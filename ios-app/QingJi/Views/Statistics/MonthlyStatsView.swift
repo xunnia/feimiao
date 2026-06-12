@@ -173,7 +173,7 @@ struct MonthlyStatsView: View {
                 Spacer()
                 Text("\(MoneyFormat.string(status.spentThisMonth, currencyCode: currencyCode)) / \(MoneyFormat.string(budget.amount, currencyCode: currencyCode))")
                     .font(.subheadline.monospacedDigit())
-                    .foregroundStyle(status.isOverBudget ? .red : .secondary)
+                    .foregroundStyle(status.isOverBudget ? Color.red : Color.secondary)
             }
             ProgressView(value: ratio)
                 .tint(status.isOverBudget ? .red : .accentColor)
@@ -182,7 +182,7 @@ struct MonthlyStatsView: View {
                      ? "今日还可以花 \(MoneyFormat.string(status.todayAllowance, currencyCode: currencyCode))"
                      : "今日已超出节奏 \(MoneyFormat.string(-status.todayAllowance, currencyCode: currencyCode))，缓一缓")
                     .font(.footnote)
-                    .foregroundStyle(status.todayAllowance >= 0 ? .secondary : .red)
+                    .foregroundStyle(status.todayAllowance >= 0 ? Color.secondary : Color.red)
             }
         }
         .padding(12)

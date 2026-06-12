@@ -71,7 +71,7 @@ struct AIQuickEntryView: View {
                         }
                         LabeledContent("金额") {
                             Text(parsed.amount.map { "\($0)" } ?? "未识别")
-                                .foregroundStyle(parsed.amount == nil ? .red : .primary)
+                                .foregroundStyle(parsed.amount == nil ? Color.red : Color.primary)
                         }
                         LabeledContent("分类") {
                             Text(matchedCategory(for: parsed)?.name ?? "其他")
