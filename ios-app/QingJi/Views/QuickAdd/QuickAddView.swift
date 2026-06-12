@@ -33,8 +33,13 @@ struct QuickAddView: View {
         }
     }
 
+    /// 首次启动种子数据异步写入，account 选择要随查询结果就绪而兜底。
+    private var effectiveAccount: Account? {
+        selectedAccount ?? accounts.first
+    }
+
     private var currencyCode: String {
-        selectedAccount?.currencyCode ?? Locale.current.currency?.identifier ?? "CNY"
+        effectiveAccount?.currencyCode ?? Locale.current.currency?.identifier ?? "CNY"
     }
 
     var body: some View {
@@ -97,6 +102,11 @@ struct QuickAddView: View {
             }
             .onAppear(perform: prepareDefaults)
             .onChange(of: kind) { resetCategorySelection() }
+            .onChange(of: accounts.count) {
+                if selectedAccount == nil { selectedAccount = accounts.first }
+                if transferTarget == nil { resetCategorySelection() }
+            }
+            .onChange(of: allCategories.count) { resetCategorySelection() }
         }
     }
 
@@ -146,7 +156,7 @@ struct QuickAddView: View {
                         Button(account.name) { selectedAccount = account }
                     }
                 } label: {
-                    Label(selectedAccount?.name ?? "账户", systemImage: selectedAccount?.kind.symbol ?? "wallet.pass")
+                    Label(effectiveAccount?.name ?? String(localized: "账户"), systemImage: effectiveAccount?.kind.symbol ?? "wallet.pass")
                         .font(.subheadline)
                         .lineLimit(1)
                 }
@@ -234,7 +244,7 @@ struct QuickAddView: View {
         let transaction: MoneyTransaction
         switch kind {
         case .transfer:
-            guard let from = selectedAccount, let to = transferTarget,
+            guard let from = effectiveAccount, let to = transferTarget,
                   from.persistentModelID != to.persistentModelID else { return }
             transaction = MoneyTransaction(
                 amount: amount, kind: .transfer, date: date, note: note,
@@ -244,7 +254,7 @@ struct QuickAddView: View {
             guard let category = selectedCategory else { return }
             transaction = MoneyTransaction(
                 amount: amount, kind: kind, date: date, note: note,
-                currencyCode: currencyCode, category: category, account: selectedAccount
+                currencyCode: currencyCode, category: category, account: effectiveAccount
             )
         }
         context.insert(transaction)
