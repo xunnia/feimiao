@@ -2,6 +2,8 @@
 
 「3 秒记一笔、漏了能补平、超支提前说」的本地优先 iOS 记账 App。
 
+面向 **iOS 26+**，全面采用 **Liquid Glass（液态玻璃）** 设计语言：快记键盘、分类网格、统计卡片均使用 `glassEffect` 交互玻璃，TabBar 滚动自动收起。
+
 产品定位与市场调研见 [docs/product-analysis.md](../docs/product-analysis.md)。
 
 ## 项目结构
@@ -21,7 +23,7 @@ ios-app/
 
 ## 本地运行
 
-需要 macOS + Xcode 15 以上。
+需要 macOS + **Xcode 26** 以上（Liquid Glass API 需要 iOS 26 SDK）。没有 Mac 时由 GitHub Actions（`.github/workflows/ios-ci.yml`）在云端 macOS 上自动编译和跑测试。
 
 ```bash
 brew install xcodegen

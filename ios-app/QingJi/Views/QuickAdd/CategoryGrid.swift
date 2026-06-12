@@ -9,27 +9,31 @@ struct CategoryGrid: View {
     private let columns = Array(repeating: GridItem(.flexible(), spacing: 8), count: 5)
 
     var body: some View {
-        LazyVGrid(columns: columns, spacing: 12) {
-            ForEach(categories) { category in
-                let isSelected = selected?.persistentModelID == category.persistentModelID
-                Button {
-                    selected = category
-                    UISelectionFeedbackGenerator().selectionChanged()
-                } label: {
-                    VStack(spacing: 4) {
-                        Image(systemName: category.symbol)
-                            .font(.system(size: 20))
-                            .frame(width: 48, height: 48)
-                            .background(isSelected ? Color.accentColor : Color(.secondarySystemBackground))
-                            .foregroundStyle(isSelected ? .white : .primary)
-                            .clipShape(Circle())
-                        Text(category.name)
-                            .font(.caption)
-                            .lineLimit(1)
-                            .foregroundStyle(isSelected ? Color.accentColor : .secondary)
+        GlassEffectContainer(spacing: 12) {
+            LazyVGrid(columns: columns, spacing: 12) {
+                ForEach(categories) { category in
+                    let isSelected = selected?.persistentModelID == category.persistentModelID
+                    Button {
+                        selected = category
+                        UISelectionFeedbackGenerator().selectionChanged()
+                    } label: {
+                        VStack(spacing: 4) {
+                            Image(systemName: category.symbol)
+                                .font(.system(size: 20))
+                                .frame(width: 48, height: 48)
+                                .foregroundStyle(isSelected ? .white : .primary)
+                                .glassEffect(
+                                    isSelected ? .regular.tint(Color.accentColor).interactive() : .regular.interactive(),
+                                    in: .circle
+                                )
+                            Text(category.name)
+                                .font(.caption)
+                                .lineLimit(1)
+                                .foregroundStyle(isSelected ? Color.accentColor : .secondary)
+                        }
                     }
+                    .buttonStyle(.plain)
                 }
-                .buttonStyle(.plain)
             }
         }
         .padding(.horizontal)

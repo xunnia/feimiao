@@ -22,6 +22,8 @@ struct RootTabView: View {
                 .tabItem { Label("设置", systemImage: "gearshape") }
                 .tag(AppTab.settings)
         }
+        // iOS 26 液态玻璃 TabBar：滚动时自动收起，突出内容
+        .tabBarMinimizeBehavior(.onScrollDown)
         // 小组件 / 快捷指令通过 qingji://add 直达快记页
         .onOpenURL { url in
             if url.host == "add" || url.path.contains("add") {

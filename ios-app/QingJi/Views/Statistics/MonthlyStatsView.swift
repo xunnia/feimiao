@@ -75,10 +75,12 @@ struct MonthlyStatsView: View {
     }
 
     private var totalsCards: some View {
-        HStack(spacing: 12) {
-            totalCard(title: "支出", amount: summary.totalExpense, color: .primary)
-            totalCard(title: "收入", amount: summary.totalIncome, color: .green)
-            totalCard(title: "结余", amount: summary.balance, color: summary.balance >= 0 ? .blue : .red)
+        GlassEffectContainer(spacing: 12) {
+            HStack(spacing: 12) {
+                totalCard(title: "支出", amount: summary.totalExpense, color: .primary)
+                totalCard(title: "收入", amount: summary.totalIncome, color: .green)
+                totalCard(title: "结余", amount: summary.balance, color: summary.balance >= 0 ? .blue : .red)
+            }
         }
     }
 
@@ -95,8 +97,7 @@ struct MonthlyStatsView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(12)
-        .background(Color(.secondarySystemBackground))
-        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .glassEffect(.regular, in: .rect(cornerRadius: 16))
     }
 
     private var categoryPieChart: some View {

@@ -68,7 +68,7 @@ struct QuickAddView: View {
                     Label("已记一笔", systemImage: "checkmark.circle.fill")
                         .padding(.horizontal, 16)
                         .padding(.vertical, 10)
-                        .background(.thinMaterial, in: Capsule())
+                        .glassEffect(.regular.tint(.green.opacity(0.5)), in: .capsule)
                         .transition(.move(edge: .top).combined(with: .opacity))
                 }
             }

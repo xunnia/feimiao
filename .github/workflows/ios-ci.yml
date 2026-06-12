@@ -23,6 +23,16 @@ jobs:
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v5
+      - name: Select Xcode 26
+        run: |
+          ls -d /Applications/Xcode*.app
+          XCODE_26=$(ls -d /Applications/Xcode_26*.app 2>/dev/null | sort -V | tail -n 1)
+          if [ -z "$XCODE_26" ]; then
+            echo "::error::runner 上没有 Xcode 26，无法编译 iOS 26 / Liquid Glass 工程"
+            exit 1
+          fi
+          sudo xcode-select -s "$XCODE_26"
+          xcodebuild -version
       - name: Install XcodeGen
         run: brew install xcodegen
       - name: Generate Xcode project
