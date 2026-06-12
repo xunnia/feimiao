@@ -1,0 +1,37 @@
+name: iOS CI
+
+on:
+  push:
+    branches: [claude/new-session-4kh1ll, main]
+    paths:
+      - "ios-app/**"
+      - ".github/workflows/ios-ci.yml"
+  workflow_dispatch:
+
+jobs:
+  core-tests:
+    name: 核心逻辑单元测试
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - name: swift test (QingJiCore)
+        run: swift test --package-path ios-app/QingJiCore
+
+  build-app:
+    name: 编译 iOS App
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      - name: Generate Xcode project
+        run: xcodegen generate --spec ios-app/project.yml --project ios-app
+      - name: Build for iOS Simulator (no signing)
+        run: |
+          xcodebuild build \
+            -project ios-app/QingJi.xcodeproj \
+            -scheme QingJi \
+            -destination 'generic/platform=iOS Simulator' \
+            CODE_SIGNING_ALLOWED=NO \
+            | tail -100
+          exit ${PIPESTATUS[0]}
