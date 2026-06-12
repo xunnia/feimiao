@@ -32,6 +32,8 @@ targets:
           - CFBundleURLName: com.qingji.app
             CFBundleURLSchemes:
               - qingji
+        NSMicrophoneUsageDescription: 语音记账需要使用麦克风。
+        NSSpeechRecognitionUsageDescription: 把你的话转成文字以便快速记账，识别在设备上完成。
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.qingji.app

@@ -26,6 +26,16 @@ struct SettingsView: View {
                     } label: {
                         Label("分类管理", systemImage: "square.grid.2x2")
                     }
+                    NavigationLink {
+                        BudgetSettingView()
+                    } label: {
+                        Label("月度预算", systemImage: "gauge.with.needle")
+                    }
+                    NavigationLink {
+                        ReconcileView()
+                    } label: {
+                        Label("对账", systemImage: "checkmark.seal")
+                    }
                 }
 
                 Section {

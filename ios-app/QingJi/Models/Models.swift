@@ -110,8 +110,23 @@ final class MoneyTransaction {
             currencyCode: currencyCode,
             categoryName: category?.name ?? "",
             accountName: account?.name ?? "",
+            toAccountName: toAccount?.name ?? "",
             note: note,
             date: date
         )
+    }
+}
+
+/// 月度预算。当前只用「总预算」一条记录（categoryKey == nil），
+/// 字段已为今后的分类预算预留。
+@Model
+final class Budget {
+    var amount: Decimal = 0
+    var categoryKey: String? = nil
+    var createdAt: Date = Date()
+
+    init(amount: Decimal, categoryKey: String? = nil) {
+        self.amount = amount
+        self.categoryKey = categoryKey
     }
 }

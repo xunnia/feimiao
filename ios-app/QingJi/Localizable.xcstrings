@@ -1,75 +1,1116 @@
 {
-  "sourceLanguage" : "zh-Hans",
-  "strings" : {
-    "记一笔" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Quick Add" } } } },
-    "明细" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Transactions" } } } },
-    "统计" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Statistics" } } } },
-    "设置" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Settings" } } } },
-    "支出" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Expense" } } } },
-    "收入" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Income" } } } },
-    "转账" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Transfer" } } } },
-    "类型" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Type" } } } },
-    "保存" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Save" } } } },
-    "取消" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Cancel" } } } },
-    "编辑" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Edit" } } } },
-    "金额" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Amount" } } } },
-    "分类" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Category" } } } },
-    "账户" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Account" } } } },
-    "日期" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Date" } } } },
-    "备注" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Note" } } } },
-    "备注…" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Note…" } } } },
-    "无" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "None" } } } },
-    "从" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "From" } } } },
-    "到" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "To" } } } },
-    "已记一笔" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Saved" } } } },
-    "还没有账目" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "No Entries Yet" } } } },
-    "去「记一笔」页开始记账吧" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Head to Quick Add to record your first entry" } } } },
-    "搜索备注、分类、账户" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Search notes, categories, accounts" } } } },
-    "删除这笔" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Delete Entry" } } } },
-    "未分类" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Uncategorized" } } } },
-    "支出 %@" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Spent %@" } } } },
-    "结余" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Balance" } } } },
-    "本月还没有支出" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "No Spending This Month" } } } },
-    "记几笔之后这里会出现分析图表" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Charts appear after a few entries" } } } },
-    "支出构成" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Spending Breakdown" } } } },
-    "每日支出" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Daily Spending" } } } },
-    "分类排行" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Top Categories" } } } },
-    "%lld 笔" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "%lld entries" } } } },
-    "管理" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Manage" } } } },
-    "账户管理" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Accounts" } } } },
-    "分类管理" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Categories" } } } },
-    "数据" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Data" } } } },
-    "导入微信 / 支付宝账单" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Import WeChat / Alipay Bills" } } } },
-    "导出全部账目为 CSV" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Export All as CSV" } } } },
-    "在微信「我-服务-钱包-账单」或支付宝「我的-账单」申请导出 CSV 账单后，从文件 App 导入。数据只保存在你的设备和 iCloud。" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Export your bill as CSV from WeChat Pay or Alipay, then import it from the Files app. Your data stays on your device and iCloud only." } } } },
-    "关于" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "About" } } } },
-    "版本" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Version" } } } },
-    "本地优先存储，开启 iCloud 后自动多端同步；无广告、无账号。" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Local-first storage with automatic iCloud sync. No ads, no account required." } } } },
-    "导入结果" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Import Result" } } } },
-    "好" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "OK" } } } },
-    "无法读取所选文件" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Cannot read the selected file" } } } },
-    "无法识别文件编码" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Unrecognized file encoding" } } } },
-    "成功导入 %lld 笔，跳过 %lld 行中性或无效交易。" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Imported %lld entries, skipped %lld neutral or invalid rows." } } } },
-    "无法识别账单格式，请确认是微信或支付宝导出的 CSV 文件。" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Unrecognized bill format. Please make sure it is a CSV exported from WeChat Pay or Alipay." } } } },
-    "新增账户" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "New Account" } } } },
-    "账户名称" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Account Name" } } } },
-    "币种代码（如 CNY、USD）" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Currency code (e.g. CNY, USD)" } } } },
-    "现金" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Cash" } } } },
-    "储蓄卡" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Debit Card" } } } },
-    "信用卡" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Credit Card" } } } },
-    "微信" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "WeChat" } } } },
-    "支付宝" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Alipay" } } } },
-    "其他" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Other" } } } },
-    "归档" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Archive" } } } },
-    "已归档" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Archived" } } } },
-    "恢复" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Restore" } } } },
-    "新增分类" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "New Category" } } } },
-    "分类名称" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Category Name" } } } },
-    "图标" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Icon" } } } },
-    "快速记一笔" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Quick Add Entry" } } } },
-    "不打开 App，直接往轻记里记一笔支出或收入。" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Add an expense or income to QingJi without opening the app." } } } },
-    "金额要大于 0 才能入账。" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Amount must be greater than zero." } } } },
-    "已记一笔：%@ %@" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Saved: %1$@ %2$@" } } } }
+  "sourceLanguage": "zh-Hans",
+  "strings": {
+    "记一笔": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Quick Add"
+          }
+        }
+      }
+    },
+    "明细": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Transactions"
+          }
+        }
+      }
+    },
+    "统计": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Statistics"
+          }
+        }
+      }
+    },
+    "设置": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Settings"
+          }
+        }
+      }
+    },
+    "支出": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Expense"
+          }
+        }
+      }
+    },
+    "收入": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Income"
+          }
+        }
+      }
+    },
+    "转账": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Transfer"
+          }
+        }
+      }
+    },
+    "类型": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Type"
+          }
+        }
+      }
+    },
+    "保存": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Save"
+          }
+        }
+      }
+    },
+    "取消": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cancel"
+          }
+        }
+      }
+    },
+    "编辑": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Edit"
+          }
+        }
+      }
+    },
+    "金额": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Amount"
+          }
+        }
+      }
+    },
+    "分类": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Category"
+          }
+        }
+      }
+    },
+    "账户": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Account"
+          }
+        }
+      }
+    },
+    "日期": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Date"
+          }
+        }
+      }
+    },
+    "备注": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Note"
+          }
+        }
+      }
+    },
+    "备注…": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Note…"
+          }
+        }
+      }
+    },
+    "无": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "None"
+          }
+        }
+      }
+    },
+    "从": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "From"
+          }
+        }
+      }
+    },
+    "到": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "To"
+          }
+        }
+      }
+    },
+    "已记一笔": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Saved"
+          }
+        }
+      }
+    },
+    "还没有账目": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No Entries Yet"
+          }
+        }
+      }
+    },
+    "去「记一笔」页开始记账吧": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Head to Quick Add to record your first entry"
+          }
+        }
+      }
+    },
+    "搜索备注、分类、账户": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Search notes, categories, accounts"
+          }
+        }
+      }
+    },
+    "删除这笔": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Delete Entry"
+          }
+        }
+      }
+    },
+    "未分类": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Uncategorized"
+          }
+        }
+      }
+    },
+    "支出 %@": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Spent %@"
+          }
+        }
+      }
+    },
+    "结余": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Balance"
+          }
+        }
+      }
+    },
+    "本月还没有支出": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No Spending This Month"
+          }
+        }
+      }
+    },
+    "记几笔之后这里会出现分析图表": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Charts appear after a few entries"
+          }
+        }
+      }
+    },
+    "支出构成": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Spending Breakdown"
+          }
+        }
+      }
+    },
+    "每日支出": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Daily Spending"
+          }
+        }
+      }
+    },
+    "分类排行": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Top Categories"
+          }
+        }
+      }
+    },
+    "%lld 笔": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld entries"
+          }
+        }
+      }
+    },
+    "管理": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Manage"
+          }
+        }
+      }
+    },
+    "账户管理": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Accounts"
+          }
+        }
+      }
+    },
+    "分类管理": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Categories"
+          }
+        }
+      }
+    },
+    "数据": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Data"
+          }
+        }
+      }
+    },
+    "导入微信 / 支付宝账单": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Import WeChat / Alipay Bills"
+          }
+        }
+      }
+    },
+    "导出全部账目为 CSV": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Export All as CSV"
+          }
+        }
+      }
+    },
+    "在微信「我-服务-钱包-账单」或支付宝「我的-账单」申请导出 CSV 账单后，从文件 App 导入。数据只保存在你的设备和 iCloud。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Export your bill as CSV from WeChat Pay or Alipay, then import it from the Files app. Your data stays on your device and iCloud only."
+          }
+        }
+      }
+    },
+    "关于": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "About"
+          }
+        }
+      }
+    },
+    "版本": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Version"
+          }
+        }
+      }
+    },
+    "本地优先存储，开启 iCloud 后自动多端同步；无广告、无账号。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Local-first storage with automatic iCloud sync. No ads, no account required."
+          }
+        }
+      }
+    },
+    "导入结果": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Import Result"
+          }
+        }
+      }
+    },
+    "好": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "OK"
+          }
+        }
+      }
+    },
+    "无法读取所选文件": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cannot read the selected file"
+          }
+        }
+      }
+    },
+    "无法识别文件编码": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Unrecognized file encoding"
+          }
+        }
+      }
+    },
+    "成功导入 %lld 笔，跳过 %lld 行中性或无效交易。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Imported %lld entries, skipped %lld neutral or invalid rows."
+          }
+        }
+      }
+    },
+    "无法识别账单格式，请确认是微信或支付宝导出的 CSV 文件。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Unrecognized bill format. Please make sure it is a CSV exported from WeChat Pay or Alipay."
+          }
+        }
+      }
+    },
+    "新增账户": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "New Account"
+          }
+        }
+      }
+    },
+    "账户名称": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Account Name"
+          }
+        }
+      }
+    },
+    "币种代码（如 CNY、USD）": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Currency code (e.g. CNY, USD)"
+          }
+        }
+      }
+    },
+    "现金": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cash"
+          }
+        }
+      }
+    },
+    "储蓄卡": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Debit Card"
+          }
+        }
+      }
+    },
+    "信用卡": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Credit Card"
+          }
+        }
+      }
+    },
+    "微信": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "WeChat"
+          }
+        }
+      }
+    },
+    "支付宝": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Alipay"
+          }
+        }
+      }
+    },
+    "其他": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Other"
+          }
+        }
+      }
+    },
+    "归档": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Archive"
+          }
+        }
+      }
+    },
+    "已归档": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Archived"
+          }
+        }
+      }
+    },
+    "恢复": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Restore"
+          }
+        }
+      }
+    },
+    "新增分类": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "New Category"
+          }
+        }
+      }
+    },
+    "分类名称": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Category Name"
+          }
+        }
+      }
+    },
+    "图标": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Icon"
+          }
+        }
+      }
+    },
+    "快速记一笔": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Quick Add Entry"
+          }
+        }
+      }
+    },
+    "不打开 App，直接往轻记里记一笔支出或收入。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Add an expense or income to QingJi without opening the app."
+          }
+        }
+      }
+    },
+    "金额要大于 0 才能入账。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Amount must be greater than zero."
+          }
+        }
+      }
+    },
+    "已记一笔：%@ %@": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Saved: %1$@ %2$@"
+          }
+        }
+      }
+    },
+    "AI 记一笔": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "AI Quick Add"
+          }
+        }
+      }
+    },
+    "一句话记账": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "One-Sentence Entry"
+          }
+        }
+      }
+    },
+    "例如：昨天打车23块": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "e.g. Taxi yesterday, 23 yuan"
+          }
+        }
+      }
+    },
+    "语音": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Voice"
+          }
+        }
+      }
+    },
+    "停止": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Stop"
+          }
+        }
+      }
+    },
+    "支付截图": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Payment Screenshot"
+          }
+        }
+      }
+    },
+    "解析": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Parse"
+          }
+        }
+      }
+    },
+    "正在识别截图…": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Recognizing screenshot…"
+          }
+        }
+      }
+    },
+    "识别结果": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Result"
+          }
+        }
+      }
+    },
+    "未识别": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Not recognized"
+          }
+        }
+      }
+    },
+    "保存这笔": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Save Entry"
+          }
+        }
+      }
+    },
+    "请在系统设置中允许语音识别": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Please allow speech recognition in Settings"
+          }
+        }
+      }
+    },
+    "语音识别暂不可用": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Speech recognition is unavailable"
+          }
+        }
+      }
+    },
+    "今日可花 %@": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Today's allowance %@"
+          }
+        }
+      }
+    },
+    "今日已超支 %@": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Over today's pace by %@"
+          }
+        }
+      }
+    },
+    "本月剩 %@": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ left this month"
+          }
+        }
+      }
+    },
+    "月度": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Monthly"
+          }
+        }
+      }
+    },
+    "年度": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Yearly"
+          }
+        }
+      }
+    },
+    "范围": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Scope"
+          }
+        }
+      }
+    },
+    "本月预算": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Monthly Budget"
+          }
+        }
+      }
+    },
+    "今日还可以花 %@": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "You can still spend %@ today"
+          }
+        }
+      }
+    },
+    "今日已超出节奏 %@，缓一缓": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Over today's pace by %@ — ease up"
+          }
+        }
+      }
+    },
+    "全年支出": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Yearly Expense"
+          }
+        }
+      }
+    },
+    "全年收入": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Yearly Income"
+          }
+        }
+      }
+    },
+    "全年结余": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Yearly Balance"
+          }
+        }
+      }
+    },
+    "今年还没有账目": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No Entries This Year"
+          }
+        }
+      }
+    },
+    "记几笔之后这里会出现年度报告": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Your yearly report appears after a few entries"
+          }
+        }
+      }
+    },
+    "每月支出": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Monthly Spending"
+          }
+        }
+      }
+    },
+    "全年分类排行": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Top Categories of the Year"
+          }
+        }
+      }
+    },
+    "月度预算": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Monthly Budget"
+          }
+        }
+      }
+    },
+    "月度预算金额": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Monthly budget amount"
+          }
+        }
+      }
+    },
+    "保存预算": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Save Budget"
+          }
+        }
+      }
+    },
+    "设置后，记账页会按「(月预算 − 已花) ÷ 剩余天数」实时显示今日可花额度，超速消费当天就能看到，而不是月底才发现超支。设为 0 关闭预算。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Once set, the entry page shows today's allowance as (budget − spent) ÷ days left, so you notice overspending the same day, not at month end. Set 0 to disable."
+          }
+        }
+      }
+    },
+    "对账": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reconcile"
+          }
+        }
+      }
+    },
+    "对一下每个账户的真实余额，有差额点「补平」，系统会自动记一笔调整，让账永远是平的。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Compare each account's real balance with the book balance. Tap to record the difference automatically so your books always balance."
+          }
+        }
+      }
+    },
+    "账面余额": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Book Balance"
+          }
+        }
+      }
+    },
+    "实际余额": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Actual Balance"
+          }
+        }
+      }
+    },
+    "差额": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Difference"
+          }
+        }
+      }
+    },
+    "补平：记一笔漏记支出": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Fix: record missed expense"
+          }
+        }
+      }
+    },
+    "补平：记一笔漏记收入": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Fix: record missed income"
+          }
+        }
+      }
+    },
+    "账已平": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Balanced"
+          }
+        }
+      }
+    },
+    "对账调整": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reconciliation adjustment"
+          }
+        }
+      }
+    }
   },
-  "version" : "1.0"
+  "version": "1.0"
 }

@@ -19,7 +19,7 @@ jobs:
 
   build-app:
     name: 编译 iOS App
-    # XcodeGen 生成的是 Xcode 16 工程格式（objectVersion 77），需要 macos-15 的 Xcode 16
+    # XcodeGen 生成的是 Xcode 16+ 工程格式（objectVersion 77）；Liquid Glass 需要 Xcode 26 SDK
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v5
@@ -46,3 +46,95 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             | tail -100
           exit ${PIPESTATUS[0]}
+
+  simulator-screenshots:
+    name: 模拟器截图
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v5
+      - name: Select Xcode 26
+        run: |
+          XCODE_26=$(ls -d /Applications/Xcode_26*.app 2>/dev/null | sort -V | tail -n 1)
+          if [ -z "$XCODE_26" ]; then
+            echo "::error::runner 上没有 Xcode 26"
+            exit 1
+          fi
+          sudo xcode-select -s "$XCODE_26"
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      - name: Generate Xcode project
+        run: xcodegen generate --spec ios-app/project.yml --project ios-app
+      - name: Build for a concrete simulator
+        run: |
+          DEVICE=$(xcrun simctl list devices available | grep "iPhone" | head -n 1 | sed -E 's/^[[:space:]]*//; s/ \(.*$//')
+          if [ -z "$DEVICE" ]; then
+            echo "::error::没有可用的 iPhone 模拟器"
+            xcrun simctl list devices
+            exit 1
+          fi
+          echo "DEVICE=$DEVICE" >> "$GITHUB_ENV"
+          echo "使用模拟器：$DEVICE"
+          xcodebuild build \
+            -project ios-app/QingJi.xcodeproj \
+            -scheme QingJi \
+            -destination "platform=iOS Simulator,name=$DEVICE" \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO \
+            | tail -30
+          exit ${PIPESTATUS[0]}
+      - name: Launch app and capture screenshots
+        run: |
+          xcrun simctl bootstatus "$DEVICE" -b
+          APP_PATH=$(find build/Build/Products -name "QingJi.app" -not -path "*PlugIns*" | head -n 1)
+          echo "安装：$APP_PATH"
+          xcrun simctl install "$DEVICE" "$APP_PATH"
+          xcrun simctl launch "$DEVICE" com.qingji.app
+          sleep 15
+          mkdir -p screenshots
+          xcrun simctl io "$DEVICE" screenshot screenshots/01-quickadd.png
+          xcrun simctl openurl "$DEVICE" "qingji://add" || true
+          sleep 3
+          xcrun simctl io "$DEVICE" screenshot screenshots/02-quickadd-again.png
+      - uses: actions/upload-artifact@v4
+        with:
+          name: simulator-screenshots
+          path: screenshots/
+
+  unsigned-ipa:
+    name: 打包未签名 IPA（AltStore 侧载用）
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v5
+      - name: Select Xcode 26
+        run: |
+          XCODE_26=$(ls -d /Applications/Xcode_26*.app 2>/dev/null | sort -V | tail -n 1)
+          if [ -z "$XCODE_26" ]; then
+            echo "::error::runner 上没有 Xcode 26"
+            exit 1
+          fi
+          sudo xcode-select -s "$XCODE_26"
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      - name: Generate Xcode project
+        run: xcodegen generate --spec ios-app/project.yml --project ios-app
+      - name: Build Release for device (unsigned)
+        run: |
+          xcodebuild build \
+            -project ios-app/QingJi.xcodeproj \
+            -scheme QingJi \
+            -configuration Release \
+            -sdk iphoneos \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO \
+            | tail -30
+          exit ${PIPESTATUS[0]}
+      - name: Package IPA
+        run: |
+          mkdir -p Payload
+          cp -R build/Build/Products/Release-iphoneos/QingJi.app Payload/
+          zip -qry QingJi-unsigned.ipa Payload
+          ls -lh QingJi-unsigned.ipa
+      - uses: actions/upload-artifact@v4
+        with:
+          name: QingJi-unsigned-ipa
+          path: QingJi-unsigned.ipa

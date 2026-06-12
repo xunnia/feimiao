@@ -43,8 +43,76 @@ public struct MonthlySummary: Equatable, Sendable {
     public var balance: Decimal { totalIncome - totalExpense }
 }
 
+/// 年度统计结果（消费年报的数据基础）。
+public struct YearlySummary: Equatable, Sendable {
+    public let year: Int
+    public let totalExpense: Decimal
+    public let totalIncome: Decimal
+    /// 12 个月的支出，下标 0 = 1 月。
+    public let monthlyExpenses: [Decimal]
+    /// 全年支出分类排行。
+    public let expenseByCategory: [CategoryTotal]
+
+    public var balance: Decimal { totalIncome - totalExpense }
+}
+
 /// 纯函数统计引擎。转账不计入收支。
 public enum StatisticsEngine {
+    public static func yearlySummary(
+        of records: [TransactionRecord],
+        year: Int,
+        calendar: Calendar = .current
+    ) -> YearlySummary {
+        var totalExpense = Decimal(0)
+        var totalIncome = Decimal(0)
+        var monthlyExpenses = [Decimal](repeating: 0, count: 12)
+        var categoryTotals: [String: (total: Decimal, count: Int)] = [:]
+
+        for record in records where record.kind != .transfer {
+            let components = calendar.dateComponents([.year, .month], from: record.date)
+            guard components.year == year, let month = components.month else { continue }
+            switch record.kind {
+            case .expense:
+                totalExpense += record.amount
+                monthlyExpenses[month - 1] += record.amount
+                let name = record.categoryName.isEmpty ? "—" : record.categoryName
+                var entry = categoryTotals[name] ?? (0, 0)
+                entry.total += record.amount
+                entry.count += 1
+                categoryTotals[name] = entry
+            case .income:
+                totalIncome += record.amount
+            case .transfer:
+                break
+            }
+        }
+
+        let expenseDouble = NSDecimalNumber(decimal: totalExpense).doubleValue
+        let byCategory = categoryTotals
+            .map { name, entry in
+                CategoryTotal(
+                    name: name,
+                    total: entry.total,
+                    share: expenseDouble > 0
+                        ? NSDecimalNumber(decimal: entry.total).doubleValue / expenseDouble
+                        : 0,
+                    count: entry.count
+                )
+            }
+            .sorted { lhs, rhs in
+                if lhs.total != rhs.total { return lhs.total > rhs.total }
+                return lhs.name < rhs.name
+            }
+
+        return YearlySummary(
+            year: year,
+            totalExpense: totalExpense,
+            totalIncome: totalIncome,
+            monthlyExpenses: monthlyExpenses,
+            expenseByCategory: byCategory
+        )
+    }
+
     public static func monthlySummary(
         of records: [TransactionRecord],
         year: Int,

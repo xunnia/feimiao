@@ -9,6 +9,8 @@ public struct TransactionRecord: Identifiable, Codable, Equatable, Sendable {
     public var currencyCode: String
     public var categoryName: String
     public var accountName: String
+    /// 转账目标账户名，仅 kind == .transfer 时有意义。
+    public var toAccountName: String
     public var note: String
     public var date: Date
 
@@ -19,6 +21,7 @@ public struct TransactionRecord: Identifiable, Codable, Equatable, Sendable {
         currencyCode: String = "CNY",
         categoryName: String = "",
         accountName: String = "",
+        toAccountName: String = "",
         note: String = "",
         date: Date
     ) {
@@ -28,6 +31,7 @@ public struct TransactionRecord: Identifiable, Codable, Equatable, Sendable {
         self.currencyCode = currencyCode
         self.categoryName = categoryName
         self.accountName = accountName
+        self.toAccountName = toAccountName
         self.note = note
         self.date = date
     }

@@ -6,8 +6,14 @@ import QingJiCore
 
 /// 月度统计：收支卡片 + 分类占比扇形图 + 每日支出柱状图 + 分类排行。
 struct MonthlyStatsView: View {
+    private enum Scope: Hashable {
+        case month, year
+    }
+
     @Query private var transactions: [MoneyTransaction]
+    @Query private var budgets: [Budget]
     @State private var displayedMonth = Date()
+    @State private var scope: Scope = .month
 
     private var summary: MonthlySummary {
         let components = Calendar.current.dateComponents([.year, .month], from: displayedMonth)
@@ -18,6 +24,15 @@ struct MonthlyStatsView: View {
         )
     }
 
+    private var yearlySummary: YearlySummary {
+        let year = Calendar.current.component(.year, from: displayedMonth)
+        return StatisticsEngine.yearlySummary(of: transactions.map(\.record), year: year)
+    }
+
+    private var monthlyBudget: Budget? {
+        budgets.first { $0.categoryKey == nil && $0.amount > 0 }
+    }
+
     private var currencyCode: String {
         transactions.first?.currencyCode ?? Locale.current.currency?.identifier ?? "CNY"
     }
@@ -26,19 +41,32 @@ struct MonthlyStatsView: View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: 20) {
-                    monthSwitcher
-                    totalsCards
-                    if summary.expenseByCategory.isEmpty {
-                        ContentUnavailableView(
-                            "本月还没有支出",
-                            systemImage: "chart.pie",
-                            description: Text("记几笔之后这里会出现分析图表")
-                        )
-                        .padding(.top, 40)
+                    Picker("范围", selection: $scope) {
+                        Text("月度").tag(Scope.month)
+                        Text("年度").tag(Scope.year)
+                    }
+                    .pickerStyle(.segmented)
+
+                    if scope == .month {
+                        monthSwitcher
+                        totalsCards
+                        if let budget = monthlyBudget {
+                            budgetProgress(budget)
+                        }
+                        if summary.expenseByCategory.isEmpty {
+                            ContentUnavailableView(
+                                "本月还没有支出",
+                                systemImage: "chart.pie",
+                                description: Text("记几笔之后这里会出现分析图表")
+                            )
+                            .padding(.top, 40)
+                        } else {
+                            categoryPieChart
+                            dailyBarChart
+                            categoryRanking
+                        }
                     } else {
-                        categoryPieChart
-                        dailyBarChart
-                        categoryRanking
+                        yearlyContent
                     }
                 }
                 .padding()
@@ -132,6 +160,91 @@ struct MonthlyStatsView: View {
             .frame(height: 160)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// 月度预算执行条 + 今日可花。
+    private func budgetProgress(_ budget: Budget) -> some View {
+        let status = BudgetEngine.status(monthlyBudget: budget.amount, records: transactions.map(\.record))
+        let ratio = min(MoneyFormat.double(status.spentThisMonth) / max(MoneyFormat.double(budget.amount), 0.01), 1)
+        return VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("本月预算")
+                    .font(.headline)
+                Spacer()
+                Text("\(MoneyFormat.string(status.spentThisMonth, currencyCode: currencyCode)) / \(MoneyFormat.string(budget.amount, currencyCode: currencyCode))")
+                    .font(.subheadline.monospacedDigit())
+                    .foregroundStyle(status.isOverBudget ? .red : .secondary)
+            }
+            ProgressView(value: ratio)
+                .tint(status.isOverBudget ? .red : .accentColor)
+            if Calendar.current.isDate(displayedMonth, equalTo: Date(), toGranularity: .month) {
+                Text(status.todayAllowance >= 0
+                     ? "今日还可以花 \(MoneyFormat.string(status.todayAllowance, currencyCode: currencyCode))"
+                     : "今日已超出节奏 \(MoneyFormat.string(-status.todayAllowance, currencyCode: currencyCode))，缓一缓")
+                    .font(.footnote)
+                    .foregroundStyle(status.todayAllowance >= 0 ? .secondary : .red)
+            }
+        }
+        .padding(12)
+        .glassEffect(.regular, in: .rect(cornerRadius: 16))
+    }
+
+    /// 年度报告：12 个月支出走势 + 全年收支 + 分类排行。
+    private var yearlyContent: some View {
+        VStack(spacing: 20) {
+            let yearly = yearlySummary
+            GlassEffectContainer(spacing: 12) {
+                HStack(spacing: 12) {
+                    totalCard(title: "全年支出", amount: yearly.totalExpense, color: .primary)
+                    totalCard(title: "全年收入", amount: yearly.totalIncome, color: .green)
+                    totalCard(title: "全年结余", amount: yearly.balance, color: yearly.balance >= 0 ? .blue : .red)
+                }
+            }
+            if yearly.totalExpense == 0 && yearly.totalIncome == 0 {
+                ContentUnavailableView(
+                    "今年还没有账目",
+                    systemImage: "chart.bar",
+                    description: Text("记几笔之后这里会出现年度报告")
+                )
+                .padding(.top, 40)
+            } else {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("每月支出")
+                        .font(.headline)
+                    Chart(Array(yearly.monthlyExpenses.enumerated()), id: \.offset) { index, amount in
+                        BarMark(
+                            x: .value("月", index + 1),
+                            y: .value("支出", MoneyFormat.double(amount))
+                        )
+                        .foregroundStyle(Color.accentColor.gradient)
+                    }
+                    .chartXAxis {
+                        AxisMarks(values: Array(1...12))
+                    }
+                    .frame(height: 160)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("全年分类排行")
+                        .font(.headline)
+                    ForEach(yearly.expenseByCategory.prefix(10), id: \.name) { item in
+                        HStack {
+                            Text(item.name)
+                                .font(.subheadline)
+                            Spacer()
+                            Text(MoneyFormat.string(item.total, currencyCode: currencyCode))
+                                .font(.subheadline.monospacedDigit())
+                            Text(item.share.formatted(.percent.precision(.fractionLength(0))))
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .frame(width: 44, alignment: .trailing)
+                        }
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
     }
 
     private var categoryRanking: some View {

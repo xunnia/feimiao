@@ -21,6 +21,8 @@ struct QuickAddView: View {
     @State private var note = ""
     @State private var rankedKeys: [String] = []
     @State private var showSavedToast = false
+    @State private var showAISheet = false
+    @State private var budgetStatus: BudgetStatus?
 
     private var visibleCategories: [TxCategory] {
         let matching = allCategories.filter { $0.kind == kind }
@@ -46,6 +48,12 @@ struct QuickAddView: View {
                 .pickerStyle(.segmented)
                 .padding(.horizontal)
 
+                if let status = budgetStatus, kind == .expense {
+                    todayAllowanceBar(status)
+                        .padding(.horizontal)
+                        .padding(.top, 8)
+                }
+
                 amountDisplay
                     .padding(.vertical, 12)
 
@@ -63,6 +71,21 @@ struct QuickAddView: View {
             }
             .navigationTitle("记一笔")
             .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        showAISheet = true
+                    } label: {
+                        Label("AI 记一笔", systemImage: "sparkles")
+                    }
+                }
+            }
+            .sheet(isPresented: $showAISheet, onDismiss: {
+                refreshRanking()
+                loadBudgetStatus()
+            }) {
+                AIQuickEntryView()
+            }
             .overlay(alignment: .top) {
                 if showSavedToast {
                     Label("已记一笔", systemImage: "checkmark.circle.fill")
@@ -143,6 +166,39 @@ struct QuickAddView: View {
         if selectedAccount == nil { selectedAccount = accounts.first }
         refreshRanking()
         resetCategorySelection()
+        loadBudgetStatus()
+    }
+
+    private func todayAllowanceBar(_ status: BudgetStatus) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: status.todayAllowance >= 0 ? "gauge.with.needle" : "exclamationmark.triangle.fill")
+            if status.todayAllowance >= 0 {
+                Text("今日可花 \(MoneyFormat.string(status.todayAllowance, currencyCode: currencyCode))")
+            } else {
+                Text("今日已超支 \(MoneyFormat.string(-status.todayAllowance, currencyCode: currencyCode))")
+            }
+            Spacer()
+            Text("本月剩 \(MoneyFormat.string(status.remaining, currencyCode: currencyCode))")
+                .foregroundStyle(.secondary)
+        }
+        .font(.footnote)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .glassEffect(
+            .regular.tint(status.todayAllowance >= 0 ? Color.accentColor.opacity(0.25) : Color.red.opacity(0.35)),
+            in: .capsule
+        )
+    }
+
+    /// 设置过预算时计算「今日可花」。
+    private func loadBudgetStatus() {
+        guard let budget = ((try? context.fetch(FetchDescriptor<Budget>())) ?? []).first(where: { $0.categoryKey == nil }),
+              budget.amount > 0 else {
+            budgetStatus = nil
+            return
+        }
+        let all = (try? context.fetch(FetchDescriptor<MoneyTransaction>())) ?? []
+        budgetStatus = BudgetEngine.status(monthlyBudget: budget.amount, records: all.map(\.record))
     }
 
     private func resetCategorySelection() {
@@ -199,6 +255,7 @@ struct QuickAddView: View {
         note = ""
         date = Date()
         refreshRanking()
+        loadBudgetStatus()
 
         withAnimation(.spring) { showSavedToast = true }
         Task {

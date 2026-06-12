@@ -6,7 +6,7 @@ import SwiftData
 /// SwiftData 会自动启用同步（ModelConfiguration 默认 cloudKitDatabase: .automatic）。
 enum AppModelContainer {
     static let shared: ModelContainer = {
-        let schema = Schema([Account.self, TxCategory.self, MoneyTransaction.self])
+        let schema = Schema([Account.self, TxCategory.self, MoneyTransaction.self, Budget.self])
         do {
             return try ModelContainer(for: schema, configurations: [ModelConfiguration(schema: schema)])
         } catch {
