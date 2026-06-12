@@ -11,17 +11,18 @@ on:
 jobs:
   core-tests:
     name: 核心逻辑单元测试
-    runs-on: macos-14
+    runs-on: macos-15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: swift test (QingJiCore)
         run: swift test --package-path ios-app/QingJiCore
 
   build-app:
     name: 编译 iOS App
-    runs-on: macos-14
+    # XcodeGen 生成的是 Xcode 16 工程格式（objectVersion 77），需要 macos-15 的 Xcode 16
+    runs-on: macos-15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Install XcodeGen
         run: brew install xcodegen
       - name: Generate Xcode project
