@@ -8,6 +8,9 @@ on:
       - ".github/workflows/ios-ci.yml"
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   core-tests:
     name: 核心逻辑单元测试
@@ -99,6 +102,23 @@ jobs:
         with:
           name: simulator-screenshots
           path: screenshots/
+      # 把截图提交回分支，方便在受限网络环境（或手机上）直接查看
+      - name: Commit screenshots back to branch
+        if: github.event_name == 'push'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          mkdir -p ci-artifacts
+          rm -rf ci-artifacts/screenshots
+          cp -R screenshots ci-artifacts/screenshots
+          git add ci-artifacts
+          if git diff --cached --quiet; then
+            echo "截图无变化，跳过提交"
+            exit 0
+          fi
+          git commit -m "ci: 更新模拟器截图 [skip ci]"
+          git pull --rebase origin "${GITHUB_REF_NAME}"
+          git push origin HEAD:"${GITHUB_REF_NAME}"
 
   unsigned-ipa:
     name: 打包未签名 IPA（AltStore 侧载用）
