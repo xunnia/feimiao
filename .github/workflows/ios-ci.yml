@@ -158,3 +158,23 @@ jobs:
         with:
           name: QingJi-unsigned-ipa
           path: QingJi-unsigned.ipa
+      # 把 IPA 提交回分支，提供固定下载链接（Sideloadly/AltStore 侧载用）
+      - name: Commit IPA back to branch
+        if: github.event_name == 'push'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          mkdir -p ci-artifacts
+          cp QingJi-unsigned.ipa ci-artifacts/QingJi-unsigned.ipa
+          git add ci-artifacts
+          if git diff --cached --quiet; then
+            echo "IPA 无变化，跳过提交"
+            exit 0
+          fi
+          git commit -m "ci: 更新未签名 IPA [skip ci]"
+          git pull --rebase origin "${GITHUB_REF_NAME}" || true
+          git push origin HEAD:"${GITHUB_REF_NAME}" || {
+            sleep 5
+            git pull --rebase origin "${GITHUB_REF_NAME}"
+            git push origin HEAD:"${GITHUB_REF_NAME}"
+          }
