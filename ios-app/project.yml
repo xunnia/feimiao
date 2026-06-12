@@ -1,0 +1,55 @@
+name: QingJi
+options:
+  bundleIdPrefix: com.qingji
+  deploymentTarget:
+    iOS: "17.0"
+  developmentLanguage: zh-Hans
+settings:
+  base:
+    SWIFT_VERSION: "5.9"
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+packages:
+  QingJiCore:
+    path: QingJiCore
+targets:
+  QingJi:
+    type: application
+    platform: iOS
+    sources:
+      - QingJi
+    dependencies:
+      - package: QingJiCore
+      - target: QingJiWidget
+    info:
+      path: QingJi/Info.plist
+      properties:
+        CFBundleDisplayName: 轻记
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        UILaunchScreen: {}
+        ITSAppUsesNonExemptEncryption: false
+        CFBundleURLTypes:
+          - CFBundleURLName: com.qingji.app
+            CFBundleURLSchemes:
+              - qingji
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.qingji.app
+        TARGETED_DEVICE_FAMILY: "1"
+  QingJiWidget:
+    type: app-extension
+    platform: iOS
+    sources:
+      - QingJiWidget
+    dependencies:
+      - sdk: WidgetKit.framework
+      - sdk: SwiftUI.framework
+    info:
+      path: QingJiWidget/Info.plist
+      properties:
+        CFBundleDisplayName: 轻记
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.qingji.app.widget

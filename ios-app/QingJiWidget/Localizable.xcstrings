@@ -1,0 +1,8 @@
+{
+  "sourceLanguage" : "zh-Hans",
+  "strings" : {
+    "记一笔" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Quick Add" } } } },
+    "一键打开快记键盘，3 秒记完一笔。" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Open the quick-add keypad with one tap." } } } }
+  },
+  "version" : "1.0"
+}
