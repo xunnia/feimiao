@@ -51,7 +51,7 @@ struct ReconcileView: View {
             if let difference, difference != 0 {
                 LabeledContent("差额") {
                     Text(MoneyFormat.string(difference, currencyCode: account.currencyCode))
-                        .foregroundStyle(difference < 0 ? Color.red : Color.green)
+                        .foregroundStyle(difference < 0 ? Color.warning : Color.income)
                         .monospacedDigit()
                 }
                 Button(difference < 0 ? "补平：记一笔漏记支出" : "补平：记一笔漏记收入") {
@@ -59,7 +59,7 @@ struct ReconcileView: View {
                 }
             } else if actual != nil {
                 Label("账已平", systemImage: "checkmark.circle.fill")
-                    .foregroundStyle(.green)
+                    .foregroundStyle(Color.income)
             }
         }
     }

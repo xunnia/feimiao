@@ -100,7 +100,7 @@ struct QuickAddView: View {
                     Label("已记一笔", systemImage: "checkmark.circle.fill")
                         .padding(.horizontal, 16)
                         .padding(.vertical, 10)
-                        .glassEffect(.regular.tint(.green.opacity(0.5)), in: .capsule)
+                        .glassEffect(.regular.tint(Color.accentColor.opacity(0.5)), in: .capsule)
                         .transition(.move(edge: .top).combined(with: .opacity))
                 }
             }
@@ -199,7 +199,7 @@ struct QuickAddView: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
         .glassEffect(
-            .regular.tint(status.todayAllowance >= 0 ? Color.accentColor.opacity(0.25) : Color.red.opacity(0.35)),
+            .regular.tint(status.todayAllowance >= 0 ? Color.accentColor.opacity(0.25) : Color.warning.opacity(0.35)),
             in: .capsule
         )
     }

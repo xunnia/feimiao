@@ -62,17 +62,17 @@ struct BudgetSettingView: View {
                 Spacer()
                 Text("本月已花 \(MoneyFormat.string(status.spentThisMonth, currencyCode: currencyCode)) / 预算 \(MoneyFormat.string(budget.amount, currencyCode: currencyCode))")
                     .font(.caption.monospacedDigit())
-                    .foregroundStyle(status.isOverBudget ? Color.red : Color.secondary)
+                    .foregroundStyle(status.isOverBudget ? Color.warning : Color.secondary)
                     .lineLimit(1)
                     .minimumScaleFactor(0.7)
             }
             ProgressView(value: ratio)
-                .tint(status.isOverBudget ? Color.red : Color.accentColor)
+                .tint(status.isOverBudget ? Color.warning : Color.accentColor)
             Text(status.todayAllowance >= 0
                  ? "今日还可以花 \(MoneyFormat.string(status.todayAllowance, currencyCode: currencyCode))"
                  : "今日已超 \(MoneyFormat.string(-status.todayAllowance, currencyCode: currencyCode))")
                 .font(.footnote)
-                .foregroundStyle(status.todayAllowance >= 0 ? Color.secondary : Color.red)
+                .foregroundStyle(status.todayAllowance >= 0 ? Color.secondary : Color.warning)
         }
         .padding(12)
         .glassEffect(.regular, in: .rect(cornerRadius: 16))

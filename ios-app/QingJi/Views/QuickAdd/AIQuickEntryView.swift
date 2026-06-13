@@ -73,7 +73,7 @@ struct AIQuickEntryView: View {
                     if let message = speech.errorMessage {
                         Text(message)
                             .font(.footnote)
-                            .foregroundStyle(.red)
+                            .foregroundStyle(Color.warning)
                     }
                 }
 
@@ -84,7 +84,7 @@ struct AIQuickEntryView: View {
                         }
                         LabeledContent("金额") {
                             Text(parsed.amount.map { "\($0)" } ?? "未识别")
-                                .foregroundStyle(parsed.amount == nil ? Color.red : Color.primary)
+                                .foregroundStyle(parsed.amount == nil ? Color.warning : Color.primary)
                         }
                         LabeledContent("分类") {
                             Text(matchedCategory(for: parsed)?.name ?? "其他")

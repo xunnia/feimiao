@@ -109,9 +109,9 @@ struct MonthlyStatsView: View {
     private var totalsCards: some View {
         GlassEffectContainer(spacing: 12) {
             HStack(spacing: 12) {
-                totalCard(title: "支出", amount: summary.totalExpense, color: .primary)
-                totalCard(title: "收入", amount: summary.totalIncome, color: .green)
-                totalCard(title: "结余", amount: summary.balance, color: summary.balance >= 0 ? .blue : .red)
+                totalCard(title: "支出", amount: summary.totalExpense, color: Color.expense)
+                totalCard(title: "收入", amount: summary.totalIncome, color: Color.income)
+                totalCard(title: "结余", amount: summary.balance, color: summary.balance >= 0 ? Color.income : Color.warning)
             }
         }
     }
@@ -177,16 +177,16 @@ struct MonthlyStatsView: View {
                 Spacer()
                 Text("\(MoneyFormat.string(status.spentThisMonth, currencyCode: currencyCode)) / \(MoneyFormat.string(budget.amount, currencyCode: currencyCode))")
                     .font(.subheadline.monospacedDigit())
-                    .foregroundStyle(status.isOverBudget ? Color.red : Color.secondary)
+                    .foregroundStyle(status.isOverBudget ? Color.warning : Color.secondary)
             }
             ProgressView(value: ratio)
-                .tint(status.isOverBudget ? .red : .accentColor)
+                .tint(status.isOverBudget ? Color.warning : .accentColor)
             if Calendar.current.isDate(displayedMonth, equalTo: Date(), toGranularity: .month) {
                 Text(status.todayAllowance >= 0
                      ? "今日还可以花 \(MoneyFormat.string(status.todayAllowance, currencyCode: currencyCode))"
                      : "今日已超出节奏 \(MoneyFormat.string(-status.todayAllowance, currencyCode: currencyCode))，缓一缓")
                     .font(.footnote)
-                    .foregroundStyle(status.todayAllowance >= 0 ? Color.secondary : Color.red)
+                    .foregroundStyle(status.todayAllowance >= 0 ? Color.secondary : Color.warning)
             }
         }
         .padding(12)
@@ -199,9 +199,9 @@ struct MonthlyStatsView: View {
             let yearly = yearlySummary
             GlassEffectContainer(spacing: 12) {
                 HStack(spacing: 12) {
-                    totalCard(title: "全年支出", amount: yearly.totalExpense, color: .primary)
-                    totalCard(title: "全年收入", amount: yearly.totalIncome, color: .green)
-                    totalCard(title: "全年结余", amount: yearly.balance, color: yearly.balance >= 0 ? .blue : .red)
+                    totalCard(title: "全年支出", amount: yearly.totalExpense, color: Color.expense)
+                    totalCard(title: "全年收入", amount: yearly.totalIncome, color: Color.income)
+                    totalCard(title: "全年结余", amount: yearly.balance, color: yearly.balance >= 0 ? Color.income : Color.warning)
                 }
             }
             if yearly.totalExpense == 0 && yearly.totalIncome == 0 {

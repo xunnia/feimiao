@@ -144,8 +144,8 @@ struct TransactionRow: View {
 
     private var amountColor: Color {
         switch transaction.kind {
-        case .expense: return .primary
-        case .income: return .green
+        case .expense: return Color.expense
+        case .income: return Color.income
         case .transfer: return .secondary
         }
     }
