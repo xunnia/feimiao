@@ -26,6 +26,30 @@ final class AppRouter {
     /// 记一笔页接到 qingji://ai 时弹出 AI 记账 sheet。
     var showAISheet: Bool = false
 
+    // MARK: - 初始化
+
+    init() {
+        // CI 截图专用：QINGJI_SCREEN 环境变量指定启动后直接跳到的页面，
+        // 避免 simctl openurl 触发模拟器「Open in App?」确认弹窗导致无法导航。
+        if let screen = ProcessInfo.processInfo.environment["QINGJI_SCREEN"], !screen.isEmpty {
+            applyLaunchScreen(screen)
+        }
+    }
+
+    /// 把启动参数映射到初始路由状态。
+    private func applyLaunchScreen(_ screen: String) {
+        switch screen {
+        case "transactions": selectedTab = .transactions
+        case "stats-month":  selectedTab = .statistics; statsScope = .month
+        case "stats-year":   selectedTab = .statistics; statsScope = .year
+        case "budget":       selectedTab = .settings;   settingsPushTarget = .budget
+        case "reconcile":    selectedTab = .settings;   settingsPushTarget = .reconcile
+        case "settings":     selectedTab = .settings
+        case "ai":           selectedTab = .quickAdd;   showAISheet = true
+        default:             selectedTab = .quickAdd
+        }
+    }
+
     // MARK: - URL 解析
 
     /// 解析 qingji:// URL 并更新路由状态。

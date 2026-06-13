@@ -91,54 +91,38 @@ jobs:
           APP_PATH=$(find build/Build/Products -name "QingJi.app" -not -path "*PlugIns*" | head -n 1)
           echo "安装：$APP_PATH"
           xcrun simctl install "$DEVICE" "$APP_PATH"
-
-          # 关键：SIMCTL_CHILD_ 前缀的环境变量会被 simctl 转发给被启动的 App，
-          # App 内 ProcessInfo.environment["QINGJI_DEMO"] 读到 "1"，启用内存容器 + 演示数据。
-          SIMCTL_CHILD_QINGJI_DEMO=1 xcrun simctl launch "$DEVICE" com.qingji.app
-          # 等待 App 完成启动 + 演示数据写入
-          sleep 15
-
           mkdir -p screenshots
 
-          # 01 记一笔（默认首页）
-          xcrun simctl openurl "$DEVICE" "qingji://add"
-          sleep 3
-          xcrun simctl io "$DEVICE" screenshot screenshots/01-quickadd.png
+          # 用「重启 + 启动参数」而不是 openurl 切页面：
+          # simctl openurl 对自定义 scheme 会弹出系统「Open in App?」确认框，CI 无法点击，
+          # 导致所有截图卡在同一个画面。改成每张图用 SIMCTL_CHILD_QINGJI_SCREEN 指定页面冷启动。
+          # （SIMCTL_CHILD_ 前缀的环境变量会被 simctl 转发给 App。）
+          shoot() {
+            local screen="$1" name="$2"
+            xcrun simctl terminate "$DEVICE" com.qingji.app 2>/dev/null || true
+            sleep 1
+            SIMCTL_CHILD_QINGJI_DEMO=1 SIMCTL_CHILD_QINGJI_SCREEN="$screen" \
+              xcrun simctl launch "$DEVICE" com.qingji.app
+            sleep 5
+            xcrun simctl io "$DEVICE" screenshot "screenshots/$name.png"
+          }
 
-          # 02 明细列表
-          xcrun simctl openurl "$DEVICE" "qingji://transactions"
-          sleep 3
-          xcrun simctl io "$DEVICE" screenshot screenshots/02-transactions.png
+          shoot "quickadd"     "01-quickadd"
+          shoot "transactions" "02-transactions"
+          shoot "stats-month"  "03-stats-month"
+          shoot "stats-year"   "04-stats-year"
+          shoot "budget"       "05-budget"
+          shoot "reconcile"    "06-reconcile"
+          shoot "settings"     "07-settings"
+          shoot "ai"           "08-ai"
 
-          # 03 统计 · 月度
-          xcrun simctl openurl "$DEVICE" "qingji://stats"
-          sleep 3
-          xcrun simctl io "$DEVICE" screenshot screenshots/03-stats-month.png
-
-          # 04 统计 · 年度
-          xcrun simctl openurl "$DEVICE" "qingji://stats/year"
-          sleep 3
-          xcrun simctl io "$DEVICE" screenshot screenshots/04-stats-year.png
-
-          # 05 设置 · 月度预算
-          xcrun simctl openurl "$DEVICE" "qingji://settings/budget"
-          sleep 3
-          xcrun simctl io "$DEVICE" screenshot screenshots/05-budget.png
-
-          # 06 设置 · 对账
-          xcrun simctl openurl "$DEVICE" "qingji://settings/reconcile"
-          sleep 3
-          xcrun simctl io "$DEVICE" screenshot screenshots/06-reconcile.png
-
-          # 07 设置主页
-          xcrun simctl openurl "$DEVICE" "qingji://settings"
-          sleep 3
-          xcrun simctl io "$DEVICE" screenshot screenshots/07-settings.png
-
-          # 08 AI 记一笔（弹出 sheet，延迟稍长等动画结束）
-          xcrun simctl openurl "$DEVICE" "qingji://ai"
-          sleep 4
-          xcrun simctl io "$DEVICE" screenshot screenshots/08-ai.png
+          # 校验：8 张图若全部相同（md5 唯一值=1）说明导航又失败了，直接让 CI 报错
+          UNIQUE=$(md5 -q screenshots/*.png | sort -u | wc -l | tr -d ' ')
+          echo "不同截图数量：$UNIQUE / 8"
+          if [ "$UNIQUE" -le 1 ]; then
+            echo "::error::8 张截图完全相同，深链/启动参数导航未生效"
+            exit 1
+          fi
       - uses: actions/upload-artifact@v4
         with:
           name: simulator-screenshots
