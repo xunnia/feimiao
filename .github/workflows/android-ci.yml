@@ -36,6 +36,11 @@ jobs:
             cp -r /tmp/scaffold/android android-app/android
           fi
           [ -f android-app/.metadata ] || cp /tmp/scaffold/.metadata android-app/.metadata
+          # release 包默认不带联网权限（只有 debug 自动带），手动注入，否则 DeepSeek 等网络请求全失败
+          MANIFEST=android-app/android/app/src/main/AndroidManifest.xml
+          grep -q 'android.permission.INTERNET' "$MANIFEST" || \
+            sed -i '/<manifest/a\    <uses-permission android:name="android.permission.INTERNET"/>' "$MANIFEST"
+          grep INTERNET "$MANIFEST"
 
       - name: 拉取依赖
         working-directory: android-app
