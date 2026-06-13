@@ -18,7 +18,7 @@ class SettingsView extends StatelessWidget {
           // ---- 管理分组 ----
           _SectionHeader(label: '管理'),
           ListTile(
-            leading: const Icon(Icons.gauge_outlined),
+            leading: const Icon(Icons.savings_outlined),
             title: const Text('月度预算'),
             trailing: const Icon(Icons.chevron_right),
             onTap: () => Navigator.push(
