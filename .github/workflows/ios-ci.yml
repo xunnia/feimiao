@@ -137,7 +137,10 @@ jobs:
         run: brew install xcodegen
       - name: Generate Xcode project
         run: xcodegen generate --spec ios-app/project.yml --project ios-app
-      - name: Build Release for device (unsigned)
+      - name: Build Release for device (ad-hoc signed)
+        # 用 ad-hoc 签名（CODE_SIGN_IDENTITY="-"）而非完全不签名：
+        # 生成结构完整的 Mach-O 代码签名段，Sideloadly/AltStore 重签时更稳，
+        # 可避免部分 "Guru Meditation / Invalid file" 报错。
         run: |
           xcodebuild build \
             -project ios-app/QingJi.xcodeproj \
@@ -145,19 +148,27 @@ jobs:
             -configuration Release \
             -sdk iphoneos \
             -derivedDataPath build \
-            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGN_IDENTITY="-" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=YES \
             | tail -30
           exit ${PIPESTATUS[0]}
-      - name: Package IPA
+      - name: Package IPA (完整版 + 无小组件版)
         run: |
+          # 完整版（含桌面小组件）
           mkdir -p Payload
-          cp -R build/Build/Products/Release-iphoneos/QingJi.app Payload/
+          cp -R build/Build/Products/Release-iphoneos/QingJi.app Payload/QingJi.app
           zip -qry QingJi-unsigned.ipa Payload
-          ls -lh QingJi-unsigned.ipa
+          # 无小组件版（剥掉 PlugIns，免费 Apple ID 侧载更易成功）
+          rm -rf Payload/QingJi.app/PlugIns
+          zip -qry QingJi-noext.ipa Payload
+          ls -lh QingJi-unsigned.ipa QingJi-noext.ipa
       - uses: actions/upload-artifact@v4
         with:
           name: QingJi-unsigned-ipa
-          path: QingJi-unsigned.ipa
+          path: |
+            QingJi-unsigned.ipa
+            QingJi-noext.ipa
       # 把 IPA 提交回分支，提供固定下载链接（Sideloadly/AltStore 侧载用）
       - name: Commit IPA back to branch
         if: github.event_name == 'push'
@@ -166,12 +177,13 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           mkdir -p ci-artifacts
           cp QingJi-unsigned.ipa ci-artifacts/QingJi-unsigned.ipa
+          cp QingJi-noext.ipa ci-artifacts/QingJi-noext.ipa
           git add ci-artifacts
           if git diff --cached --quiet; then
             echo "IPA 无变化，跳过提交"
             exit 0
           fi
-          git commit -m "ci: 更新未签名 IPA [skip ci]"
+          git commit -m "ci: 更新 IPA（完整版 + 无小组件版）[skip ci]"
           git pull --rebase origin "${GITHUB_REF_NAME}" || true
           git push origin HEAD:"${GITHUB_REF_NAME}" || {
             sleep 5
