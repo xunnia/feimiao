@@ -6,6 +6,8 @@ import QingJiCore
 /// 核心快记页：打开 App 即是键盘，目标 3 秒记完一笔。
 struct QuickAddView: View {
     @Environment(\.modelContext) private var context
+    /// 全局路由：qingji://ai 深链会把 router.showAISheet 置 true，触发 AI 记账 sheet。
+    @Environment(AppRouter.self) private var router
 
     @Query(filter: #Predicate<TxCategory> { !$0.isArchived }, sort: \TxCategory.sortOrder)
     private var allCategories: [TxCategory]
@@ -21,7 +23,6 @@ struct QuickAddView: View {
     @State private var note = ""
     @State private var rankedKeys: [String] = []
     @State private var showSavedToast = false
-    @State private var showAISheet = false
     @State private var budgetStatus: BudgetStatus?
 
     private var visibleCategories: [TxCategory] {
@@ -79,13 +80,16 @@ struct QuickAddView: View {
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
-                        showAISheet = true
+                        router.showAISheet = true
                     } label: {
                         Label("AI 记一笔", systemImage: "sparkles")
                     }
                 }
             }
-            .sheet(isPresented: $showAISheet, onDismiss: {
+            .sheet(isPresented: Binding(
+                get: { router.showAISheet },
+                set: { router.showAISheet = $0 }
+            ), onDismiss: {
                 refreshRanking()
                 loadBudgetStatus()
             }) {

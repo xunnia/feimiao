@@ -5,10 +5,12 @@ enum AppTab: Hashable {
 }
 
 struct RootTabView: View {
-    @State private var selectedTab: AppTab = .quickAdd
+    @Environment(AppRouter.self) private var router
 
     var body: some View {
-        TabView(selection: $selectedTab) {
+        // 用 Bindable 包装 @Observable 对象，让 TabView 绑定到 router.selectedTab
+        @Bindable var router = router
+        TabView(selection: $router.selectedTab) {
             QuickAddView()
                 .tabItem { Label("记一笔", systemImage: "plus.circle.fill") }
                 .tag(AppTab.quickAdd)
@@ -24,11 +26,9 @@ struct RootTabView: View {
         }
         // iOS 26 液态玻璃 TabBar：滚动时自动收起，突出内容
         .tabBarMinimizeBehavior(.onScrollDown)
-        // 小组件 / 快捷指令通过 qingji://add 直达快记页
+        // 所有深链统一由 AppRouter 解析
         .onOpenURL { url in
-            if url.host == "add" || url.path.contains("add") {
-                selectedTab = .quickAdd
-            }
+            router.handle(url: url)
         }
     }
 }
@@ -36,4 +36,5 @@ struct RootTabView: View {
 #Preview {
     RootTabView()
         .modelContainer(AppModelContainer.shared)
+        .environment(AppRouter())
 }

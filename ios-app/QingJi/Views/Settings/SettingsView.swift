@@ -4,6 +4,10 @@ import QingJiCore
 
 struct SettingsView: View {
     @Environment(\.modelContext) private var context
+    /// 全局路由：qingji://settings/budget 或 /reconcile 深链会设置 settingsPushTarget，
+    /// NavigationStack 读取后 push 对应子页面。
+    @Environment(AppRouter.self) private var router
+
     @Query(sort: \MoneyTransaction.date, order: .reverse)
     private var transactions: [MoneyTransaction]
 
@@ -65,6 +69,17 @@ struct SettingsView: View {
                 }
             }
             .navigationTitle("设置")
+            // 深链路由：qingji://settings/budget 或 /reconcile 时 push 对应子页面
+            .navigationDestination(isPresented: Binding(
+                get: { router.settingsPushTarget != nil },
+                set: { if !$0 { router.settingsPushTarget = nil } }
+            )) {
+                switch router.settingsPushTarget {
+                case .budget:    BudgetSettingView()
+                case .reconcile: ReconcileView()
+                case nil:        EmptyView()
+                }
+            }
             .fileImporter(
                 isPresented: $showImporter,
                 allowedContentTypes: [.commaSeparatedText, .plainText, .data]

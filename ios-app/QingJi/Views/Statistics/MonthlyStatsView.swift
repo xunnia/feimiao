@@ -6,14 +6,14 @@ import QingJiCore
 
 /// 月度统计：收支卡片 + 分类占比扇形图 + 每日支出柱状图 + 分类排行。
 struct MonthlyStatsView: View {
-    private enum Scope: Hashable {
-        case month, year
-    }
+    /// 复用 AppRouter 定义的枚举；本地 typealias 保持代码可读性。
+    private typealias Scope = AppRouter.StatsScope
+
+    @Environment(AppRouter.self) private var router
 
     @Query private var transactions: [MoneyTransaction]
     @Query private var budgets: [Budget]
     @State private var displayedMonth = Date()
-    @State private var scope: Scope = .month
 
     private var summary: MonthlySummary {
         let components = Calendar.current.dateComponents([.year, .month], from: displayedMonth)
@@ -38,16 +38,18 @@ struct MonthlyStatsView: View {
     }
 
     var body: some View {
+        // 用 Bindable 包装 @Observable 对象，让 Picker 绑定到 router.statsScope
+        @Bindable var router = router
         NavigationStack {
             ScrollView {
                 VStack(spacing: 20) {
-                    Picker("范围", selection: $scope) {
+                    Picker("范围", selection: $router.statsScope) {
                         Text("月度").tag(Scope.month)
                         Text("年度").tag(Scope.year)
                     }
                     .pickerStyle(.segmented)
 
-                    if scope == .month {
+                    if router.statsScope == .month {
                         monthSwitcher
                         totalsCards
                         if let budget = monthlyBudget {
@@ -68,6 +70,8 @@ struct MonthlyStatsView: View {
                     } else {
                         yearlyContent
                     }
+                    // 注：router.statsScope 在深链触发后由 AppRouter 更新，
+                    // Picker 绑定确保 UI 与路由状态同步。
                 }
                 .padding()
             }

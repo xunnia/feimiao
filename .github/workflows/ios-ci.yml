@@ -91,13 +91,54 @@ jobs:
           APP_PATH=$(find build/Build/Products -name "QingJi.app" -not -path "*PlugIns*" | head -n 1)
           echo "安装：$APP_PATH"
           xcrun simctl install "$DEVICE" "$APP_PATH"
-          xcrun simctl launch "$DEVICE" com.qingji.app
+
+          # 关键：SIMCTL_CHILD_ 前缀的环境变量会被 simctl 转发给被启动的 App，
+          # App 内 ProcessInfo.environment["QINGJI_DEMO"] 读到 "1"，启用内存容器 + 演示数据。
+          SIMCTL_CHILD_QINGJI_DEMO=1 xcrun simctl launch "$DEVICE" com.qingji.app
+          # 等待 App 完成启动 + 演示数据写入
           sleep 15
+
           mkdir -p screenshots
-          xcrun simctl io "$DEVICE" screenshot screenshots/01-quickadd.png
-          xcrun simctl openurl "$DEVICE" "qingji://add" || true
+
+          # 01 记一笔（默认首页）
+          xcrun simctl openurl "$DEVICE" "qingji://add"
           sleep 3
-          xcrun simctl io "$DEVICE" screenshot screenshots/02-quickadd-again.png
+          xcrun simctl io "$DEVICE" screenshot screenshots/01-quickadd.png
+
+          # 02 明细列表
+          xcrun simctl openurl "$DEVICE" "qingji://transactions"
+          sleep 3
+          xcrun simctl io "$DEVICE" screenshot screenshots/02-transactions.png
+
+          # 03 统计 · 月度
+          xcrun simctl openurl "$DEVICE" "qingji://stats"
+          sleep 3
+          xcrun simctl io "$DEVICE" screenshot screenshots/03-stats-month.png
+
+          # 04 统计 · 年度
+          xcrun simctl openurl "$DEVICE" "qingji://stats/year"
+          sleep 3
+          xcrun simctl io "$DEVICE" screenshot screenshots/04-stats-year.png
+
+          # 05 设置 · 月度预算
+          xcrun simctl openurl "$DEVICE" "qingji://settings/budget"
+          sleep 3
+          xcrun simctl io "$DEVICE" screenshot screenshots/05-budget.png
+
+          # 06 设置 · 对账
+          xcrun simctl openurl "$DEVICE" "qingji://settings/reconcile"
+          sleep 3
+          xcrun simctl io "$DEVICE" screenshot screenshots/06-reconcile.png
+
+          # 07 设置主页
+          xcrun simctl openurl "$DEVICE" "qingji://settings"
+          sleep 3
+          xcrun simctl io "$DEVICE" screenshot screenshots/07-settings.png
+
+          # 08 AI 记一笔（弹出 sheet，延迟稍长等动画结束）
+          xcrun simctl openurl "$DEVICE" "qingji://ai"
+          sleep 4
+          xcrun simctl io "$DEVICE" screenshot screenshots/08-ai.png
       - uses: actions/upload-artifact@v4
         with:
           name: simulator-screenshots
