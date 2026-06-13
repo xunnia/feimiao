@@ -15,7 +15,9 @@ enum AppModelContainer {
             if ProcessInfo.processInfo.environment["QINGJI_DEMO"] == "1" {
                 let config = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
                 let container = try ModelContainer(for: schema, configurations: [config])
-                DemoDataSeeder.seed(context: container.mainContext)
+                // mainContext 是 @MainActor 隔离的，这里是非隔离的静态上下文不能直接用；
+                // 改用新建的 ModelContext（内存库各上下文共享同一存储，写入对 @Query 照样可见）
+                DemoDataSeeder.seed(context: ModelContext(container))
                 return container
             }
             // 正常模式：本地持久化存储

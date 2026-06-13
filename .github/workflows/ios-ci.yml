@@ -178,10 +178,8 @@ jobs:
         run: brew install xcodegen
       - name: Generate Xcode project
         run: xcodegen generate --spec ios-app/project.yml --project ios-app
-      - name: Build Release for device (ad-hoc signed)
-        # 用 ad-hoc 签名（CODE_SIGN_IDENTITY="-"）而非完全不签名：
-        # 生成结构完整的 Mach-O 代码签名段，Sideloadly/AltStore 重签时更稳，
-        # 可避免部分 "Guru Meditation / Invalid file" 报错。
+      - name: Build Release for device (unsigned)
+        # iOS 设备 SDK 不允许 ad-hoc 签名，这里完全不签名，交给 Sideloadly/AltStore 重签
         run: |
           xcodebuild build \
             -project ios-app/QingJi.xcodeproj \
@@ -189,9 +187,7 @@ jobs:
             -configuration Release \
             -sdk iphoneos \
             -derivedDataPath build \
-            CODE_SIGN_IDENTITY="-" \
-            CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGNING_ALLOWED=YES \
+            CODE_SIGNING_ALLOWED=NO \
             | tail -30
           exit ${PIPESTATUS[0]}
       - name: Package IPA (完整版 + 无小组件版)
