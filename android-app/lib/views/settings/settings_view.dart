@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import 'accounts_view.dart';
 import 'budget_setting_view.dart';
+import 'categories_view.dart';
 
 /// 设置页：管理分组 + 关于分组。
 class SettingsView extends StatelessWidget {
@@ -36,6 +37,17 @@ class SettingsView extends StatelessWidget {
               context,
               MaterialPageRoute<void>(
                 builder: (_) => const AccountsView(),
+              ),
+            ),
+          ),
+          ListTile(
+            leading: const Icon(Icons.label_outline),
+            title: const Text('分类管理'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => Navigator.push(
+              context,
+              MaterialPageRoute<void>(
+                builder: (_) => const CategoriesView(),
               ),
             ),
           ),

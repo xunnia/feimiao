@@ -8,6 +8,7 @@ import '../../core/models/transaction_kind.dart';
 import '../../core/money_format.dart';
 import '../../data/app_repository.dart';
 import '../../theme/app_colors.dart';
+import 'ai_quick_entry_view.dart';
 import 'amount_keypad.dart';
 import 'category_grid.dart';
 
@@ -74,9 +75,6 @@ class _QuickAddViewState extends State<QuickAddView> {
     final accountId = _selectedAccountId ?? repo.accounts.firstOrNull?.id;
     if (accountId == null) return;
 
-    // 转账暂不在本里程碑实现，跳过
-    if (_kind == TransactionKind.transfer) return;
-
     await repo.addTransaction(
       kind: _kind,
       amount: amount,
@@ -121,19 +119,30 @@ class _QuickAddViewState extends State<QuickAddView> {
       appBar: AppBar(
         title: const Text('记一笔'),
         centerTitle: true,
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.auto_awesome_outlined),
+            tooltip: 'AI 记账',
+            onPressed: () => Navigator.push(
+              context,
+              MaterialPageRoute<void>(
+                builder: (_) => const AiQuickEntryView(),
+              ),
+            ),
+          ),
+        ],
       ),
       // resizeToAvoidBottomInset false，因为我们用自定义键盘不需要系统键盘顶起
       resizeToAvoidBottomInset: false,
       body: Column(
         children: [
-          // 1. 支出/收入/转账分段切换
+          // 1. 支出/收入分段切换
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
             child: SegmentedButton<TransactionKind>(
               segments: const [
                 ButtonSegment(value: TransactionKind.expense, label: Text('支出')),
                 ButtonSegment(value: TransactionKind.income, label: Text('收入')),
-                ButtonSegment(value: TransactionKind.transfer, label: Text('转账')),
               ],
               selected: {_kind},
               onSelectionChanged: (s) => _onKindChanged(s.first),
@@ -161,11 +170,6 @@ class _QuickAddViewState extends State<QuickAddView> {
           Expanded(
             child: Consumer<AppRepository>(
               builder: (context, repo, _) {
-                if (_kind == TransactionKind.transfer) {
-                  return const Center(
-                    child: Text('转账功能即将到来', style: TextStyle(color: Colors.grey)),
-                  );
-                }
                 final cats = repo.categoriesForKind(_kind);
                 return SingleChildScrollView(
                   child: CategoryGrid(

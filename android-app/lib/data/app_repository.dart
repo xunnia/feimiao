@@ -443,4 +443,42 @@ class AppRepository extends ChangeNotifier {
     await _loadAccounts();
     notifyListeners();
   }
+
+  // ---------------------------------------------------------------------------
+  // 分类 CRUD
+  // ---------------------------------------------------------------------------
+
+  /// 新增自定义分类。[key] 建议用 UUID 或时间戳字符串保证唯一性。
+  Future<int> addCategory({
+    required String key,
+    required String nameZh,
+    required String nameEn,
+    required TransactionKind kind,
+  }) async {
+    final id = await _db!.insert('categories', {
+      'key': key,
+      'name_zh': nameZh,
+      'name_en': nameEn,
+      'kind': kind.toJson(),
+    });
+    await _loadCategories();
+    notifyListeners();
+    return id;
+  }
+
+  /// 修改分类名称（中英文同时改，英文传空则维持原值）。
+  Future<void> renameCategory(int id, {required String nameZh, String? nameEn}) async {
+    final updates = <String, Object?>{'name_zh': nameZh};
+    if (nameEn != null) updates['name_en'] = nameEn;
+    await _db!.update('categories', updates, where: 'id = ?', whereArgs: [id]);
+    await _loadCategories();
+    notifyListeners();
+  }
+
+  /// 删除分类（关联交易的 category_id 由于外键未开启不会级联删除）。
+  Future<void> deleteCategory(int id) async {
+    await _db!.delete('categories', where: 'id = ?', whereArgs: [id]);
+    await _loadCategories();
+    notifyListeners();
+  }
 }
