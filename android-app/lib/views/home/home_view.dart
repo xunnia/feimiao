@@ -12,8 +12,11 @@ import '../../theme/app_colors.dart';
 
 /// 首页概览：本月收支 + 今日可花 + 最近 5 笔。
 /// 数据通过 context.watch<AppRepository>() 实时刷新。
+///
+/// 注意：HomeView 不再持有 Scaffold；它只渲染可滚动内容，
+/// 外层的 Scaffold / AppBar 由 RootShell 负责。
 class HomeView extends StatelessWidget {
-  /// 切到明细 tab 的回调（由 RootTabs 注入）。
+  /// 打开明细页的回调（由 RootShell 注入）。
   final VoidCallback onShowTransactions;
 
   const HomeView({super.key, required this.onShowTransactions});
@@ -29,74 +32,30 @@ class HomeView extends StatelessWidget {
     );
     final recentTx = repo.transactions.take(5).toList();
 
-    return Scaffold(
-      // 深蓝品牌色顶部留白头
-      backgroundColor: Theme.of(context).colorScheme.surface,
-      body: CustomScrollView(
-        slivers: [
-          _HomeAppBar(year: now.year, month: now.month),
-          SliverToBoxAdapter(
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  // 本月收支卡片
-                  _MonthSummaryCard(summary: summary),
-                  const SizedBox(height: 12),
+    return ListView(
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+      children: [
+        // 本月收支卡片
+        _MonthSummaryCard(summary: summary),
+        const SizedBox(height: 12),
 
-                  // 今日可花横幅（已设预算时显示）
-                  if (repo.monthlyBudget != null)
-                    _TodayAllowanceBanner(
-                      status: BudgetEngine.status(
-                        monthlyBudget: repo.monthlyBudget!,
-                        records: repo.allRecords,
-                      ),
-                    ),
-                  if (repo.monthlyBudget != null) const SizedBox(height: 12),
-
-                  // 最近 5 笔
-                  _RecentTransactionsCard(
-                    transactions: recentTx,
-                    allEmpty: repo.transactions.isEmpty,
-                    onShowAll: onShowTransactions,
-                  ),
-                ],
-              ),
+        // 今日可花横幅（已设预算时显示）
+        if (repo.monthlyBudget != null)
+          _TodayAllowanceBanner(
+            status: BudgetEngine.status(
+              monthlyBudget: repo.monthlyBudget!,
+              records: repo.allRecords,
             ),
           ),
-        ],
-      ),
-    );
-  }
-}
+        if (repo.monthlyBudget != null) const SizedBox(height: 12),
 
-// ---------------------------------------------------------------------------
-// 顶部 SliverAppBar：标题 + 年月
-// ---------------------------------------------------------------------------
-
-class _HomeAppBar extends StatelessWidget {
-  final int year;
-  final int month;
-
-  const _HomeAppBar({required this.year, required this.month});
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return SliverAppBar(
-      pinned: false,
-      floating: true,
-      backgroundColor: scheme.surface,
-      surfaceTintColor: Colors.transparent,
-      title: Text(
-        '$year年$month月',
-        style: Theme.of(context).textTheme.titleMedium?.copyWith(
-              color: scheme.onSurfaceVariant,
-              fontWeight: FontWeight.w500,
-            ),
-      ),
-      centerTitle: false,
+        // 最近 5 笔
+        _RecentTransactionsCard(
+          transactions: recentTx,
+          allEmpty: repo.transactions.isEmpty,
+          onShowAll: onShowTransactions,
+        ),
+      ],
     );
   }
 }
@@ -372,7 +331,7 @@ class _EmptyState extends StatelessWidget {
           ),
           const SizedBox(height: 4),
           Text(
-            '点右下角 + 记第一笔',
+            '在下方输入框记第一笔',
             style: Theme.of(context).textTheme.labelMedium?.copyWith(
                   color: scheme.onSurfaceVariant.withOpacity(0.45),
                 ),

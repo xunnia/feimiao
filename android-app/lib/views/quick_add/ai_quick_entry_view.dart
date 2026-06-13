@@ -14,8 +14,13 @@ import '../settings/ai_setting_view.dart';
 ///
 /// 配置了 DeepSeek API Key → 调 LLM，支持一句话拆多笔；
 /// 未配置或调用失败 → 降级为本地单笔规则解析。
+///
+/// [initialText] 非空时，页面打开后自动填入输入框并触发解析
+/// （从 RecordInputBar 的 AI 模式直接带文字跳过来时使用）。
 class AiQuickEntryView extends StatefulWidget {
-  const AiQuickEntryView({super.key});
+  final String? initialText;
+
+  const AiQuickEntryView({super.key, this.initialText});
 
   @override
   State<AiQuickEntryView> createState() => _AiQuickEntryViewState();
@@ -38,6 +43,17 @@ class _AiQuickEntryViewState extends State<AiQuickEntryView> {
 
   /// 降级原因提示文字。
   String _fallbackHint = '';
+
+  @override
+  void initState() {
+    super.initState();
+    final initial = widget.initialText;
+    if (initial != null && initial.isNotEmpty) {
+      _inputCtrl.text = initial;
+      // 延后一帧，等 context 就绪后自动触发解析
+      WidgetsBinding.instance.addPostFrameCallback((_) => _doParse());
+    }
+  }
 
   @override
   void dispose() {

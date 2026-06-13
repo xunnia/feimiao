@@ -19,12 +19,17 @@ class MoneyFormat {
   }
 
   /// "¥1,234.50" 风格的金额文本（固定两位小数）。
+  /// CNY 强制用 "¥"，避免某些 intl locale 下输出 "CN¥" 或 "CNY"。
   static String string(Decimal amount, {String currencyCode = 'CNY'}) {
     try {
-      final fmt = NumberFormat.currency(name: currencyCode, decimalDigits: 2);
+      final sym = currencyCode == 'CNY' ? '¥' : symbol(currencyCode);
+      final fmt = NumberFormat.currency(
+        symbol: sym,
+        decimalDigits: 2,
+      );
       return fmt.format(amount.toDouble());
     } catch (_) {
-      return '${symbol(currencyCode)}${amount.toStringAsFixed(2)}';
+      return '¥${amount.toStringAsFixed(2)}';
     }
   }
 

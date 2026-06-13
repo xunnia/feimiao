@@ -40,7 +40,9 @@ jobs:
           MANIFEST=android-app/android/app/src/main/AndroidManifest.xml
           grep -q 'android.permission.INTERNET' "$MANIFEST" || \
             sed -i '/<manifest/a\    <uses-permission android:name="android.permission.INTERNET"/>' "$MANIFEST"
-          grep INTERNET "$MANIFEST"
+          grep -q 'android.permission.RECORD_AUDIO' "$MANIFEST" || \
+            sed -i '/<manifest/a\    <uses-permission android:name="android.permission.RECORD_AUDIO"/>' "$MANIFEST"
+          grep permission "$MANIFEST"
 
       - name: 拉取依赖
         working-directory: android-app
