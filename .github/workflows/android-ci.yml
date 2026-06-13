@@ -49,13 +49,15 @@ jobs:
         working-directory: android-app
         run: flutter test
 
-      - name: 构建 debug APK（可直接安装）
+      - name: 构建 release APK（瘦身，可直接安装）
+        # release 比 debug 小很多（去掉调试运行时 + tree-shaking）；
+        # Flutter 模板的 release 默认用 debug 签名，照样能侧载安装。
         working-directory: android-app
-        run: flutter build apk --debug
+        run: flutter build apk --release
 
       - name: 收集 APK
         run: |
-          SRC=android-app/build/app/outputs/flutter-apk/app-debug.apk
+          SRC=android-app/build/app/outputs/flutter-apk/app-release.apk
           ls -lh "$SRC"
           cp "$SRC" qingji.apk
 
