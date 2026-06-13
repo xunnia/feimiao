@@ -84,32 +84,9 @@ class _QuickAddViewState extends State<QuickAddView> {
       date: _date,
     );
 
-    setState(() {
-      _expression.clear();
-      _expressionVersion++;
-      _noteController.clear();
-      _date = DateTime.now();
-      final cats = repo.categoriesForKind(_kind);
-      _selectedCategoryId = cats.firstOrNull?.id;
-    });
-
+    // 保存成功后返回首页；首页通过 context.watch<AppRepository>() 自动刷新。
     if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: const Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(Icons.check_circle, color: Colors.white, size: 18),
-              SizedBox(width: 8),
-              Text('已记一笔'),
-            ],
-          ),
-          duration: const Duration(milliseconds: 1500),
-          behavior: SnackBarBehavior.floating,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
-          margin: const EdgeInsets.fromLTRB(16, 0, 16, 80),
-        ),
-      );
+      Navigator.pop(context);
     }
   }
 
