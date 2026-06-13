@@ -152,7 +152,7 @@ class TransactionEntity {
 ///
 /// 继承 [ChangeNotifier]，UI 通过 [provider] 订阅变化。
 class AppRepository extends ChangeNotifier {
-  static const _dbVersion = 1;
+  static const _dbVersion = 2;
   static const _dbName = 'qingji.db';
 
   Database? _db;
@@ -162,9 +162,15 @@ class AppRepository extends ChangeNotifier {
   final List<CategoryEntity> _categories = [];
   final List<TransactionEntity> _transactions = [];
 
+  /// 月度总预算（null = 未设置）。
+  Decimal? _monthlyBudget;
+
   List<AccountEntity> get accounts => List.unmodifiable(_accounts);
   List<CategoryEntity> get categories => List.unmodifiable(_categories);
   List<TransactionEntity> get transactions => List.unmodifiable(_transactions);
+
+  /// 当前月度预算，null 代表未设置。
+  Decimal? get monthlyBudget => _monthlyBudget;
 
   // ---------------------------------------------------------------------------
   // 初始化
@@ -176,6 +182,7 @@ class AppRepository extends ChangeNotifier {
       dbPath,
       version: _dbVersion,
       onCreate: _onCreate,
+      onUpgrade: _onUpgrade,
     );
     await _seedIfNeeded();
     await _loadAll();
@@ -216,10 +223,20 @@ class AppRepository extends ChangeNotifier {
 
     await db.execute('''
       CREATE TABLE budget (
-        id     INTEGER PRIMARY KEY AUTOINCREMENT,
-        amount TEXT NOT NULL
+        id           INTEGER PRIMARY KEY AUTOINCREMENT,
+        category_key TEXT,
+        amount       TEXT NOT NULL
       )
     ''');
+  }
+
+  /// 数据库升级：v1→v2 在 budget 表加 category_key 列。
+  Future<void> _onUpgrade(Database db, int oldVersion, int newVersion) async {
+    if (oldVersion < 2) {
+      // v1 的 budget 表没有 category_key 列，添加之。
+      await db.execute(
+          'ALTER TABLE budget ADD COLUMN category_key TEXT');
+    }
   }
 
   /// 首次启动写入默认账户和分类种子数据。
@@ -250,6 +267,7 @@ class AppRepository extends ChangeNotifier {
       _loadAccounts(),
       _loadCategories(),
       _loadTransactions(),
+      _loadBudget(),
     ]);
     notifyListeners();
   }
@@ -266,6 +284,22 @@ class AppRepository extends ChangeNotifier {
     _categories
       ..clear()
       ..addAll(rows.map(CategoryEntity.fromMap));
+  }
+
+  /// 读取 category_key 为 NULL 的那条预算行（月度总预算）。
+  Future<void> _loadBudget() async {
+    final rows = await _db!.query(
+      'budget',
+      where: 'category_key IS NULL',
+      limit: 1,
+    );
+    if (rows.isEmpty) {
+      _monthlyBudget = null;
+    } else {
+      final raw = rows.first['amount'] as String;
+      final value = Decimal.parse(raw);
+      _monthlyBudget = value > Decimal.zero ? value : null;
+    }
   }
 
   /// 查询时做一次 LEFT JOIN 把分类/账户冗余字段带出来，避免后续多次查询。
@@ -346,4 +380,67 @@ class AppRepository extends ChangeNotifier {
   /// 返回所有交易转换为 core 的 [TransactionRecord]（用于统计引擎）。
   List<TransactionRecord> get allRecords =>
       _transactions.map((t) => t.toRecord()).toList();
+
+  // ---------------------------------------------------------------------------
+  // 月度预算
+  // ---------------------------------------------------------------------------
+
+  /// 保存月度总预算（[amount] 传 zero 视为删除预算）。
+  Future<void> saveMonthlyBudget(Decimal amount) async {
+    final rows = await _db!.query(
+      'budget',
+      where: 'category_key IS NULL',
+      limit: 1,
+    );
+    if (rows.isEmpty) {
+      await _db!.insert('budget', {
+        'category_key': null,
+        'amount': amount.toString(),
+      });
+    } else {
+      final id = rows.first['id'] as int;
+      await _db!.update(
+        'budget',
+        {'amount': amount.toString()},
+        where: 'id = ?',
+        whereArgs: [id],
+      );
+    }
+    await _loadBudget();
+    notifyListeners();
+  }
+
+  // ---------------------------------------------------------------------------
+  // 账户 CRUD
+  // ---------------------------------------------------------------------------
+
+  /// 新增账户。返回新行的 id。
+  Future<int> addAccount({required String name, String currencyCode = 'CNY'}) async {
+    final id = await _db!.insert('accounts', {
+      'name': name,
+      'currency_code': currencyCode,
+    });
+    await _loadAccounts();
+    notifyListeners();
+    return id;
+  }
+
+  /// 修改账户名（只改名字，货币码暂不支持改动）。
+  Future<void> renameAccount(int id, String newName) async {
+    await _db!.update(
+      'accounts',
+      {'name': newName},
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+    await _loadAccounts();
+    notifyListeners();
+  }
+
+  /// 删除账户。关联交易不级联删除（外键此处未开启），保持历史记录完整。
+  Future<void> deleteAccount(int id) async {
+    await _db!.delete('accounts', where: 'id = ?', whereArgs: [id]);
+    await _loadAccounts();
+    notifyListeners();
+  }
 }
