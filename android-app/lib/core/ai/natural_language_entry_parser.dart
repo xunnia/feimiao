@@ -69,7 +69,7 @@ class NaturalLanguageEntryParser {
       final yuan = Decimal.tryParse(kuaiMatch.group(1)!);
       final jiao = Decimal.tryParse(kuaiMatch.group(2)!);
       if (yuan != null && jiao != null) {
-        return yuan + jiao / Decimal.fromInt(10);
+        return yuan + (jiao / Decimal.fromInt(10)).toDecimal();
       }
     }
 

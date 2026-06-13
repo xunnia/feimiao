@@ -75,7 +75,7 @@ void main() {
 
   group('AccountBalanceCalculator', () {
     test('balance with transfers', () {
-      final day = DateTime.fromMillisecondsSinceEpoch(1_700_000_000 * 1000);
+      final day = DateTime.fromMillisecondsSinceEpoch(1700000000 * 1000);
       final records = [
         TransactionRecord.create(kind: TransactionKind.income, amount: Decimal.fromInt(1000), accountName: '微信', date: day),
         TransactionRecord.create(kind: TransactionKind.expense, amount: Decimal.fromInt(300), accountName: '微信', date: day),
