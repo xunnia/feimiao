@@ -21,6 +21,17 @@ dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^4.0.0
+  flutter_launcher_icons: ^0.14.1
 
 flutter:
   uses-material-design: true
+
+# 桌面图标：账单 + ¥ + 图表（深蓝玻璃风），CI 里用 flutter_launcher_icons 生成各分辨率
+flutter_launcher_icons:
+  android: true
+  ios: false
+  image_path: "assets/icon/app_icon.png"
+  adaptive_icon_background: "#2E5090"
+  adaptive_icon_foreground: "assets/icon/app_icon.png"
+  min_sdk_android: 21
+

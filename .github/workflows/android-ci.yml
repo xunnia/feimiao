@@ -41,6 +41,10 @@ jobs:
         working-directory: android-app
         run: flutter pub get
 
+      - name: 生成桌面图标（各分辨率 mipmap）
+        working-directory: android-app
+        run: dart run flutter_launcher_icons
+
       - name: 静态分析
         working-directory: android-app
         run: flutter analyze || true
