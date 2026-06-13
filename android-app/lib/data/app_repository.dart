@@ -152,7 +152,7 @@ class TransactionEntity {
 ///
 /// 继承 [ChangeNotifier]，UI 通过 [provider] 订阅变化。
 class AppRepository extends ChangeNotifier {
-  static const _dbVersion = 2;
+  static const _dbVersion = 3;
   static const _dbName = 'qingji.db';
 
   Database? _db;
@@ -165,12 +165,18 @@ class AppRepository extends ChangeNotifier {
   /// 月度总预算（null = 未设置）。
   Decimal? _monthlyBudget;
 
+  /// DeepSeek API Key（null = 未配置）。
+  String? _deepSeekApiKey;
+
   List<AccountEntity> get accounts => List.unmodifiable(_accounts);
   List<CategoryEntity> get categories => List.unmodifiable(_categories);
   List<TransactionEntity> get transactions => List.unmodifiable(_transactions);
 
   /// 当前月度预算，null 代表未设置。
   Decimal? get monthlyBudget => _monthlyBudget;
+
+  /// DeepSeek API Key，null 代表未配置。
+  String? get deepSeekApiKey => _deepSeekApiKey;
 
   // ---------------------------------------------------------------------------
   // 初始化
@@ -228,14 +234,31 @@ class AppRepository extends ChangeNotifier {
         amount       TEXT NOT NULL
       )
     ''');
+
+    await db.execute('''
+      CREATE TABLE app_settings (
+        key   TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+      )
+    ''');
   }
 
-  /// 数据库升级：v1→v2 在 budget 表加 category_key 列。
+  /// 数据库升级：
+  ///   v1→v2 在 budget 表加 category_key 列；
+  ///   v2→v3 新建 app_settings 表（用于存储 API Key 等键值对）。
   Future<void> _onUpgrade(Database db, int oldVersion, int newVersion) async {
     if (oldVersion < 2) {
       // v1 的 budget 表没有 category_key 列，添加之。
       await db.execute(
           'ALTER TABLE budget ADD COLUMN category_key TEXT');
+    }
+    if (oldVersion < 3) {
+      await db.execute('''
+        CREATE TABLE IF NOT EXISTS app_settings (
+          key   TEXT PRIMARY KEY,
+          value TEXT NOT NULL
+        )
+      ''');
     }
   }
 
@@ -268,6 +291,7 @@ class AppRepository extends ChangeNotifier {
       _loadCategories(),
       _loadTransactions(),
       _loadBudget(),
+      _loadApiKey(),
     ]);
     notifyListeners();
   }
@@ -300,6 +324,18 @@ class AppRepository extends ChangeNotifier {
       final value = Decimal.parse(raw);
       _monthlyBudget = value > Decimal.zero ? value : null;
     }
+  }
+
+  /// 从 app_settings 读取 DeepSeek API Key。
+  Future<void> _loadApiKey() async {
+    final rows = await _db!.query(
+      'app_settings',
+      where: 'key = ?',
+      whereArgs: ['deepseek_api_key'],
+      limit: 1,
+    );
+    _deepSeekApiKey =
+        rows.isEmpty ? null : rows.first['value'] as String?;
   }
 
   /// 查询时做一次 LEFT JOIN 把分类/账户冗余字段带出来，避免后续多次查询。
@@ -407,6 +443,31 @@ class AppRepository extends ChangeNotifier {
       );
     }
     await _loadBudget();
+    notifyListeners();
+  }
+
+  // ---------------------------------------------------------------------------
+  // AI 设置
+  // ---------------------------------------------------------------------------
+
+  /// 保存 DeepSeek API Key（传空字符串视为删除）。
+  Future<void> saveApiKey(String key) async {
+    final trimmed = key.trim();
+    if (trimmed.isEmpty) {
+      await _db!.delete(
+        'app_settings',
+        where: 'key = ?',
+        whereArgs: ['deepseek_api_key'],
+      );
+      _deepSeekApiKey = null;
+    } else {
+      await _db!.insert(
+        'app_settings',
+        {'key': 'deepseek_api_key', 'value': trimmed},
+        conflictAlgorithm: ConflictAlgorithm.replace,
+      );
+      _deepSeekApiKey = trimmed;
+    }
     notifyListeners();
   }
 

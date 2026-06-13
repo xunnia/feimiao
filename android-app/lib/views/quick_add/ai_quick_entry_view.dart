@@ -2,14 +2,18 @@ import 'package:decimal/decimal.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../../core/ai/llm_entry_parser.dart';
 import '../../core/ai/natural_language_entry_parser.dart';
 import '../../core/models/category_seed.dart';
 import '../../core/models/transaction_kind.dart';
 import '../../core/money_format.dart';
 import '../../data/app_repository.dart';
+import '../settings/ai_setting_view.dart';
 
 /// AI 一句话记账页。
-/// 输入自然语言文本 → 本地解析 → 预览结果卡片 → 一键保存。
+///
+/// 配置了 DeepSeek API Key → 调 LLM，支持一句话拆多笔；
+/// 未配置或调用失败 → 降级为本地单笔规则解析。
 class AiQuickEntryView extends StatefulWidget {
   const AiQuickEntryView({super.key});
 
@@ -20,13 +24,20 @@ class AiQuickEntryView extends StatefulWidget {
 class _AiQuickEntryViewState extends State<AiQuickEntryView> {
   final TextEditingController _inputCtrl = TextEditingController();
 
-  /// 当前解析结果，null 表示尚未解析。
-  ParsedEntry? _parsed;
+  /// 解析结果（多笔）；null 表示尚未解析。
+  List<ParsedEntry>? _entries;
 
-  /// 解析后匹配到的数据库分类实体（可为 null，此时降级为"其他"）。
-  CategoryEntity? _matchedCategory;
+  /// 对应每笔匹配到的分类实体列表，与 _entries 等长。
+  List<CategoryEntity?> _matchedCats = [];
 
+  bool _loading = false;
   bool _saving = false;
+
+  /// 是否因降级（未配置 key 或 LLM 失败）而用了本地解析。
+  bool _usedFallback = false;
+
+  /// 降级原因提示文字。
+  String _fallbackHint = '';
 
   @override
   void dispose() {
@@ -36,42 +47,93 @@ class _AiQuickEntryViewState extends State<AiQuickEntryView> {
 
   // ---------------------------------------------------------------------------
   // 解析
+  // ---------------------------------------------------------------------------
 
-  void _doParse() {
+  Future<void> _doParse() async {
     final text = _inputCtrl.text.trim();
     if (text.isEmpty) return;
 
-    final result = NaturalLanguageEntryParser.parse(text);
     final repo = context.read<AppRepository>();
-
-    // 用 categoryKey 在 repository 分类里查找，找不到则用"其他"兜底
-    CategoryEntity? matched;
-    if (result.categoryKey != null) {
-      matched = repo.categories
-          .where((c) => c.kind == result.kind && c.key == result.categoryKey)
-          .firstOrNull;
-    }
-    // 仍为 null 则取对应收/支方向的 other / otherIncome
-    matched ??= repo.categories
-        .where((c) =>
-            c.kind == result.kind &&
-            (c.key == CategorySeed.fallbackExpenseKey || c.key == 'otherIncome'))
-        .firstOrNull;
-
     setState(() {
-      _parsed = result;
-      _matchedCategory = matched;
+      _loading = true;
+      _entries = null;
+      _matchedCats = [];
+      _usedFallback = false;
+      _fallbackHint = '';
     });
+
+    try {
+      final apiKey = repo.deepSeekApiKey;
+      List<ParsedEntry> results;
+      bool usedFallback = false;
+      String fallbackHint = '';
+
+      if (apiKey != null && apiKey.isNotEmpty) {
+        // 尝试 LLM 解析
+        try {
+          results = await LlmEntryParser.parseWithLLM(
+            text: text,
+            apiKey: apiKey,
+            expenseCats: CategorySeed.expenses,
+            incomeCats: CategorySeed.incomes,
+          );
+        } on LlmParseException catch (e) {
+          // LLM 失败 → 降级
+          results = [NaturalLanguageEntryParser.parse(text)];
+          usedFallback = true;
+          fallbackHint = 'AI 解析失败（${e.message}），已用本地简易解析（单笔）';
+        } catch (e) {
+          results = [NaturalLanguageEntryParser.parse(text)];
+          usedFallback = true;
+          fallbackHint = 'AI 调用出错，已用本地简易解析（单笔）';
+        }
+      } else {
+        // 未配置 key → 降级
+        results = [NaturalLanguageEntryParser.parse(text)];
+        usedFallback = true;
+        fallbackHint = '未配置 AI 或解析失败，已用本地简易解析（单笔）';
+      }
+
+      // 为每笔结果匹配分类实体
+      final matched = results.map((entry) {
+        CategoryEntity? cat;
+        if (entry.categoryKey != null) {
+          cat = repo.categories
+              .where((c) =>
+                  c.kind == entry.kind && c.key == entry.categoryKey)
+              .firstOrNull;
+        }
+        // 未匹配 → 兜底 other / otherIncome
+        cat ??= repo.categories
+            .where((c) =>
+                c.kind == entry.kind &&
+                (c.key == CategorySeed.fallbackExpenseKey ||
+                    c.key == 'otherIncome'))
+            .firstOrNull;
+        return cat;
+      }).toList();
+
+      if (mounted) {
+        setState(() {
+          _entries = results;
+          _matchedCats = matched;
+          _usedFallback = usedFallback;
+          _fallbackHint = fallbackHint;
+          _loading = false;
+        });
+      }
+    } catch (_) {
+      if (mounted) setState(() => _loading = false);
+    }
   }
 
   // ---------------------------------------------------------------------------
-  // 保存
+  // 批量保存
+  // ---------------------------------------------------------------------------
 
-  Future<void> _save() async {
-    final parsed = _parsed;
-    if (parsed == null) return;
-    final amount = parsed.amount;
-    if (amount == null || amount <= Decimal.zero) return;
+  Future<void> _saveAll() async {
+    final entries = _entries;
+    if (entries == null || entries.isEmpty) return;
 
     final repo = context.read<AppRepository>();
     final accountId = repo.accounts.firstOrNull?.id;
@@ -79,27 +141,32 @@ class _AiQuickEntryViewState extends State<AiQuickEntryView> {
 
     setState(() => _saving = true);
     try {
-      await repo.addTransaction(
-        kind: parsed.kind,
-        amount: amount,
-        categoryId: _matchedCategory?.id,
-        accountId: accountId,
-        note: parsed.note,
-        date: parsed.date,
-      );
+      for (int i = 0; i < entries.length; i++) {
+        final e = entries[i];
+        final amount = e.amount;
+        if (amount == null || amount <= Decimal.zero) continue;
+        await repo.addTransaction(
+          kind: e.kind,
+          amount: amount,
+          categoryId: _matchedCats[i]?.id,
+          accountId: accountId,
+          note: e.note,
+          date: e.date,
+        );
+      }
       if (mounted) {
         Navigator.pop(context);
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: const Row(
+            content: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
-                Icon(Icons.check_circle, color: Colors.white, size: 18),
-                SizedBox(width: 8),
-                Text('AI 记账成功'),
+                const Icon(Icons.check_circle, color: Colors.white, size: 18),
+                const SizedBox(width: 8),
+                Text('已保存 ${entries.length} 笔账目'),
               ],
             ),
-            duration: const Duration(milliseconds: 1500),
+            duration: const Duration(milliseconds: 1800),
             behavior: SnackBarBehavior.floating,
             shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(24)),
@@ -113,14 +180,42 @@ class _AiQuickEntryViewState extends State<AiQuickEntryView> {
   }
 
   // ---------------------------------------------------------------------------
+  // 是否有至少一笔有效金额
+  // ---------------------------------------------------------------------------
+
+  bool get _hasValidEntry =>
+      _entries?.any((e) =>
+              e.amount != null && e.amount! > Decimal.zero) ??
+          false;
+
+  // ---------------------------------------------------------------------------
   // UI
+  // ---------------------------------------------------------------------------
 
   @override
   Widget build(BuildContext context) {
+    final repo = context.watch<AppRepository>();
+    final hasKey =
+        (repo.deepSeekApiKey ?? '').isNotEmpty;
+    final entries = _entries;
+    final scheme = Theme.of(context).colorScheme;
+
     return Scaffold(
       appBar: AppBar(
         title: const Text('AI 记账'),
         centerTitle: true,
+        actions: [
+          // 快捷跳转 AI 设置
+          if (!hasKey)
+            TextButton(
+              onPressed: () => Navigator.push(
+                context,
+                MaterialPageRoute<void>(
+                    builder: (_) => const AiSettingView()),
+              ),
+              child: const Text('配置'),
+            ),
+        ],
       ),
       body: SafeArea(
         child: SingleChildScrollView(
@@ -136,17 +231,24 @@ class _AiQuickEntryViewState extends State<AiQuickEntryView> {
               // 说明文字
               Row(
                 children: [
-                  Icon(Icons.auto_awesome_outlined,
-                      size: 18,
-                      color: Theme.of(context).colorScheme.primary),
+                  Icon(
+                    hasKey
+                        ? Icons.smart_toy_outlined
+                        : Icons.auto_awesome_outlined,
+                    size: 18,
+                    color: scheme.primary,
+                  ),
                   const SizedBox(width: 8),
                   Expanded(
                     child: Text(
-                      '用一句话描述这笔记录，本地即刻解析',
-                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                            color: Theme.of(context)
-                                .colorScheme
-                                .onSurfaceVariant,
+                      hasKey
+                          ? '用一句话描述多笔记录，AI 自动拆分'
+                          : '用一句话描述这笔记录，本地即刻解析',
+                      style: Theme.of(context)
+                          .textTheme
+                          .bodySmall
+                          ?.copyWith(
+                            color: scheme.onSurfaceVariant,
                           ),
                     ),
                   ),
@@ -162,47 +264,92 @@ class _AiQuickEntryViewState extends State<AiQuickEntryView> {
                 textInputAction: TextInputAction.done,
                 onSubmitted: (_) => _doParse(),
                 decoration: InputDecoration(
-                  hintText: '例如：昨天打车23块、工资发了8500',
+                  hintText: hasKey
+                      ? '例如：昨天买了20块肉、30的衣服、前天交房租1500'
+                      : '例如：昨天打车23块、工资发了8500',
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
                   ),
                   filled: true,
-                  fillColor: Theme.of(context)
-                      .colorScheme
-                      .surfaceContainerHighest
-                      .withOpacity(0.5),
+                  fillColor: scheme.surfaceContainerHighest.withOpacity(0.5),
                 ),
                 onChanged: (_) {
-                  // 输入变化时清空旧结果，需重新解析
-                  if (_parsed != null) setState(() => _parsed = null);
+                  if (_entries != null) {
+                    setState(() {
+                      _entries = null;
+                      _matchedCats = [];
+                      _usedFallback = false;
+                      _fallbackHint = '';
+                    });
+                  }
                 },
               ),
               const SizedBox(height: 12),
 
               // 解析按钮
               FilledButton.icon(
-                icon: const Icon(Icons.search, size: 18),
-                label: const Text('解析'),
-                onPressed: _inputCtrl.text.trim().isEmpty ? null : _doParse,
+                icon: _loading
+                    ? const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(
+                            strokeWidth: 2, color: Colors.white),
+                      )
+                    : const Icon(Icons.search, size: 18),
+                label: Text(_loading ? '解析中…' : '解析'),
+                onPressed: (_inputCtrl.text.trim().isEmpty || _loading)
+                    ? null
+                    : _doParse,
               ),
 
-              // 结果卡片
-              if (_parsed != null) ...[
-                const SizedBox(height: 20),
-                _ParseResultCard(
-                  parsed: _parsed!,
-                  matchedCategory: _matchedCategory,
+              // 降级提示
+              if (_usedFallback && _fallbackHint.isNotEmpty) ...[
+                const SizedBox(height: 10),
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 12, vertical: 8),
+                  decoration: BoxDecoration(
+                    color: scheme.errorContainer.withOpacity(0.5),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(Icons.warning_amber_outlined,
+                          size: 16, color: scheme.onErrorContainer),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          _fallbackHint,
+                          style: Theme.of(context)
+                              .textTheme
+                              .bodySmall
+                              ?.copyWith(color: scheme.onErrorContainer),
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
-                const SizedBox(height: 16),
+              ],
 
-                // 保存按钮
+              // 结果列表
+              if (entries != null) ...[
+                const SizedBox(height: 20),
+                ...List.generate(entries.length, (i) {
+                  return Padding(
+                    padding: const EdgeInsets.only(bottom: 10),
+                    child: _EntryCard(
+                      entry: entries[i],
+                      matchedCategory: _matchedCats[i],
+                      index: i + 1,
+                      total: entries.length,
+                    ),
+                  );
+                }),
+                const SizedBox(height: 8),
+
+                // 全部保存按钮
                 FilledButton(
-                  onPressed: (_parsed?.amount == null ||
-                              (_parsed?.amount ?? Decimal.zero) <=
-                                  Decimal.zero ||
-                              _saving)
-                      ? null
-                      : _save,
+                  onPressed: (!_hasValidEntry || _saving) ? null : _saveAll,
                   child: _saving
                       ? const SizedBox(
                           width: 18,
@@ -210,7 +357,11 @@ class _AiQuickEntryViewState extends State<AiQuickEntryView> {
                           child: CircularProgressIndicator(
                               strokeWidth: 2, color: Colors.white),
                         )
-                      : const Text('保存这笔'),
+                      : Text(
+                          entries.length > 1
+                              ? '全部保存（${entries.length} 笔）'
+                              : '保存这笔',
+                        ),
                 ),
               ],
             ],
@@ -222,29 +373,32 @@ class _AiQuickEntryViewState extends State<AiQuickEntryView> {
 }
 
 // ---------------------------------------------------------------------------
-// 解析结果卡片
+// 单笔结果卡片
 // ---------------------------------------------------------------------------
 
-class _ParseResultCard extends StatelessWidget {
-  final ParsedEntry parsed;
+class _EntryCard extends StatelessWidget {
+  final ParsedEntry entry;
   final CategoryEntity? matchedCategory;
+  final int index;
+  final int total;
 
-  const _ParseResultCard({
-    required this.parsed,
+  const _EntryCard({
+    required this.entry,
     required this.matchedCategory,
+    required this.index,
+    required this.total,
   });
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final isIncome = parsed.kind == TransactionKind.income;
+    final isIncome = entry.kind == TransactionKind.income;
     final kindLabel = isIncome ? '收入' : '支出';
-    final kindColor = isIncome
-        ? Theme.of(context).colorScheme.primary
-        : scheme.onSurface;
+    final kindColor =
+        isIncome ? scheme.primary : scheme.onSurface;
 
-    final amountText = parsed.amount != null
-        ? MoneyFormat.string(parsed.amount!)
+    final amountText = entry.amount != null
+        ? MoneyFormat.string(entry.amount!)
         : '（未识别金额）';
 
     final categoryName =
@@ -252,13 +406,14 @@ class _ParseResultCard extends StatelessWidget {
 
     final now = DateTime.now();
     final today = DateTime(now.year, now.month, now.day);
-    final parsedDay = DateTime(
-        parsed.date.year, parsed.date.month, parsed.date.day);
-    final dateLabel = parsedDay == today
+    final entryDay = DateTime(
+        entry.date.year, entry.date.month, entry.date.day);
+    final yesterday = today.subtract(const Duration(days: 1));
+    final dateLabel = entryDay == today
         ? '今天'
-        : parsedDay == today.subtract(const Duration(days: 1))
+        : entryDay == yesterday
             ? '昨天'
-            : '${parsed.date.month}月${parsed.date.day}日';
+            : '${entry.date.month}月${entry.date.day}日';
 
     return Card(
       elevation: 0,
@@ -271,35 +426,64 @@ class _ParseResultCard extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // 收/支 + 金额
+            // 序号（多笔时显示）+ 收/支 + 金额
             Row(
               crossAxisAlignment: CrossAxisAlignment.baseline,
               textBaseline: TextBaseline.alphabetic,
               children: [
+                if (total > 1) ...[
+                  Container(
+                    width: 22,
+                    height: 22,
+                    alignment: Alignment.center,
+                    decoration: BoxDecoration(
+                      color: scheme.secondaryContainer,
+                      shape: BoxShape.circle,
+                    ),
+                    child: Text(
+                      '$index',
+                      style: Theme.of(context)
+                          .textTheme
+                          .labelSmall
+                          ?.copyWith(
+                              color: scheme.onSecondaryContainer,
+                              fontWeight: FontWeight.w700),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                ],
                 Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 8, vertical: 2),
                   decoration: BoxDecoration(
                     color: kindColor.withOpacity(0.12),
                     borderRadius: BorderRadius.circular(6),
                   ),
                   child: Text(
                     kindLabel,
-                    style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                    style: Theme.of(context)
+                        .textTheme
+                        .labelSmall
+                        ?.copyWith(
                           color: kindColor,
                           fontWeight: FontWeight.w600,
                         ),
                   ),
                 ),
                 const SizedBox(width: 12),
-                Text(
-                  amountText,
-                  style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                        fontWeight: FontWeight.w700,
-                        color: parsed.amount == null
-                            ? scheme.error
-                            : scheme.onSurface,
-                      ),
+                Expanded(
+                  child: Text(
+                    amountText,
+                    style: Theme.of(context)
+                        .textTheme
+                        .headlineSmall
+                        ?.copyWith(
+                          fontWeight: FontWeight.w700,
+                          color: entry.amount == null
+                              ? scheme.error
+                              : scheme.onSurface,
+                        ),
+                  ),
                 ),
               ],
             ),
@@ -307,18 +491,26 @@ class _ParseResultCard extends StatelessWidget {
             const Divider(height: 1),
             const SizedBox(height: 12),
 
-            // 分类 + 日期
+            // 分类 + 日期 + 备注
             _InfoRow(
               icon: Icons.label_outline,
               label: '分类',
               value: categoryName,
             ),
-            const SizedBox(height: 8),
+            const SizedBox(height: 6),
             _InfoRow(
               icon: Icons.calendar_today_outlined,
               label: '日期',
               value: dateLabel,
             ),
+            if (entry.note.isNotEmpty) ...[
+              const SizedBox(height: 6),
+              _InfoRow(
+                icon: Icons.notes_outlined,
+                label: '备注',
+                value: entry.note,
+              ),
+            ],
           ],
         ),
       ),
@@ -341,6 +533,7 @@ class _InfoRow extends StatelessWidget {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Icon(icon, size: 16, color: scheme.onSurfaceVariant),
         const SizedBox(width: 6),
@@ -350,11 +543,13 @@ class _InfoRow extends StatelessWidget {
                 color: scheme.onSurfaceVariant,
               ),
         ),
-        Text(
-          value,
-          style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                fontWeight: FontWeight.w600,
-              ),
+        Expanded(
+          child: Text(
+            value,
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  fontWeight: FontWeight.w600,
+                ),
+          ),
         ),
       ],
     );

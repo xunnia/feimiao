@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'accounts_view.dart';
+import 'ai_setting_view.dart';
 import 'budget_setting_view.dart';
 import 'categories_view.dart';
 
@@ -48,6 +49,17 @@ class SettingsView extends StatelessWidget {
               context,
               MaterialPageRoute<void>(
                 builder: (_) => const CategoriesView(),
+              ),
+            ),
+          ),
+          ListTile(
+            leading: const Icon(Icons.smart_toy_outlined),
+            title: const Text('AI 记账设置'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => Navigator.push(
+              context,
+              MaterialPageRoute<void>(
+                builder: (_) => const AiSettingView(),
               ),
             ),
           ),
