@@ -45,9 +45,9 @@ jobs:
         working-directory: android-app
         run: flutter analyze || true
 
-      - name: 跑单元测试
+      - name: 跑单元测试（移植正确性的硬性闸门）
         working-directory: android-app
-        run: flutter test || true
+        run: flutter test
 
       - name: 构建 debug APK（可直接安装）
         working-directory: android-app
