@@ -981,6 +981,16 @@
         }
       }
     },
+    "本月进度": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This Month"
+          }
+        }
+      }
+    },
     "月度预算": {
       "localizations": {
         "en": {

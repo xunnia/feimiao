@@ -29,27 +29,40 @@ struct AIQuickEntryView: View {
                     TextField("例如：昨天打车23块", text: $text, axis: .vertical)
                         .lineLimit(2...4)
                         .onSubmit(parseText)
-                    HStack(spacing: 20) {
+                    HStack(spacing: 12) {
                         Button {
                             speech.toggle()
                         } label: {
-                            Label(
-                                speech.isRecording ? "停止" : "语音",
-                                systemImage: speech.isRecording ? "stop.circle.fill" : "mic.fill"
-                            )
+                            VStack(spacing: 6) {
+                                Image(systemName: speech.isRecording ? "stop.circle.fill" : "mic.fill")
+                                    .font(.title2)
+                                Text(speech.isRecording ? "停止" : "语音")
+                                    .font(.caption)
+                                    .lineLimit(1)
+                            }
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 12)
                         }
-                        .tint(speech.isRecording ? .red : .accentColor)
+                        .tint(speech.isRecording ? Color.red : Color.accentColor)
+                        .glassEffect(.regular, in: .rect(cornerRadius: 12))
 
                         PhotosPicker(selection: $photoItem, matching: .images) {
-                            Label("支付截图", systemImage: "photo.on.rectangle")
+                            VStack(spacing: 6) {
+                                Image(systemName: "photo.on.rectangle")
+                                    .font(.title2)
+                                Text("支付截图")
+                                    .font(.caption)
+                                    .lineLimit(1)
+                            }
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 12)
                         }
-
-                        Spacer()
-
-                        Button("解析", action: parseText)
-                            .buttonStyle(.glassProminent)
-                            .disabled(text.trimmingCharacters(in: .whitespaces).isEmpty)
+                        .glassEffect(.regular, in: .rect(cornerRadius: 12))
                     }
+                    Button("解析", action: parseText)
+                        .buttonStyle(.glassProminent)
+                        .frame(maxWidth: .infinity)
+                        .disabled(text.trimmingCharacters(in: .whitespaces).isEmpty)
                     if isRecognizingImage {
                         HStack {
                             ProgressView()
