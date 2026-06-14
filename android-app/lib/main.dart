@@ -173,9 +173,166 @@ class _AppDrawerState extends State<_AppDrawer> {
     );
   }
 
+  // ── 账本列表项 ──────────────────────────────────────────────────────────
+  Widget _bookTile(BookEntity b, AppRepository repo) {
+    final scheme = Theme.of(context).colorScheme;
+    final selected = b.id == repo.currentBookId;
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 8),
+      child: ListTile(
+        leading: Text(b.icon, style: const TextStyle(fontSize: 20)),
+        horizontalTitleGap: 12,
+        title: Text(
+          b.name,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: Theme.of(context).textTheme.bodyLarge?.copyWith(
+                fontWeight: selected ? FontWeight.w600 : FontWeight.w500,
+                color: selected ? scheme.primary : scheme.onSurface,
+              ),
+        ),
+        trailing: PopupMenuButton<String>(
+          icon: Icon(Icons.more_horiz,
+              size: 20, color: scheme.onSurfaceVariant),
+          onSelected: (v) {
+            if (v == 'rename') {
+              _showRenameBookDialog(b, repo);
+            } else if (v == 'delete') {
+              _confirmDeleteBook(b, repo);
+            }
+          },
+          itemBuilder: (_) => [
+            const PopupMenuItem(value: 'rename', child: Text('改名')),
+            if (repo.books.length > 1)
+              const PopupMenuItem(value: 'delete', child: Text('删除')),
+          ],
+        ),
+        tileColor: selected ? scheme.surfaceContainerHighest : null,
+        shape:
+            RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        contentPadding:
+            const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
+        onTap: () {
+          repo.switchBook(b.id);
+          Navigator.pop(context);
+        },
+      ),
+    );
+  }
+
+  // ── 新建账本（带场景模板）─────────────────────────────────────────────────
+  Future<void> _showNewBookDialog() async {
+    final repo = context.read<AppRepository>();
+    final ctrl = TextEditingController();
+    String icon = '📒';
+    const templates = <(String, String)>[
+      ('日常账本', '📒'),
+      ('旅行', '✈️'),
+      ('家庭AA', '🍚'),
+      ('装修', '🔨'),
+    ];
+
+    final created = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setLocal) => AlertDialog(
+          title: const Text('新建账本'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Wrap(
+                spacing: 8,
+                runSpacing: 4,
+                children: [
+                  for (final t in templates)
+                    ActionChip(
+                      label: Text('${t.$2} ${t.$1}'),
+                      onPressed: () {
+                        setLocal(() => icon = t.$2);
+                        ctrl.text = t.$1;
+                      },
+                    ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: ctrl,
+                autofocus: true,
+                decoration: const InputDecoration(hintText: '账本名称'),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.pop(ctx, false),
+                child: const Text('取消')),
+            FilledButton(
+                onPressed: () => Navigator.pop(ctx, true),
+                child: const Text('创建')),
+          ],
+        ),
+      ),
+    );
+
+    if (created == true) {
+      final name = ctrl.text.trim().isEmpty ? '新账本' : ctrl.text.trim();
+      final id = await repo.addBook(name: name, icon: icon);
+      await repo.switchBook(id);
+      if (mounted) Navigator.pop(context); // 关闭抽屉
+    }
+  }
+
+  Future<void> _showRenameBookDialog(BookEntity b, AppRepository repo) async {
+    final ctrl = TextEditingController(text: b.name);
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('账本改名'),
+        content: TextField(
+          controller: ctrl,
+          autofocus: true,
+          decoration: const InputDecoration(hintText: '账本名称'),
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('取消')),
+          FilledButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('保存')),
+        ],
+      ),
+    );
+    if (ok == true && ctrl.text.trim().isNotEmpty) {
+      await repo.renameBook(b.id, name: ctrl.text.trim());
+    }
+  }
+
+  Future<void> _confirmDeleteBook(BookEntity b, AppRepository repo) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('删除「${b.name}」？'),
+        content: const Text('该账本下的所有账目都会一起删除，且不可恢复。'),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('取消')),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('删除', style: TextStyle(color: Colors.red)),
+          ),
+        ],
+      ),
+    );
+    if (ok == true) await repo.deleteBook(b.id);
+  }
+
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    final repo = context.watch<AppRepository>();
 
     return Drawer(
       child: SafeArea(
@@ -219,17 +376,7 @@ class _AppDrawerState extends State<_AppDrawer> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    // 1. 账本（M4 占位）
-                    _DrawerItem(
-                      icon: Icons.menu_book_outlined,
-                      label: '账本',
-                      onTap: () {
-                        Navigator.pop(context);
-                        _showSnackBar('多账本即将到来（M4）');
-                      },
-                    ),
-
-                    // 2. 统计数据
+                    // 1. 统计数据
                     _DrawerItem(
                       icon: Icons.analytics_outlined,
                       label: '统计数据',
@@ -354,31 +501,8 @@ class _AppDrawerState extends State<_AppDrawer> {
                                 ),
                       ),
                     ),
-                    // 静态：总账本（选中态，圆角高亮）
-                    Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 8),
-                      child: ListTile(
-                        leading: Icon(Icons.menu_book_outlined,
-                            size: 24, color: scheme.primary),
-                        horizontalTitleGap: 12,
-                        title: Text(
-                          '总账本',
-                          style:
-                              Theme.of(context).textTheme.bodyLarge?.copyWith(
-                                    fontWeight: FontWeight.w600,
-                                    color: scheme.primary,
-                                  ),
-                        ),
-                        trailing:
-                            Icon(Icons.check, size: 18, color: scheme.primary),
-                        tileColor: scheme.surfaceContainerHighest,
-                        shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(12)),
-                        contentPadding: const EdgeInsets.symmetric(
-                            horizontal: 12, vertical: 4),
-                        onTap: () => Navigator.pop(context),
-                      ),
-                    ),
+                    // 真实账本列表（点击切换，⋮ 改名/删除）
+                    ...repo.books.map((b) => _bookTile(b, repo)),
 
                     const SizedBox(height: 8),
                   ],
@@ -393,10 +517,7 @@ class _AppDrawerState extends State<_AppDrawer> {
                 child: ElevatedButton.icon(
                   icon: const Icon(Icons.add, size: 18),
                   label: const Text('新建账本'),
-                  onPressed: () {
-                    Navigator.pop(context);
-                    _showSnackBar('多账本即将到来（M4）');
-                  },
+                  onPressed: _showNewBookDialog,
                   style: ElevatedButton.styleFrom(
                     backgroundColor: scheme.onSurface,
                     foregroundColor: scheme.surface,
