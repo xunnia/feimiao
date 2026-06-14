@@ -48,13 +48,15 @@ class Mascot extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // TODO(M8): 当 assets/mascot/<mood>.png 就位后，改为：
-    //   return Image.asset(
-    //     'assets/mascot/${mood.name}.png',
-    //     width: size,
-    //     height: size,
-    //   );
-    return _buildPlaceholder(context);
+    // 优先用真猫 PNG（assets/mascot/<mood>.png）；
+    // 文件还没就位 / 加载失败时回退到 emoji 占位，保证不崩。
+    return Image.asset(
+      'assets/mascot/${mood.name}.png',
+      width: size,
+      height: size,
+      fit: BoxFit.contain,
+      errorBuilder: (context, error, stackTrace) => _buildPlaceholder(context),
+    );
   }
 
   Widget _buildPlaceholder(BuildContext context) {

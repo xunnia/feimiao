@@ -27,6 +27,8 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+  assets:
+    - assets/mascot/
 
 # 桌面图标：账单 + ¥ + 图表（深蓝玻璃风），CI 里用 flutter_launcher_icons 生成各分辨率
 flutter_launcher_icons:
