@@ -182,9 +182,9 @@ class _AppDrawerState extends State<_AppDrawer> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            // ── 头部行：轻记字标 + 登录 + 关闭 ────────────────────
+            // ── 头部行：轻记字标（衬线）+ 账号头像（无关闭按钮，对齐 Claude）──
             Padding(
-              padding: const EdgeInsets.fromLTRB(20, 16, 8, 8),
+              padding: const EdgeInsets.fromLTRB(20, 18, 14, 12),
               child: Row(
                 children: [
                   Text(
@@ -193,15 +193,13 @@ class _AppDrawerState extends State<_AppDrawer> {
                         Theme.of(context).textTheme.headlineSmall?.copyWith(
                               color: scheme.primary,
                               fontWeight: FontWeight.w700,
-                              letterSpacing: -0.5,
+                              fontFamily: 'serif',
                             ),
                   ),
                   const Spacer(),
-                  // 个人中心（未登录态头像）
-                  IconButton(
-                    icon: const Icon(Icons.person_outline),
-                    tooltip: '个人中心',
-                    onPressed: () {
+                  // 账号头像：未登录👤 / 登录后名字首字，点进个人中心
+                  _AccountAvatar(
+                    onTap: () {
                       Navigator.pop(context);
                       Navigator.push<void>(
                         context,
@@ -210,16 +208,9 @@ class _AppDrawerState extends State<_AppDrawer> {
                       );
                     },
                   ),
-                  // 关闭抽屉
-                  IconButton(
-                    icon: const Icon(Icons.close),
-                    tooltip: '关闭',
-                    onPressed: () => Navigator.pop(context),
-                  ),
                 ],
               ),
             ),
-            Divider(height: 1, color: scheme.outlineVariant),
             const SizedBox(height: 4),
 
             // ── 功能区（前 5 项固定，更多折叠）────────────────────
@@ -240,7 +231,7 @@ class _AppDrawerState extends State<_AppDrawer> {
 
                     // 2. 统计数据
                     _DrawerItem(
-                      icon: Icons.bar_chart,
+                      icon: Icons.analytics_outlined,
                       label: '统计数据',
                       onTap: () => _popAndPush(const StatisticsView()),
                     ),
@@ -363,24 +354,30 @@ class _AppDrawerState extends State<_AppDrawer> {
                                 ),
                       ),
                     ),
-                    // 静态：总账本（选中态）
-                    ListTile(
-                      leading: Icon(Icons.menu_book_outlined,
-                          size: 22, color: scheme.primary),
-                      title: Text(
-                        '总账本',
-                        style:
-                            Theme.of(context).textTheme.bodyMedium?.copyWith(
-                                  fontWeight: FontWeight.w600,
-                                  color: scheme.primary,
-                                ),
+                    // 静态：总账本（选中态，圆角高亮）
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 8),
+                      child: ListTile(
+                        leading: Icon(Icons.menu_book_outlined,
+                            size: 24, color: scheme.primary),
+                        horizontalTitleGap: 12,
+                        title: Text(
+                          '总账本',
+                          style:
+                              Theme.of(context).textTheme.bodyLarge?.copyWith(
+                                    fontWeight: FontWeight.w600,
+                                    color: scheme.primary,
+                                  ),
+                        ),
+                        trailing:
+                            Icon(Icons.check, size: 18, color: scheme.primary),
+                        tileColor: scheme.surfaceContainerHighest,
+                        shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12)),
+                        contentPadding: const EdgeInsets.symmetric(
+                            horizontal: 12, vertical: 4),
+                        onTap: () => Navigator.pop(context),
                       ),
-                      trailing: Icon(Icons.check, size: 18, color: scheme.primary),
-                      shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(10)),
-                      contentPadding:
-                          const EdgeInsets.symmetric(horizontal: 16, vertical: 2),
-                      onTap: () => Navigator.pop(context),
                     ),
 
                     const SizedBox(height: 8),
@@ -389,11 +386,10 @@ class _AppDrawerState extends State<_AppDrawer> {
               ),
             ),
 
-            // ── 底部：+ 新建账本 ──────────────────────────────────
+            // ── 底部：+ 新建账本（短胶囊·居中，对齐 Claude 的 New chat）──
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
-              child: SizedBox(
-                height: 44,
+              child: Align(
                 child: ElevatedButton.icon(
                   icon: const Icon(Icons.add, size: 18),
                   label: const Text('新建账本'),
@@ -404,9 +400,10 @@ class _AppDrawerState extends State<_AppDrawer> {
                   style: ElevatedButton.styleFrom(
                     backgroundColor: scheme.onSurface,
                     foregroundColor: scheme.surface,
-                    shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(22)),
+                    shape: const StadiumBorder(),
                     elevation: 0,
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 22, vertical: 12),
                   ),
                 ),
               ),
@@ -435,18 +432,60 @@ class _DrawerItem extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    return ListTile(
-      leading: Icon(icon, size: 22, color: scheme.onSurfaceVariant),
-      title: Text(
-        label,
-        style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-              fontWeight: FontWeight.w500,
-            ),
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 8),
+      child: ListTile(
+        leading: Icon(icon, size: 24, color: scheme.onSurfaceVariant),
+        horizontalTitleGap: 12,
+        title: Text(
+          label,
+          style: Theme.of(context).textTheme.bodyLarge?.copyWith(
+                fontWeight: FontWeight.w500,
+              ),
+        ),
+        onTap: onTap,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        contentPadding: EdgeInsets.symmetric(
+            horizontal: indent ? 24 : 12, vertical: 4),
       ),
+    );
+  }
+}
+
+/// 抽屉右上角账号头像：未登录显示 👤，登录后显示用户名首字。点进个人中心。
+class _AccountAvatar extends StatelessWidget {
+  final VoidCallback onTap;
+
+  /// 登录后传入用户名首字；未登录为 null。
+  final String? initial;
+
+  const _AccountAvatar({required this.onTap, this.initial});
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return InkWell(
       onTap: onTap,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-      contentPadding: EdgeInsets.symmetric(
-          horizontal: indent ? 28 : 16, vertical: 2),
+      customBorder: const CircleBorder(),
+      child: Container(
+        width: 38,
+        height: 38,
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          color: scheme.surfaceContainerHighest,
+        ),
+        child: initial == null
+            ? Icon(Icons.person_outline,
+                size: 20, color: scheme.onSurfaceVariant)
+            : Text(
+                initial!,
+                style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.w600,
+                      color: scheme.onSurface,
+                    ),
+              ),
+      ),
     );
   }
 }
