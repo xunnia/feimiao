@@ -1,8 +1,7 @@
-import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:csv/csv.dart';
-import 'package:decimal/decimal.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
@@ -10,10 +9,10 @@ import 'package:path_provider/path_provider.dart';
 import 'package:provider/provider.dart';
 import 'package:share_plus/share_plus.dart';
 
+import '../../core/import/bill_import.dart';
 import '../../core/models/transaction_kind.dart';
 import '../../data/app_repository.dart';
 import '../../theme/app_colors.dart';
-import 'tags_view.dart';
 
 /// 导入导出页：把当前账本导出成 CSV（可分享/备份），或从 CSV 批量导入。
 ///
@@ -94,7 +93,7 @@ class _ImportExportViewState extends State<ImportExportView> {
     try {
       final picked = await FilePicker.platform.pickFiles(
         type: FileType.custom,
-        allowedExtensions: ['csv'],
+        allowedExtensions: ['csv', 'txt'],
         withData: true,
       );
       if (picked == null || picked.files.isEmpty) {
@@ -102,27 +101,23 @@ class _ImportExportViewState extends State<ImportExportView> {
         return;
       }
       final f = picked.files.first;
-      String content;
-      if (f.bytes != null) {
-        content = utf8.decode(f.bytes!, allowMalformed: true);
-      } else if (f.path != null) {
-        content = await File(f.path!).readAsString();
-      } else {
+      Uint8List? bytes = f.bytes;
+      if (bytes == null && f.path != null) {
+        bytes = await File(f.path!).readAsBytes();
+      }
+      if (bytes == null) {
         _setMessage('读不到文件内容');
         return;
       }
-      // 去掉可能的 BOM
-      if (content.isNotEmpty && content.codeUnitAt(0) == 0xFEFF) {
-        content = content.substring(1);
+
+      final result = BillImporter.parseBytes(bytes);
+      if (result.rows.isEmpty) {
+        _setMessage('没找到可导入的账目（识别为「${result.source}」，请确认是账单 CSV）');
+        return;
       }
-
-      final table = const CsvToListConverter(
-        shouldParseNumbers: false,
-        eol: '\n',
-      ).convert(content.replaceAll('\r\n', '\n'));
-
-      final count = await _ingest(table);
-      _setMessage(count > 0 ? '成功导入 $count 笔账目 🎉' : '没有可导入的有效行');
+      final count = await _ingestRows(result.rows);
+      final skip = result.skipped > 0 ? '，跳过 ${result.skipped} 笔（中性/无效）' : '';
+      _setMessage('识别为「${result.source}」，成功导入 $count 笔$skip 🎉');
     } catch (e) {
       _setMessage('导入失败：$e');
     } finally {
@@ -130,114 +125,34 @@ class _ImportExportViewState extends State<ImportExportView> {
     }
   }
 
-  /// 解析表格行 → 解析分类/账户/标签 → 批量写库。返回导入条数。
-  Future<int> _ingest(List<List<dynamic>> table) async {
+  /// 把标准化的账单行解析分类/账户后批量写库。返回导入条数。
+  Future<int> _ingestRows(List<ImportedBillRow> rows) async {
     final repo = context.read<AppRepository>();
-    if (table.isEmpty) return 0;
-
-    // 跳过表头（首行含「日期」或「金额」字样即认作表头）
-    var start = 0;
-    final first = table.first.map((e) => e.toString()).join(',');
-    if (first.contains('日期') || first.contains('金额')) start = 1;
-
-    // 默认账户（导入时账户名匹配不到就用它）
     final fallbackAccountId = repo.accounts.firstOrNull?.id;
     if (fallbackAccountId == null) return 0;
 
-    // 标签名 → id 缓存（缺失则新建）
-    final tagCache = <String, int>{
-      for (final t in repo.tags) t.name: t.id,
-    };
-    // 账户名 → id 缓存（缺失则新建）
-    final accountCache = <String, int>{
-      for (final a in repo.accounts) a.name: a.id,
-    };
-
     final drafts = <TransactionDraft>[];
-    for (var i = start; i < table.length; i++) {
-      final row = table[i].map((e) => e.toString().trim()).toList();
-      if (row.length < 4) continue; // 至少要日期/类型/分类/金额
-      final dateStr = row[0];
-      final kindStr = row.length > 1 ? row[1] : '';
-      final categoryStr = row.length > 2 ? row[2] : '';
-      final amountStr = row.length > 3 ? row[3] : '';
-      final accountStr = row.length > 4 ? row[4] : '';
-      final note = row.length > 5 ? row[5] : '';
-      final tagStr = row.length > 6 ? row[6] : '';
-
-      final amount = Decimal.tryParse(amountStr.replaceAll(',', ''));
-      if (amount == null || amount <= Decimal.zero) continue;
-
-      final kind = _kindFromZh(kindStr);
-      if (kind == TransactionKind.transfer) continue; // 转账暂不导入
-
-      final date = _parseDate(dateStr) ?? DateTime.now();
-
-      // 分类：按当前类型的中文名匹配，匹配不到留空（未分类）
+    for (final r in rows) {
+      // 分类：按该类型下的中文名匹配，匹配不到留空（未分类）
       int? categoryId;
-      for (final c in repo.categoriesForKind(kind)) {
-        if (c.nameZh == categoryStr) {
-          categoryId = c.id;
-          break;
-        }
-      }
-
-      // 账户
-      int accountId = fallbackAccountId;
-      if (accountStr.isNotEmpty) {
-        final cached = accountCache[accountStr];
-        if (cached != null) {
-          accountId = cached;
-        } else {
-          final newId = await repo.addAccount(name: accountStr);
-          accountCache[accountStr] = newId;
-          accountId = newId;
-        }
-      }
-
-      // 标签
-      final tagIds = <int>[];
-      if (tagStr.isNotEmpty) {
-        for (final name in tagStr.split(RegExp(r'[|，,]'))) {
-          final n = name.trim();
-          if (n.isEmpty) continue;
-          var id = tagCache[n];
-          if (id == null) {
-            id = await repo.addTag(
-                name: n, colorValue: kTagPalette.first.toARGB32());
-            tagCache[n] = id;
+      if (r.category.isNotEmpty) {
+        for (final c in repo.categoriesForKind(r.kind)) {
+          if (c.nameZh == r.category) {
+            categoryId = c.id;
+            break;
           }
-          tagIds.add(id);
         }
       }
-
       drafts.add(TransactionDraft(
-        kind: kind,
-        amount: amount,
+        kind: r.kind,
+        amount: r.amount,
         categoryId: categoryId,
-        accountId: accountId,
-        note: note,
-        date: date,
-        tagIds: tagIds,
+        accountId: fallbackAccountId,
+        note: r.note,
+        date: r.date,
       ));
     }
-
     return repo.importTransactions(drafts);
-  }
-
-  DateTime? _parseDate(String s) {
-    for (final fmt in [
-      'yyyy-MM-dd HH:mm',
-      'yyyy-MM-dd HH:mm:ss',
-      'yyyy-MM-dd',
-      'yyyy/MM/dd HH:mm',
-      'yyyy/MM/dd',
-    ]) {
-      try {
-        return DateFormat(fmt).parseStrict(s);
-      } catch (_) {}
-    }
-    return DateTime.tryParse(s);
   }
 
   String _kindZh(TransactionKind k) {
@@ -249,12 +164,6 @@ class _ImportExportViewState extends State<ImportExportView> {
       case TransactionKind.transfer:
         return '转账';
     }
-  }
-
-  TransactionKind _kindFromZh(String s) {
-    if (s.contains('收')) return TransactionKind.income;
-    if (s.contains('转')) return TransactionKind.transfer;
-    return TransactionKind.expense;
   }
 
   @override
@@ -277,8 +186,9 @@ class _ImportExportViewState extends State<ImportExportView> {
           _ActionCard(
             icon: Icons.download_outlined,
             color: AppColors.income(scheme),
-            title: '从 CSV 导入',
-            subtitle: '选一个 CSV 文件批量导入账目。表头：日期,类型,分类,金额,账户,备注,标签',
+            title: '导入账单 CSV',
+            subtitle: '支持微信、支付宝、咔皮、木木等主流账单，自动识别格式与编码，'
+                '也能导入轻记自己导出的 CSV',
             buttonLabel: '选择文件导入',
             onPressed: _busy ? null : _import,
           ),
@@ -311,10 +221,11 @@ class _ImportExportViewState extends State<ImportExportView> {
           ),
           const SizedBox(height: 6),
           Text(
-            '· 导入只增不删，不会覆盖已有账目。\n'
-            '· 转账类型暂不支持导入。\n'
-            '· 分类名能对上现有分类才会归类，否则记为「未分类」。\n'
-            '· 账户/标签名匹配不到时会自动新建。',
+            '· 支持微信/支付宝/咔皮/木木等账单，自动跳过文件顶部说明行、识别 UTF-8/GBK 编码。\n'
+            '· 导入只增不删，不会覆盖已有账目；导入前可先在抽屉新建一个账本隔离。\n'
+            '· 中性/不计收支的记录（如理财、还款）会自动跳过。\n'
+            '· 微信/支付宝没有分类，会先记为「未分类」，并把交易对方/商品写进备注，方便事后整理。\n'
+            '· 导入的账目都归到当前账本的默认账户。',
             style: TextStyle(
                 color: scheme.onSurfaceVariant, height: 1.6, fontSize: 13),
           ),
