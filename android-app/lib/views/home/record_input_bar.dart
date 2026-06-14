@@ -4,16 +4,15 @@ import 'package:speech_to_text/speech_to_text.dart' as stt;
 import '../quick_add/ai_quick_entry_view.dart';
 import '../quick_add/quick_add_view.dart';
 
-/// Claude 风格底部输入栏。
+/// 类 Claude 输入框：一整块圆角软卡片。
 ///
-/// 布局（两行）：
-///   上：文本输入框（占位"记一记"）
-///   下：[+扩展] ... [手动/AI 胶囊] ... [话筒] [发送]
+/// 卡片内：
+///   上：占位"记一记"的文本行
+///   下：[+]  [手动/AI 模式胶囊]  ……  [话筒]  [发送]
 ///
-/// 手动模式：点输入框或发送 → Navigator.push QuickAddView
-/// AI 模式：点发送 → Navigator.push AiQuickEntryView(initialText: text)
-///           若文本为空，也直接跳转让用户在那里输入
-/// 话筒：speech_to_text 中文听写，识别结果填入输入框
+/// 手动模式：点输入框或发送 → QuickAddView（键盘）
+/// AI 模式：点发送 → AiQuickEntryView(initialText)，自动解析
+/// 话筒：speech_to_text 中文听写，结果填进输入框
 class RecordInputBar extends StatefulWidget {
   const RecordInputBar({super.key});
 
@@ -25,7 +24,6 @@ class _RecordInputBarState extends State<RecordInputBar> {
   final TextEditingController _textCtrl = TextEditingController();
   bool _isAiMode = false;
 
-  // ---------- speech_to_text ----------
   final stt.SpeechToText _speech = stt.SpeechToText();
   bool _speechAvailable = false;
   bool _listening = false;
@@ -42,8 +40,6 @@ class _RecordInputBarState extends State<RecordInputBar> {
     _speech.stop();
     super.dispose();
   }
-
-  // ---------- 语音初始化 ----------
 
   Future<void> _initSpeech() async {
     final available = await _speech.initialize(
@@ -65,19 +61,16 @@ class _RecordInputBarState extends State<RecordInputBar> {
       _showSnack('该设备不支持语音识别');
       return;
     }
-
     if (_listening) {
       await _speech.stop();
       if (mounted) setState(() => _listening = false);
       return;
     }
-
     final started = await _speech.listen(
       onResult: (result) {
         if (mounted) {
           setState(() {
             _textCtrl.text = result.recognizedWords;
-            // 把光标移到末尾
             _textCtrl.selection = TextSelection.fromPosition(
               TextPosition(offset: _textCtrl.text.length),
             );
@@ -90,7 +83,6 @@ class _RecordInputBarState extends State<RecordInputBar> {
       cancelOnError: true,
       partialResults: true,
     );
-
     if (!started && mounted) {
       _showSnack('无法启动语音识别，请检查麦克风权限');
       return;
@@ -98,38 +90,28 @@ class _RecordInputBarState extends State<RecordInputBar> {
     if (mounted) setState(() => _listening = true);
   }
 
-  // ---------- 记账跳转 ----------
-
   void _handleSend() {
     final text = _textCtrl.text.trim();
     if (_isAiMode) {
-      // AI 模式：把文字带过去自动解析
       Navigator.push<void>(
         context,
         MaterialPageRoute<void>(
-          builder: (_) => AiQuickEntryView(initialText: text.isEmpty ? null : text),
+          builder: (_) =>
+              AiQuickEntryView(initialText: text.isEmpty ? null : text),
         ),
       );
     } else {
-      // 手动模式：直接打开数字键盘记账页
       Navigator.push<void>(
         context,
         MaterialPageRoute<void>(builder: (_) => const QuickAddView()),
       );
     }
-    // 发送后清空输入框
     _textCtrl.clear();
   }
 
   void _handleTapTextField() {
-    if (!_isAiMode) {
-      // 手动模式：点输入框即跳转，不弹系统键盘
-      _handleSend();
-    }
-    // AI 模式：正常聚焦，让用户输入文字
+    if (!_isAiMode) _handleSend();
   }
-
-  // ---------- + 扩展菜单 ----------
 
   void _showExtrasSheet() {
     showModalBottomSheet<void>(
@@ -138,18 +120,12 @@ class _RecordInputBarState extends State<RecordInputBar> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            // 标题
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 20, 16, 8),
-              child: Row(
-                children: [
-                  Text(
-                    '更多功能',
-                    style: Theme.of(ctx).textTheme.titleSmall?.copyWith(
-                          fontWeight: FontWeight.w600,
-                        ),
-                  ),
-                ],
+            const Padding(
+              padding: EdgeInsets.fromLTRB(16, 20, 16, 8),
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: Text('更多功能',
+                    style: TextStyle(fontWeight: FontWeight.w600)),
               ),
             ),
             _ExtrasItem(
@@ -195,64 +171,82 @@ class _RecordInputBarState extends State<RecordInputBar> {
     );
   }
 
-  // ---------- UI ----------
-
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
 
-    // 外层容器：surface + 顶部细线分隔
-    return Container(
-      decoration: BoxDecoration(
-        color: scheme.surface,
-        border: Border(
-          top: BorderSide(color: scheme.outlineVariant, width: 0.5),
-        ),
-      ),
-      child: SafeArea(
-        top: false,
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+    return SafeArea(
+      top: false,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(12, 6, 12, 10),
+        // 一整块圆角软卡片
+        child: Container(
+          padding: const EdgeInsets.fromLTRB(18, 16, 12, 12),
+          decoration: BoxDecoration(
+            color: scheme.surfaceContainerHigh,
+            borderRadius: BorderRadius.circular(28),
+            border: Border.all(
+              color: scheme.outlineVariant.withOpacity(0.6),
+              width: 1,
+            ),
+          ),
           child: Column(
             mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              // ── 行 1：输入框 ──────────────────────────────────────────
-              _InputField(
-                controller: _textCtrl,
-                isAiMode: _isAiMode,
-                onTap: _handleTapTextField,
-                onChanged: (_) => setState(() {}),
+              // ── 占位 / 输入文字（无边框，融入卡片）──
+              GestureDetector(
+                onTap: _isAiMode ? null : _handleTapTextField,
+                child: AbsorbPointer(
+                  absorbing: !_isAiMode,
+                  child: TextField(
+                    controller: _textCtrl,
+                    enabled: _isAiMode,
+                    onChanged: (_) => setState(() {}),
+                    onSubmitted: (_) => _handleSend(),
+                    textInputAction: TextInputAction.send,
+                    minLines: 1,
+                    maxLines: 4,
+                    style: const TextStyle(fontSize: 17),
+                    decoration: InputDecoration(
+                      hintText: '记一记',
+                      hintStyle: TextStyle(
+                        fontSize: 17,
+                        color: scheme.onSurfaceVariant.withOpacity(0.6),
+                      ),
+                      border: InputBorder.none,
+                      isDense: true,
+                      contentPadding: EdgeInsets.zero,
+                    ),
+                  ),
+                ),
               ),
-              const SizedBox(height: 8),
+              const SizedBox(height: 14),
 
-              // ── 行 2：工具栏 ─────────────────────────────────────────
+              // ── 工具行 ──
               Row(
                 children: [
-                  // + 扩展
-                  _ToolButton(
+                  _CircleButton(
                     icon: Icons.add,
                     onTap: _showExtrasSheet,
                   ),
-                  const SizedBox(width: 6),
-
-                  // 手动 / AI 胶囊切换
+                  const SizedBox(width: 8),
                   _ModePill(
                     isAi: _isAiMode,
-                    onChanged: (ai) => setState(() => _isAiMode = ai),
+                    onTap: () => setState(() => _isAiMode = !_isAiMode),
                   ),
-
                   const Spacer(),
-
-                  // 话筒
-                  _ToolButton(
-                    icon: _listening ? Icons.mic : Icons.mic_none_outlined,
-                    tintColor: _listening ? scheme.error : null,
+                  _CircleButton(
+                    icon: _listening ? Icons.mic : Icons.mic_none,
+                    tint: _listening ? scheme.error : null,
                     onTap: _toggleListen,
                   ),
-                  const SizedBox(width: 6),
-
-                  // 发送
-                  _SendButton(onTap: _handleSend),
+                  const SizedBox(width: 8),
+                  _CircleButton(
+                    icon: Icons.arrow_upward,
+                    filled: true,
+                    onTap: _handleSend,
+                  ),
                 ],
               ),
             ],
@@ -264,141 +258,41 @@ class _RecordInputBarState extends State<RecordInputBar> {
 }
 
 // ---------------------------------------------------------------------------
-// 输入框
-// ---------------------------------------------------------------------------
-
-class _InputField extends StatelessWidget {
-  final TextEditingController controller;
-  final bool isAiMode;
-  final VoidCallback onTap;
-  final ValueChanged<String> onChanged;
-
-  const _InputField({
-    required this.controller,
-    required this.isAiMode,
-    required this.onTap,
-    required this.onChanged,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-
-    return GestureDetector(
-      // 手动模式：手势拦截，点击直接跳转
-      onTap: isAiMode ? null : onTap,
-      child: AbsorbPointer(
-        absorbing: !isAiMode,
-        child: TextField(
-          controller: controller,
-          enabled: isAiMode,
-          onTap: isAiMode ? null : onTap,
-          onChanged: onChanged,
-          textInputAction: TextInputAction.send,
-          maxLines: 1,
-          style: Theme.of(context).textTheme.bodyMedium,
-          decoration: InputDecoration(
-            hintText: '记一记',
-            hintStyle: TextStyle(
-              color: scheme.onSurfaceVariant.withOpacity(0.55),
-            ),
-            filled: true,
-            fillColor: scheme.surfaceContainerHighest.withOpacity(0.6),
-            isDense: true,
-            contentPadding:
-                const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-            border: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(22),
-              borderSide: BorderSide.none,
-            ),
-            enabledBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(22),
-              borderSide: BorderSide.none,
-            ),
-            focusedBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(22),
-              borderSide: BorderSide(color: scheme.primary, width: 1.5),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-// ---------------------------------------------------------------------------
-// 模式胶囊切换（手动 / AI）
+// 模式胶囊（单个胶囊，显示当前模式，点击切换）—— 对标参考图里的 Opus pill
 // ---------------------------------------------------------------------------
 
 class _ModePill extends StatelessWidget {
   final bool isAi;
-  final ValueChanged<bool> onChanged;
-
-  const _ModePill({required this.isAi, required this.onChanged});
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-
-    return Container(
-      height: 32,
-      padding: const EdgeInsets.all(2),
-      decoration: BoxDecoration(
-        color: scheme.surfaceContainerHighest,
-        borderRadius: BorderRadius.circular(16),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          _PillSegment(
-            label: '手动',
-            selected: !isAi,
-            onTap: () => onChanged(false),
-          ),
-          _PillSegment(
-            label: 'AI',
-            selected: isAi,
-            onTap: () => onChanged(true),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _PillSegment extends StatelessWidget {
-  final String label;
-  final bool selected;
   final VoidCallback onTap;
 
-  const _PillSegment({
-    required this.label,
-    required this.selected,
-    required this.onTap,
-  });
+  const _ModePill({required this.isAi, required this.onTap});
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-
     return GestureDetector(
       onTap: onTap,
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 160),
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+      child: Container(
+        height: 36,
+        padding: const EdgeInsets.symmetric(horizontal: 14),
         decoration: BoxDecoration(
-          color: selected ? scheme.primary : Colors.transparent,
-          borderRadius: BorderRadius.circular(14),
+          color: scheme.surfaceContainerHighest,
+          borderRadius: BorderRadius.circular(18),
         ),
-        child: Text(
-          label,
-          style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                color: selected
-                    ? scheme.onPrimary
-                    : scheme.onSurfaceVariant,
-                fontWeight:
-                    selected ? FontWeight.w600 : FontWeight.w400,
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              isAi ? 'AI 记账' : '手动记账',
+              style: TextStyle(
+                fontSize: 14,
+                fontWeight: FontWeight.w600,
+                color: scheme.onSurface,
               ),
+            ),
+            const SizedBox(width: 4),
+            Icon(Icons.unfold_more, size: 16, color: scheme.onSurfaceVariant),
+          ],
         ),
       ),
     );
@@ -406,67 +300,35 @@ class _PillSegment extends StatelessWidget {
 }
 
 // ---------------------------------------------------------------------------
-// 小图标按钮（+ / 话筒）
+// 圆形按钮（+ / 话筒 / 发送）
 // ---------------------------------------------------------------------------
 
-class _ToolButton extends StatelessWidget {
+class _CircleButton extends StatelessWidget {
   final IconData icon;
   final VoidCallback onTap;
-  final Color? tintColor;
+  final bool filled;
+  final Color? tint;
 
-  const _ToolButton({
+  const _CircleButton({
     required this.icon,
     required this.onTap,
-    this.tintColor,
+    this.filled = false,
+    this.tint,
   });
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final color = tintColor ?? scheme.onSurfaceVariant;
+    final bg = filled ? scheme.primary : scheme.surfaceContainerHighest;
+    final fg = filled ? scheme.onPrimary : (tint ?? scheme.onSurfaceVariant);
 
     return GestureDetector(
       onTap: onTap,
       child: Container(
-        width: 36,
-        height: 36,
-        decoration: BoxDecoration(
-          color: scheme.surfaceContainerHighest.withOpacity(0.6),
-          shape: BoxShape.circle,
-        ),
-        child: Icon(icon, size: 20, color: color),
-      ),
-    );
-  }
-}
-
-// ---------------------------------------------------------------------------
-// 发送按钮（深色圆形箭头）
-// ---------------------------------------------------------------------------
-
-class _SendButton extends StatelessWidget {
-  final VoidCallback onTap;
-
-  const _SendButton({required this.onTap});
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        width: 36,
-        height: 36,
-        decoration: BoxDecoration(
-          color: scheme.primary,
-          shape: BoxShape.circle,
-        ),
-        child: Icon(
-          Icons.arrow_upward,
-          size: 20,
-          color: scheme.onPrimary,
-        ),
+        width: 38,
+        height: 38,
+        decoration: BoxDecoration(color: bg, shape: BoxShape.circle),
+        child: Icon(icon, size: 20, color: fg),
       ),
     );
   }
