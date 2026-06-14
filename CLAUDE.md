@@ -22,12 +22,17 @@
 ### 产品方向与关键决策（定了别反复）
 - **走 A：极简工具路线**（对标钱迹），不走可爱风。主色深蓝 `#2E5090`，中性收支配色（收入蓝/支出中性/超支橙，见 `lib/theme/app_colors.dart`）。
 - **AI 一句话记账接 DeepSeek**（不用 Claude——国产便宜、国内直连、中文好）。OpenAI 兼容 HTTP，`lib/core/ai/llm_entry_parser.dart`；用户的 key 存本地 `app_settings` 表（设置→AI记账设置）；没 key/失败时降级本地规则解析。一笔约 0.001 元。
-- **输入框对标 Claude**：底部悬浮白框启动器（白底+轻阴影）；点模式胶囊弹「手动/AI」选择面板；手动模式→键盘大卡（`manual_add_sheet.dart`，右上角关闭X+AI助手切换）；AI模式→贴键盘聚焦输入（`ai_focused_input_sheet.dart`，打字/话筒/解析）；**极简无卡通吉祥物**。
-- **导航**：无底部 tab。左上角汉堡→左侧抽屉（明细/统计/设置）；底部是输入框。
-- 货币显示统一 `¥`（不是 CNY/CN¥）。
+- **输入框对标 Claude（已按用户逐张图对齐，标准已定）**：底部悬浮白框启动器（`record_input_bar.dart`，白底+轻阴影）。相关文件都在 `android-app/lib/views/home/`：
+  - `record_input_bar.dart`：首页底部启动器。点模式胶囊 → 弹「手动/AI」选择面板；点输入区按模式分流；点话筒 → 按住说话面板。
+  - `manual_add_sheet.dart`：手动模式键盘大卡（分类网格+金额+数字键盘），右上角关闭 X + 「AI 助手」胶囊切换。
+  - `ai_focused_input_sheet.dart`：AI 模式贴键盘聚焦输入，**布局对标 Claude 输入框**：占位"记一记" + 底部一行 `[+] [⇄模式胶囊] …Spacer… [话筒] [发送]`，发送键有字才亮、触发解析。
+  - `voice_input_sheet.dart`：「按住说话」面板（长按录音 `speech_to_text` zh_CN → 松手转文字 → `AiQuickEntryView(initialText)` 走 DeepSeek 解析）。
+  - **按钮统一标准**：工具按钮（`+`/话筒/关闭/胶囊）= 透明感 `scheme.surface` + `Border black.06` + 淡阴影 `BoxShadow black.06 blur6`；唯发送键例外，实心 `scheme.primary` 圆。胶囊 `_ModePill`：前置 `Icons.swap_horiz`、文字**不加粗**。
+  - **极简无卡通吉祥物**（用户明确不要可爱风）。
 
 ### 安卓待办（按优先级）
 - 手动大卡「备注」TextField 可能与数字键盘抢系统键盘 → 需 `resizeToAvoidBottomInset:false`
+- 输入框/按钮视觉细节以用户对照截图反馈为准，可能仍要微调
 - 截图 OCR、CSV 导入导出（`+` 菜单里现是「即将到来」占位）
 - 深色模式打磨、明细搜索/编辑、固定/周期账
 
