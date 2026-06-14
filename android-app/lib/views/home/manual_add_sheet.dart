@@ -90,7 +90,6 @@ class _ManualAddSheetState extends State<ManualAddSheet> {
 
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
     // isScrollControlled: true のsheet では高さ制約を自分で持つ必要がある。
     // 画面高さの 92% を上限に、キーボード分を引いた残り全体を使う。
     final screenH = MediaQuery.sizeOf(context).height;
@@ -124,49 +123,17 @@ class _ManualAddSheetState extends State<ManualAddSheet> {
               ),
               const SizedBox(width: 8),
 
-              // AI 助手胶囊
-              GestureDetector(
+              // AI 助手胶囊（切换到 AI 模式）
+              _ModePill(
+                label: 'AI 助手',
                 onTap: widget.onSwitchToAi,
-                child: Container(
-                  height: 34,
-                  padding: const EdgeInsets.symmetric(horizontal: 12),
-                  decoration: BoxDecoration(
-                    color: scheme.primaryContainer.withOpacity(0.6),
-                    borderRadius: BorderRadius.circular(17),
-                  ),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(Icons.auto_awesome,
-                          size: 14, color: scheme.primary),
-                      const SizedBox(width: 4),
-                      Text(
-                        'AI助手',
-                        style: TextStyle(
-                          fontSize: 13,
-                          fontWeight: FontWeight.w600,
-                          color: scheme.primary,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
               ),
               const SizedBox(width: 8),
 
               // 关闭
-              GestureDetector(
+              _ToolCircleButton(
+                icon: Icons.close,
                 onTap: () => Navigator.pop(context),
-                child: Container(
-                  width: 32,
-                  height: 32,
-                  decoration: BoxDecoration(
-                    color: scheme.surfaceContainerHighest,
-                    shape: BoxShape.circle,
-                  ),
-                  child: Icon(Icons.close,
-                      size: 18, color: scheme.onSurfaceVariant),
-                ),
               ),
             ],
           ),
@@ -485,6 +452,92 @@ class _TodayAllowanceBanner extends StatelessWidget {
               color: textColor,
             ),
         textAlign: TextAlign.center,
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 统一圆形工具按钮（透明底 + 淡阴影，对标 Claude）
+// ─────────────────────────────────────────────────────────────────────────────
+
+class _ToolCircleButton extends StatelessWidget {
+  final IconData icon;
+  final VoidCallback? onTap;
+
+  const _ToolCircleButton({required this.icon, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        width: 40,
+        height: 40,
+        decoration: BoxDecoration(
+          color: scheme.surface,
+          shape: BoxShape.circle,
+          border: Border.all(color: Colors.black.withOpacity(0.06)),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.06),
+              blurRadius: 6,
+              offset: const Offset(0, 1),
+            ),
+          ],
+        ),
+        child: Icon(icon, size: 20, color: scheme.onSurfaceVariant),
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 模式胶囊（透明底 + swap_horiz 前置图标 + 不加粗）
+// ─────────────────────────────────────────────────────────────────────────────
+
+class _ModePill extends StatelessWidget {
+  final String label;
+  final VoidCallback onTap;
+
+  const _ModePill({required this.label, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        height: 36,
+        padding: const EdgeInsets.symmetric(horizontal: 12),
+        decoration: BoxDecoration(
+          color: scheme.surface,
+          borderRadius: BorderRadius.circular(18),
+          border: Border.all(color: Colors.black.withOpacity(0.06)),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.06),
+              blurRadius: 6,
+              offset: const Offset(0, 1),
+            ),
+          ],
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.swap_horiz, size: 16, color: scheme.onSurfaceVariant),
+            const SizedBox(width: 6),
+            Text(
+              label,
+              style: TextStyle(
+                fontSize: 14,
+                fontWeight: FontWeight.normal,
+                color: scheme.onSurface,
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

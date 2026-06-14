@@ -3,6 +3,7 @@ import 'package:speech_to_text/speech_to_text.dart' as stt;
 
 import 'ai_focused_input_sheet.dart';
 import 'manual_add_sheet.dart';
+import 'voice_input_sheet.dart';
 
 /// 底部启动器卡片（对标 Claude 输入框）。
 ///
@@ -109,7 +110,7 @@ class _RecordInputBarState extends State<RecordInputBar> {
       _showSnack('该设备不支持语音识别');
       return;
     }
-    _openAi(startVoice: true);
+    showVoiceInputSheet(context);
   }
 
   // ── 发送 / 点击输入区 ─────────────────────────────────────────────────────
@@ -185,7 +186,7 @@ class _RecordInputBarState extends State<RecordInputBar> {
               // ── 工具行 ──
               Row(
                 children: [
-                  _CircleButton(
+                  _ToolCircleButton(
                     icon: Icons.add,
                     onTap: () => _showExtrasSheet(),
                   ),
@@ -195,12 +196,12 @@ class _RecordInputBarState extends State<RecordInputBar> {
                     onTap: _showModeSheet,
                   ),
                   const Spacer(),
-                  _CircleButton(
+                  _ToolCircleButton(
                     icon: Icons.mic,
                     onTap: _onMicTap,
                   ),
                   const SizedBox(width: 8),
-                  _CircleButton(
+                  _ToolCircleButton(
                     icon: Icons.arrow_upward,
                     filled: true,
                     onTap: _onSend,
@@ -393,7 +394,68 @@ class _ModeCard extends StatelessWidget {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 模式胶囊
+// 统一圆形工具按钮（透明底 + 淡阴影，对标 Claude）
+//
+// filled=true → 实心 scheme.primary 背景（发送按钮专用）
+// ─────────────────────────────────────────────────────────────────────────────
+
+class _ToolCircleButton extends StatelessWidget {
+  final IconData icon;
+  final VoidCallback onTap;
+  final bool filled;
+
+  const _ToolCircleButton({
+    required this.icon,
+    required this.onTap,
+    this.filled = false,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+
+    if (filled) {
+      // 发送按钮：实心主色
+      return GestureDetector(
+        onTap: onTap,
+        child: Container(
+          width: 40,
+          height: 40,
+          decoration: BoxDecoration(
+            color: scheme.primary,
+            shape: BoxShape.circle,
+          ),
+          child: Icon(icon, size: 20, color: scheme.onPrimary),
+        ),
+      );
+    }
+
+    // 次要按钮：透明底 + 淡边框 + 淡阴影
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        width: 40,
+        height: 40,
+        decoration: BoxDecoration(
+          color: scheme.surface,
+          shape: BoxShape.circle,
+          border: Border.all(color: Colors.black.withOpacity(0.06)),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.06),
+              blurRadius: 6,
+              offset: const Offset(0, 1),
+            ),
+          ],
+        ),
+        child: Icon(icon, size: 20, color: scheme.onSurfaceVariant),
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 模式胶囊（透明底 + 淡阴影，swap_horiz 前置图标，不加粗）
 // ─────────────────────────────────────────────────────────────────────────────
 
 class _ModePill extends StatelessWidget {
@@ -409,24 +471,32 @@ class _ModePill extends StatelessWidget {
       onTap: onTap,
       child: Container(
         height: 36,
-        padding: const EdgeInsets.symmetric(horizontal: 14),
+        padding: const EdgeInsets.symmetric(horizontal: 12),
         decoration: BoxDecoration(
-          color: scheme.surfaceContainerHighest,
+          color: scheme.surface,
           borderRadius: BorderRadius.circular(18),
+          border: Border.all(color: Colors.black.withOpacity(0.06)),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.06),
+              blurRadius: 6,
+              offset: const Offset(0, 1),
+            ),
+          ],
         ),
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
+            Icon(Icons.swap_horiz, size: 16, color: scheme.onSurfaceVariant),
+            const SizedBox(width: 6),
             Text(
               isAi ? 'AI 记账' : '手动记账',
               style: TextStyle(
                 fontSize: 14,
-                fontWeight: FontWeight.w600,
+                fontWeight: FontWeight.normal,
                 color: scheme.onSurface,
               ),
             ),
-            const SizedBox(width: 4),
-            Icon(Icons.unfold_more, size: 16, color: scheme.onSurfaceVariant),
           ],
         ),
       ),
@@ -435,42 +505,7 @@ class _ModePill extends StatelessWidget {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 圆形按钮
-// ─────────────────────────────────────────────────────────────────────────────
-
-class _CircleButton extends StatelessWidget {
-  final IconData icon;
-  final VoidCallback onTap;
-  final bool filled;
-  final Color? tint;
-
-  const _CircleButton({
-    required this.icon,
-    required this.onTap,
-    this.filled = false,
-    this.tint,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    final bg = filled ? scheme.primary : scheme.surfaceContainerHighest;
-    final fg = filled ? scheme.onPrimary : (tint ?? scheme.onSurfaceVariant);
-
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        width: 38,
-        height: 38,
-        decoration: BoxDecoration(color: bg, shape: BoxShape.circle),
-        child: Icon(icon, size: 20, color: fg),
-      ),
-    );
-  }
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// 圆形关闭按钮（内联，也供 sheet 复用）
+// 圆形关闭按钮（透明风格，供 sheet 复用）
 // ─────────────────────────────────────────────────────────────────────────────
 
 class _CloseButton extends StatelessWidget {
@@ -484,11 +519,19 @@ class _CloseButton extends StatelessWidget {
     return GestureDetector(
       onTap: onTap,
       child: Container(
-        width: 32,
-        height: 32,
+        width: 36,
+        height: 36,
         decoration: BoxDecoration(
-          color: scheme.surfaceContainerHighest,
+          color: scheme.surface,
           shape: BoxShape.circle,
+          border: Border.all(color: Colors.black.withOpacity(0.06)),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.06),
+              blurRadius: 6,
+              offset: const Offset(0, 1),
+            ),
+          ],
         ),
         child: Icon(Icons.close, size: 18, color: scheme.onSurfaceVariant),
       ),
