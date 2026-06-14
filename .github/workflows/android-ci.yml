@@ -43,18 +43,44 @@ jobs:
           grep -q 'android.permission.RECORD_AUDIO' "$MANIFEST" || \
             sed -i '/<manifest/a\    <uses-permission android:name="android.permission.RECORD_AUDIO"/>' "$MANIFEST"
           grep permission "$MANIFEST"
-          # 部分插件（file_picker→flutter_plugin_android_lifecycle、image_picker 等）
-          # 要求 compileSdk≥36，脚手架默认偏低，这里强制提到 36。
-          KTS=android-app/android/app/build.gradle.kts
-          GRADLE=android-app/android/app/build.gradle
-          if [ -f "$KTS" ]; then
-            sed -i -E 's/^([[:space:]]*compileSdk[[:space:]]*=).*/\1 36/' "$KTS"
-            grep -n 'compileSdk' "$KTS" || true
+          # 部分插件（file_picker/image_picker 依赖的 flutter_plugin_android_lifecycle）
+          # 要求 compileSdk≥36；插件各自的模块不继承 app 的 compileSdk，
+          # 所以在根 gradle 注入 subprojects 覆盖，强制所有模块 compileSdk=36。
+          APP_KTS=android-app/android/app/build.gradle.kts
+          APP_GRADLE=android-app/android/app/build.gradle
+          [ -f "$APP_KTS" ] && sed -i -E 's/^([[:space:]]*compileSdk[[:space:]]*=).*/\1 36/' "$APP_KTS"
+          [ -f "$APP_GRADLE" ] && sed -i -E 's/^([[:space:]]*compileSdk(Version)?[[:space:]]+).*/\1 36/' "$APP_GRADLE"
+          ROOT_KTS=android-app/android/build.gradle.kts
+          ROOT_GRADLE=android-app/android/build.gradle
+          if [ -f "$ROOT_KTS" ]; then
+            cat >> "$ROOT_KTS" <<'GRADLE_EOF'
+
+// CI 注入：强制所有模块（含 file_picker/image_picker 等插件）compileSdk=36
+subprojects {
+    afterEvaluate {
+        val androidExt = extensions.findByName("android")
+        if (androidExt != null) {
+            androidExt.withGroovyBuilder { "compileSdkVersion"(36) }
+        }
+    }
+}
+GRADLE_EOF
+            echo ">> injected subprojects override into $ROOT_KTS"
+          elif [ -f "$ROOT_GRADLE" ]; then
+            cat >> "$ROOT_GRADLE" <<'GRADLE_EOF'
+
+// CI 注入：强制所有模块 compileSdk=36
+subprojects {
+    afterEvaluate { proj ->
+        if (proj.hasProperty('android')) {
+            proj.android { compileSdkVersion 36 }
+        }
+    }
+}
+GRADLE_EOF
+            echo ">> injected subprojects override into $ROOT_GRADLE"
           fi
-          if [ -f "$GRADLE" ]; then
-            sed -i -E 's/^([[:space:]]*compileSdk(Version)?[[:space:]]+).*/\1 36/' "$GRADLE"
-            grep -n 'compileSdk' "$GRADLE" || true
-          fi
+          ls android-app/android/*.gradle* || true
 
       - name: 拉取依赖
         working-directory: android-app
