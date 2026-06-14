@@ -120,7 +120,12 @@ class _ImportExportViewState extends State<ImportExportView> {
         result = BillImporter.parseBytes(bytes);
       }
       if (result.rows.isEmpty) {
-        _setMessage('没找到可导入的账目（识别为「${result.source}」，请确认是账单文件）');
+        final diag = result.totalRows == 0
+            ? '文件读出来是空的（可能编码不对或不是表格）'
+            : !result.headerFound
+                ? '读到 ${result.totalRows} 行，但没找到「金额/时间」表头行'
+                : '找到了表头，但没有可识别的账目行';
+        _setMessage('导入失败：识别为「${result.source}」，$diag。把文件发我看看就能修。');
         return;
       }
       final count = await _ingestRows(result.rows);

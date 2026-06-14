@@ -107,13 +107,18 @@ class _VoiceInputSheetState extends State<_VoiceInputSheet>
     if (mounted) setState(() => _speechReady = available);
   }
 
-  // ── 按住开始 ──────────────────────────────────────────────────────────────
-  Future<void> _onPressStart(LongPressStartDetails _) async {
-    if (!_speechReady) {
-      _snack('该设备不支持语音识别，请检查系统语音服务');
-      return;
-    }
+  // ── 按下开始（用原始指针事件，按下即响应，不被弹层手势抢占）────────────────────
+  Future<void> _startListening() async {
     if (_listening) return;
+    if (!_speechReady) {
+      // 可能是还没初始化好或没麦克风权限，重试一次初始化
+      setState(() => _hint = '正在准备麦克风…');
+      await _initSpeech();
+      if (!_speechReady) {
+        setState(() => _hint = '用不了麦克风，请到系统设置允许「轻记」录音');
+        return;
+      }
+    }
 
     setState(() {
       _recognized = '';
@@ -152,9 +157,8 @@ class _VoiceInputSheetState extends State<_VoiceInputSheet>
   }
 
   // ── 拖动：判断手指在哪个区 ───────────────────────────────────────────────────
-  void _onPressMove(LongPressMoveUpdateDetails d) {
+  void _updateTarget(Offset p) {
     if (!_listening) return;
-    final p = d.globalPosition;
     final next = _hitTest(_cancelKey, p)
         ? _DragTarget.cancel
         : _hitTest(_editKey, p)
@@ -175,7 +179,7 @@ class _VoiceInputSheetState extends State<_VoiceInputSheet>
   }
 
   // ── 松开结束 ──────────────────────────────────────────────────────────────
-  Future<void> _onPressEnd(LongPressEndDetails _) async {
+  Future<void> _finish() async {
     if (!_listening) return;
     await _speech.stop();
     _pulseCtrl.stop();
@@ -299,11 +303,13 @@ class _VoiceInputSheetState extends State<_VoiceInputSheet>
 
             const SizedBox(height: 16),
 
-            // 按住说话按钮
-            GestureDetector(
-              onLongPressStart: _onPressStart,
-              onLongPressMoveUpdate: _onPressMove,
-              onLongPressEnd: _onPressEnd,
+            // 按住说话按钮（Listener 原始指针：按下即录、滑动判区、松手结束）
+            Listener(
+              behavior: HitTestBehavior.opaque,
+              onPointerDown: (e) => _startListening(),
+              onPointerMove: (e) => _updateTarget(e.position),
+              onPointerUp: (e) => _finish(),
+              onPointerCancel: (e) => _finish(),
               child: AnimatedBuilder(
                 animation: _pulseCtrl,
                 builder: (_, child) => Transform.scale(

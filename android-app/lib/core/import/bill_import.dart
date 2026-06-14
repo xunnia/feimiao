@@ -24,16 +24,20 @@ class ImportedBillRow {
   });
 }
 
-/// 解析结果：识别到的来源 + 解析出的行 + 跳过条数。
+/// 解析结果：识别到的来源 + 解析出的行 + 跳过条数 + 诊断信息。
 class BillParseResult {
-  final String source; // 微信 / 支付宝 / 咔皮记账 / 木木记账 / 通用CSV
+  final String source; // 微信 / 支付宝 / 咔皮记账 / 木木记账 / 账单
   final List<ImportedBillRow> rows;
   final int skipped;
+  final int totalRows; // 文件总行数（诊断用）
+  final bool headerFound; // 是否定位到表头（诊断用）
 
   const BillParseResult({
     required this.source,
     required this.rows,
     required this.skipped,
+    this.totalRows = 0,
+    this.headerFound = false,
   });
 }
 
@@ -66,19 +70,31 @@ class BillImporter {
   /// 从已解析的二维表格解析（CSV 与 xlsx 共用的核心）。
   static BillParseResult parseRows(List<List<String>> table) {
     final source = _detectSourceFromTable(table);
+    final total = table.length;
     if (table.isEmpty) {
-      return BillParseResult(source: source, rows: const [], skipped: 0);
+      return BillParseResult(
+          source: source, rows: const [], skipped: 0, totalRows: total);
     }
 
     final headerIdx = _findHeaderRow(table);
     if (headerIdx < 0) {
-      return BillParseResult(source: source, rows: const [], skipped: 0);
+      return BillParseResult(
+          source: source,
+          rows: const [],
+          skipped: 0,
+          totalRows: total,
+          headerFound: false);
     }
 
     final header = table[headerIdx].map((e) => _norm(e)).toList();
     final cols = _ColumnMap.fromHeader(header);
     if (cols.amount < 0) {
-      return BillParseResult(source: source, rows: const [], skipped: 0);
+      return BillParseResult(
+          source: source,
+          rows: const [],
+          skipped: 0,
+          totalRows: total,
+          headerFound: true);
     }
 
     final rows = <ImportedBillRow>[];
@@ -95,10 +111,16 @@ class BillImporter {
       rows.add(parsed);
     }
 
-    return BillParseResult(source: source, rows: rows, skipped: skipped);
+    return BillParseResult(
+      source: source,
+      rows: rows,
+      skipped: skipped,
+      totalRows: total,
+      headerFound: true,
+    );
   }
 
-  // ── 编码 ────────────────────────────────────────────────────────────────
+  // ── 编码：UTF-8 / GBK 自动择优 ─────────────────────────────────────────────
   static String _decode(Uint8List bytes) {
     // 去掉 UTF-8 BOM
     if (bytes.length >= 3 &&
@@ -107,16 +129,26 @@ class BillImporter {
         bytes[2] == 0xBF) {
       bytes = bytes.sublist(3);
     }
+
+    // 严格 UTF-8 能解通就直接用（支付宝新版/微信多为 UTF-8）
     try {
-      // strict UTF-8：遇到非法字节抛异常 → 判定为 GBK
       return const Utf8Decoder(allowMalformed: false).convert(bytes);
+    } catch (_) {/* 落到下面试 GBK */}
+
+    // 严格 UTF-8 失败 → 多半是 GBK（老支付宝账单）。两种都试，挑乱码少的。
+    String? gbkText;
+    try {
+      gbkText = gbk.decode(bytes);
     } catch (_) {
-      try {
-        return gbk.decode(bytes);
-      } catch (_) {
-        return utf8.decode(bytes, allowMalformed: true);
-      }
+      gbkText = null;
     }
+    final utf8Loose = utf8.decode(bytes, allowMalformed: true);
+
+    if (gbkText == null) return utf8Loose;
+    // 统计替换符 U+FFFD，哪个少用哪个
+    final badGbk = '�'.allMatches(gbkText).length;
+    final badUtf8 = '�'.allMatches(utf8Loose).length;
+    return badGbk <= badUtf8 ? gbkText : utf8Loose;
   }
 
   // ── 来源识别：扫描表格前若干行的文字 ────────────────────────────────────────
