@@ -1,14 +1,30 @@
-// Gradle init 脚本：强制所有模块（app + 各插件）使用 compileSdk 36。
+// Gradle init 脚本（CI 拷到 ~/.gradle/init.d/ 自动生效）：
 //
-// 背景：file_picker / image_picker 依赖的 flutter_plugin_android_lifecycle
-// 要求消费方 compileSdk≥36，而插件模块各自按较低版本编译，导致
-// assembleRelease 的 AAR 元数据检查失败。插件模块不继承 app 的 compileSdk，
-// 所以用 init 脚本统一覆盖。CI 把本文件拷到 ~/.gradle/init.d/ 自动生效。
+//  1) 强制所有模块（app + 各插件）使用 compileSdk 36
+//     —— file_picker/image_picker 依赖的 flutter_plugin_android_lifecycle
+//        要求 compileSdk≥36，而插件模块各自按较低版本编译，会导致
+//        assembleRelease 的 AAR 元数据检查失败。
+//
+//  2) 给 :app 补上 ML Kit 文字识别的脚本模型依赖
+//     —— google_mlkit_text_recognition 插件初始化时引用了
+//        中文/日文/韩文/天城文 四种 *TextRecognizerOptions 类，
+//        这些模型是独立 artifact，不补会让 release 的 R8 报「Missing class」。
+//        中文是我们实际用的；其余三个仅为满足插件代码引用。
 allprojects {
     afterEvaluate { project ->
         if (project.hasProperty("android")) {
             project.android {
                 compileSdkVersion 36
+            }
+            if (project.name == "app") {
+                project.dependencies.add("implementation",
+                    "com.google.mlkit:text-recognition-chinese:16.0.1")
+                project.dependencies.add("implementation",
+                    "com.google.mlkit:text-recognition-japanese:16.0.1")
+                project.dependencies.add("implementation",
+                    "com.google.mlkit:text-recognition-korean:16.0.1")
+                project.dependencies.add("implementation",
+                    "com.google.mlkit:text-recognition-devanagari:16.0.1")
             }
         }
     }
