@@ -47,19 +47,25 @@ class BillParseResult {
 ///  - 收支方向：优先「收/支」列，其次「类型」列，再退化到金额正负号；
 ///    中性 / 不计收支的行会被跳过。
 class BillImporter {
-  /// 从原始字节解析（推荐，能正确处理 GBK）。
+  /// 从原始字节解析（CSV，推荐——能正确处理 GBK）。
   static BillParseResult parseBytes(Uint8List bytes) =>
       parseString(_decode(bytes));
 
-  /// 从已解码文本解析。
+  /// 从已解码 CSV 文本解析。
   static BillParseResult parseString(String raw) {
-    final source = _detectSource(raw);
     final normalized = raw.replaceAll('\r\n', '\n').replaceAll('\r', '\n');
     final table = const CsvToListConverter(
       shouldParseNumbers: false,
       eol: '\n',
     ).convert(normalized);
+    return parseRows(
+      table.map((r) => r.map((c) => c.toString()).toList()).toList(),
+    );
+  }
 
+  /// 从已解析的二维表格解析（CSV 与 xlsx 共用的核心）。
+  static BillParseResult parseRows(List<List<String>> table) {
+    final source = _detectSourceFromTable(table);
     if (table.isEmpty) {
       return BillParseResult(source: source, rows: const [], skipped: 0);
     }
@@ -69,8 +75,7 @@ class BillImporter {
       return BillParseResult(source: source, rows: const [], skipped: 0);
     }
 
-    final header =
-        table[headerIdx].map((e) => _norm(e.toString())).toList();
+    final header = table[headerIdx].map((e) => _norm(e)).toList();
     final cols = _ColumnMap.fromHeader(header);
     if (cols.amount < 0) {
       return BillParseResult(source: source, rows: const [], skipped: 0);
@@ -80,9 +85,8 @@ class BillImporter {
     var skipped = 0;
     for (var i = headerIdx + 1; i < table.length; i++) {
       final raw = table[i];
-      if (raw.every((c) => c.toString().trim().isEmpty)) continue;
-      final row = raw.map((e) => e.toString().trim()).toList();
-
+      if (raw.every((c) => c.trim().isEmpty)) continue;
+      final row = raw.map((e) => e.trim()).toList();
       final parsed = cols.parseRow(row);
       if (parsed == null) {
         skipped++;
@@ -115,21 +119,27 @@ class BillImporter {
     }
   }
 
-  // ── 来源识别 ──────────────────────────────────────────────────────────────
-  static String _detectSource(String raw) {
-    final head = raw.length > 600 ? raw.substring(0, 600) : raw;
+  // ── 来源识别：扫描表格前若干行的文字 ────────────────────────────────────────
+  static String _detectSourceFromTable(List<List<String>> table) {
+    final buf = StringBuffer();
+    final limit = table.length < 25 ? table.length : 25;
+    for (var i = 0; i < limit; i++) {
+      buf.write(table[i].join(','));
+      buf.write('\n');
+    }
+    final head = buf.toString();
     if (head.contains('微信支付账单') || head.contains('微信昵称')) return '微信';
-    if (head.contains('支付宝') || head.contains('支付宝（中国）')) return '支付宝';
+    if (head.contains('支付宝')) return '支付宝';
     if (head.contains('咔皮')) return '咔皮记账';
     if (head.contains('木木')) return '木木记账';
-    return '通用CSV';
+    return '账单';
   }
 
   // ── 表头定位：含「金额」类列名的那一行 ───────────────────────────────────────
-  static int _findHeaderRow(List<List<dynamic>> table) {
+  static int _findHeaderRow(List<List<String>> table) {
     final limit = table.length < 30 ? table.length : 30;
     for (var i = 0; i < limit; i++) {
-      final cells = table[i].map((e) => _norm(e.toString())).toList();
+      final cells = table[i].map(_norm).toList();
       final hasAmount = cells.any((c) => c.contains('金额'));
       final hasDateOrKind = cells.any((c) =>
           c.contains('时间') ||
@@ -141,7 +151,7 @@ class BillImporter {
     }
     // 退化：只要有「金额」就当表头
     for (var i = 0; i < limit; i++) {
-      final cells = table[i].map((e) => _norm(e.toString())).toList();
+      final cells = table[i].map(_norm).toList();
       if (cells.any((c) => c.contains('金额'))) return i;
     }
     return -1;

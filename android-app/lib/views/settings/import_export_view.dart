@@ -2,6 +2,7 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:csv/csv.dart';
+import 'package:excel/excel.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
@@ -93,7 +94,7 @@ class _ImportExportViewState extends State<ImportExportView> {
     try {
       final picked = await FilePicker.platform.pickFiles(
         type: FileType.custom,
-        allowedExtensions: ['csv', 'txt'],
+        allowedExtensions: ['csv', 'txt', 'xlsx', 'xls'],
         withData: true,
       );
       if (picked == null || picked.files.isEmpty) {
@@ -110,9 +111,16 @@ class _ImportExportViewState extends State<ImportExportView> {
         return;
       }
 
-      final result = BillImporter.parseBytes(bytes);
+      final ext = (f.extension ?? '').toLowerCase();
+      final BillParseResult result;
+      if (ext == 'xlsx' || ext == 'xls') {
+        final table = _xlsxToTable(bytes);
+        result = BillImporter.parseRows(table);
+      } else {
+        result = BillImporter.parseBytes(bytes);
+      }
       if (result.rows.isEmpty) {
-        _setMessage('没找到可导入的账目（识别为「${result.source}」，请确认是账单 CSV）');
+        _setMessage('没找到可导入的账目（识别为「${result.source}」，请确认是账单文件）');
         return;
       }
       final count = await _ingestRows(result.rows);
@@ -123,6 +131,23 @@ class _ImportExportViewState extends State<ImportExportView> {
     } finally {
       if (mounted) setState(() => _busy = false);
     }
+  }
+
+  /// 把 xlsx 字节解析成二维字符串表格（取第一个有数据的工作表）。
+  List<List<String>> _xlsxToTable(Uint8List bytes) {
+    final excel = Excel.decodeBytes(bytes);
+    for (final name in excel.tables.keys) {
+      final sheet = excel.tables[name];
+      if (sheet == null || sheet.rows.isEmpty) continue;
+      final table = <List<String>>[];
+      for (final row in sheet.rows) {
+        table.add([
+          for (final cell in row) (cell?.value?.toString() ?? '').trim(),
+        ]);
+      }
+      if (table.isNotEmpty) return table;
+    }
+    return const [];
   }
 
   /// 把标准化的账单行解析分类/账户后批量写库。返回导入条数。
@@ -186,9 +211,9 @@ class _ImportExportViewState extends State<ImportExportView> {
           _ActionCard(
             icon: Icons.download_outlined,
             color: AppColors.income(scheme),
-            title: '导入账单 CSV',
-            subtitle: '支持微信、支付宝、咔皮、木木等主流账单，自动识别格式与编码，'
-                '也能导入轻记自己导出的 CSV',
+            title: '导入账单（CSV / Excel）',
+            subtitle: '支持微信、支付宝、咔皮、木木等主流账单，CSV 和 Excel(xlsx) 都能读，'
+                '自动识别格式与编码',
             buttonLabel: '选择文件导入',
             onPressed: _busy ? null : _import,
           ),

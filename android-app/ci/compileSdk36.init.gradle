@@ -5,11 +5,9 @@
 //        要求 compileSdk≥36，而插件模块各自按较低版本编译，会导致
 //        assembleRelease 的 AAR 元数据检查失败。
 //
-//  2) 给 :app 补上 ML Kit 文字识别的脚本模型依赖
-//     —— google_mlkit_text_recognition 插件初始化时引用了
-//        中文/日文/韩文/天城文 四种 *TextRecognizerOptions 类，
-//        这些模型是独立 artifact，不补会让 release 的 R8 报「Missing class」。
-//        中文是我们实际用的；其余三个仅为满足插件代码引用。
+//  2) 给 :app 补上 ML Kit 中文文字识别模型（中文模型本身也识别英文/数字）；
+//     插件代码还引用了日/韩/天城文的 *Options 类，我们不打包这三个模型，
+//     用 -dontwarn 规则让 R8 忽略这些缺类（运行时不会走到那些分支）。
 allprojects {
     afterEvaluate { project ->
         if (project.hasProperty("android")) {
@@ -19,12 +17,16 @@ allprojects {
             if (project.name == "app") {
                 project.dependencies.add("implementation",
                     "com.google.mlkit:text-recognition-chinese:16.0.1")
-                project.dependencies.add("implementation",
-                    "com.google.mlkit:text-recognition-japanese:16.0.1")
-                project.dependencies.add("implementation",
-                    "com.google.mlkit:text-recognition-korean:16.0.1")
-                project.dependencies.add("implementation",
-                    "com.google.mlkit:text-recognition-devanagari:16.0.1")
+                // 写一份 dontwarn 规则并挂到所有 buildType 的 proguard 配置
+                def keep = new File(project.projectDir, "mlkit-dontwarn.pro")
+                keep.text = """
+-dontwarn com.google.mlkit.vision.text.japanese.**
+-dontwarn com.google.mlkit.vision.text.korean.**
+-dontwarn com.google.mlkit.vision.text.devanagari.**
+"""
+                project.android.buildTypes.all { bt ->
+                    bt.proguardFiles keep
+                }
             }
         }
     }
