@@ -3,13 +3,12 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:speech_to_text/speech_to_text.dart' as stt;
 
-import '../quick_add/ai_quick_entry_view.dart';
-
 /// 按住说话语音输入面板（对标图二，极简无吉祥物）。
 ///
-/// 用 showVoiceInputSheet 弹出，识别完成后自动跳转 AiQuickEntryView。
-Future<void> showVoiceInputSheet(BuildContext context) {
-  return showModalBottomSheet<void>(
+/// 识别完成后**返回识别到的文字**，交给调用方填进输入框校对再发；
+/// 用户没说话/取消则返回 null。
+Future<String?> showVoiceInputSheet(BuildContext context) {
+  return showModalBottomSheet<String>(
     context: context,
     isScrollControlled: true,
     shape: const RoundedRectangleBorder(
@@ -155,14 +154,8 @@ class _VoiceInputSheetState extends State<_VoiceInputSheet>
       return;
     }
 
-    // 关闭本 sheet，再跳转 AI 解析页
-    Navigator.pop(context);
-    Navigator.push<void>(
-      context,
-      MaterialPageRoute<void>(
-        builder: (_) => AiQuickEntryView(initialText: text),
-      ),
-    );
+    // 返回识别文字，交给调用方（聊天面板）填进输入框校对再发
+    Navigator.pop(context, text);
   }
 
   void _refreshBars() {

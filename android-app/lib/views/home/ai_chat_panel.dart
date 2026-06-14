@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:decimal/decimal.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
@@ -17,6 +19,7 @@ Future<void> showAiChatPanel(
   BuildContext context, {
   required bool speechAvailable,
   required VoidCallback onSwitchToManual,
+  String? initialText,
 }) {
   return showModalBottomSheet<void>(
     context: context,
@@ -29,6 +32,7 @@ Future<void> showAiChatPanel(
     builder: (_) => AiChatPanel(
       speechAvailable: speechAvailable,
       onSwitchToManual: onSwitchToManual,
+      initialText: initialText,
     ),
   );
 }
@@ -39,10 +43,14 @@ class AiChatPanel extends StatefulWidget {
   final bool speechAvailable;
   final VoidCallback onSwitchToManual;
 
+  /// 预填到输入框的文字（如语音识别结果），不自动发送，供校对再发。
+  final String? initialText;
+
   const AiChatPanel({
     super.key,
     required this.speechAvailable,
     required this.onSwitchToManual,
+    this.initialText,
   });
 
   @override
@@ -62,6 +70,16 @@ class _AiChatPanelState extends State<AiChatPanel> {
     '这周吃饭花了多少',
     '记一笔 早餐 15',
   ];
+
+  @override
+  void initState() {
+    super.initState();
+    final init = widget.initialText?.trim();
+    if (init != null && init.isNotEmpty) {
+      _ctrl.text = init;
+      _ctrl.selection = TextSelection.collapsed(offset: _ctrl.text.length);
+    }
+  }
 
   @override
   void dispose() {
@@ -272,13 +290,20 @@ class _AiChatPanelState extends State<AiChatPanel> {
     });
   }
 
-  void _onMicTap() {
+  Future<void> _onMicTap() async {
     if (!widget.speechAvailable) {
       _snack('该设备不支持语音识别');
       return;
     }
     _focus.unfocus();
-    showVoiceInputSheet(context);
+    // 语音识别完成后回填到输入框，让用户校对再发（不直接发送）
+    final text = await showVoiceInputSheet(context);
+    if (!mounted) return;
+    if (text != null && text.trim().isNotEmpty) {
+      setState(() => _ctrl.text = text.trim());
+      _ctrl.selection = TextSelection.collapsed(offset: _ctrl.text.length);
+      _focus.requestFocus();
+    }
   }
 
   // ── build ───────────────────────────────────────────────────────────────
@@ -542,14 +567,47 @@ class _InfoBubble extends StatelessWidget {
   }
 }
 
-// ── 查账回答气泡（喵助手回答）──────────────────────────────────────────────
-class _AnswerBubble extends StatelessWidget {
+// ── 查账回答气泡（喵助手回答，打字机流式）────────────────────────────────────
+class _AnswerBubble extends StatefulWidget {
   final String text;
   const _AnswerBubble({required this.text});
 
   @override
+  State<_AnswerBubble> createState() => _AnswerBubbleState();
+}
+
+class _AnswerBubbleState extends State<_AnswerBubble> {
+  int _shown = 0;
+  Timer? _timer;
+
+  @override
+  void initState() {
+    super.initState();
+    _timer = Timer.periodic(const Duration(milliseconds: 28), (t) {
+      if (!mounted) {
+        t.cancel();
+        return;
+      }
+      if (_shown >= widget.text.length) {
+        t.cancel();
+        return;
+      }
+      setState(() {
+        _shown = (_shown + 2).clamp(0, widget.text.length);
+      });
+    });
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    final shownText = widget.text.substring(0, _shown);
     return Padding(
       padding: const EdgeInsets.only(bottom: 12, right: 24),
       child: Row(
@@ -571,7 +629,7 @@ class _AnswerBubble extends StatelessWidget {
                 ),
               ),
               child: SelectableText(
-                text,
+                shownText,
                 style: const TextStyle(fontSize: 15, height: 1.4),
               ),
             ),

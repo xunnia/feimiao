@@ -94,12 +94,22 @@ class _RecordInputBarState extends State<RecordInputBar> {
 
   // ── 话筒 ──────────────────────────────────────────────────────────────────
 
-  void _onMicTap() {
+  Future<void> _onMicTap() async {
     if (!_speechAvailable) {
       _showSnack('该设备不支持语音识别');
       return;
     }
-    showVoiceInputSheet(context);
+    // 语音识别完成 → 把文字带进 AI 聊天面板，校对再发
+    final text = await showVoiceInputSheet(context);
+    if (!mounted) return;
+    if (text != null && text.trim().isNotEmpty) {
+      showAiChatPanel(
+        context,
+        speechAvailable: _speechAvailable,
+        onSwitchToManual: _openManual,
+        initialText: text.trim(),
+      );
+    }
   }
 
   // ── 发送 / 点击输入区 ─────────────────────────────────────────────────────
