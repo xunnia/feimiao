@@ -20,7 +20,12 @@
 - **CI 注意**：android/ 脚手架每次 `flutter create` 重新生成，所以 manifest 权限要在 CI 里注入（已注入 `INTERNET` + `RECORD_AUDIO`）；图标用 `flutter_launcher_icons`（`android-app/assets/icon/app_icon.png`）。
 
 ### 产品方向与关键决策（定了别反复）
-- **走 A：极简工具路线**（对标钱迹），不走可爱风。主色深蓝 `#2E5090`，中性收支配色（收入蓝/支出中性/超支橙，见 `lib/theme/app_colors.dart`）。
+
+> **⚠️ 方向已转向可爱风**（推翻原「极简工具路线」，完整方案见 `android-app/docs/可爱风改造方案.md`）
+
+- **走可爱风路线**（对标咔皮记账），吉祥物为**用户自家蓝白英短猫**（比竞品卡皮巴拉更有故事、不撞形象）。
+- **新配色（从猫身上取色）**：主色蓝灰毛 `#7D8B9B`、铜金眼 `#F2B23C`（收入/高亮）、粉鼻爪 `#F4A9B8`（萌点）、超支橙 `#FF9F68`、背景奶白 `#FFFDF7`；节日点缀钱袋金 `#F3C44B` / 红绳 `#D94B3D`。见 `lib/theme/app_colors.dart`。
+- **架构**：无底部 Tab 栏，单主页 + 左上角抽屉（学咔皮）；抽屉与输入框对齐 Claude 气质。
 - **AI 一句话记账接 DeepSeek**（不用 Claude——国产便宜、国内直连、中文好）。OpenAI 兼容 HTTP，`lib/core/ai/llm_entry_parser.dart`；用户的 key 存本地 `app_settings` 表（设置→AI记账设置）；没 key/失败时降级本地规则解析。一笔约 0.001 元。
 - **输入框对标 Claude（已按用户逐张图对齐，标准已定）**：底部悬浮白框启动器（`record_input_bar.dart`，白底+轻阴影）。相关文件都在 `android-app/lib/views/home/`：
   - `record_input_bar.dart`：首页底部启动器。点模式胶囊 → 弹「手动/AI」选择面板；点输入区按模式分流；点话筒 → 按住说话面板。
@@ -28,7 +33,7 @@
   - `ai_focused_input_sheet.dart`：AI 模式贴键盘聚焦输入，**布局对标 Claude 输入框**：占位"记一记" + 底部一行 `[+] [⇄模式胶囊] …Spacer… [话筒] [发送]`，发送键有字才亮、触发解析。
   - `voice_input_sheet.dart`：「按住说话」面板（长按录音 `speech_to_text` zh_CN → 松手转文字 → `AiQuickEntryView(initialText)` 走 DeepSeek 解析）。
   - **按钮统一标准**：工具按钮（`+`/话筒/关闭/胶囊）= 透明感 `scheme.surface` + `Border black.06` + 淡阴影 `BoxShadow black.06 blur6`；唯发送键例外，实心 `scheme.primary` 圆。胶囊 `_ModePill`：前置 `Icons.swap_horiz`、文字**不加粗**。
-  - **极简无卡通吉祥物**（用户明确不要可爱风）。
+  - **吉祥物组件**：`lib/widgets/mascot.dart`，7 个表情（idle/success/overspend/celebrate/empty/thinking/report），M0 用 emoji 占位，M8 换真猫 PNG。
 
 ### 安卓待办（按优先级）
 - 手动大卡「备注」TextField 可能与数字键盘抢系统键盘 → 需 `resizeToAvoidBottomInset:false`
