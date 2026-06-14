@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:speech_to_text/speech_to_text.dart' as stt;
 
-import 'ai_focused_input_sheet.dart';
+import 'ai_chat_panel.dart';
 import 'manual_add_sheet.dart';
 import 'voice_input_sheet.dart';
 
@@ -84,22 +84,11 @@ class _RecordInputBarState extends State<RecordInputBar> {
 
   // ── 打开 AI 聚焦输入 ──────────────────────────────────────────────────────
 
-  void _openAi({bool startVoice = false}) {
-    showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      useSafeArea: true,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-      ),
-      builder: (ctx) => AiFocusedInputSheet(
-        speechAvailable: _speechAvailable,
-        startVoiceImmediately: startVoice,
-        onSwitchToManual: () {
-          Navigator.pop(ctx);
-          _openManual();
-        },
-      ),
+  void _openAi() {
+    showAiChatPanel(
+      context,
+      speechAvailable: _speechAvailable,
+      onSwitchToManual: _openManual,
     );
   }
 
