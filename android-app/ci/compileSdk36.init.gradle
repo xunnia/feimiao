@@ -1,0 +1,15 @@
+// Gradle init 脚本：强制所有模块（app + 各插件）使用 compileSdk 36。
+//
+// 背景：file_picker / image_picker 依赖的 flutter_plugin_android_lifecycle
+// 要求消费方 compileSdk≥36，而插件模块各自按较低版本编译，导致
+// assembleRelease 的 AAR 元数据检查失败。插件模块不继承 app 的 compileSdk，
+// 所以用 init 脚本统一覆盖。CI 把本文件拷到 ~/.gradle/init.d/ 自动生效。
+allprojects {
+    afterEvaluate { project ->
+        if (project.hasProperty("android")) {
+            project.android {
+                compileSdkVersion 36
+            }
+        }
+    }
+}
