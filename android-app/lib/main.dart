@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import 'data/app_repository.dart';
 import 'theme/app_colors.dart';
 import 'views/account/personal_center_view.dart';
+import 'views/assistant/meow_assistant_view.dart';
 import 'views/common/coming_soon_view.dart';
 import 'views/home/home_view.dart';
 import 'views/home/record_input_bar.dart';
@@ -397,12 +398,11 @@ class _AppDrawerState extends State<_AppDrawer> {
                       onTap: () => _popAndPush(const BudgetSettingView()),
                     ),
 
-                    // 5. 喵助手（M5 占位）
+                    // 5. 喵助手
                     _DrawerItem(
                       icon: Icons.auto_awesome,
                       label: '喵助手',
-                      onTap: () =>
-                          _popAndPush(const ComingSoonView(title: '喵助手')),
+                      onTap: () => _popAndPush(const MeowAssistantView()),
                     ),
 
                     // 「更多 ⌄ / ⌃」折叠按钮
