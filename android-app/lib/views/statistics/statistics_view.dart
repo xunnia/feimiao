@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../../core/budget/budget_engine.dart';
+import '../../core/models/transaction_kind.dart';
 import '../../core/models/transaction_record.dart';
 import '../../core/money_format.dart';
 import '../../core/statistics/statistics_engine.dart';
@@ -116,6 +117,16 @@ class _MonthlyContent extends StatelessWidget {
       month: displayedMonth.month,
     );
 
+    // 单笔支出排行：本月支出按金额降序取前 5
+    final topExpenses = records
+        .where((r) =>
+            r.kind == TransactionKind.expense &&
+            r.date.year == displayedMonth.year &&
+            r.date.month == displayedMonth.month)
+        .toList()
+      ..sort((a, b) => b.amount.compareTo(a.amount));
+    final top5 = topExpenses.take(5).toList();
+
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
@@ -173,6 +184,13 @@ class _MonthlyContent extends StatelessWidget {
               categories: summary.expenseByCategory,
             ),
           ),
+          if (top5.isNotEmpty) ...[
+            const SizedBox(height: 16),
+            _SectionCard(
+              title: '单笔支出排行',
+              child: _TopTxnList(items: top5),
+            ),
+          ],
         ],
       ],
     );
@@ -537,14 +555,14 @@ class _SectionCard extends StatelessWidget {
 
 /// 取前 8 分类。颜色用 ColorScheme 的调色板循环。
 const _kPieColors = [
-  Color(0xFF2E5090),
-  Color(0xFF26A69A),
-  Color(0xFFEF5350),
-  Color(0xFFFF7043),
-  Color(0xFF7E57C2),
-  Color(0xFF29B6F6),
-  Color(0xFF66BB6A),
-  Color(0xFFFFCA28),
+  Color(0xFF7D8B9B), // 猫蓝灰
+  Color(0xFFF2B23C), // 铜金
+  Color(0xFFF4A9B8), // 萌粉
+  Color(0xFFFF9F68), // 暖橙
+  Color(0xFF8FBF9F), // 薄荷绿
+  Color(0xFF9BB7D4), // 浅蓝
+  Color(0xFFCBA6C3), // 藕紫
+  Color(0xFFF3C44B), // 钱袋金
 ];
 
 class _ExpensePieChart extends StatelessWidget {
@@ -861,6 +879,71 @@ class _CategoryRanking extends StatelessWidget {
           ),
         );
       }).toList(),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 单笔支出排行
+// ---------------------------------------------------------------------------
+
+class _TopTxnList extends StatelessWidget {
+  final List<TransactionRecord> items;
+
+  const _TopTxnList({required this.items});
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Column(
+      children: List.generate(items.length, (i) {
+        final r = items[i];
+        final label =
+            r.note.trim().isNotEmpty ? r.note.trim() : r.categoryName;
+        return Padding(
+          padding: const EdgeInsets.symmetric(vertical: 5),
+          child: Row(
+            children: [
+              SizedBox(
+                width: 22,
+                child: Text(
+                  '${i + 1}',
+                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                        fontWeight: FontWeight.w700,
+                        color: i < 3 ? scheme.secondary : scheme.onSurfaceVariant,
+                      ),
+                ),
+              ),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      label,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.bodyMedium,
+                    ),
+                    Text(
+                      '${r.categoryName} · ${r.date.month}月${r.date.day}日',
+                      style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                            color: scheme.onSurfaceVariant,
+                          ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 8),
+              Text(
+                '-${MoneyFormat.string(r.amount)}',
+                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                      fontWeight: FontWeight.w700,
+                    ),
+              ),
+            ],
+          ),
+        );
+      }),
     );
   }
 }
