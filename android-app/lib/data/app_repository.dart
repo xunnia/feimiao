@@ -36,6 +36,21 @@ class AccountEntity {
       );
 }
 
+/// 账本实体（多账本）。
+class BookEntity {
+  final int id;
+  final String name;
+  final String icon; // emoji 或图标标记
+
+  const BookEntity({required this.id, required this.name, this.icon = '📒'});
+
+  factory BookEntity.fromMap(Map<String, Object?> m) => BookEntity(
+        id: m['id'] as int,
+        name: m['name'] as String,
+        icon: m['icon'] as String? ?? '📒',
+      );
+}
+
 /// 分类实体。
 class CategoryEntity {
   final int id;
@@ -152,15 +167,19 @@ class TransactionEntity {
 ///
 /// 继承 [ChangeNotifier]，UI 通过 [provider] 订阅变化。
 class AppRepository extends ChangeNotifier {
-  static const _dbVersion = 3;
+  static const _dbVersion = 4;
   static const _dbName = 'qingji.db';
 
   Database? _db;
 
   // 内存缓存
+  final List<BookEntity> _books = [];
   final List<AccountEntity> _accounts = [];
   final List<CategoryEntity> _categories = [];
   final List<TransactionEntity> _transactions = [];
+
+  /// 当前账本 id（0 = 未初始化，init 后必为有效值）。
+  int _currentBookId = 0;
 
   /// 月度总预算（null = 未设置）。
   Decimal? _monthlyBudget;
@@ -168,9 +187,21 @@ class AppRepository extends ChangeNotifier {
   /// DeepSeek API Key（null = 未配置）。
   String? _deepSeekApiKey;
 
+  List<BookEntity> get books => List.unmodifiable(_books);
   List<AccountEntity> get accounts => List.unmodifiable(_accounts);
   List<CategoryEntity> get categories => List.unmodifiable(_categories);
   List<TransactionEntity> get transactions => List.unmodifiable(_transactions);
+
+  /// 当前账本 id。
+  int get currentBookId => _currentBookId;
+
+  /// 当前账本实体（找不到返回 null）。
+  BookEntity? get currentBook {
+    for (final b in _books) {
+      if (b.id == _currentBookId) return b;
+    }
+    return null;
+  }
 
   /// 当前月度预算，null 代表未设置。
   Decimal? get monthlyBudget => _monthlyBudget;
@@ -191,6 +222,7 @@ class AppRepository extends ChangeNotifier {
       onUpgrade: _onUpgrade,
     );
     await _seedIfNeeded();
+    await _ensureDefaultBook();
     await _loadAll();
   }
 
@@ -214,8 +246,25 @@ class AppRepository extends ChangeNotifier {
     ''');
 
     await db.execute('''
+      CREATE TABLE books (
+        id         INTEGER PRIMARY KEY AUTOINCREMENT,
+        name       TEXT NOT NULL,
+        icon       TEXT NOT NULL DEFAULT '📒',
+        sort_order INTEGER NOT NULL DEFAULT 0,
+        created_ms INTEGER NOT NULL DEFAULT 0
+      )
+    ''');
+    await db.insert('books', {
+      'name': '总账本',
+      'icon': '📒',
+      'sort_order': 0,
+      'created_ms': DateTime.now().millisecondsSinceEpoch,
+    });
+
+    await db.execute('''
       CREATE TABLE transactions (
         id              INTEGER PRIMARY KEY AUTOINCREMENT,
+        book_id         INTEGER,
         kind            TEXT NOT NULL,
         amount          TEXT NOT NULL,
         currency_code   TEXT NOT NULL DEFAULT 'CNY',
@@ -260,6 +309,31 @@ class AppRepository extends ChangeNotifier {
         )
       ''');
     }
+    if (oldVersion < 4) {
+      // 多账本：建 books 表 + 默认「总账本」，给 transactions 加 book_id 并迁入总账本
+      await db.execute('''
+        CREATE TABLE IF NOT EXISTS books (
+          id         INTEGER PRIMARY KEY AUTOINCREMENT,
+          name       TEXT NOT NULL,
+          icon       TEXT NOT NULL DEFAULT '📒',
+          sort_order INTEGER NOT NULL DEFAULT 0,
+          created_ms INTEGER NOT NULL DEFAULT 0
+        )
+      ''');
+      final defaultBookId = await db.insert('books', {
+        'name': '总账本',
+        'icon': '📒',
+        'sort_order': 0,
+        'created_ms': DateTime.now().millisecondsSinceEpoch,
+      });
+      try {
+        await db.execute('ALTER TABLE transactions ADD COLUMN book_id INTEGER');
+      } catch (_) {
+        // 列已存在则忽略
+      }
+      await db.execute(
+          'UPDATE transactions SET book_id = $defaultBookId WHERE book_id IS NULL');
+    }
   }
 
   /// 首次启动写入默认账户和分类种子数据。
@@ -286,6 +360,8 @@ class AppRepository extends ChangeNotifier {
   }
 
   Future<void> _loadAll() async {
+    await _loadBooks();
+    await _loadCurrentBook();
     await Future.wait([
       _loadAccounts(),
       _loadCategories(),
@@ -294,6 +370,43 @@ class AppRepository extends ChangeNotifier {
       _loadApiKey(),
     ]);
     notifyListeners();
+  }
+
+  Future<void> _loadBooks() async {
+    final rows = await _db!.query('books', orderBy: 'sort_order ASC, id ASC');
+    _books
+      ..clear()
+      ..addAll(rows.map(BookEntity.fromMap));
+  }
+
+  /// 确保至少有一个账本（默认「总账本」）。
+  Future<void> _ensureDefaultBook() async {
+    final count =
+        Sqflite.firstIntValue(await _db!.rawQuery('SELECT COUNT(*) FROM books')) ?? 0;
+    if (count == 0) {
+      await _db!.insert('books', {
+        'name': '总账本',
+        'icon': '📒',
+        'sort_order': 0,
+        'created_ms': DateTime.now().millisecondsSinceEpoch,
+      });
+    }
+  }
+
+  /// 读取当前账本 id（无效则回退到第一个账本）。
+  Future<void> _loadCurrentBook() async {
+    final rows = await _db!.query(
+      'app_settings',
+      where: 'key = ?',
+      whereArgs: ['current_book_id'],
+      limit: 1,
+    );
+    final saved = rows.isEmpty
+        ? null
+        : int.tryParse((rows.first['value'] as String?) ?? '');
+    final valid = saved != null && _books.any((b) => b.id == saved);
+    _currentBookId =
+        valid ? saved! : (_books.isNotEmpty ? _books.first.id : 1);
   }
 
   Future<void> _loadAccounts() async {
@@ -360,8 +473,9 @@ class AppRepository extends ChangeNotifier {
       LEFT JOIN categories c  ON c.id = t.category_id
       LEFT JOIN accounts   a  ON a.id = t.account_id
       LEFT JOIN accounts   ta ON ta.id = t.to_account_id
+      WHERE t.book_id = ?
       ORDER BY t.date_ms DESC
-    ''');
+    ''', [_currentBookId]);
     _transactions
       ..clear()
       ..addAll(rows.map(TransactionEntity.fromMap));
@@ -385,6 +499,7 @@ class AppRepository extends ChangeNotifier {
     required DateTime date,
   }) async {
     await _db!.insert('transactions', {
+      'book_id': _currentBookId,
       'kind': kind.toJson(),
       'amount': amount.toString(),
       'currency_code': currencyCode,
@@ -468,6 +583,64 @@ class AppRepository extends ChangeNotifier {
       );
       _deepSeekApiKey = trimmed;
     }
+    notifyListeners();
+  }
+
+  // ---------------------------------------------------------------------------
+  // 账本（多账本）
+  // ---------------------------------------------------------------------------
+
+  /// 切换当前账本（持久化并重载该账本交易）。
+  Future<void> switchBook(int bookId) async {
+    if (bookId == _currentBookId) return;
+    if (!_books.any((b) => b.id == bookId)) return;
+    _currentBookId = bookId;
+    await _db!.insert(
+      'app_settings',
+      {'key': 'current_book_id', 'value': bookId.toString()},
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+    await _loadTransactions();
+    notifyListeners();
+  }
+
+  /// 新建账本，返回新行 id。
+  Future<int> addBook({required String name, String icon = '📒'}) async {
+    final id = await _db!.insert('books', {
+      'name': name,
+      'icon': icon,
+      'sort_order': _books.length,
+      'created_ms': DateTime.now().millisecondsSinceEpoch,
+    });
+    await _loadBooks();
+    notifyListeners();
+    return id;
+  }
+
+  /// 改账本名/图标。
+  Future<void> renameBook(int id, {required String name, String? icon}) async {
+    final updates = <String, Object?>{'name': name};
+    if (icon != null) updates['icon'] = icon;
+    await _db!.update('books', updates, where: 'id = ?', whereArgs: [id]);
+    await _loadBooks();
+    notifyListeners();
+  }
+
+  /// 删除账本（连同其下交易）。不允许删到一个不剩；删的是当前账本则切到剩余第一个。
+  Future<void> deleteBook(int id) async {
+    if (_books.length <= 1) return; // 至少保留一个账本
+    await _db!.delete('transactions', where: 'book_id = ?', whereArgs: [id]);
+    await _db!.delete('books', where: 'id = ?', whereArgs: [id]);
+    await _loadBooks();
+    if (_currentBookId == id) {
+      _currentBookId = _books.isNotEmpty ? _books.first.id : 1;
+      await _db!.insert(
+        'app_settings',
+        {'key': 'current_book_id', 'value': _currentBookId.toString()},
+        conflictAlgorithm: ConflictAlgorithm.replace,
+      );
+    }
+    await _loadTransactions();
     notifyListeners();
   }
 
