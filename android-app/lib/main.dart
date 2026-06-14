@@ -49,14 +49,77 @@ class RootShell extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final now = DateTime.now();
-
     return Scaffold(
       appBar: AppBar(
-        // Scaffold 检测到 drawer 后自动在 leading 放汉堡按钮
-        title: Text('${now.year}年${now.month}月'),
-        centerTitle: false,
+        automaticallyImplyLeading: false,
+        titleSpacing: 0,
         surfaceTintColor: Colors.transparent,
+        title: Builder(
+          builder: (innerCtx) => Row(
+            children: [
+              // 左上角：Claude 风侧栏面板图标，打开 Drawer
+              IconButton(
+                icon: const Icon(Icons.view_sidebar_outlined),
+                onPressed: () => Scaffold.of(innerCtx).openDrawer(),
+                tooltip: '打开菜单',
+              ),
+              // 长条搜索栏，占满剩余宽度
+              Expanded(
+                child: GestureDetector(
+                  onTap: () => ScaffoldMessenger.of(innerCtx).showSnackBar(
+                    SnackBar(
+                      content: const Text('搜索功能开发中（M7）'),
+                      duration: const Duration(milliseconds: 1800),
+                      behavior: SnackBarBehavior.floating,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      margin: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+                    ),
+                  ),
+                  child: Container(
+                    height: 36,
+                    margin: const EdgeInsets.only(right: 12),
+                    padding: const EdgeInsets.symmetric(horizontal: 12),
+                    decoration: BoxDecoration(
+                      color: Theme.of(innerCtx).colorScheme.surface,
+                      borderRadius: BorderRadius.circular(18),
+                      border: Border.all(
+                        color: Theme.of(innerCtx)
+                            .colorScheme
+                            .outlineVariant
+                            .withOpacity(0.5),
+                      ),
+                    ),
+                    child: Row(
+                      children: [
+                        Icon(
+                          Icons.search,
+                          size: 16,
+                          color: Theme.of(innerCtx)
+                              .colorScheme
+                              .onSurfaceVariant
+                              .withOpacity(0.55),
+                        ),
+                        const SizedBox(width: 6),
+                        Text(
+                          '搜索账单 / 备注 / 金额',
+                          style: TextStyle(
+                            fontSize: 13,
+                            color: Theme.of(innerCtx)
+                                .colorScheme
+                                .onSurfaceVariant
+                                .withOpacity(0.55),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
       ),
       drawer: const _AppDrawer(),
       body: HomeView(

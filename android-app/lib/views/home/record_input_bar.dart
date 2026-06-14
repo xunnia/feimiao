@@ -415,17 +415,17 @@ class _ToolCircleButton extends StatelessWidget {
     final scheme = Theme.of(context).colorScheme;
 
     if (filled) {
-      // 发送按钮：实心主色
+      // 发送按钮：铜金高亮（scheme.secondary），符合可爱风
       return GestureDetector(
         onTap: onTap,
         child: Container(
           width: 40,
           height: 40,
           decoration: BoxDecoration(
-            color: scheme.primary,
+            color: scheme.secondary,
             shape: BoxShape.circle,
           ),
-          child: Icon(icon, size: 20, color: scheme.onPrimary),
+          child: Icon(icon, size: 20, color: scheme.onSecondary),
         ),
       );
     }

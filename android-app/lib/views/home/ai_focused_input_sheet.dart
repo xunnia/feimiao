@@ -231,19 +231,20 @@ class _ToolCircleButton extends StatelessWidget {
 
     if (filled) {
       final active = onTap != null;
+      // 发送按钮：铜金高亮（scheme.secondary），符合可爱风
       return GestureDetector(
         onTap: onTap,
         child: Container(
           width: 40,
           height: 40,
           decoration: BoxDecoration(
-            color: active ? scheme.primary : scheme.onSurface.withOpacity(0.12),
+            color: active ? scheme.secondary : scheme.onSurface.withOpacity(0.12),
             shape: BoxShape.circle,
           ),
           child: Icon(
             icon,
             size: 20,
-            color: active ? scheme.onPrimary : scheme.onSurface.withOpacity(0.38),
+            color: active ? scheme.onSecondary : scheme.onSurface.withOpacity(0.38),
           ),
         ),
       );
