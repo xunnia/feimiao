@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:speech_to_text/speech_to_text.dart' as stt;
 
+import '../quick_add/screenshot_entry.dart';
+import '../settings/import_export_view.dart';
 import 'ai_chat_panel.dart';
 import 'manual_add_sheet.dart';
 import 'voice_input_sheet.dart';
@@ -241,7 +243,7 @@ class _RecordInputBarState extends State<RecordInputBar> {
               label: '支付截图识别',
               onTap: () {
                 Navigator.pop(ctx);
-                _showSnack('即将到来');
+                recognizeScreenshotAndEntry(context);
               },
             ),
             _ExtrasItem(
@@ -249,7 +251,11 @@ class _RecordInputBarState extends State<RecordInputBar> {
               label: '导入账单',
               onTap: () {
                 Navigator.pop(ctx);
-                _showSnack('即将到来');
+                Navigator.of(context).push(
+                  MaterialPageRoute<void>(
+                    builder: (_) => const ImportExportView(),
+                  ),
+                );
               },
             ),
             _ExtrasItem(
@@ -257,7 +263,11 @@ class _RecordInputBarState extends State<RecordInputBar> {
               label: '导出账单',
               onTap: () {
                 Navigator.pop(ctx);
-                _showSnack('即将到来');
+                Navigator.of(context).push(
+                  MaterialPageRoute<void>(
+                    builder: (_) => const ImportExportView(),
+                  ),
+                );
               },
             ),
             const SizedBox(height: 16),
