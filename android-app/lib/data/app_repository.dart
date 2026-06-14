@@ -171,6 +171,27 @@ class TransactionEntity {
       );
 }
 
+/// CSV 导入用的一条交易草稿（id 由数据库分配）。
+class TransactionDraft {
+  final TransactionKind kind;
+  final Decimal amount;
+  final int? categoryId;
+  final int accountId;
+  final String note;
+  final DateTime date;
+  final List<int> tagIds;
+
+  const TransactionDraft({
+    required this.kind,
+    required this.amount,
+    this.categoryId,
+    required this.accountId,
+    this.note = '',
+    required this.date,
+    this.tagIds = const [],
+  });
+}
+
 /// 存钱目标实体。
 class SavingsGoalEntity {
   final int id;
@@ -693,6 +714,30 @@ class AppRepository extends ChangeNotifier {
     );
     await _loadTransactions();
     notifyListeners();
+  }
+
+  /// 批量导入交易（CSV 导入用，一次性写入 + 单次刷新）。返回成功条数。
+  Future<int> importTransactions(List<TransactionDraft> drafts) async {
+    if (drafts.isEmpty) return 0;
+    final batch = _db!.batch();
+    for (final d in drafts) {
+      batch.insert('transactions', {
+        'book_id': _currentBookId,
+        'kind': d.kind.toJson(),
+        'amount': d.amount.toString(),
+        'currency_code': 'CNY',
+        'category_id': d.categoryId,
+        'account_id': d.accountId,
+        'to_account_id': null,
+        'note': d.note,
+        'date_ms': d.date.millisecondsSinceEpoch,
+        'tags': d.tagIds.join(','),
+      });
+    }
+    await batch.commit(noResult: true);
+    await _loadTransactions();
+    notifyListeners();
+    return drafts.length;
   }
 
   /// 删除一笔交易（按数据库 id）。

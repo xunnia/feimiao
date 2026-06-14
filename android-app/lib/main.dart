@@ -13,6 +13,7 @@ import 'views/search/search_view.dart';
 import 'views/settings/accounts_view.dart';
 import 'views/settings/budget_setting_view.dart';
 import 'views/settings/categories_view.dart';
+import 'views/settings/import_export_view.dart';
 import 'views/settings/tags_view.dart';
 import 'views/statistics/statistics_view.dart';
 import 'views/transactions/transaction_list_view.dart';
@@ -465,8 +466,7 @@ class _AppDrawerState extends State<_AppDrawer> {
                       _DrawerItem(
                         icon: Icons.import_export_outlined,
                         label: '导入导出',
-                        onTap: () =>
-                            _popAndPush(const ComingSoonView(title: '导入导出')),
+                        onTap: () => _popAndPush(const ImportExportView()),
                         indent: true,
                       ),
                       _DrawerItem(
