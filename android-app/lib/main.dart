@@ -8,6 +8,7 @@ import 'views/assistant/meow_assistant_view.dart';
 import 'views/common/coming_soon_view.dart';
 import 'views/home/home_view.dart';
 import 'views/home/record_input_bar.dart';
+import 'views/search/search_view.dart';
 import 'views/settings/accounts_view.dart';
 import 'views/settings/budget_setting_view.dart';
 import 'views/settings/categories_view.dart';
@@ -71,15 +72,9 @@ class RootShell extends StatelessWidget {
               // 长条搜索栏，占满剩余宽度
               Expanded(
                 child: GestureDetector(
-                  onTap: () => ScaffoldMessenger.of(innerCtx).showSnackBar(
-                    SnackBar(
-                      content: const Text('搜索功能开发中（M7）'),
-                      duration: const Duration(milliseconds: 1800),
-                      behavior: SnackBarBehavior.floating,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(10),
-                      ),
-                      margin: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+                  onTap: () => Navigator.of(innerCtx).push(
+                    MaterialPageRoute<void>(
+                      builder: (_) => const SearchView(),
                     ),
                   ),
                   child: Container(
