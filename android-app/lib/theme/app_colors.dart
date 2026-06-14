@@ -79,12 +79,26 @@ class AppTheme {
       primary: kCatBlueGray,
       secondary: kCatGold,
       tertiary: kCatPink,
+      // 全局白底：surface 及各级 container 去掉蓝紫 tint，统一中性白/浅灰，消除断层
+      surface: Colors.white,
+      surfaceContainerLowest: Colors.white,
+      surfaceContainerLow: const Color(0xFFF7F8FA),
+      surfaceContainer: const Color(0xFFF3F4F6),
+      surfaceContainerHigh: const Color(0xFFEEEFF2),
+      surfaceContainerHighest: const Color(0xFFEAECEF),
     );
 
     return ThemeData(
       colorScheme: cs,
-      scaffoldBackgroundColor: kCreamWhite,
+      scaffoldBackgroundColor: Colors.white,
       useMaterial3: true,
+      // AppBar 全白、无 tint、无滚动浮起阴影，与正文背景无缝
+      appBarTheme: const AppBarTheme(
+        backgroundColor: Colors.white,
+        surfaceTintColor: Colors.transparent,
+        elevation: 0,
+        scrolledUnderElevation: 0,
+      ),
       // 卡片：圆角 20、低阴影
       cardTheme: CardThemeData(
         elevation: 1,

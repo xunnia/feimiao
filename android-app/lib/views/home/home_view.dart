@@ -72,7 +72,7 @@ class HomeView extends StatelessWidget {
           pinned: true,
           expandedHeight: expandedHeight,
           collapsedHeight: minExtent,
-          backgroundColor: kCreamWhite,
+          backgroundColor: Colors.white,
           surfaceTintColor: Colors.transparent,
           elevation: 0,
           flexibleSpace: LayoutBuilder(

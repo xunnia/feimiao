@@ -61,9 +61,9 @@ class RootShell extends StatelessWidget {
         title: Builder(
           builder: (innerCtx) => Row(
             children: [
-              // 左上角：Claude 风侧栏面板图标，打开 Drawer
+              // 左上角：对齐 iOS Claude 的横线菜单图标，打开 Drawer
               IconButton(
-                icon: const Icon(Icons.view_sidebar_outlined),
+                icon: const Icon(Icons.menu),
                 onPressed: () => Scaffold.of(innerCtx).openDrawer(),
                 tooltip: '打开菜单',
               ),
