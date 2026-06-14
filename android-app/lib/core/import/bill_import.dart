@@ -212,7 +212,7 @@ class _ColumnMap {
     final kind = _resolveKind(row, amt);
     if (kind == null) return null; // 中性 / 不计收支
 
-    final date = _parseDate(_at(row, date)) ?? DateTime.now();
+    final dt = _parseDate(_at(row, date)) ?? DateTime.now();
 
     // 分类：优先专门的分类列；没有就用交易对方/商品兜底，方便事后整理
     var cat = _at(row, category).trim();
@@ -233,7 +233,7 @@ class _ColumnMap {
     final note0 = parts.join(' · ');
 
     return ImportedBillRow(
-      date: date,
+      date: dt,
       kind: kind,
       category: cat,
       note: note0.length > 60 ? note0.substring(0, 60) : note0,
