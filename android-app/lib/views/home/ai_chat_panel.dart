@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../../core/ai/llm_entry_parser.dart';
+import '../../core/ai/llm_query.dart';
 import '../../core/ai/natural_language_entry_parser.dart';
 import '../../core/models/category_seed.dart';
 import '../../core/models/transaction_kind.dart';
@@ -56,10 +57,10 @@ class _AiChatPanelState extends State<AiChatPanel> {
   bool _busy = false;
 
   static const List<String> _suggestions = [
-    '早餐 15',
-    '打车 23',
-    '买菜 30 块',
-    '工资 8500',
+    '这个月花了多少',
+    '最大一笔开销',
+    '这周吃饭花了多少',
+    '记一笔 早餐 15',
   ];
 
   @override
@@ -94,12 +95,13 @@ class _AiChatPanelState extends State<AiChatPanel> {
     );
   }
 
-  // ── 发送：解析这句话并加一条记账确认卡 ──────────────────────────────────
+  // ── 发送：先判意图（查账 or 记账）再分流 ────────────────────────────────
   Future<void> _send([String? preset]) async {
     final text = (preset ?? _ctrl.text).trim();
     if (text.isEmpty || _busy) return;
 
     _ctrl.clear();
+    final isQuery = _looksLikeQuery(text);
     setState(() {
       _msgs.add(_UserMsg(text));
       _msgs.add(_ThinkingMsg());
@@ -107,6 +109,26 @@ class _AiChatPanelState extends State<AiChatPanel> {
     });
     _scrollToBottom();
 
+    if (isQuery) {
+      await _runQuery(text);
+    } else {
+      await _runRecord(text);
+    }
+  }
+
+  /// 意图判断：能解析出金额 → 记账；否则含疑问词 → 查账。
+  bool _looksLikeQuery(String t) {
+    if (NaturalLanguageEntryParser.extractAmount(t) != null) return false;
+    const markers = [
+      '多少', '几', '吗', '?', '？', '排行', '最大', '最多', '最贵', '花了',
+      '花销', '对比', '分析', '合理', '统计', '占比', '哪类', '哪个', '是不是',
+      '怎么样', '超支', '剩'
+    ];
+    return markers.any(t.contains);
+  }
+
+  // ── 记账流 ──────────────────────────────────────────────────────────────
+  Future<void> _runRecord(String text) async {
     final repo = context.read<AppRepository>();
     List<ParsedEntry> results = [];
     String? hint;
@@ -143,6 +165,53 @@ class _AiChatPanelState extends State<AiChatPanel> {
       _busy = false;
     });
     _scrollToBottom();
+  }
+
+  // ── 查账流 ──────────────────────────────────────────────────────────────
+  Future<void> _runQuery(String text) async {
+    final repo = context.read<AppRepository>();
+    final key = repo.deepSeekApiKey;
+    String answer;
+    if (key == null || key.isEmpty) {
+      answer = '查账要先配 AI key 哦～去「我的 → AI 记账设置」填一下，喵就能帮你分析啦';
+    } else {
+      try {
+        answer = await LlmQuery.ask(
+          question: text,
+          apiKey: key,
+          transactionsText: _buildTxnContext(repo),
+        );
+      } catch (_) {
+        answer = '喵没连上 AI，待会儿再问问？';
+      }
+    }
+    if (!mounted) return;
+    setState(() {
+      _msgs.removeWhere((m) => m is _ThinkingMsg);
+      _msgs.add(_AnswerMsg(answer));
+      _busy = false;
+    });
+    _scrollToBottom();
+  }
+
+  /// 把最近账目整理成给 LLM 的上下文（按日期倒序，最多 80 条）。
+  String _buildTxnContext(AppRepository repo) {
+    final txns = [...repo.transactions]
+      ..sort((a, b) => b.date.compareTo(a.date));
+    final now = DateTime.now();
+    final sb = StringBuffer();
+    sb.writeln('今天是 ${now.year}-${now.month}-${now.day}。');
+    sb.writeln('账目数据（格式：日期|收支|分类|金额元|备注）：');
+    for (final t in txns.take(80)) {
+      final k = t.txKind == TransactionKind.income
+          ? '收'
+          : (t.txKind == TransactionKind.transfer ? '转' : '支');
+      final d =
+          '${t.date.year}-${t.date.month.toString().padLeft(2, '0')}-${t.date.day.toString().padLeft(2, '0')}';
+      sb.writeln(
+          '$d|$k|${t.categoryNameZh}|${MoneyFormat.string(t.amount)}|${t.note}');
+    }
+    return sb.toString();
   }
 
   CategoryEntity? _matchCat(AppRepository repo, ParsedEntry e) {
@@ -335,6 +404,7 @@ class _AiChatPanelState extends State<AiChatPanel> {
     if (m is _UserMsg) return _UserBubble(text: m.text);
     if (m is _ThinkingMsg) return const _ThinkingBubble();
     if (m is _InfoMsg) return _InfoBubble(text: m.text, error: m.error);
+    if (m is _AnswerMsg) return _AnswerBubble(text: m.text);
     if (m is _RecordMsg) {
       return _RecordBubble(
         msg: m,
@@ -363,6 +433,11 @@ class _InfoMsg extends _Msg {
   final String text;
   final bool error;
   _InfoMsg(this.text, {this.error = false});
+}
+
+class _AnswerMsg extends _Msg {
+  final String text;
+  _AnswerMsg(this.text);
 }
 
 class _RecordMsg extends _Msg {
@@ -458,6 +533,46 @@ class _InfoBubble extends StatelessWidget {
               style: TextStyle(
                 fontSize: 14,
                 color: error ? scheme.error : scheme.onSurfaceVariant,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ── 查账回答气泡（喵助手回答）──────────────────────────────────────────────
+class _AnswerBubble extends StatelessWidget {
+  final String text;
+  const _AnswerBubble({required this.text});
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12, right: 24),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Mascot(mood: MascotMood.report, size: 30),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Container(
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+              decoration: BoxDecoration(
+                color: scheme.surfaceContainerHighest,
+                borderRadius: const BorderRadius.only(
+                  topLeft: Radius.circular(4),
+                  topRight: Radius.circular(16),
+                  bottomLeft: Radius.circular(16),
+                  bottomRight: Radius.circular(16),
+                ),
+              ),
+              child: SelectableText(
+                text,
+                style: const TextStyle(fontSize: 15, height: 1.4),
               ),
             ),
           ),
