@@ -43,6 +43,18 @@ jobs:
           grep -q 'android.permission.RECORD_AUDIO' "$MANIFEST" || \
             sed -i '/<manifest/a\    <uses-permission android:name="android.permission.RECORD_AUDIO"/>' "$MANIFEST"
           grep permission "$MANIFEST"
+          # 部分插件（file_picker→flutter_plugin_android_lifecycle、image_picker 等）
+          # 要求 compileSdk≥36，脚手架默认偏低，这里强制提到 36。
+          KTS=android-app/android/app/build.gradle.kts
+          GRADLE=android-app/android/app/build.gradle
+          if [ -f "$KTS" ]; then
+            sed -i -E 's/^([[:space:]]*compileSdk[[:space:]]*=).*/\1 36/' "$KTS"
+            grep -n 'compileSdk' "$KTS" || true
+          fi
+          if [ -f "$GRADLE" ]; then
+            sed -i -E 's/^([[:space:]]*compileSdk(Version)?[[:space:]]+).*/\1 36/' "$GRADLE"
+            grep -n 'compileSdk' "$GRADLE" || true
+          fi
 
       - name: 拉取依赖
         working-directory: android-app
