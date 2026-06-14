@@ -8,6 +8,7 @@ import '../../core/models/transaction_kind.dart';
 import '../../core/money_format.dart';
 import '../../data/app_repository.dart';
 import '../../theme/app_colors.dart';
+import '../../widgets/tag_selector.dart';
 import '../quick_add/amount_keypad.dart';
 import '../quick_add/category_grid.dart';
 
@@ -34,6 +35,7 @@ class _ManualAddSheetState extends State<ManualAddSheet> {
   int? _selectedAccountId;
   DateTime _date = DateTime.now();
   final TextEditingController _noteController = TextEditingController();
+  List<int> _tagIds = [];
   int _expressionVersion = 0;
 
   @override
@@ -83,6 +85,7 @@ class _ManualAddSheetState extends State<ManualAddSheet> {
       accountId: accountId,
       note: _noteController.text.trim(),
       date: _date,
+      tagIds: _tagIds,
     );
 
     if (mounted) Navigator.pop(context);
@@ -171,6 +174,15 @@ class _ManualAddSheetState extends State<ManualAddSheet> {
                 ),
               );
             },
+          ),
+        ),
+
+        // ── 标签选择 ──
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 4, 16, 4),
+          child: TagSelector(
+            selectedIds: _tagIds,
+            onChanged: (v) => setState(() => _tagIds = v),
           ),
         ),
 

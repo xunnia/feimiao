@@ -10,7 +10,9 @@ import '../../core/statistics/statistics_engine.dart';
 import '../../data/app_repository.dart';
 import '../../theme/app_colors.dart';
 import '../../widgets/mascot.dart';
+import '../../widgets/tag_selector.dart';
 import '../statistics/statistics_view.dart';
+import '../transactions/edit_transaction_sheet.dart';
 
 /// 首页：折叠吸顶大卡片（收支+预算）+ 全量按天分组明细列表。
 ///
@@ -737,7 +739,10 @@ class _DismissibleRow extends StatelessWidget {
         );
       },
       onDismissed: (_) => onDelete(),
-      child: _TransactionRow(transaction: transaction),
+      child: InkWell(
+        onTap: () => showEditTransactionSheet(context, transaction),
+        child: _TransactionRow(transaction: transaction),
+      ),
     );
   }
 }
@@ -821,6 +826,7 @@ class _TransactionRow extends StatelessWidget {
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                   ),
+                InlineTagChips(tagIds: transaction.tagIds),
               ],
             ),
           ),

@@ -76,4 +76,20 @@ class AmountExpression {
   void clear() {
     _parts = [''];
   }
+
+  /// 直接载入一个已有金额（用于编辑已有账目时把金额预填进键盘）。
+  /// 负数或非正数视为清空。
+  void loadAmount(Decimal value) {
+    if (value <= Decimal.zero) {
+      clear();
+      return;
+    }
+    // 去掉多余的尾零：12.00 → 12，3.50 → 3.5
+    var s = value.toString();
+    if (s.contains('.')) {
+      s = s.replaceFirst(RegExp(r'0+$'), '');
+      s = s.replaceFirst(RegExp(r'\.$'), '');
+    }
+    _parts = [s];
+  }
 }

@@ -5,6 +5,7 @@ import '../../core/models/transaction_kind.dart';
 import '../../core/money_format.dart';
 import '../../data/app_repository.dart';
 import '../../widgets/mascot.dart';
+import '../transactions/edit_transaction_sheet.dart';
 
 /// 明细搜索：按 分类名 / 备注 / 金额 关键词过滤当前账本的账单。
 class SearchView extends StatefulWidget {
@@ -108,6 +109,7 @@ class _SearchViewState extends State<SearchView> {
           color: income ? scheme.secondary : scheme.onSurface,
         ),
       ),
+      onTap: () => showEditTransactionSheet(context, t),
     );
   }
 }

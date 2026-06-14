@@ -8,10 +8,12 @@ import 'views/assistant/meow_assistant_view.dart';
 import 'views/common/coming_soon_view.dart';
 import 'views/home/home_view.dart';
 import 'views/home/record_input_bar.dart';
+import 'views/savings/savings_goals_view.dart';
 import 'views/search/search_view.dart';
 import 'views/settings/accounts_view.dart';
 import 'views/settings/budget_setting_view.dart';
 import 'views/settings/categories_view.dart';
+import 'views/settings/tags_view.dart';
 import 'views/statistics/statistics_view.dart';
 import 'views/transactions/transaction_list_view.dart';
 
@@ -393,7 +395,14 @@ class _AppDrawerState extends State<_AppDrawer> {
                       onTap: () => _popAndPush(const BudgetSettingView()),
                     ),
 
-                    // 5. 喵助手
+                    // 5. 存钱目标
+                    _DrawerItem(
+                      icon: Icons.savings_outlined,
+                      label: '存钱目标',
+                      onTap: () => _popAndPush(const SavingsGoalsView()),
+                    ),
+
+                    // 6. 喵助手
                     _DrawerItem(
                       icon: Icons.auto_awesome,
                       label: '喵助手',
@@ -450,8 +459,7 @@ class _AppDrawerState extends State<_AppDrawer> {
                       _DrawerItem(
                         icon: Icons.label_outline,
                         label: '标签管理',
-                        onTap: () =>
-                            _popAndPush(const ComingSoonView(title: '标签管理')),
+                        onTap: () => _popAndPush(const TagsView()),
                         indent: true,
                       ),
                       _DrawerItem(

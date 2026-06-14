@@ -7,6 +7,8 @@ import '../../core/models/transaction_kind.dart';
 import '../../core/money_format.dart';
 import '../../data/app_repository.dart';
 import '../../theme/app_colors.dart';
+import '../../widgets/tag_selector.dart';
+import 'edit_transaction_sheet.dart';
 
 /// 流水明细页：按天分组 + 当日小计 + 左滑删除 + 空状态。
 /// 对应 iOS TransactionListView.swift。
@@ -190,7 +192,10 @@ class _DismissibleRow extends StatelessWidget {
         );
       },
       onDismissed: (_) => onDelete(),
-      child: _TransactionRow(transaction: transaction),
+      child: InkWell(
+        onTap: () => showEditTransactionSheet(context, transaction),
+        child: _TransactionRow(transaction: transaction),
+      ),
     );
   }
 }
@@ -283,6 +288,7 @@ class _TransactionRow extends StatelessWidget {
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                   ),
+                InlineTagChips(tagIds: transaction.tagIds),
               ],
             ),
           ),

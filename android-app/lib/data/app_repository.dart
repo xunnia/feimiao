@@ -105,10 +105,20 @@ class TransactionEntity {
   final String toAccountName;
   final String note;
   final int dateMs;            // DateTime.millisecondsSinceEpoch
+  final String tagsRaw;        // 逗号分隔的标签 id 串，如 "1,3,5"
 
   Decimal get amount => Decimal.parse(amountStr);
   DateTime get date => DateTime.fromMillisecondsSinceEpoch(dateMs);
   TransactionKind get txKind => TransactionKind.fromJson(kind);
+
+  /// 解析出标签 id 列表（空串返回空列表）。
+  List<int> get tagIds => tagsRaw.isEmpty
+      ? const []
+      : tagsRaw
+          .split(',')
+          .map((s) => int.tryParse(s.trim()))
+          .whereType<int>()
+          .toList();
 
   const TransactionEntity({
     required this.id,
@@ -125,6 +135,7 @@ class TransactionEntity {
     this.toAccountName = '',
     this.note = '',
     required this.dateMs,
+    this.tagsRaw = '',
   });
 
   /// 转为 core 层的纯逻辑对象（用于统计引擎等）。
@@ -156,6 +167,68 @@ class TransactionEntity {
         toAccountName: m['to_account_name'] as String? ?? '',
         note: m['note'] as String? ?? '',
         dateMs: m['date_ms'] as int,
+        tagsRaw: m['tags'] as String? ?? '',
+      );
+}
+
+/// 存钱目标实体。
+class SavingsGoalEntity {
+  final int id;
+  final String name;
+  final String emoji;
+  final String targetStr; // 目标金额（Decimal 字符串）
+  final String savedStr;  // 已存金额（Decimal 字符串）
+  final int createdMs;
+
+  Decimal get target => Decimal.parse(targetStr);
+  Decimal get saved => Decimal.parse(savedStr);
+
+  /// 完成比例 0~1（目标为 0 时返回 0）。
+  double get progress {
+    final t = target;
+    if (t <= Decimal.zero) return 0;
+    final r = (saved / t).toDouble();
+    return r.clamp(0.0, 1.0);
+  }
+
+  bool get isDone => saved >= target && target > Decimal.zero;
+
+  const SavingsGoalEntity({
+    required this.id,
+    required this.name,
+    this.emoji = '🐷',
+    required this.targetStr,
+    this.savedStr = '0',
+    this.createdMs = 0,
+  });
+
+  factory SavingsGoalEntity.fromMap(Map<String, Object?> m) =>
+      SavingsGoalEntity(
+        id: m['id'] as int,
+        name: m['name'] as String,
+        emoji: m['emoji'] as String? ?? '🐷',
+        targetStr: m['target_amount'] as String? ?? '0',
+        savedStr: m['saved_amount'] as String? ?? '0',
+        createdMs: m['created_ms'] as int? ?? 0,
+      );
+}
+
+/// 标签实体。
+class TagEntity {
+  final int id;
+  final String name;
+  final int colorValue; // Color.value（ARGB int）
+
+  const TagEntity({
+    required this.id,
+    required this.name,
+    required this.colorValue,
+  });
+
+  factory TagEntity.fromMap(Map<String, Object?> m) => TagEntity(
+        id: m['id'] as int,
+        name: m['name'] as String,
+        colorValue: m['color'] as int? ?? 0xFF7D8B9B,
       );
 }
 
@@ -167,7 +240,7 @@ class TransactionEntity {
 ///
 /// 继承 [ChangeNotifier]，UI 通过 [provider] 订阅变化。
 class AppRepository extends ChangeNotifier {
-  static const _dbVersion = 4;
+  static const _dbVersion = 5;
   static const _dbName = 'qingji.db';
 
   Database? _db;
@@ -177,6 +250,8 @@ class AppRepository extends ChangeNotifier {
   final List<AccountEntity> _accounts = [];
   final List<CategoryEntity> _categories = [];
   final List<TransactionEntity> _transactions = [];
+  final List<SavingsGoalEntity> _savingsGoals = [];
+  final List<TagEntity> _tags = [];
 
   /// 当前账本 id（0 = 未初始化，init 后必为有效值）。
   int _currentBookId = 0;
@@ -191,6 +266,16 @@ class AppRepository extends ChangeNotifier {
   List<AccountEntity> get accounts => List.unmodifiable(_accounts);
   List<CategoryEntity> get categories => List.unmodifiable(_categories);
   List<TransactionEntity> get transactions => List.unmodifiable(_transactions);
+  List<SavingsGoalEntity> get savingsGoals => List.unmodifiable(_savingsGoals);
+  List<TagEntity> get tags => List.unmodifiable(_tags);
+
+  /// 按 id 查标签名（找不到返回 null）。
+  String? tagName(int id) {
+    for (final t in _tags) {
+      if (t.id == id) return t.name;
+    }
+    return null;
+  }
 
   /// 当前账本 id。
   int get currentBookId => _currentBookId;
@@ -272,7 +357,27 @@ class AppRepository extends ChangeNotifier {
         account_id      INTEGER REFERENCES accounts(id),
         to_account_id   INTEGER REFERENCES accounts(id),
         note            TEXT NOT NULL DEFAULT '',
-        date_ms         INTEGER NOT NULL
+        date_ms         INTEGER NOT NULL,
+        tags            TEXT NOT NULL DEFAULT ''
+      )
+    ''');
+
+    await db.execute('''
+      CREATE TABLE savings_goals (
+        id            INTEGER PRIMARY KEY AUTOINCREMENT,
+        name          TEXT NOT NULL,
+        emoji         TEXT NOT NULL DEFAULT '🐷',
+        target_amount TEXT NOT NULL DEFAULT '0',
+        saved_amount  TEXT NOT NULL DEFAULT '0',
+        created_ms    INTEGER NOT NULL DEFAULT 0
+      )
+    ''');
+
+    await db.execute('''
+      CREATE TABLE tags (
+        id    INTEGER PRIMARY KEY AUTOINCREMENT,
+        name  TEXT NOT NULL,
+        color INTEGER NOT NULL DEFAULT 4286351771
       )
     ''');
 
@@ -334,6 +439,32 @@ class AppRepository extends ChangeNotifier {
       await db.execute(
           'UPDATE transactions SET book_id = $defaultBookId WHERE book_id IS NULL');
     }
+    if (oldVersion < 5) {
+      // 存钱目标 + 标签：建两张新表，给 transactions 加 tags 列
+      await db.execute('''
+        CREATE TABLE IF NOT EXISTS savings_goals (
+          id            INTEGER PRIMARY KEY AUTOINCREMENT,
+          name          TEXT NOT NULL,
+          emoji         TEXT NOT NULL DEFAULT '🐷',
+          target_amount TEXT NOT NULL DEFAULT '0',
+          saved_amount  TEXT NOT NULL DEFAULT '0',
+          created_ms    INTEGER NOT NULL DEFAULT 0
+        )
+      ''');
+      await db.execute('''
+        CREATE TABLE IF NOT EXISTS tags (
+          id    INTEGER PRIMARY KEY AUTOINCREMENT,
+          name  TEXT NOT NULL,
+          color INTEGER NOT NULL DEFAULT 4286351771
+        )
+      ''');
+      try {
+        await db.execute(
+            "ALTER TABLE transactions ADD COLUMN tags TEXT NOT NULL DEFAULT ''");
+      } catch (_) {
+        // 列已存在则忽略
+      }
+    }
   }
 
   /// 首次启动写入默认账户和分类种子数据。
@@ -368,8 +499,25 @@ class AppRepository extends ChangeNotifier {
       _loadTransactions(),
       _loadBudget(),
       _loadApiKey(),
+      _loadSavingsGoals(),
+      _loadTags(),
     ]);
     notifyListeners();
+  }
+
+  Future<void> _loadSavingsGoals() async {
+    final rows =
+        await _db!.query('savings_goals', orderBy: 'created_ms ASC, id ASC');
+    _savingsGoals
+      ..clear()
+      ..addAll(rows.map(SavingsGoalEntity.fromMap));
+  }
+
+  Future<void> _loadTags() async {
+    final rows = await _db!.query('tags', orderBy: 'id ASC');
+    _tags
+      ..clear()
+      ..addAll(rows.map(TagEntity.fromMap));
   }
 
   Future<void> _loadBooks() async {
@@ -468,7 +616,8 @@ class AppRepository extends ChangeNotifier {
         t.to_account_id,
         ta.name    AS to_account_name,
         t.note,
-        t.date_ms
+        t.date_ms,
+        t.tags
       FROM transactions t
       LEFT JOIN categories c  ON c.id = t.category_id
       LEFT JOIN accounts   a  ON a.id = t.account_id
@@ -497,6 +646,7 @@ class AppRepository extends ChangeNotifier {
     int? toAccountId,
     String note = '',
     required DateTime date,
+    List<int> tagIds = const [],
   }) async {
     await _db!.insert('transactions', {
       'book_id': _currentBookId,
@@ -508,7 +658,39 @@ class AppRepository extends ChangeNotifier {
       'to_account_id': toAccountId,
       'note': note,
       'date_ms': date.millisecondsSinceEpoch,
+      'tags': tagIds.join(','),
     });
+    await _loadTransactions();
+    notifyListeners();
+  }
+
+  /// 编辑一笔已有交易（按数据库 id 覆盖更新）。
+  Future<void> updateTransaction({
+    required int id,
+    required TransactionKind kind,
+    required Decimal amount,
+    int? categoryId,
+    required int accountId,
+    int? toAccountId,
+    String note = '',
+    required DateTime date,
+    List<int> tagIds = const [],
+  }) async {
+    await _db!.update(
+      'transactions',
+      {
+        'kind': kind.toJson(),
+        'amount': amount.toString(),
+        'category_id': categoryId,
+        'account_id': accountId,
+        'to_account_id': toAccountId,
+        'note': note,
+        'date_ms': date.millisecondsSinceEpoch,
+        'tags': tagIds.join(','),
+      },
+      where: 'id = ?',
+      whereArgs: [id],
+    );
     await _loadTransactions();
     notifyListeners();
   }
@@ -713,6 +895,117 @@ class AppRepository extends ChangeNotifier {
   Future<void> deleteCategory(int id) async {
     await _db!.delete('categories', where: 'id = ?', whereArgs: [id]);
     await _loadCategories();
+    notifyListeners();
+  }
+
+  // ---------------------------------------------------------------------------
+  // 存钱目标 CRUD
+  // ---------------------------------------------------------------------------
+
+  /// 新建存钱目标，返回新行 id。
+  Future<int> addSavingsGoal({
+    required String name,
+    required Decimal target,
+    String emoji = '🐷',
+    Decimal? initialSaved,
+  }) async {
+    final id = await _db!.insert('savings_goals', {
+      'name': name,
+      'emoji': emoji,
+      'target_amount': target.toString(),
+      'saved_amount': (initialSaved ?? Decimal.zero).toString(),
+      'created_ms': DateTime.now().millisecondsSinceEpoch,
+    });
+    await _loadSavingsGoals();
+    notifyListeners();
+    return id;
+  }
+
+  /// 编辑目标的名称/图标/目标金额（已存金额不动）。
+  Future<void> updateSavingsGoal(
+    int id, {
+    required String name,
+    required Decimal target,
+    String? emoji,
+  }) async {
+    final updates = <String, Object?>{
+      'name': name,
+      'target_amount': target.toString(),
+    };
+    if (emoji != null) updates['emoji'] = emoji;
+    await _db!.update('savings_goals', updates, where: 'id = ?', whereArgs: [id]);
+    await _loadSavingsGoals();
+    notifyListeners();
+  }
+
+  /// 删除存钱目标。
+  Future<void> deleteSavingsGoal(int id) async {
+    await _db!.delete('savings_goals', where: 'id = ?', whereArgs: [id]);
+    await _loadSavingsGoals();
+    notifyListeners();
+  }
+
+  /// 给目标存入 [delta]（正数存入、负数取出），已存金额夹在 0 与目标无上限之间不为负。
+  Future<void> adjustSavingsGoal(int id, Decimal delta) async {
+    final goal = _savingsGoals.where((g) => g.id == id).firstOrNull;
+    if (goal == null) return;
+    var next = goal.saved + delta;
+    if (next < Decimal.zero) next = Decimal.zero;
+    await _db!.update(
+      'savings_goals',
+      {'saved_amount': next.toString()},
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+    await _loadSavingsGoals();
+    notifyListeners();
+  }
+
+  // ---------------------------------------------------------------------------
+  // 标签 CRUD
+  // ---------------------------------------------------------------------------
+
+  /// 新建标签，返回新行 id。
+  Future<int> addTag({required String name, required int colorValue}) async {
+    final id = await _db!.insert('tags', {'name': name, 'color': colorValue});
+    await _loadTags();
+    notifyListeners();
+    return id;
+  }
+
+  /// 改标签名/颜色。
+  Future<void> updateTag(int id, {required String name, int? colorValue}) async {
+    final updates = <String, Object?>{'name': name};
+    if (colorValue != null) updates['color'] = colorValue;
+    await _db!.update('tags', updates, where: 'id = ?', whereArgs: [id]);
+    await _loadTags();
+    notifyListeners();
+  }
+
+  /// 删除标签：同时把所有交易上引用它的 id 剔除（避免悬空引用）。
+  Future<void> deleteTag(int id) async {
+    await _db!.delete('tags', where: 'id = ?', whereArgs: [id]);
+    // 扫描含该标签的交易，去掉这个 id 后回写
+    final rows = await _db!.rawQuery(
+      "SELECT id, tags FROM transactions WHERE tags LIKE ?",
+      ['%$id%'],
+    );
+    for (final r in rows) {
+      final raw = (r['tags'] as String?) ?? '';
+      if (raw.isEmpty) continue;
+      final kept = raw
+          .split(',')
+          .map((s) => int.tryParse(s.trim()))
+          .whereType<int>()
+          .where((tid) => tid != id)
+          .join(',');
+      if (kept != raw) {
+        await _db!.update('transactions', {'tags': kept},
+            where: 'id = ?', whereArgs: [r['id']]);
+      }
+    }
+    await _loadTags();
+    await _loadTransactions();
     notifyListeners();
   }
 }
