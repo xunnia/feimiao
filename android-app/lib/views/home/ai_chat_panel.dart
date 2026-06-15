@@ -332,7 +332,7 @@ class _AiChatPanelState extends State<AiChatPanel> {
                   Text(
                     '来记一笔吧',
                     style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                          fontWeight: FontWeight.w600,
+                          fontWeight: FontWeight.w400,
                         ),
                   ),
                   const Spacer(),
@@ -819,7 +819,9 @@ class _EmptyHint extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text('试试这样说：',
-              style: TextStyle(fontSize: 13, color: scheme.onSurfaceVariant)),
+              style: TextStyle(
+                  fontSize: 13,
+                  color: scheme.onSurfaceVariant.withValues(alpha: 0.6))),
           const SizedBox(height: 8),
           Wrap(
             spacing: 8,
@@ -832,10 +834,20 @@ class _EmptyHint extends StatelessWidget {
                     padding: const EdgeInsets.symmetric(
                         horizontal: 12, vertical: 8),
                     decoration: BoxDecoration(
-                      color: scheme.surfaceContainerHighest,
+                      // 无灰底，仅极细边框，弱化成提示而非按钮
                       borderRadius: BorderRadius.circular(16),
+                      border: Border.all(
+                        color: scheme.outlineVariant.withValues(alpha: 0.6),
+                        width: 0.5,
+                      ),
                     ),
-                    child: Text(s, style: const TextStyle(fontSize: 13)),
+                    child: Text(
+                      s,
+                      style: TextStyle(
+                        fontSize: 13,
+                        color: scheme.onSurfaceVariant.withValues(alpha: 0.7),
+                      ),
+                    ),
                   ),
                 ),
             ],
