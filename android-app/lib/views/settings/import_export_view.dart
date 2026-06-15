@@ -12,6 +12,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:provider/provider.dart';
 import 'package:share_plus/share_plus.dart';
 
+import '../../core/ai/natural_language_entry_parser.dart';
 import '../../core/import/bill_import.dart';
 import '../../core/models/transaction_kind.dart';
 import '../../data/app_repository.dart';
@@ -182,15 +183,34 @@ class _ImportExportViewState extends State<ImportExportView> {
     final fallbackAccountId = repo.accounts.firstOrNull?.id;
     if (fallbackAccountId == null) return 0;
 
+    final cats = <TransactionKind, List<CategoryEntity>>{};
+    List<CategoryEntity> catsFor(TransactionKind k) =>
+        cats[k] ??= repo.categoriesForKind(k);
+
     final drafts = <TransactionDraft>[];
     for (final r in rows) {
-      // 分类：按该类型下的中文名匹配，匹配不到留空（未分类）
       int? categoryId;
+      // 1) 账单自带分类名（如支付宝交易分类）能对上现有分类就用
       if (r.category.isNotEmpty) {
-        for (final c in repo.categoriesForKind(r.kind)) {
+        for (final c in catsFor(r.kind)) {
           if (c.nameZh == r.category) {
             categoryId = c.id;
             break;
+          }
+        }
+      }
+      // 2) 否则按「分类名+商户+商品+备注」文字自动猜分类（微信账单全靠这个）
+      if (categoryId == null) {
+        final guessKey = NaturalLanguageEntryParser.guessCategory(
+          '${r.category} ${r.note}',
+          kind: r.kind,
+        );
+        if (guessKey != null) {
+          for (final c in catsFor(r.kind)) {
+            if (c.key == guessKey) {
+              categoryId = c.id;
+              break;
+            }
           }
         }
       }

@@ -128,19 +128,19 @@ class NaturalLanguageEntryParser {
   // 分类
 
   static const _expenseKeywords = [
-    ('groceries', ['买菜', '超市', '菜市场', '生鲜', 'grocery']),
-    ('dining', ['早餐', '午餐', '晚餐', '夜宵', '外卖', '吃', '饭', '餐', '咖啡', '奶茶', '火锅', '烧烤', '面', 'lunch', 'dinner', 'coffee']),
-    ('transport', ['打车', '滴滴', '出租', '地铁', '公交', '高铁', '火车', '加油', '油费', '停车', 'taxi', 'uber', 'metro']),
-    ('travel', ['机票', '酒店', '门票', '旅游', '旅行', '民宿', 'flight', 'hotel']),
+    ('groceries', ['买菜', '超市', '菜市场', '生鲜', '钱大妈', '盒马', '永辉', 'grocery']),
+    ('dining', ['早餐', '午餐', '晚餐', '夜宵', '外卖', '吃', '饭', '餐', '咖啡', '奶茶', '火锅', '烧烤', '面', '美团', '饿了么', '瑞幸', '星巴克', '麦当劳', '肯德基', '蜜雪', '茶百道', '海底捞', 'lunch', 'dinner', 'coffee']),
+    ('transport', ['打车', '滴滴', '出租', '地铁', '公交', '高铁', '火车', '加油', '油费', '停车', '青桔', '哈啰', '共享单车', '12306', 'taxi', 'uber', 'metro']),
+    ('travel', ['机票', '酒店', '门票', '旅游', '旅行', '民宿', '携程', '飞猪', 'flight', 'hotel']),
     ('housing', ['房租', '物业', '房贷', 'rent']),
-    ('utilities', ['水费', '电费', '燃气', '网费', '话费', '宽带', '流量']),
-    ('medical', ['医院', '挂号', '药', '体检', '看病', '牙', 'hospital']),
-    ('education', ['学费', '课', '培训', '书', '网课', 'course']),
-    ('entertainment', ['电影', '游戏', 'KTV', '演唱会', '音乐会', '剧本杀', '桌游', 'movie', 'game']),
+    ('utilities', ['水费', '电费', '燃气', '网费', '话费', '宽带', '流量', '中国移动', '中国联通', '中国电信']),
+    ('medical', ['医院', '挂号', '药', '体检', '看病', '牙', '大药房', '诊所', 'hospital']),
+    ('education', ['学费', '课', '培训', '书', '网课', '文印', '打印', 'course']),
+    ('entertainment', ['电影', '游戏', 'KTV', '演唱会', '音乐会', '剧本杀', '桌游', '影城', 'movie', 'game']),
     ('pets', ['猫', '狗', '宠物', '猫粮', '狗粮', 'pet']),
     ('gifts', ['随礼', '份子', '礼物', '发红包', '给红包', 'gift']),
     ('subscription', ['会员', '订阅', '续费', 'subscription']),
-    ('shopping', ['买', '购物', '淘宝', '京东', '拼多多', '网购', '衣服', '鞋', 'shopping']),
+    ('shopping', ['买', '购物', '淘宝', '天猫', '京东', '拼多多', '网购', '衣服', '鞋', '苏宁', '唯品会', '抖音', 'shopping']),
   ];
 
   static const _incomeKeywords = [
@@ -159,6 +159,12 @@ class NaturalLanguageEntryParser {
     }
     return null;
   }
+
+  /// 公开的分类猜测：给一段文字（如商户名+商品）和已知收支方向，
+  /// 返回匹配到的分类 key（CategorySeed.key），猜不出返回 null。
+  /// 账单导入时用来给「未分类」的外部账目自动归类。
+  static String? guessCategory(String text, {required TransactionKind kind}) =>
+      _detectCategory(text, kind: kind);
 }
 
 /// 支付截图 OCR 文本的金额提取（微信/支付宝支付完成页、账单详情页）。
