@@ -1,9 +1,5 @@
-import 'dart:convert';
-import 'dart:typed_data';
-
 import 'package:csv/csv.dart';
 import 'package:decimal/decimal.dart';
-import 'package:gbk_codec/gbk_codec.dart';
 
 import '../models/transaction_kind.dart';
 
@@ -41,20 +37,18 @@ class BillParseResult {
   });
 }
 
-/// 主流账单 CSV 智能解析器。
+/// 主流账单智能解析器（CSV/Excel 文本都先转成二维表格再喂进来）。
 ///
 /// 能力：
-///  - 自动识别编码（UTF-8 / GBK，支付宝账单是 GBK）；
 ///  - 跳过微信/支付宝账单顶部十几行说明，定位真正表头；
 ///  - 按「列名模糊匹配」适配不同 App（日期/收支/金额/分类/备注/交易对方…），
-///    因此咔皮、木木等常规导出也能吃下；
+///    因此微信、支付宝、咔皮、木木等都能吃下；
 ///  - 收支方向：优先「收/支」列，其次「类型」列，再退化到金额正负号；
 ///    中性 / 不计收支的行会被跳过。
+///
+/// 注意：字节→文本的解码（含 GBK）放在界面层用系统原生解码完成，
+/// 这里只处理已解码文本，保证纯 Dart 可单测。
 class BillImporter {
-  /// 从原始字节解析（CSV，推荐——能正确处理 GBK）。
-  static BillParseResult parseBytes(Uint8List bytes) =>
-      parseString(_decode(bytes));
-
   /// 从已解码 CSV 文本解析。
   static BillParseResult parseString(String raw) {
     final normalized = raw.replaceAll('\r\n', '\n').replaceAll('\r', '\n');
@@ -118,37 +112,6 @@ class BillImporter {
       totalRows: total,
       headerFound: true,
     );
-  }
-
-  // ── 编码：UTF-8 / GBK 自动择优 ─────────────────────────────────────────────
-  static String _decode(Uint8List bytes) {
-    // 去掉 UTF-8 BOM
-    if (bytes.length >= 3 &&
-        bytes[0] == 0xEF &&
-        bytes[1] == 0xBB &&
-        bytes[2] == 0xBF) {
-      bytes = bytes.sublist(3);
-    }
-
-    // 严格 UTF-8 能解通就直接用（支付宝新版/微信多为 UTF-8）
-    try {
-      return const Utf8Decoder(allowMalformed: false).convert(bytes);
-    } catch (_) {/* 落到下面试 GBK */}
-
-    // 严格 UTF-8 失败 → 多半是 GBK（老支付宝账单）。两种都试，挑乱码少的。
-    String? gbkText;
-    try {
-      gbkText = gbk.decode(bytes);
-    } catch (_) {
-      gbkText = null;
-    }
-    final utf8Loose = utf8.decode(bytes, allowMalformed: true);
-
-    if (gbkText == null) return utf8Loose;
-    // 统计替换符 U+FFFD，哪个少用哪个
-    final badGbk = '�'.allMatches(gbkText).length;
-    final badUtf8 = '�'.allMatches(utf8Loose).length;
-    return badGbk <= badUtf8 ? gbkText : utf8Loose;
   }
 
   // ── 来源识别：扫描表格前若干行的文字 ────────────────────────────────────────
@@ -239,7 +202,7 @@ class _ColumnMap {
       category: _find(header, ['分类', '类别']),
       counterparty: _find(header, ['交易对方', '对方', '商户']),
       product: _find(header, ['商品', '摘要']),
-      note: _find(header, ['备注', '说明']),
+      note: _find(header, ['备注', '说明'], avoid: ['商品']),
     );
   }
 

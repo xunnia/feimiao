@@ -1,6 +1,8 @@
+import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:charset_converter/charset_converter.dart';
 import 'package:csv/csv.dart';
 import 'package:excel/excel.dart';
 import 'package:file_picker/file_picker.dart';
@@ -117,7 +119,8 @@ class _ImportExportViewState extends State<ImportExportView> {
         final table = _xlsxToTable(bytes);
         result = BillImporter.parseRows(table);
       } else {
-        result = BillImporter.parseBytes(bytes);
+        final text = await _decodeCsvBytes(bytes);
+        result = BillImporter.parseString(text);
       }
       if (result.rows.isEmpty) {
         final diag = result.totalRows == 0
@@ -135,6 +138,24 @@ class _ImportExportViewState extends State<ImportExportView> {
       _setMessage('导入失败：$e');
     } finally {
       if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  /// 把 CSV 字节解码成文本：先严格 UTF-8，失败则用系统原生 GBK 解码
+  /// （支付宝账单是 GBK），再不行退化为宽松 UTF-8。
+  Future<String> _decodeCsvBytes(Uint8List bytes) async {
+    // 去掉 UTF-8 BOM
+    var b = bytes;
+    if (b.length >= 3 && b[0] == 0xEF && b[1] == 0xBB && b[2] == 0xBF) {
+      b = b.sublist(3);
+    }
+    try {
+      return const Utf8Decoder(allowMalformed: false).convert(b);
+    } catch (_) {/* 不是 UTF-8，试 GBK */}
+    try {
+      return await CharsetConverter.decode('GBK', b);
+    } catch (_) {
+      return utf8.decode(b, allowMalformed: true);
     }
   }
 
