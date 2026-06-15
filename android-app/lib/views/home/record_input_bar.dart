@@ -49,6 +49,8 @@ class _RecordInputBarState extends State<RecordInputBar> {
   // ── 打开手动大卡片 ─────────────────────────────────────────────────────────
 
   void _openManual() {
+    // 记住本次选择：下次打开默认手动
+    setState(() => _isAiMode = false);
     showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
@@ -68,6 +70,8 @@ class _RecordInputBarState extends State<RecordInputBar> {
   // ── 打开 AI 聚焦输入 ──────────────────────────────────────────────────────
 
   void _openAi() {
+    // 记住本次选择：下次打开默认 AI
+    setState(() => _isAiMode = true);
     showAiChatPanel(
       context,
       speechAvailable: _speechAvailable,

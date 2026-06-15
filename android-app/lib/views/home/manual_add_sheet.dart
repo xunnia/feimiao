@@ -126,9 +126,9 @@ class _ManualAddSheetState extends State<ManualAddSheet> {
               ),
               const SizedBox(width: 8),
 
-              // AI 助手胶囊（切换到 AI 模式）
+              // 模式胶囊：显示当前模式（手动），点一下切到 AI
               _ModePill(
-                label: 'AI 助手',
+                label: '手动记账',
                 onTap: widget.onSwitchToAi,
               ),
               const SizedBox(width: 8),

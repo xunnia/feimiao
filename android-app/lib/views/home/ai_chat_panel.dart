@@ -421,7 +421,7 @@ class _AiChatPanelState extends State<AiChatPanel> {
                         const SizedBox(width: 8),
                         _Pill(
                           icon: Icons.swap_horiz,
-                          label: '手动记账',
+                          label: 'AI 记账',
                           onTap: () {
                             Navigator.pop(context);
                             widget.onSwitchToManual();
