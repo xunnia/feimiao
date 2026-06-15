@@ -12,6 +12,7 @@ import '../../core/models/transaction_kind.dart';
 import '../../core/money_format.dart';
 import '../../data/app_repository.dart';
 import '../../widgets/mascot.dart';
+import 'record_extras_sheet.dart';
 import 'voice_input_sheet.dart';
 
 /// 打开「来记一笔吧」AI 聊天面板（就地弹出，替代旧的跳全屏方案）。
@@ -371,52 +372,70 @@ class _AiChatPanelState extends State<AiChatPanel> {
                 ),
               ),
 
-            // ── 输入行 ──
+            // ── 输入卡（对标首页：白卡片，输入在上，工具行在下）──
             Padding(
-              padding: const EdgeInsets.fromLTRB(16, 6, 12, 12),
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.end,
-                children: [
-                  Expanded(
-                    child: Container(
-                      decoration: BoxDecoration(
-                        color: scheme.surfaceContainerHighest,
-                        borderRadius: BorderRadius.circular(22),
-                      ),
-                      padding: const EdgeInsets.symmetric(horizontal: 16),
-                      child: TextField(
-                        controller: _ctrl,
-                        focusNode: _focus,
-                        autofocus: true,
-                        minLines: 1,
-                        maxLines: 4,
-                        textInputAction: TextInputAction.send,
-                        onSubmitted: (_) => _send(),
-                        onChanged: (_) => setState(() {}),
-                        style: const TextStyle(fontSize: 16),
-                        decoration: InputDecoration(
-                          hintText: '记一笔，如「午餐 32」',
-                          hintStyle: TextStyle(
-                            fontSize: 16,
-                            color: scheme.onSurfaceVariant.withOpacity(0.55),
-                          ),
-                          border: InputBorder.none,
-                          isDense: true,
-                          contentPadding:
-                              const EdgeInsets.symmetric(vertical: 12),
+              padding: const EdgeInsets.fromLTRB(12, 6, 12, 12),
+              child: Container(
+                padding: const EdgeInsets.fromLTRB(18, 14, 12, 12),
+                decoration: BoxDecoration(
+                  color: scheme.surface,
+                  borderRadius: BorderRadius.circular(28),
+                  border: Border.all(
+                    color: scheme.outlineVariant.withValues(alpha: 0.4),
+                    width: 1,
+                  ),
+                  boxShadow: const [
+                    BoxShadow(
+                      color: Color(0x14000000),
+                      blurRadius: 14,
+                      offset: Offset(0, 2),
+                    ),
+                  ],
+                ),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    TextField(
+                      controller: _ctrl,
+                      focusNode: _focus,
+                      autofocus: true,
+                      minLines: 1,
+                      maxLines: 4,
+                      textInputAction: TextInputAction.send,
+                      onSubmitted: (_) => _send(),
+                      onChanged: (_) => setState(() {}),
+                      style: const TextStyle(fontSize: 17),
+                      decoration: InputDecoration(
+                        hintText: '记一笔，如「午餐 32」',
+                        hintStyle: TextStyle(
+                          fontSize: 17,
+                          color: scheme.onSurfaceVariant.withValues(alpha: 0.55),
                         ),
+                        border: InputBorder.none,
+                        isDense: true,
+                        contentPadding: EdgeInsets.zero,
                       ),
                     ),
-                  ),
-                  const SizedBox(width: 8),
-                  _CircleBtn(icon: Icons.mic, onTap: _onMicTap),
-                  const SizedBox(width: 8),
-                  _CircleBtn(
-                    icon: Icons.arrow_upward,
-                    filled: true,
-                    onTap: (hasText && !_busy) ? () => _send() : null,
-                  ),
-                ],
+                    const SizedBox(height: 12),
+                    Row(
+                      children: [
+                        _CircleBtn(
+                          icon: Icons.add,
+                          onTap: () => showRecordExtrasSheet(context),
+                        ),
+                        const Spacer(),
+                        _CircleBtn(icon: Icons.mic, onTap: _onMicTap),
+                        const SizedBox(width: 8),
+                        _CircleBtn(
+                          icon: Icons.arrow_upward,
+                          filled: true,
+                          onTap: (hasText && !_busy) ? () => _send() : null,
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
               ),
             ),
           ],

@@ -1,10 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:speech_to_text/speech_to_text.dart' as stt;
 
-import '../quick_add/screenshot_entry.dart';
-import '../settings/import_export_view.dart';
 import 'ai_chat_panel.dart';
 import 'manual_add_sheet.dart';
+import 'record_extras_sheet.dart';
 import 'voice_input_sheet.dart';
 
 /// 底部启动器卡片（对标 Claude 输入框）。
@@ -189,7 +188,7 @@ class _RecordInputBarState extends State<RecordInputBar> {
                 children: [
                   _ToolCircleButton(
                     icon: Icons.add,
-                    onTap: () => _showExtrasSheet(),
+                    onTap: () => showRecordExtrasSheet(context),
                   ),
                   const SizedBox(width: 8),
                   _ModePill(
@@ -216,66 +215,6 @@ class _RecordInputBarState extends State<RecordInputBar> {
     );
   }
 
-  void _showExtrasSheet() {
-    showModalBottomSheet<void>(
-      context: context,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-      ),
-      builder: (ctx) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 20, 16, 8),
-              child: Align(
-                alignment: Alignment.centerLeft,
-                child: Text(
-                  '更多功能',
-                  style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                        fontWeight: FontWeight.w600,
-                      ),
-                ),
-              ),
-            ),
-            _ExtrasItem(
-              icon: Icons.image_outlined,
-              label: '支付截图识别',
-              onTap: () {
-                Navigator.pop(ctx);
-                recognizeScreenshotAndEntry(context);
-              },
-            ),
-            _ExtrasItem(
-              icon: Icons.upload_file_outlined,
-              label: '导入账单',
-              onTap: () {
-                Navigator.pop(ctx);
-                Navigator.of(context).push(
-                  MaterialPageRoute<void>(
-                    builder: (_) => const ImportExportView(),
-                  ),
-                );
-              },
-            ),
-            _ExtrasItem(
-              icon: Icons.download_outlined,
-              label: '导出账单',
-              onTap: () {
-                Navigator.pop(ctx);
-                Navigator.of(context).push(
-                  MaterialPageRoute<void>(
-                    builder: (_) => const ImportExportView(),
-                  ),
-                );
-              },
-            ),
-            const SizedBox(height: 16),
-          ],
-        ),
-      ),
-    );
-  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -552,36 +491,3 @@ class _CloseButton extends StatelessWidget {
 // 扩展菜单项
 // ─────────────────────────────────────────────────────────────────────────────
 
-class _ExtrasItem extends StatelessWidget {
-  final IconData icon;
-  final String label;
-  final VoidCallback onTap;
-
-  const _ExtrasItem({
-    required this.icon,
-    required this.label,
-    required this.onTap,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return ListTile(
-      leading: Icon(icon, size: 22),
-      title: Text(label),
-      trailing: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-        decoration: BoxDecoration(
-          color: Theme.of(context).colorScheme.surfaceContainerHighest,
-          borderRadius: BorderRadius.circular(6),
-        ),
-        child: Text(
-          '即将到来',
-          style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                color: Theme.of(context).colorScheme.onSurfaceVariant,
-              ),
-        ),
-      ),
-      onTap: onTap,
-    );
-  }
-}
