@@ -323,7 +323,7 @@ class _AiChatPanelState extends State<AiChatPanel> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            // ── 头部：猫 + 来记一笔吧 + 手动记账 + 关闭 ──
+            // ── 头部：猫 + 来记一笔吧 + 关闭 ──
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 12, 12, 4),
               child: Row(
@@ -337,15 +337,6 @@ class _AiChatPanelState extends State<AiChatPanel> {
                         ),
                   ),
                   const Spacer(),
-                  _Pill(
-                    icon: Icons.swap_horiz,
-                    label: '手动记账',
-                    onTap: () {
-                      Navigator.pop(context);
-                      widget.onSwitchToManual();
-                    },
-                  ),
-                  const SizedBox(width: 8),
                   _CircleBtn(
                     icon: Icons.close,
                     onTap: () => Navigator.pop(context),
@@ -406,13 +397,16 @@ class _AiChatPanelState extends State<AiChatPanel> {
                       onSubmitted: (_) => _send(),
                       onChanged: (_) => setState(() {}),
                       style: const TextStyle(fontSize: 17),
-                      decoration: InputDecoration(
-                        hintText: '记一笔，如「午餐 32」',
-                        hintStyle: TextStyle(
-                          fontSize: 17,
-                          color: scheme.onSurfaceVariant.withValues(alpha: 0.55),
-                        ),
+                      decoration: const InputDecoration(
+                        hintText: '',
+                        // 主题给输入框定义了蓝色聚焦边框，这里逐一关掉，
+                        // 让它跟首页白卡片一样无边框
                         border: InputBorder.none,
+                        enabledBorder: InputBorder.none,
+                        focusedBorder: InputBorder.none,
+                        disabledBorder: InputBorder.none,
+                        errorBorder: InputBorder.none,
+                        focusedErrorBorder: InputBorder.none,
                         isDense: true,
                         contentPadding: EdgeInsets.zero,
                       ),
@@ -423,6 +417,15 @@ class _AiChatPanelState extends State<AiChatPanel> {
                         _CircleBtn(
                           icon: Icons.add,
                           onTap: () => showRecordExtrasSheet(context),
+                        ),
+                        const SizedBox(width: 8),
+                        _Pill(
+                          icon: Icons.swap_horiz,
+                          label: '手动记账',
+                          onTap: () {
+                            Navigator.pop(context);
+                            widget.onSwitchToManual();
+                          },
                         ),
                         const Spacer(),
                         _CircleBtn(icon: Icons.mic, onTap: _onMicTap),

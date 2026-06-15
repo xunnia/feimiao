@@ -76,11 +76,15 @@ class _VoiceInputSheetState extends State<_VoiceInputSheet>
       available = await _speech
           .initialize(
             onError: (e) {
-              // 不因瞬时错误中断已识别的文字；只在没有结果时提示
               if (!mounted) return;
-              if (_recognized.isEmpty) {
-                setState(() => _hint = '没听清，再按住试试');
-              }
+              // 把真实错误码显示出来，便于定位（如 error_no_match /
+              // error_language_not_supported / error_busy 等）。
+              setState(() {
+                _listening = false;
+                _hint = '语音识别失败：${e.errorMsg}'
+                    '${e.permanent ? '（此手机可能缺少语音识别服务）' : '，再按住试试'}';
+              });
+              _pulseCtrl.stop();
             },
             onStatus: (status) {
               if (!mounted) return;

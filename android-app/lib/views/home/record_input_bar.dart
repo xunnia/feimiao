@@ -46,24 +46,6 @@ class _RecordInputBarState extends State<RecordInputBar> {
     if (mounted) setState(() => _speechAvailable = available);
   }
 
-  // ── 模式选择面板 ──────────────────────────────────────────────────────────
-
-  void _showModeSheet() {
-    showModalBottomSheet<void>(
-      context: context,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-      ),
-      builder: (ctx) => _ModeSelectionSheet(
-        isAiMode: _isAiMode,
-        onSelected: (isAi) {
-          Navigator.pop(ctx);
-          setState(() => _isAiMode = isAi);
-        },
-      ),
-    );
-  }
-
   // ── 打开手动大卡片 ─────────────────────────────────────────────────────────
 
   void _openManual() {
@@ -193,7 +175,7 @@ class _RecordInputBarState extends State<RecordInputBar> {
                   const SizedBox(width: 8),
                   _ModePill(
                     isAi: _isAiMode,
-                    onTap: _showModeSheet,
+                    onTap: () => setState(() => _isAiMode = !_isAiMode),
                   ),
                   const Spacer(),
                   _ToolCircleButton(
@@ -215,130 +197,6 @@ class _RecordInputBarState extends State<RecordInputBar> {
     );
   }
 
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// 模式选择面板（对标 Claude 选模型弹层）
-// ─────────────────────────────────────────────────────────────────────────────
-
-class _ModeSelectionSheet extends StatelessWidget {
-  final bool isAiMode;
-  final ValueChanged<bool> onSelected;
-
-  const _ModeSelectionSheet({
-    required this.isAiMode,
-    required this.onSelected,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-
-    return SafeArea(
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            // 顶行：X 关闭 + 标题
-            Row(
-              children: [
-                _CloseButton(onTap: () => Navigator.pop(context)),
-                const SizedBox(width: 12),
-                Text(
-                  '记账方式',
-                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                        fontWeight: FontWeight.w600,
-                      ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 20),
-
-            // 手动记账选项
-            _ModeCard(
-              title: '手动记账',
-              subtitle: '数字键盘，手动记一笔',
-              selected: !isAiMode,
-              scheme: scheme,
-              onTap: () => onSelected(false),
-            ),
-            const SizedBox(height: 10),
-
-            // AI 记账选项
-            _ModeCard(
-              title: 'AI 记账',
-              subtitle: '一句话或语音，智能拆多笔',
-              selected: isAiMode,
-              scheme: scheme,
-              onTap: () => onSelected(true),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _ModeCard extends StatelessWidget {
-  final String title;
-  final String subtitle;
-  final bool selected;
-  final ColorScheme scheme;
-  final VoidCallback onTap;
-
-  const _ModeCard({
-    required this.title,
-    required this.subtitle,
-    required this.selected,
-    required this.scheme,
-    required this.onTap,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Material(
-      color: selected
-          ? scheme.primaryContainer.withOpacity(0.5)
-          : scheme.surfaceContainerHighest,
-      borderRadius: BorderRadius.circular(14),
-      child: InkWell(
-        borderRadius: BorderRadius.circular(14),
-        onTap: onTap,
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-          child: Row(
-            children: [
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      title,
-                      style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                            fontWeight: FontWeight.w600,
-                            color: scheme.onSurface,
-                          ),
-                    ),
-                    const SizedBox(height: 2),
-                    Text(
-                      subtitle,
-                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                            color: scheme.onSurfaceVariant,
-                          ),
-                    ),
-                  ],
-                ),
-              ),
-              if (selected)
-                Icon(Icons.check, size: 20, color: scheme.primary),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -451,43 +309,3 @@ class _ModePill extends StatelessWidget {
     );
   }
 }
-
-// ─────────────────────────────────────────────────────────────────────────────
-// 圆形关闭按钮（透明风格，供 sheet 复用）
-// ─────────────────────────────────────────────────────────────────────────────
-
-class _CloseButton extends StatelessWidget {
-  final VoidCallback onTap;
-
-  const _CloseButton({required this.onTap});
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        width: 36,
-        height: 36,
-        decoration: BoxDecoration(
-          color: scheme.surface,
-          shape: BoxShape.circle,
-          border: Border.all(color: Colors.black.withOpacity(0.06)),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withOpacity(0.06),
-              blurRadius: 6,
-              offset: const Offset(0, 1),
-            ),
-          ],
-        ),
-        child: Icon(Icons.close, size: 18, color: scheme.onSurfaceVariant),
-      ),
-    );
-  }
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// 扩展菜单项
-// ─────────────────────────────────────────────────────────────────────────────
-
