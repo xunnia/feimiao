@@ -65,46 +65,65 @@ class _VoiceInputSheetState extends State<_VoiceInputSheet>
   }
 
   Future<void> _initSpeech() async {
-    final available = await _speech.initialize(
-      onError: (e) {
-        // 不因瞬时错误中断已识别的文字；只在没有结果时提示
-        if (!mounted) return;
-        if (_recognized.isEmpty) {
-          setState(() => _hint = '没听清，再按住试试');
-        }
-      },
-      onStatus: (status) {
-        if (!mounted) return;
-        if (status == stt.SpeechToText.doneStatus ||
-            status == stt.SpeechToText.notListeningStatus) {
-          if (_listening) setState(() => _listening = false);
-          _pulseCtrl.stop();
-        }
-      },
-    );
-    // 选一个中文 locale（zh / cmn / 中文），找不到就用系统默认
-    if (available) {
-      try {
-        final locales = await _speech.locales();
-        final zh = locales.where((l) {
-          final id = l.localeId.toLowerCase();
-          return id.startsWith('zh') ||
-              id.startsWith('cmn') ||
-              l.name.contains('中文') ||
-              l.name.toLowerCase().contains('chinese');
-        }).toList();
-        if (zh.isNotEmpty) {
-          // 优先简体中国大陆
-          final cn = zh.firstWhere(
-            (l) => l.localeId.toLowerCase().contains('cn') ||
-                l.localeId.toLowerCase().contains('hans'),
-            orElse: () => zh.first,
-          );
-          _localeId = cn.localeId;
-        }
-      } catch (_) {/* 用默认 */}
+    // 已经初始化好就直接可用，别重复 initialize（重复调用可能卡住）
+    if (_speech.isAvailable) {
+      if (mounted) setState(() => _speechReady = true);
+      _resolveLocale();
+      return;
     }
+    bool available = false;
+    try {
+      available = await _speech
+          .initialize(
+            onError: (e) {
+              // 不因瞬时错误中断已识别的文字；只在没有结果时提示
+              if (!mounted) return;
+              if (_recognized.isEmpty) {
+                setState(() => _hint = '没听清，再按住试试');
+              }
+            },
+            onStatus: (status) {
+              if (!mounted) return;
+              if (status == stt.SpeechToText.doneStatus ||
+                  status == stt.SpeechToText.notListeningStatus) {
+                if (_listening) setState(() => _listening = false);
+                _pulseCtrl.stop();
+              }
+            },
+          )
+          .timeout(const Duration(seconds: 6), onTimeout: () => false);
+    } catch (_) {
+      available = false;
+    }
+    // initialize 一返回就标记可用，不等 locales（locales 在部分设备会卡住）
     if (mounted) setState(() => _speechReady = available);
+    if (available) _resolveLocale();
+  }
+
+  /// 后台尽力挑一个中文 locale；卡住/失败都不影响录音（用系统默认）。
+  Future<void> _resolveLocale() async {
+    if (_localeId != null) return;
+    try {
+      final locales = await _speech
+          .locales()
+          .timeout(const Duration(seconds: 3), onTimeout: () => []);
+      final zh = locales.where((l) {
+        final id = l.localeId.toLowerCase();
+        return id.startsWith('zh') ||
+            id.startsWith('cmn') ||
+            l.name.contains('中文') ||
+            l.name.toLowerCase().contains('chinese');
+      }).toList();
+      if (zh.isNotEmpty) {
+        final cn = zh.firstWhere(
+          (l) =>
+              l.localeId.toLowerCase().contains('cn') ||
+              l.localeId.toLowerCase().contains('hans'),
+          orElse: () => zh.first,
+        );
+        _localeId = cn.localeId;
+      }
+    } catch (_) {/* 用系统默认 */}
   }
 
   // ── 按下开始（用原始指针事件，按下即响应，不被弹层手势抢占）────────────────────
