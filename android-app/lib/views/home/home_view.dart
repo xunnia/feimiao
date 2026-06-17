@@ -58,13 +58,6 @@ class HomeView extends StatelessWidget {
     final transactions = repo.transactions;
     final sections = _groupByDay(transactions);
 
-    // 展平为 [日期头, 交易, 交易, 日期头, ...]，单条 SliverList 渲染
-    final flatItems = <Object>[];
-    for (final s in sections) {
-      flatItems.add(s);
-      flatItems.addAll(s.items);
-    }
-
     const double expandedHeight = 256.0;
     const double minExtent = kToolbarHeight;
 
@@ -127,36 +120,35 @@ class HomeView extends StatelessWidget {
           ),
         ),
 
-        // ── 全量交易明细：日期头 + 当天列表（普通滚动，不吸顶）────────────────
+        // ── 全量交易明细：日期头吸顶（每天一组，只钉当前一天，滑到下天替换）──
         if (transactions.isEmpty)
           SliverFillRemaining(
             hasScrollBody: false,
             child: _EmptyState(),
           )
-        else
-          SliverList(
-            delegate: SliverChildBuilderDelegate(
-              (context, index) {
-                // 末尾留白项，避免最后一行被悬浮输入栏遮住
-                if (index >= flatItems.length) {
-                  return const SizedBox(height: 96);
-                }
-                final item = flatItems[index];
-                if (item is _DaySection) {
-                  return _DaySectionHeader(section: item);
-                } else if (item is TransactionEntity) {
-                  return _DismissibleRow(
-                    transaction: item,
-                    onDelete: () => repo.deleteTransaction(item.id),
-                  );
-                }
-                return const SizedBox.shrink();
-              },
-              // 末尾追加一个底部留白项，避免最后一行被悬浮输入栏遮住
-              childCount: flatItems.length + 1,
-              addAutomaticKeepAlives: false,
+        else ...[
+          for (final s in sections)
+            SliverMainAxisGroup(
+              slivers: [
+                SliverPersistentHeader(
+                  pinned: true,
+                  delegate: _DayHeaderDelegate(section: s),
+                ),
+                SliverList(
+                  delegate: SliverChildBuilderDelegate(
+                    (context, index) => _DismissibleRow(
+                      transaction: s.items[index],
+                      onDelete: () =>
+                          repo.deleteTransaction(s.items[index].id),
+                    ),
+                    childCount: s.items.length,
+                  ),
+                ),
+              ],
             ),
-          ),
+          // 底部留白，避免最后一行被悬浮输入栏遮住
+          const SliverToBoxAdapter(child: SizedBox(height: 96)),
+        ],
       ],
     );
   }
@@ -596,6 +588,32 @@ class _DaySection {
   final DateTime day;
   final List<TransactionEntity> items;
   const _DaySection({required this.day, required this.items});
+}
+
+/// 吸顶日期头委托：放进 SliverMainAxisGroup 后，只在本组（当天）范围内钉顶，
+/// 滑到下一天时被下一组的头顶替——即「只钉一个、随滑动切换」（学咔皮）。
+class _DayHeaderDelegate extends SliverPersistentHeaderDelegate {
+  final _DaySection section;
+  _DayHeaderDelegate({required this.section});
+
+  static const double _height = 44;
+
+  @override
+  double get minExtent => _height;
+
+  @override
+  double get maxExtent => _height;
+
+  @override
+  Widget build(
+      BuildContext context, double shrinkOffset, bool overlapsContent) {
+    return _DaySectionHeader(section: section);
+  }
+
+  @override
+  bool shouldRebuild(covariant _DayHeaderDelegate old) =>
+      old.section.day != section.day ||
+      old.section.items.length != section.items.length;
 }
 
 
