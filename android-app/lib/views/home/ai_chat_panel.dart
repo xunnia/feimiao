@@ -177,6 +177,10 @@ class _AiChatPanelState extends State<AiChatPanel> {
       _msgs.removeWhere((m) => m is _ThinkingMsg);
       if (results.isEmpty) {
         _msgs.add(_InfoMsg('喵没看懂这句，换个说法试试？', error: true));
+      } else if (!results
+          .any((e) => e.amount != null && e.amount! > Decimal.zero)) {
+        // 认出了内容但没金额 → 追问，而不是弹一张存不了的死卡
+        _msgs.add(_InfoMsg('喵没认出金额～再说一句金额吧，比如「奶茶 18」'));
       } else {
         if (hint != null) _msgs.add(_InfoMsg(hint));
         _msgs.add(_RecordMsg(entries: results, cats: cats));
@@ -257,6 +261,7 @@ class _AiChatPanelState extends State<AiChatPanel> {
       return;
     }
     final before = repo.transactions.map((t) => t.id).toSet();
+    int savedCount = 0;
     for (int i = 0; i < msg.entries.length; i++) {
       final e = msg.entries[i];
       final amt = e.amount;
@@ -269,6 +274,11 @@ class _AiChatPanelState extends State<AiChatPanel> {
         note: e.note,
         date: e.date,
       );
+      savedCount++;
+    }
+    if (savedCount == 0) {
+      _snack('这几笔没认出金额，先补上金额再存～');
+      return;
     }
     final after = repo.transactions.map((t) => t.id).toSet();
     if (!mounted) return;
