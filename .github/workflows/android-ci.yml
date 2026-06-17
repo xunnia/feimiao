@@ -50,14 +50,6 @@ jobs:
           cp android-app/ci/compileSdk36.init.gradle "$HOME/.gradle/init.d/compileSdk36.gradle"
           echo ">> installed compileSdk36 init script"
 
-      - name: 下载并打包字体（思源黑体 Noto Sans SC，干净专业、中文全覆盖）
-        working-directory: android-app
-        run: |
-          mkdir -p assets/fonts
-          curl -fsSL -o assets/fonts/NotoSansSC.ttf \
-            "https://github.com/google/fonts/raw/main/ofl/notosanssc/NotoSansSC%5Bwght%5D.ttf"
-          ls -lh assets/fonts/NotoSansSC.ttf
-
       - name: 拉取依赖
         working-directory: android-app
         run: flutter pub get
