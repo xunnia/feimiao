@@ -92,6 +92,8 @@ class AppTheme {
       colorScheme: cs,
       scaffoldBackgroundColor: Colors.white,
       useMaterial3: true,
+      // 全局字体：思源黑体（干净专业，替代各机型默认回退字体）
+      fontFamily: 'NotoSansSC',
       // AppBar 全白、无 tint、无滚动浮起阴影，与正文背景无缝
       appBarTheme: const AppBarTheme(
         backgroundColor: Colors.white,
@@ -154,6 +156,8 @@ class AppTheme {
     return ThemeData(
       colorScheme: cs,
       useMaterial3: true,
+      // 全局字体：思源黑体
+      fontFamily: 'NotoSansSC',
       cardTheme: CardThemeData(
         elevation: 1,
         shape: RoundedRectangleBorder(
