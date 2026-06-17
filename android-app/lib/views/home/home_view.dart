@@ -193,17 +193,12 @@ class _ExpandedSummaryCard extends StatelessWidget {
               // ── 顶部行：月份 + 统计按钮 + 吉祥物 ──
               Row(
                 children: [
-                  // 月份点击（暂 SnackBar）
+                  // 月份点击 → 打开统计页（那里有完整的月份切换）
                   GestureDetector(
-                    onTap: () => ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(
-                        content: const Text('切换月份开发中'),
-                        duration: const Duration(milliseconds: 1800),
-                        behavior: SnackBarBehavior.floating,
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(10),
-                        ),
-                        margin: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+                    onTap: () => Navigator.push<void>(
+                      context,
+                      MaterialPageRoute<void>(
+                        builder: (_) => const StatisticsView(),
                       ),
                     ),
                     child: Row(
