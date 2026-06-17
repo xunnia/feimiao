@@ -127,6 +127,8 @@ class HomeView extends StatelessWidget {
             child: _EmptyState(),
           )
         else ...[
+          // 洞察小条：本月最大支出（轻量一条，点进统计）
+          SliverToBoxAdapter(child: _InsightStrip(summary: summary)),
           for (final s in sections)
             SliverMainAxisGroup(
               slivers: [
@@ -330,6 +332,75 @@ class _ExpandedSummaryCard extends StatelessWidget {
                 budget: budget,
                 isOverspend: isOverspend,
               ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 洞察小条：本月最大支出
+// ---------------------------------------------------------------------------
+
+class _InsightStrip extends StatelessWidget {
+  final MonthlySummary summary;
+
+  const _InsightStrip({required this.summary});
+
+  @override
+  Widget build(BuildContext context) {
+    if (summary.expenseByCategory.isEmpty) return const SizedBox.shrink();
+    final top = summary.expenseByCategory
+        .reduce((a, b) => a.total >= b.total ? a : b);
+    final scheme = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 2, 16, 6),
+      child: GestureDetector(
+        onTap: () => Navigator.push<void>(
+          context,
+          MaterialPageRoute<void>(builder: (_) => const StatisticsView()),
+        ),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          decoration: BoxDecoration(
+            color: scheme.surfaceContainerLow,
+            borderRadius: BorderRadius.circular(AppRadius.md),
+          ),
+          child: Row(
+            children: [
+              Icon(Icons.local_fire_department_outlined,
+                  size: 16, color: AppColors.warning),
+              const SizedBox(width: 6),
+              Text(
+                '本月最大支出',
+                style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                      color: AppTextColor.hint(scheme),
+                    ),
+              ),
+              const SizedBox(width: 8),
+              Flexible(
+                child: Text(
+                  top.name,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                        fontWeight: AppWeight.title,
+                        color: AppTextColor.primary(scheme),
+                      ),
+                ),
+              ),
+              const Spacer(),
+              Text(
+                '¥${MoneyFormat.string(top.total)} · ${(top.share * 100).round()}%',
+                style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                      color: AppTextColor.secondary(scheme),
+                      // ignore: deprecated_member_use
+                      fontFeatures: const [FontFeature.tabularFigures()],
+                    ),
+              ),
+              Icon(Icons.chevron_right, size: 16, color: scheme.outline),
             ],
           ),
         ),
