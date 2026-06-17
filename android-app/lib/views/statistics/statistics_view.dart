@@ -116,6 +116,13 @@ class _MonthlyContent extends StatelessWidget {
       year: displayedMonth.year,
       month: displayedMonth.month,
     );
+    // 上月汇总（用于环比）
+    final prevMonth = DateTime(displayedMonth.year, displayedMonth.month - 1);
+    final prevSummary = StatisticsEngine.monthlySummary(
+      records,
+      year: prevMonth.year,
+      month: prevMonth.month,
+    );
 
     // 单笔支出排行：本月支出按金额降序取前 5
     final topExpenses = records
@@ -140,6 +147,7 @@ class _MonthlyContent extends StatelessWidget {
 
         // 支出 / 收入 / 结余卡
         _TotalsRow(summary: summary),
+        _MoMComparison(current: summary, previous: prevSummary),
         const SizedBox(height: 16),
 
         // 预算进度（有预算且是当月时）
@@ -306,6 +314,41 @@ class _MonthSwitcher extends StatelessWidget {
 // ---------------------------------------------------------------------------
 // 收支结余三卡
 // ---------------------------------------------------------------------------
+
+/// 环比：本月支出相对上月的涨跌（上月无支出则不显示）。
+class _MoMComparison extends StatelessWidget {
+  final MonthlySummary current;
+  final MonthlySummary previous;
+
+  const _MoMComparison({required this.current, required this.previous});
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final prev = previous.totalExpense.toDouble();
+    if (prev <= 0) return const SizedBox.shrink();
+    final cur = current.totalExpense.toDouble();
+    final pct = (cur - prev) / prev * 100;
+    final up = pct >= 0;
+    final color = up ? AppColors.warning : scheme.primary;
+    return Padding(
+      padding: const EdgeInsets.only(top: 8),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(up ? Icons.trending_up : Icons.trending_down,
+              size: 15, color: color),
+          const SizedBox(width: 4),
+          Text(
+            '本月支出较上月 ${up ? '+' : '-'}${pct.abs().toStringAsFixed(0)}%',
+            style:
+                Theme.of(context).textTheme.labelMedium?.copyWith(color: color),
+          ),
+        ],
+      ),
+    );
+  }
+}
 
 class _TotalsRow extends StatelessWidget {
   final MonthlySummary summary;
