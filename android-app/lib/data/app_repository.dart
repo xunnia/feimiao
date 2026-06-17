@@ -755,6 +755,28 @@ class AppRepository extends ChangeNotifier {
   List<CategoryEntity> categoriesForKind(TransactionKind kind) =>
       _categories.where((c) => c.kind == kind).toList();
 
+  /// 按使用频次排序的分类：常用的冒到前排，同频次保持原种子序。
+  /// 用于记账分类格 —— 减少翻找，默认也预选最常用的那个。
+  List<CategoryEntity> categoriesForKindRanked(TransactionKind kind) {
+    final cats = categoriesForKind(kind);
+    final counts = <int, int>{};
+    for (final t in _transactions) {
+      final cid = t.categoryId;
+      if (cid == null || t.txKind != kind) continue;
+      counts[cid] = (counts[cid] ?? 0) + 1;
+    }
+    // 稳定排序：按 (频次降序, 原序升序)
+    final indexed = [
+      for (var i = 0; i < cats.length; i++) (i, cats[i]),
+    ];
+    indexed.sort((a, b) {
+      final ca = counts[a.$2.id] ?? 0;
+      final cb = counts[b.$2.id] ?? 0;
+      return ca != cb ? cb.compareTo(ca) : a.$1.compareTo(b.$1);
+    });
+    return [for (final e in indexed) e.$2];
+  }
+
   /// 返回所有交易转换为 core 的 [TransactionRecord]（用于统计引擎）。
   List<TransactionRecord> get allRecords =>
       _transactions.map((t) => t.toRecord()).toList();

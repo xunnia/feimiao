@@ -179,14 +179,17 @@ class _AppDrawerState extends State<_AppDrawer> {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 8),
       child: ListTile(
-        leading: Text(b.icon, style: const TextStyle(fontSize: 20)),
-        horizontalTitleGap: 12,
+        dense: true,
+        visualDensity: const VisualDensity(vertical: -2),
+        minLeadingWidth: 0,
+        leading: Text(b.icon, style: const TextStyle(fontSize: 19)),
+        horizontalTitleGap: 10,
         title: Text(
           b.name,
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
-          style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                fontWeight: selected ? FontWeight.w600 : FontWeight.w500,
+          style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
                 color: selected ? scheme.primary : scheme.onSurface,
               ),
         ),
@@ -417,22 +420,22 @@ class _AppDrawerState extends State<_AppDrawer> {
                       borderRadius: BorderRadius.circular(10),
                       child: Padding(
                         padding: const EdgeInsets.symmetric(
-                            horizontal: 16, vertical: 10),
+                            horizontal: 18, vertical: 7),
                         child: Row(
                           children: [
                             Icon(
                               Icons.more_horiz,
-                              size: 22,
+                              size: 21,
                               color: scheme.onSurfaceVariant,
                             ),
-                            const SizedBox(width: 12),
+                            const SizedBox(width: 10),
                             Text(
                               '更多',
                               style: Theme.of(context)
                                   .textTheme
                                   .bodyMedium
                                   ?.copyWith(
-                                    fontWeight: FontWeight.w500,
+                                    fontWeight: FontWeight.w400,
                                     color: scheme.onSurfaceVariant,
                                   ),
                             ),
@@ -559,18 +562,22 @@ class _DrawerItem extends StatelessWidget {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 8),
       child: ListTile(
-        leading: Icon(icon, size: 24, color: scheme.onSurfaceVariant),
-        horizontalTitleGap: 12,
+        dense: true,
+        visualDensity: const VisualDensity(vertical: -2),
+        minLeadingWidth: 0,
+        leading: Icon(icon, size: 21, color: scheme.onSurfaceVariant),
+        horizontalTitleGap: 10,
         title: Text(
           label,
-          style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                fontWeight: FontWeight.w500,
+          style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                fontWeight: FontWeight.w400,
+                color: scheme.onSurface,
               ),
         ),
         onTap: onTap,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
         contentPadding: EdgeInsets.symmetric(
-            horizontal: indent ? 24 : 12, vertical: 4),
+            horizontal: indent ? 22 : 12, vertical: 0),
       ),
     );
   }

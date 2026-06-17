@@ -54,7 +54,7 @@ class _ManualAddSheetState extends State<ManualAddSheet> {
     final repo = context.read<AppRepository>();
     setState(() {
       _selectedAccountId ??= repo.accounts.firstOrNull?.id;
-      final cats = repo.categoriesForKind(_kind);
+      final cats = repo.categoriesForKindRanked(_kind);
       _selectedCategoryId ??= cats.firstOrNull?.id;
     });
   }
@@ -63,7 +63,7 @@ class _ManualAddSheetState extends State<ManualAddSheet> {
     final repo = context.read<AppRepository>();
     setState(() {
       _kind = kind;
-      final cats = repo.categoriesForKind(kind);
+      final cats = repo.categoriesForKindRanked(kind);
       _selectedCategoryId = cats.firstOrNull?.id;
     });
   }
@@ -164,7 +164,7 @@ class _ManualAddSheetState extends State<ManualAddSheet> {
         Expanded(
           child: Consumer<AppRepository>(
             builder: (context, repo, _) {
-              final cats = repo.categoriesForKind(_kind);
+              final cats = repo.categoriesForKindRanked(_kind);
               return SingleChildScrollView(
                 child: CategoryGrid(
                   categories: cats,
