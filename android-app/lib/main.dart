@@ -66,11 +66,12 @@ class RootShell extends StatelessWidget {
         title: Builder(
           builder: (innerCtx) => Row(
             children: [
-              // 左上角：对齐 iOS Claude 的横线菜单图标，打开 Drawer
-              IconButton(
-                icon: const Icon(Icons.menu),
-                onPressed: () => Scaffold.of(innerCtx).openDrawer(),
-                tooltip: '打开菜单',
+              // 左上角：对齐 iOS Claude —— 圆形浅底按钮 + 长短不一的横线
+              Padding(
+                padding: const EdgeInsets.only(left: 8, right: 4),
+                child: _MenuGlyphButton(
+                  onTap: () => Scaffold.of(innerCtx).openDrawer(),
+                ),
               ),
               // 长条搜索栏，占满剩余宽度
               Expanded(
@@ -535,6 +536,47 @@ class _AppDrawerState extends State<_AppDrawer> {
                 ),
               ),
             ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// 顶栏菜单按钮：圆形浅底 + 两条长短不一的圆角横线（对标 iOS Claude）。
+class _MenuGlyphButton extends StatelessWidget {
+  final VoidCallback onTap;
+  const _MenuGlyphButton({required this.onTap});
+
+  Widget _bar(ColorScheme scheme, double w) => Container(
+        width: w,
+        height: 2,
+        decoration: BoxDecoration(
+          color: scheme.onSurfaceVariant,
+          borderRadius: BorderRadius.circular(1),
+        ),
+      );
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return InkWell(
+      onTap: onTap,
+      customBorder: const CircleBorder(),
+      child: Container(
+        width: 38,
+        height: 38,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          color: scheme.surfaceContainerHighest.withValues(alpha: 0.7),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            _bar(scheme, 15),
+            const SizedBox(height: 5),
+            _bar(scheme, 10),
           ],
         ),
       ),
