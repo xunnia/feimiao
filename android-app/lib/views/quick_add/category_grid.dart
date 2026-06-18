@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../../core/models/category_seed.dart';
+import '../../core/models/fluent_icon.dart';
 import '../../data/app_repository.dart';
 
 /// 子类横排：点大类后展示其子类 chip（手动卡与编辑页共用）。
@@ -47,8 +48,7 @@ class SubcategoryRow extends StatelessWidget {
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Text(CategorySeed.emojiOf(c.key),
-                        style: const TextStyle(fontSize: 14)),
+                    CategoryIcon(CategorySeed.emojiOf(c.key), size: 16),
                     const SizedBox(width: 4),
                     Text(
                       c.nameZh,
@@ -159,7 +159,7 @@ class _CategoryItem extends StatelessWidget {
               color: isSelected ? scheme.primary : scheme.surfaceContainerHighest,
             ),
             child: Center(
-              child: Text(_emoji, style: const TextStyle(fontSize: 24)),
+              child: CategoryIcon(_emoji, size: 26),
             ),
           ),
           const SizedBox(height: 4),
