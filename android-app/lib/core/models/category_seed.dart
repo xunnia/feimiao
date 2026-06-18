@@ -9,8 +9,11 @@ class CategorySeed {
   final String nameZh;
   final String nameEn;
 
-  /// Material Icons 图标。
+  /// Material Icons 图标（自定义分类图标选择器仍用）。
   final IconData icon;
+
+  /// 分类 emoji：彩色图标渲染用；也是 Fluent 3D 图标下载不到时的兜底。
+  final String emoji;
   final TransactionKind kind;
 
   const CategorySeed({
@@ -18,6 +21,7 @@ class CategorySeed {
     required this.nameZh,
     required this.nameEn,
     required this.icon,
+    required this.emoji,
     required this.kind,
   });
 
@@ -63,29 +67,29 @@ class CategorySeed {
   // plus.circle       -> Icons.add_circle
 
   static const List<CategorySeed> expenses = [
-    CategorySeed(key: 'dining', nameZh: '餐饮', nameEn: 'Dining', icon: Icons.restaurant, kind: TransactionKind.expense),
-    CategorySeed(key: 'groceries', nameZh: '买菜超市', nameEn: 'Groceries', icon: Icons.shopping_cart, kind: TransactionKind.expense),
-    CategorySeed(key: 'transport', nameZh: '交通', nameEn: 'Transport', icon: Icons.directions_bus, kind: TransactionKind.expense),
-    CategorySeed(key: 'shopping', nameZh: '购物', nameEn: 'Shopping', icon: Icons.shopping_bag, kind: TransactionKind.expense),
-    CategorySeed(key: 'entertainment', nameZh: '娱乐', nameEn: 'Entertainment', icon: Icons.sports_esports, kind: TransactionKind.expense),
-    CategorySeed(key: 'housing', nameZh: '住房', nameEn: 'Housing', icon: Icons.home, kind: TransactionKind.expense),
-    CategorySeed(key: 'utilities', nameZh: '水电网', nameEn: 'Utilities', icon: Icons.bolt, kind: TransactionKind.expense),
-    CategorySeed(key: 'medical', nameZh: '医疗', nameEn: 'Medical', icon: Icons.medical_services, kind: TransactionKind.expense),
-    CategorySeed(key: 'education', nameZh: '学习', nameEn: 'Education', icon: Icons.menu_book, kind: TransactionKind.expense),
-    CategorySeed(key: 'travel', nameZh: '旅行', nameEn: 'Travel', icon: Icons.flight, kind: TransactionKind.expense),
-    CategorySeed(key: 'pets', nameZh: '宠物', nameEn: 'Pets', icon: Icons.pets, kind: TransactionKind.expense),
-    CategorySeed(key: 'gifts', nameZh: '人情', nameEn: 'Gifts', icon: Icons.card_giftcard, kind: TransactionKind.expense),
-    CategorySeed(key: 'subscription', nameZh: '订阅', nameEn: 'Subscriptions', icon: Icons.autorenew, kind: TransactionKind.expense),
-    CategorySeed(key: 'other', nameZh: '其他', nameEn: 'Other', icon: Icons.more_horiz, kind: TransactionKind.expense),
+    CategorySeed(key: 'dining', nameZh: '餐饮', nameEn: 'Dining', icon: Icons.restaurant, emoji: '🍜', kind: TransactionKind.expense),
+    CategorySeed(key: 'groceries', nameZh: '买菜超市', nameEn: 'Groceries', icon: Icons.shopping_cart, emoji: '🛒', kind: TransactionKind.expense),
+    CategorySeed(key: 'transport', nameZh: '交通', nameEn: 'Transport', icon: Icons.directions_bus, emoji: '🚌', kind: TransactionKind.expense),
+    CategorySeed(key: 'shopping', nameZh: '购物', nameEn: 'Shopping', icon: Icons.shopping_bag, emoji: '🛍️', kind: TransactionKind.expense),
+    CategorySeed(key: 'entertainment', nameZh: '娱乐', nameEn: 'Entertainment', icon: Icons.sports_esports, emoji: '🎮', kind: TransactionKind.expense),
+    CategorySeed(key: 'housing', nameZh: '住房', nameEn: 'Housing', icon: Icons.home, emoji: '🏠', kind: TransactionKind.expense),
+    CategorySeed(key: 'utilities', nameZh: '水电网', nameEn: 'Utilities', icon: Icons.bolt, emoji: '💡', kind: TransactionKind.expense),
+    CategorySeed(key: 'medical', nameZh: '医疗', nameEn: 'Medical', icon: Icons.medical_services, emoji: '💊', kind: TransactionKind.expense),
+    CategorySeed(key: 'education', nameZh: '学习', nameEn: 'Education', icon: Icons.menu_book, emoji: '📚', kind: TransactionKind.expense),
+    CategorySeed(key: 'travel', nameZh: '旅行', nameEn: 'Travel', icon: Icons.flight, emoji: '✈️', kind: TransactionKind.expense),
+    CategorySeed(key: 'pets', nameZh: '宠物', nameEn: 'Pets', icon: Icons.pets, emoji: '🐾', kind: TransactionKind.expense),
+    CategorySeed(key: 'gifts', nameZh: '人情', nameEn: 'Gifts', icon: Icons.card_giftcard, emoji: '🎁', kind: TransactionKind.expense),
+    CategorySeed(key: 'subscription', nameZh: '订阅', nameEn: 'Subscriptions', icon: Icons.autorenew, emoji: '🔄', kind: TransactionKind.expense),
+    CategorySeed(key: 'other', nameZh: '其他', nameEn: 'Other', icon: Icons.more_horiz, emoji: '📦', kind: TransactionKind.expense),
   ];
 
   static const List<CategorySeed> incomes = [
-    CategorySeed(key: 'salary', nameZh: '工资', nameEn: 'Salary', icon: Icons.payments, kind: TransactionKind.income),
-    CategorySeed(key: 'bonus', nameZh: '奖金', nameEn: 'Bonus', icon: Icons.star, kind: TransactionKind.income),
-    CategorySeed(key: 'investment', nameZh: '理财', nameEn: 'Investment', icon: Icons.trending_up, kind: TransactionKind.income),
-    CategorySeed(key: 'redPacket', nameZh: '红包', nameEn: 'Red Packet', icon: Icons.mail, kind: TransactionKind.income),
-    CategorySeed(key: 'refund', nameZh: '退款', nameEn: 'Refund', icon: Icons.undo, kind: TransactionKind.income),
-    CategorySeed(key: 'otherIncome', nameZh: '其他', nameEn: 'Other', icon: Icons.add_circle, kind: TransactionKind.income),
+    CategorySeed(key: 'salary', nameZh: '工资', nameEn: 'Salary', icon: Icons.payments, emoji: '💰', kind: TransactionKind.income),
+    CategorySeed(key: 'bonus', nameZh: '奖金', nameEn: 'Bonus', icon: Icons.star, emoji: '🏆', kind: TransactionKind.income),
+    CategorySeed(key: 'investment', nameZh: '理财', nameEn: 'Investment', icon: Icons.trending_up, emoji: '📈', kind: TransactionKind.income),
+    CategorySeed(key: 'redPacket', nameZh: '红包', nameEn: 'Red Packet', icon: Icons.mail, emoji: '🧧', kind: TransactionKind.income),
+    CategorySeed(key: 'refund', nameZh: '退款', nameEn: 'Refund', icon: Icons.undo, emoji: '↩️', kind: TransactionKind.income),
+    CategorySeed(key: 'otherIncome', nameZh: '其他', nameEn: 'Other', icon: Icons.add_circle, emoji: '💵', kind: TransactionKind.income),
   ];
 
   static List<CategorySeed> get all => [...expenses, ...incomes];

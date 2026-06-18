@@ -69,10 +69,10 @@ class _CategoryItem extends StatelessWidget {
     required this.onTap,
   });
 
-  IconData get _icon {
-    // 通过 CategorySeed 查找对应图标
+  String get _emoji {
+    // 通过 CategorySeed 查找对应 emoji（找不到给个标签兜底）
     final seed = CategorySeed.all.where((s) => s.key == category.key).firstOrNull;
-    return seed?.icon ?? Icons.label_outline;
+    return seed?.emoji ?? '🏷️';
   }
 
   @override
@@ -91,10 +91,8 @@ class _CategoryItem extends StatelessWidget {
               shape: BoxShape.circle,
               color: isSelected ? scheme.primary : scheme.surfaceContainerHighest,
             ),
-            child: Icon(
-              _icon,
-              size: 22,
-              color: isSelected ? scheme.onPrimary : scheme.onSurfaceVariant,
+            child: Center(
+              child: Text(_emoji, style: const TextStyle(fontSize: 24)),
             ),
           ),
           const SizedBox(height: 4),

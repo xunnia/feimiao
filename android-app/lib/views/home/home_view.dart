@@ -829,14 +829,14 @@ class _TransactionRow extends StatelessWidget {
 
   const _TransactionRow({required this.transaction});
 
-  IconData get _icon {
+  String get _emoji {
     if (transaction.txKind == TransactionKind.transfer) {
-      return Icons.swap_horiz;
+      return '🔁';
     }
     final seed = CategorySeed.all
         .where((s) => s.key == transaction.categoryKey)
         .firstOrNull;
-    return seed?.icon ?? Icons.label_outline;
+    return seed?.emoji ?? '🏷️';
   }
 
   String get _title {
@@ -889,7 +889,9 @@ class _TransactionRow extends StatelessWidget {
               shape: BoxShape.circle,
               color: scheme.surfaceContainerHighest,
             ),
-            child: Icon(_icon, size: 19, color: scheme.onSurfaceVariant),
+            child: Center(
+              child: Text(_emoji, style: const TextStyle(fontSize: 20)),
+            ),
           ),
           const SizedBox(width: AppSpacing.md),
           // 分类（主）+ 备注/对方（最弱灰小字）
