@@ -168,6 +168,12 @@ class _AiChatPanelState extends State<AiChatPanel> {
     final cats = results.map((e) => _matchCat(repo, e)).toList();
 
     if (!mounted) return;
+    // 高置信(每笔>=0.9且金额有效) → 直接入库 + 撤销；否则弹确认卡
+    final highConfidence = hint == null &&
+        results.length <= 5 &&
+        results.every((e) =>
+            e.amount != null && e.amount! > Decimal.zero && e.confidence >= 0.9);
+    _RecordMsg? autoMsg;
     setState(() {
       _msgs.removeWhere((m) => m is _ThinkingMsg);
       if (results.isEmpty) {
@@ -178,10 +184,17 @@ class _AiChatPanelState extends State<AiChatPanel> {
         _msgs.add(_InfoMsg('喵没认出金额～再说一句金额吧，比如「奶茶 18」'));
       } else {
         if (hint != null) _msgs.add(_InfoMsg(hint));
-        _msgs.add(_RecordMsg(entries: results, cats: cats));
+        final msg = _RecordMsg(entries: results, cats: cats);
+        _msgs.add(msg);
+        if (highConfidence) autoMsg = msg;
       }
       _busy = false;
     });
+    // 高置信：自动保存（卡片随即进入已存/可撤销态）
+    if (autoMsg != null) {
+      await _save(autoMsg!);
+      if (mounted) _snack('喵直接记好了，不对就点卡片上的撤销');
+    }
     _scrollToBottom();
   }
 

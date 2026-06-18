@@ -52,8 +52,8 @@ class LlmEntryParser {
     final systemPrompt = '''你是记账助手。把用户的一句话拆成一笔或多笔账目，只输出JSON对象，不要任何解释和Markdown。
 今天是 $todayStr。
 可用分类(key:名称)——支出：$expenseList；收入：$incomeList。
-输出格式：{"entries":[{"amount":数字,"kind":"expense或income","categoryKey":"从上面列表选最匹配的key，拿不准支出用other、收入用otherIncome","date":"YYYY-MM-DD","note":"简短备注"}]}
-规则：句子里有多笔就拆成多条；amount是纯数字(元)，不含货币符号；相对日期(今天/昨天/前天/大前天/上周等)换算成具体日期，没提日期用今天；分清收支(工资/红包/退款/报销等是收入，其余多为支出)。''';
+输出格式：{"entries":[{"amount":数字,"kind":"expense或income","categoryKey":"从上面列表选最匹配的key，拿不准支出用other、收入用otherIncome","date":"YYYY-MM-DD","note":"简短备注","confidence":0到1的小数}]}
+规则：句子里有多笔就拆成多条；amount是纯数字(元)，不含货币符号；相对日期(今天/昨天/前天/大前天/上周等)换算成具体日期，没提日期用今天；分清收支(工资/红包/退款/报销等是收入，其余多为支出)；confidence表示你对这笔解析(金额/分类/收支)的把握，信息齐全明确给0.95以上，含糊或猜的给0.6以下。''';
 
     final requestBody = jsonEncode({
       'model': _model,
@@ -163,12 +163,21 @@ class LlmEntryParser {
       date = fallbackDate;
     }
 
+    // confidence（缺省 0.7 → 走确认卡，安全兜底）
+    final rawConf = raw['confidence'];
+    final confidence = switch (rawConf) {
+      num n => n.toDouble().clamp(0.0, 1.0),
+      String s => (double.tryParse(s) ?? 0.7).clamp(0.0, 1.0),
+      _ => 0.7,
+    };
+
     return ParsedEntry(
       amount: amount,
       kind: kind,
       categoryKey: categoryKey,
       note: note,
       date: date,
+      confidence: confidence,
     );
   }
 }

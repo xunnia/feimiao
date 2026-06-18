@@ -11,12 +11,17 @@ class ParsedEntry {
   final String note;
   final DateTime date;
 
+  /// 解析置信度 0~1：高(>=0.9)可自动入库，中等需确认，低需补全。
+  /// 本地规则解析默认较低（0.55），云端 LLM 按返回值。
+  final double confidence;
+
   const ParsedEntry({
     required this.amount,
     required this.kind,
     required this.categoryKey,
     required this.note,
     required this.date,
+    this.confidence = 0.7,
   });
 
   @override
@@ -27,11 +32,12 @@ class ParsedEntry {
           kind == other.kind &&
           categoryKey == other.categoryKey &&
           note == other.note &&
-          date == other.date;
+          date == other.date &&
+          confidence == other.confidence;
 
   @override
   int get hashCode =>
-      Object.hash(amount, kind, categoryKey, note, date);
+      Object.hash(amount, kind, categoryKey, note, date, confidence);
 }
 
 /// 本地规则版「一句话记账」解析器：
@@ -54,6 +60,7 @@ class NaturalLanguageEntryParser {
       categoryKey: _detectCategory(trimmed, kind: kind),
       note: trimmed,
       date: _detectDate(trimmed, now: now),
+      confidence: 0.55, // 本地规则不够确定，始终走确认
     );
   }
 
