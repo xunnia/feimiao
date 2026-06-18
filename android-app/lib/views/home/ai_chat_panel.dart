@@ -13,12 +13,10 @@ import '../../core/money_format.dart';
 import '../../data/app_repository.dart';
 import '../../widgets/mascot.dart';
 import 'record_extras_sheet.dart';
-import 'voice_input_sheet.dart';
 
 /// 打开「来记一笔吧」AI 聊天面板（就地弹出，替代旧的跳全屏方案）。
 Future<void> showAiChatPanel(
   BuildContext context, {
-  required bool speechAvailable,
   required VoidCallback onSwitchToManual,
   String? initialText,
 }) {
@@ -31,7 +29,6 @@ Future<void> showAiChatPanel(
       borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
     ),
     builder: (_) => AiChatPanel(
-      speechAvailable: speechAvailable,
       onSwitchToManual: onSwitchToManual,
       initialText: initialText,
     ),
@@ -39,17 +36,15 @@ Future<void> showAiChatPanel(
 }
 
 /// 「来记一笔吧」聊天面板：一句话 → AI 解析 → 记账确认卡（可保存/撤销）。
-/// M3a：记账聊天 + 保存/撤销。查账问答 / 语音校对 / 流式 留 M3b。
+/// 语音用键盘自带听写打到输入框即可，不再内置录音识别。
 class AiChatPanel extends StatefulWidget {
-  final bool speechAvailable;
   final VoidCallback onSwitchToManual;
 
-  /// 预填到输入框的文字（如语音识别结果），不自动发送，供校对再发。
+  /// 预填到输入框的文字，不自动发送，供校对再发。
   final String? initialText;
 
   const AiChatPanel({
     super.key,
-    required this.speechAvailable,
     required this.onSwitchToManual,
     this.initialText,
   });
@@ -301,22 +296,6 @@ class _AiChatPanelState extends State<AiChatPanel> {
     });
   }
 
-  Future<void> _onMicTap() async {
-    if (!widget.speechAvailable) {
-      _snack('该设备不支持语音识别');
-      return;
-    }
-    _focus.unfocus();
-    // 语音识别完成后回填到输入框，让用户校对再发（不直接发送）
-    final text = await showVoiceInputSheet(context);
-    if (!mounted) return;
-    if (text != null && text.trim().isNotEmpty) {
-      setState(() => _ctrl.text = text.trim());
-      _ctrl.selection = TextSelection.collapsed(offset: _ctrl.text.length);
-      _focus.requestFocus();
-    }
-  }
-
   // ── build ───────────────────────────────────────────────────────────────
   @override
   Widget build(BuildContext context) {
@@ -438,8 +417,6 @@ class _AiChatPanelState extends State<AiChatPanel> {
                           },
                         ),
                         const Spacer(),
-                        _CircleBtn(icon: Icons.mic, onTap: _onMicTap),
-                        const SizedBox(width: 8),
                         _CircleBtn(
                           icon: Icons.arrow_upward,
                           filled: true,

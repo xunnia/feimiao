@@ -1,20 +1,17 @@
 import 'package:flutter/material.dart';
-import 'package:speech_to_text/speech_to_text.dart' as stt;
 
 import 'ai_chat_panel.dart';
 import 'manual_add_sheet.dart';
 import 'record_extras_sheet.dart';
-import 'voice_input_sheet.dart';
 
 /// 底部启动器卡片（对标 Claude 输入框）。
 ///
 /// 样式：scheme.surface 白底 + 轻阴影 + 极浅边框，圆角 28。
-/// 工具行：[+]  [模式胶囊 ▾]  …  [话筒]  [发送↑]
+/// 工具行：[+]  [模式胶囊 ▾]  …  [发送↑]
 ///
 /// 点击分流：
 ///   手动模式 → ManualAddSheet（模态大卡片）
-///   AI 模式  → AiFocusedInputSheet（贴键盘聚焦输入卡片）
-///   话筒（任意模式）→ AiFocusedInputSheet 并立即开始录音
+///   AI 模式  → AiChatPanel（贴键盘聚焦输入卡片，语音用键盘自带听写）
 class RecordInputBar extends StatefulWidget {
   const RecordInputBar({super.key});
 
@@ -24,27 +21,6 @@ class RecordInputBar extends StatefulWidget {
 
 class _RecordInputBarState extends State<RecordInputBar> {
   bool _isAiMode = false;
-
-  // ── 语音（仅用于话筒按钮 → 传参给 AiFocusedInputSheet）──
-  final stt.SpeechToText _speech = stt.SpeechToText();
-  bool _speechAvailable = false;
-
-  @override
-  void initState() {
-    super.initState();
-    _initSpeech();
-  }
-
-  @override
-  void dispose() {
-    _speech.stop();
-    super.dispose();
-  }
-
-  Future<void> _initSpeech() async {
-    final available = await _speech.initialize(onError: (_) {});
-    if (mounted) setState(() => _speechAvailable = available);
-  }
 
   // ── 打开手动大卡片 ─────────────────────────────────────────────────────────
 
@@ -74,29 +50,8 @@ class _RecordInputBarState extends State<RecordInputBar> {
     setState(() => _isAiMode = true);
     showAiChatPanel(
       context,
-      speechAvailable: _speechAvailable,
       onSwitchToManual: _openManual,
     );
-  }
-
-  // ── 话筒 ──────────────────────────────────────────────────────────────────
-
-  Future<void> _onMicTap() async {
-    if (!_speechAvailable) {
-      _showSnack('该设备不支持语音识别');
-      return;
-    }
-    // 语音识别完成 → 把文字带进 AI 聊天面板，校对再发
-    final text = await showVoiceInputSheet(context);
-    if (!mounted) return;
-    if (text != null && text.trim().isNotEmpty) {
-      showAiChatPanel(
-        context,
-        speechAvailable: _speechAvailable,
-        onSwitchToManual: _openManual,
-        initialText: text.trim(),
-      );
-    }
   }
 
   // ── 发送 / 点击输入区 ─────────────────────────────────────────────────────
@@ -107,18 +62,6 @@ class _RecordInputBarState extends State<RecordInputBar> {
     } else {
       _openManual();
     }
-  }
-
-  void _showSnack(String msg) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(msg),
-        duration: const Duration(milliseconds: 1800),
-        behavior: SnackBarBehavior.floating,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-        margin: const EdgeInsets.fromLTRB(16, 0, 16, 12),
-      ),
-    );
   }
 
   // ── build ─────────────────────────────────────────────────────────────────
@@ -182,11 +125,6 @@ class _RecordInputBarState extends State<RecordInputBar> {
                     onTap: () => setState(() => _isAiMode = !_isAiMode),
                   ),
                   const Spacer(),
-                  _ToolCircleButton(
-                    icon: Icons.mic,
-                    onTap: _onMicTap,
-                  ),
-                  const SizedBox(width: 8),
                   _ToolCircleButton(
                     icon: Icons.arrow_upward,
                     filled: true,
