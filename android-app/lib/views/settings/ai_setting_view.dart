@@ -135,7 +135,7 @@ class _AiSettingViewState extends State<AiSettingView> {
                   borderRadius: BorderRadius.circular(12),
                 ),
                 filled: true,
-                fillColor: scheme.surfaceContainerHighest.withOpacity(0.5),
+                fillColor: scheme.surfaceContainerHighest.withValues(alpha: 0.5),
                 suffixIcon: IconButton(
                   icon: Icon(
                     _obscure
@@ -186,7 +186,7 @@ class _AiSettingViewState extends State<AiSettingView> {
                   label: const Text('清除 API Key'),
                   style: OutlinedButton.styleFrom(
                     foregroundColor: scheme.error,
-                    side: BorderSide(color: scheme.error.withOpacity(0.5)),
+                    side: BorderSide(color: scheme.error.withValues(alpha: 0.5)),
                   ),
                   onPressed: () async {
                     _keyCtrl.clear();

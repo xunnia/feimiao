@@ -138,7 +138,7 @@ class _RecordInputBarState extends State<RecordInputBar> {
             color: scheme.surface,
             borderRadius: BorderRadius.circular(28),
             border: Border.all(
-              color: scheme.outlineVariant.withOpacity(0.4),
+              color: scheme.outlineVariant.withValues(alpha: 0.4),
               width: 1,
             ),
             boxShadow: const [
@@ -162,7 +162,7 @@ class _RecordInputBarState extends State<RecordInputBar> {
                     '记一记',
                     style: TextStyle(
                       fontSize: 17,
-                      color: scheme.onSurfaceVariant.withOpacity(0.55),
+                      color: scheme.onSurfaceVariant.withValues(alpha: 0.55),
                     ),
                   ),
                 ),
@@ -249,10 +249,10 @@ class _ToolCircleButton extends StatelessWidget {
         decoration: BoxDecoration(
           color: scheme.surface,
           shape: BoxShape.circle,
-          border: Border.all(color: Colors.black.withOpacity(0.06)),
+          border: Border.all(color: Colors.black.withValues(alpha: 0.06)),
           boxShadow: [
             BoxShadow(
-              color: Colors.black.withOpacity(0.06),
+              color: Colors.black.withValues(alpha: 0.06),
               blurRadius: 6,
               offset: const Offset(0, 1),
             ),
@@ -285,10 +285,10 @@ class _ModePill extends StatelessWidget {
         decoration: BoxDecoration(
           color: scheme.surface,
           borderRadius: BorderRadius.circular(18),
-          border: Border.all(color: Colors.black.withOpacity(0.06)),
+          border: Border.all(color: Colors.black.withValues(alpha: 0.06)),
           boxShadow: [
             BoxShadow(
-              color: Colors.black.withOpacity(0.06),
+              color: Colors.black.withValues(alpha: 0.06),
               blurRadius: 6,
               offset: const Offset(0, 1),
             ),

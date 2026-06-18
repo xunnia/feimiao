@@ -189,7 +189,7 @@ class _MeowAssistantViewState extends State<MeowAssistantView> {
                       decoration: BoxDecoration(
                         color: sendEnabled
                             ? scheme.secondary
-                            : scheme.onSurface.withOpacity(0.12),
+                            : scheme.onSurface.withValues(alpha: 0.12),
                         shape: BoxShape.circle,
                       ),
                       child: Icon(
@@ -197,7 +197,7 @@ class _MeowAssistantViewState extends State<MeowAssistantView> {
                         size: 20,
                         color: sendEnabled
                             ? scheme.onSecondary
-                            : scheme.onSurface.withOpacity(0.38),
+                            : scheme.onSurface.withValues(alpha: 0.38),
                       ),
                     ),
                   ),

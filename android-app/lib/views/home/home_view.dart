@@ -961,7 +961,7 @@ class _EmptyState extends StatelessWidget {
         Text(
           '在下方输入框记第一笔吧',
           style: Theme.of(context).textTheme.labelMedium?.copyWith(
-                color: scheme.onSurfaceVariant.withOpacity(0.6),
+                color: scheme.onSurfaceVariant.withValues(alpha: 0.6),
               ),
         ),
       ],

@@ -287,7 +287,7 @@ class _AiQuickEntryViewState extends State<AiQuickEntryView> {
                     borderRadius: BorderRadius.circular(12),
                   ),
                   filled: true,
-                  fillColor: scheme.surfaceContainerHighest.withOpacity(0.5),
+                  fillColor: scheme.surfaceContainerHighest.withValues(alpha: 0.5),
                 ),
                 onChanged: (_) {
                   if (_entries != null) {
@@ -325,7 +325,7 @@ class _AiQuickEntryViewState extends State<AiQuickEntryView> {
                   padding: const EdgeInsets.symmetric(
                       horizontal: 12, vertical: 8),
                   decoration: BoxDecoration(
-                    color: scheme.errorContainer.withOpacity(0.5),
+                    color: scheme.errorContainer.withValues(alpha: 0.5),
                     borderRadius: BorderRadius.circular(8),
                   ),
                   child: Row(
@@ -472,7 +472,7 @@ class _EntryCard extends StatelessWidget {
                   padding: const EdgeInsets.symmetric(
                       horizontal: 8, vertical: 2),
                   decoration: BoxDecoration(
-                    color: kindColor.withOpacity(0.12),
+                    color: kindColor.withValues(alpha: 0.12),
                     borderRadius: BorderRadius.circular(6),
                   ),
                   child: Text(

@@ -64,13 +64,13 @@ class Mascot extends StatelessWidget {
 
     // 背景色：用 secondary（金）或 tertiary（粉）的浅色调
     final bgColor = switch (mood) {
-      MascotMood.idle => kCatBlueGray.withOpacity(0.12),
-      MascotMood.success => kCatGold.withOpacity(0.18),
-      MascotMood.overspend => kOverspendOrange.withOpacity(0.15),
-      MascotMood.celebrate => kCatPink.withOpacity(0.18),
-      MascotMood.empty => scheme.surfaceContainerHighest.withOpacity(0.5),
-      MascotMood.thinking => kCatBlueGray.withOpacity(0.10),
-      MascotMood.report => kCatGold.withOpacity(0.12),
+      MascotMood.idle => kCatBlueGray.withValues(alpha: 0.12),
+      MascotMood.success => kCatGold.withValues(alpha: 0.18),
+      MascotMood.overspend => kOverspendOrange.withValues(alpha: 0.15),
+      MascotMood.celebrate => kCatPink.withValues(alpha: 0.18),
+      MascotMood.empty => scheme.surfaceContainerHighest.withValues(alpha: 0.5),
+      MascotMood.thinking => kCatBlueGray.withValues(alpha: 0.10),
+      MascotMood.report => kCatGold.withValues(alpha: 0.12),
     };
 
     final emoji = switch (mood) {

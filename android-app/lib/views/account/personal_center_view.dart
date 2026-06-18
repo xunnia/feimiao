@@ -120,7 +120,7 @@ class PersonalCenterView extends StatelessWidget {
             child: Text(
               'v0.2 · 轻记 QingJi',
               style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                    color: scheme.onSurfaceVariant.withOpacity(0.5),
+                    color: scheme.onSurfaceVariant.withValues(alpha: 0.5),
                   ),
             ),
           ),
@@ -179,7 +179,7 @@ class _SettingsTile extends StatelessWidget {
       trailing: Icon(
         Icons.chevron_right,
         size: 18,
-        color: scheme.onSurfaceVariant.withOpacity(0.5),
+        color: scheme.onSurfaceVariant.withValues(alpha: 0.5),
       ),
       onTap: onTap,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),

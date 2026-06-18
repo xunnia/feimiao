@@ -790,7 +790,7 @@ class _EntryRow extends StatelessWidget {
     return Column(
       children: [
         if (showDivider)
-          Divider(height: 16, color: scheme.outlineVariant.withOpacity(0.6)),
+          Divider(height: 16, color: scheme.outlineVariant.withValues(alpha: 0.6)),
         Row(
           children: [
             Expanded(
@@ -912,10 +912,10 @@ class _Pill extends StatelessWidget {
         decoration: BoxDecoration(
           color: scheme.surface,
           borderRadius: BorderRadius.circular(17),
-          border: Border.all(color: Colors.black.withOpacity(0.06)),
+          border: Border.all(color: Colors.black.withValues(alpha: 0.06)),
           boxShadow: [
             BoxShadow(
-              color: Colors.black.withOpacity(0.06),
+              color: Colors.black.withValues(alpha: 0.06),
               blurRadius: 6,
               offset: const Offset(0, 1),
             ),
@@ -952,13 +952,13 @@ class _CircleBtn extends StatelessWidget {
           width: 40,
           height: 40,
           decoration: BoxDecoration(
-            color: active ? scheme.secondary : scheme.onSurface.withOpacity(0.12),
+            color: active ? scheme.secondary : scheme.onSurface.withValues(alpha: 0.12),
             shape: BoxShape.circle,
           ),
           child: Icon(icon,
               size: 20,
               color:
-                  active ? scheme.onSecondary : scheme.onSurface.withOpacity(0.38)),
+                  active ? scheme.onSecondary : scheme.onSurface.withValues(alpha: 0.38)),
         ),
       );
     }
@@ -970,10 +970,10 @@ class _CircleBtn extends StatelessWidget {
         decoration: BoxDecoration(
           color: scheme.surface,
           shape: BoxShape.circle,
-          border: Border.all(color: Colors.black.withOpacity(0.06)),
+          border: Border.all(color: Colors.black.withValues(alpha: 0.06)),
           boxShadow: [
             BoxShadow(
-              color: Colors.black.withOpacity(0.06),
+              color: Colors.black.withValues(alpha: 0.06),
               blurRadius: 6,
               offset: const Offset(0, 1),
             ),

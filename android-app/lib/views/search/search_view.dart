@@ -69,7 +69,7 @@ class _SearchViewState extends State<SearchView> {
                   itemCount: results.length,
                   separatorBuilder: (_, __) => Divider(
                     height: 1,
-                    color: scheme.outlineVariant.withOpacity(0.4),
+                    color: scheme.outlineVariant.withValues(alpha: 0.4),
                   ),
                   itemBuilder: (_, i) => _row(context, results[i], scheme),
                 ),

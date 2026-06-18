@@ -388,8 +388,8 @@ class _TodayAllowanceBanner extends StatelessWidget {
     final scheme = Theme.of(context).colorScheme;
     final isOver = status.todayAllowance < Decimal.zero;
     final bgColor = isOver
-        ? AppColors.warning.withOpacity( 0.12)
-        : scheme.primaryContainer.withOpacity( 0.5);
+        ? AppColors.warning.withValues(alpha:  0.12)
+        : scheme.primaryContainer.withValues(alpha:  0.5);
     final textColor = isOver ? AppColors.warning : scheme.onSurfaceVariant;
 
     final allowanceText = isOver

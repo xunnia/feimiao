@@ -92,7 +92,7 @@ class RootShell extends StatelessWidget {
                         color: Theme.of(innerCtx)
                             .colorScheme
                             .outlineVariant
-                            .withOpacity(0.5),
+                            .withValues(alpha: 0.5),
                       ),
                     ),
                     child: Row(
@@ -103,7 +103,7 @@ class RootShell extends StatelessWidget {
                           color: Theme.of(innerCtx)
                               .colorScheme
                               .onSurfaceVariant
-                              .withOpacity(0.55),
+                              .withValues(alpha: 0.55),
                         ),
                         const SizedBox(width: 6),
                         Text(
@@ -113,7 +113,7 @@ class RootShell extends StatelessWidget {
                             color: Theme.of(innerCtx)
                                 .colorScheme
                                 .onSurfaceVariant
-                                .withOpacity(0.55),
+                                .withValues(alpha: 0.55),
                           ),
                         ),
                       ],

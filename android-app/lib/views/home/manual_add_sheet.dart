@@ -442,8 +442,8 @@ class _TodayAllowanceBanner extends StatelessWidget {
     final scheme = Theme.of(context).colorScheme;
     final isOver = status.todayAllowance < Decimal.zero;
     final bgColor = isOver
-        ? AppColors.warning.withOpacity(0.12)
-        : scheme.primaryContainer.withOpacity(0.5);
+        ? AppColors.warning.withValues(alpha: 0.12)
+        : scheme.primaryContainer.withValues(alpha: 0.5);
     final textColor = isOver ? AppColors.warning : scheme.onSurfaceVariant;
 
     final allowanceText = isOver
@@ -490,10 +490,10 @@ class _ToolCircleButton extends StatelessWidget {
         decoration: BoxDecoration(
           color: scheme.surface,
           shape: BoxShape.circle,
-          border: Border.all(color: Colors.black.withOpacity(0.06)),
+          border: Border.all(color: Colors.black.withValues(alpha: 0.06)),
           boxShadow: [
             BoxShadow(
-              color: Colors.black.withOpacity(0.06),
+              color: Colors.black.withValues(alpha: 0.06),
               blurRadius: 6,
               offset: const Offset(0, 1),
             ),
@@ -526,10 +526,10 @@ class _ModePill extends StatelessWidget {
         decoration: BoxDecoration(
           color: scheme.surface,
           borderRadius: BorderRadius.circular(18),
-          border: Border.all(color: Colors.black.withOpacity(0.06)),
+          border: Border.all(color: Colors.black.withValues(alpha: 0.06)),
           boxShadow: [
             BoxShadow(
-              color: Colors.black.withOpacity(0.06),
+              color: Colors.black.withValues(alpha: 0.06),
               blurRadius: 6,
               offset: const Offset(0, 1),
             ),
