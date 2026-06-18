@@ -59,7 +59,11 @@ class CategoryEntity {
   final String nameEn;
   final String kindRaw;
 
+  /// 所属大类 id；null 表示自身就是大类（顶级）。
+  final int? parentId;
+
   TransactionKind get kind => TransactionKind.fromJson(kindRaw);
+  bool get isTopLevel => parentId == null;
 
   const CategoryEntity({
     required this.id,
@@ -67,6 +71,7 @@ class CategoryEntity {
     required this.nameZh,
     required this.nameEn,
     required this.kindRaw,
+    this.parentId,
   });
 
   String localizedName(String languageCode) =>
@@ -78,6 +83,7 @@ class CategoryEntity {
         'name_zh': nameZh,
         'name_en': nameEn,
         'kind': kindRaw,
+        'parent_id': parentId,
       };
 
   factory CategoryEntity.fromMap(Map<String, Object?> m) => CategoryEntity(
@@ -86,6 +92,7 @@ class CategoryEntity {
         nameZh: m['name_zh'] as String,
         nameEn: m['name_en'] as String,
         kindRaw: m['kind'] as String,
+        parentId: m['parent_id'] as int?,
       );
 }
 
@@ -261,7 +268,7 @@ class TagEntity {
 ///
 /// 继承 [ChangeNotifier]，UI 通过 [provider] 订阅变化。
 class AppRepository extends ChangeNotifier {
-  static const _dbVersion = 5;
+  static const _dbVersion = 6;
   static const _dbName = 'qingji.db';
 
   Database? _db;
@@ -343,11 +350,12 @@ class AppRepository extends ChangeNotifier {
 
     await db.execute('''
       CREATE TABLE categories (
-        id      INTEGER PRIMARY KEY AUTOINCREMENT,
-        key     TEXT NOT NULL UNIQUE,
-        name_zh TEXT NOT NULL,
-        name_en TEXT NOT NULL,
-        kind    TEXT NOT NULL
+        id        INTEGER PRIMARY KEY AUTOINCREMENT,
+        key       TEXT NOT NULL UNIQUE,
+        name_zh   TEXT NOT NULL,
+        name_en   TEXT NOT NULL,
+        kind      TEXT NOT NULL,
+        parent_id INTEGER
       )
     ''');
 
@@ -486,6 +494,58 @@ class AppRepository extends ChangeNotifier {
         // 列已存在则忽略
       }
     }
+    if (oldVersion < 6) {
+      // 二级分类：加 parent_id 列，并把分类升级成两级树。
+      // 纯增量 + 幂等：只新增/改名/挂父级，绝不删分类、绝不动 transactions。
+      // 整体 try-catch 兜底：即便出错也不致 DB 打不开（最坏子类不全，账目无损）。
+      try {
+        try {
+          await db.execute(
+              'ALTER TABLE categories ADD COLUMN parent_id INTEGER');
+        } catch (_) {
+          // 列已存在则忽略
+        }
+        await _applyCategoryTree(db);
+      } catch (_) {
+        // 迁移失败也不阻断 App 启动
+      }
+    }
+  }
+
+  /// 幂等地把两级分类树写入/更新到 categories 表（建库与升级共用）。
+  /// 按 key 定位：缺则插入、有则回填名称与 parent_id；从不删除、从不改 id。
+  Future<void> _applyCategoryTree(DatabaseExecutor db) async {
+    // 1) 确保每个分类存在（key 唯一，冲突忽略）
+    for (final s in CategorySeed.all) {
+      await db.insert(
+        'categories',
+        {
+          'key': s.key,
+          'name_zh': s.nameZh,
+          'name_en': s.nameEn,
+          'kind': s.kind.toJson(),
+        },
+        conflictAlgorithm: ConflictAlgorithm.ignore,
+      );
+    }
+    // 2) 回填名称 + parent_id（按 parentKey 查父级 id）
+    for (final s in CategorySeed.all) {
+      int? parentId;
+      if (s.parentKey != null) {
+        parentId = Sqflite.firstIntValue(await db.rawQuery(
+            'SELECT id FROM categories WHERE key = ? LIMIT 1', [s.parentKey]));
+      }
+      await db.update(
+        'categories',
+        {
+          'name_zh': s.nameZh,
+          'name_en': s.nameEn,
+          'parent_id': parentId,
+        },
+        where: 'key = ?',
+        whereArgs: [s.key],
+      );
+    }
   }
 
   /// 首次启动写入默认账户和分类种子数据。
@@ -498,17 +558,8 @@ class AppRepository extends ChangeNotifier {
     // 默认账户：现金
     await db.insert('accounts', {'name': '现金', 'currency_code': 'CNY'});
 
-    // 默认分类种子
-    final batch = db.batch();
-    for (final seed in CategorySeed.all) {
-      batch.insert('categories', {
-        'key': seed.key,
-        'name_zh': seed.nameZh,
-        'name_en': seed.nameEn,
-        'kind': seed.kind.toJson(),
-      });
-    }
-    await batch.commit(noResult: true);
+    // 默认分类种子（两级树）
+    await _applyCategoryTree(db);
   }
 
   Future<void> _loadAll() async {
@@ -757,25 +808,36 @@ class AppRepository extends ChangeNotifier {
 
   /// 按使用频次排序的分类：常用的冒到前排，同频次保持原种子序。
   /// 用于记账分类格 —— 减少翻找，默认也预选最常用的那个。
+  /// 仅返回顶级大类，按使用频次排序（子类用量计入其父级）。
   List<CategoryEntity> categoriesForKindRanked(TransactionKind kind) {
-    final cats = categoriesForKind(kind);
+    final all = categoriesForKind(kind);
+    final tops = all.where((c) => c.isTopLevel).toList();
     final counts = <int, int>{};
     for (final t in _transactions) {
       final cid = t.categoryId;
       if (cid == null || t.txKind != kind) continue;
       counts[cid] = (counts[cid] ?? 0) + 1;
     }
-    // 稳定排序：按 (频次降序, 原序升序)
-    final indexed = [
-      for (var i = 0; i < cats.length; i++) (i, cats[i]),
-    ];
+    // 子类用量滚动到父级，让常用大类冒前
+    final rolled = <int, int>{};
+    for (final c in all) {
+      final n = counts[c.id] ?? 0;
+      if (n == 0) continue;
+      final top = c.isTopLevel ? c.id : (c.parentId ?? c.id);
+      rolled[top] = (rolled[top] ?? 0) + n;
+    }
+    final indexed = [for (var i = 0; i < tops.length; i++) (i, tops[i])];
     indexed.sort((a, b) {
-      final ca = counts[a.$2.id] ?? 0;
-      final cb = counts[b.$2.id] ?? 0;
+      final ca = rolled[a.$2.id] ?? 0;
+      final cb = rolled[b.$2.id] ?? 0;
       return ca != cb ? cb.compareTo(ca) : a.$1.compareTo(b.$1);
     });
     return [for (final e in indexed) e.$2];
   }
+
+  /// 某大类下的子类（按加载顺序）。
+  List<CategoryEntity> childrenOf(int parentId) =>
+      _categories.where((c) => c.parentId == parentId).toList();
 
   /// 返回所有交易转换为 core 的 [TransactionRecord]（用于统计引擎）。
   List<TransactionRecord> get allRecords =>
