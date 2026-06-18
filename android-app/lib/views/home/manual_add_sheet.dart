@@ -14,10 +14,11 @@ import '../quick_add/category_grid.dart';
 
 /// 手动记账大卡片（模态底部弹出）。
 ///
-/// 用 showModalBottomSheet(isScrollControlled: true) 全高弹出。
-/// 顶部拖动条 + 支出/收入分段 + "AI助手"胶囊 + X 关闭。
-/// 主体复用 CategoryGrid + _AmountDisplay + AmountKeypad。
-/// 保存后自动关闭（Navigator.pop）。
+/// 布局（M40 改版，参考咔皮，更顺手）：
+///   顶部：轻量文字 tab（支出/收入）+ 手动记账胶囊 + X
+///   中部：分类区（大类网格 + ▼ + 点开展开子类网格卡片）
+///   下部：标签 → 今日可花 → 「金额+账户+日期+备注」成组卡片 → 数字键盘
+/// 把金额贴到键盘上方，敲数字时视线集中。
 class ManualAddSheet extends StatefulWidget {
   /// 点击"AI助手"时的回调（由调用方切换到 AiFocusedInputSheet）。
   final VoidCallback onSwitchToAi;
@@ -31,8 +32,8 @@ class ManualAddSheet extends StatefulWidget {
 class _ManualAddSheetState extends State<ManualAddSheet> {
   TransactionKind _kind = TransactionKind.expense;
   final AmountExpression _expression = AmountExpression();
-  int? _selectedCategoryId;
-  int? _activeParentId; // 当前展开的大类（用于显示其子类）
+  int? _selectedCategoryId; // 最终记账的分类（大类或子类）
+  int? _activeParentId; // 当前展开子类面板的大类；null=未展开
   int? _selectedAccountId;
   DateTime _date = DateTime.now();
   final TextEditingController _noteController = TextEditingController();
@@ -57,17 +58,18 @@ class _ManualAddSheetState extends State<ManualAddSheet> {
       _selectedAccountId ??= repo.accounts.firstOrNull?.id;
       final cats = repo.categoriesForKindRanked(_kind);
       _selectedCategoryId ??= cats.firstOrNull?.id;
-      _activeParentId ??= _selectedCategoryId;
+      // 默认不展开子类面板，保持清爽（学咔皮）
     });
   }
 
   void _onKindChanged(TransactionKind kind) {
+    if (kind == _kind) return;
     final repo = context.read<AppRepository>();
     setState(() {
       _kind = kind;
       final cats = repo.categoriesForKindRanked(kind);
       _selectedCategoryId = cats.firstOrNull?.id;
-      _activeParentId = _selectedCategoryId;
+      _activeParentId = null;
     });
   }
 
@@ -106,127 +108,212 @@ class _ManualAddSheetState extends State<ManualAddSheet> {
       height: maxH.clamp(300.0, screenH * 0.92),
       child: Column(
         children: [
-        // ── 顶部拖动条 ──
-        const _DragHandle(),
+          // ── 顶部拖动条 ──
+          const _DragHandle(),
 
-        // ── 顶部栏：分段 + AI助手胶囊 + 关闭 ──
-        Padding(
-          padding: const EdgeInsets.fromLTRB(16, 8, 12, 0),
-          child: Row(
-            children: [
-              // 支出 / 收入
-              Expanded(
-                child: SegmentedButton<TransactionKind>(
-                  segments: const [
-                    ButtonSegment(
-                        value: TransactionKind.expense, label: Text('支出')),
-                    ButtonSegment(
-                        value: TransactionKind.income, label: Text('收入')),
-                  ],
-                  selected: {_kind},
-                  onSelectionChanged: (s) => _onKindChanged(s.first),
+          // ── 顶部栏：文字 tab + AI助手胶囊 + 关闭 ──
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 6, 12, 0),
+            child: Row(
+              children: [
+                Expanded(
+                  child: _KindTabs(
+                    selected: _kind,
+                    onChanged: _onKindChanged,
+                  ),
                 ),
-              ),
-              const SizedBox(width: 8),
-
-              // 模式胶囊：显示当前模式（手动），点一下切到 AI
-              _ModePill(
-                label: '手动记账',
-                onTap: widget.onSwitchToAi,
-              ),
-              const SizedBox(width: 8),
-
-              // 关闭
-              _ToolCircleButton(
-                icon: Icons.close,
-                onTap: () => Navigator.pop(context),
-              ),
-            ],
-          ),
-        ),
-
-        // ── 金额显示 ──
-        _AmountDisplay(
-            expression: _expression, version: _expressionVersion),
-
-        // ── 今日可花横幅（支出时按需显示）──
-        if (_kind == TransactionKind.expense)
-          Consumer<AppRepository>(
-            builder: (context, repo, _) {
-              final budget = repo.monthlyBudget;
-              if (budget == null) return const SizedBox.shrink();
-              final status = BudgetEngine.status(
-                monthlyBudget: budget,
-                records: repo.allRecords,
-              );
-              return _TodayAllowanceBanner(status: status);
-            },
+                const SizedBox(width: 8),
+                _ModePill(label: '手动记账', onTap: widget.onSwitchToAi),
+                const SizedBox(width: 8),
+                _ToolCircleButton(
+                  icon: Icons.close,
+                  onTap: () => Navigator.pop(context),
+                ),
+              ],
+            ),
           ),
 
-        // ── 分类格（Expanded 撑满剩余空间）──
-        Expanded(
-          child: Consumer<AppRepository>(
-            builder: (context, repo, _) {
-              final cats = repo.categoriesForKindRanked(_kind);
-              final children = _activeParentId == null
-                  ? const <CategoryEntity>[]
-                  : repo.childrenOf(_activeParentId!);
-              return SingleChildScrollView(
+          // ── 分类区（Expanded 撑满剩余空间）──
+          Expanded(
+            child: Consumer<AppRepository>(
+              builder: (context, repo, _) {
+                final scheme = Theme.of(context).colorScheme;
+                final cats = repo.categoriesForKindRanked(_kind);
+                final expandable = <int>{
+                  for (final c in cats)
+                    if (repo.childrenOf(c.id).isNotEmpty) c.id
+                };
+                final children = _activeParentId == null
+                    ? const <CategoryEntity>[]
+                    : repo.childrenOf(_activeParentId!);
+                int? parentHighlight = _activeParentId;
+                if (parentHighlight == null &&
+                    _selectedCategoryId != null &&
+                    cats.any((c) => c.id == _selectedCategoryId)) {
+                  parentHighlight = _selectedCategoryId;
+                }
+                return SingleChildScrollView(
+                  child: Column(
+                    children: [
+                      const SizedBox(height: 4),
+                      CategoryGrid(
+                        categories: cats,
+                        selectedId: parentHighlight,
+                        expandableIds: expandable,
+                        expandedId: _activeParentId,
+                        onSelected: (cat) => setState(() {
+                          final hasKids = expandable.contains(cat.id);
+                          _activeParentId =
+                              (hasKids && _activeParentId != cat.id)
+                                  ? cat.id
+                                  : null;
+                          _selectedCategoryId = cat.id;
+                        }),
+                      ),
+                      if (children.isNotEmpty)
+                        Container(
+                          margin: const EdgeInsets.fromLTRB(12, 2, 12, 10),
+                          padding: const EdgeInsets.symmetric(vertical: 6),
+                          decoration: BoxDecoration(
+                            color: scheme.surfaceContainerHighest
+                                .withValues(alpha: 0.45),
+                            borderRadius: BorderRadius.circular(18),
+                          ),
+                          child: CategoryGrid(
+                            categories: children,
+                            selectedId: _selectedCategoryId,
+                            onSelected: (c) => setState(
+                                () => _selectedCategoryId = c.id),
+                          ),
+                        ),
+                    ],
+                  ),
+                );
+              },
+            ),
+          ),
+
+          // ── 标签选择 ──
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 2, 16, 2),
+            child: TagSelector(
+              selectedIds: _tagIds,
+              onChanged: (v) => setState(() => _tagIds = v),
+            ),
+          ),
+
+          // ── 今日可花横幅（支出时按需显示）──
+          if (_kind == TransactionKind.expense)
+            Consumer<AppRepository>(
+              builder: (context, repo, _) {
+                final budget = repo.monthlyBudget;
+                if (budget == null) return const SizedBox.shrink();
+                final status = BudgetEngine.status(
+                  monthlyBudget: budget,
+                  records: repo.allRecords,
+                );
+                return _TodayAllowanceBanner(status: status);
+              },
+            ),
+
+          // ── 金额 + 账户/日期/备注 成组卡片（贴在键盘上方）──
+          Builder(
+            builder: (context) {
+              final scheme = Theme.of(context).colorScheme;
+              return Container(
+                margin: const EdgeInsets.fromLTRB(12, 2, 12, 4),
+                decoration: BoxDecoration(
+                  color: scheme.surfaceContainerHigh.withValues(alpha: 0.4),
+                  borderRadius: BorderRadius.circular(16),
+                ),
                 child: Column(
                   children: [
-                    // 大类网格：选中=当前展开的大类
-                    CategoryGrid(
-                      categories: cats,
-                      selectedId: _activeParentId,
-                      onSelected: (cat) => setState(() {
-                        _activeParentId = cat.id;
-                        _selectedCategoryId = cat.id; // 不选子类则记到大类
-                      }),
+                    _AmountDisplay(
+                        expression: _expression, version: _expressionVersion),
+                    _DetailBar(
+                      accounts: context.watch<AppRepository>().accounts,
+                      selectedAccountId: _selectedAccountId,
+                      date: _date,
+                      noteController: _noteController,
+                      onAccountChanged: (id) =>
+                          setState(() => _selectedAccountId = id),
+                      onDateChanged: (d) => setState(() => _date = d),
                     ),
-                    // 子类横排（选了大类且其有子类时出现）
-                    if (children.isNotEmpty)
-                      SubcategoryRow(
-                        children: children,
-                        selectedId: _selectedCategoryId,
-                        onSelected: (c) =>
-                            setState(() => _selectedCategoryId = c.id),
-                      ),
                   ],
                 ),
               );
             },
           ),
-        ),
 
-        // ── 标签选择 ──
-        Padding(
-          padding: const EdgeInsets.fromLTRB(16, 4, 16, 4),
-          child: TagSelector(
-            selectedIds: _tagIds,
-            onChanged: (v) => setState(() => _tagIds = v),
+          // ── 数字键盘 ──
+          Padding(
+            padding: const EdgeInsets.only(bottom: 16, top: 2),
+            child: AmountKeypad(
+              expression: _expression,
+              onExpressionChanged: _onExpressionChanged,
+              onSave: _save,
+            ),
           ),
-        ),
+        ],
+      ),
+    );
+  }
+}
 
-        // ── 账户 + 日期 + 备注 ──
-        _DetailBar(
-          accounts: context.watch<AppRepository>().accounts,
-          selectedAccountId: _selectedAccountId,
-          date: _date,
-          noteController: _noteController,
-          onAccountChanged: (id) => setState(() => _selectedAccountId = id),
-          onDateChanged: (d) => setState(() => _date = d),
-        ),
+// ─────────────────────────────────────────────────────────────────────────────
+// 顶部 kind 文字 tab（支出 / 收入），选中变主色 + 短下划线（学咔皮，轻量）
+// ─────────────────────────────────────────────────────────────────────────────
 
-        // ── 数字键盘 ──
+class _KindTabs extends StatelessWidget {
+  final TransactionKind selected;
+  final ValueChanged<TransactionKind> onChanged;
+
+  const _KindTabs({required this.selected, required this.onChanged});
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        _tab(context, '支出', TransactionKind.expense, scheme),
         Padding(
-          padding: const EdgeInsets.only(bottom: 16, top: 4),
-          child: AmountKeypad(
-            expression: _expression,
-            onExpressionChanged: _onExpressionChanged,
-            onSave: _save,
-          ),
+          padding: const EdgeInsets.symmetric(horizontal: 10),
+          child: Text('｜',
+              style: TextStyle(color: scheme.outlineVariant, fontSize: 16)),
         ),
+        _tab(context, '收入', TransactionKind.income, scheme),
       ],
+    );
+  }
+
+  Widget _tab(BuildContext context, String label, TransactionKind kind,
+      ColorScheme scheme) {
+    final isSel = kind == selected;
+    return GestureDetector(
+      onTap: () => onChanged(kind),
+      behavior: HitTestBehavior.opaque,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            label,
+            style: TextStyle(
+              fontSize: 18,
+              fontWeight: isSel ? FontWeight.w600 : FontWeight.w400,
+              color: isSel ? scheme.primary : scheme.onSurfaceVariant,
+            ),
+          ),
+          const SizedBox(height: 3),
+          Container(
+            width: 20,
+            height: 3,
+            decoration: BoxDecoration(
+              color: isSel ? scheme.primary : Colors.transparent,
+              borderRadius: BorderRadius.circular(2),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -272,7 +359,7 @@ class _AmountDisplay extends StatelessWidget {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+      padding: const EdgeInsets.fromLTRB(16, 10, 16, 6),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.baseline,
         textBaseline: TextBaseline.alphabetic,
@@ -288,7 +375,7 @@ class _AmountDisplay extends StatelessWidget {
           Expanded(
             child: Text(
               expression.displayText,
-              style: Theme.of(context).textTheme.displaySmall?.copyWith(
+              style: Theme.of(context).textTheme.headlineMedium?.copyWith(
                     fontWeight: FontWeight.w600,
                     // ignore: deprecated_member_use
                     fontFeatures: const [FontFeature.tabularFigures()],
@@ -314,7 +401,7 @@ class _AmountDisplay extends StatelessWidget {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 底部详情栏：账户 + 日期 + 备注
+// 详情行：账户 + 日期 + 备注（放在金额下方，同一张卡片里）
 // ─────────────────────────────────────────────────────────────────────────────
 
 class _DetailBar extends StatelessWidget {
@@ -342,7 +429,7 @@ class _DetailBar extends StatelessWidget {
             accounts.firstOrNull;
 
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      padding: const EdgeInsets.fromLTRB(12, 6, 12, 8),
       decoration: BoxDecoration(
         border: Border(
             top: BorderSide(color: scheme.outlineVariant, width: 0.5)),
@@ -473,7 +560,7 @@ class _TodayAllowanceBanner extends StatelessWidget {
 
     return Container(
       width: double.infinity,
-      margin: const EdgeInsets.fromLTRB(16, 0, 16, 4),
+      margin: const EdgeInsets.fromLTRB(16, 0, 16, 2),
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
       decoration: BoxDecoration(
         color: bgColor,
