@@ -1,11 +1,9 @@
 import 'package:decimal/decimal.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
 import '../../core/amount_expression.dart';
 import '../../core/budget/budget_engine.dart';
-import '../../core/models/category_seed.dart';
 import '../../core/models/transaction_kind.dart';
 import '../../core/money_format.dart';
 import '../../data/app_repository.dart';
@@ -187,7 +185,7 @@ class _ManualAddSheetState extends State<ManualAddSheet> {
                     ),
                     // 子类横排（选了大类且其有子类时出现）
                     if (children.isNotEmpty)
-                      _SubcategoryRow(
+                      SubcategoryRow(
                         children: children,
                         selectedId: _selectedCategoryId,
                         onSelected: (c) =>
@@ -229,75 +227,6 @@ class _ManualAddSheetState extends State<ManualAddSheet> {
           ),
         ),
       ],
-      ),
-    );
-  }
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// 子类横排（点大类后出现，可细化到二级分类）
-// ─────────────────────────────────────────────────────────────────────────────
-
-class _SubcategoryRow extends StatelessWidget {
-  final List<CategoryEntity> children;
-  final int? selectedId;
-  final ValueChanged<CategoryEntity> onSelected;
-
-  const _SubcategoryRow({
-    required this.children,
-    required this.selectedId,
-    required this.onSelected,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(12, 2, 12, 10),
-      child: Wrap(
-        spacing: 8,
-        runSpacing: 8,
-        children: [
-          for (final c in children)
-            GestureDetector(
-              onTap: () {
-                HapticFeedback.selectionClick();
-                onSelected(c);
-              },
-              child: Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
-                decoration: BoxDecoration(
-                  color: selectedId == c.id
-                      ? scheme.primary.withValues(alpha: 0.14)
-                      : scheme.surfaceContainerHigh,
-                  borderRadius: BorderRadius.circular(16),
-                  border: selectedId == c.id
-                      ? Border.all(color: scheme.primary, width: 1)
-                      : null,
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text(CategorySeed.emojiOf(c.key),
-                        style: const TextStyle(fontSize: 14)),
-                    const SizedBox(width: 4),
-                    Text(
-                      c.nameZh,
-                      style: Theme.of(context).textTheme.labelMedium?.copyWith(
-                            color: selectedId == c.id
-                                ? scheme.primary
-                                : scheme.onSurface,
-                            fontWeight: selectedId == c.id
-                                ? FontWeight.w600
-                                : FontWeight.w400,
-                          ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-        ],
       ),
     );
   }

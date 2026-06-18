@@ -28,6 +28,7 @@ class _EditTransactionSheetState extends State<EditTransactionSheet> {
   late TransactionKind _kind;
   final AmountExpression _expression = AmountExpression();
   int? _selectedCategoryId;
+  int? _activeParentId; // 当前展开的大类
   int? _selectedAccountId;
   late DateTime _date;
   late final TextEditingController _noteController;
@@ -47,6 +48,11 @@ class _EditTransactionSheetState extends State<EditTransactionSheet> {
     _date = t.date;
     _noteController = TextEditingController(text: t.note);
     _tagIds = List<int>.of(t.tagIds);
+    // 解析当前分类所属大类，用于展开其子类
+    final repo = context.read<AppRepository>();
+    final cat =
+        repo.categories.where((c) => c.id == _selectedCategoryId).firstOrNull;
+    _activeParentId = cat == null ? null : (cat.parentId ?? cat.id);
   }
 
   @override
@@ -59,11 +65,13 @@ class _EditTransactionSheetState extends State<EditTransactionSheet> {
     final repo = context.read<AppRepository>();
     setState(() {
       _kind = kind;
-      // 切换收支后，若原分类不属于该类型，回退到第一个
-      final cats = repo.categoriesForKind(kind);
-      if (!cats.any((c) => c.id == _selectedCategoryId)) {
-        _selectedCategoryId = cats.firstOrNull?.id;
+      final all = repo.categoriesForKind(kind);
+      // 切换收支后，若原分类不属于该类型，回退到第一个大类
+      if (!all.any((c) => c.id == _selectedCategoryId)) {
+        _selectedCategoryId = repo.categoriesForKindRanked(kind).firstOrNull?.id;
       }
+      final cat = all.where((c) => c.id == _selectedCategoryId).firstOrNull;
+      _activeParentId = cat == null ? null : (cat.parentId ?? cat.id);
     });
   }
 
@@ -203,17 +211,33 @@ class _EditTransactionSheetState extends State<EditTransactionSheet> {
             ),
           ),
 
-          // 分类网格
+          // 分类网格（大类）+ 子类下钻
           Expanded(
             child: Consumer<AppRepository>(
               builder: (context, repo, _) {
-                final cats = repo.categoriesForKind(_kind);
+                final cats = repo.categoriesForKindRanked(_kind);
+                final children = _activeParentId == null
+                    ? const <CategoryEntity>[]
+                    : repo.childrenOf(_activeParentId!);
                 return SingleChildScrollView(
-                  child: CategoryGrid(
-                    categories: cats,
-                    selectedId: _selectedCategoryId,
-                    onSelected: (cat) =>
-                        setState(() => _selectedCategoryId = cat.id),
+                  child: Column(
+                    children: [
+                      CategoryGrid(
+                        categories: cats,
+                        selectedId: _activeParentId,
+                        onSelected: (cat) => setState(() {
+                          _activeParentId = cat.id;
+                          _selectedCategoryId = cat.id;
+                        }),
+                      ),
+                      if (children.isNotEmpty)
+                        SubcategoryRow(
+                          children: children,
+                          selectedId: _selectedCategoryId,
+                          onSelected: (c) =>
+                              setState(() => _selectedCategoryId = c.id),
+                        ),
+                    ],
                   ),
                 );
               },
