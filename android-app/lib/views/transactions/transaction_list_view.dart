@@ -11,29 +11,16 @@ import '../../theme/app_colors.dart';
 import '../../widgets/tag_selector.dart';
 import 'edit_transaction_sheet.dart';
 
-/// 流水明细页：按天分组 + 当日小计 + 左滑删除 + 空状态。
-class TransactionListView extends StatelessWidget {
+/// 流水明细页：按天分组 + 当日小计 + 左滑删除 + 「只看待报销」筛选 + 空状态。
+class TransactionListView extends StatefulWidget {
   const TransactionListView({super.key});
 
   @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('明细'),
-        centerTitle: true,
-      ),
-      body: Consumer<AppRepository>(
-        builder: (context, repo, _) {
-          final transactions = repo.transactions;
-          if (transactions.isEmpty) {
-            return _EmptyState();
-          }
-          final sections = _groupByDay(transactions);
-          return _TransactionSectionList(sections: sections, repo: repo);
-        },
-      ),
-    );
-  }
+  State<TransactionListView> createState() => _TransactionListViewState();
+}
+
+class _TransactionListViewState extends State<TransactionListView> {
+  bool _onlyReimbursable = false;
 
   List<_DaySection> _groupByDay(List<TransactionEntity> transactions) {
     final map = <DateTime, List<TransactionEntity>>{};
@@ -46,12 +33,103 @@ class TransactionListView extends StatelessWidget {
         .toList()
       ..sort((a, b) => b.day.compareTo(a.day));
   }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('明细'),
+        centerTitle: true,
+      ),
+      body: Consumer<AppRepository>(
+        builder: (context, repo, _) {
+          final all = repo.transactions;
+          final pending =
+              all.where((t) => t.reimbursable).toList(growable: false);
+          final shown = _onlyReimbursable ? pending : all;
+
+          return Column(
+            children: [
+              if (pending.isNotEmpty)
+                _FilterBar(
+                  onlyReimbursable: _onlyReimbursable,
+                  pendingCount: pending.length,
+                  pendingTotal: pending.fold(
+                      Decimal.zero, (sum, t) => sum + t.amount),
+                  onToggle: (v) => setState(() => _onlyReimbursable = v),
+                ),
+              Expanded(
+                child: shown.isEmpty
+                    ? _EmptyState(onlyReimbursable: _onlyReimbursable)
+                    : _TransactionSectionList(
+                        sections: _groupByDay(shown), repo: repo),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
 }
 
 class _DaySection {
   final DateTime day;
   final List<TransactionEntity> items;
   const _DaySection({required this.day, required this.items});
+}
+
+// ---------------------------------------------------------------------------
+// 待报销筛选条 + 合计
+// ---------------------------------------------------------------------------
+
+class _FilterBar extends StatelessWidget {
+  final bool onlyReimbursable;
+  final int pendingCount;
+  final Decimal pendingTotal;
+  final ValueChanged<bool> onToggle;
+
+  const _FilterBar({
+    required this.onlyReimbursable,
+    required this.pendingCount,
+    required this.pendingTotal,
+    required this.onToggle,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Container(
+      padding: const EdgeInsets.fromLTRB(14, 8, 16, 6),
+      child: Row(
+        children: [
+          FilterChip(
+            label: const Text('只看待报销'),
+            avatar: const Icon(Icons.receipt_long_outlined, size: 16),
+            selected: onlyReimbursable,
+            onSelected: onToggle,
+            visualDensity: VisualDensity.compact,
+            materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+          ),
+          const Spacer(),
+          Text(
+            '待报销 $pendingCount 笔 · 合计 ',
+            style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                  color: scheme.onSurfaceVariant,
+                ),
+          ),
+          Text(
+            MoneyFormat.string(pendingTotal),
+            style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                  color: AppColors.warning,
+                  fontWeight: FontWeight.w700,
+                  // ignore: deprecated_member_use
+                  fontFeatures: const [FontFeature.tabularFigures()],
+                ),
+          ),
+        ],
+      ),
+    );
+  }
 }
 
 class _TransactionSectionList extends StatelessWidget {
@@ -317,6 +395,10 @@ class _ReimburseBadge extends StatelessWidget {
 }
 
 class _EmptyState extends StatelessWidget {
+  final bool onlyReimbursable;
+
+  const _EmptyState({this.onlyReimbursable = false});
+
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
@@ -326,11 +408,13 @@ class _EmptyState extends StatelessWidget {
         children: [
           Icon(Icons.receipt_long_outlined, size: 64, color: scheme.outlineVariant),
           const SizedBox(height: 16),
-          Text('还没有账目', style: Theme.of(context).textTheme.titleMedium),
+          Text(onlyReimbursable ? '没有待报销的账目' : '还没有账目',
+              style: Theme.of(context).textTheme.titleMedium),
           const SizedBox(height: 8),
           Text(
-            '去「记一笔」页开始记账吧',
+            onlyReimbursable ? '记账时打开「待报销」开关，这里就会列出' : '去「记一笔」页开始记账吧',
             style: TextStyle(color: scheme.onSurfaceVariant),
+            textAlign: TextAlign.center,
           ),
         ],
       ),
