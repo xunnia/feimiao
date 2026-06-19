@@ -113,6 +113,7 @@ class TransactionEntity {
   final String note;
   final int dateMs;            // DateTime.millisecondsSinceEpoch
   final String tagsRaw;        // 逗号分隔的标签 id 串，如 "1,3,5"
+  final bool reimbursable;     // 待报销标记
 
   Decimal get amount => Decimal.parse(amountStr);
   DateTime get date => DateTime.fromMillisecondsSinceEpoch(dateMs);
@@ -143,6 +144,7 @@ class TransactionEntity {
     this.note = '',
     required this.dateMs,
     this.tagsRaw = '',
+    this.reimbursable = false,
   });
 
   /// 转为 core 层的纯逻辑对象（用于统计引擎等）。
@@ -175,6 +177,7 @@ class TransactionEntity {
         note: m['note'] as String? ?? '',
         dateMs: m['date_ms'] as int,
         tagsRaw: m['tags'] as String? ?? '',
+        reimbursable: ((m['reimbursable'] as int?) ?? 0) == 1,
       );
 }
 
@@ -268,7 +271,7 @@ class TagEntity {
 ///
 /// 继承 [ChangeNotifier]，UI 通过 [provider] 订阅变化。
 class AppRepository extends ChangeNotifier {
-  static const _dbVersion = 6;
+  static const _dbVersion = 7;
   static const _dbName = 'qingji.db';
 
   Database? _db;
@@ -387,7 +390,8 @@ class AppRepository extends ChangeNotifier {
         to_account_id   INTEGER REFERENCES accounts(id),
         note            TEXT NOT NULL DEFAULT '',
         date_ms         INTEGER NOT NULL,
-        tags            TEXT NOT NULL DEFAULT ''
+        tags            TEXT NOT NULL DEFAULT '',
+        reimbursable    INTEGER NOT NULL DEFAULT 0
       )
     ''');
 
@@ -428,7 +432,9 @@ class AppRepository extends ChangeNotifier {
 
   /// 数据库升级：
   ///   v1→v2 在 budget 表加 category_key 列；
-  ///   v2→v3 新建 app_settings 表（用于存储 API Key 等键值对）。
+  ///   v2→v3 新建 app_settings 表（用于存储 API Key 等键值对）；
+  ///   v3→v4 多账本；v4→v5 存钱目标+标签；v5→v6 二级分类；
+  ///   v6→v7 交易加 reimbursable（待报销）列。
   Future<void> _onUpgrade(Database db, int oldVersion, int newVersion) async {
     if (oldVersion < 2) {
       // v1 的 budget 表没有 category_key 列，添加之。
@@ -508,6 +514,15 @@ class AppRepository extends ChangeNotifier {
         await _applyCategoryTree(db);
       } catch (_) {
         // 迁移失败也不阻断 App 启动
+      }
+    }
+    if (oldVersion < 7) {
+      // 待报销：给 transactions 加 reimbursable 列。纯增量，绝不动已有账目数据。
+      try {
+        await db.execute(
+            'ALTER TABLE transactions ADD COLUMN reimbursable INTEGER NOT NULL DEFAULT 0');
+      } catch (_) {
+        // 列已存在则忽略
       }
     }
   }
@@ -689,7 +704,8 @@ class AppRepository extends ChangeNotifier {
         ta.name    AS to_account_name,
         t.note,
         t.date_ms,
-        t.tags
+        t.tags,
+        t.reimbursable
       FROM transactions t
       LEFT JOIN categories c  ON c.id = t.category_id
       LEFT JOIN accounts   a  ON a.id = t.account_id
@@ -719,6 +735,7 @@ class AppRepository extends ChangeNotifier {
     String note = '',
     required DateTime date,
     List<int> tagIds = const [],
+    bool reimbursable = false,
   }) async {
     await _db!.insert('transactions', {
       'book_id': _currentBookId,
@@ -731,6 +748,7 @@ class AppRepository extends ChangeNotifier {
       'note': note,
       'date_ms': date.millisecondsSinceEpoch,
       'tags': tagIds.join(','),
+      'reimbursable': reimbursable ? 1 : 0,
     });
     await _loadTransactions();
     notifyListeners();
@@ -747,6 +765,7 @@ class AppRepository extends ChangeNotifier {
     String note = '',
     required DateTime date,
     List<int> tagIds = const [],
+    bool reimbursable = false,
   }) async {
     await _db!.update(
       'transactions',
@@ -759,6 +778,7 @@ class AppRepository extends ChangeNotifier {
         'note': note,
         'date_ms': date.millisecondsSinceEpoch,
         'tags': tagIds.join(','),
+        'reimbursable': reimbursable ? 1 : 0,
       },
       where: 'id = ?',
       whereArgs: [id],

@@ -6,6 +6,7 @@ import '../../core/amount_expression.dart';
 import '../../core/models/transaction_kind.dart';
 import '../../data/app_repository.dart';
 import '../../widgets/tag_selector.dart';
+import '../common/app_sheet.dart';
 import '../quick_add/amount_keypad.dart';
 import '../quick_add/category_grid.dart';
 
@@ -32,6 +33,7 @@ class _EditTransactionSheetState extends State<EditTransactionSheet> {
   late DateTime _date;
   late final TextEditingController _noteController;
   late List<int> _tagIds;
+  late bool _reimbursable;
   int _expressionVersion = 0;
 
   @override
@@ -47,6 +49,7 @@ class _EditTransactionSheetState extends State<EditTransactionSheet> {
     _date = t.date;
     _noteController = TextEditingController(text: t.note);
     _tagIds = List<int>.of(t.tagIds);
+    _reimbursable = t.reimbursable;
     // 解析当前分类所属大类，用于展开其子类
     final repo = context.read<AppRepository>();
     final cat =
@@ -64,6 +67,7 @@ class _EditTransactionSheetState extends State<EditTransactionSheet> {
     final repo = context.read<AppRepository>();
     setState(() {
       _kind = kind;
+      if (kind != TransactionKind.expense) _reimbursable = false;
       final all = repo.categoriesForKind(kind);
       // 切换收支后，若原分类不属于该类型，回退到第一个大类
       if (!all.any((c) => c.id == _selectedCategoryId)) {
@@ -92,6 +96,7 @@ class _EditTransactionSheetState extends State<EditTransactionSheet> {
       note: _noteController.text.trim(),
       date: _date,
       tagIds: _tagIds,
+      reimbursable: _kind == TransactionKind.expense ? _reimbursable : false,
     );
     if (mounted) Navigator.pop(context);
   }
@@ -270,12 +275,29 @@ class _EditTransactionSheetState extends State<EditTransactionSheet> {
 
           // 标签选择
           Padding(
-            padding: const EdgeInsets.fromLTRB(16, 4, 16, 4),
+            padding: const EdgeInsets.fromLTRB(16, 4, 16, 2),
             child: TagSelector(
               selectedIds: _tagIds,
               onChanged: (v) => setState(() => _tagIds = v),
             ),
           ),
+
+          // 待报销开关（仅支出）
+          if (_kind == TransactionKind.expense)
+            Align(
+              alignment: Alignment.centerLeft,
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(14, 0, 16, 2),
+                child: FilterChip(
+                  label: const Text('待报销'),
+                  avatar: const Icon(Icons.receipt_long_outlined, size: 16),
+                  selected: _reimbursable,
+                  onSelected: (v) => setState(() => _reimbursable = v),
+                  visualDensity: VisualDensity.compact,
+                  materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                ),
+              ),
+            ),
 
           // 账户 + 日期 + 备注
           _DetailBar(
@@ -303,7 +325,7 @@ class _EditTransactionSheetState extends State<EditTransactionSheet> {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 底部详情栏（账户 + 日期 + 备注）—— 与 manual_add_sheet 同款，独立一份避免耦合
+// 底部详情栏（账户 + 日期 + 备注）
 // ─────────────────────────────────────────────────────────────────────────────
 
 class _DetailBar extends StatelessWidget {
@@ -404,16 +426,11 @@ class _DetailBar extends StatelessWidget {
   }
 }
 
-/// 打开编辑大卡的便捷方法（统一 sheet 外观）。
+/// 打开编辑大卡的便捷方法（统一走 appSheet 外观）。
 Future<void> showEditTransactionSheet(
     BuildContext context, TransactionEntity transaction) {
-  return showModalBottomSheet<void>(
-    context: context,
-    isScrollControlled: true,
-    backgroundColor: Theme.of(context).colorScheme.surface,
-    shape: const RoundedRectangleBorder(
-      borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-    ),
-    builder: (_) => EditTransactionSheet(transaction: transaction),
+  return appSheet<void>(
+    context,
+    child: EditTransactionSheet(transaction: transaction),
   );
 }

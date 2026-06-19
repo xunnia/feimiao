@@ -12,7 +12,6 @@ import '../../widgets/tag_selector.dart';
 import 'edit_transaction_sheet.dart';
 
 /// 流水明细页：按天分组 + 当日小计 + 左滑删除 + 空状态。
-/// 对应 iOS TransactionListView.swift。
 class TransactionListView extends StatelessWidget {
   const TransactionListView({super.key});
 
@@ -36,7 +35,6 @@ class TransactionListView extends StatelessWidget {
     );
   }
 
-  /// 按日期（截断到天）分组，降序排列。
   List<_DaySection> _groupByDay(List<TransactionEntity> transactions) {
     final map = <DateTime, List<TransactionEntity>>{};
     for (final t in transactions) {
@@ -55,10 +53,6 @@ class _DaySection {
   final List<TransactionEntity> items;
   const _DaySection({required this.day, required this.items});
 }
-
-// ---------------------------------------------------------------------------
-// 带分组头的列表
-// ---------------------------------------------------------------------------
 
 class _TransactionSectionList extends StatelessWidget {
   final List<_DaySection> sections;
@@ -91,10 +85,6 @@ class _TransactionSectionList extends StatelessWidget {
     );
   }
 }
-
-// ---------------------------------------------------------------------------
-// 分组表头
-// ---------------------------------------------------------------------------
 
 class _SectionHeader extends StatelessWidget {
   final _DaySection section;
@@ -153,10 +143,6 @@ class _SectionHeader extends StatelessWidget {
   }
 }
 
-// ---------------------------------------------------------------------------
-// 可左滑删除的交易行
-// ---------------------------------------------------------------------------
-
 class _DismissibleRow extends StatelessWidget {
   final TransactionEntity transaction;
   final VoidCallback onDelete;
@@ -197,10 +183,6 @@ class _DismissibleRow extends StatelessWidget {
     );
   }
 }
-
-// ---------------------------------------------------------------------------
-// 交易行内容
-// ---------------------------------------------------------------------------
 
 class _TransactionRow extends StatelessWidget {
   final TransactionEntity transaction;
@@ -257,21 +239,28 @@ class _TransactionRow extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
       child: Row(
         children: [
-          // 分类图标（自有 iOS 风方块；转账/未分类回退 emoji）
           CatIcon(
             categoryKey: transaction.categoryKey,
             emoji: _emoji,
             size: 40,
           ),
           const SizedBox(width: 12),
-          // 标题 + 备注
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
-                  _title,
-                  style: Theme.of(context).textTheme.bodyMedium,
+                Row(
+                  children: [
+                    Flexible(
+                      child: Text(
+                        _title,
+                        style: Theme.of(context).textTheme.bodyMedium,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                    if (transaction.reimbursable) const _ReimburseBadge(),
+                  ],
                 ),
                 if (transaction.note.isNotEmpty)
                   Text(
@@ -286,7 +275,6 @@ class _TransactionRow extends StatelessWidget {
               ],
             ),
           ),
-          // 金额
           Text(
             _amountText,
             style: Theme.of(context).textTheme.bodyMedium?.copyWith(
@@ -302,9 +290,31 @@ class _TransactionRow extends StatelessWidget {
   }
 }
 
-// ---------------------------------------------------------------------------
-// 空状态
-// ---------------------------------------------------------------------------
+/// 「待报销」小标签。
+class _ReimburseBadge extends StatelessWidget {
+  const _ReimburseBadge();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: const EdgeInsets.only(left: 6),
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+      decoration: BoxDecoration(
+        color: AppColors.warning.withValues(alpha: 0.14),
+        borderRadius: BorderRadius.circular(4),
+      ),
+      child: Text(
+        '待报销',
+        style: TextStyle(
+          fontSize: 10,
+          height: 1.2,
+          color: AppColors.warning,
+          fontWeight: FontWeight.w600,
+        ),
+      ),
+    );
+  }
+}
 
 class _EmptyState extends StatelessWidget {
   @override

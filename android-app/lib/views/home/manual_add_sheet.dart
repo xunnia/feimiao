@@ -13,11 +13,6 @@ import '../quick_add/amount_keypad.dart';
 import '../quick_add/category_grid.dart';
 
 /// 手动记账大卡片（模态底部弹出）。
-///
-/// 布局（M40/M41/M42）：
-///   顶部：文字 tab（支出 / 收入 / 转账）+ 手动记账胶囊 + X
-///   中部：支出/收入=分类网格(大类 + ▼ + 展开子类卡片)；转账=账户→账户
-///   下部：标签 → 今日可花 → 「金额+账户/日期/备注」成组卡片 → 数字键盘(含 ＋− / 再记)
 class ManualAddSheet extends StatefulWidget {
   final VoidCallback onSwitchToAi;
 
@@ -30,13 +25,14 @@ class ManualAddSheet extends StatefulWidget {
 class _ManualAddSheetState extends State<ManualAddSheet> {
   TransactionKind _kind = TransactionKind.expense;
   final AmountExpression _expression = AmountExpression();
-  int? _selectedCategoryId; // 最终记账的分类（大类或子类）
-  int? _activeParentId; // 当前展开子类面板的大类；null=未展开
-  int? _selectedAccountId; // 支出/收入的账户；转账的「从」账户
-  int? _toAccountId; // 转账的「到」账户
+  int? _selectedCategoryId;
+  int? _activeParentId;
+  int? _selectedAccountId;
+  int? _toAccountId;
   DateTime _date = DateTime.now();
   final TextEditingController _noteController = TextEditingController();
   List<int> _tagIds = [];
+  bool _reimbursable = false;
   int _expressionVersion = 0;
 
   @override
@@ -65,6 +61,7 @@ class _ManualAddSheetState extends State<ManualAddSheet> {
     final repo = context.read<AppRepository>();
     setState(() {
       _kind = kind;
+      _reimbursable = false; // 切换收支/转账时复位待报销
       if (kind == TransactionKind.transfer) {
         _selectedAccountId ??= repo.accounts.firstOrNull?.id;
         _toAccountId = repo.accounts
@@ -81,7 +78,6 @@ class _ManualAddSheetState extends State<ManualAddSheet> {
 
   void _onExpressionChanged() => setState(() => _expressionVersion++);
 
-  /// 提交一笔。成功返回 true。转账要求「到账户」有效且不等于「从账户」。
   Future<bool> _commit() async {
     final amount = _expression.value;
     if (amount <= Decimal.zero) return false;
@@ -112,6 +108,7 @@ class _ManualAddSheetState extends State<ManualAddSheet> {
         note: _noteController.text.trim(),
         date: _date,
         tagIds: _tagIds,
+        reimbursable: _reimbursable,
       );
     }
     return true;
@@ -125,6 +122,7 @@ class _ManualAddSheetState extends State<ManualAddSheet> {
     if (await _commit()) {
       _expression.clear();
       _noteController.clear();
+      _reimbursable = false;
       if (mounted) setState(() => _expressionVersion++);
     }
   }
@@ -142,7 +140,6 @@ class _ManualAddSheetState extends State<ManualAddSheet> {
         children: [
           const _DragHandle(),
 
-          // ── 顶部栏：文字 tab + AI助手胶囊 + 关闭 ──
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 6, 12, 0),
             child: Row(
@@ -161,7 +158,7 @@ class _ManualAddSheetState extends State<ManualAddSheet> {
             ),
           ),
 
-          // ── 中部：分类区 或 转账区 ──
+          // 中部：分类区 或 转账区
           Expanded(
             child: Consumer<AppRepository>(
               builder: (context, repo, _) {
@@ -238,7 +235,7 @@ class _ManualAddSheetState extends State<ManualAddSheet> {
             ),
           ),
 
-          // ── 标签选择 ──
+          // 标签选择
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 2, 16, 2),
             child: TagSelector(
@@ -247,7 +244,24 @@ class _ManualAddSheetState extends State<ManualAddSheet> {
             ),
           ),
 
-          // ── 今日可花横幅（支出时按需显示）──
+          // 待报销开关（仅支出）
+          if (_kind == TransactionKind.expense)
+            Align(
+              alignment: Alignment.centerLeft,
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(14, 0, 16, 0),
+                child: FilterChip(
+                  label: const Text('待报销'),
+                  avatar: const Icon(Icons.receipt_long_outlined, size: 16),
+                  selected: _reimbursable,
+                  onSelected: (v) => setState(() => _reimbursable = v),
+                  visualDensity: VisualDensity.compact,
+                  materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                ),
+              ),
+            ),
+
+          // 今日可花横幅（支出时按需显示）
           if (_kind == TransactionKind.expense)
             Consumer<AppRepository>(
               builder: (context, repo, _) {
@@ -261,7 +275,7 @@ class _ManualAddSheetState extends State<ManualAddSheet> {
               },
             ),
 
-          // ── 金额 + 日期/备注（+账户，转账时账户在上方选）成组卡片 ──
+          // 金额 + 日期/备注 成组卡片
           Builder(
             builder: (context) {
               final scheme = Theme.of(context).colorScheme;
@@ -291,7 +305,7 @@ class _ManualAddSheetState extends State<ManualAddSheet> {
             },
           ),
 
-          // ── 数字键盘 ──
+          // 数字键盘
           Padding(
             padding: const EdgeInsets.only(bottom: 16, top: 2),
             child: AmountKeypad(

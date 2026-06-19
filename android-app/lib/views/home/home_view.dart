@@ -18,16 +18,11 @@ import '../settings/budget_setting_view.dart';
 import '../transactions/edit_transaction_sheet.dart';
 
 /// 首页：折叠吸顶大卡片（收支+预算）+ 全量按天分组明细列表。
-///
-/// 数据通过 context.watch<AppRepository>() 实时刷新。
-/// 外层 Scaffold 由 RootShell 负责；HomeView 只渲染 CustomScrollView。
 class HomeView extends StatelessWidget {
-  /// 打开明细页的回调（由 RootShell 注入，目前内部已展示全量明细，保留接口避免破坏 main.dart）。
   final VoidCallback onShowTransactions;
 
   const HomeView({super.key, required this.onShowTransactions});
 
-  /// 按天分组，降序排列。
   List<_DaySection> _groupByDay(List<TransactionEntity> transactions) {
     final map = <DateTime, List<TransactionEntity>>{};
     for (final t in transactions) {
@@ -64,7 +59,6 @@ class HomeView extends StatelessWidget {
 
     return CustomScrollView(
       slivers: [
-        // ── 折叠吸顶大卡片 ──────────────────────────────────────────────────
         SliverAppBar(
           automaticallyImplyLeading: false,
           pinned: true,
@@ -75,7 +69,6 @@ class HomeView extends StatelessWidget {
           elevation: 0,
           flexibleSpace: LayoutBuilder(
             builder: (context, constraints) {
-              // t=0 → 折叠；t=1 → 完全展开
               final maxH = constraints.maxHeight;
               final expandedTotal = expandedHeight + MediaQuery.of(context).padding.top;
               final collapsedTotal = minExtent + MediaQuery.of(context).padding.top;
@@ -85,7 +78,6 @@ class HomeView extends StatelessWidget {
 
               return Stack(
                 children: [
-                  // ── 展开态大卡片 ──
                   Opacity(
                     opacity: t,
                     child: IgnorePointer(
@@ -101,7 +93,6 @@ class HomeView extends StatelessWidget {
                       ),
                     ),
                   ),
-                  // ── 折叠态迷你条 ──
                   Opacity(
                     opacity: (1.0 - t * 2).clamp(0.0, 1.0),
                     child: IgnorePointer(
@@ -121,14 +112,12 @@ class HomeView extends StatelessWidget {
           ),
         ),
 
-        // ── 全量交易明细：日期头吸顶（每天一组，只钉当前一天，滑到下天替换）──
         if (transactions.isEmpty)
           SliverFillRemaining(
             hasScrollBody: false,
             child: _EmptyState(),
           )
         else ...[
-          // 洞察小条：本月最大支出（轻量一条，点进统计）
           SliverToBoxAdapter(child: _InsightStrip(summary: summary)),
           for (final s in sections)
             SliverMainAxisGroup(
@@ -149,7 +138,6 @@ class HomeView extends StatelessWidget {
                 ),
               ],
             ),
-          // 底部留白，避免最后一行被悬浮输入栏遮住
           const SliverToBoxAdapter(child: SizedBox(height: 96)),
         ],
       ],
@@ -193,10 +181,8 @@ class _ExpandedSummaryCard extends StatelessWidget {
             crossAxisAlignment: CrossAxisAlignment.stretch,
             mainAxisSize: MainAxisSize.min,
             children: [
-              // ── 顶部行：月份 + 统计按钮 + 吉祥物 ──
               Row(
                 children: [
-                  // 月份点击 → 打开统计页（那里有完整的月份切换）
                   GestureDetector(
                     onTap: () => Navigator.push<void>(
                       context,
@@ -227,7 +213,6 @@ class _ExpandedSummaryCard extends StatelessWidget {
                     ),
                   ),
                   const SizedBox(width: 8),
-                  // 统计 > chip
                   GestureDetector(
                     onTap: () => Navigator.push<void>(
                       context,
@@ -265,7 +250,6 @@ class _ExpandedSummaryCard extends StatelessWidget {
                     ),
                   ),
                   const Spacer(),
-                  // 吉祥物（右上角）
                   Mascot(
                     mood: isOverspend
                         ? MascotMood.overspend
@@ -276,7 +260,6 @@ class _ExpandedSummaryCard extends StatelessWidget {
               ),
               const SizedBox(height: AppSpacing.sm),
 
-              // ── 第一层：本月结余（主指标，大号）──
               Text(
                 '${balanceNegative ? '-' : ''}${MoneyFormat.string(balance.abs())}',
                 style: Theme.of(context).textTheme.headlineSmall?.copyWith(
@@ -297,7 +280,6 @@ class _ExpandedSummaryCard extends StatelessWidget {
               ),
               const SizedBox(height: AppSpacing.md),
 
-              // ── 第二层：收入 | 支出 ──
               Row(
                 children: [
                   Expanded(
@@ -327,7 +309,6 @@ class _ExpandedSummaryCard extends StatelessWidget {
               ),
               const SizedBox(height: AppSpacing.md),
 
-              // ── 第三层：预算（弱化；未设则引导）──
               _BudgetStrip(
                 budgetStatus: budgetStatus,
                 budget: budget,
@@ -487,7 +468,6 @@ class _BudgetStrip extends StatelessWidget {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
 
-    // 未设预算 → 轻量引导 chip（不常驻大占位）
     if (budgetStatus == null || budget == null) {
       return Align(
         alignment: Alignment.centerLeft,
@@ -657,8 +637,6 @@ class _DaySection {
   const _DaySection({required this.day, required this.items});
 }
 
-/// 吸顶日期头委托：放进 SliverMainAxisGroup 后，只在本组（当天）范围内钉顶，
-/// 滑到下一天时被下一组的头顶替——即「只钉一个、随滑动切换」（学咔皮）。
 class _DayHeaderDelegate extends SliverPersistentHeaderDelegate {
   final _DaySection section;
   _DayHeaderDelegate({required this.section});
@@ -705,7 +683,6 @@ class _DaySectionHeader extends StatelessWidget {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
 
-    // 当日支出与收入合计（设计：大号加粗分色）
     final expenseItems =
         section.items.where((t) => t.txKind == TransactionKind.expense);
     final incomeItems =
@@ -730,7 +707,6 @@ class _DaySectionHeader extends StatelessWidget {
       alignment: Alignment.center,
       child: Row(
         children: [
-          // 日期标签（次要色，不抢戏）
           Text(
             _dateLabel(),
             style: Theme.of(context).textTheme.labelMedium?.copyWith(
@@ -739,7 +715,6 @@ class _DaySectionHeader extends StatelessWidget {
                 ),
           ),
           const Spacer(),
-          // 支出合计（大号加粗，深色）
           if (hasExpense) ...[
             Text(
               '支 -${MoneyFormat.string(totalExpense)}',
@@ -751,7 +726,6 @@ class _DaySectionHeader extends StatelessWidget {
                   ),
             ),
           ],
-          // 收入合计（大号加粗，金色）
           if (hasExpense && hasIncome) const SizedBox(width: 8),
           if (hasIncome)
             Text(
@@ -822,7 +796,7 @@ class _DismissibleRow extends StatelessWidget {
 }
 
 // ---------------------------------------------------------------------------
-// 单笔交易行（金额小号中性灰，不抢日期行的戏）
+// 单笔交易行
 // ---------------------------------------------------------------------------
 
 class _TransactionRow extends StatelessWidget {
@@ -862,7 +836,6 @@ class _TransactionRow extends StatelessWidget {
     }
   }
 
-  /// 金额配色（猫系语义）：收入铜金、支出中性深色、转账灰。
   Color _amountColor(ColorScheme scheme) {
     switch (transaction.txKind) {
       case TransactionKind.income:
@@ -882,26 +855,31 @@ class _TransactionRow extends StatelessWidget {
           horizontal: AppSpacing.lg, vertical: AppSpacing.sm),
       child: Row(
         children: [
-          // 分类图标（自有 iOS 风方块；转账/未分类回退 emoji）
           CatIcon(
             categoryKey: transaction.categoryKey,
             emoji: _emoji,
             size: 40,
           ),
           const SizedBox(width: AppSpacing.md),
-          // 分类（主）+ 备注/对方（最弱灰小字）
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
-                  _title,
-                  style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                        fontWeight: AppWeight.title,
-                        color: AppTextColor.primary(scheme),
+                Row(
+                  children: [
+                    Flexible(
+                      child: Text(
+                        _title,
+                        style: Theme.of(context).textTheme.bodyLarge?.copyWith(
+                              fontWeight: AppWeight.title,
+                              color: AppTextColor.primary(scheme),
+                            ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
                       ),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
+                    ),
+                    if (transaction.reimbursable) const _ReimburseBadge(),
+                  ],
                 ),
                 if (transaction.note.isNotEmpty) ...[
                   const SizedBox(height: 1),
@@ -919,7 +897,6 @@ class _TransactionRow extends StatelessWidget {
             ),
           ),
           const SizedBox(width: AppSpacing.md),
-          // 金额（主角：加粗、收支分色、右对齐）
           Text(
             _amountText,
             style: Theme.of(context).textTheme.titleMedium?.copyWith(
@@ -930,6 +907,32 @@ class _TransactionRow extends StatelessWidget {
                 ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// 「待报销」小标签。
+class _ReimburseBadge extends StatelessWidget {
+  const _ReimburseBadge();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: const EdgeInsets.only(left: 6),
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+      decoration: BoxDecoration(
+        color: AppColors.warning.withValues(alpha: 0.14),
+        borderRadius: BorderRadius.circular(4),
+      ),
+      child: Text(
+        '待报销',
+        style: TextStyle(
+          fontSize: 10,
+          height: 1.2,
+          color: AppColors.warning,
+          fontWeight: FontWeight.w600,
+        ),
       ),
     );
   }
