@@ -52,9 +52,6 @@ jobs:
         working-directory: android-app
         run: flutter pub get
 
-      - name: 下载 Fluent 3D 分类图标（缺失自动回退 emoji，不阻断构建）
-        run: python3 android-app/ci/fetch_fluent_icons.py
-
       - name: 生成桌面图标（各分辨率 mipmap）
         working-directory: android-app
         run: dart run flutter_launcher_icons
