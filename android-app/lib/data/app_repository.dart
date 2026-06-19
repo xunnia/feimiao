@@ -10,10 +10,9 @@ import '../core/models/transaction_kind.dart';
 import '../core/models/transaction_record.dart';
 
 // ---------------------------------------------------------------------------
-// 领域实体（带数据库 id，方便 UI 层操作）
+// 领域实体
 // ---------------------------------------------------------------------------
 
-/// 账户实体。
 class AccountEntity {
   final int id;
   final String name;
@@ -38,7 +37,6 @@ class AccountEntity {
       );
 }
 
-/// 账本实体（多账本）。
 class BookEntity {
   final int id;
   final String name;
@@ -53,15 +51,12 @@ class BookEntity {
       );
 }
 
-/// 分类实体。
 class CategoryEntity {
   final int id;
   final String key;
   final String nameZh;
   final String nameEn;
   final String kindRaw;
-
-  /// 所属大类 id；null 表示自身就是大类（顶级）。
   final int? parentId;
 
   TransactionKind get kind => TransactionKind.fromJson(kindRaw);
@@ -98,7 +93,6 @@ class CategoryEntity {
       );
 }
 
-/// 交易实体（从数据库读出，包含关联对象冗余字段以避免 JOIN）。
 class TransactionEntity {
   final int id;
   final String kind;
@@ -184,7 +178,6 @@ class TransactionEntity {
       );
 }
 
-/// CSV 导入用的一条交易草稿（id 由数据库分配）。
 class TransactionDraft {
   final TransactionKind kind;
   final Decimal amount;
@@ -205,7 +198,6 @@ class TransactionDraft {
   });
 }
 
-/// 存钱目标实体。
 class SavingsGoalEntity {
   final int id;
   final String name;
@@ -246,7 +238,6 @@ class SavingsGoalEntity {
       );
 }
 
-/// 标签实体。
 class TagEntity {
   final int id;
   final String name;
@@ -269,7 +260,6 @@ class TagEntity {
 // Repository
 // ---------------------------------------------------------------------------
 
-/// 本地 SQLite 数据仓库，暴露给 UI 层的状态管理入口。
 class AppRepository extends ChangeNotifier {
   static const _dbVersion = 8;
   static const _dbName = 'qingji.db';
@@ -285,6 +275,7 @@ class AppRepository extends ChangeNotifier {
 
   int _currentBookId = 0;
   Decimal? _monthlyBudget;
+  final Map<String, Decimal> _categoryBudgets = {}; // 分类 key -> 月预算
   String? _deepSeekApiKey;
 
   List<BookEntity> get books => List.unmodifiable(_books);
@@ -311,6 +302,13 @@ class AppRepository extends ChangeNotifier {
   }
 
   Decimal? get monthlyBudget => _monthlyBudget;
+
+  /// 全部分类预算（key -> 月预算）。
+  Map<String, Decimal> get categoryBudgets => Map.unmodifiable(_categoryBudgets);
+
+  /// 某分类 key 的月预算（未设返回 null）。
+  Decimal? categoryBudgetFor(String key) => _categoryBudgets[key];
+
   String? get deepSeekApiKey => _deepSeekApiKey;
 
   // ---------------------------------------------------------------------------
@@ -549,6 +547,7 @@ class AppRepository extends ChangeNotifier {
       _loadCategories(),
       _loadTransactions(),
       _loadBudget(),
+      _loadCategoryBudgets(),
       _loadApiKey(),
       _loadSavingsGoals(),
       _loadTags(),
@@ -635,6 +634,18 @@ class AppRepository extends ChangeNotifier {
     }
   }
 
+  /// 读取所有分类预算（budget 表里 category_key 非空的行）。
+  Future<void> _loadCategoryBudgets() async {
+    final rows = await _db!.query('budget', where: 'category_key IS NOT NULL');
+    _categoryBudgets.clear();
+    for (final r in rows) {
+      final k = r['category_key'] as String?;
+      if (k == null || k.isEmpty) continue;
+      final v = Decimal.tryParse((r['amount'] as String?) ?? '');
+      if (v != null && v > Decimal.zero) _categoryBudgets[k] = v;
+    }
+  }
+
   Future<void> _loadApiKey() async {
     final rows = await _db!.query(
       'app_settings',
@@ -679,16 +690,12 @@ class AppRepository extends ChangeNotifier {
   }
 
   // ---------------------------------------------------------------------------
-  // 备份 / 恢复（本地，不涉及云）
+  // 备份 / 恢复
   // ---------------------------------------------------------------------------
 
-  /// 当前数据库文件的绝对路径（"导出备份"时把这个文件分享/另存）。
   Future<String> databaseFilePath() async =>
       p.join(await getDatabasesPath(), _dbName);
 
-  /// 用 [srcPath] 指向的备份文件覆盖恢复数据库。成功返回 true。
-  /// 覆盖前会把当前库复制到 `.bak`；若中途失败，尽力把 `.bak` 拷回回滚。
-  /// 恢复后重新打开并重载全部缓存（建议提示用户重启 App）。
   Future<bool> restoreDatabaseFromFile(String srcPath) async {
     final dbPath = p.join(await getDatabasesPath(), _dbName);
     final bakPath = '$dbPath.bak';
@@ -698,9 +705,9 @@ class AppRepository extends ChangeNotifier {
 
       final cur = File(dbPath);
       if (await cur.exists()) {
-        await cur.copy(bakPath); // 兜底备份
+        await cur.copy(bakPath);
       }
-      await File(srcPath).copy(dbPath); // 覆盖
+      await File(srcPath).copy(dbPath);
 
       _db = await openDatabase(
         dbPath,
@@ -712,7 +719,6 @@ class AppRepository extends ChangeNotifier {
       await _loadAll();
       return true;
     } catch (_) {
-      // 回滚：把 .bak 拷回，重新打开
       try {
         final bak = File(bakPath);
         if (await bak.exists()) {
@@ -725,15 +731,13 @@ class AppRepository extends ChangeNotifier {
           onUpgrade: _onUpgrade,
         );
         await _loadAll();
-      } catch (_) {
-        // 实在不行就保持 _db 可能为 null，等下次启动 init 再开
-      }
+      } catch (_) {}
       return false;
     }
   }
 
   // ---------------------------------------------------------------------------
-  // 收据图片清理（只删 App 自己 receipts/ 目录里的，外部相册原图绝不动）
+  // 收据图片清理
   // ---------------------------------------------------------------------------
 
   void _deleteReceiptFileIfOwned(String path) {
@@ -894,11 +898,28 @@ class AppRepository extends ChangeNotifier {
   List<CategoryEntity> childrenOf(int parentId) =>
       _categories.where((c) => c.parentId == parentId).toList();
 
+  /// 某大类本月支出合计（含其子类）。用于分类预算进度。
+  Decimal monthSpentForTopCategory(int topCategoryId, {DateTime? month}) {
+    final m = month ?? DateTime.now();
+    final ids = <int>{topCategoryId};
+    for (final c in _categories) {
+      if (c.parentId == topCategoryId) ids.add(c.id);
+    }
+    var sum = Decimal.zero;
+    for (final t in _transactions) {
+      if (t.txKind != TransactionKind.expense) continue;
+      if (t.categoryId == null || !ids.contains(t.categoryId)) continue;
+      if (t.date.year != m.year || t.date.month != m.month) continue;
+      sum += t.amount;
+    }
+    return sum;
+  }
+
   List<TransactionRecord> get allRecords =>
       _transactions.map((t) => t.toRecord()).toList();
 
   // ---------------------------------------------------------------------------
-  // 月度预算
+  // 预算（总额 + 分类）
   // ---------------------------------------------------------------------------
 
   Future<void> saveMonthlyBudget(Decimal amount) async {
@@ -922,6 +943,32 @@ class AppRepository extends ChangeNotifier {
       );
     }
     await _loadBudget();
+    notifyListeners();
+  }
+
+  /// 保存/更新某分类的月预算（[amount] <= 0 视为删除该分类预算）。
+  Future<void> saveCategoryBudget(String categoryKey, Decimal amount) async {
+    if (amount <= Decimal.zero) {
+      await _db!.delete('budget',
+          where: 'category_key = ?', whereArgs: [categoryKey]);
+    } else {
+      final rows = await _db!.query('budget',
+          where: 'category_key = ?', whereArgs: [categoryKey], limit: 1);
+      if (rows.isEmpty) {
+        await _db!.insert('budget', {
+          'category_key': categoryKey,
+          'amount': amount.toString(),
+        });
+      } else {
+        await _db!.update(
+          'budget',
+          {'amount': amount.toString()},
+          where: 'category_key = ?',
+          whereArgs: [categoryKey],
+        );
+      }
+    }
+    await _loadCategoryBudgets();
     notifyListeners();
   }
 
