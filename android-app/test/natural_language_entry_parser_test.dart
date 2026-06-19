@@ -8,18 +8,18 @@ final _now = DateTime(2026, 6, 12, 12);
 
 void main() {
   group('NaturalLanguageEntryParser', () {
-    test('taxi yesterday', () {
+    test('taxi yesterday -> 打车子类', () {
       final entry = NaturalLanguageEntryParser.parse('昨天打车23块', at: _now);
       expect(entry.amount, Decimal.fromInt(23));
       expect(entry.kind, TransactionKind.expense);
-      expect(entry.categoryKey, 'transport');
+      expect(entry.categoryKey, 'trans_taxi'); // 细化到子类「打车」
       expect(entry.date.day, 11); // 昨天 = 6月11日
     });
 
-    test('colloquial kuai amount', () {
+    test('colloquial kuai amount -> 午餐子类', () {
       final entry = NaturalLanguageEntryParser.parse('午饭23块5', at: _now);
       expect(entry.amount, Decimal.parse('23.5'));
-      expect(entry.categoryKey, 'dining');
+      expect(entry.categoryKey, 'dining_lunch'); // 细化到子类「午餐」
     });
 
     test('currency symbol', () {
@@ -28,11 +28,11 @@ void main() {
       expect(entry.categoryKey, 'groceries');
     });
 
-    test('last number fallback', () {
-      // "2杯"不是金额，应取最后的 58
+    test('last number fallback -> 饮料子类', () {
+      // "2杯"不是金额，应取最后的 58；咖啡命中「饮料酒水」子类
       final entry = NaturalLanguageEntryParser.parse('买了2杯咖啡58', at: _now);
       expect(entry.amount, Decimal.fromInt(58));
-      expect(entry.categoryKey, 'dining');
+      expect(entry.categoryKey, 'dining_drink');
     });
 
     test('income salary', () {
@@ -54,10 +54,10 @@ void main() {
       expect(entry.categoryKey, 'groceries');
     });
 
-    test('no amount', () {
+    test('no amount -> 餐饮大类兜底', () {
       final entry = NaturalLanguageEntryParser.parse('今天吃了顿好的', at: _now);
       expect(entry.amount, isNull);
-      expect(entry.categoryKey, 'dining');
+      expect(entry.categoryKey, 'dining'); // 泛词「吃」兜底到大类
     });
   });
 

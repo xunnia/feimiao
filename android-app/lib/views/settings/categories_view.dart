@@ -1,10 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../../core/models/cat_svg_icon.dart';
+import '../../core/models/category_seed.dart';
 import '../../core/models/transaction_kind.dart';
 import '../../data/app_repository.dart';
 
-/// 分类管理页：按收/支分组列出，支持新增、改名、删除。
+/// 分类管理页：按收/支分组，**大类分组 + 子类缩进**列出，支持新增、改名、删除。
 class CategoriesView extends StatelessWidget {
   const CategoriesView({super.key});
 
@@ -65,7 +67,7 @@ class CategoriesView extends StatelessWidget {
 }
 
 // ---------------------------------------------------------------------------
-// 分类列表（单一收/支类型）
+// 分类列表（单一收/支类型）：大类一组，子类缩进列在其下
 // ---------------------------------------------------------------------------
 
 class _CategoryList extends StatelessWidget {
@@ -88,8 +90,7 @@ class _CategoryList extends StatelessWidget {
             Text(
               '还没有分类',
               style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                    color:
-                        Theme.of(context).colorScheme.onSurfaceVariant,
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
                   ),
             ),
           ],
@@ -97,39 +98,60 @@ class _CategoryList extends StatelessWidget {
       );
     }
 
-    return ListView.separated(
-      itemCount: categories.length,
-      separatorBuilder: (_, __) => const Divider(height: 0),
-      itemBuilder: (context, index) {
-        final cat = categories[index];
-        final icon = _iconForKey(cat.key);
-        return ListTile(
-          leading: Icon(icon),
-          title: Text(cat.nameZh),
-          subtitle: Text(
-            cat.nameEn,
-            style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                  color:
-                      Theme.of(context).colorScheme.onSurfaceVariant,
-                ),
+    final scheme = Theme.of(context).colorScheme;
+    final tops = categories.where((c) => c.isTopLevel).toList();
+
+    return ListView(
+      padding: const EdgeInsets.only(bottom: 28),
+      children: [
+        for (final top in tops) ...[
+          _tile(context, top, isChild: false),
+          for (final child in categories.where((c) => c.parentId == top.id))
+            _tile(context, child, isChild: true),
+          Divider(
+            height: 1,
+            thickness: 0.5,
+            color: scheme.outlineVariant.withValues(alpha: 0.4),
           ),
-          trailing: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              IconButton(
-                icon: const Icon(Icons.edit_outlined, size: 20),
-                tooltip: '改名',
-                onPressed: () => _showRenameSheet(context, cat),
-              ),
-              IconButton(
-                icon: const Icon(Icons.delete_outline, size: 20),
-                tooltip: '删除',
-                onPressed: () => _confirmDelete(context, cat),
-              ),
-            ],
+        ],
+      ],
+    );
+  }
+
+  Widget _tile(BuildContext context, CategoryEntity cat,
+      {required bool isChild}) {
+    return ListTile(
+      contentPadding: EdgeInsets.only(left: isChild ? 38 : 16, right: 4),
+      minLeadingWidth: 0,
+      leading: CatIcon(
+        categoryKey: cat.key,
+        emoji: CategorySeed.emojiOf(cat.key),
+        size: isChild ? 30 : 38,
+      ),
+      title: Text(
+        cat.nameZh,
+        style: isChild
+            ? Theme.of(context).textTheme.bodyMedium
+            : Theme.of(context)
+                .textTheme
+                .titleSmall
+                ?.copyWith(fontWeight: FontWeight.w600),
+      ),
+      trailing: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          IconButton(
+            icon: const Icon(Icons.edit_outlined, size: 20),
+            tooltip: '改名',
+            onPressed: () => _showRenameSheet(context, cat),
           ),
-        );
-      },
+          IconButton(
+            icon: const Icon(Icons.delete_outline, size: 20),
+            tooltip: '删除',
+            onPressed: () => _confirmDelete(context, cat),
+          ),
+        ],
+      ),
     );
   }
 
@@ -164,40 +186,12 @@ class _CategoryList extends StatelessWidget {
       await context.read<AppRepository>().deleteCategory(cat.id);
     }
   }
-
-  /// 根据 key 返回对应图标（和 CategorySeed 保持一致，自定义分类用 label 图标兜底）。
-  static IconData _iconForKey(String key) {
-    const map = <String, IconData>{
-      'dining': Icons.restaurant,
-      'groceries': Icons.shopping_cart,
-      'transport': Icons.directions_bus,
-      'shopping': Icons.shopping_bag,
-      'entertainment': Icons.sports_esports,
-      'housing': Icons.home,
-      'utilities': Icons.bolt,
-      'medical': Icons.medical_services,
-      'education': Icons.menu_book,
-      'travel': Icons.flight,
-      'pets': Icons.pets,
-      'gifts': Icons.card_giftcard,
-      'subscription': Icons.autorenew,
-      'other': Icons.more_horiz,
-      'salary': Icons.payments,
-      'bonus': Icons.star,
-      'investment': Icons.trending_up,
-      'redPacket': Icons.mail,
-      'refund': Icons.undo,
-      'otherIncome': Icons.add_circle,
-    };
-    return map[key] ?? Icons.label_outline;
-  }
 }
 
 // ---------------------------------------------------------------------------
-// 可选图标列表（确认均为 Material Icons 标准图标）
+// 可选图标列表（用户新增自定义分类时挑选；自定义分类无 SVG，用 emoji/标签兜底）
 // ---------------------------------------------------------------------------
 
-/// 提供给用户挑选的图标列表，只包含已在 Material Icons 中确认存在的图标。
 const List<_IconOption> _kPickerIcons = [
   _IconOption(icon: Icons.restaurant, label: '餐饮'),
   _IconOption(icon: Icons.shopping_cart, label: '购物车'),
@@ -342,8 +336,7 @@ class _AddCategorySheetState extends State<_AddCategorySheet> {
                             : scheme.surfaceContainerHighest,
                         borderRadius: BorderRadius.circular(8),
                         border: selected
-                            ? Border.all(
-                                color: scheme.primary, width: 2)
+                            ? Border.all(color: scheme.primary, width: 2)
                             : null,
                       ),
                       child: Icon(
