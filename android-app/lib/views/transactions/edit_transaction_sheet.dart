@@ -13,8 +13,7 @@ import '../quick_add/category_grid.dart';
 ///
 /// 复用 [CategoryGrid] + [AmountKeypad]，预填原有数据；保存调用
 /// [AppRepository.updateTransaction]。右上角可删除。
-///
-/// 用法：`showModalBottomSheet(isScrollControlled: true, builder: ...)`。
+/// 分类区与记账页一致：大类网格 + ▼ + 点开展开子类网格面板。
 class EditTransactionSheet extends StatefulWidget {
   final TransactionEntity transaction;
 
@@ -211,31 +210,56 @@ class _EditTransactionSheetState extends State<EditTransactionSheet> {
             ),
           ),
 
-          // 分类网格（大类）+ 子类下钻
+          // 分类网格（大类）+ 子类展开面板
           Expanded(
             child: Consumer<AppRepository>(
               builder: (context, repo, _) {
                 final cats = repo.categoriesForKindRanked(_kind);
+                final expandable = <int>{
+                  for (final c in cats)
+                    if (repo.childrenOf(c.id).isNotEmpty) c.id
+                };
                 final children = _activeParentId == null
                     ? const <CategoryEntity>[]
                     : repo.childrenOf(_activeParentId!);
+                int? parentHighlight = _activeParentId;
+                if (parentHighlight == null &&
+                    _selectedCategoryId != null &&
+                    cats.any((c) => c.id == _selectedCategoryId)) {
+                  parentHighlight = _selectedCategoryId;
+                }
                 return SingleChildScrollView(
                   child: Column(
                     children: [
                       CategoryGrid(
                         categories: cats,
-                        selectedId: _activeParentId,
+                        selectedId: parentHighlight,
+                        expandableIds: expandable,
+                        expandedId: _activeParentId,
                         onSelected: (cat) => setState(() {
-                          _activeParentId = cat.id;
+                          final hasKids = expandable.contains(cat.id);
+                          _activeParentId =
+                              (hasKids && _activeParentId != cat.id)
+                                  ? cat.id
+                                  : null;
                           _selectedCategoryId = cat.id;
                         }),
                       ),
                       if (children.isNotEmpty)
-                        SubcategoryRow(
-                          children: children,
-                          selectedId: _selectedCategoryId,
-                          onSelected: (c) =>
-                              setState(() => _selectedCategoryId = c.id),
+                        Container(
+                          margin: const EdgeInsets.fromLTRB(12, 2, 12, 10),
+                          padding: const EdgeInsets.symmetric(vertical: 6),
+                          decoration: BoxDecoration(
+                            color: scheme.surfaceContainerHighest
+                                .withValues(alpha: 0.45),
+                            borderRadius: BorderRadius.circular(18),
+                          ),
+                          child: CategoryGrid(
+                            categories: children,
+                            selectedId: _selectedCategoryId,
+                            onSelected: (c) => setState(
+                                () => _selectedCategoryId = c.id),
+                          ),
                         ),
                     ],
                   ),

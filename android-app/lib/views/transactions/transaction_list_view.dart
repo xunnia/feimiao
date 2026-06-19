@@ -2,6 +2,7 @@ import 'package:decimal/decimal.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../../core/models/cat_svg_icon.dart';
 import '../../core/models/category_seed.dart';
 import '../../core/models/transaction_kind.dart';
 import '../../core/money_format.dart';
@@ -67,8 +68,6 @@ class _TransactionSectionList extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // 展平为带头部的扁平列表（方便 ListView.builder）
-    // 元素类型：_DaySection（表头）或 TransactionEntity（行）
     final items = <Object>[];
     for (final section in sections) {
       items.add(section);
@@ -117,7 +116,6 @@ class _SectionHeader extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    // 当日支出合计
     final expenseItems =
         section.items.where((t) => t.txKind == TransactionKind.expense);
     String subtitle = '';
@@ -259,17 +257,11 @@ class _TransactionRow extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
       child: Row(
         children: [
-          // 分类图标圆形背景
-          Container(
-            width: 40,
-            height: 40,
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              color: scheme.surfaceContainerHighest,
-            ),
-            child: Center(
-              child: Text(_emoji, style: const TextStyle(fontSize: 21)),
-            ),
+          // 分类图标（自有 iOS 风方块；转账/未分类回退 emoji）
+          CatIcon(
+            categoryKey: transaction.categoryKey,
+            emoji: _emoji,
+            size: 40,
           ),
           const SizedBox(width: 12),
           // 标题 + 备注

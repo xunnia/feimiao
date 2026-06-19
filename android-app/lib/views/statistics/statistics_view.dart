@@ -4,6 +4,8 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../../core/budget/budget_engine.dart';
+import '../../core/models/cat_svg_icon.dart';
+import '../../core/models/category_seed.dart';
 import '../../core/models/transaction_kind.dart';
 import '../../core/models/transaction_record.dart';
 import '../../core/money_format.dart';
@@ -861,6 +863,14 @@ class _CategoryRanking extends StatelessWidget {
 
   const _CategoryRanking({required this.categories, this.maxItems});
 
+  /// 用分类中文名反查 key（自有 SVG 图标按 key 渲染）。找不到返回 null。
+  String? _keyForName(String name) {
+    for (final s in CategorySeed.all) {
+      if (s.nameZh == name) return s.key;
+    }
+    return null;
+  }
+
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
@@ -870,6 +880,7 @@ class _CategoryRanking extends StatelessWidget {
     return Column(
       children: items.map((item) {
         final pct = (item.share * 100).toStringAsFixed(0);
+        final key = _keyForName(item.name);
         return Padding(
           padding: const EdgeInsets.only(bottom: 10),
           child: Column(
@@ -877,6 +888,14 @@ class _CategoryRanking extends StatelessWidget {
             children: [
               Row(
                 children: [
+                  CatIcon(
+                    categoryKey: key ?? '',
+                    emoji: key != null
+                        ? CategorySeed.emojiOf(key)
+                        : '🏷️',
+                    size: 24,
+                  ),
+                  const SizedBox(width: 8),
                   Expanded(
                     child: Text(
                       item.name,

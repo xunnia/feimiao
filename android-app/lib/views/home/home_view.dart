@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../../core/budget/budget_engine.dart';
+import '../../core/models/cat_svg_icon.dart';
 import '../../core/models/category_seed.dart';
 import '../../core/models/transaction_kind.dart';
 import '../../core/money_format.dart';
@@ -881,17 +882,11 @@ class _TransactionRow extends StatelessWidget {
           horizontal: AppSpacing.lg, vertical: AppSpacing.sm),
       child: Row(
         children: [
-          // 分类图标
-          Container(
-            width: 40,
-            height: 40,
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              color: scheme.surfaceContainerHighest,
-            ),
-            child: Center(
-              child: Text(_emoji, style: const TextStyle(fontSize: 20)),
-            ),
+          // 分类图标（自有 iOS 风方块；转账/未分类回退 emoji）
+          CatIcon(
+            categoryKey: transaction.categoryKey,
+            emoji: _emoji,
+            size: 40,
           ),
           const SizedBox(width: AppSpacing.md),
           // 分类（主）+ 备注/对方（最弱灰小字）
