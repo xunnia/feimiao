@@ -4,132 +4,153 @@ import 'package:flutter/services.dart';
 
 import '../../core/amount_expression.dart';
 
-/// 快记数字键盘：左侧 3 列数字 + 右侧功能列（删除、连加、保存）。
+/// 快记数字键盘（M41 改版，参考咔皮）。
 ///
-/// 对应 iOS AmountKeypad.swift 布局。
-/// Liquid Glass 效果在 Flutter 里以半透明圆角卡片 + 轻微阴影近似。
+/// 4×4 布局：
+///   1 2 3 ⌫(长按=清空)
+///   4 5 6 ＋
+///   7 8 9 －
+///   再记 0 . 保存
+///
+/// [onSaveAndContinue] 为空时（如编辑页），左下角显示「C 清空」而非「再记」。
 class AmountKeypad extends StatelessWidget {
   final AmountExpression expression;
   final VoidCallback onExpressionChanged;
   final VoidCallback onSave;
+  final VoidCallback? onSaveAndContinue;
 
   const AmountKeypad({
     super.key,
     required this.expression,
     required this.onExpressionChanged,
     required this.onSave,
+    this.onSaveAndContinue,
   });
 
-  static const double _keyHeight = 56;
+  static const double _keyHeight = 54;
   static const double _spacing = 8;
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    final canSave = expression.value > Decimal.zero;
+
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 12),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.end,
+      child: Column(
         children: [
-          // 左侧数字区
-          Expanded(
-            child: Column(
-              children: [
-                _digitRow(context, ['7', '8', '9']),
-                const SizedBox(height: _spacing),
-                _digitRow(context, ['4', '5', '6']),
-                const SizedBox(height: _spacing),
-                _digitRow(context, ['1', '2', '3']),
-                const SizedBox(height: _spacing),
-                Row(
-                  children: [
-                    Expanded(child: _digitKey(context, '.', () => _tap(() => expression.insertDot()))),
-                    const SizedBox(width: _spacing),
-                    Expanded(child: _digitKey(context, '0', () => _tap(() => expression.insertDigit('0')))),
-                    const SizedBox(width: _spacing),
-                    Expanded(child: _digitKey(context, 'C', () => _tap(() => expression.clear()))),
-                  ],
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(width: _spacing),
-          // 右侧功能区
-          SizedBox(
-            width: 84,
-            child: Column(
-              children: [
-                _functionKey(
-                  context,
-                  icon: Icons.backspace_outlined,
-                  onPressed: () => _tap(() => expression.deleteBackward()),
-                ),
-                const SizedBox(height: _spacing),
-                _functionKey(
-                  context,
-                  icon: Icons.add,
-                  onPressed: () => _tap(() => expression.beginAddition()),
-                ),
-                const SizedBox(height: _spacing),
-                // 保存按钮：高度 = 两个普通按键 + 间距
-                _saveKey(context, scheme),
-              ],
-            ),
-          ),
+          _row([
+            _digit(context, '1'),
+            _digit(context, '2'),
+            _digit(context, '3'),
+            _func(context,
+                icon: Icons.backspace_outlined,
+                onTap: () => _tap(() => expression.deleteBackward()),
+                onLongPress: () => _tap(() => expression.clear())),
+          ]),
+          const SizedBox(height: _spacing),
+          _row([
+            _digit(context, '4'),
+            _digit(context, '5'),
+            _digit(context, '6'),
+            _func(context,
+                icon: Icons.add,
+                onTap: () => _tap(() => expression.beginAddition())),
+          ]),
+          const SizedBox(height: _spacing),
+          _row([
+            _digit(context, '7'),
+            _digit(context, '8'),
+            _digit(context, '9'),
+            _func(context,
+                icon: Icons.remove,
+                onTap: () => _tap(() => expression.beginSubtraction())),
+          ]),
+          const SizedBox(height: _spacing),
+          _row([
+            // 左下：再记（有回调时）/ 否则清空
+            onSaveAndContinue != null
+                ? _text(context, '再记',
+                    color: scheme.secondaryContainer,
+                    textColor: scheme.onSecondaryContainer,
+                    onTap: canSave
+                        ? () {
+                            HapticFeedback.mediumImpact();
+                            onSaveAndContinue!();
+                          }
+                        : null)
+                : _text(context, 'C',
+                    color: scheme.surfaceContainerHigh,
+                    textColor: scheme.onSurface,
+                    onTap: () => _tap(() => expression.clear())),
+            _digit(context, '0'),
+            _digit(context, '.', onTap: () => _tap(() => expression.insertDot())),
+            _text(context, '保存',
+                color: canSave ? scheme.primary : scheme.primary.withAlpha(90),
+                textColor: scheme.onPrimary,
+                bold: true,
+                onTap: canSave ? onSave : null),
+          ]),
         ],
       ),
     );
   }
 
-  Widget _digitRow(BuildContext context, List<String> digits) {
+  Widget _row(List<Widget> cells) {
     return Row(
       children: [
-        for (int i = 0; i < digits.length; i++) ...[
+        for (int i = 0; i < cells.length; i++) ...[
           if (i > 0) const SizedBox(width: _spacing),
-          Expanded(child: _digitKey(context, digits[i], () => _tap(() => expression.insertDigit(digits[i])))),
+          Expanded(child: cells[i]),
         ],
       ],
     );
   }
 
-  Widget _digitKey(BuildContext context, String label, VoidCallback onPressed) {
+  Widget _digit(BuildContext context, String label, {VoidCallback? onTap}) {
     final scheme = Theme.of(context).colorScheme;
     return _KeyButton(
       height: _keyHeight,
       color: scheme.surfaceContainerHigh,
-      onPressed: onPressed,
+      onPressed: onTap ?? () => _tap(() => expression.insertDigit(label)),
       child: Text(
         label,
-        style: Theme.of(context).textTheme.titleLarge?.copyWith(
-              fontWeight: FontWeight.w500,
-            ),
+        style: Theme.of(context)
+            .textTheme
+            .titleLarge
+            ?.copyWith(fontWeight: FontWeight.w500),
       ),
     );
   }
 
-  Widget _functionKey(BuildContext context, {required IconData icon, required VoidCallback onPressed}) {
+  Widget _func(BuildContext context,
+      {required IconData icon,
+      required VoidCallback onTap,
+      VoidCallback? onLongPress}) {
     final scheme = Theme.of(context).colorScheme;
     return _KeyButton(
       height: _keyHeight,
-      color: scheme.surfaceContainerHigh,
-      onPressed: onPressed,
-      child: Icon(icon),
+      color: scheme.surfaceContainerHighest,
+      onPressed: onTap,
+      onLongPress: onLongPress,
+      child: Icon(icon, color: scheme.onSurfaceVariant),
     );
   }
 
-  Widget _saveKey(BuildContext context, ColorScheme scheme) {
-    final canSave = expression.value > Decimal.zero;
-    // height = 2 * keyHeight + 1 * spacing
-    const saveHeight = _keyHeight * 2 + _spacing;
+  Widget _text(BuildContext context, String label,
+      {required Color color,
+      required Color textColor,
+      bool bold = false,
+      VoidCallback? onTap}) {
     return _KeyButton(
-      height: saveHeight,
-      color: canSave ? scheme.primary : scheme.primary.withAlpha(90),
-      onPressed: canSave ? onSave : null,
+      height: _keyHeight,
+      color: color,
+      onPressed: onTap,
       child: Text(
-        '保存',
+        label,
         style: Theme.of(context).textTheme.titleMedium?.copyWith(
-              color: scheme.onPrimary,
-              fontWeight: FontWeight.w600,
+              color: textColor,
+              fontWeight: bold ? FontWeight.w600 : FontWeight.w500,
             ),
       ),
     );
@@ -147,12 +168,14 @@ class _KeyButton extends StatelessWidget {
   final double height;
   final Color color;
   final VoidCallback? onPressed;
+  final VoidCallback? onLongPress;
   final Widget child;
 
   const _KeyButton({
     required this.height,
     required this.color,
     required this.onPressed,
+    this.onLongPress,
     required this.child,
   });
 
@@ -167,6 +190,7 @@ class _KeyButton extends StatelessWidget {
         child: InkWell(
           borderRadius: BorderRadius.circular(14),
           onTap: onPressed,
+          onLongPress: onLongPress,
           child: Center(child: child),
         ),
       ),

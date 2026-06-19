@@ -14,13 +14,11 @@ import '../quick_add/category_grid.dart';
 
 /// 手动记账大卡片（模态底部弹出）。
 ///
-/// 布局（M40 改版，参考咔皮，更顺手）：
-///   顶部：轻量文字 tab（支出/收入）+ 手动记账胶囊 + X
-///   中部：分类区（大类网格 + ▼ + 点开展开子类网格卡片）
-///   下部：标签 → 今日可花 → 「金额+账户+日期+备注」成组卡片 → 数字键盘
-/// 把金额贴到键盘上方，敲数字时视线集中。
+/// 布局（M40/M41/M42）：
+///   顶部：文字 tab（支出 / 收入 / 转账）+ 手动记账胶囊 + X
+///   中部：支出/收入=分类网格(大类 + ▼ + 展开子类卡片)；转账=账户→账户
+///   下部：标签 → 今日可花 → 「金额+账户/日期/备注」成组卡片 → 数字键盘(含 ＋− / 再记)
 class ManualAddSheet extends StatefulWidget {
-  /// 点击"AI助手"时的回调（由调用方切换到 AiFocusedInputSheet）。
   final VoidCallback onSwitchToAi;
 
   const ManualAddSheet({super.key, required this.onSwitchToAi});
@@ -34,7 +32,8 @@ class _ManualAddSheetState extends State<ManualAddSheet> {
   final AmountExpression _expression = AmountExpression();
   int? _selectedCategoryId; // 最终记账的分类（大类或子类）
   int? _activeParentId; // 当前展开子类面板的大类；null=未展开
-  int? _selectedAccountId;
+  int? _selectedAccountId; // 支出/收入的账户；转账的「从」账户
+  int? _toAccountId; // 转账的「到」账户
   DateTime _date = DateTime.now();
   final TextEditingController _noteController = TextEditingController();
   List<int> _tagIds = [];
@@ -58,7 +57,6 @@ class _ManualAddSheetState extends State<ManualAddSheet> {
       _selectedAccountId ??= repo.accounts.firstOrNull?.id;
       final cats = repo.categoriesForKindRanked(_kind);
       _selectedCategoryId ??= cats.firstOrNull?.id;
-      // 默认不展开子类面板，保持清爽（学咔皮）
     });
   }
 
@@ -67,48 +65,81 @@ class _ManualAddSheetState extends State<ManualAddSheet> {
     final repo = context.read<AppRepository>();
     setState(() {
       _kind = kind;
-      final cats = repo.categoriesForKindRanked(kind);
-      _selectedCategoryId = cats.firstOrNull?.id;
-      _activeParentId = null;
+      if (kind == TransactionKind.transfer) {
+        _selectedAccountId ??= repo.accounts.firstOrNull?.id;
+        _toAccountId = repo.accounts
+            .where((a) => a.id != _selectedAccountId)
+            .firstOrNull
+            ?.id;
+      } else {
+        final cats = repo.categoriesForKindRanked(kind);
+        _selectedCategoryId = cats.firstOrNull?.id;
+        _activeParentId = null;
+      }
     });
   }
 
   void _onExpressionChanged() => setState(() => _expressionVersion++);
 
-  Future<void> _save() async {
+  /// 提交一笔。成功返回 true。转账要求「到账户」有效且不等于「从账户」。
+  Future<bool> _commit() async {
     final amount = _expression.value;
-    if (amount <= Decimal.zero) return;
+    if (amount <= Decimal.zero) return false;
 
     final repo = context.read<AppRepository>();
-    final accountId = _selectedAccountId ?? repo.accounts.firstOrNull?.id;
-    if (accountId == null) return;
+    final from = _selectedAccountId ?? repo.accounts.firstOrNull?.id;
+    if (from == null) return false;
 
-    await repo.addTransaction(
-      kind: _kind,
-      amount: amount,
-      categoryId: _selectedCategoryId,
-      accountId: accountId,
-      note: _noteController.text.trim(),
-      date: _date,
-      tagIds: _tagIds,
-    );
+    if (_kind == TransactionKind.transfer) {
+      final to = _toAccountId;
+      if (to == null || to == from) return false;
+      await repo.addTransaction(
+        kind: TransactionKind.transfer,
+        amount: amount,
+        categoryId: null,
+        accountId: from,
+        toAccountId: to,
+        note: _noteController.text.trim(),
+        date: _date,
+        tagIds: _tagIds,
+      );
+    } else {
+      await repo.addTransaction(
+        kind: _kind,
+        amount: amount,
+        categoryId: _selectedCategoryId,
+        accountId: from,
+        note: _noteController.text.trim(),
+        date: _date,
+        tagIds: _tagIds,
+      );
+    }
+    return true;
+  }
 
-    if (mounted) Navigator.pop(context);
+  Future<void> _save() async {
+    if (await _commit() && mounted) Navigator.pop(context);
+  }
+
+  Future<void> _saveAndContinue() async {
+    if (await _commit()) {
+      _expression.clear();
+      _noteController.clear();
+      if (mounted) setState(() => _expressionVersion++);
+    }
   }
 
   @override
   Widget build(BuildContext context) {
-    // isScrollControlled: true のsheet では高さ制約を自分で持つ必要がある。
-    // 画面高さの 92% を上限に、キーボード分を引いた残り全体を使う。
     final screenH = MediaQuery.sizeOf(context).height;
     final bottomInset = MediaQuery.viewInsetsOf(context).bottom;
     final maxH = screenH * 0.92 - bottomInset;
+    final isTransfer = _kind == TransactionKind.transfer;
 
     return SizedBox(
       height: maxH.clamp(300.0, screenH * 0.92),
       child: Column(
         children: [
-          // ── 顶部拖动条 ──
           const _DragHandle(),
 
           // ── 顶部栏：文字 tab + AI助手胶囊 + 关闭 ──
@@ -117,10 +148,7 @@ class _ManualAddSheetState extends State<ManualAddSheet> {
             child: Row(
               children: [
                 Expanded(
-                  child: _KindTabs(
-                    selected: _kind,
-                    onChanged: _onKindChanged,
-                  ),
+                  child: _KindTabs(selected: _kind, onChanged: _onKindChanged),
                 ),
                 const SizedBox(width: 8),
                 _ModePill(label: '手动记账', onTap: widget.onSwitchToAi),
@@ -133,10 +161,27 @@ class _ManualAddSheetState extends State<ManualAddSheet> {
             ),
           ),
 
-          // ── 分类区（Expanded 撑满剩余空间）──
+          // ── 中部：分类区 或 转账区 ──
           Expanded(
             child: Consumer<AppRepository>(
               builder: (context, repo, _) {
+                if (isTransfer) {
+                  return _TransferBody(
+                    accounts: repo.accounts,
+                    fromId: _selectedAccountId,
+                    toId: _toAccountId,
+                    onFrom: (id) => setState(() {
+                      _selectedAccountId = id;
+                      if (_toAccountId == id) {
+                        _toAccountId = repo.accounts
+                            .where((a) => a.id != id)
+                            .firstOrNull
+                            ?.id;
+                      }
+                    }),
+                    onTo: (id) => setState(() => _toAccountId = id),
+                  );
+                }
                 final scheme = Theme.of(context).colorScheme;
                 final cats = repo.categoriesForKindRanked(_kind);
                 final expandable = <int>{
@@ -216,7 +261,7 @@ class _ManualAddSheetState extends State<ManualAddSheet> {
               },
             ),
 
-          // ── 金额 + 账户/日期/备注 成组卡片（贴在键盘上方）──
+          // ── 金额 + 日期/备注（+账户，转账时账户在上方选）成组卡片 ──
           Builder(
             builder: (context) {
               final scheme = Theme.of(context).colorScheme;
@@ -235,6 +280,7 @@ class _ManualAddSheetState extends State<ManualAddSheet> {
                       selectedAccountId: _selectedAccountId,
                       date: _date,
                       noteController: _noteController,
+                      showAccount: !isTransfer,
                       onAccountChanged: (id) =>
                           setState(() => _selectedAccountId = id),
                       onDateChanged: (d) => setState(() => _date = d),
@@ -252,6 +298,7 @@ class _ManualAddSheetState extends State<ManualAddSheet> {
               expression: _expression,
               onExpressionChanged: _onExpressionChanged,
               onSave: _save,
+              onSaveAndContinue: _saveAndContinue,
             ),
           ),
         ],
@@ -261,7 +308,7 @@ class _ManualAddSheetState extends State<ManualAddSheet> {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 顶部 kind 文字 tab（支出 / 收入），选中变主色 + 短下划线（学咔皮，轻量）
+// 顶部 kind 文字 tab（支出 / 收入 / 转账）
 // ─────────────────────────────────────────────────────────────────────────────
 
 class _KindTabs extends StatelessWidget {
@@ -273,16 +320,19 @@ class _KindTabs extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    Widget sep() => Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 8),
+          child: Text('｜',
+              style: TextStyle(color: scheme.outlineVariant, fontSize: 15)),
+        );
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
         _tab(context, '支出', TransactionKind.expense, scheme),
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 10),
-          child: Text('｜',
-              style: TextStyle(color: scheme.outlineVariant, fontSize: 16)),
-        ),
+        sep(),
         _tab(context, '收入', TransactionKind.income, scheme),
+        sep(),
+        _tab(context, '转账', TransactionKind.transfer, scheme),
       ],
     );
   }
@@ -299,14 +349,14 @@ class _KindTabs extends StatelessWidget {
           Text(
             label,
             style: TextStyle(
-              fontSize: 18,
+              fontSize: 17,
               fontWeight: isSel ? FontWeight.w600 : FontWeight.w400,
               color: isSel ? scheme.primary : scheme.onSurfaceVariant,
             ),
           ),
           const SizedBox(height: 3),
           Container(
-            width: 20,
+            width: 18,
             height: 3,
             decoration: BoxDecoration(
               color: isSel ? scheme.primary : Colors.transparent,
@@ -315,6 +365,125 @@ class _KindTabs extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 转账区：从账户 → 到账户
+// ─────────────────────────────────────────────────────────────────────────────
+
+class _TransferBody extends StatelessWidget {
+  final List<AccountEntity> accounts;
+  final int? fromId;
+  final int? toId;
+  final ValueChanged<int?> onFrom;
+  final ValueChanged<int?> onTo;
+
+  const _TransferBody({
+    required this.accounts,
+    required this.fromId,
+    required this.toId,
+    required this.onFrom,
+    required this.onTo,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    if (accounts.length < 2) {
+      return Padding(
+        padding: const EdgeInsets.fromLTRB(24, 40, 24, 24),
+        child: Text(
+          '转账需要至少两个账户。\n先到「设置 → 账户」里添加一个吧～',
+          textAlign: TextAlign.center,
+          style: Theme.of(context)
+              .textTheme
+              .bodyMedium
+              ?.copyWith(color: scheme.onSurfaceVariant),
+        ),
+      );
+    }
+    final from = accounts.where((a) => a.id == fromId).firstOrNull;
+    final to = accounts.where((a) => a.id == toId).firstOrNull;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(20, 28, 20, 12),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: _accTile(context, '从', from?.name ?? '选择',
+                    exclude: toId, onChanged: onFrom),
+              ),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 10),
+                child: Icon(Icons.arrow_forward,
+                    color: scheme.primary, size: 22),
+              ),
+              Expanded(
+                child: _accTile(context, '到', to?.name ?? '选择',
+                    exclude: fromId, onChanged: onTo),
+              ),
+            ],
+          ),
+          const SizedBox(height: 14),
+          Text(
+            '转账只在账户之间移动，不计入收支',
+            style: Theme.of(context)
+                .textTheme
+                .labelSmall
+                ?.copyWith(color: scheme.onSurfaceVariant),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _accTile(BuildContext context, String label, String name,
+      {required int? exclude, required ValueChanged<int?> onChanged}) {
+    final scheme = Theme.of(context).colorScheme;
+    final options = accounts.where((a) => a.id != exclude).toList();
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(label,
+            style: Theme.of(context)
+                .textTheme
+                .labelSmall
+                ?.copyWith(color: scheme.onSurfaceVariant)),
+        const SizedBox(height: 6),
+        PopupMenuButton<int>(
+          onSelected: onChanged,
+          itemBuilder: (_) => options
+              .map((a) => PopupMenuItem(value: a.id, child: Text(a.name)))
+              .toList(),
+          child: Container(
+            height: 48,
+            padding: const EdgeInsets.symmetric(horizontal: 14),
+            decoration: BoxDecoration(
+              color: scheme.surfaceContainerHigh,
+              borderRadius: BorderRadius.circular(14),
+            ),
+            child: Row(
+              children: [
+                Icon(Icons.account_balance_wallet_outlined,
+                    size: 18, color: scheme.onSurfaceVariant),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(name,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.bodyMedium),
+                ),
+                Icon(Icons.expand_more,
+                    size: 18, color: scheme.onSurfaceVariant),
+              ],
+            ),
+          ),
+        ),
+      ],
     );
   }
 }
@@ -401,7 +570,7 @@ class _AmountDisplay extends StatelessWidget {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 详情行：账户 + 日期 + 备注（放在金额下方，同一张卡片里）
+// 详情行：账户 + 日期 + 备注
 // ─────────────────────────────────────────────────────────────────────────────
 
 class _DetailBar extends StatelessWidget {
@@ -409,6 +578,7 @@ class _DetailBar extends StatelessWidget {
   final int? selectedAccountId;
   final DateTime date;
   final TextEditingController noteController;
+  final bool showAccount;
   final ValueChanged<int?> onAccountChanged;
   final ValueChanged<DateTime> onDateChanged;
 
@@ -417,6 +587,7 @@ class _DetailBar extends StatelessWidget {
     required this.selectedAccountId,
     required this.date,
     required this.noteController,
+    required this.showAccount,
     required this.onAccountChanged,
     required this.onDateChanged,
   });
@@ -436,13 +607,14 @@ class _DetailBar extends StatelessWidget {
       ),
       child: Row(
         children: [
-          if (accounts.isNotEmpty)
+          if (showAccount && accounts.isNotEmpty) ...[
             _AccountButton(
               account: selectedAccount,
               accounts: accounts,
               onChanged: onAccountChanged,
             ),
-          const SizedBox(width: 8),
+            const SizedBox(width: 8),
+          ],
           _DateButton(date: date, onChanged: onDateChanged),
           const SizedBox(width: 8),
           Expanded(
@@ -578,7 +750,7 @@ class _TodayAllowanceBanner extends StatelessWidget {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 统一圆形工具按钮（透明底 + 淡阴影，对标 Claude）
+// 统一圆形工具按钮
 // ─────────────────────────────────────────────────────────────────────────────
 
 class _ToolCircleButton extends StatelessWidget {
@@ -614,7 +786,7 @@ class _ToolCircleButton extends StatelessWidget {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 模式胶囊（透明底 + swap_horiz 前置图标 + 不加粗）
+// 模式胶囊
 // ─────────────────────────────────────────────────────────────────────────────
 
 class _ModePill extends StatelessWidget {

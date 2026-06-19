@@ -90,5 +90,56 @@ void main() {
       expect(expr.isEmpty, isTrue);
       expect(expr.displayText, '0');
     });
+
+    // ── 减法（M41 新增）────────────────────────────────────────────────
+    test('subtraction', () {
+      final expr = AmountExpression();
+      expr.insertDigit('5');
+      expr.insertDigit('0');
+      expr.beginSubtraction();
+      expr.insertDigit('8');
+      expect(expr.displayText, '50-8');
+      expect(expr.value, Decimal.parse('42'));
+      expect(expr.isCompound, isTrue);
+    });
+
+    test('mixed addition and subtraction', () {
+      final expr = AmountExpression();
+      expr.insertDigit('1');
+      expr.insertDigit('2');
+      expr.beginAddition();
+      expr.insertDigit('3');
+      expr.beginSubtraction();
+      expr.insertDigit('5');
+      expect(expr.displayText, '12+3-5');
+      expect(expr.value, Decimal.parse('10'));
+    });
+
+    test('subtraction requires current number', () {
+      final expr = AmountExpression();
+      expr.beginSubtraction();
+      expect(expr.displayText, '0');
+      expect(expr.isCompound, isFalse);
+    });
+
+    test('subtraction can yield non-positive (save 由 UI 拦截)', () {
+      final expr = AmountExpression();
+      expr.insertDigit('2');
+      expr.beginSubtraction();
+      expr.insertDigit('5');
+      expect(expr.value, Decimal.parse('-3'));
+    });
+
+    test('delete backward across a subtraction segment', () {
+      final expr = AmountExpression();
+      expr.insertDigit('9');
+      expr.beginSubtraction();
+      expr.insertDigit('4');
+      expr.deleteBackward(); // '4'
+      expr.deleteBackward(); // 空的减段
+      expect(expr.displayText, '9');
+      expect(expr.isCompound, isFalse);
+      expect(expr.value, Decimal.parse('9'));
+    });
   });
 }
