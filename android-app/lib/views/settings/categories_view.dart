@@ -189,49 +189,7 @@ class _CategoryList extends StatelessWidget {
 }
 
 // ---------------------------------------------------------------------------
-// 可选图标列表（用户新增自定义分类时挑选；自定义分类无 SVG，用 emoji/标签兜底）
-// ---------------------------------------------------------------------------
-
-const List<_IconOption> _kPickerIcons = [
-  _IconOption(icon: Icons.restaurant, label: '餐饮'),
-  _IconOption(icon: Icons.shopping_cart, label: '购物车'),
-  _IconOption(icon: Icons.directions_bus, label: '公交'),
-  _IconOption(icon: Icons.shopping_bag, label: '购物袋'),
-  _IconOption(icon: Icons.sports_esports, label: '游戏'),
-  _IconOption(icon: Icons.home, label: '住房'),
-  _IconOption(icon: Icons.bolt, label: '电费'),
-  _IconOption(icon: Icons.medical_services, label: '医疗'),
-  _IconOption(icon: Icons.menu_book, label: '书籍'),
-  _IconOption(icon: Icons.flight, label: '机票'),
-  _IconOption(icon: Icons.pets, label: '宠物'),
-  _IconOption(icon: Icons.card_giftcard, label: '礼品'),
-  _IconOption(icon: Icons.autorenew, label: '订阅'),
-  _IconOption(icon: Icons.more_horiz, label: '其他'),
-  _IconOption(icon: Icons.payments, label: '工资'),
-  _IconOption(icon: Icons.star, label: '奖金'),
-  _IconOption(icon: Icons.trending_up, label: '理财'),
-  _IconOption(icon: Icons.mail, label: '红包'),
-  _IconOption(icon: Icons.undo, label: '退款'),
-  _IconOption(icon: Icons.add_circle, label: '新增'),
-  _IconOption(icon: Icons.coffee, label: '咖啡'),
-  _IconOption(icon: Icons.local_taxi, label: '打车'),
-  _IconOption(icon: Icons.fitness_center, label: '健身'),
-  _IconOption(icon: Icons.local_hospital, label: '医院'),
-  _IconOption(icon: Icons.phone_android, label: '手机'),
-  _IconOption(icon: Icons.laptop, label: '电脑'),
-  _IconOption(icon: Icons.child_care, label: '育儿'),
-  _IconOption(icon: Icons.sports_basketball, label: '运动'),
-];
-
-class _IconOption {
-  final IconData icon;
-  final String label;
-
-  const _IconOption({required this.icon, required this.label});
-}
-
-// ---------------------------------------------------------------------------
-// 新增分类底部弹层
+// 新增分类底部弹层（自定义分类用 emoji/标签兜底显示，不再有“假图标选择器”）
 // ---------------------------------------------------------------------------
 
 class _AddCategorySheet extends StatefulWidget {
@@ -244,7 +202,6 @@ class _AddCategorySheet extends StatefulWidget {
 class _AddCategorySheetState extends State<_AddCategorySheet> {
   final TextEditingController _nameCtrl = TextEditingController();
   TransactionKind _kind = TransactionKind.expense;
-  IconData _selectedIcon = Icons.label_outline;
 
   @override
   void dispose() {
@@ -254,7 +211,6 @@ class _AddCategorySheetState extends State<_AddCategorySheet> {
 
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
     return Padding(
       padding: EdgeInsets.only(
         bottom: MediaQuery.viewInsetsOf(context).bottom,
@@ -276,7 +232,6 @@ class _AddCategorySheetState extends State<_AddCategorySheet> {
           ),
           const SizedBox(height: 16),
 
-          // 收/支切换
           SegmentedButton<TransactionKind>(
             segments: const [
               ButtonSegment(
@@ -289,7 +244,6 @@ class _AddCategorySheetState extends State<_AddCategorySheet> {
           ),
           const SizedBox(height: 12),
 
-          // 名称输入
           TextField(
             controller: _nameCtrl,
             autofocus: true,
@@ -301,60 +255,8 @@ class _AddCategorySheetState extends State<_AddCategorySheet> {
             ),
             onChanged: (_) => setState(() {}),
           ),
-          const SizedBox(height: 12),
+          const SizedBox(height: 20),
 
-          // 图标选择
-          Text(
-            '选择图标',
-            style: Theme.of(context).textTheme.labelMedium?.copyWith(
-                  color: scheme.onSurfaceVariant,
-                ),
-          ),
-          const SizedBox(height: 8),
-          SizedBox(
-            height: 160,
-            child: GridView.builder(
-              gridDelegate:
-                  const SliverGridDelegateWithFixedCrossAxisCount(
-                crossAxisCount: 7,
-                mainAxisSpacing: 8,
-                crossAxisSpacing: 8,
-              ),
-              itemCount: _kPickerIcons.length,
-              itemBuilder: (context, index) {
-                final opt = _kPickerIcons[index];
-                final selected = _selectedIcon == opt.icon;
-                return GestureDetector(
-                  onTap: () => setState(() => _selectedIcon = opt.icon),
-                  child: Tooltip(
-                    message: opt.label,
-                    child: AnimatedContainer(
-                      duration: const Duration(milliseconds: 150),
-                      decoration: BoxDecoration(
-                        color: selected
-                            ? scheme.primaryContainer
-                            : scheme.surfaceContainerHighest,
-                        borderRadius: BorderRadius.circular(8),
-                        border: selected
-                            ? Border.all(color: scheme.primary, width: 2)
-                            : null,
-                      ),
-                      child: Icon(
-                        opt.icon,
-                        size: 22,
-                        color: selected
-                            ? scheme.onPrimaryContainer
-                            : scheme.onSurfaceVariant,
-                      ),
-                    ),
-                  ),
-                );
-              },
-            ),
-          ),
-          const SizedBox(height: 16),
-
-          // 操作按钮
           Row(
             children: [
               Expanded(
@@ -370,13 +272,12 @@ class _AddCategorySheetState extends State<_AddCategorySheet> {
                       ? null
                       : () async {
                           final name = _nameCtrl.text.trim();
-                          // 以时间戳生成唯一 key，防止与种子数据冲突
                           final key =
                               'custom_${DateTime.now().millisecondsSinceEpoch}';
                           await context.read<AppRepository>().addCategory(
                                 key: key,
                                 nameZh: name,
-                                nameEn: name, // 用户自定义分类英文名同中文名
+                                nameEn: name,
                                 kind: _kind,
                               );
                           if (context.mounted) Navigator.pop(context);

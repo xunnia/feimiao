@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:decimal/decimal.dart';
 import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as p;
@@ -40,7 +42,7 @@ class AccountEntity {
 class BookEntity {
   final int id;
   final String name;
-  final String icon; // emoji 或图标标记
+  final String icon;
 
   const BookEntity({required this.id, required this.name, this.icon = '📒'});
 
@@ -99,8 +101,8 @@ class CategoryEntity {
 /// 交易实体（从数据库读出，包含关联对象冗余字段以避免 JOIN）。
 class TransactionEntity {
   final int id;
-  final String kind;           // TransactionKind.name
-  final String amountStr;      // Decimal.toString() 字符串，保精度
+  final String kind;
+  final String amountStr;
   final String currencyCode;
   final int? categoryId;
   final String categoryKey;
@@ -111,16 +113,15 @@ class TransactionEntity {
   final int? toAccountId;
   final String toAccountName;
   final String note;
-  final int dateMs;            // DateTime.millisecondsSinceEpoch
-  final String tagsRaw;        // 逗号分隔的标签 id 串，如 "1,3,5"
-  final bool reimbursable;     // 待报销标记
-  final String imagePath;      // 收据图片本地路径（空 = 无）
+  final int dateMs;
+  final String tagsRaw;
+  final bool reimbursable;
+  final String imagePath;
 
   Decimal get amount => Decimal.parse(amountStr);
   DateTime get date => DateTime.fromMillisecondsSinceEpoch(dateMs);
   TransactionKind get txKind => TransactionKind.fromJson(kind);
 
-  /// 解析出标签 id 列表（空串返回空列表）。
   List<int> get tagIds => tagsRaw.isEmpty
       ? const []
       : tagsRaw
@@ -149,7 +150,6 @@ class TransactionEntity {
     this.imagePath = '',
   });
 
-  /// 转为 core 层的纯逻辑对象（用于统计引擎等）。
   TransactionRecord toRecord({String languageCode = 'zh'}) =>
       TransactionRecord(
         id: id.toString(),
@@ -210,14 +210,13 @@ class SavingsGoalEntity {
   final int id;
   final String name;
   final String emoji;
-  final String targetStr; // 目标金额（Decimal 字符串）
-  final String savedStr;  // 已存金额（Decimal 字符串）
+  final String targetStr;
+  final String savedStr;
   final int createdMs;
 
   Decimal get target => Decimal.parse(targetStr);
   Decimal get saved => Decimal.parse(savedStr);
 
-  /// 完成比例 0~1（目标为 0 时返回 0）。
   double get progress {
     final t = target;
     if (t <= Decimal.zero) return 0;
@@ -251,7 +250,7 @@ class SavingsGoalEntity {
 class TagEntity {
   final int id;
   final String name;
-  final int colorValue; // Color.value（ARGB int）
+  final int colorValue;
 
   const TagEntity({
     required this.id,
@@ -277,7 +276,6 @@ class AppRepository extends ChangeNotifier {
 
   Database? _db;
 
-  // 内存缓存
   final List<BookEntity> _books = [];
   final List<AccountEntity> _accounts = [];
   final List<CategoryEntity> _categories = [];
@@ -285,13 +283,8 @@ class AppRepository extends ChangeNotifier {
   final List<SavingsGoalEntity> _savingsGoals = [];
   final List<TagEntity> _tags = [];
 
-  /// 当前账本 id（0 = 未初始化，init 后必为有效值）。
   int _currentBookId = 0;
-
-  /// 月度总预算（null = 未设置）。
   Decimal? _monthlyBudget;
-
-  /// DeepSeek API Key（null = 未配置）。
   String? _deepSeekApiKey;
 
   List<BookEntity> get books => List.unmodifiable(_books);
@@ -301,7 +294,6 @@ class AppRepository extends ChangeNotifier {
   List<SavingsGoalEntity> get savingsGoals => List.unmodifiable(_savingsGoals);
   List<TagEntity> get tags => List.unmodifiable(_tags);
 
-  /// 按 id 查标签名（找不到返回 null）。
   String? tagName(int id) {
     for (final t in _tags) {
       if (t.id == id) return t.name;
@@ -309,10 +301,8 @@ class AppRepository extends ChangeNotifier {
     return null;
   }
 
-  /// 当前账本 id。
   int get currentBookId => _currentBookId;
 
-  /// 当前账本实体（找不到返回 null）。
   BookEntity? get currentBook {
     for (final b in _books) {
       if (b.id == _currentBookId) return b;
@@ -320,10 +310,7 @@ class AppRepository extends ChangeNotifier {
     return null;
   }
 
-  /// 当前月度预算，null 代表未设置。
   Decimal? get monthlyBudget => _monthlyBudget;
-
-  /// DeepSeek API Key，null 代表未配置。
   String? get deepSeekApiKey => _deepSeekApiKey;
 
   // ---------------------------------------------------------------------------
@@ -432,13 +419,9 @@ class AppRepository extends ChangeNotifier {
     ''');
   }
 
-  /// 数据库升级（逐版增量，均不动已有账目数据）：
-  ///   v1→v2 budget.category_key；v2→v3 app_settings；v3→v4 多账本；
-  ///   v4→v5 存钱目标+标签；v5→v6 二级分类；v6→v7 待报销；v7→v8 收据图片。
   Future<void> _onUpgrade(Database db, int oldVersion, int newVersion) async {
     if (oldVersion < 2) {
-      await db.execute(
-          'ALTER TABLE budget ADD COLUMN category_key TEXT');
+      await db.execute('ALTER TABLE budget ADD COLUMN category_key TEXT');
     }
     if (oldVersion < 3) {
       await db.execute('''
@@ -503,14 +486,12 @@ class AppRepository extends ChangeNotifier {
       } catch (_) {}
     }
     if (oldVersion < 7) {
-      // 待报销：纯增量加列。
       try {
         await db.execute(
             'ALTER TABLE transactions ADD COLUMN reimbursable INTEGER NOT NULL DEFAULT 0');
       } catch (_) {}
     }
     if (oldVersion < 8) {
-      // 收据图片：纯增量加列，绝不动已有账目。
       try {
         await db.execute(
             "ALTER TABLE transactions ADD COLUMN image_path TEXT NOT NULL DEFAULT ''");
@@ -518,7 +499,6 @@ class AppRepository extends ChangeNotifier {
     }
   }
 
-  /// 幂等地把两级分类树写入/更新到 categories 表（建库与升级共用）。
   Future<void> _applyCategoryTree(DatabaseExecutor db) async {
     for (final s in CategorySeed.all) {
       await db.insert(
@@ -551,7 +531,6 @@ class AppRepository extends ChangeNotifier {
     }
   }
 
-  /// 首次启动写入默认账户和分类种子数据。
   Future<void> _seedIfNeeded() async {
     final db = _db!;
     final accountCount =
@@ -700,10 +679,34 @@ class AppRepository extends ChangeNotifier {
   }
 
   // ---------------------------------------------------------------------------
+  // 收据图片清理（只删 App 自己 receipts/ 目录里的，外部相册原图绝不动）
+  // ---------------------------------------------------------------------------
+
+  void _deleteReceiptFileIfOwned(String path) {
+    if (path.isEmpty || !path.contains('/receipts/')) return;
+    try {
+      final f = File(path);
+      if (f.existsSync()) f.deleteSync();
+    } catch (_) {
+      // 删不掉就算了，不影响主流程
+    }
+  }
+
+  Future<String> _imagePathOf(int id) async {
+    final rows = await _db!.query(
+      'transactions',
+      columns: ['image_path'],
+      where: 'id = ?',
+      whereArgs: [id],
+      limit: 1,
+    );
+    return rows.isEmpty ? '' : (rows.first['image_path'] as String? ?? '');
+  }
+
+  // ---------------------------------------------------------------------------
   // 写操作
   // ---------------------------------------------------------------------------
 
-  /// 新增一笔交易。
   Future<void> addTransaction({
     required TransactionKind kind,
     required Decimal amount,
@@ -735,7 +738,6 @@ class AppRepository extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// 编辑一笔已有交易（按数据库 id 覆盖更新）。
   Future<void> updateTransaction({
     required int id,
     required TransactionKind kind,
@@ -749,6 +751,10 @@ class AppRepository extends ChangeNotifier {
     bool reimbursable = false,
     String imagePath = '',
   }) async {
+    // 若收据被替换/移除，删掉旧图，避免孤儿文件堆积。
+    final oldPath = await _imagePathOf(id);
+    if (oldPath != imagePath) _deleteReceiptFileIfOwned(oldPath);
+
     await _db!.update(
       'transactions',
       {
@@ -770,7 +776,6 @@ class AppRepository extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// 批量导入交易（CSV 导入用，一次性写入 + 单次刷新）。返回成功条数。
   Future<int> importTransactions(List<TransactionDraft> drafts) async {
     if (drafts.isEmpty) return 0;
     final batch = _db!.batch();
@@ -794,8 +799,11 @@ class AppRepository extends ChangeNotifier {
     return drafts.length;
   }
 
-  /// 删除一笔交易（按数据库 id）。
   Future<void> deleteTransaction(int id) async {
+    // 删账目时一并删掉它的收据图片（仅本 App 目录内）。
+    final path = await _imagePathOf(id);
+    _deleteReceiptFileIfOwned(path);
+
     await _db!.delete('transactions', where: 'id = ?', whereArgs: [id]);
     _transactions.removeWhere((t) => t.id == id);
     notifyListeners();
@@ -805,11 +813,9 @@ class AppRepository extends ChangeNotifier {
   // 查询辅助
   // ---------------------------------------------------------------------------
 
-  /// 返回指定 kind 的分类列表。
   List<CategoryEntity> categoriesForKind(TransactionKind kind) =>
       _categories.where((c) => c.kind == kind).toList();
 
-  /// 仅返回顶级大类，按使用频次排序（子类用量计入其父级）。
   List<CategoryEntity> categoriesForKindRanked(TransactionKind kind) {
     final all = categoriesForKind(kind);
     final tops = all.where((c) => c.isTopLevel).toList();
@@ -835,11 +841,9 @@ class AppRepository extends ChangeNotifier {
     return [for (final e in indexed) e.$2];
   }
 
-  /// 某大类下的子类（按加载顺序）。
   List<CategoryEntity> childrenOf(int parentId) =>
       _categories.where((c) => c.parentId == parentId).toList();
 
-  /// 返回所有交易转换为 core 的 [TransactionRecord]（用于统计引擎）。
   List<TransactionRecord> get allRecords =>
       _transactions.map((t) => t.toRecord()).toList();
 
@@ -847,7 +851,6 @@ class AppRepository extends ChangeNotifier {
   // 月度预算
   // ---------------------------------------------------------------------------
 
-  /// 保存月度总预算（[amount] 传 zero 视为删除预算）。
   Future<void> saveMonthlyBudget(Decimal amount) async {
     final rows = await _db!.query(
       'budget',
@@ -876,7 +879,6 @@ class AppRepository extends ChangeNotifier {
   // AI 设置
   // ---------------------------------------------------------------------------
 
-  /// 保存 DeepSeek API Key（传空字符串视为删除）。
   Future<void> saveApiKey(String key) async {
     final trimmed = key.trim();
     if (trimmed.isEmpty) {
