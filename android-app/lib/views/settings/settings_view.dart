@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import 'accounts_view.dart';
 import 'ai_setting_view.dart';
+import 'backup_view.dart';
 import 'budget_setting_view.dart';
 import 'categories_view.dart';
 
@@ -60,6 +61,17 @@ class SettingsView extends StatelessWidget {
               context,
               MaterialPageRoute<void>(
                 builder: (_) => const AiSettingView(),
+              ),
+            ),
+          ),
+          ListTile(
+            leading: const Icon(Icons.backup_outlined),
+            title: const Text('备份与恢复'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => Navigator.push(
+              context,
+              MaterialPageRoute<void>(
+                builder: (_) => const BackupView(),
               ),
             ),
           ),

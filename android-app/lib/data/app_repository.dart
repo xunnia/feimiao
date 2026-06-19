@@ -679,6 +679,60 @@ class AppRepository extends ChangeNotifier {
   }
 
   // ---------------------------------------------------------------------------
+  // 备份 / 恢复（本地，不涉及云）
+  // ---------------------------------------------------------------------------
+
+  /// 当前数据库文件的绝对路径（"导出备份"时把这个文件分享/另存）。
+  Future<String> databaseFilePath() async =>
+      p.join(await getDatabasesPath(), _dbName);
+
+  /// 用 [srcPath] 指向的备份文件覆盖恢复数据库。成功返回 true。
+  /// 覆盖前会把当前库复制到 `.bak`；若中途失败，尽力把 `.bak` 拷回回滚。
+  /// 恢复后重新打开并重载全部缓存（建议提示用户重启 App）。
+  Future<bool> restoreDatabaseFromFile(String srcPath) async {
+    final dbPath = p.join(await getDatabasesPath(), _dbName);
+    final bakPath = '$dbPath.bak';
+    try {
+      await _db?.close();
+      _db = null;
+
+      final cur = File(dbPath);
+      if (await cur.exists()) {
+        await cur.copy(bakPath); // 兜底备份
+      }
+      await File(srcPath).copy(dbPath); // 覆盖
+
+      _db = await openDatabase(
+        dbPath,
+        version: _dbVersion,
+        onCreate: _onCreate,
+        onUpgrade: _onUpgrade,
+      );
+      await _ensureDefaultBook();
+      await _loadAll();
+      return true;
+    } catch (_) {
+      // 回滚：把 .bak 拷回，重新打开
+      try {
+        final bak = File(bakPath);
+        if (await bak.exists()) {
+          await bak.copy(dbPath);
+        }
+        _db = await openDatabase(
+          dbPath,
+          version: _dbVersion,
+          onCreate: _onCreate,
+          onUpgrade: _onUpgrade,
+        );
+        await _loadAll();
+      } catch (_) {
+        // 实在不行就保持 _db 可能为 null，等下次启动 init 再开
+      }
+      return false;
+    }
+  }
+
+  // ---------------------------------------------------------------------------
   // 收据图片清理（只删 App 自己 receipts/ 目录里的，外部相册原图绝不动）
   // ---------------------------------------------------------------------------
 
@@ -687,9 +741,7 @@ class AppRepository extends ChangeNotifier {
     try {
       final f = File(path);
       if (f.existsSync()) f.deleteSync();
-    } catch (_) {
-      // 删不掉就算了，不影响主流程
-    }
+    } catch (_) {}
   }
 
   Future<String> _imagePathOf(int id) async {
@@ -751,7 +803,6 @@ class AppRepository extends ChangeNotifier {
     bool reimbursable = false,
     String imagePath = '',
   }) async {
-    // 若收据被替换/移除，删掉旧图，避免孤儿文件堆积。
     final oldPath = await _imagePathOf(id);
     if (oldPath != imagePath) _deleteReceiptFileIfOwned(oldPath);
 
@@ -800,7 +851,6 @@ class AppRepository extends ChangeNotifier {
   }
 
   Future<void> deleteTransaction(int id) async {
-    // 删账目时一并删掉它的收据图片（仅本 App 目录内）。
     final path = await _imagePathOf(id);
     _deleteReceiptFileIfOwned(path);
 
