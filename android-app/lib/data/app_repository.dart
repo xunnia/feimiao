@@ -114,6 +114,7 @@ class TransactionEntity {
   final int dateMs;            // DateTime.millisecondsSinceEpoch
   final String tagsRaw;        // 逗号分隔的标签 id 串，如 "1,3,5"
   final bool reimbursable;     // 待报销标记
+  final String imagePath;      // 收据图片本地路径（空 = 无）
 
   Decimal get amount => Decimal.parse(amountStr);
   DateTime get date => DateTime.fromMillisecondsSinceEpoch(dateMs);
@@ -145,6 +146,7 @@ class TransactionEntity {
     required this.dateMs,
     this.tagsRaw = '',
     this.reimbursable = false,
+    this.imagePath = '',
   });
 
   /// 转为 core 层的纯逻辑对象（用于统计引擎等）。
@@ -178,6 +180,7 @@ class TransactionEntity {
         dateMs: m['date_ms'] as int,
         tagsRaw: m['tags'] as String? ?? '',
         reimbursable: ((m['reimbursable'] as int?) ?? 0) == 1,
+        imagePath: m['image_path'] as String? ?? '',
       );
 }
 
@@ -268,10 +271,8 @@ class TagEntity {
 // ---------------------------------------------------------------------------
 
 /// 本地 SQLite 数据仓库，暴露给 UI 层的状态管理入口。
-///
-/// 继承 [ChangeNotifier]，UI 通过 [provider] 订阅变化。
 class AppRepository extends ChangeNotifier {
-  static const _dbVersion = 7;
+  static const _dbVersion = 8;
   static const _dbName = 'qingji.db';
 
   Database? _db;
@@ -391,7 +392,8 @@ class AppRepository extends ChangeNotifier {
         note            TEXT NOT NULL DEFAULT '',
         date_ms         INTEGER NOT NULL,
         tags            TEXT NOT NULL DEFAULT '',
-        reimbursable    INTEGER NOT NULL DEFAULT 0
+        reimbursable    INTEGER NOT NULL DEFAULT 0,
+        image_path      TEXT NOT NULL DEFAULT ''
       )
     ''');
 
@@ -430,14 +432,11 @@ class AppRepository extends ChangeNotifier {
     ''');
   }
 
-  /// 数据库升级：
-  ///   v1→v2 在 budget 表加 category_key 列；
-  ///   v2→v3 新建 app_settings 表（用于存储 API Key 等键值对）；
-  ///   v3→v4 多账本；v4→v5 存钱目标+标签；v5→v6 二级分类；
-  ///   v6→v7 交易加 reimbursable（待报销）列。
+  /// 数据库升级（逐版增量，均不动已有账目数据）：
+  ///   v1→v2 budget.category_key；v2→v3 app_settings；v3→v4 多账本；
+  ///   v4→v5 存钱目标+标签；v5→v6 二级分类；v6→v7 待报销；v7→v8 收据图片。
   Future<void> _onUpgrade(Database db, int oldVersion, int newVersion) async {
     if (oldVersion < 2) {
-      // v1 的 budget 表没有 category_key 列，添加之。
       await db.execute(
           'ALTER TABLE budget ADD COLUMN category_key TEXT');
     }
@@ -450,7 +449,6 @@ class AppRepository extends ChangeNotifier {
       ''');
     }
     if (oldVersion < 4) {
-      // 多账本：建 books 表 + 默认「总账本」，给 transactions 加 book_id 并迁入总账本
       await db.execute('''
         CREATE TABLE IF NOT EXISTS books (
           id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -468,14 +466,11 @@ class AppRepository extends ChangeNotifier {
       });
       try {
         await db.execute('ALTER TABLE transactions ADD COLUMN book_id INTEGER');
-      } catch (_) {
-        // 列已存在则忽略
-      }
+      } catch (_) {}
       await db.execute(
           'UPDATE transactions SET book_id = $defaultBookId WHERE book_id IS NULL');
     }
     if (oldVersion < 5) {
-      // 存钱目标 + 标签：建两张新表，给 transactions 加 tags 列
       await db.execute('''
         CREATE TABLE IF NOT EXISTS savings_goals (
           id            INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -496,41 +491,35 @@ class AppRepository extends ChangeNotifier {
       try {
         await db.execute(
             "ALTER TABLE transactions ADD COLUMN tags TEXT NOT NULL DEFAULT ''");
-      } catch (_) {
-        // 列已存在则忽略
-      }
+      } catch (_) {}
     }
     if (oldVersion < 6) {
-      // 二级分类：加 parent_id 列，并把分类升级成两级树。
-      // 纯增量 + 幂等：只新增/改名/挂父级，绝不删分类、绝不动 transactions。
-      // 整体 try-catch 兜底：即便出错也不致 DB 打不开（最坏子类不全，账目无损）。
       try {
         try {
           await db.execute(
               'ALTER TABLE categories ADD COLUMN parent_id INTEGER');
-        } catch (_) {
-          // 列已存在则忽略
-        }
+        } catch (_) {}
         await _applyCategoryTree(db);
-      } catch (_) {
-        // 迁移失败也不阻断 App 启动
-      }
+      } catch (_) {}
     }
     if (oldVersion < 7) {
-      // 待报销：给 transactions 加 reimbursable 列。纯增量，绝不动已有账目数据。
+      // 待报销：纯增量加列。
       try {
         await db.execute(
             'ALTER TABLE transactions ADD COLUMN reimbursable INTEGER NOT NULL DEFAULT 0');
-      } catch (_) {
-        // 列已存在则忽略
-      }
+      } catch (_) {}
+    }
+    if (oldVersion < 8) {
+      // 收据图片：纯增量加列，绝不动已有账目。
+      try {
+        await db.execute(
+            "ALTER TABLE transactions ADD COLUMN image_path TEXT NOT NULL DEFAULT ''");
+      } catch (_) {}
     }
   }
 
   /// 幂等地把两级分类树写入/更新到 categories 表（建库与升级共用）。
-  /// 按 key 定位：缺则插入、有则回填名称与 parent_id；从不删除、从不改 id。
   Future<void> _applyCategoryTree(DatabaseExecutor db) async {
-    // 1) 确保每个分类存在（key 唯一，冲突忽略）
     for (final s in CategorySeed.all) {
       await db.insert(
         'categories',
@@ -543,7 +532,6 @@ class AppRepository extends ChangeNotifier {
         conflictAlgorithm: ConflictAlgorithm.ignore,
       );
     }
-    // 2) 回填名称 + parent_id（按 parentKey 查父级 id）
     for (final s in CategorySeed.all) {
       int? parentId;
       if (s.parentKey != null) {
@@ -568,12 +556,9 @@ class AppRepository extends ChangeNotifier {
     final db = _db!;
     final accountCount =
         Sqflite.firstIntValue(await db.rawQuery('SELECT COUNT(*) FROM accounts')) ?? 0;
-    if (accountCount > 0) return; // 已初始化，跳过
+    if (accountCount > 0) return;
 
-    // 默认账户：现金
     await db.insert('accounts', {'name': '现金', 'currency_code': 'CNY'});
-
-    // 默认分类种子（两级树）
     await _applyCategoryTree(db);
   }
 
@@ -614,7 +599,6 @@ class AppRepository extends ChangeNotifier {
       ..addAll(rows.map(BookEntity.fromMap));
   }
 
-  /// 确保至少有一个账本（默认「总账本」）。
   Future<void> _ensureDefaultBook() async {
     final count =
         Sqflite.firstIntValue(await _db!.rawQuery('SELECT COUNT(*) FROM books')) ?? 0;
@@ -628,7 +612,6 @@ class AppRepository extends ChangeNotifier {
     }
   }
 
-  /// 读取当前账本 id（无效则回退到第一个账本）。
   Future<void> _loadCurrentBook() async {
     final rows = await _db!.query(
       'app_settings',
@@ -658,7 +641,6 @@ class AppRepository extends ChangeNotifier {
       ..addAll(rows.map(CategoryEntity.fromMap));
   }
 
-  /// 读取 category_key 为 NULL 的那条预算行（月度总预算）。
   Future<void> _loadBudget() async {
     final rows = await _db!.query(
       'budget',
@@ -674,7 +656,6 @@ class AppRepository extends ChangeNotifier {
     }
   }
 
-  /// 从 app_settings 读取 DeepSeek API Key。
   Future<void> _loadApiKey() async {
     final rows = await _db!.query(
       'app_settings',
@@ -686,7 +667,6 @@ class AppRepository extends ChangeNotifier {
         rows.isEmpty ? null : rows.first['value'] as String?;
   }
 
-  /// 查询时做一次 LEFT JOIN 把分类/账户冗余字段带出来，避免后续多次查询。
   Future<void> _loadTransactions() async {
     final rows = await _db!.rawQuery('''
       SELECT
@@ -705,7 +685,8 @@ class AppRepository extends ChangeNotifier {
         t.note,
         t.date_ms,
         t.tags,
-        t.reimbursable
+        t.reimbursable,
+        t.image_path
       FROM transactions t
       LEFT JOIN categories c  ON c.id = t.category_id
       LEFT JOIN accounts   a  ON a.id = t.account_id
@@ -723,8 +704,6 @@ class AppRepository extends ChangeNotifier {
   // ---------------------------------------------------------------------------
 
   /// 新增一笔交易。
-  ///
-  /// [categoryId] 支出/收入必须提供；[toAccountId] 转账必须提供。
   Future<void> addTransaction({
     required TransactionKind kind,
     required Decimal amount,
@@ -736,6 +715,7 @@ class AppRepository extends ChangeNotifier {
     required DateTime date,
     List<int> tagIds = const [],
     bool reimbursable = false,
+    String imagePath = '',
   }) async {
     await _db!.insert('transactions', {
       'book_id': _currentBookId,
@@ -749,6 +729,7 @@ class AppRepository extends ChangeNotifier {
       'date_ms': date.millisecondsSinceEpoch,
       'tags': tagIds.join(','),
       'reimbursable': reimbursable ? 1 : 0,
+      'image_path': imagePath,
     });
     await _loadTransactions();
     notifyListeners();
@@ -766,6 +747,7 @@ class AppRepository extends ChangeNotifier {
     required DateTime date,
     List<int> tagIds = const [],
     bool reimbursable = false,
+    String imagePath = '',
   }) async {
     await _db!.update(
       'transactions',
@@ -779,6 +761,7 @@ class AppRepository extends ChangeNotifier {
         'date_ms': date.millisecondsSinceEpoch,
         'tags': tagIds.join(','),
         'reimbursable': reimbursable ? 1 : 0,
+        'image_path': imagePath,
       },
       where: 'id = ?',
       whereArgs: [id],
@@ -826,8 +809,6 @@ class AppRepository extends ChangeNotifier {
   List<CategoryEntity> categoriesForKind(TransactionKind kind) =>
       _categories.where((c) => c.kind == kind).toList();
 
-  /// 按使用频次排序的分类：常用的冒到前排，同频次保持原种子序。
-  /// 用于记账分类格 —— 减少翻找，默认也预选最常用的那个。
   /// 仅返回顶级大类，按使用频次排序（子类用量计入其父级）。
   List<CategoryEntity> categoriesForKindRanked(TransactionKind kind) {
     final all = categoriesForKind(kind);
@@ -838,7 +819,6 @@ class AppRepository extends ChangeNotifier {
       if (cid == null || t.txKind != kind) continue;
       counts[cid] = (counts[cid] ?? 0) + 1;
     }
-    // 子类用量滚动到父级，让常用大类冒前
     final rolled = <int, int>{};
     for (final c in all) {
       final n = counts[c.id] ?? 0;
@@ -921,7 +901,6 @@ class AppRepository extends ChangeNotifier {
   // 账本（多账本）
   // ---------------------------------------------------------------------------
 
-  /// 切换当前账本（持久化并重载该账本交易）。
   Future<void> switchBook(int bookId) async {
     if (bookId == _currentBookId) return;
     if (!_books.any((b) => b.id == bookId)) return;
@@ -935,7 +914,6 @@ class AppRepository extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// 新建账本，返回新行 id。
   Future<int> addBook({required String name, String icon = '📒'}) async {
     final id = await _db!.insert('books', {
       'name': name,
@@ -948,7 +926,6 @@ class AppRepository extends ChangeNotifier {
     return id;
   }
 
-  /// 改账本名/图标。
   Future<void> renameBook(int id, {required String name, String? icon}) async {
     final updates = <String, Object?>{'name': name};
     if (icon != null) updates['icon'] = icon;
@@ -957,9 +934,8 @@ class AppRepository extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// 删除账本（连同其下交易）。不允许删到一个不剩；删的是当前账本则切到剩余第一个。
   Future<void> deleteBook(int id) async {
-    if (_books.length <= 1) return; // 至少保留一个账本
+    if (_books.length <= 1) return;
     await _db!.delete('transactions', where: 'book_id = ?', whereArgs: [id]);
     await _db!.delete('books', where: 'id = ?', whereArgs: [id]);
     await _loadBooks();
@@ -979,7 +955,6 @@ class AppRepository extends ChangeNotifier {
   // 账户 CRUD
   // ---------------------------------------------------------------------------
 
-  /// 新增账户。返回新行的 id。
   Future<int> addAccount({required String name, String currencyCode = 'CNY'}) async {
     final id = await _db!.insert('accounts', {
       'name': name,
@@ -990,7 +965,6 @@ class AppRepository extends ChangeNotifier {
     return id;
   }
 
-  /// 修改账户名（只改名字，货币码暂不支持改动）。
   Future<void> renameAccount(int id, String newName) async {
     await _db!.update(
       'accounts',
@@ -1002,7 +976,6 @@ class AppRepository extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// 删除账户。关联交易不级联删除（外键此处未开启），保持历史记录完整。
   Future<void> deleteAccount(int id) async {
     await _db!.delete('accounts', where: 'id = ?', whereArgs: [id]);
     await _loadAccounts();
@@ -1013,7 +986,6 @@ class AppRepository extends ChangeNotifier {
   // 分类 CRUD
   // ---------------------------------------------------------------------------
 
-  /// 新增自定义分类。[key] 建议用 UUID 或时间戳字符串保证唯一性。
   Future<int> addCategory({
     required String key,
     required String nameZh,
@@ -1031,7 +1003,6 @@ class AppRepository extends ChangeNotifier {
     return id;
   }
 
-  /// 修改分类名称（中英文同时改，英文传空则维持原值）。
   Future<void> renameCategory(int id, {required String nameZh, String? nameEn}) async {
     final updates = <String, Object?>{'name_zh': nameZh};
     if (nameEn != null) updates['name_en'] = nameEn;
@@ -1040,7 +1011,6 @@ class AppRepository extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// 删除分类（关联交易的 category_id 由于外键未开启不会级联删除）。
   Future<void> deleteCategory(int id) async {
     await _db!.delete('categories', where: 'id = ?', whereArgs: [id]);
     await _loadCategories();
@@ -1051,7 +1021,6 @@ class AppRepository extends ChangeNotifier {
   // 存钱目标 CRUD
   // ---------------------------------------------------------------------------
 
-  /// 新建存钱目标，返回新行 id。
   Future<int> addSavingsGoal({
     required String name,
     required Decimal target,
@@ -1070,7 +1039,6 @@ class AppRepository extends ChangeNotifier {
     return id;
   }
 
-  /// 编辑目标的名称/图标/目标金额（已存金额不动）。
   Future<void> updateSavingsGoal(
     int id, {
     required String name,
@@ -1087,14 +1055,12 @@ class AppRepository extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// 删除存钱目标。
   Future<void> deleteSavingsGoal(int id) async {
     await _db!.delete('savings_goals', where: 'id = ?', whereArgs: [id]);
     await _loadSavingsGoals();
     notifyListeners();
   }
 
-  /// 给目标存入 [delta]（正数存入、负数取出），已存金额夹在 0 与目标无上限之间不为负。
   Future<void> adjustSavingsGoal(int id, Decimal delta) async {
     final goal = _savingsGoals.where((g) => g.id == id).firstOrNull;
     if (goal == null) return;
@@ -1114,7 +1080,6 @@ class AppRepository extends ChangeNotifier {
   // 标签 CRUD
   // ---------------------------------------------------------------------------
 
-  /// 新建标签，返回新行 id。
   Future<int> addTag({required String name, required int colorValue}) async {
     final id = await _db!.insert('tags', {'name': name, 'color': colorValue});
     await _loadTags();
@@ -1122,7 +1087,6 @@ class AppRepository extends ChangeNotifier {
     return id;
   }
 
-  /// 改标签名/颜色。
   Future<void> updateTag(int id, {required String name, int? colorValue}) async {
     final updates = <String, Object?>{'name': name};
     if (colorValue != null) updates['color'] = colorValue;
@@ -1131,10 +1095,8 @@ class AppRepository extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// 删除标签：同时把所有交易上引用它的 id 剔除（避免悬空引用）。
   Future<void> deleteTag(int id) async {
     await _db!.delete('tags', where: 'id = ?', whereArgs: [id]);
-    // 扫描含该标签的交易，去掉这个 id 后回写
     final rows = await _db!.rawQuery(
       "SELECT id, tags FROM transactions WHERE tags LIKE ?",
       ['%$id%'],

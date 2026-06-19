@@ -9,6 +9,7 @@ import '../../core/money_format.dart';
 import '../../data/app_repository.dart';
 import '../../theme/app_colors.dart';
 import '../../widgets/tag_selector.dart';
+import '../common/receipt_picker.dart';
 import '../quick_add/amount_keypad.dart';
 import '../quick_add/category_grid.dart';
 
@@ -33,6 +34,7 @@ class _ManualAddSheetState extends State<ManualAddSheet> {
   final TextEditingController _noteController = TextEditingController();
   List<int> _tagIds = [];
   bool _reimbursable = false;
+  String? _imagePath;
   int _expressionVersion = 0;
 
   @override
@@ -61,7 +63,8 @@ class _ManualAddSheetState extends State<ManualAddSheet> {
     final repo = context.read<AppRepository>();
     setState(() {
       _kind = kind;
-      _reimbursable = false; // 切换收支/转账时复位待报销
+      _reimbursable = false;
+      _imagePath = null;
       if (kind == TransactionKind.transfer) {
         _selectedAccountId ??= repo.accounts.firstOrNull?.id;
         _toAccountId = repo.accounts
@@ -77,6 +80,11 @@ class _ManualAddSheetState extends State<ManualAddSheet> {
   }
 
   void _onExpressionChanged() => setState(() => _expressionVersion++);
+
+  Future<void> _pickReceipt() async {
+    final path = await pickAndSaveReceipt(context);
+    if (path != null && mounted) setState(() => _imagePath = path);
+  }
 
   Future<bool> _commit() async {
     final amount = _expression.value;
@@ -109,6 +117,7 @@ class _ManualAddSheetState extends State<ManualAddSheet> {
         date: _date,
         tagIds: _tagIds,
         reimbursable: _reimbursable,
+        imagePath: _imagePath ?? '',
       );
     }
     return true;
@@ -123,6 +132,7 @@ class _ManualAddSheetState extends State<ManualAddSheet> {
       _expression.clear();
       _noteController.clear();
       _reimbursable = false;
+      _imagePath = null;
       if (mounted) setState(() => _expressionVersion++);
     }
   }
@@ -244,20 +254,41 @@ class _ManualAddSheetState extends State<ManualAddSheet> {
             ),
           ),
 
-          // 待报销开关（仅支出）
-          if (_kind == TransactionKind.expense)
-            Align(
-              alignment: Alignment.centerLeft,
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(14, 0, 16, 0),
-                child: FilterChip(
-                  label: const Text('待报销'),
-                  avatar: const Icon(Icons.receipt_long_outlined, size: 16),
-                  selected: _reimbursable,
-                  onSelected: (v) => setState(() => _reimbursable = v),
-                  visualDensity: VisualDensity.compact,
-                  materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                ),
+          // 待报销开关（仅支出）+ 收据（非转账）
+          if (!isTransfer)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(14, 0, 14, 2),
+              child: Row(
+                children: [
+                  if (_kind == TransactionKind.expense)
+                    FilterChip(
+                      label: const Text('待报销'),
+                      avatar: const Icon(Icons.receipt_long_outlined, size: 16),
+                      selected: _reimbursable,
+                      onSelected: (v) => setState(() => _reimbursable = v),
+                      visualDensity: VisualDensity.compact,
+                      materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    ),
+                  const Spacer(),
+                  if (_imagePath == null)
+                    TextButton.icon(
+                      onPressed: _pickReceipt,
+                      icon: const Icon(Icons.photo_camera_outlined, size: 16),
+                      label: const Text('收据'),
+                      style: TextButton.styleFrom(
+                        visualDensity: VisualDensity.compact,
+                      ),
+                    )
+                  else
+                    Padding(
+                      padding: const EdgeInsets.only(right: 6),
+                      child: ReceiptThumb(
+                        path: _imagePath!,
+                        size: 38,
+                        onRemove: () => setState(() => _imagePath = null),
+                      ),
+                    ),
+                ],
               ),
             ),
 

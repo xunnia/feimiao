@@ -7,14 +7,11 @@ import '../../core/models/transaction_kind.dart';
 import '../../data/app_repository.dart';
 import '../../widgets/tag_selector.dart';
 import '../common/app_sheet.dart';
+import '../common/receipt_picker.dart';
 import '../quick_add/amount_keypad.dart';
 import '../quick_add/category_grid.dart';
 
 /// 编辑已有账目的底部大卡。
-///
-/// 复用 [CategoryGrid] + [AmountKeypad]，预填原有数据；保存调用
-/// [AppRepository.updateTransaction]。右上角可删除。
-/// 分类区与记账页一致：大类网格 + ▼ + 点开展开子类网格面板。
 class EditTransactionSheet extends StatefulWidget {
   final TransactionEntity transaction;
 
@@ -28,19 +25,19 @@ class _EditTransactionSheetState extends State<EditTransactionSheet> {
   late TransactionKind _kind;
   final AmountExpression _expression = AmountExpression();
   int? _selectedCategoryId;
-  int? _activeParentId; // 当前展开的大类
+  int? _activeParentId;
   int? _selectedAccountId;
   late DateTime _date;
   late final TextEditingController _noteController;
   late List<int> _tagIds;
   late bool _reimbursable;
+  String? _imagePath;
   int _expressionVersion = 0;
 
   @override
   void initState() {
     super.initState();
     final t = widget.transaction;
-    // 段控只有支出/收入；转账退化为支出处理（当前 UI 不产生转账）
     _kind =
         t.txKind == TransactionKind.transfer ? TransactionKind.expense : t.txKind;
     _expression.loadAmount(t.amount);
@@ -50,7 +47,7 @@ class _EditTransactionSheetState extends State<EditTransactionSheet> {
     _noteController = TextEditingController(text: t.note);
     _tagIds = List<int>.of(t.tagIds);
     _reimbursable = t.reimbursable;
-    // 解析当前分类所属大类，用于展开其子类
+    _imagePath = t.imagePath.isEmpty ? null : t.imagePath;
     final repo = context.read<AppRepository>();
     final cat =
         repo.categories.where((c) => c.id == _selectedCategoryId).firstOrNull;
@@ -69,7 +66,6 @@ class _EditTransactionSheetState extends State<EditTransactionSheet> {
       _kind = kind;
       if (kind != TransactionKind.expense) _reimbursable = false;
       final all = repo.categoriesForKind(kind);
-      // 切换收支后，若原分类不属于该类型，回退到第一个大类
       if (!all.any((c) => c.id == _selectedCategoryId)) {
         _selectedCategoryId = repo.categoriesForKindRanked(kind).firstOrNull?.id;
       }
@@ -79,6 +75,11 @@ class _EditTransactionSheetState extends State<EditTransactionSheet> {
   }
 
   void _onExpressionChanged() => setState(() => _expressionVersion++);
+
+  Future<void> _pickReceipt() async {
+    final path = await pickAndSaveReceipt(context);
+    if (path != null && mounted) setState(() => _imagePath = path);
+  }
 
   Future<void> _save() async {
     final amount = _expression.value;
@@ -97,6 +98,7 @@ class _EditTransactionSheetState extends State<EditTransactionSheet> {
       date: _date,
       tagIds: _tagIds,
       reimbursable: _kind == TransactionKind.expense ? _reimbursable : false,
+      imagePath: _imagePath ?? '',
     );
     if (mounted) Navigator.pop(context);
   }
@@ -134,7 +136,6 @@ class _EditTransactionSheetState extends State<EditTransactionSheet> {
       height: maxH.clamp(300.0, screenH * 0.92),
       child: Column(
         children: [
-          // 拖动条
           Padding(
             padding: const EdgeInsets.only(top: 12, bottom: 4),
             child: Center(
@@ -149,7 +150,6 @@ class _EditTransactionSheetState extends State<EditTransactionSheet> {
             ),
           ),
 
-          // 顶部栏：支出/收入 + 删除 + 关闭
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 8, 12, 0),
             child: Row(
@@ -181,7 +181,6 @@ class _EditTransactionSheetState extends State<EditTransactionSheet> {
             ),
           ),
 
-          // 金额显示
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
             child: Row(
@@ -273,7 +272,6 @@ class _EditTransactionSheetState extends State<EditTransactionSheet> {
             ),
           ),
 
-          // 标签选择
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 4, 16, 2),
             child: TagSelector(
@@ -282,24 +280,43 @@ class _EditTransactionSheetState extends State<EditTransactionSheet> {
             ),
           ),
 
-          // 待报销开关（仅支出）
-          if (_kind == TransactionKind.expense)
-            Align(
-              alignment: Alignment.centerLeft,
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(14, 0, 16, 2),
-                child: FilterChip(
-                  label: const Text('待报销'),
-                  avatar: const Icon(Icons.receipt_long_outlined, size: 16),
-                  selected: _reimbursable,
-                  onSelected: (v) => setState(() => _reimbursable = v),
-                  visualDensity: VisualDensity.compact,
-                  materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                ),
-              ),
+          // 待报销开关（仅支出）+ 收据
+          Padding(
+            padding: const EdgeInsets.fromLTRB(14, 0, 14, 2),
+            child: Row(
+              children: [
+                if (_kind == TransactionKind.expense)
+                  FilterChip(
+                    label: const Text('待报销'),
+                    avatar: const Icon(Icons.receipt_long_outlined, size: 16),
+                    selected: _reimbursable,
+                    onSelected: (v) => setState(() => _reimbursable = v),
+                    visualDensity: VisualDensity.compact,
+                    materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  ),
+                const Spacer(),
+                if (_imagePath == null)
+                  TextButton.icon(
+                    onPressed: _pickReceipt,
+                    icon: const Icon(Icons.photo_camera_outlined, size: 16),
+                    label: const Text('收据'),
+                    style: TextButton.styleFrom(
+                      visualDensity: VisualDensity.compact,
+                    ),
+                  )
+                else
+                  Padding(
+                    padding: const EdgeInsets.only(right: 6),
+                    child: ReceiptThumb(
+                      path: _imagePath!,
+                      size: 38,
+                      onRemove: () => setState(() => _imagePath = null),
+                    ),
+                  ),
+              ],
             ),
+          ),
 
-          // 账户 + 日期 + 备注
           _DetailBar(
             accounts: context.watch<AppRepository>().accounts,
             selectedAccountId: _selectedAccountId,
@@ -309,7 +326,6 @@ class _EditTransactionSheetState extends State<EditTransactionSheet> {
             onDateChanged: (d) => setState(() => _date = d),
           ),
 
-          // 数字键盘
           Padding(
             padding: const EdgeInsets.only(bottom: 16, top: 4),
             child: AmountKeypad(
