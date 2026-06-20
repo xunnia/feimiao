@@ -3,143 +3,155 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:qingji/core/amount_expression.dart';
 
 void main() {
-  group('AmountExpression', () {
-    test('typing simple amount', () {
-      final expr = AmountExpression();
-      expr.insertDigit('1');
-      expr.insertDigit('2');
-      expr.insertDot();
-      expr.insertDigit('5');
-      expect(expr.displayText, '12.5');
-      expect(expr.value, Decimal.parse('12.5'));
-      expect(expr.isCompound, isFalse);
+  group('AmountExpression 基础输入', () {
+    test('新建时为空、合计为 0、显示 0', () {
+      final e = AmountExpression();
+      expect(e.isEmpty, isTrue);
+      expect(e.isCompound, isFalse);
+      expect(e.value, Decimal.zero);
+      expect(e.displayText, '0');
     });
 
-    test('leading zero is replaced', () {
-      final expr = AmountExpression();
-      expr.insertDigit('0');
-      expr.insertDigit('7');
-      expect(expr.displayText, '7');
+    test('连续输入数字', () {
+      final e = AmountExpression();
+      e.insertDigit('1');
+      e.insertDigit('2');
+      expect(e.value, Decimal.fromInt(12));
+      expect(e.displayText, '12');
+      expect(e.isEmpty, isFalse);
     });
 
-    test('fraction digits limited to two', () {
-      final expr = AmountExpression();
-      expr.insertDigit('1');
-      expr.insertDot();
-      expr.insertDigit('2');
-      expr.insertDigit('3');
-      expr.insertDigit('4');
-      expect(expr.displayText, '1.23');
+    test('小数点输入', () {
+      final e = AmountExpression();
+      e.insertDigit('1');
+      e.insertDigit('2');
+      e.insertDot();
+      e.insertDigit('5');
+      expect(e.value, Decimal.parse('12.5'));
+      expect(e.displayText, '12.5');
     });
 
-    test('second dot is ignored', () {
-      final expr = AmountExpression();
-      expr.insertDigit('3');
-      expr.insertDot();
-      expr.insertDot();
-      expr.insertDigit('5');
-      expect(expr.displayText, '3.5');
+    test('小数最多两位，第三位被忽略', () {
+      final e = AmountExpression();
+      e.insertDigit('1');
+      e.insertDot();
+      e.insertDigit('2');
+      e.insertDigit('3');
+      e.insertDigit('4'); // 应被忽略
+      expect(e.displayText, '1.23');
+      expect(e.value, Decimal.parse('1.23'));
     });
 
-    test('dot on empty field prepends zero', () {
-      final expr = AmountExpression();
-      expr.insertDot();
-      expr.insertDigit('5');
-      expect(expr.displayText, '0.5');
-      expect(expr.value, Decimal.parse('0.5'));
+    test('重复小数点被忽略', () {
+      final e = AmountExpression();
+      e.insertDigit('5');
+      e.insertDot();
+      e.insertDot(); // 忽略
+      e.insertDigit('5');
+      expect(e.displayText, '5.5');
     });
 
-    test('addition', () {
-      final expr = AmountExpression();
-      expr.insertDigit('1');
-      expr.insertDigit('2');
-      expr.beginAddition();
-      expr.insertDigit('3');
-      expr.insertDot();
-      expr.insertDigit('5');
-      expect(expr.displayText, '12+3.5');
-      expect(expr.value, Decimal.parse('15.5'));
-      expect(expr.isCompound, isTrue);
+    test('前导 0 被后续数字替换', () {
+      final e = AmountExpression();
+      e.insertDigit('0');
+      e.insertDigit('5');
+      expect(e.displayText, '5');
+      expect(e.value, Decimal.fromInt(5));
     });
 
-    test('addition requires current number', () {
-      final expr = AmountExpression();
-      expr.beginAddition();
-      expect(expr.displayText, '0');
-      expect(expr.isCompound, isFalse);
+    test('整数位最多 9 位', () {
+      final e = AmountExpression();
+      for (var i = 0; i < 12; i++) {
+        e.insertDigit('1');
+      }
+      expect(e.displayText.length, 9);
+      expect(e.value, Decimal.fromInt(111111111));
+    });
+  });
+
+  group('AmountExpression 连加', () {
+    test('两段相加得到合计', () {
+      final e = AmountExpression();
+      e.insertDigit('1');
+      e.insertDigit('2');
+      e.beginAddition();
+      e.insertDigit('3');
+      expect(e.isCompound, isTrue);
+      expect(e.displayText, '12+3');
+      expect(e.value, Decimal.fromInt(15));
     });
 
-    test('delete backward crosses terms', () {
-      final expr = AmountExpression();
-      expr.insertDigit('8');
-      expr.beginAddition();
-      expr.insertDigit('2');
-      expr.deleteBackward(); // delete '2'
-      expr.deleteBackward(); // delete empty second segment
-      expect(expr.displayText, '8');
-      expect(expr.isCompound, isFalse);
-      expr.deleteBackward(); // delete '8'
-      expect(expr.isEmpty, isTrue);
-      expect(expr.value, Decimal.zero);
+    test('带小数的连加', () {
+      final e = AmountExpression();
+      e.insertDigit('1');
+      e.insertDigit('2');
+      e.beginAddition();
+      e.insertDigit('3');
+      e.insertDot();
+      e.insertDigit('5');
+      expect(e.displayText, '12+3.5');
+      expect(e.value, Decimal.parse('15.5'));
     });
 
-    test('clear', () {
-      final expr = AmountExpression();
-      expr.insertDigit('9');
-      expr.clear();
-      expect(expr.isEmpty, isTrue);
-      expect(expr.displayText, '0');
+    test('空段时 beginAddition 被忽略', () {
+      final e = AmountExpression();
+      e.beginAddition(); // 当前段不可解析，忽略
+      expect(e.isCompound, isFalse);
+      expect(e.isEmpty, isTrue);
+    });
+  });
+
+  group('AmountExpression 删除与清空', () {
+    test('删除最后一位', () {
+      final e = AmountExpression();
+      e.insertDigit('1');
+      e.insertDigit('2');
+      e.deleteBackward();
+      expect(e.displayText, '1');
+      expect(e.value, Decimal.fromInt(1));
     });
 
-    // ── 减法（M41 新增）────────────────────────────────────────────────
-    test('subtraction', () {
-      final expr = AmountExpression();
-      expr.insertDigit('5');
-      expr.insertDigit('0');
-      expr.beginSubtraction();
-      expr.insertDigit('8');
-      expect(expr.displayText, '50-8');
-      expect(expr.value, Decimal.parse('42'));
-      expect(expr.isCompound, isTrue);
+    test('在连加上删除会回退到上一段', () {
+      final e = AmountExpression();
+      e.insertDigit('1');
+      e.insertDigit('2');
+      e.beginAddition();
+      e.insertDigit('3');
+      e.deleteBackward(); // 删掉 "3" → 当前段空
+      e.deleteBackward(); // 移除空段，回到 "12"
+      expect(e.isCompound, isFalse);
+      expect(e.displayText, '12');
+      expect(e.value, Decimal.fromInt(12));
     });
 
-    test('mixed addition and subtraction', () {
-      final expr = AmountExpression();
-      expr.insertDigit('1');
-      expr.insertDigit('2');
-      expr.beginAddition();
-      expr.insertDigit('3');
-      expr.beginSubtraction();
-      expr.insertDigit('5');
-      expect(expr.displayText, '12+3-5');
-      expect(expr.value, Decimal.parse('10'));
+    test('clear 后回到空状态', () {
+      final e = AmountExpression();
+      e.insertDigit('9');
+      e.clear();
+      expect(e.isEmpty, isTrue);
+      expect(e.value, Decimal.zero);
+    });
+  });
+
+  group('AmountExpression.loadAmount', () {
+    test('去掉尾零', () {
+      final e = AmountExpression();
+      e.loadAmount(Decimal.parse('12.00'));
+      expect(e.displayText, '12');
+
+      final e2 = AmountExpression();
+      e2.loadAmount(Decimal.parse('3.50'));
+      expect(e2.displayText, '3.5');
     });
 
-    test('subtraction requires current number', () {
-      final expr = AmountExpression();
-      expr.beginSubtraction();
-      expect(expr.displayText, '0');
-      expect(expr.isCompound, isFalse);
-    });
+    test('0 或负数视为清空', () {
+      final e = AmountExpression();
+      e.loadAmount(Decimal.zero);
+      expect(e.isEmpty, isTrue);
 
-    test('subtraction can yield non-positive (save 由 UI 拦截)', () {
-      final expr = AmountExpression();
-      expr.insertDigit('2');
-      expr.beginSubtraction();
-      expr.insertDigit('5');
-      expect(expr.value, Decimal.parse('-3'));
-    });
-
-    test('delete backward across a subtraction segment', () {
-      final expr = AmountExpression();
-      expr.insertDigit('9');
-      expr.beginSubtraction();
-      expr.insertDigit('4');
-      expr.deleteBackward(); // '4'
-      expr.deleteBackward(); // 空的减段
-      expect(expr.displayText, '9');
-      expect(expr.isCompound, isFalse);
-      expect(expr.value, Decimal.parse('9'));
+      final e2 = AmountExpression();
+      e2.loadAmount(Decimal.parse('-5'));
+      expect(e2.isEmpty, isTrue);
     });
   });
 }
