@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../widgets/pressable_scale.dart';
 import 'ai_chat_panel.dart';
 import 'manual_add_sheet.dart';
 import 'record_extras_sheet.dart';
@@ -12,6 +13,9 @@ import 'record_extras_sheet.dart';
 /// 点击分流：
 ///   手动模式 → ManualAddSheet（模态大卡片）
 ///   AI 模式  → AiChatPanel（贴键盘聚焦输入卡片，语音用键盘自带听写）
+///
+/// 交互手感：可点元素统一用 [PressableScale]（按下缩放 + 变暗 + 触感），
+/// 不用 Material 水波纹，贴近 iOS。
 class RecordInputBar extends StatefulWidget {
   const RecordInputBar({super.key});
 
@@ -97,8 +101,8 @@ class _RecordInputBarState extends State<RecordInputBar> {
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               // ── 占位文字行（点击整行触发分流）──
-              GestureDetector(
-                onTap: _onSend,
+              PressableScale(
+                onPressed: _onSend,
                 child: Padding(
                   padding: const EdgeInsets.only(bottom: 2),
                   child: Text(
@@ -164,8 +168,8 @@ class _ToolCircleButton extends StatelessWidget {
 
     if (filled) {
       // 发送按钮：铜金高亮（scheme.secondary），符合可爱风
-      return GestureDetector(
-        onTap: onTap,
+      return PressableScale(
+        onPressed: onTap,
         child: Container(
           width: 40,
           height: 40,
@@ -179,8 +183,8 @@ class _ToolCircleButton extends StatelessWidget {
     }
 
     // 次要按钮：透明底 + 淡边框 + 淡阴影
-    return GestureDetector(
-      onTap: onTap,
+    return PressableScale(
+      onPressed: onTap,
       child: Container(
         width: 40,
         height: 40,
@@ -215,8 +219,8 @@ class _ModePill extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    return GestureDetector(
-      onTap: onTap,
+    return PressableScale(
+      onPressed: onTap,
       child: Container(
         height: 36,
         padding: const EdgeInsets.symmetric(horizontal: 12),
