@@ -322,10 +322,6 @@ class _ExpandedSummaryCard extends StatelessWidget {
   }
 }
 
-// ---------------------------------------------------------------------------
-// 洞察小条：本月最大支出
-// ---------------------------------------------------------------------------
-
 class _InsightStrip extends StatelessWidget {
   final MonthlySummary summary;
 
@@ -391,10 +387,6 @@ class _InsightStrip extends StatelessWidget {
   }
 }
 
-// ---------------------------------------------------------------------------
-// 第二层：收入/支出指标
-// ---------------------------------------------------------------------------
-
 class _SummaryMetric extends StatelessWidget {
   final String label;
   final Decimal amount;
@@ -448,10 +440,6 @@ class _SummaryMetric extends StatelessWidget {
     );
   }
 }
-
-// ---------------------------------------------------------------------------
-// 第三层：预算细条（未设则引导）
-// ---------------------------------------------------------------------------
 
 class _BudgetStrip extends StatelessWidget {
   final BudgetStatus? budgetStatus;
@@ -561,10 +549,6 @@ class _BudgetStrip extends StatelessWidget {
   }
 }
 
-// ---------------------------------------------------------------------------
-// 折叠态迷你条
-// ---------------------------------------------------------------------------
-
 class _CollapsedMiniBar extends StatelessWidget {
   final MonthlySummary summary;
   final BudgetStatus? budgetStatus;
@@ -626,10 +610,6 @@ class _CollapsedMiniBar extends StatelessWidget {
     );
   }
 }
-
-// ---------------------------------------------------------------------------
-// 日期分组表头
-// ---------------------------------------------------------------------------
 
 class _DaySection {
   final DateTime day;
@@ -743,10 +723,6 @@ class _DaySectionHeader extends StatelessWidget {
   }
 }
 
-// ---------------------------------------------------------------------------
-// 可左滑删除的交易行
-// ---------------------------------------------------------------------------
-
 class _DismissibleRow extends StatelessWidget {
   final TransactionEntity transaction;
   final VoidCallback onDelete;
@@ -795,19 +771,15 @@ class _DismissibleRow extends StatelessWidget {
   }
 }
 
-// ---------------------------------------------------------------------------
-// 单笔交易行
-// ---------------------------------------------------------------------------
-
 class _TransactionRow extends StatelessWidget {
   final TransactionEntity transaction;
 
   const _TransactionRow({required this.transaction});
 
+  bool get _isTransfer => transaction.txKind == TransactionKind.transfer;
+
   String get _emoji {
-    if (transaction.txKind == TransactionKind.transfer) {
-      return '🔁';
-    }
+    if (_isTransfer) return '🔁';
     final seed = CategorySeed.all
         .where((s) => s.key == transaction.categoryKey)
         .firstOrNull;
@@ -856,7 +828,7 @@ class _TransactionRow extends StatelessWidget {
       child: Row(
         children: [
           CatIcon(
-            categoryKey: transaction.categoryKey,
+            categoryKey: _isTransfer ? 'transfer' : transaction.categoryKey,
             emoji: _emoji,
             size: 40,
           ),
@@ -937,10 +909,6 @@ class _ReimburseBadge extends StatelessWidget {
     );
   }
 }
-
-// ---------------------------------------------------------------------------
-// 空状态
-// ---------------------------------------------------------------------------
 
 class _EmptyState extends StatelessWidget {
   @override

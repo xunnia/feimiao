@@ -12,6 +12,7 @@ import '../../core/money_format.dart';
 import '../../core/statistics/statistics_engine.dart';
 import '../../data/app_repository.dart';
 import '../../theme/app_colors.dart';
+import '../../widgets/mascot.dart';
 
 /// 统计页：月度 / 年度分段，饼图 + 柱状图 + 分类排行。
 class StatisticsView extends StatefulWidget {
@@ -23,7 +24,6 @@ class StatisticsView extends StatefulWidget {
 
 class _StatisticsViewState extends State<StatisticsView> {
   bool _isYearly = false;
-  // 月度视图当前显示月份
   DateTime _displayedMonth = DateTime(
     DateTime.now().year,
     DateTime.now().month,
@@ -36,7 +36,6 @@ class _StatisticsViewState extends State<StatisticsView> {
         _displayedMonth.month + delta,
       );
       final now = DateTime.now();
-      // 不允许跳到未来月
       if (shifted.isAfter(DateTime(now.year, now.month))) return;
       _displayedMonth = shifted;
     });
@@ -57,7 +56,6 @@ class _StatisticsViewState extends State<StatisticsView> {
           final records = repo.allRecords;
           return Column(
             children: [
-              // 月度 / 年度分段切换
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
                 child: SegmentedButton<bool>(
@@ -92,10 +90,6 @@ class _StatisticsViewState extends State<StatisticsView> {
   }
 }
 
-// ---------------------------------------------------------------------------
-// 月度内容
-// ---------------------------------------------------------------------------
-
 class _MonthlyContent extends StatelessWidget {
   final List<TransactionRecord> records;
   final DateTime displayedMonth;
@@ -118,7 +112,6 @@ class _MonthlyContent extends StatelessWidget {
       year: displayedMonth.year,
       month: displayedMonth.month,
     );
-    // 上月汇总（用于环比）
     final prevMonth = DateTime(displayedMonth.year, displayedMonth.month - 1);
     final prevSummary = StatisticsEngine.monthlySummary(
       records,
@@ -126,7 +119,6 @@ class _MonthlyContent extends StatelessWidget {
       month: prevMonth.month,
     );
 
-    // 单笔支出排行：本月支出按金额降序取前 5
     final topExpenses = records
         .where((r) =>
             r.kind == TransactionKind.expense &&
@@ -139,20 +131,15 @@ class _MonthlyContent extends StatelessWidget {
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
-        // 月份切换器
         _MonthSwitcher(
           displayedMonth: displayedMonth,
           isCurrentMonth: isCurrentMonth,
           onShift: onShiftMonth,
         ),
         const SizedBox(height: 16),
-
-        // 支出 / 收入 / 结余卡
         _TotalsRow(summary: summary),
         _MoMComparison(current: summary, previous: prevSummary),
         const SizedBox(height: 16),
-
-        // 预算进度（有预算且是当月时）
         if (monthlyBudget != null)
           _BudgetProgressCard(
             monthlyBudget: monthlyBudget!,
@@ -160,23 +147,17 @@ class _MonthlyContent extends StatelessWidget {
             isCurrentMonth: isCurrentMonth,
           ),
         if (monthlyBudget != null) const SizedBox(height: 16),
-
-        // 无支出空状态
         if (summary.expenseByCategory.isEmpty)
           _EmptyState(
-            icon: Icons.pie_chart_outline,
             message: '本月还没有支出',
             sub: '记几笔之后这里会出现分析图表',
           )
         else ...[
-          // 支出构成饼图
           _SectionCard(
             title: '支出构成',
             child: _ExpensePieChart(categories: summary.expenseByCategory),
           ),
           const SizedBox(height: 16),
-
-          // 每日支出柱状图
           _SectionCard(
             title: '每日支出',
             child: _DailyBarChart(
@@ -186,8 +167,6 @@ class _MonthlyContent extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 16),
-
-          // 分类排行
           _SectionCard(
             title: '分类排行',
             child: _CategoryRanking(
@@ -207,10 +186,6 @@ class _MonthlyContent extends StatelessWidget {
   }
 }
 
-// ---------------------------------------------------------------------------
-// 年度内容
-// ---------------------------------------------------------------------------
-
 class _YearlyContent extends StatelessWidget {
   final List<TransactionRecord> records;
   final int year;
@@ -224,7 +199,6 @@ class _YearlyContent extends StatelessWidget {
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
-        // 年度标题
         Center(
           child: Text(
             '$year 年',
@@ -234,28 +208,21 @@ class _YearlyContent extends StatelessWidget {
           ),
         ),
         const SizedBox(height: 16),
-
-        // 全年收支卡
         _YearlyTotalsRow(summary: summary),
         const SizedBox(height: 16),
-
         if (summary.totalExpense == Decimal.zero &&
             summary.totalIncome == Decimal.zero)
           _EmptyState(
-            icon: Icons.bar_chart_outlined,
             message: '今年还没有账目',
             sub: '记几笔之后这里会出现年度报告',
           )
         else ...[
-          // 12 个月支出柱状图
           _SectionCard(
             title: '每月支出',
             child: _MonthlyBarChart(
                 monthlyExpenses: summary.monthlyExpenses, year: year),
           ),
           const SizedBox(height: 16),
-
-          // 全年分类排行
           _SectionCard(
             title: '全年分类排行',
             child: _CategoryRanking(
@@ -268,10 +235,6 @@ class _YearlyContent extends StatelessWidget {
     );
   }
 }
-
-// ---------------------------------------------------------------------------
-// 月份切换器
-// ---------------------------------------------------------------------------
 
 class _MonthSwitcher extends StatelessWidget {
   final DateTime displayedMonth;
@@ -305,7 +268,6 @@ class _MonthSwitcher extends StatelessWidget {
         ),
         IconButton(
           icon: const Icon(Icons.chevron_right),
-          // 当前月不能往后跳
           onPressed: isCurrentMonth ? null : () => onShift(1),
         ),
       ],
@@ -313,11 +275,6 @@ class _MonthSwitcher extends StatelessWidget {
   }
 }
 
-// ---------------------------------------------------------------------------
-// 收支结余三卡
-// ---------------------------------------------------------------------------
-
-/// 环比：本月支出相对上月的涨跌（上月无支出则不显示）。
 class _MoMComparison extends StatelessWidget {
   final MonthlySummary current;
   final MonthlySummary previous;
@@ -471,10 +428,6 @@ class _TotalCard extends StatelessWidget {
   }
 }
 
-// ---------------------------------------------------------------------------
-// 预算进度卡
-// ---------------------------------------------------------------------------
-
 class _BudgetProgressCard extends StatelessWidget {
   final Decimal monthlyBudget;
   final List<TransactionRecord> records;
@@ -556,10 +509,6 @@ class _BudgetProgressCard extends StatelessWidget {
   }
 }
 
-// ---------------------------------------------------------------------------
-// 分段标题卡片容器
-// ---------------------------------------------------------------------------
-
 class _SectionCard extends StatelessWidget {
   final String title;
   final Widget child;
@@ -594,20 +543,15 @@ class _SectionCard extends StatelessWidget {
   }
 }
 
-// ---------------------------------------------------------------------------
-// 饼图：支出构成
-// ---------------------------------------------------------------------------
-
-/// 取前 8 分类。颜色用 ColorScheme 的调色板循环。
 const _kPieColors = [
-  Color(0xFF7D8B9B), // 猫蓝灰
-  Color(0xFFF2B23C), // 铜金
-  Color(0xFFF4A9B8), // 萌粉
-  Color(0xFFFF9F68), // 暖橙
-  Color(0xFF8FBF9F), // 薄荷绿
-  Color(0xFF9BB7D4), // 浅蓝
-  Color(0xFFCBA6C3), // 藕紫
-  Color(0xFFF3C44B), // 钱袋金
+  Color(0xFF7D8B9B),
+  Color(0xFFF2B23C),
+  Color(0xFFF4A9B8),
+  Color(0xFFFF9F68),
+  Color(0xFF8FBF9F),
+  Color(0xFF9BB7D4),
+  Color(0xFFCBA6C3),
+  Color(0xFFF3C44B),
 ];
 
 class _ExpensePieChart extends StatelessWidget {
@@ -642,7 +586,6 @@ class _ExpensePieChart extends StatelessWidget {
             ),
           ),
           const SizedBox(width: 12),
-          // 图例
           Column(
             mainAxisAlignment: MainAxisAlignment.center,
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -686,10 +629,6 @@ class _ExpensePieChart extends StatelessWidget {
   }
 }
 
-// ---------------------------------------------------------------------------
-// 柱状图：每日支出
-// ---------------------------------------------------------------------------
-
 class _DailyBarChart extends StatelessWidget {
   final List<DailyTotal> dailyTotals;
   final int year;
@@ -704,7 +643,6 @@ class _DailyBarChart extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    // 只展示有支出的日期（若全月无支出不会进到这里）
     final maxVal = dailyTotals
         .map((d) => MoneyFormat.toDouble(d.expense))
         .fold(0.0, (a, b) => a > b ? a : b);
@@ -774,10 +712,6 @@ class _DailyBarChart extends StatelessWidget {
     );
   }
 }
-
-// ---------------------------------------------------------------------------
-// 柱状图：每月支出（年度）
-// ---------------------------------------------------------------------------
 
 class _MonthlyBarChart extends StatelessWidget {
   final List<Decimal> monthlyExpenses;
@@ -853,17 +787,12 @@ class _MonthlyBarChart extends StatelessWidget {
   }
 }
 
-// ---------------------------------------------------------------------------
-// 分类排行列表
-// ---------------------------------------------------------------------------
-
 class _CategoryRanking extends StatelessWidget {
   final List<CategoryTotal> categories;
   final int? maxItems;
 
   const _CategoryRanking({required this.categories, this.maxItems});
 
-  /// 用分类中文名反查 key（自有 SVG 图标按 key 渲染）。找不到返回 null。
   String? _keyForName(String name) {
     for (final s in CategorySeed.all) {
       if (s.nameZh == name) return s.key;
@@ -945,10 +874,6 @@ class _CategoryRanking extends StatelessWidget {
   }
 }
 
-// ---------------------------------------------------------------------------
-// 单笔支出排行
-// ---------------------------------------------------------------------------
-
 class _TopTxnList extends StatelessWidget {
   final List<TransactionRecord> items;
 
@@ -1010,17 +935,11 @@ class _TopTxnList extends StatelessWidget {
   }
 }
 
-// ---------------------------------------------------------------------------
-// 空状态
-// ---------------------------------------------------------------------------
-
 class _EmptyState extends StatelessWidget {
-  final IconData icon;
   final String message;
   final String sub;
 
   const _EmptyState({
-    required this.icon,
     required this.message,
     required this.sub,
   });
@@ -1029,10 +948,10 @@ class _EmptyState extends StatelessWidget {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 48),
+      padding: const EdgeInsets.symmetric(vertical: 40),
       child: Column(
         children: [
-          Icon(icon, size: 56, color: scheme.outlineVariant),
+          const Mascot(mood: MascotMood.empty, size: 80),
           const SizedBox(height: 16),
           Text(message,
               style: Theme.of(context).textTheme.titleMedium?.copyWith(

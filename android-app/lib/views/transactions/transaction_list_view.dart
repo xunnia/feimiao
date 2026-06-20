@@ -8,6 +8,7 @@ import '../../core/models/transaction_kind.dart';
 import '../../core/money_format.dart';
 import '../../data/app_repository.dart';
 import '../../theme/app_colors.dart';
+import '../../widgets/mascot.dart';
 import '../../widgets/tag_selector.dart';
 import 'edit_transaction_sheet.dart';
 
@@ -77,10 +78,6 @@ class _DaySection {
   final List<TransactionEntity> items;
   const _DaySection({required this.day, required this.items});
 }
-
-// ---------------------------------------------------------------------------
-// 待报销筛选条 + 合计
-// ---------------------------------------------------------------------------
 
 class _FilterBar extends StatelessWidget {
   final bool onlyReimbursable;
@@ -267,10 +264,10 @@ class _TransactionRow extends StatelessWidget {
 
   const _TransactionRow({required this.transaction});
 
+  bool get _isTransfer => transaction.txKind == TransactionKind.transfer;
+
   String get _emoji {
-    if (transaction.txKind == TransactionKind.transfer) {
-      return '🔁';
-    }
+    if (_isTransfer) return '🔁';
     final seed = CategorySeed.all
         .where((s) => s.key == transaction.categoryKey)
         .firstOrNull;
@@ -318,7 +315,7 @@ class _TransactionRow extends StatelessWidget {
       child: Row(
         children: [
           CatIcon(
-            categoryKey: transaction.categoryKey,
+            categoryKey: _isTransfer ? 'transfer' : transaction.categoryKey,
             emoji: _emoji,
             size: 40,
           ),
@@ -406,10 +403,12 @@ class _EmptyState extends StatelessWidget {
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          Icon(Icons.receipt_long_outlined, size: 64, color: scheme.outlineVariant),
+          const Mascot(mood: MascotMood.empty, size: 72),
           const SizedBox(height: 16),
           Text(onlyReimbursable ? '没有待报销的账目' : '还没有账目',
-              style: Theme.of(context).textTheme.titleMedium),
+              style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                    color: scheme.onSurfaceVariant,
+                  )),
           const SizedBox(height: 8),
           Text(
             onlyReimbursable ? '记账时打开「待报销」开关，这里就会列出' : '去「记一笔」页开始记账吧',
