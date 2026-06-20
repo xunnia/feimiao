@@ -12,6 +12,8 @@ import '../../core/models/transaction_kind.dart';
 import '../../core/money_format.dart';
 import '../../data/app_repository.dart';
 import '../../widgets/mascot.dart';
+import '../../widgets/pressable_scale.dart';
+import '../../widgets/sheet_grabber.dart';
 import 'record_extras_sheet.dart';
 
 /// 打开「来记一笔吧」AI 聊天面板（就地弹出，替代旧的跳全屏方案）。
@@ -158,7 +160,7 @@ class _AiChatPanelState extends State<AiChatPanel> {
         );
       } catch (_) {
         results = [NaturalLanguageEntryParser.parse(text)];
-        hint = 'AI 没连上，喵先用本地规则记了（单笔）';
+        hint = 'AI 没连上, 喵先用本地规则记了（单笔）';
       }
     } else {
       results = [NaturalLanguageEntryParser.parse(text)];
@@ -325,6 +327,7 @@ class _AiChatPanelState extends State<AiChatPanel> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
+            const SheetGrabber(),
             // ── 头部：猫 + 来记一笔吧 + 关闭 ──
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 12, 12, 4),
@@ -850,8 +853,8 @@ class _EmptyHint extends StatelessWidget {
             runSpacing: 8,
             children: [
               for (final s in suggestions)
-                GestureDetector(
-                  onTap: () => onTapSuggestion(s),
+                PressableScale(
+                  onPressed: () => onTapSuggestion(s),
                   child: Container(
                     padding: const EdgeInsets.symmetric(
                         horizontal: 12, vertical: 8),
@@ -894,8 +897,8 @@ class _Pill extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    return GestureDetector(
-      onTap: onTap,
+    return PressableScale(
+      onPressed: onTap,
       child: Container(
         height: 34,
         padding: const EdgeInsets.symmetric(horizontal: 12),
@@ -936,8 +939,8 @@ class _CircleBtn extends StatelessWidget {
     final scheme = Theme.of(context).colorScheme;
     if (filled) {
       final active = onTap != null;
-      return GestureDetector(
-        onTap: onTap,
+      return PressableScale(
+        onPressed: onTap,
         child: Container(
           width: 40,
           height: 40,
@@ -952,8 +955,8 @@ class _CircleBtn extends StatelessWidget {
         ),
       );
     }
-    return GestureDetector(
-      onTap: onTap,
+    return PressableScale(
+      onPressed: onTap,
       child: Container(
         width: 38,
         height: 38,

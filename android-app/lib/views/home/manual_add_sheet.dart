@@ -8,13 +8,19 @@ import '../../core/models/transaction_kind.dart';
 import '../../core/money_format.dart';
 import '../../data/app_repository.dart';
 import '../../theme/app_colors.dart';
+import '../../widgets/pressable_scale.dart';
 import '../../widgets/tag_selector.dart';
-import '../common/receipt_picker.dart';
 import '../quick_add/amount_keypad.dart';
 import '../quick_add/category_grid.dart';
 
 /// 手动记账大卡片（模态底部弹出）。
+///
+/// 用 showModalBottomSheet(isScrollControlled: true) 全高弹出。
+/// 顶部拖动条 + 支出/收入分段 + "AI助手"胶囊 + X 关闭。
+/// 主体复用 CategoryGrid + _AmountDisplay + AmountKeypad。
+/// 保存后自动关闭（Navigator.pop）。
 class ManualAddSheet extends StatefulWidget {
+  /// 点击"AI助手"时的回调（由调用方切换到 AiFocusedInputSheet）。
   final VoidCallback onSwitchToAi;
 
   const ManualAddSheet({super.key, required this.onSwitchToAi});
@@ -27,14 +33,11 @@ class _ManualAddSheetState extends State<ManualAddSheet> {
   TransactionKind _kind = TransactionKind.expense;
   final AmountExpression _expression = AmountExpression();
   int? _selectedCategoryId;
-  int? _activeParentId;
+  int? _activeParentId; // 当前展开的大类（用于显示其子类）
   int? _selectedAccountId;
-  int? _toAccountId;
   DateTime _date = DateTime.now();
   final TextEditingController _noteController = TextEditingController();
   List<int> _tagIds = [];
-  bool _reimbursable = false;
-  String? _imagePath;
   int _expressionVersion = 0;
 
   @override
@@ -55,480 +58,177 @@ class _ManualAddSheetState extends State<ManualAddSheet> {
       _selectedAccountId ??= repo.accounts.firstOrNull?.id;
       final cats = repo.categoriesForKindRanked(_kind);
       _selectedCategoryId ??= cats.firstOrNull?.id;
+      _activeParentId ??= _selectedCategoryId;
     });
   }
 
   void _onKindChanged(TransactionKind kind) {
-    if (kind == _kind) return;
     final repo = context.read<AppRepository>();
     setState(() {
       _kind = kind;
-      _reimbursable = false;
-      _imagePath = null;
-      if (kind == TransactionKind.transfer) {
-        _selectedAccountId ??= repo.accounts.firstOrNull?.id;
-        _toAccountId = repo.accounts
-            .where((a) => a.id != _selectedAccountId)
-            .firstOrNull
-            ?.id;
-      } else {
-        final cats = repo.categoriesForKindRanked(kind);
-        _selectedCategoryId = cats.firstOrNull?.id;
-        _activeParentId = null;
-      }
+      final cats = repo.categoriesForKindRanked(kind);
+      _selectedCategoryId = cats.firstOrNull?.id;
+      _activeParentId = _selectedCategoryId;
     });
   }
 
   void _onExpressionChanged() => setState(() => _expressionVersion++);
 
-  Future<void> _pickReceipt() async {
-    final path = await pickAndSaveReceipt(context);
-    if (path != null && mounted) setState(() => _imagePath = path);
-  }
-
-  Future<bool> _commit() async {
+  Future<void> _save() async {
     final amount = _expression.value;
-    if (amount <= Decimal.zero) return false;
+    if (amount <= Decimal.zero) return;
 
     final repo = context.read<AppRepository>();
-    final from = _selectedAccountId ?? repo.accounts.firstOrNull?.id;
-    if (from == null) return false;
+    final accountId = _selectedAccountId ?? repo.accounts.firstOrNull?.id;
+    if (accountId == null) return;
 
-    if (_kind == TransactionKind.transfer) {
-      final to = _toAccountId;
-      if (to == null || to == from) return false;
-      await repo.addTransaction(
-        kind: TransactionKind.transfer,
-        amount: amount,
-        categoryId: null,
-        accountId: from,
-        toAccountId: to,
-        note: _noteController.text.trim(),
-        date: _date,
-        tagIds: _tagIds,
-      );
-    } else {
-      await repo.addTransaction(
-        kind: _kind,
-        amount: amount,
-        categoryId: _selectedCategoryId,
-        accountId: from,
-        note: _noteController.text.trim(),
-        date: _date,
-        tagIds: _tagIds,
-        reimbursable: _reimbursable,
-        imagePath: _imagePath ?? '',
-      );
-    }
-    return true;
-  }
+    await repo.addTransaction(
+      kind: _kind,
+      amount: amount,
+      categoryId: _selectedCategoryId,
+      accountId: accountId,
+      note: _noteController.text.trim(),
+      date: _date,
+      tagIds: _tagIds,
+    );
 
-  Future<void> _save() async {
-    if (await _commit() && mounted) Navigator.pop(context);
-  }
-
-  Future<void> _saveAndContinue() async {
-    if (await _commit()) {
-      _expression.clear();
-      _noteController.clear();
-      _reimbursable = false;
-      _imagePath = null;
-      if (mounted) setState(() => _expressionVersion++);
-    }
+    if (mounted) Navigator.pop(context);
   }
 
   @override
   Widget build(BuildContext context) {
+    // isScrollControlled: true のsheet では高さ制約を自分で持つ必要がある。
+    // 画面高さの 92% を上限に、キーボード分を引いた残り全体を使う。
     final screenH = MediaQuery.sizeOf(context).height;
     final bottomInset = MediaQuery.viewInsetsOf(context).bottom;
     final maxH = screenH * 0.92 - bottomInset;
-    final isTransfer = _kind == TransactionKind.transfer;
 
     return SizedBox(
       height: maxH.clamp(300.0, screenH * 0.92),
       child: Column(
         children: [
-          const _DragHandle(),
+        // ── 顶部拖动条 ──
+        const _DragHandle(),
 
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 6, 12, 0),
-            child: Row(
-              children: [
-                Expanded(
-                  child: _KindTabs(selected: _kind, onChanged: _onKindChanged),
+        // ── 顶部栏：分段 + AI助手胶囊 + 关闭 ──
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 8, 12, 0),
+          child: Row(
+            children: [
+              // 支出 / 收入
+              Expanded(
+                child: SegmentedButton<TransactionKind>(
+                  segments: const [
+                    ButtonSegment(
+                        value: TransactionKind.expense, label: Text('支出')),
+                    ButtonSegment(
+                        value: TransactionKind.income, label: Text('收入')),
+                  ],
+                  selected: {_kind},
+                  onSelectionChanged: (s) => _onKindChanged(s.first),
                 ),
-                const SizedBox(width: 8),
-                _ModePill(label: '手动记账', onTap: widget.onSwitchToAi),
-                const SizedBox(width: 8),
-                _ToolCircleButton(
-                  icon: Icons.close,
-                  onTap: () => Navigator.pop(context),
-                ),
-              ],
-            ),
-          ),
-
-          // 中部：分类区 或 转账区
-          Expanded(
-            child: Consumer<AppRepository>(
-              builder: (context, repo, _) {
-                if (isTransfer) {
-                  return _TransferBody(
-                    accounts: repo.accounts,
-                    fromId: _selectedAccountId,
-                    toId: _toAccountId,
-                    onFrom: (id) => setState(() {
-                      _selectedAccountId = id;
-                      if (_toAccountId == id) {
-                        _toAccountId = repo.accounts
-                            .where((a) => a.id != id)
-                            .firstOrNull
-                            ?.id;
-                      }
-                    }),
-                    onTo: (id) => setState(() => _toAccountId = id),
-                  );
-                }
-                final scheme = Theme.of(context).colorScheme;
-                final cats = repo.categoriesForKindRanked(_kind);
-                final expandable = <int>{
-                  for (final c in cats)
-                    if (repo.childrenOf(c.id).isNotEmpty) c.id
-                };
-                final children = _activeParentId == null
-                    ? const <CategoryEntity>[]
-                    : repo.childrenOf(_activeParentId!);
-                int? parentHighlight = _activeParentId;
-                if (parentHighlight == null &&
-                    _selectedCategoryId != null &&
-                    cats.any((c) => c.id == _selectedCategoryId)) {
-                  parentHighlight = _selectedCategoryId;
-                }
-                return SingleChildScrollView(
-                  child: Column(
-                    children: [
-                      const SizedBox(height: 4),
-                      CategoryGrid(
-                        categories: cats,
-                        selectedId: parentHighlight,
-                        expandableIds: expandable,
-                        expandedId: _activeParentId,
-                        onSelected: (cat) => setState(() {
-                          final hasKids = expandable.contains(cat.id);
-                          _activeParentId =
-                              (hasKids && _activeParentId != cat.id)
-                                  ? cat.id
-                                  : null;
-                          _selectedCategoryId = cat.id;
-                        }),
-                      ),
-                      if (children.isNotEmpty)
-                        Container(
-                          margin: const EdgeInsets.fromLTRB(12, 2, 12, 10),
-                          padding: const EdgeInsets.symmetric(vertical: 6),
-                          decoration: BoxDecoration(
-                            color: scheme.surfaceContainerHighest
-                                .withValues(alpha: 0.45),
-                            borderRadius: BorderRadius.circular(18),
-                          ),
-                          child: CategoryGrid(
-                            categories: children,
-                            selectedId: _selectedCategoryId,
-                            onSelected: (c) => setState(
-                                () => _selectedCategoryId = c.id),
-                          ),
-                        ),
-                    ],
-                  ),
-                );
-              },
-            ),
-          ),
-
-          // 标签选择
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 2, 16, 2),
-            child: TagSelector(
-              selectedIds: _tagIds,
-              onChanged: (v) => setState(() => _tagIds = v),
-            ),
-          ),
-
-          // 待报销开关（仅支出）+ 收据（非转账）
-          if (!isTransfer)
-            Padding(
-              padding: const EdgeInsets.fromLTRB(14, 0, 14, 2),
-              child: Row(
-                children: [
-                  if (_kind == TransactionKind.expense)
-                    FilterChip(
-                      label: const Text('待报销'),
-                      avatar: const Icon(Icons.receipt_long_outlined, size: 16),
-                      selected: _reimbursable,
-                      onSelected: (v) => setState(() => _reimbursable = v),
-                      visualDensity: VisualDensity.compact,
-                      materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                    ),
-                  const Spacer(),
-                  if (_imagePath == null)
-                    TextButton.icon(
-                      onPressed: _pickReceipt,
-                      icon: const Icon(Icons.photo_camera_outlined, size: 16),
-                      label: const Text('收据'),
-                      style: TextButton.styleFrom(
-                        visualDensity: VisualDensity.compact,
-                      ),
-                    )
-                  else
-                    Padding(
-                      padding: const EdgeInsets.only(right: 6),
-                      child: ReceiptThumb(
-                        path: _imagePath!,
-                        size: 38,
-                        onRemove: () => setState(() => _imagePath = null),
-                      ),
-                    ),
-                ],
               ),
-            ),
+              const SizedBox(width: 8),
 
-          // 今日可花横幅（支出时按需显示）
-          if (_kind == TransactionKind.expense)
-            Consumer<AppRepository>(
-              builder: (context, repo, _) {
-                final budget = repo.monthlyBudget;
-                if (budget == null) return const SizedBox.shrink();
-                final status = BudgetEngine.status(
-                  monthlyBudget: budget,
-                  records: repo.allRecords,
-                );
-                return _TodayAllowanceBanner(status: status);
-              },
-            ),
+              // 模式胶囊：显示当前模式（手动），点一下切到 AI
+              _ModePill(
+                label: '手动记账',
+                onTap: widget.onSwitchToAi,
+              ),
+              const SizedBox(width: 8),
 
-          // 金额 + 日期/备注 成组卡片
-          Builder(
-            builder: (context) {
-              final scheme = Theme.of(context).colorScheme;
-              return Container(
-                margin: const EdgeInsets.fromLTRB(12, 2, 12, 4),
-                decoration: BoxDecoration(
-                  color: scheme.surfaceContainerHigh.withValues(alpha: 0.4),
-                  borderRadius: BorderRadius.circular(16),
-                ),
+              // 关闭
+              _ToolCircleButton(
+                icon: Icons.close,
+                onTap: () => Navigator.pop(context),
+              ),
+            ],
+          ),
+        ),
+
+        // ── 金额显示 ──
+        _AmountDisplay(
+            expression: _expression, version: _expressionVersion),
+
+        // ── 今日可花横幅（支出时按需显示）──
+        if (_kind == TransactionKind.expense)
+          Consumer<AppRepository>(
+            builder: (context, repo, _) {
+              final budget = repo.monthlyBudget;
+              if (budget == null) return const SizedBox.shrink();
+              final status = BudgetEngine.status(
+                monthlyBudget: budget,
+                records: repo.allRecords,
+              );
+              return _TodayAllowanceBanner(status: status);
+            },
+          ),
+
+        // ── 分类格（Expanded 撑满剩余空间）──
+        Expanded(
+          child: Consumer<AppRepository>(
+            builder: (context, repo, _) {
+              final cats = repo.categoriesForKindRanked(_kind);
+              final children = _activeParentId == null
+                  ? const <CategoryEntity>[]
+                  : repo.childrenOf(_activeParentId!);
+              return SingleChildScrollView(
                 child: Column(
                   children: [
-                    _AmountDisplay(
-                        expression: _expression, version: _expressionVersion),
-                    _DetailBar(
-                      accounts: context.watch<AppRepository>().accounts,
-                      selectedAccountId: _selectedAccountId,
-                      date: _date,
-                      noteController: _noteController,
-                      showAccount: !isTransfer,
-                      onAccountChanged: (id) =>
-                          setState(() => _selectedAccountId = id),
-                      onDateChanged: (d) => setState(() => _date = d),
+                    // 大类网格：选中=当前展开的大类
+                    CategoryGrid(
+                      categories: cats,
+                      selectedId: _activeParentId,
+                      onSelected: (cat) => setState(() {
+                        _activeParentId = cat.id;
+                        _selectedCategoryId = cat.id; // 不选子类则记到大类
+                      }),
                     ),
+                    // 子类横排（选了大类且其有子类时出现）
+                    if (children.isNotEmpty)
+                      SubcategoryRow(
+                        children: children,
+                        selectedId: _selectedCategoryId,
+                        onSelected: (c) =>
+                            setState(() => _selectedCategoryId = c.id),
+                      ),
                   ],
                 ),
               );
             },
           ),
-
-          // 数字键盘
-          Padding(
-            padding: const EdgeInsets.only(bottom: 16, top: 2),
-            child: AmountKeypad(
-              expression: _expression,
-              onExpressionChanged: _onExpressionChanged,
-              onSave: _save,
-              onSaveAndContinue: _saveAndContinue,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// 顶部 kind 文字 tab（支出 / 收入 / 转账）
-// ─────────────────────────────────────────────────────────────────────────────
-
-class _KindTabs extends StatelessWidget {
-  final TransactionKind selected;
-  final ValueChanged<TransactionKind> onChanged;
-
-  const _KindTabs({required this.selected, required this.onChanged});
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    Widget sep() => Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 8),
-          child: Text('｜',
-              style: TextStyle(color: scheme.outlineVariant, fontSize: 15)),
-        );
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        _tab(context, '支出', TransactionKind.expense, scheme),
-        sep(),
-        _tab(context, '收入', TransactionKind.income, scheme),
-        sep(),
-        _tab(context, '转账', TransactionKind.transfer, scheme),
-      ],
-    );
-  }
-
-  Widget _tab(BuildContext context, String label, TransactionKind kind,
-      ColorScheme scheme) {
-    final isSel = kind == selected;
-    return GestureDetector(
-      onTap: () => onChanged(kind),
-      behavior: HitTestBehavior.opaque,
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Text(
-            label,
-            style: TextStyle(
-              fontSize: 17,
-              fontWeight: isSel ? FontWeight.w600 : FontWeight.w400,
-              color: isSel ? scheme.primary : scheme.onSurfaceVariant,
-            ),
-          ),
-          const SizedBox(height: 3),
-          Container(
-            width: 18,
-            height: 3,
-            decoration: BoxDecoration(
-              color: isSel ? scheme.primary : Colors.transparent,
-              borderRadius: BorderRadius.circular(2),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// 转账区：从账户 → 到账户
-// ─────────────────────────────────────────────────────────────────────────────
-
-class _TransferBody extends StatelessWidget {
-  final List<AccountEntity> accounts;
-  final int? fromId;
-  final int? toId;
-  final ValueChanged<int?> onFrom;
-  final ValueChanged<int?> onTo;
-
-  const _TransferBody({
-    required this.accounts,
-    required this.fromId,
-    required this.toId,
-    required this.onFrom,
-    required this.onTo,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    if (accounts.length < 2) {
-      return Padding(
-        padding: const EdgeInsets.fromLTRB(24, 40, 24, 24),
-        child: Text(
-          '转账需要至少两个账户。\n先到「设置 → 账户」里添加一个吧～',
-          textAlign: TextAlign.center,
-          style: Theme.of(context)
-              .textTheme
-              .bodyMedium
-              ?.copyWith(color: scheme.onSurfaceVariant),
         ),
-      );
-    }
-    final from = accounts.where((a) => a.id == fromId).firstOrNull;
-    final to = accounts.where((a) => a.id == toId).firstOrNull;
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(20, 28, 20, 12),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Row(
-            children: [
-              Expanded(
-                child: _accTile(context, '从', from?.name ?? '选择',
-                    exclude: toId, onChanged: onFrom),
-              ),
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 10),
-                child: Icon(Icons.arrow_forward,
-                    color: scheme.primary, size: 22),
-              ),
-              Expanded(
-                child: _accTile(context, '到', to?.name ?? '选择',
-                    exclude: fromId, onChanged: onTo),
-              ),
-            ],
-          ),
-          const SizedBox(height: 14),
-          Text(
-            '转账只在账户之间移动，不计入收支',
-            style: Theme.of(context)
-                .textTheme
-                .labelSmall
-                ?.copyWith(color: scheme.onSurfaceVariant),
-          ),
-        ],
-      ),
-    );
-  }
 
-  Widget _accTile(BuildContext context, String label, String name,
-      {required int? exclude, required ValueChanged<int?> onChanged}) {
-    final scheme = Theme.of(context).colorScheme;
-    final options = accounts.where((a) => a.id != exclude).toList();
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(label,
-            style: Theme.of(context)
-                .textTheme
-                .labelSmall
-                ?.copyWith(color: scheme.onSurfaceVariant)),
-        const SizedBox(height: 6),
-        PopupMenuButton<int>(
-          onSelected: onChanged,
-          itemBuilder: (_) => options
-              .map((a) => PopupMenuItem(value: a.id, child: Text(a.name)))
-              .toList(),
-          child: Container(
-            height: 48,
-            padding: const EdgeInsets.symmetric(horizontal: 14),
-            decoration: BoxDecoration(
-              color: scheme.surfaceContainerHigh,
-              borderRadius: BorderRadius.circular(14),
-            ),
-            child: Row(
-              children: [
-                Icon(Icons.account_balance_wallet_outlined,
-                    size: 18, color: scheme.onSurfaceVariant),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(name,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: Theme.of(context).textTheme.bodyMedium),
-                ),
-                Icon(Icons.expand_more,
-                    size: 18, color: scheme.onSurfaceVariant),
-              ],
-            ),
+        // ── 标签选择 ──
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 4, 16, 4),
+          child: TagSelector(
+            selectedIds: _tagIds,
+            onChanged: (v) => setState(() => _tagIds = v),
+          ),
+        ),
+
+        // ── 账户 + 日期 + 备注 ──
+        _DetailBar(
+          accounts: context.watch<AppRepository>().accounts,
+          selectedAccountId: _selectedAccountId,
+          date: _date,
+          noteController: _noteController,
+          onAccountChanged: (id) => setState(() => _selectedAccountId = id),
+          onDateChanged: (d) => setState(() => _date = d),
+        ),
+
+        // ── 数字键盘 ──
+        Padding(
+          padding: const EdgeInsets.only(bottom: 16, top: 4),
+          child: AmountKeypad(
+            expression: _expression,
+            onExpressionChanged: _onExpressionChanged,
+            onSave: _save,
           ),
         ),
       ],
+      ),
     );
   }
 }
@@ -573,7 +273,7 @@ class _AmountDisplay extends StatelessWidget {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 10, 16, 6),
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.baseline,
         textBaseline: TextBaseline.alphabetic,
@@ -589,7 +289,7 @@ class _AmountDisplay extends StatelessWidget {
           Expanded(
             child: Text(
               expression.displayText,
-              style: Theme.of(context).textTheme.headlineMedium?.copyWith(
+              style: Theme.of(context).textTheme.displaySmall?.copyWith(
                     fontWeight: FontWeight.w600,
                     // ignore: deprecated_member_use
                     fontFeatures: const [FontFeature.tabularFigures()],
@@ -615,7 +315,7 @@ class _AmountDisplay extends StatelessWidget {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 详情行：账户 + 日期 + 备注
+// 底部详情栏：账户 + 日期 + 备注
 // ─────────────────────────────────────────────────────────────────────────────
 
 class _DetailBar extends StatelessWidget {
@@ -623,7 +323,6 @@ class _DetailBar extends StatelessWidget {
   final int? selectedAccountId;
   final DateTime date;
   final TextEditingController noteController;
-  final bool showAccount;
   final ValueChanged<int?> onAccountChanged;
   final ValueChanged<DateTime> onDateChanged;
 
@@ -632,7 +331,6 @@ class _DetailBar extends StatelessWidget {
     required this.selectedAccountId,
     required this.date,
     required this.noteController,
-    required this.showAccount,
     required this.onAccountChanged,
     required this.onDateChanged,
   });
@@ -645,21 +343,20 @@ class _DetailBar extends StatelessWidget {
             accounts.firstOrNull;
 
     return Container(
-      padding: const EdgeInsets.fromLTRB(12, 6, 12, 8),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
       decoration: BoxDecoration(
         border: Border(
             top: BorderSide(color: scheme.outlineVariant, width: 0.5)),
       ),
       child: Row(
         children: [
-          if (showAccount && accounts.isNotEmpty) ...[
+          if (accounts.isNotEmpty)
             _AccountButton(
               account: selectedAccount,
               accounts: accounts,
               onChanged: onAccountChanged,
             ),
-            const SizedBox(width: 8),
-          ],
+          const SizedBox(width: 8),
           _DateButton(date: date, onChanged: onDateChanged),
           const SizedBox(width: 8),
           Expanded(
@@ -777,7 +474,7 @@ class _TodayAllowanceBanner extends StatelessWidget {
 
     return Container(
       width: double.infinity,
-      margin: const EdgeInsets.fromLTRB(16, 0, 16, 2),
+      margin: const EdgeInsets.fromLTRB(16, 0, 16, 4),
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
       decoration: BoxDecoration(
         color: bgColor,
@@ -795,7 +492,7 @@ class _TodayAllowanceBanner extends StatelessWidget {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 统一圆形工具按钮
+// 统一圆形工具按钮（透明底 + 淡阴影，对标 Claude）—— iOS 按压手感
 // ─────────────────────────────────────────────────────────────────────────────
 
 class _ToolCircleButton extends StatelessWidget {
@@ -807,8 +504,8 @@ class _ToolCircleButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    return GestureDetector(
-      onTap: onTap,
+    return PressableScale(
+      onPressed: onTap,
       child: Container(
         width: 40,
         height: 40,
@@ -831,7 +528,7 @@ class _ToolCircleButton extends StatelessWidget {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 模式胶囊
+// 模式胶囊（透明底 + swap_horiz 前置图标 + 不加粗）—— iOS 按压手感
 // ─────────────────────────────────────────────────────────────────────────────
 
 class _ModePill extends StatelessWidget {
@@ -843,8 +540,8 @@ class _ModePill extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    return GestureDetector(
-      onTap: onTap,
+    return PressableScale(
+      onPressed: onTap,
       child: Container(
         height: 36,
         padding: const EdgeInsets.symmetric(horizontal: 12),
