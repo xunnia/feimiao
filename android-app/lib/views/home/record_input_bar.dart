@@ -1,3 +1,5 @@
+import 'dart:ui' show ImageFilter;
+
 import 'package:flutter/material.dart';
 
 import '../../widgets/pressable_scale.dart';
@@ -79,15 +81,8 @@ class _RecordInputBarState extends State<RecordInputBar> {
       child: Padding(
         padding: const EdgeInsets.fromLTRB(12, 6, 12, 10),
         child: Container(
-          padding: const EdgeInsets.fromLTRB(18, 16, 12, 12),
           decoration: BoxDecoration(
-            // 对标 Claude：近纯白底
-            color: scheme.surface,
             borderRadius: BorderRadius.circular(28),
-            border: Border.all(
-              color: scheme.outlineVariant.withValues(alpha: 0.4),
-              width: 1,
-            ),
             boxShadow: const [
               BoxShadow(
                 color: Color(0x14000000), // ~8% 黑
@@ -96,7 +91,20 @@ class _RecordInputBarState extends State<RecordInputBar> {
               ),
             ],
           ),
-          child: Column(
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(28),
+            child: BackdropFilter(
+              filter: ImageFilter.blur(sigmaX: 6, sigmaY: 6),
+              child: CustomPaint(
+                foregroundPainter: const _GlassEdgePainter(),
+                child: Container(
+                  padding: const EdgeInsets.fromLTRB(18, 16, 12, 12),
+                  decoration: BoxDecoration(
+                    // iOS 玻璃：半透明白底；细黑边由 _GlassEdgePainter 画（深浅不均）
+                    color: scheme.surface.withValues(alpha: 0.4),
+                    borderRadius: BorderRadius.circular(28),
+                  ),
+                  child: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
@@ -136,7 +144,11 @@ class _RecordInputBarState extends State<RecordInputBar> {
                   ),
                 ],
               ),
-            ],
+                ],
+              ),
+              ),
+              ),
+            ),
           ),
         ),
       ),
@@ -254,4 +266,37 @@ class _ModePill extends StatelessWidget {
       ),
     );
   }
+}
+
+/// Claude 风玻璃边：沿圆角描一圈深浅不均的细线——
+/// 顶部一抹白色高光，往下渐变成一条很细的黑线（深浅/明暗不等粗）。
+class _GlassEdgePainter extends CustomPainter {
+  const _GlassEdgePainter();
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final rect = Offset.zero & size;
+    final rrect = RRect.fromRectAndRadius(
+      rect.deflate(0.5),
+      const Radius.circular(28),
+    );
+    final shader = const LinearGradient(
+      begin: Alignment.topCenter,
+      end: Alignment.bottomCenter,
+      colors: [
+        Color(0x99FFFFFF), // 顶部高光（白 ~60%）
+        Color(0x0F000000), // 中段很淡（黑 ~6%）
+        Color(0x29000000), // 底部偏深（黑 ~16%）
+      ],
+      stops: [0.0, 0.45, 1.0],
+    ).createShader(rect);
+    final paint = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.0
+      ..shader = shader;
+    canvas.drawRRect(rrect, paint);
+  }
+
+  @override
+  bool shouldRepaint(covariant _GlassEdgePainter oldDelegate) => false;
 }

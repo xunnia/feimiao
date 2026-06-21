@@ -20,11 +20,54 @@ import '../statistics/statistics_view.dart';
 import '../settings/budget_setting_view.dart';
 import '../transactions/edit_transaction_sheet.dart';
 
-/// 首页：折叠吸顶大卡片（收支+预算）+ 全量按天分组明细列表。
-class HomeView extends StatelessWidget {
+enum _TxFilter { all, expense, income }
+
+/// 首页：折叠吸顶大卡片（预算+收支）+ 按所选月分组的明细列表。
+class HomeView extends StatefulWidget {
   final VoidCallback onShowTransactions;
 
   const HomeView({super.key, required this.onShowTransactions});
+
+  @override
+  State<HomeView> createState() => _HomeViewState();
+}
+
+class _HomeViewState extends State<HomeView> {
+  late int _year;
+  late int _month;
+  _TxFilter _filter = _TxFilter.all;
+
+  @override
+  void initState() {
+    super.initState();
+    final now = DateTime.now();
+    _year = now.year;
+    _month = now.month;
+  }
+
+  bool get _isCurrentMonth {
+    final now = DateTime.now();
+    return _year == now.year && _month == now.month;
+  }
+
+  void _stepMonth(int delta) {
+    final m = DateTime(_year, _month + delta, 1);
+    final now = DateTime.now();
+    // 不翻到未来（没有未来数据）。
+    if (m.year > now.year || (m.year == now.year && m.month > now.month)) return;
+    setState(() {
+      _year = m.year;
+      _month = m.month;
+    });
+  }
+
+  void _jumpToCurrent() {
+    final now = DateTime.now();
+    setState(() {
+      _year = now.year;
+      _month = now.month;
+    });
+  }
 
   List<_DaySection> _groupByDay(List<TransactionEntity> transactions) {
     final map = <DateTime, List<TransactionEntity>>{};
@@ -41,23 +84,46 @@ class HomeView extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final repo = context.watch<AppRepository>();
-    final now = DateTime.now();
+    final isCurrent = _isCurrentMonth;
+    final monthDate = DateTime(_year, _month);
+
     final summary = StatisticsEngine.monthlySummary(
       repo.allRecords,
-      year: now.year,
-      month: now.month,
+      year: _year,
+      month: _month,
     );
     final budgetStatus = repo.monthlyBudget != null
         ? BudgetEngine.status(
             monthlyBudget: repo.monthlyBudget!,
             records: repo.allRecords,
+            on: isCurrent
+                ? DateTime.now()
+                : DateTime(_year, _month,
+                    StatisticsEngine.daysInMonth(year: _year, month: _month)),
           )
         : null;
 
-    final transactions = repo.transactions;
-    final sections = _groupByDay(transactions);
+    // 所选月的交易 + 收支筛选。
+    final monthTx = repo.transactions
+        .where((t) => t.date.year == _year && t.date.month == _month)
+        .toList();
+    final filtered = monthTx.where((t) {
+      switch (_filter) {
+        case _TxFilter.all:
+          return true;
+        case _TxFilter.expense:
+          return t.txKind == TransactionKind.expense;
+        case _TxFilter.income:
+          return t.txKind == TransactionKind.income;
+      }
+    }).toList();
+    final sections = _groupByDay(filtered);
 
-    const double expandedHeight = 220.0;
+    final double expandedHeight = budgetStatus == null
+        ? 196.0
+        : isCurrent
+            ? 232.0
+            : 220.0;
     const double minExtent = kToolbarHeight;
 
     return CustomScrollView(
@@ -73,8 +139,10 @@ class HomeView extends StatelessWidget {
           flexibleSpace: LayoutBuilder(
             builder: (context, constraints) {
               final maxH = constraints.maxHeight;
-              final expandedTotal = expandedHeight + MediaQuery.of(context).padding.top;
-              final collapsedTotal = minExtent + MediaQuery.of(context).padding.top;
+              final expandedTotal =
+                  expandedHeight + MediaQuery.of(context).padding.top;
+              final collapsedTotal =
+                  minExtent + MediaQuery.of(context).padding.top;
               final t = ((maxH - collapsedTotal) /
                       (expandedTotal - collapsedTotal).clamp(1.0, double.infinity))
                   .clamp(0.0, 1.0);
@@ -88,10 +156,14 @@ class HomeView extends StatelessWidget {
                       child: SingleChildScrollView(
                         physics: const NeverScrollableScrollPhysics(),
                         child: _ExpandedSummaryCard(
-                          now: now,
+                          monthDate: monthDate,
+                          isCurrentMonth: isCurrent,
                           summary: summary,
                           budgetStatus: budgetStatus,
                           budget: repo.monthlyBudget,
+                          onPrevMonth: () => _stepMonth(-1),
+                          onNextMonth: () => _stepMonth(1),
+                          onJumpCurrent: _jumpToCurrent,
                         ),
                       ),
                     ),
@@ -105,6 +177,7 @@ class HomeView extends StatelessWidget {
                         child: _CollapsedMiniBar(
                           summary: summary,
                           budgetStatus: budgetStatus,
+                          isCurrentMonth: isCurrent,
                         ),
                       ),
                     ),
@@ -114,19 +187,30 @@ class HomeView extends StatelessWidget {
             },
           ),
         ),
-
-        if (transactions.isEmpty)
+        if (monthTx.isEmpty)
           SliverFillRemaining(
             hasScrollBody: false,
-            child: _EmptyState(),
+            child: _EmptyState(
+              title: isCurrent ? '还没有记录哦' : '这个月没有记录',
+              subtitle: isCurrent ? '在下方输入框记第一笔吧' : '换个月看看吧',
+            ),
           )
         else ...[
-          SliverToBoxAdapter(child: _InsightStrip(summary: summary)),
-          for (final s in sections)
-            SliverToBoxAdapter(
-              child: _DayCard(section: s, repo: repo),
+          SliverToBoxAdapter(
+            child: _FilterSegment(
+              value: _filter,
+              onChanged: (f) => setState(() => _filter = f),
             ),
-          const SliverToBoxAdapter(child: SizedBox(height: 96)),
+          ),
+          SliverToBoxAdapter(child: _InsightStrip(summary: summary)),
+          if (sections.isEmpty)
+            SliverToBoxAdapter(child: _FilterEmptyHint(filter: _filter))
+          else
+            for (final s in sections)
+              SliverToBoxAdapter(
+                child: _DayCard(section: s, repo: repo),
+              ),
+          const SliverToBoxAdapter(child: SizedBox(height: 150)),
         ],
       ],
     );
@@ -138,16 +222,24 @@ class HomeView extends StatelessWidget {
 // ---------------------------------------------------------------------------
 
 class _ExpandedSummaryCard extends StatelessWidget {
-  final DateTime now;
+  final DateTime monthDate;
+  final bool isCurrentMonth;
   final MonthlySummary summary;
   final BudgetStatus? budgetStatus;
   final Decimal? budget;
+  final VoidCallback onPrevMonth;
+  final VoidCallback onNextMonth;
+  final VoidCallback onJumpCurrent;
 
   const _ExpandedSummaryCard({
-    required this.now,
+    required this.monthDate,
+    required this.isCurrentMonth,
     required this.summary,
     required this.budgetStatus,
     required this.budget,
+    required this.onPrevMonth,
+    required this.onNextMonth,
+    required this.onJumpCurrent,
   });
 
   @override
@@ -172,33 +264,14 @@ class _ExpandedSummaryCard extends StatelessWidget {
             children: [
               Row(
                 children: [
-                  GestureDetector(
-                    onTap: () => Navigator.push<void>(
-                      context,
-                      CupertinoPageRoute<void>(
-                        builder: (_) => const StatisticsView(),
-                      ),
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Text(
-                          '${now.year}年${now.month}月',
-                          style: Theme.of(context)
-                              .textTheme
-                              .labelLarge
-                              ?.copyWith(
-                                fontWeight: FontWeight.w500,
-                                color: scheme.onSurface,
-                              ),
-                        ),
-                        const SizedBox(width: 2),
-                        Icon(
-                          CupertinoIcons.chevron_down,
-                          size: 18,
-                          color: scheme.onSurfaceVariant,
-                        ),
-                      ],
+                  Transform.translate(
+                    offset: const Offset(-12, 0),
+                    child: _MonthStepper(
+                      monthDate: monthDate,
+                      isCurrentMonth: isCurrentMonth,
+                      onPrev: onPrevMonth,
+                      onNext: onNextMonth,
+                      onJumpCurrent: onJumpCurrent,
                     ),
                   ),
                   const SizedBox(width: 8),
@@ -247,47 +320,31 @@ class _ExpandedSummaryCard extends StatelessWidget {
               ),
               const SizedBox(height: AppSpacing.sm),
 
-              _HeroBlock(
-                now: now,
-                summary: summary,
-                budgetStatus: budgetStatus,
-              ),
-              const SizedBox(height: AppSpacing.md),
-
-              Row(
-                children: [
-                  Expanded(
-                    child: _SummaryMetric(
-                      label: '收入',
-                      amount: summary.totalIncome,
-                      color: AppColors.income(scheme),
-                      up: true,
-                    ),
-                  ),
-                  Container(
-                    width: 1,
-                    height: 28,
-                    color: scheme.outlineVariant.withValues(alpha: 0.5),
-                    margin:
-                        const EdgeInsets.symmetric(horizontal: AppSpacing.md),
-                  ),
-                  Expanded(
-                    child: _SummaryMetric(
-                      label: '支出',
-                      amount: summary.totalExpense,
-                      color: scheme.onSurface,
-                      up: false,
-                    ),
+              if (budgetStatus != null && isCurrentMonth)
+                _CurrentBudgetBody(
+                  summary: summary,
+                  budgetStatus: budgetStatus!,
+                  budget: budget!,
+                )
+              else ...[
+                _HeroBlock(
+                  summary: summary,
+                  budgetStatus: budgetStatus,
+                  isCurrentMonth: isCurrentMonth,
+                ),
+                const SizedBox(height: AppSpacing.md),
+                _IncomeExpenseRow(summary: summary),
+                if (budgetStatus != null) ...[
+                  const SizedBox(height: AppSpacing.md),
+                  _BudgetStrip(
+                    budgetStatus: budgetStatus,
+                    budget: budget,
+                    isOverspend: isOverspend,
+                    monthDate: monthDate,
+                    isCurrentMonth: isCurrentMonth,
                   ),
                 ],
-              ),
-              const SizedBox(height: AppSpacing.md),
-
-              _BudgetStrip(
-                budgetStatus: budgetStatus,
-                budget: budget,
-                isOverspend: isOverspend,
-              ),
+              ],
             ],
           ),
         ),
@@ -309,17 +366,359 @@ class _ExpandedSummaryCard extends StatelessWidget {
   }
 }
 
-/// 大卡片主角：有预算时显示「预算剩余 + 今日可用 + 节奏趋势」，
-/// 没设预算时回退「本月结余」。
-class _HeroBlock extends StatelessWidget {
-  final DateTime now;
-  final MonthlySummary summary;
-  final BudgetStatus? budgetStatus;
+/// 月份步进器：‹ 2026年6月 ›。到当月时禁用向后箭头；点月份名跳回当月。
+class _MonthStepper extends StatelessWidget {
+  final DateTime monthDate;
+  final bool isCurrentMonth;
+  final VoidCallback onPrev;
+  final VoidCallback onNext;
+  final VoidCallback onJumpCurrent;
 
-  const _HeroBlock({
-    required this.now,
+  const _MonthStepper({
+    required this.monthDate,
+    required this.isCurrentMonth,
+    required this.onPrev,
+    required this.onNext,
+    required this.onJumpCurrent,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+
+    Widget arrow(IconData icon, VoidCallback? onTap) => GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTap: onTap,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
+            child: Icon(
+              icon,
+              size: 16,
+              color: onTap == null
+                  ? scheme.onSurfaceVariant.withValues(alpha: 0.3)
+                  : scheme.onSurfaceVariant,
+            ),
+          ),
+        );
+
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        arrow(CupertinoIcons.chevron_back, onPrev),
+        GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTap: isCurrentMonth ? null : onJumpCurrent,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 4),
+            child: Text(
+              '${monthDate.year}年${monthDate.month}月',
+              style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                    fontWeight: FontWeight.w500,
+                    color: scheme.onSurface,
+                  ),
+            ),
+          ),
+        ),
+        arrow(
+          CupertinoIcons.chevron_forward,
+          isCurrentMonth ? null : onNext,
+        ),
+      ],
+    );
+  }
+}
+
+/// 收入 | 支出 两栏（中间发丝竖线）。
+class _IncomeExpenseRow extends StatelessWidget {
+  final MonthlySummary summary;
+
+  const _IncomeExpenseRow({required this.summary});
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Row(
+      children: [
+        Expanded(
+          child: _SummaryMetric(
+            label: '收入',
+            amount: summary.totalIncome,
+            color: AppColors.income(scheme),
+            up: true,
+          ),
+        ),
+        Container(
+          width: 1,
+          height: 28,
+          color: scheme.outlineVariant.withValues(alpha: 0.5),
+          margin: const EdgeInsets.symmetric(horizontal: AppSpacing.md),
+        ),
+        Expanded(
+          child: _SummaryMetric(
+            label: '支出',
+            amount: summary.totalExpense,
+            color: scheme.onSurface,
+            up: false,
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// 当月有预算时的大卡片主体：左侧（月预算剩余 + 收支 + 进度条）+ 右侧今日可花环形图。
+class _CurrentBudgetBody extends StatelessWidget {
+  final MonthlySummary summary;
+  final BudgetStatus budgetStatus;
+  final Decimal budget;
+
+  const _CurrentBudgetBody({
     required this.summary,
     required this.budgetStatus,
+    required this.budget,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    final s = budgetStatus;
+    final over = s.isOverBudget;
+    final remaining = s.remaining;
+
+    final ratio = budget > Decimal.zero
+        ? (s.spentThisMonth / budget)
+            .toDecimal(scaleOnInfinitePrecision: 4)
+            .toDouble()
+            .clamp(0.0, 1.0)
+        : 0.0;
+    final pct = (ratio * 100).round();
+
+    final now = DateTime.now();
+    final daysInMonth = DateTime(now.year, now.month + 1, 0).day;
+    final timeRatio = (now.day / daysInMonth).clamp(0.0, 1.0);
+    final Color barColor;
+    if (over) {
+      barColor = const Color(0xFFE0552B);
+    } else if (ratio <= timeRatio) {
+      barColor = const Color(0xFF7FB069);
+    } else {
+      final o = (1 - timeRatio) <= 0
+          ? 1.0
+          : ((ratio - timeRatio) / (1 - timeRatio)).clamp(0.0, 1.0);
+      barColor =
+          Color.lerp(const Color(0xFFF2B23C), const Color(0xFFE0552B), o)!;
+    }
+    final remainingDays = daysInMonth - now.day + 1;
+
+    // 今日可花（剩余可花）环形图。
+    final today = s.todayAllowance;
+    final todayNeg = today < Decimal.zero;
+    final dayEnv = s.spentToday + (todayNeg ? Decimal.zero : today);
+    final ringVal = todayNeg
+        ? 0.0
+        : (dayEnv > Decimal.zero
+            ? (today / dayEnv)
+                .toDecimal(scaleOnInfinitePrecision: 4)
+                .toDouble()
+                .clamp(0.0, 1.0)
+            : 1.0);
+    final ringColor =
+        todayNeg ? AppColors.warning : const Color(0xFF7FB069);
+    final todayText = todayNeg
+        ? '-${MoneyFormat.string(today.abs())}'
+        : MoneyFormat.string(today);
+
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.center,
+      children: [
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // ▎月预算剩余
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(
+                    width: 3,
+                    height: 13,
+                    decoration: BoxDecoration(
+                      color: scheme.primary,
+                      borderRadius: BorderRadius.circular(2),
+                    ),
+                  ),
+                  const SizedBox(width: 6),
+                  Text(
+                    over ? '月预算已超' : '月预算剩余',
+                    style: theme.textTheme.labelSmall?.copyWith(
+                      color: AppTextColor.hint(scheme),
+                      fontWeight: FontWeight.w300,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 2),
+              AnimatedMoney(
+                value: remaining.abs(),
+                prefix: over ? '-' : '',
+                style: theme.textTheme.headlineSmall?.copyWith(
+                  fontWeight: FontWeight.w600,
+                  fontFamily: 'Nunito',
+                  color: over ? AppColors.warning : scheme.onSurface,
+                  // ignore: deprecated_member_use
+                  fontFeatures: const [FontFeature.tabularFigures()],
+                ),
+              ),
+              const SizedBox(height: AppSpacing.md),
+              _IncomeExpenseRow(summary: summary),
+              const SizedBox(height: AppSpacing.md),
+              ClipRRect(
+                borderRadius: BorderRadius.circular(AppRadius.pill),
+                child: LinearProgressIndicator(
+                  value: ratio,
+                  minHeight: 7,
+                  backgroundColor: scheme.surfaceContainerHighest,
+                  valueColor: AlwaysStoppedAnimation<Color>(barColor),
+                ),
+              ),
+              const SizedBox(height: 6),
+              Row(
+                children: [
+                  Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+                    decoration: BoxDecoration(
+                      color: scheme.primary.withValues(alpha: 0.1),
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                    child: Text(
+                      '$pct%',
+                      style: theme.textTheme.labelSmall?.copyWith(
+                        color: scheme.primary,
+                        fontWeight: FontWeight.w600,
+                        fontFamily: 'Nunito',
+                      ),
+                    ),
+                  ),
+                  const Spacer(),
+                  Text.rich(
+                    TextSpan(
+                      children: [
+                        TextSpan(
+                          text: MoneyFormat.string(budget),
+                          style: theme.textTheme.labelSmall?.copyWith(
+                            color: scheme.onSurfaceVariant,
+                            fontWeight: FontWeight.w500,
+                            fontFamily: 'Nunito',
+                            // ignore: deprecated_member_use
+                            fontFeatures: const [FontFeature.tabularFigures()],
+                          ),
+                        ),
+                        TextSpan(
+                          text: ' · 剩 $remainingDays 天',
+                          style: theme.textTheme.labelSmall?.copyWith(
+                            color:
+                                scheme.onSurfaceVariant.withValues(alpha: 0.5),
+                            fontWeight: FontWeight.w300,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(width: 14),
+        Transform.translate(
+          offset: const Offset(-8, 8),
+          child: _TodayRing(
+              value: ringVal, amountText: todayText, color: ringColor),
+        ),
+      ],
+    );
+  }
+}
+
+/// 今日可花环形图（右侧）。
+class _TodayRing extends StatelessWidget {
+  final double value;
+  final String amountText;
+  final Color color;
+
+  const _TodayRing({
+    required this.value,
+    required this.amountText,
+    required this.color,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    return SizedBox(
+      width: 80,
+      height: 80,
+      child: Stack(
+        alignment: Alignment.center,
+        children: [
+          SizedBox(
+            width: 80,
+            height: 80,
+            child: CircularProgressIndicator(
+              value: value,
+              strokeWidth: 7,
+              backgroundColor: scheme.surfaceContainerHighest,
+              valueColor: AlwaysStoppedAnimation<Color>(color),
+              strokeCap: StrokeCap.round,
+            ),
+          ),
+          Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                '今日可花',
+                style: theme.textTheme.labelSmall?.copyWith(
+                  color: AppTextColor.hint(scheme),
+                  fontSize: 10,
+                ),
+              ),
+              const SizedBox(height: 1),
+              Text(
+                amountText,
+                maxLines: 1,
+                style: theme.textTheme.titleSmall?.copyWith(
+                  fontWeight: FontWeight.w600,
+                  fontFamily: 'Nunito',
+                  color: scheme.onSurface,
+                  // ignore: deprecated_member_use
+                  fontFeatures: const [FontFeature.tabularFigures()],
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// 大卡片主角：
+/// - 当月有预算：预算剩余 + 趋势 +（今日可用 / 今天已花）
+/// - 非当月有预算：该月预算剩余
+/// - 无预算：本月结余 + 邀请去设预算
+class _HeroBlock extends StatelessWidget {
+  final MonthlySummary summary;
+  final BudgetStatus? budgetStatus;
+  final bool isCurrentMonth;
+
+  const _HeroBlock({
+    required this.summary,
+    required this.budgetStatus,
+    required this.isCurrentMonth,
   });
 
   @override
@@ -327,7 +726,22 @@ class _HeroBlock extends StatelessWidget {
     final theme = Theme.of(context);
     final scheme = theme.colorScheme;
 
-    // 无预算：回退本月结余。
+    Widget bigMoney(Decimal v, {bool neg = false, required Color color}) =>
+        AnimatedMoney(
+          value: v.abs(),
+          prefix: neg ? '-' : '',
+          style: theme.textTheme.headlineSmall?.copyWith(
+            fontWeight: FontWeight.w500,
+            color: color,
+            fontFamily: 'Nunito',
+            // ignore: deprecated_member_use
+            fontFeatures: const [FontFeature.tabularFigures()],
+          ),
+        );
+    TextStyle? hint() =>
+        theme.textTheme.labelSmall?.copyWith(color: AppTextColor.hint(scheme));
+
+    // 1) 无预算 → 结余 + 邀请去设预算。
     if (budgetStatus == null) {
       final balance = summary.balance;
       final neg = balance < Decimal.zero;
@@ -335,20 +749,30 @@ class _HeroBlock extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         mainAxisSize: MainAxisSize.min,
         children: [
-          AnimatedMoney(
-            value: balance.abs(),
-            prefix: neg ? '-' : '',
-            style: theme.textTheme.headlineSmall?.copyWith(
-              fontWeight: FontWeight.w500,
-              color: neg ? AppColors.warning : scheme.onSurface,
-              // ignore: deprecated_member_use
-              fontFeatures: const [FontFeature.tabularFigures()],
+          bigMoney(balance,
+              neg: neg, color: neg ? AppColors.warning : scheme.onSurface),
+          const SizedBox(height: 3),
+          GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: () => Navigator.of(context).push(
+              CupertinoPageRoute<void>(
+                  builder: (_) => const BudgetSettingView()),
             ),
-          ),
-          Text(
-            '本月结余',
-            style: theme.textTheme.labelSmall
-                ?.copyWith(color: AppTextColor.hint(scheme)),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.add_circle_outline, size: 13, color: scheme.primary),
+                const SizedBox(width: 3),
+                Text(
+                  '设预算 · 帮你盯每天能花多少',
+                  style: theme.textTheme.labelSmall
+                      ?.copyWith(color: scheme.primary),
+                ),
+                const SizedBox(width: 1),
+                Icon(CupertinoIcons.chevron_forward,
+                    size: 11, color: scheme.primary),
+              ],
+            ),
           ),
         ],
       );
@@ -356,79 +780,136 @@ class _HeroBlock extends StatelessWidget {
 
     final s = budgetStatus!;
     final over = s.isOverBudget;
-    final remaining = s.remaining; // 可负
+    final heroColor = over ? AppColors.warning : scheme.onSurface;
+
+    // 2) 非当月 → 该月预算剩余（今日/趋势对历史月无意义）。
+    if (!isCurrentMonth) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          bigMoney(s.remaining, neg: over, color: heroColor),
+          Text(over ? '该月超预算' : '该月预算剩余', style: hint()),
+        ],
+      );
+    }
+
+    // 3) 当月 → 预算剩余 + 今日可用/今天已花（节奏看进度条颜色即可，不重复标趋势）。
     final today = s.todayAllowance; // 可负
     final todayNeg = today < Decimal.zero;
-
-    // 趋势：花钱进度 vs 时间进度。
-    final daysInMonth = DateTime(now.year, now.month + 1, 0).day;
-    final timeRatio = now.day / daysInMonth;
-    final spendRatio = s.monthlyBudget > Decimal.zero
-        ? (s.spentThisMonth / s.monthlyBudget)
-            .toDecimal(scaleOnInfinitePrecision: 4)
-            .toDouble()
-        : 0.0;
-
-    final String trendWord;
-    final Color trendColor;
-    final IconData trendIcon;
-    if (over) {
-      trendWord = '超支';
-      trendColor = const Color(0xFFE0552B);
-      trendIcon = Icons.arrow_upward;
-    } else if (spendRatio <= timeRatio) {
-      trendWord = '宽裕';
-      trendColor = const Color(0xFF7FB069);
-      trendIcon = Icons.arrow_downward;
-    } else {
-      trendWord = '偏快';
-      trendColor = const Color(0xFFE08A2B);
-      trendIcon = Icons.arrow_upward;
-    }
+    final secondLine = todayNeg
+        ? '今日超 ${MoneyFormat.string(today.abs())} · 今天已花 ${MoneyFormat.string(s.spentToday)}'
+        : '今日可用 ${MoneyFormat.string(today)} · 今天已花 ${MoneyFormat.string(s.spentToday)}';
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       mainAxisSize: MainAxisSize.min,
       children: [
-        AnimatedMoney(
-          value: remaining.abs(),
-          prefix: over ? '-' : '',
-          style: theme.textTheme.headlineSmall?.copyWith(
-            fontWeight: FontWeight.w500,
-            color: over ? AppColors.warning : scheme.onSurface,
+        bigMoney(s.remaining, neg: over, color: heroColor),
+        const SizedBox(height: 3),
+        Text(over ? '已超预算' : '预算剩余', style: hint()),
+        const SizedBox(height: 2),
+        Text(
+          secondLine,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: theme.textTheme.labelSmall?.copyWith(
+            color: AppTextColor.secondary(scheme),
+            fontFamily: 'Nunito',
             // ignore: deprecated_member_use
             fontFeatures: const [FontFeature.tabularFigures()],
           ),
         ),
-        const SizedBox(height: 3),
-        Row(
+      ],
+    );
+  }
+}
+
+/// 列表上方的 全部 / 支出 / 收入 分段筛选（iOS 风）。
+class _FilterSegment extends StatelessWidget {
+  final _TxFilter value;
+  final ValueChanged<_TxFilter> onChanged;
+
+  const _FilterSegment({required this.value, required this.onChanged});
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+
+    Widget pill(_TxFilter f, String label) {
+      final sel = f == value;
+      return Expanded(
+        child: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTap: () => onChanged(f),
+          child: Container(
+            margin: const EdgeInsets.all(2),
+            padding: const EdgeInsets.symmetric(vertical: 6),
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              color: sel ? Colors.white : Colors.transparent,
+              borderRadius: BorderRadius.circular(8),
+              boxShadow: sel
+                  ? [
+                      BoxShadow(
+                        color: Colors.black.withValues(alpha: 0.06),
+                        blurRadius: 4,
+                        offset: const Offset(0, 1),
+                      ),
+                    ]
+                  : null,
+            ),
+            child: Text(
+              label,
+              style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                    color: sel ? scheme.onSurface : scheme.onSurfaceVariant,
+                    fontWeight: sel ? FontWeight.w500 : FontWeight.w400,
+                  ),
+            ),
+          ),
+        ),
+      );
+    }
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 2, 16, 8),
+      child: Container(
+        decoration: BoxDecoration(
+          color: scheme.surfaceContainerHighest.withValues(alpha: 0.6),
+          borderRadius: BorderRadius.circular(10),
+        ),
+        child: Row(
           children: [
-            Text(
-              over ? '已超预算' : '预算剩余',
-              style: theme.textTheme.labelSmall
-                  ?.copyWith(color: AppTextColor.hint(scheme)),
-            ),
-            const SizedBox(width: 10),
-            Text(
-              todayNeg
-                  ? '今日超 ${MoneyFormat.string(today.abs())}'
-                  : '今日可用 ${MoneyFormat.string(today)}',
-              style: theme.textTheme.labelSmall?.copyWith(
-                color: AppTextColor.secondary(scheme),
-                // ignore: deprecated_member_use
-                fontFeatures: const [FontFeature.tabularFigures()],
-              ),
-            ),
-            const SizedBox(width: 8),
-            Icon(trendIcon, size: 12, color: trendColor),
-            const SizedBox(width: 1),
-            Text(
-              trendWord,
-              style: theme.textTheme.labelSmall?.copyWith(color: trendColor),
-            ),
+            pill(_TxFilter.all, '全部'),
+            pill(_TxFilter.expense, '支出'),
+            pill(_TxFilter.income, '收入'),
           ],
         ),
-      ],
+      ),
+    );
+  }
+}
+
+/// 筛选后该月无对应记录时的占位提示。
+class _FilterEmptyHint extends StatelessWidget {
+  final _TxFilter filter;
+
+  const _FilterEmptyHint({required this.filter});
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final word = filter == _TxFilter.income ? '收入' : '支出';
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 28, 16, 28),
+      child: Center(
+        child: Text(
+          '这个月还没有$word记录',
+          style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                color: scheme.onSurfaceVariant,
+              ),
+        ),
+      ),
     );
   }
 }
@@ -483,6 +964,7 @@ class _InsightStrip extends StatelessWidget {
                 '${MoneyFormat.string(top.total)} · ${(top.share * 100).round()}%',
                 style: Theme.of(context).textTheme.labelMedium?.copyWith(
                       color: AppTextColor.secondary(scheme),
+                      fontFamily: 'Nunito',
                       // ignore: deprecated_member_use
                       fontFeatures: const [FontFeature.tabularFigures()],
                     ),
@@ -532,6 +1014,7 @@ class _SummaryMetric extends StatelessWidget {
           style: Theme.of(context).textTheme.titleSmall?.copyWith(
                 fontWeight: FontWeight.w400,
                 color: color,
+                fontFamily: 'Nunito',
                 // ignore: deprecated_member_use
                 fontFeatures: const [FontFeature.tabularFigures()],
               ),
@@ -547,11 +1030,15 @@ class _BudgetStrip extends StatelessWidget {
   final BudgetStatus? budgetStatus;
   final Decimal? budget;
   final bool isOverspend;
+  final DateTime monthDate;
+  final bool isCurrentMonth;
 
   const _BudgetStrip({
     required this.budgetStatus,
     required this.budget,
     required this.isOverspend,
+    required this.monthDate,
+    required this.isCurrentMonth,
   });
 
   @override
@@ -559,34 +1046,7 @@ class _BudgetStrip extends StatelessWidget {
     final scheme = Theme.of(context).colorScheme;
 
     if (budgetStatus == null || budget == null) {
-      return Align(
-        alignment: Alignment.centerLeft,
-        child: GestureDetector(
-          onTap: () => Navigator.of(context).push(
-            CupertinoPageRoute<void>(builder: (_) => const BudgetSettingView()),
-          ),
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-            decoration: BoxDecoration(
-              color: scheme.surfaceContainerHigh,
-              borderRadius: BorderRadius.circular(AppRadius.sm),
-            ),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(Icons.add, size: 14, color: scheme.onSurfaceVariant),
-                const SizedBox(width: 4),
-                Text(
-                  '设置本月预算',
-                  style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                        color: scheme.onSurfaceVariant,
-                      ),
-                ),
-              ],
-            ),
-          ),
-        ),
-      );
+      return const SizedBox.shrink();
     }
 
     final status = budgetStatus!;
@@ -598,13 +1058,16 @@ class _BudgetStrip extends StatelessWidget {
             .clamp(0.0, 1.0)
         : 0.0;
 
-    // 时间进度：今天是当月第几天 / 当月总天数
+    // 时间进度：当月用今天/总天数；历史月视作已走完（1.0）。
     final now = DateTime.now();
-    final daysInMonth = DateTime(now.year, now.month + 1, 0).day;
-    final timeRatio = (now.day / daysInMonth).clamp(0.0, 1.0);
+    final daysInMonth = DateTime(monthDate.year, monthDate.month + 1, 0).day;
+    final timeRatio =
+        (isCurrentMonth ? now.day / daysInMonth : 1.0).clamp(0.0, 1.0);
     // 花钱进度 vs 时间进度：没超时间进度 = 柔绿；超了 = 越深的橙
     final Color barColor;
-    if (ratio <= timeRatio) {
+    if (isOverspend) {
+      barColor = const Color(0xFFE0552B);
+    } else if (ratio <= timeRatio) {
       barColor = const Color(0xFF7FB069);
     } else {
       final over = (1 - timeRatio) <= 0
@@ -617,7 +1080,9 @@ class _BudgetStrip extends StatelessWidget {
     final remainingDays = daysInMonth - now.day + 1;
     final caption = isOverspend
         ? '已超 ${MoneyFormat.string(status.spentThisMonth - budgetVal)} · 预算 ${MoneyFormat.string(budgetVal)}'
-        : '已用 ${MoneyFormat.string(status.spentThisMonth)} / ${MoneyFormat.string(budgetVal)} · 剩 $remainingDays 天';
+        : isCurrentMonth
+            ? '已用 ${MoneyFormat.string(status.spentThisMonth)} / ${MoneyFormat.string(budgetVal)} · 剩 $remainingDays 天'
+            : '已用 ${MoneyFormat.string(status.spentThisMonth)} / ${MoneyFormat.string(budgetVal)}';
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -636,7 +1101,9 @@ class _BudgetStrip extends StatelessWidget {
         Text(
           caption,
           style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                color: AppTextColor.hint(scheme),
+                color: scheme.onSurfaceVariant.withValues(alpha: 0.45),
+                fontWeight: FontWeight.w300,
+                fontFamily: 'Nunito',
                 // ignore: deprecated_member_use
                 fontFeatures: const [FontFeature.tabularFigures()],
               ),
@@ -651,33 +1118,45 @@ class _BudgetStrip extends StatelessWidget {
 class _CollapsedMiniBar extends StatelessWidget {
   final MonthlySummary summary;
   final BudgetStatus? budgetStatus;
+  final bool isCurrentMonth;
 
   const _CollapsedMiniBar({
     required this.summary,
     required this.budgetStatus,
+    required this.isCurrentMonth,
   });
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final balance = summary.balance;
-    final balanceNegative = balance < Decimal.zero;
-    final balanceColor =
-        balanceNegative ? AppColors.warning : scheme.onSurface;
 
-    final budgetPart = budgetStatus != null
-        ? (() {
-            final b = budgetStatus!;
-            final ratio = b.monthlyBudget > Decimal.zero
-                ? ((b.spentThisMonth / b.monthlyBudget)
-                        .toDecimal(scaleOnInfinitePrecision: 4)
-                        .toDouble() *
-                    100)
-                    .round()
-                : 0;
-            return ' · 预算 $ratio%';
-          })()
-        : '';
+    final String label;
+    final String value;
+    final Color color;
+    final b = budgetStatus;
+
+    if (b != null && isCurrentMonth) {
+      // 与展开态一致：剩 ¥X · 今日 ¥Y
+      final over = b.isOverBudget;
+      final todayNeg = b.todayAllowance < Decimal.zero;
+      final todayStr = todayNeg
+          ? '今日超 ${MoneyFormat.string(b.todayAllowance.abs())}'
+          : '今日 ${MoneyFormat.string(b.todayAllowance)}';
+      label = over ? '超 ' : '剩 ';
+      value = '${MoneyFormat.string(b.remaining.abs())} · $todayStr';
+      color = over ? AppColors.warning : scheme.onSurface;
+    } else if (b != null) {
+      final over = b.isOverBudget;
+      label = over ? '该月超 ' : '该月剩 ';
+      value = MoneyFormat.string(b.remaining.abs());
+      color = over ? AppColors.warning : scheme.onSurface;
+    } else {
+      final balance = summary.balance;
+      final neg = balance < Decimal.zero;
+      label = '结余 ';
+      value = '${neg ? '-' : ''}${MoneyFormat.string(balance.abs())}';
+      color = neg ? AppColors.warning : scheme.onSurface;
+    }
 
     return SizedBox(
       height: kToolbarHeight,
@@ -687,16 +1166,17 @@ class _CollapsedMiniBar extends StatelessWidget {
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
             Text(
-              '结余 ',
+              label,
               style: Theme.of(context).textTheme.labelMedium?.copyWith(
                     color: scheme.onSurfaceVariant,
                   ),
             ),
             Text(
-              '${balanceNegative ? '-' : ''}¥${MoneyFormat.string(balance.abs())}$budgetPart',
+              value,
               style: Theme.of(context).textTheme.labelMedium?.copyWith(
                     fontWeight: FontWeight.w400,
-                    color: balanceColor,
+                    color: color,
+                    fontFamily: 'Nunito',
                     // ignore: deprecated_member_use
                     fontFeatures: const [FontFeature.tabularFigures()],
                   ),
@@ -809,9 +1289,10 @@ class _DaySectionHeader extends StatelessWidget {
           if (hasExpense) ...[
             Text(
               '支 ${MoneyFormat.string(totalExpense).replaceAll('¥', '')}',
-              style: Theme.of(context).textTheme.labelMedium?.copyWith(
+              style: Theme.of(context).textTheme.labelSmall?.copyWith(
                     fontWeight: FontWeight.w400,
                     color: scheme.onSurfaceVariant,
+                    fontFamily: 'Nunito',
                     // ignore: deprecated_member_use
                     fontFeatures: const [FontFeature.tabularFigures()],
                   ),
@@ -821,9 +1302,10 @@ class _DaySectionHeader extends StatelessWidget {
           if (hasIncome)
             Text(
               '收 ${MoneyFormat.string(totalIncome).replaceAll('¥', '')}',
-              style: Theme.of(context).textTheme.labelMedium?.copyWith(
+              style: Theme.of(context).textTheme.labelSmall?.copyWith(
                     fontWeight: FontWeight.w400,
-                    color: AppColors.income(scheme),
+                    color: scheme.onSurfaceVariant,
+                    fontFamily: 'Nunito',
                     // ignore: deprecated_member_use
                     fontFeatures: const [FontFeature.tabularFigures()],
                   ),
@@ -928,7 +1410,7 @@ class _TransactionRow extends StatelessWidget {
           CatIcon(
             categoryKey: _isTransfer ? 'transfer' : transaction.categoryKey,
             emoji: _emoji,
-            size: 40,
+            size: 36,
           ),
           const SizedBox(width: AppSpacing.md),
           Expanded(
@@ -955,7 +1437,7 @@ class _TransactionRow extends StatelessWidget {
                   const SizedBox(height: 1),
                   Text(
                     transaction.note,
-                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    style: Theme.of(context).textTheme.labelSmall?.copyWith(
                           color: AppTextColor.hint(scheme),
                         ),
                     maxLines: 1,
@@ -971,7 +1453,8 @@ class _TransactionRow extends StatelessWidget {
             _amountText,
             style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                   color: _amountColor(scheme),
-                  fontWeight: FontWeight.w400,
+                  fontWeight: FontWeight.w600,
+                  fontFamily: 'Nunito',
                   // ignore: deprecated_member_use
                   fontFeatures: const [FontFeature.tabularFigures()],
                 ),
@@ -1009,6 +1492,14 @@ class _ReimburseBadge extends StatelessWidget {
 }
 
 class _EmptyState extends StatelessWidget {
+  final String title;
+  final String subtitle;
+
+  const _EmptyState({
+    this.title = '还没有记录哦',
+    this.subtitle = '在下方输入框记第一笔吧',
+  });
+
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
@@ -1018,14 +1509,14 @@ class _EmptyState extends StatelessWidget {
         const Mascot(mood: MascotMood.empty, size: 72),
         const SizedBox(height: 16),
         Text(
-          '还没有记录哦',
+          title,
           style: Theme.of(context).textTheme.titleMedium?.copyWith(
                 color: scheme.onSurfaceVariant,
               ),
         ),
         const SizedBox(height: 6),
         Text(
-          '在下方输入框记第一笔吧',
+          subtitle,
           style: Theme.of(context).textTheme.labelMedium?.copyWith(
                 color: scheme.onSurfaceVariant.withValues(alpha: 0.6),
               ),

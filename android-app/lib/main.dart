@@ -72,32 +72,45 @@ class RootShell extends StatelessWidget {
         title: Builder(
           builder: (innerCtx) => Row(
             children: [
-              // 左上角：对齐 iOS Claude —— 圆形浅底按钮 + 长短不一的横线
               Padding(
-                padding: const EdgeInsets.only(left: 8, right: 4),
+                padding: const EdgeInsets.only(left: 12),
                 child: _MenuGlyphButton(
                   onTap: () => Scaffold.of(innerCtx).openDrawer(),
                 ),
               ),
-              // 当前账本快切
-              const _BookSwitchChip(),
               const Spacer(),
-              // 搜索收成图标
+              // 搜索（在账本左边）
               const _SearchIconButton(),
               const SizedBox(width: 8),
+              // 当前账本快切（最右）
+              const _BookSwitchChip(),
+              const SizedBox(width: 12),
             ],
           ),
         ),
       ),
       drawer: const _AppDrawer(),
-      body: HomeView(
-        onShowTransactions: () => Navigator.push<void>(
-          context,
-          CupertinoPageRoute<void>(
-              builder: (_) => const TransactionListView()),
-        ),
+      // 输入栏悬浮在列表之上：只有那张圆角卡片本身遮挡列表，
+      // 卡片外的透明边距让后面的账单透出来（不再整条“一刀切”遮挡）。
+      body: Stack(
+        children: [
+          Positioned.fill(
+            child: HomeView(
+              onShowTransactions: () => Navigator.push<void>(
+                context,
+                CupertinoPageRoute<void>(
+                    builder: (_) => const TransactionListView()),
+              ),
+            ),
+          ),
+          const Positioned(
+            left: 0,
+            right: 0,
+            bottom: 0,
+            child: RecordInputBar(),
+          ),
+        ],
       ),
-      bottomNavigationBar: const RecordInputBar(),
     );
   }
 }
@@ -515,8 +528,16 @@ class _BookSwitchChip extends StatelessWidget {
           height: 36,
           padding: const EdgeInsets.symmetric(horizontal: 10),
           decoration: BoxDecoration(
-            color: scheme.surfaceContainerHighest.withValues(alpha: 0.7),
+            color: scheme.surface,
             borderRadius: BorderRadius.circular(18),
+            border: Border.all(color: Colors.black.withValues(alpha: 0.06)),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.06),
+                blurRadius: 6,
+                offset: const Offset(0, 1),
+              ),
+            ],
           ),
           child: Row(
             mainAxisSize: MainAxisSize.min,
@@ -563,7 +584,15 @@ class _SearchIconButton extends StatelessWidget {
         height: 38,
         decoration: BoxDecoration(
           shape: BoxShape.circle,
-          color: scheme.surfaceContainerHighest.withValues(alpha: 0.7),
+          color: scheme.surface,
+          border: Border.all(color: Colors.black.withValues(alpha: 0.06)),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.06),
+              blurRadius: 6,
+              offset: const Offset(0, 1),
+            ),
+          ],
         ),
         child: Icon(Icons.search, size: 19, color: scheme.onSurfaceVariant),
       ),
@@ -578,7 +607,7 @@ class _MenuGlyphButton extends StatelessWidget {
 
   Widget _bar(ColorScheme scheme, double w) => Container(
         width: w,
-        height: 2,
+        height: 1.5,
         decoration: BoxDecoration(
           color: scheme.onSurfaceVariant,
           borderRadius: BorderRadius.circular(1),
@@ -588,24 +617,40 @@ class _MenuGlyphButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    return InkWell(
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
       onTap: onTap,
-      customBorder: const CircleBorder(),
       child: Container(
         width: 38,
         height: 38,
         decoration: BoxDecoration(
           shape: BoxShape.circle,
-          color: scheme.surfaceContainerHighest.withValues(alpha: 0.7),
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            _bar(scheme, 15),
-            const SizedBox(height: 5),
-            _bar(scheme, 10),
+          color: scheme.surface,
+          border: Border.all(color: Colors.black.withValues(alpha: 0.06)),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.06),
+              blurRadius: 6,
+              offset: const Offset(0, 1),
+            ),
           ],
+        ),
+        // 三条左对齐横线，最下面一条只有上面两条的一半（对齐底部 + 的设计语言）。
+        child: Center(
+          child: SizedBox(
+            width: 16,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                _bar(scheme, 16),
+                const SizedBox(height: 3),
+                _bar(scheme, 16),
+                const SizedBox(height: 3),
+                _bar(scheme, 8),
+              ],
+            ),
+          ),
         ),
       ),
     );
