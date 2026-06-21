@@ -1,5 +1,6 @@
 import 'package:decimal/decimal.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/cupertino.dart' show CupertinoPageRoute, CupertinoIcons;
 import 'package:provider/provider.dart';
 
 import '../../core/budget/budget_engine.dart';
@@ -11,7 +12,9 @@ import '../../core/statistics/statistics_engine.dart';
 import '../../data/app_repository.dart';
 import '../../theme/app_colors.dart';
 import '../../theme/app_tokens.dart';
+import '../../widgets/animated_money.dart';
 import '../../widgets/mascot.dart';
+import '../../widgets/ios_dialogs.dart';
 import '../../widgets/tag_selector.dart';
 import '../statistics/statistics_view.dart';
 import '../settings/budget_setting_view.dart';
@@ -54,7 +57,7 @@ class HomeView extends StatelessWidget {
     final transactions = repo.transactions;
     final sections = _groupByDay(transactions);
 
-    const double expandedHeight = 256.0;
+    const double expandedHeight = 220.0;
     const double minExtent = kToolbarHeight;
 
     return CustomScrollView(
@@ -82,8 +85,8 @@ class HomeView extends StatelessWidget {
                     opacity: t,
                     child: IgnorePointer(
                       ignoring: t < 0.3,
-                      child: Align(
-                        alignment: Alignment.topCenter,
+                      child: SingleChildScrollView(
+                        physics: const NeverScrollableScrollPhysics(),
                         child: _ExpandedSummaryCard(
                           now: now,
                           summary: summary,
@@ -120,23 +123,8 @@ class HomeView extends StatelessWidget {
         else ...[
           SliverToBoxAdapter(child: _InsightStrip(summary: summary)),
           for (final s in sections)
-            SliverMainAxisGroup(
-              slivers: [
-                SliverPersistentHeader(
-                  pinned: true,
-                  delegate: _DayHeaderDelegate(section: s),
-                ),
-                SliverList(
-                  delegate: SliverChildBuilderDelegate(
-                    (context, index) => _DismissibleRow(
-                      transaction: s.items[index],
-                      onDelete: () =>
-                          repo.deleteTransaction(s.items[index].id),
-                    ),
-                    childCount: s.items.length,
-                  ),
-                ),
-              ],
+            SliverToBoxAdapter(
+              child: _DayCard(section: s, repo: repo),
             ),
           const SliverToBoxAdapter(child: SizedBox(height: 96)),
         ],
@@ -166,12 +154,13 @@ class _ExpandedSummaryCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final isOverspend = budgetStatus?.isOverBudget ?? false;
-    final balance = summary.balance;
-    final balanceNegative = balance < Decimal.zero;
 
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
-      child: Card(
+      child: Stack(
+        clipBehavior: Clip.none,
+        children: [
+          Card(
         elevation: 1,
         color: Colors.white,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
@@ -186,7 +175,7 @@ class _ExpandedSummaryCard extends StatelessWidget {
                   GestureDetector(
                     onTap: () => Navigator.push<void>(
                       context,
-                      MaterialPageRoute<void>(
+                      CupertinoPageRoute<void>(
                         builder: (_) => const StatisticsView(),
                       ),
                     ),
@@ -199,13 +188,13 @@ class _ExpandedSummaryCard extends StatelessWidget {
                               .textTheme
                               .labelLarge
                               ?.copyWith(
-                                fontWeight: FontWeight.w600,
+                                fontWeight: FontWeight.w500,
                                 color: scheme.onSurface,
                               ),
                         ),
                         const SizedBox(width: 2),
                         Icon(
-                          Icons.arrow_drop_down,
+                          CupertinoIcons.chevron_down,
                           size: 18,
                           color: scheme.onSurfaceVariant,
                         ),
@@ -216,7 +205,7 @@ class _ExpandedSummaryCard extends StatelessWidget {
                   GestureDetector(
                     onTap: () => Navigator.push<void>(
                       context,
-                      MaterialPageRoute<void>(
+                      CupertinoPageRoute<void>(
                         builder: (_) => const StatisticsView(),
                       ),
                     ),
@@ -224,8 +213,12 @@ class _ExpandedSummaryCard extends StatelessWidget {
                       padding: const EdgeInsets.symmetric(
                           horizontal: 10, vertical: 3),
                       decoration: BoxDecoration(
-                        color: scheme.surfaceContainerHighest,
+                        color: Colors.white,
                         borderRadius: BorderRadius.circular(12),
+                        border: Border.all(
+                          color: scheme.outlineVariant.withValues(alpha: 0.6),
+                          width: 0.5,
+                        ),
                       ),
                       child: Row(
                         mainAxisSize: MainAxisSize.min,
@@ -241,7 +234,7 @@ class _ExpandedSummaryCard extends StatelessWidget {
                           ),
                           const SizedBox(width: 2),
                           Icon(
-                            Icons.chevron_right,
+                            CupertinoIcons.chevron_forward,
                             size: 13,
                             color: scheme.onSurfaceVariant,
                           ),
@@ -250,33 +243,14 @@ class _ExpandedSummaryCard extends StatelessWidget {
                     ),
                   ),
                   const Spacer(),
-                  Mascot(
-                    mood: isOverspend
-                        ? MascotMood.overspend
-                        : MascotMood.idle,
-                    size: 44,
-                  ),
                 ],
               ),
               const SizedBox(height: AppSpacing.sm),
 
-              Text(
-                '${balanceNegative ? '-' : ''}${MoneyFormat.string(balance.abs())}',
-                style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                      fontWeight: AppWeight.emphasis,
-                      color:
-                          balanceNegative ? AppColors.warning : scheme.onSurface,
-                      // ignore: deprecated_member_use
-                      fontFeatures: const [FontFeature.tabularFigures()],
-                    ),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-              ),
-              Text(
-                '本月结余',
-                style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                      color: AppTextColor.hint(scheme),
-                    ),
+              _HeroBlock(
+                now: now,
+                summary: summary,
+                budgetStatus: budgetStatus,
               ),
               const SizedBox(height: AppSpacing.md),
 
@@ -318,6 +292,143 @@ class _ExpandedSummaryCard extends StatelessWidget {
           ),
         ),
       ),
+          Positioned(
+            top: -8,
+            right: -2,
+            child: IgnorePointer(
+              child: Image.asset(
+                'assets/mascot/${isOverspend ? 'overspend' : 'idle'}.png',
+                height: 96,
+                fit: BoxFit.fitHeight,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// 大卡片主角：有预算时显示「预算剩余 + 今日可用 + 节奏趋势」，
+/// 没设预算时回退「本月结余」。
+class _HeroBlock extends StatelessWidget {
+  final DateTime now;
+  final MonthlySummary summary;
+  final BudgetStatus? budgetStatus;
+
+  const _HeroBlock({
+    required this.now,
+    required this.summary,
+    required this.budgetStatus,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+
+    // 无预算：回退本月结余。
+    if (budgetStatus == null) {
+      final balance = summary.balance;
+      final neg = balance < Decimal.zero;
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          AnimatedMoney(
+            value: balance.abs(),
+            prefix: neg ? '-' : '',
+            style: theme.textTheme.headlineSmall?.copyWith(
+              fontWeight: FontWeight.w500,
+              color: neg ? AppColors.warning : scheme.onSurface,
+              // ignore: deprecated_member_use
+              fontFeatures: const [FontFeature.tabularFigures()],
+            ),
+          ),
+          Text(
+            '本月结余',
+            style: theme.textTheme.labelSmall
+                ?.copyWith(color: AppTextColor.hint(scheme)),
+          ),
+        ],
+      );
+    }
+
+    final s = budgetStatus!;
+    final over = s.isOverBudget;
+    final remaining = s.remaining; // 可负
+    final today = s.todayAllowance; // 可负
+    final todayNeg = today < Decimal.zero;
+
+    // 趋势：花钱进度 vs 时间进度。
+    final daysInMonth = DateTime(now.year, now.month + 1, 0).day;
+    final timeRatio = now.day / daysInMonth;
+    final spendRatio = s.monthlyBudget > Decimal.zero
+        ? (s.spentThisMonth / s.monthlyBudget)
+            .toDecimal(scaleOnInfinitePrecision: 4)
+            .toDouble()
+        : 0.0;
+
+    final String trendWord;
+    final Color trendColor;
+    final IconData trendIcon;
+    if (over) {
+      trendWord = '超支';
+      trendColor = const Color(0xFFE0552B);
+      trendIcon = Icons.arrow_upward;
+    } else if (spendRatio <= timeRatio) {
+      trendWord = '宽裕';
+      trendColor = const Color(0xFF7FB069);
+      trendIcon = Icons.arrow_downward;
+    } else {
+      trendWord = '偏快';
+      trendColor = const Color(0xFFE08A2B);
+      trendIcon = Icons.arrow_upward;
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        AnimatedMoney(
+          value: remaining.abs(),
+          prefix: over ? '-' : '',
+          style: theme.textTheme.headlineSmall?.copyWith(
+            fontWeight: FontWeight.w500,
+            color: over ? AppColors.warning : scheme.onSurface,
+            // ignore: deprecated_member_use
+            fontFeatures: const [FontFeature.tabularFigures()],
+          ),
+        ),
+        const SizedBox(height: 3),
+        Row(
+          children: [
+            Text(
+              over ? '已超预算' : '预算剩余',
+              style: theme.textTheme.labelSmall
+                  ?.copyWith(color: AppTextColor.hint(scheme)),
+            ),
+            const SizedBox(width: 10),
+            Text(
+              todayNeg
+                  ? '今日超 ${MoneyFormat.string(today.abs())}'
+                  : '今日可用 ${MoneyFormat.string(today)}',
+              style: theme.textTheme.labelSmall?.copyWith(
+                color: AppTextColor.secondary(scheme),
+                // ignore: deprecated_member_use
+                fontFeatures: const [FontFeature.tabularFigures()],
+              ),
+            ),
+            const SizedBox(width: 8),
+            Icon(trendIcon, size: 12, color: trendColor),
+            const SizedBox(width: 1),
+            Text(
+              trendWord,
+              style: theme.textTheme.labelSmall?.copyWith(color: trendColor),
+            ),
+          ],
+        ),
+      ],
     );
   }
 }
@@ -338,13 +449,12 @@ class _InsightStrip extends StatelessWidget {
       child: GestureDetector(
         onTap: () => Navigator.push<void>(
           context,
-          MaterialPageRoute<void>(builder: (_) => const StatisticsView()),
+          CupertinoPageRoute<void>(builder: (_) => const StatisticsView()),
         ),
         child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-          decoration: BoxDecoration(
-            color: scheme.surfaceContainerLow,
-            borderRadius: BorderRadius.circular(AppRadius.md),
+          padding: const EdgeInsets.symmetric(horizontal: 0, vertical: 8),
+          decoration: const BoxDecoration(
+            color: Colors.transparent,
           ),
           child: Row(
             children: [
@@ -358,27 +468,25 @@ class _InsightStrip extends StatelessWidget {
                     ),
               ),
               const SizedBox(width: 8),
-              Flexible(
+              Expanded(
                 child: Text(
                   top.name,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: Theme.of(context).textTheme.labelMedium?.copyWith(
-                        fontWeight: AppWeight.title,
+                        fontWeight: FontWeight.w400,
                         color: AppTextColor.primary(scheme),
                       ),
                 ),
               ),
-              const Spacer(),
               Text(
-                '¥${MoneyFormat.string(top.total)} · ${(top.share * 100).round()}%',
+                '${MoneyFormat.string(top.total)} · ${(top.share * 100).round()}%',
                 style: Theme.of(context).textTheme.labelMedium?.copyWith(
                       color: AppTextColor.secondary(scheme),
                       // ignore: deprecated_member_use
                       fontFeatures: const [FontFeature.tabularFigures()],
                     ),
               ),
-              Icon(Icons.chevron_right, size: 16, color: scheme.outline),
             ],
           ),
         ),
@@ -410,12 +518,6 @@ class _SummaryMetric extends StatelessWidget {
         Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(
-              up ? Icons.arrow_upward : Icons.arrow_downward,
-              size: 13,
-              color: color,
-            ),
-            const SizedBox(width: 2),
             Text(
               label,
               style: Theme.of(context).textTheme.labelSmall?.copyWith(
@@ -428,7 +530,7 @@ class _SummaryMetric extends StatelessWidget {
         Text(
           MoneyFormat.string(amount),
           style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                fontWeight: AppWeight.title,
+                fontWeight: FontWeight.w400,
                 color: color,
                 // ignore: deprecated_member_use
                 fontFeatures: const [FontFeature.tabularFigures()],
@@ -461,7 +563,7 @@ class _BudgetStrip extends StatelessWidget {
         alignment: Alignment.centerLeft,
         child: GestureDetector(
           onTap: () => Navigator.of(context).push(
-            MaterialPageRoute<void>(builder: (_) => const BudgetSettingView()),
+            CupertinoPageRoute<void>(builder: (_) => const BudgetSettingView()),
           ),
           child: Container(
             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
@@ -489,7 +591,6 @@ class _BudgetStrip extends StatelessWidget {
 
     final status = budgetStatus!;
     final budgetVal = budget!;
-    final color = isOverspend ? AppColors.warning : scheme.primary;
     final ratio = budgetVal > Decimal.zero
         ? (status.spentThisMonth / budgetVal)
             .toDecimal(scaleOnInfinitePrecision: 4)
@@ -497,45 +598,43 @@ class _BudgetStrip extends StatelessWidget {
             .clamp(0.0, 1.0)
         : 0.0;
 
+    // 时间进度：今天是当月第几天 / 当月总天数
+    final now = DateTime.now();
+    final daysInMonth = DateTime(now.year, now.month + 1, 0).day;
+    final timeRatio = (now.day / daysInMonth).clamp(0.0, 1.0);
+    // 花钱进度 vs 时间进度：没超时间进度 = 柔绿；超了 = 越深的橙
+    final Color barColor;
+    if (ratio <= timeRatio) {
+      barColor = const Color(0xFF7FB069);
+    } else {
+      final over = (1 - timeRatio) <= 0
+          ? 1.0
+          : ((ratio - timeRatio) / (1 - timeRatio)).clamp(0.0, 1.0);
+      barColor =
+          Color.lerp(const Color(0xFFF2B23C), const Color(0xFFE0552B), over)!;
+    }
+
+    final remainingDays = daysInMonth - now.day + 1;
+    final caption = isOverspend
+        ? '已超 ${MoneyFormat.string(status.spentThisMonth - budgetVal)} · 预算 ${MoneyFormat.string(budgetVal)}'
+        : '已用 ${MoneyFormat.string(status.spentThisMonth)} / ${MoneyFormat.string(budgetVal)} · 剩 $remainingDays 天';
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       mainAxisSize: MainAxisSize.min,
       children: [
-        Row(
-          children: [
-            Text(
-              '预算',
-              style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                    color: AppTextColor.hint(scheme),
-                  ),
-            ),
-            const Spacer(),
-            Text(
-              isOverspend
-                  ? '超出 ${MoneyFormat.string(status.spentThisMonth - budgetVal)}'
-                  : '剩余 ${MoneyFormat.string(status.remaining)}',
-              style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                    color: color,
-                    fontWeight: AppWeight.title,
-                    // ignore: deprecated_member_use
-                    fontFeatures: const [FontFeature.tabularFigures()],
-                  ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 5),
         ClipRRect(
           borderRadius: BorderRadius.circular(AppRadius.pill),
           child: LinearProgressIndicator(
             value: ratio,
-            minHeight: 6,
+            minHeight: 7,
             backgroundColor: scheme.surfaceContainerHighest,
-            valueColor: AlwaysStoppedAnimation<Color>(color),
+            valueColor: AlwaysStoppedAnimation<Color>(barColor),
           ),
         ),
-        const SizedBox(height: 4),
+        const SizedBox(height: 6),
         Text(
-          '已用 ${MoneyFormat.string(status.spentThisMonth)} / ${MoneyFormat.string(budgetVal)}',
+          caption,
           style: Theme.of(context).textTheme.labelSmall?.copyWith(
                 color: AppTextColor.hint(scheme),
                 // ignore: deprecated_member_use
@@ -596,7 +695,7 @@ class _CollapsedMiniBar extends StatelessWidget {
             Text(
               '${balanceNegative ? '-' : ''}¥${MoneyFormat.string(balance.abs())}$budgetPart',
               style: Theme.of(context).textTheme.labelMedium?.copyWith(
-                    fontWeight: FontWeight.w600,
+                    fontWeight: FontWeight.w400,
                     color: balanceColor,
                     // ignore: deprecated_member_use
                     fontFeatures: const [FontFeature.tabularFigures()],
@@ -617,28 +716,41 @@ class _DaySection {
   const _DaySection({required this.day, required this.items});
 }
 
-class _DayHeaderDelegate extends SliverPersistentHeaderDelegate {
+/// 按天分组的白色卡片：卡内 = 日期头 + 当天各笔（发丝线分隔）。
+class _DayCard extends StatelessWidget {
   final _DaySection section;
-  _DayHeaderDelegate({required this.section});
+  final AppRepository repo;
 
-  static const double _height = 44;
-
-  @override
-  double get minExtent => _height;
+  const _DayCard({required this.section, required this.repo});
 
   @override
-  double get maxExtent => _height;
-
-  @override
-  Widget build(
-      BuildContext context, double shrinkOffset, bool overlapsContent) {
-    return _DaySectionHeader(section: section);
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Card(
+      margin: const EdgeInsets.fromLTRB(16, 0, 16, 10),
+      elevation: 1,
+      color: Colors.white,
+      clipBehavior: Clip.antiAlias,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+      child: Column(
+        children: [
+          _DaySectionHeader(section: section),
+          for (int i = 0; i < section.items.length; i++) ...[
+            if (i > 0)
+              Container(
+                margin: const EdgeInsets.only(left: 66),
+                height: 0.5,
+                color: scheme.outlineVariant.withValues(alpha: 0.5),
+              ),
+            _DismissibleRow(
+              transaction: section.items[i],
+              onDelete: () => repo.deleteTransaction(section.items[i].id),
+            ),
+          ],
+        ],
+      ),
+    );
   }
-
-  @override
-  bool shouldRebuild(covariant _DayHeaderDelegate old) =>
-      old.section.day != section.day ||
-      old.section.items.length != section.items.length;
 }
 
 
@@ -651,9 +763,11 @@ class _DaySectionHeader extends StatelessWidget {
     final now = DateTime.now();
     final today = DateTime(now.year, now.month, now.day);
     final yesterday = today.subtract(const Duration(days: 1));
-    if (section.day == today) return '今天';
-    if (section.day == yesterday) return '昨天';
-    return '${section.day.month}月${section.day.day}日 ${_weekday(section.day.weekday)}';
+    final full =
+        '${section.day.month}月${section.day.day}日 周${_weekday(section.day.weekday)}';
+    if (section.day == today) return '今天 · $full';
+    if (section.day == yesterday) return '昨天 · $full';
+    return full;
   }
 
   String _weekday(int w) =>
@@ -680,11 +794,8 @@ class _DaySectionHeader extends StatelessWidget {
     final hasExpense = totalExpense > Decimal.zero;
     final hasIncome = totalIncome > Decimal.zero;
 
-    return Container(
-      height: 44,
-      padding: const EdgeInsets.symmetric(horizontal: AppSpacing.lg),
-      color: scheme.surface,
-      alignment: Alignment.center,
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(14, 12, 14, 8),
       child: Row(
         children: [
           Text(
@@ -697,10 +808,10 @@ class _DaySectionHeader extends StatelessWidget {
           const Spacer(),
           if (hasExpense) ...[
             Text(
-              '支 -${MoneyFormat.string(totalExpense)}',
-              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                    fontWeight: FontWeight.w700,
-                    color: scheme.onSurface,
+              '支 ${MoneyFormat.string(totalExpense).replaceAll('¥', '')}',
+              style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                    fontWeight: FontWeight.w400,
+                    color: scheme.onSurfaceVariant,
                     // ignore: deprecated_member_use
                     fontFeatures: const [FontFeature.tabularFigures()],
                   ),
@@ -709,9 +820,9 @@ class _DaySectionHeader extends StatelessWidget {
           if (hasExpense && hasIncome) const SizedBox(width: 8),
           if (hasIncome)
             Text(
-              '收 +${MoneyFormat.string(totalIncome)}',
-              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                    fontWeight: FontWeight.w700,
+              '收 ${MoneyFormat.string(totalIncome).replaceAll('¥', '')}',
+              style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                    fontWeight: FontWeight.w400,
                     color: AppColors.income(scheme),
                     // ignore: deprecated_member_use
                     fontFeatures: const [FontFeature.tabularFigures()],
@@ -743,25 +854,12 @@ class _DismissibleRow extends StatelessWidget {
         color: Colors.red.shade400,
         child: const Icon(Icons.delete_outline, color: Colors.white),
       ),
-      confirmDismiss: (_) async {
-        return await showDialog<bool>(
-          context: context,
-          builder: (ctx) => AlertDialog(
-            title: const Text('删除这笔账？'),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(ctx, false),
-                child: const Text('取消'),
-              ),
-              TextButton(
-                onPressed: () => Navigator.pop(ctx, true),
-                child: const Text('删除',
-                    style: TextStyle(color: Colors.red)),
-              ),
-            ],
-          ),
-        );
-      },
+      confirmDismiss: (_) => showConfirmDialog(
+        context,
+        title: '删除这笔账？',
+        confirmText: '删除',
+        destructive: true,
+      ),
       onDismissed: (_) => onDelete(),
       child: InkWell(
         onTap: () => showEditTransactionSheet(context, transaction),
@@ -842,8 +940,8 @@ class _TransactionRow extends StatelessWidget {
                     Flexible(
                       child: Text(
                         _title,
-                        style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                              fontWeight: AppWeight.title,
+                        style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                              fontWeight: FontWeight.w400,
                               color: AppTextColor.primary(scheme),
                             ),
                         maxLines: 1,
@@ -871,9 +969,9 @@ class _TransactionRow extends StatelessWidget {
           const SizedBox(width: AppSpacing.md),
           Text(
             _amountText,
-            style: Theme.of(context).textTheme.titleMedium?.copyWith(
+            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                   color: _amountColor(scheme),
-                  fontWeight: AppWeight.emphasis,
+                  fontWeight: FontWeight.w400,
                   // ignore: deprecated_member_use
                   fontFeatures: const [FontFeature.tabularFigures()],
                 ),
@@ -903,7 +1001,7 @@ class _ReimburseBadge extends StatelessWidget {
           fontSize: 10,
           height: 1.2,
           color: AppColors.warning,
-          fontWeight: FontWeight.w600,
+          fontWeight: FontWeight.w500,
         ),
       ),
     );

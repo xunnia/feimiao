@@ -1,5 +1,7 @@
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+
+import '../../widgets/ios_dialogs.dart';
 import 'package:provider/provider.dart';
 import 'package:share_plus/share_plus.dart';
 
@@ -40,28 +42,16 @@ class BackupView extends StatelessWidget {
         (result != null && result.files.isNotEmpty) ? result.files.first.path : null;
     if (path == null) return;
 
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('从备份恢复？'),
-        content: const Text(
-          '将用所选文件覆盖当前全部账目数据，且不可撤销。\n'
+    final ok = await showConfirmDialog(
+      context,
+      title: '从备份恢复？',
+      message: '将用所选文件覆盖当前全部账目数据，且不可撤销。\n'
           '（系统会在覆盖前自动保留一份 .bak 兜底。）\n\n'
           '确认选的是轻记导出的备份文件吗？',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('取消'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('确认恢复'),
-          ),
-        ],
-      ),
+      confirmText: '确认恢复',
+      destructive: true,
     );
-    if (ok != true) return;
+    if (!ok) return;
 
     final success = await repo.restoreDatabaseFromFile(path);
     messenger.showSnackBar(

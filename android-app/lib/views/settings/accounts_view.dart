@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+
+import '../../widgets/ios_dialogs.dart';
 import 'package:provider/provider.dart';
 
 import '../../data/app_repository.dart';
@@ -104,26 +106,14 @@ class AccountsView extends StatelessWidget {
     AppRepository repo,
     AccountEntity account,
   ) async {
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('删除账户'),
-        content: Text(
-          '确认删除「${account.name}」？\n关联的历史记录不会被删除。',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('取消'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('删除'),
-          ),
-        ],
-      ),
+    final confirmed = await showConfirmDialog(
+      context,
+      title: '删除账户',
+      message: '确认删除「${account.name}」？\n关联的历史记录不会被删除。',
+      confirmText: '删除',
+      destructive: true,
     );
-    if (confirmed == true) {
+    if (confirmed) {
       await repo.deleteAccount(account.id);
     }
   }

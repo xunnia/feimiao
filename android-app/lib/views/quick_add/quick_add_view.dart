@@ -1,5 +1,6 @@
 import 'package:decimal/decimal.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/cupertino.dart' show CupertinoPageRoute;
 import 'package:provider/provider.dart';
 
 import '../../core/amount_expression.dart';
@@ -102,7 +103,7 @@ class _QuickAddViewState extends State<QuickAddView> {
             tooltip: 'AI 记账',
             onPressed: () => Navigator.push(
               context,
-              MaterialPageRoute<void>(
+              CupertinoPageRoute<void>(
                 builder: (_) => const AiQuickEntryView(),
               ),
             ),

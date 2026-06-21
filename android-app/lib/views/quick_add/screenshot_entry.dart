@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/cupertino.dart' show CupertinoPageRoute;
 import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart';
 import 'package:image_picker/image_picker.dart';
 
@@ -59,7 +60,7 @@ Future<void> recognizeScreenshotAndEntry(BuildContext context) async {
 
   // 5. 把识别文字交给 AI 快记页解析
   navigator.push(
-    MaterialPageRoute<void>(
+    CupertinoPageRoute<void>(
       builder: (_) => AiQuickEntryView(initialText: cleaned),
     ),
   );

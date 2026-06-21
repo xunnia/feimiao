@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/cupertino.dart' show CupertinoPageRoute, CupertinoIcons;
 
 import '../quick_add/screenshot_entry.dart';
 import '../settings/import_export_view.dart';
@@ -42,7 +43,7 @@ void showRecordExtrasSheet(BuildContext context) {
             onTap: () {
               Navigator.pop(ctx);
               Navigator.of(context).push(
-                MaterialPageRoute<void>(
+                CupertinoPageRoute<void>(
                   builder: (_) => const ImportExportView(),
                 ),
               );
@@ -54,7 +55,7 @@ void showRecordExtrasSheet(BuildContext context) {
             onTap: () {
               Navigator.pop(ctx);
               Navigator.of(context).push(
-                MaterialPageRoute<void>(
+                CupertinoPageRoute<void>(
                   builder: (_) => const ImportExportView(),
                 ),
               );
@@ -84,7 +85,7 @@ class _ExtrasItem extends StatelessWidget {
     return ListTile(
       leading: Icon(icon, size: 22, color: scheme.onSurfaceVariant),
       title: Text(label),
-      trailing: Icon(Icons.chevron_right, size: 20, color: scheme.outline),
+      trailing: Icon(CupertinoIcons.chevron_forward, size: 20, color: scheme.outline),
       onTap: onTap,
     );
   }

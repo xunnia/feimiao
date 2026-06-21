@@ -1,6 +1,8 @@
 import 'package:decimal/decimal.dart';
 import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/cupertino.dart'
+    show CupertinoSlidingSegmentedControl, CupertinoIcons;
 import 'package:provider/provider.dart';
 
 import '../../core/budget/budget_engine.dart';
@@ -58,14 +60,23 @@ class _StatisticsViewState extends State<StatisticsView> {
             children: [
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
-                child: SegmentedButton<bool>(
-                  segments: const [
-                    ButtonSegment(value: false, label: Text('月度')),
-                    ButtonSegment(value: true, label: Text('年度')),
-                  ],
-                  selected: {_isYearly},
-                  onSelectionChanged: (s) =>
-                      setState(() => _isYearly = s.first),
+                child: Center(
+                  child: CupertinoSlidingSegmentedControl<bool>(
+                    groupValue: _isYearly,
+                    onValueChanged: (v) {
+                      if (v != null) setState(() => _isYearly = v);
+                    },
+                    children: const {
+                      false: Padding(
+                        padding: EdgeInsets.symmetric(vertical: 6),
+                        child: Text('月度'),
+                      ),
+                      true: Padding(
+                        padding: EdgeInsets.symmetric(vertical: 6),
+                        child: Text('年度'),
+                      ),
+                    },
+                  ),
                 ),
               ),
               Expanded(
@@ -252,7 +263,7 @@ class _MonthSwitcher extends StatelessWidget {
     return Row(
       children: [
         IconButton(
-          icon: const Icon(Icons.chevron_left),
+          icon: const Icon(CupertinoIcons.chevron_back),
           onPressed: () => onShift(-1),
         ),
         Expanded(
@@ -267,7 +278,7 @@ class _MonthSwitcher extends StatelessWidget {
           ),
         ),
         IconButton(
-          icon: const Icon(Icons.chevron_right),
+          icon: const Icon(CupertinoIcons.chevron_forward),
           onPressed: isCurrentMonth ? null : () => onShift(1),
         ),
       ],

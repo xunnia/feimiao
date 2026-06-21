@@ -1,5 +1,6 @@
 import 'package:decimal/decimal.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/cupertino.dart' show CupertinoIcons;
 import 'package:provider/provider.dart';
 
 import '../../core/budget/budget_engine.dart';
@@ -450,7 +451,7 @@ class _CategoryBudgetTile extends StatelessWidget {
               ),
             ),
             const SizedBox(width: 4),
-            Icon(Icons.chevron_right, size: 18, color: scheme.outline),
+            Icon(CupertinoIcons.chevron_forward, size: 18, color: scheme.outline),
           ],
         ),
       ),

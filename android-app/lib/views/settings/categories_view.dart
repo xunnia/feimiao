@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+
+import '../../widgets/ios_dialogs.dart';
 import 'package:provider/provider.dart';
 
 import '../../core/models/cat_svg_icon.dart';
@@ -165,24 +167,14 @@ class _CategoryList extends StatelessWidget {
 
   Future<void> _confirmDelete(
       BuildContext context, CategoryEntity cat) async {
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('删除分类'),
-        content: Text('确认删除「${cat.nameZh}」？\n关联的历史记录不会被删除。'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('取消'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('删除'),
-          ),
-        ],
-      ),
+    final confirmed = await showConfirmDialog(
+      context,
+      title: '删除分类',
+      message: '确认删除「${cat.nameZh}」？\n关联的历史记录不会被删除。',
+      confirmText: '删除',
+      destructive: true,
     );
-    if (confirmed == true && context.mounted) {
+    if (confirmed && context.mounted) {
       await context.read<AppRepository>().deleteCategory(cat.id);
     }
   }

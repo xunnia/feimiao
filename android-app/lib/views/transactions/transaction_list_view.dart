@@ -9,6 +9,7 @@ import '../../core/money_format.dart';
 import '../../data/app_repository.dart';
 import '../../theme/app_colors.dart';
 import '../../widgets/mascot.dart';
+import '../../widgets/ios_dialogs.dart';
 import '../../widgets/tag_selector.dart';
 import 'edit_transaction_sheet.dart';
 
@@ -235,21 +236,12 @@ class _DismissibleRow extends StatelessWidget {
         color: Colors.red.shade400,
         child: const Icon(Icons.delete_outline, color: Colors.white),
       ),
-      confirmDismiss: (_) async {
-        return await showDialog<bool>(
-          context: context,
-          builder: (ctx) => AlertDialog(
-            title: const Text('删除这笔账？'),
-            actions: [
-              TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('取消')),
-              TextButton(
-                onPressed: () => Navigator.pop(ctx, true),
-                child: const Text('删除', style: TextStyle(color: Colors.red)),
-              ),
-            ],
-          ),
-        );
-      },
+      confirmDismiss: (_) => showConfirmDialog(
+        context,
+        title: '删除这笔账？',
+        confirmText: '删除',
+        destructive: true,
+      ),
       onDismissed: (_) => onDelete(),
       child: InkWell(
         onTap: () => showEditTransactionSheet(context, transaction),

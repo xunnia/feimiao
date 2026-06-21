@@ -67,15 +67,6 @@ class AppColors {
 // 主题工厂
 // ---------------------------------------------------------------------------
 
-/// 全 App 页面转场：用 iOS 风（横向滑入 + 从左缘侧滑返回）。
-/// 设在主题里 → 所有 MaterialPageRoute 自动生效，无需逐个跳转点改。
-const PageTransitionsTheme _kIosPageTransitions = PageTransitionsTheme(
-  builders: {
-    TargetPlatform.android: CupertinoPageTransitionsBuilder(),
-    TargetPlatform.iOS: CupertinoPageTransitionsBuilder(),
-  },
-);
-
 /// Material 3 ColorScheme 工厂：浅色 + 深色。
 class AppTheme {
   AppTheme._();
@@ -101,7 +92,14 @@ class AppTheme {
       colorScheme: cs,
       scaffoldBackgroundColor: Colors.white,
       useMaterial3: true,
-      pageTransitionsTheme: _kIosPageTransitions,
+      // 全局 iOS 化：返回键变 ‹ 箭头、列表滚动回弹、自适应控件转 Cupertino
+      platform: TargetPlatform.iOS,
+      // 发丝分隔线（0.5px、极淡）
+      dividerTheme: const DividerThemeData(
+        thickness: 0.5,
+        space: 0.5,
+        color: Color(0x1F000000),
+      ),
       // AppBar 全白、无 tint、无滚动浮起阴影，与正文背景无缝
       appBarTheme: const AppBarTheme(
         backgroundColor: Colors.white,
@@ -164,7 +162,12 @@ class AppTheme {
     return ThemeData(
       colorScheme: cs,
       useMaterial3: true,
-      pageTransitionsTheme: _kIosPageTransitions,
+      platform: TargetPlatform.iOS,
+      dividerTheme: const DividerThemeData(
+        thickness: 0.5,
+        space: 0.5,
+        color: Color(0x24FFFFFF),
+      ),
       cardTheme: CardThemeData(
         elevation: 1,
         shape: RoundedRectangleBorder(

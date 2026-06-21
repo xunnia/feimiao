@@ -1,8 +1,12 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/cupertino.dart' show CupertinoPageRoute, CupertinoIcons;
 import 'package:provider/provider.dart';
 
 import 'data/app_repository.dart';
 import 'theme/app_colors.dart';
+import 'widgets/ios_dialogs.dart';
+import 'widgets/ios_form.dart';
+import 'widgets/ios_menu.dart';
 import 'views/account/personal_center_view.dart';
 import 'views/assistant/meow_assistant_view.dart';
 import 'views/common/coming_soon_view.dart';
@@ -59,6 +63,8 @@ class RootShell extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      // 左侧大片区域右滑即可拉出抽屉（行内左滑删除不受影响）。
+      drawerEdgeDragWidth: MediaQuery.of(context).size.width * 0.5,
       appBar: AppBar(
         automaticallyImplyLeading: false,
         titleSpacing: 0,
@@ -73,54 +79,12 @@ class RootShell extends StatelessWidget {
                   onTap: () => Scaffold.of(innerCtx).openDrawer(),
                 ),
               ),
-              // 长条搜索栏，占满剩余宽度
-              Expanded(
-                child: GestureDetector(
-                  onTap: () => Navigator.of(innerCtx).push(
-                    MaterialPageRoute<void>(
-                      builder: (_) => const SearchView(),
-                    ),
-                  ),
-                  child: Container(
-                    height: 36,
-                    margin: const EdgeInsets.only(right: 12),
-                    padding: const EdgeInsets.symmetric(horizontal: 12),
-                    decoration: BoxDecoration(
-                      color: Theme.of(innerCtx).colorScheme.surface,
-                      borderRadius: BorderRadius.circular(18),
-                      border: Border.all(
-                        color: Theme.of(innerCtx)
-                            .colorScheme
-                            .outlineVariant
-                            .withValues(alpha: 0.5),
-                      ),
-                    ),
-                    child: Row(
-                      children: [
-                        Icon(
-                          Icons.search,
-                          size: 16,
-                          color: Theme.of(innerCtx)
-                              .colorScheme
-                              .onSurfaceVariant
-                              .withValues(alpha: 0.55),
-                        ),
-                        const SizedBox(width: 6),
-                        Text(
-                          '搜索账单 / 备注 / 金额',
-                          style: TextStyle(
-                            fontSize: 13,
-                            color: Theme.of(innerCtx)
-                                .colorScheme
-                                .onSurfaceVariant
-                                .withValues(alpha: 0.55),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              ),
+              // 当前账本快切
+              const _BookSwitchChip(),
+              const Spacer(),
+              // 搜索收成图标
+              const _SearchIconButton(),
+              const SizedBox(width: 8),
             ],
           ),
         ),
@@ -129,7 +93,7 @@ class RootShell extends StatelessWidget {
       body: HomeView(
         onShowTransactions: () => Navigator.push<void>(
           context,
-          MaterialPageRoute<void>(
+          CupertinoPageRoute<void>(
               builder: (_) => const TransactionListView()),
         ),
       ),
@@ -169,7 +133,7 @@ class _AppDrawerState extends State<_AppDrawer> {
     Navigator.pop(context);
     Navigator.push<void>(
       context,
-      MaterialPageRoute<void>(builder: (_) => page),
+      CupertinoPageRoute<void>(builder: (_) => page),
     );
   }
 
@@ -194,21 +158,29 @@ class _AppDrawerState extends State<_AppDrawer> {
                 color: selected ? scheme.primary : scheme.onSurface,
               ),
         ),
-        trailing: PopupMenuButton<String>(
-          icon: Icon(Icons.more_horiz,
-              size: 20, color: scheme.onSurfaceVariant),
-          onSelected: (v) {
-            if (v == 'rename') {
-              _showRenameBookDialog(b, repo);
-            } else if (v == 'delete') {
-              _confirmDeleteBook(b, repo);
-            }
-          },
-          itemBuilder: (_) => [
-            const PopupMenuItem(value: 'rename', child: Text('改名')),
-            if (repo.books.length > 1)
-              const PopupMenuItem(value: 'delete', child: Text('删除')),
-          ],
+        trailing: Builder(
+          builder: (iconCtx) => GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: () => showIosMenu(iconCtx, [
+              IosMenuItem(
+                label: '改名',
+                icon: Icons.drive_file_rename_outline,
+                onTap: () => _showRenameBookDialog(b, repo),
+              ),
+              if (repo.books.length > 1)
+                IosMenuItem(
+                  label: '删除',
+                  icon: Icons.delete_outline,
+                  destructive: true,
+                  onTap: () => _confirmDeleteBook(b, repo),
+                ),
+            ]),
+            child: Padding(
+              padding: const EdgeInsets.all(6),
+              child: Icon(Icons.more_horiz,
+                  size: 20, color: scheme.onSurfaceVariant),
+            ),
+          ),
         ),
         tileColor: selected ? scheme.surfaceContainerHighest : null,
         shape:
@@ -235,50 +207,41 @@ class _AppDrawerState extends State<_AppDrawer> {
       ('装修', '🔨'),
     ];
 
-    final created = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setLocal) => AlertDialog(
-          title: const Text('新建账本'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Wrap(
-                spacing: 8,
-                runSpacing: 4,
-                children: [
-                  for (final t in templates)
-                    ActionChip(
-                      label: Text('${t.$2} ${t.$1}'),
-                      onPressed: () {
-                        setLocal(() => icon = t.$2);
-                        ctrl.text = t.$1;
-                      },
-                    ),
-                ],
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: ctrl,
-                autofocus: true,
-                decoration: const InputDecoration(hintText: '账本名称'),
-              ),
-            ],
-          ),
-          actions: [
-            TextButton(
-                onPressed: () => Navigator.pop(ctx, false),
-                child: const Text('取消')),
-            FilledButton(
-                onPressed: () => Navigator.pop(ctx, true),
-                child: const Text('创建')),
+    final created = await showIosFormDialog(
+      context,
+      title: '新建账本',
+      confirmText: '创建',
+      content: StatefulBuilder(
+        builder: (ctx, setLocal) => Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Wrap(
+              spacing: 8,
+              runSpacing: 4,
+              children: [
+                for (final t in templates)
+                  ActionChip(
+                    label: Text('${t.$2} ${t.$1}'),
+                    onPressed: () {
+                      setLocal(() => icon = t.$2);
+                      ctrl.text = t.$1;
+                    },
+                  ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: ctrl,
+              autofocus: true,
+              decoration: iosInputDecoration(hint: '账本名称'),
+            ),
           ],
         ),
       ),
     );
 
-    if (created == true) {
+    if (created) {
       final name = ctrl.text.trim().isEmpty ? '新账本' : ctrl.text.trim();
       final id = await repo.addBook(name: name, icon: icon);
       await repo.switchBook(id);
@@ -288,48 +251,29 @@ class _AppDrawerState extends State<_AppDrawer> {
 
   Future<void> _showRenameBookDialog(BookEntity b, AppRepository repo) async {
     final ctrl = TextEditingController(text: b.name);
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('账本改名'),
-        content: TextField(
-          controller: ctrl,
-          autofocus: true,
-          decoration: const InputDecoration(hintText: '账本名称'),
-        ),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('取消')),
-          FilledButton(
-              onPressed: () => Navigator.pop(ctx, true),
-              child: const Text('保存')),
-        ],
+    final ok = await showIosFormDialog(
+      context,
+      title: '账本改名',
+      content: TextField(
+        controller: ctrl,
+        autofocus: true,
+        decoration: iosInputDecoration(hint: '账本名称'),
       ),
     );
-    if (ok == true && ctrl.text.trim().isNotEmpty) {
+    if (ok && ctrl.text.trim().isNotEmpty) {
       await repo.renameBook(b.id, name: ctrl.text.trim());
     }
   }
 
   Future<void> _confirmDeleteBook(BookEntity b, AppRepository repo) async {
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text('删除「${b.name}」？'),
-        content: const Text('该账本下的所有账目都会一起删除，且不可恢复。'),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('取消')),
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('删除', style: TextStyle(color: Colors.red)),
-          ),
-        ],
-      ),
+    final ok = await showConfirmDialog(
+      context,
+      title: '删除「${b.name}」？',
+      message: '该账本下的所有账目都会一起删除，且不可恢复。',
+      confirmText: '删除',
+      destructive: true,
     );
-    if (ok == true) await repo.deleteBook(b.id);
+    if (ok) await repo.deleteBook(b.id);
   }
 
   @override
@@ -363,7 +307,7 @@ class _AppDrawerState extends State<_AppDrawer> {
                       Navigator.pop(context);
                       Navigator.push<void>(
                         context,
-                        MaterialPageRoute<void>(
+                        CupertinoPageRoute<void>(
                             builder: (_) => const PersonalCenterView()),
                       );
                     },
@@ -538,6 +482,90 @@ class _AppDrawerState extends State<_AppDrawer> {
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+/// 顶栏当前账本快切：图标 + 名 + chevron，点开 iOS 菜单一键切换账本。
+class _BookSwitchChip extends StatelessWidget {
+  const _BookSwitchChip();
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final repo = context.watch<AppRepository>();
+    final book = repo.currentBook ??
+        (repo.books.isNotEmpty ? repo.books.first : null);
+
+    return Builder(
+      builder: (ctx) => GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: () => showIosMenu(ctx, [
+          for (final b in repo.books)
+            IosMenuItem(
+              label: '${b.icon} ${b.name}',
+              icon: b.id == repo.currentBookId
+                  ? Icons.check_circle
+                  : Icons.radio_button_unchecked,
+              onTap: () => repo.switchBook(b.id),
+            ),
+        ]),
+        child: Container(
+          height: 36,
+          padding: const EdgeInsets.symmetric(horizontal: 10),
+          decoration: BoxDecoration(
+            color: scheme.surfaceContainerHighest.withValues(alpha: 0.7),
+            borderRadius: BorderRadius.circular(18),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(book?.icon ?? '📒', style: const TextStyle(fontSize: 15)),
+              const SizedBox(width: 5),
+              ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 120),
+                child: Text(
+                  book?.name ?? '账本',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(ctx).textTheme.bodyMedium?.copyWith(
+                        fontWeight: FontWeight.w500,
+                        color: scheme.onSurface,
+                      ),
+                ),
+              ),
+              const SizedBox(width: 2),
+              Icon(CupertinoIcons.chevron_down,
+                  size: 14, color: scheme.onSurfaceVariant),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// 顶栏搜索按钮：圆形浅底放大镜，点进搜索页（与左侧菜单按钮对称）。
+class _SearchIconButton extends StatelessWidget {
+  const _SearchIconButton();
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return InkWell(
+      onTap: () => Navigator.of(context).push(
+        CupertinoPageRoute<void>(builder: (_) => const SearchView()),
+      ),
+      customBorder: const CircleBorder(),
+      child: Container(
+        width: 38,
+        height: 38,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          color: scheme.surfaceContainerHighest.withValues(alpha: 0.7),
+        ),
+        child: Icon(Icons.search, size: 19, color: scheme.onSurfaceVariant),
       ),
     );
   }

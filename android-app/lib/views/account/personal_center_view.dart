@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/cupertino.dart' show CupertinoPageRoute, CupertinoIcons;
 
 import '../../widgets/mascot.dart';
 import '../settings/ai_setting_view.dart';
@@ -88,7 +89,7 @@ class PersonalCenterView extends StatelessWidget {
             label: 'AI 记账设置',
             onTap: () => Navigator.push<void>(
               context,
-              MaterialPageRoute<void>(
+              CupertinoPageRoute<void>(
                   builder: (_) => const AiSettingView()),
             ),
           ),
@@ -177,7 +178,7 @@ class _SettingsTile extends StatelessWidget {
             ?.copyWith(fontWeight: FontWeight.w500),
       ),
       trailing: Icon(
-        Icons.chevron_right,
+        CupertinoIcons.chevron_forward,
         size: 18,
         color: scheme.onSurfaceVariant.withValues(alpha: 0.5),
       ),

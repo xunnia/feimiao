@@ -1,5 +1,6 @@
 import 'package:decimal/decimal.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/cupertino.dart' show CupertinoSlidingSegmentedControl;
 import 'package:provider/provider.dart';
 
 import '../../core/amount_expression.dart';
@@ -117,15 +118,21 @@ class _ManualAddSheetState extends State<ManualAddSheet> {
             children: [
               // 支出 / 收入
               Expanded(
-                child: SegmentedButton<TransactionKind>(
-                  segments: const [
-                    ButtonSegment(
-                        value: TransactionKind.expense, label: Text('支出')),
-                    ButtonSegment(
-                        value: TransactionKind.income, label: Text('收入')),
-                  ],
-                  selected: {_kind},
-                  onSelectionChanged: (s) => _onKindChanged(s.first),
+                child: CupertinoSlidingSegmentedControl<TransactionKind>(
+                  groupValue: _kind,
+                  onValueChanged: (v) {
+                    if (v != null) _onKindChanged(v);
+                  },
+                  children: const {
+                    TransactionKind.expense: Padding(
+                      padding: EdgeInsets.symmetric(vertical: 6),
+                      child: Text('支出'),
+                    ),
+                    TransactionKind.income: Padding(
+                      padding: EdgeInsets.symmetric(vertical: 6),
+                      child: Text('收入'),
+                    ),
+                  },
                 ),
               ),
               const SizedBox(width: 8),

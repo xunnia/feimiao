@@ -1,5 +1,6 @@
 import 'package:decimal/decimal.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/cupertino.dart' show CupertinoPageRoute;
 import 'package:provider/provider.dart';
 
 import '../../core/ai/llm_entry_parser.dart';
@@ -226,7 +227,7 @@ class _AiQuickEntryViewState extends State<AiQuickEntryView> {
             TextButton(
               onPressed: () => Navigator.push(
                 context,
-                MaterialPageRoute<void>(
+                CupertinoPageRoute<void>(
                     builder: (_) => const AiSettingView()),
               ),
               child: const Text('配置'),

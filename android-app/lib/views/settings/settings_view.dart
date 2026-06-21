@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/cupertino.dart' show CupertinoPageRoute, CupertinoIcons;
 
 import 'accounts_view.dart';
 import 'ai_setting_view.dart';
@@ -23,10 +24,10 @@ class SettingsView extends StatelessWidget {
           ListTile(
             leading: const Icon(Icons.savings_outlined),
             title: const Text('月度预算'),
-            trailing: const Icon(Icons.chevron_right),
+            trailing: const Icon(CupertinoIcons.chevron_forward),
             onTap: () => Navigator.push(
               context,
-              MaterialPageRoute<void>(
+              CupertinoPageRoute<void>(
                 builder: (_) => const BudgetSettingView(),
               ),
             ),
@@ -34,10 +35,10 @@ class SettingsView extends StatelessWidget {
           ListTile(
             leading: const Icon(Icons.account_balance_wallet_outlined),
             title: const Text('账户管理'),
-            trailing: const Icon(Icons.chevron_right),
+            trailing: const Icon(CupertinoIcons.chevron_forward),
             onTap: () => Navigator.push(
               context,
-              MaterialPageRoute<void>(
+              CupertinoPageRoute<void>(
                 builder: (_) => const AccountsView(),
               ),
             ),
@@ -45,10 +46,10 @@ class SettingsView extends StatelessWidget {
           ListTile(
             leading: const Icon(Icons.label_outline),
             title: const Text('分类管理'),
-            trailing: const Icon(Icons.chevron_right),
+            trailing: const Icon(CupertinoIcons.chevron_forward),
             onTap: () => Navigator.push(
               context,
-              MaterialPageRoute<void>(
+              CupertinoPageRoute<void>(
                 builder: (_) => const CategoriesView(),
               ),
             ),
@@ -56,10 +57,10 @@ class SettingsView extends StatelessWidget {
           ListTile(
             leading: const Icon(Icons.smart_toy_outlined),
             title: const Text('AI 记账设置'),
-            trailing: const Icon(Icons.chevron_right),
+            trailing: const Icon(CupertinoIcons.chevron_forward),
             onTap: () => Navigator.push(
               context,
-              MaterialPageRoute<void>(
+              CupertinoPageRoute<void>(
                 builder: (_) => const AiSettingView(),
               ),
             ),
@@ -67,10 +68,10 @@ class SettingsView extends StatelessWidget {
           ListTile(
             leading: const Icon(Icons.backup_outlined),
             title: const Text('备份与恢复'),
-            trailing: const Icon(Icons.chevron_right),
+            trailing: const Icon(CupertinoIcons.chevron_forward),
             onTap: () => Navigator.push(
               context,
-              MaterialPageRoute<void>(
+              CupertinoPageRoute<void>(
                 builder: (_) => const BackupView(),
               ),
             ),

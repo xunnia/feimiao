@@ -1,4 +1,8 @@
 import 'package:flutter/material.dart';
+
+import '../../widgets/ios_dialogs.dart';
+import '../../widgets/ios_form.dart';
+import '../../widgets/ios_menu.dart';
 import 'package:provider/provider.dart';
 
 import '../../data/app_repository.dart';
@@ -23,11 +27,16 @@ class TagsView extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('标签管理'), centerTitle: true),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: () => _showEditDialog(context, null),
-        icon: const Icon(Icons.add),
-        label: const Text('新建标签'),
+      appBar: AppBar(
+        title: const Text('标签管理'),
+        centerTitle: true,
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.add),
+            tooltip: '新建标签',
+            onPressed: () => _showEditDialog(context, null),
+          ),
+        ],
       ),
       body: Consumer<AppRepository>(
         builder: (context, repo, _) {
@@ -55,15 +64,27 @@ class TagsView extends StatelessWidget {
                   title: Text(t.name,
                       style: const TextStyle(fontWeight: FontWeight.w600)),
                   subtitle: Text('$count 笔账目用到'),
-                  trailing: PopupMenuButton<String>(
-                    onSelected: (v) {
-                      if (v == 'edit') _showEditDialog(context, t);
-                      if (v == 'delete') _confirmDelete(context, repo, t);
-                    },
-                    itemBuilder: (_) => const [
-                      PopupMenuItem(value: 'edit', child: Text('编辑')),
-                      PopupMenuItem(value: 'delete', child: Text('删除')),
-                    ],
+                  trailing: Builder(
+                    builder: (iconCtx) => GestureDetector(
+                      behavior: HitTestBehavior.opaque,
+                      onTap: () => showIosMenu(iconCtx, [
+                        IosMenuItem(
+                          label: '编辑',
+                          icon: Icons.drive_file_rename_outline,
+                          onTap: () => _showEditDialog(context, t),
+                        ),
+                        IosMenuItem(
+                          label: '删除',
+                          icon: Icons.delete_outline,
+                          destructive: true,
+                          onTap: () => _confirmDelete(context, repo, t),
+                        ),
+                      ]),
+                      child: const Padding(
+                        padding: EdgeInsets.all(6),
+                        child: Icon(Icons.more_horiz),
+                      ),
+                    ),
                   ),
                   onTap: () => _showEditDialog(context, t),
                 ),
@@ -94,23 +115,14 @@ class TagsView extends StatelessWidget {
 
   Future<void> _confirmDelete(
       BuildContext context, AppRepository repo, TagEntity t) async {
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text('删除标签「${t.name}」？'),
-        content: const Text('删除后，账目上的这个标签也会被移除（账目本身不受影响）。'),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('取消')),
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('删除', style: TextStyle(color: Colors.red)),
-          ),
-        ],
-      ),
+    final ok = await showConfirmDialog(
+      context,
+      title: '删除标签「${t.name}」？',
+      message: '删除后，账目上的这个标签也会被移除（账目本身不受影响）。',
+      confirmText: '删除',
+      destructive: true,
     );
-    if (ok == true) await repo.deleteTag(t.id);
+    if (ok) await repo.deleteTag(t.id);
   }
 
   /// [tag] 为 null 时新建，否则编辑。
@@ -119,67 +131,60 @@ class TagsView extends StatelessWidget {
     final ctrl = TextEditingController(text: tag?.name ?? '');
     int colorValue = tag?.colorValue ?? kTagPalette.first.toARGB32();
 
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setLocal) => AlertDialog(
-          title: Text(tag == null ? '新建标签' : '编辑标签'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              TextField(
-                controller: ctrl,
-                autofocus: true,
-                maxLength: 8,
-                decoration: const InputDecoration(hintText: '标签名'),
-              ),
-              const SizedBox(height: 8),
-              Text('颜色', style: Theme.of(ctx).textTheme.labelMedium),
-              const SizedBox(height: 8),
-              Wrap(
-                spacing: 10,
-                runSpacing: 10,
-                children: [
-                  for (final c in kTagPalette)
-                    GestureDetector(
-                      onTap: () => setLocal(() => colorValue = c.toARGB32()),
-                      child: Container(
-                        width: 32,
-                        height: 32,
-                        decoration: BoxDecoration(
-                          color: c,
-                          shape: BoxShape.circle,
-                          border: Border.all(
-                            color: colorValue == c.toARGB32()
-                                ? Colors.black87
-                                : Colors.transparent,
-                            width: 2.5,
-                          ),
+    final ok = await showIosFormDialog(
+      context,
+      title: tag == null ? '新建标签' : '编辑标签',
+      content: StatefulBuilder(
+        builder: (ctx, setLocal) => Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            TextField(
+              controller: ctrl,
+              autofocus: true,
+              maxLength: 8,
+              decoration: iosInputDecoration(hint: '标签名'),
+            ),
+            const SizedBox(height: 12),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: Text('颜色', style: Theme.of(ctx).textTheme.labelMedium),
+            ),
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 10,
+              runSpacing: 10,
+              children: [
+                for (final c in kTagPalette)
+                  GestureDetector(
+                    onTap: () => setLocal(() => colorValue = c.toARGB32()),
+                    child: Container(
+                      width: 32,
+                      height: 32,
+                      decoration: BoxDecoration(
+                        color: c,
+                        shape: BoxShape.circle,
+                        border: Border.all(
+                          color: colorValue == c.toARGB32()
+                              ? Colors.black87
+                              : Colors.transparent,
+                          width: 2.5,
                         ),
-                        child: colorValue == c.toARGB32()
-                            ? const Icon(Icons.check,
-                                size: 18, color: Colors.white)
-                            : null,
                       ),
+                      child: colorValue == c.toARGB32()
+                          ? const Icon(Icons.check,
+                              size: 18, color: Colors.white)
+                          : null,
                     ),
-                ],
-              ),
-            ],
-          ),
-          actions: [
-            TextButton(
-                onPressed: () => Navigator.pop(ctx, false),
-                child: const Text('取消')),
-            FilledButton(
-                onPressed: () => Navigator.pop(ctx, true),
-                child: const Text('保存')),
+                  ),
+              ],
+            ),
           ],
         ),
       ),
     );
 
-    if (ok == true && ctrl.text.trim().isNotEmpty) {
+    if (ok && ctrl.text.trim().isNotEmpty) {
       final name = ctrl.text.trim();
       if (tag == null) {
         await repo.addTag(name: name, colorValue: colorValue);
