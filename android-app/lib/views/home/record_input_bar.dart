@@ -115,7 +115,7 @@ class _RecordInputBarState extends State<RecordInputBar> {
               child: CustomPaint(
                 foregroundPainter: const GlassEdgePainter(radius: 28),
                 child: Container(
-                  padding: const EdgeInsets.fromLTRB(18, 16, 12, 12),
+                  padding: const EdgeInsets.fromLTRB(14, 14, 10, 10),
                   decoration: BoxDecoration(
                     // iOS 玻璃：半透明白底；细黑边由 _GlassEdgePainter 画（深浅不均）
                     color: scheme.surface.withValues(alpha: 0.4),
@@ -139,7 +139,7 @@ class _RecordInputBarState extends State<RecordInputBar> {
                   ),
                 ),
               ),
-              const SizedBox(height: 14),
+              const SizedBox(height: 10),
 
               // ── 工具行 ──
               Row(
@@ -148,7 +148,7 @@ class _RecordInputBarState extends State<RecordInputBar> {
                     icon: Icons.add,
                     onTap: () => showRecordExtrasSheet(context),
                   ),
-                  const SizedBox(width: 8),
+                  const SizedBox(width: 6),
                   _ModePill(
                     isAi: _isAiMode,
                     onTap: () => _setMode(!_isAiMode),
@@ -195,12 +195,12 @@ class _ToolCircleButton extends StatelessWidget {
     return PressableScale(
       onPressed: onTap,
       child: SizedBox(
-        width: 40,
-        height: 40,
+        width: 36,
+        height: 36,
         child: GlassSurface(
           circle: true,
           child: Center(
-            child: Icon(icon, size: 20, color: scheme.onSurfaceVariant),
+            child: Icon(icon, size: 18, color: scheme.onSurfaceVariant),
           ),
         ),
       ),
@@ -224,20 +224,20 @@ class _ModePill extends StatelessWidget {
     return PressableScale(
       onPressed: onTap,
       child: GlassSurface(
-        radius: 18,
-        padding: const EdgeInsets.symmetric(horizontal: 12),
+        radius: 16,
+        padding: const EdgeInsets.symmetric(horizontal: 11),
         child: SizedBox(
-          height: 36,
+          height: 32,
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
               Icon(isAi ? Icons.auto_awesome : Icons.edit_outlined,
-                  size: 16, color: scheme.onSurfaceVariant),
+                  size: 14, color: scheme.onSurfaceVariant),
               const SizedBox(width: 6),
               Text(
                 isAi ? 'AI 记账' : '手动记账',
                 style: TextStyle(
-                  fontSize: 14,
+                  fontSize: 13,
                   fontWeight: FontWeight.normal,
                   color: scheme.onSurfaceVariant,
                 ),

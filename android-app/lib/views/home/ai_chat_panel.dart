@@ -4,6 +4,7 @@ import 'dart:ui' show ImageFilter;
 
 import 'package:decimal/decimal.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
 import '../../core/ai/llm_entry_parser.dart';
@@ -57,6 +58,10 @@ Future<void> showAiChatPanel(
   );
 }
 
+/// 会话历史（同一次 App 运行内复用：关闭再打开仍能看到过往对话）。
+/// 跨重启的持久化交给「对话保存时长」设置统一管理（后续）。
+final List<_Msg> _chatHistory = <_Msg>[];
+
 /// 「来记一笔吧」聊天面板：一句话 → AI 解析 → 记账确认卡（可保存/撤销）。
 /// 语音用键盘自带听写打到输入框即可，不再内置录音识别。
 class AiChatPanel extends StatefulWidget {
@@ -79,8 +84,14 @@ class _AiChatPanelState extends State<AiChatPanel> {
   final TextEditingController _ctrl = TextEditingController();
   final FocusNode _focus = FocusNode();
   final ScrollController _scroll = ScrollController();
-  final List<_Msg> _msgs = [];
+  final List<_Msg> _msgs = _chatHistory;
   bool _busy = false;
+
+  // 对话态聊天窗高度占比（半屏 0.58 / 全屏 0.94），及拖拽中标记。
+  double _heightFrac = 0.58;
+  bool _dragging = false;
+  // 本次打开是否已经发过消息：未发=建议页；发过=半屏对话窗(可下拉看历史)。
+  bool _started = false;
 
   // 查账/建设性建议池（记账建议从历史账单分析得来，见 _pickSuggestions）。
   static const List<String> _queryPool = [
@@ -137,6 +148,15 @@ class _AiChatPanelState extends State<AiChatPanel> {
       _ctrl.text = init;
       _ctrl.selection = TextSelection.collapsed(offset: _ctrl.text.length);
     }
+    _focus.addListener(_onFocusChanged);
+    // 复用会话历史：清掉残留的"思考中"，滚到底显示最新。
+    _msgs.removeWhere((m) => m is _ThinkingMsg);
+    _busy = false;
+    if (_msgs.isNotEmpty) _scrollToBottom();
+  }
+
+  void _onFocusChanged() {
+    if (mounted) setState(() {});
   }
 
   @override
@@ -186,8 +206,10 @@ class _AiChatPanelState extends State<AiChatPanel> {
     if (text.isEmpty || _busy) return;
 
     _ctrl.clear();
+    _focus.unfocus();
     final isQuery = _looksLikeQuery(text);
     setState(() {
+      _started = true;
       _msgs.add(_UserMsg(text));
       _msgs.add(_ThinkingMsg());
       _busy = true;
@@ -290,7 +312,7 @@ class _AiChatPanelState extends State<AiChatPanel> {
     if (!mounted) return;
     setState(() {
       _msgs.removeWhere((m) => m is _ThinkingMsg);
-      _msgs.add(_AnswerMsg(answer));
+      _msgs.add(_AnswerMsg(answer, question: text));
       _busy = false;
     });
     _scrollToBottom();
@@ -383,173 +405,279 @@ class _AiChatPanelState extends State<AiChatPanel> {
   // ── build ───────────────────────────────────────────────────────────────
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
     final bottomInset = MediaQuery.viewInsetsOf(context).bottom;
-    final hasText = _ctrl.text.trim().isNotEmpty;
-
     return Material(
       type: MaterialType.transparency,
       child: Padding(
         padding: EdgeInsets.only(bottom: bottomInset),
         child: SafeArea(
           top: false,
-          child: Column(
-            children: [
-            // ── 上方展开区：建议 / 对话，点空白处收起 ──
-            // 上方：建议(2×2) / 对话，浮在模糊背景上，点空白处收起
+          child: _started
+              ? _chatMode(context)
+              : _emptyMode(context),
+        ),
+      ),
+    );
+  }
+
+  // 点建议：把文字填进输入框（不直接发），让用户改了再发。
+  void _fillInput(String s) {
+    setState(() {
+      _ctrl.text = s;
+      _ctrl.selection = TextSelection.collapsed(offset: _ctrl.text.length);
+    });
+    _focus.requestFocus();
+  }
+
+  // 空态：建议浮在模糊背景上 + 底部白卡输入。
+  Widget _emptyMode(BuildContext context) {
+    return Column(
+      children: [
+        Expanded(
+          child: GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: () => Navigator.pop(context),
+            child: SingleChildScrollView(
+              reverse: true,
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(6, 0, 16, 10),
+                child: _SuggestionGrid(items: _picked, onTap: _fillInput),
+              ),
+            ),
+          ),
+        ),
+        _header(context),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(12, 0, 12, 10),
+          child: _inputBox(context, autofocus: true),
+        ),
+      ],
+    );
+  }
+
+  // 对话态：半屏/全屏可拖拽的白色聊天窗。
+  Widget _chatMode(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return LayoutBuilder(
+      builder: (ctx, c) {
+        final availH = c.maxHeight;
+        // 聚焦(键盘弹起)时铺满键盘上方区域，避免溢出；否则用半/全屏档位。
+        final focused = _focus.hasFocus;
+        final frac = (focused ? 1.0 : _heightFrac).clamp(0.35, 1.0);
+        return Column(
+          children: [
             Expanded(
               child: GestureDetector(
                 behavior: HitTestBehavior.opaque,
                 onTap: () => Navigator.pop(context),
-                child: _msgs.isEmpty
-                    ? SingleChildScrollView(
-                        reverse: true,
-                        child: Padding(
-                          padding: const EdgeInsets.fromLTRB(6, 0, 16, 10),
-                          child: _SuggestionGrid(
-                            items: _picked,
-                            onTap: (s) => _send(s),
-                          ),
-                        ),
-                      )
-                    : ListView.builder(
-                        controller: _scroll,
-                        padding: const EdgeInsets.fromLTRB(16, 12, 16, 10),
-                        itemCount: _msgs.length,
-                        itemBuilder: (_, i) => _buildMsg(_msgs[i]),
-                      ),
+                child: const SizedBox.expand(),
               ),
             ),
-
-            // 大白卡：发财猫 + 喵喵助手 + 输入框 + 工具行
-            Padding(
-              padding: const EdgeInsets.fromLTRB(8, 0, 8, 8),
-              child: Container(
-                decoration: BoxDecoration(
-                  color: scheme.surface,
-                  borderRadius: BorderRadius.circular(24),
-                  boxShadow: const [
-                    BoxShadow(
+            AnimatedContainer(
+              duration: (_dragging || focused)
+                  ? Duration.zero
+                  : const Duration(milliseconds: 220),
+              curve: Curves.easeOut,
+              height: availH * frac,
+              decoration: BoxDecoration(
+                color: scheme.surface,
+                borderRadius:
+                    const BorderRadius.vertical(top: Radius.circular(24)),
+                boxShadow: const [
+                  BoxShadow(
                       color: Color(0x1F000000),
                       blurRadius: 24,
-                      offset: Offset(0, 8),
+                      offset: Offset(0, -4)),
+                ],
+              ),
+              child: Column(
+                children: [
+                  _dragHandle(availH),
+                  _header(context),
+                  Expanded(
+                    child: ListView.builder(
+                      controller: _scroll,
+                      padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
+                      itemCount: _msgs.length,
+                      itemBuilder: (_, i) => _buildMsg(_msgs[i]),
                     ),
-                  ],
-                ),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    // 头部：发财猫 + 喵喵助手 + 关闭
-                    Padding(
-                      padding: const EdgeInsets.fromLTRB(16, 12, 12, 4),
-                      child: Row(
-                        children: [
-                          const Mascot(mood: MascotMood.celebrate, size: 35),
-                          const SizedBox(width: 8),
-                          Text(
-                            '喵喵助手',
-                            style: Theme.of(context)
-                                .textTheme
-                                .titleSmall
-                                ?.copyWith(fontWeight: FontWeight.w500),
-                          ),
-                          const Spacer(),
-                          _CircleBtn(
-                            icon: Icons.close,
-                            onTap: () => Navigator.pop(context),
-                          ),
-                        ],
-                      ),
-                    ),
-                    // 卡中卡：原输入框（浅底圆角框）包在白卡里
-                    Padding(
-                      padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
-                      child: Container(
-                        padding: const EdgeInsets.fromLTRB(16, 10, 10, 10),
-                        decoration: BoxDecoration(
-                          color: scheme.surfaceContainerLow,
-                          borderRadius: BorderRadius.circular(20),
-                          border: Border.all(
-                            color: scheme.outlineVariant.withValues(alpha: 0.5),
-                          ),
-                        ),
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          crossAxisAlignment: CrossAxisAlignment.stretch,
-                          children: [
-                            TextField(
-                              controller: _ctrl,
-                              focusNode: _focus,
-                              autofocus: true,
-                              minLines: 1,
-                              maxLines: 4,
-                              textInputAction: TextInputAction.send,
-                              onSubmitted: (_) => _send(),
-                              onChanged: (_) => setState(() {}),
-                              style: const TextStyle(fontSize: 17),
-                              decoration: InputDecoration(
-                                hintText: 'Chat with cat',
-                                hintStyle: TextStyle(
-                                  fontSize: 14,
-                                  color: scheme.onSurfaceVariant
-                                      .withValues(alpha: 0.5),
-                                ),
-                                filled: false,
-                                border: InputBorder.none,
-                                enabledBorder: InputBorder.none,
-                                focusedBorder: InputBorder.none,
-                                disabledBorder: InputBorder.none,
-                                errorBorder: InputBorder.none,
-                                focusedErrorBorder: InputBorder.none,
-                                isDense: true,
-                                contentPadding: EdgeInsets.zero,
-                              ),
-                            ),
-                            const SizedBox(height: 10),
-                            Row(
-                              children: [
-                                _CircleBtn(
-                                  icon: Icons.add,
-                                  onTap: () => showRecordExtrasSheet(context),
-                                ),
-                                const SizedBox(width: 8),
-                                _Pill(
-                                  isAi: true,
-                                  onTap: () {
-                                    Navigator.pop(context);
-                                    widget.onSwitchToManual();
-                                  },
-                                ),
-                                const Spacer(),
-                                _CircleBtn(
-                                  icon: Icons.arrow_upward,
-                                  filled: true,
-                                  onTap: (hasText && !_busy)
-                                      ? () => _send()
-                                      : null,
-                                ),
-                              ],
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(12, 0, 12, 10),
+                    child: _inputBox(context, autofocus: false),
+                  ),
+                ],
               ),
             ),
           ],
+        );
+      },
+    );
+  }
+
+  // 顶部横条：跟手缩放 + 松手吸附半/全屏 + 点击切换。
+  Widget _dragHandle(double availH) {
+    final scheme = Theme.of(context).colorScheme;
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onVerticalDragStart: (_) => _dragging = true,
+      onVerticalDragUpdate: (d) {
+        setState(() {
+          _heightFrac = (_heightFrac - d.delta.dy / availH).clamp(0.35, 0.96);
+        });
+      },
+      onVerticalDragEnd: (_) {
+        setState(() {
+          _dragging = false;
+          if (_heightFrac < 0.45) {
+            Navigator.pop(context);
+            return;
+          }
+          _heightFrac = _heightFrac < 0.74 ? 0.58 : 0.94;
+        });
+      },
+      onTap: () =>
+          setState(() => _heightFrac = _heightFrac > 0.74 ? 0.58 : 0.94),
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.symmetric(vertical: 10),
+        alignment: Alignment.center,
+        child: Container(
+          width: 40,
+          height: 4,
+          decoration: BoxDecoration(
+            color: scheme.onSurfaceVariant.withValues(alpha: 0.25),
+            borderRadius: BorderRadius.circular(2),
+          ),
         ),
       ),
-    ));
+    );
+  }
+
+  // 头部：发财猫 + 喵喵助手 + 关闭。
+  Widget _header(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 6, 12, 4),
+      child: Row(
+        children: [
+          const Mascot(mood: MascotMood.celebrate, size: 35),
+          const SizedBox(width: 8),
+          Text(
+            '喵喵助手',
+            style: Theme.of(context)
+                .textTheme
+                .titleSmall
+                ?.copyWith(fontWeight: FontWeight.w500),
+          ),
+          const Spacer(),
+          _CircleBtn(
+            icon: Icons.close,
+            onTap: () => Navigator.pop(context),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // 卡中卡输入框：浅底圆角框 + 工具行。
+  // 输入框：与首页那条完全统一（玻璃圆角卡 + 细黑边）。
+  Widget _inputBox(BuildContext context, {required bool autofocus}) {
+    final scheme = Theme.of(context).colorScheme;
+    final hasText = _ctrl.text.trim().isNotEmpty;
+    return Container(
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(28),
+        boxShadow: const [
+          BoxShadow(
+              color: Color(0x14000000), blurRadius: 14, offset: Offset(0, 2)),
+        ],
+      ),
+      child: GlassSurface(
+        radius: 28,
+        padding: const EdgeInsets.fromLTRB(14, 12, 10, 10),
+        child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          TextField(
+            controller: _ctrl,
+            focusNode: _focus,
+            autofocus: autofocus,
+            minLines: 1,
+            maxLines: 4,
+            textInputAction: TextInputAction.send,
+            onSubmitted: (_) => _send(),
+            onChanged: (_) => setState(() {}),
+            style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w300),
+            decoration: InputDecoration(
+              hintText: 'Chat with cat',
+              hintStyle: TextStyle(
+                fontSize: 14,
+                color: scheme.onSurfaceVariant.withValues(alpha: 0.5),
+              ),
+              filled: false,
+              border: InputBorder.none,
+              enabledBorder: InputBorder.none,
+              focusedBorder: InputBorder.none,
+              disabledBorder: InputBorder.none,
+              errorBorder: InputBorder.none,
+              focusedErrorBorder: InputBorder.none,
+              isDense: true,
+              contentPadding: EdgeInsets.zero,
+            ),
+          ),
+          const SizedBox(height: 4),
+          Row(
+            children: [
+              _CircleBtn(
+                icon: Icons.add,
+                onTap: () => showRecordExtrasSheet(context),
+              ),
+              const SizedBox(width: 6),
+              _Pill(
+                isAi: true,
+                onTap: () {
+                  Navigator.pop(context);
+                  widget.onSwitchToManual();
+                },
+              ),
+              const Spacer(),
+              _CircleBtn(
+                icon: Icons.arrow_upward,
+                filled: true,
+                onTap: (hasText && !_busy) ? () => _send() : null,
+              ),
+            ],
+          ),
+        ],
+      ),
+      ),
+    );
+  }
+
+  void _regenerate(_AnswerMsg m) {
+    if (_busy || m.question.isEmpty) return;
+    setState(() {
+      _msgs.remove(m);
+      _msgs.add(_ThinkingMsg());
+      _busy = true;
+    });
+    _scrollToBottom();
+    _runQuery(m.question);
   }
 
   Widget _buildMsg(_Msg m) {
     if (m is _UserMsg) return _UserBubble(text: m.text);
     if (m is _ThinkingMsg) return const _ThinkingBubble();
     if (m is _InfoMsg) return _InfoBubble(text: m.text, error: m.error);
-    if (m is _AnswerMsg) return _AnswerBubble(text: m.text);
+    if (m is _AnswerMsg) {
+      return _AnswerBubble(
+        text: m.text,
+        animate: !m.shown,
+        onShown: () => m.shown = true,
+        onRegenerate: m.question.isEmpty ? null : () => _regenerate(m),
+      );
+    }
     if (m is _RecordMsg) {
       return _RecordBubble(
         msg: m,
@@ -582,7 +710,9 @@ class _InfoMsg extends _Msg {
 
 class _AnswerMsg extends _Msg {
   final String text;
-  _AnswerMsg(this.text);
+  final String question;
+  bool shown;
+  _AnswerMsg(this.text, {this.question = '', this.shown = false});
 }
 
 class _RecordMsg extends _Msg {
@@ -623,7 +753,8 @@ class _UserBubble extends StatelessWidget {
             bottomRight: Radius.circular(4),
           ),
         ),
-        child: Text(text, style: const TextStyle(fontSize: 15)),
+        child: Text(text,
+            style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w300)),
       ),
     );
   }
@@ -690,7 +821,15 @@ class _InfoBubble extends StatelessWidget {
 // ── 查账回答气泡（喵助手回答，打字机流式）────────────────────────────────────
 class _AnswerBubble extends StatefulWidget {
   final String text;
-  const _AnswerBubble({required this.text});
+  final bool animate;
+  final VoidCallback? onShown;
+  final VoidCallback? onRegenerate;
+  const _AnswerBubble({
+    required this.text,
+    this.animate = true,
+    this.onShown,
+    this.onRegenerate,
+  });
 
   @override
   State<_AnswerBubble> createState() => _AnswerBubbleState();
@@ -698,11 +837,17 @@ class _AnswerBubble extends StatefulWidget {
 
 class _AnswerBubbleState extends State<_AnswerBubble> {
   int _shown = 0;
+  bool _liked = false;
+  bool _disliked = false;
   Timer? _timer;
 
   @override
   void initState() {
     super.initState();
+    if (!widget.animate) {
+      _shown = widget.text.length;
+      return;
+    }
     _timer = Timer.periodic(const Duration(milliseconds: 28), (t) {
       if (!mounted) {
         t.cancel();
@@ -710,6 +855,7 @@ class _AnswerBubbleState extends State<_AnswerBubble> {
       }
       if (_shown >= widget.text.length) {
         t.cancel();
+        widget.onShown?.call();
         return;
       }
       setState(() {
@@ -724,36 +870,87 @@ class _AnswerBubbleState extends State<_AnswerBubble> {
     super.dispose();
   }
 
+  // 按回答语气挑一只猫。
+  MascotMood _moodFor(String t) {
+    if (t.contains('超支') || t.contains('超了') || t.contains('超出')) {
+      return MascotMood.overspend;
+    }
+    if (t.contains('管住') || t.contains('继续保持') || t.contains('省钱')) {
+      return MascotMood.celebrate;
+    }
+    return MascotMood.report;
+  }
+
+  Widget _action(IconData icon, VoidCallback onTap, {bool active = false}) {
+    final scheme = Theme.of(context).colorScheme;
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: onTap,
+      child: Padding(
+        padding: const EdgeInsets.all(6),
+        child: Icon(
+          icon,
+          size: 17,
+          color: active
+              ? scheme.primary
+              : scheme.onSurfaceVariant.withValues(alpha: 0.6),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final shownText = widget.text.substring(0, _shown);
+    final done = _shown >= widget.text.length;
     return Padding(
-      padding: const EdgeInsets.only(bottom: 12, right: 24),
-      child: Row(
+      padding: const EdgeInsets.only(bottom: 16, right: 8),
+      child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Mascot(mood: MascotMood.report, size: 30),
-          const SizedBox(width: 8),
-          Expanded(
-            child: Container(
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-              decoration: BoxDecoration(
-                color: scheme.surfaceContainerHighest,
-                borderRadius: const BorderRadius.only(
-                  topLeft: Radius.circular(4),
-                  topRight: Radius.circular(16),
-                  bottomLeft: Radius.circular(16),
-                  bottomRight: Radius.circular(16),
-                ),
-              ),
-              child: SelectableText(
-                shownText,
-                style: const TextStyle(fontSize: 15, height: 1.4),
-              ),
+          // 回答正文：全宽、无气泡（对标 Claude）。
+          SelectableText(
+            shownText,
+            style: TextStyle(
+              fontSize: 15,
+              height: 1.5,
+              fontWeight: FontWeight.w300,
+              color: scheme.onSurface,
             ),
           ),
+          if (done) ...[
+            const SizedBox(height: 6),
+            Row(
+              children: [
+                Mascot(mood: _moodFor(widget.text), size: 40),
+                const SizedBox(width: 10),
+                _action(Icons.content_copy_outlined, () {
+                  Clipboard.setData(ClipboardData(text: widget.text));
+                }),
+                _action(
+                  _liked ? Icons.thumb_up_alt : Icons.thumb_up_alt_outlined,
+                  () => setState(() {
+                    _liked = !_liked;
+                    if (_liked) _disliked = false;
+                  }),
+                  active: _liked,
+                ),
+                _action(
+                  _disliked
+                      ? Icons.thumb_down_alt
+                      : Icons.thumb_down_alt_outlined,
+                  () => setState(() {
+                    _disliked = !_disliked;
+                    if (_disliked) _liked = false;
+                  }),
+                  active: _disliked,
+                ),
+                if (widget.onRegenerate != null)
+                  _action(Icons.refresh, widget.onRegenerate!),
+              ],
+            ),
+          ],
         ],
       ),
     );
@@ -981,19 +1178,19 @@ class _Pill extends StatelessWidget {
     return PressableScale(
       onPressed: onTap,
       child: GlassSurface(
-        radius: 17,
-        padding: const EdgeInsets.symmetric(horizontal: 12),
+        radius: 15,
+        padding: const EdgeInsets.symmetric(horizontal: 11),
         child: SizedBox(
-          height: 34,
+          height: 31,
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
               Icon(isAi ? Icons.auto_awesome : Icons.edit_outlined,
-                  size: 16, color: scheme.onSurfaceVariant),
+                  size: 14, color: scheme.onSurfaceVariant),
               const SizedBox(width: 6),
               Text(isAi ? 'AI 记账' : '手动记账',
                   style: TextStyle(
-                      fontSize: 13, color: scheme.onSurfaceVariant)),
+                      fontSize: 12, color: scheme.onSurfaceVariant)),
             ],
           ),
         ),
@@ -1017,14 +1214,14 @@ class _CircleBtn extends StatelessWidget {
       return PressableScale(
         onPressed: onTap,
         child: Container(
-          width: 40,
-          height: 40,
+          width: 36,
+          height: 36,
           decoration: BoxDecoration(
             color: active ? scheme.secondary : scheme.onSurface.withValues(alpha: 0.12),
             shape: BoxShape.circle,
           ),
           child: Icon(icon,
-              size: 20,
+              size: 18,
               color:
                   active ? scheme.onSecondary : scheme.onSurface.withValues(alpha: 0.38)),
         ),
@@ -1033,12 +1230,12 @@ class _CircleBtn extends StatelessWidget {
     return PressableScale(
       onPressed: onTap,
       child: SizedBox(
-        width: 38,
-        height: 38,
+        width: 34,
+        height: 34,
         child: GlassSurface(
           circle: true,
           child: Center(
-            child: Icon(icon, size: 19, color: scheme.onSurfaceVariant),
+            child: Icon(icon, size: 17, color: scheme.onSurfaceVariant),
           ),
         ),
       ),
