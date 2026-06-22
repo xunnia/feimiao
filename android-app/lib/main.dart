@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 
 import 'data/app_repository.dart';
 import 'theme/app_colors.dart';
+import 'widgets/glass.dart';
 import 'widgets/ios_dialogs.dart';
 import 'widgets/ios_form.dart';
 import 'widgets/ios_menu.dart';
@@ -63,11 +64,13 @@ class RootShell extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      backgroundColor: const Color(0xFFF7F8FA),
       // 左侧大片区域右滑即可拉出抽屉（行内左滑删除不受影响）。
       drawerEdgeDragWidth: MediaQuery.of(context).size.width * 0.5,
       appBar: AppBar(
         automaticallyImplyLeading: false,
         titleSpacing: 0,
+        backgroundColor: const Color(0xFFF7F8FA),
         surfaceTintColor: Colors.transparent,
         title: Builder(
           builder: (innerCtx) => Row(
@@ -524,42 +527,33 @@ class _BookSwitchChip extends StatelessWidget {
               onTap: () => repo.switchBook(b.id),
             ),
         ]),
-        child: Container(
-          height: 36,
+        child: GlassSurface(
+          radius: 18,
           padding: const EdgeInsets.symmetric(horizontal: 10),
-          decoration: BoxDecoration(
-            color: scheme.surface,
-            borderRadius: BorderRadius.circular(18),
-            border: Border.all(color: Colors.black.withValues(alpha: 0.06)),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withValues(alpha: 0.06),
-                blurRadius: 6,
-                offset: const Offset(0, 1),
-              ),
-            ],
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text(book?.icon ?? '📒', style: const TextStyle(fontSize: 15)),
-              const SizedBox(width: 5),
-              ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: 120),
-                child: Text(
-                  book?.name ?? '账本',
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: Theme.of(ctx).textTheme.bodyMedium?.copyWith(
-                        fontWeight: FontWeight.w500,
-                        color: scheme.onSurface,
-                      ),
+          child: SizedBox(
+            height: 36,
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(book?.icon ?? '📒', style: const TextStyle(fontSize: 15)),
+                const SizedBox(width: 5),
+                ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 120),
+                  child: Text(
+                    book?.name ?? '账本',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(ctx).textTheme.bodyMedium?.copyWith(
+                          fontWeight: FontWeight.w500,
+                          color: scheme.onSurface,
+                        ),
+                  ),
                 ),
-              ),
-              const SizedBox(width: 2),
-              Icon(CupertinoIcons.chevron_down,
-                  size: 14, color: scheme.onSurfaceVariant),
-            ],
+                const SizedBox(width: 2),
+                Icon(CupertinoIcons.chevron_down,
+                    size: 14, color: scheme.onSurfaceVariant),
+              ],
+            ),
           ),
         ),
       ),
@@ -574,27 +568,20 @@ class _SearchIconButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    return InkWell(
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
       onTap: () => Navigator.of(context).push(
         CupertinoPageRoute<void>(builder: (_) => const SearchView()),
       ),
-      customBorder: const CircleBorder(),
-      child: Container(
+      child: SizedBox(
         width: 38,
         height: 38,
-        decoration: BoxDecoration(
-          shape: BoxShape.circle,
-          color: scheme.surface,
-          border: Border.all(color: Colors.black.withValues(alpha: 0.06)),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withValues(alpha: 0.06),
-              blurRadius: 6,
-              offset: const Offset(0, 1),
-            ),
-          ],
+        child: GlassSurface(
+          circle: true,
+          child: Center(
+            child: Icon(Icons.search, size: 19, color: scheme.onSurfaceVariant),
+          ),
         ),
-        child: Icon(Icons.search, size: 19, color: scheme.onSurfaceVariant),
       ),
     );
   }
@@ -620,35 +607,26 @@ class _MenuGlyphButton extends StatelessWidget {
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
       onTap: onTap,
-      child: Container(
+      child: SizedBox(
         width: 38,
         height: 38,
-        decoration: BoxDecoration(
-          shape: BoxShape.circle,
-          color: scheme.surface,
-          border: Border.all(color: Colors.black.withValues(alpha: 0.06)),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withValues(alpha: 0.06),
-              blurRadius: 6,
-              offset: const Offset(0, 1),
-            ),
-          ],
-        ),
-        // 三条左对齐横线，最下面一条只有上面两条的一半（对齐底部 + 的设计语言）。
-        child: Center(
-          child: SizedBox(
-            width: 16,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                _bar(scheme, 16),
-                const SizedBox(height: 3),
-                _bar(scheme, 16),
-                const SizedBox(height: 3),
-                _bar(scheme, 8),
-              ],
+        // 统一玻璃圆钮 + 三条左对齐横线（最下一条半长）。
+        child: GlassSurface(
+          circle: true,
+          child: Center(
+            child: SizedBox(
+              width: 16,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  _bar(scheme, 16),
+                  const SizedBox(height: 3),
+                  _bar(scheme, 16),
+                  const SizedBox(height: 3),
+                  _bar(scheme, 8),
+                ],
+              ),
             ),
           ),
         ),

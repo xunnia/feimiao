@@ -90,7 +90,7 @@ class AppTheme {
 
     return ThemeData(
       colorScheme: cs,
-      scaffoldBackgroundColor: Colors.white,
+      scaffoldBackgroundColor: const Color(0xFFF7F8FA),
       useMaterial3: true,
       // 全局 iOS 化：返回键变 ‹ 箭头、列表滚动回弹、自适应控件转 Cupertino
       platform: TargetPlatform.iOS,
@@ -100,9 +100,9 @@ class AppTheme {
         space: 0.5,
         color: Color(0x1F000000),
       ),
-      // AppBar 全白、无 tint、无滚动浮起阴影，与正文背景无缝
+      // AppBar 与正文同灰、无 tint、无滚动浮起阴影，无缝衔接
       appBarTheme: const AppBarTheme(
-        backgroundColor: Colors.white,
+        backgroundColor: Color(0xFFF7F8FA),
         surfaceTintColor: Colors.transparent,
         elevation: 0,
         scrolledUnderElevation: 0,

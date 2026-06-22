@@ -119,11 +119,7 @@ class _HomeViewState extends State<HomeView> {
     }).toList();
     final sections = _groupByDay(filtered);
 
-    final double expandedHeight = budgetStatus == null
-        ? 196.0
-        : isCurrent
-            ? 232.0
-            : 220.0;
+    final double expandedHeight = budgetStatus == null ? 196.0 : 232.0;
     const double minExtent = kToolbarHeight;
 
     return CustomScrollView(
@@ -133,7 +129,7 @@ class _HomeViewState extends State<HomeView> {
           pinned: true,
           expandedHeight: expandedHeight,
           collapsedHeight: minExtent,
-          backgroundColor: Colors.white,
+          backgroundColor: const Color(0xFFF7F8FA),
           surfaceTintColor: Colors.transparent,
           elevation: 0,
           flexibleSpace: LayoutBuilder(
@@ -320,11 +316,12 @@ class _ExpandedSummaryCard extends StatelessWidget {
               ),
               const SizedBox(height: AppSpacing.sm),
 
-              if (budgetStatus != null && isCurrentMonth)
-                _CurrentBudgetBody(
+              if (budgetStatus != null)
+                _BudgetBody(
                   summary: summary,
                   budgetStatus: budgetStatus!,
                   budget: budget!,
+                  isCurrentMonth: isCurrentMonth,
                 )
               else ...[
                 _HeroBlock(
@@ -334,16 +331,6 @@ class _ExpandedSummaryCard extends StatelessWidget {
                 ),
                 const SizedBox(height: AppSpacing.md),
                 _IncomeExpenseRow(summary: summary),
-                if (budgetStatus != null) ...[
-                  const SizedBox(height: AppSpacing.md),
-                  _BudgetStrip(
-                    budgetStatus: budgetStatus,
-                    budget: budget,
-                    isOverspend: isOverspend,
-                    monthDate: monthDate,
-                    isCurrentMonth: isCurrentMonth,
-                  ),
-                ],
               ],
             ],
           ),
@@ -467,15 +454,17 @@ class _IncomeExpenseRow extends StatelessWidget {
 }
 
 /// 当月有预算时的大卡片主体：左侧（月预算剩余 + 收支 + 进度条）+ 右侧今日可花环形图。
-class _CurrentBudgetBody extends StatelessWidget {
+class _BudgetBody extends StatelessWidget {
   final MonthlySummary summary;
   final BudgetStatus budgetStatus;
   final Decimal budget;
+  final bool isCurrentMonth;
 
-  const _CurrentBudgetBody({
+  const _BudgetBody({
     required this.summary,
     required this.budgetStatus,
     required this.budget,
+    required this.isCurrentMonth,
   });
 
   @override
@@ -486,159 +475,206 @@ class _CurrentBudgetBody extends StatelessWidget {
     final over = s.isOverBudget;
     final remaining = s.remaining;
 
-    final ratio = budget > Decimal.zero
+    final rawRatio = budget > Decimal.zero
         ? (s.spentThisMonth / budget)
             .toDecimal(scaleOnInfinitePrecision: 4)
             .toDouble()
-            .clamp(0.0, 1.0)
         : 0.0;
-    final pct = (ratio * 100).round();
+    final ratio = rawRatio.clamp(0.0, 1.0);
+    final pct = (rawRatio * 100).round();
 
     final now = DateTime.now();
     final daysInMonth = DateTime(now.year, now.month + 1, 0).day;
-    final timeRatio = (now.day / daysInMonth).clamp(0.0, 1.0);
-    final Color barColor;
-    if (over) {
-      barColor = const Color(0xFFE0552B);
-    } else if (ratio <= timeRatio) {
-      barColor = const Color(0xFF7FB069);
-    } else {
-      final o = (1 - timeRatio) <= 0
-          ? 1.0
-          : ((ratio - timeRatio) / (1 - timeRatio)).clamp(0.0, 1.0);
-      barColor =
-          Color.lerp(const Color(0xFFF2B23C), const Color(0xFFE0552B), o)!;
-    }
     final remainingDays = daysInMonth - now.day + 1;
 
-    // 今日可花（剩余可花）环形图。
-    final today = s.todayAllowance;
-    final todayNeg = today < Decimal.zero;
-    final dayEnv = s.spentToday + (todayNeg ? Decimal.zero : today);
-    final ringVal = todayNeg
-        ? 0.0
-        : (dayEnv > Decimal.zero
-            ? (today / dayEnv)
-                .toDecimal(scaleOnInfinitePrecision: 4)
-                .toDouble()
-                .clamp(0.0, 1.0)
-            : 1.0);
-    final ringColor =
-        todayNeg ? AppColors.warning : const Color(0xFF7FB069);
-    final todayText = todayNeg
-        ? '-${MoneyFormat.string(today.abs())}'
-        : MoneyFormat.string(today);
+    final leftColumn = Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        // ▎月预算剩余
+        Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 2,
+              height: 11,
+              decoration: BoxDecoration(
+                color: scheme.primary,
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+            const SizedBox(width: 6),
+            Text(
+              isCurrentMonth
+                  ? (over ? '月预算已超' : '月预算剩余')
+                  : (over ? '该月超预算' : '该月预算剩余'),
+              style: theme.textTheme.labelSmall?.copyWith(
+                color: AppTextColor.hint(scheme),
+                fontWeight: FontWeight.w300,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 2),
+        AnimatedMoney(
+          value: remaining.abs(),
+          prefix: over ? '-' : '',
+          style: theme.textTheme.headlineSmall?.copyWith(
+            fontWeight: FontWeight.w600,
+            fontFamily: 'Nunito',
+            color: over ? AppColors.warning : scheme.onSurface,
+            // ignore: deprecated_member_use
+            fontFeatures: const [FontFeature.tabularFigures()],
+          ),
+        ),
+        const SizedBox(height: AppSpacing.md),
+        _IncomeExpenseRow(summary: summary),
+        const SizedBox(height: AppSpacing.md),
+        _BudgetBar(ratio: ratio),
+        const SizedBox(height: 6),
+        Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+              decoration: BoxDecoration(
+                color: scheme.primary.withValues(alpha: 0.1),
+                borderRadius: BorderRadius.circular(6),
+              ),
+              child: Text(
+                '$pct%',
+                style: theme.textTheme.labelSmall?.copyWith(
+                  color: scheme.primary,
+                  fontWeight: FontWeight.w600,
+                  fontFamily: 'Nunito',
+                ),
+              ),
+            ),
+            const Spacer(),
+            Text.rich(
+              TextSpan(
+                children: [
+                  TextSpan(
+                    text: MoneyFormat.string(budget),
+                    style: theme.textTheme.labelSmall?.copyWith(
+                      color: scheme.onSurfaceVariant,
+                      fontWeight: FontWeight.w500,
+                      fontFamily: 'Nunito',
+                      // ignore: deprecated_member_use
+                      fontFeatures: const [FontFeature.tabularFigures()],
+                    ),
+                  ),
+                  if (isCurrentMonth)
+                    TextSpan(
+                      text: ' · 剩 $remainingDays 天',
+                      style: theme.textTheme.labelSmall?.copyWith(
+                        color: scheme.onSurfaceVariant.withValues(alpha: 0.5),
+                        fontWeight: FontWeight.w300,
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ],
+    );
+
+    // 右侧环形图：当月 = 今日可花(金额)；历史月 = 本月预算用量(百分比)。
+    final String ringLabel;
+    final String ringText;
+    final double ringVal;
+    final Color ringColor;
+    if (isCurrentMonth) {
+      final today = s.todayAllowance;
+      final todayNeg = today < Decimal.zero;
+      final dayEnv = s.spentToday + (todayNeg ? Decimal.zero : today);
+      ringVal = todayNeg
+          ? 0.0
+          : (dayEnv > Decimal.zero
+              ? (today / dayEnv)
+                  .toDecimal(scaleOnInfinitePrecision: 4)
+                  .toDouble()
+                  .clamp(0.0, 1.0)
+              : 1.0);
+      ringColor = todayNeg ? AppColors.warning : const Color(0xFF7FB069);
+      ringLabel = '今日可花';
+      ringText = todayNeg
+          ? '-${MoneyFormat.string(today.abs())}'
+          : MoneyFormat.string(today);
+    } else {
+      ringVal = ratio;
+      ringColor = over ? AppColors.warning : const Color(0xFF7FB069);
+      ringLabel = '已用';
+      ringText = '$pct%';
+    }
 
     return Row(
       crossAxisAlignment: CrossAxisAlignment.center,
       children: [
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              // ▎月预算剩余
-              Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Container(
-                    width: 3,
-                    height: 13,
-                    decoration: BoxDecoration(
-                      color: scheme.primary,
-                      borderRadius: BorderRadius.circular(2),
-                    ),
-                  ),
-                  const SizedBox(width: 6),
-                  Text(
-                    over ? '月预算已超' : '月预算剩余',
-                    style: theme.textTheme.labelSmall?.copyWith(
-                      color: AppTextColor.hint(scheme),
-                      fontWeight: FontWeight.w300,
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 2),
-              AnimatedMoney(
-                value: remaining.abs(),
-                prefix: over ? '-' : '',
-                style: theme.textTheme.headlineSmall?.copyWith(
-                  fontWeight: FontWeight.w600,
-                  fontFamily: 'Nunito',
-                  color: over ? AppColors.warning : scheme.onSurface,
-                  // ignore: deprecated_member_use
-                  fontFeatures: const [FontFeature.tabularFigures()],
-                ),
-              ),
-              const SizedBox(height: AppSpacing.md),
-              _IncomeExpenseRow(summary: summary),
-              const SizedBox(height: AppSpacing.md),
-              ClipRRect(
-                borderRadius: BorderRadius.circular(AppRadius.pill),
-                child: LinearProgressIndicator(
-                  value: ratio,
-                  minHeight: 7,
-                  backgroundColor: scheme.surfaceContainerHighest,
-                  valueColor: AlwaysStoppedAnimation<Color>(barColor),
-                ),
-              ),
-              const SizedBox(height: 6),
-              Row(
-                children: [
-                  Container(
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
-                    decoration: BoxDecoration(
-                      color: scheme.primary.withValues(alpha: 0.1),
-                      borderRadius: BorderRadius.circular(6),
-                    ),
-                    child: Text(
-                      '$pct%',
-                      style: theme.textTheme.labelSmall?.copyWith(
-                        color: scheme.primary,
-                        fontWeight: FontWeight.w600,
-                        fontFamily: 'Nunito',
-                      ),
-                    ),
-                  ),
-                  const Spacer(),
-                  Text.rich(
-                    TextSpan(
-                      children: [
-                        TextSpan(
-                          text: MoneyFormat.string(budget),
-                          style: theme.textTheme.labelSmall?.copyWith(
-                            color: scheme.onSurfaceVariant,
-                            fontWeight: FontWeight.w500,
-                            fontFamily: 'Nunito',
-                            // ignore: deprecated_member_use
-                            fontFeatures: const [FontFeature.tabularFigures()],
-                          ),
-                        ),
-                        TextSpan(
-                          text: ' · 剩 $remainingDays 天',
-                          style: theme.textTheme.labelSmall?.copyWith(
-                            color:
-                                scheme.onSurfaceVariant.withValues(alpha: 0.5),
-                            fontWeight: FontWeight.w300,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-            ],
-          ),
-        ),
+        Expanded(child: leftColumn),
         const SizedBox(width: 14),
         Transform.translate(
           offset: const Offset(-8, 8),
           child: _TodayRing(
-              value: ringVal, amountText: todayText, color: ringColor),
+            value: ringVal,
+            label: ringLabel,
+            amountText: ringText,
+            color: ringColor,
+          ),
         ),
       ],
+    );
+  }
+}
+
+/// 预算进度条：填充部分是「绿 → 黄橙 → 红」渐变的左侧切片，花得越多越往红推进。
+class _BudgetBar extends StatelessWidget {
+  final double ratio;
+  const _BudgetBar({required this.ratio});
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final r = ratio.clamp(0.0, 1.0);
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(AppRadius.pill),
+      child: SizedBox(
+        height: 7,
+        child: LayoutBuilder(
+          builder: (ctx, c) {
+            final w = c.maxWidth;
+            return Stack(
+              children: [
+                Container(
+                  width: w,
+                  height: 7,
+                  color: scheme.surfaceContainerHighest,
+                ),
+                ClipRect(
+                  child: Align(
+                    alignment: Alignment.centerLeft,
+                    widthFactor: r,
+                    child: Container(
+                      width: w,
+                      height: 7,
+                      decoration: const BoxDecoration(
+                        gradient: LinearGradient(
+                          colors: [
+                            Color(0xFF7FB069), // 绿
+                            Color(0xFFF2B23C), // 黄橙
+                            Color(0xFFE0552B), // 红
+                          ],
+                          stops: [0.0, 0.6, 1.0],
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            );
+          },
+        ),
+      ),
     );
   }
 }
@@ -646,11 +682,13 @@ class _CurrentBudgetBody extends StatelessWidget {
 /// 今日可花环形图（右侧）。
 class _TodayRing extends StatelessWidget {
   final double value;
+  final String label;
   final String amountText;
   final Color color;
 
   const _TodayRing({
     required this.value,
+    required this.label,
     required this.amountText,
     required this.color,
   });
@@ -680,7 +718,7 @@ class _TodayRing extends StatelessWidget {
             mainAxisSize: MainAxisSize.min,
             children: [
               Text(
-                '今日可花',
+                label,
                 style: theme.textTheme.labelSmall?.copyWith(
                   color: AppTextColor.hint(scheme),
                   fontSize: 10,
@@ -1218,7 +1256,7 @@ class _DayCard extends StatelessWidget {
           for (int i = 0; i < section.items.length; i++) ...[
             if (i > 0)
               Container(
-                margin: const EdgeInsets.only(left: 66),
+                margin: const EdgeInsets.only(left: 66, right: 14),
                 height: 0.5,
                 color: scheme.outlineVariant.withValues(alpha: 0.5),
               ),

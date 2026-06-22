@@ -1,4 +1,6 @@
 import 'dart:async';
+import 'dart:math';
+import 'dart:ui' show ImageFilter;
 
 import 'package:decimal/decimal.dart';
 import 'package:flutter/material.dart';
@@ -11,9 +13,9 @@ import '../../core/models/category_seed.dart';
 import '../../core/models/transaction_kind.dart';
 import '../../core/money_format.dart';
 import '../../data/app_repository.dart';
+import '../../widgets/glass.dart';
 import '../../widgets/mascot.dart';
 import '../../widgets/pressable_scale.dart';
-import '../../widgets/sheet_grabber.dart';
 import 'record_extras_sheet.dart';
 
 /// 打开「来记一笔吧」AI 聊天面板（就地弹出，替代旧的跳全屏方案）。
@@ -22,18 +24,36 @@ Future<void> showAiChatPanel(
   required VoidCallback onSwitchToManual,
   String? initialText,
 }) {
-  return showModalBottomSheet<void>(
+  return showGeneralDialog<void>(
     context: context,
-    isScrollControlled: true,
-    useSafeArea: true,
-    backgroundColor: Theme.of(context).colorScheme.surface,
-    shape: const RoundedRectangleBorder(
-      borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-    ),
-    builder: (_) => AiChatPanel(
+    barrierDismissible: true,
+    barrierLabel: '记账',
+    barrierColor: Colors.black.withValues(alpha: 0.12),
+    transitionDuration: const Duration(milliseconds: 240),
+    pageBuilder: (_, __, ___) => AiChatPanel(
       onSwitchToManual: onSwitchToManual,
       initialText: initialText,
     ),
+    transitionBuilder: (ctx, anim, _, child) {
+      final curved = CurvedAnimation(parent: anim, curve: Curves.easeOutCubic);
+      // 背景高斯模糊（随动画渐入）+ 浮层上滑淡入。
+      return BackdropFilter(
+        filter: ImageFilter.blur(
+          sigmaX: 10 * anim.value,
+          sigmaY: 10 * anim.value,
+        ),
+        child: FadeTransition(
+          opacity: anim,
+          child: SlideTransition(
+            position: Tween<Offset>(
+              begin: const Offset(0, 0.06),
+              end: Offset.zero,
+            ).animate(curved),
+            child: child,
+          ),
+        ),
+      );
+    },
   );
 }
 
@@ -62,12 +82,52 @@ class _AiChatPanelState extends State<AiChatPanel> {
   final List<_Msg> _msgs = [];
   bool _busy = false;
 
-  static const List<String> _suggestions = [
+  // 查账/建设性建议池（记账建议从历史账单分析得来，见 _pickSuggestions）。
+  static const List<String> _queryPool = [
     '这个月花了多少',
     '最大一笔开销',
     '这周吃饭花了多少',
-    '记一笔 早餐 15',
+    '本月预算还剩多少',
+    '今天花了多少',
+    '这个月哪类花最多',
+    '上个月花了多少',
+    '本月比上月多吗',
   ];
+  List<String> _picked = const [];
+  bool _pickInit = false;
+
+  /// 建议来源：从历史支出挑「常记分类(≥3 次)」生成记账建议（带中位金额），
+  /// 规律不足就用查账类「建设性建议」补满 4 条。不推没记过的东西。
+  List<String> _pickSuggestions(AppRepository repo) {
+    final r = Random();
+    final counts = <String, int>{};
+    final amounts = <String, List<Decimal>>{};
+    for (final t in repo.transactions) {
+      if (t.txKind != TransactionKind.expense) continue;
+      final name = t.categoryNameZh;
+      if (name.isEmpty || name == '未分类') continue;
+      counts[name] = (counts[name] ?? 0) + 1;
+      (amounts[name] ??= <Decimal>[]).add(t.amount);
+    }
+    final frequent = counts.entries.where((e) => e.value >= 3).toList()
+      ..sort((a, b) => b.value.compareTo(a.value));
+
+    final recs = <String>[];
+    for (final e in frequent.take(4)) {
+      final list = amounts[e.key]!..sort();
+      var amt = list[list.length ~/ 2].toString();
+      if (amt.endsWith('.00')) amt = amt.substring(0, amt.length - 3);
+      recs.add('记一笔 ${e.key} $amt');
+    }
+    recs.shuffle(r);
+
+    final qs = List<String>.from(_queryPool)..shuffle(r);
+    final picked = <String>[...recs.take(2)];
+    picked.addAll(qs.take(4 - picked.length));
+    // 短的排前面 → 第一行短建议、第二行长建议
+    return picked.take(4).toList()
+      ..sort((a, b) => a.length.compareTo(b.length));
+  }
 
   @override
   void initState() {
@@ -76,6 +136,15 @@ class _AiChatPanelState extends State<AiChatPanel> {
     if (init != null && init.isNotEmpty) {
       _ctrl.text = init;
       _ctrl.selection = TextSelection.collapsed(offset: _ctrl.text.length);
+    }
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (!_pickInit) {
+      _pickInit = true;
+      _picked = _pickSuggestions(context.read<AppRepository>());
     }
   }
 
@@ -316,75 +385,54 @@ class _AiChatPanelState extends State<AiChatPanel> {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final bottomInset = MediaQuery.viewInsetsOf(context).bottom;
-    final screenH = MediaQuery.sizeOf(context).height;
     final hasText = _ctrl.text.trim().isNotEmpty;
 
-    return Padding(
-      padding: EdgeInsets.only(bottom: bottomInset),
-      child: SafeArea(
-        top: false,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            const SheetGrabber(),
-            // ── 头部：猫 + 来记一笔吧 + 关闭 ──
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 12, 12, 4),
-              child: Row(
-                children: [
-                  const Mascot(mood: MascotMood.idle, size: 32),
-                  const SizedBox(width: 8),
-                  Text(
-                    '来记一笔吧',
-                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                          fontWeight: FontWeight.w400,
+    return Material(
+      type: MaterialType.transparency,
+      child: Padding(
+        padding: EdgeInsets.only(bottom: bottomInset),
+        child: SafeArea(
+          top: false,
+          child: Column(
+            children: [
+            // ── 上方展开区：建议 / 对话，点空白处收起 ──
+            // 上方：建议(2×2) / 对话，浮在模糊背景上，点空白处收起
+            Expanded(
+              child: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: () => Navigator.pop(context),
+                child: _msgs.isEmpty
+                    ? SingleChildScrollView(
+                        reverse: true,
+                        child: Padding(
+                          padding: const EdgeInsets.fromLTRB(6, 0, 16, 10),
+                          child: _SuggestionGrid(
+                            items: _picked,
+                            onTap: (s) => _send(s),
+                          ),
                         ),
-                  ),
-                  const Spacer(),
-                  _CircleBtn(
-                    icon: Icons.close,
-                    onTap: () => Navigator.pop(context),
-                  ),
-                ],
+                      )
+                    : ListView.builder(
+                        controller: _scroll,
+                        padding: const EdgeInsets.fromLTRB(16, 12, 16, 10),
+                        itemCount: _msgs.length,
+                        itemBuilder: (_, i) => _buildMsg(_msgs[i]),
+                      ),
               ),
             ),
 
-            // ── 聊天流 / 空态气泡 ──
-            if (_msgs.isEmpty)
-              _EmptyHint(
-                suggestions: _suggestions,
-                onTapSuggestion: (s) => _send(s),
-              )
-            else
-              ConstrainedBox(
-                constraints: BoxConstraints(maxHeight: screenH * 0.46),
-                child: ListView.builder(
-                  controller: _scroll,
-                  shrinkWrap: true,
-                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
-                  itemCount: _msgs.length,
-                  itemBuilder: (_, i) => _buildMsg(_msgs[i]),
-                ),
-              ),
-
-            // ── 输入卡（对标首页：白卡片，输入在上，工具行在下）──
+            // 大白卡：发财猫 + 喵喵助手 + 输入框 + 工具行
             Padding(
-              padding: const EdgeInsets.fromLTRB(12, 6, 12, 12),
+              padding: const EdgeInsets.fromLTRB(8, 0, 8, 8),
               child: Container(
-                padding: const EdgeInsets.fromLTRB(18, 14, 12, 12),
                 decoration: BoxDecoration(
                   color: scheme.surface,
-                  borderRadius: BorderRadius.circular(28),
-                  border: Border.all(
-                    color: scheme.outlineVariant.withValues(alpha: 0.4),
-                    width: 1,
-                  ),
+                  borderRadius: BorderRadius.circular(24),
                   boxShadow: const [
                     BoxShadow(
-                      color: Color(0x14000000),
-                      blurRadius: 14,
-                      offset: Offset(0, 2),
+                      color: Color(0x1F000000),
+                      blurRadius: 24,
+                      offset: Offset(0, 8),
                     ),
                   ],
                 ),
@@ -392,53 +440,100 @@ class _AiChatPanelState extends State<AiChatPanel> {
                   mainAxisSize: MainAxisSize.min,
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    TextField(
-                      controller: _ctrl,
-                      focusNode: _focus,
-                      autofocus: true,
-                      minLines: 1,
-                      maxLines: 4,
-                      textInputAction: TextInputAction.send,
-                      onSubmitted: (_) => _send(),
-                      onChanged: (_) => setState(() {}),
-                      style: const TextStyle(fontSize: 17),
-                      decoration: const InputDecoration(
-                        hintText: '',
-                        // 主题给输入框定义了蓝色聚焦边框，这里逐一关掉，
-                        // 让它跟首页白卡片一样无边框
-                        border: InputBorder.none,
-                        enabledBorder: InputBorder.none,
-                        focusedBorder: InputBorder.none,
-                        disabledBorder: InputBorder.none,
-                        errorBorder: InputBorder.none,
-                        focusedErrorBorder: InputBorder.none,
-                        isDense: true,
-                        contentPadding: EdgeInsets.zero,
+                    // 头部：发财猫 + 喵喵助手 + 关闭
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 12, 12, 4),
+                      child: Row(
+                        children: [
+                          const Mascot(mood: MascotMood.celebrate, size: 35),
+                          const SizedBox(width: 8),
+                          Text(
+                            '喵喵助手',
+                            style: Theme.of(context)
+                                .textTheme
+                                .titleSmall
+                                ?.copyWith(fontWeight: FontWeight.w500),
+                          ),
+                          const Spacer(),
+                          _CircleBtn(
+                            icon: Icons.close,
+                            onTap: () => Navigator.pop(context),
+                          ),
+                        ],
                       ),
                     ),
-                    const SizedBox(height: 12),
-                    Row(
-                      children: [
-                        _CircleBtn(
-                          icon: Icons.add,
-                          onTap: () => showRecordExtrasSheet(context),
+                    // 卡中卡：原输入框（浅底圆角框）包在白卡里
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+                      child: Container(
+                        padding: const EdgeInsets.fromLTRB(16, 10, 10, 10),
+                        decoration: BoxDecoration(
+                          color: scheme.surfaceContainerLow,
+                          borderRadius: BorderRadius.circular(20),
+                          border: Border.all(
+                            color: scheme.outlineVariant.withValues(alpha: 0.5),
+                          ),
                         ),
-                        const SizedBox(width: 8),
-                        _Pill(
-                          icon: Icons.swap_horiz,
-                          label: 'AI 记账',
-                          onTap: () {
-                            Navigator.pop(context);
-                            widget.onSwitchToManual();
-                          },
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            TextField(
+                              controller: _ctrl,
+                              focusNode: _focus,
+                              autofocus: true,
+                              minLines: 1,
+                              maxLines: 4,
+                              textInputAction: TextInputAction.send,
+                              onSubmitted: (_) => _send(),
+                              onChanged: (_) => setState(() {}),
+                              style: const TextStyle(fontSize: 17),
+                              decoration: InputDecoration(
+                                hintText: 'Chat with cat',
+                                hintStyle: TextStyle(
+                                  fontSize: 14,
+                                  color: scheme.onSurfaceVariant
+                                      .withValues(alpha: 0.5),
+                                ),
+                                filled: false,
+                                border: InputBorder.none,
+                                enabledBorder: InputBorder.none,
+                                focusedBorder: InputBorder.none,
+                                disabledBorder: InputBorder.none,
+                                errorBorder: InputBorder.none,
+                                focusedErrorBorder: InputBorder.none,
+                                isDense: true,
+                                contentPadding: EdgeInsets.zero,
+                              ),
+                            ),
+                            const SizedBox(height: 10),
+                            Row(
+                              children: [
+                                _CircleBtn(
+                                  icon: Icons.add,
+                                  onTap: () => showRecordExtrasSheet(context),
+                                ),
+                                const SizedBox(width: 8),
+                                _Pill(
+                                  isAi: true,
+                                  onTap: () {
+                                    Navigator.pop(context);
+                                    widget.onSwitchToManual();
+                                  },
+                                ),
+                                const Spacer(),
+                                _CircleBtn(
+                                  icon: Icons.arrow_upward,
+                                  filled: true,
+                                  onTap: (hasText && !_busy)
+                                      ? () => _send()
+                                      : null,
+                                ),
+                              ],
+                            ),
+                          ],
                         ),
-                        const Spacer(),
-                        _CircleBtn(
-                          icon: Icons.arrow_upward,
-                          filled: true,
-                          onTap: (hasText && !_busy) ? () => _send() : null,
-                        ),
-                      ],
+                      ),
                     ),
                   ],
                 ),
@@ -447,7 +542,7 @@ class _AiChatPanelState extends State<AiChatPanel> {
           ],
         ),
       ),
-    );
+    ));
   }
 
   Widget _buildMsg(_Msg m) {
@@ -829,56 +924,43 @@ class _EntryRow extends StatelessWidget {
 // 空态：猜你想问气泡
 // ─────────────────────────────────────────────────────────────────────────────
 
-class _EmptyHint extends StatelessWidget {
-  final List<String> suggestions;
-  final ValueChanged<String> onTapSuggestion;
+/// 建议 2×2 网格：浮在模糊背景上，半透明白底胶囊，便于阅读。
+class _SuggestionGrid extends StatelessWidget {
+  final List<String> items;
+  final ValueChanged<String> onTap;
 
-  const _EmptyHint({required this.suggestions, required this.onTapSuggestion});
+  const _SuggestionGrid({required this.items, required this.onTap});
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text('试试这样说：',
-              style: TextStyle(
+    if (items.isEmpty) return const SizedBox.shrink();
+
+    return Wrap(
+      spacing: 8,
+      runSpacing: 8,
+      children: [
+        for (final s in items)
+          PressableScale(
+            onPressed: () => onTap(s),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 7),
+              decoration: BoxDecoration(
+                color: scheme.surface.withValues(alpha: 0.78),
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(color: Colors.black.withValues(alpha: 0.05)),
+              ),
+              child: Text(
+                s,
+                style: TextStyle(
                   fontSize: 13,
-                  color: scheme.onSurfaceVariant.withValues(alpha: 0.6))),
-          const SizedBox(height: 8),
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: [
-              for (final s in suggestions)
-                PressableScale(
-                  onPressed: () => onTapSuggestion(s),
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 12, vertical: 8),
-                    decoration: BoxDecoration(
-                      // 无灰底，仅极细边框，弱化成提示而非按钮
-                      borderRadius: BorderRadius.circular(16),
-                      border: Border.all(
-                        color: scheme.outlineVariant.withValues(alpha: 0.6),
-                        width: 0.5,
-                      ),
-                    ),
-                    child: Text(
-                      s,
-                      style: TextStyle(
-                        fontSize: 13,
-                        color: scheme.onSurfaceVariant.withValues(alpha: 0.7),
-                      ),
-                    ),
-                  ),
+                  fontWeight: FontWeight.w300,
+                  color: scheme.onSurfaceVariant.withValues(alpha: 0.62),
                 ),
-            ],
+              ),
+            ),
           ),
-        ],
-      ),
+      ],
     );
   }
 }
@@ -888,39 +970,32 @@ class _EmptyHint extends StatelessWidget {
 // ─────────────────────────────────────────────────────────────────────────────
 
 class _Pill extends StatelessWidget {
-  final IconData icon;
-  final String label;
+  final bool isAi;
   final VoidCallback onTap;
 
-  const _Pill({required this.icon, required this.label, required this.onTap});
+  const _Pill({required this.isAi, required this.onTap});
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     return PressableScale(
       onPressed: onTap,
-      child: Container(
-        height: 34,
+      child: GlassSurface(
+        radius: 17,
         padding: const EdgeInsets.symmetric(horizontal: 12),
-        decoration: BoxDecoration(
-          color: scheme.surface,
-          borderRadius: BorderRadius.circular(17),
-          border: Border.all(color: Colors.black.withValues(alpha: 0.06)),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withValues(alpha: 0.06),
-              blurRadius: 6,
-              offset: const Offset(0, 1),
-            ),
-          ],
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(icon, size: 16, color: scheme.onSurfaceVariant),
-            const SizedBox(width: 6),
-            Text(label, style: const TextStyle(fontSize: 13)),
-          ],
+        child: SizedBox(
+          height: 34,
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(isAi ? Icons.auto_awesome : Icons.edit_outlined,
+                  size: 16, color: scheme.onSurfaceVariant),
+              const SizedBox(width: 6),
+              Text(isAi ? 'AI 记账' : '手动记账',
+                  style: TextStyle(
+                      fontSize: 13, color: scheme.onSurfaceVariant)),
+            ],
+          ),
         ),
       ),
     );
@@ -957,22 +1032,15 @@ class _CircleBtn extends StatelessWidget {
     }
     return PressableScale(
       onPressed: onTap,
-      child: Container(
+      child: SizedBox(
         width: 38,
         height: 38,
-        decoration: BoxDecoration(
-          color: scheme.surface,
-          shape: BoxShape.circle,
-          border: Border.all(color: Colors.black.withValues(alpha: 0.06)),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withValues(alpha: 0.06),
-              blurRadius: 6,
-              offset: const Offset(0, 1),
-            ),
-          ],
+        child: GlassSurface(
+          circle: true,
+          child: Center(
+            child: Icon(icon, size: 19, color: scheme.onSurfaceVariant),
+          ),
         ),
-        child: Icon(icon, size: 19, color: scheme.onSurfaceVariant),
       ),
     );
   }

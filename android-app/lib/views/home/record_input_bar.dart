@@ -1,7 +1,10 @@
 import 'dart:ui' show ImageFilter;
 
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 
+import '../../data/app_repository.dart';
+import '../../widgets/glass.dart';
 import '../../widgets/pressable_scale.dart';
 import 'ai_chat_panel.dart';
 import 'manual_add_sheet.dart';
@@ -27,12 +30,27 @@ class RecordInputBar extends StatefulWidget {
 
 class _RecordInputBarState extends State<RecordInputBar> {
   bool _isAiMode = false;
+  bool _modeInit = false;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // 启动时沿用上次记账模式（已持久化）。
+    if (!_modeInit) {
+      _modeInit = true;
+      _isAiMode = context.read<AppRepository>().recordAiMode;
+    }
+  }
+
+  void _setMode(bool ai) {
+    if (_isAiMode != ai) setState(() => _isAiMode = ai);
+    context.read<AppRepository>().setRecordAiMode(ai);
+  }
 
   // ── 打开手动大卡片 ─────────────────────────────────────────────────────────
 
   void _openManual() {
-    // 记住本次选择：下次打开默认手动
-    setState(() => _isAiMode = false);
+    _setMode(false);
     showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
@@ -52,8 +70,7 @@ class _RecordInputBarState extends State<RecordInputBar> {
   // ── 打开 AI 聚焦输入 ──────────────────────────────────────────────────────
 
   void _openAi() {
-    // 记住本次选择：下次打开默认 AI
-    setState(() => _isAiMode = true);
+    _setMode(true);
     showAiChatPanel(
       context,
       onSwitchToManual: _openManual,
@@ -96,7 +113,7 @@ class _RecordInputBarState extends State<RecordInputBar> {
             child: BackdropFilter(
               filter: ImageFilter.blur(sigmaX: 6, sigmaY: 6),
               child: CustomPaint(
-                foregroundPainter: const _GlassEdgePainter(),
+                foregroundPainter: const GlassEdgePainter(radius: 28),
                 child: Container(
                   padding: const EdgeInsets.fromLTRB(18, 16, 12, 12),
                   decoration: BoxDecoration(
@@ -134,12 +151,11 @@ class _RecordInputBarState extends State<RecordInputBar> {
                   const SizedBox(width: 8),
                   _ModePill(
                     isAi: _isAiMode,
-                    onTap: () => setState(() => _isAiMode = !_isAiMode),
+                    onTap: () => _setMode(!_isAiMode),
                   ),
                   const Spacer(),
                   _ToolCircleButton(
                     icon: Icons.arrow_upward,
-                    filled: true,
                     onTap: _onSend,
                   ),
                 ],
@@ -166,53 +182,27 @@ class _RecordInputBarState extends State<RecordInputBar> {
 class _ToolCircleButton extends StatelessWidget {
   final IconData icon;
   final VoidCallback onTap;
-  final bool filled;
 
   const _ToolCircleButton({
     required this.icon,
     required this.onTap,
-    this.filled = false,
   });
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-
-    if (filled) {
-      // 发送按钮：铜金高亮（scheme.secondary），符合可爱风
-      return PressableScale(
-        onPressed: onTap,
-        child: Container(
-          width: 40,
-          height: 40,
-          decoration: BoxDecoration(
-            color: scheme.secondary,
-            shape: BoxShape.circle,
-          ),
-          child: Icon(icon, size: 20, color: scheme.onSecondary),
-        ),
-      );
-    }
-
-    // 次要按钮：透明底 + 淡边框 + 淡阴影
+    // 统一玻璃圆钮：透明模糊 + 不规则细黑边，黑色图标。
     return PressableScale(
       onPressed: onTap,
-      child: Container(
+      child: SizedBox(
         width: 40,
         height: 40,
-        decoration: BoxDecoration(
-          color: scheme.surface,
-          shape: BoxShape.circle,
-          border: Border.all(color: Colors.black.withValues(alpha: 0.06)),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withValues(alpha: 0.06),
-              blurRadius: 6,
-              offset: const Offset(0, 1),
-            ),
-          ],
+        child: GlassSurface(
+          circle: true,
+          child: Center(
+            child: Icon(icon, size: 20, color: scheme.onSurfaceVariant),
+          ),
         ),
-        child: Icon(icon, size: 20, color: scheme.onSurfaceVariant),
       ),
     );
   }
@@ -233,70 +223,30 @@ class _ModePill extends StatelessWidget {
     final scheme = Theme.of(context).colorScheme;
     return PressableScale(
       onPressed: onTap,
-      child: Container(
-        height: 36,
+      child: GlassSurface(
+        radius: 18,
         padding: const EdgeInsets.symmetric(horizontal: 12),
-        decoration: BoxDecoration(
-          color: scheme.surface,
-          borderRadius: BorderRadius.circular(18),
-          border: Border.all(color: Colors.black.withValues(alpha: 0.06)),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withValues(alpha: 0.06),
-              blurRadius: 6,
-              offset: const Offset(0, 1),
-            ),
-          ],
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(Icons.swap_horiz, size: 16, color: scheme.onSurfaceVariant),
-            const SizedBox(width: 6),
-            Text(
-              isAi ? 'AI 记账' : '手动记账',
-              style: TextStyle(
-                fontSize: 14,
-                fontWeight: FontWeight.normal,
-                color: scheme.onSurface,
+        child: SizedBox(
+          height: 36,
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(isAi ? Icons.auto_awesome : Icons.edit_outlined,
+                  size: 16, color: scheme.onSurfaceVariant),
+              const SizedBox(width: 6),
+              Text(
+                isAi ? 'AI 记账' : '手动记账',
+                style: TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.normal,
+                  color: scheme.onSurfaceVariant,
+                ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );
   }
 }
 
-/// Claude 风玻璃边：沿圆角描一圈深浅不均的细线——
-/// 顶部一抹白色高光，往下渐变成一条很细的黑线（深浅/明暗不等粗）。
-class _GlassEdgePainter extends CustomPainter {
-  const _GlassEdgePainter();
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final rect = Offset.zero & size;
-    final rrect = RRect.fromRectAndRadius(
-      rect.deflate(0.5),
-      const Radius.circular(28),
-    );
-    final shader = const LinearGradient(
-      begin: Alignment.topCenter,
-      end: Alignment.bottomCenter,
-      colors: [
-        Color(0x99FFFFFF), // 顶部高光（白 ~60%）
-        Color(0x0F000000), // 中段很淡（黑 ~6%）
-        Color(0x29000000), // 底部偏深（黑 ~16%）
-      ],
-      stops: [0.0, 0.45, 1.0],
-    ).createShader(rect);
-    final paint = Paint()
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 1.0
-      ..shader = shader;
-    canvas.drawRRect(rrect, paint);
-  }
-
-  @override
-  bool shouldRepaint(covariant _GlassEdgePainter oldDelegate) => false;
-}

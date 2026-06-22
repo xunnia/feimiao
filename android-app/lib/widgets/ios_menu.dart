@@ -1,6 +1,6 @@
-import 'dart:ui';
-
 import 'package:flutter/material.dart';
+
+import 'glass.dart';
 
 /// iOS 风浮动菜单的一项。
 class IosMenuItem {
@@ -83,40 +83,34 @@ class _IosMenuCard extends StatelessWidget {
   Widget build(BuildContext context) {
     return Material(
       type: MaterialType.transparency,
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(15),
-        child: BackdropFilter(
-          filter: ImageFilter.blur(sigmaX: 24, sigmaY: 24),
-          child: Container(
-            width: width,
-            decoration: BoxDecoration(
-              color: Colors.white.withValues(alpha: 0.80),
-              borderRadius: BorderRadius.circular(15),
-              border: Border.all(
-                color: Colors.white.withValues(alpha: 0.5),
-                width: 0.5,
-              ),
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withValues(alpha: 0.16),
-                  blurRadius: 28,
-                  offset: const Offset(0, 10),
-                ),
-              ],
+      child: Container(
+        width: width,
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(15),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.16),
+              blurRadius: 28,
+              offset: const Offset(0, 10),
             ),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                for (int i = 0; i < items.length; i++) ...[
-                  if (i > 0)
-                    Container(
-                      height: 0.5,
-                      color: Colors.black.withValues(alpha: 0.08),
-                    ),
-                  _IosMenuRow(item: items[i]),
-                ],
+          ],
+        ),
+        child: GlassSurface(
+          radius: 15,
+          blur: 8,
+          opacity: 0.55,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              for (int i = 0; i < items.length; i++) ...[
+                if (i > 0)
+                  Container(
+                    height: 0.5,
+                    color: Colors.black.withValues(alpha: 0.08),
+                  ),
+                _IosMenuRow(item: items[i]),
               ],
-            ),
+            ],
           ),
         ),
       ),

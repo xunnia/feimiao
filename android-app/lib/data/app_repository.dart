@@ -278,6 +278,9 @@ class AppRepository extends ChangeNotifier {
   final Map<String, Decimal> _categoryBudgets = {}; // 分类 key -> 月预算
   String? _deepSeekApiKey;
 
+  /// 记账模式偏好：true=AI 记账，false=手动记账（持久化）。
+  bool _recordAiMode = false;
+
   List<BookEntity> get books => List.unmodifiable(_books);
   List<AccountEntity> get accounts => List.unmodifiable(_accounts);
   List<CategoryEntity> get categories => List.unmodifiable(_categories);
@@ -310,6 +313,8 @@ class AppRepository extends ChangeNotifier {
   Decimal? categoryBudgetFor(String key) => _categoryBudgets[key];
 
   String? get deepSeekApiKey => _deepSeekApiKey;
+
+  bool get recordAiMode => _recordAiMode;
 
   // ---------------------------------------------------------------------------
   // 初始化
@@ -549,6 +554,7 @@ class AppRepository extends ChangeNotifier {
       _loadBudget(),
       _loadCategoryBudgets(),
       _loadApiKey(),
+      _loadRecordMode(),
       _loadSavingsGoals(),
       _loadTags(),
     ]);
@@ -655,6 +661,28 @@ class AppRepository extends ChangeNotifier {
     );
     _deepSeekApiKey =
         rows.isEmpty ? null : rows.first['value'] as String?;
+  }
+
+  Future<void> _loadRecordMode() async {
+    final rows = await _db!.query(
+      'app_settings',
+      where: 'key = ?',
+      whereArgs: ['record_ai_mode'],
+      limit: 1,
+    );
+    _recordAiMode = rows.isNotEmpty && (rows.first['value'] as String?) == '1';
+  }
+
+  /// 记住记账模式（AI / 手动），下次启动沿用。
+  Future<void> setRecordAiMode(bool ai) async {
+    if (_recordAiMode == ai) return;
+    _recordAiMode = ai;
+    await _db!.insert(
+      'app_settings',
+      {'key': 'record_ai_mode', 'value': ai ? '1' : '0'},
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+    notifyListeners();
   }
 
   Future<void> _loadTransactions() async {
