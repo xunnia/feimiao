@@ -80,7 +80,7 @@ class _SearchViewState extends State<SearchView> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Mascot(mood: mood, size: 72),
+            Mascot(mood: mood, size: 72, animate: true),
             const SizedBox(height: 12),
             Text(text, style: TextStyle(color: scheme.onSurfaceVariant)),
           ],

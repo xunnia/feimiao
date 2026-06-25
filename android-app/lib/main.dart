@@ -157,8 +157,19 @@ class _AppDrawerState extends State<_AppDrawer> {
   // ── 喵助手：关抽屉后打开半屏 AI 面板（与首页记账栏同一套）──────────────────
   void _openAssistant() {
     Navigator.pop(context); // 关抽屉
-    showAiChatPanel(context,
-        onSwitchToManual: _openManualFromDrawer, fullScreen: true);
+    _pushAssistant();
+  }
+
+  /// 全屏喵助手作为「页面」push 进去：原生从右滑入 + 可侧滑返回，不再是弹层。
+  void _pushAssistant() {
+    Navigator.of(context).push(
+      CupertinoPageRoute<void>(
+        builder: (_) => AiChatPanel(
+          fullScreen: true,
+          onSwitchToManual: _openManualFromDrawer,
+        ),
+      ),
+    );
   }
 
   void _openManualFromDrawer() {
@@ -172,8 +183,7 @@ class _AppDrawerState extends State<_AppDrawer> {
       builder: (ctx) => ManualAddSheet(
         onSwitchToAi: () {
           Navigator.pop(ctx);
-          showAiChatPanel(context,
-              onSwitchToManual: _openManualFromDrawer, fullScreen: true);
+          _pushAssistant();
         },
       ),
     );

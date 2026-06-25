@@ -51,7 +51,7 @@ class PersonalCenterView extends StatelessWidget {
               padding: const EdgeInsets.symmetric(vertical: 24, horizontal: 20),
               child: Row(
                 children: [
-                  const Mascot(mood: MascotMood.idle, size: 56),
+                  const Mascot(mood: MascotMood.idle, size: 56, animate: true),
                   const SizedBox(width: 16),
                   Expanded(
                     child: Column(

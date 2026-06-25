@@ -18,7 +18,7 @@ class ComingSoonView extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Mascot(mood: MascotMood.thinking, size: 96),
+            const Mascot(mood: MascotMood.thinking, size: 96, animate: true),
             const SizedBox(height: 20),
             Text(
               '「$title」即将到来 🐱',

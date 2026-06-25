@@ -1553,7 +1553,7 @@ class _EmptyState extends StatelessWidget {
     return Column(
       mainAxisAlignment: MainAxisAlignment.center,
       children: [
-        const Mascot(mood: MascotMood.empty, size: 72),
+        const Mascot(mood: MascotMood.empty, size: 72, animate: true),
         const SizedBox(height: 16),
         Text(
           title,

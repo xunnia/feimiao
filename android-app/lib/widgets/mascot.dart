@@ -39,6 +39,7 @@ class Mascot extends StatelessWidget {
     super.key,
     this.mood = MascotMood.idle,
     this.size = 48,
+    this.animate = false,
   });
 
   final MascotMood mood;
@@ -46,8 +47,20 @@ class Mascot extends StatelessWidget {
   /// 整体尺寸（宽高相等）。
   final double size;
 
+  /// 是否做轻微的「活着」动效（呼吸 + 浮动；thinking 态加思考摇摆）。
+  /// 空状态、加载/思考态打开即可。尊重系统「减弱动效」设置。
+  final bool animate;
+
   @override
   Widget build(BuildContext context) {
+    final child = _buildImage(context);
+    if (!animate) return child;
+    // 系统开启「减弱动效」时保持静止（无障碍）。
+    if (MediaQuery.maybeOf(context)?.disableAnimations ?? false) return child;
+    return _AnimatedMascot(mood: mood, child: child);
+  }
+
+  Widget _buildImage(BuildContext context) {
     // 优先用真猫 PNG（assets/mascot/<mood>.png）；
     // 文件还没就位 / 加载失败时回退到 emoji 占位，保证不崩。
     return Image.asset(
@@ -96,6 +109,61 @@ class Mascot extends StatelessWidget {
         style: TextStyle(fontSize: size * 0.52),
         textAlign: TextAlign.center,
       ),
+    );
+  }
+}
+
+/// 给吉祥物套一层轻微的「呼吸 + 浮动」循环动效。
+/// - 通用：缓慢放大缩小（1.0↔1.05）+ 微微上浮，像在轻轻呼吸。
+/// - thinking 态：额外加 ±3° 左右摇摆，像在歪头思考。
+class _AnimatedMascot extends StatefulWidget {
+  const _AnimatedMascot({required this.mood, required this.child});
+
+  final MascotMood mood;
+  final Widget child;
+
+  @override
+  State<_AnimatedMascot> createState() => _AnimatedMascotState();
+}
+
+class _AnimatedMascotState extends State<_AnimatedMascot>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _c;
+
+  @override
+  void initState() {
+    super.initState();
+    _c = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 2200),
+    )..repeat(reverse: true);
+  }
+
+  @override
+  void dispose() {
+    _c.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: _c,
+      child: widget.child,
+      builder: (context, child) {
+        final t = Curves.easeInOut.transform(_c.value); // 0..1
+        final scale = 1.0 + 0.05 * t; // 呼吸放大
+        final dy = -2.0 * t; // 微微上浮
+        final angle =
+            widget.mood == MascotMood.thinking ? (t - 0.5) * 0.10 : 0.0;
+        return Transform.translate(
+          offset: Offset(0, dy),
+          child: Transform.rotate(
+            angle: angle,
+            child: Transform.scale(scale: scale, child: child),
+          ),
+        );
+      },
     );
   }
 }

@@ -60,7 +60,7 @@ class SavingsGoalsView extends StatelessWidget {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          const Mascot(mood: MascotMood.idle, size: 80),
+          const Mascot(mood: MascotMood.idle, size: 80, animate: true),
           const SizedBox(height: 12),
           Text('还没有存钱目标', style: Theme.of(context).textTheme.titleMedium),
           const SizedBox(height: 6),

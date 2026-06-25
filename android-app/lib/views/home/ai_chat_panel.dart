@@ -198,6 +198,7 @@ class _AiChatPanelState extends State<AiChatPanel> {
       }
     }
     setState(() => _chatHistory.insertAll(0, restored));
+    _scrollToBottom();
   }
 
   void _onFocusChanged() {
@@ -471,15 +472,57 @@ class _AiChatPanelState extends State<AiChatPanel> {
   @override
   Widget build(BuildContext context) {
     final bottomInset = MediaQuery.viewInsetsOf(context).bottom;
+    // 全屏（抽屉「喵助手」入口）：一条独立的整屏不透明页，恒定铺满，状态栏也盖住。
+    if (widget.fullScreen) return _fullScreenPage(context, bottomInset);
     return Material(
       type: MaterialType.transparency,
       child: Padding(
         padding: EdgeInsets.only(bottom: bottomInset),
         child: SafeArea(
-          top: widget.fullScreen,
+          top: false,
           child: _started
               ? _chatMode(context)
               : _emptyMode(context),
+        ),
+      ),
+    );
+  }
+
+  // 全屏聊天页：不透明 surface 铺满整屏（含状态栏），SafeArea 垫内容。
+  // 顶部头部、中间内容（建议 or 对话）、底部输入；空态/对话态都恒定全屏。
+  Widget _fullScreenPage(BuildContext context, double bottomInset) {
+    final scheme = Theme.of(context).colorScheme;
+    return Material(
+      color: scheme.surface,
+      child: SafeArea(
+        child: Padding(
+          padding: EdgeInsets.only(bottom: bottomInset),
+          child: Column(
+            children: [
+              _header(context),
+              Expanded(
+                // 有历史就直接显示对话(滚到最新)；完全没记录才显示建议空状态。
+                child: _msgs.isEmpty
+                    ? SingleChildScrollView(
+                        child: Padding(
+                          padding: const EdgeInsets.fromLTRB(6, 8, 16, 10),
+                          child:
+                              _SuggestionGrid(items: _picked, onTap: _fillInput),
+                        ),
+                      )
+                    : ListView.builder(
+                        controller: _scroll,
+                        padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
+                        itemCount: _msgs.length,
+                        itemBuilder: (_, i) => _buildMsg(_msgs[i]),
+                      ),
+              ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(12, 0, 12, 10),
+                child: _inputBox(context, autofocus: false),
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -528,30 +571,26 @@ class _AiChatPanelState extends State<AiChatPanel> {
         final availH = c.maxHeight;
         // 聚焦(键盘弹起)时铺满键盘上方区域，避免溢出；否则用半/全屏档位。
         final focused = _focus.hasFocus;
-        final frac = widget.fullScreen
-            ? 1.0
-            : (focused ? 1.0 : _heightFrac).clamp(0.35, 1.0);
+        final frac = (focused ? 1.0 : _heightFrac).clamp(0.35, 1.0);
         return Column(
           children: [
-            if (!widget.fullScreen)
-              Expanded(
-                child: GestureDetector(
-                  behavior: HitTestBehavior.opaque,
-                  onTap: () => Navigator.pop(context),
-                  child: const SizedBox.expand(),
-                ),
+            Expanded(
+              child: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: () => Navigator.pop(context),
+                child: const SizedBox.expand(),
               ),
+            ),
             AnimatedContainer(
-              duration: (_dragging || focused || widget.fullScreen)
+              duration: (_dragging || focused)
                   ? Duration.zero
                   : const Duration(milliseconds: 220),
               curve: Curves.easeOut,
               height: availH * frac,
               decoration: BoxDecoration(
                 color: scheme.surface,
-                borderRadius: widget.fullScreen
-                    ? BorderRadius.zero
-                    : const BorderRadius.vertical(top: Radius.circular(24)),
+                borderRadius:
+                    const BorderRadius.vertical(top: Radius.circular(24)),
                 boxShadow: const [
                   BoxShadow(
                       color: Color(0x1F000000),
@@ -561,7 +600,7 @@ class _AiChatPanelState extends State<AiChatPanel> {
               ),
               child: Column(
                 children: [
-                  if (!widget.fullScreen) _dragHandle(availH),
+                  _dragHandle(availH),
                   _header(context),
                   Expanded(
                     child: ListView.builder(
@@ -839,7 +878,7 @@ class _ThinkingBubble extends StatelessWidget {
       padding: const EdgeInsets.only(bottom: 10),
       child: Row(
         children: [
-          const Mascot(mood: MascotMood.thinking, size: 28),
+          const Mascot(mood: MascotMood.thinking, size: 28, animate: true),
           const SizedBox(width: 8),
           Text('喵在想…',
               style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 14)),

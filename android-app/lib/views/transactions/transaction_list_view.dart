@@ -400,7 +400,7 @@ class _EmptyState extends StatelessWidget {
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          const Mascot(mood: MascotMood.empty, size: 72),
+          const Mascot(mood: MascotMood.empty, size: 72, animate: true),
           const SizedBox(height: 16),
           Text(onlyReimbursable ? '没有待报销的账目' : '还没有账目',
               style: Theme.of(context).textTheme.titleMedium?.copyWith(

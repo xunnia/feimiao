@@ -989,7 +989,7 @@ class _EmptyState extends StatelessWidget {
       padding: const EdgeInsets.symmetric(vertical: 40),
       child: Column(
         children: [
-          const Mascot(mood: MascotMood.empty, size: 80),
+          const Mascot(mood: MascotMood.empty, size: 80, animate: true),
           const SizedBox(height: 16),
           Text(message,
               style: Theme.of(context).textTheme.titleMedium?.copyWith(

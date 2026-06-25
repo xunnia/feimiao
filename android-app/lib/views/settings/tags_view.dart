@@ -102,7 +102,7 @@ class TagsView extends StatelessWidget {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          const Mascot(mood: MascotMood.empty, size: 72),
+          const Mascot(mood: MascotMood.empty, size: 72, animate: true),
           const SizedBox(height: 12),
           Text('还没有标签', style: Theme.of(context).textTheme.titleMedium),
           const SizedBox(height: 6),
