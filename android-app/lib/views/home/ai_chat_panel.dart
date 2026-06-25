@@ -16,6 +16,7 @@ import '../../core/models/category_seed.dart';
 import '../../core/models/transaction_kind.dart';
 import '../../core/money_format.dart';
 import '../../data/app_repository.dart';
+import '../../theme/app_colors.dart';
 import '../../widgets/glass.dart';
 import '../../widgets/mascot.dart';
 import '../../widgets/pressable_scale.dart';
@@ -399,11 +400,7 @@ class _AiChatPanelState extends State<AiChatPanel> {
         answer = '喵没连上 AI，待会儿再问问？';
       }
     }
-    // 去掉 markdown 强调符号（**加粗** / __ / 标题井号），纯文本展示。
-    answer = answer
-        .replaceAll('**', '')
-        .replaceAll('__', '')
-        .replaceAll(RegExp(r'^#{1,6}\s*', multiLine: true), '');
+    // 保留 markdown 原文，交给 _AnswerBubble 轻量渲染（**加粗** / 列表 / 标题）。
     if (!mounted) return;
     setState(() {
       _msgs.removeWhere((m) => m is _ThinkingMsg);
@@ -1041,25 +1038,53 @@ class _AnswerBubbleState extends State<_AnswerBubble> {
     );
   }
 
+  // 轻量 markdown → 富文本：处理 **加粗**、行首 - / * 列表、# 标题；保留可选中。
+  List<InlineSpan> _mdSpans(String text, TextStyle base) {
+    final spans = <InlineSpan>[];
+    final lines = text.split('\n');
+    for (int li = 0; li < lines.length; li++) {
+      var line = lines[li].replaceAll('__', '');
+      var headerBold = false;
+      final h = RegExp(r'^#{1,6}\s*').firstMatch(line);
+      if (h != null) {
+        line = line.substring(h.end);
+        headerBold = true;
+      }
+      final b = RegExp(r'^\s*[-*]\s+').firstMatch(line);
+      if (b != null) line = '•  ${line.substring(b.end)}';
+      final parts = line.split('**');
+      for (int i = 0; i < parts.length; i++) {
+        if (parts[i].isEmpty) continue;
+        final bold = headerBold || i.isOdd;
+        spans.add(TextSpan(
+          text: parts[i],
+          style: bold ? base.copyWith(fontWeight: FontWeight.w600) : null,
+        ));
+      }
+      if (li != lines.length - 1) spans.add(const TextSpan(text: '\n'));
+    }
+    return spans;
+  }
+
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final shownText = widget.text.substring(0, _shown);
     final done = _shown >= widget.text.length;
+    final baseStyle = TextStyle(
+      fontSize: 15,
+      height: 1.5,
+      fontWeight: FontWeight.w300,
+      color: scheme.onSurface,
+    );
     return Padding(
       padding: const EdgeInsets.only(bottom: 16, right: 8),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // 回答正文：全宽、无气泡（对标 Claude）。
-          SelectableText(
-            shownText,
-            style: TextStyle(
-              fontSize: 15,
-              height: 1.5,
-              fontWeight: FontWeight.w300,
-              color: scheme.onSurface,
-            ),
+          // 回答正文：全宽、无气泡（对标 Claude），轻量 markdown 渲染。
+          SelectableText.rich(
+            TextSpan(style: baseStyle, children: _mdSpans(shownText, baseStyle)),
           ),
           if (done) ...[
             const SizedBox(height: 4),
@@ -1136,9 +1161,15 @@ class _RecordBubble extends StatelessWidget {
           const SizedBox(height: 8),
           Container(
             decoration: BoxDecoration(
-              color: scheme.surface,
-              borderRadius: BorderRadius.circular(14),
-              border: Border.all(color: scheme.outlineVariant),
+              color: AppColors.card(scheme),
+              borderRadius: BorderRadius.circular(16),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withValues(alpha: 0.04),
+                  blurRadius: 10,
+                  offset: const Offset(0, 2),
+                ),
+              ],
             ),
             padding: const EdgeInsets.all(12),
             child: Column(
@@ -1167,7 +1198,7 @@ class _RecordBubble extends StatelessWidget {
                       Text('已记下',
                           style: TextStyle(
                               color: scheme.primary,
-                              fontWeight: FontWeight.w600)),
+                              fontWeight: FontWeight.w500)),
                       const Spacer(),
                       TextButton.icon(
                         onPressed: onUndo,

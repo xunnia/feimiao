@@ -13,7 +13,9 @@ import '../../core/models/transaction_record.dart';
 import '../../core/money_format.dart';
 import '../../core/statistics/statistics_engine.dart';
 import '../../data/app_repository.dart';
+import '../../core/haptics.dart';
 import '../../theme/app_colors.dart';
+import '../../widgets/glass.dart';
 import '../../widgets/mascot.dart';
 
 /// 统计页：月度 / 年度分段，饼图 + 柱状图 + 分类排行。
@@ -263,10 +265,10 @@ class _MonthSwitcher extends StatelessWidget {
   Widget build(BuildContext context) {
     return Row(
       children: [
-        IconButton(
-          icon: const Icon(CupertinoIcons.chevron_back),
-          onPressed: () => onShift(-1),
-        ),
+        _glassArrow(context, CupertinoIcons.chevron_back, () {
+          Haptics.selection();
+          onShift(-1);
+        }),
         Expanded(
           child: Center(
             child: Text(
@@ -278,11 +280,39 @@ class _MonthSwitcher extends StatelessWidget {
             ),
           ),
         ),
-        IconButton(
-          icon: const Icon(CupertinoIcons.chevron_forward),
-          onPressed: isCurrentMonth ? null : () => onShift(1),
+        _glassArrow(
+          context,
+          CupertinoIcons.chevron_forward,
+          isCurrentMonth
+              ? null
+              : () {
+                  Haptics.selection();
+                  onShift(1);
+                },
         ),
       ],
+    );
+  }
+
+  // 玻璃圆形翻月按钮（对齐首页玻璃语言）；禁用态变淡、不可点。
+  Widget _glassArrow(
+      BuildContext context, IconData icon, VoidCallback? onTap) {
+    final scheme = Theme.of(context).colorScheme;
+    final enabled = onTap != null;
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: onTap,
+      child: GlassSurface(
+        circle: true,
+        padding: const EdgeInsets.all(8),
+        child: Icon(
+          icon,
+          size: 18,
+          color: enabled
+              ? scheme.onSurfaceVariant
+              : scheme.onSurfaceVariant.withValues(alpha: 0.3),
+        ),
+      ),
     );
   }
 }
@@ -471,7 +501,6 @@ class _BudgetProgressCard extends StatelessWidget {
         .clamp(0.0, 1.0);
 
     final isOver = status.isOverBudget;
-    final progressColor = isOver ? AppColors.warning : scheme.primary;
 
     return Container(
       padding: const EdgeInsets.all(14),
@@ -509,13 +538,44 @@ class _BudgetProgressCard extends StatelessWidget {
             ],
           ),
           const SizedBox(height: 8),
-          ClipRRect(
-            borderRadius: BorderRadius.circular(4),
-            child: LinearProgressIndicator(
-              value: ratio,
-              minHeight: 6,
-              color: progressColor,
-              backgroundColor: scheme.outlineVariant,
+          // 渐变进度条（绿→金→红），与首页预算条统一；超支整条变橙。
+          SizedBox(
+            height: 7,
+            child: LayoutBuilder(
+              builder: (ctx, c) {
+                final w = c.maxWidth;
+                return Stack(
+                  children: [
+                    Container(
+                      decoration: BoxDecoration(
+                        color: scheme.outlineVariant.withValues(alpha: 0.4),
+                        borderRadius: BorderRadius.circular(4),
+                      ),
+                    ),
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(4),
+                      child: Align(
+                        alignment: Alignment.centerLeft,
+                        widthFactor: ratio.clamp(0.0, 1.0),
+                        child: Container(
+                          width: w,
+                          decoration: BoxDecoration(
+                            gradient: LinearGradient(
+                              colors: isOver
+                                  ? const [AppColors.warning, AppColors.warning]
+                                  : const [
+                                      Color(0xFF7FB069),
+                                      Color(0xFFF2B23C),
+                                      Color(0xFFE0552B),
+                                    ],
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                );
+              },
             ),
           ),
           if (isCurrentMonth) ...[
