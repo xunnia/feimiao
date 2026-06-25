@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../theme/app_colors.dart';
+
 /// iOS 风输入框样式：圆角 + 浅灰填充 + 无边框（systemGray6 观感）。
 /// 给表单里的 TextField 套用：`decoration: iosInputDecoration(hint: '…')`。
 InputDecoration iosInputDecoration({String? hint, String? prefix}) {
@@ -94,7 +96,7 @@ class _IosFormCard extends StatelessWidget {
         child: Container(
           padding: const EdgeInsets.fromLTRB(20, 20, 20, 16),
           decoration: BoxDecoration(
-            color: Colors.white,
+            color: AppColors.card(scheme),
             borderRadius: BorderRadius.circular(22),
             boxShadow: [
               BoxShadow(

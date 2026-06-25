@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/cupertino.dart' show CupertinoPageRoute, CupertinoIcons;
 
+import '../../theme/app_colors.dart';
 import '../../widgets/mascot.dart';
 import '../settings/ai_setting_view.dart';
 
@@ -33,12 +34,19 @@ class PersonalCenterView extends StatelessWidget {
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
         children: [
           // ── 未登录卡 ──────────────────────────────────────
-          Card(
+          Container(
             margin: const EdgeInsets.only(bottom: 20),
-            shape:
-                RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-            elevation: 0,
-            color: scheme.surfaceContainerLow,
+            decoration: BoxDecoration(
+              color: AppColors.card(scheme),
+              borderRadius: BorderRadius.circular(20),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withValues(alpha: 0.04),
+                  blurRadius: 10,
+                  offset: const Offset(0, 2),
+                ),
+              ],
+            ),
             child: Padding(
               padding: const EdgeInsets.symmetric(vertical: 24, horizontal: 20),
               child: Row(
@@ -53,7 +61,7 @@ class PersonalCenterView extends StatelessWidget {
                           '未登录',
                           style:
                               Theme.of(context).textTheme.titleMedium?.copyWith(
-                                    fontWeight: FontWeight.w600,
+                                    fontWeight: FontWeight.w500,
                                   ),
                         ),
                         const SizedBox(height: 4),
@@ -84,37 +92,41 @@ class PersonalCenterView extends StatelessWidget {
 
           // ── 功能分组 ──────────────────────────────────────
           _SectionLabel(label: '设置'),
-          _SettingsTile(
-            icon: Icons.smart_toy_outlined,
-            label: 'AI 记账设置',
-            onTap: () => Navigator.push<void>(
-              context,
-              CupertinoPageRoute<void>(
-                  builder: (_) => const AiSettingView()),
+          _Group(children: [
+            _SettingsTile(
+              icon: Icons.smart_toy_outlined,
+              label: 'AI 记账设置',
+              onTap: () => Navigator.push<void>(
+                context,
+                CupertinoPageRoute<void>(
+                    builder: (_) => const AiSettingView()),
+              ),
             ),
-          ),
-          _SettingsTile(
-            icon: Icons.palette_outlined,
-            label: '主题皮肤',
-            onTap: () => _showSnackBar(context, '更多猫皮肤即将到来'),
-          ),
+            _SettingsTile(
+              icon: Icons.palette_outlined,
+              label: '主题皮肤',
+              onTap: () => _showSnackBar(context, '更多猫皮肤即将到来'),
+            ),
+          ]),
 
           const SizedBox(height: 12),
           _SectionLabel(label: '关于'),
-          _SettingsTile(
-            icon: Icons.info_outline,
-            label: '关于轻记',
-            onTap: () => showAboutDialog(
-              context: context,
-              applicationName: '轻记 QingJi',
-              applicationVersion: 'v0.2',
-              applicationLegalese: '© 2025 轻记团队',
-              children: const [
-                SizedBox(height: 8),
-                Text('一款可爱的 AI 记账 App，以你家的猫为灵感。'),
-              ],
+          _Group(children: [
+            _SettingsTile(
+              icon: Icons.info_outline,
+              label: '关于轻记',
+              onTap: () => showAboutDialog(
+                context: context,
+                applicationName: '轻记 QingJi',
+                applicationVersion: 'v0.2',
+                applicationLegalese: '© 2025 轻记团队',
+                children: const [
+                  SizedBox(height: 8),
+                  Text('一款可爱的 AI 记账 App，以你家的猫为灵感。'),
+                ],
+              ),
             ),
-          ),
+          ]),
 
           const SizedBox(height: 24),
           Center(
@@ -146,9 +158,50 @@ class _SectionLabel extends StatelessWidget {
         label,
         style: Theme.of(context).textTheme.labelMedium?.copyWith(
               color: Theme.of(context).colorScheme.onSurfaceVariant,
-              fontWeight: FontWeight.w600,
+              fontWeight: FontWeight.w500,
               letterSpacing: 0.5,
             ),
+      ),
+    );
+  }
+}
+
+/// 白色圆角分组卡：内含若干行，发丝线分隔（左缩进对齐图标后）。
+class _Group extends StatelessWidget {
+  const _Group({required this.children});
+
+  final List<Widget> children;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Container(
+      decoration: BoxDecoration(
+        color: AppColors.card(scheme),
+        borderRadius: BorderRadius.circular(16),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.04),
+            blurRadius: 10,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          for (int i = 0; i < children.length; i++) ...[
+            if (i > 0)
+              Divider(
+                height: 0.5,
+                thickness: 0.5,
+                indent: 54,
+                color: scheme.outlineVariant.withValues(alpha: 0.5),
+              ),
+            children[i],
+          ],
+        ],
       ),
     );
   }
@@ -183,8 +236,9 @@ class _SettingsTile extends StatelessWidget {
         color: scheme.onSurfaceVariant.withValues(alpha: 0.5),
       ),
       onTap: onTap,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-      contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
+      minLeadingWidth: 0,
+      horizontalTitleGap: 12,
+      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 2),
     );
   }
 }

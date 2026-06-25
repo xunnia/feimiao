@@ -328,7 +328,7 @@ class _ActionCard extends StatelessWidget {
     final scheme = Theme.of(context).colorScheme;
     return Container(
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: AppColors.card(scheme),
         borderRadius: BorderRadius.circular(18),
         boxShadow: [
           BoxShadow(

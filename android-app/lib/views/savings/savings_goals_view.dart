@@ -258,7 +258,7 @@ class _GoalCard extends StatelessWidget {
     return Container(
       margin: const EdgeInsets.symmetric(vertical: 6),
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: AppColors.card(scheme),
         borderRadius: BorderRadius.circular(18),
         boxShadow: [
           BoxShadow(

@@ -7,6 +7,7 @@ import '../../core/models/cat_svg_icon.dart';
 import '../../core/models/category_seed.dart';
 import '../../core/models/transaction_kind.dart';
 import '../../data/app_repository.dart';
+import '../../theme/app_colors.dart';
 
 /// 分类管理页：按收/支分组，**大类分组 + 子类缩进**列出，支持新增、改名、删除。
 class CategoriesView extends StatelessWidget {
@@ -101,6 +102,7 @@ class _CategoryList extends StatelessWidget {
     }
 
     final tops = categories.where((c) => c.isTopLevel).toList();
+    final scheme = Theme.of(context).colorScheme;
 
     return ListView(
       padding: const EdgeInsets.fromLTRB(16, 16, 16, 28),
@@ -109,7 +111,7 @@ class _CategoryList extends StatelessWidget {
           Container(
             margin: const EdgeInsets.only(bottom: 10),
             decoration: BoxDecoration(
-              color: Colors.white,
+              color: AppColors.card(scheme),
               borderRadius: BorderRadius.circular(16),
               boxShadow: [
                 BoxShadow(

@@ -3,6 +3,7 @@ import 'dart:ui' show ImageFilter;
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../../core/haptics.dart';
 import '../../data/app_repository.dart';
 import '../../widgets/glass.dart';
 import '../../widgets/pressable_scale.dart';
@@ -43,7 +44,10 @@ class _RecordInputBarState extends State<RecordInputBar> {
   }
 
   void _setMode(bool ai) {
-    if (_isAiMode != ai) setState(() => _isAiMode = ai);
+    if (_isAiMode != ai) {
+      Haptics.selection();
+      setState(() => _isAiMode = ai);
+    }
     context.read<AppRepository>().setRecordAiMode(ai);
   }
 

@@ -153,11 +153,12 @@ class _InputSectionState extends State<_InputSection> {
 
   @override
   Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
     final parsed = _parsed;
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: AppColors.card(scheme),
         borderRadius: BorderRadius.circular(16),
         boxShadow: [
           BoxShadow(
@@ -227,7 +228,7 @@ class _MonthProgressCard extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: AppColors.card(scheme),
         borderRadius: BorderRadius.circular(16),
         boxShadow: [
           BoxShadow(
@@ -326,7 +327,7 @@ class _CategoryBudgetSection extends StatelessWidget {
         const SizedBox(height: 8),
         Container(
           decoration: BoxDecoration(
-            color: Colors.white,
+            color: AppColors.card(scheme),
             borderRadius: BorderRadius.circular(16),
             boxShadow: [
               BoxShadow(

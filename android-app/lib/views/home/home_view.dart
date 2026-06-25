@@ -4,6 +4,7 @@ import 'package:flutter/cupertino.dart' show CupertinoPageRoute, CupertinoIcons;
 import 'package:provider/provider.dart';
 
 import '../../core/budget/budget_engine.dart';
+import '../../core/haptics.dart';
 import '../../core/models/cat_svg_icon.dart';
 import '../../core/models/category_seed.dart';
 import '../../core/models/transaction_kind.dart';
@@ -55,6 +56,7 @@ class _HomeViewState extends State<HomeView> {
     final now = DateTime.now();
     // 不翻到未来（没有未来数据）。
     if (m.year > now.year || (m.year == now.year && m.month > now.month)) return;
+    Haptics.selection();
     setState(() {
       _year = m.year;
       _month = m.month;
@@ -129,7 +131,7 @@ class _HomeViewState extends State<HomeView> {
           pinned: true,
           expandedHeight: expandedHeight,
           collapsedHeight: minExtent,
-          backgroundColor: const Color(0xFFF7F8FA),
+          backgroundColor: AppColors.appBg(Theme.of(context).colorScheme),
           surfaceTintColor: Colors.transparent,
           elevation: 0,
           flexibleSpace: LayoutBuilder(
@@ -195,7 +197,11 @@ class _HomeViewState extends State<HomeView> {
           SliverToBoxAdapter(
             child: _FilterSegment(
               value: _filter,
-              onChanged: (f) => setState(() => _filter = f),
+              onChanged: (f) {
+                if (f == _filter) return;
+                Haptics.selection();
+                setState(() => _filter = f);
+              },
             ),
           ),
           SliverToBoxAdapter(child: _InsightStrip(summary: summary)),
@@ -250,7 +256,7 @@ class _ExpandedSummaryCard extends StatelessWidget {
         children: [
           Card(
         elevation: 1,
-        color: Colors.white,
+        color: AppColors.card(scheme),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
         child: Padding(
           padding: const EdgeInsets.fromLTRB(16, 12, 16, 14),
@@ -282,7 +288,7 @@ class _ExpandedSummaryCard extends StatelessWidget {
                       padding: const EdgeInsets.symmetric(
                           horizontal: 10, vertical: 3),
                       decoration: BoxDecoration(
-                        color: Colors.white,
+                        color: AppColors.card(scheme),
                         borderRadius: BorderRadius.circular(12),
                         border: Border.all(
                           color: scheme.outlineVariant.withValues(alpha: 0.6),
@@ -1247,7 +1253,7 @@ class _DayCard extends StatelessWidget {
     return Card(
       margin: const EdgeInsets.fromLTRB(16, 0, 16, 10),
       elevation: 1,
-      color: Colors.white,
+      color: AppColors.card(scheme),
       clipBehavior: Clip.antiAlias,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
       child: Column(
@@ -1380,7 +1386,10 @@ class _DismissibleRow extends StatelessWidget {
         confirmText: '删除',
         destructive: true,
       ),
-      onDismissed: (_) => onDelete(),
+      onDismissed: (_) {
+        Haptics.of(Haptic.warning);
+        onDelete();
+      },
       child: InkWell(
         onTap: () => showEditTransactionSheet(context, transaction),
         child: _TransactionRow(transaction: transaction),

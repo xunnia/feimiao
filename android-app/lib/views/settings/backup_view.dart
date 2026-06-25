@@ -6,6 +6,7 @@ import 'package:provider/provider.dart';
 import 'package:share_plus/share_plus.dart';
 
 import '../../data/app_repository.dart';
+import '../../theme/app_colors.dart';
 
 /// 本地备份 / 恢复（不涉及云）：
 /// - 导出：把整个账本数据库文件分享出去（存到微信/网盘/邮件/本地皆可）。
@@ -124,7 +125,7 @@ class _Card extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: AppColors.card(scheme),
         borderRadius: BorderRadius.circular(16),
         boxShadow: [
           BoxShadow(

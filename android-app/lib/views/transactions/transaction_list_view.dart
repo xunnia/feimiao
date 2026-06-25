@@ -2,6 +2,7 @@ import 'package:decimal/decimal.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../../core/haptics.dart';
 import '../../core/models/cat_svg_icon.dart';
 import '../../core/models/category_seed.dart';
 import '../../core/models/transaction_kind.dart';
@@ -243,7 +244,10 @@ class _DismissibleRow extends StatelessWidget {
         confirmText: '删除',
         destructive: true,
       ),
-      onDismissed: (_) => onDelete(),
+      onDismissed: (_) {
+        Haptics.of(Haptic.warning);
+        onDelete();
+      },
       child: InkWell(
         onTap: () => showEditTransactionSheet(context, transaction),
         child: _TransactionRow(transaction: transaction),

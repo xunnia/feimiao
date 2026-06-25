@@ -5,6 +5,7 @@ import 'package:provider/provider.dart';
 
 import '../../core/amount_expression.dart';
 import '../../core/budget/budget_engine.dart';
+import '../../core/haptics.dart';
 import '../../core/models/transaction_kind.dart';
 import '../../core/money_format.dart';
 import '../../data/app_repository.dart';
@@ -93,6 +94,7 @@ class _ManualAddSheetState extends State<ManualAddSheet> {
       tagIds: _tagIds,
     );
 
+    Haptics.of(Haptic.success);
     if (mounted) Navigator.pop(context);
   }
 

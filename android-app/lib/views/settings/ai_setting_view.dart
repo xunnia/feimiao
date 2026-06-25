@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../../data/app_repository.dart';
+import '../../theme/app_colors.dart';
 import '../home/ai_chat_panel.dart';
 
 /// AI 记账设置页：配置 DeepSeek API Key。
@@ -75,7 +76,7 @@ class _AiSettingViewState extends State<AiSettingView> {
             // 说明卡片
             Container(
               decoration: BoxDecoration(
-                color: Colors.white,
+                color: AppColors.card(scheme),
                 borderRadius: BorderRadius.circular(16),
                 boxShadow: [
                   BoxShadow(
@@ -253,7 +254,7 @@ class _ChatRetentionCard extends StatelessWidget {
 
     return Container(
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: AppColors.card(scheme),
         borderRadius: BorderRadius.circular(16),
         boxShadow: [
           BoxShadow(

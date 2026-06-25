@@ -9,9 +9,10 @@ import 'widgets/ios_dialogs.dart';
 import 'widgets/ios_form.dart';
 import 'widgets/ios_menu.dart';
 import 'views/account/personal_center_view.dart';
-import 'views/assistant/meow_assistant_view.dart';
 import 'views/common/coming_soon_view.dart';
+import 'views/home/ai_chat_panel.dart';
 import 'views/home/home_view.dart';
+import 'views/home/manual_add_sheet.dart';
 import 'views/home/record_input_bar.dart';
 import 'views/savings/savings_goals_view.dart';
 import 'views/search/search_view.dart';
@@ -64,13 +65,13 @@ class RootShell extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFFF7F8FA),
+      backgroundColor: AppColors.appBg(Theme.of(context).colorScheme),
       // 左侧大片区域右滑即可拉出抽屉（行内左滑删除不受影响）。
       drawerEdgeDragWidth: MediaQuery.of(context).size.width * 0.5,
       appBar: AppBar(
         automaticallyImplyLeading: false,
         titleSpacing: 0,
-        backgroundColor: const Color(0xFFF7F8FA),
+        backgroundColor: AppColors.appBg(Theme.of(context).colorScheme),
         surfaceTintColor: Colors.transparent,
         title: Builder(
           builder: (innerCtx) => Row(
@@ -150,6 +151,31 @@ class _AppDrawerState extends State<_AppDrawer> {
     Navigator.push<void>(
       context,
       CupertinoPageRoute<void>(builder: (_) => page),
+    );
+  }
+
+  // ── 喵助手：关抽屉后打开半屏 AI 面板（与首页记账栏同一套）──────────────────
+  void _openAssistant() {
+    Navigator.pop(context); // 关抽屉
+    showAiChatPanel(context,
+        onSwitchToManual: _openManualFromDrawer, fullScreen: true);
+  }
+
+  void _openManualFromDrawer() {
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (ctx) => ManualAddSheet(
+        onSwitchToAi: () {
+          Navigator.pop(ctx);
+          showAiChatPanel(context,
+              onSwitchToManual: _openManualFromDrawer, fullScreen: true);
+        },
+      ),
     );
   }
 
@@ -367,11 +393,11 @@ class _AppDrawerState extends State<_AppDrawer> {
                       onTap: () => _popAndPush(const SavingsGoalsView()),
                     ),
 
-                    // 6. 喵助手
+                    // 6. 喵助手（统一到首页那套半屏 AI 面板）
                     _DrawerItem(
                       icon: Icons.auto_awesome,
                       label: '喵助手',
-                      onTap: () => _popAndPush(const MeowAssistantView()),
+                      onTap: _openAssistant,
                     ),
 
                     // 「更多 ⌄ / ⌃」折叠按钮

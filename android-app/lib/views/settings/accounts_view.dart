@@ -4,6 +4,7 @@ import '../../widgets/ios_dialogs.dart';
 import 'package:provider/provider.dart';
 
 import '../../data/app_repository.dart';
+import '../../theme/app_colors.dart';
 
 /// 账户管理页：列出账户，支持新增、改名、删除。
 class AccountsView extends StatelessWidget {
@@ -51,7 +52,7 @@ class AccountsView extends StatelessWidget {
             children: [
               Container(
                 decoration: BoxDecoration(
-                  color: Colors.white,
+                  color: AppColors.card(scheme),
                   borderRadius: BorderRadius.circular(16),
                   boxShadow: [
                     BoxShadow(

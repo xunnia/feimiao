@@ -411,7 +411,7 @@ class _TotalCard extends StatelessWidget {
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
         decoration: BoxDecoration(
-          color: Colors.white,
+          color: AppColors.card(scheme),
           borderRadius: BorderRadius.circular(16),
           boxShadow: [
             BoxShadow(
@@ -476,7 +476,7 @@ class _BudgetProgressCard extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: AppColors.card(scheme),
         borderRadius: BorderRadius.circular(20),
         boxShadow: [
           BoxShadow(
@@ -550,7 +550,7 @@ class _SectionCard extends StatelessWidget {
       width: double.infinity,
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: AppColors.card(scheme),
         borderRadius: BorderRadius.circular(20),
         boxShadow: [
           BoxShadow(

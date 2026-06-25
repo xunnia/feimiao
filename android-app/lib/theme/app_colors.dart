@@ -61,6 +61,18 @@ class AppColors {
 
   /// 支出颜色直接返回 onSurface（中性文本色）。
   static Color expense(ColorScheme scheme) => scheme.onSurface;
+
+  /// 卡片底色：浅色纯白 / 深色暖灰，跟随主题，避免深色下死白。
+  static Color card(ColorScheme scheme) =>
+      scheme.brightness == Brightness.dark
+          ? const Color(0xFF332F2C)
+          : Colors.white;
+
+  /// 页面背景：浅色淡灰 / 深色更深暖灰（比卡片暗一档，让卡片浮起来）。
+  static Color appBg(ColorScheme scheme) =>
+      scheme.brightness == Brightness.dark
+          ? const Color(0xFF211E1C)
+          : const Color(0xFFF7F8FA);
 }
 
 // ---------------------------------------------------------------------------
@@ -161,8 +173,15 @@ class AppTheme {
 
     return ThemeData(
       colorScheme: cs,
+      scaffoldBackgroundColor: const Color(0xFF211E1C),
       useMaterial3: true,
       platform: TargetPlatform.iOS,
+      appBarTheme: const AppBarTheme(
+        backgroundColor: Color(0xFF211E1C),
+        surfaceTintColor: Colors.transparent,
+        elevation: 0,
+        scrolledUnderElevation: 0,
+      ),
       dividerTheme: const DividerThemeData(
         thickness: 0.5,
         space: 0.5,

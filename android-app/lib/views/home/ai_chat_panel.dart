@@ -10,6 +10,7 @@ import 'package:provider/provider.dart';
 import '../../core/ai/llm_entry_parser.dart';
 import '../../core/ai/llm_query.dart';
 import '../../core/ai/natural_language_entry_parser.dart';
+import '../../core/haptics.dart';
 import '../../core/models/category_seed.dart';
 import '../../core/models/transaction_kind.dart';
 import '../../core/money_format.dart';
@@ -24,6 +25,7 @@ Future<void> showAiChatPanel(
   BuildContext context, {
   required VoidCallback onSwitchToManual,
   String? initialText,
+  bool fullScreen = false,
 }) {
   return showGeneralDialog<void>(
     context: context,
@@ -34,6 +36,7 @@ Future<void> showAiChatPanel(
     pageBuilder: (_, __, ___) => AiChatPanel(
       onSwitchToManual: onSwitchToManual,
       initialText: initialText,
+      fullScreen: fullScreen,
     ),
     transitionBuilder: (ctx, anim, _, child) {
       final curved = CurvedAnimation(parent: anim, curve: Curves.easeOutCubic);
@@ -76,10 +79,14 @@ class AiChatPanel extends StatefulWidget {
   /// 预填到输入框的文字，不自动发送，供校对再发。
   final String? initialText;
 
+  /// 全屏模式（抽屉「喵助手」入口用）：铺满屏幕、方角、无拖拽条，靠关闭按钮退出。
+  final bool fullScreen;
+
   const AiChatPanel({
     super.key,
     required this.onSwitchToManual,
     this.initialText,
+    this.fullScreen = false,
   });
 
   @override
@@ -243,6 +250,7 @@ class _AiChatPanelState extends State<AiChatPanel> {
     final text = (preset ?? _ctrl.text).trim();
     if (text.isEmpty || _busy) return;
 
+    Haptics.light();
     final repo = context.read<AppRepository>();
     _ctrl.clear();
     _focus.unfocus();
@@ -439,6 +447,7 @@ class _AiChatPanelState extends State<AiChatPanel> {
     }
     final after = repo.transactions.map((t) => t.id).toSet();
     if (!mounted) return;
+    Haptics.of(Haptic.success);
     setState(() {
       msg.saved = true;
       msg.savedIds = after.difference(before).toList();
@@ -467,7 +476,7 @@ class _AiChatPanelState extends State<AiChatPanel> {
       child: Padding(
         padding: EdgeInsets.only(bottom: bottomInset),
         child: SafeArea(
-          top: false,
+          top: widget.fullScreen,
           child: _started
               ? _chatMode(context)
               : _emptyMode(context),
@@ -519,26 +528,30 @@ class _AiChatPanelState extends State<AiChatPanel> {
         final availH = c.maxHeight;
         // 聚焦(键盘弹起)时铺满键盘上方区域，避免溢出；否则用半/全屏档位。
         final focused = _focus.hasFocus;
-        final frac = (focused ? 1.0 : _heightFrac).clamp(0.35, 1.0);
+        final frac = widget.fullScreen
+            ? 1.0
+            : (focused ? 1.0 : _heightFrac).clamp(0.35, 1.0);
         return Column(
           children: [
-            Expanded(
-              child: GestureDetector(
-                behavior: HitTestBehavior.opaque,
-                onTap: () => Navigator.pop(context),
-                child: const SizedBox.expand(),
+            if (!widget.fullScreen)
+              Expanded(
+                child: GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTap: () => Navigator.pop(context),
+                  child: const SizedBox.expand(),
+                ),
               ),
-            ),
             AnimatedContainer(
-              duration: (_dragging || focused)
+              duration: (_dragging || focused || widget.fullScreen)
                   ? Duration.zero
                   : const Duration(milliseconds: 220),
               curve: Curves.easeOut,
               height: availH * frac,
               decoration: BoxDecoration(
                 color: scheme.surface,
-                borderRadius:
-                    const BorderRadius.vertical(top: Radius.circular(24)),
+                borderRadius: widget.fullScreen
+                    ? BorderRadius.zero
+                    : const BorderRadius.vertical(top: Radius.circular(24)),
                 boxShadow: const [
                   BoxShadow(
                       color: Color(0x1F000000),
@@ -548,7 +561,7 @@ class _AiChatPanelState extends State<AiChatPanel> {
               ),
               child: Column(
                 children: [
-                  _dragHandle(availH),
+                  if (!widget.fullScreen) _dragHandle(availH),
                   _header(context),
                   Expanded(
                     child: ListView.builder(

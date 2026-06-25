@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/cupertino.dart' show CupertinoPageRoute, CupertinoIcons;
 
+import '../../theme/app_colors.dart';
 import 'accounts_view.dart';
 import 'ai_setting_view.dart';
 import 'backup_view.dart';
@@ -128,7 +129,7 @@ class _Group extends StatelessWidget {
     return Container(
       margin: const EdgeInsets.fromLTRB(16, 0, 16, 8),
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: AppColors.card(scheme),
         borderRadius: BorderRadius.circular(16),
         boxShadow: [
           BoxShadow(
