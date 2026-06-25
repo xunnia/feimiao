@@ -64,9 +64,31 @@ jobs:
         working-directory: android-app
         run: flutter test
 
+      - name: 注入固定 release 签名（有 Secret 才签，否则回落 debug）
+        # 不写死钥匙到仓库：从 GitHub Secrets 解出 keystore + 生成 key.properties，
+        # 让 CI 用和本地同一把 release 钥匙签名，这样每次下载的包都能直接覆盖更新、不用卸载。
+        working-directory: android-app
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          STORE_PW: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_PW: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+        run: |
+          if [ -n "$KEYSTORE_B64" ]; then
+            echo "$KEYSTORE_B64" | base64 -d > android/app/upload-keystore.jks
+            cat > android/key.properties <<EOF
+          storePassword=$STORE_PW
+          keyPassword=$KEY_PW
+          keyAlias=$KEY_ALIAS
+          storeFile=upload-keystore.jks
+          EOF
+            echo ">> 已配置固定 release 签名"
+          else
+            echo ">> 未提供 keystore Secret，回落到 debug 签名（每次签名会变）"
+          fi
+
       - name: 构建 release APK（瘦身，可直接安装）
-        # release 比 debug 小很多（去掉调试运行时 + tree-shaking）；
-        # Flutter 模板的 release 默认用 debug 签名，照样能侧载安装。
+        # 有 key.properties 时用固定 release 钥匙签名；否则回落 debug（仅用于无 Secret 的环境）。
         working-directory: android-app
         run: flutter build apk --release
 
