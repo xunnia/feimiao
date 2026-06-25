@@ -5,6 +5,7 @@ import 'dart:ui' show ImageFilter;
 import 'package:decimal/decimal.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_svg/flutter_svg.dart';
 import 'package:provider/provider.dart';
 
 import '../../core/ai/llm_entry_parser.dart';
@@ -70,6 +71,36 @@ bool _chatRestored = false;
 
 /// 清空内存中的会话历史（设置页「清空对话」时同步调用，避免本次运行还残留）。
 void clearChatHistoryMemory() => _chatHistory.clear();
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Claude 风格操作图标：Lucide 线性图标（MIT 开源），细线 + 圆角描边。
+// 用 flutter_svg 内嵌渲染，再用 colorFilter 着色；和 Material 图标完全不同的观感。
+// ─────────────────────────────────────────────────────────────────────────────
+const String _lucideHeader =
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" '
+    'stroke="#000" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">';
+const String _icCopy =
+    '$_lucideHeader<rect width="14" height="14" x="8" y="8" rx="2" ry="2"/>'
+    '<path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>';
+const String _icRetry =
+    '$_lucideHeader<path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/>'
+    '<path d="M3 3v5h5"/></svg>';
+const String _icThumbUp =
+    '$_lucideHeader<path d="M7 10v12"/>'
+    '<path d="M15 5.88 14 10h5.83a2 2 0 0 1 1.92 2.56l-2.33 8A2 2 0 0 1 17.5 22H4a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2h2.76a2 2 0 0 0 1.79-1.11L12 2a3.13 3.13 0 0 1 3 3.88Z"/></svg>';
+const String _icThumbDown =
+    '$_lucideHeader<path d="M17 14V2"/>'
+    '<path d="M9 18.12 10 14H4.17a2 2 0 0 1-1.92-2.56l2.33-8A2 2 0 0 1 6.5 2H20a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-2.76a2 2 0 0 0-1.79 1.11L12 22a3.13 3.13 0 0 1-3 3.88Z"/></svg>';
+// 选中态：实心（fill）。
+const String _lucideHeaderFill =
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="#000" '
+    'stroke="#000" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">';
+const String _icThumbUpFill =
+    '$_lucideHeaderFill<path d="M7 10v12"/>'
+    '<path d="M15 5.88 14 10h5.83a2 2 0 0 1 1.92 2.56l-2.33 8A2 2 0 0 1 17.5 22H4a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2h2.76a2 2 0 0 0 1.79-1.11L12 2a3.13 3.13 0 0 1 3 3.88Z"/></svg>';
+const String _icThumbDownFill =
+    '$_lucideHeaderFill<path d="M17 14V2"/>'
+    '<path d="M9 18.12 10 14H4.17a2 2 0 0 1-1.92-2.56l2.33-8A2 2 0 0 1 6.5 2H20a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-2.76a2 2 0 0 0-1.79 1.11L12 22a3.13 3.13 0 0 1-3 3.88Z"/></svg>';
 
 /// 「来记一笔吧」聊天面板：一句话 → AI 解析 → 记账确认卡（可保存/撤销）。
 /// 语音用键盘自带听写打到输入框即可，不再内置录音识别。
@@ -989,19 +1020,22 @@ class _AnswerBubbleState extends State<_AnswerBubble> {
     return MascotMood.report;
   }
 
-  Widget _action(IconData icon, VoidCallback onTap, {bool active = false}) {
+  // Claude 风格操作图标：Lucide 线性 SVG + 着色（选中态用主色）。
+  Widget _action(String svg, VoidCallback onTap, {bool active = false}) {
     final scheme = Theme.of(context).colorScheme;
+    final color = active
+        ? scheme.primary
+        : scheme.onSurfaceVariant.withValues(alpha: 0.6);
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
       onTap: onTap,
       child: Padding(
-        padding: const EdgeInsets.all(6),
-        child: Icon(
-          icon,
-          size: 17,
-          color: active
-              ? scheme.primary
-              : scheme.onSurfaceVariant.withValues(alpha: 0.6),
+        padding: const EdgeInsets.all(7),
+        child: SvgPicture.string(
+          svg,
+          width: 17,
+          height: 17,
+          colorFilter: ColorFilter.mode(color, BlendMode.srcIn),
         ),
       ),
     );
@@ -1028,16 +1062,15 @@ class _AnswerBubbleState extends State<_AnswerBubble> {
             ),
           ),
           if (done) ...[
-            const SizedBox(height: 6),
+            const SizedBox(height: 4),
+            // 操作图标行（对标 Claude：裸图标、细线、浅灰）。
             Row(
               children: [
-                Mascot(mood: _moodFor(widget.text), size: 40),
-                const SizedBox(width: 10),
-                _action(Icons.content_copy_outlined, () {
+                _action(_icCopy, () {
                   Clipboard.setData(ClipboardData(text: widget.text));
                 }),
                 _action(
-                  _liked ? Icons.thumb_up_alt : Icons.thumb_up_alt_outlined,
+                  _liked ? _icThumbUpFill : _icThumbUp,
                   () => setState(() {
                     _liked = !_liked;
                     if (_liked) _disliked = false;
@@ -1045,9 +1078,7 @@ class _AnswerBubbleState extends State<_AnswerBubble> {
                   active: _liked,
                 ),
                 _action(
-                  _disliked
-                      ? Icons.thumb_down_alt
-                      : Icons.thumb_down_alt_outlined,
+                  _disliked ? _icThumbDownFill : _icThumbDown,
                   () => setState(() {
                     _disliked = !_disliked;
                     if (_disliked) _liked = false;
@@ -1055,9 +1086,12 @@ class _AnswerBubbleState extends State<_AnswerBubble> {
                   active: _disliked,
                 ),
                 if (widget.onRegenerate != null)
-                  _action(Icons.refresh, widget.onRegenerate!),
+                  _action(_icRetry, widget.onRegenerate!),
               ],
             ),
+            const SizedBox(height: 2),
+            // 猫在操作图标下方、左侧；放大 30%。
+            Mascot(mood: _moodFor(widget.text), size: 52),
           ],
         ],
       ),
