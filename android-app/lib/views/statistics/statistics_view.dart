@@ -214,7 +214,8 @@ class _YearlyContent extends StatelessWidget {
           child: Text(
             '$year 年',
             style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                  fontWeight: FontWeight.w600,
+                  fontWeight: FontWeight.w500,
+                  fontFamily: 'Nunito',
                 ),
           ),
         ),
@@ -273,7 +274,7 @@ class _MonthSwitcher extends StatelessWidget {
               style: Theme.of(context)
                   .textTheme
                   .titleMedium
-                  ?.copyWith(fontWeight: FontWeight.w600),
+                  ?.copyWith(fontWeight: FontWeight.w500, fontFamily: 'Nunito'),
             ),
           ),
         ),
@@ -408,10 +409,17 @@ class _TotalCard extends StatelessWidget {
     final scheme = Theme.of(context).colorScheme;
     return Expanded(
       child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 12),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
         decoration: BoxDecoration(
-          color: scheme.surfaceContainerHighest,
-          borderRadius: BorderRadius.circular(12),
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(16),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.04),
+              blurRadius: 10,
+              offset: const Offset(0, 2),
+            ),
+          ],
         ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -427,7 +435,8 @@ class _TotalCard extends StatelessWidget {
               MoneyFormat.string(amount),
               style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                     color: color,
-                    fontWeight: FontWeight.w600,
+                    fontWeight: FontWeight.w500,
+                    fontFamily: 'Nunito',
                   ),
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
@@ -467,8 +476,15 @@ class _BudgetProgressCard extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
-        color: scheme.surfaceContainerHighest,
-        borderRadius: BorderRadius.circular(12),
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(20),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.04),
+            blurRadius: 12,
+            offset: const Offset(0, 2),
+          ),
+        ],
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -480,13 +496,14 @@ class _BudgetProgressCard extends StatelessWidget {
                 style: Theme.of(context)
                     .textTheme
                     .titleSmall
-                    ?.copyWith(fontWeight: FontWeight.w600),
+                    ?.copyWith(fontWeight: FontWeight.w500),
               ),
               const Spacer(),
               Text(
                 '${MoneyFormat.string(status.spentThisMonth)} / ${MoneyFormat.string(monthlyBudget)}',
                 style: Theme.of(context).textTheme.bodySmall?.copyWith(
                       color: isOver ? AppColors.warning : scheme.onSurfaceVariant,
+                      fontFamily: 'Nunito',
                     ),
               ),
             ],
@@ -533,8 +550,15 @@ class _SectionCard extends StatelessWidget {
       width: double.infinity,
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
-        color: scheme.surfaceContainerHighest,
-        borderRadius: BorderRadius.circular(12),
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(20),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.04),
+            blurRadius: 12,
+            offset: const Offset(0, 2),
+          ),
+        ],
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -544,7 +568,7 @@ class _SectionCard extends StatelessWidget {
             style: Theme.of(context)
                 .textTheme
                 .titleSmall
-                ?.copyWith(fontWeight: FontWeight.w600),
+                ?.copyWith(fontWeight: FontWeight.w500),
           ),
           const SizedBox(height: 12),
           child,
@@ -852,7 +876,8 @@ class _CategoryRanking extends StatelessWidget {
                   Text(
                     MoneyFormat.string(item.total),
                     style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                          fontWeight: FontWeight.w600,
+                          fontWeight: FontWeight.w500,
+                          fontFamily: 'Nunito',
                         ),
                   ),
                   SizedBox(
@@ -907,7 +932,8 @@ class _TopTxnList extends StatelessWidget {
                 child: Text(
                   '${i + 1}',
                   style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                        fontWeight: FontWeight.w700,
+                        fontWeight: FontWeight.w600,
+                        fontFamily: 'Nunito',
                         color: i < 3 ? scheme.secondary : scheme.onSurfaceVariant,
                       ),
                 ),
@@ -935,7 +961,8 @@ class _TopTxnList extends StatelessWidget {
               Text(
                 '-${MoneyFormat.string(r.amount)}',
                 style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                      fontWeight: FontWeight.w700,
+                      fontWeight: FontWeight.w600,
+                      fontFamily: 'Nunito',
                     ),
               ),
             ],

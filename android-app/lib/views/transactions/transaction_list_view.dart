@@ -119,7 +119,8 @@ class _FilterBar extends StatelessWidget {
             MoneyFormat.string(pendingTotal),
             style: Theme.of(context).textTheme.labelMedium?.copyWith(
                   color: AppColors.warning,
-                  fontWeight: FontWeight.w700,
+                  fontWeight: FontWeight.w600,
+                  fontFamily: 'Nunito',
                   // ignore: deprecated_member_use
                   fontFeatures: const [FontFeature.tabularFigures()],
                 ),

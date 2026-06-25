@@ -255,11 +255,19 @@ class _GoalCard extends StatelessWidget {
     final barColor = done ? AppColors.income(scheme) : scheme.primary;
     final remaining = goal.target - goal.saved;
 
-    return Card(
-      elevation: 0,
+    return Container(
       margin: const EdgeInsets.symmetric(vertical: 6),
-      color: scheme.surfaceContainerHighest.withValues(alpha: 0.4),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(18),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.04),
+            blurRadius: 10,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
       child: Padding(
         padding: const EdgeInsets.fromLTRB(16, 14, 8, 12),
         child: Column(
@@ -277,7 +285,7 @@ class _GoalCard extends StatelessWidget {
                           style: Theme.of(context)
                               .textTheme
                               .titleMedium
-                              ?.copyWith(fontWeight: FontWeight.w700),
+                              ?.copyWith(fontWeight: FontWeight.w600),
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis),
                       Text(
@@ -338,7 +346,8 @@ class _GoalCard extends StatelessWidget {
                   Text(
                     '${MoneyFormat.string(goal.saved)} / ${MoneyFormat.string(goal.target)}',
                     style: Theme.of(context).textTheme.labelMedium?.copyWith(
-                          fontWeight: FontWeight.w600,
+                          fontWeight: FontWeight.w500,
+                          fontFamily: 'Nunito',
                           color: scheme.onSurface,
                         ),
                   ),
@@ -346,7 +355,10 @@ class _GoalCard extends StatelessWidget {
                       style: Theme.of(context)
                           .textTheme
                           .labelMedium
-                          ?.copyWith(color: barColor, fontWeight: FontWeight.w700)),
+                          ?.copyWith(
+                              color: barColor,
+                              fontWeight: FontWeight.w600,
+                              fontFamily: 'Nunito')),
                 ],
               ),
             ),

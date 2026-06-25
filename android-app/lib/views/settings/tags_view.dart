@@ -62,7 +62,7 @@ class TagsView extends StatelessWidget {
                   leading: CircleAvatar(
                       radius: 12, backgroundColor: color),
                   title: Text(t.name,
-                      style: const TextStyle(fontWeight: FontWeight.w600)),
+                      style: const TextStyle(fontWeight: FontWeight.w500)),
                   subtitle: Text('$count 笔账目用到'),
                   trailing: Builder(
                     builder: (iconCtx) => GestureDetector(

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../../data/app_repository.dart';
+import '../home/ai_chat_panel.dart';
 
 /// AI 记账设置页：配置 DeepSeek API Key。
 class AiSettingView extends StatefulWidget {
@@ -72,11 +73,17 @@ class _AiSettingViewState extends State<AiSettingView> {
           padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
           children: [
             // 说明卡片
-            Card(
-              elevation: 0,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(12),
-                side: BorderSide(color: scheme.outlineVariant),
+            Container(
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(16),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: 0.04),
+                    blurRadius: 10,
+                    offset: const Offset(0, 2),
+                  ),
+                ],
               ),
               child: Padding(
                 padding: const EdgeInsets.all(16),
@@ -93,7 +100,7 @@ class _AiSettingViewState extends State<AiSettingView> {
                           style: Theme.of(context)
                               .textTheme
                               .titleSmall
-                              ?.copyWith(fontWeight: FontWeight.w600),
+                              ?.copyWith(fontWeight: FontWeight.w500),
                         ),
                       ],
                     ),
@@ -119,7 +126,7 @@ class _AiSettingViewState extends State<AiSettingView> {
               'DeepSeek API Key',
               style: Theme.of(context).textTheme.labelMedium?.copyWith(
                     color: scheme.primary,
-                    fontWeight: FontWeight.w600,
+                    fontWeight: FontWeight.w500,
                   ),
             ),
             const SizedBox(height: 8),
@@ -194,8 +201,122 @@ class _AiSettingViewState extends State<AiSettingView> {
                   },
                 ),
               ),
+
+            const SizedBox(height: 32),
+
+            // ── 对话记录 ──
+            Text(
+              '对话记录',
+              style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                    color: scheme.primary,
+                    fontWeight: FontWeight.w500,
+                  ),
+            ),
+            const SizedBox(height: 8),
+            const _ChatRetentionCard(),
           ],
         ),
+      ),
+    );
+  }
+}
+
+/// 对话保存时长选择（一个月 / 半年）+ 清空对话。
+class _ChatRetentionCard extends StatelessWidget {
+  const _ChatRetentionCard();
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final repo = context.watch<AppRepository>();
+    final days = repo.chatRetentionDays;
+
+    Widget option(String label, int value) {
+      final selected = days == value;
+      return InkWell(
+        onTap: () => repo.setChatRetentionDays(value),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+          child: Row(
+            children: [
+              Expanded(
+                child: Text(label,
+                    style: Theme.of(context).textTheme.bodyLarge),
+              ),
+              if (selected)
+                Icon(Icons.check, size: 20, color: scheme.primary),
+            ],
+          ),
+        ),
+      );
+    }
+
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.04),
+            blurRadius: 10,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          option('保存一个月', 30),
+          Divider(
+              height: 0.5,
+              thickness: 0.5,
+              indent: 16,
+              color: scheme.outlineVariant.withValues(alpha: 0.5)),
+          option('保存半年', 180),
+          Divider(
+              height: 0.5,
+              thickness: 0.5,
+              color: scheme.outlineVariant.withValues(alpha: 0.5)),
+          InkWell(
+            onTap: () async {
+              final ok = await showDialog<bool>(
+                context: context,
+                builder: (ctx) => AlertDialog(
+                  title: const Text('清空对话'),
+                  content: const Text('确认清空全部 AI 对话记录？此操作不可撤销。'),
+                  actions: [
+                    TextButton(
+                        onPressed: () => Navigator.pop(ctx, false),
+                        child: const Text('取消')),
+                    FilledButton(
+                        onPressed: () => Navigator.pop(ctx, true),
+                        child: const Text('清空')),
+                  ],
+                ),
+              );
+              if (ok == true) {
+                clearChatHistoryMemory();
+                await repo.clearChatMessages();
+              }
+            },
+            child: Padding(
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+              child: Row(
+                children: [
+                  Icon(Icons.delete_outline, size: 20, color: scheme.error),
+                  const SizedBox(width: 8),
+                  Text('清空对话',
+                      style: Theme.of(context)
+                          .textTheme
+                          .bodyLarge
+                          ?.copyWith(color: scheme.error)),
+                ],
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }

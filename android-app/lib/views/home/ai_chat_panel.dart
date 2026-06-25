@@ -59,8 +59,14 @@ Future<void> showAiChatPanel(
 }
 
 /// 会话历史（同一次 App 运行内复用：关闭再打开仍能看到过往对话）。
-/// 跨重启的持久化交给「对话保存时长」设置统一管理（后续）。
+/// 跨重启由 chat_messages 表持久化，按「对话保存时长」设置自动清理超期。
 final List<_Msg> _chatHistory = <_Msg>[];
+
+/// 本次 App 运行是否已从数据库恢复过历史（只恢复一次，之后内存复用）。
+bool _chatRestored = false;
+
+/// 清空内存中的会话历史（设置页「清空对话」时同步调用，避免本次运行还残留）。
+void clearChatHistoryMemory() => _chatHistory.clear();
 
 /// 「来记一笔吧」聊天面板：一句话 → AI 解析 → 记账确认卡（可保存/撤销）。
 /// 语音用键盘自带听写打到输入框即可，不再内置录音识别。
@@ -111,13 +117,17 @@ class _AiChatPanelState extends State<AiChatPanel> {
   /// 规律不足就用查账类「建设性建议」补满 4 条。不推没记过的东西。
   List<String> _pickSuggestions(AppRepository repo) {
     final r = Random();
+    final nowHour = DateTime.now().hour;
     final counts = <String, int>{};
     final amounts = <String, List<Decimal>>{};
     for (final t in repo.transactions) {
       if (t.txKind != TransactionKind.expense) continue;
       final name = t.categoryNameZh;
       if (name.isEmpty || name == '未分类') continue;
-      counts[name] = (counts[name] ?? 0) + 1;
+      // 时段加权：在当前时段(±3 小时，含跨午夜)记过的分类权重更高。
+      final dh = (t.date.hour - nowHour).abs();
+      final w = (dh <= 3 || dh >= 21) ? 2 : 1;
+      counts[name] = (counts[name] ?? 0) + w;
       (amounts[name] ??= <Decimal>[]).add(t.amount);
     }
     final frequent = counts.entries.where((e) => e.value >= 3).toList()
@@ -152,7 +162,35 @@ class _AiChatPanelState extends State<AiChatPanel> {
     // 复用会话历史：清掉残留的"思考中"，滚到底显示最新。
     _msgs.removeWhere((m) => m is _ThinkingMsg);
     _busy = false;
+    // 跨重启恢复：本次运行第一次打开时，从数据库读回历史对话。
+    if (!_chatRestored) {
+      _chatRestored = true;
+      WidgetsBinding.instance.addPostFrameCallback((_) => _restoreHistory());
+    }
     if (_msgs.isNotEmpty) _scrollToBottom();
+  }
+
+  /// 从数据库恢复历史对话（超期的已在 loadChatMessages 内清理）。
+  Future<void> _restoreHistory() async {
+    if (!mounted) return;
+    final rows = await context.read<AppRepository>().loadChatMessages();
+    if (!mounted || rows.isEmpty) return;
+    final restored = <_Msg>[];
+    for (final r in rows) {
+      final role = (r['role'] as String?) ?? 'info';
+      final text = (r['text'] as String?) ?? '';
+      final question = (r['question'] as String?) ?? '';
+      if (role == 'user') {
+        restored.add(_UserMsg(text));
+      } else if (role == 'answer') {
+        restored.add(_AnswerMsg(text, question: question, shown: true));
+      } else if (role == 'info_err') {
+        restored.add(_InfoMsg(text, error: true));
+      } else {
+        restored.add(_InfoMsg(text));
+      }
+    }
+    setState(() => _chatHistory.insertAll(0, restored));
   }
 
   void _onFocusChanged() {
@@ -205,6 +243,7 @@ class _AiChatPanelState extends State<AiChatPanel> {
     final text = (preset ?? _ctrl.text).trim();
     if (text.isEmpty || _busy) return;
 
+    final repo = context.read<AppRepository>();
     _ctrl.clear();
     _focus.unfocus();
     final isQuery = _looksLikeQuery(text);
@@ -214,6 +253,7 @@ class _AiChatPanelState extends State<AiChatPanel> {
       _msgs.add(_ThinkingMsg());
       _busy = true;
     });
+    await repo.addChatMessage(role: 'user', text: text);
     _scrollToBottom();
 
     if (isQuery) {
@@ -267,22 +307,32 @@ class _AiChatPanelState extends State<AiChatPanel> {
         results.every((e) =>
             e.amount != null && e.amount! > Decimal.zero && e.confidence >= 0.9);
     _RecordMsg? autoMsg;
+    String persistText = '';
+    String persistRole = 'info';
     setState(() {
       _msgs.removeWhere((m) => m is _ThinkingMsg);
       if (results.isEmpty) {
         _msgs.add(_InfoMsg('喵没看懂这句，换个说法试试？', error: true));
+        persistText = '喵没看懂这句，换个说法试试？';
+        persistRole = 'info_err';
       } else if (!results
           .any((e) => e.amount != null && e.amount! > Decimal.zero)) {
         // 认出了内容但没金额 → 追问，而不是弹一张存不了的死卡
         _msgs.add(_InfoMsg('喵没认出金额～再说一句金额吧，比如「奶茶 18」'));
+        persistText = '喵没认出金额～再说一句金额吧，比如「奶茶 18」';
       } else {
         if (hint != null) _msgs.add(_InfoMsg(hint));
         final msg = _RecordMsg(entries: results, cats: cats);
         _msgs.add(msg);
         if (highConfidence) autoMsg = msg;
+        final n = results.where((e) => e.amount != null).length;
+        persistText = hint != null ? '$hint · 已记 $n 笔' : '已记 $n 笔';
       }
       _busy = false;
     });
+    if (persistText.isNotEmpty) {
+      await repo.addChatMessage(role: persistRole, text: persistText);
+    }
     // 高置信：自动保存（卡片随即进入已存/可撤销态）
     if (autoMsg != null) {
       await _save(autoMsg!);
@@ -309,12 +359,18 @@ class _AiChatPanelState extends State<AiChatPanel> {
         answer = '喵没连上 AI，待会儿再问问？';
       }
     }
+    // 去掉 markdown 强调符号（**加粗** / __ / 标题井号），纯文本展示。
+    answer = answer
+        .replaceAll('**', '')
+        .replaceAll('__', '')
+        .replaceAll(RegExp(r'^#{1,6}\s*', multiLine: true), '');
     if (!mounted) return;
     setState(() {
       _msgs.removeWhere((m) => m is _ThinkingMsg);
       _msgs.add(_AnswerMsg(answer, question: text));
       _busy = false;
     });
+    await repo.addChatMessage(role: 'answer', text: answer, question: text);
     _scrollToBottom();
   }
 
@@ -1104,7 +1160,8 @@ class _EntryRow extends StatelessWidget {
               amountText,
               style: TextStyle(
                 fontSize: 16,
-                fontWeight: FontWeight.w700,
+                fontWeight: FontWeight.w600,
+                fontFamily: 'Nunito',
                 color: entry.amount == null
                     ? scheme.error
                     : (isIncome ? scheme.secondary : scheme.onSurface),

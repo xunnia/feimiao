@@ -464,7 +464,8 @@ class _EntryCard extends StatelessWidget {
                           .labelSmall
                           ?.copyWith(
                               color: scheme.onSecondaryContainer,
-                              fontWeight: FontWeight.w700),
+                              fontFamily: 'Nunito',
+                              fontWeight: FontWeight.w600),
                     ),
                   ),
                   const SizedBox(width: 8),
@@ -495,7 +496,8 @@ class _EntryCard extends StatelessWidget {
                         .textTheme
                         .headlineSmall
                         ?.copyWith(
-                          fontWeight: FontWeight.w700,
+                          fontWeight: FontWeight.w600,
+                          fontFamily: 'Nunito',
                           color: entry.amount == null
                               ? scheme.error
                               : scheme.onSurface,

@@ -45,40 +45,71 @@ class AccountsView extends StatelessWidget {
               ),
             );
           }
-          return ListView.separated(
-            itemCount: accounts.length,
-            separatorBuilder: (_, __) => const Divider(height: 0),
-            itemBuilder: (context, index) {
-              final account = accounts[index];
-              return ListTile(
-                leading: const Icon(Icons.account_balance_wallet_outlined),
-                title: Text(account.name),
-                subtitle: Text(
-                  account.currencyCode,
-                  style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                        color:
-                            Theme.of(context).colorScheme.onSurfaceVariant,
-                      ),
-                ),
-                trailing: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    IconButton(
-                      icon: const Icon(Icons.edit_outlined, size: 20),
-                      tooltip: '改名',
-                      onPressed: () =>
-                          _showRenameSheet(context, account),
-                    ),
-                    IconButton(
-                      icon: const Icon(Icons.delete_outline, size: 20),
-                      tooltip: '删除',
-                      onPressed: () =>
-                          _confirmDelete(context, repo, account),
+          final scheme = Theme.of(context).colorScheme;
+          return ListView(
+            padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
+            children: [
+              Container(
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(16),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withValues(alpha: 0.04),
+                      blurRadius: 10,
+                      offset: const Offset(0, 2),
                     ),
                   ],
                 ),
-              );
-            },
+                clipBehavior: Clip.antiAlias,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    for (int i = 0; i < accounts.length; i++) ...[
+                      if (i > 0)
+                        Divider(
+                          height: 0.5,
+                          thickness: 0.5,
+                          indent: 54,
+                          color: scheme.outlineVariant.withValues(alpha: 0.5),
+                        ),
+                      ListTile(
+                        leading: Icon(Icons.account_balance_wallet_outlined,
+                            size: 22, color: scheme.onSurfaceVariant),
+                        minLeadingWidth: 0,
+                        horizontalTitleGap: 12,
+                        title: Text(accounts[i].name),
+                        subtitle: Text(
+                          accounts[i].currencyCode,
+                          style:
+                              Theme.of(context).textTheme.labelSmall?.copyWith(
+                                    color: scheme.onSurfaceVariant,
+                                    fontFamily: 'Nunito',
+                                  ),
+                        ),
+                        trailing: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            IconButton(
+                              icon: const Icon(Icons.edit_outlined, size: 20),
+                              tooltip: '改名',
+                              onPressed: () =>
+                                  _showRenameSheet(context, accounts[i]),
+                            ),
+                            IconButton(
+                              icon: const Icon(Icons.delete_outline, size: 20),
+                              tooltip: '删除',
+                              onPressed: () =>
+                                  _confirmDelete(context, repo, accounts[i]),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            ],
           );
         },
       ),
@@ -161,7 +192,7 @@ class _AddAccountSheetState extends State<_AddAccountSheet> {
             style: Theme.of(context)
                 .textTheme
                 .titleMedium
-                ?.copyWith(fontWeight: FontWeight.w600),
+                ?.copyWith(fontWeight: FontWeight.w500),
             textAlign: TextAlign.center,
           ),
           const SizedBox(height: 16),
@@ -268,7 +299,7 @@ class _RenameAccountSheetState extends State<_RenameAccountSheet> {
             style: Theme.of(context)
                 .textTheme
                 .titleMedium
-                ?.copyWith(fontWeight: FontWeight.w600),
+                ?.copyWith(fontWeight: FontWeight.w500),
             textAlign: TextAlign.center,
           ),
           const SizedBox(height: 16),

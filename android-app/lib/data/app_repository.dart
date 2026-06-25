@@ -261,7 +261,7 @@ class TagEntity {
 // ---------------------------------------------------------------------------
 
 class AppRepository extends ChangeNotifier {
-  static const _dbVersion = 8;
+  static const _dbVersion = 9;
   static const _dbName = 'qingji.db';
 
   Database? _db;
@@ -280,6 +280,7 @@ class AppRepository extends ChangeNotifier {
 
   /// 记账模式偏好：true=AI 记账，false=手动记账（持久化）。
   bool _recordAiMode = false;
+  int _chatRetentionDays = 30;
 
   List<BookEntity> get books => List.unmodifiable(_books);
   List<AccountEntity> get accounts => List.unmodifiable(_accounts);
@@ -420,6 +421,16 @@ class AppRepository extends ChangeNotifier {
         value TEXT NOT NULL
       )
     ''');
+
+    await db.execute('''
+      CREATE TABLE chat_messages (
+        id         INTEGER PRIMARY KEY AUTOINCREMENT,
+        role       TEXT NOT NULL,
+        text       TEXT NOT NULL DEFAULT '',
+        question   TEXT NOT NULL DEFAULT '',
+        created_ms INTEGER NOT NULL
+      )
+    ''');
   }
 
   Future<void> _onUpgrade(Database db, int oldVersion, int newVersion) async {
@@ -500,6 +511,17 @@ class AppRepository extends ChangeNotifier {
             "ALTER TABLE transactions ADD COLUMN image_path TEXT NOT NULL DEFAULT ''");
       } catch (_) {}
     }
+    if (oldVersion < 9) {
+      await db.execute('''
+        CREATE TABLE IF NOT EXISTS chat_messages (
+          id         INTEGER PRIMARY KEY AUTOINCREMENT,
+          role       TEXT NOT NULL,
+          text       TEXT NOT NULL DEFAULT '',
+          question   TEXT NOT NULL DEFAULT '',
+          created_ms INTEGER NOT NULL
+        )
+      ''');
+    }
   }
 
   Future<void> _applyCategoryTree(DatabaseExecutor db) async {
@@ -555,6 +577,7 @@ class AppRepository extends ChangeNotifier {
       _loadCategoryBudgets(),
       _loadApiKey(),
       _loadRecordMode(),
+      _loadChatRetention(),
       _loadSavingsGoals(),
       _loadTags(),
     ]);
@@ -682,6 +705,74 @@ class AppRepository extends ChangeNotifier {
       {'key': 'record_ai_mode', 'value': ai ? '1' : '0'},
       conflictAlgorithm: ConflictAlgorithm.replace,
     );
+    notifyListeners();
+  }
+
+  // ---------------------------------------------------------------------------
+  // AI 对话历史（跨重启持久化 + 按「保存时长」自动清理）
+  // ---------------------------------------------------------------------------
+
+  /// 对话保存天数（30 = 一个月，180 = 半年）。
+  int get chatRetentionDays => _chatRetentionDays;
+
+  Future<void> _loadChatRetention() async {
+    final rows = await _db!.query(
+      'app_settings',
+      where: 'key = ?',
+      whereArgs: ['chat_retention_days'],
+      limit: 1,
+    );
+    final v = rows.isEmpty
+        ? null
+        : int.tryParse((rows.first['value'] as String?) ?? '');
+    _chatRetentionDays = (v != null && v > 0) ? v : 30;
+  }
+
+  /// 设置对话保存时长（天）。设置后立即清理超期对话。
+  Future<void> setChatRetentionDays(int days) async {
+    if (days <= 0) return;
+    _chatRetentionDays = days;
+    await _db!.insert(
+      'app_settings',
+      {'key': 'chat_retention_days', 'value': '$days'},
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+    await _pruneChatMessages();
+    notifyListeners();
+  }
+
+  /// 删除超过保存时长的对话。
+  Future<void> _pruneChatMessages() async {
+    final cutoff = DateTime.now()
+        .subtract(Duration(days: _chatRetentionDays))
+        .millisecondsSinceEpoch;
+    await _db!
+        .delete('chat_messages', where: 'created_ms < ?', whereArgs: [cutoff]);
+  }
+
+  /// 读取保存的对话（先清理超期，再按时间正序返回）。
+  Future<List<Map<String, Object?>>> loadChatMessages() async {
+    await _pruneChatMessages();
+    return _db!.query('chat_messages', orderBy: 'created_ms ASC, id ASC');
+  }
+
+  /// 追加一条对话消息。
+  Future<void> addChatMessage({
+    required String role,
+    String text = '',
+    String question = '',
+  }) async {
+    await _db!.insert('chat_messages', {
+      'role': role,
+      'text': text,
+      'question': question,
+      'created_ms': DateTime.now().millisecondsSinceEpoch,
+    });
+  }
+
+  /// 清空全部对话。
+  Future<void> clearChatMessages() async {
+    await _db!.delete('chat_messages');
     notifyListeners();
   }
 

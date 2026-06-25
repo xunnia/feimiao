@@ -105,7 +105,8 @@ class _SearchViewState extends State<SearchView> {
       trailing: Text(
         amt,
         style: TextStyle(
-          fontWeight: FontWeight.w700,
+          fontWeight: FontWeight.w600,
+          fontFamily: 'Nunito',
           color: income ? scheme.secondary : scheme.onSurface,
         ),
       ),

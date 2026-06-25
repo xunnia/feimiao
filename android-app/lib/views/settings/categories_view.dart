@@ -100,22 +100,36 @@ class _CategoryList extends StatelessWidget {
       );
     }
 
-    final scheme = Theme.of(context).colorScheme;
     final tops = categories.where((c) => c.isTopLevel).toList();
 
     return ListView(
-      padding: const EdgeInsets.only(bottom: 28),
+      padding: const EdgeInsets.fromLTRB(16, 16, 16, 28),
       children: [
-        for (final top in tops) ...[
-          _tile(context, top, isChild: false),
-          for (final child in categories.where((c) => c.parentId == top.id))
-            _tile(context, child, isChild: true),
-          Divider(
-            height: 1,
-            thickness: 0.5,
-            color: scheme.outlineVariant.withValues(alpha: 0.4),
+        for (final top in tops)
+          Container(
+            margin: const EdgeInsets.only(bottom: 10),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(16),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withValues(alpha: 0.04),
+                  blurRadius: 10,
+                  offset: const Offset(0, 2),
+                ),
+              ],
+            ),
+            clipBehavior: Clip.antiAlias,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                _tile(context, top, isChild: false),
+                for (final child
+                    in categories.where((c) => c.parentId == top.id))
+                  _tile(context, child, isChild: true),
+              ],
+            ),
           ),
-        ],
       ],
     );
   }
@@ -137,7 +151,7 @@ class _CategoryList extends StatelessWidget {
             : Theme.of(context)
                 .textTheme
                 .titleSmall
-                ?.copyWith(fontWeight: FontWeight.w600),
+                ?.copyWith(fontWeight: FontWeight.w500),
       ),
       trailing: Row(
         mainAxisSize: MainAxisSize.min,
@@ -219,7 +233,7 @@ class _AddCategorySheetState extends State<_AddCategorySheet> {
             style: Theme.of(context)
                 .textTheme
                 .titleMedium
-                ?.copyWith(fontWeight: FontWeight.w600),
+                ?.copyWith(fontWeight: FontWeight.w500),
             textAlign: TextAlign.center,
           ),
           const SizedBox(height: 16),
@@ -332,7 +346,7 @@ class _RenameCategorySheetState extends State<_RenameCategorySheet> {
             style: Theme.of(context)
                 .textTheme
                 .titleMedium
-                ?.copyWith(fontWeight: FontWeight.w600),
+                ?.copyWith(fontWeight: FontWeight.w500),
             textAlign: TextAlign.center,
           ),
           const SizedBox(height: 16),
