@@ -45,7 +45,7 @@ class QingJiApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: '轻记',
+      title: '肥喵记账',
       debugShowCheckedModeBanner: false,
       theme: AppTheme.light(),
       darkTheme: AppTheme.dark(),
@@ -345,7 +345,7 @@ class _AppDrawerState extends State<_AppDrawer> {
               child: Row(
                 children: [
                   Text(
-                    '轻记',
+                    '肥喵记账',
                     style:
                         Theme.of(context).textTheme.headlineSmall?.copyWith(
                               color: scheme.primary,

@@ -114,12 +114,12 @@ class PersonalCenterView extends StatelessWidget {
           _Group(children: [
             _SettingsTile(
               icon: Icons.info_outline,
-              label: '关于轻记',
+              label: '关于肥喵记账',
               onTap: () => showAboutDialog(
                 context: context,
-                applicationName: '轻记 QingJi',
+                applicationName: '肥喵记账',
                 applicationVersion: 'v0.2',
-                applicationLegalese: '© 2025 轻记团队',
+                applicationLegalese: '© 2025 肥喵记账团队',
                 children: const [
                   SizedBox(height: 8),
                   Text('一款可爱的 AI 记账 App，以你家的猫为灵感。'),
@@ -131,7 +131,7 @@ class PersonalCenterView extends StatelessWidget {
           const SizedBox(height: 24),
           Center(
             child: Text(
-              'v0.2 · 轻记 QingJi',
+              'v0.2 · 肥喵记账',
               style: Theme.of(context).textTheme.bodySmall?.copyWith(
                     color: scheme.onSurfaceVariant.withValues(alpha: 0.5),
                   ),

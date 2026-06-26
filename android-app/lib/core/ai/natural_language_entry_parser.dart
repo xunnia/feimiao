@@ -233,6 +233,30 @@ class NaturalLanguageEntryParser {
 class PaymentScreenshotParser {
   PaymentScreenshotParser._();
 
+  /// 截图 OCR 清噪：剔掉明显与交易无关的行（订单号/卡号/余额/积分/纯长数字），
+  /// 但凡含"实付/支付/付款/消费/金额"等支付关键词的行一律保留，避免误删真金额。
+  static String cleanOcr(String raw) {
+    final noise = RegExp(
+        r'订单号|交易单号|商户单号|流水号|订单编号|卡号|余额|积分|实名|手机号|身份证');
+    final pay = RegExp(r'实付|支付金额|付款金额|消费金额|交易金额|合计|￥|¥');
+    final pureDigits = RegExp(r'^[\d\s\-*]{11,}$');
+    final hasDigit = RegExp(r'\d');
+    final kept = <String>[];
+    for (final line in raw.split('\n')) {
+      final t = line.trim();
+      if (t.isEmpty) continue;
+      if (noise.hasMatch(t) && !pay.hasMatch(t)) continue;
+      // 纯长数字串(>=11位，无小数) → 订单号/卡号/手机号
+      if (pureDigits.hasMatch(t) &&
+          hasDigit.hasMatch(t) &&
+          !t.contains('.')) {
+        continue;
+      }
+      kept.add(t);
+    }
+    return kept.join('\n');
+  }
+
   /// 从 OCR 出来的多行文本里找「这笔交易的金额」：
   /// 优先带 ¥/￥/− 标记的大号金额行，其次任何两位小数的数字，取金额最大者。
   static Decimal? extractAmount({required String fromOCRText}) {

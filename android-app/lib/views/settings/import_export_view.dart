@@ -74,14 +74,14 @@ class _ImportExportViewState extends State<ImportExportView> {
       final dir = await getTemporaryDirectory();
       final bookName = repo.currentBook?.name ?? '账本';
       final stamp = DateFormat('yyyyMMdd_HHmm').format(DateTime.now());
-      final file = File('${dir.path}/轻记_${bookName}_$stamp.csv');
+      final file = File('${dir.path}/肥喵记账_${bookName}_$stamp.csv');
       // 加 UTF-8 BOM，Excel 打开不乱码
       await file.writeAsString('﻿$csv');
 
       await Share.shareXFiles(
         [XFile(file.path, mimeType: 'text/csv')],
-        subject: '轻记账单导出',
-        text: '轻记「$bookName」账单（共 ${txs.length} 笔）',
+        subject: '肥喵账单导出',
+        text: '肥喵「$bookName」账单（共 ${txs.length} 笔）',
       );
       _setMessage('已导出 ${txs.length} 笔，去分享面板里保存或发送吧');
     } catch (e) {

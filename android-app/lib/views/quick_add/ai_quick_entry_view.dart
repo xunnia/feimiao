@@ -21,7 +21,14 @@ import '../settings/ai_setting_view.dart';
 class AiQuickEntryView extends StatefulWidget {
   final String? initialText;
 
-  const AiQuickEntryView({super.key, this.initialText});
+  /// 文字来自截图 OCR 时置 true：解析走专门的截图提取提示词。
+  final bool fromScreenshot;
+
+  const AiQuickEntryView({
+    super.key,
+    this.initialText,
+    this.fromScreenshot = false,
+  });
 
   @override
   State<AiQuickEntryView> createState() => _AiQuickEntryViewState();
@@ -93,6 +100,7 @@ class _AiQuickEntryViewState extends State<AiQuickEntryView> {
             apiKey: apiKey,
             expenseCats: CategorySeed.expenses,
             incomeCats: CategorySeed.incomes,
+            fromScreenshot: widget.fromScreenshot,
           );
         } on LlmParseException catch (e) {
           // LLM 失败 → 降级

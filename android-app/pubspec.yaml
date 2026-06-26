@@ -51,11 +51,12 @@ flutter:
         - asset: assets/fonts/Nunito-Bold.ttf
           weight: 700
 
-# 桌面图标：账单 + ¥ + 图表（深蓝玻璃风），CI 里用 flutter_launcher_icons 生成各分辨率
+# 桌面图标：账单 + ¥ + 图表（深蓝玻璃风），CI 里用 flutter_launcher_icons 生成各分辨率。
+# 说明：这张图是「完整成品图标」(自带圆角+留白)，所以不走自适应前景层
+# (前景层会被系统放大并裁掉边缘安全区，导致图标显示不全/被放大)。
+# 只生成传统图标，整张图直接展示，由桌面统一做圆角遮罩。
 flutter_launcher_icons:
   android: true
   ios: false
   image_path: "assets/icon/app_icon.png"
-  adaptive_icon_background: "#2E5090"
-  adaptive_icon_foreground: "assets/icon/app_icon.png"
-  min_sdk_android: 21
+  remove_alpha_ios: true

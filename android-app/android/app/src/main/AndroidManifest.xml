@@ -1,6 +1,6 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <application
-        android:label="qingji"
+        android:label="肥喵记账"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
         <activity

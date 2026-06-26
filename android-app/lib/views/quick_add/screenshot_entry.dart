@@ -3,6 +3,7 @@ import 'package:flutter/cupertino.dart' show CupertinoPageRoute;
 import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart';
 import 'package:image_picker/image_picker.dart';
 
+import '../../core/ai/natural_language_entry_parser.dart';
 import 'ai_quick_entry_view.dart';
 
 /// 支付截图识别入口：相册选一张支付/账单截图 → ML Kit 中文 OCR →
@@ -50,7 +51,8 @@ Future<void> recognizeScreenshotAndEntry(BuildContext context) async {
   // 4. 关遮罩
   if (navigator.canPop()) navigator.pop();
 
-  final cleaned = text.trim();
+  // 先清噪(剔订单号/卡号/余额等),再喂给 AI。
+  final cleaned = PaymentScreenshotParser.cleanOcr(text).trim();
   if (cleaned.isEmpty) {
     messenger.showSnackBar(
       const SnackBar(content: Text('没识别到文字，换张更清晰的截图试试')),
@@ -61,7 +63,10 @@ Future<void> recognizeScreenshotAndEntry(BuildContext context) async {
   // 5. 把识别文字交给 AI 快记页解析
   navigator.push(
     CupertinoPageRoute<void>(
-      builder: (_) => AiQuickEntryView(initialText: cleaned),
+      builder: (_) => AiQuickEntryView(
+        initialText: cleaned,
+        fromScreenshot: true,
+      ),
     ),
   );
 }

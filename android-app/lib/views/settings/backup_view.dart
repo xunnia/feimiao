@@ -24,7 +24,7 @@ class BackupView extends StatelessWidget {
           '${now.year}${now.month.toString().padLeft(2, '0')}${now.day.toString().padLeft(2, '0')}';
       await Share.shareXFiles(
         [XFile(path, name: 'qingji-backup-$stamp.db')],
-        text: '轻记账本备份（$stamp）',
+        text: '肥喵账本备份（$stamp）',
       );
     } catch (_) {
       messenger.showSnackBar(
@@ -48,7 +48,7 @@ class BackupView extends StatelessWidget {
       title: '从备份恢复？',
       message: '将用所选文件覆盖当前全部账目数据，且不可撤销。\n'
           '（系统会在覆盖前自动保留一份 .bak 兜底。）\n\n'
-          '确认选的是轻记导出的备份文件吗？',
+          '确认选的是肥喵记账导出的备份文件吗？',
       confirmText: '确认恢复',
       destructive: true,
     );
@@ -91,7 +91,7 @@ class BackupView extends StatelessWidget {
           ),
           const SizedBox(height: 16),
           Text(
-            '说明：轻记是纯本地 App，数据只在你手机上。建议定期导出一份备份存到网盘，避免换机或丢失手机时账目丢失。',
+            '说明：肥喵记账是纯本地 App，数据只在你手机上。建议定期导出一份备份存到网盘，避免换机或丢失手机时账目丢失。',
             style: Theme.of(context).textTheme.bodySmall?.copyWith(
                   color: scheme.onSurfaceVariant,
                 ),

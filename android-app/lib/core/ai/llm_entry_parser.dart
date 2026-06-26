@@ -37,6 +37,7 @@ class LlmEntryParser {
     required List<CategorySeed> expenseCats,
     required List<CategorySeed> incomeCats,
     DateTime? now,
+    bool fromScreenshot = false,
   }) async {
     final today = now ?? DateTime.now();
     String fmt(DateTime d) =>
@@ -77,11 +78,25 @@ class LlmEntryParser {
 输入：发工资了八千
 输出：{"entries":[{"amount":8000,"kind":"income","categoryKey":"salary","date":"$todayStr","note":"工资","confidence":0.97}]}''';
 
+    // 截图模式:OCR 文本含界面噪声,加一段专门的提取规则。
+    const screenshotExtra = '''
+
+【这是一张支付/账单截图的 OCR 文本，含界面噪声】
+- 只提取真实的消费/收支交易；忽略与交易无关的数字：余额、订单号、卡号、积分、手机号、商品数量、划线原价等。
+- 金额取"实付/支付金额/付款金额/合计/¥"对应的主金额（通常是最显眼那个）。
+- "商户/收款方/对方/店名"作为分类依据，并写进备注。
+- 能识别交易时间（如 2026-06-20 12:30）就用它的日期；识别不到用今天。
+- 一般就是一笔；只有明显是账单列表（多行各带金额）才拆成多笔。''';
+    final sys = fromScreenshot ? systemPrompt + screenshotExtra : systemPrompt;
+    final userContent = fromScreenshot
+        ? '下面是支付/账单截图的 OCR 文字，请从中提取交易：\n\n$text'
+        : text;
+
     final requestBody = jsonEncode({
       'model': _model,
       'messages': [
-        {'role': 'system', 'content': systemPrompt},
-        {'role': 'user', 'content': text},
+        {'role': 'system', 'content': sys},
+        {'role': 'user', 'content': userContent},
       ],
       'response_format': {'type': 'json_object'},
       'temperature': 0.2, // 抽取类任务调低，减少同句不同解析的随机性
