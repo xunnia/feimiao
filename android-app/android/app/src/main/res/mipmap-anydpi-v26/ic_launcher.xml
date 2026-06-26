@@ -1,9 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+  完整成品图标(自带圆角+留白)的正确显示方式:
+  把整张图当作「全屏背景层」(背景层不做安全区裁切、铺满整个 108dp),
+  前景层透明 → 整张设计原样显示,只被桌面统一做圆角遮罩,不再被放大/裁掉边缘。
+  注意:pubspec 里 flutter_launcher_icons 已设为「只生成传统图标」,
+  不带 adaptive 配置,所以 CI 不会覆盖本文件。
+-->
 <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
-  <background android:drawable="@color/ic_launcher_background"/>
-  <foreground>
-      <inset
-          android:drawable="@drawable/ic_launcher_foreground"
-          android:inset="16%" />
-  </foreground>
+    <background android:drawable="@drawable/ic_launcher_foreground"/>
+    <foreground android:drawable="@android:color/transparent"/>
 </adaptive-icon>

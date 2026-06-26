@@ -45,7 +45,7 @@ class _MonthlyReportViewState extends State<MonthlyReportView> {
     });
   }
 
-  String _money(Decimal d) => '¥${MoneyFormat.string(d)}';
+  String _money(Decimal d) => MoneyFormat.string(d);
 
   @override
   Widget build(BuildContext context) {

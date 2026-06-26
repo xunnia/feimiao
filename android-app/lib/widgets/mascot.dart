@@ -120,10 +120,19 @@ class Mascot extends StatelessWidget {
 /// 公开复用：Mascot(animate:true) 走它,首页大卡片探头猫等自定义布局也直接套。
 /// [sway] 是晃头幅度(弧度系数),thinking 态用大一点。
 class MascotBreath extends StatefulWidget {
-  const MascotBreath({super.key, required this.child, this.sway = 0.06});
+  const MascotBreath({
+    super.key,
+    required this.child,
+    this.sway = 0.06,
+    this.bob = -3.0,
+  });
 
   final Widget child;
   final double sway;
+
+  /// 上下浮动幅度(负=上浮)。贴在卡片顶边的探头猫用正值(下沉),
+  /// 否则上浮会被上方边界裁掉。
+  final double bob;
 
   @override
   State<MascotBreath> createState() => _MascotBreathState();
@@ -156,7 +165,7 @@ class _MascotBreathState extends State<MascotBreath>
       builder: (context, child) {
         final t = Curves.easeInOut.transform(_c.value); // 0..1
         final scale = 1.0 + 0.07 * t; // 呼吸放大
-        final dy = -3.0 * t; // 微微上浮
+        final dy = widget.bob * t; // 上下浮动(默认上浮;探头猫用正值下沉)
         final angle = (t - 0.5) * widget.sway; // 轻轻晃头
         return Transform.translate(
           offset: Offset(0, dy),
