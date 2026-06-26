@@ -175,6 +175,8 @@ class _MonthlyContent extends StatelessWidget {
             isCurrentMonth: isCurrentMonth,
           ),
         if (monthlyBudget != null) const SizedBox(height: 16),
+        // 近半年 支出/收入 双线趋势(跨月,看大走势);无数据时自动隐藏。
+        _TrendChart(records: records),
         if (summary.expenseByCategory.isEmpty)
           _EmptyState(
             message: '本月还没有支出',
@@ -841,6 +843,154 @@ class _DailyBarChart extends StatelessWidget {
       ),
     );
   }
+}
+
+/// 近 6 个月 支出/收入 双线趋势(跨月,看大走势)。无数据自动隐藏。
+class _TrendChart extends StatelessWidget {
+  final List<TransactionRecord> records;
+
+  const _TrendChart({required this.records});
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final now = DateTime.now();
+    final months = <DateTime>[];
+    for (var i = 5; i >= 0; i--) {
+      months.add(DateTime(now.year, now.month - i, 1));
+    }
+    final exp = <double>[];
+    final inc = <double>[];
+    for (final m in months) {
+      final s = StatisticsEngine.monthlySummary(records,
+          year: m.year, month: m.month);
+      exp.add(MoneyFormat.toDouble(s.totalExpense));
+      inc.add(MoneyFormat.toDouble(s.totalIncome));
+    }
+    final hasData = exp.any((v) => v > 0) || inc.any((v) => v > 0);
+    if (!hasData) return const SizedBox.shrink();
+
+    final expColor = AppColors.expense(scheme);
+    final incColor = AppColors.income(scheme);
+    final maxV = [...exp, ...inc].fold<double>(0, (a, b) => a > b ? a : b);
+    final maxY = maxV <= 0 ? 1.0 : maxV * 1.25;
+
+    LineChartBarData bar(List<double> data, Color c) => LineChartBarData(
+          spots: [
+            for (var i = 0; i < data.length; i++) FlSpot(i.toDouble(), data[i])
+          ],
+          color: c,
+          isCurved: true,
+          curveSmoothness: 0.25,
+          barWidth: 2.5,
+          dotData: FlDotData(
+            show: true,
+            getDotPainter: (s, p, b, i) =>
+                FlDotCirclePainter(radius: 2.5, color: c, strokeWidth: 0),
+          ),
+          belowBarData: BarAreaData(show: false),
+        );
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 16),
+      child: _SectionCard(
+        title: '近半年趋势',
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                _dot(expColor),
+                const SizedBox(width: 4),
+                Text('支出',
+                    style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                        color: scheme.onSurfaceVariant)),
+                const SizedBox(width: 16),
+                _dot(incColor),
+                const SizedBox(width: 4),
+                Text('收入',
+                    style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                        color: scheme.onSurfaceVariant)),
+              ],
+            ),
+            const SizedBox(height: 14),
+            SizedBox(
+              height: 160,
+              child: LineChart(
+                LineChartData(
+                  minY: 0,
+                  maxY: maxY,
+                  lineBarsData: [bar(exp, expColor), bar(inc, incColor)],
+                  gridData: FlGridData(
+                    show: true,
+                    drawVerticalLine: false,
+                    horizontalInterval: maxY / 3,
+                    getDrawingHorizontalLine: (v) => FlLine(
+                      color: scheme.outlineVariant.withValues(alpha: 0.3),
+                      strokeWidth: 0.5,
+                    ),
+                  ),
+                  borderData: FlBorderData(show: false),
+                  titlesData: FlTitlesData(
+                    leftTitles: const AxisTitles(
+                        sideTitles: SideTitles(showTitles: false)),
+                    rightTitles: const AxisTitles(
+                        sideTitles: SideTitles(showTitles: false)),
+                    topTitles: const AxisTitles(
+                        sideTitles: SideTitles(showTitles: false)),
+                    bottomTitles: AxisTitles(
+                      sideTitles: SideTitles(
+                        showTitles: true,
+                        reservedSize: 22,
+                        interval: 1,
+                        getTitlesWidget: (v, meta) {
+                          final i = v.toInt();
+                          if (i < 0 || i >= months.length) {
+                            return const SizedBox.shrink();
+                          }
+                          return Padding(
+                            padding: const EdgeInsets.only(top: 6),
+                            child: Text('${months[i].month}月',
+                                style: Theme.of(context)
+                                    .textTheme
+                                    .labelSmall
+                                    ?.copyWith(
+                                        color: scheme.onSurfaceVariant,
+                                        fontSize: 10)),
+                          );
+                        },
+                      ),
+                    ),
+                  ),
+                  lineTouchData: LineTouchData(
+                    touchTooltipData: LineTouchTooltipData(
+                      getTooltipItems: (spots) => spots.map((s) {
+                        final label = s.barIndex == 0 ? '支出' : '收入';
+                        return LineTooltipItem(
+                          '$label ¥${s.y.toStringAsFixed(0)}',
+                          TextStyle(
+                            color: s.barIndex == 0 ? expColor : incColor,
+                            fontSize: 12,
+                            fontWeight: FontWeight.w500,
+                          ),
+                        );
+                      }).toList(),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _dot(Color c) => Container(
+        width: 8,
+        height: 8,
+        decoration: BoxDecoration(color: c, shape: BoxShape.circle),
+      );
 }
 
 class _MonthlyBarChart extends StatelessWidget {
