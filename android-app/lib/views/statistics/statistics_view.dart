@@ -2,7 +2,7 @@ import 'package:decimal/decimal.dart';
 import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/cupertino.dart'
-    show CupertinoSlidingSegmentedControl, CupertinoIcons;
+    show CupertinoSlidingSegmentedControl, CupertinoIcons, CupertinoPageRoute;
 import 'package:provider/provider.dart';
 
 import '../../core/budget/budget_engine.dart';
@@ -17,6 +17,7 @@ import '../../core/haptics.dart';
 import '../../theme/app_colors.dart';
 import '../../widgets/glass.dart';
 import '../../widgets/mascot.dart';
+import 'monthly_report_view.dart';
 
 /// 统计页：月度 / 年度分段，饼图 + 柱状图 + 分类排行。
 class StatisticsView extends StatefulWidget {
@@ -54,7 +55,21 @@ class _StatisticsViewState extends State<StatisticsView> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('统计'), centerTitle: true),
+      appBar: AppBar(
+        title: const Text('统计'),
+        centerTitle: true,
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.description_outlined),
+            tooltip: '月度报告',
+            onPressed: () => Navigator.push<void>(
+              context,
+              CupertinoPageRoute<void>(
+                  builder: (_) => const MonthlyReportView()),
+            ),
+          ),
+        ],
+      ),
       body: Consumer<AppRepository>(
         builder: (context, repo, _) {
           final records = repo.allRecords;
