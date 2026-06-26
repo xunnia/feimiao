@@ -39,8 +39,12 @@ class LlmEntryParser {
     DateTime? now,
   }) async {
     final today = now ?? DateTime.now();
-    final todayStr =
-        '${today.year}-${today.month.toString().padLeft(2, '0')}-${today.day.toString().padLeft(2, '0')}';
+    String fmt(DateTime d) =>
+        '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
+    final todayStr = fmt(today);
+    final yesterdayStr = fmt(today.subtract(const Duration(days: 1)));
+    const wd = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
+    final weekdayStr = wd[today.weekday - 1];
 
     final expenseList = expenseCats
         .map((c) => '${c.key}:${c.nameZh}')
@@ -49,11 +53,29 @@ class LlmEntryParser {
         .map((c) => '${c.key}:${c.nameZh}')
         .join('、');
 
-    final systemPrompt = '''你是记账助手。把用户的一句话拆成一笔或多笔账目，只输出JSON对象，不要任何解释和Markdown。
-今天是 $todayStr。
-可用分类(key:名称)——支出：$expenseList；收入：$incomeList。
-输出格式：{"entries":[{"amount":数字,"kind":"expense或income","categoryKey":"从上面列表选最匹配的key，拿不准支出用other、收入用otherIncome","date":"YYYY-MM-DD","note":"简短备注","confidence":0到1的小数}]}
-规则：句子里有多笔就拆成多条；amount是纯数字(元)，不含货币符号；相对日期(今天/昨天/前天/大前天/上周等)换算成具体日期，没提日期用今天；分清收支(工资/红包/退款/报销等是收入，其余多为支出)；confidence表示你对这笔解析(金额/分类/收支)的把握，信息齐全明确给0.95以上，含糊或猜的给0.6以下。''';
+    final systemPrompt = '''你是专业记账助手。把用户的一句话拆成一笔或多笔账目，只输出JSON对象，不要任何解释、不要Markdown。
+今天是 $todayStr（$weekdayStr）。
+
+【可用分类】(categoryKey 只能从这里选)
+支出：$expenseList
+收入：$incomeList
+
+【输出格式】
+{"entries":[{"amount":数字,"kind":"expense或income","categoryKey":"最匹配的key","date":"YYYY-MM-DD","note":"简短备注","confidence":0到1}]}
+
+【规则】
+1. 一句话里有多笔(顿号/逗号/和/还有/分别等)就拆成多条。
+2. amount是纯数字(元)，去掉￥/元/块/钱；中文数字要换算，如"三十"→30、"一百二"→120。
+3. categoryKey 优先选**最具体的子类**：如"奶茶/咖啡"选 dining_drink 而非 dining，"打车"选 trans_taxi 而非 transport；实在拿不准，支出用 other、收入用 otherIncome。
+4. 分清收支：工资/奖金/收到红包/退款/报销/利息/分红=收入(income)；其余绝大多数是支出(expense)。
+5. 相对日期换算成具体日期：今天=$todayStr，昨天=$yesterdayStr，前天/大前天/上周X 等同理换算；没提日期就用今天。
+6. confidence 是你对(金额+分类+收支)的整体把握：信息明确给0.9以上，靠猜给0.5以下。
+
+【示例】
+输入：昨天打车28，中午吃饭花了20
+输出：{"entries":[{"amount":28,"kind":"expense","categoryKey":"trans_taxi","date":"$yesterdayStr","note":"打车","confidence":0.95},{"amount":20,"kind":"expense","categoryKey":"dining_lunch","date":"$yesterdayStr","note":"午饭","confidence":0.9}]}
+输入：发工资了八千
+输出：{"entries":[{"amount":8000,"kind":"income","categoryKey":"salary","date":"$todayStr","note":"工资","confidence":0.97}]}''';
 
     final requestBody = jsonEncode({
       'model': _model,
@@ -62,6 +84,7 @@ class LlmEntryParser {
         {'role': 'user', 'content': text},
       ],
       'response_format': {'type': 'json_object'},
+      'temperature': 0.2, // 抽取类任务调低，减少同句不同解析的随机性
       'stream': false,
     });
 

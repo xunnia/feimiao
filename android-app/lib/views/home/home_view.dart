@@ -17,6 +17,7 @@ import '../../widgets/animated_money.dart';
 import '../../widgets/mascot.dart';
 import '../../widgets/ios_dialogs.dart';
 import '../../widgets/tag_selector.dart';
+import '../../widgets/transaction_actions.dart';
 import '../statistics/statistics_view.dart';
 import '../settings/budget_setting_view.dart';
 import '../transactions/edit_transaction_sheet.dart';
@@ -346,10 +347,12 @@ class _ExpandedSummaryCard extends StatelessWidget {
             top: -8,
             right: -2,
             child: IgnorePointer(
-              child: Image.asset(
-                'assets/mascot/${isOverspend ? 'overspend' : 'idle'}.png',
-                height: 96,
-                fit: BoxFit.fitHeight,
+              child: MascotBreath(
+                child: Image.asset(
+                  'assets/mascot/${isOverspend ? 'overspend' : 'idle'}.png',
+                  height: 96,
+                  fit: BoxFit.fitHeight,
+                ),
               ),
             ),
           ),
@@ -1266,10 +1269,7 @@ class _DayCard extends StatelessWidget {
                 height: 0.5,
                 color: scheme.outlineVariant.withValues(alpha: 0.5),
               ),
-            _DismissibleRow(
-              transaction: section.items[i],
-              onDelete: () => repo.deleteTransaction(section.items[i].id),
-            ),
+            _DismissibleRow(transaction: section.items[i]),
           ],
         ],
       ),
@@ -1362,34 +1362,13 @@ class _DaySectionHeader extends StatelessWidget {
 
 class _DismissibleRow extends StatelessWidget {
   final TransactionEntity transaction;
-  final VoidCallback onDelete;
 
-  const _DismissibleRow({
-    required this.transaction,
-    required this.onDelete,
-  });
+  const _DismissibleRow({required this.transaction});
 
   @override
   Widget build(BuildContext context) {
-    return Dismissible(
-      key: ValueKey(transaction.id),
-      direction: DismissDirection.endToStart,
-      background: Container(
-        alignment: Alignment.centerRight,
-        padding: const EdgeInsets.only(right: 20),
-        color: Colors.red.shade400,
-        child: const Icon(Icons.delete_outline, color: Colors.white),
-      ),
-      confirmDismiss: (_) => showConfirmDialog(
-        context,
-        title: '删除这笔账？',
-        confirmText: '删除',
-        destructive: true,
-      ),
-      onDismissed: (_) {
-        Haptics.of(Haptic.warning);
-        onDelete();
-      },
+    return TransactionSlidable(
+      transaction: transaction,
       child: InkWell(
         onTap: () => showEditTransactionSheet(context, transaction),
         child: _TransactionRow(transaction: transaction),
@@ -1423,7 +1402,13 @@ class _TransactionRow extends StatelessWidget {
     }
   }
 
+  // 退款冲账 = 负向支出：显示成「+¥x」铜金色。
+  bool get _isRefund =>
+      transaction.txKind == TransactionKind.expense &&
+      transaction.amount < Decimal.zero;
+
   String get _amountText {
+    if (_isRefund) return '+${MoneyFormat.string(transaction.amount.abs())}';
     final text = MoneyFormat.string(transaction.amount);
     switch (transaction.txKind) {
       case TransactionKind.expense:
@@ -1436,6 +1421,7 @@ class _TransactionRow extends StatelessWidget {
   }
 
   Color _amountColor(ColorScheme scheme) {
+    if (_isRefund) return AppColors.income(scheme);
     switch (transaction.txKind) {
       case TransactionKind.income:
         return AppColors.income(scheme);

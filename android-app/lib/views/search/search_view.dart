@@ -89,7 +89,12 @@ class _SearchViewState extends State<SearchView> {
 
   Widget _row(BuildContext context, TransactionEntity t, ColorScheme scheme) {
     final income = t.txKind == TransactionKind.income;
-    final amt = '${income ? '+' : '-'}${MoneyFormat.string(t.amount)}';
+    // 退款冲账 = 负向支出：显示成「+¥x」铜金色。
+    final isRefund =
+        t.txKind == TransactionKind.expense && t.amount.toDouble() < 0;
+    final amt = isRefund
+        ? '+${MoneyFormat.string(t.amount.abs())}'
+        : '${income ? '+' : '-'}${MoneyFormat.string(t.amount)}';
     final dateStr = '${t.date.year}-${t.date.month}-${t.date.day}';
     return ListTile(
       title: Text(
@@ -107,7 +112,7 @@ class _SearchViewState extends State<SearchView> {
         style: TextStyle(
           fontWeight: FontWeight.w600,
           fontFamily: 'Nunito',
-          color: income ? scheme.secondary : scheme.onSurface,
+          color: (income || isRefund) ? scheme.secondary : scheme.onSurface,
         ),
       ),
       onTap: () => showEditTransactionSheet(context, t),

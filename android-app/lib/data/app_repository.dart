@@ -913,6 +913,28 @@ class AppRepository extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// 退款冲账(方案1):在同分类/账户记一笔「负支出」,
+  /// 原记录不动;统计、预算、结余因负数累加自动按净额计算。
+  Future<void> refundTransaction(
+      TransactionEntity original, Decimal refundAmount) async {
+    if (refundAmount <= Decimal.zero) return;
+    final accountId = original.accountId ?? _accounts.firstOrNull?.id;
+    if (accountId == null) return;
+    final note = original.note.isNotEmpty
+        ? '退款 · ${original.note}'
+        : (original.categoryNameZh.isNotEmpty
+            ? '退款 · ${original.categoryNameZh}'
+            : '退款');
+    await addTransaction(
+      kind: TransactionKind.expense,
+      amount: Decimal.zero - refundAmount, // 负支出 = 冲账
+      categoryId: original.categoryId,
+      accountId: accountId,
+      note: note,
+      date: DateTime.now(),
+    );
+  }
+
   Future<void> updateTransaction({
     required int id,
     required TransactionKind kind,

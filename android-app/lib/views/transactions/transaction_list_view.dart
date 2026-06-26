@@ -2,7 +2,6 @@ import 'package:decimal/decimal.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
-import '../../core/haptics.dart';
 import '../../core/models/cat_svg_icon.dart';
 import '../../core/models/category_seed.dart';
 import '../../core/models/transaction_kind.dart';
@@ -10,8 +9,8 @@ import '../../core/money_format.dart';
 import '../../data/app_repository.dart';
 import '../../theme/app_colors.dart';
 import '../../widgets/mascot.dart';
-import '../../widgets/ios_dialogs.dart';
 import '../../widgets/tag_selector.dart';
+import '../../widgets/transaction_actions.dart';
 import 'edit_transaction_sheet.dart';
 
 /// 流水明细页：按天分组 + 当日小计 + 左滑删除 + 「只看待报销」筛选 + 空状态。
@@ -153,10 +152,7 @@ class _TransactionSectionList extends StatelessWidget {
         if (item is _DaySection) {
           return _SectionHeader(section: item);
         } else if (item is TransactionEntity) {
-          return _DismissibleRow(
-            transaction: item,
-            onDelete: () => repo.deleteTransaction(item.id),
-          );
+          return _DismissibleRow(transaction: item);
         }
         return const SizedBox.shrink();
       },
@@ -223,31 +219,13 @@ class _SectionHeader extends StatelessWidget {
 
 class _DismissibleRow extends StatelessWidget {
   final TransactionEntity transaction;
-  final VoidCallback onDelete;
 
-  const _DismissibleRow({required this.transaction, required this.onDelete});
+  const _DismissibleRow({required this.transaction});
 
   @override
   Widget build(BuildContext context) {
-    return Dismissible(
-      key: ValueKey(transaction.id),
-      direction: DismissDirection.endToStart,
-      background: Container(
-        alignment: Alignment.centerRight,
-        padding: const EdgeInsets.only(right: 20),
-        color: Colors.red.shade400,
-        child: const Icon(Icons.delete_outline, color: Colors.white),
-      ),
-      confirmDismiss: (_) => showConfirmDialog(
-        context,
-        title: '删除这笔账？',
-        confirmText: '删除',
-        destructive: true,
-      ),
-      onDismissed: (_) {
-        Haptics.of(Haptic.warning);
-        onDelete();
-      },
+    return TransactionSlidable(
+      transaction: transaction,
       child: InkWell(
         onTap: () => showEditTransactionSheet(context, transaction),
         child: _TransactionRow(transaction: transaction),
@@ -281,7 +259,13 @@ class _TransactionRow extends StatelessWidget {
     }
   }
 
+  // 退款冲账 = 负向支出：显示成「+¥x」铜金色，避免 --30 这种丑写法。
+  bool get _isRefund =>
+      transaction.txKind == TransactionKind.expense &&
+      transaction.amount < Decimal.zero;
+
   String get _amountText {
+    if (_isRefund) return '+${MoneyFormat.string(transaction.amount.abs())}';
     final text = MoneyFormat.string(transaction.amount);
     switch (transaction.txKind) {
       case TransactionKind.expense:
@@ -294,6 +278,7 @@ class _TransactionRow extends StatelessWidget {
   }
 
   Color _amountColor(ColorScheme scheme) {
+    if (_isRefund) return AppColors.income(scheme);
     switch (transaction.txKind) {
       case TransactionKind.expense:
         return AppColors.expense(scheme);

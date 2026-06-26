@@ -696,7 +696,7 @@ class _AiChatPanelState extends State<AiChatPanel> {
       padding: const EdgeInsets.fromLTRB(16, 6, 12, 4),
       child: Row(
         children: [
-          const Mascot(mood: MascotMood.celebrate, size: 35),
+          const Mascot(mood: MascotMood.celebrate, size: 35, animate: true),
           const SizedBox(width: 8),
           Text(
             '喵喵助手',
@@ -1116,7 +1116,7 @@ class _AnswerBubbleState extends State<_AnswerBubble> {
             ),
             const SizedBox(height: 2),
             // 猫在操作图标下方、左侧；放大 30%。
-            Mascot(mood: _moodFor(widget.text), size: 52),
+            Mascot(mood: _moodFor(widget.text), size: 52, animate: true),
           ],
         ],
       ),
@@ -1150,7 +1150,8 @@ class _RecordBubble extends StatelessWidget {
             children: [
               Mascot(
                   mood: msg.saved ? MascotMood.success : MascotMood.idle,
-                  size: 28),
+                  size: 28,
+                  animate: true),
               const SizedBox(width: 8),
               Text(
                 msg.saved ? '记好啦！' : (n > 1 ? '帮你拆成 $n 笔：' : '看看对不对：'),

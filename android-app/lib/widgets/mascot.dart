@@ -57,7 +57,10 @@ class Mascot extends StatelessWidget {
     if (!animate) return child;
     // 系统开启「减弱动效」时保持静止（无障碍）。
     if (MediaQuery.maybeOf(context)?.disableAnimations ?? false) return child;
-    return _AnimatedMascot(mood: mood, child: child);
+    return MascotBreath(
+      sway: mood == MascotMood.thinking ? 0.14 : 0.06,
+      child: child,
+    );
   }
 
   Widget _buildImage(BuildContext context) {
@@ -113,20 +116,20 @@ class Mascot extends StatelessWidget {
   }
 }
 
-/// 给吉祥物套一层轻微的「呼吸 + 浮动」循环动效。
-/// - 通用：缓慢放大缩小（1.0↔1.05）+ 微微上浮，像在轻轻呼吸。
-/// - thinking 态：额外加 ±3° 左右摇摆，像在歪头思考。
-class _AnimatedMascot extends StatefulWidget {
-  const _AnimatedMascot({required this.mood, required this.child});
+/// 给任意吉祥物图片套一层轻微的「呼吸 + 浮动 + 晃头」循环动效。
+/// 公开复用：Mascot(animate:true) 走它,首页大卡片探头猫等自定义布局也直接套。
+/// [sway] 是晃头幅度(弧度系数),thinking 态用大一点。
+class MascotBreath extends StatefulWidget {
+  const MascotBreath({super.key, required this.child, this.sway = 0.06});
 
-  final MascotMood mood;
   final Widget child;
+  final double sway;
 
   @override
-  State<_AnimatedMascot> createState() => _AnimatedMascotState();
+  State<MascotBreath> createState() => _MascotBreathState();
 }
 
-class _AnimatedMascotState extends State<_AnimatedMascot>
+class _MascotBreathState extends State<MascotBreath>
     with SingleTickerProviderStateMixin {
   late final AnimationController _c;
 
@@ -152,10 +155,9 @@ class _AnimatedMascotState extends State<_AnimatedMascot>
       child: widget.child,
       builder: (context, child) {
         final t = Curves.easeInOut.transform(_c.value); // 0..1
-        final scale = 1.0 + 0.05 * t; // 呼吸放大
-        final dy = -2.0 * t; // 微微上浮
-        final angle =
-            widget.mood == MascotMood.thinking ? (t - 0.5) * 0.10 : 0.0;
+        final scale = 1.0 + 0.07 * t; // 呼吸放大
+        final dy = -3.0 * t; // 微微上浮
+        final angle = (t - 0.5) * widget.sway; // 轻轻晃头
         return Transform.translate(
           offset: Offset(0, dy),
           child: Transform.rotate(
