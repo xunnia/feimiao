@@ -73,6 +73,29 @@ void main() {
       expect(summary.dailyTotals[19].expense, Decimal.zero);
     });
 
+    test('refund (negative expense) nets out totals and category', () {
+      final records = [
+        _rec(
+            kind: TransactionKind.expense,
+            amount: Decimal.fromInt(50),
+            categoryName: '购物',
+            date: _date(2026, 6, 1)),
+        // 退款冲账 = 同分类负支出
+        _rec(
+            kind: TransactionKind.expense,
+            amount: Decimal.fromInt(-30),
+            categoryName: '购物',
+            date: _date(2026, 6, 3)),
+      ];
+      final summary = StatisticsEngine.monthlySummary(
+        records,
+        year: 2026,
+        month: 6,
+      );
+      expect(summary.totalExpense, Decimal.fromInt(20)); // 50 - 30
+      expect(summary.expenseByCategory.first.total, Decimal.fromInt(20));
+    });
+
     test('empty month', () {
       final summary = StatisticsEngine.monthlySummary(
         [],

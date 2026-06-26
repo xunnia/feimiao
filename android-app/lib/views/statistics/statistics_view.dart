@@ -656,7 +656,26 @@ class _ExpensePieChart extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final items = categories.take(8).toList();
+    // 只取净额为正的分类:退款冲账可能让某分类净额≤0,
+    // 负值喂给饼图会渲染异常,这里直接剔除。
+    final items = categories
+        .where((c) => MoneyFormat.toDouble(c.total) > 0)
+        .take(8)
+        .toList();
+
+    if (items.isEmpty) {
+      return SizedBox(
+        height: 200,
+        child: Center(
+          child: Text(
+            '本月暂无支出',
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                ),
+          ),
+        ),
+      );
+    }
 
     return SizedBox(
       height: 200,
@@ -752,7 +771,8 @@ class _DailyBarChart extends StatelessWidget {
               x: d.day,
               barRods: [
                 BarChartRodData(
-                  toY: MoneyFormat.toDouble(d.expense),
+                  // 退款冲账可能让某天净额为负,夹到 0 避免倒柱。
+                  toY: MoneyFormat.toDouble(d.expense).clamp(0.0, double.infinity),
                   color: scheme.primary,
                   width: 6,
                   borderRadius: const BorderRadius.vertical(

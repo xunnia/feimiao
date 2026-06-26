@@ -6,6 +6,7 @@ import 'package:path/path.dart' as p;
 import 'package:sqflite/sqflite.dart';
 
 import '../core/models/category_seed.dart';
+import '../core/models/recurring_rule.dart';
 import '../core/models/transaction_kind.dart';
 import '../core/models/transaction_record.dart';
 
@@ -261,7 +262,7 @@ class TagEntity {
 // ---------------------------------------------------------------------------
 
 class AppRepository extends ChangeNotifier {
-  static const _dbVersion = 9;
+  static const _dbVersion = 11;
   static const _dbName = 'qingji.db';
 
   Database? _db;
@@ -281,6 +282,13 @@ class AppRepository extends ChangeNotifier {
   /// 记账模式偏好：true=AI 记账，false=手动记账（持久化）。
   bool _recordAiMode = false;
   int _chatRetentionDays = 30;
+
+  /// 用户纠正记忆：(备注短语, 收支, 分类key)。AI 记账时按此覆盖模型的猜测。
+  final List<({String phrase, TransactionKind kind, String key})> _catMemory =
+      [];
+
+  /// 周期记账规则(全部账本)。
+  final List<RecurringRule> _recurringRules = [];
 
   List<BookEntity> get books => List.unmodifiable(_books);
   List<AccountEntity> get accounts => List.unmodifiable(_accounts);
@@ -332,6 +340,9 @@ class AppRepository extends ChangeNotifier {
     await _seedIfNeeded();
     await _ensureDefaultBook();
     await _loadAll();
+    // 启动时补记到期的周期账目,再刷新一次交易。
+    await _materializeRecurring();
+    await _loadTransactions();
   }
 
   Future<void> _onCreate(Database db, int version) async {
@@ -431,6 +442,32 @@ class AppRepository extends ChangeNotifier {
         created_ms INTEGER NOT NULL
       )
     ''');
+
+    await db.execute('''
+      CREATE TABLE category_memory (
+        phrase       TEXT NOT NULL,
+        kind         TEXT NOT NULL,
+        category_key TEXT NOT NULL,
+        updated_ms   INTEGER NOT NULL,
+        PRIMARY KEY (phrase, kind)
+      )
+    ''');
+
+    await db.execute('''
+      CREATE TABLE recurring_rules (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        book_id     INTEGER,
+        kind        TEXT NOT NULL,
+        amount      TEXT NOT NULL,
+        category_id INTEGER,
+        account_id  INTEGER,
+        note        TEXT NOT NULL DEFAULT '',
+        period      TEXT NOT NULL,
+        next_due_ms INTEGER NOT NULL,
+        enabled     INTEGER NOT NULL DEFAULT 1,
+        created_ms  INTEGER NOT NULL DEFAULT 0
+      )
+    ''');
   }
 
   Future<void> _onUpgrade(Database db, int oldVersion, int newVersion) async {
@@ -522,6 +559,34 @@ class AppRepository extends ChangeNotifier {
         )
       ''');
     }
+    if (oldVersion < 10) {
+      await db.execute('''
+        CREATE TABLE IF NOT EXISTS category_memory (
+          phrase       TEXT NOT NULL,
+          kind         TEXT NOT NULL,
+          category_key TEXT NOT NULL,
+          updated_ms   INTEGER NOT NULL,
+          PRIMARY KEY (phrase, kind)
+        )
+      ''');
+    }
+    if (oldVersion < 11) {
+      await db.execute('''
+        CREATE TABLE IF NOT EXISTS recurring_rules (
+          id          INTEGER PRIMARY KEY AUTOINCREMENT,
+          book_id     INTEGER,
+          kind        TEXT NOT NULL,
+          amount      TEXT NOT NULL,
+          category_id INTEGER,
+          account_id  INTEGER,
+          note        TEXT NOT NULL DEFAULT '',
+          period      TEXT NOT NULL,
+          next_due_ms INTEGER NOT NULL,
+          enabled     INTEGER NOT NULL DEFAULT 1,
+          created_ms  INTEGER NOT NULL DEFAULT 0
+        )
+      ''');
+    }
   }
 
   Future<void> _applyCategoryTree(DatabaseExecutor db) async {
@@ -578,6 +643,8 @@ class AppRepository extends ChangeNotifier {
       _loadApiKey(),
       _loadRecordMode(),
       _loadChatRetention(),
+      _loadCategoryMemory(),
+      _loadRecurringRules(),
       _loadSavingsGoals(),
       _loadTags(),
     ]);
@@ -774,6 +841,188 @@ class AppRepository extends ChangeNotifier {
   Future<void> clearChatMessages() async {
     await _db!.delete('chat_messages');
     notifyListeners();
+  }
+
+  // ---------------------------------------------------------------------------
+  // AI 学习用户纠正：改了某笔分类就记住，下次同备注/商户自动套用
+  // ---------------------------------------------------------------------------
+
+  Future<void> _loadCategoryMemory() async {
+    final rows = await _db!.query('category_memory');
+    _catMemory
+      ..clear()
+      ..addAll(rows.map((r) => (
+            phrase: r['phrase'] as String,
+            kind: TransactionKind.fromJson(r['kind'] as String),
+            key: r['category_key'] as String,
+          )));
+  }
+
+  /// 记住一条「备注短语 → 分类」的纠正（编辑里改了分类时调用）。
+  Future<void> learnCategory({
+    required String phrase,
+    required TransactionKind kind,
+    required String categoryKey,
+  }) async {
+    final p = phrase.trim();
+    if (p.length < 2 || categoryKey.isEmpty) return;
+    await _db!.insert(
+      'category_memory',
+      {
+        'phrase': p,
+        'kind': kind.toJson(),
+        'category_key': categoryKey,
+        'updated_ms': DateTime.now().millisecondsSinceEpoch,
+      },
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+    _catMemory.removeWhere((m) => m.phrase == p && m.kind == kind);
+    _catMemory.add((phrase: p, kind: kind, key: categoryKey));
+  }
+
+  /// 按备注召回学过的分类 key：取被备注包含的「最长」短语对应的分类；无则 null。
+  String? recallCategoryKey(String note, TransactionKind kind) {
+    final n = note.trim();
+    if (n.isEmpty) return null;
+    String? best;
+    int bestLen = 0;
+    for (final m in _catMemory) {
+      if (m.kind != kind) continue;
+      if (m.phrase.length > bestLen && n.contains(m.phrase)) {
+        best = m.key;
+        bestLen = m.phrase.length;
+      }
+    }
+    return best;
+  }
+
+  // ---------------------------------------------------------------------------
+  // 周期记账
+  // ---------------------------------------------------------------------------
+
+  /// 当前账本的周期规则(按下次到期升序)。
+  List<RecurringRule> get recurringRules => _recurringRules
+      .where((r) => r.bookId == _currentBookId)
+      .toList()
+    ..sort((a, b) => a.nextDueMs.compareTo(b.nextDueMs));
+
+  Future<void> _loadRecurringRules() async {
+    final rows = await _db!.query('recurring_rules');
+    _recurringRules
+      ..clear()
+      ..addAll(rows.map(RecurringRule.fromMap));
+  }
+
+  Future<void> addRecurringRule({
+    required TransactionKind kind,
+    required Decimal amount,
+    int? categoryId,
+    int? accountId,
+    String note = '',
+    required RecurPeriod period,
+    required DateTime startDate,
+  }) async {
+    await _db!.insert('recurring_rules', {
+      'book_id': _currentBookId,
+      'kind': kind.toJson(),
+      'amount': amount.toString(),
+      'category_id': categoryId,
+      'account_id': accountId,
+      'note': note,
+      'period': period.toJson(),
+      'next_due_ms': startDate.millisecondsSinceEpoch,
+      'enabled': 1,
+      'created_ms': DateTime.now().millisecondsSinceEpoch,
+    });
+    await _loadRecurringRules();
+    await _materializeRecurring(); // 起始日若已过则立即补记
+    await _loadTransactions();
+    notifyListeners();
+  }
+
+  Future<void> updateRecurringRule({
+    required int id,
+    required TransactionKind kind,
+    required Decimal amount,
+    int? categoryId,
+    int? accountId,
+    String note = '',
+    required RecurPeriod period,
+    required DateTime nextDue,
+  }) async {
+    await _db!.update(
+      'recurring_rules',
+      {
+        'kind': kind.toJson(),
+        'amount': amount.toString(),
+        'category_id': categoryId,
+        'account_id': accountId,
+        'note': note,
+        'period': period.toJson(),
+        'next_due_ms': nextDue.millisecondsSinceEpoch,
+      },
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+    await _loadRecurringRules();
+    notifyListeners();
+  }
+
+  Future<void> deleteRecurringRule(int id) async {
+    await _db!.delete('recurring_rules', where: 'id = ?', whereArgs: [id]);
+    await _loadRecurringRules();
+    notifyListeners();
+  }
+
+  Future<void> setRecurringEnabled(int id, bool enabled) async {
+    await _db!.update('recurring_rules', {'enabled': enabled ? 1 : 0},
+        where: 'id = ?', whereArgs: [id]);
+    await _loadRecurringRules();
+    if (enabled) {
+      await _materializeRecurring();
+      await _loadTransactions();
+    }
+    notifyListeners();
+  }
+
+  /// 到期生成:启用规则中凡 nextDue<=今天 就补记一笔并推进 nextDue。
+  /// guard 上限防止极端情况(长期没打开 App)跑飞。
+  Future<void> _materializeRecurring() async {
+    final now = DateTime.now();
+    final cutoff =
+        DateTime(now.year, now.month, now.day, 23, 59, 59).millisecondsSinceEpoch;
+    final fallbackAccount = _accounts.firstOrNull?.id;
+    var changed = false;
+    for (final rule in List<RecurringRule>.from(_recurringRules)) {
+      if (!rule.enabled) continue;
+      var due = rule.nextDue;
+      var guard = 0;
+      while (due.millisecondsSinceEpoch <= cutoff && guard < 400) {
+        await _db!.insert('transactions', {
+          'book_id': rule.bookId,
+          'kind': rule.kind,
+          'amount': rule.amountStr,
+          'currency_code': 'CNY',
+          'category_id': rule.categoryId,
+          'account_id': rule.accountId ?? fallbackAccount,
+          'to_account_id': null,
+          'note': rule.note.isEmpty ? '周期记账' : rule.note,
+          'date_ms': due.millisecondsSinceEpoch,
+          'tags': '',
+          'reimbursable': 0,
+          'image_path': '',
+        });
+        due = rule.recurPeriod.advance(due);
+        guard++;
+      }
+      if (guard > 0) {
+        await _db!.update('recurring_rules',
+            {'next_due_ms': due.millisecondsSinceEpoch},
+            where: 'id = ?', whereArgs: [rule.id]);
+        changed = true;
+      }
+    }
+    if (changed) await _loadRecurringRules();
   }
 
   Future<void> _loadTransactions() async {

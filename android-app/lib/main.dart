@@ -18,6 +18,7 @@ import 'views/savings/savings_goals_view.dart';
 import 'views/search/search_view.dart';
 import 'views/settings/accounts_view.dart';
 import 'views/settings/budget_setting_view.dart';
+import 'views/settings/recurring_view.dart';
 import 'views/settings/categories_view.dart';
 import 'views/settings/import_export_view.dart';
 import 'views/settings/tags_view.dart';
@@ -472,8 +473,7 @@ class _AppDrawerState extends State<_AppDrawer> {
                       _DrawerItem(
                         icon: Icons.schedule_outlined,
                         label: '定时记账',
-                        onTap: () =>
-                            _popAndPush(const ComingSoonView(title: '定时记账')),
+                        onTap: () => _popAndPush(const RecurringView()),
                         indent: true,
                       ),
                       _DrawerItem(

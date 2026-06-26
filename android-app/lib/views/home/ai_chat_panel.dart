@@ -433,9 +433,12 @@ class _AiChatPanelState extends State<AiChatPanel> {
 
   CategoryEntity? _matchCat(AppRepository repo, ParsedEntry e) {
     CategoryEntity? cat;
-    if (e.categoryKey != null) {
+    // 先按用户纠正记忆召回:命中就用学过的分类覆盖模型的猜测。
+    final learned = repo.recallCategoryKey(e.note, e.kind);
+    final wantKey = learned ?? e.categoryKey;
+    if (wantKey != null) {
       cat = repo.categories
-          .where((c) => c.kind == e.kind && c.key == e.categoryKey)
+          .where((c) => c.kind == e.kind && c.key == wantKey)
           .firstOrNull;
     }
     cat ??= repo.categories

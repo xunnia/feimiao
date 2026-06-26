@@ -15,7 +15,6 @@ import '../../theme/app_colors.dart';
 import '../../theme/app_tokens.dart';
 import '../../widgets/animated_money.dart';
 import '../../widgets/mascot.dart';
-import '../../widgets/ios_dialogs.dart';
 import '../../widgets/tag_selector.dart';
 import '../../widgets/transaction_actions.dart';
 import '../statistics/statistics_view.dart';

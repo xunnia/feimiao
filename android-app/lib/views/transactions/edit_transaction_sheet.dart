@@ -118,6 +118,20 @@ class _EditTransactionSheetState extends State<EditTransactionSheet> {
         reimbursable: _kind == TransactionKind.expense ? _reimbursable : false,
         imagePath: _imagePath ?? '',
       );
+      // 学习用户纠正:改了分类且有备注 → 记住「备注 → 新分类」,下次 AI 自动套用。
+      final note = _noteController.text.trim();
+      if (_selectedCategoryId != null &&
+          _selectedCategoryId != widget.transaction.categoryId &&
+          note.isNotEmpty) {
+        final newKey = repo.categories
+            .where((c) => c.id == _selectedCategoryId)
+            .firstOrNull
+            ?.key;
+        if (newKey != null) {
+          await repo.learnCategory(
+              phrase: note, kind: _kind, categoryKey: newKey);
+        }
+      }
     }
     if (mounted) Navigator.pop(context);
   }
