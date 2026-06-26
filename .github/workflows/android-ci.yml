@@ -54,7 +54,14 @@ jobs:
 
       - name: 生成桌面图标（各分辨率 mipmap）
         working-directory: android-app
-        run: dart run flutter_launcher_icons
+        run: |
+          dart run flutter_launcher_icons
+          # app_icon.png 是「完整成品图标」(内容铺满+自带圆角)，不适合 Android 自适应图标
+          # (自适应会裁掉约 16% 边缘 / 放大)。删掉自适应 XML，强制用传统图标：
+          # 整张图直接显示，由桌面统一做圆角遮罩，不再被裁切。
+          rm -f android/app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml
+          rm -f android/app/src/main/res/mipmap-anydpi-v26/ic_launcher_round.xml
+          echo ">> 已移除自适应图标 XML，强制传统图标"
 
       - name: 静态分析
         working-directory: android-app

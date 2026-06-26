@@ -14,6 +14,7 @@ import '../../core/ai/natural_language_entry_parser.dart';
 import '../../core/haptics.dart';
 import '../../core/models/category_seed.dart';
 import '../../core/models/transaction_kind.dart';
+import '../../core/meow_insights.dart';
 import '../../core/money_format.dart';
 import '../../data/app_repository.dart';
 import '../../theme/app_colors.dart';
@@ -479,10 +480,14 @@ class _AiChatPanelState extends State<AiChatPanel> {
     }
     final after = repo.transactions.map((t) => t.id).toSet();
     if (!mounted) return;
+    // 记完反馈:取首笔的分类名,让猫说一句数据感言。
+    final mainCat = msg.cats.firstWhere((c) => c != null, orElse: () => null);
+    final feedback = MeowInsights.recordFeedback(repo, mainCat?.nameZh ?? '');
     Haptics.of(Haptic.success);
     setState(() {
       msg.saved = true;
       msg.savedIds = after.difference(before).toList();
+      msg.savedFeedback = feedback;
     });
   }
 
@@ -536,9 +541,19 @@ class _AiChatPanelState extends State<AiChatPanel> {
                 child: _msgs.isEmpty
                     ? SingleChildScrollView(
                         child: Padding(
-                          padding: const EdgeInsets.fromLTRB(6, 8, 16, 10),
-                          child:
-                              _SuggestionGrid(items: _picked, onTap: _fillInput),
+                          padding: const EdgeInsets.fromLTRB(16, 4, 16, 10),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const _GreetingLine(),
+                              const SizedBox(height: 14),
+                              Padding(
+                                padding: const EdgeInsets.only(left: 0),
+                                child: _SuggestionGrid(
+                                    items: _picked, onTap: _fillInput),
+                              ),
+                            ],
+                          ),
                         ),
                       )
                     : ListView.builder(
@@ -859,11 +874,13 @@ class _RecordMsg extends _Msg {
   final List<CategoryEntity?> cats;
   bool saved;
   List<int> savedIds;
+  String savedFeedback; // 记完后猫给的一句数据反馈
   _RecordMsg({
     required this.entries,
     required this.cats,
     this.saved = false,
     this.savedIds = const [],
+    this.savedFeedback = '',
   });
 }
 
@@ -1127,6 +1144,27 @@ class _AnswerBubbleState extends State<_AnswerBubble> {
   }
 }
 
+// ── 喵助手打开时主动说的一句洞察 ──────────────────────────────────────────────
+class _GreetingLine extends StatelessWidget {
+  const _GreetingLine();
+
+  @override
+  Widget build(BuildContext context) {
+    final g = MeowInsights.greeting(context.read<AppRepository>());
+    if (g == null) return const SizedBox.shrink();
+    final scheme = Theme.of(context).colorScheme;
+    return Text(
+      g,
+      style: TextStyle(
+        fontSize: 15,
+        height: 1.45,
+        fontWeight: FontWeight.w300,
+        color: scheme.onSurface,
+      ),
+    );
+  }
+}
+
 // ── 记账确认卡 ───────────────────────────────────────────────────────────────
 class _RecordBubble extends StatelessWidget {
   final _RecordMsg msg;
@@ -1157,7 +1195,11 @@ class _RecordBubble extends StatelessWidget {
                   animate: true),
               const SizedBox(width: 8),
               Text(
-                msg.saved ? '记好啦！' : (n > 1 ? '帮你拆成 $n 笔：' : '看看对不对：'),
+                msg.saved
+                    ? (msg.savedFeedback.isNotEmpty
+                        ? msg.savedFeedback
+                        : '记好啦！')
+                    : (n > 1 ? '帮你拆成 $n 笔：' : '看看对不对：'),
                 style: TextStyle(fontSize: 14, color: scheme.onSurfaceVariant),
               ),
             ],
