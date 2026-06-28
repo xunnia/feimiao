@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../../core/ai/smart_tags.dart';
 import '../../core/auto_record.dart';
 import '../../core/models/category_seed.dart';
 import '../../core/models/transaction_kind.dart';
@@ -69,6 +70,7 @@ class _AutoRecordSheetState extends State<_AutoRecordSheet> {
         accountId: accountId,
         note: c.text.length > 40 ? c.text.substring(0, 40) : c.text,
         date: c.time,
+        reimbursable: SmartTags.isReimbursable(c.text),
       );
       n++;
     }

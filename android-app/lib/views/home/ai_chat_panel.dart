@@ -12,7 +12,9 @@ import '../../core/ai/chat_intent.dart';
 import '../../core/ai/llm_entry_parser.dart';
 import '../../core/ai/llm_query.dart';
 import '../../core/ai/merchant_category.dart';
+import '../../core/ai/smart_tags.dart';
 import '../../core/meal_time.dart';
+import '../../core/spending_anomaly.dart';
 import '../../core/ai/natural_language_entry_parser.dart';
 import '../../core/haptics.dart';
 import '../../core/models/category_seed.dart';
@@ -464,6 +466,27 @@ class _AiChatPanelState extends State<AiChatPanel> {
       _snack('请先在「资产管理」里加一个账户');
       return;
     }
+    // 入库前先算「异常提醒」（用当前历史，尚不含本次）：只提醒第一笔明显偏高的支出。
+    String? anomalyNote;
+    for (int i = 0; i < msg.entries.length; i++) {
+      final e = msg.entries[i];
+      final cat = msg.cats[i];
+      if (e.amount == null ||
+          e.amount! <= Decimal.zero ||
+          e.kind != TransactionKind.expense ||
+          cat == null) continue;
+      final past = <Decimal>[];
+      for (final t in repo.transactions) {
+        if (t.txKind == TransactionKind.expense &&
+            t.categoryNameZh == cat.nameZh &&
+            t.amount > Decimal.zero) {
+          past.add(t.amount);
+        }
+      }
+      anomalyNote = SpendingAnomaly.note(past, e.amount!, cat.nameZh);
+      if (anomalyNote != null) break;
+    }
+
     // 按条目逐笔入库,记下每笔的 id(无金额的占位 null),用于之后按条目改分类。
     final ids = <int?>[];
     int savedCount = 0;
@@ -481,6 +504,7 @@ class _AiChatPanelState extends State<AiChatPanel> {
         accountId: accountId,
         note: e.note,
         date: e.date,
+        reimbursable: SmartTags.isReimbursable(e.note), // 出差/报销自动标待报销
       );
       ids.add(id);
       savedCount++;
@@ -499,7 +523,11 @@ class _AiChatPanelState extends State<AiChatPanel> {
       msg.txnIds = ids;
       msg.savedIds = ids.whereType<int>().toList();
       msg.savedFeedback = feedback;
+      if (anomalyNote != null) _msgs.add(_InfoMsg(anomalyNote!));
     });
+    if (anomalyNote != null) {
+      await repo.addChatMessage(role: 'info', text: anomalyNote);
+    }
   }
 
   /// 一键改分类：把第 [i] 笔改成 [newCat]，并记住这次纠正(下次自动用)；

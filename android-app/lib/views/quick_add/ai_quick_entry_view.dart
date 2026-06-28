@@ -6,6 +6,7 @@ import 'package:provider/provider.dart';
 import '../../core/ai/llm_entry_parser.dart';
 import '../../core/ai/merchant_category.dart';
 import '../../core/ai/natural_language_entry_parser.dart';
+import '../../core/ai/smart_tags.dart';
 import '../../core/meal_time.dart';
 import '../../core/models/category_seed.dart';
 import '../../core/models/transaction_kind.dart';
@@ -183,6 +184,7 @@ class _AiQuickEntryViewState extends State<AiQuickEntryView> {
           accountId: accountId,
           note: e.note,
           date: e.date,
+          reimbursable: SmartTags.isReimbursable(e.note),
         );
       }
       if (mounted) {
