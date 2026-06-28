@@ -4,6 +4,7 @@ import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart
 import 'package:image_picker/image_picker.dart';
 
 import '../../core/ai/natural_language_entry_parser.dart';
+import '../../core/ai/order_list_parser.dart';
 import '../../core/ai/screenshot_layout.dart';
 import 'ai_quick_entry_view.dart';
 
@@ -91,7 +92,8 @@ Future<void> recognizeImagePathAndEntry(
   // 其它（单笔支付页）：沿用已验证的 flat 清噪路径，不受影响。
   String cleaned;
   if (isOrderList && ocrLines.isNotEmpty) {
-    final blocks = ScreenshotLayout.clusterBlocks(ocrLines);
+    // 按「共N件」确定性切单(并丢弃已取消/退款单);无锚点时回退纵向聚类。
+    final blocks = OrderListParser.segment(ocrLines);
     final rendered = ScreenshotLayout.renderBlocks(
       blocks,
       cleaner: (s) => PaymentScreenshotParser.cleanOcr(s),
