@@ -13,7 +13,6 @@ import 'ai_quick_entry_view.dart';
 /// 用 ML Kit on-device 识别（中文脚本），无需联网；解析阶段才可能走 DeepSeek。
 Future<void> recognizeScreenshotAndEntry(BuildContext context) async {
   final messenger = ScaffoldMessenger.of(context);
-  final navigator = Navigator.of(context);
 
   // 1. 选图
   XFile? file;
@@ -27,9 +26,17 @@ Future<void> recognizeScreenshotAndEntry(BuildContext context) async {
     return;
   }
   if (file == null) return; // 用户取消
+  if (!context.mounted) return;
+  await recognizeImagePathAndEntry(context, file.path);
+}
+
+/// 给定图片路径直接识别记账：相册选图与「分享到肥喵」共用这条管线。
+Future<void> recognizeImagePathAndEntry(
+    BuildContext context, String imagePath) async {
+  final messenger = ScaffoldMessenger.of(context);
+  final navigator = Navigator.of(context);
 
   // 2. 显示识别中遮罩
-  if (!context.mounted) return;
   showDialog<void>(
     context: context,
     barrierDismissible: false,
@@ -41,7 +48,7 @@ Future<void> recognizeScreenshotAndEntry(BuildContext context) async {
   final ocrLines = <OcrLine>[];
   final recognizer = TextRecognizer(script: TextRecognitionScript.chinese);
   try {
-    final input = InputImage.fromFilePath(file.path);
+    final input = InputImage.fromFilePath(imagePath);
     final result = await recognizer.processImage(input);
     text = result.text;
     for (final block in result.blocks) {

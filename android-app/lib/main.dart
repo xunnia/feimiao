@@ -3,6 +3,7 @@ import 'package:flutter/cupertino.dart' show CupertinoPageRoute, CupertinoIcons;
 import 'package:provider/provider.dart';
 
 import 'data/app_repository.dart';
+import 'share_intake.dart';
 import 'theme/app_colors.dart';
 import 'widgets/glass.dart';
 import 'widgets/ios_dialogs.dart';
@@ -31,6 +32,8 @@ void main() async {
   final repo = AppRepository();
   await repo.init();
 
+  ShareIntake.init(); // 「分享到肥喵」：监听系统分享，自动记账
+
   runApp(
     ChangeNotifierProvider<AppRepository>.value(
       value: repo,
@@ -47,6 +50,7 @@ class QingJiApp extends StatelessWidget {
     return MaterialApp(
       title: '肥喵记账',
       debugShowCheckedModeBanner: false,
+      navigatorKey: ShareIntake.navigatorKey,
       theme: AppTheme.light(),
       darkTheme: AppTheme.dark(),
       themeMode: ThemeMode.system,
