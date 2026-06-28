@@ -45,6 +45,7 @@ Future<void> recognizeImagePathAndEntry(
 
   // 3. OCR（同时保留每行坐标，供订单列表分块用）
   String text = '';
+  String? ocrError; // 记下真实报错，便于诊断（之前被静默吞掉）
   final ocrLines = <OcrLine>[];
   final recognizer = TextRecognizer(script: TextRecognitionScript.chinese);
   try {
@@ -64,6 +65,7 @@ Future<void> recognizeImagePathAndEntry(
     }
   } catch (e) {
     text = '';
+    ocrError = '$e';
   } finally {
     await recognizer.close();
   }
@@ -102,7 +104,12 @@ Future<void> recognizeImagePathAndEntry(
   }
   if (cleaned.isEmpty) {
     messenger.showSnackBar(
-      const SnackBar(content: Text('没识别到文字，换张更清晰的截图试试')),
+      SnackBar(
+        content: Text(ocrError != null
+            ? '识别失败：$ocrError'
+            : '没识别到文字，换张更清晰的截图试试'),
+        duration: const Duration(seconds: 6),
+      ),
     );
     return;
   }
