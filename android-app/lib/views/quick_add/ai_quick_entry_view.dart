@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/cupertino.dart' show CupertinoPageRoute;
 import 'package:provider/provider.dart';
 
+import '../../build_info.dart';
 import '../../core/ai/llm_entry_parser.dart';
 import '../../core/ai/merchant_category.dart';
 import '../../core/ai/natural_language_entry_parser.dart';
@@ -275,8 +276,8 @@ class _AiQuickEntryViewState extends State<AiQuickEntryView> {
                   Expanded(
                     child: Text(
                       hasKey
-                          ? '用一句话描述多笔记录，AI 自动拆分'
-                          : '用一句话描述这笔记录，本地即刻解析',
+                          ? '用一句话描述多笔记录，AI 自动拆分 · $kBuildTag'
+                          : '用一句话描述这笔记录，本地即刻解析 · $kBuildTag',
                       style: Theme.of(context)
                           .textTheme
                           .bodySmall
