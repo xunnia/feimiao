@@ -74,11 +74,14 @@ Future<void> recognizeImagePathAndEntry(
   // 4. 关遮罩
   if (navigator.canPop()) navigator.pop();
 
-  // 判定是否「订单列表」：出现 ≥2 个付款锚点（每单一个），或 ≥3 个不同的正金额。
-  final anchorRe = RegExp(r'自动确认收货并付款|确认收货|待收货|待评价|实付款|付款金额');
+  // 判定是否「订单列表」：≥2 个订单锚点，或 ≥3 个不同金额。
+  // 注意：部分截图 OCR 抓不到 ¥ 符号（金额是裸的 17.70），所以锚点要带「共N件」、
+  // 金额也按"两位小数"识别，不能只认 ¥。
+  final anchorRe = RegExp(
+      r'自动确认收货并付款|确认收货|待收货|待评价|实付款|付款金额|共\s*\d+\s*件|再次购买|已完成');
   final anchorCount = ocrLines.where((l) => anchorRe.hasMatch(l.text)).length;
   final amounts = <String>{};
-  final amtRe = RegExp(r'[¥￥]\s*(\d+(?:\.\d+)?)');
+  final amtRe = RegExp(r'(?:[¥￥]\s*)?(\d{1,6}\.\d{2})');
   for (final l in ocrLines) {
     for (final m in amtRe.allMatches(l.text)) {
       final v = double.tryParse(m.group(1) ?? '') ?? 0;
