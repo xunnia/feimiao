@@ -6,6 +6,7 @@ import 'package:provider/provider.dart';
 import '../../core/ai/llm_entry_parser.dart';
 import '../../core/ai/merchant_category.dart';
 import '../../core/ai/natural_language_entry_parser.dart';
+import '../../core/meal_time.dart';
 import '../../core/models/category_seed.dart';
 import '../../core/models/transaction_kind.dart';
 import '../../core/money_format.dart';
@@ -126,7 +127,8 @@ class _AiQuickEntryViewState extends State<AiQuickEntryView> {
         CategoryEntity? cat;
         final learned = repo.recallCategoryKey(entry.note, entry.kind);
         final dict = MerchantCategory.classify(entry.note, entry.kind);
-        final wantKey = learned ?? dict ?? entry.categoryKey;
+        final wantKey = MealTime.refine(
+            learned ?? dict ?? entry.categoryKey, entry.date, entry.note);
         if (wantKey != null) {
           cat = repo.categories
               .where((c) => c.kind == entry.kind && c.key == wantKey)

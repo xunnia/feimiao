@@ -1,6 +1,7 @@
 import 'package:decimal/decimal.dart';
 import '../models/transaction_kind.dart';
 import 'entry_sanity.dart';
+import 'smart_tags.dart';
 
 /// 一句话记账的解析结果。
 class ParsedEntry {
@@ -55,9 +56,11 @@ class NaturalLanguageEntryParser {
     final now = at ?? DateTime.now();
     final trimmed = text.trim();
     final kind = _detectKind(trimmed);
+    final rawAmt = extractAmount(trimmed);
+    final amount = rawAmt != null ? SmartTags.aaShare(trimmed, rawAmt) : null;
     return EntrySanity.clean(
       ParsedEntry(
-        amount: extractAmount(trimmed),
+        amount: amount,
         kind: kind,
         categoryKey: _detectCategory(trimmed, kind: kind),
         note: trimmed,

@@ -148,9 +148,10 @@ class _AutoRecordSheetState extends State<_AutoRecordSheet> {
   Widget _row(ColorScheme scheme, int i) {
     final c = widget.items[i];
     final isIncome = c.kind == TransactionKind.income;
-    final catName = CategorySeed.byKey(c.categoryKey)?.nameZh ??
+    final key = c.categoryKey;
+    final catName = (key != null ? CategorySeed.byKey(key)?.nameZh : null) ??
         (isIncome ? '其他收入' : '其他');
-    final emoji = CategorySeed.emojiOf(c.categoryKey);
+    final emoji = CategorySeed.emojiOf(c.categoryKey); // emojiOf 接受可空
     return InkWell(
       onTap: () => setState(() => _checked[i] = !_checked[i]),
       borderRadius: BorderRadius.circular(14),

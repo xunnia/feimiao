@@ -12,6 +12,7 @@ import '../../core/ai/chat_intent.dart';
 import '../../core/ai/llm_entry_parser.dart';
 import '../../core/ai/llm_query.dart';
 import '../../core/ai/merchant_category.dart';
+import '../../core/meal_time.dart';
 import '../../core/ai/natural_language_entry_parser.dart';
 import '../../core/haptics.dart';
 import '../../core/models/category_seed.dart';
@@ -439,7 +440,9 @@ class _AiChatPanelState extends State<AiChatPanel> {
     // 记忆=最懂你;词典=高频商户确定性命中(瑞幸→饮料、滴滴→打车),比模型稳。
     final learned = repo.recallCategoryKey(e.note, e.kind);
     final dict = MerchantCategory.classify(e.note, e.kind);
-    final wantKey = learned ?? dict ?? e.categoryKey;
+    // 笼统餐饮按时段细化到早/午/晚餐（更聪明）。
+    final wantKey =
+        MealTime.refine(learned ?? dict ?? e.categoryKey, e.date, e.note);
     if (wantKey != null) {
       cat = repo.categories
           .where((c) => c.kind == e.kind && c.key == wantKey)

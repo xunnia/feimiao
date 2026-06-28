@@ -4,8 +4,9 @@ import 'package:decimal/decimal.dart';
 import 'package:flutter/services.dart';
 
 import 'ai/merchant_category.dart';
-import 'ai/natural_language_entry_parser.dart';
+import 'meal_time.dart';
 import 'models/transaction_kind.dart';
+import 'notification_parse.dart';
 
 /// 自动记账的一条候选（来自一条支付通知，本地解析后）。
 class AutoCandidate {
@@ -75,16 +76,13 @@ class AutoRecord {
           ? DateTime.fromMillisecondsSinceEpoch(millis)
           : DateTime.now();
 
-      final parsed = NaturalLanguageEntryParser.parse(text, at: time);
-      final amt = parsed.amount;
+      // 通知专用解析：挑最像本次支付的金额（避开余额）+ 收支方向。
+      final amt = NotificationParse.pickAmount(text);
       if (amt == null || amt <= Decimal.zero) continue; // 没金额 → 丢弃
-
-      // 收款/到账 视为收入，其余按解析（多数是支出）。
-      var kind = parsed.kind;
-      if (RegExp('到账|收款|收钱').hasMatch(text)) {
-        kind = TransactionKind.income;
-      }
+      final kind = NotificationParse.kindOf(text);
+      // 分类：商户词典命中即用；笼统餐饮再按时段细化到餐次。
       final dictKey = MerchantCategory.classify(text, kind);
+      final catKey = MealTime.refine(dictKey, time, text);
 
       out.add(AutoCandidate(
         app: app,
@@ -92,7 +90,7 @@ class AutoRecord {
         time: time,
         amount: amt,
         kind: kind,
-        categoryKey: dictKey ?? parsed.categoryKey,
+        categoryKey: catKey,
       ));
     }
     return out;
