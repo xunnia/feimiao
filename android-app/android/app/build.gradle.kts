@@ -56,6 +56,11 @@ android {
             } else {
                 signingConfigs.getByName("debug")
             }
+            // 关掉 R8 代码裁剪/混淆：ML Kit 靠反射加载中文模型，被裁会崩
+            // （NPE: getClass() on null）。侧载不在乎包大小，关掉最稳，
+            // 且崩溃堆栈不再被混淆成 d2.na，方便定位。
+            isMinifyEnabled = false
+            isShrinkResources = false
         }
     }
 }
