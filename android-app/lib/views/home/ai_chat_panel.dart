@@ -461,13 +461,17 @@ class _AiChatPanelState extends State<AiChatPanel> {
       _snack('请先在「资产管理」里加一个账户');
       return;
     }
-    final before = repo.transactions.map((t) => t.id).toSet();
+    // 按条目逐笔入库,记下每笔的 id(无金额的占位 null),用于之后按条目改分类。
+    final ids = <int?>[];
     int savedCount = 0;
     for (int i = 0; i < msg.entries.length; i++) {
       final e = msg.entries[i];
       final amt = e.amount;
-      if (amt == null || amt <= Decimal.zero) continue;
-      await repo.addTransaction(
+      if (amt == null || amt <= Decimal.zero) {
+        ids.add(null);
+        continue;
+      }
+      final id = await repo.addTransaction(
         kind: e.kind,
         amount: amt,
         categoryId: msg.cats[i]?.id,
@@ -475,13 +479,13 @@ class _AiChatPanelState extends State<AiChatPanel> {
         note: e.note,
         date: e.date,
       );
+      ids.add(id);
       savedCount++;
     }
     if (savedCount == 0) {
       _snack('这几笔没认出金额，先补上金额再存～');
       return;
     }
-    final after = repo.transactions.map((t) => t.id).toSet();
     if (!mounted) return;
     // 记完反馈:取首笔的分类名,让猫说一句数据感言。
     final mainCat = msg.cats.firstWhere((c) => c != null, orElse: () => null);
@@ -489,9 +493,54 @@ class _AiChatPanelState extends State<AiChatPanel> {
     Haptics.of(Haptic.success);
     setState(() {
       msg.saved = true;
-      msg.savedIds = after.difference(before).toList();
+      msg.txnIds = ids;
+      msg.savedIds = ids.whereType<int>().toList();
       msg.savedFeedback = feedback;
     });
+  }
+
+  /// 一键改分类：把第 [i] 笔改成 [newCat]，并记住这次纠正(下次自动用)；
+  /// 若已入库则同步改库。
+  Future<void> _pickCategory(_RecordMsg msg, int i, CategoryEntity newCat) async {
+    final repo = context.read<AppRepository>();
+    Haptics.light();
+    // 学习:把"备注短语 → 分类"记下,下次同类自动命中
+    final note = msg.entries[i].note;
+    if (note.trim().isNotEmpty) {
+      await repo.learnCategory(
+        phrase: note,
+        kind: newCat.kind,
+        categoryKey: newCat.key,
+      );
+    }
+    // 已入库 → 改库
+    if (msg.saved && i < msg.txnIds.length && msg.txnIds[i] != null) {
+      await repo.setTransactionCategory(msg.txnIds[i]!, newCat.id);
+    }
+    if (!mounted) return;
+    setState(() => msg.cats[i] = newCat);
+  }
+
+  /// 给第 i 笔算几个候选分类(最常见的纠错):
+  /// 子类→同父兄弟;大类→它的子类;无子类的(如收入)→同级其它大类。
+  List<CategoryEntity> _catCandidates(AppRepository repo, _RecordMsg msg, int i) {
+    final cur = msg.cats[i];
+    final kind = msg.entries[i].kind;
+    if (cur == null) return const [];
+    final pid = cur.parentId;
+    Iterable<CategoryEntity> sibs;
+    if (pid != null) {
+      sibs = repo.categories
+          .where((c) => c.kind == kind && c.parentId == pid && c.id != cur.id);
+    } else {
+      final children =
+          repo.categories.where((c) => c.kind == kind && c.parentId == cur.id);
+      sibs = children.isNotEmpty
+          ? children
+          : repo.categories.where(
+              (c) => c.kind == kind && c.parentId == null && c.id != cur.id);
+    }
+    return sibs.take(6).toList();
   }
 
   // ── 撤销：删掉刚才保存的那几笔 ─────────────────────────────────────────
@@ -836,10 +885,13 @@ class _AiChatPanelState extends State<AiChatPanel> {
       );
     }
     if (m is _RecordMsg) {
+      final repo = context.read<AppRepository>();
       return _RecordBubble(
         msg: m,
         onSave: () => _save(m),
         onUndo: () => _undo(m),
+        candidatesFor: (i) => _catCandidates(repo, m, i),
+        onPickCat: (i, cat) => _pickCategory(m, i, cat),
       );
     }
     return const SizedBox.shrink();
@@ -877,12 +929,14 @@ class _RecordMsg extends _Msg {
   final List<CategoryEntity?> cats;
   bool saved;
   List<int> savedIds;
+  List<int?> txnIds; // 已入库时,每个条目对应的记录 id(无金额为 null);供按条目改分类
   String savedFeedback; // 记完后猫给的一句数据反馈
   _RecordMsg({
     required this.entries,
     required this.cats,
     this.saved = false,
     this.savedIds = const [],
+    this.txnIds = const [],
     this.savedFeedback = '',
   });
 }
@@ -1173,11 +1227,15 @@ class _RecordBubble extends StatelessWidget {
   final _RecordMsg msg;
   final VoidCallback onSave;
   final VoidCallback onUndo;
+  final List<CategoryEntity> Function(int index) candidatesFor;
+  final void Function(int index, CategoryEntity cat) onPickCat;
 
   const _RecordBubble({
     required this.msg,
     required this.onSave,
     required this.onUndo,
+    required this.candidatesFor,
+    required this.onPickCat,
   });
 
   @override
@@ -1228,6 +1286,8 @@ class _RecordBubble extends StatelessWidget {
                     entry: msg.entries[i],
                     cat: msg.cats[i],
                     showDivider: i > 0,
+                    candidates: candidatesFor(i),
+                    onPickCat: (c) => onPickCat(i, c),
                   ),
                 const SizedBox(height: 10),
                 if (!msg.saved)
@@ -1269,11 +1329,15 @@ class _EntryRow extends StatelessWidget {
   final ParsedEntry entry;
   final CategoryEntity? cat;
   final bool showDivider;
+  final List<CategoryEntity> candidates;
+  final ValueChanged<CategoryEntity> onPickCat;
 
   const _EntryRow({
     required this.entry,
     required this.cat,
     required this.showDivider,
+    this.candidates = const [],
+    required this.onPickCat,
   });
 
   @override
@@ -1335,7 +1399,60 @@ class _EntryRow extends StatelessWidget {
             ),
           ],
         ),
+        // 一键改分类:同大类兄弟子类候选,点一下即改并被学走(下次自动用)。
+        if (candidates.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.only(top: 8),
+            child: SizedBox(
+              height: 30,
+              child: ListView(
+                scrollDirection: Axis.horizontal,
+                padding: EdgeInsets.zero,
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.only(right: 6, top: 5),
+                    child: Text('改成',
+                        style: TextStyle(
+                            fontSize: 11, color: scheme.onSurfaceVariant)),
+                  ),
+                  for (final c in candidates)
+                    Padding(
+                      padding: const EdgeInsets.only(right: 6),
+                      child: _CatChip(cat: c, onTap: () => onPickCat(c)),
+                    ),
+                ],
+              ),
+            ),
+          ),
       ],
+    );
+  }
+}
+
+/// 改分类小芯片：emoji + 名称，点一下切到该分类。
+class _CatChip extends StatelessWidget {
+  final CategoryEntity cat;
+  final VoidCallback onTap;
+  const _CatChip({required this.cat, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return PressableScale(
+      onPressed: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10),
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          color: scheme.surfaceContainerHighest.withValues(alpha: 0.5),
+          borderRadius: BorderRadius.circular(15),
+          border: Border.all(color: Colors.black.withValues(alpha: 0.05)),
+        ),
+        child: Text(
+          '${CategorySeed.emojiOf(cat.key)} ${cat.nameZh}',
+          style: TextStyle(fontSize: 12, color: scheme.onSurface),
+        ),
+      ),
     );
   }
 }

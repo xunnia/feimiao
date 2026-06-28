@@ -1131,7 +1131,8 @@ class AppRepository extends ChangeNotifier {
   // 写操作
   // ---------------------------------------------------------------------------
 
-  Future<void> addTransaction({
+  /// 新增一笔，返回新记录的 id（供记账卡保存后按条目改分类用）。
+  Future<int> addTransaction({
     required TransactionKind kind,
     required Decimal amount,
     String currencyCode = 'CNY',
@@ -1144,7 +1145,7 @@ class AppRepository extends ChangeNotifier {
     bool reimbursable = false,
     String imagePath = '',
   }) async {
-    await _db!.insert('transactions', {
+    final newId = await _db!.insert('transactions', {
       'book_id': _currentBookId,
       'kind': kind.toJson(),
       'amount': amount.toString(),
@@ -1158,6 +1159,19 @@ class AppRepository extends ChangeNotifier {
       'reimbursable': reimbursable ? 1 : 0,
       'image_path': imagePath,
     });
+    await _loadTransactions();
+    notifyListeners();
+    return newId;
+  }
+
+  /// 只改某笔的分类（记账卡「一键改分类」用，轻量、不动其它字段）。
+  Future<void> setTransactionCategory(int id, int? categoryId) async {
+    await _db!.update(
+      'transactions',
+      {'category_id': categoryId},
+      where: 'id = ?',
+      whereArgs: [id],
+    );
     await _loadTransactions();
     notifyListeners();
   }
