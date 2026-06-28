@@ -1,5 +1,6 @@
 import 'package:decimal/decimal.dart';
 import '../models/transaction_kind.dart';
+import 'entry_sanity.dart';
 
 /// 一句话记账的解析结果。
 class ParsedEntry {
@@ -54,13 +55,16 @@ class NaturalLanguageEntryParser {
     final now = at ?? DateTime.now();
     final trimmed = text.trim();
     final kind = _detectKind(trimmed);
-    return ParsedEntry(
-      amount: extractAmount(trimmed),
-      kind: kind,
-      categoryKey: _detectCategory(trimmed, kind: kind),
-      note: trimmed,
-      date: _detectDate(trimmed, now: now),
-      confidence: 0.55, // 本地规则不够确定，始终走确认
+    return EntrySanity.clean(
+      ParsedEntry(
+        amount: extractAmount(trimmed),
+        kind: kind,
+        categoryKey: _detectCategory(trimmed, kind: kind),
+        note: trimmed,
+        date: _detectDate(trimmed, now: now),
+        confidence: 0.55, // 本地规则不够确定，始终走确认
+      ),
+      now: now,
     );
   }
 
@@ -89,6 +93,27 @@ class NaturalLanguageEntryParser {
       return Decimal.tryParse(markedMatch.group(1)!);
     }
 
+    // 中文数字金额（离线/无 key 也能认）：
+    // "两块五""三块五毛" → X元Y角；"三十块""一百二""一百二十元" → 整元。
+    const cn = '零〇一二两三四五六七八九十百千万';
+    final cnKuaiJiao =
+        RegExp('([$cn]+)\\s*[块元]\\s*([一二两三四五六七八九])\\s*[毛角]?');
+    final mkj = cnKuaiJiao.firstMatch(text);
+    if (mkj != null) {
+      final yuan = _cnToInt(mkj.group(1)!);
+      final jiao = _cnToInt(mkj.group(2)!);
+      if (yuan != null && jiao != null) {
+        return Decimal.fromInt(yuan) +
+            (Decimal.fromInt(jiao) / Decimal.fromInt(10)).toDecimal();
+      }
+    }
+    final cnYuan = RegExp('([$cn]+)\\s*[块元]');
+    final mY = cnYuan.firstMatch(text);
+    if (mY != null) {
+      final yuan = _cnToInt(mY.group(1)!);
+      if (yuan != null) return Decimal.fromInt(yuan);
+    }
+
     // 兜底：最后一个数字（"买了2杯咖啡58" -> 58）
     final allPattern = RegExp(r'(\d+(?:\.\d{1,2})?)');
     final allMatches = allPattern.allMatches(text).toList();
@@ -97,6 +122,58 @@ class NaturalLanguageEntryParser {
     }
 
     return null;
+  }
+
+  /// 中文数字 → 整数：支持 十/百/千/万 及口语省略（"一百二"=120、"一万二"=12000）。
+  /// 仅接受中文数字字符，遇到其它字符返回 null。
+  static int? _cnToInt(String s) {
+    const digit = {
+      '零': 0, '〇': 0, '一': 1, '二': 2, '两': 2, '三': 3,
+      '四': 4, '五': 5, '六': 6, '七': 7, '八': 8, '九': 9,
+    };
+    const unit = {'十': 10, '百': 100, '千': 1000};
+    if (s.isEmpty) return null;
+    int section = 0; // 当前万段内累加
+    int number = 0; // 待处理数字
+    int result = 0; // 总和
+    int lastUnit = 0; // 最近的单位（口语省略时给末位定位）
+    bool bareUnits = false; // 出现「零」后，末位按个位
+    bool any = false;
+    for (final ch in s.split('')) {
+      if (ch == '零' || ch == '〇') {
+        bareUnits = true;
+        number = 0;
+        any = true;
+      } else if (digit.containsKey(ch)) {
+        number = digit[ch]!;
+        any = true;
+      } else if (unit.containsKey(ch)) {
+        final u = unit[ch]!;
+        final n = number == 0 ? 1 : number; // 十 = 一十
+        section += n * u;
+        lastUnit = u;
+        bareUnits = false;
+        number = 0;
+        any = true;
+      } else if (ch == '万') {
+        final base = section + number; // 当前万段的值
+        result += (base == 0 ? 1 : base) * 10000;
+        section = 0;
+        number = 0;
+        lastUnit = 10000;
+        bareUnits = false;
+        any = true;
+      } else {
+        return null;
+      }
+    }
+    if (number != 0) {
+      section += (!bareUnits && lastUnit >= 10)
+          ? number * (lastUnit ~/ 10) // 口语省略，如 一百「二」=120
+          : number;
+    }
+    result += section;
+    return any ? result : null;
   }
 
   // ---------------------------------------------------------------------------

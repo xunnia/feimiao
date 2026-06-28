@@ -5,6 +5,7 @@ import 'package:http/http.dart' as http;
 
 import '../models/category_seed.dart';
 import '../models/transaction_kind.dart';
+import 'entry_sanity.dart';
 import 'natural_language_entry_parser.dart';
 
 /// DeepSeek 大模型解析器：把一句话拆成多笔 [ParsedEntry]。
@@ -222,13 +223,16 @@ class LlmEntryParser {
       _ => 0.7,
     };
 
-    return ParsedEntry(
-      amount: amount,
-      kind: kind,
-      categoryKey: categoryKey,
-      note: note,
-      date: date,
-      confidence: confidence,
+    return EntrySanity.clean(
+      ParsedEntry(
+        amount: amount,
+        kind: kind,
+        categoryKey: categoryKey,
+        note: note,
+        date: date,
+        confidence: confidence,
+      ),
+      now: fallbackDate,
     );
   }
 }
