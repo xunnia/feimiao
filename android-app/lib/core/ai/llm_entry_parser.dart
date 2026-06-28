@@ -31,7 +31,7 @@ class LlmEntryParser {
   /// - [now]          「今天」的基准时间，默认 DateTime.now()
   ///
   /// 失败时抛出 [LlmParseException]。
-  static Future<List<ParsedEntry>> parseWithLLM({
+  static Future<LlmParseResult> parseWithLLM({
     required String text,
     required String apiKey,
     required List<CategorySeed> expenseCats,
@@ -62,7 +62,10 @@ class LlmEntryParser {
 收入：$incomeList
 
 【输出格式】
-{"entries":[{"amount":数字,"kind":"expense或income","categoryKey":"最匹配的key","date":"YYYY-MM-DD","note":"简短备注","confidence":0到1}]}
+{"intent":"record或query","entries":[{"amount":数字,"kind":"expense或income","categoryKey":"最匹配的key","date":"YYYY-MM-DD","note":"简短备注","confidence":0到1}]}
+- intent="record"：用户在**记一笔账**（描述花了/买了/收到多少钱），哪怕很口语（如"坐公交花了一块""中午吃了碗面15"）。entries 填解析出的账目。
+- intent="query"：用户在**问**已有账目或要分析（如"这月吃饭花了多少""最大一笔是哪个""我花得多不多"）。这时 entries 给空数组 []。
+- 拿不准时**优先当 record**（这是记账助手，多数输入是在记账）。
 
 【规则】
 1. 一句话里有多笔(顿号/逗号/和/还有/分别等)就拆成多条。
@@ -74,9 +77,11 @@ class LlmEntryParser {
 
 【示例】
 输入：昨天打车28，中午吃饭花了20
-输出：{"entries":[{"amount":28,"kind":"expense","categoryKey":"trans_taxi","date":"$yesterdayStr","note":"打车","confidence":0.95},{"amount":20,"kind":"expense","categoryKey":"dining_lunch","date":"$yesterdayStr","note":"午饭","confidence":0.9}]}
+输出：{"intent":"record","entries":[{"amount":28,"kind":"expense","categoryKey":"trans_taxi","date":"$yesterdayStr","note":"打车","confidence":0.95},{"amount":20,"kind":"expense","categoryKey":"dining_lunch","date":"$yesterdayStr","note":"午饭","confidence":0.9}]}
 输入：发工资了八千
-输出：{"entries":[{"amount":8000,"kind":"income","categoryKey":"salary","date":"$todayStr","note":"工资","confidence":0.97}]}''';
+输出：{"intent":"record","entries":[{"amount":8000,"kind":"income","categoryKey":"salary","date":"$todayStr","note":"工资","confidence":0.97}]}
+输入：这个月吃饭花了多少
+输出：{"intent":"query","entries":[]}''';
 
     // 截图模式:OCR 文本含界面噪声,加一段专门的提取规则。
     const screenshotExtra = '''
@@ -153,22 +158,25 @@ class LlmEntryParser {
       throw LlmParseException('模型返回的 JSON 解析失败：$e\n原文：$content');
     }
 
-    final rawEntries = parsed['entries'];
-    if (rawEntries == null || rawEntries is! List) {
-      throw LlmParseException('模型返回格式异常：缺少 entries 数组');
-    }
+    // 意图：截图一律记账；否则读模型给的 intent，缺省/拿不准当 record。
+    final intentStr = (parsed['intent'] as String?)?.toLowerCase();
+    final intent = (!fromScreenshot && intentStr == 'query')
+        ? LlmIntent.query
+        : LlmIntent.record;
 
     final result = <ParsedEntry>[];
-    for (final raw in rawEntries) {
-      final entry = _convertEntry(raw as Map<String, dynamic>, today);
-      if (entry != null) result.add(entry);
+    final rawEntries = parsed['entries'];
+    if (rawEntries is List) {
+      for (final raw in rawEntries) {
+        if (raw is Map<String, dynamic>) {
+          final entry = _convertEntry(raw, today);
+          if (entry != null) result.add(entry);
+        }
+      }
     }
 
-    if (result.isEmpty) {
-      throw LlmParseException('模型未能解析出任何账目，请换一种说法重试');
-    }
-
-    return result;
+    // 不再因 entries 为空而抛错：query 本就无账目；record 为空交给上层礼貌追问。
+    return LlmParseResult(intent: intent, entries: result);
   }
 
   // ---------------------------------------------------------------------------
@@ -223,6 +231,16 @@ class LlmEntryParser {
       confidence: confidence,
     );
   }
+}
+
+/// 用户意图：记一笔账 / 查询已有账目。
+enum LlmIntent { record, query }
+
+/// parseWithLLM 的结果：意图 + 解析出的账目（query 时 entries 可为空）。
+class LlmParseResult {
+  final LlmIntent intent;
+  final List<ParsedEntry> entries;
+  const LlmParseResult({required this.intent, required this.entries});
 }
 
 /// LLM 解析过程中的异常，携带可读中文消息。

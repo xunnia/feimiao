@@ -8,8 +8,10 @@ import 'package:flutter/services.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:provider/provider.dart';
 
+import '../../core/ai/chat_intent.dart';
 import '../../core/ai/llm_entry_parser.dart';
 import '../../core/ai/llm_query.dart';
+import '../../core/ai/merchant_category.dart';
 import '../../core/ai/natural_language_entry_parser.dart';
 import '../../core/haptics.dart';
 import '../../core/models/category_seed.dart';
@@ -288,7 +290,6 @@ class _AiChatPanelState extends State<AiChatPanel> {
     final repo = context.read<AppRepository>();
     _ctrl.clear();
     _focus.unfocus();
-    final isQuery = _looksLikeQuery(text);
     setState(() {
       _started = true;
       _msgs.add(_UserMsg(text));
@@ -298,48 +299,48 @@ class _AiChatPanelState extends State<AiChatPanel> {
     await repo.addChatMessage(role: 'user', text: text);
     _scrollToBottom();
 
-    if (isQuery) {
-      await _runQuery(text);
-    } else {
-      await _runRecord(text);
-    }
-  }
-
-  /// 意图判断：能解析出金额 → 记账；否则含疑问词 → 查账。
-  bool _looksLikeQuery(String t) {
-    if (NaturalLanguageEntryParser.extractAmount(t) != null) return false;
-    const markers = [
-      '多少', '几', '吗', '?', '？', '排行', '最大', '最多', '最贵', '花了',
-      '花销', '对比', '分析', '合理', '统计', '占比', '哪类', '哪个', '是不是',
-      '怎么样', '超支', '剩'
-    ];
-    return markers.any(t.contains);
-  }
-
-  // ── 记账流 ──────────────────────────────────────────────────────────────
-  Future<void> _runRecord(String text) async {
-    final repo = context.read<AppRepository>();
-    List<ParsedEntry> results = [];
-    String? hint;
-
     final key = repo.deepSeekApiKey;
+    // 有 key：让大模型在同一次调用里判「记账/查账」并解析（意图判断最准，
+    // 不再靠脆弱的关键词，"坐公交花了一块"这类不会再被误当查账）。
     if (key != null && key.isNotEmpty) {
       try {
-        results = await LlmEntryParser.parseWithLLM(
+        final res = await LlmEntryParser.parseWithLLM(
           text: text,
           apiKey: key,
           expenseCats: CategorySeed.expenses,
           incomeCats: CategorySeed.incomes,
         );
+        if (res.intent == LlmIntent.query) {
+          await _runQuery(text);
+        } else {
+          await _applyRecord(res.entries);
+        }
+        return;
       } catch (_) {
-        results = [NaturalLanguageEntryParser.parse(text)];
-        hint = 'AI 没连上, 喵先用本地规则记了（单笔）';
+        // 调用失败 → 落到下面的离线兜底
       }
-    } else {
-      results = [NaturalLanguageEntryParser.parse(text)];
-      hint = '还没配 AI key，喵先用本地规则记（单笔）';
     }
+    // 无 key / 调用失败：关键词判意图（ChatIntent）+ 本地规则兜底。
+    if (_looksLikeQuery(text)) {
+      await _runQuery(text);
+    } else {
+      final hint = (key == null || key.isEmpty)
+          ? '还没配 AI key，喵先用本地规则记（单笔）'
+          : 'AI 没连上, 喵先用本地规则记了（单笔）';
+      await _applyRecord([NaturalLanguageEntryParser.parse(text)], hint: hint);
+    }
+  }
 
+  /// 意图判断：是「记账」还是「查账」。逻辑见 [ChatIntent]（纯逻辑，有单测）。
+  /// 记账优先——"花了/吃/打车 + 金额(含口语一块)"都算记账，只有真在问数据才查账。
+  bool _looksLikeQuery(String t) => ChatIntent.isQuery(
+        t,
+        hasArabicAmount: NaturalLanguageEntryParser.extractAmount(t) != null,
+      );
+
+  // ── 记账流：给定解析结果，匹配分类 → 高置信自动入库/否则确认卡 ──────────────
+  Future<void> _applyRecord(List<ParsedEntry> results, {String? hint}) async {
+    final repo = context.read<AppRepository>();
     final cats = results.map((e) => _matchCat(repo, e)).toList();
 
     if (!mounted) return;
@@ -434,9 +435,11 @@ class _AiChatPanelState extends State<AiChatPanel> {
 
   CategoryEntity? _matchCat(AppRepository repo, ParsedEntry e) {
     CategoryEntity? cat;
-    // 先按用户纠正记忆召回:命中就用学过的分类覆盖模型的猜测。
+    // 分类优先级:用户纠正记忆 > 商户/关键词词典 > 大模型猜测 > 兜底。
+    // 记忆=最懂你;词典=高频商户确定性命中(瑞幸→饮料、滴滴→打车),比模型稳。
     final learned = repo.recallCategoryKey(e.note, e.kind);
-    final wantKey = learned ?? e.categoryKey;
+    final dict = MerchantCategory.classify(e.note, e.kind);
+    final wantKey = learned ?? dict ?? e.categoryKey;
     if (wantKey != null) {
       cat = repo.categories
           .where((c) => c.kind == e.kind && c.key == wantKey)

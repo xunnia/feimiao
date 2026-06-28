@@ -4,6 +4,7 @@ import 'package:flutter/cupertino.dart' show CupertinoPageRoute;
 import 'package:provider/provider.dart';
 
 import '../../core/ai/llm_entry_parser.dart';
+import '../../core/ai/merchant_category.dart';
 import '../../core/ai/natural_language_entry_parser.dart';
 import '../../core/models/category_seed.dart';
 import '../../core/models/transaction_kind.dart';
@@ -95,13 +96,14 @@ class _AiQuickEntryViewState extends State<AiQuickEntryView> {
       if (apiKey != null && apiKey.isNotEmpty) {
         // 尝试 LLM 解析
         try {
-          results = await LlmEntryParser.parseWithLLM(
+          results = (await LlmEntryParser.parseWithLLM(
             text: text,
             apiKey: apiKey,
             expenseCats: CategorySeed.expenses,
             incomeCats: CategorySeed.incomes,
             fromScreenshot: widget.fromScreenshot,
-          );
+          ))
+              .entries;
         } on LlmParseException catch (e) {
           // LLM 失败 → 降级
           results = [NaturalLanguageEntryParser.parse(text)];
@@ -119,13 +121,15 @@ class _AiQuickEntryViewState extends State<AiQuickEntryView> {
         fallbackHint = '未配置 AI 或解析失败，已用本地简易解析（单笔）';
       }
 
-      // 为每笔结果匹配分类实体
+      // 为每笔结果匹配分类实体：用户记忆 > 商户/关键词词典 > 大模型 > 兜底。
       final matched = results.map((entry) {
         CategoryEntity? cat;
-        if (entry.categoryKey != null) {
+        final learned = repo.recallCategoryKey(entry.note, entry.kind);
+        final dict = MerchantCategory.classify(entry.note, entry.kind);
+        final wantKey = learned ?? dict ?? entry.categoryKey;
+        if (wantKey != null) {
           cat = repo.categories
-              .where((c) =>
-                  c.kind == entry.kind && c.key == entry.categoryKey)
+              .where((c) => c.kind == entry.kind && c.key == wantKey)
               .firstOrNull;
         }
         // 未匹配 → 兜底 other / otherIncome
