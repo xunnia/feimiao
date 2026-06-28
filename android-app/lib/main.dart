@@ -2,9 +2,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter/cupertino.dart' show CupertinoPageRoute, CupertinoIcons;
 import 'package:provider/provider.dart';
 
+import 'core/auto_record.dart';
 import 'data/app_repository.dart';
 import 'share_intake.dart';
 import 'theme/app_colors.dart';
+import 'views/auto_record/auto_record_sheet.dart';
 import 'widgets/glass.dart';
 import 'widgets/ios_dialogs.dart';
 import 'widgets/ios_form.dart';
@@ -18,6 +20,7 @@ import 'views/home/record_input_bar.dart';
 import 'views/savings/savings_goals_view.dart';
 import 'views/search/search_view.dart';
 import 'views/settings/accounts_view.dart';
+import 'views/settings/auto_record_setting_view.dart';
 import 'views/settings/budget_setting_view.dart';
 import 'views/settings/recurring_view.dart';
 import 'views/settings/categories_view.dart';
@@ -33,6 +36,7 @@ void main() async {
   await repo.init();
 
   ShareIntake.init(); // 「分享到肥喵」：监听系统分享，自动记账
+  autoRecordWatcher.start(); // 自动记账：回到 App 时排空通知队列、弹确认表
 
   runApp(
     ChangeNotifierProvider<AppRepository>.value(
@@ -41,6 +45,39 @@ void main() async {
     ),
   );
 }
+
+/// 自动记账巡查：App 首帧后与每次回到前台时，取出原生抓到的支付通知，
+/// 本地解析成候选，弹「确认记账」表（无候选则静默）。用全局 navigatorKey 弹层。
+class _AutoRecordWatcher with WidgetsBindingObserver {
+  bool _busy = false;
+
+  void start() {
+    WidgetsBinding.instance.addObserver(this);
+    WidgetsBinding.instance.addPostFrameCallback((_) => _run());
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) _run();
+  }
+
+  Future<void> _run() async {
+    if (_busy) return;
+    _busy = true;
+    try {
+      final items = await AutoRecord.drain();
+      if (items.isEmpty) return;
+      final ctx = ShareIntake.navigatorKey.currentContext;
+      if (ctx == null) return;
+      await showAutoRecordSheet(ctx, items);
+    } catch (_) {
+    } finally {
+      _busy = false;
+    }
+  }
+}
+
+final _AutoRecordWatcher autoRecordWatcher = _AutoRecordWatcher();
 
 class QingJiApp extends StatelessWidget {
   const QingJiApp({super.key});
@@ -478,6 +515,13 @@ class _AppDrawerState extends State<_AppDrawer> {
                         icon: Icons.schedule_outlined,
                         label: '定时记账',
                         onTap: () => _popAndPush(const RecurringView()),
+                        indent: true,
+                      ),
+                      _DrawerItem(
+                        icon: Icons.notifications_active_outlined,
+                        label: '自动记账',
+                        onTap: () =>
+                            _popAndPush(const AutoRecordSettingView()),
                         indent: true,
                       ),
                       _DrawerItem(
