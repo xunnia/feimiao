@@ -1,6 +1,51 @@
 # CLAUDE.md
 
-> 交接文档（2026-06-18 刷新）。新会话/新环境（含 cowork）接手时先读这份，**别把已锁定的决策又问一遍或推翻**。
+> 交接文档。新会话/新环境（含 cowork / Claude Code）接手时先读这份，**别把已锁定的决策又问一遍或推翻**。
+> 下面「§0 最新交接」是 2026-06-28 那次长 session 的增量，**优先看它**；再往下是更早的 2026-06-18 版底稿（仍有效，但 §0 覆盖更新的部分）。
+
+---
+
+## §0 最新交接（2026-06-28，一次超长 session）
+
+### 0.1 首要在途：截图识别「京东/淘宝订单列表」解析（正在攻）
+- 现象：用京东「我的订单」整页截图记账时，会**漏单、错位（金额配错商品）、把已取消订单也记了**。
+- 已定位真因（用户贴了原始 OCR）：**ML Kit 对京东这种密集彩色页识别很糟——¥ 符号丢失（金额是裸的 `17.70`）、"999"认成"99"、行序打乱**。因为旧判定用 `[¥￥]\d` 认金额 → 认不到 → **`isOrderList` 判 false → 切单代码根本没触发**。
+- 已推的修复（最新提交，构建号 **b0628-3**）：
+  - `screenshot_entry.dart` 里 `isOrderList` 判定**不再依赖 ¥**，改用「共N件」锚点 + 裸两位小数金额。
+  - `order_list_parser.dart`（新，纯逻辑+单测）：按每单一个的「共N件」**确定性切单**，切单时**整单丢弃「已取消/退款/未付款」**；无「共N件」回退到 `screenshot_layout.dart` 的纵向聚类。
+  - `llm_entry_parser.dart` 的 `screenshotExtra` 提示词：多平台结构感知（店铺→商品→金额→共N件→状态）、跳过已取消、不漏单、金额只配同单商品。
+- **待用户真机验 b0628-3**：看①是否触发切单（输入框会出现 `─────` 分块）②取消单丢没丢③漏单补没补。
+- **诚实结论/天花板**：本地 OCR（ML Kit）对京东这类页就是不稳，切单能显著改善但**做不到分毫不差**；要 100% 只有**视觉大模型看图**（通义/智谱 VL，需云端 key）。用户**明确嫌云端麻烦、要纯本地**，所以别擅自上云；可以再优化本地启发式，但要如实告诉他上限。**单个订单详情页截图几乎不会错**，整页列表当"批量草稿"、确认页删改兜底。
+
+### 0.2 本 session 已完成（都在分支上、有单测的已进 CI 硬闸门）
+- **改名**：App 从「轻记」→ **「肥喵记账」**（`AndroidManifest label`）。
+- **AI 记账准确率三连**：
+  - P0-1 大模型统一判意图：`parseWithLLM` 返回 `{intent,entries}`，记账/查账交给 DeepSeek 判；关键词 `ChatIntent`（`chat_intent.dart`）仅离线兜底。**修了"花了"被误判查账的 bug。**
+  - P0-2 商户词典 `merchant_category.dart`（真实 key、kind 感知、最长匹配）：瑞幸→饮料、滴滴→打车…；分类优先级 **用户记忆 > 词典 > 大模型 > 兜底**（`_matchCat` / quick-entry / auto-record 都接了）。
+  - P1 记账卡**一键改分类芯片**（`ai_chat_panel.dart` `_CatChip`/`_pickCategory`/`_catCandidates`）：同大类兄弟子类，点一下=改+学习(`learnCategory`)+若已入库改库(`repo.setTransactionCategory`)。`addTransaction` 现返回 id。
+  - P2 `entry_sanity.dart`（金额≤0/过大→null、未来日期→今天、置信度 clamp，接在 LLM 与本地两条路）；本地解析认**中文数字金额**（`_cnToInt`：一百二/两块五/一万二）。
+- **解析更聪明**：`meal_time.dart`（笼统 `dining` 按时段→早/午/晚餐）；`smart_tags.dart`（报销识别→存账标"待报销"、AA 分摊按人数）；`spending_anomaly.dart`（记完比同类历史贵一大截→温和提醒，仅聊天记账路弹）；`notification_parse.dart`（通知挑支付金额避余额+方向）。
+- **顶级·捕获入口（原生）**：
+  - **分享到肥喵**：`MainActivity.kt`（MethodChannel `feimiao/share`）+ manifest SEND/SEND_MULTIPLE + `share_intake.dart`（全局 navigatorKey，文字→AiQuickEntryView、图片→`recognizeImagePathAndEntry`，与相册选图共用 OCR 管线）。**待真机验。**
+  - **自动记账**：`PaymentNotificationListener.kt`（`NotificationListenerService` 抓微信/支付宝支付通知→粗筛→排队 SharedPreferences）+ channel `feimiao/autorecord`（取队列/查授权/跳设置）+ `auto_record.dart` + `auto_record_sheet.dart`（回前台一键批量确认，不静默乱记）+ 设置页 `auto_record_setting_view.dart`（抽屉入口，含保活引导）。**待真机验（通知文案解析 + 国产 ROM 保活是最大变数）。**
+- **趋势图**：统计页「近半年趋势」支出+收入双线（`statistics_view.dart` `_TrendChart`）。
+- **月度报告**：`monthly_report_view.dart`（本地算的月报 + 猫锐评，统计页入口）。修了双 ¥ bug。
+- **退款=冲账方案1**：`repo.refundTransaction` 记负支出；左滑「编辑/退款/删除」`transaction_actions.dart`（flutter_slidable）。
+- **周期记账**：`recurring_rule.dart` + DB v11 + `recurring_view.dart`（抽屉「定时记账」）。
+- **崩溃修复（重要）**：release 版截图识别崩（NPE `getClass() on null`）根因是 **R8 裁掉了 ML Kit 反射加载的中文模型类** → 已在 `android/app/build.gradle.kts` 的 release 关掉 R8：`isMinifyEnabled=false` + `isShrinkResources=false`。**别再打开**，否则 ML Kit 会被裁崩。
+- **图标**：`app_icon.png` 是完整成品图（内容贴边），CI 里 `rm` 掉自适应 XML 强制传统图标。真正无裁切要用户给「透明背景 logo 前景」做标准自适应——用户没给，**暂搁置**。
+
+### 0.3 构建 / 验证 的变化（覆盖 §二）
+- **提交信息不再用 `M{n}` 流水号**，改**中文描述式**（如「AI记账P2:…」）。
+- **用户在本地 `master` 分支**，推送用 **`git push origin HEAD:claude/hopeful-wozniak-pr2ne3`**（把 HEAD 推到那个固定分支；直接 `git push -u origin claude/…` 会 `src refspec … does not match`，因为本地分支名叫 master）。
+- **cowork 环境里没有 `mcp__github__*` 工具**，我读不到 CI 日志；靠用户截图/告知 CI 颜色。Claude Code 环境若有 `gh` CLI 或 github 工具可自查。
+- **构建水印**：`lib/build_info.dart` 的 `kBuildTag` 显示在 AI 记账页副标题（现 **b0628-3**）。**每次有意义改动就 +1**，让用户一眼确认装的是不是最新包（本 session 反复踩"用户在测旧包"的坑，务必让他先认水印再报问题）。
+- 沙箱/cowork 的 bash **不能 commit/push**（`.git/objects` 无写权限 + 无 git 身份）；**代码编辑靠文件工具落盘到用户磁盘，git 提交推送让用户在自己终端跑**。Claude Code 在用户机器上则可直接 git。
+- CI 仍是唯一编译闸门：**没有本地 Dart/Flutter，我编译不了；纯逻辑都写了单测让 CI 真验；原生(Kotlin)只能 CI 验编译 + 用户真机验行为。**
+
+### 0.4 又锁定的决策（补充 §三）
+- **AI 记账要做到"顶级"**：方向是①解析准（已大量做）②捕获无摩擦（分享+自动记账）③更聪明（餐次/报销/AA/异常）。**纯本地优先，用户嫌云端 OCR 麻烦——不上云。**
+- **不派子代理**依旧（用户 6-14 决定），一条龙干。
 
 ## 一、当前活跃项目
 
