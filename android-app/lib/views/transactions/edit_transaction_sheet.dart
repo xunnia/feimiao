@@ -391,6 +391,7 @@ class _EditTransactionSheetState extends State<EditTransactionSheet> {
               expression: _expression,
               onExpressionChanged: _onExpressionChanged,
               onSave: _save,
+              saveLabel: '保存',
             ),
           ),
         ],

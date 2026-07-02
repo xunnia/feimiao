@@ -15,7 +15,12 @@ Future<String?> pickAndSaveReceipt(BuildContext context) async {
     child: const _SourceSheet(),
   );
   if (source == null) return null;
+  return pickAndSaveReceiptFrom(source);
+}
 
+/// 指定来源（拍照/相册）直接选图存图，不弹来源选择。
+/// 手动卡右下角「相册」「拍照」两个独立按钮走这里。
+Future<String?> pickAndSaveReceiptFrom(ImageSource source) async {
   final picker = ImagePicker();
   final XFile? picked = await picker.pickImage(
     source: source,

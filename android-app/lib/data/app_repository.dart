@@ -1132,6 +1132,7 @@ class AppRepository extends ChangeNotifier {
   // ---------------------------------------------------------------------------
 
   /// 新增一笔，返回新记录的 id（供记账卡保存后按条目改分类用）。
+  /// [bookId] 不传则记到当前账本（手动卡的「账本」芯片可指定记到别的账本）。
   Future<int> addTransaction({
     required TransactionKind kind,
     required Decimal amount,
@@ -1144,9 +1145,10 @@ class AppRepository extends ChangeNotifier {
     List<int> tagIds = const [],
     bool reimbursable = false,
     String imagePath = '',
+    int? bookId,
   }) async {
     final newId = await _db!.insert('transactions', {
-      'book_id': _currentBookId,
+      'book_id': bookId ?? _currentBookId,
       'kind': kind.toJson(),
       'amount': amount.toString(),
       'currency_code': currencyCode,
@@ -1301,6 +1303,25 @@ class AppRepository extends ChangeNotifier {
 
   List<CategoryEntity> childrenOf(int parentId) =>
       _categories.where((c) => c.parentId == parentId).toList();
+
+  /// 子分类按「这个人用得多不多」排序：记过的次数多在前，没记过的保持原顺序。
+  /// 手动卡的二级分类展开面板用它，让常用子类排前面少翻找。
+  List<CategoryEntity> childrenOfRanked(int parentId) {
+    final children = childrenOf(parentId);
+    if (children.length < 2) return children;
+    final counts = <int, int>{};
+    for (final t in _transactions) {
+      final cid = t.categoryId;
+      if (cid != null) counts[cid] = (counts[cid] ?? 0) + 1;
+    }
+    final indexed = [for (var i = 0; i < children.length; i++) (i, children[i])];
+    indexed.sort((a, b) {
+      final ca = counts[a.$2.id] ?? 0;
+      final cb = counts[b.$2.id] ?? 0;
+      return ca != cb ? cb.compareTo(ca) : a.$1.compareTo(b.$1);
+    });
+    return [for (final e in indexed) e.$2];
+  }
 
   /// 某大类本月支出合计（含其子类）。用于分类预算进度。
   Decimal monthSpentForTopCategory(int topCategoryId, {DateTime? month}) {

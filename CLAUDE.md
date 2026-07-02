@@ -23,8 +23,9 @@
 ### -1.15 环境重要变化：本机有 Flutter 工具链！
 - 用户这台 Windows 机（Claude Code 环境）装了 **Flutter 3.44.2 / Dart 3.12.2**，`flutter analyze`、`flutter test` 都能本地跑（本批已跑：analyze 无 error、154 测试全过）。**推 CI 前先本地验，别再盲推**。CI 仍负责出 APK 到固定 Release 链接。
 
-### -1.2 本批(1)已改文件速查
-`home_view.dart`（猫216/新_FilterSegment/删_InsightStrip）、`main.dart`（PressableScale+底部渐变）、`ai_chat_panel.dart`（_SuggestionGrid玻璃底/_AnswerBubble.showMascot）、`manual_add_sheet.dart`（删今日可花）、`build_info.dart`（b0702-1）。
+### -1.2 已完成批次速查
+- **批1（b0702-1，待真机验）**：`home_view.dart`（猫216/新_FilterSegment/删_InsightStrip）、`main.dart`（PressableScale+底部渐变）、`ai_chat_panel.dart`（_SuggestionGrid玻璃底/_AnswerBubble.showMascot）、`manual_add_sheet.dart`（删今日可花）。
+- **批2（b0702-2，待真机验）手动记账重构**：`manual_add_sheet.dart` 整体重写（_KindSegment Telegram胶囊 / 咔皮式二级面板 _SubcategoryPanel+_blurIf 模糊收起 / _ChipsRow 日期·账本·账户·标签·待报销 / _AmountCard 输入框风格金额+备注+相册拍照+再记flash提示）；`amount_keypad.dart` 重写成咔皮4×4（1-9/⌫长按清空/+/−/再记/0/./完成，onSaveAgain 可选，编辑页 saveLabel=保存）；`app_repository.dart` 加 `addTransaction(bookId:)` 和 `childrenOfRanked`；`receipt_picker.dart` 拆出 `pickAndSaveReceiptFrom(source)`；新测试 `amount_keypad_widget_test.dart`（4个）。旧 `SubcategoryRow` 仅编辑页还在用。
 
 ---
 
