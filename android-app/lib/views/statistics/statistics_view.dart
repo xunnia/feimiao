@@ -168,7 +168,9 @@ class _StatisticsViewState extends State<StatisticsView> {
           records: records,
           displayedMonth: _displayedMonth,
           isCurrentMonth: _isCurrentMonth,
-          monthlyBudget: repo.monthlyBudget,
+          // 预算期间模型：历史月显示当时生效的预算。
+          monthlyBudget: repo.budgetTotalFor(
+              _displayedMonth.year, _displayedMonth.month),
           onShiftMonth: _shiftMonth,
         );
       case _StatRange.year:
@@ -377,6 +379,7 @@ class _MonthlyContent extends StatelessWidget {
             monthlyBudget: monthlyBudget!,
             records: records,
             isCurrentMonth: isCurrentMonth,
+            monthDate: displayedMonth,
           ),
           const SizedBox(height: 16),
         ],
@@ -954,19 +957,25 @@ class _BudgetProgressCard extends StatelessWidget {
   final Decimal monthlyBudget;
   final List<TransactionRecord> records;
   final bool isCurrentMonth;
+  final DateTime monthDate;
 
   const _BudgetProgressCard({
     required this.monthlyBudget,
     required this.records,
     required this.isCurrentMonth,
+    required this.monthDate,
   });
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    // 历史月按该月最后一天算执行情况；当月按今天。
     final status = BudgetEngine.status(
       monthlyBudget: monthlyBudget,
       records: records,
+      on: isCurrentMonth
+          ? DateTime.now()
+          : DateTime(monthDate.year, monthDate.month + 1, 0),
     );
     final ratio = (MoneyFormat.toDouble(status.spentThisMonth) /
             MoneyFormat.toDouble(monthlyBudget).clamp(0.01, double.infinity))

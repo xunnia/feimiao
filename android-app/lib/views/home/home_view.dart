@@ -95,9 +95,11 @@ class _HomeViewState extends State<HomeView> {
       year: _year,
       month: _month,
     );
-    final budgetStatus = repo.monthlyBudget != null
+    // 预算走「期间」模型：历史月显示当时生效的预算，不被后来的调整覆盖。
+    final monthBudget = repo.budgetTotalFor(_year, _month);
+    final budgetStatus = monthBudget != null
         ? BudgetEngine.status(
-            monthlyBudget: repo.monthlyBudget!,
+            monthlyBudget: monthBudget,
             records: repo.allRecords,
             on: isCurrent
                 ? DateTime.now()
@@ -160,7 +162,7 @@ class _HomeViewState extends State<HomeView> {
                           isCurrentMonth: isCurrent,
                           summary: summary,
                           budgetStatus: budgetStatus,
-                          budget: repo.monthlyBudget,
+                          budget: monthBudget,
                           onPrevMonth: () => _stepMonth(-1),
                           onNextMonth: () => _stepMonth(1),
                           onJumpCurrent: _jumpToCurrent,

@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:decimal/decimal.dart';
@@ -5,6 +6,7 @@ import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as p;
 import 'package:sqflite/sqflite.dart';
 
+import '../core/budget/budget_period.dart';
 import '../core/models/category_seed.dart';
 import '../core/models/recurring_rule.dart';
 import '../core/models/transaction_kind.dart';
@@ -276,7 +278,7 @@ class TagEntity {
 // ---------------------------------------------------------------------------
 
 class AppRepository extends ChangeNotifier {
-  static const _dbVersion = 12;
+  static const _dbVersion = 13;
   static const _dbName = 'qingji.db';
 
   Database? _db;
@@ -289,8 +291,8 @@ class AppRepository extends ChangeNotifier {
   final List<TagEntity> _tags = [];
 
   int _currentBookId = 0;
-  Decimal? _monthlyBudget;
-  final Map<String, Decimal> _categoryBudgets = {}; // 分类 key -> 月预算
+  /// 全部预算期间（新模型：阶段性预算，见 core/budget/budget_period.dart）。
+  final List<BudgetPeriod> _budgetPeriods = [];
   String? _deepSeekApiKey;
 
   /// 记账模式偏好：true=AI 记账，false=手动记账（持久化）。
@@ -366,13 +368,33 @@ class AppRepository extends ChangeNotifier {
     }
   }
 
-  Decimal? get monthlyBudget => _monthlyBudget;
+  /// 全部预算期间（新建在前面显示用，按生效起点降序）。
+  List<BudgetPeriod> get budgetPeriods {
+    final list = List<BudgetPeriod>.of(_budgetPeriods)
+      ..sort((a, b) => b.start.compareTo(a.start));
+    return List.unmodifiable(list);
+  }
 
-  /// 全部分类预算（key -> 月预算）。
-  Map<String, Decimal> get categoryBudgets => Map.unmodifiable(_categoryBudgets);
+  /// 某年某月生效的月预算总额（当前账本口径）；没设过返回 null。
+  Decimal? budgetTotalFor(int year, int month) =>
+      BudgetResolver.monthlyTotalFor(_budgetPeriods, year, month,
+          bookId: _currentBookId);
+
+  /// 现在生效的月预算总额（老调用方无感兼容）。
+  Decimal? get monthlyBudget {
+    final n = DateTime.now();
+    return budgetTotalFor(n.year, n.month);
+  }
+
+  /// 现在生效的分类预算明细（key -> 月预算）。
+  Map<String, Decimal> get categoryBudgets =>
+      BudgetResolver.effectiveOn(_budgetPeriods, DateTime.now(),
+              bookId: _currentBookId)
+          ?.categoryBudgets ??
+      const {};
 
   /// 某分类 key 的月预算（未设返回 null）。
-  Decimal? categoryBudgetFor(String key) => _categoryBudgets[key];
+  Decimal? categoryBudgetFor(String key) => categoryBudgets[key];
 
   String? get deepSeekApiKey => _deepSeekApiKey;
 
@@ -480,6 +502,8 @@ class AppRepository extends ChangeNotifier {
         amount       TEXT NOT NULL
       )
     ''');
+
+    await db.execute(_createBudgetPeriodsSql);
 
     await db.execute('''
       CREATE TABLE app_settings (
@@ -653,7 +677,59 @@ class AppRepository extends ChangeNotifier {
             'ALTER TABLE books ADD COLUMN include_in_total INTEGER NOT NULL DEFAULT 1');
       } catch (_) {}
     }
+    if (oldVersion < 13) {
+      // 预算改「预算期间」模型：阶段性预算，历史月显示当时生效的那份。
+      await db.execute(_createBudgetPeriodsSql);
+      // 老的单一预算自动搬成一条「从很久以前开始的每月循环期间」，
+      // 行为与之前完全一致；旧 budget 表保留不动（只加不删）。
+      try {
+        final totalRows = await db.query('budget',
+            where: 'category_key IS NULL', limit: 1);
+        if (totalRows.isNotEmpty) {
+          final total =
+              Decimal.tryParse(totalRows.first['amount'] as String? ?? '');
+          if (total != null && total > Decimal.zero) {
+            final catRows =
+                await db.query('budget', where: 'category_key IS NOT NULL');
+            final cats = <String, String>{};
+            for (final r in catRows) {
+              final k = r['category_key'] as String?;
+              final v = Decimal.tryParse(r['amount'] as String? ?? '');
+              if (k != null && k.isNotEmpty && v != null && v > Decimal.zero) {
+                cats[k] = v.toString();
+              }
+            }
+            await db.insert('budget_periods', {
+              'book_id': null,
+              'start_ms': DateTime(2000, 1, 1).millisecondsSinceEpoch,
+              'end_ms': null,
+              'recurring_monthly': 1,
+              'total': total.toString(),
+              'category_budgets': cats.isEmpty ? '' : jsonEncode(cats),
+              'monthly_income': '',
+              'fixed_expenses': '',
+              'created_ms': DateTime.now().millisecondsSinceEpoch,
+            });
+          }
+        }
+      } catch (_) {}
+    }
   }
+
+  static const _createBudgetPeriodsSql = '''
+      CREATE TABLE IF NOT EXISTS budget_periods (
+        id                INTEGER PRIMARY KEY AUTOINCREMENT,
+        book_id           INTEGER,
+        start_ms          INTEGER NOT NULL,
+        end_ms            INTEGER,
+        recurring_monthly INTEGER NOT NULL DEFAULT 1,
+        total             TEXT NOT NULL,
+        category_budgets  TEXT NOT NULL DEFAULT '',
+        monthly_income    TEXT NOT NULL DEFAULT '',
+        fixed_expenses    TEXT NOT NULL DEFAULT '',
+        created_ms        INTEGER NOT NULL DEFAULT 0
+      )
+    ''';
 
   Future<void> _applyCategoryTree(DatabaseExecutor db) async {
     for (final s in CategorySeed.all) {
@@ -704,8 +780,7 @@ class AppRepository extends ChangeNotifier {
       _loadAccounts(),
       _loadCategories(),
       _loadTransactions(),
-      _loadBudget(),
-      _loadCategoryBudgets(),
+      _loadBudgetPeriods(),
       _loadApiKey(),
       _loadRecordMode(),
       _loadChatRetention(),
@@ -795,31 +870,12 @@ class AppRepository extends ChangeNotifier {
       ..addAll(rows.map(CategoryEntity.fromMap));
   }
 
-  Future<void> _loadBudget() async {
-    final rows = await _db!.query(
-      'budget',
-      where: 'category_key IS NULL',
-      limit: 1,
-    );
-    if (rows.isEmpty) {
-      _monthlyBudget = null;
-    } else {
-      final raw = rows.first['amount'] as String;
-      final value = Decimal.parse(raw);
-      _monthlyBudget = value > Decimal.zero ? value : null;
-    }
-  }
-
-  /// 读取所有分类预算（budget 表里 category_key 非空的行）。
-  Future<void> _loadCategoryBudgets() async {
-    final rows = await _db!.query('budget', where: 'category_key IS NOT NULL');
-    _categoryBudgets.clear();
-    for (final r in rows) {
-      final k = r['category_key'] as String?;
-      if (k == null || k.isEmpty) continue;
-      final v = Decimal.tryParse((r['amount'] as String?) ?? '');
-      if (v != null && v > Decimal.zero) _categoryBudgets[k] = v;
-    }
+  Future<void> _loadBudgetPeriods() async {
+    final rows = await _db!
+        .query('budget_periods', orderBy: 'start_ms ASC, id ASC');
+    _budgetPeriods
+      ..clear()
+      ..addAll(rows.map(BudgetPeriod.fromMap));
   }
 
   Future<void> _loadApiKey() async {
@@ -1435,56 +1491,52 @@ class AppRepository extends ChangeNotifier {
       _transactions.map((t) => t.toRecord()).toList();
 
   // ---------------------------------------------------------------------------
-  // 预算（总额 + 分类）
+  // 预算期间（新模型：阶段性预算）
   // ---------------------------------------------------------------------------
 
-  Future<void> saveMonthlyBudget(Decimal amount) async {
-    final rows = await _db!.query(
-      'budget',
-      where: 'category_key IS NULL',
-      limit: 1,
+  /// 新建一条预算期间，返回 id。
+  Future<int> addBudgetPeriod({
+    int? bookId,
+    required DateTime start,
+    DateTime? end,
+    bool recurringMonthly = true,
+    required Decimal total,
+    Map<String, Decimal> categoryBudgets = const {},
+    Decimal? monthlyIncome,
+    List<(String, Decimal)> fixedExpenses = const [],
+  }) async {
+    final p = BudgetPeriod(
+      id: 0,
+      bookId: bookId,
+      start: DateTime(start.year, start.month, start.day),
+      end: end == null ? null : DateTime(end.year, end.month, end.day),
+      recurringMonthly: recurringMonthly,
+      total: total,
+      categoryBudgets: categoryBudgets,
+      monthlyIncome: monthlyIncome,
+      fixedExpenses: fixedExpenses,
     );
-    if (rows.isEmpty) {
-      await _db!.insert('budget', {
-        'category_key': null,
-        'amount': amount.toString(),
-      });
-    } else {
-      final id = rows.first['id'] as int;
-      await _db!.update(
-        'budget',
-        {'amount': amount.toString()},
-        where: 'id = ?',
-        whereArgs: [id],
-      );
-    }
-    await _loadBudget();
+    final id = await _db!.insert('budget_periods', {
+      'book_id': bookId,
+      'start_ms': p.start.millisecondsSinceEpoch,
+      'end_ms': p.end?.millisecondsSinceEpoch,
+      'recurring_monthly': recurringMonthly ? 1 : 0,
+      'total': total.toString(),
+      'category_budgets':
+          categoryBudgets.isEmpty ? '' : p.categoryBudgetsJson(),
+      'monthly_income': monthlyIncome?.toString() ?? '',
+      'fixed_expenses':
+          fixedExpenses.isEmpty ? '' : p.fixedExpensesJson(),
+      'created_ms': DateTime.now().millisecondsSinceEpoch,
+    });
+    await _loadBudgetPeriods();
     notifyListeners();
+    return id;
   }
 
-  /// 保存/更新某分类的月预算（[amount] <= 0 视为删除该分类预算）。
-  Future<void> saveCategoryBudget(String categoryKey, Decimal amount) async {
-    if (amount <= Decimal.zero) {
-      await _db!.delete('budget',
-          where: 'category_key = ?', whereArgs: [categoryKey]);
-    } else {
-      final rows = await _db!.query('budget',
-          where: 'category_key = ?', whereArgs: [categoryKey], limit: 1);
-      if (rows.isEmpty) {
-        await _db!.insert('budget', {
-          'category_key': categoryKey,
-          'amount': amount.toString(),
-        });
-      } else {
-        await _db!.update(
-          'budget',
-          {'amount': amount.toString()},
-          where: 'category_key = ?',
-          whereArgs: [categoryKey],
-        );
-      }
-    }
-    await _loadCategoryBudgets();
+  Future<void> deleteBudgetPeriod(int id) async {
+    await _db!.delete('budget_periods', where: 'id = ?', whereArgs: [id]);
+    await _loadBudgetPeriods();
     notifyListeners();
   }
 
