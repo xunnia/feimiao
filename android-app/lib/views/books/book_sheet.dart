@@ -166,6 +166,8 @@ class _BookSheetState extends State<_BookSheet> {
                   Expanded(
                     child: TextField(
                       controller: _nameCtrl,
+                      // 编辑就是来改名的，直接聚焦弹键盘；新建先让用户看模板。
+                      autofocus: _isEdit,
                       maxLength: 12,
                       decoration: iosInputDecoration(hint: '账本名称'),
                       onChanged: (_) => setState(() {}),

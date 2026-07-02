@@ -122,7 +122,8 @@ class _HomeViewState extends State<HomeView> {
     }).toList();
     final sections = _groupByDay(filtered);
 
-    final double expandedHeight = budgetStatus == null ? 196.0 : 232.0;
+    // 顶部大卡片与下方筛选胶囊的间距收紧（用户 0702：原间距太远，减半）。
+    final double expandedHeight = budgetStatus == null ? 188.0 : 224.0;
     const double minExtent = kToolbarHeight;
 
     return CustomScrollView(
@@ -247,7 +248,7 @@ class _ExpandedSummaryCard extends StatelessWidget {
     final isOverspend = budgetStatus?.isOverBudget ?? false;
 
     return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
       child: Stack(
         clipBehavior: Clip.none,
         children: [
@@ -880,7 +881,7 @@ class _FilterSegment extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 2, 16, 8),
+      padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
       child: SlidingSegment<_TxFilter>(
         items: const [
           (_TxFilter.all, '全部'),

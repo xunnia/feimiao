@@ -23,7 +23,65 @@ import '../common/receipt_picker.dart';
 import '../quick_add/amount_keypad.dart';
 import '../quick_add/category_grid.dart';
 
-/// 手动记账大卡片（模态底部弹出）。
+/// 打开手动记账 / 编辑账目大卡（**统一入口**：背景高斯模糊 + 底部上滑，
+/// 与 AI 记账面板同一套出场，别再用无模糊的 showModalBottomSheet）。
+/// [edit] 传已有账目 = 编辑模式（同一套界面，避免记账/编辑两套设计割裂）。
+Future<void> showManualAddSheet(
+  BuildContext context, {
+  VoidCallback? onSwitchToAi,
+  TransactionEntity? edit,
+}) {
+  return showGeneralDialog<void>(
+    context: context,
+    barrierDismissible: true,
+    barrierLabel: '记账',
+    barrierColor: Colors.black.withValues(alpha: 0.12),
+    transitionDuration: const Duration(milliseconds: 240),
+    pageBuilder: (ctx, _, __) => SafeArea(
+      top: false,
+      // 键盘弹起时整卡上移，备注不会被挡（对齐咔皮）。
+      child: AnimatedPadding(
+        duration: const Duration(milliseconds: 160),
+        curve: Curves.easeOut,
+        padding:
+            EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(ctx).bottom),
+        child: Align(
+          alignment: Alignment.bottomCenter,
+          child: ClipRRect(
+            borderRadius:
+                const BorderRadius.vertical(top: Radius.circular(24)),
+            child: Material(
+              color: Theme.of(ctx).colorScheme.surface,
+              child: ManualAddSheet(onSwitchToAi: onSwitchToAi, edit: edit),
+            ),
+          ),
+        ),
+      ),
+    ),
+    transitionBuilder: (ctx, anim, _, child) {
+      final curved = CurvedAnimation(parent: anim, curve: Curves.easeOutCubic);
+      // 与 AI 面板同款：背景高斯模糊渐入 + 浮层上滑淡入。
+      return BackdropFilter(
+        filter: ImageFilter.blur(
+          sigmaX: 10 * anim.value,
+          sigmaY: 10 * anim.value,
+        ),
+        child: FadeTransition(
+          opacity: anim,
+          child: SlideTransition(
+            position: Tween<Offset>(
+              begin: const Offset(0, 0.06),
+              end: Offset.zero,
+            ).animate(curved),
+            child: child,
+          ),
+        ),
+      );
+    },
+  );
+}
+
+/// 手动记账大卡片。
 ///
 /// 布局对齐咔皮（自上而下）：
 ///   支出/收入 分段（Telegram 胶囊）+ 模式胶囊 + 关闭
@@ -32,11 +90,15 @@ import '../quick_add/category_grid.dart';
 ///   金额卡（输入框风格）：左上金额 + 细横线 + 备注 + 右下相册/拍照
 ///   数字键盘：1-9 / ⌫ / + / − / 再记 / 0 / . / 完成
 /// 「再记」保存后不关卡片继续记；「完成」保存并关闭。
+/// 编辑模式（[edit] 非空）：预填原账目、完成键=保存、无「再记」、不切账本。
 class ManualAddSheet extends StatefulWidget {
-  /// 点击"AI助手"时的回调（由调用方切换到 AiFocusedInputSheet）。
-  final VoidCallback onSwitchToAi;
+  /// 点击"AI助手"时的回调；null（编辑模式）则不显示模式胶囊。
+  final VoidCallback? onSwitchToAi;
 
-  const ManualAddSheet({super.key, required this.onSwitchToAi});
+  /// 要编辑的账目；null = 新记一笔。
+  final TransactionEntity? edit;
+
+  const ManualAddSheet({super.key, this.onSwitchToAi, this.edit});
 
   @override
   State<ManualAddSheet> createState() => _ManualAddSheetState();
@@ -61,15 +123,40 @@ class _ManualAddSheetState extends State<ManualAddSheet> {
   String? _flash;
   Timer? _flashTimer;
 
+  /// 备注输入焦点：聚焦时收起数字键盘，让位给系统键盘（对齐咔皮）。
+  final FocusNode _noteFocus = FocusNode();
+
+  bool get _isEdit => widget.edit != null;
+
   @override
   void initState() {
     super.initState();
+    _noteFocus.addListener(() => setState(() {}));
+    final t = widget.edit;
+    if (t != null) {
+      // 编辑模式：预填原账目。
+      _kind = t.txKind;
+      _expression.loadAmount(t.amount);
+      _selectedCategoryId = t.categoryId;
+      _selectedAccountId = t.accountId;
+      _date = t.date;
+      _noteController.text = t.note;
+      _tagIds = List<int>.of(t.tagIds);
+      _reimbursable = t.reimbursable;
+      _imagePath = t.imagePath.isEmpty ? null : t.imagePath;
+      final repo = context.read<AppRepository>();
+      final cat = repo.categories
+          .where((c) => c.id == _selectedCategoryId)
+          .firstOrNull;
+      _activeParentId = cat == null ? null : (cat.parentId ?? cat.id);
+    }
     WidgetsBinding.instance.addPostFrameCallback((_) => _applyDefaults());
   }
 
   @override
   void dispose() {
     _flashTimer?.cancel();
+    _noteFocus.dispose();
     _noteController.dispose();
     super.dispose();
   }
@@ -132,13 +219,45 @@ class _ManualAddSheetState extends State<ManualAddSheet> {
     final repo = context.read<AppRepository>();
     final accountId = _selectedAccountId ?? repo.accounts.firstOrNull?.id;
     if (accountId == null) return false;
+    final note = _noteController.text.trim();
+
+    final edit = widget.edit;
+    if (edit != null) {
+      await repo.updateTransaction(
+        id: edit.id,
+        kind: _kind,
+        amount: amount,
+        categoryId: _selectedCategoryId,
+        accountId: accountId,
+        note: note,
+        date: _date,
+        tagIds: _tagIds,
+        reimbursable:
+            _kind == TransactionKind.expense ? _reimbursable : false,
+        imagePath: _imagePath ?? '',
+      );
+      // 学习用户纠正：改了分类且有备注 → 记住「备注 → 新分类」，下次 AI 自动套用。
+      if (_selectedCategoryId != null &&
+          _selectedCategoryId != edit.categoryId &&
+          note.isNotEmpty) {
+        final newKey = repo.categories
+            .where((c) => c.id == _selectedCategoryId)
+            .firstOrNull
+            ?.key;
+        if (newKey != null) {
+          await repo.learnCategory(
+              phrase: note, kind: _kind, categoryKey: newKey);
+        }
+      }
+      return true;
+    }
 
     await repo.addTransaction(
       kind: _kind,
       amount: amount,
       categoryId: _selectedCategoryId,
       accountId: accountId,
-      note: _noteController.text.trim(),
+      note: note,
       date: _date,
       tagIds: _tagIds,
       reimbursable: _kind == TransactionKind.expense ? _reimbursable : false,
@@ -220,10 +339,22 @@ class _ManualAddSheetState extends State<ManualAddSheet> {
     return ConstrainedBox(
       constraints:
           BoxConstraints(maxHeight: maxH.clamp(300.0, screenH * 0.92)),
-      child: Column(
+      // 高度变化（二级面板开合/键盘收放）平滑过渡，不突兀跳变。
+      child: AnimatedSize(
+        duration: const Duration(milliseconds: 220),
+        curve: Curves.easeOutCubic,
+        alignment: Alignment.topCenter,
+        child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          const _DragHandle(),
+          // 拖动条：下滑手势关卡（对齐底部弹层习惯）。
+          GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onVerticalDragEnd: (d) {
+              if ((d.primaryVelocity ?? 0) > 300) Navigator.pop(context);
+            },
+            child: const _DragHandle(),
+          ),
 
           // ── 顶部栏：支出/收入 分段（对齐主页大小）+ 模式胶囊 + 关闭 ──
           Padding(
@@ -242,8 +373,10 @@ class _ManualAddSheetState extends State<ManualAddSheet> {
                   ),
                 ),
                 const Spacer(),
-                _ModePill(label: '手动记账', onTap: widget.onSwitchToAi),
-                const SizedBox(width: 8),
+                if (widget.onSwitchToAi != null) ...[
+                  _ModePill(label: '手动记账', onTap: widget.onSwitchToAi!),
+                  const SizedBox(width: 8),
+                ],
                 _ToolCircleButton(
                   icon: Icons.close,
                   onTap: () => Navigator.pop(context),
@@ -313,6 +446,7 @@ class _ManualAddSheetState extends State<ManualAddSheet> {
                   kind: _kind,
                   date: _date,
                   bookId: _bookId,
+                  showBook: !_isEdit, // 编辑不换账本
                   accountId: _selectedAccountId,
                   tagCount: _tagIds.length,
                   reimbursable: _reimbursable,
@@ -329,25 +463,32 @@ class _ManualAddSheetState extends State<ManualAddSheet> {
                   version: _expressionVersion,
                   kind: _kind,
                   noteController: _noteController,
+                  noteFocus: _noteFocus,
                   imagePath: _imagePath,
                   flash: _flash,
                   onPickGallery: () => _pickImage(ImageSource.gallery),
                   onPickCamera: () => _pickImage(ImageSource.camera),
                   onRemoveImage: () => setState(() => _imagePath = null),
                 ),
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 14, top: 6),
-                  child: AmountKeypad(
-                    expression: _expression,
-                    onExpressionChanged: _onExpressionChanged,
-                    onSave: _save,
-                    onSaveAgain: _saveAgain,
-                  ),
-                ),
+                // 备注聚焦时收起数字键盘，让系统键盘顶上来也挡不住备注（对齐咔皮）。
+                if (!_noteFocus.hasFocus)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 14, top: 6),
+                    child: AmountKeypad(
+                      expression: _expression,
+                      onExpressionChanged: _onExpressionChanged,
+                      onSave: _save,
+                      onSaveAgain: _isEdit ? null : _saveAgain,
+                      saveLabel: _isEdit ? '保存' : '完成',
+                    ),
+                  )
+                else
+                  const SizedBox(height: 10),
               ],
             ),
           ),
         ],
+        ),
       ),
     );
   }
@@ -463,6 +604,7 @@ class _ChipsRow extends StatelessWidget {
   final TransactionKind kind;
   final DateTime date;
   final int? bookId;
+  final bool showBook;
   final int? accountId;
   final int tagCount;
   final bool reimbursable;
@@ -476,6 +618,7 @@ class _ChipsRow extends StatelessWidget {
     required this.kind,
     required this.date,
     required this.bookId,
+    this.showBook = true,
     required this.accountId,
     required this.tagCount,
     required this.reimbursable,
@@ -526,7 +669,7 @@ class _ChipsRow extends StatelessWidget {
           ),
           const SizedBox(width: 8),
           // 账本（多账本：这笔记到哪本）—— 弹 iOS 浮动菜单，与抽屉账本菜单同款
-          if (repo.books.length > 1) ...[
+          if (showBook && repo.books.length > 1) ...[
             Builder(
               builder: (chipCtx) => _Chip(
                 icon: Icons.menu_book_outlined,
@@ -609,6 +752,7 @@ class _Chip extends StatelessWidget {
     final scheme = Theme.of(context).colorScheme;
     final accent = selectedColor ?? scheme.primary;
     final fg = selected ? accent : scheme.onSurfaceVariant;
+    // 与全 App 按钮同一套设计：白底 + 发丝边 + 淡影（不要灰底）。
     return PressableScale(
       onPressed: onTap,
       child: Container(
@@ -617,13 +761,22 @@ class _Chip extends StatelessWidget {
         decoration: BoxDecoration(
           color: selected
               ? accent.withValues(alpha: 0.12)
-              : scheme.surfaceContainerHigh,
+              : AppColors.card(scheme),
           borderRadius: BorderRadius.circular(10),
           border: Border.all(
             color: selected
                 ? accent.withValues(alpha: 0.6)
-                : Colors.transparent,
+                : Colors.black.withValues(alpha: 0.06),
           ),
+          boxShadow: selected
+              ? null
+              : [
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: 0.04),
+                    blurRadius: 6,
+                    offset: const Offset(0, 1),
+                  ),
+                ],
         ),
         child: Row(
           mainAxisSize: MainAxisSize.min,
@@ -654,6 +807,7 @@ class _AmountCard extends StatelessWidget {
   final int version;
   final TransactionKind kind;
   final TextEditingController noteController;
+  final FocusNode noteFocus;
   final String? imagePath;
   final String? flash;
   final VoidCallback onPickGallery;
@@ -665,6 +819,7 @@ class _AmountCard extends StatelessWidget {
     required this.version,
     required this.kind,
     required this.noteController,
+    required this.noteFocus,
     required this.imagePath,
     required this.flash,
     required this.onPickGallery,
@@ -755,6 +910,8 @@ class _AmountCard extends StatelessWidget {
                       )
                     : TextField(
                         controller: noteController,
+                        focusNode: noteFocus,
+                        textInputAction: TextInputAction.done,
                         style: const TextStyle(fontSize: 13),
                         decoration: InputDecoration(
                           hintText: '写备注',

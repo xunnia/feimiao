@@ -162,8 +162,10 @@ class _RootShellState extends State<RootShell>
                   // 左缘右滑拉开抽屉；开着时任意左滑关上（行内左滑删除不受影响，
                   // 因为 Slidable 在手势竞技场里更深、优先赢）。
                   onHorizontalDragStart: (d) {
-                    _edgeDrag =
-                        _drawerCtl.value > 0 || d.globalPosition.dx < 28;
+                    // 左半屏右滑即可拉出抽屉（行内左滑删除在手势竞技场里更深、
+                    // 优先赢，不受影响）；抽屉开着时任意位置可滑动关。
+                    _edgeDrag = _drawerCtl.value > 0 ||
+                        d.globalPosition.dx < screenW * 0.5;
                   },
                   onHorizontalDragUpdate: (d) {
                     if (!_edgeDrag) return;
@@ -350,6 +352,9 @@ class _DrawerPanel extends StatefulWidget {
 }
 
 class _DrawerPanelState extends State<_DrawerPanel> {
+  /// 「更多」折叠：默认只露前 5 个功能项，展开后全部可见（都可长按拖动排序）。
+  bool _moreExpanded = false;
+
   void _popAndPush(Widget page) {
     widget.onClose();
     Navigator.push<void>(
@@ -419,19 +424,12 @@ class _DrawerPanelState extends State<_DrawerPanel> {
   }
 
   void _openManualFromDrawer() {
-    showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      useSafeArea: true,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-      ),
-      builder: (ctx) => ManualAddSheet(
-        onSwitchToAi: () {
-          Navigator.pop(ctx);
-          _pushAssistant();
-        },
-      ),
+    showManualAddSheet(
+      context,
+      onSwitchToAi: () {
+        Navigator.pop(context);
+        _pushAssistant();
+      },
     );
   }
 
@@ -558,6 +556,8 @@ class _DrawerPanelState extends State<_DrawerPanel> {
     final scheme = Theme.of(context).colorScheme;
     final repo = context.watch<AppRepository>();
     final fns = _orderedFns(repo);
+    // 折叠态只露排序后的前 5 个（shown 是 fns 的前缀，排序索引可直接对应全局）。
+    final shown = _moreExpanded ? fns : fns.take(5).toList();
 
     return Material(
       color: AppColors.appBg(scheme),
@@ -592,17 +592,50 @@ class _DrawerPanelState extends State<_DrawerPanel> {
                       buildDefaultDragHandles: false,
                       onReorder: (o, n) => _onReorder(o, n, fns),
                       children: [
-                        for (int i = 0; i < fns.length; i++)
+                        for (int i = 0; i < shown.length; i++)
                           ReorderableDelayedDragStartListener(
-                            key: ValueKey(fns[i].key),
+                            key: ValueKey(shown[i].key),
                             index: i,
                             child: _DrawerItem(
-                              icon: fns[i].icon,
-                              label: fns[i].label,
-                              onTap: () => _onFnTap(fns[i].key),
+                              icon: shown[i].icon,
+                              label: shown[i].label,
+                              onTap: () => _onFnTap(shown[i].key),
                             ),
                           ),
                       ],
+                    ),
+
+                    // 「更多 ⌄ / 收起 ⌃」折叠开关
+                    InkWell(
+                      onTap: () =>
+                          setState(() => _moreExpanded = !_moreExpanded),
+                      borderRadius: BorderRadius.circular(10),
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 20, vertical: 8),
+                        child: Row(
+                          children: [
+                            Icon(Icons.more_horiz,
+                                size: 20, color: scheme.onSurfaceVariant),
+                            const SizedBox(width: 12),
+                            Text(
+                              _moreExpanded ? '收起' : '更多',
+                              style: TextStyle(
+                                fontSize: 15,
+                                color: scheme.onSurfaceVariant,
+                              ),
+                            ),
+                            const SizedBox(width: 4),
+                            Icon(
+                              _moreExpanded
+                                  ? Icons.expand_less
+                                  : Icons.expand_more,
+                              size: 18,
+                              color: scheme.onSurfaceVariant,
+                            ),
+                          ],
+                        ),
+                      ),
                     ),
 
                     Divider(
@@ -844,7 +877,8 @@ class _DrawerItem extends StatelessWidget {
   }
 }
 
-/// 抽屉右上角账号头像：未登录显示 👤，登录后显示用户名首字。点进个人中心。
+/// 抽屉左下角账号头像：未登录显示 👤，登录后显示用户名首字。点进个人中心。
+/// 与全 App 圆形按钮同一套设计（玻璃白底+细边，纯色背景免模糊）。
 class _AccountAvatar extends StatelessWidget {
   final VoidCallback onTap;
 
@@ -858,24 +892,25 @@ class _AccountAvatar extends StatelessWidget {
     final scheme = Theme.of(context).colorScheme;
     return PressableScale(
       onPressed: onTap,
-      child: Container(
+      child: SizedBox(
         width: 38,
         height: 38,
-        alignment: Alignment.center,
-        decoration: BoxDecoration(
-          shape: BoxShape.circle,
-          color: scheme.surfaceContainerHighest,
+        child: GlassSurface(
+          circle: true,
+          blur: 0,
+          child: Center(
+            child: initial == null
+                ? Icon(Icons.person_outline,
+                    size: 20, color: scheme.onSurfaceVariant)
+                : Text(
+                    initial!,
+                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                          fontWeight: FontWeight.w600,
+                          color: scheme.onSurface,
+                        ),
+                  ),
+          ),
         ),
-        child: initial == null
-            ? Icon(Icons.person_outline,
-                size: 20, color: scheme.onSurfaceVariant)
-            : Text(
-                initial!,
-                style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                      fontWeight: FontWeight.w600,
-                      color: scheme.onSurface,
-                    ),
-              ),
       ),
     );
   }

@@ -1002,7 +1002,11 @@ class _UserBubble extends StatelessWidget {
           ),
         ),
         child: Text(text,
-            style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w300)),
+            style: const TextStyle(
+              fontSize: 15,
+              fontWeight: FontWeight.w400,
+              fontVariations: [FontVariation('wght', 350)],
+            )),
       ),
     );
   }
@@ -1155,6 +1159,13 @@ class _AnswerBubbleState extends State<_AnswerBubble> {
     );
   }
 
+  // 加粗样式：w450（可变字重），比正文 w350 高一小档——反差克制（用户 0702 定）。
+  // 不支持可变字重的机型回退到 fontWeight w500。
+  TextStyle _boldOf(TextStyle base) => base.copyWith(
+        fontWeight: FontWeight.w500,
+        fontVariations: const [FontVariation('wght', 450)],
+      );
+
   // 轻量 markdown → 富文本：处理 **加粗**、行首 - / * 列表、# 标题；保留可选中。
   List<InlineSpan> _mdSpans(String text, TextStyle base) {
     final spans = <InlineSpan>[];
@@ -1175,7 +1186,7 @@ class _AnswerBubbleState extends State<_AnswerBubble> {
         final bold = headerBold || i.isOdd;
         spans.add(TextSpan(
           text: parts[i],
-          style: bold ? base.copyWith(fontWeight: FontWeight.w600) : null,
+          style: bold ? _boldOf(base) : null,
         ));
       }
       if (li != lines.length - 1) spans.add(const TextSpan(text: '\n'));
@@ -1188,11 +1199,12 @@ class _AnswerBubbleState extends State<_AnswerBubble> {
     final scheme = Theme.of(context).colorScheme;
     final shownText = widget.text.substring(0, _shown);
     final done = _shown >= widget.text.length;
-    // 对齐 Claude：正文 w400、加粗 w600，反差一档，别太夸张。
+    // 正文 w350（可变字重，回退 w400）、加粗 w450：反差半档，观感克制。
     final baseStyle = TextStyle(
       fontSize: 15,
       height: 1.5,
       fontWeight: FontWeight.w400,
+      fontVariations: const [FontVariation('wght', 350)],
       color: scheme.onSurface,
     );
     return Padding(
@@ -1259,6 +1271,7 @@ class _GreetingLine extends StatelessWidget {
         fontSize: 15,
         height: 1.45,
         fontWeight: FontWeight.w400,
+        fontVariations: const [FontVariation('wght', 350)],
         color: scheme.onSurface,
       ),
     );

@@ -8,6 +8,7 @@ import '../../data/app_repository.dart';
 import '../../widgets/tag_selector.dart';
 import '../common/app_sheet.dart';
 import '../common/receipt_picker.dart';
+import '../home/manual_add_sheet.dart';
 import '../quick_add/amount_keypad.dart';
 import '../quick_add/category_grid.dart';
 
@@ -614,9 +615,14 @@ class _DetailBar extends StatelessWidget {
   }
 }
 
-/// 打开编辑大卡的便捷方法（统一走 appSheet 外观）。
+/// 打开编辑大卡的便捷方法。
+/// 支出/收入 → 与手动记账**同一套界面**（ManualAddSheet 编辑模式，避免割裂）；
+/// 转账（手动记账界面不支持）→ 保留本文件的旧编辑卡。
 Future<void> showEditTransactionSheet(
     BuildContext context, TransactionEntity transaction) {
+  if (transaction.txKind != TransactionKind.transfer) {
+    return showManualAddSheet(context, edit: transaction);
+  }
   return appSheet<void>(
     context,
     child: EditTransactionSheet(transaction: transaction),

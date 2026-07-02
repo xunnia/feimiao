@@ -55,19 +55,12 @@ class _RecordInputBarState extends State<RecordInputBar> {
 
   void _openManual() {
     _setMode(false);
-    showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      useSafeArea: true,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-      ),
-      builder: (ctx) => ManualAddSheet(
-        onSwitchToAi: () {
-          Navigator.pop(ctx);
-          _openAi();
-        },
-      ),
+    showManualAddSheet(
+      context,
+      onSwitchToAi: () {
+        Navigator.pop(context);
+        _openAi();
+      },
     );
   }
 
