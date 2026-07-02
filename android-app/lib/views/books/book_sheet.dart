@@ -8,27 +8,43 @@ import '../../widgets/pressable_scale.dart';
 import '../common/app_sheet.dart';
 
 /// 常用账本模板（对齐团团记账的预置账本，去掉共享类）。
-/// 封面现用 emoji+浅色底占位；用户提供成品封面图后换成
-/// `assets/book_covers/<key>.png` 的 Image.asset。
+/// [cover] 是成品封面图（用户 GPT 生成的蓝白英短猫插画）；
+/// 还没出图的模板 cover 为 null，用 emoji+浅色底占位。
 class BookTemplate {
   final String key;
   final String name;
   final String emoji;
   final Color tint;
 
-  const BookTemplate(this.key, this.name, this.emoji, this.tint);
+  /// 封面资源路径（assets/book_covers/<key>.png），无图为 null。
+  final String? cover;
+
+  const BookTemplate(this.key, this.name, this.emoji, this.tint,
+      {this.cover});
 }
 
 const List<BookTemplate> kBookTemplates = [
-  BookTemplate('daily', '日常生活', '📒', Color(0xFFEDF1F5)),
-  BookTemplate('dining', '餐饮账本', '🍜', Color(0xFFFDEBD8)),
-  BookTemplate('shopping', '网购账本', '📦', Color(0xFFE8F0E4)),
-  BookTemplate('travel', '旅游账本', '🧳', Color(0xFFDDEFF7)),
+  // 「日常生活」暂用默认账本封面，等专属「记账」图出了再换。
+  BookTemplate('daily', '日常生活', '📒', Color(0xFFEDF1F5),
+      cover: 'assets/book_covers/default.png'),
+  BookTemplate('dining', '餐饮账本', '🍜', Color(0xFFFDEBD8),
+      cover: 'assets/book_covers/dining.png'),
+  BookTemplate('shopping', '网购账本', '📦', Color(0xFFE8F0E4),
+      cover: 'assets/book_covers/shopping.png'),
+  BookTemplate('travel', '旅游账本', '🧳', Color(0xFFDDEFF7),
+      cover: 'assets/book_covers/travel.png'),
+  BookTemplate('beauty', '美妆账本', '💄', Color(0xFFFBE9EE),
+      cover: 'assets/book_covers/beauty.png'),
+  BookTemplate('business', '生意账本', '💼', Color(0xFFE4E9F2),
+      cover: 'assets/book_covers/business.png'),
+  BookTemplate('couple', '情侣账本', '💑', Color(0xFFF9E4EA),
+      cover: 'assets/book_covers/couple.png'),
+  BookTemplate('multi', '多人账本', '👥', Color(0xFFEFEBE2),
+      cover: 'assets/book_covers/multi.png'),
+  // ↓ 封面图还在生成中，emoji 占位
   BookTemplate('pet', '宠物账本', '🐱', Color(0xFFF6E8DC)),
   BookTemplate('baby', '母婴账本', '🍼', Color(0xFFFBE9EE)),
   BookTemplate('family', '家庭账本', '🏠', Color(0xFFEFEBE2)),
-  BookTemplate('business', '生意账本', '💼', Color(0xFFE4E9F2)),
-  BookTemplate('couple', '情侣账本', '💑', Color(0xFFF9E4EA)),
 ];
 
 /// 弹「新建账本」半屏页；[edit] 传入则是编辑既有账本。
@@ -50,6 +66,7 @@ class _BookSheetState extends State<_BookSheet> {
       TextEditingController(text: widget.edit?.name ?? '');
   late String _icon = widget.edit?.icon ?? '📒';
   late bool _includeInTotal = widget.edit?.includeInTotal ?? true;
+  late String _cover = widget.edit?.cover ?? '';
   String? _pickedTemplate;
 
   bool get _isEdit => widget.edit != null;
@@ -65,6 +82,7 @@ class _BookSheetState extends State<_BookSheet> {
     setState(() {
       _pickedTemplate = t.key;
       _icon = t.emoji;
+      _cover = t.cover ?? '';
       // 用户没自己敲过名字时跟着模板走
       if (_nameCtrl.text.trim().isEmpty ||
           kBookTemplates.any((k) => k.name == _nameCtrl.text.trim())) {
@@ -83,12 +101,14 @@ class _BookSheetState extends State<_BookSheet> {
         widget.edit!.id,
         name: name,
         icon: _icon,
+        cover: _cover,
         includeInTotal: _includeInTotal,
       );
     } else {
       final id = await repo.addBook(
         name: name,
         icon: _icon,
+        cover: _cover,
         includeInTotal: _includeInTotal,
       );
       await repo.switchBook(id);
@@ -240,7 +260,8 @@ class _BookSheetState extends State<_BookSheet> {
   }
 }
 
-/// 封面卡：3:4 竖卡，emoji 占位（将来换成品封面 PNG）。
+/// 封面卡：3:4 竖卡。有成品封面图用图（名字压在底部渐变上），
+/// 还没出图的模板用 emoji+浅色底占位。
 class _CoverCard extends StatelessWidget {
   final BookTemplate template;
   final bool selected;
@@ -255,6 +276,7 @@ class _CoverCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    final cover = template.cover;
     return PressableScale(
       onPressed: onTap,
       haptic: null, // _pickTemplate 里已振动
@@ -269,22 +291,64 @@ class _CoverCard extends StatelessWidget {
             width: selected ? 2 : 1,
           ),
         ),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Text(template.emoji, style: const TextStyle(fontSize: 34)),
-            const SizedBox(height: 8),
-            Text(
-              template.name,
-              style: TextStyle(
-                fontSize: 12,
-                fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
-                color: scheme.onSurface,
-              ),
-            ),
-          ],
-        ),
+        clipBehavior: Clip.antiAlias,
+        child: cover != null
+            ? Stack(
+                fit: StackFit.expand,
+                children: [
+                  Image.asset(
+                    cover,
+                    fit: BoxFit.cover,
+                    // 图加载失败兜底回 emoji 占位，不崩不空白。
+                    errorBuilder: (_, __, ___) => _placeholder(scheme),
+                  ),
+                  // 底部渐变压字，保证名字在任何封面上都可读。
+                  Align(
+                    alignment: Alignment.bottomCenter,
+                    child: Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.fromLTRB(4, 14, 4, 5),
+                      decoration: const BoxDecoration(
+                        gradient: LinearGradient(
+                          begin: Alignment.topCenter,
+                          end: Alignment.bottomCenter,
+                          colors: [Color(0x00000000), Color(0x8A000000)],
+                        ),
+                      ),
+                      child: Text(
+                        template.name,
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          fontSize: 11,
+                          fontWeight:
+                              selected ? FontWeight.w700 : FontWeight.w500,
+                          color: Colors.white,
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              )
+            : _placeholder(scheme),
       ),
+    );
+  }
+
+  Widget _placeholder(ColorScheme scheme) {
+    return Column(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        Text(template.emoji, style: const TextStyle(fontSize: 34)),
+        const SizedBox(height: 8),
+        Text(
+          template.name,
+          style: TextStyle(
+            fontSize: 12,
+            fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
+            color: scheme.onSurface,
+          ),
+        ),
+      ],
     );
   }
 }

@@ -39,6 +39,7 @@ flutter:
   assets:
     - assets/mascot/
     - assets/cat_icons/
+    - assets/book_covers/
   fonts:
     - family: Nunito
       fonts:

@@ -482,7 +482,20 @@ class _DrawerPanelState extends State<_DrawerPanel> {
         dense: true,
         visualDensity: const VisualDensity(vertical: -2),
         minLeadingWidth: 0,
-        leading: Text(b.icon, style: const TextStyle(fontSize: 19)),
+        // 有封面图显示小缩略图，没有回退 emoji。
+        leading: b.cover.isEmpty
+            ? Text(b.icon, style: const TextStyle(fontSize: 19))
+            : ClipRRect(
+                borderRadius: BorderRadius.circular(6),
+                child: Image.asset(
+                  b.cover,
+                  width: 24,
+                  height: 24,
+                  fit: BoxFit.cover,
+                  errorBuilder: (_, __, ___) =>
+                      Text(b.icon, style: const TextStyle(fontSize: 19)),
+                ),
+              ),
         horizontalTitleGap: 10,
         title: Row(
           children: [

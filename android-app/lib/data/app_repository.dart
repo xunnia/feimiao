@@ -45,6 +45,9 @@ class BookEntity {
   final String name;
   final String icon;
 
+  /// 封面图资源路径（assets/book_covers/*.png）；空 = 无封面（显示 emoji）。
+  final String cover;
+
   /// 加星账本排在列表前面（总账本永远第一）。
   final bool starred;
 
@@ -55,6 +58,7 @@ class BookEntity {
     required this.id,
     required this.name,
     this.icon = '📒',
+    this.cover = '',
     this.starred = false,
     this.includeInTotal = true,
   });
@@ -63,6 +67,7 @@ class BookEntity {
         id: m['id'] as int,
         name: m['name'] as String,
         icon: m['icon'] as String? ?? '📒',
+        cover: m['cover'] as String? ?? '',
         starred: ((m['starred'] as int?) ?? 0) == 1,
         includeInTotal: ((m['include_in_total'] as int?) ?? 1) == 1,
       );
@@ -278,7 +283,7 @@ class TagEntity {
 // ---------------------------------------------------------------------------
 
 class AppRepository extends ChangeNotifier {
-  static const _dbVersion = 13;
+  static const _dbVersion = 14;
   static const _dbName = 'qingji.db';
 
   Database? _db;
@@ -445,6 +450,7 @@ class AppRepository extends ChangeNotifier {
         id               INTEGER PRIMARY KEY AUTOINCREMENT,
         name             TEXT NOT NULL,
         icon             TEXT NOT NULL DEFAULT '📒',
+        cover            TEXT NOT NULL DEFAULT '',
         sort_order       INTEGER NOT NULL DEFAULT 0,
         created_ms       INTEGER NOT NULL DEFAULT 0,
         starred          INTEGER NOT NULL DEFAULT 0,
@@ -712,6 +718,13 @@ class AppRepository extends ChangeNotifier {
             });
           }
         }
+      } catch (_) {}
+    }
+    if (oldVersion < 14) {
+      // 账本封面图（模板成品插画的资源路径）。
+      try {
+        await db.execute(
+            "ALTER TABLE books ADD COLUMN cover TEXT NOT NULL DEFAULT ''");
       } catch (_) {}
     }
   }
@@ -1584,11 +1597,13 @@ class AppRepository extends ChangeNotifier {
   Future<int> addBook({
     required String name,
     String icon = '📒',
+    String cover = '',
     bool includeInTotal = true,
   }) async {
     final id = await _db!.insert('books', {
       'name': name,
       'icon': icon,
+      'cover': cover,
       'sort_order': _books.length,
       'created_ms': DateTime.now().millisecondsSinceEpoch,
       'starred': 0,
@@ -1607,16 +1622,18 @@ class AppRepository extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// 编辑账本（名称/图标/是否计入总账本）。计入开关变了会刷新聚合视图。
+  /// 编辑账本（名称/图标/封面/是否计入总账本）。计入开关变了会刷新聚合视图。
   Future<void> updateBook(
     int id, {
     String? name,
     String? icon,
+    String? cover,
     bool? includeInTotal,
   }) async {
     final updates = <String, Object?>{};
     if (name != null && name.isNotEmpty) updates['name'] = name;
     if (icon != null) updates['icon'] = icon;
+    if (cover != null) updates['cover'] = cover;
     if (includeInTotal != null) {
       updates['include_in_total'] = includeInTotal ? 1 : 0;
     }
