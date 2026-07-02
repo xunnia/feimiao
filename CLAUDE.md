@@ -25,6 +25,7 @@
 
 ### -1.2 已完成批次速查
 - **批1（b0702-1，待真机验）**：`home_view.dart`（猫216/新_FilterSegment/删_InsightStrip）、`main.dart`（PressableScale+底部渐变）、`ai_chat_panel.dart`（_SuggestionGrid玻璃底/_AnswerBubble.showMascot）、`manual_add_sheet.dart`（删今日可花）。
+- **批3（b0702-3，待真机验）抽屉重构**：`main.dart` RootShell 改 Claude 式推开抽屉（AnimationController+Transform，主页右移+圆角+阴影，左缘28px右滑开、点遮罩/左滑/返回键关）；`_DrawerPanel`（字标对齐Claude、功能项 ReorderableDelayedDragStartListener 长按拖动排序→repo.setDrawerOrder 持久化、去掉「更多」折叠、头像挪左下+新建账本胶囊）；账本菜单=加星/编辑/改名/删除（图标在前，`ios_menu.dart` 全局翻转）；`ios_form.dart` 弹窗对齐Claude（左对齐标题+subtitle+双灰胶囊）；**DB v12**：books 加 `starred`+`include_in_total`；**总账本改真聚合**（_loadTransactions 按 include_in_total 聚合，最早的账本=总账本=defaultBookId 不可删）；新文件 `views/books/book_sheet.dart`（新建/编辑账本半屏页，9个模板封面 emoji 占位等用户 GPT 图，规格见 -1.1 批3）。⚠️ 仓库根有已提交的垃圾目录 `qingji-receipt/`（旧拷贝），建议用户 `git rm -r` 清掉。
 - **批2（b0702-2，待真机验）手动记账重构**：`manual_add_sheet.dart` 整体重写（_KindSegment Telegram胶囊 / 咔皮式二级面板 _SubcategoryPanel+_blurIf 模糊收起 / _ChipsRow 日期·账本·账户·标签·待报销 / _AmountCard 输入框风格金额+备注+相册拍照+再记flash提示）；`amount_keypad.dart` 重写成咔皮4×4（1-9/⌫长按清空/+/−/再记/0/./完成，onSaveAgain 可选，编辑页 saveLabel=保存）；`app_repository.dart` 加 `addTransaction(bookId:)` 和 `childrenOfRanked`；`receipt_picker.dart` 拆出 `pickAndSaveReceiptFrom(source)`；新测试 `amount_keypad_widget_test.dart`（4个）。旧 `SubcategoryRow` 仅编辑页还在用。
 
 ---

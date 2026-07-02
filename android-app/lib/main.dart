@@ -3,6 +3,7 @@ import 'package:flutter/cupertino.dart' show CupertinoPageRoute, CupertinoIcons;
 import 'package:provider/provider.dart';
 
 import 'core/auto_record.dart';
+import 'core/haptics.dart';
 import 'data/app_repository.dart';
 import 'share_intake.dart';
 import 'theme/app_colors.dart';
@@ -13,6 +14,7 @@ import 'widgets/ios_dialogs.dart';
 import 'widgets/ios_form.dart';
 import 'widgets/ios_menu.dart';
 import 'views/account/personal_center_view.dart';
+import 'views/books/book_sheet.dart';
 import 'views/common/coming_soon_view.dart';
 import 'views/home/ai_chat_panel.dart';
 import 'views/home/home_view.dart';
@@ -97,46 +99,170 @@ class QingJiApp extends StatelessWidget {
   }
 }
 
-/// 新主框架：
-/// - AppBar：标题当前月份，左侧汉堡按钮打开 Drawer
-/// - Drawer：左侧抽屉，明细 / 统计 / 设置
-/// - body：HomeView（本月概览 + 最近几笔，无嵌套 Scaffold）
-/// - bottomNavigationBar：RecordInputBar（Claude 风格输入栏）
-class RootShell extends StatelessWidget {
+/// 新主框架（对齐 iOS Claude 的抽屉分层）：
+/// 抽屉固定在最底层，主页面像一张卡片被向右推开、露出圆角和阴影；
+/// 点右侧余边或往左滑关回来。左缘右滑也可拉开。
+class RootShell extends StatefulWidget {
   const RootShell({super.key});
 
   @override
+  State<RootShell> createState() => _RootShellState();
+}
+
+class _RootShellState extends State<RootShell>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _drawerCtl = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 240),
+  );
+  bool _edgeDrag = false;
+
+  void _openDrawer() =>
+      _drawerCtl.animateTo(1, curve: Curves.easeOutCubic);
+  void _closeDrawer() =>
+      _drawerCtl.animateTo(0, curve: Curves.easeOutCubic);
+
+  @override
+  void dispose() {
+    _drawerCtl.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final screenW = MediaQuery.sizeOf(context).width;
+    final drawerW = (screenW * 0.82).clamp(260.0, 340.0);
+
+    return AnimatedBuilder(
+      animation: _drawerCtl,
+      builder: (context, _) {
+        final t = Curves.easeOutCubic.transform(_drawerCtl.value);
+        final open = _drawerCtl.value > 0.5;
+        return PopScope(
+          // 抽屉开着时系统返回键先关抽屉，不退出页面。
+          canPop: !open,
+          onPopInvokedWithResult: (didPop, _) {
+            if (!didPop) _closeDrawer();
+          },
+          child: Scaffold(
+            backgroundColor: AppColors.appBg(scheme),
+            body: Stack(
+              children: [
+                // ── 底层：抽屉面板（固定不动，主页推开后露出来）──
+                Positioned(
+                  left: 0,
+                  top: 0,
+                  bottom: 0,
+                  width: drawerW,
+                  child: _DrawerPanel(onClose: _closeDrawer),
+                ),
+                // ── 上层：主页面卡片，右移 + 圆角 + 阴影 ──
+                GestureDetector(
+                  // 左缘右滑拉开抽屉；开着时任意左滑关上（行内左滑删除不受影响，
+                  // 因为 Slidable 在手势竞技场里更深、优先赢）。
+                  onHorizontalDragStart: (d) {
+                    _edgeDrag =
+                        _drawerCtl.value > 0 || d.globalPosition.dx < 28;
+                  },
+                  onHorizontalDragUpdate: (d) {
+                    if (!_edgeDrag) return;
+                    _drawerCtl.value =
+                        (_drawerCtl.value + d.delta.dx / drawerW)
+                            .clamp(0.0, 1.0);
+                  },
+                  onHorizontalDragEnd: (d) {
+                    if (!_edgeDrag) return;
+                    _edgeDrag = false;
+                    final v = d.primaryVelocity ?? 0;
+                    if (v > 250) {
+                      _openDrawer();
+                    } else if (v < -250) {
+                      _closeDrawer();
+                    } else {
+                      _drawerCtl.value > 0.5 ? _openDrawer() : _closeDrawer();
+                    }
+                  },
+                  child: Transform.translate(
+                    offset: Offset(drawerW * t, 0),
+                    child: Container(
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(26 * t),
+                        boxShadow: t > 0.01
+                            ? [
+                                BoxShadow(
+                                  color:
+                                      Colors.black.withValues(alpha: 0.18 * t),
+                                  blurRadius: 32,
+                                  offset: const Offset(-6, 0),
+                                ),
+                              ]
+                            : null,
+                      ),
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(26 * t),
+                        child: Stack(
+                          children: [
+                            _MainScaffold(onMenu: _openDrawer),
+                            // 打开时主页盖一层轻遮罩：点一下关抽屉
+                            if (_drawerCtl.value > 0.01)
+                              Positioned.fill(
+                                child: GestureDetector(
+                                  behavior: HitTestBehavior.opaque,
+                                  onTap: _closeDrawer,
+                                  child: Container(
+                                    color: Colors.black
+                                        .withValues(alpha: 0.05 * t),
+                                  ),
+                                ),
+                              ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+/// 主页面本体（顶栏 + 账单流 + 底部渐变 + 输入栏）。
+class _MainScaffold extends StatelessWidget {
+  final VoidCallback onMenu;
+
+  const _MainScaffold({required this.onMenu});
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
     return Scaffold(
-      backgroundColor: AppColors.appBg(Theme.of(context).colorScheme),
-      // 左侧大片区域右滑即可拉出抽屉（行内左滑删除不受影响）。
-      drawerEdgeDragWidth: MediaQuery.of(context).size.width * 0.5,
+      backgroundColor: AppColors.appBg(scheme),
       appBar: AppBar(
         automaticallyImplyLeading: false,
         titleSpacing: 0,
-        backgroundColor: AppColors.appBg(Theme.of(context).colorScheme),
+        backgroundColor: AppColors.appBg(scheme),
         surfaceTintColor: Colors.transparent,
-        title: Builder(
-          builder: (innerCtx) => Row(
-            children: [
-              Padding(
-                padding: const EdgeInsets.only(left: 12),
-                child: _MenuGlyphButton(
-                  onTap: () => Scaffold.of(innerCtx).openDrawer(),
-                ),
-              ),
-              const Spacer(),
-              // 搜索（在账本左边）
-              const _SearchIconButton(),
-              const SizedBox(width: 8),
-              // 当前账本快切（最右）
-              const _BookSwitchChip(),
-              const SizedBox(width: 12),
-            ],
-          ),
+        title: Row(
+          children: [
+            Padding(
+              padding: const EdgeInsets.only(left: 12),
+              child: _MenuGlyphButton(onTap: onMenu),
+            ),
+            const Spacer(),
+            // 搜索（在账本左边）
+            const _SearchIconButton(),
+            const SizedBox(width: 8),
+            // 当前账本快切（最右）
+            const _BookSwitchChip(),
+            const SizedBox(width: 12),
+          ],
         ),
       ),
-      drawer: const _AppDrawer(),
       // 输入栏悬浮在列表之上：只有那张圆角卡片本身遮挡列表，
       // 卡片外的透明边距让后面的账单透出来（不再整条“一刀切”遮挡）。
       body: Stack(
@@ -164,11 +290,9 @@ class RootShell extends StatelessWidget {
                     begin: Alignment.topCenter,
                     end: Alignment.bottomCenter,
                     colors: [
-                      AppColors.appBg(Theme.of(context).colorScheme)
-                          .withValues(alpha: 0.0),
-                      AppColors.appBg(Theme.of(context).colorScheme)
-                          .withValues(alpha: 0.85),
-                      AppColors.appBg(Theme.of(context).colorScheme),
+                      AppColors.appBg(scheme).withValues(alpha: 0.0),
+                      AppColors.appBg(scheme).withValues(alpha: 0.85),
+                      AppColors.appBg(scheme),
                     ],
                     stops: const [0.0, 0.55, 1.0],
                   ),
@@ -189,43 +313,96 @@ class RootShell extends StatelessWidget {
 }
 
 // ---------------------------------------------------------------------------
-// 左侧 Drawer
+// 左侧抽屉面板（对齐 iOS Claude：主页推开后露出，功能项可长按拖动排序）
 // ---------------------------------------------------------------------------
 
-class _AppDrawer extends StatefulWidget {
-  const _AppDrawer();
+/// 抽屉功能项注册表：key 用于持久化排序，别改已有 key。
+class _DrawerFn {
+  final String key;
+  final IconData icon;
+  final String label;
 
-  @override
-  State<_AppDrawer> createState() => _AppDrawerState();
+  const _DrawerFn(this.key, this.icon, this.label);
 }
 
-class _AppDrawerState extends State<_AppDrawer> {
-  bool _moreExpanded = false;
+const List<_DrawerFn> _kDrawerFns = [
+  _DrawerFn('stats', Icons.analytics_outlined, '统计数据'),
+  _DrawerFn('assets', Icons.account_balance_wallet_outlined, '资产管理'),
+  _DrawerFn('budget', Icons.calendar_today_outlined, '预算管理'),
+  _DrawerFn('savings', Icons.savings_outlined, '存钱目标'),
+  _DrawerFn('assistant', Icons.auto_awesome, '喵助手'),
+  _DrawerFn('categories', Icons.category_outlined, '分类管理'),
+  _DrawerFn('tags', Icons.label_outline, '标签管理'),
+  _DrawerFn('import', Icons.import_export_outlined, '导入导出'),
+  _DrawerFn('recurring', Icons.schedule_outlined, '定时记账'),
+  _DrawerFn('autorecord', Icons.notifications_active_outlined, '自动记账'),
+  _DrawerFn('widgets', Icons.widgets_outlined, '小组件'),
+];
 
-  void _showSnackBar(String message) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(message),
-        duration: const Duration(milliseconds: 2000),
-        behavior: SnackBarBehavior.floating,
-        shape:
-            RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-        margin: const EdgeInsets.fromLTRB(16, 0, 16, 12),
-      ),
-    );
-  }
+class _DrawerPanel extends StatefulWidget {
+  /// 关抽屉（收回主页面卡片）。
+  final VoidCallback onClose;
 
+  const _DrawerPanel({required this.onClose});
+
+  @override
+  State<_DrawerPanel> createState() => _DrawerPanelState();
+}
+
+class _DrawerPanelState extends State<_DrawerPanel> {
   void _popAndPush(Widget page) {
-    Navigator.pop(context);
+    widget.onClose();
     Navigator.push<void>(
       context,
       CupertinoPageRoute<void>(builder: (_) => page),
     );
   }
 
-  // ── 喵助手：关抽屉后打开半屏 AI 面板（与首页记账栏同一套）──────────────────
+  /// 按保存的顺序排功能项：没排过/有新功能时按默认顺序补齐。
+  List<_DrawerFn> _orderedFns(AppRepository repo) {
+    final byKey = {for (final f in _kDrawerFns) f.key: f};
+    final out = <_DrawerFn>[];
+    final seen = <String>{};
+    for (final k in repo.drawerOrder) {
+      final f = byKey[k];
+      if (f != null && seen.add(k)) out.add(f);
+    }
+    for (final f in _kDrawerFns) {
+      if (seen.add(f.key)) out.add(f);
+    }
+    return out;
+  }
+
+  void _onFnTap(String key) {
+    switch (key) {
+      case 'stats':
+        _popAndPush(const StatisticsView());
+      case 'assets':
+        _popAndPush(const AccountsView());
+      case 'budget':
+        _popAndPush(const BudgetSettingView());
+      case 'savings':
+        _popAndPush(const SavingsGoalsView());
+      case 'assistant':
+        _openAssistant();
+      case 'categories':
+        _popAndPush(const CategoriesView());
+      case 'tags':
+        _popAndPush(const TagsView());
+      case 'import':
+        _popAndPush(const ImportExportView());
+      case 'recurring':
+        _popAndPush(const RecurringView());
+      case 'autorecord':
+        _popAndPush(const AutoRecordSettingView());
+      case 'widgets':
+        _popAndPush(const ComingSoonView(title: '小组件'));
+    }
+  }
+
+  // ── 喵助手：关抽屉后打开全屏 AI 面板（与首页记账栏同一套）──────────────────
   void _openAssistant() {
-    Navigator.pop(context); // 关抽屉
+    widget.onClose();
     _pushAssistant();
   }
 
@@ -262,6 +439,7 @@ class _AppDrawerState extends State<_AppDrawer> {
   Widget _bookTile(BookEntity b, AppRepository repo) {
     final scheme = Theme.of(context).colorScheme;
     final selected = b.id == repo.currentBookId;
+    final deletable = repo.books.length > 1 && b.id != repo.defaultBookId;
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 8),
       child: ListTile(
@@ -270,25 +448,47 @@ class _AppDrawerState extends State<_AppDrawer> {
         minLeadingWidth: 0,
         leading: Text(b.icon, style: const TextStyle(fontSize: 19)),
         horizontalTitleGap: 10,
-        title: Text(
-          b.name,
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-          style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
-                color: selected ? scheme.primary : scheme.onSurface,
+        title: Row(
+          children: [
+            Flexible(
+              child: Text(
+                b.name,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                      fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
+                      color: selected ? scheme.primary : scheme.onSurface,
+                    ),
               ),
+            ),
+            if (b.starred) ...[
+              const SizedBox(width: 4),
+              Icon(Icons.star_rounded,
+                  size: 14, color: AppColors.income(scheme)),
+            ],
+          ],
         ),
         trailing: Builder(
           builder: (iconCtx) => GestureDetector(
             behavior: HitTestBehavior.opaque,
             onTap: () => showIosMenu(iconCtx, [
+              // 对齐 Claude 的会话菜单：加星 / 编辑 / 改名 / 删除
+              IosMenuItem(
+                label: b.starred ? '取消加星' : '加星',
+                icon: b.starred ? Icons.star : Icons.star_outline,
+                onTap: () => repo.setBookStarred(b.id, !b.starred),
+              ),
+              IosMenuItem(
+                label: '编辑',
+                icon: Icons.edit_outlined,
+                onTap: () => showBookSheet(context, edit: b),
+              ),
               IosMenuItem(
                 label: '改名',
                 icon: Icons.drive_file_rename_outline,
                 onTap: () => _showRenameBookDialog(b, repo),
               ),
-              if (repo.books.length > 1)
+              if (deletable)
                 IosMenuItem(
                   label: '删除',
                   icon: Icons.delete_outline,
@@ -310,64 +510,10 @@ class _AppDrawerState extends State<_AppDrawer> {
             const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
         onTap: () {
           repo.switchBook(b.id);
-          Navigator.pop(context);
+          widget.onClose();
         },
       ),
     );
-  }
-
-  // ── 新建账本（带场景模板）─────────────────────────────────────────────────
-  Future<void> _showNewBookDialog() async {
-    final repo = context.read<AppRepository>();
-    final ctrl = TextEditingController();
-    String icon = '📒';
-    const templates = <(String, String)>[
-      ('日常账本', '📒'),
-      ('旅行', '✈️'),
-      ('家庭AA', '🍚'),
-      ('装修', '🔨'),
-    ];
-
-    final created = await showIosFormDialog(
-      context,
-      title: '新建账本',
-      confirmText: '创建',
-      content: StatefulBuilder(
-        builder: (ctx, setLocal) => Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Wrap(
-              spacing: 8,
-              runSpacing: 4,
-              children: [
-                for (final t in templates)
-                  ActionChip(
-                    label: Text('${t.$2} ${t.$1}'),
-                    onPressed: () {
-                      setLocal(() => icon = t.$2);
-                      ctrl.text = t.$1;
-                    },
-                  ),
-              ],
-            ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: ctrl,
-              autofocus: true,
-              decoration: iosInputDecoration(hint: '账本名称'),
-            ),
-          ],
-        ),
-      ),
-    );
-
-    if (created) {
-      final name = ctrl.text.trim().isEmpty ? '新账本' : ctrl.text.trim();
-      final id = await repo.addBook(name: name, icon: icon);
-      await repo.switchBook(id);
-      if (mounted) Navigator.pop(context); // 关闭抽屉
-    }
   }
 
   Future<void> _showRenameBookDialog(BookEntity b, AppRepository repo) async {
@@ -375,6 +521,7 @@ class _AppDrawerState extends State<_AppDrawer> {
     final ok = await showIosFormDialog(
       context,
       title: '账本改名',
+      subtitle: '给账本起个新名字',
       content: TextField(
         controller: ctrl,
         autofocus: true,
@@ -397,168 +544,66 @@ class _AppDrawerState extends State<_AppDrawer> {
     if (ok) await repo.deleteBook(b.id);
   }
 
+  void _onReorder(int oldIndex, int newIndex, List<_DrawerFn> fns) {
+    if (newIndex > oldIndex) newIndex--;
+    final keys = fns.map((f) => f.key).toList();
+    final k = keys.removeAt(oldIndex);
+    keys.insert(newIndex, k);
+    Haptics.selection();
+    context.read<AppRepository>().setDrawerOrder(keys);
+  }
+
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final repo = context.watch<AppRepository>();
+    final fns = _orderedFns(repo);
 
-    return Drawer(
+    return Material(
+      color: AppColors.appBg(scheme),
       child: SafeArea(
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            // ── 头部行：轻记字标（衬线）+ 账号头像（无关闭按钮，对齐 Claude）──
+            // ── 头部：字标（对齐 Claude 抽屉左上角 wordmark：衬线、深色、不喧哗）──
             Padding(
               padding: const EdgeInsets.fromLTRB(20, 18, 14, 12),
-              child: Row(
-                children: [
-                  Text(
-                    '肥喵记账',
-                    style:
-                        Theme.of(context).textTheme.headlineSmall?.copyWith(
-                              color: scheme.primary,
-                              fontWeight: FontWeight.w700,
-                              fontFamily: 'serif',
-                            ),
-                  ),
-                  const Spacer(),
-                  // 账号头像：未登录👤 / 登录后名字首字，点进个人中心
-                  _AccountAvatar(
-                    onTap: () {
-                      Navigator.pop(context);
-                      Navigator.push<void>(
-                        context,
-                        CupertinoPageRoute<void>(
-                            builder: (_) => const PersonalCenterView()),
-                      );
-                    },
-                  ),
-                ],
+              child: Text(
+                '肥喵记账',
+                style: TextStyle(
+                  fontSize: 24,
+                  fontWeight: FontWeight.w600,
+                  fontFamily: 'serif',
+                  color: scheme.onSurface,
+                ),
               ),
             ),
             const SizedBox(height: 4),
 
-            // ── 功能区（前 5 项固定，更多折叠）────────────────────
+            // ── 功能区（长按拖动排序，常用的放上面）+ 账本区 ──
             Expanded(
               child: SingleChildScrollView(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    // 1. 统计数据
-                    _DrawerItem(
-                      icon: Icons.analytics_outlined,
-                      label: '统计数据',
-                      onTap: () => _popAndPush(const StatisticsView()),
-                    ),
-
-                    // 3. 资产管理
-                    _DrawerItem(
-                      icon: Icons.account_balance_wallet_outlined,
-                      label: '资产管理',
-                      onTap: () => _popAndPush(const AccountsView()),
-                    ),
-
-                    // 4. 预算管理
-                    _DrawerItem(
-                      icon: Icons.calendar_today_outlined,
-                      label: '预算管理',
-                      onTap: () => _popAndPush(const BudgetSettingView()),
-                    ),
-
-                    // 5. 存钱目标
-                    _DrawerItem(
-                      icon: Icons.savings_outlined,
-                      label: '存钱目标',
-                      onTap: () => _popAndPush(const SavingsGoalsView()),
-                    ),
-
-                    // 6. 喵助手（统一到首页那套半屏 AI 面板）
-                    _DrawerItem(
-                      icon: Icons.auto_awesome,
-                      label: '喵助手',
-                      onTap: _openAssistant,
-                    ),
-
-                    // 「更多 ⌄ / ⌃」折叠按钮
-                    InkWell(
-                      onTap: () =>
-                          setState(() => _moreExpanded = !_moreExpanded),
-                      borderRadius: BorderRadius.circular(10),
-                      child: Padding(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 18, vertical: 7),
-                        child: Row(
-                          children: [
-                            Icon(
-                              Icons.more_horiz,
-                              size: 21,
-                              color: scheme.onSurfaceVariant,
+                    ReorderableListView(
+                      shrinkWrap: true,
+                      physics: const NeverScrollableScrollPhysics(),
+                      buildDefaultDragHandles: false,
+                      onReorder: (o, n) => _onReorder(o, n, fns),
+                      children: [
+                        for (int i = 0; i < fns.length; i++)
+                          ReorderableDelayedDragStartListener(
+                            key: ValueKey(fns[i].key),
+                            index: i,
+                            child: _DrawerItem(
+                              icon: fns[i].icon,
+                              label: fns[i].label,
+                              onTap: () => _onFnTap(fns[i].key),
                             ),
-                            const SizedBox(width: 10),
-                            Text(
-                              '更多',
-                              style: Theme.of(context)
-                                  .textTheme
-                                  .bodyMedium
-                                  ?.copyWith(
-                                    fontWeight: FontWeight.w400,
-                                    color: scheme.onSurfaceVariant,
-                                  ),
-                            ),
-                            const SizedBox(width: 4),
-                            Icon(
-                              _moreExpanded
-                                  ? Icons.expand_less
-                                  : Icons.expand_more,
-                              size: 18,
-                              color: scheme.onSurfaceVariant,
-                            ),
-                          ],
-                        ),
-                      ),
+                          ),
+                      ],
                     ),
-
-                    // 折叠内容
-                    if (_moreExpanded) ...[
-                      _DrawerItem(
-                        icon: Icons.category_outlined,
-                        label: '分类管理',
-                        onTap: () => _popAndPush(const CategoriesView()),
-                        indent: true,
-                      ),
-                      _DrawerItem(
-                        icon: Icons.label_outline,
-                        label: '标签管理',
-                        onTap: () => _popAndPush(const TagsView()),
-                        indent: true,
-                      ),
-                      _DrawerItem(
-                        icon: Icons.import_export_outlined,
-                        label: '导入导出',
-                        onTap: () => _popAndPush(const ImportExportView()),
-                        indent: true,
-                      ),
-                      _DrawerItem(
-                        icon: Icons.schedule_outlined,
-                        label: '定时记账',
-                        onTap: () => _popAndPush(const RecurringView()),
-                        indent: true,
-                      ),
-                      _DrawerItem(
-                        icon: Icons.notifications_active_outlined,
-                        label: '自动记账',
-                        onTap: () =>
-                            _popAndPush(const AutoRecordSettingView()),
-                        indent: true,
-                      ),
-                      _DrawerItem(
-                        icon: Icons.widgets_outlined,
-                        label: '小组件',
-                        onTap: () =>
-                            _popAndPush(const ComingSoonView(title: '小组件')),
-                        indent: true,
-                      ),
-                    ],
 
                     Divider(
                         height: 20,
@@ -579,7 +624,7 @@ class _AppDrawerState extends State<_AppDrawer> {
                                 ),
                       ),
                     ),
-                    // 真实账本列表（点击切换，⋮ 改名/删除）
+                    // 账本列表：总账本第一、加星靠前；⋮ 加星/编辑/改名/删除
                     ...repo.books.map((b) => _bookTile(b, repo)),
 
                     const SizedBox(height: 8),
@@ -588,23 +633,36 @@ class _AppDrawerState extends State<_AppDrawer> {
               ),
             ),
 
-            // ── 底部：+ 新建账本（短胶囊·居中，对齐 Claude 的 New chat）──
+            // ── 底部：头像（左下角，对齐 Claude）+ 新建账本胶囊 ──
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
-              child: Align(
-                child: ElevatedButton.icon(
-                  icon: const Icon(Icons.add, size: 18),
-                  label: const Text('新建账本'),
-                  onPressed: _showNewBookDialog,
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: scheme.onSurface,
-                    foregroundColor: scheme.surface,
-                    shape: const StadiumBorder(),
-                    elevation: 0,
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 22, vertical: 12),
+              child: Row(
+                children: [
+                  _AccountAvatar(
+                    onTap: () {
+                      widget.onClose();
+                      Navigator.push<void>(
+                        context,
+                        CupertinoPageRoute<void>(
+                            builder: (_) => const PersonalCenterView()),
+                      );
+                    },
                   ),
-                ),
+                  const Spacer(),
+                  ElevatedButton.icon(
+                    icon: const Icon(Icons.add, size: 18),
+                    label: const Text('新建账本'),
+                    onPressed: () => showBookSheet(context),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: scheme.onSurface,
+                      foregroundColor: scheme.surface,
+                      shape: const StadiumBorder(),
+                      elevation: 0,
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 22, vertical: 12),
+                    ),
+                  ),
+                ],
               ),
             ),
           ],
@@ -747,38 +805,37 @@ class _DrawerItem extends StatelessWidget {
   final IconData icon;
   final String label;
   final VoidCallback onTap;
-  /// 折叠区子项：左侧额外缩进
-  final bool indent;
 
   const _DrawerItem({
     required this.icon,
     required this.label,
     required this.onTap,
-    this.indent = false,
   });
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    // 对齐 Claude 抽屉项：细线图标 + 常规字重深色文字，行高舒展。
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 8),
       child: ListTile(
         dense: true,
-        visualDensity: const VisualDensity(vertical: -2),
+        visualDensity: const VisualDensity(vertical: -1),
         minLeadingWidth: 0,
-        leading: Icon(icon, size: 21, color: scheme.onSurfaceVariant),
-        horizontalTitleGap: 10,
+        leading: Icon(icon, size: 20, color: scheme.onSurfaceVariant),
+        horizontalTitleGap: 12,
         title: Text(
           label,
-          style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                fontWeight: FontWeight.w400,
-                color: scheme.onSurface,
-              ),
+          style: TextStyle(
+            fontSize: 15,
+            fontWeight: FontWeight.w400,
+            color: scheme.onSurface,
+          ),
         ),
         onTap: onTap,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-        contentPadding: EdgeInsets.symmetric(
-            horizontal: indent ? 22 : 12, vertical: 0),
+        contentPadding:
+            const EdgeInsets.symmetric(horizontal: 12, vertical: 0),
       ),
     );
   }

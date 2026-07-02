@@ -28,11 +28,13 @@ InputDecoration iosInputDecoration({String? hint, String? prefix}) {
   );
 }
 
-/// 弹出 iOS 风表单弹窗：居中圆角卡 + 标题 + 自定义内容 + 取消/保存。
+/// 弹出 iOS 风表单弹窗（对齐 Claude 的 Rename 弹窗）：
+/// 居中圆角卡 + 左对齐标题/灰色副标题 + 自定义内容 + 底部两颗灰胶囊按钮。
 /// 返回 true=点了保存/确认，false=取消或点外部关闭。
 Future<bool> showIosFormDialog(
   BuildContext context, {
   required String title,
+  String? subtitle,
   required Widget content,
   String confirmText = '保存',
   String cancelText = '取消',
@@ -57,6 +59,7 @@ Future<bool> showIosFormDialog(
             child: Center(
               child: _IosFormCard(
                 title: title,
+                subtitle: subtitle,
                 content: content,
                 confirmText: confirmText,
                 cancelText: cancelText,
@@ -72,12 +75,14 @@ Future<bool> showIosFormDialog(
 
 class _IosFormCard extends StatelessWidget {
   final String title;
+  final String? subtitle;
   final Widget content;
   final String confirmText;
   final String cancelText;
 
   const _IosFormCard({
     required this.title,
+    required this.subtitle,
     required this.content,
     required this.confirmText,
     required this.cancelText,
@@ -87,7 +92,6 @@ class _IosFormCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final maxW = MediaQuery.of(context).size.width - 56;
-    final maxH = MediaQuery.of(context).size.height * 0.7;
 
     return Material(
       type: MaterialType.transparency,
@@ -98,6 +102,7 @@ class _IosFormCard extends StatelessWidget {
           decoration: BoxDecoration(
             color: AppColors.card(scheme),
             borderRadius: BorderRadius.circular(22),
+            border: Border.all(color: Colors.black.withValues(alpha: 0.06)),
             boxShadow: [
               BoxShadow(
                 color: Colors.black.withValues(alpha: 0.18),
@@ -108,13 +113,25 @@ class _IosFormCard extends StatelessWidget {
           ),
           child: Column(
             mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
+              // 标题左对齐（对齐 Claude），副标题灰色小字。
               Text(
                 title,
                 style: const TextStyle(
-                    fontSize: 18, fontWeight: FontWeight.w600),
+                    fontSize: 17, fontWeight: FontWeight.w600),
               ),
-              const SizedBox(height: 16),
+              if (subtitle != null) ...[
+                const SizedBox(height: 4),
+                Text(
+                  subtitle!,
+                  style: TextStyle(
+                    fontSize: 13,
+                    color: scheme.onSurfaceVariant,
+                  ),
+                ),
+              ],
+              const SizedBox(height: 14),
               Flexible(
                 child: SingleChildScrollView(
                   child: content,
@@ -126,7 +143,7 @@ class _IosFormCard extends StatelessWidget {
                   Expanded(
                     child: _FormButton(
                       label: cancelText,
-                      filled: false,
+                      emphasis: false,
                       onTap: () => Navigator.of(context).pop(false),
                       scheme: scheme,
                     ),
@@ -135,7 +152,7 @@ class _IosFormCard extends StatelessWidget {
                   Expanded(
                     child: _FormButton(
                       label: confirmText,
-                      filled: true,
+                      emphasis: true,
                       onTap: () => Navigator.of(context).pop(true),
                       scheme: scheme,
                     ),
@@ -152,35 +169,37 @@ class _IosFormCard extends StatelessWidget {
 
 class _FormButton extends StatelessWidget {
   final String label;
-  final bool filled;
+  final bool emphasis;
   final VoidCallback onTap;
   final ColorScheme scheme;
 
   const _FormButton({
     required this.label,
-    required this.filled,
+    required this.emphasis,
     required this.onTap,
     required this.scheme,
   });
 
   @override
   Widget build(BuildContext context) {
+    // 对齐 Claude：两颗都是浅灰胶囊，确认键用深色字加粗区分。
     return GestureDetector(
       onTap: onTap,
       behavior: HitTestBehavior.opaque,
       child: Container(
-        height: 46,
+        height: 44,
         alignment: Alignment.center,
         decoration: BoxDecoration(
-          color: filled ? scheme.primary : const Color(0xFFF2F2F7),
-          borderRadius: BorderRadius.circular(14),
+          color: const Color(0xFFF2F2F7),
+          borderRadius: BorderRadius.circular(999),
+          border: Border.all(color: Colors.black.withValues(alpha: 0.05)),
         ),
         child: Text(
           label,
           style: TextStyle(
-            fontSize: 16,
-            fontWeight: FontWeight.w600,
-            color: filled ? Colors.white : scheme.onSurface,
+            fontSize: 15,
+            fontWeight: emphasis ? FontWeight.w600 : FontWeight.w400,
+            color: scheme.onSurface,
           ),
         ),
       ),

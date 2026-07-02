@@ -136,18 +136,23 @@ class _IosMenuRow extends StatelessWidget {
       highlightColor: Colors.black.withValues(alpha: 0.06),
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        // 对齐 Claude：图标在前、名称在后。
         child: Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
-            Text(
-              item.label,
-              style: TextStyle(
-                fontSize: 16,
-                color: color,
-                fontWeight: FontWeight.w400,
+            Icon(item.icon, size: 19, color: color),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Text(
+                item.label,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  fontSize: 16,
+                  color: color,
+                  fontWeight: FontWeight.w400,
+                ),
               ),
             ),
-            Icon(item.icon, size: 20, color: color),
           ],
         ),
       ),

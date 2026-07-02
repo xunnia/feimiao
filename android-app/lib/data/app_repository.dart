@@ -43,12 +43,26 @@ class BookEntity {
   final String name;
   final String icon;
 
-  const BookEntity({required this.id, required this.name, this.icon = '📒'});
+  /// 加星账本排在列表前面（总账本永远第一）。
+  final bool starred;
+
+  /// 该账本的账单是否并入「总账本」视图（默认并入）。
+  final bool includeInTotal;
+
+  const BookEntity({
+    required this.id,
+    required this.name,
+    this.icon = '📒',
+    this.starred = false,
+    this.includeInTotal = true,
+  });
 
   factory BookEntity.fromMap(Map<String, Object?> m) => BookEntity(
         id: m['id'] as int,
         name: m['name'] as String,
         icon: m['icon'] as String? ?? '📒',
+        starred: ((m['starred'] as int?) ?? 0) == 1,
+        includeInTotal: ((m['include_in_total'] as int?) ?? 1) == 1,
       );
 }
 
@@ -262,7 +276,7 @@ class TagEntity {
 // ---------------------------------------------------------------------------
 
 class AppRepository extends ChangeNotifier {
-  static const _dbVersion = 11;
+  static const _dbVersion = 12;
   static const _dbName = 'qingji.db';
 
   Database? _db;
@@ -290,6 +304,12 @@ class AppRepository extends ChangeNotifier {
   /// 周期记账规则(全部账本)。
   final List<RecurringRule> _recurringRules = [];
 
+  /// 总账本 id（最早建的那本，聚合视图、不可删）。
+  int _defaultBookId = 0;
+
+  /// 抽屉功能项的用户自定义顺序（key 列表，见 main.dart 注册表）。
+  final List<String> _drawerOrder = [];
+
   List<BookEntity> get books => List.unmodifiable(_books);
   List<AccountEntity> get accounts => List.unmodifiable(_accounts);
   List<CategoryEntity> get categories => List.unmodifiable(_categories);
@@ -306,11 +326,44 @@ class AppRepository extends ChangeNotifier {
 
   int get currentBookId => _currentBookId;
 
+  /// 总账本（最早建的那本）的 id：聚合视图、不可删除。
+  int get defaultBookId => _defaultBookId;
+
   BookEntity? get currentBook {
     for (final b in _books) {
       if (b.id == _currentBookId) return b;
     }
     return null;
+  }
+
+  /// 抽屉功能项顺序（key 列表）；空 = 用默认顺序。
+  List<String> get drawerOrder => List.unmodifiable(_drawerOrder);
+
+  /// 保存抽屉功能项顺序（长按拖动排序后持久化）。
+  Future<void> setDrawerOrder(List<String> keys) async {
+    _drawerOrder
+      ..clear()
+      ..addAll(keys);
+    await _db!.insert(
+      'app_settings',
+      {'key': 'drawer_order', 'value': keys.join(',')},
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+    notifyListeners();
+  }
+
+  Future<void> _loadDrawerOrder() async {
+    final rows = await _db!.query(
+      'app_settings',
+      where: 'key = ?',
+      whereArgs: ['drawer_order'],
+      limit: 1,
+    );
+    _drawerOrder.clear();
+    final raw = rows.isEmpty ? '' : (rows.first['value'] as String? ?? '');
+    if (raw.isNotEmpty) {
+      _drawerOrder.addAll(raw.split(',').where((s) => s.isNotEmpty));
+    }
   }
 
   Decimal? get monthlyBudget => _monthlyBudget;
@@ -367,11 +420,13 @@ class AppRepository extends ChangeNotifier {
 
     await db.execute('''
       CREATE TABLE books (
-        id         INTEGER PRIMARY KEY AUTOINCREMENT,
-        name       TEXT NOT NULL,
-        icon       TEXT NOT NULL DEFAULT '📒',
-        sort_order INTEGER NOT NULL DEFAULT 0,
-        created_ms INTEGER NOT NULL DEFAULT 0
+        id               INTEGER PRIMARY KEY AUTOINCREMENT,
+        name             TEXT NOT NULL,
+        icon             TEXT NOT NULL DEFAULT '📒',
+        sort_order       INTEGER NOT NULL DEFAULT 0,
+        created_ms       INTEGER NOT NULL DEFAULT 0,
+        starred          INTEGER NOT NULL DEFAULT 0,
+        include_in_total INTEGER NOT NULL DEFAULT 1
       )
     ''');
     await db.insert('books', {
@@ -587,6 +642,17 @@ class AppRepository extends ChangeNotifier {
         )
       ''');
     }
+    if (oldVersion < 12) {
+      // 账本加星 + 是否计入总账本（默认计入）。
+      try {
+        await db.execute(
+            'ALTER TABLE books ADD COLUMN starred INTEGER NOT NULL DEFAULT 0');
+      } catch (_) {}
+      try {
+        await db.execute(
+            'ALTER TABLE books ADD COLUMN include_in_total INTEGER NOT NULL DEFAULT 1');
+      } catch (_) {}
+    }
   }
 
   Future<void> _applyCategoryTree(DatabaseExecutor db) async {
@@ -647,6 +713,7 @@ class AppRepository extends ChangeNotifier {
       _loadRecurringRules(),
       _loadSavingsGoals(),
       _loadTags(),
+      _loadDrawerOrder(),
     ]);
     notifyListeners();
   }
@@ -668,9 +735,22 @@ class AppRepository extends ChangeNotifier {
 
   Future<void> _loadBooks() async {
     final rows = await _db!.query('books', orderBy: 'sort_order ASC, id ASC');
+    final loaded = rows.map(BookEntity.fromMap).toList();
+    // 总账本 = 最早建的那本（id 最小），不可删、永远排第一。
+    _defaultBookId = loaded.isEmpty
+        ? 0
+        : loaded.map((b) => b.id).reduce((a, b) => a < b ? a : b);
+    // 排序：总账本 → 加星 → 其它（同组保持原顺序，稳定排序）。
+    int rank(BookEntity b) =>
+        b.id == _defaultBookId ? 0 : (b.starred ? 1 : 2);
+    final indexed = [for (var i = 0; i < loaded.length; i++) (i, loaded[i])];
+    indexed.sort((a, b) {
+      final r = rank(a.$2).compareTo(rank(b.$2));
+      return r != 0 ? r : a.$1.compareTo(b.$1);
+    });
     _books
       ..clear()
-      ..addAll(rows.map(BookEntity.fromMap));
+      ..addAll(indexed.map((e) => e.$2));
   }
 
   Future<void> _ensureDefaultBook() async {
@@ -1026,6 +1106,17 @@ class AppRepository extends ChangeNotifier {
   }
 
   Future<void> _loadTransactions() async {
+    // 总账本 = 聚合视图：显示自己的账单 + 所有「计入总账本」账本的账单；
+    // 其它账本只显示自己的。
+    final isTotal = _currentBookId == _defaultBookId;
+    final ids = isTotal
+        ? [
+            for (final b in _books)
+              if (b.id == _defaultBookId || b.includeInTotal) b.id
+          ]
+        : [_currentBookId];
+    if (ids.isEmpty) ids.add(-1); // 空保护，避免 IN () 语法错误
+    final idList = ids.join(','); // 都是 DB 里来的 int，可安全拼接
     final rows = await _db!.rawQuery('''
       SELECT
         t.id,
@@ -1049,9 +1140,9 @@ class AppRepository extends ChangeNotifier {
       LEFT JOIN categories c  ON c.id = t.category_id
       LEFT JOIN accounts   a  ON a.id = t.account_id
       LEFT JOIN accounts   ta ON ta.id = t.to_account_id
-      WHERE t.book_id = ?
+      WHERE t.book_id IN ($idList)
       ORDER BY t.date_ms DESC
-    ''', [_currentBookId]);
+    ''');
     _transactions
       ..clear()
       ..addAll(rows.map(TransactionEntity.fromMap));
@@ -1438,12 +1529,18 @@ class AppRepository extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<int> addBook({required String name, String icon = '📒'}) async {
+  Future<int> addBook({
+    required String name,
+    String icon = '📒',
+    bool includeInTotal = true,
+  }) async {
     final id = await _db!.insert('books', {
       'name': name,
       'icon': icon,
       'sort_order': _books.length,
       'created_ms': DateTime.now().millisecondsSinceEpoch,
+      'starred': 0,
+      'include_in_total': includeInTotal ? 1 : 0,
     });
     await _loadBooks();
     notifyListeners();
@@ -1458,8 +1555,37 @@ class AppRepository extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// 编辑账本（名称/图标/是否计入总账本）。计入开关变了会刷新聚合视图。
+  Future<void> updateBook(
+    int id, {
+    String? name,
+    String? icon,
+    bool? includeInTotal,
+  }) async {
+    final updates = <String, Object?>{};
+    if (name != null && name.isNotEmpty) updates['name'] = name;
+    if (icon != null) updates['icon'] = icon;
+    if (includeInTotal != null) {
+      updates['include_in_total'] = includeInTotal ? 1 : 0;
+    }
+    if (updates.isEmpty) return;
+    await _db!.update('books', updates, where: 'id = ?', whereArgs: [id]);
+    await _loadBooks();
+    await _loadTransactions();
+    notifyListeners();
+  }
+
+  /// 加星 / 取消加星（加星账本排前面）。
+  Future<void> setBookStarred(int id, bool starred) async {
+    await _db!.update('books', {'starred': starred ? 1 : 0},
+        where: 'id = ?', whereArgs: [id]);
+    await _loadBooks();
+    notifyListeners();
+  }
+
   Future<void> deleteBook(int id) async {
     if (_books.length <= 1) return;
+    if (id == _defaultBookId) return; // 总账本不可删
     await _db!.delete('transactions', where: 'book_id = ?', whereArgs: [id]);
     await _db!.delete('books', where: 'id = ?', whereArgs: [id]);
     await _loadBooks();
