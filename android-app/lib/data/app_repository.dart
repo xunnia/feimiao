@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
 
 import 'package:decimal/decimal.dart';
 import 'package:flutter/foundation.dart';
@@ -81,6 +82,9 @@ class CategoryEntity {
   final String kindRaw;
   final int? parentId;
 
+  /// 已隐藏：不再出现在记账面板/编辑的分类网格里（历史账单不受影响）。
+  final bool hidden;
+
   TransactionKind get kind => TransactionKind.fromJson(kindRaw);
   bool get isTopLevel => parentId == null;
 
@@ -91,6 +95,7 @@ class CategoryEntity {
     required this.nameEn,
     required this.kindRaw,
     this.parentId,
+    this.hidden = false,
   });
 
   String localizedName(String languageCode) =>
@@ -103,6 +108,7 @@ class CategoryEntity {
         'name_en': nameEn,
         'kind': kindRaw,
         'parent_id': parentId,
+        'hidden': hidden ? 1 : 0,
       };
 
   factory CategoryEntity.fromMap(Map<String, Object?> m) => CategoryEntity(
@@ -112,6 +118,7 @@ class CategoryEntity {
         nameEn: m['name_en'] as String,
         kindRaw: m['kind'] as String,
         parentId: m['parent_id'] as int?,
+        hidden: ((m['hidden'] as int?) ?? 0) == 1,
       );
 }
 
@@ -288,8 +295,21 @@ class TagEntity {
 // ---------------------------------------------------------------------------
 
 class AppRepository extends ChangeNotifier {
-  static const _dbVersion = 15;
+  static const _dbVersion = 16;
   static const _dbName = 'qingji.db';
+
+  /// 行级 uuid（多人共享账本的同步地基）：32 位小写 hex，无需三方库。
+  static String _newUuid() {
+    final r = Random();
+    return List.generate(
+        16, (_) => r.nextInt(256).toRadixString(16).padLeft(2, '0')).join();
+  }
+
+  /// 新行的同步字段：uuid + 变更时间戳。
+  static Map<String, Object?> _syncStampNew() => {
+        'uuid': _newUuid(),
+        'updated_ms': DateTime.now().millisecondsSinceEpoch,
+      };
 
   Database? _db;
 
@@ -498,7 +518,8 @@ class AppRepository extends ChangeNotifier {
         name_zh   TEXT NOT NULL,
         name_en   TEXT NOT NULL,
         kind      TEXT NOT NULL,
-        parent_id INTEGER
+        parent_id INTEGER,
+        hidden    INTEGER NOT NULL DEFAULT 0
       )
     ''');
 
@@ -511,7 +532,9 @@ class AppRepository extends ChangeNotifier {
         sort_order       INTEGER NOT NULL DEFAULT 0,
         created_ms       INTEGER NOT NULL DEFAULT 0,
         starred          INTEGER NOT NULL DEFAULT 0,
-        include_in_total INTEGER NOT NULL DEFAULT 1
+        include_in_total INTEGER NOT NULL DEFAULT 1,
+        uuid             TEXT NOT NULL DEFAULT '',
+        updated_ms       INTEGER NOT NULL DEFAULT 0
       )
     ''');
     await db.insert('books', {
@@ -519,6 +542,8 @@ class AppRepository extends ChangeNotifier {
       'icon': '📒',
       'sort_order': 0,
       'created_ms': DateTime.now().millisecondsSinceEpoch,
+      'uuid': _newUuid(),
+      'updated_ms': DateTime.now().millisecondsSinceEpoch,
     });
 
     await db.execute('''
@@ -536,7 +561,9 @@ class AppRepository extends ChangeNotifier {
         tags            TEXT NOT NULL DEFAULT '',
         reimbursable    INTEGER NOT NULL DEFAULT 0,
         image_path      TEXT NOT NULL DEFAULT '',
-        excluded        INTEGER NOT NULL DEFAULT 0
+        excluded        INTEGER NOT NULL DEFAULT 0,
+        uuid            TEXT NOT NULL DEFAULT '',
+        updated_ms      INTEGER NOT NULL DEFAULT 0
       )
     ''');
 
@@ -792,6 +819,30 @@ class AppRepository extends ChangeNotifier {
             'ALTER TABLE transactions ADD COLUMN excluded INTEGER NOT NULL DEFAULT 0');
       } catch (_) {}
     }
+    if (oldVersion < 16) {
+      // ① 分类可隐藏：删除保护的出路——有历史账单的分类建议隐藏/合并，不硬删。
+      try {
+        await db.execute(
+            'ALTER TABLE categories ADD COLUMN hidden INTEGER NOT NULL DEFAULT 0');
+      } catch (_) {}
+      // ② 多人共享账本的地基：行级 uuid + 变更时间戳。现在先落库并回填，
+      //    以后接后端同步时就不用再全表迁移（越晚加越疼）。
+      for (final table in ['transactions', 'books']) {
+        try {
+          await db.execute(
+              "ALTER TABLE $table ADD COLUMN uuid TEXT NOT NULL DEFAULT ''");
+        } catch (_) {}
+        try {
+          await db.execute(
+              'ALTER TABLE $table ADD COLUMN updated_ms INTEGER NOT NULL DEFAULT 0');
+        } catch (_) {}
+        // 存量行回填：uuid 用 SQLite 自带 randomblob，无需三方库。
+        await db.execute(
+            "UPDATE $table SET uuid = lower(hex(randomblob(16))) WHERE uuid = ''");
+        await db.execute('UPDATE $table SET updated_ms = ? WHERE updated_ms = 0',
+            [DateTime.now().millisecondsSinceEpoch]);
+      }
+    }
   }
 
   static const _createBudgetPeriodsSql = '''
@@ -912,6 +963,7 @@ class AppRepository extends ChangeNotifier {
         Sqflite.firstIntValue(await _db!.rawQuery('SELECT COUNT(*) FROM books')) ?? 0;
     if (count == 0) {
       await _db!.insert('books', {
+        ..._syncStampNew(),
         'name': '总账本',
         'icon': '📒',
         'sort_order': 0,
@@ -1214,6 +1266,7 @@ class AppRepository extends ChangeNotifier {
       var guard = 0;
       while (due.millisecondsSinceEpoch <= cutoff && guard < 400) {
         await _db!.insert('transactions', {
+          ..._syncStampNew(),
           'book_id': rule.bookId,
           'kind': rule.kind,
           'amount': rule.amountStr,
@@ -1389,6 +1442,7 @@ class AppRepository extends ChangeNotifier {
       'reimbursable': reimbursable ? 1 : 0,
       'image_path': imagePath,
       'excluded': excluded ? 1 : 0,
+      ..._syncStampNew(),
     });
     await _loadTransactions();
     notifyListeners();
@@ -1399,7 +1453,10 @@ class AppRepository extends ChangeNotifier {
   Future<void> setTransactionCategory(int id, int? categoryId) async {
     await _db!.update(
       'transactions',
-      {'category_id': categoryId},
+      {
+        'category_id': categoryId,
+        'updated_ms': DateTime.now().millisecondsSinceEpoch,
+      },
       where: 'id = ?',
       whereArgs: [id],
     );
@@ -1460,6 +1517,7 @@ class AppRepository extends ChangeNotifier {
         'reimbursable': reimbursable ? 1 : 0,
         'image_path': imagePath,
         'excluded': excluded ? 1 : 0,
+        'updated_ms': DateTime.now().millisecondsSinceEpoch,
       },
       where: 'id = ?',
       whereArgs: [id],
@@ -1483,6 +1541,7 @@ class AppRepository extends ChangeNotifier {
         'note': d.note,
         'date_ms': d.date.millisecondsSinceEpoch,
         'tags': d.tagIds.join(','),
+        ..._syncStampNew(),
       });
     }
     await batch.commit(noResult: true);
@@ -1509,7 +1568,8 @@ class AppRepository extends ChangeNotifier {
 
   List<CategoryEntity> categoriesForKindRanked(TransactionKind kind) {
     final all = categoriesForKind(kind);
-    final tops = all.where((c) => c.isTopLevel).toList();
+    // 记账面板不展示已隐藏的分类（管理页用 categoriesForKind 能看到全部）。
+    final tops = all.where((c) => c.isTopLevel && !c.hidden).toList();
     final counts = <int, int>{};
     for (final t in _transactions) {
       final cid = t.categoryId;
@@ -1535,10 +1595,14 @@ class AppRepository extends ChangeNotifier {
   List<CategoryEntity> childrenOf(int parentId) =>
       _categories.where((c) => c.parentId == parentId).toList();
 
+  /// 未隐藏的子分类（记账面板判断「可不可展开」用它，管理页用 childrenOf）。
+  List<CategoryEntity> visibleChildrenOf(int parentId) =>
+      _categories.where((c) => c.parentId == parentId && !c.hidden).toList();
+
   /// 子分类按「这个人用得多不多」排序：记过的次数多在前，没记过的保持原顺序。
-  /// 手动卡的二级分类展开面板用它，让常用子类排前面少翻找。
+  /// 手动卡的二级分类展开面板用它，让常用子类排前面少翻找。已隐藏的不出现。
   List<CategoryEntity> childrenOfRanked(int parentId) {
-    final children = childrenOf(parentId);
+    final children = visibleChildrenOf(parentId);
     if (children.length < 2) return children;
     final counts = <int, int>{};
     for (final t in _transactions) {
@@ -1719,6 +1783,7 @@ class AppRepository extends ChangeNotifier {
     bool includeInTotal = true,
   }) async {
     final id = await _db!.insert('books', {
+      ..._syncStampNew(),
       'name': name,
       'icon': icon,
       'cover': cover,
@@ -1733,7 +1798,10 @@ class AppRepository extends ChangeNotifier {
   }
 
   Future<void> renameBook(int id, {required String name, String? icon}) async {
-    final updates = <String, Object?>{'name': name};
+    final updates = <String, Object?>{
+      'name': name,
+      'updated_ms': DateTime.now().millisecondsSinceEpoch,
+    };
     if (icon != null) updates['icon'] = icon;
     await _db!.update('books', updates, where: 'id = ?', whereArgs: [id]);
     await _loadBooks();
@@ -1756,6 +1824,7 @@ class AppRepository extends ChangeNotifier {
       updates['include_in_total'] = includeInTotal ? 1 : 0;
     }
     if (updates.isEmpty) return;
+    updates['updated_ms'] = DateTime.now().millisecondsSinceEpoch;
     await _db!.update('books', updates, where: 'id = ?', whereArgs: [id]);
     await _loadBooks();
     await _loadTransactions();
@@ -1770,10 +1839,31 @@ class AppRepository extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> deleteBook(int id) async {
+  /// 这个账本名下有多少笔账单（删除前的保护检查用）。
+  Future<int> transactionCountForBook(int id) async =>
+      Sqflite.firstIntValue(await _db!.rawQuery(
+          'SELECT COUNT(*) FROM transactions WHERE book_id = ?', [id])) ??
+      0;
+
+  /// 删账本。[moveRecordsToDefault] = true 时先把账单转移到总账本再删，
+  /// 记录不丢；false = 连账单一起删（UI 层要走更深的二次确认）。
+  Future<void> deleteBook(int id, {bool moveRecordsToDefault = false}) async {
     if (_books.length <= 1) return;
     if (id == _defaultBookId) return; // 总账本不可删
-    await _db!.delete('transactions', where: 'book_id = ?', whereArgs: [id]);
+    if (moveRecordsToDefault) {
+      await _db!.update(
+        'transactions',
+        {
+          'book_id': _defaultBookId,
+          'updated_ms': DateTime.now().millisecondsSinceEpoch,
+        },
+        where: 'book_id = ?',
+        whereArgs: [id],
+      );
+    } else {
+      await _db!
+          .delete('transactions', where: 'book_id = ?', whereArgs: [id]);
+    }
     await _db!.delete('books', where: 'id = ?', whereArgs: [id]);
     await _loadBooks();
     if (_currentBookId == id) {
@@ -1828,12 +1918,14 @@ class AppRepository extends ChangeNotifier {
     required String nameZh,
     required String nameEn,
     required TransactionKind kind,
+    int? parentId,
   }) async {
     final id = await _db!.insert('categories', {
       'key': key,
       'name_zh': nameZh,
       'name_en': nameEn,
       'kind': kind.toJson(),
+      'parent_id': parentId,
     });
     await _loadCategories();
     notifyListeners();
@@ -1848,9 +1940,57 @@ class AppRepository extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// 删除分类（连同它的子分类，防止留下挂着失效 parent_id 的幽灵行）。
+  /// 有历史账单的分类别直接删——UI 层用 [transactionCountForCategory]
+  /// 检查后引导「隐藏」或「合并」。
   Future<void> deleteCategory(int id) async {
-    await _db!.delete('categories', where: 'id = ?', whereArgs: [id]);
+    await _db!.delete('categories',
+        where: 'id = ? OR parent_id = ?', whereArgs: [id, id]);
     await _loadCategories();
+    notifyListeners();
+  }
+
+  /// 这个分类（含子分类）名下有多少笔账单——跨全部账本查 DB，不是只看当前账本。
+  Future<int> transactionCountForCategory(int id) async {
+    final ids = <int>[id, ...childrenOf(id).map((c) => c.id)];
+    final marks = List.filled(ids.length, '?').join(',');
+    return Sqflite.firstIntValue(await _db!.rawQuery(
+            'SELECT COUNT(*) FROM transactions WHERE category_id IN ($marks)',
+            ids)) ??
+        0;
+  }
+
+  /// 隐藏 / 恢复显示分类（隐藏后不再出现在记账面板，历史账单不动）。
+  Future<void> setCategoryHidden(int id, bool hidden) async {
+    await _db!.update('categories', {'hidden': hidden ? 1 : 0},
+        where: 'id = ?', whereArgs: [id]);
+    await _loadCategories();
+    notifyListeners();
+  }
+
+  /// 把分类 [fromId] 合并进 [toId]：账单改挂、子分类改挂、
+  /// AI 纠正记忆（category_memory）迁移，然后删掉 from。不可撤销。
+  Future<void> mergeCategory(int fromId, int toId) async {
+    if (fromId == toId) return;
+    final from = _categories.where((c) => c.id == fromId).firstOrNull;
+    final to = _categories.where((c) => c.id == toId).firstOrNull;
+    if (from == null || to == null) return;
+
+    final now = DateTime.now().millisecondsSinceEpoch;
+    await _db!.update(
+        'transactions', {'category_id': toId, 'updated_ms': now},
+        where: 'category_id = ?', whereArgs: [fromId]);
+    // from 的子分类改认 to 当父类（to 是子分类时挂到 to 的父类下，别出现三级）。
+    final newParent = to.isTopLevel ? to.id : to.parentId!;
+    await _db!.update('categories', {'parent_id': newParent},
+        where: 'parent_id = ?', whereArgs: [fromId]);
+    await _db!.update('category_memory', {'category_key': to.key},
+        where: 'category_key = ?', whereArgs: [from.key]);
+    await _db!.delete('categories', where: 'id = ?', whereArgs: [fromId]);
+
+    await _loadCategories();
+    await _loadCategoryMemory();
+    await _loadTransactions();
     notifyListeners();
   }
 

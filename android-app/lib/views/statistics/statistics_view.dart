@@ -449,7 +449,8 @@ class _MonthlyContent extends StatelessWidget {
             index: i,
             child: Padding(
               padding: const EdgeInsets.only(bottom: 16),
-              child: items[i].$2,
+              // 每张图表卡隔离重绘：滚动/拖排序时旁边的 fl_chart 不用跟着重画。
+              child: RepaintBoundary(child: items[i].$2),
             ),
           ),
       ],
@@ -630,7 +631,7 @@ class _CustomizeButton extends StatelessWidget {
           decoration: BoxDecoration(
             color: AppColors.card(scheme),
             borderRadius: BorderRadius.circular(999),
-            border: Border.all(color: Colors.black.withValues(alpha: 0.06)),
+            border: Border.all(color: AppColors.hairline(scheme)),
           ),
           child: Row(
             mainAxisSize: MainAxisSize.min,

@@ -10,6 +10,7 @@ import 'data/app_repository.dart';
 import 'share_intake.dart';
 import 'theme/app_colors.dart';
 import 'views/auto_record/auto_record_sheet.dart';
+import 'widgets/app_toast.dart';
 import 'widgets/glass.dart';
 import 'widgets/pressable_scale.dart';
 import 'widgets/slidable_tracker.dart';
@@ -255,7 +256,10 @@ class _RootShellState extends State<RootShell>
                                       sigmaY: 5 * t,
                                     ),
                                     child: Container(
-                                      color: Colors.white
+                                      // 遮罩跟随主题：深色模式用背景色压暗，
+                                      // 不然白纱盖深色页面像屏幕坏了。
+                                      color: AppColors.appBg(Theme.of(context)
+                                              .colorScheme)
                                           .withValues(alpha: 0.35 * t),
                                     ),
                                   ),
@@ -579,7 +583,7 @@ class _DrawerPanelState extends State<_DrawerPanel> {
       content: TextField(
         controller: ctrl,
         autofocus: true,
-        decoration: iosInputDecoration(hint: '账本名称'),
+        decoration: iosInputDecoration(context, hint: '账本名称'),
       ),
     );
     if (ok && ctrl.text.trim().isNotEmpty) {
@@ -587,15 +591,48 @@ class _DrawerPanelState extends State<_DrawerPanel> {
     }
   }
 
+  /// 删账本保护：有账单时先给「转移到总账本」的温和出路，
+  /// 连账单一起删要过两道确认（真实数据，别让一次手滑清掉）。
   Future<void> _confirmDeleteBook(BookEntity b, AppRepository repo) async {
-    final ok = await showConfirmDialog(
+    final n = await repo.transactionCountForBook(b.id);
+    if (!mounted) return;
+
+    if (n == 0) {
+      final ok = await showConfirmDialog(
+        context,
+        title: '删除「${b.name}」？',
+        message: '这个账本没有账目，删除后不可恢复。',
+        confirmText: '删除',
+        destructive: true,
+      );
+      if (ok) await repo.deleteBook(b.id);
+      return;
+    }
+
+    // 有账单：先推荐转移。
+    final move = await showConfirmDialog(
       context,
-      title: '删除「${b.name}」？',
-      message: '该账本下的所有账目都会一起删除，且不可恢复。',
-      confirmText: '删除',
+      title: '「${b.name}」有 $n 笔账目',
+      message: '建议把账目转移到总账本再删——记录一笔不丢。\n'
+          '（点「取消」后仍想连账目一起删，再删一次会有单独确认。）',
+      confirmText: '转移并删除',
+    );
+    if (!mounted) return;
+    if (move) {
+      await repo.deleteBook(b.id, moveRecordsToDefault: true);
+      if (mounted) showAppToast(context, '$n 笔账目已转移到总账本');
+      return;
+    }
+
+    // 用户拒绝转移：更深一层的破坏性确认。
+    final wipe = await showConfirmDialog(
+      context,
+      title: '连 $n 笔账目一起删除？',
+      message: '「${b.name}」和它的全部账目将永久删除，无法恢复。',
+      confirmText: '永久删除',
       destructive: true,
     );
-    if (ok) await repo.deleteBook(b.id);
+    if (wipe) await repo.deleteBook(b.id);
   }
 
   void _onReorder(int oldIndex, int newIndex, List<_DrawerFn> fns) {
@@ -621,17 +658,30 @@ class _DrawerPanelState extends State<_DrawerPanel> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            // ── 头部：字标（对齐 Claude 抽屉左上角 wordmark：衬线、深色、不喧哗）──
+            // ── 头部：字标 logo（藏青+金币爪印，用户选定的第二版）──
+            // 深色模式下藏青字看不清，退回文字字标；图加载失败同样退回文字。
             Padding(
               padding: const EdgeInsets.fromLTRB(20, 18, 14, 12),
-              child: Text(
-                '肥喵记账',
-                style: TextStyle(
-                  fontSize: 24,
-                  fontWeight: FontWeight.w600,
-                  fontFamily: 'serif',
-                  color: scheme.onSurface,
-                ),
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: Builder(builder: (context) {
+                  final wordmark = Text(
+                    '肥喵记账',
+                    style: TextStyle(
+                      fontSize: 24,
+                      fontWeight: FontWeight.w600,
+                      fontFamily: 'serif',
+                      color: scheme.onSurface,
+                    ),
+                  );
+                  if (scheme.brightness == Brightness.dark) return wordmark;
+                  return Image.asset(
+                    'assets/brand/logo.png',
+                    height: 30,
+                    fit: BoxFit.contain,
+                    errorBuilder: (_, __, ___) => wordmark,
+                  );
+                }),
               ),
             ),
             const SizedBox(height: 4),

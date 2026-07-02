@@ -3,9 +3,12 @@ import 'package:flutter/material.dart';
 import '../theme/app_colors.dart';
 
 /// iOS 风输入框样式：圆角 + 浅灰填充 + 无边框（systemGray6 观感）。
-/// 给表单里的 TextField 套用：`decoration: iosInputDecoration(hint: '…')`。
-InputDecoration iosInputDecoration({String? hint, String? prefix}) {
+/// 给表单里的 TextField 套用：`decoration: iosInputDecoration(context, hint: '…')`。
+/// 需要 context 取主题：深色模式下填充用暖灰，不再是刺眼的浅灰。
+InputDecoration iosInputDecoration(BuildContext context,
+    {String? hint, String? prefix}) {
   const radius = 12.0;
+  final scheme = Theme.of(context).colorScheme;
   final border = OutlineInputBorder(
     borderRadius: BorderRadius.circular(radius),
     borderSide: BorderSide.none,
@@ -14,7 +17,7 @@ InputDecoration iosInputDecoration({String? hint, String? prefix}) {
     hintText: hint,
     prefixText: prefix,
     filled: true,
-    fillColor: const Color(0xFFF2F2F7), // iOS systemGray6
+    fillColor: AppColors.inputFill(scheme),
     isDense: true,
     counterText: '',
     contentPadding:
@@ -23,7 +26,7 @@ InputDecoration iosInputDecoration({String? hint, String? prefix}) {
     enabledBorder: border,
     focusedBorder: OutlineInputBorder(
       borderRadius: BorderRadius.circular(radius),
-      borderSide: const BorderSide(color: Color(0xFF7D8B9B), width: 1.4),
+      borderSide: BorderSide(color: scheme.primary, width: 1.4),
     ),
   );
 }
@@ -102,7 +105,7 @@ class _IosFormCard extends StatelessWidget {
           decoration: BoxDecoration(
             color: AppColors.card(scheme),
             borderRadius: BorderRadius.circular(22),
-            border: Border.all(color: Colors.black.withValues(alpha: 0.06)),
+            border: Border.all(color: AppColors.hairline(scheme)),
             boxShadow: [
               BoxShadow(
                 color: Colors.black.withValues(alpha: 0.18),
@@ -190,9 +193,9 @@ class _FormButton extends StatelessWidget {
         height: 44,
         alignment: Alignment.center,
         decoration: BoxDecoration(
-          color: const Color(0xFFF2F2F7),
+          color: AppColors.inputFill(scheme),
           borderRadius: BorderRadius.circular(999),
-          border: Border.all(color: Colors.black.withValues(alpha: 0.05)),
+          border: Border.all(color: AppColors.hairline(scheme, strength: 0.8)),
         ),
         child: Text(
           label,

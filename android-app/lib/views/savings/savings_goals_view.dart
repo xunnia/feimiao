@@ -96,7 +96,7 @@ class SavingsGoalsView extends StatelessWidget {
         controller: ctrl,
         autofocus: true,
         keyboardType: const TextInputType.numberWithOptions(decimal: true),
-        decoration: iosInputDecoration(prefix: '¥ ', hint: '0.00'),
+        decoration: iosInputDecoration(context, prefix: '¥ ', hint: '0.00'),
       ),
     );
     if (ok) {
@@ -128,14 +128,16 @@ class SavingsGoalsView extends StatelessWidget {
               controller: nameCtrl,
               autofocus: true,
               maxLength: 12,
-              decoration: iosInputDecoration(hint: '目标名，如「换新相机」'),
+              decoration:
+                  iosInputDecoration(ctx, hint: '目标名，如「换新相机」'),
             ),
             const SizedBox(height: 10),
             TextField(
               controller: targetCtrl,
               keyboardType:
                   const TextInputType.numberWithOptions(decimal: true),
-              decoration: iosInputDecoration(prefix: '¥ ', hint: '目标金额'),
+              decoration:
+                  iosInputDecoration(ctx, prefix: '¥ ', hint: '目标金额'),
             ),
             const SizedBox(height: 14),
             Align(

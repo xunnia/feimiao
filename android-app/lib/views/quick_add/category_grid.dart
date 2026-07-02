@@ -88,6 +88,9 @@ class CategoryGrid extends StatelessWidget {
   /// 大类 id -> 已选中的二级分类名：显示成「大类·二级」（缩略）。
   final Map<int, String> subLabels;
 
+  /// 显示成半透明的分类（分类管理页用来标「已隐藏」）。
+  final Set<int> dimmedIds;
+
   const CategoryGrid({
     super.key,
     required this.categories,
@@ -96,6 +99,7 @@ class CategoryGrid extends StatelessWidget {
     this.expandableIds = const <int>{},
     this.expandedId,
     this.subLabels = const <int, String>{},
+    this.dimmedIds = const <int>{},
   });
 
   static const int _columns = 5;
@@ -119,7 +123,7 @@ class CategoryGrid extends StatelessWidget {
       itemCount: categories.length,
       itemBuilder: (context, index) {
         final cat = categories[index];
-        return _CategoryItem(
+        final item = _CategoryItem(
           category: cat,
           isSelected: cat.id == selectedId,
           showChevron: expandableIds.contains(cat.id),
@@ -131,6 +135,9 @@ class CategoryGrid extends StatelessWidget {
             onSelected(cat);
           },
         );
+        return dimmedIds.contains(cat.id)
+            ? Opacity(opacity: 0.4, child: item)
+            : item;
       },
     );
   }

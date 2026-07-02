@@ -7,10 +7,11 @@
 
 ## §-1 最新交接（2026-07-02 起：按用户优化文档做六批 UI/功能升级）
 
-### -1.-1 当前状态速览（2026-07-03 晚更新）
-- **水印 b0703-3 / DB v15**（b0702-13 已 commit）。**b0703-1/2/3 三个水印合并成一个提交待用户推**：预算修正包 + 二级面板提层修复 + GPT小修包，详见 -1.2 顶部三条。推送命令模板：中文描述式+水印号，`git push origin HEAD:claude/hopeful-wozniak-pr2ne3`。
-- **下一步排队**：①分类管理重构包（见 -1.15b，唯一还没做的大包；做时 DB v16 顺手给 transactions/books 加 `uuid`+`updated_ms` 为共享账本打地基）②删账本先转移/归档 + 深色模式巡检（新组件大量黑发丝边/白底，深色下会翻车）③统计卡懒加载、monthlyTotalFor 15号代表日改按天重叠（攒着跟统计改动一起）。
-- **GPT 全面复盘已消化**（2026-07-03）：P0 大多已做或已修；采纳并完成=AI喂数滤excluded/今日vs日均文案区分/SnackBar→toast统一/DB迁移前自动备份；驳回=图标颜色编辑（锁定不做）；「统计默认卡数」「预算状态设计」「API key遮罩」核实后本来就有。**别再重复做这些。**
+### -1.-1 当前状态速览（2026-07-03 深夜更新）
+- **水印 b0703-4 / DB v16**（b0702-13 已 commit）。**b0703-1..4 待用户合并推送**（一个提交即可）：预算修正包(-1) + 二级面板提层修复(-2) + GPT小修包(-3) + 分类管理重构/删账本保护/深色巡检/统计性能/logo封面(-4)，详见 -1.2 顶部。推送：`git push origin HEAD:claude/hopeful-wozniak-pr2ne3`。
+- **本地验证坑**：flutter 启动锁死锁一次（强杀 analyze 任务后锁未释放，后续命令死等 54 分钟）。已杀干净进程；若再卡，删 `C:\src\flutter\bin\cache\lockfile` 后重试（用户已知情）。
+- **GPT 全面复盘已消化**（2026-07-03）：全部采纳项已完成（AI滤excluded/今日vs日均文案/toast统一/迁移前备份/删账本保护/15号代表日改按天重叠/分类管理包）；驳回=图标颜色编辑；核实本来就有=统计默认卡数/预算状态色/API key遮罩/手动备份页。**别再重复做。**
+- **下一步候选**：①猫表情真图替换 emoji 占位（用户已给 8 张：`Desktop\记账app\图片\celebrate/empty/idle/overspend/report/sleep/success/thinking.png`，对应 mascot.dart 7表情，需压缩+透明处理）②「记账(日常)」封面还缺（GPT 在做）③多人共享账本后端（长期）。
 - **等用户的文件**：①字标 logo（已选定第二版=藏青+金币爪印，等存到 `Desktop\记账app\图片\logo.png`→白底转透明+裁边→assets/brand/→换抽屉头部文字）②账本封面缺 4 张：记账(日常)/宠物/母婴/家庭（流程见 -1.2 批5.6）。
 - **给 GPT 复盘的代码包**已生成在 `Desktop\记账app\复盘包\`（4个txt，含提示词模板+锁定决策护栏）；GPT 结论回来**只挑增量**（它会推底部Tab/红色/云同步，一律驳）。
 - 长期项目：多人共享账本（后端+账号），排在所有 UI 批次之后。
@@ -32,10 +33,16 @@
 - 用户这台 Windows 机（Claude Code 环境）装了 **Flutter 3.44.2 / Dart 3.12.2**，`flutter analyze`、`flutter test` 都能本地跑（本批已跑：analyze 无 error、154 测试全过）。**推 CI 前先本地验，别再盲推**。CI 仍负责出 APK 到固定 Release 链接。
 
 ### -1.15b 排队待开工
-- ~~预算逻辑修正包~~ ✅ 已完成（b0703-1，见 -1.2）。
-- **分类管理重构包**（GPT方案已复盘，取舍见对话）：卡片式分类树（一级白卡+展开子类网格**5列复用CategoryGrid**）、⋯菜单(showIosMenu)收纳操作、新增/编辑走 showBlurSheet、删除保护（有历史账单→建议隐藏/合并）。**成本点：隐藏需 DB 加 hidden 列+全查询过滤；合并=账单改挂+记忆迁移；自定义图标/颜色选择先不做（图标是代码侧 key 映射，自建分类兜底🏷️）**。管理模式/拖拽排序第一版不做，只留菜单入口。**做这包时 DB v16 顺手加 uuid/updated_ms（共享账本地基）。**
+- ~~预算逻辑修正包~~ ✅ b0703-1；~~分类管理重构包~~ ✅ b0703-4（含 DB v16 hidden + uuid/updated_ms 地基）。队列已清空，下一步见 -1.-1 候选。
 
 ### -1.2 已完成批次速查
+- **大合批（b0703-4，待真机验）分类管理重构 + 删账本保护 + 深色巡检 + 统计性能 + logo/封面**：
+  ①**DB v16**：categories 加 `hidden`；transactions/books 加 `uuid`+`updated_ms`（共享账本同步地基，存量行 SQLite `randomblob` 回填；所有 insert 走 `_syncStampNew()`、update 补 updated_ms，**删除还没做墓碑——接后端同步时要补**）。
+  ②**分类管理页重写** `categories_view.dart`：SlidingSegment 支出/收入；一级=白卡（点头部展开子类 5 列 CategoryGrid，新 `dimmedIds` 参数标已隐藏）；操作收「⋯」=重命名/隐藏-恢复/合并到…/删除；新增走 showBlurSheet（一级+子分类，自建 key=`custom_时间戳` 图标🏷️兜底）；**删除保护**：`transactionCountForCategory`（跨账本查DB）>0 → 引导隐藏（合并另有入口），=0 → 确认后删（连子类）；**合并** `mergeCategory`=账单改挂+子类改挂+category_memory 迁移+删源。repo 新增 `visibleChildrenOf`（记账面板不显示隐藏分类，childrenOfRanked/categoriesForKindRanked 过滤 hidden；管理页用不过滤的 childrenOf/categoriesForKind）。
+  ③**删账本保护**：repo.deleteBook 加 `moveRecordsToDefault`，`transactionCountForBook`；main.dart `_confirmDeleteBook` 三段流：无账单=普通确认；有账单=推荐「转移并删除」（账单挪总账本）；拒绝转移再弹「永久删除」深确认。
+  ④**深色巡检**：AppColors 加 `hairline(scheme,{strength})` 和 `inputFill(scheme)`；`iosInputDecoration` **签名改为必传 context**（11 个调用点全更新）；换掉黑发丝边/浅灰底：ios_form(输入框/按钮/弹窗边)、ios_menu(**行文字改 onSurface**+分隔线+高亮)、sliding_segment、manual_add_sheet(面板/圆图标/芯片/金额卡/_AccountBox)、ai_chat_panel×4、book_sheet 封面边、statistics _BookChip、budget_setting×3；抽屉遮罩 白→`AppColors.appBg` 随主题。**阴影的黑没动（深色下本来就弱，正常）。**
+  ⑤**统计性能+预算精度**：每张统计卡包 RepaintBoundary；`BudgetResolver.monthlyTotalFor` 从「15号代表日」改**按天重叠求和**（短区间不再漏、循环+临时区间可叠加），新增 2 个测试。
+  ⑥**资产**：logo 第二版处理完成（白转透明+裁边，640×192 121KB）→ `assets/brand/logo.png`（pubspec 已注册），抽屉头部 Image.asset 替换文字（**深色模式退回文字**，加载失败也退回）；封面补 pet/baby/family.png（420宽 256色 ~100KB each），book_sheet 模板接上。**还缺「记账(日常)」封面**；用户另给了 8 张猫表情图（见 -1.-1 候选①）。
 - **GPT小修包（b0703-3，待真机验）数据口径+轻提示统一+DB安全**：①AI 喂数口径和统计一致：`ai_chat_panel` 三处（建议生成/_buildTxnContext/异常提醒）过滤 `t.excluded`；②「今日可花」（首页/统计/快记，=今天份额−今天已花）vs 预算页改文案「往后每天可花」（=剩余÷剩余天数），两口径同基底不矛盾，budget_engine.dart 有注释说明；③全 App SnackBar 清零→showAppToast（7个文件：auto_record_sheet/personal_center/ai_quick_entry/ai_setting/screenshot_entry/ai_chat_panel(_snack委托)/backup_view），app_toast 加限宽+两行省略防长错误文案顶出屏；错误用 `icon: Icons.error_outline`；④**DB 迁移前自动备份**：repo.init 里 `_backupBeforeMigration`（openReadOnlyDatabase 读 user_version，要升版本才复制 `qingji.db.pre-v旧.bak`，失败不拦启动）。核实：API key 遮罩(_obscure)、备份/恢复页(backup_view+.bak回滚)早已存在。
 - **二级面板提层修复（b0703-2，待真机验）**：用户对比咔皮截图指出裁切/叠影。根因=面板画在分类区 Stack 里，芯片/金额/键盘**后画且半透明**盖住了它。修：整卡包一层 Stack，面板挪到最顶层最后画（CompositedTransformFollower + showWhenUnlinked:false，锚点 _panelLink 不变）；面板限高 268（约3行）超出内部滚动；底部区展开时重雾压白（_blurIf 加 sigma/opacity 参数，底部 3.0/0.3，网格行维持 1.8/0.65）；二级图标改**白底圆44+ClipOval 内嵌34图标**和一级圆角方块拉开层级（对齐咔皮）。
 - **预算修正包（b0703-1，待真机验）**：①建议口径修正：`BudgetSuggestion.suggestTotal` 删除→`suggestFromIncome`（收入×80%，总预算含固定支出）+`averageMonthlySpend`（近3月只均有记录月份，不填收入也能建议）；弹层固定支出输入行整个删除（fixedExpenses 字段保留兼容 DB）；文案「本月可支配预算」→「本月预算」（整段总额时叫「期间预算总额」）②首条无终点循环预算 start=DateTime(2000) 覆盖历史，已有循环预算再新建才从本月1号起；自定义段加「每月额度/整段总额」SlidingSegment（每月额度=recurringMonthly+end，编辑回显 _customMonthly）③分类区实时「已分配 ¥x/¥总额」超橙；分类合计>总预算禁存；编辑无终点循环预算先 showConfirmDialog「会影响X年X月起所有月份」④UI减重：新建预算按钮白底描边、计划列表 padding/字号压缩、iosInputDecoration 全局 vertical 13→10、弹层滚动底 24。计划列表区分「每月额度/整段总额」描述。测试更新：budget_period_test 换 suggestFromIncome/averageMonthlySpend 两用例。

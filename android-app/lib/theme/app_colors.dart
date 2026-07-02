@@ -73,6 +73,19 @@ class AppColors {
       scheme.brightness == Brightness.dark
           ? const Color(0xFF211E1C)
           : const Color(0xFFF7F8FA);
+
+  /// 发丝描边：浅色=淡黑、深色=淡白。
+  /// 别再手写 `Colors.black.withValues(alpha: 0.06)`——深色模式下会看不见。
+  static Color hairline(ColorScheme scheme, {double strength = 1}) =>
+      scheme.brightness == Brightness.dark
+          ? Colors.white.withValues(alpha: 0.10 * strength)
+          : Colors.black.withValues(alpha: 0.06 * strength);
+
+  /// 输入框填充底：浅色 iOS systemGray6 / 深色暖灰（比卡片再深一点）。
+  static Color inputFill(ColorScheme scheme) =>
+      scheme.brightness == Brightness.dark
+          ? const Color(0xFF3B3733)
+          : const Color(0xFFF2F2F7);
 }
 
 // ---------------------------------------------------------------------------

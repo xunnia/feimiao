@@ -150,33 +150,43 @@ class BudgetResolver {
     return best;
   }
 
-  /// 某个月生效的「月预算总额」：
-  /// 每月循环期间直接用 total；一次性区间把 total 按天摊到该月覆盖的天数。
+  /// 某个月生效的「月预算总额」：**按天重叠**求和（2026-07-03 起）。
+  /// 逐天解析当天生效的期间，把该期间的日均额度累加：
+  ///   每月循环 = total ÷ 当月天数；一次性区间 = total ÷ 区间总天数。
+  /// 之前用「15 号代表日」，会漏掉不含 15 号的短区间（如 7/1–7/10 的旅行预算），
+  /// 也算不了「循环 + 月中临时区间」的叠加月份。
   static Decimal? monthlyTotalFor(
     List<BudgetPeriod> periods,
     int year,
     int month, {
     int? bookId,
   }) {
-    // 用当月 15 号做代表日解析（避免月初月末恰好跨期间的抖动）。
-    final p = effectiveOn(periods, DateTime(year, month, 15), bookId: bookId);
-    if (p == null) return null;
-    if (p.recurringMonthly) return p.total;
-    // 一次性区间：按覆盖天数占区间总天数的比例摊到这个月。
-    final e = p.end;
-    if (e == null) return p.total;
-    final totalDays = DateTime(e.year, e.month, e.day)
-            .difference(DateTime(p.start.year, p.start.month, p.start.day))
-            .inDays +
-        1;
-    if (totalDays <= 0) return p.total;
-    final monthStart = DateTime(year, month, 1);
-    final monthEnd = DateTime(year, month + 1, 0);
-    final coverStart = p.start.isAfter(monthStart) ? p.start : monthStart;
-    final coverEnd = e.isBefore(monthEnd) ? e : monthEnd;
-    final coverDays = coverEnd.difference(coverStart).inDays + 1;
-    if (coverDays <= 0) return null;
-    final v = p.total.toDouble() * coverDays / totalDays;
-    return Decimal.parse(v.toStringAsFixed(2));
+    final daysInMonth = DateTime(year, month + 1, 0).day;
+    // 先数每个期间在当月「生效了几天」，再按日均折算，少做浮点累加。
+    final coveredDays = <BudgetPeriod, int>{};
+    for (var d = 1; d <= daysInMonth; d++) {
+      final p =
+          effectiveOn(periods, DateTime(year, month, d), bookId: bookId);
+      if (p != null) coveredDays[p] = (coveredDays[p] ?? 0) + 1;
+    }
+    if (coveredDays.isEmpty) return null;
+
+    var sum = 0.0;
+    coveredDays.forEach((p, days) {
+      if (p.recurringMonthly) {
+        sum += p.total.toDouble() * days / daysInMonth;
+      } else {
+        final e = p.end;
+        final totalDays = e == null
+            ? daysInMonth
+            : DateTime(e.year, e.month, e.day)
+                    .difference(
+                        DateTime(p.start.year, p.start.month, p.start.day))
+                    .inDays +
+                1;
+        sum += p.total.toDouble() * days / (totalDays <= 0 ? 1 : totalDays);
+      }
+    });
+    return Decimal.parse(sum.toStringAsFixed(2));
   }
 }

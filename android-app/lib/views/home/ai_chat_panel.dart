@@ -1329,8 +1329,7 @@ class _RecordBubble extends StatelessWidget {
               decoration: BoxDecoration(
                 color: AppColors.card(scheme),
                 borderRadius: BorderRadius.circular(16),
-                border:
-                    Border.all(color: Colors.black.withValues(alpha: 0.06)),
+                border: Border.all(color: AppColors.hairline(scheme)),
                 boxShadow: [
                   BoxShadow(
                     color: Colors.black.withValues(alpha: 0.04),
@@ -1447,7 +1446,7 @@ class _SavedEntryCard extends StatelessWidget {
         decoration: BoxDecoration(
           color: AppColors.card(scheme),
           borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: Colors.black.withValues(alpha: 0.06)),
+          border: Border.all(color: AppColors.hairline(scheme)),
           boxShadow: [
             BoxShadow(
               color: Colors.black.withValues(alpha: 0.04),
@@ -1571,7 +1570,7 @@ class _ActionChip extends StatelessWidget {
         decoration: BoxDecoration(
           color: AppColors.card(scheme),
           borderRadius: BorderRadius.circular(999),
-          border: Border.all(color: Colors.black.withValues(alpha: 0.06)),
+          border: Border.all(color: AppColors.hairline(scheme)),
         ),
         child: Row(
           mainAxisSize: MainAxisSize.min,
@@ -1709,7 +1708,8 @@ class _CatChip extends StatelessWidget {
         decoration: BoxDecoration(
           color: scheme.surfaceContainerHighest.withValues(alpha: 0.5),
           borderRadius: BorderRadius.circular(15),
-          border: Border.all(color: Colors.black.withValues(alpha: 0.05)),
+          border:
+              Border.all(color: AppColors.hairline(scheme, strength: 0.8)),
         ),
         child: Text(
           '${CategorySeed.emojiOf(cat.key)} ${cat.nameZh}',

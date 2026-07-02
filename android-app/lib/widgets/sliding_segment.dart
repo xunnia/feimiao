@@ -29,7 +29,7 @@ class SlidingSegment<T> extends StatelessWidget {
       decoration: BoxDecoration(
         color: AppColors.card(scheme),
         borderRadius: BorderRadius.circular(999),
-        border: Border.all(color: Colors.black.withValues(alpha: 0.06)),
+        border: Border.all(color: AppColors.hairline(scheme)),
         boxShadow: [
           BoxShadow(
             color: Colors.black.withValues(alpha: 0.04),

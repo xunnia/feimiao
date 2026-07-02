@@ -55,8 +55,10 @@ class BudgetSettingView extends StatelessWidget {
               decoration: BoxDecoration(
                 color: AppColors.card(Theme.of(context).colorScheme),
                 borderRadius: BorderRadius.circular(999),
-                border:
-                    Border.all(color: Colors.black.withValues(alpha: 0.08)),
+                border: Border.all(
+                    color: AppColors.hairline(
+                        Theme.of(context).colorScheme,
+                        strength: 1.3)),
               ),
               child: Text(
                 '新建预算',
@@ -654,8 +656,7 @@ class _BudgetSheetState extends State<_BudgetSheet> {
                                 color: AppColors.card(scheme),
                                 borderRadius: BorderRadius.circular(999),
                                 border: Border.all(
-                                    color:
-                                        Colors.black.withValues(alpha: 0.06)),
+                                    color: AppColors.hairline(scheme)),
                               ),
                               child: Row(
                                 mainAxisSize: MainAxisSize.min,
@@ -688,9 +689,8 @@ class _BudgetSheetState extends State<_BudgetSheet> {
                             decoration: BoxDecoration(
                               color: AppColors.card(scheme),
                               borderRadius: BorderRadius.circular(999),
-                              border: Border.all(
-                                  color:
-                                      Colors.black.withValues(alpha: 0.06)),
+                              border:
+                                  Border.all(color: AppColors.hairline(scheme)),
                             ),
                             child: Row(
                               mainAxisSize: MainAxisSize.min,
@@ -752,8 +752,8 @@ class _BudgetSheetState extends State<_BudgetSheet> {
                           keyboardType: const TextInputType.numberWithOptions(
                               decimal: true),
                           onChanged: (_) => setState(() {}),
-                          decoration:
-                              iosInputDecoration(hint: '如 4000', prefix: '¥ '),
+                          decoration: iosInputDecoration(context,
+                              hint: '如 4000', prefix: '¥ '),
                         ),
                       ),
                       const SizedBox(width: 8),
@@ -811,7 +811,7 @@ class _BudgetSheetState extends State<_BudgetSheet> {
                             keyboardType:
                                 const TextInputType.numberWithOptions(
                                     decimal: true),
-                            decoration: iosInputDecoration(
+                            decoration: iosInputDecoration(context,
                                 hint: '不填就按近 3 个月平均支出算', prefix: '¥ '),
                           ),
                           const SizedBox(height: 10),
@@ -905,8 +905,8 @@ class _BudgetSheetState extends State<_BudgetSheet> {
                                     decimal: true),
                             textAlign: TextAlign.end,
                             onChanged: (_) => setState(() {}),
-                            decoration:
-                                iosInputDecoration(hint: '0', prefix: '¥ '),
+                            decoration: iosInputDecoration(context,
+                                hint: '0', prefix: '¥ '),
                           ),
                         ),
                       ],

@@ -504,7 +504,7 @@ class _ManualAddSheetState extends State<ManualAddSheet> {
                 final cats = repo.categoriesForKindRanked(_kind);
                 final expandable = <int>{
                   for (final c in cats)
-                    if (repo.childrenOf(c.id).isNotEmpty) c.id,
+                    if (repo.visibleChildrenOf(c.id).isNotEmpty) c.id,
                 };
                 const cols = 5;
                 final rows = <List<CategoryEntity>>[];
@@ -692,7 +692,7 @@ class _SubcategoryPanel extends StatelessWidget {
         // 实底（不透明），底下的雾一点都不许透上来。
         color: AppColors.card(scheme),
         borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: Colors.black.withValues(alpha: 0.06)),
+        border: Border.all(color: AppColors.hairline(scheme)),
         boxShadow: [
           BoxShadow(
             color: Colors.black.withValues(alpha: 0.10),
@@ -734,7 +734,7 @@ class _SubcategoryPanel extends StatelessWidget {
                       border: Border.all(
                         color: sel
                             ? scheme.primary
-                            : Colors.black.withValues(alpha: 0.08),
+                            : AppColors.hairline(scheme, strength: 1.3),
                         width: sel ? 2 : 1,
                       ),
                     ),
@@ -807,7 +807,8 @@ class _AccountBox extends StatelessWidget {
           decoration: BoxDecoration(
             color: AppColors.card(scheme),
             borderRadius: BorderRadius.circular(14),
-            border: Border.all(color: Colors.black.withValues(alpha: 0.08)),
+            border:
+                Border.all(color: AppColors.hairline(scheme, strength: 1.3)),
           ),
           child: Row(
             children: [
@@ -1021,7 +1022,7 @@ class _Chip extends StatelessWidget {
           border: Border.all(
             color: selected
                 ? accent.withValues(alpha: 0.6)
-                : Colors.black.withValues(alpha: 0.06),
+                : AppColors.hairline(scheme),
           ),
           boxShadow: selected
               ? null
@@ -1095,7 +1096,7 @@ class _AmountCard extends StatelessWidget {
       decoration: BoxDecoration(
         color: AppColors.card(scheme),
         borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: Colors.black.withValues(alpha: 0.06)),
+        border: Border.all(color: AppColors.hairline(scheme)),
         boxShadow: const [
           BoxShadow(
             color: Color(0x14000000),

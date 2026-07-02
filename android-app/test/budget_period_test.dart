@@ -96,6 +96,37 @@ void main() {
       final v = BudgetResolver.monthlyTotalFor(periods, 2026, 7);
       expect(v, Decimal.parse('1500.00'));
     });
+
+    test('不含 15 号的短区间也算得进（按天重叠，不再取代表日）', () {
+      // 7/1–7/10 的旅行预算，旧的「15 号代表日」会整个漏掉。
+      final periods = [
+        _p(
+            id: 1,
+            start: DateTime(2026, 7, 1),
+            end: DateTime(2026, 7, 10),
+            recurring: false,
+            total: 1000),
+      ];
+      expect(BudgetResolver.monthlyTotalFor(periods, 2026, 7),
+          Decimal.parse('1000.00'));
+    });
+
+    test('循环预算 + 月中临时区间叠加', () {
+      // 7 月 31 天：循环 3100（日均 100）生效 21 天 = 2100，
+      // 旅行区间 7/11–7/20 整段 2000 全在 7 月 → 合计 4100。
+      final periods = [
+        _p(id: 1, start: DateTime(2026, 1, 1), total: 3100),
+        _p(
+            id: 2,
+            start: DateTime(2026, 7, 11),
+            end: DateTime(2026, 7, 20),
+            recurring: false,
+            total: 2000,
+            createdMs: 2),
+      ];
+      final v = BudgetResolver.monthlyTotalFor(periods, 2026, 7)!;
+      expect(v.toDouble(), closeTo(4100, 0.01));
+    });
   });
 
   group('BudgetSuggestion', () {

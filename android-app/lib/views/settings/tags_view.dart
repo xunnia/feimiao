@@ -143,7 +143,7 @@ class TagsView extends StatelessWidget {
               controller: ctrl,
               autofocus: true,
               maxLength: 8,
-              decoration: iosInputDecoration(hint: '标签名'),
+              decoration: iosInputDecoration(ctx, hint: '标签名'),
             ),
             const SizedBox(height: 12),
             Align(

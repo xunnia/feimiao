@@ -41,10 +41,12 @@ const List<BookTemplate> kBookTemplates = [
       cover: 'assets/book_covers/couple.png'),
   BookTemplate('multi', '多人账本', '👥', Color(0xFFEFEBE2),
       cover: 'assets/book_covers/multi.png'),
-  // ↓ 封面图还在生成中，emoji 占位
-  BookTemplate('pet', '宠物账本', '🐱', Color(0xFFF6E8DC)),
-  BookTemplate('baby', '母婴账本', '🍼', Color(0xFFFBE9EE)),
-  BookTemplate('family', '家庭账本', '🏠', Color(0xFFEFEBE2)),
+  BookTemplate('pet', '宠物账本', '🐱', Color(0xFFF6E8DC),
+      cover: 'assets/book_covers/pet.png'),
+  BookTemplate('baby', '母婴账本', '🍼', Color(0xFFFBE9EE),
+      cover: 'assets/book_covers/baby.png'),
+  BookTemplate('family', '家庭账本', '🏠', Color(0xFFEFEBE2),
+      cover: 'assets/book_covers/family.png'),
 ];
 
 /// 弹「新建账本」半屏页；[edit] 传入则是编辑既有账本。
@@ -189,7 +191,8 @@ class _BookSheetState extends State<_BookSheet> {
                       // 编辑就是来改名的，直接聚焦弹键盘；新建先让用户看模板。
                       autofocus: _isEdit,
                       maxLength: 12,
-                      decoration: iosInputDecoration(hint: '账本名称'),
+                      decoration:
+                          iosInputDecoration(context, hint: '账本名称'),
                       onChanged: (_) => setState(() {}),
                     ),
                   ),
@@ -287,7 +290,9 @@ class _CoverCard extends StatelessWidget {
           color: template.tint,
           borderRadius: BorderRadius.circular(16),
           border: Border.all(
-            color: selected ? scheme.primary : Colors.black.withValues(alpha: 0.05),
+            color: selected
+                ? scheme.primary
+                : AppColors.hairline(scheme, strength: 0.8),
             width: selected ? 2 : 1,
           ),
         ),

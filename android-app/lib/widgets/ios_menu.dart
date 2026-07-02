@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../theme/app_colors.dart';
 import 'glass.dart';
 
 /// iOS 风浮动菜单的一项。
@@ -114,7 +115,9 @@ class _IosMenuCard extends StatelessWidget {
                 if (i > 0)
                   Container(
                     height: 0.5,
-                    color: Colors.black.withValues(alpha: 0.08),
+                    color: AppColors.hairline(
+                        Theme.of(context).colorScheme,
+                        strength: 1.3),
                   ),
                 _IosMenuRow(item: items[i]),
               ],
@@ -133,15 +136,17 @@ class _IosMenuRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    // 文字跟随主题（深色模式下之前的硬编码深灰会看不清）。
     final color =
-        item.destructive ? _kDestructiveRed : const Color(0xFF1A1A1A);
+        item.destructive ? _kDestructiveRed : scheme.onSurface;
     return InkWell(
       onTap: () {
         Navigator.of(context).pop();
         item.onTap();
       },
       splashFactory: NoSplash.splashFactory,
-      highlightColor: Colors.black.withValues(alpha: 0.06),
+      highlightColor: AppColors.hairline(scheme),
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
         // 对齐 Claude：图标在前、名称在后。
