@@ -7,6 +7,7 @@ import '../core/haptics.dart';
 import '../core/models/transaction_kind.dart';
 import '../data/app_repository.dart';
 import '../views/transactions/edit_transaction_sheet.dart';
+import 'slidable_tracker.dart';
 
 const Color _kEdit = Color(0xFF7D8B9B); // 蓝灰毛
 const Color _kRefund = Color(0xFFF2B23C); // 铜金眼
@@ -64,7 +65,11 @@ class _TransactionSlidableState extends State<TransactionSlidable> {
           ),
         ],
       ),
-      child: widget.child,
+      // 观察面板开合，登记到全局 SlidableTracker（右滑开抽屉手势据此让位）。
+      child: _PaneWatcher(
+        trackKey: 'tx_${widget.transaction.id}',
+        child: widget.child,
+      ),
     );
   }
 
@@ -139,6 +144,49 @@ class _TransactionSlidableState extends State<TransactionSlidable> {
       ctrl.actionPaneType.addListener(listener);
     }
   }
+}
+
+/// 挂在 Slidable 内部，把操作面板的开合状态登记到 [SlidableTracker]。
+class _PaneWatcher extends StatefulWidget {
+  final Object trackKey;
+  final Widget child;
+
+  const _PaneWatcher({required this.trackKey, required this.child});
+
+  @override
+  State<_PaneWatcher> createState() => _PaneWatcherState();
+}
+
+class _PaneWatcherState extends State<_PaneWatcher> {
+  SlidableController? _ctl;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final ctl = Slidable.of(context);
+    if (!identical(ctl, _ctl)) {
+      _ctl?.actionPaneType.removeListener(_onPaneChanged);
+      _ctl = ctl;
+      _ctl?.actionPaneType.addListener(_onPaneChanged);
+    }
+  }
+
+  void _onPaneChanged() {
+    final ctl = _ctl;
+    if (ctl == null) return;
+    SlidableTracker.setOpen(
+        widget.trackKey, ctl.actionPaneType.value != ActionPaneType.none);
+  }
+
+  @override
+  void dispose() {
+    _ctl?.actionPaneType.removeListener(_onPaneChanged);
+    SlidableTracker.setOpen(widget.trackKey, false);
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => widget.child;
 }
 
 /// 退款弹层:默认全额、可改部分;确认后在同分类记一笔退款冲账(负支出)。

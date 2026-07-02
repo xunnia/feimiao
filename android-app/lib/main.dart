@@ -12,6 +12,7 @@ import 'theme/app_colors.dart';
 import 'views/auto_record/auto_record_sheet.dart';
 import 'widgets/glass.dart';
 import 'widgets/pressable_scale.dart';
+import 'widgets/slidable_tracker.dart';
 import 'widgets/ios_dialogs.dart';
 import 'widgets/ios_form.dart';
 import 'widgets/ios_menu.dart';
@@ -198,10 +199,14 @@ class _RootShellState extends State<RootShell>
                       final total = e.position - start;
                       final open = _drawerCtl.value > 0.01;
                       // 横向位移明显大于纵向才接管，不干扰列表上下滚动；
-                      // 关着时只认「向右拖」（左滑仍归账单行的编辑操作）。
+                      // 关着时只认「向右拖」（左滑仍归账单行的编辑操作）；
+                      // 有账单行的操作面板开着时，右滑先让它关面板，不开抽屉。
                       final horizontal = total.dx.abs() > 24 &&
                           total.dx.abs() > total.dy.abs() * 1.6;
-                      if (horizontal && (open ? total.dx < 0 : total.dx > 0)) {
+                      if (horizontal &&
+                          (open
+                              ? total.dx < 0
+                              : total.dx > 0 && !SlidableTracker.anyOpen)) {
                         _ptrDragging = true;
                         _ptrLastX = e.position.dx;
                       }

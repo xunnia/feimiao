@@ -24,6 +24,7 @@ import '../../core/meow_insights.dart';
 import '../../core/money_format.dart';
 import '../../data/app_repository.dart';
 import '../../theme/app_colors.dart';
+import '../../widgets/app_toast.dart';
 import '../../widgets/glass.dart';
 import '../../widgets/ios_dialogs.dart';
 import '../../widgets/ios_menu.dart';
@@ -1235,6 +1236,7 @@ class _AnswerBubbleState extends State<_AnswerBubble> {
               children: [
                 _action(_icCopy, () {
                   Clipboard.setData(ClipboardData(text: widget.text));
+                  showAppToast(context, '已复制');
                 }),
                 _action(
                   _liked ? _icThumbUpFill : _icThumbUp,
