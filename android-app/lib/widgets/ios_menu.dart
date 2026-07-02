@@ -42,7 +42,14 @@ Future<void> showIosMenu(BuildContext anchorContext, List<IosMenuItem> items) {
   if (left + menuWidth > screen.width - margin) {
     left = screen.width - margin - menuWidth;
   }
-  final top = anchor.bottom + 4;
+  // 默认弹在锚点下方；下方放不下（锚点靠近屏底，如记账卡芯片）就翻到上方。
+  final estHeight = items.length * 45.0 + 4;
+  double top = anchor.bottom + 4;
+  var growUp = false;
+  if (top + estHeight > screen.height - margin) {
+    top = (anchor.top - 4 - estHeight).clamp(margin, screen.height - margin);
+    growUp = true;
+  }
 
   return showGeneralDialog<void>(
     context: anchorContext,
@@ -61,7 +68,8 @@ Future<void> showIosMenu(BuildContext anchorContext, List<IosMenuItem> items) {
             child: FadeTransition(
               opacity: anim,
               child: ScaleTransition(
-                alignment: Alignment.topRight,
+                alignment:
+                    growUp ? Alignment.bottomRight : Alignment.topRight,
                 scale: Tween<double>(begin: 0.82, end: 1.0).animate(curved),
                 child: _IosMenuCard(items: items, width: menuWidth),
               ),

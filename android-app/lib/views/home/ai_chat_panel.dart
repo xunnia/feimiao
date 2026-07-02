@@ -1188,10 +1188,11 @@ class _AnswerBubbleState extends State<_AnswerBubble> {
     final scheme = Theme.of(context).colorScheme;
     final shownText = widget.text.substring(0, _shown);
     final done = _shown >= widget.text.length;
+    // 对齐 Claude：正文 w400、加粗 w600，反差一档，别太夸张。
     final baseStyle = TextStyle(
       fontSize: 15,
       height: 1.5,
-      fontWeight: FontWeight.w300,
+      fontWeight: FontWeight.w400,
       color: scheme.onSurface,
     );
     return Padding(
@@ -1257,7 +1258,7 @@ class _GreetingLine extends StatelessWidget {
       style: TextStyle(
         fontSize: 15,
         height: 1.45,
-        fontWeight: FontWeight.w300,
+        fontWeight: FontWeight.w400,
         color: scheme.onSurface,
       ),
     );

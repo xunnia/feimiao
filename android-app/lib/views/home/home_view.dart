@@ -15,6 +15,7 @@ import '../../theme/app_colors.dart';
 import '../../theme/app_tokens.dart';
 import '../../widgets/animated_money.dart';
 import '../../widgets/mascot.dart';
+import '../../widgets/sliding_segment.dart';
 import '../../widgets/tag_selector.dart';
 import '../../widgets/transaction_actions.dart';
 import '../statistics/statistics_view.dart';
@@ -186,12 +187,9 @@ class _HomeViewState extends State<HomeView> {
           ),
         ),
         if (monthTx.isEmpty)
-          SliverFillRemaining(
+          const SliverFillRemaining(
             hasScrollBody: false,
-            child: _EmptyState(
-              title: isCurrent ? '还没有记录哦' : '这个月没有记录',
-              subtitle: isCurrent ? '在下方输入框记第一笔吧' : '换个月看看吧',
-            ),
+            child: _EmptyState(),
           )
         else ...[
           SliverToBoxAdapter(
@@ -872,9 +870,7 @@ class _HeroBlock extends StatelessWidget {
   }
 }
 
-/// 列表上方的 全部 / 支出 / 收入 分段筛选。
-/// 对标 Telegram 聊天文件夹：外层白色大胶囊（细边+淡阴影），
-/// 选中项是里面的浅灰小胶囊，切换时平滑过渡。
+/// 列表上方的 全部 / 支出 / 收入 分段筛选（Telegram 式滑块，全局组件）。
 class _FilterSegment extends StatelessWidget {
   final _TxFilter value;
   final ValueChanged<_TxFilter> onChanged;
@@ -883,60 +879,16 @@ class _FilterSegment extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-
-    Widget pill(_TxFilter f, String label) {
-      final sel = f == value;
-      return Expanded(
-        child: GestureDetector(
-          behavior: HitTestBehavior.opaque,
-          onTap: () => onChanged(f),
-          child: AnimatedContainer(
-            duration: const Duration(milliseconds: 180),
-            curve: Curves.easeOut,
-            margin: const EdgeInsets.all(3),
-            padding: const EdgeInsets.symmetric(vertical: 7),
-            alignment: Alignment.center,
-            decoration: BoxDecoration(
-              color: sel
-                  ? scheme.surfaceContainerHighest
-                  : Colors.transparent,
-              borderRadius: BorderRadius.circular(999),
-            ),
-            child: Text(
-              label,
-              style: Theme.of(context).textTheme.labelMedium?.copyWith(
-                    color: scheme.onSurface,
-                    fontWeight: sel ? FontWeight.w600 : FontWeight.w400,
-                  ),
-            ),
-          ),
-        ),
-      );
-    }
-
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 2, 16, 8),
-      child: Container(
-        decoration: BoxDecoration(
-          color: AppColors.card(scheme),
-          borderRadius: BorderRadius.circular(999),
-          border: Border.all(color: Colors.black.withValues(alpha: 0.06)),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withValues(alpha: 0.04),
-              blurRadius: 8,
-              offset: const Offset(0, 1),
-            ),
-          ],
-        ),
-        child: Row(
-          children: [
-            pill(_TxFilter.all, '全部'),
-            pill(_TxFilter.expense, '支出'),
-            pill(_TxFilter.income, '收入'),
-          ],
-        ),
+      child: SlidingSegment<_TxFilter>(
+        items: const [
+          (_TxFilter.all, '全部'),
+          (_TxFilter.expense, '支出'),
+          (_TxFilter.income, '收入'),
+        ],
+        value: value,
+        onChanged: onChanged,
       ),
     );
   }
@@ -1466,37 +1418,14 @@ class _ReimburseBadge extends StatelessWidget {
   }
 }
 
+/// 空状态：只有猫，不配文案（用户 0702 拍板）。
 class _EmptyState extends StatelessWidget {
-  final String title;
-  final String subtitle;
-
-  const _EmptyState({
-    this.title = '还没有记录哦',
-    this.subtitle = '在下方输入框记第一笔吧',
-  });
+  const _EmptyState();
 
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return Column(
-      mainAxisAlignment: MainAxisAlignment.center,
-      children: [
-        const Mascot(mood: MascotMood.empty, size: 216, animate: true),
-        const SizedBox(height: 16),
-        Text(
-          title,
-          style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                color: scheme.onSurfaceVariant,
-              ),
-        ),
-        const SizedBox(height: 6),
-        Text(
-          subtitle,
-          style: Theme.of(context).textTheme.labelMedium?.copyWith(
-                color: scheme.onSurfaceVariant.withValues(alpha: 0.6),
-              ),
-        ),
-      ],
+    return const Center(
+      child: Mascot(mood: MascotMood.empty, size: 184, animate: true),
     );
   }
 }

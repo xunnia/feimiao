@@ -15,7 +15,9 @@ import '../../core/money_format.dart';
 import '../../data/app_repository.dart';
 import '../../theme/app_colors.dart';
 import '../../widgets/glass.dart';
+import '../../widgets/ios_menu.dart';
 import '../../widgets/pressable_scale.dart';
+import '../../widgets/sliding_segment.dart';
 import '../../widgets/tag_selector.dart';
 import '../common/receipt_picker.dart';
 import '../quick_add/amount_keypad.dart';
@@ -209,26 +211,37 @@ class _ManualAddSheetState extends State<ManualAddSheet> {
   @override
   Widget build(BuildContext context) {
     // isScrollControlled sheet 需要自己限高：屏幕 92% 减去键盘高度。
+    // 高度按内容自适应（分类少时卡片就矮，别留大片空白），超了才滚动。
     final screenH = MediaQuery.sizeOf(context).height;
     final bottomInset = MediaQuery.viewInsetsOf(context).bottom;
     final maxH = screenH * 0.92 - bottomInset;
     final panelOpen = _panelParentId != null;
 
-    return SizedBox(
-      height: maxH.clamp(300.0, screenH * 0.92),
+    return ConstrainedBox(
+      constraints:
+          BoxConstraints(maxHeight: maxH.clamp(300.0, screenH * 0.92)),
       child: Column(
+        mainAxisSize: MainAxisSize.min,
         children: [
           const _DragHandle(),
 
-          // ── 顶部栏：支出/收入 分段 + 模式胶囊 + 关闭 ──
+          // ── 顶部栏：支出/收入 分段（对齐主页大小）+ 模式胶囊 + 关闭 ──
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 8, 12, 0),
             child: Row(
               children: [
-                Expanded(
-                  child: _KindSegment(value: _kind, onChanged: _onKindChanged),
+                SizedBox(
+                  width: 150,
+                  child: SlidingSegment<TransactionKind>(
+                    items: const [
+                      (TransactionKind.expense, '支出'),
+                      (TransactionKind.income, '收入'),
+                    ],
+                    value: _kind,
+                    onChanged: _onKindChanged,
+                  ),
                 ),
-                const SizedBox(width: 8),
+                const Spacer(),
                 _ModePill(label: '手动记账', onTap: widget.onSwitchToAi),
                 const SizedBox(width: 8),
                 _ToolCircleButton(
@@ -239,8 +252,8 @@ class _ManualAddSheetState extends State<ManualAddSheet> {
             ),
           ),
 
-          // ── 分类区（滚动）：网格按行铺开，展开的大类下面原位插入二级面板 ──
-          Expanded(
+          // ── 分类区（内容多高就多高，放不下才滚动）──
+          Flexible(
             child: Consumer<AppRepository>(
               builder: (context, repo, _) {
                 final cats = repo.categoriesForKindRanked(_kind);
@@ -350,72 +363,6 @@ class _ManualAddSheetState extends State<ManualAddSheet> {
           imageFilter: ImageFilter.blur(sigmaX: 2.5, sigmaY: 2.5),
           child: Opacity(opacity: 0.45, child: child),
         ),
-      ),
-    );
-  }
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// 支出 / 收入 分段（Telegram 文件夹式胶囊，与首页筛选同款设计）
-// ─────────────────────────────────────────────────────────────────────────────
-
-class _KindSegment extends StatelessWidget {
-  final TransactionKind value;
-  final ValueChanged<TransactionKind> onChanged;
-
-  const _KindSegment({required this.value, required this.onChanged});
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-
-    Widget pill(TransactionKind k, String label) {
-      final sel = k == value;
-      return Expanded(
-        child: GestureDetector(
-          behavior: HitTestBehavior.opaque,
-          onTap: () => onChanged(k),
-          child: AnimatedContainer(
-            duration: const Duration(milliseconds: 180),
-            curve: Curves.easeOut,
-            margin: const EdgeInsets.all(3),
-            padding: const EdgeInsets.symmetric(vertical: 7),
-            alignment: Alignment.center,
-            decoration: BoxDecoration(
-              color:
-                  sel ? scheme.surfaceContainerHighest : Colors.transparent,
-              borderRadius: BorderRadius.circular(999),
-            ),
-            child: Text(
-              label,
-              style: Theme.of(context).textTheme.labelMedium?.copyWith(
-                    color: scheme.onSurface,
-                    fontWeight: sel ? FontWeight.w600 : FontWeight.w400,
-                  ),
-            ),
-          ),
-        ),
-      );
-    }
-
-    return Container(
-      decoration: BoxDecoration(
-        color: AppColors.card(scheme),
-        borderRadius: BorderRadius.circular(999),
-        border: Border.all(color: Colors.black.withValues(alpha: 0.06)),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.04),
-            blurRadius: 8,
-            offset: const Offset(0, 1),
-          ),
-        ],
-      ),
-      child: Row(
-        children: [
-          pill(TransactionKind.expense, '支出'),
-          pill(TransactionKind.income, '收入'),
-        ],
       ),
     );
   }
@@ -578,29 +525,43 @@ class _ChipsRow extends StatelessWidget {
             },
           ),
           const SizedBox(width: 8),
-          // 账本（多账本：这笔记到哪本）
+          // 账本（多账本：这笔记到哪本）—— 弹 iOS 浮动菜单，与抽屉账本菜单同款
           if (repo.books.length > 1) ...[
-            _MenuChip<int>(
-              icon: Icons.menu_book_outlined,
-              label: book?.name ?? '账本',
-              items: [
-                for (final b in repo.books)
-                  PopupMenuItem(value: b.id, child: Text('${b.icon} ${b.name}')),
-              ],
-              onSelected: onBookChanged,
+            Builder(
+              builder: (chipCtx) => _Chip(
+                icon: Icons.menu_book_outlined,
+                label: book?.name ?? '账本',
+                onTap: () => showIosMenu(chipCtx, [
+                  for (final b in repo.books)
+                    IosMenuItem(
+                      label: '${b.icon} ${b.name}',
+                      icon: b.id == bookId
+                          ? Icons.check_circle
+                          : Icons.radio_button_unchecked,
+                      onTap: () => onBookChanged(b.id),
+                    ),
+                ]),
+              ),
             ),
             const SizedBox(width: 8),
           ],
-          // 账户
+          // 账户 —— 同款 iOS 浮动菜单
           if (repo.accounts.isNotEmpty) ...[
-            _MenuChip<int>(
-              icon: Icons.account_balance_wallet_outlined,
-              label: account?.name ?? '账户',
-              items: [
-                for (final a in repo.accounts)
-                  PopupMenuItem(value: a.id, child: Text(a.name)),
-              ],
-              onSelected: onAccountChanged,
+            Builder(
+              builder: (chipCtx) => _Chip(
+                icon: Icons.account_balance_wallet_outlined,
+                label: account?.name ?? '账户',
+                onTap: () => showIosMenu(chipCtx, [
+                  for (final a in repo.accounts)
+                    IosMenuItem(
+                      label: a.name,
+                      icon: a.id == account?.id
+                          ? Icons.check_circle
+                          : Icons.radio_button_unchecked,
+                      onTap: () => onAccountChanged(a.id),
+                    ),
+                ]),
+              ),
             ),
             const SizedBox(width: 8),
           ],
@@ -684,52 +645,6 @@ class _Chip extends StatelessWidget {
   }
 }
 
-/// 点开弹菜单选一项的芯片（账本/账户）。
-class _MenuChip<T> extends StatelessWidget {
-  final IconData icon;
-  final String label;
-  final List<PopupMenuEntry<T>> items;
-  final ValueChanged<T?> onSelected;
-
-  const _MenuChip({
-    required this.icon,
-    required this.label,
-    required this.items,
-    required this.onSelected,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return PopupMenuButton<T>(
-      onSelected: onSelected,
-      itemBuilder: (_) => items,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 10),
-        alignment: Alignment.center,
-        decoration: BoxDecoration(
-          color: scheme.surfaceContainerHigh,
-          borderRadius: BorderRadius.circular(10),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(icon, size: 14, color: scheme.onSurfaceVariant),
-            const SizedBox(width: 5),
-            Text(
-              label,
-              style:
-                  TextStyle(fontSize: 12, color: scheme.onSurfaceVariant),
-            ),
-            Icon(Icons.keyboard_arrow_down,
-                size: 14, color: scheme.onSurfaceVariant),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
 // ─────────────────────────────────────────────────────────────────────────────
 // 金额卡（输入框风格）：金额 + 细横线 + 备注 + 右下 相册/拍照
 // ─────────────────────────────────────────────────────────────────────────────
@@ -782,7 +697,7 @@ class _AmountCard extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // ── 金额行 ──
+          // ── 金额行（大小/粗度对齐咔皮：别太大太粗）──
           Row(
             crossAxisAlignment: CrossAxisAlignment.baseline,
             textBaseline: TextBaseline.alphabetic,
@@ -790,8 +705,8 @@ class _AmountCard extends StatelessWidget {
               Text(
                 '¥',
                 style: TextStyle(
-                  fontSize: 20,
-                  fontWeight: FontWeight.w600,
+                  fontSize: 17,
+                  fontWeight: FontWeight.w500,
                   color: amountColor,
                 ),
               ),
@@ -800,8 +715,8 @@ class _AmountCard extends StatelessWidget {
                 child: Text(
                   expression.displayText,
                   style: TextStyle(
-                    fontSize: 30,
-                    fontWeight: FontWeight.w700,
+                    fontSize: 24,
+                    fontWeight: FontWeight.w600,
                     color: amountColor,
                     fontFeatures: const [FontFeature.tabularFigures()],
                   ),
@@ -822,13 +737,7 @@ class _AmountCard extends StatelessWidget {
                 ),
             ],
           ),
-          // ── 细横线 ──
-          Container(
-            height: 0.6,
-            margin: const EdgeInsets.only(top: 8, right: 8),
-            color: scheme.outlineVariant,
-          ),
-          // ── 备注 + 照片/拍照 ──
+          // ── 备注 + 照片/拍照（对齐咔皮：无分隔线、无输入框边线）──
           Row(
             children: [
               Expanded(
@@ -856,6 +765,9 @@ class _AmountCard extends StatelessWidget {
                           ),
                           isDense: true,
                           border: InputBorder.none,
+                          enabledBorder: InputBorder.none,
+                          focusedBorder: InputBorder.none,
+                          filled: false,
                           contentPadding:
                               const EdgeInsets.symmetric(vertical: 10),
                         ),
@@ -969,25 +881,26 @@ class _ModePill extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    // 尺寸对齐 AI 面板的模式胶囊（同类同款）。
     return PressableScale(
       onPressed: onTap,
       child: GlassSurface(
-        radius: 18,
-        padding: const EdgeInsets.symmetric(horizontal: 12),
+        radius: 15,
+        padding: const EdgeInsets.symmetric(horizontal: 11),
         child: SizedBox(
-          height: 36,
+          height: 31,
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
               Icon(Icons.edit_outlined,
-                  size: 15, color: scheme.onSurfaceVariant),
+                  size: 14, color: scheme.onSurfaceVariant),
               const SizedBox(width: 6),
               Text(
                 label,
                 style: TextStyle(
-                  fontSize: 14,
+                  fontSize: 12,
                   fontWeight: FontWeight.normal,
-                  color: scheme.onSurface,
+                  color: scheme.onSurfaceVariant,
                 ),
               ),
             ],
