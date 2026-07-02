@@ -44,6 +44,11 @@ class GlassEdgePainter extends CustomPainter {
 
 /// 透明模糊玻璃面：背景模糊 + 半透明白底 + 不规则细黑边。
 /// 全 App 的按钮 / 小弹窗 / 浮层统一用它，保证设计语言一致。
+///
+/// ⚠️ 性能：`BackdropFilter` 实时模糊很贵（每次失效都要 GPU 重算一片背景）。
+/// 控件背后是**纯色/静态背景**时模糊了肉眼也看不出来，传 `blur: 0`
+/// 走免模糊快速通道（观感一致、GPU 白省）——首页常驻小按钮都应该这么用；
+/// 只有真正盖在滚动内容/动态画面上的浮层（如底部输入卡）才留模糊。
 class GlassSurface extends StatelessWidget {
   final Widget child;
   final double radius;
@@ -69,19 +74,23 @@ class GlassSurface extends StatelessWidget {
         ? const CircleBorder()
         : RoundedRectangleBorder(borderRadius: BorderRadius.circular(radius));
 
+    final core = CustomPaint(
+      foregroundPainter: GlassEdgePainter(radius: radius, circle: circle),
+      child: Container(
+        padding: padding,
+        color: scheme.surface.withValues(alpha: opacity),
+        child: child,
+      ),
+    );
+
     return ClipPath(
       clipper: ShapeBorderClipper(shape: shape),
-      child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: blur, sigmaY: blur),
-        child: CustomPaint(
-          foregroundPainter: GlassEdgePainter(radius: radius, circle: circle),
-          child: Container(
-            padding: padding,
-            color: scheme.surface.withValues(alpha: opacity),
-            child: child,
-          ),
-        ),
-      ),
+      child: blur <= 0
+          ? core
+          : BackdropFilter(
+              filter: ImageFilter.blur(sigmaX: blur, sigmaY: blur),
+              child: core,
+            ),
     );
   }
 }

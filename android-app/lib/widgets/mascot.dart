@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import '../theme/app_colors.dart';
 
@@ -116,9 +118,14 @@ class Mascot extends StatelessWidget {
   }
 }
 
-/// 给任意吉祥物图片套一层轻微的「呼吸 + 浮动 + 晃头」循环动效。
+/// 给任意吉祥物图片套一层轻微的「呼吸 + 浮动 + 晃头」动效。
 /// 公开复用：Mascot(animate:true) 走它,首页大卡片探头猫等自定义布局也直接套。
 /// [sway] 是晃头幅度(弧度系数),thinking 态用大一点。
+///
+/// ⚠️ 性能：**间歇呼吸**，不是永动画——呼吸 2 个来回后完全静止歇 8 秒再来。
+/// 之前 `repeat()` 永不停会逼手机以 60/120fps 持续渲染 + 反复重算
+/// BackdropFilter 模糊，是「打开 App 手机发烫」的元凶（2026-07-02 用户实测）。
+/// 静止期间零帧渲染；再用 RepaintBoundary 把重绘圈在猫自己这一小块。
 class MascotBreath extends StatefulWidget {
   const MascotBreath({
     super.key,
@@ -140,7 +147,12 @@ class MascotBreath extends StatefulWidget {
 
 class _MascotBreathState extends State<MascotBreath>
     with SingleTickerProviderStateMixin {
+  static const int _breathsPerBout = 2; // 每轮呼吸的来回数
+  static const Duration _rest = Duration(seconds: 8); // 每轮之间静止时长
+
   late final AnimationController _c;
+  Timer? _restTimer;
+  int _halfCycles = 0; // 已完成的半程数（forward/reverse 各算一次）
 
   @override
   void initState() {
@@ -148,33 +160,56 @@ class _MascotBreathState extends State<MascotBreath>
     _c = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 2200),
-    )..repeat(reverse: true);
+    )..addStatusListener(_onStatus);
+    _c.forward();
+  }
+
+  void _onStatus(AnimationStatus s) {
+    if (s == AnimationStatus.completed) {
+      _halfCycles++;
+      _c.reverse();
+    } else if (s == AnimationStatus.dismissed) {
+      _halfCycles++;
+      if (_halfCycles < _breathsPerBout * 2) {
+        _c.forward();
+      } else {
+        // 一轮呼吸结束：完全停住歇一会儿（期间零帧渲染），再来下一轮。
+        _restTimer = Timer(_rest, () {
+          if (!mounted) return;
+          _halfCycles = 0;
+          _c.forward();
+        });
+      }
+    }
   }
 
   @override
   void dispose() {
+    _restTimer?.cancel();
     _c.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    return AnimatedBuilder(
-      animation: _c,
-      child: widget.child,
-      builder: (context, child) {
-        final t = Curves.easeInOut.transform(_c.value); // 0..1
-        final scale = 1.0 + 0.07 * t; // 呼吸放大
-        final dy = widget.bob * t; // 上下浮动(默认上浮;探头猫用正值下沉)
-        final angle = (t - 0.5) * widget.sway; // 轻轻晃头
-        return Transform.translate(
-          offset: Offset(0, dy),
-          child: Transform.rotate(
-            angle: angle,
-            child: Transform.scale(scale: scale, child: child),
-          ),
-        );
-      },
+    return RepaintBoundary(
+      child: AnimatedBuilder(
+        animation: _c,
+        child: widget.child,
+        builder: (context, child) {
+          final t = Curves.easeInOut.transform(_c.value); // 0..1
+          final scale = 1.0 + 0.07 * t; // 呼吸放大
+          final dy = widget.bob * t; // 上下浮动(默认上浮;探头猫用正值下沉)
+          final angle = (t - 0.5) * widget.sway; // 轻轻晃头
+          return Transform.translate(
+            offset: Offset(0, dy),
+            child: Transform.rotate(
+              angle: angle,
+              child: Transform.scale(scale: scale, child: child),
+            ),
+          );
+        },
+      ),
     );
   }
 }

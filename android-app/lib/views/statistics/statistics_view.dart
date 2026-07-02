@@ -321,6 +321,7 @@ class _MonthSwitcher extends StatelessWidget {
       onTap: onTap,
       child: GlassSurface(
         circle: true,
+        blur: 0, // 纯色背景，模糊看不出来，省 GPU
         padding: const EdgeInsets.all(8),
         child: Icon(
           icon,

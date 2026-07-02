@@ -697,6 +697,7 @@ class _BookSwitchChip extends StatelessWidget {
         ]),
         child: GlassSurface(
           radius: 18,
+          blur: 0, // 纯色背景，模糊看不出来，省 GPU
           padding: const EdgeInsets.symmetric(horizontal: 10),
           child: SizedBox(
             height: 36,
@@ -745,6 +746,7 @@ class _SearchIconButton extends StatelessWidget {
         height: 38,
         child: GlassSurface(
           circle: true,
+          blur: 0, // 纯色背景，模糊看不出来，省 GPU
           child: Center(
             child: Icon(Icons.search, size: 19, color: scheme.onSurfaceVariant),
           ),
@@ -779,6 +781,7 @@ class _MenuGlyphButton extends StatelessWidget {
         // 统一玻璃圆钮 + 三条左对齐横线（最下一条半长）。
         child: GlassSurface(
           circle: true,
+          blur: 0, // 纯色背景，模糊看不出来，省 GPU
           child: Center(
             child: SizedBox(
               width: 16,

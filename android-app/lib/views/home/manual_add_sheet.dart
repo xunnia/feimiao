@@ -859,6 +859,7 @@ class _ToolCircleButton extends StatelessWidget {
         height: 38,
         child: GlassSurface(
           circle: true,
+          blur: 0, // 卡片是实底，无需模糊
           child: Center(
             child: Icon(icon, size: 19, color: scheme.onSurfaceVariant),
           ),
@@ -886,6 +887,7 @@ class _ModePill extends StatelessWidget {
       onPressed: onTap,
       child: GlassSurface(
         radius: 15,
+        blur: 0, // 卡片是实底，无需模糊
         padding: const EdgeInsets.symmetric(horizontal: 11),
         child: SizedBox(
           height: 31,

@@ -1525,6 +1525,7 @@ class _SuggestionGrid extends StatelessWidget {
             onPressed: () => onTap(s),
             child: GlassSurface(
               radius: 16,
+              blur: 0, // 面板背景已经模糊过，无需叠加
               padding:
                   const EdgeInsets.symmetric(horizontal: 11, vertical: 7),
               child: Text(
@@ -1559,6 +1560,7 @@ class _Pill extends StatelessWidget {
       onPressed: onTap,
       child: GlassSurface(
         radius: 15,
+        blur: 0, // 面板背景已经模糊过，无需叠加
         padding: const EdgeInsets.symmetric(horizontal: 11),
         child: SizedBox(
           height: 31,
@@ -1614,6 +1616,7 @@ class _CircleBtn extends StatelessWidget {
         height: 34,
         child: GlassSurface(
           circle: true,
+          blur: 0, // 面板背景已经模糊过，无需叠加
           child: Center(
             child: Icon(icon, size: 17, color: scheme.onSurfaceVariant),
           ),
