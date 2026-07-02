@@ -8,6 +8,7 @@ import 'share_intake.dart';
 import 'theme/app_colors.dart';
 import 'views/auto_record/auto_record_sheet.dart';
 import 'widgets/glass.dart';
+import 'widgets/pressable_scale.dart';
 import 'widgets/ios_dialogs.dart';
 import 'widgets/ios_form.dart';
 import 'widgets/ios_menu.dart';
@@ -146,6 +147,32 @@ class RootShell extends StatelessWidget {
                 context,
                 CupertinoPageRoute<void>(
                     builder: (_) => const TransactionListView()),
+              ),
+            ),
+          ),
+          // 底部渐变过渡（对标 Telegram 聊天底部）：列表内容滑到输入栏后面时
+          // 渐渐隐入背景色，而不是被“一刀切”遮住。不拦截点击。
+          Positioned(
+            left: 0,
+            right: 0,
+            bottom: 0,
+            height: 150,
+            child: IgnorePointer(
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                    colors: [
+                      AppColors.appBg(Theme.of(context).colorScheme)
+                          .withValues(alpha: 0.0),
+                      AppColors.appBg(Theme.of(context).colorScheme)
+                          .withValues(alpha: 0.85),
+                      AppColors.appBg(Theme.of(context).colorScheme),
+                    ],
+                    stops: const [0.0, 0.55, 1.0],
+                  ),
+                ),
               ),
             ),
           ),
@@ -599,9 +626,8 @@ class _BookSwitchChip extends StatelessWidget {
         (repo.books.isNotEmpty ? repo.books.first : null);
 
     return Builder(
-      builder: (ctx) => GestureDetector(
-        behavior: HitTestBehavior.opaque,
-        onTap: () => showIosMenu(ctx, [
+      builder: (ctx) => PressableScale(
+        onPressed: () => showIosMenu(ctx, [
           for (final b in repo.books)
             IosMenuItem(
               label: '${b.icon} ${b.name}',
@@ -652,9 +678,8 @@ class _SearchIconButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    return GestureDetector(
-      behavior: HitTestBehavior.opaque,
-      onTap: () => Navigator.of(context).push(
+    return PressableScale(
+      onPressed: () => Navigator.of(context).push(
         CupertinoPageRoute<void>(builder: (_) => const SearchView()),
       ),
       child: SizedBox(
@@ -688,9 +713,8 @@ class _MenuGlyphButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    return GestureDetector(
-      behavior: HitTestBehavior.opaque,
-      onTap: onTap,
+    return PressableScale(
+      onPressed: onTap,
       child: SizedBox(
         width: 38,
         height: 38,
@@ -772,9 +796,8 @@ class _AccountAvatar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    return InkWell(
-      onTap: onTap,
-      customBorder: const CircleBorder(),
+    return PressableScale(
+      onPressed: onTap,
       child: Container(
         width: 38,
         height: 38,

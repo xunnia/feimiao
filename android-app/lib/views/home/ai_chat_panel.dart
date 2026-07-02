@@ -643,7 +643,8 @@ class _AiChatPanelState extends State<AiChatPanel> {
                         controller: _scroll,
                         padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
                         itemCount: _msgs.length,
-                        itemBuilder: (_, i) => _buildMsg(_msgs[i]),
+                        itemBuilder: (_, i) =>
+                            _buildMsg(_msgs[i], isLast: i == _msgs.length - 1),
                       ),
               ),
               Padding(
@@ -736,7 +737,8 @@ class _AiChatPanelState extends State<AiChatPanel> {
                       controller: _scroll,
                       padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
                       itemCount: _msgs.length,
-                      itemBuilder: (_, i) => _buildMsg(_msgs[i]),
+                      itemBuilder: (_, i) =>
+                          _buildMsg(_msgs[i], isLast: i == _msgs.length - 1),
                     ),
                   ),
                   Padding(
@@ -903,7 +905,7 @@ class _AiChatPanelState extends State<AiChatPanel> {
     _runQuery(m.question);
   }
 
-  Widget _buildMsg(_Msg m) {
+  Widget _buildMsg(_Msg m, {bool isLast = false}) {
     if (m is _UserMsg) return _UserBubble(text: m.text);
     if (m is _ThinkingMsg) return const _ThinkingBubble();
     if (m is _InfoMsg) return _InfoBubble(text: m.text, error: m.error);
@@ -913,6 +915,8 @@ class _AiChatPanelState extends State<AiChatPanel> {
         animate: !m.shown,
         onShown: () => m.shown = true,
         onRegenerate: m.question.isEmpty ? null : () => _regenerate(m),
+        // 猫只出现在最后一条回复下（对齐 Claude），历史回复不重复放猫。
+        showMascot: isLast,
       );
     }
     if (m is _RecordMsg) {
@@ -1068,11 +1072,16 @@ class _AnswerBubble extends StatefulWidget {
   final bool animate;
   final VoidCallback? onShown;
   final VoidCallback? onRegenerate;
+
+  /// 是否在操作图标下放猫：只有列表最后一条回复为 true（对齐 Claude）。
+  final bool showMascot;
+
   const _AnswerBubble({
     required this.text,
     this.animate = true,
     this.onShown,
     this.onRegenerate,
+    this.showMascot = false,
   });
 
   @override
@@ -1222,9 +1231,11 @@ class _AnswerBubbleState extends State<_AnswerBubble> {
                   _action(_icRetry, widget.onRegenerate!),
               ],
             ),
-            const SizedBox(height: 2),
-            // 猫在操作图标下方、左侧；放大 30%。
-            Mascot(mood: _moodFor(widget.text), size: 52, animate: true),
+            if (widget.showMascot) ...[
+              const SizedBox(height: 2),
+              // 猫在操作图标下方、左侧；只跟着最后一条回复走。
+              Mascot(mood: _moodFor(widget.text), size: 52, animate: true),
+            ],
           ],
         ],
       ),
@@ -1492,7 +1503,7 @@ class _CatChip extends StatelessWidget {
 // 空态：猜你想问气泡
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// 建议 2×2 网格：浮在模糊背景上，半透明白底胶囊，便于阅读。
+/// 建议 2×2 网格：浮在模糊背景上，与底部输入框同款玻璃透明底胶囊。
 class _SuggestionGrid extends StatelessWidget {
   final List<String> items;
   final ValueChanged<String> onTap;
@@ -1511,13 +1522,10 @@ class _SuggestionGrid extends StatelessWidget {
         for (final s in items)
           PressableScale(
             onPressed: () => onTap(s),
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 7),
-              decoration: BoxDecoration(
-                color: scheme.surface.withValues(alpha: 0.78),
-                borderRadius: BorderRadius.circular(16),
-                border: Border.all(color: Colors.black.withValues(alpha: 0.05)),
-              ),
+            child: GlassSurface(
+              radius: 16,
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 11, vertical: 7),
               child: Text(
                 s,
                 style: TextStyle(

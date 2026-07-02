@@ -204,15 +204,6 @@ class _HomeViewState extends State<HomeView> {
               },
             ),
           ),
-          SliverToBoxAdapter(
-            child: _InsightStrip(
-              summary: summary,
-              repo: repo,
-              year: _year,
-              month: _month,
-              budgetStatus: budgetStatus,
-            ),
-          ),
           if (sections.isEmpty)
             SliverToBoxAdapter(child: _FilterEmptyHint(filter: _filter))
           else
@@ -881,7 +872,9 @@ class _HeroBlock extends StatelessWidget {
   }
 }
 
-/// 列表上方的 全部 / 支出 / 收入 分段筛选（iOS 风）。
+/// 列表上方的 全部 / 支出 / 收入 分段筛选。
+/// 对标 Telegram 聊天文件夹：外层白色大胶囊（细边+淡阴影），
+/// 选中项是里面的浅灰小胶囊，切换时平滑过渡。
 class _FilterSegment extends StatelessWidget {
   final _TxFilter value;
   final ValueChanged<_TxFilter> onChanged;
@@ -898,28 +891,23 @@ class _FilterSegment extends StatelessWidget {
         child: GestureDetector(
           behavior: HitTestBehavior.opaque,
           onTap: () => onChanged(f),
-          child: Container(
-            margin: const EdgeInsets.all(2),
-            padding: const EdgeInsets.symmetric(vertical: 6),
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 180),
+            curve: Curves.easeOut,
+            margin: const EdgeInsets.all(3),
+            padding: const EdgeInsets.symmetric(vertical: 7),
             alignment: Alignment.center,
             decoration: BoxDecoration(
-              color: sel ? Colors.white : Colors.transparent,
-              borderRadius: BorderRadius.circular(8),
-              boxShadow: sel
-                  ? [
-                      BoxShadow(
-                        color: Colors.black.withValues(alpha: 0.06),
-                        blurRadius: 4,
-                        offset: const Offset(0, 1),
-                      ),
-                    ]
-                  : null,
+              color: sel
+                  ? scheme.surfaceContainerHighest
+                  : Colors.transparent,
+              borderRadius: BorderRadius.circular(999),
             ),
             child: Text(
               label,
               style: Theme.of(context).textTheme.labelMedium?.copyWith(
-                    color: sel ? scheme.onSurface : scheme.onSurfaceVariant,
-                    fontWeight: sel ? FontWeight.w500 : FontWeight.w400,
+                    color: scheme.onSurface,
+                    fontWeight: sel ? FontWeight.w600 : FontWeight.w400,
                   ),
             ),
           ),
@@ -931,8 +919,16 @@ class _FilterSegment extends StatelessWidget {
       padding: const EdgeInsets.fromLTRB(16, 2, 16, 8),
       child: Container(
         decoration: BoxDecoration(
-          color: scheme.surfaceContainerHighest.withValues(alpha: 0.6),
-          borderRadius: BorderRadius.circular(10),
+          color: AppColors.card(scheme),
+          borderRadius: BorderRadius.circular(999),
+          border: Border.all(color: Colors.black.withValues(alpha: 0.06)),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.04),
+              blurRadius: 8,
+              offset: const Offset(0, 1),
+            ),
+          ],
         ),
         child: Row(
           children: [
@@ -964,139 +960,6 @@ class _FilterEmptyHint extends StatelessWidget {
           style: Theme.of(context).textTheme.labelMedium?.copyWith(
                 color: scheme.onSurfaceVariant,
               ),
-        ),
-      ),
-    );
-  }
-}
-
-/// 首页智能洞察小条：会随数据变化的"懂你"提示。
-/// 优先级：超预算 → 今天同类第N笔 → 比上月多花最多 → 兜底本月最大支出。
-class _InsightStrip extends StatelessWidget {
-  final MonthlySummary summary;
-  final AppRepository repo;
-  final int year;
-  final int month;
-  final BudgetStatus? budgetStatus;
-
-  const _InsightStrip({
-    required this.summary,
-    required this.repo,
-    required this.year,
-    required this.month,
-    required this.budgetStatus,
-  });
-
-  String _m(Decimal d) => MoneyFormat.string(d);
-
-  ({String emoji, String text, Color color})? _pick(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    final now = DateTime.now();
-    final isCurrent = year == now.year && month == now.month;
-    final gold = AppColors.income(scheme);
-    final warn = AppColors.warning;
-
-    // 1. 超预算(仅当月)
-    final bs = budgetStatus;
-    if (isCurrent && bs != null && bs.remaining < Decimal.zero) {
-      return (
-        emoji: '🔥',
-        text: '本月已超预算 ${_m(Decimal.zero - bs.remaining)}，悠着点喵~',
-        color: warn,
-      );
-    }
-
-    // 2. 今天同类第 N 笔(仅当月,N≥2)
-    if (isCurrent) {
-      final counts = <String, int>{};
-      for (final t in repo.transactions) {
-        if (t.txKind != TransactionKind.expense) continue;
-        if (t.amount <= Decimal.zero) continue;
-        if (t.date.year != now.year ||
-            t.date.month != now.month ||
-            t.date.day != now.day) continue;
-        final name = t.categoryNameZh;
-        if (name.isEmpty || name == '未分类') continue;
-        counts[name] = (counts[name] ?? 0) + 1;
-      }
-      String? rname;
-      var rn = 0;
-      counts.forEach((k, v) {
-        if (v > rn) {
-          rn = v;
-          rname = k;
-        }
-      });
-      if (rn >= 2 && rname != null) {
-        return (emoji: '🐱', text: '今天第 $rn 次「$rname」啦~', color: gold);
-      }
-    }
-
-    // 3. 比上月多花最多的分类
-    final pm = DateTime(year, month - 1, 1);
-    final prev = StatisticsEngine.monthlySummary(repo.allRecords,
-        year: pm.year, month: pm.month);
-    String? gname;
-    var gdelta = Decimal.zero;
-    for (final c in summary.expenseByCategory) {
-      if (c.total <= Decimal.zero) continue;
-      final pv = prev.expenseByCategory
-              .where((p) => p.name == c.name)
-              .firstOrNull
-              ?.total ??
-          Decimal.zero;
-      final d = c.total - pv;
-      if (d > gdelta) {
-        gdelta = d;
-        gname = c.name;
-      }
-    }
-    if (gname != null && gdelta.toDouble() >= 50) {
-      return (emoji: '📈', text: '「$gname」比上月多花了 ${_m(gdelta)}', color: warn);
-    }
-
-    // 4. 兜底:本月最大支出
-    final pos =
-        summary.expenseByCategory.where((c) => c.total > Decimal.zero).toList();
-    if (pos.isEmpty) return null;
-    final top = pos.reduce((a, b) => a.total >= b.total ? a : b);
-    return (
-      emoji: '💸',
-      text: '本月最大头「${top.name}」${_m(top.total)}（${(top.share * 100).round()}%）',
-      color: gold,
-    );
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final insight = _pick(context);
-    if (insight == null) return const SizedBox.shrink();
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 2, 16, 6),
-      child: GestureDetector(
-        onTap: () => Navigator.push<void>(
-          context,
-          CupertinoPageRoute<void>(builder: (_) => const StatisticsView()),
-        ),
-        child: Padding(
-          padding: const EdgeInsets.symmetric(vertical: 8),
-          child: Row(
-            children: [
-              Text(insight.emoji, style: const TextStyle(fontSize: 15)),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Text(
-                  insight.text,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: Theme.of(context).textTheme.labelMedium?.copyWith(
-                        color: insight.color,
-                        fontWeight: FontWeight.w500,
-                      ),
-                ),
-              ),
-            ],
-          ),
         ),
       ),
     );
@@ -1618,7 +1481,7 @@ class _EmptyState extends StatelessWidget {
     return Column(
       mainAxisAlignment: MainAxisAlignment.center,
       children: [
-        const Mascot(mood: MascotMood.empty, size: 72, animate: true),
+        const Mascot(mood: MascotMood.empty, size: 216, animate: true),
         const SizedBox(height: 16),
         Text(
           title,

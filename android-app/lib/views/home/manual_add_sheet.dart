@@ -4,12 +4,9 @@ import 'package:flutter/cupertino.dart' show CupertinoSlidingSegmentedControl;
 import 'package:provider/provider.dart';
 
 import '../../core/amount_expression.dart';
-import '../../core/budget/budget_engine.dart';
 import '../../core/haptics.dart';
 import '../../core/models/transaction_kind.dart';
-import '../../core/money_format.dart';
 import '../../data/app_repository.dart';
-import '../../theme/app_colors.dart';
 import '../../widgets/pressable_scale.dart';
 import '../../widgets/tag_selector.dart';
 import '../quick_add/amount_keypad.dart';
@@ -158,20 +155,6 @@ class _ManualAddSheetState extends State<ManualAddSheet> {
         // ── 金额显示 ──
         _AmountDisplay(
             expression: _expression, version: _expressionVersion),
-
-        // ── 今日可花横幅（支出时按需显示）──
-        if (_kind == TransactionKind.expense)
-          Consumer<AppRepository>(
-            builder: (context, repo, _) {
-              final budget = repo.monthlyBudget;
-              if (budget == null) return const SizedBox.shrink();
-              final status = BudgetEngine.status(
-                monthlyBudget: budget,
-                records: repo.allRecords,
-              );
-              return _TodayAllowanceBanner(status: status);
-            },
-          ),
 
         // ── 分类格（Expanded 撑满剩余空间）──
         Expanded(
@@ -454,47 +437,6 @@ class _DateButton extends StatelessWidget {
         label: Text(_label()),
         visualDensity: VisualDensity.compact,
         padding: const EdgeInsets.symmetric(horizontal: 4),
-      ),
-    );
-  }
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// 今日可花横幅
-// ─────────────────────────────────────────────────────────────────────────────
-
-class _TodayAllowanceBanner extends StatelessWidget {
-  final BudgetStatus status;
-
-  const _TodayAllowanceBanner({required this.status});
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    final isOver = status.todayAllowance < Decimal.zero;
-    final bgColor = isOver
-        ? AppColors.warning.withValues(alpha: 0.12)
-        : scheme.primaryContainer.withValues(alpha: 0.5);
-    final textColor = isOver ? AppColors.warning : scheme.onSurfaceVariant;
-
-    final allowanceText = isOver
-        ? '今日已超出节奏 ${MoneyFormat.string(-status.todayAllowance)}，缓一缓'
-        : '今日可花 ${MoneyFormat.string(status.todayAllowance)} · 本月剩 ${MoneyFormat.string(status.remaining)}';
-
-    return Container(
-      width: double.infinity,
-      margin: const EdgeInsets.fromLTRB(16, 0, 16, 4),
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-      decoration: BoxDecoration(
-        color: bgColor,
-        borderRadius: BorderRadius.circular(8),
-      ),
-      child: Text(
-        allowanceText,
-        style: Theme.of(context).textTheme.labelSmall?.copyWith(
-              color: textColor,
-            ),
-        textAlign: TextAlign.center,
       ),
     );
   }
