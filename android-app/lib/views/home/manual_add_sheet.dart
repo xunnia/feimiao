@@ -30,7 +30,14 @@ Future<void> showManualAddSheet(
   BuildContext context, {
   VoidCallback? onSwitchToAi,
   TransactionEntity? edit,
-}) {
+}) async {
+  // 键盘开着（如从 AI 面板切过来）先收掉再弹卡：
+  // 否则卡片会先被键盘位置顶高、键盘收起后再落下来（"先上再下"的抖动）。
+  if (MediaQuery.viewInsetsOf(context).bottom > 0) {
+    FocusManager.instance.primaryFocus?.unfocus();
+    await Future<void>.delayed(const Duration(milliseconds: 130));
+  }
+  if (!context.mounted) return;
   return showGeneralDialog<void>(
     context: context,
     barrierDismissible: true,
@@ -40,9 +47,10 @@ Future<void> showManualAddSheet(
     pageBuilder: (ctx, _, __) => SafeArea(
       top: false,
       // 键盘弹起时整卡上移，备注不会被挡（对齐咔皮）。
+      // 时长/曲线与卡内数字键盘收起动画一致，合成"一次上移"，无中间抖动。
       child: AnimatedPadding(
-        duration: const Duration(milliseconds: 160),
-        curve: Curves.easeOut,
+        duration: const Duration(milliseconds: 250),
+        curve: Curves.easeOutCubic,
         padding:
             EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(ctx).bottom),
         child: Align(
@@ -125,6 +133,9 @@ class _ManualAddSheetState extends State<ManualAddSheet> {
 
   /// 备注输入焦点：聚焦时收起数字键盘，让位给系统键盘（对齐咔皮）。
   final FocusNode _noteFocus = FocusNode();
+
+  /// 二级面板浮层的锚点：挂在被点的那行分类上，浮层跟着行走。
+  final LayerLink _panelLink = LayerLink();
 
   bool get _isEdit => widget.edit != null;
 
@@ -339,26 +350,18 @@ class _ManualAddSheetState extends State<ManualAddSheet> {
     return ConstrainedBox(
       constraints:
           BoxConstraints(maxHeight: maxH.clamp(300.0, screenH * 0.92)),
-      // 高度变化（二级面板开合/键盘收放）平滑过渡，不突兀跳变。
-      child: AnimatedSize(
-        duration: const Duration(milliseconds: 220),
-        curve: Curves.easeOutCubic,
-        alignment: Alignment.topCenter,
-        child: Column(
+      child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          // 拖动条：下滑手势关卡（对齐底部弹层习惯）。
+          // ── 顶部栏：支出/收入 分段（对齐主页大小）+ 模式胶囊 + 关闭 ──
+          // （拖动把手已删——用处小还占地方；下滑关卡手势保留在顶栏空白区。）
           GestureDetector(
-            behavior: HitTestBehavior.opaque,
+            behavior: HitTestBehavior.translucent,
             onVerticalDragEnd: (d) {
               if ((d.primaryVelocity ?? 0) > 300) Navigator.pop(context);
             },
-            child: const _DragHandle(),
-          ),
-
-          // ── 顶部栏：支出/收入 分段（对齐主页大小）+ 模式胶囊 + 关闭 ──
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 8, 12, 0),
+            child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 14, 12, 0),
             child: Row(
               children: [
                 SizedBox(
@@ -383,9 +386,12 @@ class _ManualAddSheetState extends State<ManualAddSheet> {
                 ),
               ],
             ),
+            ),
           ),
 
           // ── 分类区（内容多高就多高，放不下才滚动）──
+          // 二级面板是**浮层**：锚在被点的那行下面、悬浮在网格上方，
+          // 不占布局位置，所以卡片整体高度纹丝不动（用户 0703 要求）。
           Flexible(
             child: Consumer<AppRepository>(
               builder: (context, repo, _) {
@@ -394,41 +400,92 @@ class _ManualAddSheetState extends State<ManualAddSheet> {
                   for (final c in cats)
                     if (repo.childrenOf(c.id).isNotEmpty) c.id,
                 };
-                // 5 个一行切行，展开面板插在所在行下面（对齐咔皮）。
                 const cols = 5;
                 final rows = <List<CategoryEntity>>[];
                 for (var i = 0; i < cats.length; i += cols) {
                   rows.add(cats.sublist(
                       i, i + cols > cats.length ? cats.length : i + cols));
                 }
-                return SingleChildScrollView(
-                  child: Column(
+                final activeRow = !panelOpen
+                    ? -1
+                    : rows.indexWhere(
+                        (r) => r.any((c) => c.id == _panelParentId));
+
+                Widget grid(List<CategoryEntity> row) => CategoryGrid(
+                      categories: row,
+                      selectedId: _activeParentId,
+                      expandableIds: expandable,
+                      expandedId: _panelParentId,
+                      onSelected: (c) => _onCategoryTap(c, repo),
+                    );
+
+                return LayoutBuilder(
+                  builder: (context, constraints) => Stack(
+                    clipBehavior: Clip.none,
                     children: [
-                      for (final row in rows) ...[
-                        _blurIf(
-                          panelOpen &&
-                              !row.any((c) => c.id == _panelParentId),
-                          CategoryGrid(
-                            categories: row,
-                            selectedId: _activeParentId,
-                            expandableIds: expandable,
-                            expandedId: _panelParentId,
-                            onSelected: (c) => _onCategoryTap(c, repo),
+                      SingleChildScrollView(
+                        child: Column(
+                          children: [
+                            for (var i = 0; i < rows.length; i++)
+                              i == activeRow
+                                  // 被点的那行挂上锚点，浮层跟着它走（滚动也跟随）
+                                  ? CompositedTransformTarget(
+                                      link: _panelLink,
+                                      child: grid(rows[i]),
+                                    )
+                                  : grid(rows[i]),
+                            const SizedBox(height: 4),
+                          ],
+                        ),
+                      ),
+                      if (panelOpen) ...[
+                        // 网格区盖一层白雾模糊，点一下收起
+                        Positioned.fill(
+                          child: GestureDetector(
+                            behavior: HitTestBehavior.opaque,
+                            onTap: _closePanel,
+                            child: ClipRect(
+                              child: BackdropFilter(
+                                filter: ImageFilter.blur(
+                                    sigmaX: 3, sigmaY: 3),
+                                child: Container(
+                                  color: Colors.white
+                                      .withValues(alpha: 0.3),
+                                ),
+                              ),
+                            ),
                           ),
                         ),
-                        if (panelOpen &&
-                            row.any((c) => c.id == _panelParentId))
-                          _SubcategoryPanel(
-                            children:
-                                repo.childrenOfRanked(_panelParentId!),
-                            selectedId: _selectedCategoryId,
-                            onSelected: (c) => setState(() {
-                              _selectedCategoryId = c.id;
-                              _panelParentId = null;
-                            }),
+                        // 被点的那行在雾层上再画一遍，保持清晰可点（对齐咔皮）
+                        if (activeRow >= 0)
+                          CompositedTransformFollower(
+                            link: _panelLink,
+                            targetAnchor: Alignment.topLeft,
+                            followerAnchor: Alignment.topLeft,
+                            child: SizedBox(
+                              width: constraints.maxWidth,
+                              child: grid(rows[activeRow]),
+                            ),
                           ),
+                        // 二级面板：悬浮在锚点行正下方
+                        CompositedTransformFollower(
+                          link: _panelLink,
+                          targetAnchor: Alignment.bottomCenter,
+                          followerAnchor: Alignment.topCenter,
+                          child: SizedBox(
+                            width: constraints.maxWidth,
+                            child: _SubcategoryPanel(
+                              children:
+                                  repo.childrenOfRanked(_panelParentId!),
+                              selectedId: _selectedCategoryId,
+                              onSelected: (c) => setState(() {
+                                _selectedCategoryId = c.id;
+                                _panelParentId = null;
+                              }),
+                            ),
+                          ),
+                        ),
                       ],
-                      const SizedBox(height: 4),
                     ],
                   ),
                 );
@@ -471,24 +528,28 @@ class _ManualAddSheetState extends State<ManualAddSheet> {
                   onRemoveImage: () => setState(() => _imagePath = null),
                 ),
                 // 备注聚焦时收起数字键盘，让系统键盘顶上来也挡不住备注（对齐咔皮）。
-                if (!_noteFocus.hasFocus)
-                  Padding(
-                    padding: const EdgeInsets.only(bottom: 14, top: 6),
-                    child: AmountKeypad(
-                      expression: _expression,
-                      onExpressionChanged: _onExpressionChanged,
-                      onSave: _save,
-                      onSaveAgain: _isEdit ? null : _saveAgain,
-                      saveLabel: _isEdit ? '保存' : '完成',
-                    ),
-                  )
-                else
-                  const SizedBox(height: 10),
+                // 收放动画与整卡上移的 AnimatedPadding 同时长同曲线，合成一次过渡。
+                AnimatedSize(
+                  duration: const Duration(milliseconds: 250),
+                  curve: Curves.easeOutCubic,
+                  alignment: Alignment.topCenter,
+                  child: _noteFocus.hasFocus
+                      ? const SizedBox(width: double.infinity, height: 10)
+                      : Padding(
+                          padding: const EdgeInsets.only(bottom: 14, top: 6),
+                          child: AmountKeypad(
+                            expression: _expression,
+                            onExpressionChanged: _onExpressionChanged,
+                            onSave: _save,
+                            onSaveAgain: _isEdit ? null : _saveAgain,
+                            saveLabel: _isEdit ? '保存' : '完成',
+                          ),
+                        ),
+                ),
               ],
             ),
           ),
         ],
-        ),
       ),
     );
   }
@@ -648,7 +709,7 @@ class _ChipsRow extends StatelessWidget {
             repo.accounts.firstOrNull;
 
     return SizedBox(
-      height: 40,
+      height: 32,
       child: ListView(
         scrollDirection: Axis.horizontal,
         padding: const EdgeInsets.symmetric(horizontal: 12),
@@ -752,17 +813,17 @@ class _Chip extends StatelessWidget {
     final scheme = Theme.of(context).colorScheme;
     final accent = selectedColor ?? scheme.primary;
     final fg = selected ? accent : scheme.onSurfaceVariant;
-    // 与全 App 按钮同一套设计：白底 + 发丝边 + 淡影（不要灰底）。
+    // 与全 App 按钮同一套设计：白底 + 发丝边 + 淡影；全圆角胶囊、小巧（-20%）。
     return PressableScale(
       onPressed: onTap,
       child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 10),
+        padding: const EdgeInsets.symmetric(horizontal: 9),
         alignment: Alignment.center,
         decoration: BoxDecoration(
           color: selected
               ? accent.withValues(alpha: 0.12)
               : AppColors.card(scheme),
-          borderRadius: BorderRadius.circular(10),
+          borderRadius: BorderRadius.circular(999),
           border: Border.all(
             color: selected
                 ? accent.withValues(alpha: 0.6)
@@ -781,12 +842,12 @@ class _Chip extends StatelessWidget {
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(icon, size: 14, color: fg),
-            const SizedBox(width: 5),
+            Icon(icon, size: 12, color: fg),
+            const SizedBox(width: 4),
             Text(
               label,
               style: TextStyle(
-                fontSize: 12,
+                fontSize: 11,
                 fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
                 color: fg,
               ),
@@ -892,7 +953,13 @@ class _AmountCard extends StatelessWidget {
                 ),
             ],
           ),
-          // ── 备注 + 照片/拍照（对齐咔皮：无分隔线、无输入框边线）──
+          // ── 金额和备注之间的细灰分隔线（对齐咔皮）──
+          Container(
+            height: 0.6,
+            margin: const EdgeInsets.only(top: 8, right: 8),
+            color: scheme.outlineVariant,
+          ),
+          // ── 备注 + 照片/拍照（备注无输入框边线，对齐咔皮）──
           Row(
             children: [
               Expanded(
@@ -965,32 +1032,6 @@ class _IconBtn extends StatelessWidget {
       child: Padding(
         padding: const EdgeInsets.all(8),
         child: Icon(icon, size: 19, color: scheme.onSurfaceVariant),
-      ),
-    );
-  }
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// 拖动条
-// ─────────────────────────────────────────────────────────────────────────────
-
-class _DragHandle extends StatelessWidget {
-  const _DragHandle();
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return Padding(
-      padding: const EdgeInsets.only(top: 12, bottom: 4),
-      child: Center(
-        child: Container(
-          width: 40,
-          height: 4,
-          decoration: BoxDecoration(
-            color: scheme.outlineVariant,
-            borderRadius: BorderRadius.circular(2),
-          ),
-        ),
       ),
     );
   }

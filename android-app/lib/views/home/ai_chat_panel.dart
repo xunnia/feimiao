@@ -1005,7 +1005,7 @@ class _UserBubble extends StatelessWidget {
             style: const TextStyle(
               fontSize: 15,
               fontWeight: FontWeight.w400,
-              fontVariations: [FontVariation('wght', 350)],
+              fontVariations: [FontVariation('wght', 330)],
             )),
       ),
     );
@@ -1163,7 +1163,7 @@ class _AnswerBubbleState extends State<_AnswerBubble> {
   // 不支持可变字重的机型回退到 fontWeight w500。
   TextStyle _boldOf(TextStyle base) => base.copyWith(
         fontWeight: FontWeight.w500,
-        fontVariations: const [FontVariation('wght', 450)],
+        fontVariations: const [FontVariation('wght', 430)],
       );
 
   // 轻量 markdown → 富文本：处理 **加粗**、行首 - / * 列表、# 标题；保留可选中。
@@ -1204,7 +1204,7 @@ class _AnswerBubbleState extends State<_AnswerBubble> {
       fontSize: 15,
       height: 1.5,
       fontWeight: FontWeight.w400,
-      fontVariations: const [FontVariation('wght', 350)],
+      fontVariations: const [FontVariation('wght', 330)],
       color: scheme.onSurface,
     );
     return Padding(
@@ -1271,7 +1271,7 @@ class _GreetingLine extends StatelessWidget {
         fontSize: 15,
         height: 1.45,
         fontWeight: FontWeight.w400,
-        fontVariations: const [FontVariation('wght', 350)],
+        fontVariations: const [FontVariation('wght', 330)],
         color: scheme.onSurface,
       ),
     );

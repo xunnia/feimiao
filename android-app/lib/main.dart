@@ -1,3 +1,5 @@
+import 'dart:ui' show ImageFilter;
+
 import 'package:flutter/material.dart';
 import 'package:flutter/cupertino.dart' show CupertinoPageRoute, CupertinoIcons;
 import 'package:provider/provider.dart';
@@ -115,12 +117,33 @@ class _RootShellState extends State<RootShell>
     vsync: this,
     duration: const Duration(milliseconds: 240),
   );
-  bool _edgeDrag = false;
+
+  // 抽屉拖动手势用 Listener 裸指针实现（不进手势竞技场）：
+  // 这样在账单行（有左滑操作的 Slidable）上右滑也能拉出抽屉，
+  // 而行自己的左滑编辑不受影响——两边永远不打架。
+  Offset? _ptrStart;
+  bool _ptrDragging = false;
+  double _ptrLastX = 0;
+  double _ptrLastDx = 0;
 
   void _openDrawer() =>
       _drawerCtl.animateTo(1, curve: Curves.easeOutCubic);
   void _closeDrawer() =>
       _drawerCtl.animateTo(0, curve: Curves.easeOutCubic);
+
+  /// 指针抬起：按最后一段滑动方向（快挥）或当前进度落定开/关。
+  void _settlePointerDrag() {
+    _ptrStart = null;
+    if (!_ptrDragging) return;
+    _ptrDragging = false;
+    if (_ptrLastDx > 6) {
+      _openDrawer();
+    } else if (_ptrLastDx < -6) {
+      _closeDrawer();
+    } else {
+      _drawerCtl.value >= 0.5 ? _openDrawer() : _closeDrawer();
+    }
+  }
 
   @override
   void dispose() {
@@ -132,7 +155,8 @@ class _RootShellState extends State<RootShell>
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final screenW = MediaQuery.sizeOf(context).width;
-    final drawerW = (screenW * 0.82).clamp(260.0, 340.0);
+    // 抽屉占 75%（用户 0703：0.82 偏大）。
+    final drawerW = (screenW * 0.75).clamp(240.0, 320.0);
 
     return AnimatedBuilder(
       animation: _drawerCtl,
@@ -158,45 +182,52 @@ class _RootShellState extends State<RootShell>
                   child: _DrawerPanel(onClose: _closeDrawer),
                 ),
                 // ── 上层：主页面卡片，右移 + 圆角 + 阴影 ──
-                GestureDetector(
-                  // 左缘右滑拉开抽屉；开着时任意左滑关上（行内左滑删除不受影响，
-                  // 因为 Slidable 在手势竞技场里更深、优先赢）。
-                  onHorizontalDragStart: (d) {
-                    // 左半屏右滑即可拉出抽屉（行内左滑删除在手势竞技场里更深、
-                    // 优先赢，不受影响）；抽屉开着时任意位置可滑动关。
-                    _edgeDrag = _drawerCtl.value > 0 ||
-                        d.globalPosition.dx < screenW * 0.5;
+                // 拖动手势用 Listener 裸指针：不进手势竞技场，所以在账单行
+                // （有左滑操作的 Slidable）上右滑也能拉出抽屉，互不打架。
+                Listener(
+                  behavior: HitTestBehavior.translucent,
+                  onPointerDown: (e) {
+                    _ptrStart = e.position;
+                    _ptrDragging = false;
+                    _ptrLastDx = 0;
                   },
-                  onHorizontalDragUpdate: (d) {
-                    if (!_edgeDrag) return;
-                    _drawerCtl.value =
-                        (_drawerCtl.value + d.delta.dx / drawerW)
-                            .clamp(0.0, 1.0);
-                  },
-                  onHorizontalDragEnd: (d) {
-                    if (!_edgeDrag) return;
-                    _edgeDrag = false;
-                    final v = d.primaryVelocity ?? 0;
-                    if (v > 250) {
-                      _openDrawer();
-                    } else if (v < -250) {
-                      _closeDrawer();
+                  onPointerMove: (e) {
+                    final start = _ptrStart;
+                    if (start == null) return;
+                    if (!_ptrDragging) {
+                      final total = e.position - start;
+                      final open = _drawerCtl.value > 0.01;
+                      // 横向位移明显大于纵向才接管，不干扰列表上下滚动；
+                      // 关着时只认「向右拖」（左滑仍归账单行的编辑操作）。
+                      final horizontal = total.dx.abs() > 24 &&
+                          total.dx.abs() > total.dy.abs() * 1.6;
+                      if (horizontal && (open ? total.dx < 0 : total.dx > 0)) {
+                        _ptrDragging = true;
+                        _ptrLastX = e.position.dx;
+                      }
                     } else {
-                      _drawerCtl.value > 0.5 ? _openDrawer() : _closeDrawer();
+                      _drawerCtl.value = (_drawerCtl.value +
+                              (e.position.dx - _ptrLastX) / drawerW)
+                          .clamp(0.0, 1.0);
+                      _ptrLastDx = e.delta.dx;
+                      _ptrLastX = e.position.dx;
                     }
                   },
+                  onPointerUp: (_) => _settlePointerDrag(),
+                  onPointerCancel: (_) => _settlePointerDrag(),
                   child: Transform.translate(
                     offset: Offset(drawerW * t, 0),
                     child: Container(
                       decoration: BoxDecoration(
                         borderRadius: BorderRadius.circular(26 * t),
+                        // 阴影收敛（blur 小、不偏移），避免在左下圆角外
+                        // 晕出一块灰底。
                         boxShadow: t > 0.01
                             ? [
                                 BoxShadow(
                                   color:
-                                      Colors.black.withValues(alpha: 0.18 * t),
-                                  blurRadius: 32,
-                                  offset: const Offset(-6, 0),
+                                      Colors.black.withValues(alpha: 0.10 * t),
+                                  blurRadius: 18,
                                 ),
                               ]
                             : null,
@@ -206,15 +237,22 @@ class _RootShellState extends State<RootShell>
                         child: Stack(
                           children: [
                             _MainScaffold(onMenu: _openDrawer),
-                            // 打开时主页盖一层轻遮罩：点一下关抽屉
+                            // 打开时主页盖白色半透明模糊遮罩（对齐 Claude），
+                            // 点一下关抽屉。
                             if (_drawerCtl.value > 0.01)
                               Positioned.fill(
                                 child: GestureDetector(
                                   behavior: HitTestBehavior.opaque,
                                   onTap: _closeDrawer,
-                                  child: Container(
-                                    color: Colors.black
-                                        .withValues(alpha: 0.05 * t),
+                                  child: BackdropFilter(
+                                    filter: ImageFilter.blur(
+                                      sigmaX: 5 * t,
+                                      sigmaY: 5 * t,
+                                    ),
+                                    child: Container(
+                                      color: Colors.white
+                                          .withValues(alpha: 0.35 * t),
+                                    ),
                                   ),
                                 ),
                               ),
@@ -666,9 +704,9 @@ class _DrawerPanelState extends State<_DrawerPanel> {
               ),
             ),
 
-            // ── 底部：头像（左下角，对齐 Claude）+ 新建账本胶囊 ──
+            // ── 底部：头像（左下角，对齐 Claude）+ 新建账本胶囊（右侧多留边）──
             Padding(
-              padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+              padding: const EdgeInsets.fromLTRB(16, 8, 24, 16),
               child: Row(
                 children: [
                   _AccountAvatar(
