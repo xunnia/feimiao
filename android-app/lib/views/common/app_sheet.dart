@@ -1,3 +1,5 @@
+import 'dart:ui' show ImageFilter;
+
 import 'package:flutter/material.dart';
 
 /// 统一的底部弹层外观：圆角顶 + 可滚动撑高 + surface 底色。
@@ -19,5 +21,56 @@ Future<T?> appSheet<T>(
       borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
     ),
     builder: (_) => child,
+  );
+}
+
+/// 重量级底部弹层（与手动记账/AI 面板同一套出场）：
+/// 背景高斯模糊渐入 + 浮层上滑淡入 + 键盘弹起时整卡上移。
+/// 「同类功能同一种设计」——新的大弹层一律用它。
+Future<T?> showBlurSheet<T>(BuildContext context, {required Widget child}) {
+  return showGeneralDialog<T>(
+    context: context,
+    barrierDismissible: true,
+    barrierLabel: '关闭',
+    barrierColor: Colors.black.withValues(alpha: 0.12),
+    transitionDuration: const Duration(milliseconds: 240),
+    pageBuilder: (ctx, _, __) => SafeArea(
+      top: false,
+      child: AnimatedPadding(
+        duration: const Duration(milliseconds: 250),
+        curve: Curves.easeOutCubic,
+        padding: EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(ctx).bottom),
+        child: Align(
+          alignment: Alignment.bottomCenter,
+          child: ClipRRect(
+            borderRadius:
+                const BorderRadius.vertical(top: Radius.circular(24)),
+            child: Material(
+              color: Theme.of(ctx).colorScheme.surface,
+              child: child,
+            ),
+          ),
+        ),
+      ),
+    ),
+    transitionBuilder: (ctx, anim, _, child) {
+      final curved = CurvedAnimation(parent: anim, curve: Curves.easeOutCubic);
+      return BackdropFilter(
+        filter: ImageFilter.blur(
+          sigmaX: 10 * anim.value,
+          sigmaY: 10 * anim.value,
+        ),
+        child: FadeTransition(
+          opacity: anim,
+          child: SlideTransition(
+            position: Tween<Offset>(
+              begin: const Offset(0, 0.06),
+              end: Offset.zero,
+            ).animate(curved),
+            child: child,
+          ),
+        ),
+      );
+    },
   );
 }

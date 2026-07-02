@@ -17,6 +17,7 @@ import '../../core/meal_time.dart';
 import '../../core/spending_anomaly.dart';
 import '../../core/ai/natural_language_entry_parser.dart';
 import '../../core/haptics.dart';
+import '../../core/models/cat_svg_icon.dart';
 import '../../core/models/category_seed.dart';
 import '../../core/models/transaction_kind.dart';
 import '../../core/meow_insights.dart';
@@ -24,6 +25,8 @@ import '../../core/money_format.dart';
 import '../../data/app_repository.dart';
 import '../../theme/app_colors.dart';
 import '../../widgets/glass.dart';
+import '../../widgets/ios_dialogs.dart';
+import '../../widgets/ios_menu.dart';
 import '../../widgets/mascot.dart';
 import '../../widgets/pressable_scale.dart';
 import 'record_extras_sheet.dart';
@@ -574,17 +577,22 @@ class _AiChatPanelState extends State<AiChatPanel> {
     return sibs.take(6).toList();
   }
 
-  // ── 撤销：删掉刚才保存的那几笔 ─────────────────────────────────────────
-  Future<void> _undo(_RecordMsg msg) async {
-    final repo = context.read<AppRepository>();
-    for (final id in msg.savedIds) {
-      await repo.deleteTransaction(id);
-    }
+  // ── 删除单笔：明细卡上的「删除」芯片（带确认，替代旧的整条撤销）────────────
+  Future<void> _deleteEntry(_RecordMsg msg, int i) async {
+    final id = i < msg.txnIds.length ? msg.txnIds[i] : null;
+    if (id == null) return;
+    final ok = await showConfirmDialog(
+      context,
+      title: '删除这笔账？',
+      message: '删除后不可恢复。',
+      confirmText: '删除',
+      destructive: true,
+    );
+    if (!ok || !mounted) return;
+    await context.read<AppRepository>().deleteTransaction(id);
     if (!mounted) return;
-    setState(() {
-      msg.saved = false;
-      msg.savedIds = [];
-    });
+    Haptics.selection();
+    setState(() => msg.deletedIdx.add(i));
   }
 
   // ── build ───────────────────────────────────────────────────────────────
@@ -923,10 +931,11 @@ class _AiChatPanelState extends State<AiChatPanel> {
       final repo = context.read<AppRepository>();
       return _RecordBubble(
         msg: m,
+        bookName: repo.currentBook?.name ?? '总账本',
         onSave: () => _save(m),
-        onUndo: () => _undo(m),
         candidatesFor: (i) => _catCandidates(repo, m, i),
         onPickCat: (i, cat) => _pickCategory(m, i, cat),
+        onDeleteEntry: (i) => _deleteEntry(m, i),
       );
     }
     return const SizedBox.shrink();
@@ -965,6 +974,9 @@ class _RecordMsg extends _Msg {
   bool saved;
   List<int> savedIds;
   List<int?> txnIds; // 已入库时,每个条目对应的记录 id(无金额为 null);供按条目改分类
+
+  /// 已被用户从明细卡上删除的条目下标（运行时状态，不跨重启）。
+  final Set<int> deletedIdx = <int>{};
   String savedFeedback; // 记完后猫给的一句数据反馈
   _RecordMsg({
     required this.entries,
@@ -1278,20 +1290,25 @@ class _GreetingLine extends StatelessWidget {
   }
 }
 
-// ── 记账确认卡 ───────────────────────────────────────────────────────────────
+// ── 记账卡 ───────────────────────────────────────────────────────────────────
+// 未保存 = 确认卡（看看对不对 + 记下按钮）；
+// 已保存 = 每笔一张「记账明细卡」（对齐咔皮：图标+名称、灰字时间+账本、
+// 右侧金额、底部 改分类/删除 芯片），替掉旧的「喵 + 已记一笔」。
 class _RecordBubble extends StatelessWidget {
   final _RecordMsg msg;
+  final String bookName;
   final VoidCallback onSave;
-  final VoidCallback onUndo;
   final List<CategoryEntity> Function(int index) candidatesFor;
   final void Function(int index, CategoryEntity cat) onPickCat;
+  final void Function(int index) onDeleteEntry;
 
   const _RecordBubble({
     required this.msg,
+    required this.bookName,
     required this.onSave,
-    required this.onUndo,
     required this.candidatesFor,
     required this.onPickCat,
+    required this.onDeleteEntry,
   });
 
   @override
@@ -1299,83 +1316,276 @@ class _RecordBubble extends StatelessWidget {
     final scheme = Theme.of(context).colorScheme;
     final n = msg.entries.length;
 
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 10, right: 24),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Mascot(
-                  mood: msg.saved ? MascotMood.success : MascotMood.idle,
-                  size: 28,
-                  animate: true),
-              const SizedBox(width: 8),
-              Text(
-                msg.saved
-                    ? (msg.savedFeedback.isNotEmpty
-                        ? msg.savedFeedback
-                        : '记好啦！')
-                    : (n > 1 ? '帮你拆成 $n 笔：' : '看看对不对：'),
-                style: TextStyle(fontSize: 14, color: scheme.onSurfaceVariant),
-              ),
-            ],
-          ),
-          const SizedBox(height: 8),
-          Container(
-            decoration: BoxDecoration(
-              color: AppColors.card(scheme),
-              borderRadius: BorderRadius.circular(16),
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withValues(alpha: 0.04),
-                  blurRadius: 10,
-                  offset: const Offset(0, 2),
-                ),
-              ],
+    if (!msg.saved) {
+      // ── 确认卡 ──
+      return Padding(
+        padding: const EdgeInsets.only(bottom: 10, right: 24),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              n > 1 ? '帮你拆成 $n 笔，看看对不对：' : '看看对不对：',
+              style: TextStyle(fontSize: 13, color: scheme.onSurfaceVariant),
             ),
-            padding: const EdgeInsets.all(12),
-            child: Column(
-              children: [
-                for (int i = 0; i < msg.entries.length; i++)
-                  _EntryRow(
-                    entry: msg.entries[i],
-                    cat: msg.cats[i],
-                    showDivider: i > 0,
-                    candidates: candidatesFor(i),
-                    onPickCat: (c) => onPickCat(i, c),
+            const SizedBox(height: 8),
+            Container(
+              decoration: BoxDecoration(
+                color: AppColors.card(scheme),
+                borderRadius: BorderRadius.circular(16),
+                border:
+                    Border.all(color: Colors.black.withValues(alpha: 0.06)),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: 0.04),
+                    blurRadius: 10,
+                    offset: const Offset(0, 2),
                   ),
-                const SizedBox(height: 10),
-                if (!msg.saved)
+                ],
+              ),
+              padding: const EdgeInsets.all(12),
+              child: Column(
+                children: [
+                  for (int i = 0; i < msg.entries.length; i++)
+                    _EntryRow(
+                      entry: msg.entries[i],
+                      cat: msg.cats[i],
+                      showDivider: i > 0,
+                      candidates: candidatesFor(i),
+                      onPickCat: (c) => onPickCat(i, c),
+                    ),
+                  const SizedBox(height: 10),
                   SizedBox(
                     width: double.infinity,
                     child: FilledButton(
                       onPressed: onSave,
                       child: Text(n > 1 ? '记下这 $n 笔' : '记下'),
                     ),
-                  )
-                else
-                  Row(
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    // ── 已保存：每笔一张明细卡 ──
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10, right: 24),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          for (int i = 0; i < msg.entries.length; i++)
+            _SavedEntryCard(
+              entry: msg.entries[i],
+              cat: msg.cats[i],
+              bookName: bookName,
+              deleted: msg.deletedIdx.contains(i),
+              canAct: i < msg.txnIds.length && msg.txnIds[i] != null,
+              candidates: candidatesFor(i),
+              onPickCat: (c) => onPickCat(i, c),
+              onDelete: () => onDeleteEntry(i),
+            ),
+          if (msg.savedFeedback.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(top: 2),
+              child: Text(
+                msg.savedFeedback,
+                style:
+                    TextStyle(fontSize: 12, color: scheme.onSurfaceVariant),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+/// 已入库单笔的「记账明细卡」：左上分类图标+名称，灰字日期+账本，
+/// 右侧金额，底部 改分类 / 删除 芯片。删除后整卡淡化。
+class _SavedEntryCard extends StatelessWidget {
+  final ParsedEntry entry;
+  final CategoryEntity? cat;
+  final String bookName;
+  final bool deleted;
+  final bool canAct;
+  final List<CategoryEntity> candidates;
+  final ValueChanged<CategoryEntity> onPickCat;
+  final VoidCallback onDelete;
+
+  const _SavedEntryCard({
+    required this.entry,
+    required this.cat,
+    required this.bookName,
+    required this.deleted,
+    required this.canAct,
+    required this.candidates,
+    required this.onPickCat,
+    required this.onDelete,
+  });
+
+  String _dateLabel() {
+    final d = entry.date;
+    final base = '${d.year}.${d.month}.${d.day}';
+    if (d.hour == 0 && d.minute == 0) return base;
+    final two = (int v) => v.toString().padLeft(2, '0');
+    return '$base ${two(d.hour)}:${two(d.minute)}';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final isIncome = entry.kind == TransactionKind.income;
+    final catName = cat?.nameZh ?? (isIncome ? '其他收入' : '其他支出');
+    final amountText = entry.amount != null
+        ? '${isIncome ? '+' : '-'}${MoneyFormat.string(entry.amount!)}'
+        : '—';
+
+    return Opacity(
+      opacity: deleted ? 0.45 : 1,
+      child: Container(
+        width: double.infinity,
+        margin: const EdgeInsets.only(bottom: 8),
+        padding: const EdgeInsets.fromLTRB(12, 11, 12, 10),
+        decoration: BoxDecoration(
+          color: AppColors.card(scheme),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: Colors.black.withValues(alpha: 0.06)),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.04),
+              blurRadius: 10,
+              offset: const Offset(0, 2),
+            ),
+          ],
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                CatIcon(
+                  categoryKey: cat?.key ?? '',
+                  emoji: cat != null
+                      ? CategorySeed.emojiOf(cat!.key)
+                      : '🏷️',
+                  size: 30,
+                ),
+                const SizedBox(width: 9),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Icon(Icons.check_circle,
-                          size: 18, color: scheme.primary),
-                      const SizedBox(width: 6),
-                      Text('已记下',
-                          style: TextStyle(
-                              color: scheme.primary,
-                              fontWeight: FontWeight.w500)),
-                      const Spacer(),
-                      TextButton.icon(
-                        onPressed: onUndo,
-                        icon: const Icon(Icons.undo, size: 16),
-                        label: const Text('撤销'),
+                      Text(
+                        entry.note.isNotEmpty ? entry.note : catName,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                            fontSize: 14, fontWeight: FontWeight.w600),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        '${_dateLabel()} · $bookName'
+                        '${entry.note.isNotEmpty ? ' · $catName' : ''}',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                            fontSize: 11, color: scheme.onSurfaceVariant),
                       ),
                     ],
                   ),
+                ),
+                const SizedBox(width: 8),
+                Text(
+                  amountText,
+                  style: TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.w600,
+                    fontFamily: 'Nunito',
+                    decoration:
+                        deleted ? TextDecoration.lineThrough : null,
+                    color: isIncome
+                        ? AppColors.income(scheme)
+                        : scheme.onSurface,
+                  ),
+                ),
               ],
             ),
-          ),
-        ],
+            const SizedBox(height: 8),
+            if (deleted)
+              Text('已删除',
+                  style: TextStyle(
+                      fontSize: 11, color: scheme.onSurfaceVariant))
+            else if (canAct)
+              Row(
+                children: [
+                  if (candidates.isNotEmpty) ...[
+                    Builder(
+                      builder: (chipCtx) => _ActionChip(
+                        icon: Icons.swap_horiz,
+                        label: '改分类',
+                        onTap: () => showIosMenu(chipCtx, [
+                          for (final c in candidates)
+                            IosMenuItem(
+                              label:
+                                  '${CategorySeed.emojiOf(c.key)} ${c.nameZh}',
+                              icon: Icons.label_outline,
+                              onTap: () => onPickCat(c),
+                            ),
+                        ]),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                  ],
+                  _ActionChip(
+                    icon: Icons.delete_outline,
+                    label: '删除',
+                    onTap: onDelete,
+                  ),
+                ],
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// 明细卡底部小芯片（白底发丝边，与全 App 芯片同款语言）。
+class _ActionChip extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final VoidCallback onTap;
+
+  const _ActionChip({
+    required this.icon,
+    required this.label,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return PressableScale(
+      onPressed: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
+        decoration: BoxDecoration(
+          color: AppColors.card(scheme),
+          borderRadius: BorderRadius.circular(999),
+          border: Border.all(color: Colors.black.withValues(alpha: 0.06)),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 12, color: scheme.onSurfaceVariant),
+            const SizedBox(width: 4),
+            Text(label,
+                style: TextStyle(
+                    fontSize: 11, color: scheme.onSurfaceVariant)),
+          ],
+        ),
       ),
     );
   }

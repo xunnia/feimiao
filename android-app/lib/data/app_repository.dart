@@ -1547,6 +1547,49 @@ class AppRepository extends ChangeNotifier {
     return id;
   }
 
+  /// 编辑既有预算计划（整条覆盖式更新，id 不变）。
+  Future<void> updateBudgetPeriod(
+    int id, {
+    int? bookId,
+    required DateTime start,
+    DateTime? end,
+    bool recurringMonthly = true,
+    required Decimal total,
+    Map<String, Decimal> categoryBudgets = const {},
+    Decimal? monthlyIncome,
+    List<(String, Decimal)> fixedExpenses = const [],
+  }) async {
+    final p = BudgetPeriod(
+      id: id,
+      bookId: bookId,
+      start: DateTime(start.year, start.month, start.day),
+      end: end == null ? null : DateTime(end.year, end.month, end.day),
+      recurringMonthly: recurringMonthly,
+      total: total,
+      categoryBudgets: categoryBudgets,
+      monthlyIncome: monthlyIncome,
+      fixedExpenses: fixedExpenses,
+    );
+    await _db!.update(
+      'budget_periods',
+      {
+        'book_id': bookId,
+        'start_ms': p.start.millisecondsSinceEpoch,
+        'end_ms': p.end?.millisecondsSinceEpoch,
+        'recurring_monthly': recurringMonthly ? 1 : 0,
+        'total': total.toString(),
+        'category_budgets':
+            categoryBudgets.isEmpty ? '' : p.categoryBudgetsJson(),
+        'monthly_income': monthlyIncome?.toString() ?? '',
+        'fixed_expenses': fixedExpenses.isEmpty ? '' : p.fixedExpensesJson(),
+      },
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+    await _loadBudgetPeriods();
+    notifyListeners();
+  }
+
   Future<void> deleteBudgetPeriod(int id) async {
     await _db!.delete('budget_periods', where: 'id = ?', whereArgs: [id]);
     await _loadBudgetPeriods();
