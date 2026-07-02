@@ -8,6 +8,7 @@ import '../../core/models/transaction_kind.dart';
 import '../../core/money_format.dart';
 import '../../data/app_repository.dart';
 import '../../theme/app_colors.dart';
+import '../../widgets/app_toast.dart';
 
 /// 「喵盯到几笔消费」确认表：本地解析后的候选，勾选要记的，一键全部记下。
 /// 不静默直接入账，避免抓错/重复（退款、余额变动等）直接污染账本。
@@ -41,10 +42,9 @@ class _AutoRecordSheetState extends State<_AutoRecordSheet> {
     setState(() => _saving = true);
     final repo = context.read<AppRepository>();
     final accountId = repo.accounts.isNotEmpty ? repo.accounts.first.id : null;
-    final messenger = ScaffoldMessenger.of(context);
     if (accountId == null) {
-      messenger.showSnackBar(
-          const SnackBar(content: Text('请先在「资产管理」里加一个账户')));
+      showAppToast(context, '请先在「资产管理」里加一个账户',
+          icon: Icons.info_outline);
       setState(() => _saving = false);
       return;
     }
@@ -75,8 +75,8 @@ class _AutoRecordSheetState extends State<_AutoRecordSheet> {
       n++;
     }
     if (!mounted) return;
+    showAppToast(context, '喵帮你记下了 $n 笔～');
     Navigator.of(context).pop();
-    messenger.showSnackBar(SnackBar(content: Text('喵帮你记下了 $n 笔～')));
   }
 
   @override

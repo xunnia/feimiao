@@ -13,6 +13,7 @@ import '../../core/models/category_seed.dart';
 import '../../core/models/transaction_kind.dart';
 import '../../core/money_format.dart';
 import '../../data/app_repository.dart';
+import '../../widgets/app_toast.dart';
 import '../settings/ai_setting_view.dart';
 
 /// AI 一句话记账页。
@@ -189,24 +190,8 @@ class _AiQuickEntryViewState extends State<AiQuickEntryView> {
         );
       }
       if (mounted) {
+        showAppToast(context, '已保存 ${entries.length} 笔账目');
         Navigator.pop(context);
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const Icon(Icons.check_circle, color: Colors.white, size: 18),
-                const SizedBox(width: 8),
-                Text('已保存 ${entries.length} 笔账目'),
-              ],
-            ),
-            duration: const Duration(milliseconds: 1800),
-            behavior: SnackBarBehavior.floating,
-            shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(24)),
-            margin: const EdgeInsets.fromLTRB(16, 0, 16, 80),
-          ),
-        );
       }
     } finally {
       if (mounted) setState(() => _saving = false);

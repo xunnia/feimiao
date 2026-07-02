@@ -6,6 +6,7 @@ import 'package:image_picker/image_picker.dart';
 import '../../core/ai/natural_language_entry_parser.dart';
 import '../../core/ai/order_list_parser.dart';
 import '../../core/ai/screenshot_layout.dart';
+import '../../widgets/app_toast.dart';
 import 'ai_quick_entry_view.dart';
 
 /// 支付截图识别入口：相册选一张支付/账单截图 → ML Kit 中文 OCR →
@@ -13,8 +14,6 @@ import 'ai_quick_entry_view.dart';
 ///
 /// 用 ML Kit on-device 识别（中文脚本），无需联网；解析阶段才可能走 DeepSeek。
 Future<void> recognizeScreenshotAndEntry(BuildContext context) async {
-  final messenger = ScaffoldMessenger.of(context);
-
   // 1. 选图
   XFile? file;
   try {
@@ -23,7 +22,9 @@ Future<void> recognizeScreenshotAndEntry(BuildContext context) async {
       imageQuality: 92,
     );
   } catch (e) {
-    messenger.showSnackBar(SnackBar(content: Text('打不开相册：$e')));
+    if (context.mounted) {
+      showAppToast(context, '打不开相册：$e', icon: Icons.error_outline);
+    }
     return;
   }
   if (file == null) return; // 用户取消
@@ -34,7 +35,6 @@ Future<void> recognizeScreenshotAndEntry(BuildContext context) async {
 /// 给定图片路径直接识别记账：相册选图与「分享到肥喵」共用这条管线。
 Future<void> recognizeImagePathAndEntry(
     BuildContext context, String imagePath) async {
-  final messenger = ScaffoldMessenger.of(context);
   final navigator = Navigator.of(context);
 
   // 2. 显示识别中遮罩
@@ -108,14 +108,13 @@ Future<void> recognizeImagePathAndEntry(
     cleaned = PaymentScreenshotParser.cleanOcr(text).trim();
   }
   if (cleaned.isEmpty) {
-    messenger.showSnackBar(
-      SnackBar(
-        content: Text(ocrError != null
-            ? '识别失败：$ocrError'
-            : '没识别到文字，换张更清晰的截图试试'),
-        duration: const Duration(seconds: 6),
-      ),
-    );
+    if (context.mounted) {
+      showAppToast(
+        context,
+        ocrError != null ? '识别失败：$ocrError' : '没识别到文字，换张更清晰的截图试试',
+        icon: Icons.error_outline,
+      );
+    }
     return;
   }
 

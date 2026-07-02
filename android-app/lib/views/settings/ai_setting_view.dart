@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 
 import '../../data/app_repository.dart';
 import '../../theme/app_colors.dart';
+import '../../widgets/app_toast.dart';
 import '../home/ai_chat_panel.dart';
 
 /// AI 记账设置页：配置 DeepSeek API Key。
@@ -36,25 +37,7 @@ class _AiSettingViewState extends State<AiSettingView> {
     setState(() => _saving = true);
     try {
       await repo.saveApiKey(_keyCtrl.text);
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: const Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(Icons.check_circle, color: Colors.white, size: 18),
-                SizedBox(width: 8),
-                Text('API Key 已保存'),
-              ],
-            ),
-            duration: const Duration(milliseconds: 1500),
-            behavior: SnackBarBehavior.floating,
-            shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(24)),
-            margin: const EdgeInsets.fromLTRB(16, 0, 16, 80),
-          ),
-        );
-      }
+      if (mounted) showAppToast(context, 'API Key 已保存');
     } finally {
       if (mounted) setState(() => _saving = false);
     }

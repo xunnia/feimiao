@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/cupertino.dart' show CupertinoPageRoute, CupertinoIcons;
 
 import '../../theme/app_colors.dart';
+import '../../widgets/app_toast.dart';
 import '../../widgets/mascot.dart';
 import '../settings/ai_setting_view.dart';
 
@@ -9,18 +10,6 @@ import '../settings/ai_setting_view.dart';
 /// 对齐 Claude 账号页版式，设置/主题/关于都收在这里。
 class PersonalCenterView extends StatelessWidget {
   const PersonalCenterView({super.key});
-
-  void _showSnackBar(BuildContext context, String message) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(message),
-        duration: const Duration(milliseconds: 2000),
-        behavior: SnackBarBehavior.floating,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-        margin: const EdgeInsets.fromLTRB(16, 0, 16, 12),
-      ),
-    );
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -77,7 +66,8 @@ class PersonalCenterView extends StatelessWidget {
                   ),
                   const SizedBox(width: 12),
                   FilledButton(
-                    onPressed: () => _showSnackBar(context, '云同步即将到来'),
+                    onPressed: () => showAppToast(context, '云同步即将到来',
+                        icon: Icons.info_outline),
                     style: FilledButton.styleFrom(
                       visualDensity: VisualDensity.compact,
                       shape: RoundedRectangleBorder(
@@ -105,7 +95,8 @@ class PersonalCenterView extends StatelessWidget {
             _SettingsTile(
               icon: Icons.palette_outlined,
               label: '主题皮肤',
-              onTap: () => _showSnackBar(context, '更多猫皮肤即将到来'),
+              onTap: () => showAppToast(context, '更多猫皮肤即将到来',
+                  icon: Icons.info_outline),
             ),
           ]),
 

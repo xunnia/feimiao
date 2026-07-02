@@ -170,6 +170,7 @@ class _AiChatPanelState extends State<AiChatPanel> {
     final counts = <String, int>{};
     final amounts = <String, List<Decimal>>{};
     for (final t in repo.transactions) {
+      if (t.excluded) continue; // 不计入收支的和统计口径一致，不进建议
       if (t.txKind != TransactionKind.expense) continue;
       final name = t.categoryNameZh;
       if (name.isEmpty || name == '未分类') continue;
@@ -276,17 +277,9 @@ class _AiChatPanelState extends State<AiChatPanel> {
     });
   }
 
-  void _snack(String msg) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(msg),
-        duration: const Duration(milliseconds: 1800),
-        behavior: SnackBarBehavior.floating,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-        margin: const EdgeInsets.fromLTRB(16, 0, 16, 12),
-      ),
-    );
-  }
+  // 轻提示统一走全局 app_toast（同类功能同一种设计）。
+  void _snack(String msg) =>
+      showAppToast(context, msg, icon: Icons.info_outline);
 
   // ── 发送：先判意图（查账 or 记账）再分流 ────────────────────────────────
   Future<void> _send([String? preset]) async {
@@ -421,8 +414,9 @@ class _AiChatPanelState extends State<AiChatPanel> {
   }
 
   /// 把最近账目整理成给 LLM 的上下文（按日期倒序，最多 80 条）。
+  /// 口径和统计页一致：「不计入收支」的记录不喂给 AI，答数才对得上统计。
   String _buildTxnContext(AppRepository repo) {
-    final txns = [...repo.transactions]
+    final txns = repo.transactions.where((t) => !t.excluded).toList()
       ..sort((a, b) => b.date.compareTo(a.date));
     final now = DateTime.now();
     final sb = StringBuffer();
@@ -481,7 +475,8 @@ class _AiChatPanelState extends State<AiChatPanel> {
           cat == null) continue;
       final past = <Decimal>[];
       for (final t in repo.transactions) {
-        if (t.txKind == TransactionKind.expense &&
+        if (!t.excluded &&
+            t.txKind == TransactionKind.expense &&
             t.categoryNameZh == cat.nameZh &&
             t.amount > Decimal.zero) {
           past.add(t.amount);

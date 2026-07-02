@@ -13,6 +13,10 @@ class BudgetStatus {
   final Decimal remaining;
 
   /// 「今日可花」：(预算 − 今天之前已花) ÷ 含今天的剩余天数 − 今天已花。可为负。
+  ///
+  /// 口径说明（和预算页「往后每天可花」区分，两者同一基底不矛盾）：
+  ///   今日可花 = 今天这一天的份额，扣掉今天已花；
+  ///   往后每天可花 = 剩余额度 ÷ 剩余天数（预算页自算），是往后的平均。
   final Decimal todayAllowance;
   final bool isOverBudget;
 

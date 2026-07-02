@@ -7,9 +7,10 @@
 
 ## §-1 最新交接（2026-07-02 起：按用户优化文档做六批 UI/功能升级）
 
-### -1.-1 当前状态速览（2026-07-03 压缩上下文时的快照）
-- **水印 b0702-13 / DB v15**；本地 analyze 0 error、182 测试全过。**用户可能还没 commit/push b0702-13**——新会话先 `git status` 确认，提交命令模板见各批小结（中文描述式+水印号，推 `git push origin HEAD:claude/hopeful-wozniak-pr2ne3`）。
-- **六批原计划全部完成**，后续按用户真机反馈+GPT复盘持续迭代（已到第4轮反馈）。**下一步=排队的两个包（见 -1.15b），用户说"开工"就做，顺序：预算修正包→分类管理包。**
+### -1.-1 当前状态速览（2026-07-03 晚更新）
+- **水印 b0703-3 / DB v15**（b0702-13 已 commit）。**b0703-1/2/3 三个水印合并成一个提交待用户推**：预算修正包 + 二级面板提层修复 + GPT小修包，详见 -1.2 顶部三条。推送命令模板：中文描述式+水印号，`git push origin HEAD:claude/hopeful-wozniak-pr2ne3`。
+- **下一步排队**：①分类管理重构包（见 -1.15b，唯一还没做的大包；做时 DB v16 顺手给 transactions/books 加 `uuid`+`updated_ms` 为共享账本打地基）②删账本先转移/归档 + 深色模式巡检（新组件大量黑发丝边/白底，深色下会翻车）③统计卡懒加载、monthlyTotalFor 15号代表日改按天重叠（攒着跟统计改动一起）。
+- **GPT 全面复盘已消化**（2026-07-03）：P0 大多已做或已修；采纳并完成=AI喂数滤excluded/今日vs日均文案区分/SnackBar→toast统一/DB迁移前自动备份；驳回=图标颜色编辑（锁定不做）；「统计默认卡数」「预算状态设计」「API key遮罩」核实后本来就有。**别再重复做这些。**
 - **等用户的文件**：①字标 logo（已选定第二版=藏青+金币爪印，等存到 `Desktop\记账app\图片\logo.png`→白底转透明+裁边→assets/brand/→换抽屉头部文字）②账本封面缺 4 张：记账(日常)/宠物/母婴/家庭（流程见 -1.2 批5.6）。
 - **给 GPT 复盘的代码包**已生成在 `Desktop\记账app\复盘包\`（4个txt，含提示词模板+锁定决策护栏）；GPT 结论回来**只挑增量**（它会推底部Tab/红色/云同步，一律驳）。
 - 长期项目：多人共享账本（后端+账号），排在所有 UI 批次之后。
@@ -30,12 +31,15 @@
 ### -1.15 环境重要变化：本机有 Flutter 工具链！
 - 用户这台 Windows 机（Claude Code 环境）装了 **Flutter 3.44.2 / Dart 3.12.2**，`flutter analyze`、`flutter test` 都能本地跑（本批已跑：analyze 无 error、154 测试全过）。**推 CI 前先本地验，别再盲推**。CI 仍负责出 APK 到固定 Release 链接。
 
-### -1.15b 排队待开工（用户额度恢复后说"开工"）
-- **预算逻辑修正包**（已和用户对齐，见 b0702-13 后的对话）：①口径修正=总预算含固定支出，建议=收入×80% 或 近3月平均月支出（不填收入也能建议），文案改「本月预算」②首条循环预算 start=2000 覆盖全部历史、之后新建的才从本月起；自定义时间段加「每月额度/整段总额」二选一（模型已支持 recurring+end，只差UI）③「已分配 ¥x/总预算」提示+分类合计超总预算禁存+编辑循环预算提示"会影响X月起所有月份"④UI减重（计划卡压缩/新建预算降白底描边/输入框变薄/底部padding防遮挡）。**颜色语义不变：接近=铜金、超支=橙，不用红。**
-- **分类管理重构包**（GPT方案已复盘，取舍见对话）：卡片式分类树（一级白卡+展开子类网格**5列复用CategoryGrid**）、⋯菜单(showIosMenu)收纳操作、新增/编辑走 showBlurSheet、删除保护（有历史账单→建议隐藏/合并）。**成本点：隐藏需 DB 加 hidden 列+全查询过滤；合并=账单改挂+记忆迁移；自定义图标/颜色选择先不做（图标是代码侧 key 映射，自建分类兜底🏷️）**。管理模式/拖拽排序第一版不做，只留菜单入口。
+### -1.15b 排队待开工
+- ~~预算逻辑修正包~~ ✅ 已完成（b0703-1，见 -1.2）。
+- **分类管理重构包**（GPT方案已复盘，取舍见对话）：卡片式分类树（一级白卡+展开子类网格**5列复用CategoryGrid**）、⋯菜单(showIosMenu)收纳操作、新增/编辑走 showBlurSheet、删除保护（有历史账单→建议隐藏/合并）。**成本点：隐藏需 DB 加 hidden 列+全查询过滤；合并=账单改挂+记忆迁移；自定义图标/颜色选择先不做（图标是代码侧 key 映射，自建分类兜底🏷️）**。管理模式/拖拽排序第一版不做，只留菜单入口。**做这包时 DB v16 顺手加 uuid/updated_ms（共享账本地基）。**
 
 ### -1.2 已完成批次速查
-- **批7+批8（b0702-13，待真机验）统计图表库+卡片化 & 手动卡收尾 & 二级分类视觉修正**：
+- **GPT小修包（b0703-3，待真机验）数据口径+轻提示统一+DB安全**：①AI 喂数口径和统计一致：`ai_chat_panel` 三处（建议生成/_buildTxnContext/异常提醒）过滤 `t.excluded`；②「今日可花」（首页/统计/快记，=今天份额−今天已花）vs 预算页改文案「往后每天可花」（=剩余÷剩余天数），两口径同基底不矛盾，budget_engine.dart 有注释说明；③全 App SnackBar 清零→showAppToast（7个文件：auto_record_sheet/personal_center/ai_quick_entry/ai_setting/screenshot_entry/ai_chat_panel(_snack委托)/backup_view），app_toast 加限宽+两行省略防长错误文案顶出屏；错误用 `icon: Icons.error_outline`；④**DB 迁移前自动备份**：repo.init 里 `_backupBeforeMigration`（openReadOnlyDatabase 读 user_version，要升版本才复制 `qingji.db.pre-v旧.bak`，失败不拦启动）。核实：API key 遮罩(_obscure)、备份/恢复页(backup_view+.bak回滚)早已存在。
+- **二级面板提层修复（b0703-2，待真机验）**：用户对比咔皮截图指出裁切/叠影。根因=面板画在分类区 Stack 里，芯片/金额/键盘**后画且半透明**盖住了它。修：整卡包一层 Stack，面板挪到最顶层最后画（CompositedTransformFollower + showWhenUnlinked:false，锚点 _panelLink 不变）；面板限高 268（约3行）超出内部滚动；底部区展开时重雾压白（_blurIf 加 sigma/opacity 参数，底部 3.0/0.3，网格行维持 1.8/0.65）；二级图标改**白底圆44+ClipOval 内嵌34图标**和一级圆角方块拉开层级（对齐咔皮）。
+- **预算修正包（b0703-1，待真机验）**：①建议口径修正：`BudgetSuggestion.suggestTotal` 删除→`suggestFromIncome`（收入×80%，总预算含固定支出）+`averageMonthlySpend`（近3月只均有记录月份，不填收入也能建议）；弹层固定支出输入行整个删除（fixedExpenses 字段保留兼容 DB）；文案「本月可支配预算」→「本月预算」（整段总额时叫「期间预算总额」）②首条无终点循环预算 start=DateTime(2000) 覆盖历史，已有循环预算再新建才从本月1号起；自定义段加「每月额度/整段总额」SlidingSegment（每月额度=recurringMonthly+end，编辑回显 _customMonthly）③分类区实时「已分配 ¥x/¥总额」超橙；分类合计>总预算禁存；编辑无终点循环预算先 showConfirmDialog「会影响X年X月起所有月份」④UI减重：新建预算按钮白底描边、计划列表 padding/字号压缩、iosInputDecoration 全局 vertical 13→10、弹层滚动底 24。计划列表区分「每月额度/整段总额」描述。测试更新：budget_period_test 换 suggestFromIncome/averageMonthlySpend 两用例。
+- **批7+批8（b0702-13，已提交，待真机验）统计图表库+卡片化 & 手动卡收尾 & 二级分类视觉修正**：
   ①**二级分类视觉**（用户截图反馈）：_blurIf 透明度 0.45→0.65/blur 1.8（可读性）；选中一级名字黑色加粗（不再蓝）；去掉"雾上重画激活行"（双影/边缘模糊根源）→激活行原样清晰其余行轻模糊；选完二级后一级名字后缀「·二级名」（CategoryGrid 新 subLabels 参数，字号10缩略）。
   ②**批8**：「不计入收支」= **DB v15** transactions 加 `excluded` 列（entity/addTransaction/updateTransaction/查询全接），**repo.allRecords 过滤 excluded**（统计/预算/洞察自动跳过），手动卡「不计入」芯片+列表灰色小标(_ExcludedBadge)；**转账 tab**：手动卡三段 支出/收入/转账（新建才有转账；编辑转账锁类型显示"编辑转账"），_AccountBox 扣款⇄入款（iOS菜单选账户），转账时芯片只留日期/账本(showExtras)，保存走 kind=transfer+toAccountId；**showEditTransactionSheet 全部路由到 ManualAddSheet**（旧 EditTransactionSheet 退役留档）。
   ③**批7**：repo 加 statCardOrder/setStatCardOrder('stat_cards' 持久化)；**统计月视图=可管理卡片**：ReorderableListView（header=切换器+合计+环比，长按卡片拖排序，情境性无数据的卡自动跳过但保留位置），底部「＋自定义图表」弹层=全部卡片开关；卡片注册表 10 张：insights/budget/ring/daily/ranking/top5(默认开) + **heatmap 日历热力图/compare 本月vs上月分组柱/radar 结构雷达/stacked 近12月收支堆叠柱(默认关，图表库加)**。堆叠柱语义：柱高=收支较大者，深色花掉/金色结余/橙色超支。

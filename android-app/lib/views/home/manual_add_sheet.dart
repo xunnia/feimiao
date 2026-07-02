@@ -397,7 +397,14 @@ class _ManualAddSheetState extends State<ManualAddSheet> {
     return ConstrainedBox(
       constraints:
           BoxConstraints(maxHeight: maxH.clamp(300.0, screenH * 0.92)),
-      child: Column(
+      // 整卡包一层 Stack：二级面板作为最后一个孩子挂在锚点行下方，
+      // 保证它画在芯片/金额/键盘**之上**——之前面板画在分类区里，
+      // 被后画的半透明底部区盖住，产生裁切和叠影（用户 0703 截图反馈）。
+      child: LayoutBuilder(
+        builder: (context, outer) => Stack(
+          clipBehavior: Clip.none,
+          children: [
+            Column(
         mainAxisSize: MainAxisSize.min,
         children: [
           // ── 顶部栏：支出/收入 分段（对齐主页大小）+ 模式胶囊 + 关闭 ──
@@ -527,45 +534,19 @@ class _ManualAddSheetState extends State<ManualAddSheet> {
                       onSelected: (c) => _onCategoryTap(c, repo),
                     );
 
-                return LayoutBuilder(
-                  builder: (context, constraints) => Stack(
-                    clipBehavior: Clip.none,
+                // 面板本体在整卡 Stack 的最顶层（见 build 外层），这里只负责
+                // 网格本身：被点的那行保持原样清晰（挂锚点），其余行轻模糊让位。
+                return SingleChildScrollView(
+                  child: Column(
                     children: [
-                      SingleChildScrollView(
-                        child: Column(
-                          children: [
-                            // 被点的那行保持原样清晰（不重画不叠雾，无双影）；
-                            // 其余行轻模糊压暗让位，点一下收起面板。
-                            for (var i = 0; i < rows.length; i++)
-                              i == activeRow
-                                  ? CompositedTransformTarget(
-                                      link: _panelLink,
-                                      child: grid(rows[i]),
-                                    )
-                                  : _blurIf(panelOpen, grid(rows[i])),
-                            const SizedBox(height: 4),
-                          ],
-                        ),
-                      ),
-                      // 二级面板：悬浮在锚点行正下方，不占布局位置
-                      if (panelOpen)
-                        CompositedTransformFollower(
-                          link: _panelLink,
-                          targetAnchor: Alignment.bottomCenter,
-                          followerAnchor: Alignment.topCenter,
-                          child: SizedBox(
-                            width: constraints.maxWidth,
-                            child: _SubcategoryPanel(
-                              children:
-                                  repo.childrenOfRanked(_panelParentId!),
-                              selectedId: _selectedCategoryId,
-                              onSelected: (c) => setState(() {
-                                _selectedCategoryId = c.id;
-                                _panelParentId = null;
-                              }),
-                            ),
-                          ),
-                        ),
+                      for (var i = 0; i < rows.length; i++)
+                        i == activeRow
+                            ? CompositedTransformTarget(
+                                link: _panelLink,
+                                child: grid(rows[i]),
+                              )
+                            : _blurIf(panelOpen, grid(rows[i])),
+                      const SizedBox(height: 4),
                     ],
                   ),
                 );
@@ -573,9 +554,12 @@ class _ManualAddSheetState extends State<ManualAddSheet> {
             ),
           ),
 
-          // ── 底部固定区：芯片排 + 金额卡 + 键盘（面板展开时整体模糊+点击收起）──
+          // ── 底部固定区：芯片排 + 金额卡 + 键盘 ──
+          // 面板展开时整片重雾压白（比网格行狠，芯片不再半遮半露），点击收起。
           _blurIf(
             panelOpen,
+            sigma: 3.0,
+            opacity: 0.3,
             Column(
               mainAxisSize: MainAxisSize.min,
               children: [
@@ -635,21 +619,48 @@ class _ManualAddSheetState extends State<ManualAddSheet> {
             ),
           ),
         ],
+            ),
+            // ── 二级面板：整卡最顶层，锚点行正下方，不占布局位置 ──
+            // 实底白卡 + 限高内部滚动，永远不会被底部区盖住或裁切。
+            if (panelOpen && _kind != TransactionKind.transfer)
+              CompositedTransformFollower(
+                link: _panelLink,
+                showWhenUnlinked: false,
+                targetAnchor: Alignment.bottomCenter,
+                followerAnchor: Alignment.topCenter,
+                child: SizedBox(
+                  width: outer.maxWidth,
+                  child: Consumer<AppRepository>(
+                    builder: (context, repo, _) => _SubcategoryPanel(
+                      children: repo.childrenOfRanked(_panelParentId!),
+                      selectedId: _selectedCategoryId,
+                      onSelected: (c) => setState(() {
+                        _selectedCategoryId = c.id;
+                        _panelParentId = null;
+                      }),
+                    ),
+                  ),
+                ),
+              ),
+          ],
+        ),
       ),
     );
   }
 
-  /// 二级面板展开时把其它区域轻模糊让位；点模糊区收起面板。
-  /// 透明度别压太狠（0.65），保持背景可读（用户 0703 反馈）。
-  Widget _blurIf(bool blur, Widget child) {
+  /// 二级面板展开时把其它区域模糊让位；点模糊区收起面板。
+  /// 网格行用默认轻雾（0.65 保持可读，用户 0703 反馈）；
+  /// 底部芯片/金额/键盘用重雾压白（sigma/opacity 调狠些）。
+  Widget _blurIf(bool blur, Widget child,
+      {double sigma = 1.8, double opacity = 0.65}) {
     if (!blur) return child;
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
       onTap: _closePanel,
       child: AbsorbPointer(
         child: ImageFiltered(
-          imageFilter: ImageFilter.blur(sigmaX: 1.8, sigmaY: 1.8),
-          child: Opacity(opacity: 0.65, child: child),
+          imageFilter: ImageFilter.blur(sigmaX: sigma, sigmaY: sigma),
+          child: Opacity(opacity: opacity, child: child),
         ),
       ),
     );
@@ -678,6 +689,7 @@ class _SubcategoryPanel extends StatelessWidget {
       margin: const EdgeInsets.fromLTRB(12, 2, 12, 6),
       padding: const EdgeInsets.symmetric(vertical: 10),
       decoration: BoxDecoration(
+        // 实底（不透明），底下的雾一点都不许透上来。
         color: AppColors.card(scheme),
         borderRadius: BorderRadius.circular(18),
         border: Border.all(color: Colors.black.withValues(alpha: 0.06)),
@@ -689,55 +701,68 @@ class _SubcategoryPanel extends StatelessWidget {
           ),
         ],
       ),
-      child: GridView.builder(
-        shrinkWrap: true,
-        physics: const NeverScrollableScrollPhysics(),
-        padding: const EdgeInsets.symmetric(horizontal: 10),
-        gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-          crossAxisCount: 5,
-          mainAxisSpacing: 10,
-          crossAxisSpacing: 8,
-          childAspectRatio: 0.82,
-        ),
-        itemCount: children.length,
-        itemBuilder: (context, i) {
-          final c = children[i];
-          final sel = c.id == selectedId;
-          return PressableScale(
-            onPressed: () => onSelected(c),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Container(
-                  padding: const EdgeInsets.all(2),
-                  decoration: BoxDecoration(
-                    borderRadius: BorderRadius.circular(14),
-                    border: Border.all(
-                      color: sel ? scheme.primary : Colors.transparent,
-                      width: 2,
+      // 最多三行高，再多在面板里滚动（不许伸到键盘外面去）。
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxHeight: 268),
+        child: GridView.builder(
+          shrinkWrap: true,
+          physics: const ClampingScrollPhysics(),
+          padding: const EdgeInsets.symmetric(horizontal: 10),
+          gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+            crossAxisCount: 5,
+            mainAxisSpacing: 10,
+            crossAxisSpacing: 8,
+            childAspectRatio: 0.92,
+          ),
+          itemCount: children.length,
+          itemBuilder: (context, i) {
+            final c = children[i];
+            final sel = c.id == selectedId;
+            // 二级用「白底圆 + 小一号图标」，和一级的圆角方块拉开层级（对齐咔皮）。
+            return PressableScale(
+              onPressed: () => onSelected(c),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(
+                    width: 44,
+                    height: 44,
+                    alignment: Alignment.center,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: AppColors.card(scheme),
+                      border: Border.all(
+                        color: sel
+                            ? scheme.primary
+                            : Colors.black.withValues(alpha: 0.08),
+                        width: sel ? 2 : 1,
+                      ),
+                    ),
+                    child: ClipOval(
+                      child: CatIcon(
+                        categoryKey: c.key,
+                        emoji: CategorySeed.emojiOf(c.key),
+                        size: 34,
+                      ),
                     ),
                   ),
-                  child: CatIcon(
-                    categoryKey: c.key,
-                    emoji: CategorySeed.emojiOf(c.key),
-                    size: 40,
+                  const SizedBox(height: 4),
+                  Text(
+                    c.nameZh,
+                    style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                          color:
+                              sel ? scheme.primary : scheme.onSurfaceVariant,
+                          fontWeight:
+                              sel ? FontWeight.w600 : FontWeight.normal,
+                        ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
                   ),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  c.nameZh,
-                  style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                        color:
-                            sel ? scheme.primary : scheme.onSurfaceVariant,
-                        fontWeight: sel ? FontWeight.w600 : FontWeight.normal,
-                      ),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ],
-            ),
-          );
-        },
+                ],
+              ),
+            );
+          },
+        ),
       ),
     );
   }

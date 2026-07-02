@@ -449,6 +449,7 @@ class AppRepository extends ChangeNotifier {
 
   Future<void> init() async {
     final dbPath = p.join(await getDatabasesPath(), _dbName);
+    await _backupBeforeMigration(dbPath);
     _db = await openDatabase(
       dbPath,
       version: _dbVersion,
@@ -461,6 +462,24 @@ class AppRepository extends ChangeNotifier {
     // 启动时补记到期的周期账目,再刷新一次交易。
     await _materializeRecurring();
     await _loadTransactions();
+  }
+
+  /// DB 要升版本时，先把旧库原样复制一份（qingji.db.pre-v旧版本.bak）再迁移。
+  /// 迁移代码万一有 bug，用户的真实账本还有救——「备份/恢复」页选这个文件即可。
+  /// 版本没变或新装机则什么都不做；备份失败也不拦启动。
+  Future<void> _backupBeforeMigration(String dbPath) async {
+    try {
+      final f = File(dbPath);
+      if (!await f.exists()) return;
+      final probe = await openReadOnlyDatabase(dbPath);
+      final rows = await probe.rawQuery('PRAGMA user_version');
+      await probe.close();
+      final old = (rows.first.values.first as int?) ?? 0;
+      if (old <= 0 || old >= _dbVersion) return;
+      await f.copy('$dbPath.pre-v$old.bak');
+    } catch (_) {
+      // 备份是兜底，不能因为它失败（磁盘满等）挡住正常启动。
+    }
   }
 
   Future<void> _onCreate(Database db, int version) async {

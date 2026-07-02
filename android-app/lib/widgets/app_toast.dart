@@ -74,6 +74,9 @@ class _ToastState extends State<_Toast> with SingleTickerProviderStateMixin {
           },
           child: Center(
             child: Container(
+              // 长文案（如错误信息）别顶出屏幕：限宽 + 最多两行。
+              constraints: BoxConstraints(
+                  maxWidth: MediaQuery.sizeOf(context).width - 48),
               padding:
                   const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
               decoration: BoxDecoration(
@@ -85,13 +88,17 @@ class _ToastState extends State<_Toast> with SingleTickerProviderStateMixin {
                 children: [
                   Icon(widget.icon, size: 14, color: Colors.white),
                   const SizedBox(width: 6),
-                  Text(
-                    widget.text,
-                    style: const TextStyle(
-                      fontSize: 13,
-                      color: Colors.white,
-                      fontWeight: FontWeight.w500,
-                      decoration: TextDecoration.none,
+                  Flexible(
+                    child: Text(
+                      widget.text,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        fontSize: 13,
+                        color: Colors.white,
+                        fontWeight: FontWeight.w500,
+                        decoration: TextDecoration.none,
+                      ),
                     ),
                   ),
                 ],

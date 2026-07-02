@@ -162,10 +162,11 @@ class _StatusCard extends StatelessWidget {
           ),
           const SizedBox(height: 6),
           // 从「看数字」变成「指导消费」：日均可花。
+          // 叫法和首页「今日可花」区分：这里是往后平均，首页是今天还能花。
           Text(
             isOver
                 ? '本月已超支，接下来 $daysLeft 天缓一缓喵'
-                : '本月还剩 $daysLeft 天 · 日均可花 ${MoneyFormat.string(perDay!)}',
+                : '还剩 $daysLeft 天 · 往后每天可花 ${MoneyFormat.string(perDay!)}',
             style: TextStyle(
               fontSize: 12,
               fontWeight: FontWeight.w500,

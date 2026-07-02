@@ -7,6 +7,7 @@ import 'package:share_plus/share_plus.dart';
 
 import '../../data/app_repository.dart';
 import '../../theme/app_colors.dart';
+import '../../widgets/app_toast.dart';
 
 /// 本地备份 / 恢复（不涉及云）：
 /// - 导出：把整个账本数据库文件分享出去（存到微信/网盘/邮件/本地皆可）。
@@ -15,7 +16,6 @@ class BackupView extends StatelessWidget {
   const BackupView({super.key});
 
   Future<void> _export(BuildContext context) async {
-    final messenger = ScaffoldMessenger.of(context);
     final repo = context.read<AppRepository>();
     try {
       final path = await repo.databaseFilePath();
@@ -27,14 +27,13 @@ class BackupView extends StatelessWidget {
         text: '肥喵账本备份（$stamp）',
       );
     } catch (_) {
-      messenger.showSnackBar(
-        const SnackBar(content: Text('导出失败，请重试')),
-      );
+      if (context.mounted) {
+        showAppToast(context, '导出失败，请重试', icon: Icons.error_outline);
+      }
     }
   }
 
   Future<void> _restore(BuildContext context) async {
-    final messenger = ScaffoldMessenger.of(context);
     final repo = context.read<AppRepository>();
 
     final result = await FilePicker.platform.pickFiles(type: FileType.any);
@@ -55,14 +54,13 @@ class BackupView extends StatelessWidget {
     if (!ok) return;
 
     final success = await repo.restoreDatabaseFromFile(path);
-    messenger.showSnackBar(
-      SnackBar(
-        content: Text(success
-            ? '恢复成功，建议重启 App 让数据完全刷新'
-            : '恢复失败，已尽力回滚到原数据'),
-        behavior: SnackBarBehavior.floating,
-      ),
-    );
+    if (context.mounted) {
+      showAppToast(
+        context,
+        success ? '恢复成功，建议重启 App 让数据完全刷新' : '恢复失败，已尽力回滚到原数据',
+        icon: success ? Icons.check_circle : Icons.error_outline,
+      );
+    }
   }
 
   @override
