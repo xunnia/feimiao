@@ -45,23 +45,25 @@ class BudgetSettingView extends StatelessWidget {
             _PlanListCard(repo: repo),
           ],
           const SizedBox(height: 20),
-          // 底部主按钮：设预算走弹层
+          // 底部主按钮：设预算走弹层。降级成白底描边，页面视觉轻一点。
           PressableScale(
             onPressed: () => showBudgetSheet(context),
             child: Container(
               width: double.infinity,
-              height: 48,
+              height: 46,
               alignment: Alignment.center,
               decoration: BoxDecoration(
-                color: Theme.of(context).colorScheme.onSurface,
+                color: AppColors.card(Theme.of(context).colorScheme),
                 borderRadius: BorderRadius.circular(999),
+                border:
+                    Border.all(color: Colors.black.withValues(alpha: 0.08)),
               ),
               child: Text(
                 '新建预算',
                 style: TextStyle(
                   fontSize: 15,
                   fontWeight: FontWeight.w600,
-                  color: Theme.of(context).colorScheme.surface,
+                  color: Theme.of(context).colorScheme.onSurface,
                 ),
               ),
             ),
@@ -271,10 +273,11 @@ class _PlanListCard extends StatelessWidget {
   String _desc(BudgetPeriod p) {
     String d(DateTime t) => '${t.year}/${t.month}/${t.day}';
     if (p.recurringMonthly) {
+      if (p.end != null) return '${d(p.start)} – ${d(p.end!)} · 每月额度';
       final since = p.start.year <= 2000 ? '一直有效' : '${d(p.start)} 起';
       return '每月循环 · $since';
     }
-    return '${d(p.start)} – ${p.end == null ? '不限' : d(p.end!)}';
+    return '${d(p.start)} – ${p.end == null ? '不限' : d(p.end!)} · 整段总额';
   }
 
   String _bookName(BudgetPeriod p) {
@@ -292,7 +295,7 @@ class _PlanListCard extends StatelessWidget {
         children: [
           for (final p in repo.budgetPeriods)
             Padding(
-              padding: const EdgeInsets.symmetric(vertical: 5),
+              padding: const EdgeInsets.symmetric(vertical: 3),
               child: Row(
                 children: [
                   Expanded(
@@ -303,7 +306,7 @@ class _PlanListCard extends StatelessWidget {
                           '${MoneyFormat.string(p.total)}'
                           '${p.recurringMonthly ? ' / 月' : ' 总额'}',
                           style: const TextStyle(
-                            fontSize: 14,
+                            fontSize: 13.5,
                             fontWeight: FontWeight.w500,
                             fontFamily: 'Nunito',
                           ),
@@ -381,15 +384,20 @@ class _BudgetSheetState extends State<_BudgetSheet> {
       text: widget.edit == null ? '' : widget.edit!.total.toString());
   late final TextEditingController _incomeCtrl = TextEditingController(
       text: widget.edit?.monthlyIncome?.toString() ?? '');
-  final List<({TextEditingController name, TextEditingController amount})>
-      _fixed = [];
   final Map<String, TextEditingController> _catCtrls = {};
-  late bool _recurring = widget.edit?.recurringMonthly ?? true;
-  late DateTimeRange? _customRange = widget.edit != null &&
-          !widget.edit!.recurringMonthly &&
-          widget.edit!.end != null
-      ? DateTimeRange(start: widget.edit!.start, end: widget.edit!.end!)
-      : null;
+
+  /// 「每月」页签 = 无终点的每月循环；「自定义」页签 = 有起止日期。
+  late bool _recurring =
+      widget.edit == null || (widget.edit!.recurringMonthly && widget.edit!.end == null);
+
+  /// 自定义时间段的额度口径：true = 期间内每月额度，false = 整段总额。
+  /// （模型层早就支持 recurringMonthly + end，这里补上 UI。）
+  late bool _customMonthly =
+      widget.edit != null && widget.edit!.recurringMonthly && widget.edit!.end != null;
+  late DateTimeRange? _customRange =
+      widget.edit != null && widget.edit!.end != null
+          ? DateTimeRange(start: widget.edit!.start, end: widget.edit!.end!)
+          : null;
   late int? _bookId = widget.edit?.bookId;
   bool _suggestExpanded = false;
   String? _formError;
@@ -402,12 +410,6 @@ class _BudgetSheetState extends State<_BudgetSheet> {
     final e = widget.edit;
     if (e != null) {
       e.categoryBudgets.forEach((k, v) => _catCtrl(k).text = v.toString());
-      for (final (name, amount) in e.fixedExpenses) {
-        _fixed.add((
-          name: TextEditingController(text: name),
-          amount: TextEditingController(text: amount.toString()),
-        ));
-      }
     }
   }
 
@@ -415,10 +417,6 @@ class _BudgetSheetState extends State<_BudgetSheet> {
   void dispose() {
     _totalCtrl.dispose();
     _incomeCtrl.dispose();
-    for (final f in _fixed) {
-      f.name.dispose();
-      f.amount.dispose();
-    }
     for (final c in _catCtrls.values) {
       c.dispose();
     }
@@ -436,29 +434,18 @@ class _BudgetSheetState extends State<_BudgetSheet> {
     return null;
   }
 
-  Decimal _fixedTotal() {
-    var sum = Decimal.zero;
-    for (final f in _fixed) {
-      final v = Decimal.tryParse(f.amount.text.trim());
-      if (v != null && v > Decimal.zero) sum += v;
-    }
-    return sum;
-  }
-
   // ── 智能建议（辅助功能，收在折叠区）──────────────────────────────────────
+  // 口径：总预算含固定支出。填了收入 = 收入 × 80%（留 20% 储蓄）；
+  // 不填收入 = 近 3 个月平均月支出（记过账就能给建议）。
   void _suggest(AppRepository repo) {
     final income = Decimal.tryParse(_incomeCtrl.text.trim());
-    if (income == null || income <= Decimal.zero) {
-      setState(() => _formError = '先填一下月收入，喵才能帮你算建议');
-      return;
-    }
-    final total = BudgetSuggestion.suggestTotal(
-      income: income,
-      fixedTotal: _fixedTotal(),
-    );
+    final total = income != null && income > Decimal.zero
+        ? BudgetSuggestion.suggestFromIncome(income)
+        : BudgetSuggestion.averageMonthlySpend(
+            repo.allRecords, now: DateTime.now());
     if (total == null) {
-      setState(() =>
-          _formError = '收入减去固定支出和 20% 储蓄后没有剩余额度了，检查一下数字');
+      setState(() => _formError =
+          '最近还没什么支出记录，填一下月收入喵就能按 80% 帮你算');
       return;
     }
     final weights = BudgetSuggestion.historicalWeights(
@@ -496,22 +483,46 @@ class _BudgetSheetState extends State<_BudgetSheet> {
       final v = Decimal.tryParse(ctrl.text.trim());
       if (v != null && v > Decimal.zero) catBudgets[key] = v;
     });
-    final fixed = <(String, Decimal)>[];
-    for (final f in _fixed) {
-      final v = Decimal.tryParse(f.amount.text.trim());
-      final name = f.name.text.trim();
-      if (v != null && v > Decimal.zero) {
-        fixed.add((name.isEmpty ? '固定支出' : name, v));
-      }
+    // 分类合计不能超过总预算，超了禁存（这是逻辑矛盾，不只是提醒）。
+    final catSum =
+        catBudgets.values.fold(Decimal.zero, (a, b) => a + b);
+    if (catSum > total) {
+      setState(() => _formError =
+          '分类合计 ${MoneyFormat.string(catSum)} 超过了总预算 ${MoneyFormat.string(total)}，先调一下');
+      return;
+    }
+
+    // 编辑无终点的循环计划会重写它覆盖的所有历史月份，先跟用户说清楚。
+    if (_isEdit &&
+        widget.edit!.recurringMonthly &&
+        widget.edit!.end == null) {
+      final s = widget.edit!.start;
+      final ok = await showConfirmDialog(
+        context,
+        title: '修改这条循环预算？',
+        message: s.year <= 2000
+            ? '它覆盖所有历史月份，改完后过去每个月显示的预算都会跟着变。'
+            : '它从 ${s.year} 年 ${s.month} 月起生效，改完后那之后每个月显示的预算都会跟着变。',
+        confirmText: '仍要修改',
+      );
+      if (!ok || !mounted) return;
     }
 
     final now = DateTime.now();
+    // 首条循环预算从 2000 年起覆盖全部历史月份（老账单也有预算可看）；
+    // 之后再新建的才从本月生效，历史月仍显示当时那条。
+    final hasRecurring = repo.budgetPeriods
+        .any((p) => p.recurringMonthly && p.end == null);
     final start = _recurring
         ? (_isEdit
             ? widget.edit!.start // 编辑循环计划保留原生效起点
-            : DateTime(now.year, now.month, 1))
+            : (hasRecurring
+                ? DateTime(now.year, now.month, 1)
+                : DateTime(2000, 1, 1)))
         : _customRange!.start;
     final end = _recurring ? null : _customRange!.end;
+    // 自定义时间段支持两种口径：每月额度（recurring + end）/ 整段总额。
+    final recurringMonthly = _recurring || _customMonthly;
     final income = Decimal.tryParse(_incomeCtrl.text.trim());
 
     if (_isEdit) {
@@ -520,22 +531,20 @@ class _BudgetSheetState extends State<_BudgetSheet> {
         bookId: _bookId,
         start: start,
         end: end,
-        recurringMonthly: _recurring,
+        recurringMonthly: recurringMonthly,
         total: total,
         categoryBudgets: catBudgets,
         monthlyIncome: income,
-        fixedExpenses: fixed,
       );
     } else {
       await repo.addBudgetPeriod(
         bookId: _bookId,
         start: start,
         end: end,
-        recurringMonthly: _recurring,
+        recurringMonthly: recurringMonthly,
         total: total,
         categoryBudgets: catBudgets,
         monthlyIncome: income,
-        fixedExpenses: fixed,
       );
     }
     Haptics.of(Haptic.success);
@@ -589,7 +598,8 @@ class _BudgetSheetState extends State<_BudgetSheet> {
           ),
           Flexible(
             child: SingleChildScrollView(
-              padding: const EdgeInsets.fromLTRB(20, 4, 20, 8),
+              // 底部多留一截，最后一行分类不被保存按钮/手势条挡住。
+              padding: const EdgeInsets.fromLTRB(20, 4, 20, 24),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -667,49 +677,71 @@ class _BudgetSheetState extends State<_BudgetSheet> {
                   ),
                   if (!_recurring) ...[
                     const SizedBox(height: 10),
-                    PressableScale(
-                      onPressed: _pickCustomRange,
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 12, vertical: 8),
-                        decoration: BoxDecoration(
-                          color: AppColors.card(scheme),
-                          borderRadius: BorderRadius.circular(999),
-                          border: Border.all(
-                              color: Colors.black.withValues(alpha: 0.06)),
-                        ),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Icon(Icons.date_range_outlined,
-                                size: 15, color: scheme.onSurfaceVariant),
-                            const SizedBox(width: 6),
-                            Text(
-                              _customRange == null
-                                  ? '选择起止日期'
-                                  : '${_customRange!.start.year}/${_customRange!.start.month}/${_customRange!.start.day}'
-                                      ' – '
-                                      '${_customRange!.end.year}/${_customRange!.end.month}/${_customRange!.end.day}',
-                              style: TextStyle(
-                                  fontSize: 13, color: scheme.onSurface),
+                    Row(
+                      children: [
+                        PressableScale(
+                          onPressed: _pickCustomRange,
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 12, vertical: 8),
+                            decoration: BoxDecoration(
+                              color: AppColors.card(scheme),
+                              borderRadius: BorderRadius.circular(999),
+                              border: Border.all(
+                                  color:
+                                      Colors.black.withValues(alpha: 0.06)),
                             ),
-                          ],
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(Icons.date_range_outlined,
+                                    size: 15, color: scheme.onSurfaceVariant),
+                                const SizedBox(width: 6),
+                                Text(
+                                  _customRange == null
+                                      ? '选择起止日期'
+                                      : '${_customRange!.start.year}/${_customRange!.start.month}/${_customRange!.start.day}'
+                                          ' – '
+                                          '${_customRange!.end.year}/${_customRange!.end.month}/${_customRange!.end.day}',
+                                  style: TextStyle(
+                                      fontSize: 13, color: scheme.onSurface),
+                                ),
+                              ],
+                            ),
+                          ),
                         ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    // 额度口径二选一：期间内每个月各给一份，还是整段共用一笔。
+                    SizedBox(
+                      width: 196,
+                      child: SlidingSegment<bool>(
+                        items: const [(true, '每月额度'), (false, '整段总额')],
+                        value: _customMonthly,
+                        onChanged: (v) {
+                          Haptics.selection();
+                          setState(() => _customMonthly = v);
+                        },
                       ),
                     ),
-                    const SizedBox(height: 2),
+                    const SizedBox(height: 4),
                     Text(
-                      '自定义周期的预算是整段期间的总额（如一次旅行）',
+                      _customMonthly
+                          ? '期间内每个月都是这个额度（如 1–7 月每月 4000）'
+                          : '整段期间共用这一笔总额（如一次旅行）',
                       style: TextStyle(
                           fontSize: 11, color: scheme.onSurfaceVariant),
                     ),
                   ],
                   const SizedBox(height: 16),
 
-                  // ── 本月可支配预算 + 智能建议按钮 ──
-                  Text('本月可支配预算',
-                      style: TextStyle(
-                          fontSize: 13, color: scheme.onSurfaceVariant)),
+                  // ── 本月预算（含房租等固定支出）+ 智能建议按钮 ──
+                  Text(
+                    !_recurring && !_customMonthly ? '期间预算总额' : '本月预算',
+                    style: TextStyle(
+                        fontSize: 13, color: scheme.onSurfaceVariant),
+                  ),
                   const SizedBox(height: 6),
                   Row(
                     children: [
@@ -718,6 +750,7 @@ class _BudgetSheetState extends State<_BudgetSheet> {
                           controller: _totalCtrl,
                           keyboardType: const TextInputType.numberWithOptions(
                               decimal: true),
+                          onChanged: (_) => setState(() {}),
                           decoration:
                               iosInputDecoration(hint: '如 4000', prefix: '¥ '),
                         ),
@@ -755,7 +788,7 @@ class _BudgetSheetState extends State<_BudgetSheet> {
                     ],
                   ),
 
-                  // ── 智能建议折叠区（收入 + 固定支出 + 生成）──
+                  // ── 智能建议折叠区（收入选填 + 生成）──
                   if (_suggestExpanded) ...[
                     const SizedBox(height: 12),
                     Container(
@@ -767,7 +800,7 @@ class _BudgetSheetState extends State<_BudgetSheet> {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Text('月收入（用于生成建议）',
+                          Text('月收入（选填）',
                               style: TextStyle(
                                   fontSize: 12,
                                   color: scheme.onSurfaceVariant)),
@@ -778,65 +811,8 @@ class _BudgetSheetState extends State<_BudgetSheet> {
                                 const TextInputType.numberWithOptions(
                                     decimal: true),
                             decoration: iosInputDecoration(
-                                hint: '如 8000', prefix: '¥ '),
+                                hint: '不填就按近 3 个月平均支出算', prefix: '¥ '),
                           ),
-                          const SizedBox(height: 10),
-                          Row(
-                            children: [
-                              Text('每月固定支出（房租、话费等）',
-                                  style: TextStyle(
-                                      fontSize: 12,
-                                      color: scheme.onSurfaceVariant)),
-                              const Spacer(),
-                              PressableScale(
-                                onPressed: () => setState(() => _fixed.add((
-                                      name: TextEditingController(),
-                                      amount: TextEditingController(),
-                                    ))),
-                                child: Icon(Icons.add_circle_outline,
-                                    size: 19, color: scheme.primary),
-                              ),
-                            ],
-                          ),
-                          for (var i = 0; i < _fixed.length; i++) ...[
-                            const SizedBox(height: 8),
-                            Row(
-                              children: [
-                                Expanded(
-                                  flex: 5,
-                                  child: TextField(
-                                    controller: _fixed[i].name,
-                                    decoration:
-                                        iosInputDecoration(hint: '如 房租'),
-                                  ),
-                                ),
-                                const SizedBox(width: 8),
-                                Expanded(
-                                  flex: 4,
-                                  child: TextField(
-                                    controller: _fixed[i].amount,
-                                    keyboardType: const TextInputType
-                                        .numberWithOptions(decimal: true),
-                                    decoration: iosInputDecoration(
-                                        hint: '金额', prefix: '¥ '),
-                                  ),
-                                ),
-                                PressableScale(
-                                  onPressed: () => setState(() {
-                                    final f = _fixed.removeAt(i);
-                                    f.name.dispose();
-                                    f.amount.dispose();
-                                  }),
-                                  child: Padding(
-                                    padding: const EdgeInsets.all(6),
-                                    child: Icon(Icons.remove_circle_outline,
-                                        size: 18,
-                                        color: scheme.onSurfaceVariant),
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ],
                           const SizedBox(height: 10),
                           PressableScale(
                             onPressed: () => _suggest(repo),
@@ -860,7 +836,8 @@ class _BudgetSheetState extends State<_BudgetSheet> {
                           ),
                           const SizedBox(height: 4),
                           Text(
-                            '建议 = 收入 − 固定支出 − 20% 储蓄，按你近 3 个月的消费结构分到各分类',
+                            '建议含房租等固定支出：填收入按 80% 算（留 20% 储蓄），'
+                            '不填按你近 3 个月平均支出算；再按消费结构分到各分类',
                             style: TextStyle(
                                 fontSize: 10.5,
                                 color: scheme.onSurfaceVariant,
@@ -873,9 +850,37 @@ class _BudgetSheetState extends State<_BudgetSheet> {
                   const SizedBox(height: 16),
 
                   // ── 分类预算 ──
-                  Text('分类预算（可选）',
-                      style: TextStyle(
-                          fontSize: 13, color: scheme.onSurfaceVariant)),
+                  Builder(builder: (_) {
+                    // 「已分配 ¥x / 总预算」实时提示，超了标橙（保存时也会拦）。
+                    var catSum = Decimal.zero;
+                    for (final c in _catCtrls.values) {
+                      final v = Decimal.tryParse(c.text.trim());
+                      if (v != null && v > Decimal.zero) catSum += v;
+                    }
+                    final total = Decimal.tryParse(_totalCtrl.text.trim());
+                    final over =
+                        total != null && total > Decimal.zero && catSum > total;
+                    return Row(
+                      children: [
+                        Text('分类预算（可选）',
+                            style: TextStyle(
+                                fontSize: 13, color: scheme.onSurfaceVariant)),
+                        const Spacer(),
+                        if (catSum > Decimal.zero)
+                          Text(
+                            '已分配 ${MoneyFormat.string(catSum)}'
+                            '${total == null || total <= Decimal.zero ? '' : ' / ${MoneyFormat.string(total)}'}',
+                            style: TextStyle(
+                              fontSize: 11.5,
+                              fontFamily: 'Nunito',
+                              color: over
+                                  ? AppColors.warning
+                                  : scheme.onSurfaceVariant,
+                            ),
+                          ),
+                      ],
+                    );
+                  }),
                   for (final c in cats) ...[
                     const SizedBox(height: 6),
                     Row(
@@ -898,6 +903,7 @@ class _BudgetSheetState extends State<_BudgetSheet> {
                                 const TextInputType.numberWithOptions(
                                     decimal: true),
                             textAlign: TextAlign.end,
+                            onChanged: (_) => setState(() {}),
                             decoration:
                                 iosInputDecoration(hint: '0', prefix: '¥ '),
                           ),

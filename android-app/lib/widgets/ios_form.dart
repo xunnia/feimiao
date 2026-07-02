@@ -18,7 +18,7 @@ InputDecoration iosInputDecoration({String? hint, String? prefix}) {
     isDense: true,
     counterText: '',
     contentPadding:
-        const EdgeInsets.symmetric(horizontal: 14, vertical: 13),
+        const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
     border: border,
     enabledBorder: border,
     focusedBorder: OutlineInputBorder(

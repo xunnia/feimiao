@@ -99,23 +99,33 @@ void main() {
   });
 
   group('BudgetSuggestion', () {
-    test('建议总额 = 收入 − 固定 − 20% 储蓄', () {
-      final v = BudgetSuggestion.suggestTotal(
-        income: Decimal.fromInt(10000),
-        fixedTotal: Decimal.fromInt(3000),
-      );
-      expect(v, Decimal.fromInt(5000)); // 10000-3000-2000
+    test('按收入建议 = 收入 × 80%（总预算含固定支出）', () {
+      expect(BudgetSuggestion.suggestFromIncome(Decimal.fromInt(10000)),
+          Decimal.fromInt(8000));
+      expect(BudgetSuggestion.suggestFromIncome(Decimal.zero), isNull);
     });
 
-    test('收入不够时返回 null', () {
-      expect(
-          BudgetSuggestion.suggestTotal(
-              income: Decimal.fromInt(1000), fixedTotal: Decimal.fromInt(900)),
-          isNull);
-      expect(
-          BudgetSuggestion.suggestTotal(
-              income: Decimal.zero, fixedTotal: Decimal.zero),
-          isNull);
+    test('averageMonthlySpend 只算有记录的月份、不含本月', () {
+      TransactionRecord rec(int amount, DateTime date) =>
+          TransactionRecord.create(
+            kind: TransactionKind.expense,
+            amount: Decimal.fromInt(amount),
+            categoryName: '午餐',
+            accountName: '',
+            toAccountName: '',
+            date: date,
+          );
+      final now = DateTime(2026, 7, 10);
+      // 近 3 个月里只有 5、6 月有支出：(3000+1000)/2 = 2000。
+      final records = [
+        rec(3000, DateTime(2026, 6, 5)),
+        rec(1000, DateTime(2026, 5, 20)),
+        rec(999, DateTime(2026, 7, 3)), // 本月，不算
+        rec(999, DateTime(2026, 3, 5)), // 超 3 个月，不算
+      ];
+      expect(BudgetSuggestion.averageMonthlySpend(records, now: now),
+          Decimal.fromInt(2000));
+      expect(BudgetSuggestion.averageMonthlySpend(const [], now: now), isNull);
     });
 
     test('historicalWeights 只算近3个月且不含本月，按顶级归并', () {

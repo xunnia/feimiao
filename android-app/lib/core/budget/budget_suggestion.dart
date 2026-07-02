@@ -3,24 +3,51 @@ import 'package:decimal/decimal.dart';
 import '../models/transaction_kind.dart';
 import '../models/transaction_record.dart';
 
-/// 一页式预算设置的「自动建议」计算：
-/// 总预算 = 收入 − 固定支出 − 储蓄（默认收入的 20%）；
+/// 预算设置的「智能建议」计算。
+/// 口径（2026-07-03 修正）：总预算**含**房租等固定支出——固定支出本身也会被记账，
+/// 单独扣一遍会重复计算。建议值二选一：
+///   有收入 → 收入 × (1 − 储蓄率)，默认留 20% 储蓄；
+///   没收入 → 近 3 个月平均月支出（记过账就能给建议）。
 /// 分类明细按用户自己近 3 个月的真实消费结构分配（比按通用法则拍脑袋更贴身）。
 class BudgetSuggestion {
   BudgetSuggestion._();
 
-  /// 建议总预算（弹性可花额度，不含固定支出）。
-  /// 收入不为正、或算出来 ≤0 时返回 null（没法给建议）。
-  static Decimal? suggestTotal({
-    required Decimal income,
-    required Decimal fixedTotal,
+  /// 按收入建议总预算 = 收入 × (1 − [savingRate])，取整元。
+  /// 收入不为正时返回 null。
+  static Decimal? suggestFromIncome(
+    Decimal income, {
     double savingRate = 0.2,
   }) {
     if (income <= Decimal.zero) return null;
-    final saving = income.toDouble() * savingRate;
-    final v = income.toDouble() - fixedTotal.toDouble() - saving;
+    final v = income.toDouble() * (1 - savingRate);
     if (v <= 0) return null;
-    return Decimal.parse(v.toStringAsFixed(0)); // 建议值取整元
+    return Decimal.parse(v.toStringAsFixed(0));
+  }
+
+  /// 近 [months] 个自然月（不含本月）的平均月支出，取整元。
+  /// 只对有支出记录的月份取平均（刚记 1 个月的新用户也能得到靠谱建议）；
+  /// 一笔支出都没有时返回 null。
+  static Decimal? averageMonthlySpend(
+    List<TransactionRecord> records, {
+    required DateTime now,
+    int months = 3,
+  }) {
+    final from = DateTime(now.year, now.month - months, 1);
+    final to = DateTime(now.year, now.month, 1); // 不含本月
+    final byMonth = <int, double>{}; // year*100+month -> 支出合计
+    for (final r in records) {
+      if (r.kind != TransactionKind.expense) continue;
+      if (r.amount <= Decimal.zero) continue;
+      final d = DateTime(r.date.year, r.date.month, 1);
+      if (d.isBefore(from) || !d.isBefore(to)) continue;
+      final key = d.year * 100 + d.month;
+      byMonth[key] = (byMonth[key] ?? 0) + r.amount.toDouble();
+    }
+    if (byMonth.isEmpty) return null;
+    final avg =
+        byMonth.values.reduce((a, b) => a + b) / byMonth.length;
+    if (avg <= 0) return null;
+    return Decimal.parse(avg.toStringAsFixed(0));
   }
 
   /// 近 [months] 个月（不含本月）的支出结构权重：顶级分类 key -> 占比。
