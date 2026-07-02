@@ -134,6 +134,9 @@ class TransactionEntity {
   final bool reimbursable;
   final String imagePath;
 
+  /// 不计入收支：仍在账单列表里，但统计/预算/洞察都跳过它。
+  final bool excluded;
+
   Decimal get amount => Decimal.parse(amountStr);
   DateTime get date => DateTime.fromMillisecondsSinceEpoch(dateMs);
   TransactionKind get txKind => TransactionKind.fromJson(kind);
@@ -164,6 +167,7 @@ class TransactionEntity {
     this.tagsRaw = '',
     this.reimbursable = false,
     this.imagePath = '',
+    this.excluded = false,
   });
 
   TransactionRecord toRecord({String languageCode = 'zh'}) =>
@@ -197,6 +201,7 @@ class TransactionEntity {
         tagsRaw: m['tags'] as String? ?? '',
         reimbursable: ((m['reimbursable'] as int?) ?? 0) == 1,
         imagePath: m['image_path'] as String? ?? '',
+        excluded: ((m['excluded'] as int?) ?? 0) == 1,
       );
 }
 
@@ -283,7 +288,7 @@ class TagEntity {
 // ---------------------------------------------------------------------------
 
 class AppRepository extends ChangeNotifier {
-  static const _dbVersion = 14;
+  static const _dbVersion = 15;
   static const _dbName = 'qingji.db';
 
   Database? _db;
@@ -316,6 +321,9 @@ class AppRepository extends ChangeNotifier {
 
   /// 抽屉功能项的用户自定义顺序（key 列表，见 main.dart 注册表）。
   final List<String> _drawerOrder = [];
+
+  /// 统计页卡片的用户自定义顺序/可见集（key 列表，见 statistics_view 注册表）。
+  final List<String> _statCardOrder = [];
 
   List<BookEntity> get books => List.unmodifiable(_books);
   List<AccountEntity> get accounts => List.unmodifiable(_accounts);
@@ -370,6 +378,36 @@ class AppRepository extends ChangeNotifier {
     final raw = rows.isEmpty ? '' : (rows.first['value'] as String? ?? '');
     if (raw.isNotEmpty) {
       _drawerOrder.addAll(raw.split(',').where((s) => s.isNotEmpty));
+    }
+  }
+
+  /// 统计页（月视图）卡片顺序（key 列表）；空 = 用默认。
+  List<String> get statCardOrder => List.unmodifiable(_statCardOrder);
+
+  /// 保存统计卡片顺序/可见集（长按排序、移除、添加后持久化）。
+  Future<void> setStatCardOrder(List<String> keys) async {
+    _statCardOrder
+      ..clear()
+      ..addAll(keys);
+    await _db!.insert(
+      'app_settings',
+      {'key': 'stat_cards', 'value': keys.join(',')},
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+    notifyListeners();
+  }
+
+  Future<void> _loadStatCardOrder() async {
+    final rows = await _db!.query(
+      'app_settings',
+      where: 'key = ?',
+      whereArgs: ['stat_cards'],
+      limit: 1,
+    );
+    _statCardOrder.clear();
+    final raw = rows.isEmpty ? '' : (rows.first['value'] as String? ?? '');
+    if (raw.isNotEmpty) {
+      _statCardOrder.addAll(raw.split(',').where((s) => s.isNotEmpty));
     }
   }
 
@@ -478,7 +516,8 @@ class AppRepository extends ChangeNotifier {
         date_ms         INTEGER NOT NULL,
         tags            TEXT NOT NULL DEFAULT '',
         reimbursable    INTEGER NOT NULL DEFAULT 0,
-        image_path      TEXT NOT NULL DEFAULT ''
+        image_path      TEXT NOT NULL DEFAULT '',
+        excluded        INTEGER NOT NULL DEFAULT 0
       )
     ''');
 
@@ -727,6 +766,13 @@ class AppRepository extends ChangeNotifier {
             "ALTER TABLE books ADD COLUMN cover TEXT NOT NULL DEFAULT ''");
       } catch (_) {}
     }
+    if (oldVersion < 15) {
+      // 「不计入收支」：帮人代付等不想进统计/预算的账（记录仍在列表里）。
+      try {
+        await db.execute(
+            'ALTER TABLE transactions ADD COLUMN excluded INTEGER NOT NULL DEFAULT 0');
+      } catch (_) {}
+    }
   }
 
   static const _createBudgetPeriodsSql = '''
@@ -802,6 +848,7 @@ class AppRepository extends ChangeNotifier {
       _loadSavingsGoals(),
       _loadTags(),
       _loadDrawerOrder(),
+      _loadStatCardOrder(),
     ]);
     notifyListeners();
   }
@@ -1204,7 +1251,8 @@ class AppRepository extends ChangeNotifier {
         t.date_ms,
         t.tags,
         t.reimbursable,
-        t.image_path
+        t.image_path,
+        t.excluded
       FROM transactions t
       LEFT JOIN categories c  ON c.id = t.category_id
       LEFT JOIN accounts   a  ON a.id = t.account_id
@@ -1305,6 +1353,7 @@ class AppRepository extends ChangeNotifier {
     List<int> tagIds = const [],
     bool reimbursable = false,
     String imagePath = '',
+    bool excluded = false,
     int? bookId,
   }) async {
     final newId = await _db!.insert('transactions', {
@@ -1320,6 +1369,7 @@ class AppRepository extends ChangeNotifier {
       'tags': tagIds.join(','),
       'reimbursable': reimbursable ? 1 : 0,
       'image_path': imagePath,
+      'excluded': excluded ? 1 : 0,
     });
     await _loadTransactions();
     notifyListeners();
@@ -1372,6 +1422,7 @@ class AppRepository extends ChangeNotifier {
     List<int> tagIds = const [],
     bool reimbursable = false,
     String imagePath = '',
+    bool excluded = false,
   }) async {
     final oldPath = await _imagePathOf(id);
     if (oldPath != imagePath) _deleteReceiptFileIfOwned(oldPath);
@@ -1389,6 +1440,7 @@ class AppRepository extends ChangeNotifier {
         'tags': tagIds.join(','),
         'reimbursable': reimbursable ? 1 : 0,
         'image_path': imagePath,
+        'excluded': excluded ? 1 : 0,
       },
       where: 'id = ?',
       whereArgs: [id],
@@ -1500,8 +1552,12 @@ class AppRepository extends ChangeNotifier {
     return sum;
   }
 
-  List<TransactionRecord> get allRecords =>
-      _transactions.map((t) => t.toRecord()).toList();
+  /// 供统计/预算/洞察消费的记录流：**跳过「不计入收支」的账**。
+  /// 账单列表要显示全部请用 [transactions]。
+  List<TransactionRecord> get allRecords => [
+        for (final t in _transactions)
+          if (!t.excluded) t.toRecord()
+      ];
 
   // ---------------------------------------------------------------------------
   // 预算期间（新模型：阶段性预算）

@@ -119,11 +119,13 @@ class _ManualAddSheetState extends State<ManualAddSheet> {
   int? _activeParentId; // 当前选中的大类
   int? _panelParentId; // 当前展开二级面板的大类（null=没开）
   int? _selectedAccountId;
+  int? _toAccountId; // 转账的「入款账户」
   int? _bookId; // 记到哪个账本（默认当前账本）
   DateTime _date = DateTime.now();
   final TextEditingController _noteController = TextEditingController();
   List<int> _tagIds = [];
   bool _reimbursable = false;
+  bool _excluded = false; // 不计入收支（帮人代付等，统计/预算跳过）
   String? _imagePath;
   int _expressionVersion = 0;
 
@@ -150,10 +152,12 @@ class _ManualAddSheetState extends State<ManualAddSheet> {
       _expression.loadAmount(t.amount);
       _selectedCategoryId = t.categoryId;
       _selectedAccountId = t.accountId;
+      _toAccountId = t.toAccountId;
       _date = t.date;
       _noteController.text = t.note;
       _tagIds = List<int>.of(t.tagIds);
       _reimbursable = t.reimbursable;
+      _excluded = t.excluded;
       _imagePath = t.imagePath.isEmpty ? null : t.imagePath;
       final repo = context.read<AppRepository>();
       final cat = repo.categories
@@ -189,10 +193,18 @@ class _ManualAddSheetState extends State<ManualAddSheet> {
     Haptics.selection();
     setState(() {
       _kind = kind;
-      final cats = repo.categoriesForKindRanked(kind);
-      _selectedCategoryId = cats.firstOrNull?.id;
-      _activeParentId = _selectedCategoryId;
       _panelParentId = null;
+      if (kind == TransactionKind.transfer) {
+        // 转账不占分类；默认给一个和扣款不同的入款账户。
+        _toAccountId ??= repo.accounts
+            .where((a) => a.id != (_selectedAccountId ?? -1))
+            .firstOrNull
+            ?.id;
+      } else {
+        final cats = repo.categoriesForKindRanked(kind);
+        _selectedCategoryId = cats.firstOrNull?.id;
+        _activeParentId = _selectedCategoryId;
+      }
       if (kind != TransactionKind.expense) _reimbursable = false;
     });
   }
@@ -232,6 +244,39 @@ class _ManualAddSheetState extends State<ManualAddSheet> {
     if (accountId == null) return false;
     final note = _noteController.text.trim();
 
+    // 转账：要两个不同账户；不占分类，也不进统计（引擎本来就跳过转账）。
+    if (_kind == TransactionKind.transfer) {
+      final to = _toAccountId;
+      if (to == null || to == accountId) return false;
+      final edit = widget.edit;
+      if (edit != null) {
+        await repo.updateTransaction(
+          id: edit.id,
+          kind: TransactionKind.transfer,
+          amount: amount,
+          categoryId: null,
+          accountId: accountId,
+          toAccountId: to,
+          note: note,
+          date: _date,
+          imagePath: _imagePath ?? '',
+        );
+      } else {
+        await repo.addTransaction(
+          kind: TransactionKind.transfer,
+          amount: amount,
+          categoryId: null,
+          accountId: accountId,
+          toAccountId: to,
+          note: note,
+          date: _date,
+          imagePath: _imagePath ?? '',
+          bookId: _bookId,
+        );
+      }
+      return true;
+    }
+
     final edit = widget.edit;
     if (edit != null) {
       await repo.updateTransaction(
@@ -246,6 +291,7 @@ class _ManualAddSheetState extends State<ManualAddSheet> {
         reimbursable:
             _kind == TransactionKind.expense ? _reimbursable : false,
         imagePath: _imagePath ?? '',
+        excluded: _excluded,
       );
       // 学习用户纠正：改了分类且有备注 → 记住「备注 → 新分类」，下次 AI 自动套用。
       if (_selectedCategoryId != null &&
@@ -273,6 +319,7 @@ class _ManualAddSheetState extends State<ManualAddSheet> {
       tagIds: _tagIds,
       reimbursable: _kind == TransactionKind.expense ? _reimbursable : false,
       imagePath: _imagePath ?? '',
+      excluded: _excluded,
       bookId: _bookId,
     );
     return true;
@@ -364,17 +411,25 @@ class _ManualAddSheetState extends State<ManualAddSheet> {
             padding: const EdgeInsets.fromLTRB(16, 14, 12, 0),
             child: Row(
               children: [
-                SizedBox(
-                  width: 150,
-                  child: SlidingSegment<TransactionKind>(
-                    items: const [
-                      (TransactionKind.expense, '支出'),
-                      (TransactionKind.income, '收入'),
-                    ],
-                    value: _kind,
-                    onChanged: _onKindChanged,
+                if (_isEdit && _kind == TransactionKind.transfer)
+                  // 编辑转账不允许改类型（和分类账互转要重录，容易出错）
+                  const Text('编辑转账',
+                      style:
+                          TextStyle(fontSize: 16, fontWeight: FontWeight.w600))
+                else
+                  SizedBox(
+                    width: _isEdit ? 150 : 216,
+                    child: SlidingSegment<TransactionKind>(
+                      items: [
+                        (TransactionKind.expense, '支出'),
+                        (TransactionKind.income, '收入'),
+                        // 新记一笔才给转账入口；编辑保持原类型二选一
+                        if (!_isEdit) (TransactionKind.transfer, '转账'),
+                      ],
+                      value: _kind,
+                      onChanged: _onKindChanged,
+                    ),
                   ),
-                ),
                 const Spacer(),
                 if (widget.onSwitchToAi != null) ...[
                   _ModePill(label: '手动记账', onTap: widget.onSwitchToAi!),
@@ -389,9 +444,53 @@ class _ManualAddSheetState extends State<ManualAddSheet> {
             ),
           ),
 
+          // ── 转账：扣款 ⇄ 入款 账户选择（不占分类）──
+          if (_kind == TransactionKind.transfer)
+            Consumer<AppRepository>(
+              builder: (context, repo, _) {
+                String? nameOf(int? id) =>
+                    repo.accounts.where((a) => a.id == id).firstOrNull?.name;
+                return Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 26, 16, 18),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: _AccountBox(
+                          hint: '扣款账户',
+                          name: nameOf(_selectedAccountId),
+                          accounts: repo.accounts,
+                          selectedId: _selectedAccountId,
+                          onPick: (id) =>
+                              setState(() => _selectedAccountId = id),
+                        ),
+                      ),
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 8),
+                        child: Icon(Icons.swap_horiz,
+                            size: 18,
+                            color: Theme.of(context)
+                                .colorScheme
+                                .onSurfaceVariant),
+                      ),
+                      Expanded(
+                        child: _AccountBox(
+                          hint: '入款账户',
+                          name: nameOf(_toAccountId),
+                          accounts: repo.accounts,
+                          selectedId: _toAccountId,
+                          onPick: (id) => setState(() => _toAccountId = id),
+                        ),
+                      ),
+                    ],
+                  ),
+                );
+              },
+            ),
+
           // ── 分类区（内容多高就多高，放不下才滚动）──
           // 二级面板是**浮层**：锚在被点的那行下面、悬浮在网格上方，
           // 不占布局位置，所以卡片整体高度纹丝不动（用户 0703 要求）。
+          if (_kind != TransactionKind.transfer)
           Flexible(
             child: Consumer<AppRepository>(
               builder: (context, repo, _) {
@@ -411,11 +510,20 @@ class _ManualAddSheetState extends State<ManualAddSheet> {
                     : rows.indexWhere(
                         (r) => r.any((c) => c.id == _panelParentId));
 
+                // 选了二级分类时，在一级名字后缀「·二级名」缩略显示。
+                final selCat = repo.categories
+                    .where((c) => c.id == _selectedCategoryId)
+                    .firstOrNull;
+                final subLabels = selCat != null && selCat.parentId != null
+                    ? {selCat.parentId!: selCat.nameZh}
+                    : const <int, String>{};
+
                 Widget grid(List<CategoryEntity> row) => CategoryGrid(
                       categories: row,
                       selectedId: _activeParentId,
                       expandableIds: expandable,
                       expandedId: _panelParentId,
+                      subLabels: subLabels,
                       onSelected: (c) => _onCategoryTap(c, repo),
                     );
 
@@ -426,48 +534,21 @@ class _ManualAddSheetState extends State<ManualAddSheet> {
                       SingleChildScrollView(
                         child: Column(
                           children: [
+                            // 被点的那行保持原样清晰（不重画不叠雾，无双影）；
+                            // 其余行轻模糊压暗让位，点一下收起面板。
                             for (var i = 0; i < rows.length; i++)
                               i == activeRow
-                                  // 被点的那行挂上锚点，浮层跟着它走（滚动也跟随）
                                   ? CompositedTransformTarget(
                                       link: _panelLink,
                                       child: grid(rows[i]),
                                     )
-                                  : grid(rows[i]),
+                                  : _blurIf(panelOpen, grid(rows[i])),
                             const SizedBox(height: 4),
                           ],
                         ),
                       ),
-                      if (panelOpen) ...[
-                        // 网格区盖一层白雾模糊，点一下收起
-                        Positioned.fill(
-                          child: GestureDetector(
-                            behavior: HitTestBehavior.opaque,
-                            onTap: _closePanel,
-                            child: ClipRect(
-                              child: BackdropFilter(
-                                filter: ImageFilter.blur(
-                                    sigmaX: 3, sigmaY: 3),
-                                child: Container(
-                                  color: Colors.white
-                                      .withValues(alpha: 0.3),
-                                ),
-                              ),
-                            ),
-                          ),
-                        ),
-                        // 被点的那行在雾层上再画一遍，保持清晰可点（对齐咔皮）
-                        if (activeRow >= 0)
-                          CompositedTransformFollower(
-                            link: _panelLink,
-                            targetAnchor: Alignment.topLeft,
-                            followerAnchor: Alignment.topLeft,
-                            child: SizedBox(
-                              width: constraints.maxWidth,
-                              child: grid(rows[activeRow]),
-                            ),
-                          ),
-                        // 二级面板：悬浮在锚点行正下方
+                      // 二级面板：悬浮在锚点行正下方，不占布局位置
+                      if (panelOpen)
                         CompositedTransformFollower(
                           link: _panelLink,
                           targetAnchor: Alignment.bottomCenter,
@@ -485,7 +566,6 @@ class _ManualAddSheetState extends State<ManualAddSheet> {
                             ),
                           ),
                         ),
-                      ],
                     ],
                   ),
                 );
@@ -504,9 +584,12 @@ class _ManualAddSheetState extends State<ManualAddSheet> {
                   date: _date,
                   bookId: _bookId,
                   showBook: !_isEdit, // 编辑不换账本
+                  // 转账只留日期/账本（账户在上方选，报销/标签/不计入不适用）
+                  showExtras: _kind != TransactionKind.transfer,
                   accountId: _selectedAccountId,
                   tagCount: _tagIds.length,
                   reimbursable: _reimbursable,
+                  excluded: _excluded,
                   onDateChanged: (d) => setState(() => _date = d),
                   onBookChanged: (id) => setState(() => _bookId = id),
                   onAccountChanged: (id) =>
@@ -514,6 +597,8 @@ class _ManualAddSheetState extends State<ManualAddSheet> {
                   onTagsTap: _pickTags,
                   onReimbursableToggle: () =>
                       setState(() => _reimbursable = !_reimbursable),
+                  onExcludedToggle: () =>
+                      setState(() => _excluded = !_excluded),
                 ),
                 _AmountCard(
                   expression: _expression,
@@ -554,7 +639,8 @@ class _ManualAddSheetState extends State<ManualAddSheet> {
     );
   }
 
-  /// 二级面板展开时把其它区域模糊压暗；点模糊区收起面板。
+  /// 二级面板展开时把其它区域轻模糊让位；点模糊区收起面板。
+  /// 透明度别压太狠（0.65），保持背景可读（用户 0703 反馈）。
   Widget _blurIf(bool blur, Widget child) {
     if (!blur) return child;
     return GestureDetector(
@@ -562,8 +648,8 @@ class _ManualAddSheetState extends State<ManualAddSheet> {
       onTap: _closePanel,
       child: AbsorbPointer(
         child: ImageFiltered(
-          imageFilter: ImageFilter.blur(sigmaX: 2.5, sigmaY: 2.5),
-          child: Opacity(opacity: 0.45, child: child),
+          imageFilter: ImageFilter.blur(sigmaX: 1.8, sigmaY: 1.8),
+          child: Opacity(opacity: 0.65, child: child),
         ),
       ),
     );
@@ -658,6 +744,73 @@ class _SubcategoryPanel extends StatelessWidget {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// 转账的账户选择块（扣款 / 入款，白卡 + iOS 浮动菜单，对齐咔皮）
+// ─────────────────────────────────────────────────────────────────────────────
+
+class _AccountBox extends StatelessWidget {
+  final String hint;
+  final String? name;
+  final List<AccountEntity> accounts;
+  final int? selectedId;
+  final ValueChanged<int> onPick;
+
+  const _AccountBox({
+    required this.hint,
+    required this.name,
+    required this.accounts,
+    required this.selectedId,
+    required this.onPick,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Builder(
+      builder: (boxCtx) => PressableScale(
+        onPressed: () => showIosMenu(boxCtx, [
+          for (final a in accounts)
+            IosMenuItem(
+              label: a.name,
+              icon: a.id == selectedId
+                  ? Icons.check_circle
+                  : Icons.radio_button_unchecked,
+              onTap: () => onPick(a.id),
+            ),
+        ]),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
+          decoration: BoxDecoration(
+            color: AppColors.card(scheme),
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: Colors.black.withValues(alpha: 0.08)),
+          ),
+          child: Row(
+            children: [
+              Icon(Icons.account_balance_wallet_outlined,
+                  size: 15, color: scheme.onSurfaceVariant),
+              const SizedBox(width: 7),
+              Expanded(
+                child: Text(
+                  name ?? hint,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 13,
+                    color: name == null
+                        ? scheme.onSurfaceVariant
+                        : scheme.onSurface,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // 芯片排：日期 / 账本 / 账户 / 标签 / 待报销（横滑）
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -666,28 +819,34 @@ class _ChipsRow extends StatelessWidget {
   final DateTime date;
   final int? bookId;
   final bool showBook;
+  final bool showExtras;
   final int? accountId;
   final int tagCount;
   final bool reimbursable;
+  final bool excluded;
   final ValueChanged<DateTime> onDateChanged;
   final ValueChanged<int?> onBookChanged;
   final ValueChanged<int?> onAccountChanged;
   final VoidCallback onTagsTap;
   final VoidCallback onReimbursableToggle;
+  final VoidCallback onExcludedToggle;
 
   const _ChipsRow({
     required this.kind,
     required this.date,
     required this.bookId,
     this.showBook = true,
+    this.showExtras = true,
     required this.accountId,
     required this.tagCount,
     required this.reimbursable,
+    required this.excluded,
     required this.onDateChanged,
     required this.onBookChanged,
     required this.onAccountChanged,
     required this.onTagsTap,
     required this.onReimbursableToggle,
+    required this.onExcludedToggle,
   });
 
   String _dateLabel() {
@@ -750,7 +909,7 @@ class _ChipsRow extends StatelessWidget {
             const SizedBox(width: 8),
           ],
           // 账户 —— 同款 iOS 浮动菜单
-          if (repo.accounts.isNotEmpty) ...[
+          if (showExtras && repo.accounts.isNotEmpty) ...[
             Builder(
               builder: (chipCtx) => _Chip(
                 icon: Icons.account_balance_wallet_outlined,
@@ -769,22 +928,32 @@ class _ChipsRow extends StatelessWidget {
             ),
             const SizedBox(width: 8),
           ],
-          // 标签
-          _Chip(
-            icon: Icons.label_outline,
-            label: tagCount > 0 ? '$tagCount 个标签' : '标签',
-            selected: tagCount > 0,
-            onTap: onTagsTap,
-          ),
-          // 待报销（仅支出）
-          if (kind == TransactionKind.expense) ...[
+          if (showExtras) ...[
+            // 标签
+            _Chip(
+              icon: Icons.label_outline,
+              label: tagCount > 0 ? '$tagCount 个标签' : '标签',
+              selected: tagCount > 0,
+              onTap: onTagsTap,
+            ),
+            // 待报销（仅支出）
+            if (kind == TransactionKind.expense) ...[
+              const SizedBox(width: 8),
+              _Chip(
+                icon: Icons.receipt_long_outlined,
+                label: '待报销',
+                selected: reimbursable,
+                selectedColor: AppColors.warning,
+                onTap: onReimbursableToggle,
+              ),
+            ],
+            // 不计入收支（帮人代付等：留在账单里，统计/预算跳过）
             const SizedBox(width: 8),
             _Chip(
-              icon: Icons.receipt_long_outlined,
-              label: '待报销',
-              selected: reimbursable,
-              selectedColor: AppColors.warning,
-              onTap: onReimbursableToggle,
+              icon: Icons.visibility_off_outlined,
+              label: '不计入',
+              selected: excluded,
+              onTap: onExcludedToggle,
             ),
           ],
         ],

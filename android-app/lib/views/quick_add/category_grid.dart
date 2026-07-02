@@ -85,6 +85,9 @@ class CategoryGrid extends StatelessWidget {
   final Set<int> expandableIds;
   final int? expandedId;
 
+  /// 大类 id -> 已选中的二级分类名：显示成「大类·二级」（缩略）。
+  final Map<int, String> subLabels;
+
   const CategoryGrid({
     super.key,
     required this.categories,
@@ -92,6 +95,7 @@ class CategoryGrid extends StatelessWidget {
     required this.onSelected,
     this.expandableIds = const <int>{},
     this.expandedId,
+    this.subLabels = const <int, String>{},
   });
 
   static const int _columns = 5;
@@ -120,6 +124,7 @@ class CategoryGrid extends StatelessWidget {
           isSelected: cat.id == selectedId,
           showChevron: expandableIds.contains(cat.id),
           expanded: cat.id == expandedId,
+          subLabel: subLabels[cat.id],
           scheme: scheme,
           onTap: () {
             HapticFeedback.selectionClick();
@@ -136,6 +141,7 @@ class _CategoryItem extends StatelessWidget {
   final bool isSelected;
   final bool showChevron;
   final bool expanded;
+  final String? subLabel;
   final ColorScheme scheme;
   final VoidCallback onTap;
 
@@ -144,6 +150,7 @@ class _CategoryItem extends StatelessWidget {
     required this.isSelected,
     required this.showChevron,
     required this.expanded,
+    this.subLabel,
     required this.scheme,
     required this.onTap,
   });
@@ -205,10 +212,13 @@ class _CategoryItem extends StatelessWidget {
             ],
           ),
           const SizedBox(height: 4),
+          // 选中=加粗但保持黑色（不变蓝）；选了二级时后缀「·二级名」缩略显示。
           Text(
-            category.nameZh,
+            subLabel == null ? category.nameZh : '${category.nameZh}·$subLabel',
             style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                  color: isSelected ? scheme.primary : scheme.onSurfaceVariant,
+                  fontSize: subLabel == null ? null : 10,
+                  color:
+                      isSelected ? scheme.onSurface : scheme.onSurfaceVariant,
                   fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
                 ),
             maxLines: 1,

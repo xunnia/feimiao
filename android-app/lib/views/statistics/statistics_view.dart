@@ -166,6 +166,7 @@ class _StatisticsViewState extends State<StatisticsView> {
       case _StatRange.month:
         return _MonthlyContent(
           records: records,
+          repo: repo,
           displayedMonth: _displayedMonth,
           isCurrentMonth: _isCurrentMonth,
           // 预算期间模型：历史月显示当时生效的预算。
@@ -315,6 +316,7 @@ class _WeekContent extends StatelessWidget {
 
 class _MonthlyContent extends StatelessWidget {
   final List<TransactionRecord> records;
+  final AppRepository repo;
   final DateTime displayedMonth;
   final bool isCurrentMonth;
   final Decimal? monthlyBudget;
@@ -322,11 +324,40 @@ class _MonthlyContent extends StatelessWidget {
 
   const _MonthlyContent({
     required this.records,
+    required this.repo,
     required this.displayedMonth,
     required this.isCurrentMonth,
     required this.monthlyBudget,
     required this.onShiftMonth,
   });
+
+  /// 月视图卡片注册表：key 用于持久化，别改已有 key。
+  static const Map<String, String> _cardTitles = {
+    'insights': '喵的洞察',
+    'budget': '本月预算',
+    'ring': '支出构成',
+    'daily': '每日趋势',
+    'ranking': '分类排行',
+    'top5': '单笔支出排行',
+    'heatmap': '消费热力图',
+    'compare': '本月 vs 上月',
+    'radar': '消费结构雷达',
+    'stacked': '近 12 月收支',
+  };
+
+  /// 默认可见卡片（热力图/对比/雷达/堆叠柱在图表库里，用户自己加）。
+  static const List<String> _defaultOrder = [
+    'insights', 'budget', 'ring', 'daily', 'ranking', 'top5',
+  ];
+
+  List<String> _visibleKeys() {
+    final saved = repo.statCardOrder;
+    if (saved.isEmpty) return List.of(_defaultOrder);
+    return [
+      for (final k in saved)
+        if (_cardTitles.containsKey(k)) k
+    ];
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -351,8 +382,7 @@ class _MonthlyContent extends StatelessWidget {
       ..sort((a, b) => b.amount.compareTo(a.amount));
     final top5 = topExpenses.take(5).toList();
 
-    return ListView(
-      padding: const EdgeInsets.all(16),
+    final header = Column(
       children: [
         _ArrowSwitcher(
           label: '${displayedMonth.year} 年 ${displayedMonth.month} 月',
@@ -367,68 +397,253 @@ class _MonthlyContent extends StatelessWidget {
         ),
         _MoMComparison(current: summary, previous: prevSummary),
         const SizedBox(height: 16),
-        _InsightsCard(
+      ],
+    );
+
+    // 本月完全没数据：给空状态，不进卡片管理。
+    if (summary.expenseByCategory.isEmpty &&
+        summary.totalIncome == Decimal.zero) {
+      return ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          header,
+          const _EmptyState(
+            message: '本月还没有记录',
+            sub: '记几笔之后这里会出现分析图表',
+          ),
+        ],
+      );
+    }
+
+    // ── 按用户顺序构建可见卡片（情境性无数据的卡自动跳过但保留位置）──
+    final visible = _visibleKeys();
+    final items = <(String, Widget)>[];
+    for (final k in visible) {
+      final w = _buildCard(k, summary, prevSummary, top5);
+      if (w != null) items.add((k, w));
+    }
+
+    return ReorderableListView(
+      padding: const EdgeInsets.all(16),
+      buildDefaultDragHandles: false,
+      header: header,
+      footer: _CustomizeButton(
+        onTap: () => _showCardLibrary(context, visible),
+      ),
+      onReorder: (o, n) {
+        if (n > o) n--;
+        final itemKeys = [for (final e in items) e.$1];
+        final moved = itemKeys.removeAt(o);
+        itemKeys.insert(n, moved);
+        Haptics.selection();
+        // 新顺序 = 参与排序的卡 + 情境性隐藏的卡（保持原相对顺序放后面）
+        repo.setStatCardOrder([
+          ...itemKeys,
+          ...visible.where((k) => !itemKeys.contains(k)),
+        ]);
+      },
+      children: [
+        for (var i = 0; i < items.length; i++)
+          ReorderableDelayedDragStartListener(
+            key: ValueKey('stat_card_${items[i].$1}'),
+            index: i,
+            child: Padding(
+              padding: const EdgeInsets.only(bottom: 16),
+              child: items[i].$2,
+            ),
+          ),
+      ],
+    );
+  }
+
+  Widget? _buildCard(
+    String key,
+    MonthlySummary summary,
+    MonthlySummary prevSummary,
+    List<TransactionRecord> top5,
+  ) {
+    final hasExpense = summary.expenseByCategory.isNotEmpty;
+    switch (key) {
+      case 'insights':
+        return _InsightsCard(
           records: records,
           year: displayedMonth.year,
           month: displayedMonth.month,
           monthlyBudget: monthlyBudget,
           isCurrentMonth: isCurrentMonth,
+        );
+      case 'budget':
+        if (monthlyBudget == null) return null;
+        return _BudgetProgressCard(
+          monthlyBudget: monthlyBudget!,
+          records: records,
+          isCurrentMonth: isCurrentMonth,
+          monthDate: displayedMonth,
+        );
+      case 'ring':
+        if (!hasExpense) return null;
+        return _RingCard(
+          title: '支出构成',
+          totalLabel: '本月支出',
+          total: summary.totalExpense,
+          categories: summary.expenseByCategory,
+        );
+      case 'daily':
+        if (!hasExpense) return null;
+        return _SectionCard(
+          title: '每日趋势',
+          child: _DualLineChart(
+            xLabels: [
+              for (final d in summary.dailyTotals)
+                (d.day == 1 || d.day % 5 == 0) ? '${d.day}' : '',
+            ],
+            expense: [
+              for (final d in summary.dailyTotals)
+                MoneyFormat.toDouble(d.expense).clamp(0.0, double.infinity),
+            ],
+            income: [
+              for (final d in summary.dailyTotals)
+                MoneyFormat.toDouble(d.income).clamp(0.0, double.infinity),
+            ],
+          ),
+        );
+      case 'ranking':
+        if (!hasExpense) return null;
+        return _SectionCard(
+          title: '分类排行',
+          child: _CategoryRanking(categories: summary.expenseByCategory),
+        );
+      case 'top5':
+        if (top5.isEmpty) return null;
+        return _SectionCard(
+          title: '单笔支出排行',
+          child: _TopTxnList(items: top5),
+        );
+      case 'heatmap':
+        if (!hasExpense) return null;
+        return _SectionCard(
+          title: '消费热力图',
+          child: _CalendarHeatmap(
+            dailyTotals: summary.dailyTotals,
+            year: displayedMonth.year,
+            month: displayedMonth.month,
+          ),
+        );
+      case 'compare':
+        if (!hasExpense && prevSummary.expenseByCategory.isEmpty) return null;
+        return _SectionCard(
+          title: '本月 vs 上月',
+          child: _CompareBars(current: summary, previous: prevSummary),
+        );
+      case 'radar':
+        if (summary.expenseByCategory.length < 3) return null;
+        return _SectionCard(
+          title: '消费结构雷达（本月 vs 上月）',
+          child: _RadarCompare(current: summary, previous: prevSummary),
+        );
+      case 'stacked':
+        return _SectionCard(
+          title: '近 12 月收支',
+          child: _StackedBars12(records: records, endMonth: displayedMonth),
+        );
+    }
+    return null;
+  }
+
+  /// 图表库弹层：开关每张卡（开=追加到底部，关=移除）。
+  void _showCardLibrary(BuildContext context, List<String> visible) {
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: Theme.of(context).colorScheme.surface,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) {
+        return StatefulBuilder(
+          builder: (ctx2, setLocal) {
+            final cur = _visibleKeys();
+            return SafeArea(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(20, 16, 20, 12),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text('自定义图表',
+                        style: TextStyle(
+                            fontSize: 16, fontWeight: FontWeight.w600)),
+                    const SizedBox(height: 4),
+                    Text('打开想看的图表，长按卡片可拖动排序',
+                        style: TextStyle(
+                            fontSize: 12,
+                            color:
+                                Theme.of(ctx2).colorScheme.onSurfaceVariant)),
+                    const SizedBox(height: 8),
+                    for (final e in _cardTitles.entries)
+                      Row(
+                        children: [
+                          Expanded(
+                              child: Text(e.value,
+                                  style: const TextStyle(fontSize: 14))),
+                          Switch(
+                            value: cur.contains(e.key),
+                            onChanged: (on) {
+                              final next = List.of(cur);
+                              if (on) {
+                                next.add(e.key);
+                              } else {
+                                next.remove(e.key);
+                              }
+                              repo.setStatCardOrder(next);
+                              setLocal(() {});
+                            },
+                          ),
+                        ],
+                      ),
+                  ],
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+}
+
+/// 底部「自定义图表」按钮。
+class _CustomizeButton extends StatelessWidget {
+  final VoidCallback onTap;
+
+  const _CustomizeButton({required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 24),
+      child: PressableScale(
+        onPressed: onTap,
+        child: Container(
+          height: 44,
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            color: AppColors.card(scheme),
+            borderRadius: BorderRadius.circular(999),
+            border: Border.all(color: Colors.black.withValues(alpha: 0.06)),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.add, size: 16, color: scheme.onSurfaceVariant),
+              const SizedBox(width: 6),
+              Text('自定义图表',
+                  style: TextStyle(
+                      fontSize: 13, color: scheme.onSurfaceVariant)),
+            ],
+          ),
         ),
-        if (monthlyBudget != null) ...[
-          _BudgetProgressCard(
-            monthlyBudget: monthlyBudget!,
-            records: records,
-            isCurrentMonth: isCurrentMonth,
-            monthDate: displayedMonth,
-          ),
-          const SizedBox(height: 16),
-        ],
-        if (summary.expenseByCategory.isEmpty)
-          const _EmptyState(
-            message: '本月还没有支出',
-            sub: '记几笔之后这里会出现分析图表',
-          )
-        else ...[
-          _RingCard(
-            title: '支出构成',
-            totalLabel: '本月支出',
-            total: summary.totalExpense,
-            categories: summary.expenseByCategory,
-          ),
-          const SizedBox(height: 16),
-          _SectionCard(
-            title: '每日趋势',
-            child: _DualLineChart(
-              xLabels: [
-                for (final d in summary.dailyTotals)
-                  (d.day == 1 || d.day % 5 == 0) ? '${d.day}' : '',
-              ],
-              expense: [
-                for (final d in summary.dailyTotals)
-                  MoneyFormat.toDouble(d.expense).clamp(0.0, double.infinity),
-              ],
-              income: [
-                for (final d in summary.dailyTotals)
-                  MoneyFormat.toDouble(d.income).clamp(0.0, double.infinity),
-              ],
-            ),
-          ),
-          const SizedBox(height: 16),
-          _SectionCard(
-            title: '分类排行',
-            child: _CategoryRanking(
-              categories: summary.expenseByCategory,
-            ),
-          ),
-          if (top5.isNotEmpty) ...[
-            const SizedBox(height: 16),
-            _SectionCard(
-              title: '单笔支出排行',
-              child: _TopTxnList(items: top5),
-            ),
-          ],
-        ],
-      ],
+      ),
     );
   }
 }
@@ -1698,6 +1913,475 @@ class _EmptyState extends StatelessWidget {
                   )),
         ],
       ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 图表库新卡（批7）：日历热力图 / 本月vs上月分组柱 / 结构雷达 / 近12月堆叠柱
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// 消费日历热力图：颜色越深花得越多（GitHub 提交热力图的记账版）。
+class _CalendarHeatmap extends StatelessWidget {
+  final List<DailyTotal> dailyTotals;
+  final int year;
+  final int month;
+
+  const _CalendarHeatmap({
+    required this.dailyTotals,
+    required this.year,
+    required this.month,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final maxVal = dailyTotals
+        .map((d) => MoneyFormat.toDouble(d.expense))
+        .fold(0.0, (a, b) => a > b ? a : b);
+    // 周一开头的偏移空格。
+    final leading = DateTime(year, month, 1).weekday - 1;
+    const names = ['一', '二', '三', '四', '五', '六', '日'];
+
+    return Column(
+      children: [
+        Row(
+          children: [
+            for (final n in names)
+              Expanded(
+                child: Center(
+                  child: Text(n,
+                      style: TextStyle(
+                          fontSize: 10, color: scheme.onSurfaceVariant)),
+                ),
+              ),
+          ],
+        ),
+        const SizedBox(height: 6),
+        GridView.count(
+          crossAxisCount: 7,
+          shrinkWrap: true,
+          physics: const NeverScrollableScrollPhysics(),
+          mainAxisSpacing: 4,
+          crossAxisSpacing: 4,
+          children: [
+            for (var i = 0; i < leading; i++) const SizedBox.shrink(),
+            for (final d in dailyTotals)
+              Builder(builder: (_) {
+                final v = MoneyFormat.toDouble(d.expense);
+                final t = maxVal <= 0 ? 0.0 : (v / maxVal).clamp(0.0, 1.0);
+                final bg = v <= 0
+                    ? scheme.outlineVariant.withValues(alpha: 0.25)
+                    : scheme.primary.withValues(alpha: 0.18 + 0.72 * t);
+                return Container(
+                  decoration: BoxDecoration(
+                    color: bg,
+                    borderRadius: BorderRadius.circular(5),
+                  ),
+                  alignment: Alignment.center,
+                  child: Text(
+                    '${d.day}',
+                    style: TextStyle(
+                      fontSize: 9,
+                      color:
+                          t > 0.55 ? Colors.white : scheme.onSurfaceVariant,
+                    ),
+                  ),
+                );
+              }),
+          ],
+        ),
+        const SizedBox(height: 6),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.end,
+          children: [
+            Text('少',
+                style:
+                    TextStyle(fontSize: 10, color: scheme.onSurfaceVariant)),
+            const SizedBox(width: 4),
+            for (final a in [0.2, 0.45, 0.7, 0.9]) ...[
+              Container(
+                width: 10,
+                height: 10,
+                decoration: BoxDecoration(
+                  color: scheme.primary.withValues(alpha: a),
+                  borderRadius: BorderRadius.circular(3),
+                ),
+              ),
+              const SizedBox(width: 3),
+            ],
+            const SizedBox(width: 1),
+            Text('多',
+                style:
+                    TextStyle(fontSize: 10, color: scheme.onSurfaceVariant)),
+          ],
+        ),
+      ],
+    );
+  }
+}
+
+/// 本月 vs 上月：TOP5 分类的分组柱状对比。
+class _CompareBars extends StatelessWidget {
+  final MonthlySummary current;
+  final MonthlySummary previous;
+
+  const _CompareBars({required this.current, required this.previous});
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final cats = current.expenseByCategory
+        .where((c) => c.total > Decimal.zero)
+        .take(5)
+        .toList();
+    if (cats.isEmpty) {
+      return Text('本月还没有支出',
+          style: TextStyle(fontSize: 12, color: scheme.onSurfaceVariant));
+    }
+    double prevOf(String name) {
+      final p =
+          previous.expenseByCategory.where((c) => c.name == name).toList();
+      return p.isEmpty ? 0 : MoneyFormat.toDouble(p.first.total);
+    }
+
+    final curColor = scheme.primary;
+    final prevColor = scheme.outlineVariant;
+    var maxV = 0.0;
+    for (final c in cats) {
+      final cur = MoneyFormat.toDouble(c.total);
+      final prev = prevOf(c.name);
+      if (cur > maxV) maxV = cur;
+      if (prev > maxV) maxV = prev;
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            _LegendDot(color: curColor, label: '本月'),
+            const SizedBox(width: 14),
+            _LegendDot(color: prevColor, label: '上月'),
+          ],
+        ),
+        const SizedBox(height: 12),
+        SizedBox(
+          height: 170,
+          child: BarChart(
+            BarChartData(
+              maxY: maxV * 1.2,
+              barGroups: [
+                for (var i = 0; i < cats.length; i++)
+                  BarChartGroupData(
+                    x: i,
+                    barsSpace: 3,
+                    barRods: [
+                      BarChartRodData(
+                        toY: prevOf(cats[i].name),
+                        color: prevColor,
+                        width: 9,
+                        borderRadius: const BorderRadius.vertical(
+                            top: Radius.circular(3)),
+                      ),
+                      BarChartRodData(
+                        toY: MoneyFormat.toDouble(cats[i].total),
+                        color: curColor,
+                        width: 9,
+                        borderRadius: const BorderRadius.vertical(
+                            top: Radius.circular(3)),
+                      ),
+                    ],
+                  ),
+              ],
+              gridData: FlGridData(
+                show: true,
+                drawVerticalLine: false,
+                getDrawingHorizontalLine: (_) => FlLine(
+                  color: scheme.outlineVariant.withValues(alpha: 0.3),
+                  strokeWidth: 0.5,
+                ),
+              ),
+              borderData: FlBorderData(show: false),
+              titlesData: FlTitlesData(
+                leftTitles: const AxisTitles(
+                    sideTitles: SideTitles(showTitles: false)),
+                rightTitles: const AxisTitles(
+                    sideTitles: SideTitles(showTitles: false)),
+                topTitles: const AxisTitles(
+                    sideTitles: SideTitles(showTitles: false)),
+                bottomTitles: AxisTitles(
+                  sideTitles: SideTitles(
+                    showTitles: true,
+                    reservedSize: 22,
+                    getTitlesWidget: (v, meta) {
+                      final i = v.toInt();
+                      if (i < 0 || i >= cats.length) {
+                        return const SizedBox.shrink();
+                      }
+                      return Padding(
+                        padding: const EdgeInsets.only(top: 5),
+                        child: Text(
+                          cats[i].name.length > 3
+                              ? cats[i].name.substring(0, 3)
+                              : cats[i].name,
+                          style: TextStyle(
+                              fontSize: 10, color: scheme.onSurfaceVariant),
+                        ),
+                      );
+                    },
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// 消费结构雷达：本月 vs 上月的 TOP 分类金额轮廓对比。
+class _RadarCompare extends StatelessWidget {
+  final MonthlySummary current;
+  final MonthlySummary previous;
+
+  const _RadarCompare({required this.current, required this.previous});
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final cats = current.expenseByCategory
+        .where((c) => c.total > Decimal.zero)
+        .take(6)
+        .toList();
+    if (cats.length < 3) {
+      return Text('分类不足 3 个，雷达图画不起来',
+          style: TextStyle(fontSize: 12, color: scheme.onSurfaceVariant));
+    }
+    double prevOf(String name) {
+      final p =
+          previous.expenseByCategory.where((c) => c.name == name).toList();
+      return p.isEmpty ? 0 : MoneyFormat.toDouble(p.first.total);
+    }
+
+    final curColor = scheme.primary;
+    final prevColor = AppColors.income(scheme);
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            _LegendDot(color: curColor, label: '本月'),
+            const SizedBox(width: 14),
+            _LegendDot(color: prevColor, label: '上月'),
+          ],
+        ),
+        const SizedBox(height: 8),
+        SizedBox(
+          height: 220,
+          child: RadarChart(
+            RadarChartData(
+              radarShape: RadarShape.polygon,
+              tickCount: 3,
+              ticksTextStyle:
+                  const TextStyle(color: Colors.transparent, fontSize: 8),
+              tickBorderData: BorderSide(
+                  color: scheme.outlineVariant.withValues(alpha: 0.4),
+                  width: 0.5),
+              gridBorderData: BorderSide(
+                  color: scheme.outlineVariant.withValues(alpha: 0.6),
+                  width: 0.7),
+              radarBorderData: const BorderSide(color: Colors.transparent),
+              borderData: FlBorderData(show: false),
+              getTitle: (index, angle) => RadarChartTitle(
+                text: cats[index].name.length > 4
+                    ? cats[index].name.substring(0, 4)
+                    : cats[index].name,
+              ),
+              titleTextStyle:
+                  TextStyle(fontSize: 10, color: scheme.onSurfaceVariant),
+              titlePositionPercentageOffset: 0.14,
+              dataSets: [
+                RadarDataSet(
+                  fillColor: prevColor.withValues(alpha: 0.12),
+                  borderColor: prevColor,
+                  borderWidth: 1.6,
+                  entryRadius: 2,
+                  dataEntries: [
+                    for (final c in cats) RadarEntry(value: prevOf(c.name)),
+                  ],
+                ),
+                RadarDataSet(
+                  fillColor: curColor.withValues(alpha: 0.16),
+                  borderColor: curColor,
+                  borderWidth: 2,
+                  entryRadius: 2.5,
+                  dataEntries: [
+                    for (final c in cats)
+                      RadarEntry(value: MoneyFormat.toDouble(c.total)),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// 近 12 月收支堆叠柱：柱高=当月收支较大者；深色=花掉的，金色=结余，橙色=超支。
+class _StackedBars12 extends StatelessWidget {
+  final List<TransactionRecord> records;
+  final DateTime endMonth;
+
+  const _StackedBars12({required this.records, required this.endMonth});
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final months = <DateTime>[];
+    for (var i = 11; i >= 0; i--) {
+      months.add(DateTime(endMonth.year, endMonth.month - i, 1));
+    }
+    final exp = <double>[];
+    final inc = <double>[];
+    var maxV = 0.0;
+    var any = false;
+    for (final m in months) {
+      final s = StatisticsEngine.monthlySummary(records,
+          year: m.year, month: m.month);
+      final e =
+          MoneyFormat.toDouble(s.totalExpense).clamp(0.0, double.infinity);
+      final iv =
+          MoneyFormat.toDouble(s.totalIncome).clamp(0.0, double.infinity);
+      exp.add(e);
+      inc.add(iv);
+      final top = e > iv ? e : iv;
+      if (top > maxV) maxV = top;
+      if (top > 0) any = true;
+    }
+    if (!any) {
+      return Text('近 12 个月还没有记录',
+          style: TextStyle(fontSize: 12, color: scheme.onSurfaceVariant));
+    }
+
+    final spentColor = AppColors.expense(scheme);
+    final savedColor = AppColors.income(scheme);
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            _LegendDot(color: spentColor, label: '花掉'),
+            const SizedBox(width: 14),
+            _LegendDot(color: savedColor, label: '结余'),
+            const SizedBox(width: 14),
+            const _LegendDot(color: AppColors.warning, label: '超支'),
+          ],
+        ),
+        const SizedBox(height: 12),
+        SizedBox(
+          height: 170,
+          child: BarChart(
+            BarChartData(
+              maxY: maxV * 1.15,
+              barGroups: [
+                for (var i = 0; i < months.length; i++)
+                  BarChartGroupData(
+                    x: i,
+                    barRods: [
+                      BarChartRodData(
+                        toY: exp[i] > inc[i] ? exp[i] : inc[i],
+                        width: 12,
+                        borderRadius: const BorderRadius.vertical(
+                            top: Radius.circular(3)),
+                        rodStackItems: [
+                          // 花掉的部分（不超过收入的那截）
+                          BarChartRodStackItem(0,
+                              exp[i] < inc[i] ? exp[i] : inc[i], spentColor),
+                          // 结余（收入 > 支出）
+                          if (inc[i] > exp[i])
+                            BarChartRodStackItem(exp[i], inc[i], savedColor),
+                          // 超支（支出 > 收入）
+                          if (exp[i] > inc[i])
+                            BarChartRodStackItem(
+                                inc[i], exp[i], AppColors.warning),
+                        ],
+                      ),
+                    ],
+                  ),
+              ],
+              gridData: FlGridData(
+                show: true,
+                drawVerticalLine: false,
+                getDrawingHorizontalLine: (_) => FlLine(
+                  color: scheme.outlineVariant.withValues(alpha: 0.3),
+                  strokeWidth: 0.5,
+                ),
+              ),
+              borderData: FlBorderData(show: false),
+              titlesData: FlTitlesData(
+                leftTitles: const AxisTitles(
+                    sideTitles: SideTitles(showTitles: false)),
+                rightTitles: const AxisTitles(
+                    sideTitles: SideTitles(showTitles: false)),
+                topTitles: const AxisTitles(
+                    sideTitles: SideTitles(showTitles: false)),
+                bottomTitles: AxisTitles(
+                  sideTitles: SideTitles(
+                    showTitles: true,
+                    reservedSize: 20,
+                    getTitlesWidget: (v, meta) {
+                      final i = v.toInt();
+                      if (i < 0 || i >= months.length || i.isOdd) {
+                        return const SizedBox.shrink();
+                      }
+                      return Padding(
+                        padding: const EdgeInsets.only(top: 5),
+                        child: Text(
+                          '${months[i].month}月',
+                          style: TextStyle(
+                              fontSize: 9, color: scheme.onSurfaceVariant),
+                        ),
+                      );
+                    },
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// 图例小圆点 + 文案。
+class _LegendDot extends StatelessWidget {
+  final Color color;
+  final String label;
+
+  const _LegendDot({required this.color, required this.label});
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          width: 8,
+          height: 8,
+          decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+        ),
+        const SizedBox(width: 4),
+        Text(label,
+            style: TextStyle(fontSize: 11, color: scheme.onSurfaceVariant)),
+      ],
     );
   }
 }

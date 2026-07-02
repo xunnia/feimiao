@@ -615,16 +615,9 @@ class _DetailBar extends StatelessWidget {
   }
 }
 
-/// 打开编辑大卡的便捷方法。
-/// 支出/收入 → 与手动记账**同一套界面**（ManualAddSheet 编辑模式，避免割裂）；
-/// 转账（手动记账界面不支持）→ 保留本文件的旧编辑卡。
+/// 打开编辑大卡的便捷方法：全部走手动记账同一套界面（含转账编辑模式）。
+/// 本文件的旧编辑卡已退役，仅留档。
 Future<void> showEditTransactionSheet(
     BuildContext context, TransactionEntity transaction) {
-  if (transaction.txKind != TransactionKind.transfer) {
-    return showManualAddSheet(context, edit: transaction);
-  }
-  return appSheet<void>(
-    context,
-    child: EditTransactionSheet(transaction: transaction),
-  );
+  return showManualAddSheet(context, edit: transaction);
 }

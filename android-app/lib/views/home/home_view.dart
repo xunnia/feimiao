@@ -1361,6 +1361,7 @@ class _TransactionRow extends StatelessWidget {
                       ),
                     ),
                     if (transaction.reimbursable) const _ReimburseBadge(),
+                    if (transaction.excluded) const _ExcludedBadge(),
                   ],
                 ),
                 if (transaction.note.isNotEmpty) ...[
@@ -1414,6 +1415,33 @@ class _ReimburseBadge extends StatelessWidget {
           fontSize: 10,
           height: 1.2,
           color: AppColors.warning,
+          fontWeight: FontWeight.w500,
+        ),
+      ),
+    );
+  }
+}
+
+/// 「不计入收支」小标：这笔在列表里，但统计/预算都跳过它。
+class _ExcludedBadge extends StatelessWidget {
+  const _ExcludedBadge();
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Container(
+      margin: const EdgeInsets.only(left: 6),
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+      decoration: BoxDecoration(
+        color: scheme.surfaceContainerHighest,
+        borderRadius: BorderRadius.circular(4),
+      ),
+      child: Text(
+        '不计入',
+        style: TextStyle(
+          fontSize: 10,
+          height: 1.2,
+          color: scheme.onSurfaceVariant,
           fontWeight: FontWeight.w500,
         ),
       ),
