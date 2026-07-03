@@ -182,7 +182,10 @@ class _RootShellState extends State<RootShell>
                   top: 0,
                   bottom: 0,
                   width: drawerW,
-                  child: _DrawerPanel(onClose: _closeDrawer),
+                  child: _DrawerPanel(
+                    onClose: _closeDrawer,
+                    closed: _drawerCtl.value < 0.01,
+                  ),
                 ),
                 // ── 上层：主页面卡片，右移 + 圆角 + 阴影 ──
                 // 拖动手势用 Listener 裸指针：不进手势竞技场，所以在账单行
@@ -394,7 +397,10 @@ class _DrawerPanel extends StatefulWidget {
   /// 关抽屉（收回主页面卡片）。
   final VoidCallback onClose;
 
-  const _DrawerPanel({required this.onClose});
+  /// 抽屉是否已完全关闭。面板常驻不销毁，关上时用它把「更多」折叠态收回去。
+  final bool closed;
+
+  const _DrawerPanel({required this.onClose, required this.closed});
 
   @override
   State<_DrawerPanel> createState() => _DrawerPanelState();
@@ -403,6 +409,15 @@ class _DrawerPanel extends StatefulWidget {
 class _DrawerPanelState extends State<_DrawerPanel> {
   /// 「更多」折叠：默认只露前 5 个功能项，展开后全部可见（都可长按拖动排序）。
   bool _moreExpanded = false;
+
+  @override
+  void didUpdateWidget(_DrawerPanel old) {
+    super.didUpdateWidget(old);
+    // 抽屉刚关上（含点功能项跳页时的关闭）→ 收回「更多」，下次打开是折叠态。
+    if (widget.closed && !old.closed && _moreExpanded) {
+      _moreExpanded = false;
+    }
+  }
 
   void _popAndPush(Widget page) {
     widget.onClose();
@@ -665,8 +680,8 @@ class _DrawerPanelState extends State<_DrawerPanel> {
             // ── 头部：字标 logo（藏青+金币爪印，用户选定的第二版）──
             // 深色模式下藏青字看不清，退回文字字标；图加载失败同样退回文字。
             Padding(
-              // 左距缩半、字标放大两成（用户 0703 反馈）。
-              padding: const EdgeInsets.fromLTRB(10, 18, 14, 12),
+              // 左距再压到贴边（用户 0703 二次反馈：还要更左）。
+              padding: const EdgeInsets.fromLTRB(4, 18, 14, 12),
               child: Align(
                 alignment: Alignment.centerLeft,
                 child: Builder(builder: (context) {
