@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 
 import '../../core/haptics.dart';
 import '../../data/app_repository.dart';
+import '../../theme/app_colors.dart';
 import '../../widgets/ios_form.dart';
 import '../../widgets/pressable_scale.dart';
 import '../common/app_sheet.dart';
