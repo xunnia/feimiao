@@ -164,7 +164,10 @@ class _RootShellState extends State<RootShell>
     return AnimatedBuilder(
       animation: _drawerCtl,
       builder: (context, _) {
-        final t = Curves.easeOutCubic.transform(_drawerCtl.value);
+        // 主页平移量恒等于进度值（线性）：拖动时 = 手指位移，1:1 跟手不跑手前面；
+        // 回弹的缓动交给 _openDrawer/_closeDrawer 的 animateTo(easeOutCubic) 在
+        // 时间维度上做，所以既顺滑又不会在松手瞬间跳一下。
+        final t = _drawerCtl.value;
         final open = _drawerCtl.value > 0.5;
         return PopScope(
           // 抽屉开着时系统返回键先关抽屉，不退出页面。

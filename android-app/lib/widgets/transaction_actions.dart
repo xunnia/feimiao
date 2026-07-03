@@ -34,6 +34,14 @@ class TransactionSlidable extends StatefulWidget {
 class _TransactionSlidableState extends State<TransactionSlidable> {
   bool _confirming = false;
 
+  @override
+  void didUpdateWidget(TransactionSlidable old) {
+    super.didUpdateWidget(old);
+    // 列表因退款/改动重建时，清掉可能残留的「删除这笔」确认态——
+    // 否则下次左滑这一行会直接冒出红色删除确认条（用户 0703 反馈）。
+    if (_confirming) _confirming = false;
+  }
+
   // 仅对「正向支出」给退款入口(收入/转账/退款冲账本身都不给)。
   bool get _canRefund =>
       widget.transaction.txKind == TransactionKind.expense &&
