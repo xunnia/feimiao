@@ -15,6 +15,12 @@ class ImportedBillRow {
   final String merchant;
   final String product;
 
+  /// 商户订单号：支付宝退款行与原单的这个号完全一致，用来把退款挂回原单。
+  final String orderNo;
+
+  /// 是否退款行（支付宝标「不计收支」但要挂回原单让净额归零，不能直接跳过）。
+  final bool isRefund;
+
   const ImportedBillRow({
     required this.date,
     required this.kind,
@@ -23,6 +29,8 @@ class ImportedBillRow {
     required this.amount,
     this.merchant = '',
     this.product = '',
+    this.orderNo = '',
+    this.isRefund = false,
   });
 }
 
@@ -177,6 +185,7 @@ class _ColumnMap {
   final int counterparty;
   final int product;
   final int note;
+  final int order; // 商户订单号（退款挂回原单用）
 
   const _ColumnMap({
     required this.date,
@@ -187,6 +196,7 @@ class _ColumnMap {
     required this.counterparty,
     required this.product,
     required this.note,
+    required this.order,
   });
 
   static int _find(List<String> header, List<String> keys,
@@ -195,6 +205,17 @@ class _ColumnMap {
       final h = header[i];
       if (avoid.any((a) => h.contains(a))) continue;
       if (keys.any((k) => h.contains(k))) return i;
+    }
+    return -1;
+  }
+
+  /// 按 key 的优先级找列（每个 key 扫全表头）：靠前的 key 优先命中，
+  /// 不受列在表头里的先后影响。用于「商户订单号」要优先于「交易订单号」。
+  static int _findFirst(List<String> header, List<String> keysInPriority) {
+    for (final k in keysInPriority) {
+      for (var i = 0; i < header.length; i++) {
+        if (header[i].contains(k)) return i;
+      }
     }
     return -1;
   }
@@ -209,6 +230,8 @@ class _ColumnMap {
       counterparty: _find(header, ['交易对方', '对方', '商户']),
       product: _find(header, ['商品', '摘要']),
       note: _find(header, ['备注', '说明'], avoid: ['商品']),
+      // 商户订单号优先（退款与原单一致）；交易订单号退款带后缀，不能用来配对。
+      order: _findFirst(header, ['商户订单号', '交易订单号', '订单号']),
     );
   }
 
@@ -218,23 +241,25 @@ class _ColumnMap {
   ImportedBillRow? parseRow(List<String> row) {
     final amountRaw = _at(row, amount);
     final amt = _parseAmount(amountRaw);
-    if (amt == null || amt == Decimal.zero) return null;
+    if (amt == null || amt == Decimal.zero) return null; // 0 元行（如医保 0 自付）跳过
 
-    final kind = _resolveKind(row, amt);
-    if (kind == null) return null; // 中性 / 不计收支
-
-    final dt = _parseDate(_at(row, date)) ?? DateTime.now();
-
-    // 分类：优先专门的分类列；没有就用交易对方/商品兜底，方便事后整理
     var cat = _at(row, category).trim();
     final party = _at(row, counterparty).trim();
     final prod = _at(row, product).trim();
     final noteText = _at(row, note).trim();
+    final orderNo = _at(row, order).trim();
 
-    if (cat.isEmpty) {
-      // 外部账单（微信/支付宝）没有分类，交易对方就是最有用的信息
-      cat = '';
-    }
+    // 退款行：支付宝把它标「不计收支」，但要挂回原单让净额归零，不能直接跳过。
+    // 识别：交易分类含「退款」或 商品以「退款」开头。
+    final isRefund = cat.contains('退款') || prod.startsWith('退款');
+
+    // 非退款行照常判方向；「不计收支/中性」（提现/还款/失败交易）→ 跳过。
+    final kind = isRefund ? TransactionKind.expense : _resolveKind(row, amt);
+    if (kind == null) return null;
+
+    final dt = _parseDate(_at(row, date)) ?? DateTime.now();
+
+    if (cat == '退款' || cat.contains('退款')) cat = ''; // 退款不当分类名用
 
     // 备注：把交易对方/商品/原备注拼起来（去重去空）
     final parts = <String>[];
@@ -251,6 +276,8 @@ class _ColumnMap {
       amount: amt.abs(),
       merchant: party,
       product: prod == '/' ? '' : prod,
+      orderNo: orderNo,
+      isRefund: isRefund,
     );
   }
 

@@ -195,44 +195,58 @@ class _ImportExportViewState extends State<ImportExportView> {
       return null;
     }
 
-    final drafts = <TransactionDraft>[];
-    for (final r in rows) {
-      int? categoryId;
+    int? categorize(ImportedBillRow r) {
       // 1) 账单自带分类名（如支付宝交易分类）能对上现有分类就用。
       if (r.category.isNotEmpty) {
         for (final c in catsFor(r.kind)) {
-          if (c.nameZh == r.category) {
-            categoryId = c.id;
-            break;
-          }
+          if (c.nameZh == r.category) return c.id;
         }
       }
       // 2) 用户已学过的分类记忆最优先（个人化，越用越准）。
-      if (categoryId == null) {
-        final learned =
-            repo.recallCategoryKey('${r.merchant} ${r.product} ${r.note}', r.kind);
-        categoryId = idOfKey(r.kind, learned);
-      }
+      final learned = repo.recallCategoryKey(
+          '${r.merchant} ${r.product} ${r.note}', r.kind);
+      final byLearned = idOfKey(r.kind, learned);
+      if (byLearned != null) return byLearned;
       // 3) 分类器：商品优先 > 决定性商户 > 平台顶级默认 > 兜底备注。
-      if (categoryId == null) {
-        final guess = BillCategorizer.classify(
-          merchant: r.merchant,
-          product: r.product,
-          note: '${r.category} ${r.note}',
-          kind: r.kind,
-        );
-        categoryId = idOfKey(r.kind, guess.key);
+      final guess = BillCategorizer.classify(
+        merchant: r.merchant,
+        product: r.product,
+        note: '${r.category} ${r.note}',
+        kind: r.kind,
+      );
+      return idOfKey(r.kind, guess.key);
+    }
+
+    // 先记所有非退款行，记住 商户订单号 → 新账单 id（退款要挂回它）。
+    final orderToId = <String, int>{};
+    final refunds = <ImportedBillRow>[];
+    var count = 0;
+    for (final r in rows) {
+      if (r.isRefund) {
+        refunds.add(r);
+        continue;
       }
-      drafts.add(TransactionDraft(
+      final id = await repo.addTransaction(
         kind: r.kind,
         amount: r.amount,
-        categoryId: categoryId,
+        categoryId: categorize(r),
         accountId: fallbackAccountId,
         note: r.note,
         date: r.date,
-      ));
+      );
+      if (r.orderNo.isNotEmpty) orderToId[r.orderNo] = id;
+      count++;
     }
-    return repo.importTransactions(drafts);
+    // 退款挂回原单让净额归零（支付宝「付了又退」）；找不到原单的退款丢弃，
+    // 不凭空造负数污染统计。
+    for (final r in refunds) {
+      final origId = orderToId[r.orderNo];
+      if (origId == null) continue;
+      final orig =
+          repo.transactions.where((t) => t.id == origId).firstOrNull;
+      if (orig != null) await repo.refundTransaction(orig, r.amount);
+    }
+    return count;
   }
 
   String _kindZh(TransactionKind k) {

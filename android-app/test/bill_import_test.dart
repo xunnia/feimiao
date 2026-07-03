@@ -64,27 +64,33 @@ void main() {
       expect(r.rows[1].category, '工资');
     });
 
-    test('新版支付宝格式（含交易分类列 + 不计收支）', () {
+    test('新版支付宝：退款行保留并标记(挂回原单)，商户订单号优先配对', () {
       const csv = '''
 ------------------------------------------------------------
 导出信息：
 姓名：张三
 共3笔记录
 ------------------------支付宝支付科技有限公司------------------------
-交易时间,交易分类,交易对方,对方账号,商品说明,收/支,金额,收/付款方式,交易状态,交易订单号,商家订单号,备注,
-2026-06-12 09:46:39,商业服务,北京奇付通,qif@360.cn,360AI办公,支出,4.90,平安银行信用卡,交易成功,123,456,,
-2026-06-11 10:06:02,保险,众安保险,/,住院医疗,支出,62.25,平安银行信用卡,交易成功,789,012,,
-2026-06-12 21:22:06,退款,杭州帧流科技,yiz@gmail.com,礼品卡退款,不计收支,88.00,平安银行信用卡,退款成功,345,678,,
+交易时间,交易分类,交易对方,对方账号,商品说明,收/支,金额,收/付款方式,交易状态,交易订单号,商户订单号,备注,
+2026-06-11 19:19:19,商业服务,杭州帧流科技,yiz@gmail.com,尼日利亚礼品卡,支出,88.00,平安银行信用卡,交易关闭,A1,ORDER88,,
+2026-06-12 21:22:06,退款,杭州帧流科技,yiz@gmail.com,退款-尼日利亚礼品卡,不计收支,88.00,平安银行信用卡,退款成功,A1_x,ORDER88,,
+2026-02-07 12:32:24,账户存取,平安银行,/,提现-实时提现,不计收支,20.32,余额,交易成功,B1,ORDERW,,
 ''';
       final r = BillImporter.parseString(csv);
       expect(r.source, '支付宝');
       expect(r.headerFound, isTrue);
-      expect(r.rows.length, 2); // 不计收支跳过
-      expect(r.skipped, 1);
-      expect(r.rows[0].kind, TransactionKind.expense);
-      expect(r.rows[0].category, '商业服务');
-      expect(r.rows[0].amount, Decimal.parse('4.90'));
-      expect(r.rows[0].note.contains('北京奇付通'), isTrue);
+      // 提现(不计收支非退款)跳过；原单 + 退款保留。
+      expect(r.rows.length, 2);
+
+      final orig = r.rows.firstWhere((e) => !e.isRefund);
+      expect(orig.kind, TransactionKind.expense);
+      expect(orig.amount, Decimal.parse('88.00'));
+      expect(orig.orderNo, 'ORDER88'); // 取商户订单号，不是交易订单号 A1
+      expect(orig.merchant, '杭州帧流科技');
+
+      final refund = r.rows.firstWhere((e) => e.isRefund);
+      expect(refund.amount, Decimal.parse('88.00'));
+      expect(refund.orderNo, 'ORDER88'); // 与原单同号 → ingest 挂回归零
     });
 
     test('金额带千分位和符号也能解析', () {
