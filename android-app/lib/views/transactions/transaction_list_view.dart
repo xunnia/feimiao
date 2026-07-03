@@ -45,7 +45,7 @@ class _TransactionListViewState extends State<TransactionListView> {
       ),
       body: Consumer<AppRepository>(
         builder: (context, repo, _) {
-          final all = repo.transactions;
+          final all = repo.visibleTransactions;
           final pending =
               all.where((t) => t.reimbursable).toList(growable: false);
           final shown = _onlyReimbursable ? pending : all;
@@ -292,6 +292,11 @@ class _TransactionRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    final refunded =
+        context.read<AppRepository>().refundedAmountOf(transaction.id);
+    final hasRefund = refunded > Decimal.zero &&
+        transaction.txKind == TransactionKind.expense;
+    final net = transaction.amount - refunded;
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
       child: Row(
@@ -316,6 +321,7 @@ class _TransactionRow extends StatelessWidget {
                         overflow: TextOverflow.ellipsis,
                       ),
                     ),
+                    if (hasRefund) _RefundBadge(refunded: refunded),
                     if (transaction.reimbursable) const _ReimburseBadge(),
                   ],
                 ),
@@ -332,16 +338,64 @@ class _TransactionRow extends StatelessWidget {
               ],
             ),
           ),
-          Text(
-            _amountText,
-            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                  color: _amountColor(scheme),
-                  fontWeight: FontWeight.w600,
-                  // ignore: deprecated_member_use
-                  fontFeatures: const [FontFeature.tabularFigures()],
-                ),
-          ),
+          if (hasRefund) ...[
+            Text(
+              MoneyFormat.string(transaction.amount),
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: scheme.onSurfaceVariant,
+                    decoration: TextDecoration.lineThrough,
+                  ),
+            ),
+            const SizedBox(width: 6),
+            Text(
+              '-${MoneyFormat.string(net)}',
+              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                    color: AppColors.expense(scheme),
+                    fontWeight: FontWeight.w600,
+                    // ignore: deprecated_member_use
+                    fontFeatures: const [FontFeature.tabularFigures()],
+                  ),
+            ),
+          ] else
+            Text(
+              _amountText,
+              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                    color: _amountColor(scheme),
+                    fontWeight: FontWeight.w600,
+                    // ignore: deprecated_member_use
+                    fontFeatures: const [FontFeature.tabularFigures()],
+                  ),
+            ),
         ],
+      ),
+    );
+  }
+}
+
+/// 「已退 X」小标（铜金，不用红绿）。
+class _RefundBadge extends StatelessWidget {
+  final Decimal refunded;
+
+  const _RefundBadge({required this.refunded});
+
+  @override
+  Widget build(BuildContext context) {
+    final gold = AppColors.income(Theme.of(context).colorScheme);
+    return Container(
+      margin: const EdgeInsets.only(left: 6),
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+      decoration: BoxDecoration(
+        color: gold.withValues(alpha: 0.16),
+        borderRadius: BorderRadius.circular(4),
+      ),
+      child: Text(
+        '已退 ${MoneyFormat.string(refunded)}',
+        style: TextStyle(
+          fontSize: 10,
+          height: 1.2,
+          color: gold,
+          fontWeight: FontWeight.w500,
+        ),
       ),
     );
   }

@@ -144,6 +144,10 @@ class TransactionEntity {
   /// 不计入收支：仍在账单列表里，但统计/预算/洞察都跳过它。
   final bool excluded;
 
+  /// 附着式退款：非空 = 这是某笔原账单的退款行（负支出），
+  /// 不在时间线单独显示，改挂到 refundOf 那笔的详情/净额里。
+  final int? refundOf;
+
   Decimal get amount => Decimal.parse(amountStr);
   DateTime get date => DateTime.fromMillisecondsSinceEpoch(dateMs);
   TransactionKind get txKind => TransactionKind.fromJson(kind);
@@ -175,6 +179,7 @@ class TransactionEntity {
     this.reimbursable = false,
     this.imagePath = '',
     this.excluded = false,
+    this.refundOf,
   });
 
   TransactionRecord toRecord({String languageCode = 'zh'}) =>
@@ -209,6 +214,7 @@ class TransactionEntity {
         reimbursable: ((m['reimbursable'] as int?) ?? 0) == 1,
         imagePath: m['image_path'] as String? ?? '',
         excluded: ((m['excluded'] as int?) ?? 0) == 1,
+        refundOf: m['refund_of'] as int?,
       );
 }
 
@@ -295,7 +301,7 @@ class TagEntity {
 // ---------------------------------------------------------------------------
 
 class AppRepository extends ChangeNotifier {
-  static const _dbVersion = 16;
+  static const _dbVersion = 17;
   static const _dbName = 'qingji.db';
 
   /// 行级 uuid（多人共享账本的同步地基）：32 位小写 hex，无需三方库。
@@ -630,7 +636,8 @@ class AppRepository extends ChangeNotifier {
         image_path      TEXT NOT NULL DEFAULT '',
         excluded        INTEGER NOT NULL DEFAULT 0,
         uuid            TEXT NOT NULL DEFAULT '',
-        updated_ms      INTEGER NOT NULL DEFAULT 0
+        updated_ms      INTEGER NOT NULL DEFAULT 0,
+        refund_of       INTEGER
       )
     ''');
 
@@ -909,6 +916,14 @@ class AppRepository extends ChangeNotifier {
         await db.execute('UPDATE $table SET updated_ms = ? WHERE updated_ms = 0',
             [DateTime.now().millisecondsSinceEpoch]);
       }
+    }
+    if (oldVersion < 17) {
+      // 附着式退款：退款行挂到原账单（refund_of=原id），不再作为独立条目
+      // 出现在时间线里。老的独立冲账行 refund_of 保持 NULL，仍按旧样显示。
+      try {
+        await db.execute(
+            'ALTER TABLE transactions ADD COLUMN refund_of INTEGER');
+      } catch (_) {}
     }
   }
 
@@ -1404,7 +1419,8 @@ class AppRepository extends ChangeNotifier {
         t.tags,
         t.reimbursable,
         t.image_path,
-        t.excluded
+        t.excluded,
+        t.refund_of
       FROM transactions t
       LEFT JOIN categories c  ON c.id = t.category_id
       LEFT JOIN accounts   a  ON a.id = t.account_id
@@ -1568,26 +1584,59 @@ class AppRepository extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// 退款冲账(方案1):在同分类/账户记一笔「负支出」,
-  /// 原记录不动;统计、预算、结余因负数累加自动按净额计算。
+  /// 退款：记一笔挂在原账单上的「负支出」（refund_of=原id）。
+  /// 退款行不在时间线单独显示，改挂到原账单的净额/详情里（对齐咔皮）；
+  /// 统计/预算/结余因负数累加自动按净额计算，无需改引擎。
   Future<void> refundTransaction(
       TransactionEntity original, Decimal refundAmount) async {
     if (refundAmount <= Decimal.zero) return;
     final accountId = original.accountId ?? _accounts.firstOrNull?.id;
     if (accountId == null) return;
-    final note = original.note.isNotEmpty
-        ? '退款 · ${original.note}'
-        : (original.categoryNameZh.isNotEmpty
-            ? '退款 · ${original.categoryNameZh}'
-            : '退款');
-    await addTransaction(
-      kind: TransactionKind.expense,
-      amount: Decimal.zero - refundAmount, // 负支出 = 冲账
-      categoryId: original.categoryId,
-      accountId: accountId,
-      note: note,
-      date: DateTime.now(),
-    );
+    // 退款行跟原账单同一个账本，跨账本视图也待在一起。
+    final bookId = Sqflite.firstIntValue(await _db!.rawQuery(
+        'SELECT book_id FROM transactions WHERE id = ?', [original.id]));
+    await _db!.insert('transactions', {
+      'book_id': bookId ?? _currentBookId,
+      'kind': TransactionKind.expense.toJson(),
+      'amount': (Decimal.zero - refundAmount).toString(), // 负支出 = 冲账
+      'currency_code': 'CNY',
+      'category_id': original.categoryId,
+      'account_id': accountId,
+      'note': '退款',
+      'date_ms': DateTime.now().millisecondsSinceEpoch,
+      'refund_of': original.id,
+      ..._syncStampNew(),
+    });
+    await _loadTransactions();
+    notifyListeners();
+  }
+
+  /// 时间线可见账单：隐藏「附着式退款行」（它们挂在原账单里）。
+  /// 老的独立冲账行 refundOf==null，仍照常显示（不破坏历史）。
+  List<TransactionEntity> get visibleTransactions =>
+      _transactions.where((t) => t.refundOf == null).toList();
+
+  /// 某笔账单的退款明细行（按时间正序）。
+  List<TransactionEntity> refundsOf(int id) =>
+      (_transactions.where((t) => t.refundOf == id).toList())
+        ..sort((a, b) => a.dateMs.compareTo(b.dateMs));
+
+  /// 某笔账单已退款合计（正数）。
+  Decimal refundedAmountOf(int id) {
+    var sum = Decimal.zero;
+    for (final t in _transactions) {
+      if (t.refundOf == id) sum += t.amount.abs();
+    }
+    return sum;
+  }
+
+  /// 某笔账单的净额 = 原额 − 已退（退款行是负数，直接累加即净额）。
+  Decimal netAmountOf(TransactionEntity t) {
+    var net = t.amount;
+    for (final r in _transactions) {
+      if (r.refundOf == t.id) net += r.amount; // r.amount 为负
+    }
+    return net;
   }
 
   Future<void> updateTransaction({
@@ -1658,8 +1707,10 @@ class AppRepository extends ChangeNotifier {
     final path = await _imagePathOf(id);
     _deleteReceiptFileIfOwned(path);
 
-    await _db!.delete('transactions', where: 'id = ?', whereArgs: [id]);
-    _transactions.removeWhere((t) => t.id == id);
+    // 删原账单时连它的退款行一起删（不然会留下挂空的退款负数进统计）。
+    await _db!.delete('transactions',
+        where: 'id = ? OR refund_of = ?', whereArgs: [id, id]);
+    _transactions.removeWhere((t) => t.id == id || t.refundOf == id);
     notifyListeners();
   }
 

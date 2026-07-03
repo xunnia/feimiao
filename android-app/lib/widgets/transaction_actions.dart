@@ -6,6 +6,7 @@ import 'package:provider/provider.dart';
 import '../core/haptics.dart';
 import '../core/models/transaction_kind.dart';
 import '../data/app_repository.dart';
+import '../theme/app_colors.dart';
 import '../views/transactions/edit_transaction_sheet.dart';
 import 'slidable_tracker.dart';
 
@@ -189,12 +190,12 @@ class _PaneWatcherState extends State<_PaneWatcher> {
   Widget build(BuildContext context) => widget.child;
 }
 
-/// 退款弹层:默认全额、可改部分;确认后在同分类记一笔退款冲账(负支出)。
+/// 退款弹层：显示原价/已退/净额 + 已退明细（图三的「退款记录」）；
+/// 新退款默认填「剩余可退」，上限也是剩余，退不了超过原价。
 Future<void> showRefundSheet(
     BuildContext context, TransactionEntity tx) async {
   final repo = context.read<AppRepository>();
   final full = tx.amount;
-  final ctrl = TextEditingController(text: _trim(full));
 
   await showModalBottomSheet<void>(
     context: context,
@@ -202,23 +203,30 @@ Future<void> showRefundSheet(
     backgroundColor: Colors.transparent,
     builder: (sheetCtx) {
       final scheme = Theme.of(sheetCtx).colorScheme;
-      return Padding(
-        padding: EdgeInsets.only(
-          bottom: MediaQuery.viewInsetsOf(sheetCtx).bottom,
-        ),
-        child: Container(
-          decoration: BoxDecoration(
-            color: scheme.surface,
-            borderRadius:
-                const BorderRadius.vertical(top: Radius.circular(24)),
-          ),
-          padding: const EdgeInsets.fromLTRB(20, 12, 20, 20),
-          child: StatefulBuilder(
-            builder: (ctx, setLocal) {
-              final parsed = Decimal.tryParse(ctrl.text.trim());
-              final valid =
-                  parsed != null && parsed > Decimal.zero && parsed <= full;
-              return Column(
+      final gold = AppColors.income(scheme);
+      // 每次重建都读最新已退（多次退款后剩余会变）。
+      return StatefulBuilder(
+        builder: (ctx, setLocal) {
+          final refunds = repo.refundsOf(tx.id);
+          final refunded = repo.refundedAmountOf(tx.id);
+          final remaining = full - refunded;
+          final ctrl = _refundCtrl ??=
+              TextEditingController(text: _trim(remaining));
+          final parsed = Decimal.tryParse(ctrl.text.trim());
+          final valid = parsed != null &&
+              parsed > Decimal.zero &&
+              parsed <= remaining;
+          return Padding(
+            padding:
+                EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(ctx).bottom),
+            child: Container(
+              decoration: BoxDecoration(
+                color: scheme.surface,
+                borderRadius:
+                    const BorderRadius.vertical(top: Radius.circular(24)),
+              ),
+              padding: const EdgeInsets.fromLTRB(20, 12, 20, 20),
+              child: Column(
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
@@ -227,7 +235,8 @@ Future<void> showRefundSheet(
                       width: 36,
                       height: 4,
                       decoration: BoxDecoration(
-                        color: scheme.onSurfaceVariant.withValues(alpha: 0.25),
+                        color:
+                            scheme.onSurfaceVariant.withValues(alpha: 0.25),
                         borderRadius: BorderRadius.circular(2),
                       ),
                     ),
@@ -241,55 +250,108 @@ Future<void> showRefundSheet(
                       textAlign: TextAlign.center),
                   const SizedBox(height: 4),
                   Text(
-                    '${tx.categoryNameZh.isNotEmpty ? tx.categoryNameZh : '这笔'} 原支出 ¥${_trim(full)}',
+                    '${tx.categoryNameZh.isNotEmpty ? tx.categoryNameZh : '这笔'}'
+                    ' 原支出 ¥${_trim(full)}'
+                    '${refunded > Decimal.zero ? ' · 已退 ¥${_trim(refunded)} · 剩 ¥${_trim(remaining)}' : ''}',
                     style: Theme.of(ctx).textTheme.bodySmall?.copyWith(
                           color: scheme.onSurfaceVariant,
                         ),
                     textAlign: TextAlign.center,
                   ),
-                  const SizedBox(height: 16),
-                  TextField(
-                    controller: ctrl,
-                    autofocus: true,
-                    keyboardType:
-                        const TextInputType.numberWithOptions(decimal: true),
-                    onChanged: (_) => setLocal(() {}),
-                    decoration: const InputDecoration(
-                      labelText: '退款金额',
-                      prefixText: '¥ ',
-                      helperText: '默认全额,可改成实际退款金额',
+                  // ── 已退明细（退款记录）──
+                  if (refunds.isNotEmpty) ...[
+                    const SizedBox(height: 12),
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: Text('退款记录',
+                          style: Theme.of(ctx).textTheme.labelMedium?.copyWith(
+                              color: scheme.onSurfaceVariant)),
                     ),
-                  ),
-                  Align(
-                    alignment: Alignment.centerLeft,
-                    child: TextButton(
-                      onPressed: () => setLocal(() => ctrl.text = _trim(full)),
-                      child: const Text('全额'),
+                    const SizedBox(height: 4),
+                    for (final r in refunds)
+                      Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 3),
+                        child: Row(
+                          children: [
+                            Expanded(
+                              child: Text(
+                                '${r.date.year}-${r.date.month.toString().padLeft(2, '0')}-${r.date.day.toString().padLeft(2, '0')} ${r.date.hour.toString().padLeft(2, '0')}:${r.date.minute.toString().padLeft(2, '0')}',
+                                style: Theme.of(ctx).textTheme.bodySmall?.copyWith(
+                                    color: scheme.onSurfaceVariant),
+                              ),
+                            ),
+                            Text('+${_trim(r.amount.abs())}',
+                                style: TextStyle(
+                                    color: gold,
+                                    fontWeight: FontWeight.w600,
+                                    fontFamily: 'Nunito')),
+                            // 单笔退款可撤销（记错了）。
+                            IconButton(
+                              visualDensity: VisualDensity.compact,
+                              icon: Icon(Icons.close,
+                                  size: 16, color: scheme.onSurfaceVariant),
+                              onPressed: () async {
+                                await repo.deleteTransaction(r.id);
+                                ctrl.text = _trim(full - repo.refundedAmountOf(tx.id));
+                                setLocal(() {});
+                              },
+                            ),
+                          ],
+                        ),
+                      ),
+                    const Divider(height: 16),
+                  ],
+                  if (remaining > Decimal.zero) ...[
+                    const SizedBox(height: 8),
+                    TextField(
+                      controller: ctrl,
+                      autofocus: refunds.isEmpty,
+                      keyboardType: const TextInputType.numberWithOptions(
+                          decimal: true),
+                      onChanged: (_) => setLocal(() {}),
+                      decoration: InputDecoration(
+                        labelText: '本次退款金额',
+                        prefixText: '¥ ',
+                        helperText: '默认剩余可退 ¥${_trim(remaining)}，可改小',
+                      ),
                     ),
-                  ),
-                  const SizedBox(height: 4),
-                  SizedBox(
-                    width: double.infinity,
-                    child: FilledButton(
-                      onPressed: valid
-                          ? () async {
-                              Navigator.pop(ctx);
-                              Haptics.of(Haptic.success);
-                              await repo.refundTransaction(tx, parsed);
-                            }
-                          : null,
-                      child: Text(valid && parsed == full ? '全额退款' : '确认退款'),
+                    const SizedBox(height: 8),
+                    SizedBox(
+                      width: double.infinity,
+                      child: FilledButton(
+                        onPressed: valid
+                            ? () async {
+                                Navigator.pop(ctx);
+                                Haptics.of(Haptic.success);
+                                await repo.refundTransaction(tx, parsed);
+                              }
+                            : null,
+                        child: Text(valid && parsed == remaining
+                            ? '全部退回'
+                            : '确认退款'),
+                      ),
                     ),
-                  ),
+                  ] else
+                    Padding(
+                      padding: const EdgeInsets.only(top: 8),
+                      child: Text('已全额退完',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(color: scheme.onSurfaceVariant)),
+                    ),
                 ],
-              );
-            },
-          ),
-        ),
+              ),
+            ),
+          );
+        },
       );
     },
   );
+  _refundCtrl?.dispose();
+  _refundCtrl = null;
 }
+
+/// 退款弹层的输入控制器（弹层生命周期内复用，关闭时释放）。
+TextEditingController? _refundCtrl;
 
 String _trim(Decimal d) {
   var s = d.toString();

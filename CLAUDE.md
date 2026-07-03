@@ -11,7 +11,7 @@
 - **水印 b0703-4 / DB v16**（b0702-13 已 commit）。**b0703-1..4 待用户合并推送**（一个提交即可）：预算修正包(-1) + 二级面板提层修复(-2) + GPT小修包(-3) + 分类管理重构/删账本保护/深色巡检/统计性能/logo封面(-4)，详见 -1.2 顶部。推送：`git push origin HEAD:claude/hopeful-wozniak-pr2ne3`。
 - **本地验证坑（已解决）**：flutter 启动锁死锁（强杀任务后锁未释放，后续命令死等）。解法=杀 dart 进程 + 删 `C:\src\flutter\bin\cache\lockfile`，之后 analyze 十几秒正常出结果。**教训**：b0703-4 首次构建红=book_sheet 漏 import AppColors——CI analyze 原是 `|| true` 非阻断、测试只编译引用到的文件，编译错漏到打 APK 才炸。**CI 已改**：analyze 换成 `--no-fatal-infos --no-fatal-warnings`（error 阻断，warning 放行）。
 - **GPT 全面复盘已消化**（2026-07-03）：全部采纳项已完成（AI滤excluded/今日vs日均文案/toast统一/迁移前备份/删账本保护/15号代表日改按天重叠/分类管理包）；驳回=图标颜色编辑；核实本来就有=统计默认卡数/预算状态色/API key遮罩/手动备份页。**别再重复做。**
-- **⚠️ 每次推送前记得**：①水印 +1 ②pubspec version minor+1 且 +N（versionCode）+1。APK 下载链接已变：`.../android-latest/肥喵记账.apk`。
+- **⚠️ 每次推送前记得**：①水印 +1 ②pubspec version minor+1 且 +N（versionCode）+1（当前 1.2.0+4 / 水印 b0703-8 / DB v17）。APK 下载链接：`.../android-latest/肥喵记账.apk`。
 - **下一步候选**：①统计卡 ReorderableListView.builder 真懒加载 ②「记账(日常)」封面（GPT 在做）③多人共享账本后端（先出设计文档；删除墓碑未做）④喵助手记账卡跨重启恢复（chat_messages 只存文本）。不做：多币种/图标颜色编辑/语音。
 - **等用户的文件**：①字标 logo（已选定第二版=藏青+金币爪印，等存到 `Desktop\记账app\图片\logo.png`→白底转透明+裁边→assets/brand/→换抽屉头部文字）②账本封面缺 4 张：记账(日常)/宠物/母婴/家庭（流程见 -1.2 批5.6）。
 - **给 GPT 复盘的代码包**已生成在 `Desktop\记账app\复盘包\`（4个txt，含提示词模板+锁定决策护栏）；GPT 结论回来**只挑增量**（它会推底部Tab/红色/云同步，一律驳）。
@@ -37,6 +37,7 @@
 - ~~预算逻辑修正包~~ ✅ b0703-1；~~分类管理重构包~~ ✅ b0703-4（含 DB v16 hidden + uuid/updated_ms 地基）。队列已清空，下一步见 -1.-1 候选。
 
 ### -1.2 已完成批次速查
+- **附着式退款（b0703-8，待真机验，DB v17）**：退款不再作为独立负支出条目漂在时间线里，改**挂到原账单**（对齐咔皮图二三）。①DB v17：transactions 加 `refund_of`（非空=退款行，指向原 id）；老的独立冲账行 refund_of 为空仍按旧样显示。②repo：`refundTransaction` 改为插带 refund_of 的负支出（同原账单账本）；新增 `visibleTransactions`（滤掉退款行，首页/账单列表/搜索都换用它）、`refundsOf(id)`、`refundedAmountOf(id)`、`netAmountOf(t)`；`deleteTransaction` 删原账单时级联删退款行。统计/预算走 allRecords（含退款负数），净额自动对，引擎零改。③UI：账单行有退款时=划线原价+净额+「已退 X」铜金小标（**不用绿，守配色铁律**，home_view+transaction_list_view 两处行都改）；退款弹层升级=显示原价/已退/剩余+退款记录明细（每笔可撤销）+新退款上限改「剩余可退」。④测试：repo 层加附着退款用例（净额/已退/可见列表/删除级联），v15→v17 迁移断言更新。**198 测试全过。**⚠️ 删除墓碑仍未做（接后端同步要补）。
 - **用户三修+中期包（b0703-6，待真机验）版本规范/logo微调/统计全维度 + 待报销闭环/AI喂数裁剪/repo测试**：
   ①**版本与包名**：pubspec `version: 1.0.0+2`（规则：1.0 起步每次推送 minor+1，**+N versionCode 只增不减**，每批推送都要一起 bump）；CI 产物改名 `肥喵记账.apk`（**下载链接变了**：`https://github.com/178517877qq-sketch/xunni/releases/download/android-latest/肥喵记账.apk`），加了删旧 qingji.apk 资产的步骤，Release 标题也改肥喵记账。
   ②**抽屉字标**：左距 20→10、logo 30→36（文字兜底 24→29）。

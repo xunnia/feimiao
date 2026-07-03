@@ -73,7 +73,7 @@ class _SearchViewState extends State<SearchView> {
     final active = q.isNotEmpty || _hasFilter;
     final results = !active
         ? const <TransactionEntity>[]
-        : repo.transactions.where((t) => _pass(t, q)).toList();
+        : repo.visibleTransactions.where((t) => _pass(t, q)).toList();
 
     return Scaffold(
       appBar: AppBar(

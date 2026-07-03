@@ -131,7 +131,40 @@ void main() {
     await repo.closeForTest();
   });
 
-  test('v15 → v16 迁移：老账单原样保留，uuid 回填，hidden 列就位', () async {
+  test('附着式退款：净额/已退/可见列表隐藏退款行/删除级联', () async {
+    final repo = await freshRepo();
+    final cats = repo.categoriesForKindRanked(TransactionKind.expense);
+    final id = await repo.addTransaction(
+      kind: TransactionKind.expense,
+      amount: Decimal.fromInt(80),
+      categoryId: cats.first.id,
+      accountId: repo.accounts.first.id,
+      note: '早餐',
+      date: DateTime(2026, 7, 3),
+    );
+    final original = repo.transactions.firstWhere((t) => t.id == id);
+    await repo.refundTransaction(original, Decimal.fromInt(5));
+    await repo.refundTransaction(original, Decimal.fromInt(3));
+
+    expect(repo.refundedAmountOf(id), Decimal.fromInt(8));
+    expect(repo.netAmountOf(original), Decimal.fromInt(72));
+    expect(repo.refundsOf(id), hasLength(2));
+    // 可见列表只有原账单，退款行不单独出现。
+    expect(repo.visibleTransactions.where((t) => t.id == id), hasLength(1));
+    expect(repo.visibleTransactions.where((t) => t.refundOf == id), isEmpty);
+    // 统计口径（allRecords 含退款负数）净额对：80−5−3=72。
+    final expenseSum = repo.allRecords
+        .where((r) => r.kind == TransactionKind.expense)
+        .fold(Decimal.zero, (a, r) => a + r.amount);
+    expect(expenseSum, Decimal.fromInt(72));
+    // 删原账单，退款行一起删。
+    await repo.deleteTransaction(id);
+    expect(repo.transactions.where((t) => t.id == id || t.refundOf == id),
+        isEmpty);
+    await repo.closeForTest();
+  });
+
+  test('v15 → 最新 迁移：老账单原样保留，uuid 回填，hidden 列就位', () async {
     // 手工造一个最小 v15 库（schema 抄 v15 时的 _onCreate，无 hidden/uuid/updated_ms）。
     final path = p.join(tmp.path, 'qingji.db');
     final db = await databaseFactory.openDatabase(
@@ -201,7 +234,7 @@ void main() {
     final check = await databaseFactory.openDatabase(path);
     final v = Sqflite.firstIntValue(
         await check.rawQuery('PRAGMA user_version'));
-    expect(v, 16);
+    expect(v, 17); // init 一路升到当前最新版本
     final rows = await check.query('transactions');
     expect((rows.first['uuid'] as String).length, 32); // randomblob 回填
     expect(rows.first['updated_ms'] as int, greaterThan(0));

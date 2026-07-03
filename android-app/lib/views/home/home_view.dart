@@ -108,8 +108,8 @@ class _HomeViewState extends State<HomeView> {
           )
         : null;
 
-    // 所选月的交易 + 收支筛选。
-    final monthTx = repo.transactions
+    // 所选月的交易 + 收支筛选（退款行不单独显示，挂在原账单里）。
+    final monthTx = repo.visibleTransactions
         .where((t) => t.date.year == _year && t.date.month == _month)
         .toList();
     final filtered = monthTx.where((t) {
@@ -1332,6 +1332,11 @@ class _TransactionRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    // 附着式退款：这笔有退款时显示净额 + 划掉原价 + 「已退 X」绿标。
+    final refunded = context.read<AppRepository>().refundedAmountOf(transaction.id);
+    final hasRefund = refunded > Decimal.zero &&
+        transaction.txKind == TransactionKind.expense;
+    final net = transaction.amount - refunded;
     return Padding(
       padding: const EdgeInsets.symmetric(
           horizontal: AppSpacing.lg, vertical: AppSpacing.sm),
@@ -1360,6 +1365,7 @@ class _TransactionRow extends StatelessWidget {
                         overflow: TextOverflow.ellipsis,
                       ),
                     ),
+                    if (hasRefund) _RefundBadge(refunded: refunded),
                     if (transaction.reimbursable) const _ReimburseBadge(),
                     if (transaction.excluded) const _ExcludedBadge(),
                   ],
@@ -1380,17 +1386,68 @@ class _TransactionRow extends StatelessWidget {
             ),
           ),
           const SizedBox(width: AppSpacing.md),
-          Text(
-            _amountText,
-            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                  color: _amountColor(scheme),
-                  fontWeight: FontWeight.w600,
-                  fontFamily: 'Nunito',
-                  // ignore: deprecated_member_use
-                  fontFeatures: const [FontFeature.tabularFigures()],
-                ),
-          ),
+          // 有退款：划线原价（小、灰）+ 净额；否则单显金额。
+          if (hasRefund) ...[
+            Text(
+              MoneyFormat.string(transaction.amount),
+              style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                    color: AppTextColor.hint(scheme),
+                    decoration: TextDecoration.lineThrough,
+                    fontFamily: 'Nunito',
+                  ),
+            ),
+            const SizedBox(width: 6),
+            Text(
+              '-${MoneyFormat.string(net)}',
+              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                    color: scheme.onSurface,
+                    fontWeight: FontWeight.w600,
+                    fontFamily: 'Nunito',
+                    // ignore: deprecated_member_use
+                    fontFeatures: const [FontFeature.tabularFigures()],
+                  ),
+            ),
+          ] else
+            Text(
+              _amountText,
+              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                    color: _amountColor(scheme),
+                    fontWeight: FontWeight.w600,
+                    fontFamily: 'Nunito',
+                    // ignore: deprecated_member_use
+                    fontFeatures: const [FontFeature.tabularFigures()],
+                  ),
+            ),
         ],
+      ),
+    );
+  }
+}
+
+/// 「已退 X」小标。退款=钱回来了，用铜金（守住「不用红绿」的配色铁律）。
+class _RefundBadge extends StatelessWidget {
+  final Decimal refunded;
+
+  const _RefundBadge({required this.refunded});
+
+  @override
+  Widget build(BuildContext context) {
+    final gold = AppColors.income(Theme.of(context).colorScheme);
+    return Container(
+      margin: const EdgeInsets.only(left: 6),
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+      decoration: BoxDecoration(
+        color: gold.withValues(alpha: 0.16),
+        borderRadius: BorderRadius.circular(4),
+      ),
+      child: Text(
+        '已退 ${MoneyFormat.string(refunded)}',
+        style: TextStyle(
+          fontSize: 10,
+          height: 1.2,
+          color: gold,
+          fontWeight: FontWeight.w500,
+        ),
       ),
     );
   }
