@@ -9,7 +9,7 @@
 
 ### -1.-1 当前状态速览（2026-07-03 深夜更新）
 - **水印 b0703-4 / DB v16**（b0702-13 已 commit）。**b0703-1..4 待用户合并推送**（一个提交即可）：预算修正包(-1) + 二级面板提层修复(-2) + GPT小修包(-3) + 分类管理重构/删账本保护/深色巡检/统计性能/logo封面(-4)，详见 -1.2 顶部。推送：`git push origin HEAD:claude/hopeful-wozniak-pr2ne3`。
-- **本地验证坑**：flutter 启动锁死锁一次（强杀 analyze 任务后锁未释放，后续命令死等 54 分钟）。已杀干净进程；若再卡，删 `C:\src\flutter\bin\cache\lockfile` 后重试（用户已知情）。
+- **本地验证坑（已解决）**：flutter 启动锁死锁（强杀任务后锁未释放，后续命令死等）。解法=杀 dart 进程 + 删 `C:\src\flutter\bin\cache\lockfile`，之后 analyze 十几秒正常出结果。**教训**：b0703-4 首次构建红=book_sheet 漏 import AppColors——CI analyze 原是 `|| true` 非阻断、测试只编译引用到的文件，编译错漏到打 APK 才炸。**CI 已改**：analyze 换成 `--no-fatal-infos --no-fatal-warnings`（error 阻断，warning 放行）。
 - **GPT 全面复盘已消化**（2026-07-03）：全部采纳项已完成（AI滤excluded/今日vs日均文案/toast统一/迁移前备份/删账本保护/15号代表日改按天重叠/分类管理包）；驳回=图标颜色编辑；核实本来就有=统计默认卡数/预算状态色/API key遮罩/手动备份页。**别再重复做。**
 - **下一步候选**：①猫表情真图替换 emoji 占位（用户已给 8 张：`Desktop\记账app\图片\celebrate/empty/idle/overspend/report/sleep/success/thinking.png`，对应 mascot.dart 7表情，需压缩+透明处理）②「记账(日常)」封面还缺（GPT 在做）③多人共享账本后端（长期）。
 - **等用户的文件**：①字标 logo（已选定第二版=藏青+金币爪印，等存到 `Desktop\记账app\图片\logo.png`→白底转透明+裁边→assets/brand/→换抽屉头部文字）②账本封面缺 4 张：记账(日常)/宠物/母婴/家庭（流程见 -1.2 批5.6）。

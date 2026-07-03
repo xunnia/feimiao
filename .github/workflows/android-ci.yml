@@ -63,9 +63,11 @@ jobs:
           rm -f android/app/src/main/res/mipmap-anydpi-v26/ic_launcher_round.xml
           echo ">> 已移除自适应图标 XML，强制传统图标"
 
-      - name: 静态分析
+      - name: 静态分析（error 阻断，warning/info 放行）
+        # 别再让编译错漏到打 APK 才炸：单元测试只编译它引用的文件，
+        # 没被测试覆盖的页面里的错误只有 analyze 能提前拦住。
         working-directory: android-app
-        run: flutter analyze || true
+        run: flutter analyze --no-fatal-infos --no-fatal-warnings
 
       - name: 跑单元测试（移植正确性的硬性闸门）
         working-directory: android-app
