@@ -50,9 +50,15 @@ class _SearchViewState extends State<SearchView> {
 
   bool _pass(TransactionEntity t, String q) {
     if (q.isNotEmpty) {
-      final hit = t.categoryNameZh.contains(q) ||
+      // 分类名空时按列表里显示的「未分类」参与匹配，搜「未分类」才搜得到。
+      final catName = t.categoryNameZh.isNotEmpty
+          ? t.categoryNameZh
+          : (t.txKind == TransactionKind.transfer ? '转账' : '未分类');
+      final hit = catName.contains(q) ||
           t.note.contains(q) ||
-          MoneyFormat.string(t.amount).contains(q);
+          t.accountName.contains(q) ||
+          MoneyFormat.string(t.amount).contains(q) ||
+          t.amount.toString().contains(q);
       if (!hit) return false;
     }
     if (_kind != null && t.txKind != _kind) return false;

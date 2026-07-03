@@ -21,6 +21,18 @@ void main() {
       '屈臣氏买洗面奶': 'shop_beauty',
       '发红包给朋友': 'gift_red',
       '买了维达抽纸': 'shop_home',
+      // ── 微信账单常见商户（0703 补强）──
+      '京东-订单编号349126': 'shopping',
+      '拼多多平台商户 先用后付': 'shopping',
+      '淘宝平台商户': 'shopping',
+      'Apple apple.com/bill/MMQ': 'subscription',
+      'iCloud 由云上贵州运营': 'subscription',
+      'miHoYo Games': 'subscription',
+      '深圳市腾讯天游科技有限公司': 'subscription',
+      '手机充值-中国移动': 'house_phone',
+      '中国电信': 'house_phone',
+      '顺丰速运 散单运费': 'other',
+      '广东省广州市中级人民法院': 'other_fine',
     };
     cases.forEach((text, key) {
       test('「$text」→ $key', () {
