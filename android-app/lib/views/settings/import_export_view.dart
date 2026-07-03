@@ -12,11 +12,11 @@ import 'package:path_provider/path_provider.dart';
 import 'package:provider/provider.dart';
 import 'package:share_plus/share_plus.dart';
 
-import '../../core/ai/bill_categorizer.dart';
 import '../../core/import/bill_import.dart';
 import '../../core/models/transaction_kind.dart';
 import '../../data/app_repository.dart';
 import '../../theme/app_colors.dart';
+import 'bill_review_view.dart';
 
 /// 导入导出页：把当前账本导出成 CSV（可分享/备份），或从 CSV 批量导入。
 ///
@@ -132,9 +132,24 @@ class _ImportExportViewState extends State<ImportExportView> {
         _setMessage('导入失败：识别为「${result.source}」，$diag。把文件发我看看就能修。');
         return;
       }
-      final count = await _ingestRows(result.rows);
-      final skip = result.skipped > 0 ? '，跳过 ${result.skipped} 笔（中性/无效）' : '';
-      _setMessage('识别为「${result.source}」，成功导入 $count 笔$skip 🎉');
+      if (!mounted) return;
+      // 进复核页：每行先自动归类，剩余按商户分组让用户确认/AI 兜底，确认后入库。
+      final count = await Navigator.of(context).push<int>(
+        MaterialPageRoute(
+          builder: (_) => BillReviewView(
+            rows: result.rows,
+            source: result.source,
+            skipped: result.skipped,
+          ),
+        ),
+      );
+      if (count != null) {
+        final skip =
+            result.skipped > 0 ? '，跳过 ${result.skipped} 笔（中性/无效）' : '';
+        _setMessage('成功导入 $count 笔$skip 🎉');
+      } else {
+        _setMessage('已取消导入');
+      }
     } catch (e) {
       _setMessage('导入失败：$e');
     } finally {
@@ -175,78 +190,6 @@ class _ImportExportViewState extends State<ImportExportView> {
       if (table.isNotEmpty) return table;
     }
     return const [];
-  }
-
-  /// 把标准化的账单行解析分类/账户后批量写库。返回导入条数。
-  Future<int> _ingestRows(List<ImportedBillRow> rows) async {
-    final repo = context.read<AppRepository>();
-    final fallbackAccountId = repo.accounts.firstOrNull?.id;
-    if (fallbackAccountId == null) return 0;
-
-    final cats = <TransactionKind, List<CategoryEntity>>{};
-    List<CategoryEntity> catsFor(TransactionKind k) =>
-        cats[k] ??= repo.categoriesForKind(k);
-
-    int? idOfKey(TransactionKind k, String? key) {
-      if (key == null) return null;
-      for (final c in catsFor(k)) {
-        if (c.key == key) return c.id;
-      }
-      return null;
-    }
-
-    int? categorize(ImportedBillRow r) {
-      // 1) 账单自带分类名（如支付宝交易分类）能对上现有分类就用。
-      if (r.category.isNotEmpty) {
-        for (final c in catsFor(r.kind)) {
-          if (c.nameZh == r.category) return c.id;
-        }
-      }
-      // 2) 用户已学过的分类记忆最优先（个人化，越用越准）。
-      final learned = repo.recallCategoryKey(
-          '${r.merchant} ${r.product} ${r.note}', r.kind);
-      final byLearned = idOfKey(r.kind, learned);
-      if (byLearned != null) return byLearned;
-      // 3) 分类器：商品优先 > 决定性商户 > 平台顶级默认 > 兜底备注。
-      final guess = BillCategorizer.classify(
-        merchant: r.merchant,
-        product: r.product,
-        note: '${r.category} ${r.note}',
-        kind: r.kind,
-      );
-      return idOfKey(r.kind, guess.key);
-    }
-
-    // 先记所有非退款行，记住 商户订单号 → 新账单 id（退款要挂回它）。
-    final orderToId = <String, int>{};
-    final refunds = <ImportedBillRow>[];
-    var count = 0;
-    for (final r in rows) {
-      if (r.isRefund) {
-        refunds.add(r);
-        continue;
-      }
-      final id = await repo.addTransaction(
-        kind: r.kind,
-        amount: r.amount,
-        categoryId: categorize(r),
-        accountId: fallbackAccountId,
-        note: r.note,
-        date: r.date,
-      );
-      if (r.orderNo.isNotEmpty) orderToId[r.orderNo] = id;
-      count++;
-    }
-    // 退款挂回原单让净额归零（支付宝「付了又退」）；找不到原单的退款丢弃，
-    // 不凭空造负数污染统计。
-    for (final r in refunds) {
-      final origId = orderToId[r.orderNo];
-      if (origId == null) continue;
-      final orig =
-          repo.transactions.where((t) => t.id == origId).firstOrNull;
-      if (orig != null) await repo.refundTransaction(orig, r.amount);
-    }
-    return count;
   }
 
   String _kindZh(TransactionKind k) {

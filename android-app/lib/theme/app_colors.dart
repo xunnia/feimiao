@@ -137,12 +137,22 @@ class AppTheme {
         space: 0.5,
         color: Color(0x1F000000),
       ),
-      // AppBar 与正文同灰、无 tint、无滚动浮起阴影，无缝衔接
-      appBarTheme: const AppBarTheme(
-        backgroundColor: Color(0xFFF7F8FA),
+      // AppBar 与正文同灰、无 tint、无滚动浮起阴影，无缝衔接。
+      // 全局统一返回键/标题/加号按钮：标题居中 17/w600，图标中性 onSurface 21，
+      // 各页面 AppBar 从此一个样，不再各写各的。
+      appBarTheme: AppBarTheme(
+        backgroundColor: const Color(0xFFF7F8FA),
         surfaceTintColor: Colors.transparent,
         elevation: 0,
         scrolledUnderElevation: 0,
+        centerTitle: true,
+        titleTextStyle: TextStyle(
+          fontSize: 17,
+          fontWeight: FontWeight.w600,
+          color: cs.onSurface,
+        ),
+        iconTheme: IconThemeData(color: cs.onSurface, size: 21),
+        actionsIconTheme: IconThemeData(color: cs.onSurface, size: 21),
       ),
       // 卡片：圆角 20、低阴影
       cardTheme: CardThemeData(
@@ -202,11 +212,19 @@ class AppTheme {
       useMaterial3: true,
       platform: TargetPlatform.iOS,
       pageTransitionsTheme: _iosPageTransitions,
-      appBarTheme: const AppBarTheme(
-        backgroundColor: Color(0xFF211E1C),
+      appBarTheme: AppBarTheme(
+        backgroundColor: const Color(0xFF211E1C),
         surfaceTintColor: Colors.transparent,
         elevation: 0,
         scrolledUnderElevation: 0,
+        centerTitle: true,
+        titleTextStyle: TextStyle(
+          fontSize: 17,
+          fontWeight: FontWeight.w600,
+          color: cs.onSurface,
+        ),
+        iconTheme: IconThemeData(color: cs.onSurface, size: 21),
+        actionsIconTheme: IconThemeData(color: cs.onSurface, size: 21),
       ),
       dividerTheme: const DividerThemeData(
         thickness: 0.5,

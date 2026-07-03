@@ -112,7 +112,7 @@ class _StatisticsViewState extends State<StatisticsView> {
     return Scaffold(
       appBar: AppBar(
         title: const Text('统计'),
-        centerTitle: false,
+        centerTitle: true,
         actions: [
           IconButton(
             icon: const Icon(Icons.description_outlined),
