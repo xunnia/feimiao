@@ -1234,6 +1234,16 @@ class AppRepository extends ChangeNotifier {
       get categoryMemories =>
           List.of(_catMemory)..sort((a, b) => a.phrase.compareTo(b.phrase));
 
+  /// 给 DeepSeek 提示词用：某收支下**未隐藏**的分类选项（key + 中文名，含自建分类）。
+  List<({String key, String name})> llmCategoryOptions(TransactionKind kind) => [
+        for (final c in _categories)
+          if (c.kind == kind && !c.hidden) (key: c.key, name: c.nameZh)
+      ];
+
+  /// 给 DeepSeek 提示词用：用户的学习记忆（历史纠正），让模型模仿其分类习惯。
+  List<({String phrase, String categoryKey})> get llmLearnedHints =>
+      [for (final m in _catMemory) (phrase: m.phrase, categoryKey: m.key)];
+
   /// 删除一条学过的记忆（学错了/过时了，用户在管理页手动清）。
   Future<void> forgetCategory(String phrase, TransactionKind kind) async {
     await _db!.delete('category_memory',

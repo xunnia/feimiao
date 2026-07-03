@@ -309,8 +309,10 @@ class _AiChatPanelState extends State<AiChatPanel> {
         final res = await LlmEntryParser.parseWithLLM(
           text: text,
           apiKey: key,
-          expenseCats: CategorySeed.expenses,
-          incomeCats: CategorySeed.incomes,
+          // 用户真实分类（含自建、去隐藏）+ 学习习惯，AI 往用户的分类里归、模仿其选择。
+          expenseCats: repo.llmCategoryOptions(TransactionKind.expense),
+          incomeCats: repo.llmCategoryOptions(TransactionKind.income),
+          learnedHints: repo.llmLearnedHints,
         );
         if (res.intent == LlmIntent.query) {
           await _runQuery(text);

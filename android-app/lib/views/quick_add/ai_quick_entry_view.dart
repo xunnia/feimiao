@@ -103,8 +103,10 @@ class _AiQuickEntryViewState extends State<AiQuickEntryView> {
           results = (await LlmEntryParser.parseWithLLM(
             text: text,
             apiKey: apiKey,
-            expenseCats: CategorySeed.expenses,
-            incomeCats: CategorySeed.incomes,
+            // 传用户真实分类（含自建、去隐藏）+ 学习习惯，让 AI 往用户的分类里归。
+            expenseCats: repo.llmCategoryOptions(TransactionKind.expense),
+            incomeCats: repo.llmCategoryOptions(TransactionKind.income),
+            learnedHints: repo.llmLearnedHints,
             fromScreenshot: widget.fromScreenshot,
           ))
               .entries;

@@ -3,7 +3,6 @@ import 'dart:convert';
 import 'package:decimal/decimal.dart';
 import 'package:http/http.dart' as http;
 
-import '../models/category_seed.dart';
 import '../models/transaction_kind.dart';
 import 'entry_sanity.dart';
 import 'natural_language_entry_parser.dart';
@@ -35,8 +34,9 @@ class LlmEntryParser {
   static Future<LlmParseResult> parseWithLLM({
     required String text,
     required String apiKey,
-    required List<CategorySeed> expenseCats,
-    required List<CategorySeed> incomeCats,
+    required List<({String key, String name})> expenseCats,
+    required List<({String key, String name})> incomeCats,
+    List<({String phrase, String categoryKey})> learnedHints = const [],
     DateTime? now,
     bool fromScreenshot = false,
   }) async {
@@ -48,19 +48,24 @@ class LlmEntryParser {
     const wd = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
     final weekdayStr = wd[today.weekday - 1];
 
-    final expenseList = expenseCats
-        .map((c) => '${c.key}:${c.nameZh}')
-        .join('、');
-    final incomeList = incomeCats
-        .map((c) => '${c.key}:${c.nameZh}')
-        .join('、');
+    final expenseList = expenseCats.map((c) => '${c.key}:${c.name}').join('、');
+    final incomeList = incomeCats.map((c) => '${c.key}:${c.name}').join('、');
+
+    // 用户历史纠正 → few-shot 习惯提示，让模型模仿这个用户的分类选择。
+    final hints = learnedHints.take(20).toList();
+    final habitBlock = hints.isEmpty
+        ? ''
+        : '''
+
+【该用户的记账习惯】(备注/商户含左边词时**优先**归右边分类，这是该用户亲自纠正过的，尽量遵循)
+${hints.map((h) => '${h.phrase}→${h.categoryKey}').join('、')}''';
 
     final systemPrompt = '''你是专业记账助手。把用户的一句话拆成一笔或多笔账目，只输出JSON对象，不要任何解释、不要Markdown。
 今天是 $todayStr（$weekdayStr）。
 
 【可用分类】(categoryKey 只能从这里选)
 支出：$expenseList
-收入：$incomeList
+收入：$incomeList$habitBlock
 
 【输出格式】
 {"intent":"record或query","entries":[{"amount":数字,"kind":"expense或income","categoryKey":"最匹配的key","date":"YYYY-MM-DD","note":"简短备注","confidence":0到1}]}
