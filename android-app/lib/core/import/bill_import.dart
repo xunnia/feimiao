@@ -11,12 +11,18 @@ class ImportedBillRow {
   final String note;
   final Decimal amount; // 恒为正
 
+  /// 交易对方 / 商品：分开保留（不只是拼进 note），供分类器按信号可靠性分流用。
+  final String merchant;
+  final String product;
+
   const ImportedBillRow({
     required this.date,
     required this.kind,
     required this.category,
     required this.note,
     required this.amount,
+    this.merchant = '',
+    this.product = '',
   });
 }
 
@@ -243,6 +249,8 @@ class _ColumnMap {
       category: cat,
       note: note0.length > 60 ? note0.substring(0, 60) : note0,
       amount: amt.abs(),
+      merchant: party,
+      product: prod == '/' ? '' : prod,
     );
   }
 

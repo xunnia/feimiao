@@ -12,8 +12,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:provider/provider.dart';
 import 'package:share_plus/share_plus.dart';
 
-import '../../core/ai/merchant_category.dart';
-import '../../core/ai/natural_language_entry_parser.dart';
+import '../../core/ai/bill_categorizer.dart';
 import '../../core/import/bill_import.dart';
 import '../../core/models/transaction_kind.dart';
 import '../../data/app_repository.dart';
@@ -188,10 +187,18 @@ class _ImportExportViewState extends State<ImportExportView> {
     List<CategoryEntity> catsFor(TransactionKind k) =>
         cats[k] ??= repo.categoriesForKind(k);
 
+    int? idOfKey(TransactionKind k, String? key) {
+      if (key == null) return null;
+      for (final c in catsFor(k)) {
+        if (c.key == key) return c.id;
+      }
+      return null;
+    }
+
     final drafts = <TransactionDraft>[];
     for (final r in rows) {
       int? categoryId;
-      // 1) 账单自带分类名（如支付宝交易分类）能对上现有分类就用
+      // 1) 账单自带分类名（如支付宝交易分类）能对上现有分类就用。
       if (r.category.isNotEmpty) {
         for (final c in catsFor(r.kind)) {
           if (c.nameZh == r.category) {
@@ -200,20 +207,21 @@ class _ImportExportViewState extends State<ImportExportView> {
           }
         }
       }
-      // 2) 否则按「分类名+商户+商品+备注」文字自动猜分类（微信账单全靠这个）。
-      //    先查专门的商户词典（京东/淘宝/iCloud/米哈游…更准），再退回宽泛关键词。
+      // 2) 用户已学过的分类记忆最优先（个人化，越用越准）。
       if (categoryId == null) {
-        final text = '${r.category} ${r.note}';
-        final guessKey = MerchantCategory.classify(text, r.kind) ??
-            NaturalLanguageEntryParser.guessCategory(text, kind: r.kind);
-        if (guessKey != null) {
-          for (final c in catsFor(r.kind)) {
-            if (c.key == guessKey) {
-              categoryId = c.id;
-              break;
-            }
-          }
-        }
+        final learned =
+            repo.recallCategoryKey('${r.merchant} ${r.product} ${r.note}', r.kind);
+        categoryId = idOfKey(r.kind, learned);
+      }
+      // 3) 分类器：商品优先 > 决定性商户 > 平台顶级默认 > 兜底备注。
+      if (categoryId == null) {
+        final guess = BillCategorizer.classify(
+          merchant: r.merchant,
+          product: r.product,
+          note: '${r.category} ${r.note}',
+          kind: r.kind,
+        );
+        categoryId = idOfKey(r.kind, guess.key);
       }
       drafts.add(TransactionDraft(
         kind: r.kind,

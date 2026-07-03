@@ -11,6 +11,7 @@ import 'package:provider/provider.dart';
 import '../../core/ai/chat_intent.dart';
 import '../../core/ai/llm_entry_parser.dart';
 import '../../core/ai/llm_query.dart';
+import '../../core/ai/bill_categorizer.dart';
 import '../../core/ai/merchant_category.dart';
 import '../../core/ai/query_range.dart';
 import '../../core/ai/smart_tags.dart';
@@ -547,11 +548,14 @@ class _AiChatPanelState extends State<AiChatPanel> {
   Future<void> _pickCategory(_RecordMsg msg, int i, CategoryEntity newCat) async {
     final repo = context.read<AppRepository>();
     Haptics.light();
-    // 学习:把"备注短语 → 分类"记下,下次同类自动命中
+    // 学习:把"短语 → 分类"记下,下次同类自动命中。
+    // 优先学「归一化商户主体」(顺丰/中国电信…)——一次改，以后同商户都对；
+    // 是平台商户(京东/淘宝…)或无明确商户时才退回学整条备注(避免错学平台→子类)。
     final note = msg.entries[i].note;
-    if (note.trim().isNotEmpty) {
+    final learnPhrase = BillCategorizer.learnKeyFor(note) ?? note;
+    if (learnPhrase.trim().isNotEmpty) {
       await repo.learnCategory(
-        phrase: note,
+        phrase: learnPhrase,
         kind: newCat.kind,
         categoryKey: newCat.key,
       );

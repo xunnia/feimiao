@@ -1,3 +1,3 @@
 /// 构建标记：每次有意义的改动就改一下，方便一眼确认手机上装的是不是最新包。
 /// 显示在 AI 记账页副标题末尾。
-const String kBuildTag = 'b0703-10';
+const String kBuildTag = 'b0703-11';
