@@ -188,6 +188,70 @@ ${hints.map((h) => '${h.phrase}→${h.categoryKey}').join('、')}''';
     return LlmParseResult(intent: intent, entries: result);
   }
 
+  /// 批量给商户归类（导入复核页的「一次 AI 兜底」）：把去重后的商户名
+  /// （可带示例商品）一次性发给 DeepSeek，返回 {商户名: categoryKey}。
+  /// 一次调用归几十个商户，去重后 token 极省。失败抛 [LlmParseException]。
+  static Future<Map<String, String>> classifyMerchants({
+    required List<({String merchant, String sample})> items,
+    required List<({String key, String name})> expenseCats,
+    required String apiKey,
+  }) async {
+    if (items.isEmpty) return const {};
+    final catList = expenseCats.map((c) => '${c.key}:${c.name}').join('、');
+    final merchantLines = items
+        .map((e) => e.sample.trim().isEmpty
+            ? e.merchant
+            : '${e.merchant}（例:${e.sample}）')
+        .join('\n');
+    final sys =
+        '''你是记账分类助手。下面每行是一个商户名（可能带示例商品）。把**每个商户**归到最合适的**支出**分类，只输出一个JSON对象，键是商户名原文、值是categoryKey，不要解释、不要Markdown。
+categoryKey 只能从这里选（拿不准用 other）：
+$catList
+规则：看商户在卖什么就归哪类；京东/淘宝/拼多多/美团这类万能平台按最可能的大类(购物/餐饮)；个人转账/看不出卖什么的用 other。''';
+    final requestBody = jsonEncode({
+      'model': _model,
+      'messages': [
+        {'role': 'system', 'content': sys},
+        {'role': 'user', 'content': merchantLines},
+      ],
+      'response_format': {'type': 'json_object'},
+      'temperature': 0.2,
+      'stream': false,
+    });
+
+    late http.Response response;
+    try {
+      response = await http
+          .post(
+            Uri.parse(_endpoint),
+            headers: {
+              'Authorization': 'Bearer $apiKey',
+              'Content-Type': 'application/json',
+            },
+            body: requestBody,
+          )
+          .timeout(const Duration(seconds: _timeoutSeconds));
+    } catch (e) {
+      throw LlmParseException('网络请求失败：$e');
+    }
+    if (response.statusCode != 200) {
+      throw LlmParseException('DeepSeek 返回错误 ${response.statusCode}');
+    }
+    try {
+      final outer = jsonDecode(response.body) as Map<String, dynamic>;
+      final content =
+          (outer['choices'] as List).first['message']['content'] as String;
+      final parsed = jsonDecode(content) as Map<String, dynamic>;
+      return {
+        for (final e in parsed.entries)
+          if (e.value is String && (e.value as String).isNotEmpty)
+            e.key: e.value as String
+      };
+    } catch (e) {
+      throw LlmParseException('AI 归类结果解析失败：$e');
+    }
+  }
+
   // ---------------------------------------------------------------------------
   // 内部转换
   // ---------------------------------------------------------------------------
