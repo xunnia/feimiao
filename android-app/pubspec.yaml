@@ -1,7 +1,9 @@
 name: qingji
-description: "轻记 - 极简记账"
+description: "肥喵记账 - 可爱又聪明的记账猫"
 publish_to: 'none'
-version: 0.1.0+1
+# 版本规则（用户 0703 拍板）：1.0 起步，每次推 GitHub 构建 minor +1（1.1、1.2…）。
+# 加号后是 Android versionCode，必须只增不减，否则手机拒绝覆盖安装。
+version: 1.0.0+2
 
 environment:
   sdk: '>=3.4.0 <4.0.0'
@@ -33,6 +35,8 @@ dev_dependencies:
     sdk: flutter
   flutter_lints: ^4.0.0
   flutter_launcher_icons: ^0.14.1
+  # repo 层测试用：桌面/CI 上跑真 SQLite，验证迁移/合并/删账本这些最不能错的操作。
+  sqflite_common_ffi: ^2.3.3
 
 flutter:
   uses-material-design: true

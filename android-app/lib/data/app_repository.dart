@@ -562,6 +562,13 @@ class AppRepository extends ChangeNotifier {
     }
   }
 
+  /// 测试用：关掉底层数据库连接（不然临时目录删不掉）。
+  @visibleForTesting
+  Future<void> closeForTest() async {
+    await _db?.close();
+    _db = null;
+  }
+
   Future<void> _onCreate(Database db, int version) async {
     await db.execute('''
       CREATE TABLE accounts (
@@ -1520,6 +1527,30 @@ class AppRepository extends ChangeNotifier {
     await _loadTransactions();
     notifyListeners();
     return newId;
+  }
+
+  /// 当前账本视角下所有「待报销」的支出（金额大的在前）。
+  List<TransactionEntity> get reimbursableTransactions => _transactions
+      .where((t) =>
+          t.reimbursable &&
+          t.txKind == TransactionKind.expense &&
+          t.amount > Decimal.zero)
+      .toList()
+    ..sort((a, b) => b.amount.compareTo(a.amount));
+
+  /// 标记一笔已报销（清掉待报销标；账单本身不动）。
+  Future<void> markReimbursed(int id) async {
+    await _db!.update(
+      'transactions',
+      {
+        'reimbursable': 0,
+        'updated_ms': DateTime.now().millisecondsSinceEpoch,
+      },
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+    await _loadTransactions();
+    notifyListeners();
   }
 
   /// 只改某笔的分类（记账卡「一键改分类」用，轻量、不动其它字段）。

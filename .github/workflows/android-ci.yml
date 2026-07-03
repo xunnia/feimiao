@@ -71,7 +71,11 @@ jobs:
 
       - name: 跑单元测试（移植正确性的硬性闸门）
         working-directory: android-app
-        run: flutter test
+        run: |
+          # repo 层测试用 sqflite_common_ffi 跑真 SQLite，需要系统 libsqlite3。
+          sudo apt-get install -y libsqlite3-dev \
+            || (sudo apt-get update && sudo apt-get install -y libsqlite3-dev)
+          flutter test
 
       - name: 注入固定 release 签名（有 Secret 才签，否则回落 debug）
         # 不写死钥匙到仓库：从 GitHub Secrets 解出 keystore + 生成 key.properties，
@@ -105,12 +109,19 @@ jobs:
         run: |
           SRC=android-app/build/app/outputs/flutter-apk/app-release.apk
           ls -lh "$SRC"
-          cp "$SRC" qingji.apk
+          cp "$SRC" 肥喵记账.apk
 
       - uses: actions/upload-artifact@v4
         with:
-          name: qingji-apk
-          path: qingji.apk
+          name: feimiao-apk
+          path: 肥喵记账.apk
+
+      # 老命名的 qingji.apk 资产删掉，Release 页只留一个正确命名的包
+      - name: 清理旧命名资产
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release delete-asset android-latest qingji.apk -y || true
 
       # 传到固定 tag 的 GitHub Release，给用户一个稳定下载链接（不污染 git 历史）
       - name: 发布到 GitHub Release
@@ -118,9 +129,9 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: android-latest
-          name: 轻记 安卓测试版（最新）
+          name: 肥喵记账 安卓测试版（最新）
           prerelease: true
-          files: qingji.apk
+          files: 肥喵记账.apk
           body: |
-            轻记安卓测试版，每次代码更新自动重新构建。
-            手机浏览器直接下载 qingji.apk 安装即可（需在系统里允许「安装未知来源应用」）。
+            肥喵记账安卓测试版，每次代码更新自动重新构建。
+            手机浏览器直接下载 肥喵记账.apk 安装即可（需在系统里允许「安装未知来源应用」）。

@@ -159,6 +159,7 @@ class _StatisticsViewState extends State<StatisticsView> {
       case _StatRange.week:
         return _WeekContent(
           records: records,
+          repo: repo,
           weekStart: _weekStart,
           isCurrentWeek: _isCurrentWeek,
           onShift: _shiftWeek,
@@ -177,6 +178,7 @@ class _StatisticsViewState extends State<StatisticsView> {
       case _StatRange.year:
         return _YearlyContent(
           records: records,
+          repo: repo,
           year: _displayedMonth.year,
           isCurrentYear: _displayedMonth.year == DateTime.now().year,
           onShift: _shiftYear,
@@ -184,6 +186,7 @@ class _StatisticsViewState extends State<StatisticsView> {
       case _StatRange.custom:
         return _CustomContent(
           records: records,
+          repo: repo,
           range: _customRange,
           onPick: _pickCustomRange,
         );
@@ -251,12 +254,14 @@ class _BookChip extends StatelessWidget {
 
 class _WeekContent extends StatelessWidget {
   final List<TransactionRecord> records;
+  final AppRepository repo;
   final DateTime weekStart;
   final bool isCurrentWeek;
   final void Function(int) onShift;
 
   const _WeekContent({
     required this.records,
+    required this.repo,
     required this.weekStart,
     required this.isCurrentWeek,
     required this.onShift,
@@ -270,8 +275,7 @@ class _WeekContent extends StatelessWidget {
     final label =
         '${weekStart.month}月${weekStart.day}日 – ${weekEnd.month}月${weekEnd.day}日';
 
-    return ListView(
-      padding: const EdgeInsets.all(16),
+    final header = Column(
       children: [
         _ArrowSwitcher(
           label: label,
@@ -285,29 +289,71 @@ class _WeekContent extends StatelessWidget {
           balance: s.balance,
         ),
         const SizedBox(height: 16),
-        if (s.totalExpense == Decimal.zero && s.totalIncome == Decimal.zero)
-          const _EmptyState(message: '这一周没有记录', sub: '换一周看看吧')
-        else ...[
-          _RingCard(
-            title: '支出构成',
-            totalLabel: '本周支出',
-            total: s.totalExpense,
-            categories: s.expenseByCategory,
-          ),
-          const SizedBox(height: 16),
-          _SectionCard(
-            title: '每日支出',
-            child: _WeekBars(daily: s.dailyTotals),
-          ),
-          const SizedBox(height: 16),
-          _SectionCard(
-            title: '分类排行',
-            child: _CategoryRanking(categories: s.expenseByCategory),
-          ),
-        ],
       ],
     );
+
+    if (s.totalExpense == Decimal.zero && s.totalIncome == Decimal.zero) {
+      return ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          header,
+          const _EmptyState(message: '这一周没有记录', sub: '换一周看看吧'),
+        ],
+      );
+    }
+
+    final top5 = _topExpenses(records, weekStart, weekEnd);
+    final hasExpense = s.expenseByCategory.isNotEmpty;
+
+    return _ManagedCards(
+      repo: repo,
+      header: header,
+      buildCard: (k) => switch (k) {
+        'ring' => !hasExpense
+            ? null
+            : _RingCard(
+                title: '支出构成',
+                totalLabel: '本周支出',
+                total: s.totalExpense,
+                categories: s.expenseByCategory,
+              ),
+        'daily' => !hasExpense
+            ? null
+            : _SectionCard(
+                title: '每日支出',
+                child: _WeekBars(daily: s.dailyTotals),
+              ),
+        'ranking' => !hasExpense
+            ? null
+            : _SectionCard(
+                title: '分类排行',
+                child: _CategoryRanking(categories: s.expenseByCategory),
+              ),
+        'top5' => top5.isEmpty
+            ? null
+            : _SectionCard(
+                title: '单笔支出排行',
+                child: _TopTxnList(items: top5),
+              ),
+        _ => null, // 其余卡是月视图专属
+      },
+    );
   }
+}
+
+/// 任意日期区间内金额最大的 5 笔支出（周/年/自定义视图的单笔排行用）。
+List<TransactionRecord> _topExpenses(
+    List<TransactionRecord> records, DateTime start, DateTime end) {
+  final s = DateTime(start.year, start.month, start.day);
+  final e = DateTime(end.year, end.month, end.day, 23, 59, 59);
+  final list = records
+      .where((r) =>
+          r.kind == TransactionKind.expense &&
+          !r.date.isBefore(s) &&
+          !r.date.isAfter(e))
+      .toList()
+    ..sort((a, b) => b.amount.compareTo(a.amount));
+  return list.take(5).toList();
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -330,34 +376,6 @@ class _MonthlyContent extends StatelessWidget {
     required this.monthlyBudget,
     required this.onShiftMonth,
   });
-
-  /// 月视图卡片注册表：key 用于持久化，别改已有 key。
-  static const Map<String, String> _cardTitles = {
-    'insights': '喵的洞察',
-    'budget': '本月预算',
-    'ring': '支出构成',
-    'daily': '每日趋势',
-    'ranking': '分类排行',
-    'top5': '单笔支出排行',
-    'heatmap': '消费热力图',
-    'compare': '本月 vs 上月',
-    'radar': '消费结构雷达',
-    'stacked': '近 12 月收支',
-  };
-
-  /// 默认可见卡片（热力图/对比/雷达/堆叠柱在图表库里，用户自己加）。
-  static const List<String> _defaultOrder = [
-    'insights', 'budget', 'ring', 'daily', 'ranking', 'top5',
-  ];
-
-  List<String> _visibleKeys() {
-    final saved = repo.statCardOrder;
-    if (saved.isEmpty) return List.of(_defaultOrder);
-    return [
-      for (final k in saved)
-        if (_cardTitles.containsKey(k)) k
-    ];
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -415,45 +433,11 @@ class _MonthlyContent extends StatelessWidget {
       );
     }
 
-    // ── 按用户顺序构建可见卡片（情境性无数据的卡自动跳过但保留位置）──
-    final visible = _visibleKeys();
-    final items = <(String, Widget)>[];
-    for (final k in visible) {
-      final w = _buildCard(k, summary, prevSummary, top5);
-      if (w != null) items.add((k, w));
-    }
-
-    return ReorderableListView(
-      padding: const EdgeInsets.all(16),
-      buildDefaultDragHandles: false,
+    // ── 卡片管理走全维度共享的 _ManagedCards ──
+    return _ManagedCards(
+      repo: repo,
       header: header,
-      footer: _CustomizeButton(
-        onTap: () => _showCardLibrary(context, visible),
-      ),
-      onReorder: (o, n) {
-        if (n > o) n--;
-        final itemKeys = [for (final e in items) e.$1];
-        final moved = itemKeys.removeAt(o);
-        itemKeys.insert(n, moved);
-        Haptics.selection();
-        // 新顺序 = 参与排序的卡 + 情境性隐藏的卡（保持原相对顺序放后面）
-        repo.setStatCardOrder([
-          ...itemKeys,
-          ...visible.where((k) => !itemKeys.contains(k)),
-        ]);
-      },
-      children: [
-        for (var i = 0; i < items.length; i++)
-          ReorderableDelayedDragStartListener(
-            key: ValueKey('stat_card_${items[i].$1}'),
-            index: i,
-            child: Padding(
-              padding: const EdgeInsets.only(bottom: 16),
-              // 每张图表卡隔离重绘：滚动/拖排序时旁边的 fl_chart 不用跟着重画。
-              child: RepaintBoundary(child: items[i].$2),
-            ),
-          ),
-      ],
+      buildCard: (k) => _buildCard(k, summary, prevSummary, top5),
     );
   }
 
@@ -491,22 +475,20 @@ class _MonthlyContent extends StatelessWidget {
         );
       case 'daily':
         if (!hasExpense) return null;
-        return _SectionCard(
+        return _TrendCard(
           title: '每日趋势',
-          child: _DualLineChart(
-            xLabels: [
-              for (final d in summary.dailyTotals)
-                (d.day == 1 || d.day % 5 == 0) ? '${d.day}' : '',
-            ],
-            expense: [
-              for (final d in summary.dailyTotals)
-                MoneyFormat.toDouble(d.expense).clamp(0.0, double.infinity),
-            ],
-            income: [
-              for (final d in summary.dailyTotals)
-                MoneyFormat.toDouble(d.income).clamp(0.0, double.infinity),
-            ],
-          ),
+          xLabels: [
+            for (final d in summary.dailyTotals)
+              (d.day == 1 || d.day % 5 == 0) ? '${d.day}' : '',
+          ],
+          expense: [
+            for (final d in summary.dailyTotals)
+              MoneyFormat.toDouble(d.expense).clamp(0.0, double.infinity),
+          ],
+          income: [
+            for (final d in summary.dailyTotals)
+              MoneyFormat.toDouble(d.income).clamp(0.0, double.infinity),
+          ],
         );
       case 'ranking':
         if (!hasExpense) return null;
@@ -551,8 +533,103 @@ class _MonthlyContent extends StatelessWidget {
     return null;
   }
 
-  /// 图表库弹层：开关每张卡（开=追加到底部，关=移除）。
-  void _showCardLibrary(BuildContext context, List<String> visible) {
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 全维度通用：可管理卡片列表（长按拖排序 + 图表库开关，周/月/年/自定义共用）
+// ─────────────────────────────────────────────────────────────────────────────
+
+class _ManagedCards extends StatelessWidget {
+  final AppRepository repo;
+  final Widget header;
+
+  /// key → 该维度下这张卡的 Widget；null = 此维度不适用或没数据（跳过但保留位置）。
+  final Widget? Function(String key) buildCard;
+
+  const _ManagedCards({
+    required this.repo,
+    required this.header,
+    required this.buildCard,
+  });
+
+  /// 卡片注册表：key 用于持久化，别改已有 key。顺序/开关全维度共用一份。
+  static const Map<String, String> cardTitles = {
+    'insights': '喵的洞察',
+    'budget': '本月预算',
+    'ring': '支出构成',
+    'daily': '趋势图',
+    'ranking': '分类排行',
+    'top5': '单笔支出排行',
+    'heatmap': '消费热力图',
+    'compare': '本月 vs 上月',
+    'radar': '消费结构雷达',
+    'stacked': '近 12 月收支',
+  };
+
+  /// 只在月视图有意义的卡（图表库里标注出来）。
+  static const Set<String> monthOnly = {
+    'insights', 'budget', 'heatmap', 'compare', 'radar', 'stacked',
+  };
+
+  /// 默认可见卡片（其余在图表库里，用户自己加）。
+  static const List<String> defaultOrder = [
+    'insights', 'budget', 'ring', 'daily', 'ranking', 'top5',
+  ];
+
+  static List<String> visibleKeys(AppRepository repo) {
+    final saved = repo.statCardOrder;
+    if (saved.isEmpty) return List.of(defaultOrder);
+    return [
+      for (final k in saved)
+        if (cardTitles.containsKey(k)) k
+    ];
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final visible = visibleKeys(repo);
+    final items = <(String, Widget)>[];
+    for (final k in visible) {
+      final w = buildCard(k);
+      if (w != null) items.add((k, w));
+    }
+
+    return ReorderableListView(
+      padding: const EdgeInsets.all(16),
+      buildDefaultDragHandles: false,
+      header: header,
+      footer: _CustomizeButton(
+        onTap: () => _showCardLibrary(context),
+      ),
+      onReorder: (o, n) {
+        if (n > o) n--;
+        final itemKeys = [for (final e in items) e.$1];
+        final moved = itemKeys.removeAt(o);
+        itemKeys.insert(n, moved);
+        Haptics.selection();
+        // 新顺序 = 参与排序的卡 + 此维度隐藏的卡（保持原相对顺序放后面）
+        repo.setStatCardOrder([
+          ...itemKeys,
+          ...visible.where((k) => !itemKeys.contains(k)),
+        ]);
+      },
+      children: [
+        for (var i = 0; i < items.length; i++)
+          ReorderableDelayedDragStartListener(
+            key: ValueKey('stat_card_${items[i].$1}'),
+            index: i,
+            child: Padding(
+              padding: const EdgeInsets.only(bottom: 16),
+              // 每张图表卡隔离重绘：滚动/拖排序时旁边的 fl_chart 不用跟着重画。
+              child: RepaintBoundary(child: items[i].$2),
+            ),
+          ),
+      ],
+    );
+  }
+
+  /// 图表库弹层：开关每张卡（开=追加到底部，关=移除）。全维度同一份配置。
+  void _showCardLibrary(BuildContext context) {
     showModalBottomSheet<void>(
       context: context,
       backgroundColor: Theme.of(context).colorScheme.surface,
@@ -562,7 +639,7 @@ class _MonthlyContent extends StatelessWidget {
       builder: (ctx) {
         return StatefulBuilder(
           builder: (ctx2, setLocal) {
-            final cur = _visibleKeys();
+            final cur = visibleKeys(repo);
             return SafeArea(
               child: Padding(
                 padding: const EdgeInsets.fromLTRB(20, 16, 20, 12),
@@ -574,18 +651,23 @@ class _MonthlyContent extends StatelessWidget {
                         style: TextStyle(
                             fontSize: 16, fontWeight: FontWeight.w600)),
                     const SizedBox(height: 4),
-                    Text('打开想看的图表，长按卡片可拖动排序',
+                    Text('打开想看的图表，长按卡片可拖动排序；带「月」标的只在月视图显示',
                         style: TextStyle(
                             fontSize: 12,
                             color:
                                 Theme.of(ctx2).colorScheme.onSurfaceVariant)),
                     const SizedBox(height: 8),
-                    for (final e in _cardTitles.entries)
+                    for (final e in cardTitles.entries)
                       Row(
                         children: [
                           Expanded(
-                              child: Text(e.value,
-                                  style: const TextStyle(fontSize: 14))),
+                            child: Text(
+                              monthOnly.contains(e.key)
+                                  ? '${e.value} · 月'
+                                  : e.value,
+                              style: const TextStyle(fontSize: 14),
+                            ),
+                          ),
                           Switch(
                             value: cur.contains(e.key),
                             onChanged: (on) {
@@ -608,6 +690,62 @@ class _MonthlyContent extends StatelessWidget {
           },
         );
       },
+    );
+  }
+}
+
+/// 趋势卡：右上角 支出/收入 开关，二选一显示（两条线挤一起看不清）。
+class _TrendCard extends StatefulWidget {
+  final String title;
+  final List<String> xLabels;
+  final List<double> expense;
+  final List<double> income;
+
+  const _TrendCard({
+    super.key,
+    required this.title,
+    required this.xLabels,
+    required this.expense,
+    required this.income,
+  });
+
+  @override
+  State<_TrendCard> createState() => _TrendCardState();
+}
+
+class _TrendCardState extends State<_TrendCard> {
+  bool _showIncome = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return _SectionCard(
+      title: widget.title,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Align(
+            alignment: Alignment.centerRight,
+            child: SizedBox(
+              width: 132,
+              child: SlidingSegment<bool>(
+                items: const [(false, '支出'), (true, '收入')],
+                value: _showIncome,
+                onChanged: (v) {
+                  Haptics.selection();
+                  setState(() => _showIncome = v);
+                },
+              ),
+            ),
+          ),
+          const SizedBox(height: 10),
+          _DualLineChart(
+            xLabels: widget.xLabels,
+            expense: widget.expense,
+            income: widget.income,
+            showIncome: _showIncome,
+          ),
+        ],
+      ),
     );
   }
 }
@@ -655,12 +793,14 @@ class _CustomizeButton extends StatelessWidget {
 
 class _YearlyContent extends StatelessWidget {
   final List<TransactionRecord> records;
+  final AppRepository repo;
   final int year;
   final bool isCurrentYear;
   final void Function(int) onShift;
 
   const _YearlyContent({
     required this.records,
+    required this.repo,
     required this.year,
     required this.isCurrentYear,
     required this.onShift,
@@ -677,8 +817,7 @@ class _YearlyContent extends StatelessWidget {
       monthlyIncome[r.date.month - 1] += MoneyFormat.toDouble(r.amount);
     }
 
-    return ListView(
-      padding: const EdgeInsets.all(16),
+    final header = Column(
       children: [
         _ArrowSwitcher(
           label: '$year 年',
@@ -693,43 +832,67 @@ class _YearlyContent extends StatelessWidget {
           prefix: '全年',
         ),
         const SizedBox(height: 16),
-        if (summary.totalExpense == Decimal.zero &&
-            summary.totalIncome == Decimal.zero)
+      ],
+    );
+
+    if (summary.totalExpense == Decimal.zero &&
+        summary.totalIncome == Decimal.zero) {
+      return ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          header,
           const _EmptyState(
             message: '今年还没有账目',
             sub: '记几笔之后这里会出现年度报告',
-          )
-        else ...[
-          _SectionCard(
-            title: '全年趋势',
-            child: _DualLineChart(
-              xLabels: [
-                for (var m = 1; m <= 12; m++) m.isOdd ? '$m月' : '',
-              ],
-              expense: [
-                for (final e in summary.monthlyExpenses)
-                  MoneyFormat.toDouble(e).clamp(0.0, double.infinity),
-              ],
-              income: monthlyIncome,
-            ),
-          ),
-          const SizedBox(height: 16),
-          _RingCard(
-            title: '支出构成',
-            totalLabel: '全年支出',
-            total: summary.totalExpense,
-            categories: summary.expenseByCategory,
-          ),
-          const SizedBox(height: 16),
-          _SectionCard(
-            title: '全年分类排行',
-            child: _CategoryRanking(
-              categories: summary.expenseByCategory,
-              maxItems: 10,
-            ),
           ),
         ],
-      ],
+      );
+    }
+
+    final hasExpense = summary.expenseByCategory.isNotEmpty;
+    final top5 =
+        _topExpenses(records, DateTime(year, 1, 1), DateTime(year, 12, 31));
+
+    return _ManagedCards(
+      repo: repo,
+      header: header,
+      buildCard: (k) => switch (k) {
+        'daily' => _TrendCard(
+            title: '全年趋势',
+            xLabels: [
+              for (var m = 1; m <= 12; m++) m.isOdd ? '$m月' : '',
+            ],
+            expense: [
+              for (final e in summary.monthlyExpenses)
+                MoneyFormat.toDouble(e).clamp(0.0, double.infinity),
+            ],
+            income: monthlyIncome,
+          ),
+        'ring' => !hasExpense
+            ? null
+            : _RingCard(
+                title: '支出构成',
+                totalLabel: '全年支出',
+                total: summary.totalExpense,
+                categories: summary.expenseByCategory,
+              ),
+        'ranking' => !hasExpense
+            ? null
+            : _SectionCard(
+                title: '全年分类排行',
+                child: _CategoryRanking(
+                  categories: summary.expenseByCategory,
+                  maxItems: 10,
+                ),
+              ),
+        'top5' => top5.isEmpty
+            ? null
+            : _SectionCard(
+                title: '单笔支出排行',
+                child: _TopTxnList(items: top5),
+              ),
+        _ => null,
+      },
     );
   }
 }
@@ -740,11 +903,13 @@ class _YearlyContent extends StatelessWidget {
 
 class _CustomContent extends StatelessWidget {
   final List<TransactionRecord> records;
+  final AppRepository repo;
   final DateTimeRange? range;
   final VoidCallback onPick;
 
   const _CustomContent({
     required this.records,
+    required this.repo,
     required this.range,
     required this.onPick,
   });
@@ -780,8 +945,7 @@ class _CustomContent extends StatelessWidget {
     final label =
         '${r.start.year}/${r.start.month}/${r.start.day} – ${r.end.year}/${r.end.month}/${r.end.day}';
 
-    return ListView(
-      padding: const EdgeInsets.all(16),
+    final header = Column(
       children: [
         Center(
           child: PressableScale(
@@ -812,21 +976,39 @@ class _CustomContent extends StatelessWidget {
           balance: s.balance,
         ),
         const SizedBox(height: 16),
-        if (s.totalExpense == Decimal.zero && s.totalIncome == Decimal.zero)
-          const _EmptyState(message: '这段时间没有记录', sub: '换个区间试试')
-        else ...[
-          _RingCard(
-            title: '支出构成',
-            totalLabel: '期间支出',
-            total: s.totalExpense,
-            categories: s.expenseByCategory,
-          ),
-          const SizedBox(height: 16),
-          // 区间不超过约两个月才画每日线，太长看不清。
-          if (s.dayCount <= 62) ...[
-            _SectionCard(
-              title: '每日趋势',
-              child: _DualLineChart(
+      ],
+    );
+
+    if (s.totalExpense == Decimal.zero && s.totalIncome == Decimal.zero) {
+      return ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          header,
+          const _EmptyState(message: '这段时间没有记录', sub: '换个区间试试'),
+        ],
+      );
+    }
+
+    final hasExpense = s.expenseByCategory.isNotEmpty;
+    final top5 = _topExpenses(records, r.start, r.end);
+
+    return _ManagedCards(
+      repo: repo,
+      header: header,
+      buildCard: (k) => switch (k) {
+        'ring' => !hasExpense
+            ? null
+            : _RingCard(
+                title: '支出构成',
+                totalLabel: '期间支出',
+                total: s.totalExpense,
+                categories: s.expenseByCategory,
+              ),
+        // 区间不超过约两个月才画每日线，太长看不清。
+        'daily' => !hasExpense || s.dayCount > 62
+            ? null
+            : _TrendCard(
+                title: '每日趋势',
                 xLabels: [
                   for (var i = 0; i < s.dailyTotals.length; i++)
                     (i == 0 || i % (s.dayCount > 14 ? 7 : 2) == 0)
@@ -844,15 +1026,20 @@ class _CustomContent extends StatelessWidget {
                         .clamp(0.0, double.infinity),
                 ],
               ),
-            ),
-            const SizedBox(height: 16),
-          ],
-          _SectionCard(
-            title: '分类排行',
-            child: _CategoryRanking(categories: s.expenseByCategory),
-          ),
-        ],
-      ],
+        'ranking' => !hasExpense
+            ? null
+            : _SectionCard(
+                title: '分类排行',
+                child: _CategoryRanking(categories: s.expenseByCategory),
+              ),
+        'top5' => top5.isEmpty
+            ? null
+            : _SectionCard(
+                title: '单笔支出排行',
+                child: _TopTxnList(items: top5),
+              ),
+        _ => null,
+      },
     );
   }
 }
@@ -1601,10 +1788,15 @@ class _DualLineChart extends StatelessWidget {
   final List<double> expense;
   final List<double> income;
 
+  /// 二选一显示（用户 0703：支出/收入别挤在一张图里）。
+  /// 默认只画支出；[showIncome]=true 时只画收入。
+  final bool showIncome;
+
   const _DualLineChart({
     required this.xLabels,
     required this.expense,
     required this.income,
+    this.showIncome = false,
   });
 
   @override
@@ -1612,20 +1804,22 @@ class _DualLineChart extends StatelessWidget {
     final scheme = Theme.of(context).colorScheme;
     final expColor = AppColors.expense(scheme);
     final incColor = AppColors.income(scheme);
-    final maxV =
-        [...expense, ...income].fold<double>(0, (a, b) => a > b ? a : b);
+    final data = showIncome ? income : expense;
+    final color = showIncome ? incColor : expColor;
+    final label = showIncome ? '收入' : '支出';
+    final maxV = data.fold<double>(0, (a, b) => a > b ? a : b);
     final maxY = maxV <= 0 ? 1.0 : maxV * 1.25;
 
-    LineChartBarData bar(List<double> data, Color c) => LineChartBarData(
+    LineChartBarData bar(List<double> d, Color c) => LineChartBarData(
           spots: [
-            for (var i = 0; i < data.length; i++) FlSpot(i.toDouble(), data[i])
+            for (var i = 0; i < d.length; i++) FlSpot(i.toDouble(), d[i])
           ],
           color: c,
           isCurved: true,
           curveSmoothness: 0.25,
           barWidth: 2.5,
           dotData: FlDotData(
-            show: data.length <= 14,
+            show: d.length <= 14,
             getDotPainter: (s, p, b, i) =>
                 FlDotCirclePainter(radius: 2.5, color: c, strokeWidth: 0),
           ),
@@ -1637,17 +1831,9 @@ class _DualLineChart extends StatelessWidget {
       children: [
         Row(
           children: [
-            _dot(expColor),
+            _dot(color),
             const SizedBox(width: 4),
-            Text('支出',
-                style: Theme.of(context)
-                    .textTheme
-                    .labelSmall
-                    ?.copyWith(color: scheme.onSurfaceVariant)),
-            const SizedBox(width: 16),
-            _dot(incColor),
-            const SizedBox(width: 4),
-            Text('收入',
+            Text(label,
                 style: Theme.of(context)
                     .textTheme
                     .labelSmall
@@ -1661,7 +1847,7 @@ class _DualLineChart extends StatelessWidget {
             LineChartData(
               minY: 0,
               maxY: maxY,
-              lineBarsData: [bar(expense, expColor), bar(income, incColor)],
+              lineBarsData: [bar(data, color)],
               gridData: FlGridData(
                 show: true,
                 drawVerticalLine: false,
@@ -1708,11 +1894,10 @@ class _DualLineChart extends StatelessWidget {
               lineTouchData: LineTouchData(
                 touchTooltipData: LineTouchTooltipData(
                   getTooltipItems: (spots) => spots.map((s) {
-                    final label = s.barIndex == 0 ? '支出' : '收入';
                     return LineTooltipItem(
                       '$label ¥${s.y.toStringAsFixed(0)}',
                       TextStyle(
-                        color: s.barIndex == 0 ? expColor : incColor,
+                        color: color,
                         fontSize: 12,
                         fontWeight: FontWeight.w500,
                       ),

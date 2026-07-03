@@ -34,6 +34,7 @@ import 'views/settings/categories_view.dart';
 import 'views/settings/import_export_view.dart';
 import 'views/settings/tags_view.dart';
 import 'views/statistics/statistics_view.dart';
+import 'views/transactions/reimburse_view.dart';
 import 'views/transactions/transaction_list_view.dart';
 
 void main() async {
@@ -383,6 +384,7 @@ const List<_DrawerFn> _kDrawerFns = [
   _DrawerFn('categories', Icons.category_outlined, '分类管理'),
   _DrawerFn('tags', Icons.label_outline, '标签管理'),
   _DrawerFn('import', Icons.import_export_outlined, '导入导出'),
+  _DrawerFn('reimburse', Icons.receipt_long_outlined, '待报销'),
   _DrawerFn('recurring', Icons.schedule_outlined, '定时记账'),
   _DrawerFn('autorecord', Icons.notifications_active_outlined, '自动记账'),
   _DrawerFn('widgets', Icons.widgets_outlined, '小组件'),
@@ -443,6 +445,8 @@ class _DrawerPanelState extends State<_DrawerPanel> {
         _popAndPush(const TagsView());
       case 'import':
         _popAndPush(const ImportExportView());
+      case 'reimburse':
+        _popAndPush(const ReimburseView());
       case 'recurring':
         _popAndPush(const RecurringView());
       case 'autorecord':
@@ -661,14 +665,15 @@ class _DrawerPanelState extends State<_DrawerPanel> {
             // ── 头部：字标 logo（藏青+金币爪印，用户选定的第二版）──
             // 深色模式下藏青字看不清，退回文字字标；图加载失败同样退回文字。
             Padding(
-              padding: const EdgeInsets.fromLTRB(20, 18, 14, 12),
+              // 左距缩半、字标放大两成（用户 0703 反馈）。
+              padding: const EdgeInsets.fromLTRB(10, 18, 14, 12),
               child: Align(
                 alignment: Alignment.centerLeft,
                 child: Builder(builder: (context) {
                   final wordmark = Text(
                     '肥喵记账',
                     style: TextStyle(
-                      fontSize: 24,
+                      fontSize: 29,
                       fontWeight: FontWeight.w600,
                       fontFamily: 'serif',
                       color: scheme.onSurface,
@@ -677,7 +682,7 @@ class _DrawerPanelState extends State<_DrawerPanel> {
                   if (scheme.brightness == Brightness.dark) return wordmark;
                   return Image.asset(
                     'assets/brand/logo.png',
-                    height: 30,
+                    height: 36,
                     fit: BoxFit.contain,
                     errorBuilder: (_, __, ___) => wordmark,
                   );

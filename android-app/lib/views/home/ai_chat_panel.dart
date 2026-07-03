@@ -12,6 +12,7 @@ import '../../core/ai/chat_intent.dart';
 import '../../core/ai/llm_entry_parser.dart';
 import '../../core/ai/llm_query.dart';
 import '../../core/ai/merchant_category.dart';
+import '../../core/ai/query_range.dart';
 import '../../core/ai/smart_tags.dart';
 import '../../core/meal_time.dart';
 import '../../core/spending_anomaly.dart';
@@ -396,7 +397,7 @@ class _AiChatPanelState extends State<AiChatPanel> {
         answer = await LlmQuery.ask(
           question: text,
           apiKey: key,
-          transactionsText: _buildTxnContext(repo),
+          transactionsText: _buildTxnContext(repo, question: text),
         );
       } catch (_) {
         answer = '喵没连上 AI，待会儿再问问？';
@@ -413,16 +414,28 @@ class _AiChatPanelState extends State<AiChatPanel> {
     _scrollToBottom();
   }
 
-  /// 把最近账目整理成给 LLM 的上下文（按日期倒序，最多 80 条）。
+  /// 把账目整理成给 LLM 的上下文。
   /// 口径和统计页一致：「不计入收支」的记录不喂给 AI，答数才对得上统计。
-  String _buildTxnContext(AppRepository repo) {
-    final txns = repo.transactions.where((t) => !t.excluded).toList()
-      ..sort((a, b) => b.date.compareTo(a.date));
+  /// 问题里带时间（上个月/今年/5月/近30天…）就只喂那段的账（最多 240 条）——
+  /// 账多的时候「上个月」可能根本不在最近 80 条里；没带时间才喂最近 80 条。
+  String _buildTxnContext(AppRepository repo, {required String question}) {
     final now = DateTime.now();
+    final range = QueryRange.parse(question, now);
+    var txns = repo.transactions.where((t) => !t.excluded).toList()
+      ..sort((a, b) => b.date.compareTo(a.date));
+    final limit = range == null ? 80 : 240;
+    if (range != null) {
+      txns = txns.where((t) => range.covers(t.date)).toList();
+    }
     final sb = StringBuffer();
     sb.writeln('今天是 ${now.year}-${now.month}-${now.day}。');
+    if (range != null) {
+      sb.writeln('以下是 ${range.start.year}-${range.start.month}-${range.start.day} '
+          '至 ${range.end.year}-${range.end.month}-${range.end.day} 的账目'
+          '${txns.length > limit ? '（超长已截断，只保留最近 $limit 条）' : ''}。');
+    }
     sb.writeln('账目数据（格式：日期|收支|分类|金额元|备注）：');
-    for (final t in txns.take(80)) {
+    for (final t in txns.take(limit)) {
       final k = t.txKind == TransactionKind.income
           ? '收'
           : (t.txKind == TransactionKind.transfer ? '转' : '支');

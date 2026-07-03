@@ -11,7 +11,8 @@
 - **水印 b0703-4 / DB v16**（b0702-13 已 commit）。**b0703-1..4 待用户合并推送**（一个提交即可）：预算修正包(-1) + 二级面板提层修复(-2) + GPT小修包(-3) + 分类管理重构/删账本保护/深色巡检/统计性能/logo封面(-4)，详见 -1.2 顶部。推送：`git push origin HEAD:claude/hopeful-wozniak-pr2ne3`。
 - **本地验证坑（已解决）**：flutter 启动锁死锁（强杀任务后锁未释放，后续命令死等）。解法=杀 dart 进程 + 删 `C:\src\flutter\bin\cache\lockfile`，之后 analyze 十几秒正常出结果。**教训**：b0703-4 首次构建红=book_sheet 漏 import AppColors——CI analyze 原是 `|| true` 非阻断、测试只编译引用到的文件，编译错漏到打 APK 才炸。**CI 已改**：analyze 换成 `--no-fatal-infos --no-fatal-warnings`（error 阻断，warning 放行）。
 - **GPT 全面复盘已消化**（2026-07-03）：全部采纳项已完成（AI滤excluded/今日vs日均文案/toast统一/迁移前备份/删账本保护/15号代表日改按天重叠/分类管理包）；驳回=图标颜色编辑；核实本来就有=统计默认卡数/预算状态色/API key遮罩/手动备份页。**别再重复做。**
-- **下一步候选**（自主复盘清单剩余项）：①待报销闭环（标记已报销+待报销合计入口）②AI 喂数按问题时间/分类裁剪（现固定80条）③repo 层测试补课（sqflite_common_ffi 跑真 SQLite：v15→v16迁移/merge/deleteBook转移）④统计卡 ReorderableListView.builder 真懒加载 ⑤「记账(日常)」封面（GPT 在做）⑥多人共享账本后端（先出设计文档；删除墓碑未做）。不做：多币种/图标颜色编辑/语音。
+- **⚠️ 每次推送前记得**：①水印 +1 ②pubspec version minor+1 且 +N（versionCode）+1。APK 下载链接已变：`.../android-latest/肥喵记账.apk`。
+- **下一步候选**：①统计卡 ReorderableListView.builder 真懒加载 ②「记账(日常)」封面（GPT 在做）③多人共享账本后端（先出设计文档；删除墓碑未做）④喵助手记账卡跨重启恢复（chat_messages 只存文本）。不做：多币种/图标颜色编辑/语音。
 - **等用户的文件**：①字标 logo（已选定第二版=藏青+金币爪印，等存到 `Desktop\记账app\图片\logo.png`→白底转透明+裁边→assets/brand/→换抽屉头部文字）②账本封面缺 4 张：记账(日常)/宠物/母婴/家庭（流程见 -1.2 批5.6）。
 - **给 GPT 复盘的代码包**已生成在 `Desktop\记账app\复盘包\`（4个txt，含提示词模板+锁定决策护栏）；GPT 结论回来**只挑增量**（它会推底部Tab/红色/云同步，一律驳）。
 - 长期项目：多人共享账本（后端+账号），排在所有 UI 批次之后。
@@ -36,6 +37,13 @@
 - ~~预算逻辑修正包~~ ✅ b0703-1；~~分类管理重构包~~ ✅ b0703-4（含 DB v16 hidden + uuid/updated_ms 地基）。队列已清空，下一步见 -1.-1 候选。
 
 ### -1.2 已完成批次速查
+- **用户三修+中期包（b0703-6，待真机验）版本规范/logo微调/统计全维度 + 待报销闭环/AI喂数裁剪/repo测试**：
+  ①**版本与包名**：pubspec `version: 1.0.0+2`（规则：1.0 起步每次推送 minor+1，**+N versionCode 只增不减**，每批推送都要一起 bump）；CI 产物改名 `肥喵记账.apk`（**下载链接变了**：`https://github.com/178517877qq-sketch/xunni/releases/download/android-latest/肥喵记账.apk`），加了删旧 qingji.apk 资产的步骤，Release 标题也改肥喵记账。
+  ②**抽屉字标**：左距 20→10、logo 30→36（文字兜底 24→29）。
+  ③**统计全维度卡片化**：抽出 `_ManagedCards`（注册表/默认序/图表库/拖排序全在它身上，statCardOrder 四个维度共用一份）；周/年/自定义视图全部接入（周=ring/daily(7天柱)/ranking/top5、年=trend/ring/ranking/top5、自定义=ring/trend/ranking/top5，月保留全部 10 张）；图表库里月专属卡带「· 月」标注。**趋势图改 _TrendCard**：右上角 SlidingSegment 支出/收入二选一（_DualLineChart 加 showIncome 参数只画一条线）。新增 `_topExpenses(records,start,end)` 顶部函数给周/年/自定义的单笔排行。
+  ④**待报销闭环**：repo `reimbursableTransactions` + `markReimbursed(id)`；新页 `views/transactions/reimburse_view.dart`（合计卡+列表+每行「已报销」白胶囊带确认+空态成功猫）；抽屉注册表加 `reimburse` 项（key 制自动补齐，老用户顺序不乱）。
+  ⑤**AI 喂数按问题裁剪**：新纯逻辑 `core/ai/query_range.dart`（今天/昨天/本周/上周/本月/上月/今年/去年/近N天/「5月」「五月」[未到的月份按去年]），`_buildTxnContext` 带 question——命中时间则只喂该范围（上限240条），否则最近80条。8 个单测。
+  ⑥**repo 层测试补课**：dev 依赖 `sqflite_common_ffi`（Windows 本地直接能跑；CI 加了 libsqlite3-dev 安装保险）；`test/app_repository_test.dart` 5 个用例=建库播种+同步戳/mergeCategory/deleteBook转移/隐藏过滤/**v15→v16迁移**（测试里手写 v15 全 schema 造老库→init→断言账单原样+uuid回填+version 16）；repo 加 `@visibleForTesting closeForTest()`。**本地 197 测试全过、analyze 0 error。**
 - **快赢+数据安全批（b0703-5，待真机验）猫表情真图 + 冷启动引导 + 备份自动化 + 记忆管理**：
   ①**猫表情 7 张真图**进 `assets/mascot/`（512px，idle/overspend/success 三张是 GPT 假棋盘格底，用「边缘洪泛抠中性灰(190-252且r≈g≈b)、白描边≥253挡住不进贴纸内部」抠掉；其余 RGBA 真透明直接 alpha-bbox 裁边；`sleep.png` 没用上留备用）。mascot.dart 本来就先试 Image.asset 再回退 emoji，零代码改动即生效。处理脚本留在 scratchpad `process_mascot.py`。
   ②**冷启动引导**：home_view `_EmptyState`——仅当**全库一笔账都没有**时猫下加一句「点下面的输入框，跟我说『午饭花了 20』试试喵」；老用户翻空月份仍然只有猫（不违反 0702 空态拍板）。
