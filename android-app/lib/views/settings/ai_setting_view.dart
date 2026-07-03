@@ -5,6 +5,7 @@ import '../../data/app_repository.dart';
 import '../../theme/app_colors.dart';
 import '../../widgets/app_toast.dart';
 import '../home/ai_chat_panel.dart';
+import 'memory_view.dart';
 
 /// AI 记账设置页：配置 DeepSeek API Key。
 class AiSettingView extends StatefulWidget {
@@ -185,6 +186,60 @@ class _AiSettingViewState extends State<AiSettingView> {
                   },
                 ),
               ),
+
+            const SizedBox(height: 32),
+
+            // ── 喵学到的分类（纠正记忆管理）──
+            Text(
+              '分类学习',
+              style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                    color: scheme.primary,
+                    fontWeight: FontWeight.w500,
+                  ),
+            ),
+            const SizedBox(height: 8),
+            Container(
+              decoration: BoxDecoration(
+                color: AppColors.card(scheme),
+                borderRadius: BorderRadius.circular(16),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: 0.04),
+                    blurRadius: 10,
+                    offset: const Offset(0, 2),
+                  ),
+                ],
+              ),
+              clipBehavior: Clip.antiAlias,
+              child: InkWell(
+                onTap: () => Navigator.of(context).push(
+                  MaterialPageRoute(builder: (_) => const MemoryView()),
+                ),
+                child: Padding(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                  child: Row(
+                    children: [
+                      Icon(Icons.psychology_outlined,
+                          size: 20, color: scheme.primary),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text('喵学到的分类',
+                            style: Theme.of(context).textTheme.bodyLarge),
+                      ),
+                      Text(
+                        '${context.watch<AppRepository>().categoryMemories.length} 条',
+                        style: TextStyle(
+                            fontSize: 12, color: scheme.onSurfaceVariant),
+                      ),
+                      const SizedBox(width: 4),
+                      Icon(Icons.chevron_right,
+                          size: 18, color: scheme.onSurfaceVariant),
+                    ],
+                  ),
+                ),
+              ),
+            ),
 
             const SizedBox(height: 32),
 

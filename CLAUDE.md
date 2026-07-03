@@ -11,7 +11,7 @@
 - **水印 b0703-4 / DB v16**（b0702-13 已 commit）。**b0703-1..4 待用户合并推送**（一个提交即可）：预算修正包(-1) + 二级面板提层修复(-2) + GPT小修包(-3) + 分类管理重构/删账本保护/深色巡检/统计性能/logo封面(-4)，详见 -1.2 顶部。推送：`git push origin HEAD:claude/hopeful-wozniak-pr2ne3`。
 - **本地验证坑（已解决）**：flutter 启动锁死锁（强杀任务后锁未释放，后续命令死等）。解法=杀 dart 进程 + 删 `C:\src\flutter\bin\cache\lockfile`，之后 analyze 十几秒正常出结果。**教训**：b0703-4 首次构建红=book_sheet 漏 import AppColors——CI analyze 原是 `|| true` 非阻断、测试只编译引用到的文件，编译错漏到打 APK 才炸。**CI 已改**：analyze 换成 `--no-fatal-infos --no-fatal-warnings`（error 阻断，warning 放行）。
 - **GPT 全面复盘已消化**（2026-07-03）：全部采纳项已完成（AI滤excluded/今日vs日均文案/toast统一/迁移前备份/删账本保护/15号代表日改按天重叠/分类管理包）；驳回=图标颜色编辑；核实本来就有=统计默认卡数/预算状态色/API key遮罩/手动备份页。**别再重复做。**
-- **下一步候选**：①猫表情真图替换 emoji 占位（用户已给 8 张：`Desktop\记账app\图片\celebrate/empty/idle/overspend/report/sleep/success/thinking.png`，对应 mascot.dart 7表情，需压缩+透明处理）②「记账(日常)」封面还缺（GPT 在做）③多人共享账本后端（长期）。
+- **下一步候选**（自主复盘清单剩余项）：①待报销闭环（标记已报销+待报销合计入口）②AI 喂数按问题时间/分类裁剪（现固定80条）③repo 层测试补课（sqflite_common_ffi 跑真 SQLite：v15→v16迁移/merge/deleteBook转移）④统计卡 ReorderableListView.builder 真懒加载 ⑤「记账(日常)」封面（GPT 在做）⑥多人共享账本后端（先出设计文档；删除墓碑未做）。不做：多币种/图标颜色编辑/语音。
 - **等用户的文件**：①字标 logo（已选定第二版=藏青+金币爪印，等存到 `Desktop\记账app\图片\logo.png`→白底转透明+裁边→assets/brand/→换抽屉头部文字）②账本封面缺 4 张：记账(日常)/宠物/母婴/家庭（流程见 -1.2 批5.6）。
 - **给 GPT 复盘的代码包**已生成在 `Desktop\记账app\复盘包\`（4个txt，含提示词模板+锁定决策护栏）；GPT 结论回来**只挑增量**（它会推底部Tab/红色/云同步，一律驳）。
 - 长期项目：多人共享账本（后端+账号），排在所有 UI 批次之后。
@@ -36,6 +36,11 @@
 - ~~预算逻辑修正包~~ ✅ b0703-1；~~分类管理重构包~~ ✅ b0703-4（含 DB v16 hidden + uuid/updated_ms 地基）。队列已清空，下一步见 -1.-1 候选。
 
 ### -1.2 已完成批次速查
+- **快赢+数据安全批（b0703-5，待真机验）猫表情真图 + 冷启动引导 + 备份自动化 + 记忆管理**：
+  ①**猫表情 7 张真图**进 `assets/mascot/`（512px，idle/overspend/success 三张是 GPT 假棋盘格底，用「边缘洪泛抠中性灰(190-252且r≈g≈b)、白描边≥253挡住不进贴纸内部」抠掉；其余 RGBA 真透明直接 alpha-bbox 裁边；`sleep.png` 没用上留备用）。mascot.dart 本来就先试 Image.asset 再回退 emoji，零代码改动即生效。处理脚本留在 scratchpad `process_mascot.py`。
+  ②**冷启动引导**：home_view `_EmptyState`——仅当**全库一笔账都没有**时猫下加一句「点下面的输入框，跟我说『午饭花了 20』试试喵」；老用户翻空月份仍然只有猫（不违反 0702 空态拍板）。
+  ③**备份自动化**：repo.init 加 `_autoPeriodicBackup`（openDatabase 前跑：最新 `qingji.db.auto-日期.bak` 超过 7 天就再备一份，最多留 3 份，无设置表依赖）；`localBackupFiles()` 列出全部 .bak（auto/pre-v/恢复兜底）按时间倒序；backup_view 改 StatefulWidget 加「本机备份」卡列表，点一条→确认→restoreDatabaseFromFile，人话标签（自动备份 2026/7/3 / 升级前备份(v15) / 恢复前兜底）。
+  ④**记忆管理**：repo 加 `categoryMemories` getter + `forgetCategory(phrase,kind)`；新页 `memory_view.dart`（列表=短语→分类·收支+图标，× 删除带确认；空态=思考猫+引导语）；入口在 AI 记账设置页「分类学习→喵学到的分类（N条）」。
 - **大合批（b0703-4，待真机验）分类管理重构 + 删账本保护 + 深色巡检 + 统计性能 + logo/封面**：
   ①**DB v16**：categories 加 `hidden`；transactions/books 加 `uuid`+`updated_ms`（共享账本同步地基，存量行 SQLite `randomblob` 回填；所有 insert 走 `_syncStampNew()`、update 补 updated_ms，**删除还没做墓碑——接后端同步时要补**）。
   ②**分类管理页重写** `categories_view.dart`：SlidingSegment 支出/收入；一级=白卡（点头部展开子类 5 列 CategoryGrid，新 `dimmedIds` 参数标已隐藏）；操作收「⋯」=重命名/隐藏-恢复/合并到…/删除；新增走 showBlurSheet（一级+子分类，自建 key=`custom_时间戳` 图标🏷️兜底）；**删除保护**：`transactionCountForCategory`（跨账本查DB）>0 → 引导隐藏（合并另有入口），=0 → 确认后删（连子类）；**合并** `mergeCategory`=账单改挂+子类改挂+category_memory 迁移+删源。repo 新增 `visibleChildrenOf`（记账面板不显示隐藏分类，childrenOfRanked/categoriesForKindRanked 过滤 hidden；管理页用不过滤的 childrenOf/categoriesForKind）。

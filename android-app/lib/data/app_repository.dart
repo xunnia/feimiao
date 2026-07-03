@@ -470,6 +470,7 @@ class AppRepository extends ChangeNotifier {
   Future<void> init() async {
     final dbPath = p.join(await getDatabasesPath(), _dbName);
     await _backupBeforeMigration(dbPath);
+    await _autoPeriodicBackup(dbPath);
     _db = await openDatabase(
       dbPath,
       version: _dbVersion,
@@ -482,6 +483,65 @@ class AppRepository extends ChangeNotifier {
     // 启动时补记到期的周期账目,再刷新一次交易。
     await _materializeRecurring();
     await _loadTransactions();
+  }
+
+  /// 每周静默本地备份一次（qingji.db.auto-日期.bak，最多保留 3 份）。
+  /// 不依赖任何设置表——看最近一份自动备份的日期决定要不要备，
+  /// 在 openDatabase 之前做，复制的是磁盘上完整落定的库文件。
+  Future<void> _autoPeriodicBackup(String dbPath) async {
+    try {
+      final f = File(dbPath);
+      if (!await f.exists()) return; // 新装机没得备
+      final dir = f.parent;
+      final autos = <File>[];
+      await for (final e in dir.list()) {
+        if (e is File &&
+            p.basename(e.path).startsWith('$_dbName.auto-') &&
+            e.path.endsWith('.bak')) {
+          autos.add(e);
+        }
+      }
+      autos.sort((a, b) => b.path.compareTo(a.path)); // 文件名含日期，倒序=最新在前
+      if (autos.isNotEmpty) {
+        final newest = await autos.first.lastModified();
+        if (DateTime.now().difference(newest).inDays < 7) return;
+      }
+      final now = DateTime.now();
+      final stamp = '${now.year}'
+          '${now.month.toString().padLeft(2, '0')}'
+          '${now.day.toString().padLeft(2, '0')}';
+      await f.copy(p.join(dir.path, '$_dbName.auto-$stamp.bak'));
+      // 只留最近 3 份，旧的删掉。
+      for (final old in autos.skip(2)) {
+        try {
+          await old.delete();
+        } catch (_) {}
+      }
+    } catch (_) {
+      // 备份失败不拦启动。
+    }
+  }
+
+  /// 本机现有的备份文件（自动 + 迁移前），最新在前。给「备份/恢复」页展示用。
+  Future<List<File>> localBackupFiles() async {
+    final dbPath = p.join(await getDatabasesPath(), _dbName);
+    final dir = File(dbPath).parent;
+    final out = <File>[];
+    try {
+      await for (final e in dir.list()) {
+        if (e is File &&
+            p.basename(e.path).startsWith('$_dbName.') &&
+            e.path.endsWith('.bak')) {
+          out.add(e);
+        }
+      }
+      final times = <String, DateTime>{};
+      for (final f in out) {
+        times[f.path] = await f.lastModified();
+      }
+      out.sort((a, b) => times[b.path]!.compareTo(times[a.path]!));
+    } catch (_) {}
+    return out;
   }
 
   /// DB 要升版本时，先把旧库原样复制一份（qingji.db.pre-v旧版本.bak）再迁移。
@@ -1145,6 +1205,19 @@ class AppRepository extends ChangeNotifier {
     );
     _catMemory.removeWhere((m) => m.phrase == p && m.kind == kind);
     _catMemory.add((phrase: p, kind: kind, key: categoryKey));
+  }
+
+  /// 喵学过的全部「备注短语 → 分类」记忆（管理页展示用），按短语排序。
+  List<({String phrase, TransactionKind kind, String key})>
+      get categoryMemories =>
+          List.of(_catMemory)..sort((a, b) => a.phrase.compareTo(b.phrase));
+
+  /// 删除一条学过的记忆（学错了/过时了，用户在管理页手动清）。
+  Future<void> forgetCategory(String phrase, TransactionKind kind) async {
+    await _db!.delete('category_memory',
+        where: 'phrase = ? AND kind = ?', whereArgs: [phrase, kind.toJson()]);
+    _catMemory.removeWhere((m) => m.phrase == phrase && m.kind == kind);
+    notifyListeners();
   }
 
   /// 按备注召回学过的分类 key：取被备注包含的「最长」短语对应的分类；无则 null。

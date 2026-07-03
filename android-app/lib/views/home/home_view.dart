@@ -1450,13 +1450,36 @@ class _ExcludedBadge extends StatelessWidget {
 }
 
 /// 空状态：只有猫，不配文案（用户 0702 拍板）。
+/// 唯一例外：整个 App 一笔账都没有（新用户首启），给一句上手引导——
+/// 不然新人进来只看到一只睡觉的猫，不知道第一步干嘛。
 class _EmptyState extends StatelessWidget {
   const _EmptyState();
 
   @override
   Widget build(BuildContext context) {
-    return const Center(
-      child: Mascot(mood: MascotMood.empty, size: 184, animate: true),
+    final firstUse = context.watch<AppRepository>().transactions.isEmpty;
+    if (!firstUse) {
+      return const Center(
+        child: Mascot(mood: MascotMood.empty, size: 184, animate: true),
+      );
+    }
+    final scheme = Theme.of(context).colorScheme;
+    return Center(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Mascot(mood: MascotMood.empty, size: 184, animate: true),
+          const SizedBox(height: 10),
+          Text(
+            '点下面的输入框，跟我说「午饭花了 20」试试喵',
+            style: TextStyle(
+              fontSize: 13,
+              color: scheme.onSurfaceVariant,
+              height: 1.4,
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
