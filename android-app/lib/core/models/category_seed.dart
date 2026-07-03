@@ -44,6 +44,7 @@ class CategorySeed {
   int get hashCode => key.hashCode;
 
   // ───────────────────────── 支出：大类 + 子类 ─────────────────────────
+  // ⚠️ key 稳定不变（历史账单靠它定位）；改名只改 nameZh，重挂只改 parentKey。
   static const List<CategorySeed> expenses = [
     // 食品餐饮
     CategorySeed(key: 'dining', nameZh: '食品餐饮', nameEn: 'Food', emoji: '🍜', kind: TransactionKind.expense),
@@ -55,30 +56,40 @@ class CategorySeed {
     CategorySeed(key: 'groceries', nameZh: '生鲜食品', nameEn: 'Groceries', emoji: '🥬', kind: TransactionKind.expense, parentKey: 'dining'),
     CategorySeed(key: 'dining_treat', nameZh: '请客吃饭', nameEn: 'Treat', emoji: '🍻', kind: TransactionKind.expense, parentKey: 'dining'),
     CategorySeed(key: 'dining_cook', nameZh: '粮油调味', nameEn: 'Cooking', emoji: '🧂', kind: TransactionKind.expense, parentKey: 'dining'),
+    CategorySeed(key: 'dining_tobacco', nameZh: '烟草', nameEn: 'Tobacco', emoji: '🚬', kind: TransactionKind.expense, parentKey: 'dining'),
 
     // 购物消费
     CategorySeed(key: 'shopping', nameZh: '购物消费', nameEn: 'Shopping', emoji: '🛍️', kind: TransactionKind.expense),
     CategorySeed(key: 'shop_home', nameZh: '日常家居', nameEn: 'Home', emoji: '🛋️', kind: TransactionKind.expense, parentKey: 'shopping'),
     CategorySeed(key: 'shop_beauty', nameZh: '个护美妆', nameEn: 'Beauty', emoji: '💄', kind: TransactionKind.expense, parentKey: 'shopping'),
     CategorySeed(key: 'shop_digital', nameZh: '手机数码', nameEn: 'Digital', emoji: '📱', kind: TransactionKind.expense, parentKey: 'shopping'),
+    CategorySeed(key: 'shop_digital_acc', nameZh: '数码配件', nameEn: 'Accessories', emoji: '🎧', kind: TransactionKind.expense, parentKey: 'shopping'),
     CategorySeed(key: 'subscription', nameZh: '虚拟充值', nameEn: 'Top-up', emoji: '🎟️', kind: TransactionKind.expense, parentKey: 'shopping'),
     CategorySeed(key: 'shop_appliance', nameZh: '生活电器', nameEn: 'Appliances', emoji: '📺', kind: TransactionKind.expense, parentKey: 'shopping'),
     CategorySeed(key: 'shop_watch', nameZh: '配饰腕表', nameEn: 'Accessories', emoji: '⌚', kind: TransactionKind.expense, parentKey: 'shopping'),
+    CategorySeed(key: 'shop_jewelry', nameZh: '珠宝首饰', nameEn: 'Jewelry', emoji: '💍', kind: TransactionKind.expense, parentKey: 'shopping'),
     CategorySeed(key: 'shop_baby', nameZh: '母婴玩具', nameEn: 'Baby', emoji: '🧸', kind: TransactionKind.expense, parentKey: 'shopping'),
     CategorySeed(key: 'shop_clothes', nameZh: '服饰运动', nameEn: 'Clothing', emoji: '👟', kind: TransactionKind.expense, parentKey: 'shopping'),
     CategorySeed(key: 'pets', nameZh: '宠物用品', nameEn: 'Pets', emoji: '🐾', kind: TransactionKind.expense, parentKey: 'shopping'),
     CategorySeed(key: 'shop_office', nameZh: '办公用品', nameEn: 'Office', emoji: '📎', kind: TransactionKind.expense, parentKey: 'shopping'),
-    CategorySeed(key: 'shop_deco', nameZh: '装修装饰', nameEn: 'Decor', emoji: '🧰', kind: TransactionKind.expense, parentKey: 'shopping'),
 
-    // 出行交通
-    CategorySeed(key: 'transport', nameZh: '出行交通', nameEn: 'Transport', emoji: '🚗', kind: TransactionKind.expense),
+    // 出行交通（养车相关拆到「车辆支出」）
+    CategorySeed(key: 'transport', nameZh: '出行交通', nameEn: 'Transport', emoji: '🚌', kind: TransactionKind.expense),
     CategorySeed(key: 'trans_taxi', nameZh: '打车', nameEn: 'Taxi', emoji: '🚕', kind: TransactionKind.expense, parentKey: 'transport'),
     CategorySeed(key: 'trans_public', nameZh: '公共交通', nameEn: 'Transit', emoji: '🚌', kind: TransactionKind.expense, parentKey: 'transport'),
-    CategorySeed(key: 'trans_park', nameZh: '停车费', nameEn: 'Parking', emoji: '🅿️', kind: TransactionKind.expense, parentKey: 'transport'),
-    CategorySeed(key: 'trans_fuel', nameZh: '加油', nameEn: 'Fuel', emoji: '⛽', kind: TransactionKind.expense, parentKey: 'transport'),
+    CategorySeed(key: 'trans_bike', nameZh: '共享单车', nameEn: 'Bike', emoji: '🚲', kind: TransactionKind.expense, parentKey: 'transport'),
     CategorySeed(key: 'trans_train', nameZh: '火车', nameEn: 'Train', emoji: '🚄', kind: TransactionKind.expense, parentKey: 'transport'),
     CategorySeed(key: 'trans_flight', nameZh: '飞机', nameEn: 'Flight', emoji: '✈️', kind: TransactionKind.expense, parentKey: 'transport'),
-    CategorySeed(key: 'trans_repair', nameZh: '保养修车', nameEn: 'Car Service', emoji: '🔧', kind: TransactionKind.expense, parentKey: 'transport'),
+
+    // 车辆支出（新一级；加油/停车/保养从出行交通与居家生活重挂过来）
+    CategorySeed(key: 'car', nameZh: '车辆支出', nameEn: 'Car', emoji: '🚗', kind: TransactionKind.expense),
+    CategorySeed(key: 'trans_fuel', nameZh: '加油', nameEn: 'Fuel', emoji: '⛽', kind: TransactionKind.expense, parentKey: 'car'),
+    CategorySeed(key: 'trans_park', nameZh: '停车费', nameEn: 'Parking', emoji: '🅿️', kind: TransactionKind.expense, parentKey: 'car'),
+    CategorySeed(key: 'house_park', nameZh: '车位费', nameEn: 'Parking Lot', emoji: '🚙', kind: TransactionKind.expense, parentKey: 'car'),
+    CategorySeed(key: 'trans_repair', nameZh: '保养修车', nameEn: 'Car Service', emoji: '🔧', kind: TransactionKind.expense, parentKey: 'car'),
+    CategorySeed(key: 'car_toll', nameZh: '过路过桥', nameEn: 'Toll', emoji: '🛣️', kind: TransactionKind.expense, parentKey: 'car'),
+    CategorySeed(key: 'car_wash', nameZh: '洗车', nameEn: 'Car Wash', emoji: '🧼', kind: TransactionKind.expense, parentKey: 'car'),
+    CategorySeed(key: 'car_tax', nameZh: '车船税年检', nameEn: 'Car Tax', emoji: '📋', kind: TransactionKind.expense, parentKey: 'car'),
 
     // 休闲娱乐
     CategorySeed(key: 'entertainment', nameZh: '休闲娱乐', nameEn: 'Leisure', emoji: '🎮', kind: TransactionKind.expense),
@@ -89,50 +100,115 @@ class CategorySeed {
     CategorySeed(key: 'ent_game', nameZh: '棋牌桌游', nameEn: 'Games', emoji: '🀄', kind: TransactionKind.expense, parentKey: 'entertainment'),
     CategorySeed(key: 'ent_bar', nameZh: '酒吧', nameEn: 'Bar', emoji: '🍸', kind: TransactionKind.expense, parentKey: 'entertainment'),
     CategorySeed(key: 'ent_show', nameZh: '演出', nameEn: 'Show', emoji: '🎭', kind: TransactionKind.expense, parentKey: 'entertainment'),
+    CategorySeed(key: 'ent_photo', nameZh: '摄影写真', nameEn: 'Photo', emoji: '📸', kind: TransactionKind.expense, parentKey: 'entertainment'),
 
-    // 居家生活
-    CategorySeed(key: 'housing', nameZh: '居家生活', nameEn: 'Living', emoji: '🏠', kind: TransactionKind.expense),
+    // 居家住房
+    CategorySeed(key: 'housing', nameZh: '居家住房', nameEn: 'Living', emoji: '🏠', kind: TransactionKind.expense),
     CategorySeed(key: 'house_phone', nameZh: '话费宽带', nameEn: 'Phone/Net', emoji: '📶', kind: TransactionKind.expense, parentKey: 'housing'),
     CategorySeed(key: 'utilities', nameZh: '电费', nameEn: 'Electricity', emoji: '💡', kind: TransactionKind.expense, parentKey: 'housing'),
     CategorySeed(key: 'house_water', nameZh: '水费', nameEn: 'Water', emoji: '🚰', kind: TransactionKind.expense, parentKey: 'housing'),
     CategorySeed(key: 'house_gas', nameZh: '燃气费', nameEn: 'Gas', emoji: '🔥', kind: TransactionKind.expense, parentKey: 'housing'),
     CategorySeed(key: 'house_property', nameZh: '物业费', nameEn: 'Property', emoji: '🏢', kind: TransactionKind.expense, parentKey: 'housing'),
-    CategorySeed(key: 'house_rent', nameZh: '房租还贷', nameEn: 'Rent/Loan', emoji: '🏦', kind: TransactionKind.expense, parentKey: 'housing'),
-    CategorySeed(key: 'house_park', nameZh: '车位费', nameEn: 'Parking Lot', emoji: '🚙', kind: TransactionKind.expense, parentKey: 'housing'),
+    CategorySeed(key: 'house_rent', nameZh: '房租', nameEn: 'Rent', emoji: '🏘️', kind: TransactionKind.expense, parentKey: 'housing'),
+    CategorySeed(key: 'house_loan', nameZh: '房贷利息', nameEn: 'Mortgage', emoji: '🏦', kind: TransactionKind.expense, parentKey: 'housing'),
     CategorySeed(key: 'house_clean', nameZh: '家政清洁', nameEn: 'Cleaning', emoji: '🧹', kind: TransactionKind.expense, parentKey: 'housing'),
+    CategorySeed(key: 'shop_deco', nameZh: '装修维修', nameEn: 'Decor', emoji: '🧰', kind: TransactionKind.expense, parentKey: 'housing'),
 
     // 医疗健康
     CategorySeed(key: 'medical', nameZh: '医疗健康', nameEn: 'Medical', emoji: '💊', kind: TransactionKind.expense),
     CategorySeed(key: 'med_drug', nameZh: '药品', nameEn: 'Medicine', emoji: '💊', kind: TransactionKind.expense, parentKey: 'medical'),
-    CategorySeed(key: 'med_clinic', nameZh: '门诊', nameEn: 'Clinic', emoji: '🏥', kind: TransactionKind.expense, parentKey: 'medical'),
-    CategorySeed(key: 'med_checkup', nameZh: '体检', nameEn: 'Checkup', emoji: '🩺', kind: TransactionKind.expense, parentKey: 'medical'),
+    CategorySeed(key: 'med_clinic', nameZh: '门诊挂号', nameEn: 'Clinic', emoji: '🩺', kind: TransactionKind.expense, parentKey: 'medical'),
+    CategorySeed(key: 'med_hospital', nameZh: '住院手术', nameEn: 'Hospital', emoji: '🏥', kind: TransactionKind.expense, parentKey: 'medical'),
+    CategorySeed(key: 'med_dental', nameZh: '牙科', nameEn: 'Dental', emoji: '🦷', kind: TransactionKind.expense, parentKey: 'medical'),
+    CategorySeed(key: 'med_eye', nameZh: '眼科配镜', nameEn: 'Optical', emoji: '👓', kind: TransactionKind.expense, parentKey: 'medical'),
+    CategorySeed(key: 'med_mental', nameZh: '心理咨询', nameEn: 'Mental', emoji: '🧠', kind: TransactionKind.expense, parentKey: 'medical'),
+    CategorySeed(key: 'med_beauty', nameZh: '医美', nameEn: 'Aesthetic', emoji: '💉', kind: TransactionKind.expense, parentKey: 'medical'),
+    CategorySeed(key: 'med_health', nameZh: '保健品', nameEn: 'Supplement', emoji: '🌿', kind: TransactionKind.expense, parentKey: 'medical'),
+    CategorySeed(key: 'med_checkup', nameZh: '体检', nameEn: 'Checkup', emoji: '📋', kind: TransactionKind.expense, parentKey: 'medical'),
 
     // 教育学习
     CategorySeed(key: 'education', nameZh: '教育学习', nameEn: 'Education', emoji: '📚', kind: TransactionKind.expense),
     CategorySeed(key: 'edu_book', nameZh: '书籍', nameEn: 'Books', emoji: '📖', kind: TransactionKind.expense, parentKey: 'education'),
     CategorySeed(key: 'edu_course', nameZh: '课程', nameEn: 'Course', emoji: '🎓', kind: TransactionKind.expense, parentKey: 'education'),
+    CategorySeed(key: 'edu_tuition', nameZh: '学费', nameEn: 'Tuition', emoji: '🏫', kind: TransactionKind.expense, parentKey: 'education'),
+    CategorySeed(key: 'edu_exam', nameZh: '考试考证', nameEn: 'Exam', emoji: '📝', kind: TransactionKind.expense, parentKey: 'education'),
     CategorySeed(key: 'edu_print', nameZh: '文具打印', nameEn: 'Stationery', emoji: '🖨️', kind: TransactionKind.expense, parentKey: 'education'),
 
-    // 人情往来
-    CategorySeed(key: 'gifts', nameZh: '人情往来', nameEn: 'Gifts', emoji: '🎁', kind: TransactionKind.expense),
+    // 保险保障（新一级）
+    CategorySeed(key: 'insurance', nameZh: '保险保障', nameEn: 'Insurance', emoji: '🛡️', kind: TransactionKind.expense),
+    CategorySeed(key: 'ins_car', nameZh: '车险', nameEn: 'Car Ins', emoji: '🚗', kind: TransactionKind.expense, parentKey: 'insurance'),
+    CategorySeed(key: 'ins_medical', nameZh: '医疗险', nameEn: 'Medical Ins', emoji: '⚕️', kind: TransactionKind.expense, parentKey: 'insurance'),
+    CategorySeed(key: 'ins_critical', nameZh: '重疾险', nameEn: 'Critical Ins', emoji: '🎗️', kind: TransactionKind.expense, parentKey: 'insurance'),
+    CategorySeed(key: 'ins_accident', nameZh: '意外险', nameEn: 'Accident Ins', emoji: '🚑', kind: TransactionKind.expense, parentKey: 'insurance'),
+    CategorySeed(key: 'ins_life', nameZh: '寿险', nameEn: 'Life Ins', emoji: '🕊️', kind: TransactionKind.expense, parentKey: 'insurance'),
+    CategorySeed(key: 'ins_property', nameZh: '财产险', nameEn: 'Property Ins', emoji: '🏠', kind: TransactionKind.expense, parentKey: 'insurance'),
+    CategorySeed(key: 'ins_other', nameZh: '其他保险', nameEn: 'Other Ins', emoji: '📑', kind: TransactionKind.expense, parentKey: 'insurance'),
+
+    // 人情家庭
+    CategorySeed(key: 'gifts', nameZh: '人情家庭', nameEn: 'Gifts', emoji: '🎁', kind: TransactionKind.expense),
     CategorySeed(key: 'gift_red', nameZh: '随礼红包', nameEn: 'Gift Money', emoji: '🧧', kind: TransactionKind.expense, parentKey: 'gifts'),
     CategorySeed(key: 'gift_present', nameZh: '礼物', nameEn: 'Present', emoji: '🎀', kind: TransactionKind.expense, parentKey: 'gifts'),
+    CategorySeed(key: 'gift_parents', nameZh: '孝敬父母', nameEn: 'Parents', emoji: '👵', kind: TransactionKind.expense, parentKey: 'gifts'),
 
     // 其他
     CategorySeed(key: 'other', nameZh: '其他', nameEn: 'Other', emoji: '📦', kind: TransactionKind.expense),
     CategorySeed(key: 'other_fine', nameZh: '罚款赔偿', nameEn: 'Fine', emoji: '⚖️', kind: TransactionKind.expense, parentKey: 'other'),
-    CategorySeed(key: 'other_invest', nameZh: '理财支出', nameEn: 'Invest Out', emoji: '📉', kind: TransactionKind.expense, parentKey: 'other'),
+    CategorySeed(key: 'other_fee', nameZh: '手续费', nameEn: 'Fee', emoji: '🧾', kind: TransactionKind.expense, parentKey: 'other'),
+    CategorySeed(key: 'other_tax', nameZh: '税费', nameEn: 'Tax', emoji: '🏛️', kind: TransactionKind.expense, parentKey: 'other'),
+    CategorySeed(key: 'other_invest', nameZh: '投资费用', nameEn: 'Invest Fee', emoji: '📉', kind: TransactionKind.expense, parentKey: 'other'),
+    CategorySeed(key: 'other_loss', nameZh: '意外损失', nameEn: 'Loss', emoji: '💥', kind: TransactionKind.expense, parentKey: 'other'),
     CategorySeed(key: 'other_charity', nameZh: '慈善捐助', nameEn: 'Charity', emoji: '❤️', kind: TransactionKind.expense, parentKey: 'other'),
   ];
 
-  // ───────────────────────── 收入：仅大类 ─────────────────────────
+  // ───────────────────────── 收入：大类 + 子类 ─────────────────────────
   static const List<CategorySeed> incomes = [
-    CategorySeed(key: 'salary', nameZh: '工资', nameEn: 'Salary', emoji: '💰', kind: TransactionKind.income),
-    CategorySeed(key: 'bonus', nameZh: '奖金', nameEn: 'Bonus', emoji: '🏆', kind: TransactionKind.income),
-    CategorySeed(key: 'investment', nameZh: '理财', nameEn: 'Investment', emoji: '📈', kind: TransactionKind.income),
-    CategorySeed(key: 'redPacket', nameZh: '红包', nameEn: 'Red Packet', emoji: '🧧', kind: TransactionKind.income),
-    CategorySeed(key: 'refund', nameZh: '退款', nameEn: 'Refund', emoji: '↩️', kind: TransactionKind.income),
-    CategorySeed(key: 'otherIncome', nameZh: '其他', nameEn: 'Other', emoji: '💵', kind: TransactionKind.income),
+    // 工资薪酬
+    CategorySeed(key: 'salary', nameZh: '工资薪酬', nameEn: 'Salary', emoji: '💰', kind: TransactionKind.income),
+    CategorySeed(key: 'inc_salary_base', nameZh: '基本工资', nameEn: 'Base Pay', emoji: '💵', kind: TransactionKind.income, parentKey: 'salary'),
+    CategorySeed(key: 'inc_salary_ot', nameZh: '加班费', nameEn: 'Overtime', emoji: '⏰', kind: TransactionKind.income, parentKey: 'salary'),
+    CategorySeed(key: 'inc_salary_allow', nameZh: '补贴', nameEn: 'Allowance', emoji: '🎫', kind: TransactionKind.income, parentKey: 'salary'),
+    CategorySeed(key: 'inc_salary_commission', nameZh: '提成绩效', nameEn: 'Commission', emoji: '📊', kind: TransactionKind.income, parentKey: 'salary'),
+
+    // 奖金奖励
+    CategorySeed(key: 'bonus', nameZh: '奖金奖励', nameEn: 'Bonus', emoji: '🏆', kind: TransactionKind.income),
+    CategorySeed(key: 'inc_bonus_year', nameZh: '年终奖', nameEn: 'Year Bonus', emoji: '🧧', kind: TransactionKind.income, parentKey: 'bonus'),
+    CategorySeed(key: 'inc_bonus_project', nameZh: '项目奖金', nameEn: 'Project Bonus', emoji: '🏅', kind: TransactionKind.income, parentKey: 'bonus'),
+    CategorySeed(key: 'inc_bonus_full', nameZh: '全勤奖', nameEn: 'Attendance', emoji: '✅', kind: TransactionKind.income, parentKey: 'bonus'),
+
+    // 副业收入（新一级）
+    CategorySeed(key: 'sideline', nameZh: '副业收入', nameEn: 'Sideline', emoji: '💼', kind: TransactionKind.income),
+    CategorySeed(key: 'inc_parttime', nameZh: '兼职', nameEn: 'Part-time', emoji: '🧑‍💻', kind: TransactionKind.income, parentKey: 'sideline'),
+    CategorySeed(key: 'inc_freelance', nameZh: '自由职业', nameEn: 'Freelance', emoji: '🎨', kind: TransactionKind.income, parentKey: 'sideline'),
+    CategorySeed(key: 'inc_media', nameZh: '自媒体', nameEn: 'Media', emoji: '📹', kind: TransactionKind.income, parentKey: 'sideline'),
+
+    // 投资理财
+    CategorySeed(key: 'investment', nameZh: '投资理财', nameEn: 'Investment', emoji: '📈', kind: TransactionKind.income),
+    CategorySeed(key: 'inc_interest', nameZh: '利息', nameEn: 'Interest', emoji: '🏦', kind: TransactionKind.income, parentKey: 'investment'),
+    CategorySeed(key: 'inc_dividend', nameZh: '分红', nameEn: 'Dividend', emoji: '💹', kind: TransactionKind.income, parentKey: 'investment'),
+    CategorySeed(key: 'inc_gain', nameZh: '投资收益', nameEn: 'Gain', emoji: '📊', kind: TransactionKind.income, parentKey: 'investment'),
+    CategorySeed(key: 'inc_rent', nameZh: '租金收入', nameEn: 'Rent Income', emoji: '🏘️', kind: TransactionKind.income, parentKey: 'investment'),
+
+    // 养老金（新一级）
+    CategorySeed(key: 'pension', nameZh: '养老金', nameEn: 'Pension', emoji: '👴', kind: TransactionKind.income),
+    // 家庭支持（新一级）
+    CategorySeed(key: 'familySupport', nameZh: '家庭支持', nameEn: 'Family', emoji: '👪', kind: TransactionKind.income),
+
+    // 礼金红包
+    CategorySeed(key: 'redPacket', nameZh: '礼金红包', nameEn: 'Red Packet', emoji: '🧧', kind: TransactionKind.income),
+    CategorySeed(key: 'inc_rp_wx', nameZh: '微信红包', nameEn: 'WeChat RP', emoji: '💚', kind: TransactionKind.income, parentKey: 'redPacket'),
+    CategorySeed(key: 'inc_rp_ali', nameZh: '支付宝红包', nameEn: 'Alipay RP', emoji: '💙', kind: TransactionKind.income, parentKey: 'redPacket'),
+    CategorySeed(key: 'inc_rp_gift', nameZh: '人情红包', nameEn: 'Gift RP', emoji: '🧧', kind: TransactionKind.income, parentKey: 'redPacket'),
+
+    // 经营收入（新一级）
+    CategorySeed(key: 'business', nameZh: '经营收入', nameEn: 'Business', emoji: '🏪', kind: TransactionKind.income),
+
+    // 退款报销
+    CategorySeed(key: 'refund', nameZh: '退款报销', nameEn: 'Refund', emoji: '↩️', kind: TransactionKind.income),
+
+    // 其他收入
+    CategorySeed(key: 'otherIncome', nameZh: '其他收入', nameEn: 'Other', emoji: '💵', kind: TransactionKind.income),
+    CategorySeed(key: 'inc_prize', nameZh: '中奖收入', nameEn: 'Prize', emoji: '🎰', kind: TransactionKind.income, parentKey: 'otherIncome'),
+    CategorySeed(key: 'inc_subsidy', nameZh: '政府补助', nameEn: 'Subsidy', emoji: '🏛️', kind: TransactionKind.income, parentKey: 'otherIncome'),
   ];
 
   static List<CategorySeed> get all => [...expenses, ...incomes];

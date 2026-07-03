@@ -301,7 +301,7 @@ class TagEntity {
 // ---------------------------------------------------------------------------
 
 class AppRepository extends ChangeNotifier {
-  static const _dbVersion = 17;
+  static const _dbVersion = 18;
   static const _dbName = 'qingji.db';
 
   /// 行级 uuid（多人共享账本的同步地基）：32 位小写 hex，无需三方库。
@@ -924,6 +924,11 @@ class AppRepository extends ChangeNotifier {
         await db.execute(
             'ALTER TABLE transactions ADD COLUMN refund_of INTEGER');
       } catch (_) {}
+    }
+    if (oldVersion < 18) {
+      // Phase A 分类大改：重跑分类树（幂等 upsert）——新分类插入、改名/重挂父类
+      // 更新，**绝不动 transactions**，历史账单靠 category_id 不变、分类不丢。
+      await _applyCategoryTree(db);
     }
   }
 
