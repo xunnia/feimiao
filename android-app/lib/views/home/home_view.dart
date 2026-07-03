@@ -16,11 +16,9 @@ import '../../theme/app_tokens.dart';
 import '../../widgets/animated_money.dart';
 import '../../widgets/mascot.dart';
 import '../../widgets/sliding_segment.dart';
-import '../../widgets/tag_selector.dart';
-import '../../widgets/transaction_actions.dart';
+import '../../widgets/transaction_day_list.dart';
 import '../statistics/statistics_view.dart';
 import '../settings/budget_setting_view.dart';
-import '../transactions/edit_transaction_sheet.dart';
 
 enum _TxFilter { all, expense, income }
 
@@ -72,17 +70,6 @@ class _HomeViewState extends State<HomeView> {
     });
   }
 
-  List<_DaySection> _groupByDay(List<TransactionEntity> transactions) {
-    final map = <DateTime, List<TransactionEntity>>{};
-    for (final t in transactions) {
-      final day = DateTime(t.date.year, t.date.month, t.date.day);
-      map.putIfAbsent(day, () => []).add(t);
-    }
-    return map.entries
-        .map((e) => _DaySection(day: e.key, items: e.value))
-        .toList()
-      ..sort((a, b) => b.day.compareTo(a.day));
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -122,7 +109,7 @@ class _HomeViewState extends State<HomeView> {
           return t.txKind == TransactionKind.income;
       }
     }).toList();
-    final sections = _groupByDay(filtered);
+    final sections = groupTxnsByDay(filtered);
 
     // 顶部大卡片与下方筛选胶囊的间距收紧（用户 0702：原间距太远，减半）。
     final double expandedHeight = budgetStatus == null ? 188.0 : 224.0;
@@ -210,7 +197,7 @@ class _HomeViewState extends State<HomeView> {
           else
             for (final s in sections)
               SliverToBoxAdapter(
-                child: _DayCard(section: s, repo: repo),
+                child: TxDayCard(section: s),
               ),
           const SliverToBoxAdapter(child: SizedBox(height: 150)),
         ],

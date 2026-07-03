@@ -10,8 +10,8 @@ import '../../widgets/ios_form.dart';
 import '../../widgets/ios_menu.dart';
 import '../../widgets/mascot.dart';
 import '../../widgets/pressable_scale.dart';
+import '../../widgets/transaction_day_list.dart';
 import '../common/app_sheet.dart';
-import '../transactions/edit_transaction_sheet.dart';
 
 /// 明细搜索：关键词(分类/备注/金额) + 类型/时间/账户/标签/金额区间 筛选。
 class SearchView extends StatefulWidget {
@@ -86,67 +86,147 @@ class _SearchViewState extends State<SearchView> {
         ? const <TransactionEntity>[]
         : repo.visibleTransactions.where((t) => _pass(t, q)).toList();
 
+    final sections = groupTxnsByDay(results);
+
     return Scaffold(
-      appBar: AppBar(
-        titleSpacing: 0,
-        // 圆角搜索框（iOS 搜索栏观感），替代 AppBar 里的裸输入框。
-        title: Padding(
-          padding: const EdgeInsets.only(right: 12),
-          child: Container(
-            height: 38,
-            padding: const EdgeInsets.symmetric(horizontal: 12),
-            decoration: BoxDecoration(
-              color: AppColors.inputFill(scheme),
-              borderRadius: BorderRadius.circular(999),
-            ),
-            child: Row(
-              children: [
-                Icon(Icons.search,
-                    size: 17, color: scheme.onSurfaceVariant),
-                const SizedBox(width: 6),
-                Expanded(
-                  child: TextField(
-                    controller: _ctrl,
-                    autofocus: true,
-                    onChanged: (v) => setState(() => _q = v),
-                    textAlignVertical: TextAlignVertical.center,
-                    decoration: const InputDecoration(
-                      isCollapsed: true,
-                      hintText: '搜账单 / 备注 / 金额',
-                      border: InputBorder.none,
+      appBar: AppBar(title: const Text('搜索')),
+      // 输入框在底部（对齐主页、好点到）；结果用主页同款账单行按天分组。
+      body: Column(
+        children: [
+          _filterBar(scheme, repo),
+          // 统计卡：搜索/筛选结果的支出、收入金额与笔数（搜索的价值在这）。
+          if (active && results.isNotEmpty) _summaryCard(scheme, results),
+          Expanded(
+            child: !active
+                ? _hint(scheme, '输入关键词或选筛选条件', MascotMood.idle)
+                : results.isEmpty
+                    ? _hint(scheme, '没找到符合条件的账单', MascotMood.empty)
+                    : ListView(
+                        padding: const EdgeInsets.only(top: 8, bottom: 12),
+                        children: [
+                          for (final s in sections) TxDayCard(section: s),
+                        ],
+                      ),
+          ),
+          _searchInputBar(scheme, q),
+        ],
+      ),
+    );
+  }
+
+  /// 顶部统计卡：支出/收入 金额 + 笔数（对齐咔皮）。
+  Widget _summaryCard(ColorScheme scheme, List<TransactionEntity> rows) {
+    var exp = Decimal.zero, inc = Decimal.zero;
+    var expN = 0, incN = 0;
+    for (final t in rows) {
+      if (t.txKind == TransactionKind.expense) {
+        exp += t.amount;
+        expN++;
+      } else if (t.txKind == TransactionKind.income) {
+        inc += t.amount;
+        incN++;
+      }
+    }
+    Widget col(String label, int n, Decimal amt, Color color) => Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Text(label,
+                      style: TextStyle(
+                          fontSize: 13, color: scheme.onSurfaceVariant)),
+                  const SizedBox(width: 6),
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 6, vertical: 1),
+                    decoration: BoxDecoration(
+                      color: scheme.surfaceContainerHighest,
+                      borderRadius: BorderRadius.circular(999),
                     ),
+                    child: Text('共$n笔',
+                        style: TextStyle(
+                            fontSize: 10, color: scheme.onSurfaceVariant)),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 4),
+              Text(MoneyFormat.string(amt),
+                  style: TextStyle(
+                      fontSize: 20,
+                      fontWeight: FontWeight.w700,
+                      fontFamily: 'Nunito',
+                      color: color)),
+            ],
+          ),
+        );
+    return Container(
+      margin: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+      decoration: BoxDecoration(
+        color: AppColors.card(scheme),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: AppColors.hairline(scheme)),
+      ),
+      child: Row(
+        children: [
+          col('支出', expN, exp, scheme.onSurface),
+          Container(width: 0.5, height: 32, color: AppColors.hairline(scheme)),
+          const SizedBox(width: 16),
+          col('收入', incN, inc, AppColors.income(scheme)),
+        ],
+      ),
+    );
+  }
+
+  /// 底部搜索输入框（对齐主页输入框：圆角白卡 + 轻阴影，跟键盘上移）。
+  Widget _searchInputBar(ColorScheme scheme, String q) {
+    return SafeArea(
+      top: false,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 6, 16, 10),
+        child: Container(
+          height: 48,
+          padding: const EdgeInsets.symmetric(horizontal: 16),
+          decoration: BoxDecoration(
+            color: AppColors.card(scheme),
+            borderRadius: BorderRadius.circular(28),
+            border: Border.all(color: AppColors.hairline(scheme)),
+            boxShadow: const [
+              BoxShadow(
+                  color: Color(0x14000000), blurRadius: 14, offset: Offset(0, 2)),
+            ],
+          ),
+          child: Row(
+            children: [
+              Icon(Icons.search, size: 19, color: scheme.onSurfaceVariant),
+              const SizedBox(width: 8),
+              Expanded(
+                child: TextField(
+                  controller: _ctrl,
+                  autofocus: true,
+                  onChanged: (v) => setState(() => _q = v),
+                  textAlignVertical: TextAlignVertical.center,
+                  decoration: const InputDecoration(
+                    isCollapsed: true,
+                    hintText: '搜账单 / 备注 / 金额',
+                    border: InputBorder.none,
                   ),
                 ),
-                if (q.isNotEmpty)
-                  GestureDetector(
-                    onTap: () {
-                      _ctrl.clear();
-                      setState(() => _q = '');
-                    },
-                    child: Icon(Icons.cancel,
-                        size: 16, color: scheme.onSurfaceVariant),
-                  ),
-              ],
-            ),
+              ),
+              if (q.isNotEmpty)
+                GestureDetector(
+                  onTap: () {
+                    _ctrl.clear();
+                    setState(() => _q = '');
+                  },
+                  child: Icon(Icons.cancel,
+                      size: 18, color: scheme.onSurfaceVariant),
+                ),
+            ],
           ),
         ),
-        bottom: PreferredSize(
-          preferredSize: const Size.fromHeight(48),
-          child: _filterBar(scheme, repo),
-        ),
       ),
-      body: !active
-          ? _hint(scheme, '输入关键词或选筛选条件', MascotMood.idle)
-          : results.isEmpty
-              ? _hint(scheme, '没找到符合条件的账单', MascotMood.empty)
-              : ListView.separated(
-                  itemCount: results.length,
-                  separatorBuilder: (_, __) => Divider(
-                    height: 1,
-                    color: scheme.outlineVariant.withValues(alpha: 0.4),
-                  ),
-                  itemBuilder: (_, i) => _row(context, results[i], scheme),
-                ),
     );
   }
 
@@ -411,35 +491,4 @@ class _SearchViewState extends State<SearchView> {
         ),
       );
 
-  Widget _row(BuildContext context, TransactionEntity t, ColorScheme scheme) {
-    final income = t.txKind == TransactionKind.income;
-    // 退款冲账 = 负向支出：显示成「+¥x」铜金色。
-    final isRefund =
-        t.txKind == TransactionKind.expense && t.amount.toDouble() < 0;
-    final amt = isRefund
-        ? '+${MoneyFormat.string(t.amount.abs())}'
-        : '${income ? '+' : '-'}${MoneyFormat.string(t.amount)}';
-    final dateStr = '${t.date.year}-${t.date.month}-${t.date.day}';
-    return ListTile(
-      title: Text(
-        t.categoryNameZh.isNotEmpty ? t.categoryNameZh : '未分类',
-        maxLines: 1,
-        overflow: TextOverflow.ellipsis,
-      ),
-      subtitle: Text(
-        t.note.isNotEmpty ? '$dateStr · ${t.note}' : dateStr,
-        maxLines: 1,
-        overflow: TextOverflow.ellipsis,
-      ),
-      trailing: Text(
-        amt,
-        style: TextStyle(
-          fontWeight: FontWeight.w600,
-          fontFamily: 'Nunito',
-          color: (income || isRefund) ? scheme.secondary : scheme.onSurface,
-        ),
-      ),
-      onTap: () => showEditTransactionSheet(context, t),
-    );
-  }
 }
