@@ -7,8 +7,9 @@
 
 ## §-1 最新交接（2026-07-02 起：按用户优化文档做六批 UI/功能升级）
 
-### -1.-1 当前状态速览（2026-07-03 深夜更新）
-- **水印 b0703-4 / DB v16**（b0702-13 已 commit）。**b0703-1..4 待用户合并推送**（一个提交即可）：预算修正包(-1) + 二级面板提层修复(-2) + GPT小修包(-3) + 分类管理重构/删账本保护/深色巡检/统计性能/logo封面(-4)，详见 -1.2 顶部。推送：`git push origin HEAD:claude/hopeful-wozniak-pr2ne3`。
+### -1.-1 当前状态速览（2026-07-04 更新）
+- **最新 = 水印 b0703-18 / v1.12.0 / DB v18**，commit `3873059` 已 commit **待推送**：`git push origin HEAD:claude/hopeful-wozniak-pr2ne3`。b0703-1..17 均已推送验过；b0703-17(d43d4ec) CI 挂过静态分析——根因见下条教训——已被 3873059 修复。
+- **⚠️ 血泪教训（2026-07-04）**：给用户推送命令后**别立刻开始下一批的破坏性改动**（尤其 PowerShell 删行/大改文件到一半）。用户用 `git add -A` 提交上一批时，会把我改到一半的文件（如 home_view 删了类但没改用法）一起提交进去 → 编译错 → CI 挂。**规矩：一批完全做完(analyze+test 绿)再给推送命令；给了命令后要动大文件前先提醒用户"先推完再让我继续"。** 排查手法：`git stash -u` 还原到 HEAD 复现 CI 错误。
 - **本地验证坑（已解决）**：flutter 启动锁死锁（强杀任务后锁未释放，后续命令死等）。解法=杀 dart 进程 + 删 `C:\src\flutter\bin\cache\lockfile`，之后 analyze 十几秒正常出结果。**教训**：b0703-4 首次构建红=book_sheet 漏 import AppColors——CI analyze 原是 `|| true` 非阻断、测试只编译引用到的文件，编译错漏到打 APK 才炸。**CI 已改**：analyze 换成 `--no-fatal-infos --no-fatal-warnings`（error 阻断，warning 放行）。
 - **GPT 全面复盘已消化**（2026-07-03）：全部采纳项已完成（AI滤excluded/今日vs日均文案/toast统一/迁移前备份/删账本保护/15号代表日改按天重叠/分类管理包）；驳回=图标颜色编辑；核实本来就有=统计默认卡数/预算状态色/API key遮罩/手动备份页。**别再重复做。**
 - **⚠️ 每次推送前记得**：①水印 +1 ②pubspec version minor+1 且 +N（versionCode）+1（当前 1.12.0+14 / 水印 b0703-18 / DB v18）。APK 下载链接：`.../android-latest/肥喵记账.apk`。
