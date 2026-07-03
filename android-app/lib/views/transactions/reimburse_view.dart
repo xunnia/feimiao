@@ -172,14 +172,14 @@ class _ReimburseRow extends StatelessWidget {
                 context,
                 title: '这笔已经报销到账了？',
                 message:
-                    '「${tx.note.isNotEmpty ? tx.note : tx.categoryNameZh} ${MoneyFormat.string(tx.amount)}」将从待报销里销掉。',
+                    '「${tx.note.isNotEmpty ? tx.note : tx.categoryNameZh} ${MoneyFormat.string(tx.amount)}」报销后会抵消成 0 支出（不再算你的花销），列表里保留成划线记录。',
                 confirmText: '已报销',
               );
               if (ok && context.mounted) {
                 Haptics.of(Haptic.success);
                 await repo.markReimbursed(tx.id);
                 if (context.mounted) {
-                  showAppToast(context, '已销掉，记得记一笔到账收入喵');
+                  showAppToast(context, '已报销，这笔支出已抵消归零喵');
                 }
               }
             },

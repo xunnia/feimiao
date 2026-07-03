@@ -1,3 +1,4 @@
+import 'package:flutter/cupertino.dart' show CupertinoPageTransitionsBuilder;
 import 'package:flutter/material.dart';
 
 // ---------------------------------------------------------------------------
@@ -92,6 +93,15 @@ class AppColors {
 // 主题工厂
 // ---------------------------------------------------------------------------
 
+/// 全平台用 iOS 式转场：MaterialPageRoute 也带左缘右滑返回手势。
+/// （Android 默认 ZoomPageTransitionsBuilder 不支持返回手势，返回键又难点到。）
+const PageTransitionsTheme _iosPageTransitions = PageTransitionsTheme(
+  builders: {
+    TargetPlatform.android: CupertinoPageTransitionsBuilder(),
+    TargetPlatform.iOS: CupertinoPageTransitionsBuilder(),
+  },
+);
+
 /// Material 3 ColorScheme 工厂：浅色 + 深色。
 class AppTheme {
   AppTheme._();
@@ -119,6 +129,8 @@ class AppTheme {
       useMaterial3: true,
       // 全局 iOS 化：返回键变 ‹ 箭头、列表滚动回弹、自适应控件转 Cupertino
       platform: TargetPlatform.iOS,
+      // 所有二三级页面支持左缘右滑返回（Android 默认 Zoom 转场没有此手势）。
+      pageTransitionsTheme: _iosPageTransitions,
       // 发丝分隔线（0.5px、极淡）
       dividerTheme: const DividerThemeData(
         thickness: 0.5,
@@ -189,6 +201,7 @@ class AppTheme {
       scaffoldBackgroundColor: const Color(0xFF211E1C),
       useMaterial3: true,
       platform: TargetPlatform.iOS,
+      pageTransitionsTheme: _iosPageTransitions,
       appBarTheme: const AppBarTheme(
         backgroundColor: Color(0xFF211E1C),
         surfaceTintColor: Colors.transparent,

@@ -2,13 +2,19 @@ import 'package:decimal/decimal.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../../core/haptics.dart';
 import '../../core/models/cat_svg_icon.dart';
 import '../../core/models/category_seed.dart';
 import '../../core/models/recurring_rule.dart';
 import '../../core/models/transaction_kind.dart';
 import '../../data/app_repository.dart';
 import '../../theme/app_colors.dart';
+import '../../widgets/ios_form.dart';
+import '../../widgets/ios_menu.dart';
 import '../../widgets/mascot.dart';
+import '../../widgets/pressable_scale.dart';
+import '../../widgets/sliding_segment.dart';
+import '../common/app_sheet.dart';
 
 String _d2(int n) => n.toString().padLeft(2, '0');
 String _dateStr(DateTime d) => '${d.year}-${_d2(d.month)}-${_d2(d.day)}';
@@ -150,14 +156,10 @@ class _RuleCard extends StatelessWidget {
 }
 
 /// 新增 / 编辑周期规则表单。[rule] 为 null 时新增。
+/// 走全局模糊弹层（同类大弹层同一设计）。
 Future<void> showRecurringEditSheet(
     BuildContext context, RecurringRule? rule) {
-  return showModalBottomSheet<void>(
-    context: context,
-    isScrollControlled: true,
-    backgroundColor: Colors.transparent,
-    builder: (_) => _RecurringEditSheet(rule: rule),
-  );
+  return showBlurSheet<void>(context, child: _RecurringEditSheet(rule: rule));
 }
 
 class _RecurringEditSheet extends StatefulWidget {
@@ -215,175 +217,251 @@ class _RecurringEditSheetState extends State<_RecurringEditSheet> {
 
     final amount = Decimal.tryParse(_amountCtrl.text.trim());
     final valid = amount != null && amount > Decimal.zero && _accountId != null;
+    final selCat = cats.where((c) => c.id == _categoryId).firstOrNull;
+    final selAcc = accounts.where((a) => a.id == _accountId).firstOrNull;
+    final screenH = MediaQuery.sizeOf(context).height;
 
-    return Padding(
-      padding: EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(context).bottom),
-      child: Container(
-        decoration: BoxDecoration(
-          color: scheme.surface,
-          borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
-        ),
-        padding: const EdgeInsets.fromLTRB(20, 12, 20, 20),
-        child: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Center(
-                child: Container(
-                  width: 36,
-                  height: 4,
-                  decoration: BoxDecoration(
-                    color: scheme.onSurfaceVariant.withValues(alpha: 0.25),
-                    borderRadius: BorderRadius.circular(2),
+    return ConstrainedBox(
+      constraints: BoxConstraints(maxHeight: screenH * 0.88),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 16, 12, 4),
+            child: Row(
+              children: [
+                Text(widget.rule == null ? '新增定时记账' : '编辑定时记账',
+                    style: const TextStyle(
+                        fontSize: 17, fontWeight: FontWeight.w600)),
+                const Spacer(),
+                PressableScale(
+                  onPressed: () => Navigator.pop(context),
+                  child: Padding(
+                    padding: const EdgeInsets.all(8),
+                    child: Icon(Icons.close,
+                        size: 20, color: scheme.onSurfaceVariant),
                   ),
                 ),
-              ),
-              const SizedBox(height: 14),
-              Text(widget.rule == null ? '新增定时记账' : '编辑定时记账',
-                  textAlign: TextAlign.center,
-                  style: Theme.of(context)
-                      .textTheme
-                      .titleMedium
-                      ?.copyWith(fontWeight: FontWeight.w500)),
-              const SizedBox(height: 16),
-
-              // 收支
-              SegmentedButton<TransactionKind>(
-                segments: const [
-                  ButtonSegment(
-                      value: TransactionKind.expense, label: Text('支出')),
-                  ButtonSegment(
-                      value: TransactionKind.income, label: Text('收入')),
-                ],
-                selected: {_kind},
-                onSelectionChanged: (s) => setState(() {
-                  _kind = s.first;
-                  _categoryId = null;
-                }),
-              ),
-              const SizedBox(height: 12),
-
-              // 金额
-              TextField(
-                controller: _amountCtrl,
-                keyboardType:
-                    const TextInputType.numberWithOptions(decimal: true),
-                onChanged: (_) => setState(() {}),
-                decoration: const InputDecoration(
-                  labelText: '金额',
-                  prefixText: '¥ ',
-                ),
-              ),
-              const SizedBox(height: 12),
-
-              // 分类
-              DropdownButtonFormField<int>(
-                value:_categoryId,
-                isExpanded: true,
-                decoration: const InputDecoration(labelText: '分类'),
-                items: [
-                  for (final c in cats)
-                    DropdownMenuItem(
-                      value: c.id,
-                      child: Text('${CategorySeed.emojiOf(c.key)} ${c.nameZh}'),
-                    ),
-                ],
-                onChanged: (v) => setState(() => _categoryId = v),
-              ),
-              const SizedBox(height: 12),
-
-              // 账户
-              DropdownButtonFormField<int>(
-                value:_accountId,
-                isExpanded: true,
-                decoration: const InputDecoration(labelText: '账户'),
-                items: [
-                  for (final a in accounts)
-                    DropdownMenuItem(value: a.id, child: Text(a.name)),
-                ],
-                onChanged: (v) => setState(() => _accountId = v),
-              ),
-              const SizedBox(height: 12),
-
-              // 周期
-              Align(
-                alignment: Alignment.centerLeft,
-                child: Text('周期',
-                    style: Theme.of(context).textTheme.labelMedium?.copyWith(
-                          color: scheme.onSurfaceVariant,
-                        )),
-              ),
-              const SizedBox(height: 6),
-              SegmentedButton<RecurPeriod>(
-                segments: const [
-                  ButtonSegment(value: RecurPeriod.daily, label: Text('每天')),
-                  ButtonSegment(value: RecurPeriod.weekly, label: Text('每周')),
-                  ButtonSegment(value: RecurPeriod.monthly, label: Text('每月')),
-                  ButtonSegment(value: RecurPeriod.yearly, label: Text('每年')),
-                ],
-                selected: {_period},
-                showSelectedIcon: false,
-                onSelectionChanged: (s) => setState(() => _period = s.first),
-              ),
-              const SizedBox(height: 12),
-
-              // 起始 / 下次日期
-              ListTile(
-                contentPadding: EdgeInsets.zero,
-                title: const Text('起始日期'),
-                subtitle: Text(_dateStr(_startDate)),
-                trailing: const Icon(Icons.calendar_today_outlined, size: 18),
-                onTap: () async {
-                  final picked = await showDatePicker(
-                    context: context,
-                    initialDate: _startDate,
-                    firstDate: DateTime(2015),
-                    lastDate: DateTime(2100),
-                  );
-                  if (picked != null) setState(() => _startDate = picked);
-                },
-              ),
-              const SizedBox(height: 4),
-
-              // 备注
-              TextField(
-                controller: _noteCtrl,
-                decoration: const InputDecoration(labelText: '备注(可选)'),
-              ),
-              const SizedBox(height: 20),
-
-              Row(
+              ],
+            ),
+          ),
+          Flexible(
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.fromLTRB(20, 4, 20, 20),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  if (widget.rule != null)
-                    Expanded(
-                      child: OutlinedButton(
-                        onPressed: () async {
-                          await repo.deleteRecurringRule(widget.rule!.id);
-                          if (context.mounted) Navigator.pop(context);
+                  // 收支
+                  Center(
+                    child: SizedBox(
+                      width: 200,
+                      child: SlidingSegment<TransactionKind>(
+                        items: const [
+                          (TransactionKind.expense, '支出'),
+                          (TransactionKind.income, '收入'),
+                        ],
+                        value: _kind,
+                        onChanged: (v) {
+                          Haptics.selection();
+                          setState(() {
+                            _kind = v;
+                            _categoryId = null;
+                          });
                         },
-                        style: OutlinedButton.styleFrom(
-                          foregroundColor: scheme.error,
-                          side: BorderSide(
-                              color: scheme.error.withValues(alpha: 0.5)),
-                        ),
-                        child: const Text('删除'),
                       ),
                     ),
-                  if (widget.rule != null) const SizedBox(width: 12),
-                  Expanded(
-                    flex: 2,
-                    child: FilledButton(
-                      onPressed: valid ? () => _save(repo) : null,
-                      child: const Text('保存'),
+                  ),
+                  const SizedBox(height: 16),
+
+                  // 金额
+                  Text('金额',
+                      style: TextStyle(
+                          fontSize: 13, color: scheme.onSurfaceVariant)),
+                  const SizedBox(height: 6),
+                  TextField(
+                    controller: _amountCtrl,
+                    keyboardType: const TextInputType.numberWithOptions(
+                        decimal: true),
+                    onChanged: (_) => setState(() {}),
+                    decoration: iosInputDecoration(context,
+                        hint: '如 1300', prefix: '¥ '),
+                  ),
+                  const SizedBox(height: 14),
+
+                  // 分类 + 账户（showIosMenu 选择，同全局设计）
+                  Row(
+                    children: [
+                      Expanded(
+                        child: _PickerField(
+                          label: '分类',
+                          value: selCat == null
+                              ? '选择分类'
+                              : '${CategorySeed.emojiOf(selCat.key)} ${selCat.nameZh}',
+                          placeholder: selCat == null,
+                          onTapMenu: (menuCtx) => showIosMenu(menuCtx, [
+                            for (final c in cats)
+                              IosMenuItem(
+                                label:
+                                    '${CategorySeed.emojiOf(c.key)} ${c.nameZh}',
+                                icon: c.id == _categoryId
+                                    ? Icons.check_circle
+                                    : Icons.radio_button_unchecked,
+                                onTap: () =>
+                                    setState(() => _categoryId = c.id),
+                              ),
+                          ]),
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: _PickerField(
+                          label: '账户',
+                          value: selAcc?.name ?? '选择账户',
+                          placeholder: selAcc == null,
+                          onTapMenu: (menuCtx) => showIosMenu(menuCtx, [
+                            for (final a in accounts)
+                              IosMenuItem(
+                                label: a.name,
+                                icon: a.id == _accountId
+                                    ? Icons.check_circle
+                                    : Icons.radio_button_unchecked,
+                                onTap: () =>
+                                    setState(() => _accountId = a.id),
+                              ),
+                          ]),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 14),
+
+                  // 周期
+                  Text('周期',
+                      style: TextStyle(
+                          fontSize: 13, color: scheme.onSurfaceVariant)),
+                  const SizedBox(height: 6),
+                  SlidingSegment<RecurPeriod>(
+                    items: const [
+                      (RecurPeriod.daily, '每天'),
+                      (RecurPeriod.weekly, '每周'),
+                      (RecurPeriod.monthly, '每月'),
+                      (RecurPeriod.yearly, '每年'),
+                    ],
+                    value: _period,
+                    onChanged: (v) {
+                      Haptics.selection();
+                      setState(() => _period = v);
+                    },
+                  ),
+                  const SizedBox(height: 14),
+
+                  // 起始日期
+                  Text('起始日期',
+                      style: TextStyle(
+                          fontSize: 13, color: scheme.onSurfaceVariant)),
+                  const SizedBox(height: 6),
+                  PressableScale(
+                    onPressed: () async {
+                      final picked = await showDatePicker(
+                        context: context,
+                        initialDate: _startDate,
+                        firstDate: DateTime(2015),
+                        lastDate: DateTime(2100),
+                      );
+                      if (picked != null) setState(() => _startDate = picked);
+                    },
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 14, vertical: 12),
+                      decoration: BoxDecoration(
+                        color: AppColors.inputFill(scheme),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Row(
+                        children: [
+                          Text(_dateStr(_startDate),
+                              style: TextStyle(
+                                  fontSize: 14, color: scheme.onSurface)),
+                          const Spacer(),
+                          Icon(Icons.calendar_today_outlined,
+                              size: 16, color: scheme.onSurfaceVariant),
+                        ],
+                      ),
                     ),
+                  ),
+                  const SizedBox(height: 14),
+
+                  // 备注
+                  Text('备注（可选）',
+                      style: TextStyle(
+                          fontSize: 13, color: scheme.onSurfaceVariant)),
+                  const SizedBox(height: 6),
+                  TextField(
+                    controller: _noteCtrl,
+                    decoration:
+                        iosInputDecoration(context, hint: '如 房租还贷'),
                   ),
                 ],
               ),
-              const SizedBox(height: 8),
-            ],
+            ),
           ),
-        ),
+          // 底部按钮
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 8, 20, 14),
+            child: Row(
+              children: [
+                if (widget.rule != null) ...[
+                  Expanded(
+                    child: PressableScale(
+                      onPressed: () async {
+                        await repo.deleteRecurringRule(widget.rule!.id);
+                        if (context.mounted) Navigator.pop(context);
+                      },
+                      child: Container(
+                        height: 46,
+                        alignment: Alignment.center,
+                        decoration: BoxDecoration(
+                          color: AppColors.card(scheme),
+                          borderRadius: BorderRadius.circular(999),
+                          border: Border.all(
+                              color: scheme.error.withValues(alpha: 0.5)),
+                        ),
+                        child: Text('删除',
+                            style: TextStyle(
+                                fontSize: 15,
+                                fontWeight: FontWeight.w600,
+                                color: scheme.error)),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                ],
+                Expanded(
+                  flex: 2,
+                  child: PressableScale(
+                    onPressed: valid ? () => _save(repo) : null,
+                    child: Opacity(
+                      opacity: valid ? 1 : 0.4,
+                      child: Container(
+                        height: 46,
+                        alignment: Alignment.center,
+                        decoration: BoxDecoration(
+                          color: scheme.onSurface,
+                          borderRadius: BorderRadius.circular(999),
+                        ),
+                        child: Text('保存',
+                            style: TextStyle(
+                                fontSize: 15,
+                                fontWeight: FontWeight.w600,
+                                color: scheme.surface)),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -414,5 +492,65 @@ class _RecurringEditSheetState extends State<_RecurringEditSheet> {
       );
     }
     if (mounted) Navigator.pop(context);
+  }
+}
+
+/// 标签 + 值的选择框：点开走 showIosMenu（对齐全局设计，替代原生 Dropdown）。
+class _PickerField extends StatelessWidget {
+  final String label;
+  final String value;
+  final bool placeholder;
+  final void Function(BuildContext menuCtx) onTapMenu;
+
+  const _PickerField({
+    required this.label,
+    required this.value,
+    required this.placeholder,
+    required this.onTapMenu,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(label,
+            style: TextStyle(fontSize: 13, color: scheme.onSurfaceVariant)),
+        const SizedBox(height: 6),
+        Builder(
+          builder: (menuCtx) => PressableScale(
+            onPressed: () => onTapMenu(menuCtx),
+            child: Container(
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+              decoration: BoxDecoration(
+                color: AppColors.inputFill(scheme),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      value,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: 14,
+                        color: placeholder
+                            ? scheme.onSurfaceVariant
+                            : scheme.onSurface,
+                      ),
+                    ),
+                  ),
+                  Icon(Icons.expand_more,
+                      size: 18, color: scheme.onSurfaceVariant),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
   }
 }

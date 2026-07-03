@@ -1554,8 +1554,30 @@ class AppRepository extends ChangeNotifier {
       .toList()
     ..sort((a, b) => b.amount.compareTo(a.amount));
 
-  /// 标记一笔已报销（清掉待报销标；账单本身不动）。
+  /// 标记一笔已报销：钱报销回来了 = 这笔不算自己的支出，
+  /// 所以像退款一样给它补一笔「补满净额」的退款让净额归 0（用户 0703 拍板），
+  /// 同时清掉待报销标。原账单仍在列表里，显示成划线原价 + 净额 0。
   Future<void> markReimbursed(int id) async {
+    final original = _transactions.where((t) => t.id == id).firstOrNull;
+    if (original == null) return;
+    final net = netAmountOf(original);
+    if (net > Decimal.zero) {
+      final accountId = original.accountId ?? _accounts.firstOrNull?.id;
+      final bookId = Sqflite.firstIntValue(await _db!.rawQuery(
+          'SELECT book_id FROM transactions WHERE id = ?', [id]));
+      await _db!.insert('transactions', {
+        'book_id': bookId ?? _currentBookId,
+        'kind': TransactionKind.expense.toJson(),
+        'amount': (Decimal.zero - net).toString(),
+        'currency_code': 'CNY',
+        'category_id': original.categoryId,
+        'account_id': accountId,
+        'note': '报销到账',
+        'date_ms': DateTime.now().millisecondsSinceEpoch,
+        'refund_of': id,
+        ..._syncStampNew(),
+      });
+    }
     await _db!.update(
       'transactions',
       {

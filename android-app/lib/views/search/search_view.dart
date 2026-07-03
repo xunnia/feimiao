@@ -5,7 +5,12 @@ import 'package:provider/provider.dart';
 import '../../core/models/transaction_kind.dart';
 import '../../core/money_format.dart';
 import '../../data/app_repository.dart';
+import '../../theme/app_colors.dart';
+import '../../widgets/ios_form.dart';
+import '../../widgets/ios_menu.dart';
 import '../../widgets/mascot.dart';
+import '../../widgets/pressable_scale.dart';
+import '../common/app_sheet.dart';
 import '../transactions/edit_transaction_sheet.dart';
 
 /// 明细搜索：关键词(分类/备注/金额) + 类型/时间/账户/标签/金额区间 筛选。
@@ -78,25 +83,47 @@ class _SearchViewState extends State<SearchView> {
     return Scaffold(
       appBar: AppBar(
         titleSpacing: 0,
-        title: TextField(
-          controller: _ctrl,
-          autofocus: true,
-          onChanged: (v) => setState(() => _q = v),
-          decoration: const InputDecoration(
-            hintText: '搜账单 / 备注 / 金额',
-            border: InputBorder.none,
+        // 圆角搜索框（iOS 搜索栏观感），替代 AppBar 里的裸输入框。
+        title: Padding(
+          padding: const EdgeInsets.only(right: 12),
+          child: Container(
+            height: 38,
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+            decoration: BoxDecoration(
+              color: AppColors.inputFill(scheme),
+              borderRadius: BorderRadius.circular(999),
+            ),
+            child: Row(
+              children: [
+                Icon(Icons.search,
+                    size: 17, color: scheme.onSurfaceVariant),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: TextField(
+                    controller: _ctrl,
+                    autofocus: true,
+                    onChanged: (v) => setState(() => _q = v),
+                    textAlignVertical: TextAlignVertical.center,
+                    decoration: const InputDecoration(
+                      isCollapsed: true,
+                      hintText: '搜账单 / 备注 / 金额',
+                      border: InputBorder.none,
+                    ),
+                  ),
+                ),
+                if (q.isNotEmpty)
+                  GestureDetector(
+                    onTap: () {
+                      _ctrl.clear();
+                      setState(() => _q = '');
+                    },
+                    child: Icon(Icons.cancel,
+                        size: 16, color: scheme.onSurfaceVariant),
+                  ),
+              ],
+            ),
           ),
         ),
-        actions: [
-          if (q.isNotEmpty)
-            IconButton(
-              icon: const Icon(Icons.close),
-              onPressed: () {
-                _ctrl.clear();
-                setState(() => _q = '');
-              },
-            ),
-        ],
         bottom: PreferredSize(
           preferredSize: const Size.fromHeight(48),
           child: _filterBar(scheme, repo),
@@ -152,8 +179,9 @@ class _SearchViewState extends State<SearchView> {
             _pickRange,
           ),
           _chip(scheme, accName ?? '账户', _accountId != null,
-              () => _pickAccount(repo)),
-          _chip(scheme, tagName ?? '标签', _tagId != null, () => _pickTag(repo)),
+              (ctx) => _pickAccount(ctx, repo)),
+          _chip(scheme, tagName ?? '标签', _tagId != null,
+              (ctx) => _pickTag(ctx, repo)),
           _chip(scheme, amtLabel ?? '金额',
               _minAmt != null || _maxAmt != null, _pickAmount),
           if (_hasFilter)
@@ -176,38 +204,69 @@ class _SearchViewState extends State<SearchView> {
     );
   }
 
-  Widget _chip(
-      ColorScheme scheme, String label, bool active, VoidCallback onTap) {
+  Widget _chip(ColorScheme scheme, String label, bool active,
+      void Function(BuildContext) onTap) {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
-      child: ActionChip(
-        label: Text(label),
-        avatar: Icon(Icons.expand_more,
-            size: 16,
-            color: active ? scheme.onPrimary : scheme.onSurfaceVariant),
-        backgroundColor:
-            active ? scheme.primary : scheme.surfaceContainerHighest,
-        labelStyle: TextStyle(
-          color: active ? scheme.onPrimary : scheme.onSurface,
-          fontSize: 13,
+      child: Builder(
+        builder: (chipCtx) => PressableScale(
+          onPressed: () => onTap(chipCtx),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              // 激活=主色浅底+主色描边；未选=白底+发丝边（对齐全局胶囊）。
+              color: active
+                  ? scheme.primary.withValues(alpha: 0.12)
+                  : AppColors.card(scheme),
+              borderRadius: BorderRadius.circular(999),
+              border: Border.all(
+                color: active
+                    ? scheme.primary.withValues(alpha: 0.5)
+                    : AppColors.hairline(scheme),
+              ),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.expand_more,
+                    size: 15,
+                    color: active ? scheme.primary : scheme.onSurfaceVariant),
+                const SizedBox(width: 3),
+                Text(label,
+                    style: TextStyle(
+                      fontSize: 12.5,
+                      color: active ? scheme.primary : scheme.onSurface,
+                      fontWeight:
+                          active ? FontWeight.w600 : FontWeight.w400,
+                    )),
+              ],
+            ),
+          ),
         ),
-        side: BorderSide.none,
-        onPressed: onTap,
       ),
     );
   }
 
-  Future<void> _pickKind() async {
-    final v = await _sheet<TransactionKind?>('类型', [
-      (null, '全部'),
-      (TransactionKind.expense, '支出'),
-      (TransactionKind.income, '收入'),
-      (TransactionKind.transfer, '转账'),
+  void _pickKind(BuildContext anchor) {
+    showIosMenu(anchor, [
+      for (final o in const [
+        (null, '全部'),
+        (TransactionKind.expense, '支出'),
+        (TransactionKind.income, '收入'),
+        (TransactionKind.transfer, '转账'),
+      ])
+        IosMenuItem(
+          label: o.$2,
+          icon: _kind == o.$1
+              ? Icons.check_circle
+              : Icons.radio_button_unchecked,
+          onTap: () => setState(() => _kind = o.$1),
+        ),
     ]);
-    if (v.$1) setState(() => _kind = v.$2);
   }
 
-  Future<void> _pickRange() async {
+  Future<void> _pickRange(BuildContext _) async {
     final r = await showDateRangePicker(
       context: context,
       firstDate: DateTime(2015),
@@ -217,121 +276,120 @@ class _SearchViewState extends State<SearchView> {
     if (r != null) setState(() => _range = r);
   }
 
-  Future<void> _pickAccount(AppRepository repo) async {
-    final v = await _sheet<int?>('账户', [
-      (null, '全部'),
-      for (final a in repo.accounts) (a.id, a.name),
-    ]);
-    if (v.$1) setState(() => _accountId = v.$2);
-  }
-
-  Future<void> _pickTag(AppRepository repo) async {
-    final v = await _sheet<int?>('标签', [
-      (null, '全部'),
-      for (final t in repo.tags) (t.id, t.name),
-    ]);
-    if (v.$1) setState(() => _tagId = v.$2);
-  }
-
-  /// 通用单选底部表，返回 (是否选了, 选中值)。
-  Future<(bool, T)> _sheet<T>(String title, List<(T, String)> options) async {
-    T? chosen;
-    var picked = false;
-    await showModalBottomSheet<void>(
-      context: context,
-      builder: (ctx) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Padding(
-              padding: const EdgeInsets.fromLTRB(20, 14, 20, 8),
-              child: Text(title,
-                  style: Theme.of(ctx)
-                      .textTheme
-                      .titleSmall
-                      ?.copyWith(fontWeight: FontWeight.w500)),
-            ),
-            for (final o in options)
-              ListTile(
-                title: Text(o.$2),
-                onTap: () {
-                  chosen = o.$1;
-                  picked = true;
-                  Navigator.pop(ctx);
-                },
-              ),
-          ],
-        ),
+  void _pickAccount(BuildContext anchor, AppRepository repo) {
+    showIosMenu(anchor, [
+      IosMenuItem(
+        label: '全部',
+        icon: _accountId == null
+            ? Icons.check_circle
+            : Icons.radio_button_unchecked,
+        onTap: () => setState(() => _accountId = null),
       ),
-    );
-    return (picked, chosen as T);
+      for (final a in repo.accounts)
+        IosMenuItem(
+          label: a.name,
+          icon: a.id == _accountId
+              ? Icons.check_circle
+              : Icons.radio_button_unchecked,
+          onTap: () => setState(() => _accountId = a.id),
+        ),
+    ]);
   }
 
-  Future<void> _pickAmount() async {
+  void _pickTag(BuildContext anchor, AppRepository repo) {
+    showIosMenu(anchor, [
+      IosMenuItem(
+        label: '全部',
+        icon: _tagId == null
+            ? Icons.check_circle
+            : Icons.radio_button_unchecked,
+        onTap: () => setState(() => _tagId = null),
+      ),
+      for (final t in repo.tags)
+        IosMenuItem(
+          label: t.name,
+          icon: t.id == _tagId
+              ? Icons.check_circle
+              : Icons.radio_button_unchecked,
+          onTap: () => setState(() => _tagId = t.id),
+        ),
+    ]);
+  }
+
+  Future<void> _pickAmount(BuildContext _) async {
     final minC = TextEditingController(
         text: _minAmt != null ? _minAmt.toString() : '');
     final maxC = TextEditingController(
         text: _maxAmt != null ? _maxAmt.toString() : '');
-    await showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      builder: (ctx) => Padding(
-        padding: EdgeInsets.only(
-          left: 20,
-          right: 20,
-          top: 16,
-          bottom: MediaQuery.viewInsetsOf(ctx).bottom + 20,
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Text('金额区间',
-                textAlign: TextAlign.center,
-                style: Theme.of(ctx)
-                    .textTheme
-                    .titleSmall
-                    ?.copyWith(fontWeight: FontWeight.w500)),
-            const SizedBox(height: 14),
-            Row(
+    await showBlurSheet<void>(
+      context,
+      child: Builder(
+        builder: (ctx) {
+          final scheme = Theme.of(ctx).colorScheme;
+          return Padding(
+            padding: const EdgeInsets.fromLTRB(20, 16, 20, 16),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                Expanded(
-                  child: TextField(
-                    controller: minC,
-                    keyboardType:
-                        const TextInputType.numberWithOptions(decimal: true),
-                    decoration: const InputDecoration(
-                        labelText: '最低', prefixText: '¥ '),
-                  ),
+                const Text('金额区间',
+                    style: TextStyle(
+                        fontSize: 17, fontWeight: FontWeight.w600)),
+                const SizedBox(height: 14),
+                Row(
+                  children: [
+                    Expanded(
+                      child: TextField(
+                        controller: minC,
+                        keyboardType: const TextInputType.numberWithOptions(
+                            decimal: true),
+                        decoration: iosInputDecoration(ctx,
+                            hint: '最低', prefix: '¥ '),
+                      ),
+                    ),
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 10),
+                      child: Text('~',
+                          style: TextStyle(color: scheme.onSurfaceVariant)),
+                    ),
+                    Expanded(
+                      child: TextField(
+                        controller: maxC,
+                        keyboardType: const TextInputType.numberWithOptions(
+                            decimal: true),
+                        decoration: iosInputDecoration(ctx,
+                            hint: '最高', prefix: '¥ '),
+                      ),
+                    ),
+                  ],
                 ),
-                const Padding(
-                  padding: EdgeInsets.symmetric(horizontal: 10),
-                  child: Text('~'),
-                ),
-                Expanded(
-                  child: TextField(
-                    controller: maxC,
-                    keyboardType:
-                        const TextInputType.numberWithOptions(decimal: true),
-                    decoration: const InputDecoration(
-                        labelText: '最高', prefixText: '¥ '),
+                const SizedBox(height: 18),
+                PressableScale(
+                  onPressed: () {
+                    setState(() {
+                      _minAmt = Decimal.tryParse(minC.text.trim());
+                      _maxAmt = Decimal.tryParse(maxC.text.trim());
+                    });
+                    Navigator.pop(ctx);
+                  },
+                  child: Container(
+                    height: 46,
+                    alignment: Alignment.center,
+                    decoration: BoxDecoration(
+                      color: scheme.onSurface,
+                      borderRadius: BorderRadius.circular(999),
+                    ),
+                    child: Text('确定',
+                        style: TextStyle(
+                            fontSize: 15,
+                            fontWeight: FontWeight.w600,
+                            color: scheme.surface)),
                   ),
                 ),
               ],
             ),
-            const SizedBox(height: 18),
-            FilledButton(
-              onPressed: () {
-                setState(() {
-                  _minAmt = Decimal.tryParse(minC.text.trim());
-                  _maxAmt = Decimal.tryParse(maxC.text.trim());
-                });
-                Navigator.pop(ctx);
-              },
-              child: const Text('确定'),
-            ),
-          ],
-        ),
+          );
+        },
       ),
     );
   }

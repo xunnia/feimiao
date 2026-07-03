@@ -348,7 +348,9 @@ class _TransactionRow extends StatelessWidget {
             ),
             const SizedBox(width: 6),
             Text(
-              '-${MoneyFormat.string(net)}',
+              net <= Decimal.zero
+                  ? MoneyFormat.string(net)
+                  : '-${MoneyFormat.string(net)}',
               style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                     color: AppColors.expense(scheme),
                     fontWeight: FontWeight.w600,

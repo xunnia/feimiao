@@ -5,6 +5,7 @@ import 'package:provider/provider.dart';
 
 import '../../data/app_repository.dart';
 import '../../theme/app_colors.dart';
+import '../../widgets/ios_form.dart';
 
 /// 账户管理页：列出账户，支持新增、改名、删除。
 class AccountsView extends StatelessWidget {
@@ -201,24 +202,15 @@ class _AddAccountSheetState extends State<_AddAccountSheet> {
             controller: _nameCtrl,
             autofocus: true,
             textCapitalization: TextCapitalization.words,
-            decoration: InputDecoration(
-              labelText: '账户名称',
-              border: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(8),
-              ),
-            ),
+            decoration: iosInputDecoration(context, hint: '账户名称'),
             onChanged: (_) => setState(() {}),
           ),
           const SizedBox(height: 12),
           TextField(
             controller: _currencyCtrl,
             textCapitalization: TextCapitalization.characters,
-            decoration: InputDecoration(
-              labelText: '币种代码（如 CNY、USD）',
-              border: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(8),
-              ),
-            ),
+            decoration:
+                iosInputDecoration(context, hint: '币种代码（如 CNY、USD）'),
           ),
           const SizedBox(height: 16),
           Row(
@@ -308,12 +300,7 @@ class _RenameAccountSheetState extends State<_RenameAccountSheet> {
             controller: _nameCtrl,
             autofocus: true,
             textCapitalization: TextCapitalization.words,
-            decoration: InputDecoration(
-              labelText: '账户名称',
-              border: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(8),
-              ),
-            ),
+            decoration: iosInputDecoration(context, hint: '账户名称'),
             onChanged: (_) => setState(() {}),
           ),
           const SizedBox(height: 16),

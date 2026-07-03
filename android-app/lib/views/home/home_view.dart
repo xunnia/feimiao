@@ -1398,7 +1398,10 @@ class _TransactionRow extends StatelessWidget {
             ),
             const SizedBox(width: 6),
             Text(
-              '-${MoneyFormat.string(net)}',
+              // 净额归 0（全额退/报销）就不带负号，避免「-¥0.00」。
+              net <= Decimal.zero
+                  ? MoneyFormat.string(net)
+                  : '-${MoneyFormat.string(net)}',
               style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                     color: scheme.onSurface,
                     fontWeight: FontWeight.w600,
