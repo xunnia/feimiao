@@ -19,12 +19,14 @@ import '../../core/haptics.dart';
 import '../../theme/app_colors.dart';
 import '../../widgets/app_buttons.dart';
 import '../../widgets/app_date_picker.dart';
+import '../../widgets/app_toast.dart';
 import '../../widgets/glass.dart';
 import '../../widgets/ios_menu.dart';
 import '../../widgets/mascot.dart';
 import '../../widgets/pressable_scale.dart';
 import '../../widgets/settings_ui.dart';
 import '../../widgets/sliding_segment.dart';
+import 'category_txns_view.dart';
 import 'monthly_report_view.dart';
 
 /// 图表 Y 轴的「漂亮步长」：把最大值凑成 100/200/500/1000/2000/5000… 这类整齐刻度。
@@ -52,6 +54,18 @@ AxisTitles _moneyLeftTitles(ColorScheme scheme, double step) {
               style: TextStyle(fontSize: 9, color: scheme.onSurfaceVariant)),
         );
       },
+    ),
+  );
+}
+
+/// 点分类下钻：进「该分类在本区间的明细」页。
+void _drillToCategory(
+    BuildContext context, String name, DateTime start, DateTime end) {
+  Navigator.push(
+    context,
+    CupertinoPageRoute<void>(
+      builder: (_) =>
+          CategoryTxnsView(categoryName: name, start: start, end: end),
     ),
   );
 }
@@ -381,6 +395,8 @@ class _WeekContent extends StatelessWidget {
                 totalLabel: '本周支出',
                 total: s.totalExpense,
                 categories: s.expenseByCategory,
+                onDrill: (n) =>
+                    _drillToCategory(context, n, weekStart, weekEnd),
               ),
         'daily' => !hasExpense
             ? null
@@ -392,7 +408,10 @@ class _WeekContent extends StatelessWidget {
             ? null
             : _SectionCard(
                 title: '分类排行',
-                child: _CategoryRanking(categories: s.expenseByCategory),
+                child: _CategoryRanking(
+                    categories: s.expenseByCategory,
+                    onDrill: (n) =>
+                        _drillToCategory(context, n, weekStart, weekEnd)),
               ),
         'top5' => top5.isEmpty
             ? null
@@ -501,17 +520,21 @@ class _MonthlyContent extends StatelessWidget {
     return _ManagedCards(
       repo: repo,
       header: header,
-      buildCard: (k) => _buildCard(k, summary, prevSummary, top5),
+      buildCard: (k) => _buildCard(context, k, summary, prevSummary, top5),
     );
   }
 
   Widget? _buildCard(
+    BuildContext context,
     String key,
     MonthlySummary summary,
     MonthlySummary prevSummary,
     List<TransactionRecord> top5,
   ) {
     final hasExpense = summary.expenseByCategory.isNotEmpty;
+    final mStart = DateTime(displayedMonth.year, displayedMonth.month, 1);
+    final mEnd = DateTime(displayedMonth.year, displayedMonth.month + 1, 0);
+    void drill(String n) => _drillToCategory(context, n, mStart, mEnd);
     switch (key) {
       case 'insights':
         return _InsightsCard(
@@ -542,6 +565,7 @@ class _MonthlyContent extends StatelessWidget {
           totalLabel: '本月支出',
           total: summary.totalExpense,
           categories: summary.expenseByCategory,
+          onDrill: drill,
         );
       case 'daily':
         if (!hasExpense) return null;
@@ -564,7 +588,8 @@ class _MonthlyContent extends StatelessWidget {
         if (!hasExpense) return null;
         return _SectionCard(
           title: '分类排行',
-          child: _CategoryRanking(categories: summary.expenseByCategory),
+          child: _CategoryRanking(
+              categories: summary.expenseByCategory, onDrill: drill),
         );
       case 'top5':
         if (top5.isEmpty) return null;
@@ -919,6 +944,8 @@ class _YearlyContent extends StatelessWidget {
                 totalLabel: '全年支出',
                 total: summary.totalExpense,
                 categories: summary.expenseByCategory,
+                onDrill: (n) => _drillToCategory(
+                    context, n, DateTime(year, 1, 1), DateTime(year, 12, 31)),
               ),
         'ranking' => !hasExpense
             ? null
@@ -927,6 +954,8 @@ class _YearlyContent extends StatelessWidget {
                 child: _CategoryRanking(
                   categories: summary.expenseByCategory,
                   maxItems: 10,
+                  onDrill: (n) => _drillToCategory(context, n,
+                      DateTime(year, 1, 1), DateTime(year, 12, 31)),
                 ),
               ),
         'top5' => top5.isEmpty
@@ -1046,6 +1075,7 @@ class _CustomContent extends StatelessWidget {
                 totalLabel: '期间支出',
                 total: s.totalExpense,
                 categories: s.expenseByCategory,
+                onDrill: (n) => _drillToCategory(context, n, r.start, r.end),
               ),
         // 区间不超过约两个月才画每日线，太长看不清。
         'daily' => !hasExpense || s.dayCount > 62
@@ -1073,7 +1103,10 @@ class _CustomContent extends StatelessWidget {
             ? null
             : _SectionCard(
                 title: '分类排行',
-                child: _CategoryRanking(categories: s.expenseByCategory),
+                child: _CategoryRanking(
+                    categories: s.expenseByCategory,
+                    onDrill: (n) =>
+                        _drillToCategory(context, n, r.start, r.end)),
               ),
         'top5' => top5.isEmpty
             ? null
@@ -1549,6 +1582,23 @@ class _BudgetBatteryCard extends StatelessWidget {
     final lineColor = over ? AppColors.warning : scheme.primary;
     final xInterval = (days / 6).ceilToDouble().clamp(1.0, 999.0);
 
+    // 底部每日「支出/收入」小柱 strip 的数据。
+    final expColor = AppColors.expense(scheme);
+    final incColor = AppColors.income(scheme);
+    final dExp = [
+      for (final d in dailyTotals)
+        MoneyFormat.toDouble(d.expense).clamp(0.0, double.infinity)
+    ];
+    final dInc = [
+      for (final d in dailyTotals)
+        MoneyFormat.toDouble(d.income).clamp(0.0, double.infinity)
+    ];
+    final stripMax = [...dExp, ...dInc].fold<double>(0.0, (a, b) => a > b ? a : b);
+    final stripStep = _niceStep(stripMax);
+    final stripMaxY = stripMax <= 0
+        ? stripStep
+        : ((stripMax / stripStep).floor() + 1) * stripStep;
+
     return _SectionCard(
       title: '本月电量',
       trailing: Text(
@@ -1560,94 +1610,150 @@ class _BudgetBatteryCard extends StatelessWidget {
           color: over ? AppColors.warning : scheme.onSurfaceVariant,
         ),
       ),
-      child: SizedBox(
-        height: 176,
-        child: LineChart(
-          LineChartData(
-            minY: loY,
-            maxY: maxY,
-            minX: 0,
-            maxX: (days - 1).toDouble(),
-            lineBarsData: [
-              LineChartBarData(
-                spots: spots,
-                isCurved: false,
-                color: lineColor,
-                barWidth: 2.6,
-                dotData: const FlDotData(show: false),
-                belowBarData: BarAreaData(
+      child: Column(
+        children: [
+          // ── 上：预算剩余"电量"线 ──
+          SizedBox(
+            height: 130,
+            child: LineChart(
+              LineChartData(
+                minY: loY,
+                maxY: maxY,
+                minX: 0,
+                maxX: (days - 1).toDouble(),
+                lineBarsData: [
+                  LineChartBarData(
+                    spots: spots,
+                    isCurved: false,
+                    color: lineColor,
+                    barWidth: 2.6,
+                    dotData: const FlDotData(show: false),
+                    belowBarData: BarAreaData(
+                      show: true,
+                      gradient: LinearGradient(
+                        begin: Alignment.topCenter,
+                        end: Alignment.bottomCenter,
+                        colors: [
+                          lineColor.withValues(alpha: 0.24),
+                          lineColor.withValues(alpha: 0.02),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
+                extraLinesData: ExtraLinesData(horizontalLines: [
+                  if (over)
+                    HorizontalLine(
+                      y: 0,
+                      color: AppColors.warning.withValues(alpha: 0.6),
+                      strokeWidth: 1,
+                      dashArray: const [4, 3],
+                    ),
+                ]),
+                gridData: FlGridData(
                   show: true,
-                  gradient: LinearGradient(
-                    begin: Alignment.topCenter,
-                    end: Alignment.bottomCenter,
-                    colors: [
-                      lineColor.withValues(alpha: 0.24),
-                      lineColor.withValues(alpha: 0.02),
-                    ],
+                  drawVerticalLine: false,
+                  horizontalInterval: step,
+                  getDrawingHorizontalLine: (v) => FlLine(
+                    color: scheme.outlineVariant.withValues(alpha: 0.3),
+                    strokeWidth: 0.5,
+                  ),
+                ),
+                borderData: FlBorderData(show: false),
+                titlesData: FlTitlesData(
+                  leftTitles: _moneyLeftTitles(scheme, step),
+                  rightTitles: const AxisTitles(
+                      sideTitles: SideTitles(showTitles: false)),
+                  topTitles: const AxisTitles(
+                      sideTitles: SideTitles(showTitles: false)),
+                  bottomTitles: const AxisTitles(
+                      sideTitles: SideTitles(showTitles: false)),
+                ),
+                lineTouchData: LineTouchData(
+                  touchTooltipData: LineTouchTooltipData(
+                    getTooltipItems: (spots) => spots.map((s) {
+                      return LineTooltipItem(
+                        '第${s.x.toInt() + 1}天 剩 ${MoneyFormat.axisLabel(s.y)}',
+                        TextStyle(
+                            color: lineColor,
+                            fontSize: 12,
+                            fontWeight: FontWeight.w500),
+                      );
+                    }).toList(),
                   ),
                 ),
               ),
-            ],
-            extraLinesData: ExtraLinesData(horizontalLines: [
-              if (over)
-                HorizontalLine(
-                  y: 0,
-                  color: AppColors.warning.withValues(alpha: 0.6),
-                  strokeWidth: 1,
-                  dashArray: const [4, 3],
-                ),
-            ]),
-            gridData: FlGridData(
-              show: true,
-              drawVerticalLine: false,
-              horizontalInterval: step,
-              getDrawingHorizontalLine: (v) => FlLine(
-                color: scheme.outlineVariant.withValues(alpha: 0.3),
-                strokeWidth: 0.5,
-              ),
             ),
-            borderData: FlBorderData(show: false),
-            titlesData: FlTitlesData(
-              leftTitles: _moneyLeftTitles(scheme, step),
-              rightTitles: const AxisTitles(
-                  sideTitles: SideTitles(showTitles: false)),
-              topTitles: const AxisTitles(
-                  sideTitles: SideTitles(showTitles: false)),
-              bottomTitles: AxisTitles(
-                sideTitles: SideTitles(
-                  showTitles: true,
-                  reservedSize: 20,
-                  interval: xInterval,
-                  getTitlesWidget: (v, meta) {
-                    final day = v.toInt() + 1;
-                    if (day != 1 && day % xInterval.toInt() != 0) {
-                      return const SizedBox.shrink();
-                    }
-                    return Padding(
-                      padding: const EdgeInsets.only(top: 6),
-                      child: Text('$day',
-                          style: TextStyle(
-                              fontSize: 9, color: scheme.onSurfaceVariant)),
-                    );
-                  },
+          ),
+          const SizedBox(height: 4),
+          // ── 下：每日 支出(深)/收入(金) 小柱条，点看当天 ──
+          SizedBox(
+            height: 46,
+            child: BarChart(
+              BarChartData(
+                minY: 0,
+                maxY: stripMaxY,
+                alignment: BarChartAlignment.spaceAround,
+                barTouchData: BarTouchData(
+                  touchTooltipData: BarTouchTooltipData(
+                    getTooltipItem: (g, gi, rod, ri) => BarTooltipItem(
+                      '${g.x.toInt() + 1}日 ${ri == 0 ? '支' : '收'} '
+                      '${MoneyFormat.axisLabel(rod.toY)}',
+                      TextStyle(
+                          color: ri == 0 ? expColor : incColor,
+                          fontSize: 11,
+                          fontWeight: FontWeight.w600),
+                    ),
+                  ),
                 ),
-              ),
-            ),
-            lineTouchData: LineTouchData(
-              touchTooltipData: LineTouchTooltipData(
-                getTooltipItems: (spots) => spots.map((s) {
-                  return LineTooltipItem(
-                    '第${s.x.toInt() + 1}天 剩 ${MoneyFormat.axisLabel(s.y)}',
-                    TextStyle(
-                        color: lineColor,
-                        fontSize: 12,
-                        fontWeight: FontWeight.w500),
-                  );
-                }).toList(),
+                barGroups: [
+                  for (var i = 0; i < days; i++)
+                    BarChartGroupData(
+                      x: i,
+                      barsSpace: 1,
+                      barRods: [
+                        BarChartRodData(
+                            toY: dExp[i], color: expColor, width: 3),
+                        BarChartRodData(
+                            toY: dInc[i], color: incColor, width: 3),
+                      ],
+                    ),
+                ],
+                gridData: const FlGridData(show: false),
+                borderData: FlBorderData(show: false),
+                titlesData: FlTitlesData(
+                  leftTitles: const AxisTitles(
+                      sideTitles:
+                          SideTitles(showTitles: false, reservedSize: 40)),
+                  rightTitles: const AxisTitles(
+                      sideTitles: SideTitles(showTitles: false)),
+                  topTitles: const AxisTitles(
+                      sideTitles: SideTitles(showTitles: false)),
+                  bottomTitles: AxisTitles(
+                    sideTitles: SideTitles(
+                      showTitles: true,
+                      reservedSize: 16,
+                      interval: xInterval,
+                      getTitlesWidget: (v, meta) {
+                        final day = v.toInt() + 1;
+                        if (day != 1 && day % xInterval.toInt() != 0) {
+                          return const SizedBox.shrink();
+                        }
+                        return Padding(
+                          padding: const EdgeInsets.only(top: 4),
+                          child: Text('$day',
+                              style: TextStyle(
+                                  fontSize: 9,
+                                  color: scheme.onSurfaceVariant)),
+                        );
+                      },
+                    ),
+                  ),
+                ),
               ),
             ),
           ),
-        ),
+        ],
       ),
     );
   }
@@ -1726,11 +1832,15 @@ class _RingCard extends StatelessWidget {
   final Decimal total;
   final List<CategoryTotal> categories;
 
+  /// 点分类（图例）下钻到该分类明细；「其他」聚合项不下钻。
+  final void Function(String name)? onDrill;
+
   const _RingCard({
     required this.title,
     required this.totalLabel,
     required this.total,
     required this.categories,
+    this.onDrill,
   });
 
   /// 只取净额为正的分类；超过 6 类把尾部归成「其他」。
@@ -1826,7 +1936,11 @@ class _RingCard extends StatelessWidget {
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: List.generate(items.length, (i) {
                   final item = items[i];
-                  return Padding(
+                  final canDrill = onDrill != null && item.name != '其他';
+                  return GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    onTap: canDrill ? () => onDrill!(item.name) : null,
+                    child: Padding(
                     padding: const EdgeInsets.symmetric(vertical: 3),
                     child: Row(
                       children: [
@@ -1865,9 +1979,14 @@ class _RingCard extends StatelessWidget {
                                 fontWeight: FontWeight.w500,
                               ),
                         ),
+                        if (canDrill) ...[
+                          const SizedBox(width: 2),
+                          Icon(CupertinoIcons.chevron_forward,
+                              size: 11, color: scheme.onSurfaceVariant),
+                        ],
                       ],
                     ),
-                  );
+                  ));
                 }),
               ),
             ),
@@ -2116,8 +2235,10 @@ class _DualLineChart extends StatelessWidget {
 class _CategoryRanking extends StatelessWidget {
   final List<CategoryTotal> categories;
   final int? maxItems;
+  final void Function(String name)? onDrill;
 
-  const _CategoryRanking({required this.categories, this.maxItems});
+  const _CategoryRanking(
+      {required this.categories, this.maxItems, this.onDrill});
 
   String? _keyForName(String name) {
     for (final s in CategorySeed.all) {
@@ -2136,7 +2257,10 @@ class _CategoryRanking extends StatelessWidget {
       children: items.map((item) {
         final pct = (item.share * 100).toStringAsFixed(0);
         final key = _keyForName(item.name);
-        return Padding(
+        return GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTap: onDrill == null ? null : () => onDrill!(item.name),
+          child: Padding(
           padding: const EdgeInsets.only(bottom: 10),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -2195,7 +2319,7 @@ class _CategoryRanking extends StatelessWidget {
               ),
             ],
           ),
-        );
+        ));
       }).toList(),
     );
   }
@@ -2347,24 +2471,33 @@ class _CalendarHeatmap extends StatelessWidget {
           children: [
             for (var i = 0; i < leading; i++) const SizedBox.shrink(),
             for (final d in dailyTotals)
-              Builder(builder: (_) {
+              Builder(builder: (cellCtx) {
                 final v = MoneyFormat.toDouble(d.expense);
                 final t = maxVal <= 0 ? 0.0 : (v / maxVal).clamp(0.0, 1.0);
                 final bg = v <= 0
                     ? scheme.outlineVariant.withValues(alpha: 0.25)
                     : scheme.primary.withValues(alpha: 0.18 + 0.72 * t);
-                return Container(
-                  decoration: BoxDecoration(
-                    color: bg,
-                    borderRadius: BorderRadius.circular(5),
+                return GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTap: () => showAppToast(
+                    cellCtx,
+                    v <= 0
+                        ? '$month月${d.day}日 没花钱'
+                        : '$month月${d.day}日 支出 ${MoneyFormat.string(d.expense)}',
                   ),
-                  alignment: Alignment.center,
-                  child: Text(
-                    '${d.day}',
-                    style: TextStyle(
-                      fontSize: 9,
-                      color:
-                          t > 0.55 ? Colors.white : scheme.onSurfaceVariant,
+                  child: Container(
+                    decoration: BoxDecoration(
+                      color: bg,
+                      borderRadius: BorderRadius.circular(5),
+                    ),
+                    alignment: Alignment.center,
+                    child: Text(
+                      '${d.day}',
+                      style: TextStyle(
+                        fontSize: 9,
+                        color:
+                            t > 0.55 ? Colors.white : scheme.onSurfaceVariant,
+                      ),
                     ),
                   ),
                 );
@@ -2550,6 +2683,21 @@ class _StackedBars12 extends StatelessWidget {
           child: BarChart(
             BarChartData(
               maxY: ((maxV / step).floor() + 1) * step,
+              barTouchData: BarTouchData(
+                touchTooltipData: BarTouchTooltipData(
+                  getTooltipItem: (g, gi, rod, ri) {
+                    final i = g.x.toInt();
+                    return BarTooltipItem(
+                      '${months[i].month}月\n支 ${MoneyFormat.axisLabel(exp[i])}  '
+                      '收 ${MoneyFormat.axisLabel(inc[i])}',
+                      TextStyle(
+                          color: scheme.onSurface,
+                          fontSize: 11,
+                          fontWeight: FontWeight.w500),
+                    );
+                  },
+                ),
+              ),
               barGroups: [
                 for (var i = 0; i < months.length; i++)
                   BarChartGroupData(
