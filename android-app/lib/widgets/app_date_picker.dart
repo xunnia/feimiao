@@ -5,6 +5,7 @@ import '../core/haptics.dart';
 import '../theme/app_colors.dart';
 import '../views/common/app_sheet.dart';
 import 'pressable_scale.dart';
+import 'settings_ui.dart';
 
 /// 全局日历选择器（对齐 iOS/咔皮体验，替代难用的系统 showDatePicker）。
 ///
@@ -440,6 +441,259 @@ class _DayCell extends StatelessWidget {
                       selected || isToday ? FontWeight.w600 : FontWeight.w400,
                   color: textColor)),
         ),
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 年 / 月 / 周 滚轮选择（统计页 周/月/年 维度切换用；对齐日期轮动样式标准）
+// ─────────────────────────────────────────────────────────────────────────────
+
+DateTime _mondayOfWeek(DateTime d) {
+  final day = DateTime(d.year, d.month, d.day);
+  return day.subtract(Duration(days: day.weekday - 1));
+}
+
+/// 某年的各周（周一为起点，起始日落在该年内的周）。
+List<DateTime> _weeksOfYear(int y) {
+  var m = _mondayOfWeek(DateTime(y, 1, 1));
+  final end = DateTime(y, 12, 31);
+  final res = <DateTime>[];
+  while (!m.isAfter(end)) {
+    res.add(m);
+    m = m.add(const Duration(days: 7));
+  }
+  return res;
+}
+
+/// 月份滚轮：年 + 月，返回 DateTime(年, 月, 1)。
+Future<DateTime?> showAppMonthPicker(BuildContext context,
+    {required DateTime initial, DateTime? last}) {
+  return showBlurSheet<DateTime>(context,
+      child: _MonthPickerSheet(
+          initial: DateTime(initial.year, initial.month),
+          last: last ?? DateTime(2100, 12)));
+}
+
+/// 年份滚轮，返回年份。
+Future<int?> showAppYearPicker(BuildContext context,
+    {required int initial, int? lastYear}) {
+  return showBlurSheet<int>(context,
+      child: _YearPickerSheet(initial: initial, lastYear: lastYear ?? 2100));
+}
+
+/// 周滚轮：先选年、再选第几周（含起始日期），返回该周周一。
+Future<DateTime?> showAppWeekPicker(BuildContext context,
+    {required DateTime initialWeekStart, DateTime? last}) {
+  return showBlurSheet<DateTime>(context,
+      child: _WeekPickerSheet(
+          initial: _mondayOfWeek(initialWeekStart),
+          last: last ?? DateTime(2100, 12, 31)));
+}
+
+Widget _wheel({
+  required int count,
+  required int initialItem,
+  required ValueChanged<int> onChanged,
+  required IndexedWidgetBuilder itemBuilder,
+  Key? key,
+}) {
+  return CupertinoPicker.builder(
+    key: key,
+    scrollController: FixedExtentScrollController(initialItem: initialItem),
+    itemExtent: 40,
+    onSelectedItemChanged: onChanged,
+    childCount: count,
+    itemBuilder: itemBuilder,
+  );
+}
+
+class _MonthPickerSheet extends StatefulWidget {
+  final DateTime initial;
+  final DateTime last;
+  const _MonthPickerSheet({required this.initial, required this.last});
+  @override
+  State<_MonthPickerSheet> createState() => _MonthPickerSheetState();
+}
+
+class _MonthPickerSheetState extends State<_MonthPickerSheet> {
+  static const _firstYear = 2015;
+  late int _y = widget.initial.year.clamp(_firstYear, widget.last.year);
+  late int _m = widget.initial.month;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final years = [for (int y = _firstYear; y <= widget.last.year; y++) y];
+    TextStyle st() => TextStyle(color: scheme.onSurface);
+    return SizedBox(
+      width: double.infinity,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          SheetHeader(
+            title: '选择月份',
+            onClose: () => Navigator.pop(context),
+            actionLabel: '确认',
+            onAction: () {
+              var y = _y, m = _m;
+              if (DateTime(y, m)
+                  .isAfter(DateTime(widget.last.year, widget.last.month))) {
+                y = widget.last.year;
+                m = widget.last.month;
+              }
+              Navigator.pop(context, DateTime(y, m));
+            },
+          ),
+          SizedBox(
+            height: 200,
+            child: Row(children: [
+              Expanded(
+                child: _wheel(
+                  count: years.length,
+                  initialItem: years.indexOf(_y),
+                  onChanged: (i) => _y = years[i],
+                  itemBuilder: (_, i) =>
+                      Center(child: Text('${years[i]}年', style: st())),
+                ),
+              ),
+              Expanded(
+                child: _wheel(
+                  count: 12,
+                  initialItem: _m - 1,
+                  onChanged: (i) => _m = i + 1,
+                  itemBuilder: (_, i) =>
+                      Center(child: Text('${i + 1}月', style: st())),
+                ),
+              ),
+            ]),
+          ),
+          const SizedBox(height: 8),
+        ],
+      ),
+    );
+  }
+}
+
+class _YearPickerSheet extends StatefulWidget {
+  final int initial;
+  final int lastYear;
+  const _YearPickerSheet({required this.initial, required this.lastYear});
+  @override
+  State<_YearPickerSheet> createState() => _YearPickerSheetState();
+}
+
+class _YearPickerSheetState extends State<_YearPickerSheet> {
+  static const _firstYear = 2015;
+  late int _y = widget.initial.clamp(_firstYear, widget.lastYear);
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final years = [for (int y = _firstYear; y <= widget.lastYear; y++) y];
+    return SizedBox(
+      width: double.infinity,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          SheetHeader(
+            title: '选择年份',
+            onClose: () => Navigator.pop(context),
+            actionLabel: '确认',
+            onAction: () => Navigator.pop(context, _y),
+          ),
+          SizedBox(
+            height: 200,
+            child: _wheel(
+              count: years.length,
+              initialItem: years.indexOf(_y),
+              onChanged: (i) => _y = years[i],
+              itemBuilder: (_, i) => Center(
+                  child: Text('${years[i]}年',
+                      style: TextStyle(color: scheme.onSurface))),
+            ),
+          ),
+          const SizedBox(height: 8),
+        ],
+      ),
+    );
+  }
+}
+
+class _WeekPickerSheet extends StatefulWidget {
+  final DateTime initial; // 该周周一
+  final DateTime last;
+  const _WeekPickerSheet({required this.initial, required this.last});
+  @override
+  State<_WeekPickerSheet> createState() => _WeekPickerSheetState();
+}
+
+class _WeekPickerSheetState extends State<_WeekPickerSheet> {
+  static const _firstYear = 2015;
+  late int _y = widget.initial.year.clamp(_firstYear, widget.last.year);
+  late List<DateTime> _weeks = _weeksOfYear(_y);
+  late int _wIdx = _weeks
+      .indexWhere((w) => !w.isBefore(widget.initial))
+      .clamp(0, _weeks.length - 1);
+
+  String _label(int i) {
+    final w = _weeks[i];
+    return '第${i + 1}周（${w.month}/${w.day}起）';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final years = [for (int y = _firstYear; y <= widget.last.year; y++) y];
+    return SizedBox(
+      width: double.infinity,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          SheetHeader(
+            title: '选择周',
+            onClose: () => Navigator.pop(context),
+            actionLabel: '确认',
+            onAction: () {
+              var d = _weeks[_wIdx.clamp(0, _weeks.length - 1)];
+              if (d.isAfter(widget.last)) d = _mondayOfWeek(widget.last);
+              Navigator.pop(context, d);
+            },
+          ),
+          SizedBox(
+            height: 200,
+            child: Row(children: [
+              SizedBox(
+                width: 96,
+                child: _wheel(
+                  count: years.length,
+                  initialItem: years.indexOf(_y),
+                  onChanged: (i) => setState(() {
+                    _y = years[i];
+                    _weeks = _weeksOfYear(_y);
+                    if (_wIdx >= _weeks.length) _wIdx = _weeks.length - 1;
+                  }),
+                  itemBuilder: (_, i) => Center(
+                      child: Text('${years[i]}年',
+                          style: TextStyle(color: scheme.onSurface))),
+                ),
+              ),
+              Expanded(
+                child: _wheel(
+                  key: ValueKey(_y),
+                  count: _weeks.length,
+                  initialItem: _wIdx.clamp(0, _weeks.length - 1),
+                  onChanged: (i) => _wIdx = i,
+                  itemBuilder: (_, i) => Center(
+                      child: Text(_label(i),
+                          style: TextStyle(color: scheme.onSurface))),
+                ),
+              ),
+            ]),
+          ),
+          const SizedBox(height: 8),
+        ],
       ),
     );
   }

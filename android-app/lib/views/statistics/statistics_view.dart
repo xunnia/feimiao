@@ -60,32 +60,29 @@ class _StatisticsViewState extends State<StatisticsView> {
     return day.subtract(Duration(days: day.weekday - 1));
   }
 
-  void _shiftMonth(int delta) {
-    setState(() {
-      final shifted = DateTime(
-        _displayedMonth.year,
-        _displayedMonth.month + delta,
-      );
-      final now = DateTime.now();
-      if (shifted.isAfter(DateTime(now.year, now.month))) return;
-      _displayedMonth = shifted;
-    });
+  // 月/周/年 改用滚轮选择（点期间文案的 ⌄ 打开，替代左右翻箭头）。
+  Future<void> _pickMonth() async {
+    final picked = await showAppMonthPicker(context,
+        initial: _displayedMonth, last: DateTime.now());
+    if (picked != null && mounted) {
+      setState(() => _displayedMonth = DateTime(picked.year, picked.month));
+    }
   }
 
-  void _shiftWeek(int delta) {
-    setState(() {
-      final shifted = _weekStart.add(Duration(days: 7 * delta));
-      if (shifted.isAfter(DateTime.now())) return;
-      _weekStart = shifted;
-    });
+  Future<void> _pickWeek() async {
+    final picked = await showAppWeekPicker(context,
+        initialWeekStart: _weekStart, last: DateTime.now());
+    if (picked != null && mounted) {
+      setState(() => _weekStart = _mondayOf(picked));
+    }
   }
 
-  void _shiftYear(int delta) {
-    setState(() {
-      final y = _displayedMonth.year + delta;
-      if (y > DateTime.now().year) return;
-      _displayedMonth = DateTime(y, _displayedMonth.month);
-    });
+  Future<void> _pickYear() async {
+    final picked = await showAppYearPicker(context,
+        initial: _displayedMonth.year, lastYear: DateTime.now().year);
+    if (picked != null && mounted) {
+      setState(() => _displayedMonth = DateTime(picked, _displayedMonth.month));
+    }
   }
 
   bool get _isCurrentMonth {
@@ -93,9 +90,6 @@ class _StatisticsViewState extends State<StatisticsView> {
     return _displayedMonth.year == now.year &&
         _displayedMonth.month == now.month;
   }
-
-  bool get _isCurrentWeek =>
-      _weekStart == _mondayOf(DateTime.now());
 
   DateTime _dayOnly(DateTime d) => DateTime(d.year, d.month, d.day);
 
@@ -208,8 +202,7 @@ class _StatisticsViewState extends State<StatisticsView> {
           records: records,
           repo: repo,
           weekStart: _weekStart,
-          isCurrentWeek: _isCurrentWeek,
-          onShift: _shiftWeek,
+          onPick: _pickWeek,
         );
       case _StatRange.month:
         return _MonthlyContent(
@@ -220,15 +213,14 @@ class _StatisticsViewState extends State<StatisticsView> {
           // 预算期间模型：历史月显示当时生效的预算。
           monthlyBudget: repo.budgetTotalFor(
               _displayedMonth.year, _displayedMonth.month),
-          onShiftMonth: _shiftMonth,
+          onPick: _pickMonth,
         );
       case _StatRange.year:
         return _YearlyContent(
           records: records,
           repo: repo,
           year: _displayedMonth.year,
-          isCurrentYear: _displayedMonth.year == DateTime.now().year,
-          onShift: _shiftYear,
+          onPick: _pickYear,
         );
       case _StatRange.custom:
         return _CustomContent(
@@ -304,15 +296,13 @@ class _WeekContent extends StatelessWidget {
   final List<TransactionRecord> records;
   final AppRepository repo;
   final DateTime weekStart;
-  final bool isCurrentWeek;
-  final void Function(int) onShift;
+  final VoidCallback onPick;
 
   const _WeekContent({
     required this.records,
     required this.repo,
     required this.weekStart,
-    required this.isCurrentWeek,
-    required this.onShift,
+    required this.onPick,
   });
 
   @override
@@ -325,11 +315,7 @@ class _WeekContent extends StatelessWidget {
 
     final header = Column(
       children: [
-        _ArrowSwitcher(
-          label: label,
-          onPrev: () => onShift(-1),
-          onNext: isCurrentWeek ? null : () => onShift(1),
-        ),
+        _PeriodDropdown(label: label, onTap: onPick),
         const SizedBox(height: 16),
         _TotalsRow(
           expense: s.totalExpense,
@@ -414,7 +400,7 @@ class _MonthlyContent extends StatelessWidget {
   final DateTime displayedMonth;
   final bool isCurrentMonth;
   final Decimal? monthlyBudget;
-  final void Function(int) onShiftMonth;
+  final VoidCallback onPick;
 
   const _MonthlyContent({
     required this.records,
@@ -422,7 +408,7 @@ class _MonthlyContent extends StatelessWidget {
     required this.displayedMonth,
     required this.isCurrentMonth,
     required this.monthlyBudget,
-    required this.onShiftMonth,
+    required this.onPick,
   });
 
   @override
@@ -450,10 +436,9 @@ class _MonthlyContent extends StatelessWidget {
 
     final header = Column(
       children: [
-        _ArrowSwitcher(
-          label: '${displayedMonth.year} 年 ${displayedMonth.month} 月',
-          onPrev: () => onShiftMonth(-1),
-          onNext: isCurrentMonth ? null : () => onShiftMonth(1),
+        _PeriodDropdown(
+          label: '${displayedMonth.year}年${displayedMonth.month}月',
+          onTap: onPick,
         ),
         const SizedBox(height: 16),
         _TotalsRow(
@@ -822,15 +807,13 @@ class _YearlyContent extends StatelessWidget {
   final List<TransactionRecord> records;
   final AppRepository repo;
   final int year;
-  final bool isCurrentYear;
-  final void Function(int) onShift;
+  final VoidCallback onPick;
 
   const _YearlyContent({
     required this.records,
     required this.repo,
     required this.year,
-    required this.isCurrentYear,
-    required this.onShift,
+    required this.onPick,
   });
 
   @override
@@ -846,11 +829,7 @@ class _YearlyContent extends StatelessWidget {
 
     final header = Column(
       children: [
-        _ArrowSwitcher(
-          label: '$year 年',
-          onPrev: () => onShift(-1),
-          onNext: isCurrentYear ? null : () => onShift(1),
-        ),
+        _PeriodDropdown(label: '$year年', onTap: onPick),
         const SizedBox(height: 16),
         _TotalsRow(
           expense: summary.totalExpense,
@@ -1188,61 +1167,33 @@ class _InsightsCard extends StatelessWidget {
 // 通用小件
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// 左右箭头 + 中间期间文案的切换器（周/月/年通用）。
-class _ArrowSwitcher extends StatelessWidget {
+/// 期间文案 + ⌄ 的下拉切换器（周/月/年通用）：点开走滚轮选择，替代左右翻箭头。
+class _PeriodDropdown extends StatelessWidget {
   final String label;
-  final VoidCallback? onPrev;
-  final VoidCallback? onNext;
+  final VoidCallback onTap;
 
-  const _ArrowSwitcher({
-    required this.label,
-    required this.onPrev,
-    required this.onNext,
-  });
+  const _PeriodDropdown({required this.label, required this.onTap});
 
   @override
   Widget build(BuildContext context) {
-    return Row(
-      children: [
-        _glassArrow(context, CupertinoIcons.chevron_back, onPrev),
-        Expanded(
-          child: Center(
-            child: Text(
+    final scheme = Theme.of(context).colorScheme;
+    return Center(
+      child: PressableScale(
+        onPressed: onTap,
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
               label,
               style: Theme.of(context)
                   .textTheme
                   .titleMedium
                   ?.copyWith(fontWeight: FontWeight.w500, fontFamily: 'Nunito'),
             ),
-          ),
-        ),
-        _glassArrow(context, CupertinoIcons.chevron_forward, onNext),
-      ],
-    );
-  }
-
-  Widget _glassArrow(
-      BuildContext context, IconData icon, VoidCallback? onTap) {
-    final scheme = Theme.of(context).colorScheme;
-    final enabled = onTap != null;
-    return GestureDetector(
-      behavior: HitTestBehavior.opaque,
-      onTap: onTap == null
-          ? null
-          : () {
-              Haptics.selection();
-              onTap();
-            },
-      child: GlassSurface(
-        circle: true,
-        blur: 0, // 纯色背景，模糊看不出来，省 GPU
-        padding: const EdgeInsets.all(8),
-        child: Icon(
-          icon,
-          size: 18,
-          color: enabled
-              ? scheme.onSurfaceVariant
-              : scheme.onSurfaceVariant.withValues(alpha: 0.3),
+            const SizedBox(width: 4),
+            Icon(CupertinoIcons.chevron_down,
+                size: 17, color: scheme.onSurfaceVariant),
+          ],
         ),
       ),
     );
@@ -2238,126 +2189,6 @@ class _CalendarHeatmap extends StatelessWidget {
                 style:
                     TextStyle(fontSize: 10, color: scheme.onSurfaceVariant)),
           ],
-        ),
-      ],
-    );
-  }
-}
-
-/// 本月 vs 上月：TOP5 分类的分组柱状对比。
-class _CompareBars extends StatelessWidget {
-  final MonthlySummary current;
-  final MonthlySummary previous;
-
-  const _CompareBars({required this.current, required this.previous});
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    final cats = current.expenseByCategory
-        .where((c) => c.total > Decimal.zero)
-        .take(5)
-        .toList();
-    if (cats.isEmpty) {
-      return Text('本月还没有支出',
-          style: TextStyle(fontSize: 12, color: scheme.onSurfaceVariant));
-    }
-    double prevOf(String name) {
-      final p =
-          previous.expenseByCategory.where((c) => c.name == name).toList();
-      return p.isEmpty ? 0 : MoneyFormat.toDouble(p.first.total);
-    }
-
-    final curColor = scheme.primary;
-    final prevColor = scheme.outlineVariant;
-    var maxV = 0.0;
-    for (final c in cats) {
-      final cur = MoneyFormat.toDouble(c.total);
-      final prev = prevOf(c.name);
-      if (cur > maxV) maxV = cur;
-      if (prev > maxV) maxV = prev;
-    }
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Row(
-          children: [
-            _LegendDot(color: curColor, label: '本月'),
-            const SizedBox(width: 14),
-            _LegendDot(color: prevColor, label: '上月'),
-          ],
-        ),
-        const SizedBox(height: 12),
-        SizedBox(
-          height: 170,
-          child: BarChart(
-            BarChartData(
-              maxY: maxV * 1.2,
-              barGroups: [
-                for (var i = 0; i < cats.length; i++)
-                  BarChartGroupData(
-                    x: i,
-                    barsSpace: 3,
-                    barRods: [
-                      BarChartRodData(
-                        toY: prevOf(cats[i].name),
-                        color: prevColor,
-                        width: 9,
-                        borderRadius: const BorderRadius.vertical(
-                            top: Radius.circular(3)),
-                      ),
-                      BarChartRodData(
-                        toY: MoneyFormat.toDouble(cats[i].total),
-                        color: curColor,
-                        width: 9,
-                        borderRadius: const BorderRadius.vertical(
-                            top: Radius.circular(3)),
-                      ),
-                    ],
-                  ),
-              ],
-              gridData: FlGridData(
-                show: true,
-                drawVerticalLine: false,
-                getDrawingHorizontalLine: (_) => FlLine(
-                  color: scheme.outlineVariant.withValues(alpha: 0.3),
-                  strokeWidth: 0.5,
-                ),
-              ),
-              borderData: FlBorderData(show: false),
-              titlesData: FlTitlesData(
-                leftTitles: const AxisTitles(
-                    sideTitles: SideTitles(showTitles: false)),
-                rightTitles: const AxisTitles(
-                    sideTitles: SideTitles(showTitles: false)),
-                topTitles: const AxisTitles(
-                    sideTitles: SideTitles(showTitles: false)),
-                bottomTitles: AxisTitles(
-                  sideTitles: SideTitles(
-                    showTitles: true,
-                    reservedSize: 22,
-                    getTitlesWidget: (v, meta) {
-                      final i = v.toInt();
-                      if (i < 0 || i >= cats.length) {
-                        return const SizedBox.shrink();
-                      }
-                      return Padding(
-                        padding: const EdgeInsets.only(top: 5),
-                        child: Text(
-                          cats[i].name.length > 3
-                              ? cats[i].name.substring(0, 3)
-                              : cats[i].name,
-                          style: TextStyle(
-                              fontSize: 10, color: scheme.onSurfaceVariant),
-                        ),
-                      );
-                    },
-                  ),
-                ),
-              ),
-            ),
-          ),
         ),
       ],
     );
