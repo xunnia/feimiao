@@ -1405,8 +1405,8 @@ class _AnswerBubbleState extends State<_AnswerBubble> {
   // 加粗样式：w450（可变字重），比正文 w350 高一小档——反差克制（用户 0702 定）。
   // 不支持可变字重的机型回退到 fontWeight w500。
   TextStyle _boldOf(TextStyle base) => base.copyWith(
-        fontWeight: FontWeight.w600,
-        fontVariations: const [FontVariation('wght', 560)],
+        fontWeight: FontWeight.w500,
+        fontVariations: const [FontVariation('wght', 430)],
       );
 
   // 轻量 markdown → 富文本：处理 **加粗**、行首 - / * 列表、# 标题；保留可选中。

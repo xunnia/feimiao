@@ -560,12 +560,6 @@ class _MonthlyContent extends StatelessWidget {
             month: displayedMonth.month,
           ),
         );
-      case 'compare':
-        if (!hasExpense && prevSummary.expenseByCategory.isEmpty) return null;
-        return _SectionCard(
-          title: '本月 vs 上月',
-          child: _CompareBars(current: summary, previous: prevSummary),
-        );
       case 'radar':
         if (summary.expenseByCategory.length < 3) return null;
         return _SectionCard(
@@ -609,14 +603,13 @@ class _ManagedCards extends StatelessWidget {
     'ranking': '分类排行',
     'top5': '单笔支出排行',
     'heatmap': '消费热力图',
-    'compare': '本月 vs 上月',
     'radar': '消费结构雷达',
     'stacked': '近 12 月收支',
   };
 
   /// 只在月视图有意义的卡（图表库里标注出来）。
   static const Set<String> monthOnly = {
-    'insights', 'budget', 'heatmap', 'compare', 'radar', 'stacked',
+    'insights', 'budget', 'heatmap', 'radar', 'stacked',
   };
 
   /// 默认可见卡片（其余在图表库里，用户自己加）。
@@ -762,31 +755,23 @@ class _TrendCardState extends State<_TrendCard> {
   Widget build(BuildContext context) {
     return _SectionCard(
       title: widget.title,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Align(
-            alignment: Alignment.centerRight,
-            child: SizedBox(
-              width: 132,
-              child: SlidingSegment<bool>(
-                items: const [(false, '支出'), (true, '收入')],
-                value: _showIncome,
-                onChanged: (v) {
-                  Haptics.selection();
-                  setState(() => _showIncome = v);
-                },
-              ),
-            ),
-          ),
-          const SizedBox(height: 10),
-          _DualLineChart(
-            xLabels: widget.xLabels,
-            expense: widget.expense,
-            income: widget.income,
-            showIncome: _showIncome,
-          ),
-        ],
+      // 支出/收入 切换挪到标题同一行（不再单独占一行、下压图表）。
+      trailing: SizedBox(
+        width: 124,
+        child: SlidingSegment<bool>(
+          items: const [(false, '支出'), (true, '收入')],
+          value: _showIncome,
+          onChanged: (v) {
+            Haptics.selection();
+            setState(() => _showIncome = v);
+          },
+        ),
+      ),
+      child: _DualLineChart(
+        xLabels: widget.xLabels,
+        expense: widget.expense,
+        income: widget.income,
+        showIncome: _showIncome,
       ),
     );
   }
@@ -952,24 +937,22 @@ class _DateField extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    // 咔皮式：纯文字 + 小 ⌄，不加底框（保持我们的日期格式）。
     return PressableScale(
       onPressed: onTap,
-      child: Container(
-        height: 42,
-        padding: const EdgeInsets.symmetric(horizontal: 14),
-        decoration: BoxDecoration(
-          color: AppColors.inputFill(scheme),
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: AppColors.hairline(scheme)),
-        ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 8),
         child: Row(
-          mainAxisAlignment: MainAxisAlignment.center,
+          mainAxisSize: MainAxisSize.min,
           children: [
             Text('${date.year}/${date.month}/${date.day}',
-                style: TextStyle(fontSize: 14, color: scheme.onSurface)),
-            const SizedBox(width: 6),
+                style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w600,
+                    color: scheme.onSurface)),
+            const SizedBox(width: 4),
             Icon(CupertinoIcons.chevron_down,
-                size: 13, color: scheme.onSurfaceVariant),
+                size: 14, color: scheme.onSurfaceVariant),
           ],
         ),
       ),
@@ -1528,7 +1511,11 @@ class _SectionCard extends StatelessWidget {
   final String title;
   final Widget child;
 
-  const _SectionCard({required this.title, required this.child});
+  /// 与标题同一行、靠右的部件（如趋势图的 支出/收入 切换）。
+  final Widget? trailing;
+
+  const _SectionCard(
+      {required this.title, required this.child, this.trailing});
 
   @override
   Widget build(BuildContext context) {
@@ -1550,12 +1537,19 @@ class _SectionCard extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            title,
-            style: Theme.of(context)
-                .textTheme
-                .titleSmall
-                ?.copyWith(fontWeight: FontWeight.w500),
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  title,
+                  style: Theme.of(context)
+                      .textTheme
+                      .titleSmall
+                      ?.copyWith(fontWeight: FontWeight.w500),
+                ),
+              ),
+              if (trailing != null) trailing!,
+            ],
           ),
           const SizedBox(height: 12),
           child,
