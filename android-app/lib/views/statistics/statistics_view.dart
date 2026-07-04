@@ -496,7 +496,6 @@ class _MonthlyContent extends StatelessWidget {
           income: summary.totalIncome,
           balance: summary.balance,
         ),
-        _MoMComparison(current: summary, previous: prevSummary),
         const SizedBox(height: 16),
       ],
     );
@@ -1327,39 +1326,6 @@ class _PeriodDropdown extends StatelessWidget {
   }
 }
 
-class _MoMComparison extends StatelessWidget {
-  final MonthlySummary current;
-  final MonthlySummary previous;
-
-  const _MoMComparison({required this.current, required this.previous});
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    final prev = previous.totalExpense.toDouble();
-    if (prev <= 0) return const SizedBox.shrink();
-    final cur = current.totalExpense.toDouble();
-    final pct = (cur - prev) / prev * 100;
-    final up = pct >= 0;
-    final color = up ? AppColors.warning : scheme.primary;
-    return Padding(
-      padding: const EdgeInsets.only(top: 8),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Icon(up ? Icons.trending_up : Icons.trending_down,
-              size: 15, color: color),
-          const SizedBox(width: 4),
-          Text(
-            '本月支出较上月 ${up ? '+' : '-'}${pct.abs().toStringAsFixed(0)}%',
-            style:
-                Theme.of(context).textTheme.labelMedium?.copyWith(color: color),
-          ),
-        ],
-      ),
-    );
-  }
-}
 
 class _TotalsRow extends StatelessWidget {
   final Decimal expense;
