@@ -24,6 +24,20 @@ const Set<String> kSvgCategoryKeys = {
   'other', 'other_fine', 'other_invest', 'other_charity',
   'salary', 'bonus', 'investment', 'redPacket', 'refund', 'otherIncome',
   'transfer',
+  // Phase A 后补齐的新分类图标（b0703-28，同款圆角方块+品类色）。
+  'shop_digital_acc', 'shop_jewelry', 'dining_tobacco', 'trans_bike',
+  'car', 'car_toll', 'car_wash', 'car_tax', 'ent_photo', 'house_loan',
+  'med_hospital', 'med_dental', 'med_eye', 'med_mental', 'med_beauty',
+  'med_health', 'edu_tuition', 'edu_exam',
+  'insurance', 'ins_car', 'ins_medical', 'ins_critical', 'ins_accident',
+  'ins_life', 'ins_property', 'ins_other', 'gift_parents',
+  'other_fee', 'other_tax', 'other_loss',
+  'inc_salary_base', 'inc_salary_ot', 'inc_salary_allow',
+  'inc_salary_commission', 'inc_bonus_year', 'inc_bonus_project',
+  'inc_bonus_full', 'sideline', 'inc_parttime', 'inc_freelance', 'inc_media',
+  'inc_interest', 'inc_dividend', 'inc_gain', 'inc_rent', 'pension',
+  'familySupport', 'inc_rp_wx', 'inc_rp_ali', 'inc_rp_gift', 'business',
+  'inc_prize', 'inc_subsidy',
 };
 
 /// 分类图标控件：优先渲染自有 iOS 风 SVG（圆角方块 + 品类色 + 白色图形）；
