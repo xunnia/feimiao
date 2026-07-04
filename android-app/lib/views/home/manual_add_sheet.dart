@@ -499,7 +499,9 @@ class _ManualAddSheetState extends State<ManualAddSheet> {
           // 二级面板是**浮层**：锚在被点的那行下面、悬浮在网格上方，
           // 不占布局位置，所以卡片整体高度纹丝不动（用户 0703 要求）。
           if (_kind != TransactionKind.transfer)
-          Flexible(
+          // 一级分类默认只露两行，多的下滑看（更简洁，不把键盘顶下去）。
+          ConstrainedBox(
+            constraints: const BoxConstraints(maxHeight: 184),
             child: Consumer<AppRepository>(
               builder: (context, repo, _) {
                 final cats = repo.categoriesForKindRanked(_kind);
@@ -704,53 +706,49 @@ class _SubcategoryPanel extends StatelessWidget {
       ),
       // 最多三行高，再多在面板里滚动（不许伸到键盘外面去）。
       child: ConstrainedBox(
-        constraints: const BoxConstraints(maxHeight: 268),
+        constraints: const BoxConstraints(maxHeight: 232),
         child: GridView.builder(
           shrinkWrap: true,
           physics: const ClampingScrollPhysics(),
-          padding: const EdgeInsets.symmetric(horizontal: 10),
+          padding: const EdgeInsets.symmetric(horizontal: 8),
           gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-            crossAxisCount: 5,
-            mainAxisSpacing: 10,
-            crossAxisSpacing: 8,
-            childAspectRatio: 0.92,
+            crossAxisCount: 6,
+            mainAxisSpacing: 12,
+            crossAxisSpacing: 4,
+            childAspectRatio: 0.74,
           ),
           itemCount: children.length,
           itemBuilder: (context, i) {
             final c = children[i];
             final sel = c.id == selectedId;
-            // 二级用「白底圆 + 小一号图标」，和一级的圆角方块拉开层级（对齐咔皮）。
+            // 和一级同款：圆角方块图标 + 选中主色描边环（不再圆圈裁切），
+            // 只是尺寸小一号（一行放 6 个）。
             return PressableScale(
               onPressed: () => onSelected(c),
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   Container(
-                    width: 44,
-                    height: 44,
-                    alignment: Alignment.center,
+                    padding: const EdgeInsets.all(2),
                     decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      color: AppColors.card(scheme),
+                      borderRadius: BorderRadius.circular(12),
                       border: Border.all(
-                        color: sel
-                            ? scheme.primary
-                            : AppColors.hairline(scheme, strength: 1.3),
-                        width: sel ? 2 : 1,
+                        color: sel ? scheme.primary : Colors.transparent,
+                        width: 2,
                       ),
                     ),
-                    child: ClipOval(
-                      child: CatIcon(
-                        categoryKey: c.key,
-                        emoji: CategorySeed.emojiOf(c.key),
-                        size: 34,
-                      ),
+                    child: CatIcon(
+                      categoryKey: c.key,
+                      emoji: CategorySeed.emojiOf(c.key),
+                      size: 36,
                     ),
                   ),
-                  const SizedBox(height: 4),
+                  const SizedBox(height: 3),
                   Text(
                     c.nameZh,
+                    textAlign: TextAlign.center,
                     style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                          fontSize: 10,
                           color:
                               sel ? scheme.primary : scheme.onSurfaceVariant,
                           fontWeight:

@@ -222,13 +222,15 @@ class _CategoryItem extends StatelessWidget {
           // 选中=加粗但保持黑色（不变蓝）；选了二级时后缀「·二级名」缩略显示。
           Text(
             subLabel == null ? category.nameZh : '${category.nameZh}·$subLabel',
+            textAlign: TextAlign.center,
             style: Theme.of(context).textTheme.labelSmall?.copyWith(
                   fontSize: subLabel == null ? null : 10,
                   color:
                       isSelected ? scheme.onSurface : scheme.onSurfaceVariant,
                   fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
                 ),
-            maxLines: 1,
+            // 选了二级时允许两行，保证「大类·二级名」的二级名能露出来。
+            maxLines: subLabel == null ? 1 : 2,
             overflow: TextOverflow.ellipsis,
           ),
         ],
