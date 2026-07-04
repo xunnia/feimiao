@@ -595,6 +595,17 @@ class _MonthlyContent extends StatelessWidget {
             for (final d in summary.dailyTotals)
               MoneyFormat.toDouble(d.income).clamp(0.0, double.infinity),
           ],
+          // 上月同期每日（淡色虚线）+ 今天竖线。
+          compareExpense: [
+            for (final d in prevSummary.dailyTotals)
+              MoneyFormat.toDouble(d.expense).clamp(0.0, double.infinity),
+          ],
+          compareIncome: [
+            for (final d in prevSummary.dailyTotals)
+              MoneyFormat.toDouble(d.income).clamp(0.0, double.infinity),
+          ],
+          compareLabel: '上月同期',
+          markIndex: isCurrentMonth ? DateTime.now().day - 1 : null,
         );
       case 'ranking':
         if (!hasExpense) return null;
@@ -798,6 +809,10 @@ class _TrendCard extends StatefulWidget {
   final List<String> xLabels;
   final List<double> expense;
   final List<double> income;
+  final List<double>? compareExpense;
+  final List<double>? compareIncome;
+  final String? compareLabel;
+  final int? markIndex;
 
   const _TrendCard({
     super.key,
@@ -805,6 +820,10 @@ class _TrendCard extends StatefulWidget {
     required this.xLabels,
     required this.expense,
     required this.income,
+    this.compareExpense,
+    this.compareIncome,
+    this.compareLabel,
+    this.markIndex,
   });
 
   @override
@@ -835,6 +854,10 @@ class _TrendCardState extends State<_TrendCard> {
         expense: widget.expense,
         income: widget.income,
         showIncome: _showIncome,
+        compareExpense: widget.compareExpense,
+        compareIncome: widget.compareIncome,
+        compareLabel: widget.compareLabel,
+        markIndex: widget.markIndex,
       ),
     );
   }
@@ -904,6 +927,20 @@ class _YearlyContent extends StatelessWidget {
       if (r.date.year != year) continue;
       monthlyIncome[r.date.month - 1] += MoneyFormat.toDouble(r.amount);
     }
+    // 去年每月支出/收入（趋势对比线用）。
+    final prevYear = StatisticsEngine.yearlySummary(records, year: year - 1);
+    final prevExpense = [
+      for (final e in prevYear.monthlyExpenses)
+        MoneyFormat.toDouble(e).clamp(0.0, double.infinity)
+    ];
+    final prevIncome = List<double>.filled(12, 0);
+    for (final r in records) {
+      if (r.kind != TransactionKind.income) continue;
+      if (r.date.year != year - 1) continue;
+      prevIncome[r.date.month - 1] += MoneyFormat.toDouble(r.amount);
+    }
+    final markMonth =
+        year == DateTime.now().year ? DateTime.now().month - 1 : null;
 
     final header = Column(
       children: [
@@ -951,6 +988,10 @@ class _YearlyContent extends StatelessWidget {
                 MoneyFormat.toDouble(e).clamp(0.0, double.infinity),
             ],
             income: monthlyIncome,
+            compareExpense: prevExpense,
+            compareIncome: prevIncome,
+            compareLabel: '去年同期',
+            markIndex: markMonth,
           ),
         'ring' => !hasExpense
             ? null
@@ -2120,11 +2161,23 @@ class _DualLineChart extends StatelessWidget {
   /// 默认只画支出；[showIncome]=true 时只画收入。
   final bool showIncome;
 
+  /// 上一周期同期数据（月=上月每日、年=去年每月），画成淡色虚线做对比。
+  final List<double>? compareExpense;
+  final List<double>? compareIncome;
+  final String? compareLabel;
+
+  /// "今天"竖虚线的下标（当月/当年才传）。
+  final int? markIndex;
+
   const _DualLineChart({
     required this.xLabels,
     required this.expense,
     required this.income,
     this.showIncome = false,
+    this.compareExpense,
+    this.compareIncome,
+    this.compareLabel,
+    this.markIndex,
   });
 
   @override
@@ -2133,9 +2186,11 @@ class _DualLineChart extends StatelessWidget {
     final expColor = AppColors.expense(scheme);
     final incColor = AppColors.income(scheme);
     final data = showIncome ? income : expense;
+    final compare = showIncome ? compareIncome : compareExpense;
     final color = showIncome ? incColor : expColor;
     final label = showIncome ? '收入' : '支出';
-    final maxV = data.fold<double>(0, (a, b) => a > b ? a : b);
+    final maxV = [...data, if (compare != null) ...compare]
+        .fold<double>(0, (a, b) => a > b ? a : b);
     final step = _niceStep(maxV);
     final maxY = maxV <= 0 ? step : ((maxV / step).floor() + 1) * step;
 
@@ -2167,6 +2222,19 @@ class _DualLineChart extends StatelessWidget {
                     .textTheme
                     .labelSmall
                     ?.copyWith(color: scheme.onSurfaceVariant)),
+            if (compare != null) ...[
+              const SizedBox(width: 12),
+              Container(
+                  width: 12,
+                  height: 2,
+                  color: color.withValues(alpha: 0.4)),
+              const SizedBox(width: 4),
+              Text(compareLabel ?? '上期',
+                  style: Theme.of(context)
+                      .textTheme
+                      .labelSmall
+                      ?.copyWith(color: scheme.onSurfaceVariant)),
+            ],
           ],
         ),
         const SizedBox(height: 14),
@@ -2176,7 +2244,31 @@ class _DualLineChart extends StatelessWidget {
             LineChartData(
               minY: 0,
               maxY: maxY,
-              lineBarsData: [bar(data, color)],
+              lineBarsData: [
+                if (compare != null)
+                  LineChartBarData(
+                    spots: [
+                      for (var i = 0; i < compare.length; i++)
+                        FlSpot(i.toDouble(), compare[i])
+                    ],
+                    color: color.withValues(alpha: 0.4),
+                    isCurved: false,
+                    barWidth: 1.6,
+                    dashArray: const [4, 3],
+                    dotData: const FlDotData(show: false),
+                    belowBarData: BarAreaData(show: false),
+                  ),
+                bar(data, color),
+              ],
+              extraLinesData: ExtraLinesData(verticalLines: [
+                if (markIndex != null)
+                  VerticalLine(
+                    x: markIndex!.toDouble(),
+                    color: scheme.onSurfaceVariant.withValues(alpha: 0.35),
+                    strokeWidth: 1,
+                    dashArray: const [3, 3],
+                  ),
+              ]),
               gridData: FlGridData(
                 show: true,
                 drawVerticalLine: false,
