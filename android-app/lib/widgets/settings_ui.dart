@@ -2,6 +2,7 @@ import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 
 import '../theme/app_colors.dart';
+import 'app_buttons.dart';
 
 /// 全局设置/弹层 UI 零件（对齐 iOS/图二：居中标题、分组白卡、发丝线分隔、iOS 开关）。
 /// 「同类功能同一种设计」——所有设置类界面/弹层都走这几个，别再各写各的。
@@ -66,10 +67,11 @@ class SheetHeader extends StatelessWidget {
                 Align(
                   alignment: Alignment.centerLeft,
                   child: Padding(
-                    padding: const EdgeInsets.only(left: 6),
-                    child: IconButton(
-                      icon: Icon(CupertinoIcons.xmark,
-                          size: 20, color: scheme.onSurfaceVariant),
+                    padding: const EdgeInsets.only(left: 12),
+                    child: AppCircleButton(
+                      icon: CupertinoIcons.xmark,
+                      iconSize: 18,
+                      size: 34,
                       onPressed: onClose,
                     ),
                   ),
@@ -78,21 +80,8 @@ class SheetHeader extends StatelessWidget {
                 Align(
                   alignment: Alignment.centerRight,
                   child: Padding(
-                    padding: const EdgeInsets.only(right: 8),
-                    child: TextButton(
-                      onPressed: onAction,
-                      style: TextButton.styleFrom(
-                        foregroundColor: scheme.primary,
-                        disabledForegroundColor:
-                            scheme.onSurfaceVariant.withValues(alpha: 0.4),
-                        textStyle: const TextStyle(
-                            fontSize: 16, fontWeight: FontWeight.w600),
-                        minimumSize: const Size(0, 36),
-                        padding: const EdgeInsets.symmetric(horizontal: 12),
-                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                      ),
-                      child: Text(actionLabel!),
-                    ),
+                    padding: const EdgeInsets.only(right: 12),
+                    child: AppPillButton(label: actionLabel!, onPressed: onAction),
                   ),
                 ),
             ],

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../widgets/ios_dialogs.dart';
+import '../../widgets/app_buttons.dart';
 import '../../widgets/ios_form.dart';
 import '../../widgets/ios_menu.dart';
 import 'package:provider/provider.dart';
@@ -27,14 +28,15 @@ class TagsView extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
+      appBar: AppBar(leading: const AppBackButton(), 
         title: const Text('标签管理'),
         centerTitle: true,
         actions: [
-          IconButton(
-            icon: const Icon(Icons.add),
-            tooltip: '新建标签',
-            onPressed: () => _showEditDialog(context, null),
+          Padding(
+            padding: const EdgeInsets.only(right: 10),
+            child: AppCircleButton(
+                icon: Icons.add,
+                onPressed: () => _showEditDialog(context, null)),
           ),
         ],
       ),

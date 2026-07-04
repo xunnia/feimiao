@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/cupertino.dart' show CupertinoPageRoute, CupertinoIcons;
 
 import '../../theme/app_colors.dart';
+import '../../widgets/app_buttons.dart';
 import '../../widgets/app_toast.dart';
 import '../../widgets/mascot.dart';
 import '../settings/ai_setting_view.dart';
@@ -16,7 +17,7 @@ class PersonalCenterView extends StatelessWidget {
     final scheme = Theme.of(context).colorScheme;
 
     return Scaffold(
-      appBar: AppBar(
+      appBar: AppBar(leading: const AppBackButton(), 
         title: const Text('我的'),
       ),
       body: ListView(

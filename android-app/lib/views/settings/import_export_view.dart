@@ -13,6 +13,7 @@ import 'package:provider/provider.dart';
 import 'package:share_plus/share_plus.dart';
 
 import '../../core/import/bill_import.dart';
+import '../../widgets/app_buttons.dart';
 import '../../core/models/transaction_kind.dart';
 import '../../data/app_repository.dart';
 import '../../theme/app_colors.dart';
@@ -207,7 +208,7 @@ class _ImportExportViewState extends State<ImportExportView> {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     return Scaffold(
-      appBar: AppBar(title: const Text('导入导出'), centerTitle: true),
+      appBar: AppBar(leading: const AppBackButton(), title: const Text('导入导出'), centerTitle: true),
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [

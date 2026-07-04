@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/cupertino.dart' show CupertinoPageRoute, CupertinoIcons;
 
 import '../../theme/app_colors.dart';
+import '../../widgets/app_buttons.dart';
 import 'accounts_view.dart';
 import 'ai_setting_view.dart';
 import 'backup_view.dart';
@@ -18,7 +19,10 @@ class SettingsView extends StatelessWidget {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     return Scaffold(
-      appBar: AppBar(title: const Text('设置'), centerTitle: true),
+      appBar: AppBar(
+          leading: const AppBackButton(),
+          title: const Text('设置'),
+          centerTitle: true),
       body: ListView(
         padding: const EdgeInsets.only(top: 8, bottom: 32),
         children: [

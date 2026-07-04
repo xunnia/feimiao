@@ -4,6 +4,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 
 import '../../widgets/ios_dialogs.dart';
+import '../../widgets/app_buttons.dart';
 import 'package:provider/provider.dart';
 import 'package:share_plus/share_plus.dart';
 
@@ -89,7 +90,7 @@ class _BackupViewState extends State<BackupView> {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     return Scaffold(
-      appBar: AppBar(title: const Text('备份与恢复'), centerTitle: true),
+      appBar: AppBar(leading: const AppBackButton(), title: const Text('备份与恢复'), centerTitle: true),
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [

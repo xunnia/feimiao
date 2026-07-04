@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../../core/ai/bill_categorizer.dart';
+import '../../widgets/app_buttons.dart';
 import '../../core/ai/llm_entry_parser.dart';
 import '../../core/haptics.dart';
 import '../../core/import/bill_import.dart';
@@ -108,7 +109,7 @@ class _BillReviewViewState extends State<BillReviewView> {
     final pendingCount = _pending.length;
 
     return Scaffold(
-      appBar: AppBar(title: const Text('导入复核'), centerTitle: true),
+      appBar: AppBar(leading: const AppBackButton(), title: const Text('导入复核'), centerTitle: true),
       body: Column(
         children: [
           Expanded(

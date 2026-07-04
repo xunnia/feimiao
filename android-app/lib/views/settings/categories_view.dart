@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../../core/haptics.dart';
+import '../../widgets/app_buttons.dart';
 import '../../core/models/cat_svg_icon.dart';
 import '../../core/models/category_seed.dart';
 import '../../core/models/transaction_kind.dart';
@@ -41,7 +42,7 @@ class _CategoriesViewState extends State<CategoriesView> {
         .toList();
 
     return Scaffold(
-      appBar: AppBar(title: const Text('分类管理')),
+      appBar: AppBar(leading: const AppBackButton(), title: const Text('分类管理')),
       body: ListView(
         padding: const EdgeInsets.fromLTRB(16, 4, 16, 28),
         children: [

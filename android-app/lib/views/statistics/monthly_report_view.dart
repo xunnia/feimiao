@@ -4,6 +4,7 @@ import 'package:flutter/cupertino.dart' show CupertinoIcons;
 import 'package:provider/provider.dart';
 
 import '../../core/models/transaction_kind.dart';
+import '../../widgets/app_buttons.dart';
 import '../../core/money_format.dart';
 import '../../core/statistics/statistics_engine.dart';
 import '../../data/app_repository.dart';
@@ -72,7 +73,7 @@ class _MonthlyReportViewState extends State<MonthlyReportView> {
     final (mood, comment) = _verdict(repo, cur);
 
     return Scaffold(
-      appBar: AppBar(title: const Text('月度报告'), centerTitle: true),
+      appBar: AppBar(leading: const AppBackButton(), title: const Text('月度报告'), centerTitle: true),
       body: ListView(
         padding: const EdgeInsets.fromLTRB(16, 8, 16, 28),
         children: [

@@ -6,6 +6,7 @@ import 'package:provider/provider.dart';
 import '../../core/money_format.dart';
 import '../../data/app_repository.dart';
 import '../../theme/app_colors.dart';
+import '../../widgets/app_buttons.dart';
 import '../../widgets/ios_dialogs.dart';
 import '../../widgets/ios_form.dart';
 import '../../widgets/ios_menu.dart';
@@ -23,13 +24,15 @@ class SavingsGoalsView extends StatelessWidget {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
+        leading: const AppBackButton(),
         title: const Text('存钱目标'),
         centerTitle: true,
         actions: [
-          IconButton(
-            icon: const Icon(Icons.add),
-            tooltip: '新目标',
-            onPressed: () => _showEditDialog(context, null),
+          Padding(
+            padding: const EdgeInsets.only(right: 10),
+            child: AppCircleButton(
+                icon: Icons.add,
+                onPressed: () => _showEditDialog(context, null)),
           ),
         ],
       ),

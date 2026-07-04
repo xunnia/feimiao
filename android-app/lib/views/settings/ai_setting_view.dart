@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../../data/app_repository.dart';
+import '../../widgets/app_buttons.dart';
 import '../../theme/app_colors.dart';
 import '../../widgets/app_toast.dart';
 import '../home/ai_chat_panel.dart';
@@ -49,7 +50,7 @@ class _AiSettingViewState extends State<AiSettingView> {
     final scheme = Theme.of(context).colorScheme;
 
     return Scaffold(
-      appBar: AppBar(
+      appBar: AppBar(leading: const AppBackButton(), 
         title: const Text('AI 记账设置'),
         centerTitle: true,
       ),

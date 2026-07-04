@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../../core/models/cat_svg_icon.dart';
+import '../../widgets/app_buttons.dart';
 import '../../core/models/category_seed.dart';
 import '../../core/models/transaction_kind.dart';
 import '../../data/app_repository.dart';
@@ -22,7 +23,7 @@ class MemoryView extends StatelessWidget {
     final memories = repo.categoryMemories;
 
     return Scaffold(
-      appBar: AppBar(title: const Text('喵学到的分类'), centerTitle: true),
+      appBar: AppBar(leading: const AppBackButton(), title: const Text('喵学到的分类'), centerTitle: true),
       body: memories.isEmpty
           ? Center(
               child: Column(

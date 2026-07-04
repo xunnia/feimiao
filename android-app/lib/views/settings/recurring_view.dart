@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../../core/haptics.dart';
+import '../../widgets/app_buttons.dart';
 import '../../core/models/cat_svg_icon.dart';
 import '../../core/models/category_seed.dart';
 import '../../core/models/recurring_rule.dart';
@@ -28,14 +29,15 @@ class RecurringView extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
+      appBar: AppBar(leading: const AppBackButton(), 
         title: const Text('定时记账'),
         centerTitle: true,
         actions: [
-          IconButton(
-            icon: const Icon(Icons.add),
-            tooltip: '新增规则',
-            onPressed: () => showRecurringEditSheet(context, null),
+          Padding(
+            padding: const EdgeInsets.only(right: 10),
+            child: AppCircleButton(
+                icon: Icons.add,
+                onPressed: () => showRecurringEditSheet(context, null)),
           ),
         ],
       ),

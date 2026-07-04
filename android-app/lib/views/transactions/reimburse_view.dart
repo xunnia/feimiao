@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../../core/haptics.dart';
+import '../../widgets/app_buttons.dart';
 import '../../core/models/cat_svg_icon.dart';
 import '../../core/models/category_seed.dart';
 import '../../core/money_format.dart';
@@ -26,7 +27,7 @@ class ReimburseView extends StatelessWidget {
         items.fold(Decimal.zero, (Decimal a, t) => a + t.amount);
 
     return Scaffold(
-      appBar: AppBar(title: const Text('待报销'), centerTitle: true),
+      appBar: AppBar(leading: const AppBackButton(), title: const Text('待报销'), centerTitle: true),
       body: items.isEmpty
           ? Center(
               child: Column(

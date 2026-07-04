@@ -14,6 +14,8 @@ import '../../core/statistics/statistics_engine.dart';
 import '../../data/app_repository.dart';
 import '../../theme/app_colors.dart';
 import '../../widgets/app_date_picker.dart';
+import '../../widgets/app_buttons.dart';
+import '../../widgets/settings_ui.dart';
 import '../../widgets/ios_dialogs.dart';
 import '../../widgets/ios_form.dart';
 import '../../widgets/ios_menu.dart';
@@ -579,26 +581,11 @@ class _BudgetSheetState extends State<_BudgetSheet> {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(20, 16, 12, 4),
-            child: Row(
-              children: [
-                Text(
-                  _isEdit ? '编辑预算' : '新建预算',
-                  style: const TextStyle(
-                      fontSize: 17, fontWeight: FontWeight.w600),
-                ),
-                const Spacer(),
-                PressableScale(
-                  onPressed: () => Navigator.pop(context),
-                  child: Padding(
-                    padding: const EdgeInsets.all(8),
-                    child: Icon(Icons.close,
-                        size: 20, color: scheme.onSurfaceVariant),
-                  ),
-                ),
-              ],
-            ),
+          SheetHeader(
+            title: _isEdit ? '编辑预算' : '新建预算',
+            onClose: () => Navigator.pop(context),
+            actionLabel: '保存',
+            onAction: () => _save(repo),
           ),
           Flexible(
             child: SingleChildScrollView(
@@ -923,30 +910,6 @@ class _BudgetSheetState extends State<_BudgetSheet> {
                     ),
                   ],
                 ],
-              ),
-            ),
-          ),
-          // ── 保存 ──
-          Padding(
-            padding: const EdgeInsets.fromLTRB(20, 8, 20, 14),
-            child: PressableScale(
-              onPressed: () => _save(repo),
-              child: Container(
-                width: double.infinity,
-                height: 46,
-                alignment: Alignment.center,
-                decoration: BoxDecoration(
-                  color: scheme.onSurface,
-                  borderRadius: BorderRadius.circular(999),
-                ),
-                child: Text(
-                  _isEdit ? '保存修改' : '保存预算',
-                  style: TextStyle(
-                    fontSize: 15,
-                    fontWeight: FontWeight.w600,
-                    color: scheme.surface,
-                  ),
-                ),
               ),
             ),
           ),
