@@ -4,6 +4,7 @@ import 'dart:math';
 import 'dart:ui' show ImageFilter;
 
 import 'package:decimal/decimal.dart';
+import 'package:flutter/cupertino.dart' show CupertinoIcons;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_svg/flutter_svg.dart';
@@ -895,62 +896,30 @@ class _AiChatPanelState extends State<AiChatPanel> {
     );
   }
 
-  // 头部：左=返回、中=睡觉猫、右=聊天记录保存时长（取代原来的关闭按钮）。
+  // 头部：左上角返回、中间放大的睡觉猫、右上角 ⋯（聊天记录管理 / 删除）。
   Widget _header(BuildContext context) {
-    final repo = context.watch<AppRepository>();
-    final days = repo.chatRetentionDays;
-    final label = days >= 180 ? '存半年' : '存一个月';
     return Padding(
       padding: const EdgeInsets.fromLTRB(12, 6, 12, 4),
       child: SizedBox(
-        height: 44,
+        height: 72,
         child: Stack(
           alignment: Alignment.center,
           children: [
-            const Align(
+            Align(
               alignment: Alignment.centerLeft,
-              child: AppBackButton(),
+              child: AppCircleButton(
+                icon: CupertinoIcons.chevron_back,
+                iconSize: 22,
+                onPressed: () => Navigator.pop(context),
+              ),
             ),
-            const Mascot(mood: MascotMood.empty, size: 40, animate: true),
+            const Mascot(mood: MascotMood.empty, size: 72, animate: true),
             Align(
               alignment: Alignment.centerRight,
               child: Builder(
-                builder: (btnCtx) => PressableScale(
-                  onPressed: () => showIosMenu(btnCtx, [
-                    IosMenuItem(
-                      label: '保存一个月',
-                      icon: days == 30 ? Icons.check : Icons.schedule,
-                      onTap: () => repo.setChatRetentionDays(30),
-                    ),
-                    IosMenuItem(
-                      label: '保存半年',
-                      icon: days >= 180 ? Icons.check : Icons.schedule,
-                      onTap: () => repo.setChatRetentionDays(180),
-                    ),
-                  ]),
-                  child: GlassSurface(
-                    radius: 16,
-                    blur: 0,
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 10, vertical: 6),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(Icons.access_time,
-                            size: 13,
-                            color: Theme.of(context)
-                                .colorScheme
-                                .onSurfaceVariant),
-                        const SizedBox(width: 4),
-                        Text(label,
-                            style: TextStyle(
-                                fontSize: 12,
-                                color: Theme.of(context)
-                                    .colorScheme
-                                    .onSurface)),
-                      ],
-                    ),
-                  ),
+                builder: (btnCtx) => AppCircleButton(
+                  icon: Icons.more_horiz,
+                  onPressed: () => _showChatMenu(btnCtx),
                 ),
               ),
             ),
@@ -958,6 +927,58 @@ class _AiChatPanelState extends State<AiChatPanel> {
         ),
       ),
     );
+  }
+
+  // ⋯ 菜单：聊天记录管理（保存时长）/ 删除对话记录。以后可再加功能。
+  void _showChatMenu(BuildContext anchor) {
+    showIosMenu(anchor, [
+      IosMenuItem(
+        label: '聊天记录管理',
+        icon: Icons.schedule,
+        onTap: () => WidgetsBinding.instance
+            .addPostFrameCallback((_) => _showRetentionMenu(anchor)),
+      ),
+      IosMenuItem(
+        label: '删除对话记录',
+        icon: Icons.delete_outline,
+        destructive: true,
+        onTap: _confirmClearChat,
+      ),
+    ]);
+  }
+
+  void _showRetentionMenu(BuildContext anchor) {
+    if (!mounted) return;
+    final repo = context.read<AppRepository>();
+    final days = repo.chatRetentionDays;
+    const opts = [
+      (7, '一周'),
+      (30, '一个月'),
+      (90, '三个月'),
+      (180, '半年'),
+      (36500, '永不删除'),
+    ];
+    showIosMenu(anchor, [
+      for (final (d, label) in opts)
+        IosMenuItem(
+          label: label,
+          icon: days == d ? Icons.check : Icons.schedule,
+          onTap: () => repo.setChatRetentionDays(d),
+        ),
+    ]);
+  }
+
+  Future<void> _confirmClearChat() async {
+    final ok = await showConfirmDialog(
+      context,
+      title: '删除对话记录？',
+      message: '喵助手的聊天记录会全部清空，不可恢复。',
+      confirmText: '删除',
+      destructive: true,
+    );
+    if (!ok || !mounted) return;
+    await context.read<AppRepository>().clearChatMessages();
+    if (mounted) setState(() => _msgs.clear());
   }
 
   // 卡中卡输入框：浅底圆角框 + 工具行。
@@ -1290,24 +1311,15 @@ class _InfoBubble extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    // 去掉左边的小猫（记账确认这类信息太多猫了），只留文字。
     return Padding(
-      padding: const EdgeInsets.only(bottom: 10, right: 40),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Mascot(
-              mood: error ? MascotMood.empty : MascotMood.idle, size: 28),
-          const SizedBox(width: 8),
-          Expanded(
-            child: Text(
-              text,
-              style: TextStyle(
-                fontSize: 14,
-                color: error ? scheme.error : scheme.onSurfaceVariant,
-              ),
-            ),
-          ),
-        ],
+      padding: const EdgeInsets.only(bottom: 10, left: 4, right: 40),
+      child: Text(
+        text,
+        style: TextStyle(
+          fontSize: 14,
+          color: error ? scheme.error : scheme.onSurfaceVariant,
+        ),
       ),
     );
   }
@@ -1731,7 +1743,7 @@ class _SavedEntryCard extends StatelessWidget {
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: const TextStyle(
-                            fontSize: 14, fontWeight: FontWeight.w600),
+                            fontSize: 14, fontWeight: FontWeight.w500),
                       ),
                       const SizedBox(height: 2),
                       Text(
@@ -1769,10 +1781,10 @@ class _SavedEntryCard extends StatelessWidget {
             else if (canAct)
               Row(
                 children: [
-                  if (candidates.isNotEmpty) ...[
+                  if (candidates.isNotEmpty)
                     Builder(
                       builder: (chipCtx) => _ActionChip(
-                        icon: Icons.swap_horiz,
+                        icon: CupertinoIcons.tag,
                         label: '改分类',
                         onTap: () => showIosMenu(chipCtx, [
                           for (final c in candidates)
@@ -1785,12 +1797,15 @@ class _SavedEntryCard extends StatelessWidget {
                         ]),
                       ),
                     ),
-                    const SizedBox(width: 8),
-                  ],
-                  _ActionChip(
-                    icon: Icons.delete_outline,
-                    label: '删除',
-                    onTap: onDelete,
+                  const Spacer(),
+                  // 删除挪到卡片右下角，只留图标（不要「删除」二字）。
+                  PressableScale(
+                    onPressed: onDelete,
+                    child: Padding(
+                      padding: const EdgeInsets.all(4),
+                      child: Icon(CupertinoIcons.delete,
+                          size: 18, color: scheme.onSurfaceVariant),
+                    ),
                   ),
                 ],
               ),
