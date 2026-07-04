@@ -513,7 +513,8 @@ class _DrawerPanelState extends State<_DrawerPanel> {
       child: ListTile(
         minLeadingWidth: 0,
         // 放大的封面（竖版 3:4，猫脸能看清）；无封面回退 emoji 浅底方块。
-        leading: _bookCover(b, Theme.of(context).colorScheme),
+        // 总账本没自选封面时用「日常生活」封面。
+        leading: _bookCover(b, scheme, isTotal: b.id == repo.defaultBookId),
         horizontalTitleGap: 12,
         title: Row(
           children: [
@@ -591,7 +592,8 @@ class _DrawerPanelState extends State<_DrawerPanel> {
   }
 
   /// 抽屉账本行的放大封面（竖版 3:4 圆角图）；无封面 = 浅底方块 + emoji。
-  Widget _bookCover(BookEntity b, ColorScheme scheme) {
+  /// 总账本([isTotal]) 没自选封面时用「日常生活」封面 default.png。
+  Widget _bookCover(BookEntity b, ColorScheme scheme, {bool isTotal = false}) {
     const w = 46.0, h = 54.0;
     Widget fallback() => Container(
           width: w,
@@ -603,11 +605,14 @@ class _DrawerPanelState extends State<_DrawerPanel> {
           ),
           child: Text(b.icon, style: const TextStyle(fontSize: 24)),
         );
-    if (b.cover.isEmpty) return fallback();
+    final cover = b.cover.isNotEmpty
+        ? b.cover
+        : (isTotal ? 'assets/book_covers/default.png' : null);
+    if (cover == null) return fallback();
     return ClipRRect(
       borderRadius: BorderRadius.circular(10),
       child: Image.asset(
-        b.cover,
+        cover,
         width: w,
         height: h,
         fit: BoxFit.cover,

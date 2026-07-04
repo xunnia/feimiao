@@ -26,9 +26,7 @@ class BookTemplate {
 }
 
 const List<BookTemplate> kBookTemplates = [
-  // 「日常生活」暂用默认账本封面，等专属「记账」图出了再换。
-  BookTemplate('daily', '日常生活', '📒', Color(0xFFEDF1F5),
-      cover: 'assets/book_covers/default.png'),
+  // 「日常生活」封面给了总账本用，模板里不再重复列出。
   BookTemplate('dining', '餐饮账本', '🍜', Color(0xFFFDEBD8),
       cover: 'assets/book_covers/dining.png'),
   BookTemplate('shopping', '网购账本', '📦', Color(0xFFE8F0E4),
@@ -138,35 +136,17 @@ class _BookSheetState extends State<_BookSheet> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const SizedBox(height: 10),
-            Center(
-              child: Container(
-                width: 40,
-                height: 4,
-                decoration: BoxDecoration(
-                  color: scheme.outlineVariant,
-                  borderRadius: BorderRadius.circular(2),
-                ),
-              ),
-            ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(20, 14, 20, 4),
-              child: Text(
-                _isEdit ? '编辑账本' : '新建账本',
-                style:
-                    const TextStyle(fontSize: 17, fontWeight: FontWeight.w600),
-              ),
+            // 统一弹层头：✕ 关闭 + 居中标题 + 右上角「创建/保存」。
+            SheetHeader(
+              title: _isEdit ? '编辑账本' : '新建账本',
+              subtitle: _isEdit ? null : '选一个常用账本，或直接起名自定义',
+              onClose: () => Navigator.pop(context),
+              actionLabel: _isEdit ? '保存' : '创建',
+              onAction: _nameCtrl.text.trim().isEmpty ? null : _submit,
             ),
             if (!_isEdit) ...[
-              Padding(
-                padding: const EdgeInsets.fromLTRB(20, 0, 20, 10),
-                child: Text(
-                  '选一个常用账本，或直接起名自定义',
-                  style: TextStyle(
-                      fontSize: 13, color: scheme.onSurfaceVariant),
-                ),
-              ),
-              // ── 封面横滑（对齐 Claude 选图交互；封面图就位后换 Image.asset）──
+              const SizedBox(height: 12),
+              // ── 封面横滑（对齐 Claude 选图交互）──
               SizedBox(
                 height: 118,
                 child: ListView(
@@ -245,35 +225,7 @@ class _BookSheetState extends State<_BookSheet> {
                 ],
               ),
             ),
-            const SizedBox(height: 14),
-            // ── 创建 / 保存 ──
-            Padding(
-              padding: const EdgeInsets.fromLTRB(20, 0, 20, 14),
-              child: SizedBox(
-                width: double.infinity,
-                child: PressableScale(
-                  onPressed: _nameCtrl.text.trim().isEmpty ? null : _submit,
-                  child: Container(
-                    height: 48,
-                    alignment: Alignment.center,
-                    decoration: BoxDecoration(
-                      color: _nameCtrl.text.trim().isEmpty
-                          ? scheme.onSurface.withValues(alpha: 0.3)
-                          : scheme.onSurface,
-                      borderRadius: BorderRadius.circular(999),
-                    ),
-                    child: Text(
-                      _isEdit ? '保存' : '创建账本',
-                      style: TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w600,
-                        color: scheme.surface,
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-            ),
+            const SizedBox(height: 18),
           ],
         ),
       ),
