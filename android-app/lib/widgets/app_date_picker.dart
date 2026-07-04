@@ -72,6 +72,13 @@ Future<DateTimeRange?> showAppDateRangePicker(
 
 DateTime _dayOnly(DateTime d) => DateTime(d.year, d.month, d.day);
 
+/// 所有滚轮（日历/月/年/周）统一的文字样式：小一号、细一档，不那么丑。
+TextStyle _wheelStyle(ColorScheme scheme) => TextStyle(
+      fontSize: 18,
+      fontWeight: FontWeight.w300,
+      color: scheme.onSurface,
+    );
+
 class _AppDatePickerSheet extends StatefulWidget {
   final DateTime initial;
   final DateTime first;
@@ -157,7 +164,7 @@ class _AppDatePickerSheetState extends State<_AppDatePickerSheet> {
                 Text(widget.title,
                     style: TextStyle(
                         fontSize: 16,
-                        fontWeight: FontWeight.w600,
+                        fontWeight: FontWeight.w500,
                         color: scheme.onSurface)),
                 const Spacer(),
                 PressableScale(
@@ -192,8 +199,8 @@ class _AppDatePickerSheetState extends State<_AppDatePickerSheet> {
                     children: [
                       Text('${_visibleMonth.year}年${_visibleMonth.month}月',
                           style: TextStyle(
-                              fontSize: 17,
-                              fontWeight: FontWeight.w600,
+                              fontSize: 16,
+                              fontWeight: FontWeight.w500,
                               color: scheme.onSurface)),
                       const SizedBox(width: 4),
                       AnimatedRotation(
@@ -332,7 +339,7 @@ class _AppDatePickerSheetState extends State<_AppDatePickerSheet> {
                 for (final yy in years)
                   Center(
                       child: Text('$yy年',
-                          style: TextStyle(color: scheme.onSurface))),
+                          style: _wheelStyle(scheme))),
               ],
             ),
           ),
@@ -346,7 +353,7 @@ class _AppDatePickerSheetState extends State<_AppDatePickerSheet> {
                 for (int mm = 1; mm <= 12; mm++)
                   Center(
                       child: Text('$mm月',
-                          style: TextStyle(color: scheme.onSurface))),
+                          style: _wheelStyle(scheme))),
               ],
             ),
           ),
@@ -526,7 +533,7 @@ class _MonthPickerSheetState extends State<_MonthPickerSheet> {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final years = [for (int y = _firstYear; y <= widget.last.year; y++) y];
-    TextStyle st() => TextStyle(color: scheme.onSurface);
+    TextStyle st() => _wheelStyle(scheme);
     return SizedBox(
       width: double.infinity,
       child: Column(
@@ -611,7 +618,7 @@ class _YearPickerSheetState extends State<_YearPickerSheet> {
               onChanged: (i) => _y = years[i],
               itemBuilder: (_, i) => Center(
                   child: Text('${years[i]}年',
-                      style: TextStyle(color: scheme.onSurface))),
+                      style: _wheelStyle(scheme))),
             ),
           ),
           const SizedBox(height: 8),
@@ -676,7 +683,7 @@ class _WeekPickerSheetState extends State<_WeekPickerSheet> {
                   }),
                   itemBuilder: (_, i) => Center(
                       child: Text('${years[i]}年',
-                          style: TextStyle(color: scheme.onSurface))),
+                          style: _wheelStyle(scheme))),
                 ),
               ),
               Expanded(
@@ -687,7 +694,7 @@ class _WeekPickerSheetState extends State<_WeekPickerSheet> {
                   onChanged: (i) => _wIdx = i,
                   itemBuilder: (_, i) => Center(
                       child: Text(_label(i),
-                          style: TextStyle(color: scheme.onSurface))),
+                          style: _wheelStyle(scheme))),
                 ),
               ),
             ]),

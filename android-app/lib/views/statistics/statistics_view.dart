@@ -1084,16 +1084,16 @@ class _CustomContent extends StatelessWidget {
 
     final header = Column(
       children: [
-        // 起止两个可点日期字段（对齐咔皮：点哪个改哪个，各自弹全局日历）。
+        // 起止两个可点日期字段挨在一起（开始紧贴结束，不再左右撑开）。
         Row(
           children: [
-            Expanded(child: _DateField(date: r.start, onTap: onPickStart)),
+            _DateField(date: r.start, onTap: onPickStart),
             Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 8),
+              padding: const EdgeInsets.symmetric(horizontal: 6),
               child: Text('–',
                   style: TextStyle(color: scheme.onSurfaceVariant)),
             ),
-            Expanded(child: _DateField(date: r.end, onTap: onPickEnd)),
+            _DateField(date: r.end, onTap: onPickEnd),
           ],
         ),
         const SizedBox(height: 16),
