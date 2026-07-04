@@ -13,6 +13,7 @@ import '../../core/money_format.dart';
 import '../../core/statistics/statistics_engine.dart';
 import '../../data/app_repository.dart';
 import '../../theme/app_colors.dart';
+import '../../widgets/app_date_picker.dart';
 import '../../widgets/ios_dialogs.dart';
 import '../../widgets/ios_form.dart';
 import '../../widgets/ios_menu.dart';
@@ -556,11 +557,11 @@ class _BudgetSheetState extends State<_BudgetSheet> {
 
   Future<void> _pickCustomRange() async {
     final now = DateTime.now();
-    final picked = await showDateRangePicker(
-      context: context,
-      firstDate: DateTime(2000),
-      lastDate: DateTime(now.year + 2, 12, 31),
-      initialDateRange: _customRange,
+    final picked = await showAppDateRangePicker(
+      context,
+      initial: _customRange,
+      first: DateTime(2000),
+      last: DateTime(now.year + 2, 12, 31),
     );
     if (picked != null && mounted) setState(() => _customRange = picked);
   }

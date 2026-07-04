@@ -14,6 +14,7 @@ import '../../core/models/transaction_kind.dart';
 import '../../core/money_format.dart';
 import '../../data/app_repository.dart';
 import '../../theme/app_colors.dart';
+import '../../widgets/app_date_picker.dart';
 import '../../widgets/glass.dart';
 import '../../widgets/ios_menu.dart';
 import '../../widgets/pressable_scale.dart';
@@ -904,11 +905,12 @@ class _ChipsRow extends StatelessWidget {
             icon: Icons.calendar_today_outlined,
             label: _dateLabel(),
             onTap: () async {
-              final picked = await showDatePicker(
-                context: context,
-                initialDate: date,
-                firstDate: DateTime(2000),
-                lastDate: DateTime.now(),
+              final picked = await showAppDatePicker(
+                context,
+                initial: date,
+                first: DateTime(2000),
+                last: DateTime.now(),
+                title: '选择日期',
               );
               if (picked != null) onDateChanged(picked);
             },

@@ -9,6 +9,7 @@ import '../../core/models/transaction_kind.dart';
 import '../../core/money_format.dart';
 import '../../data/app_repository.dart';
 import '../../theme/app_colors.dart';
+import '../../widgets/app_date_picker.dart';
 import 'ai_quick_entry_view.dart';
 import 'amount_keypad.dart';
 import 'category_grid.dart';
@@ -357,11 +358,12 @@ class _DateButton extends StatelessWidget {
   Widget build(BuildContext context) {
     return GestureDetector(
       onTap: () async {
-        final picked = await showDatePicker(
-          context: context,
-          initialDate: date,
-          firstDate: DateTime(2000),
-          lastDate: DateTime.now(),
+        final picked = await showAppDatePicker(
+          context,
+          initial: date,
+          first: DateTime(2000),
+          last: DateTime.now(),
+          title: '选择日期',
         );
         if (picked != null) onChanged(picked);
       },

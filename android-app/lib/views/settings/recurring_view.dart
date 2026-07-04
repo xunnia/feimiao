@@ -9,6 +9,7 @@ import '../../core/models/recurring_rule.dart';
 import '../../core/models/transaction_kind.dart';
 import '../../data/app_repository.dart';
 import '../../theme/app_colors.dart';
+import '../../widgets/app_date_picker.dart';
 import '../../widgets/ios_form.dart';
 import '../../widgets/ios_menu.dart';
 import '../../widgets/mascot.dart';
@@ -362,11 +363,12 @@ class _RecurringEditSheetState extends State<_RecurringEditSheet> {
                   const SizedBox(height: 6),
                   PressableScale(
                     onPressed: () async {
-                      final picked = await showDatePicker(
-                        context: context,
-                        initialDate: _startDate,
-                        firstDate: DateTime(2015),
-                        lastDate: DateTime(2100),
+                      final picked = await showAppDatePicker(
+                        context,
+                        initial: _startDate,
+                        first: DateTime(2015),
+                        last: DateTime(2100),
+                        title: '开始日期',
                       );
                       if (picked != null) setState(() => _startDate = picked);
                     },

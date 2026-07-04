@@ -5,6 +5,7 @@ import 'package:provider/provider.dart';
 import '../../core/amount_expression.dart';
 import '../../core/models/transaction_kind.dart';
 import '../../data/app_repository.dart';
+import '../../widgets/app_date_picker.dart';
 import '../../widgets/tag_selector.dart';
 import '../common/app_sheet.dart';
 import '../common/receipt_picker.dart';
@@ -567,11 +568,12 @@ class _DetailBar extends StatelessWidget {
           ],
           GestureDetector(
             onTap: () async {
-              final picked = await showDatePicker(
-                context: context,
-                initialDate: date,
-                firstDate: DateTime(2000),
-                lastDate: DateTime.now(),
+              final picked = await showAppDatePicker(
+                context,
+                initial: date,
+                first: DateTime(2000),
+                last: DateTime.now(),
+                title: '选择日期',
               );
               if (picked != null) onDateChanged(picked);
             },

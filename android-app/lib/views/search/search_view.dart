@@ -6,6 +6,7 @@ import '../../core/models/transaction_kind.dart';
 import '../../core/money_format.dart';
 import '../../data/app_repository.dart';
 import '../../theme/app_colors.dart';
+import '../../widgets/app_date_picker.dart';
 import '../../widgets/ios_form.dart';
 import '../../widgets/ios_menu.dart';
 import '../../widgets/mascot.dart';
@@ -353,11 +354,11 @@ class _SearchViewState extends State<SearchView> {
   }
 
   Future<void> _pickRange(BuildContext _) async {
-    final r = await showDateRangePicker(
-      context: context,
-      firstDate: DateTime(2015),
-      lastDate: DateTime(2100),
-      initialDateRange: _range,
+    final r = await showAppDateRangePicker(
+      context,
+      initial: _range,
+      first: DateTime(2015),
+      last: DateTime(2100),
     );
     if (r != null) setState(() => _range = r);
   }

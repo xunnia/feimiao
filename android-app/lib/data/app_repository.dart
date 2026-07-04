@@ -437,6 +437,44 @@ class AppRepository extends ChangeNotifier {
     }
   }
 
+  // 统计页「自定义」区间：记住上次选择，再次进入不用重选。
+  // 用记录类型 (start,end) 避免数据层依赖 Flutter 的 DateTimeRange；视图侧再转。
+  (DateTime, DateTime)? _statCustomRange;
+  (DateTime, DateTime)? get statCustomRange => _statCustomRange;
+
+  Future<void> setStatCustomRange(DateTime start, DateTime end) async {
+    _statCustomRange = (start, end);
+    await _db!.insert(
+      'app_settings',
+      {
+        'key': 'stat_custom_range',
+        'value': '${start.millisecondsSinceEpoch},'
+            '${end.millisecondsSinceEpoch}',
+      },
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+    notifyListeners();
+  }
+
+  Future<void> _loadStatCustomRange() async {
+    final rows = await _db!.query(
+      'app_settings',
+      where: 'key = ?',
+      whereArgs: ['stat_custom_range'],
+      limit: 1,
+    );
+    if (rows.isEmpty) return;
+    final parts = (rows.first['value'] as String? ?? '').split(',');
+    if (parts.length != 2) return;
+    final s = int.tryParse(parts[0]);
+    final e = int.tryParse(parts[1]);
+    if (s == null || e == null) return;
+    _statCustomRange = (
+      DateTime.fromMillisecondsSinceEpoch(s),
+      DateTime.fromMillisecondsSinceEpoch(e),
+    );
+  }
+
   /// 全部预算期间（新建在前面显示用，按生效起点降序）。
   List<BudgetPeriod> get budgetPeriods {
     final list = List<BudgetPeriod>.of(_budgetPeriods)
@@ -1025,6 +1063,7 @@ class AppRepository extends ChangeNotifier {
       _loadTags(),
       _loadDrawerOrder(),
       _loadStatCardOrder(),
+      _loadStatCustomRange(),
     ]);
     notifyListeners();
   }

@@ -15,6 +15,7 @@ import '../../core/statistics/statistics_engine.dart';
 import '../../data/app_repository.dart';
 import '../../core/haptics.dart';
 import '../../theme/app_colors.dart';
+import '../../widgets/app_date_picker.dart';
 import '../../widgets/glass.dart';
 import '../../widgets/ios_menu.dart';
 import '../../widgets/mascot.dart';
@@ -41,6 +42,16 @@ class _StatisticsViewState extends State<StatisticsView> {
   );
   late DateTime _weekStart = _mondayOf(DateTime.now());
   DateTimeRange? _customRange;
+
+  @override
+  void initState() {
+    super.initState();
+    // 记住上次「自定义」区间：再次进入不用重选。
+    final saved = context.read<AppRepository>().statCustomRange;
+    if (saved != null) {
+      _customRange = DateTimeRange(start: saved.$1, end: saved.$2);
+    }
+  }
 
   static DateTime _mondayOf(DateTime d) {
     final day = DateTime(d.year, d.month, d.day);
@@ -84,27 +95,58 @@ class _StatisticsViewState extends State<StatisticsView> {
   bool get _isCurrentWeek =>
       _weekStart == _mondayOf(DateTime.now());
 
-  Future<void> _pickCustomRange() async {
+  DateTime _dayOnly(DateTime d) => DateTime(d.year, d.month, d.day);
+
+  /// 进入「自定义」时若还没区间，默认给「本月 1 号 → 今天」，界面上就有两个
+  /// 可点的起止日期字段（对齐咔皮），不再是一片空白要先弹窗。
+  DateTimeRange get _effectiveRange {
     final now = DateTime.now();
-    final picked = await showDateRangePicker(
-      context: context,
-      firstDate: DateTime(2000),
-      lastDate: now,
-      initialDateRange: _customRange ??
-          DateTimeRange(
-            start: now.subtract(const Duration(days: 29)),
-            end: now,
-          ),
+    return _customRange ??
+        DateTimeRange(start: DateTime(now.year, now.month, 1), end: now);
+  }
+
+  Future<void> _applyRange(DateTimeRange r) async {
+    setState(() => _customRange = r);
+    await context.read<AppRepository>().setStatCustomRange(r.start, r.end);
+  }
+
+  /// 点开始日期：选完若晚于结束，把结束顺到同一天。
+  Future<void> _pickStart() async {
+    final cur = _effectiveRange;
+    final picked = await showAppDatePicker(
+      context,
+      initial: cur.start,
+      first: DateTime(2000),
+      last: DateTime.now(),
+      title: '开始时间',
     );
-    if (picked != null && mounted) {
-      setState(() => _customRange = picked);
-    }
+    if (picked == null || !mounted) return;
+    final start = _dayOnly(picked);
+    final end = cur.end.isBefore(start) ? start : cur.end;
+    await _applyRange(DateTimeRange(start: start, end: end));
+  }
+
+  /// 点结束日期：不能早于开始。
+  Future<void> _pickEnd() async {
+    final cur = _effectiveRange;
+    final picked = await showAppDatePicker(
+      context,
+      initial: cur.end,
+      first: cur.start,
+      last: DateTime.now(),
+      title: '结束时间',
+    );
+    if (picked == null || !mounted) return;
+    await _applyRange(DateTimeRange(start: cur.start, end: _dayOnly(picked)));
   }
 
   void _onRangeChanged(_StatRange r) {
     Haptics.selection();
     setState(() => _range = r);
-    if (r == _StatRange.custom && _customRange == null) _pickCustomRange();
+    // 首次进自定义、还没区间 → 落一个默认区间并持久化（界面立刻有两个日期字段）。
+    if (r == _StatRange.custom && _customRange == null) {
+      _applyRange(_effectiveRange);
+    }
   }
 
   @override
@@ -187,8 +229,9 @@ class _StatisticsViewState extends State<StatisticsView> {
         return _CustomContent(
           records: records,
           repo: repo,
-          range: _customRange,
-          onPick: _pickCustomRange,
+          range: _effectiveRange,
+          onPickStart: _pickStart,
+          onPickEnd: _pickEnd,
         );
     }
   }
@@ -902,73 +945,74 @@ class _YearlyContent extends StatelessWidget {
 // 自定义视图：起止日期任选
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// 自定义区间里的单个日期字段（起 / 止），点开走全局日历。
+class _DateField extends StatelessWidget {
+  final DateTime date;
+  final VoidCallback onTap;
+  const _DateField({required this.date, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return PressableScale(
+      onPressed: onTap,
+      child: Container(
+        height: 42,
+        padding: const EdgeInsets.symmetric(horizontal: 14),
+        decoration: BoxDecoration(
+          color: AppColors.inputFill(scheme),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: AppColors.hairline(scheme)),
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Text('${date.year}/${date.month}/${date.day}',
+                style: TextStyle(fontSize: 14, color: scheme.onSurface)),
+            const SizedBox(width: 6),
+            Icon(CupertinoIcons.chevron_down,
+                size: 13, color: scheme.onSurfaceVariant),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class _CustomContent extends StatelessWidget {
   final List<TransactionRecord> records;
   final AppRepository repo;
-  final DateTimeRange? range;
-  final VoidCallback onPick;
+  final DateTimeRange range;
+  final VoidCallback onPickStart;
+  final VoidCallback onPickEnd;
 
   const _CustomContent({
     required this.records,
     required this.repo,
     required this.range,
-    required this.onPick,
+    required this.onPickStart,
+    required this.onPickEnd,
   });
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final r = range;
-    if (r == null) {
-      return Center(
-        child: PressableScale(
-          onPressed: onPick,
-          child: GlassSurface(
-            radius: 18,
-            blur: 0,
-            padding:
-                const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(Icons.date_range_outlined,
-                    size: 17, color: scheme.onSurfaceVariant),
-                const SizedBox(width: 8),
-                const Text('选择起止日期', style: TextStyle(fontSize: 14)),
-              ],
-            ),
-          ),
-        ),
-      );
-    }
-
     final s = StatisticsEngine.rangeSummary(records, start: r.start, end: r.end);
-    final label =
-        '${r.start.year}/${r.start.month}/${r.start.day} – ${r.end.year}/${r.end.month}/${r.end.day}';
 
     final header = Column(
       children: [
-        Center(
-          child: PressableScale(
-            onPressed: onPick,
-            child: GlassSurface(
-              radius: 16,
-              blur: 0,
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(label,
-                      style:
-                          TextStyle(fontSize: 13, color: scheme.onSurface)),
-                  const SizedBox(width: 6),
-                  Icon(Icons.edit_calendar_outlined,
-                      size: 15, color: scheme.onSurfaceVariant),
-                ],
-              ),
+        // 起止两个可点日期字段（对齐咔皮：点哪个改哪个，各自弹全局日历）。
+        Row(
+          children: [
+            Expanded(child: _DateField(date: r.start, onTap: onPickStart)),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 8),
+              child: Text('–',
+                  style: TextStyle(color: scheme.onSurfaceVariant)),
             ),
-          ),
+            Expanded(child: _DateField(date: r.end, onTap: onPickEnd)),
+          ],
         ),
         const SizedBox(height: 16),
         _TotalsRow(
