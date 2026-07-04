@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:decimal/decimal.dart';
 import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
@@ -24,6 +26,35 @@ import '../../widgets/pressable_scale.dart';
 import '../../widgets/settings_ui.dart';
 import '../../widgets/sliding_segment.dart';
 import 'monthly_report_view.dart';
+
+/// 图表 Y 轴的「漂亮步长」：把最大值凑成 100/200/500/1000/2000/5000… 这类整齐刻度。
+double _niceStep(double maxV) {
+  if (maxV <= 0) return 1;
+  final rough = maxV / 3; // 目标 ~3 条网格线
+  final mag = math.pow(10, (math.log(rough) / math.ln10).floor()).toDouble();
+  final norm = rough / mag;
+  final step = norm <= 1 ? 1.0 : (norm <= 2 ? 2.0 : (norm <= 5 ? 5.0 : 10.0));
+  return step * mag;
+}
+
+/// 图表左侧金额刻度（¥/万，隐藏 0），全统计页统一走它。
+AxisTitles _moneyLeftTitles(ColorScheme scheme, double step) {
+  return AxisTitles(
+    sideTitles: SideTitles(
+      showTitles: true,
+      reservedSize: 40,
+      interval: step,
+      getTitlesWidget: (v, meta) {
+        if (v < step * 0.5) return const SizedBox.shrink();
+        return Padding(
+          padding: const EdgeInsets.only(right: 4),
+          child: Text(MoneyFormat.axisLabel(v),
+              style: TextStyle(fontSize: 9, color: scheme.onSurfaceVariant)),
+        );
+      },
+    ),
+  );
+}
 
 /// 统计页：周 / 月 / 年 / 自定义 四个时间维度（Telegram 胶囊切换），
 /// 右上角可切账本；首图=环形图；趋势按维度给对应粒度；全部卡片化。
@@ -498,6 +529,12 @@ class _MonthlyContent extends StatelessWidget {
           isCurrentMonth: isCurrentMonth,
           monthDate: displayedMonth,
         );
+      case 'battery':
+        return _BudgetBatteryCard(
+          dailyTotals: summary.dailyTotals,
+          monthlyBudget: monthlyBudget,
+          isCurrentMonth: isCurrentMonth,
+        );
       case 'ring':
         if (!hasExpense) return null;
         return _RingCard(
@@ -582,6 +619,7 @@ class _ManagedCards extends StatelessWidget {
   /// 卡片注册表：key 用于持久化，别改已有 key。顺序/开关全维度共用一份。
   static const Map<String, String> cardTitles = {
     'insights': '喵的洞察',
+    'battery': '本月电量',
     'budget': '本月预算',
     'ring': '支出构成',
     'daily': '趋势图',
@@ -594,12 +632,12 @@ class _ManagedCards extends StatelessWidget {
 
   /// 只在月视图有意义的卡（图表库里标注出来）。
   static const Set<String> monthOnly = {
-    'insights', 'budget', 'heatmap', 'radar', 'stacked',
+    'insights', 'battery', 'budget', 'heatmap', 'radar', 'stacked',
   };
 
   /// 默认可见卡片（其余在图表库里，用户自己加）。
   static const List<String> defaultOrder = [
-    'insights', 'budget', 'ring', 'daily', 'ranking', 'top5',
+    'insights', 'battery', 'budget', 'ring', 'daily', 'ranking', 'top5',
   ];
 
   static List<String> visibleKeys(AppRepository repo) {
@@ -1458,6 +1496,163 @@ class _BudgetProgressCard extends StatelessWidget {
   }
 }
 
+/// 「本月电量」：预算=满格，累计支出在放电——「预算剩余」随每天花钱往下掉，
+/// 掉到 0 以下=透支(橙色)。当月只画到今天。没设预算给引导。
+class _BudgetBatteryCard extends StatelessWidget {
+  final List<DailyTotal> dailyTotals;
+  final Decimal? monthlyBudget;
+  final bool isCurrentMonth;
+
+  const _BudgetBatteryCard({
+    required this.dailyTotals,
+    required this.monthlyBudget,
+    required this.isCurrentMonth,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    if (monthlyBudget == null || monthlyBudget! <= Decimal.zero) {
+      return _SectionCard(
+        title: '本月电量',
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 8),
+          child: Text(
+            '设了本月预算后，这里用「电量」展示预算消耗：预算是满格，花钱在放电，超支就见红。',
+            style: TextStyle(
+                fontSize: 12.5, height: 1.5, color: scheme.onSurfaceVariant),
+          ),
+        ),
+      );
+    }
+    final budget = MoneyFormat.toDouble(monthlyBudget!);
+    final days = dailyTotals.length;
+    final remaining = <double>[];
+    var cum = 0.0;
+    for (final d in dailyTotals) {
+      cum += MoneyFormat.toDouble(d.expense).clamp(0.0, double.infinity);
+      remaining.add(budget - cum);
+    }
+    // 当月只画到今天；历史月画满整月。
+    final shownEnd = (isCurrentMonth ? DateTime.now().day : days).clamp(1, days);
+    final shown = remaining.take(shownEnd).toList();
+    final spots = [
+      for (var i = 0; i < shown.length; i++) FlSpot(i.toDouble(), shown[i])
+    ];
+    final minY = shown.fold<double>(budget, (a, b) => b < a ? b : a);
+    final over = minY < 0;
+    final remainNow = shown.last;
+
+    final step = _niceStep(budget);
+    final maxY = ((budget / step).floor() + 1) * step;
+    final loY = over ? -(((-minY) / step).floor() + 1) * step : 0.0;
+    final lineColor = over ? AppColors.warning : scheme.primary;
+    final xInterval = (days / 6).ceilToDouble().clamp(1.0, 999.0);
+
+    return _SectionCard(
+      title: '本月电量',
+      trailing: Text(
+        '剩 ${MoneyFormat.axisLabel(remainNow)} / ${MoneyFormat.axisLabel(budget)}',
+        style: TextStyle(
+          fontSize: 12,
+          fontWeight: FontWeight.w600,
+          fontFamily: 'Nunito',
+          color: over ? AppColors.warning : scheme.onSurfaceVariant,
+        ),
+      ),
+      child: SizedBox(
+        height: 176,
+        child: LineChart(
+          LineChartData(
+            minY: loY,
+            maxY: maxY,
+            minX: 0,
+            maxX: (days - 1).toDouble(),
+            lineBarsData: [
+              LineChartBarData(
+                spots: spots,
+                isCurved: false,
+                color: lineColor,
+                barWidth: 2.6,
+                dotData: const FlDotData(show: false),
+                belowBarData: BarAreaData(
+                  show: true,
+                  gradient: LinearGradient(
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                    colors: [
+                      lineColor.withValues(alpha: 0.24),
+                      lineColor.withValues(alpha: 0.02),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+            extraLinesData: ExtraLinesData(horizontalLines: [
+              if (over)
+                HorizontalLine(
+                  y: 0,
+                  color: AppColors.warning.withValues(alpha: 0.6),
+                  strokeWidth: 1,
+                  dashArray: const [4, 3],
+                ),
+            ]),
+            gridData: FlGridData(
+              show: true,
+              drawVerticalLine: false,
+              horizontalInterval: step,
+              getDrawingHorizontalLine: (v) => FlLine(
+                color: scheme.outlineVariant.withValues(alpha: 0.3),
+                strokeWidth: 0.5,
+              ),
+            ),
+            borderData: FlBorderData(show: false),
+            titlesData: FlTitlesData(
+              leftTitles: _moneyLeftTitles(scheme, step),
+              rightTitles: const AxisTitles(
+                  sideTitles: SideTitles(showTitles: false)),
+              topTitles: const AxisTitles(
+                  sideTitles: SideTitles(showTitles: false)),
+              bottomTitles: AxisTitles(
+                sideTitles: SideTitles(
+                  showTitles: true,
+                  reservedSize: 20,
+                  interval: xInterval,
+                  getTitlesWidget: (v, meta) {
+                    final day = v.toInt() + 1;
+                    if (day != 1 && day % xInterval.toInt() != 0) {
+                      return const SizedBox.shrink();
+                    }
+                    return Padding(
+                      padding: const EdgeInsets.only(top: 6),
+                      child: Text('$day',
+                          style: TextStyle(
+                              fontSize: 9, color: scheme.onSurfaceVariant)),
+                    );
+                  },
+                ),
+              ),
+            ),
+            lineTouchData: LineTouchData(
+              touchTooltipData: LineTouchTooltipData(
+                getTooltipItems: (spots) => spots.map((s) {
+                  return LineTooltipItem(
+                    '第${s.x.toInt() + 1}天 剩 ${MoneyFormat.axisLabel(s.y)}',
+                    TextStyle(
+                        color: lineColor,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w500),
+                  );
+                }).toList(),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _SectionCard extends StatelessWidget {
   final String title;
   final Widget child;
@@ -1700,12 +1895,24 @@ class _WeekBars extends StatelessWidget {
     final maxVal = daily
         .map((d) => MoneyFormat.toDouble(d.expense))
         .fold(0.0, (a, b) => a > b ? a : b);
+    final step = _niceStep(maxVal);
 
     return SizedBox(
-      height: 140,
+      height: 150,
       child: BarChart(
         BarChartData(
-          maxY: maxVal <= 0 ? 1 : maxVal * 1.2,
+          maxY: maxVal <= 0 ? step : ((maxVal / step).floor() + 1) * step,
+          barTouchData: BarTouchData(
+            touchTooltipData: BarTouchTooltipData(
+              getTooltipItem: (g, gi, rod, ri) => BarTooltipItem(
+                MoneyFormat.axisLabel(rod.toY),
+                TextStyle(
+                    color: AppColors.expense(scheme),
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600),
+              ),
+            ),
+          ),
           barGroups: List.generate(daily.length, (i) {
             return BarChartGroupData(
               x: i,
@@ -1713,7 +1920,7 @@ class _WeekBars extends StatelessWidget {
                 BarChartRodData(
                   toY: MoneyFormat.toDouble(daily[i].expense)
                       .clamp(0.0, double.infinity),
-                  color: scheme.primary,
+                  color: AppColors.expense(scheme),
                   width: 16,
                   borderRadius:
                       const BorderRadius.vertical(top: Radius.circular(4)),
@@ -1724,6 +1931,7 @@ class _WeekBars extends StatelessWidget {
           gridData: FlGridData(
             show: true,
             drawVerticalLine: false,
+            horizontalInterval: step,
             getDrawingHorizontalLine: (_) => FlLine(
               color: scheme.outlineVariant,
               strokeWidth: 0.5,
@@ -1731,9 +1939,7 @@ class _WeekBars extends StatelessWidget {
           ),
           borderData: FlBorderData(show: false),
           titlesData: FlTitlesData(
-            leftTitles: const AxisTitles(
-              sideTitles: SideTitles(showTitles: false),
-            ),
+            leftTitles: _moneyLeftTitles(scheme, step),
             rightTitles: const AxisTitles(
               sideTitles: SideTitles(showTitles: false),
             ),
@@ -1796,7 +2002,8 @@ class _DualLineChart extends StatelessWidget {
     final color = showIncome ? incColor : expColor;
     final label = showIncome ? '收入' : '支出';
     final maxV = data.fold<double>(0, (a, b) => a > b ? a : b);
-    final maxY = maxV <= 0 ? 1.0 : maxV * 1.25;
+    final step = _niceStep(maxV);
+    final maxY = maxV <= 0 ? step : ((maxV / step).floor() + 1) * step;
 
     LineChartBarData bar(List<double> d, Color c) => LineChartBarData(
           spots: [
@@ -1839,7 +2046,7 @@ class _DualLineChart extends StatelessWidget {
               gridData: FlGridData(
                 show: true,
                 drawVerticalLine: false,
-                horizontalInterval: maxY / 3,
+                horizontalInterval: step,
                 getDrawingHorizontalLine: (v) => FlLine(
                   color: scheme.outlineVariant.withValues(alpha: 0.3),
                   strokeWidth: 0.5,
@@ -1847,8 +2054,7 @@ class _DualLineChart extends StatelessWidget {
               ),
               borderData: FlBorderData(show: false),
               titlesData: FlTitlesData(
-                leftTitles: const AxisTitles(
-                    sideTitles: SideTitles(showTitles: false)),
+                leftTitles: _moneyLeftTitles(scheme, step),
                 rightTitles: const AxisTitles(
                     sideTitles: SideTitles(showTitles: false)),
                 topTitles: const AxisTitles(
@@ -1883,7 +2089,7 @@ class _DualLineChart extends StatelessWidget {
                 touchTooltipData: LineTouchTooltipData(
                   getTooltipItems: (spots) => spots.map((s) {
                     return LineTooltipItem(
-                      '$label ¥${s.y.toStringAsFixed(0)}',
+                      '$label ${MoneyFormat.axisLabel(s.y)}',
                       TextStyle(
                         color: color,
                         fontSize: 12,
@@ -2324,6 +2530,7 @@ class _StackedBars12 extends StatelessWidget {
 
     final spentColor = AppColors.expense(scheme);
     final savedColor = AppColors.income(scheme);
+    final step = _niceStep(maxV);
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -2342,7 +2549,7 @@ class _StackedBars12 extends StatelessWidget {
           height: 170,
           child: BarChart(
             BarChartData(
-              maxY: maxV * 1.15,
+              maxY: ((maxV / step).floor() + 1) * step,
               barGroups: [
                 for (var i = 0; i < months.length; i++)
                   BarChartGroupData(
@@ -2372,6 +2579,7 @@ class _StackedBars12 extends StatelessWidget {
               gridData: FlGridData(
                 show: true,
                 drawVerticalLine: false,
+                horizontalInterval: step,
                 getDrawingHorizontalLine: (_) => FlLine(
                   color: scheme.outlineVariant.withValues(alpha: 0.3),
                   strokeWidth: 0.5,
@@ -2379,8 +2587,7 @@ class _StackedBars12 extends StatelessWidget {
               ),
               borderData: FlBorderData(show: false),
               titlesData: FlTitlesData(
-                leftTitles: const AxisTitles(
-                    sideTitles: SideTitles(showTitles: false)),
+                leftTitles: _moneyLeftTitles(scheme, step),
                 rightTitles: const AxisTitles(
                     sideTitles: SideTitles(showTitles: false)),
                 topTitles: const AxisTitles(

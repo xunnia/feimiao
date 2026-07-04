@@ -35,4 +35,25 @@ class MoneyFormat {
 
   /// [Decimal] -> [double]，仅供图表/动画等不需要精确计算的场合。
   static double toDouble(Decimal amount) => amount.toDouble();
+
+  /// 图表坐标轴 / tooltip 用的紧凑金额：`¥800` / `¥1.2万` / `¥12万`。
+  /// 万位以上用「万」，千分位保留，小额直接整数。
+  static String axisLabel(double v, {bool withSymbol = true}) {
+    final sign = v < 0 ? '-' : '';
+    final a = v.abs();
+    final sym = withSymbol ? '¥' : '';
+    String body;
+    if (a >= 10000) {
+      final wan = a / 10000;
+      // 10万以上不留小数，10万以下保留一位（1.2万）。
+      body = wan >= 10
+          ? '${wan.round()}万'
+          : '${(wan * 10).round() / 10}万';
+    } else if (a >= 1000) {
+      body = NumberFormat('#,###').format(a.round());
+    } else {
+      body = a.round().toString();
+    }
+    return '$sign$sym$body';
+  }
 }
