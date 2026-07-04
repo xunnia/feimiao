@@ -424,7 +424,10 @@ class _AiChatPanelState extends State<AiChatPanel> {
   String _buildTxnContext(AppRepository repo, {required String question}) {
     final now = DateTime.now();
     final range = QueryRange.parse(question, now);
-    var txns = repo.transactions.where((t) => !t.excluded).toList()
+    // 只喂「可见订单」（退款行已挂到原订单里，不单独喂），且金额取**净额**
+    // （原额−已退）。否则 AI 会看到散落的退款负数行 → 无中生有「某某退款」、
+    // 又把已退到 140 的订单仍当 150 算。喂净额=AI 看到的就是用户实际花的。
+    var txns = repo.visibleTransactions.where((t) => !t.excluded).toList()
       ..sort((a, b) => b.date.compareTo(a.date));
     final limit = range == null ? 80 : 240;
     if (range != null) {
@@ -437,15 +440,20 @@ class _AiChatPanelState extends State<AiChatPanel> {
           '至 ${range.end.year}-${range.end.month}-${range.end.day} 的账目'
           '${txns.length > limit ? '（超长已截断，只保留最近 $limit 条）' : ''}。');
     }
-    sb.writeln('账目数据（格式：日期|收支|分类|金额元|备注）：');
+    sb.writeln('账目数据（金额均为退款后的净额，直接用即可，不必再减退款）'
+        '（格式：日期|收支|分类|金额元|备注）：');
     for (final t in txns.take(limit)) {
       final k = t.txKind == TransactionKind.income
           ? '收'
           : (t.txKind == TransactionKind.transfer ? '转' : '支');
       final d =
           '${t.date.year}-${t.date.month.toString().padLeft(2, '0')}-${t.date.day.toString().padLeft(2, '0')}';
+      // 净额：支出订单扣掉已退部分；收入/转账无退款，net==原额。
+      final net = t.txKind == TransactionKind.expense
+          ? repo.netAmountOf(t)
+          : t.amount;
       sb.writeln(
-          '$d|$k|${t.categoryNameZh}|${MoneyFormat.string(t.amount)}|${t.note}');
+          '$d|$k|${t.categoryNameZh}|${MoneyFormat.string(net)}|${t.note}');
     }
     return sb.toString();
   }

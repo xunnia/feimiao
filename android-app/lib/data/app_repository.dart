@@ -301,7 +301,7 @@ class TagEntity {
 // ---------------------------------------------------------------------------
 
 class AppRepository extends ChangeNotifier {
-  static const _dbVersion = 18;
+  static const _dbVersion = 19;
   static const _dbName = 'qingji.db';
 
   /// 行级 uuid（多人共享账本的同步地基）：32 位小写 hex，无需三方库。
@@ -929,6 +929,25 @@ class AppRepository extends ChangeNotifier {
       // Phase A 分类大改：重跑分类树（幂等 upsert）——新分类插入、改名/重挂父类
       // 更新，**绝不动 transactions**，历史账单靠 category_id 不变、分类不丢。
       await _applyCategoryTree(db);
+    }
+    if (oldVersion < 19) {
+      // 退款日期修复：早期版本把退款/报销冲减行记成「记账当天」而非原订单日期，
+      // 导致跨月退款把当月支出算错、表头合计与列表净额对不上。
+      // ① 把已挂账的退款行日期改回原订单日期；
+      await db.execute('''
+        UPDATE transactions
+        SET date_ms = (SELECT o.date_ms FROM transactions o
+                       WHERE o.id = transactions.refund_of)
+        WHERE refund_of IS NOT NULL
+          AND refund_of IN (SELECT id FROM transactions)
+      ''');
+      // ② 删除「孤儿退款」（原订单已不存在）——它们是隐藏的幽灵负数，
+      //    会让合计凭空少一截、AI 无中生有。删掉即可（退款本就无所依附）。
+      await db.execute('''
+        DELETE FROM transactions
+        WHERE refund_of IS NOT NULL
+          AND refund_of NOT IN (SELECT id FROM transactions)
+      ''');
     }
   }
 
@@ -1588,7 +1607,8 @@ class AppRepository extends ChangeNotifier {
         'category_id': original.categoryId,
         'account_id': accountId,
         'note': '报销到账',
-        'date_ms': DateTime.now().millisecondsSinceEpoch,
+        // 同退款：冲减归属原订单那个月，保证表头合计=列表净额。
+        'date_ms': original.dateMs,
         'refund_of': id,
         ..._syncStampNew(),
       });
@@ -1640,7 +1660,9 @@ class AppRepository extends ChangeNotifier {
       'category_id': original.categoryId,
       'account_id': accountId,
       'note': '退款',
-      'date_ms': DateTime.now().millisecondsSinceEpoch,
+      // 退款是原支出的冲减，日期归属原订单那个月（否则跨月退款会把当月
+      // 支出算错、且表头合计与列表净额对不上 → 用户不信任）。
+      'date_ms': original.dateMs,
       'refund_of': original.id,
       ..._syncStampNew(),
     });

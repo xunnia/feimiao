@@ -149,6 +149,11 @@ void main() {
     expect(repo.refundedAmountOf(id), Decimal.fromInt(8));
     expect(repo.netAmountOf(original), Decimal.fromInt(72));
     expect(repo.refundsOf(id), hasLength(2));
+    // 退款行日期 = 原订单日期（不是记账当天）——保证跨月退款不把当月算错、
+    // 表头合计与列表净额一致。
+    for (final r in repo.refundsOf(id)) {
+      expect(r.date, DateTime(2026, 7, 3));
+    }
     // 可见列表只有原账单，退款行不单独出现。
     expect(repo.visibleTransactions.where((t) => t.id == id), hasLength(1));
     expect(repo.visibleTransactions.where((t) => t.refundOf == id), isEmpty);
@@ -234,7 +239,7 @@ void main() {
     final check = await databaseFactory.openDatabase(path);
     final v = Sqflite.firstIntValue(
         await check.rawQuery('PRAGMA user_version'));
-    expect(v, 18); // init 一路升到当前最新版本
+    expect(v, 19); // init 一路升到当前最新版本
     final rows = await check.query('transactions');
     expect((rows.first['uuid'] as String).length, 32); // randomblob 回填
     expect(rows.first['updated_ms'] as int, greaterThan(0));
