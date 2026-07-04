@@ -8,6 +8,7 @@ import '../core/models/transaction_kind.dart';
 import '../data/app_repository.dart';
 import '../theme/app_colors.dart';
 import '../views/transactions/edit_transaction_sheet.dart';
+import 'settings_ui.dart';
 import 'slidable_tracker.dart';
 
 const Color _kEdit = Color(0xFF7D8B9B); // 蓝灰毛
@@ -233,119 +234,109 @@ Future<void> showRefundSheet(
                 borderRadius:
                     const BorderRadius.vertical(top: Radius.circular(24)),
               ),
-              padding: const EdgeInsets.fromLTRB(20, 12, 20, 20),
+              padding: EdgeInsets.zero,
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  Center(
-                    child: Container(
-                      width: 36,
-                      height: 4,
-                      decoration: BoxDecoration(
-                        color:
-                            scheme.onSurfaceVariant.withValues(alpha: 0.25),
-                        borderRadius: BorderRadius.circular(2),
-                      ),
-                    ),
+                  // 统一弹层头：✕ 关闭 + 居中「退款」+ 右上角确认（取代底部长条）。
+                  SheetHeader(
+                    title: '退款',
+                    subtitle:
+                        '${tx.categoryNameZh.isNotEmpty ? tx.categoryNameZh : '这笔'}'
+                        ' 原支出 ¥${_trim(full)}'
+                        '${refunded > Decimal.zero ? ' · 已退 ¥${_trim(refunded)} · 剩 ¥${_trim(remaining)}' : ''}',
+                    onClose: () => Navigator.pop(ctx),
+                    actionLabel: remaining > Decimal.zero
+                        ? (valid && parsed == remaining ? '全部退回' : '确认退款')
+                        : null,
+                    onAction: (remaining > Decimal.zero && valid)
+                        ? () async {
+                            Navigator.pop(ctx);
+                            Haptics.of(Haptic.success);
+                            await repo.refundTransaction(tx, parsed!);
+                          }
+                        : null,
                   ),
-                  const SizedBox(height: 16),
-                  Text('退款',
-                      style: Theme.of(ctx)
-                          .textTheme
-                          .titleMedium
-                          ?.copyWith(fontWeight: FontWeight.w500),
-                      textAlign: TextAlign.center),
-                  const SizedBox(height: 4),
-                  Text(
-                    '${tx.categoryNameZh.isNotEmpty ? tx.categoryNameZh : '这笔'}'
-                    ' 原支出 ¥${_trim(full)}'
-                    '${refunded > Decimal.zero ? ' · 已退 ¥${_trim(refunded)} · 剩 ¥${_trim(remaining)}' : ''}',
-                    style: Theme.of(ctx).textTheme.bodySmall?.copyWith(
-                          color: scheme.onSurfaceVariant,
-                        ),
-                    textAlign: TextAlign.center,
-                  ),
-                  // ── 已退明细（退款记录）──
-                  if (refunds.isNotEmpty) ...[
-                    const SizedBox(height: 12),
-                    Align(
-                      alignment: Alignment.centerLeft,
-                      child: Text('退款记录',
-                          style: Theme.of(ctx).textTheme.labelMedium?.copyWith(
-                              color: scheme.onSurfaceVariant)),
-                    ),
-                    const SizedBox(height: 4),
-                    for (final r in refunds)
-                      Padding(
-                        padding: const EdgeInsets.symmetric(vertical: 3),
-                        child: Row(
-                          children: [
-                            Expanded(
-                              child: Text(
-                                '${r.date.year}-${r.date.month.toString().padLeft(2, '0')}-${r.date.day.toString().padLeft(2, '0')} ${r.date.hour.toString().padLeft(2, '0')}:${r.date.minute.toString().padLeft(2, '0')}',
-                                style: Theme.of(ctx).textTheme.bodySmall?.copyWith(
-                                    color: scheme.onSurfaceVariant),
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(20, 12, 20, 20),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        // ── 已退明细（退款记录）──
+                        if (refunds.isNotEmpty) ...[
+                          Align(
+                            alignment: Alignment.centerLeft,
+                            child: Text('退款记录',
+                                style: Theme.of(ctx)
+                                    .textTheme
+                                    .labelMedium
+                                    ?.copyWith(color: scheme.onSurfaceVariant)),
+                          ),
+                          const SizedBox(height: 4),
+                          for (final r in refunds)
+                            Padding(
+                              padding: const EdgeInsets.symmetric(vertical: 3),
+                              child: Row(
+                                children: [
+                                  Expanded(
+                                    child: Text(
+                                      '${r.date.year}-${r.date.month.toString().padLeft(2, '0')}-${r.date.day.toString().padLeft(2, '0')} ${r.date.hour.toString().padLeft(2, '0')}:${r.date.minute.toString().padLeft(2, '0')}',
+                                      style: Theme.of(ctx)
+                                          .textTheme
+                                          .bodySmall
+                                          ?.copyWith(
+                                              color: scheme.onSurfaceVariant),
+                                    ),
+                                  ),
+                                  Text('+${_trim(r.amount.abs())}',
+                                      style: TextStyle(
+                                          color: gold,
+                                          fontWeight: FontWeight.w600,
+                                          fontFamily: 'Nunito')),
+                                  // 单笔退款可撤销（记错了）。
+                                  IconButton(
+                                    visualDensity: VisualDensity.compact,
+                                    icon: Icon(Icons.close,
+                                        size: 16,
+                                        color: scheme.onSurfaceVariant),
+                                    onPressed: () async {
+                                      await repo.deleteTransaction(r.id);
+                                      ctrl.text = _trim(
+                                          full - repo.refundedAmountOf(tx.id));
+                                      setLocal(() {});
+                                    },
+                                  ),
+                                ],
                               ),
                             ),
-                            Text('+${_trim(r.amount.abs())}',
-                                style: TextStyle(
-                                    color: gold,
-                                    fontWeight: FontWeight.w600,
-                                    fontFamily: 'Nunito')),
-                            // 单笔退款可撤销（记错了）。
-                            IconButton(
-                              visualDensity: VisualDensity.compact,
-                              icon: Icon(Icons.close,
-                                  size: 16, color: scheme.onSurfaceVariant),
-                              onPressed: () async {
-                                await repo.deleteTransaction(r.id);
-                                ctrl.text = _trim(full - repo.refundedAmountOf(tx.id));
-                                setLocal(() {});
-                              },
+                          const Divider(height: 16),
+                        ],
+                        if (remaining > Decimal.zero)
+                          TextField(
+                            controller: ctrl,
+                            autofocus: refunds.isEmpty,
+                            keyboardType: const TextInputType.numberWithOptions(
+                                decimal: true),
+                            onChanged: (_) => setLocal(() {}),
+                            decoration: InputDecoration(
+                              labelText: '本次退款金额',
+                              prefixText: '¥ ',
+                              helperText: '默认剩余可退 ¥${_trim(remaining)}，可改小',
                             ),
-                          ],
-                        ),
-                      ),
-                    const Divider(height: 16),
-                  ],
-                  if (remaining > Decimal.zero) ...[
-                    const SizedBox(height: 8),
-                    TextField(
-                      controller: ctrl,
-                      autofocus: refunds.isEmpty,
-                      keyboardType: const TextInputType.numberWithOptions(
-                          decimal: true),
-                      onChanged: (_) => setLocal(() {}),
-                      decoration: InputDecoration(
-                        labelText: '本次退款金额',
-                        prefixText: '¥ ',
-                        helperText: '默认剩余可退 ¥${_trim(remaining)}，可改小',
-                      ),
+                          )
+                        else
+                          Padding(
+                            padding: const EdgeInsets.only(top: 8),
+                            child: Text('已全额退完',
+                                textAlign: TextAlign.center,
+                                style: TextStyle(
+                                    color: scheme.onSurfaceVariant)),
+                          ),
+                      ],
                     ),
-                    const SizedBox(height: 8),
-                    SizedBox(
-                      width: double.infinity,
-                      child: FilledButton(
-                        onPressed: valid
-                            ? () async {
-                                Navigator.pop(ctx);
-                                Haptics.of(Haptic.success);
-                                await repo.refundTransaction(tx, parsed);
-                              }
-                            : null,
-                        child: Text(valid && parsed == remaining
-                            ? '全部退回'
-                            : '确认退款'),
-                      ),
-                    ),
-                  ] else
-                    Padding(
-                      padding: const EdgeInsets.only(top: 8),
-                      child: Text('已全额退完',
-                          textAlign: TextAlign.center,
-                          style: TextStyle(color: scheme.onSurfaceVariant)),
-                    ),
+                  ),
                 ],
               ),
             ),

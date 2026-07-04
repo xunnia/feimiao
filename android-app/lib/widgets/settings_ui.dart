@@ -23,16 +23,22 @@ class AppSwitch extends StatelessWidget {
   }
 }
 
-/// 半屏弹层统一顶部：左上角 ✕ 关闭 + 居中标题（字重 w500）+ 可选副标题。
+/// 半屏弹层统一顶部（对齐图二）：左上角 ✕ 关闭 + 居中标题（字重 w500）
+/// + 右上角可选操作按钮（保存/确认，取代占地方的底部大长条按钮）+ 可选副标题。
+/// [onAction] 为 null 时操作按钮置灰不可点（表单未填完等）。
 class SheetHeader extends StatelessWidget {
   final String title;
   final String? subtitle;
   final VoidCallback? onClose;
+  final String? actionLabel;
+  final VoidCallback? onAction;
   const SheetHeader({
     super.key,
     required this.title,
     this.subtitle,
     this.onClose,
+    this.actionLabel,
+    this.onAction,
   });
 
   @override
@@ -65,6 +71,27 @@ class SheetHeader extends StatelessWidget {
                       icon: Icon(CupertinoIcons.xmark,
                           size: 20, color: scheme.onSurfaceVariant),
                       onPressed: onClose,
+                    ),
+                  ),
+                ),
+              if (actionLabel != null)
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: Padding(
+                    padding: const EdgeInsets.only(right: 8),
+                    child: TextButton(
+                      onPressed: onAction,
+                      style: TextButton.styleFrom(
+                        foregroundColor: scheme.primary,
+                        disabledForegroundColor:
+                            scheme.onSurfaceVariant.withValues(alpha: 0.4),
+                        textStyle: const TextStyle(
+                            fontSize: 16, fontWeight: FontWeight.w600),
+                        minimumSize: const Size(0, 36),
+                        padding: const EdgeInsets.symmetric(horizontal: 12),
+                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      ),
+                      child: Text(actionLabel!),
                     ),
                   ),
                 ),
