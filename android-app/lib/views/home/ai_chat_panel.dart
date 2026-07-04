@@ -27,6 +27,7 @@ import '../../core/meow_insights.dart';
 import '../../core/money_format.dart';
 import '../../data/app_repository.dart';
 import '../../theme/app_colors.dart';
+import '../../widgets/app_buttons.dart';
 import '../../widgets/app_toast.dart';
 import '../../widgets/glass.dart';
 import '../../widgets/ios_dialogs.dart';
@@ -471,7 +472,21 @@ class _AiChatPanelState extends State<AiChatPanel> {
     if (range != null) {
       sb.writeln('以下是 ${range.start.year}-${range.start.month}-${range.start.day} '
           '至 ${range.end.year}-${range.end.month}-${range.end.day} 的账目'
-          '${txns.length > limit ? '（超长已截断，只保留最近 $limit 条）' : ''}。');
+          '${txns.length > limit ? '（明细超长已截断只列最近 $limit 条，但下面的合计是全量算的）' : ''}。');
+      // 合计在代码里按净额算准（和统计页完全一致）。LLM 自己加几十个数会算错，
+      // 所以回答"总共花了多少"必须直接引用这个数，不要自己重新加总。
+      var totalExp = Decimal.zero;
+      var totalInc = Decimal.zero;
+      for (final t in txns) {
+        if (t.txKind == TransactionKind.expense) {
+          totalExp += repo.netAmountOf(t);
+        } else if (t.txKind == TransactionKind.income) {
+          totalInc += t.amount;
+        }
+      }
+      sb.writeln('【本期准确合计（务必直接引用，不要自己再加总明细）】'
+          '支出 ${MoneyFormat.string(totalExp)}，'
+          '收入 ${MoneyFormat.string(totalInc)}。');
     }
     sb.writeln('账目数据（金额均为退款后的净额，直接用即可，不必再减退款）'
         '（格式：日期|收支|分类|金额元|备注）：');
@@ -880,27 +895,67 @@ class _AiChatPanelState extends State<AiChatPanel> {
     );
   }
 
-  // 头部：发财猫 + 喵喵助手 + 关闭。
+  // 头部：左=返回、中=睡觉猫、右=聊天记录保存时长（取代原来的关闭按钮）。
   Widget _header(BuildContext context) {
+    final repo = context.watch<AppRepository>();
+    final days = repo.chatRetentionDays;
+    final label = days >= 180 ? '存半年' : '存一个月';
     return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 6, 12, 4),
-      child: Row(
-        children: [
-          const Mascot(mood: MascotMood.celebrate, size: 35, animate: true),
-          const SizedBox(width: 8),
-          Text(
-            '喵喵助手',
-            style: Theme.of(context)
-                .textTheme
-                .titleSmall
-                ?.copyWith(fontWeight: FontWeight.w500),
-          ),
-          const Spacer(),
-          _CircleBtn(
-            icon: Icons.close,
-            onTap: () => Navigator.pop(context),
-          ),
-        ],
+      padding: const EdgeInsets.fromLTRB(12, 6, 12, 4),
+      child: SizedBox(
+        height: 44,
+        child: Stack(
+          alignment: Alignment.center,
+          children: [
+            const Align(
+              alignment: Alignment.centerLeft,
+              child: AppBackButton(),
+            ),
+            const Mascot(mood: MascotMood.empty, size: 40, animate: true),
+            Align(
+              alignment: Alignment.centerRight,
+              child: Builder(
+                builder: (btnCtx) => PressableScale(
+                  onPressed: () => showIosMenu(btnCtx, [
+                    IosMenuItem(
+                      label: '保存一个月',
+                      icon: days == 30 ? Icons.check : Icons.schedule,
+                      onTap: () => repo.setChatRetentionDays(30),
+                    ),
+                    IosMenuItem(
+                      label: '保存半年',
+                      icon: days >= 180 ? Icons.check : Icons.schedule,
+                      onTap: () => repo.setChatRetentionDays(180),
+                    ),
+                  ]),
+                  child: GlassSurface(
+                    radius: 16,
+                    blur: 0,
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 10, vertical: 6),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(Icons.access_time,
+                            size: 13,
+                            color: Theme.of(context)
+                                .colorScheme
+                                .onSurfaceVariant),
+                        const SizedBox(width: 4),
+                        Text(label,
+                            style: TextStyle(
+                                fontSize: 12,
+                                color: Theme.of(context)
+                                    .colorScheme
+                                    .onSurface)),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -1350,34 +1405,52 @@ class _AnswerBubbleState extends State<_AnswerBubble> {
   // 加粗样式：w450（可变字重），比正文 w350 高一小档——反差克制（用户 0702 定）。
   // 不支持可变字重的机型回退到 fontWeight w500。
   TextStyle _boldOf(TextStyle base) => base.copyWith(
-        fontWeight: FontWeight.w500,
-        fontVariations: const [FontVariation('wght', 430)],
+        fontWeight: FontWeight.w600,
+        fontVariations: const [FontVariation('wght', 560)],
       );
 
   // 轻量 markdown → 富文本：处理 **加粗**、行首 - / * 列表、# 标题；保留可选中。
   List<InlineSpan> _mdSpans(String text, TextStyle base) {
     final spans = <InlineSpan>[];
     final lines = text.split('\n');
+    final headerStyle = base.copyWith(
+      fontSize: (base.fontSize ?? 15) + 1.5,
+      fontWeight: FontWeight.w700,
+      fontVariations: const [FontVariation('wght', 640)],
+    );
+    void newline() => spans.add(const TextSpan(text: '\n'));
     for (int li = 0; li < lines.length; li++) {
       var line = lines[li].replaceAll('__', '');
-      var headerBold = false;
-      final h = RegExp(r'^#{1,6}\s*').firstMatch(line);
-      if (h != null) {
-        line = line.substring(h.end);
-        headerBold = true;
+      // 空行 = 段落间距（比普通换行大半行，给呼吸空间）。
+      if (line.trim().isEmpty) {
+        spans.add(const TextSpan(text: '\n', style: TextStyle(fontSize: 7)));
+        continue;
       }
-      final b = RegExp(r'^\s*[-*]\s+').firstMatch(line);
-      if (b != null) line = '•  ${line.substring(b.end)}';
+      // 标题：更大 + 更粗 + 上方留白（首行除外）。
+      final h = RegExp(r'^\s*#{1,6}\s*').firstMatch(line);
+      if (h != null) {
+        if (li != 0) spans.add(const TextSpan(text: '\n', style: TextStyle(fontSize: 5)));
+        spans.add(TextSpan(text: line.substring(h.end), style: headerStyle));
+        if (li != lines.length - 1) newline();
+        continue;
+      }
+      // 列表：无序 •、有序 1.（标记加粗，正文续行由 strutStyle 撑开行距）。
+      final ul = RegExp(r'^\s*[-*]\s+').firstMatch(line);
+      final ol = RegExp(r'^\s*(\d+)[.)]\s+').firstMatch(line);
+      if (ul != null) {
+        spans.add(TextSpan(text: '•  ', style: _boldOf(base)));
+        line = line.substring(ul.end);
+      } else if (ol != null) {
+        spans.add(TextSpan(text: '${ol.group(1)}.  ', style: _boldOf(base)));
+        line = line.substring(ol.end);
+      }
+      // 内联 **加粗**。
       final parts = line.split('**');
       for (int i = 0; i < parts.length; i++) {
         if (parts[i].isEmpty) continue;
-        final bold = headerBold || i.isOdd;
-        spans.add(TextSpan(
-          text: parts[i],
-          style: bold ? _boldOf(base) : null,
-        ));
+        spans.add(TextSpan(text: parts[i], style: i.isOdd ? _boldOf(base) : null));
       }
-      if (li != lines.length - 1) spans.add(const TextSpan(text: '\n'));
+      if (li != lines.length - 1) newline();
     }
     return spans;
   }

@@ -15,6 +15,7 @@ import '../../core/statistics/statistics_engine.dart';
 import '../../data/app_repository.dart';
 import '../../core/haptics.dart';
 import '../../theme/app_colors.dart';
+import '../../widgets/app_buttons.dart';
 import '../../widgets/app_date_picker.dart';
 import '../../widgets/glass.dart';
 import '../../widgets/ios_menu.dart';
@@ -154,18 +155,21 @@ class _StatisticsViewState extends State<StatisticsView> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
+        leading: const AppBackButton(),
         title: const Text('统计'),
         centerTitle: true,
         actions: [
-          IconButton(
-            icon: const Icon(Icons.description_outlined),
-            tooltip: '月度报告',
+          // 月度报告：Claude 同款文件图标（灰圆按钮）。
+          AppCircleButton(
+            icon: CupertinoIcons.doc_text,
+            iconSize: 19,
             onPressed: () => Navigator.push<void>(
               context,
               CupertinoPageRoute<void>(
                   builder: (_) => const MonthlyReportView()),
             ),
           ),
+          const SizedBox(width: 8),
           // 账本切换（多账本时统计口径跟着切）
           const _BookChip(),
           const SizedBox(width: 12),
