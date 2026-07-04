@@ -11,6 +11,7 @@ import '../../data/app_repository.dart';
 import '../../theme/app_colors.dart';
 import '../../widgets/app_date_picker.dart';
 import '../../widgets/ios_form.dart';
+import '../../widgets/settings_ui.dart';
 import '../../widgets/ios_menu.dart';
 import '../../widgets/mascot.dart';
 import '../../widgets/pressable_scale.dart';
@@ -144,7 +145,7 @@ class _RuleCard extends StatelessWidget {
                 ),
               ),
               const SizedBox(width: 4),
-              Switch(
+              AppSwitch(
                 value: rule.enabled,
                 onChanged: (v) => repo.setRecurringEnabled(rule.id, v),
               ),

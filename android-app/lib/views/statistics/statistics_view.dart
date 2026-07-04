@@ -20,6 +20,7 @@ import '../../widgets/glass.dart';
 import '../../widgets/ios_menu.dart';
 import '../../widgets/mascot.dart';
 import '../../widgets/pressable_scale.dart';
+import '../../widgets/settings_ui.dart';
 import '../../widgets/sliding_segment.dart';
 import 'monthly_report_view.dart';
 
@@ -685,50 +686,43 @@ class _ManagedCards extends StatelessWidget {
           builder: (ctx2, setLocal) {
             final cur = visibleKeys(repo);
             return SafeArea(
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(20, 16, 20, 12),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text('自定义图表',
-                        style: TextStyle(
-                            fontSize: 16, fontWeight: FontWeight.w600)),
-                    const SizedBox(height: 4),
-                    Text('打开想看的图表，长按卡片可拖动排序；带「月」标的只在月视图显示',
-                        style: TextStyle(
-                            fontSize: 12,
-                            color:
-                                Theme.of(ctx2).colorScheme.onSurfaceVariant)),
-                    const SizedBox(height: 8),
-                    for (final e in cardTitles.entries)
-                      Row(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  SheetHeader(
+                    title: '自定义图表',
+                    subtitle: '打开想看的图表，长按卡片可拖动排序；带「月」标的只在月视图显示',
+                    onClose: () => Navigator.pop(ctx2),
+                  ),
+                  Flexible(
+                    child: SingleChildScrollView(
+                      child: SettingsGroup(
                         children: [
-                          Expanded(
-                            child: Text(
-                              monthOnly.contains(e.key)
+                          for (final e in cardTitles.entries)
+                            SettingsRow(
+                              title: monthOnly.contains(e.key)
                                   ? '${e.value} · 月'
                                   : e.value,
-                              style: const TextStyle(fontSize: 14),
+                              trailing: AppSwitch(
+                                value: cur.contains(e.key),
+                                onChanged: (on) {
+                                  final next = List.of(cur);
+                                  if (on) {
+                                    next.add(e.key);
+                                  } else {
+                                    next.remove(e.key);
+                                  }
+                                  repo.setStatCardOrder(next);
+                                  setLocal(() {});
+                                },
+                              ),
                             ),
-                          ),
-                          Switch(
-                            value: cur.contains(e.key),
-                            onChanged: (on) {
-                              final next = List.of(cur);
-                              if (on) {
-                                next.add(e.key);
-                              } else {
-                                next.remove(e.key);
-                              }
-                              repo.setStatCardOrder(next);
-                              setLocal(() {});
-                            },
-                          ),
                         ],
                       ),
-                  ],
-                ),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                ],
               ),
             );
           },

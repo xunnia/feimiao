@@ -6,6 +6,7 @@ import '../../data/app_repository.dart';
 import '../../theme/app_colors.dart';
 import '../../widgets/ios_form.dart';
 import '../../widgets/pressable_scale.dart';
+import '../../widgets/settings_ui.dart';
 import '../common/app_sheet.dart';
 
 /// 常用账本模板（对齐团团记账的预置账本，去掉共享类）。
@@ -221,7 +222,7 @@ class _BookSheetState extends State<_BookSheet> {
                       ],
                     ),
                   ),
-                  Switch(
+                  AppSwitch(
                     value: _includeInTotal,
                     onChanged: (v) => setState(() => _includeInTotal = v),
                   ),
