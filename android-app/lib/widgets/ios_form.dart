@@ -15,6 +15,12 @@ InputDecoration iosInputDecoration(BuildContext context,
   );
   return InputDecoration(
     hintText: hint,
+    // 提示文字调小调浅：不抢眼，只做轻提示。
+    hintStyle: TextStyle(
+      fontSize: 14,
+      fontWeight: FontWeight.w400,
+      color: scheme.onSurfaceVariant.withValues(alpha: 0.5),
+    ),
     prefixText: prefix,
     filled: true,
     fillColor: AppColors.inputFill(scheme),

@@ -176,6 +176,11 @@ class AppTheme {
       ),
       // 输入框：圆角
       inputDecorationTheme: InputDecorationTheme(
+        hintStyle: TextStyle(
+          fontSize: 14,
+          fontWeight: FontWeight.w400,
+          color: cs.onSurfaceVariant.withValues(alpha: 0.5),
+        ),
         border: OutlineInputBorder(
           borderRadius: BorderRadius.circular(16),
         ),
@@ -249,6 +254,11 @@ class AppTheme {
         ),
       ),
       inputDecorationTheme: InputDecorationTheme(
+        hintStyle: TextStyle(
+          fontSize: 14,
+          fontWeight: FontWeight.w400,
+          color: cs.onSurfaceVariant.withValues(alpha: 0.5),
+        ),
         border: OutlineInputBorder(
           borderRadius: BorderRadius.circular(16),
         ),
