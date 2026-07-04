@@ -8,7 +8,8 @@
 ## §-1 最新交接（2026-07-02 起：按用户优化文档做六批 UI/功能升级）
 
 ### -1.-1 当前状态速览（2026-07-04 更新）
-- **最新 = 水印 b0703-19 / v1.13.0 / DB v19**，**退款统计严重 bug 已修，待 commit+推送**：`git push origin HEAD:claude/hopeful-wozniak-pr2ne3`。本地 analyze 0 error、225 测试全过。b0703-18(3873059) 及之前均已推送。
+- **最新 = 水印 b0703-20 / v1.14.0 / DB v19**，**统计卡懒加载①+喵助手记账卡跨重启恢复④已完成，待 commit+推送**：`git push origin HEAD:claude/hopeful-wozniak-pr2ne3`。本地 analyze 0 error、227 测试全过。b0703-19(退款统计bug)及之前均已推送。
+- **b0703-20 做了两件（候选①④）**：①**统计卡真懒加载**：`statistics_view.dart` `_ManagedCards` 的 `ReorderableListView(children:)` 换成 `.builder`（itemCount+itemBuilder），离屏 fl_chart 卡不再 layout/paint，统计页更跟手；header/footer/onReorder 逻辑原样。②**喵助手记账卡跨重启恢复**：`chat_messages` 复用 text 列存 JSON、新增 `role='record'`（免 DB 迁移）；repo 加 `addChatRecordMessage`(返回行id)/`updateChatRecordMessage`；ai_chat_panel 加顶层 `encodeRecordCard`/`decodeRecordCard`/`DecodedRecordCard`（可单测）+ `_RecordMsg.chatRowId` + `_persistRecord`（保存/改分类/删条目后写回）+ `_restoreHistory` 加 record 分支 `_rebuildRecordCard`（catId 用 repo 查回分类，deletedIdx 灌回）。只持久化**已保存**的卡（pending 不跨重启）。测试 `ai_chat_record_serialization_test.dart` 往返一致。方案原文 `android-app/docs/待做方案-b0703-19后.md`。
 - **⚠️ 退款日期 bug（b0703-19 修复，重要认知）**：用户报「主页支出 79.40 但列表明显 160+」+「AI 无中生有礼物退款 88」。根因=`refundTransaction`/`markReimbursed` 把退款/报销冲减行记成 **`DateTime.now()`（记账当天）而非原订单日期**。导入历史账单时，别的月份订单的退款被记到本月 → ①本月支出=正支出−所有退款(含跨月那笔88) 少算一截、且那笔−88的原订单不在本月列表 → **表头合计≠列表净额之和**（信任崩塌）；②AI 侧 `_buildTxnContext` 直接喂原始行（含散落退款负数行）→ AI 照实念「礼物退款88」、又把已退到140的订单仍当150。**修复三处+1迁移**：①退款/报销行 `date_ms=original.dateMs`（冲减归属原订单月）；②**DB v19 数据修复**：把已存在挂账退款行日期改回原订单日期 + 删孤儿退款(refund_of 指向已不存在订单的幽灵负数)；③`_buildTxnContext` 改喂 `visibleTransactions` 的**净额**(`netAmountOf`)、不再喂散退款行。**教训：任何"冲减/调整"类记录(退款/报销/未来的红冲)日期都要归属被冲减的原始记录那个月，否则跨月就把统计算错。喂 AI 的数一定是净额、不是毛额+散明细。**
 - **⚠️ 血泪教训（2026-07-04）**：给用户推送命令后**别立刻开始下一批的破坏性改动**（尤其 PowerShell 删行/大改文件到一半）。用户用 `git add -A` 提交上一批时，会把我改到一半的文件（如 home_view 删了类但没改用法）一起提交进去 → 编译错 → CI 挂。**规矩：一批完全做完(analyze+test 绿)再给推送命令；给了命令后要动大文件前先提醒用户"先推完再让我继续"。** 排查手法：`git stash -u` 还原到 HEAD 复现 CI 错误。
 - **本地验证坑（已解决）**：flutter 启动锁死锁（强杀任务后锁未释放，后续命令死等）。解法=杀 dart 进程 + 删 `C:\src\flutter\bin\cache\lockfile`，之后 analyze 十几秒正常出结果。**教训**：b0703-4 首次构建红=book_sheet 漏 import AppColors——CI analyze 原是 `|| true` 非阻断、测试只编译引用到的文件，编译错漏到打 APK 才炸。**CI 已改**：analyze 换成 `--no-fatal-infos --no-fatal-warnings`（error 阻断，warning 放行）。
@@ -18,7 +19,7 @@
 - **全局 AppBar 统一（b0703-17）**：app_colors.dart AppTheme 两套主题的 `appBarTheme` 补全 `centerTitle:true`+`titleTextStyle(17/w600/onSurface)`+`iconTheme`+`actionsIconTheme(onSurface 21)`，所有页面返回键/标题/加号按钮从此一个样，不用逐页改；statistics 的 `centerTitle:false` 改回 true。以后新页面 AppBar 直接 `AppBar(title: Text('x'))` 即自动统一。
 - **智能分类方案：四层全部做完**（地基 b0703-11、支付宝退款归零 b0703-13、AI记账侧增量 b0703-14、Phase A 分类大改 b0703-15、导入复核页+批量AI兜底 b0703-16）。**缓做**：特殊交易类型 还款/借贷/投资本金 复式记账(太重、和可爱简单路线有张力，现有转账+不计入收支覆盖80%)。(GPT `记账分类最终版调整建议.md`：医疗/教育补子类、收入细分、居家生活→居家住房、理财→投资收益、新增车辆支出/保险保障一级；新分类用 emoji 图标即"同款"，不用画SVG。**缓做**：特殊交易类型 还款/借贷/投资本金 那套复式记账，太重、和可爱简单路线有张力，现有转账+不计入收支已覆盖80%)。
 - **全局右滑返回已开**：AppTheme 两套主题都设了 `pageTransitionsTheme`=Cupertino（安卓默认 Zoom 无返回手势）。以后所有 push 页面自动支持左缘右滑退回，无需每页单独加。
-- **下一步候选**：①统计卡 ReorderableListView.builder 真懒加载 ②「记账(日常)」封面（GPT 在做）③多人共享账本后端（先出设计文档；删除墓碑未做）④喵助手记账卡跨重启恢复（chat_messages 只存文本）。不做：多币种/图标颜色编辑/语音。
+- **下一步候选（2026-07-04 定案）**：①统计卡真懒加载【要做】+④喵助手记账卡跨重启恢复【要做】——**详细实施方案见 [`android-app/docs/待做方案-b0703-19后.md`](android-app/docs/待做方案-b0703-19后.md)，下次直接照做**；③多人共享账本后端【押后·工作量大】；②「记账(日常)」封面【不做·已有】。不做：多币种/图标颜色编辑/语音。
 - **等用户的文件**：①字标 logo（已选定第二版=藏青+金币爪印，等存到 `Desktop\记账app\图片\logo.png`→白底转透明+裁边→assets/brand/→换抽屉头部文字）②账本封面缺 4 张：记账(日常)/宠物/母婴/家庭（流程见 -1.2 批5.6）。
 - **给 GPT 复盘的代码包**已生成在 `Desktop\记账app\复盘包\`（4个txt，含提示词模板+锁定决策护栏）；GPT 结论回来**只挑增量**（它会推底部Tab/红色/云同步，一律驳）。
 - 长期项目：多人共享账本（后端+账号），排在所有 UI 批次之后。

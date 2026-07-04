@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:math';
 import 'dart:ui' show ImageFilter;
 
@@ -225,7 +226,8 @@ class _AiChatPanelState extends State<AiChatPanel> {
   /// 从数据库恢复历史对话（超期的已在 loadChatMessages 内清理）。
   Future<void> _restoreHistory() async {
     if (!mounted) return;
-    final rows = await context.read<AppRepository>().loadChatMessages();
+    final repo = context.read<AppRepository>();
+    final rows = await repo.loadChatMessages();
     if (!mounted || rows.isEmpty) return;
     final restored = <_Msg>[];
     for (final r in rows) {
@@ -236,6 +238,10 @@ class _AiChatPanelState extends State<AiChatPanel> {
         restored.add(_UserMsg(text));
       } else if (role == 'answer') {
         restored.add(_AnswerMsg(text, question: question, shown: true));
+      } else if (role == 'record') {
+        // 记账明细卡跨重启恢复：重建卡 + 芯片（改分类/删除）继续可用。
+        final card = _rebuildRecordCard(text, (r['id'] as num?)?.toInt(), repo);
+        if (card != null) restored.add(card);
       } else if (role == 'info_err') {
         restored.add(_InfoMsg(text, error: true));
       } else {
@@ -244,6 +250,33 @@ class _AiChatPanelState extends State<AiChatPanel> {
     }
     setState(() => _chatHistory.insertAll(0, restored));
     _scrollToBottom();
+  }
+
+  /// 从持久化 JSON 重建一张记账卡（catId 用 repo 查回分类，行 id 灌回供之后写回）。
+  /// 坏数据容错：解析失败返回 null，跳过这张卡而不是整个恢复流程崩掉。
+  _RecordMsg? _rebuildRecordCard(String json, int? rowId, AppRepository repo) {
+    try {
+      final d = decodeRecordCard(json);
+      final cats = <CategoryEntity?>[
+        for (final id in d.catIds)
+          id == null
+              ? null
+              : repo.categories.where((c) => c.id == id).firstOrNull,
+      ];
+      final msg = _RecordMsg(
+        entries: d.entries,
+        cats: cats,
+        saved: d.saved,
+        txnIds: d.txnIds,
+        savedIds: d.txnIds.whereType<int>().toList(),
+        savedFeedback: d.feedback,
+        chatRowId: rowId,
+      );
+      msg.deletedIdx.addAll(d.deleted);
+      return msg;
+    } catch (_) {
+      return null;
+    }
   }
 
   void _onFocusChanged() {
@@ -551,6 +584,27 @@ class _AiChatPanelState extends State<AiChatPanel> {
     if (anomalyNote != null) {
       await repo.addChatMessage(role: 'info', text: anomalyNote);
     }
+    await _persistRecord(msg);
+  }
+
+  /// 把一张记账卡持久化到 chat_messages（首次 insert 拿行 id，之后 update），
+  /// 供关 App 重开后重建卡片、芯片（改分类/删除）继续可用。只持久化已保存的卡。
+  Future<void> _persistRecord(_RecordMsg msg) async {
+    if (!msg.saved) return;
+    final repo = context.read<AppRepository>();
+    final json = encodeRecordCard(
+      entries: msg.entries,
+      catIds: [for (final c in msg.cats) c?.id],
+      txnIds: msg.txnIds,
+      saved: msg.saved,
+      feedback: msg.savedFeedback,
+      deleted: msg.deletedIdx,
+    );
+    if (msg.chatRowId == null) {
+      msg.chatRowId = await repo.addChatRecordMessage(json);
+    } else {
+      await repo.updateChatRecordMessage(msg.chatRowId!, json);
+    }
   }
 
   /// 一键改分类：把第 [i] 笔改成 [newCat]，并记住这次纠正(下次自动用)；
@@ -576,6 +630,7 @@ class _AiChatPanelState extends State<AiChatPanel> {
     }
     if (!mounted) return;
     setState(() => msg.cats[i] = newCat);
+    await _persistRecord(msg); // 把改后的分类写回持久化卡
   }
 
   /// 给第 i 笔算几个候选分类(最常见的纠错):
@@ -616,6 +671,7 @@ class _AiChatPanelState extends State<AiChatPanel> {
     if (!mounted) return;
     Haptics.selection();
     setState(() => msg.deletedIdx.add(i));
+    await _persistRecord(msg); // 把删除状态写回持久化卡
   }
 
   // ── build ───────────────────────────────────────────────────────────────
@@ -998,9 +1054,14 @@ class _RecordMsg extends _Msg {
   List<int> savedIds;
   List<int?> txnIds; // 已入库时,每个条目对应的记录 id(无金额为 null);供按条目改分类
 
-  /// 已被用户从明细卡上删除的条目下标（运行时状态，不跨重启）。
+  /// 已被用户从明细卡上删除的条目下标（跨重启持久化，恢复时从 JSON 灌回）。
   final Set<int> deletedIdx = <int>{};
   String savedFeedback; // 记完后猫给的一句数据反馈
+
+  /// 这张卡在 chat_messages 表里的行 id（已保存的卡才有）；改分类/删条目后
+  /// 用它把最新状态写回，跨重启恢复。null=还没持久化。
+  int? chatRowId;
+
   _RecordMsg({
     required this.entries,
     required this.cats,
@@ -1008,7 +1069,99 @@ class _RecordMsg extends _Msg {
     this.savedIds = const [],
     this.txnIds = const [],
     this.savedFeedback = '',
+    this.chatRowId,
   });
+}
+
+/// 解码后的记账卡原始数据（catId 未解析成 CategoryEntity，恢复时用 repo 查回）。
+class DecodedRecordCard {
+  final List<ParsedEntry> entries;
+  final List<int?> catIds;
+  final List<int?> txnIds;
+  final bool saved;
+  final String feedback;
+  final Set<int> deleted;
+  const DecodedRecordCard({
+    required this.entries,
+    required this.catIds,
+    required this.txnIds,
+    required this.saved,
+    required this.feedback,
+    required this.deleted,
+  });
+}
+
+/// 把一张记账卡的结构化数据编码成 JSON（跨重启恢复用）。
+/// 抽成顶层纯函数便于单测（不依赖 Widget/BuildContext）。
+String encodeRecordCard({
+  required List<ParsedEntry> entries,
+  required List<int?> catIds,
+  required List<int?> txnIds,
+  required bool saved,
+  required String feedback,
+  required Set<int> deleted,
+}) {
+  final list = <Map<String, dynamic>>[];
+  for (var i = 0; i < entries.length; i++) {
+    final e = entries[i];
+    list.add({
+      'amt': e.amount?.toString(),
+      'kind': e.kind.toJson(),
+      'catKey': e.categoryKey,
+      'note': e.note,
+      'date': e.date.millisecondsSinceEpoch,
+      'conf': e.confidence,
+      'catId': i < catIds.length ? catIds[i] : null,
+      'txnId': i < txnIds.length ? txnIds[i] : null,
+    });
+  }
+  return jsonEncode({
+    'saved': saved,
+    'feedback': feedback,
+    'deleted': deleted.toList(),
+    'entries': list,
+  });
+}
+
+/// 解码记账卡 JSON。坏数据尽量容错（跳过烂条目而不是整卡丢失）。
+DecodedRecordCard decodeRecordCard(String json) {
+  final map = jsonDecode(json) as Map<String, dynamic>;
+  final rawEntries = (map['entries'] as List?) ?? const [];
+  final entries = <ParsedEntry>[];
+  final catIds = <int?>[];
+  final txnIds = <int?>[];
+  for (final raw in rawEntries) {
+    final m = raw as Map<String, dynamic>;
+    final amtStr = m['amt'] as String?;
+    TransactionKind kind;
+    try {
+      kind = TransactionKind.fromJson(m['kind'] as String? ?? 'expense');
+    } catch (_) {
+      kind = TransactionKind.expense;
+    }
+    entries.add(ParsedEntry(
+      amount: amtStr == null ? null : Decimal.tryParse(amtStr),
+      kind: kind,
+      categoryKey: m['catKey'] as String?,
+      note: (m['note'] as String?) ?? '',
+      date: DateTime.fromMillisecondsSinceEpoch(
+          (m['date'] as num?)?.toInt() ?? 0),
+      confidence: (m['conf'] as num?)?.toDouble() ?? 0.7,
+    ));
+    catIds.add((m['catId'] as num?)?.toInt());
+    txnIds.add((m['txnId'] as num?)?.toInt());
+  }
+  final deleted = <int>{
+    for (final d in (map['deleted'] as List?) ?? const []) (d as num).toInt()
+  };
+  return DecodedRecordCard(
+    entries: entries,
+    catIds: catIds,
+    txnIds: txnIds,
+    saved: (map['saved'] as bool?) ?? true,
+    feedback: (map['feedback'] as String?) ?? '',
+    deleted: deleted,
+  );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

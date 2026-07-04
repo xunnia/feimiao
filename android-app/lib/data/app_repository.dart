@@ -1210,6 +1210,23 @@ class AppRepository extends ChangeNotifier {
     });
   }
 
+  /// 追加一条「记账明细卡」消息（role='record'，结构化数据 JSON 存在 text 列，
+  /// 复用现有列免迁移）。返回新行 id，供之后改分类/删除时更新这张卡。
+  Future<int> addChatRecordMessage(String json) async {
+    return _db!.insert('chat_messages', {
+      'role': 'record',
+      'text': json,
+      'question': '',
+      'created_ms': DateTime.now().millisecondsSinceEpoch,
+    });
+  }
+
+  /// 更新某张记账卡的持久化 JSON（用户改分类/删条目后写回最新状态）。
+  Future<void> updateChatRecordMessage(int rowId, String json) async {
+    await _db!.update('chat_messages', {'text': json},
+        where: 'id = ?', whereArgs: [rowId]);
+  }
+
   /// 清空全部对话。
   Future<void> clearChatMessages() async {
     await _db!.delete('chat_messages');

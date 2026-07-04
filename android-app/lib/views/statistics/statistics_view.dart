@@ -594,13 +594,17 @@ class _ManagedCards extends StatelessWidget {
       if (w != null) items.add((k, w));
     }
 
-    return ReorderableListView(
+    // .builder 懒加载：只 layout/paint 当前视口内的卡，离屏的 fl_chart 滚到才算，
+    // 统计页打开更快、滚动更跟手。items 里的 Widget 是廉价构造，真正贵的图表
+    // layout/paint 由 .builder 按需触发。
+    return ReorderableListView.builder(
       padding: const EdgeInsets.all(16),
       buildDefaultDragHandles: false,
       header: header,
       footer: _CustomizeButton(
         onTap: () => _showCardLibrary(context),
       ),
+      itemCount: items.length,
       onReorder: (o, n) {
         if (n > o) n--;
         final itemKeys = [for (final e in items) e.$1];
@@ -613,18 +617,15 @@ class _ManagedCards extends StatelessWidget {
           ...visible.where((k) => !itemKeys.contains(k)),
         ]);
       },
-      children: [
-        for (var i = 0; i < items.length; i++)
-          ReorderableDelayedDragStartListener(
-            key: ValueKey('stat_card_${items[i].$1}'),
-            index: i,
-            child: Padding(
-              padding: const EdgeInsets.only(bottom: 16),
-              // 每张图表卡隔离重绘：滚动/拖排序时旁边的 fl_chart 不用跟着重画。
-              child: RepaintBoundary(child: items[i].$2),
-            ),
-          ),
-      ],
+      itemBuilder: (context, i) => ReorderableDelayedDragStartListener(
+        key: ValueKey('stat_card_${items[i].$1}'),
+        index: i,
+        child: Padding(
+          padding: const EdgeInsets.only(bottom: 16),
+          // 每张图表卡隔离重绘：滚动/拖排序时旁边的 fl_chart 不用跟着重画。
+          child: RepaintBoundary(child: items[i].$2),
+        ),
+      ),
     );
   }
 
