@@ -507,27 +507,14 @@ class _DrawerPanelState extends State<_DrawerPanel> {
     final scheme = Theme.of(context).colorScheme;
     final selected = b.id == repo.currentBookId;
     final deletable = repo.books.length > 1 && b.id != repo.defaultBookId;
+    final hasRemark = b.remark.trim().isNotEmpty;
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
       child: ListTile(
-        dense: true,
-        visualDensity: const VisualDensity(vertical: -2),
         minLeadingWidth: 0,
-        // 有封面图显示小缩略图，没有回退 emoji。
-        leading: b.cover.isEmpty
-            ? Text(b.icon, style: const TextStyle(fontSize: 19))
-            : ClipRRect(
-                borderRadius: BorderRadius.circular(6),
-                child: Image.asset(
-                  b.cover,
-                  width: 24,
-                  height: 24,
-                  fit: BoxFit.cover,
-                  errorBuilder: (_, __, ___) =>
-                      Text(b.icon, style: const TextStyle(fontSize: 19)),
-                ),
-              ),
-        horizontalTitleGap: 10,
+        // 放大的封面（竖版 3:4，猫脸能看清）；无封面回退 emoji 浅底方块。
+        leading: _bookCover(b, Theme.of(context).colorScheme),
+        horizontalTitleGap: 12,
         title: Row(
           children: [
             Flexible(
@@ -548,6 +535,13 @@ class _DrawerPanelState extends State<_DrawerPanel> {
             ],
           ],
         ),
+        subtitle: hasRemark
+            ? Text(b.remark,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style:
+                    TextStyle(fontSize: 12, color: scheme.onSurfaceVariant))
+            : null,
         trailing: Builder(
           builder: (iconCtx) => GestureDetector(
             behavior: HitTestBehavior.opaque,
@@ -592,6 +586,32 @@ class _DrawerPanelState extends State<_DrawerPanel> {
           repo.switchBook(b.id);
           widget.onClose();
         },
+      ),
+    );
+  }
+
+  /// 抽屉账本行的放大封面（竖版 3:4 圆角图）；无封面 = 浅底方块 + emoji。
+  Widget _bookCover(BookEntity b, ColorScheme scheme) {
+    const w = 46.0, h = 54.0;
+    Widget fallback() => Container(
+          width: w,
+          height: h,
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            color: scheme.surfaceContainerHighest,
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: Text(b.icon, style: const TextStyle(fontSize: 24)),
+        );
+    if (b.cover.isEmpty) return fallback();
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(10),
+      child: Image.asset(
+        b.cover,
+        width: w,
+        height: h,
+        fit: BoxFit.cover,
+        errorBuilder: (_, __, ___) => fallback(),
       ),
     );
   }

@@ -49,6 +49,9 @@ class BookEntity {
   /// 封面图资源路径（assets/book_covers/*.png）；空 = 无封面（显示 emoji）。
   final String cover;
 
+  /// 备注（抽屉账本行名称下方的灰小字）；空 = 不显示。
+  final String remark;
+
   /// 加星账本排在列表前面（总账本永远第一）。
   final bool starred;
 
@@ -60,6 +63,7 @@ class BookEntity {
     required this.name,
     this.icon = '📒',
     this.cover = '',
+    this.remark = '',
     this.starred = false,
     this.includeInTotal = true,
   });
@@ -69,6 +73,7 @@ class BookEntity {
         name: m['name'] as String,
         icon: m['icon'] as String? ?? '📒',
         cover: m['cover'] as String? ?? '',
+        remark: m['remark'] as String? ?? '',
         starred: ((m['starred'] as int?) ?? 0) == 1,
         includeInTotal: ((m['include_in_total'] as int?) ?? 1) == 1,
       );
@@ -301,7 +306,7 @@ class TagEntity {
 // ---------------------------------------------------------------------------
 
 class AppRepository extends ChangeNotifier {
-  static const _dbVersion = 19;
+  static const _dbVersion = 20;
   static const _dbName = 'qingji.db';
 
   /// 行级 uuid（多人共享账本的同步地基）：32 位小写 hex，无需三方库。
@@ -640,6 +645,7 @@ class AppRepository extends ChangeNotifier {
         name             TEXT NOT NULL,
         icon             TEXT NOT NULL DEFAULT '📒',
         cover            TEXT NOT NULL DEFAULT '',
+        remark           TEXT NOT NULL DEFAULT '',
         sort_order       INTEGER NOT NULL DEFAULT 0,
         created_ms       INTEGER NOT NULL DEFAULT 0,
         starred          INTEGER NOT NULL DEFAULT 0,
@@ -986,6 +992,13 @@ class AppRepository extends ChangeNotifier {
         WHERE refund_of IS NOT NULL
           AND refund_of NOT IN (SELECT id FROM transactions)
       ''');
+    }
+    if (oldVersion < 20) {
+      // 账本加「备注」列（抽屉账本行放大后显示在名称下方）。
+      try {
+        await db.execute(
+            "ALTER TABLE books ADD COLUMN remark TEXT NOT NULL DEFAULT ''");
+      } catch (_) {}
     }
   }
 
@@ -2050,6 +2063,7 @@ class AppRepository extends ChangeNotifier {
     required String name,
     String icon = '📒',
     String cover = '',
+    String remark = '',
     bool includeInTotal = true,
   }) async {
     final id = await _db!.insert('books', {
@@ -2057,6 +2071,7 @@ class AppRepository extends ChangeNotifier {
       'name': name,
       'icon': icon,
       'cover': cover,
+      'remark': remark,
       'sort_order': _books.length,
       'created_ms': DateTime.now().millisecondsSinceEpoch,
       'starred': 0,
@@ -2084,12 +2099,14 @@ class AppRepository extends ChangeNotifier {
     String? name,
     String? icon,
     String? cover,
+    String? remark,
     bool? includeInTotal,
   }) async {
     final updates = <String, Object?>{};
     if (name != null && name.isNotEmpty) updates['name'] = name;
     if (icon != null) updates['icon'] = icon;
     if (cover != null) updates['cover'] = cover;
+    if (remark != null) updates['remark'] = remark;
     if (includeInTotal != null) {
       updates['include_in_total'] = includeInTotal ? 1 : 0;
     }

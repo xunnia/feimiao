@@ -68,6 +68,8 @@ class _BookSheet extends StatefulWidget {
 class _BookSheetState extends State<_BookSheet> {
   late final TextEditingController _nameCtrl =
       TextEditingController(text: widget.edit?.name ?? '');
+  late final TextEditingController _remarkCtrl =
+      TextEditingController(text: widget.edit?.remark ?? '');
   late String _icon = widget.edit?.icon ?? '📒';
   late bool _includeInTotal = widget.edit?.includeInTotal ?? true;
   late String _cover = widget.edit?.cover ?? '';
@@ -78,6 +80,7 @@ class _BookSheetState extends State<_BookSheet> {
   @override
   void dispose() {
     _nameCtrl.dispose();
+    _remarkCtrl.dispose();
     super.dispose();
   }
 
@@ -100,12 +103,14 @@ class _BookSheetState extends State<_BookSheet> {
     final name = _nameCtrl.text.trim();
     if (name.isEmpty) return;
     Haptics.of(Haptic.success);
+    final remark = _remarkCtrl.text.trim();
     if (_isEdit) {
       await repo.updateBook(
         widget.edit!.id,
         name: name,
         icon: _icon,
         cover: _cover,
+        remark: remark,
         includeInTotal: _includeInTotal,
       );
     } else {
@@ -113,6 +118,7 @@ class _BookSheetState extends State<_BookSheet> {
         name: name,
         icon: _icon,
         cover: _cover,
+        remark: remark,
         includeInTotal: _includeInTotal,
       );
       await repo.switchBook(id);
@@ -199,6 +205,16 @@ class _BookSheetState extends State<_BookSheet> {
                     ),
                   ),
                 ],
+              ),
+            ),
+            const SizedBox(height: 6),
+            // ── 备注（显示在抽屉账本名下方）──
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 20),
+              child: TextField(
+                controller: _remarkCtrl,
+                maxLength: 20,
+                decoration: iosInputDecoration(context, hint: '备注（可选，如"日常开销"）'),
               ),
             ),
             const SizedBox(height: 6),

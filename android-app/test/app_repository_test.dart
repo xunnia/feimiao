@@ -239,7 +239,7 @@ void main() {
     final check = await databaseFactory.openDatabase(path);
     final v = Sqflite.firstIntValue(
         await check.rawQuery('PRAGMA user_version'));
-    expect(v, 19); // init 一路升到当前最新版本
+    expect(v, 20); // init 一路升到当前最新版本
     final rows = await check.query('transactions');
     expect((rows.first['uuid'] as String).length, 32); // randomblob 回填
     expect(rows.first['updated_ms'] as int, greaterThan(0));
