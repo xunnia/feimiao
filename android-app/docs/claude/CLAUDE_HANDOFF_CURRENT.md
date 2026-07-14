@@ -11,21 +11,21 @@
 - 最新本地 APK：`C:\src\xunni-codex\ci-artifacts\releases\feimiao-codex-v1.196.0-198.apk`
 - 版本：`1.196.0+198`
 - build tag：`b0714-198`
-- 当前分支：`codex/feimiao-p0-fixes`；HEAD 基线 `4070c6e`，v198 工作区未 commit、未 push、未发布；当前线上为 v195（releaseId `v195-3c502eb61f4e`）
+- 当前开发工作区分支：`codex/feimiao-p0-fixes`；本地功能提交 `1301e44`。因历史含 31 个超过 GitHub 100 MiB 限制的 APK，未改写本地历史，改用无发布产物的源码快照 `6703f8e`（父提交 `61c0c06`）推到 `origin/codex/feimiao-p0-fixes`；当前线上为 v198（releaseId `v198-69ae3ccda9ad`）
 - SHA256：`69AE3CCDA9ADE11D470E444E519CEC01483F701B495199A11EE0C744C1EC9A7E`
 - 包名：`com.qingji.qingji.codex`
 - 应用名：`肥喵记账`
 - 签名：`CN=Feimiao Codex Test, OU=Codex, O=Feimiao, L=Shanghai, ST=Shanghai, C=CN`
-- v198 已包含旧账时间降噪与 DB v40 时间精度地基；707/707、analyze 0 issue、aapt/16K/V2 签名/哈希均通过，尚未 commit、push 或发布。
+- v198 已包含旧账时间降噪与 DB v40 时间精度地基；707/707、analyze 0 issue、aapt/16K/V2 签名/哈希均通过，已 commit、push 并发布，运行态待用户安装验收。
 
 ## 2. 本轮修复摘要（1.196.0+198，本地待用户安装验收）
 
 ### 1.196.0+198 本轮
 
 - **旧账时间降噪（DB v40）**：交易新增 `time_precision` 四态。存量账只标记 `legacy_unknown`，不改写 `date_ms`，不拿创建或更新时间伪造消费时分；日期分组卡隐藏不可靠午夜，独立卡只保留日期，来源明确的真实午夜仍显示 `00:00`。
-- **入口与兼容链**：主页、搜索、账单、报销、喵助手普通卡/退款卡、手动/快捷/AI/通知、定时、普通导入、肥喵 CSV、退款报销和资产流水统一携带或继承精度。旧聊天 JSON/CSV 缺字段回退未知；CSV 导出也隐藏仅日期或旧未知午夜的 `00:00`。
+- **入口与兼容链**：主页、搜索、账单、报销、喵助手普通卡/退款卡、手动/快捷/AI/通知、定时、普通导入、肥喵 CSV、退款报销和资产流水统一携带或继承精度。旧聊天 JSON/CSV 缺字段回退未知；CSV 为兼容旧格式继续输出固定 `yyyy-MM-dd HH:mm` 日期字段，并通过时间精度列避免把未知 `00:00` 解释成明确时分。
 - **建议证据**：`TransactionRecord` 与智能建议引擎消费真实精度；`exact` 使用完整时段证据，`entryClock` 降权，`dateOnly/legacyUnknown` 不参与时段评分，但星期和周期证据仍可独立生效。
-- **验证 / 产物**：定向 192/192、最终全量 707/707；full analyze 0 issue，格式与 diff check 通过。`1.196.0+198` / `b0714-198` / DB v40；Release APK 120,641,920 字节，SHA256 `69AE3CCDA9ADE11D470E444E519CEC01483F701B495199A11EE0C744C1EC9A7E`。aapt、16K ZIP 对齐、唯一 Codex V2 签名和源/归档/sidecar 哈希一致。无连接设备，未做安装/冷启动；未 commit、push 或发布。
+- **验证 / 产物**：定向 192/192、最终全量 707/707；full analyze 0 issue，格式与 diff check 通过。`1.196.0+198` / `b0714-198` / DB v40；Release APK 120,641,920 字节，SHA256 `69AE3CCDA9ADE11D470E444E519CEC01483F701B495199A11EE0C744C1EC9A7E`。aapt、16K ZIP 对齐、唯一 Codex V2 签名和源/归档/sidecar 哈希一致。无连接设备，未做安装/冷启动；本地提交 `1301e44`、远端源码快照 `6703f8e`、Cloudflare releaseId `v198-69ae3ccda9ad`，公网与 KV 逐分片验证通过。
 
 ### 1.195.0+197 本轮
 
@@ -189,7 +189,7 @@
 - 模拟器、真机安装和截图按用户要求跳过；运行态由用户自行安装验收，不能宣称已通过真机验证。
 
 ## 4. 线上上传状态
-- ⏳ **v198 已由 Codex 完成本地出包，未 commit、未 push、未发布**：`1.196.0+198` / `b0714-198`；用户自行安装验收，当前线上仍为 v195。
+- ✅ **v198 已由 Codex 于 2026-07-14 提交、推送并发布上线**：`1.196.0+198` / `b0714-198`；本地功能提交 `1301e44`，远端无产物源码快照 `6703f8e` 位于 `origin/codex/feimiao-p0-fixes`，Cloudflare releaseId `v198-69ae3ccda9ad`。公网 `version.json`、KV manifest、5 分片逐片内容、拼接 SHA256 与 Range 响应均已验证；运行态由用户自行安装确认。
 - ↩️ **v197 APK/sidecar 原样保留**：作为本轮升级前本地回退基线，不代表 DB v40 运行后的无损降级方案。
 - ↩️ **v196 APK/sidecar 原样保留**：作为前一轮回退基线，不代表 DB v40 运行后的无损降级方案。
 - ✅ **v195 已由 Claude 于 2026-07-14 发布并逐分片验证**：releaseId `v195-3c502eb61f4e`，version.json 返回 195、sha256 干净、5 分片拼接哈希与源 APK 完全一致。发布时 Cloudflare 连接抖动，改用逐分片带重试上传（version.json 最后原子切换，过程中线上保持 185 不受影响）。

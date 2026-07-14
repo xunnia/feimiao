@@ -1,9 +1,9 @@
-## 2026-07-14 v1.196.0+198 旧账时间降噪与时间精度地基（Codex，本地待安装验收）
+## 2026-07-14 v1.196.0+198 旧账时间降噪与时间精度地基（Codex，已提交、推送并上线，待安装验收）
 
 - **不再成片显示 `00:00`（DB v40）**：`transactions` 新增 `time_precision`，区分来源明确时分、应用记账时钟、仅日期和旧数据未知。旧账统一迁移为 `legacy_unknown`，不改写任何 `date_ms`，不拿创建/更新时间伪造消费时间；日期分组卡隐藏不可靠午夜，独立卡只保留日期，真实明确午夜仍显示 `00:00`。
-- **全入口与兼容链收口**：主页、搜索、账单、报销、喵助手普通卡与退款卡统一使用时间精度；手动/快捷/AI/通知、定时、普通导入、肥喵 CSV、退款报销和资产流水分别写入来源对应精度。旧聊天 JSON 与旧 CSV 缺字段时安全回退未知；CSV 导出也不再给仅日期或旧未知午夜补 `00:00`。
+- **全入口与兼容链收口**：主页、搜索、账单、报销、喵助手普通卡与退款卡统一使用时间精度；手动/快捷/AI/通知、定时、普通导入、肥喵 CSV、退款报销和资产流水分别写入来源对应精度。旧聊天 JSON 与旧 CSV 缺字段时安全回退未知；CSV 为兼容旧格式继续输出固定 `yyyy-MM-dd HH:mm` 日期字段，并通过时间精度列避免把未知 `00:00` 解释成明确时分。
 - **智能建议读取真实证据**：建议引擎不再只靠“值是不是午夜”猜时段。`exact` 可使用真实午夜，`entryClock` 降权，`dateOnly/legacyUnknown` 不作为时段证据；星期和周期证据仍可独立工作，缓存指纹同步纳入精度。
-- **验证 / 产物**：定向回归 192/192、最终全量测试 707/707；`flutter analyze --no-pub --no-fatal-infos --no-fatal-warnings` 0 issue，格式与 `git diff --check` 通过。Release build 成功；aapt=`com.qingji.qingji.codex` / 198 / 1.196.0，16K ZIP 对齐、唯一 Codex V2 签名和固定证书通过。APK 120,641,920 字节，SHA256 `69AE3CCDA9ADE11D470E444E519CEC01483F701B495199A11EE0C744C1EC9A7E`，源 APK、归档件和 sidecar 一致。未连接 Android 设备，按用户既定要求不做模拟器/真机安装或截图；未 commit、未 push、未发布，线上仍为 v195。
+- **验证 / 产物与发布**：定向回归 192/192、最终全量测试 707/707；`flutter analyze --no-pub --no-fatal-infos --no-fatal-warnings` 0 issue，格式与 `git diff --check` 通过。Release build 成功；aapt=`com.qingji.qingji.codex` / 198 / 1.196.0，16K ZIP 对齐、唯一 Codex V2 签名和固定证书通过。APK 120,641,920 字节，SHA256 `69AE3CCDA9ADE11D470E444E519CEC01483F701B495199A11EE0C744C1EC9A7E`，源 APK、归档件和 sidecar 一致。未连接 Android 设备，按用户既定要求不做模拟器/真机安装或截图。本地功能提交 `1301e44`；为避开 31 个历史超限 APK，远端使用不含 `ci-artifacts` 与 Wrangler 缓存的单提交源码快照 `6703f8e`，已推到 `origin/codex/feimiao-p0-fixes`。Cloudflare 已发布 releaseId `v198-69ae3ccda9ad`；公网 `version.json`、KV manifest、5 分片逐片内容、拼接后 120,641,920 字节与 SHA256、以及公网 Range 206/长度/哈希响应头均通过验证。运行态仍待用户安装确认。
 
 ## 2026-07-14 v1.195.0+197 真机反馈修复（Codex，本地待安装验收）
 
