@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../../core/haptics.dart';
+import '../../core/money_format.dart';
 import '../../widgets/app_buttons.dart';
 import '../../core/models/cat_svg_icon.dart';
 import '../../core/models/category_seed.dart';
@@ -10,6 +11,7 @@ import '../../core/models/recurring_rule.dart';
 import '../../core/models/transaction_kind.dart';
 import '../../data/app_repository.dart';
 import '../../theme/app_colors.dart';
+import '../../widgets/app_empty_state.dart';
 import '../../widgets/app_date_picker.dart';
 import '../../widgets/ios_form.dart';
 import '../../widgets/settings_ui.dart';
@@ -17,10 +19,15 @@ import '../../widgets/ios_menu.dart';
 import '../../widgets/mascot.dart';
 import '../../widgets/pressable_scale.dart';
 import '../../widgets/sliding_segment.dart';
+import '../../widgets/transaction_day_list.dart';
+import '../common/category_picker_sheet.dart';
 import '../common/app_sheet.dart';
 
 String _d2(int n) => n.toString().padLeft(2, '0');
+DateTime _dateOnly(DateTime d) => DateTime(d.year, d.month, d.day);
 String _dateStr(DateTime d) => '${d.year}-${_d2(d.month)}-${_d2(d.day)}';
+
+enum _RecurringEndMode { none, date, count }
 
 /// 定时记账(周期记账)管理页:列出规则,可启停、编辑、删除、新增。
 class RecurringView extends StatelessWidget {
@@ -29,7 +36,8 @@ class RecurringView extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(leading: const AppBackButton(), 
+      appBar: AppBar(
+        leading: const AppBackButton(),
         title: const Text('定时记账'),
         centerTitle: true,
         actions: [
@@ -45,23 +53,10 @@ class RecurringView extends StatelessWidget {
         builder: (context, repo, _) {
           final rules = repo.recurringRules;
           if (rules.isEmpty) {
-            return Center(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  const Mascot(mood: MascotMood.idle, size: 72, animate: true),
-                  const SizedBox(height: 12),
-                  Text('还没有定时记账',
-                      style: Theme.of(context).textTheme.titleSmall),
-                  const SizedBox(height: 6),
-                  Text(
-                    '房租、订阅、工资这类固定收支,设一次自动记',
-                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                          color: Theme.of(context).colorScheme.onSurfaceVariant,
-                        ),
-                  ),
-                ],
-              ),
+            return const AppEmptyState(
+              mood: MascotMood.idle,
+              title: '还没有定时记账',
+              message: '房租、订阅、工资这类固定收支，设一次自动记',
             );
           }
           return ListView(
@@ -87,15 +82,17 @@ class _RuleCard extends StatelessWidget {
     final scheme = Theme.of(context).colorScheme;
     final cat =
         repo.categories.where((c) => c.id == rule.categoryId).firstOrNull;
+    final book = repo.books.where((b) => b.id == rule.bookId).firstOrNull;
     final catKey = cat?.key ?? '';
     final title = rule.note.isNotEmpty
         ? rule.note
-        : (cat?.nameZh ?? (rule.txKind == TransactionKind.income ? '收入' : '支出'));
+        : (cat?.nameZh ??
+            (rule.txKind == TransactionKind.income ? '收入' : '支出'));
     final amtColor = rule.txKind == TransactionKind.income
         ? AppColors.income(scheme)
         : scheme.onSurface;
     final amtText =
-        '${rule.txKind == TransactionKind.income ? '+' : '-'}¥${rule.amount}';
+        '${rule.txKind == TransactionKind.income ? '+' : '-'}${MoneyFormat.string(rule.amount)}';
 
     return Container(
       margin: const EdgeInsets.only(bottom: 10),
@@ -126,11 +123,14 @@ class _RuleCard extends StatelessWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(title,
-                        maxLines: 1, overflow: TextOverflow.ellipsis),
+                    Text(title, maxLines: 1, overflow: TextOverflow.ellipsis),
                     const SizedBox(height: 2),
                     Text(
-                      '${rule.recurPeriod.label} · 下次 ${_dateStr(rule.nextDue)}',
+                      [
+                        rule.recurPeriod.label,
+                        if (book != null) book.name,
+                        '下次 ${_dateStr(rule.nextDue)}',
+                      ].join(' · '),
                       style: Theme.of(context).textTheme.labelSmall?.copyWith(
                             color: scheme.onSurfaceVariant,
                           ),
@@ -161,8 +161,7 @@ class _RuleCard extends StatelessWidget {
 
 /// 新增 / 编辑周期规则表单。[rule] 为 null 时新增。
 /// 走全局模糊弹层（同类大弹层同一设计）。
-Future<void> showRecurringEditSheet(
-    BuildContext context, RecurringRule? rule) {
+Future<void> showRecurringEditSheet(BuildContext context, RecurringRule? rule) {
   return showBlurSheet<void>(context, child: _RecurringEditSheet(rule: rule));
 }
 
@@ -178,10 +177,14 @@ class _RecurringEditSheetState extends State<_RecurringEditSheet> {
   late TransactionKind _kind;
   late final TextEditingController _amountCtrl;
   late final TextEditingController _noteCtrl;
+  late final TextEditingController _countCtrl;
   int? _categoryId;
   int? _accountId;
+  int? _bookId;
   late RecurPeriod _period;
   late DateTime _startDate;
+  late _RecurringEndMode _endMode;
+  DateTime? _endDate;
 
   @override
   void initState() {
@@ -193,36 +196,70 @@ class _RecurringEditSheetState extends State<_RecurringEditSheet> {
     _noteCtrl = TextEditingController(text: r?.note ?? '');
     _categoryId = r?.categoryId;
     _accountId = r?.accountId;
+    _bookId = r?.bookId;
     _period = r?.recurPeriod ?? RecurPeriod.monthly;
-    _startDate = r?.nextDue ?? DateTime.now();
+    _startDate = _dateOnly(r?.startDate ?? DateTime.now());
+    _endDate = r?.endDate == null ? null : _dateOnly(r!.endDate!);
+    _countCtrl = TextEditingController(text: r?.totalCount?.toString() ?? '');
+    _endMode = r?.totalCount != null
+        ? _RecurringEndMode.count
+        : (r?.endDate != null
+            ? _RecurringEndMode.date
+            : _RecurringEndMode.none);
   }
 
   @override
   void dispose() {
     _amountCtrl.dispose();
     _noteCtrl.dispose();
+    _countCtrl.dispose();
     super.dispose();
+  }
+
+  int? get _countLimit => int.tryParse(_countCtrl.text.trim());
+
+  bool get _endConfigValid {
+    return switch (_endMode) {
+      _RecurringEndMode.none => true,
+      _RecurringEndMode.date => _endDate != null &&
+          !_endDate!.isBefore(DateTime(
+            _startDate.year,
+            _startDate.month,
+            _startDate.day,
+          )),
+      _RecurringEndMode.count => (_countLimit ?? 0) > 0,
+    };
   }
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final repo = context.read<AppRepository>();
-    final cats = repo.categoriesForKind(_kind);
-    final accounts = repo.accounts;
+    final cats = repo.categoriesForKind(_kind).where((c) => !c.hidden).toList();
+    final accounts = repo.transactionAccounts;
+    final books = repo.books;
+    if (_bookId == null || !books.any((b) => b.id == _bookId)) {
+      _bookId = repo.currentBookId;
+    }
     // 账户:为空或指向已删除账户时,回落到第一个(否则 Dropdown 会断言崩)。
     if (_accountId == null || !accounts.any((a) => a.id == _accountId)) {
       _accountId = accounts.firstOrNull?.id;
     }
-    // 若当前选中分类不在本类型下,清空
+    // 若当前选中分类不在本类型下,清空。这里必须包含二级分类:
+    // 用户常选「房租」这类子分类,只校验一级分类会在返回后立刻被清空。
     if (_categoryId != null && !cats.any((c) => c.id == _categoryId)) {
       _categoryId = null;
     }
 
     final amount = Decimal.tryParse(_amountCtrl.text.trim());
-    final valid = amount != null && amount > Decimal.zero && _accountId != null;
+    final valid = amount != null &&
+        amount > Decimal.zero &&
+        _accountId != null &&
+        _bookId != null &&
+        _endConfigValid;
     final selCat = cats.where((c) => c.id == _categoryId).firstOrNull;
     final selAcc = accounts.where((a) => a.id == _accountId).firstOrNull;
+    final selBook = books.where((b) => b.id == _bookId).firstOrNull;
     final screenH = MediaQuery.sizeOf(context).height;
 
     return ConstrainedBox(
@@ -230,24 +267,11 @@ class _RecurringEditSheetState extends State<_RecurringEditSheet> {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(20, 16, 12, 4),
-            child: Row(
-              children: [
-                Text(widget.rule == null ? '新增定时记账' : '编辑定时记账',
-                    style: const TextStyle(
-                        fontSize: 17, fontWeight: FontWeight.w600)),
-                const Spacer(),
-                PressableScale(
-                  onPressed: () => Navigator.pop(context),
-                  child: Padding(
-                    padding: const EdgeInsets.all(8),
-                    child: Icon(Icons.close,
-                        size: 20, color: scheme.onSurfaceVariant),
-                  ),
-                ),
-              ],
-            ),
+          SheetHeader(
+            title: widget.rule == null ? '新增定时记账' : '编辑定时记账',
+            onClose: () => Navigator.pop(context),
+            actionLabel: '保存',
+            onAction: valid ? () => _save(repo) : null,
           ),
           Flexible(
             child: SingleChildScrollView(
@@ -284,8 +308,8 @@ class _RecurringEditSheetState extends State<_RecurringEditSheet> {
                   const SizedBox(height: 6),
                   TextField(
                     controller: _amountCtrl,
-                    keyboardType: const TextInputType.numberWithOptions(
-                        decimal: true),
+                    keyboardType:
+                        const TextInputType.numberWithOptions(decimal: true),
                     onChanged: (_) => setState(() {}),
                     decoration: iosInputDecoration(context,
                         hint: '如 1300', prefix: '¥ '),
@@ -298,22 +322,28 @@ class _RecurringEditSheetState extends State<_RecurringEditSheet> {
                       Expanded(
                         child: _PickerField(
                           label: '分类',
-                          value: selCat == null
-                              ? '选择分类'
-                              : '${CategorySeed.emojiOf(selCat.key)} ${selCat.nameZh}',
+                          value: selCat == null ? '选择分类' : selCat.nameZh,
                           placeholder: selCat == null,
-                          onTapMenu: (menuCtx) => showIosMenu(menuCtx, [
-                            for (final c in cats)
-                              IosMenuItem(
-                                label:
-                                    '${CategorySeed.emojiOf(c.key)} ${c.nameZh}',
-                                icon: c.id == _categoryId
-                                    ? Icons.check_circle
-                                    : Icons.radio_button_unchecked,
-                                onTap: () =>
-                                    setState(() => _categoryId = c.id),
-                              ),
-                          ]),
+                          leading: selCat == null
+                              ? null
+                              : CatIcon(
+                                  categoryKey: selCat.key,
+                                  emoji: CategorySeed.emojiOf(selCat.key),
+                                  size: 20,
+                                ),
+                          onTapMenu: (menuCtx) async {
+                            final picked = await showCategoryPickerSheet(
+                              context,
+                              kind: _kind,
+                              selectedId: _categoryId,
+                              title: _kind == TransactionKind.income
+                                  ? '选择收入分类'
+                                  : '选择支出分类',
+                            );
+                            if (picked != null && mounted) {
+                              setState(() => _categoryId = picked.id);
+                            }
+                          },
                         ),
                       ),
                       const SizedBox(width: 10),
@@ -329,13 +359,28 @@ class _RecurringEditSheetState extends State<_RecurringEditSheet> {
                                 icon: a.id == _accountId
                                     ? Icons.check_circle
                                     : Icons.radio_button_unchecked,
-                                onTap: () =>
-                                    setState(() => _accountId = a.id),
+                                onTap: () => setState(() => _accountId = a.id),
                               ),
                           ]),
                         ),
                       ),
                     ],
+                  ),
+                  const SizedBox(height: 14),
+                  _PickerField(
+                    label: '账本',
+                    value: selBook?.name ?? '选择账本',
+                    placeholder: selBook == null,
+                    onTapMenu: (menuCtx) => showIosMenu(menuCtx, [
+                      for (final b in books)
+                        IosMenuItem(
+                          label: b.name,
+                          icon: b.id == _bookId
+                              ? Icons.check_circle
+                              : Icons.radio_button_unchecked,
+                          onTap: () => setState(() => _bookId = b.id),
+                        ),
+                    ]),
                   ),
                   const SizedBox(height: 14),
 
@@ -396,6 +441,78 @@ class _RecurringEditSheetState extends State<_RecurringEditSheet> {
                   ),
                   const SizedBox(height: 14),
 
+                  Text('结束方式',
+                      style: TextStyle(
+                          fontSize: 13, color: scheme.onSurfaceVariant)),
+                  const SizedBox(height: 6),
+                  SlidingSegment<_RecurringEndMode>(
+                    items: const [
+                      (_RecurringEndMode.none, '不限'),
+                      (_RecurringEndMode.date, '结束日期'),
+                      (_RecurringEndMode.count, '记录次数'),
+                    ],
+                    value: _endMode,
+                    onChanged: (v) {
+                      Haptics.selection();
+                      setState(() {
+                        _endMode = v;
+                        if (v == _RecurringEndMode.date) {
+                          _endDate ??= _startDate;
+                        }
+                      });
+                    },
+                  ),
+                  if (_endMode == _RecurringEndMode.date) ...[
+                    const SizedBox(height: 8),
+                    PressableScale(
+                      onPressed: () async {
+                        final picked = await showAppDatePicker(
+                          context,
+                          initial: _endDate ?? _startDate,
+                          first: _startDate,
+                          last: DateTime(2100),
+                          title: '结束日期',
+                        );
+                        if (picked != null) setState(() => _endDate = picked);
+                      },
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 14, vertical: 12),
+                        decoration: BoxDecoration(
+                          color: AppColors.inputFill(scheme),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: Row(
+                          children: [
+                            Text(
+                              _endDate == null ? '选择结束日期' : _dateStr(_endDate!),
+                              style: TextStyle(
+                                fontSize: 14,
+                                color: _endDate == null
+                                    ? scheme.onSurfaceVariant
+                                    : scheme.onSurface,
+                              ),
+                            ),
+                            const Spacer(),
+                            Icon(Icons.calendar_today_outlined,
+                                size: 16, color: scheme.onSurfaceVariant),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ],
+                  if (_endMode == _RecurringEndMode.count) ...[
+                    const SizedBox(height: 8),
+                    TextField(
+                      controller: _countCtrl,
+                      keyboardType: TextInputType.number,
+                      onChanged: (_) => setState(() {}),
+                      decoration: iosInputDecoration(context, hint: '如 12')
+                          .copyWith(suffixText: '次'),
+                    ),
+                  ],
+                  const SizedBox(height: 14),
+
                   // 备注
                   Text('备注（可选）',
                       style: TextStyle(
@@ -403,69 +520,48 @@ class _RecurringEditSheetState extends State<_RecurringEditSheet> {
                   const SizedBox(height: 6),
                   TextField(
                     controller: _noteCtrl,
-                    decoration:
-                        iosInputDecoration(context, hint: '如 房租还贷'),
+                    decoration: iosInputDecoration(context, hint: '如 房租还贷'),
                   ),
+                  if (widget.rule != null) ...[
+                    const SizedBox(height: 14),
+                    _RecurringRecordedStatus(
+                      rule: widget.rule!,
+                      records:
+                          repo.transactionsForRecurringRule(widget.rule!.id),
+                    ),
+                  ],
                 ],
               ),
             ),
           ),
-          // 底部按钮
-          Padding(
-            padding: const EdgeInsets.fromLTRB(20, 8, 20, 14),
-            child: Row(
-              children: [
-                if (widget.rule != null) ...[
-                  Expanded(
-                    child: PressableScale(
-                      onPressed: () async {
-                        await repo.deleteRecurringRule(widget.rule!.id);
-                        if (context.mounted) Navigator.pop(context);
-                      },
-                      child: Container(
-                        height: 46,
-                        alignment: Alignment.center,
-                        decoration: BoxDecoration(
-                          color: AppColors.card(scheme),
-                          borderRadius: BorderRadius.circular(999),
-                          border: Border.all(
-                              color: scheme.error.withValues(alpha: 0.5)),
-                        ),
-                        child: Text('删除',
-                            style: TextStyle(
-                                fontSize: 15,
-                                fontWeight: FontWeight.w600,
-                                color: scheme.error)),
-                      ),
-                    ),
+          if (widget.rule != null)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 8, 20, 14),
+              child: PressableScale(
+                onPressed: () async {
+                  await repo.deleteRecurringRule(widget.rule!.id);
+                  if (context.mounted) Navigator.pop(context);
+                },
+                child: Container(
+                  height: 46,
+                  alignment: Alignment.center,
+                  decoration: BoxDecoration(
+                    color: AppColors.card(scheme),
+                    borderRadius: BorderRadius.circular(999),
+                    border: Border.all(
+                        color: AppColors.warning.withValues(alpha: 0.5)),
                   ),
-                  const SizedBox(width: 12),
-                ],
-                Expanded(
-                  flex: 2,
-                  child: PressableScale(
-                    onPressed: valid ? () => _save(repo) : null,
-                    child: Opacity(
-                      opacity: valid ? 1 : 0.4,
-                      child: Container(
-                        height: 46,
-                        alignment: Alignment.center,
-                        decoration: BoxDecoration(
-                          color: scheme.onSurface,
-                          borderRadius: BorderRadius.circular(999),
-                        ),
-                        child: Text('保存',
-                            style: TextStyle(
-                                fontSize: 15,
-                                fontWeight: FontWeight.w600,
-                                color: scheme.surface)),
-                      ),
+                  child: const Text(
+                    '删除',
+                    style: TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.w600,
+                      color: AppColors.warning,
                     ),
                   ),
                 ),
-              ],
+              ),
             ),
-          ),
         ],
       ),
     );
@@ -474,15 +570,26 @@ class _RecurringEditSheetState extends State<_RecurringEditSheet> {
   Future<void> _save(AppRepository repo) async {
     final amount = Decimal.parse(_amountCtrl.text.trim());
     final note = _noteCtrl.text.trim();
+    final startDate = _dateOnly(_startDate);
+    final endDate = _endMode == _RecurringEndMode.date && _endDate != null
+        ? _dateOnly(_endDate!)
+        : null;
+    final totalCount = _endMode == _RecurringEndMode.count ? _countLimit : null;
+    final nextDue = widget.rule == null || widget.rule!.generatedCount == 0
+        ? startDate
+        : widget.rule!.nextDue;
     if (widget.rule == null) {
       await repo.addRecurringRule(
         kind: _kind,
         amount: amount,
         categoryId: _categoryId,
         accountId: _accountId,
+        bookId: _bookId,
         note: note,
         period: _period,
-        startDate: _startDate,
+        startDate: startDate,
+        endDate: endDate,
+        totalCount: totalCount,
       );
     } else {
       await repo.updateRecurringRule(
@@ -491,12 +598,115 @@ class _RecurringEditSheetState extends State<_RecurringEditSheet> {
         amount: amount,
         categoryId: _categoryId,
         accountId: _accountId,
+        bookId: _bookId,
         note: note,
         period: _period,
-        nextDue: _startDate,
+        startDate: startDate,
+        nextDue: nextDue,
+        endDate: endDate,
+        totalCount: totalCount,
       );
     }
     if (mounted) Navigator.pop(context);
+  }
+}
+
+class _RecurringRecordedStatus extends StatelessWidget {
+  final RecurringRule rule;
+  final List<TransactionEntity> records;
+
+  const _RecurringRecordedStatus({
+    required this.rule,
+    required this.records,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final latest = records.reversed.take(3).toList();
+    final countText = rule.totalCount == null
+        ? '${rule.generatedCount} 次'
+        : '${rule.generatedCount}/${rule.totalCount} 次';
+    final statusText =
+        rule.isCompleted ? '已完成' : (rule.enabled ? '进行中' : '已停用');
+
+    return Container(
+      decoration: BoxDecoration(
+        color: AppColors.card(scheme).withValues(alpha: 0.72),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color: scheme.outlineVariant.withValues(alpha: 0.34),
+          width: 0.5,
+        ),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(14, 12, 14, 10),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Text(
+                      '已记录情况',
+                      style: TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w500,
+                        color: scheme.onSurface,
+                      ),
+                    ),
+                    const Spacer(),
+                    Text(
+                      statusText,
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w400,
+                        color: scheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  '开始 ${_dateStr(rule.startDate)} · 已记录 $countText',
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w400,
+                    color: scheme.onSurfaceVariant,
+                    fontFamily: 'Nunito',
+                  ),
+                ),
+              ],
+            ),
+          ),
+          if (latest.isEmpty)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(14, 0, 14, 12),
+              child: Text(
+                '还没有生成账单',
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w400,
+                  color: scheme.onSurfaceVariant.withValues(alpha: 0.72),
+                ),
+              ),
+            )
+          else
+            for (var i = 0; i < latest.length; i++) ...[
+              if (i > 0)
+                Container(
+                  margin: const EdgeInsets.only(left: 58, right: 14),
+                  height: 0.5,
+                  color: scheme.outlineVariant.withValues(alpha: 0.42),
+                ),
+              TxRow(transaction: latest[i], dateGrouped: false),
+            ],
+        ],
+      ),
+    );
   }
 }
 
@@ -505,12 +715,14 @@ class _PickerField extends StatelessWidget {
   final String label;
   final String value;
   final bool placeholder;
+  final Widget? leading;
   final void Function(BuildContext menuCtx) onTapMenu;
 
   const _PickerField({
     required this.label,
     required this.value,
     required this.placeholder,
+    this.leading,
     required this.onTapMenu,
   });
 
@@ -527,14 +739,17 @@ class _PickerField extends StatelessWidget {
           builder: (menuCtx) => PressableScale(
             onPressed: () => onTapMenu(menuCtx),
             child: Container(
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
               decoration: BoxDecoration(
                 color: AppColors.inputFill(scheme),
                 borderRadius: BorderRadius.circular(12),
               ),
               child: Row(
                 children: [
+                  if (leading != null) ...[
+                    leading!,
+                    const SizedBox(width: 8),
+                  ],
                   Expanded(
                     child: Text(
                       value,

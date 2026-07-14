@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 
 import '../theme/app_colors.dart';
@@ -8,12 +10,14 @@ class IosMenuItem {
   final String label;
   final IconData icon;
   final bool destructive;
+  final bool selected;
   final VoidCallback onTap;
 
   const IosMenuItem({
     required this.label,
     required this.icon,
     this.destructive = false,
+    this.selected = false,
     required this.onTap,
   });
 }
@@ -30,25 +34,34 @@ const Color _kDestructiveRed = Color(0xFFFF3B30);
 ///   child: Icon(Icons.more_horiz),
 /// ))
 /// ```
-Future<void> showIosMenu(BuildContext anchorContext, List<IosMenuItem> items) {
+Future<void> showIosMenu(
+  BuildContext anchorContext,
+  List<IosMenuItem> items, {
+  double? width,
+  bool alignToAnchorLeft = false,
+}) {
   final box = anchorContext.findRenderObject() as RenderBox;
   final anchor = box.localToGlobal(Offset.zero) & box.size;
   final screen = MediaQuery.of(anchorContext).size;
-  const menuWidth = 196.0;
+  final menuWidth = width ?? 196.0;
   const margin = 8.0;
 
   // 右对齐到锚点右缘，越界时夹回屏幕内。
   double left = anchor.right - menuWidth;
+  if (alignToAnchorLeft) left = anchor.left;
   if (left < margin) left = margin;
   if (left + menuWidth > screen.width - margin) {
     left = screen.width - margin - menuWidth;
   }
   // 默认弹在锚点下方；下方放不下（锚点靠近屏底，如记账卡芯片）就翻到上方。
   final estHeight = items.length * 45.0 + 4;
+  final maxHeight = math.min(estHeight, screen.height - margin * 2).toDouble();
   double top = anchor.bottom + 4;
   var growUp = false;
   if (top + estHeight > screen.height - margin) {
-    top = (anchor.top - 4 - estHeight).clamp(margin, screen.height - margin);
+    top = (anchor.top - 4 - maxHeight)
+        .clamp(margin, screen.height - margin)
+        .toDouble();
     growUp = true;
   }
 
@@ -69,10 +82,13 @@ Future<void> showIosMenu(BuildContext anchorContext, List<IosMenuItem> items) {
             child: FadeTransition(
               opacity: anim,
               child: ScaleTransition(
-                alignment:
-                    growUp ? Alignment.bottomRight : Alignment.topRight,
+                alignment: growUp ? Alignment.bottomRight : Alignment.topRight,
                 scale: Tween<double>(begin: 0.82, end: 1.0).animate(curved),
-                child: _IosMenuCard(items: items, width: menuWidth),
+                child: _IosMenuCard(
+                  items: items,
+                  width: menuWidth,
+                  maxHeight: maxHeight,
+                ),
               ),
             ),
           ),
@@ -85,8 +101,13 @@ Future<void> showIosMenu(BuildContext anchorContext, List<IosMenuItem> items) {
 class _IosMenuCard extends StatelessWidget {
   final List<IosMenuItem> items;
   final double width;
+  final double maxHeight;
 
-  const _IosMenuCard({required this.items, required this.width});
+  const _IosMenuCard({
+    required this.items,
+    required this.width,
+    required this.maxHeight,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -104,24 +125,29 @@ class _IosMenuCard extends StatelessWidget {
             ),
           ],
         ),
-        child: GlassSurface(
-          radius: 15,
-          blur: 8,
-          opacity: 0.55,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              for (int i = 0; i < items.length; i++) ...[
-                if (i > 0)
-                  Container(
-                    height: 0.5,
-                    color: AppColors.hairline(
-                        Theme.of(context).colorScheme,
-                        strength: 1.3),
-                  ),
-                _IosMenuRow(item: items[i]),
-              ],
-            ],
+        child: ConstrainedBox(
+          constraints: BoxConstraints(maxHeight: maxHeight),
+          child: GlassSurface(
+            radius: 15,
+            blur: 8,
+            opacity: 0.55,
+            child: SingleChildScrollView(
+              padding: EdgeInsets.zero,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  for (int i = 0; i < items.length; i++) ...[
+                    if (i > 0)
+                      Container(
+                        height: 0.5,
+                        color: AppColors.hairline(Theme.of(context).colorScheme,
+                            strength: 1.3),
+                      ),
+                    _IosMenuRow(item: items[i]),
+                  ],
+                ],
+              ),
+            ),
           ),
         ),
       ),
@@ -138,8 +164,7 @@ class _IosMenuRow extends StatelessWidget {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     // 文字跟随主题（深色模式下之前的硬编码深灰会看不清）。
-    final color =
-        item.destructive ? _kDestructiveRed : scheme.onSurface;
+    final color = item.destructive ? _kDestructiveRed : scheme.onSurface;
     return InkWell(
       onTap: () {
         Navigator.of(context).pop();
@@ -166,6 +191,10 @@ class _IosMenuRow extends StatelessWidget {
                 ),
               ),
             ),
+            if (item.selected) ...[
+              const SizedBox(width: 10),
+              Icon(Icons.check_rounded, size: 18, color: color),
+            ],
           ],
         ),
       ),

@@ -1,11 +1,15 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:decimal/decimal.dart';
 
 import '../../core/ai/llm_query.dart';
 import '../../core/models/transaction_kind.dart';
 import '../../core/money_format.dart';
 import '../../data/app_repository.dart';
+import '../../widgets/app_buttons.dart';
+import '../../widgets/glass_input.dart';
 import '../../widgets/mascot.dart';
+import '../settings/ai_privacy_consent.dart';
 
 /// 喵助手页：进入自动生成本月消费分析报告，可继续对话追问。
 /// 复用 DeepSeek（LlmQuery）+ 当前账本的账目上下文。
@@ -58,10 +62,15 @@ class _MeowAssistantViewState extends State<MeowAssistantView> {
 
   Future<void> _ask(String question, {bool auto = false}) async {
     final repo = context.read<AppRepository>();
-    final key = repo.deepSeekApiKey;
-    if (key == null || key.isEmpty) {
-      setState(() => _msgs.add(_Msg(false,
-          '喵还没连上 AI～去「我的 → AI 记账设置」填个 DeepSeek key，我就能帮你分析账单啦。')));
+    final aiConfig = repo.aiProviderConfig;
+    if (!aiConfig.hasKey) {
+      setState(() => _msgs
+          .add(_Msg(false, '喵还没连上 AI～去「我的 → AI 记账设置」填个 API Key，我就能帮你分析账单啦。')));
+      return;
+    }
+    final consented = await ensureAiPrivacyConsent(context);
+    if (!consented) {
+      setState(() => _msgs.add(_Msg(false, '未同意 AI 隐私说明，喵不会把账本内容发出去。')));
       return;
     }
     setState(() {
@@ -74,7 +83,7 @@ class _MeowAssistantViewState extends State<MeowAssistantView> {
     try {
       answer = await LlmQuery.ask(
         question: question,
-        apiKey: key,
+        config: aiConfig,
         transactionsText: _txnContext(repo),
       );
     } catch (_) {
@@ -89,21 +98,52 @@ class _MeowAssistantViewState extends State<MeowAssistantView> {
   }
 
   String _txnContext(AppRepository repo) {
-    final txns = [...repo.transactions]
+    final txns = repo.visibleTransactions.where((t) => !t.excluded).toList()
       ..sort((a, b) => b.date.compareTo(a.date));
     final now = DateTime.now();
+    final thisStart = DateTime(now.year, now.month, 1);
+    final nextMonth = DateTime(now.year, now.month + 1, 1);
+    final lastStart = DateTime(now.year, now.month - 1, 1);
+
+    ({int count, Decimal expense, Decimal income}) summary(
+        DateTime start, DateTime end) {
+      var expense = Decimal.zero;
+      var income = Decimal.zero;
+      var count = 0;
+      for (final t in txns) {
+        if (t.date.isBefore(start) || !t.date.isBefore(end)) continue;
+        count++;
+        if (t.txKind == TransactionKind.expense) {
+          final net = repo.netAmountOf(t);
+          if (net > Decimal.zero) expense += net;
+        } else if (t.txKind == TransactionKind.income) {
+          income += t.amount;
+        }
+      }
+      return (count: count, expense: expense, income: income);
+    }
+
+    final thisMonth = summary(thisStart, nextMonth);
+    final lastMonth = summary(lastStart, thisStart);
     final sb = StringBuffer();
     sb.writeln(
         '今天是 ${now.year}-${now.month}-${now.day}。当前账本：${repo.currentBook?.name ?? '总账本'}。');
-    sb.writeln('账目数据（日期|收支|分类|金额元|备注）：');
-    for (final t in txns.take(80)) {
+    sb.writeln('【准确月度汇总】这些数字由本地全量账本计算，优先使用：');
+    sb.writeln(
+        '本月：支出 ${MoneyFormat.string(thisMonth.expense)}，收入 ${MoneyFormat.string(thisMonth.income)}，${thisMonth.count} 笔');
+    sb.writeln(
+        '上月：支出 ${MoneyFormat.string(lastMonth.expense)}，收入 ${MoneyFormat.string(lastMonth.income)}，${lastMonth.count} 笔');
+    sb.writeln('账目数据（金额均为退款后净额；格式：日期|收支|分类|金额元|备注）：');
+    for (final t in txns.take(160)) {
       final k = t.txKind == TransactionKind.income
           ? '收'
           : (t.txKind == TransactionKind.transfer ? '转' : '支');
       final d =
           '${t.date.year}-${t.date.month.toString().padLeft(2, '0')}-${t.date.day.toString().padLeft(2, '0')}';
+      final amount =
+          t.txKind == TransactionKind.expense ? repo.netAmountOf(t) : t.amount;
       sb.writeln(
-          '$d|$k|${t.categoryNameZh}|${MoneyFormat.string(t.amount)}|${t.note}');
+          '$d|$k|${t.categoryNameZh}|${MoneyFormat.string(amount)}|${t.note}');
     }
     return sb.toString();
   }
@@ -121,7 +161,10 @@ class _MeowAssistantViewState extends State<MeowAssistantView> {
     final sendEnabled = _ctrl.text.trim().isNotEmpty && !_busy;
 
     return Scaffold(
-      appBar: AppBar(title: const Text('喵助手')),
+      appBar: AppBar(
+        leading: const AppBackButton(),
+        title: const Text('喵助手'),
+      ),
       body: Column(
         children: [
           Expanded(
@@ -153,17 +196,12 @@ class _MeowAssistantViewState extends State<MeowAssistantView> {
           SafeArea(
             top: false,
             child: Padding(
-              padding: const EdgeInsets.fromLTRB(12, 6, 12, 8),
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.end,
-                children: [
-                  Expanded(
-                    child: Container(
-                      decoration: BoxDecoration(
-                        color: scheme.surfaceContainerHighest,
-                        borderRadius: BorderRadius.circular(22),
-                      ),
-                      padding: const EdgeInsets.symmetric(horizontal: 16),
+              padding: const EdgeInsets.fromLTRB(12, 6, 12, 10),
+              child: AppGlassInputShell(
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    Expanded(
                       child: TextField(
                         controller: _ctrl,
                         minLines: 1,
@@ -171,37 +209,33 @@ class _MeowAssistantViewState extends State<MeowAssistantView> {
                         textInputAction: TextInputAction.send,
                         onSubmitted: (_) => _send(),
                         onChanged: (_) => setState(() {}),
-                        decoration: const InputDecoration(
+                        cursorColor: scheme.primary,
+                        style: TextStyle(
+                          fontSize: 17,
+                          color: scheme.onSurface,
+                        ),
+                        decoration: InputDecoration(
                           hintText: '问问喵助手…',
+                          hintStyle: TextStyle(
+                            fontSize: 17,
+                            color:
+                                scheme.onSurfaceVariant.withValues(alpha: 0.55),
+                          ),
                           border: InputBorder.none,
-                          isDense: true,
-                          contentPadding: EdgeInsets.symmetric(vertical: 12),
+                          isCollapsed: true,
+                          contentPadding:
+                              const EdgeInsets.symmetric(vertical: 8),
                         ),
                       ),
                     ),
-                  ),
-                  const SizedBox(width: 8),
-                  GestureDetector(
-                    onTap: sendEnabled ? _send : null,
-                    child: Container(
-                      width: 40,
-                      height: 40,
-                      decoration: BoxDecoration(
-                        color: sendEnabled
-                            ? scheme.secondary
-                            : scheme.onSurface.withValues(alpha: 0.12),
-                        shape: BoxShape.circle,
-                      ),
-                      child: Icon(
-                        Icons.arrow_upward,
-                        size: 20,
-                        color: sendEnabled
-                            ? scheme.onSecondary
-                            : scheme.onSurface.withValues(alpha: 0.38),
-                      ),
+                    const SizedBox(width: 10),
+                    AppGlassInputIconButton(
+                      icon: Icons.arrow_upward,
+                      onPressed: sendEnabled ? _send : null,
+                      color: scheme.onSurfaceVariant,
                     ),
-                  ),
-                ],
+                  ],
+                ),
               ),
             ),
           ),

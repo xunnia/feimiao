@@ -2,6 +2,7 @@ import 'package:decimal/decimal.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:qingji/core/models/transaction_kind.dart';
 import 'package:qingji/core/ai/natural_language_entry_parser.dart';
+import 'package:qingji/core/transaction_time.dart';
 
 // 固定参考时间：2026-06-12 12:00（对应 Swift 测试的 now）。
 final _now = DateTime(2026, 6, 12, 12);
@@ -58,6 +59,29 @@ void main() {
       final entry = NaturalLanguageEntryParser.parse('今天吃了顿好的', at: _now);
       expect(entry.amount, isNull);
       expect(entry.categoryKey, 'dining'); // 泛词「吃」兜底到大类
+    });
+
+    test('relative day without a time keeps the submission clock', () {
+      final entry = NaturalLanguageEntryParser.parse('昨天公交4.3', at: _now);
+
+      expect(entry.date, DateTime(2026, 6, 11, 12));
+      expect(entry.timePrecision, TransactionTimePrecision.entryClock);
+    });
+
+    test('an explicit local time overrides the submission clock', () {
+      final entry = NaturalLanguageEntryParser.parse(
+        '昨天下午6点30公交4.3',
+        at: _now,
+      );
+
+      expect(entry.date, DateTime(2026, 6, 11, 18, 30));
+      expect(entry.timePrecision, TransactionTimePrecision.exact);
+    });
+
+    test('昨晚 uses the evening clock on the previous day', () {
+      final entry = NaturalLanguageEntryParser.parse('昨晚8点公交4.3', at: _now);
+
+      expect(entry.date, DateTime(2026, 6, 11, 20));
     });
   });
 

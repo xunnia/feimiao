@@ -1,5 +1,6 @@
 import 'package:flutter/cupertino.dart' show CupertinoPageTransitionsBuilder;
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show SystemUiOverlayStyle;
 
 // ---------------------------------------------------------------------------
 // 猫色板：从用户家蓝白英短猫取色
@@ -56,24 +57,114 @@ class AppColors {
   /// 警示色（超支）—— 深浅模式均用柔和橙。
   static const Color warning = kOverspendOrange;
 
+  /// 预算健康态——沿用预算卡最初的低饱和绿色。
+  ///
+  /// 预算进度表达的是「额度仍健康」，不是品牌选中态，不能跟随主题主色；
+  /// 否则蓝灰主题会把健康进度误画成灰色。深色模式略提亮以保持辨识度。
+  static const Color budgetHealthyLightMode = Color(0xFF7FB069);
+  static const Color budgetHealthyDarkMode = Color(0xFF9AC584);
+
   /// 根据当前 [ColorScheme] 返回收入颜色。
   static Color income(ColorScheme scheme) =>
       scheme.brightness == Brightness.dark ? incomeDarkMode : incomeLightMode;
 
+  static Color budgetHealthy(ColorScheme scheme) =>
+      scheme.brightness == Brightness.dark
+          ? budgetHealthyDarkMode
+          : budgetHealthyLightMode;
+
   /// 支出颜色直接返回 onSurface（中性文本色）。
   static Color expense(ColorScheme scheme) => scheme.onSurface;
 
-  /// 卡片底色：浅色纯白 / 深色暖灰，跟随主题，避免深色下死白。
-  static Color card(ColorScheme scheme) =>
-      scheme.brightness == Brightness.dark
-          ? const Color(0xFF332F2C)
-          : Colors.white;
+  /// 全局玻璃卡片透明度**默认值**（2026-07-11 主题系统上线后，
+  /// 实际生效值是下面的运行时字段，由 AppThemeController 灌入；
+  /// 这里的 const 只是出厂默认=暖橙 40%）。选中态 36% 用户点名"还不错"，别动。
+  /// 小组件 compact 渲染仍实心，不受主题影响。
+  static const double cardAlphaLight = 0.40;
+  static const double cardAlphaDark = 0.55;
+  static const double selectedCardAlphaLight = 0.36;
+  static const double selectedCardAlphaDark = 0.46;
 
-  /// 页面背景：浅色淡灰 / 深色更深暖灰（比卡片暗一档，让卡片浮起来）。
-  static Color appBg(ColorScheme scheme) =>
+  // ── 主题系统运行时字段（唯一写入口 applyTheme，别处不许改）──
+  static double _cardAlphaL = cardAlphaLight;
+  static double _cardAlphaD = cardAlphaDark;
+  static Color _bgTop = warmBackgroundTop;
+  static Color _bgBottom = warmBackgroundBottom;
+  static bool _bgSolid = false;
+  static Color _bgDark = const Color(0xFF211E1C);
+  static Color _bgDarkTop = const Color(0xFF211E1C);
+
+  /// 主题系统唯一写入口：AppThemeController 把算好的具体颜色灌进来。
+  /// 语义色（收入铜金/预算健康绿/超支橙/主色蓝灰）不在此列——永不开放，守配色铁律。
+  static void applyTheme({
+    required Color bgTop,
+    required Color bgBottom,
+    required bool bgSolid,
+    required double cardAlphaL,
+    required double cardAlphaD,
+    required Color bgDark,
+    required Color bgDarkTop,
+  }) {
+    _bgTop = bgTop;
+    _bgBottom = bgBottom;
+    _bgSolid = bgSolid;
+    _cardAlphaL = cardAlphaL;
+    _cardAlphaD = cardAlphaD;
+    _bgDark = bgDark;
+    _bgDarkTop = bgDarkTop;
+  }
+
+  /// 卡片底色：浅色半透明白 / 深色半透明暖灰，透明度跟主题走。
+  static Color card(ColorScheme scheme) => scheme.brightness == Brightness.dark
+      ? const Color(0xFF332F2C).withValues(alpha: _cardAlphaD)
+      : Colors.white.withValues(alpha: _cardAlphaL);
+
+  /// 选中态卡片底色：比普通卡片更低透明度，形成轻微灰玻璃选中块。
+  static Color selectedCard(ColorScheme scheme) => scheme.brightness ==
+          Brightness.dark
+      ? scheme.surfaceContainerHighest.withValues(alpha: selectedCardAlphaDark)
+      : Colors.white.withValues(alpha: selectedCardAlphaLight);
+
+  /// 半透明卡片上的进度底轨。彩色背景继续使用透白轨道；简约白背景
+  /// 改用克制的中性灰，否则白卡、白轨和灰白页底会融成一片。
+  static Color cardTrack(ColorScheme scheme) {
+    if (scheme.brightness == Brightness.dark) {
+      return Colors.white.withValues(alpha: 0.14);
+    }
+    final isNearWhiteSolid = _bgSolid && _bgBottom.computeLuminance() >= 0.90;
+    return isNearWhiteSolid
+        ? scheme.onSurface.withValues(alpha: 0.09)
+        : Colors.white.withValues(alpha: 0.56);
+  }
+
+  /// 全 App 背景渐变（浅色模式），跟主题色卡走；出厂默认=暖橙。
+  /// 纯色色卡（简约白）= 上下同色的退化渐变，调用点无需分支。
+  /// 深色模式不用渐变（appBg 纯色）。
+  static const Color warmBackgroundTop = Color(0xFFFAE0B0);
+  static const Color warmBackgroundBottom = Color(0xFFFFFDF7);
+  static LinearGradient get warmBackground => LinearGradient(
+        begin: Alignment.topCenter,
+        end: Alignment.bottomCenter,
+        colors: _bgSolid ? [_bgBottom, _bgBottom] : [_bgTop, _bgBottom],
+        stops: const [0.0, 0.85],
+      );
+
+  /// 顶部虚化层的染色：跟背景顶色走（灰白会把状态栏区域洗成白色）。
+  static Color topFrostTint(ColorScheme scheme) =>
       scheme.brightness == Brightness.dark
-          ? const Color(0xFF211E1C)
-          : const Color(0xFFF7F8FA);
+          ? _bgDarkTop
+          : (_bgSolid ? _bgBottom : _bgTop);
+
+  /// 页面背景：浅色淡灰 / 深色跟主题（暮夜=冷夜黑，默认=暖黑）。
+  static Color appBg(ColorScheme scheme) =>
+      scheme.brightness == Brightness.dark ? _bgDark : const Color(0xFFF7F8FA);
+
+  /// 整页背景装饰：浅色=主题渐变、深色=主题纯色。
+  /// 页面转场底/路由底一律用它，别再 const 写死。
+  static BoxDecoration pageBackground(Brightness brightness) =>
+      brightness == Brightness.dark
+          ? BoxDecoration(color: _bgDark)
+          : BoxDecoration(gradient: warmBackground);
 
   /// 发丝描边：浅色=淡黑、深色=淡白。
   /// 别再手写 `Colors.black.withValues(alpha: 0.06)`——深色模式下会看不见。
@@ -93,12 +184,45 @@ class AppColors {
 // 主题工厂
 // ---------------------------------------------------------------------------
 
-/// 全平台用 iOS 式转场：MaterialPageRoute 也带左缘右滑返回手势。
-/// （Android 默认 ZoomPageTransitionsBuilder 不支持返回手势，返回键又难点到。）
+/// 深色模式的页面底色（渐变只给浅色用）。
+const Color kDarkPageBg = Color(0xFF211E1C);
+
+/// iOS 式转场 + 每个路由自带不透明暖渐变底。
+/// 之前渐变只铺在 MaterialApp builder（Navigator 之下）、页面全透明——
+/// Cupertino 转场时新旧两页互相透视（错位感）且失去不透明页优化（卡顿）。
+/// 在转场器里给每页垫一层自己的背景，转场干净、合成器也能按不透明页处理。
+class _GradientCupertinoTransitionsBuilder extends PageTransitionsBuilder {
+  const _GradientCupertinoTransitionsBuilder();
+
+  static const _cupertino = CupertinoPageTransitionsBuilder();
+
+  @override
+  Widget buildTransitions<T>(
+    PageRoute<T> route,
+    BuildContext context,
+    Animation<double> animation,
+    Animation<double> secondaryAnimation,
+    Widget child,
+  ) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    return _cupertino.buildTransitions(
+      route,
+      context,
+      animation,
+      secondaryAnimation,
+      DecoratedBox(
+        decoration: AppColors.pageBackground(
+            isDark ? Brightness.dark : Brightness.light),
+        child: child,
+      ),
+    );
+  }
+}
+
 const PageTransitionsTheme _iosPageTransitions = PageTransitionsTheme(
   builders: {
-    TargetPlatform.android: CupertinoPageTransitionsBuilder(),
-    TargetPlatform.iOS: CupertinoPageTransitionsBuilder(),
+    TargetPlatform.android: _GradientCupertinoTransitionsBuilder(),
+    TargetPlatform.iOS: _GradientCupertinoTransitionsBuilder(),
   },
 );
 
@@ -125,7 +249,8 @@ class AppTheme {
 
     return ThemeData(
       colorScheme: cs,
-      scaffoldBackgroundColor: const Color(0xFFF7F8FA),
+      // 透明：透出 MaterialApp builder 铺的全局暖渐变背景（warmBackground）。
+      scaffoldBackgroundColor: Colors.transparent,
       useMaterial3: true,
       // 全局 iOS 化：返回键变 ‹ 箭头、列表滚动回弹、自适应控件转 Cupertino
       platform: TargetPlatform.iOS,
@@ -141,11 +266,19 @@ class AppTheme {
       // 全局统一返回键/标题/加号按钮：标题居中 17/w600，图标中性 onSurface 21，
       // 各页面 AppBar 从此一个样，不再各写各的。
       appBarTheme: AppBarTheme(
-        backgroundColor: const Color(0xFFF7F8FA),
+        backgroundColor: Colors.transparent,
         surfaceTintColor: Colors.transparent,
         elevation: 0,
         scrolledUnderElevation: 0,
         centerTitle: true,
+        // 暖渐变浅背景上状态栏图标必须深色，白字看不清（用户点名）。
+        systemOverlayStyle: const SystemUiOverlayStyle(
+          statusBarColor: Colors.transparent,
+          statusBarIconBrightness: Brightness.dark,
+          statusBarBrightness: Brightness.light,
+          systemNavigationBarColor: Colors.transparent,
+          systemNavigationBarIconBrightness: Brightness.dark,
+        ),
         titleTextStyle: TextStyle(
           fontSize: 17,
           fontWeight: FontWeight.w600,
@@ -157,10 +290,13 @@ class AppTheme {
       // 卡片：圆角 20、低阴影
       cardTheme: CardThemeData(
         elevation: 1,
+        // Card 默认按 elevation 叠加 primary 色调，会把半透明白卡染灰。
+        // 关闭后与直接使用 AppColors.card 的设置卡保持一致。
+        surfaceTintColor: Colors.transparent,
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(20),
         ),
-        color: Colors.white,
+        color: AppColors.card(cs),
       ),
       // FilledButton：全圆角（Stadium）
       filledButtonTheme: FilledButtonThemeData(
@@ -223,6 +359,14 @@ class AppTheme {
         elevation: 0,
         scrolledUnderElevation: 0,
         centerTitle: true,
+        // 深色背景上状态栏图标必须浅色（和浅色主题对称，别靠默认推断）。
+        systemOverlayStyle: const SystemUiOverlayStyle(
+          statusBarColor: Colors.transparent,
+          statusBarIconBrightness: Brightness.light,
+          statusBarBrightness: Brightness.dark,
+          systemNavigationBarColor: Colors.transparent,
+          systemNavigationBarIconBrightness: Brightness.light,
+        ),
         titleTextStyle: TextStyle(
           fontSize: 17,
           fontWeight: FontWeight.w600,
@@ -238,10 +382,11 @@ class AppTheme {
       ),
       cardTheme: CardThemeData(
         elevation: 1,
+        surfaceTintColor: Colors.transparent,
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(20),
         ),
-        color: const Color(0xFF332F2C),
+        color: AppColors.card(cs),
       ),
       filledButtonTheme: FilledButtonThemeData(
         style: FilledButton.styleFrom(

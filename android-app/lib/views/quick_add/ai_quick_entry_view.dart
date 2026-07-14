@@ -1,20 +1,27 @@
 import 'package:decimal/decimal.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/cupertino.dart' show CupertinoPageRoute;
+import '../../theme/app_colors.dart';
 import 'package:provider/provider.dart';
 
 import '../../build_info.dart';
+import '../../core/ai/ai_provider_config.dart';
 import '../../core/ai/llm_entry_parser.dart';
 import '../../core/ai/merchant_category.dart';
 import '../../core/ai/natural_language_entry_parser.dart';
+import '../../core/ai/refund_matcher.dart';
 import '../../core/ai/smart_tags.dart';
 import '../../core/meal_time.dart';
 import '../../core/models/category_seed.dart';
 import '../../core/models/transaction_kind.dart';
 import '../../core/money_format.dart';
 import '../../data/app_repository.dart';
+import '../../widgets/app_buttons.dart';
 import '../../widgets/app_toast.dart';
+import '../../widgets/glass_input.dart';
+import '../../widgets/refund_settlement_sheet.dart';
 import '../settings/ai_setting_view.dart';
+import '../settings/ai_privacy_consent.dart';
+import '../../widgets/app_page_route.dart';
 
 /// AI 一句话记账页。
 ///
@@ -57,6 +64,9 @@ class _AiQuickEntryViewState extends State<AiQuickEntryView> {
   /// 降级原因提示文字。
   String _fallbackHint = '';
 
+  RefundMatchResult? _pendingRefund;
+  String _refundNotice = '';
+
   @override
   void initState() {
     super.initState();
@@ -89,20 +99,63 @@ class _AiQuickEntryViewState extends State<AiQuickEntryView> {
       _matchedCats = [];
       _usedFallback = false;
       _fallbackHint = '';
+      _pendingRefund = null;
+      _refundNotice = '';
     });
 
     try {
-      final apiKey = repo.deepSeekApiKey;
+      if (!widget.fromScreenshot) {
+        final refund = RefundMatcher.match(
+          text: text,
+          amount: RefundMatcher.extractAmount(text),
+          candidates: [
+            for (final transaction in repo.visibleTransactions)
+              if (transaction.txKind == TransactionKind.expense &&
+                  transaction.amount > Decimal.zero)
+                RefundCandidate(
+                  id: transaction.id,
+                  label: '${transaction.note} ${transaction.categoryNameZh}',
+                  amount: transaction.amount,
+                  refunded: repo.refundedAmountOf(transaction.id),
+                  date: transaction.date,
+                ),
+          ],
+        );
+        if (refund.isRefundMutation) {
+          if (mounted) {
+            setState(() {
+              _pendingRefund =
+                  refund.status == RefundMatchStatus.matched ? refund : null;
+              _refundNotice = _refundPrompt(refund);
+              _loading = false;
+            });
+          }
+          return;
+        }
+      }
+
+      final aiConfig = repo.aiProviderConfigFor(AiTaskType.recordParse);
       List<ParsedEntry> results;
       bool usedFallback = false;
       String fallbackHint = '';
 
-      if (apiKey != null && apiKey.isNotEmpty) {
+      if (aiConfig.hasKey) {
+        final consented = await ensureAiPrivacyConsent(context);
+        if (!consented) {
+          if (mounted) {
+            setState(() {
+              _loading = false;
+              _usedFallback = true;
+              _fallbackHint = '未同意 AI 隐私说明，已取消联网解析';
+            });
+          }
+          return;
+        }
         // 尝试 LLM 解析
         try {
           results = (await LlmEntryParser.parseWithLLM(
             text: text,
-            apiKey: apiKey,
+            config: aiConfig,
             // 传用户真实分类（含自建、去隐藏）+ 学习习惯，让 AI 往用户的分类里归。
             expenseCats: repo.llmCategoryOptions(TransactionKind.expense),
             incomeCats: repo.llmCategoryOptions(TransactionKind.income),
@@ -168,11 +221,62 @@ class _AiQuickEntryViewState extends State<AiQuickEntryView> {
   // ---------------------------------------------------------------------------
 
   Future<void> _saveAll() async {
+    if (_saving) return;
+    final pendingRefund = _pendingRefund;
+    if (pendingRefund != null &&
+        pendingRefund.status == RefundMatchStatus.matched) {
+      final repo = context.read<AppRepository>();
+      final original = repo.visibleTransactions
+          .where((transaction) => transaction.id == pendingRefund.candidate!.id)
+          .firstOrNull;
+      if (original == null) {
+        setState(() {
+          _pendingRefund = null;
+          _refundNotice = '原订单刚刚发生了变化，退款没有写入。请重新解析';
+        });
+        return;
+      }
+      setState(() => _saving = true);
+      try {
+        final settlement = await showRefundSettlementSheet(
+          context,
+          original: original,
+          initialAmount: pendingRefund.amount!,
+          maxAmount: pendingRefund.candidate!.remaining,
+          amountEditable: false,
+          title: '确认退款到账',
+          confirmLabel: '确认退款',
+          existingRefunds: repo.refundsOf(original.id),
+        );
+        if (settlement == null || !mounted) return;
+        await repo.refundTransaction(
+          original,
+          settlement.amount,
+          settledAt: settlement.settledAt,
+          settlementAccountId: settlement.settlementAccountId,
+        );
+        if (mounted) {
+          showAppToast(context, '退款已挂到原订单');
+          Navigator.pop(context);
+        }
+      } on Object catch (_) {
+        if (mounted) {
+          setState(() {
+            _pendingRefund = null;
+            _refundNotice = '原订单或可退金额刚刚发生了变化，退款没有写入。请核对后重试';
+          });
+        }
+      } finally {
+        if (mounted) setState(() => _saving = false);
+      }
+      return;
+    }
+
     final entries = _entries;
     if (entries == null || entries.isEmpty) return;
 
     final repo = context.read<AppRepository>();
-    final accountId = repo.accounts.firstOrNull?.id;
+    final accountId = repo.transactionAccounts.firstOrNull?.id;
     if (accountId == null) return;
 
     setState(() => _saving = true);
@@ -188,6 +292,7 @@ class _AiQuickEntryViewState extends State<AiQuickEntryView> {
           accountId: accountId,
           note: e.note,
           date: e.date,
+          timePrecision: e.timePrecision,
           reimbursable: SmartTags.isReimbursable(e.note),
         );
       }
@@ -205,9 +310,26 @@ class _AiQuickEntryViewState extends State<AiQuickEntryView> {
   // ---------------------------------------------------------------------------
 
   bool get _hasValidEntry =>
-      _entries?.any((e) =>
-              e.amount != null && e.amount! > Decimal.zero) ??
-          false;
+      _entries?.any((e) => e.amount != null && e.amount! > Decimal.zero) ??
+      false;
+
+  String _refundPrompt(RefundMatchResult result) {
+    switch (result.status) {
+      case RefundMatchStatus.missingAmount:
+        return '还缺退款金额，例如「7月3日淘宝衣服退款 30」';
+      case RefundMatchStatus.noMatch:
+        return '没有找到唯一对应的原订单。请补充商户或商品和原订单日期';
+      case RefundMatchStatus.ambiguous:
+        return '找到了多笔可能的原订单。请再补充日期或商品，本次不会落账';
+      case RefundMatchStatus.exceedsRemaining:
+        return '这笔原订单只剩 '
+            '${MoneyFormat.string(result.candidate!.remaining)} 可退，请核对金额';
+      case RefundMatchStatus.matched:
+        return '已找到唯一原订单，确认后退款会附着到原订单，不会新增收入';
+      case RefundMatchStatus.notRefundMutation:
+        return '';
+    }
+  }
 
   // ---------------------------------------------------------------------------
   // UI
@@ -216,13 +338,13 @@ class _AiQuickEntryViewState extends State<AiQuickEntryView> {
   @override
   Widget build(BuildContext context) {
     final repo = context.watch<AppRepository>();
-    final hasKey =
-        (repo.deepSeekApiKey ?? '').isNotEmpty;
+    final hasKey = repo.hasAiApiKey;
     final entries = _entries;
     final scheme = Theme.of(context).colorScheme;
 
     return Scaffold(
       appBar: AppBar(
+        leading: const AppBackButton(),
         title: const Text('AI 记账'),
         centerTitle: true,
         actions: [
@@ -231,8 +353,7 @@ class _AiQuickEntryViewState extends State<AiQuickEntryView> {
             TextButton(
               onPressed: () => Navigator.push(
                 context,
-                CupertinoPageRoute<void>(
-                    builder: (_) => const AiSettingView()),
+                AppPageRoute<void>(builder: (_) => const AiSettingView()),
               ),
               child: const Text('配置'),
             ),
@@ -265,10 +386,7 @@ class _AiQuickEntryViewState extends State<AiQuickEntryView> {
                       hasKey
                           ? '用一句话描述多笔记录，AI 自动拆分 · $kBuildTag'
                           : '用一句话描述这笔记录，本地即刻解析 · $kBuildTag',
-                      style: Theme.of(context)
-                          .textTheme
-                          .bodySmall
-                          ?.copyWith(
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
                             color: scheme.onSurfaceVariant,
                           ),
                     ),
@@ -277,60 +395,93 @@ class _AiQuickEntryViewState extends State<AiQuickEntryView> {
               ),
               const SizedBox(height: 16),
 
-              // 输入框
-              TextField(
-                controller: _inputCtrl,
-                maxLines: 3,
-                autofocus: true,
-                textInputAction: TextInputAction.done,
-                onSubmitted: (_) => _doParse(),
-                decoration: InputDecoration(
-                  hintText: hasKey
-                      ? '例如：昨天买了20块肉、30的衣服、前天交房租1500'
-                      : '例如：昨天打车23块、工资发了8500',
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  filled: true,
-                  fillColor: scheme.surfaceContainerHighest.withValues(alpha: 0.5),
+              AppGlassInputShell(
+                padding: const EdgeInsets.fromLTRB(14, 14, 10, 10),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    TextField(
+                      controller: _inputCtrl,
+                      minLines: 2,
+                      maxLines: 4,
+                      autofocus: true,
+                      textInputAction: TextInputAction.done,
+                      onSubmitted: (_) => _doParse(),
+                      cursorColor: scheme.primary,
+                      style: TextStyle(
+                        fontSize: 17,
+                        color: scheme.onSurface,
+                      ),
+                      decoration: InputDecoration(
+                        hintText: hasKey
+                            ? '例如：昨天买了20块肉、30的衣服、前天交房租1500'
+                            : '例如：昨天打车23块、工资发了8500',
+                        hintStyle: TextStyle(
+                          fontSize: 16,
+                          color:
+                              scheme.onSurfaceVariant.withValues(alpha: 0.55),
+                        ),
+                        border: InputBorder.none,
+                        isCollapsed: true,
+                        contentPadding: const EdgeInsets.symmetric(vertical: 4),
+                      ),
+                      onChanged: (_) {
+                        setState(() {
+                          if (_entries != null) {
+                            _entries = null;
+                            _matchedCats = [];
+                            _usedFallback = false;
+                            _fallbackHint = '';
+                          }
+                          _pendingRefund = null;
+                          _refundNotice = '';
+                        });
+                      },
+                    ),
+                    const SizedBox(height: 12),
+                    Row(
+                      children: [
+                        AppGlassInputPillButton(
+                          label: _loading
+                              ? '解析中'
+                              : hasKey
+                                  ? 'AI 解析'
+                                  : '本地解析',
+                          icon: _loading
+                              ? null
+                              : hasKey
+                                  ? Icons.auto_awesome
+                                  : Icons.edit_outlined,
+                          leading: _loading
+                              ? SizedBox(
+                                  width: 14,
+                                  height: 14,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                    color: scheme.onSurfaceVariant,
+                                  ),
+                                )
+                              : null,
+                          onPressed:
+                              (_inputCtrl.text.trim().isEmpty || _loading)
+                                  ? null
+                                  : _doParse,
+                        ),
+                      ],
+                    ),
+                  ],
                 ),
-                onChanged: (_) {
-                  if (_entries != null) {
-                    setState(() {
-                      _entries = null;
-                      _matchedCats = [];
-                      _usedFallback = false;
-                      _fallbackHint = '';
-                    });
-                  }
-                },
-              ),
-              const SizedBox(height: 12),
-
-              // 解析按钮
-              FilledButton.icon(
-                icon: _loading
-                    ? const SizedBox(
-                        width: 16,
-                        height: 16,
-                        child: CircularProgressIndicator(
-                            strokeWidth: 2, color: Colors.white),
-                      )
-                    : const Icon(Icons.search, size: 18),
-                label: Text(_loading ? '解析中…' : '解析'),
-                onPressed: (_inputCtrl.text.trim().isEmpty || _loading)
-                    ? null
-                    : _doParse,
               ),
 
               // 降级提示
               if (_usedFallback && _fallbackHint.isNotEmpty) ...[
                 const SizedBox(height: 10),
                 Container(
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 12, vertical: 8),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                   decoration: BoxDecoration(
-                    color: scheme.errorContainer.withValues(alpha: 0.5),
+                    // 守不用红铁律：警示底用超支橙淡底。
+                    color: AppColors.warning.withValues(alpha: 0.12),
                     borderRadius: BorderRadius.circular(8),
                   ),
                   child: Row(
@@ -349,6 +500,44 @@ class _AiQuickEntryViewState extends State<AiQuickEntryView> {
                       ),
                     ],
                   ),
+                ),
+              ],
+
+              if (_refundNotice.isNotEmpty) ...[
+                const SizedBox(height: 12),
+                Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                  decoration: BoxDecoration(
+                    color: scheme.primary.withValues(alpha: 0.08),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: AppColors.hairline(scheme)),
+                  ),
+                  child: Text(
+                    _refundNotice,
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: scheme.onSurfaceVariant,
+                        ),
+                  ),
+                ),
+              ],
+
+              if (_pendingRefund != null) ...[
+                const SizedBox(height: 16),
+                _QuickRefundCard(result: _pendingRefund!),
+                const SizedBox(height: 12),
+                FilledButton(
+                  onPressed: _saving ? null : _saveAll,
+                  child: _saving
+                      ? const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: Colors.white,
+                          ),
+                        )
+                      : const Text('附着到原订单'),
                 ),
               ],
 
@@ -397,6 +586,73 @@ class _AiQuickEntryViewState extends State<AiQuickEntryView> {
 // 单笔结果卡片
 // ---------------------------------------------------------------------------
 
+class _QuickRefundCard extends StatelessWidget {
+  final RefundMatchResult result;
+
+  const _QuickRefundCard({required this.result});
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final candidate = result.candidate!;
+    final label =
+        candidate.label.trim().isEmpty ? '原支出' : candidate.label.trim();
+    return Card(
+      elevation: 0,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(12),
+        side: BorderSide(color: scheme.outlineVariant),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(Icons.keyboard_return_rounded,
+                    size: 20, color: scheme.primary),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    label,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                          fontWeight: FontWeight.w600,
+                        ),
+                  ),
+                ),
+                Text(
+                  '+${MoneyFormat.string(result.amount!)}',
+                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                        color: scheme.primary,
+                        fontWeight: FontWeight.w600,
+                        fontFamily: 'Nunito',
+                      ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 10),
+            _InfoRow(
+              icon: Icons.calendar_today_outlined,
+              label: '原订单日期',
+              value:
+                  '${candidate.date.year}.${candidate.date.month}.${candidate.date.day}',
+            ),
+            const SizedBox(height: 6),
+            _InfoRow(
+              icon: Icons.account_balance_wallet_outlined,
+              label: '退款后剩余',
+              value: MoneyFormat.string(candidate.remaining - result.amount!),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class _EntryCard extends StatelessWidget {
   final ParsedEntry entry;
   final CategoryEntity? matchedCategory;
@@ -415,20 +671,18 @@ class _EntryCard extends StatelessWidget {
     final scheme = Theme.of(context).colorScheme;
     final isIncome = entry.kind == TransactionKind.income;
     final kindLabel = isIncome ? '收入' : '支出';
-    final kindColor =
-        isIncome ? scheme.primary : scheme.onSurface;
+    final kindColor = isIncome ? scheme.primary : scheme.onSurface;
 
-    final amountText = entry.amount != null
-        ? MoneyFormat.string(entry.amount!)
-        : '（未识别金额）';
+    final amountText =
+        entry.amount != null ? MoneyFormat.string(entry.amount!) : '（未识别金额）';
 
     final categoryName =
         matchedCategory?.nameZh ?? (isIncome ? '其他收入' : '其他支出');
 
     final now = DateTime.now();
     final today = DateTime(now.year, now.month, now.day);
-    final entryDay = DateTime(
-        entry.date.year, entry.date.month, entry.date.day);
+    final entryDay =
+        DateTime(entry.date.year, entry.date.month, entry.date.day);
     final yesterday = today.subtract(const Duration(days: 1));
     final dateLabel = entryDay == today
         ? '今天'
@@ -463,30 +717,24 @@ class _EntryCard extends StatelessWidget {
                     ),
                     child: Text(
                       '$index',
-                      style: Theme.of(context)
-                          .textTheme
-                          .labelSmall
-                          ?.copyWith(
-                              color: scheme.onSecondaryContainer,
-                              fontFamily: 'Nunito',
-                              fontWeight: FontWeight.w600),
+                      style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                          color: scheme.onSecondaryContainer,
+                          fontFamily: 'Nunito',
+                          fontWeight: FontWeight.w600),
                     ),
                   ),
                   const SizedBox(width: 8),
                 ],
                 Container(
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 8, vertical: 2),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
                   decoration: BoxDecoration(
                     color: kindColor.withValues(alpha: 0.12),
                     borderRadius: BorderRadius.circular(6),
                   ),
                   child: Text(
                     kindLabel,
-                    style: Theme.of(context)
-                        .textTheme
-                        .labelSmall
-                        ?.copyWith(
+                    style: Theme.of(context).textTheme.labelSmall?.copyWith(
                           color: kindColor,
                           fontWeight: FontWeight.w600,
                         ),
@@ -496,14 +744,11 @@ class _EntryCard extends StatelessWidget {
                 Expanded(
                   child: Text(
                     amountText,
-                    style: Theme.of(context)
-                        .textTheme
-                        .headlineSmall
-                        ?.copyWith(
+                    style: Theme.of(context).textTheme.headlineSmall?.copyWith(
                           fontWeight: FontWeight.w600,
                           fontFamily: 'Nunito',
                           color: entry.amount == null
-                              ? scheme.error
+                              ? AppColors.warning // 守不用红铁律
                               : scheme.onSurface,
                         ),
                   ),
@@ -511,8 +756,7 @@ class _EntryCard extends StatelessWidget {
               ],
             ),
             const SizedBox(height: 12),
-            const Divider(height: 1),
-            const SizedBox(height: 12),
+            const SizedBox(height: 10),
 
             // 分类 + 日期 + 备注
             _InfoRow(

@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_svg/flutter_svg.dart';
 import 'package:provider/provider.dart';
 
 import '../../core/haptics.dart';
 import '../../widgets/app_buttons.dart';
+import '../../core/models/category_icon_style.dart';
 import '../../core/models/cat_svg_icon.dart';
 import '../../core/models/category_seed.dart';
 import '../../core/models/transaction_kind.dart';
@@ -13,6 +15,7 @@ import '../../widgets/ios_dialogs.dart';
 import '../../widgets/ios_form.dart';
 import '../../widgets/ios_menu.dart';
 import '../../widgets/pressable_scale.dart';
+import '../../widgets/settings_ui.dart';
 import '../../widgets/sliding_segment.dart';
 import '../common/app_sheet.dart';
 import '../quick_add/category_grid.dart';
@@ -36,13 +39,28 @@ class _CategoriesViewState extends State<CategoriesView> {
   Widget build(BuildContext context) {
     final repo = context.watch<AppRepository>();
     final scheme = Theme.of(context).colorScheme;
-    final tops = repo
-        .categoriesForKind(_kind)
-        .where((c) => c.isTopLevel)
-        .toList();
+    final tops =
+        repo.categoriesForKind(_kind).where((c) => c.isTopLevel).toList();
 
     return Scaffold(
-      appBar: AppBar(leading: const AppBackButton(), title: const Text('分类管理')),
+      appBar: AppBar(
+        leading: const AppBackButton(),
+        title: const Text('分类管理'),
+        actions: [
+          Padding(
+            padding: const EdgeInsets.only(right: 12),
+            child: Tooltip(
+              message: '图标样式',
+              child: AppCircleButton(
+                icon: Icons.palette_outlined,
+                iconSize: 19,
+                size: 38,
+                onPressed: () => _showIconStyleSheet(context),
+              ),
+            ),
+          ),
+        ],
+      ),
       body: ListView(
         padding: const EdgeInsets.fromLTRB(16, 4, 16, 28),
         children: [
@@ -193,8 +211,7 @@ class _TopCategoryCard extends StatelessWidget {
                           Text(
                             '${children.length} 个子分类',
                             style: TextStyle(
-                                fontSize: 11,
-                                color: scheme.onSurfaceVariant),
+                                fontSize: 11, color: scheme.onSurfaceVariant),
                           ),
                         ],
                       ],
@@ -288,6 +305,257 @@ class _Badge extends StatelessWidget {
   }
 }
 
+Future<void> _showIconStyleSheet(BuildContext context) {
+  return showBlurSheet<void>(
+    context,
+    child: const _IconStyleSheet(),
+  );
+}
+
+class _IconStyleSheet extends StatefulWidget {
+  const _IconStyleSheet();
+
+  @override
+  State<_IconStyleSheet> createState() => _IconStyleSheetState();
+}
+
+class _IconStyleSheetState extends State<_IconStyleSheet> {
+  late CategoryIconStyle _selected;
+
+  @override
+  void initState() {
+    super.initState();
+    _selected = context.read<AppRepository>().categoryIconStyle;
+  }
+
+  Future<void> _save() async {
+    await context.read<AppRepository>().setCategoryIconStyle(_selected);
+    Haptics.of(Haptic.success);
+    if (mounted) Navigator.pop(context);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return SafeArea(
+      top: false,
+      child: SizedBox(
+        width: double.infinity,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            SheetHeader(
+              title: '图标样式',
+              onClose: () => Navigator.pop(context),
+              actionLabel: '保存',
+              onAction: _save,
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 18),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.only(left: 4, bottom: 8),
+                    child: Text(
+                      '风格',
+                      style: TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w400,
+                        color: scheme.onSurfaceVariant.withValues(alpha: 0.78),
+                      ),
+                    ),
+                  ),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: _IconStyleOption(
+                          style: CategoryIconStyle.filled,
+                          selected: _selected == CategoryIconStyle.filled,
+                          onTap: () {
+                            Haptics.selection();
+                            setState(
+                                () => _selected = CategoryIconStyle.filled);
+                          },
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: _IconStyleOption(
+                          style: CategoryIconStyle.line,
+                          selected: _selected == CategoryIconStyle.line,
+                          onTap: () {
+                            Haptics.selection();
+                            setState(() => _selected = CategoryIconStyle.line);
+                          },
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _IconStyleOption extends StatelessWidget {
+  static const _previewKeys = [
+    'dining',
+    'shopping',
+    'transport',
+    'car',
+    'housing',
+    'medical',
+    'salary',
+    'other',
+  ];
+
+  final CategoryIconStyle style;
+  final bool selected;
+  final VoidCallback onTap;
+
+  const _IconStyleOption({
+    required this.style,
+    required this.selected,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final borderColor =
+        selected ? kCatGold : AppColors.hairline(scheme, strength: 1.5);
+    return PressableScale(
+      onPressed: onTap,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 180),
+        curve: Curves.easeOutCubic,
+        height: 154,
+        padding: const EdgeInsets.fromLTRB(14, 14, 14, 12),
+        decoration: BoxDecoration(
+          color: AppColors.card(scheme),
+          borderRadius: BorderRadius.circular(18),
+          border: Border.all(color: borderColor, width: selected ? 1.6 : 0.8),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: selected ? 0.07 : 0.035),
+              blurRadius: selected ? 14 : 9,
+              offset: const Offset(0, 3),
+            ),
+          ],
+        ),
+        child: Stack(
+          children: [
+            Column(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Wrap(
+                  spacing: 12,
+                  runSpacing: 10,
+                  alignment: WrapAlignment.center,
+                  children: [
+                    for (final key in _previewKeys)
+                      _IconStylePreview(
+                        categoryKey: key,
+                        style: style,
+                        size: 31,
+                      ),
+                  ],
+                ),
+                Text(
+                  style.label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 15,
+                    fontWeight: selected ? FontWeight.w600 : FontWeight.w500,
+                    color: selected ? kCatGold : scheme.onSurface,
+                  ),
+                ),
+              ],
+            ),
+            if (selected)
+              Positioned(
+                right: 0,
+                top: 0,
+                child: Container(
+                  width: 20,
+                  height: 20,
+                  decoration: const BoxDecoration(
+                    color: kCatGold,
+                    shape: BoxShape.circle,
+                  ),
+                  child: const Icon(
+                    Icons.check_rounded,
+                    size: 15,
+                    color: Colors.white,
+                  ),
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _IconStylePreview extends StatelessWidget {
+  final String categoryKey;
+  final CategoryIconStyle style;
+  final double size;
+
+  const _IconStylePreview({
+    required this.categoryKey,
+    required this.style,
+    required this.size,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final emoji = CategorySeed.emojiOf(categoryKey);
+    return SvgPicture.asset(
+      '${style.assetDir}/$categoryKey.svg',
+      width: size,
+      height: size,
+      placeholderBuilder: (_) => _PreviewFallback(emoji: emoji, size: size),
+      errorBuilder: (_, __, ___) => SvgPicture.asset(
+        'assets/cat_icons/$categoryKey.svg',
+        width: size,
+        height: size,
+        placeholderBuilder: (_) => _PreviewFallback(emoji: emoji, size: size),
+        errorBuilder: (_, __, ___) =>
+            _PreviewFallback(emoji: emoji, size: size),
+      ),
+    );
+  }
+}
+
+class _PreviewFallback extends StatelessWidget {
+  final String emoji;
+  final double size;
+
+  const _PreviewFallback({required this.emoji, required this.size});
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: size,
+      height: size,
+      child: Center(
+        child:
+            Text(emoji, style: TextStyle(fontSize: size * 0.64, height: 1.0)),
+      ),
+    );
+  }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // ⋯ 操作菜单（一级 / 二级通用）
 // ─────────────────────────────────────────────────────────────────────────────
@@ -302,7 +570,9 @@ void _showCategoryMenu(
     ),
     IosMenuItem(
       label: cat.hidden ? '恢复显示' : '隐藏',
-      icon: cat.hidden ? Icons.visibility_outlined : Icons.visibility_off_outlined,
+      icon: cat.hidden
+          ? Icons.visibility_outlined
+          : Icons.visibility_off_outlined,
       onTap: () async {
         await repo.setCategoryHidden(cat.id, !cat.hidden);
         if (anchorCtx.mounted) {
@@ -505,8 +775,7 @@ class _CategorySheetState extends State<_CategorySheet> {
             const SizedBox(height: 6),
             Text(
               '自建分类的图标先用 🏷️ 兜底显示',
-              style:
-                  TextStyle(fontSize: 11, color: scheme.onSurfaceVariant),
+              style: TextStyle(fontSize: 11, color: scheme.onSurfaceVariant),
             ),
           ],
           const SizedBox(height: 16),

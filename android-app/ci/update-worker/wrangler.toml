@@ -1,0 +1,13 @@
+# 肥喵记账检查更新分发 Worker（Cloudflare 免费版，无需绑卡）。
+# APK 切片存 KV（免费层单值 ≤25MB），Worker 拼接流式输出。
+name = "feimiao-updates"
+main = "src/index.js"
+compatibility_date = "2026-07-01"
+
+routes = [
+  { pattern = "updates.xunni9481.dpdns.org", custom_domain = true },
+]
+
+[[kv_namespaces]]
+binding = "UPDATES"
+id = "34c07e0793ea4fb8a526dd28eb1aa1b0"

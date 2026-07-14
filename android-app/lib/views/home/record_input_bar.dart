@@ -1,14 +1,12 @@
-import 'dart:ui' show ImageFilter;
-
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../../core/haptics.dart';
 import '../../data/app_repository.dart';
 import '../../widgets/glass.dart';
+import '../../widgets/glass_input.dart';
 import '../../widgets/pressable_scale.dart';
-import 'ai_chat_panel.dart';
-import 'manual_add_sheet.dart';
+import 'record_entry_sheet.dart';
 import 'record_extras_sheet.dart';
 
 /// 底部启动器卡片（对标 Claude 输入框）。
@@ -32,6 +30,7 @@ class RecordInputBar extends StatefulWidget {
 class _RecordInputBarState extends State<RecordInputBar> {
   bool _isAiMode = false;
   bool _modeInit = false;
+  bool _sheetOpen = false;
 
   @override
   void didChangeDependencies() {
@@ -53,35 +52,37 @@ class _RecordInputBarState extends State<RecordInputBar> {
 
   // ── 打开手动大卡片 ─────────────────────────────────────────────────────────
 
-  void _openManual() {
-    _setMode(false);
-    showManualAddSheet(
-      context,
-      onSwitchToAi: () {
-        Navigator.pop(context);
-        _openAi();
-      },
-    );
+  Future<void> _openEntry(bool ai) async {
+    _setMode(ai);
+    if (!_sheetOpen) {
+      setState(() => _sheetOpen = true);
+    }
+    try {
+      await showRecordEntrySheet(
+        context,
+        initialMode: ai ? RecordEntryMode.ai : RecordEntryMode.manual,
+        onModeChanged: (nextAi) {
+          if (!mounted || _isAiMode == nextAi) return;
+          setState(() => _isAiMode = nextAi);
+        },
+      );
+    } finally {
+      if (mounted) {
+        final persistedMode = context.read<AppRepository>().recordAiMode;
+        setState(() {
+          _sheetOpen = false;
+          _isAiMode = persistedMode;
+        });
+      }
+    }
   }
 
   // ── 打开 AI 聚焦输入 ──────────────────────────────────────────────────────
 
-  void _openAi() {
-    _setMode(true);
-    showAiChatPanel(
-      context,
-      onSwitchToManual: _openManual,
-    );
-  }
-
   // ── 发送 / 点击输入区 ─────────────────────────────────────────────────────
 
   void _onSend() {
-    if (_isAiMode) {
-      _openAi();
-    } else {
-      _openManual();
-    }
+    _openEntry(_isAiMode);
   }
 
   // ── build ─────────────────────────────────────────────────────────────────
@@ -90,35 +91,18 @@ class _RecordInputBarState extends State<RecordInputBar> {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
 
+    if (_sheetOpen) {
+      return const SizedBox(key: ValueKey('home-record-input-hidden'));
+    }
+
     return SafeArea(
       top: false,
       child: Padding(
         padding: const EdgeInsets.fromLTRB(12, 6, 12, 10),
-        child: Container(
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(28),
-            boxShadow: const [
-              BoxShadow(
-                color: Color(0x14000000), // ~8% 黑
-                blurRadius: 14,
-                offset: Offset(0, 2),
-              ),
-            ],
-          ),
-          child: ClipRRect(
-            borderRadius: BorderRadius.circular(28),
-            child: BackdropFilter(
-              filter: ImageFilter.blur(sigmaX: 6, sigmaY: 6),
-              child: CustomPaint(
-                foregroundPainter: const GlassEdgePainter(radius: 28),
-                child: Container(
-                  padding: const EdgeInsets.fromLTRB(14, 14, 10, 10),
-                  decoration: BoxDecoration(
-                    // iOS 玻璃：半透明白底；细黑边由 _GlassEdgePainter 画（深浅不均）
-                    color: scheme.surface.withValues(alpha: 0.4),
-                    borderRadius: BorderRadius.circular(28),
-                  ),
-                  child: Column(
+        child: AppGlassInputShell(
+          key: const ValueKey('home-record-input-shell'),
+          padding: const EdgeInsets.fromLTRB(14, 14, 10, 10),
+          child: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
@@ -157,17 +141,12 @@ class _RecordInputBarState extends State<RecordInputBar> {
                   ),
                 ],
               ),
-                ],
-              ),
-              ),
-              ),
-            ),
+            ],
           ),
         ),
       ),
     );
   }
-
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -189,19 +168,10 @@ class _ToolCircleButton extends StatelessWidget {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     // 统一玻璃圆钮：透明模糊 + 不规则细黑边，黑色图标。
-    return PressableScale(
+    return AppGlassInputIconButton(
+      icon: icon,
       onPressed: onTap,
-      child: SizedBox(
-        width: 36,
-        height: 36,
-        child: GlassSurface(
-          circle: true,
-          blur: 0, // 在输入卡内部，背景均匀，无需再模糊
-          child: Center(
-            child: Icon(icon, size: 18, color: scheme.onSurfaceVariant),
-          ),
-        ),
-      ),
+      color: scheme.onSurfaceVariant,
     );
   }
 }
@@ -248,4 +218,3 @@ class _ModePill extends StatelessWidget {
     );
   }
 }
-

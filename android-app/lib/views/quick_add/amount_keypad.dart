@@ -44,8 +44,8 @@ class AmountKeypad extends StatelessWidget {
     final scheme = Theme.of(context).colorScheme;
     final canSave = expression.value > Decimal.zero;
 
-    Widget digit(String d) =>
-        _key(context, label: d, onPressed: () => _tap(() => expression.insertDigit(d)));
+    Widget digit(String d) => _key(context,
+        label: d, onPressed: () => _tap(() => expression.insertDigit(d)));
 
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 12),
@@ -86,7 +86,9 @@ class AmountKeypad extends StatelessWidget {
               _key(
                 context,
                 label: '再记',
-                labelColor: canSave ? scheme.primary : scheme.onSurfaceVariant.withValues(alpha: 0.4),
+                labelColor: canSave
+                    ? scheme.primary
+                    : scheme.onSurfaceVariant.withValues(alpha: 0.4),
                 labelSize: 16,
                 onPressed: canSave ? onSaveAgain : null,
                 haptic: Haptic.medium,
@@ -96,7 +98,8 @@ class AmountKeypad extends StatelessWidget {
                   label: 'C', onPressed: () => _tap(() => expression.clear())),
             digit('0'),
             _key(context,
-                label: '.', onPressed: () => _tap(() => expression.insertDot())),
+                label: '.',
+                onPressed: () => _tap(() => expression.insertDot())),
             _key(
               context,
               label: saveLabel,
@@ -148,6 +151,7 @@ class AmountKeypad extends StatelessWidget {
               style: Theme.of(context).textTheme.titleLarge?.copyWith(
                     fontSize: labelSize,
                     fontWeight: FontWeight.w500,
+                    fontFamily: 'Nunito',
                     color: labelColor,
                   ),
             ),

@@ -5,39 +5,1979 @@ import 'dart:math';
 import 'package:decimal/decimal.dart';
 import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as p;
+import 'package:path_provider/path_provider.dart';
 import 'package:sqflite/sqflite.dart';
 
 import '../core/budget/budget_period.dart';
+import '../core/budget/budget_plan_v2.dart';
+import '../core/budget/budget_special_tracking.dart';
+import '../core/budget/budget_transaction_family.dart';
+import '../core/budget/budget_window_resolver.dart';
+import '../core/budget/fixed_commitment.dart';
+import '../core/account/account_activity.dart';
+import '../core/account/account_balance_checkpoint.dart';
+import '../core/account/account_movement_projection.dart';
+import '../core/account/net_worth_snapshot.dart';
+import '../core/account/net_worth_verified_checkpoint.dart';
+import '../core/ai/ai_provider_config.dart';
+import '../core/assets/asset_allocation.dart';
+import '../core/assets/asset_enhancements.dart';
+import '../core/backup/backup_package_codec.dart';
+import '../core/import/bill_import.dart';
+import '../core/ledger/ledger_policy.dart';
+import '../core/money_format.dart';
+import '../core/models/category_icon_style.dart';
 import '../core/models/category_seed.dart';
 import '../core/models/recurring_rule.dart';
+import '../core/models/transaction_card_display.dart';
 import '../core/models/transaction_kind.dart';
 import '../core/models/transaction_record.dart';
+import '../core/security/secure_key_store.dart';
+import '../core/statistics/consumption_projection.dart';
+import '../core/statistics/metric_contract.dart';
+import '../core/transaction_time.dart';
 
 // ---------------------------------------------------------------------------
 // 领域实体
 // ---------------------------------------------------------------------------
 
+enum AccountType {
+  cash,
+  debit,
+  credit,
+  savings,
+  investment,
+  loan,
+  other,
+}
+
+enum AccountOpeningBalanceQuality { exact, legacyUnknown }
+
+extension AccountOpeningBalanceQualityX on AccountOpeningBalanceQuality {
+  String get storageKey => switch (this) {
+        AccountOpeningBalanceQuality.exact => 'exact',
+        AccountOpeningBalanceQuality.legacyUnknown => 'legacy_unknown',
+      };
+
+  static AccountOpeningBalanceQuality fromStorage(String? value) =>
+      value == 'exact'
+          ? AccountOpeningBalanceQuality.exact
+          : AccountOpeningBalanceQuality.legacyUnknown;
+}
+
+enum AccountStatus { active, archived, legacyHidden }
+
+extension AccountStatusX on AccountStatus {
+  String get storageKey => switch (this) {
+        AccountStatus.active => 'active',
+        AccountStatus.archived => 'archived',
+        AccountStatus.legacyHidden => 'legacy_hidden',
+      };
+
+  static AccountStatus fromStorage(String? value) => switch (value) {
+        'archived' => AccountStatus.archived,
+        'legacy_hidden' => AccountStatus.legacyHidden,
+        _ => AccountStatus.active,
+      };
+}
+
+extension AccountTypeX on AccountType {
+  String get storageKey => switch (this) {
+        AccountType.cash => 'cash',
+        AccountType.debit => 'debit',
+        AccountType.credit => 'credit',
+        AccountType.savings => 'savings',
+        AccountType.investment => 'investment',
+        AccountType.loan => 'loan',
+        AccountType.other => 'other',
+      };
+
+  String get label => switch (this) {
+        AccountType.cash => '现金',
+        AccountType.debit => '储蓄卡',
+        AccountType.credit => '信用卡',
+        AccountType.savings => '存款',
+        AccountType.investment => '投资',
+        AccountType.loan => '贷款',
+        AccountType.other => '其他',
+      };
+
+  bool get liability => this == AccountType.credit || this == AccountType.loan;
+
+  static AccountType fromStorage(String? value) {
+    for (final type in AccountType.values) {
+      if (type.storageKey == value) return type;
+    }
+    return AccountType.cash;
+  }
+}
+
 class AccountEntity {
   final int id;
+  final String uuid;
   final String name;
   final String currencyCode;
+  final AccountType type;
+  final Decimal openingBalance;
+  final bool includeInNetWorth;
+  final String institution;
+  final int sortOrder;
+  final bool isDeleted;
+  final int createdMs;
+  final int updatedMs;
+  final int? openingBalanceEffectiveMs;
+  final int openingBalanceSequence;
+  final AccountOpeningBalanceQuality openingBalanceQuality;
+  final AccountStatus status;
+  final int? archivedMs;
+  final int? lastVerifiedMs;
+  final int? verificationIntervalDays;
 
   const AccountEntity({
     required this.id,
+    this.uuid = '',
     required this.name,
     this.currencyCode = 'CNY',
+    this.type = AccountType.cash,
+    required this.openingBalance,
+    this.includeInNetWorth = true,
+    this.institution = '',
+    this.sortOrder = 0,
+    this.isDeleted = false,
+    this.createdMs = 0,
+    this.updatedMs = 0,
+    this.openingBalanceEffectiveMs,
+    this.openingBalanceSequence = 0,
+    this.openingBalanceQuality = AccountOpeningBalanceQuality.legacyUnknown,
+    this.status = AccountStatus.active,
+    this.archivedMs,
+    this.lastVerifiedMs,
+    this.verificationIntervalDays,
   });
+
+  bool get isArchived => status == AccountStatus.archived;
+  bool get isLegacyHidden => isDeleted || status == AccountStatus.legacyHidden;
 
   Map<String, Object?> toMap() => {
         'id': id == 0 ? null : id,
+        'uuid': uuid,
         'name': name,
         'currency_code': currencyCode,
+        'type': type.storageKey,
+        'opening_balance': openingBalance.toString(),
+        'include_in_net_worth': includeInNetWorth ? 1 : 0,
+        'institution': institution,
+        'sort_order': sortOrder,
+        'is_deleted': isDeleted ? 1 : 0,
+        'created_ms': createdMs,
+        'updated_ms': updatedMs,
+        'opening_balance_effective_ms': openingBalanceEffectiveMs,
+        'opening_balance_sequence': openingBalanceSequence,
+        'opening_balance_quality': openingBalanceQuality.storageKey,
+        'status': status.storageKey,
+        'archived_ms': archivedMs,
+        'last_verified_ms': lastVerifiedMs,
+        'verification_interval_days': verificationIntervalDays,
       };
 
   factory AccountEntity.fromMap(Map<String, Object?> m) => AccountEntity(
         id: m['id'] as int,
+        uuid: m['uuid'] as String? ?? '',
         name: m['name'] as String,
         currencyCode: m['currency_code'] as String? ?? 'CNY',
+        type: AccountTypeX.fromStorage(m['type'] as String?),
+        openingBalance:
+            Decimal.tryParse(m['opening_balance'] as String? ?? '') ??
+                Decimal.zero,
+        includeInNetWorth: ((m['include_in_net_worth'] as int?) ?? 1) == 1,
+        institution: m['institution'] as String? ?? '',
+        sortOrder: (m['sort_order'] as int?) ?? 0,
+        isDeleted: ((m['is_deleted'] as int?) ?? 0) == 1,
+        createdMs: (m['created_ms'] as int?) ?? 0,
+        updatedMs: (m['updated_ms'] as int?) ?? 0,
+        openingBalanceEffectiveMs: m['opening_balance_effective_ms'] as int?,
+        openingBalanceSequence: (m['opening_balance_sequence'] as int?) ?? 0,
+        openingBalanceQuality: AccountOpeningBalanceQualityX.fromStorage(
+          m['opening_balance_quality'] as String?,
+        ),
+        status: AccountStatusX.fromStorage(m['status'] as String?),
+        archivedMs: m['archived_ms'] as int?,
+        lastVerifiedMs: m['last_verified_ms'] as int?,
+        verificationIntervalDays: m['verification_interval_days'] as int?,
+      );
+}
+
+class AccountBalanceValue {
+  final Decimal balance;
+  final AccountMovementProjectionValue movement;
+  final AccountBalanceCheckpointEntity? checkpoint;
+  final DateTime? trustedFrom;
+
+  const AccountBalanceValue({
+    required this.balance,
+    required this.movement,
+    this.checkpoint,
+    this.trustedFrom,
+  });
+}
+
+class AccountBalanceTrendPoint {
+  final DateTime asOf;
+  final Decimal balance;
+  final bool trusted;
+
+  const AccountBalanceTrendPoint({
+    required this.asOf,
+    required this.balance,
+    required this.trusted,
+  });
+}
+
+class AccountBalanceTrendValue {
+  final DateTime trustedFrom;
+  final List<AccountBalanceTrendPoint> points;
+
+  const AccountBalanceTrendValue({
+    required this.trustedFrom,
+    required this.points,
+  });
+
+  bool get hasTrend => points.length >= 2;
+}
+
+enum AccountBalanceCheckpointKind { anchor, reversal }
+
+extension AccountBalanceCheckpointKindX on AccountBalanceCheckpointKind {
+  String get storageKey =>
+      this == AccountBalanceCheckpointKind.anchor ? 'anchor' : 'reversal';
+
+  static AccountBalanceCheckpointKind fromStorage(String? value) =>
+      value == 'reversal'
+          ? AccountBalanceCheckpointKind.reversal
+          : AccountBalanceCheckpointKind.anchor;
+}
+
+class AccountBalanceCheckpointEntity {
+  final int id;
+  final String uuid;
+  final int accountId;
+  final AccountBalanceCheckpointKind eventKind;
+  final int effectiveMs;
+  final int sequence;
+  final String timezone;
+  final int knowledgeCutoffMs;
+  final Decimal targetBalance;
+  final Decimal calculatedBefore;
+  final Decimal deltaAtCreation;
+  final String reason;
+  final String note;
+  final String status;
+  final int? reversalOf;
+  final int createdMs;
+  final int updatedMs;
+
+  const AccountBalanceCheckpointEntity({
+    required this.id,
+    required this.uuid,
+    required this.accountId,
+    required this.eventKind,
+    required this.effectiveMs,
+    required this.sequence,
+    required this.timezone,
+    required this.knowledgeCutoffMs,
+    required this.targetBalance,
+    required this.calculatedBefore,
+    required this.deltaAtCreation,
+    required this.reason,
+    required this.note,
+    required this.status,
+    required this.reversalOf,
+    required this.createdMs,
+    required this.updatedMs,
+  });
+
+  bool get isAnchor => eventKind == AccountBalanceCheckpointKind.anchor;
+  bool get isReversal => eventKind == AccountBalanceCheckpointKind.reversal;
+
+  factory AccountBalanceCheckpointEntity.fromMap(Map<String, Object?> m) =>
+      AccountBalanceCheckpointEntity(
+        id: m['id'] as int,
+        uuid: m['uuid'] as String? ?? '',
+        accountId: m['account_id'] as int,
+        eventKind: AccountBalanceCheckpointKindX.fromStorage(
+          m['event_kind'] as String?,
+        ),
+        effectiveMs: m['effective_ms'] as int,
+        sequence: (m['sequence'] as int?) ?? 0,
+        timezone: m['timezone'] as String? ?? 'device_local',
+        knowledgeCutoffMs: (m['knowledge_cutoff_ms'] as int?) ?? 0,
+        targetBalance: Decimal.tryParse(m['target_balance'] as String? ?? '') ??
+            Decimal.zero,
+        calculatedBefore:
+            Decimal.tryParse(m['calculated_before'] as String? ?? '') ??
+                Decimal.zero,
+        deltaAtCreation:
+            Decimal.tryParse(m['delta_at_creation'] as String? ?? '') ??
+                Decimal.zero,
+        reason: m['reason'] as String? ?? 'manual',
+        note: m['note'] as String? ?? '',
+        status: m['status'] as String? ?? 'active',
+        reversalOf: m['reversal_of'] as int?,
+        createdMs: (m['created_ms'] as int?) ?? 0,
+        updatedMs: (m['updated_ms'] as int?) ?? 0,
+      );
+}
+
+class BudgetFixedOccurrenceEntity {
+  final int id;
+  final String uuid;
+  final int revisionId;
+  final FixedCommitmentOccurrence occurrence;
+  final int? resolvedMs;
+  final int createdMs;
+  final int updatedMs;
+
+  const BudgetFixedOccurrenceEntity({
+    required this.id,
+    required this.uuid,
+    required this.revisionId,
+    required this.occurrence,
+    required this.resolvedMs,
+    required this.createdMs,
+    required this.updatedMs,
+  });
+
+  String get templateId => occurrence.templateId;
+  int get planId => occurrence.planId;
+  int get plannedCents => occurrence.plannedCents;
+  DateTime get dueDate => occurrence.dueDate;
+  FixedCommitmentResolutionStatus get resolutionStatus =>
+      occurrence.resolutionStatus;
+  String? get matchedTransactionFamilyId =>
+      occurrence.matchedTransactionFamilyId;
+}
+
+enum PhysicalAssetSourceType {
+  historicalExisting,
+  fromTransaction,
+  newPurchaseWithAccount,
+  giftReceived,
+  inheritance,
+  manualOther,
+}
+
+extension PhysicalAssetSourceTypeX on PhysicalAssetSourceType {
+  String get storageKey => switch (this) {
+        PhysicalAssetSourceType.historicalExisting => 'historical_existing',
+        PhysicalAssetSourceType.fromTransaction => 'from_transaction',
+        PhysicalAssetSourceType.newPurchaseWithAccount =>
+          'new_purchase_with_account',
+        PhysicalAssetSourceType.giftReceived => 'gift_received',
+        PhysicalAssetSourceType.inheritance => 'inheritance',
+        PhysicalAssetSourceType.manualOther => 'manual_other',
+      };
+
+  String get label => switch (this) {
+        PhysicalAssetSourceType.historicalExisting => '历史已有，补录一个',
+        PhysicalAssetSourceType.fromTransaction => '从已有账单加入',
+        PhysicalAssetSourceType.newPurchaseWithAccount => '新购买，同时记账',
+        PhysicalAssetSourceType.giftReceived => '别人赠送',
+        PhysicalAssetSourceType.inheritance => '继承/转入',
+        PhysicalAssetSourceType.manualOther => '其他来源',
+      };
+
+  static PhysicalAssetSourceType fromStorage(String? value) {
+    for (final type in PhysicalAssetSourceType.values) {
+      if (type.storageKey == value) return type;
+    }
+    return PhysicalAssetSourceType.historicalExisting;
+  }
+}
+
+enum PhysicalAssetStatus {
+  active,
+  idle,
+  sold,
+  disposed,
+  lost,
+  gifted,
+  archived,
+}
+
+enum PhysicalAssetEconomicStatus {
+  owned,
+  sold,
+  returned,
+  scrapped,
+  lost,
+  gifted,
+}
+
+extension PhysicalAssetEconomicStatusX on PhysicalAssetEconomicStatus {
+  String get storageKey => switch (this) {
+        PhysicalAssetEconomicStatus.owned => 'owned',
+        PhysicalAssetEconomicStatus.sold => 'sold',
+        PhysicalAssetEconomicStatus.returned => 'returned',
+        PhysicalAssetEconomicStatus.scrapped => 'scrapped',
+        PhysicalAssetEconomicStatus.lost => 'lost',
+        PhysicalAssetEconomicStatus.gifted => 'gifted',
+      };
+
+  String get label => switch (this) {
+        PhysicalAssetEconomicStatus.owned => '持有中',
+        PhysicalAssetEconomicStatus.sold => '已出售',
+        PhysicalAssetEconomicStatus.returned => '已退货',
+        PhysicalAssetEconomicStatus.scrapped => '已报废',
+        PhysicalAssetEconomicStatus.lost => '已丢失',
+        PhysicalAssetEconomicStatus.gifted => '已赠送',
+      };
+
+  bool get ownsValue => this == PhysicalAssetEconomicStatus.owned;
+
+  static PhysicalAssetEconomicStatus fromStorage(String? value) {
+    for (final status in PhysicalAssetEconomicStatus.values) {
+      if (status.storageKey == value) return status;
+    }
+    return PhysicalAssetEconomicStatus.owned;
+  }
+}
+
+enum PhysicalAssetUsageStatus { active, idle, unknown }
+
+extension PhysicalAssetUsageStatusX on PhysicalAssetUsageStatus {
+  String get storageKey => switch (this) {
+        PhysicalAssetUsageStatus.active => 'active',
+        PhysicalAssetUsageStatus.idle => 'idle',
+        PhysicalAssetUsageStatus.unknown => 'unknown',
+      };
+
+  String get label => switch (this) {
+        PhysicalAssetUsageStatus.active => '使用中',
+        PhysicalAssetUsageStatus.idle => '闲置',
+        PhysicalAssetUsageStatus.unknown => '使用状态待确认',
+      };
+
+  static PhysicalAssetUsageStatus fromStorage(String? value) {
+    for (final status in PhysicalAssetUsageStatus.values) {
+      if (status.storageKey == value) return status;
+    }
+    return PhysicalAssetUsageStatus.unknown;
+  }
+}
+
+enum AssetVisibilityStatus { active, archived }
+
+extension AssetVisibilityStatusX on AssetVisibilityStatus {
+  String get storageKey => switch (this) {
+        AssetVisibilityStatus.active => 'active',
+        AssetVisibilityStatus.archived => 'archived',
+      };
+
+  String get label => switch (this) {
+        AssetVisibilityStatus.active => '显示中',
+        AssetVisibilityStatus.archived => '已归档',
+      };
+
+  static AssetVisibilityStatus fromStorage(String? value) {
+    return value == 'archived'
+        ? AssetVisibilityStatus.archived
+        : AssetVisibilityStatus.active;
+  }
+}
+
+enum AssetInclusionQuality { confirmed, needsReview }
+
+extension AssetInclusionQualityX on AssetInclusionQuality {
+  String get storageKey => switch (this) {
+        AssetInclusionQuality.confirmed => 'confirmed',
+        AssetInclusionQuality.needsReview => 'needs_review',
+      };
+
+  String get label => switch (this) {
+        AssetInclusionQuality.confirmed => '已确认',
+        AssetInclusionQuality.needsReview => '待确认',
+      };
+
+  static AssetInclusionQuality fromStorage(String? value) {
+    return value == 'needs_review'
+        ? AssetInclusionQuality.needsReview
+        : AssetInclusionQuality.confirmed;
+  }
+}
+
+PhysicalAssetEconomicStatus _physicalEconomicFromLegacyStatus(
+  PhysicalAssetStatus status,
+) =>
+    switch (status) {
+      PhysicalAssetStatus.sold => PhysicalAssetEconomicStatus.sold,
+      PhysicalAssetStatus.disposed => PhysicalAssetEconomicStatus.scrapped,
+      PhysicalAssetStatus.lost => PhysicalAssetEconomicStatus.lost,
+      PhysicalAssetStatus.gifted => PhysicalAssetEconomicStatus.gifted,
+      PhysicalAssetStatus.active ||
+      PhysicalAssetStatus.idle ||
+      PhysicalAssetStatus.archived =>
+        PhysicalAssetEconomicStatus.owned,
+    };
+
+PhysicalAssetUsageStatus _physicalUsageFromLegacyStatus(
+  PhysicalAssetStatus status,
+) =>
+    switch (status) {
+      PhysicalAssetStatus.active => PhysicalAssetUsageStatus.active,
+      PhysicalAssetStatus.idle => PhysicalAssetUsageStatus.idle,
+      _ => PhysicalAssetUsageStatus.unknown,
+    };
+
+PhysicalAssetStatus _legacyPhysicalStatusFor({
+  required PhysicalAssetEconomicStatus economicStatus,
+  required PhysicalAssetUsageStatus usageStatus,
+  required AssetVisibilityStatus visibilityStatus,
+}) {
+  if (visibilityStatus == AssetVisibilityStatus.archived) {
+    return PhysicalAssetStatus.archived;
+  }
+  return switch (economicStatus) {
+    PhysicalAssetEconomicStatus.owned =>
+      usageStatus == PhysicalAssetUsageStatus.idle
+          ? PhysicalAssetStatus.idle
+          : PhysicalAssetStatus.active,
+    PhysicalAssetEconomicStatus.sold => PhysicalAssetStatus.sold,
+    PhysicalAssetEconomicStatus.returned ||
+    PhysicalAssetEconomicStatus.scrapped =>
+      PhysicalAssetStatus.disposed,
+    PhysicalAssetEconomicStatus.lost => PhysicalAssetStatus.lost,
+    PhysicalAssetEconomicStatus.gifted => PhysicalAssetStatus.gifted,
+  };
+}
+
+extension PhysicalAssetStatusX on PhysicalAssetStatus {
+  String get storageKey => switch (this) {
+        PhysicalAssetStatus.active => 'active',
+        PhysicalAssetStatus.idle => 'idle',
+        PhysicalAssetStatus.sold => 'sold',
+        PhysicalAssetStatus.disposed => 'disposed',
+        PhysicalAssetStatus.lost => 'lost',
+        PhysicalAssetStatus.gifted => 'gifted',
+        PhysicalAssetStatus.archived => 'archived',
+      };
+
+  String get label => switch (this) {
+        PhysicalAssetStatus.active => '使用中',
+        PhysicalAssetStatus.idle => '闲置',
+        PhysicalAssetStatus.sold => '已出售',
+        PhysicalAssetStatus.disposed => '已报废',
+        PhysicalAssetStatus.lost => '已丢失',
+        PhysicalAssetStatus.gifted => '已赠送',
+        PhysicalAssetStatus.archived => '已归档',
+      };
+
+  bool get canCountInNetWorth =>
+      this == PhysicalAssetStatus.active || this == PhysicalAssetStatus.idle;
+
+  static PhysicalAssetStatus fromStorage(String? value) {
+    for (final status in PhysicalAssetStatus.values) {
+      if (status.storageKey == value) return status;
+    }
+    return PhysicalAssetStatus.active;
+  }
+}
+
+enum AssetValueSource {
+  opening,
+  purchase,
+  manual,
+  sale,
+  statusZero,
+  autoDepreciation,
+}
+
+extension AssetValueSourceX on AssetValueSource {
+  String get storageKey => switch (this) {
+        AssetValueSource.opening => 'opening',
+        AssetValueSource.purchase => 'purchase',
+        AssetValueSource.manual => 'manual',
+        AssetValueSource.sale => 'sale',
+        AssetValueSource.statusZero => 'status_zero',
+        AssetValueSource.autoDepreciation => 'auto_depreciation',
+      };
+
+  static AssetValueSource fromStorage(String? value) {
+    for (final source in AssetValueSource.values) {
+      if (source.storageKey == value) return source;
+    }
+    return AssetValueSource.manual;
+  }
+}
+
+enum AssetType {
+  digital,
+  appliance,
+  vehicle,
+  property,
+  valuables,
+  collectibles,
+  tools,
+  other,
+}
+
+extension AssetTypeX on AssetType {
+  String get storageKey => switch (this) {
+        AssetType.digital => 'digital',
+        AssetType.appliance => 'appliance',
+        AssetType.vehicle => 'vehicle',
+        AssetType.property => 'property',
+        AssetType.valuables => 'valuables',
+        AssetType.collectibles => 'collectibles',
+        AssetType.tools => 'tools',
+        AssetType.other => 'other',
+      };
+
+  String get label => switch (this) {
+        AssetType.digital => '数码设备',
+        AssetType.appliance => '家电家具',
+        AssetType.vehicle => '车辆交通',
+        AssetType.property => '房产',
+        AssetType.valuables => '贵重物品',
+        AssetType.collectibles => '收藏品',
+        AssetType.tools => '工具设备',
+        AssetType.other => '其他',
+      };
+
+  static AssetType fromStorage(String? value) {
+    for (final type in AssetType.values) {
+      if (type.storageKey == value) return type;
+    }
+    return AssetType.other;
+  }
+}
+
+enum AssetObjectType {
+  physical,
+  receivable,
+  investment,
+  liability,
+}
+
+extension AssetObjectTypeX on AssetObjectType {
+  String get storageKey => switch (this) {
+        AssetObjectType.physical => 'physical',
+        AssetObjectType.receivable => 'receivable',
+        AssetObjectType.investment => 'investment',
+        AssetObjectType.liability => 'liability',
+      };
+
+  String get label => switch (this) {
+        AssetObjectType.physical => '实物资产',
+        AssetObjectType.receivable => '权益资产',
+        AssetObjectType.investment => '投资资产',
+        AssetObjectType.liability => '负债',
+      };
+
+  static AssetObjectType fromStorage(String? value) {
+    for (final type in AssetObjectType.values) {
+      if (type.storageKey == value) return type;
+    }
+    return AssetObjectType.physical;
+  }
+}
+
+enum ReceivableAssetType {
+  rentalDeposit,
+  loanOut,
+  accountReceivable,
+  prepaidCard,
+  membershipCard,
+  securityDeposit,
+  other,
+}
+
+extension ReceivableAssetTypeX on ReceivableAssetType {
+  String get storageKey => switch (this) {
+        ReceivableAssetType.rentalDeposit => 'rental_deposit',
+        ReceivableAssetType.loanOut => 'loan_out',
+        ReceivableAssetType.accountReceivable => 'account_receivable',
+        ReceivableAssetType.prepaidCard => 'prepaid_card',
+        ReceivableAssetType.membershipCard => 'membership_card',
+        ReceivableAssetType.securityDeposit => 'security_deposit',
+        ReceivableAssetType.other => 'other',
+      };
+
+  String get label => switch (this) {
+        ReceivableAssetType.rentalDeposit => '租房押金',
+        ReceivableAssetType.loanOut => '借出款',
+        ReceivableAssetType.accountReceivable => '应收款',
+        ReceivableAssetType.prepaidCard => '预付卡余额',
+        ReceivableAssetType.membershipCard => '会员卡余额',
+        ReceivableAssetType.securityDeposit => '保证金',
+        ReceivableAssetType.other => '其他权益',
+      };
+
+  static ReceivableAssetType fromStorage(String? value) {
+    for (final type in ReceivableAssetType.values) {
+      if (type.storageKey == value) return type;
+    }
+    return ReceivableAssetType.other;
+  }
+}
+
+enum ReceivableAssetStatus {
+  active,
+  partialRecovered,
+  recovered,
+  lost,
+  archived,
+}
+
+enum ReceivableEconomicStatus {
+  active,
+  partialRecovered,
+  recovered,
+  lost,
+  unknown,
+}
+
+extension ReceivableEconomicStatusX on ReceivableEconomicStatus {
+  String get storageKey => switch (this) {
+        ReceivableEconomicStatus.active => 'active',
+        ReceivableEconomicStatus.partialRecovered => 'partial_recovered',
+        ReceivableEconomicStatus.recovered => 'recovered',
+        ReceivableEconomicStatus.lost => 'lost',
+        ReceivableEconomicStatus.unknown => 'unknown',
+      };
+
+  String get label => switch (this) {
+        ReceivableEconomicStatus.active => '未收回',
+        ReceivableEconomicStatus.partialRecovered => '部分收回',
+        ReceivableEconomicStatus.recovered => '已收回',
+        ReceivableEconomicStatus.lost => '已损失',
+        ReceivableEconomicStatus.unknown => '状态待确认',
+      };
+
+  bool get canCountInNetWorth =>
+      this == ReceivableEconomicStatus.active ||
+      this == ReceivableEconomicStatus.partialRecovered;
+
+  static ReceivableEconomicStatus fromStorage(String? value) {
+    for (final status in ReceivableEconomicStatus.values) {
+      if (status.storageKey == value) return status;
+    }
+    return ReceivableEconomicStatus.unknown;
+  }
+}
+
+ReceivableEconomicStatus _receivableEconomicFromLegacyStatus(
+  ReceivableAssetStatus status,
+) =>
+    switch (status) {
+      ReceivableAssetStatus.active => ReceivableEconomicStatus.active,
+      ReceivableAssetStatus.partialRecovered =>
+        ReceivableEconomicStatus.partialRecovered,
+      ReceivableAssetStatus.recovered => ReceivableEconomicStatus.recovered,
+      ReceivableAssetStatus.lost => ReceivableEconomicStatus.lost,
+      ReceivableAssetStatus.archived => ReceivableEconomicStatus.unknown,
+    };
+
+ReceivableAssetStatus _legacyReceivableStatusFor({
+  required ReceivableEconomicStatus economicStatus,
+  required AssetVisibilityStatus visibilityStatus,
+}) {
+  if (visibilityStatus == AssetVisibilityStatus.archived) {
+    return ReceivableAssetStatus.archived;
+  }
+  return switch (economicStatus) {
+    ReceivableEconomicStatus.active => ReceivableAssetStatus.active,
+    ReceivableEconomicStatus.partialRecovered =>
+      ReceivableAssetStatus.partialRecovered,
+    ReceivableEconomicStatus.recovered => ReceivableAssetStatus.recovered,
+    ReceivableEconomicStatus.lost => ReceivableAssetStatus.lost,
+    ReceivableEconomicStatus.unknown => ReceivableAssetStatus.active,
+  };
+}
+
+extension ReceivableAssetStatusX on ReceivableAssetStatus {
+  String get storageKey => switch (this) {
+        ReceivableAssetStatus.active => 'active',
+        ReceivableAssetStatus.partialRecovered => 'partial_recovered',
+        ReceivableAssetStatus.recovered => 'recovered',
+        ReceivableAssetStatus.lost => 'lost',
+        ReceivableAssetStatus.archived => 'archived',
+      };
+
+  String get label => switch (this) {
+        ReceivableAssetStatus.active => '未收回',
+        ReceivableAssetStatus.partialRecovered => '部分收回',
+        ReceivableAssetStatus.recovered => '已收回',
+        ReceivableAssetStatus.lost => '已损失',
+        ReceivableAssetStatus.archived => '已归档',
+      };
+
+  bool get canCountInNetWorth =>
+      this == ReceivableAssetStatus.active ||
+      this == ReceivableAssetStatus.partialRecovered;
+
+  static ReceivableAssetStatus fromStorage(String? value) {
+    for (final status in ReceivableAssetStatus.values) {
+      if (status.storageKey == value) return status;
+    }
+    return ReceivableAssetStatus.active;
+  }
+}
+
+enum LiabilityProfileType {
+  creditCard,
+  mortgage,
+  carLoan,
+  consumerLoan,
+  other,
+}
+
+extension LiabilityProfileTypeX on LiabilityProfileType {
+  String get storageKey => switch (this) {
+        LiabilityProfileType.creditCard => 'credit_card',
+        LiabilityProfileType.mortgage => 'mortgage',
+        LiabilityProfileType.carLoan => 'car_loan',
+        LiabilityProfileType.consumerLoan => 'consumer_loan',
+        LiabilityProfileType.other => 'other',
+      };
+
+  String get label => switch (this) {
+        LiabilityProfileType.creditCard => '信用卡',
+        LiabilityProfileType.mortgage => '房贷',
+        LiabilityProfileType.carLoan => '车贷',
+        LiabilityProfileType.consumerLoan => '消费贷',
+        LiabilityProfileType.other => '其他负债',
+      };
+
+  static LiabilityProfileType fromStorage(String? value) {
+    for (final type in LiabilityProfileType.values) {
+      if (type.storageKey == value) return type;
+    }
+    return LiabilityProfileType.other;
+  }
+}
+
+enum LiabilityProfileStatus {
+  active,
+  paidOff,
+  paused,
+  archived,
+}
+
+extension LiabilityProfileStatusX on LiabilityProfileStatus {
+  String get storageKey => switch (this) {
+        LiabilityProfileStatus.active => 'active',
+        LiabilityProfileStatus.paidOff => 'paid_off',
+        LiabilityProfileStatus.paused => 'paused',
+        LiabilityProfileStatus.archived => 'archived',
+      };
+
+  String get label => switch (this) {
+        LiabilityProfileStatus.active => '还款中',
+        LiabilityProfileStatus.paidOff => '已结清',
+        LiabilityProfileStatus.paused => '暂停',
+        LiabilityProfileStatus.archived => '已归档',
+      };
+
+  bool get countsAsLiability => this == LiabilityProfileStatus.active;
+
+  static LiabilityProfileStatus fromStorage(String? value) {
+    for (final status in LiabilityProfileStatus.values) {
+      if (status.storageKey == value) return status;
+    }
+    return LiabilityProfileStatus.active;
+  }
+}
+
+enum AssetEventType {
+  openingAssetImport,
+  createdFromTransaction,
+  assetPurchased,
+  assetCreated,
+  assetEdited,
+  valueUpdated,
+  assetSold,
+  assetSaleUndone,
+  assetReturned,
+  assetReturnUndone,
+  assetTransactionUnlinked,
+  assetDisposed,
+  assetLost,
+  assetGifted,
+  assetTerminalUndone,
+  assetCostLinked,
+  assetCostUnlinked,
+  assetUsageTrackingEnabled,
+  assetUsageTrackingDisabled,
+  assetSavingsGoalLinked,
+  assetSavingsGoalUnlinked,
+  assetArchived,
+  assetUnarchived,
+  depreciationConfigured,
+  autoDepreciationApplied,
+  evidenceUpdated,
+  receivableCreated,
+  receivableEdited,
+  receivableRecovered,
+  receivableRecoveryUndone,
+  receivableLost,
+  receivableArchived,
+  receivableUnarchived,
+}
+
+extension AssetEventTypeX on AssetEventType {
+  String get storageKey => switch (this) {
+        AssetEventType.openingAssetImport => 'opening_asset_import',
+        AssetEventType.createdFromTransaction => 'created_from_transaction',
+        AssetEventType.assetPurchased => 'asset_purchased',
+        AssetEventType.assetCreated => 'asset_created',
+        AssetEventType.assetEdited => 'asset_edited',
+        AssetEventType.valueUpdated => 'value_updated',
+        AssetEventType.assetSold => 'asset_sold',
+        AssetEventType.assetSaleUndone => 'asset_sale_undone',
+        AssetEventType.assetReturned => 'asset_returned',
+        AssetEventType.assetReturnUndone => 'asset_return_undone',
+        AssetEventType.assetTransactionUnlinked => 'asset_transaction_unlinked',
+        AssetEventType.assetDisposed => 'asset_disposed',
+        AssetEventType.assetLost => 'asset_lost',
+        AssetEventType.assetGifted => 'asset_gifted',
+        AssetEventType.assetTerminalUndone => 'asset_terminal_undone',
+        AssetEventType.assetCostLinked => 'asset_cost_linked',
+        AssetEventType.assetCostUnlinked => 'asset_cost_unlinked',
+        AssetEventType.assetUsageTrackingEnabled =>
+          'asset_usage_tracking_enabled',
+        AssetEventType.assetUsageTrackingDisabled =>
+          'asset_usage_tracking_disabled',
+        AssetEventType.assetSavingsGoalLinked => 'asset_savings_goal_linked',
+        AssetEventType.assetSavingsGoalUnlinked =>
+          'asset_savings_goal_unlinked',
+        AssetEventType.assetArchived => 'asset_archived',
+        AssetEventType.assetUnarchived => 'asset_unarchived',
+        AssetEventType.depreciationConfigured => 'depreciation_configured',
+        AssetEventType.autoDepreciationApplied => 'auto_depreciation_applied',
+        AssetEventType.evidenceUpdated => 'evidence_updated',
+        AssetEventType.receivableCreated => 'receivable_created',
+        AssetEventType.receivableEdited => 'receivable_edited',
+        AssetEventType.receivableRecovered => 'receivable_recovered',
+        AssetEventType.receivableRecoveryUndone => 'receivable_recovery_undone',
+        AssetEventType.receivableLost => 'receivable_lost',
+        AssetEventType.receivableArchived => 'receivable_archived',
+        AssetEventType.receivableUnarchived => 'receivable_unarchived',
+      };
+
+  String get label => switch (this) {
+        AssetEventType.openingAssetImport => '历史补录',
+        AssetEventType.createdFromTransaction => '从账单加入',
+        AssetEventType.assetPurchased => '新购买',
+        AssetEventType.assetCreated => '新增资产',
+        AssetEventType.assetEdited => '编辑资料',
+        AssetEventType.valueUpdated => '更新当前价值',
+        AssetEventType.assetSold => '出售资产',
+        AssetEventType.assetSaleUndone => '撤销出售',
+        AssetEventType.assetReturned => '退货',
+        AssetEventType.assetReturnUndone => '撤销退货',
+        AssetEventType.assetTransactionUnlinked => '解除账单关联',
+        AssetEventType.assetDisposed => '报废资产',
+        AssetEventType.assetLost => '标记丢失',
+        AssetEventType.assetGifted => '赠送资产',
+        AssetEventType.assetTerminalUndone => '撤销结束持有',
+        AssetEventType.assetCostLinked => '关联持有支出',
+        AssetEventType.assetCostUnlinked => '解除持有支出',
+        AssetEventType.assetUsageTrackingEnabled => '开启使用次数',
+        AssetEventType.assetUsageTrackingDisabled => '关闭使用次数',
+        AssetEventType.assetSavingsGoalLinked => '关联存钱目标',
+        AssetEventType.assetSavingsGoalUnlinked => '解除存钱目标',
+        AssetEventType.assetArchived => '归档资产',
+        AssetEventType.assetUnarchived => '恢复归档',
+        AssetEventType.depreciationConfigured => '折旧设置',
+        AssetEventType.autoDepreciationApplied => '自动折旧',
+        AssetEventType.evidenceUpdated => '凭证更新',
+        AssetEventType.receivableCreated => '新增权益',
+        AssetEventType.receivableEdited => '编辑权益',
+        AssetEventType.receivableRecovered => '收回权益',
+        AssetEventType.receivableRecoveryUndone => '撤销收回',
+        AssetEventType.receivableLost => '权益损失',
+        AssetEventType.receivableArchived => '归档权益',
+        AssetEventType.receivableUnarchived => '恢复权益',
+      };
+
+  static AssetEventType fromStorage(String? value) {
+    for (final type in AssetEventType.values) {
+      if (type.storageKey == value) return type;
+    }
+    return AssetEventType.assetCreated;
+  }
+}
+
+enum AssetTransactionLinkType {
+  sourceTransaction,
+  purchaseTransaction,
+  saleAccountMovement,
+  maintenance,
+  accessory,
+  insurance,
+  otherCost,
+}
+
+extension AssetTransactionLinkTypeX on AssetTransactionLinkType {
+  String get storageKey => switch (this) {
+        AssetTransactionLinkType.sourceTransaction => 'source_transaction',
+        AssetTransactionLinkType.purchaseTransaction => 'purchase_transaction',
+        AssetTransactionLinkType.saleAccountMovement => 'sale_account_movement',
+        AssetTransactionLinkType.maintenance => 'maintenance',
+        AssetTransactionLinkType.accessory => 'accessory',
+        AssetTransactionLinkType.insurance => 'insurance',
+        AssetTransactionLinkType.otherCost => 'other_cost',
+      };
+
+  String get label => switch (this) {
+        AssetTransactionLinkType.sourceTransaction => '购买账单',
+        AssetTransactionLinkType.purchaseTransaction => '购置支出',
+        AssetTransactionLinkType.saleAccountMovement => '出售到账',
+        AssetTransactionLinkType.maintenance => '维修保养',
+        AssetTransactionLinkType.accessory => '配件',
+        AssetTransactionLinkType.insurance => '保险',
+        AssetTransactionLinkType.otherCost => '其他支出',
+      };
+
+  bool get isAdditionalCost =>
+      this == AssetTransactionLinkType.maintenance ||
+      this == AssetTransactionLinkType.accessory ||
+      this == AssetTransactionLinkType.insurance ||
+      this == AssetTransactionLinkType.otherCost;
+
+  static AssetTransactionLinkType fromStorage(String? value) {
+    for (final type in AssetTransactionLinkType.values) {
+      if (type.storageKey == value) return type;
+    }
+    return AssetTransactionLinkType.sourceTransaction;
+  }
+}
+
+class PhysicalAssetEntity {
+  final int id;
+  final String uuid;
+  final int? bookId;
+  final String name;
+  final AssetType assetType;
+
+  /// v32 及资产 JSON v3 的兼容影子；v33 业务逻辑不得再读取它。
+  final PhysicalAssetStatus status;
+  final PhysicalAssetEconomicStatus economicStatus;
+  final PhysicalAssetUsageStatus usageStatus;
+  final AssetVisibilityStatus visibilityStatus;
+  final AssetInclusionQuality inclusionQuality;
+  final PhysicalAssetSourceType sourceType;
+  final AssetAcquisitionCostSource acquisitionCostSource;
+  final Decimal purchasePrice;
+  final Decimal currentValue;
+  final String currencyCode;
+  final int? purchaseDateMs;
+  final String brand;
+  final String model;
+  final String location;
+  final int? warrantyUntilMs;
+  final bool usageTrackingEnabled;
+  final int? savingsGoalId;
+  final String photoPath;
+  final String thumbnailPath;
+  final String invoicePath;
+  final String depreciationMethod;
+  final Decimal depreciationBase;
+  final Decimal salvageValue;
+  final int usefulLifeMonths;
+  final int? depreciationStartMs;
+  final bool depreciationPaused;
+  final String note;
+  final bool includeInNetWorth;
+  final bool isDeleted;
+  final int? endedMs;
+  final int? archivedMs;
+  final int createdMs;
+  final int updatedMs;
+
+  const PhysicalAssetEntity({
+    required this.id,
+    this.uuid = '',
+    this.bookId,
+    required this.name,
+    this.assetType = AssetType.other,
+    this.status = PhysicalAssetStatus.active,
+    this.economicStatus = PhysicalAssetEconomicStatus.owned,
+    this.usageStatus = PhysicalAssetUsageStatus.active,
+    this.visibilityStatus = AssetVisibilityStatus.active,
+    this.inclusionQuality = AssetInclusionQuality.confirmed,
+    this.sourceType = PhysicalAssetSourceType.historicalExisting,
+    this.acquisitionCostSource = AssetAcquisitionCostSource.manual,
+    required this.purchasePrice,
+    required this.currentValue,
+    this.currencyCode = 'CNY',
+    this.purchaseDateMs,
+    this.brand = '',
+    this.model = '',
+    this.location = '',
+    this.warrantyUntilMs,
+    this.usageTrackingEnabled = false,
+    this.savingsGoalId,
+    this.photoPath = '',
+    this.thumbnailPath = '',
+    this.invoicePath = '',
+    this.depreciationMethod = '',
+    required this.depreciationBase,
+    required this.salvageValue,
+    this.usefulLifeMonths = 0,
+    this.depreciationStartMs,
+    this.depreciationPaused = false,
+    this.note = '',
+    this.includeInNetWorth = true,
+    this.isDeleted = false,
+    this.endedMs,
+    this.archivedMs,
+    this.createdMs = 0,
+    this.updatedMs = 0,
+  });
+
+  DateTime? get purchaseDate => purchaseDateMs == null
+      ? null
+      : DateTime.fromMillisecondsSinceEpoch(purchaseDateMs!);
+  DateTime? get warrantyUntil => warrantyUntilMs == null
+      ? null
+      : DateTime.fromMillisecondsSinceEpoch(warrantyUntilMs!);
+  DateTime? get depreciationStartDate => depreciationStartMs == null
+      ? null
+      : DateTime.fromMillisecondsSinceEpoch(depreciationStartMs!);
+  DateTime get updatedAt => DateTime.fromMillisecondsSinceEpoch(updatedMs);
+  DateTime? get endedAt =>
+      endedMs == null ? null : DateTime.fromMillisecondsSinceEpoch(endedMs!);
+  DateTime? get archivedAt => archivedMs == null
+      ? null
+      : DateTime.fromMillisecondsSinceEpoch(archivedMs!);
+  bool get isArchived => visibilityStatus == AssetVisibilityStatus.archived;
+  bool get isOwned => economicStatus == PhysicalAssetEconomicStatus.owned;
+  bool get hasLinearDepreciation =>
+      depreciationMethod == 'linear' &&
+      usefulLifeMonths > 0 &&
+      depreciationBase > Decimal.zero;
+  bool get countsInNetWorth =>
+      !isDeleted && includeInNetWorth && economicStatus.ownsValue;
+
+  factory PhysicalAssetEntity.fromMap(Map<String, Object?> m) {
+    final legacyStatus =
+        PhysicalAssetStatusX.fromStorage(m['status'] as String?);
+    return PhysicalAssetEntity(
+      id: m['id'] as int,
+      uuid: m['uuid'] as String? ?? '',
+      bookId: m['book_id'] as int?,
+      name: m['name'] as String? ?? '',
+      assetType: AssetTypeX.fromStorage(m['asset_type'] as String?),
+      status: legacyStatus,
+      economicStatus: m.containsKey('economic_status')
+          ? PhysicalAssetEconomicStatusX.fromStorage(
+              m['economic_status'] as String?,
+            )
+          : _physicalEconomicFromLegacyStatus(legacyStatus),
+      usageStatus: m.containsKey('usage_status')
+          ? PhysicalAssetUsageStatusX.fromStorage(
+              m['usage_status'] as String?,
+            )
+          : _physicalUsageFromLegacyStatus(legacyStatus),
+      visibilityStatus: m.containsKey('visibility_status')
+          ? AssetVisibilityStatusX.fromStorage(
+              m['visibility_status'] as String?,
+            )
+          : legacyStatus == PhysicalAssetStatus.archived
+              ? AssetVisibilityStatus.archived
+              : AssetVisibilityStatus.active,
+      inclusionQuality: m.containsKey('inclusion_quality')
+          ? AssetInclusionQualityX.fromStorage(
+              m['inclusion_quality'] as String?,
+            )
+          : legacyStatus == PhysicalAssetStatus.archived
+              ? AssetInclusionQuality.needsReview
+              : AssetInclusionQuality.confirmed,
+      sourceType:
+          PhysicalAssetSourceTypeX.fromStorage(m['source_type'] as String?),
+      acquisitionCostSource: AssetAcquisitionCostSourceX.fromStorage(
+        m['acquisition_cost_source'] as String?,
+      ),
+      purchasePrice: Decimal.tryParse(m['purchase_price'] as String? ?? '') ??
+          Decimal.zero,
+      currentValue:
+          Decimal.tryParse(m['current_value'] as String? ?? '') ?? Decimal.zero,
+      currencyCode: m['currency_code'] as String? ?? 'CNY',
+      purchaseDateMs: m['purchase_date_ms'] as int?,
+      brand: m['brand'] as String? ?? '',
+      model: m['model'] as String? ?? '',
+      location: m['location'] as String? ?? '',
+      warrantyUntilMs: m['warranty_until_ms'] as int?,
+      usageTrackingEnabled: ((m['usage_tracking_enabled'] as int?) ?? 0) == 1,
+      savingsGoalId: m['savings_goal_id'] as int?,
+      photoPath: m['photo_path'] as String? ?? '',
+      thumbnailPath: m['thumbnail_path'] as String? ?? '',
+      invoicePath: m['invoice_path'] as String? ?? '',
+      depreciationMethod: m['depreciation_method'] as String? ?? '',
+      depreciationBase:
+          Decimal.tryParse(m['depreciation_base'] as String? ?? '') ??
+              Decimal.zero,
+      salvageValue:
+          Decimal.tryParse(m['salvage_value'] as String? ?? '') ?? Decimal.zero,
+      usefulLifeMonths: m['useful_life_months'] as int? ?? 0,
+      depreciationStartMs: m['depreciation_start_ms'] as int?,
+      depreciationPaused: ((m['depreciation_paused'] as int?) ?? 0) == 1,
+      note: m['note'] as String? ?? '',
+      includeInNetWorth: ((m['include_in_net_worth'] as int?) ?? 1) == 1,
+      isDeleted: ((m['is_deleted'] as int?) ?? 0) == 1,
+      endedMs: m['ended_ms'] as int?,
+      archivedMs: m['archived_ms'] as int?,
+      createdMs: m['created_ms'] as int? ?? 0,
+      updatedMs: m['updated_ms'] as int? ?? 0,
+    );
+  }
+}
+
+class AssetEventEntity {
+  final int id;
+  final String uuid;
+  final int assetId;
+  final AssetObjectType assetType;
+  final AssetEventType eventType;
+  final int occurredMs;
+  final Decimal? value;
+  final String note;
+  final String metadata;
+  final int createdMs;
+
+  const AssetEventEntity({
+    required this.id,
+    this.uuid = '',
+    required this.assetId,
+    this.assetType = AssetObjectType.physical,
+    required this.eventType,
+    required this.occurredMs,
+    this.value,
+    this.note = '',
+    this.metadata = '',
+    this.createdMs = 0,
+  });
+
+  DateTime get occurredAt => DateTime.fromMillisecondsSinceEpoch(occurredMs);
+
+  factory AssetEventEntity.fromMap(Map<String, Object?> m) => AssetEventEntity(
+        id: m['id'] as int,
+        uuid: m['uuid'] as String? ?? '',
+        assetId: m['asset_id'] as int,
+        assetType: AssetObjectTypeX.fromStorage(m['asset_type'] as String?),
+        eventType: AssetEventTypeX.fromStorage(m['event_type'] as String?),
+        occurredMs: m['occurred_ms'] as int? ?? 0,
+        value: Decimal.tryParse(m['value'] as String? ?? ''),
+        note: m['note'] as String? ?? '',
+        metadata: m['metadata'] as String? ?? '',
+        createdMs: m['created_ms'] as int? ?? 0,
+      );
+}
+
+class AssetValuationEntity {
+  final int id;
+  final String uuid;
+  final int assetId;
+  final Decimal value;
+  final AssetValueSource source;
+  final int valuedAtMs;
+  final String note;
+  final int createdMs;
+
+  const AssetValuationEntity({
+    required this.id,
+    this.uuid = '',
+    required this.assetId,
+    required this.value,
+    this.source = AssetValueSource.manual,
+    required this.valuedAtMs,
+    this.note = '',
+    this.createdMs = 0,
+  });
+
+  DateTime get valuedAt => DateTime.fromMillisecondsSinceEpoch(valuedAtMs);
+
+  factory AssetValuationEntity.fromMap(Map<String, Object?> m) =>
+      AssetValuationEntity(
+        id: m['id'] as int,
+        uuid: m['uuid'] as String? ?? '',
+        assetId: m['asset_id'] as int,
+        value: Decimal.tryParse(m['value'] as String? ?? '') ?? Decimal.zero,
+        source: AssetValueSourceX.fromStorage(m['source'] as String?),
+        valuedAtMs: m['valued_at_ms'] as int? ?? 0,
+        note: m['note'] as String? ?? '',
+        createdMs: m['created_ms'] as int? ?? 0,
+      );
+}
+
+class AssetTransactionLinkEntity {
+  final int id;
+  final String uuid;
+  final int assetId;
+  final AssetObjectType assetObjectType;
+  final int transactionId;
+  final AssetTransactionLinkType linkType;
+  final Decimal amount;
+  final int allocatedGrossCents;
+  final int allocatedRefundCents;
+  final AssetAllocationCostQuality costQuality;
+  final String note;
+  final int createdMs;
+  final int updatedMs;
+
+  const AssetTransactionLinkEntity({
+    required this.id,
+    this.uuid = '',
+    required this.assetId,
+    this.assetObjectType = AssetObjectType.physical,
+    required this.transactionId,
+    required this.linkType,
+    required this.amount,
+    this.allocatedGrossCents = 0,
+    this.allocatedRefundCents = 0,
+    this.costQuality = AssetAllocationCostQuality.partial,
+    this.note = '',
+    this.createdMs = 0,
+    this.updatedMs = 0,
+  });
+
+  int get allocatedNetCents => allocatedGrossCents - allocatedRefundCents;
+
+  factory AssetTransactionLinkEntity.fromMap(Map<String, Object?> m) =>
+      AssetTransactionLinkEntity(
+        id: m['id'] as int,
+        uuid: m['uuid'] as String? ?? '',
+        assetId: m['asset_id'] as int,
+        assetObjectType:
+            AssetObjectTypeX.fromStorage(m['asset_object_type'] as String?),
+        transactionId: m['transaction_id'] as int,
+        linkType:
+            AssetTransactionLinkTypeX.fromStorage(m['link_type'] as String?),
+        amount: Decimal.tryParse(m['amount'] as String? ?? '') ?? Decimal.zero,
+        allocatedGrossCents: m['allocated_gross_cents'] as int? ?? 0,
+        allocatedRefundCents: m['allocated_refund_cents'] as int? ?? 0,
+        costQuality: AssetAllocationCostQualityX.fromStorage(
+          m['cost_quality'] as String?,
+        ),
+        note: m['note'] as String? ?? '',
+        createdMs: m['created_ms'] as int? ?? 0,
+        updatedMs: m['updated_ms'] as int? ?? 0,
+      );
+}
+
+class AssetUsageEventEntity {
+  final int id;
+  final String uuid;
+  final int assetId;
+  final int countDelta;
+  final int? reversalOf;
+  final int occurredMs;
+  final String note;
+  final int createdMs;
+  final int updatedMs;
+
+  const AssetUsageEventEntity({
+    required this.id,
+    required this.uuid,
+    required this.assetId,
+    required this.countDelta,
+    this.reversalOf,
+    required this.occurredMs,
+    this.note = '',
+    required this.createdMs,
+    required this.updatedMs,
+  });
+
+  factory AssetUsageEventEntity.fromMap(Map<String, Object?> map) =>
+      AssetUsageEventEntity(
+        id: map['id'] as int,
+        uuid: map['uuid'] as String? ?? '',
+        assetId: map['asset_id'] as int,
+        countDelta: map['count_delta'] as int? ?? 0,
+        reversalOf: map['reversal_of'] as int?,
+        occurredMs: map['occurred_ms'] as int? ?? 0,
+        note: map['note'] as String? ?? '',
+        createdMs: map['created_ms'] as int? ?? 0,
+        updatedMs: map['updated_ms'] as int? ?? 0,
+      );
+
+  AssetUsageEventPoint toPoint(Map<int, String> uuidById) =>
+      AssetUsageEventPoint(
+        id: uuid.isEmpty ? id.toString() : uuid,
+        countDelta: countDelta,
+        occurredMs: occurredMs,
+        sequence: id,
+        reversalOf: reversalOf == null
+            ? null
+            : (uuidById[reversalOf!] ?? reversalOf.toString()),
+      );
+}
+
+class AssetPurchaseAllocationCandidate {
+  final TransactionEntity transaction;
+  final int orderGrossCents;
+  final int validRefundCents;
+  final int allocatedGrossCents;
+  final int allocatedRefundCents;
+
+  const AssetPurchaseAllocationCandidate({
+    required this.transaction,
+    required this.orderGrossCents,
+    required this.validRefundCents,
+    required this.allocatedGrossCents,
+    required this.allocatedRefundCents,
+  });
+
+  int get remainingGrossCents => orderGrossCents - allocatedGrossCents;
+  int get remainingRefundCents => validRefundCents - allocatedRefundCents;
+  int get orderNetCents => orderGrossCents - validRefundCents;
+}
+
+class PhysicalAssetRefundAllocationTarget {
+  final int assetId;
+  final String name;
+  final int grossCents;
+  final int currentAllocatedRefundCents;
+  final int totalAllocatedRefundCents;
+
+  const PhysicalAssetRefundAllocationTarget({
+    required this.assetId,
+    required this.name,
+    required this.grossCents,
+    required this.currentAllocatedRefundCents,
+    required this.totalAllocatedRefundCents,
+  });
+}
+
+class PendingPhysicalAssetRefundAllocation {
+  final int refundTransactionId;
+  final int originalTransactionId;
+  final int refundDateMs;
+  final String orderLabel;
+  final int refundCents;
+  final List<PhysicalAssetRefundAllocationTarget> targets;
+
+  const PendingPhysicalAssetRefundAllocation({
+    required this.refundTransactionId,
+    required this.originalTransactionId,
+    required this.refundDateMs,
+    required this.orderLabel,
+    required this.refundCents,
+    required this.targets,
+  });
+
+  int get allocatedCents => targets.fold<int>(
+        0,
+        (sum, target) => sum + target.currentAllocatedRefundCents,
+      );
+
+  int get remainingCents => refundCents - allocatedCents;
+}
+
+enum PhysicalAssetAcquisitionCostQuality { exact, partial, conflict }
+
+class PhysicalAssetAcquisitionCostResult {
+  final PhysicalAssetAcquisitionCostQuality quality;
+  final Decimal? amount;
+  final String reason;
+
+  const PhysicalAssetAcquisitionCostResult({
+    required this.quality,
+    required this.amount,
+    required this.reason,
+  });
+
+  bool get isExact => quality == PhysicalAssetAcquisitionCostQuality.exact;
+}
+
+class PhysicalAssetAdditionalCostResult {
+  final Decimal amount;
+  final bool isExact;
+  final String reason;
+
+  const PhysicalAssetAdditionalCostResult({
+    required this.amount,
+    required this.isExact,
+    this.reason = '',
+  });
+}
+
+class ReceivableAssetEntity {
+  final int id;
+  final String uuid;
+  final int? bookId;
+  final String name;
+  final ReceivableAssetType type;
+
+  /// v32 及资产 JSON v3 的兼容影子；v33 业务逻辑不得再读取它。
+  final ReceivableAssetStatus status;
+  final ReceivableEconomicStatus economicStatus;
+  final AssetVisibilityStatus visibilityStatus;
+  final AssetInclusionQuality inclusionQuality;
+  final Decimal originalAmount;
+  final Decimal remainingAmount;
+  final String currencyCode;
+  final String counterparty;
+  final int? dueDateMs;
+  final bool includeInNetWorth;
+  final String note;
+  final bool isDeleted;
+  final int? endedMs;
+  final int? archivedMs;
+  final int createdMs;
+  final int updatedMs;
+
+  const ReceivableAssetEntity({
+    required this.id,
+    this.uuid = '',
+    this.bookId,
+    required this.name,
+    this.type = ReceivableAssetType.other,
+    this.status = ReceivableAssetStatus.active,
+    this.economicStatus = ReceivableEconomicStatus.active,
+    this.visibilityStatus = AssetVisibilityStatus.active,
+    this.inclusionQuality = AssetInclusionQuality.confirmed,
+    required this.originalAmount,
+    required this.remainingAmount,
+    this.currencyCode = 'CNY',
+    this.counterparty = '',
+    this.dueDateMs,
+    this.includeInNetWorth = true,
+    this.note = '',
+    this.isDeleted = false,
+    this.endedMs,
+    this.archivedMs,
+    this.createdMs = 0,
+    this.updatedMs = 0,
+  });
+
+  DateTime? get dueDate => dueDateMs == null
+      ? null
+      : DateTime.fromMillisecondsSinceEpoch(dueDateMs!);
+
+  DateTime? get endedAt =>
+      endedMs == null ? null : DateTime.fromMillisecondsSinceEpoch(endedMs!);
+  DateTime? get archivedAt => archivedMs == null
+      ? null
+      : DateTime.fromMillisecondsSinceEpoch(archivedMs!);
+  bool get isArchived => visibilityStatus == AssetVisibilityStatus.archived;
+  bool get countsInNetWorth =>
+      !isDeleted &&
+      includeInNetWorth &&
+      economicStatus.canCountInNetWorth &&
+      remainingAmount > Decimal.zero;
+
+  factory ReceivableAssetEntity.fromMap(Map<String, Object?> m) {
+    final legacyStatus =
+        ReceivableAssetStatusX.fromStorage(m['status'] as String?);
+    return ReceivableAssetEntity(
+      id: m['id'] as int,
+      uuid: m['uuid'] as String? ?? '',
+      bookId: m['book_id'] as int?,
+      name: m['name'] as String? ?? '',
+      type: ReceivableAssetTypeX.fromStorage(m['receivable_type'] as String?),
+      status: legacyStatus,
+      economicStatus: m.containsKey('economic_status')
+          ? ReceivableEconomicStatusX.fromStorage(
+              m['economic_status'] as String?,
+            )
+          : _receivableEconomicFromLegacyStatus(legacyStatus),
+      visibilityStatus: m.containsKey('visibility_status')
+          ? AssetVisibilityStatusX.fromStorage(
+              m['visibility_status'] as String?,
+            )
+          : legacyStatus == ReceivableAssetStatus.archived
+              ? AssetVisibilityStatus.archived
+              : AssetVisibilityStatus.active,
+      inclusionQuality: m.containsKey('inclusion_quality')
+          ? AssetInclusionQualityX.fromStorage(
+              m['inclusion_quality'] as String?,
+            )
+          : legacyStatus == ReceivableAssetStatus.archived
+              ? AssetInclusionQuality.needsReview
+              : AssetInclusionQuality.confirmed,
+      originalAmount: Decimal.tryParse(m['original_amount'] as String? ?? '') ??
+          Decimal.zero,
+      remainingAmount:
+          Decimal.tryParse(m['remaining_amount'] as String? ?? '') ??
+              Decimal.zero,
+      currencyCode: m['currency_code'] as String? ?? 'CNY',
+      counterparty: m['counterparty'] as String? ?? '',
+      dueDateMs: m['due_date_ms'] as int?,
+      includeInNetWorth: ((m['include_in_net_worth'] as int?) ?? 1) == 1,
+      note: m['note'] as String? ?? '',
+      isDeleted: ((m['is_deleted'] as int?) ?? 0) == 1,
+      endedMs: m['ended_ms'] as int?,
+      archivedMs: m['archived_ms'] as int?,
+      createdMs: m['created_ms'] as int? ?? 0,
+      updatedMs: m['updated_ms'] as int? ?? 0,
+    );
+  }
+}
+
+class ReceivableRecoveryEntity {
+  final int id;
+  final String uuid;
+  final int receivableAssetId;
+  final Decimal amount;
+  final int recoveredMs;
+  final int? targetAccountId;
+  final int? eventId;
+  final int? transactionId;
+  final String note;
+  final int createdMs;
+
+  const ReceivableRecoveryEntity({
+    required this.id,
+    this.uuid = '',
+    required this.receivableAssetId,
+    required this.amount,
+    required this.recoveredMs,
+    this.targetAccountId,
+    this.eventId,
+    this.transactionId,
+    this.note = '',
+    this.createdMs = 0,
+  });
+
+  DateTime get recoveredAt => DateTime.fromMillisecondsSinceEpoch(recoveredMs);
+
+  factory ReceivableRecoveryEntity.fromMap(Map<String, Object?> m) =>
+      ReceivableRecoveryEntity(
+        id: m['id'] as int,
+        uuid: m['uuid'] as String? ?? '',
+        receivableAssetId: m['receivable_asset_id'] as int,
+        amount: Decimal.tryParse(m['amount'] as String? ?? '') ?? Decimal.zero,
+        recoveredMs: m['recovered_ms'] as int? ?? 0,
+        targetAccountId: m['target_account_id'] as int?,
+        eventId: m['event_id'] as int?,
+        transactionId: m['transaction_id'] as int?,
+        note: m['note'] as String? ?? '',
+        createdMs: m['created_ms'] as int? ?? 0,
+      );
+}
+
+class NetWorthSnapshotEntity {
+  final int id;
+  final String scopeKey;
+  final String snapshotDate;
+  final Decimal totalAssets;
+  final Decimal totalLiabilities;
+  final Decimal netWorth;
+  final Decimal cashAssets;
+  final Decimal investmentAssets;
+  final Decimal physicalAssets;
+  final Decimal receivableAssets;
+  final String snapshotType;
+  final String lineageKey;
+  final int asOfMs;
+  final int knowledgeCutoffMs;
+  final String timezone;
+  final int scopeVersion;
+  final int calculationVersion;
+  final String currencyCoverageJson;
+  final NetWorthSnapshotQuality quality;
+  final String causeSetJson;
+  final String reasonsJson;
+  final String valuationCoverageJson;
+  final bool provisional;
+  final int createdMs;
+
+  const NetWorthSnapshotEntity({
+    required this.id,
+    this.scopeKey = 'global',
+    required this.snapshotDate,
+    required this.totalAssets,
+    required this.totalLiabilities,
+    required this.netWorth,
+    required this.cashAssets,
+    required this.investmentAssets,
+    required this.physicalAssets,
+    required this.receivableAssets,
+    this.snapshotType = 'legacy_unverified',
+    this.lineageKey = 'legacy:global',
+    this.asOfMs = 0,
+    this.knowledgeCutoffMs = 0,
+    this.timezone = 'device_local',
+    this.scopeVersion = 1,
+    this.calculationVersion = 1,
+    this.currencyCoverageJson = '',
+    this.quality = NetWorthSnapshotQuality.legacyUnverified,
+    this.causeSetJson = '',
+    this.reasonsJson = '',
+    this.valuationCoverageJson = '',
+    this.provisional = false,
+    this.createdMs = 0,
+  });
+
+  bool get isComputed => snapshotType == 'computed_snapshot';
+
+  ComputedNetWorthSnapshot toComputedSnapshot() {
+    final parsedDate = DateTime.tryParse(snapshotDate) ??
+        DateTime.fromMillisecondsSinceEpoch(
+          asOfMs == 0 ? createdMs : asOfMs,
+        );
+    // snapshot_date is the civil-day truth. Epoch midnight can map to another
+    // day after the device travels to a different timezone.
+    final asOf = parsedDate;
+    final coverage = _decodeNetWorthCurrencyCoverage(currencyCoverageJson);
+    final causes = _decodeNetWorthSnapshotCauses(causeSetJson);
+    final reasons = _decodeNetWorthSnapshotReasons(reasonsJson);
+    final valuation = _decodeNetWorthValuationCoverage(valuationCoverageJson);
+    final effectiveQuality =
+        isComputed ? quality : NetWorthSnapshotQuality.legacyUnverified;
+    return ComputedNetWorthSnapshot.rehydrate(
+      lineage: NetWorthSnapshotLineage(
+        asOf: asOf,
+        knowledgeCutoff: DateTime.fromMillisecondsSinceEpoch(
+          knowledgeCutoffMs == 0 ? createdMs : knowledgeCutoffMs,
+        ),
+        timezone: timezone.isEmpty ? 'device_local' : timezone,
+        scopeKey: scopeKey,
+        scopeVersion: max(1, scopeVersion),
+        calculationVersion: max(1, calculationVersion),
+        currencyCoverage: coverage,
+        quality: effectiveQuality,
+        reasons: effectiveQuality == NetWorthSnapshotQuality.available
+            ? const []
+            : reasons.isEmpty
+                ? [
+                    NetWorthSnapshotReason(
+                      code: effectiveQuality.storageKey,
+                      message: isComputed ? '快照数据不完整' : '旧快照未经当前口径验证',
+                    ),
+                  ]
+                : reasons,
+        provisional: provisional,
+        causes:
+            causes.isEmpty ? const {NetWorthSnapshotCause.migration} : causes,
+      ),
+      components: NetWorthSnapshotComponents(
+        cashAssetsMinor: decimalToBudgetCents(cashAssets),
+        investmentAssetsMinor: decimalToBudgetCents(investmentAssets),
+        physicalAssetsMinor: decimalToBudgetCents(physicalAssets),
+        receivableAssetsMinor: decimalToBudgetCents(receivableAssets),
+        liabilitiesMinor: decimalToBudgetCents(totalLiabilities),
+      ),
+      valuationCoverage: valuation,
+    );
+  }
+
+  factory NetWorthSnapshotEntity.fromMap(Map<String, Object?> m) =>
+      NetWorthSnapshotEntity(
+        id: m['id'] as int,
+        scopeKey: m['scope_key'] as String? ?? 'global',
+        snapshotDate: m['snapshot_date'] as String? ?? '',
+        totalAssets: Decimal.tryParse(m['total_assets'] as String? ?? '') ??
+            Decimal.zero,
+        totalLiabilities:
+            Decimal.tryParse(m['total_liabilities'] as String? ?? '') ??
+                Decimal.zero,
+        netWorth:
+            Decimal.tryParse(m['net_worth'] as String? ?? '') ?? Decimal.zero,
+        cashAssets:
+            Decimal.tryParse(m['cash_assets'] as String? ?? '') ?? Decimal.zero,
+        investmentAssets:
+            Decimal.tryParse(m['investment_assets'] as String? ?? '') ??
+                Decimal.zero,
+        physicalAssets:
+            Decimal.tryParse(m['physical_assets'] as String? ?? '') ??
+                Decimal.zero,
+        receivableAssets:
+            Decimal.tryParse(m['receivable_assets'] as String? ?? '') ??
+                Decimal.zero,
+        snapshotType: m['snapshot_type'] as String? ?? 'legacy_unverified',
+        lineageKey: m['lineage_key'] as String? ?? 'legacy:global',
+        asOfMs: m['as_of_ms'] as int? ?? 0,
+        knowledgeCutoffMs: m['knowledge_cutoff_ms'] as int? ?? 0,
+        timezone: m['timezone'] as String? ?? 'device_local',
+        scopeVersion: m['scope_version'] as int? ?? 1,
+        calculationVersion: m['calculation_version'] as int? ?? 1,
+        currencyCoverageJson: m['currency_coverage_json'] as String? ?? '',
+        quality: NetWorthSnapshotQualityX.fromStorage(
+          m['quality'] as String?,
+        ),
+        causeSetJson: m['cause_set_json'] as String? ?? '',
+        reasonsJson: m['reasons_json'] as String? ?? '',
+        valuationCoverageJson: m['valuation_coverage_json'] as String? ?? '',
+        provisional: (m['provisional'] as int? ?? 0) == 1,
+        createdMs: m['created_ms'] as int? ?? 0,
+      );
+}
+
+NetWorthCurrencyCoverage _decodeNetWorthCurrencyCoverage(String raw) {
+  try {
+    final value = jsonDecode(raw);
+    if (value is Map) {
+      return NetWorthCurrencyCoverage(
+        baseCurrency: value['base_currency']?.toString() ?? 'CNY',
+        coveredCurrencies:
+            (value['covered'] as List? ?? const ['CNY']).map((e) => '$e'),
+        uncoveredCurrencies:
+            (value['uncovered'] as List? ?? const []).map((e) => '$e'),
+      );
+    }
+  } catch (_) {}
+  return NetWorthCurrencyCoverage.single('CNY');
+}
+
+Set<NetWorthSnapshotCause> _decodeNetWorthSnapshotCauses(String raw) {
+  try {
+    final value = jsonDecode(raw);
+    if (value is List) {
+      return value
+          .map((item) => NetWorthSnapshotCauseX.fromStorage('$item'))
+          .toSet();
+    }
+  } catch (_) {}
+  return const {};
+}
+
+List<NetWorthSnapshotReason> _decodeNetWorthSnapshotReasons(String raw) {
+  try {
+    final value = jsonDecode(raw);
+    if (value is List) {
+      return [
+        for (final item in value)
+          if (item is Map && (item['code']?.toString().isNotEmpty ?? false))
+            NetWorthSnapshotReason(
+              code: item['code'].toString(),
+              message: item['message']?.toString() ?? '',
+              details: item['details'] is Map
+                  ? Map<String, Object?>.from(item['details'] as Map)
+                  : const {},
+            ),
+      ];
+    }
+  } catch (_) {}
+  return const [];
+}
+
+NetWorthValuationCoverage _decodeNetWorthValuationCoverage(String raw) {
+  try {
+    final value = jsonDecode(raw);
+    if (value is Map) {
+      return NetWorthValuationCoverage(
+        missingValuationCount: value['missing_count'] as int? ?? 0,
+        staleValuationCount: value['stale_count'] as int? ?? 0,
+      );
+    }
+  } catch (_) {}
+  return const NetWorthValuationCoverage();
+}
+
+class NetWorthBreakdown {
+  final Decimal totalAssets;
+  final Decimal totalLiabilities;
+  final Decimal netWorth;
+  final Decimal cashAssets;
+  final Decimal investmentAssets;
+  final Decimal physicalAssets;
+  final Decimal receivableAssets;
+
+  const NetWorthBreakdown({
+    required this.totalAssets,
+    required this.totalLiabilities,
+    required this.netWorth,
+    required this.cashAssets,
+    required this.investmentAssets,
+    required this.physicalAssets,
+    required this.receivableAssets,
+  });
+}
+
+class LiabilityProfileEntity {
+  final int id;
+  final String uuid;
+  final int accountId;
+  final LiabilityProfileType type;
+  final Decimal originalAmount;
+  final Decimal currentPrincipal;
+  final Decimal interestRate;
+  final int? repaymentDay;
+  final int? repaymentAccountId;
+  final int? startDateMs;
+  final int? endDateMs;
+  final LiabilityProfileStatus status;
+  final String note;
+  final int createdMs;
+  final int updatedMs;
+
+  LiabilityProfileEntity({
+    required this.id,
+    this.uuid = '',
+    required this.accountId,
+    this.type = LiabilityProfileType.other,
+    required this.originalAmount,
+    required this.currentPrincipal,
+    Decimal? interestRate,
+    this.repaymentDay,
+    this.repaymentAccountId,
+    this.startDateMs,
+    this.endDateMs,
+    this.status = LiabilityProfileStatus.active,
+    this.note = '',
+    this.createdMs = 0,
+    this.updatedMs = 0,
+  }) : interestRate = interestRate ?? Decimal.zero;
+
+  DateTime? get startDate => startDateMs == null
+      ? null
+      : DateTime.fromMillisecondsSinceEpoch(startDateMs!);
+  DateTime? get endDate => endDateMs == null
+      ? null
+      : DateTime.fromMillisecondsSinceEpoch(endDateMs!);
+
+  bool get countsAsLiability =>
+      status.countsAsLiability && currentPrincipal > Decimal.zero;
+
+  DateTime? nextRepaymentDate({DateTime? now}) {
+    final day = repaymentDay;
+    if (day == null || day < 1 || day > 31) return null;
+    final base = now ?? DateTime.now();
+    DateTime candidate(int year, int month) {
+      final last = DateTime(year, month + 1, 0).day;
+      return DateTime(year, month, min(day, last));
+    }
+
+    var next = candidate(base.year, base.month);
+    if (next.isBefore(DateTime(base.year, base.month, base.day))) {
+      next = candidate(base.year, base.month + 1);
+    }
+    return next;
+  }
+
+  int? daysUntilRepayment({DateTime? now}) {
+    final next = nextRepaymentDate(now: now);
+    if (next == null) return null;
+    final base = now ?? DateTime.now();
+    final today = DateTime(base.year, base.month, base.day);
+    return next.difference(today).inDays;
+  }
+
+  factory LiabilityProfileEntity.fromMap(Map<String, Object?> m) =>
+      LiabilityProfileEntity(
+        id: m['id'] as int,
+        uuid: m['uuid'] as String? ?? '',
+        accountId: m['account_id'] as int,
+        type: LiabilityProfileTypeX.fromStorage(m['liability_type'] as String?),
+        originalAmount:
+            Decimal.tryParse(m['original_amount'] as String? ?? '') ??
+                Decimal.zero,
+        currentPrincipal:
+            Decimal.tryParse(m['current_principal'] as String? ?? '') ??
+                Decimal.zero,
+        interestRate: Decimal.tryParse(m['interest_rate'] as String? ?? '') ??
+            Decimal.zero,
+        repaymentDay: m['repayment_day'] as int?,
+        repaymentAccountId: m['repayment_account_id'] as int?,
+        startDateMs: m['start_date_ms'] as int?,
+        endDateMs: m['end_date_ms'] as int?,
+        status: LiabilityProfileStatusX.fromStorage(m['status'] as String?),
+        note: m['note'] as String? ?? '',
+        createdMs: m['created_ms'] as int? ?? 0,
+        updatedMs: m['updated_ms'] as int? ?? 0,
       );
 }
 
@@ -129,6 +2069,8 @@ class CategoryEntity {
 
 class TransactionEntity {
   final int id;
+  final int? bookId;
+  final String uuid;
   final String kind;
   final String amountStr;
   final String currencyCode;
@@ -142,9 +2084,17 @@ class TransactionEntity {
   final String toAccountName;
   final String note;
   final int dateMs;
+  final TransactionTimePrecision timePrecision;
+  final int createdMs;
+  final int? settledMs;
+  final SettlementQuality settlementQuality;
+  final int? settlementAccountId;
+  final SettlementQuality settlementAccountQuality;
+  final TransactionEventType eventType;
   final String tagsRaw;
   final bool reimbursable;
   final String imagePath;
+  final int? recurringRuleId;
 
   /// 不计入收支：仍在账单列表里，但统计/预算/洞察都跳过它。
   final bool excluded;
@@ -155,6 +2105,9 @@ class TransactionEntity {
 
   Decimal get amount => Decimal.parse(amountStr);
   DateTime get date => DateTime.fromMillisecondsSinceEpoch(dateMs);
+  DateTime? get settledAt => settledMs == null
+      ? null
+      : DateTime.fromMillisecondsSinceEpoch(settledMs!);
   TransactionKind get txKind => TransactionKind.fromJson(kind);
 
   List<int> get tagIds => tagsRaw.isEmpty
@@ -167,6 +2120,8 @@ class TransactionEntity {
 
   const TransactionEntity({
     required this.id,
+    this.bookId,
+    this.uuid = '',
     required this.kind,
     required this.amountStr,
     this.currencyCode = 'CNY',
@@ -180,28 +2135,43 @@ class TransactionEntity {
     this.toAccountName = '',
     this.note = '',
     required this.dateMs,
+    this.timePrecision = TransactionTimePrecision.legacyUnknown,
+    this.createdMs = 0,
+    this.settledMs,
+    this.settlementQuality = SettlementQuality.unknown,
+    this.settlementAccountId,
+    this.settlementAccountQuality = SettlementQuality.unknown,
+    this.eventType = TransactionEventType.legacyAdjustment,
     this.tagsRaw = '',
     this.reimbursable = false,
     this.imagePath = '',
+    this.recurringRuleId,
     this.excluded = false,
     this.refundOf,
   });
 
-  TransactionRecord toRecord({String languageCode = 'zh'}) =>
-      TransactionRecord(
+  TransactionRecord toRecord({String languageCode = 'zh'}) => TransactionRecord(
         id: id.toString(),
         kind: txKind,
         amount: amount,
         currencyCode: currencyCode,
-        categoryName: languageCode.startsWith('zh') ? categoryNameZh : categoryNameEn,
+        categoryName:
+            languageCode.startsWith('zh') ? categoryNameZh : categoryNameEn,
+        categoryKey: categoryKey,
+        accountId: accountId,
         accountName: accountName,
+        toAccountId: toAccountId,
         toAccountName: toAccountName,
         note: note,
         date: date,
+        timePrecision: timePrecision,
       );
 
-  factory TransactionEntity.fromMap(Map<String, Object?> m) => TransactionEntity(
+  factory TransactionEntity.fromMap(Map<String, Object?> m) =>
+      TransactionEntity(
         id: m['id'] as int,
+        bookId: m['book_id'] as int?,
+        uuid: m['uuid'] as String? ?? '',
         kind: m['kind'] as String,
         amountStr: m['amount'] as String,
         currencyCode: m['currency_code'] as String? ?? 'CNY',
@@ -215,9 +2185,25 @@ class TransactionEntity {
         toAccountName: m['to_account_name'] as String? ?? '',
         note: m['note'] as String? ?? '',
         dateMs: m['date_ms'] as int,
+        timePrecision: TransactionTimePrecisionX.fromStorage(
+          m['time_precision'] as String?,
+        ),
+        createdMs: m['created_ms'] as int? ?? 0,
+        settledMs: m['settled_ms'] as int?,
+        settlementQuality: SettlementQualityX.fromStorage(
+          m['settlement_quality'] as String?,
+        ),
+        settlementAccountId: m['settlement_account_id'] as int?,
+        settlementAccountQuality: SettlementQualityX.fromStorage(
+          m['settlement_account_quality'] as String?,
+        ),
+        eventType: TransactionEventTypeX.fromStorage(
+          m['event_type'] as String?,
+        ),
         tagsRaw: m['tags'] as String? ?? '',
         reimbursable: ((m['reimbursable'] as int?) ?? 0) == 1,
         imagePath: m['image_path'] as String? ?? '',
+        recurringRuleId: m['recurring_rule_id'] as int?,
         excluded: ((m['excluded'] as int?) ?? 0) == 1,
         refundOf: m['refund_of'] as int?,
       );
@@ -230,6 +2216,7 @@ class TransactionDraft {
   final int accountId;
   final String note;
   final DateTime date;
+  final TransactionTimePrecision timePrecision;
   final List<int> tagIds;
 
   const TransactionDraft({
@@ -239,17 +2226,135 @@ class TransactionDraft {
     required this.accountId,
     this.note = '',
     required this.date,
+    this.timePrecision = TransactionTimePrecision.legacyUnknown,
     this.tagIds = const [],
+  });
+}
+
+class FeimiaoImportRow {
+  final String uuid;
+  final String refundOfUuid;
+  final String role;
+  final TransactionKind kind;
+  final Decimal amount;
+  final Decimal refunded;
+  final String categoryKey;
+  final String categoryName;
+  final String accountName;
+  final String toAccountName;
+  final List<String> tagNames;
+  final String note;
+  final DateTime date;
+  final TransactionTimePrecision timePrecision;
+  final DateTime? settledAt;
+  final SettlementQuality? settlementQuality;
+  final String settlementAccountName;
+  final SettlementQuality? settlementAccountQuality;
+  final TransactionEventType? eventType;
+  final bool excluded;
+  final bool reimbursable;
+
+  const FeimiaoImportRow({
+    this.uuid = '',
+    this.refundOfUuid = '',
+    this.role = 'transaction',
+    required this.kind,
+    required this.amount,
+    required this.refunded,
+    this.categoryKey = '',
+    this.categoryName = '',
+    this.accountName = '',
+    this.toAccountName = '',
+    this.tagNames = const [],
+    this.note = '',
+    required this.date,
+    this.timePrecision = TransactionTimePrecision.legacyUnknown,
+    this.settledAt,
+    this.settlementQuality,
+    this.settlementAccountName = '',
+    this.settlementAccountQuality,
+    this.eventType,
+    this.excluded = false,
+    this.reimbursable = false,
+  });
+}
+
+class FeimiaoImportResult {
+  final int inserted;
+  final int skippedDuplicates;
+  final int refundsAttached;
+
+  const FeimiaoImportResult({
+    required this.inserted,
+    required this.skippedDuplicates,
+    required this.refundsAttached,
+  });
+}
+
+class FeimiaoAssetImportResult {
+  final int assets;
+  final int receivables;
+  final int events;
+  final int usages;
+  final int valuations;
+  final int links;
+  final int recoveries;
+  final int snapshots;
+  final int liabilities;
+  final int unresolvedTransactionLinks;
+  final int unresolvedSavingsGoalLinks;
+  final int rejectedLinks;
+
+  const FeimiaoAssetImportResult({
+    required this.assets,
+    this.receivables = 0,
+    required this.events,
+    this.usages = 0,
+    required this.valuations,
+    required this.links,
+    this.recoveries = 0,
+    this.snapshots = 0,
+    this.liabilities = 0,
+    this.unresolvedTransactionLinks = 0,
+    this.unresolvedSavingsGoalLinks = 0,
+    this.rejectedLinks = 0,
+  });
+
+  int get total =>
+      assets +
+      receivables +
+      events +
+      usages +
+      valuations +
+      links +
+      recoveries +
+      snapshots +
+      liabilities;
+}
+
+class ImportBatchResult {
+  final int inserted;
+  final int skippedDuplicates;
+  final int refundsAttached;
+  final int unresolvedRefunds;
+
+  const ImportBatchResult({
+    required this.inserted,
+    required this.skippedDuplicates,
+    required this.refundsAttached,
+    this.unresolvedRefunds = 0,
   });
 }
 
 class SavingsGoalEntity {
   final int id;
+  final String uuid;
   final String name;
   final String emoji;
   final String targetStr;
   final String savedStr;
   final int createdMs;
+  final int updatedMs;
 
   Decimal get target => Decimal.parse(targetStr);
   Decimal get saved => Decimal.parse(savedStr);
@@ -265,21 +2370,25 @@ class SavingsGoalEntity {
 
   const SavingsGoalEntity({
     required this.id,
+    required this.uuid,
     required this.name,
     this.emoji = '🐷',
     required this.targetStr,
     this.savedStr = '0',
     this.createdMs = 0,
+    this.updatedMs = 0,
   });
 
   factory SavingsGoalEntity.fromMap(Map<String, Object?> m) =>
       SavingsGoalEntity(
         id: m['id'] as int,
+        uuid: m['uuid'] as String? ?? '',
         name: m['name'] as String,
         emoji: m['emoji'] as String? ?? '🐷',
         targetStr: m['target_amount'] as String? ?? '0',
         savedStr: m['saved_amount'] as String? ?? '0',
         createdMs: m['created_ms'] as int? ?? 0,
+        updatedMs: m['updated_ms'] as int? ?? 0,
       );
 }
 
@@ -301,12 +2410,113 @@ class TagEntity {
       );
 }
 
+class ReportEntity {
+  final int id;
+  final int? bookId;
+  final String type;
+  final String title;
+  final String summary;
+  final String markdown;
+  final int periodStartMs;
+  final int periodEndMs;
+  final int createdMs;
+  final int pinnedMs;
+
+  const ReportEntity({
+    required this.id,
+    this.bookId,
+    required this.type,
+    required this.title,
+    required this.summary,
+    required this.markdown,
+    required this.periodStartMs,
+    required this.periodEndMs,
+    required this.createdMs,
+    this.pinnedMs = 0,
+  });
+
+  DateTime get periodStart =>
+      DateTime.fromMillisecondsSinceEpoch(periodStartMs);
+  DateTime get periodEnd => DateTime.fromMillisecondsSinceEpoch(periodEndMs);
+  DateTime get createdAt => DateTime.fromMillisecondsSinceEpoch(createdMs);
+  bool get pinned => pinnedMs > 0;
+
+  factory ReportEntity.fromMap(Map<String, Object?> m) => ReportEntity(
+        id: m['id'] as int,
+        bookId: m['book_id'] as int?,
+        type: m['type'] as String? ?? 'monthly',
+        title: m['title'] as String? ?? '',
+        summary: m['summary'] as String? ?? '',
+        markdown: m['markdown'] as String? ?? '',
+        periodStartMs: m['period_start_ms'] as int? ?? 0,
+        periodEndMs: m['period_end_ms'] as int? ?? 0,
+        createdMs: m['created_ms'] as int? ?? 0,
+        pinnedMs: m['pinned_ms'] as int? ?? 0,
+      );
+}
+
+class ReportJobEntity {
+  final int id;
+  final String uuid;
+  final int? bookId;
+  final int? reportId;
+  final String question;
+  final String type;
+  final String title;
+  final int periodStartMs;
+  final int periodEndMs;
+  final String status;
+  final String stage;
+  final String error;
+  final int createdMs;
+  final int updatedMs;
+
+  const ReportJobEntity({
+    required this.id,
+    required this.uuid,
+    this.bookId,
+    this.reportId,
+    required this.question,
+    required this.type,
+    required this.title,
+    required this.periodStartMs,
+    required this.periodEndMs,
+    required this.status,
+    required this.stage,
+    required this.error,
+    required this.createdMs,
+    required this.updatedMs,
+  });
+
+  DateTime get periodStart =>
+      DateTime.fromMillisecondsSinceEpoch(periodStartMs);
+  DateTime get periodEnd => DateTime.fromMillisecondsSinceEpoch(periodEndMs);
+  bool get isPending => status == 'queued' || status == 'running';
+
+  factory ReportJobEntity.fromMap(Map<String, Object?> row) => ReportJobEntity(
+        id: row['id'] as int,
+        uuid: row['uuid'] as String? ?? '',
+        bookId: row['book_id'] as int?,
+        reportId: row['report_id'] as int?,
+        question: row['question'] as String? ?? '',
+        type: row['type'] as String? ?? 'monthly',
+        title: row['title'] as String? ?? '',
+        periodStartMs: row['period_start_ms'] as int? ?? 0,
+        periodEndMs: row['period_end_ms'] as int? ?? 0,
+        status: row['status'] as String? ?? 'queued',
+        stage: row['stage'] as String? ?? 'collect',
+        error: row['error'] as String? ?? '',
+        createdMs: row['created_ms'] as int? ?? 0,
+        updatedMs: row['updated_ms'] as int? ?? 0,
+      );
+}
+
 // ---------------------------------------------------------------------------
 // Repository
 // ---------------------------------------------------------------------------
 
 class AppRepository extends ChangeNotifier {
-  static const _dbVersion = 20;
+  static const _dbVersion = 40;
   static const _dbName = 'qingji.db';
 
   /// 行级 uuid（多人共享账本的同步地基）：32 位小写 hex，无需三方库。
@@ -317,28 +2527,104 @@ class AppRepository extends ChangeNotifier {
   }
 
   /// 新行的同步字段：uuid + 变更时间戳。
-  static Map<String, Object?> _syncStampNew() => {
-        'uuid': _newUuid(),
-        'updated_ms': DateTime.now().millisecondsSinceEpoch,
+  static Map<String, Object?> _syncStampNew() {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    return {'uuid': _newUuid(), 'created_ms': now, 'updated_ms': now};
+  }
+
+  static TransactionEventType _eventTypeForKind(TransactionKind kind) =>
+      switch (kind) {
+        TransactionKind.expense => TransactionEventType.expense,
+        TransactionKind.income => TransactionEventType.income,
+        TransactionKind.transfer => TransactionEventType.transfer,
+      };
+
+  static Map<String, Object?> _settlementFields({
+    required DateTime settledAt,
+    required int settlementAccountId,
+    required TransactionEventType eventType,
+    SettlementQuality dateQuality = SettlementQuality.userConfirmed,
+    SettlementQuality accountQuality = SettlementQuality.userConfirmed,
+  }) =>
+      {
+        'settled_ms': settledAt.millisecondsSinceEpoch,
+        'settlement_quality': dateQuality.storageKey,
+        'settlement_account_id': settlementAccountId,
+        'settlement_account_quality': accountQuality.storageKey,
+        'event_type': eventType.storageKey,
       };
 
   Database? _db;
 
+  bool get isInitialized => _db != null;
+
   final List<BookEntity> _books = [];
   final List<AccountEntity> _accounts = [];
+  final List<AccountBalanceCheckpointEntity> _accountBalanceCheckpoints = [];
+  final Map<int, Set<String>> _checkpointCoveredUnknownEventIds = {};
   final List<CategoryEntity> _categories = [];
   final List<TransactionEntity> _transactions = [];
+  final List<TransactionEntity> _allTransactions = [];
+  final List<PhysicalAssetEntity> _physicalAssets = [];
+  final List<PhysicalAssetEntity> _allPhysicalAssets = [];
+  final List<ReceivableAssetEntity> _receivableAssets = [];
+  final List<ReceivableAssetEntity> _allReceivableAssets = [];
+  final List<ReceivableRecoveryEntity> _receivableRecoveries = [];
+  final List<NetWorthSnapshotEntity> _netWorthSnapshots = [];
+  final List<NetWorthVerifiedCheckpoint> _verifiedNetWorthCheckpoints = [];
+  int _netWorthScopeVersion = 1;
+  final List<LiabilityProfileEntity> _liabilityProfiles = [];
+  final List<AssetEventEntity> _assetEvents = [];
+  final List<AssetValuationEntity> _assetValuations = [];
+  final List<AssetTransactionLinkEntity> _assetTransactionLinks = [];
+  final List<AssetUsageEventEntity> _assetUsageEvents = [];
   final List<SavingsGoalEntity> _savingsGoals = [];
   final List<TagEntity> _tags = [];
+  final List<ReportEntity> _reports = [];
 
   int _currentBookId = 0;
+
   /// 全部预算期间（新模型：阶段性预算，见 core/budget/budget_period.dart）。
   final List<BudgetPeriod> _budgetPeriods = [];
+  final List<BudgetPlanV2> _budgetPlansV2 = [];
+  final List<BudgetPlanRevisionV2> _budgetPlanRevisionsV2 = [];
+  final List<BudgetCycleOverrideV2> _budgetCycleOverridesV2 = [];
+  final List<BudgetFixedOccurrenceEntity> _budgetFixedOccurrencesV2 = [];
+  AiProviderType _aiProviderType = AiProviderType.deepseek;
   String? _deepSeekApiKey;
+  String? _customAiApiKey;
+  String _customAiDisplayName = '自定义';
+  String _customAiBaseUrl = AiProviderConfig.customDefaultBaseUrl;
+  String _customAiModel = AiProviderConfig.customDefaultModel;
+  String _reportAiModel = AiProviderConfig.customReportDefaultModel;
+  AiProviderType _recordAiProviderType = AiProviderType.deepseek;
+  AiProviderType _chatAiProviderType = AiProviderType.deepseek;
+  AiProviderType _reportAiProviderType = AiProviderType.custom;
+  AiRouteMode _recordAiRouteMode = AiRouteMode.auto;
+  AiRouteMode _chatAiRouteMode = AiRouteMode.auto;
+  AiRouteMode _reportAiRouteMode = AiRouteMode.auto;
+  AiEndpointType _recordAiEndpointType = AiEndpointType.chatCompletions;
+  AiEndpointType _chatAiEndpointType = AiEndpointType.auto;
+  AiEndpointType _reportAiEndpointType = AiEndpointType.responses;
+  AiReasoningEffort _recordAiReasoningEffort = AiReasoningEffort.none;
+  AiReasoningEffort _chatAiReasoningEffort = AiReasoningEffort.low;
+  AiReasoningEffort _reportAiReasoningEffort = AiReasoningEffort.xhigh;
 
   /// 记账模式偏好：true=AI 记账，false=手动记账（持久化）。
   bool _recordAiMode = false;
   int _chatRetentionDays = 30;
+  bool _aiPrivacyAccepted = false;
+  bool _widgetPrivacyMode = false;
+  int _moneyDecimalPlaces = 2;
+  MoneyIntegerRoundingMode _moneyIntegerRoundingMode =
+      MoneyIntegerRoundingMode.round;
+  CategoryIconStyle _categoryIconStyle = CategoryIconStyle.filled;
+  TransactionCardDisplayMode _transactionCardDisplayMode =
+      TransactionCardDisplayMode.contentFirst;
+  UserMessageBubbleStyle _userMessageBubbleStyle =
+      UserMessageBubbleStyle.followCardOpacity;
+  String _profileNickname = '';
+  String _profileAvatarPath = '';
 
   /// 用户纠正记忆：(备注短语, 收支, 分类key)。AI 记账时按此覆盖模型的猜测。
   final List<({String phrase, TransactionKind kind, String key})> _catMemory =
@@ -355,13 +2641,160 @@ class AppRepository extends ChangeNotifier {
 
   /// 统计页卡片的用户自定义顺序/可见集（key 列表，见 statistics_view 注册表）。
   final List<String> _statCardOrder = [];
+  bool _statCardOrderConfigured = false;
 
   List<BookEntity> get books => List.unmodifiable(_books);
   List<AccountEntity> get accounts => List.unmodifiable(_accounts);
+  List<AccountEntity> get activeAccounts => List.unmodifiable(
+        _accounts.where((account) => !account.isArchived),
+      );
+  List<AccountEntity> get archivedAccounts => List.unmodifiable(
+        _accounts.where((account) => account.isArchived),
+      );
+  List<AccountEntity> get transactionAccounts => List.unmodifiable(
+        _accounts.where(
+          (account) =>
+              !account.isDeleted &&
+              !account.isArchived &&
+              account.currencyCode == 'CNY',
+        ),
+      );
   List<CategoryEntity> get categories => List.unmodifiable(_categories);
   List<TransactionEntity> get transactions => List.unmodifiable(_transactions);
+  TransactionEntity? transactionById(int id) =>
+      _allTransactions.where((transaction) => transaction.id == id).firstOrNull;
+  int get transactionCount => _transactions.length;
+  Iterable<TransactionEntity> get transactionsView => _transactions;
+  List<TransactionEntity> transactionsForRecurringRule(int ruleId) =>
+      _transactions.where((t) => t.recurringRuleId == ruleId).toList()
+        ..sort((a, b) => a.dateMs.compareTo(b.dateMs));
+  List<PhysicalAssetEntity> get physicalAssets =>
+      List.unmodifiable(_physicalAssets);
+  List<ReceivableAssetEntity> get receivableAssets =>
+      List.unmodifiable(_receivableAssets);
+  List<ReceivableRecoveryEntity> get receivableRecoveries =>
+      List.unmodifiable(_receivableRecoveries);
+  List<NetWorthSnapshotEntity> get netWorthSnapshots =>
+      List.unmodifiable(_netWorthSnapshots);
+  List<NetWorthVerifiedCheckpoint> get verifiedNetWorthCheckpoints =>
+      List.unmodifiable(_verifiedNetWorthCheckpoints);
+  List<LiabilityProfileEntity> get liabilityProfiles =>
+      List.unmodifiable(_liabilityProfiles);
+  List<AssetEventEntity> get assetEvents => List.unmodifiable(_assetEvents);
+  List<AssetValuationEntity> get assetValuations =>
+      List.unmodifiable(_assetValuations);
+  List<AssetTransactionLinkEntity> get assetTransactionLinks =>
+      List.unmodifiable(_assetTransactionLinks);
+  List<AssetUsageEventEntity> get assetUsageEvents =>
+      List.unmodifiable(_assetUsageEvents);
+  List<PhysicalAssetEntity> get visiblePhysicalAssets => _physicalAssets
+      .where((a) =>
+          !a.isDeleted && a.visibilityStatus == AssetVisibilityStatus.active)
+      .toList();
+  List<PhysicalAssetEntity> get archivedPhysicalAssets => _physicalAssets
+      .where((a) =>
+          !a.isDeleted && a.visibilityStatus == AssetVisibilityStatus.archived)
+      .toList();
+  List<PhysicalAssetEntity> get globalActivePhysicalAssets => _allPhysicalAssets
+      .where((a) =>
+          !a.isDeleted && a.visibilityStatus == AssetVisibilityStatus.active)
+      .toList(growable: false);
+  List<PhysicalAssetEntity> get globalArchivedPhysicalAssets =>
+      _allPhysicalAssets
+          .where((a) =>
+              !a.isDeleted &&
+              a.visibilityStatus == AssetVisibilityStatus.archived)
+          .toList(growable: false);
+  PhysicalAssetEntity? physicalAssetDetailById(int id) =>
+      _allPhysicalAssets.where((asset) => asset.id == id).firstOrNull;
+  List<PhysicalAssetEntity> get physicalAssetsCountedInNetWorth =>
+      _allPhysicalAssets
+          .where((a) => a.countsInNetWorth && a.currencyCode == 'CNY')
+          .toList();
+  Decimal get physicalAssetNetWorthTotal =>
+      physicalAssetsCountedInNetWorth.fold<Decimal>(
+        Decimal.zero,
+        (sum, asset) => sum + asset.currentValue,
+      );
+  int stalePhysicalValuationCount({
+    DateTime? asOf,
+    int staleAfterDays = 90,
+  }) {
+    final cutoff = (asOf ?? DateTime.now()).subtract(
+      Duration(days: staleAfterDays),
+    );
+    var count = 0;
+    for (final asset in physicalAssetsCountedInNetWorth) {
+      final valuations = _assetValuations
+          .where((point) => point.assetId == asset.id)
+          .toList()
+        ..sort((left, right) => left.valuedAtMs.compareTo(right.valuedAtMs));
+      final latest = valuations.lastOrNull;
+      if (latest != null && latest.valuedAt.isBefore(cutoff)) count++;
+    }
+    return count;
+  }
+
+  List<ReceivableAssetEntity> get visibleReceivableAssets => _receivableAssets
+      .where((a) =>
+          !a.isDeleted && a.visibilityStatus == AssetVisibilityStatus.active)
+      .toList();
+  List<ReceivableAssetEntity> get archivedReceivableAssets => _receivableAssets
+      .where((a) =>
+          !a.isDeleted && a.visibilityStatus == AssetVisibilityStatus.archived)
+      .toList();
+  List<ReceivableAssetEntity> get globalActiveReceivables =>
+      _allReceivableAssets
+          .where(
+              (a) =>
+                  !a.isDeleted &&
+                  a.visibilityStatus == AssetVisibilityStatus.active)
+          .toList(growable: false);
+  List<ReceivableAssetEntity> get globalArchivedReceivables =>
+      _allReceivableAssets
+          .where(
+              (a) =>
+                  !a.isDeleted &&
+                  a.visibilityStatus == AssetVisibilityStatus.archived)
+          .toList(growable: false);
+  ReceivableAssetEntity? receivableDetailById(int id) =>
+      _allReceivableAssets.where((asset) => asset.id == id).firstOrNull;
+  List<ReceivableAssetEntity> get receivableAssetsCountedInNetWorth =>
+      _allReceivableAssets
+          .where((a) => a.countsInNetWorth && a.currencyCode == 'CNY')
+          .toList();
+  Decimal get receivableAssetNetWorthTotal =>
+      receivableAssetsCountedInNetWorth.fold<Decimal>(
+        Decimal.zero,
+        (sum, asset) => sum + asset.remainingAmount,
+      );
+  LiabilityProfileEntity? liabilityProfileForAccount(int accountId) =>
+      _liabilityProfiles
+          .where((profile) => profile.accountId == accountId)
+          .firstOrNull;
+  Decimal get liabilityProfilePrincipalTotal =>
+      _liabilityProfiles.where((p) => p.countsAsLiability).fold<Decimal>(
+            Decimal.zero,
+            (sum, profile) => sum + profile.currentPrincipal,
+          );
+  Set<String> get unsupportedNetWorthCurrencyCodes => {
+        for (final account in _accounts)
+          if (!account.isDeleted &&
+              account.includeInNetWorth &&
+              account.currencyCode != 'CNY')
+            account.currencyCode,
+        for (final asset in _allPhysicalAssets)
+          if (asset.countsInNetWorth && asset.currencyCode != 'CNY')
+            asset.currencyCode,
+        for (final asset in _allReceivableAssets)
+          if (asset.countsInNetWorth && asset.currencyCode != 'CNY')
+            asset.currencyCode,
+      };
   List<SavingsGoalEntity> get savingsGoals => List.unmodifiable(_savingsGoals);
+  SavingsGoalEntity? savingsGoalById(int id) =>
+      _savingsGoals.where((goal) => goal.id == id).firstOrNull;
   List<TagEntity> get tags => List.unmodifiable(_tags);
+  List<ReportEntity> get reports => List.unmodifiable(_reports);
 
   String? tagName(int id) {
     for (final t in _tags) {
@@ -412,19 +2845,38 @@ class AppRepository extends ChangeNotifier {
     }
   }
 
-  /// 统计页（月视图）卡片顺序（key 列表）；空 = 用默认。
+  /// 统计页卡片顺序/可见集（key 列表）。
+  /// 未配置时空列表表示用默认；用户明确全关时空列表保持为空。
   List<String> get statCardOrder => List.unmodifiable(_statCardOrder);
+  bool get hasStatCardOrderConfig => _statCardOrderConfigured;
+
+  static const int _statCardsConfigVersion = 6;
+  static const String _statCardsConfigVersionKey = 'stat_cards_config_version';
+  static const List<String> _statCardsV2NewDefaults = [];
+  static const Set<String> _removedStatCards = {
+    'pace',
+    'budget',
+    'budget_cat',
+  };
 
   /// 保存统计卡片顺序/可见集（长按排序、移除、添加后持久化）。
   Future<void> setStatCardOrder(List<String> keys) async {
+    _statCardOrderConfigured = true;
     _statCardOrder
       ..clear()
-      ..addAll(keys);
-    await _db!.insert(
-      'app_settings',
-      {'key': 'stat_cards', 'value': keys.join(',')},
-      conflictAlgorithm: ConflictAlgorithm.replace,
-    );
+      ..addAll(keys.where((k) => !_removedStatCards.contains(k)));
+    final batch = _db!.batch();
+    batch.insert('app_settings',
+        {'key': 'stat_cards', 'value': _statCardOrder.join(',')},
+        conflictAlgorithm: ConflictAlgorithm.replace);
+    batch.insert(
+        'app_settings',
+        {
+          'key': _statCardsConfigVersionKey,
+          'value': '$_statCardsConfigVersion'
+        },
+        conflictAlgorithm: ConflictAlgorithm.replace);
+    await batch.commit(noResult: true);
     notifyListeners();
   }
 
@@ -436,10 +2888,63 @@ class AppRepository extends ChangeNotifier {
       limit: 1,
     );
     _statCardOrder.clear();
+    _statCardOrderConfigured = rows.isNotEmpty;
     final raw = rows.isEmpty ? '' : (rows.first['value'] as String? ?? '');
     if (raw.isNotEmpty) {
-      _statCardOrder.addAll(raw.split(',').where((s) => s.isNotEmpty));
+      _statCardOrder.addAll(raw
+          .split(',')
+          .where((s) => s.isNotEmpty && !_removedStatCards.contains(s)));
     }
+    if (raw.isNotEmpty) {
+      await _migrateStatCardOrderIfNeeded();
+    }
+  }
+
+  Future<void> _migrateStatCardOrderIfNeeded() async {
+    final rows = await _db!.query(
+      'app_settings',
+      where: 'key = ?',
+      whereArgs: [_statCardsConfigVersionKey],
+      limit: 1,
+    );
+    final rawVersion = rows.isEmpty ? '' : rows.first['value'] as String? ?? '';
+    final version = int.tryParse(rawVersion) ?? 1;
+    var changed = false;
+    final beforeLen = _statCardOrder.length;
+    _statCardOrder.removeWhere(_removedStatCards.contains);
+    changed = changed || _statCardOrder.length != beforeLen;
+    if (version >= _statCardsConfigVersion) {
+      if (!changed) return;
+      await _db!.insert(
+        'app_settings',
+        {'key': 'stat_cards', 'value': _statCardOrder.join(',')},
+        conflictAlgorithm: ConflictAlgorithm.replace,
+      );
+      return;
+    }
+
+    for (final key in _statCardsV2NewDefaults.reversed) {
+      if (_statCardOrder.contains(key)) continue;
+      final insightsIndex = _statCardOrder.indexOf('insights');
+      final insertAt = insightsIndex >= 0 ? insightsIndex + 1 : 0;
+      _statCardOrder.insert(insertAt, key);
+      changed = true;
+    }
+
+    final batch = _db!.batch();
+    if (changed) {
+      batch.insert('app_settings',
+          {'key': 'stat_cards', 'value': _statCardOrder.join(',')},
+          conflictAlgorithm: ConflictAlgorithm.replace);
+    }
+    batch.insert(
+        'app_settings',
+        {
+          'key': _statCardsConfigVersionKey,
+          'value': '$_statCardsConfigVersion'
+        },
+        conflictAlgorithm: ConflictAlgorithm.replace);
+    await batch.commit(noResult: true);
   }
 
   // 统计页「自定义」区间：记住上次选择，再次进入不用重选。
@@ -487,10 +2992,185 @@ class AppRepository extends ChangeNotifier {
     return List.unmodifiable(list);
   }
 
+  List<BudgetPlanV2> get budgetPlansV2 => List.unmodifiable(
+        _budgetPlansV2.toList()
+          ..sort(
+              (left, right) => right.anchorStart.compareTo(left.anchorStart)),
+      );
+
+  List<BudgetPlanV2> get budgetSpecialPlansV2 => List.unmodifiable(
+        _budgetPlansV2.where((plan) => plan.isSpecial).toList()
+          ..sort(
+            (left, right) => left.anchorStart.compareTo(right.anchorStart),
+          ),
+      );
+
+  List<BudgetPlanRevisionV2> budgetPlanRevisionsV2For(int planId) =>
+      List.unmodifiable(
+        _budgetPlanRevisionsV2.where((item) => item.planId == planId).toList()
+          ..sort((left, right) =>
+              left.effectiveCycleStart.compareTo(right.effectiveCycleStart)),
+      );
+
+  List<BudgetFixedOccurrenceEntity> budgetFixedOccurrencesV2For(
+    int planId, {
+    DateTime? cycleStart,
+  }) =>
+      List.unmodifiable(
+        _budgetFixedOccurrencesV2.where((item) {
+          if (item.planId != planId) return false;
+          return cycleStart == null ||
+              budgetCivilDayKey(item.occurrence.cycleStart) ==
+                  budgetCivilDayKey(cycleStart);
+        }).toList()
+          ..sort((left, right) => left.dueDate.compareTo(right.dueDate)),
+      );
+
+  List<ConsumptionExpenseFamily> _budgetExpenseFamiliesForBook(
+    int logicalBookId,
+  ) {
+    final allowedBooks = _bookIdsForView(logicalBookId).toSet();
+    final transactionById = {
+      for (final transaction in _allTransactions) transaction.id: transaction,
+    };
+    final categoryById = {
+      for (final category in _categories) category.id: category
+    };
+    final events = <BudgetTransactionFamilyEvent>[];
+    for (final transaction in _allTransactions) {
+      if (transaction.bookId == null ||
+          !allowedBooks.contains(transaction.bookId)) {
+        continue;
+      }
+      final category = transaction.categoryId == null
+          ? null
+          : categoryById[transaction.categoryId];
+      final top = category?.parentId == null
+          ? category
+          : categoryById[category!.parentId!];
+      final root = transaction.refundOf == null
+          ? null
+          : transactionById[transaction.refundOf!];
+      events.add(BudgetTransactionFamilyEvent(
+        id: transaction.uuid.isEmpty
+            ? transaction.id.toString()
+            : transaction.uuid,
+        refundOfId: root == null
+            ? null
+            : (root.uuid.isEmpty ? root.id.toString() : root.uuid),
+        isExpense: transaction.txKind == TransactionKind.expense,
+        bookId: logicalBookId,
+        currencyCode: transaction.currencyCode,
+        attributionDate: transaction.date,
+        createdAt: transaction.createdMs > 0
+            ? DateTime.fromMillisecondsSinceEpoch(transaction.createdMs)
+            : DateTime.fromMillisecondsSinceEpoch(0),
+        amountMinor: decimalToBudgetCents(transaction.amount),
+        countsInIncomeExpense: !transaction.excluded,
+        countsInBudget: !transaction.excluded,
+        categoryKey: top?.key ?? category?.key ?? '',
+        categoryName: top?.nameZh ?? category?.nameZh ?? '',
+      ));
+    }
+    return BudgetTransactionFamilyAdapter.build(events);
+  }
+
+  /// Resolves one explicit budget window for a logical book view. V2 receives
+  /// the original expense family plus refund events, including fully-refunded
+  /// orders, so knowledge-cutoff and fixed-commitment review remain replayable.
+  BudgetWindowResult budgetWindow(BudgetWindowQuery query) {
+    final families = _budgetExpenseFamiliesForBook(query.bookId);
+    return BudgetWindowResolver.resolve(
+      query: query,
+      periods: _budgetPeriods,
+      expenseFamilies: families,
+      plansV2: _budgetPlansV2,
+      revisionsV2: _budgetPlanRevisionsV2,
+      overridesV2: _budgetCycleOverridesV2,
+      fixedOccurrencesV2:
+          _budgetFixedOccurrencesV2.map((item) => item.occurrence),
+    );
+  }
+
+  List<BudgetSpecialTrackingResult> budgetSpecialTrackings({
+    required int bookId,
+    required DateTime windowStartInclusive,
+    required DateTime windowEndExclusive,
+    DateTime? asOf,
+    DateTime? knowledgeCutoff,
+    bool includeArchived = false,
+  }) {
+    final cutoff = knowledgeCutoff ?? DateTime.now();
+    final families = _budgetExpenseFamiliesForBook(bookId);
+    final rootByFamilyId = <String, TransactionEntity>{
+      for (final transaction in _allTransactions)
+        if (transaction.refundOf == null)
+          transaction.uuid.isEmpty
+              ? transaction.id.toString()
+              : transaction.uuid: transaction,
+    };
+    final inputs = <BudgetSpecialExpenseFamilyInput>[
+      for (final family in families)
+        BudgetSpecialExpenseFamilyInput(
+          id: family.id,
+          bookId: bookId,
+          currencyCode: family.currencyCode,
+          attributionDate: family.attributionDate,
+          createdAt: family.createdAt,
+          netAmountCents: _familyNetAt(family, cutoff),
+          countsInBudget: family.countsInBudget,
+          categoryKey:
+              family.categoryAllocations.firstOrNull?.categoryKey ?? '',
+          tagIds: rootByFamilyId[family.id]?.tagIds ?? const [],
+        ),
+    ];
+    return BudgetSpecialTrackingResolver.resolveWindow(
+      windowStartInclusive: windowStartInclusive,
+      windowEndExclusive: windowEndExclusive,
+      bookId: bookId,
+      asOf: asOf ?? DateTime.now(),
+      knowledgeCutoff: cutoff,
+      plans: _budgetPlansV2,
+      revisions: _budgetPlanRevisionsV2,
+      expenseFamilies: inputs,
+      includeArchived: includeArchived,
+    );
+  }
+
+  BudgetWindowResult budgetForCalendarMonth(
+    DateTime month, {
+    int? bookId,
+    DateTime? asOf,
+    DateTime? knowledgeCutoff,
+  }) {
+    final queryAsOf = asOf ?? DateTime.now();
+    return budgetWindow(BudgetWindowQuery(
+      viewKind: BudgetViewKind.calendarMonth,
+      bookId: bookId ?? _currentBookId,
+      referenceDate: month,
+      asOf: queryAsOf,
+      knowledgeCutoff: knowledgeCutoff ?? DateTime.now(),
+    ));
+  }
+
+  BudgetWindowResult currentBudgetCycle({
+    int? bookId,
+    DateTime? now,
+    DateTime? knowledgeCutoff,
+  }) {
+    final queryNow = now ?? DateTime.now();
+    return budgetWindow(BudgetWindowQuery(
+      viewKind: BudgetViewKind.cycle,
+      bookId: bookId ?? _currentBookId,
+      referenceDate: queryNow,
+      asOf: queryNow,
+      knowledgeCutoff: knowledgeCutoff ?? DateTime.now(),
+    ));
+  }
+
   /// 某年某月生效的月预算总额（当前账本口径）；没设过返回 null。
   Decimal? budgetTotalFor(int year, int month) =>
-      BudgetResolver.monthlyTotalFor(_budgetPeriods, year, month,
-          bookId: _currentBookId);
+      budgetForCalendarMonth(DateTime(year, month)).plannedAmount;
 
   /// 现在生效的月预算总额（老调用方无感兼容）。
   Decimal? get monthlyBudget {
@@ -499,18 +3179,112 @@ class AppRepository extends ChangeNotifier {
   }
 
   /// 现在生效的分类预算明细（key -> 月预算）。
-  Map<String, Decimal> get categoryBudgets =>
-      BudgetResolver.effectiveOn(_budgetPeriods, DateTime.now(),
-              bookId: _currentBookId)
-          ?.categoryBudgets ??
-      const {};
+  Map<String, Decimal> get categoryBudgets {
+    final result = budgetForCalendarMonth(DateTime.now());
+    return Map.unmodifiable({
+      for (final category in result.categoryResults)
+        if (category.plannedCents > 0)
+          category.categoryKey: category.plannedAmount,
+    });
+  }
 
   /// 某分类 key 的月预算（未设返回 null）。
   Decimal? categoryBudgetFor(String key) => categoryBudgets[key];
 
+  AiProviderType get aiProviderType => _aiProviderType;
   String? get deepSeekApiKey => _deepSeekApiKey;
+  String? get customAiApiKey => _customAiApiKey;
+  String get customAiDisplayName => _customAiDisplayName;
+  String get customAiBaseUrl => _customAiBaseUrl;
+  String get customAiModel => _customAiModel;
+  String get reportAiModel => _reportAiModel;
+
+  AiProviderType aiProviderTypeFor(AiTaskType task) => switch (task) {
+        AiTaskType.recordParse => _recordAiProviderType,
+        AiTaskType.chatQuery => _chatAiProviderType,
+        AiTaskType.report => _reportAiProviderType,
+      };
+
+  AiRouteMode aiRouteModeFor(AiTaskType task) => switch (task) {
+        AiTaskType.recordParse => _recordAiRouteMode,
+        AiTaskType.chatQuery => _chatAiRouteMode,
+        AiTaskType.report => _reportAiRouteMode,
+      };
+
+  AiProviderType aiResolvedProviderTypeFor(AiTaskType task) {
+    if (aiRouteModeFor(task) == AiRouteMode.fixed) {
+      return aiProviderTypeFor(task);
+    }
+    return _autoAiProviderTypeFor(task);
+  }
+
+  AiProviderType _autoAiProviderTypeFor(AiTaskType task) {
+    final hasDeepSeek = _deepSeekApiKey?.trim().isNotEmpty ?? false;
+    final hasCustom = _customAiApiKey?.trim().isNotEmpty ?? false;
+    if (task == AiTaskType.report) {
+      if (hasCustom) return AiProviderType.custom;
+      if (hasDeepSeek) return AiProviderType.deepseek;
+      return AiProviderType.custom;
+    }
+    if (hasDeepSeek) return AiProviderType.deepseek;
+    if (hasCustom) return AiProviderType.custom;
+    return AiProviderType.deepseek;
+  }
+
+  String aiProviderLabel(AiProviderType type) =>
+      type == AiProviderType.custom ? _customAiDisplayName : type.label;
+
+  String aiResolvedProviderLabelFor(AiTaskType task) =>
+      aiProviderLabel(aiResolvedProviderTypeFor(task));
+
+  AiEndpointType aiEndpointTypeFor(AiTaskType task) => switch (task) {
+        AiTaskType.recordParse => _recordAiEndpointType,
+        AiTaskType.chatQuery => _chatAiEndpointType,
+        AiTaskType.report => _reportAiEndpointType,
+      };
+
+  AiReasoningEffort aiReasoningEffortFor(AiTaskType task) => switch (task) {
+        AiTaskType.recordParse => _recordAiReasoningEffort,
+        AiTaskType.chatQuery => _chatAiReasoningEffort,
+        AiTaskType.report => _reportAiReasoningEffort,
+      };
+
+  AiProviderConfig get aiProviderConfig =>
+      aiProviderConfigFor(AiTaskType.recordParse);
+
+  AiProviderConfig aiProviderConfigFor(AiTaskType task) {
+    final type = aiResolvedProviderTypeFor(task);
+    if (type == AiProviderType.custom) {
+      return AiProviderConfig.custom(
+        apiKey: _customAiApiKey ?? '',
+        baseUrl: _customAiBaseUrl,
+        model: task == AiTaskType.report ? _reportAiModel : _customAiModel,
+        endpointType: aiEndpointTypeFor(task),
+        reasoningEffort: aiReasoningEffortFor(task),
+        displayName: _customAiDisplayName,
+      );
+    }
+    return AiProviderConfig.deepSeek(
+      apiKey: _deepSeekApiKey ?? '',
+      displayName: AiProviderType.deepseek.label,
+    );
+  }
+
+  bool get hasAiApiKey => aiProviderConfig.hasKey;
+  bool get hasAnyAiApiKey =>
+      (_deepSeekApiKey?.trim().isNotEmpty ?? false) ||
+      (_customAiApiKey?.trim().isNotEmpty ?? false);
 
   bool get recordAiMode => _recordAiMode;
+  bool get aiPrivacyAccepted => _aiPrivacyAccepted;
+  bool get widgetPrivacyMode => _widgetPrivacyMode;
+  int get moneyDecimalPlaces => _moneyDecimalPlaces;
+  MoneyIntegerRoundingMode get moneyIntegerRoundingMode =>
+      _moneyIntegerRoundingMode;
+  CategoryIconStyle get categoryIconStyle => _categoryIconStyle;
+  TransactionCardDisplayMode get transactionCardDisplayMode =>
+      _transactionCardDisplayMode;
+  UserMessageBubbleStyle get userMessageBubbleStyle => _userMessageBubbleStyle;
 
   // ---------------------------------------------------------------------------
   // 初始化
@@ -518,20 +3292,31 @@ class AppRepository extends ChangeNotifier {
 
   Future<void> init() async {
     final dbPath = p.join(await getDatabasesPath(), _dbName);
+    final databaseAlreadyExisted = await File(dbPath).exists();
     await _backupBeforeMigration(dbPath);
-    await _autoPeriodicBackup(dbPath);
+    await _backupBeforeB3A4V39Compat(dbPath);
     _db = await openDatabase(
       dbPath,
       version: _dbVersion,
       onCreate: _onCreate,
       onUpgrade: _onUpgrade,
     );
+    await _runB3A4V39Compat(_db!);
+    if (databaseAlreadyExisted) await _autoPeriodicBackup(dbPath);
+    await _ensureTransactionIndexes(_db!);
     await _seedIfNeeded();
     await _ensureDefaultBook();
+    await _normalizeStandaloneRefunds();
     await _loadAll();
+    await _materializeBudgetV2Occurrences();
+    await applyPhysicalAssetDepreciation();
     // 启动时补记到期的周期账目,再刷新一次交易。
     await _materializeRecurring();
     await _loadTransactions();
+    await _persistCurrentNetWorthSnapshot(
+      causes: const {NetWorthSnapshotCause.scheduledRebuild},
+      notify: false,
+    );
   }
 
   /// 每周静默本地备份一次（qingji.db.auto-日期.bak，最多保留 3 份）。
@@ -553,25 +3338,26 @@ class AppRepository extends ChangeNotifier {
       autos.sort((a, b) => b.path.compareTo(a.path)); // 文件名含日期，倒序=最新在前
       if (autos.isNotEmpty) {
         final newest = await autos.first.lastModified();
-        if (DateTime.now().difference(newest).inDays < 7) return;
+        if (DateTime.now().difference(newest).inDays < 7) {
+          return;
+        }
       }
       final now = DateTime.now();
       final stamp = '${now.year}'
           '${now.month.toString().padLeft(2, '0')}'
           '${now.day.toString().padLeft(2, '0')}';
-      await f.copy(p.join(dir.path, '$_dbName.auto-$stamp.bak'));
-      // 只留最近 3 份，旧的删掉。
-      for (final old in autos.skip(2)) {
-        try {
-          await old.delete();
-        } catch (_) {}
-      }
+      await _createConsistentDatabaseCopy(
+        dbPath,
+        p.join(dir.path, '$_dbName.auto-$stamp.bak'),
+        sourceDb: _db,
+      );
+      await _pruneLocalBackups(dir);
     } catch (_) {
       // 备份失败不拦启动。
     }
   }
 
-  /// 本机现有的备份文件（自动 + 迁移前），最新在前。给「备份/恢复」页展示用。
+  /// 本机现有的备份文件（自动 / 手动 / 迁移前等），最新在前。给「备份/恢复」页展示用。
   Future<List<File>> localBackupFiles() async {
     final dbPath = p.join(await getDatabasesPath(), _dbName);
     final dir = File(dbPath).parent;
@@ -593,6 +3379,32 @@ class AppRepository extends ChangeNotifier {
     return out;
   }
 
+  /// 用户手动点击「立即备份」时，马上在本机生成一份数据库备份。
+  Future<File?> createLocalBackupNow() async {
+    try {
+      final dbPath = p.join(await getDatabasesPath(), _dbName);
+      final f = File(dbPath);
+      if (!await f.exists()) return null;
+      final now = DateTime.now();
+      final stamp = '${now.year}'
+          '${now.month.toString().padLeft(2, '0')}'
+          '${now.day.toString().padLeft(2, '0')}-'
+          '${now.hour.toString().padLeft(2, '0')}'
+          '${now.minute.toString().padLeft(2, '0')}'
+          '${now.second.toString().padLeft(2, '0')}';
+      final out = File(p.join(f.parent.path, '$_dbName.manual-$stamp.bak'));
+      final copied = await _createConsistentDatabaseCopy(
+        dbPath,
+        out.path,
+        sourceDb: _db,
+      );
+      await _pruneLocalBackups(f.parent);
+      return copied;
+    } catch (_) {
+      return null;
+    }
+  }
+
   /// DB 要升版本时，先把旧库原样复制一份（qingji.db.pre-v旧版本.bak）再迁移。
   /// 迁移代码万一有 bug，用户的真实账本还有救——「备份/恢复」页选这个文件即可。
   /// 版本没变或新装机则什么都不做；备份失败也不拦启动。
@@ -605,10 +3417,205 @@ class AppRepository extends ChangeNotifier {
       await probe.close();
       final old = (rows.first.values.first as int?) ?? 0;
       if (old <= 0 || old >= _dbVersion) return;
-      await f.copy('$dbPath.pre-v$old.bak');
+      await _createConsistentDatabaseCopy(
+        dbPath,
+        '$dbPath.pre-v$old.bak',
+      );
+      await _pruneLocalBackups(f.parent);
     } catch (_) {
       // 备份是兜底，不能因为它失败（磁盘满等）挡住正常启动。
     }
+  }
+
+  /// Some development builds already used user_version 39 before every B3/A4
+  /// column and index had landed. Preserve that exact database before applying
+  /// the idempotent same-version compatibility repair.
+  Future<void> _backupBeforeB3A4V39Compat(String dbPath) async {
+    Database? probe;
+    try {
+      final source = File(dbPath);
+      if (!await source.exists()) return;
+      probe = await openReadOnlyDatabase(dbPath);
+      final version = Sqflite.firstIntValue(
+            await probe.rawQuery('PRAGMA user_version'),
+          ) ??
+          0;
+      if (version != 39 || !await _needsB3A4V39Compat(probe)) return;
+      await probe.close();
+      probe = null;
+      final destination = File('$dbPath.pre-v39-compat.bak');
+      if (await destination.exists()) return;
+      final pending = File('${destination.path}.pending');
+      if (await pending.exists()) await pending.delete();
+      await _createConsistentDatabaseCopy(
+        dbPath,
+        pending.path,
+      );
+      if (await destination.exists()) {
+        await pending.delete();
+      } else {
+        await pending.rename(destination.path);
+      }
+    } catch (_) {
+      // Like normal migration backups, failure here must not strand startup.
+    } finally {
+      await probe?.close();
+    }
+  }
+
+  Future<void> _pruneLocalBackups(Directory dir, {int keep = 3}) async {
+    if (keep <= 0) return;
+    final manualFiles = <File>[];
+    final autoFiles = <File>[];
+    try {
+      await for (final e in dir.list()) {
+        if (e is File &&
+            p.basename(e.path).startsWith('$_dbName.') &&
+            e.path.endsWith('.bak')) {
+          final name = p.basename(e.path);
+          if (name.startsWith('$_dbName.manual-')) {
+            manualFiles.add(e);
+          } else if (name.startsWith('$_dbName.auto-')) {
+            autoFiles.add(e);
+          }
+        }
+      }
+      final times = <String, DateTime>{};
+      for (final f in [...manualFiles, ...autoFiles]) {
+        times[f.path] = await f.lastModified();
+      }
+      Future<void> pruneBucket(List<File> files) async {
+        files.sort((a, b) => times[b.path]!.compareTo(times[a.path]!));
+        for (final old in files.skip(keep)) {
+          try {
+            await old.delete();
+          } catch (_) {}
+        }
+      }
+
+      await pruneBucket(manualFiles);
+      await pruneBucket(autoFiles);
+    } catch (_) {
+      // 清理失败不影响启动、备份或恢复。
+    }
+  }
+
+  Future<File> _createConsistentDatabaseCopy(
+    String sourcePath,
+    String destinationPath, {
+    Database? sourceDb,
+    bool forceCheckpointCopyForTest = false,
+  }) async {
+    final destination = File(destinationPath);
+    await destination.parent.create(recursive: true);
+    if (await destination.exists()) await destination.delete();
+
+    Database? ownedDb;
+    final db = sourceDb ??
+        (ownedDb = await openDatabase(
+          sourcePath,
+          singleInstance: false,
+        ));
+    try {
+      if (forceCheckpointCopyForTest) {
+        await _copyDatabaseAfterCheckpoint(
+          db,
+          sourcePath,
+          destinationPath,
+        );
+      } else {
+        final escaped = destinationPath.replaceAll("'", "''");
+        try {
+          await db.execute("VACUUM INTO '$escaped'");
+        } catch (error) {
+          if (!_isVacuumIntoUnsupported(error)) rethrow;
+          if (await destination.exists()) await destination.delete();
+          await _copyDatabaseAfterCheckpoint(
+            db,
+            sourcePath,
+            destinationPath,
+          );
+        }
+      }
+    } finally {
+      await ownedDb?.close();
+    }
+
+    final check = await openReadOnlyDatabase(destinationPath);
+    try {
+      final rows = await check.rawQuery('PRAGMA quick_check');
+      final result = rows.isEmpty ? '' : rows.first.values.first.toString();
+      if (result.toLowerCase() != 'ok') {
+        throw StateError('database snapshot integrity check failed: $result');
+      }
+    } finally {
+      await check.close();
+    }
+    return destination;
+  }
+
+  static bool _isVacuumIntoUnsupported(Object error) {
+    if (error is! DatabaseException) return false;
+    final message = error.toString().toLowerCase();
+    return message.contains('vacuum') &&
+        message.contains('into') &&
+        message.contains('syntax error');
+  }
+
+  static Future<void> _copyDatabaseAfterCheckpoint(
+    Database db,
+    String sourcePath,
+    String destinationPath,
+  ) async {
+    final source = File(sourcePath);
+    if (!await source.exists()) {
+      throw StateError('database snapshot source does not exist');
+    }
+
+    // VACUUM INTO arrived in SQLite 3.27 and is unavailable on some devices
+    // supported by minSdk 24. Flush WAL first, then hold an exclusive database
+    // transaction for the whole file copy so no app write can race the copy.
+    for (var attempt = 0; attempt < 3; attempt++) {
+      final checkpoint = await db.rawQuery('PRAGMA wal_checkpoint(TRUNCATE)');
+      final busyValue = checkpoint.isEmpty
+          ? 1
+          : checkpoint.first['busy'] ?? checkpoint.first.values.first;
+      final busy = busyValue is int
+          ? busyValue
+          : int.tryParse(busyValue.toString()) ?? 1;
+      if (busy != 0) continue;
+
+      var racedWithWriter = false;
+      await db.transaction<void>((txn) async {
+        await txn.rawQuery('SELECT 1');
+        final wal = File('$sourcePath-wal');
+        if (await wal.exists() && await wal.length() > 0) {
+          racedWithWriter = true;
+          return;
+        }
+        await source.copy(destinationPath);
+      }, exclusive: true);
+      if (!racedWithWriter) return;
+
+      final partial = File(destinationPath);
+      if (await partial.exists()) await partial.delete();
+    }
+    throw StateError('database remained busy while creating snapshot');
+  }
+
+  @visibleForTesting
+  Future<File> createCheckpointDatabaseCopyForTest(
+    String destinationPath,
+  ) async {
+    final db = _db;
+    if (db == null) throw StateError('repository is not initialized');
+    final sourcePath = p.join(await getDatabasesPath(), _dbName);
+    return _createConsistentDatabaseCopy(
+      sourcePath,
+      destinationPath,
+      sourceDb: db,
+      forceCheckpointCopyForTest: true,
+    );
   }
 
   /// 测试用：关掉底层数据库连接（不然临时目录删不掉）。
@@ -621,11 +3628,30 @@ class AppRepository extends ChangeNotifier {
   Future<void> _onCreate(Database db, int version) async {
     await db.execute('''
       CREATE TABLE accounts (
-        id            INTEGER PRIMARY KEY AUTOINCREMENT,
-        name          TEXT NOT NULL,
-        currency_code TEXT NOT NULL DEFAULT 'CNY'
+        id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+        uuid                  TEXT NOT NULL DEFAULT '',
+        name                  TEXT NOT NULL,
+        currency_code         TEXT NOT NULL DEFAULT 'CNY',
+        type                  TEXT NOT NULL DEFAULT 'cash',
+        opening_balance       TEXT NOT NULL DEFAULT '0',
+        include_in_net_worth  INTEGER NOT NULL DEFAULT 1,
+        institution           TEXT NOT NULL DEFAULT '',
+        sort_order            INTEGER NOT NULL DEFAULT 0,
+        is_deleted            INTEGER NOT NULL DEFAULT 0,
+        deleted_at_ms         INTEGER,
+        created_ms            INTEGER NOT NULL DEFAULT 0,
+        updated_ms            INTEGER NOT NULL DEFAULT 0,
+        opening_balance_effective_ms INTEGER,
+        opening_balance_sequence INTEGER NOT NULL DEFAULT 0,
+        opening_balance_quality TEXT NOT NULL DEFAULT 'legacy_unknown',
+        status                TEXT NOT NULL DEFAULT 'active',
+        archived_ms           INTEGER,
+        last_verified_ms      INTEGER,
+        verification_interval_days INTEGER
       )
     ''');
+    await _ensureAccountCheckpointTables(db);
+    await _ensureNetWorthVerifiedCheckpointTables(db);
 
     await db.execute('''
       CREATE TABLE categories (
@@ -675,24 +3701,35 @@ class AppRepository extends ChangeNotifier {
         to_account_id   INTEGER REFERENCES accounts(id),
         note            TEXT NOT NULL DEFAULT '',
         date_ms         INTEGER NOT NULL,
+        time_precision  TEXT NOT NULL DEFAULT 'legacy_unknown',
         tags            TEXT NOT NULL DEFAULT '',
         reimbursable    INTEGER NOT NULL DEFAULT 0,
         image_path      TEXT NOT NULL DEFAULT '',
+        recurring_rule_id INTEGER,
         excluded        INTEGER NOT NULL DEFAULT 0,
         uuid            TEXT NOT NULL DEFAULT '',
         updated_ms      INTEGER NOT NULL DEFAULT 0,
-        refund_of       INTEGER
+        refund_of       INTEGER,
+        created_ms      INTEGER NOT NULL DEFAULT 0,
+        settled_ms      INTEGER,
+        settlement_quality TEXT NOT NULL DEFAULT 'unknown',
+        settlement_account_id INTEGER,
+        settlement_account_quality TEXT NOT NULL DEFAULT 'unknown',
+        event_type      TEXT NOT NULL DEFAULT 'legacy_adjustment'
       )
     ''');
+    await _ensureTransactionIndexes(db);
 
     await db.execute('''
       CREATE TABLE savings_goals (
         id            INTEGER PRIMARY KEY AUTOINCREMENT,
+        uuid          TEXT NOT NULL UNIQUE,
         name          TEXT NOT NULL,
         emoji         TEXT NOT NULL DEFAULT '🐷',
         target_amount TEXT NOT NULL DEFAULT '0',
         saved_amount  TEXT NOT NULL DEFAULT '0',
-        created_ms    INTEGER NOT NULL DEFAULT 0
+        created_ms    INTEGER NOT NULL DEFAULT 0,
+        updated_ms    INTEGER NOT NULL DEFAULT 0
       )
     ''');
 
@@ -713,6 +3750,7 @@ class AppRepository extends ChangeNotifier {
     ''');
 
     await db.execute(_createBudgetPeriodsSql);
+    await _ensureBudgetV2Tables(db);
 
     await db.execute('''
       CREATE TABLE app_settings (
@@ -730,6 +3768,10 @@ class AppRepository extends ChangeNotifier {
         created_ms INTEGER NOT NULL
       )
     ''');
+
+    await db.execute(_createReportsSql);
+    await _ensureAssetTables(db);
+    await _ensureLiabilityTables(db);
 
     await db.execute('''
       CREATE TABLE category_memory (
@@ -751,11 +3793,19 @@ class AppRepository extends ChangeNotifier {
         account_id  INTEGER,
         note        TEXT NOT NULL DEFAULT '',
         period      TEXT NOT NULL,
+        start_date_ms INTEGER NOT NULL DEFAULT 0,
         next_due_ms INTEGER NOT NULL,
         enabled     INTEGER NOT NULL DEFAULT 1,
+        anchor_day  INTEGER NOT NULL DEFAULT 0,
+        end_date_ms INTEGER,
+        total_count INTEGER,
+        generated_count INTEGER NOT NULL DEFAULT 0,
         created_ms  INTEGER NOT NULL DEFAULT 0
       )
     ''');
+    await _ensureRecurringOccurrences(db);
+    await _ensureAutoRecordOccurrences(db);
+    await _ensureReportJobs(db);
   }
 
   Future<void> _onUpgrade(Database db, int oldVersion, int newVersion) async {
@@ -818,8 +3868,8 @@ class AppRepository extends ChangeNotifier {
     if (oldVersion < 6) {
       try {
         try {
-          await db.execute(
-              'ALTER TABLE categories ADD COLUMN parent_id INTEGER');
+          await db
+              .execute('ALTER TABLE categories ADD COLUMN parent_id INTEGER');
         } catch (_) {}
         await _applyCategoryTree(db);
       } catch (_) {}
@@ -869,8 +3919,13 @@ class AppRepository extends ChangeNotifier {
           account_id  INTEGER,
           note        TEXT NOT NULL DEFAULT '',
           period      TEXT NOT NULL,
+          start_date_ms INTEGER NOT NULL DEFAULT 0,
           next_due_ms INTEGER NOT NULL,
           enabled     INTEGER NOT NULL DEFAULT 1,
+          anchor_day  INTEGER NOT NULL DEFAULT 0,
+          end_date_ms INTEGER,
+          total_count INTEGER,
+          generated_count INTEGER NOT NULL DEFAULT 0,
           created_ms  INTEGER NOT NULL DEFAULT 0
         )
       ''');
@@ -892,8 +3947,8 @@ class AppRepository extends ChangeNotifier {
       // 老的单一预算自动搬成一条「从很久以前开始的每月循环期间」，
       // 行为与之前完全一致；旧 budget 表保留不动（只加不删）。
       try {
-        final totalRows = await db.query('budget',
-            where: 'category_key IS NULL', limit: 1);
+        final totalRows =
+            await db.query('budget', where: 'category_key IS NULL', limit: 1);
         if (totalRows.isNotEmpty) {
           final total =
               Decimal.tryParse(totalRows.first['amount'] as String? ?? '');
@@ -957,7 +4012,8 @@ class AppRepository extends ChangeNotifier {
         // 存量行回填：uuid 用 SQLite 自带 randomblob，无需三方库。
         await db.execute(
             "UPDATE $table SET uuid = lower(hex(randomblob(16))) WHERE uuid = ''");
-        await db.execute('UPDATE $table SET updated_ms = ? WHERE updated_ms = 0',
+        await db.execute(
+            'UPDATE $table SET updated_ms = ? WHERE updated_ms = 0',
             [DateTime.now().millisecondsSinceEpoch]);
       }
     }
@@ -965,8 +4021,8 @@ class AppRepository extends ChangeNotifier {
       // 附着式退款：退款行挂到原账单（refund_of=原id），不再作为独立条目
       // 出现在时间线里。老的独立冲账行 refund_of 保持 NULL，仍按旧样显示。
       try {
-        await db.execute(
-            'ALTER TABLE transactions ADD COLUMN refund_of INTEGER');
+        await db
+            .execute('ALTER TABLE transactions ADD COLUMN refund_of INTEGER');
       } catch (_) {}
     }
     if (oldVersion < 18) {
@@ -1000,7 +4056,1233 @@ class AppRepository extends ChangeNotifier {
             "ALTER TABLE books ADD COLUMN remark TEXT NOT NULL DEFAULT ''");
       } catch (_) {}
     }
+    if (oldVersion < 21) {
+      // 账户软删除：保留历史交易 join 到旧账户名，避免删除账户后历史展示空掉。
+      try {
+        await db.execute(
+            'ALTER TABLE accounts ADD COLUMN is_deleted INTEGER NOT NULL DEFAULT 0');
+      } catch (_) {}
+      try {
+        await db
+            .execute('ALTER TABLE accounts ADD COLUMN deleted_at_ms INTEGER');
+      } catch (_) {}
+    }
+    if (oldVersion < 22) {
+      await db.execute(_createReportsSql);
+    }
+    if (oldVersion < 23) {
+      await db.execute(_createReportsSql);
+      try {
+        await db.execute(
+            'ALTER TABLE reports ADD COLUMN pinned_ms INTEGER NOT NULL DEFAULT 0');
+      } catch (_) {}
+    }
+    if (oldVersion < 24) {
+      try {
+        await db.execute(
+            "ALTER TABLE accounts ADD COLUMN type TEXT NOT NULL DEFAULT 'cash'");
+      } catch (_) {}
+      try {
+        await db.execute(
+            "ALTER TABLE accounts ADD COLUMN opening_balance TEXT NOT NULL DEFAULT '0'");
+      } catch (_) {}
+      try {
+        await db.execute(
+            'ALTER TABLE accounts ADD COLUMN include_in_net_worth INTEGER NOT NULL DEFAULT 1');
+      } catch (_) {}
+      try {
+        await db.execute(
+            "ALTER TABLE accounts ADD COLUMN institution TEXT NOT NULL DEFAULT ''");
+      } catch (_) {}
+      try {
+        await db.execute(
+            'ALTER TABLE accounts ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0');
+      } catch (_) {}
+    }
+    if (oldVersion < 25) {
+      try {
+        await db.execute(
+            'ALTER TABLE recurring_rules ADD COLUMN anchor_day INTEGER NOT NULL DEFAULT 0');
+      } catch (_) {}
+      try {
+        await db.execute('''
+          UPDATE recurring_rules
+          SET anchor_day = CAST(strftime('%d', next_due_ms / 1000, 'unixepoch', 'localtime') AS INTEGER)
+          WHERE anchor_day = 0
+        ''');
+      } catch (_) {}
+    }
+    if (oldVersion < 26) {
+      await _ensureAssetTables(db);
+    }
+    if (oldVersion < 27) {
+      await _ensureAssetTables(db);
+    }
+    if (oldVersion < 28) {
+      await _ensureLiabilityTables(db);
+    }
+    if (oldVersion < 29) {
+      await _ensurePhysicalAssetAdvancedColumns(db);
+    }
+    if (oldVersion < 30) {
+      await _ensureRecurringEndColumns(db);
+    }
+    if (oldVersion < 31) {
+      await _ensureRecurringOccurrences(db);
+      await _ensureNetWorthSnapshotScope(db);
+    }
+    if (oldVersion < 32) {
+      await _ensureAutoRecordOccurrences(db);
+      await _ensureReportJobs(db);
+    }
+    if (oldVersion < 33) {
+      await _migrateAssetStateV33(db);
+    }
+    if (oldVersion < 34) {
+      await _migrateTransactionSettlementV34(db);
+    }
+    if (oldVersion < 35) {
+      await _migrateAssetAllocationsV35(db);
+    }
+    if (oldVersion < 36) {
+      await _migrateNetWorthSnapshotsV36(db);
+    }
+    if (oldVersion < 37) {
+      await _migrateAccountCheckpointsV37(db);
+    }
+    if (oldVersion < 38) {
+      await _ensureBudgetV2Tables(db);
+    }
+    if (oldVersion < 39) {
+      await _ensureB3A4V39Compat(db);
+    }
+    if (oldVersion < 40) {
+      final transactionColumns = await _columnNamesFor(db, 'transactions');
+      if (!transactionColumns.contains('time_precision')) {
+        await db.execute(
+          "ALTER TABLE transactions ADD COLUMN time_precision TEXT NOT NULL DEFAULT 'legacy_unknown'",
+        );
+      }
+    }
+    await _ensureTransactionIndexes(db);
   }
+
+  static Future<bool> _tableExists(
+    DatabaseExecutor db,
+    String table,
+  ) async {
+    final rows = await db.rawQuery(
+      "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ? LIMIT 1",
+      [table],
+    );
+    return rows.isNotEmpty;
+  }
+
+  static Future<Set<String>> _columnNamesFor(
+    DatabaseExecutor db,
+    String table,
+  ) async {
+    if (!await _tableExists(db, table)) return const <String>{};
+    return (await db.rawQuery('PRAGMA table_info($table)'))
+        .map((row) => row['name'])
+        .whereType<String>()
+        .toSet();
+  }
+
+  static Future<bool> _indexMatches(
+    DatabaseExecutor db, {
+    required String table,
+    required String name,
+    required List<String> columns,
+    required bool unique,
+    bool partial = false,
+    String? wherePredicate,
+  }) async {
+    if (!await _tableExists(db, table)) return false;
+    final indexes = await db.rawQuery("PRAGMA index_list('$table')");
+    final row = indexes.where((item) => item['name'] == name).firstOrNull;
+    if (row == null ||
+        ((row['unique'] as int? ?? 0) == 1) != unique ||
+        ((row['partial'] as int? ?? 0) == 1) != partial) {
+      return false;
+    }
+    final actual = (await db.rawQuery("PRAGMA index_info('$name')"))
+        .map((item) => item['name'])
+        .whereType<String>()
+        .toList(growable: false);
+    if (!listEquals(actual, columns)) return false;
+    if (wherePredicate == null) return true;
+    final definitions = await db.rawQuery(
+      "SELECT sql FROM sqlite_master WHERE type = 'index' AND name = ? LIMIT 1",
+      [name],
+    );
+    if (definitions.isEmpty) return false;
+    String normalize(String value) => value
+        .trim()
+        .replaceAll(RegExp(r'\s+'), ' ')
+        .replaceAll(RegExp(r';$'), '')
+        .toLowerCase();
+    final definition = normalize(definitions.single['sql'] as String? ?? '');
+    final whereOffset = definition.indexOf(' where ');
+    if (whereOffset < 0) return false;
+    final actualPredicate = definition.substring(whereOffset + 7).trim();
+    return actualPredicate == normalize(wherePredicate);
+  }
+
+  static Future<void> _ensureNamedIndex(
+    DatabaseExecutor db, {
+    required String table,
+    required String name,
+    required List<String> columns,
+    required bool unique,
+    bool partial = false,
+    String? wherePredicate,
+    required String createSql,
+  }) async {
+    if (await _indexMatches(
+      db,
+      table: table,
+      name: name,
+      columns: columns,
+      unique: unique,
+      partial: partial,
+      wherePredicate: wherePredicate,
+    )) {
+      return;
+    }
+    await db.execute('DROP INDEX IF EXISTS $name');
+    await db.execute(createSql);
+  }
+
+  static Future<bool> _needsB3A4V39Compat(DatabaseExecutor db) async {
+    final planColumns = await _columnNamesFor(db, 'budget_plans');
+    final assetColumns = await _columnNamesFor(db, 'physical_assets');
+    final goalColumns = await _columnNamesFor(db, 'savings_goals');
+    final usageColumns = await _columnNamesFor(db, 'asset_usage_events');
+    if (!planColumns.contains('expense_scope_json') ||
+        !assetColumns.containsAll(
+          const {'usage_tracking_enabled', 'savings_goal_id'},
+        ) ||
+        !goalColumns.containsAll(const {'uuid', 'updated_ms'}) ||
+        !usageColumns.containsAll(
+          const {
+            'id',
+            'uuid',
+            'asset_id',
+            'count_delta',
+            'reversal_of',
+            'occurred_ms',
+            'note',
+            'created_ms',
+            'updated_ms',
+          },
+        )) {
+      return true;
+    }
+    final incompleteGoalCount = Sqflite.firstIntValue(await db.rawQuery('''
+          SELECT COUNT(*)
+          FROM savings_goals
+          WHERE trim(uuid) = '' OR updated_ms = 0
+        ''')) ?? 0;
+    final duplicateGoalUuidCount = Sqflite.firstIntValue(await db.rawQuery('''
+          SELECT COUNT(*)
+          FROM (
+            SELECT uuid
+            FROM savings_goals
+            WHERE trim(uuid) <> ''
+            GROUP BY uuid
+            HAVING COUNT(*) > 1
+          )
+        ''')) ?? 0;
+    if (incompleteGoalCount > 0 || duplicateGoalUuidCount > 0) return true;
+    final usageInfo = await db.rawQuery(
+      'PRAGMA table_info(asset_usage_events)',
+    );
+    if (!usageInfo.any(
+      (row) => row['name'] == 'id' && (row['pk'] as int? ?? 0) == 1,
+    )) {
+      return true;
+    }
+    final incompleteUsageCount = Sqflite.firstIntValue(await db.rawQuery('''
+          SELECT COUNT(*)
+          FROM asset_usage_events
+          WHERE trim(uuid) = '' OR updated_ms = 0
+        ''')) ?? 0;
+    final duplicateUsageUuidCount = Sqflite.firstIntValue(await db.rawQuery('''
+          SELECT COUNT(*)
+          FROM (
+            SELECT uuid
+            FROM asset_usage_events
+            WHERE trim(uuid) <> ''
+            GROUP BY uuid
+            HAVING COUNT(*) > 1
+          )
+        ''')) ?? 0;
+    if (incompleteUsageCount > 0 || duplicateUsageUuidCount > 0) return true;
+    final invalidUsageReversalCount =
+        Sqflite.firstIntValue(await db.rawQuery('''
+          SELECT COUNT(*)
+          FROM asset_usage_events reversal
+          WHERE reversal.reversal_of IS NOT NULL
+            AND (
+              reversal.count_delta <> 0
+              OR NOT EXISTS (
+                SELECT 1
+                FROM asset_usage_events target
+                WHERE target.id = reversal.reversal_of
+                  AND target.asset_id = reversal.asset_id
+                  AND target.id <> reversal.id
+                  AND (
+                    target.occurred_ms < reversal.occurred_ms
+                    OR (
+                      target.occurred_ms = reversal.occurred_ms
+                      AND target.id < reversal.id
+                    )
+                  )
+              )
+            )
+        ''')) ?? 0;
+    if (invalidUsageReversalCount > 0) return true;
+    return !await _indexMatches(
+          db,
+          table: 'savings_goals',
+          name: 'idx_savings_goals_uuid',
+          columns: const ['uuid'],
+          unique: true,
+        ) ||
+        !await _indexMatches(
+          db,
+          table: 'asset_usage_events',
+          name: 'idx_asset_usage_events_uuid',
+          columns: const ['uuid'],
+          unique: true,
+        ) ||
+        !await _indexMatches(
+          db,
+          table: 'asset_usage_events',
+          name: 'idx_asset_usage_events_asset',
+          columns: const ['asset_id', 'occurred_ms', 'id'],
+          unique: false,
+        ) ||
+        !await _indexMatches(
+          db,
+          table: 'asset_usage_events',
+          name: 'idx_asset_usage_events_reversal',
+          columns: const ['reversal_of'],
+          unique: true,
+          partial: true,
+          wherePredicate: 'reversal_of IS NOT NULL',
+        ) ||
+        !await _indexMatches(
+          db,
+          table: 'physical_assets',
+          name: 'idx_physical_assets_savings_goal',
+          columns: const ['savings_goal_id'],
+          unique: false,
+        );
+  }
+
+  static Future<void> _removeInvalidAssetUsageReversals(
+    DatabaseExecutor db,
+  ) async {
+    while (true) {
+      final removed = await db.rawDelete('''
+        DELETE FROM asset_usage_events
+        WHERE reversal_of IS NOT NULL
+          AND (
+            count_delta <> 0
+            OR NOT EXISTS (
+              SELECT 1
+              FROM asset_usage_events target
+              WHERE target.id = asset_usage_events.reversal_of
+                AND target.asset_id = asset_usage_events.asset_id
+                AND target.id <> asset_usage_events.id
+                AND (
+                  target.occurred_ms < asset_usage_events.occurred_ms
+                  OR (
+                    target.occurred_ms = asset_usage_events.occurred_ms
+                    AND target.id < asset_usage_events.id
+                  )
+                )
+            )
+          )
+      ''');
+      if (removed == 0) break;
+    }
+  }
+
+  static Future<void> _ensureAssetUsageReversalIndex(
+    DatabaseExecutor db,
+  ) async {
+    await _removeInvalidAssetUsageReversals(db);
+    if (await _indexMatches(
+      db,
+      table: 'asset_usage_events',
+      name: 'idx_asset_usage_events_reversal',
+      columns: const ['reversal_of'],
+      unique: true,
+      partial: true,
+      wherePredicate: 'reversal_of IS NOT NULL',
+    )) {
+      return;
+    }
+    await db.execute('DROP INDEX IF EXISTS idx_asset_usage_events_reversal');
+    // Intermediate v39 builds could record two reversals for one event. Keep
+    // the earliest event-time/id pair so the audit chain stays deterministic.
+    await db.execute('''
+      DELETE FROM asset_usage_events
+      WHERE reversal_of IS NOT NULL
+        AND EXISTS (
+          SELECT 1
+          FROM asset_usage_events earlier
+          WHERE earlier.reversal_of = asset_usage_events.reversal_of
+            AND (
+              earlier.occurred_ms < asset_usage_events.occurred_ms
+              OR (
+                earlier.occurred_ms = asset_usage_events.occurred_ms
+                AND earlier.id < asset_usage_events.id
+              )
+            )
+        )
+    ''');
+    await _removeInvalidAssetUsageReversals(db);
+    await db.execute('''
+      CREATE UNIQUE INDEX idx_asset_usage_events_reversal
+      ON asset_usage_events(reversal_of)
+      WHERE reversal_of IS NOT NULL
+    ''');
+  }
+
+  static Future<void> _ensureAssetUsageEventsV39Schema(
+    DatabaseExecutor db,
+  ) async {
+    await db.execute(_createAssetUsageEventsSql);
+    var info = await db.rawQuery('PRAGMA table_info(asset_usage_events)');
+    var columns = info.map((row) => row['name']).whereType<String>().toSet();
+    final hasPrimaryId = info.any(
+      (row) => row['name'] == 'id' && (row['pk'] as int? ?? 0) == 1,
+    );
+    if (!hasPrimaryId) {
+      await db.execute('DROP TABLE IF EXISTS asset_usage_events_v39_compat');
+      await db.execute('''
+        CREATE TABLE asset_usage_events_v39_compat (
+          id          INTEGER PRIMARY KEY AUTOINCREMENT,
+          uuid        TEXT NOT NULL DEFAULT '',
+          asset_id    INTEGER NOT NULL DEFAULT 0,
+          count_delta INTEGER NOT NULL DEFAULT 0,
+          reversal_of INTEGER,
+          occurred_ms INTEGER NOT NULL DEFAULT 0,
+          note        TEXT NOT NULL DEFAULT '',
+          created_ms  INTEGER NOT NULL DEFAULT 0,
+          updated_ms  INTEGER NOT NULL DEFAULT 0
+        )
+      ''');
+      String valueOr(String column, String fallback) =>
+          columns.contains(column) ? column : fallback;
+      final idExpression = columns.contains('id') ? 'id' : 'rowid';
+      await db.execute('''
+        INSERT INTO asset_usage_events_v39_compat (
+          id, uuid, asset_id, count_delta, reversal_of, occurred_ms, note,
+          created_ms, updated_ms
+        )
+        SELECT
+          $idExpression,
+          ${valueOr('uuid', "''")},
+          ${valueOr('asset_id', '0')},
+          ${valueOr('count_delta', '0')},
+          ${valueOr('reversal_of', 'NULL')},
+          ${valueOr('occurred_ms', '0')},
+          ${valueOr('note', "''")},
+          ${valueOr('created_ms', '0')},
+          ${valueOr('updated_ms', '0')}
+        FROM asset_usage_events
+        ORDER BY rowid
+      ''');
+      await db.execute('DROP TABLE asset_usage_events');
+      await db.execute('''
+        ALTER TABLE asset_usage_events_v39_compat
+        RENAME TO asset_usage_events
+      ''');
+      info = await db.rawQuery('PRAGMA table_info(asset_usage_events)');
+      columns = info.map((row) => row['name']).whereType<String>().toSet();
+    }
+    for (final entry in const <(String, String)>[
+      ('uuid', "TEXT NOT NULL DEFAULT ''"),
+      ('asset_id', 'INTEGER NOT NULL DEFAULT 0'),
+      ('count_delta', 'INTEGER NOT NULL DEFAULT 0'),
+      ('reversal_of', 'INTEGER'),
+      ('occurred_ms', 'INTEGER NOT NULL DEFAULT 0'),
+      ('note', "TEXT NOT NULL DEFAULT ''"),
+      ('created_ms', 'INTEGER NOT NULL DEFAULT 0'),
+      ('updated_ms', 'INTEGER NOT NULL DEFAULT 0'),
+    ]) {
+      if (columns.contains(entry.$1)) continue;
+      await db.execute(
+        'ALTER TABLE asset_usage_events ADD COLUMN ${entry.$1} ${entry.$2}',
+      );
+      columns.add(entry.$1);
+    }
+    await db.execute('''
+      UPDATE asset_usage_events
+      SET uuid = lower(hex(randomblob(16)))
+      WHERE trim(uuid) = ''
+    ''');
+    await db.execute('''
+      UPDATE asset_usage_events
+      SET uuid = lower(hex(randomblob(16)))
+      WHERE id IN (
+        SELECT duplicate.id
+        FROM asset_usage_events duplicate
+        JOIN asset_usage_events keeper
+          ON duplicate.uuid = keeper.uuid
+         AND duplicate.id > keeper.id
+      )
+    ''');
+    await db.rawUpdate('''
+      UPDATE asset_usage_events
+      SET updated_ms = CASE WHEN created_ms > 0 THEN created_ms ELSE ? END
+      WHERE updated_ms = 0
+    ''', [DateTime.now().millisecondsSinceEpoch]);
+    await _ensureNamedIndex(
+      db,
+      table: 'asset_usage_events',
+      name: 'idx_asset_usage_events_uuid',
+      columns: const ['uuid'],
+      unique: true,
+      createSql: '''
+        CREATE UNIQUE INDEX idx_asset_usage_events_uuid
+        ON asset_usage_events(uuid)
+      ''',
+    );
+  }
+
+  static Future<void> _runB3A4V39Compat(Database db) =>
+      db.transaction(_ensureB3A4V39Compat);
+
+  static Future<void> _ensureB3A4V39Compat(DatabaseExecutor db) async {
+    await _ensureBudgetV2Tables(db);
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS savings_goals (
+        id            INTEGER PRIMARY KEY AUTOINCREMENT,
+        uuid          TEXT NOT NULL DEFAULT '',
+        name          TEXT NOT NULL,
+        emoji         TEXT NOT NULL DEFAULT '🐷',
+        target_amount TEXT NOT NULL DEFAULT '0',
+        saved_amount  TEXT NOT NULL DEFAULT '0',
+        created_ms    INTEGER NOT NULL DEFAULT 0,
+        updated_ms    INTEGER NOT NULL DEFAULT 0
+      )
+    ''');
+    await _ensureAssetTables(db);
+    for (final sql in [
+      "ALTER TABLE budget_plans ADD COLUMN expense_scope_json TEXT NOT NULL DEFAULT ''",
+      'ALTER TABLE physical_assets ADD COLUMN usage_tracking_enabled INTEGER NOT NULL DEFAULT 0',
+      'ALTER TABLE physical_assets ADD COLUMN savings_goal_id INTEGER',
+      "ALTER TABLE savings_goals ADD COLUMN uuid TEXT NOT NULL DEFAULT ''",
+      'ALTER TABLE savings_goals ADD COLUMN updated_ms INTEGER NOT NULL DEFAULT 0',
+    ]) {
+      try {
+        await db.execute(sql);
+      } catch (_) {}
+    }
+    await db.execute('''
+      UPDATE savings_goals
+      SET uuid = lower(hex(randomblob(16)))
+      WHERE trim(uuid) = ''
+    ''');
+    await db.execute('''
+      UPDATE savings_goals
+      SET uuid = lower(hex(randomblob(16)))
+      WHERE id IN (
+        SELECT duplicate.id
+        FROM savings_goals duplicate
+        JOIN savings_goals keeper
+          ON duplicate.uuid = keeper.uuid
+         AND duplicate.id > keeper.id
+      )
+    ''');
+    await db.rawUpdate('''
+      UPDATE savings_goals
+      SET updated_ms = CASE WHEN created_ms > 0 THEN created_ms ELSE ? END
+      WHERE updated_ms = 0
+    ''', [DateTime.now().millisecondsSinceEpoch]);
+    await _ensureNamedIndex(
+      db,
+      table: 'savings_goals',
+      name: 'idx_savings_goals_uuid',
+      columns: const ['uuid'],
+      unique: true,
+      createSql: '''
+        CREATE UNIQUE INDEX idx_savings_goals_uuid
+        ON savings_goals(uuid)
+      ''',
+    );
+    await _ensureNamedIndex(
+      db,
+      table: 'asset_usage_events',
+      name: 'idx_asset_usage_events_asset',
+      columns: const ['asset_id', 'occurred_ms', 'id'],
+      unique: false,
+      createSql: '''
+        CREATE INDEX idx_asset_usage_events_asset
+        ON asset_usage_events(asset_id, occurred_ms DESC, id DESC)
+      ''',
+    );
+    await _ensureAssetUsageReversalIndex(db);
+    await _ensureNamedIndex(
+      db,
+      table: 'physical_assets',
+      name: 'idx_physical_assets_savings_goal',
+      columns: const ['savings_goal_id'],
+      unique: false,
+      createSql: '''
+        CREATE INDEX idx_physical_assets_savings_goal
+        ON physical_assets(savings_goal_id)
+      ''',
+    );
+  }
+
+  static Future<void> _ensureBudgetV2Tables(DatabaseExecutor db) async {
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS budget_plans (
+        id                INTEGER PRIMARY KEY AUTOINCREMENT,
+        uuid              TEXT NOT NULL UNIQUE,
+        book_id           INTEGER NOT NULL,
+        currency_code     TEXT NOT NULL DEFAULT 'CNY',
+        timezone          TEXT NOT NULL DEFAULT 'device_local',
+        name              TEXT NOT NULL DEFAULT '',
+        role              TEXT NOT NULL DEFAULT 'primary',
+        cadence           TEXT NOT NULL,
+        anchor_start_day  INTEGER NOT NULL,
+        month_start_day   INTEGER,
+        week_start        INTEGER,
+        end_day           INTEGER,
+        expense_scope_json TEXT NOT NULL DEFAULT '',
+        status            TEXT NOT NULL DEFAULT 'active',
+        created_ms        INTEGER NOT NULL,
+        updated_ms        INTEGER NOT NULL
+      )
+    ''');
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS budget_plan_revisions (
+        id                          INTEGER PRIMARY KEY AUTOINCREMENT,
+        uuid                        TEXT NOT NULL UNIQUE,
+        plan_id                     INTEGER NOT NULL,
+        effective_cycle_start_day   INTEGER NOT NULL,
+        effective_to_cycle_start_day INTEGER,
+        amount_cents                INTEGER NOT NULL,
+        category_budgets_json       TEXT NOT NULL DEFAULT '{}',
+        monthly_income_cents        INTEGER,
+        fixed_templates_json        TEXT NOT NULL DEFAULT '[]',
+        legacy_source_period_id     INTEGER,
+        created_ms                  INTEGER NOT NULL,
+        updated_ms                  INTEGER NOT NULL,
+        UNIQUE(plan_id, effective_cycle_start_day)
+      )
+    ''');
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS budget_cycle_overrides (
+        id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+        uuid                  TEXT NOT NULL UNIQUE,
+        plan_id               INTEGER NOT NULL,
+        cycle_start_day       INTEGER NOT NULL,
+        cycle_end_day         INTEGER NOT NULL,
+        target_amount_cents   INTEGER NOT NULL,
+        category_budgets_json TEXT,
+        input_intent          TEXT NOT NULL DEFAULT 'replace_total',
+        input_delta_cents     INTEGER,
+        created_ms            INTEGER NOT NULL,
+        updated_ms            INTEGER NOT NULL,
+        UNIQUE(plan_id, cycle_start_day)
+      )
+    ''');
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS budget_fixed_commitment_occurrences (
+        id                              INTEGER PRIMARY KEY AUTOINCREMENT,
+        uuid                            TEXT NOT NULL UNIQUE,
+        plan_id                         INTEGER NOT NULL,
+        revision_id                     INTEGER NOT NULL,
+        template_id                     TEXT NOT NULL,
+        cycle_start_day                 INTEGER NOT NULL,
+        cycle_end_day                   INTEGER NOT NULL,
+        due_day                         INTEGER NOT NULL,
+        planned_cents                   INTEGER NOT NULL,
+        resolution_status               TEXT NOT NULL DEFAULT 'planned',
+        review_reason                   TEXT NOT NULL DEFAULT '',
+        matched_transaction_family_uuid TEXT,
+        resolved_ms                     INTEGER,
+        created_ms                      INTEGER NOT NULL,
+        updated_ms                      INTEGER NOT NULL,
+        UNIQUE(plan_id, template_id, cycle_start_day)
+      )
+    ''');
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS budget_change_events (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        uuid        TEXT NOT NULL UNIQUE,
+        plan_id     INTEGER NOT NULL,
+        event_type  TEXT NOT NULL,
+        before_json TEXT NOT NULL DEFAULT '',
+        after_json  TEXT NOT NULL DEFAULT '',
+        created_ms  INTEGER NOT NULL
+      )
+    ''');
+    await db.execute('''
+      CREATE INDEX IF NOT EXISTS idx_budget_plans_scope
+      ON budget_plans(book_id, role, status, anchor_start_day, end_day)
+    ''');
+    await db.execute('''
+      CREATE INDEX IF NOT EXISTS idx_budget_revisions_effective
+      ON budget_plan_revisions(
+        plan_id, effective_cycle_start_day, effective_to_cycle_start_day
+      )
+    ''');
+    await db.execute('''
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_budget_occurrence_family_unique
+      ON budget_fixed_commitment_occurrences(
+        plan_id, matched_transaction_family_uuid
+      )
+      WHERE matched_transaction_family_uuid IS NOT NULL
+    ''');
+    await db.execute('''
+      CREATE INDEX IF NOT EXISTS idx_budget_occurrences_cycle
+      ON budget_fixed_commitment_occurrences(
+        plan_id, cycle_start_day, resolution_status
+      )
+    ''');
+  }
+
+  static Future<void> _ensureAccountCheckpointTables(
+    DatabaseExecutor db,
+  ) async {
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS account_balance_checkpoints (
+        id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+        uuid                TEXT NOT NULL UNIQUE,
+        account_id          INTEGER NOT NULL,
+        event_kind          TEXT NOT NULL DEFAULT 'anchor',
+        effective_ms        INTEGER NOT NULL,
+        sequence            INTEGER NOT NULL DEFAULT 0,
+        timezone            TEXT NOT NULL DEFAULT 'device_local',
+        knowledge_cutoff_ms INTEGER NOT NULL,
+        target_balance      TEXT NOT NULL DEFAULT '0',
+        calculated_before   TEXT NOT NULL DEFAULT '0',
+        delta_at_creation   TEXT NOT NULL DEFAULT '0',
+        reason              TEXT NOT NULL DEFAULT 'manual',
+        note                TEXT NOT NULL DEFAULT '',
+        status              TEXT NOT NULL DEFAULT 'active',
+        reversal_of         INTEGER,
+        created_ms          INTEGER NOT NULL,
+        updated_ms          INTEGER NOT NULL
+      )
+    ''');
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS account_checkpoint_covered_unknown_events (
+        checkpoint_id     INTEGER NOT NULL,
+        account_event_uuid TEXT NOT NULL,
+        created_ms        INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY (checkpoint_id, account_event_uuid)
+      )
+    ''');
+    await db.execute('''
+      CREATE INDEX IF NOT EXISTS idx_account_checkpoints_lookup
+      ON account_balance_checkpoints(
+        account_id, status, effective_ms DESC, sequence DESC, id DESC
+      )
+    ''');
+    await db.execute('''
+      CREATE INDEX IF NOT EXISTS idx_account_checkpoint_reversal
+      ON account_balance_checkpoints(reversal_of)
+    ''');
+  }
+
+  static Future<void> _ensureNetWorthVerifiedCheckpointTables(
+    DatabaseExecutor db,
+  ) async {
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS net_worth_verified_checkpoints (
+        id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+        uuid                  TEXT NOT NULL UNIQUE,
+        as_of_ms              INTEGER NOT NULL,
+        knowledge_cutoff_ms   INTEGER NOT NULL,
+        scope_version         INTEGER NOT NULL,
+        calculation_version   INTEGER NOT NULL,
+        currency_coverage_json TEXT NOT NULL DEFAULT '',
+        total_assets          TEXT NOT NULL DEFAULT '0',
+        total_liabilities     TEXT NOT NULL DEFAULT '0',
+        net_worth             TEXT NOT NULL DEFAULT '0',
+        completeness          TEXT NOT NULL DEFAULT 'partial',
+        reasons_json          TEXT NOT NULL DEFAULT '',
+        status                TEXT NOT NULL DEFAULT 'active',
+        supersedes_id         INTEGER,
+        created_ms            INTEGER NOT NULL
+      )
+    ''');
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS net_worth_verified_checkpoint_items (
+        checkpoint_id       INTEGER NOT NULL,
+        object_type         TEXT NOT NULL,
+        object_uuid         TEXT NOT NULL,
+        confirmed_amount    TEXT NOT NULL DEFAULT '0',
+        currency_code       TEXT NOT NULL DEFAULT 'CNY',
+        value_effective_ms  INTEGER NOT NULL,
+        value_source        TEXT NOT NULL,
+        quality             TEXT NOT NULL,
+        PRIMARY KEY (checkpoint_id, object_type, object_uuid)
+      )
+    ''');
+    await db.execute('''
+      CREATE INDEX IF NOT EXISTS idx_verified_net_worth_as_of
+      ON net_worth_verified_checkpoints(
+        status, completeness, as_of_ms DESC, id DESC
+      )
+    ''');
+  }
+
+  static Future<void> _migrateAccountCheckpointsV37(
+    DatabaseExecutor db,
+  ) async {
+    for (final sql in [
+      "ALTER TABLE accounts ADD COLUMN uuid TEXT NOT NULL DEFAULT ''",
+      'ALTER TABLE accounts ADD COLUMN created_ms INTEGER NOT NULL DEFAULT 0',
+      'ALTER TABLE accounts ADD COLUMN updated_ms INTEGER NOT NULL DEFAULT 0',
+      'ALTER TABLE accounts ADD COLUMN opening_balance_effective_ms INTEGER',
+      'ALTER TABLE accounts ADD COLUMN opening_balance_sequence INTEGER NOT NULL DEFAULT 0',
+      "ALTER TABLE accounts ADD COLUMN opening_balance_quality TEXT NOT NULL DEFAULT 'legacy_unknown'",
+      "ALTER TABLE accounts ADD COLUMN status TEXT NOT NULL DEFAULT 'active'",
+      'ALTER TABLE accounts ADD COLUMN archived_ms INTEGER',
+      'ALTER TABLE accounts ADD COLUMN last_verified_ms INTEGER',
+      'ALTER TABLE accounts ADD COLUMN verification_interval_days INTEGER',
+    ]) {
+      try {
+        await db.execute(sql);
+      } catch (_) {}
+    }
+    await db.execute(
+      "UPDATE accounts SET uuid = lower(hex(randomblob(16))) WHERE uuid = ''",
+    );
+    await db.execute('''
+      UPDATE accounts
+      SET status = CASE
+        WHEN is_deleted = 1 THEN 'legacy_hidden'
+        ELSE 'active'
+      END,
+      opening_balance_effective_ms = NULL,
+      opening_balance_sequence = 0,
+      opening_balance_quality = 'legacy_unknown'
+    ''');
+    await _ensureAccountCheckpointTables(db);
+    await _ensureNetWorthVerifiedCheckpointTables(db);
+  }
+
+  static Future<void> _migrateNetWorthSnapshotsV36(
+    DatabaseExecutor db,
+  ) async {
+    await db.execute(_createNetWorthSnapshotsSql);
+    for (final sql in [
+      "ALTER TABLE net_worth_snapshots ADD COLUMN snapshot_type TEXT NOT NULL DEFAULT 'legacy_unverified'",
+      "ALTER TABLE net_worth_snapshots ADD COLUMN lineage_key TEXT NOT NULL DEFAULT 'legacy:global'",
+      'ALTER TABLE net_worth_snapshots ADD COLUMN as_of_ms INTEGER NOT NULL DEFAULT 0',
+      'ALTER TABLE net_worth_snapshots ADD COLUMN knowledge_cutoff_ms INTEGER NOT NULL DEFAULT 0',
+      "ALTER TABLE net_worth_snapshots ADD COLUMN timezone TEXT NOT NULL DEFAULT 'device_local'",
+      'ALTER TABLE net_worth_snapshots ADD COLUMN scope_version INTEGER NOT NULL DEFAULT 1',
+      'ALTER TABLE net_worth_snapshots ADD COLUMN calculation_version INTEGER NOT NULL DEFAULT 1',
+      "ALTER TABLE net_worth_snapshots ADD COLUMN currency_coverage_json TEXT NOT NULL DEFAULT ''",
+      "ALTER TABLE net_worth_snapshots ADD COLUMN quality TEXT NOT NULL DEFAULT 'legacy_unverified'",
+      "ALTER TABLE net_worth_snapshots ADD COLUMN cause_set_json TEXT NOT NULL DEFAULT ''",
+      "ALTER TABLE net_worth_snapshots ADD COLUMN reasons_json TEXT NOT NULL DEFAULT ''",
+      "ALTER TABLE net_worth_snapshots ADD COLUMN valuation_coverage_json TEXT NOT NULL DEFAULT ''",
+      'ALTER TABLE net_worth_snapshots ADD COLUMN provisional INTEGER NOT NULL DEFAULT 0',
+    ]) {
+      try {
+        await db.execute(sql);
+      } catch (_) {}
+    }
+    final rows = await db.query(
+      'net_worth_snapshots',
+      columns: ['id', 'scope_key', 'snapshot_date', 'created_ms'],
+    );
+    for (final row in rows) {
+      final parsed = DateTime.tryParse(row['snapshot_date'] as String? ?? '');
+      final asOf = parsed == null
+          ? 0
+          : DateTime(parsed.year, parsed.month, parsed.day)
+              .millisecondsSinceEpoch;
+      final scope = row['scope_key'] as String? ?? 'global';
+      await db.update(
+        'net_worth_snapshots',
+        {
+          'snapshot_type': 'legacy_unverified',
+          'lineage_key': 'legacy:$scope',
+          'as_of_ms': asOf,
+          'knowledge_cutoff_ms': row['created_ms'] as int? ?? 0,
+          'timezone': 'device_local',
+          'scope_version': 1,
+          'calculation_version': statisticsCalculationVersion,
+          'currency_coverage_json': jsonEncode(
+            NetWorthCurrencyCoverage.single('CNY').toJson(),
+          ),
+          'quality': NetWorthSnapshotQuality.legacyUnverified.storageKey,
+          'cause_set_json': jsonEncode(
+            [NetWorthSnapshotCause.migration.storageKey],
+          ),
+          'reasons_json': jsonEncode([
+            NetWorthSnapshotReason(
+              code: 'legacy_unverified',
+              message: '旧快照缺少当前统计口径和覆盖证据',
+            ).toJson(),
+          ]),
+          'valuation_coverage_json': jsonEncode(
+            const NetWorthValuationCoverage().toJson(),
+          ),
+          'provisional': 0,
+        },
+        where: 'id = ?',
+        whereArgs: [row['id']],
+      );
+    }
+    await db.execute('''
+      CREATE INDEX IF NOT EXISTS idx_net_worth_snapshot_lineage
+      ON net_worth_snapshots(
+        snapshot_type, quality, scope_key, scope_version,
+        calculation_version, snapshot_date
+      )
+    ''');
+  }
+
+  static Future<void> _ensureAssetAllocationV35(DatabaseExecutor db) async {
+    for (final sql in [
+      "ALTER TABLE physical_assets ADD COLUMN acquisition_cost_source TEXT NOT NULL DEFAULT 'manual'",
+      "ALTER TABLE physical_assets ADD COLUMN thumbnail_path TEXT NOT NULL DEFAULT ''",
+      "ALTER TABLE asset_transaction_links ADD COLUMN asset_object_type TEXT NOT NULL DEFAULT 'physical'",
+      'ALTER TABLE asset_transaction_links ADD COLUMN allocated_gross_cents INTEGER NOT NULL DEFAULT 0',
+      'ALTER TABLE asset_transaction_links ADD COLUMN allocated_refund_cents INTEGER NOT NULL DEFAULT 0',
+      "ALTER TABLE asset_transaction_links ADD COLUMN cost_quality TEXT NOT NULL DEFAULT 'partial'",
+      'ALTER TABLE asset_transaction_links ADD COLUMN updated_ms INTEGER NOT NULL DEFAULT 0',
+    ]) {
+      try {
+        await db.execute(sql);
+      } catch (_) {}
+    }
+    await db.execute(_createAssetRefundAllocationsSql);
+    await db.execute('''
+      CREATE INDEX IF NOT EXISTS idx_asset_links_transaction
+      ON asset_transaction_links(transaction_id, link_type)
+    ''');
+    await db.execute('''
+      CREATE INDEX IF NOT EXISTS idx_asset_refund_allocations_refund
+      ON asset_refund_allocations(refund_transaction_id, status)
+    ''');
+  }
+
+  static Future<void> _migrateAssetAllocationsV35(
+    DatabaseExecutor db,
+  ) async {
+    final beforeRows = await db.query(
+      'physical_assets',
+      columns: ['current_value', 'include_in_net_worth', 'is_deleted'],
+    );
+    final beforeNetWorth = beforeRows
+        .where(
+            (row) => row['include_in_net_worth'] == 1 && row['is_deleted'] != 1)
+        .fold<Decimal>(
+          Decimal.zero,
+          (sum, row) =>
+              sum +
+              (Decimal.tryParse(row['current_value'] as String? ?? '') ??
+                  Decimal.zero),
+        );
+    await _ensureAssetAllocationV35(db);
+    await db.execute('''
+      UPDATE physical_assets
+      SET acquisition_cost_source = CASE
+        WHEN id IN (
+          SELECT asset_id
+          FROM asset_transaction_links
+          WHERE link_type IN ('source_transaction', 'purchase_transaction')
+        ) THEN 'transaction_allocations'
+        ELSE 'manual'
+      END
+    ''');
+
+    final transactionRows = await db.rawQuery('''
+      SELECT DISTINCT transaction_id
+      FROM asset_transaction_links
+      WHERE link_type IN ('source_transaction', 'purchase_transaction')
+    ''');
+    for (final transactionRow in transactionRows) {
+      final transactionId = transactionRow['transaction_id'] as int;
+      final links = await db.query(
+        'asset_transaction_links',
+        where:
+            "transaction_id = ? AND link_type IN ('source_transaction', 'purchase_transaction')",
+        whereArgs: [transactionId],
+        orderBy: 'id ASC',
+      );
+      final orderRows = await db.query(
+        'transactions',
+        columns: ['amount'],
+        where: 'id = ?',
+        whereArgs: [transactionId],
+        limit: 1,
+      );
+      if (orderRows.isEmpty) {
+        for (final link in links) {
+          await db.update(
+            'asset_transaction_links',
+            {
+              'asset_object_type': 'physical',
+              'allocated_gross_cents': 0,
+              'allocated_refund_cents': 0,
+              'cost_quality': 'partial',
+              'updated_ms': link['created_ms'] as int? ?? 0,
+            },
+            where: 'id = ?',
+            whereArgs: [link['id']],
+          );
+        }
+        continue;
+      }
+      final orderGross = decimalToBudgetCents(
+        Decimal.tryParse(orderRows.first['amount'] as String? ?? '') ??
+            Decimal.zero,
+      ).abs();
+      final refundRows = await db.query(
+        'transactions',
+        columns: ['id', 'uuid', 'amount', 'created_ms', 'updated_ms'],
+        where: 'refund_of = ?',
+        whereArgs: [transactionId],
+        orderBy: 'id ASC',
+      );
+      final validRefund = refundRows.fold<int>(0, (sum, row) {
+        final amount =
+            Decimal.tryParse(row['amount'] as String? ?? '') ?? Decimal.zero;
+        return sum + decimalToBudgetCents(amount).abs();
+      });
+      if (links.length == 1) {
+        final link = links.single;
+        final legacyAmount = decimalToBudgetCents(
+          Decimal.tryParse(link['amount'] as String? ?? '') ?? Decimal.zero,
+        ).abs();
+        final gross = legacyAmount <= orderGross ? legacyAmount : orderGross;
+        final fullyCoversOrder = gross == orderGross;
+        final refund =
+            fullyCoversOrder ? validRefund.clamp(0, gross).toInt() : 0;
+        await db.update(
+          'asset_transaction_links',
+          {
+            'asset_object_type': 'physical',
+            'allocated_gross_cents': gross,
+            'allocated_refund_cents': refund,
+            'cost_quality': fullyCoversOrder ? 'exact' : 'partial',
+            'updated_ms': link['created_ms'] as int? ?? 0,
+          },
+          where: 'id = ?',
+          whereArgs: [link['id']],
+        );
+        if (fullyCoversOrder) {
+          var capacity = gross;
+          for (final refundRow in refundRows) {
+            final cents = decimalToBudgetCents(
+              Decimal.tryParse(refundRow['amount'] as String? ?? '') ??
+                  Decimal.zero,
+            ).abs();
+            final allocated = cents.clamp(0, capacity).toInt();
+            if (allocated == 0) continue;
+            final createdMs = refundRow['created_ms'] as int? ?? 0;
+            await db.insert('asset_refund_allocations', {
+              'uuid': _newUuid(),
+              'asset_transaction_link_id': link['id'],
+              'refund_transaction_id': refundRow['id'],
+              'allocated_refund_cents': allocated,
+              'status': 'active',
+              'created_ms': createdMs,
+              'updated_ms': refundRow['updated_ms'] as int? ?? createdMs,
+            });
+            capacity -= allocated;
+          }
+        }
+      } else {
+        for (final link in links) {
+          await db.update(
+            'asset_transaction_links',
+            {
+              'asset_object_type': 'physical',
+              'allocated_gross_cents': 0,
+              'allocated_refund_cents': 0,
+              'cost_quality':
+                  validRefund > 0 ? 'pending_refund_allocation' : 'partial',
+              'updated_ms': link['created_ms'] as int? ?? 0,
+            },
+            where: 'id = ?',
+            whereArgs: [link['id']],
+          );
+        }
+      }
+    }
+
+    final afterRows = await db.query(
+      'physical_assets',
+      columns: ['current_value', 'include_in_net_worth', 'is_deleted'],
+    );
+    final afterNetWorth = afterRows
+        .where(
+            (row) => row['include_in_net_worth'] == 1 && row['is_deleted'] != 1)
+        .fold<Decimal>(
+          Decimal.zero,
+          (sum, row) =>
+              sum +
+              (Decimal.tryParse(row['current_value'] as String? ?? '') ??
+                  Decimal.zero),
+        );
+    if (beforeNetWorth != afterNetWorth) {
+      throw StateError('v35 物品分配迁移改变了净资产合计');
+    }
+  }
+
+  static Future<void> _ensureTransactionSettlementColumns(
+    DatabaseExecutor db,
+  ) async {
+    for (final sql in [
+      'ALTER TABLE transactions ADD COLUMN created_ms INTEGER NOT NULL DEFAULT 0',
+      'ALTER TABLE transactions ADD COLUMN settled_ms INTEGER',
+      "ALTER TABLE transactions ADD COLUMN settlement_quality TEXT NOT NULL DEFAULT 'unknown'",
+      'ALTER TABLE transactions ADD COLUMN settlement_account_id INTEGER',
+      "ALTER TABLE transactions ADD COLUMN settlement_account_quality TEXT NOT NULL DEFAULT 'unknown'",
+      "ALTER TABLE transactions ADD COLUMN event_type TEXT NOT NULL DEFAULT 'legacy_adjustment'",
+    ]) {
+      try {
+        await db.execute(sql);
+      } catch (_) {}
+    }
+  }
+
+  static Future<void> _migrateTransactionSettlementV34(
+    DatabaseExecutor db,
+  ) async {
+    await _ensureTransactionSettlementColumns(db);
+    await db.execute('''
+      UPDATE transactions
+      SET settled_ms = date_ms,
+          settlement_quality = 'legacy_assumed',
+          settlement_account_id = account_id,
+          settlement_account_quality = CASE
+            WHEN account_id IS NULL THEN 'unknown'
+            ELSE 'legacy_assumed'
+          END,
+          event_type = CASE kind
+            WHEN 'expense' THEN 'expense'
+            WHEN 'income' THEN 'income'
+            WHEN 'transfer' THEN 'transfer'
+            ELSE 'legacy_adjustment'
+          END,
+          created_ms = 0
+    ''');
+    await db.execute('''
+      UPDATE transactions
+      SET event_type = 'asset_purchase'
+      WHERE id IN (
+        SELECT transaction_id
+        FROM asset_transaction_links
+        WHERE link_type IN ('source_transaction', 'purchase_transaction')
+      )
+    ''');
+    await db.execute('''
+      UPDATE transactions
+      SET event_type = 'asset_sale'
+      WHERE id IN (
+        SELECT transaction_id
+        FROM asset_transaction_links
+        WHERE link_type = 'sale_account_movement'
+      )
+    ''');
+    await db.execute('''
+      UPDATE transactions
+      SET event_type = 'receivable_recovery'
+      WHERE id IN (
+        SELECT transaction_id
+        FROM receivable_recoveries
+        WHERE transaction_id IS NOT NULL
+      )
+    ''');
+    await db.execute('''
+      UPDATE transactions
+      SET event_type = CASE
+            WHEN note = '报销到账' THEN 'reimbursement'
+            ELSE 'refund'
+          END,
+          settled_ms = NULL,
+          settlement_quality = 'unknown',
+          settlement_account_id = CASE
+            WHEN note = '报销到账' THEN NULL
+            ELSE account_id
+          END,
+          settlement_account_quality = CASE
+            WHEN note = '报销到账' OR account_id IS NULL THEN 'unknown'
+            ELSE 'legacy_assumed'
+          END
+      WHERE refund_of IS NOT NULL
+    ''');
+    await db.execute('''
+      UPDATE transactions
+      SET event_type = 'legacy_adjustment'
+      WHERE refund_of IS NULL AND CAST(amount AS REAL) < 0
+    ''');
+  }
+
+  static Future<void> _ensureTransactionIndexes(DatabaseExecutor db) async {
+    await db.execute('''
+      CREATE INDEX IF NOT EXISTS idx_transactions_book_date
+      ON transactions(book_id, date_ms DESC)
+    ''');
+    await db.execute('''
+      CREATE INDEX IF NOT EXISTS idx_transactions_refund_of
+      ON transactions(refund_of)
+    ''');
+    await db.execute('''
+      CREATE INDEX IF NOT EXISTS idx_transactions_book_refund
+      ON transactions(book_id, refund_of)
+    ''');
+    await db.execute('''
+      CREATE INDEX IF NOT EXISTS idx_transactions_book_category_date
+      ON transactions(book_id, category_id, date_ms DESC)
+    ''');
+    await db.execute('''
+      CREATE INDEX IF NOT EXISTS idx_transactions_book_account_date
+      ON transactions(book_id, account_id, date_ms DESC)
+    ''');
+    await db.execute('''
+      CREATE INDEX IF NOT EXISTS idx_transactions_settlement_account_date
+      ON transactions(settlement_account_id, settled_ms, id)
+    ''');
+    await db.execute('''
+      CREATE INDEX IF NOT EXISTS idx_transactions_event_settled
+      ON transactions(event_type, settled_ms)
+    ''');
+    await db.execute('''
+      CREATE INDEX IF NOT EXISTS idx_transactions_settlement_quality
+      ON transactions(settlement_quality, id)
+    ''');
+    await db.execute('''
+      CREATE INDEX IF NOT EXISTS idx_transactions_settlement_account_quality
+      ON transactions(settlement_account_quality, id)
+    ''');
+  }
+
+  static const _createReportsSql = '''
+      CREATE TABLE IF NOT EXISTS reports (
+        id              INTEGER PRIMARY KEY AUTOINCREMENT,
+        book_id         INTEGER,
+        type            TEXT NOT NULL,
+        title           TEXT NOT NULL,
+        summary         TEXT NOT NULL DEFAULT '',
+        markdown        TEXT NOT NULL DEFAULT '',
+        period_start_ms INTEGER NOT NULL DEFAULT 0,
+        period_end_ms   INTEGER NOT NULL DEFAULT 0,
+        created_ms      INTEGER NOT NULL DEFAULT 0,
+        pinned_ms       INTEGER NOT NULL DEFAULT 0
+      )
+    ''';
 
   static const _createBudgetPeriodsSql = '''
       CREATE TABLE IF NOT EXISTS budget_periods (
@@ -1016,6 +5298,772 @@ class AppRepository extends ChangeNotifier {
         created_ms        INTEGER NOT NULL DEFAULT 0
       )
     ''';
+
+  static const _createPhysicalAssetsSql = '''
+      CREATE TABLE IF NOT EXISTS physical_assets (
+        id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+        uuid                  TEXT NOT NULL UNIQUE,
+        book_id               INTEGER,
+        name                  TEXT NOT NULL,
+        asset_type            TEXT NOT NULL DEFAULT 'other',
+        status                TEXT NOT NULL DEFAULT 'active',
+        economic_status       TEXT NOT NULL DEFAULT 'owned',
+        usage_status          TEXT NOT NULL DEFAULT 'active',
+        visibility_status     TEXT NOT NULL DEFAULT 'active',
+        inclusion_quality     TEXT NOT NULL DEFAULT 'confirmed',
+        source_type           TEXT NOT NULL DEFAULT 'historical_existing',
+        acquisition_cost_source TEXT NOT NULL DEFAULT 'manual',
+        purchase_price        TEXT NOT NULL DEFAULT '0',
+        current_value         TEXT NOT NULL DEFAULT '0',
+        currency_code         TEXT NOT NULL DEFAULT 'CNY',
+        purchase_date_ms      INTEGER,
+        brand                 TEXT NOT NULL DEFAULT '',
+        model                 TEXT NOT NULL DEFAULT '',
+        location              TEXT NOT NULL DEFAULT '',
+        warranty_until_ms     INTEGER,
+        usage_tracking_enabled INTEGER NOT NULL DEFAULT 0,
+        savings_goal_id       INTEGER,
+        photo_path            TEXT NOT NULL DEFAULT '',
+        thumbnail_path        TEXT NOT NULL DEFAULT '',
+        invoice_path          TEXT NOT NULL DEFAULT '',
+        depreciation_method   TEXT NOT NULL DEFAULT '',
+        depreciation_base     TEXT NOT NULL DEFAULT '0',
+        salvage_value         TEXT NOT NULL DEFAULT '0',
+        useful_life_months    INTEGER NOT NULL DEFAULT 0,
+        depreciation_start_ms INTEGER,
+        depreciation_paused   INTEGER NOT NULL DEFAULT 0,
+        note                  TEXT NOT NULL DEFAULT '',
+        include_in_net_worth  INTEGER NOT NULL DEFAULT 1,
+        is_deleted            INTEGER NOT NULL DEFAULT 0,
+        ended_ms              INTEGER,
+        archived_ms           INTEGER,
+        created_ms            INTEGER NOT NULL DEFAULT 0,
+        updated_ms            INTEGER NOT NULL DEFAULT 0
+      )
+    ''';
+
+  static const _createAssetEventsSql = '''
+      CREATE TABLE IF NOT EXISTS asset_events (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        uuid        TEXT NOT NULL UNIQUE,
+        asset_id    INTEGER NOT NULL,
+        asset_type  TEXT NOT NULL DEFAULT 'physical',
+        event_type  TEXT NOT NULL,
+        occurred_ms INTEGER NOT NULL,
+        value       TEXT NOT NULL DEFAULT '',
+        note        TEXT NOT NULL DEFAULT '',
+        metadata    TEXT NOT NULL DEFAULT '',
+        created_ms  INTEGER NOT NULL DEFAULT 0
+      )
+    ''';
+
+  static const _createAssetUsageEventsSql = '''
+      CREATE TABLE IF NOT EXISTS asset_usage_events (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        uuid        TEXT NOT NULL UNIQUE,
+        asset_id    INTEGER NOT NULL,
+        count_delta INTEGER NOT NULL DEFAULT 0,
+        reversal_of INTEGER,
+        occurred_ms INTEGER NOT NULL,
+        note        TEXT NOT NULL DEFAULT '',
+        created_ms  INTEGER NOT NULL DEFAULT 0,
+        updated_ms  INTEGER NOT NULL DEFAULT 0
+      )
+    ''';
+
+  static const _createReceivableAssetsSql = '''
+      CREATE TABLE IF NOT EXISTS receivable_assets (
+        id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+        uuid                  TEXT NOT NULL UNIQUE,
+        book_id               INTEGER,
+        name                  TEXT NOT NULL,
+        receivable_type       TEXT NOT NULL DEFAULT 'other',
+        status                TEXT NOT NULL DEFAULT 'active',
+        economic_status       TEXT NOT NULL DEFAULT 'active',
+        visibility_status     TEXT NOT NULL DEFAULT 'active',
+        inclusion_quality     TEXT NOT NULL DEFAULT 'confirmed',
+        original_amount       TEXT NOT NULL DEFAULT '0',
+        remaining_amount      TEXT NOT NULL DEFAULT '0',
+        currency_code         TEXT NOT NULL DEFAULT 'CNY',
+        counterparty          TEXT NOT NULL DEFAULT '',
+        due_date_ms           INTEGER,
+        include_in_net_worth  INTEGER NOT NULL DEFAULT 1,
+        note                  TEXT NOT NULL DEFAULT '',
+        is_deleted            INTEGER NOT NULL DEFAULT 0,
+        ended_ms              INTEGER,
+        archived_ms           INTEGER,
+        created_ms            INTEGER NOT NULL DEFAULT 0,
+        updated_ms            INTEGER NOT NULL DEFAULT 0
+      )
+    ''';
+
+  static const _createReceivableRecoveriesSql = '''
+      CREATE TABLE IF NOT EXISTS receivable_recoveries (
+        id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+        uuid                TEXT NOT NULL UNIQUE,
+        receivable_asset_id INTEGER NOT NULL,
+        amount              TEXT NOT NULL DEFAULT '0',
+        recovered_ms        INTEGER NOT NULL,
+        target_account_id   INTEGER,
+        event_id            INTEGER,
+        transaction_id      INTEGER,
+        note                TEXT NOT NULL DEFAULT '',
+        created_ms          INTEGER NOT NULL DEFAULT 0
+      )
+    ''';
+
+  static const _createNetWorthSnapshotsSql = '''
+      CREATE TABLE IF NOT EXISTS net_worth_snapshots (
+        id                INTEGER PRIMARY KEY AUTOINCREMENT,
+        scope_key         TEXT NOT NULL DEFAULT 'global',
+        snapshot_date     TEXT NOT NULL,
+        total_assets      TEXT NOT NULL DEFAULT '0',
+        total_liabilities TEXT NOT NULL DEFAULT '0',
+        net_worth         TEXT NOT NULL DEFAULT '0',
+        cash_assets       TEXT NOT NULL DEFAULT '0',
+        investment_assets TEXT NOT NULL DEFAULT '0',
+        physical_assets   TEXT NOT NULL DEFAULT '0',
+        receivable_assets TEXT NOT NULL DEFAULT '0',
+        snapshot_type     TEXT NOT NULL DEFAULT 'legacy_unverified',
+        lineage_key       TEXT NOT NULL DEFAULT 'legacy:global',
+        as_of_ms          INTEGER NOT NULL DEFAULT 0,
+        knowledge_cutoff_ms INTEGER NOT NULL DEFAULT 0,
+        timezone          TEXT NOT NULL DEFAULT 'device_local',
+        scope_version     INTEGER NOT NULL DEFAULT 1,
+        calculation_version INTEGER NOT NULL DEFAULT 1,
+        currency_coverage_json TEXT NOT NULL DEFAULT '',
+        quality           TEXT NOT NULL DEFAULT 'legacy_unverified',
+        cause_set_json    TEXT NOT NULL DEFAULT '',
+        reasons_json      TEXT NOT NULL DEFAULT '',
+        valuation_coverage_json TEXT NOT NULL DEFAULT '',
+        provisional       INTEGER NOT NULL DEFAULT 0,
+        created_ms        INTEGER NOT NULL DEFAULT 0,
+        UNIQUE(scope_key, snapshot_date)
+      )
+    ''';
+
+  static Future<void> _ensureNetWorthSnapshotScope(DatabaseExecutor db) async {
+    final table = await db.rawQuery('''
+      SELECT name
+      FROM sqlite_master
+      WHERE type = 'table' AND name = 'net_worth_snapshots'
+      LIMIT 1
+    ''');
+    if (table.isEmpty) {
+      await db.execute(_createNetWorthSnapshotsSql);
+      return;
+    }
+
+    final columns = await db.rawQuery(
+      'PRAGMA table_info(net_worth_snapshots)',
+    );
+    final hasScope = columns.any((row) => row['name'] == 'scope_key');
+
+    // snapshot_date used to carry a column-level UNIQUE constraint. SQLite
+    // cannot drop that constraint in-place, so v31 must rebuild the table.
+    // INSERT OR IGNORE deliberately keeps the oldest id if an intermediate
+    // development build ever produced duplicate rows for one scope and day.
+    await db.execute('DROP TABLE IF EXISTS net_worth_snapshots_v31');
+    await db.execute('''
+      CREATE TABLE net_worth_snapshots_v31 (
+        id                INTEGER PRIMARY KEY AUTOINCREMENT,
+        scope_key         TEXT NOT NULL DEFAULT 'global',
+        snapshot_date     TEXT NOT NULL,
+        total_assets      TEXT NOT NULL DEFAULT '0',
+        total_liabilities TEXT NOT NULL DEFAULT '0',
+        net_worth         TEXT NOT NULL DEFAULT '0',
+        cash_assets       TEXT NOT NULL DEFAULT '0',
+        investment_assets TEXT NOT NULL DEFAULT '0',
+        physical_assets   TEXT NOT NULL DEFAULT '0',
+        receivable_assets TEXT NOT NULL DEFAULT '0',
+        snapshot_type     TEXT NOT NULL DEFAULT 'legacy_unverified',
+        lineage_key       TEXT NOT NULL DEFAULT 'legacy:global',
+        as_of_ms          INTEGER NOT NULL DEFAULT 0,
+        knowledge_cutoff_ms INTEGER NOT NULL DEFAULT 0,
+        timezone          TEXT NOT NULL DEFAULT 'device_local',
+        scope_version     INTEGER NOT NULL DEFAULT 1,
+        calculation_version INTEGER NOT NULL DEFAULT 1,
+        currency_coverage_json TEXT NOT NULL DEFAULT '',
+        quality           TEXT NOT NULL DEFAULT 'legacy_unverified',
+        cause_set_json    TEXT NOT NULL DEFAULT '',
+        reasons_json      TEXT NOT NULL DEFAULT '',
+        valuation_coverage_json TEXT NOT NULL DEFAULT '',
+        provisional       INTEGER NOT NULL DEFAULT 0,
+        created_ms        INTEGER NOT NULL DEFAULT 0,
+        UNIQUE(scope_key, snapshot_date)
+      )
+    ''');
+    final scopeExpression =
+        hasScope ? "COALESCE(NULLIF(scope_key, ''), 'global')" : "'global'";
+    await db.execute('''
+      INSERT OR IGNORE INTO net_worth_snapshots_v31 (
+        id,
+        scope_key,
+        snapshot_date,
+        total_assets,
+        total_liabilities,
+        net_worth,
+        cash_assets,
+        investment_assets,
+        physical_assets,
+        receivable_assets,
+        created_ms
+      )
+      SELECT
+        id,
+        $scopeExpression,
+        snapshot_date,
+        total_assets,
+        total_liabilities,
+        net_worth,
+        cash_assets,
+        investment_assets,
+        physical_assets,
+        receivable_assets,
+        created_ms
+      FROM net_worth_snapshots
+      ORDER BY id
+    ''');
+    await db.execute('DROP TABLE net_worth_snapshots');
+    await db.execute(
+      'ALTER TABLE net_worth_snapshots_v31 RENAME TO net_worth_snapshots',
+    );
+  }
+
+  static const _createLiabilityProfilesSql = '''
+      CREATE TABLE IF NOT EXISTS liability_profiles (
+        id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+        uuid                 TEXT NOT NULL UNIQUE,
+        account_id           INTEGER NOT NULL UNIQUE,
+        liability_type       TEXT NOT NULL DEFAULT 'other',
+        original_amount      TEXT NOT NULL DEFAULT '0',
+        current_principal    TEXT NOT NULL DEFAULT '0',
+        interest_rate        TEXT NOT NULL DEFAULT '0',
+        repayment_day        INTEGER,
+        repayment_account_id INTEGER,
+        start_date_ms        INTEGER,
+        end_date_ms          INTEGER,
+        status               TEXT NOT NULL DEFAULT 'active',
+        note                 TEXT NOT NULL DEFAULT '',
+        created_ms           INTEGER NOT NULL DEFAULT 0,
+        updated_ms           INTEGER NOT NULL DEFAULT 0
+      )
+    ''';
+
+  static const _createAssetValuationsSql = '''
+      CREATE TABLE IF NOT EXISTS asset_valuations (
+        id           INTEGER PRIMARY KEY AUTOINCREMENT,
+        uuid         TEXT NOT NULL UNIQUE,
+        asset_id     INTEGER NOT NULL,
+        value        TEXT NOT NULL,
+        source       TEXT NOT NULL DEFAULT 'manual',
+        valued_at_ms INTEGER NOT NULL,
+        note         TEXT NOT NULL DEFAULT '',
+        created_ms   INTEGER NOT NULL DEFAULT 0
+      )
+    ''';
+
+  static const _createAssetTransactionLinksSql = '''
+      CREATE TABLE IF NOT EXISTS asset_transaction_links (
+        id             INTEGER PRIMARY KEY AUTOINCREMENT,
+        uuid           TEXT NOT NULL UNIQUE,
+        asset_id       INTEGER NOT NULL,
+        asset_object_type TEXT NOT NULL DEFAULT 'physical',
+        transaction_id INTEGER NOT NULL,
+        link_type      TEXT NOT NULL,
+        amount         TEXT NOT NULL DEFAULT '0',
+        allocated_gross_cents INTEGER NOT NULL DEFAULT 0,
+        allocated_refund_cents INTEGER NOT NULL DEFAULT 0,
+        cost_quality   TEXT NOT NULL DEFAULT 'partial',
+        note           TEXT NOT NULL DEFAULT '',
+        created_ms     INTEGER NOT NULL DEFAULT 0,
+        updated_ms     INTEGER NOT NULL DEFAULT 0,
+        UNIQUE(asset_object_type, asset_id, transaction_id, link_type)
+      )
+    ''';
+
+  static const _createAssetRefundAllocationsSql = '''
+      CREATE TABLE IF NOT EXISTS asset_refund_allocations (
+        id                        INTEGER PRIMARY KEY AUTOINCREMENT,
+        uuid                      TEXT NOT NULL UNIQUE,
+        asset_transaction_link_id INTEGER NOT NULL,
+        refund_transaction_id     INTEGER NOT NULL,
+        allocated_refund_cents    INTEGER NOT NULL,
+        status                    TEXT NOT NULL DEFAULT 'active',
+        created_ms                INTEGER NOT NULL DEFAULT 0,
+        updated_ms                INTEGER NOT NULL DEFAULT 0
+      )
+    ''';
+
+  static Future<void> _ensureRecurringEndColumns(DatabaseExecutor db) async {
+    Future<void> addColumn(String sql) async {
+      try {
+        await db.execute(sql);
+      } catch (_) {}
+    }
+
+    await addColumn(
+        'ALTER TABLE recurring_rules ADD COLUMN start_date_ms INTEGER NOT NULL DEFAULT 0');
+    await addColumn(
+        'ALTER TABLE recurring_rules ADD COLUMN end_date_ms INTEGER');
+    await addColumn(
+        'ALTER TABLE recurring_rules ADD COLUMN total_count INTEGER');
+    await addColumn(
+        'ALTER TABLE recurring_rules ADD COLUMN generated_count INTEGER NOT NULL DEFAULT 0');
+    await addColumn(
+        'ALTER TABLE transactions ADD COLUMN recurring_rule_id INTEGER');
+    try {
+      await db.execute('''
+        UPDATE recurring_rules
+        SET start_date_ms = next_due_ms
+        WHERE start_date_ms = 0
+      ''');
+    } catch (_) {}
+  }
+
+  static Future<void> _ensureRecurringOccurrences(DatabaseExecutor db) async {
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS recurring_occurrences (
+        rule_id        INTEGER NOT NULL,
+        due_ms         INTEGER NOT NULL,
+        transaction_id INTEGER,
+        created_ms     INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY (rule_id, due_ms)
+      )
+    ''');
+    await db.execute('''
+      INSERT OR IGNORE INTO recurring_occurrences (
+        rule_id,
+        due_ms,
+        transaction_id,
+        created_ms
+      )
+      SELECT
+        recurring_rule_id,
+        date_ms,
+        MIN(id),
+        MIN(updated_ms)
+      FROM transactions
+      WHERE recurring_rule_id IS NOT NULL
+      GROUP BY recurring_rule_id, date_ms
+    ''');
+    await db.execute('''
+      CREATE INDEX IF NOT EXISTS idx_recurring_occurrences_transaction
+      ON recurring_occurrences(transaction_id)
+    ''');
+  }
+
+  static Future<void> _ensureAutoRecordOccurrences(
+    DatabaseExecutor db,
+  ) async {
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS auto_record_occurrences (
+        source_id      TEXT PRIMARY KEY,
+        transaction_id INTEGER,
+        created_ms     INTEGER NOT NULL DEFAULT 0
+      )
+    ''');
+    await db.execute('''
+      CREATE INDEX IF NOT EXISTS idx_auto_record_occurrences_transaction
+      ON auto_record_occurrences(transaction_id)
+    ''');
+  }
+
+  static Future<void> _ensureReportJobs(DatabaseExecutor db) async {
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS report_jobs (
+        id              INTEGER PRIMARY KEY AUTOINCREMENT,
+        uuid            TEXT NOT NULL UNIQUE,
+        book_id         INTEGER,
+        report_id       INTEGER,
+        question        TEXT NOT NULL DEFAULT '',
+        type            TEXT NOT NULL,
+        title           TEXT NOT NULL,
+        period_start_ms INTEGER NOT NULL,
+        period_end_ms   INTEGER NOT NULL,
+        status          TEXT NOT NULL DEFAULT 'queued',
+        stage           TEXT NOT NULL DEFAULT 'collect',
+        error           TEXT NOT NULL DEFAULT '',
+        created_ms      INTEGER NOT NULL DEFAULT 0,
+        updated_ms      INTEGER NOT NULL DEFAULT 0
+      )
+    ''');
+    await db.execute('''
+      CREATE INDEX IF NOT EXISTS idx_report_jobs_status_updated
+      ON report_jobs(status, updated_ms DESC)
+    ''');
+  }
+
+  static Future<void> _ensureAssetTables(DatabaseExecutor db) async {
+    await db.execute(_createPhysicalAssetsSql);
+    await _ensurePhysicalAssetAdvancedColumns(db);
+    await db.execute(_createAssetEventsSql);
+    await _ensureAssetUsageEventsV39Schema(db);
+    try {
+      await db.execute(
+          "ALTER TABLE asset_events ADD COLUMN asset_type TEXT NOT NULL DEFAULT 'physical'");
+    } catch (_) {}
+    await db.execute(_createAssetValuationsSql);
+    await db.execute(_createAssetTransactionLinksSql);
+    await _ensureAssetAllocationV35(db);
+    await db.execute(_createReceivableAssetsSql);
+    await _ensureAssetStateColumns(db);
+    await db.execute(_createReceivableRecoveriesSql);
+    await db.execute(_createNetWorthSnapshotsSql);
+    await db.execute('''
+      CREATE INDEX IF NOT EXISTS idx_physical_assets_book_status
+      ON physical_assets(book_id, status, is_deleted)
+    ''');
+    await db.execute('''
+      CREATE INDEX IF NOT EXISTS idx_asset_events_asset
+      ON asset_events(asset_type, asset_id, occurred_ms DESC)
+    ''');
+    await db.execute('''
+      CREATE INDEX IF NOT EXISTS idx_asset_usage_events_asset
+      ON asset_usage_events(asset_id, occurred_ms DESC, id DESC)
+    ''');
+    await _ensureAssetUsageReversalIndex(db);
+    await db.execute('''
+      CREATE INDEX IF NOT EXISTS idx_asset_valuations_asset
+      ON asset_valuations(asset_id, valued_at_ms DESC)
+    ''');
+    await db.execute('''
+      CREATE INDEX IF NOT EXISTS idx_asset_links_asset
+      ON asset_transaction_links(asset_id)
+    ''');
+    await db.execute('''
+      CREATE INDEX IF NOT EXISTS idx_receivable_assets_book_status
+      ON receivable_assets(book_id, status, is_deleted)
+    ''');
+    await db.execute('''
+      CREATE INDEX IF NOT EXISTS idx_receivable_recoveries_asset
+      ON receivable_recoveries(receivable_asset_id, recovered_ms DESC)
+    ''');
+  }
+
+  static Future<void> _ensureAssetStateColumns(DatabaseExecutor db) async {
+    for (final sql in [
+      "ALTER TABLE physical_assets ADD COLUMN economic_status TEXT NOT NULL DEFAULT 'owned'",
+      "ALTER TABLE physical_assets ADD COLUMN usage_status TEXT NOT NULL DEFAULT 'active'",
+      "ALTER TABLE physical_assets ADD COLUMN visibility_status TEXT NOT NULL DEFAULT 'active'",
+      "ALTER TABLE physical_assets ADD COLUMN inclusion_quality TEXT NOT NULL DEFAULT 'confirmed'",
+      'ALTER TABLE physical_assets ADD COLUMN ended_ms INTEGER',
+      'ALTER TABLE physical_assets ADD COLUMN archived_ms INTEGER',
+      "ALTER TABLE receivable_assets ADD COLUMN economic_status TEXT NOT NULL DEFAULT 'active'",
+      "ALTER TABLE receivable_assets ADD COLUMN visibility_status TEXT NOT NULL DEFAULT 'active'",
+      "ALTER TABLE receivable_assets ADD COLUMN inclusion_quality TEXT NOT NULL DEFAULT 'confirmed'",
+      'ALTER TABLE receivable_assets ADD COLUMN ended_ms INTEGER',
+      'ALTER TABLE receivable_assets ADD COLUMN archived_ms INTEGER',
+    ]) {
+      try {
+        await db.execute(sql);
+      } catch (_) {}
+    }
+    await db.execute('''
+      CREATE INDEX IF NOT EXISTS idx_physical_assets_global_visibility
+      ON physical_assets(is_deleted, visibility_status, economic_status, updated_ms DESC)
+    ''');
+    await db.execute('''
+      CREATE INDEX IF NOT EXISTS idx_physical_assets_book_visibility
+      ON physical_assets(book_id, is_deleted, visibility_status, updated_ms DESC)
+    ''');
+    await db.execute('''
+      CREATE INDEX IF NOT EXISTS idx_receivable_assets_global_visibility
+      ON receivable_assets(is_deleted, visibility_status, economic_status, updated_ms DESC)
+    ''');
+    await db.execute('''
+      CREATE INDEX IF NOT EXISTS idx_receivable_assets_book_visibility
+      ON receivable_assets(book_id, is_deleted, visibility_status, updated_ms DESC)
+    ''');
+  }
+
+  static Decimal _assetAmount(Map<String, Object?> row, String column) =>
+      Decimal.tryParse(row[column] as String? ?? '') ?? Decimal.zero;
+
+  static ({Decimal physical, Decimal receivable}) _legacyAssetTotals(
+    List<Map<String, Object?>> physicalRows,
+    List<Map<String, Object?>> receivableRows,
+  ) {
+    var physical = Decimal.zero;
+    for (final row in physicalRows) {
+      final status = row['status'] as String? ?? 'active';
+      if ((row['is_deleted'] as int? ?? 0) == 0 &&
+          (row['include_in_net_worth'] as int? ?? 1) == 1 &&
+          (row['currency_code'] as String? ?? 'CNY') == 'CNY' &&
+          (status == 'active' || status == 'idle')) {
+        physical += _assetAmount(row, 'current_value');
+      }
+    }
+    var receivable = Decimal.zero;
+    for (final row in receivableRows) {
+      final status = row['status'] as String? ?? 'active';
+      final remaining = _assetAmount(row, 'remaining_amount');
+      if ((row['is_deleted'] as int? ?? 0) == 0 &&
+          (row['include_in_net_worth'] as int? ?? 1) == 1 &&
+          (row['currency_code'] as String? ?? 'CNY') == 'CNY' &&
+          (status == 'active' || status == 'partial_recovered') &&
+          remaining > Decimal.zero) {
+        receivable += remaining;
+      }
+    }
+    return (physical: physical, receivable: receivable);
+  }
+
+  static ({Decimal physical, Decimal receivable}) _v33AssetTotals(
+    List<Map<String, Object?>> physicalRows,
+    List<Map<String, Object?>> receivableRows,
+  ) {
+    var physical = Decimal.zero;
+    for (final row in physicalRows) {
+      if ((row['is_deleted'] as int? ?? 0) == 0 &&
+          (row['include_in_net_worth'] as int? ?? 1) == 1 &&
+          (row['currency_code'] as String? ?? 'CNY') == 'CNY' &&
+          row['economic_status'] == 'owned') {
+        physical += _assetAmount(row, 'current_value');
+      }
+    }
+    var receivable = Decimal.zero;
+    for (final row in receivableRows) {
+      final remaining = _assetAmount(row, 'remaining_amount');
+      final economicStatus = row['economic_status'];
+      if ((row['is_deleted'] as int? ?? 0) == 0 &&
+          (row['include_in_net_worth'] as int? ?? 1) == 1 &&
+          (row['currency_code'] as String? ?? 'CNY') == 'CNY' &&
+          (economicStatus == 'active' ||
+              economicStatus == 'partial_recovered') &&
+          remaining > Decimal.zero) {
+        receivable += remaining;
+      }
+    }
+    return (physical: physical, receivable: receivable);
+  }
+
+  static Future<void> _migrateAssetStateV33(DatabaseExecutor db) async {
+    final oldPhysical = await db.query('physical_assets');
+    final oldReceivable = await db.query('receivable_assets');
+    final before = _legacyAssetTotals(oldPhysical, oldReceivable);
+
+    await _ensureAssetStateColumns(db);
+    await db.execute('''
+      UPDATE physical_assets
+      SET economic_status = CASE status
+            WHEN 'sold' THEN 'sold'
+            WHEN 'disposed' THEN 'scrapped'
+            WHEN 'lost' THEN 'lost'
+            WHEN 'gifted' THEN 'gifted'
+            ELSE 'owned'
+          END,
+          usage_status = CASE status
+            WHEN 'active' THEN 'active'
+            WHEN 'idle' THEN 'idle'
+            ELSE 'unknown'
+          END,
+          visibility_status = CASE status
+            WHEN 'archived' THEN 'archived'
+            ELSE 'active'
+          END,
+          inclusion_quality = CASE
+            WHEN status = 'archived' THEN 'needs_review'
+            WHEN status IN ('active', 'idle', 'sold', 'disposed', 'lost', 'gifted')
+              THEN 'confirmed'
+            ELSE 'needs_review'
+          END,
+          ended_ms = CASE status
+            WHEN 'sold' THEN (
+              SELECT MAX(e.occurred_ms) FROM asset_events e
+              WHERE e.asset_type = 'physical'
+                AND e.asset_id = physical_assets.id
+                AND e.event_type = 'asset_sold'
+            )
+            WHEN 'disposed' THEN (
+              SELECT MAX(e.occurred_ms) FROM asset_events e
+              WHERE e.asset_type = 'physical'
+                AND e.asset_id = physical_assets.id
+                AND e.event_type = 'asset_disposed'
+            )
+            WHEN 'lost' THEN (
+              SELECT MAX(e.occurred_ms) FROM asset_events e
+              WHERE e.asset_type = 'physical'
+                AND e.asset_id = physical_assets.id
+                AND e.event_type = 'asset_lost'
+            )
+            WHEN 'gifted' THEN (
+              SELECT MAX(e.occurred_ms) FROM asset_events e
+              WHERE e.asset_type = 'physical'
+                AND e.asset_id = physical_assets.id
+                AND e.event_type = 'asset_gifted'
+            )
+            ELSE NULL
+          END,
+          archived_ms = CASE status
+            WHEN 'archived' THEN (
+              SELECT MAX(e.occurred_ms) FROM asset_events e
+              WHERE e.asset_type = 'physical'
+                AND e.asset_id = physical_assets.id
+                AND e.event_type = 'asset_archived'
+            )
+            ELSE NULL
+          END
+    ''');
+    await db.execute('''
+      UPDATE receivable_assets
+      SET economic_status = CASE status
+            WHEN 'partial_recovered' THEN 'partial_recovered'
+            WHEN 'recovered' THEN 'recovered'
+            WHEN 'lost' THEN 'lost'
+            WHEN 'archived' THEN 'unknown'
+            ELSE 'active'
+          END,
+          visibility_status = CASE status
+            WHEN 'archived' THEN 'archived'
+            ELSE 'active'
+          END,
+          inclusion_quality = CASE
+            WHEN status = 'archived' THEN 'needs_review'
+            WHEN status IN ('active', 'partial_recovered', 'recovered', 'lost')
+              THEN 'confirmed'
+            ELSE 'needs_review'
+          END,
+          ended_ms = CASE status
+            WHEN 'recovered' THEN (
+              SELECT MAX(r.recovered_ms) FROM receivable_recoveries r
+              WHERE r.receivable_asset_id = receivable_assets.id
+            )
+            WHEN 'lost' THEN (
+              SELECT MAX(e.occurred_ms) FROM asset_events e
+              WHERE e.asset_type = 'receivable'
+                AND e.asset_id = receivable_assets.id
+                AND e.event_type = 'receivable_lost'
+            )
+            ELSE NULL
+          END,
+          archived_ms = CASE status
+            WHEN 'archived' THEN (
+              SELECT MAX(e.occurred_ms) FROM asset_events e
+              WHERE e.asset_type = 'receivable'
+                AND e.asset_id = receivable_assets.id
+                AND e.event_type = 'receivable_archived'
+            )
+            ELSE NULL
+          END
+    ''');
+
+    final archivedRows = await db.query(
+      'receivable_assets',
+      where: "status = 'archived'",
+    );
+    for (final row in archivedRows) {
+      final id = row['id'] as int;
+      final original = _assetAmount(row, 'original_amount');
+      final remaining = _assetAmount(row, 'remaining_amount');
+      final recoveryRows = await db.query(
+        'receivable_recoveries',
+        where: 'receivable_asset_id = ?',
+        whereArgs: [id],
+      );
+      var recovered = Decimal.zero;
+      var recoveriesValid = true;
+      var latestRecoveryMs = 0;
+      for (final recovery in recoveryRows) {
+        final amount = _assetAmount(recovery, 'amount');
+        if (amount <= Decimal.zero) recoveriesValid = false;
+        recovered += amount;
+        final recoveredMs = recovery['recovered_ms'] as int? ?? 0;
+        if (recoveredMs > latestRecoveryMs) latestRecoveryMs = recoveredMs;
+      }
+      final lostEvents = await db.query(
+        'asset_events',
+        columns: ['occurred_ms'],
+        where:
+            "asset_type = 'receivable' AND asset_id = ? AND event_type = 'receivable_lost'",
+        whereArgs: [id],
+        orderBy: 'occurred_ms DESC, id DESC',
+      );
+      final lostMs =
+          lostEvents.isEmpty ? null : lostEvents.first['occurred_ms'] as int?;
+      final recoveryAfterLoss = lostMs != null &&
+          recoveryRows.any((recovery) {
+            final recoveredMs = recovery['recovered_ms'] as int? ?? 0;
+            return recoveredMs > lostMs;
+          });
+      final amountsValid = original >= Decimal.zero &&
+          remaining >= Decimal.zero &&
+          remaining <= original &&
+          recoveriesValid &&
+          recovered <= original;
+      var economicStatus = ReceivableEconomicStatus.unknown;
+      int? endedMs;
+      if (amountsValid && lostMs != null && !recoveryAfterLoss) {
+        if (remaining == Decimal.zero) {
+          economicStatus = ReceivableEconomicStatus.lost;
+          endedMs = lostMs;
+        }
+      } else if (amountsValid && lostMs == null) {
+        if (original > Decimal.zero &&
+            remaining == Decimal.zero &&
+            recovered == original) {
+          economicStatus = ReceivableEconomicStatus.recovered;
+          endedMs = latestRecoveryMs == 0 ? null : latestRecoveryMs;
+        } else if (remaining > Decimal.zero &&
+            remaining < original &&
+            recovered == original - remaining) {
+          economicStatus = ReceivableEconomicStatus.partialRecovered;
+        } else if (remaining == original && recovered == Decimal.zero) {
+          economicStatus = ReceivableEconomicStatus.active;
+        }
+      }
+      await db.update(
+        'receivable_assets',
+        {
+          'economic_status': economicStatus.storageKey,
+          'visibility_status': AssetVisibilityStatus.archived.storageKey,
+          'inclusion_quality': AssetInclusionQuality.needsReview.storageKey,
+          'ended_ms': endedMs,
+        },
+        where: 'id = ?',
+        whereArgs: [id],
+      );
+    }
+
+    final migratedPhysical = await db.query('physical_assets');
+    final migratedReceivable = await db.query('receivable_assets');
+    final after = _v33AssetTotals(migratedPhysical, migratedReceivable);
+    if (before.physical != after.physical ||
+        before.receivable != after.receivable) {
+      throw StateError(
+        'v33 asset migration changed net worth: '
+        'physical ${before.physical}->${after.physical}, '
+        'receivable ${before.receivable}->${after.receivable}',
+      );
+    }
+  }
+
+  static Future<void> _ensurePhysicalAssetAdvancedColumns(
+    DatabaseExecutor db,
+  ) async {
+    for (final sql in [
+      "ALTER TABLE physical_assets ADD COLUMN photo_path TEXT NOT NULL DEFAULT ''",
+      "ALTER TABLE physical_assets ADD COLUMN invoice_path TEXT NOT NULL DEFAULT ''",
+      "ALTER TABLE physical_assets ADD COLUMN depreciation_method TEXT NOT NULL DEFAULT ''",
+      "ALTER TABLE physical_assets ADD COLUMN depreciation_base TEXT NOT NULL DEFAULT '0'",
+      "ALTER TABLE physical_assets ADD COLUMN salvage_value TEXT NOT NULL DEFAULT '0'",
+      'ALTER TABLE physical_assets ADD COLUMN useful_life_months INTEGER NOT NULL DEFAULT 0',
+      'ALTER TABLE physical_assets ADD COLUMN depreciation_start_ms INTEGER',
+      'ALTER TABLE physical_assets ADD COLUMN depreciation_paused INTEGER NOT NULL DEFAULT 0',
+    ]) {
+      try {
+        await db.execute(sql);
+      } catch (_) {}
+    }
+  }
+
+  static Future<void> _ensureLiabilityTables(DatabaseExecutor db) async {
+    await db.execute(_createLiabilityProfilesSql);
+    await db.execute('''
+      CREATE INDEX IF NOT EXISTS idx_liability_profiles_status
+      ON liability_profiles(status, repayment_day)
+    ''');
+  }
 
   Future<void> _applyCategoryTree(DatabaseExecutor db) async {
     for (final s in CategorySeed.all) {
@@ -1051,11 +6099,24 @@ class AppRepository extends ChangeNotifier {
 
   Future<void> _seedIfNeeded() async {
     final db = _db!;
-    final accountCount =
-        Sqflite.firstIntValue(await db.rawQuery('SELECT COUNT(*) FROM accounts')) ?? 0;
+    final accountCount = Sqflite.firstIntValue(await db
+            .rawQuery('SELECT COUNT(*) FROM accounts WHERE is_deleted = 0')) ??
+        0;
     if (accountCount > 0) return;
 
-    await db.insert('accounts', {'name': '现金', 'currency_code': 'CNY'});
+    await db.insert('accounts', {
+      'uuid': _newUuid(),
+      'name': '现金',
+      'currency_code': 'CNY',
+      'type': AccountType.cash.storageKey,
+      'opening_balance': '0',
+      'include_in_net_worth': 1,
+      'created_ms': DateTime.now().millisecondsSinceEpoch,
+      'updated_ms': DateTime.now().millisecondsSinceEpoch,
+      'opening_balance_effective_ms': DateTime.now().millisecondsSinceEpoch,
+      'opening_balance_quality': AccountOpeningBalanceQuality.exact.storageKey,
+      'status': AccountStatus.active.storageKey,
+    });
     await _applyCategoryTree(db);
   }
 
@@ -1064,16 +6125,28 @@ class AppRepository extends ChangeNotifier {
     await _loadCurrentBook();
     await Future.wait([
       _loadAccounts(),
+      _loadAccountBalanceCheckpoints(),
+      _loadVerifiedNetWorthCheckpoints(),
       _loadCategories(),
       _loadTransactions(),
+      _loadPhysicalAssetData(refreshSnapshot: false),
+      _loadLiabilityProfiles(),
       _loadBudgetPeriods(),
+      _loadBudgetV2(),
       _loadApiKey(),
       _loadRecordMode(),
+      _loadAiPrivacyAccepted(),
+      _loadWidgetPrivacyMode(),
+      _loadMoneyDisplaySettings(),
+      _loadCategoryIconStyle(),
+      _loadTransactionDisplayPreferences(),
+      _loadProfileSettings(),
       _loadChatRetention(),
       _loadCategoryMemory(),
       _loadRecurringRules(),
       _loadSavingsGoals(),
       _loadTags(),
+      _loadReports(),
       _loadDrawerOrder(),
       _loadStatCardOrder(),
       _loadStatCustomRange(),
@@ -1096,6 +6169,16 @@ class AppRepository extends ChangeNotifier {
       ..addAll(rows.map(TagEntity.fromMap));
   }
 
+  Future<void> _loadReports() async {
+    final rows = await _db!.query(
+      'reports',
+      orderBy: 'pinned_ms DESC, created_ms DESC, id DESC',
+    );
+    _reports
+      ..clear()
+      ..addAll(rows.map(ReportEntity.fromMap));
+  }
+
   Future<void> _loadBooks() async {
     final rows = await _db!.query('books', orderBy: 'sort_order ASC, id ASC');
     final loaded = rows.map(BookEntity.fromMap).toList();
@@ -1104,8 +6187,7 @@ class AppRepository extends ChangeNotifier {
         ? 0
         : loaded.map((b) => b.id).reduce((a, b) => a < b ? a : b);
     // 排序：总账本 → 加星 → 其它（同组保持原顺序，稳定排序）。
-    int rank(BookEntity b) =>
-        b.id == _defaultBookId ? 0 : (b.starred ? 1 : 2);
+    int rank(BookEntity b) => b.id == _defaultBookId ? 0 : (b.starred ? 1 : 2);
     final indexed = [for (var i = 0; i < loaded.length; i++) (i, loaded[i])];
     indexed.sort((a, b) {
       final r = rank(a.$2).compareTo(rank(b.$2));
@@ -1117,8 +6199,9 @@ class AppRepository extends ChangeNotifier {
   }
 
   Future<void> _ensureDefaultBook() async {
-    final count =
-        Sqflite.firstIntValue(await _db!.rawQuery('SELECT COUNT(*) FROM books')) ?? 0;
+    final count = Sqflite.firstIntValue(
+            await _db!.rawQuery('SELECT COUNT(*) FROM books')) ??
+        0;
     if (count == 0) {
       await _db!.insert('books', {
         ..._syncStampNew(),
@@ -1140,16 +6223,156 @@ class AppRepository extends ChangeNotifier {
     final saved = rows.isEmpty
         ? null
         : int.tryParse((rows.first['value'] as String?) ?? '');
-    final valid = saved != null && _books.any((b) => b.id == saved);
-    _currentBookId =
-        valid ? saved! : (_books.isNotEmpty ? _books.first.id : 1);
+    _currentBookId = saved != null && _books.any((b) => b.id == saved)
+        ? saved
+        : (_books.isNotEmpty ? _books.first.id : 1);
   }
 
   Future<void> _loadAccounts() async {
-    final rows = await _db!.query('accounts');
+    final rows = await _db!.query(
+      'accounts',
+      where: "is_deleted = 0 AND status <> 'legacy_hidden'",
+      orderBy: 'sort_order ASC, id ASC',
+    );
     _accounts
       ..clear()
       ..addAll(rows.map(AccountEntity.fromMap));
+  }
+
+  Future<void> _loadAccountBalanceCheckpoints() async {
+    final rows = await _db!.query(
+      'account_balance_checkpoints',
+      orderBy: 'effective_ms ASC, sequence ASC, id ASC',
+    );
+    final coverageRows = await _db!.query(
+      'account_checkpoint_covered_unknown_events',
+    );
+    _accountBalanceCheckpoints
+      ..clear()
+      ..addAll(rows.map(AccountBalanceCheckpointEntity.fromMap));
+    _checkpointCoveredUnknownEventIds.clear();
+    for (final row in coverageRows) {
+      final checkpointId = row['checkpoint_id'] as int;
+      final eventId = row['account_event_uuid'] as String? ?? '';
+      if (eventId.isEmpty) continue;
+      _checkpointCoveredUnknownEventIds
+          .putIfAbsent(checkpointId, () => <String>{})
+          .add(eventId);
+    }
+  }
+
+  NetWorthCurrencyCoverage _decodeCurrencyCoverage(String raw) {
+    try {
+      final decoded = jsonDecode(raw) as Map<String, dynamic>;
+      return NetWorthCurrencyCoverage(
+        baseCurrency: decoded['base_currency'] as String? ?? 'CNY',
+        coveredCurrencies: (decoded['covered'] as List<dynamic>? ?? const [])
+            .map((value) => value.toString()),
+        uncoveredCurrencies:
+            (decoded['uncovered'] as List<dynamic>? ?? const [])
+                .map((value) => value.toString()),
+      );
+    } catch (_) {
+      return NetWorthCurrencyCoverage.single('CNY');
+    }
+  }
+
+  Future<void> _loadVerifiedNetWorthCheckpoints() async {
+    final headers = await _db!.query(
+      'net_worth_verified_checkpoints',
+      orderBy: 'as_of_ms ASC, id ASC',
+    );
+    final itemRows = await _db!.query(
+      'net_worth_verified_checkpoint_items',
+      orderBy: 'checkpoint_id ASC, object_type ASC, object_uuid ASC',
+    );
+    final itemsByCheckpoint = <int, List<NetWorthVerifiedCheckpointItem>>{};
+    for (final row in itemRows) {
+      final checkpointId = row['checkpoint_id'] as int;
+      itemsByCheckpoint
+          .putIfAbsent(checkpointId, () => [])
+          .add(NetWorthVerifiedCheckpointItem(
+            objectType: row['object_type'] as String? ?? 'unknown',
+            objectUuid: row['object_uuid'] as String? ?? 'unknown',
+            confirmedAmountMinor: decimalToBudgetCents(
+              Decimal.tryParse(row['confirmed_amount'] as String? ?? '') ??
+                  Decimal.zero,
+            ),
+            currencyCode: row['currency_code'] as String? ?? 'CNY',
+            valueEffectiveAt: DateTime.fromMillisecondsSinceEpoch(
+              row['value_effective_ms'] as int? ?? 0,
+              isUtc: true,
+            ),
+            valueSource: row['value_source'] as String? ?? 'unknown',
+            quality: row['quality'] as String? ?? 'partial',
+          ));
+    }
+    _verifiedNetWorthCheckpoints.clear();
+    for (final row in headers) {
+      final reasons = <NetWorthVerifiedCheckpointReason>[];
+      try {
+        final decoded =
+            jsonDecode(row['reasons_json'] as String? ?? '') as List;
+        for (final value in decoded.whereType<Map>()) {
+          reasons.add(NetWorthVerifiedCheckpointReason(
+            code: value['code']?.toString() ?? 'partial',
+            message: value['message']?.toString() ?? '核对范围不完整',
+            details: {
+              for (final entry
+                  in (value['details'] as Map? ?? const {}).entries)
+                entry.key.toString(): entry.value,
+            },
+          ));
+        }
+      } catch (_) {}
+      final totalAssets = decimalToBudgetCents(
+        Decimal.tryParse(row['total_assets'] as String? ?? '') ?? Decimal.zero,
+      );
+      final totalLiabilities = decimalToBudgetCents(
+        Decimal.tryParse(row['total_liabilities'] as String? ?? '') ??
+            Decimal.zero,
+      );
+      final netWorth = decimalToBudgetCents(
+        Decimal.tryParse(row['net_worth'] as String? ?? '') ?? Decimal.zero,
+      );
+      _verifiedNetWorthCheckpoints.add(NetWorthVerifiedCheckpoint(
+        header: NetWorthVerifiedCheckpointHeader(
+          id: row['id'] as int,
+          uuid: row['uuid'] as String? ?? 'legacy-${row['id']}',
+          asOf: DateTime.fromMillisecondsSinceEpoch(
+            row['as_of_ms'] as int,
+            isUtc: true,
+          ),
+          knowledgeCutoff: DateTime.fromMillisecondsSinceEpoch(
+            row['knowledge_cutoff_ms'] as int,
+            isUtc: true,
+          ),
+          scopeVersion: row['scope_version'] as int? ?? 1,
+          calculationVersion: row['calculation_version'] as int? ?? 1,
+          currencyCoverage: _decodeCurrencyCoverage(
+            row['currency_coverage_json'] as String? ?? '',
+          ),
+          totals: NetWorthVerifiedCheckpointTotals.checked(
+            totalAssetsMinor: totalAssets,
+            totalLiabilitiesMinor: totalLiabilities,
+            netWorthMinor: netWorth,
+          ),
+          completeness: NetWorthVerifiedCheckpointCompletenessX.fromStorage(
+            row['completeness'] as String?,
+          ),
+          incompletenessReasons: reasons,
+          status: NetWorthVerifiedCheckpointStatusX.fromStorage(
+            row['status'] as String?,
+          ),
+          supersedesId: row['supersedes_id'] as int?,
+          createdAt: DateTime.fromMillisecondsSinceEpoch(
+            row['created_ms'] as int,
+            isUtc: true,
+          ),
+        ),
+        items: itemsByCheckpoint[row['id'] as int] ?? const [],
+      ));
+    }
   }
 
   Future<void> _loadCategories() async {
@@ -1157,25 +6380,352 @@ class AppRepository extends ChangeNotifier {
     _categories
       ..clear()
       ..addAll(rows.map(CategoryEntity.fromMap));
+    _allRecordsCache = null;
   }
 
   Future<void> _loadBudgetPeriods() async {
-    final rows = await _db!
-        .query('budget_periods', orderBy: 'start_ms ASC, id ASC');
+    final rows =
+        await _db!.query('budget_periods', orderBy: 'start_ms ASC, id ASC');
     _budgetPeriods
       ..clear()
       ..addAll(rows.map(BudgetPeriod.fromMap));
   }
 
+  List<BudgetFixedTemplateV2> _decodeBudgetFixedTemplates(String raw) {
+    try {
+      final decoded = jsonDecode(raw) as List;
+      return [
+        for (final value in decoded.whereType<Map>())
+          BudgetFixedTemplateV2(
+            id: value['id']?.toString() ?? '',
+            name: value['name']?.toString() ?? '',
+            plannedCents: int.tryParse(value['planned_cents'].toString()) ?? 0,
+            dueValue: int.tryParse(value['due_value'].toString()) ?? 1,
+          ),
+      ].where((item) => item.id.isNotEmpty && item.plannedCents >= 0).toList();
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  Map<String, int> _decodeBudgetCategoryCents(String? raw) {
+    if (raw == null) return const {};
+    try {
+      final decoded = jsonDecode(raw) as Map<String, dynamic>;
+      return {
+        for (final entry in decoded.entries)
+          if ((int.tryParse(entry.value.toString()) ?? -1) >= 0)
+            entry.key: int.parse(entry.value.toString()),
+      };
+    } catch (_) {
+      return const {};
+    }
+  }
+
+  Future<void> _loadBudgetV2() async {
+    final planRows = await _db!.query('budget_plans', orderBy: 'id ASC');
+    final revisionRows =
+        await _db!.query('budget_plan_revisions', orderBy: 'id ASC');
+    final overrideRows =
+        await _db!.query('budget_cycle_overrides', orderBy: 'id ASC');
+    final occurrenceRows = await _db!.query(
+      'budget_fixed_commitment_occurrences',
+      orderBy: 'cycle_start_day ASC, due_day ASC, id ASC',
+    );
+    _budgetPlansV2
+      ..clear()
+      ..addAll(planRows.map((row) => BudgetPlanV2(
+            id: row['id'] as int,
+            uuid: row['uuid'] as String,
+            bookId: row['book_id'] as int,
+            currencyCode: row['currency_code'] as String? ?? 'CNY',
+            timezone: row['timezone'] as String? ?? 'device_local',
+            name: row['name'] as String? ?? '',
+            role: row['role'] as String? ?? 'primary',
+            cadence:
+                BudgetPlanCadenceV2X.fromStorage(row['cadence'] as String?),
+            anchorStart: budgetCivilDayFromKey(row['anchor_start_day'] as int),
+            monthStartDay: row['month_start_day'] as int?,
+            weekStart: row['week_start'] as int?,
+            endInclusive: row['end_day'] == null
+                ? null
+                : budgetCivilDayFromKey(row['end_day'] as int),
+            expenseScope: BudgetExpenseScopeV2.fromJsonString(
+              row['expense_scope_json'] as String?,
+            ),
+            status: BudgetPlanStatusV2X.fromStorage(row['status'] as String?),
+            createdMs: row['created_ms'] as int? ?? 0,
+            updatedMs: row['updated_ms'] as int? ?? 0,
+          )));
+    _budgetPlanRevisionsV2
+      ..clear()
+      ..addAll(revisionRows.map((row) => BudgetPlanRevisionV2(
+            id: row['id'] as int,
+            uuid: row['uuid'] as String,
+            planId: row['plan_id'] as int,
+            effectiveCycleStart: budgetCivilDayFromKey(
+              row['effective_cycle_start_day'] as int,
+            ),
+            effectiveToCycleStart: row['effective_to_cycle_start_day'] == null
+                ? null
+                : budgetCivilDayFromKey(
+                    row['effective_to_cycle_start_day'] as int,
+                  ),
+            amountCents: row['amount_cents'] as int,
+            categoryBudgetsCents: _decodeBudgetCategoryCents(
+              row['category_budgets_json'] as String?,
+            ),
+            monthlyIncomeCents: row['monthly_income_cents'] as int?,
+            fixedTemplates: _decodeBudgetFixedTemplates(
+              row['fixed_templates_json'] as String? ?? '[]',
+            ),
+            legacySourcePeriodId: row['legacy_source_period_id'] as int?,
+            createdMs: row['created_ms'] as int? ?? 0,
+            updatedMs: row['updated_ms'] as int? ?? 0,
+          )));
+    _budgetCycleOverridesV2
+      ..clear()
+      ..addAll(overrideRows.map((row) => BudgetCycleOverrideV2(
+            id: row['id'] as int,
+            uuid: row['uuid'] as String,
+            planId: row['plan_id'] as int,
+            cycleStart: budgetCivilDayFromKey(row['cycle_start_day'] as int),
+            cycleEndInclusive:
+                budgetCivilDayFromKey(row['cycle_end_day'] as int),
+            targetAmountCents: row['target_amount_cents'] as int,
+            categoryBudgetsCents: row['category_budgets_json'] == null
+                ? null
+                : _decodeBudgetCategoryCents(
+                    row['category_budgets_json'] as String?,
+                  ),
+            inputIntent: BudgetOverrideIntent.fromStorage(
+              row['input_intent'] as String?,
+            ),
+            inputDeltaCents: row['input_delta_cents'] as int?,
+            createdMs: row['created_ms'] as int? ?? 0,
+            updatedMs: row['updated_ms'] as int? ?? 0,
+          )));
+    final plansById = {for (final plan in _budgetPlansV2) plan.id: plan};
+    _budgetFixedOccurrencesV2.clear();
+    for (final row in occurrenceRows) {
+      final plan = plansById[row['plan_id'] as int];
+      if (plan == null) continue;
+      FixedCommitmentResolutionStatus status;
+      try {
+        status = FixedCommitmentResolutionStatus.fromStorage(
+          row['resolution_status'] as String? ?? 'planned',
+        );
+      } catch (_) {
+        status = FixedCommitmentResolutionStatus.requiresReview;
+      }
+      FixedCommitmentReviewReason? reviewReason;
+      final reviewRaw = row['review_reason'] as String? ?? '';
+      if (reviewRaw.isNotEmpty) {
+        try {
+          reviewReason = FixedCommitmentReviewReason.fromStorage(reviewRaw);
+        } catch (_) {
+          reviewReason = FixedCommitmentReviewReason.invalidScope;
+        }
+      }
+      _budgetFixedOccurrencesV2.add(BudgetFixedOccurrenceEntity(
+        id: row['id'] as int,
+        uuid: row['uuid'] as String,
+        revisionId: row['revision_id'] as int,
+        occurrence: FixedCommitmentOccurrence(
+          id: row['id'] as int,
+          planId: plan.id,
+          bookId: plan.bookId,
+          currencyCode: plan.currencyCode,
+          templateId: row['template_id'] as String,
+          cycleStart: budgetCivilDayFromKey(row['cycle_start_day'] as int),
+          cycleEnd: budgetCivilDayFromKey(row['cycle_end_day'] as int),
+          dueDate: budgetCivilDayFromKey(row['due_day'] as int),
+          plannedCents: row['planned_cents'] as int,
+          resolutionStatus: status,
+          reviewReason: reviewReason,
+          matchedTransactionFamilyId:
+              row['matched_transaction_family_uuid'] as String?,
+          resolvedMs: row['resolved_ms'] as int?,
+        ),
+        resolvedMs: row['resolved_ms'] as int?,
+        createdMs: row['created_ms'] as int? ?? 0,
+        updatedMs: row['updated_ms'] as int? ?? 0,
+      ));
+    }
+  }
+
+  Future<void> _materializeBudgetV2Occurrences() async {
+    if (_budgetPlansV2.isEmpty) return;
+    final now = DateTime.now();
+    final nowMs = now.millisecondsSinceEpoch;
+    await _db!.transaction((txn) async {
+      for (final plan in _budgetPlansV2) {
+        if (!plan.isPrimary) continue;
+        final reference =
+            now.isBefore(plan.anchorStart) ? plan.anchorStart : now;
+        final current = plan.cycleFor(reference);
+        final cycles = [
+          current,
+          plan.cycleFor(current.endExclusive),
+        ];
+        for (final cycle in cycles) {
+          if (cycle.start.isBefore(plan.anchorStart) ||
+              (plan.endInclusive != null &&
+                  cycle.start.isAfter(plan.endInclusive!))) {
+            continue;
+          }
+          final revisions = _budgetPlanRevisionsV2
+              .where((revision) => revision.appliesTo(cycle))
+              .toList()
+            ..sort((left, right) =>
+                left.effectiveCycleStart.compareTo(right.effectiveCycleStart));
+          final revision = revisions.lastOrNull;
+          if (revision == null) continue;
+          await _insertBudgetOccurrencesForRevision(
+            txn,
+            plan: plan,
+            revisionId: revision.id,
+            cycle: cycle,
+            templates: revision.fixedTemplates,
+            nowMs: nowMs,
+          );
+        }
+      }
+    });
+    await _loadBudgetV2();
+  }
+
   Future<void> _loadApiKey() async {
+    const keys = [
+      'ai_provider_type',
+      'custom_ai_display_name',
+      'custom_ai_base_url',
+      'custom_ai_model',
+      'report_ai_model',
+      'deepseek_api_key',
+      'custom_ai_api_key',
+      'ai_record_provider_type',
+      'ai_chat_provider_type',
+      'ai_report_provider_type',
+      'ai_record_route_mode',
+      'ai_chat_route_mode',
+      'ai_report_route_mode',
+      'ai_record_endpoint_type',
+      'ai_chat_endpoint_type',
+      'ai_report_endpoint_type',
+      'ai_record_reasoning_effort',
+      'ai_chat_reasoning_effort',
+      'ai_report_reasoning_effort',
+      'ai_task_config_version',
+    ];
     final rows = await _db!.query(
       'app_settings',
-      where: 'key = ?',
-      whereArgs: ['deepseek_api_key'],
-      limit: 1,
+      where: 'key IN (${List.filled(keys.length, '?').join(', ')})',
+      whereArgs: keys,
     );
-    _deepSeekApiKey =
-        rows.isEmpty ? null : rows.first['value'] as String?;
+    final settings = {
+      for (final row in rows)
+        row['key'] as String: (row['value'] as String?) ?? '',
+    };
+    _aiProviderType = AiProviderTypeX.fromStorage(settings['ai_provider_type']);
+    _customAiDisplayName =
+        (settings['custom_ai_display_name'] ?? '').trim().isEmpty
+            ? '自定义'
+            : settings['custom_ai_display_name']!.trim();
+    _customAiBaseUrl = (settings['custom_ai_base_url'] ?? '').trim().isEmpty
+        ? AiProviderConfig.customDefaultBaseUrl
+        : settings['custom_ai_base_url']!.trim();
+    _customAiModel = (settings['custom_ai_model'] ?? '').trim().isEmpty
+        ? AiProviderConfig.customDefaultModel
+        : settings['custom_ai_model']!.trim();
+    _reportAiModel = (settings['report_ai_model'] ?? '').trim().isEmpty
+        ? AiProviderConfig.customReportDefaultModel
+        : settings['report_ai_model']!.trim();
+
+    _deepSeekApiKey = await _loadSecretWithLegacyFallback(
+      secureKey: 'deepseek_api_key',
+      legacySettingKey: 'deepseek_api_key',
+      configuredSettingKey: 'deepseek_api_key_configured',
+      legacyValue: settings['deepseek_api_key'],
+    );
+    _customAiApiKey = await _loadSecretWithLegacyFallback(
+      secureKey: 'custom_ai_api_key',
+      legacySettingKey: 'custom_ai_api_key',
+      configuredSettingKey: 'custom_ai_api_key_configured',
+      legacyValue: settings['custom_ai_api_key'],
+    );
+
+    final hasCustomKey = _customAiApiKey?.trim().isNotEmpty ?? false;
+    final reportFallback =
+        hasCustomKey ? AiProviderType.custom : _aiProviderType;
+    _recordAiProviderType = AiProviderTypeX.fromStorage(
+      settings['ai_record_provider_type'] ?? _aiProviderType.storageKey,
+    );
+    _chatAiProviderType = AiProviderTypeX.fromStorage(
+      settings['ai_chat_provider_type'] ?? _aiProviderType.storageKey,
+    );
+    _reportAiProviderType = AiProviderTypeX.fromStorage(
+      settings['ai_report_provider_type'] ?? reportFallback.storageKey,
+    );
+    _recordAiRouteMode = AiRouteModeX.fromStorage(
+      settings['ai_record_route_mode'],
+    );
+    _chatAiRouteMode = AiRouteModeX.fromStorage(
+      settings['ai_chat_route_mode'],
+    );
+    _reportAiRouteMode = AiRouteModeX.fromStorage(
+      settings['ai_report_route_mode'],
+    );
+    _recordAiEndpointType = AiEndpointTypeX.fromStorage(
+      settings['ai_record_endpoint_type'] ??
+          AiEndpointType.chatCompletions.storageKey,
+    );
+    _chatAiEndpointType = AiEndpointTypeX.fromStorage(
+      settings['ai_chat_endpoint_type'] ?? AiEndpointType.auto.storageKey,
+    );
+    _reportAiEndpointType = AiEndpointTypeX.fromStorage(
+      settings['ai_report_endpoint_type'] ??
+          AiEndpointType.responses.storageKey,
+    );
+    _recordAiReasoningEffort = AiReasoningEffortX.fromStorage(
+      settings['ai_record_reasoning_effort'],
+      fallback: AiReasoningEffort.none,
+    );
+    _chatAiReasoningEffort = AiReasoningEffortX.fromStorage(
+      settings['ai_chat_reasoning_effort'],
+      fallback: AiReasoningEffort.low,
+    );
+    _reportAiReasoningEffort = AiReasoningEffortX.fromStorage(
+      settings['ai_report_reasoning_effort'],
+      fallback: AiReasoningEffort.xhigh,
+    );
+  }
+
+  Future<String?> _loadSecretWithLegacyFallback({
+    required String secureKey,
+    required String legacySettingKey,
+    required String configuredSettingKey,
+    String? legacyValue,
+  }) async {
+    final secure = await SecureKeyStore.read(secureKey);
+    if (secure != null && secure.isNotEmpty) return secure;
+
+    final legacy = legacyValue?.trim();
+    if (legacy == null || legacy.isEmpty) return null;
+    final moved = await SecureKeyStore.write(secureKey, legacy);
+    if (moved) {
+      await _db!.delete(
+        'app_settings',
+        where: 'key = ?',
+        whereArgs: [legacySettingKey],
+      );
+      await _db!.insert(
+        'app_settings',
+        {'key': configuredSettingKey, 'value': '1'},
+        conflictAlgorithm: ConflictAlgorithm.replace,
+      );
+    }
+    return legacy;
   }
 
   Future<void> _loadRecordMode() async {
@@ -1188,6 +6738,256 @@ class AppRepository extends ChangeNotifier {
     _recordAiMode = rows.isNotEmpty && (rows.first['value'] as String?) == '1';
   }
 
+  Future<void> _loadAiPrivacyAccepted() async {
+    final rows = await _db!.query(
+      'app_settings',
+      where: 'key = ?',
+      whereArgs: ['ai_privacy_accepted'],
+      limit: 1,
+    );
+    _aiPrivacyAccepted =
+        rows.isNotEmpty && (rows.first['value'] as String?) == '1';
+  }
+
+  Future<void> setAiPrivacyAccepted(bool accepted) async {
+    _aiPrivacyAccepted = accepted;
+    await _db!.insert(
+      'app_settings',
+      {'key': 'ai_privacy_accepted', 'value': accepted ? '1' : '0'},
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+    notifyListeners();
+  }
+
+  Future<void> _loadWidgetPrivacyMode() async {
+    final rows = await _db!.query(
+      'app_settings',
+      where: 'key = ?',
+      whereArgs: ['widget_privacy_mode'],
+      limit: 1,
+    );
+    _widgetPrivacyMode =
+        rows.isNotEmpty && (rows.first['value'] as String?) == '1';
+  }
+
+  Future<void> setWidgetPrivacyMode(bool enabled) async {
+    if (_widgetPrivacyMode == enabled) return;
+    _widgetPrivacyMode = enabled;
+    await _db!.insert(
+      'app_settings',
+      {'key': 'widget_privacy_mode', 'value': enabled ? '1' : '0'},
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+    notifyListeners();
+  }
+
+  Future<void> _loadMoneyDisplaySettings() async {
+    final rows = await _db!.query(
+      'app_settings',
+      where: 'key IN (?, ?)',
+      whereArgs: ['money_decimal_places', 'money_integer_rounding_mode'],
+    );
+    final map = {
+      for (final row in rows)
+        row['key'] as String: (row['value'] as String?) ?? '',
+    };
+    _moneyDecimalPlaces =
+        (int.tryParse(map['money_decimal_places'] ?? '') ?? 2).clamp(0, 2);
+    _moneyIntegerRoundingMode =
+        _parseMoneyIntegerRoundingMode(map['money_integer_rounding_mode']);
+    MoneyFormat.configure(
+      decimalPlaces: _moneyDecimalPlaces,
+      integerRoundingMode: _moneyIntegerRoundingMode,
+    );
+  }
+
+  Future<void> setMoneyDecimalPlaces(int places) async {
+    final next = places.clamp(0, 2);
+    if (_moneyDecimalPlaces == next) return;
+    _moneyDecimalPlaces = next;
+    MoneyFormat.configure(
+      decimalPlaces: _moneyDecimalPlaces,
+      integerRoundingMode: _moneyIntegerRoundingMode,
+    );
+    await _db!.insert(
+      'app_settings',
+      {'key': 'money_decimal_places', 'value': '$next'},
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+    notifyListeners();
+  }
+
+  Future<void> setMoneyIntegerRoundingMode(
+    MoneyIntegerRoundingMode mode,
+  ) async {
+    if (_moneyIntegerRoundingMode == mode) return;
+    _moneyIntegerRoundingMode = mode;
+    MoneyFormat.configure(
+      decimalPlaces: _moneyDecimalPlaces,
+      integerRoundingMode: _moneyIntegerRoundingMode,
+    );
+    await _db!.insert(
+      'app_settings',
+      {
+        'key': 'money_integer_rounding_mode',
+        'value': _moneyIntegerRoundingMode.name,
+      },
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+    notifyListeners();
+  }
+
+  MoneyIntegerRoundingMode _parseMoneyIntegerRoundingMode(String? raw) {
+    for (final mode in MoneyIntegerRoundingMode.values) {
+      if (mode.name == raw) return mode;
+    }
+    return MoneyIntegerRoundingMode.round;
+  }
+
+  Future<void> _loadCategoryIconStyle() async {
+    final rows = await _db!.query(
+      'app_settings',
+      where: 'key = ?',
+      whereArgs: ['category_icon_style'],
+      limit: 1,
+    );
+    _categoryIconStyle = CategoryIconStyleX.fromStorage(
+      rows.isEmpty ? null : rows.first['value'] as String?,
+    );
+  }
+
+  Future<void> setCategoryIconStyle(CategoryIconStyle style) async {
+    if (_categoryIconStyle == style) return;
+    _categoryIconStyle = style;
+    await _db!.insert(
+      'app_settings',
+      {'key': 'category_icon_style', 'value': style.storageKey},
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+    notifyListeners();
+  }
+
+  Future<void> _loadTransactionDisplayPreferences() async {
+    const keys = [
+      'transaction_card_display_mode',
+      'user_message_bubble_style',
+    ];
+    final rows = await _db!.query(
+      'app_settings',
+      where: 'key IN (?, ?)',
+      whereArgs: keys,
+    );
+    final settings = {
+      for (final row in rows)
+        row['key'] as String: (row['value'] as String?) ?? '',
+    };
+    _transactionCardDisplayMode = TransactionCardDisplayModeX.fromStorage(
+      settings['transaction_card_display_mode'],
+    );
+    _userMessageBubbleStyle = UserMessageBubbleStyleX.fromStorage(
+      settings['user_message_bubble_style'],
+    );
+  }
+
+  Future<void> setTransactionCardDisplayMode(
+    TransactionCardDisplayMode mode,
+  ) async {
+    if (_transactionCardDisplayMode == mode) return;
+    _transactionCardDisplayMode = mode;
+    await _db!.insert(
+      'app_settings',
+      {'key': 'transaction_card_display_mode', 'value': mode.storageKey},
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+    notifyListeners();
+  }
+
+  Future<void> setUserMessageBubbleStyle(
+    UserMessageBubbleStyle style,
+  ) async {
+    if (_userMessageBubbleStyle == style) return;
+    _userMessageBubbleStyle = style;
+    await _db!.insert(
+      'app_settings',
+      {'key': 'user_message_bubble_style', 'value': style.storageKey},
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+    notifyListeners();
+  }
+
+  String get profileNickname => _profileNickname;
+  String get profileAvatarPath => _profileAvatarPath;
+
+  Future<void> _loadProfileSettings() async {
+    const keys = ['profile_nickname', 'profile_avatar_path'];
+    final rows = await _db!.query(
+      'app_settings',
+      where: 'key IN (?, ?)',
+      whereArgs: keys,
+    );
+    final map = {
+      for (final row in rows)
+        row['key'] as String: (row['value'] as String?) ?? '',
+    };
+    final nickname = (map['profile_nickname'] ?? '').trim();
+    // 昵称是「用户的名字」不是 App 的名字：没设置就留空（UI 显示引导文案），
+    // 旧版曾把 App 名当默认值写进库，读到它一律视为未设置。
+    _profileNickname = nickname == '肥喵记账' ? '' : nickname;
+    _profileAvatarPath = (map['profile_avatar_path'] ?? '').trim();
+  }
+
+  Future<void> setProfileNickname(String nickname) async {
+    final trimmed = nickname.trim();
+    final normalized = trimmed.length > 12 ? trimmed.substring(0, 12) : trimmed;
+    if (_profileNickname == normalized) return;
+    _profileNickname = normalized;
+    await _db!.insert(
+      'app_settings',
+      {'key': 'profile_nickname', 'value': normalized},
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+    notifyListeners();
+  }
+
+  Future<String> saveProfileAvatarBytes(
+    Uint8List bytes, {
+    Directory? documentsDir,
+  }) async {
+    final docs = documentsDir ?? await getApplicationDocumentsDirectory();
+    final dir = Directory(p.join(docs.path, 'profile'));
+    if (!await dir.exists()) {
+      await dir.create(recursive: true);
+    }
+    final dest = File(p.join(dir.path, 'avatar.png'));
+    final tmp = File(p.join(
+      dir.path,
+      'avatar.${DateTime.now().millisecondsSinceEpoch}.tmp',
+    ));
+    await tmp.writeAsBytes(bytes, flush: true);
+    if (await dest.exists()) {
+      final old = File(p.join(dir.path, 'avatar.old.tmp'));
+      try {
+        if (await old.exists()) await old.delete();
+        await dest.rename(old.path);
+        await tmp.rename(dest.path);
+        await old.delete();
+      } catch (_) {
+        if (await dest.exists()) await dest.delete();
+        await tmp.rename(dest.path);
+      }
+    } else {
+      await tmp.rename(dest.path);
+    }
+    _profileAvatarPath = dest.path;
+    await _db!.insert(
+      'app_settings',
+      {'key': 'profile_avatar_path', 'value': dest.path},
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+    notifyListeners();
+    return dest.path;
+  }
+
   /// 记住记账模式（AI / 手动），下次启动沿用。
   Future<void> setRecordAiMode(bool ai) async {
     if (_recordAiMode == ai) return;
@@ -1197,7 +6997,6 @@ class AppRepository extends ChangeNotifier {
       {'key': 'record_ai_mode', 'value': ai ? '1' : '0'},
       conflictAlgorithm: ConflictAlgorithm.replace,
     );
-    notifyListeners();
   }
 
   // ---------------------------------------------------------------------------
@@ -1249,17 +7048,351 @@ class AppRepository extends ChangeNotifier {
   }
 
   /// 追加一条对话消息。
-  Future<void> addChatMessage({
+  Future<int> addChatMessage({
     required String role,
     String text = '',
     String question = '',
   }) async {
-    await _db!.insert('chat_messages', {
+    return _db!.insert('chat_messages', {
       'role': role,
       'text': text,
       'question': question,
       'created_ms': DateTime.now().millisecondsSinceEpoch,
     });
+  }
+
+  Future<int> addReport({
+    required String type,
+    required String title,
+    required String summary,
+    required String markdown,
+    DateTime? periodStart,
+    DateTime? periodEnd,
+    int? bookId,
+  }) async {
+    final id = await _db!.insert('reports', {
+      'book_id': bookId ?? _currentBookId,
+      'type': type,
+      'title': title,
+      'summary': summary,
+      'markdown': markdown,
+      'period_start_ms': (periodStart ?? DateTime.now()).millisecondsSinceEpoch,
+      'period_end_ms': (periodEnd ?? DateTime.now()).millisecondsSinceEpoch,
+      'created_ms': DateTime.now().millisecondsSinceEpoch,
+      'pinned_ms': 0,
+    });
+    await _loadReports();
+    notifyListeners();
+    return id;
+  }
+
+  Future<ReportJobEntity> createReportJob({
+    required String question,
+    required String type,
+    required String title,
+    required DateTime periodStart,
+    required DateTime periodEnd,
+    int? bookId,
+    int? reportId,
+  }) async {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    await _db!.delete(
+      'report_jobs',
+      where: "status IN ('completed', 'failed') AND updated_ms < ?",
+      whereArgs: [now - const Duration(days: 14).inMilliseconds],
+    );
+    final id = await _db!.insert('report_jobs', {
+      'uuid': _newUuid(),
+      'book_id': bookId ?? _currentBookId,
+      'report_id': reportId,
+      'question': question,
+      'type': type,
+      'title': title,
+      'period_start_ms': periodStart.millisecondsSinceEpoch,
+      'period_end_ms': periodEnd.millisecondsSinceEpoch,
+      'status': 'queued',
+      'stage': 'collect',
+      'error': '',
+      'created_ms': now,
+      'updated_ms': now,
+    });
+    final rows = await _db!.query(
+      'report_jobs',
+      where: 'id = ?',
+      whereArgs: [id],
+      limit: 1,
+    );
+    return ReportJobEntity.fromMap(rows.single);
+  }
+
+  Future<List<ReportJobEntity>> pendingReportJobs() async {
+    final db = _db;
+    if (db == null) return const <ReportJobEntity>[];
+    final rows = await db.query(
+      'report_jobs',
+      where: "status IN ('queued', 'running')",
+      orderBy: 'created_ms ASC, id ASC',
+    );
+    return rows.map(ReportJobEntity.fromMap).toList(growable: false);
+  }
+
+  Future<ReportJobEntity?> reportJobById(int id) async {
+    final db = _db;
+    if (db == null) return null;
+    final rows = await db.query(
+      'report_jobs',
+      where: 'id = ?',
+      whereArgs: [id],
+      limit: 1,
+    );
+    return rows.isEmpty ? null : ReportJobEntity.fromMap(rows.first);
+  }
+
+  Future<void> updateReportJob(
+    int id, {
+    String? status,
+    String? stage,
+    String? error,
+    int? reportId,
+  }) async {
+    final values = <String, Object?>{
+      'updated_ms': DateTime.now().millisecondsSinceEpoch,
+    };
+    if (status != null) values['status'] = status;
+    if (stage != null) values['stage'] = stage;
+    if (error != null) values['error'] = error;
+    if (reportId != null) values['report_id'] = reportId;
+    await _db!.update(
+      'report_jobs',
+      values,
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+  }
+
+  /// 报告正文、聊天报告卡和 job 完成状态原子提交。
+  /// WorkManager 在进程被杀后可能重试；只要这个事务成功，再次执行同一 job
+  /// 会直接返回既有报告，不会生成第二份文档或第二张聊天卡。
+  Future<ReportEntity> completeReportJob({
+    required int jobId,
+    required String summary,
+    required String markdown,
+  }) async {
+    final reportId = await _db!.transaction<int>((txn) async {
+      final jobRows = await txn.query(
+        'report_jobs',
+        where: 'id = ?',
+        whereArgs: [jobId],
+        limit: 1,
+      );
+      if (jobRows.isEmpty) throw StateError('report job does not exist');
+      final job = jobRows.first;
+      final existingReportId = job['report_id'] as int?;
+      if (job['status'] == 'completed' && existingReportId != null) {
+        return existingReportId;
+      }
+
+      final now = DateTime.now().millisecondsSinceEpoch;
+      late final int id;
+      if (existingReportId == null) {
+        id = await txn.insert('reports', {
+          'book_id': job['book_id'] as int?,
+          'type': job['type'] as String,
+          'title': job['title'] as String,
+          'summary': summary,
+          'markdown': markdown,
+          'period_start_ms': job['period_start_ms'] as int,
+          'period_end_ms': job['period_end_ms'] as int,
+          'created_ms': now,
+          'pinned_ms': 0,
+        });
+        await txn.insert('chat_messages', {
+          'role': 'report',
+          'text': jsonEncode({'reportId': id, 'summary': summary}),
+          'question': job['question'] as String? ?? '',
+          'created_ms': now,
+        });
+      } else {
+        id = existingReportId;
+        await txn.update(
+          'reports',
+          {
+            'title': job['title'] as String,
+            'summary': summary,
+            'markdown': markdown,
+            'created_ms': now,
+          },
+          where: 'id = ?',
+          whereArgs: [id],
+        );
+        final chatRows = await txn.query(
+          'chat_messages',
+          columns: ['id', 'text'],
+          where: 'role = ?',
+          whereArgs: ['report'],
+        );
+        for (final row in chatRows) {
+          try {
+            final decoded = jsonDecode(row['text'] as String? ?? '');
+            if (decoded is! Map ||
+                (decoded['reportId'] as num?)?.toInt() != id) {
+              continue;
+            }
+            final updated = Map<String, Object?>.from(decoded)
+              ..['summary'] = summary;
+            await txn.update(
+              'chat_messages',
+              {'text': jsonEncode(updated)},
+              where: 'id = ?',
+              whereArgs: [row['id']],
+            );
+          } catch (_) {}
+        }
+      }
+
+      await txn.update(
+        'report_jobs',
+        {
+          'status': 'completed',
+          'stage': 'save',
+          'report_id': id,
+          'error': '',
+          'updated_ms': now,
+        },
+        where: 'id = ?',
+        whereArgs: [jobId],
+      );
+      return id;
+    });
+    await _loadReports();
+    notifyListeners();
+    final report = _reports.where((item) => item.id == reportId).firstOrNull;
+    if (report == null) throw StateError('report row missing after commit');
+    return report;
+  }
+
+  Future<void> reloadReportsFromStorage() async {
+    await _loadReports();
+    notifyListeners();
+  }
+
+  Future<ReportEntity?> getReport(int id) async {
+    for (final report in _reports) {
+      if (report.id == id) return report;
+    }
+    final rows = await _db!.query(
+      'reports',
+      where: 'id = ?',
+      whereArgs: [id],
+      limit: 1,
+    );
+    return rows.isEmpty ? null : ReportEntity.fromMap(rows.first);
+  }
+
+  Future<void> setReportPinned(int id, bool pinned) async {
+    await _db!.update(
+      'reports',
+      {'pinned_ms': pinned ? DateTime.now().millisecondsSinceEpoch : 0},
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+    await _loadReports();
+    notifyListeners();
+  }
+
+  Future<void> updateReportContent(
+    int id, {
+    required String summary,
+    required String markdown,
+    String? title,
+  }) async {
+    final values = <String, Object?>{
+      'summary': summary,
+      'markdown': markdown,
+      'created_ms': DateTime.now().millisecondsSinceEpoch,
+    };
+    if (title != null && title.trim().isNotEmpty) {
+      values['title'] = title.trim();
+    }
+    await _db!.transaction((txn) async {
+      await txn.update(
+        'reports',
+        values,
+        where: 'id = ?',
+        whereArgs: [id],
+      );
+      final chatRows = await txn.query(
+        'chat_messages',
+        columns: ['id', 'text'],
+        where: 'role = ?',
+        whereArgs: ['report'],
+      );
+      for (final row in chatRows) {
+        try {
+          final decoded = jsonDecode(row['text'] as String? ?? '');
+          if (decoded is! Map || (decoded['reportId'] as num?)?.toInt() != id) {
+            continue;
+          }
+          final updated = Map<String, Object?>.from(decoded)
+            ..['summary'] = summary;
+          await txn.update(
+            'chat_messages',
+            {'text': jsonEncode(updated)},
+            where: 'id = ?',
+            whereArgs: [row['id']],
+          );
+        } catch (_) {}
+      }
+    });
+    await _loadReports();
+    notifyListeners();
+  }
+
+  Future<void> deleteReport(int id) async {
+    await _db!.transaction((txn) async {
+      await txn.delete('reports', where: 'id = ?', whereArgs: [id]);
+      final rows = await txn.query(
+        'chat_messages',
+        columns: ['id', 'text'],
+        where: 'role = ?',
+        whereArgs: ['report'],
+      );
+      final orphanIds = <int>[];
+      for (final row in rows) {
+        try {
+          final decoded = jsonDecode(row['text'] as String? ?? '');
+          final reportId =
+              decoded is Map ? (decoded['reportId'] as num?)?.toInt() : null;
+          if (reportId == id) orphanIds.add(row['id'] as int);
+        } catch (_) {
+          // Ignore malformed historical rows; they simply remain hidden by UI restore.
+        }
+      }
+      if (orphanIds.isNotEmpty) {
+        await txn.delete(
+          'chat_messages',
+          where: 'id IN (${List.filled(orphanIds.length, '?').join(',')})',
+          whereArgs: orphanIds,
+        );
+      }
+    });
+    await _loadReports();
+    notifyListeners();
+  }
+
+  Future<List<ReportEntity>> loadReports({
+    int? bookId,
+    String? type,
+  }) async {
+    await _loadReports();
+    Iterable<ReportEntity> out = _reports;
+    if (bookId != null) {
+      out = out.where((r) => r.bookId == null || r.bookId == bookId);
+    }
+    if (type != null && type.isNotEmpty) {
+      out = out.where((r) => r.type == type);
+    }
+    return List.unmodifiable(out);
   }
 
   /// 追加一条「记账明细卡」消息（role='record'，结构化数据 JSON 存在 text 列，
@@ -1328,7 +7461,8 @@ class AppRepository extends ChangeNotifier {
           List.of(_catMemory)..sort((a, b) => a.phrase.compareTo(b.phrase));
 
   /// 给 DeepSeek 提示词用：某收支下**未隐藏**的分类选项（key + 中文名，含自建分类）。
-  List<({String key, String name})> llmCategoryOptions(TransactionKind kind) => [
+  List<({String key, String name})> llmCategoryOptions(TransactionKind kind) =>
+      [
         for (final c in _categories)
           if (c.kind == kind && !c.hidden) (key: c.key, name: c.nameZh)
       ];
@@ -1366,10 +7500,9 @@ class AppRepository extends ChangeNotifier {
   // ---------------------------------------------------------------------------
 
   /// 当前账本的周期规则(按下次到期升序)。
-  List<RecurringRule> get recurringRules => _recurringRules
-      .where((r) => r.bookId == _currentBookId)
-      .toList()
-    ..sort((a, b) => a.nextDueMs.compareTo(b.nextDueMs));
+  List<RecurringRule> get recurringRules =>
+      _recurringRules.where((r) => r.bookId == _currentBookId).toList()
+        ..sort((a, b) => a.nextDueMs.compareTo(b.nextDueMs));
 
   Future<void> _loadRecurringRules() async {
     final rows = await _db!.query('recurring_rules');
@@ -1383,25 +7516,44 @@ class AppRepository extends ChangeNotifier {
     required Decimal amount,
     int? categoryId,
     int? accountId,
+    int? bookId,
     String note = '',
     required RecurPeriod period,
     required DateTime startDate,
+    DateTime? endDate,
+    int? totalCount,
   }) async {
+    if (accountId != null && !_isSupportedTransactionAccountId(accountId)) {
+      throw ArgumentError('定时记账账户不存在或币种不受支持');
+    }
+    final normalizedTotalCount =
+        totalCount != null && totalCount > 0 ? totalCount : null;
+    final targetBookId = bookId != null && _books.any((b) => b.id == bookId)
+        ? bookId
+        : _currentBookId;
     await _db!.insert('recurring_rules', {
-      'book_id': _currentBookId,
+      'book_id': targetBookId,
       'kind': kind.toJson(),
       'amount': amount.toString(),
       'category_id': categoryId,
       'account_id': accountId,
       'note': note,
       'period': period.toJson(),
+      'start_date_ms': startDate.millisecondsSinceEpoch,
       'next_due_ms': startDate.millisecondsSinceEpoch,
       'enabled': 1,
+      'anchor_day': startDate.day,
+      'end_date_ms': endDate?.millisecondsSinceEpoch,
+      'total_count': normalizedTotalCount,
+      'generated_count': 0,
       'created_ms': DateTime.now().millisecondsSinceEpoch,
     });
     await _loadRecurringRules();
     await _materializeRecurring(); // 起始日若已过则立即补记
     await _loadTransactions();
+    await _refreshCurrentNetWorthSnapshotBestEffort(
+      const {NetWorthSnapshotCause.scheduledRebuild},
+    );
     notifyListeners();
   }
 
@@ -1411,20 +7563,36 @@ class AppRepository extends ChangeNotifier {
     required Decimal amount,
     int? categoryId,
     int? accountId,
+    int? bookId,
     String note = '',
     required RecurPeriod period,
     required DateTime nextDue,
+    DateTime? startDate,
+    DateTime? endDate,
+    int? totalCount,
   }) async {
+    if (accountId != null && !_isSupportedTransactionAccountId(accountId)) {
+      throw ArgumentError('定时记账账户不存在或币种不受支持');
+    }
+    final normalizedTotalCount =
+        totalCount != null && totalCount > 0 ? totalCount : null;
+    final targetBookId =
+        bookId != null && _books.any((b) => b.id == bookId) ? bookId : null;
     await _db!.update(
       'recurring_rules',
       {
+        if (targetBookId != null) 'book_id': targetBookId,
         'kind': kind.toJson(),
         'amount': amount.toString(),
         'category_id': categoryId,
         'account_id': accountId,
         'note': note,
         'period': period.toJson(),
+        'start_date_ms': (startDate ?? nextDue).millisecondsSinceEpoch,
         'next_due_ms': nextDue.millisecondsSinceEpoch,
+        'anchor_day': (startDate ?? nextDue).day,
+        'end_date_ms': endDate?.millisecondsSinceEpoch,
+        'total_count': normalizedTotalCount,
       },
       where: 'id = ?',
       whereArgs: [id],
@@ -1446,6 +7614,10 @@ class AppRepository extends ChangeNotifier {
     if (enabled) {
       await _materializeRecurring();
       await _loadTransactions();
+      await _persistCurrentNetWorthSnapshot(
+        causes: const {NetWorthSnapshotCause.scheduledRebuild},
+        notify: false,
+      );
     }
     notifyListeners();
   }
@@ -1454,58 +7626,136 @@ class AppRepository extends ChangeNotifier {
   /// guard 上限防止极端情况(长期没打开 App)跑飞。
   Future<void> _materializeRecurring() async {
     final now = DateTime.now();
-    final cutoff =
-        DateTime(now.year, now.month, now.day, 23, 59, 59).millisecondsSinceEpoch;
-    final fallbackAccount = _accounts.firstOrNull?.id;
+    final cutoff = DateTime(now.year, now.month, now.day, 23, 59, 59)
+        .millisecondsSinceEpoch;
+    final supportedAccountIds = transactionAccounts.map((a) => a.id).toSet();
+    final fallbackAccount = supportedAccountIds.firstOrNull;
     var changed = false;
-    for (final rule in List<RecurringRule>.from(_recurringRules)) {
-      if (!rule.enabled) continue;
-      var due = rule.nextDue;
-      var guard = 0;
-      while (due.millisecondsSinceEpoch <= cutoff && guard < 400) {
-        await _db!.insert('transactions', {
-          ..._syncStampNew(),
-          'book_id': rule.bookId,
-          'kind': rule.kind,
-          'amount': rule.amountStr,
-          'currency_code': 'CNY',
-          'category_id': rule.categoryId,
-          'account_id': rule.accountId ?? fallbackAccount,
-          'to_account_id': null,
-          'note': rule.note.isEmpty ? '周期记账' : rule.note,
-          'date_ms': due.millisecondsSinceEpoch,
-          'tags': '',
-          'reimbursable': 0,
-          'image_path': '',
-        });
-        due = rule.recurPeriod.advance(due);
-        guard++;
+    await _db!.transaction((txn) async {
+      for (final rule in List<RecurringRule>.from(_recurringRules)) {
+        if (!rule.enabled) continue;
+        var due = rule.nextDue;
+        var generatedCount = rule.generatedCount;
+        final totalCount = rule.totalCount;
+        final endDate = rule.endDate;
+        final endCutoff = endDate == null
+            ? null
+            : DateTime(
+                endDate.year,
+                endDate.month,
+                endDate.day,
+                23,
+                59,
+                59,
+                999,
+              ).millisecondsSinceEpoch;
+        var guard = 0;
+        while (due.millisecondsSinceEpoch <= cutoff && guard < 400) {
+          if (totalCount != null &&
+              totalCount > 0 &&
+              generatedCount >= totalCount) {
+            break;
+          }
+          final dueMs = due.millisecondsSinceEpoch;
+          if (endCutoff != null && dueMs > endCutoff) break;
+
+          final existing = await txn.query(
+            'recurring_occurrences',
+            columns: ['transaction_id'],
+            where: 'rule_id = ? AND due_ms = ?',
+            whereArgs: [rule.id, dueMs],
+            limit: 1,
+          );
+          if (existing.isEmpty) {
+            final accountId = supportedAccountIds.contains(rule.accountId)
+                ? rule.accountId
+                : fallbackAccount;
+            final kind = TransactionKind.fromJson(rule.kind);
+            final transactionId = await txn.insert('transactions', {
+              ..._syncStampNew(),
+              'book_id': rule.bookId,
+              'kind': rule.kind,
+              'amount': rule.amountStr,
+              'currency_code': 'CNY',
+              'category_id': rule.categoryId,
+              'account_id': accountId,
+              'to_account_id': null,
+              'note': rule.note.isEmpty ? '周期记账' : rule.note,
+              'date_ms': dueMs,
+              'time_precision': TransactionTimePrecision.dateOnly.storageKey,
+              'tags': '',
+              'reimbursable': 0,
+              'image_path': '',
+              'recurring_rule_id': rule.id,
+              'settled_ms': dueMs,
+              'settlement_quality': SettlementQuality.legacyAssumed.storageKey,
+              'settlement_account_id': accountId,
+              'settlement_account_quality': accountId == null
+                  ? SettlementQuality.unknown.storageKey
+                  : SettlementQuality.legacyAssumed.storageKey,
+              'event_type': _eventTypeForKind(kind).storageKey,
+            });
+            await txn.insert('recurring_occurrences', {
+              'rule_id': rule.id,
+              'due_ms': dueMs,
+              'transaction_id': transactionId,
+              'created_ms': DateTime.now().millisecondsSinceEpoch,
+            });
+          }
+          due = rule.recurPeriod.advance(
+            due,
+            anchorDay: rule.anchorDay > 0 ? rule.anchorDay : null,
+          );
+          generatedCount++;
+          guard++;
+        }
+        if (guard > 0) {
+          await txn.update(
+            'recurring_rules',
+            {
+              'next_due_ms': due.millisecondsSinceEpoch,
+              'generated_count': generatedCount,
+            },
+            where: 'id = ?',
+            whereArgs: [rule.id],
+          );
+          changed = true;
+        }
       }
-      if (guard > 0) {
-        await _db!.update('recurring_rules',
-            {'next_due_ms': due.millisecondsSinceEpoch},
-            where: 'id = ?', whereArgs: [rule.id]);
-        changed = true;
-      }
-    }
+    });
     if (changed) await _loadRecurringRules();
   }
 
-  Future<void> _loadTransactions() async {
-    // 总账本 = 聚合视图：显示自己的账单 + 所有「计入总账本」账本的账单；
-    // 其它账本只显示自己的。
-    final isTotal = _currentBookId == _defaultBookId;
+  List<int> _bookIdsForView(int bookId) {
+    final isTotal = bookId == _defaultBookId;
     final ids = isTotal
         ? [
             for (final b in _books)
               if (b.id == _defaultBookId || b.includeInTotal) b.id
           ]
-        : [_currentBookId];
-    if (ids.isEmpty) ids.add(-1); // 空保护，避免 IN () 语法错误
-    final idList = ids.join(','); // 都是 DB 里来的 int，可安全拼接
-    final rows = await _db!.rawQuery('''
+        : [bookId];
+    if (ids.isEmpty) ids.add(-1);
+    return ids;
+  }
+
+  List<int> _bookIdsForCurrentView() => _bookIdsForView(_currentBookId);
+
+  Future<void> _loadTransactions() async {
+    // 总账本 = 聚合视图：显示自己的账单 + 所有「计入总账本」账本的账单；
+    // 其它账本只显示自己的。
+    _transactionFullReloadCount++;
+    final all = await _queryTransactions();
+    _allTransactions
+      ..clear()
+      ..addAll(all);
+    _applyCurrentBookTransactionView();
+  }
+
+  static const String _transactionSelectSql = '''
       SELECT
         t.id,
+        t.book_id,
+        t.uuid,
         t.kind,
         t.amount,
         t.currency_code,
@@ -1519,21 +7769,260 @@ class AppRepository extends ChangeNotifier {
         ta.name    AS to_account_name,
         t.note,
         t.date_ms,
+        t.time_precision,
+        t.created_ms,
+        t.settled_ms,
+        t.settlement_quality,
+        t.settlement_account_id,
+        t.settlement_account_quality,
+        t.event_type,
         t.tags,
         t.reimbursable,
         t.image_path,
+        t.recurring_rule_id,
         t.excluded,
         t.refund_of
       FROM transactions t
       LEFT JOIN categories c  ON c.id = t.category_id
       LEFT JOIN accounts   a  ON a.id = t.account_id
       LEFT JOIN accounts   ta ON ta.id = t.to_account_id
-      WHERE t.book_id IN ($idList)
-      ORDER BY t.date_ms DESC
-    ''');
+  ''';
+
+  int _transactionFullReloadCount = 0;
+
+  @visibleForTesting
+  int get transactionFullReloadCount => _transactionFullReloadCount;
+
+  Future<List<TransactionEntity>> _queryTransactions({
+    String where = '',
+    List<Object?> args = const [],
+  }) async {
+    final whereSql = where.isEmpty ? '' : ' WHERE $where';
+    final rows = await _db!.rawQuery(
+      '$_transactionSelectSql$whereSql ORDER BY t.date_ms DESC, t.id DESC',
+      args,
+    );
+    return rows.map(TransactionEntity.fromMap).toList(growable: false);
+  }
+
+  void _applyCurrentBookTransactionView() {
+    final ids = _bookIdsForCurrentView();
+    final allowedBookIds = ids.toSet();
     _transactions
       ..clear()
-      ..addAll(rows.map(TransactionEntity.fromMap));
+      ..addAll(_allTransactions.where((transaction) =>
+          transaction.bookId != null &&
+          allowedBookIds.contains(transaction.bookId)));
+    _invalidateTxDerived();
+  }
+
+  /// 常规单笔写入只回读受影响的原单和退款子行，不再全表 SELECT。
+  /// [familyRoots] 中的 id 会同时匹配 `t.id` 与 `t.refund_of`，用于退款、
+  /// 改分类和删除原单；数据库仍是唯一真相，内存只在事务成功后更新。
+  Future<void> _refreshTransactionRows({
+    Set<int> ids = const <int>{},
+    Set<int> familyRoots = const <int>{},
+  }) async {
+    if (ids.isEmpty && familyRoots.isEmpty) return;
+
+    final conditions = <String>[];
+    final args = <Object?>[];
+    String placeholders(int count) => List.filled(count, '?').join(',');
+    if (ids.isNotEmpty) {
+      conditions.add('t.id IN (${placeholders(ids.length)})');
+      args.addAll(ids);
+    }
+    if (familyRoots.isNotEmpty) {
+      final roots = placeholders(familyRoots.length);
+      conditions.add('(t.id IN ($roots) OR t.refund_of IN ($roots))');
+      args
+        ..addAll(familyRoots)
+        ..addAll(familyRoots);
+    }
+
+    final fresh = await _queryTransactions(
+      where: conditions.join(' OR '),
+      args: args,
+    );
+    final affectedIds = <int>{...ids, ...familyRoots};
+    for (final transaction in _allTransactions) {
+      if (familyRoots.contains(transaction.refundOf)) {
+        affectedIds.add(transaction.id);
+      }
+    }
+    affectedIds.addAll(fresh.map((transaction) => transaction.id));
+    _allTransactions
+      ..removeWhere((transaction) => affectedIds.contains(transaction.id))
+      ..addAll(fresh)
+      ..sort((a, b) {
+        final byDate = b.dateMs.compareTo(a.dateMs);
+        return byDate != 0 ? byDate : b.id.compareTo(a.id);
+      });
+    _applyCurrentBookTransactionView();
+  }
+
+  // 账单派生数据缓存：退款索引 / 可见列表 / 统计记录流。
+  // 都是纯内存派生，_transactions 一变（重载或原地删）就整体作废、
+  // 下次访问时懒重建——把原来「每次访问全表扫」的 O(n²) 压到 O(n)。
+  Map<int, Decimal>? _refundTotalsCache;
+  Map<int, Decimal>? _globalRefundTotalsCache;
+  List<TransactionEntity>? _visibleTxCache;
+  List<TransactionEntity>? _globalVisibleTxCache;
+  List<TransactionRecord>? _allRecordsCache;
+
+  void _invalidateTxDerived() {
+    _refundTotalsCache = null;
+    _globalRefundTotalsCache = null;
+    _visibleTxCache = null;
+    _globalVisibleTxCache = null;
+    _allRecordsCache = null;
+  }
+
+  Map<int, Decimal> get _refundTotals =>
+      _refundTotalsCache ??= LedgerPolicy.refundTotals(_transactions);
+  Map<int, Decimal> get _globalRefundTotals =>
+      _globalRefundTotalsCache ??= LedgerPolicy.refundTotals(_allTransactions);
+  List<TransactionEntity> get _globalVisibleTransactions =>
+      _globalVisibleTxCache ??= _allTransactions
+          .where((transaction) => transaction.refundOf == null)
+          .toList();
+
+  Future<void> _loadPhysicalAssetData({bool refreshSnapshot = true}) async {
+    await _loadPhysicalAssets();
+    await _loadReceivableAssets();
+    await Future.wait([
+      _loadAssetEvents(),
+      _loadAssetUsageEvents(),
+      _loadAssetValuations(),
+      _loadAssetTransactionLinks(),
+      _loadReceivableRecoveries(),
+      _loadNetWorthSnapshots(),
+    ]);
+    if (refreshSnapshot) {
+      await _refreshCurrentNetWorthSnapshotBestEffort(
+        const {NetWorthSnapshotCause.other},
+      );
+    }
+  }
+
+  Future<void> _loadPhysicalAssets() async {
+    final ids = _bookIdsForCurrentView();
+    final rows = await _db!.query(
+      'physical_assets',
+      orderBy:
+          "is_deleted ASC, CASE visibility_status WHEN 'active' THEN 0 ELSE 1 END ASC, CASE economic_status WHEN 'owned' THEN 0 ELSE 1 END ASC, CASE usage_status WHEN 'active' THEN 0 WHEN 'idle' THEN 1 ELSE 2 END ASC, CAST(current_value AS REAL) DESC, updated_ms DESC, id DESC",
+    );
+    final allowedBookIds = ids.toSet();
+    final all = rows.map(PhysicalAssetEntity.fromMap).toList(growable: false);
+    _allPhysicalAssets
+      ..clear()
+      ..addAll(all);
+    _physicalAssets
+      ..clear()
+      ..addAll(all.where((asset) =>
+          asset.bookId != null && allowedBookIds.contains(asset.bookId)));
+  }
+
+  Future<void> _loadReceivableAssets() async {
+    final ids = _bookIdsForCurrentView();
+    final rows = await _db!.query(
+      'receivable_assets',
+      orderBy:
+          "is_deleted ASC, CASE visibility_status WHEN 'active' THEN 0 ELSE 1 END ASC, CASE economic_status WHEN 'active' THEN 0 WHEN 'partial_recovered' THEN 1 WHEN 'unknown' THEN 2 ELSE 3 END ASC, CAST(remaining_amount AS REAL) DESC, updated_ms DESC, id DESC",
+    );
+    final allowedBookIds = ids.toSet();
+    final all = rows.map(ReceivableAssetEntity.fromMap).toList(growable: false);
+    _allReceivableAssets
+      ..clear()
+      ..addAll(all);
+    _receivableAssets
+      ..clear()
+      ..addAll(all.where((asset) =>
+          asset.bookId != null && allowedBookIds.contains(asset.bookId)));
+  }
+
+  Future<void> _loadAssetEvents() async {
+    final rows = await _db!.query(
+      'asset_events',
+      orderBy: 'occurred_ms DESC, id DESC',
+    );
+    _assetEvents
+      ..clear()
+      ..addAll(rows.map(AssetEventEntity.fromMap));
+  }
+
+  Future<void> _loadAssetUsageEvents() async {
+    final rows = await _db!.query(
+      'asset_usage_events',
+      orderBy: 'occurred_ms ASC, id ASC',
+    );
+    _assetUsageEvents
+      ..clear()
+      ..addAll(rows.map(AssetUsageEventEntity.fromMap));
+  }
+
+  Future<void> _loadAssetValuations() async {
+    final rows = await _db!.query(
+      'asset_valuations',
+      orderBy: 'valued_at_ms DESC, id DESC',
+    );
+    _assetValuations
+      ..clear()
+      ..addAll(rows.map(AssetValuationEntity.fromMap));
+  }
+
+  Future<void> _loadAssetTransactionLinks() async {
+    final rows = await _db!.query(
+      'asset_transaction_links',
+      orderBy: 'created_ms DESC, id DESC',
+    );
+    _assetTransactionLinks
+      ..clear()
+      ..addAll(rows.map(AssetTransactionLinkEntity.fromMap));
+  }
+
+  Future<void> _loadReceivableRecoveries() async {
+    final rows = await _db!.query(
+      'receivable_recoveries',
+      orderBy: 'recovered_ms DESC, id DESC',
+    );
+    _receivableRecoveries
+      ..clear()
+      ..addAll(rows.map(ReceivableRecoveryEntity.fromMap));
+  }
+
+  Future<void> _loadNetWorthSnapshots() async {
+    final scopeRows = await _db!.query(
+      'app_settings',
+      columns: ['value'],
+      where: 'key = ?',
+      whereArgs: const ['net_worth_scope_version'],
+      limit: 1,
+    );
+    _netWorthScopeVersion = max(
+      1,
+      int.tryParse(scopeRows.firstOrNull?['value'] as String? ?? '') ?? 1,
+    );
+    final rows = await _db!.query(
+      'net_worth_snapshots',
+      where: 'scope_key = ?',
+      whereArgs: const ['global'],
+      orderBy: 'snapshot_date DESC, id DESC',
+    );
+    _netWorthSnapshots
+      ..clear()
+      ..addAll(rows.map(NetWorthSnapshotEntity.fromMap));
+  }
+
+  Future<void> _loadLiabilityProfiles() async {
+    final rows = await _db!.query(
+      'liability_profiles',
+      orderBy:
+          "CASE status WHEN 'active' THEN 0 WHEN 'paused' THEN 1 WHEN 'paid_off' THEN 2 ELSE 3 END ASC, repayment_day IS NULL, repayment_day ASC, id DESC",
+    );
+    _liabilityProfiles
+      ..clear()
+      ..addAll(rows.map(LiabilityProfileEntity.fromMap));
   }
 
   // ---------------------------------------------------------------------------
@@ -1543,43 +8032,672 @@ class AppRepository extends ChangeNotifier {
   Future<String> databaseFilePath() async =>
       p.join(await getDatabasesPath(), _dbName);
 
-  Future<bool> restoreDatabaseFromFile(String srcPath) async {
+  Future<File> _sanitizedDatabaseCopy(Directory dir) async {
+    final dest = File(p.join(dir.path, _dbName));
+    final sourcePath = await databaseFilePath();
+    await _createConsistentDatabaseCopy(
+      sourcePath,
+      dest.path,
+      sourceDb: _db,
+    );
+    final db = await openDatabase(dest.path, singleInstance: false);
+    try {
+      await db.delete(
+        'app_settings',
+        where: 'key IN (?, ?)',
+        whereArgs: ['deepseek_api_key', 'custom_ai_api_key'],
+      );
+    } finally {
+      await db.close();
+    }
+    return dest;
+  }
+
+  Future<File> exportBackupPackage({
+    @visibleForTesting Directory? temporaryDirectory,
+    @visibleForTesting Directory? documentsDirectory,
+  }) async {
+    final tmp = temporaryDirectory ?? await getTemporaryDirectory();
+    final work = await Directory(p.join(
+      tmp.path,
+      'feimiao_backup_${DateTime.now().millisecondsSinceEpoch}',
+    )).create(recursive: true);
+    try {
+      final dbCopy = await _sanitizedDatabaseCopy(work);
+      final docs =
+          documentsDirectory ?? await getApplicationDocumentsDirectory();
+      final receiptsDir = Directory(p.join(docs.path, 'receipts'));
+      final assetMediaDir = Directory(p.join(docs.path, 'asset_media'));
+
+      final files = <String, Uint8List>{
+        'database/$_dbName': await dbCopy.readAsBytes(),
+      };
+      await _collectBackupDirectory(
+        source: receiptsDir,
+        archiveRoot: 'receipts',
+        output: files,
+      );
+      await _collectBackupDirectory(
+        source: assetMediaDir,
+        archiveRoot: 'asset_media',
+        output: files,
+      );
+      final stamp = DateTime.now();
+      final zipBytes = BackupPackageCodec.encode(
+        files: files,
+        databaseVersion: _dbVersion,
+        createdAt: stamp,
+      );
+      final name = 'feimiao-backup-${stamp.year}'
+          '${stamp.month.toString().padLeft(2, '0')}'
+          '${stamp.day.toString().padLeft(2, '0')}-'
+          '${stamp.hour.toString().padLeft(2, '0')}'
+          '${stamp.minute.toString().padLeft(2, '0')}.zip';
+      final out = File(p.join(tmp.path, name));
+      await out.writeAsBytes(zipBytes, flush: true);
+      return out;
+    } finally {
+      try {
+        if (await work.exists()) {
+          await work.delete(recursive: true);
+        }
+      } catch (_) {}
+    }
+  }
+
+  Future<void> _collectBackupDirectory({
+    required Directory source,
+    required String archiveRoot,
+    required Map<String, Uint8List> output,
+  }) async {
+    if (!await source.exists()) return;
+    await for (final entry
+        in source.list(recursive: true, followLinks: false)) {
+      if (entry is! File) continue;
+      final relative = p.relative(entry.path, from: source.path);
+      final archivePath = p.posix.join(
+        archiveRoot,
+        p.split(relative).join('/'),
+      );
+      output[archivePath] = await entry.readAsBytes();
+    }
+  }
+
+  Future<bool> restoreBackupPackage(
+    String srcPath, {
+    @visibleForTesting Directory? temporaryDirectory,
+    @visibleForTesting Directory? documentsDirectory,
+    @visibleForTesting void Function(String step)? onRestoreStep,
+  }) async {
+    late final DecodedBackupPackage package;
+    try {
+      package = BackupPackageCodec.decode(await File(srcPath).readAsBytes());
+    } catch (_) {
+      return false;
+    }
+    final databaseBytes = package.files['database/$_dbName'];
+    if (databaseBytes == null) return false;
+
+    final tmp = temporaryDirectory ?? await getTemporaryDirectory();
+    final work = await Directory(p.join(
+      tmp.path,
+      'feimiao_restore_${DateTime.now().millisecondsSinceEpoch}',
+    )).create(recursive: true);
+    try {
+      final dbPath = p.join(work.path, _dbName);
+      await File(dbPath).writeAsBytes(databaseBytes, flush: true);
+
+      final docs =
+          documentsDirectory ?? await getApplicationDocumentsDirectory();
+      final finalReceiptsDir = Directory(p.join(docs.path, 'receipts'));
+      final finalAssetMediaDir = Directory(p.join(docs.path, 'asset_media'));
+      final stagedReceiptsDir = await Directory(p.join(work.path, 'receipts'))
+          .create(recursive: true);
+      final stagedAssetMediaDir = await Directory(
+        p.join(work.path, 'asset_media'),
+      ).create(recursive: true);
+      final receiptPathByName = <String, String>{};
+      final originalPathByName = <String, String>{};
+      final thumbnailPathByName = <String, String>{};
+      for (final entry in package.files.entries) {
+        final segments = p.posix.split(entry.key);
+        if (segments.length < 2) continue;
+        final root = segments.first;
+        final relativeSegments = segments.skip(1).toList(growable: false);
+        if (root != 'receipts' && root != 'asset_media') continue;
+        final stagedRoot =
+            root == 'receipts' ? stagedReceiptsDir : stagedAssetMediaDir;
+        final destination = File(
+          p.joinAll([stagedRoot.path, ...relativeSegments]),
+        );
+        await destination.parent.create(recursive: true);
+        await destination.writeAsBytes(entry.value, flush: true);
+        final name = relativeSegments.last;
+        if (root == 'receipts') {
+          receiptPathByName[name] = p.joinAll(
+            [finalReceiptsDir.path, ...relativeSegments],
+          );
+        } else if (relativeSegments.first == 'thumbnails') {
+          thumbnailPathByName[name] = p.joinAll(
+            [finalAssetMediaDir.path, ...relativeSegments],
+          );
+        } else {
+          originalPathByName[name] = p.joinAll(
+            [finalAssetMediaDir.path, ...relativeSegments],
+          );
+        }
+      }
+
+      if (receiptPathByName.isNotEmpty ||
+          originalPathByName.isNotEmpty ||
+          thumbnailPathByName.isNotEmpty) {
+        final db = await openDatabase(dbPath, singleInstance: false);
+        try {
+          final transactionRows = await db.query(
+            'transactions',
+            columns: ['id', 'image_path'],
+            where: "image_path <> ''",
+          );
+          for (final row in transactionRows) {
+            final oldPath = row['image_path'] as String? ?? '';
+            final mapped = receiptPathByName[p.basename(oldPath)];
+            if (mapped != null) {
+              await db.update(
+                'transactions',
+                {'image_path': mapped},
+                where: 'id = ?',
+                whereArgs: [row['id']],
+              );
+            }
+          }
+          final tables = await db.rawQuery(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'physical_assets'",
+          );
+          if (tables.isNotEmpty) {
+            final columns =
+                (await db.rawQuery('PRAGMA table_info(physical_assets)'))
+                    .map((row) => row['name'])
+                    .whereType<String>()
+                    .toSet();
+            final selectedColumns = <String>[
+              'id',
+              'photo_path',
+              'invoice_path'
+            ];
+            if (columns.contains('thumbnail_path')) {
+              selectedColumns.add('thumbnail_path');
+            }
+            final assetRows = await db.query(
+              'physical_assets',
+              columns: selectedColumns,
+            );
+            for (final row in assetRows) {
+              final changes = <String, Object?>{};
+              final photo = row['photo_path'] as String? ?? '';
+              final invoice = row['invoice_path'] as String? ?? '';
+              final thumbnail = row['thumbnail_path'] as String? ?? '';
+              final mappedPhoto = originalPathByName[p.basename(photo)];
+              final mappedInvoice = originalPathByName[p.basename(invoice)] ??
+                  receiptPathByName[p.basename(invoice)];
+              final mappedThumbnail =
+                  thumbnailPathByName[p.basename(thumbnail)];
+              if (mappedPhoto != null) changes['photo_path'] = mappedPhoto;
+              if (mappedInvoice != null) {
+                changes['invoice_path'] = mappedInvoice;
+              }
+              if (columns.contains('thumbnail_path') &&
+                  mappedThumbnail != null) {
+                changes['thumbnail_path'] = mappedThumbnail;
+              }
+              if (changes.isNotEmpty) {
+                await db.update(
+                  'physical_assets',
+                  changes,
+                  where: 'id = ?',
+                  whereArgs: [row['id']],
+                );
+              }
+            }
+          }
+        } finally {
+          await db.close();
+        }
+      }
+
+      final replaceEmptyDirectories = package.version >= 2;
+      return await _restoreDatabaseFromFile(
+        dbPath,
+        replacementReceipts:
+            replaceEmptyDirectories || receiptPathByName.isNotEmpty
+                ? stagedReceiptsDir
+                : null,
+        replacementAssetMedia: replaceEmptyDirectories ||
+                originalPathByName.isNotEmpty ||
+                thumbnailPathByName.isNotEmpty
+            ? stagedAssetMediaDir
+            : null,
+        documentsDirectory: docs,
+        onRestoreStep: onRestoreStep,
+      );
+    } finally {
+      try {
+        if (await work.exists()) {
+          await work.delete(recursive: true);
+        }
+      } catch (_) {}
+    }
+  }
+
+  Future<bool> restoreDatabaseFromFile(String srcPath) =>
+      _restoreDatabaseFromFile(srcPath);
+
+  Future<bool> _restoreDatabaseFromFile(
+    String srcPath, {
+    Directory? replacementReceipts,
+    Directory? replacementAssetMedia,
+    Directory? documentsDirectory,
+    void Function(String step)? onRestoreStep,
+  }) async {
     final dbPath = p.join(await getDatabasesPath(), _dbName);
     final bakPath = '$dbPath.bak';
+    final token = DateTime.now().microsecondsSinceEpoch;
+    final stagedPath = '$dbPath.restore-new-$token';
+    final oldPath = '$dbPath.restore-old-$token';
+    Directory? liveReceipts;
+    Directory? stagedReceipts;
+    Directory? oldReceipts;
+    Directory? liveAssetMedia;
+    Directory? stagedAssetMedia;
+    Directory? oldAssetMedia;
+    var databaseMovedToOld = false;
+    var databaseInstalled = false;
+    var receiptsMovedToOld = false;
+    var receiptsInstalled = false;
+    var assetMediaMovedToOld = false;
+    var assetMediaInstalled = false;
+
+    try {
+      await File(srcPath).copy(stagedPath);
+      if (!await _validateAndMigrateRestoreCandidate(stagedPath)) {
+        await File(stagedPath).delete();
+        return false;
+      }
+      if (replacementReceipts != null) {
+        final docs =
+            documentsDirectory ?? await getApplicationDocumentsDirectory();
+        liveReceipts = Directory(p.join(docs.path, 'receipts'));
+        stagedReceipts = Directory('${liveReceipts.path}.restore-new-$token');
+        oldReceipts = Directory('${liveReceipts.path}.restore-old-$token');
+        await _copyDirectoryTree(replacementReceipts, stagedReceipts);
+      }
+      if (replacementAssetMedia != null) {
+        final docs =
+            documentsDirectory ?? await getApplicationDocumentsDirectory();
+        liveAssetMedia = Directory(p.join(docs.path, 'asset_media'));
+        stagedAssetMedia =
+            Directory('${liveAssetMedia.path}.restore-new-$token');
+        oldAssetMedia = Directory('${liveAssetMedia.path}.restore-old-$token');
+        await _copyDirectoryTree(replacementAssetMedia, stagedAssetMedia);
+      }
+      final current = File(dbPath);
+      if (await current.exists()) {
+        await _createConsistentDatabaseCopy(
+          dbPath,
+          bakPath,
+          sourceDb: _db,
+        );
+      }
+    } catch (_) {
+      try {
+        if (await File(stagedPath).exists()) await File(stagedPath).delete();
+        if (stagedReceipts != null && await stagedReceipts.exists()) {
+          await stagedReceipts.delete(recursive: true);
+        }
+        if (stagedAssetMedia != null && await stagedAssetMedia.exists()) {
+          await stagedAssetMedia.delete(recursive: true);
+        }
+      } catch (_) {}
+      return false;
+    }
+
     try {
       await _db?.close();
       _db = null;
 
       final cur = File(dbPath);
       if (await cur.exists()) {
-        await cur.copy(bakPath);
+        await cur.rename(oldPath);
+        databaseMovedToOld = true;
       }
-      await File(srcPath).copy(dbPath);
+      for (final suffix in ['-wal', '-shm']) {
+        final sidecar = File('$dbPath$suffix');
+        if (await sidecar.exists()) await sidecar.delete();
+      }
+      onRestoreStep?.call('before_database_install');
+      await File(stagedPath).rename(dbPath);
+      databaseInstalled = true;
+      if (stagedReceipts != null &&
+          liveReceipts != null &&
+          oldReceipts != null) {
+        if (await liveReceipts.exists()) {
+          await liveReceipts.rename(oldReceipts.path);
+          receiptsMovedToOld = true;
+        }
+        onRestoreStep?.call('before_receipts_install');
+        await stagedReceipts.rename(liveReceipts.path);
+        receiptsInstalled = true;
+      }
+      if (stagedAssetMedia != null &&
+          liveAssetMedia != null &&
+          oldAssetMedia != null) {
+        if (await liveAssetMedia.exists()) {
+          await liveAssetMedia.rename(oldAssetMedia.path);
+          assetMediaMovedToOld = true;
+        }
+        onRestoreStep?.call('before_asset_media_install');
+        await stagedAssetMedia.rename(liveAssetMedia.path);
+        assetMediaInstalled = true;
+      }
 
+      onRestoreStep?.call('before_database_open');
       _db = await openDatabase(
         dbPath,
         version: _dbVersion,
         onCreate: _onCreate,
         onUpgrade: _onUpgrade,
       );
+      await _runB3A4V39Compat(_db!);
       await _ensureDefaultBook();
+      await _normalizeStandaloneRefunds();
       await _loadAll();
+      await _materializeBudgetV2Occurrences();
+      await _cleanupCommittedRestore(
+        dbPath: dbPath,
+        oldPath: oldPath,
+        oldReceipts: oldReceipts,
+        oldAssetMedia: oldAssetMedia,
+      );
       return true;
     } catch (_) {
       try {
-        final bak = File(bakPath);
-        if (await bak.exists()) {
-          await bak.copy(dbPath);
+        await _db?.close();
+      } catch (_) {
+      } finally {
+        _db = null;
+      }
+      try {
+        final current = File(dbPath);
+        if (databaseInstalled && await current.exists()) {
+          await current.delete();
         }
+        final old = File(oldPath);
+        if (databaseMovedToOld && await old.exists()) {
+          await old.rename(dbPath);
+        } else if (!await current.exists()) {
+          final bak = File(bakPath);
+          if (await bak.exists()) await bak.copy(dbPath);
+        }
+      } catch (_) {}
+      try {
+        if (liveReceipts != null && oldReceipts != null) {
+          if (receiptsInstalled && await liveReceipts.exists()) {
+            await liveReceipts.delete(recursive: true);
+          }
+          if (receiptsMovedToOld && await oldReceipts.exists()) {
+            await oldReceipts.rename(liveReceipts.path);
+          }
+        }
+      } catch (_) {}
+      try {
+        if (liveAssetMedia != null && oldAssetMedia != null) {
+          if (assetMediaInstalled && await liveAssetMedia.exists()) {
+            await liveAssetMedia.delete(recursive: true);
+          }
+          if (assetMediaMovedToOld && await oldAssetMedia.exists()) {
+            await oldAssetMedia.rename(liveAssetMedia.path);
+          }
+        }
+      } catch (_) {}
+      try {
+        final staged = File(stagedPath);
+        if (await staged.exists()) await staged.delete();
+      } catch (_) {}
+      try {
+        if (stagedReceipts != null && await stagedReceipts.exists()) {
+          await stagedReceipts.delete(recursive: true);
+        }
+      } catch (_) {}
+      try {
+        if (stagedAssetMedia != null && await stagedAssetMedia.exists()) {
+          await stagedAssetMedia.delete(recursive: true);
+        }
+      } catch (_) {}
+      try {
         _db = await openDatabase(
           dbPath,
           version: _dbVersion,
           onCreate: _onCreate,
           onUpgrade: _onUpgrade,
         );
+        await _runB3A4V39Compat(_db!);
+        await _normalizeStandaloneRefunds();
         await _loadAll();
+        await _materializeBudgetV2Occurrences();
       } catch (_) {}
       return false;
+    }
+  }
+
+  Future<void> _cleanupCommittedRestore({
+    required String dbPath,
+    required String oldPath,
+    Directory? oldReceipts,
+    Directory? oldAssetMedia,
+  }) async {
+    try {
+      await _pruneLocalBackups(File(dbPath).parent);
+    } catch (_) {}
+    try {
+      final old = File(oldPath);
+      if (await old.exists()) await old.delete();
+    } catch (_) {}
+    try {
+      if (oldReceipts != null && await oldReceipts.exists()) {
+        await oldReceipts.delete(recursive: true);
+      }
+    } catch (_) {}
+    try {
+      if (oldAssetMedia != null && await oldAssetMedia.exists()) {
+        await oldAssetMedia.delete(recursive: true);
+      }
+    } catch (_) {}
+  }
+
+  Future<void> _copyDirectoryTree(Directory source, Directory target) async {
+    await target.create(recursive: true);
+    if (!await source.exists()) return;
+    await for (final entry
+        in source.list(recursive: true, followLinks: false)) {
+      if (entry is! File) continue;
+      final relative = p.relative(entry.path, from: source.path);
+      final destination = File(p.join(target.path, relative));
+      await destination.parent.create(recursive: true);
+      await entry.copy(destination.path);
+    }
+  }
+
+  Future<bool> _validateAndMigrateRestoreCandidate(String path) async {
+    Database? probe;
+    Database? migrated;
+    try {
+      probe = await openReadOnlyDatabase(path);
+      final quick = await probe.rawQuery('PRAGMA quick_check');
+      if (quick.isEmpty ||
+          quick.first.values.first.toString().toLowerCase() != 'ok') {
+        return false;
+      }
+      final version = Sqflite.firstIntValue(
+            await probe.rawQuery('PRAGMA user_version'),
+          ) ??
+          0;
+      if (version <= 0 || version > _dbVersion) return false;
+      final tables = (await probe.rawQuery(
+        "SELECT name FROM sqlite_master WHERE type = 'table'",
+      ))
+          .map((row) => row['name'])
+          .whereType<String>()
+          .toSet();
+      if (!tables.containsAll(
+        const {
+          'accounts',
+          'categories',
+          'books',
+          'transactions',
+          'app_settings'
+        },
+      )) {
+        return false;
+      }
+      await probe.close();
+      probe = null;
+
+      migrated = await openDatabase(
+        path,
+        version: _dbVersion,
+        onUpgrade: _onUpgrade,
+        singleInstance: false,
+      );
+      await _runB3A4V39Compat(migrated);
+      final migratedQuick = await migrated.rawQuery('PRAGMA quick_check');
+      return migratedQuick.isNotEmpty &&
+          migratedQuick.first.values.first.toString().toLowerCase() == 'ok';
+    } catch (_) {
+      return false;
+    } finally {
+      await probe?.close();
+      await migrated?.close();
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // 旧退款归并
+  // ---------------------------------------------------------------------------
+
+  /// 把「游离的负数支出行」（v17 之前老版本产生的独立冲账行、或导入残留）
+  /// 归并成挂在原订单上的附着式退款（refund_of），净额与月份归属才正确。
+  ///
+  /// ⚠️ 数据安全铁律（2026-07-09 复审后收紧，别再放宽）：
+  /// - 只处理**负数支出行**。收入行一律不碰——用户记的「押金退回」等收入
+  ///   是不是退款只有用户知道，猜错=收入凭空消失，宁可不归并。
+  /// - 只在**无歧义的高置信匹配**时才挂：分类一致或金额精确等于原单金额，
+  ///   且这样的候选恰好一个；候选多于一个直接放弃。归并是锦上添花，
+  ///   改错账是信任崩塌。
+  /// - 挂上后日期归属原订单（和 refundTransaction 口径一致），非空备注保留。
+  Future<void> _normalizeStandaloneRefunds() async {
+    final db = _db;
+    if (db == null) return;
+    final rows = await db.query(
+      'transactions',
+      columns: [
+        'id',
+        'book_id',
+        'kind',
+        'amount',
+        'category_id',
+        'account_id',
+        'note',
+        'date_ms',
+        'time_precision',
+        'refund_of',
+      ],
+      orderBy: 'id ASC',
+    );
+    final positiveExpenses = <Map<String, Object?>>[];
+    final refundRows = <Map<String, Object?>>[];
+    final attached = <int, Decimal>{};
+
+    for (final row in rows) {
+      final kind = row['kind'] as String? ?? '';
+      // 收入/转账一律不参与归并（也不当原单）。
+      if (kind != TransactionKind.expense.toJson()) continue;
+      final amount = Decimal.tryParse(row['amount'] as String? ?? '');
+      if (amount == null) continue;
+      final refundOf = row['refund_of'] as int?;
+      if (refundOf != null) {
+        attached[refundOf] =
+            (attached[refundOf] ?? Decimal.zero) + amount.abs();
+        continue;
+      }
+      if (amount > Decimal.zero) {
+        positiveExpenses.add(row);
+      } else if (amount < Decimal.zero) {
+        refundRows.add(row);
+      }
+    }
+
+    for (final refund in refundRows) {
+      final refundId = refund['id'] as int;
+      final refundAmount = Decimal.parse(refund['amount'] as String).abs();
+      final refundDate =
+          DateTime.fromMillisecondsSinceEpoch(refund['date_ms'] as int);
+      final note = (refund['note'] as String? ?? '').trim();
+      final looksRefund = note.contains('退款') ||
+          note.contains('退回') ||
+          note.contains('退货') ||
+          note.toLowerCase().contains('refund');
+      // 带正经备注（不像退款）的负数行是用户有意为之，不猜。
+      if (note.isNotEmpty && !looksRefund) continue;
+
+      final candidates = <Map<String, Object?>>[];
+      final strong = <Map<String, Object?>>[];
+      for (final orig in positiveExpenses) {
+        if (orig['book_id'] != refund['book_id']) continue;
+        if (orig['account_id'] != refund['account_id']) continue;
+        final origId = orig['id'] as int;
+        final origAmount = Decimal.parse(orig['amount'] as String);
+        final remaining = origAmount - (attached[origId] ?? Decimal.zero);
+        if (remaining < refundAmount) continue; // 剩余可退必须装得下
+
+        final origDate =
+            DateTime.fromMillisecondsSinceEpoch(orig['date_ms'] as int);
+        final diff = refundDate.difference(origDate);
+        // 退款不会发生在下单之前（留 1 天时钟余量），超 90 天也不猜。
+        if (diff.inDays < -1 || diff.inDays > 90) continue;
+
+        candidates.add(orig);
+        final sameCategory = orig['category_id'] != null &&
+            orig['category_id'] == refund['category_id'];
+        final exactAmount = origAmount == refundAmount; // 全额退，最常见形态
+        if (sameCategory || exactAmount) strong.add(orig);
+      }
+
+      Map<String, Object?>? target;
+      if (strong.length == 1) {
+        target = strong.first;
+      } else if (strong.isEmpty && candidates.length == 1 && looksRefund) {
+        // 备注明说是退款、且区间内只有唯一一笔装得下 → 也算无歧义。
+        target = candidates.first;
+      }
+      if (target == null) continue; // 有歧义或无匹配：原样保留，绝不猜。
+
+      final origId = target['id'] as int;
+      await db.update(
+        'transactions',
+        {
+          'category_id': target['category_id'],
+          'account_id': target['account_id'],
+          if (note.isEmpty) 'note': '退款',
+          'date_ms': target['date_ms'],
+          'time_precision': (target['time_precision'] as String?) ??
+              TransactionTimePrecision.legacyUnknown.storageKey,
+          'refund_of': origId,
+          'event_type': TransactionEventType.refund.storageKey,
+          'updated_ms': DateTime.now().millisecondsSinceEpoch,
+        },
+        where: 'id = ?',
+        whereArgs: [refundId],
+      );
+      attached[origId] = (attached[origId] ?? Decimal.zero) + refundAmount;
     }
   }
 
@@ -1610,6 +8728,66 @@ class AppRepository extends ChangeNotifier {
   // 写操作
   // ---------------------------------------------------------------------------
 
+  Future<String?> transactionMutationBlockReason(int transactionId) async {
+    final physicalLinks = await _db!.query(
+      'asset_transaction_links',
+      columns: ['link_type'],
+      where: 'transaction_id = ?',
+      whereArgs: [transactionId],
+      limit: 1,
+    );
+    if (physicalLinks.isNotEmpty) {
+      final type = AssetTransactionLinkTypeX.fromStorage(
+        physicalLinks.first['link_type'] as String?,
+      );
+      return switch (type) {
+        AssetTransactionLinkType.saleAccountMovement =>
+          '这笔流水来自资产出售，请先在资产详情中撤销出售。',
+        AssetTransactionLinkType.sourceTransaction ||
+        AssetTransactionLinkType.purchaseTransaction =>
+          '这笔流水已关联实物资产，请先在资产详情中解除关联。',
+        AssetTransactionLinkType.maintenance ||
+        AssetTransactionLinkType.accessory ||
+        AssetTransactionLinkType.insurance ||
+        AssetTransactionLinkType.otherCost =>
+          '这笔流水已关联物品持有支出，请先在物品详情中解除关联。',
+      };
+    }
+    final recoveries = await _db!.query(
+      'receivable_recoveries',
+      columns: ['id'],
+      where: 'transaction_id = ?',
+      whereArgs: [transactionId],
+      limit: 1,
+    );
+    if (recoveries.isNotEmpty) {
+      return '这笔流水来自权益收回，请先在资产详情中撤销收回。';
+    }
+    return null;
+  }
+
+  Future<void> _assertTransactionMutable(int transactionId) async {
+    final reason = await transactionMutationBlockReason(transactionId);
+    if (reason != null) throw StateError(reason);
+  }
+
+  static Future<Decimal> _refundedAmountInDb(
+    DatabaseExecutor db,
+    int transactionId,
+  ) async {
+    final rows = await db.query(
+      'transactions',
+      columns: ['amount'],
+      where: 'refund_of = ?',
+      whereArgs: [transactionId],
+    );
+    return rows.fold<Decimal>(Decimal.zero, (sum, row) {
+      final amount =
+          Decimal.tryParse(row['amount'] as String? ?? '') ?? Decimal.zero;
+      return sum + amount.abs();
+    });
+  }
+
   /// 新增一笔，返回新记录的 id（供记账卡保存后按条目改分类用）。
   /// [bookId] 不传则记到当前账本（手动卡的「账本」芯片可指定记到别的账本）。
   Future<int> addTransaction({
@@ -1621,32 +8799,108 @@ class AppRepository extends ChangeNotifier {
     int? toAccountId,
     String note = '',
     required DateTime date,
+    TransactionTimePrecision timePrecision =
+        TransactionTimePrecision.entryClock,
     List<int> tagIds = const [],
     bool reimbursable = false,
     String imagePath = '',
     bool excluded = false,
     int? bookId,
+    String? autoRecordSourceId,
   }) async {
-    final newId = await _db!.insert('transactions', {
+    final normalizedCurrency = currencyCode.trim().toUpperCase();
+    if (normalizedCurrency != 'CNY') {
+      throw UnsupportedError('当前版本仅支持新增人民币流水。');
+    }
+    if (!_isSupportedTransactionAccountId(accountId)) {
+      throw ArgumentError('记账账户不存在或币种不受支持');
+    }
+    if (kind == TransactionKind.transfer) {
+      if (toAccountId == null ||
+          toAccountId == accountId ||
+          !_isSupportedTransactionAccountId(toAccountId)) {
+        throw ArgumentError('转入账户不存在、币种不受支持或与转出账户相同');
+      }
+    } else if (toAccountId != null &&
+        !_isSupportedTransactionAccountId(toAccountId)) {
+      throw ArgumentError('到账账户不存在或币种不受支持');
+    }
+    final sourceId = autoRecordSourceId?.trim();
+    final values = <String, Object?>{
       'book_id': bookId ?? _currentBookId,
       'kind': kind.toJson(),
       'amount': amount.toString(),
-      'currency_code': currencyCode,
+      'currency_code': normalizedCurrency,
       'category_id': categoryId,
       'account_id': accountId,
       'to_account_id': toAccountId,
       'note': note,
       'date_ms': date.millisecondsSinceEpoch,
+      'time_precision': timePrecision.storageKey,
       'tags': tagIds.join(','),
       'reimbursable': reimbursable ? 1 : 0,
       'image_path': imagePath,
       'excluded': excluded ? 1 : 0,
+      ..._settlementFields(
+        settledAt: date,
+        settlementAccountId: accountId,
+        eventType: _eventTypeForKind(kind),
+      ),
       ..._syncStampNew(),
+    };
+    final newId = sourceId == null || sourceId.isEmpty
+        ? await _db!.insert('transactions', values)
+        : await _db!.transaction<int>((txn) async {
+            final existing = await txn.query(
+              'auto_record_occurrences',
+              columns: ['transaction_id'],
+              where: 'source_id = ?',
+              whereArgs: [sourceId],
+              limit: 1,
+            );
+            if (existing.isNotEmpty) {
+              final transactionId = existing.first['transaction_id'] as int?;
+              if (transactionId != null) return transactionId;
+              // A null claim cannot survive the transaction that creates it,
+              // but self-heal malformed development data instead of blocking.
+              await txn.delete(
+                'auto_record_occurrences',
+                where: 'source_id = ?',
+                whereArgs: [sourceId],
+              );
+            }
+            await txn.insert('auto_record_occurrences', {
+              'source_id': sourceId,
+              'transaction_id': null,
+              'created_ms': DateTime.now().millisecondsSinceEpoch,
+            });
+            final transactionId = await txn.insert('transactions', values);
+            await txn.update(
+              'auto_record_occurrences',
+              {'transaction_id': transactionId},
+              where: 'source_id = ?',
+              whereArgs: [sourceId],
+            );
+            return transactionId;
+          });
+    await _refreshTransactionRows(ids: {newId});
+    await _refreshCurrentNetWorthSnapshotBestEffort({
+      kind == TransactionKind.transfer
+          ? NetWorthSnapshotCause.transfer
+          : NetWorthSnapshotCause.transaction,
     });
-    await _loadTransactions();
     notifyListeners();
     return newId;
   }
+
+  bool _isSupportedTransactionAccountId(int? accountId) =>
+      accountId != null &&
+      _accounts.any(
+        (account) =>
+            account.id == accountId &&
+            !account.isDeleted &&
+            account.currencyCode == 'CNY',
+      );
 
   /// 当前账本视角下所有「待报销」的支出（金额大的在前）。
   List<TransactionEntity> get reimbursableTransactions => _transactions
@@ -1660,111 +8914,1489 @@ class AppRepository extends ChangeNotifier {
   /// 标记一笔已报销：钱报销回来了 = 这笔不算自己的支出，
   /// 所以像退款一样给它补一笔「补满净额」的退款让净额归 0（用户 0703 拍板），
   /// 同时清掉待报销标。原账单仍在列表里，显示成划线原价 + 净额 0。
-  Future<void> markReimbursed(int id) async {
-    final original = _transactions.where((t) => t.id == id).firstOrNull;
-    if (original == null) return;
-    final net = netAmountOf(original);
-    if (net > Decimal.zero) {
-      final accountId = original.accountId ?? _accounts.firstOrNull?.id;
-      final bookId = Sqflite.firstIntValue(await _db!.rawQuery(
-          'SELECT book_id FROM transactions WHERE id = ?', [id]));
-      await _db!.insert('transactions', {
-        'book_id': bookId ?? _currentBookId,
-        'kind': TransactionKind.expense.toJson(),
-        'amount': (Decimal.zero - net).toString(),
-        'currency_code': 'CNY',
-        'category_id': original.categoryId,
-        'account_id': accountId,
-        'note': '报销到账',
-        // 同退款：冲减归属原订单那个月，保证表头合计=列表净额。
-        'date_ms': original.dateMs,
-        'refund_of': id,
-        ..._syncStampNew(),
-      });
+  Future<void> markReimbursed(
+    int id, {
+    required DateTime settledAt,
+    required int settlementAccountId,
+  }) async {
+    await _assertTransactionMutable(id);
+    if (!_accounts.any((account) =>
+        account.id == settlementAccountId &&
+        !account.isDeleted &&
+        account.currencyCode == 'CNY')) {
+      throw ArgumentError('报销到账账户不存在或币种不受支持');
     }
-    await _db!.update(
-      'transactions',
-      {
-        'reimbursable': 0,
-        'updated_ms': DateTime.now().millisecondsSinceEpoch,
-      },
-      where: 'id = ?',
-      whereArgs: [id],
+    await _db!.transaction((txn) async {
+      final rows = await txn.query(
+        'transactions',
+        where: 'id = ?',
+        whereArgs: [id],
+        limit: 1,
+      );
+      if (rows.isEmpty) return;
+      final original = rows.first;
+      final amount =
+          Decimal.tryParse(original['amount'] as String? ?? '') ?? Decimal.zero;
+      final refunded = await _refundedAmountInDb(txn, id);
+      final net = amount - refunded;
+      if (net > Decimal.zero) {
+        final accountId =
+            original['account_id'] as int? ?? _accounts.firstOrNull?.id;
+        final reimbursementId = await txn.insert('transactions', {
+          'book_id': original['book_id'] as int? ?? _currentBookId,
+          'kind': TransactionKind.expense.toJson(),
+          'amount': (Decimal.zero - net).toString(),
+          'currency_code': original['currency_code'] as String? ?? 'CNY',
+          'category_id': original['category_id'] as int?,
+          'account_id': accountId,
+          'note': '报销到账',
+          'date_ms': original['date_ms'] as int,
+          'time_precision': (original['time_precision'] as String?) ??
+              TransactionTimePrecision.legacyUnknown.storageKey,
+          'refund_of': id,
+          ..._settlementFields(
+            settledAt: settledAt,
+            settlementAccountId: settlementAccountId,
+            eventType: TransactionEventType.reimbursement,
+          ),
+          ..._syncStampNew(),
+        });
+        await _applyNewRefundToAssetAllocations(
+          txn,
+          originalTransactionId: id,
+          refundTransactionId: reimbursementId,
+          refundCents: decimalToBudgetCents(net).abs(),
+        );
+      }
+      await txn.update(
+        'transactions',
+        {
+          'reimbursable': 0,
+          'updated_ms': DateTime.now().millisecondsSinceEpoch,
+        },
+        where: 'id = ?',
+        whereArgs: [id],
+      );
+    });
+    await _refreshTransactionRows(familyRoots: {id});
+    await _loadPhysicalAssetData(refreshSnapshot: false);
+    await _refreshCurrentNetWorthSnapshotBestEffort(
+      const {NetWorthSnapshotCause.refund},
     );
-    await _loadTransactions();
     notifyListeners();
   }
 
   /// 只改某笔的分类（记账卡「一键改分类」用，轻量、不动其它字段）。
   Future<void> setTransactionCategory(int id, int? categoryId) async {
-    await _db!.update(
-      'transactions',
-      {
-        'category_id': categoryId,
-        'updated_ms': DateTime.now().millisecondsSinceEpoch,
-      },
-      where: 'id = ?',
-      whereArgs: [id],
-    );
-    await _loadTransactions();
+    await _assertTransactionMutable(id);
+    final updatedMs = DateTime.now().millisecondsSinceEpoch;
+    await _db!.transaction((txn) async {
+      await txn.update(
+        'transactions',
+        {'category_id': categoryId, 'updated_ms': updatedMs},
+        where: 'id = ?',
+        whereArgs: [id],
+      );
+      await txn.update(
+        'transactions',
+        {'category_id': categoryId, 'updated_ms': updatedMs},
+        where: 'refund_of = ?',
+        whereArgs: [id],
+      );
+    });
+    await _refreshTransactionRows(familyRoots: {id});
     notifyListeners();
   }
 
   /// 退款：记一笔挂在原账单上的「负支出」（refund_of=原id）。
   /// 退款行不在时间线单独显示，改挂到原账单的净额/详情里（对齐咔皮）；
   /// 统计/预算/结余因负数累加自动按净额计算，无需改引擎。
-  Future<void> refundTransaction(
-      TransactionEntity original, Decimal refundAmount) async {
-    if (refundAmount <= Decimal.zero) return;
-    final accountId = original.accountId ?? _accounts.firstOrNull?.id;
-    if (accountId == null) return;
-    // 退款行跟原账单同一个账本，跨账本视图也待在一起。
-    final bookId = Sqflite.firstIntValue(await _db!.rawQuery(
-        'SELECT book_id FROM transactions WHERE id = ?', [original.id]));
-    await _db!.insert('transactions', {
-      'book_id': bookId ?? _currentBookId,
-      'kind': TransactionKind.expense.toJson(),
-      'amount': (Decimal.zero - refundAmount).toString(), // 负支出 = 冲账
-      'currency_code': 'CNY',
-      'category_id': original.categoryId,
-      'account_id': accountId,
-      'note': '退款',
-      // 退款是原支出的冲减，日期归属原订单那个月（否则跨月退款会把当月
-      // 支出算错、且表头合计与列表净额对不上 → 用户不信任）。
-      'date_ms': original.dateMs,
-      'refund_of': original.id,
-      ..._syncStampNew(),
+  Future<int> refundTransaction(
+    TransactionEntity original,
+    Decimal refundAmount, {
+    required DateTime settledAt,
+    required int settlementAccountId,
+  }) async {
+    if (refundAmount <= Decimal.zero) {
+      throw ArgumentError('refund amount must be greater than zero');
+    }
+    if (!_accounts.any((account) =>
+        account.id == settlementAccountId &&
+        !account.isDeleted &&
+        account.currencyCode == original.currencyCode)) {
+      throw ArgumentError('退款到账账户不存在或币种不受支持');
+    }
+    final refundId = await _db!.transaction<int>((txn) async {
+      final rows = await txn.query(
+        'transactions',
+        where: 'id = ?',
+        whereArgs: [original.id],
+        limit: 1,
+      );
+      if (rows.isEmpty) {
+        throw StateError('original transaction does not exist');
+      }
+      final stored = rows.first;
+      final amount =
+          Decimal.tryParse(stored['amount'] as String? ?? '') ?? Decimal.zero;
+      final kind = TransactionKind.fromJson(stored['kind'] as String);
+      if (stored['refund_of'] != null ||
+          kind != TransactionKind.expense ||
+          amount <= Decimal.zero) {
+        throw StateError('only positive expense transactions can be refunded');
+      }
+      final refunded = await _refundedAmountInDb(txn, original.id);
+      if (refundAmount > amount - refunded) {
+        throw StateError('refund amount exceeds remaining refundable amount');
+      }
+      final accountId =
+          stored['account_id'] as int? ?? _accounts.firstOrNull?.id;
+      if (accountId == null) {
+        throw StateError('refund account does not exist');
+      }
+      final refundId = await txn.insert('transactions', {
+        'book_id': stored['book_id'] as int? ?? _currentBookId,
+        'kind': TransactionKind.expense.toJson(),
+        'amount': (Decimal.zero - refundAmount).toString(),
+        'currency_code': stored['currency_code'] as String? ?? 'CNY',
+        'category_id': stored['category_id'] as int?,
+        'account_id': accountId,
+        'note': '退款',
+        'date_ms': stored['date_ms'] as int,
+        'time_precision': (stored['time_precision'] as String?) ??
+            TransactionTimePrecision.legacyUnknown.storageKey,
+        'refund_of': original.id,
+        ..._settlementFields(
+          settledAt: settledAt,
+          settlementAccountId: settlementAccountId,
+          eventType: TransactionEventType.refund,
+        ),
+        ..._syncStampNew(),
+      });
+      await _applyNewRefundToAssetAllocations(
+        txn,
+        originalTransactionId: original.id,
+        refundTransactionId: refundId,
+        refundCents: decimalToBudgetCents(refundAmount).abs(),
+      );
+      return refundId;
     });
-    await _loadTransactions();
+    await _refreshTransactionRows(familyRoots: {original.id});
+    await _markBudgetOccurrenceRefundReview(original);
+    await _loadPhysicalAssetData(refreshSnapshot: false);
+    await _refreshCurrentNetWorthSnapshotBestEffort(
+      const {NetWorthSnapshotCause.refund},
+    );
+    notifyListeners();
+    return refundId;
+  }
+
+  /// 补确认历史退款/报销的真实到账信息。迁移后的 unknown 只能通过这个
+  /// 显式入口升级为 user_confirmed，普通账单编辑不得顺带改写这些字段。
+  Future<void> confirmTransactionSettlement(
+    int transactionId, {
+    required DateTime settledAt,
+    required int settlementAccountId,
+  }) async {
+    final rows = await _db!.query(
+      'transactions',
+      columns: ['refund_of', 'event_type', 'currency_code'],
+      where: 'id = ?',
+      whereArgs: [transactionId],
+      limit: 1,
+    );
+    if (rows.isEmpty) throw StateError('结算事件不存在');
+    final row = rows.first;
+    final rootId = row['refund_of'] as int?;
+    final eventType = TransactionEventTypeX.fromStorage(
+      row['event_type'] as String?,
+    );
+    if (rootId == null ||
+        (eventType != TransactionEventType.refund &&
+            eventType != TransactionEventType.reimbursement)) {
+      throw StateError('只有退款或报销到账事件可以补确认');
+    }
+    final currencyCode = row['currency_code'] as String? ?? 'CNY';
+    if (!_accounts.any((account) =>
+        account.id == settlementAccountId &&
+        !account.isDeleted &&
+        account.currencyCode == currencyCode)) {
+      throw ArgumentError('到账账户不存在或币种不受支持');
+    }
+    final eventUuid = row['uuid'] as String? ?? transactionId.toString();
+    final coveringCheckpoints = _checkpointCoveredUnknownEventIds.entries
+        .where((entry) => entry.value.contains(eventUuid))
+        .map((entry) => _accountBalanceCheckpoints
+            .where((checkpoint) => checkpoint.id == entry.key)
+            .firstOrNull)
+        .whereType<AccountBalanceCheckpointEntity>()
+        .where((checkpoint) => checkpoint.isAnchor)
+        .toList();
+    final nowMs = DateTime.now().millisecondsSinceEpoch;
+    for (final checkpoint
+        in coveringCheckpoints.where((item) => !_reversedAccountCheckpointIds(
+              item.accountId,
+              asOfMs: nowMs,
+              knowledgeCutoffMs: nowMs,
+            ).contains(item.id))) {
+      if (checkpoint.accountId != settlementAccountId) {
+        throw StateError('这笔到账已被其他账户的余额核对吸收，请先撤销原校准再修改到账账户。');
+      }
+      if (settledAt.millisecondsSinceEpoch > checkpoint.effectiveMs) {
+        throw StateError('确认的到账时间晚于吸收它的余额核对时点，请先撤销原校准后重新核对。');
+      }
+    }
+    await _db!.update(
+      'transactions',
+      {
+        'settled_ms': settledAt.millisecondsSinceEpoch,
+        'settlement_quality': SettlementQuality.userConfirmed.storageKey,
+        'settlement_account_id': settlementAccountId,
+        'settlement_account_quality':
+            SettlementQuality.userConfirmed.storageKey,
+        'updated_ms': DateTime.now().millisecondsSinceEpoch,
+      },
+      where: 'id = ?',
+      whereArgs: [transactionId],
+    );
+    await _refreshTransactionRows(familyRoots: {rootId});
+    await _refreshCurrentNetWorthSnapshotBestEffort(
+      const {NetWorthSnapshotCause.refund, NetWorthSnapshotCause.account},
+    );
     notifyListeners();
   }
 
   /// 时间线可见账单：隐藏「附着式退款行」（它们挂在原账单里）。
   /// 老的独立冲账行 refundOf==null，仍照常显示（不破坏历史）。
-  List<TransactionEntity> get visibleTransactions =>
-      _transactions.where((t) => t.refundOf == null).toList();
+  /// 返回副本：调用方可随意 sort/filter，不会弄脏缓存。
+  List<TransactionEntity> get visibleTransactions => List.of(
+      _visibleTxCache ??= _transactions.where((t) => t.refundOf == null).toList(
+            growable: false,
+          ));
 
   /// 某笔账单的退款明细行（按时间正序）。
   List<TransactionEntity> refundsOf(int id) =>
       (_transactions.where((t) => t.refundOf == id).toList())
         ..sort((a, b) => a.dateMs.compareTo(b.dateMs));
 
-  /// 某笔账单已退款合计（正数）。
-  Decimal refundedAmountOf(int id) {
-    var sum = Decimal.zero;
-    for (final t in _transactions) {
-      if (t.refundOf == id) sum += t.amount.abs();
+  /// 某笔账单已退款合计（正数）。退款行全是负数，索引合计取绝对值即可。
+  Decimal refundedAmountOf(int id) => (_refundTotals[id] ?? Decimal.zero).abs();
+
+  /// 某笔账单的净额 = 原额 − 已退（退款行是负数，直接累加即净额）。O(1)。
+  Decimal netAmountOf(TransactionEntity t) =>
+      LedgerPolicy.netAmountWith(t, _refundTotals);
+
+  /// 指定账本视图/历史报告使用：不依赖当前账本，退款索引覆盖全部账本。
+  Decimal netAmountAcrossBooks(TransactionEntity t) =>
+      LedgerPolicy.netAmountWith(t, _globalRefundTotals);
+
+  /// 用户可见统计金额：排除不计入行，附着式退款归并到原账单净额。O(1)。
+  Decimal userAmountOf(TransactionEntity t) =>
+      LedgerPolicy.userAmountWith(t, _refundTotals);
+
+  AccountSettlementEvent _accountSettlementEvent(
+    TransactionEntity transaction,
+  ) =>
+      AccountSettlementEvent(
+        id: transaction.uuid.isEmpty
+            ? transaction.id.toString()
+            : transaction.uuid,
+        bookId: transaction.bookId ?? _defaultBookId,
+        currencyCode: transaction.currencyCode,
+        eventType: transaction.eventType,
+        legacyKind: transaction.txKind,
+        amountMinor: decimalToBudgetCents(transaction.amount),
+        attributionAt: transaction.date,
+        settledAt: transaction.settledAt,
+        settlementQuality: transaction.settlementQuality,
+        settlementAccountId: transaction.settlementAccountId,
+        settlementAccountQuality: transaction.settlementAccountQuality,
+        toAccountId: transaction.toAccountId,
+        createdMs: transaction.createdMs,
+      );
+
+  List<AccountBalanceMovement> _accountBalanceMovementLegs(
+    TransactionEntity transaction,
+  ) {
+    final eventId =
+        transaction.uuid.isEmpty ? transaction.id.toString() : transaction.uuid;
+    final amount = decimalToBudgetCents(transaction.amount);
+    final absolute = amount.abs();
+    AccountBalanceMovement leg({
+      required String id,
+      required int? accountId,
+      required int delta,
+      Set<int> candidates = const {},
+    }) =>
+        AccountBalanceMovement(
+          id: id,
+          accountId: accountId,
+          candidateAccountIds: candidates,
+          deltaMinor: delta,
+          settledMs: transaction.settledMs,
+          sequence: transaction.id,
+          createdMs: transaction.createdMs,
+        );
+
+    final accountId = transaction.settlementAccountId;
+    switch (transaction.eventType) {
+      case TransactionEventType.expense ||
+            TransactionEventType.assetPurchase ||
+            TransactionEventType.principalPayment ||
+            TransactionEventType.interest:
+        return [leg(id: eventId, accountId: accountId, delta: -absolute)];
+      case TransactionEventType.income ||
+            TransactionEventType.refund ||
+            TransactionEventType.reimbursement ||
+            TransactionEventType.assetSale ||
+            TransactionEventType.receivableRecovery:
+        return [leg(id: eventId, accountId: accountId, delta: absolute)];
+      case TransactionEventType.transfer:
+        final toAccountId = transaction.toAccountId;
+        if (accountId == null ||
+            toAccountId == null ||
+            accountId == toAccountId) {
+          return [
+            leg(
+              id: eventId,
+              accountId: null,
+              delta: 0,
+              candidates: {
+                if (accountId != null) accountId,
+                if (toAccountId != null) toAccountId,
+              },
+            ),
+          ];
+        }
+        return [
+          leg(id: '$eventId:out', accountId: accountId, delta: -absolute),
+          leg(id: '$eventId:in', accountId: toAccountId, delta: absolute),
+        ];
+      case TransactionEventType.legacyAdjustment:
+        return switch (transaction.txKind) {
+          TransactionKind.expense => [
+              leg(id: eventId, accountId: accountId, delta: -amount)
+            ],
+          TransactionKind.income => [
+              leg(id: eventId, accountId: accountId, delta: amount)
+            ],
+          TransactionKind.transfer => transaction.toAccountId == null ||
+                  accountId == null ||
+                  transaction.toAccountId == accountId
+              ? [
+                  leg(
+                    id: eventId,
+                    accountId: null,
+                    delta: 0,
+                    candidates: {
+                      if (accountId != null) accountId,
+                      if (transaction.toAccountId != null)
+                        transaction.toAccountId!,
+                    },
+                  ),
+                ]
+              : [
+                  leg(
+                    id: '$eventId:out',
+                    accountId: accountId,
+                    delta: -absolute,
+                  ),
+                  leg(
+                    id: '$eventId:in',
+                    accountId: transaction.toAccountId,
+                    delta: absolute,
+                  ),
+                ],
+        };
     }
-    return sum;
   }
 
-  /// 某笔账单的净额 = 原额 − 已退（退款行是负数，直接累加即净额）。
-  Decimal netAmountOf(TransactionEntity t) {
-    var net = t.amount;
-    for (final r in _transactions) {
-      if (r.refundOf == t.id) net += r.amount; // r.amount 为负
+  List<AccountBalanceCheckpointEntity> accountBalanceCheckpointsFor(
+    int accountId,
+  ) =>
+      List.unmodifiable(
+        _accountBalanceCheckpoints
+            .where((checkpoint) => checkpoint.accountId == accountId)
+            .toList()
+          ..sort((left, right) {
+            final effective = right.effectiveMs.compareTo(left.effectiveMs);
+            if (effective != 0) return effective;
+            final sequence = right.sequence.compareTo(left.sequence);
+            return sequence != 0 ? sequence : right.id.compareTo(left.id);
+          }),
+      );
+
+  bool isAccountBalanceCheckpointReversed(int checkpointId) {
+    final checkpoint = _accountBalanceCheckpoints
+        .where((item) => item.id == checkpointId)
+        .firstOrNull;
+    if (checkpoint == null) return false;
+    final now = DateTime.now().millisecondsSinceEpoch;
+    return _reversedAccountCheckpointIds(
+      checkpoint.accountId,
+      asOfMs: now,
+      knowledgeCutoffMs: now,
+    ).contains(checkpointId);
+  }
+
+  Set<int> _reversedAccountCheckpointIds(
+    int accountId, {
+    required int asOfMs,
+    required int knowledgeCutoffMs,
+  }) {
+    final visible = _accountBalanceCheckpoints
+        .where((checkpoint) =>
+            checkpoint.accountId == accountId &&
+            checkpoint.status == 'active' &&
+            checkpoint.createdMs <= knowledgeCutoffMs &&
+            checkpoint.effectiveMs <= asOfMs)
+        .toList()
+      ..sort((left, right) {
+        final effective = left.effectiveMs.compareTo(right.effectiveMs);
+        if (effective != 0) return effective;
+        final sequence = left.sequence.compareTo(right.sequence);
+        return sequence != 0 ? sequence : left.id.compareTo(right.id);
+      });
+    final inactive = <int>{};
+    for (final checkpoint in visible.reversed) {
+      if (inactive.contains(checkpoint.id)) continue;
+      if (checkpoint.isReversal && checkpoint.reversalOf != null) {
+        inactive.add(checkpoint.reversalOf!);
+      }
     }
-    return net;
+    return inactive;
+  }
+
+  AccountBalanceCheckpointEntity? _effectiveAccountCheckpoint({
+    required int accountId,
+    required int asOfMs,
+    required int knowledgeCutoffMs,
+  }) {
+    final reversed = _reversedAccountCheckpointIds(
+      accountId,
+      asOfMs: asOfMs,
+      knowledgeCutoffMs: knowledgeCutoffMs,
+    );
+    final candidates = _accountBalanceCheckpoints.where(
+      (checkpoint) =>
+          checkpoint.accountId == accountId &&
+          checkpoint.isAnchor &&
+          checkpoint.status == 'active' &&
+          checkpoint.createdMs <= knowledgeCutoffMs &&
+          checkpoint.effectiveMs <= asOfMs &&
+          !reversed.contains(checkpoint.id),
+    );
+    AccountBalanceCheckpointEntity? best;
+    for (final candidate in candidates) {
+      if (best == null ||
+          candidate.effectiveMs > best.effectiveMs ||
+          (candidate.effectiveMs == best.effectiveMs &&
+              (candidate.sequence > best.sequence ||
+                  (candidate.sequence == best.sequence &&
+                      candidate.id > best.id)))) {
+        best = candidate;
+      }
+    }
+    return best;
+  }
+
+  MetricResult<AccountBalanceValue> accountBalanceResultOf(
+    AccountEntity account,
+  ) =>
+      _accountBalanceResultAt(
+        account,
+        asOf: DateTime.now(),
+        knowledgeCutoff: DateTime.now(),
+        historical: false,
+      );
+
+  MetricResult<AccountBalanceValue> _accountBalanceResultAt(
+    AccountEntity account, {
+    required DateTime asOf,
+    required DateTime knowledgeCutoff,
+    required bool historical,
+  }) {
+    final bookIds = _books.map((book) => book.id).toList();
+    if (bookIds.isEmpty) bookIds.add(_defaultBookId == 0 ? 1 : _defaultBookId);
+    final metricQuery = MetricQuery(
+      metricId: 'F-ACC-001:${account.id}',
+      window: MetricWindow(
+        startInclusive: DateTime(1900),
+        endExclusive: asOf.add(const Duration(days: 1)),
+      ),
+      dateAxis: MetricDateAxis.settlement,
+      timezone: 'device_local',
+      bookScope: MetricBookScope(bookIds: bookIds, scopeVersion: 1),
+      currencyScope: MetricCurrencyScope.single(account.currencyCode),
+      asOf: asOf,
+      knowledgeCutoff: knowledgeCutoff,
+    );
+    final asOfMs = asOf.millisecondsSinceEpoch;
+    final cutoffMs = knowledgeCutoff.millisecondsSinceEpoch;
+    final checkpoint = _effectiveAccountCheckpoint(
+      accountId: account.id,
+      asOfMs: asOfMs,
+      knowledgeCutoffMs: cutoffMs,
+    );
+    final trustedFromMs = checkpoint?.effectiveMs ??
+        (account.openingBalanceQuality == AccountOpeningBalanceQuality.exact
+            ? account.openingBalanceEffectiveMs
+            : null);
+    final baselineCutoffMs = checkpoint?.knowledgeCutoffMs ?? account.createdMs;
+    final covered = checkpoint == null
+        ? const <String>{}
+        : _checkpointCoveredUnknownEventIds[checkpoint.id] ?? const <String>{};
+    var unresolvedAbsorbedUnknown = 0;
+    var backfilledBeforeOpeningCount = 0;
+    final events = <AccountSettlementEvent>[];
+    for (final transaction in _allTransactions) {
+      final event = _accountSettlementEvent(transaction);
+      if (trustedFromMs == null) {
+        events.add(event);
+        continue;
+      }
+      final settledMs = transaction.settledMs;
+      if (settledMs != null &&
+          transaction.settlementQuality != SettlementQuality.unknown) {
+        if (settledMs > trustedFromMs ||
+            (settledMs == trustedFromMs &&
+                transaction.createdMs > baselineCutoffMs)) {
+          events.add(event);
+        } else if (checkpoint == null &&
+            transaction.createdMs >= baselineCutoffMs &&
+            transaction.createdMs <= asOfMs) {
+          // Compatibility for a transaction entered after a newly-created
+          // account but attributed to an earlier day. It changes the current
+          // balance at knowledge time, while the trusted trend still starts
+          // at account creation instead of drawing a fake earlier history.
+          events.add(event);
+          backfilledBeforeOpeningCount++;
+        }
+        continue;
+      }
+      final eventId = event.id;
+      final knownAtBaseline = transaction.createdMs == 0 ||
+          transaction.createdMs <= baselineCutoffMs;
+      if (knownAtBaseline) {
+        if (!covered.contains(eventId) &&
+            (transaction.settlementAccountId == account.id ||
+                transaction.settlementAccountId == null)) {
+          unresolvedAbsorbedUnknown++;
+        }
+        continue;
+      }
+      events.add(event);
+    }
+    final coreMovements = <AccountBalanceMovement>[];
+    for (final transaction in _allTransactions) {
+      final legs = _accountBalanceMovementLegs(transaction);
+      final unknownDate = transaction.settledMs == null ||
+          transaction.settlementQuality == SettlementQuality.unknown;
+      final knownAtBaseline = checkpoint != null &&
+          (transaction.createdMs == 0 ||
+              transaction.createdMs <= checkpoint.knowledgeCutoffMs);
+      for (final leg in legs) {
+        final backfilledBeforeOpening = checkpoint == null &&
+            account.openingBalanceQuality ==
+                AccountOpeningBalanceQuality.exact &&
+            transaction.settledMs != null &&
+            account.openingBalanceEffectiveMs != null &&
+            transaction.settledMs! < account.openingBalanceEffectiveMs! &&
+            transaction.createdMs >= account.createdMs;
+        if (backfilledBeforeOpening) {
+          coreMovements.add(AccountBalanceMovement(
+            id: leg.id,
+            accountId: leg.accountId,
+            candidateAccountIds: leg.candidateAccountIds,
+            deltaMinor: leg.deltaMinor,
+            settledMs: transaction.createdMs,
+            sequence: leg.sequence,
+            createdMs: leg.createdMs,
+          ));
+          continue;
+        }
+        if (unknownDate &&
+            knownAtBaseline &&
+            !covered.contains(leg.id) &&
+            leg.mayAffect(account.id)) {
+          coreMovements.add(AccountBalanceMovement(
+            id: leg.id,
+            accountId: leg.accountId,
+            candidateAccountIds: leg.candidateAccountIds,
+            deltaMinor: 0,
+            settledMs: null,
+            sequence: leg.sequence,
+            createdMs: leg.createdMs,
+          ));
+        } else {
+          coreMovements.add(leg);
+        }
+      }
+    }
+    final coreResult = AccountBalanceCheckpointResolver.resolve(
+      query: AccountBalanceQuery(
+        accountId: account.id,
+        asOfMs: asOfMs,
+        knowledgeCutoffMs: cutoffMs,
+        mode: historical
+            ? AccountBalanceQueryMode.historical
+            : AccountBalanceQueryMode.current,
+      ),
+      openingBalance: AccountOpeningBalance(
+        amountMinor: decimalToBudgetCents(account.openingBalance),
+        effectiveMs:
+            account.openingBalanceQuality == AccountOpeningBalanceQuality.exact
+                ? account.openingBalanceEffectiveMs
+                : null,
+        sequence: account.openingBalanceSequence,
+      ),
+      checkpoints: [
+        for (final item in _accountBalanceCheckpoints)
+          if (item.accountId == account.id && item.status == 'active')
+            AccountBalanceCheckpoint(
+              id: item.id.toString(),
+              accountId: item.accountId,
+              effectiveMs: item.effectiveMs,
+              sequence: item.sequence,
+              knowledgeCutoffMs: item.knowledgeCutoffMs,
+              targetBalanceMinor: decimalToBudgetCents(item.targetBalance),
+              reversalOf: item.reversalOf?.toString(),
+              coveredUnknownEventIds:
+                  _checkpointCoveredUnknownEventIds[item.id] ?? const {},
+            ),
+      ],
+      movements: coreMovements,
+    );
+    final movement = AccountMovementProjection.resolve(
+      query: historical
+          ? AccountMovementQuery.historicalBalanceAsOf(
+              metricQuery: metricQuery,
+              balanceAsOf: asOf,
+              accountId: account.id,
+            )
+          : AccountMovementQuery.currentBalance(
+              metricQuery: metricQuery,
+              accountId: account.id,
+            ),
+      events: events,
+    );
+    final movementValue = movement.value!;
+    final balance = budgetDecimalFromCents(coreResult.balanceMinor!)!;
+    final value = AccountBalanceValue(
+      balance: balance,
+      movement: movementValue,
+      checkpoint: checkpoint,
+      trustedFrom: coreResult.trustedFromMs == null
+          ? null
+          : DateTime.fromMillisecondsSinceEpoch(coreResult.trustedFromMs!),
+    );
+    final reasons = [...movement.reasons];
+    if (coreResult.partialReasons.contains(
+      AccountBalancePartialReason.unknownOpeningBalanceEffectiveTime,
+    )) {
+      reasons.add(MetricReason(
+        code: MetricReasonCode.invalidInput,
+        message: '历史账户缺少可证明的期初时点，校准前不生成可信余额趋势。',
+        details: {'account_id': account.id, 'domain': 'opening_balance'},
+      ));
+    }
+    if (coreResult.partialReasons.contains(
+          AccountBalancePartialReason.unknownSettlementAccount,
+        ) &&
+        !reasons.any((reason) =>
+            reason.code == MetricReasonCode.unknownSettlementAccount)) {
+      reasons.add(MetricReason(
+        code: MetricReasonCode.unknownSettlementAccount,
+        message: '仍有到账账户待确认的变动，当前余额只能部分核对。',
+        details: {'account_id': account.id},
+      ));
+    }
+    if (coreResult.partialReasons.contains(
+          AccountBalancePartialReason.unknownSettlementDate,
+        ) &&
+        !reasons.any((reason) =>
+            reason.code == MetricReasonCode.unknownSettlementDate)) {
+      reasons.add(MetricReason(
+        code: MetricReasonCode.unknownSettlementDate,
+        message: '仍有到账日期待确认的变动，历史余额不能精确分配。',
+        details: {'account_id': account.id},
+      ));
+    }
+    if (coreResult.partialReasons.contains(
+      AccountBalancePartialReason.missingReversalTarget,
+    )) {
+      reasons.add(MetricReason(
+        code: MetricReasonCode.invalidInput,
+        message: '一条余额校准撤销记录缺少目标，结果需要复核。',
+        details: {'account_id': account.id, 'domain': 'checkpoint'},
+      ));
+    }
+    if (unresolvedAbsorbedUnknown > 0) {
+      reasons.add(MetricReason(
+        code: MetricReasonCode.unknownSettlementDate,
+        message: '$unresolvedAbsorbedUnknown 笔旧账户变动已被余额锚点吸收，但到账信息仍待确认。',
+        details: {
+          'account_id': account.id,
+          'count': unresolvedAbsorbedUnknown,
+          'absorbed_by_checkpoint': checkpoint?.id,
+        },
+      ));
+    }
+    if (backfilledBeforeOpeningCount > 0) {
+      reasons.add(MetricReason(
+        code: MetricReasonCode.assumedSettlementDate,
+        message: '$backfilledBeforeOpeningCount 笔早于账户起点的后补流水按录入时点影响余额。',
+        details: {
+          'account_id': account.id,
+          'count': backfilledBeforeOpeningCount,
+          'domain': 'backfilled_before_opening',
+        },
+      ));
+    }
+    return reasons.isEmpty
+        ? MetricResult.available(
+            value: value,
+            query: movement.query,
+            resolver: AccountMovementProjection.resolverName,
+          )
+        : MetricResult.partial(
+            value: value,
+            reasons: reasons,
+            query: movement.query,
+            resolver: AccountMovementProjection.resolverName,
+          );
+  }
+
+  Decimal accountBalanceOf(AccountEntity account) =>
+      accountBalanceResultOf(account).value!.balance;
+
+  MetricResult<AccountBalanceValue> accountBalanceAsOfResult(
+    AccountEntity account, {
+    required DateTime asOf,
+    DateTime? knowledgeCutoff,
+  }) =>
+      _accountBalanceResultAt(
+        account,
+        asOf: asOf,
+        knowledgeCutoff: knowledgeCutoff ?? DateTime.now(),
+        historical: true,
+      );
+
+  AccountBalanceTrendValue? accountBalanceTrend(
+    AccountEntity account, {
+    int days = 90,
+  }) {
+    final now = DateTime.now();
+    final current = accountBalanceResultOf(account).value!;
+    final trustedFrom = current.trustedFrom;
+    if (trustedFrom == null) return null;
+    final requestedStart = DateTime(now.year, now.month, now.day)
+        .subtract(Duration(days: max(1, days) - 1));
+    var cursor = DateTime(
+      trustedFrom.year,
+      trustedFrom.month,
+      trustedFrom.day,
+    );
+    if (cursor.isBefore(requestedStart)) cursor = requestedStart;
+    final points = <AccountBalanceTrendPoint>[];
+    while (!cursor.isAfter(now)) {
+      final endOfDay = DateTime(
+        cursor.year,
+        cursor.month,
+        cursor.day,
+        23,
+        59,
+        59,
+        999,
+      );
+      final asOf = endOfDay.isAfter(now) ? now : endOfDay;
+      if (!asOf.isBefore(trustedFrom)) {
+        final result = accountBalanceAsOfResult(
+          account,
+          asOf: asOf,
+          knowledgeCutoff: now,
+        );
+        points.add(AccountBalanceTrendPoint(
+          asOf: asOf,
+          balance: result.value!.balance,
+          trusted: result.status == MetricStatus.available,
+        ));
+      }
+      cursor = cursor.add(const Duration(days: 1));
+    }
+    return AccountBalanceTrendValue(
+      trustedFrom: trustedFrom,
+      points: List.unmodifiable(points),
+    );
+  }
+
+  List<AccountActivityItem> accountActivitiesFor(
+    int accountId, {
+    int limit = 12,
+  }) {
+    final bookNames = {for (final book in _books) book.id: book.name};
+    final categoryNames = {
+      for (final category in _categories) category.id: category.nameZh,
+    };
+    final accountCurrency = _accounts
+        .where((account) => account.id == accountId)
+        .firstOrNull
+        ?.currencyCode;
+    return AccountActivityProjection.forAccount(
+      accountId: accountId,
+      limit: limit,
+      events: _allTransactions
+          .where((transaction) =>
+              accountCurrency == null ||
+              transaction.currencyCode == accountCurrency)
+          .map(
+            (transaction) => AccountActivityEvent(
+              id: transaction.uuid.isEmpty
+                  ? transaction.id.toString()
+                  : transaction.uuid,
+              bookId: transaction.bookId ?? _defaultBookId,
+              currencyCode: transaction.currencyCode,
+              eventType: transaction.eventType,
+              legacyKind: transaction.txKind,
+              amountMinor: decimalToBudgetCents(transaction.amount),
+              attributionAt: transaction.date,
+              settledAt: transaction.settledAt,
+              settlementQuality: transaction.settlementQuality,
+              settlementAccountId: transaction.settlementAccountId,
+              settlementAccountQuality: transaction.settlementAccountQuality,
+              toAccountId: transaction.toAccountId,
+              createdMs: transaction.createdMs,
+              title: transaction.note.trim().isEmpty
+                  ? categoryNames[transaction.categoryId] ?? '账户变动'
+                  : transaction.note.trim(),
+              categoryName: categoryNames[transaction.categoryId] ?? '',
+              bookName: bookNames[transaction.bookId] ?? '总账本',
+            ),
+          ),
+    );
+  }
+
+  NetWorthBreakdown currentNetWorthBreakdown() {
+    var cashAssets = Decimal.zero;
+    var investmentAssets = Decimal.zero;
+    var liabilities = Decimal.zero;
+    final accountBalances = <int, Decimal>{};
+    for (final account in _accounts) {
+      if (!account.includeInNetWorth ||
+          account.isDeleted ||
+          account.currencyCode != 'CNY') {
+        continue;
+      }
+      final balance = accountBalanceOf(account);
+      accountBalances[account.id] = balance;
+      if (balance >= Decimal.zero) {
+        if (account.type == AccountType.investment) {
+          investmentAssets += balance;
+        } else {
+          cashAssets += balance;
+        }
+      } else {
+        liabilities -= balance;
+      }
+    }
+    for (final profile in _liabilityProfiles) {
+      if (!profile.countsAsLiability) continue;
+      final account =
+          _accounts.where((a) => a.id == profile.accountId).firstOrNull;
+      if (account == null || account.isDeleted || !account.includeInNetWorth) {
+        continue;
+      }
+      final accountBalance = accountBalances[account.id] ?? Decimal.zero;
+      if (accountBalance >= Decimal.zero) {
+        liabilities += profile.currentPrincipal;
+      }
+    }
+    final physical = physicalAssetNetWorthTotal;
+    final receivable = receivableAssetNetWorthTotal;
+    final totalAssets = cashAssets + investmentAssets + physical + receivable;
+    return NetWorthBreakdown(
+      totalAssets: totalAssets,
+      totalLiabilities: liabilities,
+      netWorth: totalAssets - liabilities,
+      cashAssets: cashAssets,
+      investmentAssets: investmentAssets,
+      physicalAssets: physical,
+      receivableAssets: receivable,
+    );
+  }
+
+  MetricResult<NetWorthBreakdown> currentNetWorthResult() {
+    final now = DateTime.now();
+    final bookIds = _books.map((book) => book.id).toList();
+    if (bookIds.isEmpty) bookIds.add(_defaultBookId == 0 ? 1 : _defaultBookId);
+    final query = MetricQuery(
+      metricId: 'F-NW-001',
+      window: MetricWindow(
+        startInclusive: DateTime(1900),
+        endExclusive: now.add(const Duration(days: 1)),
+      ),
+      dateAxis: MetricDateAxis.asOf,
+      timezone: 'device_local',
+      bookScope: MetricBookScope(bookIds: bookIds, scopeVersion: 1),
+      currencyScope: MetricCurrencyScope.single('CNY'),
+      asOf: now,
+      knowledgeCutoff: now,
+    );
+    final reasons = <MetricReason>[];
+
+    void addReason(MetricReason reason) {
+      if (!reasons.contains(reason)) reasons.add(reason);
+    }
+
+    for (final account in _accounts.where(
+      (item) => item.includeInNetWorth && !item.isDeleted,
+    )) {
+      if (account.currencyCode != 'CNY') {
+        addReason(MetricReason(
+          code: MetricReasonCode.unsupportedCurrencyAggregation,
+          message: '外币账户未折算进人民币净资产',
+          details: {'account_id': account.id, 'currency': account.currencyCode},
+        ));
+        continue;
+      }
+      final balance = accountBalanceResultOf(account);
+      for (final reason in balance.reasons) {
+        addReason(reason);
+      }
+    }
+    for (final asset in _allPhysicalAssets.where(
+      (item) => item.countsInNetWorth,
+    )) {
+      if (asset.currencyCode != 'CNY') {
+        addReason(MetricReason(
+          code: MetricReasonCode.unsupportedCurrencyAggregation,
+          message: '外币物品未折算进人民币净资产',
+          details: {'asset_id': asset.id, 'currency': asset.currencyCode},
+        ));
+      }
+      if (asset.inclusionQuality == AssetInclusionQuality.needsReview) {
+        addReason(MetricReason(
+          code: MetricReasonCode.invalidInput,
+          message: '部分物品的净资产计入口径待确认',
+          details: {'asset_id': asset.id, 'domain': 'physical_asset'},
+        ));
+      }
+      if (!_assetValuations.any((point) => point.assetId == asset.id)) {
+        addReason(MetricReason(
+          code: MetricReasonCode.invalidInput,
+          message: '部分物品缺少可追溯估值',
+          details: {'asset_id': asset.id, 'domain': 'valuation'},
+        ));
+      }
+    }
+    for (final asset in _allReceivableAssets.where(
+      (item) => item.countsInNetWorth,
+    )) {
+      if (asset.currencyCode != 'CNY') {
+        addReason(MetricReason(
+          code: MetricReasonCode.unsupportedCurrencyAggregation,
+          message: '外币权益未折算进人民币净资产',
+          details: {'asset_id': asset.id, 'currency': asset.currencyCode},
+        ));
+      }
+      if (asset.inclusionQuality == AssetInclusionQuality.needsReview) {
+        addReason(MetricReason(
+          code: MetricReasonCode.invalidInput,
+          message: '部分权益的净资产计入口径待确认',
+          details: {'asset_id': asset.id, 'domain': 'receivable'},
+        ));
+      }
+    }
+    for (final profile in _liabilityProfiles.where(
+      (item) => item.countsAsLiability,
+    )) {
+      final account =
+          _accounts.where((a) => a.id == profile.accountId).firstOrNull;
+      if (account != null && account.currencyCode != 'CNY') {
+        addReason(MetricReason(
+          code: MetricReasonCode.unsupportedCurrencyAggregation,
+          message: '外币负债未折算进人民币净资产',
+          details: {'account_id': account.id, 'currency': account.currencyCode},
+        ));
+      }
+    }
+    final value = currentNetWorthBreakdown();
+    return reasons.isEmpty
+        ? MetricResult.available(
+            value: value,
+            query: query,
+            resolver: 'NetWorthAsOfResolver.current',
+          )
+        : MetricResult.partial(
+            value: value,
+            reasons: reasons,
+            query: query,
+            resolver: 'NetWorthAsOfResolver.current',
+          );
+  }
+
+  NetWorthVerifiedCheckpointComparison? get latestVerifiedNetWorthComparison {
+    final complete = _verifiedNetWorthCheckpoints
+        .where((checkpoint) =>
+            checkpoint.header.status ==
+                NetWorthVerifiedCheckpointStatus.active &&
+            checkpoint.header.completeness ==
+                NetWorthVerifiedCheckpointCompleteness.complete)
+        .toList()
+      ..sort((left, right) => left.header.asOf.compareTo(right.header.asOf));
+    if (complete.length < 2) return null;
+    return compareNetWorthVerifiedCheckpoints(
+      complete[complete.length - 2],
+      complete.last,
+    );
+  }
+
+  Future<NetWorthVerifiedCheckpoint> createVerifiedNetWorthCheckpoint({
+    int? supersedesId,
+    bool acceptStaleValuations = false,
+  }) async {
+    final now = DateTime.now();
+    final nowMs = now.millisecondsSinceEpoch;
+    final result = currentNetWorthResult();
+    final breakdown = result.value!;
+    final uncoveredCurrencies = unsupportedNetWorthCurrencyCodes;
+    final currencyCoverage = NetWorthCurrencyCoverage(
+      baseCurrency: 'CNY',
+      coveredCurrencies: const ['CNY'],
+      uncoveredCurrencies: uncoveredCurrencies,
+    );
+    final reasons = <NetWorthVerifiedCheckpointReason>[
+      for (final reason in result.reasons)
+        NetWorthVerifiedCheckpointReason(
+          code: reason.code.name,
+          message: reason.message,
+          details: reason.details,
+        ),
+    ];
+    final staleValuationCount = stalePhysicalValuationCount(asOf: now);
+    if (staleValuationCount > 0 && !acceptStaleValuations) {
+      reasons.add(NetWorthVerifiedCheckpointReason(
+        code: 'stale_valuation_not_accepted',
+        message: '$staleValuationCount 件物品的估值超过 90 天，尚未明确接受该估值日期。',
+        details: {'count': staleValuationCount, 'days': 90},
+      ));
+    }
+    final completeness = reasons.isEmpty && currencyCoverage.isComplete
+        ? NetWorthVerifiedCheckpointCompleteness.complete
+        : NetWorthVerifiedCheckpointCompleteness.partial;
+    if (completeness == NetWorthVerifiedCheckpointCompleteness.partial &&
+        reasons.isEmpty) {
+      reasons.add(NetWorthVerifiedCheckpointReason(
+        code: 'currency_coverage',
+        message: '仍有未纳入人民币口径的外币对象。',
+        details: {'currencies': uncoveredCurrencies.toList()..sort()},
+      ));
+    }
+    final items = <NetWorthVerifiedCheckpointItem>[];
+    final accountBalances = <int, Decimal>{};
+    for (final account in _accounts.where(
+      (item) => item.includeInNetWorth && !item.isDeleted,
+    )) {
+      if (account.currencyCode != 'CNY') continue;
+      final balanceResult = accountBalanceResultOf(account);
+      final value = balanceResult.value!;
+      accountBalances[account.id] = value.balance;
+      items.add(NetWorthVerifiedCheckpointItem(
+        objectType: 'account',
+        objectUuid:
+            account.uuid.isEmpty ? 'account-${account.id}' : account.uuid,
+        confirmedAmountMinor: decimalToBudgetCents(value.balance),
+        currencyCode: account.currencyCode,
+        valueEffectiveAt: now,
+        valueSource:
+            value.checkpoint == null ? 'ledger_balance' : 'balance_checkpoint',
+        quality: balanceResult.status == MetricStatus.available
+            ? 'confirmed'
+            : 'partial',
+      ));
+    }
+    for (final profile in _liabilityProfiles.where(
+      (item) => item.countsAsLiability,
+    )) {
+      final account =
+          _accounts.where((item) => item.id == profile.accountId).firstOrNull;
+      if (account == null ||
+          account.isDeleted ||
+          !account.includeInNetWorth ||
+          account.currencyCode != 'CNY' ||
+          (accountBalances[account.id] ?? Decimal.zero) < Decimal.zero) {
+        continue;
+      }
+      items.add(NetWorthVerifiedCheckpointItem(
+        objectType: 'liability_profile',
+        objectUuid:
+            profile.uuid.isEmpty ? 'liability-${profile.id}' : profile.uuid,
+        confirmedAmountMinor: -decimalToBudgetCents(profile.currentPrincipal),
+        currencyCode: account.currencyCode,
+        valueEffectiveAt: now,
+        valueSource: 'liability_profile',
+        quality: 'legacy_hybrid',
+      ));
+    }
+    for (final asset in physicalAssetsCountedInNetWorth) {
+      final valuations = _assetValuations
+          .where((point) => point.assetId == asset.id)
+          .toList()
+        ..sort((left, right) => left.valuedAtMs.compareTo(right.valuedAtMs));
+      final latest = valuations.lastOrNull;
+      final stale = latest != null &&
+          latest.valuedAt.isBefore(now.subtract(const Duration(days: 90)));
+      items.add(NetWorthVerifiedCheckpointItem(
+        objectType: 'physical_asset',
+        objectUuid: asset.uuid,
+        confirmedAmountMinor: decimalToBudgetCents(asset.currentValue),
+        currencyCode: asset.currencyCode,
+        valueEffectiveAt: latest?.valuedAt ?? now,
+        valueSource: latest?.source.storageKey ?? 'missing_valuation',
+        quality: latest == null
+            ? 'partial'
+            : stale
+                ? (acceptStaleValuations ? 'accepted_stale' : 'partial')
+                : 'confirmed',
+      ));
+    }
+    for (final asset in receivableAssetsCountedInNetWorth) {
+      items.add(NetWorthVerifiedCheckpointItem(
+        objectType: 'receivable_asset',
+        objectUuid: asset.uuid,
+        confirmedAmountMinor: decimalToBudgetCents(asset.remainingAmount),
+        currencyCode: asset.currencyCode,
+        valueEffectiveAt: now,
+        valueSource: 'receivable_ledger',
+        quality: asset.inclusionQuality == AssetInclusionQuality.confirmed
+            ? 'confirmed'
+            : 'partial',
+      ));
+    }
+
+    late final int id;
+    final uuid = _newUuid();
+    await _db!.transaction((txn) async {
+      if (supersedesId != null) {
+        await txn.update(
+          'net_worth_verified_checkpoints',
+          {'status': NetWorthVerifiedCheckpointStatus.superseded.storageKey},
+          where: 'id = ? AND status = ?',
+          whereArgs: [
+            supersedesId,
+            NetWorthVerifiedCheckpointStatus.active.storageKey,
+          ],
+        );
+      }
+      id = await txn.insert('net_worth_verified_checkpoints', {
+        'uuid': uuid,
+        'as_of_ms': nowMs,
+        'knowledge_cutoff_ms': nowMs,
+        'scope_version': _netWorthScopeVersion,
+        'calculation_version': statisticsCalculationVersion,
+        'currency_coverage_json': jsonEncode(currencyCoverage.toJson()),
+        'total_assets': breakdown.totalAssets.toString(),
+        'total_liabilities': breakdown.totalLiabilities.toString(),
+        'net_worth': breakdown.netWorth.toString(),
+        'completeness': completeness.storageKey,
+        'reasons_json': jsonEncode([
+          for (final reason in reasons)
+            {
+              'code': reason.code,
+              'message': reason.message,
+              if (reason.details.isNotEmpty) 'details': reason.details,
+            },
+        ]),
+        'status': NetWorthVerifiedCheckpointStatus.active.storageKey,
+        'supersedes_id': supersedesId,
+        'created_ms': nowMs,
+      });
+      for (final item in items) {
+        await txn.insert('net_worth_verified_checkpoint_items', {
+          'checkpoint_id': id,
+          'object_type': item.key.objectType,
+          'object_uuid': item.key.objectUuid,
+          'confirmed_amount':
+              budgetDecimalFromCents(item.confirmedAmountMinor)!.toString(),
+          'currency_code': item.currencyCode,
+          'value_effective_ms': item.valueEffectiveAt.millisecondsSinceEpoch,
+          'value_source': item.valueSource,
+          'quality': item.quality,
+        });
+      }
+      await txn.update(
+        'accounts',
+        {'last_verified_ms': nowMs, 'updated_ms': nowMs},
+        where: "is_deleted = 0 AND status <> 'legacy_hidden'",
+      );
+    });
+    await Future.wait([
+      _loadAccounts(),
+      _loadVerifiedNetWorthCheckpoints(),
+    ]);
+    notifyListeners();
+    return _verifiedNetWorthCheckpoints
+        .where((checkpoint) => checkpoint.header.id == id)
+        .first;
+  }
+
+  Future<void> revokeVerifiedNetWorthCheckpoint(int id) async {
+    await _db!.update(
+      'net_worth_verified_checkpoints',
+      {'status': NetWorthVerifiedCheckpointStatus.revoked.storageKey},
+      where: 'id = ? AND status = ?',
+      whereArgs: [id, NetWorthVerifiedCheckpointStatus.active.storageKey],
+    );
+    await _loadVerifiedNetWorthCheckpoints();
+    notifyListeners();
+  }
+
+  NetWorthTrendResult get netWorthEstimatedTrend => resolveNetWorthTrend(
+        _netWorthSnapshots.map((snapshot) => snapshot.toComputedSnapshot()),
+      );
+
+  String _snapshotDateKey(DateTime date) =>
+      '${date.year.toString().padLeft(4, '0')}-'
+      '${date.month.toString().padLeft(2, '0')}-'
+      '${date.day.toString().padLeft(2, '0')}';
+
+  Future<void> recordNetWorthSnapshot({DateTime? date}) async {
+    final now = DateTime.now();
+    final requested = date ?? now;
+    if (_snapshotDateKey(requested) != _snapshotDateKey(now)) {
+      throw StateError('当前解析器只能生成今天的计算快照，不能把当前值写成历史日期');
+    }
+    await _persistCurrentNetWorthSnapshot(
+      causes: const {NetWorthSnapshotCause.scheduledRebuild},
+      notify: true,
+    );
+  }
+
+  Future<void> _persistCurrentNetWorthSnapshot({
+    required Set<NetWorthSnapshotCause> causes,
+    required bool notify,
+  }) async {
+    if (_db == null) return;
+    final mergedCauses = Set<NetWorthSnapshotCause>.from(causes);
+    final now = DateTime.now();
+    final result = currentNetWorthResult();
+    final b = result.value!;
+    final missingValuationCount = _allPhysicalAssets
+        .where((asset) =>
+            asset.countsInNetWorth &&
+            !_assetValuations.any((point) => point.assetId == asset.id))
+        .length;
+    final uncoveredCurrencies = <String>{
+      for (final account in _accounts)
+        if (account.includeInNetWorth &&
+            !account.isDeleted &&
+            account.currencyCode != 'CNY')
+          account.currencyCode,
+      for (final asset in _allPhysicalAssets)
+        if (asset.countsInNetWorth && asset.currencyCode != 'CNY')
+          asset.currencyCode,
+      for (final asset in _allReceivableAssets)
+        if (asset.countsInNetWorth && asset.currencyCode != 'CNY')
+          asset.currencyCode,
+    };
+    final currencyCoverage = NetWorthCurrencyCoverage(
+      baseCurrency: 'CNY',
+      coveredCurrencies: const ['CNY'],
+      uncoveredCurrencies: uncoveredCurrencies,
+    );
+    final valuationCoverage = NetWorthValuationCoverage(
+      missingValuationCount: missingValuationCount,
+    );
+    final quality = result.status == MetricStatus.available
+        ? NetWorthSnapshotQuality.available
+        : NetWorthSnapshotQuality.partial;
+    final reasons = result.reasons
+        .map(
+          (reason) => NetWorthSnapshotReason(
+            code: reason.code.name,
+            message: reason.message,
+            details: reason.details,
+          ),
+        )
+        .toList(growable: false);
+    final dateKey = _snapshotDateKey(now);
+    final existing = _netWorthSnapshots
+        .where((snapshot) =>
+            snapshot.snapshotDate == dateKey && snapshot.isComputed)
+        .firstOrNull;
+    if (existing != null) {
+      mergedCauses.addAll(_decodeNetWorthSnapshotCauses(existing.causeSetJson));
+    }
+    final previous = _netWorthSnapshots
+        .where((snapshot) => snapshot.isComputed)
+        .map((snapshot) => snapshot.toComputedSnapshot())
+        .firstOrNull;
+    if (previous != null) {
+      if (previous.lineage.scopeVersion != _netWorthScopeVersion) {
+        mergedCauses.add(NetWorthSnapshotCause.scope);
+      }
+      final components = previous.components;
+      if (components.cashAssetsMinor != decimalToBudgetCents(b.cashAssets) ||
+          components.investmentAssetsMinor !=
+              decimalToBudgetCents(b.investmentAssets)) {
+        mergedCauses.add(NetWorthSnapshotCause.account);
+      }
+      if (components.physicalAssetsMinor !=
+          decimalToBudgetCents(b.physicalAssets)) {
+        mergedCauses.add(NetWorthSnapshotCause.physicalAsset);
+      }
+      if (components.receivableAssetsMinor !=
+          decimalToBudgetCents(b.receivableAssets)) {
+        mergedCauses.add(NetWorthSnapshotCause.receivable);
+      }
+      if (components.liabilitiesMinor !=
+          decimalToBudgetCents(b.totalLiabilities)) {
+        mergedCauses.add(NetWorthSnapshotCause.liability);
+      }
+    }
+    if (mergedCauses.isEmpty) {
+      mergedCauses.add(NetWorthSnapshotCause.scheduledRebuild);
+    }
+    final sortedCauses = mergedCauses.map((cause) => cause.storageKey).toList()
+      ..sort();
+    final asOf = DateTime.utc(now.year, now.month, now.day);
+    final timezone = _snapshotTimezoneIdentity(now);
+    final lineageKey = 'global|scope=$_netWorthScopeVersion|'
+        'calc=$statisticsCalculationVersion|'
+        'currency=${currencyCoverage.baseCurrency}|tz=$timezone';
+    await _db!.insert(
+      'net_worth_snapshots',
+      {
+        'scope_key': 'global',
+        'snapshot_date': dateKey,
+        'total_assets': b.totalAssets.toString(),
+        'total_liabilities': b.totalLiabilities.toString(),
+        'net_worth': b.netWorth.toString(),
+        'cash_assets': b.cashAssets.toString(),
+        'investment_assets': b.investmentAssets.toString(),
+        'physical_assets': b.physicalAssets.toString(),
+        'receivable_assets': b.receivableAssets.toString(),
+        'snapshot_type': 'computed_snapshot',
+        'lineage_key': lineageKey,
+        'as_of_ms': asOf.millisecondsSinceEpoch,
+        'knowledge_cutoff_ms': now.millisecondsSinceEpoch,
+        'timezone': timezone,
+        'scope_version': _netWorthScopeVersion,
+        'calculation_version': statisticsCalculationVersion,
+        'currency_coverage_json': jsonEncode(currencyCoverage.toJson()),
+        'quality': quality.storageKey,
+        'cause_set_json': jsonEncode(sortedCauses),
+        'reasons_json': jsonEncode(
+          reasons.map((reason) => reason.toJson()).toList(),
+        ),
+        'valuation_coverage_json': jsonEncode(valuationCoverage.toJson()),
+        'provisional': 1,
+        'created_ms': now.millisecondsSinceEpoch,
+      },
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+    await _loadNetWorthSnapshots();
+    if (notify) super.notifyListeners();
+  }
+
+  String _snapshotTimezoneIdentity(DateTime value) {
+    final offset = value.timeZoneOffset;
+    final sign = offset.isNegative ? '-' : '+';
+    final totalMinutes = offset.inMinutes.abs();
+    final hours = (totalMinutes ~/ 60).toString().padLeft(2, '0');
+    final minutes = (totalMinutes % 60).toString().padLeft(2, '0');
+    return 'device_local@UTC$sign$hours:$minutes';
+  }
+
+  Future<void> _refreshCurrentNetWorthSnapshotBestEffort(
+    Set<NetWorthSnapshotCause> causes,
+  ) async {
+    try {
+      await _persistCurrentNetWorthSnapshot(causes: causes, notify: false);
+    } catch (_) {
+      // A computed snapshot is a rebuildable cache. User mutations remain
+      // committed and the next mutation or startup will repair today's point.
+    }
+  }
+
+  Future<void> _bumpNetWorthScopeVersion() async {
+    final next = _netWorthScopeVersion + 1;
+    await _db!.insert(
+      'app_settings',
+      {'key': 'net_worth_scope_version', 'value': next.toString()},
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+    _netWorthScopeVersion = next;
+  }
+
+  Future<int> createAssetReport({DateTime? date}) async {
+    final at = date ?? DateTime.now();
+    final b = currentNetWorthBreakdown();
+    final liabilityRate = b.totalAssets <= Decimal.zero
+        ? '暂无资产数据'
+        : '${(b.totalLiabilities.toDouble() / b.totalAssets.toDouble() * 100).toStringAsFixed(1)}%';
+    final title =
+        '资产分析报告 ${at.year}-${at.month.toString().padLeft(2, '0')}-${at.day.toString().padLeft(2, '0')}';
+    final summary =
+        '当前净资产 ${b.netWorth}，总资产 ${b.totalAssets}，总负债 ${b.totalLiabilities}。';
+    final physicalTop = [...physicalAssetsCountedInNetWorth]
+      ..sort((a, b) => b.currentValue.compareTo(a.currentValue));
+    final receivableTop = [...receivableAssetsCountedInNetWorth]
+      ..sort((a, b) => b.remainingAmount.compareTo(a.remainingAmount));
+    final markdown = StringBuffer()
+      ..writeln('# $title')
+      ..writeln()
+      ..writeln('## 核心指标')
+      ..writeln()
+      ..writeln('- 净资产：${b.netWorth}')
+      ..writeln('- 总资产：${b.totalAssets}')
+      ..writeln('- 总负债：${b.totalLiabilities}')
+      ..writeln('- 负债率：$liabilityRate')
+      ..writeln()
+      ..writeln('## 资产结构')
+      ..writeln()
+      ..writeln('- 流动资产：${b.cashAssets}')
+      ..writeln('- 投资账户：${b.investmentAssets}')
+      ..writeln('- 实物资产：${b.physicalAssets}')
+      ..writeln('- 权益资产：${b.receivableAssets}')
+      ..writeln()
+      ..writeln('## 重点实物资产')
+      ..writeln();
+    if (physicalTop.isEmpty) {
+      markdown.writeln('- 暂无计入净资产的实物资产。');
+    } else {
+      for (final asset in physicalTop.take(5)) {
+        markdown.writeln(
+          '- ${asset.name}：${asset.currentValue}（${asset.assetType.label}）',
+        );
+      }
+    }
+    markdown
+      ..writeln()
+      ..writeln('## 重点权益资产')
+      ..writeln();
+    if (receivableTop.isEmpty) {
+      markdown.writeln('- 暂无计入净资产的权益资产。');
+    } else {
+      for (final asset in receivableTop.take(5)) {
+        markdown.writeln(
+          '- ${asset.name}：剩余 ${asset.remainingAmount}（${asset.type.label}）',
+        );
+      }
+    }
+    markdown
+      ..writeln()
+      ..writeln('## 说明')
+      ..writeln()
+      ..writeln('资产出售、权益收回属于资产形态转换，不进入普通收入统计。');
+    return addReport(
+      type: 'asset',
+      title: title,
+      summary: summary,
+      markdown: markdown.toString(),
+      periodStart: DateTime(at.year, at.month, at.day),
+      periodEnd: DateTime(at.year, at.month, at.day, 23, 59, 59),
+    );
   }
 
   Future<void> updateTransaction({
@@ -1776,17 +10408,41 @@ class AppRepository extends ChangeNotifier {
     int? toAccountId,
     String note = '',
     required DateTime date,
+    TransactionTimePrecision? timePrecision,
     List<int> tagIds = const [],
     bool reimbursable = false,
     String imagePath = '',
     bool excluded = false,
   }) async {
+    if (amount <= Decimal.zero) {
+      throw ArgumentError('transaction amount must be greater than zero');
+    }
+    await _assertTransactionMutable(id);
     final oldPath = await _imagePathOf(id);
-    if (oldPath != imagePath) _deleteReceiptFileIfOwned(oldPath);
+    final updatedMs = DateTime.now().millisecondsSinceEpoch;
+    await _db!.transaction((txn) async {
+      final rows = await txn.query(
+        'transactions',
+        columns: ['kind', 'refund_of'],
+        where: 'id = ?',
+        whereArgs: [id],
+        limit: 1,
+      );
+      if (rows.isEmpty) throw StateError('transaction does not exist');
+      if (rows.first['refund_of'] != null) {
+        throw StateError('退款明细不能直接编辑，请在原账单中管理退款。');
+      }
+      final refunded = await _refundedAmountInDb(txn, id);
+      if (refunded > Decimal.zero) {
+        if (kind != TransactionKind.expense) {
+          throw StateError('已有退款的账单不能改为收入或转账。');
+        }
+        if (amount < refunded) {
+          throw StateError('账单金额不能小于已退款金额。');
+        }
+      }
 
-    await _db!.update(
-      'transactions',
-      {
+      final values = <String, Object?>{
         'kind': kind.toJson(),
         'amount': amount.toString(),
         'category_id': categoryId,
@@ -1798,12 +10454,42 @@ class AppRepository extends ChangeNotifier {
         'reimbursable': reimbursable ? 1 : 0,
         'image_path': imagePath,
         'excluded': excluded ? 1 : 0,
-        'updated_ms': DateTime.now().millisecondsSinceEpoch,
-      },
-      where: 'id = ?',
-      whereArgs: [id],
-    );
-    await _loadTransactions();
+        // Editing the user-facing attribution fields must not silently
+        // replace or upgrade the independently evidenced settlement data.
+        'event_type': _eventTypeForKind(kind).storageKey,
+        'updated_ms': updatedMs,
+      };
+      if (timePrecision != null) {
+        values['time_precision'] = timePrecision.storageKey;
+      }
+      await txn.update(
+        'transactions',
+        values,
+        where: 'id = ?',
+        whereArgs: [id],
+      );
+      if (refunded > Decimal.zero) {
+        await txn.update(
+          'transactions',
+          {
+            'category_id': categoryId,
+            'date_ms': date.millisecondsSinceEpoch,
+            if (timePrecision != null)
+              'time_precision': timePrecision.storageKey,
+            'updated_ms': updatedMs,
+          },
+          where: 'refund_of = ?',
+          whereArgs: [id],
+        );
+      }
+    });
+    if (oldPath != imagePath) _deleteReceiptFileIfOwned(oldPath);
+    await _refreshTransactionRows(familyRoots: {id});
+    await _refreshCurrentNetWorthSnapshotBestEffort({
+      kind == TransactionKind.transfer
+          ? NetWorthSnapshotCause.transfer
+          : NetWorthSnapshotCause.transaction,
+    });
     notifyListeners();
   }
 
@@ -1821,24 +10507,712 @@ class AppRepository extends ChangeNotifier {
         'to_account_id': null,
         'note': d.note,
         'date_ms': d.date.millisecondsSinceEpoch,
+        'time_precision': d.timePrecision.storageKey,
         'tags': d.tagIds.join(','),
+        ..._settlementFields(
+          settledAt: d.date,
+          settlementAccountId: d.accountId,
+          eventType: _eventTypeForKind(d.kind),
+          dateQuality: SettlementQuality.legacyAssumed,
+          accountQuality: SettlementQuality.legacyAssumed,
+        ),
         ..._syncStampNew(),
       });
     }
     await batch.commit(noResult: true);
+    // 批量导入会一次新增任意数量的行；提交后只做一次全量刷新，避免
+    // 为几千个 id 生成超长 IN 查询，也不会退化成“每插一行就全表重载”。
     await _loadTransactions();
+    await _refreshCurrentNetWorthSnapshotBestEffort(
+      const {NetWorthSnapshotCause.transaction},
+    );
     notifyListeners();
     return drafts.length;
   }
 
-  Future<void> deleteTransaction(int id) async {
-    final path = await _imagePathOf(id);
-    _deleteReceiptFileIfOwned(path);
+  Future<FeimiaoImportResult> importFeimiaoExportRows(
+    List<FeimiaoImportRow> rows,
+  ) async {
+    if (rows.isEmpty) {
+      return const FeimiaoImportResult(
+        inserted: 0,
+        skippedDuplicates: 0,
+        refundsAttached: 0,
+      );
+    }
 
-    // 删原账单时连它的退款行一起删（不然会留下挂空的退款负数进统计）。
-    await _db!.delete('transactions',
-        where: 'id = ? OR refund_of = ?', whereArgs: [id, id]);
-    _transactions.removeWhere((t) => t.id == id || t.refundOf == id);
+    final existingUuids = (await _db!.query(
+      'transactions',
+      columns: ['uuid'],
+      where: "uuid <> ''",
+    ))
+        .map((r) => r['uuid'] as String)
+        .toSet();
+    final existingFingerprints = await _existingImportFingerprints();
+    final uuidToId = <String, int>{};
+    var inserted = 0;
+    var skipped = 0;
+    var refundsAttached = 0;
+
+    String normalizedName(String name) => name.trim().toLowerCase();
+
+    final accountIdsByName = <String, int>{
+      for (final account in transactionAccounts)
+        normalizedName(account.name): account.id,
+    };
+    var createdAccounts = false;
+    var nextAccountSort = _accounts.fold<int>(
+          0,
+          (maxSort, account) => max(maxSort, account.sortOrder),
+        ) +
+        1;
+    final accountNames = <String>{
+      for (final row in rows) ...[
+        if (row.accountName.trim().isNotEmpty) row.accountName.trim(),
+        if (row.toAccountName.trim().isNotEmpty) row.toAccountName.trim(),
+        if (row.settlementAccountName.trim().isNotEmpty)
+          row.settlementAccountName.trim(),
+      ],
+    };
+    for (final name in accountNames) {
+      final key = normalizedName(name);
+      if (accountIdsByName.containsKey(key)) continue;
+      final id = await _db!.insert('accounts', {
+        'uuid': _newUuid(),
+        'name': name,
+        'currency_code': 'CNY',
+        'type': AccountType.cash.storageKey,
+        'opening_balance': '0',
+        'include_in_net_worth': 1,
+        'institution': '',
+        'sort_order': nextAccountSort++,
+        'created_ms': 0,
+        'updated_ms': DateTime.now().millisecondsSinceEpoch,
+        'opening_balance_effective_ms': null,
+        'opening_balance_sequence': 0,
+        'opening_balance_quality':
+            AccountOpeningBalanceQuality.legacyUnknown.storageKey,
+        'status': AccountStatus.active.storageKey,
+      });
+      accountIdsByName[key] = id;
+      createdAccounts = true;
+    }
+
+    int? accountIdByName(String name) {
+      final key = normalizedName(name);
+      if (key.isEmpty) return transactionAccounts.firstOrNull?.id;
+      return accountIdsByName[key];
+    }
+
+    final tagIdsByName = <String, int>{
+      for (final tag in _tags) normalizedName(tag.name): tag.id,
+    };
+    var createdTags = false;
+    final tagNames = <String>{
+      for (final row in rows)
+        for (final name in row.tagNames)
+          if (name.trim().isNotEmpty) name.trim(),
+    };
+    for (final name in tagNames) {
+      final key = normalizedName(name);
+      if (tagIdsByName.containsKey(key)) continue;
+      final id = await _db!.insert('tags', {
+        'name': name,
+        'color': 0xFF7D8B9B,
+      });
+      tagIdsByName[key] = id;
+      createdTags = true;
+    }
+
+    String tagIdsFor(FeimiaoImportRow row) => row.tagNames
+        .map((name) => tagIdsByName[normalizedName(name)])
+        .whereType<int>()
+        .toSet()
+        .join(',');
+
+    int? categoryIdFor(FeimiaoImportRow row) {
+      if (row.categoryKey.isNotEmpty) {
+        final byKey = _categories
+            .where((c) => c.key == row.categoryKey && c.kind == row.kind)
+            .firstOrNull;
+        if (byKey != null) return byKey.id;
+      }
+      if (row.categoryName.isNotEmpty) {
+        final byName = _categories
+            .where((c) => c.nameZh == row.categoryName && c.kind == row.kind)
+            .firstOrNull;
+        if (byName != null) return byName.id;
+      }
+      return null;
+    }
+
+    String nextUuid(String raw) {
+      final u = raw.trim();
+      if (u.length == 32) return u;
+      return _newUuid();
+    }
+
+    Map<String, Object?> baseMap(FeimiaoImportRow row) {
+      final accountId = accountIdByName(row.accountName);
+      final toAccountId = row.toAccountName.trim().isEmpty
+          ? null
+          : accountIdByName(row.toAccountName);
+      final hasExplicitSettlementDate = row.settlementQuality != null;
+      final hasExplicitSettlementAccount = row.settlementAccountQuality != null;
+      final settlementAccountId = row.settlementAccountName.trim().isEmpty
+          ? null
+          : accountIdByName(row.settlementAccountName);
+      final now = DateTime.now().millisecondsSinceEpoch;
+      return {
+        'book_id': _currentBookId,
+        'kind': row.kind.toJson(),
+        'amount': row.amount.toString(),
+        'currency_code': 'CNY',
+        'category_id': categoryIdFor(row),
+        'account_id': accountId,
+        'to_account_id': toAccountId,
+        'note': row.note,
+        'date_ms': row.date.millisecondsSinceEpoch,
+        'time_precision': row.timePrecision.storageKey,
+        'tags': tagIdsFor(row),
+        'reimbursable': row.reimbursable ? 1 : 0,
+        'image_path': '',
+        'excluded': row.excluded ? 1 : 0,
+        'created_ms': now,
+        'settled_ms': hasExplicitSettlementDate
+            ? row.settledAt?.millisecondsSinceEpoch
+            : row.date.millisecondsSinceEpoch,
+        'settlement_quality':
+            (row.settlementQuality ?? SettlementQuality.legacyAssumed)
+                .storageKey,
+        'settlement_account_id':
+            hasExplicitSettlementAccount ? settlementAccountId : accountId,
+        'settlement_account_quality':
+            (row.settlementAccountQuality ?? SettlementQuality.legacyAssumed)
+                .storageKey,
+        'event_type': (row.eventType ?? _eventTypeForKind(row.kind)).storageKey,
+        'updated_ms': now,
+      };
+    }
+
+    final explicitRefundParents = {
+      for (final r in rows)
+        if (r.refundOfUuid.trim().isNotEmpty) r.refundOfUuid.trim(),
+    };
+    final originals = rows.where((r) => r.refundOfUuid.trim().isEmpty).toList();
+    for (final row in originals) {
+      final uuid = nextUuid(row.uuid);
+      if (existingUuids.contains(uuid)) {
+        final existing = await _db!.query(
+          'transactions',
+          columns: ['id'],
+          where: 'uuid = ?',
+          whereArgs: [uuid],
+          limit: 1,
+        );
+        if (existing.isNotEmpty) {
+          uuidToId[uuid] = existing.first['id'] as int;
+        }
+        skipped++;
+        continue;
+      }
+      final fp = _importFingerprint(
+        kind: row.kind,
+        amount: row.amount,
+        date: row.date,
+        note: row.note,
+        categoryId: categoryIdFor(row),
+        accountId: accountIdByName(row.accountName),
+      );
+      if (row.uuid.isEmpty &&
+          _consumeExistingImportFingerprint(existingFingerprints, fp) != null) {
+        skipped++;
+        continue;
+      }
+      final id = await _db!.insert('transactions', {
+        ...baseMap(row),
+        'uuid': uuid,
+        'refund_of': null,
+      });
+      uuidToId[uuid] = id;
+      existingUuids.add(uuid);
+      inserted++;
+
+      if (row.refunded > Decimal.zero &&
+          row.amount > Decimal.zero &&
+          !explicitRefundParents.contains(uuid)) {
+        if (row.refunded > row.amount) {
+          skipped++;
+          continue;
+        }
+        await _db!.insert('transactions', {
+          ...baseMap(row),
+          'amount': (Decimal.zero - row.refunded).toString(),
+          'note': '退款',
+          'uuid': _newUuid(),
+          'refund_of': id,
+          'settled_ms': null,
+          'settlement_quality': SettlementQuality.unknown.storageKey,
+          'event_type': TransactionEventType.refund.storageKey,
+        });
+        refundsAttached++;
+      }
+    }
+
+    final refunds = rows.where((r) => r.refundOfUuid.trim().isNotEmpty);
+    for (final row in refunds) {
+      final uuid = nextUuid(row.uuid);
+      if (existingUuids.contains(uuid)) {
+        skipped++;
+        continue;
+      }
+      final originalId = uuidToId[row.refundOfUuid.trim()];
+      if (originalId == null) {
+        skipped++;
+        continue;
+      }
+      final requestedRefund = row.amount.abs();
+      final originalRows = await _db!.query(
+        'transactions',
+        columns: ['amount'],
+        where: 'id = ?',
+        whereArgs: [originalId],
+        limit: 1,
+      );
+      if (originalRows.isEmpty) {
+        skipped++;
+        continue;
+      }
+      final originalAmount =
+          Decimal.tryParse(originalRows.first['amount'] as String? ?? '') ??
+              Decimal.zero;
+      var existingRefunded = Decimal.zero;
+      final existingRefundRows = await _db!.query(
+        'transactions',
+        columns: ['amount'],
+        where: 'refund_of = ?',
+        whereArgs: [originalId],
+      );
+      for (final existingRefund in existingRefundRows) {
+        existingRefunded +=
+            (Decimal.tryParse(existingRefund['amount'] as String? ?? '') ??
+                    Decimal.zero)
+                .abs();
+      }
+      if (requestedRefund > originalAmount - existingRefunded) {
+        skipped++;
+        continue;
+      }
+      final inferredEventType = row.eventType ??
+          (row.note.trim() == '报销到账'
+              ? TransactionEventType.reimbursement
+              : TransactionEventType.refund);
+      final refundMap = <String, Object?>{
+        ...baseMap(row),
+        'amount': (Decimal.zero - requestedRefund).toString(),
+        'note': row.note.trim().isEmpty ? '退款' : row.note,
+        'uuid': uuid,
+        'refund_of': originalId,
+        'event_type': inferredEventType.storageKey,
+      };
+      if (row.settlementQuality == null) {
+        refundMap['settled_ms'] = null;
+        refundMap['settlement_quality'] = SettlementQuality.unknown.storageKey;
+      }
+      if (row.settlementAccountQuality == null &&
+          inferredEventType == TransactionEventType.reimbursement) {
+        refundMap['settlement_account_id'] = null;
+        refundMap['settlement_account_quality'] =
+            SettlementQuality.unknown.storageKey;
+      }
+      await _db!.insert('transactions', refundMap);
+      existingUuids.add(uuid);
+      refundsAttached++;
+    }
+
+    if (createdAccounts) await _loadAccounts();
+    if (createdTags) await _loadTags();
+    await _loadTransactions();
+    await _refreshCurrentNetWorthSnapshotBestEffort(
+      const {
+        NetWorthSnapshotCause.transaction,
+        NetWorthSnapshotCause.refund,
+      },
+    );
+    notifyListeners();
+    return FeimiaoImportResult(
+      inserted: inserted,
+      skippedDuplicates: skipped,
+      refundsAttached: refundsAttached,
+    );
+  }
+
+  String _importFingerprint({
+    required TransactionKind kind,
+    required Decimal amount,
+    required DateTime date,
+    required String note,
+    int? categoryId,
+    int? accountId,
+  }) {
+    final minute = DateTime(
+      date.year,
+      date.month,
+      date.day,
+      date.hour,
+      date.minute,
+    );
+    return [
+      kind.toJson(),
+      amount.toString(),
+      minute.millisecondsSinceEpoch.toString(),
+      (categoryId ?? 0).toString(),
+      (accountId ?? 0).toString(),
+      note.trim(),
+    ].join('|');
+  }
+
+  int? _consumeExistingImportFingerprint(
+    Map<String, List<int>> existing,
+    String fingerprint,
+  ) {
+    final ids = existing[fingerprint];
+    if (ids == null || ids.isEmpty) return null;
+    return ids.removeLast();
+  }
+
+  Future<Map<String, List<int>>> _existingImportFingerprints() async {
+    final rows = await _db!.query(
+      'transactions',
+      columns: [
+        'id',
+        'kind',
+        'amount',
+        'date_ms',
+        'note',
+        'category_id',
+        'account_id',
+      ],
+      where: 'book_id = ?',
+      whereArgs: [_currentBookId],
+    );
+    final result = <String, List<int>>{};
+    for (final r in rows) {
+      final fp = _importFingerprint(
+        kind: TransactionKind.fromJson(r['kind'] as String),
+        amount: Decimal.parse(r['amount'] as String),
+        date: DateTime.fromMillisecondsSinceEpoch(r['date_ms'] as int),
+        note: r['note'] as String? ?? '',
+        categoryId: r['category_id'] as int?,
+        accountId: r['account_id'] as int?,
+      );
+      (result[fp] ??= <int>[]).add(r['id'] as int);
+    }
+    return result;
+  }
+
+  bool _looksLikeImportedRefund(ImportedBillRow row) {
+    if (row.isRefund) return true;
+    final text = '${row.category} ${row.note} ${row.merchant} ${row.product}';
+    return text.contains('退款') ||
+        text.contains('退回') ||
+        text.contains('退货') ||
+        text.toLowerCase().contains('refund');
+  }
+
+  String _refundMatchKey(String text) {
+    return text
+        .toLowerCase()
+        .replaceAll(RegExp(r'退款|退回|退货|成功|订单|商户|备注|微信转账'), '')
+        .replaceAll(RegExp(r'[\s·,，。:：;；()（）\-_]+'), '')
+        .trim();
+  }
+
+  Future<ImportBatchResult> importReviewedBillBatch({
+    required int accountId,
+    required List<({ImportedBillRow row, String? categoryKey})> rows,
+    required List<ImportedBillRow> refunds,
+  }) async {
+    if (rows.isEmpty && refunds.isEmpty) {
+      return const ImportBatchResult(
+        inserted: 0,
+        skippedDuplicates: 0,
+        refundsAttached: 0,
+      );
+    }
+    if (!_isSupportedTransactionAccountId(accountId)) {
+      throw ArgumentError('导入账户不存在或币种不受支持');
+    }
+
+    int? idOf(String? key, TransactionKind k) => key == null
+        ? null
+        : _categories.where((c) => c.key == key && c.kind == k).firstOrNull?.id;
+
+    final existing = await _existingImportFingerprints();
+    final orderToId = <String, int>{};
+    final insertedRows = <({int id, ImportedBillRow row, int? categoryId})>[];
+    final attachedRefunds = <int, Decimal>{};
+    var inserted = 0;
+    var skipped = 0;
+    var refundsAttached = 0;
+    var unresolvedRefunds = 0;
+
+    final normalRows = <({ImportedBillRow row, String? categoryKey})>[];
+    final refundRows = <ImportedBillRow>[...refunds];
+    for (final item in rows) {
+      if (_looksLikeImportedRefund(item.row)) {
+        refundRows.add(item.row);
+      } else {
+        normalRows.add(item);
+      }
+    }
+
+    await _db!.transaction((txn) async {
+      Future<void> insertRow(ImportedBillRow r, String? key) async {
+        final categoryId = idOf(key, r.kind);
+        final fp = _importFingerprint(
+          kind: r.kind,
+          amount: r.amount,
+          date: r.date,
+          note: r.note,
+          categoryId: categoryId,
+          accountId: accountId,
+        );
+        final existingId = _consumeExistingImportFingerprint(existing, fp);
+        if (existingId != null) {
+          skipped++;
+          if (r.orderNo.isNotEmpty) orderToId[r.orderNo] = existingId;
+          insertedRows.add((id: existingId, row: r, categoryId: categoryId));
+          return;
+        }
+        final id = await txn.insert('transactions', {
+          'book_id': _currentBookId,
+          'kind': r.kind.toJson(),
+          'amount': r.amount.toString(),
+          'currency_code': 'CNY',
+          'category_id': categoryId,
+          'account_id': accountId,
+          'to_account_id': null,
+          'note': r.note,
+          'date_ms': r.date.millisecondsSinceEpoch,
+          'time_precision': r.timePrecision.storageKey,
+          'tags': '',
+          ..._settlementFields(
+            settledAt: r.date,
+            settlementAccountId: accountId,
+            eventType: _eventTypeForKind(r.kind),
+            dateQuality: SettlementQuality.exact,
+          ),
+          ..._syncStampNew(),
+        });
+        inserted++;
+        if (r.orderNo.isNotEmpty) orderToId[r.orderNo] = id;
+        insertedRows.add((id: id, row: r, categoryId: categoryId));
+      }
+
+      int? findRefundOriginalId(ImportedBillRow r) {
+        final exact = r.orderNo.isEmpty ? null : orderToId[r.orderNo];
+        if (exact != null) return exact;
+        final rMerchant = _refundMatchKey(r.merchant);
+        final rText = _refundMatchKey('${r.product} ${r.note}');
+        var bestScore = -1;
+        var bestScoreCount = 0;
+        int? bestId;
+        for (final c in insertedRows) {
+          if (c.row.kind != TransactionKind.expense) continue;
+          final attached = attachedRefunds[c.id] ?? Decimal.zero;
+          final remaining = c.row.amount - attached;
+          if (remaining <= Decimal.zero) continue;
+          final cMerchant = _refundMatchKey(c.row.merchant);
+          final cText = _refundMatchKey('${c.row.product} ${c.row.note}');
+          var score = 0;
+          if (rMerchant.isNotEmpty && rMerchant == cMerchant) score += 8;
+          if (rText.isNotEmpty &&
+              cText.isNotEmpty &&
+              (rText.contains(cText) || cText.contains(rText))) {
+            score += 3;
+          }
+          final days = r.date.difference(c.row.date).inDays.abs();
+          if (days <= 1) {
+            score += 3;
+          } else if (days <= 45) {
+            score += 1;
+          }
+          if (remaining >= r.amount) score += 2;
+          if (score > bestScore) {
+            bestScore = score;
+            bestScoreCount = 1;
+            bestId = c.id;
+          } else if (score == bestScore) {
+            bestScoreCount++;
+          }
+        }
+        final uniqueSameDayAmountFit = bestScore >= 5 && bestScoreCount == 1;
+        return bestScore >= 8 || uniqueSameDayAmountFit ? bestId : null;
+      }
+
+      for (final item in normalRows) {
+        await insertRow(item.row, item.categoryKey);
+      }
+
+      for (final r in refundRows) {
+        final origId = findRefundOriginalId(r);
+        if (origId == null) {
+          unresolvedRefunds++;
+          continue;
+        }
+        final origRows = await txn.query(
+          'transactions',
+          columns: ['amount', 'category_id', 'date_ms', 'time_precision'],
+          where: 'id = ?',
+          whereArgs: [origId],
+          limit: 1,
+        );
+        if (origRows.isEmpty) continue;
+        final orig = origRows.first;
+        final originalAmount =
+            Decimal.tryParse(orig['amount'] as String? ?? '') ?? Decimal.zero;
+        final categoryId = orig['category_id'] as int?;
+        final dateMs = orig['date_ms'] as int;
+        final timePrecision = TransactionTimePrecisionX.fromStorage(
+          orig['time_precision'] as String?,
+        );
+        final requestedRefund = r.amount.abs();
+        var dbRefunded = Decimal.zero;
+        final refundRowsForOriginal = await txn.query(
+          'transactions',
+          columns: ['amount'],
+          where: 'refund_of = ?',
+          whereArgs: [origId],
+        );
+        for (final row in refundRowsForOriginal) {
+          dbRefunded +=
+              (Decimal.tryParse(row['amount'] as String? ?? '') ?? Decimal.zero)
+                  .abs();
+        }
+        final remaining = originalAmount -
+            dbRefunded -
+            (attachedRefunds[origId] ?? Decimal.zero);
+        if (remaining <= Decimal.zero || requestedRefund > remaining) {
+          unresolvedRefunds++;
+          continue;
+        }
+        final refundAmount = Decimal.zero - requestedRefund;
+        final fp = _importFingerprint(
+          kind: TransactionKind.expense,
+          amount: refundAmount,
+          date: DateTime.fromMillisecondsSinceEpoch(dateMs),
+          note: '退款',
+          categoryId: categoryId,
+          accountId: accountId,
+        );
+        if (_consumeExistingImportFingerprint(existing, fp) != null) {
+          skipped++;
+          continue;
+        }
+        await txn.insert('transactions', {
+          'book_id': _currentBookId,
+          'kind': TransactionKind.expense.toJson(),
+          'amount': refundAmount.toString(),
+          'currency_code': 'CNY',
+          'category_id': categoryId,
+          'account_id': accountId,
+          'note': '退款',
+          'date_ms': dateMs,
+          'time_precision': timePrecision.storageKey,
+          'refund_of': origId,
+          ..._settlementFields(
+            settledAt: r.date,
+            settlementAccountId: accountId,
+            eventType: TransactionEventType.refund,
+            dateQuality: SettlementQuality.exact,
+          ),
+          ..._syncStampNew(),
+        });
+        attachedRefunds[origId] =
+            (attachedRefunds[origId] ?? Decimal.zero) + requestedRefund;
+        refundsAttached++;
+      }
+    });
+
+    await _normalizeStandaloneRefunds();
+    await _loadTransactions();
+    await _refreshCurrentNetWorthSnapshotBestEffort(
+      const {
+        NetWorthSnapshotCause.transaction,
+        NetWorthSnapshotCause.refund,
+      },
+    );
+    notifyListeners();
+    return ImportBatchResult(
+      inserted: inserted,
+      skippedDuplicates: skipped,
+      refundsAttached: refundsAttached,
+      unresolvedRefunds: unresolvedRefunds,
+    );
+  }
+
+  Future<void> deleteTransaction(int id) async {
+    final deleting = _allTransactions
+        .where((transaction) => transaction.id == id)
+        .firstOrNull;
+    final originalId = deleting?.refundOf;
+    if (originalId != null) {
+      final returnedAssetIds = _allPhysicalAssets
+          .where((asset) =>
+              !asset.isDeleted &&
+              asset.economicStatus == PhysicalAssetEconomicStatus.returned)
+          .map((asset) => asset.id)
+          .toSet();
+      final touchesReturnedAsset = _assetTransactionLinks.any(
+        (link) =>
+            link.transactionId == originalId &&
+            returnedAssetIds.contains(link.assetId) &&
+            link.allocatedRefundCents > 0,
+      );
+      if (touchesReturnedAsset) {
+        throw StateError('这笔退款已经用于确认物品退货，请先撤销退货');
+      }
+    }
+    await _assertTransactionMutable(id);
+    final path = await _imagePathOf(id);
+    var familyRoot = id;
+    await _db!.transaction((txn) async {
+      final rows = await txn.query(
+        'transactions',
+        columns: ['id', 'refund_of'],
+        where: 'id = ? OR refund_of = ?',
+        whereArgs: [id, id],
+      );
+      final selected = rows.where((row) => row['id'] == id).firstOrNull;
+      familyRoot = selected?['refund_of'] as int? ?? id;
+      if (familyRoot != id) {
+        await _assertRefundDeletionAllowed(txn, id);
+      }
+      final refundIds = rows
+          .where((row) => row['refund_of'] != null)
+          .map((row) => row['id'] as int)
+          .toList();
+      await _reverseRefundAllocationAudit(txn, refundIds);
+      // 删原账单时连它的退款行一起删，退款分配审计只反转、不删除。
+      await txn.delete('transactions',
+          where: 'id = ? OR refund_of = ?', whereArgs: [id, id]);
+      if (familyRoot != id) {
+        // 退款行删除后再按剩余有效退款重算；若在删除前计算，会把
+        // 即将删除的退款误判成“尚未分配”。
+        await _refreshOrderAllocationQuality(txn, familyRoot);
+      }
+    });
+    _deleteReceiptFileIfOwned(path);
+    await _refreshTransactionRows(familyRoots: {familyRoot});
+    await _refreshBudgetOccurrenceRefundReview(familyRoot);
+    await _loadPhysicalAssetData(refreshSnapshot: false);
+    await _refreshCurrentNetWorthSnapshotBestEffort(
+      const {
+        NetWorthSnapshotCause.transaction,
+        NetWorthSnapshotCause.refund,
+      },
+    );
     notifyListeners();
   }
 
@@ -1892,7 +11266,9 @@ class AppRepository extends ChangeNotifier {
       final cid = t.categoryId;
       if (cid != null) counts[cid] = (counts[cid] ?? 0) + 1;
     }
-    final indexed = [for (var i = 0; i < children.length; i++) (i, children[i])];
+    final indexed = [
+      for (var i = 0; i < children.length; i++) (i, children[i])
+    ];
     indexed.sort((a, b) {
       final ca = counts[a.$2.id] ?? 0;
       final cb = counts[b.$2.id] ?? 0;
@@ -1911,23 +11287,1074 @@ class AppRepository extends ChangeNotifier {
     var sum = Decimal.zero;
     for (final t in _transactions) {
       if (t.txKind != TransactionKind.expense) continue;
+      if (t.excluded || t.refundOf != null) continue;
       if (t.categoryId == null || !ids.contains(t.categoryId)) continue;
       if (t.date.year != m.year || t.date.month != m.month) continue;
-      sum += t.amount;
+      final net = netAmountOf(t);
+      if (net > Decimal.zero) sum += net;
     }
     return sum;
   }
 
   /// 供统计/预算/洞察消费的记录流：**跳过「不计入收支」的账**。
   /// 账单列表要显示全部请用 [transactions]。
-  List<TransactionRecord> get allRecords => [
-        for (final t in _transactions)
-          if (!t.excluded) t.toRecord()
-      ];
+  /// 结果按 _transactions 版本缓存（主页/统计/小组件每次 rebuild 都要它，
+  /// 以前每次访问都是全量 O(n²) 重算）；返回副本防调用方 sort 弄脏缓存。
+  List<TransactionRecord> get allRecords =>
+      List.of(_allRecordsCache ??= _buildAllRecords());
+
+  List<TransactionRecord> _buildAllRecords() =>
+      _buildUserRecords(_transactions, _refundTotals);
+
+  List<TransactionEntity> visibleTransactionsForBookView(int bookId) {
+    final allowed = _bookIdsForView(bookId).toSet();
+    return _globalVisibleTransactions
+        .where((transaction) =>
+            transaction.bookId != null && allowed.contains(transaction.bookId))
+        .toList(growable: false);
+  }
+
+  List<TransactionRecord> recordsForBookView(int bookId) {
+    final allowed = _bookIdsForView(bookId).toSet();
+    final transactions = _allTransactions.where((transaction) =>
+        transaction.bookId != null && allowed.contains(transaction.bookId));
+    return _buildUserRecords(transactions, _globalRefundTotals);
+  }
+
+  List<TransactionRecord> _buildUserRecords(
+    Iterable<TransactionEntity> transactions,
+    Map<int, Decimal> refundTotals,
+  ) {
+    final categoryById = {for (final c in _categories) c.id: c};
+    return [
+      for (final t in transactions)
+        if (!t.excluded && t.refundOf == null)
+          (() {
+            final category =
+                t.categoryId == null ? null : categoryById[t.categoryId];
+            final topCategory = category?.parentId == null
+                ? category
+                : categoryById[category!.parentId!];
+            final effectiveTop = topCategory ?? category;
+            return LedgerPolicy.toUserRecordWith(t, refundTotals).copyWith(
+              topCategoryName: effectiveTop?.nameZh ?? '',
+              topCategoryKey: effectiveTop?.key ?? '',
+            );
+          })(),
+    ];
+  }
 
   // ---------------------------------------------------------------------------
   // 预算期间（新模型：阶段性预算）
   // ---------------------------------------------------------------------------
+
+  String _encodeBudgetCategoryCents(Map<String, int> categories) =>
+      jsonEncode(categories);
+
+  String _encodeBudgetFixedTemplates(
+    Iterable<BudgetFixedTemplateV2> templates,
+  ) =>
+      jsonEncode([
+        for (final template in templates)
+          {
+            'id': template.id,
+            'name': template.name,
+            'planned_cents': template.plannedCents,
+            'due_value': template.dueValue,
+          },
+      ]);
+
+  BudgetPlanCycleV2 _budgetCycleForStartChoice({
+    required BudgetPlanCadenceV2 cadence,
+    required DateTime now,
+    required int monthStartDay,
+    required int weekStart,
+    required bool nextCycle,
+  }) {
+    final day = DateTime(now.year, now.month, now.day);
+    late DateTime start;
+    late DateTime end;
+    if (cadence == BudgetPlanCadenceV2.monthly) {
+      start = DateTime(day.year, day.month, monthStartDay);
+      if (day.isBefore(start)) {
+        start = DateTime(day.year, day.month - 1, monthStartDay);
+      }
+      if (nextCycle) {
+        start = DateTime(start.year, start.month + 1, monthStartDay);
+      }
+      end = DateTime(start.year, start.month + 1, monthStartDay);
+    } else {
+      final offset = (day.weekday - weekStart + 7) % 7;
+      start = day.subtract(Duration(days: offset));
+      if (nextCycle) start = start.add(const Duration(days: 7));
+      end = start.add(const Duration(days: 7));
+    }
+    return BudgetPlanCycleV2(planId: 0, start: start, endExclusive: end);
+  }
+
+  DateTime _fixedTemplateDueDate(
+    BudgetPlanV2 plan,
+    BudgetPlanCycleV2 cycle,
+    BudgetFixedTemplateV2 template,
+  ) {
+    if (plan.cadence == BudgetPlanCadenceV2.weekly) {
+      final offset = (template.dueValue - cycle.start.weekday + 7) % 7;
+      return cycle.start.add(Duration(days: offset));
+    }
+    var due = DateTime(cycle.start.year, cycle.start.month, template.dueValue);
+    if (due.isBefore(cycle.start)) {
+      due =
+          DateTime(cycle.start.year, cycle.start.month + 1, template.dueValue);
+    }
+    if (!due.isBefore(cycle.endExclusive)) {
+      due = cycle.endInclusive;
+    }
+    return due;
+  }
+
+  Future<void> _insertBudgetOccurrencesForRevision(
+    DatabaseExecutor txn, {
+    required BudgetPlanV2 plan,
+    required int revisionId,
+    required BudgetPlanCycleV2 cycle,
+    required Iterable<BudgetFixedTemplateV2> templates,
+    required int nowMs,
+  }) async {
+    for (final template in templates) {
+      await txn.insert(
+        'budget_fixed_commitment_occurrences',
+        {
+          'uuid': _newUuid(),
+          'plan_id': plan.id,
+          'revision_id': revisionId,
+          'template_id': template.id,
+          'cycle_start_day': cycle.startDayKey,
+          'cycle_end_day': cycle.endDayKey,
+          'due_day': budgetCivilDayKey(
+            _fixedTemplateDueDate(plan, cycle, template),
+          ),
+          'planned_cents': template.plannedCents,
+          'resolution_status':
+              FixedCommitmentResolutionStatus.planned.storageValue,
+          'review_reason': '',
+          'matched_transaction_family_uuid': null,
+          'resolved_ms': null,
+          'created_ms': nowMs,
+          'updated_ms': nowMs,
+        },
+        conflictAlgorithm: ConflictAlgorithm.ignore,
+      );
+    }
+  }
+
+  Future<void> _syncBudgetOccurrencesForRevision(
+    DatabaseExecutor txn, {
+    required BudgetPlanV2 plan,
+    required int revisionId,
+    required BudgetPlanCycleV2 cycle,
+    required Iterable<BudgetFixedTemplateV2> templates,
+    required int nowMs,
+  }) async {
+    final remaining = {
+      for (final template in templates) template.id: template,
+    };
+    final rows = await txn.query(
+      'budget_fixed_commitment_occurrences',
+      where: 'plan_id = ? AND cycle_start_day = ?',
+      whereArgs: [plan.id, cycle.startDayKey],
+    );
+    for (final row in rows) {
+      final id = row['id'] as int;
+      final templateId = row['template_id'] as String;
+      final template = remaining.remove(templateId);
+      final status = row['resolution_status'] as String? ?? 'planned';
+      final linked = row['matched_transaction_family_uuid'] as String?;
+      final untouched =
+          status == FixedCommitmentResolutionStatus.planned.storageValue &&
+              linked == null;
+      if (template == null) {
+        if (untouched) {
+          await txn.delete(
+            'budget_fixed_commitment_occurrences',
+            where: 'id = ?',
+            whereArgs: [id],
+          );
+        } else {
+          await txn.update(
+            'budget_fixed_commitment_occurrences',
+            {
+              'revision_id': revisionId,
+              'resolution_status':
+                  FixedCommitmentResolutionStatus.requiresReview.storageValue,
+              'review_reason':
+                  FixedCommitmentReviewReason.amountConflict.storageValue,
+              'matched_transaction_family_uuid': null,
+              'resolved_ms': null,
+              'updated_ms': nowMs,
+            },
+            where: 'id = ?',
+            whereArgs: [id],
+          );
+        }
+        continue;
+      }
+      final dueDay = budgetCivilDayKey(
+        _fixedTemplateDueDate(plan, cycle, template),
+      );
+      final amountChanged = row['planned_cents'] != template.plannedCents ||
+          row['due_day'] != dueDay;
+      final updates = <String, Object?>{
+        'revision_id': revisionId,
+        'planned_cents': template.plannedCents,
+        'due_day': dueDay,
+        'updated_ms': nowMs,
+      };
+      if (amountChanged && !untouched) {
+        updates.addAll({
+          'resolution_status':
+              FixedCommitmentResolutionStatus.requiresReview.storageValue,
+          'review_reason':
+              FixedCommitmentReviewReason.amountConflict.storageValue,
+          'matched_transaction_family_uuid': null,
+          'resolved_ms': null,
+        });
+      }
+      await txn.update(
+        'budget_fixed_commitment_occurrences',
+        updates,
+        where: 'id = ?',
+        whereArgs: [id],
+      );
+    }
+    await _insertBudgetOccurrencesForRevision(
+      txn,
+      plan: plan,
+      revisionId: revisionId,
+      cycle: cycle,
+      templates: remaining.values,
+      nowMs: nowMs,
+    );
+  }
+
+  Future<int> addBudgetPlanV2({
+    required int bookId,
+    required String name,
+    required BudgetPlanCadenceV2 cadence,
+    required int totalCents,
+    Map<String, int> categoryBudgetsCents = const {},
+    int? monthlyIncomeCents,
+    List<BudgetFixedTemplateV2> fixedTemplates = const [],
+    int monthStartDay = 1,
+    int weekStart = DateTime.monday,
+    bool startNextCycle = true,
+  }) async {
+    if (cadence == BudgetPlanCadenceV2.oneOff) {
+      throw ArgumentError('一次性计划请使用专项追踪。');
+    }
+    if (!_books.any((book) => book.id == bookId)) {
+      throw ArgumentError('预算必须选择一个明确账本');
+    }
+    if (totalCents <= 0 ||
+        categoryBudgetsCents.values.fold<int>(0, (a, b) => a + b) >
+            totalCents ||
+        fixedTemplates.fold<int>(0, (sum, item) => sum + item.plannedCents) >
+            totalCents) {
+      throw ArgumentError('预算总额、分类额度或固定支出不合法');
+    }
+    final now = DateTime.now();
+    final nowMs = now.millisecondsSinceEpoch;
+    final cycle = _budgetCycleForStartChoice(
+      cadence: cadence,
+      now: now,
+      monthStartDay: monthStartDay,
+      weekStart: weekStart,
+      nextCycle: startNextCycle,
+    );
+    final overlaps = _budgetPlansV2.any((plan) =>
+        plan.isPrimary &&
+        plan.bookId == bookId &&
+        plan.status == BudgetPlanStatusV2.active &&
+        (plan.endInclusive == null ||
+            !plan.endInclusive!.isBefore(cycle.start)));
+    if (overlaps) {
+      throw StateError('这个账本已有会与新计划重叠的主预算，请先归档旧计划。');
+    }
+    late final int planId;
+    await _db!.transaction((txn) async {
+      planId = await txn.insert('budget_plans', {
+        'uuid': _newUuid(),
+        'book_id': bookId,
+        'currency_code': 'CNY',
+        'timezone': 'device_local',
+        'name': name.trim(),
+        'role': 'primary',
+        'cadence': cadence.storageKey,
+        'anchor_start_day': cycle.startDayKey,
+        'month_start_day':
+            cadence == BudgetPlanCadenceV2.monthly ? monthStartDay : null,
+        'week_start': cadence == BudgetPlanCadenceV2.weekly ? weekStart : null,
+        'end_day': null,
+        'status': BudgetPlanStatusV2.active.storageKey,
+        'created_ms': nowMs,
+        'updated_ms': nowMs,
+      });
+      final revisionId = await txn.insert('budget_plan_revisions', {
+        'uuid': _newUuid(),
+        'plan_id': planId,
+        'effective_cycle_start_day': cycle.startDayKey,
+        'effective_to_cycle_start_day': null,
+        'amount_cents': totalCents,
+        'category_budgets_json':
+            _encodeBudgetCategoryCents(categoryBudgetsCents),
+        'monthly_income_cents': monthlyIncomeCents,
+        'fixed_templates_json': _encodeBudgetFixedTemplates(fixedTemplates),
+        'legacy_source_period_id': null,
+        'created_ms': nowMs,
+        'updated_ms': nowMs,
+      });
+      final persistedPlan = BudgetPlanV2(
+        id: planId,
+        uuid: 'pending-$planId',
+        bookId: bookId,
+        cadence: cadence,
+        anchorStart: cycle.start,
+        monthStartDay:
+            cadence == BudgetPlanCadenceV2.monthly ? monthStartDay : null,
+        weekStart: cadence == BudgetPlanCadenceV2.weekly ? weekStart : null,
+      );
+      await _insertBudgetOccurrencesForRevision(
+        txn,
+        plan: persistedPlan,
+        revisionId: revisionId,
+        cycle: BudgetPlanCycleV2(
+          planId: planId,
+          start: cycle.start,
+          endExclusive: cycle.endExclusive,
+        ),
+        templates: fixedTemplates,
+        nowMs: nowMs,
+      );
+      await txn.insert('budget_change_events', {
+        'uuid': _newUuid(),
+        'plan_id': planId,
+        'event_type': 'plan_created',
+        'before_json': '',
+        'after_json': jsonEncode({
+          'total_cents': totalCents,
+          'effective_cycle_start_day': cycle.startDayKey,
+        }),
+        'created_ms': nowMs,
+      });
+    });
+    await _loadBudgetV2();
+    notifyListeners();
+    return planId;
+  }
+
+  Future<int> saveBudgetSpecialTrackingV2({
+    int? planId,
+    required int bookId,
+    required String name,
+    required DateTime startInclusive,
+    required DateTime endInclusive,
+    required int totalCents,
+    required BudgetExpenseScopeV2 expenseScope,
+    Map<String, int> categoryBudgetsCents = const {},
+  }) async {
+    if (!_books.any((book) => book.id == bookId)) {
+      throw ArgumentError('专项追踪必须选择一个明确账本');
+    }
+    final start = DateTime(
+      startInclusive.year,
+      startInclusive.month,
+      startInclusive.day,
+    );
+    final end = DateTime(
+      endInclusive.year,
+      endInclusive.month,
+      endInclusive.day,
+    );
+    final normalizedName = name.trim();
+    final categoryTotal =
+        categoryBudgetsCents.values.fold<int>(0, (sum, value) => sum + value);
+    if (normalizedName.isEmpty ||
+        end.isBefore(start) ||
+        totalCents < 0 ||
+        expenseScope.isEmpty ||
+        categoryBudgetsCents.values.any((value) => value < 0) ||
+        categoryTotal > totalCents ||
+        categoryBudgetsCents.keys
+            .any((key) => !expenseScope.categoryKeys.contains(key))) {
+      throw ArgumentError('专项名称、日期、额度或消费范围不合法');
+    }
+    final nowMs = DateTime.now().millisecondsSinceEpoch;
+    late final int savedPlanId;
+    await _db!.transaction((txn) async {
+      if (planId == null) {
+        savedPlanId = await txn.insert('budget_plans', {
+          'uuid': _newUuid(),
+          'book_id': bookId,
+          'currency_code': 'CNY',
+          'timezone': 'device_local',
+          'name': normalizedName,
+          'role': 'special',
+          'cadence': BudgetPlanCadenceV2.oneOff.storageKey,
+          'anchor_start_day': budgetCivilDayKey(start),
+          'month_start_day': null,
+          'week_start': null,
+          'end_day': budgetCivilDayKey(end),
+          'expense_scope_json': expenseScope.toJsonString(),
+          'status': BudgetPlanStatusV2.active.storageKey,
+          'created_ms': nowMs,
+          'updated_ms': nowMs,
+        });
+        await txn.insert('budget_plan_revisions', {
+          'uuid': _newUuid(),
+          'plan_id': savedPlanId,
+          'effective_cycle_start_day': budgetCivilDayKey(start),
+          'effective_to_cycle_start_day': null,
+          'amount_cents': totalCents,
+          'category_budgets_json':
+              _encodeBudgetCategoryCents(categoryBudgetsCents),
+          'monthly_income_cents': null,
+          'fixed_templates_json': '[]',
+          'legacy_source_period_id': null,
+          'created_ms': nowMs,
+          'updated_ms': nowMs,
+        });
+        await txn.insert('budget_change_events', {
+          'uuid': _newUuid(),
+          'plan_id': savedPlanId,
+          'event_type': 'special_created',
+          'before_json': '',
+          'after_json': jsonEncode({
+            'start_day': budgetCivilDayKey(start),
+            'end_day': budgetCivilDayKey(end),
+            'total_cents': totalCents,
+            'expense_scope': expenseScope.toJson(),
+          }),
+          'created_ms': nowMs,
+        });
+        return;
+      }
+
+      final existingPlanRows = await txn.query(
+        'budget_plans',
+        where: "id = ? AND role = 'special'",
+        whereArgs: [planId],
+        limit: 1,
+      );
+      if (existingPlanRows.isEmpty) {
+        throw StateError('专项追踪不存在');
+      }
+      final existingPlan = existingPlanRows.first;
+      if (existingPlan['status'] == BudgetPlanStatusV2.archived.storageKey) {
+        throw StateError('已归档专项追踪不能再修改');
+      }
+      final versionMs = max(
+        nowMs,
+        (existingPlan['updated_ms'] as int? ?? 0) + 1,
+      );
+      final revisionRows = await txn.query(
+        'budget_plan_revisions',
+        where: 'plan_id = ?',
+        whereArgs: [planId],
+        orderBy: 'id ASC',
+      );
+      if (revisionRows.isEmpty) {
+        throw StateError('专项追踪缺少额度记录');
+      }
+      final revision = revisionRows.first;
+      savedPlanId = await txn.insert('budget_plans', {
+        'uuid': _newUuid(),
+        'book_id': bookId,
+        'currency_code': 'CNY',
+        'timezone': 'device_local',
+        'name': normalizedName,
+        'role': 'special',
+        'cadence': BudgetPlanCadenceV2.oneOff.storageKey,
+        'anchor_start_day': budgetCivilDayKey(start),
+        'month_start_day': null,
+        'week_start': null,
+        'end_day': budgetCivilDayKey(end),
+        'expense_scope_json': expenseScope.toJsonString(),
+        'status': BudgetPlanStatusV2.active.storageKey,
+        'created_ms': versionMs,
+        'updated_ms': versionMs,
+      });
+      await txn.insert('budget_plan_revisions', {
+        'uuid': _newUuid(),
+        'plan_id': savedPlanId,
+        'effective_cycle_start_day': budgetCivilDayKey(start),
+        'effective_to_cycle_start_day': null,
+        'amount_cents': totalCents,
+        'category_budgets_json':
+            _encodeBudgetCategoryCents(categoryBudgetsCents),
+        'monthly_income_cents': null,
+        'fixed_templates_json': '[]',
+        'legacy_source_period_id': null,
+        'created_ms': versionMs,
+        'updated_ms': versionMs,
+      });
+      await txn.update(
+        'budget_plans',
+        {
+          'status': BudgetPlanStatusV2.archived.storageKey,
+          'updated_ms': versionMs,
+        },
+        where: 'id = ?',
+        whereArgs: [planId],
+      );
+      await txn.insert('budget_change_events', {
+        'uuid': _newUuid(),
+        'plan_id': planId,
+        'event_type': 'special_superseded',
+        'before_json': jsonEncode({
+          'plan': existingPlan,
+          'revision': revision,
+        }),
+        'after_json': jsonEncode({'successor_plan_id': savedPlanId}),
+        'created_ms': versionMs,
+      });
+      await txn.insert('budget_change_events', {
+        'uuid': _newUuid(),
+        'plan_id': savedPlanId,
+        'event_type': 'special_created',
+        'before_json': jsonEncode({'supersedes_plan_id': planId}),
+        'after_json': jsonEncode({
+          'start_day': budgetCivilDayKey(start),
+          'end_day': budgetCivilDayKey(end),
+          'total_cents': totalCents,
+          'expense_scope': expenseScope.toJson(),
+        }),
+        'created_ms': versionMs,
+      });
+    });
+    await _loadBudgetV2();
+    notifyListeners();
+    return savedPlanId;
+  }
+
+  Future<int> addBudgetPlanRevisionV2({
+    required int planId,
+    required int totalCents,
+    Map<String, int> categoryBudgetsCents = const {},
+    int? monthlyIncomeCents,
+    List<BudgetFixedTemplateV2> fixedTemplates = const [],
+    DateTime? effectiveCycleStart,
+  }) async {
+    final plan = _budgetPlansV2.where((item) => item.id == planId).firstOrNull;
+    if (plan == null) throw StateError('预算计划不存在');
+    final current = plan.cycleFor(DateTime.now());
+    final start = effectiveCycleStart ?? current.endExclusive;
+    final cycle = plan.cycleFor(start);
+    if (cycle.start != DateTime(start.year, start.month, start.day)) {
+      throw ArgumentError('预算修订只能从完整周期边界生效');
+    }
+    if (totalCents <= 0 ||
+        categoryBudgetsCents.values.fold<int>(0, (a, b) => a + b) >
+            totalCents ||
+        fixedTemplates.fold<int>(0, (sum, item) => sum + item.plannedCents) >
+            totalCents) {
+      throw ArgumentError('预算修订金额不合法');
+    }
+    final nowMs = DateTime.now().millisecondsSinceEpoch;
+    late final int revisionId;
+    await _db!.transaction((txn) async {
+      final existing = await txn.query(
+        'budget_plan_revisions',
+        where: 'plan_id = ? AND effective_cycle_start_day = ?',
+        whereArgs: [planId, cycle.startDayKey],
+        limit: 1,
+      );
+      final revisionPayload = <String, Object?>{
+        'amount_cents': totalCents,
+        'category_budgets_json':
+            _encodeBudgetCategoryCents(categoryBudgetsCents),
+        'monthly_income_cents': monthlyIncomeCents,
+        'fixed_templates_json': _encodeBudgetFixedTemplates(fixedTemplates),
+        'updated_ms': nowMs,
+      };
+      if (existing.isEmpty) {
+        await txn.update(
+          'budget_plan_revisions',
+          {
+            'effective_to_cycle_start_day': cycle.startDayKey,
+            'updated_ms': nowMs,
+          },
+          where:
+              'plan_id = ? AND effective_to_cycle_start_day IS NULL AND effective_cycle_start_day < ?',
+          whereArgs: [planId, cycle.startDayKey],
+        );
+        revisionId = await txn.insert('budget_plan_revisions', {
+          'uuid': _newUuid(),
+          'plan_id': planId,
+          'effective_cycle_start_day': cycle.startDayKey,
+          'effective_to_cycle_start_day': null,
+          ...revisionPayload,
+          'legacy_source_period_id': null,
+          'created_ms': nowMs,
+        });
+      } else {
+        revisionId = existing.first['id'] as int;
+        await txn.update(
+          'budget_plan_revisions',
+          revisionPayload,
+          where: 'id = ?',
+          whereArgs: [revisionId],
+        );
+      }
+      await _syncBudgetOccurrencesForRevision(
+        txn,
+        plan: plan,
+        revisionId: revisionId,
+        cycle: cycle,
+        templates: fixedTemplates,
+        nowMs: nowMs,
+      );
+      await txn.insert('budget_change_events', {
+        'uuid': _newUuid(),
+        'plan_id': planId,
+        'event_type':
+            existing.isEmpty ? 'revision_created' : 'revision_updated',
+        'before_json': existing.isEmpty ? '' : jsonEncode(existing.first),
+        'after_json': jsonEncode({
+          'revision_id': revisionId,
+          'total_cents': totalCents,
+          'effective_cycle_start_day': cycle.startDayKey,
+        }),
+        'created_ms': nowMs,
+      });
+    });
+    await _loadBudgetV2();
+    notifyListeners();
+    return revisionId;
+  }
+
+  Future<void> upsertBudgetCycleOverrideV2({
+    required int planId,
+    required DateTime cycleStart,
+    required int targetAmountCents,
+    Map<String, int>? categoryBudgetsCents,
+    BudgetOverrideIntent inputIntent = BudgetOverrideIntent.replaceTotal,
+    int? inputDeltaCents,
+  }) async {
+    final plan = _budgetPlansV2.where((item) => item.id == planId).firstOrNull;
+    if (plan == null) throw StateError('预算计划不存在');
+    final cycle = plan.cycleFor(cycleStart);
+    if (cycle.start !=
+        DateTime(cycleStart.year, cycleStart.month, cycleStart.day)) {
+      throw ArgumentError('本周期调整必须指向完整周期起点');
+    }
+    final categories = categoryBudgetsCents ??
+        _budgetPlanRevisionsV2
+            .where((revision) => revision.appliesTo(cycle))
+            .lastOrNull
+            ?.categoryBudgetsCents ??
+        const <String, int>{};
+    if (targetAmountCents < 0 ||
+        categories.values.fold<int>(0, (a, b) => a + b) > targetAmountCents) {
+      throw ArgumentError('调整后的分类额度超过了周期总额');
+    }
+    final nowMs = DateTime.now().millisecondsSinceEpoch;
+    await _db!.transaction((txn) async {
+      final existing = await txn.query(
+        'budget_cycle_overrides',
+        where: 'plan_id = ? AND cycle_start_day = ?',
+        whereArgs: [planId, cycle.startDayKey],
+        limit: 1,
+      );
+      final payload = {
+        'uuid': existing.isEmpty ? _newUuid() : existing.first['uuid'],
+        'plan_id': planId,
+        'cycle_start_day': cycle.startDayKey,
+        'cycle_end_day': cycle.endDayKey,
+        'target_amount_cents': targetAmountCents,
+        'category_budgets_json': categoryBudgetsCents == null
+            ? null
+            : _encodeBudgetCategoryCents(categoryBudgetsCents),
+        'input_intent': inputIntent.storageKey,
+        'input_delta_cents': inputDeltaCents,
+        'created_ms': existing.isEmpty
+            ? nowMs
+            : existing.first['created_ms'] as int? ?? nowMs,
+        'updated_ms': nowMs,
+      };
+      await txn.insert(
+        'budget_cycle_overrides',
+        payload,
+        conflictAlgorithm: ConflictAlgorithm.replace,
+      );
+      await txn.insert('budget_change_events', {
+        'uuid': _newUuid(),
+        'plan_id': planId,
+        'event_type': 'cycle_override_saved',
+        'before_json': existing.isEmpty ? '' : jsonEncode(existing.first),
+        'after_json': jsonEncode(payload),
+        'created_ms': nowMs,
+      });
+    });
+    await _loadBudgetV2();
+    notifyListeners();
+  }
+
+  Future<void> archiveBudgetPlanV2(int planId) async {
+    final plan = _budgetPlansV2.where((item) => item.id == planId).firstOrNull;
+    if (plan == null || plan.status == BudgetPlanStatusV2.archived) return;
+    final cycle = plan.cycleFor(DateTime.now());
+    final archiveEnd = plan.isSpecial
+        ? budgetCivilDayKey(plan.endInclusive!)
+        : cycle.endDayKey;
+    final nowMs = max(
+      DateTime.now().millisecondsSinceEpoch,
+      plan.updatedMs + 1,
+    );
+    await _db!.transaction((txn) async {
+      await txn.update(
+        'budget_plans',
+        {
+          'status': BudgetPlanStatusV2.archived.storageKey,
+          'end_day': archiveEnd,
+          'updated_ms': nowMs,
+        },
+        where: 'id = ?',
+        whereArgs: [planId],
+      );
+      await txn.insert('budget_change_events', {
+        'uuid': _newUuid(),
+        'plan_id': planId,
+        'event_type': 'plan_archived',
+        'before_json': jsonEncode({'status': plan.status.storageKey}),
+        'after_json': jsonEncode({
+          'status': BudgetPlanStatusV2.archived.storageKey,
+          'end_day': archiveEnd,
+        }),
+        'created_ms': nowMs,
+      });
+    });
+    await _loadBudgetV2();
+    notifyListeners();
+  }
+
+  int _familyNetAt(
+    ConsumptionExpenseFamily family,
+    DateTime knowledgeCutoff,
+  ) {
+    if (family.createdAt.isAfter(knowledgeCutoff)) return 0;
+    final refunds = family.refunds
+        .where((refund) => !refund.createdAt.isAfter(knowledgeCutoff))
+        .fold<int>(0, (sum, refund) => sum + refund.amountMinor);
+    return max(0, family.originalAmountMinor - refunds);
+  }
+
+  List<FixedCommitmentEvaluation> budgetFixedEvaluationsForCycle(
+    int planId,
+    DateTime cycleStart, {
+    DateTime? asOf,
+    DateTime? knowledgeCutoff,
+  }) {
+    final plan = _budgetPlansV2.where((item) => item.id == planId).firstOrNull;
+    if (plan == null) return const [];
+    final queryAsOf = asOf ?? DateTime.now();
+    final cutoff = knowledgeCutoff ?? DateTime.now();
+    final families = _budgetExpenseFamiliesForBook(plan.bookId);
+    final familyById = {for (final family in families) family.id: family};
+    final entities = budgetFixedOccurrencesV2For(
+      planId,
+      cycleStart: cycleStart,
+    );
+    final coreOccurrences = entities.map((item) => item.occurrence).toList();
+    return [
+      for (final entity in entities)
+        (() {
+          final occurrence = entity.occurrence;
+          final familyId = occurrence.matchedTransactionFamilyId;
+          final family = familyId == null ? null : familyById[familyId];
+          var exclusive = false;
+          var familyNet = 0;
+          var attributionOccurred = false;
+          var refundReview = occurrence.reviewReason ==
+              FixedCommitmentReviewReason.refundAfterMatch;
+          if (family != null) {
+            final candidate = FixedCommitmentFamilyCandidate(
+              familyId: family.id,
+              bookId: plan.bookId,
+              currencyCode: family.currencyCode,
+              attributionDate: family.attributionDate,
+            );
+            exclusive = FixedCommitmentLinkValidator.validateLink(
+              occurrence: occurrence,
+              candidate: candidate,
+              existingOccurrences: coreOccurrences,
+            ).isValid;
+            familyNet = _familyNetAt(family, cutoff);
+            attributionOccurred = !family.attributionDate.isAfter(queryAsOf);
+            final resolvedMs = occurrence.resolvedMs ?? 0;
+            if (family.refunds.any((refund) =>
+                refund.createdAt.millisecondsSinceEpoch > resolvedMs &&
+                !refund.createdAt.isAfter(cutoff))) {
+              refundReview = true;
+            }
+          }
+          return FixedCommitmentCalculator.evaluate(
+            occurrence: occurrence,
+            asOf: queryAsOf,
+            exclusiveLinked: exclusive,
+            familyNetCents: familyNet,
+            attributionOccurred: attributionOccurred,
+            refundAfterMatchReview: refundReview,
+          );
+        })(),
+    ];
+  }
+
+  List<TransactionEntity> budgetFixedMatchCandidates(
+    BudgetFixedOccurrenceEntity entity,
+  ) {
+    final plan =
+        _budgetPlansV2.where((item) => item.id == entity.planId).firstOrNull;
+    if (plan == null) return const [];
+    final allowedBooks = _bookIdsForView(plan.bookId).toSet();
+    final linkedFamilies = {
+      for (final item in _budgetFixedOccurrencesV2)
+        if (item.planId == plan.id &&
+            item.id != entity.id &&
+            item.matchedTransactionFamilyId != null)
+          item.matchedTransactionFamilyId!,
+    };
+    final candidates = _globalVisibleTransactions.where((transaction) {
+      if (transaction.txKind != TransactionKind.expense ||
+          transaction.amount <= Decimal.zero ||
+          transaction.bookId == null ||
+          !allowedBooks.contains(transaction.bookId) ||
+          transaction.currencyCode != plan.currencyCode) {
+        return false;
+      }
+      final day = DateTime(
+        transaction.date.year,
+        transaction.date.month,
+        transaction.date.day,
+      );
+      if (day.isBefore(entity.occurrence.cycleStart) ||
+          day.isAfter(entity.occurrence.cycleEnd)) {
+        return false;
+      }
+      final familyId = transaction.uuid.isEmpty
+          ? transaction.id.toString()
+          : transaction.uuid;
+      return !linkedFamilies.contains(familyId);
+    }).toList()
+      ..sort((left, right) => right.dateMs.compareTo(left.dateMs));
+    return List.unmodifiable(candidates);
+  }
+
+  Future<void> matchBudgetFixedOccurrence(
+    int occurrenceId,
+    String familyId,
+  ) async {
+    final entity = _budgetFixedOccurrencesV2
+        .where((item) => item.id == occurrenceId)
+        .firstOrNull;
+    if (entity == null) throw StateError('固定支出周期记录不存在');
+    final plan =
+        _budgetPlansV2.where((item) => item.id == entity.planId).firstOrNull;
+    if (plan == null) throw StateError('预算计划不存在');
+    final family = _budgetExpenseFamiliesForBook(plan.bookId)
+        .where((item) => item.id == familyId)
+        .firstOrNull;
+    if (family == null) throw StateError('匹配账单不存在');
+    final validation = FixedCommitmentLinkValidator.validateLink(
+      occurrence: entity.occurrence,
+      candidate: FixedCommitmentFamilyCandidate(
+        familyId: family.id,
+        bookId: plan.bookId,
+        currencyCode: family.currencyCode,
+        attributionDate: family.attributionDate,
+      ),
+      existingOccurrences:
+          _budgetFixedOccurrencesV2.map((item) => item.occurrence),
+    );
+    if (!validation.isValid) {
+      throw StateError('这笔账不在固定支出的账本、币种或周期范围内，或已匹配其他承诺。');
+    }
+    final nowMs = DateTime.now().millisecondsSinceEpoch;
+    await _db!.transaction((txn) async {
+      await txn.update(
+        'budget_fixed_commitment_occurrences',
+        {
+          'resolution_status':
+              FixedCommitmentResolutionStatus.matched.storageValue,
+          'review_reason': '',
+          'matched_transaction_family_uuid': familyId,
+          'resolved_ms': nowMs,
+          'updated_ms': nowMs,
+        },
+        where: 'id = ?',
+        whereArgs: [occurrenceId],
+      );
+      await txn.insert('budget_change_events', {
+        'uuid': _newUuid(),
+        'plan_id': entity.planId,
+        'event_type': 'occurrence_matched',
+        'before_json': jsonEncode({
+          'occurrence_id': occurrenceId,
+          'family_id': entity.matchedTransactionFamilyId,
+        }),
+        'after_json': jsonEncode({
+          'occurrence_id': occurrenceId,
+          'family_id': familyId,
+        }),
+        'created_ms': nowMs,
+      });
+    });
+    await _loadBudgetV2();
+    notifyListeners();
+  }
+
+  Future<void> skipBudgetFixedOccurrence(int occurrenceId) =>
+      _setBudgetFixedOccurrenceResolution(
+        occurrenceId,
+        status: FixedCommitmentResolutionStatus.skipped,
+        eventType: 'occurrence_skipped',
+      );
+
+  Future<void> resetBudgetFixedOccurrence(int occurrenceId) =>
+      _setBudgetFixedOccurrenceResolution(
+        occurrenceId,
+        status: FixedCommitmentResolutionStatus.planned,
+        eventType: 'occurrence_reset',
+      );
+
+  Future<void> acceptBudgetFixedRefundReview(int occurrenceId) async {
+    final entity = _budgetFixedOccurrencesV2
+        .where((item) => item.id == occurrenceId)
+        .firstOrNull;
+    if (entity == null ||
+        entity.occurrence.reviewReason !=
+            FixedCommitmentReviewReason.refundAfterMatch ||
+        entity.matchedTransactionFamilyId == null) {
+      throw StateError('这条固定支出没有可确认的退款差额');
+    }
+    final nowMs = DateTime.now().millisecondsSinceEpoch;
+    await _db!.update(
+      'budget_fixed_commitment_occurrences',
+      {
+        'resolution_status':
+            FixedCommitmentResolutionStatus.matched.storageValue,
+        'review_reason': '',
+        'resolved_ms': nowMs,
+        'updated_ms': nowMs,
+      },
+      where: 'id = ?',
+      whereArgs: [occurrenceId],
+    );
+    await _loadBudgetV2();
+    notifyListeners();
+  }
+
+  Future<void> _setBudgetFixedOccurrenceResolution(
+    int occurrenceId, {
+    required FixedCommitmentResolutionStatus status,
+    required String eventType,
+  }) async {
+    final entity = _budgetFixedOccurrencesV2
+        .where((item) => item.id == occurrenceId)
+        .firstOrNull;
+    if (entity == null) throw StateError('固定支出周期记录不存在');
+    final nowMs = DateTime.now().millisecondsSinceEpoch;
+    await _db!.transaction((txn) async {
+      await txn.update(
+        'budget_fixed_commitment_occurrences',
+        {
+          'resolution_status': status.storageValue,
+          'review_reason': '',
+          'matched_transaction_family_uuid': null,
+          'resolved_ms':
+              status == FixedCommitmentResolutionStatus.skipped ? nowMs : null,
+          'updated_ms': nowMs,
+        },
+        where: 'id = ?',
+        whereArgs: [occurrenceId],
+      );
+      await txn.insert('budget_change_events', {
+        'uuid': _newUuid(),
+        'plan_id': entity.planId,
+        'event_type': eventType,
+        'before_json': jsonEncode({
+          'status': entity.resolutionStatus.storageValue,
+          'family_id': entity.matchedTransactionFamilyId,
+        }),
+        'after_json': jsonEncode({'status': status.storageValue}),
+        'created_ms': nowMs,
+      });
+    });
+    await _loadBudgetV2();
+    notifyListeners();
+  }
+
+  Future<void> _markBudgetOccurrenceRefundReview(
+    TransactionEntity root,
+  ) async {
+    final familyId = root.uuid.isEmpty ? root.id.toString() : root.uuid;
+    final nowMs = DateTime.now().millisecondsSinceEpoch;
+    await _db!.update(
+      'budget_fixed_commitment_occurrences',
+      {
+        'resolution_status':
+            FixedCommitmentResolutionStatus.requiresReview.storageValue,
+        'review_reason':
+            FixedCommitmentReviewReason.refundAfterMatch.storageValue,
+        'updated_ms': nowMs,
+      },
+      where: 'matched_transaction_family_uuid = ? AND resolution_status = ?',
+      whereArgs: [
+        familyId,
+        FixedCommitmentResolutionStatus.matched.storageValue,
+      ],
+    );
+    await _loadBudgetV2();
+  }
+
+  Future<void> _refreshBudgetOccurrenceRefundReview(int rootId) async {
+    final root = _allTransactions
+        .where((transaction) => transaction.id == rootId)
+        .firstOrNull;
+    if (root == null) return;
+    final familyId = root.uuid.isEmpty ? root.id.toString() : root.uuid;
+    final refunds = _allTransactions
+        .where((transaction) => transaction.refundOf == rootId)
+        .toList();
+    final occurrences = _budgetFixedOccurrencesV2.where((item) =>
+        item.matchedTransactionFamilyId == familyId &&
+        (item.resolutionStatus == FixedCommitmentResolutionStatus.matched ||
+            item.occurrence.reviewReason ==
+                FixedCommitmentReviewReason.refundAfterMatch));
+    final nowMs = DateTime.now().millisecondsSinceEpoch;
+    await _db!.transaction((txn) async {
+      for (final occurrence in occurrences) {
+        final resolvedMs = occurrence.resolvedMs ?? 0;
+        final hasUnreviewedRefund = refunds.any(
+          (refund) => refund.createdMs > resolvedMs,
+        );
+        await txn.update(
+          'budget_fixed_commitment_occurrences',
+          {
+            'resolution_status': (hasUnreviewedRefund
+                    ? FixedCommitmentResolutionStatus.requiresReview
+                    : FixedCommitmentResolutionStatus.matched)
+                .storageValue,
+            'review_reason': hasUnreviewedRefund
+                ? FixedCommitmentReviewReason.refundAfterMatch.storageValue
+                : '',
+            'updated_ms': nowMs,
+          },
+          where: 'id = ?',
+          whereArgs: [occurrence.id],
+        );
+      }
+    });
+    await _loadBudgetV2();
+  }
 
   /// 新建一条预算期间，返回 id。
   Future<int> addBudgetPeriod({
@@ -1960,8 +12387,7 @@ class AppRepository extends ChangeNotifier {
       'category_budgets':
           categoryBudgets.isEmpty ? '' : p.categoryBudgetsJson(),
       'monthly_income': monthlyIncome?.toString() ?? '',
-      'fixed_expenses':
-          fixedExpenses.isEmpty ? '' : p.fixedExpensesJson(),
+      'fixed_expenses': fixedExpenses.isEmpty ? '' : p.fixedExpensesJson(),
       'created_ms': DateTime.now().millisecondsSinceEpoch,
     });
     await _loadBudgetPeriods();
@@ -2023,23 +12449,271 @@ class AppRepository extends ChangeNotifier {
   // ---------------------------------------------------------------------------
 
   Future<void> saveApiKey(String key) async {
-    final trimmed = key.trim();
+    await saveAiProviderConfig(
+      type: AiProviderType.deepseek,
+      apiKey: key,
+    );
+  }
+
+  Future<void> saveAiProviderConfig({
+    required AiProviderType type,
+    required String apiKey,
+    String? customDisplayName,
+    String? customBaseUrl,
+    String? customModel,
+    String? reportModel,
+    AiProviderType? recordProviderType,
+    AiProviderType? chatProviderType,
+    AiProviderType? reportProviderType,
+    AiRouteMode? recordRouteMode,
+    AiRouteMode? chatRouteMode,
+    AiRouteMode? reportRouteMode,
+    AiEndpointType? recordEndpointType,
+    AiEndpointType? chatEndpointType,
+    AiEndpointType? reportEndpointType,
+    AiReasoningEffort? recordReasoningEffort,
+    AiReasoningEffort? chatReasoningEffort,
+    AiReasoningEffort? reportReasoningEffort,
+  }) async {
+    final oldRouteSignature = [
+      _aiProviderType.storageKey,
+      _customAiDisplayName,
+      _customAiBaseUrl,
+      _recordAiProviderType.storageKey,
+      _chatAiProviderType.storageKey,
+      _reportAiProviderType.storageKey,
+      _recordAiRouteMode.storageKey,
+      _chatAiRouteMode.storageKey,
+      _reportAiRouteMode.storageKey,
+      _recordAiEndpointType.storageKey,
+      _chatAiEndpointType.storageKey,
+      _reportAiEndpointType.storageKey,
+    ].join('|');
+
+    _aiProviderType = type;
+    _customAiDisplayName =
+        (customDisplayName ?? _customAiDisplayName).trim().isEmpty
+            ? '自定义'
+            : (customDisplayName ?? _customAiDisplayName).trim();
+    _customAiBaseUrl = (customBaseUrl ?? _customAiBaseUrl).trim().isEmpty
+        ? AiProviderConfig.customDefaultBaseUrl
+        : (customBaseUrl ?? _customAiBaseUrl).trim();
+    _customAiModel = (customModel ?? _customAiModel).trim().isEmpty
+        ? AiProviderConfig.customDefaultModel
+        : (customModel ?? _customAiModel).trim();
+    _reportAiModel = (reportModel ?? _reportAiModel).trim().isEmpty
+        ? AiProviderConfig.customReportDefaultModel
+        : (reportModel ?? _reportAiModel).trim();
+    _recordAiProviderType = recordProviderType ?? _recordAiProviderType;
+    _chatAiProviderType = chatProviderType ?? _chatAiProviderType;
+    _reportAiProviderType = reportProviderType ?? _reportAiProviderType;
+    _recordAiRouteMode = recordRouteMode ?? _recordAiRouteMode;
+    _chatAiRouteMode = chatRouteMode ?? _chatAiRouteMode;
+    _reportAiRouteMode = reportRouteMode ?? _reportAiRouteMode;
+    _recordAiEndpointType = recordEndpointType ?? _recordAiEndpointType;
+    _chatAiEndpointType = chatEndpointType ?? _chatAiEndpointType;
+    _reportAiEndpointType = reportEndpointType ?? _reportAiEndpointType;
+    _recordAiReasoningEffort =
+        recordReasoningEffort ?? _recordAiReasoningEffort;
+    _chatAiReasoningEffort = chatReasoningEffort ?? _chatAiReasoningEffort;
+    _reportAiReasoningEffort =
+        reportReasoningEffort ?? _reportAiReasoningEffort;
+
+    if (type == AiProviderType.custom) {
+      _customAiApiKey = await _saveSecret(
+        secureKey: 'custom_ai_api_key',
+        legacySettingKey: 'custom_ai_api_key',
+        configuredSettingKey: 'custom_ai_api_key_configured',
+        value: apiKey,
+      );
+    } else {
+      _deepSeekApiKey = await _saveSecret(
+        secureKey: 'deepseek_api_key',
+        legacySettingKey: 'deepseek_api_key',
+        configuredSettingKey: 'deepseek_api_key_configured',
+        value: apiKey,
+      );
+    }
+
+    final batch = _db!.batch();
+    void setting(String key, String value) => batch.insert(
+          'app_settings',
+          {'key': key, 'value': value},
+          conflictAlgorithm: ConflictAlgorithm.replace,
+        );
+
+    setting('ai_provider_type', _aiProviderType.storageKey);
+    setting('custom_ai_display_name', _customAiDisplayName);
+    setting('custom_ai_base_url', _customAiBaseUrl);
+    setting('custom_ai_model', _customAiModel);
+    setting('report_ai_model', _reportAiModel);
+    setting('ai_record_provider_type', _recordAiProviderType.storageKey);
+    setting('ai_chat_provider_type', _chatAiProviderType.storageKey);
+    setting('ai_report_provider_type', _reportAiProviderType.storageKey);
+    setting('ai_record_route_mode', _recordAiRouteMode.storageKey);
+    setting('ai_chat_route_mode', _chatAiRouteMode.storageKey);
+    setting('ai_report_route_mode', _reportAiRouteMode.storageKey);
+    setting('ai_record_endpoint_type', _recordAiEndpointType.storageKey);
+    setting('ai_chat_endpoint_type', _chatAiEndpointType.storageKey);
+    setting('ai_report_endpoint_type', _reportAiEndpointType.storageKey);
+    setting('ai_record_reasoning_effort', _recordAiReasoningEffort.storageKey);
+    setting('ai_chat_reasoning_effort', _chatAiReasoningEffort.storageKey);
+    setting('ai_report_reasoning_effort', _reportAiReasoningEffort.storageKey);
+    setting('ai_task_config_version', '2');
+
+    final newRouteSignature = [
+      _aiProviderType.storageKey,
+      _customAiDisplayName,
+      _customAiBaseUrl,
+      _recordAiProviderType.storageKey,
+      _chatAiProviderType.storageKey,
+      _reportAiProviderType.storageKey,
+      _recordAiRouteMode.storageKey,
+      _chatAiRouteMode.storageKey,
+      _reportAiRouteMode.storageKey,
+      _recordAiEndpointType.storageKey,
+      _chatAiEndpointType.storageKey,
+      _reportAiEndpointType.storageKey,
+    ].join('|');
+    if (oldRouteSignature != newRouteSignature) {
+      _aiPrivacyAccepted = false;
+      setting('ai_privacy_accepted', '0');
+    }
+    await batch.commit(noResult: true);
+    notifyListeners();
+  }
+
+  Future<void> saveAiTaskRouting({
+    required AiRouteMode recordRouteMode,
+    required AiRouteMode chatRouteMode,
+    required AiRouteMode reportRouteMode,
+    required AiProviderType recordProviderType,
+    required AiProviderType chatProviderType,
+    required AiProviderType reportProviderType,
+  }) async {
+    final oldRouteSignature = [
+      _recordAiProviderType.storageKey,
+      _chatAiProviderType.storageKey,
+      _reportAiProviderType.storageKey,
+      _recordAiRouteMode.storageKey,
+      _chatAiRouteMode.storageKey,
+      _reportAiRouteMode.storageKey,
+    ].join('|');
+
+    _recordAiRouteMode = recordRouteMode;
+    _chatAiRouteMode = chatRouteMode;
+    _reportAiRouteMode = reportRouteMode;
+    _recordAiProviderType = recordProviderType;
+    _chatAiProviderType = chatProviderType;
+    _reportAiProviderType = reportProviderType;
+
+    final batch = _db!.batch();
+    void setting(String key, String value) => batch.insert(
+          'app_settings',
+          {'key': key, 'value': value},
+          conflictAlgorithm: ConflictAlgorithm.replace,
+        );
+    setting('ai_record_route_mode', _recordAiRouteMode.storageKey);
+    setting('ai_chat_route_mode', _chatAiRouteMode.storageKey);
+    setting('ai_report_route_mode', _reportAiRouteMode.storageKey);
+    setting('ai_record_provider_type', _recordAiProviderType.storageKey);
+    setting('ai_chat_provider_type', _chatAiProviderType.storageKey);
+    setting('ai_report_provider_type', _reportAiProviderType.storageKey);
+    setting('ai_task_config_version', '2');
+
+    final newRouteSignature = [
+      _recordAiProviderType.storageKey,
+      _chatAiProviderType.storageKey,
+      _reportAiProviderType.storageKey,
+      _recordAiRouteMode.storageKey,
+      _chatAiRouteMode.storageKey,
+      _reportAiRouteMode.storageKey,
+    ].join('|');
+    if (oldRouteSignature != newRouteSignature) {
+      _aiPrivacyAccepted = false;
+      setting('ai_privacy_accepted', '0');
+    }
+    await batch.commit(noResult: true);
+    notifyListeners();
+  }
+
+  Future<void> saveAiAdvancedConfig({
+    String? customModel,
+    String? reportModel,
+    AiEndpointType? chatEndpointType,
+    AiEndpointType? reportEndpointType,
+    AiReasoningEffort? chatReasoningEffort,
+    AiReasoningEffort? reportReasoningEffort,
+  }) async {
+    _customAiModel = (customModel ?? _customAiModel).trim().isEmpty
+        ? AiProviderConfig.customDefaultModel
+        : (customModel ?? _customAiModel).trim();
+    _reportAiModel = (reportModel ?? _reportAiModel).trim().isEmpty
+        ? AiProviderConfig.customReportDefaultModel
+        : (reportModel ?? _reportAiModel).trim();
+    _chatAiEndpointType = chatEndpointType ?? _chatAiEndpointType;
+    _reportAiEndpointType = reportEndpointType ?? _reportAiEndpointType;
+    _chatAiReasoningEffort = chatReasoningEffort ?? _chatAiReasoningEffort;
+    _reportAiReasoningEffort =
+        reportReasoningEffort ?? _reportAiReasoningEffort;
+
+    final batch = _db!.batch();
+    void setting(String key, String value) => batch.insert(
+          'app_settings',
+          {'key': key, 'value': value},
+          conflictAlgorithm: ConflictAlgorithm.replace,
+        );
+    setting('custom_ai_model', _customAiModel);
+    setting('report_ai_model', _reportAiModel);
+    setting('ai_chat_endpoint_type', _chatAiEndpointType.storageKey);
+    setting('ai_report_endpoint_type', _reportAiEndpointType.storageKey);
+    setting('ai_chat_reasoning_effort', _chatAiReasoningEffort.storageKey);
+    setting('ai_report_reasoning_effort', _reportAiReasoningEffort.storageKey);
+    setting('ai_task_config_version', '2');
+    await batch.commit(noResult: true);
+    notifyListeners();
+  }
+
+  Future<String?> _saveSecret({
+    required String secureKey,
+    required String legacySettingKey,
+    required String configuredSettingKey,
+    required String value,
+  }) async {
+    final trimmed = value.trim();
     if (trimmed.isEmpty) {
+      await SecureKeyStore.delete(secureKey);
       await _db!.delete(
         'app_settings',
-        where: 'key = ?',
-        whereArgs: ['deepseek_api_key'],
+        where: 'key IN (?, ?)',
+        whereArgs: [legacySettingKey, configuredSettingKey],
       );
-      _deepSeekApiKey = null;
+      return null;
     } else {
-      await _db!.insert(
-        'app_settings',
-        {'key': 'deepseek_api_key', 'value': trimmed},
-        conflictAlgorithm: ConflictAlgorithm.replace,
-      );
-      _deepSeekApiKey = trimmed;
+      final stored = await SecureKeyStore.write(secureKey, trimmed);
+      if (stored) {
+        await _db!.delete(
+          'app_settings',
+          where: 'key = ?',
+          whereArgs: [legacySettingKey],
+        );
+        await _db!.insert(
+          'app_settings',
+          {'key': configuredSettingKey, 'value': '1'},
+          conflictAlgorithm: ConflictAlgorithm.replace,
+        );
+      } else {
+        // Desktop tests and unsupported platforms do not provide the native
+        // secure channel. Keep the app usable there, but Android release builds
+        // use Keystore through MainActivity.
+        await _db!.insert(
+          'app_settings',
+          {'key': legacySettingKey, 'value': trimmed},
+          conflictAlgorithm: ConflictAlgorithm.replace,
+        );
+      }
+      return trimmed;
     }
-    notifyListeners();
   }
 
   // ---------------------------------------------------------------------------
@@ -2055,7 +12729,8 @@ class AppRepository extends ChangeNotifier {
       {'key': 'current_book_id', 'value': bookId.toString()},
       conflictAlgorithm: ConflictAlgorithm.replace,
     );
-    await _loadTransactions();
+    _applyCurrentBookTransactionView();
+    await _loadPhysicalAssetData();
     notifyListeners();
   }
 
@@ -2114,7 +12789,7 @@ class AppRepository extends ChangeNotifier {
     updates['updated_ms'] = DateTime.now().millisecondsSinceEpoch;
     await _db!.update('books', updates, where: 'id = ?', whereArgs: [id]);
     await _loadBooks();
-    await _loadTransactions();
+    _applyCurrentBookTransactionView();
     notifyListeners();
   }
 
@@ -2137,44 +12812,5589 @@ class AppRepository extends ChangeNotifier {
   Future<void> deleteBook(int id, {bool moveRecordsToDefault = false}) async {
     if (_books.length <= 1) return;
     if (id == _defaultBookId) return; // 总账本不可删
-    if (moveRecordsToDefault) {
-      await _db!.update(
-        'transactions',
+    final receiptPaths = <String>[];
+    await _db!.transaction((txn) async {
+      if (moveRecordsToDefault) {
+        final now = DateTime.now().millisecondsSinceEpoch;
+        await txn.update(
+          'transactions',
+          {'book_id': _defaultBookId, 'updated_ms': now},
+          where: 'book_id = ?',
+          whereArgs: [id],
+        );
+        for (final table in [
+          'recurring_rules',
+          'budget_periods',
+          'reports',
+          'report_jobs',
+          'physical_assets',
+          'receivable_assets',
+        ]) {
+          await txn.update(
+            table,
+            {'book_id': _defaultBookId},
+            where: 'book_id = ?',
+            whereArgs: [id],
+          );
+        }
+        await txn.update(
+          'budget_plans',
+          {'book_id': _defaultBookId, 'updated_ms': now},
+          where: 'book_id = ?',
+          whereArgs: [id],
+        );
+      } else {
+        final txRows = await txn.query(
+          'transactions',
+          columns: ['image_path'],
+          where: 'book_id = ?',
+          whereArgs: [id],
+        );
+        receiptPaths.addAll(txRows
+            .map((row) => row['image_path'] as String? ?? '')
+            .where((path) => path.isNotEmpty));
+
+        final ruleIds = (await txn.query(
+          'recurring_rules',
+          columns: ['id'],
+          where: 'book_id = ?',
+          whereArgs: [id],
+        ))
+            .map((row) => row['id'] as int)
+            .toList();
+        if (ruleIds.isNotEmpty) {
+          await txn.delete(
+            'recurring_occurrences',
+            where: 'rule_id IN (${List.filled(ruleIds.length, '?').join(',')})',
+            whereArgs: ruleIds,
+          );
+        }
+
+        final physicalIds = (await txn.query(
+          'physical_assets',
+          columns: ['id'],
+          where: 'book_id = ?',
+          whereArgs: [id],
+        ))
+            .map((row) => row['id'] as int)
+            .toList();
+        if (physicalIds.isNotEmpty) {
+          final marks = List.filled(physicalIds.length, '?').join(',');
+          await txn.delete('asset_transaction_links',
+              where: 'asset_id IN ($marks)', whereArgs: physicalIds);
+          await txn.delete('asset_valuations',
+              where: 'asset_id IN ($marks)', whereArgs: physicalIds);
+          await txn.delete('asset_events',
+              where: "asset_type = 'physical' AND asset_id IN ($marks)",
+              whereArgs: physicalIds);
+          await txn.delete('asset_usage_events',
+              where: 'asset_id IN ($marks)', whereArgs: physicalIds);
+        }
+
+        final receivableIds = (await txn.query(
+          'receivable_assets',
+          columns: ['id'],
+          where: 'book_id = ?',
+          whereArgs: [id],
+        ))
+            .map((row) => row['id'] as int)
+            .toList();
+        if (receivableIds.isNotEmpty) {
+          final marks = List.filled(receivableIds.length, '?').join(',');
+          await txn.delete('receivable_recoveries',
+              where: 'receivable_asset_id IN ($marks)',
+              whereArgs: receivableIds);
+          await txn.delete('asset_events',
+              where: "asset_type = 'receivable' AND asset_id IN ($marks)",
+              whereArgs: receivableIds);
+        }
+
+        final reportIds = (await txn.query(
+          'reports',
+          columns: ['id'],
+          where: 'book_id = ?',
+          whereArgs: [id],
+        ))
+            .map((row) => row['id'] as int)
+            .toSet();
+        if (reportIds.isNotEmpty) {
+          final chatRows = await txn.query(
+            'chat_messages',
+            columns: ['id', 'text'],
+            where: 'role = ?',
+            whereArgs: ['report'],
+          );
+          final chatIds = <int>[];
+          for (final row in chatRows) {
+            try {
+              final decoded = jsonDecode(row['text'] as String? ?? '');
+              final reportId = decoded is Map
+                  ? (decoded['reportId'] as num?)?.toInt()
+                  : null;
+              if (reportId != null && reportIds.contains(reportId)) {
+                chatIds.add(row['id'] as int);
+              }
+            } catch (_) {}
+          }
+          if (chatIds.isNotEmpty) {
+            await txn.delete(
+              'chat_messages',
+              where: 'id IN (${List.filled(chatIds.length, '?').join(',')})',
+              whereArgs: chatIds,
+            );
+          }
+        }
+
+        final budgetPlanIds = (await txn.query(
+          'budget_plans',
+          columns: ['id'],
+          where: 'book_id = ?',
+          whereArgs: [id],
+        ))
+            .map((row) => row['id'] as int)
+            .toList();
+        if (budgetPlanIds.isNotEmpty) {
+          final marks = List.filled(budgetPlanIds.length, '?').join(',');
+          for (final table in [
+            'budget_fixed_commitment_occurrences',
+            'budget_cycle_overrides',
+            'budget_plan_revisions',
+            'budget_change_events',
+          ]) {
+            await txn.delete(
+              table,
+              where: 'plan_id IN ($marks)',
+              whereArgs: budgetPlanIds,
+            );
+          }
+          await txn.delete(
+            'budget_plans',
+            where: 'id IN ($marks)',
+            whereArgs: budgetPlanIds,
+          );
+        }
+
+        for (final table in [
+          'transactions',
+          'recurring_rules',
+          'budget_periods',
+          'reports',
+          'report_jobs',
+          'physical_assets',
+          'receivable_assets',
+        ]) {
+          await txn.delete(table, where: 'book_id = ?', whereArgs: [id]);
+        }
+      }
+      await txn.delete('books', where: 'id = ?', whereArgs: [id]);
+      if (_currentBookId == id) {
+        _currentBookId = _defaultBookId;
+        await txn.insert(
+          'app_settings',
+          {'key': 'current_book_id', 'value': _currentBookId.toString()},
+          conflictAlgorithm: ConflictAlgorithm.replace,
+        );
+      }
+    });
+    for (final path in receiptPaths) {
+      _deleteReceiptFileIfOwned(path);
+    }
+    await _loadAll();
+    await _refreshCurrentNetWorthSnapshotBestEffort(
+      const {
+        NetWorthSnapshotCause.transaction,
+        NetWorthSnapshotCause.refund,
+        NetWorthSnapshotCause.physicalAsset,
+        NetWorthSnapshotCause.receivable,
+      },
+    );
+    notifyListeners();
+  }
+
+  // ---------------------------------------------------------------------------
+  // 实物资产 CRUD / 生命周期
+  // ---------------------------------------------------------------------------
+
+  List<AssetEventEntity> eventsForAsset(int assetId) => _assetEvents
+      .where((event) =>
+          event.assetType == AssetObjectType.physical &&
+          event.assetId == assetId)
+      .toList()
+    ..sort((a, b) => b.occurredMs.compareTo(a.occurredMs));
+
+  AssetEventType? _terminalEventTypeFor(
+    PhysicalAssetEconomicStatus status,
+  ) =>
+      switch (status) {
+        PhysicalAssetEconomicStatus.scrapped => AssetEventType.assetDisposed,
+        PhysicalAssetEconomicStatus.lost => AssetEventType.assetLost,
+        PhysicalAssetEconomicStatus.gifted => AssetEventType.assetGifted,
+        _ => null,
+      };
+
+  bool _hasPhysicalTerminalUndoEvidence(Map<String, dynamic> metadata) {
+    final economicRaw = metadata['previous_economic_status']?.toString();
+    final usageRaw = metadata['previous_usage_status']?.toString();
+    final qualityRaw = metadata['previous_inclusion_quality']?.toString();
+    final value = Decimal.tryParse(
+      metadata['previous_value']?.toString() ?? '',
+    );
+    if (economicRaw == null ||
+        usageRaw == null ||
+        qualityRaw == null ||
+        value == null ||
+        value < Decimal.zero ||
+        metadata['previous_include_in_net_worth'] is! bool ||
+        !metadata.containsKey('previous_ended_ms')) {
+      return false;
+    }
+    final economic = PhysicalAssetEconomicStatusX.fromStorage(economicRaw);
+    return PhysicalAssetEconomicStatus.values
+            .any((status) => status.storageKey == economicRaw) &&
+        economic.ownsValue &&
+        PhysicalAssetUsageStatus.values
+            .any((status) => status.storageKey == usageRaw) &&
+        AssetInclusionQuality.values
+            .any((quality) => quality.storageKey == qualityRaw);
+  }
+
+  AssetEventEntity? _latestUnreversedTerminalEvent(
+    Iterable<AssetEventEntity> events,
+    AssetEventType terminalType,
+  ) {
+    final reversedIds = <int>{};
+    final reversedUuids = <String>{};
+    for (final event in events) {
+      if (event.eventType != AssetEventType.assetTerminalUndone) continue;
+      final metadata = _assetEventMetadata(event.metadata);
+      final reversedId = int.tryParse(
+        metadata['reversal_of_event_id']?.toString() ?? '',
+      );
+      final reversedUuid =
+          metadata['reversal_of_event_uuid']?.toString().trim() ?? '';
+      if (reversedId != null) reversedIds.add(reversedId);
+      if (reversedUuid.isNotEmpty) reversedUuids.add(reversedUuid);
+    }
+    final candidates = events
+        .where((event) =>
+            event.eventType == terminalType &&
+            !reversedIds.contains(event.id) &&
+            (event.uuid.isEmpty || !reversedUuids.contains(event.uuid)))
+        .toList()
+      ..sort((left, right) {
+        final created = right.createdMs.compareTo(left.createdMs);
+        return created != 0 ? created : right.id.compareTo(left.id);
+      });
+    return candidates.firstOrNull;
+  }
+
+  bool canUndoPhysicalAssetTerminalStatus(int assetId) {
+    final asset = physicalAssetDetailById(assetId);
+    if (asset == null || asset.isDeleted) return false;
+    final terminalType = _terminalEventTypeFor(asset.economicStatus);
+    if (terminalType == null) return false;
+    final event = _latestUnreversedTerminalEvent(
+      _assetEvents.where((candidate) =>
+          candidate.assetType == AssetObjectType.physical &&
+          candidate.assetId == assetId),
+      terminalType,
+    );
+    if (event == null) return false;
+    return _hasPhysicalTerminalUndoEvidence(
+      _assetEventMetadata(event.metadata),
+    );
+  }
+
+  List<AssetValuationEntity> valuationsForAsset(int assetId) =>
+      _assetValuations.where((value) => value.assetId == assetId).toList()
+        ..sort((a, b) => b.valuedAtMs.compareTo(a.valuedAtMs));
+
+  List<AssetTransactionLinkEntity> transactionLinksForAsset(int assetId) =>
+      _assetTransactionLinks.where((link) => link.assetId == assetId).toList()
+        ..sort((a, b) => b.createdMs.compareTo(a.createdMs));
+
+  List<AssetTransactionLinkEntity> additionalCostLinksForAsset(int assetId) =>
+      _assetTransactionLinks
+          .where((link) =>
+              link.assetObjectType == AssetObjectType.physical &&
+              link.assetId == assetId &&
+              link.linkType.isAdditionalCost)
+          .toList()
+        ..sort((a, b) => b.createdMs.compareTo(a.createdMs));
+
+  int? _transactionFamilyNetCents(int transactionId) {
+    final transaction = _allTransactions
+        .where((item) => item.id == transactionId && item.refundOf == null)
+        .firstOrNull;
+    if (transaction == null) return null;
+    final gross = decimalToBudgetCents(transaction.amount).abs();
+    final refunds = decimalToBudgetCents(
+      (_globalRefundTotals[transactionId] ?? Decimal.zero).abs(),
+    ).abs();
+    return max(0, gross - refunds);
+  }
+
+  int physicalAssetTransactionFamilyNetCents(int transactionId) =>
+      _transactionFamilyNetCents(transactionId) ?? 0;
+
+  Decimal physicalAssetLinkCurrentAmount(AssetTransactionLinkEntity link) {
+    if (link.linkType.isAdditionalCost) {
+      final cents = _transactionFamilyNetCents(link.transactionId);
+      if (cents != null) return budgetDecimalFromCents(cents) ?? Decimal.zero;
+    }
+    if (link.linkType == AssetTransactionLinkType.sourceTransaction ||
+        link.linkType == AssetTransactionLinkType.purchaseTransaction) {
+      return budgetDecimalFromCents(max(0, link.allocatedNetCents)) ??
+          Decimal.zero;
+    }
+    return link.amount;
+  }
+
+  List<AssetUsageEventEntity> usageEventsForAsset(int assetId) =>
+      _assetUsageEvents.where((event) => event.assetId == assetId).toList()
+        ..sort((left, right) {
+          final occurred = left.occurredMs.compareTo(right.occurredMs);
+          return occurred != 0 ? occurred : left.id.compareTo(right.id);
+        });
+
+  AssetUsageAggregation physicalAssetUsage(int assetId) {
+    final events = usageEventsForAsset(assetId);
+    final uuidById = {
+      for (final event in events)
+        event.id: event.uuid.isEmpty ? event.id.toString() : event.uuid,
+    };
+    return aggregateAssetUsage(
+      events.map((event) => event.toPoint(uuidById)),
+    );
+  }
+
+  AssetReminderState warrantyReminderForAsset(
+    PhysicalAssetEntity asset, {
+    DateTime? asOf,
+  }) =>
+      resolveWarrantyReminder(
+        warrantyUntil: asset.warrantyUntil,
+        isEconomicallyOwned: asset.isOwned && !asset.isDeleted,
+        asOf: asOf,
+      );
+
+  AssetReminderState dueReminderForReceivable(
+    ReceivableAssetEntity asset, {
+    DateTime? asOf,
+  }) =>
+      resolveReceivableDueReminder(
+        dueAt: asset.dueDate,
+        isCollectible: !asset.isDeleted &&
+            (asset.economicStatus == ReceivableEconomicStatus.active ||
+                asset.economicStatus ==
+                    ReceivableEconomicStatus.partialRecovered),
+        asOf: asOf,
+      );
+
+  PhysicalAssetAdditionalCostResult physicalAssetAdditionalCost(
+    int assetId, {
+    DateTime? asOf,
+  }) {
+    final asset = physicalAssetDetailById(assetId);
+    if (asset == null || asset.isDeleted) {
+      return PhysicalAssetAdditionalCostResult(
+        amount: Decimal.zero,
+        isExact: false,
+        reason: '物品不存在',
+      );
+    }
+    final cutoff = asOf ?? DateTime.now();
+    var cents = 0;
+    final issues = <String>{};
+    for (final link in additionalCostLinksForAsset(assetId)) {
+      final transaction = _allTransactions
+          .where((item) => item.id == link.transactionId)
+          .firstOrNull;
+      if (transaction == null) {
+        issues.add('关联支出已不存在');
+        continue;
+      }
+      if (transaction.txKind != TransactionKind.expense ||
+          transaction.refundOf != null ||
+          transaction.excluded ||
+          transaction.currencyCode != asset.currencyCode) {
+        issues.add('关联支出口径不一致');
+        continue;
+      }
+      if (transaction.date.isAfter(cutoff)) continue;
+      final gross = decimalToBudgetCents(transaction.amount).abs();
+      final refunds = decimalToBudgetCents(
+        (_globalRefundTotals[transaction.id] ?? Decimal.zero).abs(),
+      ).abs();
+      if (refunds > gross) {
+        issues.add('关联支出退款超过原金额');
+        continue;
+      }
+      cents += gross - refunds;
+    }
+    return PhysicalAssetAdditionalCostResult(
+      amount: budgetDecimalFromCents(cents) ?? Decimal.zero,
+      isExact: issues.isEmpty,
+      reason: issues.join('；'),
+    );
+  }
+
+  List<AssetPurchaseAllocationCandidate>
+      eligiblePhysicalAssetPurchaseTransactions({
+    int? bookId,
+    String query = '',
+  }) {
+    final normalizedQuery = query.trim().toLowerCase();
+    final candidates = <AssetPurchaseAllocationCandidate>[];
+    for (final transaction in _globalVisibleTransactions) {
+      if ((bookId != null && transaction.bookId != bookId) ||
+          transaction.txKind != TransactionKind.expense ||
+          transaction.refundOf != null ||
+          transaction.amount <= Decimal.zero ||
+          transaction.currencyCode != 'CNY') {
+        continue;
+      }
+      if (normalizedQuery.isNotEmpty &&
+          !transaction.note.toLowerCase().contains(normalizedQuery) &&
+          !transaction.categoryNameZh.toLowerCase().contains(normalizedQuery) &&
+          !transaction.amountStr.contains(normalizedQuery)) {
+        continue;
+      }
+      final links = _assetTransactionLinks.where((link) =>
+          link.assetObjectType == AssetObjectType.physical &&
+          link.transactionId == transaction.id &&
+          (link.linkType == AssetTransactionLinkType.sourceTransaction ||
+              link.linkType == AssetTransactionLinkType.purchaseTransaction));
+      final gross = links.fold<int>(
+        0,
+        (sum, link) => sum + link.allocatedGrossCents,
+      );
+      final refund = links.fold<int>(
+        0,
+        (sum, link) => sum + link.allocatedRefundCents,
+      );
+      final orderGross = decimalToBudgetCents(transaction.amount).abs();
+      final validRefund = decimalToBudgetCents(
+        (_globalRefundTotals[transaction.id] ?? Decimal.zero).abs(),
+      ).abs();
+      if (orderGross - gross <= 0) continue;
+      candidates.add(AssetPurchaseAllocationCandidate(
+        transaction: transaction,
+        orderGrossCents: orderGross,
+        validRefundCents: validRefund,
+        allocatedGrossCents: gross,
+        allocatedRefundCents: refund,
+      ));
+    }
+    candidates.sort((a, b) {
+      final byDate = b.transaction.dateMs.compareTo(a.transaction.dateMs);
+      return byDate != 0
+          ? byDate
+          : b.transaction.id.compareTo(a.transaction.id);
+    });
+    return candidates;
+  }
+
+  List<TransactionEntity> eligiblePhysicalAssetCostTransactions({
+    required int assetId,
+    String query = '',
+  }) {
+    final asset = physicalAssetDetailById(assetId);
+    if (asset == null || asset.isDeleted || asset.bookId == null) {
+      return const [];
+    }
+    final allowedBooks = _bookIdsForView(asset.bookId!).toSet();
+    final normalized = query.trim().toLowerCase();
+    final purchaseIds = _assetTransactionLinks
+        .where((link) =>
+            link.assetObjectType == AssetObjectType.physical &&
+            link.assetId == assetId &&
+            (link.linkType == AssetTransactionLinkType.sourceTransaction ||
+                link.linkType == AssetTransactionLinkType.purchaseTransaction))
+        .map((link) => link.transactionId)
+        .toSet();
+    final result = _globalVisibleTransactions.where((transaction) {
+      if (transaction.txKind != TransactionKind.expense ||
+          transaction.refundOf != null ||
+          transaction.amount <= Decimal.zero ||
+          transaction.excluded ||
+          transaction.bookId == null ||
+          !allowedBooks.contains(transaction.bookId) ||
+          transaction.currencyCode != asset.currencyCode ||
+          purchaseIds.contains(transaction.id)) {
+        return false;
+      }
+      return normalized.isEmpty ||
+          transaction.note.toLowerCase().contains(normalized) ||
+          transaction.categoryNameZh.toLowerCase().contains(normalized) ||
+          transaction.amountStr.contains(normalized);
+    }).toList()
+      ..sort((left, right) {
+        final byDate = right.dateMs.compareTo(left.dateMs);
+        return byDate != 0 ? byDate : right.id.compareTo(left.id);
+      });
+    return List.unmodifiable(result);
+  }
+
+  bool isTransactionLinkedAsPhysicalAssetCost(int transactionId) =>
+      _assetTransactionLinks.any((link) =>
+          link.assetObjectType == AssetObjectType.physical &&
+          link.transactionId == transactionId &&
+          (link.linkType.isAdditionalCost ||
+              link.linkType == AssetTransactionLinkType.sourceTransaction ||
+              link.linkType == AssetTransactionLinkType.purchaseTransaction));
+
+  Future<void> linkPhysicalAssetCost({
+    required int assetId,
+    required int transactionId,
+    required AssetTransactionLinkType type,
+  }) async {
+    if (!type.isAdditionalCost) {
+      throw ArgumentError('关联类型不是物品持有支出');
+    }
+    final asset = physicalAssetDetailById(assetId);
+    if (asset == null || asset.isDeleted || asset.bookId == null) {
+      throw StateError('物品不存在');
+    }
+    final transaction =
+        _allTransactions.where((item) => item.id == transactionId).firstOrNull;
+    final allowedBooks = _bookIdsForView(asset.bookId!).toSet();
+    if (transaction == null ||
+        transaction.txKind != TransactionKind.expense ||
+        transaction.refundOf != null ||
+        transaction.amount <= Decimal.zero ||
+        transaction.excluded ||
+        transaction.bookId == null ||
+        !allowedBooks.contains(transaction.bookId) ||
+        transaction.currencyCode != asset.currencyCode) {
+      throw StateError('只能关联同账本、同币种的普通支出');
+    }
+    if (isTransactionLinkedAsPhysicalAssetCost(transactionId)) {
+      throw StateError('这笔支出已经关联了其他物品');
+    }
+    if (_assetTransactionLinks.any((link) =>
+        link.assetObjectType == AssetObjectType.physical &&
+        link.assetId == assetId &&
+        link.transactionId == transactionId)) {
+      throw StateError('这笔支出已经关联当前物品');
+    }
+    final net = max(
+      0,
+      decimalToBudgetCents(transaction.amount).abs() -
+          decimalToBudgetCents(
+            (_globalRefundTotals[transaction.id] ?? Decimal.zero).abs(),
+          ).abs(),
+    );
+    await _db!.transaction((txn) async {
+      await _insertAssetTransactionLink(
+        txn,
+        assetId: assetId,
+        transactionId: transactionId,
+        type: type,
+        amount: budgetDecimalFromCents(net) ?? Decimal.zero,
+        allocatedGrossCents: 0,
+        costQuality: AssetAllocationCostQuality.exact,
+        note: type.label,
+      );
+      await _insertAssetEvent(
+        txn,
+        assetId: assetId,
+        type: AssetEventType.assetCostLinked,
+        occurredAt: DateTime.now(),
+        value: budgetDecimalFromCents(net),
+        note: '${type.label} · 交易 #$transactionId',
+        metadata: {
+          'transaction_id': transactionId,
+          'link_type': type.storageKey,
+        },
+      );
+    });
+    await _loadPhysicalAssetData();
+    notifyListeners();
+  }
+
+  Future<List<PendingPhysicalAssetRefundAllocation>>
+      pendingPhysicalAssetRefundAllocationsForAsset(int assetId) async {
+    final purchaseLinks = _assetTransactionLinks
+        .where((link) =>
+            link.assetObjectType == AssetObjectType.physical &&
+            link.assetId == assetId &&
+            (link.linkType == AssetTransactionLinkType.sourceTransaction ||
+                link.linkType == AssetTransactionLinkType.purchaseTransaction))
+        .toList(growable: false);
+    if (purchaseLinks.isEmpty) return const [];
+    final orderIds = purchaseLinks.map((link) => link.transactionId).toSet();
+    final assetsById = {
+      for (final asset in _allPhysicalAssets) asset.id: asset,
+    };
+    final result = <PendingPhysicalAssetRefundAllocation>[];
+    for (final refund in _allTransactions.where(
+      (transaction) =>
+          transaction.refundOf != null &&
+          orderIds.contains(transaction.refundOf),
+    )) {
+      final orderLinks = _assetTransactionLinks
+          .where((link) =>
+              link.assetObjectType == AssetObjectType.physical &&
+              link.transactionId == refund.refundOf &&
+              (link.linkType == AssetTransactionLinkType.sourceTransaction ||
+                  link.linkType ==
+                      AssetTransactionLinkType.purchaseTransaction))
+          .toList(growable: false);
+      if (orderLinks.isEmpty) continue;
+      final audits = await _db!.query(
+        'asset_refund_allocations',
+        columns: [
+          'asset_transaction_link_id',
+          'allocated_refund_cents',
+        ],
+        where: "refund_transaction_id = ? AND status = 'active'",
+        whereArgs: [refund.id],
+      );
+      final allocatedByLink = <int, int>{};
+      for (final audit in audits) {
+        final linkId = audit['asset_transaction_link_id'] as int;
+        allocatedByLink[linkId] = (allocatedByLink[linkId] ?? 0) +
+            (audit['allocated_refund_cents'] as int? ?? 0);
+      }
+      final refundCents = decimalToBudgetCents(refund.amount).abs();
+      final allocated = allocatedByLink.values.fold<int>(0, (a, b) => a + b);
+      if (allocated >= refundCents) continue;
+      result.add(PendingPhysicalAssetRefundAllocation(
+        refundTransactionId: refund.id,
+        originalTransactionId: refund.refundOf!,
+        refundDateMs: refund.settledMs ?? refund.dateMs,
+        orderLabel: _allTransactions
+                    .where((transaction) => transaction.id == refund.refundOf)
+                    .firstOrNull
+                    ?.note
+                    .trim()
+                    .isNotEmpty ==
+                true
+            ? _allTransactions
+                .firstWhere((transaction) => transaction.id == refund.refundOf)
+                .note
+                .trim()
+            : '账单 #${refund.refundOf}',
+        refundCents: refundCents,
+        targets: [
+          for (final link in orderLinks)
+            PhysicalAssetRefundAllocationTarget(
+              assetId: link.assetId,
+              name: assetsById[link.assetId]?.name ?? '物品 #${link.assetId}',
+              grossCents: link.allocatedGrossCents,
+              currentAllocatedRefundCents: allocatedByLink[link.id] ?? 0,
+              totalAllocatedRefundCents: link.allocatedRefundCents,
+            ),
+        ],
+      ));
+    }
+    result.sort(
+      (a, b) => b.refundTransactionId.compareTo(a.refundTransactionId),
+    );
+    return result;
+  }
+
+  PhysicalAssetAcquisitionCostResult physicalAssetAcquisitionCost(
+    int assetId,
+  ) {
+    final asset = physicalAssetDetailById(assetId);
+    if (asset == null || asset.isDeleted) {
+      return const PhysicalAssetAcquisitionCostResult(
+        quality: PhysicalAssetAcquisitionCostQuality.conflict,
+        amount: null,
+        reason: '物品不存在或已删除',
+      );
+    }
+    if (asset.acquisitionCostSource ==
+        AssetAcquisitionCostSource.manualUnknown) {
+      return const PhysicalAssetAcquisitionCostResult(
+        quality: PhysicalAssetAcquisitionCostQuality.partial,
+        amount: null,
+        reason: '手工购置成本未知',
+      );
+    }
+    if (asset.acquisitionCostSource == AssetAcquisitionCostSource.manual) {
+      return PhysicalAssetAcquisitionCostResult(
+        quality: PhysicalAssetAcquisitionCostQuality.exact,
+        amount: asset.purchasePrice,
+        reason: '手工购置成本',
+      );
+    }
+    final purchaseLinks = transactionLinksForAsset(assetId)
+        .where((link) =>
+            link.assetObjectType == AssetObjectType.physical &&
+            (link.linkType == AssetTransactionLinkType.sourceTransaction ||
+                link.linkType == AssetTransactionLinkType.purchaseTransaction))
+        .toList(growable: false);
+    if (purchaseLinks.isEmpty) {
+      return const PhysicalAssetAcquisitionCostResult(
+        quality: PhysicalAssetAcquisitionCostQuality.conflict,
+        amount: null,
+        reason: '账单分配来源物品缺少购置账单关联',
+      );
+    }
+    if (purchaseLinks.any((link) =>
+        link.allocatedGrossCents < 0 ||
+        link.allocatedRefundCents < 0 ||
+        link.allocatedRefundCents > link.allocatedGrossCents)) {
+      return const PhysicalAssetAcquisitionCostResult(
+        quality: PhysicalAssetAcquisitionCostQuality.conflict,
+        amount: null,
+        reason: '购置账单分配金额不合法',
+      );
+    }
+    final netCents = purchaseLinks.fold<int>(
+      0,
+      (sum, link) => sum + link.allocatedNetCents,
+    );
+    final hasPending = purchaseLinks
+        .any((link) => link.costQuality != AssetAllocationCostQuality.exact);
+    if (hasPending) {
+      return PhysicalAssetAcquisitionCostResult(
+        quality: PhysicalAssetAcquisitionCostQuality.partial,
+        amount: budgetDecimalFromCents(netCents),
+        reason: purchaseLinks.any((link) =>
+                link.costQuality ==
+                AssetAllocationCostQuality.pendingRefundAllocation)
+            ? '有退款尚未分配到具体物品'
+            : '购置账单仍有未确认分配',
+      );
+    }
+    return PhysicalAssetAcquisitionCostResult(
+      quality: PhysicalAssetAcquisitionCostQuality.exact,
+      amount: budgetDecimalFromCents(netCents),
+      reason: '账单逐物品分配后的净购置成本',
+    );
+  }
+
+  List<AssetEventEntity> eventsForReceivableAsset(int assetId) => _assetEvents
+      .where((event) =>
+          event.assetType == AssetObjectType.receivable &&
+          event.assetId == assetId)
+      .toList()
+    ..sort((a, b) => b.occurredMs.compareTo(a.occurredMs));
+
+  List<ReceivableRecoveryEntity> recoveriesForReceivableAsset(int assetId) =>
+      _receivableRecoveries
+          .where((recovery) => recovery.receivableAssetId == assetId)
+          .toList()
+        ..sort((a, b) => b.recoveredMs.compareTo(a.recoveredMs));
+
+  Future<int> _insertAssetEvent(
+    DatabaseExecutor db, {
+    required int assetId,
+    AssetObjectType assetType = AssetObjectType.physical,
+    required AssetEventType type,
+    required DateTime occurredAt,
+    Decimal? value,
+    String note = '',
+    Map<String, Object?> metadata = const {},
+  }) async {
+    return db.insert('asset_events', {
+      'uuid': _newUuid(),
+      'asset_id': assetId,
+      'asset_type': assetType.storageKey,
+      'event_type': type.storageKey,
+      'occurred_ms': occurredAt.millisecondsSinceEpoch,
+      'value': value?.toString() ?? '',
+      'note': note,
+      'metadata': metadata.isEmpty ? '' : jsonEncode(metadata),
+      'created_ms': DateTime.now().millisecondsSinceEpoch,
+    });
+  }
+
+  Future<void> _insertAssetValuation(
+    DatabaseExecutor db, {
+    required int assetId,
+    required Decimal value,
+    required AssetValueSource source,
+    required DateTime valuedAt,
+    String note = '',
+  }) async {
+    await db.insert('asset_valuations', {
+      'uuid': _newUuid(),
+      'asset_id': assetId,
+      'value': value.toString(),
+      'source': source.storageKey,
+      'valued_at_ms': valuedAt.millisecondsSinceEpoch,
+      'note': note,
+      'created_ms': DateTime.now().millisecondsSinceEpoch,
+    });
+  }
+
+  Future<void> _insertAssetTransactionLink(
+    DatabaseExecutor db, {
+    required int assetId,
+    required int transactionId,
+    required AssetTransactionLinkType type,
+    required Decimal amount,
+    int? allocatedGrossCents,
+    int allocatedRefundCents = 0,
+    AssetAllocationCostQuality costQuality = AssetAllocationCostQuality.exact,
+    String note = '',
+  }) async {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    await db.insert(
+      'asset_transaction_links',
+      {
+        'uuid': _newUuid(),
+        'asset_id': assetId,
+        'asset_object_type': AssetObjectType.physical.storageKey,
+        'transaction_id': transactionId,
+        'link_type': type.storageKey,
+        'amount': amount.toString(),
+        'allocated_gross_cents':
+            allocatedGrossCents ?? decimalToBudgetCents(amount).abs(),
+        'allocated_refund_cents': allocatedRefundCents,
+        'cost_quality': costQuality.storageKey,
+        'note': note,
+        'created_ms': now,
+        'updated_ms': now,
+      },
+      conflictAlgorithm: ConflictAlgorithm.ignore,
+    );
+  }
+
+  Future<int> _validOrderRefundCents(
+    DatabaseExecutor db,
+    int transactionId,
+  ) async {
+    final rows = await db.query(
+      'transactions',
+      columns: ['amount'],
+      where: 'refund_of = ?',
+      whereArgs: [transactionId],
+    );
+    return rows.fold<int>(0, (sum, row) {
+      final amount =
+          Decimal.tryParse(row['amount'] as String? ?? '') ?? Decimal.zero;
+      return sum + decimalToBudgetCents(amount).abs();
+    });
+  }
+
+  Future<void> _validateOrderAllocations(
+    DatabaseExecutor db,
+    int transactionId, {
+    int? excludingLinkId,
+    AssetAllocationLine? proposed,
+  }) async {
+    final orderRows = await db.query(
+      'transactions',
+      columns: ['amount', 'kind', 'refund_of'],
+      where: 'id = ?',
+      whereArgs: [transactionId],
+      limit: 1,
+    );
+    if (orderRows.isEmpty) throw StateError('购置账单不存在');
+    final order = orderRows.first;
+    final orderAmount =
+        Decimal.tryParse(order['amount'] as String? ?? '') ?? Decimal.zero;
+    if (order['kind'] != TransactionKind.expense.toJson() ||
+        order['refund_of'] != null ||
+        orderAmount <= Decimal.zero) {
+      throw StateError('只能分配正数支出原账单');
+    }
+    final rows = await db.query(
+      'asset_transaction_links',
+      columns: [
+        'id',
+        'asset_id',
+        'allocated_gross_cents',
+        'allocated_refund_cents'
+      ],
+      where:
+          "transaction_id = ? AND asset_object_type = 'physical' AND link_type IN ('source_transaction', 'purchase_transaction')",
+      whereArgs: [transactionId],
+    );
+    final lines = <AssetAllocationLine>[
+      for (final row in rows)
+        if (row['id'] != excludingLinkId)
+          AssetAllocationLine(
+            assetId: row['asset_id'] as int,
+            grossCents: row['allocated_gross_cents'] as int? ?? 0,
+            refundCents: row['allocated_refund_cents'] as int? ?? 0,
+          ),
+      if (proposed != null) proposed,
+    ];
+    AssetAllocationPolicy.validate(
+      orderGrossCents: decimalToBudgetCents(orderAmount).abs(),
+      validOrderRefundCents: await _validOrderRefundCents(db, transactionId),
+      lines: lines,
+    );
+  }
+
+  Future<void> _auditRefundAllocation(
+    DatabaseExecutor db, {
+    required int linkId,
+    required int refundTransactionId,
+    required int cents,
+  }) async {
+    if (cents <= 0) return;
+    final now = DateTime.now().millisecondsSinceEpoch;
+    await db.insert(
+      'asset_refund_allocations',
+      {
+        'uuid': _newUuid(),
+        'asset_transaction_link_id': linkId,
+        'refund_transaction_id': refundTransactionId,
+        'allocated_refund_cents': cents,
+        'status': 'active',
+        'created_ms': now,
+        'updated_ms': now,
+      },
+      conflictAlgorithm: ConflictAlgorithm.abort,
+    );
+  }
+
+  Future<void> _allocateHistoricalRefundsToLink(
+    DatabaseExecutor db, {
+    required int transactionId,
+    required int linkId,
+    required int requestedCents,
+  }) async {
+    var remaining = requestedCents;
+    if (remaining == 0) return;
+    final refunds = await db.query(
+      'transactions',
+      columns: ['id', 'amount'],
+      where: 'refund_of = ?',
+      whereArgs: [transactionId],
+      orderBy: 'id ASC',
+    );
+    for (final refund in refunds) {
+      if (remaining == 0) break;
+      final refundId = refund['id'] as int;
+      final total = decimalToBudgetCents(
+        Decimal.tryParse(refund['amount'] as String? ?? '') ?? Decimal.zero,
+      ).abs();
+      final allocated = Sqflite.firstIntValue(await db.rawQuery('''
+        SELECT COALESCE(SUM(allocated_refund_cents), 0)
+        FROM asset_refund_allocations
+        WHERE refund_transaction_id = ? AND status = 'active'
+      ''', [refundId])) ?? 0;
+      final available = total - allocated;
+      if (available <= 0) continue;
+      final take = remaining < available ? remaining : available;
+      await _auditRefundAllocation(
+        db,
+        linkId: linkId,
+        refundTransactionId: refundId,
+        cents: take,
+      );
+      remaining -= take;
+    }
+    if (remaining != 0) {
+      throw StateError('退款分配缺少对应的有效退款事件');
+    }
+  }
+
+  Future<void> _refreshOrderAllocationQuality(
+    DatabaseExecutor db,
+    int transactionId,
+  ) async {
+    final orderRows = await db.query(
+      'transactions',
+      columns: ['amount'],
+      where: 'id = ?',
+      whereArgs: [transactionId],
+      limit: 1,
+    );
+    if (orderRows.isEmpty) return;
+    final links = await db.query(
+      'asset_transaction_links',
+      where:
+          "transaction_id = ? AND asset_object_type = 'physical' AND link_type IN ('source_transaction', 'purchase_transaction')",
+      whereArgs: [transactionId],
+    );
+    final allocatedRefund = links.fold<int>(
+      0,
+      (sum, row) => sum + (row['allocated_refund_cents'] as int? ?? 0),
+    );
+    final validRefund = await _validOrderRefundCents(db, transactionId);
+    final quality = allocatedRefund < validRefund
+        ? AssetAllocationCostQuality.pendingRefundAllocation
+        : links.any(
+            (row) => (row['allocated_gross_cents'] as int? ?? 0) <= 0,
+          )
+            ? AssetAllocationCostQuality.partial
+            : AssetAllocationCostQuality.exact;
+    await db.update(
+      'asset_transaction_links',
+      {
+        'cost_quality': quality.storageKey,
+        'updated_ms': DateTime.now().millisecondsSinceEpoch,
+      },
+      where:
+          "transaction_id = ? AND asset_object_type = 'physical' AND link_type IN ('source_transaction', 'purchase_transaction')",
+      whereArgs: [transactionId],
+    );
+  }
+
+  Future<void> _syncAssetPurchasePriceCache(
+    DatabaseExecutor db,
+    Iterable<int> assetIds,
+  ) async {
+    for (final assetId in assetIds.toSet()) {
+      final rows = await db.query(
+        'asset_transaction_links',
+        columns: ['allocated_gross_cents', 'allocated_refund_cents'],
+        where:
+            "asset_object_type = 'physical' AND asset_id = ? AND link_type IN ('source_transaction', 'purchase_transaction')",
+        whereArgs: [assetId],
+      );
+      final netCents = rows.fold<int>(
+        0,
+        (sum, row) =>
+            sum +
+            (row['allocated_gross_cents'] as int? ?? 0) -
+            (row['allocated_refund_cents'] as int? ?? 0),
+      );
+      await db.update(
+        'physical_assets',
         {
-          'book_id': _defaultBookId,
+          'purchase_price': budgetDecimalFromCents(netCents).toString(),
+          'acquisition_cost_source':
+              AssetAcquisitionCostSource.transactionAllocations.storageKey,
           'updated_ms': DateTime.now().millisecondsSinceEpoch,
         },
-        where: 'book_id = ?',
+        where: 'id = ?',
+        whereArgs: [assetId],
+      );
+    }
+  }
+
+  Future<void> _autoAllocateAllRefundsForSingleFullLink(
+    DatabaseExecutor db,
+    int transactionId,
+  ) async {
+    final links = await db.query(
+      'asset_transaction_links',
+      where:
+          "transaction_id = ? AND asset_object_type = 'physical' AND link_type IN ('source_transaction', 'purchase_transaction')",
+      whereArgs: [transactionId],
+    );
+    final orderRows = await db.query(
+      'transactions',
+      columns: ['amount'],
+      where: 'id = ?',
+      whereArgs: [transactionId],
+      limit: 1,
+    );
+    if (links.length != 1 || orderRows.isEmpty) {
+      await _refreshOrderAllocationQuality(db, transactionId);
+      return;
+    }
+    final link = links.single;
+    final gross = link['allocated_gross_cents'] as int? ?? 0;
+    final orderGross = decimalToBudgetCents(
+      Decimal.tryParse(orderRows.first['amount'] as String? ?? '') ??
+          Decimal.zero,
+    ).abs();
+    final currentRefund = link['allocated_refund_cents'] as int? ?? 0;
+    final validRefund = await _validOrderRefundCents(db, transactionId);
+    final missing = validRefund - currentRefund;
+    final uniquelyCoversTrackedItem = currentRefund + missing == gross;
+    if (missing > 0 &&
+        currentRefund + missing <= gross &&
+        (gross == orderGross || uniquelyCoversTrackedItem)) {
+      await _allocateHistoricalRefundsToLink(
+        db,
+        transactionId: transactionId,
+        linkId: link['id'] as int,
+        requestedCents: missing,
+      );
+      await db.update(
+        'asset_transaction_links',
+        {'allocated_refund_cents': currentRefund + missing},
+        where: 'id = ?',
+        whereArgs: [link['id']],
+      );
+    }
+    await _refreshOrderAllocationQuality(db, transactionId);
+    await _syncAssetPurchasePriceCache(db, [link['asset_id'] as int]);
+  }
+
+  Future<void> _applyNewRefundToAssetAllocations(
+    DatabaseExecutor db, {
+    required int originalTransactionId,
+    required int refundTransactionId,
+    required int refundCents,
+  }) async {
+    final links = await db.query(
+      'asset_transaction_links',
+      where:
+          "transaction_id = ? AND asset_object_type = 'physical' AND link_type IN ('source_transaction', 'purchase_transaction')",
+      whereArgs: [originalTransactionId],
+    );
+    if (links.isEmpty) return;
+    final orderRows = await db.query(
+      'transactions',
+      columns: ['amount'],
+      where: 'id = ?',
+      whereArgs: [originalTransactionId],
+      limit: 1,
+    );
+    final orderGross = orderRows.isEmpty
+        ? 0
+        : decimalToBudgetCents(
+            Decimal.tryParse(orderRows.first['amount'] as String? ?? '') ??
+                Decimal.zero,
+          ).abs();
+    if (links.length == 1) {
+      final link = links.single;
+      final gross = link['allocated_gross_cents'] as int? ?? 0;
+      final currentRefund = link['allocated_refund_cents'] as int? ?? 0;
+      final validRefund =
+          await _validOrderRefundCents(db, originalTransactionId);
+      final priorRefundsFullyAllocated =
+          currentRefund == validRefund - refundCents;
+      final uniquelyCoversTrackedItem = currentRefund + refundCents == gross;
+      if (priorRefundsFullyAllocated &&
+          currentRefund + refundCents <= gross &&
+          (gross == orderGross || uniquelyCoversTrackedItem)) {
+        await _validateOrderAllocations(
+          db,
+          originalTransactionId,
+          excludingLinkId: link['id'] as int,
+          proposed: AssetAllocationLine(
+            assetId: link['asset_id'] as int,
+            grossCents: gross,
+            refundCents: currentRefund + refundCents,
+          ),
+        );
+        await db.update(
+          'asset_transaction_links',
+          {
+            'allocated_refund_cents': currentRefund + refundCents,
+            'cost_quality': AssetAllocationCostQuality.exact.storageKey,
+            'updated_ms': DateTime.now().millisecondsSinceEpoch,
+          },
+          where: 'id = ?',
+          whereArgs: [link['id']],
+        );
+        await _auditRefundAllocation(
+          db,
+          linkId: link['id'] as int,
+          refundTransactionId: refundTransactionId,
+          cents: refundCents,
+        );
+        await _syncAssetPurchasePriceCache(db, [link['asset_id'] as int]);
+        return;
+      }
+    }
+    await db.update(
+      'asset_transaction_links',
+      {
+        'cost_quality':
+            AssetAllocationCostQuality.pendingRefundAllocation.storageKey,
+        'updated_ms': DateTime.now().millisecondsSinceEpoch,
+      },
+      where:
+          "transaction_id = ? AND asset_object_type = 'physical' AND link_type IN ('source_transaction', 'purchase_transaction')",
+      whereArgs: [originalTransactionId],
+    );
+  }
+
+  Future<void> allocatePhysicalAssetRefund({
+    required int refundTransactionId,
+    required Map<int, int> allocationsByAssetId,
+  }) async {
+    if (allocationsByAssetId.isEmpty ||
+        allocationsByAssetId.values.any((cents) => cents < 0)) {
+      throw ArgumentError('退款分配不能为空或包含负数');
+    }
+    int? originalId;
+    await _db!.transaction((txn) async {
+      final refundRows = await txn.query(
+        'transactions',
+        columns: ['refund_of', 'amount'],
+        where: 'id = ?',
+        whereArgs: [refundTransactionId],
+        limit: 1,
+      );
+      if (refundRows.isEmpty || refundRows.first['refund_of'] == null) {
+        throw StateError('退款事件不存在');
+      }
+      originalId = refundRows.first['refund_of'] as int;
+      final refundCents = decimalToBudgetCents(
+        Decimal.tryParse(refundRows.first['amount'] as String? ?? '') ??
+            Decimal.zero,
+      ).abs();
+      final requested =
+          allocationsByAssetId.values.fold<int>(0, (a, b) => a + b);
+      if (requested != refundCents) {
+        throw StateError('本次退款必须完整分配到具体物品');
+      }
+
+      final oldAudit = await txn.query(
+        'asset_refund_allocations',
+        where: "refund_transaction_id = ? AND status = 'active'",
+        whereArgs: [refundTransactionId],
+      );
+      final affectedAssets = <int>{};
+      for (final audit in oldAudit) {
+        final linkId = audit['asset_transaction_link_id'] as int;
+        final cents = audit['allocated_refund_cents'] as int;
+        final linkRows = await txn.query(
+          'asset_transaction_links',
+          columns: ['asset_id', 'allocated_refund_cents'],
+          where: 'id = ?',
+          whereArgs: [linkId],
+          limit: 1,
+        );
+        if (linkRows.isNotEmpty) {
+          final link = linkRows.first;
+          affectedAssets.add(link['asset_id'] as int);
+          await txn.update(
+            'asset_transaction_links',
+            {
+              'allocated_refund_cents':
+                  (link['allocated_refund_cents'] as int? ?? 0) - cents,
+            },
+            where: 'id = ?',
+            whereArgs: [linkId],
+          );
+        }
+        await txn.update(
+          'asset_refund_allocations',
+          {
+            'status': 'reversed',
+            'updated_ms': DateTime.now().millisecondsSinceEpoch,
+          },
+          where: 'id = ?',
+          whereArgs: [audit['id']],
+        );
+      }
+
+      final proposedByLink = <int, AssetAllocationLine>{};
+      for (final entry in allocationsByAssetId.entries) {
+        if (entry.value == 0) continue;
+        final linkRows = await txn.query(
+          'asset_transaction_links',
+          where:
+              "transaction_id = ? AND asset_object_type = 'physical' AND asset_id = ? AND link_type IN ('source_transaction', 'purchase_transaction')",
+          whereArgs: [originalId, entry.key],
+        );
+        if (linkRows.length != 1) {
+          throw StateError('退款物品缺少唯一的购置账单关联');
+        }
+        final link = linkRows.single;
+        final nextRefund =
+            (link['allocated_refund_cents'] as int? ?? 0) + entry.value;
+        proposedByLink[link['id'] as int] = AssetAllocationLine(
+          assetId: entry.key,
+          grossCents: link['allocated_gross_cents'] as int? ?? 0,
+          refundCents: nextRefund,
+        );
+      }
+      final allLinks = await txn.query(
+        'asset_transaction_links',
+        where:
+            "transaction_id = ? AND asset_object_type = 'physical' AND link_type IN ('source_transaction', 'purchase_transaction')",
+        whereArgs: [originalId],
+      );
+      final orderRows = await txn.query(
+        'transactions',
+        columns: ['amount'],
+        where: 'id = ?',
+        whereArgs: [originalId],
+        limit: 1,
+      );
+      AssetAllocationPolicy.validate(
+        orderGrossCents: decimalToBudgetCents(
+          Decimal.tryParse(orderRows.first['amount'] as String? ?? '') ??
+              Decimal.zero,
+        ).abs(),
+        validOrderRefundCents: await _validOrderRefundCents(txn, originalId!),
+        lines: [
+          for (final link in allLinks)
+            proposedByLink[link['id'] as int] ??
+                AssetAllocationLine(
+                  assetId: link['asset_id'] as int,
+                  grossCents: link['allocated_gross_cents'] as int? ?? 0,
+                  refundCents: link['allocated_refund_cents'] as int? ?? 0,
+                )
+        ],
+      );
+      for (final entry in allocationsByAssetId.entries) {
+        if (entry.value == 0) continue;
+        final link =
+            allLinks.singleWhere((row) => row['asset_id'] == entry.key);
+        final proposed = proposedByLink[link['id'] as int]!;
+        await txn.update(
+          'asset_transaction_links',
+          {'allocated_refund_cents': proposed.refundCents},
+          where: 'id = ?',
+          whereArgs: [link['id']],
+        );
+        await _auditRefundAllocation(
+          txn,
+          linkId: link['id'] as int,
+          refundTransactionId: refundTransactionId,
+          cents: entry.value,
+        );
+        affectedAssets.add(entry.key);
+      }
+      await _assertReturnedAssetsKeepZeroAllocatedCost(txn, affectedAssets);
+      await _refreshOrderAllocationQuality(txn, originalId!);
+      await _syncAssetPurchasePriceCache(txn, affectedAssets);
+    });
+    await _loadPhysicalAssetData();
+    notifyListeners();
+  }
+
+  Future<void> _reverseRefundAllocationAudit(
+    DatabaseExecutor db,
+    Iterable<int> refundTransactionIds,
+  ) async {
+    final ids = refundTransactionIds.toSet();
+    if (ids.isEmpty) return;
+    final placeholders = List.filled(ids.length, '?').join(',');
+    final audits = await db.query(
+      'asset_refund_allocations',
+      where: "refund_transaction_id IN ($placeholders) AND status = 'active'",
+      whereArgs: ids.toList(),
+    );
+    final affectedAssets = <int>{};
+    final affectedOrders = <int>{};
+    for (final audit in audits) {
+      final linkRows = await db.query(
+        'asset_transaction_links',
+        where: 'id = ?',
+        whereArgs: [audit['asset_transaction_link_id']],
+        limit: 1,
+      );
+      if (linkRows.isNotEmpty) {
+        final link = linkRows.first;
+        final current = link['allocated_refund_cents'] as int? ?? 0;
+        final cents = audit['allocated_refund_cents'] as int;
+        await db.update(
+          'asset_transaction_links',
+          {'allocated_refund_cents': current - cents},
+          where: 'id = ?',
+          whereArgs: [link['id']],
+        );
+        affectedAssets.add(link['asset_id'] as int);
+        affectedOrders.add(link['transaction_id'] as int);
+      }
+      await db.update(
+        'asset_refund_allocations',
+        {
+          'status': 'reversed',
+          'updated_ms': DateTime.now().millisecondsSinceEpoch,
+        },
+        where: 'id = ?',
+        whereArgs: [audit['id']],
+      );
+    }
+    for (final orderId in affectedOrders) {
+      await _refreshOrderAllocationQuality(db, orderId);
+    }
+    await _syncAssetPurchasePriceCache(db, affectedAssets);
+  }
+
+  Future<void> _assertReturnedAssetsKeepZeroAllocatedCost(
+    DatabaseExecutor db,
+    Iterable<int> assetIds,
+  ) async {
+    for (final assetId in assetIds.toSet()) {
+      final assetRows = await db.query(
+        'physical_assets',
+        columns: ['economic_status'],
+        where: 'id = ? AND is_deleted = 0',
+        whereArgs: [assetId],
+        limit: 1,
+      );
+      if (assetRows.isEmpty ||
+          assetRows.first['economic_status'] !=
+              PhysicalAssetEconomicStatus.returned.storageKey) {
+        continue;
+      }
+      final links = await db.query(
+        'asset_transaction_links',
+        columns: ['allocated_gross_cents', 'allocated_refund_cents'],
+        where:
+            "asset_object_type = 'physical' AND asset_id = ? AND link_type IN ('source_transaction', 'purchase_transaction')",
+        whereArgs: [assetId],
+      );
+      final netCents = links.fold<int>(
+        0,
+        (sum, link) =>
+            sum +
+            (link['allocated_gross_cents'] as int? ?? 0) -
+            (link['allocated_refund_cents'] as int? ?? 0),
+      );
+      if (netCents != 0) {
+        throw StateError('已确认退货的物品必须保持净购置成本为 0，请先撤销退货');
+      }
+    }
+  }
+
+  Future<void> _assertRefundDeletionAllowed(
+    DatabaseExecutor db,
+    int refundTransactionId,
+  ) async {
+    final refundRows = await db.query(
+      'transactions',
+      columns: ['refund_of'],
+      where: 'id = ?',
+      whereArgs: [refundTransactionId],
+      limit: 1,
+    );
+    final originalId = refundRows.firstOrNull?['refund_of'] as int?;
+    if (originalId == null) return;
+    final returned = await db.rawQuery('''
+      SELECT p.id
+      FROM asset_transaction_links l
+      JOIN physical_assets p ON p.id = l.asset_id
+      WHERE l.transaction_id = ?
+        AND l.asset_object_type = 'physical'
+        AND l.link_type IN ('source_transaction', 'purchase_transaction')
+        AND l.allocated_refund_cents > 0
+        AND p.is_deleted = 0
+        AND p.economic_status = ?
+      LIMIT 1
+    ''', [
+      originalId,
+      PhysicalAssetEconomicStatus.returned.storageKey,
+    ]);
+    if (returned.isNotEmpty) {
+      throw StateError('这笔退款已经用于确认物品退货，请先撤销退货');
+    }
+  }
+
+  static Map<String, dynamic> _assetEventMetadata(String raw) {
+    if (raw.trim().isEmpty) return const {};
+    try {
+      final decoded = jsonDecode(raw);
+      return decoded is Map<String, dynamic> ? decoded : const {};
+    } catch (_) {
+      return const {};
+    }
+  }
+
+  static DateTime _assetCalendarDay(DateTime value) =>
+      DateTime.utc(value.year, value.month, value.day);
+
+  static bool _assetDayIsBefore(DateTime value, DateTime reference) =>
+      _assetCalendarDay(value).isBefore(_assetCalendarDay(reference));
+
+  static bool _sameAssetCalendarDay(DateTime left, DateTime right) =>
+      _assetCalendarDay(left) == _assetCalendarDay(right);
+
+  AssetEventType _createEventForSource(PhysicalAssetSourceType source) =>
+      switch (source) {
+        PhysicalAssetSourceType.historicalExisting =>
+          AssetEventType.openingAssetImport,
+        PhysicalAssetSourceType.fromTransaction =>
+          AssetEventType.createdFromTransaction,
+        PhysicalAssetSourceType.newPurchaseWithAccount =>
+          AssetEventType.assetPurchased,
+        PhysicalAssetSourceType.giftReceived ||
+        PhysicalAssetSourceType.inheritance ||
+        PhysicalAssetSourceType.manualOther =>
+          AssetEventType.assetCreated,
+      };
+
+  AssetValueSource _initialValueSourceFor(PhysicalAssetSourceType source) =>
+      switch (source) {
+        PhysicalAssetSourceType.historicalExisting => AssetValueSource.opening,
+        PhysicalAssetSourceType.newPurchaseWithAccount ||
+        PhysicalAssetSourceType.fromTransaction =>
+          AssetValueSource.purchase,
+        PhysicalAssetSourceType.giftReceived ||
+        PhysicalAssetSourceType.inheritance ||
+        PhysicalAssetSourceType.manualOther =>
+          AssetValueSource.manual,
+      };
+
+  Future<void> linkPhysicalAssetPurchaseAllocation({
+    required int assetId,
+    required int transactionId,
+    required int allocatedGrossCents,
+    int allocatedRefundCents = 0,
+    bool replaceManualCost = false,
+  }) async {
+    if (allocatedGrossCents <= 0 ||
+        allocatedRefundCents < 0 ||
+        allocatedRefundCents > allocatedGrossCents) {
+      throw ArgumentError('物品分配金额不合法');
+    }
+    await _db!.transaction((txn) async {
+      final assetRows = await txn.query(
+        'physical_assets',
+        where: 'id = ? AND is_deleted = 0',
+        whereArgs: [assetId],
+        limit: 1,
+      );
+      if (assetRows.isEmpty) throw StateError('物品不存在');
+      final asset = PhysicalAssetEntity.fromMap(assetRows.first);
+      if (asset.acquisitionCostSource == AssetAcquisitionCostSource.manual &&
+          !replaceManualCost) {
+        throw StateError('请先确认用账单分配替换手工成本');
+      }
+      final transactionRows = await txn.query(
+        'transactions',
+        columns: ['book_id', 'kind', 'amount', 'currency_code', 'refund_of'],
+        where: 'id = ?',
+        whereArgs: [transactionId],
+        limit: 1,
+      );
+      if (transactionRows.isEmpty) throw StateError('购置账单不存在');
+      final transaction = transactionRows.first;
+      if (transaction['book_id'] != asset.bookId ||
+          transaction['kind'] != TransactionKind.expense.toJson() ||
+          transaction['refund_of'] != null ||
+          transaction['currency_code'] != asset.currencyCode) {
+        throw StateError('物品和购置账单的账本、类型或币种不一致');
+      }
+      await _validateOrderAllocations(
+        txn,
+        transactionId,
+        proposed: AssetAllocationLine(
+          assetId: assetId,
+          grossCents: allocatedGrossCents,
+          refundCents: allocatedRefundCents,
+        ),
+      );
+      await _insertAssetTransactionLink(
+        txn,
+        assetId: assetId,
+        transactionId: transactionId,
+        type: AssetTransactionLinkType.sourceTransaction,
+        amount: budgetDecimalFromCents(allocatedGrossCents)!,
+        allocatedGrossCents: allocatedGrossCents,
+        allocatedRefundCents: allocatedRefundCents,
+        costQuality: AssetAllocationCostQuality.partial,
+        note: '从已有账单分配',
+      );
+      final linkId = Sqflite.firstIntValue(await txn.rawQuery('''
+        SELECT id FROM asset_transaction_links
+        WHERE asset_object_type = 'physical'
+          AND asset_id = ? AND transaction_id = ?
+          AND link_type = 'source_transaction'
+        LIMIT 1
+      ''', [assetId, transactionId]));
+      if (linkId == null) throw StateError('保存物品账单关联失败');
+      await _allocateHistoricalRefundsToLink(
+        txn,
+        transactionId: transactionId,
+        linkId: linkId,
+        requestedCents: allocatedRefundCents,
+      );
+      await _refreshOrderAllocationQuality(txn, transactionId);
+      await _syncAssetPurchasePriceCache(txn, [assetId]);
+    });
+    await _loadPhysicalAssetData();
+    notifyListeners();
+  }
+
+  Future<int> addPhysicalAssetFromTransaction({
+    required int transactionId,
+    required String name,
+    AssetType assetType = AssetType.other,
+    required int allocatedGrossCents,
+    int allocatedRefundCents = 0,
+    Decimal? currentValue,
+    PhysicalAssetStatus status = PhysicalAssetStatus.active,
+    String brand = '',
+    String model = '',
+    String location = '',
+    DateTime? warrantyUntil,
+    String photoPath = '',
+    String thumbnailPath = '',
+    String note = '',
+    bool includeInNetWorth = true,
+  }) async {
+    final trimmedName = name.trim();
+    if (trimmedName.isEmpty) throw ArgumentError('资产名称不能为空');
+    if (!status.canCountInNetWorth) {
+      throw ArgumentError('新增资产只能从使用中或闲置状态开始');
+    }
+    if (allocatedGrossCents <= 0 ||
+        allocatedRefundCents < 0 ||
+        allocatedRefundCents > allocatedGrossCents) {
+      throw ArgumentError('物品分配金额不合法');
+    }
+    final initialNet = budgetDecimalFromCents(
+      allocatedGrossCents - allocatedRefundCents,
+    )!;
+    final initialValue = currentValue ?? initialNet;
+    if (initialValue < Decimal.zero) throw ArgumentError('资产金额不能为负');
+    late int assetId;
+    await _db!.transaction((txn) async {
+      final transactionRows = await txn.query(
+        'transactions',
+        where: 'id = ?',
+        whereArgs: [transactionId],
+        limit: 1,
+      );
+      if (transactionRows.isEmpty) throw StateError('购置账单不存在');
+      final transaction = transactionRows.first;
+      final amount = Decimal.tryParse(transaction['amount'] as String? ?? '') ??
+          Decimal.zero;
+      if (transaction['kind'] != TransactionKind.expense.toJson() ||
+          transaction['refund_of'] != null ||
+          amount <= Decimal.zero ||
+          transaction['currency_code'] != 'CNY') {
+        throw StateError('只能从人民币正数支出原账单加入物品');
+      }
+      await _validateOrderAllocations(
+        txn,
+        transactionId,
+        proposed: AssetAllocationLine(
+          assetId: -1,
+          grossCents: allocatedGrossCents,
+          refundCents: allocatedRefundCents,
+        ),
+      );
+      final now = DateTime.now().millisecondsSinceEpoch;
+      final dateMs = transaction['date_ms'] as int;
+      final purchaseDate = DateTime.fromMillisecondsSinceEpoch(dateMs);
+      if (warrantyUntil != null &&
+          _assetDayIsBefore(warrantyUntil, purchaseDate)) {
+        throw ArgumentError('保修到期日不能早于购买日期');
+      }
+      final usageStatus = status == PhysicalAssetStatus.idle
+          ? PhysicalAssetUsageStatus.idle
+          : PhysicalAssetUsageStatus.active;
+      assetId = await txn.insert('physical_assets', {
+        'uuid': _newUuid(),
+        'book_id': transaction['book_id'] as int?,
+        'name': trimmedName,
+        'asset_type': assetType.storageKey,
+        'status': status.storageKey,
+        'economic_status': PhysicalAssetEconomicStatus.owned.storageKey,
+        'usage_status': usageStatus.storageKey,
+        'visibility_status': AssetVisibilityStatus.active.storageKey,
+        'inclusion_quality': AssetInclusionQuality.confirmed.storageKey,
+        'source_type': PhysicalAssetSourceType.fromTransaction.storageKey,
+        'acquisition_cost_source':
+            AssetAcquisitionCostSource.transactionAllocations.storageKey,
+        'purchase_price': initialNet.toString(),
+        'current_value': initialValue.toString(),
+        'currency_code': 'CNY',
+        'purchase_date_ms': dateMs,
+        'brand': brand.trim(),
+        'model': model.trim(),
+        'location': location.trim(),
+        'warranty_until_ms': warrantyUntil?.millisecondsSinceEpoch,
+        'photo_path': photoPath.trim(),
+        'thumbnail_path': thumbnailPath.trim(),
+        'invoice_path': '',
+        'depreciation_method': '',
+        'depreciation_base': '0',
+        'salvage_value': '0',
+        'useful_life_months': 0,
+        'depreciation_start_ms': null,
+        'depreciation_paused': 0,
+        'note': note.trim(),
+        'include_in_net_worth': includeInNetWorth ? 1 : 0,
+        'is_deleted': 0,
+        'ended_ms': null,
+        'archived_ms': null,
+        'created_ms': now,
+        'updated_ms': now,
+      });
+      await _insertAssetEvent(
+        txn,
+        assetId: assetId,
+        type: AssetEventType.createdFromTransaction,
+        occurredAt: purchaseDate,
+        value: initialValue,
+        note: note.trim(),
+        metadata: {'transaction_id': transactionId},
+      );
+      await _insertAssetValuation(
+        txn,
+        assetId: assetId,
+        value: initialValue,
+        source: AssetValueSource.purchase,
+        valuedAt: purchaseDate,
+        note: '初始当前价值',
+      );
+      await _insertAssetTransactionLink(
+        txn,
+        assetId: assetId,
+        transactionId: transactionId,
+        type: AssetTransactionLinkType.sourceTransaction,
+        amount: budgetDecimalFromCents(allocatedGrossCents)!,
+        allocatedGrossCents: allocatedGrossCents,
+        allocatedRefundCents: allocatedRefundCents,
+        costQuality: AssetAllocationCostQuality.partial,
+        note: '从已有账单分配',
+      );
+      final linkId = Sqflite.firstIntValue(await txn.rawQuery('''
+        SELECT id FROM asset_transaction_links
+        WHERE asset_object_type = 'physical'
+          AND asset_id = ? AND transaction_id = ?
+          AND link_type = 'source_transaction'
+        LIMIT 1
+      ''', [assetId, transactionId]));
+      if (linkId == null) throw StateError('保存物品账单关联失败');
+      await _allocateHistoricalRefundsToLink(
+        txn,
+        transactionId: transactionId,
+        linkId: linkId,
+        requestedCents: allocatedRefundCents,
+      );
+      await _refreshOrderAllocationQuality(txn, transactionId);
+      await _syncAssetPurchasePriceCache(txn, [assetId]);
+    });
+    await _loadPhysicalAssetData();
+    notifyListeners();
+    return assetId;
+  }
+
+  Future<int> addPhysicalAsset({
+    required String name,
+    AssetType assetType = AssetType.other,
+    required Decimal currentValue,
+    Decimal? purchasePrice,
+    String currencyCode = 'CNY',
+    PhysicalAssetSourceType sourceType =
+        PhysicalAssetSourceType.historicalExisting,
+    PhysicalAssetStatus status = PhysicalAssetStatus.active,
+    DateTime? purchaseDate,
+    String brand = '',
+    String model = '',
+    String location = '',
+    DateTime? warrantyUntil,
+    String note = '',
+    bool includeInNetWorth = true,
+    int? sourceTransactionId,
+    int? paymentAccountId,
+    int? purchaseCategoryId,
+    DateTime? occurredAt,
+    bool purchasePriceKnown = true,
+  }) async {
+    final trimmedName = name.trim();
+    final normalizedCurrency = currencyCode.trim().toUpperCase();
+    final initialPrice =
+        purchasePriceKnown ? (purchasePrice ?? currentValue) : Decimal.zero;
+    if (trimmedName.isEmpty) throw ArgumentError('资产名称不能为空');
+    if (currentValue < Decimal.zero || initialPrice < Decimal.zero) {
+      throw ArgumentError('资产金额不能为负');
+    }
+    if (normalizedCurrency != 'CNY') {
+      throw UnsupportedError('当前版本仅支持新增人民币资产。');
+    }
+    if (!status.canCountInNetWorth) {
+      throw ArgumentError('新增资产只能从使用中或闲置状态开始');
+    }
+    if (sourceType == PhysicalAssetSourceType.newPurchaseWithAccount &&
+        paymentAccountId == null) {
+      throw ArgumentError('新购买资产必须选择付款账户');
+    }
+    if (sourceType == PhysicalAssetSourceType.newPurchaseWithAccount &&
+        purchaseDate == null) {
+      throw ArgumentError('新购买资产必须明确购买日期');
+    }
+    if (sourceType == PhysicalAssetSourceType.fromTransaction &&
+        sourceTransactionId == null) {
+      throw ArgumentError('从已有账单加入资产必须提供账单 ID');
+    }
+    if (!purchasePriceKnown &&
+        (sourceType == PhysicalAssetSourceType.newPurchaseWithAccount ||
+            sourceType == PhysicalAssetSourceType.fromTransaction)) {
+      throw ArgumentError('账单来源的物品不能把购置成本标记为未知');
+    }
+
+    final now = DateTime.now();
+    var effectivePurchaseDate = purchaseDate;
+    var eventAt = sourceType == PhysicalAssetSourceType.newPurchaseWithAccount
+        ? purchaseDate!
+        : occurredAt ?? effectivePurchaseDate ?? now;
+    late int assetId;
+
+    await _db!.transaction((txn) async {
+      int? linkedTransactionId;
+      var linkedAmount = initialPrice;
+      if (sourceType == PhysicalAssetSourceType.newPurchaseWithAccount) {
+        if (initialPrice <= Decimal.zero) {
+          throw ArgumentError('新购买资产的购买价必须大于 0');
+        }
+        final account = _accounts
+            .where((item) => item.id == paymentAccountId && !item.isDeleted)
+            .firstOrNull;
+        if (account == null || account.currencyCode != 'CNY') {
+          throw ArgumentError('付款账户不存在或币种不受支持');
+        }
+        linkedTransactionId = await txn.insert('transactions', {
+          'book_id': _currentBookId,
+          'kind': TransactionKind.expense.toJson(),
+          'amount': initialPrice.toString(),
+          'currency_code': normalizedCurrency,
+          'category_id': purchaseCategoryId,
+          'account_id': paymentAccountId,
+          'to_account_id': null,
+          'note': note.trim().isEmpty ? name : note.trim(),
+          'date_ms': eventAt.millisecondsSinceEpoch,
+          'time_precision': TransactionTimePrecision.dateOnly.storageKey,
+          'tags': '',
+          'reimbursable': 0,
+          'image_path': '',
+          'excluded': 0,
+          ..._settlementFields(
+            settledAt: eventAt,
+            settlementAccountId: paymentAccountId!,
+            eventType: TransactionEventType.assetPurchase,
+          ),
+          ..._syncStampNew(),
+        });
+        linkedAmount = initialPrice;
+      } else if (sourceType == PhysicalAssetSourceType.fromTransaction) {
+        final sourceRows = await txn.query(
+          'transactions',
+          columns: [
+            'book_id',
+            'kind',
+            'amount',
+            'currency_code',
+            'refund_of',
+            'date_ms',
+          ],
+          where: 'id = ?',
+          whereArgs: [sourceTransactionId],
+          limit: 1,
+        );
+        if (sourceRows.isEmpty) throw ArgumentError('关联账单不存在');
+        final source = sourceRows.first;
+        final sourceAmount =
+            Decimal.tryParse(source['amount'] as String? ?? '') ?? Decimal.zero;
+        if (source['book_id'] != _currentBookId ||
+            source['kind'] != TransactionKind.expense.toJson() ||
+            source['refund_of'] != null ||
+            sourceAmount <= Decimal.zero ||
+            source['currency_code'] != 'CNY') {
+          throw ArgumentError('只能关联当前账本中的人民币支出账单');
+        }
+        linkedTransactionId = sourceTransactionId;
+        linkedAmount = sourceAmount;
+        effectivePurchaseDate = DateTime.fromMillisecondsSinceEpoch(
+          source['date_ms'] as int,
+        );
+        eventAt = effectivePurchaseDate!;
+      }
+
+      if (warrantyUntil != null &&
+          effectivePurchaseDate != null &&
+          _assetDayIsBefore(warrantyUntil, effectivePurchaseDate!)) {
+        throw ArgumentError('保修到期日不能早于购买日期');
+      }
+
+      if (linkedTransactionId != null) {
+        await _validateOrderAllocations(
+          txn,
+          linkedTransactionId,
+          proposed: AssetAllocationLine(
+            assetId: -1,
+            grossCents: decimalToBudgetCents(linkedAmount).abs(),
+            refundCents: 0,
+          ),
+        );
+      }
+
+      final createdMs = now.millisecondsSinceEpoch;
+      final usageStatus = status == PhysicalAssetStatus.idle
+          ? PhysicalAssetUsageStatus.idle
+          : PhysicalAssetUsageStatus.active;
+      assetId = await txn.insert('physical_assets', {
+        'uuid': _newUuid(),
+        'book_id': _currentBookId,
+        'name': trimmedName,
+        'asset_type': assetType.storageKey,
+        'status': status.storageKey,
+        'economic_status': PhysicalAssetEconomicStatus.owned.storageKey,
+        'usage_status': usageStatus.storageKey,
+        'visibility_status': AssetVisibilityStatus.active.storageKey,
+        'inclusion_quality': AssetInclusionQuality.confirmed.storageKey,
+        'source_type': sourceType.storageKey,
+        'acquisition_cost_source': linkedTransactionId == null
+            ? (purchasePriceKnown
+                ? AssetAcquisitionCostSource.manual.storageKey
+                : AssetAcquisitionCostSource.manualUnknown.storageKey)
+            : AssetAcquisitionCostSource.transactionAllocations.storageKey,
+        'purchase_price': initialPrice.toString(),
+        'current_value': currentValue.toString(),
+        'currency_code': normalizedCurrency,
+        'purchase_date_ms': effectivePurchaseDate?.millisecondsSinceEpoch,
+        'brand': brand.trim(),
+        'model': model.trim(),
+        'location': location.trim(),
+        'warranty_until_ms': warrantyUntil?.millisecondsSinceEpoch,
+        'photo_path': '',
+        'thumbnail_path': '',
+        'invoice_path': '',
+        'depreciation_method': '',
+        'depreciation_base': '0',
+        'salvage_value': '0',
+        'useful_life_months': 0,
+        'depreciation_start_ms': null,
+        'depreciation_paused': 0,
+        'note': note.trim(),
+        'include_in_net_worth': includeInNetWorth ? 1 : 0,
+        'is_deleted': 0,
+        'ended_ms': null,
+        'archived_ms': null,
+        'created_ms': createdMs,
+        'updated_ms': createdMs,
+      });
+
+      await _insertAssetEvent(
+        txn,
+        assetId: assetId,
+        type: _createEventForSource(sourceType),
+        occurredAt: eventAt,
+        value: currentValue,
+        note: note.trim(),
+        metadata: {'source_type': sourceType.storageKey},
+      );
+      await _insertAssetValuation(
+        txn,
+        assetId: assetId,
+        value: currentValue,
+        source: _initialValueSourceFor(sourceType),
+        valuedAt: eventAt,
+        note: '初始当前价值',
+      );
+      if (linkedTransactionId != null) {
+        await _insertAssetTransactionLink(
+          txn,
+          assetId: assetId,
+          transactionId: linkedTransactionId,
+          type: sourceType == PhysicalAssetSourceType.fromTransaction
+              ? AssetTransactionLinkType.sourceTransaction
+              : AssetTransactionLinkType.purchaseTransaction,
+          amount: linkedAmount,
+          note: sourceType.label,
+        );
+        await _autoAllocateAllRefundsForSingleFullLink(
+          txn,
+          linkedTransactionId,
+        );
+      }
+    });
+
+    await _loadTransactions();
+    await _loadPhysicalAssetData();
+    notifyListeners();
+    return assetId;
+  }
+
+  Future<void> updatePhysicalAsset({
+    required int id,
+    required String name,
+    required AssetType assetType,
+    required Decimal purchasePrice,
+    required Decimal currentValue,
+    required String currencyCode,
+    required PhysicalAssetStatus status,
+    DateTime? purchaseDate,
+    bool clearPurchaseDate = false,
+    String brand = '',
+    String model = '',
+    String location = '',
+    DateTime? warrantyUntil,
+    bool clearWarrantyUntil = false,
+    String note = '',
+    required bool includeInNetWorth,
+    bool? purchasePriceKnown,
+  }) async {
+    final existing =
+        _allPhysicalAssets.where((asset) => asset.id == id).firstOrNull;
+    if (existing == null) throw StateError('资产不存在');
+    if (name.trim().isEmpty) throw ArgumentError('资产名称不能为空');
+    if (purchasePrice < Decimal.zero || currentValue < Decimal.zero) {
+      throw ArgumentError('资产金额不能为负');
+    }
+    if (currencyCode.trim().toUpperCase() != existing.currencyCode) {
+      throw UnsupportedError('当前版本不能转换资产币种。');
+    }
+    if (clearPurchaseDate && purchaseDate != null) {
+      throw ArgumentError('清空购买日期时不能同时提供新日期');
+    }
+    if (clearWarrantyUntil && warrantyUntil != null) {
+      throw ArgumentError('清空保修日期时不能同时提供新日期');
+    }
+    final editingArchivedShadow =
+        status == PhysicalAssetStatus.archived && existing.isArchived;
+    if (!editingArchivedShadow &&
+        (!existing.economicStatus.ownsValue || !status.canCountInNetWorth)) {
+      throw StateError('出售、报废、丢失、赠送和归档必须从资产详情执行。');
+    }
+    if (!existing.economicStatus.ownsValue &&
+        currentValue != existing.currentValue) {
+      throw StateError('已结束资产不能通过普通编辑修改价值。');
+    }
+    final usageStatus = editingArchivedShadow
+        ? existing.usageStatus
+        : status == PhysicalAssetStatus.idle
+            ? PhysicalAssetUsageStatus.idle
+            : PhysicalAssetUsageStatus.active;
+    final legacyStatus = _legacyPhysicalStatusFor(
+      economicStatus: existing.economicStatus,
+      usageStatus: usageStatus,
+      visibilityStatus: existing.visibilityStatus,
+    );
+    final allocatedCost = existing.acquisitionCostSource ==
+        AssetAcquisitionCostSource.transactionAllocations;
+    if (allocatedCost && purchasePriceKnown != null) {
+      throw StateError('账单分配成本不能改成手工成本口径');
+    }
+    int? canonicalPurchaseDateMs;
+    if (allocatedCost) {
+      final purchaseLinks = transactionLinksForAsset(id)
+          .where((link) =>
+              link.assetObjectType == AssetObjectType.physical &&
+              (link.linkType == AssetTransactionLinkType.sourceTransaction ||
+                  link.linkType ==
+                      AssetTransactionLinkType.purchaseTransaction))
+          .toList(growable: false);
+      final purchaseTransactions = purchaseLinks
+          .map((link) => transactionById(link.transactionId))
+          .whereType<TransactionEntity>()
+          .toList(growable: false);
+      if (purchaseLinks.isEmpty ||
+          purchaseTransactions.length != purchaseLinks.length) {
+        throw StateError('账单分配来源物品缺少有效购置账单关联');
+      }
+      canonicalPurchaseDateMs = purchaseTransactions
+          .map((transaction) => transaction.dateMs)
+          .reduce(min);
+      final canonicalPurchaseDate =
+          DateTime.fromMillisecondsSinceEpoch(canonicalPurchaseDateMs);
+      if (clearPurchaseDate) {
+        throw StateError('账单来源物品不能清空购买日期');
+      }
+      if (purchaseDate != null &&
+          !_sameAssetCalendarDay(purchaseDate, canonicalPurchaseDate)) {
+        throw StateError('账单来源物品的购买日期必须与原账单一致');
+      }
+    }
+    final nextPurchaseDate = allocatedCost
+        ? DateTime.fromMillisecondsSinceEpoch(canonicalPurchaseDateMs!)
+        : clearPurchaseDate
+            ? null
+            : purchaseDate ?? existing.purchaseDate;
+    final nextWarrantyUntil =
+        clearWarrantyUntil ? null : warrantyUntil ?? existing.warrantyUntil;
+    if (nextPurchaseDate != null &&
+        nextWarrantyUntil != null &&
+        _assetDayIsBefore(nextWarrantyUntil, nextPurchaseDate)) {
+      throw ArgumentError('保修到期日不能早于购买日期');
+    }
+    final scopeChanged = existing.includeInNetWorth != includeInNetWorth;
+    if (scopeChanged) {
+      await _bumpNetWorthScopeVersion();
+    }
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final nextCostSource = allocatedCost
+        ? AssetAcquisitionCostSource.transactionAllocations
+        : purchasePriceKnown == null
+            ? existing.acquisitionCostSource
+            : purchasePriceKnown
+                ? AssetAcquisitionCostSource.manual
+                : AssetAcquisitionCostSource.manualUnknown;
+    await _db!.transaction((txn) async {
+      await txn.update(
+        'physical_assets',
+        {
+          'name': name.trim(),
+          'asset_type': assetType.storageKey,
+          'status': legacyStatus.storageKey,
+          'economic_status': existing.economicStatus.storageKey,
+          'usage_status': usageStatus.storageKey,
+          'visibility_status': existing.visibilityStatus.storageKey,
+          'acquisition_cost_source': nextCostSource.storageKey,
+          'purchase_price': allocatedCost
+              ? existing.purchasePrice.toString()
+              : nextCostSource == AssetAcquisitionCostSource.manualUnknown
+                  ? Decimal.zero.toString()
+                  : purchasePrice.toString(),
+          'current_value': currentValue.toString(),
+          'currency_code': currencyCode,
+          'purchase_date_ms': nextPurchaseDate?.millisecondsSinceEpoch,
+          'brand': brand.trim(),
+          'model': model.trim(),
+          'location': location.trim(),
+          'warranty_until_ms': nextWarrantyUntil?.millisecondsSinceEpoch,
+          'note': note.trim(),
+          'include_in_net_worth':
+              includeInNetWorth && existing.economicStatus.ownsValue ? 1 : 0,
+          'updated_ms': now,
+        },
+        where: 'id = ?',
         whereArgs: [id],
       );
-    } else {
-      await _db!
-          .delete('transactions', where: 'book_id = ?', whereArgs: [id]);
+      await _insertAssetEvent(
+        txn,
+        assetId: id,
+        type: AssetEventType.assetEdited,
+        occurredAt: DateTime.now(),
+        value: currentValue,
+        note: '编辑资产资料',
+      );
+      if (currentValue != existing.currentValue) {
+        await _insertAssetValuation(
+          txn,
+          assetId: id,
+          value: currentValue,
+          source: AssetValueSource.manual,
+          valuedAt: DateTime.now(),
+          note: '编辑资产时更新当前价值',
+        );
+        await txn.update(
+          'physical_assets',
+          {'depreciation_paused': 1},
+          where: 'id = ?',
+          whereArgs: [id],
+        );
+      }
+      if (allocatedCost) {
+        await _syncAssetPurchasePriceCache(txn, [id]);
+      }
+    });
+    await _loadPhysicalAssetData();
+    notifyListeners();
+  }
+
+  Future<void> updatePhysicalAssetValue(
+    int id,
+    Decimal value, {
+    DateTime? valuedAt,
+    String note = '',
+  }) async {
+    if (value < Decimal.zero) throw ArgumentError('资产当前价值不能为负');
+    final asset = _allPhysicalAssets.where((item) => item.id == id).firstOrNull;
+    if (asset == null) throw StateError('资产不存在');
+    if (!asset.economicStatus.ownsValue) {
+      throw StateError('当前资产状态不能更新价值');
     }
-    await _db!.delete('books', where: 'id = ?', whereArgs: [id]);
-    await _loadBooks();
-    if (_currentBookId == id) {
-      _currentBookId = _books.isNotEmpty ? _books.first.id : 1;
-      await _db!.insert(
-        'app_settings',
-        {'key': 'current_book_id', 'value': _currentBookId.toString()},
-        conflictAlgorithm: ConflictAlgorithm.replace,
+    final at = valuedAt ?? DateTime.now();
+    await _db!.transaction((txn) async {
+      final latestRows = await txn.query(
+        'asset_valuations',
+        columns: ['valued_at_ms'],
+        where: 'asset_id = ?',
+        whereArgs: [id],
+        orderBy: 'valued_at_ms DESC, id DESC',
+        limit: 1,
+      );
+      final becomesCurrent = latestRows.isEmpty ||
+          at.millisecondsSinceEpoch >=
+              (latestRows.first['valued_at_ms'] as int? ?? 0);
+      await _insertAssetValuation(
+        txn,
+        assetId: id,
+        value: value,
+        source: AssetValueSource.manual,
+        valuedAt: at,
+        note: note,
+      );
+      await txn.update(
+        'physical_assets',
+        {
+          if (becomesCurrent) 'current_value': value.toString(),
+          if (becomesCurrent) 'depreciation_paused': 1,
+          'updated_ms': DateTime.now().millisecondsSinceEpoch,
+        },
+        where: 'id = ?',
+        whereArgs: [id],
+      );
+      await _insertAssetEvent(
+        txn,
+        assetId: id,
+        type: AssetEventType.valueUpdated,
+        occurredAt: at,
+        value: value,
+        note: note,
+      );
+    });
+    await _loadPhysicalAssetData();
+    notifyListeners();
+  }
+
+  Future<void> updatePhysicalAssetEvidence(
+    int id, {
+    String photoPath = '',
+    String? thumbnailPath,
+    String invoicePath = '',
+    String note = '',
+  }) async {
+    final now = DateTime.now();
+    await _db!.transaction((txn) async {
+      await txn.update(
+        'physical_assets',
+        {
+          'photo_path': photoPath.trim(),
+          if (thumbnailPath != null) 'thumbnail_path': thumbnailPath.trim(),
+          'invoice_path': invoicePath.trim(),
+          'updated_ms': now.millisecondsSinceEpoch,
+        },
+        where: 'id = ?',
+        whereArgs: [id],
+      );
+      await _insertAssetEvent(
+        txn,
+        assetId: id,
+        type: AssetEventType.evidenceUpdated,
+        occurredAt: now,
+        note: note.trim().isEmpty ? '凭证信息更新' : note.trim(),
+      );
+    });
+    await _loadPhysicalAssetData();
+    notifyListeners();
+  }
+
+  Future<void> configurePhysicalAssetDepreciation({
+    required int id,
+    required bool enabled,
+    Decimal? depreciationBase,
+    Decimal? salvageValue,
+    int? usefulLifeMonths,
+    DateTime? startAt,
+    String note = '',
+  }) async {
+    final now = DateTime.now();
+    final base = depreciationBase ?? Decimal.zero;
+    final salvage = salvageValue ?? Decimal.zero;
+    final lifeMonths = usefulLifeMonths ?? 0;
+    if (enabled) {
+      if (base <= Decimal.zero) {
+        throw ArgumentError('折旧基准金额必须大于 0');
+      }
+      if (salvage < Decimal.zero || salvage > base) {
+        throw ArgumentError('残值必须在 0 到折旧基准金额之间');
+      }
+      if (lifeMonths <= 0) {
+        throw ArgumentError('使用寿命月份必须大于 0');
+      }
+      if (startAt == null) {
+        throw ArgumentError('开启折旧必须明确开始日期');
+      }
+    }
+    await _db!.transaction((txn) async {
+      await txn.update(
+        'physical_assets',
+        {
+          'depreciation_method': enabled ? 'linear' : '',
+          'depreciation_base': enabled ? base.toString() : '0',
+          'salvage_value': enabled ? salvage.toString() : '0',
+          'useful_life_months': enabled ? lifeMonths : 0,
+          'depreciation_start_ms':
+              enabled ? startAt!.millisecondsSinceEpoch : null,
+          'depreciation_paused': 0,
+          'updated_ms': now.millisecondsSinceEpoch,
+        },
+        where: 'id = ?',
+        whereArgs: [id],
+      );
+      await _insertAssetEvent(
+        txn,
+        assetId: id,
+        type: AssetEventType.depreciationConfigured,
+        occurredAt: now,
+        value: enabled ? base : null,
+        note:
+            note.trim().isEmpty ? (enabled ? '设置线性折旧' : '关闭自动折旧') : note.trim(),
+        metadata: enabled
+            ? {
+                'method': 'linear',
+                'base': base.toString(),
+                'salvage_value': salvage.toString(),
+                'useful_life_months': lifeMonths,
+                'start_ms': startAt!.millisecondsSinceEpoch,
+              }
+            : {'method': ''},
+      );
+    });
+    await _loadPhysicalAssetData();
+    notifyListeners();
+  }
+
+  Future<int> applyPhysicalAssetDepreciation({DateTime? asOf}) async {
+    final at = asOf ?? DateTime.now();
+    var changed = 0;
+    final candidates = _allPhysicalAssets.where(
+      (asset) =>
+          !asset.isDeleted &&
+          asset.economicStatus.ownsValue &&
+          asset.hasLinearDepreciation &&
+          !asset.depreciationPaused &&
+          asset.depreciationStartMs != null,
+    );
+    await _db!.transaction((txn) async {
+      for (final asset in candidates) {
+        final start = asset.depreciationStartDate;
+        if (start == null || at.isBefore(start)) continue;
+        final latestValuation = await txn.query(
+          'asset_valuations',
+          columns: ['valued_at_ms'],
+          where: 'asset_id = ?',
+          whereArgs: [asset.id],
+          orderBy: 'valued_at_ms DESC, id DESC',
+          limit: 1,
+        );
+        if (latestValuation.isNotEmpty &&
+            at.millisecondsSinceEpoch <
+                (latestValuation.first['valued_at_ms'] as int? ?? 0)) {
+          continue;
+        }
+        final elapsedMonths = _wholeMonthsBetween(start, at)
+            .clamp(0, asset.usefulLifeMonths)
+            .toInt();
+        final depreciable = asset.depreciationBase - asset.salvageValue;
+        if (elapsedMonths <= 0 || depreciable <= Decimal.zero) continue;
+        final monthly = (depreciable / Decimal.fromInt(asset.usefulLifeMonths))
+            .toDecimal(scaleOnInfinitePrecision: 8);
+        final nextRaw =
+            asset.depreciationBase - (monthly * Decimal.fromInt(elapsedMonths));
+        final nextValue =
+            nextRaw < asset.salvageValue ? asset.salvageValue : nextRaw;
+        if (nextValue == asset.currentValue) continue;
+        await txn.update(
+          'physical_assets',
+          {
+            'current_value': nextValue.toString(),
+            'updated_ms': at.millisecondsSinceEpoch,
+          },
+          where: 'id = ?',
+          whereArgs: [asset.id],
+        );
+        await _insertAssetValuation(
+          txn,
+          assetId: asset.id,
+          value: nextValue,
+          source: AssetValueSource.autoDepreciation,
+          valuedAt: at,
+          note: '线性折旧自动更新',
+        );
+        await _insertAssetEvent(
+          txn,
+          assetId: asset.id,
+          type: AssetEventType.autoDepreciationApplied,
+          occurredAt: at,
+          value: nextValue,
+          note: '线性折旧自动更新',
+          metadata: {
+            'elapsed_months': elapsedMonths,
+            'base': asset.depreciationBase.toString(),
+            'salvage_value': asset.salvageValue.toString(),
+          },
+        );
+        changed++;
+      }
+    });
+    if (changed > 0) {
+      await _loadPhysicalAssetData();
+      notifyListeners();
+    }
+    return changed;
+  }
+
+  static int _wholeMonthsBetween(DateTime start, DateTime end) {
+    var months = (end.year - start.year) * 12 + end.month - start.month;
+    if (end.day < start.day) months--;
+    return max(0, months);
+  }
+
+  Future<void> returnPhysicalAsset({
+    required int assetId,
+    DateTime? returnedAt,
+    String note = '',
+  }) async {
+    final resolved = physicalAssetAcquisitionCost(assetId);
+    if (!resolved.isExact || resolved.amount != Decimal.zero) {
+      throw StateError('只有已精确分配且净购置成本为 0 的物品可以确认退货');
+    }
+    final at = returnedAt ?? DateTime.now();
+    await _db!.transaction((txn) async {
+      final rows = await txn.query(
+        'physical_assets',
+        where: 'id = ? AND is_deleted = 0',
+        whereArgs: [assetId],
+        limit: 1,
+      );
+      if (rows.isEmpty) throw StateError('物品不存在');
+      final asset = PhysicalAssetEntity.fromMap(rows.first);
+      if (!asset.economicStatus.ownsValue) {
+        throw StateError('只有仍持有的物品可以确认退货');
+      }
+      await txn.update(
+        'physical_assets',
+        {
+          'status': _legacyPhysicalStatusFor(
+            economicStatus: PhysicalAssetEconomicStatus.returned,
+            usageStatus: asset.usageStatus,
+            visibilityStatus: asset.visibilityStatus,
+          ).storageKey,
+          'economic_status': PhysicalAssetEconomicStatus.returned.storageKey,
+          'current_value': '0',
+          'include_in_net_worth': 0,
+          'ended_ms': at.millisecondsSinceEpoch,
+          'updated_ms': DateTime.now().millisecondsSinceEpoch,
+        },
+        where: 'id = ?',
+        whereArgs: [assetId],
+      );
+      await _insertAssetValuation(
+        txn,
+        assetId: assetId,
+        value: Decimal.zero,
+        source: AssetValueSource.statusZero,
+        valuedAt: at,
+        note: '退货后价值归零',
+      );
+      await _insertAssetEvent(
+        txn,
+        assetId: assetId,
+        type: AssetEventType.assetReturned,
+        occurredAt: at,
+        note: note.trim(),
+        metadata: {
+          'previous_current_value': asset.currentValue.toString(),
+          'previous_include_in_net_worth': asset.includeInNetWorth,
+          'previous_ended_ms': asset.endedMs,
+          'previous_usage_status': asset.usageStatus.storageKey,
+          'previous_visibility_status': asset.visibilityStatus.storageKey,
+          'previous_inclusion_quality': asset.inclusionQuality.storageKey,
+        },
+      );
+    });
+    await _loadPhysicalAssetData();
+    notifyListeners();
+  }
+
+  Future<void> undoPhysicalAssetReturn(int assetId) async {
+    await _db!.transaction((txn) async {
+      final rows = await txn.query(
+        'physical_assets',
+        where: 'id = ? AND is_deleted = 0',
+        whereArgs: [assetId],
+        limit: 1,
+      );
+      if (rows.isEmpty) throw StateError('物品不存在');
+      final asset = PhysicalAssetEntity.fromMap(rows.first);
+      if (asset.economicStatus != PhysicalAssetEconomicStatus.returned) {
+        throw StateError('只有已退货物品可以撤销退货');
+      }
+      final events = await txn.query(
+        'asset_events',
+        where: "asset_type = 'physical' AND asset_id = ? AND event_type = ?",
+        whereArgs: [assetId, AssetEventType.assetReturned.storageKey],
+        orderBy: 'occurred_ms DESC, id DESC',
+        limit: 1,
+      );
+      if (events.isEmpty) throw StateError('缺少可撤销的退货事件');
+      final metadata = _assetEventMetadata(
+        events.first['metadata'] as String? ?? '',
+      );
+      final value = Decimal.tryParse(
+            metadata['previous_current_value']?.toString() ?? '',
+          ) ??
+          Decimal.zero;
+      final usage = PhysicalAssetUsageStatusX.fromStorage(
+        metadata['previous_usage_status']?.toString(),
+      );
+      final visibility = AssetVisibilityStatusX.fromStorage(
+        metadata['previous_visibility_status']?.toString(),
+      );
+      final inclusion = AssetInclusionQualityX.fromStorage(
+        metadata['previous_inclusion_quality']?.toString(),
+      );
+      final include = metadata['previous_include_in_net_worth'] is bool
+          ? metadata['previous_include_in_net_worth'] as bool
+          : true;
+      await txn.update(
+        'physical_assets',
+        {
+          'status': _legacyPhysicalStatusFor(
+            economicStatus: PhysicalAssetEconomicStatus.owned,
+            usageStatus: usage,
+            visibilityStatus: visibility,
+          ).storageKey,
+          'economic_status': PhysicalAssetEconomicStatus.owned.storageKey,
+          'usage_status': usage.storageKey,
+          'visibility_status': visibility.storageKey,
+          'inclusion_quality': inclusion.storageKey,
+          'current_value': value.toString(),
+          'include_in_net_worth': include ? 1 : 0,
+          'ended_ms': int.tryParse(
+            metadata['previous_ended_ms']?.toString() ?? '',
+          ),
+          'updated_ms': DateTime.now().millisecondsSinceEpoch,
+        },
+        where: 'id = ?',
+        whereArgs: [assetId],
+      );
+      await _insertAssetValuation(
+        txn,
+        assetId: assetId,
+        value: value,
+        source: AssetValueSource.manual,
+        valuedAt: DateTime.now(),
+        note: '撤销退货，恢复退货前价值',
+      );
+      await _insertAssetEvent(
+        txn,
+        assetId: assetId,
+        type: AssetEventType.assetReturnUndone,
+        occurredAt: DateTime.now(),
+        value: value,
+        note: '撤销退货',
+      );
+    });
+    await _loadPhysicalAssetData();
+    notifyListeners();
+  }
+
+  Future<void> sellPhysicalAsset({
+    required int id,
+    required Decimal saleAmount,
+    Decimal? saleFee,
+    int? accountId,
+    DateTime? soldAt,
+    String note = '',
+  }) async {
+    final fee = saleFee ?? Decimal.zero;
+    if (saleAmount < Decimal.zero || fee < Decimal.zero || fee > saleAmount) {
+      throw ArgumentError('成交价和出售费用不合法');
+    }
+    final netProceeds = saleAmount - fee;
+    final at = soldAt ?? DateTime.now();
+    final timePrecision = soldAt == null
+        ? TransactionTimePrecision.exact
+        : TransactionTimePrecision.dateOnly;
+    await _db!.transaction((txn) async {
+      final rows = await txn.query(
+        'physical_assets',
+        where: 'id = ? AND is_deleted = 0',
+        whereArgs: [id],
+        limit: 1,
+      );
+      if (rows.isEmpty) throw StateError('资产不存在');
+      final asset = PhysicalAssetEntity.fromMap(rows.first);
+      if (!asset.economicStatus.ownsValue) {
+        throw StateError('当前资产状态不能出售');
+      }
+      if (asset.currencyCode != 'CNY') {
+        throw UnsupportedError('当前版本暂不支持外币资产出售入账。');
+      }
+      if (accountId != null &&
+          !_accounts.any((account) =>
+              account.id == accountId &&
+              !account.isDeleted &&
+              account.currencyCode == 'CNY')) {
+        throw ArgumentError('收款账户不存在或币种不受支持');
+      }
+      int? transactionId;
+      if (accountId != null && netProceeds > Decimal.zero) {
+        transactionId = await txn.insert('transactions', {
+          'book_id': asset.bookId ?? _currentBookId,
+          'kind': TransactionKind.income.toJson(),
+          'amount': netProceeds.toString(),
+          'currency_code': asset.currencyCode,
+          'category_id': null,
+          'account_id': accountId,
+          'to_account_id': null,
+          'note': note.trim().isEmpty ? '资产出售：${asset.name}' : note.trim(),
+          'date_ms': at.millisecondsSinceEpoch,
+          'time_precision': timePrecision.storageKey,
+          'tags': '',
+          'reimbursable': 0,
+          'image_path': '',
+          'excluded': 1,
+          ..._settlementFields(
+            settledAt: at,
+            settlementAccountId: accountId,
+            eventType: TransactionEventType.assetSale,
+          ),
+          ..._syncStampNew(),
+        });
+      }
+      await txn.update(
+        'physical_assets',
+        {
+          'status': _legacyPhysicalStatusFor(
+            economicStatus: PhysicalAssetEconomicStatus.sold,
+            usageStatus: asset.usageStatus,
+            visibilityStatus: asset.visibilityStatus,
+          ).storageKey,
+          'economic_status': PhysicalAssetEconomicStatus.sold.storageKey,
+          'current_value': '0',
+          'include_in_net_worth': 0,
+          'ended_ms': at.millisecondsSinceEpoch,
+          'updated_ms': DateTime.now().millisecondsSinceEpoch,
+        },
+        where: 'id = ?',
+        whereArgs: [id],
+      );
+      await _insertAssetValuation(
+        txn,
+        assetId: id,
+        value: Decimal.zero,
+        source: AssetValueSource.sale,
+        valuedAt: at,
+        note: note.trim(),
+      );
+      await _insertAssetEvent(
+        txn,
+        assetId: id,
+        type: AssetEventType.assetSold,
+        occurredAt: at,
+        value: netProceeds,
+        note: note.trim(),
+        metadata: {
+          'gross_sale_amount': saleAmount.toString(),
+          'sale_fee': fee.toString(),
+          'net_proceeds': netProceeds.toString(),
+          'previous_value': asset.currentValue.toString(),
+          'previous_status': asset.status.storageKey,
+          'previous_economic_status': asset.economicStatus.storageKey,
+          'previous_usage_status': asset.usageStatus.storageKey,
+          'previous_visibility_status': asset.visibilityStatus.storageKey,
+          'previous_inclusion_quality': asset.inclusionQuality.storageKey,
+          'previous_ended_ms': asset.endedMs,
+          'previous_include_in_net_worth': asset.includeInNetWorth,
+          if (transactionId != null) 'transaction_id': transactionId,
+        },
+      );
+      if (transactionId != null) {
+        await _insertAssetTransactionLink(
+          txn,
+          assetId: id,
+          transactionId: transactionId,
+          type: AssetTransactionLinkType.saleAccountMovement,
+          amount: netProceeds,
+          note: '出售入账，不计入普通收入',
+        );
+      }
+    });
+    await _loadTransactions();
+    await _loadPhysicalAssetData();
+    notifyListeners();
+  }
+
+  Future<void> undoPhysicalAssetSale(int id) async {
+    await _db!.transaction((txn) async {
+      final assetRows = await txn.query(
+        'physical_assets',
+        where: 'id = ? AND is_deleted = 0',
+        whereArgs: [id],
+        limit: 1,
+      );
+      if (assetRows.isEmpty) throw StateError('资产不存在');
+      final asset = PhysicalAssetEntity.fromMap(assetRows.first);
+      if (asset.economicStatus != PhysicalAssetEconomicStatus.sold) {
+        throw StateError('只有已出售资产可以撤销出售');
+      }
+      final eventRows = await txn.query(
+        'asset_events',
+        where: "asset_type = 'physical' AND asset_id = ? AND event_type = ?",
+        whereArgs: [id, AssetEventType.assetSold.storageKey],
+        orderBy: 'occurred_ms DESC, id DESC',
+        limit: 1,
+      );
+      final metadata = eventRows.isEmpty
+          ? const <String, dynamic>{}
+          : _assetEventMetadata(eventRows.first['metadata'] as String? ?? '');
+      var previousValue =
+          Decimal.tryParse(metadata['previous_value']?.toString() ?? '');
+      if (previousValue == null) {
+        final valuationRows = await txn.query(
+          'asset_valuations',
+          columns: ['value'],
+          where: 'asset_id = ? AND source <> ?',
+          whereArgs: [id, AssetValueSource.sale.storageKey],
+          orderBy: 'valued_at_ms DESC, id DESC',
+          limit: 1,
+        );
+        previousValue = valuationRows.isEmpty
+            ? Decimal.zero
+            : Decimal.tryParse(valuationRows.first['value'] as String? ?? '') ??
+                Decimal.zero;
+      }
+      final previousStatus = PhysicalAssetStatusX.fromStorage(
+        metadata['previous_status']?.toString(),
+      );
+      final restoredEconomic = metadata.containsKey('previous_economic_status')
+          ? PhysicalAssetEconomicStatusX.fromStorage(
+              metadata['previous_economic_status']?.toString(),
+            )
+          : _physicalEconomicFromLegacyStatus(previousStatus);
+      final restoredUsage = metadata.containsKey('previous_usage_status')
+          ? PhysicalAssetUsageStatusX.fromStorage(
+              metadata['previous_usage_status']?.toString(),
+            )
+          : _physicalUsageFromLegacyStatus(previousStatus);
+      final restoredVisibility =
+          metadata.containsKey('previous_visibility_status')
+              ? AssetVisibilityStatusX.fromStorage(
+                  metadata['previous_visibility_status']?.toString(),
+                )
+              : previousStatus == PhysicalAssetStatus.archived
+                  ? AssetVisibilityStatus.archived
+                  : AssetVisibilityStatus.active;
+      final restoredQuality = metadata.containsKey('previous_inclusion_quality')
+          ? AssetInclusionQualityX.fromStorage(
+              metadata['previous_inclusion_quality']?.toString(),
+            )
+          : AssetInclusionQuality.confirmed;
+      final restoredStatus = _legacyPhysicalStatusFor(
+        economicStatus: restoredEconomic,
+        usageStatus: restoredUsage,
+        visibilityStatus: restoredVisibility,
+      );
+      final previousIncluded = metadata['previous_include_in_net_worth'] is bool
+          ? metadata['previous_include_in_net_worth'] as bool
+          : true;
+      final saleLinks = await txn.query(
+        'asset_transaction_links',
+        where: 'asset_id = ? AND link_type = ?',
+        whereArgs: [
+          id,
+          AssetTransactionLinkType.saleAccountMovement.storageKey
+        ],
+        orderBy: 'created_ms DESC, id DESC',
+        limit: 1,
+      );
+      if (saleLinks.isNotEmpty) {
+        final transactionId = saleLinks.first['transaction_id'] as int;
+        await txn.delete('asset_transaction_links',
+            where: 'id = ?', whereArgs: [saleLinks.first['id']]);
+        await txn.delete('transactions',
+            where: 'id = ? OR refund_of = ?',
+            whereArgs: [transactionId, transactionId]);
+      }
+      await txn.update(
+        'physical_assets',
+        {
+          'status': restoredStatus.storageKey,
+          'economic_status': restoredEconomic.storageKey,
+          'usage_status': restoredUsage.storageKey,
+          'visibility_status': restoredVisibility.storageKey,
+          'inclusion_quality': restoredQuality.storageKey,
+          'current_value': previousValue.toString(),
+          'include_in_net_worth': previousIncluded ? 1 : 0,
+          'ended_ms': int.tryParse(
+            metadata['previous_ended_ms']?.toString() ?? '',
+          ),
+          'updated_ms': DateTime.now().millisecondsSinceEpoch,
+        },
+        where: 'id = ?',
+        whereArgs: [id],
+      );
+      await _insertAssetValuation(
+        txn,
+        assetId: id,
+        value: previousValue,
+        source: AssetValueSource.manual,
+        valuedAt: DateTime.now(),
+        note: '撤销出售，恢复出售前价值',
+      );
+      await _insertAssetEvent(
+        txn,
+        assetId: id,
+        type: AssetEventType.assetSaleUndone,
+        occurredAt: DateTime.now(),
+        value: previousValue,
+        note: '撤销出售',
+      );
+    });
+    await _loadTransactions();
+    await _loadPhysicalAssetData();
+    notifyListeners();
+  }
+
+  Future<void> unlinkPhysicalAssetTransaction({
+    required int assetId,
+    required int transactionId,
+  }) async {
+    await _db!.transaction((txn) async {
+      final links = await txn.query(
+        'asset_transaction_links',
+        where: 'asset_id = ? AND transaction_id = ?',
+        whereArgs: [assetId, transactionId],
+        limit: 1,
+      );
+      if (links.isEmpty) throw StateError('资产账单关联不存在');
+      final type = AssetTransactionLinkTypeX.fromStorage(
+        links.first['link_type'] as String?,
+      );
+      if (type == AssetTransactionLinkType.saleAccountMovement) {
+        throw StateError('出售流水必须通过撤销出售解除');
+      }
+      if (type.isAdditionalCost) {
+        await txn.delete(
+          'asset_transaction_links',
+          where: 'id = ?',
+          whereArgs: [links.first['id']],
+        );
+        await _insertAssetEvent(
+          txn,
+          assetId: assetId,
+          type: AssetEventType.assetCostUnlinked,
+          occurredAt: DateTime.now(),
+          note: '解除${type.label} · 交易 #$transactionId',
+          metadata: {
+            'transaction_id': transactionId,
+            'link_type': type.storageKey,
+          },
+        );
+        return;
+      }
+      final assetRows = await txn.query(
+        'physical_assets',
+        columns: ['economic_status'],
+        where: 'id = ? AND is_deleted = 0',
+        whereArgs: [assetId],
+        limit: 1,
+      );
+      if (assetRows.isEmpty) throw StateError('物品不存在');
+      if (assetRows.first['economic_status'] ==
+          PhysicalAssetEconomicStatus.returned.storageKey) {
+        throw StateError('已确认退货的物品请先撤销退货，再解除账单关联');
+      }
+      final link = links.first;
+      final preservedNetCents = (link['allocated_gross_cents'] as int? ?? 0) -
+          (link['allocated_refund_cents'] as int? ?? 0);
+      await txn.update(
+        'asset_refund_allocations',
+        {
+          'status': 'reversed',
+          'updated_ms': DateTime.now().millisecondsSinceEpoch,
+        },
+        where: "asset_transaction_link_id = ? AND status = 'active'",
+        whereArgs: [link['id']],
+      );
+      await txn.delete('asset_transaction_links',
+          where: 'id = ?', whereArgs: [link['id']]);
+      await _refreshOrderAllocationQuality(txn, transactionId);
+      final remainingLinks = await txn.query(
+        'asset_transaction_links',
+        columns: ['id'],
+        where:
+            "asset_object_type = 'physical' AND asset_id = ? AND link_type IN ('source_transaction', 'purchase_transaction')",
+        whereArgs: [assetId],
+      );
+      if (remainingLinks.isEmpty) {
+        await txn.update(
+          'physical_assets',
+          {
+            'source_type':
+                PhysicalAssetSourceType.historicalExisting.storageKey,
+            'purchase_price':
+                budgetDecimalFromCents(preservedNetCents).toString(),
+            'acquisition_cost_source':
+                AssetAcquisitionCostSource.manual.storageKey,
+            'updated_ms': DateTime.now().millisecondsSinceEpoch,
+          },
+          where: 'id = ?',
+          whereArgs: [assetId],
+        );
+      } else {
+        await _syncAssetPurchasePriceCache(txn, [assetId]);
+      }
+      await _insertAssetEvent(
+        txn,
+        assetId: assetId,
+        type: AssetEventType.assetTransactionUnlinked,
+        occurredAt: DateTime.now(),
+        note: '解除交易 #$transactionId 的关联',
+      );
+    });
+    await _loadPhysicalAssetData();
+    notifyListeners();
+  }
+
+  Future<void> setPhysicalAssetUsageTracking(
+    int assetId, {
+    required bool enabled,
+  }) async {
+    final asset = physicalAssetDetailById(assetId);
+    if (asset == null || asset.isDeleted) throw StateError('物品不存在');
+    if (asset.usageTrackingEnabled == enabled) return;
+    final now = DateTime.now();
+    await _db!.transaction((txn) async {
+      await txn.update(
+        'physical_assets',
+        {
+          'usage_tracking_enabled': enabled ? 1 : 0,
+          'updated_ms': now.millisecondsSinceEpoch,
+        },
+        where: 'id = ?',
+        whereArgs: [assetId],
+      );
+      await _insertAssetEvent(
+        txn,
+        assetId: assetId,
+        type: enabled
+            ? AssetEventType.assetUsageTrackingEnabled
+            : AssetEventType.assetUsageTrackingDisabled,
+        occurredAt: now,
+      );
+    });
+    await _loadPhysicalAssetData();
+    notifyListeners();
+  }
+
+  Future<int> recordPhysicalAssetUsage(
+    int assetId, {
+    int count = 1,
+    DateTime? occurredAt,
+    String note = '',
+  }) async {
+    final asset = physicalAssetDetailById(assetId);
+    if (asset == null || asset.isDeleted) throw StateError('物品不存在');
+    if (!asset.usageTrackingEnabled) {
+      throw StateError('请先开启使用次数');
+    }
+    if (!asset.isOwned) throw StateError('已结束持有的物品不能再记录使用');
+    if (count <= 0) throw ArgumentError('使用次数必须大于 0');
+    final now = DateTime.now();
+    final effectiveAt = occurredAt ?? now;
+    final id = await _db!.insert('asset_usage_events', {
+      'uuid': _newUuid(),
+      'asset_id': assetId,
+      'count_delta': count,
+      'reversal_of': null,
+      'occurred_ms': effectiveAt.millisecondsSinceEpoch,
+      'note': note.trim(),
+      'created_ms': now.millisecondsSinceEpoch,
+      'updated_ms': now.millisecondsSinceEpoch,
+    });
+    await _loadAssetUsageEvents();
+    notifyListeners();
+    return id;
+  }
+
+  Future<void> undoLatestPhysicalAssetUsage(int assetId) async {
+    final asset = physicalAssetDetailById(assetId);
+    if (asset == null || asset.isDeleted) throw StateError('物品不存在');
+    final now = DateTime.now();
+    await _db!.transaction((txn) async {
+      final targets = await txn.rawQuery('''
+        SELECT original.id
+        FROM asset_usage_events original
+        WHERE original.asset_id = ?
+          AND original.reversal_of IS NULL
+          AND original.count_delta > 0
+          AND NOT EXISTS (
+            SELECT 1
+            FROM asset_usage_events reversal
+            WHERE reversal.reversal_of = original.id
+          )
+        ORDER BY original.occurred_ms DESC, original.id DESC
+        LIMIT 1
+      ''', [assetId]);
+      if (targets.isEmpty) throw StateError('没有可撤销的使用记录');
+      final targetId = targets.single['id'] as int;
+      await txn.insert(
+        'asset_usage_events',
+        {
+          'uuid': _newUuid(),
+          'asset_id': assetId,
+          'count_delta': 0,
+          'reversal_of': targetId,
+          'occurred_ms': now.millisecondsSinceEpoch,
+          'note': '撤销使用记录 #$targetId',
+          'created_ms': now.millisecondsSinceEpoch,
+          'updated_ms': now.millisecondsSinceEpoch,
+        },
+        conflictAlgorithm: ConflictAlgorithm.abort,
+      );
+    });
+    await _loadAssetUsageEvents();
+    notifyListeners();
+  }
+
+  Future<void> setPhysicalAssetSavingsGoal(
+    int assetId,
+    int? savingsGoalId,
+  ) async {
+    final asset = physicalAssetDetailById(assetId);
+    if (asset == null || asset.isDeleted) throw StateError('物品不存在');
+    if (savingsGoalId != null && savingsGoalById(savingsGoalId) == null) {
+      throw StateError('存钱目标不存在');
+    }
+    if (asset.savingsGoalId == savingsGoalId) return;
+    final now = DateTime.now();
+    await _db!.transaction((txn) async {
+      await txn.update(
+        'physical_assets',
+        {
+          'savings_goal_id': savingsGoalId,
+          'updated_ms': now.millisecondsSinceEpoch,
+        },
+        where: 'id = ?',
+        whereArgs: [assetId],
+      );
+      await _insertAssetEvent(
+        txn,
+        assetId: assetId,
+        type: savingsGoalId == null
+            ? AssetEventType.assetSavingsGoalUnlinked
+            : AssetEventType.assetSavingsGoalLinked,
+        occurredAt: now,
+        note: savingsGoalId == null
+            ? '解除存钱目标'
+            : '关联存钱目标：${savingsGoalById(savingsGoalId)?.name ?? ''}',
+        metadata: {
+          'previous_savings_goal_id': asset.savingsGoalId,
+          'savings_goal_id': savingsGoalId,
+        },
+      );
+    });
+    await _loadPhysicalAssetData();
+    notifyListeners();
+  }
+
+  Future<void> setPhysicalAssetStatus({
+    required int id,
+    required PhysicalAssetStatus status,
+    DateTime? occurredAt,
+    String note = '',
+    bool? includeInNetWorth,
+  }) async {
+    if (status == PhysicalAssetStatus.sold) {
+      throw StateError('出售资产必须使用出售流程。');
+    }
+    final asset = _allPhysicalAssets.where((item) => item.id == id).firstOrNull;
+    if (asset == null) throw StateError('资产不存在');
+    if (status == PhysicalAssetStatus.archived) {
+      await archivePhysicalAsset(id, note: note);
+      return;
+    }
+    final at = occurredAt ?? DateTime.now();
+    if (!asset.economicStatus.ownsValue) {
+      throw StateError('终止状态的资产不能直接改状态。');
+    }
+    final usageChange = status == PhysicalAssetStatus.active ||
+        status == PhysicalAssetStatus.idle;
+    final nextUsage = usageChange
+        ? status == PhysicalAssetStatus.idle
+            ? PhysicalAssetUsageStatus.idle
+            : PhysicalAssetUsageStatus.active
+        : asset.usageStatus;
+    final nextEconomic = switch (status) {
+      PhysicalAssetStatus.disposed => PhysicalAssetEconomicStatus.scrapped,
+      PhysicalAssetStatus.lost => PhysicalAssetEconomicStatus.lost,
+      PhysicalAssetStatus.gifted => PhysicalAssetEconomicStatus.gifted,
+      _ => asset.economicStatus,
+    };
+    final eventType = switch (status) {
+      PhysicalAssetStatus.disposed => AssetEventType.assetDisposed,
+      PhysicalAssetStatus.lost => AssetEventType.assetLost,
+      PhysicalAssetStatus.gifted => AssetEventType.assetGifted,
+      _ => AssetEventType.assetEdited,
+    };
+    final economicTermination = !nextEconomic.ownsValue;
+    if (!economicTermination &&
+        includeInNetWorth != null &&
+        includeInNetWorth != asset.includeInNetWorth) {
+      await _bumpNetWorthScopeVersion();
+    }
+    final legacyStatus = _legacyPhysicalStatusFor(
+      economicStatus: nextEconomic,
+      usageStatus: nextUsage,
+      visibilityStatus: asset.visibilityStatus,
+    );
+    await _db!.transaction((txn) async {
+      await txn.update(
+        'physical_assets',
+        {
+          'status': legacyStatus.storageKey,
+          'economic_status': nextEconomic.storageKey,
+          'usage_status': nextUsage.storageKey,
+          if (economicTermination) 'current_value': '0',
+          'include_in_net_worth': economicTermination
+              ? 0
+              : (includeInNetWorth ?? asset.includeInNetWorth)
+                  ? 1
+                  : 0,
+          if (includeInNetWorth != null)
+            'inclusion_quality': AssetInclusionQuality.confirmed.storageKey,
+          'ended_ms': economicTermination ? at.millisecondsSinceEpoch : null,
+          'updated_ms': DateTime.now().millisecondsSinceEpoch,
+        },
+        where: 'id = ?',
+        whereArgs: [id],
+      );
+      if (economicTermination) {
+        await _insertAssetValuation(
+          txn,
+          assetId: id,
+          value: Decimal.zero,
+          source: AssetValueSource.statusZero,
+          valuedAt: at,
+          note: note.trim(),
+        );
+      }
+      await _insertAssetEvent(
+        txn,
+        assetId: id,
+        type: eventType,
+        occurredAt: at,
+        value: economicTermination ? Decimal.zero : null,
+        note: note.trim(),
+        metadata: {
+          'previous_economic_status': asset.economicStatus.storageKey,
+          'previous_usage_status': asset.usageStatus.storageKey,
+          'previous_visibility_status': asset.visibilityStatus.storageKey,
+          'previous_inclusion_quality': asset.inclusionQuality.storageKey,
+          'previous_include_in_net_worth': asset.includeInNetWorth,
+          'previous_value': asset.currentValue.toString(),
+          'previous_ended_ms': asset.endedMs,
+        },
+      );
+    });
+    await _loadPhysicalAssetData();
+    notifyListeners();
+  }
+
+  Future<void> undoPhysicalAssetTerminalStatus(int id) async {
+    final asset = physicalAssetDetailById(id);
+    if (asset == null || asset.isDeleted) throw StateError('物品不存在');
+    final terminalType = _terminalEventTypeFor(asset.economicStatus);
+    if (terminalType == null) {
+      throw StateError('当前状态不能使用这个撤销操作');
+    }
+    final now = DateTime.now();
+    await _db!.transaction((txn) async {
+      final currentRows = await txn.query(
+        'physical_assets',
+        where: 'id = ?',
+        whereArgs: [id],
+        limit: 1,
+      );
+      if (currentRows.isEmpty) throw StateError('物品不存在');
+      final current = PhysicalAssetEntity.fromMap(currentRows.single);
+      if (current.isDeleted) throw StateError('物品不存在');
+      final currentTerminalType = _terminalEventTypeFor(current.economicStatus);
+      if (currentTerminalType == null) {
+        throw StateError('当前状态不能使用这个撤销操作');
+      }
+      final eventRows = await txn.query(
+        'asset_events',
+        where: "asset_type = 'physical' AND asset_id = ?",
+        whereArgs: [id],
+      );
+      final event = _latestUnreversedTerminalEvent(
+        eventRows.map(AssetEventEntity.fromMap),
+        currentTerminalType,
+      );
+      if (event == null) throw StateError('缺少可撤销的结束持有事件');
+      final metadata = _assetEventMetadata(event.metadata);
+      if (!_hasPhysicalTerminalUndoEvidence(metadata)) {
+        throw StateError('这条历史结束记录缺少结束前价值或计入口径证据，不能自动撤销');
+      }
+      final restoredEconomic = PhysicalAssetEconomicStatusX.fromStorage(
+        metadata['previous_economic_status']?.toString(),
+      );
+      if (!restoredEconomic.ownsValue) {
+        throw StateError('结束持有前的经济状态无法恢复');
+      }
+      final restoredUsage = PhysicalAssetUsageStatusX.fromStorage(
+        metadata['previous_usage_status']?.toString(),
+      );
+      final restoredQuality = AssetInclusionQualityX.fromStorage(
+        metadata['previous_inclusion_quality']?.toString(),
+      );
+      final restoredValue = Decimal.parse(
+        metadata['previous_value'].toString(),
+      );
+      final restoredIncluded =
+          metadata['previous_include_in_net_worth'] as bool;
+      await txn.update(
+        'physical_assets',
+        {
+          'status': _legacyPhysicalStatusFor(
+            economicStatus: restoredEconomic,
+            usageStatus: restoredUsage,
+            visibilityStatus: current.visibilityStatus,
+          ).storageKey,
+          'economic_status': restoredEconomic.storageKey,
+          'usage_status': restoredUsage.storageKey,
+          'inclusion_quality': restoredQuality.storageKey,
+          'current_value': restoredValue.toString(),
+          'include_in_net_worth': restoredIncluded ? 1 : 0,
+          'ended_ms': int.tryParse(
+            metadata['previous_ended_ms']?.toString() ?? '',
+          ),
+          'updated_ms': now.millisecondsSinceEpoch,
+        },
+        where: 'id = ?',
+        whereArgs: [id],
+      );
+      await _insertAssetValuation(
+        txn,
+        assetId: id,
+        value: restoredValue,
+        source: AssetValueSource.manual,
+        valuedAt: now,
+        note: '撤销${currentTerminalType.label}，恢复结束前价值',
+      );
+      await _insertAssetEvent(
+        txn,
+        assetId: id,
+        type: AssetEventType.assetTerminalUndone,
+        occurredAt: now,
+        value: restoredValue,
+        note: '撤销${currentTerminalType.label}',
+        metadata: {
+          'reversal_of_event_id': event.id,
+          'reversal_of_event_uuid': event.uuid,
+          'reversal_of_type': currentTerminalType.storageKey,
+        },
+      );
+    });
+    await _loadPhysicalAssetData();
+    notifyListeners();
+  }
+
+  Future<void> archivePhysicalAsset(int id, {String note = ''}) async {
+    final asset = physicalAssetDetailById(id);
+    if (asset == null || asset.isDeleted) throw StateError('资产不存在');
+    if (asset.isArchived) return;
+    final now = DateTime.now();
+    await _db!.transaction((txn) async {
+      await txn.update(
+        'physical_assets',
+        {
+          'status': PhysicalAssetStatus.archived.storageKey,
+          'visibility_status': AssetVisibilityStatus.archived.storageKey,
+          'archived_ms': now.millisecondsSinceEpoch,
+          'updated_ms': now.millisecondsSinceEpoch,
+        },
+        where: 'id = ?',
+        whereArgs: [id],
+      );
+      await _insertAssetEvent(
+        txn,
+        assetId: id,
+        type: AssetEventType.assetArchived,
+        occurredAt: now,
+        note: note.trim(),
+      );
+    });
+    await _loadPhysicalAssetData();
+    notifyListeners();
+  }
+
+  Future<void> restorePhysicalAsset(
+    int id, {
+    bool includeInNetWorth = true,
+    PhysicalAssetStatus status = PhysicalAssetStatus.active,
+    String note = '',
+  }) async {
+    final existing =
+        _allPhysicalAssets.where((asset) => asset.id == id).firstOrNull;
+    if (existing == null) throw StateError('资产不存在');
+    if (!existing.isArchived) {
+      throw StateError('只有已归档资产可以恢复');
+    }
+    final restoredStatus = _legacyPhysicalStatusFor(
+      economicStatus: existing.economicStatus,
+      usageStatus: existing.usageStatus,
+      visibilityStatus: AssetVisibilityStatus.active,
+    );
+    await _db!.transaction((txn) async {
+      await txn.update(
+        'physical_assets',
+        {
+          'status': restoredStatus.storageKey,
+          'visibility_status': AssetVisibilityStatus.active.storageKey,
+          'archived_ms': null,
+          'updated_ms': DateTime.now().millisecondsSinceEpoch,
+        },
+        where: 'id = ?',
+        whereArgs: [id],
+      );
+      await _insertAssetEvent(
+        txn,
+        assetId: id,
+        type: AssetEventType.assetUnarchived,
+        occurredAt: DateTime.now(),
+        note: note.trim(),
+      );
+    });
+    await _loadPhysicalAssetData();
+    notifyListeners();
+  }
+
+  Future<void> confirmPhysicalAssetState(
+    int id, {
+    required PhysicalAssetUsageStatus usageStatus,
+    required bool includeInNetWorth,
+  }) async {
+    final asset = physicalAssetDetailById(id);
+    if (asset == null || asset.isDeleted) throw StateError('资产不存在');
+    if (asset.inclusionQuality != AssetInclusionQuality.needsReview) {
+      throw StateError('这件物品没有待确认的迁移状态');
+    }
+    if (!asset.economicStatus.ownsValue) {
+      throw StateError('已结束物品不能通过迁移确认恢复为持有中');
+    }
+    if (asset.includeInNetWorth != includeInNetWorth) {
+      await _bumpNetWorthScopeVersion();
+    }
+    final now = DateTime.now();
+    await _db!.transaction((txn) async {
+      await txn.update(
+        'physical_assets',
+        {
+          'status': _legacyPhysicalStatusFor(
+            economicStatus: asset.economicStatus,
+            usageStatus: usageStatus,
+            visibilityStatus: asset.visibilityStatus,
+          ).storageKey,
+          'usage_status': usageStatus.storageKey,
+          'include_in_net_worth': includeInNetWorth ? 1 : 0,
+          'inclusion_quality': AssetInclusionQuality.confirmed.storageKey,
+          'updated_ms': now.millisecondsSinceEpoch,
+        },
+        where: 'id = ?',
+        whereArgs: [id],
+      );
+      await _insertAssetEvent(
+        txn,
+        assetId: id,
+        type: AssetEventType.assetEdited,
+        occurredAt: now,
+        note: '确认迁移状态与净资产口径',
+        metadata: {
+          'usage_status': usageStatus.storageKey,
+          'include_in_net_worth': includeInNetWorth,
+        },
+      );
+    });
+    await _loadPhysicalAssetData();
+    notifyListeners();
+  }
+
+  Future<void> softDeletePhysicalAsset(int id) async {
+    final asset = physicalAssetDetailById(id);
+    if (asset?.includeInNetWorth ?? false) {
+      await _bumpNetWorthScopeVersion();
+    }
+    await _db!.update(
+      'physical_assets',
+      {
+        'is_deleted': 1,
+        'include_in_net_worth': 0,
+        'updated_ms': DateTime.now().millisecondsSinceEpoch,
+      },
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+    await _loadPhysicalAssetData();
+    notifyListeners();
+  }
+
+  // ---------------------------------------------------------------------------
+  // 权益资产 CRUD / 收回
+  // ---------------------------------------------------------------------------
+
+  ReceivableEconomicStatus _receivableEconomicStatusForRemaining(
+    Decimal remaining,
+    Decimal original,
+  ) =>
+      remaining <= Decimal.zero
+          ? ReceivableEconomicStatus.recovered
+          : remaining < original
+              ? ReceivableEconomicStatus.partialRecovered
+              : ReceivableEconomicStatus.active;
+
+  Future<int> addReceivableAsset({
+    required String name,
+    ReceivableAssetType type = ReceivableAssetType.other,
+    required Decimal originalAmount,
+    Decimal? remainingAmount,
+    String currencyCode = 'CNY',
+    String counterparty = '',
+    DateTime? dueDate,
+    bool includeInNetWorth = true,
+    ReceivableAssetStatus status = ReceivableAssetStatus.active,
+    String note = '',
+    DateTime? occurredAt,
+  }) async {
+    if (name.trim().isEmpty) throw ArgumentError('权益名称不能为空');
+    final normalizedCurrency = currencyCode.trim().toUpperCase();
+    if (normalizedCurrency != 'CNY') {
+      throw UnsupportedError('当前版本仅支持新增人民币权益资产。');
+    }
+    if (originalAmount < Decimal.zero) {
+      throw ArgumentError('权益资产原始金额不能为负');
+    }
+    final remaining = remainingAmount ?? originalAmount;
+    if (remaining < Decimal.zero || remaining > originalAmount) {
+      throw ArgumentError('权益资产剩余金额必须在 0 到原始金额之间');
+    }
+    final normalizedStatus = remaining <= Decimal.zero
+        ? ReceivableAssetStatus.recovered
+        : status == ReceivableAssetStatus.recovered
+            ? ReceivableAssetStatus.active
+            : status;
+    if (normalizedStatus == ReceivableAssetStatus.lost ||
+        normalizedStatus == ReceivableAssetStatus.archived) {
+      throw ArgumentError('新增权益资产不能从损失或归档状态开始');
+    }
+    final now = DateTime.now();
+    final createdMs = now.millisecondsSinceEpoch;
+    final economicStatus = _receivableEconomicStatusForRemaining(
+      remaining,
+      originalAmount,
+    );
+    const visibilityStatus = AssetVisibilityStatus.active;
+    late int assetId;
+    await _db!.transaction((txn) async {
+      assetId = await txn.insert('receivable_assets', {
+        'uuid': _newUuid(),
+        'book_id': _currentBookId,
+        'name': name.trim(),
+        'receivable_type': type.storageKey,
+        'status': _legacyReceivableStatusFor(
+          economicStatus: economicStatus,
+          visibilityStatus: visibilityStatus,
+        ).storageKey,
+        'economic_status': economicStatus.storageKey,
+        'visibility_status': visibilityStatus.storageKey,
+        'inclusion_quality': AssetInclusionQuality.confirmed.storageKey,
+        'original_amount': originalAmount.toString(),
+        'remaining_amount': remaining.toString(),
+        'currency_code': normalizedCurrency,
+        'counterparty': counterparty.trim(),
+        'due_date_ms': dueDate?.millisecondsSinceEpoch,
+        'include_in_net_worth': includeInNetWorth &&
+                economicStatus.canCountInNetWorth &&
+                remaining > Decimal.zero
+            ? 1
+            : 0,
+        'note': note.trim(),
+        'is_deleted': 0,
+        'ended_ms': economicStatus == ReceivableEconomicStatus.recovered
+            ? (occurredAt ?? now).millisecondsSinceEpoch
+            : null,
+        'archived_ms': null,
+        'created_ms': createdMs,
+        'updated_ms': createdMs,
+      });
+      await _insertAssetEvent(
+        txn,
+        assetId: assetId,
+        assetType: AssetObjectType.receivable,
+        type: AssetEventType.receivableCreated,
+        occurredAt: occurredAt ?? now,
+        value: remaining,
+        note: note.trim(),
+        metadata: {'receivable_type': type.storageKey},
+      );
+    });
+    await _loadPhysicalAssetData();
+    notifyListeners();
+    return assetId;
+  }
+
+  Future<void> updateReceivableAsset({
+    required int id,
+    required String name,
+    required ReceivableAssetType type,
+    required Decimal originalAmount,
+    required Decimal remainingAmount,
+    required ReceivableAssetStatus status,
+    String currencyCode = 'CNY',
+    String counterparty = '',
+    DateTime? dueDate,
+    required bool includeInNetWorth,
+    String note = '',
+  }) async {
+    final existing =
+        _allReceivableAssets.where((asset) => asset.id == id).firstOrNull;
+    if (existing == null) throw StateError('权益资产不存在');
+    if (name.trim().isEmpty) throw ArgumentError('权益名称不能为空');
+    if (originalAmount < Decimal.zero ||
+        remainingAmount < Decimal.zero ||
+        remainingAmount > originalAmount) {
+      throw ArgumentError('权益资产金额不合法');
+    }
+    if (currencyCode.trim().toUpperCase() != existing.currencyCode) {
+      throw UnsupportedError('当前版本不能转换权益资产币种。');
+    }
+    if (remainingAmount != existing.remainingAmount ||
+        status != existing.status) {
+      throw StateError('剩余金额和状态必须通过收回、损失、归档或恢复流程修改。');
+    }
+    if (_receivableRecoveries
+            .any((recovery) => recovery.receivableAssetId == id) &&
+        originalAmount != existing.originalAmount) {
+      throw StateError('已有收回记录后不能修改原始金额。');
+    }
+    if (existing.includeInNetWorth != includeInNetWorth) {
+      await _bumpNetWorthScopeVersion();
+    }
+    final normalizedStatus = existing.status;
+    await _db!.transaction((txn) async {
+      await txn.update(
+        'receivable_assets',
+        {
+          'name': name.trim(),
+          'receivable_type': type.storageKey,
+          'status': normalizedStatus.storageKey,
+          'economic_status': existing.economicStatus.storageKey,
+          'visibility_status': existing.visibilityStatus.storageKey,
+          'original_amount': originalAmount.toString(),
+          'remaining_amount': remainingAmount.toString(),
+          'currency_code': currencyCode,
+          'counterparty': counterparty.trim(),
+          'due_date_ms': (dueDate ?? existing.dueDate)?.millisecondsSinceEpoch,
+          'include_in_net_worth': includeInNetWorth &&
+                  existing.economicStatus.canCountInNetWorth &&
+                  remainingAmount > Decimal.zero
+              ? 1
+              : 0,
+          'inclusion_quality': existing.inclusionQuality.storageKey,
+          'note': note.trim(),
+          'updated_ms': DateTime.now().millisecondsSinceEpoch,
+        },
+        where: 'id = ?',
+        whereArgs: [id],
+      );
+      await _insertAssetEvent(
+        txn,
+        assetId: id,
+        assetType: AssetObjectType.receivable,
+        type: AssetEventType.receivableEdited,
+        occurredAt: DateTime.now(),
+        value: remainingAmount,
+        note: note.trim(),
+      );
+    });
+    await _loadPhysicalAssetData();
+    notifyListeners();
+  }
+
+  Future<void> recoverReceivableAsset({
+    required int id,
+    required Decimal amount,
+    int? targetAccountId,
+    DateTime? recoveredAt,
+    String note = '',
+  }) async {
+    if (amount <= Decimal.zero) {
+      throw ArgumentError('收回金额必须大于 0');
+    }
+    final at = recoveredAt ?? DateTime.now();
+    final timePrecision = recoveredAt == null
+        ? TransactionTimePrecision.exact
+        : TransactionTimePrecision.dateOnly;
+    await _db!.transaction((txn) async {
+      final rows = await txn.query(
+        'receivable_assets',
+        where: 'id = ? AND is_deleted = 0',
+        whereArgs: [id],
+        limit: 1,
+      );
+      if (rows.isEmpty) throw StateError('权益资产不存在');
+      final asset = ReceivableAssetEntity.fromMap(rows.first);
+      if (!asset.economicStatus.canCountInNetWorth ||
+          asset.remainingAmount <= Decimal.zero) {
+        throw StateError('当前权益状态不能收回');
+      }
+      if (amount > asset.remainingAmount) {
+        throw ArgumentError('收回金额不能超过剩余金额');
+      }
+      if (asset.currencyCode != 'CNY') {
+        throw UnsupportedError('当前版本暂不支持外币权益收回入账。');
+      }
+      if (targetAccountId != null &&
+          !_accounts.any((account) =>
+              account.id == targetAccountId &&
+              !account.isDeleted &&
+              account.currencyCode == 'CNY')) {
+        throw ArgumentError('到账账户不存在或币种不受支持');
+      }
+      final newRemaining = asset.remainingAmount - amount;
+      final newEconomicStatus = _receivableEconomicStatusForRemaining(
+        newRemaining,
+        asset.originalAmount,
+      );
+      int? transactionId;
+      if (targetAccountId != null) {
+        transactionId = await txn.insert('transactions', {
+          'book_id': asset.bookId ?? _currentBookId,
+          'kind': TransactionKind.income.toJson(),
+          'amount': amount.toString(),
+          'currency_code': asset.currencyCode,
+          'category_id': null,
+          'account_id': targetAccountId,
+          'to_account_id': null,
+          'note': note.trim().isEmpty ? '权益收回：${asset.name}' : note.trim(),
+          'date_ms': at.millisecondsSinceEpoch,
+          'time_precision': timePrecision.storageKey,
+          'tags': '',
+          'reimbursable': 0,
+          'image_path': '',
+          'excluded': 1,
+          ..._settlementFields(
+            settledAt: at,
+            settlementAccountId: targetAccountId,
+            eventType: TransactionEventType.receivableRecovery,
+          ),
+          ..._syncStampNew(),
+        });
+      }
+      await txn.update(
+        'receivable_assets',
+        {
+          'remaining_amount': newRemaining.toString(),
+          'status': _legacyReceivableStatusFor(
+            economicStatus: newEconomicStatus,
+            visibilityStatus: asset.visibilityStatus,
+          ).storageKey,
+          'economic_status': newEconomicStatus.storageKey,
+          'include_in_net_worth':
+              newRemaining > Decimal.zero && asset.includeInNetWorth ? 1 : 0,
+          'ended_ms':
+              newRemaining <= Decimal.zero ? at.millisecondsSinceEpoch : null,
+          'updated_ms': DateTime.now().millisecondsSinceEpoch,
+        },
+        where: 'id = ?',
+        whereArgs: [id],
+      );
+      final eventId = await _insertAssetEvent(
+        txn,
+        assetId: id,
+        assetType: AssetObjectType.receivable,
+        type: AssetEventType.receivableRecovered,
+        occurredAt: at,
+        value: amount,
+        note: note.trim(),
+        metadata: {
+          'previous_remaining': asset.remainingAmount.toString(),
+          'previous_status': asset.status.storageKey,
+          'previous_economic_status': asset.economicStatus.storageKey,
+          'previous_visibility_status': asset.visibilityStatus.storageKey,
+          'previous_inclusion_quality': asset.inclusionQuality.storageKey,
+          'previous_ended_ms': asset.endedMs,
+          'previous_include_in_net_worth': asset.includeInNetWorth,
+          if (targetAccountId != null) 'target_account_id': targetAccountId,
+          if (transactionId != null) 'transaction_id': transactionId,
+        },
+      );
+      await txn.insert('receivable_recoveries', {
+        'uuid': _newUuid(),
+        'receivable_asset_id': id,
+        'amount': amount.toString(),
+        'recovered_ms': at.millisecondsSinceEpoch,
+        'target_account_id': targetAccountId,
+        'event_id': eventId,
+        'transaction_id': transactionId,
+        'note': note.trim(),
+        'created_ms': DateTime.now().millisecondsSinceEpoch,
+      });
+    });
+    await _loadTransactions();
+    await _loadPhysicalAssetData();
+    notifyListeners();
+  }
+
+  Future<void> undoReceivableRecovery(int recoveryId) async {
+    await _db!.transaction((txn) async {
+      final recoveryRows = await txn.query(
+        'receivable_recoveries',
+        where: 'id = ?',
+        whereArgs: [recoveryId],
+        limit: 1,
+      );
+      if (recoveryRows.isEmpty) throw StateError('收回记录不存在');
+      final recovery = ReceivableRecoveryEntity.fromMap(recoveryRows.first);
+      final latestRows = await txn.query(
+        'receivable_recoveries',
+        columns: ['id'],
+        where: 'receivable_asset_id = ?',
+        whereArgs: [recovery.receivableAssetId],
+        orderBy: 'recovered_ms DESC, id DESC',
+        limit: 1,
+      );
+      if (latestRows.isEmpty || latestRows.first['id'] != recoveryId) {
+        throw StateError('只能从最近一次收回开始撤销');
+      }
+      final assetRows = await txn.query(
+        'receivable_assets',
+        where: 'id = ? AND is_deleted = 0',
+        whereArgs: [recovery.receivableAssetId],
+        limit: 1,
+      );
+      if (assetRows.isEmpty) throw StateError('权益资产不存在');
+      final asset = ReceivableAssetEntity.fromMap(assetRows.first);
+      final restoredRemaining = asset.remainingAmount + recovery.amount;
+      if (restoredRemaining > asset.originalAmount) {
+        throw StateError('撤销后金额会超过原始金额');
+      }
+      Map<String, dynamic> metadata = const {};
+      if (recovery.eventId != null) {
+        final eventRows = await txn.query(
+          'asset_events',
+          columns: ['metadata'],
+          where: 'id = ?',
+          whereArgs: [recovery.eventId],
+          limit: 1,
+        );
+        if (eventRows.isNotEmpty) {
+          metadata = _assetEventMetadata(
+            eventRows.first['metadata'] as String? ?? '',
+          );
+        }
+      }
+      final previousStatus = ReceivableAssetStatusX.fromStorage(
+        metadata['previous_status']?.toString(),
+      );
+      final restoredEconomic = metadata.containsKey('previous_economic_status')
+          ? ReceivableEconomicStatusX.fromStorage(
+              metadata['previous_economic_status']?.toString(),
+            )
+          : previousStatus.canCountInNetWorth
+              ? _receivableEconomicFromLegacyStatus(previousStatus)
+              : _receivableEconomicStatusForRemaining(
+                  restoredRemaining,
+                  asset.originalAmount,
+                );
+      final restoredVisibility =
+          metadata.containsKey('previous_visibility_status')
+              ? AssetVisibilityStatusX.fromStorage(
+                  metadata['previous_visibility_status']?.toString(),
+                )
+              : asset.visibilityStatus;
+      final restoredQuality = metadata.containsKey('previous_inclusion_quality')
+          ? AssetInclusionQualityX.fromStorage(
+              metadata['previous_inclusion_quality']?.toString(),
+            )
+          : asset.inclusionQuality;
+      final restoredStatus = _legacyReceivableStatusFor(
+        economicStatus: restoredEconomic,
+        visibilityStatus: restoredVisibility,
+      );
+      final previousIncluded = metadata['previous_include_in_net_worth'] is bool
+          ? metadata['previous_include_in_net_worth'] as bool
+          : true;
+      if (recovery.transactionId != null) {
+        await txn.delete(
+          'transactions',
+          where: 'id = ? OR refund_of = ?',
+          whereArgs: [recovery.transactionId, recovery.transactionId],
+        );
+      }
+      await txn.delete('receivable_recoveries',
+          where: 'id = ?', whereArgs: [recoveryId]);
+      await txn.update(
+        'receivable_assets',
+        {
+          'remaining_amount': restoredRemaining.toString(),
+          'status': restoredStatus.storageKey,
+          'economic_status': restoredEconomic.storageKey,
+          'visibility_status': restoredVisibility.storageKey,
+          'inclusion_quality': restoredQuality.storageKey,
+          'include_in_net_worth': previousIncluded ? 1 : 0,
+          'ended_ms': int.tryParse(
+            metadata['previous_ended_ms']?.toString() ?? '',
+          ),
+          'updated_ms': DateTime.now().millisecondsSinceEpoch,
+        },
+        where: 'id = ?',
+        whereArgs: [asset.id],
+      );
+      await _insertAssetEvent(
+        txn,
+        assetId: asset.id,
+        assetType: AssetObjectType.receivable,
+        type: AssetEventType.receivableRecoveryUndone,
+        occurredAt: DateTime.now(),
+        value: recovery.amount,
+        note: '撤销收回',
+      );
+    });
+    await _loadTransactions();
+    await _loadPhysicalAssetData();
+    notifyListeners();
+  }
+
+  Future<void> markReceivableAssetLost(int id, {String note = ''}) async {
+    final asset = receivableDetailById(id);
+    if (asset == null || asset.isDeleted) {
+      throw StateError('权益资产不存在');
+    }
+    if (!asset.economicStatus.canCountInNetWorth) {
+      throw StateError('当前权益状态不能标记损失');
+    }
+    final now = DateTime.now();
+    await _db!.transaction((txn) async {
+      await txn.update(
+        'receivable_assets',
+        {
+          'remaining_amount': '0',
+          'status': _legacyReceivableStatusFor(
+            economicStatus: ReceivableEconomicStatus.lost,
+            visibilityStatus: asset.visibilityStatus,
+          ).storageKey,
+          'economic_status': ReceivableEconomicStatus.lost.storageKey,
+          'include_in_net_worth': 0,
+          'ended_ms': now.millisecondsSinceEpoch,
+          'updated_ms': now.millisecondsSinceEpoch,
+        },
+        where: 'id = ?',
+        whereArgs: [id],
+      );
+      await _insertAssetEvent(
+        txn,
+        assetId: id,
+        assetType: AssetObjectType.receivable,
+        type: AssetEventType.receivableLost,
+        occurredAt: now,
+        value: Decimal.zero,
+        note: note.trim(),
+        metadata: {
+          'previous_economic_status': asset.economicStatus.storageKey,
+          'previous_remaining': asset.remainingAmount.toString(),
+          'previous_include_in_net_worth': asset.includeInNetWorth,
+          'previous_ended_ms': asset.endedMs,
+        },
+      );
+    });
+    await _loadPhysicalAssetData();
+    notifyListeners();
+  }
+
+  Future<void> archiveReceivableAsset(int id, {String note = ''}) async {
+    final asset = receivableDetailById(id);
+    if (asset == null || asset.isDeleted) {
+      throw StateError('权益资产不存在');
+    }
+    if (asset.isArchived) return;
+    final now = DateTime.now();
+    await _db!.transaction((txn) async {
+      await txn.update(
+        'receivable_assets',
+        {
+          'status': ReceivableAssetStatus.archived.storageKey,
+          'visibility_status': AssetVisibilityStatus.archived.storageKey,
+          'archived_ms': now.millisecondsSinceEpoch,
+          'updated_ms': now.millisecondsSinceEpoch,
+        },
+        where: 'id = ?',
+        whereArgs: [id],
+      );
+      await _insertAssetEvent(
+        txn,
+        assetId: id,
+        assetType: AssetObjectType.receivable,
+        type: AssetEventType.receivableArchived,
+        occurredAt: now,
+        note: note.trim(),
+      );
+    });
+    await _loadPhysicalAssetData();
+    notifyListeners();
+  }
+
+  Future<void> restoreReceivableAsset(
+    int id, {
+    bool includeInNetWorth = true,
+  }) async {
+    final asset =
+        _allReceivableAssets.where((item) => item.id == id).firstOrNull;
+    if (asset == null) throw StateError('权益资产不存在');
+    if (!asset.isArchived) {
+      throw StateError('只有已归档权益可以恢复');
+    }
+    final status = _legacyReceivableStatusFor(
+      economicStatus: asset.economicStatus,
+      visibilityStatus: AssetVisibilityStatus.active,
+    );
+    await _db!.transaction((txn) async {
+      await txn.update(
+        'receivable_assets',
+        {
+          'status': status.storageKey,
+          'visibility_status': AssetVisibilityStatus.active.storageKey,
+          'archived_ms': null,
+          'updated_ms': DateTime.now().millisecondsSinceEpoch,
+        },
+        where: 'id = ?',
+        whereArgs: [id],
+      );
+      await _insertAssetEvent(
+        txn,
+        assetId: id,
+        assetType: AssetObjectType.receivable,
+        type: AssetEventType.receivableUnarchived,
+        occurredAt: DateTime.now(),
+      );
+    });
+    await _loadPhysicalAssetData();
+    notifyListeners();
+  }
+
+  Future<void> confirmReceivableAssetState(
+    int id, {
+    required ReceivableEconomicStatus economicStatus,
+    required bool includeInNetWorth,
+  }) async {
+    final asset = receivableDetailById(id);
+    if (asset == null || asset.isDeleted) {
+      throw StateError('权益资产不存在');
+    }
+    if (asset.inclusionQuality != AssetInclusionQuality.needsReview) {
+      throw StateError('这项权益没有待确认的迁移状态');
+    }
+    final remaining = asset.remainingAmount;
+    switch (economicStatus) {
+      case ReceivableEconomicStatus.active:
+        if (remaining <= Decimal.zero) {
+          throw ArgumentError('剩余金额为 0 的权益不能确认为未收回');
+        }
+      case ReceivableEconomicStatus.partialRecovered:
+        if (remaining <= Decimal.zero || remaining >= asset.originalAmount) {
+          throw ArgumentError('部分收回状态与当前剩余金额不一致');
+        }
+      case ReceivableEconomicStatus.recovered || ReceivableEconomicStatus.lost:
+        if (remaining != Decimal.zero) {
+          throw ArgumentError('已收回或已损失权益的剩余金额必须为 0');
+        }
+      case ReceivableEconomicStatus.unknown:
+        break;
+    }
+    final now = DateTime.now();
+    final normalizedInclude = includeInNetWorth &&
+        economicStatus.canCountInNetWorth &&
+        remaining > Decimal.zero;
+    if (asset.includeInNetWorth != normalizedInclude) {
+      await _bumpNetWorthScopeVersion();
+    }
+    await _db!.transaction((txn) async {
+      await txn.update(
+        'receivable_assets',
+        {
+          'status': _legacyReceivableStatusFor(
+            economicStatus: economicStatus,
+            visibilityStatus: asset.visibilityStatus,
+          ).storageKey,
+          'economic_status': economicStatus.storageKey,
+          'include_in_net_worth': normalizedInclude ? 1 : 0,
+          'inclusion_quality': AssetInclusionQuality.confirmed.storageKey,
+          'updated_ms': now.millisecondsSinceEpoch,
+        },
+        where: 'id = ?',
+        whereArgs: [id],
+      );
+      await _insertAssetEvent(
+        txn,
+        assetId: id,
+        assetType: AssetObjectType.receivable,
+        type: AssetEventType.receivableEdited,
+        occurredAt: now,
+        value: remaining,
+        note: '确认迁移状态与净资产口径',
+        metadata: {
+          'economic_status': economicStatus.storageKey,
+          'include_in_net_worth': normalizedInclude,
+        },
+      );
+    });
+    await _loadPhysicalAssetData();
+    notifyListeners();
+  }
+
+  Future<void> softDeleteReceivableAsset(int id) async {
+    final asset = receivableDetailById(id);
+    if (asset?.includeInNetWorth ?? false) {
+      await _bumpNetWorthScopeVersion();
+    }
+    await _db!.update(
+      'receivable_assets',
+      {
+        'is_deleted': 1,
+        'include_in_net_worth': 0,
+        'updated_ms': DateTime.now().millisecondsSinceEpoch,
+      },
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+    await _loadPhysicalAssetData();
+    notifyListeners();
+  }
+
+  // ---------------------------------------------------------------------------
+  // P3 负债档案
+  // ---------------------------------------------------------------------------
+
+  Future<int> upsertLiabilityProfile({
+    required int accountId,
+    LiabilityProfileType type = LiabilityProfileType.other,
+    required Decimal originalAmount,
+    required Decimal currentPrincipal,
+    Decimal? interestRate,
+    int? repaymentDay,
+    int? repaymentAccountId,
+    DateTime? startDate,
+    DateTime? endDate,
+    LiabilityProfileStatus status = LiabilityProfileStatus.active,
+    String note = '',
+  }) async {
+    final rate = interestRate ?? Decimal.zero;
+    if (originalAmount < Decimal.zero ||
+        currentPrincipal < Decimal.zero ||
+        rate < Decimal.zero) {
+      throw ArgumentError('负债金额和利率不能为负');
+    }
+    if (repaymentDay != null && (repaymentDay < 1 || repaymentDay > 31)) {
+      throw ArgumentError('还款日必须在 1 到 31 之间');
+    }
+    final existing = liabilityProfileForAccount(accountId);
+    final nowMs = DateTime.now().millisecondsSinceEpoch;
+    final map = {
+      'account_id': accountId,
+      'liability_type': type.storageKey,
+      'original_amount': originalAmount.toString(),
+      'current_principal': currentPrincipal.toString(),
+      'interest_rate': rate.toString(),
+      'repayment_day': repaymentDay,
+      'repayment_account_id': repaymentAccountId,
+      'start_date_ms': startDate?.millisecondsSinceEpoch,
+      'end_date_ms': endDate?.millisecondsSinceEpoch,
+      'status': status.storageKey,
+      'note': note.trim(),
+      'updated_ms': nowMs,
+    };
+    late int id;
+    if (existing == null) {
+      id = await _db!.insert('liability_profiles', {
+        'uuid': _newUuid(),
+        ...map,
+        'created_ms': nowMs,
+      });
+    } else {
+      id = existing.id;
+      await _db!.update(
+        'liability_profiles',
+        map,
+        where: 'id = ?',
+        whereArgs: [id],
       );
     }
-    await _loadTransactions();
+    await _loadLiabilityProfiles();
+    await _refreshCurrentNetWorthSnapshotBestEffort(
+      const {NetWorthSnapshotCause.liability},
+    );
     notifyListeners();
+    return id;
+  }
+
+  Future<void> deleteLiabilityProfileForAccount(int accountId) async {
+    await _db!.delete(
+      'liability_profiles',
+      where: 'account_id = ?',
+      whereArgs: [accountId],
+    );
+    await _loadLiabilityProfiles();
+    await _refreshCurrentNetWorthSnapshotBestEffort(
+      const {NetWorthSnapshotCause.liability},
+    );
+    notifyListeners();
+  }
+
+  Future<String> exportAssetTablesJson() async {
+    final assetIds = _physicalAssets.map((a) => a.id).toSet();
+    final receivableIds = _receivableAssets.map((a) => a.id).toSet();
+    final txRows = await _db!.query('transactions', columns: ['id', 'uuid']);
+    final txUuidById = {
+      for (final row in txRows) row['id'] as int: row['uuid'] as String? ?? ''
+    };
+    final linkUuidById = {
+      for (final link in _assetTransactionLinks) link.id: link.uuid,
+    };
+    final refundAllocations = await _db!.query(
+      'asset_refund_allocations',
+      orderBy: 'created_ms ASC, id ASC',
+    );
+    final accountById = {for (final a in _accounts) a.id: a};
+    final savingsGoalById = {for (final goal in _savingsGoals) goal.id: goal};
+    final usageUuidById = {
+      for (final event in _assetUsageEvents) event.id: event.uuid,
+    };
+    String accountNameOf(int? id) =>
+        id == null ? '' : accountById[id]?.name ?? '';
+    Map<String, Object?> assetMap(PhysicalAssetEntity a) => {
+          'id': a.id,
+          'uuid': a.uuid,
+          'book_id': a.bookId,
+          'name': a.name,
+          'asset_type': a.assetType.storageKey,
+          'status': a.status.storageKey,
+          'economic_status': a.economicStatus.storageKey,
+          'usage_status': a.usageStatus.storageKey,
+          'visibility_status': a.visibilityStatus.storageKey,
+          'inclusion_quality': a.inclusionQuality.storageKey,
+          'source_type': a.sourceType.storageKey,
+          'acquisition_cost_source': a.acquisitionCostSource.storageKey,
+          'purchase_price': a.purchasePrice.toString(),
+          'current_value': a.currentValue.toString(),
+          'currency_code': a.currencyCode,
+          'purchase_date_ms': a.purchaseDateMs,
+          'brand': a.brand,
+          'model': a.model,
+          'location': a.location,
+          'warranty_until_ms': a.warrantyUntilMs,
+          'usage_tracking_enabled': a.usageTrackingEnabled ? 1 : 0,
+          'savings_goal_id': a.savingsGoalId,
+          'savings_goal_uuid': a.savingsGoalId == null
+              ? ''
+              : savingsGoalById[a.savingsGoalId]?.uuid ?? '',
+          'savings_goal_name': a.savingsGoalId == null
+              ? ''
+              : savingsGoalById[a.savingsGoalId]?.name ?? '',
+          'photo_path': a.photoPath,
+          'thumbnail_path': a.thumbnailPath,
+          'invoice_path': a.invoicePath,
+          'depreciation_method': a.depreciationMethod,
+          'depreciation_base': a.depreciationBase.toString(),
+          'salvage_value': a.salvageValue.toString(),
+          'useful_life_months': a.usefulLifeMonths,
+          'depreciation_start_ms': a.depreciationStartMs,
+          'depreciation_paused': a.depreciationPaused ? 1 : 0,
+          'note': a.note,
+          'include_in_net_worth': a.includeInNetWorth ? 1 : 0,
+          'is_deleted': a.isDeleted ? 1 : 0,
+          'ended_ms': a.endedMs,
+          'archived_ms': a.archivedMs,
+          'created_ms': a.createdMs,
+          'updated_ms': a.updatedMs,
+        };
+    Map<String, Object?> receivableMap(ReceivableAssetEntity a) => {
+          'id': a.id,
+          'uuid': a.uuid,
+          'book_id': a.bookId,
+          'name': a.name,
+          'receivable_type': a.type.storageKey,
+          'status': a.status.storageKey,
+          'economic_status': a.economicStatus.storageKey,
+          'visibility_status': a.visibilityStatus.storageKey,
+          'inclusion_quality': a.inclusionQuality.storageKey,
+          'original_amount': a.originalAmount.toString(),
+          'remaining_amount': a.remainingAmount.toString(),
+          'currency_code': a.currencyCode,
+          'counterparty': a.counterparty,
+          'due_date_ms': a.dueDateMs,
+          'include_in_net_worth': a.includeInNetWorth ? 1 : 0,
+          'note': a.note,
+          'is_deleted': a.isDeleted ? 1 : 0,
+          'ended_ms': a.endedMs,
+          'archived_ms': a.archivedMs,
+          'created_ms': a.createdMs,
+          'updated_ms': a.updatedMs,
+        };
+    Map<String, Object?> liabilityMap(LiabilityProfileEntity p) => {
+          'id': p.id,
+          'uuid': p.uuid,
+          'account_id': p.accountId,
+          'account_name': accountNameOf(p.accountId),
+          'liability_type': p.type.storageKey,
+          'original_amount': p.originalAmount.toString(),
+          'current_principal': p.currentPrincipal.toString(),
+          'interest_rate': p.interestRate.toString(),
+          'repayment_day': p.repaymentDay,
+          'repayment_account_id': p.repaymentAccountId,
+          'repayment_account_name': accountNameOf(p.repaymentAccountId),
+          'start_date_ms': p.startDateMs,
+          'end_date_ms': p.endDateMs,
+          'status': p.status.storageKey,
+          'note': p.note,
+          'created_ms': p.createdMs,
+          'updated_ms': p.updatedMs,
+        };
+    return const JsonEncoder.withIndent('  ').convert({
+      'format': 'feimiao-assets',
+      'version': 6,
+      'databaseVersion': _dbVersion,
+      'exportedAt': DateTime.now().toIso8601String(),
+      'assets': [for (final a in _physicalAssets) assetMap(a)],
+      'receivable_assets': [
+        for (final a in _receivableAssets) receivableMap(a)
+      ],
+      'events': [
+        for (final e in _assetEvents)
+          if ((e.assetType == AssetObjectType.physical &&
+                  assetIds.contains(e.assetId)) ||
+              (e.assetType == AssetObjectType.receivable &&
+                  receivableIds.contains(e.assetId)))
+            {
+              'id': e.id,
+              'uuid': e.uuid,
+              'asset_id': e.assetId,
+              'asset_type': e.assetType.storageKey,
+              'event_type': e.eventType.storageKey,
+              'occurred_ms': e.occurredMs,
+              'value': e.value?.toString() ?? '',
+              'note': e.note,
+              'metadata': e.metadata,
+              'created_ms': e.createdMs,
+            }
+      ],
+      'usage_events': [
+        for (final event in _assetUsageEvents)
+          if (assetIds.contains(event.assetId))
+            {
+              'id': event.id,
+              'uuid': event.uuid,
+              'asset_id': event.assetId,
+              'count_delta': event.countDelta,
+              'reversal_of': event.reversalOf,
+              'reversal_of_uuid': event.reversalOf == null
+                  ? ''
+                  : usageUuidById[event.reversalOf] ?? '',
+              'occurred_ms': event.occurredMs,
+              'note': event.note,
+              'created_ms': event.createdMs,
+              'updated_ms': event.updatedMs,
+            },
+      ],
+      'valuations': [
+        for (final v in _assetValuations)
+          if (assetIds.contains(v.assetId))
+            {
+              'id': v.id,
+              'uuid': v.uuid,
+              'asset_id': v.assetId,
+              'value': v.value.toString(),
+              'source': v.source.storageKey,
+              'valued_at_ms': v.valuedAtMs,
+              'note': v.note,
+              'created_ms': v.createdMs,
+            }
+      ],
+      'links': [
+        for (final link in _assetTransactionLinks)
+          if (link.assetObjectType == AssetObjectType.physical &&
+              assetIds.contains(link.assetId))
+            {
+              'id': link.id,
+              'uuid': link.uuid,
+              'asset_id': link.assetId,
+              'asset_object_type': link.assetObjectType.storageKey,
+              'transaction_id': link.transactionId,
+              'transaction_uuid': txUuidById[link.transactionId] ?? '',
+              'link_type': link.linkType.storageKey,
+              'amount': physicalAssetLinkCurrentAmount(link).toString(),
+              'allocated_gross_cents': link.allocatedGrossCents,
+              'allocated_refund_cents': link.allocatedRefundCents,
+              'cost_quality': link.costQuality.storageKey,
+              'note': link.note,
+              'created_ms': link.createdMs,
+              'updated_ms': link.updatedMs,
+            }
+      ],
+      'refund_allocations': [
+        for (final allocation in refundAllocations)
+          if (linkUuidById.containsKey(
+            allocation['asset_transaction_link_id'] as int,
+          ))
+            {
+              'uuid': allocation['uuid'],
+              'asset_transaction_link_uuid':
+                  linkUuidById[allocation['asset_transaction_link_id'] as int],
+              'refund_transaction_uuid':
+                  txUuidById[allocation['refund_transaction_id'] as int] ?? '',
+              'allocated_refund_cents': allocation['allocated_refund_cents'],
+              'status': allocation['status'],
+              'created_ms': allocation['created_ms'],
+              'updated_ms': allocation['updated_ms'],
+            }
+      ],
+      'recoveries': [
+        for (final recovery in _receivableRecoveries)
+          if (receivableIds.contains(recovery.receivableAssetId))
+            {
+              'id': recovery.id,
+              'uuid': recovery.uuid,
+              'receivable_asset_id': recovery.receivableAssetId,
+              'amount': recovery.amount.toString(),
+              'recovered_ms': recovery.recoveredMs,
+              'target_account_id': recovery.targetAccountId,
+              'target_account_name': accountNameOf(recovery.targetAccountId),
+              'event_id': recovery.eventId,
+              'transaction_id': recovery.transactionId,
+              'transaction_uuid': recovery.transactionId == null
+                  ? ''
+                  : txUuidById[recovery.transactionId] ?? '',
+              'note': recovery.note,
+              'created_ms': recovery.createdMs,
+            }
+      ],
+      'net_worth_snapshots': [
+        for (final snapshot in _netWorthSnapshots)
+          {
+            'id': snapshot.id,
+            'scope_key': snapshot.scopeKey,
+            'snapshot_date': snapshot.snapshotDate,
+            'total_assets': snapshot.totalAssets.toString(),
+            'total_liabilities': snapshot.totalLiabilities.toString(),
+            'net_worth': snapshot.netWorth.toString(),
+            'cash_assets': snapshot.cashAssets.toString(),
+            'investment_assets': snapshot.investmentAssets.toString(),
+            'physical_assets': snapshot.physicalAssets.toString(),
+            'receivable_assets': snapshot.receivableAssets.toString(),
+            'snapshot_type': snapshot.snapshotType,
+            'lineage_key': snapshot.lineageKey,
+            'as_of_ms': snapshot.asOfMs,
+            'knowledge_cutoff_ms': snapshot.knowledgeCutoffMs,
+            'timezone': snapshot.timezone,
+            'scope_version': snapshot.scopeVersion,
+            'calculation_version': snapshot.calculationVersion,
+            'currency_coverage_json': snapshot.currencyCoverageJson,
+            'quality': snapshot.quality.storageKey,
+            'cause_set_json': snapshot.causeSetJson,
+            'reasons_json': snapshot.reasonsJson,
+            'valuation_coverage_json': snapshot.valuationCoverageJson,
+            'provisional': snapshot.provisional ? 1 : 0,
+            'created_ms': snapshot.createdMs,
+          }
+      ],
+      'liability_profiles': [
+        for (final profile in _liabilityProfiles) liabilityMap(profile)
+      ],
+    });
+  }
+
+  Future<FeimiaoAssetImportResult> importAssetTablesJson(
+    String jsonText,
+  ) async {
+    final decoded = jsonDecode(jsonText);
+    if (decoded is! Map<String, dynamic> ||
+        decoded['format'] != 'feimiao-assets') {
+      throw ArgumentError('不是肥喵资产导出文件');
+    }
+    final formatVersion =
+        int.tryParse(decoded['version']?.toString() ?? '') ?? 3;
+    if (formatVersion < 1 || formatVersion > 6) {
+      throw UnsupportedError('不支持的肥喵资产文件版本：$formatVersion');
+    }
+    final isLegacyStateFormat = formatVersion < 4;
+    final assets = (decoded['assets'] as List? ?? const [])
+        .whereType<Map>()
+        .cast<Map<dynamic, dynamic>>()
+        .toList();
+    final receivableAssets = (decoded['receivable_assets'] as List? ?? const [])
+        .whereType<Map>()
+        .cast<Map<dynamic, dynamic>>()
+        .toList();
+    final events = (decoded['events'] as List? ?? const [])
+        .whereType<Map>()
+        .cast<Map<dynamic, dynamic>>()
+        .toList();
+    final usageEvents = (decoded['usage_events'] as List? ?? const [])
+        .whereType<Map>()
+        .cast<Map<dynamic, dynamic>>()
+        .toList();
+    final valuations = (decoded['valuations'] as List? ?? const [])
+        .whereType<Map>()
+        .cast<Map<dynamic, dynamic>>()
+        .toList();
+    final links = (decoded['links'] as List? ?? const [])
+        .whereType<Map>()
+        .cast<Map<dynamic, dynamic>>()
+        .toList();
+    final refundAllocations =
+        (decoded['refund_allocations'] as List? ?? const [])
+            .whereType<Map>()
+            .cast<Map<dynamic, dynamic>>()
+            .toList();
+    final recoveries = (decoded['recoveries'] as List? ?? const [])
+        .whereType<Map>()
+        .cast<Map<dynamic, dynamic>>()
+        .toList();
+    final snapshots = (decoded['net_worth_snapshots'] as List? ?? const [])
+        .whereType<Map>()
+        .cast<Map<dynamic, dynamic>>()
+        .toList();
+    final liabilityProfiles =
+        (decoded['liability_profiles'] as List? ?? const [])
+            .whereType<Map>()
+            .cast<Map<dynamic, dynamic>>()
+            .toList();
+
+    String str(Map<dynamic, dynamic> m, String key, [String fallback = '']) =>
+        (m[key] ?? fallback).toString();
+    int? intOrNull(Object? value) =>
+        value == null ? null : int.tryParse(value.toString());
+    int intOr(Object? value, int fallback) =>
+        int.tryParse(value?.toString() ?? '') ?? fallback;
+    String uuidOf(Map<dynamic, dynamic> m) {
+      final raw = str(m, 'uuid').trim();
+      return raw.length == 32 ? raw : _newUuid();
+    }
+
+    bool isUsageReversal(Map<dynamic, dynamic> event) =>
+        str(event, 'reversal_of_uuid').trim().isNotEmpty ||
+        intOrNull(event['reversal_of']) != null;
+    usageEvents.sort((left, right) {
+      final byKind = (isUsageReversal(left) ? 1 : 0)
+          .compareTo(isUsageReversal(right) ? 1 : 0);
+      if (byKind != 0) return byKind;
+      final occurred = intOr(left['occurred_ms'], 0)
+          .compareTo(intOr(right['occurred_ms'], 0));
+      return occurred != 0
+          ? occurred
+          : intOr(left['id'], 0).compareTo(intOr(right['id'], 0));
+    });
+
+    int? accountIdFromAssetJson(
+      Map<dynamic, dynamic> m, {
+      required String idKey,
+      required String nameKey,
+    }) {
+      final name = str(m, nameKey).trim();
+      if (name.isNotEmpty) {
+        final active = _accounts
+            .where((a) => !a.isDeleted && a.name.trim() == name)
+            .firstOrNull;
+        if (active != null) return active.id;
+        final any = _accounts.where((a) => a.name.trim() == name).firstOrNull;
+        if (any != null) return any.id;
+      }
+      final rawId = intOrNull(m[idKey]);
+      if (rawId == null) return null;
+      final exists = _accounts.any((a) => a.id == rawId && !a.isDeleted);
+      return exists ? rawId : null;
+    }
+
+    ({int? id, bool requested, bool unresolved}) savingsGoalIdFromAssetJson(
+        Map<dynamic, dynamic> map) {
+      final uuid = str(map, 'savings_goal_uuid').trim();
+      final name = str(map, 'savings_goal_name').trim();
+      final rawId = intOrNull(map['savings_goal_id']);
+      final requested = uuid.isNotEmpty || name.isNotEmpty || rawId != null;
+      if (!requested) {
+        return (id: null, requested: false, unresolved: false);
+      }
+      if (uuid.isNotEmpty) {
+        final byUuid =
+            _savingsGoals.where((goal) => goal.uuid == uuid).firstOrNull;
+        if (byUuid != null) {
+          return (id: byUuid.id, requested: true, unresolved: false);
+        }
+      } else if (rawId != null) {
+        final byId =
+            _savingsGoals.where((goal) => goal.id == rawId).firstOrNull;
+        if (byId != null && (name.isEmpty || byId.name.trim() == name)) {
+          return (id: byId.id, requested: true, unresolved: false);
+        }
+      }
+      if (name.isNotEmpty) {
+        final byName =
+            _savingsGoals.where((goal) => goal.name.trim() == name).toList();
+        if (byName.length == 1) {
+          return (id: byName.single.id, requested: true, unresolved: false);
+        }
+      }
+      return (id: null, requested: true, unresolved: true);
+    }
+
+    final existingAssets = await _db!.query(
+      'physical_assets',
+      columns: ['id', 'uuid'],
+      where: "uuid <> ''",
+    );
+    final assetIdByUuid = {
+      for (final row in existingAssets) row['uuid'] as String: row['id'] as int
+    };
+    final existingReceivables = await _db!.query(
+      'receivable_assets',
+      columns: ['id', 'uuid'],
+      where: "uuid <> ''",
+    );
+    final receivableIdByUuid = {
+      for (final row in existingReceivables)
+        row['uuid'] as String: row['id'] as int
+    };
+    final oldAssetIdToNew = <int, int>{};
+    final oldReceivableIdToNew = <int, int>{};
+    final oldEventIdToNew = <int, int>{};
+    final oldUsageIdToNew = <int, int>{};
+    final importedLinkIdByUuid = <String, int>{};
+    final insertedLegacyAssetIds = <int>{};
+    final insertedLegacyReceivableIds = <int>{};
+    var assetCount = 0;
+    var receivableCount = 0;
+    var eventCount = 0;
+    var usageCount = 0;
+    var valuationCount = 0;
+    var linkCount = 0;
+    var recoveryCount = 0;
+    var snapshotCount = 0;
+    var liabilityCount = 0;
+    var unresolvedTransactionLinkCount = 0;
+    var unresolvedSavingsGoalLinkCount = 0;
+    var rejectedLinkCount = 0;
+
+    await _db!.transaction((txn) async {
+      for (final raw in assets) {
+        final uuid = uuidOf(raw);
+        final oldId = intOrNull(raw['id']);
+        final legacyStatus =
+            PhysicalAssetStatusX.fromStorage(str(raw, 'status'));
+        final rawEconomic = str(raw, 'economic_status');
+        final rawUsage = str(raw, 'usage_status');
+        final rawVisibility = str(raw, 'visibility_status');
+        final rawQuality = str(raw, 'inclusion_quality');
+        final economicStatus = isLegacyStateFormat
+            ? _physicalEconomicFromLegacyStatus(legacyStatus)
+            : PhysicalAssetEconomicStatusX.fromStorage(rawEconomic);
+        final usageStatus = isLegacyStateFormat
+            ? _physicalUsageFromLegacyStatus(legacyStatus)
+            : PhysicalAssetUsageStatusX.fromStorage(rawUsage);
+        final visibilityStatus = isLegacyStateFormat
+            ? legacyStatus == PhysicalAssetStatus.archived
+                ? AssetVisibilityStatus.archived
+                : AssetVisibilityStatus.active
+            : AssetVisibilityStatusX.fromStorage(rawVisibility);
+        final validEconomic = PhysicalAssetEconomicStatus.values
+            .any((value) => value.storageKey == rawEconomic);
+        final validUsage = PhysicalAssetUsageStatus.values
+            .any((value) => value.storageKey == rawUsage);
+        final validVisibility = AssetVisibilityStatus.values
+            .any((value) => value.storageKey == rawVisibility);
+        final validQuality = AssetInclusionQuality.values
+            .any((value) => value.storageKey == rawQuality);
+        final inclusionQuality = isLegacyStateFormat
+            ? legacyStatus == PhysicalAssetStatus.archived
+                ? AssetInclusionQuality.needsReview
+                : AssetInclusionQuality.confirmed
+            : !validEconomic || !validUsage || !validVisibility || !validQuality
+                ? AssetInclusionQuality.needsReview
+                : AssetInclusionQualityX.fromStorage(rawQuality);
+        final status = _legacyPhysicalStatusFor(
+          economicStatus: economicStatus,
+          usageStatus: usageStatus,
+          visibilityStatus: visibilityStatus,
+        );
+        final existingId = assetIdByUuid[uuid];
+        final goalResolution = formatVersion >= 6
+            ? savingsGoalIdFromAssetJson(raw)
+            : (id: null, requested: false, unresolved: false);
+        if (goalResolution.unresolved) {
+          unresolvedSavingsGoalLinkCount++;
+        }
+        final existingGoalId = existingId == null
+            ? null
+            : _allPhysicalAssets
+                .where((asset) => asset.id == existingId)
+                .firstOrNull
+                ?.savingsGoalId;
+        final map = {
+          'uuid': uuid,
+          'book_id': _currentBookId,
+          'name': str(raw, 'name', '未命名资产'),
+          'asset_type':
+              AssetTypeX.fromStorage(str(raw, 'asset_type')).storageKey,
+          'status': status.storageKey,
+          'economic_status': economicStatus.storageKey,
+          'usage_status': usageStatus.storageKey,
+          'visibility_status': visibilityStatus.storageKey,
+          'inclusion_quality': inclusionQuality.storageKey,
+          'source_type': PhysicalAssetSourceTypeX.fromStorage(
+            str(raw, 'source_type'),
+          ).storageKey,
+          'acquisition_cost_source': formatVersion >= 5
+              ? AssetAcquisitionCostSourceX.fromStorage(
+                  str(raw, 'acquisition_cost_source'),
+                ).storageKey
+              : AssetAcquisitionCostSource.manual.storageKey,
+          'purchase_price': str(raw, 'purchase_price', '0'),
+          'current_value': str(raw, 'current_value', '0'),
+          'currency_code': str(raw, 'currency_code', 'CNY'),
+          'purchase_date_ms': intOrNull(raw['purchase_date_ms']),
+          'brand': str(raw, 'brand'),
+          'model': str(raw, 'model'),
+          'location': str(raw, 'location'),
+          'warranty_until_ms': intOrNull(raw['warranty_until_ms']),
+          'usage_tracking_enabled':
+              formatVersion >= 6 ? intOr(raw['usage_tracking_enabled'], 0) : 0,
+          'savings_goal_id':
+              goalResolution.unresolved ? existingGoalId : goalResolution.id,
+          'photo_path': str(raw, 'photo_path'),
+          'thumbnail_path': str(raw, 'thumbnail_path'),
+          'invoice_path': str(raw, 'invoice_path'),
+          'depreciation_method': str(raw, 'depreciation_method'),
+          'depreciation_base': str(raw, 'depreciation_base', '0'),
+          'salvage_value': str(raw, 'salvage_value', '0'),
+          'useful_life_months': intOr(raw['useful_life_months'], 0),
+          'depreciation_start_ms': intOrNull(raw['depreciation_start_ms']),
+          'depreciation_paused': intOr(raw['depreciation_paused'], 0),
+          'note': str(raw, 'note'),
+          'include_in_net_worth': intOr(raw['include_in_net_worth'], 1) == 1 &&
+                  economicStatus.ownsValue &&
+                  (!isLegacyStateFormat ||
+                      legacyStatus != PhysicalAssetStatus.archived)
+              ? 1
+              : 0,
+          'is_deleted': intOr(raw['is_deleted'], 0),
+          'ended_ms': isLegacyStateFormat ? null : intOrNull(raw['ended_ms']),
+          'archived_ms':
+              isLegacyStateFormat ? null : intOrNull(raw['archived_ms']),
+          'created_ms': intOr(
+            raw['created_ms'],
+            DateTime.now().millisecondsSinceEpoch,
+          ),
+          'updated_ms': intOr(
+            raw['updated_ms'],
+            DateTime.now().millisecondsSinceEpoch,
+          ),
+        };
+        final newId = existingId ?? await txn.insert('physical_assets', map);
+        if (existingId != null) {
+          if (isLegacyStateFormat) {
+            for (final key in [
+              'status',
+              'economic_status',
+              'usage_status',
+              'visibility_status',
+              'inclusion_quality',
+              'include_in_net_worth',
+              'ended_ms',
+              'archived_ms',
+            ]) {
+              map.remove(key);
+            }
+          }
+          await txn.update(
+            'physical_assets',
+            map,
+            where: 'id = ?',
+            whereArgs: [existingId],
+          );
+        }
+        if (existingId == null && isLegacyStateFormat) {
+          insertedLegacyAssetIds.add(newId);
+        }
+        assetIdByUuid[uuid] = newId;
+        if (oldId != null) oldAssetIdToNew[oldId] = newId;
+        assetCount++;
+      }
+
+      for (final raw in receivableAssets) {
+        final uuid = uuidOf(raw);
+        final oldId = intOrNull(raw['id']);
+        final legacyStatus =
+            ReceivableAssetStatusX.fromStorage(str(raw, 'status'));
+        final remaining = Decimal.tryParse(
+              str(raw, 'remaining_amount', '0'),
+            ) ??
+            Decimal.zero;
+        final rawEconomic = str(raw, 'economic_status');
+        final rawVisibility = str(raw, 'visibility_status');
+        final rawQuality = str(raw, 'inclusion_quality');
+        final economicStatus = isLegacyStateFormat
+            ? _receivableEconomicFromLegacyStatus(legacyStatus)
+            : ReceivableEconomicStatusX.fromStorage(rawEconomic);
+        final visibilityStatus = isLegacyStateFormat
+            ? legacyStatus == ReceivableAssetStatus.archived
+                ? AssetVisibilityStatus.archived
+                : AssetVisibilityStatus.active
+            : AssetVisibilityStatusX.fromStorage(rawVisibility);
+        final validEconomic = ReceivableEconomicStatus.values
+            .any((value) => value.storageKey == rawEconomic);
+        final validVisibility = AssetVisibilityStatus.values
+            .any((value) => value.storageKey == rawVisibility);
+        final validQuality = AssetInclusionQuality.values
+            .any((value) => value.storageKey == rawQuality);
+        final inclusionQuality = isLegacyStateFormat
+            ? legacyStatus == ReceivableAssetStatus.archived
+                ? AssetInclusionQuality.needsReview
+                : AssetInclusionQuality.confirmed
+            : !validEconomic || !validVisibility || !validQuality
+                ? AssetInclusionQuality.needsReview
+                : AssetInclusionQualityX.fromStorage(rawQuality);
+        final status = _legacyReceivableStatusFor(
+          economicStatus: economicStatus,
+          visibilityStatus: visibilityStatus,
+        );
+        final map = {
+          'uuid': uuid,
+          'book_id': _currentBookId,
+          'name': str(raw, 'name', '未命名权益'),
+          'receivable_type': ReceivableAssetTypeX.fromStorage(
+            str(raw, 'receivable_type'),
+          ).storageKey,
+          'status': status.storageKey,
+          'economic_status': economicStatus.storageKey,
+          'visibility_status': visibilityStatus.storageKey,
+          'inclusion_quality': inclusionQuality.storageKey,
+          'original_amount': str(raw, 'original_amount', '0'),
+          'remaining_amount': remaining.toString(),
+          'currency_code': str(raw, 'currency_code', 'CNY'),
+          'counterparty': str(raw, 'counterparty'),
+          'due_date_ms': intOrNull(raw['due_date_ms']),
+          'include_in_net_worth': intOr(raw['include_in_net_worth'], 1) == 1 &&
+                  economicStatus.canCountInNetWorth &&
+                  (!isLegacyStateFormat ||
+                      legacyStatus != ReceivableAssetStatus.archived) &&
+                  remaining > Decimal.zero
+              ? 1
+              : 0,
+          'note': str(raw, 'note'),
+          'is_deleted': intOr(raw['is_deleted'], 0),
+          'ended_ms': isLegacyStateFormat ? null : intOrNull(raw['ended_ms']),
+          'archived_ms':
+              isLegacyStateFormat ? null : intOrNull(raw['archived_ms']),
+          'created_ms': intOr(
+            raw['created_ms'],
+            DateTime.now().millisecondsSinceEpoch,
+          ),
+          'updated_ms': intOr(
+            raw['updated_ms'],
+            DateTime.now().millisecondsSinceEpoch,
+          ),
+        };
+        final existingId = receivableIdByUuid[uuid];
+        final newId = existingId ?? await txn.insert('receivable_assets', map);
+        if (existingId != null) {
+          if (isLegacyStateFormat) {
+            for (final key in [
+              'status',
+              'economic_status',
+              'visibility_status',
+              'inclusion_quality',
+              'include_in_net_worth',
+              'ended_ms',
+              'archived_ms',
+            ]) {
+              map.remove(key);
+            }
+          }
+          await txn.update(
+            'receivable_assets',
+            map,
+            where: 'id = ?',
+            whereArgs: [existingId],
+          );
+        }
+        if (existingId == null && isLegacyStateFormat) {
+          insertedLegacyReceivableIds.add(newId);
+        }
+        receivableIdByUuid[uuid] = newId;
+        if (oldId != null) oldReceivableIdToNew[oldId] = newId;
+        receivableCount++;
+      }
+
+      Future<bool> existsByUuid(String table, String uuid) async {
+        if (uuid.isEmpty) return false;
+        final rows = await txn.query(
+          table,
+          columns: ['id'],
+          where: 'uuid = ?',
+          whereArgs: [uuid],
+          limit: 1,
+        );
+        return rows.isNotEmpty;
+      }
+
+      Future<int?> idByUuid(String table, String uuid) async {
+        if (uuid.isEmpty) return null;
+        final rows = await txn.query(
+          table,
+          columns: ['id'],
+          where: 'uuid = ?',
+          whereArgs: [uuid],
+          limit: 1,
+        );
+        return rows.isEmpty ? null : rows.first['id'] as int;
+      }
+
+      for (final raw in events) {
+        final assetType =
+            AssetObjectTypeX.fromStorage(str(raw, 'asset_type', 'physical'));
+        final oldAssetId = intOrNull(raw['asset_id']);
+        final assetId = oldAssetId == null
+            ? null
+            : assetType == AssetObjectType.receivable
+                ? oldReceivableIdToNew[oldAssetId]
+                : oldAssetIdToNew[oldAssetId];
+        if (assetId == null) continue;
+        final uuid = uuidOf(raw);
+        final oldEventId = intOrNull(raw['id']);
+        final existingEventId = await idByUuid('asset_events', uuid);
+        if (existingEventId != null) {
+          if (oldEventId != null) oldEventIdToNew[oldEventId] = existingEventId;
+          continue;
+        }
+        final newEventId = await txn.insert('asset_events', {
+          'uuid': uuid,
+          'asset_id': assetId,
+          'asset_type': assetType.storageKey,
+          'event_type': str(raw, 'event_type', 'asset_created'),
+          'occurred_ms':
+              intOr(raw['occurred_ms'], DateTime.now().millisecondsSinceEpoch),
+          'value': str(raw, 'value'),
+          'note': str(raw, 'note'),
+          'metadata': str(raw, 'metadata'),
+          'created_ms':
+              intOr(raw['created_ms'], DateTime.now().millisecondsSinceEpoch),
+        });
+        if (oldEventId != null) oldEventIdToNew[oldEventId] = newEventId;
+        eventCount++;
+      }
+
+      for (final raw in usageEvents) {
+        final oldAssetId = intOrNull(raw['asset_id']);
+        final assetId = oldAssetId == null ? null : oldAssetIdToNew[oldAssetId];
+        if (assetId == null) continue;
+        final uuid = uuidOf(raw);
+        final oldUsageId = intOrNull(raw['id']);
+        final existingUsageId = await idByUuid('asset_usage_events', uuid);
+        if (existingUsageId != null) {
+          if (oldUsageId != null) {
+            oldUsageIdToNew[oldUsageId] = existingUsageId;
+          }
+          continue;
+        }
+        int? reversalOf;
+        final reversalUuid = str(raw, 'reversal_of_uuid').trim();
+        if (reversalUuid.isNotEmpty) {
+          reversalOf = await idByUuid('asset_usage_events', reversalUuid);
+        }
+        final oldReversalId = intOrNull(raw['reversal_of']);
+        reversalOf ??=
+            oldReversalId == null ? null : oldUsageIdToNew[oldReversalId];
+        if ((reversalUuid.isNotEmpty || oldReversalId != null) &&
+            reversalOf == null) {
+          continue;
+        }
+        final countDelta = intOr(raw['count_delta'], 0);
+        final occurredMs =
+            intOr(raw['occurred_ms'], DateTime.now().millisecondsSinceEpoch);
+        if (reversalOf != null) {
+          if (countDelta != 0) continue;
+          final targetRows = await txn.query(
+            'asset_usage_events',
+            columns: ['id', 'asset_id', 'occurred_ms'],
+            where: 'id = ?',
+            whereArgs: [reversalOf],
+            limit: 1,
+          );
+          if (targetRows.isEmpty ||
+              (targetRows.single['asset_id'] as int) != assetId) {
+            continue;
+          }
+          final targetOccurredMs =
+              targetRows.single['occurred_ms'] as int? ?? 0;
+          if (occurredMs < targetOccurredMs) continue;
+          final existingReversals = await txn.query(
+            'asset_usage_events',
+            columns: ['id'],
+            where: 'reversal_of = ?',
+            whereArgs: [reversalOf],
+            orderBy: 'occurred_ms ASC, id ASC',
+            limit: 1,
+          );
+          if (existingReversals.isNotEmpty) {
+            if (oldUsageId != null) {
+              oldUsageIdToNew[oldUsageId] =
+                  existingReversals.single['id'] as int;
+            }
+            continue;
+          }
+        }
+        final newUsageId = await txn.insert('asset_usage_events', {
+          'uuid': uuid,
+          'asset_id': assetId,
+          'count_delta': countDelta,
+          'reversal_of': reversalOf,
+          'occurred_ms': occurredMs,
+          'note': str(raw, 'note'),
+          'created_ms':
+              intOr(raw['created_ms'], DateTime.now().millisecondsSinceEpoch),
+          'updated_ms': intOr(
+            raw['updated_ms'],
+            intOr(raw['created_ms'], DateTime.now().millisecondsSinceEpoch),
+          ),
+        });
+        if (oldUsageId != null) oldUsageIdToNew[oldUsageId] = newUsageId;
+        usageCount++;
+      }
+
+      for (final raw in valuations) {
+        final oldAssetId = intOrNull(raw['asset_id']);
+        final assetId = oldAssetId == null ? null : oldAssetIdToNew[oldAssetId];
+        if (assetId == null) continue;
+        final uuid = uuidOf(raw);
+        if (await existsByUuid('asset_valuations', uuid)) continue;
+        await txn.insert('asset_valuations', {
+          'uuid': uuid,
+          'asset_id': assetId,
+          'value': str(raw, 'value', '0'),
+          'source': str(raw, 'source', 'manual'),
+          'valued_at_ms':
+              intOr(raw['valued_at_ms'], DateTime.now().millisecondsSinceEpoch),
+          'note': str(raw, 'note'),
+          'created_ms':
+              intOr(raw['created_ms'], DateTime.now().millisecondsSinceEpoch),
+        });
+        valuationCount++;
+      }
+
+      for (final raw in links) {
+        final oldAssetId = intOrNull(raw['asset_id']);
+        final assetId = oldAssetId == null ? null : oldAssetIdToNew[oldAssetId];
+        if (assetId == null) {
+          rejectedLinkCount++;
+          continue;
+        }
+        final transactionUuid = str(raw, 'transaction_uuid');
+        if (transactionUuid.isEmpty) {
+          rejectedLinkCount++;
+          continue;
+        }
+        final txRows = await txn.query(
+          'transactions',
+          columns: [
+            'id',
+            'book_id',
+            'kind',
+            'amount',
+            'currency_code',
+            'refund_of',
+            'excluded',
+            'event_type',
+          ],
+          where: 'uuid = ?',
+          whereArgs: [transactionUuid],
+          limit: 1,
+        );
+        if (txRows.isEmpty) {
+          unresolvedTransactionLinkCount++;
+          continue;
+        }
+        final transaction = txRows.single;
+        final transactionId = transaction['id'] as int;
+        final uuid = uuidOf(raw);
+        final rawLinkType = str(raw, 'link_type', 'source_transaction');
+        if (!AssetTransactionLinkType.values
+            .any((type) => type.storageKey == rawLinkType)) {
+          rejectedLinkCount++;
+          continue;
+        }
+        final linkType = AssetTransactionLinkTypeX.fromStorage(rawLinkType);
+        if (str(raw, 'asset_object_type', 'physical') !=
+            AssetObjectType.physical.storageKey) {
+          rejectedLinkCount++;
+          continue;
+        }
+        final assetRows = await txn.query(
+          'physical_assets',
+          columns: ['book_id', 'currency_code', 'is_deleted'],
+          where: 'id = ?',
+          whereArgs: [assetId],
+          limit: 1,
+        );
+        if (assetRows.isEmpty || assetRows.single['is_deleted'] == 1) {
+          rejectedLinkCount++;
+          continue;
+        }
+        final asset = assetRows.single;
+        final existingByUuid = await txn.query(
+          'asset_transaction_links',
+          columns: ['id', 'asset_id', 'transaction_id', 'link_type'],
+          where: 'uuid = ?',
+          whereArgs: [uuid],
+          limit: 1,
+        );
+        if (existingByUuid.isNotEmpty) {
+          final existing = existingByUuid.single;
+          if (existing['asset_id'] == assetId &&
+              existing['transaction_id'] == transactionId &&
+              existing['link_type'] == linkType.storageKey) {
+            importedLinkIdByUuid[uuid] = existing['id'] as int;
+          } else {
+            rejectedLinkCount++;
+          }
+          continue;
+        }
+        final existingByRelation = await txn.query(
+          'asset_transaction_links',
+          columns: ['id'],
+          where:
+              'asset_object_type = ? AND asset_id = ? AND transaction_id = ? AND link_type = ?',
+          whereArgs: [
+            AssetObjectType.physical.storageKey,
+            assetId,
+            transactionId,
+            linkType.storageKey,
+          ],
+          limit: 1,
+        );
+        if (existingByRelation.isNotEmpty) {
+          importedLinkIdByUuid[uuid] = existingByRelation.single['id'] as int;
+          continue;
+        }
+        final transactionAmount =
+            Decimal.tryParse(transaction['amount'] as String? ?? '') ??
+                Decimal.zero;
+        final sameCurrency = transaction['currency_code'] ==
+            (asset['currency_code'] as String? ?? 'CNY');
+        final sameBook = transaction['book_id'] == asset['book_id'];
+        var amount = str(raw, 'amount', '0');
+        final legacyGross = decimalToBudgetCents(
+          Decimal.tryParse(amount) ?? Decimal.zero,
+        ).abs();
+        var allocatedGrossCents = formatVersion >= 5
+            ? intOr(raw['allocated_gross_cents'], 0)
+            : legacyGross;
+        var allocatedRefundCents =
+            formatVersion >= 5 ? intOr(raw['allocated_refund_cents'], 0) : 0;
+        var costQuality = formatVersion >= 5
+            ? AssetAllocationCostQualityX.fromStorage(
+                str(raw, 'cost_quality'),
+              )
+            : AssetAllocationCostQuality.partial;
+        var valid = true;
+        if (linkType.isAdditionalCost) {
+          final assetBookId = asset['book_id'] as int?;
+          final allowedBooks = assetBookId == null
+              ? const <int>{}
+              : _bookIdsForView(assetBookId).toSet();
+          final occupied = await txn.query(
+            'asset_transaction_links',
+            columns: ['id'],
+            where:
+                "asset_object_type = 'physical' AND transaction_id = ? AND link_type IN ('source_transaction','purchase_transaction','maintenance','accessory','insurance','other_cost')",
+            whereArgs: [transactionId],
+            limit: 1,
+          );
+          valid = transaction['kind'] == TransactionKind.expense.toJson() &&
+              transaction['refund_of'] == null &&
+              transactionAmount > Decimal.zero &&
+              transaction['excluded'] != 1 &&
+              transaction['book_id'] != null &&
+              allowedBooks.contains(transaction['book_id']) &&
+              sameCurrency &&
+              occupied.isEmpty;
+          if (valid) {
+            final gross = decimalToBudgetCents(transactionAmount).abs();
+            final refunds = await _validOrderRefundCents(txn, transactionId);
+            amount = (budgetDecimalFromCents(max(0, gross - refunds)) ??
+                    Decimal.zero)
+                .toString();
+            allocatedGrossCents = 0;
+            allocatedRefundCents = 0;
+            costQuality = AssetAllocationCostQuality.exact;
+          }
+        } else if (linkType == AssetTransactionLinkType.sourceTransaction ||
+            linkType == AssetTransactionLinkType.purchaseTransaction) {
+          final otherAcquisition = await txn.query(
+            'asset_transaction_links',
+            columns: ['id'],
+            where:
+                "asset_object_type = 'physical' AND asset_id = ? AND transaction_id = ? AND link_type IN ('source_transaction','purchase_transaction')",
+            whereArgs: [assetId, transactionId],
+            limit: 1,
+          );
+          valid = sameBook &&
+              sameCurrency &&
+              transaction['kind'] == TransactionKind.expense.toJson() &&
+              transaction['refund_of'] == null &&
+              transactionAmount > Decimal.zero &&
+              allocatedGrossCents > 0 &&
+              allocatedRefundCents >= 0 &&
+              allocatedRefundCents <= allocatedGrossCents &&
+              otherAcquisition.isEmpty;
+          if (valid) {
+            try {
+              await _validateOrderAllocations(
+                txn,
+                transactionId,
+                proposed: AssetAllocationLine(
+                  assetId: assetId,
+                  grossCents: allocatedGrossCents,
+                  refundCents: allocatedRefundCents,
+                ),
+              );
+            } on StateError {
+              valid = false;
+            } on ArgumentError {
+              valid = false;
+            }
+          }
+          amount = (budgetDecimalFromCents(allocatedGrossCents) ?? Decimal.zero)
+              .toString();
+        } else if (linkType == AssetTransactionLinkType.saleAccountMovement) {
+          valid = sameBook &&
+              sameCurrency &&
+              transaction['kind'] == TransactionKind.income.toJson() &&
+              transaction['refund_of'] == null &&
+              transactionAmount > Decimal.zero &&
+              transaction['excluded'] == 1 &&
+              transaction['event_type'] ==
+                  TransactionEventType.assetSale.storageKey;
+        }
+        if (!valid) {
+          rejectedLinkCount++;
+          continue;
+        }
+        final linkId = await txn.insert(
+          'asset_transaction_links',
+          {
+            'uuid': uuid,
+            'asset_id': assetId,
+            'asset_object_type': AssetObjectType.physical.storageKey,
+            'transaction_id': transactionId,
+            'link_type': linkType.storageKey,
+            'amount': amount,
+            'allocated_gross_cents': allocatedGrossCents,
+            'allocated_refund_cents': allocatedRefundCents,
+            'cost_quality': costQuality.storageKey,
+            'note': str(raw, 'note'),
+            'created_ms':
+                intOr(raw['created_ms'], DateTime.now().millisecondsSinceEpoch),
+            'updated_ms': intOr(
+              raw['updated_ms'],
+              intOr(raw['created_ms'], DateTime.now().millisecondsSinceEpoch),
+            ),
+          },
+          conflictAlgorithm: ConflictAlgorithm.abort,
+        );
+        if (linkId <= 0) throw StateError('资产账单关联导入失败');
+        importedLinkIdByUuid[uuid] = linkId;
+        if (linkType == AssetTransactionLinkType.sourceTransaction ||
+            linkType == AssetTransactionLinkType.purchaseTransaction) {
+          await txn.update(
+            'physical_assets',
+            {
+              'acquisition_cost_source':
+                  AssetAcquisitionCostSource.transactionAllocations.storageKey,
+            },
+            where: 'id = ?',
+            whereArgs: [assetId],
+          );
+        }
+        linkCount++;
+      }
+
+      for (final raw in refundAllocations) {
+        final linkUuid = str(raw, 'asset_transaction_link_uuid');
+        final linkId = importedLinkIdByUuid[linkUuid] ??
+            await idByUuid('asset_transaction_links', linkUuid);
+        final refundUuid = str(raw, 'refund_transaction_uuid');
+        if (linkId == null || linkId <= 0 || refundUuid.isEmpty) continue;
+        final parentLinks = await txn.query(
+          'asset_transaction_links',
+          columns: [
+            'transaction_id',
+            'link_type',
+            'allocated_refund_cents',
+          ],
+          where: 'id = ?',
+          whereArgs: [linkId],
+          limit: 1,
+        );
+        if (parentLinks.isEmpty) continue;
+        final parentLink = parentLinks.single;
+        final parentType = AssetTransactionLinkTypeX.fromStorage(
+          parentLink['link_type'] as String?,
+        );
+        if (parentType != AssetTransactionLinkType.sourceTransaction &&
+            parentType != AssetTransactionLinkType.purchaseTransaction) {
+          rejectedLinkCount++;
+          continue;
+        }
+        final refundRows = await txn.query(
+          'transactions',
+          columns: ['id', 'refund_of', 'amount'],
+          where: 'uuid = ?',
+          whereArgs: [refundUuid],
+          limit: 1,
+        );
+        if (refundRows.isEmpty) {
+          unresolvedTransactionLinkCount++;
+          continue;
+        }
+        final uuid = uuidOf(raw);
+        if (await existsByUuid('asset_refund_allocations', uuid)) continue;
+        final refund = refundRows.single;
+        final cents = intOr(raw['allocated_refund_cents'], 0);
+        final allocationStatus = str(raw, 'status', 'active');
+        final refundTotal = decimalToBudgetCents(
+          Decimal.tryParse(refund['amount'] as String? ?? '') ?? Decimal.zero,
+        ).abs();
+        final alreadyForRefund = Sqflite.firstIntValue(await txn.rawQuery('''
+          SELECT COALESCE(SUM(allocated_refund_cents), 0)
+          FROM asset_refund_allocations
+          WHERE refund_transaction_id = ? AND status = 'active'
+        ''', [refund['id']])) ?? 0;
+        final alreadyForLink = Sqflite.firstIntValue(await txn.rawQuery('''
+          SELECT COALESCE(SUM(allocated_refund_cents), 0)
+          FROM asset_refund_allocations
+          WHERE asset_transaction_link_id = ? AND status = 'active'
+        ''', [linkId])) ?? 0;
+        if ((allocationStatus != 'active' && allocationStatus != 'reversed') ||
+            refund['refund_of'] != parentLink['transaction_id'] ||
+            cents <= 0 ||
+            (allocationStatus == 'active' &&
+                (alreadyForRefund + cents > refundTotal ||
+                    alreadyForLink + cents >
+                        (parentLink['allocated_refund_cents'] as int? ?? 0)))) {
+          rejectedLinkCount++;
+          continue;
+        }
+        await txn.insert('asset_refund_allocations', {
+          'uuid': uuid,
+          'asset_transaction_link_id': linkId,
+          'refund_transaction_id': refund['id'] as int,
+          'allocated_refund_cents': cents,
+          'status': allocationStatus,
+          'created_ms':
+              intOr(raw['created_ms'], DateTime.now().millisecondsSinceEpoch),
+          'updated_ms':
+              intOr(raw['updated_ms'], DateTime.now().millisecondsSinceEpoch),
+        });
+      }
+
+      for (final raw in recoveries) {
+        final oldAssetId = intOrNull(raw['receivable_asset_id']);
+        final assetId =
+            oldAssetId == null ? null : oldReceivableIdToNew[oldAssetId];
+        if (assetId == null) continue;
+        final uuid = uuidOf(raw);
+        if (await existsByUuid('receivable_recoveries', uuid)) continue;
+        int? transactionId;
+        var targetAccountId = accountIdFromAssetJson(
+          raw,
+          idKey: 'target_account_id',
+          nameKey: 'target_account_name',
+        );
+        final transactionUuid = str(raw, 'transaction_uuid');
+        if (transactionUuid.isNotEmpty) {
+          final txRows = await txn.query(
+            'transactions',
+            columns: ['id', 'account_id'],
+            where: 'uuid = ?',
+            whereArgs: [transactionUuid],
+            limit: 1,
+          );
+          if (txRows.isNotEmpty) {
+            transactionId = txRows.first['id'] as int;
+            targetAccountId ??= txRows.first['account_id'] as int?;
+          }
+        }
+        final oldEventId = intOrNull(raw['event_id']);
+        await txn.insert('receivable_recoveries', {
+          'uuid': uuid,
+          'receivable_asset_id': assetId,
+          'amount': str(raw, 'amount', '0'),
+          'recovered_ms':
+              intOr(raw['recovered_ms'], DateTime.now().millisecondsSinceEpoch),
+          'target_account_id': targetAccountId,
+          'event_id': oldEventId == null ? null : oldEventIdToNew[oldEventId],
+          'transaction_id': transactionId,
+          'note': str(raw, 'note'),
+          'created_ms':
+              intOr(raw['created_ms'], DateTime.now().millisecondsSinceEpoch),
+        });
+        recoveryCount++;
+      }
+
+      if (isLegacyStateFormat) {
+        Future<int?> latestEventMs(
+          String assetType,
+          int assetId,
+          String eventType,
+        ) async {
+          final rows = await txn.rawQuery(
+            '''
+            SELECT MAX(occurred_ms) AS occurred_ms
+            FROM asset_events
+            WHERE asset_type = ? AND asset_id = ? AND event_type = ?
+            ''',
+            [assetType, assetId, eventType],
+          );
+          return rows.isEmpty ? null : rows.first['occurred_ms'] as int?;
+        }
+
+        for (final assetId in insertedLegacyAssetIds) {
+          final rows = await txn.query(
+            'physical_assets',
+            columns: ['economic_status', 'visibility_status'],
+            where: 'id = ?',
+            whereArgs: [assetId],
+            limit: 1,
+          );
+          if (rows.isEmpty) continue;
+          final economic = rows.first['economic_status'] as String? ?? 'owned';
+          final visibility =
+              rows.first['visibility_status'] as String? ?? 'active';
+          final endedEvent = switch (economic) {
+            'sold' => AssetEventType.assetSold.storageKey,
+            'scrapped' => AssetEventType.assetDisposed.storageKey,
+            'lost' => AssetEventType.assetLost.storageKey,
+            'gifted' => AssetEventType.assetGifted.storageKey,
+            _ => null,
+          };
+          await txn.update(
+            'physical_assets',
+            {
+              'ended_ms': endedEvent == null
+                  ? null
+                  : await latestEventMs('physical', assetId, endedEvent),
+              'archived_ms': visibility == 'archived'
+                  ? await latestEventMs(
+                      'physical',
+                      assetId,
+                      AssetEventType.assetArchived.storageKey,
+                    )
+                  : null,
+            },
+            where: 'id = ?',
+            whereArgs: [assetId],
+          );
+        }
+
+        for (final assetId in insertedLegacyReceivableIds) {
+          final rows = await txn.query(
+            'receivable_assets',
+            where: 'id = ?',
+            whereArgs: [assetId],
+            limit: 1,
+          );
+          if (rows.isEmpty) continue;
+          final row = rows.first;
+          final visibility = row['visibility_status'] as String? ?? 'active';
+          final original = _assetAmount(row, 'original_amount');
+          final remaining = _assetAmount(row, 'remaining_amount');
+          final recoveryRows = await txn.query(
+            'receivable_recoveries',
+            where: 'receivable_asset_id = ?',
+            whereArgs: [assetId],
+          );
+          var recovered = Decimal.zero;
+          var recoveriesValid = true;
+          var latestRecoveryMs = 0;
+          for (final recovery in recoveryRows) {
+            final amount = _assetAmount(recovery, 'amount');
+            if (amount <= Decimal.zero) recoveriesValid = false;
+            recovered += amount;
+            final recoveredMs = recovery['recovered_ms'] as int? ?? 0;
+            if (recoveredMs > latestRecoveryMs) {
+              latestRecoveryMs = recoveredMs;
+            }
+          }
+          final lostMs = await latestEventMs(
+            'receivable',
+            assetId,
+            AssetEventType.receivableLost.storageKey,
+          );
+          ReceivableEconomicStatus economicStatus;
+          int? endedMs;
+          if (visibility != 'archived') {
+            economicStatus = ReceivableEconomicStatusX.fromStorage(
+              row['economic_status'] as String?,
+            );
+            endedMs = switch (economicStatus) {
+              ReceivableEconomicStatus.recovered =>
+                latestRecoveryMs == 0 ? null : latestRecoveryMs,
+              ReceivableEconomicStatus.lost => lostMs,
+              _ => null,
+            };
+          } else {
+            economicStatus = ReceivableEconomicStatus.unknown;
+            endedMs = null;
+            final recoveryAfterLoss = lostMs != null &&
+                recoveryRows.any((recovery) =>
+                    (recovery['recovered_ms'] as int? ?? 0) > lostMs);
+            final amountsValid = original >= Decimal.zero &&
+                remaining >= Decimal.zero &&
+                remaining <= original &&
+                recoveriesValid &&
+                recovered <= original;
+            if (amountsValid && lostMs != null && !recoveryAfterLoss) {
+              if (remaining == Decimal.zero) {
+                economicStatus = ReceivableEconomicStatus.lost;
+                endedMs = lostMs;
+              }
+            } else if (amountsValid && lostMs == null) {
+              if (original > Decimal.zero &&
+                  remaining == Decimal.zero &&
+                  recovered == original) {
+                economicStatus = ReceivableEconomicStatus.recovered;
+                endedMs = latestRecoveryMs == 0 ? null : latestRecoveryMs;
+              } else if (remaining > Decimal.zero &&
+                  remaining < original &&
+                  recovered == original - remaining) {
+                economicStatus = ReceivableEconomicStatus.partialRecovered;
+              } else if (remaining == original && recovered == Decimal.zero) {
+                economicStatus = ReceivableEconomicStatus.active;
+              }
+            }
+          }
+          await txn.update(
+            'receivable_assets',
+            {
+              'economic_status': economicStatus.storageKey,
+              'ended_ms': endedMs,
+              'archived_ms': visibility == 'archived'
+                  ? await latestEventMs(
+                      'receivable',
+                      assetId,
+                      AssetEventType.receivableArchived.storageKey,
+                    )
+                  : null,
+            },
+            where: 'id = ?',
+            whereArgs: [assetId],
+          );
+        }
+      }
+
+      for (final raw in snapshots) {
+        final snapshotDate = str(raw, 'snapshot_date');
+        if (snapshotDate.isEmpty) continue;
+        await txn.insert(
+          'net_worth_snapshots',
+          {
+            'scope_key': str(raw, 'scope_key', 'global'),
+            'snapshot_date': snapshotDate,
+            'total_assets': str(raw, 'total_assets', '0'),
+            'total_liabilities': str(raw, 'total_liabilities', '0'),
+            'net_worth': str(raw, 'net_worth', '0'),
+            'cash_assets': str(raw, 'cash_assets', '0'),
+            'investment_assets': str(raw, 'investment_assets', '0'),
+            'physical_assets': str(raw, 'physical_assets', '0'),
+            'receivable_assets': str(raw, 'receivable_assets', '0'),
+            'snapshot_type': str(raw, 'snapshot_type', 'legacy_unverified'),
+            'lineage_key': str(raw, 'lineage_key', 'legacy:global'),
+            'as_of_ms': intOr(raw['as_of_ms'], 0),
+            'knowledge_cutoff_ms': intOr(
+              raw['knowledge_cutoff_ms'],
+              intOr(raw['created_ms'], 0),
+            ),
+            'timezone': str(raw, 'timezone', 'device_local'),
+            'scope_version': intOr(raw['scope_version'], 1),
+            'calculation_version':
+                intOr(raw['calculation_version'], statisticsCalculationVersion),
+            'currency_coverage_json': str(raw, 'currency_coverage_json'),
+            'quality': str(raw, 'quality', 'legacy_unverified'),
+            'cause_set_json': str(raw, 'cause_set_json'),
+            'reasons_json': str(raw, 'reasons_json'),
+            'valuation_coverage_json': str(raw, 'valuation_coverage_json'),
+            'provisional': intOr(raw['provisional'], 0),
+            'created_ms':
+                intOr(raw['created_ms'], DateTime.now().millisecondsSinceEpoch),
+          },
+          conflictAlgorithm: ConflictAlgorithm.replace,
+        );
+        snapshotCount++;
+      }
+
+      for (final raw in liabilityProfiles) {
+        final uuid = uuidOf(raw);
+        if (await existsByUuid('liability_profiles', uuid)) continue;
+        final accountId = accountIdFromAssetJson(
+          raw,
+          idKey: 'account_id',
+          nameKey: 'account_name',
+        );
+        if (accountId == null) continue;
+        final repaymentAccountId = accountIdFromAssetJson(
+          raw,
+          idKey: 'repayment_account_id',
+          nameKey: 'repayment_account_name',
+        );
+        await txn.insert(
+          'liability_profiles',
+          {
+            'uuid': uuid,
+            'account_id': accountId,
+            'liability_type': LiabilityProfileTypeX.fromStorage(
+              str(raw, 'liability_type'),
+            ).storageKey,
+            'original_amount': str(raw, 'original_amount', '0'),
+            'current_principal': str(raw, 'current_principal', '0'),
+            'interest_rate': str(raw, 'interest_rate', '0'),
+            'repayment_day': intOrNull(raw['repayment_day']),
+            'repayment_account_id': repaymentAccountId,
+            'start_date_ms': intOrNull(raw['start_date_ms']),
+            'end_date_ms': intOrNull(raw['end_date_ms']),
+            'status': LiabilityProfileStatusX.fromStorage(
+              str(raw, 'status'),
+            ).storageKey,
+            'note': str(raw, 'note'),
+            'created_ms':
+                intOr(raw['created_ms'], DateTime.now().millisecondsSinceEpoch),
+            'updated_ms':
+                intOr(raw['updated_ms'], DateTime.now().millisecondsSinceEpoch),
+          },
+          conflictAlgorithm: ConflictAlgorithm.replace,
+        );
+        liabilityCount++;
+      }
+    });
+
+    await _loadTransactions();
+    await _loadPhysicalAssetData();
+    await _loadNetWorthSnapshots();
+    await _loadLiabilityProfiles();
+    notifyListeners();
+    return FeimiaoAssetImportResult(
+      assets: assetCount,
+      receivables: receivableCount,
+      events: eventCount,
+      usages: usageCount,
+      valuations: valuationCount,
+      links: linkCount,
+      recoveries: recoveryCount,
+      snapshots: snapshotCount,
+      liabilities: liabilityCount,
+      unresolvedTransactionLinks: unresolvedTransactionLinkCount,
+      unresolvedSavingsGoalLinks: unresolvedSavingsGoalLinkCount,
+      rejectedLinks: rejectedLinkCount,
+    );
   }
 
   // ---------------------------------------------------------------------------
   // 账户 CRUD
   // ---------------------------------------------------------------------------
 
-  Future<int> addAccount({required String name, String currencyCode = 'CNY'}) async {
+  Future<int> addAccount({
+    required String name,
+    String currencyCode = 'CNY',
+    AccountType type = AccountType.cash,
+    Decimal? openingBalance,
+    bool includeInNetWorth = true,
+    String institution = '',
+  }) async {
+    final normalizedCurrency = currencyCode.trim().toUpperCase();
+    if (normalizedCurrency != 'CNY') {
+      throw UnsupportedError('当前版本仅支持新增人民币账户。');
+    }
+    final now = DateTime.now().millisecondsSinceEpoch;
     final id = await _db!.insert('accounts', {
+      'uuid': _newUuid(),
       'name': name,
-      'currency_code': currencyCode,
+      'currency_code': normalizedCurrency,
+      'type': type.storageKey,
+      'opening_balance': (openingBalance ?? Decimal.zero).toString(),
+      'include_in_net_worth': includeInNetWorth ? 1 : 0,
+      'institution': institution,
+      'created_ms': now,
+      'updated_ms': now,
+      'opening_balance_effective_ms': now,
+      'opening_balance_sequence': 0,
+      'opening_balance_quality': AccountOpeningBalanceQuality.exact.storageKey,
+      'status': AccountStatus.active.storageKey,
     });
     await _loadAccounts();
+    await _refreshCurrentNetWorthSnapshotBestEffort(
+      const {NetWorthSnapshotCause.account},
+    );
     notifyListeners();
     return id;
   }
@@ -2182,7 +18402,10 @@ class AppRepository extends ChangeNotifier {
   Future<void> renameAccount(int id, String newName) async {
     await _db!.update(
       'accounts',
-      {'name': newName},
+      {
+        'name': newName,
+        'updated_ms': DateTime.now().millisecondsSinceEpoch,
+      },
       where: 'id = ?',
       whereArgs: [id],
     );
@@ -2190,9 +18413,252 @@ class AppRepository extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> deleteAccount(int id) async {
-    await _db!.delete('accounts', where: 'id = ?', whereArgs: [id]);
+  Future<void> updateAccount({
+    required int id,
+    required String name,
+    required String currencyCode,
+    required AccountType type,
+    required Decimal openingBalance,
+    required bool includeInNetWorth,
+    required String institution,
+  }) async {
+    final existing = _accounts.where((account) => account.id == id).firstOrNull;
+    if (existing == null) throw StateError('账户不存在');
+    final normalizedCurrency = currencyCode.trim().toUpperCase();
+    final allowedCurrency = existing.currencyCode == 'CNY'
+        ? 'CNY'
+        : existing.currencyCode.toUpperCase();
+    if (normalizedCurrency != allowedCurrency) {
+      throw UnsupportedError('当前版本不能新增或转换外币账户。');
+    }
+    if (existing.includeInNetWorth != includeInNetWorth) {
+      await _bumpNetWorthScopeVersion();
+    }
+    await _db!.update(
+      'accounts',
+      {
+        'name': name,
+        'currency_code': allowedCurrency,
+        'type': type.storageKey,
+        'include_in_net_worth': includeInNetWorth ? 1 : 0,
+        'institution': institution,
+        'updated_ms': DateTime.now().millisecondsSinceEpoch,
+      },
+      where: 'id = ?',
+      whereArgs: [id],
+    );
     await _loadAccounts();
+    await _refreshCurrentNetWorthSnapshotBestEffort(
+      const {NetWorthSnapshotCause.account},
+    );
+    notifyListeners();
+  }
+
+  Future<void> deleteAccount(int id) async {
+    await archiveAccount(id);
+  }
+
+  Future<void> archiveAccount(int id) async {
+    final existing = _accounts.where((account) => account.id == id).firstOrNull;
+    if (existing == null || existing.isArchived) return;
+    final now = DateTime.now().millisecondsSinceEpoch;
+    await _db!.update(
+      'accounts',
+      {
+        'status': AccountStatus.archived.storageKey,
+        'archived_ms': now,
+        'updated_ms': now,
+      },
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+    await _loadAccounts();
+    await _refreshCurrentNetWorthSnapshotBestEffort(
+      const {NetWorthSnapshotCause.account},
+    );
+    notifyListeners();
+  }
+
+  Future<void> restoreArchivedAccount(int id) async {
+    final existing = _accounts.where((account) => account.id == id).firstOrNull;
+    if (existing == null || !existing.isArchived) return;
+    final now = DateTime.now().millisecondsSinceEpoch;
+    await _db!.update(
+      'accounts',
+      {
+        'status': AccountStatus.active.storageKey,
+        'archived_ms': null,
+        'updated_ms': now,
+      },
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+    await _loadAccounts();
+    await _refreshCurrentNetWorthSnapshotBestEffort(
+      const {NetWorthSnapshotCause.account},
+    );
+    notifyListeners();
+  }
+
+  Future<int> createAccountBalanceCheckpoint({
+    required int accountId,
+    required Decimal targetBalance,
+    String note = '',
+    DateTime? effectiveAt,
+  }) async {
+    final account =
+        _accounts.where((candidate) => candidate.id == accountId).firstOrNull;
+    if (account == null) throw StateError('账户不存在');
+    final now = DateTime.now();
+    final effective = effectiveAt ?? now;
+    if (effective.isAfter(now.add(const Duration(seconds: 1)))) {
+      throw ArgumentError('核对时点不能晚于现在');
+    }
+    final historical =
+        now.difference(effective).abs() > const Duration(minutes: 1);
+    if (historical) {
+      throw UnsupportedError('当前版本只支持“现在核对”，历史日终需逐项确认未知到账事件后再开放。');
+    }
+    final calculated = accountBalanceResultOf(account).value!.balance;
+    final effectiveMs = effective.millisecondsSinceEpoch;
+    final cutoffMs = now.millisecondsSinceEpoch;
+    final checkpointSequence = _accountBalanceCheckpoints
+        .where((checkpoint) =>
+            checkpoint.accountId == accountId &&
+            checkpoint.effectiveMs == effectiveMs)
+        .map((checkpoint) => checkpoint.sequence)
+        .fold<int>(0, max);
+    final movementSequence = _allTransactions
+        .where((transaction) =>
+            transaction.settledMs == effectiveMs &&
+            (transaction.createdMs == 0 || transaction.createdMs <= cutoffMs))
+        .map((transaction) => transaction.id)
+        .fold<int>(0, max);
+    final sequence = max(checkpointSequence, movementSequence) + 1;
+    final coveredUnknownIds = <String>{};
+    for (final transaction in _allTransactions) {
+      final unknownDate = transaction.settledMs == null ||
+          transaction.settlementQuality == SettlementQuality.unknown;
+      final knownAtCutoff =
+          transaction.createdMs == 0 || transaction.createdMs <= cutoffMs;
+      final confirmedSource =
+          transaction.settlementAccountQuality == SettlementQuality.exact ||
+              transaction.settlementAccountQuality ==
+                  SettlementQuality.userConfirmed;
+      if (!unknownDate || !knownAtCutoff || !confirmedSource) continue;
+      final eventId = transaction.uuid.isEmpty
+          ? transaction.id.toString()
+          : transaction.uuid;
+      if (transaction.eventType == TransactionEventType.transfer) {
+        if (transaction.settlementAccountId == accountId) {
+          coveredUnknownIds.add('$eventId:out');
+        }
+        if (transaction.toAccountId == accountId) {
+          coveredUnknownIds.add('$eventId:in');
+        }
+      } else if (transaction.settlementAccountId == accountId) {
+        coveredUnknownIds.add(eventId);
+      }
+    }
+    late final int checkpointId;
+    await _db!.transaction((txn) async {
+      checkpointId = await txn.insert('account_balance_checkpoints', {
+        'uuid': _newUuid(),
+        'account_id': accountId,
+        'event_kind': AccountBalanceCheckpointKind.anchor.storageKey,
+        'effective_ms': effectiveMs,
+        'sequence': sequence,
+        'timezone': 'device_local',
+        'knowledge_cutoff_ms': cutoffMs,
+        'target_balance': targetBalance.toString(),
+        'calculated_before': calculated.toString(),
+        'delta_at_creation': (targetBalance - calculated).toString(),
+        'reason': 'manual',
+        'note': note.trim(),
+        'status': 'active',
+        'reversal_of': null,
+        'created_ms': cutoffMs,
+        'updated_ms': cutoffMs,
+      });
+      for (final eventId in coveredUnknownIds) {
+        await txn.insert(
+          'account_checkpoint_covered_unknown_events',
+          {
+            'checkpoint_id': checkpointId,
+            'account_event_uuid': eventId,
+            'created_ms': cutoffMs,
+          },
+          conflictAlgorithm: ConflictAlgorithm.ignore,
+        );
+      }
+      await txn.update(
+        'accounts',
+        {
+          'last_verified_ms': effectiveMs,
+          'updated_ms': cutoffMs,
+        },
+        where: 'id = ?',
+        whereArgs: [accountId],
+      );
+    });
+    await Future.wait([
+      _loadAccounts(),
+      _loadAccountBalanceCheckpoints(),
+    ]);
+    await _refreshCurrentNetWorthSnapshotBestEffort(
+      const {NetWorthSnapshotCause.account},
+    );
+    notifyListeners();
+    return checkpointId;
+  }
+
+  Future<void> reverseAccountBalanceCheckpoint(
+    int checkpointId, {
+    String note = '',
+  }) async {
+    final original = _accountBalanceCheckpoints
+        .where((checkpoint) => checkpoint.id == checkpointId)
+        .firstOrNull;
+    if (original == null || !original.isAnchor) {
+      throw StateError('校准记录不存在');
+    }
+    final alreadyReversed = _accountBalanceCheckpoints.any(
+      (checkpoint) =>
+          checkpoint.isReversal &&
+          checkpoint.reversalOf == checkpointId &&
+          checkpoint.status == 'active',
+    );
+    if (alreadyReversed) return;
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final sequence = _accountBalanceCheckpoints
+            .where((checkpoint) =>
+                checkpoint.accountId == original.accountId &&
+                checkpoint.effectiveMs == now)
+            .map((checkpoint) => checkpoint.sequence)
+            .fold<int>(0, max) +
+        1;
+    await _db!.insert('account_balance_checkpoints', {
+      'uuid': _newUuid(),
+      'account_id': original.accountId,
+      'event_kind': AccountBalanceCheckpointKind.reversal.storageKey,
+      'effective_ms': now,
+      'sequence': sequence,
+      'timezone': 'device_local',
+      'knowledge_cutoff_ms': now,
+      'target_balance': original.targetBalance.toString(),
+      'calculated_before': original.calculatedBefore.toString(),
+      'delta_at_creation': original.deltaAtCreation.toString(),
+      'reason': 'manual_reversal',
+      'note': note.trim(),
+      'status': 'active',
+      'reversal_of': checkpointId,
+      'created_ms': now,
+      'updated_ms': now,
+    });
+    await _loadAccountBalanceCheckpoints();
+    await _refreshCurrentNetWorthSnapshotBestEffort(
+      const {NetWorthSnapshotCause.account},
+    );
     notifyListeners();
   }
 
@@ -2219,7 +18685,8 @@ class AppRepository extends ChangeNotifier {
     return id;
   }
 
-  Future<void> renameCategory(int id, {required String nameZh, String? nameEn}) async {
+  Future<void> renameCategory(int id,
+      {required String nameZh, String? nameEn}) async {
     final updates = <String, Object?>{'name_zh': nameZh};
     if (nameEn != null) updates['name_en'] = nameEn;
     await _db!.update('categories', updates, where: 'id = ?', whereArgs: [id]);
@@ -2231,9 +18698,72 @@ class AppRepository extends ChangeNotifier {
   /// 有历史账单的分类别直接删——UI 层用 [transactionCountForCategory]
   /// 检查后引导「隐藏」或「合并」。
   Future<void> deleteCategory(int id) async {
-    await _db!.delete('categories',
-        where: 'id = ? OR parent_id = ?', whereArgs: [id, id]);
+    final targets = <CategoryEntity>[
+      for (final category in _categories)
+        if (category.id == id || category.parentId == id) category,
+    ];
+    if (targets.isEmpty) return;
+    final ids = targets.map((category) => category.id).toList();
+    final marks = List.filled(ids.length, '?').join(',');
+    final transactionCount = Sqflite.firstIntValue(await _db!.rawQuery(
+          'SELECT COUNT(*) FROM transactions WHERE category_id IN ($marks)',
+          ids,
+        )) ??
+        0;
+    final recurringCount = Sqflite.firstIntValue(await _db!.rawQuery(
+          'SELECT COUNT(*) FROM recurring_rules WHERE category_id IN ($marks)',
+          ids,
+        )) ??
+        0;
+    final budgetKeys = targets.map((category) => category.key).toSet();
+    var hasBudget = false;
+    final budgetRows = await _db!.query(
+      'budget_periods',
+      columns: ['category_budgets'],
+      where: "category_budgets <> ''",
+    );
+    for (final row in budgetRows) {
+      try {
+        final decoded = jsonDecode(row['category_budgets'] as String);
+        if (decoded is Map &&
+            decoded.keys.any((key) => budgetKeys.contains(key))) {
+          hasBudget = true;
+          break;
+        }
+      } catch (_) {}
+    }
+    final revisionRows = await _db!.query(
+      'budget_plan_revisions',
+      columns: ['category_budgets_json'],
+      where: "category_budgets_json <> '{}'",
+    );
+    for (final row in revisionRows) {
+      try {
+        final decoded = jsonDecode(row['category_budgets_json'] as String);
+        if (decoded is Map &&
+            decoded.keys.any((key) => budgetKeys.contains(key))) {
+          hasBudget = true;
+          break;
+        }
+      } catch (_) {}
+    }
+    if (_budgetPlansV2.any((plan) =>
+        plan.isSpecial &&
+        plan.expenseScope.categoryKeys.any(budgetKeys.contains))) {
+      hasBudget = true;
+    }
+    if (transactionCount > 0 || recurringCount > 0 || hasBudget) {
+      throw StateError('这个分类仍被账单、定时记账、分类预算或专项追踪使用，请先隐藏或合并。');
+    }
+    await _db!.transaction((txn) async {
+      await txn.delete('category_memory',
+          where:
+              'category_key IN (${List.filled(budgetKeys.length, '?').join(',')})',
+          whereArgs: budgetKeys.toList());
+      await txn.delete('categories', where: 'id IN ($marks)', whereArgs: ids);
+    });
     await _loadCategories();
+    await _loadCategoryMemory();
     notifyListeners();
   }
 
@@ -2262,21 +18792,117 @@ class AppRepository extends ChangeNotifier {
     final from = _categories.where((c) => c.id == fromId).firstOrNull;
     final to = _categories.where((c) => c.id == toId).firstOrNull;
     if (from == null || to == null) return;
+    if (from.kind != to.kind) {
+      throw ArgumentError('支出和收入分类不能互相合并');
+    }
+    final targetScopeKey = to.parentId == null
+        ? to.key
+        : _categories
+                .where((category) => category.id == to.parentId)
+                .firstOrNull
+                ?.key ??
+            to.key;
 
     final now = DateTime.now().millisecondsSinceEpoch;
-    await _db!.update(
-        'transactions', {'category_id': toId, 'updated_ms': now},
-        where: 'category_id = ?', whereArgs: [fromId]);
-    // from 的子分类改认 to 当父类（to 是子分类时挂到 to 的父类下，别出现三级）。
-    final newParent = to.isTopLevel ? to.id : to.parentId!;
-    await _db!.update('categories', {'parent_id': newParent},
-        where: 'parent_id = ?', whereArgs: [fromId]);
-    await _db!.update('category_memory', {'category_key': to.key},
-        where: 'category_key = ?', whereArgs: [from.key]);
-    await _db!.delete('categories', where: 'id = ?', whereArgs: [fromId]);
+    await _db!.transaction((txn) async {
+      await txn.update('transactions', {'category_id': toId, 'updated_ms': now},
+          where: 'category_id = ?', whereArgs: [fromId]);
+      await txn.update('recurring_rules', {'category_id': toId},
+          where: 'category_id = ?', whereArgs: [fromId]);
+      final budgetRows = await txn.query(
+        'budget_periods',
+        columns: ['id', 'category_budgets'],
+        where: "category_budgets <> ''",
+      );
+      for (final row in budgetRows) {
+        try {
+          final decoded = jsonDecode(row['category_budgets'] as String);
+          if (decoded is! Map || !decoded.containsKey(from.key)) continue;
+          final budgets = <String, dynamic>{
+            for (final entry in decoded.entries)
+              entry.key.toString(): entry.value,
+          };
+          final fromAmount =
+              Decimal.tryParse(budgets.remove(from.key).toString()) ??
+                  Decimal.zero;
+          final toAmount =
+              Decimal.tryParse(budgets[to.key]?.toString() ?? '') ??
+                  Decimal.zero;
+          budgets[to.key] = (fromAmount + toAmount).toString();
+          await txn.update(
+            'budget_periods',
+            {'category_budgets': jsonEncode(budgets)},
+            where: 'id = ?',
+            whereArgs: [row['id']],
+          );
+        } catch (_) {}
+      }
+      final revisionRows = await txn.query(
+        'budget_plan_revisions',
+        columns: ['id', 'category_budgets_json'],
+        where: "category_budgets_json <> '{}'",
+      );
+      for (final row in revisionRows) {
+        try {
+          final decoded = jsonDecode(row['category_budgets_json'] as String);
+          if (decoded is! Map || !decoded.containsKey(from.key)) continue;
+          final budgets = <String, dynamic>{
+            for (final entry in decoded.entries)
+              entry.key.toString(): entry.value,
+          };
+          final fromAmount =
+              int.tryParse(budgets.remove(from.key).toString()) ?? 0;
+          final toAmount = int.tryParse(budgets[to.key]?.toString() ?? '') ?? 0;
+          budgets[to.key] = fromAmount + toAmount;
+          await txn.update(
+            'budget_plan_revisions',
+            {'category_budgets_json': jsonEncode(budgets)},
+            where: 'id = ?',
+            whereArgs: [row['id']],
+          );
+        } catch (_) {}
+      }
+      final specialRows = await txn.query(
+        'budget_plans',
+        columns: ['id', 'expense_scope_json'],
+        where: "role = 'special' AND expense_scope_json <> ''",
+      );
+      for (final row in specialRows) {
+        try {
+          final scope = BudgetExpenseScopeV2.fromJsonString(
+            row['expense_scope_json'] as String?,
+          );
+          if (!scope.categoryKeys.contains(from.key)) continue;
+          final categoryKeys = scope.categoryKeys.toSet()
+            ..remove(from.key)
+            ..add(targetScopeKey);
+          await txn.update(
+            'budget_plans',
+            {
+              'expense_scope_json': BudgetExpenseScopeV2(
+                categoryKeys: categoryKeys,
+                tagIds: scope.tagIds,
+              ).toJsonString(),
+            },
+            where: 'id = ?',
+            whereArgs: [row['id']],
+          );
+        } catch (_) {}
+      }
+      // from 的子分类改认 to 当父类（to 是子分类时挂到 to 的父类下，别出现三级）。
+      final newParent = to.isTopLevel ? to.id : to.parentId!;
+      await txn.update('categories', {'parent_id': newParent},
+          where: 'parent_id = ?', whereArgs: [fromId]);
+      await txn.update('category_memory', {'category_key': to.key},
+          where: 'category_key = ?', whereArgs: [from.key]);
+      await txn.delete('categories', where: 'id = ?', whereArgs: [fromId]);
+    });
 
     await _loadCategories();
     await _loadCategoryMemory();
+    await _loadRecurringRules();
+    await _loadBudgetPeriods();
+    await _loadBudgetV2();
     await _loadTransactions();
     notifyListeners();
   }
@@ -2291,12 +18917,15 @@ class AppRepository extends ChangeNotifier {
     String emoji = '🐷',
     Decimal? initialSaved,
   }) async {
+    final nowMs = DateTime.now().millisecondsSinceEpoch;
     final id = await _db!.insert('savings_goals', {
+      'uuid': _newUuid(),
       'name': name,
       'emoji': emoji,
       'target_amount': target.toString(),
       'saved_amount': (initialSaved ?? Decimal.zero).toString(),
-      'created_ms': DateTime.now().millisecondsSinceEpoch,
+      'created_ms': nowMs,
+      'updated_ms': nowMs,
     });
     await _loadSavingsGoals();
     notifyListeners();
@@ -2312,16 +18941,47 @@ class AppRepository extends ChangeNotifier {
     final updates = <String, Object?>{
       'name': name,
       'target_amount': target.toString(),
+      'updated_ms': DateTime.now().millisecondsSinceEpoch,
     };
     if (emoji != null) updates['emoji'] = emoji;
-    await _db!.update('savings_goals', updates, where: 'id = ?', whereArgs: [id]);
+    await _db!
+        .update('savings_goals', updates, where: 'id = ?', whereArgs: [id]);
     await _loadSavingsGoals();
     notifyListeners();
   }
 
   Future<void> deleteSavingsGoal(int id) async {
-    await _db!.delete('savings_goals', where: 'id = ?', whereArgs: [id]);
+    final now = DateTime.now();
+    await _db!.transaction((txn) async {
+      final linked = await txn.query(
+        'physical_assets',
+        columns: ['id'],
+        where: 'savings_goal_id = ? AND is_deleted = 0',
+        whereArgs: [id],
+      );
+      await txn.update(
+        'physical_assets',
+        {
+          'savings_goal_id': null,
+          'updated_ms': now.millisecondsSinceEpoch,
+        },
+        where: 'savings_goal_id = ?',
+        whereArgs: [id],
+      );
+      for (final row in linked) {
+        await _insertAssetEvent(
+          txn,
+          assetId: row['id'] as int,
+          type: AssetEventType.assetSavingsGoalUnlinked,
+          occurredAt: now,
+          note: '存钱目标已删除，自动解除关联',
+          metadata: {'previous_savings_goal_id': id},
+        );
+      }
+      await txn.delete('savings_goals', where: 'id = ?', whereArgs: [id]);
+    });
     await _loadSavingsGoals();
+    await _loadPhysicalAssetData();
     notifyListeners();
   }
 
@@ -2332,7 +18992,10 @@ class AppRepository extends ChangeNotifier {
     if (next < Decimal.zero) next = Decimal.zero;
     await _db!.update(
       'savings_goals',
-      {'saved_amount': next.toString()},
+      {
+        'saved_amount': next.toString(),
+        'updated_ms': DateTime.now().millisecondsSinceEpoch,
+      },
       where: 'id = ?',
       whereArgs: [id],
     );
@@ -2351,7 +19014,8 @@ class AppRepository extends ChangeNotifier {
     return id;
   }
 
-  Future<void> updateTag(int id, {required String name, int? colorValue}) async {
+  Future<void> updateTag(int id,
+      {required String name, int? colorValue}) async {
     final updates = <String, Object?>{'name': name};
     if (colorValue != null) updates['color'] = colorValue;
     await _db!.update('tags', updates, where: 'id = ?', whereArgs: [id]);
@@ -2360,6 +19024,10 @@ class AppRepository extends ChangeNotifier {
   }
 
   Future<void> deleteTag(int id) async {
+    if (_budgetPlansV2.any(
+        (plan) => plan.isSpecial && plan.expenseScope.tagIds.contains(id))) {
+      throw StateError('这个标签仍被专项追踪历史使用，暂时不能删除。');
+    }
     await _db!.delete('tags', where: 'id = ?', whereArgs: [id]);
     final rows = await _db!.rawQuery(
       "SELECT id, tags FROM transactions WHERE tags LIKE ?",

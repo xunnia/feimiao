@@ -10,7 +10,8 @@ import 'pressable_scale.dart';
 
 /// 圆形浅底图标按钮（主页 ☰/🔍 同款）。用于返回 / 加号 / ✕ 等。
 class AppCircleButton extends StatelessWidget {
-  final IconData icon;
+  final IconData? icon;
+  final Widget? iconWidget;
   final VoidCallback? onPressed;
   final double size;
   final double iconSize;
@@ -20,7 +21,15 @@ class AppCircleButton extends StatelessWidget {
     required this.onPressed,
     this.size = 38,
     this.iconSize = 20,
-  });
+  }) : iconWidget = null;
+
+  const AppCircleButton.custom({
+    super.key,
+    required this.iconWidget,
+    required this.onPressed,
+    this.size = 38,
+    this.iconSize = 20,
+  }) : icon = null;
 
   @override
   Widget build(BuildContext context) {
@@ -34,7 +43,46 @@ class AppCircleButton extends StatelessWidget {
           circle: true,
           blur: 0, // 纯色背景，省 GPU
           child: Center(
-            child: Icon(icon, size: iconSize, color: scheme.onSurfaceVariant),
+            child: iconWidget ??
+                Icon(icon, size: iconSize, color: scheme.onSurfaceVariant),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class AppCloseButton extends StatelessWidget {
+  final VoidCallback? onPressed;
+  final double size;
+
+  const AppCloseButton({
+    super.key,
+    required this.onPressed,
+    this.size = 34,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return PressableScale(
+      onPressed: onPressed,
+      child: SizedBox(
+        width: size,
+        height: size,
+        child: GlassSurface(
+          circle: true,
+          blur: 0,
+          child: Center(
+            child: Text(
+              '×',
+              style: TextStyle(
+                height: 1,
+                fontSize: size * 0.64,
+                fontWeight: FontWeight.w300,
+                color: scheme.onSurfaceVariant,
+              ),
+            ),
           ),
         ),
       ),
@@ -65,7 +113,8 @@ class AppBackButton extends StatelessWidget {
 class AppPillButton extends StatelessWidget {
   final String label;
   final VoidCallback? onPressed;
-  const AppPillButton({super.key, required this.label, required this.onPressed});
+  const AppPillButton(
+      {super.key, required this.label, required this.onPressed});
 
   @override
   Widget build(BuildContext context) {
@@ -73,18 +122,27 @@ class AppPillButton extends StatelessWidget {
     final enabled = onPressed != null;
     return PressableScale(
       onPressed: onPressed,
-      child: GlassSurface(
-        radius: 18,
-        blur: 0,
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-        child: Text(
-          label,
-          style: TextStyle(
-            fontSize: 15,
-            fontWeight: FontWeight.w600,
-            color: enabled
-                ? scheme.onSurface
-                : scheme.onSurfaceVariant.withValues(alpha: 0.4),
+      child: IntrinsicWidth(
+        child: SizedBox(
+          height: 34,
+          child: GlassSurface(
+            radius: 17,
+            blur: 0,
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: Center(
+              child: Text(
+                label,
+                maxLines: 1,
+                softWrap: false,
+                style: TextStyle(
+                  fontSize: 15,
+                  fontWeight: FontWeight.w400,
+                  color: enabled
+                      ? scheme.onSurface
+                      : scheme.onSurfaceVariant.withValues(alpha: 0.38),
+                ),
+              ),
+            ),
           ),
         ),
       ),

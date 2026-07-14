@@ -2,9 +2,26 @@ import 'package:decimal/decimal.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:qingji/core/import/bill_import.dart';
 import 'package:qingji/core/models/transaction_kind.dart';
+import 'package:qingji/core/transaction_time.dart';
 
 void main() {
   group('BillImporter', () {
+    test('skips rows with an invalid date instead of inventing today', () {
+      const csv = '''日期,收/支,金额,备注
+不是日期,支出,12.50,无效日期账单
+2026-07-13,支出,8.00,有效账单''';
+
+      final result = BillImporter.parseString(csv);
+
+      expect(result.rows, hasLength(1));
+      expect(result.rows.single.note, '有效账单');
+      expect(result.rows.single.date, DateTime(2026, 7, 13));
+      expect(
+        result.rows.single.timePrecision,
+        TransactionTimePrecision.dateOnly,
+      );
+    });
+
     test('微信账单：跳过说明行 + 中性记录', () {
       const csv = '''
 微信支付账单明细
@@ -26,6 +43,7 @@ void main() {
       expect(coffee.kind, TransactionKind.expense);
       expect(coffee.amount, Decimal.parse('35.00'));
       expect(coffee.note.contains('星巴克'), isTrue);
+      expect(coffee.timePrecision, TransactionTimePrecision.exact);
 
       expect(r.rows[1].kind, TransactionKind.income);
       expect(r.rows[1].amount, Decimal.parse('100.00'));

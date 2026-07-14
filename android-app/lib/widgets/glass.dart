@@ -54,7 +54,9 @@ class GlassSurface extends StatelessWidget {
   final double radius;
   final bool circle;
   final double blur;
+  final bool blurEnabled;
   final double opacity;
+  final Color? fillColor;
   final EdgeInsetsGeometry? padding;
 
   const GlassSurface({
@@ -63,7 +65,9 @@ class GlassSurface extends StatelessWidget {
     this.radius = 20,
     this.circle = false,
     this.blur = 6,
+    this.blurEnabled = true,
     this.opacity = 0.4,
+    this.fillColor,
     this.padding,
   });
 
@@ -78,7 +82,7 @@ class GlassSurface extends StatelessWidget {
       foregroundPainter: GlassEdgePainter(radius: radius, circle: circle),
       child: Container(
         padding: padding,
-        color: scheme.surface.withValues(alpha: opacity),
+        color: fillColor ?? scheme.surface.withValues(alpha: opacity),
         child: child,
       ),
     );
@@ -88,6 +92,7 @@ class GlassSurface extends StatelessWidget {
       child: blur <= 0
           ? core
           : BackdropFilter(
+              enabled: blurEnabled,
               filter: ImageFilter.blur(sigmaX: blur, sigmaY: blur),
               child: core,
             ),

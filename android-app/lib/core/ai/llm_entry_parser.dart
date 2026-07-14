@@ -4,6 +4,8 @@ import 'package:decimal/decimal.dart';
 import 'package:http/http.dart' as http;
 
 import '../models/transaction_kind.dart';
+import '../transaction_time.dart';
+import 'ai_provider_config.dart';
 import 'entry_sanity.dart';
 import 'natural_language_entry_parser.dart';
 
@@ -14,9 +16,6 @@ import 'natural_language_entry_parser.dart';
 class LlmEntryParser {
   LlmEntryParser._();
 
-  static const _endpoint =
-      'https://api.deepseek.com/chat/completions';
-  static const _model = 'deepseek-chat';
   static const _timeoutSeconds = 20;
 
   // ---------------------------------------------------------------------------
@@ -33,13 +32,15 @@ class LlmEntryParser {
   /// 失败时抛出 [LlmParseException]。
   static Future<LlmParseResult> parseWithLLM({
     required String text,
-    required String apiKey,
+    String? apiKey,
+    AiProviderConfig? config,
     required List<({String key, String name})> expenseCats,
     required List<({String key, String name})> incomeCats,
     List<({String phrase, String categoryKey})> learnedHints = const [],
     DateTime? now,
     bool fromScreenshot = false,
   }) async {
+    final provider = _resolveConfig(apiKey: apiKey, config: config);
     final today = now ?? DateTime.now();
     String fmt(DateTime d) =>
         '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
@@ -60,7 +61,8 @@ class LlmEntryParser {
 【该用户的记账习惯】(备注/商户含左边词时**优先**归右边分类，这是该用户亲自纠正过的，尽量遵循)
 ${hints.map((h) => '${h.phrase}→${h.categoryKey}').join('、')}''';
 
-    final systemPrompt = '''你是专业记账助手。把用户的一句话拆成一笔或多笔账目，只输出JSON对象，不要任何解释、不要Markdown。
+    final systemPrompt =
+        '''你是专业记账助手。把用户的一句话拆成一笔或多笔账目，只输出JSON对象，不要任何解释、不要Markdown。
 今天是 $todayStr（$weekdayStr）。
 
 【可用分类】(categoryKey 只能从这里选)
@@ -68,7 +70,7 @@ ${hints.map((h) => '${h.phrase}→${h.categoryKey}').join('、')}''';
 收入：$incomeList$habitBlock
 
 【输出格式】
-{"intent":"record或query","entries":[{"amount":数字,"kind":"expense或income","categoryKey":"最匹配的key","date":"YYYY-MM-DD","note":"简短备注","confidence":0到1}]}
+{"intent":"record或query","entries":[{"amount":数字,"kind":"expense或income","categoryKey":"最匹配的key","date":"YYYY-MM-DD或YYYY-MM-DDTHH:mm:ss","note":"简短备注","confidence":0到1}]}
 - intent="record"：用户在**记一笔账**（描述花了/买了/收到多少钱），哪怕很口语（如"坐公交花了一块""中午吃了碗面15"）。entries 填解析出的账目。
 - intent="query"：用户在**问**已有账目或要分析（如"这月吃饭花了多少""最大一笔是哪个""我花得多不多"）。这时 entries 给空数组 []。
 - 拿不准时**优先当 record**（这是记账助手，多数输入是在记账）。
@@ -78,7 +80,7 @@ ${hints.map((h) => '${h.phrase}→${h.categoryKey}').join('、')}''';
 2. amount是纯数字(元)，去掉￥/元/块/钱；中文数字要换算，如"三十"→30、"一百二"→120。
 3. categoryKey 优先选**最具体的子类**：如"奶茶/咖啡"选 dining_drink 而非 dining，"打车"选 trans_taxi 而非 transport；实在拿不准，支出用 other、收入用 otherIncome。
 4. 分清收支：工资/奖金/收到红包/退款/报销/利息/分红=收入(income)；其余绝大多数是支出(expense)。
-5. 相对日期换算成具体日期：今天=$todayStr，昨天=$yesterdayStr，前天/大前天/上周X 等同理换算；没提日期就用今天。
+5. 相对日期换算成具体日期：今天=$todayStr，昨天=$yesterdayStr，前天/大前天/上周X 等同理换算；没提日期就用今天。用户明确说了时分时输出完整时间（如 2026-06-20T12:30:00），没说时分只输出日期，不能猜时间。
 6. confidence 是你对(金额+分类+收支)的整体把握：信息明确给0.9以上，靠猜给0.5以下。
 7. AA/均摊/平摊：若说了人数N(如"4个人AA""3人均摊")，amount 填**我应承担的那份=总额÷N**；没给人数就按总额，别瞎猜人数。
 
@@ -104,15 +106,14 @@ ${hints.map((h) => '${h.phrase}→${h.categoryKey}').join('、')}''';
 - 忽略界面噪声：搜索框、顶部 tab(全部/购物/外卖/服务)、按钮(再次购买/删除订单/去报销/去领券/退换售后/咨询医生)、优惠券与权益横幅、划线原价、件数、报销百分比。
 - **文本若含 ───── 分隔线**：是按版面切好的订单分块，金额只跟同块内紧邻上方的商品配对、不跨块；一块通常=一单。
   例：「舒肤佳沐浴露…¥32.04…维达抽纸…¥15.9」必须记成 舒肤佳=32.04、维达=15.9，**不要**错位成维达=32.04。
-- 能识别交易时间（如 2026-06-20 12:30）就用其日期；识别不到用今天。
+- 能识别交易时间（如 2026-06-20 12:30）就输出完整日期和时分；只有日期时只输出日期；识别不到用今天。
 - 普通单笔支付页就只记一笔。''';
     final sys = fromScreenshot ? systemPrompt + screenshotExtra : systemPrompt;
-    final userContent = fromScreenshot
-        ? '下面是支付/账单截图的 OCR 文字，请从中提取交易：\n\n$text'
-        : text;
+    final userContent =
+        fromScreenshot ? '下面是支付/账单截图的 OCR 文字，请从中提取交易：\n\n$text' : text;
 
     final requestBody = jsonEncode({
-      'model': _model,
+      'model': provider.model,
       'messages': [
         {'role': 'system', 'content': sys},
         {'role': 'user', 'content': userContent},
@@ -126,9 +127,9 @@ ${hints.map((h) => '${h.phrase}→${h.categoryKey}').join('、')}''';
     try {
       response = await http
           .post(
-            Uri.parse(_endpoint),
+            provider.chatCompletionsUri,
             headers: {
-              'Authorization': 'Bearer $apiKey',
+              'Authorization': 'Bearer ${provider.apiKey}',
               'Content-Type': 'application/json',
             },
             body: requestBody,
@@ -140,7 +141,7 @@ ${hints.map((h) => '${h.phrase}→${h.categoryKey}').join('、')}''';
 
     if (response.statusCode != 200) {
       throw LlmParseException(
-          'DeepSeek 返回错误 ${response.statusCode}：${response.body}');
+          '${provider.providerLabel} 返回错误 ${response.statusCode}：${response.body}');
     }
 
     // 取 choices[0].message.content
@@ -193,23 +194,29 @@ ${hints.map((h) => '${h.phrase}→${h.categoryKey}').join('、')}''';
   /// 一次调用归几十个商户，去重后 token 极省。失败抛 [LlmParseException]。
   static Future<Map<String, String>> classifyMerchants({
     required List<({String merchant, String sample})> items,
-    required List<({String key, String name})> expenseCats,
-    required String apiKey,
+    required List<({String key, String name})> categories,
+    required TransactionKind kind,
+    String? apiKey,
+    AiProviderConfig? config,
   }) async {
     if (items.isEmpty) return const {};
-    final catList = expenseCats.map((c) => '${c.key}:${c.name}').join('、');
+    final provider = _resolveConfig(apiKey: apiKey, config: config);
+    final catList = categories.map((c) => '${c.key}:${c.name}').join('、');
+    final kindName = kind == TransactionKind.income ? '收入' : '支出';
+    final fallbackKey =
+        kind == TransactionKind.income ? 'otherIncome' : 'other';
     final merchantLines = items
         .map((e) => e.sample.trim().isEmpty
             ? e.merchant
             : '${e.merchant}（例:${e.sample}）')
         .join('\n');
     final sys =
-        '''你是记账分类助手。下面每行是一个商户名（可能带示例商品）。把**每个商户**归到最合适的**支出**分类，只输出一个JSON对象，键是商户名原文、值是categoryKey，不要解释、不要Markdown。
-categoryKey 只能从这里选（拿不准用 other）：
+        '''你是记账分类助手。下面每行是一个商户名（可能带示例商品）。把**每个商户**归到最合适的**$kindName**分类，只输出一个JSON对象，键是商户名原文、值是categoryKey，不要解释、不要Markdown。
+categoryKey 只能从这里选（拿不准用 $fallbackKey）：
 $catList
-规则：看商户在卖什么就归哪类；京东/淘宝/拼多多/美团这类万能平台按最可能的大类(购物/餐饮)；个人转账/看不出卖什么的用 other。''';
+规则：看商户在卖什么就归哪类；京东/淘宝/拼多多/美团这类万能平台按最可能的大类(购物/餐饮)；个人转账/看不出来源或用途的用 $fallbackKey。''';
     final requestBody = jsonEncode({
-      'model': _model,
+      'model': provider.model,
       'messages': [
         {'role': 'system', 'content': sys},
         {'role': 'user', 'content': merchantLines},
@@ -223,9 +230,9 @@ $catList
     try {
       response = await http
           .post(
-            Uri.parse(_endpoint),
+            provider.chatCompletionsUri,
             headers: {
-              'Authorization': 'Bearer $apiKey',
+              'Authorization': 'Bearer ${provider.apiKey}',
               'Content-Type': 'application/json',
             },
             body: requestBody,
@@ -235,7 +242,8 @@ $catList
       throw LlmParseException('网络请求失败：$e');
     }
     if (response.statusCode != 200) {
-      throw LlmParseException('DeepSeek 返回错误 ${response.statusCode}');
+      throw LlmParseException(
+          '${provider.providerLabel} 返回错误 ${response.statusCode}');
     }
     try {
       final outer = jsonDecode(response.body) as Map<String, dynamic>;
@@ -256,6 +264,18 @@ $catList
   // 内部转换
   // ---------------------------------------------------------------------------
 
+  static AiProviderConfig _resolveConfig({
+    String? apiKey,
+    AiProviderConfig? config,
+  }) {
+    final provider =
+        config ?? AiProviderConfig.deepSeek(apiKey: apiKey?.trim() ?? '');
+    if (!provider.hasKey) {
+      throw LlmParseException('${provider.providerLabel} API Key 未配置');
+    }
+    return provider;
+  }
+
   static ParsedEntry? _convertEntry(
       Map<String, dynamic> raw, DateTime fallbackDate) {
     // amount
@@ -268,9 +288,8 @@ $catList
 
     // kind
     final kindStr = raw['kind'] as String? ?? 'expense';
-    final kind = kindStr == 'income'
-        ? TransactionKind.income
-        : TransactionKind.expense;
+    final kind =
+        kindStr == 'income' ? TransactionKind.income : TransactionKind.expense;
 
     // categoryKey
     final categoryKey = raw['categoryKey'] as String?;
@@ -279,13 +298,12 @@ $catList
     final note = raw['note'] as String? ?? '';
 
     // date
-    DateTime date;
-    try {
-      final dateStr = raw['date'] as String? ?? '';
-      date = dateStr.isEmpty ? fallbackDate : DateTime.parse(dateStr);
-    } catch (_) {
-      date = fallbackDate;
-    }
+    final date = parseAiTransactionTime(
+      raw['date'] as String? ?? '',
+      fallback: fallbackDate,
+    );
+    final timePrecision =
+        aiTransactionTimePrecision(raw['date'] as String? ?? '');
 
     // confidence（缺省 0.7 → 走确认卡，安全兜底）
     final rawConf = raw['confidence'];
@@ -302,6 +320,7 @@ $catList
         categoryKey: categoryKey,
         note: note,
         date: date,
+        timePrecision: timePrecision,
         confidence: confidence,
       ),
       now: fallbackDate,

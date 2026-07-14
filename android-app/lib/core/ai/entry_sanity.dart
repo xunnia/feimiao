@@ -38,6 +38,7 @@ class EntrySanity {
       categoryKey: e.categoryKey,
       note: e.note,
       date: d,
+      timePrecision: e.timePrecision,
       confidence: conf,
     );
   }

@@ -1,14 +1,19 @@
+import 'dart:ui' show ImageFilter;
+
 import 'package:decimal/decimal.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../../core/models/transaction_kind.dart';
+import '../../core/ledger/ledger_policy.dart';
 import '../../core/money_format.dart';
 import '../../data/app_repository.dart';
 import '../../theme/app_colors.dart';
+import '../../widgets/app_buttons.dart';
 import '../../widgets/app_date_picker.dart';
 import '../../widgets/ios_form.dart';
 import '../../widgets/ios_menu.dart';
+import '../../widgets/glass_input.dart';
 import '../../widgets/mascot.dart';
 import '../../widgets/pressable_scale.dart';
 import '../../widgets/transaction_day_list.dart';
@@ -20,6 +25,40 @@ class SearchView extends StatefulWidget {
 
   @override
   State<SearchView> createState() => _SearchViewState();
+}
+
+const double _searchBottomChromeHeight = 150.0;
+const double _searchTopFilterHeight = 56.0;
+const double _searchTopSummaryHeight = 92.0;
+
+String normalizeSearchText(String input) {
+  final buffer = StringBuffer();
+  for (final rune in input.runes) {
+    if (rune == 0x3000) {
+      buffer.writeCharCode(0x20);
+    } else if (rune >= 0xFF01 && rune <= 0xFF5E) {
+      buffer.writeCharCode(rune - 0xFEE0);
+    } else {
+      buffer.writeCharCode(rune);
+    }
+  }
+  return buffer.toString().trim().toLowerCase();
+}
+
+List<String> moneySearchTexts(Decimal amount) => [
+      MoneyFormat.string(amount),
+      MoneyFormat.fixedString(amount),
+      amount.toString(),
+      amount.toStringAsFixed(2),
+    ];
+
+String moneyRangeLabel(Decimal? minAmount, Decimal? maxAmount) {
+  if (minAmount != null && maxAmount != null) {
+    return '${MoneyFormat.string(minAmount)}~${MoneyFormat.string(maxAmount)}';
+  }
+  if (minAmount != null) return '≥ ${MoneyFormat.string(minAmount)}';
+  if (maxAmount != null) return '≤ ${MoneyFormat.string(maxAmount)}';
+  return '金额';
 }
 
 class _SearchViewState extends State<SearchView> {
@@ -49,29 +88,39 @@ class _SearchViewState extends State<SearchView> {
 
   String _two(int n) => n.toString().padLeft(2, '0');
 
-  bool _pass(TransactionEntity t, String q) {
-    if (q.isNotEmpty) {
+  bool _pass(
+    TransactionEntity t,
+    String q,
+    Map<int, Decimal> refundTotals,
+  ) {
+    final userAmount = LedgerPolicy.userAmountWith(t, refundTotals);
+    final query = normalizeSearchText(q);
+    if (query.isNotEmpty) {
+      bool contains(String value) => normalizeSearchText(value).contains(query);
       // 分类名空时按列表里显示的「未分类」参与匹配，搜「未分类」才搜得到。
       final catName = t.categoryNameZh.isNotEmpty
           ? t.categoryNameZh
           : (t.txKind == TransactionKind.transfer ? '转账' : '未分类');
-      final hit = catName.contains(q) ||
-          t.note.contains(q) ||
-          t.accountName.contains(q) ||
-          MoneyFormat.string(t.amount).contains(q) ||
-          t.amount.toString().contains(q);
+      final hit = contains(catName) ||
+          contains(t.note) ||
+          contains(t.accountName) ||
+          contains(t.toAccountName) ||
+          contains(t.categoryKey) ||
+          moneySearchTexts(t.amount).any(contains) ||
+          moneySearchTexts(userAmount).any(contains);
       if (!hit) return false;
     }
     if (_kind != null && t.txKind != _kind) return false;
     if (_range != null) {
       final d = DateTime(t.date.year, t.date.month, t.date.day);
-      final s = DateTime(_range!.start.year, _range!.start.month, _range!.start.day);
+      final s =
+          DateTime(_range!.start.year, _range!.start.month, _range!.start.day);
       final e = DateTime(_range!.end.year, _range!.end.month, _range!.end.day);
       if (d.isBefore(s) || d.isAfter(e)) return false;
     }
     if (_accountId != null && t.accountId != _accountId) return false;
     if (_tagId != null && !t.tagIds.contains(_tagId)) return false;
-    final abs = t.amount.abs();
+    final abs = userAmount == Decimal.zero ? t.amount.abs() : userAmount.abs();
     if (_minAmt != null && abs < _minAmt!) return false;
     if (_maxAmt != null && abs > _maxAmt!) return false;
     return true;
@@ -83,48 +132,110 @@ class _SearchViewState extends State<SearchView> {
     final repo = context.watch<AppRepository>();
     final q = _q.trim();
     final active = q.isNotEmpty || _hasFilter;
+    final all = repo.transactions;
+    final refundTotals = LedgerPolicy.refundTotals(all);
     final results = !active
         ? const <TransactionEntity>[]
-        : repo.visibleTransactions.where((t) => _pass(t, q)).toList();
+        : repo.visibleTransactions
+            .where((t) => _pass(t, q, refundTotals))
+            .toList();
 
     final sections = groupTxnsByDay(results);
+    final showSummary = active && results.isNotEmpty;
+    final topChromeHeight =
+        _searchTopFilterHeight + (showSummary ? _searchTopSummaryHeight : 0);
 
     return Scaffold(
-      appBar: AppBar(title: const Text('搜索')),
-      // 输入框在底部（对齐主页、好点到）；结果用主页同款账单行按天分组。
-      body: Column(
+      appBar: AppBar(
+        leading: const AppBackButton(),
+        title: const Text('搜索'),
+        centerTitle: true,
+      ),
+      // 输入框像主页一样浮在内容上方，后面用底部虚化渐隐过渡，避免一刀切。
+      body: Stack(
         children: [
-          _filterBar(scheme, repo),
-          // 统计卡：搜索/筛选结果的支出、收入金额与笔数（搜索的价值在这）。
-          if (active && results.isNotEmpty) _summaryCard(scheme, results),
-          Expanded(
+          Positioned.fill(
             child: !active
-                ? _hint(scheme, '输入关键词或选筛选条件', MascotMood.idle)
+                ? Padding(
+                    padding: EdgeInsets.only(
+                      top: topChromeHeight,
+                      bottom: _searchBottomChromeHeight,
+                    ),
+                    child: _hint(scheme, '输入关键词或选筛选条件', MascotMood.idle),
+                  )
                 : results.isEmpty
-                    ? _hint(scheme, '没找到符合条件的账单', MascotMood.empty)
+                    ? Padding(
+                        padding: EdgeInsets.only(
+                          top: topChromeHeight,
+                          bottom: _searchBottomChromeHeight,
+                        ),
+                        child: _hint(scheme, '没找到符合条件的账单', MascotMood.empty),
+                      )
                     : ListView(
-                        padding: const EdgeInsets.only(top: 8, bottom: 12),
+                        padding: EdgeInsets.only(
+                          top: topChromeHeight + 8,
+                          bottom: _searchBottomChromeHeight,
+                        ),
                         children: [
                           for (final s in sections) TxDayCard(section: s),
                         ],
                       ),
           ),
-          _searchInputBar(scheme, q),
+          Positioned(
+            left: 0,
+            right: 0,
+            top: 0,
+            height: topChromeHeight + 32,
+            child: const IgnorePointer(child: _SearchTopFrostedFade()),
+          ),
+          Positioned(
+            left: 0,
+            right: 0,
+            top: 0,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                _filterBar(scheme, repo),
+                if (showSummary)
+                  _summaryCard(scheme, repo, results, refundTotals),
+              ],
+            ),
+          ),
+          const Positioned(
+            left: 0,
+            right: 0,
+            bottom: 0,
+            height: _searchBottomChromeHeight,
+            child: IgnorePointer(child: _SearchBottomFrostedFade()),
+          ),
+          Positioned(
+            left: 0,
+            right: 0,
+            bottom: 0,
+            child: _searchInputBar(scheme, q),
+          ),
         ],
       ),
     );
   }
 
   /// 顶部统计卡：支出/收入 金额 + 笔数（对齐咔皮）。
-  Widget _summaryCard(ColorScheme scheme, List<TransactionEntity> rows) {
+  Widget _summaryCard(
+    ColorScheme scheme,
+    AppRepository repo,
+    List<TransactionEntity> rows,
+    Map<int, Decimal> refundTotals,
+  ) {
     var exp = Decimal.zero, inc = Decimal.zero;
     var expN = 0, incN = 0;
     for (final t in rows) {
+      final amount = LedgerPolicy.userAmountWith(t, refundTotals);
+      if (amount == Decimal.zero) continue;
       if (t.txKind == TransactionKind.expense) {
-        exp += t.amount;
+        exp += amount;
         expN++;
       } else if (t.txKind == TransactionKind.income) {
-        inc += t.amount;
+        inc += amount;
         incN++;
       }
     }
@@ -139,8 +250,8 @@ class _SearchViewState extends State<SearchView> {
                           fontSize: 13, color: scheme.onSurfaceVariant)),
                   const SizedBox(width: 6),
                   Container(
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 6, vertical: 1),
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
                     decoration: BoxDecoration(
                       color: scheme.surfaceContainerHighest,
                       borderRadius: BorderRadius.circular(999),
@@ -155,75 +266,88 @@ class _SearchViewState extends State<SearchView> {
               Text(MoneyFormat.string(amt),
                   style: TextStyle(
                       fontSize: 20,
-                      fontWeight: FontWeight.w700,
+                      fontWeight: FontWeight.w600,
                       fontFamily: 'Nunito',
                       color: color)),
             ],
           ),
         );
-    return Container(
-      margin: const EdgeInsets.fromLTRB(16, 8, 16, 4),
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-      decoration: BoxDecoration(
-        color: AppColors.card(scheme),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: AppColors.hairline(scheme)),
-      ),
-      child: Row(
-        children: [
-          col('支出', expN, exp, scheme.onSurface),
-          Container(width: 0.5, height: 32, color: AppColors.hairline(scheme)),
-          const SizedBox(width: 16),
-          col('收入', incN, inc, AppColors.income(scheme)),
-        ],
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+      child: AppGlassInputShell(
+        radius: 18,
+        blur: 8,
+        opacity: 0.52,
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+        child: Row(
+          children: [
+            col('支出', expN, exp, scheme.onSurface),
+            Container(
+                width: 0.5, height: 32, color: AppColors.hairline(scheme)),
+            const SizedBox(width: 16),
+            col('收入', incN, inc, AppColors.income(scheme)),
+          ],
+        ),
       ),
     );
   }
 
-  /// 底部搜索输入框（对齐主页输入框：圆角白卡 + 轻阴影，跟键盘上移）。
+  /// 底部搜索输入框：沿用主页 RecordInputBar 的玻璃卡片语言。
   Widget _searchInputBar(ColorScheme scheme, String q) {
     return SafeArea(
       top: false,
       child: Padding(
-        padding: const EdgeInsets.fromLTRB(16, 6, 16, 10),
-        child: Container(
-          height: 48,
-          padding: const EdgeInsets.symmetric(horizontal: 16),
-          decoration: BoxDecoration(
-            color: AppColors.card(scheme),
-            borderRadius: BorderRadius.circular(28),
-            border: Border.all(color: AppColors.hairline(scheme)),
-            boxShadow: const [
-              BoxShadow(
-                  color: Color(0x14000000), blurRadius: 14, offset: Offset(0, 2)),
-            ],
-          ),
-          child: Row(
+        padding: const EdgeInsets.fromLTRB(12, 6, 12, 10),
+        child: AppGlassInputShell(
+          padding: const EdgeInsets.fromLTRB(14, 14, 10, 10),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Icon(Icons.search, size: 19, color: scheme.onSurfaceVariant),
-              const SizedBox(width: 8),
-              Expanded(
+              Padding(
+                padding: const EdgeInsets.only(bottom: 2),
                 child: TextField(
                   controller: _ctrl,
                   autofocus: true,
                   onChanged: (v) => setState(() => _q = v),
-                  textAlignVertical: TextAlignVertical.center,
-                  decoration: const InputDecoration(
+                  textInputAction: TextInputAction.search,
+                  cursorColor: scheme.primary,
+                  style: TextStyle(
+                    fontSize: 17,
+                    color: scheme.onSurface,
+                  ),
+                  decoration: InputDecoration(
+                    isDense: true,
                     isCollapsed: true,
+                    filled: false,
+                    fillColor: Colors.transparent,
+                    hoverColor: Colors.transparent,
+                    contentPadding: EdgeInsets.zero,
                     hintText: '搜账单 / 备注 / 金额',
+                    hintStyle: TextStyle(
+                      fontSize: 17,
+                      fontWeight: FontWeight.w300,
+                      color: scheme.onSurfaceVariant.withValues(alpha: 0.55),
+                    ),
                     border: InputBorder.none,
+                    enabledBorder: InputBorder.none,
+                    focusedBorder: InputBorder.none,
+                    disabledBorder: InputBorder.none,
+                    errorBorder: InputBorder.none,
+                    focusedErrorBorder: InputBorder.none,
                   ),
                 ),
               ),
-              if (q.isNotEmpty)
-                GestureDetector(
-                  onTap: () {
-                    _ctrl.clear();
-                    setState(() => _q = '');
-                  },
-                  child: Icon(Icons.cancel,
-                      size: 18, color: scheme.onSurfaceVariant),
-                ),
+              const SizedBox(height: 10),
+              Row(
+                children: [
+                  const Spacer(),
+                  _SearchSubmitButton(
+                    enabled: q.isNotEmpty || _hasFilter,
+                    onPressed: () => FocusScope.of(context).unfocus(),
+                  ),
+                ],
+              ),
             ],
           ),
         ),
@@ -235,10 +359,7 @@ class _SearchViewState extends State<SearchView> {
     final accName =
         repo.accounts.where((a) => a.id == _accountId).firstOrNull?.name;
     final tagName = repo.tags.where((t) => t.id == _tagId).firstOrNull?.name;
-    String? amtLabel;
-    if (_minAmt != null || _maxAmt != null) {
-      amtLabel = '¥${_minAmt ?? 0}~${_maxAmt != null ? '$_maxAmt' : ''}';
-    }
+    final amtLabel = moneyRangeLabel(_minAmt, _maxAmt);
     return SizedBox(
       height: 48,
       child: ListView(
@@ -269,20 +390,23 @@ class _SearchViewState extends State<SearchView> {
               (ctx) => _pickAccount(ctx, repo)),
           _chip(scheme, tagName ?? '标签', _tagId != null,
               (ctx) => _pickTag(ctx, repo)),
-          _chip(scheme, amtLabel ?? '金额',
-              _minAmt != null || _maxAmt != null, _pickAmount),
+          _chip(scheme, amtLabel, _minAmt != null || _maxAmt != null,
+              _pickAmount),
           if (_hasFilter)
             Padding(
               padding: const EdgeInsets.symmetric(vertical: 8),
               child: TextButton(
-                onPressed: () => setState(() {
-                  _kind = null;
-                  _range = null;
-                  _accountId = null;
-                  _tagId = null;
-                  _minAmt = null;
-                  _maxAmt = null;
-                }),
+                onPressed: () {
+                  FocusScope.of(context).unfocus();
+                  setState(() {
+                    _kind = null;
+                    _range = null;
+                    _accountId = null;
+                    _tagId = null;
+                    _minAmt = null;
+                    _maxAmt = null;
+                  });
+                },
                 child: const Text('清除'),
               ),
             ),
@@ -324,8 +448,7 @@ class _SearchViewState extends State<SearchView> {
                     style: TextStyle(
                       fontSize: 12.5,
                       color: active ? scheme.primary : scheme.onSurface,
-                      fontWeight:
-                          active ? FontWeight.w600 : FontWeight.w400,
+                      fontWeight: active ? FontWeight.w600 : FontWeight.w400,
                     )),
               ],
             ),
@@ -336,6 +459,7 @@ class _SearchViewState extends State<SearchView> {
   }
 
   void _pickKind(BuildContext anchor) {
+    FocusScope.of(context).unfocus();
     showIosMenu(anchor, [
       for (final o in const [
         (null, '全部'),
@@ -345,18 +469,26 @@ class _SearchViewState extends State<SearchView> {
       ])
         IosMenuItem(
           label: o.$2,
-          icon: _kind == o.$1
-              ? Icons.check_circle
-              : Icons.radio_button_unchecked,
+          icon:
+              _kind == o.$1 ? Icons.check_circle : Icons.radio_button_unchecked,
           onTap: () => setState(() => _kind = o.$1),
         ),
     ]);
   }
 
   Future<void> _pickRange(BuildContext _) async {
+    final hadFocus = FocusManager.instance.primaryFocus != null;
+    FocusScope.of(context).unfocus();
+    if (hadFocus) {
+      await Future<void>.delayed(const Duration(milliseconds: 180));
+      if (!mounted) return;
+    }
+    final today = DateTime.now();
     final r = await showAppDateRangePicker(
       context,
       initial: _range,
+      defaultStart: today,
+      defaultEnd: today,
       first: DateTime(2015),
       last: DateTime(2100),
     );
@@ -364,6 +496,7 @@ class _SearchViewState extends State<SearchView> {
   }
 
   void _pickAccount(BuildContext anchor, AppRepository repo) {
+    FocusScope.of(context).unfocus();
     showIosMenu(anchor, [
       IosMenuItem(
         label: '全部',
@@ -384,12 +517,12 @@ class _SearchViewState extends State<SearchView> {
   }
 
   void _pickTag(BuildContext anchor, AppRepository repo) {
+    FocusScope.of(context).unfocus();
     showIosMenu(anchor, [
       IosMenuItem(
         label: '全部',
-        icon: _tagId == null
-            ? Icons.check_circle
-            : Icons.radio_button_unchecked,
+        icon:
+            _tagId == null ? Icons.check_circle : Icons.radio_button_unchecked,
         onTap: () => setState(() => _tagId = null),
       ),
       for (final t in repo.tags)
@@ -404,10 +537,11 @@ class _SearchViewState extends State<SearchView> {
   }
 
   Future<void> _pickAmount(BuildContext _) async {
-    final minC = TextEditingController(
-        text: _minAmt != null ? _minAmt.toString() : '');
-    final maxC = TextEditingController(
-        text: _maxAmt != null ? _maxAmt.toString() : '');
+    FocusScope.of(context).unfocus();
+    final minC =
+        TextEditingController(text: _minAmt != null ? _minAmt.toString() : '');
+    final maxC =
+        TextEditingController(text: _maxAmt != null ? _maxAmt.toString() : '');
     await showBlurSheet<void>(
       context,
       child: Builder(
@@ -420,8 +554,8 @@ class _SearchViewState extends State<SearchView> {
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 const Text('金额区间',
-                    style: TextStyle(
-                        fontSize: 17, fontWeight: FontWeight.w600)),
+                    style:
+                        TextStyle(fontSize: 17, fontWeight: FontWeight.w600)),
                 const SizedBox(height: 14),
                 Row(
                   children: [
@@ -430,8 +564,8 @@ class _SearchViewState extends State<SearchView> {
                         controller: minC,
                         keyboardType: const TextInputType.numberWithOptions(
                             decimal: true),
-                        decoration: iosInputDecoration(ctx,
-                            hint: '最低', prefix: '¥ '),
+                        decoration:
+                            iosInputDecoration(ctx, hint: '最低', prefix: '¥ '),
                       ),
                     ),
                     Padding(
@@ -444,8 +578,8 @@ class _SearchViewState extends State<SearchView> {
                         controller: maxC,
                         keyboardType: const TextInputType.numberWithOptions(
                             decimal: true),
-                        decoration: iosInputDecoration(ctx,
-                            hint: '最高', prefix: '¥ '),
+                        decoration:
+                            iosInputDecoration(ctx, hint: '最高', prefix: '¥ '),
                       ),
                     ),
                   ],
@@ -457,6 +591,7 @@ class _SearchViewState extends State<SearchView> {
                       _minAmt = Decimal.tryParse(minC.text.trim());
                       _maxAmt = Decimal.tryParse(maxC.text.trim());
                     });
+                    FocusScope.of(context).unfocus();
                     Navigator.pop(ctx);
                   },
                   child: Container(
@@ -491,5 +626,125 @@ class _SearchViewState extends State<SearchView> {
           ],
         ),
       );
+}
 
+class _SearchTopFrostedFade extends StatelessWidget {
+  const _SearchTopFrostedFade();
+
+  @override
+  Widget build(BuildContext context) {
+    final bg = AppColors.appBg(Theme.of(context).colorScheme);
+    return ClipRect(
+      child: ShaderMask(
+        blendMode: BlendMode.dstIn,
+        shaderCallback: (bounds) => const LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: [
+            Colors.white,
+            Colors.white,
+            Colors.transparent,
+          ],
+          stops: [0.0, 0.58, 1.0],
+        ).createShader(bounds),
+        child: BackdropFilter(
+          filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topCenter,
+                end: Alignment.bottomCenter,
+                colors: [
+                  bg.withValues(alpha: 0.96),
+                  bg.withValues(alpha: 0.68),
+                  bg.withValues(alpha: 0.0),
+                ],
+                stops: const [0.0, 0.62, 1.0],
+              ),
+            ),
+            child: const SizedBox.expand(),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _SearchBottomFrostedFade extends StatelessWidget {
+  const _SearchBottomFrostedFade();
+
+  @override
+  Widget build(BuildContext context) {
+    final bg = AppColors.appBg(Theme.of(context).colorScheme);
+    return ClipRect(
+      child: ShaderMask(
+        blendMode: BlendMode.dstIn,
+        shaderCallback: (bounds) => const LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: [
+            Colors.transparent,
+            Colors.white,
+            Colors.white,
+          ],
+          stops: [0.0, 0.42, 1.0],
+        ).createShader(bounds),
+        child: BackdropFilter(
+          filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topCenter,
+                end: Alignment.bottomCenter,
+                colors: [
+                  bg.withValues(alpha: 0.0),
+                  bg.withValues(alpha: 0.72),
+                  bg.withValues(alpha: 0.96),
+                ],
+                stops: const [0.0, 0.58, 1.0],
+              ),
+            ),
+            child: const SizedBox.expand(),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _SearchSubmitButton extends StatelessWidget {
+  final bool enabled;
+  final VoidCallback onPressed;
+
+  const _SearchSubmitButton({
+    required this.enabled,
+    required this.onPressed,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return PressableScale(
+      onPressed: enabled ? onPressed : null,
+      child: Container(
+        width: 36,
+        height: 36,
+        decoration: BoxDecoration(
+          color: enabled
+              ? scheme.secondary
+              : scheme.onSurface.withValues(alpha: 0.08),
+          shape: BoxShape.circle,
+          border:
+              enabled ? null : Border.all(color: AppColors.hairline(scheme)),
+        ),
+        child: Icon(
+          Icons.arrow_upward,
+          size: 18,
+          color: enabled
+              ? scheme.onSecondary
+              : scheme.onSurface.withValues(alpha: 0.38),
+        ),
+      ),
+    );
+  }
 }

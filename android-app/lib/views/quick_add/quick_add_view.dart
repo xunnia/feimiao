@@ -1,18 +1,22 @@
 import 'package:decimal/decimal.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/cupertino.dart' show CupertinoPageRoute;
 import 'package:provider/provider.dart';
 
 import '../../core/amount_expression.dart';
 import '../../core/budget/budget_engine.dart';
 import '../../core/models/transaction_kind.dart';
 import '../../core/money_format.dart';
+import '../../core/transaction_time.dart';
 import '../../data/app_repository.dart';
 import '../../theme/app_colors.dart';
+import '../../theme/app_tokens.dart';
+import '../../widgets/app_buttons.dart';
 import '../../widgets/app_date_picker.dart';
+import '../../widgets/app_toast.dart';
 import 'ai_quick_entry_view.dart';
 import 'amount_keypad.dart';
 import 'category_grid.dart';
+import '../../widgets/app_page_route.dart';
 
 /// 快记页：打开即键盘，目标 3 秒记完一笔。
 /// 对应 iOS QuickAddView.swift。
@@ -30,6 +34,7 @@ class _QuickAddViewState extends State<QuickAddView> {
   int? _selectedAccountId;
   DateTime _date = DateTime.now();
   final TextEditingController _noteController = TextEditingController();
+  bool _saving = false;
 
   // 用于触发键盘区 rebuild 的计数器（AmountExpression 是可变对象）
   int _expressionVersion = 0;
@@ -50,7 +55,7 @@ class _QuickAddViewState extends State<QuickAddView> {
   void _applyDefaults() {
     final repo = context.read<AppRepository>();
     setState(() {
-      _selectedAccountId ??= repo.accounts.firstOrNull?.id;
+      _selectedAccountId ??= repo.transactionAccounts.firstOrNull?.id;
       final cats = repo.categoriesForKind(_kind);
       _selectedCategoryId ??= cats.firstOrNull?.id;
     });
@@ -70,25 +75,33 @@ class _QuickAddViewState extends State<QuickAddView> {
   }
 
   Future<void> _save() async {
+    if (_saving) return;
     final amount = _expression.value;
     if (amount <= Decimal.zero) return; // 金额为 0 或负数，不记录
 
     final repo = context.read<AppRepository>();
-    final accountId = _selectedAccountId ?? repo.accounts.firstOrNull?.id;
+    final accountId =
+        _selectedAccountId ?? repo.transactionAccounts.firstOrNull?.id;
     if (accountId == null) return;
 
-    await repo.addTransaction(
-      kind: _kind,
-      amount: amount,
-      categoryId: _selectedCategoryId,
-      accountId: accountId,
-      note: _noteController.text.trim(),
-      date: _date,
-    );
-
-    // 保存成功后返回首页；首页通过 context.watch<AppRepository>() 自动刷新。
-    if (mounted) {
-      Navigator.pop(context);
+    setState(() => _saving = true);
+    try {
+      final transactionDate = calendarDayWithClock(_date, DateTime.now());
+      await repo.addTransaction(
+        kind: _kind,
+        amount: amount,
+        categoryId: _selectedCategoryId,
+        accountId: accountId,
+        note: _noteController.text.trim(),
+        date: transactionDate,
+      );
+      if (mounted) Navigator.pop(context);
+    } catch (error) {
+      if (mounted) {
+        showAppToast(context, '保存失败：$error', icon: Icons.info_outline);
+      }
+    } finally {
+      if (mounted) setState(() => _saving = false);
     }
   }
 
@@ -96,6 +109,7 @@ class _QuickAddViewState extends State<QuickAddView> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
+        leading: const AppBackButton(),
         title: const Text('记一笔'),
         centerTitle: true,
         actions: [
@@ -104,7 +118,7 @@ class _QuickAddViewState extends State<QuickAddView> {
             tooltip: 'AI 记账',
             onPressed: () => Navigator.push(
               context,
-              CupertinoPageRoute<void>(
+              AppPageRoute<void>(
                 builder: (_) => const AiQuickEntryView(),
               ),
             ),
@@ -120,7 +134,8 @@ class _QuickAddViewState extends State<QuickAddView> {
             padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
             child: SegmentedButton<TransactionKind>(
               segments: const [
-                ButtonSegment(value: TransactionKind.expense, label: Text('支出')),
+                ButtonSegment(
+                    value: TransactionKind.expense, label: Text('支出')),
                 ButtonSegment(value: TransactionKind.income, label: Text('收入')),
               ],
               selected: {_kind},
@@ -131,16 +146,14 @@ class _QuickAddViewState extends State<QuickAddView> {
           // 2. 金额大字显示
           _AmountDisplay(expression: _expression, version: _expressionVersion),
 
-          // 2b. 今日可花横幅（支出且已设预算时显示）
+          // 2b. Current-cycle guidance from the shared budget resolver.
           if (_kind == TransactionKind.expense)
             Consumer<AppRepository>(
               builder: (context, repo, _) {
-                final budget = repo.monthlyBudget;
-                if (budget == null) return const SizedBox.shrink();
-                final status = BudgetEngine.status(
-                  monthlyBudget: budget,
-                  records: repo.allRecords,
+                final status = BudgetEngine.fromWindowResult(
+                  repo.currentBudgetCycle(),
                 );
+                if (status == null) return const SizedBox.shrink();
                 return _TodayAllowanceBanner(status: status);
               },
             ),
@@ -154,7 +167,8 @@ class _QuickAddViewState extends State<QuickAddView> {
                   child: CategoryGrid(
                     categories: cats,
                     selectedId: _selectedCategoryId,
-                    onSelected: (cat) => setState(() => _selectedCategoryId = cat.id),
+                    onSelected: (cat) =>
+                        setState(() => _selectedCategoryId = cat.id),
                   ),
                 );
               },
@@ -163,12 +177,14 @@ class _QuickAddViewState extends State<QuickAddView> {
 
           // 4. 底部：账户 + 日期 + 备注
           _DetailBar(
-            accounts: context.watch<AppRepository>().accounts,
+            accounts: context.watch<AppRepository>().transactionAccounts,
             selectedAccountId: _selectedAccountId,
             date: _date,
             noteController: _noteController,
             onAccountChanged: (id) => setState(() => _selectedAccountId = id),
-            onDateChanged: (d) => setState(() => _date = d),
+            onDateChanged: (d) => setState(
+              () => _date = calendarDayWithClock(d, _date),
+            ),
           ),
 
           // 5. 数字键盘
@@ -216,10 +232,10 @@ class _AmountDisplay extends StatelessWidget {
             child: Text(
               expression.displayText,
               style: Theme.of(context).textTheme.displaySmall?.copyWith(
-                    fontWeight: FontWeight.w600,
-                    // ignore: deprecated_member_use
-                    fontFeatures: const [FontFeature.tabularFigures()],
-                  ),
+                fontWeight: FontWeight.w600,
+                // ignore: deprecated_member_use
+                fontFeatures: const [FontFeature.tabularFigures()],
+              ),
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
             ),
@@ -263,14 +279,12 @@ class _DetailBar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final selectedAccount = accounts.where((a) => a.id == selectedAccountId).firstOrNull
-        ?? accounts.firstOrNull;
+    final selectedAccount =
+        accounts.where((a) => a.id == selectedAccountId).firstOrNull ??
+            accounts.firstOrNull;
 
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-      decoration: BoxDecoration(
-        border: Border(top: BorderSide(color: scheme.outlineVariant, width: 0.5)),
-      ),
       child: Row(
         children: [
           // 账户选择器
@@ -295,7 +309,8 @@ class _DetailBar extends StatelessWidget {
                 hintText: '备注…',
                 hintStyle: TextStyle(color: scheme.onSurfaceVariant),
                 isDense: true,
-                contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                contentPadding:
+                    const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
                 border: OutlineInputBorder(
                   borderRadius: BorderRadius.circular(8),
                   borderSide: BorderSide(color: scheme.outline),
@@ -391,13 +406,15 @@ class _TodayAllowanceBanner extends StatelessWidget {
     final scheme = Theme.of(context).colorScheme;
     final isOver = status.todayAllowance < Decimal.zero;
     final bgColor = isOver
-        ? AppColors.warning.withValues(alpha:  0.12)
-        : scheme.primaryContainer.withValues(alpha:  0.5);
-    final textColor = isOver ? AppColors.warning : scheme.onSurfaceVariant;
+        ? AppColors.warning.withValues(alpha: 0.12)
+        : scheme.primaryContainer.withValues(alpha: 0.5);
+    final textColor =
+        isOver ? AppColors.warning : AppTextColor.secondary(scheme);
 
     final allowanceText = isOver
-        ? '今日已超出节奏 ${MoneyFormat.string(-status.todayAllowance)}，缓一缓'
-        : '今日可花 ${MoneyFormat.string(status.todayAllowance)} · 本月剩 ${MoneyFormat.string(status.remaining)}';
+        ? '按预算平均 · 今日已超出节奏 ${MoneyFormat.string(-status.todayAllowance)}'
+        : '按预算平均 · 今日可用 ${MoneyFormat.string(status.todayAllowance)}'
+            ' · 周期剩余 ${MoneyFormat.string(status.remaining)}';
 
     return Container(
       width: double.infinity,

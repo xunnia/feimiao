@@ -21,8 +21,7 @@ class BookTemplate {
   /// 封面资源路径（assets/book_covers/<key>.png），无图为 null。
   final String? cover;
 
-  const BookTemplate(this.key, this.name, this.emoji, this.tint,
-      {this.cover});
+  const BookTemplate(this.key, this.name, this.emoji, this.tint, {this.cover});
 }
 
 const List<BookTemplate> kBookTemplates = [
@@ -171,16 +170,19 @@ class _BookSheetState extends State<_BookSheet> {
               padding: const EdgeInsets.symmetric(horizontal: 20),
               child: Row(
                 children: [
-                  Text(_icon, style: const TextStyle(fontSize: 22)),
-                  const SizedBox(width: 10),
+                  SizedBox(
+                    width: 34,
+                    child: Center(
+                      child: Text(_icon, style: const TextStyle(fontSize: 22)),
+                    ),
+                  ),
                   Expanded(
                     child: TextField(
                       controller: _nameCtrl,
                       // 编辑就是来改名的，直接聚焦弹键盘；新建先让用户看模板。
                       autofocus: _isEdit,
                       maxLength: 12,
-                      decoration:
-                          iosInputDecoration(context, hint: '账本名称'),
+                      decoration: iosInputDecoration(context, hint: '账本名称'),
                       onChanged: (_) => setState(() {}),
                     ),
                   ),
@@ -191,10 +193,29 @@ class _BookSheetState extends State<_BookSheet> {
             // ── 备注（显示在抽屉账本名下方）──
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 20),
-              child: TextField(
-                controller: _remarkCtrl,
-                maxLength: 20,
-                decoration: iosInputDecoration(context, hint: '备注（可选，如"日常开销"）'),
+              child: Row(
+                children: [
+                  SizedBox(
+                    width: 34,
+                    child: Text(
+                      '备注',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w400,
+                        color: scheme.onSurface,
+                      ),
+                    ),
+                  ),
+                  Expanded(
+                    child: TextField(
+                      controller: _remarkCtrl,
+                      maxLength: 20,
+                      decoration:
+                          iosInputDecoration(context, hint: '可选，如"日常开销"'),
+                    ),
+                  ),
+                ],
               ),
             ),
             const SizedBox(height: 6),
@@ -208,12 +229,19 @@ class _BookSheetState extends State<_BookSheet> {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         const Text('账单计入总账本',
-                            style: TextStyle(fontSize: 15)),
+                            style: TextStyle(
+                              fontSize: 15,
+                              fontWeight: FontWeight.w400,
+                            )),
                         const SizedBox(height: 2),
                         Text(
                           '开启后，这本账的账单也会出现在总账本里一起统计',
                           style: TextStyle(
-                              fontSize: 12, color: scheme.onSurfaceVariant),
+                            fontSize: 12,
+                            fontWeight: FontWeight.w400,
+                            color:
+                                scheme.onSurfaceVariant.withValues(alpha: 0.68),
+                          ),
                         ),
                       ],
                     ),
@@ -261,9 +289,9 @@ class _CoverCard extends StatelessWidget {
           borderRadius: BorderRadius.circular(16),
           border: Border.all(
             color: selected
-                ? scheme.primary
+                ? scheme.primary.withValues(alpha: 0.42)
                 : AppColors.hairline(scheme, strength: 0.8),
-            width: selected ? 2 : 1,
+            width: 1,
           ),
         ),
         clipBehavior: Clip.antiAlias,
@@ -302,6 +330,15 @@ class _CoverCard extends StatelessWidget {
                       ),
                     ),
                   ),
+                  if (selected)
+                    Positioned.fill(
+                      child: CustomPaint(
+                        painter: _CornerSelectionPainter(
+                          color: scheme.primary,
+                          radius: 16,
+                        ),
+                      ),
+                    ),
                 ],
               )
             : _placeholder(scheme),
@@ -325,5 +362,49 @@ class _CoverCard extends StatelessWidget {
         ),
       ],
     );
+  }
+}
+
+class _CornerSelectionPainter extends CustomPainter {
+  final Color color;
+  final double radius;
+
+  const _CornerSelectionPainter({
+    required this.color,
+    required this.radius,
+  });
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = color
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 2
+      ..strokeCap = StrokeCap.round;
+    const inset = 4.0;
+    const len = 17.0;
+
+    void drawCorner(double x, double y, int sx, int sy) {
+      canvas.drawLine(
+        Offset(x, y + sy * radius),
+        Offset(x, y + sy * len),
+        paint,
+      );
+      canvas.drawLine(
+        Offset(x + sx * radius, y),
+        Offset(x + sx * len, y),
+        paint,
+      );
+    }
+
+    drawCorner(inset, inset, 1, 1);
+    drawCorner(size.width - inset, inset, -1, 1);
+    drawCorner(inset, size.height - inset, 1, -1);
+    drawCorner(size.width - inset, size.height - inset, -1, -1);
+  }
+
+  @override
+  bool shouldRepaint(covariant _CornerSelectionPainter oldDelegate) {
+    return oldDelegate.color != color || oldDelegate.radius != radius;
   }
 }

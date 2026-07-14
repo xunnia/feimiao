@@ -39,4 +39,16 @@ void main() {
       expect(NotificationParse.kindOf('转账给张三¥50'), TransactionKind.expense);
     });
   });
+
+  group('NotificationParse.isRefund — 退款事件', () {
+    test('识别退款到账通知', () {
+      expect(NotificationParse.isRefund('淘宝退款到账 ￥23.50'), isTrue);
+      expect(NotificationParse.isRefund('商家已退回 18 元'), isTrue);
+    });
+
+    test('普通收入不误判为退款', () {
+      expect(NotificationParse.isRefund('工资到账 8000 元'), isFalse);
+      expect(NotificationParse.isRefund('收到转账 50 元'), isFalse);
+    });
+  });
 }

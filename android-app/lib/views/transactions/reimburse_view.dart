@@ -6,15 +6,17 @@ import '../../core/haptics.dart';
 import '../../widgets/app_buttons.dart';
 import '../../core/models/cat_svg_icon.dart';
 import '../../core/models/category_seed.dart';
+import '../../core/models/transaction_card_display.dart';
 import '../../core/money_format.dart';
 import '../../data/app_repository.dart';
 import '../../theme/app_colors.dart';
 import '../../widgets/app_toast.dart';
-import '../../widgets/ios_dialogs.dart';
+import '../../widgets/app_empty_state.dart';
 import '../../widgets/mascot.dart';
+import '../../widgets/refund_settlement_sheet.dart';
 
 /// 待报销：所有标了「待报销」的支出集中在这，报销到账后一键销掉。
-/// 闭环 = 记账时标待报销 → 这里看合计催报销 → 到账标已报销（+提醒记收入）。
+/// 闭环 = 记账时标待报销 → 这里看合计催报销 → 确认真实到账日和账户。
 class ReimburseView extends StatelessWidget {
   const ReimburseView({super.key});
 
@@ -23,25 +25,21 @@ class ReimburseView extends StatelessWidget {
     final repo = context.watch<AppRepository>();
     final scheme = Theme.of(context).colorScheme;
     final items = repo.reimbursableTransactions;
-    final total =
-        items.fold(Decimal.zero, (Decimal a, t) => a + t.amount);
+    final total = items.fold(
+      Decimal.zero,
+      (Decimal sum, item) => sum + repo.netAmountOf(item),
+    );
 
     return Scaffold(
-      appBar: AppBar(leading: const AppBackButton(), title: const Text('待报销'), centerTitle: true),
+      appBar: AppBar(
+          leading: const AppBackButton(),
+          title: const Text('待报销'),
+          centerTitle: true),
       body: items.isEmpty
-          ? Center(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  const Mascot(mood: MascotMood.success, size: 140),
-                  const SizedBox(height: 12),
-                  Text(
-                    '没有待报销的账单，都结清啦',
-                    style: TextStyle(
-                        fontSize: 13, color: scheme.onSurfaceVariant),
-                  ),
-                ],
-              ),
+          ? const AppEmptyState(
+              mood: MascotMood.success,
+              title: '没有待报销的账单',
+              message: '都结清啦',
             )
           : ListView(
               padding: const EdgeInsets.fromLTRB(16, 8, 16, 28),
@@ -82,9 +80,9 @@ class ReimburseView extends StatelessWidget {
                 ),
                 const SizedBox(height: 6),
                 Text(
-                  '报销到账后点「已报销」销掉；到账的钱记得记一笔收入喵',
-                  style: TextStyle(
-                      fontSize: 11.5, color: scheme.onSurfaceVariant),
+                  '报销到账后确认日期和收款账户，原支出会按实际报销额抵消。',
+                  style:
+                      TextStyle(fontSize: 11.5, color: scheme.onSurfaceVariant),
                 ),
                 const SizedBox(height: 10),
                 Container(
@@ -127,7 +125,27 @@ class _ReimburseRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final d = tx.date;
+    final familyNet = repo.netAmountOf(tx);
+    final displayMode =
+        context.select<AppRepository, TransactionCardDisplayMode>(
+            (value) => value.transactionCardDisplayMode);
+    final cardText = resolveTransactionCardText(
+      mode: displayMode,
+      kind: tx.txKind,
+      note: tx.note,
+      categoryName: tx.categoryNameZh,
+      accountName: tx.accountName,
+      toAccountName: tx.toAccountName,
+    );
+    final detailText = joinTransactionCardDetails([
+      transactionCardTimeLabel(
+        tx.date,
+        dateGrouped: false,
+        precision: tx.timePrecision,
+      ),
+      repo.currentBook?.name,
+      cardText.secondary,
+    ]);
 
     return Padding(
       padding: const EdgeInsets.fromLTRB(14, 10, 10, 10),
@@ -144,21 +162,24 @@ class _ReimburseRow extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  tx.note.isNotEmpty ? tx.note : tx.categoryNameZh,
+                  cardText.title,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: const TextStyle(fontSize: 14),
                 ),
                 Text(
-                  '${d.year}/${d.month}/${d.day} · ${tx.categoryNameZh}',
-                  style: TextStyle(
-                      fontSize: 11, color: scheme.onSurfaceVariant),
+                  detailText,
+                  style:
+                      TextStyle(fontSize: 11, color: scheme.onSurfaceVariant),
                 ),
               ],
             ),
           ),
           Text(
-            MoneyFormat.string(tx.amount),
+            MoneyFormat.string(
+              familyNet,
+              currencyCode: tx.currencyCode,
+            ),
             style: const TextStyle(
               fontSize: 15,
               fontWeight: FontWeight.w500,
@@ -169,24 +190,32 @@ class _ReimburseRow extends StatelessWidget {
           // 已报销：白底描边小胶囊（轻操作，不喧哗）
           GestureDetector(
             onTap: () async {
-              final ok = await showConfirmDialog(
+              if (familyNet <= Decimal.zero) {
+                showAppToast(context, '这笔账已没有待报销金额');
+                return;
+              }
+              final result = await showRefundSettlementSheet(
                 context,
-                title: '这笔已经报销到账了？',
-                message:
-                    '「${tx.note.isNotEmpty ? tx.note : tx.categoryNameZh} ${MoneyFormat.string(tx.amount)}」报销后会抵消成 0 支出（不再算你的花销），列表里保留成划线记录。',
-                confirmText: '已报销',
+                original: tx,
+                initialAmount: familyNet,
+                maxAmount: familyNet,
+                amountEditable: false,
+                title: '报销到账',
+                confirmLabel: '确认到账',
               );
-              if (ok && context.mounted) {
-                Haptics.of(Haptic.success);
-                await repo.markReimbursed(tx.id);
-                if (context.mounted) {
-                  showAppToast(context, '已报销，这笔支出已抵消归零喵');
-                }
+              if (result == null || !context.mounted) return;
+              Haptics.of(Haptic.success);
+              await repo.markReimbursed(
+                tx.id,
+                settledAt: result.settledAt,
+                settlementAccountId: result.settlementAccountId,
+              );
+              if (context.mounted) {
+                showAppToast(context, '已确认报销到账，原支出已抵消');
               }
             },
             child: Container(
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
               decoration: BoxDecoration(
                 color: AppColors.card(scheme),
                 borderRadius: BorderRadius.circular(999),

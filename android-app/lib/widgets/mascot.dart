@@ -132,6 +132,7 @@ class MascotBreath extends StatefulWidget {
     required this.child,
     this.sway = 0.06,
     this.bob = -3.0,
+    this.alignment = Alignment.center,
   });
 
   final Widget child;
@@ -140,6 +141,10 @@ class MascotBreath extends StatefulWidget {
   /// 上下浮动幅度(负=上浮)。贴在卡片顶边的探头猫用正值(下沉),
   /// 否则上浮会被上方边界裁掉。
   final double bob;
+
+  /// Transform anchor. A peeking mascot uses centerRight so breathing never
+  /// pulls its gripping edge away from the card.
+  final Alignment alignment;
 
   @override
   State<MascotBreath> createState() => _MascotBreathState();
@@ -205,7 +210,12 @@ class _MascotBreathState extends State<MascotBreath>
             offset: Offset(0, dy),
             child: Transform.rotate(
               angle: angle,
-              child: Transform.scale(scale: scale, child: child),
+              alignment: widget.alignment,
+              child: Transform.scale(
+                scale: scale,
+                alignment: widget.alignment,
+                child: child,
+              ),
             ),
           );
         },

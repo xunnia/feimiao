@@ -1,5 +1,6 @@
 import 'package:decimal/decimal.dart';
 import '../models/transaction_kind.dart';
+import '../transaction_time.dart';
 import 'entry_sanity.dart';
 import 'smart_tags.dart';
 
@@ -12,6 +13,7 @@ class ParsedEntry {
   final String? categoryKey;
   final String note;
   final DateTime date;
+  final TransactionTimePrecision timePrecision;
 
   /// 解析置信度 0~1：高(>=0.9)可自动入库，中等需确认，低需补全。
   /// 本地规则解析默认较低（0.55），云端 LLM 按返回值。
@@ -23,6 +25,7 @@ class ParsedEntry {
     required this.categoryKey,
     required this.note,
     required this.date,
+    this.timePrecision = TransactionTimePrecision.entryClock,
     this.confidence = 0.7,
   });
 
@@ -35,11 +38,19 @@ class ParsedEntry {
           categoryKey == other.categoryKey &&
           note == other.note &&
           date == other.date &&
+          timePrecision == other.timePrecision &&
           confidence == other.confidence;
 
   @override
-  int get hashCode =>
-      Object.hash(amount, kind, categoryKey, note, date, confidence);
+  int get hashCode => Object.hash(
+        amount,
+        kind,
+        categoryKey,
+        note,
+        date,
+        timePrecision,
+        confidence,
+      );
 }
 
 /// 本地规则版「一句话记账」解析器：
@@ -65,6 +76,9 @@ class NaturalLanguageEntryParser {
         categoryKey: _detectCategory(trimmed, kind: kind),
         note: trimmed,
         date: _detectDate(trimmed, now: now),
+        timePrecision: _hasExplicitTime(trimmed)
+            ? TransactionTimePrecision.exact
+            : TransactionTimePrecision.entryClock,
         confidence: 0.55, // 本地规则不够确定，始终走确认
       ),
       now: now,
@@ -99,8 +113,7 @@ class NaturalLanguageEntryParser {
     // 中文数字金额（离线/无 key 也能认）：
     // "两块五""三块五毛" → X元Y角；"三十块""一百二""一百二十元" → 整元。
     const cn = '零〇一二两三四五六七八九十百千万';
-    final cnKuaiJiao =
-        RegExp('([$cn]+)\\s*[块元]\\s*([一二两三四五六七八九])\\s*[毛角]?');
+    final cnKuaiJiao = RegExp('([$cn]+)\\s*[块元]\\s*([一二两三四五六七八九])\\s*[毛角]?');
     final mkj = cnKuaiJiao.firstMatch(text);
     if (mkj != null) {
       final yuan = _cnToInt(mkj.group(1)!);
@@ -131,8 +144,18 @@ class NaturalLanguageEntryParser {
   /// 仅接受中文数字字符，遇到其它字符返回 null。
   static int? _cnToInt(String s) {
     const digit = {
-      '零': 0, '〇': 0, '一': 1, '二': 2, '两': 2, '三': 3,
-      '四': 4, '五': 5, '六': 6, '七': 7, '八': 8, '九': 9,
+      '零': 0,
+      '〇': 0,
+      '一': 1,
+      '二': 2,
+      '两': 2,
+      '三': 3,
+      '四': 4,
+      '五': 5,
+      '六': 6,
+      '七': 7,
+      '八': 8,
+      '九': 9,
     };
     const unit = {'十': 10, '百': 100, '千': 1000};
     if (s.isEmpty) return null;
@@ -184,10 +207,23 @@ class NaturalLanguageEntryParser {
 
   static TransactionKind _detectKind(String text) {
     const incomeMarkers = [
-      '收入', '工资', '发薪', '奖金', '年终奖', '退款', '退了', '报销',
-      '收到红包', '收红包', '分红', '利息', '卖了',
+      '收入',
+      '工资',
+      '发薪',
+      '奖金',
+      '年终奖',
+      '退款',
+      '退了',
+      '报销',
+      '收到红包',
+      '收红包',
+      '分红',
+      '利息',
+      '卖了',
     ];
-    return incomeMarkers.any(text.contains) ? TransactionKind.income : TransactionKind.expense;
+    return incomeMarkers.any(text.contains)
+        ? TransactionKind.income
+        : TransactionKind.expense;
   }
 
   // ---------------------------------------------------------------------------
@@ -205,11 +241,41 @@ class NaturalLanguageEntryParser {
     ];
     for (final (word, offset) in offsets) {
       if (text.contains(word)) {
-        return now.add(Duration(days: offset));
+        return _applyExplicitTime(text, now.add(Duration(days: offset)));
       }
     }
-    return now;
+    return _applyExplicitTime(text, now);
   }
+
+  static DateTime _applyExplicitTime(String text, DateTime fallback) {
+    final match = RegExp(
+      r'(凌晨|早上|上午|中午|下午|晚上|昨晚|今晚|今早)?\s*(\d{1,2})\s*(?::|：|点|时)\s*(\d{1,2})?\s*分?',
+    ).firstMatch(text);
+    if (match == null) return fallback;
+
+    var hour = int.tryParse(match.group(2) ?? '');
+    final minute = int.tryParse(match.group(3) ?? '') ?? 0;
+    if (hour == null || hour > 23 || minute > 59) return fallback;
+
+    final period = match.group(1) ?? '';
+    final isEvening = period == '下午' || period.contains('晚');
+    if (isEvening && hour < 12) hour += 12;
+    if (isEvening && hour == 12) hour = 0;
+    if (period == '中午' && hour < 11) hour += 12;
+    if (period == '凌晨' && hour == 12) hour = 0;
+
+    return DateTime(
+      fallback.year,
+      fallback.month,
+      fallback.day,
+      hour,
+      minute,
+    );
+  }
+
+  static bool _hasExplicitTime(String text) => RegExp(
+        r'(?:凌晨|早上|上午|中午|下午|晚上|昨晚|今晚|今早)?\s*\d{1,2}\s*(?::|：|点|时)\s*\d{0,2}\s*分?',
+      ).hasMatch(text);
 
   // ---------------------------------------------------------------------------
   // 分类
@@ -220,15 +286,52 @@ class NaturalLanguageEntryParser {
 
   static const _expenseKeywords = [
     // —— 食品餐饮（子类优先；吃/饭/餐 兜底到大类 dining）——
-    ('dining_drink', ['咖啡', '奶茶', '饮料', '酒水', '啤酒', '可乐', '瑞幸', '星巴克', '蜜雪', '茶百道', '喜茶', '奈雪', 'coffee']),
+    (
+      'dining_drink',
+      [
+        '咖啡',
+        '奶茶',
+        '饮料',
+        '酒水',
+        '啤酒',
+        '可乐',
+        '瑞幸',
+        '星巴克',
+        '蜜雪',
+        '茶百道',
+        '喜茶',
+        '奈雪',
+        'coffee'
+      ]
+    ),
     ('dining_breakfast', ['早餐', '早饭', '包子', '豆浆', '油条']),
     ('dining_treat', ['请客', '请吃饭', '聚餐', '饭局', '做东']),
-    ('groceries', ['买菜', '超市', '菜市场', '生鲜', '钱大妈', '盒马', '永辉', '便利店', 'grocery']),
+    (
+      'groceries',
+      ['买菜', '超市', '菜市场', '生鲜', '钱大妈', '盒马', '永辉', '便利店', 'grocery']
+    ),
     ('dining_cook', ['粮油', '调味', '食用油', '大米', '酱油', '挂面']),
     ('dining_snack', ['零食', '薯片', '瓜子', '小吃', '坚果']),
     ('dining_lunch', ['午餐', '午饭', '中午饭']),
     ('dining_dinner', ['晚餐', '晚饭', '夜宵', '宵夜']),
-    ('dining', ['外卖', '吃', '饭', '餐', '火锅', '烧烤', '美团', '饿了么', '麦当劳', '肯德基', '海底捞', 'lunch', 'dinner']),
+    (
+      'dining',
+      [
+        '外卖',
+        '吃',
+        '饭',
+        '餐',
+        '火锅',
+        '烧烤',
+        '美团',
+        '饿了么',
+        '麦当劳',
+        '肯德基',
+        '海底捞',
+        'lunch',
+        'dinner'
+      ]
+    ),
     // —— 出行交通 ——
     ('trans_taxi', ['打车', '滴滴', '出租', '网约车', '曹操', '花小猪', 'taxi', 'uber']),
     ('trans_public', ['地铁', '公交', '公交车', '巴士', 'metro']),
@@ -276,7 +379,10 @@ class NaturalLanguageEntryParser {
     ('shop_watch', ['手表', '腕表', '配饰', '首饰']),
     ('pets', ['猫', '狗', '宠物', '猫粮', '狗粮', 'pet']),
     ('subscription', ['会员', '订阅', '续费', 'vip', 'subscription']),
-    ('shopping', ['买', '购物', '淘宝', '天猫', '京东', '拼多多', '网购', '苏宁', '唯品会', 'shopping']),
+    (
+      'shopping',
+      ['买', '购物', '淘宝', '天猫', '京东', '拼多多', '网购', '苏宁', '唯品会', 'shopping']
+    ),
     // —— 人情往来 ——
     ('gift_red', ['随礼', '份子', '发红包', '给红包']),
     ('gift_present', ['礼物', '礼品', '送礼', 'gift']),
@@ -316,8 +422,7 @@ class PaymentScreenshotParser {
   /// 截图 OCR 清噪：剔掉明显与交易无关的行（订单号/卡号/余额/积分/纯长数字），
   /// 但凡含"实付/支付/付款/消费/金额"等支付关键词的行一律保留，避免误删真金额。
   static String cleanOcr(String raw) {
-    final noise = RegExp(
-        r'订单号|交易单号|商户单号|流水号|订单编号|卡号|余额|积分|实名|手机号|身份证');
+    final noise = RegExp(r'订单号|交易单号|商户单号|流水号|订单编号|卡号|余额|积分|实名|手机号|身份证');
     final pay = RegExp(r'实付|支付金额|付款金额|消费金额|交易金额|合计|￥|¥');
     final pureDigits = RegExp(r'^[\d\s\-*]{11,}$');
     final hasDigit = RegExp(r'\d');
@@ -327,9 +432,7 @@ class PaymentScreenshotParser {
       if (t.isEmpty) continue;
       if (noise.hasMatch(t) && !pay.hasMatch(t)) continue;
       // 纯长数字串(>=11位，无小数) → 订单号/卡号/手机号
-      if (pureDigits.hasMatch(t) &&
-          hasDigit.hasMatch(t) &&
-          !t.contains('.')) {
+      if (pureDigits.hasMatch(t) && hasDigit.hasMatch(t) && !t.contains('.')) {
         continue;
       }
       kept.add(t);

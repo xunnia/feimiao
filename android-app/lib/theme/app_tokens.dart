@@ -82,16 +82,62 @@ class AppWeight {
   static const FontWeight body = FontWeight.w400;
 }
 
-/// 文字层级颜色（随深浅模式自适应；对应 GPT 建议的 #111/#666/#999 三级）。
+/// 文字层级颜色（2026-07-11 定稿：一律基于 onSurface 的灰阶，
+/// 弃用 M3 onSurfaceVariant——那是深灰紫，看着跟黑字没区别，没有层次）。
 class AppTextColor {
   AppTextColor._();
 
   /// 主文字：金额、标题（最深）
   static Color primary(ColorScheme s) => s.onSurface;
 
-  /// 次要文字：分类名等
-  static Color secondary(ColorScheme s) => s.onSurfaceVariant;
+  /// 次要文字：说明、副标题、行尾值（= 弹窗正文 dialogBodyColor 同级）
+  static Color secondary(ColorScheme s) => s.onSurface.withValues(alpha: 0.55);
 
-  /// 辅助/最弱：备注、交易对方、占位提示
-  static Color hint(ColorScheme s) => s.onSurfaceVariant.withValues(alpha: 0.6);
+  /// 辅助/最弱：脚注、占位提示
+  static Color hint(ColorScheme s) => s.onSurface.withValues(alpha: 0.45);
+}
+
+/// 文字层级令牌（2026-07-11 定稿，对齐 iOS 设置页「非重点降号+变灰」原则）。
+/// **新界面一律引用这里，别再裸写 TextStyle、别依赖 textTheme 默认值**——
+/// 默认值是 16px 深色，说明文字和正文长一样就是"大杂烩"的根源。
+/// 页面 AppBar 标题（17/w600）由全局 appBarTheme 管，不在此列。
+class AppType {
+  AppType._();
+
+  /// 行标题：设置行 / 编辑块标题。
+  static TextStyle rowTitle(ColorScheme s) => TextStyle(
+      fontSize: 15.5, fontWeight: FontWeight.w500, color: s.onSurface);
+
+  /// 正文。
+  static TextStyle body(ColorScheme s) => TextStyle(
+      fontSize: 15,
+      fontWeight: FontWeight.w400,
+      height: 1.5,
+      color: s.onSurface);
+
+  /// 说明/副标题（iOS 式降号变灰）：行副标题、选项说明、弹窗正文同级。
+  static TextStyle secondary(ColorScheme s) => TextStyle(
+      fontSize: 13,
+      fontWeight: FontWeight.w400,
+      height: 1.45,
+      color: AppTextColor.secondary(s));
+
+  /// 分组标签（管理/显示/接口…），和 SettingsSectionLabel 同规格。
+  static TextStyle sectionLabel(ColorScheme s) => TextStyle(
+      fontSize: 13.5,
+      fontWeight: FontWeight.w500,
+      color: s.onSurface.withValues(alpha: 0.50));
+
+  /// 行尾值（右侧灰字：「两位小数」「已配置」）。
+  static TextStyle trailingValue(ColorScheme s) => TextStyle(
+      fontSize: 14,
+      fontWeight: FontWeight.w400,
+      color: AppTextColor.secondary(s));
+
+  /// 脚注（页面底部整段说明，最弱一级）。
+  static TextStyle caption(ColorScheme s) => TextStyle(
+      fontSize: 12.5,
+      fontWeight: FontWeight.w400,
+      height: 1.5,
+      color: AppTextColor.hint(s));
 }

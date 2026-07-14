@@ -1,17 +1,17 @@
-import 'dart:ui' show FontFeature;
-
 import 'package:decimal/decimal.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../core/models/cat_svg_icon.dart';
 import '../core/models/category_seed.dart';
+import '../core/models/transaction_card_display.dart';
 import '../core/models/transaction_kind.dart';
 import '../core/money_format.dart';
 import '../data/app_repository.dart';
 import '../theme/app_colors.dart';
 import '../theme/app_tokens.dart';
 import '../views/transactions/edit_transaction_sheet.dart';
+import 'glass.dart';
 import 'tag_selector.dart';
 import 'transaction_actions.dart';
 
@@ -31,9 +31,7 @@ List<TxSection> groupTxnsByDay(List<TransactionEntity> transactions) {
     final day = DateTime(t.date.year, t.date.month, t.date.day);
     map.putIfAbsent(day, () => []).add(t);
   }
-  return map.entries
-      .map((e) => TxSection(day: e.key, items: e.value))
-      .toList()
+  return map.entries.map((e) => TxSection(day: e.key, items: e.value)).toList()
     ..sort((a, b) => b.day.compareTo(a.day));
 }
 
@@ -46,25 +44,29 @@ class TxDayCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    return Card(
-      margin: const EdgeInsets.fromLTRB(16, 0, 16, 10),
-      elevation: 1,
-      color: AppColors.card(scheme),
-      clipBehavior: Clip.antiAlias,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-      child: Column(
-        children: [
-          _TxDaySectionHeader(section: section),
-          for (int i = 0; i < section.items.length; i++) ...[
-            if (i > 0)
-              Container(
-                margin: const EdgeInsets.only(left: 66, right: 14),
-                height: 0.5,
-                color: scheme.outlineVariant.withValues(alpha: 0.5),
-              ),
-            TxDismissibleRow(transaction: section.items[i]),
-          ],
-        ],
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
+      child: GlassSurface(
+        radius: 20,
+        blur: 0,
+        fillColor: AppColors.card(scheme),
+        child: Material(
+          type: MaterialType.transparency,
+          child: Column(
+            children: [
+              _TxDaySectionHeader(section: section),
+              for (int i = 0; i < section.items.length; i++) ...[
+                if (i > 0)
+                  Container(
+                    margin: const EdgeInsets.only(left: 66, right: 14),
+                    height: 0.5,
+                    color: scheme.outlineVariant.withValues(alpha: 0.5),
+                  ),
+                TxDismissibleRow(transaction: section.items[i]),
+              ],
+            ],
+          ),
+        ),
       ),
     );
   }
@@ -86,18 +88,18 @@ class _TxDaySectionHeader extends StatelessWidget {
     return full;
   }
 
-  String _weekday(int w) =>
-      const ['一', '二', '三', '四', '五', '六', '日'][w - 1];
+  String _weekday(int w) => const ['一', '二', '三', '四', '五', '六', '日'][w - 1];
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    final repo = context.read<AppRepository>();
     final totalExpense = section.items
         .where((t) => t.txKind == TransactionKind.expense)
-        .fold(Decimal.zero, (s, t) => s + t.amount);
+        .fold(Decimal.zero, (s, t) => s + repo.userAmountOf(t));
     final totalIncome = section.items
         .where((t) => t.txKind == TransactionKind.income)
-        .fold(Decimal.zero, (s, t) => s + t.amount);
+        .fold(Decimal.zero, (s, t) => s + repo.userAmountOf(t));
     final hasExpense = totalExpense > Decimal.zero;
     final hasIncome = totalIncome > Decimal.zero;
 
@@ -153,8 +155,13 @@ class TxDismissibleRow extends StatelessWidget {
 
 class TxRow extends StatelessWidget {
   final TransactionEntity transaction;
+  final bool dateGrouped;
 
-  const TxRow({super.key, required this.transaction});
+  const TxRow({
+    super.key,
+    required this.transaction,
+    this.dateGrouped = true,
+  });
 
   bool get _isTransfer => transaction.txKind == TransactionKind.transfer;
 
@@ -164,16 +171,6 @@ class TxRow extends StatelessWidget {
         .where((s) => s.key == transaction.categoryKey)
         .firstOrNull;
     return seed?.emoji ?? '🏷️';
-  }
-
-  String get _title {
-    switch (transaction.txKind) {
-      case TransactionKind.transfer:
-        return '${transaction.accountName} → ${transaction.toAccountName}';
-      default:
-        final name = transaction.categoryNameZh;
-        return name.isNotEmpty ? name : '未分类';
-    }
   }
 
   // 老的独立退款冲账行（负支出）：显示成「+¥x」铜金色。
@@ -209,11 +206,30 @@ class TxRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final refunded =
-        context.read<AppRepository>().refundedAmountOf(transaction.id);
+    final displayMode =
+        context.select<AppRepository, TransactionCardDisplayMode>(
+            (repo) => repo.transactionCardDisplayMode);
+    final repo = context.read<AppRepository>();
+    final refunded = repo.refundedAmountOf(transaction.id);
     final hasRefund = refunded > Decimal.zero &&
         transaction.txKind == TransactionKind.expense;
     final net = transaction.amount - refunded;
+    final cardText = resolveTransactionCardText(
+      mode: displayMode,
+      kind: transaction.txKind,
+      note: transaction.note,
+      categoryName: transaction.categoryNameZh,
+      accountName: transaction.accountName,
+      toAccountName: transaction.toAccountName,
+    );
+    final detailText = joinTransactionCardDetails([
+      transactionCardTimeLabel(
+        transaction.date,
+        dateGrouped: dateGrouped,
+        precision: transaction.timePrecision,
+      ),
+      cardText.secondary,
+    ]);
     return Padding(
       padding: const EdgeInsets.symmetric(
           horizontal: AppSpacing.lg, vertical: AppSpacing.sm),
@@ -233,7 +249,7 @@ class TxRow extends StatelessWidget {
                   children: [
                     Flexible(
                       child: Text(
-                        _title,
+                        cardText.title,
                         style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                               fontWeight: FontWeight.w400,
                               color: AppTextColor.primary(scheme),
@@ -247,10 +263,10 @@ class TxRow extends StatelessWidget {
                     if (transaction.excluded) const _TxExcludedBadge(),
                   ],
                 ),
-                if (transaction.note.isNotEmpty) ...[
+                if (detailText.isNotEmpty) ...[
                   const SizedBox(height: 1),
                   Text(
-                    transaction.note,
+                    detailText,
                     style: Theme.of(context).textTheme.labelSmall?.copyWith(
                           color: AppTextColor.hint(scheme),
                         ),
@@ -278,23 +294,23 @@ class TxRow extends StatelessWidget {
                   ? MoneyFormat.string(net)
                   : '-${MoneyFormat.string(net)}',
               style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                    color: scheme.onSurface,
-                    fontWeight: FontWeight.w600,
-                    fontFamily: 'Nunito',
-                    // ignore: deprecated_member_use
-                    fontFeatures: const [FontFeature.tabularFigures()],
-                  ),
+                color: scheme.onSurface,
+                fontWeight: FontWeight.w600,
+                fontFamily: 'Nunito',
+                // ignore: deprecated_member_use
+                fontFeatures: const [FontFeature.tabularFigures()],
+              ),
             ),
           ] else
             Text(
               _amountText,
               style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                    color: _amountColor(scheme),
-                    fontWeight: FontWeight.w600,
-                    fontFamily: 'Nunito',
-                    // ignore: deprecated_member_use
-                    fontFeatures: const [FontFeature.tabularFigures()],
-                  ),
+                color: _amountColor(scheme),
+                fontWeight: FontWeight.w600,
+                fontFamily: 'Nunito',
+                // ignore: deprecated_member_use
+                fontFeatures: const [FontFeature.tabularFigures()],
+              ),
             ),
         ],
       ),
@@ -338,7 +354,7 @@ class _TxReimburseBadge extends StatelessWidget {
         color: AppColors.warning.withValues(alpha: 0.14),
         borderRadius: BorderRadius.circular(4),
       ),
-      child: Text('待报销',
+      child: const Text('待报销',
           style: TextStyle(
               fontSize: 10,
               height: 1.2,

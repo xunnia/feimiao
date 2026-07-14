@@ -2,8 +2,8 @@ import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 
 import '../core/haptics.dart';
-import '../theme/app_colors.dart';
 import '../views/common/app_sheet.dart';
+import 'app_buttons.dart';
 import 'pressable_scale.dart';
 import 'settings_ui.dart';
 
@@ -45,13 +45,17 @@ Future<DateTime?> showAppDatePicker(
 Future<DateTimeRange?> showAppDateRangePicker(
   BuildContext context, {
   DateTimeRange? initial,
+  DateTime? defaultStart,
+  DateTime? defaultEnd,
   DateTime? first,
   DateTime? last,
 }) async {
   final now = DateTime.now();
   final start = await showAppDatePicker(
     context,
-    initial: initial?.start ?? now.subtract(const Duration(days: 29)),
+    initial: initial?.start ??
+        defaultStart ??
+        now.subtract(const Duration(days: 29)),
     first: first,
     last: last,
     title: '开始时间',
@@ -61,7 +65,9 @@ Future<DateTimeRange?> showAppDateRangePicker(
     context,
     initial: initial?.end != null && !initial!.end.isBefore(start)
         ? initial.end
-        : start,
+        : defaultEnd != null && !defaultEnd.isBefore(start)
+            ? defaultEnd
+            : start,
     first: start,
     last: last,
     title: '结束时间',
@@ -141,52 +147,44 @@ class _AppDatePickerSheetState extends State<_AppDatePickerSheet> {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    final today = _dayOnly(DateTime.now());
+    final showToday = !_sameDay(_selected, today) && !_disabled(today);
     return SizedBox(
       width: double.infinity,
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          // 抓手
-          Container(
-            margin: const EdgeInsets.only(top: 10, bottom: 4),
-            width: 36,
-            height: 4,
-            decoration: BoxDecoration(
-              color: AppColors.hairline(scheme, strength: 1.3),
-              borderRadius: BorderRadius.circular(2),
-            ),
-          ),
-          // 标题行：开始时间 / 结束时间 ... 回今天
           Padding(
-            padding: const EdgeInsets.fromLTRB(20, 8, 16, 8),
-            child: Row(
-              children: [
-                Text(widget.title,
-                    style: TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w500,
-                        color: scheme.onSurface)),
-                const Spacer(),
-                PressableScale(
-                  onPressed: _goToday,
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 12, vertical: 6),
-                    decoration: BoxDecoration(
-                      color: scheme.primary.withValues(alpha: 0.12),
-                      borderRadius: BorderRadius.circular(20),
+            padding: const EdgeInsets.fromLTRB(12, 10, 12, 6),
+            child: SizedBox(
+              height: 44,
+              child: Stack(
+                alignment: Alignment.center,
+                children: [
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: AppCircleButton(
+                      icon: CupertinoIcons.xmark,
+                      iconSize: 18,
+                      size: 34,
+                      onPressed: () => Navigator.of(context).maybePop(),
                     ),
-                    child: Text('回今天',
-                        style: TextStyle(
-                            fontSize: 13,
-                            fontWeight: FontWeight.w500,
-                            color: scheme.primary)),
                   ),
-                ),
-              ],
+                  Text(widget.title,
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                          fontSize: 17,
+                          fontWeight: FontWeight.w500,
+                          color: scheme.onSurface)),
+                  if (showToday)
+                    Align(
+                      alignment: Alignment.centerRight,
+                      child: _TodayButton(onPressed: _goToday),
+                    ),
+                ],
+              ),
             ),
           ),
-          Divider(height: 1, color: scheme.outlineVariant.withValues(alpha: 0.5)),
           // 月份标题行：2026年7月 ⌄ ... ‹ ›
           Padding(
             padding: const EdgeInsets.fromLTRB(20, 14, 16, 6),
@@ -252,7 +250,7 @@ class _AppDatePickerSheetState extends State<_AppDatePickerSheet> {
                   child: const Text('确认',
                       style: TextStyle(
                           fontSize: 16,
-                          fontWeight: FontWeight.w600,
+                          fontWeight: FontWeight.w500,
                           color: Colors.white)),
                 ),
               ),
@@ -291,7 +289,7 @@ class _AppDatePickerSheetState extends State<_AppDatePickerSheet> {
 
     return Padding(
       key: const ValueKey('grid'),
-      padding: const EdgeInsets.fromLTRB(12, 4, 12, 8),
+      padding: const EdgeInsets.fromLTRB(12, 2, 12, 8),
       child: Column(
         children: [
           Row(
@@ -306,12 +304,15 @@ class _AppDatePickerSheetState extends State<_AppDatePickerSheet> {
                 ),
             ],
           ),
-          const SizedBox(height: 6),
-          GridView.count(
-            crossAxisCount: 7,
+          const SizedBox(height: 2),
+          GridView(
+            padding: EdgeInsets.zero,
             shrinkWrap: true,
             physics: const NeverScrollableScrollPhysics(),
-            childAspectRatio: 1.05,
+            gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+              crossAxisCount: 7,
+              mainAxisExtent: 44,
+            ),
             children: cells,
           ),
         ],
@@ -324,6 +325,9 @@ class _AppDatePickerSheetState extends State<_AppDatePickerSheet> {
     final years = [
       for (int yy = widget.first.year; yy <= widget.last.year; yy++) yy
     ];
+    final daysInMonth =
+        DateTime(_visibleMonth.year, _visibleMonth.month + 1, 0).day;
+    final selectedDay = _selected.day.clamp(1, daysInMonth).toInt();
     return SizedBox(
       key: const ValueKey('wheel'),
       height: 200,
@@ -334,12 +338,10 @@ class _AppDatePickerSheetState extends State<_AppDatePickerSheet> {
               scrollController: FixedExtentScrollController(
                   initialItem: years.indexOf(_visibleMonth.year)),
               itemExtent: 40,
-              onSelectedItemChanged: (i) => _onWheel(years[i], null),
+              onSelectedItemChanged: (i) => _onWheel(year: years[i]),
               children: [
                 for (final yy in years)
-                  Center(
-                      child: Text('$yy年',
-                          style: _wheelStyle(scheme))),
+                  Center(child: Text('$yy年', style: _wheelStyle(scheme))),
               ],
             ),
           ),
@@ -348,12 +350,22 @@ class _AppDatePickerSheetState extends State<_AppDatePickerSheet> {
               scrollController: FixedExtentScrollController(
                   initialItem: _visibleMonth.month - 1),
               itemExtent: 40,
-              onSelectedItemChanged: (i) => _onWheel(null, i + 1),
+              onSelectedItemChanged: (i) => _onWheel(month: i + 1),
               children: [
                 for (int mm = 1; mm <= 12; mm++)
-                  Center(
-                      child: Text('$mm月',
-                          style: _wheelStyle(scheme))),
+                  Center(child: Text('$mm月', style: _wheelStyle(scheme))),
+              ],
+            ),
+          ),
+          Expanded(
+            child: CupertinoPicker(
+              scrollController:
+                  FixedExtentScrollController(initialItem: selectedDay - 1),
+              itemExtent: 40,
+              onSelectedItemChanged: (i) => _onWheel(day: i + 1),
+              children: [
+                for (int dd = 1; dd <= daysInMonth; dd++)
+                  Center(child: Text('$dd日', style: _wheelStyle(scheme))),
               ],
             ),
           ),
@@ -362,18 +374,48 @@ class _AppDatePickerSheetState extends State<_AppDatePickerSheet> {
     );
   }
 
-  void _onWheel(int? year, int? month) {
+  void _onWheel({int? year, int? month, int? day}) {
     final y = year ?? _visibleMonth.year;
     final m = month ?? _visibleMonth.month;
     setState(() {
       _visibleMonth = DateTime(y, m);
       // 选中日跟随到该月（超出该月天数则取月末），并夹到 [first,last]。
       final dim = DateTime(y, m + 1, 0).day;
-      var d = DateTime(y, m, _selected.day > dim ? dim : _selected.day);
+      final nextDay = day ?? _selected.day;
+      var d = DateTime(y, m, nextDay > dim ? dim : nextDay);
       if (d.isBefore(widget.first)) d = widget.first;
       if (d.isAfter(widget.last)) d = widget.last;
       _selected = d;
     });
+  }
+}
+
+class _TodayButton extends StatelessWidget {
+  final VoidCallback onPressed;
+
+  const _TodayButton({required this.onPressed});
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return PressableScale(
+      onPressed: onPressed,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        decoration: BoxDecoration(
+          color: scheme.surfaceContainerHighest.withValues(alpha: 0.76),
+          borderRadius: BorderRadius.circular(999),
+        ),
+        child: Text(
+          '回今天',
+          style: TextStyle(
+            fontSize: 13,
+            fontWeight: FontWeight.w400,
+            color: scheme.primary,
+          ),
+        ),
+      ),
+    );
   }
 }
 
@@ -395,7 +437,9 @@ class _NavArrow extends StatelessWidget {
         alignment: Alignment.center,
         child: Icon(icon,
             size: 20,
-            color: enabled ? scheme.onSurface : scheme.onSurfaceVariant.withValues(alpha: 0.4)),
+            color: enabled
+                ? scheme.onSurface
+                : scheme.onSurfaceVariant.withValues(alpha: 0.4)),
       ),
     );
   }
@@ -617,8 +661,7 @@ class _YearPickerSheetState extends State<_YearPickerSheet> {
               initialItem: years.indexOf(_y),
               onChanged: (i) => _y = years[i],
               itemBuilder: (_, i) => Center(
-                  child: Text('${years[i]}年',
-                      style: _wheelStyle(scheme))),
+                  child: Text('${years[i]}年', style: _wheelStyle(scheme))),
             ),
           ),
           const SizedBox(height: 8),
@@ -682,8 +725,7 @@ class _WeekPickerSheetState extends State<_WeekPickerSheet> {
                     if (_wIdx >= _weeks.length) _wIdx = _weeks.length - 1;
                   }),
                   itemBuilder: (_, i) => Center(
-                      child: Text('${years[i]}年',
-                          style: _wheelStyle(scheme))),
+                      child: Text('${years[i]}年', style: _wheelStyle(scheme))),
                 ),
               ),
               Expanded(
@@ -693,8 +735,7 @@ class _WeekPickerSheetState extends State<_WeekPickerSheet> {
                   initialItem: _wIdx.clamp(0, _weeks.length - 1),
                   onChanged: (i) => _wIdx = i,
                   itemBuilder: (_, i) => Center(
-                      child: Text(_label(i),
-                          style: _wheelStyle(scheme))),
+                      child: Text(_label(i), style: _wheelStyle(scheme))),
                 ),
               ),
             ]),

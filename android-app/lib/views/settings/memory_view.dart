@@ -8,6 +8,7 @@ import '../../core/models/transaction_kind.dart';
 import '../../data/app_repository.dart';
 import '../../theme/app_colors.dart';
 import '../../widgets/app_toast.dart';
+import '../../widgets/app_empty_state.dart';
 import '../../widgets/ios_dialogs.dart';
 import '../../widgets/mascot.dart';
 
@@ -23,24 +24,15 @@ class MemoryView extends StatelessWidget {
     final memories = repo.categoryMemories;
 
     return Scaffold(
-      appBar: AppBar(leading: const AppBackButton(), title: const Text('喵学到的分类'), centerTitle: true),
+      appBar: AppBar(
+          leading: const AppBackButton(),
+          title: const Text('喵学到的分类'),
+          centerTitle: true),
       body: memories.isEmpty
-          ? Center(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  const Mascot(mood: MascotMood.thinking, size: 140),
-                  const SizedBox(height: 12),
-                  Text(
-                    '还没学到东西。\n记账后在账单里改一次分类，喵就记住了',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(
-                        fontSize: 13,
-                        color: scheme.onSurfaceVariant,
-                        height: 1.5),
-                  ),
-                ],
-              ),
+          ? const AppEmptyState(
+              mood: MascotMood.thinking,
+              title: '还没学到东西',
+              message: '记账后在账单里改一次分类，喵就记住了',
             )
           : ListView(
               padding: const EdgeInsets.fromLTRB(16, 8, 16, 28),
@@ -118,15 +110,14 @@ class _MemoryRow extends StatelessWidget {
                     style: const TextStyle(fontSize: 14)),
                 Text(
                   '→ $catName · ${memory.kind == TransactionKind.income ? '收入' : '支出'}',
-                  style: TextStyle(
-                      fontSize: 11.5, color: scheme.onSurfaceVariant),
+                  style:
+                      TextStyle(fontSize: 11.5, color: scheme.onSurfaceVariant),
                 ),
               ],
             ),
           ),
           IconButton(
-            icon: Icon(Icons.close,
-                size: 18, color: scheme.onSurfaceVariant),
+            icon: Icon(Icons.close, size: 18, color: scheme.onSurfaceVariant),
             tooltip: '删除这条记忆',
             onPressed: () async {
               final ok = await showConfirmDialog(

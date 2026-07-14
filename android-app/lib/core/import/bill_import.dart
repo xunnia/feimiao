@@ -2,10 +2,12 @@ import 'package:csv/csv.dart';
 import 'package:decimal/decimal.dart';
 
 import '../models/transaction_kind.dart';
+import '../transaction_time.dart';
 
 /// 一条从外部账单解析出来的标准化记录。
 class ImportedBillRow {
   final DateTime date;
+  final TransactionTimePrecision timePrecision;
   final TransactionKind kind;
   final String category; // 分类名（外部账单常没有，可能为空）
   final String note;
@@ -23,6 +25,7 @@ class ImportedBillRow {
 
   const ImportedBillRow({
     required this.date,
+    this.timePrecision = TransactionTimePrecision.legacyUnknown,
     required this.kind,
     required this.category,
     required this.note,
@@ -222,7 +225,8 @@ class _ColumnMap {
 
   factory _ColumnMap.fromHeader(List<String> header) {
     return _ColumnMap(
-      date: _find(header, ['交易时间', '交易创建时间', '付款时间', '日期', '记账时间', '时间', '创建时间']),
+      date:
+          _find(header, ['交易时间', '交易创建时间', '付款时间', '日期', '记账时间', '时间', '创建时间']),
       amount: _find(header, ['金额']),
       direction: _find(header, ['收/支', '收支']),
       kindType: _find(header, ['类型', '收入/支出'], avoid: ['交易类型', '业务类型']),
@@ -250,14 +254,22 @@ class _ColumnMap {
     final orderNo = _at(row, order).trim();
 
     // 退款行：支付宝把它标「不计收支」，但要挂回原单让净额归零，不能直接跳过。
-    // 识别：交易分类含「退款」或 商品以「退款」开头。
-    final isRefund = cat.contains('退款') || prod.startsWith('退款');
+    // 识别：交易分类/商品/备注/对方含退款信号。
+    final refundText = '$cat $prod $noteText $party';
+    final isRefund = refundText.contains('退款') ||
+        refundText.contains('退回') ||
+        refundText.contains('退货') ||
+        refundText.toLowerCase().contains('refund');
 
     // 非退款行照常判方向；「不计收支/中性」（提现/还款/失败交易）→ 跳过。
     final kind = isRefund ? TransactionKind.expense : _resolveKind(row, amt);
     if (kind == null) return null;
 
-    final dt = _parseDate(_at(row, date)) ?? DateTime.now();
+    // 日期是消费归属和结算迁移的业务真值。解析失败不能静默落到今天，
+    // 否则旧账会被凭空挪到当前周期；保留在导入跳过数中等待用户修正。
+    final dateText = _at(row, date);
+    final dt = _parseDate(dateText);
+    if (dt == null) return null;
 
     if (cat == '退款' || cat.contains('退款')) cat = ''; // 退款不当分类名用
 
@@ -270,6 +282,9 @@ class _ColumnMap {
 
     return ImportedBillRow(
       date: dt,
+      timePrecision: _containsClock(dateText)
+          ? TransactionTimePrecision.exact
+          : TransactionTimePrecision.dateOnly,
       kind: kind,
       category: cat,
       note: note0.length > 60 ? note0.substring(0, 60) : note0,
@@ -321,4 +336,7 @@ class _ColumnMap {
     int g(int i, [int d = 0]) => int.tryParse(m.group(i) ?? '') ?? d;
     return DateTime(g(1), g(2, 1), g(3, 1), g(4), g(5), g(6));
   }
+
+  static bool _containsClock(String value) =>
+      RegExp(r'(?:T|\s)\d{1,2}:\d{2}').hasMatch(value.trim());
 }

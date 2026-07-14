@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 检查更新用：允许 FileProvider 暴露外部缓存/内部缓存里的更新 APK。 -->
+<paths>
+    <external-cache-path name="ext_cache" path="." />
+    <external-files-path name="ext_files" path="." />
+    <cache-path name="cache" path="." />
+</paths>

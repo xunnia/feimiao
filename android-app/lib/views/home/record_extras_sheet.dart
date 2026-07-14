@@ -1,9 +1,10 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/cupertino.dart' show CupertinoPageRoute, CupertinoIcons;
+import 'package:flutter/cupertino.dart' show CupertinoIcons;
 
 import '../../widgets/settings_ui.dart';
 import '../quick_add/screenshot_entry.dart';
 import '../settings/import_export_view.dart';
+import '../../widgets/app_page_route.dart';
 
 /// 「更多功能」底部面板：支付截图识别 / 导入账单 / 导出账单。
 /// 首页输入栏与 AI 面板的 [+] 共用，保证两处行为一致。
@@ -37,7 +38,7 @@ void showRecordExtrasSheet(BuildContext context) {
                 onTap: () {
                   Navigator.pop(ctx);
                   Navigator.of(context).push(
-                    CupertinoPageRoute<void>(
+                    AppPageRoute<void>(
                       builder: (_) => const ImportExportView(),
                     ),
                   );
@@ -50,7 +51,7 @@ void showRecordExtrasSheet(BuildContext context) {
                 onTap: () {
                   Navigator.pop(ctx);
                   Navigator.of(context).push(
-                    CupertinoPageRoute<void>(
+                    AppPageRoute<void>(
                       builder: (_) => const ImportExportView(),
                     ),
                   );

@@ -3,7 +3,7 @@ description: "肥喵记账 - 可爱又聪明的记账猫"
 publish_to: 'none'
 # 版本规则（用户 0703 拍板）：1.0 起步，每次推 GitHub 构建 minor +1（1.1、1.2…）。
 # 加号后是 Android versionCode，必须只增不减，否则手机拒绝覆盖安装。
-version: 1.33.0+35
+version: 1.196.0+198
 
 environment:
   sdk: '>=3.4.0 <4.0.0'
@@ -12,6 +12,8 @@ dependencies:
   flutter:
     sdk: flutter
   cupertino_icons: ^1.0.8
+  archive: ^3.6.1
+  crypto: ^3.0.7
   intl: ^0.19.0
   decimal: ^3.0.0
   sqflite: ^2.3.3
@@ -29,6 +31,10 @@ dependencies:
   google_mlkit_text_recognition: ^0.13.0
   flutter_svg: ^2.0.10+1
   flutter_slidable: ^3.1.1
+  image: ^4.3.0
+  workmanager: ^0.9.0+3
+  flutter_secure_storage: ^10.3.1
+  flutter_local_notifications: ^22.0.1
 
 dev_dependencies:
   flutter_test:
@@ -43,6 +49,8 @@ flutter:
   assets:
     - assets/mascot/
     - assets/cat_icons/
+    - assets/cat_icons_filled/
+    - assets/cat_icons_line/
     - assets/book_covers/
     - assets/brand/
   fonts:
@@ -57,10 +65,10 @@ flutter:
         - asset: assets/fonts/Nunito-Bold.ttf
           weight: 700
 
-# 桌面图标：账单 + ¥ + 图表（深蓝玻璃风），CI 里用 flutter_launcher_icons 生成各分辨率。
-# 说明：这张图是「完整成品图标」(自带圆角+留白)，所以不走自适应前景层
-# (前景层会被系统放大并裁掉边缘安全区，导致图标显示不全/被放大)。
-# 只生成传统图标，整张图直接展示，由桌面统一做圆角遮罩。
+# 桌面图标：账单 + ¥ + 图表（蓝色玻璃风）。
+# 小米等桌面会优先使用 Android 8+ adaptive icon XML，并放大前景层。
+# 为避免图标被二次放大裁切，manifest 明确指向 @mipmap/ic_launcher_legacy
+# 纯 PNG 资源；下面配置只保留源图路径，实际交付前用脚本同步各密度 PNG。
 flutter_launcher_icons:
   android: true
   ios: false

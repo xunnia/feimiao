@@ -13,29 +13,56 @@ import '../../widgets/transaction_day_list.dart';
 /// 从环形图 / 分类排行点分类进来。
 class CategoryTxnsView extends StatelessWidget {
   final String categoryName;
+  final Set<String>? categoryNames;
   final DateTime start;
   final DateTime end;
 
   const CategoryTxnsView({
     super.key,
     required this.categoryName,
+    this.categoryNames,
     required this.start,
     required this.end,
   });
+
+  static String _displayCategory(String raw) {
+    final name = raw.trim();
+    if (name.isEmpty ||
+        name == '—' ||
+        name == '-' ||
+        name == '未分类' ||
+        name == '其他支出') {
+      return '其他';
+    }
+    return name;
+  }
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final repo = context.watch<AppRepository>();
     final endInclusive = DateTime(end.year, end.month, end.day, 23, 59, 59);
+    final selectedNames = categoryNames ?? {categoryName};
+    final categoryById = {for (final c in repo.categories) c.id: c};
+    String topCategoryNameOf(TransactionEntity transaction) {
+      final category = transaction.categoryId == null
+          ? null
+          : categoryById[transaction.categoryId];
+      final topCategory = category?.parentId == null
+          ? category
+          : categoryById[category!.parentId!];
+      return _displayCategory(
+        (topCategory ?? category)?.nameZh ?? transaction.categoryNameZh,
+      );
+    }
+
     final txns = repo.visibleTransactions
         .where((t) =>
             !t.excluded &&
             t.txKind == TransactionKind.expense &&
             !t.date.isBefore(DateTime(start.year, start.month, start.day)) &&
             !t.date.isAfter(endInclusive) &&
-            (t.categoryNameZh.isEmpty ? '未分类' : t.categoryNameZh) ==
-                categoryName)
+            selectedNames.contains(topCategoryNameOf(t)))
         .toList();
     // 该分类净额合计（扣退款）。
     var total = Decimal.zero;
@@ -63,8 +90,7 @@ class CategoryTxnsView extends StatelessWidget {
                   child: Row(
                     children: [
                       Text('共 ${txns.length} 笔',
-                          style:
-                              TextStyle(color: scheme.onSurfaceVariant)),
+                          style: TextStyle(color: scheme.onSurfaceVariant)),
                       const Spacer(),
                       Text(
                         MoneyFormat.string(total),

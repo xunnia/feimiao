@@ -7,17 +7,31 @@ import '../../core/money_format.dart';
 import '../../data/app_repository.dart';
 import '../../theme/app_colors.dart';
 import '../../widgets/app_buttons.dart';
+import '../../widgets/app_empty_state.dart';
 import '../../widgets/ios_dialogs.dart';
 import '../../widgets/ios_form.dart';
 import '../../widgets/ios_menu.dart';
 import '../../widgets/mascot.dart';
+import '../../widgets/settings_ui.dart';
+import '../common/app_sheet.dart';
 
 /// 存钱目标页：给「买相机」「旅行基金」这类目标攒钱，带进度条 + 存入/取出。
 class SavingsGoalsView extends StatelessWidget {
   const SavingsGoalsView({super.key});
 
   static const _emojiChoices = [
-    '🐷', '✈️', '📷', '💻', '🎮', '🏠', '🚗', '🎁', '💍', '🎓', '🐱', '❤️'
+    '🐷',
+    '✈️',
+    '📷',
+    '💻',
+    '🎮',
+    '🏠',
+    '🚗',
+    '🎁',
+    '💍',
+    '🎓',
+    '🐱',
+    '❤️'
   ];
 
   @override
@@ -32,7 +46,7 @@ class SavingsGoalsView extends StatelessWidget {
             padding: const EdgeInsets.only(right: 10),
             child: AppCircleButton(
                 icon: Icons.add,
-                onPressed: () => _showEditDialog(context, null)),
+                onPressed: () => _showEditSheet(context, null)),
           ),
         ],
       ),
@@ -45,10 +59,11 @@ class SavingsGoalsView extends StatelessWidget {
             itemCount: goals.length,
             itemBuilder: (_, i) => _GoalCard(
               goal: goals[i],
-              onDeposit: () => _showAdjustDialog(context, goals[i], deposit: true),
+              onDeposit: () =>
+                  _showAdjustDialog(context, goals[i], deposit: true),
               onWithdraw: () =>
                   _showAdjustDialog(context, goals[i], deposit: false),
-              onEdit: () => _showEditDialog(context, goals[i]),
+              onEdit: () => _showEditSheet(context, goals[i]),
               onDelete: () => _confirmDelete(context, repo, goals[i]),
             ),
           );
@@ -58,19 +73,10 @@ class SavingsGoalsView extends StatelessWidget {
   }
 
   Widget _empty(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return Center(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          const Mascot(mood: MascotMood.idle, size: 80, animate: true),
-          const SizedBox(height: 12),
-          Text('还没有存钱目标', style: Theme.of(context).textTheme.titleMedium),
-          const SizedBox(height: 6),
-          Text('立个小目标，攒钱更有动力～',
-              style: TextStyle(color: scheme.onSurfaceVariant)),
-        ],
-      ),
+    return const AppEmptyState(
+      mood: MascotMood.idle,
+      title: '还没有存钱目标',
+      message: '立个小目标，攒钱更有动力',
     );
   }
 
@@ -102,8 +108,10 @@ class SavingsGoalsView extends StatelessWidget {
         decoration: iosInputDecoration(context, prefix: '¥ ', hint: '0.00'),
       ),
     );
+    final rawValue = ctrl.text.trim();
+    ctrl.dispose();
     if (ok) {
-      final v = Decimal.tryParse(ctrl.text.trim());
+      final v = Decimal.tryParse(rawValue);
       if (v != null && v > Decimal.zero) {
         await repo.adjustSavingsGoal(g.id, deposit ? v : -v);
       }
@@ -111,83 +119,14 @@ class SavingsGoalsView extends StatelessWidget {
   }
 
   /// [goal] 为 null 时新建，否则编辑。
-  Future<void> _showEditDialog(
-      BuildContext context, SavingsGoalEntity? goal) async {
-    final repo = context.read<AppRepository>();
-    final nameCtrl = TextEditingController(text: goal?.name ?? '');
-    final targetCtrl =
-        TextEditingController(text: goal == null ? '' : _trimZero(goal.target));
-    String emoji = goal?.emoji ?? _emojiChoices.first;
-
-    final ok = await showIosFormDialog(
+  Future<void> _showEditSheet(BuildContext context, SavingsGoalEntity? goal) {
+    return showBlurSheet<void>(
       context,
-      title: goal == null ? '新建存钱目标' : '编辑目标',
-      content: StatefulBuilder(
-        builder: (ctx, setLocal) => Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            TextField(
-              controller: nameCtrl,
-              autofocus: true,
-              maxLength: 12,
-              decoration:
-                  iosInputDecoration(ctx, hint: '目标名，如「换新相机」'),
-            ),
-            const SizedBox(height: 10),
-            TextField(
-              controller: targetCtrl,
-              keyboardType:
-                  const TextInputType.numberWithOptions(decimal: true),
-              decoration:
-                  iosInputDecoration(ctx, prefix: '¥ ', hint: '目标金额'),
-            ),
-            const SizedBox(height: 14),
-            Align(
-              alignment: Alignment.centerLeft,
-              child:
-                  Text('选个图标', style: Theme.of(ctx).textTheme.labelMedium),
-            ),
-            const SizedBox(height: 8),
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: [
-                for (final e in _emojiChoices)
-                  GestureDetector(
-                    onTap: () => setLocal(() => emoji = e),
-                    child: Container(
-                      padding: const EdgeInsets.all(3),
-                      decoration: BoxDecoration(
-                        borderRadius: BorderRadius.circular(14),
-                        border: Border.all(
-                          color: emoji == e
-                              ? Theme.of(ctx).colorScheme.primary
-                              : Colors.transparent,
-                          width: 2.5,
-                        ),
-                      ),
-                      child: GoalIcon(emoji: e, size: 40),
-                    ),
-                  ),
-              ],
-            ),
-          ],
-        ),
+      child: _SavingsGoalEditSheet(
+        goal: goal,
+        emojiChoices: _emojiChoices,
       ),
     );
-
-    if (ok) {
-      final name = nameCtrl.text.trim();
-      final target = Decimal.tryParse(targetCtrl.text.trim()) ?? Decimal.zero;
-      if (name.isEmpty || target <= Decimal.zero) return;
-      if (goal == null) {
-        await repo.addSavingsGoal(name: name, target: target, emoji: emoji);
-      } else {
-        await repo.updateSavingsGoal(goal.id,
-            name: name, target: target, emoji: emoji);
-      }
-    }
   }
 
   static String _trimZero(Decimal v) {
@@ -196,6 +135,171 @@ class SavingsGoalsView extends StatelessWidget {
       s = s.replaceFirst(RegExp(r'0+$'), '').replaceFirst(RegExp(r'\.$'), '');
     }
     return s;
+  }
+}
+
+class _SavingsGoalEditSheet extends StatefulWidget {
+  final SavingsGoalEntity? goal;
+  final List<String> emojiChoices;
+
+  const _SavingsGoalEditSheet({
+    required this.goal,
+    required this.emojiChoices,
+  });
+
+  @override
+  State<_SavingsGoalEditSheet> createState() => _SavingsGoalEditSheetState();
+}
+
+class _SavingsGoalEditSheetState extends State<_SavingsGoalEditSheet> {
+  late final TextEditingController _nameCtrl;
+  late final TextEditingController _targetCtrl;
+  late String _emoji;
+  bool _saving = false;
+
+  bool get _valid {
+    final target = Decimal.tryParse(_targetCtrl.text.trim());
+    return _nameCtrl.text.trim().isNotEmpty &&
+        target != null &&
+        target > Decimal.zero;
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    final goal = widget.goal;
+    _nameCtrl = TextEditingController(text: goal?.name ?? '');
+    _targetCtrl = TextEditingController(
+      text: goal == null ? '' : SavingsGoalsView._trimZero(goal.target),
+    );
+    _emoji = goal?.emoji ?? widget.emojiChoices.first;
+    _nameCtrl.addListener(_onFieldChanged);
+    _targetCtrl.addListener(_onFieldChanged);
+  }
+
+  @override
+  void dispose() {
+    _nameCtrl
+      ..removeListener(_onFieldChanged)
+      ..dispose();
+    _targetCtrl
+      ..removeListener(_onFieldChanged)
+      ..dispose();
+    super.dispose();
+  }
+
+  void _onFieldChanged() => setState(() {});
+
+  Future<void> _save() async {
+    if (!_valid || _saving) return;
+    setState(() => _saving = true);
+    final repo = context.read<AppRepository>();
+    final name = _nameCtrl.text.trim();
+    final target = Decimal.parse(_targetCtrl.text.trim());
+    final goal = widget.goal;
+    if (goal == null) {
+      await repo.addSavingsGoal(name: name, target: target, emoji: _emoji);
+    } else {
+      await repo.updateSavingsGoal(
+        goal.id,
+        name: name,
+        target: target,
+        emoji: _emoji,
+      );
+    }
+    if (mounted) Navigator.pop(context);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final screenHeight = MediaQuery.sizeOf(context).height;
+    return ConstrainedBox(
+      constraints: BoxConstraints(maxHeight: screenHeight * 0.86),
+      child: SafeArea(
+        top: false,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            SheetHeader(
+              title: widget.goal == null ? '新建存钱目标' : '编辑目标',
+              onClose: () => Navigator.pop(context),
+              actionLabel: '保存',
+              onAction: _valid && !_saving ? _save : null,
+            ),
+            Flexible(
+              child: SingleChildScrollView(
+                keyboardDismissBehavior:
+                    ScrollViewKeyboardDismissBehavior.onDrag,
+                padding: const EdgeInsets.fromLTRB(20, 8, 20, 20),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    AppLabeledField(
+                      label: '目标名称',
+                      child: TextField(
+                        controller: _nameCtrl,
+                        autofocus: true,
+                        maxLength: 12,
+                        textInputAction: TextInputAction.next,
+                        decoration:
+                            iosInputDecoration(context, hint: '如「换新相机」'),
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    AppLabeledField(
+                      label: '目标金额',
+                      child: TextField(
+                        controller: _targetCtrl,
+                        keyboardType: const TextInputType.numberWithOptions(
+                          decimal: true,
+                        ),
+                        textInputAction: TextInputAction.done,
+                        onSubmitted: (_) {
+                          if (_valid) _save();
+                        },
+                        decoration: iosInputDecoration(
+                          context,
+                          prefix: '¥ ',
+                          hint: '0.00',
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 18),
+                    AppLabeledField(
+                      label: '目标图标',
+                      child: Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        children: [
+                          for (final emoji in widget.emojiChoices)
+                            GestureDetector(
+                              onTap: () => setState(() => _emoji = emoji),
+                              child: Container(
+                                padding: const EdgeInsets.all(3),
+                                decoration: BoxDecoration(
+                                  borderRadius: BorderRadius.circular(14),
+                                  border: Border.all(
+                                    color: _emoji == emoji
+                                        ? Theme.of(context).colorScheme.primary
+                                        : Colors.transparent,
+                                    width: 2.5,
+                                  ),
+                                ),
+                                child: GoalIcon(emoji: emoji, size: 40),
+                              ),
+                            ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 }
 
@@ -294,9 +398,7 @@ class _GoalCard extends StatelessWidget {
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis),
                       Text(
-                        done
-                            ? '已达成 🎉'
-                            : '还差 ${MoneyFormat.string(remaining)}',
+                        done ? '已达成 🎉' : '还差 ${MoneyFormat.string(remaining)}',
                         style: Theme.of(context).textTheme.labelSmall?.copyWith(
                               color: done
                                   ? AppColors.income(scheme)
@@ -357,13 +459,10 @@ class _GoalCard extends StatelessWidget {
                         ),
                   ),
                   Text('${(goal.progress * 100).round()}%',
-                      style: Theme.of(context)
-                          .textTheme
-                          .labelMedium
-                          ?.copyWith(
-                              color: barColor,
-                              fontWeight: FontWeight.w600,
-                              fontFamily: 'Nunito')),
+                      style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                          color: barColor,
+                          fontWeight: FontWeight.w600,
+                          fontFamily: 'Nunito')),
                 ],
               ),
             ),

@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 
 import '../data/app_repository.dart';
 import '../views/settings/tags_view.dart';
+import 'ios_form.dart';
 
 /// 标签选择器：一行可横滑的标签胶囊，点选/取消，末尾「+」可快速建标签。
 ///
@@ -30,27 +31,19 @@ class TagSelector extends StatelessWidget {
   Future<void> _quickCreate(BuildContext context) async {
     final repo = context.read<AppRepository>();
     final ctrl = TextEditingController();
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('新建标签'),
-        content: TextField(
-          controller: ctrl,
-          autofocus: true,
-          maxLength: 8,
-          decoration: const InputDecoration(hintText: '如：聚餐、报销、旅行'),
-        ),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('取消')),
-          FilledButton(
-              onPressed: () => Navigator.pop(ctx, true),
-              child: const Text('创建')),
-        ],
+    // 走全局表单弹窗（图二风格：左对齐+双浅胶囊），别再用裸 AlertDialog。
+    final ok = await showIosFormDialog(
+      context,
+      title: '新建标签',
+      confirmText: '创建',
+      content: TextField(
+        controller: ctrl,
+        autofocus: true,
+        maxLength: 8,
+        decoration: iosInputDecoration(context, hint: '如：聚餐、报销、旅行'),
       ),
     );
-    if (ok == true && ctrl.text.trim().isNotEmpty) {
+    if (ok && ctrl.text.trim().isNotEmpty) {
       final id = await repo.addTag(
         name: ctrl.text.trim(),
         colorValue: kTagPalette.first.toARGB32(),

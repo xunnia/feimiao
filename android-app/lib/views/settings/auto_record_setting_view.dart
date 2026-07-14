@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 
 import '../../core/auto_record.dart';
-import '../../theme/app_colors.dart';
+import '../../theme/app_tokens.dart';
+import '../../widgets/app_buttons.dart';
+import '../../widgets/settings_ui.dart';
 
 /// 自动记账设置：开启「通知使用权」+ 保活引导 + 状态显示。
 class AutoRecordSettingView extends StatefulWidget {
@@ -31,91 +33,82 @@ class _AutoRecordSettingViewState extends State<AutoRecordSettingView>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed) _refresh();
+    if (state == AppLifecycleState.resumed) {
+      _refresh();
+    }
   }
 
   Future<void> _refresh() async {
     final on = await AutoRecord.isEnabled();
-    if (mounted) setState(() {
-      _enabled = on;
-      _loading = false;
-    });
+    if (mounted) {
+      setState(() {
+        _enabled = on;
+        _loading = false;
+      });
+    }
   }
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     return Scaffold(
-      backgroundColor: AppColors.appBg(scheme),
+      backgroundColor: Colors.transparent,
       appBar: AppBar(
+        leading: const AppBackButton(),
         title: const Text('自动记账'),
-        backgroundColor: AppColors.appBg(scheme),
+        backgroundColor: Colors.transparent,
         surfaceTintColor: Colors.transparent,
       ),
       body: ListView(
-        padding: const EdgeInsets.all(16),
+        physics: const BouncingScrollPhysics(),
+        padding: const EdgeInsets.only(top: 8, bottom: 32),
         children: [
-          Container(
-            padding: const EdgeInsets.all(16),
-            decoration: BoxDecoration(
-              color: AppColors.card(scheme),
-              borderRadius: BorderRadius.circular(16),
-            ),
-            child: Row(
-              children: [
-                Icon(
-                  _enabled ? Icons.check_circle : Icons.notifications_active,
-                  color: _enabled ? scheme.primary : scheme.onSurfaceVariant,
+          SettingsGroup(
+            children: [
+              SettingsRow(
+                leading: Icon(
+                  _enabled
+                      ? Icons.check_circle_outline
+                      : Icons.notifications_none_rounded,
+                  color: _enabled
+                      ? scheme.primary
+                      : AppTextColor.secondary(scheme),
                 ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Text(
-                    _loading
-                        ? '检查中…'
-                        : (_enabled ? '已开启：付完款喵会自动盯着' : '未开启'),
-                    style: const TextStyle(
-                        fontSize: 15, fontWeight: FontWeight.w600),
-                  ),
-                ),
-              ],
+                title: _loading ? '正在检查' : (_enabled ? '已开启' : '未开启'),
+                trailing: _loading
+                    ? SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 1.8,
+                          color: scheme.primary,
+                        ),
+                      )
+                    : null,
+              ),
+            ],
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(24, 2, 24, 18),
+            child: Text(
+              '开启后，肥喵会识别微信和支付宝的收付款通知。再次打开应用时，确认后即可入账。',
+              style: AppType.secondary(scheme),
             ),
           ),
-          const SizedBox(height: 16),
-          Text(
-            '开启后，微信 / 支付宝有支付通知时，喵会悄悄记下来；'
-            '你下次打开肥喵，一键就能把它们记进账本（不会乱记，都要你确认）。',
-            style: TextStyle(
-                fontSize: 13, height: 1.6, color: scheme.onSurfaceVariant),
-          ),
-          const SizedBox(height: 20),
-          SizedBox(
-            width: double.infinity,
-            child: FilledButton(
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: OutlinedButton(
               onPressed: AutoRecord.openSettings,
-              child: Text(_enabled ? '去系统设置查看' : '去开启「通知使用权」'),
+              child: Text(_enabled ? '打开系统设置' : '开启通知使用权'),
             ),
           ),
-          const SizedBox(height: 24),
-          _tip(scheme, '①', '在弹出的系统列表里找到「肥喵记账」，打开开关。'),
-          _tip(scheme, '②', '把肥喵加入「电池白名单 / 允许自启动」，否则后台可能被系统杀掉、漏记。'),
-          _tip(scheme, '③', '只读取支付/收付款通知用于记账，数据全在你手机本地，不上传。'),
-        ],
-      ),
-    );
-  }
-
-  Widget _tip(ColorScheme scheme, String n, String text) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 12),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(n, style: TextStyle(color: scheme.primary, fontWeight: FontWeight.w700)),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Text(text,
-                style: TextStyle(
-                    fontSize: 13, height: 1.5, color: scheme.onSurfaceVariant)),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(24, 20, 24, 0),
+            child: Text(
+              '在系统列表中找到「肥喵记账」并允许通知使用权。为减少漏记，也建议允许应用在后台运行。\n\n'
+              '肥喵只读取收付款通知，每笔账都由你确认后保存，数据留在本机。',
+              style: AppType.caption(scheme),
+            ),
           ),
         ],
       ),

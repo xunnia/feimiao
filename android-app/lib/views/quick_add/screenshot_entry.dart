@@ -1,13 +1,14 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/cupertino.dart' show CupertinoPageRoute;
 import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart';
 import 'package:image_picker/image_picker.dart';
 
 import '../../core/ai/natural_language_entry_parser.dart';
+import '../../widgets/ios_dialogs.dart';
 import '../../core/ai/order_list_parser.dart';
 import '../../core/ai/screenshot_layout.dart';
 import '../../widgets/app_toast.dart';
 import 'ai_quick_entry_view.dart';
+import '../../widgets/app_page_route.dart';
 
 /// 支付截图识别入口：相册选一张支付/账单截图 → ML Kit 中文 OCR →
 /// 把识别文字喂给 [AiQuickEntryView]（复用既有的金额/分类/收支解析）。
@@ -77,8 +78,8 @@ Future<void> recognizeImagePathAndEntry(
   // 判定是否「订单列表」：≥2 个订单锚点，或 ≥3 个不同金额。
   // 注意：部分截图 OCR 抓不到 ¥ 符号（金额是裸的 17.70），所以锚点要带「共N件」、
   // 金额也按"两位小数"识别，不能只认 ¥。
-  final anchorRe = RegExp(
-      r'自动确认收货并付款|确认收货|待收货|待评价|实付款|付款金额|共\s*\d+\s*件|再次购买|已完成');
+  final anchorRe =
+      RegExp(r'自动确认收货并付款|确认收货|待收货|待评价|实付款|付款金额|共\s*\d+\s*件|再次购买|已完成');
   final anchorCount = ocrLines.where((l) => anchorRe.hasMatch(l.text)).length;
   final amounts = <String>{};
   final amtRe = RegExp(r'(?:[¥￥]\s*)?(\d{1,6}\.\d{2})');
@@ -120,7 +121,7 @@ Future<void> recognizeImagePathAndEntry(
 
   // 5. 把识别文字交给 AI 快记页解析
   navigator.push(
-    CupertinoPageRoute<void>(
+    AppPageRoute<void>(
       builder: (_) => AiQuickEntryView(
         initialText: cleaned,
         fromScreenshot: true,
@@ -134,17 +135,34 @@ class _RecognizingDialog extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return const AlertDialog(
-      content: Row(
-        children: [
-          SizedBox(
-            width: 22,
-            height: 22,
-            child: CircularProgressIndicator(strokeWidth: 2.4),
-          ),
-          SizedBox(width: 16),
-          Text('正在识别截图…'),
-        ],
+    // 全局弹窗规范（图二 Cloudflare 风）：磨砂卡走 FrostedDialogCard。
+    final scheme = Theme.of(context).colorScheme;
+    return Center(
+      child: FrostedDialogCard(
+        maxWidth: 300,
+        padding: const EdgeInsets.fromLTRB(22, 20, 26, 20),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            SizedBox(
+              width: 22,
+              height: 22,
+              child: CircularProgressIndicator(
+                strokeWidth: 2.4,
+                color: scheme.primary,
+              ),
+            ),
+            const SizedBox(width: 14),
+            Text(
+              '正在识别截图…',
+              style: TextStyle(
+                fontSize: 15,
+                fontWeight: FontWeight.w500,
+                color: scheme.onSurface,
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

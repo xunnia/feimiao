@@ -1,13 +1,13 @@
 import 'package:flutter/material.dart';
 
 import '../../widgets/ios_dialogs.dart';
+import '../../widgets/app_empty_state.dart';
 import '../../widgets/app_buttons.dart';
 import '../../widgets/ios_form.dart';
 import '../../widgets/ios_menu.dart';
 import 'package:provider/provider.dart';
 
 import '../../data/app_repository.dart';
-import '../../widgets/mascot.dart';
 
 /// 标签可选颜色（取自猫系配色 + 常用萌色）。
 const List<Color> kTagPalette = [
@@ -28,7 +28,8 @@ class TagsView extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(leading: const AppBackButton(), 
+      appBar: AppBar(
+        leading: const AppBackButton(),
         title: const Text('标签管理'),
         centerTitle: true,
         actions: [
@@ -61,8 +62,7 @@ class TagsView extends StatelessWidget {
                 shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(14)),
                 child: ListTile(
-                  leading: CircleAvatar(
-                      radius: 12, backgroundColor: color),
+                  leading: CircleAvatar(radius: 12, backgroundColor: color),
                   title: Text(t.name,
                       style: const TextStyle(fontWeight: FontWeight.w500)),
                   subtitle: Text('$count 笔账目用到'),
@@ -99,19 +99,9 @@ class TagsView extends StatelessWidget {
   }
 
   Widget _empty(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return Center(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          const Mascot(mood: MascotMood.empty, size: 72, animate: true),
-          const SizedBox(height: 12),
-          Text('还没有标签', style: Theme.of(context).textTheme.titleMedium),
-          const SizedBox(height: 6),
-          Text('用标签把账目分组，比如「聚餐」「报销」',
-              style: TextStyle(color: scheme.onSurfaceVariant)),
-        ],
-      ),
+    return const AppEmptyState(
+      title: '还没有标签',
+      message: '用标签把账目分组，比如「聚餐」「报销」',
     );
   }
 

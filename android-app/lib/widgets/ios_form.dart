@@ -1,6 +1,43 @@
 import 'package:flutter/material.dart';
 
 import '../theme/app_colors.dart';
+import '../theme/app_tokens.dart';
+import 'ios_dialogs.dart';
+
+/// 表单字段的常驻标签。字段名始终显示，hint 只负责给示例或格式提示。
+class AppLabeledField extends StatelessWidget {
+  final String label;
+  final Widget child;
+  final String? helperText;
+
+  const AppLabeledField({
+    super.key,
+    required this.label,
+    required this.child,
+    this.helperText,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(
+          label,
+          style: AppType.secondary(scheme).copyWith(height: 1),
+        ),
+        const SizedBox(height: 7),
+        SizedBox(width: double.infinity, child: child),
+        if (helperText != null) ...[
+          const SizedBox(height: 6),
+          Text(helperText!, style: AppType.caption(scheme)),
+        ],
+      ],
+    );
+  }
+}
 
 /// iOS 风输入框样式：圆角 + 浅灰填充 + 无边框（systemGray6 观感）。
 /// 给表单里的 TextField 套用：`decoration: iosInputDecoration(context, hint: '…')`。
@@ -26,8 +63,7 @@ InputDecoration iosInputDecoration(BuildContext context,
     fillColor: AppColors.inputFill(scheme),
     isDense: true,
     counterText: '',
-    contentPadding:
-        const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+    contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
     border: border,
     enabledBorder: border,
     focusedBorder: OutlineInputBorder(
@@ -63,8 +99,8 @@ Future<bool> showIosFormDialog(
           scale: Tween<double>(begin: 0.9, end: 1.0).animate(curved),
           child: Padding(
             // 跟随键盘上移
-            padding: EdgeInsets.only(
-                bottom: MediaQuery.of(ctx).viewInsets.bottom),
+            padding:
+                EdgeInsets.only(bottom: MediaQuery.of(ctx).viewInsets.bottom),
             child: Center(
               child: _IosFormCard(
                 title: title,
@@ -100,117 +136,57 @@ class _IosFormCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final maxW = MediaQuery.of(context).size.width - 56;
 
-    return Material(
-      type: MaterialType.transparency,
-      child: ConstrainedBox(
-        constraints: BoxConstraints(maxWidth: maxW > 360 ? 360 : maxW),
-        child: Container(
-          padding: const EdgeInsets.fromLTRB(20, 20, 20, 16),
-          decoration: BoxDecoration(
-            color: AppColors.card(scheme),
-            borderRadius: BorderRadius.circular(22),
-            border: Border.all(color: AppColors.hairline(scheme)),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withValues(alpha: 0.18),
-                blurRadius: 30,
-                offset: const Offset(0, 12),
-              ),
-            ],
+    // 磨砂卡 + 发丝边走全局 FrostedDialogCard，和确认弹窗同一张皮。
+    return FrostedDialogCard(
+      maxWidth: 360,
+      padding: const EdgeInsets.fromLTRB(20, 20, 20, 16),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // 标题左对齐，16/w500（图二规格）。
+          Text(
+            title,
+            style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w500),
           ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
+          if (subtitle != null) ...[
+            const SizedBox(height: 4),
+            Text(
+              subtitle!,
+              style: TextStyle(
+                fontSize: 13,
+                color: scheme.onSurfaceVariant,
+              ),
+            ),
+          ],
+          const SizedBox(height: 14),
+          Flexible(
+            child: SingleChildScrollView(
+              child: content,
+            ),
+          ),
+          const SizedBox(height: 18),
+          Row(
             children: [
-              // 标题左对齐（对齐 Claude），副标题灰色小字。
-              Text(
-                title,
-                style: const TextStyle(
-                    fontSize: 17, fontWeight: FontWeight.w600),
-              ),
-              if (subtitle != null) ...[
-                const SizedBox(height: 4),
-                Text(
-                  subtitle!,
-                  style: TextStyle(
-                    fontSize: 13,
-                    color: scheme.onSurfaceVariant,
-                  ),
-                ),
-              ],
-              const SizedBox(height: 14),
-              Flexible(
-                child: SingleChildScrollView(
-                  child: content,
+              Expanded(
+                child: DialogPillButton(
+                  label: cancelText,
+                  height: 44,
+                  onTap: () => Navigator.of(context).pop(false),
                 ),
               ),
-              const SizedBox(height: 18),
-              Row(
-                children: [
-                  Expanded(
-                    child: _FormButton(
-                      label: cancelText,
-                      emphasis: false,
-                      onTap: () => Navigator.of(context).pop(false),
-                      scheme: scheme,
-                    ),
-                  ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: _FormButton(
-                      label: confirmText,
-                      emphasis: true,
-                      onTap: () => Navigator.of(context).pop(true),
-                      scheme: scheme,
-                    ),
-                  ),
-                ],
+              const SizedBox(width: 10),
+              Expanded(
+                child: DialogPillButton(
+                  label: confirmText,
+                  height: 44,
+                  onTap: () => Navigator.of(context).pop(true),
+                ),
               ),
             ],
           ),
-        ),
-      ),
-    );
-  }
-}
-
-class _FormButton extends StatelessWidget {
-  final String label;
-  final bool emphasis;
-  final VoidCallback onTap;
-  final ColorScheme scheme;
-
-  const _FormButton({
-    required this.label,
-    required this.emphasis,
-    required this.onTap,
-    required this.scheme,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    // 对齐 Claude：两颗都是浅灰胶囊，确认键用深色字加粗区分。
-    return GestureDetector(
-      onTap: onTap,
-      behavior: HitTestBehavior.opaque,
-      child: Container(
-        height: 44,
-        alignment: Alignment.center,
-        decoration: BoxDecoration(
-          color: AppColors.inputFill(scheme),
-          borderRadius: BorderRadius.circular(999),
-          border: Border.all(color: AppColors.hairline(scheme, strength: 0.8)),
-        ),
-        child: Text(
-          label,
-          style: TextStyle(
-            fontSize: 15,
-            fontWeight: emphasis ? FontWeight.w600 : FontWeight.w400,
-            color: scheme.onSurface,
-          ),
-        ),
+        ],
       ),
     );
   }

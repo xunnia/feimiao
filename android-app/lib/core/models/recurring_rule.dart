@@ -18,12 +18,11 @@ enum RecurPeriod {
 
   String toJson() => name;
 
-  static RecurPeriod fromJson(String value) =>
-      RecurPeriod.values.firstWhere((e) => e.name == value,
-          orElse: () => RecurPeriod.monthly);
+  static RecurPeriod fromJson(String value) => RecurPeriod.values
+      .firstWhere((e) => e.name == value, orElse: () => RecurPeriod.monthly);
 
   /// 在 [d] 基础上推进一个周期(月/年做月末夹取,避免 31 号溢出到下月)。
-  DateTime advance(DateTime d) {
+  DateTime advance(DateTime d, {int? anchorDay}) {
     switch (this) {
       case RecurPeriod.daily:
         return d.add(const Duration(days: 1));
@@ -37,14 +36,48 @@ enum RecurPeriod {
           y += 1;
         }
         final lastDay = DateTime(y, m + 1, 0).day;
-        final day = d.day < lastDay ? d.day : lastDay;
+        final targetDay = _validAnchorDay(anchorDay) ?? d.day;
+        final day = targetDay < lastDay ? targetDay : lastDay;
         return DateTime(y, m, day);
       case RecurPeriod.yearly:
         final y = d.year + 1;
         final lastDay = DateTime(y, d.month + 1, 0).day;
-        final day = d.day < lastDay ? d.day : lastDay;
+        final targetDay = _validAnchorDay(anchorDay) ?? d.day;
+        final day = targetDay < lastDay ? targetDay : lastDay;
         return DateTime(y, d.month, day);
     }
+  }
+
+  static int? _validAnchorDay(int? day) {
+    if (day == null || day < 1 || day > 31) return null;
+    return day;
+  }
+
+  /// 从 [firstDue] 开始预览接下来 [count] 次执行日期。
+  ///
+  /// 这是纯函数，供编辑页预览执行日期使用；真正入账仍由
+  /// AppRepository 的到期 materialize 逻辑负责。
+  List<DateTime> previewDates(
+    DateTime firstDue, {
+    int count = 3,
+    DateTime? endDate,
+  }) {
+    if (count <= 0) return const [];
+    final dates = <DateTime>[];
+    var due = firstDue;
+    final end = endDate == null
+        ? null
+        : DateTime(endDate.year, endDate.month, endDate.day, 23, 59, 59, 999);
+    final anchorDay = switch (this) {
+      RecurPeriod.monthly || RecurPeriod.yearly => firstDue.day,
+      _ => null,
+    };
+    for (var i = 0; i < count; i++) {
+      if (end != null && due.isAfter(end)) break;
+      dates.add(due);
+      due = advance(due, anchorDay: anchorDay);
+    }
+    return dates;
   }
 }
 
@@ -58,8 +91,13 @@ class RecurringRule {
   final int? accountId;
   final String note;
   final String period; // RecurPeriod.name
+  final int startDateMs;
   final int nextDueMs;
   final bool enabled;
+  final int anchorDay;
+  final int? endDateMs;
+  final int? totalCount;
+  final int generatedCount;
 
   const RecurringRule({
     required this.id,
@@ -70,14 +108,33 @@ class RecurringRule {
     required this.accountId,
     required this.note,
     required this.period,
+    required this.startDateMs,
     required this.nextDueMs,
     required this.enabled,
+    required this.anchorDay,
+    required this.endDateMs,
+    required this.totalCount,
+    required this.generatedCount,
   });
 
   Decimal get amount => Decimal.tryParse(amountStr) ?? Decimal.zero;
   TransactionKind get txKind => TransactionKind.fromJson(kind);
   RecurPeriod get recurPeriod => RecurPeriod.fromJson(period);
+  DateTime get startDate => DateTime.fromMillisecondsSinceEpoch(startDateMs);
   DateTime get nextDue => DateTime.fromMillisecondsSinceEpoch(nextDueMs);
+  DateTime? get endDate => endDateMs == null
+      ? null
+      : DateTime.fromMillisecondsSinceEpoch(endDateMs!);
+  bool get hasCountLimit => totalCount != null && totalCount! > 0;
+  bool get isCompletedByCount => hasCountLimit && generatedCount >= totalCount!;
+  bool get isCompletedByDate {
+    final end = endDate;
+    if (end == null) return false;
+    final endOfDay = DateTime(end.year, end.month, end.day, 23, 59, 59, 999);
+    return nextDue.isAfter(endOfDay);
+  }
+
+  bool get isCompleted => isCompletedByCount || isCompletedByDate;
 
   static RecurringRule fromMap(Map<String, Object?> m) => RecurringRule(
         id: m['id'] as int,
@@ -88,7 +145,13 @@ class RecurringRule {
         accountId: m['account_id'] as int?,
         note: (m['note'] as String?) ?? '',
         period: (m['period'] as String?) ?? 'monthly',
+        startDateMs:
+            (m['start_date_ms'] as int?) ?? (m['next_due_ms'] as int?) ?? 0,
         nextDueMs: (m['next_due_ms'] as int?) ?? 0,
         enabled: ((m['enabled'] as int?) ?? 1) == 1,
+        anchorDay: (m['anchor_day'] as int?) ?? 0,
+        endDateMs: m['end_date_ms'] as int?,
+        totalCount: m['total_count'] as int?,
+        generatedCount: (m['generated_count'] as int?) ?? 0,
       );
 }

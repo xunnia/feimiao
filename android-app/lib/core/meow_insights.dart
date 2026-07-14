@@ -1,6 +1,7 @@
 import 'package:decimal/decimal.dart';
 
 import 'budget/budget_engine.dart';
+import 'ledger/ledger_policy.dart';
 import 'models/transaction_kind.dart';
 import 'money_format.dart';
 import 'statistics/statistics_engine.dart';
@@ -17,19 +18,18 @@ class MeowInsights {
     final now = DateTime.now();
 
     // 1. 超预算
-    final budget = repo.monthlyBudget;
-    if (budget != null && budget > Decimal.zero) {
-      final bs = BudgetEngine.status(monthlyBudget: budget, records: records);
-      if (bs.remaining < Decimal.zero) {
-        return '这个月有点超预算啦,剩下的日子省着点喵~有啥想问的随时说。';
-      }
+    final budgetStatus = BudgetEngine.fromWindowResult(
+      repo.budgetForCalendarMonth(DateTime(now.year, now.month)),
+    );
+    if (budgetStatus != null && budgetStatus.remaining < Decimal.zero) {
+      return '这个月有点超预算啦,剩下的日子省着点喵~有啥想问的随时说。';
     }
 
-    final cur =
-        StatisticsEngine.monthlySummary(records, year: now.year, month: now.month);
+    final cur = StatisticsEngine.monthlySummary(records,
+        year: now.year, month: now.month);
     final pm = DateTime(now.year, now.month - 1, 1);
-    final prev =
-        StatisticsEngine.monthlySummary(records, year: pm.year, month: pm.month);
+    final prev = StatisticsEngine.monthlySummary(records,
+        year: pm.year, month: pm.month);
 
     // 2. 比上月多花最多的分类
     String? gname;
@@ -38,7 +38,7 @@ class MeowInsights {
       if (c.total <= Decimal.zero) continue;
       var pv = Decimal.zero;
       for (final p in prev.expenseByCategory) {
-        if (p.name == c.name) {
+        if (p.identity == c.identity) {
           pv = p.total;
           break;
         }
@@ -66,22 +66,30 @@ class MeowInsights {
   }
 
   /// 记完一笔后,猫给一句基于数据的反馈。
-  static String recordFeedback(AppRepository repo, String categoryName) {
+  static String recordFeedback(
+    AppRepository repo,
+    String categoryName, {
+    DateTime? date,
+  }) {
     if (categoryName.isEmpty || categoryName == '未分类') {
       return '记好啦,喵帮你盯着~';
     }
-    final now = DateTime.now();
+    final target = date ?? DateTime.now();
     var todayN = 0;
     var monthN = 0;
     var monthSum = Decimal.zero;
-    for (final t in repo.transactions) {
+    final all = repo.transactions;
+    final refundTotals = LedgerPolicy.refundTotals(all);
+    for (final t in repo.visibleTransactions) {
       if (t.txKind != TransactionKind.expense) continue;
-      if (t.amount <= Decimal.zero) continue;
+      if (t.excluded) continue;
+      final amount = LedgerPolicy.userAmountWith(t, refundTotals);
+      if (amount <= Decimal.zero) continue;
       if (t.categoryNameZh != categoryName) continue;
-      if (t.date.year == now.year && t.date.month == now.month) {
+      if (t.date.year == target.year && t.date.month == target.month) {
         monthN++;
-        monthSum += t.amount;
-        if (t.date.day == now.day) todayN++;
+        monthSum += amount;
+        if (t.date.day == target.day) todayN++;
       }
     }
     if (todayN >= 2) {

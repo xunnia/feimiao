@@ -8,10 +8,12 @@ import 'models/transaction_kind.dart';
 class NotificationParse {
   NotificationParse._();
 
+  static final RegExp _refundCtx =
+      RegExp(r'退款|退回|已退|refund', caseSensitive: false);
+
   static final RegExp _amt = RegExp(r'[¥￥]\s*(\d+(?:\.\d{1,2})?)');
   static final RegExp _yuan = RegExp(r'(\d+(?:\.\d{1,2})?)\s*元');
-  static final RegExp _payCtx =
-      RegExp(r'支付|付款|实付|扣款|消费|到账|收款|收钱|花');
+  static final RegExp _payCtx = RegExp(r'支付|付款|实付|扣款|消费|到账|收款|收钱|花');
   static final RegExp _balCtx = RegExp(r'余额|零钱|可用|额度|账户余');
 
   /// 从通知文本里挑出本次交易金额。
@@ -44,10 +46,14 @@ class NotificationParse {
 
   /// 收支方向：收款/到账/退款/「向你转账」→ 收入；其余 → 支出。
   static TransactionKind kindOf(String text) {
-    if (RegExp(r'退款|退回').hasMatch(text)) return TransactionKind.income;
+    if (isRefund(text)) return TransactionKind.income;
     if (RegExp(r'收款|收钱|到账|入账|向你转账|转账给你|发给你').hasMatch(text)) {
       return TransactionKind.income;
     }
     return TransactionKind.expense;
   }
+
+  /// Refund notifications are settlement events attached to an original
+  /// expense. They must never be persisted as ordinary income.
+  static bool isRefund(String text) => _refundCtx.hasMatch(text);
 }

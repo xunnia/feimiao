@@ -1,5 +1,9 @@
 import 'package:flutter/widgets.dart';
 import 'package:flutter_svg/flutter_svg.dart';
+import 'package:provider/provider.dart';
+
+import '../../data/app_repository.dart';
+import 'category_icon_style.dart';
 
 /// 拥有「自有 iOS 风 SVG 图标」的分类 key 全集。
 /// 由图标生成器产出（assets/cat_icons/{key}.svg）。不在此集合里的 key
@@ -40,6 +44,142 @@ const Set<String> kSvgCategoryKeys = {
   'inc_prize', 'inc_subsidy',
 };
 
+const Set<String> kDualStyleCategoryKeys = {
+  'bonus',
+  'business',
+  'car',
+  'car_tax',
+  'car_toll',
+  'car_wash',
+  'dining',
+  'dining_breakfast',
+  'dining_cook',
+  'dining_dinner',
+  'dining_drink',
+  'dining_lunch',
+  'dining_snack',
+  'dining_tobacco',
+  'dining_treat',
+  'edu_book',
+  'edu_course',
+  'edu_exam',
+  'edu_print',
+  'edu_tuition',
+  'education',
+  'ent_bar',
+  'ent_game',
+  'ent_movie',
+  'ent_photo',
+  'ent_show',
+  'ent_spa',
+  'ent_sport',
+  'entertainment',
+  'familySupport',
+  'gift_parents',
+  'gift_present',
+  'gift_red',
+  'gifts',
+  'goal_camera',
+  'goal_car',
+  'goal_cat',
+  'goal_game',
+  'goal_gift',
+  'goal_grad',
+  'goal_heart',
+  'goal_house',
+  'goal_laptop',
+  'goal_pig',
+  'goal_plane',
+  'goal_ring',
+  'groceries',
+  'house_clean',
+  'house_gas',
+  'house_loan',
+  'house_park',
+  'house_phone',
+  'house_property',
+  'house_rent',
+  'house_water',
+  'housing',
+  'inc_bonus_full',
+  'inc_bonus_project',
+  'inc_bonus_year',
+  'inc_dividend',
+  'inc_freelance',
+  'inc_gain',
+  'inc_interest',
+  'inc_media',
+  'inc_parttime',
+  'inc_prize',
+  'inc_rent',
+  'inc_rp_ali',
+  'inc_rp_gift',
+  'inc_rp_wx',
+  'inc_salary_allow',
+  'inc_salary_base',
+  'inc_salary_commission',
+  'inc_salary_ot',
+  'inc_subsidy',
+  'ins_accident',
+  'ins_car',
+  'ins_critical',
+  'ins_life',
+  'ins_medical',
+  'ins_other',
+  'ins_property',
+  'insurance',
+  'investment',
+  'med_beauty',
+  'med_checkup',
+  'med_clinic',
+  'med_dental',
+  'med_drug',
+  'med_eye',
+  'med_health',
+  'med_hospital',
+  'med_mental',
+  'medical',
+  'other',
+  'otherIncome',
+  'other_charity',
+  'other_fee',
+  'other_fine',
+  'other_invest',
+  'other_loss',
+  'other_tax',
+  'pension',
+  'pets',
+  'redPacket',
+  'refund',
+  'salary',
+  'shop_appliance',
+  'shop_baby',
+  'shop_beauty',
+  'shop_clothes',
+  'shop_deco',
+  'shop_digital',
+  'shop_digital_acc',
+  'shop_home',
+  'shop_jewelry',
+  'shop_office',
+  'shop_watch',
+  'shopping',
+  'sideline',
+  'subscription',
+  'trans_bike',
+  'trans_flight',
+  'trans_fuel',
+  'trans_park',
+  'trans_public',
+  'trans_repair',
+  'trans_taxi',
+  'trans_train',
+  'transfer',
+  'transport',
+  'travel',
+  'utilities',
+};
+
 /// 分类图标控件：优先渲染自有 iOS 风 SVG（圆角方块 + 品类色 + 白色图形）；
 /// 没有对应 SVG 时回退到原彩色 emoji 文本，保证永不崩、永不白屏。
 class CatIcon extends StatelessWidget {
@@ -57,18 +197,51 @@ class CatIcon extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (kSvgCategoryKeys.contains(categoryKey)) {
+      final style = _categoryIconStyleOf(context);
+      final assetDir = kDualStyleCategoryKeys.contains(categoryKey)
+          ? style.assetDir
+          : 'assets/cat_icons';
       return SvgPicture.asset(
-        'assets/cat_icons/$categoryKey.svg',
+        '$assetDir/$categoryKey.svg',
         width: size,
         height: size,
-        placeholderBuilder: (_) => SizedBox(width: size, height: size),
+        placeholderBuilder: (_) => _FallbackCatIcon(emoji: emoji, size: size),
+        errorBuilder: (_, __, ___) => SvgPicture.asset(
+          'assets/cat_icons/$categoryKey.svg',
+          width: size,
+          height: size,
+          placeholderBuilder: (_) => _FallbackCatIcon(emoji: emoji, size: size),
+          errorBuilder: (_, __, ___) =>
+              _FallbackCatIcon(emoji: emoji, size: size),
+        ),
       );
     }
+    return _FallbackCatIcon(emoji: emoji, size: size);
+  }
+}
+
+CategoryIconStyle _categoryIconStyleOf(BuildContext context) {
+  try {
+    return Provider.of<AppRepository>(context).categoryIconStyle;
+  } on ProviderNotFoundException {
+    return CategoryIconStyle.filled;
+  }
+}
+
+class _FallbackCatIcon extends StatelessWidget {
+  final String emoji;
+  final double size;
+
+  const _FallbackCatIcon({required this.emoji, required this.size});
+
+  @override
+  Widget build(BuildContext context) {
     return SizedBox(
       width: size,
       height: size,
       child: Center(
-        child: Text(emoji, style: TextStyle(fontSize: size * 0.64, height: 1.0)),
+        child:
+            Text(emoji, style: TextStyle(fontSize: size * 0.64, height: 1.0)),
       ),
     );
   }

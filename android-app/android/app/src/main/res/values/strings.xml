@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">肥喵记账</string>
+    <string name="widget_overview_name">肥喵总览</string>
+    <string name="widget_quick_add_name">肥喵快速记账</string>
+    <string name="widget_budget_name">肥喵本月进度</string>
+    <string name="widget_categories_name">肥喵支出活动</string>
+</resources>

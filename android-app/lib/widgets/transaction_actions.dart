@@ -6,9 +6,8 @@ import 'package:provider/provider.dart';
 import '../core/haptics.dart';
 import '../core/models/transaction_kind.dart';
 import '../data/app_repository.dart';
-import '../theme/app_colors.dart';
 import '../views/transactions/edit_transaction_sheet.dart';
-import 'settings_ui.dart';
+import 'refund_settlement_sheet.dart';
 import 'slidable_tracker.dart';
 
 const Color _kEdit = Color(0xFF7D8B9B); // 蓝灰毛
@@ -67,9 +66,8 @@ class _TransactionSlidableState extends State<TransactionSlidable> {
             child: Builder(
               builder: (paneCtx) => AnimatedSwitcher(
                 duration: const Duration(milliseconds: 220),
-                child: _confirming
-                    ? _confirmBar(paneCtx)
-                    : _buttonsRow(paneCtx),
+                child:
+                    _confirming ? _confirmBar(paneCtx) : _buttonsRow(paneCtx),
               ),
             ),
           ),
@@ -199,161 +197,31 @@ class _PaneWatcherState extends State<_PaneWatcher> {
   Widget build(BuildContext context) => widget.child;
 }
 
-/// 退款弹层：显示原价/已退/净额 + 已退明细（图三的「退款记录」）；
-/// 新退款默认填「剩余可退」，上限也是剩余，退不了超过原价。
-Future<void> showRefundSheet(
-    BuildContext context, TransactionEntity tx) async {
+/// 手工退款与 AI 退款共用同一套结算确认，避免消费归属和真实到账混用。
+Future<void> showRefundSheet(BuildContext context, TransactionEntity tx) async {
   final repo = context.read<AppRepository>();
-  final full = tx.amount;
-
-  await showModalBottomSheet<void>(
-    context: context,
-    isScrollControlled: true,
-    backgroundColor: Colors.transparent,
-    builder: (sheetCtx) {
-      final scheme = Theme.of(sheetCtx).colorScheme;
-      final gold = AppColors.income(scheme);
-      // 每次重建都读最新已退（多次退款后剩余会变）。
-      return StatefulBuilder(
-        builder: (ctx, setLocal) {
-          final refunds = repo.refundsOf(tx.id);
-          final refunded = repo.refundedAmountOf(tx.id);
-          final remaining = full - refunded;
-          final ctrl = _refundCtrl ??=
-              TextEditingController(text: _trim(remaining));
-          final parsed = Decimal.tryParse(ctrl.text.trim());
-          final valid = parsed != null &&
-              parsed > Decimal.zero &&
-              parsed <= remaining;
-          return Padding(
-            padding:
-                EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(ctx).bottom),
-            child: Container(
-              decoration: BoxDecoration(
-                color: scheme.surface,
-                borderRadius:
-                    const BorderRadius.vertical(top: Radius.circular(24)),
-              ),
-              padding: EdgeInsets.zero,
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  // 统一弹层头：✕ 关闭 + 居中「退款」+ 右上角确认（取代底部长条）。
-                  SheetHeader(
-                    title: '退款',
-                    subtitle:
-                        '${tx.categoryNameZh.isNotEmpty ? tx.categoryNameZh : '这笔'}'
-                        ' 原支出 ¥${_trim(full)}'
-                        '${refunded > Decimal.zero ? ' · 已退 ¥${_trim(refunded)} · 剩 ¥${_trim(remaining)}' : ''}',
-                    onClose: () => Navigator.pop(ctx),
-                    actionLabel: remaining > Decimal.zero
-                        ? (valid && parsed == remaining ? '全部退回' : '确认退款')
-                        : null,
-                    onAction: (remaining > Decimal.zero && valid)
-                        ? () async {
-                            Navigator.pop(ctx);
-                            Haptics.of(Haptic.success);
-                            await repo.refundTransaction(tx, parsed!);
-                          }
-                        : null,
-                  ),
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(20, 12, 20, 20),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        // ── 已退明细（退款记录）──
-                        if (refunds.isNotEmpty) ...[
-                          Align(
-                            alignment: Alignment.centerLeft,
-                            child: Text('退款记录',
-                                style: Theme.of(ctx)
-                                    .textTheme
-                                    .labelMedium
-                                    ?.copyWith(color: scheme.onSurfaceVariant)),
-                          ),
-                          const SizedBox(height: 4),
-                          for (final r in refunds)
-                            Padding(
-                              padding: const EdgeInsets.symmetric(vertical: 3),
-                              child: Row(
-                                children: [
-                                  Expanded(
-                                    child: Text(
-                                      '${r.date.year}-${r.date.month.toString().padLeft(2, '0')}-${r.date.day.toString().padLeft(2, '0')} ${r.date.hour.toString().padLeft(2, '0')}:${r.date.minute.toString().padLeft(2, '0')}',
-                                      style: Theme.of(ctx)
-                                          .textTheme
-                                          .bodySmall
-                                          ?.copyWith(
-                                              color: scheme.onSurfaceVariant),
-                                    ),
-                                  ),
-                                  Text('+${_trim(r.amount.abs())}',
-                                      style: TextStyle(
-                                          color: gold,
-                                          fontWeight: FontWeight.w600,
-                                          fontFamily: 'Nunito')),
-                                  // 单笔退款可撤销（记错了）。
-                                  IconButton(
-                                    visualDensity: VisualDensity.compact,
-                                    icon: Icon(Icons.close,
-                                        size: 16,
-                                        color: scheme.onSurfaceVariant),
-                                    onPressed: () async {
-                                      await repo.deleteTransaction(r.id);
-                                      ctrl.text = _trim(
-                                          full - repo.refundedAmountOf(tx.id));
-                                      setLocal(() {});
-                                    },
-                                  ),
-                                ],
-                              ),
-                            ),
-                          const Divider(height: 16),
-                        ],
-                        if (remaining > Decimal.zero)
-                          TextField(
-                            controller: ctrl,
-                            autofocus: refunds.isEmpty,
-                            keyboardType: const TextInputType.numberWithOptions(
-                                decimal: true),
-                            onChanged: (_) => setLocal(() {}),
-                            decoration: InputDecoration(
-                              labelText: '本次退款金额',
-                              prefixText: '¥ ',
-                              helperText: '默认剩余可退 ¥${_trim(remaining)}，可改小',
-                            ),
-                          )
-                        else
-                          Padding(
-                            padding: const EdgeInsets.only(top: 8),
-                            child: Text('已全额退完',
-                                textAlign: TextAlign.center,
-                                style: TextStyle(
-                                    color: scheme.onSurfaceVariant)),
-                          ),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          );
-        },
-      );
-    },
+  final refunds = repo.refundsOf(tx.id);
+  final remaining = tx.amount - repo.refundedAmountOf(tx.id);
+  final result = await showRefundSettlementSheet(
+    context,
+    original: tx,
+    initialAmount: remaining,
+    maxAmount: remaining,
+    existingRefunds: refunds,
+    onDeleteRefund: (refund) => repo.deleteTransaction(refund.id),
+    onConfirmSettlement: (refund, settledAt, settlementAccountId) =>
+        repo.confirmTransactionSettlement(
+      refund.id,
+      settledAt: settledAt,
+      settlementAccountId: settlementAccountId,
+    ),
   );
-  _refundCtrl?.dispose();
-  _refundCtrl = null;
-}
-
-/// 退款弹层的输入控制器（弹层生命周期内复用，关闭时释放）。
-TextEditingController? _refundCtrl;
-
-String _trim(Decimal d) {
-  var s = d.toString();
-  if (s.endsWith('.00')) s = s.substring(0, s.length - 3);
-  return s;
+  if (result == null) return;
+  Haptics.of(Haptic.success);
+  await repo.refundTransaction(
+    tx,
+    result.amount,
+    settledAt: result.settledAt,
+    settlementAccountId: result.settlementAccountId,
+  );
 }

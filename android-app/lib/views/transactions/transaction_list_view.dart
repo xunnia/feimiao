@@ -2,15 +2,14 @@ import 'package:decimal/decimal.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
-import '../../core/models/cat_svg_icon.dart';
-import '../../core/models/category_seed.dart';
 import '../../core/models/transaction_kind.dart';
 import '../../core/money_format.dart';
 import '../../data/app_repository.dart';
 import '../../theme/app_colors.dart';
-import '../../widgets/mascot.dart';
-import '../../widgets/tag_selector.dart';
+import '../../widgets/app_buttons.dart';
+import '../../widgets/app_empty_state.dart';
 import '../../widgets/transaction_actions.dart';
+import '../../widgets/transaction_day_list.dart';
 import 'edit_transaction_sheet.dart';
 
 /// 流水明细页：按天分组 + 当日小计 + 左滑删除 + 「只看待报销」筛选 + 空状态。
@@ -40,6 +39,7 @@ class _TransactionListViewState extends State<TransactionListView> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
+        leading: const AppBackButton(),
         title: const Text('明细'),
         centerTitle: true,
       ),
@@ -56,8 +56,8 @@ class _TransactionListViewState extends State<TransactionListView> {
                 _FilterBar(
                   onlyReimbursable: _onlyReimbursable,
                   pendingCount: pending.length,
-                  pendingTotal: pending.fold(
-                      Decimal.zero, (sum, t) => sum + t.amount),
+                  pendingTotal:
+                      pending.fold(Decimal.zero, (sum, t) => sum + t.amount),
                   onToggle: (v) => setState(() => _onlyReimbursable = v),
                 ),
               Expanded(
@@ -118,12 +118,12 @@ class _FilterBar extends StatelessWidget {
           Text(
             MoneyFormat.string(pendingTotal),
             style: Theme.of(context).textTheme.labelMedium?.copyWith(
-                  color: AppColors.warning,
-                  fontWeight: FontWeight.w600,
-                  fontFamily: 'Nunito',
-                  // ignore: deprecated_member_use
-                  fontFeatures: const [FontFeature.tabularFigures()],
-                ),
+              color: AppColors.warning,
+              fontWeight: FontWeight.w600,
+              fontFamily: 'Nunito',
+              // ignore: deprecated_member_use
+              fontFeatures: const [FontFeature.tabularFigures()],
+            ),
           ),
         ],
       ),
@@ -174,8 +174,7 @@ class _SectionHeader extends StatelessWidget {
     return '${section.day.month}月${section.day.day}日 ${_weekday(section.day.weekday)}';
   }
 
-  String _weekday(int w) =>
-      const ['一', '二', '三', '四', '五', '六', '日'][w - 1];
+  String _weekday(int w) => const ['一', '二', '三', '四', '五', '六', '日'][w - 1];
 
   @override
   Widget build(BuildContext context) {
@@ -228,202 +227,7 @@ class _DismissibleRow extends StatelessWidget {
       transaction: transaction,
       child: InkWell(
         onTap: () => showEditTransactionSheet(context, transaction),
-        child: _TransactionRow(transaction: transaction),
-      ),
-    );
-  }
-}
-
-class _TransactionRow extends StatelessWidget {
-  final TransactionEntity transaction;
-
-  const _TransactionRow({required this.transaction});
-
-  bool get _isTransfer => transaction.txKind == TransactionKind.transfer;
-
-  String get _emoji {
-    if (_isTransfer) return '🔁';
-    final seed = CategorySeed.all
-        .where((s) => s.key == transaction.categoryKey)
-        .firstOrNull;
-    return seed?.emoji ?? '🏷️';
-  }
-
-  String get _title {
-    switch (transaction.txKind) {
-      case TransactionKind.transfer:
-        return '${transaction.accountName} → ${transaction.toAccountName}';
-      default:
-        final name = transaction.categoryNameZh;
-        return name.isNotEmpty ? name : '未分类';
-    }
-  }
-
-  // 退款冲账 = 负向支出：显示成「+¥x」铜金色，避免 --30 这种丑写法。
-  bool get _isRefund =>
-      transaction.txKind == TransactionKind.expense &&
-      transaction.amount < Decimal.zero;
-
-  String get _amountText {
-    if (_isRefund) return '+${MoneyFormat.string(transaction.amount.abs())}';
-    final text = MoneyFormat.string(transaction.amount);
-    switch (transaction.txKind) {
-      case TransactionKind.expense:
-        return '-$text';
-      case TransactionKind.income:
-        return '+$text';
-      case TransactionKind.transfer:
-        return text;
-    }
-  }
-
-  Color _amountColor(ColorScheme scheme) {
-    if (_isRefund) return AppColors.income(scheme);
-    switch (transaction.txKind) {
-      case TransactionKind.expense:
-        return AppColors.expense(scheme);
-      case TransactionKind.income:
-        return AppColors.income(scheme);
-      case TransactionKind.transfer:
-        return scheme.onSurfaceVariant;
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    final refunded =
-        context.read<AppRepository>().refundedAmountOf(transaction.id);
-    final hasRefund = refunded > Decimal.zero &&
-        transaction.txKind == TransactionKind.expense;
-    final net = transaction.amount - refunded;
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-      child: Row(
-        children: [
-          CatIcon(
-            categoryKey: _isTransfer ? 'transfer' : transaction.categoryKey,
-            emoji: _emoji,
-            size: 40,
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    Flexible(
-                      child: Text(
-                        _title,
-                        style: Theme.of(context).textTheme.bodyMedium,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ),
-                    if (hasRefund) _RefundBadge(refunded: refunded),
-                    if (transaction.reimbursable) const _ReimburseBadge(),
-                  ],
-                ),
-                if (transaction.note.isNotEmpty)
-                  Text(
-                    transaction.note,
-                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                          color: scheme.onSurfaceVariant,
-                        ),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                InlineTagChips(tagIds: transaction.tagIds),
-              ],
-            ),
-          ),
-          if (hasRefund) ...[
-            Text(
-              MoneyFormat.string(transaction.amount),
-              style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                    color: scheme.onSurfaceVariant,
-                    decoration: TextDecoration.lineThrough,
-                  ),
-            ),
-            const SizedBox(width: 6),
-            Text(
-              net <= Decimal.zero
-                  ? MoneyFormat.string(net)
-                  : '-${MoneyFormat.string(net)}',
-              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                    color: AppColors.expense(scheme),
-                    fontWeight: FontWeight.w600,
-                    // ignore: deprecated_member_use
-                    fontFeatures: const [FontFeature.tabularFigures()],
-                  ),
-            ),
-          ] else
-            Text(
-              _amountText,
-              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                    color: _amountColor(scheme),
-                    fontWeight: FontWeight.w600,
-                    // ignore: deprecated_member_use
-                    fontFeatures: const [FontFeature.tabularFigures()],
-                  ),
-            ),
-        ],
-      ),
-    );
-  }
-}
-
-/// 「已退 X」小标（铜金，不用红绿）。
-class _RefundBadge extends StatelessWidget {
-  final Decimal refunded;
-
-  const _RefundBadge({required this.refunded});
-
-  @override
-  Widget build(BuildContext context) {
-    final gold = AppColors.income(Theme.of(context).colorScheme);
-    return Container(
-      margin: const EdgeInsets.only(left: 6),
-      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
-      decoration: BoxDecoration(
-        color: gold.withValues(alpha: 0.16),
-        borderRadius: BorderRadius.circular(4),
-      ),
-      child: Text(
-        '已退 ${MoneyFormat.string(refunded)}',
-        style: TextStyle(
-          fontSize: 10,
-          height: 1.2,
-          color: gold,
-          fontWeight: FontWeight.w500,
-        ),
-      ),
-    );
-  }
-}
-
-/// 「待报销」小标签。
-class _ReimburseBadge extends StatelessWidget {
-  const _ReimburseBadge();
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      margin: const EdgeInsets.only(left: 6),
-      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
-      decoration: BoxDecoration(
-        color: AppColors.warning.withValues(alpha: 0.14),
-        borderRadius: BorderRadius.circular(4),
-      ),
-      child: Text(
-        '待报销',
-        style: TextStyle(
-          fontSize: 10,
-          height: 1.2,
-          color: AppColors.warning,
-          fontWeight: FontWeight.w600,
-        ),
+        child: TxRow(transaction: transaction),
       ),
     );
   }
@@ -436,25 +240,9 @@ class _EmptyState extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return Center(
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          const Mascot(mood: MascotMood.empty, size: 72, animate: true),
-          const SizedBox(height: 16),
-          Text(onlyReimbursable ? '没有待报销的账目' : '还没有账目',
-              style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                    color: scheme.onSurfaceVariant,
-                  )),
-          const SizedBox(height: 8),
-          Text(
-            onlyReimbursable ? '记账时打开「待报销」开关，这里就会列出' : '去「记一笔」页开始记账吧',
-            style: TextStyle(color: scheme.onSurfaceVariant),
-            textAlign: TextAlign.center,
-          ),
-        ],
-      ),
+    return AppEmptyState(
+      title: onlyReimbursable ? '没有待报销的账目' : '还没有账目',
+      message: onlyReimbursable ? '记账时打开「待报销」开关，这里就会列出' : '去「记一笔」页开始记账吧',
     );
   }
 }

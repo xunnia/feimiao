@@ -3,10 +3,11 @@ import 'dart:math' as math;
 import 'package:decimal/decimal.dart';
 import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/cupertino.dart' show CupertinoIcons, CupertinoPageRoute;
+import 'package:flutter/cupertino.dart' show CupertinoIcons;
 import 'package:provider/provider.dart';
 
-import '../../core/budget/budget_engine.dart';
+import '../../core/ai/bill_categorizer.dart';
+import '../../core/budget/budget_window_resolver.dart';
 import '../../core/models/cat_svg_icon.dart';
 import '../../core/models/category_seed.dart';
 import '../../core/models/transaction_kind.dart';
@@ -17,17 +18,20 @@ import '../../core/statistics/statistics_engine.dart';
 import '../../data/app_repository.dart';
 import '../../core/haptics.dart';
 import '../../theme/app_colors.dart';
+import '../../theme/app_tokens.dart';
 import '../../widgets/app_buttons.dart';
 import '../../widgets/app_date_picker.dart';
 import '../../widgets/app_toast.dart';
+import '../../widgets/budget_progress.dart';
 import '../../widgets/glass.dart';
 import '../../widgets/ios_menu.dart';
 import '../../widgets/mascot.dart';
+import '../../widgets/monthly_pace_card.dart';
 import '../../widgets/pressable_scale.dart';
 import '../../widgets/settings_ui.dart';
 import '../../widgets/sliding_segment.dart';
 import 'category_txns_view.dart';
-import 'monthly_report_view.dart';
+import '../../widgets/app_page_route.dart';
 
 /// 图表 Y 轴的「漂亮步长」：把最大值凑成 100/200/500/1000/2000/5000… 这类整齐刻度。
 double _niceStep(double maxV) {
@@ -60,12 +64,21 @@ AxisTitles _moneyLeftTitles(ColorScheme scheme, double step) {
 
 /// 点分类下钻：进「该分类在本区间的明细」页。
 void _drillToCategory(
-    BuildContext context, String name, DateTime start, DateTime end) {
+  BuildContext context,
+  String name,
+  DateTime start,
+  DateTime end, {
+  Set<String>? categoryNames,
+}) {
   Navigator.push(
     context,
-    CupertinoPageRoute<void>(
-      builder: (_) =>
-          CategoryTxnsView(categoryName: name, start: start, end: end),
+    AppPageRoute<void>(
+      builder: (_) => CategoryTxnsView(
+        categoryName: name,
+        categoryNames: categoryNames,
+        start: start,
+        end: end,
+      ),
     ),
   );
 }
@@ -192,20 +205,19 @@ class _StatisticsViewState extends State<StatisticsView> {
 
   @override
   Widget build(BuildContext context) {
+    // 暖渐变背景已全局化（MaterialApp builder + 主题透明化），页面不再自铺。
     return Scaffold(
       appBar: AppBar(
         leading: const AppBackButton(),
         title: const Text('统计'),
         centerTitle: true,
         actions: [
-          // 月度报告：Claude 同款文件图标（灰圆按钮）。
           AppCircleButton(
-            icon: CupertinoIcons.doc_text,
-            iconSize: 19,
-            onPressed: () => Navigator.push<void>(
+            icon: CupertinoIcons.plus,
+            iconSize: 22,
+            onPressed: () => _ManagedCards.showCardLibrary(
               context,
-              CupertinoPageRoute<void>(
-                  builder: (_) => const MonthlyReportView()),
+              context.read<AppRepository>(),
             ),
           ),
           const SizedBox(width: 8),
@@ -255,9 +267,6 @@ class _StatisticsViewState extends State<StatisticsView> {
           repo: repo,
           displayedMonth: _displayedMonth,
           isCurrentMonth: _isCurrentMonth,
-          // 预算期间模型：历史月显示当时生效的预算。
-          monthlyBudget: repo.budgetTotalFor(
-              _displayedMonth.year, _displayedMonth.month),
           onPick: _pickMonth,
         );
       case _StatRange.year:
@@ -353,19 +362,42 @@ class _WeekContent extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final weekEnd = weekStart.add(const Duration(days: 6));
-    final s = StatisticsEngine.rangeSummary(records,
-        start: weekStart, end: weekEnd);
+    final s =
+        StatisticsEngine.rangeSummary(records, start: weekStart, end: weekEnd);
     final label =
         '${weekStart.month}月${weekStart.day}日 – ${weekEnd.month}月${weekEnd.day}日';
+
+    // 徽章基准=上周同期：本周比到上周同一星期几，历史周全周对全周。
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final isCurrentWeek = !today.isBefore(weekStart) && !today.isAfter(weekEnd);
+    final prevStart = weekStart.subtract(const Duration(days: 7));
+    final prevEnd = isCurrentWeek
+        ? prevStart.add(Duration(days: today.difference(weekStart).inDays))
+        : prevStart.add(const Duration(days: 6));
+    final prevSame =
+        StatisticsEngine.rangeSummary(records, start: prevStart, end: prevEnd);
 
     final header = Column(
       children: [
         _PeriodDropdown(label: label, onTap: onPick),
         const SizedBox(height: 16),
-        _TotalsRow(
+        _TotalsHeader(
           expense: s.totalExpense,
           income: s.totalIncome,
           balance: s.balance,
+          periodLabel: isCurrentWeek ? '本周' : '该周',
+          prevExpense: prevSame.totalExpense,
+          prevIncome: prevSame.totalIncome,
+          prevBalance: prevSame.balance,
+          series: [
+            for (final d in s.dailyTotals)
+              (
+                '${d.date.month}/${d.date.day}',
+                MoneyFormat.toDouble(d.expense).clamp(0.0, double.infinity),
+                MoneyFormat.toDouble(d.income).clamp(0.0, double.infinity),
+              ),
+          ],
         ),
         const SizedBox(height: 16),
       ],
@@ -395,8 +427,13 @@ class _WeekContent extends StatelessWidget {
                 totalLabel: '本周支出',
                 total: s.totalExpense,
                 categories: s.expenseByCategory,
-                onDrill: (n) =>
-                    _drillToCategory(context, n, weekStart, weekEnd),
+                onDrill: (n, {categoryNames}) => _drillToCategory(
+                  context,
+                  n,
+                  weekStart,
+                  weekEnd,
+                  categoryNames: categoryNames,
+                ),
               ),
         'daily' => !hasExpense
             ? null
@@ -449,7 +486,6 @@ class _MonthlyContent extends StatelessWidget {
   final AppRepository repo;
   final DateTime displayedMonth;
   final bool isCurrentMonth;
-  final Decimal? monthlyBudget;
   final VoidCallback onPick;
 
   const _MonthlyContent({
@@ -457,7 +493,6 @@ class _MonthlyContent extends StatelessWidget {
     required this.repo,
     required this.displayedMonth,
     required this.isCurrentMonth,
-    required this.monthlyBudget,
     required this.onPick,
   });
 
@@ -474,6 +509,7 @@ class _MonthlyContent extends StatelessWidget {
       year: prevMonth.year,
       month: prevMonth.month,
     );
+    final budgetWindow = repo.budgetForCalendarMonth(displayedMonth);
 
     final topExpenses = records
         .where((r) =>
@@ -484,6 +520,22 @@ class _MonthlyContent extends StatelessWidget {
       ..sort((a, b) => b.amount.compareTo(a.amount));
     final top5 = topExpenses.take(5).toList();
 
+    // 徽章基准=上月「同期」：当月比到上月同一天（比全月才诚实——
+    // 月初拿 9 天比上月 31 天永远显示大降），历史月才全月对全月。
+    final now = DateTime.now();
+    final prevMonthDays =
+        DateTime(displayedMonth.year, displayedMonth.month, 0).day;
+    final prevSameEnd = DateTime(
+      prevMonth.year,
+      prevMonth.month,
+      isCurrentMonth ? now.day.clamp(1, prevMonthDays) : prevMonthDays,
+    );
+    final prevSame = StatisticsEngine.rangeSummary(
+      records,
+      start: DateTime(prevMonth.year, prevMonth.month, 1),
+      end: prevSameEnd,
+    );
+
     final header = Column(
       children: [
         _PeriodDropdown(
@@ -491,10 +543,22 @@ class _MonthlyContent extends StatelessWidget {
           onTap: onPick,
         ),
         const SizedBox(height: 16),
-        _TotalsRow(
+        _TotalsHeader(
           expense: summary.totalExpense,
           income: summary.totalIncome,
           balance: summary.balance,
+          periodLabel: '${displayedMonth.month}月',
+          prevExpense: prevSame.totalExpense,
+          prevIncome: prevSame.totalIncome,
+          prevBalance: prevSame.balance,
+          series: [
+            for (final d in summary.dailyTotals)
+              (
+                '${displayedMonth.month}/${d.day}',
+                MoneyFormat.toDouble(d.expense).clamp(0.0, double.infinity),
+                MoneyFormat.toDouble(d.income).clamp(0.0, double.infinity),
+              ),
+          ],
         ),
         const SizedBox(height: 16),
       ],
@@ -519,7 +583,14 @@ class _MonthlyContent extends StatelessWidget {
     return _ManagedCards(
       repo: repo,
       header: header,
-      buildCard: (k) => _buildCard(context, k, summary, prevSummary, top5),
+      buildCard: (k) => _buildCard(
+        context,
+        k,
+        summary,
+        prevSummary,
+        top5,
+        budgetWindow,
+      ),
     );
   }
 
@@ -529,6 +600,7 @@ class _MonthlyContent extends StatelessWidget {
     MonthlySummary summary,
     MonthlySummary prevSummary,
     List<TransactionRecord> top5,
+    BudgetWindowResult budgetWindow,
   ) {
     final hasExpense = summary.expenseByCategory.isNotEmpty;
     final mStart = DateTime(displayedMonth.year, displayedMonth.month, 1);
@@ -540,34 +612,43 @@ class _MonthlyContent extends StatelessWidget {
           records: records,
           year: displayedMonth.year,
           month: displayedMonth.month,
-          monthlyBudget: monthlyBudget,
+          monthlyBudget: budgetWindow.plannedAmount,
           isCurrentMonth: isCurrentMonth,
-        );
-      case 'budget':
-        if (monthlyBudget == null) return null;
-        return _BudgetProgressCard(
-          monthlyBudget: monthlyBudget!,
-          records: records,
-          isCurrentMonth: isCurrentMonth,
-          monthDate: displayedMonth,
         );
       case 'battery':
-        return _BudgetBatteryCard(
-          dailyTotals: summary.dailyTotals,
-          monthlyBudget: monthlyBudget,
+        return MonthlyPaceCard(
+          records: records,
+          summary: summary,
+          year: displayedMonth.year,
+          month: displayedMonth.month,
           isCurrentMonth: isCurrentMonth,
+          onOpenAllExpenseActivity: (categoryNames, start, end) {
+            Navigator.push(
+              context,
+              AppPageRoute<void>(
+                builder: (_) => CategoryTxnsView(
+                  categoryName: '全部支出活动',
+                  categoryNames: categoryNames,
+                  start: start,
+                  end: end,
+                ),
+              ),
+            );
+          },
         );
-      case 'budget_cat':
-        final budgets = repo.categoryBudgets;
-        if (budgets.isEmpty) return null;
-        return _SectionCard(
-          title: '预算 vs 实际',
-          child: _BudgetVsActualCard(
-            records: records,
-            year: displayedMonth.year,
-            month: displayedMonth.month,
-            budgets: budgets,
-          ),
+      case 'budget_ring':
+        // 没设预算不占位（引导在预算页，别在统计页塞空环）。
+        final planned = budgetWindow.plannedAmount;
+        final spent = budgetWindow.spentAmount;
+        if (planned == null || planned <= Decimal.zero || spent == null) {
+          return null;
+        }
+        return _BudgetRingCard(
+          spent: spent,
+          budget: planned,
+          isCurrentMonth: isCurrentMonth,
+          displayedMonth: displayedMonth,
+          excludedForeignCount: budgetWindow.excludedForeignTransactionCount,
         );
       case 'ring':
         if (!hasExpense) return null;
@@ -576,7 +657,13 @@ class _MonthlyContent extends StatelessWidget {
           totalLabel: '本月支出',
           total: summary.totalExpense,
           categories: summary.expenseByCategory,
-          onDrill: drill,
+          onDrill: (n, {categoryNames}) => _drillToCategory(
+            context,
+            n,
+            mStart,
+            mEnd,
+            categoryNames: categoryNames,
+          ),
         );
       case 'daily':
         if (!hasExpense) return null;
@@ -640,10 +727,41 @@ class _MonthlyContent extends StatelessWidget {
           title: '近 12 月收支',
           child: _StackedBars12(records: records, endMonth: displayedMonth),
         );
+      case 'sources':
+        final sources = _topSpendSources(records, mStart, mEnd);
+        if (sources.isEmpty) return null;
+        return _SectionCard(
+          title: '消费来源',
+          child: _SourceBars(items: sources),
+        );
     }
     return null;
   }
+}
 
+/// 月内支出按「商户/备注归一化」聚合，净额 TOP6（消费地图的替代方案：
+/// 回答"钱都花在哪些地方"，数据用现成的账单备注，不需要位置信息）。
+List<(String, Decimal)> _topSpendSources(
+  List<TransactionRecord> records,
+  DateTime start,
+  DateTime end,
+) {
+  final endEx = DateTime(end.year, end.month, end.day + 1);
+  final totals = <String, Decimal>{};
+  for (final r in records) {
+    if (r.kind != TransactionKind.expense) continue;
+    if (r.date.isBefore(start) || !r.date.isBefore(endEx)) continue;
+    final src = BillCategorizer.normalizeMerchant(r.note).trim();
+    final key = src.isEmpty ? '未标注' : src;
+    // 退款负数行同 key 相抵，聚合完自然是净额。
+    totals[key] = (totals[key] ?? Decimal.zero) + r.amount;
+  }
+  final list = totals.entries
+      .where((e) => e.value > Decimal.zero)
+      .map((e) => (e.key, e.value))
+      .toList()
+    ..sort((a, b) => b.$2.compareTo(a.$2));
+  return list.take(6).toList();
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -665,14 +783,14 @@ class _ManagedCards extends StatelessWidget {
 
   /// 卡片注册表：key 用于持久化，别改已有 key。顺序/开关全维度共用一份。
   static const Map<String, String> cardTitles = {
-    'insights': '喵的洞察',
-    'battery': '本月电量',
-    'budget': '本月预算',
-    'budget_cat': '预算 vs 实际',
+    'battery': '截至今日进度',
+    'budget_ring': '预算使用',
     'ring': '支出构成',
     'daily': '趋势图',
     'ranking': '分类排行',
     'top5': '单笔支出排行',
+    'sources': '消费来源',
+    'insights': '喵的洞察',
     'heatmap': '消费热力图',
     'radar': '本月 vs 上月',
     'stacked': '近 12 月收支',
@@ -680,23 +798,38 @@ class _ManagedCards extends StatelessWidget {
 
   /// 只在月视图有意义的卡（图表库里标注出来）。
   static const Set<String> monthOnly = {
-    'insights', 'battery', 'budget', 'budget_cat', 'heatmap', 'radar',
+    'battery',
+    'budget_ring',
+    'insights',
+    'heatmap',
+    'radar',
     'stacked',
+    'sources',
   };
 
   /// 默认可见卡片（其余在图表库里，用户自己加）。
+  /// 注意：已保存过卡片配置的老用户不会自动看到新加的卡
+  /// （区分不了"没见过"和"手动关了"，宁可让用户自己从图表库开一次）。
   static const List<String> defaultOrder = [
-    'insights', 'battery', 'budget', 'budget_cat', 'ring', 'daily',
-    'ranking', 'top5',
+    'battery',
+    'budget_ring',
+    'ring',
+    'daily',
+    'ranking',
+    'top5',
+    'sources',
   ];
 
   static List<String> visibleKeys(AppRepository repo) {
     final saved = repo.statCardOrder;
-    if (saved.isEmpty) return List.of(defaultOrder);
-    return [
+    if (!repo.hasStatCardOrderConfig && saved.isEmpty) {
+      return List.of(defaultOrder);
+    }
+    final restored = [
       for (final k in saved)
         if (cardTitles.containsKey(k)) k
     ];
+    return restored;
   }
 
   @override
@@ -715,12 +848,9 @@ class _ManagedCards extends StatelessWidget {
       padding: const EdgeInsets.all(16),
       buildDefaultDragHandles: false,
       header: header,
-      footer: _CustomizeButton(
-        onTap: () => _showCardLibrary(context),
-      ),
+      footer: const SizedBox(height: 8),
       itemCount: items.length,
-      onReorder: (o, n) {
-        if (n > o) n--;
+      onReorderItem: (o, n) {
         final itemKeys = [for (final e in items) e.$1];
         final moved = itemKeys.removeAt(o);
         itemKeys.insert(n, moved);
@@ -744,7 +874,7 @@ class _ManagedCards extends StatelessWidget {
   }
 
   /// 图表库弹层：开关每张卡（开=追加到底部，关=移除）。全维度同一份配置。
-  void _showCardLibrary(BuildContext context) {
+  static void showCardLibrary(BuildContext context, AppRepository repo) {
     showModalBottomSheet<void>(
       context: context,
       backgroundColor: Theme.of(context).colorScheme.surface,
@@ -752,9 +882,9 @@ class _ManagedCards extends StatelessWidget {
         borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
       ),
       builder: (ctx) {
+        var localVisible = visibleKeys(repo);
         return StatefulBuilder(
           builder: (ctx2, setLocal) {
-            final cur = visibleKeys(repo);
             return SafeArea(
               child: Column(
                 mainAxisSize: MainAxisSize.min,
@@ -766,28 +896,21 @@ class _ManagedCards extends StatelessWidget {
                   ),
                   Flexible(
                     child: SingleChildScrollView(
-                      child: SettingsGroup(
-                        children: [
-                          for (final e in cardTitles.entries)
-                            SettingsRow(
-                              title: monthOnly.contains(e.key)
-                                  ? '${e.value} · 月'
-                                  : e.value,
-                              trailing: AppSwitch(
-                                value: cur.contains(e.key),
-                                onChanged: (on) {
-                                  final next = List.of(cur);
-                                  if (on) {
-                                    next.add(e.key);
-                                  } else {
-                                    next.remove(e.key);
-                                  }
-                                  repo.setStatCardOrder(next);
-                                  setLocal(() {});
-                                },
-                              ),
-                            ),
-                        ],
+                      padding: const EdgeInsets.fromLTRB(18, 6, 18, 10),
+                      child: _ChartLibraryGroup(
+                        entries: cardTitles.entries.toList(growable: false),
+                        monthOnly: monthOnly,
+                        visible: localVisible.toSet(),
+                        onChanged: (key, on) {
+                          final next = List.of(localVisible);
+                          if (on) {
+                            if (!next.contains(key)) next.add(key);
+                          } else {
+                            next.remove(key);
+                          }
+                          setLocal(() => localVisible = next);
+                          repo.setStatCardOrder(next);
+                        },
                       ),
                     ),
                   ),
@@ -814,7 +937,6 @@ class _TrendCard extends StatefulWidget {
   final int? markIndex;
 
   const _TrendCard({
-    super.key,
     required this.title,
     required this.xLabels,
     required this.expense,
@@ -838,9 +960,8 @@ class _TrendCardState extends State<_TrendCard> {
       title: widget.title,
       // 支出/收入 切换挪到标题同一行（不再单独占一行、下压图表）。
       trailing: SizedBox(
-        width: 124,
-        child: SlidingSegment<bool>(
-          items: const [(false, '支出'), (true, '收入')],
+        width: 108,
+        child: _TrendModeSegment(
           value: _showIncome,
           onChanged: (v) {
             Haptics.selection();
@@ -862,36 +983,279 @@ class _TrendCardState extends State<_TrendCard> {
   }
 }
 
-/// 底部「自定义图表」按钮。
-class _CustomizeButton extends StatelessWidget {
-  final VoidCallback onTap;
+class _TrendModeSegment extends StatelessWidget {
+  final bool value;
+  final ValueChanged<bool> onChanged;
 
-  const _CustomizeButton({required this.onTap});
+  const _TrendModeSegment({
+    required this.value,
+    required this.onChanged,
+  });
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 24),
-      child: PressableScale(
-        onPressed: onTap,
-        child: Container(
-          height: 44,
-          alignment: Alignment.center,
-          decoration: BoxDecoration(
-            color: AppColors.card(scheme),
-            borderRadius: BorderRadius.circular(999),
-            border: Border.all(color: AppColors.hairline(scheme)),
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
+    final index = value ? 1 : 0;
+    return Container(
+      height: 30,
+      padding: const EdgeInsets.all(3),
+      decoration: BoxDecoration(
+        color: AppColors.card(scheme),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: AppColors.hairline(scheme)),
+      ),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final itemW = constraints.maxWidth / 2;
+          return Stack(
             children: [
-              Icon(Icons.add, size: 16, color: scheme.onSurfaceVariant),
-              const SizedBox(width: 6),
-              Text('自定义图表',
-                  style: TextStyle(
-                      fontSize: 13, color: scheme.onSurfaceVariant)),
+              AnimatedPositioned(
+                duration: const Duration(milliseconds: 200),
+                curve: Curves.easeOutCubic,
+                left: index * itemW,
+                top: 0,
+                bottom: 0,
+                width: itemW,
+                child: Container(
+                  decoration: BoxDecoration(
+                    color: scheme.surfaceContainerHighest,
+                    borderRadius: BorderRadius.circular(999),
+                  ),
+                ),
+              ),
+              Row(
+                children: [
+                  _TrendModeItem(
+                    label: '支出',
+                    selected: !value,
+                    onTap: () => onChanged(false),
+                  ),
+                  _TrendModeItem(
+                    label: '收入',
+                    selected: value,
+                    onTap: () => onChanged(true),
+                  ),
+                ],
+              ),
             ],
+          );
+        },
+      ),
+    );
+  }
+}
+
+class _TrendModeItem extends StatelessWidget {
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+
+  const _TrendModeItem({
+    required this.label,
+    required this.selected,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Expanded(
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: selected ? null : onTap,
+        child: Center(
+          child: Text(
+            label,
+            style: TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w400,
+              color: selected
+                  ? scheme.onSurface
+                  : scheme.onSurfaceVariant.withValues(alpha: 0.82),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _ChartLibraryGroup extends StatelessWidget {
+  final List<MapEntry<String, String>> entries;
+  final Set<String> monthOnly;
+  final Set<String> visible;
+  final void Function(String key, bool value) onChanged;
+
+  const _ChartLibraryGroup({
+    required this.entries,
+    required this.monthOnly,
+    required this.visible,
+    required this.onChanged,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Container(
+      decoration: BoxDecoration(
+        color: AppColors.card(scheme),
+        borderRadius: BorderRadius.circular(16),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.035),
+            blurRadius: 14,
+            offset: const Offset(0, 3),
+          ),
+        ],
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          for (var i = 0; i < entries.length; i++)
+            _ChartLibraryRow(
+              title: monthOnly.contains(entries[i].key)
+                  ? '${entries[i].value} · 月'
+                  : entries[i].value,
+              value: visible.contains(entries[i].key),
+              showDivider: i != entries.length - 1,
+              onChanged: (v) => onChanged(entries[i].key, v),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ChartLibraryRow extends StatelessWidget {
+  final String title;
+  final bool value;
+  final bool showDivider;
+  final ValueChanged<bool> onChanged;
+
+  const _ChartLibraryRow({
+    required this.title,
+    required this.value,
+    required this.showDivider,
+    required this.onChanged,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final dividerColor = scheme.outlineVariant.withValues(alpha: 0.38);
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        SizedBox(
+          height: 32,
+          child: Row(
+            children: [
+              const SizedBox(width: 13),
+              Expanded(
+                child: Text(
+                  title,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w400,
+                    fontVariations: const [FontVariation('wght', 400)],
+                    color: scheme.onSurface.withValues(alpha: 0.94),
+                  ),
+                ),
+              ),
+              SizedBox(
+                width: 52,
+                child: Align(
+                  alignment: Alignment.centerRight,
+                  child: _ChartLibrarySwitch(
+                    value: value,
+                    onChanged: onChanged,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 11),
+            ],
+          ),
+        ),
+        if (showDivider)
+          Padding(
+            padding: const EdgeInsets.only(left: 13, right: 13),
+            child: Divider(
+              height: 1,
+              thickness: 0.5,
+              color: dividerColor.withValues(alpha: 0.58),
+            ),
+          ),
+      ],
+    );
+  }
+}
+
+class _ChartLibrarySwitch extends StatelessWidget {
+  final bool value;
+  final ValueChanged<bool> onChanged;
+
+  const _ChartLibrarySwitch({
+    required this.value,
+    required this.onChanged,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    const width = 43.2;
+    const height = 28.8;
+    const trackHeight = 24.0;
+    const thumbSize = 20.0;
+    const padding = 2.0;
+    const activeTrack = Color(0xFF73767D);
+    const inactiveTrack = Color(0xFFE8E9EC);
+    const inactiveBorder = Color(0xFFD8DADF);
+    return Semantics(
+      toggled: value,
+      button: true,
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: () {
+          Haptics.selection();
+          onChanged(!value);
+        },
+        child: SizedBox(
+          width: width,
+          height: height,
+          child: Center(
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 120),
+              curve: Curves.easeOutCubic,
+              width: width,
+              height: trackHeight,
+              padding: const EdgeInsets.all(padding),
+              decoration: BoxDecoration(
+                color: value ? activeTrack : inactiveTrack,
+                borderRadius: BorderRadius.circular(999),
+                border: value ? null : Border.all(color: inactiveBorder),
+              ),
+              child: AnimatedAlign(
+                duration: const Duration(milliseconds: 120),
+                curve: Curves.easeOutCubic,
+                alignment: value ? Alignment.centerRight : Alignment.centerLeft,
+                child: Container(
+                  width: thumbSize,
+                  height: thumbSize,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: Colors.white,
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withValues(alpha: 0.14),
+                        blurRadius: 4,
+                        offset: const Offset(0, 1),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
           ),
         ),
       ),
@@ -941,15 +1305,42 @@ class _YearlyContent extends StatelessWidget {
     final markMonth =
         year == DateTime.now().year ? DateTime.now().month - 1 : null;
 
+    // 徽章基准=去年同期：今年比到去年同月同日，历史年全年对全年。
+    final nowDate = DateTime.now();
+    final isCurrentYear = year == nowDate.year;
+    final prevSame = StatisticsEngine.rangeSummary(
+      records,
+      start: DateTime(year - 1, 1, 1),
+      end: isCurrentYear
+          ? DateTime(
+              year - 1,
+              nowDate.month,
+              nowDate.day
+                  .clamp(1, DateTime(year - 1, nowDate.month + 1, 0).day))
+          : DateTime(year - 1, 12, 31),
+    );
+
     final header = Column(
       children: [
         _PeriodDropdown(label: '$year年', onTap: onPick),
         const SizedBox(height: 16),
-        _TotalsRow(
+        _TotalsHeader(
           expense: summary.totalExpense,
           income: summary.totalIncome,
           balance: summary.balance,
-          prefix: '全年',
+          periodLabel: '$year年',
+          prevExpense: prevSame.totalExpense,
+          prevIncome: prevSame.totalIncome,
+          prevBalance: prevSame.balance,
+          series: [
+            for (var i = 0; i < 12; i++)
+              (
+                '${i + 1}月',
+                MoneyFormat.toDouble(summary.monthlyExpenses[i])
+                    .clamp(0.0, double.infinity),
+                monthlyIncome[i],
+              ),
+          ],
         ),
         const SizedBox(height: 16),
       ],
@@ -999,8 +1390,13 @@ class _YearlyContent extends StatelessWidget {
                 totalLabel: '全年支出',
                 total: summary.totalExpense,
                 categories: summary.expenseByCategory,
-                onDrill: (n) => _drillToCategory(
-                    context, n, DateTime(year, 1, 1), DateTime(year, 12, 31)),
+                onDrill: (n, {categoryNames}) => _drillToCategory(
+                  context,
+                  n,
+                  DateTime(year, 1, 1),
+                  DateTime(year, 12, 31),
+                  categoryNames: categoryNames,
+                ),
               ),
         'ranking' => !hasExpense
             ? null
@@ -1008,9 +1404,8 @@ class _YearlyContent extends StatelessWidget {
                 title: '全年分类排行',
                 child: _CategoryRanking(
                   categories: summary.expenseByCategory,
-                  maxItems: 10,
-                  onDrill: (n) => _drillToCategory(context, n,
-                      DateTime(year, 1, 1), DateTime(year, 12, 31)),
+                  onDrill: (n) => _drillToCategory(
+                      context, n, DateTime(year, 1, 1), DateTime(year, 12, 31)),
                 ),
               ),
         'top5' => top5.isEmpty
@@ -1049,7 +1444,7 @@ class _DateField extends StatelessWidget {
             Text('${date.year}/${date.month}/${date.day}',
                 style: TextStyle(
                     fontSize: 16,
-                    fontWeight: FontWeight.w600,
+                    fontWeight: FontWeight.w400,
                     color: scheme.onSurface)),
             const SizedBox(width: 4),
             Icon(CupertinoIcons.chevron_down,
@@ -1080,27 +1475,39 @@ class _CustomContent extends StatelessWidget {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final r = range;
-    final s = StatisticsEngine.rangeSummary(records, start: r.start, end: r.end);
+    final s =
+        StatisticsEngine.rangeSummary(records, start: r.start, end: r.end);
 
     final header = Column(
       children: [
         // 起止两个可点日期字段挨在一起（开始紧贴结束，不再左右撑开）。
         Row(
+          mainAxisAlignment: MainAxisAlignment.center,
           children: [
             _DateField(date: r.start, onTap: onPickStart),
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 6),
-              child: Text('–',
-                  style: TextStyle(color: scheme.onSurfaceVariant)),
+              child:
+                  Text('–', style: TextStyle(color: scheme.onSurfaceVariant)),
             ),
             _DateField(date: r.end, onTap: onPickEnd),
           ],
         ),
         const SizedBox(height: 16),
-        _TotalsRow(
+        // 自定义区间没有天然同期，不传 prev → 徽章隐藏（与同期虚线规则一致）。
+        _TotalsHeader(
           expense: s.totalExpense,
           income: s.totalIncome,
           balance: s.balance,
+          periodLabel: '区间',
+          series: [
+            for (final d in s.dailyTotals)
+              (
+                '${d.date.month}/${d.date.day}',
+                MoneyFormat.toDouble(d.expense).clamp(0.0, double.infinity),
+                MoneyFormat.toDouble(d.income).clamp(0.0, double.infinity),
+              ),
+          ],
         ),
         const SizedBox(height: 16),
       ],
@@ -1130,7 +1537,13 @@ class _CustomContent extends StatelessWidget {
                 totalLabel: '期间支出',
                 total: s.totalExpense,
                 categories: s.expenseByCategory,
-                onDrill: (n) => _drillToCategory(context, n, r.start, r.end),
+                onDrill: (n, {categoryNames}) => _drillToCategory(
+                  context,
+                  n,
+                  r.start,
+                  r.end,
+                  categoryNames: categoryNames,
+                ),
               ),
         // 区间不超过约两个月才画每日线，太长看不清。
         'daily' => !hasExpense || s.dayCount > 62
@@ -1145,13 +1558,11 @@ class _CustomContent extends StatelessWidget {
                 ],
                 expense: [
                   for (final d in s.dailyTotals)
-                    MoneyFormat.toDouble(d.expense)
-                        .clamp(0.0, double.infinity),
+                    MoneyFormat.toDouble(d.expense).clamp(0.0, double.infinity),
                 ],
                 income: [
                   for (final d in s.dailyTotals)
-                    MoneyFormat.toDouble(d.income)
-                        .clamp(0.0, double.infinity),
+                    MoneyFormat.toDouble(d.income).clamp(0.0, double.infinity),
                 ],
               ),
         'ranking' => !hasExpense
@@ -1197,7 +1608,8 @@ class _InsightsCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final lines = SpendingInsights.summaryLines(records, year: year, month: month);
+    final lines =
+        SpendingInsights.summaryLines(records, year: year, month: month);
     final profile = SpendingInsights.profile(records, year: year, month: month);
     final forecast = isCurrentMonth
         ? SpendingInsights.forecast(records, monthlyBudget: monthlyBudget)
@@ -1220,8 +1632,8 @@ class _InsightsCard extends StatelessWidget {
                   Text(profile.emoji, style: const TextStyle(fontSize: 16)),
                   const SizedBox(width: 6),
                   Container(
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 8, vertical: 3),
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                     decoration: BoxDecoration(
                       color: scheme.primary.withValues(alpha: 0.10),
                       borderRadius: BorderRadius.circular(999),
@@ -1259,9 +1671,7 @@ class _InsightsCard extends StatelessWidget {
                       child: Text(
                         line,
                         style: TextStyle(
-                            fontSize: 13,
-                            height: 1.5,
-                            color: scheme.onSurface),
+                            fontSize: 13, height: 1.5, color: scheme.onSurface),
                       ),
                     ),
                   ],
@@ -1289,11 +1699,6 @@ class _InsightsCard extends StatelessWidget {
   }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// 通用小件
-// ─────────────────────────────────────────────────────────────────────────────
-
-/// 期间文案 + ⌄ 的下拉切换器（周/月/年通用）：点开走滚轮选择，替代左右翻箭头。
 class _PeriodDropdown extends StatelessWidget {
   final String label;
   final VoidCallback onTap;
@@ -1326,456 +1731,430 @@ class _PeriodDropdown extends StatelessWidget {
   }
 }
 
-
-class _TotalsRow extends StatelessWidget {
+/// 期间合计头（2026-07-09 视觉升级二轮，逐项对齐参考图 iOS Cloudflare 客户端）：
+/// 主卡=「总支出」标签+右上无底徽章+大金额+**内嵌支出曲线**（合体，用户拍板）；
+/// 收入/结余=两张半宽小卡：大号加粗金额+左下无底徽章+右下迷你曲线。
+/// [series] = (标签, 支出, 收入) 逐期序列（月/周/自定义=每日，年=每月），喂曲线用。
+/// [prevExpense] 等传「同期基准」；null=无同期可比（自定义视图），徽章整体隐藏。
+class _TotalsHeader extends StatelessWidget {
   final Decimal expense;
   final Decimal income;
   final Decimal balance;
-  final String prefix;
+  final Decimal? prevExpense;
+  final Decimal? prevIncome;
+  final Decimal? prevBalance;
+  final String periodLabel;
+  final List<(String, double, double)> series;
 
-  const _TotalsRow({
+  const _TotalsHeader({
     required this.expense,
     required this.income,
     required this.balance,
-    this.prefix = '',
+    required this.periodLabel,
+    required this.series,
+    this.prevExpense,
+    this.prevIncome,
+    this.prevBalance,
   });
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final balanceColor = balance >= Decimal.zero
-        ? AppColors.income(scheme)
-        : AppColors.warning;
+    // 金额统一中性深灰（参考图口径：数字不带彩，彩色只给徽章和迷你曲线）。
+    final amountGrey = scheme.onSurface.withValues(alpha: 0.87);
 
-    return Row(
+    final card = BoxDecoration(
+      color: AppColors.card(scheme),
+      borderRadius: BorderRadius.circular(20),
+      boxShadow: [
+        BoxShadow(
+          color: Colors.black.withValues(alpha: 0.04),
+          blurRadius: 12,
+          offset: const Offset(0, 2),
+        ),
+      ],
+    );
+
+    final expenseSeries = [for (final s in series) s.$2];
+    final incomeSeries = [for (final s in series) s.$3];
+    // 结余迷你曲线用累计值（逐日净结余的爬坡线，比单日抖动有意义）。
+    final balanceSeries = <double>[];
+    var acc = 0.0;
+    for (final s in series) {
+      acc += s.$3 - s.$2;
+      balanceSeries.add(acc);
+    }
+
+    return Column(
       children: [
-        _TotalCard(
-          title: '$prefix支出',
-          amount: expense,
-          color: AppColors.expense(scheme),
+        // 通栏主卡：总支出 + 内嵌支出曲线（参考图同款合体）。
+        Container(
+          width: double.infinity,
+          padding: const EdgeInsets.fromLTRB(16, 14, 16, 12),
+          decoration: card,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      '总支出 · $periodLabel',
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                            color: scheme.onSurfaceVariant,
+                            fontWeight: FontWeight.w400,
+                          ),
+                    ),
+                  ),
+                  _DeltaBadge(
+                    current: expense,
+                    prev: prevExpense,
+                    goodWhenUp: false,
+                  ),
+                ],
+              ),
+              const SizedBox(height: 4),
+              Text(
+                MoneyFormat.string(expense),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  fontSize: 34,
+                  fontWeight: FontWeight.w700,
+                  fontFamily: 'Nunito',
+                  height: 1.15,
+                  color: amountGrey,
+                ),
+              ),
+              if (expenseSeries.any((v) => v > 0)) ...[
+                const SizedBox(height: 10),
+                SizedBox(
+                  height: 128,
+                  child: _HeaderCurve(
+                    values: expenseSeries,
+                    labels: [for (final s in series) s.$1],
+                    color: scheme.primary,
+                  ),
+                ),
+              ],
+            ],
+          ),
         ),
-        const SizedBox(width: 8),
-        _TotalCard(
-          title: '$prefix收入',
-          amount: income,
-          color: AppColors.income(scheme),
-        ),
-        const SizedBox(width: 8),
-        _TotalCard(
-          title: '$prefix结余',
-          amount: balance,
-          color: balanceColor,
+        const SizedBox(height: 8),
+        Row(
+          children: [
+            Expanded(
+              child: _MiniTotalCard(
+                title: '收入',
+                amount: income,
+                color: amountGrey,
+                prev: prevIncome,
+                goodWhenUp: true,
+                decoration: card,
+                spark: incomeSeries,
+                sparkColor: AppColors.income(scheme),
+              ),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: _MiniTotalCard(
+                title: '结余',
+                amount: balance,
+                color: amountGrey,
+                prev: prevBalance,
+                goodWhenUp: true,
+                decoration: card,
+                spark: balanceSeries,
+                sparkColor: scheme.primary,
+              ),
+            ),
+          ],
         ),
       ],
     );
   }
 }
 
-class _TotalCard extends StatelessWidget {
-  final String title;
-  final Decimal amount;
+/// 主卡内嵌支出曲线（简化版）：曲线+渐变填充+右侧淡刻度+稀疏日期，无图例。
+class _HeaderCurve extends StatelessWidget {
+  final List<double> values;
+  final List<String> labels;
   final Color color;
 
-  const _TotalCard({
-    required this.title,
-    required this.amount,
+  const _HeaderCurve({
+    required this.values,
+    required this.labels,
     required this.color,
   });
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    return Expanded(
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
-        decoration: BoxDecoration(
-          color: AppColors.card(scheme),
-          borderRadius: BorderRadius.circular(16),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withValues(alpha: 0.04),
-              blurRadius: 10,
-              offset: const Offset(0, 2),
+    final maxV = values.fold<double>(0, (a, b) => a > b ? a : b);
+    final step = _niceStep(maxV);
+    final maxY = maxV <= 0 ? step : ((maxV / step).floor() + 1) * step;
+    final labelEvery = (labels.length / 4).ceil().clamp(1, labels.length);
+
+    return LineChart(
+      LineChartData(
+        minY: 0,
+        maxY: maxY,
+        clipData: const FlClipData.all(),
+        lineTouchData: const LineTouchData(enabled: false),
+        lineBarsData: [
+          LineChartBarData(
+            spots: [
+              for (var i = 0; i < values.length; i++)
+                FlSpot(i.toDouble(), values[i])
+            ],
+            color: color,
+            isCurved: true,
+            curveSmoothness: 0.4,
+            barWidth: 2.5,
+            dotData: const FlDotData(show: false),
+            belowBarData: BarAreaData(
+              show: true,
+              gradient: LinearGradient(
+                begin: Alignment.topCenter,
+                end: Alignment.bottomCenter,
+                colors: [
+                  color.withValues(alpha: 0.22),
+                  color.withValues(alpha: 0.02),
+                ],
+              ),
             ),
-          ],
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              title,
-              style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                    color: scheme.onSurfaceVariant,
-                  ),
-            ),
-            const SizedBox(height: 4),
-            Text(
-              MoneyFormat.string(amount),
-              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                    color: color,
-                    fontWeight: FontWeight.w500,
-                    fontFamily: 'Nunito',
-                  ),
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _BudgetProgressCard extends StatelessWidget {
-  final Decimal monthlyBudget;
-  final List<TransactionRecord> records;
-  final bool isCurrentMonth;
-  final DateTime monthDate;
-
-  const _BudgetProgressCard({
-    required this.monthlyBudget,
-    required this.records,
-    required this.isCurrentMonth,
-    required this.monthDate,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    // 历史月按该月最后一天算执行情况；当月按今天。
-    final status = BudgetEngine.status(
-      monthlyBudget: monthlyBudget,
-      records: records,
-      on: isCurrentMonth
-          ? DateTime.now()
-          : DateTime(monthDate.year, monthDate.month + 1, 0),
-    );
-    final ratio = (MoneyFormat.toDouble(status.spentThisMonth) /
-            MoneyFormat.toDouble(monthlyBudget).clamp(0.01, double.infinity))
-        .clamp(0.0, 1.0);
-
-    final isOver = status.isOverBudget;
-
-    return Container(
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: AppColors.card(scheme),
-        borderRadius: BorderRadius.circular(20),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.04),
-            blurRadius: 12,
-            offset: const Offset(0, 2),
           ),
         ],
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Text(
-                '本月预算',
-                style: Theme.of(context)
-                    .textTheme
-                    .titleSmall
-                    ?.copyWith(fontWeight: FontWeight.w500),
-              ),
-              const Spacer(),
-              Text(
-                '${MoneyFormat.string(status.spentThisMonth)} / ${MoneyFormat.string(monthlyBudget)}',
-                style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                      color: isOver ? AppColors.warning : scheme.onSurfaceVariant,
-                      fontFamily: 'Nunito',
-                    ),
-              ),
-            ],
+        gridData: FlGridData(
+          show: true,
+          drawVerticalLine: false,
+          horizontalInterval: step,
+          getDrawingHorizontalLine: (v) => FlLine(
+            color: scheme.outlineVariant.withValues(alpha: 0.6),
+            strokeWidth: 0.8,
+            dashArray: const [4, 4],
           ),
-          const SizedBox(height: 8),
-          // 渐变进度条（绿→金→红），与首页预算条统一；超支整条变橙。
-          SizedBox(
-            height: 7,
-            child: LayoutBuilder(
-              builder: (ctx, c) {
-                final w = c.maxWidth;
-                return Stack(
-                  children: [
-                    Container(
-                      decoration: BoxDecoration(
-                        color: scheme.outlineVariant.withValues(alpha: 0.4),
-                        borderRadius: BorderRadius.circular(4),
-                      ),
+        ),
+        borderData: FlBorderData(show: false),
+        titlesData: FlTitlesData(
+          // 参考图刻度在右侧。
+          rightTitles: AxisTitles(
+            sideTitles: SideTitles(
+              showTitles: true,
+              reservedSize: 44,
+              interval: step,
+              getTitlesWidget: (v, meta) => Padding(
+                padding: const EdgeInsets.only(left: 4),
+                child: Text(
+                  v == 0 ? '' : MoneyFormat.axisLabel(v, withSymbol: false),
+                  style: TextStyle(
+                    fontSize: 10,
+                    fontFamily: 'Nunito',
+                    color: scheme.onSurfaceVariant.withValues(alpha: 0.6),
+                  ),
+                ),
+              ),
+            ),
+          ),
+          leftTitles:
+              const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+          topTitles:
+              const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+          bottomTitles: AxisTitles(
+            sideTitles: SideTitles(
+              showTitles: true,
+              reservedSize: 20,
+              interval: 1,
+              getTitlesWidget: (v, meta) {
+                final i = v.toInt();
+                // 第一个刻度不显示：开头是几号人人都知道（参考图逻辑）。
+                if (i <= 0 || i >= labels.length || i % labelEvery != 0) {
+                  return const SizedBox.shrink();
+                }
+                return Padding(
+                  padding: const EdgeInsets.only(top: 5),
+                  child: Text(
+                    labels[i],
+                    style: TextStyle(
+                      fontSize: 10,
+                      fontFamily: 'Nunito',
+                      color: scheme.onSurfaceVariant.withValues(alpha: 0.6),
                     ),
-                    ClipRRect(
-                      borderRadius: BorderRadius.circular(4),
-                      child: Align(
-                        alignment: Alignment.centerLeft,
-                        widthFactor: ratio.clamp(0.0, 1.0),
-                        child: Container(
-                          width: w,
-                          decoration: BoxDecoration(
-                            gradient: LinearGradient(
-                              colors: isOver
-                                  ? const [AppColors.warning, AppColors.warning]
-                                  : const [
-                                      Color(0xFF7FB069),
-                                      Color(0xFFF2B23C),
-                                      Color(0xFFE0552B),
-                                    ],
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
-                  ],
+                  ),
                 );
               },
             ),
           ),
-          if (isCurrentMonth) ...[
-            const SizedBox(height: 6),
-            Text(
-              status.todayAllowance >= Decimal.zero
-                  ? '今日可花 ${MoneyFormat.string(status.todayAllowance)} · 本月剩 ${MoneyFormat.string(status.remaining)}'
-                  : '今日已超出节奏 ${MoneyFormat.string(-status.todayAllowance)}，缓一缓',
-              style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                    color: status.todayAllowance >= Decimal.zero
-                        ? scheme.onSurfaceVariant
-                        : AppColors.warning,
-                  ),
+        ),
+      ),
+    );
+  }
+}
+
+class _MiniTotalCard extends StatelessWidget {
+  final String title;
+  final Decimal amount;
+  final Color color;
+  final Decimal? prev;
+  final bool goodWhenUp;
+  final BoxDecoration decoration;
+  final List<double> spark;
+  final Color sparkColor;
+
+  const _MiniTotalCard({
+    required this.title,
+    required this.amount,
+    required this.color,
+    required this.prev,
+    required this.goodWhenUp,
+    required this.decoration,
+    required this.spark,
+    required this.sparkColor,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Container(
+      padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+      decoration: decoration,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            title,
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: scheme.onSurfaceVariant,
+                  fontWeight: FontWeight.w400,
+                ),
+          ),
+          const SizedBox(height: 4),
+          // 金额加大加粗（对齐参考图小指标卡）。
+          Text(
+            MoneyFormat.string(amount),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              fontSize: 21,
+              fontWeight: FontWeight.w700,
+              fontFamily: 'Nunito',
+              color: color,
             ),
-          ],
+          ),
+          const SizedBox(height: 8),
+          // 左下徽章 + 右下迷你曲线（参考图布局）。
+          Row(
+            children: [
+              _DeltaBadge(
+                current: amount,
+                prev: prev,
+                goodWhenUp: goodWhenUp,
+              ),
+              const Spacer(),
+              if (spark.any((v) => v != 0))
+                SizedBox(
+                  width: 64,
+                  height: 26,
+                  child: _Sparkline(values: spark, color: sparkColor),
+                ),
+            ],
+          ),
         ],
       ),
     );
   }
 }
 
-/// 「本月电量」：预算=满格，累计支出在放电——「预算剩余」随每天花钱往下掉，
-/// 掉到 0 以下=透支(橙色)。当月只画到今天。没设预算给引导。
-class _BudgetBatteryCard extends StatelessWidget {
-  final List<DailyTotal> dailyTotals;
-  final Decimal? monthlyBudget;
-  final bool isCurrentMonth;
+/// 迷你趋势线（无轴无网格，参考图小卡右下角那种）。
+class _Sparkline extends StatelessWidget {
+  final List<double> values;
+  final Color color;
 
-  const _BudgetBatteryCard({
-    required this.dailyTotals,
-    required this.monthlyBudget,
-    required this.isCurrentMonth,
+  const _Sparkline({required this.values, required this.color});
+
+  @override
+  Widget build(BuildContext context) {
+    var minV = values.first;
+    var maxV = values.first;
+    for (final v in values) {
+      if (v < minV) minV = v;
+      if (v > maxV) maxV = v;
+    }
+    if (maxV == minV) maxV = minV + 1;
+
+    return LineChart(
+      LineChartData(
+        minY: minV,
+        maxY: maxV,
+        clipData: const FlClipData.all(),
+        lineTouchData: const LineTouchData(enabled: false),
+        lineBarsData: [
+          LineChartBarData(
+            spots: [
+              for (var i = 0; i < values.length; i++)
+                FlSpot(i.toDouble(), values[i])
+            ],
+            color: color,
+            isCurved: true,
+            curveSmoothness: 0.4,
+            barWidth: 1.8,
+            dotData: const FlDotData(show: false),
+            belowBarData: BarAreaData(show: false),
+          ),
+        ],
+        gridData: const FlGridData(show: false),
+        borderData: FlBorderData(show: false),
+        titlesData: const FlTitlesData(
+          leftTitles: AxisTitles(sideTitles: SideTitles(showTitles: false)),
+          rightTitles: AxisTitles(sideTitles: SideTitles(showTitles: false)),
+          topTitles: AxisTitles(sideTitles: SideTitles(showTitles: false)),
+          bottomTitles: AxisTitles(sideTitles: SideTitles(showTitles: false)),
+        ),
+      ),
+    );
+  }
+}
+
+/// 涨跌徽章：↑/↓ + 同期百分比，无底色纯彩字（参考图同款）。
+/// 配色：绿=好事、红=坏事（2026-07-09 用户拍板"更直观"，徽章处破红绿铁律）。
+/// 上期无数据/为 0、或变化小于 0.05% 时整体隐藏（不出 ∞%/0% 噪声）。
+class _DeltaBadge extends StatelessWidget {
+  static const _up = Color(0xFF34A853);
+  static const _down = Color(0xFFE5484D);
+
+  final Decimal current;
+  final Decimal? prev;
+  final bool goodWhenUp;
+
+  const _DeltaBadge({
+    required this.current,
+    required this.prev,
+    required this.goodWhenUp,
   });
 
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    if (monthlyBudget == null || monthlyBudget! <= Decimal.zero) {
-      return _SectionCard(
-        title: '本月电量',
-        child: Padding(
-          padding: const EdgeInsets.symmetric(vertical: 8),
-          child: Text(
-            '设了本月预算后，这里用「电量」展示预算消耗：预算是满格，花钱在放电，超支就见红。',
-            style: TextStyle(
-                fontSize: 12.5, height: 1.5, color: scheme.onSurfaceVariant),
-          ),
-        ),
-      );
-    }
-    final budget = MoneyFormat.toDouble(monthlyBudget!);
-    final days = dailyTotals.length;
-    final remaining = <double>[];
-    var cum = 0.0;
-    for (final d in dailyTotals) {
-      cum += MoneyFormat.toDouble(d.expense).clamp(0.0, double.infinity);
-      remaining.add(budget - cum);
-    }
-    // 当月只画到今天；历史月画满整月。
-    final shownEnd = (isCurrentMonth ? DateTime.now().day : days).clamp(1, days);
-    final shown = remaining.take(shownEnd).toList();
-    final spots = [
-      for (var i = 0; i < shown.length; i++) FlSpot(i.toDouble(), shown[i])
-    ];
-    final minY = shown.fold<double>(budget, (a, b) => b < a ? b : a);
-    final over = minY < 0;
-    final remainNow = shown.last;
+    final base = prev;
+    if (base == null || base == Decimal.zero) return const SizedBox.shrink();
+    // 结余可能为负：分母取绝对值，方向语义才不翻车。
+    final baseVal = MoneyFormat.toDouble(base).abs();
+    final pct = (MoneyFormat.toDouble(current) - MoneyFormat.toDouble(base)) /
+        baseVal *
+        100;
+    if (pct.abs() < 0.05) return const SizedBox.shrink();
+    final up = pct > 0;
+    final good = up == goodWhenUp;
+    final pctText = pct.abs() >= 10
+        ? pct.abs().toStringAsFixed(0)
+        : pct.abs().toStringAsFixed(1);
 
-    final step = _niceStep(budget);
-    final maxY = ((budget / step).floor() + 1) * step;
-    final loY = over ? -(((-minY) / step).floor() + 1) * step : 0.0;
-    final lineColor = over ? AppColors.warning : scheme.primary;
-    final xInterval = (days / 6).ceilToDouble().clamp(1.0, 999.0);
-
-    // 底部每日「支出/收入」小柱 strip 的数据。
-    final expColor = AppColors.expense(scheme);
-    final incColor = AppColors.income(scheme);
-    final dExp = [
-      for (final d in dailyTotals)
-        MoneyFormat.toDouble(d.expense).clamp(0.0, double.infinity)
-    ];
-    final dInc = [
-      for (final d in dailyTotals)
-        MoneyFormat.toDouble(d.income).clamp(0.0, double.infinity)
-    ];
-    final stripMax = [...dExp, ...dInc].fold<double>(0.0, (a, b) => a > b ? a : b);
-    final stripStep = _niceStep(stripMax);
-    final stripMaxY = stripMax <= 0
-        ? stripStep
-        : ((stripMax / stripStep).floor() + 1) * stripStep;
-
-    return _SectionCard(
-      title: '本月电量',
-      trailing: Text(
-        '剩 ${MoneyFormat.axisLabel(remainNow)} / ${MoneyFormat.axisLabel(budget)}',
-        style: TextStyle(
-          fontSize: 12,
-          fontWeight: FontWeight.w600,
-          fontFamily: 'Nunito',
-          color: over ? AppColors.warning : scheme.onSurfaceVariant,
-        ),
-      ),
-      child: Column(
-        children: [
-          // ── 上：预算剩余"电量"线 ──
-          SizedBox(
-            height: 130,
-            child: LineChart(
-              LineChartData(
-                minY: loY,
-                maxY: maxY,
-                minX: 0,
-                maxX: (days - 1).toDouble(),
-                lineBarsData: [
-                  LineChartBarData(
-                    spots: spots,
-                    isCurved: false,
-                    color: lineColor,
-                    barWidth: 2.6,
-                    dotData: const FlDotData(show: false),
-                    belowBarData: BarAreaData(
-                      show: true,
-                      gradient: LinearGradient(
-                        begin: Alignment.topCenter,
-                        end: Alignment.bottomCenter,
-                        colors: [
-                          lineColor.withValues(alpha: 0.24),
-                          lineColor.withValues(alpha: 0.02),
-                        ],
-                      ),
-                    ),
-                  ),
-                ],
-                extraLinesData: ExtraLinesData(horizontalLines: [
-                  if (over)
-                    HorizontalLine(
-                      y: 0,
-                      color: AppColors.warning.withValues(alpha: 0.6),
-                      strokeWidth: 1,
-                      dashArray: const [4, 3],
-                    ),
-                ]),
-                gridData: FlGridData(
-                  show: true,
-                  drawVerticalLine: false,
-                  horizontalInterval: step,
-                  getDrawingHorizontalLine: (v) => FlLine(
-                    color: scheme.outlineVariant.withValues(alpha: 0.3),
-                    strokeWidth: 0.5,
-                  ),
-                ),
-                borderData: FlBorderData(show: false),
-                titlesData: FlTitlesData(
-                  leftTitles: _moneyLeftTitles(scheme, step),
-                  rightTitles: const AxisTitles(
-                      sideTitles: SideTitles(showTitles: false)),
-                  topTitles: const AxisTitles(
-                      sideTitles: SideTitles(showTitles: false)),
-                  bottomTitles: const AxisTitles(
-                      sideTitles: SideTitles(showTitles: false)),
-                ),
-                lineTouchData: LineTouchData(
-                  touchTooltipData: LineTouchTooltipData(
-                    getTooltipItems: (spots) => spots.map((s) {
-                      return LineTooltipItem(
-                        '第${s.x.toInt() + 1}天 剩 ${MoneyFormat.axisLabel(s.y)}',
-                        TextStyle(
-                            color: lineColor,
-                            fontSize: 12,
-                            fontWeight: FontWeight.w500),
-                      );
-                    }).toList(),
-                  ),
-                ),
-              ),
-            ),
-          ),
-          const SizedBox(height: 4),
-          // ── 下：每日 支出(深)/收入(金) 小柱条，点看当天 ──
-          SizedBox(
-            height: 46,
-            child: BarChart(
-              BarChartData(
-                minY: 0,
-                maxY: stripMaxY,
-                alignment: BarChartAlignment.spaceAround,
-                barTouchData: BarTouchData(
-                  touchTooltipData: BarTouchTooltipData(
-                    getTooltipItem: (g, gi, rod, ri) => BarTooltipItem(
-                      '${g.x.toInt() + 1}日 ${ri == 0 ? '支' : '收'} '
-                      '${MoneyFormat.axisLabel(rod.toY)}',
-                      TextStyle(
-                          color: ri == 0 ? expColor : incColor,
-                          fontSize: 11,
-                          fontWeight: FontWeight.w600),
-                    ),
-                  ),
-                ),
-                barGroups: [
-                  for (var i = 0; i < days; i++)
-                    BarChartGroupData(
-                      x: i,
-                      barsSpace: 1,
-                      barRods: [
-                        BarChartRodData(
-                            toY: dExp[i], color: expColor, width: 3),
-                        BarChartRodData(
-                            toY: dInc[i], color: incColor, width: 3),
-                      ],
-                    ),
-                ],
-                gridData: const FlGridData(show: false),
-                borderData: FlBorderData(show: false),
-                titlesData: FlTitlesData(
-                  leftTitles: const AxisTitles(
-                      sideTitles:
-                          SideTitles(showTitles: false, reservedSize: 40)),
-                  rightTitles: const AxisTitles(
-                      sideTitles: SideTitles(showTitles: false)),
-                  topTitles: const AxisTitles(
-                      sideTitles: SideTitles(showTitles: false)),
-                  bottomTitles: AxisTitles(
-                    sideTitles: SideTitles(
-                      showTitles: true,
-                      reservedSize: 16,
-                      interval: xInterval,
-                      getTitlesWidget: (v, meta) {
-                        final day = v.toInt() + 1;
-                        if (day != 1 && day % xInterval.toInt() != 0) {
-                          return const SizedBox.shrink();
-                        }
-                        return Padding(
-                          padding: const EdgeInsets.only(top: 4),
-                          child: Text('$day',
-                              style: TextStyle(
-                                  fontSize: 9,
-                                  color: scheme.onSurfaceVariant)),
-                        );
-                      },
-                    ),
-                  ),
-                ),
-              ),
-            ),
-          ),
-        ],
+    return Text(
+      '${up ? '↑' : '↓'} $pctText%',
+      style: TextStyle(
+        fontSize: 12.5,
+        fontWeight: FontWeight.w600,
+        fontFamily: 'Nunito',
+        color: good ? _up : _down,
       ),
     );
   }
@@ -1788,8 +2167,7 @@ class _SectionCard extends StatelessWidget {
   /// 与标题同一行、靠右的部件（如趋势图的 支出/收入 切换）。
   final Widget? trailing;
 
-  const _SectionCard(
-      {required this.title, required this.child, this.trailing});
+  const _SectionCard({required this.title, required this.child, this.trailing});
 
   @override
   Widget build(BuildContext context) {
@@ -1811,24 +2189,93 @@ class _SectionCard extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
-            children: [
-              Expanded(
-                child: Text(
-                  title,
-                  style: Theme.of(context)
-                      .textTheme
-                      .titleSmall
-                      ?.copyWith(fontWeight: FontWeight.w500),
+          if (title.isNotEmpty || trailing != null) ...[
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    title,
+                    style: Theme.of(context)
+                        .textTheme
+                        .titleSmall
+                        ?.copyWith(fontWeight: FontWeight.w400),
+                  ),
                 ),
-              ),
-              if (trailing != null) trailing!,
-            ],
-          ),
-          const SizedBox(height: 12),
+                if (trailing != null) trailing!,
+              ],
+            ),
+            const SizedBox(height: 12),
+          ],
           child,
         ],
       ),
+    );
+  }
+}
+
+/// 消费来源 TOP 横向条形（视觉升级批⑤，消费地图的替代）：
+/// 每行 = 来源名 + 相对最大值的条形 + 净额。条形用猫系色板循环。
+class _SourceBars extends StatelessWidget {
+  final List<(String, Decimal)> items;
+
+  const _SourceBars({required this.items});
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final maxVal = MoneyFormat.toDouble(items.first.$2);
+
+    return Column(
+      children: [
+        for (var i = 0; i < items.length; i++)
+          Padding(
+            padding: EdgeInsets.only(bottom: i == items.length - 1 ? 0 : 10),
+            child: Row(
+              children: [
+                SizedBox(
+                  width: 88,
+                  child: Text(
+                    items[i].$1,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context).textTheme.labelSmall,
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(4),
+                    child: Container(
+                      height: 12,
+                      color: AppColors.inputFill(scheme),
+                      alignment: Alignment.centerLeft,
+                      child: FractionallySizedBox(
+                        widthFactor: maxVal <= 0
+                            ? 0
+                            : (MoneyFormat.toDouble(items[i].$2) / maxVal)
+                                .clamp(0.04, 1.0),
+                        child: Container(
+                          decoration: BoxDecoration(
+                            color: _kPieColors[i % _kPieColors.length],
+                            borderRadius: BorderRadius.circular(4),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Text(
+                  MoneyFormat.string(items[i].$2),
+                  style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                        fontFamily: 'Nunito',
+                        fontWeight: FontWeight.w500,
+                      ),
+                ),
+              ],
+            ),
+          ),
+      ],
     );
   }
 }
@@ -1845,6 +2292,121 @@ const _kPieColors = [
 ];
 
 // ─────────────────────────────────────────────────────────────────────────────
+// 预算使用环形卡（2026-07-10 用户拍板，参考 iOS Cloudflare 客户端的缓存命中率卡）：
+// 左=环形进度（中心百分比），右=大字百分比 + 已用/总额 + 剩余天数。
+// ─────────────────────────────────────────────────────────────────────────────
+
+class _BudgetRingCard extends StatelessWidget {
+  final Decimal spent;
+  final Decimal budget;
+  final bool isCurrentMonth;
+  final DateTime displayedMonth;
+  final int excludedForeignCount;
+
+  const _BudgetRingCard({
+    required this.spent,
+    required this.budget,
+    required this.isCurrentMonth,
+    required this.displayedMonth,
+    required this.excludedForeignCount,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final ratio = MoneyFormat.toDouble(spent) / MoneyFormat.toDouble(budget);
+    final over = ratio > 1.0;
+    final ringColor =
+        over ? AppColors.warning : AppColors.budgetHealthy(scheme);
+    final pctText = '${(ratio * 100).round()}%';
+    final lastDay =
+        DateTime(displayedMonth.year, displayedMonth.month + 1, 0).day;
+    final daysLeft = isCurrentMonth ? lastDay - DateTime.now().day : 0;
+
+    return _SectionCard(
+      title: '',
+      child: Row(
+        children: [
+          SizedBox(
+            width: 92,
+            height: 92,
+            child: Stack(
+              alignment: Alignment.center,
+              children: [
+                SizedBox(
+                  width: 92,
+                  height: 92,
+                  child: BudgetProgressRing(
+                    value: ratio.clamp(0.0, 1.0),
+                    strokeWidth: 9,
+                    activeColor: ringColor,
+                  ),
+                ),
+                Text(
+                  pctText,
+                  style: TextStyle(
+                    fontSize: 17,
+                    fontWeight: FontWeight.w600,
+                    fontFamily: 'Nunito',
+                    color: scheme.onSurface.withValues(alpha: 0.87),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 18),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  '预算使用',
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: AppTextColor.secondary(scheme),
+                      ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  over ? '超支 ${MoneyFormat.string(spent - budget)}' : pctText,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: over ? 22 : 28,
+                    fontWeight: FontWeight.w700,
+                    fontFamily: 'Nunito',
+                    color: over
+                        ? AppColors.warning
+                        : scheme.onSurface.withValues(alpha: 0.87),
+                  ),
+                ),
+                const SizedBox(height: 5),
+                Text(
+                  '已用 ${MoneyFormat.string(spent)} / ${MoneyFormat.string(budget)}'
+                  '${daysLeft > 0 ? ' · 剩 $daysLeft 天' : ''}',
+                  maxLines: 2,
+                  style: TextStyle(
+                    fontSize: 12.5,
+                    color: AppTextColor.secondary(scheme),
+                    fontFamily: 'Nunito',
+                  ),
+                ),
+                if (excludedForeignCount > 0) ...[
+                  const SizedBox(height: 4),
+                  Text(
+                    '已排除 $excludedForeignCount 笔其他币种记录',
+                    style: AppType.caption(scheme),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // 环形图首图：环左（中心=期间支出）+ 图例右（名称/占比/金额），>6 类归「其他」
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -1854,8 +2416,8 @@ class _RingCard extends StatelessWidget {
   final Decimal total;
   final List<CategoryTotal> categories;
 
-  /// 点分类（图例）下钻到该分类明细；「其他」聚合项不下钻。
-  final void Function(String name)? onDrill;
+  /// 点分类（图例）下钻到该分类明细；「更多」会带上被折叠的真实分类集合。
+  final void Function(String name, {Set<String>? categoryNames})? onDrill;
 
   const _RingCard({
     required this.title,
@@ -1865,11 +2427,12 @@ class _RingCard extends StatelessWidget {
     this.onDrill,
   });
 
-  /// 只取净额为正的分类；超过 6 类把尾部归成「其他」。
+  /// 只取净额为正的分类；超过 6 类把尾部归成「更多」。
+  /// 不能再硬叫「其他」：如果真实分类里本来就有「其他」，
+  /// 图例会出现两个同名项，用户也分不清哪个能下钻。
   List<CategoryTotal> _condensed() {
-    final positive = categories
-        .where((c) => MoneyFormat.toDouble(c.total) > 0)
-        .toList();
+    final positive =
+        categories.where((c) => MoneyFormat.toDouble(c.total) > 0).toList();
     if (positive.length <= 6) return positive;
     final head = positive.take(5).toList();
     var restTotal = Decimal.zero;
@@ -1883,7 +2446,7 @@ class _RingCard extends StatelessWidget {
     return [
       ...head,
       CategoryTotal(
-        name: '其他',
+        name: '更多',
         total: restTotal,
         share: restShare,
         count: restCount,
@@ -1891,10 +2454,18 @@ class _RingCard extends StatelessWidget {
     ];
   }
 
+  Set<String> _moreCategoryNames() {
+    final positive =
+        categories.where((c) => MoneyFormat.toDouble(c.total) > 0).toList();
+    if (positive.length <= 6) return const {};
+    return positive.skip(5).map((c) => c.name).toSet();
+  }
+
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final items = _condensed();
+    final moreCategoryNames = _moreCategoryNames();
     if (items.isEmpty) return const SizedBox.shrink();
 
     return _SectionCard(
@@ -1937,13 +2508,11 @@ class _RingCard extends StatelessWidget {
                       const SizedBox(height: 2),
                       Text(
                         MoneyFormat.string(total),
-                        style: Theme.of(context)
-                            .textTheme
-                            .titleMedium
-                            ?.copyWith(
-                              fontWeight: FontWeight.w600,
-                              fontFamily: 'Nunito',
-                            ),
+                        style:
+                            Theme.of(context).textTheme.titleMedium?.copyWith(
+                                  fontWeight: FontWeight.w600,
+                                  fontFamily: 'Nunito',
+                                ),
                       ),
                     ],
                   ),
@@ -1958,57 +2527,66 @@ class _RingCard extends StatelessWidget {
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: List.generate(items.length, (i) {
                   final item = items[i];
-                  final canDrill = onDrill != null && item.name != '其他';
+                  final isMore = item.name == '更多' &&
+                      i == items.length - 1 &&
+                      moreCategoryNames.isNotEmpty;
+                  final canDrill = onDrill != null;
                   return GestureDetector(
-                    behavior: HitTestBehavior.opaque,
-                    onTap: canDrill ? () => onDrill!(item.name) : null,
-                    child: Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 3),
-                    child: Row(
-                      children: [
-                        Container(
-                          width: 9,
-                          height: 9,
-                          decoration: BoxDecoration(
-                            color: _kPieColors[i % _kPieColors.length],
-                            shape: BoxShape.circle,
-                          ),
-                        ),
-                        const SizedBox(width: 6),
-                        Expanded(
-                          child: Text(
-                            item.name,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: Theme.of(context).textTheme.labelSmall,
-                          ),
-                        ),
-                        Text(
-                          '${(item.share * 100).toStringAsFixed(0)}%',
-                          style: Theme.of(context)
-                              .textTheme
-                              .labelSmall
-                              ?.copyWith(color: scheme.onSurfaceVariant),
-                        ),
-                        const SizedBox(width: 6),
-                        Text(
-                          MoneyFormat.string(item.total),
-                          style: Theme.of(context)
-                              .textTheme
-                              .labelSmall
-                              ?.copyWith(
-                                fontFamily: 'Nunito',
-                                fontWeight: FontWeight.w500,
+                      behavior: HitTestBehavior.opaque,
+                      onTap: canDrill
+                          ? () => onDrill!(
+                                item.name,
+                                categoryNames:
+                                    isMore ? moreCategoryNames : null,
+                              )
+                          : null,
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 3),
+                        child: Row(
+                          children: [
+                            Container(
+                              width: 9,
+                              height: 9,
+                              decoration: BoxDecoration(
+                                color: _kPieColors[i % _kPieColors.length],
+                                shape: BoxShape.circle,
                               ),
+                            ),
+                            const SizedBox(width: 6),
+                            Expanded(
+                              child: Text(
+                                item.name,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: Theme.of(context).textTheme.labelSmall,
+                              ),
+                            ),
+                            Text(
+                              '${(item.share * 100).toStringAsFixed(0)}%',
+                              style: Theme.of(context)
+                                  .textTheme
+                                  .labelSmall
+                                  ?.copyWith(color: scheme.onSurfaceVariant),
+                            ),
+                            const SizedBox(width: 6),
+                            Text(
+                              MoneyFormat.string(item.total),
+                              style: Theme.of(context)
+                                  .textTheme
+                                  .labelSmall
+                                  ?.copyWith(
+                                    fontFamily: 'Nunito',
+                                    fontWeight: FontWeight.w400,
+                                  ),
+                            ),
+                            if (canDrill) ...[
+                              const SizedBox(width: 2),
+                              Icon(CupertinoIcons.chevron_forward,
+                                  size: 11, color: scheme.onSurfaceVariant),
+                            ],
+                          ],
                         ),
-                        if (canDrill) ...[
-                          const SizedBox(width: 2),
-                          Icon(CupertinoIcons.chevron_forward,
-                              size: 11, color: scheme.onSurfaceVariant),
-                        ],
-                      ],
-                    ),
-                  ));
+                      ));
                 }),
               ),
             ),
@@ -2049,7 +2627,7 @@ class _WeekBars extends StatelessWidget {
                 MoneyFormat.axisLabel(rod.toY),
                 TextStyle(
                     color: AppColors.expense(scheme),
-                    fontSize: 12,
+                    fontSize: 11,
                     fontWeight: FontWeight.w600),
               ),
             ),
@@ -2155,6 +2733,14 @@ class _DualLineChart extends StatelessWidget {
     final compare = showIncome ? compareIncome : compareExpense;
     final color = showIncome ? incColor : expColor;
     final label = showIncome ? '收入' : '支出';
+    final compareText = compareLabel ?? '上期';
+    final primaryLabel = compare == null
+        ? label
+        : compareText.contains('上月')
+            ? '本月$label'
+            : compareText.contains('去年')
+                ? '今年$label'
+                : '本期$label';
     final maxV = [...data, if (compare != null) ...compare]
         .fold<double>(0, (a, b) => a > b ? a : b);
     final step = _niceStep(maxV);
@@ -2165,15 +2751,28 @@ class _DualLineChart extends StatelessWidget {
             for (var i = 0; i < d.length; i++) FlSpot(i.toDouble(), d[i])
           ],
           color: c,
-          // 直线段（不用曲线平滑，避免数据点少时"过冲"出不存在的起伏）。
-          isCurved: false,
+          // 曲线（2026-07-10 用户点名要真圆滑：防过冲参数会把曲线压成直线，
+          // 改自由曲线，越界由 minY+clipData 兜住）。
+          isCurved: true,
+          curveSmoothness: 0.4,
           barWidth: 2.5,
           dotData: FlDotData(
             show: d.length <= 14,
             getDotPainter: (s, p, b, i) =>
                 FlDotCirclePainter(radius: 2.5, color: c, strokeWidth: 0),
           ),
-          belowBarData: BarAreaData(show: false),
+          // 线下渐变填充（对齐参考图）：线色 → 透明。
+          belowBarData: BarAreaData(
+            show: true,
+            gradient: LinearGradient(
+              begin: Alignment.topCenter,
+              end: Alignment.bottomCenter,
+              colors: [
+                c.withValues(alpha: 0.22),
+                c.withValues(alpha: 0.02),
+              ],
+            ),
+          ),
         );
 
     return Column(
@@ -2183,19 +2782,17 @@ class _DualLineChart extends StatelessWidget {
           children: [
             _dot(color),
             const SizedBox(width: 4),
-            Text(label,
+            Text(primaryLabel,
                 style: Theme.of(context)
                     .textTheme
                     .labelSmall
                     ?.copyWith(color: scheme.onSurfaceVariant)),
             if (compare != null) ...[
-              const SizedBox(width: 12),
+              const SizedBox(width: 11),
               Container(
-                  width: 12,
-                  height: 2,
-                  color: color.withValues(alpha: 0.4)),
+                  width: 12, height: 2, color: color.withValues(alpha: 0.4)),
               const SizedBox(width: 4),
-              Text(compareLabel ?? '上期',
+              Text(compareText,
                   style: Theme.of(context)
                       .textTheme
                       .labelSmall
@@ -2210,6 +2807,7 @@ class _DualLineChart extends StatelessWidget {
             LineChartData(
               minY: 0,
               maxY: maxY,
+              clipData: const FlClipData.all(),
               lineBarsData: [
                 if (compare != null)
                   LineChartBarData(
@@ -2218,7 +2816,8 @@ class _DualLineChart extends StatelessWidget {
                         FlSpot(i.toDouble(), compare[i])
                     ],
                     color: color.withValues(alpha: 0.4),
-                    isCurved: false,
+                    isCurved: true,
+                    curveSmoothness: 0.4,
                     barWidth: 1.6,
                     dashArray: const [4, 3],
                     dotData: const FlDotData(show: false),
@@ -2239,18 +2838,20 @@ class _DualLineChart extends StatelessWidget {
                 show: true,
                 drawVerticalLine: false,
                 horizontalInterval: step,
+                // 淡虚线网格（对齐参考图质感）。
                 getDrawingHorizontalLine: (v) => FlLine(
-                  color: scheme.outlineVariant.withValues(alpha: 0.3),
-                  strokeWidth: 0.5,
+                  color: scheme.outlineVariant.withValues(alpha: 0.6),
+                  strokeWidth: 0.8,
+                  dashArray: const [4, 4],
                 ),
               ),
               borderData: FlBorderData(show: false),
               titlesData: FlTitlesData(
                 leftTitles: _moneyLeftTitles(scheme, step),
-                rightTitles: const AxisTitles(
-                    sideTitles: SideTitles(showTitles: false)),
-                topTitles: const AxisTitles(
-                    sideTitles: SideTitles(showTitles: false)),
+                rightTitles:
+                    const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                topTitles:
+                    const AxisTitles(sideTitles: SideTitles(showTitles: false)),
                 bottomTitles: AxisTitles(
                   sideTitles: SideTitles(
                     showTitles: true,
@@ -2258,9 +2859,7 @@ class _DualLineChart extends StatelessWidget {
                     interval: 1,
                     getTitlesWidget: (v, meta) {
                       final i = v.toInt();
-                      if (i < 0 ||
-                          i >= xLabels.length ||
-                          xLabels[i].isEmpty) {
+                      if (i < 0 || i >= xLabels.length || xLabels[i].isEmpty) {
                         return const SizedBox.shrink();
                       }
                       return Padding(
@@ -2278,15 +2877,104 @@ class _DualLineChart extends StatelessWidget {
                 ),
               ),
               lineTouchData: LineTouchData(
+                getTouchedSpotIndicator: (barData, indicators) {
+                  final isCompare = barData.dashArray != null;
+                  return indicators
+                      .map(
+                        (_) => TouchedSpotIndicatorData(
+                          FlLine(
+                            color: scheme.onSurfaceVariant.withValues(
+                              alpha: isCompare ? 0.06 : 0.16,
+                            ),
+                            strokeWidth: 0.8,
+                            dashArray: const [3, 4],
+                          ),
+                          FlDotData(
+                            show: true,
+                            getDotPainter: (spot, percent, bar, index) =>
+                                FlDotCirclePainter(
+                              radius: isCompare ? 4 : 6,
+                              color: isCompare
+                                  ? scheme.onSurfaceVariant
+                                      .withValues(alpha: 0.45)
+                                  : color,
+                              strokeWidth: isCompare ? 1.6 : 2,
+                              strokeColor: AppColors.card(scheme),
+                            ),
+                          ),
+                        ),
+                      )
+                      .toList();
+                },
                 touchTooltipData: LineTouchTooltipData(
+                  getTooltipColor: (_) => AppColors.card(scheme),
+                  tooltipBorder: BorderSide(
+                    color: AppColors.hairline(scheme, strength: 1.2),
+                  ),
+                  tooltipRoundedRadius: 12,
+                  tooltipPadding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  tooltipMargin: 10,
+                  maxContentWidth: 190,
+                  fitInsideHorizontally: true,
                   getTooltipItems: (spots) => spots.map((s) {
+                    final i = s.x.round().clamp(0, data.length - 1).toInt();
+                    if (s != spots.first) return null;
+                    final current = data[i];
+                    final previous = compare != null && i < compare.length
+                        ? compare[i]
+                        : null;
+                    final diff = previous == null ? null : current - previous;
+                    final pointLabel = compareText.contains('去年')
+                        ? '${i + 1}月'
+                        : compareText.contains('上月') || xLabels.length > 20
+                            ? '${i + 1}日'
+                            : (i < xLabels.length && xLabels[i].isNotEmpty
+                                ? xLabels[i]
+                                : '第${i + 1}项');
                     return LineTooltipItem(
-                      '$label ${MoneyFormat.axisLabel(s.y)}',
+                      '$pointLabel\n',
                       TextStyle(
-                        color: color,
-                        fontSize: 12,
+                        color: scheme.onSurface,
+                        fontSize: 11,
                         fontWeight: FontWeight.w500,
                       ),
+                      textAlign: TextAlign.left,
+                      children: [
+                        TextSpan(
+                          text:
+                              '$primaryLabel  ${MoneyFormat.axisLabel(current)}',
+                          style: TextStyle(
+                            color: color,
+                            fontSize: 11,
+                            fontWeight: FontWeight.w500,
+                            fontFamily: 'Nunito',
+                          ),
+                        ),
+                        if (previous != null && diff != null) ...[
+                          TextSpan(
+                            text:
+                                '\n$compareText  ${MoneyFormat.axisLabel(previous)}',
+                            style: TextStyle(
+                              color: scheme.onSurfaceVariant,
+                              fontSize: 11,
+                              fontWeight: FontWeight.w400,
+                              fontFamily: 'Nunito',
+                            ),
+                          ),
+                          TextSpan(
+                            text:
+                                '\n较$compareText  ${diff >= 0 ? '+' : '-'}${MoneyFormat.axisLabel(diff.abs())}',
+                            style: TextStyle(
+                              color:
+                                  diff >= 0 ? color : scheme.onSurfaceVariant,
+                              fontSize: 11,
+                              fontWeight: FontWeight.w500,
+                              fontFamily: 'Nunito',
+                            ),
+                          ),
+                        ],
+                      ],
                     );
                   }).toList(),
                 ),
@@ -2307,11 +2995,9 @@ class _DualLineChart extends StatelessWidget {
 
 class _CategoryRanking extends StatelessWidget {
   final List<CategoryTotal> categories;
-  final int? maxItems;
   final void Function(String name)? onDrill;
 
-  const _CategoryRanking(
-      {required this.categories, this.maxItems, this.onDrill});
+  const _CategoryRanking({required this.categories, this.onDrill});
 
   String? _keyForName(String name) {
     for (final s in CategorySeed.all) {
@@ -2323,8 +3009,7 @@ class _CategoryRanking extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final items =
-        maxItems != null ? categories.take(maxItems!).toList() : categories;
+    final items = categories.take(5).toList();
 
     return Column(
       children: items.map((item) {
@@ -2334,65 +3019,82 @@ class _CategoryRanking extends StatelessWidget {
           behavior: HitTestBehavior.opaque,
           onTap: onDrill == null ? null : () => onDrill!(item.name),
           child: Padding(
-          padding: const EdgeInsets.only(bottom: 10),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                children: [
-                  CatIcon(
-                    categoryKey: key ?? '',
-                    emoji: key != null
-                        ? CategorySeed.emojiOf(key)
-                        : '🏷️',
-                    size: 24,
-                  ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      item.name,
-                      style: Theme.of(context).textTheme.bodyMedium,
+            padding: const EdgeInsets.only(bottom: 14),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Row(
+                  children: [
+                    CatIcon(
+                      categoryKey: key ?? '',
+                      emoji: key != null ? CategorySeed.emojiOf(key) : '🏷️',
+                      size: 28,
                     ),
-                  ),
-                  Text(
-                    '${item.count} 笔',
-                    style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                          color: scheme.onSurfaceVariant,
-                        ),
-                  ),
-                  const SizedBox(width: 8),
-                  Text(
-                    MoneyFormat.string(item.total),
-                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                          fontWeight: FontWeight.w500,
-                          fontFamily: 'Nunito',
-                        ),
-                  ),
-                  SizedBox(
-                    width: 36,
-                    child: Text(
-                      '$pct%',
-                      textAlign: TextAlign.end,
-                      style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Text(
+                        item.name,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                              fontWeight: FontWeight.w400,
+                            ),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Text(
+                      '${item.count} 笔',
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
                             color: scheme.onSurfaceVariant,
+                            fontFamily: 'Nunito',
                           ),
                     ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 4),
-              ClipRRect(
-                borderRadius: BorderRadius.circular(3),
-                child: LinearProgressIndicator(
-                  value: item.share.clamp(0.0, 1.0),
-                  minHeight: 4,
-                  color: scheme.primary,
-                  backgroundColor: scheme.outlineVariant,
+                    const SizedBox(width: 10),
+                    Text(
+                      MoneyFormat.string(item.total),
+                      style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                            fontWeight: FontWeight.w400,
+                            fontFamily: 'Nunito',
+                          ),
+                    ),
+                    const SizedBox(width: 10),
+                    SizedBox(
+                      width: 40,
+                      child: Text(
+                        '$pct%',
+                        textAlign: TextAlign.end,
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                              color: scheme.onSurfaceVariant,
+                              fontWeight: FontWeight.w400,
+                              fontFamily: 'Nunito',
+                            ),
+                      ),
+                    ),
+                    if (onDrill != null) ...[
+                      const SizedBox(width: 3),
+                      Icon(
+                        CupertinoIcons.chevron_forward,
+                        size: 16,
+                        color: scheme.onSurfaceVariant,
+                      ),
+                    ],
+                  ],
                 ),
-              ),
-            ],
+                const SizedBox(height: 8),
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(3),
+                  child: LinearProgressIndicator(
+                    value: item.share.clamp(0.0, 1.0),
+                    minHeight: 5,
+                    color: scheme.onSurfaceVariant.withValues(alpha: 0.66),
+                    backgroundColor:
+                        scheme.outlineVariant.withValues(alpha: 0.48),
+                  ),
+                ),
+              ],
+            ),
           ),
-        ));
+        );
       }).toList(),
     );
   }
@@ -2409,8 +3111,7 @@ class _TopTxnList extends StatelessWidget {
     return Column(
       children: List.generate(items.length, (i) {
         final r = items[i];
-        final label =
-            r.note.trim().isNotEmpty ? r.note.trim() : r.categoryName;
+        final label = r.note.trim().isNotEmpty ? r.note.trim() : r.categoryName;
         return Padding(
           padding: const EdgeInsets.symmetric(vertical: 5),
           child: Row(
@@ -2422,7 +3123,8 @@ class _TopTxnList extends StatelessWidget {
                   style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                         fontWeight: FontWeight.w600,
                         fontFamily: 'Nunito',
-                        color: i < 3 ? scheme.secondary : scheme.onSurfaceVariant,
+                        color:
+                            i < 3 ? scheme.secondary : scheme.onSurfaceVariant,
                       ),
                 ),
               ),
@@ -2582,8 +3284,7 @@ class _CalendarHeatmap extends StatelessWidget {
           mainAxisAlignment: MainAxisAlignment.end,
           children: [
             Text('少',
-                style:
-                    TextStyle(fontSize: 10, color: scheme.onSurfaceVariant)),
+                style: TextStyle(fontSize: 10, color: scheme.onSurfaceVariant)),
             const SizedBox(width: 4),
             for (final a in [0.2, 0.45, 0.7, 0.9]) ...[
               Container(
@@ -2597,12 +3298,8 @@ class _CalendarHeatmap extends StatelessWidget {
               const SizedBox(width: 3),
             ],
             const SizedBox(width: 1),
-            Text(
-                maxVal > 0
-                    ? '多 · 单日最高 ${MoneyFormat.axisLabel(maxVal)}'
-                    : '多',
-                style:
-                    TextStyle(fontSize: 10, color: scheme.onSurfaceVariant)),
+            Text(maxVal > 0 ? '多 · 单日最高 ${MoneyFormat.axisLabel(maxVal)}' : '多',
+                style: TextStyle(fontSize: 10, color: scheme.onSurfaceVariant)),
           ],
         ),
       ],
@@ -2630,9 +3327,10 @@ class _CompareBarsH extends StatelessWidget {
       return Text('本月还没有支出',
           style: TextStyle(fontSize: 12, color: scheme.onSurfaceVariant));
     }
-    double prevOf(String name) {
-      final p =
-          previous.expenseByCategory.where((c) => c.name == name).toList();
+    double prevOf(CategoryTotal current) {
+      final p = previous.expenseByCategory
+          .where((c) => c.identity == current.identity)
+          .toList();
       return p.isEmpty ? 0 : MoneyFormat.toDouble(p.first.total);
     }
 
@@ -2640,7 +3338,7 @@ class _CompareBarsH extends StatelessWidget {
     final prevColor = scheme.onSurfaceVariant.withValues(alpha: 0.35);
     var maxV = 0.0;
     for (final c in cats) {
-      maxV = math.max(maxV, math.max(MoneyFormat.toDouble(c.total), prevOf(c.name)));
+      maxV = math.max(maxV, math.max(MoneyFormat.toDouble(c.total), prevOf(c)));
     }
     if (maxV <= 0) maxV = 1;
 
@@ -2692,104 +3390,7 @@ class _CompareBarsH extends StatelessWidget {
           const SizedBox(height: 4),
           bar(curColor, MoneyFormat.toDouble(c.total)),
           const SizedBox(height: 3),
-          bar(prevColor, prevOf(c.name)),
-          const SizedBox(height: 12),
-        ],
-      ],
-    );
-  }
-}
-
-/// 预算 vs 实际：每个设了预算的分类一条横条（已花/预算），超支标橙。
-class _BudgetVsActualCard extends StatelessWidget {
-  final List<TransactionRecord> records;
-  final int year;
-  final int month;
-  final Map<String, Decimal> budgets;
-
-  const _BudgetVsActualCard({
-    required this.records,
-    required this.year,
-    required this.month,
-    required this.budgets,
-  });
-
-  static String? _topKeyOf(String categoryName) {
-    for (final s in CategorySeed.all) {
-      if (s.nameZh == categoryName) return s.parentKey ?? s.key;
-    }
-    return null;
-  }
-
-  static String _nameOf(String key) {
-    for (final s in CategorySeed.all) {
-      if (s.key == key) return s.nameZh;
-    }
-    return key;
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    // 本月各顶级分类实际支出。
-    final spent = <String, double>{};
-    for (final r in records) {
-      if (r.kind != TransactionKind.expense) continue;
-      if (r.date.year != year || r.date.month != month) continue;
-      final k = _topKeyOf(r.categoryName);
-      if (k == null) continue;
-      spent[k] = (spent[k] ?? 0) + MoneyFormat.toDouble(r.amount);
-    }
-    final rows = <(String, String, double, double)>[];
-    for (final e in budgets.entries) {
-      final b = MoneyFormat.toDouble(e.value);
-      if (b <= 0) continue;
-      rows.add((e.key, _nameOf(e.key), spent[e.key] ?? 0, b));
-    }
-    if (rows.isEmpty) {
-      return Text('还没有设分类预算',
-          style: TextStyle(fontSize: 12, color: scheme.onSurfaceVariant));
-    }
-    rows.sort((a, b) => (b.$3 / b.$4).compareTo(a.$3 / a.$4));
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        for (final r in rows) ...[
-          Row(
-            children: [
-              CatIcon(
-                  categoryKey: r.$1,
-                  emoji: CategorySeed.emojiOf(r.$1),
-                  size: 22),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Text(r.$2,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: Theme.of(context).textTheme.bodyMedium),
-              ),
-              Text(
-                '${MoneyFormat.axisLabel(r.$3)} / ${MoneyFormat.axisLabel(r.$4)}',
-                style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                      fontFamily: 'Nunito',
-                      color: r.$3 > r.$4
-                          ? AppColors.warning
-                          : scheme.onSurfaceVariant,
-                    ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 5),
-          ClipRRect(
-            borderRadius: BorderRadius.circular(3),
-            child: LinearProgressIndicator(
-              value: (r.$3 / r.$4).clamp(0.0, 1.0),
-              minHeight: 6,
-              color: r.$3 > r.$4 ? AppColors.warning : scheme.primary,
-              backgroundColor: scheme.outlineVariant.withValues(alpha: 0.3),
-            ),
-          ),
+          bar(prevColor, prevOf(c)),
           const SizedBox(height: 12),
         ],
       ],
@@ -2882,8 +3483,8 @@ class _StackedBars12 extends StatelessWidget {
                             top: Radius.circular(3)),
                         rodStackItems: [
                           // 花掉的部分（不超过收入的那截）
-                          BarChartRodStackItem(0,
-                              exp[i] < inc[i] ? exp[i] : inc[i], spentColor),
+                          BarChartRodStackItem(
+                              0, exp[i] < inc[i] ? exp[i] : inc[i], spentColor),
                           // 结余（收入 > 支出）
                           if (inc[i] > exp[i])
                             BarChartRodStackItem(exp[i], inc[i], savedColor),
@@ -2908,10 +3509,10 @@ class _StackedBars12 extends StatelessWidget {
               borderData: FlBorderData(show: false),
               titlesData: FlTitlesData(
                 leftTitles: _moneyLeftTitles(scheme, step),
-                rightTitles: const AxisTitles(
-                    sideTitles: SideTitles(showTitles: false)),
-                topTitles: const AxisTitles(
-                    sideTitles: SideTitles(showTitles: false)),
+                rightTitles:
+                    const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                topTitles:
+                    const AxisTitles(sideTitles: SideTitles(showTitles: false)),
                 bottomTitles: AxisTitles(
                   sideTitles: SideTitles(
                     showTitles: true,

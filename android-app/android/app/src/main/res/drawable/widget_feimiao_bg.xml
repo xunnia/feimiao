@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 小组件白卡底：半透明（透出壁纸的毛玻璃感，和 App 内半透明卡片呼应，
+     2026-07-09 视觉升级批）。 -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- 2026-07-10 用户拍板：花壁纸上半透明可读性崩，改回不透明。 -->
+    <solid android:color="#FFFFFFFF" />
+    <corners android:radius="22dp" />
+    <stroke
+        android:width="0.5dp"
+        android:color="#14000000" />
+</shape>

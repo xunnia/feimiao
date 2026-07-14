@@ -2,12 +2,16 @@ import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 
 import '../theme/app_colors.dart';
+import '../theme/app_tokens.dart';
 import 'app_buttons.dart';
+import 'pressable_scale.dart';
 
 /// 全局设置/弹层 UI 零件（对齐 iOS/图二：居中标题、分组白卡、发丝线分隔、iOS 开关）。
 /// 「同类功能同一种设计」——所有设置类界面/弹层都走这几个，别再各写各的。
 
-/// iOS 胶囊开关，打开=主色（守配色铁律，不用通用绿）。
+/// 统一胶囊开关（iOS 标准形态）：槽体常显——开=深色槽+白点，关=浅灰槽+白点。
+/// 2026-07-10 用户点名：关闭态之前只剩一个裸灰点（槽是透明的，半透明卡上
+/// 完全看不出这是个开关），改回经典「灰槽白点」。
 class AppSwitch extends StatelessWidget {
   final bool value;
   final ValueChanged<bool>? onChanged;
@@ -16,10 +20,51 @@ class AppSwitch extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    return CupertinoSwitch(
-      value: value,
-      onChanged: onChanged,
-      activeTrackColor: scheme.primary,
+    final enabled = onChanged != null;
+    final dark = scheme.brightness == Brightness.dark;
+    final trackColor = value
+        ? (dark
+            ? Colors.white.withValues(alpha: 0.92)
+            : const Color(0xFF111111))
+        : scheme.onSurface.withValues(alpha: dark ? 0.28 : 0.16);
+    final thumbColor = value && dark ? const Color(0xFF1C1A18) : Colors.white;
+    return Opacity(
+      opacity: enabled ? 1 : 0.45,
+      child: PressableScale(
+        pressedScale: 0.96,
+        onPressed: enabled ? () => onChanged!(!value) : null,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 180),
+          curve: Curves.easeOutCubic,
+          width: 40,
+          height: 24,
+          padding: const EdgeInsets.all(2.5),
+          decoration: BoxDecoration(
+            color: trackColor,
+            borderRadius: BorderRadius.circular(999),
+          ),
+          child: AnimatedAlign(
+            duration: const Duration(milliseconds: 180),
+            curve: Curves.easeOutCubic,
+            alignment: value ? Alignment.centerRight : Alignment.centerLeft,
+            child: Container(
+              width: 19,
+              height: 19,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: thumbColor,
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: 0.14),
+                    blurRadius: 4,
+                    offset: const Offset(0, 1),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
     );
   }
 }
@@ -33,6 +78,7 @@ class SheetHeader extends StatelessWidget {
   final VoidCallback? onClose;
   final String? actionLabel;
   final VoidCallback? onAction;
+  final Key? actionKey;
   const SheetHeader({
     super.key,
     required this.title,
@@ -40,16 +86,20 @@ class SheetHeader extends StatelessWidget {
     this.onClose,
     this.actionLabel,
     this.onAction,
+    this.actionKey,
   });
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    const sideInset = 12.0;
+    const controlSize = 34.0;
+    const headerHeight = controlSize + sideInset * 2;
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
         SizedBox(
-          height: 48,
+          height: headerHeight,
           child: Stack(
             alignment: Alignment.center,
             children: [
@@ -67,11 +117,11 @@ class SheetHeader extends StatelessWidget {
                 Align(
                   alignment: Alignment.centerLeft,
                   child: Padding(
-                    padding: const EdgeInsets.only(left: 12),
+                    padding: const EdgeInsets.only(left: sideInset),
                     child: AppCircleButton(
                       icon: CupertinoIcons.xmark,
                       iconSize: 18,
-                      size: 34,
+                      size: controlSize,
                       onPressed: onClose,
                     ),
                   ),
@@ -80,8 +130,12 @@ class SheetHeader extends StatelessWidget {
                 Align(
                   alignment: Alignment.centerRight,
                   child: Padding(
-                    padding: const EdgeInsets.only(right: 12),
-                    child: AppPillButton(label: actionLabel!, onPressed: onAction),
+                    padding: const EdgeInsets.only(right: sideInset),
+                    child: AppPillButton(
+                      key: actionKey,
+                      label: actionLabel!,
+                      onPressed: onAction,
+                    ),
                   ),
                 ),
             ],
@@ -93,11 +147,13 @@ class SheetHeader extends StatelessWidget {
             child: Text(
               subtitle!,
               textAlign: TextAlign.center,
-              style: TextStyle(fontSize: 12, color: scheme.onSurfaceVariant),
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w400,
+                color: scheme.onSurfaceVariant.withValues(alpha: 0.68),
+              ),
             ),
           ),
-        Divider(
-            height: 1, color: scheme.outlineVariant.withValues(alpha: 0.5)),
       ],
     );
   }
@@ -129,14 +185,21 @@ class SettingsGroup extends StatelessWidget {
       }
       rows.add(children[i]);
     }
+    // 连续曲率圆角（近似 iOS 超椭圆）：视觉约 22，比普通圆角自然。
     return Container(
       margin: margin,
-      decoration: BoxDecoration(
+      decoration: ShapeDecoration(
         color: AppColors.card(scheme),
-        borderRadius: BorderRadius.circular(16),
+        shape: ContinuousRectangleBorder(
+          borderRadius: BorderRadius.circular(34),
+        ),
       ),
       clipBehavior: Clip.antiAlias,
-      child: Column(mainAxisSize: MainAxisSize.min, children: rows),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: rows,
+      ),
     );
   }
 }
@@ -181,15 +244,16 @@ class SettingsRow extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 mainAxisSize: MainAxisSize.min,
                 children: [
+                  // 走 AppType 字阶令牌（UI 标准）：标题 15.5/w500，
+                  // 副标题 13 中灰——非重点降号+变灰，别再手写。
                   Text(title,
-                      style: TextStyle(
-                          fontSize: 15,
-                          color: titleColor ?? scheme.onSurface)),
+                      style: titleColor == null
+                          ? AppType.rowTitle(scheme)
+                          : AppType.rowTitle(scheme)
+                              .copyWith(color: titleColor)),
                   if (subtitle != null) ...[
                     const SizedBox(height: 2),
-                    Text(subtitle!,
-                        style: TextStyle(
-                            fontSize: 12, color: scheme.onSurfaceVariant)),
+                    Text(subtitle!, style: AppType.secondary(scheme)),
                   ],
                 ],
               ),
@@ -213,15 +277,12 @@ class SettingsSectionLabel extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    // 规格收口到 AppType.sectionLabel（UI 标准唯一出处）。
     return Padding(
       padding: const EdgeInsets.fromLTRB(24, 16, 24, 6),
       child: Align(
         alignment: Alignment.centerLeft,
-        child: Text(text,
-            style: TextStyle(
-                fontSize: 12.5,
-                fontWeight: FontWeight.w500,
-                color: scheme.onSurfaceVariant)),
+        child: Text(text, style: AppType.sectionLabel(scheme)),
       ),
     );
   }

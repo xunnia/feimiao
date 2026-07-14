@@ -1,4 +1,5 @@
 import 'package:decimal/decimal.dart';
+import 'budget_window_resolver.dart';
 import '../models/transaction_kind.dart';
 import '../models/transaction_record.dart';
 import '../statistics/statistics_engine.dart';
@@ -55,6 +56,28 @@ class BudgetStatus {
 class BudgetEngine {
   BudgetEngine._();
 
+  /// Adapts the unified resolver output for legacy consumers.
+  ///
+  /// No configured plan (or an unavailable/conflicting spend result) remains
+  /// null instead of becoming a zero budget. Historical windows have no
+  /// current-cycle daily guidance, so their two legacy daily fields are zero.
+  static BudgetStatus? fromWindowResult(BudgetWindowResult result) {
+    final budget = result.plannedAmount;
+    final spent = result.spentAmount;
+    final remaining = result.remainingAmount;
+    if (budget == null || spent == null || remaining == null) return null;
+
+    final daily = result.currentCycleDailyStatus;
+    return BudgetStatus(
+      monthlyBudget: budget,
+      spentThisMonth: spent,
+      spentToday: daily?.spentTodayAmount ?? Decimal.zero,
+      remaining: remaining,
+      todayAllowance: daily?.todayRemainingAllowanceAmount ?? Decimal.zero,
+      isOverBudget: remaining < Decimal.zero,
+    );
+  }
+
   static BudgetStatus status({
     required Decimal monthlyBudget,
     required List<TransactionRecord> records,
@@ -81,7 +104,8 @@ class BudgetEngine {
     }
 
     final spentBeforeToday = spentThisMonth - spentToday;
-    final remainingDaysInt = dayCount - today + 1 < 1 ? 1 : dayCount - today + 1;
+    final remainingDaysInt =
+        dayCount - today + 1 < 1 ? 1 : dayCount - today + 1;
     final remainingDays = Decimal.fromInt(remainingDaysInt);
     // In decimal v3, Decimal / Decimal returns Rational; convert back to Decimal
     // with sufficient scale (10 decimal places) before subtracting spentToday.

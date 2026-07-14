@@ -1,25 +1,29 @@
 import 'dart:ui' show ImageFilter;
 
 import 'package:flutter/material.dart';
-import 'package:flutter/cupertino.dart' show CupertinoPageRoute, CupertinoIcons;
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
 import 'core/auto_record.dart';
+import 'core/ai/report_task_scheduler.dart';
 import 'core/haptics.dart';
+import 'core/widgets/widget_snapshot_service.dart';
 import 'data/app_repository.dart';
 import 'share_intake.dart';
 import 'theme/app_colors.dart';
+import 'theme/app_theme_controller.dart';
 import 'views/auto_record/auto_record_sheet.dart';
+import 'widgets/app_buttons.dart';
+import 'widgets/app_line_icon.dart';
 import 'widgets/app_toast.dart';
+import 'widgets/book_switch_chip.dart';
 import 'widgets/glass.dart';
 import 'widgets/pressable_scale.dart';
 import 'widgets/slidable_tracker.dart';
 import 'widgets/ios_dialogs.dart';
 import 'widgets/ios_form.dart';
 import 'widgets/ios_menu.dart';
-import 'views/account/personal_center_view.dart';
 import 'views/books/book_sheet.dart';
-import 'views/common/coming_soon_view.dart';
 import 'views/home/ai_chat_panel.dart';
 import 'views/home/home_view.dart';
 import 'views/home/manual_add_sheet.dart';
@@ -32,30 +36,49 @@ import 'views/settings/budget_setting_view.dart';
 import 'views/settings/recurring_view.dart';
 import 'views/settings/categories_view.dart';
 import 'views/settings/import_export_view.dart';
+import 'views/settings/app_update_flow.dart';
+import 'views/settings/settings_view.dart';
 import 'views/settings/tags_view.dart';
 import 'views/statistics/statistics_view.dart';
 import 'views/transactions/reimburse_view.dart';
 import 'views/transactions/transaction_list_view.dart';
+import 'widgets/app_page_route.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
+    statusBarColor: Colors.transparent,
+    statusBarIconBrightness: Brightness.dark,
+    statusBarBrightness: Brightness.light,
+    systemNavigationBarColor: Colors.transparent,
+    systemNavigationBarIconBrightness: Brightness.dark,
+  ));
 
   final repo = AppRepository();
   await repo.init();
+  await ReportTaskScheduler.initialize();
+  await ReportTaskScheduler.reschedulePending(repo);
+  WidgetSnapshotService.instance.attach(repo);
+  // 主题偏好要在首帧前灌进 AppColors，否则会闪一下默认暖橙再切换。
+  await AppThemeController.instance.load();
 
   ShareIntake.init(); // 「分享到肥喵」：监听系统分享，自动记账
-  autoRecordWatcher.start(); // 自动记账：回到 App 时排空通知队列、弹确认表
+  _autoRecordWatcher.start(); // 自动记账：回到 App 时读取通知队列、弹确认表
 
   runApp(
-    ChangeNotifierProvider<AppRepository>.value(
-      value: repo,
+    MultiProvider(
+      providers: [
+        ChangeNotifierProvider<AppRepository>.value(value: repo),
+        ChangeNotifierProvider<AppThemeController>.value(
+            value: AppThemeController.instance),
+      ],
       child: const QingJiApp(),
     ),
   );
 }
 
-/// 自动记账巡查：App 首帧后与每次回到前台时，取出原生抓到的支付通知，
-/// 本地解析成候选，弹「确认记账」表（无候选则静默）。用全局 navigatorKey 弹层。
+/// 自动记账巡查：App 首帧后与每次回到前台时读取支付通知，用户明确处理后
+/// 才从原生队列删除。用全局 navigatorKey 弹层。
 class _AutoRecordWatcher with WidgetsBindingObserver {
   bool _busy = false;
 
@@ -73,11 +96,15 @@ class _AutoRecordWatcher with WidgetsBindingObserver {
     if (_busy) return;
     _busy = true;
     try {
-      final items = await AutoRecord.drain();
+      final items = await AutoRecord.pending();
       if (items.isEmpty) return;
       final ctx = ShareIntake.navigatorKey.currentContext;
       if (ctx == null) return;
-      await showAutoRecordSheet(ctx, items);
+      if (!ctx.mounted) return;
+      final handledIds = await showAutoRecordSheet(ctx, items);
+      if (handledIds != null && handledIds.isNotEmpty) {
+        await AutoRecord.acknowledgeIds(handledIds);
+      }
     } catch (_) {
     } finally {
       _busy = false;
@@ -85,20 +112,25 @@ class _AutoRecordWatcher with WidgetsBindingObserver {
   }
 }
 
-final _AutoRecordWatcher autoRecordWatcher = _AutoRecordWatcher();
+final _autoRecordWatcher = _AutoRecordWatcher();
 
 class QingJiApp extends StatelessWidget {
   const QingJiApp({super.key});
 
   @override
   Widget build(BuildContext context) {
+    // 主题一变（色卡/滑杆/极简）整棵树重建；暮夜色卡强制深色。
+    final appTheme = context.watch<AppThemeController>();
     return MaterialApp(
       title: '肥喵记账',
       debugShowCheckedModeBanner: false,
       navigatorKey: ShareIntake.navigatorKey,
       theme: AppTheme.light(),
       darkTheme: AppTheme.dark(),
-      themeMode: ThemeMode.system,
+      themeMode: appTheme.forceDark ? ThemeMode.dark : ThemeMode.system,
+      // 暖渐变背景由转场器按路由注入（app_colors.dart 的
+      // _GradientCupertinoTransitionsBuilder）：每页自带不透明渐变底，
+      // 转场不透视、合成器按不透明页优化，不在这里全局铺。
       home: const RootShell(),
     );
   }
@@ -111,10 +143,10 @@ class RootShell extends StatefulWidget {
   const RootShell({super.key});
 
   @override
-  State<RootShell> createState() => _RootShellState();
+  State<RootShell> createState() => RootShellState();
 }
 
-class _RootShellState extends State<RootShell>
+class RootShellState extends State<RootShell>
     with SingleTickerProviderStateMixin {
   late final AnimationController _drawerCtl = AnimationController(
     vsync: this,
@@ -129,10 +161,17 @@ class _RootShellState extends State<RootShell>
   double _ptrLastX = 0;
   double _ptrLastDx = 0;
 
-  void _openDrawer() =>
-      _drawerCtl.animateTo(1, curve: Curves.easeOutCubic);
-  void _closeDrawer() =>
-      _drawerCtl.animateTo(0, curve: Curves.easeOutCubic);
+  void _openDrawer() => _drawerCtl.animateTo(1, curve: Curves.easeOutCubic);
+  void _closeDrawer() => _drawerCtl.animateTo(0, curve: Curves.easeOutCubic);
+
+  @override
+  void initState() {
+    super.initState();
+    // 启动后静默检查更新（延迟几秒别抢首屏；失败/没更新都不打扰）。
+    Future.delayed(const Duration(seconds: 4), () {
+      if (mounted) checkAppUpdate(context, silent: true);
+    });
+  }
 
   /// 指针抬起：按最后一段滑动方向（快挥）或当前进度落定开/关。
   void _settlePointerDrag() {
@@ -156,6 +195,8 @@ class _RootShellState extends State<RootShell>
 
   @override
   Widget build(BuildContext context) {
+    // 订阅主题：色卡/滑杆一变整个主框架（背景/卡片/遮罩）立即重绘。
+    context.watch<AppThemeController>();
     final scheme = Theme.of(context).colorScheme;
     final screenW = MediaQuery.sizeOf(context).width;
     // 抽屉占 75%（用户 0703：0.82 偏大）。
@@ -163,7 +204,10 @@ class _RootShellState extends State<RootShell>
 
     return AnimatedBuilder(
       animation: _drawerCtl,
-      builder: (context, _) {
+      child: RepaintBoundary(
+        child: _MainScaffold(onMenu: _openDrawer),
+      ),
+      builder: (context, mainChild) {
         // 主页平移量恒等于进度值（线性）：拖动时 = 手指位移，1:1 跟手不跑手前面；
         // 回弹的缓动交给 _openDrawer/_closeDrawer 的 animateTo(easeOutCubic) 在
         // 时间维度上做，所以既顺滑又不会在松手瞬间跳一下。
@@ -176,7 +220,8 @@ class _RootShellState extends State<RootShell>
             if (!didPop) _closeDrawer();
           },
           child: Scaffold(
-            backgroundColor: AppColors.appBg(scheme),
+            // 透明：透出路由级暖渐变底（抽屉推开后露出的背景也是渐变）。
+            backgroundColor: Colors.transparent,
             body: Stack(
               children: [
                 // ── 底层：抽屉面板（固定不动，主页推开后露出来）──
@@ -185,9 +230,15 @@ class _RootShellState extends State<RootShell>
                   top: 0,
                   bottom: 0,
                   width: drawerW,
-                  child: _DrawerPanel(
-                    onClose: _closeDrawer,
-                    closed: _drawerCtl.value < 0.01,
+                  child: IgnorePointer(
+                    ignoring: _drawerCtl.value < 0.01,
+                    child: ExcludeSemantics(
+                      excluding: _drawerCtl.value < 0.01,
+                      child: _DrawerPanel(
+                        onClose: _closeDrawer,
+                        closed: _drawerCtl.value < 0.01,
+                      ),
+                    ),
                   ),
                 ),
                 // ── 上层：主页面卡片，右移 + 圆角 + 阴影 ──
@@ -233,14 +284,24 @@ class _RootShellState extends State<RootShell>
                     child: Container(
                       decoration: BoxDecoration(
                         borderRadius: BorderRadius.circular(26 * t),
-                        // 阴影收敛（blur 小、不偏移），避免在左下圆角外
-                        // 晕出一块灰底。
-                        boxShadow: t > 0.01
+                        border: t > 0.01
+                            ? Border.all(
+                                color: scheme.onSurface.withValues(
+                                  alpha: 0.08 * t,
+                                ),
+                                width: 0.7,
+                              )
+                            : null,
+                        // 向抽屉侧投影，明确区分上下两层页面。
+                        boxShadow: t > 0.08
                             ? [
                                 BoxShadow(
-                                  color:
-                                      Colors.black.withValues(alpha: 0.10 * t),
-                                  blurRadius: 18,
+                                  color: Colors.black.withValues(
+                                    alpha: 0.14 * t,
+                                  ),
+                                  blurRadius: 24,
+                                  spreadRadius: 1,
+                                  offset: const Offset(-4, 0),
                                 ),
                               ]
                             : null,
@@ -249,26 +310,25 @@ class _RootShellState extends State<RootShell>
                         borderRadius: BorderRadius.circular(26 * t),
                         child: Stack(
                           children: [
-                            _MainScaffold(onMenu: _openDrawer),
-                            // 打开时主页盖白色半透明模糊遮罩（对齐 Claude），
-                            // 点一下关抽屉。
+                            // 主页卡片自带不透明渐变底：主页 Scaffold 是透明的，
+                            // 不垫这层会透出下面的抽屉面板。
+                            Positioned.fill(
+                              child: DecoratedBox(
+                                decoration:
+                                    AppColors.pageBackground(scheme.brightness),
+                              ),
+                            ),
+                            mainChild!,
+                            // 打开时主页盖轻遮罩，点一下关抽屉。
+                            // 拖动中不再做全屏实时模糊，避免右滑抽屉卡顿。
                             if (_drawerCtl.value > 0.01)
                               Positioned.fill(
                                 child: GestureDetector(
                                   behavior: HitTestBehavior.opaque,
                                   onTap: _closeDrawer,
-                                  child: BackdropFilter(
-                                    filter: ImageFilter.blur(
-                                      sigmaX: 5 * t,
-                                      sigmaY: 5 * t,
-                                    ),
-                                    child: Container(
-                                      // 遮罩跟随主题：深色模式用背景色压暗，
-                                      // 不然白纱盖深色页面像屏幕坏了。
-                                      color: AppColors.appBg(Theme.of(context)
-                                              .colorScheme)
-                                          .withValues(alpha: 0.35 * t),
-                                    ),
+                                  child: ColoredBox(
+                                    color: AppColors.appBg(scheme)
+                                        .withValues(alpha: 0.22 * t),
                                   ),
                                 ),
                               ),
@@ -288,26 +348,86 @@ class _RootShellState extends State<RootShell>
 }
 
 /// 主页面本体（顶栏 + 账单流 + 底部渐变 + 输入栏）。
-class _MainScaffold extends StatelessWidget {
+class _MainScaffold extends StatefulWidget {
   final VoidCallback onMenu;
 
   const _MainScaffold({required this.onMenu});
 
   @override
+  State<_MainScaffold> createState() => _MainScaffoldState();
+}
+
+class _MainScaffoldState extends State<_MainScaffold> {
+  final GlobalKey _inputKey = GlobalKey();
+  double _inputInset = 150;
+  bool _measureScheduled = false;
+
+  void _measureInputBar() {
+    if (_measureScheduled) return;
+    _measureScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _measureScheduled = false;
+      final ctx = _inputKey.currentContext;
+      if (ctx == null || !mounted) return;
+      final box = ctx.findRenderObject() as RenderBox?;
+      final next = box?.size.height;
+      if (next == null || next <= 0) return;
+      final inset = next + 18;
+      if ((inset - _inputInset).abs() > 1) {
+        setState(() => _inputInset = inset);
+      }
+    });
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _measureInputBar();
+  }
+
+  @override
   Widget build(BuildContext context) {
+    _measureInputBar();
     final scheme = Theme.of(context).colorScheme;
     return Scaffold(
-      backgroundColor: AppColors.appBg(scheme),
+      resizeToAvoidBottomInset: false,
+      extendBodyBehindAppBar: true,
+      // 透明：透出 RootShell 垫的暖渐变底。之前这里画不透明 appBg 灰，
+      // 把渐变整个盖住了——主页一直没有主题色的真凶。
+      backgroundColor: Colors.transparent,
       appBar: AppBar(
         automaticallyImplyLeading: false,
+        // 状态栏图标必须跟主题走：深色主题背景近黑，硬编码深色图标
+        // 会让时间/电量在深色模式下看不见。
+        systemOverlayStyle: scheme.brightness == Brightness.dark
+            ? const SystemUiOverlayStyle(
+                statusBarColor: Colors.transparent,
+                statusBarIconBrightness: Brightness.light,
+                statusBarBrightness: Brightness.dark,
+                systemNavigationBarColor: Colors.transparent,
+                systemNavigationBarIconBrightness: Brightness.light,
+              )
+            : const SystemUiOverlayStyle(
+                statusBarColor: Colors.transparent,
+                statusBarIconBrightness: Brightness.dark,
+                statusBarBrightness: Brightness.light,
+                systemNavigationBarColor: Colors.transparent,
+                systemNavigationBarIconBrightness: Brightness.dark,
+              ),
         titleSpacing: 0,
-        backgroundColor: AppColors.appBg(scheme),
+        backgroundColor: Colors.transparent,
         surfaceTintColor: Colors.transparent,
+        flexibleSpace: const _TopFrostedFade(
+          blur: 12,
+          topAlpha: 0.70,
+          midAlpha: 0.24,
+          bottomAlpha: 0.0,
+        ),
         title: Row(
           children: [
             Padding(
               padding: const EdgeInsets.only(left: 12),
-              child: _MenuGlyphButton(onTap: onMenu),
+              child: _MenuGlyphButton(onTap: widget.onMenu),
             ),
             const Spacer(),
             // 搜索（在账本左边）
@@ -325,15 +445,14 @@ class _MainScaffold extends StatelessWidget {
         children: [
           Positioned.fill(
             child: HomeView(
+              bottomInset: _inputInset,
               onShowTransactions: () => Navigator.push<void>(
                 context,
-                CupertinoPageRoute<void>(
-                    builder: (_) => const TransactionListView()),
+                AppPageRoute<void>(builder: (_) => const TransactionListView()),
               ),
             ),
           ),
-          // 底部渐变过渡（对标 Telegram 聊天底部）：列表内容滑到输入栏后面时
-          // 渐渐隐入背景色，而不是被“一刀切”遮住。不拦截点击。
+
           Positioned(
             left: 0,
             right: 0,
@@ -356,13 +475,71 @@ class _MainScaffold extends StatelessWidget {
               ),
             ),
           ),
-          const Positioned(
+          // 底部渐变过渡（对标 Telegram 聊天底部）：列表内容滑到输入栏后面时
+          // 渐渐隐入背景色，而不是被“一刀切”遮住。不拦截点击。
+          Positioned(
             left: 0,
             right: 0,
             bottom: 0,
-            child: RecordInputBar(),
+            child: NotificationListener<SizeChangedLayoutNotification>(
+              onNotification: (_) {
+                _measureInputBar();
+                return false;
+              },
+              child: SizeChangedLayoutNotifier(
+                child: RecordInputBar(key: _inputKey),
+              ),
+            ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+class _TopFrostedFade extends StatelessWidget {
+  final double blur;
+  final double topAlpha;
+  final double midAlpha;
+  final double bottomAlpha;
+
+  const _TopFrostedFade({
+    required this.blur,
+    required this.topAlpha,
+    required this.midAlpha,
+    required this.bottomAlpha,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final bg = AppColors.topFrostTint(Theme.of(context).colorScheme);
+    return ClipRect(
+      child: ShaderMask(
+        blendMode: BlendMode.dstIn,
+        shaderCallback: (bounds) => const LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: [Colors.white, Colors.white, Colors.transparent],
+          stops: [0.0, 0.46, 1.0],
+        ).createShader(bounds),
+        child: BackdropFilter(
+          filter: ImageFilter.blur(sigmaX: blur, sigmaY: blur),
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topCenter,
+                end: Alignment.bottomCenter,
+                colors: [
+                  bg.withValues(alpha: topAlpha),
+                  bg.withValues(alpha: midAlpha),
+                  bg.withValues(alpha: bottomAlpha),
+                ],
+                stops: const [0.0, 0.58, 1.0],
+              ),
+            ),
+            child: const SizedBox.expand(),
+          ),
+        ),
       ),
     );
   }
@@ -375,25 +552,24 @@ class _MainScaffold extends StatelessWidget {
 /// 抽屉功能项注册表：key 用于持久化排序，别改已有 key。
 class _DrawerFn {
   final String key;
-  final IconData icon;
+  final AppLineIconData icon;
   final String label;
 
   const _DrawerFn(this.key, this.icon, this.label);
 }
 
 const List<_DrawerFn> _kDrawerFns = [
-  _DrawerFn('stats', Icons.analytics_outlined, '统计数据'),
-  _DrawerFn('assets', Icons.account_balance_wallet_outlined, '资产管理'),
-  _DrawerFn('budget', Icons.calendar_today_outlined, '预算管理'),
-  _DrawerFn('savings', Icons.savings_outlined, '存钱目标'),
-  _DrawerFn('assistant', Icons.auto_awesome, '喵助手'),
-  _DrawerFn('categories', Icons.category_outlined, '分类管理'),
-  _DrawerFn('tags', Icons.label_outline, '标签管理'),
-  _DrawerFn('import', Icons.import_export_outlined, '导入导出'),
-  _DrawerFn('reimburse', Icons.receipt_long_outlined, '待报销'),
-  _DrawerFn('recurring', Icons.schedule_outlined, '定时记账'),
-  _DrawerFn('autorecord', Icons.notifications_active_outlined, '自动记账'),
-  _DrawerFn('widgets', Icons.widgets_outlined, '小组件'),
+  _DrawerFn('stats', AppLineIcons.chart, '统计数据'),
+  _DrawerFn('assets', AppLineIcons.wallet, '资产管理'),
+  _DrawerFn('budget', AppLineIcons.calendar, '预算管理'),
+  _DrawerFn('savings', AppLineIcons.savings, '存钱目标'),
+  _DrawerFn('assistant', AppLineIcons.sparkles, '喵助手'),
+  _DrawerFn('categories', AppLineIcons.grid, '分类管理'),
+  _DrawerFn('tags', AppLineIcons.tag, '标签管理'),
+  _DrawerFn('import', AppLineIcons.importExport, '导入导出'),
+  _DrawerFn('reimburse', AppLineIcons.receipt, '待报销'),
+  _DrawerFn('recurring', AppLineIcons.calendarClock, '定时记账'),
+  _DrawerFn('autorecord', AppLineIcons.bell, '自动记账'),
 ];
 
 class _DrawerPanel extends StatefulWidget {
@@ -426,7 +602,7 @@ class _DrawerPanelState extends State<_DrawerPanel> {
     widget.onClose();
     Navigator.push<void>(
       context,
-      CupertinoPageRoute<void>(builder: (_) => page),
+      AppPageRoute<void>(builder: (_) => page),
     );
   }
 
@@ -469,8 +645,6 @@ class _DrawerPanelState extends State<_DrawerPanel> {
         _popAndPush(const RecurringView());
       case 'autorecord':
         _popAndPush(const AutoRecordSettingView());
-      case 'widgets':
-        _popAndPush(const ComingSoonView(title: '小组件'));
     }
   }
 
@@ -483,7 +657,7 @@ class _DrawerPanelState extends State<_DrawerPanel> {
   /// 全屏喵助手作为「页面」push 进去：原生从右滑入 + 可侧滑返回，不再是弹层。
   void _pushAssistant() {
     Navigator.of(context).push(
-      CupertinoPageRoute<void>(
+      AppPageRoute<void>(
         builder: (_) => AiChatPanel(
           fullScreen: true,
           onSwitchToManual: _openManualFromDrawer,
@@ -493,11 +667,17 @@ class _DrawerPanelState extends State<_DrawerPanel> {
   }
 
   void _openManualFromDrawer() {
+    if (Navigator.of(context).canPop()) {
+      Navigator.of(context).pop();
+    }
     showManualAddSheet(
       context,
+      fastSwitch: true,
       onSwitchToAi: () {
-        Navigator.pop(context);
-        _pushAssistant();
+        Navigator.of(context, rootNavigator: true).pop();
+        Future<void>.delayed(const Duration(milliseconds: 28), () {
+          if (mounted) _pushAssistant();
+        });
       },
     );
   }
@@ -540,8 +720,7 @@ class _DrawerPanelState extends State<_DrawerPanel> {
             ? Text(b.remark,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
-                style:
-                    TextStyle(fontSize: 12, color: scheme.onSurfaceVariant))
+                style: TextStyle(fontSize: 12, color: scheme.onSurfaceVariant))
             : null,
         trailing: Builder(
           builder: (iconCtx) => GestureDetector(
@@ -578,11 +757,9 @@ class _DrawerPanelState extends State<_DrawerPanel> {
             ),
           ),
         ),
-        tileColor: selected ? scheme.surfaceContainerHighest : null,
-        shape:
-            RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-        contentPadding:
-            const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
+        tileColor: selected ? AppColors.selectedCard(scheme) : null,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
         onTap: () {
           repo.switchBook(b.id);
           widget.onClose();
@@ -600,7 +777,7 @@ class _DrawerPanelState extends State<_DrawerPanel> {
           height: h,
           alignment: Alignment.center,
           decoration: BoxDecoration(
-            color: scheme.surfaceContainerHighest,
+            color: AppColors.selectedCard(scheme),
             borderRadius: BorderRadius.circular(10),
           ),
           child: Text(b.icon, style: const TextStyle(fontSize: 24)),
@@ -683,7 +860,6 @@ class _DrawerPanelState extends State<_DrawerPanel> {
   }
 
   void _onReorder(int oldIndex, int newIndex, List<_DrawerFn> fns) {
-    if (newIndex > oldIndex) newIndex--;
     final keys = fns.map((f) => f.key).toList();
     final k = keys.removeAt(oldIndex);
     keys.insert(newIndex, k);
@@ -700,7 +876,8 @@ class _DrawerPanelState extends State<_DrawerPanel> {
     final shown = _moreExpanded ? fns : fns.take(5).toList();
 
     return Material(
-      color: AppColors.appBg(scheme),
+      // 透明：透出路由级暖渐变底（抽屉和主页共一层渐变，推开不换色）。
+      color: Colors.transparent,
       child: SafeArea(
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -744,7 +921,7 @@ class _DrawerPanelState extends State<_DrawerPanel> {
                       shrinkWrap: true,
                       physics: const NeverScrollableScrollPhysics(),
                       buildDefaultDragHandles: false,
-                      onReorder: (o, n) => _onReorder(o, n, fns),
+                      onReorderItem: (o, n) => _onReorder(o, n, fns),
                       children: [
                         for (int i = 0; i < shown.length; i++)
                           ReorderableDelayedDragStartListener(
@@ -759,7 +936,7 @@ class _DrawerPanelState extends State<_DrawerPanel> {
                       ],
                     ),
 
-                    // 「更多 ⌄ / 收起 ⌃」折叠开关
+                    // 「更多 / 收起」折叠开关：右侧不再重复放展开符号。
                     InkWell(
                       onTap: () =>
                           setState(() => _moreExpanded = !_moreExpanded),
@@ -779,14 +956,6 @@ class _DrawerPanelState extends State<_DrawerPanel> {
                                 color: scheme.onSurfaceVariant,
                               ),
                             ),
-                            const SizedBox(width: 4),
-                            Icon(
-                              _moreExpanded
-                                  ? Icons.expand_less
-                                  : Icons.expand_more,
-                              size: 18,
-                              color: scheme.onSurfaceVariant,
-                            ),
                           ],
                         ),
                       ),
@@ -803,12 +972,11 @@ class _DrawerPanelState extends State<_DrawerPanel> {
                       padding: const EdgeInsets.fromLTRB(20, 4, 20, 6),
                       child: Text(
                         '我的账本',
-                        style:
-                            Theme.of(context).textTheme.labelSmall?.copyWith(
-                                  color: scheme.onSurfaceVariant,
-                                  fontWeight: FontWeight.w600,
-                                  letterSpacing: 0.5,
-                                ),
+                        style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                              color: scheme.onSurfaceVariant,
+                              fontWeight: FontWeight.w600,
+                              letterSpacing: 0.5,
+                            ),
                       ),
                     ),
                     // 账本列表：总账本第一、加星靠前；⋮ 加星/编辑/改名/删除
@@ -820,34 +988,43 @@ class _DrawerPanelState extends State<_DrawerPanel> {
               ),
             ),
 
-            // ── 底部：头像（左下角，对齐 Claude）+ 新建账本胶囊（右侧多留边）──
+            // ── 底部：高频新建账本在左，设置齿轮在右（全局唯一设置入口）。──
             Padding(
-              padding: const EdgeInsets.fromLTRB(16, 8, 24, 16),
+              padding: const EdgeInsets.fromLTRB(16, 8, 18, 16),
               child: Row(
                 children: [
-                  _AccountAvatar(
-                    onTap: () {
-                      widget.onClose();
-                      Navigator.push<void>(
-                        context,
-                        CupertinoPageRoute<void>(
-                            builder: (_) => const PersonalCenterView()),
-                      );
-                    },
-                  ),
-                  const Spacer(),
                   ElevatedButton.icon(
-                    icon: const Icon(Icons.add, size: 18),
+                    icon: AppLineIcon(
+                      AppLineIcons.squarePen,
+                      size: 19,
+                      color: scheme.onSurface,
+                    ),
                     label: const Text('新建账本'),
                     onPressed: () => showBookSheet(context),
                     style: ElevatedButton.styleFrom(
-                      backgroundColor: scheme.onSurface,
-                      foregroundColor: scheme.surface,
+                      backgroundColor: AppColors.card(scheme),
+                      foregroundColor: scheme.onSurface,
                       shape: const StadiumBorder(),
                       elevation: 0,
                       padding: const EdgeInsets.symmetric(
                           horizontal: 22, vertical: 12),
+                      side: BorderSide(color: AppColors.hairline(scheme)),
                     ),
+                  ),
+                  const Spacer(),
+                  // 设置钮：走全局标准件 AppCircleButton（主页顶栏/返回键/
+                  // 设置✕同款），别再手搓白圆+阴影（用户点名两次了）。
+                  AppCircleButton.custom(
+                    iconWidget: AppLineIcon(
+                      AppLineIcons.settings,
+                      size: 24,
+                      color: scheme.onSurface,
+                    ),
+                    size: 44,
+                    onPressed: () {
+                      widget.onClose();
+                      showSettingsSheet(context);
+                    },
                   ),
                 ],
               ),
@@ -865,13 +1042,14 @@ class _BookSwitchChip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
     final repo = context.watch<AppRepository>();
-    final book = repo.currentBook ??
-        (repo.books.isNotEmpty ? repo.books.first : null);
+    final book =
+        repo.currentBook ?? (repo.books.isNotEmpty ? repo.books.first : null);
 
     return Builder(
-      builder: (ctx) => PressableScale(
+      builder: (ctx) => AppBookSwitchChip(
+        iconText: book?.icon ?? '📒',
+        label: book?.name ?? '账本',
         onPressed: () => showIosMenu(ctx, [
           for (final b in repo.books)
             IosMenuItem(
@@ -882,36 +1060,6 @@ class _BookSwitchChip extends StatelessWidget {
               onTap: () => repo.switchBook(b.id),
             ),
         ]),
-        child: GlassSurface(
-          radius: 18,
-          blur: 0, // 纯色背景，模糊看不出来，省 GPU
-          padding: const EdgeInsets.symmetric(horizontal: 10),
-          child: SizedBox(
-            height: 36,
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(book?.icon ?? '📒', style: const TextStyle(fontSize: 15)),
-                const SizedBox(width: 5),
-                ConstrainedBox(
-                  constraints: const BoxConstraints(maxWidth: 120),
-                  child: Text(
-                    book?.name ?? '账本',
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: Theme.of(ctx).textTheme.bodyMedium?.copyWith(
-                          fontWeight: FontWeight.w500,
-                          color: scheme.onSurface,
-                        ),
-                  ),
-                ),
-                const SizedBox(width: 2),
-                Icon(CupertinoIcons.chevron_down,
-                    size: 14, color: scheme.onSurfaceVariant),
-              ],
-            ),
-          ),
-        ),
       ),
     );
   }
@@ -926,7 +1074,7 @@ class _SearchIconButton extends StatelessWidget {
     final scheme = Theme.of(context).colorScheme;
     return PressableScale(
       onPressed: () => Navigator.of(context).push(
-        CupertinoPageRoute<void>(builder: (_) => const SearchView()),
+        AppPageRoute<void>(builder: (_) => const SearchView()),
       ),
       child: SizedBox(
         width: 38,
@@ -992,7 +1140,7 @@ class _MenuGlyphButton extends StatelessWidget {
 }
 
 class _DrawerItem extends StatelessWidget {
-  final IconData icon;
+  final AppLineIconData icon;
   final String label;
   final VoidCallback onTap;
 
@@ -1012,7 +1160,11 @@ class _DrawerItem extends StatelessWidget {
         dense: true,
         visualDensity: const VisualDensity(vertical: -1),
         minLeadingWidth: 0,
-        leading: Icon(icon, size: 20, color: scheme.onSurfaceVariant),
+        leading: AppLineIcon(
+          icon,
+          size: 21,
+          color: scheme.onSurfaceVariant,
+        ),
         horizontalTitleGap: 12,
         title: Text(
           label,
@@ -1024,47 +1176,7 @@ class _DrawerItem extends StatelessWidget {
         ),
         onTap: onTap,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-        contentPadding:
-            const EdgeInsets.symmetric(horizontal: 12, vertical: 0),
-      ),
-    );
-  }
-}
-
-/// 抽屉左下角账号头像：未登录显示 👤，登录后显示用户名首字。点进个人中心。
-/// 与全 App 圆形按钮同一套设计（玻璃白底+细边，纯色背景免模糊）。
-class _AccountAvatar extends StatelessWidget {
-  final VoidCallback onTap;
-
-  /// 登录后传入用户名首字；未登录为 null。
-  final String? initial;
-
-  const _AccountAvatar({required this.onTap, this.initial});
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return PressableScale(
-      onPressed: onTap,
-      child: SizedBox(
-        width: 38,
-        height: 38,
-        child: GlassSurface(
-          circle: true,
-          blur: 0,
-          child: Center(
-            child: initial == null
-                ? Icon(Icons.person_outline,
-                    size: 20, color: scheme.onSurfaceVariant)
-                : Text(
-                    initial!,
-                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                          fontWeight: FontWeight.w600,
-                          color: scheme.onSurface,
-                        ),
-                  ),
-          ),
-        ),
+        contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 0),
       ),
     );
   }

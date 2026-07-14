@@ -6,15 +6,16 @@ import '../../core/auto_record.dart';
 import '../../core/models/category_seed.dart';
 import '../../core/models/transaction_kind.dart';
 import '../../core/money_format.dart';
+import '../../core/transaction_time.dart';
 import '../../data/app_repository.dart';
 import '../../theme/app_colors.dart';
 import '../../widgets/app_toast.dart';
 
 /// 「喵盯到几笔消费」确认表：本地解析后的候选，勾选要记的，一键全部记下。
 /// 不静默直接入账，避免抓错/重复（退款、余额变动等）直接污染账本。
-Future<void> showAutoRecordSheet(
+Future<List<String>?> showAutoRecordSheet(
     BuildContext context, List<AutoCandidate> items) {
-  return showModalBottomSheet<void>(
+  return showModalBottomSheet<List<String>>(
     context: context,
     isScrollControlled: true,
     backgroundColor: Colors.transparent,
@@ -31,8 +32,9 @@ class _AutoRecordSheet extends StatefulWidget {
 }
 
 class _AutoRecordSheetState extends State<_AutoRecordSheet> {
-  late final List<bool> _checked =
-      List<bool>.filled(widget.items.length, true);
+  late final List<bool> _checked = [
+    for (final item in widget.items) !item.isRefund,
+  ];
   bool _saving = false;
 
   int get _selectedCount => _checked.where((c) => c).length;
@@ -41,42 +43,57 @@ class _AutoRecordSheetState extends State<_AutoRecordSheet> {
     if (_saving) return;
     setState(() => _saving = true);
     final repo = context.read<AppRepository>();
-    final accountId = repo.accounts.isNotEmpty ? repo.accounts.first.id : null;
+    final accountId = repo.transactionAccounts.firstOrNull?.id;
     if (accountId == null) {
-      showAppToast(context, '请先在「资产管理」里加一个账户',
-          icon: Icons.info_outline);
+      showAppToast(context, '请先在「资产管理」里加一个账户', icon: Icons.info_outline);
       setState(() => _saving = false);
       return;
     }
-    int n = 0;
-    for (var i = 0; i < widget.items.length; i++) {
-      if (!_checked[i]) continue;
-      final c = widget.items[i];
-      final wantKey = c.categoryKey ??
-          (c.kind == TransactionKind.income
-              ? 'otherIncome'
-              : CategorySeed.fallbackExpenseKey);
-      int? catId;
-      for (final x in repo.categories) {
-        if (x.kind == c.kind && x.key == wantKey) {
-          catId = x.id;
-          break;
+    var n = 0;
+    try {
+      for (var i = 0; i < widget.items.length; i++) {
+        if (!_checked[i]) continue;
+        final c = widget.items[i];
+        if (c.isRefund) continue;
+        final wantKey = c.categoryKey ??
+            (c.kind == TransactionKind.income
+                ? 'otherIncome'
+                : CategorySeed.fallbackExpenseKey);
+        int? catId;
+        for (final x in repo.categories) {
+          if (x.kind == c.kind && x.key == wantKey) {
+            catId = x.id;
+            break;
+          }
         }
+        await repo.addTransaction(
+          kind: c.kind,
+          amount: c.amount,
+          categoryId: catId,
+          accountId: accountId,
+          note: c.text.length > 40 ? c.text.substring(0, 40) : c.text,
+          date: c.time,
+          timePrecision: TransactionTimePrecision.exact,
+          reimbursable: SmartTags.isReimbursable(c.text),
+          autoRecordSourceId: c.sourceId,
+        );
+        n++;
       }
-      await repo.addTransaction(
-        kind: c.kind,
-        amount: c.amount,
-        categoryId: catId,
-        accountId: accountId,
-        note: c.text.length > 40 ? c.text.substring(0, 40) : c.text,
-        date: c.time,
-        reimbursable: SmartTags.isReimbursable(c.text),
-      );
-      n++;
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _saving = false);
+      showAppToast(context, '保存没有完成，请稍后重试', icon: Icons.info_outline);
+      return;
     }
     if (!mounted) return;
-    showAppToast(context, '喵帮你记下了 $n 笔～');
-    Navigator.of(context).pop();
+    showAppToast(
+      context,
+      n == 0 ? '没有新增普通账单' : '喵帮你记下了 $n 笔～',
+    );
+    Navigator.of(context).pop([
+      for (final item in widget.items)
+        if (!item.isRefund) item.sourceId,
+    ]);
   }
 
   @override
@@ -109,7 +126,8 @@ class _AutoRecordSheetState extends State<_AutoRecordSheet> {
             ),
           ),
           Text('喵盯到 ${widget.items.length} 笔可能的消费',
-              style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w700)),
+              style:
+                  const TextStyle(fontSize: 17, fontWeight: FontWeight.w600)),
           const SizedBox(height: 2),
           Text('勾掉不想记的，其余一键记下',
               style: TextStyle(fontSize: 12, color: scheme.onSurfaceVariant)),
@@ -127,7 +145,24 @@ class _AutoRecordSheetState extends State<_AutoRecordSheet> {
             children: [
               Expanded(
                 child: OutlinedButton(
-                  onPressed: _saving ? null : () => Navigator.of(context).pop(),
+                  onPressed: _saving
+                      ? null
+                      : () => Navigator.of(context).pop([
+                            for (final item in widget.items) item.sourceId,
+                          ]),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: scheme.onSurface,
+                    side: BorderSide(
+                      color: scheme.outlineVariant.withValues(alpha: 0.56),
+                      width: 0.7,
+                    ),
+                    minimumSize: const Size.fromHeight(40),
+                    shape: const StadiumBorder(),
+                    textStyle: const TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w400,
+                    ),
+                  ),
                   child: const Text('忽略'),
                 ),
               ),
@@ -137,6 +172,16 @@ class _AutoRecordSheetState extends State<_AutoRecordSheet> {
                 child: FilledButton(
                   onPressed:
                       (_saving || _selectedCount == 0) ? null : _saveSelected,
+                  style: FilledButton.styleFrom(
+                    backgroundColor: scheme.onSurface,
+                    foregroundColor: scheme.surface,
+                    minimumSize: const Size.fromHeight(40),
+                    shape: const StadiumBorder(),
+                    textStyle: const TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
                   child: Text(_saving ? '记账中…' : '记下这 $_selectedCount 笔'),
                 ),
               ),
@@ -155,7 +200,8 @@ class _AutoRecordSheetState extends State<_AutoRecordSheet> {
         (isIncome ? '其他收入' : '其他');
     final emoji = CategorySeed.emojiOf(c.categoryKey); // emojiOf 接受可空
     return InkWell(
-      onTap: () => setState(() => _checked[i] = !_checked[i]),
+      onTap:
+          c.isRefund ? null : () => setState(() => _checked[i] = !_checked[i]),
       borderRadius: BorderRadius.circular(14),
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
@@ -167,7 +213,9 @@ class _AutoRecordSheetState extends State<_AutoRecordSheet> {
           children: [
             Checkbox(
               value: _checked[i],
-              onChanged: (v) => setState(() => _checked[i] = v ?? false),
+              onChanged: c.isRefund
+                  ? null
+                  : (v) => setState(() => _checked[i] = v ?? false),
             ),
             Text(emoji, style: const TextStyle(fontSize: 20)),
             const SizedBox(width: 10),
@@ -175,13 +223,13 @@ class _AutoRecordSheetState extends State<_AutoRecordSheet> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text('$catName · ${c.app}',
+                  Text(c.isRefund ? '退款到账 · ${c.app}' : '$catName · ${c.app}',
                       style: const TextStyle(
-                          fontSize: 14, fontWeight: FontWeight.w600)),
+                          fontSize: 14, fontWeight: FontWeight.w500)),
                   const SizedBox(height: 2),
                   Text(
-                    c.text,
-                    maxLines: 1,
+                    c.isRefund ? '需匹配原订单，请到喵助手登记' : c.text,
+                    maxLines: c.isRefund ? 2 : 1,
                     overflow: TextOverflow.ellipsis,
                     style:
                         TextStyle(fontSize: 12, color: scheme.onSurfaceVariant),
@@ -194,7 +242,7 @@ class _AutoRecordSheetState extends State<_AutoRecordSheet> {
               '${isIncome ? '+' : '-'}${MoneyFormat.string(c.amount)}',
               style: TextStyle(
                 fontSize: 15,
-                fontWeight: FontWeight.w700,
+                fontWeight: FontWeight.w600,
                 fontFamily: 'Nunito',
                 color: isIncome ? scheme.secondary : scheme.onSurface,
               ),

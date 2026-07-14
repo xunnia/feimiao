@@ -4,10 +4,12 @@ import 'package:provider/provider.dart';
 
 import '../../core/amount_expression.dart';
 import '../../core/models/transaction_kind.dart';
+import '../../core/transaction_time.dart';
 import '../../data/app_repository.dart';
 import '../../widgets/app_date_picker.dart';
+import '../../widgets/app_toast.dart';
+import '../../widgets/ios_dialogs.dart';
 import '../../widgets/tag_selector.dart';
-import '../common/app_sheet.dart';
 import '../common/receipt_picker.dart';
 import '../home/manual_add_sheet.dart';
 import '../quick_add/amount_keypad.dart';
@@ -37,6 +39,7 @@ class _EditTransactionSheetState extends State<EditTransactionSheet> {
   late bool _reimbursable;
   String? _imagePath;
   int _expressionVersion = 0;
+  bool _busy = false;
 
   @override
   void initState() {
@@ -72,7 +75,8 @@ class _EditTransactionSheetState extends State<EditTransactionSheet> {
       if (kind != TransactionKind.expense) _reimbursable = false;
       final all = repo.categoriesForKind(kind);
       if (!all.any((c) => c.id == _selectedCategoryId)) {
-        _selectedCategoryId = repo.categoriesForKindRanked(kind).firstOrNull?.id;
+        _selectedCategoryId =
+            repo.categoriesForKindRanked(kind).firstOrNull?.id;
       }
       final cat = all.where((c) => c.id == _selectedCategoryId).firstOrNull;
       _activeParentId = cat == null ? null : (cat.parentId ?? cat.id);
@@ -87,76 +91,99 @@ class _EditTransactionSheetState extends State<EditTransactionSheet> {
   }
 
   Future<void> _save() async {
+    if (_busy) return;
     final amount = _expression.value;
     if (amount <= Decimal.zero) return;
     final repo = context.read<AppRepository>();
-    final accountId = _selectedAccountId ?? repo.accounts.firstOrNull?.id;
+    final accountId =
+        _selectedAccountId ?? repo.transactionAccounts.firstOrNull?.id;
     if (accountId == null) return;
 
-    if (_isTransfer) {
-      final to = _toAccountId;
-      if (to == null || to == accountId) return; // 转账要两个不同账户
-      await repo.updateTransaction(
-        id: widget.transaction.id,
-        kind: TransactionKind.transfer,
-        amount: amount,
-        categoryId: null,
-        accountId: accountId,
-        toAccountId: to,
-        note: _noteController.text.trim(),
-        date: _date,
-        tagIds: _tagIds,
-      );
-    } else {
-      await repo.updateTransaction(
-        id: widget.transaction.id,
-        kind: _kind,
-        amount: amount,
-        categoryId: _selectedCategoryId,
-        accountId: accountId,
-        note: _noteController.text.trim(),
-        date: _date,
-        tagIds: _tagIds,
-        reimbursable: _kind == TransactionKind.expense ? _reimbursable : false,
-        imagePath: _imagePath ?? '',
-      );
-      // 学习用户纠正:改了分类且有备注 → 记住「备注 → 新分类」,下次 AI 自动套用。
-      final note = _noteController.text.trim();
-      if (_selectedCategoryId != null &&
-          _selectedCategoryId != widget.transaction.categoryId &&
-          note.isNotEmpty) {
-        final newKey = repo.categories
-            .where((c) => c.id == _selectedCategoryId)
-            .firstOrNull
-            ?.key;
-        if (newKey != null) {
-          await repo.learnCategory(
-              phrase: note, kind: _kind, categoryKey: newKey);
+    setState(() => _busy = true);
+    try {
+      if (_isTransfer) {
+        final to = _toAccountId;
+        if (to == null || to == accountId) return; // 转账要两个不同账户
+        await repo.updateTransaction(
+          id: widget.transaction.id,
+          kind: TransactionKind.transfer,
+          amount: amount,
+          categoryId: null,
+          accountId: accountId,
+          toAccountId: to,
+          note: _noteController.text.trim(),
+          date: _date,
+          tagIds: _tagIds,
+        );
+      } else {
+        await repo.updateTransaction(
+          id: widget.transaction.id,
+          kind: _kind,
+          amount: amount,
+          categoryId: _selectedCategoryId,
+          accountId: accountId,
+          note: _noteController.text.trim(),
+          date: _date,
+          tagIds: _tagIds,
+          reimbursable:
+              _kind == TransactionKind.expense ? _reimbursable : false,
+          imagePath: _imagePath ?? '',
+        );
+        // 学习用户纠正:改了分类且有备注 → 记住「备注 → 新分类」,下次 AI 自动套用。
+        final note = _noteController.text.trim();
+        if (_selectedCategoryId != null &&
+            _selectedCategoryId != widget.transaction.categoryId &&
+            note.isNotEmpty) {
+          final newKey = repo.categories
+              .where((c) => c.id == _selectedCategoryId)
+              .firstOrNull
+              ?.key;
+          if (newKey != null) {
+            await repo.learnCategory(
+                phrase: note, kind: _kind, categoryKey: newKey);
+          }
         }
       }
+      if (mounted) Navigator.pop(context);
+    } catch (error) {
+      if (mounted) {
+        showAppToast(
+          context,
+          error.toString().replaceFirst('Bad state: ', ''),
+          icon: Icons.info_outline,
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _busy = false);
     }
-    if (mounted) Navigator.pop(context);
   }
 
   Future<void> _delete() async {
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('删除这笔账？'),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('取消')),
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('删除', style: TextStyle(color: Colors.red)),
-          ),
-        ],
-      ),
+    if (_busy) return;
+    final repo = context.read<AppRepository>();
+    // 走全局确认弹窗（图二风格），别再用裸 AlertDialog + 红字（守不用红铁律）。
+    final ok = await showConfirmDialog(
+      context,
+      title: '删除这笔账？',
+      confirmText: '删除',
+      destructive: true,
     );
-    if (ok == true) {
-      await context.read<AppRepository>().deleteTransaction(widget.transaction.id);
-      if (mounted) Navigator.pop(context);
+    if (ok) {
+      setState(() => _busy = true);
+      try {
+        await repo.deleteTransaction(widget.transaction.id);
+        if (mounted) Navigator.pop(context);
+      } catch (error) {
+        if (mounted) {
+          showAppToast(
+            context,
+            error.toString().replaceFirst('Bad state: ', ''),
+            icon: Icons.info_outline,
+          );
+        }
+      } finally {
+        if (mounted) setState(() => _busy = false);
+      }
     }
   }
 
@@ -166,7 +193,7 @@ class _EditTransactionSheetState extends State<EditTransactionSheet> {
     final screenH = MediaQuery.sizeOf(context).height;
     final bottomInset = MediaQuery.viewInsetsOf(context).bottom;
     final maxH = screenH * 0.92 - bottomInset;
-    final accounts = context.watch<AppRepository>().accounts;
+    final accounts = context.watch<AppRepository>().transactionAccounts;
 
     return SizedBox(
       height: maxH.clamp(300.0, screenH * 0.92),
@@ -384,7 +411,9 @@ class _EditTransactionSheetState extends State<EditTransactionSheet> {
             noteController: _noteController,
             showAccount: !_isTransfer,
             onAccountChanged: (id) => setState(() => _selectedAccountId = id),
-            onDateChanged: (d) => setState(() => _date = d),
+            onDateChanged: (d) => setState(
+              () => _date = calendarDayWithClock(d, _date),
+            ),
           ),
 
           Padding(
@@ -440,8 +469,8 @@ class _EditTransactionSheetState extends State<EditTransactionSheet> {
               ),
               Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 10),
-                child: Icon(Icons.arrow_forward,
-                    color: scheme.primary, size: 22),
+                child:
+                    Icon(Icons.arrow_forward, color: scheme.primary, size: 22),
               ),
               Expanded(
                 child: _accField(context, '到', to?.name ?? '选择', accounts,
@@ -543,10 +572,6 @@ class _DetailBar extends StatelessWidget {
 
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-      decoration: BoxDecoration(
-        border:
-            Border(top: BorderSide(color: scheme.outlineVariant, width: 0.5)),
-      ),
       child: Row(
         children: [
           if (showAccount && accounts.isNotEmpty) ...[
@@ -557,8 +582,8 @@ class _DetailBar extends StatelessWidget {
                   .map((a) => PopupMenuItem(value: a.id, child: Text(a.name)))
                   .toList(),
               child: Chip(
-                avatar: const Icon(Icons.account_balance_wallet_outlined,
-                    size: 16),
+                avatar:
+                    const Icon(Icons.account_balance_wallet_outlined, size: 16),
                 label: Text(selectedAccount?.name ?? '账户'),
                 visualDensity: VisualDensity.compact,
                 padding: const EdgeInsets.symmetric(horizontal: 4),

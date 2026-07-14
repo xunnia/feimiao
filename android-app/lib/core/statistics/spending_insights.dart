@@ -33,10 +33,11 @@ class SpendingInsights {
     required int year,
     required int month,
   }) {
-    final cur = StatisticsEngine.monthlySummary(records, year: year, month: month);
+    final cur =
+        StatisticsEngine.monthlySummary(records, year: year, month: month);
     final pm = DateTime(year, month - 1, 1);
-    final prev =
-        StatisticsEngine.monthlySummary(records, year: pm.year, month: pm.month);
+    final prev = StatisticsEngine.monthlySummary(records,
+        year: pm.year, month: pm.month);
 
     final lines = <String>[];
     final curTotal = cur.totalExpense.toDouble();
@@ -59,7 +60,7 @@ class SpendingInsights {
     for (final c in cur.expenseByCategory) {
       if (c.total <= Decimal.zero) continue;
       final p = prev.expenseByCategory
-          .where((x) => x.name == c.name)
+          .where((x) => x.identity == c.identity)
           .toList();
       final prevTotalC = p.isEmpty ? Decimal.zero : p.first.total;
       final prevCount = p.isEmpty ? 0 : p.first.count;
@@ -76,10 +77,10 @@ class SpendingInsights {
     }
 
     // 最大头分类占比过高提醒（>45% 且总支出有规模）。
-    final top = cur.expenseByCategory.isEmpty ? null : cur.expenseByCategory.first;
+    final top =
+        cur.expenseByCategory.isEmpty ? null : cur.expenseByCategory.first;
     if (top != null && top.share >= 0.45 && curTotal >= 200) {
-      lines.add(
-          '「${top.name}」占了本月支出的 ${(top.share * 100).round()}%，是绝对大头');
+      lines.add('「${top.name}」占了本月支出的 ${(top.share * 100).round()}%，是绝对大头');
     }
 
     return lines.take(3).toList();
@@ -92,7 +93,8 @@ class SpendingInsights {
     required int year,
     required int month,
   }) {
-    final cur = StatisticsEngine.monthlySummary(records, year: year, month: month);
+    final cur =
+        StatisticsEngine.monthlySummary(records, year: year, month: month);
     final expenseCount = records
         .where((r) =>
             r.kind == TransactionKind.expense &&
@@ -173,7 +175,8 @@ class SpendingInsights {
     }
     if (spent <= Decimal.zero) return null;
 
-    final daysTotal = StatisticsEngine.daysInMonth(year: n.year, month: n.month);
+    final daysTotal =
+        StatisticsEngine.daysInMonth(year: n.year, month: n.month);
     final projectedDouble = spent.toDouble() / n.day * daysTotal;
     final projected = Decimal.parse(projectedDouble.toStringAsFixed(2));
     final overBy = projected - monthlyBudget;

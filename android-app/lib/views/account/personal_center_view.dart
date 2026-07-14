@@ -1,131 +1,69 @@
+import 'package:flutter/cupertino.dart' show CupertinoIcons;
 import 'package:flutter/material.dart';
-import 'package:flutter/cupertino.dart' show CupertinoPageRoute, CupertinoIcons;
+import 'package:provider/provider.dart';
 
+import '../../core/app_version.dart';
+import '../../data/app_repository.dart';
 import '../../theme/app_colors.dart';
 import '../../widgets/app_buttons.dart';
-import '../../widgets/app_toast.dart';
-import '../../widgets/mascot.dart';
+import '../../widgets/settings_ui.dart';
 import '../settings/ai_setting_view.dart';
+import '../settings/backup_view.dart';
+import '../settings/settings_view.dart';
+import '../../widgets/app_page_route.dart';
 
-/// 个人中心页（未登录态）。
-/// 对齐 Claude 账号页版式，设置/主题/关于都收在这里。
 class PersonalCenterView extends StatelessWidget {
   const PersonalCenterView({super.key});
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-
+    final repo = context.watch<AppRepository>();
     return Scaffold(
-      appBar: AppBar(leading: const AppBackButton(), 
+      backgroundColor: AppColors.appBg(scheme),
+      appBar: AppBar(
+        leading: const AppBackButton(),
         title: const Text('我的'),
+        centerTitle: true,
+        backgroundColor: AppColors.appBg(scheme),
+        surfaceTintColor: Colors.transparent,
       ),
       body: ListView(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        padding: const EdgeInsets.fromLTRB(18, 18, 18, 36),
         children: [
-          // ── 未登录卡 ──────────────────────────────────────
-          Container(
-            margin: const EdgeInsets.only(bottom: 20),
-            decoration: BoxDecoration(
-              color: AppColors.card(scheme),
-              borderRadius: BorderRadius.circular(20),
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withValues(alpha: 0.04),
-                  blurRadius: 10,
-                  offset: const Offset(0, 2),
-                ),
-              ],
-            ),
-            child: Padding(
-              padding: const EdgeInsets.symmetric(vertical: 24, horizontal: 20),
-              child: Row(
-                children: [
-                  const Mascot(mood: MascotMood.idle, size: 56, animate: true),
-                  const SizedBox(width: 16),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          '未登录',
-                          style:
-                              Theme.of(context).textTheme.titleMedium?.copyWith(
-                                    fontWeight: FontWeight.w500,
-                                  ),
-                        ),
-                        const SizedBox(height: 4),
-                        Text(
-                          '登录后可云端备份账单',
-                          style:
-                              Theme.of(context).textTheme.bodySmall?.copyWith(
-                                    color: scheme.onSurfaceVariant,
-                                  ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  FilledButton(
-                    onPressed: () => showAppToast(context, '云同步即将到来',
-                        icon: Icons.info_outline),
-                    style: FilledButton.styleFrom(
-                      visualDensity: VisualDensity.compact,
-                      shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(20)),
-                    ),
-                    child: const Text('登录 / 注册'),
-                  ),
-                ],
-              ),
-            ),
-          ),
-
-          // ── 功能分组 ──────────────────────────────────────
-          _SectionLabel(label: '设置'),
-          _Group(children: [
-            _SettingsTile(
+          const _ProfileHeader(),
+          const SizedBox(height: 22),
+          const _SectionLabel('设置'),
+          _SettingsGroupCard(children: [
+            _SettingsRow(
               icon: Icons.smart_toy_outlined,
-              label: 'AI 记账设置',
-              onTap: () => Navigator.push<void>(
-                context,
-                CupertinoPageRoute<void>(
-                    builder: (_) => const AiSettingView()),
-              ),
+              title: 'AI 记账设置',
+              onTap: () => _push(context, const AiSettingView()),
             ),
-            _SettingsTile(
-              icon: Icons.palette_outlined,
-              label: '主题皮肤',
-              onTap: () => showAppToast(context, '更多猫皮肤即将到来',
-                  icon: Icons.info_outline),
+            _SettingsRow(
+              icon: Icons.payments_outlined,
+              title: '金额显示',
+              trailingText: moneyDisplayLabel(repo),
+              onTap: () => showMoneyDisplaySheet(context),
             ),
-          ]),
-
-          const SizedBox(height: 12),
-          _SectionLabel(label: '关于'),
-          _Group(children: [
-            _SettingsTile(
+            _SettingsRow(
+              icon: Icons.inventory_2_outlined,
+              title: '备份与恢复',
+              onTap: () => _push(context, const BackupView()),
+            ),
+            _SettingsRow(
               icon: Icons.info_outline,
-              label: '关于肥喵记账',
-              onTap: () => showAboutDialog(
-                context: context,
-                applicationName: '肥喵记账',
-                applicationVersion: 'v0.2',
-                applicationLegalese: '© 2025 肥喵记账团队',
-                children: const [
-                  SizedBox(height: 8),
-                  Text('一款可爱的 AI 记账 App，以你家的猫为灵感。'),
-                ],
-              ),
+              title: '关于',
+              onTap: () => _showAboutSheet(context),
             ),
           ]),
-
-          const SizedBox(height: 24),
+          const SizedBox(height: 22),
           Center(
             child: Text(
-              'v0.2 · 肥喵记账',
+              '${AppVersion.display} · ${AppVersion.name}',
               style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                    color: scheme.onSurfaceVariant.withValues(alpha: 0.5),
+                    color: scheme.onSurfaceVariant.withValues(alpha: 0.55),
+                    fontFamily: 'Nunito',
                   ),
             ),
           ),
@@ -133,36 +71,80 @@ class PersonalCenterView extends StatelessWidget {
       ),
     );
   }
+
+  static void _push(BuildContext context, Widget page) {
+    Navigator.push<void>(
+      context,
+      AppPageRoute<void>(builder: (_) => page),
+    );
+  }
 }
 
-// ── 小工具组件 ──────────────────────────────────────────────────────────────
+class _ProfileHeader extends StatelessWidget {
+  const _ProfileHeader();
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Column(
+      children: [
+        Container(
+          width: 78,
+          height: 78,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            color: AppColors.card(scheme),
+            border: Border.all(color: AppColors.hairline(scheme)),
+          ),
+        ),
+        const SizedBox(height: 12),
+        Text(
+          '肥喵记账',
+          style: Theme.of(context).textTheme.bodyLarge?.copyWith(
+                fontSize: 17,
+                fontWeight: FontWeight.w400,
+                color: scheme.onSurface,
+              ),
+        ),
+        const SizedBox(height: 3),
+        Text(
+          AppVersion.display,
+          style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                fontSize: 13,
+                color: scheme.onSurfaceVariant,
+                fontWeight: FontWeight.w300,
+              ),
+        ),
+      ],
+    );
+  }
+}
 
 class _SectionLabel extends StatelessWidget {
-  const _SectionLabel({required this.label});
+  final String text;
 
-  final String label;
+  const _SectionLabel(this.text);
 
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.only(left: 4, bottom: 4, top: 4),
+      padding: const EdgeInsets.fromLTRB(18, 0, 18, 8),
       child: Text(
-        label,
-        style: Theme.of(context).textTheme.labelMedium?.copyWith(
+        text,
+        style: Theme.of(context).textTheme.titleMedium?.copyWith(
               color: Theme.of(context).colorScheme.onSurfaceVariant,
-              fontWeight: FontWeight.w500,
-              letterSpacing: 0.5,
+              fontSize: 12.5,
+              fontWeight: FontWeight.w400,
             ),
       ),
     );
   }
 }
 
-/// 白色圆角分组卡：内含若干行，发丝线分隔（左缩进对齐图标后）。
-class _Group extends StatelessWidget {
-  const _Group({required this.children});
-
+class _SettingsGroupCard extends StatelessWidget {
   final List<Widget> children;
+
+  const _SettingsGroupCard({required this.children});
 
   @override
   Widget build(BuildContext context) {
@@ -170,26 +152,19 @@ class _Group extends StatelessWidget {
     return Container(
       decoration: BoxDecoration(
         color: AppColors.card(scheme),
-        borderRadius: BorderRadius.circular(16),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.04),
-            blurRadius: 10,
-            offset: const Offset(0, 2),
-          ),
-        ],
+        borderRadius: BorderRadius.circular(18),
       ),
       clipBehavior: Clip.antiAlias,
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          for (int i = 0; i < children.length; i++) ...[
+          for (var i = 0; i < children.length; i++) ...[
             if (i > 0)
               Divider(
                 height: 0.5,
                 thickness: 0.5,
-                indent: 54,
-                color: scheme.outlineVariant.withValues(alpha: 0.5),
+                indent: 72,
+                color: scheme.outlineVariant.withValues(alpha: 0.58),
               ),
             children[i],
           ],
@@ -199,38 +174,155 @@ class _Group extends StatelessWidget {
   }
 }
 
-class _SettingsTile extends StatelessWidget {
-  const _SettingsTile({
-    required this.icon,
-    required this.label,
-    required this.onTap,
-  });
-
+class _SettingsRow extends StatelessWidget {
   final IconData icon;
-  final String label;
+  final String title;
+  final String? trailingText;
   final VoidCallback onTap;
+
+  const _SettingsRow({
+    required this.icon,
+    required this.title,
+    required this.onTap,
+    this.trailingText,
+  });
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    return ListTile(
-      leading: Icon(icon, size: 22, color: scheme.onSurfaceVariant),
-      title: Text(
-        label,
-        style: Theme.of(context)
-            .textTheme
-            .bodyMedium
-            ?.copyWith(fontWeight: FontWeight.w500),
-      ),
-      trailing: Icon(
-        CupertinoIcons.chevron_forward,
-        size: 18,
-        color: scheme.onSurfaceVariant.withValues(alpha: 0.5),
-      ),
+    return InkWell(
       onTap: onTap,
-      minLeadingWidth: 0,
-      horizontalTitleGap: 12,
-      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 2),
+      child: SizedBox(
+        height: 54,
+        child: Row(
+          children: [
+            const SizedBox(width: 18),
+            Icon(icon, size: 22, color: scheme.onSurface),
+            const SizedBox(width: 16),
+            Expanded(
+              child: Text(
+                title,
+                style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                      fontSize: 15.5,
+                      fontWeight: FontWeight.w400,
+                      color: scheme.onSurface,
+                    ),
+              ),
+            ),
+            if (trailingText != null)
+              Text(
+                trailingText!,
+                style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                      fontSize: 15,
+                      fontWeight: FontWeight.w300,
+                      color: scheme.onSurfaceVariant,
+                    ),
+              ),
+            const SizedBox(width: 10),
+            Icon(
+              CupertinoIcons.chevron_forward,
+              size: 15,
+              color: scheme.onSurfaceVariant.withValues(alpha: 0.45),
+            ),
+            const SizedBox(width: 18),
+          ],
+        ),
+      ),
     );
   }
+}
+
+void _showAboutSheet(BuildContext context) {
+  showModalBottomSheet<void>(
+    context: context,
+    isScrollControlled: true,
+    backgroundColor: Colors.transparent,
+    builder: (ctx) {
+      final scheme = Theme.of(ctx).colorScheme;
+      return SafeArea(
+        child: Container(
+          margin: const EdgeInsets.all(10),
+          decoration: BoxDecoration(
+            color: AppColors.appBg(scheme),
+            borderRadius: BorderRadius.circular(30),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              SheetHeader(title: '关于', onClose: () => Navigator.pop(ctx)),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(18, 10, 18, 22),
+                child: _SettingsGroupCard(children: [
+                  _SettingsRow(
+                    icon: Icons.article_outlined,
+                    title: '使用条款',
+                    onTap: () => _showTextSheet(
+                      ctx,
+                      title: '使用条款',
+                      body:
+                          '肥喵记账用于个人记账、账单整理和消费分析。你需要自行确认录入、导入和 AI 识别结果是否准确。\n\nAI 记账和 AI 分析可能产生错误，涉及金额、分类、退款和统计结论时，请以你的真实账单和银行、支付平台记录为准。\n\n你应妥善保管自己的设备、备份文件和 API Key。因误删、误导入、第三方服务异常或设备故障造成的数据损失，建议优先通过备份恢复。',
+                    ),
+                  ),
+                  _SettingsRow(
+                    icon: Icons.lock_outline,
+                    title: '隐私政策',
+                    onTap: () => _showTextSheet(
+                      ctx,
+                      title: '隐私政策',
+                      body:
+                          '肥喵记账默认将账本数据保存在本机。完整备份会包含账本数据库和收据图片，但不会包含 AI API Key。\n\n当你使用 AI 解析或 AI 分析时，相关文本、账单摘要或你输入的问题可能会发送给你配置的 AI 服务提供方，用于生成结果。请避免提交身份证号、银行卡号、验证码等敏感信息。\n\n导入、导出和分享备份文件由你主动触发。请只把备份文件保存到你信任的位置。',
+                    ),
+                  ),
+                  _SettingsRow(
+                    icon: Icons.info_outline,
+                    title: AppVersion.name,
+                    trailingText: AppVersion.fullDisplay,
+                    onTap: () {},
+                  ),
+                ]),
+              ),
+            ],
+          ),
+        ),
+      );
+    },
+  );
+}
+
+void _showTextSheet(BuildContext context,
+    {required String title, required String body}) {
+  showModalBottomSheet<void>(
+    context: context,
+    isScrollControlled: true,
+    backgroundColor: Colors.transparent,
+    builder: (ctx) {
+      final scheme = Theme.of(ctx).colorScheme;
+      return SafeArea(
+        child: Container(
+          margin: const EdgeInsets.all(10),
+          decoration: BoxDecoration(
+            color: AppColors.appBg(scheme),
+            borderRadius: BorderRadius.circular(30),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              SheetHeader(title: title, onClose: () => Navigator.pop(ctx)),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(24, 10, 24, 28),
+                child: Text(
+                  body,
+                  style: Theme.of(ctx).textTheme.bodyMedium?.copyWith(
+                        height: 1.55,
+                        color: scheme.onSurface,
+                        fontWeight: FontWeight.w300,
+                      ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    },
+  );
 }
