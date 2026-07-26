@@ -22,10 +22,11 @@
 - **⚠️ 用户报应用内更新下载只有 30KB/s——已诊断，待用户拍板方案**：直连探针显示大陆流量被调度到 Cloudflare 阿姆斯特丹节点（CF-RAY AMS），免费版对大陆就这样，晚高峰 30KB/s 正常、波动 10 倍。包本身完好。已告知用户可直接从电脑传 APK 到手机安装。**根治方案候选**：A=发布脚本双写腾讯云 COS/阿里 OSS 国内源+version.json 指向它（推荐，需用户开账号给 key）；B=App 进程内下载器改多线程分段（治标，零外部依赖）；C=优选 IP（custom domain 模式下不可行，已排除）。
 - Kotlin 两处小改（MainActivity 分享重放守卫 / PaymentNotificationListener 支付宝模板锚点 ALIPAY_TXN）已随 v206 APK 编译通过；**运行态锚点覆盖面待真机验**：如果用户反馈支付宝某种官方通知没被自动记账抓到，把通知文案要来、往 ALIPAY_TXN 正则加一个模板词即可（宁漏抓不错抓是既定取舍）。
 
-### 2026-07-26 资产管理 UI 复盘（✅已完成，**方案待用户拍板，未动代码**）
+### 2026-07-26/27 资产管理 UI P0 快赢批（✅已完成验收，v1.205.0+207 / b0726-207 / DB 仍 v41）
 
-- 用户嫌资产管理 UI 太丑。4 智能体复盘（结构/规范 21 条违规/视觉批判/真实渲染截图）已完成，**方案落盘：`docs/claude/资产UI优化方案-2026-07-26.md`**（P0 快赢 1 天 / P1 结构 2-3 天 / P2 重构可选，总诊断=「审计后台气质+术语裸奔+卡片规格失控+无情感化」）。截图证据 `outputs/asset_ui_review/01~07*.png`（本地提交 `4250d42`）。
-- **用户已拍板 P0 并开工，后因额度不足叫停**：半成品封存在 WIP 提交 `f458a3d`（analyze 绿、全量测试未跑）。**⏭️ 下一个会话的头号任务：照方案文档 §五点五 的接手流程续完 P0**——①核对 accounts_view.dart 任务清单完成度并补完 ②全量 analyze+test（修可能被文案改动破坏的断言）③重渲染截图出 before/after 给用户 ④bump 1.205.0+207 / b0726-207 ⑤commit+快照推送（快照法见 §4 附注）⑥视额度出 APK/发布。动 UI 前必读 UI_DESIGN_STANDARD.md。
+- 复盘方案：`docs/claude/资产UI优化方案-2026-07-26.md`（P0 快赢 / P1 结构 / P2 重构）。P0 全部落地：术语人话化全扫（口径/证据/锚点/推定等内部词清零、·CNY 全删）、净资产卡重排（34px Nunito 主数字+铜金 ¥）、卡片规格统一（appCardDecoration/appCardDivider/iconCircleFill 三个新全局零件）、物品网格裁切 bug 修复、scheme.error 红清零、_SwitchRow 删除换 SettingsRow+AppSwitch、三表单铺 AppLabeledField、_TypeChip 主色化、空态换猫。明细与验收状态见方案文档 §五点五。
+- **验收**：analyze 0 error 0 warning；全量测试 **802/802**；before/after 对比图 7 张 `outputs/asset_ui_review/compare/`。
+- **⏭️ 下一步：P1 结构批**（方案文档 §三，6 项：总览重组/资金页小计+清零折叠/物品筛选收口/详情容器统一/新增入口统一/生成报告反馈闭环），P2（accounts_view 拆模块/性能缓存/情感化）可选排期。动 UI 前必读 UI_DESIGN_STANDARD.md。
 
 ### 2026-07-18 当前启动体验修复（工作区未提交）
 
@@ -254,9 +255,9 @@
 
 ## 5. 版本文件同步状态
 
-- `pubspec.yaml`：`version: 1.204.0+206`
-- `lib/core/app_version.dart`：`version = '1.204.0'`，`buildNumber = 206`
-- `lib/build_info.dart`：`kBuildTag = 'b0726-206'`
+- `pubspec.yaml`：`version: 1.205.0+207`
+- `lib/core/app_version.dart`：`version = '1.205.0'`，`buildNumber = 207`
+- `lib/build_info.dart`：`kBuildTag = 'b0726-207'`
 - `android/local.properties`：Flutter release 构建已读取 `1.204.0+206`；该文件通常不入 git
 - DB：**v41**（v40 交易时间精度之上，transactions 新增 `order_no`；导入退款支持跨批/跨月挂回历史原单）
 - 版本规矩：每次推送 minor+1、versionCode+1、kBuildTag 同步（b月日-versionCode）

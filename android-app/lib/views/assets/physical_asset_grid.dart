@@ -321,14 +321,14 @@ class _AssetCardText extends StatelessWidget {
             style: AppType.secondary(scheme),
           ),
           const Spacer(),
-          Text(
-            primaryText,
+          Text.rich(
+            _digitAwareSpan(
+              primaryText,
+              (Theme.of(context).textTheme.bodyMedium ?? const TextStyle())
+                  .copyWith(fontWeight: FontWeight.w600),
+            ),
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
-            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                  fontFamily: 'Nunito',
-                  fontWeight: FontWeight.w600,
-                ),
           ),
           const SizedBox(height: 2),
           Text(
@@ -342,6 +342,26 @@ class _AssetCardText extends StatelessWidget {
       ),
     );
   }
+}
+
+/// 中文混排文案里只给数字子串套 Nunito（UI 标准：Nunito 只准用于纯数字/金额）。
+TextSpan _digitAwareSpan(String text, TextStyle base) {
+  final spans = <TextSpan>[];
+  var cursor = 0;
+  for (final match in RegExp(r'[0-9][0-9,.]*').allMatches(text)) {
+    if (match.start > cursor) {
+      spans.add(TextSpan(text: text.substring(cursor, match.start)));
+    }
+    spans.add(TextSpan(
+      text: text.substring(match.start, match.end),
+      style: base.copyWith(fontFamily: 'Nunito'),
+    ));
+    cursor = match.end;
+  }
+  if (cursor < text.length) {
+    spans.add(TextSpan(text: text.substring(cursor)));
+  }
+  return TextSpan(style: base, children: spans);
 }
 
 String? _warrantyReminderText(AssetReminderState reminder) {
