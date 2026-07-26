@@ -40,7 +40,7 @@
 - **用户真机三条反馈（v209）全修**：①**弹层顶进状态栏**（手工补录/新购买表单，键盘顶起后头部压住时钟）——根因=showBlurSheet 路由 `SafeArea(top:false)`；路由层打开顶部安全区，12+ 弹层一次全修；同类隐患一并排查：appSheet 路由加 `useSafeArea:true`、自动记账确认表、主页月份选择器同修，其余小弹层无此风险。②**支出分类选择不统一**——新购买表单的平铺菜单改全局分类选择器 `showCategoryPickerSheet`（彩色网格+二级展开），废弃的 AssetCategoryDropdown 删除。③**添加弹层头部大空隙**——根因=弹层内部 SafeArea 在屏底弹层里垫了状态栏高度；路由层修复后内部 SafeArea 自动去重（SafeArea 会从子树 MediaQuery 移除已消费 padding），头部贴顶。
 - **验收**：analyze 0/0（2 老 info）；全量 **808/808**；三张证据图（伪键盘+伪状态栏离屏渲染）`outputs/asset_ui_review/v210_fixes/`。
 - **v210 APK 已构建核验归档**：aapt=`com.qingji.qingji.codex`/210/1.208.0；16K/V2 过。`ci-artifacts/releases/feimiao-codex-v1.208.0-210.apk`，110,666,443 字节，SHA256 `3164A10907987B1E0E37193EBD2DE06635E8F7BEB4685E916263C16F798AF79A`。**未发布线上**（线上仍 v209，等用户点头）。
-- **⏭️ 用户已拍板（2026-07-27）：按资产对标方案 A→B→D→C 顺序开工**（方案=`docs/claude/资产功能对标与优化方案-2026-07-27.md`；A批=信用卡账期三件套/借贷按人/房贷向导+清 A5 欠账）。每阶段完成即更新本文档（用户铁律）。
+- **⏭️ 用户已拍板（2026-07-27）：按资产对标方案 A→B→D→C 顺序开工**。**🔄 A 批施工中**：规格=方案文档 §二点五（**范围纠偏：A5 ledger 迁移仍是独立批，A 批只做产品层**）；工作流 6 段串行（①DB v42+免息期引擎 ②账期UI ③借贷往来页 ④房贷向导 ⑤还款提醒 ⑥验收），完整任务书在工作流脚本 `C:\Users\寻逆啊\.claude\projects\C--src-xunni-codex\0775c34a-7109-42fb-b5ab-bab67ef5ca2f\workflows\scripts\asset-batch-a-wf_06caa166-89d.js`（磁盘可读）。**若中断接手**：git status+diff 看做到哪段，按脚本任务书补完；完成后收尾=全量测试→渲染证据图→bump 1.209.0+211/b0727-211→本文档 A 批终稿→commit+快照（parent 先 ls-remote 拿 tip）→APK v211。每阶段完成即更新本文档（用户铁律）。
 
 ### 2026-07-27 资产UI P2 重构批（✅已完成总验收，v1.207.0+209 / b0727-209 / DB 仍 v41）
 
