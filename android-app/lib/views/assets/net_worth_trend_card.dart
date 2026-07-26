@@ -1,4 +1,5 @@
 import 'dart:math' as math;
+import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 
@@ -177,18 +178,40 @@ class _NetWorthTrendPainter extends CustomPainter {
     final pointPaint = Paint()
       ..color = lineColor
       ..style = PaintingStyle.fill;
+    // 线下渐变填充：主色 18% 透明度渐隐到 0，按段独立（口径断点处不连成一片）。
+    final fillPaint = Paint()
+      ..shader = ui.Gradient.linear(
+        Offset(0, chart.top),
+        Offset(0, chart.bottom),
+        [
+          lineColor.withValues(alpha: 0.18),
+          lineColor.withValues(alpha: 0.0),
+        ],
+      );
     for (final segment in segments.where((item) => item.points.isNotEmpty)) {
       final path = Path();
+      Offset first = Offset.zero;
+      Offset last = Offset.zero;
       for (var index = 0; index < segment.points.length; index++) {
         final offset = position(segment.points[index]);
         if (index == 0) {
           path.moveTo(offset.dx, offset.dy);
+          first = offset;
         } else {
           path.lineTo(offset.dx, offset.dy);
         }
+        last = offset;
         canvas.drawCircle(offset, 2.7, pointPaint);
       }
-      if (segment.points.length > 1) canvas.drawPath(path, linePaint);
+      if (segment.points.length > 1) {
+        // 填充画在网格线之后、描线之前。
+        final fill = Path.from(path)
+          ..lineTo(last.dx, chart.bottom)
+          ..lineTo(first.dx, chart.bottom)
+          ..close();
+        canvas.drawPath(fill, fillPaint);
+        canvas.drawPath(path, linePaint);
+      }
     }
   }
 

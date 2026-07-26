@@ -8,6 +8,7 @@ import '../../data/app_repository.dart';
 import '../../theme/app_tokens.dart';
 import '../../widgets/app_toast.dart';
 import '../../widgets/ios_form.dart';
+import '../../widgets/mascot.dart';
 import '../../widgets/settings_ui.dart';
 import 'asset_form_kit.dart';
 
@@ -212,138 +213,134 @@ class _ReceivableAssetFormSheetState extends State<ReceivableAssetFormSheet> {
         remaining >= Decimal.zero &&
         remaining <= original;
     final screenH = MediaQuery.sizeOf(context).height;
-    return Padding(
-      padding: EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(context).bottom),
-      child: ConstrainedBox(
-        constraints: BoxConstraints(maxHeight: screenH * 0.88),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            SheetHeader(
-              title: _editing ? '编辑权益资产' : '添加权益资产',
-              onClose: () => Navigator.pop(context),
-              actionLabel: '保存',
-              onAction: valid ? _save : null,
-            ),
-            Flexible(
-              child: SingleChildScrollView(
-                padding: const EdgeInsets.fromLTRB(16, 4, 16, 18),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    AppLabeledField(
-                      label: '权益名称',
-                      child: TextField(
-                        controller: _nameCtrl,
-                        autofocus: true,
-                        decoration:
-                            iosInputDecoration(context, hint: '例如 房租押金'),
-                        onChanged: (_) => setState(() {}),
+    return ConstrainedBox(
+      constraints: BoxConstraints(maxHeight: screenH * 0.88),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          SheetHeader(
+            title: _editing ? '编辑权益资产' : '添加权益资产',
+            onClose: () => Navigator.pop(context),
+            actionLabel: '保存',
+            onAction: valid ? _save : null,
+          ),
+          Flexible(
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.fromLTRB(16, 4, 16, 18),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  AppLabeledField(
+                    label: '权益名称',
+                    child: TextField(
+                      controller: _nameCtrl,
+                      autofocus: true,
+                      decoration: iosInputDecoration(context, hint: '例如 房租押金'),
+                      onChanged: (_) => setState(() {}),
+                    ),
+                  ),
+                  const SizedBox(height: 14),
+                  AppLabeledField(
+                    label: '权益类型',
+                    child: AssetEnumDropdown<ReceivableAssetType>(
+                      value: _type,
+                      values: ReceivableAssetType.values,
+                      labelOf: (value) => value.label,
+                      hint: '选择类型',
+                      onChanged: (value) => setState(() => _type = value),
+                    ),
+                  ),
+                  const SizedBox(height: 14),
+                  AppLabeledField(
+                    label: '原始金额',
+                    child: TextField(
+                      controller: _originalCtrl,
+                      keyboardType: const TextInputType.numberWithOptions(
+                        decimal: true,
                       ),
+                      inputFormatters: moneyInputFormatters(),
+                      decoration: iosInputDecoration(
+                        context,
+                        prefix: '¥ ',
+                        hint: '例如 2000',
+                      ),
+                      onChanged: (_) {
+                        if (!_editing) {
+                          _remainingCtrl.text = _originalCtrl.text;
+                        }
+                        setState(() {});
+                      },
+                    ),
+                  ),
+                  const SizedBox(height: 14),
+                  AppLabeledField(
+                    label: '剩余可收回金额',
+                    child: TextField(
+                      controller: _remainingCtrl,
+                      readOnly: _editing,
+                      keyboardType: const TextInputType.numberWithOptions(
+                        decimal: true,
+                      ),
+                      inputFormatters: moneyInputFormatters(),
+                      decoration: iosInputDecoration(
+                        context,
+                        prefix: '¥ ',
+                        hint: '例如 2000',
+                      ),
+                      onChanged: (_) => setState(() {}),
+                    ),
+                  ),
+                  const SizedBox(height: 14),
+                  AppLabeledField(
+                    label: '对方/机构（可选）',
+                    child: TextField(
+                      controller: _counterpartyCtrl,
+                      decoration:
+                          iosInputDecoration(context, hint: '例如 房东、健身房'),
+                    ),
+                  ),
+                  const SizedBox(height: 14),
+                  if (_editing) ...[
+                    const AssetHintBox(
+                      text: '剩余金额和状态请通过收回、损失、归档或恢复操作修改。',
                     ),
                     const SizedBox(height: 14),
-                    AppLabeledField(
-                      label: '权益类型',
-                      child: AssetEnumDropdown<ReceivableAssetType>(
-                        value: _type,
-                        values: ReceivableAssetType.values,
-                        labelOf: (value) => value.label,
-                        hint: '选择类型',
-                        onChanged: (value) => setState(() => _type = value),
-                      ),
-                    ),
-                    const SizedBox(height: 14),
-                    AppLabeledField(
-                      label: '原始金额',
-                      child: TextField(
-                        controller: _originalCtrl,
-                        keyboardType: const TextInputType.numberWithOptions(
-                          decimal: true,
-                        ),
-                        inputFormatters: moneyInputFormatters(),
-                        decoration: iosInputDecoration(
-                          context,
-                          prefix: '¥ ',
-                          hint: '例如 2000',
-                        ),
-                        onChanged: (_) {
-                          if (!_editing) {
-                            _remainingCtrl.text = _originalCtrl.text;
-                          }
-                          setState(() {});
-                        },
-                      ),
-                    ),
-                    const SizedBox(height: 14),
-                    AppLabeledField(
-                      label: '剩余可收回金额',
-                      child: TextField(
-                        controller: _remainingCtrl,
-                        readOnly: _editing,
-                        keyboardType: const TextInputType.numberWithOptions(
-                          decimal: true,
-                        ),
-                        inputFormatters: moneyInputFormatters(),
-                        decoration: iosInputDecoration(
-                          context,
-                          prefix: '¥ ',
-                          hint: '例如 2000',
-                        ),
-                        onChanged: (_) => setState(() {}),
-                      ),
-                    ),
-                    const SizedBox(height: 14),
-                    AppLabeledField(
-                      label: '对方/机构（可选）',
-                      child: TextField(
-                        controller: _counterpartyCtrl,
-                        decoration:
-                            iosInputDecoration(context, hint: '例如 房东、健身房'),
-                      ),
-                    ),
-                    const SizedBox(height: 14),
-                    if (_editing) ...[
-                      const AssetHintBox(
-                        text: '剩余金额和状态请通过收回、损失、归档或恢复操作修改。',
-                      ),
-                      const SizedBox(height: 14),
-                    ],
-                    AppLabeledField(
-                      label: '备注（可选）',
-                      child: TextField(
-                        controller: _noteCtrl,
-                        minLines: 2,
-                        maxLines: 4,
-                        decoration:
-                            iosInputDecoration(context, hint: '押金合同、约定日期等'),
-                      ),
-                    ),
-                    const SizedBox(height: 14),
-                    SettingsGroup(
-                      margin: EdgeInsets.zero,
-                      children: [
-                        SettingsRow(
-                          title: '计入净资产',
-                          subtitle: '关闭后仍保留权益记录，但不进入净资产合计',
-                          trailing: AppSwitch(
-                            value: _includeInNetWorth,
-                            onChanged: (v) =>
-                                setState(() => _includeInNetWorth = v),
-                          ),
-                        ),
-                      ],
-                    ),
-                    if (remaining > original) ...[
-                      const SizedBox(height: 12),
-                      const AssetHintBox(text: '剩余可收回金额不能超过原始金额。'),
-                    ],
                   ],
-                ),
+                  AppLabeledField(
+                    label: '备注（可选）',
+                    child: TextField(
+                      controller: _noteCtrl,
+                      minLines: 2,
+                      maxLines: 4,
+                      decoration:
+                          iosInputDecoration(context, hint: '押金合同、约定日期等'),
+                    ),
+                  ),
+                  const SizedBox(height: 14),
+                  SettingsGroup(
+                    margin: EdgeInsets.zero,
+                    children: [
+                      SettingsRow(
+                        title: '计入净资产',
+                        subtitle: '关闭后仍保留权益记录，但不进入净资产合计',
+                        trailing: AppSwitch(
+                          value: _includeInNetWorth,
+                          onChanged: (v) =>
+                              setState(() => _includeInNetWorth = v),
+                        ),
+                      ),
+                    ],
+                  ),
+                  if (remaining > original) ...[
+                    const SizedBox(height: 12),
+                    const AssetHintBox(text: '剩余可收回金额不能超过原始金额。'),
+                  ],
+                ],
               ),
             ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }
@@ -425,67 +422,64 @@ class _ReceivableRecoverySheetState extends State<ReceivableRecoverySheet> {
         amount > Decimal.zero &&
         amount <= widget.asset.remainingAmount &&
         _accountId != null;
-    return Padding(
-      padding: EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(context).bottom),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          SheetHeader(
-            title: '收回权益',
-            onClose: () => Navigator.pop(context),
-            actionLabel: '保存',
-            onAction: valid ? _save : null,
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        SheetHeader(
+          title: '收回权益',
+          onClose: () => Navigator.pop(context),
+          actionLabel: '保存',
+          onAction: valid ? _save : null,
+        ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 4, 16, 18),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              AppLabeledField(
+                label: '收回金额',
+                child: TextField(
+                  controller: _amountCtrl,
+                  autofocus: true,
+                  keyboardType: const TextInputType.numberWithOptions(
+                    decimal: true,
+                  ),
+                  inputFormatters: moneyInputFormatters(),
+                  decoration: iosInputDecoration(
+                    context,
+                    prefix: '¥ ',
+                    hint: '例如 500',
+                  ),
+                  onChanged: (_) => setState(() {}),
+                ),
+              ),
+              const SizedBox(height: 14),
+              AppLabeledField(
+                label: '到账账户',
+                child: AssetAccountDropdown(
+                  value: _accountId,
+                  accounts: repo.accounts,
+                  hint: '选择到账账户',
+                  onChanged: (value) => setState(() => _accountId = value),
+                ),
+              ),
+              const SizedBox(height: 14),
+              AppLabeledField(
+                label: '备注（可选）',
+                child: TextField(
+                  controller: _noteCtrl,
+                  decoration: iosInputDecoration(context, hint: '例如 退租结清'),
+                ),
+              ),
+              const SizedBox(height: 12),
+              const AssetHintBox(
+                text: '收回会增加到账账户余额，并减少权益资产剩余金额；这不是普通收入，不会进入收入统计。',
+              ),
+            ],
           ),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 4, 16, 18),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                AppLabeledField(
-                  label: '收回金额',
-                  child: TextField(
-                    controller: _amountCtrl,
-                    autofocus: true,
-                    keyboardType: const TextInputType.numberWithOptions(
-                      decimal: true,
-                    ),
-                    inputFormatters: moneyInputFormatters(),
-                    decoration: iosInputDecoration(
-                      context,
-                      prefix: '¥ ',
-                      hint: '例如 500',
-                    ),
-                    onChanged: (_) => setState(() {}),
-                  ),
-                ),
-                const SizedBox(height: 14),
-                AppLabeledField(
-                  label: '到账账户',
-                  child: AssetAccountDropdown(
-                    value: _accountId,
-                    accounts: repo.accounts,
-                    hint: '选择到账账户',
-                    onChanged: (value) => setState(() => _accountId = value),
-                  ),
-                ),
-                const SizedBox(height: 14),
-                AppLabeledField(
-                  label: '备注（可选）',
-                  child: TextField(
-                    controller: _noteCtrl,
-                    decoration: iosInputDecoration(context, hint: '例如 退租结清'),
-                  ),
-                ),
-                const SizedBox(height: 12),
-                const AssetHintBox(
-                  text: '收回会增加到账账户余额，并减少权益资产剩余金额；这不是普通收入，不会进入收入统计。',
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
+        ),
+      ],
     );
   }
 
@@ -499,7 +493,11 @@ class _ReceivableRecoverySheetState extends State<ReceivableRecoverySheet> {
             targetAccountId: _accountId,
             note: _noteCtrl.text,
           );
-      if (mounted) Navigator.pop(context);
+      if (mounted) {
+        // showAppToast 走 rootOverlay，pop 前调用能存活到弹层关闭后。
+        showAppToast(context, '权益已收回', mascot: MascotMood.success);
+        Navigator.pop(context);
+      }
     } finally {
       _saving = false;
     }

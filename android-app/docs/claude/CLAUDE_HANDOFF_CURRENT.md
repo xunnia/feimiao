@@ -35,10 +35,10 @@
 - **v208 APK 已构建并核验**：aapt=`com.qingji.qingji.codex`/208/1.206.0；16K zipalign 过；V2 唯一 Codex 证书。归档 `ci-artifacts/releases/feimiao-codex-v1.206.0-208.apk`，110,666,663 字节，SHA256 `451A56DD4550FCC4E5774ADB9A7E3D2E31A966EA5792F884230D0290A765E13A`。**未发布线上**（线上仍 v206，v207/v208 都等用户点头再发；用户从电脑直接传包安装）。本地功能提交 `39995ee`，远端源码快照 `09aa437`。
 - P2（accounts_view 拆模块/性能缓存/情感化）可选排期。动 UI 前必读 UI_DESIGN_STANDARD.md。
 
-### 2026-07-27 资产UI P2 重构批（🔄施工中断点——接手先读这段，用户额度耗尽中断）
+### 2026-07-27 资产UI P2 重构批（🔄施工B进行中：拆分/性能/情感化全部完成，验收交付阶段）
 
 - **P2 定义**：`资产UI优化方案-2026-07-26.md` §四 三件事：①accounts_view.dart(7333行) 拆模块+四处收口（死代码/图标映射/PickerField/照片选择器）②性能缓存 ③情感化（猫探头/成功猫 toast/趋势渐变）。
-- **施工依据材料（全部已归档进仓库，别重新侦察）**：`docs/claude/P2侦察报告-2026-07-27.md`——6 路侦察报告合集（拆分依赖图/PickerField 四套/照片胶水三份/图标差异/性能热点+缓存方案/情感化素材），**附录含施工A工作流脚本原文（拆分改名总表 SPLIT_SPEC + 九段任务书），重跑未完成段直接照抄对应段 prompt**。
+- **施工依据材料（全部已归档进仓库，别重新侦察）**：`docs/claude/P2侦察报告-2026-07-27.md`——6 路侦察报告合集（拆分依赖图/PickerField 四套/照片胶水三份/图标差异/性能热点+缓存方案/情感化素材），**附录含施工A工作流脚本原文（拆分改名总表 SPLIT_SPEC + 九段任务书）**。
 - **已完成段（每段完成时 analyze 0 error 0 warning + asset_management_view_test 全过）**：
   - ✅ S1 全局标准件 `lib/widgets/app_picker_field.dart`（AppPickerField/AppReadOnlyField/showPickerMenu），4 套重复实现全收口：accounts_view `_IosPickerField`、recurring_view `_PickerField`（含 409-443 内联起始日期块、账户/账本菜单升级 selected: 写法）、physical_asset_purchase_sheet `_PickerField`（InkWell→PressableScale、chevron_right→下箭头）、refund_settlement_sheet `_SettlementPickerField`。**以后「点击弹菜单选值」字段一律用 AppPickerField，别再手搓。**
   - ✅ S2 图标合一+死代码：删 `_PhysicalAssetGroupCard`+`_PhysicalAssetTile`（171 行死代码）；删私有 `_assetIcon`，统一用 physical_asset_grid.dart 公开 `assetTypeIcon`；**已拍板取值（用户未过目，可推翻）**：digital=devices_other_outlined（线框系统一）、appliance=kitchen_outlined（维持）。
@@ -48,14 +48,20 @@
   - ✅ S8 物品簇 → `physical_asset_detail_page.dart`(1147行) + `physical_asset_sheets.dart`(1014行) + `physical_asset_form_sheet.dart`(664行)。⚠️ 发现待决策项：私有 `_physicalAssetStatusLabel`（在 detail_page）与 physical_asset_grid.dart 公开 `physicalAssetStatusLabel` **不等价**（usageStatus.unknown 时前者「持有中」后者「待确认」），按规矩保留两套未合并，合一留后续拍板。
   - ✅ S9 收尾 → `asset_add_entry_sheet.dart`(200行，AssetAddEntrySheet)；accounts_view 无 unused import、旧私有名零残留。**终检：accounts_view.dart 2733 行（原 7333）；analyze 0 error 0 warning；8 个资产测试文件 81 用例全过。**
 - **✅ 断点已落盘**：施工A 全部成果（上述代码+本文档+侦察报告）已 WIP commit `e0ec79d`，远端源码快照 `bc8095a` 已推 origin/codex/feimiao-p0-fixes（parent=39371b1，不含发布产物）。树在提交时点=编译绿+资产测试绿。下次推快照 parent 用 `bc8095a`。
-- **❌ 未完成（按顺序做）**：
-  1. **S5 总览+资金簇重跑**（agent 因 API 连接中断死亡未执行，非代码问题）：`asset_overview_cards.dart` + `funds_tab_cards.dart` 不存在，_AssetSummaryCard/_VerifiedNetWorthCard/_AssetPendingCard/_AssetAnalysisCard/_AssetEmptyState/_AccountBalance/_AccountGroup(Card)/_AccountBalanceTile/_ZeroBalanceAccountsCard/_FundsArchive* 两簇（约 1200 行）还在 accounts_view.dart。照侦察报告附录 SPLIT_SPEC 改名总表做。
-  2. **S6 账户簇重跑**（同上，0 个 tool call 就死了）：`account_detail_page.dart` + `account_form_sheet.dart` 不存在，_AccountDetailPage(+State)/_CheckpointRow/_AccountBalanceCalibrationSheet/_AccountBalanceTrendCard(+Painter)/_AccountFormSheet(+State)/_AccountTypePicker/_TypeChip（约 700 行）还在 accounts_view.dart。做完 S5+S6 后 accounts_view 应 <900 行。
-  3. **性能缓存**：照侦察报告§五方案（revision 计数挂 notifyListeners 覆写 + 当天维度 + per-account 余额 memo + 趋势 memo + 净资产 memo + _txById 索引 + 物品卡 watch→read + 加 @visibleForTesting 计数器和失效测试）。资产页现状一次 build ≈ 3×账户数次全量交易重放，账户详情页趋势 ~91 次/帧最重。
-  4. **情感化三件**：照侦察报告§六（净资产合并卡猫探头：Stack+Positioned top-8/right-4+MascotBreath(bob:2,sway:0,centerRight)+idle.webp 高~80、ListView 顶部 padding 4→≥12 防裁切；showAppToast 加可选 mascot 参数配成功猫：净资产核对完成/余额已核对/权益收回 _save 补 toast[现在收回成功无任何提示]；两个趋势 CustomPainter 加 per-segment 渐变填充 withValues 0.18→0）。
-  5. **验收交付**：全量 flutter test（基线 803，结果落文件查 $?）→ 对抗审查 → 渲染对比图（方法见方案文档§六）→ 版本 bump **1.207.0+209 / b0727-209**（pubspec+app_version.dart+build_info.dart 三处）→ build apk + verify_release_apk.sh（先 export JAVA_HOME）→ 归档 sha256 → 更新本文档 → commit（**别混入 33 个旧 APK 删除状态**）→ 源码快照推 origin（parent=上一快照 09aa437）。**未拍板前不发布线上（线上仍 v206）。**
-- **⚠️ 接手第一步**：`flutter analyze --no-pub --no-fatal-infos --no-fatal-warnings`（WIP 提交时点已验绿，重跑确认环境即可）+ `flutter test test/asset_management_view_test.dart` 验资产 UI，然后从上面「未完成」第 1 条（S5 重跑）继续。
-- **⚠️ 工作树状态**：施工A 成果已 WIP commit；工作树剩 33 个旧 APK 删除状态（D）——老规矩别混进功能提交。版本号未 bump（仍 1.206.0+208 / b0727-208），DB 仍 v41，线上仍 v206。
+- **✅ 施工B（2026-07-27 本会话，工作流 4 段全绿，每段 analyze 0 error 0 warning + 资产测试全过）**：
+  1. **S5 总览+资金簇**：新 `asset_overview_cards.dart`(451行：AssetEmptyState/AssetPendingItem/AssetPendingCard/VerifiedNetWorthCard/AssetSummaryCard/AssetAnalysisCard 公开+3 私有) + `funds_tab_cards.dart`(337行：FundsAccountBalance/FundsAccountGroup(Card)/FundsAccountBalanceTile/ZeroBalanceAccountsCard/FundsArchive* 全公开)。
+  2. **S6 账户簇**：新 `account_detail_page.dart`(624行：AccountDetailPage 公开+校准弹层/趋势卡/CheckpointRow 私有) + `account_form_sheet.dart`(500行：AccountFormSheet 公开+TypePicker/TypeChip 私有)。**accounts_view.dart 最终 898 行**（原 7333；S1-S9 全部完成）。转公开的 Widget 构造补了 super.key（lint 硬要求，与既拆文件做法一致），其余逐字搬运。
+  3. **性能缓存（app_repository.dart）**：①全局 `_revision`（override notifyListeners 自增，121 处调用点零改动接入）②accountBalanceResultOf per-account memo、currentNetWorthResult/Breakdown 整结果 memo、accountBalanceTrend 按(accountId,days) memo——全部带 (revision, 当天yyyymmdd) 维度，historical/自定义 asOf 路径零缓存 ③`_txById` 惰性索引（transactionById/physicalAssetAdditionalCost 线性查 O(L×T)→O(L)）④双保险失效 `_invalidateBalanceDerived()`：挂 _invalidateTxDerived + 8 个 _loadXxx 重载漏斗（防 notify 前内部读脏，如 _persistCurrentNetWorthSnapshot）⑤该函数里原 super.notifyListeners() 改 notifyListeners()（保 revision 不变量）⑥@visibleForTesting balanceRecomputeCount/netWorthRecomputeCount/trendRecomputeCount ⑦physical_asset_grid 物品卡 watch→read（外层 Consumer 已重建，卡内 watch 冗余）⑧新 `test/balance_cache_test.dart` 5 用例（命中/交易失效/校准失效/账户编辑失效/净资产+趋势）。效果：资产页 build 从 3×账户数次全量重放降到同数据版本只算一次；账户详情趋势 ~91 次/帧→1 次。
+  4. **情感化三件**：①净资产合并卡探头猫（accounts_view _buildOverview：Stack Clip.none+Positioned top-8/right-4+MascotBreath(bob:2,sway:0,centerRight)+idle.webp 高80、overview ListView 顶 padding 4→12 防裁）②showAppToast 加可选 `MascotMood? mascot`（Mascot size22 自带回退，胶囊 vertical padding 8→6），三处接成功猫：净资产核对完成/余额已核对/**权益收回 _save 补 toast「权益已收回」**（原来无任何提示，pop 前调用走 rootOverlay 存活）③两个趋势 painter（net_worth_trend_card + account_detail_page）per-segment 渐变填充 ui.Gradient.linear lineColor withValues 0.18→0，断点不连片，网格后描线前。
+- **✅ 用户真机反馈两条已修（2026-07-27，等 v209 一起交付）**：
+  1. **编辑物品键盘 bug（用户截图：键盘弹起后大片空白+表头顶进状态栏）**：根因=「双重键盘垫层」——showBlurSheet 路由层已有 AnimatedPadding 避让键盘，弹层内部又垫了一层 `Padding(bottom: viewInsetsOf)`，两层叠加把可视区压没。**12 处 showBlurSheet 弹层统一删内层垫层**（物品表单/权益表单/收回/物品估值·出售·凭证·折旧·复核·结束持有/退款分摊/成本关联/账户表单/余额校准）。⚠️ book_sheet 走 appSheet(showModalBottomSheet) 路由**不会**自动避让，其内层垫层是正确的，刻意保留——以后判断这类问题先看弹层走哪条路由。
+  2. **物品卡空隙（用户截图红框：副标题和日均之间大空白）**：根因=竖卡文字区固定 6/11 高度+Spacer，名称一行时富余全成空白。改「照片 Expanded 吃掉富余高度+文字块贴底自适应」（physical_asset_grid.dart），照片更大、空隙消失、名称两行时照片自动让位天生防溢出。测试适配：asset_management_view_test 一处 tap 卡片前补 scrollLastGridTo（文字贴底后在 800×600 测试视口落到折叠线下，非弱化）。
+- **✅ 已验收部分（2026-07-27 施工B会话）**：
+  - **全量 flutter test：808/808 全过**（803 基线 + 5 新缓存用例），exit 0。
+  - **渲染图已出**：after `outputs/asset_ui_review/after_p2/`（7 张，含 p2_07=编辑物品+FakeViewPadding 伪键盘的修复证据图）；对比图 `outputs/asset_ui_review/compare_p2/`（5 张，P1 vs P2），已发用户过目（尚未回复拍板）。渲染脚本临时拷进 test/ 跑完已删，原件在施工B会话 scratchpad `tmp_asset_ui_p2_render_test.dart`（丢了就照 after_p1 那版改：输出目录/p2_07 那段 FakeViewPadding(bottom:600)）。
+  - 对抗审查工作流（拆分等价/缓存正确性/UI铁律/测试质量 4 维+逐条复核）**发起但用户额度耗尽时未跑完**：4 路中 1 路（test 维度）已回报**零问题**。journal：`~/.claude/projects/C--src-xunni-codex/a86b7f00-6c65-4beb-8553-07d51f8bce67/subagents/workflows/wf_d4379b23-5d5/journal.jsonl`（每路一条 result）。接手时若 journal 已有 4 条 result 就直接看结论；没有就重发一轮审查（或人工抽查缓存失效点+拆分引用即可，全量测试已绿兜底）。
+- **❌ 剩余（按顺序，接手从这里继续）**：①看对抗审查结论、处置发现（如有）②版本 bump **1.207.0+209 / b0727-209**（pubspec+app_version.dart+build_info.dart 三处）③build apk + verify_release_apk.sh（先 export JAVA_HOME="C:\Program Files\Android\Android Studio\jbr"）④归档 sha256 ⑤更新本文档终稿 ⑥最终 commit ⑦源码快照推 origin。**未拍板前不发布线上（线上仍 v206）。等用户对 compare_p2 对比图点头。**
+- **⚠️ 断点落盘（额度告急时做的保底）**：施工B 全部成果（S5/S6/性能/情感化/两条bug修复/本文档/渲染对比图）已 WIP commit 到本地 codex/feimiao-p0-fixes，并推了源码快照到 origin（哈希见 git log 最新两条；快照 parent=bc8095a，不含发布产物）。**33 个旧 APK 删除状态（D）刻意未提交**——老规矩别混进功能提交。版本号未 bump（仍 1.206.0+208 / b0727-208），DB 仍 v41，线上仍 v206。
 
 ### 2026-07-18 当前启动体验修复（工作区未提交）
 

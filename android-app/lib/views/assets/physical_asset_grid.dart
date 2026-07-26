@@ -42,8 +42,8 @@ class PhysicalAssetGrid extends StatelessWidget {
             crossAxisCount: singleColumn ? 1 : 2,
             crossAxisSpacing: 10,
             mainAxisSpacing: 10,
-            // 2 栏卡片改矮胖为瘦高（0.78→0.66），给底部文字行留够高度，
-            // 否则窄屏上名称+说明+提醒三行会被固定宽高比裁成溢出碎块。
+            // 2 栏卡片瘦高比例（0.66）配合「照片 Expanded + 文字自适应」：
+            // 文字块按内容取高不会溢出，名称一两行的差额由照片高度吸收。
             childAspectRatio: singleColumn ? (largeText ? 1.75 : 2.25) : 0.66,
           ),
           itemCount: assets.length,
@@ -72,7 +72,10 @@ class _AssetGridCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final repo = context.watch<AppRepository>();
+    // 上层资产管理页的 Consumer<AppRepository> 已负责在数据变化时重建整个
+    // 子树，这里再 watch 就是每张卡对全仓库的冗余双重订阅——改成 read，
+    // 卡内所有查询与 quick-use 按钮共用同一个引用。
+    final repo = context.read<AppRepository>();
     final cost = repo.physicalAssetAcquisitionCost(asset.id);
     final additional = repo.physicalAssetAdditionalCost(asset.id);
     final usage = repo.physicalAssetUsage(asset.id);
@@ -153,8 +156,10 @@ class _AssetGridCard extends StatelessWidget {
                   : Column(
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
-                        Expanded(flex: 5, child: image),
-                        Expanded(flex: 6, child: content),
+                        // 照片吃掉全部富余高度，文字块按内容自适应贴底：
+                        // 名称只有一行时多出来的空间进照片而不是变成空白。
+                        Expanded(child: image),
+                        content,
                       ],
                     ),
             ),
@@ -217,6 +222,7 @@ class _AssetCardText extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         mainAxisAlignment: MainAxisAlignment.center,
+        mainAxisSize: MainAxisSize.min,
         children: [
           Text(
             asset.name,
@@ -231,7 +237,7 @@ class _AssetCardText extends StatelessWidget {
             overflow: TextOverflow.ellipsis,
             style: AppType.secondary(scheme),
           ),
-          const Spacer(),
+          const SizedBox(height: 8),
           Text.rich(
             digitAwareAmountSpan(
               primaryText,

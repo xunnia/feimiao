@@ -81,54 +81,51 @@ class _PhysicalAssetTerminalSheetState
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    return Padding(
-      padding: EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(context).bottom),
-      child: SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            SheetHeader(
-              title: '${widget.actionLabel}物品',
-              subtitle: '结束持有后当前价值归零，但不会生成账户流水、普通收支或预算。',
-              onClose: () => Navigator.pop(context),
-              actionLabel: '确认${widget.actionLabel}',
-              onAction: _saving ? null : _save,
-            ),
-            Flexible(
-              child: SingleChildScrollView(
-                padding: const EdgeInsets.fromLTRB(16, 4, 16, 18),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    AppLabeledField(
-                      label: '结束日期',
-                      child: AppPickerField(
-                        text: assetDateText(_endedAt),
-                        hint: '选择日期',
-                        onTap: (_) => _pickDate(),
+    return SafeArea(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          SheetHeader(
+            title: '${widget.actionLabel}物品',
+            subtitle: '结束持有后当前价值归零，但不会生成账户流水、普通收支或预算。',
+            onClose: () => Navigator.pop(context),
+            actionLabel: '确认${widget.actionLabel}',
+            onAction: _saving ? null : _save,
+          ),
+          Flexible(
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.fromLTRB(16, 4, 16, 18),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  AppLabeledField(
+                    label: '结束日期',
+                    child: AppPickerField(
+                      text: assetDateText(_endedAt),
+                      hint: '选择日期',
+                      onTap: (_) => _pickDate(),
+                    ),
+                  ),
+                  const SizedBox(height: 14),
+                  AppLabeledField(
+                    label: '说明（可选）',
+                    child: TextField(
+                      controller: _noteController,
+                      maxLength: 80,
+                      maxLines: 2,
+                      style: AppType.body(scheme),
+                      decoration: iosInputDecoration(
+                        context,
+                        hint: '例如损坏原因、赠送对象',
                       ),
                     ),
-                    const SizedBox(height: 14),
-                    AppLabeledField(
-                      label: '说明（可选）',
-                      child: TextField(
-                        controller: _noteController,
-                        maxLength: 80,
-                        maxLines: 2,
-                        style: AppType.body(scheme),
-                        decoration: iosInputDecoration(
-                          context,
-                          hint: '例如损坏原因、赠送对象',
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
+                  ),
+                ],
               ),
             ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }
@@ -293,61 +290,58 @@ class _AssetValueSheetState extends State<AssetValueSheet> {
   @override
   Widget build(BuildContext context) {
     final valid = assetDecimalInputValid(_amountCtrl.text, required: true);
-    return Padding(
-      padding: EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(context).bottom),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          SheetHeader(
-            title: '更新当前价值',
-            onClose: () => Navigator.pop(context),
-            actionLabel: '保存',
-            onAction: valid ? _save : null,
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        SheetHeader(
+          title: '更新当前价值',
+          onClose: () => Navigator.pop(context),
+          actionLabel: '保存',
+          onAction: valid ? _save : null,
+        ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 4, 16, 18),
+          child: Column(
+            children: [
+              AppLabeledField(
+                label: '当前估值',
+                child: TextField(
+                  controller: _amountCtrl,
+                  autofocus: true,
+                  keyboardType:
+                      const TextInputType.numberWithOptions(decimal: true),
+                  inputFormatters: moneyInputFormatters(),
+                  decoration: iosInputDecoration(
+                    context,
+                    prefix: '¥ ',
+                    hint: '例如 1800',
+                  ),
+                  onChanged: (_) => setState(() {}),
+                ),
+              ),
+              const SizedBox(height: 14),
+              AppLabeledField(
+                label: '估值日期',
+                helperText: '历史估值会进入时间线，不会覆盖更晚的有效估值。',
+                child: AssetNullableDateField(
+                  fieldKey: const Key('physical-asset-valuation-date'),
+                  value: _valuedAt,
+                  emptyText: '选择日期',
+                  onTap: _pickValuationDate,
+                ),
+              ),
+              const SizedBox(height: 14),
+              AppLabeledField(
+                label: '说明（可选）',
+                child: TextField(
+                  controller: _noteCtrl,
+                  decoration: iosInputDecoration(context, hint: '例如 二手平台参考价'),
+                ),
+              ),
+            ],
           ),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 4, 16, 18),
-            child: Column(
-              children: [
-                AppLabeledField(
-                  label: '当前估值',
-                  child: TextField(
-                    controller: _amountCtrl,
-                    autofocus: true,
-                    keyboardType:
-                        const TextInputType.numberWithOptions(decimal: true),
-                    inputFormatters: moneyInputFormatters(),
-                    decoration: iosInputDecoration(
-                      context,
-                      prefix: '¥ ',
-                      hint: '例如 1800',
-                    ),
-                    onChanged: (_) => setState(() {}),
-                  ),
-                ),
-                const SizedBox(height: 14),
-                AppLabeledField(
-                  label: '估值日期',
-                  helperText: '历史估值会进入时间线，不会覆盖更晚的有效估值。',
-                  child: AssetNullableDateField(
-                    fieldKey: const Key('physical-asset-valuation-date'),
-                    value: _valuedAt,
-                    emptyText: '选择日期',
-                    onTap: _pickValuationDate,
-                  ),
-                ),
-                const SizedBox(height: 14),
-                AppLabeledField(
-                  label: '说明（可选）',
-                  child: TextField(
-                    controller: _noteCtrl,
-                    decoration: iosInputDecoration(context, hint: '例如 二手平台参考价'),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
+        ),
+      ],
     );
   }
 
@@ -426,128 +420,125 @@ class _AssetEvidenceSheetState extends State<AssetEvidenceSheet> {
                 : widget.asset.photoPath);
     final invoicePath =
         _removeInvoice ? '' : _pendingInvoicePath ?? widget.asset.invoicePath;
-    return Padding(
-      padding: EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(context).bottom),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          SheetHeader(
-            title: '资产凭证',
-            subtitle: '照片会保存到 App 受管目录，并生成列表缩略图',
-            onClose: () => Navigator.pop(context),
-            actionLabel: '保存',
-            onAction: _saving ? null : _save,
-          ),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 4, 16, 18),
-            child: Column(
-              children: [
-                AppLabeledField(
-                  label: '物品照片',
-                  child: Container(
-                    height: 156,
-                    decoration: BoxDecoration(
-                      color: AppColors.inputFill(scheme),
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    clipBehavior: Clip.antiAlias,
-                    child:
-                        previewPath.isNotEmpty && File(previewPath).existsSync()
-                            ? Image.file(File(previewPath), fit: BoxFit.cover)
-                            : Center(
-                                child: Icon(
-                                  Icons.image_outlined,
-                                  size: 36,
-                                  color: AppTextColor.secondary(scheme),
-                                ),
-                              ),
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        SheetHeader(
+          title: '资产凭证',
+          subtitle: '照片会保存到 App 受管目录，并生成列表缩略图',
+          onClose: () => Navigator.pop(context),
+          actionLabel: '保存',
+          onAction: _saving ? null : _save,
+        ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 4, 16, 18),
+          child: Column(
+            children: [
+              AppLabeledField(
+                label: '物品照片',
+                child: Container(
+                  height: 156,
+                  decoration: BoxDecoration(
+                    color: AppColors.inputFill(scheme),
+                    borderRadius: BorderRadius.circular(12),
                   ),
-                ),
-                const SizedBox(height: 8),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.end,
-                  children: [
-                    Tooltip(
-                      message: '拍照',
-                      child: AppCircleButton(
-                        icon: Icons.photo_camera_outlined,
-                        onPressed: () => _pickImage(ImageSource.camera),
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    Tooltip(
-                      message: '从相册选择',
-                      child: AppCircleButton(
-                        icon: Icons.photo_library_outlined,
-                        onPressed: () => _pickImage(ImageSource.gallery),
-                      ),
-                    ),
-                    if (previewPath.isNotEmpty) ...[
-                      const SizedBox(width: 8),
-                      Tooltip(
-                        message: '移除照片',
-                        child: AppCircleButton(
-                          icon: Icons.close,
-                          onPressed: _clearPhoto,
-                        ),
-                      ),
-                    ],
-                  ],
-                ),
-                const SizedBox(height: 12),
-                AppLabeledField(
-                  label: '发票 / 保修单（可选）',
-                  child: SettingsGroup(
-                    margin: EdgeInsets.zero,
-                    children: [
-                      SettingsRow(
-                        title: invoicePath.isEmpty
-                            ? '还没有添加凭证'
-                            : path.basename(invoicePath),
-                        subtitle: '文件会复制到 App 受管目录',
-                        trailing: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Tooltip(
-                              message: '选择文件',
-                              child: AppCircleButton(
-                                icon: Icons.attach_file,
+                  clipBehavior: Clip.antiAlias,
+                  child:
+                      previewPath.isNotEmpty && File(previewPath).existsSync()
+                          ? Image.file(File(previewPath), fit: BoxFit.cover)
+                          : Center(
+                              child: Icon(
+                                Icons.image_outlined,
                                 size: 36,
-                                iconSize: 18,
-                                onPressed: _pickInvoice,
+                                color: AppTextColor.secondary(scheme),
                               ),
                             ),
-                            if (invoicePath.isNotEmpty) ...[
-                              const SizedBox(width: 6),
-                              Tooltip(
-                                message: '移除凭证',
-                                child: AppCircleButton(
-                                  icon: Icons.close,
-                                  size: 36,
-                                  iconSize: 18,
-                                  onPressed: _clearInvoice,
-                                ),
-                              ),
-                            ],
-                          ],
-                        ),
+                ),
+              ),
+              const SizedBox(height: 8),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+                  Tooltip(
+                    message: '拍照',
+                    child: AppCircleButton(
+                      icon: Icons.photo_camera_outlined,
+                      onPressed: () => _pickImage(ImageSource.camera),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Tooltip(
+                    message: '从相册选择',
+                    child: AppCircleButton(
+                      icon: Icons.photo_library_outlined,
+                      onPressed: () => _pickImage(ImageSource.gallery),
+                    ),
+                  ),
+                  if (previewPath.isNotEmpty) ...[
+                    const SizedBox(width: 8),
+                    Tooltip(
+                      message: '移除照片',
+                      child: AppCircleButton(
+                        icon: Icons.close,
+                        onPressed: _clearPhoto,
                       ),
-                    ],
-                  ),
+                    ),
+                  ],
+                ],
+              ),
+              const SizedBox(height: 12),
+              AppLabeledField(
+                label: '发票 / 保修单（可选）',
+                child: SettingsGroup(
+                  margin: EdgeInsets.zero,
+                  children: [
+                    SettingsRow(
+                      title: invoicePath.isEmpty
+                          ? '还没有添加凭证'
+                          : path.basename(invoicePath),
+                      subtitle: '文件会复制到 App 受管目录',
+                      trailing: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Tooltip(
+                            message: '选择文件',
+                            child: AppCircleButton(
+                              icon: Icons.attach_file,
+                              size: 36,
+                              iconSize: 18,
+                              onPressed: _pickInvoice,
+                            ),
+                          ),
+                          if (invoicePath.isNotEmpty) ...[
+                            const SizedBox(width: 6),
+                            Tooltip(
+                              message: '移除凭证',
+                              child: AppCircleButton(
+                                icon: Icons.close,
+                                size: 36,
+                                iconSize: 18,
+                                onPressed: _clearInvoice,
+                              ),
+                            ),
+                          ],
+                        ],
+                      ),
+                    ),
+                  ],
                 ),
-                const SizedBox(height: 12),
-                AppLabeledField(
-                  label: '说明（可选）',
-                  child: TextField(
-                    controller: _noteCtrl,
-                    decoration: iosInputDecoration(context, hint: '例如保修范围'),
-                  ),
+              ),
+              const SizedBox(height: 12),
+              AppLabeledField(
+                label: '说明（可选）',
+                child: TextField(
+                  controller: _noteCtrl,
+                  decoration: iosInputDecoration(context, hint: '例如保修范围'),
                 ),
-              ],
-            ),
+              ),
+            ],
           ),
-        ],
-      ),
+        ),
+      ],
     );
   }
 
@@ -728,97 +719,93 @@ class _AssetDepreciationSheetState extends State<AssetDepreciationSheet> {
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(context).bottom),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          SheetHeader(
-            title: '折旧设置',
-            subtitle: '手动更新当前价值会暂停自动折旧，重新保存折旧设置后恢复。',
-            onClose: () => Navigator.pop(context),
-            actionLabel: '保存',
-            onAction: _valid ? _save : null,
-          ),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 4, 16, 18),
-            child: Column(
-              children: [
-                SettingsGroup(
-                  margin: EdgeInsets.zero,
-                  children: [
-                    SettingsRow(
-                      title: '线性折旧',
-                      subtitle: '按完整月份把价值降到残值，不写入普通收支',
-                      trailing: AppSwitch(
-                        value: _enabled,
-                        onChanged: (value) => setState(() => _enabled = value),
-                      ),
-                    ),
-                  ],
-                ),
-                if (_enabled) ...[
-                  const SizedBox(height: 14),
-                  AppLabeledField(
-                    label: '折旧基准金额',
-                    child: TextField(
-                      controller: _baseCtrl,
-                      keyboardType:
-                          const TextInputType.numberWithOptions(decimal: true),
-                      inputFormatters: moneyInputFormatters(),
-                      decoration: iosInputDecoration(context, prefix: '¥ '),
-                      onChanged: (_) => setState(() {}),
-                    ),
-                  ),
-                  const SizedBox(height: 14),
-                  AppLabeledField(
-                    label: '预计残值',
-                    child: TextField(
-                      controller: _salvageCtrl,
-                      keyboardType:
-                          const TextInputType.numberWithOptions(decimal: true),
-                      inputFormatters: moneyInputFormatters(),
-                      decoration: iosInputDecoration(context, prefix: '¥ '),
-                      onChanged: (_) => setState(() {}),
-                    ),
-                  ),
-                  const SizedBox(height: 14),
-                  AppLabeledField(
-                    label: '使用寿命（月）',
-                    child: TextField(
-                      controller: _monthsCtrl,
-                      keyboardType: TextInputType.number,
-                      decoration: iosInputDecoration(context, hint: '例如 36'),
-                      onChanged: (_) => setState(() {}),
-                    ),
-                  ),
-                  const SizedBox(height: 14),
-                  AppLabeledField(
-                    label: '折旧开始日期',
-                    helperText:
-                        _startAt == null ? '购买日期未知，请明确选择折旧从哪一天开始。' : null,
-                    child: AssetNullableDateField(
-                      fieldKey:
-                          const Key('physical-asset-depreciation-start-date'),
-                      value: _startAt,
-                      emptyText: '请选择开始日期',
-                      onTap: _pickStartDate,
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        SheetHeader(
+          title: '折旧设置',
+          subtitle: '手动更新当前价值会暂停自动折旧，重新保存折旧设置后恢复。',
+          onClose: () => Navigator.pop(context),
+          actionLabel: '保存',
+          onAction: _valid ? _save : null,
+        ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 4, 16, 18),
+          child: Column(
+            children: [
+              SettingsGroup(
+                margin: EdgeInsets.zero,
+                children: [
+                  SettingsRow(
+                    title: '线性折旧',
+                    subtitle: '按完整月份把价值降到残值，不写入普通收支',
+                    trailing: AppSwitch(
+                      value: _enabled,
+                      onChanged: (value) => setState(() => _enabled = value),
                     ),
                   ),
                 ],
+              ),
+              if (_enabled) ...[
                 const SizedBox(height: 14),
                 AppLabeledField(
-                  label: '说明（可选）',
+                  label: '折旧基准金额',
                   child: TextField(
-                    controller: _noteCtrl,
-                    decoration: iosInputDecoration(context, hint: '例如 按三年折旧'),
+                    controller: _baseCtrl,
+                    keyboardType:
+                        const TextInputType.numberWithOptions(decimal: true),
+                    inputFormatters: moneyInputFormatters(),
+                    decoration: iosInputDecoration(context, prefix: '¥ '),
+                    onChanged: (_) => setState(() {}),
+                  ),
+                ),
+                const SizedBox(height: 14),
+                AppLabeledField(
+                  label: '预计残值',
+                  child: TextField(
+                    controller: _salvageCtrl,
+                    keyboardType:
+                        const TextInputType.numberWithOptions(decimal: true),
+                    inputFormatters: moneyInputFormatters(),
+                    decoration: iosInputDecoration(context, prefix: '¥ '),
+                    onChanged: (_) => setState(() {}),
+                  ),
+                ),
+                const SizedBox(height: 14),
+                AppLabeledField(
+                  label: '使用寿命（月）',
+                  child: TextField(
+                    controller: _monthsCtrl,
+                    keyboardType: TextInputType.number,
+                    decoration: iosInputDecoration(context, hint: '例如 36'),
+                    onChanged: (_) => setState(() {}),
+                  ),
+                ),
+                const SizedBox(height: 14),
+                AppLabeledField(
+                  label: '折旧开始日期',
+                  helperText: _startAt == null ? '购买日期未知，请明确选择折旧从哪一天开始。' : null,
+                  child: AssetNullableDateField(
+                    fieldKey:
+                        const Key('physical-asset-depreciation-start-date'),
+                    value: _startAt,
+                    emptyText: '请选择开始日期',
+                    onTap: _pickStartDate,
                   ),
                 ),
               ],
-            ),
+              const SizedBox(height: 14),
+              AppLabeledField(
+                label: '说明（可选）',
+                child: TextField(
+                  controller: _noteCtrl,
+                  decoration: iosInputDecoration(context, hint: '例如 按三年折旧'),
+                ),
+              ),
+            ],
           ),
-        ],
-      ),
+        ),
+      ],
     );
   }
 
@@ -895,91 +882,88 @@ class _AssetSellSheetState extends State<AssetSellSheet> {
         fee >= Decimal.zero &&
         fee <= amount;
     final net = amount - fee;
-    return Padding(
-      padding: EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(context).bottom),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          SheetHeader(
-            title: '出售资产',
-            subtitle: '出售入账只影响账户余额，不进入普通收入统计。',
-            onClose: () => Navigator.pop(context),
-            actionLabel: '保存',
-            onAction: valid ? _save : null,
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        SheetHeader(
+          title: '出售资产',
+          subtitle: '出售入账只影响账户余额，不进入普通收入统计。',
+          onClose: () => Navigator.pop(context),
+          actionLabel: '保存',
+          onAction: valid ? _save : null,
+        ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 4, 16, 18),
+          child: Column(
+            children: [
+              AppLabeledField(
+                label: '成交价',
+                child: TextField(
+                  controller: _amountCtrl,
+                  autofocus: true,
+                  keyboardType:
+                      const TextInputType.numberWithOptions(decimal: true),
+                  inputFormatters: moneyInputFormatters(),
+                  decoration:
+                      iosInputDecoration(context, prefix: '¥ ', hint: '实际成交金额'),
+                  onChanged: (_) => setState(() {}),
+                ),
+              ),
+              const SizedBox(height: 12),
+              AppLabeledField(
+                label: '出售费用',
+                helperText: '平台手续费、运费等；不会另记普通支出',
+                child: TextField(
+                  controller: _feeCtrl,
+                  keyboardType:
+                      const TextInputType.numberWithOptions(decimal: true),
+                  inputFormatters: moneyInputFormatters(),
+                  decoration: iosInputDecoration(context, prefix: '¥ '),
+                  onChanged: (_) => setState(() {}),
+                ),
+              ),
+              const SizedBox(height: 12),
+              AssetDetailSection(
+                title: '结算',
+                children: [
+                  AssetDetailRow(
+                    label: '净到账',
+                    value: MoneyFormat.string(net),
+                  ),
+                  AssetDetailRow(
+                    label: '成交日期',
+                    value: assetDateText(_soldAt),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              AssetActionButton(
+                label: '选择成交日期',
+                icon: Icons.event_outlined,
+                onTap: _pickSoldAt,
+              ),
+              const SizedBox(height: 12),
+              AppLabeledField(
+                label: '收款账户',
+                child: AssetAccountDropdown(
+                  value: _accountId,
+                  accounts: repo.accounts,
+                  hint: '选择收款账户',
+                  onChanged: (value) => setState(() => _accountId = value),
+                ),
+              ),
+              const SizedBox(height: 12),
+              AppLabeledField(
+                label: '备注（可选）',
+                child: TextField(
+                  controller: _noteCtrl,
+                  decoration: iosInputDecoration(context, hint: '例如 闲鱼出售'),
+                ),
+              ),
+            ],
           ),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 4, 16, 18),
-            child: Column(
-              children: [
-                AppLabeledField(
-                  label: '成交价',
-                  child: TextField(
-                    controller: _amountCtrl,
-                    autofocus: true,
-                    keyboardType:
-                        const TextInputType.numberWithOptions(decimal: true),
-                    inputFormatters: moneyInputFormatters(),
-                    decoration: iosInputDecoration(context,
-                        prefix: '¥ ', hint: '实际成交金额'),
-                    onChanged: (_) => setState(() {}),
-                  ),
-                ),
-                const SizedBox(height: 12),
-                AppLabeledField(
-                  label: '出售费用',
-                  helperText: '平台手续费、运费等；不会另记普通支出',
-                  child: TextField(
-                    controller: _feeCtrl,
-                    keyboardType:
-                        const TextInputType.numberWithOptions(decimal: true),
-                    inputFormatters: moneyInputFormatters(),
-                    decoration: iosInputDecoration(context, prefix: '¥ '),
-                    onChanged: (_) => setState(() {}),
-                  ),
-                ),
-                const SizedBox(height: 12),
-                AssetDetailSection(
-                  title: '结算',
-                  children: [
-                    AssetDetailRow(
-                      label: '净到账',
-                      value: MoneyFormat.string(net),
-                    ),
-                    AssetDetailRow(
-                      label: '成交日期',
-                      value: assetDateText(_soldAt),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 8),
-                AssetActionButton(
-                  label: '选择成交日期',
-                  icon: Icons.event_outlined,
-                  onTap: _pickSoldAt,
-                ),
-                const SizedBox(height: 12),
-                AppLabeledField(
-                  label: '收款账户',
-                  child: AssetAccountDropdown(
-                    value: _accountId,
-                    accounts: repo.accounts,
-                    hint: '选择收款账户',
-                    onChanged: (value) => setState(() => _accountId = value),
-                  ),
-                ),
-                const SizedBox(height: 12),
-                AppLabeledField(
-                  label: '备注（可选）',
-                  child: TextField(
-                    controller: _noteCtrl,
-                    decoration: iosInputDecoration(context, hint: '例如 闲鱼出售'),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
+        ),
+      ],
     );
   }
 

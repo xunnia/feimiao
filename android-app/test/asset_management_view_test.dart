@@ -557,6 +557,7 @@ void main() {
     await pumpAccountsView(tester, repo);
     await tester.tap(find.text('物品'));
     await pumpViewAnimations(tester);
+    await scrollLastGridTo(tester, find.text('锁定成本物品'));
     await tester.tap(find.text('锁定成本物品'));
     await pumpViewAnimations(tester);
 

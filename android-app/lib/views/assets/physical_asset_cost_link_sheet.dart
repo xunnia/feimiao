@@ -198,27 +198,24 @@ class _PhysicalAssetCostLinkSheetState
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(context).bottom),
-      child: ConstrainedBox(
-        constraints: BoxConstraints(
-          maxHeight: MediaQuery.sizeOf(context).height * 0.9,
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            SheetHeader(
-              title: '关联支出',
-              subtitle: '选择一笔已有支出，记录这件物品后续发生的成本。',
-              onClose: () => Navigator.pop(context),
-              actionLabel: _submitting ? '关联中' : '关联',
-              actionKey: const Key('physical-asset-cost-submit'),
-              onAction: _canSubmit ? _submit : null,
-            ),
-            Flexible(child: _buildBody(context)),
-          ],
-        ),
+    return ConstrainedBox(
+      constraints: BoxConstraints(
+        maxHeight: MediaQuery.sizeOf(context).height * 0.9,
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          SheetHeader(
+            title: '关联支出',
+            subtitle: '选择一笔已有支出，记录这件物品后续发生的成本。',
+            onClose: () => Navigator.pop(context),
+            actionLabel: _submitting ? '关联中' : '关联',
+            actionKey: const Key('physical-asset-cost-submit'),
+            onAction: _canSubmit ? _submit : null,
+          ),
+          Flexible(child: _buildBody(context)),
+        ],
       ),
     );
   }

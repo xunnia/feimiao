@@ -167,298 +167,289 @@ class _PhysicalAssetFormSheetState extends State<PhysicalAssetFormSheet> {
             !assetCalendarDay(_warrantyUntil!)
                 .isBefore(assetCalendarDay(_purchaseDate!)));
     final screenH = MediaQuery.sizeOf(context).height;
-    return Padding(
-      padding: EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(context).bottom),
-      child: ConstrainedBox(
-        constraints: BoxConstraints(maxHeight: screenH * 0.9),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            SheetHeader(
-              title: _editing
-                  ? '编辑物品'
-                  : _newPurchase
-                      ? '记录新购买'
-                      : '手工补录物品',
-              onClose: () => Navigator.pop(context),
-              actionLabel: '保存',
-              onAction: valid ? _save : null,
-            ),
-            Flexible(
-              child: SingleChildScrollView(
-                padding: const EdgeInsets.fromLTRB(16, 4, 16, 18),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    AppLabeledField(
-                      label: '物品名称',
-                      child: TextField(
-                        key: const Key('physical-asset-name'),
-                        controller: _nameCtrl,
-                        autofocus: true,
-                        maxLength: 30,
-                        decoration:
-                            iosInputDecoration(context, hint: '例如 无线耳机'),
-                        onChanged: (_) => setState(() {}),
-                      ),
+    return ConstrainedBox(
+      constraints: BoxConstraints(maxHeight: screenH * 0.9),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          SheetHeader(
+            title: _editing
+                ? '编辑物品'
+                : _newPurchase
+                    ? '记录新购买'
+                    : '手工补录物品',
+            onClose: () => Navigator.pop(context),
+            actionLabel: '保存',
+            onAction: valid ? _save : null,
+          ),
+          Flexible(
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.fromLTRB(16, 4, 16, 18),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  AppLabeledField(
+                    label: '物品名称',
+                    child: TextField(
+                      key: const Key('physical-asset-name'),
+                      controller: _nameCtrl,
+                      autofocus: true,
+                      maxLength: 30,
+                      decoration: iosInputDecoration(context, hint: '例如 无线耳机'),
+                      onChanged: (_) => setState(() {}),
                     ),
-                    const SizedBox(height: 14),
-                    AppLabeledField(
-                      label: '物品分类',
-                      child: AssetEnumDropdown<AssetType>(
-                        value: _assetType,
-                        values: AssetType.values,
-                        labelOf: (value) => value.label,
-                        hint: '选择分类',
-                        onChanged: (value) =>
-                            setState(() => _assetType = value),
-                      ),
+                  ),
+                  const SizedBox(height: 14),
+                  AppLabeledField(
+                    label: '物品分类',
+                    child: AssetEnumDropdown<AssetType>(
+                      value: _assetType,
+                      values: AssetType.values,
+                      labelOf: (value) => value.label,
+                      hint: '选择分类',
+                      onChanged: (value) => setState(() => _assetType = value),
                     ),
-                    const SizedBox(height: 14),
+                  ),
+                  const SizedBox(height: 14),
+                  AppLabeledField(
+                    label: '物品照片（可选）',
+                    helperText: '照片会复制到 App 受管目录，并生成列表缩略图。',
+                    child: _buildPhotoField(),
+                  ),
+                  const SizedBox(height: 14),
+                  if (!_editing) ...[
                     AppLabeledField(
-                      label: '物品照片（可选）',
-                      helperText: '照片会复制到 App 受管目录，并生成列表缩略图。',
-                      child: _buildPhotoField(),
-                    ),
-                    const SizedBox(height: 14),
-                    if (!_editing) ...[
-                      AppLabeledField(
-                        label: '物品来源',
-                        helperText: _newPurchase
-                            ? '保存后会同步生成购买支出，不会重复入账。'
-                            : '历史物品不会减少账户余额，也不会补造旧支出。',
-                        child: _newPurchase
-                            ? AppReadOnlyField(
-                                text: _sourceType.label,
-                                icon: Icons.shopping_bag_outlined,
-                              )
-                            : AssetEnumDropdown<PhysicalAssetSourceType>(
-                                value: _sourceType,
-                                values: _manualSources,
-                                labelOf: (value) => value.label,
-                                hint: '选择来源',
-                                onChanged: (value) =>
-                                    setState(() => _sourceType = value),
-                              ),
-                      ),
-                      const SizedBox(height: 14),
-                      if (_newPurchase) ...[
-                        AppLabeledField(
-                          label: '付款账户',
-                          child: AssetAccountDropdown(
-                            value: _paymentAccountId,
-                            accounts: repo.accounts,
-                            hint: '选择付款账户',
-                            onChanged: (value) =>
-                                setState(() => _paymentAccountId = value),
-                          ),
-                        ),
-                        const SizedBox(height: 14),
-                        AppLabeledField(
-                          label: '支出分类',
-                          child: AssetCategoryDropdown(
-                            value: _purchaseCategoryId,
-                            categories: expenseCategories,
-                            hint: '选择支出分类',
-                            onChanged: (value) =>
-                                setState(() => _purchaseCategoryId = value),
-                          ),
-                        ),
-                      ],
-                    ],
-                    AppLabeledField(
-                      label: '当前估值',
-                      helperText: '填写今天大约能卖多少钱，不是原购买价。',
-                      child: TextField(
-                        key: const Key('physical-asset-current-value'),
-                        controller: _currentCtrl,
-                        keyboardType: const TextInputType.numberWithOptions(
-                            decimal: true),
-                        inputFormatters: moneyInputFormatters(),
-                        decoration: iosInputDecoration(
-                          context,
-                          prefix: '¥ ',
-                          hint: '例如 1800',
-                        ),
-                        onChanged: (_) => setState(() {}),
-                      ),
-                    ),
-                    const SizedBox(height: 14),
-                    AppLabeledField(
-                      label: _purchasePriceLocked ? '净购置成本' : '购买价',
-                      helperText: _purchasePriceLocked
-                          ? '成本来自原购买账单，不能在这里重复修改。'
-                          : _sourceType ==
-                                      PhysicalAssetSourceType.giftReceived ||
-                                  _sourceType ==
-                                      PhysicalAssetSourceType.inheritance
-                              ? '没有实际支出可留空，将按 ¥0 记录。'
-                              : _newPurchase
-                                  ? '新购买必须填写，金额会同步写入支出。'
-                                  : '不知道可以留空，日均花费和保值率会显示待补充。',
-                      child: TextField(
-                        key: const Key('physical-asset-purchase-price'),
-                        controller: _purchaseCtrl,
-                        readOnly: _purchasePriceLocked,
-                        enableInteractiveSelection: !_purchasePriceLocked,
-                        showCursor: !_purchasePriceLocked,
-                        keyboardType: const TextInputType.numberWithOptions(
-                            decimal: true),
-                        inputFormatters: moneyInputFormatters(),
-                        decoration: iosInputDecoration(
-                          context,
-                          prefix: '¥ ',
-                          hint: _newPurchase ? '必填' : '可留空',
-                        ).copyWith(
-                          suffixIcon: _purchasePriceLocked
-                              ? Icon(
-                                  Icons.lock_outline,
-                                  size: 18,
-                                  color: AppTextColor.secondary(scheme),
-                                )
-                              : null,
-                        ),
-                        onChanged: (_) => setState(() {}),
-                      ),
-                    ),
-                    const SizedBox(height: 14),
-                    AppLabeledField(
-                      label: _newPurchase || _purchaseDateLocked
-                          ? '购买日期'
-                          : '购买日期（可选）',
-                      helperText: _purchaseDateLocked
-                          ? '购买日期继承原账单，避免物品指标与账单日期冲突。'
-                          : _purchaseDate == null
-                              ? '未填写时持有天数和日均花费不会计算。'
-                              : '持有天数会从这一天开始计算。',
-                      child: _purchaseDateLocked
+                      label: '物品来源',
+                      helperText: _newPurchase
+                          ? '保存后会同步生成购买支出，不会重复入账。'
+                          : '历史物品不会减少账户余额，也不会补造旧支出。',
+                      child: _newPurchase
                           ? AppReadOnlyField(
-                              text: assetDateText(_purchaseDate),
-                              icon: Icons.event_outlined,
+                              text: _sourceType.label,
+                              icon: Icons.shopping_bag_outlined,
                             )
-                          : AssetNullableDateField(
-                              fieldKey:
-                                  const Key('physical-asset-purchase-date'),
-                              value: _purchaseDate,
-                              emptyText: _newPurchase ? '请选择购买日期' : '暂不清楚',
-                              onTap: _pickPurchaseDate,
-                              onClear: _newPurchase
-                                  ? null
-                                  : () => setState(() => _purchaseDate = null),
+                          : AssetEnumDropdown<PhysicalAssetSourceType>(
+                              value: _sourceType,
+                              values: _manualSources,
+                              labelOf: (value) => value.label,
+                              hint: '选择来源',
+                              onChanged: (value) =>
+                                  setState(() => _sourceType = value),
                             ),
                     ),
                     const SizedBox(height: 14),
-                    AppLabeledField(
-                      label: '使用状态',
-                      child: SlidingSegment<PhysicalAssetStatus>(
-                        key: const Key('physical-asset-usage-status'),
-                        items: const [
-                          (PhysicalAssetStatus.active, '在用'),
-                          (PhysicalAssetStatus.idle, '闲置'),
-                        ],
-                        value: _status == PhysicalAssetStatus.idle
-                            ? PhysicalAssetStatus.idle
-                            : PhysicalAssetStatus.active,
-                        onChanged: (value) => setState(() => _status = value),
-                      ),
-                    ),
-                    const SizedBox(height: 14),
-                    if (_editing) ...[
-                      const AssetHintBox(
-                        text: '出售、报废、丢失、赠送和归档请从资产详情执行。',
+                    if (_newPurchase) ...[
+                      AppLabeledField(
+                        label: '付款账户',
+                        child: AssetAccountDropdown(
+                          value: _paymentAccountId,
+                          accounts: repo.accounts,
+                          hint: '选择付款账户',
+                          onChanged: (value) =>
+                              setState(() => _paymentAccountId = value),
+                        ),
                       ),
                       const SizedBox(height: 14),
+                      AppLabeledField(
+                        label: '支出分类',
+                        child: AssetCategoryDropdown(
+                          value: _purchaseCategoryId,
+                          categories: expenseCategories,
+                          hint: '选择支出分类',
+                          onChanged: (value) =>
+                              setState(() => _purchaseCategoryId = value),
+                        ),
+                      ),
                     ],
-                    Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Expanded(
-                          child: AppLabeledField(
-                            label: '品牌（可选）',
-                            child: TextField(
-                              controller: _brandCtrl,
-                              decoration:
-                                  iosInputDecoration(context, hint: '例如 Apple'),
-                            ),
-                          ),
-                        ),
-                        const SizedBox(width: 10),
-                        Expanded(
-                          child: AppLabeledField(
-                            label: '型号（可选）',
-                            child: TextField(
-                              controller: _modelCtrl,
-                              decoration: iosInputDecoration(context,
-                                  hint: '例如 AirPods Pro'),
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 14),
-                    AppLabeledField(
-                      label: '保修到期日（可选）',
-                      helperText: _warrantyUntil != null &&
-                              _purchaseDate != null &&
-                              _warrantyUntil!.isBefore(_purchaseDate!)
-                          ? '保修到期日不能早于购买日期。'
-                          : null,
-                      child: AssetNullableDateField(
-                        fieldKey: const Key('physical-asset-warranty-date'),
-                        value: _warrantyUntil,
-                        emptyText: '未设置',
-                        onTap: _pickWarrantyDate,
-                        onClear: _warrantyUntil == null
-                            ? null
-                            : () => setState(() => _warrantyUntil = null),
-                      ),
-                    ),
-                    const SizedBox(height: 14),
-                    AppLabeledField(
-                      label: '存放位置（可选）',
-                      child: TextField(
-                        controller: _locationCtrl,
-                        decoration:
-                            iosInputDecoration(context, hint: '例如 客厅书桌'),
-                      ),
-                    ),
-                    const SizedBox(height: 14),
-                    AppLabeledField(
-                      label: '备注（可选）',
-                      child: TextField(
-                        controller: _noteCtrl,
-                        minLines: 2,
-                        maxLines: 4,
-                        maxLength: 80,
-                        decoration:
-                            iosInputDecoration(context, hint: '购买渠道、配置等'),
-                      ),
-                    ),
-                    const SizedBox(height: 14),
-                    SettingsGroup(
-                      margin: EdgeInsets.zero,
-                      children: [
-                        SettingsRow(
-                          title: '计入净资产',
-                          subtitle: _includeInNetWorth
-                              ? '按当前估值进入人民币净资产合计'
-                              : '只记录物品，不影响顶部净资产',
-                          trailing: AppSwitch(
-                            key: const Key('physical-asset-net-worth-switch'),
-                            value: _includeInNetWorth,
-                            onChanged: (value) =>
-                                setState(() => _includeInNetWorth = value),
-                          ),
-                        ),
-                      ],
-                    ),
                   ],
-                ),
+                  AppLabeledField(
+                    label: '当前估值',
+                    helperText: '填写今天大约能卖多少钱，不是原购买价。',
+                    child: TextField(
+                      key: const Key('physical-asset-current-value'),
+                      controller: _currentCtrl,
+                      keyboardType:
+                          const TextInputType.numberWithOptions(decimal: true),
+                      inputFormatters: moneyInputFormatters(),
+                      decoration: iosInputDecoration(
+                        context,
+                        prefix: '¥ ',
+                        hint: '例如 1800',
+                      ),
+                      onChanged: (_) => setState(() {}),
+                    ),
+                  ),
+                  const SizedBox(height: 14),
+                  AppLabeledField(
+                    label: _purchasePriceLocked ? '净购置成本' : '购买价',
+                    helperText: _purchasePriceLocked
+                        ? '成本来自原购买账单，不能在这里重复修改。'
+                        : _sourceType == PhysicalAssetSourceType.giftReceived ||
+                                _sourceType ==
+                                    PhysicalAssetSourceType.inheritance
+                            ? '没有实际支出可留空，将按 ¥0 记录。'
+                            : _newPurchase
+                                ? '新购买必须填写，金额会同步写入支出。'
+                                : '不知道可以留空，日均花费和保值率会显示待补充。',
+                    child: TextField(
+                      key: const Key('physical-asset-purchase-price'),
+                      controller: _purchaseCtrl,
+                      readOnly: _purchasePriceLocked,
+                      enableInteractiveSelection: !_purchasePriceLocked,
+                      showCursor: !_purchasePriceLocked,
+                      keyboardType:
+                          const TextInputType.numberWithOptions(decimal: true),
+                      inputFormatters: moneyInputFormatters(),
+                      decoration: iosInputDecoration(
+                        context,
+                        prefix: '¥ ',
+                        hint: _newPurchase ? '必填' : '可留空',
+                      ).copyWith(
+                        suffixIcon: _purchasePriceLocked
+                            ? Icon(
+                                Icons.lock_outline,
+                                size: 18,
+                                color: AppTextColor.secondary(scheme),
+                              )
+                            : null,
+                      ),
+                      onChanged: (_) => setState(() {}),
+                    ),
+                  ),
+                  const SizedBox(height: 14),
+                  AppLabeledField(
+                    label: _newPurchase || _purchaseDateLocked
+                        ? '购买日期'
+                        : '购买日期（可选）',
+                    helperText: _purchaseDateLocked
+                        ? '购买日期继承原账单，避免物品指标与账单日期冲突。'
+                        : _purchaseDate == null
+                            ? '未填写时持有天数和日均花费不会计算。'
+                            : '持有天数会从这一天开始计算。',
+                    child: _purchaseDateLocked
+                        ? AppReadOnlyField(
+                            text: assetDateText(_purchaseDate),
+                            icon: Icons.event_outlined,
+                          )
+                        : AssetNullableDateField(
+                            fieldKey: const Key('physical-asset-purchase-date'),
+                            value: _purchaseDate,
+                            emptyText: _newPurchase ? '请选择购买日期' : '暂不清楚',
+                            onTap: _pickPurchaseDate,
+                            onClear: _newPurchase
+                                ? null
+                                : () => setState(() => _purchaseDate = null),
+                          ),
+                  ),
+                  const SizedBox(height: 14),
+                  AppLabeledField(
+                    label: '使用状态',
+                    child: SlidingSegment<PhysicalAssetStatus>(
+                      key: const Key('physical-asset-usage-status'),
+                      items: const [
+                        (PhysicalAssetStatus.active, '在用'),
+                        (PhysicalAssetStatus.idle, '闲置'),
+                      ],
+                      value: _status == PhysicalAssetStatus.idle
+                          ? PhysicalAssetStatus.idle
+                          : PhysicalAssetStatus.active,
+                      onChanged: (value) => setState(() => _status = value),
+                    ),
+                  ),
+                  const SizedBox(height: 14),
+                  if (_editing) ...[
+                    const AssetHintBox(
+                      text: '出售、报废、丢失、赠送和归档请从资产详情执行。',
+                    ),
+                    const SizedBox(height: 14),
+                  ],
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Expanded(
+                        child: AppLabeledField(
+                          label: '品牌（可选）',
+                          child: TextField(
+                            controller: _brandCtrl,
+                            decoration:
+                                iosInputDecoration(context, hint: '例如 Apple'),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: AppLabeledField(
+                          label: '型号（可选）',
+                          child: TextField(
+                            controller: _modelCtrl,
+                            decoration: iosInputDecoration(context,
+                                hint: '例如 AirPods Pro'),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 14),
+                  AppLabeledField(
+                    label: '保修到期日（可选）',
+                    helperText: _warrantyUntil != null &&
+                            _purchaseDate != null &&
+                            _warrantyUntil!.isBefore(_purchaseDate!)
+                        ? '保修到期日不能早于购买日期。'
+                        : null,
+                    child: AssetNullableDateField(
+                      fieldKey: const Key('physical-asset-warranty-date'),
+                      value: _warrantyUntil,
+                      emptyText: '未设置',
+                      onTap: _pickWarrantyDate,
+                      onClear: _warrantyUntil == null
+                          ? null
+                          : () => setState(() => _warrantyUntil = null),
+                    ),
+                  ),
+                  const SizedBox(height: 14),
+                  AppLabeledField(
+                    label: '存放位置（可选）',
+                    child: TextField(
+                      controller: _locationCtrl,
+                      decoration: iosInputDecoration(context, hint: '例如 客厅书桌'),
+                    ),
+                  ),
+                  const SizedBox(height: 14),
+                  AppLabeledField(
+                    label: '备注（可选）',
+                    child: TextField(
+                      controller: _noteCtrl,
+                      minLines: 2,
+                      maxLines: 4,
+                      maxLength: 80,
+                      decoration: iosInputDecoration(context, hint: '购买渠道、配置等'),
+                    ),
+                  ),
+                  const SizedBox(height: 14),
+                  SettingsGroup(
+                    margin: EdgeInsets.zero,
+                    children: [
+                      SettingsRow(
+                        title: '计入净资产',
+                        subtitle: _includeInNetWorth
+                            ? '按当前估值进入人民币净资产合计'
+                            : '只记录物品，不影响顶部净资产',
+                        trailing: AppSwitch(
+                          key: const Key('physical-asset-net-worth-switch'),
+                          value: _includeInNetWorth,
+                          onChanged: (value) =>
+                              setState(() => _includeInNetWorth = value),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
               ),
             ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }

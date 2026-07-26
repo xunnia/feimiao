@@ -2542,6 +2542,17 @@ class AppRepository extends ChangeNotifier {
   /// View-level caches use this to drop rows that belonged to the old file.
   int get databaseGeneration => _databaseGeneration;
 
+  /// 全局数据版本号：每次 notifyListeners()（= 任何写路径收尾）自动 +1。
+  /// 余额 / 净资产 / 趋势 memo 拿它当缓存 key——版本一变旧结果自动作废，
+  /// 121 处 notifyListeners 调用点零改动就全部接入失效。
+  int _revision = 0;
+
+  @override
+  void notifyListeners() {
+    _revision++;
+    super.notifyListeners();
+  }
+
   /// 行级 uuid（多人共享账本的同步地基）：32 位小写 hex，无需三方库。
   static String _newUuid() {
     final r = Random();
@@ -2729,8 +2740,7 @@ class AppRepository extends ChangeNotifier {
       _categoriesViewCache ??= List.unmodifiable(_categories);
   List<TransactionEntity> get transactions =>
       _transactionsViewCache ??= List.unmodifiable(_transactions);
-  TransactionEntity? transactionById(int id) =>
-      _allTransactions.where((transaction) => transaction.id == id).firstOrNull;
+  TransactionEntity? transactionById(int id) => _txById[id];
   int get transactionCount => _transactions.length;
   Iterable<TransactionEntity> get transactionsView => _transactions;
   List<TransactionEntity> transactionsForRecurringRule(int ruleId) =>
@@ -6441,6 +6451,7 @@ class AppRepository extends ChangeNotifier {
       ..clear()
       ..addAll(indexed.map((e) => e.$2));
     _booksViewCache = null;
+    _invalidateBalanceDerived();
   }
 
   Future<void> _ensureDefaultBook() async {
@@ -6482,6 +6493,7 @@ class AppRepository extends ChangeNotifier {
     _accounts
       ..clear()
       ..addAll(rows.map(AccountEntity.fromMap));
+    _invalidateBalanceDerived();
   }
 
   Future<void> _loadAccountBalanceCheckpoints() async {
@@ -6504,6 +6516,7 @@ class AppRepository extends ChangeNotifier {
           .putIfAbsent(checkpointId, () => <String>{})
           .add(eventId);
     }
+    _invalidateBalanceDerived();
   }
 
   NetWorthCurrencyCoverage _decodeCurrencyCoverage(String raw) {
@@ -8235,6 +8248,74 @@ class AppRepository extends ChangeNotifier {
     _transactionsViewCache = null;
     _visibleTxViewCache = null;
     _allRecordsViewCache = null;
+    _txByIdCache = null;
+    _invalidateBalanceDerived();
+  }
+
+  Map<int, TransactionEntity>? _txByIdCache;
+
+  /// 惰性 by-id 索引：把 transactionById / physicalAssetAdditionalCost
+  /// 里对 _allTransactions 的线性查压成 O(1)。随 _invalidateTxDerived() 作废。
+  Map<int, TransactionEntity> get _txById => _txByIdCache ??= {
+        for (final transaction in _allTransactions) transaction.id: transaction,
+      };
+
+  // ---- 资产页性能 memo（余额 / 净资产 / 趋势）----
+  // accountBalanceResultOf / currentNetWorth* / accountBalanceTrend 的结果
+  // 只依赖 (数据版本, 当天日期)：asOf/knowledgeCutoff 都固定取 now，
+  // 却每次调用都做全量结算重放。这里按 (revision, 当天 yyyymmdd) memo：
+  //  · revision 一变（任何写路径 notifyListeners）自动失效；
+  //  · 跨午夜（当天变了）也失效——「今天到账」等窗口端点会移动；
+  //  · 双保险：账户 / 校准锚点 / 账本 / 资产 / 负债档案等 _loadXxx 重载时
+  //    显式清空，防止「写路径中途、notifyListeners 之前」的内部读
+  //    （如 _persistCurrentNetWorthSnapshot）拿到脏缓存。
+  // 只缓存无参数的「今天」路径；historical / 自定义 asOf 一律现算。
+  final Map<int, MetricResult<AccountBalanceValue>> _accountBalanceCache = {};
+  final Map<(int, int), AccountBalanceTrendValue?> _accountBalanceTrendCache =
+      {};
+  MetricResult<NetWorthBreakdown>? _netWorthResultCache;
+  NetWorthBreakdown? _netWorthBreakdownCache;
+  int? _balanceCacheRevision;
+  int? _balanceCacheDayStamp;
+
+  int _balanceRecomputeCount = 0;
+  int _netWorthRecomputeCount = 0;
+  int _trendRecomputeCount = 0;
+
+  /// 「今天」余额真正重算的次数（缓存命中不增），供缓存回归测试断言。
+  @visibleForTesting
+  int get balanceRecomputeCount => _balanceRecomputeCount;
+
+  @visibleForTesting
+  int get netWorthRecomputeCount => _netWorthRecomputeCount;
+
+  @visibleForTesting
+  int get trendRecomputeCount => _trendRecomputeCount;
+
+  static int _dayStampOf(DateTime now) =>
+      now.year * 10000 + now.month * 100 + now.day;
+
+  void _invalidateBalanceDerived() {
+    _accountBalanceCache.clear();
+    _accountBalanceTrendCache.clear();
+    _netWorthResultCache = null;
+    _netWorthBreakdownCache = null;
+    _balanceCacheRevision = null;
+    _balanceCacheDayStamp = null;
+  }
+
+  /// memo 只在 (revision, 当天) 都没变时有效；否则整体清空重建。
+  void _ensureBalanceCacheFresh() {
+    final today = _dayStampOf(DateTime.now());
+    if (_balanceCacheRevision == _revision && _balanceCacheDayStamp == today) {
+      return;
+    }
+    _accountBalanceCache.clear();
+    _accountBalanceTrendCache.clear();
+    _netWorthResultCache = null;
+    _netWorthBreakdownCache = null;
+    _balanceCacheRevision = _revision;
+    _balanceCacheDayStamp = today;
   }
 
   Map<int, Decimal> get _refundTotals =>
@@ -8280,6 +8361,7 @@ class AppRepository extends ChangeNotifier {
       ..clear()
       ..addAll(all.where((asset) =>
           asset.bookId != null && allowedBookIds.contains(asset.bookId)));
+    _invalidateBalanceDerived();
   }
 
   Future<void> _loadReceivableAssets() async {
@@ -8298,6 +8380,7 @@ class AppRepository extends ChangeNotifier {
       ..clear()
       ..addAll(all.where((asset) =>
           asset.bookId != null && allowedBookIds.contains(asset.bookId)));
+    _invalidateBalanceDerived();
   }
 
   Future<void> _loadAssetEvents() async {
@@ -8328,6 +8411,7 @@ class AppRepository extends ChangeNotifier {
     _assetValuations
       ..clear()
       ..addAll(rows.map(AssetValuationEntity.fromMap));
+    _invalidateBalanceDerived();
   }
 
   Future<void> _loadAssetTransactionLinks() async {
@@ -8348,6 +8432,7 @@ class AppRepository extends ChangeNotifier {
     _receivableRecoveries
       ..clear()
       ..addAll(rows.map(ReceivableRecoveryEntity.fromMap));
+    _invalidateBalanceDerived();
   }
 
   Future<void> _loadNetWorthSnapshots() async {
@@ -8382,6 +8467,7 @@ class AppRepository extends ChangeNotifier {
     _liabilityProfiles
       ..clear()
       ..addAll(rows.map(LiabilityProfileEntity.fromMap));
+    _invalidateBalanceDerived();
   }
 
   // ---------------------------------------------------------------------------
@@ -9875,13 +9961,20 @@ class AppRepository extends ChangeNotifier {
 
   MetricResult<AccountBalanceValue> accountBalanceResultOf(
     AccountEntity account,
-  ) =>
-      _accountBalanceResultAt(
-        account,
-        asOf: DateTime.now(),
-        knowledgeCutoff: DateTime.now(),
-        historical: false,
-      );
+  ) {
+    _ensureBalanceCacheFresh();
+    final cached = _accountBalanceCache[account.id];
+    if (cached != null) return cached;
+    _balanceRecomputeCount++;
+    final result = _accountBalanceResultAt(
+      account,
+      asOf: DateTime.now(),
+      knowledgeCutoff: DateTime.now(),
+      historical: false,
+    );
+    _accountBalanceCache[account.id] = result;
+    return result;
+  }
 
   MetricResult<AccountBalanceValue> _accountBalanceResultAt(
     AccountEntity account, {
@@ -10159,6 +10252,23 @@ class AppRepository extends ChangeNotifier {
     AccountEntity account, {
     int days = 90,
   }) {
+    // 账户详情页一次 build 会触发 ~91 次全量结算重放，是单点最重的路径，
+    // 按 (accountId, days) + (revision, 当天) memo。
+    _ensureBalanceCacheFresh();
+    final key = (account.id, days);
+    if (_accountBalanceTrendCache.containsKey(key)) {
+      return _accountBalanceTrendCache[key];
+    }
+    _trendRecomputeCount++;
+    final value = _computeAccountBalanceTrend(account, days: days);
+    _accountBalanceTrendCache[key] = value;
+    return value;
+  }
+
+  AccountBalanceTrendValue? _computeAccountBalanceTrend(
+    AccountEntity account, {
+    required int days,
+  }) {
     final now = DateTime.now();
     final current = accountBalanceResultOf(account).value!;
     final trustedFrom = current.trustedFrom;
@@ -10250,6 +10360,11 @@ class AppRepository extends ChangeNotifier {
   }
 
   NetWorthBreakdown currentNetWorthBreakdown() {
+    _ensureBalanceCacheFresh();
+    return _netWorthBreakdownCache ??= _computeCurrentNetWorthBreakdown();
+  }
+
+  NetWorthBreakdown _computeCurrentNetWorthBreakdown() {
     var cashAssets = Decimal.zero;
     var investmentAssets = Decimal.zero;
     var liabilities = Decimal.zero;
@@ -10299,6 +10414,16 @@ class AppRepository extends ChangeNotifier {
   }
 
   MetricResult<NetWorthBreakdown> currentNetWorthResult() {
+    _ensureBalanceCacheFresh();
+    final cached = _netWorthResultCache;
+    if (cached != null) return cached;
+    _netWorthRecomputeCount++;
+    final result = _computeCurrentNetWorthResult();
+    _netWorthResultCache = result;
+    return result;
+  }
+
+  MetricResult<NetWorthBreakdown> _computeCurrentNetWorthResult() {
     final now = DateTime.now();
     final bookIds = _books.map((book) => book.id).toList();
     if (bookIds.isEmpty) bookIds.add(_defaultBookId == 0 ? 1 : _defaultBookId);
@@ -10769,7 +10894,9 @@ class AppRepository extends ChangeNotifier {
       conflictAlgorithm: ConflictAlgorithm.replace,
     );
     await _loadNetWorthSnapshots();
-    if (notify) super.notifyListeners();
+    // 走 override（而非 super.）让 revision 一起 +1，保住「每次通知 = 版本+1」
+    // 的失效不变量。
+    if (notify) notifyListeners();
   }
 
   String _snapshotTimezoneIdentity(DateTime value) {
@@ -13847,9 +13974,7 @@ class AppRepository extends ChangeNotifier {
     var cents = 0;
     final issues = <String>{};
     for (final link in additionalCostLinksForAsset(assetId)) {
-      final transaction = _allTransactions
-          .where((item) => item.id == link.transactionId)
-          .firstOrNull;
+      final transaction = _txById[link.transactionId];
       if (transaction == null) {
         issues.add('关联支出已不存在');
         continue;

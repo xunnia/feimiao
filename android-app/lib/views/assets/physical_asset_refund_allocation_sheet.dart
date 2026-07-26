@@ -108,69 +108,66 @@ class _PhysicalAssetRefundAllocationSheetState
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(context).bottom),
-      child: ConstrainedBox(
-        constraints: BoxConstraints(
-          maxHeight: MediaQuery.sizeOf(context).height * 0.9,
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            SheetHeader(
-              title: '分配退款',
-              subtitle: '把每笔退款分到对应物品，购置成本才会准确更新。',
-              onClose: () => Navigator.pop(context),
-            ),
-            Flexible(
-              child: FutureBuilder<List<PhysicalAssetRefundAllocationData>>(
-                future: _pending,
-                builder: (context, snapshot) {
-                  if (snapshot.connectionState != ConnectionState.done) {
-                    return const Center(
-                      child: Padding(
-                        padding: EdgeInsets.all(32),
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      ),
-                    );
-                  }
-                  if (snapshot.hasError) {
-                    return _RefundAllocationMessage(
-                      icon: Icons.sync_problem_outlined,
-                      title: '暂时无法读取退款',
-                      message: '关闭后重试，原账单与物品金额不会改变。',
-                      actionLabel: '重试',
-                      onAction: _reload,
-                    );
-                  }
-                  final items = snapshot.data ?? const [];
-                  if (items.isEmpty) {
-                    return const _RefundAllocationMessage(
-                      mood: MascotMood.success,
-                      title: '退款都已分配',
-                      message: '关联物品的净购置成本已经更新。',
-                    );
-                  }
-                  return ListView.separated(
-                    key: const Key('asset-refund-allocation-list'),
-                    padding: const EdgeInsets.fromLTRB(16, 4, 16, 24),
-                    itemCount: items.length,
-                    separatorBuilder: (_, __) => const SizedBox(height: 12),
-                    itemBuilder: (context, index) => _RefundAllocationCard(
-                      key: ValueKey(
-                        'asset-refund-${items[index].refundTransactionId}',
-                      ),
-                      data: items[index],
-                      submit: widget.submit,
-                      onCompleted: _reload,
+    return ConstrainedBox(
+      constraints: BoxConstraints(
+        maxHeight: MediaQuery.sizeOf(context).height * 0.9,
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          SheetHeader(
+            title: '分配退款',
+            subtitle: '把每笔退款分到对应物品，购置成本才会准确更新。',
+            onClose: () => Navigator.pop(context),
+          ),
+          Flexible(
+            child: FutureBuilder<List<PhysicalAssetRefundAllocationData>>(
+              future: _pending,
+              builder: (context, snapshot) {
+                if (snapshot.connectionState != ConnectionState.done) {
+                  return const Center(
+                    child: Padding(
+                      padding: EdgeInsets.all(32),
+                      child: CircularProgressIndicator(strokeWidth: 2),
                     ),
                   );
-                },
-              ),
+                }
+                if (snapshot.hasError) {
+                  return _RefundAllocationMessage(
+                    icon: Icons.sync_problem_outlined,
+                    title: '暂时无法读取退款',
+                    message: '关闭后重试，原账单与物品金额不会改变。',
+                    actionLabel: '重试',
+                    onAction: _reload,
+                  );
+                }
+                final items = snapshot.data ?? const [];
+                if (items.isEmpty) {
+                  return const _RefundAllocationMessage(
+                    mood: MascotMood.success,
+                    title: '退款都已分配',
+                    message: '关联物品的净购置成本已经更新。',
+                  );
+                }
+                return ListView.separated(
+                  key: const Key('asset-refund-allocation-list'),
+                  padding: const EdgeInsets.fromLTRB(16, 4, 16, 24),
+                  itemCount: items.length,
+                  separatorBuilder: (_, __) => const SizedBox(height: 12),
+                  itemBuilder: (context, index) => _RefundAllocationCard(
+                    key: ValueKey(
+                      'asset-refund-${items[index].refundTransactionId}',
+                    ),
+                    data: items[index],
+                    submit: widget.submit,
+                    onCompleted: _reload,
+                  ),
+                );
+              },
             ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }
