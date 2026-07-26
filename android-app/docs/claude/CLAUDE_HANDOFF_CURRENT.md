@@ -22,11 +22,10 @@
 - **⚠️ 用户报应用内更新下载只有 30KB/s——已诊断，待用户拍板方案**：直连探针显示大陆流量被调度到 Cloudflare 阿姆斯特丹节点（CF-RAY AMS），免费版对大陆就这样，晚高峰 30KB/s 正常、波动 10 倍。包本身完好。已告知用户可直接从电脑传 APK 到手机安装。**根治方案候选**：A=发布脚本双写腾讯云 COS/阿里 OSS 国内源+version.json 指向它（推荐，需用户开账号给 key）；B=App 进程内下载器改多线程分段（治标，零外部依赖）；C=优选 IP（custom domain 模式下不可行，已排除）。
 - Kotlin 两处小改（MainActivity 分享重放守卫 / PaymentNotificationListener 支付宝模板锚点 ALIPAY_TXN）已随 v206 APK 编译通过；**运行态锚点覆盖面待真机验**：如果用户反馈支付宝某种官方通知没被自动记账抓到，把通知文案要来、往 ALIPAY_TXN 正则加一个模板词即可（宁漏抓不错抓是既定取舍）。
 
-### 2026-07-26 在途：资产管理 UI 全面复盘（进行中）
+### 2026-07-26 资产管理 UI 复盘（✅已完成，**方案待用户拍板，未动代码**）
 
-- 用户嫌**资产管理 UI 太丑**，要求全面复盘找优化空间。已定原则：**先出方案供用户拍板，不直接动 UI**。
-- 已启动 4 智能体并行复盘：①结构盘点（入口/三视图/全部二级页弹层清单）②UI 规范合规审计（对照 `docs/claude/UI_DESIGN_STANDARD.md`+全局组件找违规）③视觉/信息层级批判 ④离屏真实渲染截图（真中文字体+真图标，产出到 `outputs/asset_ui_review/*.png`，做法参考曾经的抽屉对比图：FontLoader 加载 C:/Windows/Fonts/msyh.ttc + flutter cache 的 MaterialIcons）。
-- **如果本会话中断没出结果**：复盘结论没落盘的话直接重做上述 4 路分析即可；关键量尺=UI_DESIGN_STANDARD.md 三总原则（同类同设计/非重点降号变灰/语义色铁律），资产主文件=`lib/views/settings/accounts_view.dart`（6971 行）+ `lib/views/assets/`（6 个文件）。产出物预期=按优先级排序的优化清单（快赢 vs 重做），写进 `docs/claude/` 供下批实施。
+- 用户嫌资产管理 UI 太丑。4 智能体复盘（结构/规范 21 条违规/视觉批判/真实渲染截图）已完成，**方案落盘：`docs/claude/资产UI优化方案-2026-07-26.md`**（P0 快赢 1 天 / P1 结构 2-3 天 / P2 重构可选，总诊断=「审计后台气质+术语裸奔+卡片规格失控+无情感化」）。截图证据 `outputs/asset_ui_review/01~07*.png`（本地提交 `4250d42`）。
+- **接手动作**：等用户拍板做哪批 → 照方案文档实施（动 UI 前必读 UI_DESIGN_STANDARD.md；实锤 bug 两个可先修：物品网格卡底行被裁切、accounts_view.dart:2568 用了 scheme.error 红）。改完重跑截图渲染出 before/after（方法写在方案文档 §6）。
 
 ### 2026-07-18 当前启动体验修复（工作区未提交）
 
