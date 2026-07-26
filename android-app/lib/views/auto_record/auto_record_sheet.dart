@@ -90,9 +90,10 @@ class _AutoRecordSheetState extends State<_AutoRecordSheet> {
       context,
       n == 0 ? '没有新增普通账单' : '喵帮你记下了 $n 笔～',
     );
+    // 退款项只是提示、不会入账，这一批处理完也一起出队；
+    // 否则它们永远不被 ack，每次回前台都重复弹同一批退款通知。
     Navigator.of(context).pop([
-      for (final item in widget.items)
-        if (!item.isRefund) item.sourceId,
+      for (final item in widget.items) item.sourceId,
     ]);
   }
 
@@ -234,6 +235,17 @@ class _AutoRecordSheetState extends State<_AutoRecordSheet> {
                     style:
                         TextStyle(fontSize: 12, color: scheme.onSurfaceVariant),
                   ),
+                  if (c.isRefund) ...[
+                    const SizedBox(height: 2),
+                    Text(
+                      '退款通知仅提示，不会入账',
+                      style: TextStyle(
+                        fontSize: 11,
+                        color: scheme.onSurfaceVariant
+                            .withValues(alpha: 0.75),
+                      ),
+                    ),
+                  ],
                 ],
               ),
             ),

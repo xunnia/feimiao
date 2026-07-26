@@ -137,13 +137,19 @@ class _ReimburseRow extends StatelessWidget {
       accountName: tx.accountName,
       toAccountName: tx.toAccountName,
     );
+    // 待报销行可能来自任意账本：按 tx.bookId 反查账本名，找不到再兜底当前账本。
+    final bookName = repo.books
+            .where((book) => book.id == tx.bookId)
+            .firstOrNull
+            ?.name ??
+        repo.currentBook?.name;
     final detailText = joinTransactionCardDetails([
       transactionCardTimeLabel(
         tx.date,
         dateGrouped: false,
         precision: tx.timePrecision,
       ),
-      repo.currentBook?.name,
+      bookName,
       cardText.secondary,
     ]);
 
@@ -204,12 +210,28 @@ class _ReimburseRow extends StatelessWidget {
                 confirmLabel: '确认到账',
               );
               if (result == null || !context.mounted) return;
+              try {
+                await repo.markReimbursed(
+                  tx.id,
+                  settledAt: result.settledAt,
+                  settlementAccountId: result.settlementAccountId,
+                );
+              } on StateError catch (e) {
+                // 仓储层的保护性拦截（如流水已关联资产等）要说给用户听，
+                // 不能静默吞掉让「已报销」看起来没反应。
+                if (context.mounted) {
+                  showAppToast(context, e.message, icon: Icons.error_outline);
+                }
+                return;
+              } catch (_) {
+                if (context.mounted) {
+                  showAppToast(context, '报销确认失败，请重试',
+                      icon: Icons.error_outline);
+                }
+                return;
+              }
+              // 成功之后才给成功触感/提示，失败别装成功。
               Haptics.of(Haptic.success);
-              await repo.markReimbursed(
-                tx.id,
-                settledAt: result.settledAt,
-                settlementAccountId: result.settlementAccountId,
-              );
               if (context.mounted) {
                 showAppToast(context, '已确认报销到账，原支出已抵消');
               }

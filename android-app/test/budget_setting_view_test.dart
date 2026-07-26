@@ -8,6 +8,7 @@ import 'package:qingji/core/money_format.dart';
 import 'package:qingji/core/statistics/consumption_projection.dart';
 import 'package:qingji/data/app_repository.dart';
 import 'package:qingji/views/settings/budget_setting_view.dart';
+import 'package:qingji/widgets/sliding_segment.dart';
 
 class _ResolverRepo extends AppRepository {
   _ResolverRepo({
@@ -173,6 +174,14 @@ void main() {
     expect(find.text('每周'), findsOneWidget);
     expect(find.text('下周期生效'), findsOneWidget);
     expect(find.text('本周期生效'), findsOneWidget);
+    expect(
+      tester
+          .widget<SlidingSegment<bool>>(
+            find.byKey(const ValueKey('budget-start-cycle-segment')),
+          )
+          .value,
+      isFalse,
+    );
     expect(find.text('一次性期间（旧模式）'), findsNothing);
     expect(tester.takeException(), isNull);
   });

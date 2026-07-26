@@ -20,6 +20,14 @@ void main() {
     test('无金额返回 null', () {
       expect(NotificationParse.pickAmount('今天天气很好'), isNull);
     });
+    test('千位分隔符：¥1,280.00', () {
+      expect(NotificationParse.pickAmount('微信支付 你已成功付款¥1,280.00'),
+          Decimal.parse('1280.00'));
+    });
+    test('千位分隔符：12,000.00元（修复前会被截成 000.00）', () {
+      expect(NotificationParse.pickAmount('支付宝 你有一笔12,000.00元的支出'),
+          Decimal.parse('12000'));
+    });
   });
 
   group('NotificationParse.kindOf — 收支方向', () {

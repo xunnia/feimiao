@@ -10,6 +10,7 @@ import '../theme/app_tokens.dart';
 import '../views/common/app_sheet.dart';
 import 'app_buttons.dart';
 import 'app_date_picker.dart';
+import 'app_toast.dart';
 import 'ios_dialogs.dart';
 import 'ios_form.dart';
 import 'ios_menu.dart';
@@ -109,9 +110,14 @@ class _RefundSettlementSheetState extends State<RefundSettlementSheet> {
   @override
   void initState() {
     super.initState();
-    _amountController = TextEditingController(
-      text: _trimDecimal(widget.initialAmount),
-    );
+    final initialAmountText = _trimDecimal(widget.initialAmount);
+    _amountController = TextEditingController(text: initialAmountText);
+    if (widget.amountEditable) {
+      _amountController.selection = TextSelection(
+        baseOffset: 0,
+        extentOffset: initialAmountText.length,
+      );
+    }
     _maxAmount = widget.maxAmount;
     _refunds = List.of(widget.existingRefunds);
     _settledAt = widget.initialSettledAt;
@@ -243,9 +249,11 @@ class _RefundSettlementSheetState extends State<RefundSettlementSheet> {
                         ? TextField(
                             key: const Key('refund-settlement-amount'),
                             controller: _amountController,
+                            autofocus: true,
                             keyboardType: const TextInputType.numberWithOptions(
                               decimal: true,
                             ),
+                            inputFormatters: moneyInputFormatters(),
                             style: AppType.body(scheme).copyWith(
                               fontFamily: 'Nunito',
                             ),
@@ -363,11 +371,23 @@ class _RefundSettlementSheetState extends State<RefundSettlementSheet> {
       ),
     );
     if (result == null || widget.onConfirmSettlement == null) return;
-    await widget.onConfirmSettlement!(
-      refund,
-      result.settledAt,
-      result.settlementAccountId,
-    );
+    try {
+      await widget.onConfirmSettlement!(
+        refund,
+        result.settledAt,
+        result.settlementAccountId,
+      );
+    } on StateError catch (e) {
+      // 「已被锚点余额核对吸收」这类保护性拦截：把话术说给用户，
+      // 并保持退款记录原样，别让弹层看起来像保存成功。
+      if (mounted) showAppToast(context, e.message, icon: Icons.error_outline);
+      return;
+    } catch (_) {
+      if (mounted) {
+        showAppToast(context, '到账信息保存失败，请重试', icon: Icons.error_outline);
+      }
+      return;
+    }
     if (!mounted) return;
     final updated = context
         .read<AppRepository>()
@@ -400,6 +420,14 @@ class _RefundSettlementSheetState extends State<RefundSettlementSheet> {
           _amountController.text = _trimDecimal(_maxAmount);
         }
       });
+    } on StateError catch (e) {
+      // 仓储层的保护性拦截（如「这笔退款已经用于确认物品退货…」）：
+      // 说给用户听，且不把退款从列表里移掉，别让撤销看起来成功了。
+      if (mounted) showAppToast(context, e.message, icon: Icons.error_outline);
+    } catch (_) {
+      if (mounted) {
+        showAppToast(context, '撤销退款失败，请重试', icon: Icons.error_outline);
+      }
     } finally {
       if (mounted) setState(() => _deletingRefund = false);
     }

@@ -479,44 +479,53 @@ class _BillReviewViewState extends State<BillReviewView> {
       return;
     }
     setState(() => _importing = true);
+    try {
+      final importRows = <({ImportedBillRow row, String? categoryKey})>[
+        for (final (r, key) in _autoRows) (row: r, categoryKey: key),
+      ];
 
-    final importRows = <({ImportedBillRow row, String? categoryKey})>[
-      for (final (r, key) in _autoRows) (row: r, categoryKey: key),
-    ];
-
-    // 分组行：用组分类；并把用户/AI 的选择喂给学习（决定性商户才学）。
-    for (final g in _groups.values) {
-      final learnKey = BillCategorizer.learnKeyFor(g.merchant);
-      if (g.categoryKey != null && learnKey != null) {
-        await repo.learnCategory(
-            phrase: learnKey, kind: g.kind, categoryKey: g.categoryKey!);
+      // 分组行：用组分类；并把用户/AI 的选择喂给学习（决定性商户才学）。
+      for (final g in _groups.values) {
+        final learnKey = BillCategorizer.learnKeyFor(g.merchant);
+        if (g.categoryKey != null && learnKey != null) {
+          await repo.learnCategory(
+              phrase: learnKey, kind: g.kind, categoryKey: g.categoryKey!);
+        }
+        for (final r in g.rows) {
+          importRows.add((row: r, categoryKey: g.categoryKey));
+        }
       }
-      for (final r in g.rows) {
-        importRows.add((row: r, categoryKey: g.categoryKey));
-      }
-    }
 
-    final result = await repo.importReviewedBillBatch(
-      accountId: accountId,
-      rows: importRows,
-      refunds: _refunds,
-    );
-
-    if (mounted) {
-      Haptics.of(Haptic.success);
-      final skipped = result.skippedDuplicates > 0
-          ? '，跳过重复 ${result.skippedDuplicates} 笔'
-          : '';
-      final refunds =
-          result.refundsAttached > 0 ? '，挂回退款 ${result.refundsAttached} 笔' : '';
-      final unresolved = result.unresolvedRefunds > 0
-          ? '，${result.unresolvedRefunds} 笔退款未匹配，未导入'
-          : '';
-      showAppToast(
-        context,
-        '已导入 ${result.inserted} 笔$refunds$skipped$unresolved',
+      final result = await repo.importReviewedBillBatch(
+        accountId: accountId,
+        rows: importRows,
+        refunds: _refunds,
       );
-      Navigator.pop(context, result.inserted);
+
+      if (mounted) {
+        Haptics.of(Haptic.success);
+        final skipped = result.skippedDuplicates > 0
+            ? '，跳过重复 ${result.skippedDuplicates} 笔'
+            : '';
+        final refunds = result.refundsAttached > 0
+            ? '，挂回退款 ${result.refundsAttached} 笔'
+            : '';
+        final unresolved = result.unresolvedRefunds > 0
+            ? '，${result.unresolvedRefunds} 笔退款没找到原单，已按收入记入'
+            : '';
+        showAppToast(
+          context,
+          '已导入 ${result.inserted} 笔$refunds$skipped$unresolved',
+        );
+        Navigator.pop(context, result.inserted);
+      }
+    } catch (e) {
+      // 入库中途失败不能让按钮永远转圈：提示错误，用户可重试。
+      if (mounted) {
+        showAppToast(context, '导入失败：$e', icon: Icons.error_outline);
+      }
+    } finally {
+      if (mounted) setState(() => _importing = false);
     }
   }
 }

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
@@ -22,8 +24,17 @@ class ShareIntake {
       GlobalKey<NavigatorState>();
 
   static const MethodChannel _channel = MethodChannel('feimiao/share');
+  static Future<void>? _repositoryReady;
+  static bool Function()? _repositoryReadyCheck;
+  static final List<void Function(BuildContext)> _pendingActions = [];
+  static bool _flushing = false;
 
-  static void init() {
+  static void init({
+    Future<void>? repositoryReady,
+    bool Function()? repositoryReadyCheck,
+  }) {
+    _repositoryReady = repositoryReady;
+    _repositoryReadyCheck = repositoryReadyCheck;
     _channel.setMethodCallHandler((call) async {
       if (call.method == 'onShare' && call.arguments is Map) {
         _handle(Map<String, dynamic>.from(call.arguments as Map));
@@ -49,25 +60,72 @@ class ShareIntake {
   }
 
   static void _handle(Map<String, dynamic> data) {
-    final ctx = navigatorKey.currentContext;
-    if (ctx == null) return;
     final type = data['type']?.toString();
     if (type == 'text') {
       final text = (data['text'] ?? '').toString().trim();
       if (text.isEmpty) return;
-      Navigator.of(ctx).push(AppPageRoute<void>(
-        builder: (_) => AiQuickEntryView(initialText: text),
-      ));
+      _enqueue((ctx) {
+        Navigator.of(ctx).push(AppPageRoute<void>(
+          builder: (_) => AiQuickEntryView(initialText: text),
+        ));
+      });
     } else if (type == 'image') {
       final path = (data['path'] ?? '').toString();
       if (path.isEmpty) return;
-      recognizeImagePathAndEntry(ctx, path);
+      _enqueue((ctx) => recognizeImagePathAndEntry(ctx, path));
     }
   }
 
   static void _handleOpen(Map<String, dynamic> data) {
-    final ctx = navigatorKey.currentContext;
-    if (ctx == null) return;
+    _enqueue((ctx) => _dispatchOpen(ctx, data));
+  }
+
+  /// Cold-start shares can arrive before Navigator exists and before SQLite
+  /// has loaded categories/accounts. Queue them instead of silently dropping
+  /// the user's share or opening a half-empty quick-entry page.
+  static void _enqueue(void Function(BuildContext) action) {
+    _pendingActions.add(action);
+    _flushPending();
+  }
+
+  static void _flushPending() {
+    if (_flushing) return;
+    _flushing = true;
+    unawaited(_flushPendingAsync());
+  }
+
+  static Future<void> _flushPendingAsync() async {
+    // 已经注册了帧回调重试时，finally 里不能再同步重入 _flushPending：
+    // ctx 未就绪前那会变成「注册回调→finally 重入→再注册回调」的死循环。
+    var retryScheduled = false;
+    try {
+      final ready = _repositoryReady;
+      if (ready != null) await ready;
+      if (_repositoryReadyCheck != null && !_repositoryReadyCheck!()) {
+        // Initialization failed. Do not replay a share into a repository that
+        // cannot save it; the native pending intent has already been consumed.
+        _pendingActions.clear();
+        return;
+      }
+      while (_pendingActions.isNotEmpty) {
+        final ctx = navigatorKey.currentContext;
+        if (ctx == null || !ctx.mounted) {
+          retryScheduled = true;
+          WidgetsBinding.instance.addPostFrameCallback((_) => _flushPending());
+          return;
+        }
+        final action = _pendingActions.removeAt(0);
+        action(ctx);
+        // Let a route push/image pipeline yield before replaying another item.
+        await Future<void>.value();
+      }
+    } finally {
+      _flushing = false;
+      if (!retryScheduled && _pendingActions.isNotEmpty) _flushPending();
+    }
+  }
+
+  static void _dispatchOpen(BuildContext ctx, Map<String, dynamic> data) {
     final target = data['target']?.toString();
     if (target == 'quick_add') {
       final repo = ctx.read<AppRepository>();

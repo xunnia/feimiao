@@ -386,6 +386,7 @@ class _PhysicalAssetPurchaseSheetState
               controller: _valueController,
               keyboardType:
                   const TextInputType.numberWithOptions(decimal: true),
+              inputFormatters: moneyInputFormatters(),
               decoration: iosInputDecoration(context, prefix: '¥ '),
               onChanged: (_) {
                 _valueEdited = true;
@@ -465,6 +466,7 @@ class _PhysicalAssetPurchaseSheetState
   Widget _moneyField(TextEditingController controller) => TextField(
         controller: controller,
         keyboardType: const TextInputType.numberWithOptions(decimal: true),
+        inputFormatters: moneyInputFormatters(),
         decoration: iosInputDecoration(context, prefix: '¥ '),
         onChanged: (_) {
           if (!_valueEdited) {
@@ -575,6 +577,7 @@ class _PhysicalAssetPurchaseSheetState
   }
 
   Future<void> _save() async {
+    if (_saving) return;
     final validationMessage = _validationMessage;
     if (validationMessage != null) {
       setState(() => _formError = validationMessage);

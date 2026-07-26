@@ -1,7 +1,8 @@
 import 'dart:convert';
+import 'dart:io';
 import 'dart:typed_data';
 
-import 'package:archive/archive.dart';
+import 'package:archive/archive_io.dart';
 import 'package:crypto/crypto.dart';
 import 'package:path/path.dart' as path;
 
@@ -12,6 +13,14 @@ class BackupPackageException implements Exception {
 
   @override
   String toString() => 'BackupPackageException: $message';
+}
+
+/// 一个待打包的备份文件：包内路径 + 磁盘上的源文件（内容流式读取）。
+class BackupPayloadFile {
+  final String archivePath;
+  final File file;
+
+  const BackupPayloadFile({required this.archivePath, required this.file});
 }
 
 class DecodedBackupPackage {
@@ -82,6 +91,56 @@ class BackupPackageCodec {
       throw const BackupPackageException('Backup package encoding failed.');
     }
     return Uint8List.fromList(encoded);
+  }
+
+  /// 流式打包到 [outputPath]：逐文件流式算校验和、逐文件流式压入 zip，
+  /// 任何时刻内存里只有单个读写缓冲——收据/资产照片多的老用户在低端机上
+  /// 导出不再因「全部文件字节 + 整包 zip 字节」同时驻留而 OOM。
+  /// 包格式与 [encode] 完全一致，[decode] 可原样读回。
+  static Future<void> encodeToFile({
+    required List<BackupPayloadFile> files,
+    required String outputPath,
+    required int databaseVersion,
+    required DateTime createdAt,
+  }) async {
+    final names = [for (final entry in files) entry.archivePath];
+    _validatePayloadNames(names);
+    if (!names.contains('database/qingji.db')) {
+      throw const BackupPackageException('Backup database is missing.');
+    }
+
+    final checksums = <String, String>{};
+    for (final entry in files) {
+      final digest = await sha256.bind(entry.file.openRead()).first;
+      checksums[entry.archivePath] = digest.toString();
+    }
+    final manifest = <String, Object?>{
+      'format': format,
+      'version': currentVersion,
+      'createdAt': createdAt.toIso8601String(),
+      'databaseVersion': databaseVersion,
+      'contains': {
+        'database': true,
+        'receipts': names.any((name) => name.startsWith('receipts/')),
+        'assetMedia': names.any((name) => name.startsWith('asset_media/')),
+      },
+      'excludes': const ['deepseek_api_key', 'custom_ai_api_key'],
+      'checksums': checksums,
+    };
+    final manifestBytes = Uint8List.fromList(utf8.encode(jsonEncode(manifest)));
+
+    final encoder = ZipFileEncoder();
+    encoder.create(outputPath);
+    try {
+      for (final entry in files) {
+        await encoder.addFile(entry.file, entry.archivePath);
+      }
+      encoder.addArchiveFile(
+        ArchiveFile(manifestPath, manifestBytes.length, manifestBytes),
+      );
+    } finally {
+      await encoder.close();
+    }
   }
 
   static DecodedBackupPackage decode(Uint8List bytes) {

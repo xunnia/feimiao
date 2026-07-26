@@ -1,6 +1,6 @@
 # Claude 新会话启动入口（先读这里）
 
-更新时间：2026-07-14
+更新时间：2026-07-18
 适用工程：`C:\src\xunni-codex\android-app`  
 严禁触碰：`C:\src\xunni`，除非用户明确要求并确认风险。
 
@@ -8,8 +8,17 @@
 
 ## 1. 当前真实状态
 
-- 最新本地 APK：`C:\src\xunni-codex\ci-artifacts\releases\feimiao-codex-v1.196.0-198.apk`
-- 版本：`1.196.0+198`
+### 当前工作区新增启动修复（2026-07-18，尚未提交/发布）
+
+- 本地验证 APK：`C:\src\xunni-codex\ci-artifacts\releases\feimiao-codex-v1.202.0-204.apk`
+- 版本：`1.202.0+204`；build tag：`b0718-204`；DB v40；SHA256：`3C178D9A6EE37DE806B281BD031058AD60A355E690844099534BAC421C566CC3`
+- 当前启动合同：不再用“空主页先画、数据后掉入”换速度。启动首阶段读取账本/当前账本、账户、分类、预算、显示偏好和当月已持久化账单，真实本月数据就绪后立即进主页；全历史、资产、报告、定时物化、净资产、备份和旧退款归并在首帧后完成。
+- 完整 hydration 前记账、Widget deep link 和冷启动分享会排队；后台服务不会读半快照。主题 JSON 异步读取，抽屉首次打开才构建。
+- Android 12+ 的 `LaunchTheme` 必须包含 `windowSplashScreenAnimatedIcon=@drawable/splash_transparent` 和透明 icon background，不能让系统回退到 launcher icon。
+- 验证已完成：启动/SQLite 专项 5/5、全量测试 752/752、analyze 0 issue、发布逻辑 9/9、aapt/16 KiB zipalign/固定证书 V2 签名通过。本轮无可用 Android 设备，未宣称真机冷启动观感通过；未 commit、未 push、未发布线上。
+
+- 历史已发布基线 APK（非本轮）：`C:\src\xunni-codex\ci-artifacts\releases\feimiao-codex-v1.196.0-198.apk`
+- 历史基线版本：`1.196.0+198`
 - build tag：`b0714-198`
 - DB：v40
 - 当前开发工作区分支：`codex/feimiao-p0-fixes`；本地功能提交 `1301e44`。因本地历史含 31 个超过 GitHub 100 MiB 限制的 APK，未改写原分支历史，改用无发布产物的源码快照 `6703f8e`（父提交 `61c0c06`）推到 `origin/codex/feimiao-p0-fixes`；当前线上为 v198（releaseId `v198-69ae3ccda9ad`）
@@ -21,7 +30,7 @@
 - v197、v195、v194 与 v193 APK/sidecar 必须保留为回退基线；不要用 `git clean` 删除。它们不代表 DB v40 运行后可以直接无损降级。
 - v198 已把旧账无可靠时分时的 `00:00` 从所有账单卡隐藏，并用 DB v40 持久化时间精度；真实午夜仍显示。全量 707/707、analyze 0 issue，Release APK 的 aapt/16K/V2 签名/哈希均通过；已 commit、push 并发布，运行态仍待用户安装验收。
 
-## 2. 最新已完成改动
+## 2. 历史已完成改动（当前启动修复见上方）
 
 `1.196.0+198` 已完成旧账时间降噪并本地出包，等待用户安装验收：
 

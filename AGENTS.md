@@ -1,0 +1,196 @@
+# AGENTS.md
+
+> 交接文档。新会话/新环境（含 cowork / Codex）接手时先读这份，**别把已锁定的决策又问一遍或推翻**。
+> 「§-1 最新交接」是 2026-07-02 的增量，**最优先看**；再往下依次是 2026-06-28 的 §0 和 2026-06-18 版底稿（仍有效，新章节覆盖旧的）。
+
+---
+
+## §-1 最新交接（2026-07-02 起：按用户优化文档做六批 UI/功能升级）
+
+### -1.-1 当前状态速览（2026-07-04 更新）
+- **最新 = 水印 b0703-22 / v1.16.0 / DB v19**，**弹层/开关 UI 统一(第一批)已完成，待 commit+推送**：`git push origin HEAD:Codex/hopeful-wozniak-pr2ne3`。本地 analyze 0 error、227 测试全过。b0703-21(全局日历)及之前均已推送。
+- **UI 统一决策（2026-07-04 用户拍板）**：借鉴图二(Grok 触觉反馈页 iOS 风)。①开关 ON 颜色=**主色蓝灰**(不用绿，守配色铁律) ②半屏弹层左上角=**✕ 关闭** ③标题**居中**+字重 w600→**w500** ④设置类每行**发丝线分隔**。范围=全量(含设置页 body)。**新全局零件** `widgets/settings_ui.dart`：`AppSwitch`(CupertinoSwitch activeTrackColor=primary)、`SheetHeader`(✕+居中标题+副标题+底分隔线)、`SettingsGroup`(白卡内发丝线分隔)、`SettingsRow`(前图标+标题/副标题+尾部件)、`SettingsSectionLabel`(灰小标题)。**以后设置类界面/弹层一律用它们，别再各写各的 Switch/标题。**
+- **b0703-22 已改**：①`statistics _showCardLibrary`(自定义图表弹层，用户截图那个)→SheetHeader+SettingsGroup+AppSwitch ②`record_extras_sheet`(更多功能:截图/导入/导出)→SheetHeader+SettingsRow ③全 App 3 处 Material `Switch`→`AppSwitch`(statistics/recurring/book_sheet)。**核对发现**：主设置页 `settings_view.dart` 本就是图二式分组白卡+发丝线(不用动)；`auto_record_setting` 是引导页非设置列表(不用动)；设置页里除上述外**已无裸 Switch**。
+- **b0703-27：总账本用日常封面 + 新建账本弹层标准化 + 提示文字调柔**：①总账本(默认账本)没自选封面时，抽屉 `_bookCover` 用 `default.png`(日常生活封面)；②`book_sheet` 模板列表删掉「日常生活」(给总账本用了，避免重复)；③新建/编辑账本弹层改 SheetHeader(✕左上+居中标题+右上角「创建/保存」pill)、去掉手写 drag handle 和底部大按钮——**book_sheet 已从表单弹层待铺开清单划掉**；④(b0703-26)输入框 hintStyle 全局调 14px+onSurfaceVariant 50%(原来无 hintStyle 走默认 16px 深灰太抢眼)，设在 iosInputDecoration+两套主题 inputDecorationTheme。**剩余表单弹层待铺开**：budget(已b0703-24做)、search 金额区间、accounts/tags/savings 添加弹层。
+- **抽屉账本行放大 + 账本备注（b0703-25，DB v20）**：用户嫌账本封面 24px 太小。抽屉账本行放大成"封面+标题+副标题"经典行：`main.dart _bookTile` 保留 ListTile 但 leading 换 `_bookCover`(竖版 46×54 圆角图，无封面回退 emoji 浅底方块)、subtitle=账本备注(有才显示)、去掉 dense。**新增账本备注**：DB v20 `books` 加 `remark` 列；BookEntity/addBook/updateBook 带 remark；`book_sheet` 名称下加备注输入框(maxLength 20)。repo 测试迁移断言 19→20。
+- **⚠️ 全局按钮标准（b0703-24，用户反复强调"很多次"）**：所有导航/操作按钮**一律套在浅灰圆/胶囊里**（主页顶栏 ☰/🔍 同款 + 图五 ChatGPT 记忆页标准），不再是光秃秃图标/文字。**新全局零件** `widgets/app_buttons.dart`：`AppCircleButton`(GlassSurface circle+blur:0，返回/加号/✕ 用)、`AppBackButton`(chevron_back 灰圆，当 AppBar `leading` 用)、`AppPillButton`(灰胶囊文字，保存/确认用，onPressed=null 置灰)。`SheetHeader` 的 ✕ 改用 AppCircleButton、右上角操作改用 AppPillButton。**已铺开**：全部 push 页面 AppBar 加 `leading: const AppBackButton()`（accounts/savings/tags/categories/recurring/memory/backup/ai_setting/personal_center/reimburse/monthly_report/import_export/settings/bill_review，用 python 脚本批量插，见附注）；accounts/savings/tags/recurring 的 `+` 换 AppCircleButton；budget 弹层(新建预算)去掉底部大按钮、改 SheetHeader ✕+居中标题+右上角「保存」pill。**以后新页面 AppBar 一律 `leading: const AppBackButton()`，`+`/操作按钮用 AppCircleButton/AppPillButton，别再用裸 IconButton/FilledButton。**
+- **b0703-23：SheetHeader 加右上角操作位 + 退款弹层改造**。用户指出退款弹层还乱(图一 vs 图二 ChatGPT记忆页)：①去掉顶部小灰条(drag handle) ②确认动作从**底部大长条按钮**挪到**右上角文字按钮**(对齐图二「保存」，省地方)。**SheetHeader 新增 `actionLabel`+`onAction`**(右上角 TextButton 主色，onAction=null 时置灰)；`transaction_actions.dart` showRefundSheet 去掉手写 drag handle+底部 FilledButton，改 SheetHeader(✕+居中「退款」+副标题原支出/已退/剩+右上角「确认退款/全部退回」)。**用户认可的通用模式：表单类弹层的底部大长条确认按钮，一律改成 SheetHeader 右上角操作按钮。剩余待铺开**(用户说"很多地方也是这样")：book_sheet 新建账本(保存)、budget 预算弹层(保存)、search 金额区间(确定)、accounts/tags/savings 添加弹层——下一步逐个把底部按钮挪到 SheetHeader 右上角(等用户点头或直接做)。
+- **全局日历组件（b0703-21）**：用户嫌系统 showDatePicker 难用（对比咔皮）。新 `widgets/app_date_picker.dart`：`showAppDatePicker`(单日期，月网格+左上「年月⌄」点开切年月滚轮 CupertinoPicker+右侧‹›翻月+回今天+确认，对齐 iOS/咔皮)、`showAppDateRangePicker`(先开始后结束两步)。**全 App 8 处日历统一替换**：统计自定义(两个可点起止字段`_DateField`+**记住上次区间**：repo `statCustomRange`/`setStatCustomRange`(存 app_settings，用记录类型 (DateTime,DateTime) 避免数据层依赖 material 的 DateTimeRange)+init 恢复)、search/budget 区间、manual/edit/quick/recurring 单日期。以后所有选日期一律用它，别再 showDatePicker。
+- **b0703-20 做了两件（候选①④）**：①**统计卡真懒加载**：`statistics_view.dart` `_ManagedCards` 的 `ReorderableListView(children:)` 换成 `.builder`（itemCount+itemBuilder），离屏 fl_chart 卡不再 layout/paint，统计页更跟手；header/footer/onReorder 逻辑原样。②**喵助手记账卡跨重启恢复**：`chat_messages` 复用 text 列存 JSON、新增 `role='record'`（免 DB 迁移）；repo 加 `addChatRecordMessage`(返回行id)/`updateChatRecordMessage`；ai_chat_panel 加顶层 `encodeRecordCard`/`decodeRecordCard`/`DecodedRecordCard`（可单测）+ `_RecordMsg.chatRowId` + `_persistRecord`（保存/改分类/删条目后写回）+ `_restoreHistory` 加 record 分支 `_rebuildRecordCard`（catId 用 repo 查回分类，deletedIdx 灌回）。只持久化**已保存**的卡（pending 不跨重启）。测试 `ai_chat_record_serialization_test.dart` 往返一致。方案原文 `android-app/docs/待做方案-b0703-19后.md`。
+- **⚠️ 退款日期 bug（b0703-19 修复，重要认知）**：用户报「主页支出 79.40 但列表明显 160+」+「AI 无中生有礼物退款 88」。根因=`refundTransaction`/`markReimbursed` 把退款/报销冲减行记成 **`DateTime.now()`（记账当天）而非原订单日期**。导入历史账单时，别的月份订单的退款被记到本月 → ①本月支出=正支出−所有退款(含跨月那笔88) 少算一截、且那笔−88的原订单不在本月列表 → **表头合计≠列表净额之和**（信任崩塌）；②AI 侧 `_buildTxnContext` 直接喂原始行（含散落退款负数行）→ AI 照实念「礼物退款88」、又把已退到140的订单仍当150。**修复三处+1迁移**：①退款/报销行 `date_ms=original.dateMs`（冲减归属原订单月）；②**DB v19 数据修复**：把已存在挂账退款行日期改回原订单日期 + 删孤儿退款(refund_of 指向已不存在订单的幽灵负数)；③`_buildTxnContext` 改喂 `visibleTransactions` 的**净额**(`netAmountOf`)、不再喂散退款行。**教训：任何"冲减/调整"类记录(退款/报销/未来的红冲)日期都要归属被冲减的原始记录那个月，否则跨月就把统计算错。喂 AI 的数一定是净额、不是毛额+散明细。**
+- **⚠️ 血泪教训（2026-07-04）**：给用户推送命令后**别立刻开始下一批的破坏性改动**（尤其 PowerShell 删行/大改文件到一半）。用户用 `git add -A` 提交上一批时，会把我改到一半的文件（如 home_view 删了类但没改用法）一起提交进去 → 编译错 → CI 挂。**规矩：一批完全做完(analyze+test 绿)再给推送命令；给了命令后要动大文件前先提醒用户"先推完再让我继续"。** 排查手法：`git stash -u` 还原到 HEAD 复现 CI 错误。
+- **本地验证坑（已解决）**：flutter 启动锁死锁（强杀任务后锁未释放，后续命令死等）。解法=杀 dart 进程 + 删 `C:\src\flutter\bin\cache\lockfile`，之后 analyze 十几秒正常出结果。**教训**：b0703-4 首次构建红=book_sheet 漏 import AppColors——CI analyze 原是 `|| true` 非阻断、测试只编译引用到的文件，编译错漏到打 APK 才炸。**CI 已改**：analyze 换成 `--no-fatal-infos --no-fatal-warnings`（error 阻断，warning 放行）。
+- **GPT 全面复盘已消化**（2026-07-03）：全部采纳项已完成（AI滤excluded/今日vs日均文案/toast统一/迁移前备份/删账本保护/15号代表日改按天重叠/分类管理包）；驳回=图标颜色编辑；核实本来就有=统计默认卡数/预算状态色/API key遮罩/手动备份页。**别再重复做。**
+- **⚠️ 每次推送前记得**：①水印 +1 ②pubspec version minor+1 且 +N（versionCode）+1（当前 1.12.0+14 / 水印 b0703-18 / DB v18）。APK 下载链接：`.../android-latest/肥喵记账.apk`。
+- **账单行 UI 已抽成公共组件** `widgets/transaction_day_list.dart`（`TxDayCard`/`TxRow`/`groupTxnsByDay`/徽章），主页+搜索共用。以后要显示账单列表直接用它，别再各写各的。
+- **全局 AppBar 统一（b0703-17）**：app_colors.dart AppTheme 两套主题的 `appBarTheme` 补全 `centerTitle:true`+`titleTextStyle(17/w600/onSurface)`+`iconTheme`+`actionsIconTheme(onSurface 21)`，所有页面返回键/标题/加号按钮从此一个样，不用逐页改；statistics 的 `centerTitle:false` 改回 true。以后新页面 AppBar 直接 `AppBar(title: Text('x'))` 即自动统一。
+- **智能分类方案：四层全部做完**（地基 b0703-11、支付宝退款归零 b0703-13、AI记账侧增量 b0703-14、Phase A 分类大改 b0703-15、导入复核页+批量AI兜底 b0703-16）。**缓做**：特殊交易类型 还款/借贷/投资本金 复式记账(太重、和可爱简单路线有张力，现有转账+不计入收支覆盖80%)。(GPT `记账分类最终版调整建议.md`：医疗/教育补子类、收入细分、居家生活→居家住房、理财→投资收益、新增车辆支出/保险保障一级；新分类用 emoji 图标即"同款"，不用画SVG。**缓做**：特殊交易类型 还款/借贷/投资本金 那套复式记账，太重、和可爱简单路线有张力，现有转账+不计入收支已覆盖80%)。
+- **全局右滑返回已开**：AppTheme 两套主题都设了 `pageTransitionsTheme`=Cupertino（安卓默认 Zoom 无返回手势）。以后所有 push 页面自动支持左缘右滑退回，无需每页单独加。
+- **下一步候选（2026-07-04 定案）**：①统计卡真懒加载【要做】+④喵助手记账卡跨重启恢复【要做】——**详细实施方案见 [`android-app/docs/待做方案-b0703-19后.md`](android-app/docs/待做方案-b0703-19后.md)，下次直接照做**；③多人共享账本后端【押后·工作量大】；②「记账(日常)」封面【不做·已有】。不做：多币种/图标颜色编辑/语音。
+- **等用户的文件**：①字标 logo（已选定第二版=藏青+金币爪印，等存到 `Desktop\记账app\图片\logo.png`→白底转透明+裁边→assets/brand/→换抽屉头部文字）②账本封面缺 4 张：记账(日常)/宠物/母婴/家庭（流程见 -1.2 批5.6）。
+- **给 GPT 复盘的代码包**已生成在 `Desktop\记账app\复盘包\`（4个txt，含提示词模板+锁定决策护栏）；GPT 结论回来**只挑增量**（它会推底部Tab/红色/云同步，一律驳）。
+- 长期项目：多人共享账本（后端+账号），排在所有 UI 批次之后。
+
+### -1.0 背景与两个重要变化
+- **b0628-3 订单切单修复已真机验证通过**，京东订单列表解析告一段落（天花板结论见 §0.1，仍有效）。
+- 用户写了**优化文档** `C:\Users\寻逆啊\Desktop\记账app\记账app优化文档-0701.docx`（21 张参考图：Telegram 分段胶囊 / 咔皮手动记账+键盘+预算流程 / Codex 抽屉+改名弹窗 / 团团账本封面等）。所有需求以它为准，我已完整读过并给了分析，用户认可全部结论。
+- **⚠️ 决策解锁**：原「纯本地、无登录、无云同步、无多人共享（多次否决）」**已被用户 2026-07-02 亲口放开**：现在方向是「功能尽可能完善、满足用户需求」，**要做多人共享账本**。真·共享需要后端+账号体系，属六批之后的独立大项目；六批期间数据模型往「可同步」方向设计（如用 uuid、变更时间戳）。**别再拿旧决策否掉共享需求。**
+
+### -1.1 六批实施计划（✅全部完成，留档看意图；实际改动以 -1.2 各批小结为准）
+1. **视觉快改批（b0702-1）**：空态猫放大3倍(216)；AI建议胶囊改输入框同款玻璃透明底；顶栏抽屉/搜索/账本按钮+抽屉头像统一 PressableScale 按压动效；主页底部 Telegram 式渐变过渡；全部/支出/收入改 Telegram 文件夹式胶囊；移除首页洞察小条(_InsightStrip已删)；手动卡移除今日可花横幅(_TodayAllowanceBanner已删)；聊天里只最后一条回复带猫(showMascot)。
+2. **手动记账重构**：键盘对齐咔皮（减号/再记/完成）；金额显示区改输入框风格（左上金额+细横线备注+右下拍照/相册附图）；芯片排=日期/账本/账户/标签+更多(待报销/不计入收支)，**不做「优惠」「计入预算」**；二级分类改咔皮式「点一级原位展开二级面板+背景模糊」+记忆常用二级排前；收入页同款布局芯片少几个。附照片要加 DB 字段（attachment path）。
+3. **抽屉重构**：Codex 式推开分层（主页右移露边）；字标/图标/字体对齐 Codex；头像挪左下角；账本菜单加「编辑/加星」（图标在前名称在后）；改名弹窗对齐 Codex（圆角/细边/灰底/左对齐）；抽屉项长按拖动排序（持久化）；新建账本半屏页=Codex 选图式横滑封面+自定义名称/封面+「计入总账本」开关（默认开）；总账本不可删；删账本二次确认。**封面图等用户拿 GPT 生成**（规格已给：蓝白英短猫主题、竖版3:4、PNG 900×1200、9张：默认/日常/餐饮/网购/旅游/宠物/母婴/家庭/生意/情侣）。
+4. **统计重构**：时间维度加周/自定义（去掉"度"字），按钮同 Telegram 胶囊；右上角加账本切换；首图改环形图（环左+图例右，猫系低饱和多色板，>6类归其他）；趋势图按维度给粒度（周=7天柱/月=每日线/年=12月线）；页面卡片化，后续支持长按排序/删除/底部+添加（图表库：堆叠柱/热力图/横向条形/分组柱/雷达[本月vs上月]，桑基图缓）；AI洞察三件套（消费摘要/画像/超支预测）纯本地规则实现。
+5. **预算期间模型**（动 DB，单独一批）：预算改「预算期间」表（账本id、起止或每月循环、总额、分类明细）；历史月显示当时生效预算；一页式设置（收入→固定支出→自动建议[收入-固定-20%储蓄，按历史消费结构分配]→微调→选账本+期间）。
+6. **喵助手**：历史消息改记账明细卡（左上图标+名称、灰字时间+账本、右侧金额、底部改分类/删除芯片，替掉"喵+已记一笔"）；**保留改分类芯片**（学习闭环，用户已确认要）；AI 回复排版对齐 Codex（关键数字加粗，轻量 markdown 已有 _mdSpans 可加强）。
+
+### -1.15 环境重要变化：本机有 Flutter 工具链！
+- 用户这台 Windows 机（Codex 环境）装了 **Flutter 3.44.2 / Dart 3.12.2**，`flutter analyze`、`flutter test` 都能本地跑（本批已跑：analyze 无 error、154 测试全过）。**推 CI 前先本地验，别再盲推**。CI 仍负责出 APK 到固定 Release 链接。
+
+### -1.15b 排队待开工
+- ~~预算逻辑修正包~~ ✅ b0703-1；~~分类管理重构包~~ ✅ b0703-4（含 DB v16 hidden + uuid/updated_ms 地基）。队列已清空，下一步见 -1.-1 候选。
+
+### -1.2 已完成批次速查
+- **搜索页重做 + 账单行抽公共组件（b0703-18，待真机验，v1.12.0）**：用户对比咔皮指出搜索页丑、违反"同类同设计"。①**抽公共组件** `widgets/transaction_day_list.dart`：把主页私有的 `_DayCard/_DaySectionHeader/_DismissibleRow/_TransactionRow/_RefundBadge/_ReimburseBadge/_ExcludedBadge/_groupByDay` 全搬过去做成公共 `TxDayCard/TxRow/TxDismissibleRow/groupTxnsByDay`；home_view 删私有副本(PowerShell 删 1137-1510 行)改用共享、去掉 3 个只被删类用的 import。②**搜索页重写** search_view：搜索框从 AppBar 顶部挪到**底部圆角白卡**(对齐主页输入框、跟键盘上移、autofocus)；AppBar 只留返回+「搜索」标题；结果从 ListTile 改**主页同款 TxDayCard 按天分组**；顶部加**统计卡**(支出/收入 金额+笔数，搜索的价值)；筛选胶囊/单选弹层保持上一版。删旧 `_row`。**效果**：搜索页和主页记账体验完全一致。
+- **导入复核页 + 批量AI兜底（b0703-16，待真机验，v1.10.0）智能分类第3/4层**：导入不再静默入库，改推 `bill_review_view.dart` 复核页。①**每行先自动归类**(学习记忆→BillCategorizer)，成功的进 `_autoRows`；**未归类的按归一化商户分组** `_groups`(同商户共用一分类)，退款行单列 `_refunds`。②UI：显示"已自动归类X笔/退款Y笔/Z个商户待确认"，每个待确认商户一张卡(商户名+笔数+金额+分类chip)，点 chip 走 showIosMenu 选顶级分类归一整组(待分类=橙描边)。③**一次AI兜底**：`LlmEntryParser.classifyMerchants`(去重商户名+示例商品→一次DeepSeek调用→返回{商户:key})，底部"AI归类剩N个"按钮(opt-in、需key)。④**确认导入**：`_commit` 逐笔入库(自动行用各自key、分组行用组key)，**分组的用户/AI选择喂 learnCategory**(仅决定性商户 learnKeyFor 非空才学，平台不学)，退款按商户订单号挂回原单归零。⑤import_export_view `_import` 改推复核页并接收返回条数；旧 `_ingestRows` 删除(逻辑搬进复核页)。诚实边界：分组只给顶级分类(子类精度靠自动归类那部分或事后手改)。
+- **Phase A 分类大改（b0703-15，待真机验，v1.9.0，DB v18）**：按用户 `记账分类最终版调整建议.md` 重写 category_seed.dart。**铁律：key 稳定不变(历史账单靠它)，改名只改 nameZh、重挂只改 parentKey**。①支出：食品+烟草；购物+数码配件/珠宝首饰；**新一级车辆支出**(加油/停车/车位/保养 从出行&居家**重挂**过来，+过路过桥/洗车/车船税)；出行交通只留打车/公交/共享单车/火车/飞机；居家生活→**居家住房**(房租还贷拆成 房租+房贷利息，装修装饰重挂进来改名装修维修)；医疗+牙科/眼科配镜/住院手术/心理咨询/医美/保健品(门诊改门诊挂号)；教育+学费/考试考证；娱乐+摄影写真；人情往来→**人情家庭**+孝敬父母；**新一级保险保障**(车险/医疗险/重疾/意外/寿险/财产/其他)；其他+手续费/税费/意外损失(理财支出→投资费用)。②收入从纯大类变**两级**：工资→工资薪酬(+基本/加班/补贴/提成)；奖金→奖金奖励(+年终/项目/全勤)；**新一级副业收入/养老金/家庭支持/经营收入**；理财→投资理财(+利息/分红/收益/租金)；红包→礼金红包(+微信/支付宝/人情)；退款→退款报销；其他→其他收入(+中奖/补助)。③新分类全用 emoji 图标(不画SVG)。④**DB v18 迁移**：老用户 onUpgrade 重跑 `_applyCategoryTree`(幂等 upsert，新增插入/改名重挂更新，不动 transactions)。⑤MerchantCategory 补车辆/保险/医疗子类/学费/房贷/烟草关键词(导入命中)；AI记账因提示词已带全分类树可直接选新分类。repo 测试迁移断言 17→18。
+- **AI记账侧增量（b0703-14，待真机验，v1.8.0）**：`parseWithLLM` 签名改：`expenseCats/incomeCats` 从静态 `List<CategorySeed>` 改成 `List<({key,name})>`（改传**用户真实分类含自建、去隐藏**），新增 `learnedHints` 参数（用户历史纠正当 few-shot 塞进提示词【该用户的记账习惯】块，上限20条，让模型模仿其分类选择）。repo 加 `llmCategoryOptions(kind)`+`llmLearnedHints` 两 getter。两调用方(ai_chat_panel/ai_quick_entry_view)改用 `repo.llmCategoryOptions(...)`+`repo.llmLearnedHints`。llm_entry_parser 去掉 category_seed 导入。**效果**：AI 能选到用户自建分类、且按用户历史习惯归类。
+- **支付宝退款归零导入（b0703-13，待真机验，v1.7.0）**：对着用户真实支付宝 csv 做。①`ImportedBillRow` 加 `orderNo`(商户订单号)+`isRefund`；bill_import `_findFirst` 按 key 优先级找列（**商户订单号优先于交易订单号**，退款与原单商户订单号一致、交易订单号带后缀不能配对）；parseRow 识别退款行(交易分类含退款/商品以退款开头)**不再跳过**、标记 isRefund、带 orderNo；非退款「不计收支」(提现/花呗还款/失败充值)仍跳过，0 元行(医保0自付)仍跳过。②import `_ingestRows` 重写：先逐笔记非退款行(addTransaction 返回 id)存 orderNo→id，再把退款行按 orderNo 挂回原单 `refundTransaction`(净额归零，复用附着式退款)；找不到原单的退款丢弃不造负数。③bill_import_test 更新（原「不计收支跳过」用例改成退款保留+订单号配对断言）。**诚实**：0元医保行仍跳过(记¥0无意义)；跨行匹配只认商户订单号完全一致。
+- **智能分类地基·第1批（b0703-11，待真机验，v1.5.0）核心认知：分类取决于「买了什么」不是「谁卖的」**：新 `core/ai/bill_categorizer.dart`（纯逻辑+16测试）。①**商户品类分流**：`platformDefault` 万能平台集(京东/淘宝/天猫/拼多多/苏宁/唯品会/闲鱼/得物/1688→shopping、美团/饿了么→dining、抖音/快手→shopping)——平台商户名零信息只落**安全顶级默认**、绝不落子类；其余=决定性商户(瑞幸/滴滴/中国电信/米哈游)商户名可信。②`normalizeMerchant`剥订单号/长数字/平台后缀/备注前缀/首尾分隔符（京东-订单编号349126→京东）。③`classify(merchant,product,note,kind)→(key,置信度high/medium/low)`：**商品关键词>决定性商户>平台顶级默认>兜底备注**（商品升为一等信号）。④`learnKeyFor`：决定性商户返回商户主体(一次改泛化同商户)、平台返回null(不错学京东→子类)。⑤`ImportedBillRow`加 merchant/product 字段分开保留；import `_ingestRows` 改用 BillCategorizer + **先查用户学习记忆**；ai_chat_panel 改分类学习改走 `learnKeyFor(note)??note`。**下一批候选(方案第3/4层)**：导入复核页(按商户分组批量归类+喂学习)、一次批量AI兜底(去重(商户+商品)、opt-in省token)。诚实边界：个人转账/无商品扫码小店仍只能待确认交用户。
+- **搜索增强+导入分类增强（b0703-10，待真机验，v1.4.0）**：①**搜「未分类」搜不到**修复：search_view `_pass` 里分类名空时按显示的「未分类」/「转账」参与匹配，且加账户名+金额原串匹配。②**导入分类增强**：`_ingestRows` 改为**先查商户词典 MerchantCategory.classify 再退回 guessCategory**（之前只用 guessCategory，导致 iCloud 等在商户词典里的商户导入却未归类）；MerchantCategory 补强（对着用户真实微信账单）：新增 `shopping`(京东/淘宝/天猫/拼多多/苏宁/唯品会/得物/闲鱼/1688)、`subscription` 加 app store/apple.com/itunes/米哈游/mihoyo/原神/崩坏/腾讯游戏/天游科技/网易游戏/游戏充值、`house_phone` 加手机充值/话费充值、`other_fine` 加法院/诉讼/罚金、新 `other` 加顺丰/快递/运费/圆通/中通/韵达/申通/极兔/ems。merchant_category_test 加 11 个真实商户用例。**诚实边界**：个人转账(M&X/人名)、扫码付小商户(悲伤牛蛙/夜空中最亮的星)这类不透明对方名**无法自动归类**，只能靠用户手动或喵学习记忆——已尽力，别指望 100%。
+- **UI规范扫除+右滑返回+报销归零（b0703-9，待真机验，v1.3.0）**：①**全局右滑返回**：AppTheme light/dark 加 `pageTransitionsTheme`=Cupertino（需 `import cupertino show CupertinoPageTransitionsBuilder`），所有二三级页面自动支持左缘右滑退回。②**定时记账页重写** `recurring_view.dart`：SegmentedButton→SlidingSegment、DropdownButtonFormField→新 `_PickerField`（标签+值，点开 showIosMenu）、原生 TextField→iosInputDecoration、ListTile 日期→PressableScale 胶囊、FilledButton→深色/描边胶囊，弹层改 showBlurSheet。③**搜索页** `search_view.dart`：AppBar 裸输入框→圆角搜索框(inputFill+放大镜+清除)、ActionChip→自绘胶囊(激活主色浅底描边/未选白底发丝边)、单选 `_sheet`(ListTile)→showIosMenu、金额区间弹层→showBlurSheet+iosInputDecoration+深色胶囊按钮。④**账户页** accounts_view 3 处 InputDecoration→iosInputDecoration。⑤**待报销点报销=归零**（用户拍板，学退款）：`markReimbursed` 改为给原账单挂一笔「补满净额」的退款行（note='报销到账'）让净额=0 再清待报销标；账单行净额≤0 不显负号（避免-¥0.00）；reimburse_view 文案改「抵消成 0 支出」。**别再理解成只是清标记。**
+- **附着式退款（b0703-8，待真机验，DB v17）**：退款不再作为独立负支出条目漂在时间线里，改**挂到原账单**（对齐咔皮图二三）。①DB v17：transactions 加 `refund_of`（非空=退款行，指向原 id）；老的独立冲账行 refund_of 为空仍按旧样显示。②repo：`refundTransaction` 改为插带 refund_of 的负支出（同原账单账本）；新增 `visibleTransactions`（滤掉退款行，首页/账单列表/搜索都换用它）、`refundsOf(id)`、`refundedAmountOf(id)`、`netAmountOf(t)`；`deleteTransaction` 删原账单时级联删退款行。统计/预算走 allRecords（含退款负数），净额自动对，引擎零改。③UI：账单行有退款时=划线原价+净额+「已退 X」铜金小标（**不用绿，守配色铁律**，home_view+transaction_list_view 两处行都改）；退款弹层升级=显示原价/已退/剩余+退款记录明细（每笔可撤销）+新退款上限改「剩余可退」。④测试：repo 层加附着退款用例（净额/已退/可见列表/删除级联），v15→v17 迁移断言更新。**198 测试全过。**⚠️ 删除墓碑仍未做（接后端同步要补）。
+- **用户三修+中期包（b0703-6，待真机验）版本规范/logo微调/统计全维度 + 待报销闭环/AI喂数裁剪/repo测试**：
+  ①**版本与包名**：pubspec `version: 1.0.0+2`（规则：1.0 起步每次推送 minor+1，**+N versionCode 只增不减**，每批推送都要一起 bump）；CI 产物改名 `肥喵记账.apk`（**下载链接变了**：`https://github.com/178517877qq-sketch/xunni/releases/download/android-latest/肥喵记账.apk`），加了删旧 qingji.apk 资产的步骤，Release 标题也改肥喵记账。
+  ②**抽屉字标**：左距 20→10、logo 30→36（文字兜底 24→29）。
+  ③**统计全维度卡片化**：抽出 `_ManagedCards`（注册表/默认序/图表库/拖排序全在它身上，statCardOrder 四个维度共用一份）；周/年/自定义视图全部接入（周=ring/daily(7天柱)/ranking/top5、年=trend/ring/ranking/top5、自定义=ring/trend/ranking/top5，月保留全部 10 张）；图表库里月专属卡带「· 月」标注。**趋势图改 _TrendCard**：右上角 SlidingSegment 支出/收入二选一（_DualLineChart 加 showIncome 参数只画一条线）。新增 `_topExpenses(records,start,end)` 顶部函数给周/年/自定义的单笔排行。
+  ④**待报销闭环**：repo `reimbursableTransactions` + `markReimbursed(id)`；新页 `views/transactions/reimburse_view.dart`（合计卡+列表+每行「已报销」白胶囊带确认+空态成功猫）；抽屉注册表加 `reimburse` 项（key 制自动补齐，老用户顺序不乱）。
+  ⑤**AI 喂数按问题裁剪**：新纯逻辑 `core/ai/query_range.dart`（今天/昨天/本周/上周/本月/上月/今年/去年/近N天/「5月」「五月」[未到的月份按去年]），`_buildTxnContext` 带 question——命中时间则只喂该范围（上限240条），否则最近80条。8 个单测。
+  ⑥**repo 层测试补课**：dev 依赖 `sqflite_common_ffi`（Windows 本地直接能跑；CI 加了 libsqlite3-dev 安装保险）；`test/app_repository_test.dart` 5 个用例=建库播种+同步戳/mergeCategory/deleteBook转移/隐藏过滤/**v15→v16迁移**（测试里手写 v15 全 schema 造老库→init→断言账单原样+uuid回填+version 16）；repo 加 `@visibleForTesting closeForTest()`。**本地 197 测试全过、analyze 0 error。**
+- **快赢+数据安全批（b0703-5，待真机验）猫表情真图 + 冷启动引导 + 备份自动化 + 记忆管理**：
+  ①**猫表情 7 张真图**进 `assets/mascot/`（512px，idle/overspend/success 三张是 GPT 假棋盘格底，用「边缘洪泛抠中性灰(190-252且r≈g≈b)、白描边≥253挡住不进贴纸内部」抠掉；其余 RGBA 真透明直接 alpha-bbox 裁边；`sleep.png` 没用上留备用）。mascot.dart 本来就先试 Image.asset 再回退 emoji，零代码改动即生效。处理脚本留在 scratchpad `process_mascot.py`。
+  ②**冷启动引导**：home_view `_EmptyState`——仅当**全库一笔账都没有**时猫下加一句「点下面的输入框，跟我说『午饭花了 20』试试喵」；老用户翻空月份仍然只有猫（不违反 0702 空态拍板）。
+  ③**备份自动化**：repo.init 加 `_autoPeriodicBackup`（openDatabase 前跑：最新 `qingji.db.auto-日期.bak` 超过 7 天就再备一份，最多留 3 份，无设置表依赖）；`localBackupFiles()` 列出全部 .bak（auto/pre-v/恢复兜底）按时间倒序；backup_view 改 StatefulWidget 加「本机备份」卡列表，点一条→确认→restoreDatabaseFromFile，人话标签（自动备份 2026/7/3 / 升级前备份(v15) / 恢复前兜底）。
+  ④**记忆管理**：repo 加 `categoryMemories` getter + `forgetCategory(phrase,kind)`；新页 `memory_view.dart`（列表=短语→分类·收支+图标，× 删除带确认；空态=思考猫+引导语）；入口在 AI 记账设置页「分类学习→喵学到的分类（N条）」。
+- **大合批（b0703-4，待真机验）分类管理重构 + 删账本保护 + 深色巡检 + 统计性能 + logo/封面**：
+  ①**DB v16**：categories 加 `hidden`；transactions/books 加 `uuid`+`updated_ms`（共享账本同步地基，存量行 SQLite `randomblob` 回填；所有 insert 走 `_syncStampNew()`、update 补 updated_ms，**删除还没做墓碑——接后端同步时要补**）。
+  ②**分类管理页重写** `categories_view.dart`：SlidingSegment 支出/收入；一级=白卡（点头部展开子类 5 列 CategoryGrid，新 `dimmedIds` 参数标已隐藏）；操作收「⋯」=重命名/隐藏-恢复/合并到…/删除；新增走 showBlurSheet（一级+子分类，自建 key=`custom_时间戳` 图标🏷️兜底）；**删除保护**：`transactionCountForCategory`（跨账本查DB）>0 → 引导隐藏（合并另有入口），=0 → 确认后删（连子类）；**合并** `mergeCategory`=账单改挂+子类改挂+category_memory 迁移+删源。repo 新增 `visibleChildrenOf`（记账面板不显示隐藏分类，childrenOfRanked/categoriesForKindRanked 过滤 hidden；管理页用不过滤的 childrenOf/categoriesForKind）。
+  ③**删账本保护**：repo.deleteBook 加 `moveRecordsToDefault`，`transactionCountForBook`；main.dart `_confirmDeleteBook` 三段流：无账单=普通确认；有账单=推荐「转移并删除」（账单挪总账本）；拒绝转移再弹「永久删除」深确认。
+  ④**深色巡检**：AppColors 加 `hairline(scheme,{strength})` 和 `inputFill(scheme)`；`iosInputDecoration` **签名改为必传 context**（11 个调用点全更新）；换掉黑发丝边/浅灰底：ios_form(输入框/按钮/弹窗边)、ios_menu(**行文字改 onSurface**+分隔线+高亮)、sliding_segment、manual_add_sheet(面板/圆图标/芯片/金额卡/_AccountBox)、ai_chat_panel×4、book_sheet 封面边、statistics _BookChip、budget_setting×3；抽屉遮罩 白→`AppColors.appBg` 随主题。**阴影的黑没动（深色下本来就弱，正常）。**
+  ⑤**统计性能+预算精度**：每张统计卡包 RepaintBoundary；`BudgetResolver.monthlyTotalFor` 从「15号代表日」改**按天重叠求和**（短区间不再漏、循环+临时区间可叠加），新增 2 个测试。
+  ⑥**资产**：logo 第二版处理完成（白转透明+裁边，640×192 121KB）→ `assets/brand/logo.png`（pubspec 已注册），抽屉头部 Image.asset 替换文字（**深色模式退回文字**，加载失败也退回）；封面补 pet/baby/family.png（420宽 256色 ~100KB each），book_sheet 模板接上。**还缺「记账(日常)」封面**；用户另给了 8 张猫表情图（见 -1.-1 候选①）。
+- **GPT小修包（b0703-3，待真机验）数据口径+轻提示统一+DB安全**：①AI 喂数口径和统计一致：`ai_chat_panel` 三处（建议生成/_buildTxnContext/异常提醒）过滤 `t.excluded`；②「今日可花」（首页/统计/快记，=今天份额−今天已花）vs 预算页改文案「往后每天可花」（=剩余÷剩余天数），两口径同基底不矛盾，budget_engine.dart 有注释说明；③全 App SnackBar 清零→showAppToast（7个文件：auto_record_sheet/personal_center/ai_quick_entry/ai_setting/screenshot_entry/ai_chat_panel(_snack委托)/backup_view），app_toast 加限宽+两行省略防长错误文案顶出屏；错误用 `icon: Icons.error_outline`；④**DB 迁移前自动备份**：repo.init 里 `_backupBeforeMigration`（openReadOnlyDatabase 读 user_version，要升版本才复制 `qingji.db.pre-v旧.bak`，失败不拦启动）。核实：API key 遮罩(_obscure)、备份/恢复页(backup_view+.bak回滚)早已存在。
+- **二级面板提层修复（b0703-2，待真机验）**：用户对比咔皮截图指出裁切/叠影。根因=面板画在分类区 Stack 里，芯片/金额/键盘**后画且半透明**盖住了它。修：整卡包一层 Stack，面板挪到最顶层最后画（CompositedTransformFollower + showWhenUnlinked:false，锚点 _panelLink 不变）；面板限高 268（约3行）超出内部滚动；底部区展开时重雾压白（_blurIf 加 sigma/opacity 参数，底部 3.0/0.3，网格行维持 1.8/0.65）；二级图标改**白底圆44+ClipOval 内嵌34图标**和一级圆角方块拉开层级（对齐咔皮）。
+- **预算修正包（b0703-1，待真机验）**：①建议口径修正：`BudgetSuggestion.suggestTotal` 删除→`suggestFromIncome`（收入×80%，总预算含固定支出）+`averageMonthlySpend`（近3月只均有记录月份，不填收入也能建议）；弹层固定支出输入行整个删除（fixedExpenses 字段保留兼容 DB）；文案「本月可支配预算」→「本月预算」（整段总额时叫「期间预算总额」）②首条无终点循环预算 start=DateTime(2000) 覆盖历史，已有循环预算再新建才从本月1号起；自定义段加「每月额度/整段总额」SlidingSegment（每月额度=recurringMonthly+end，编辑回显 _customMonthly）③分类区实时「已分配 ¥x/¥总额」超橙；分类合计>总预算禁存；编辑无终点循环预算先 showConfirmDialog「会影响X年X月起所有月份」④UI减重：新建预算按钮白底描边、计划列表 padding/字号压缩、iosInputDecoration 全局 vertical 13→10、弹层滚动底 24。计划列表区分「每月额度/整段总额」描述。测试更新：budget_period_test 换 suggestFromIncome/averageMonthlySpend 两用例。
+- **批7+批8（b0702-13，已提交，待真机验）统计图表库+卡片化 & 手动卡收尾 & 二级分类视觉修正**：
+  ①**二级分类视觉**（用户截图反馈）：_blurIf 透明度 0.45→0.65/blur 1.8（可读性）；选中一级名字黑色加粗（不再蓝）；去掉"雾上重画激活行"（双影/边缘模糊根源）→激活行原样清晰其余行轻模糊；选完二级后一级名字后缀「·二级名」（CategoryGrid 新 subLabels 参数，字号10缩略）。
+  ②**批8**：「不计入收支」= **DB v15** transactions 加 `excluded` 列（entity/addTransaction/updateTransaction/查询全接），**repo.allRecords 过滤 excluded**（统计/预算/洞察自动跳过），手动卡「不计入」芯片+列表灰色小标(_ExcludedBadge)；**转账 tab**：手动卡三段 支出/收入/转账（新建才有转账；编辑转账锁类型显示"编辑转账"），_AccountBox 扣款⇄入款（iOS菜单选账户），转账时芯片只留日期/账本(showExtras)，保存走 kind=transfer+toAccountId；**showEditTransactionSheet 全部路由到 ManualAddSheet**（旧 EditTransactionSheet 退役留档）。
+  ③**批7**：repo 加 statCardOrder/setStatCardOrder('stat_cards' 持久化)；**统计月视图=可管理卡片**：ReorderableListView（header=切换器+合计+环比，长按卡片拖排序，情境性无数据的卡自动跳过但保留位置），底部「＋自定义图表」弹层=全部卡片开关；卡片注册表 10 张：insights/budget/ring/daily/ranking/top5(默认开) + **heatmap 日历热力图/compare 本月vs上月分组柱/radar 结构雷达/stacked 近12月收支堆叠柱(默认关，图表库加)**。堆叠柱语义：柱高=收支较大者，深色花掉/金色结余/橙色超支。
+  ④**未做（诚实）**：二级页面按钮动效扫尾（面广价值低，暂搁）；桑基图/面积图（进后续）；logo 等用户放文件；宠物/母婴/家庭/记账封面等 GPT 图。
+- **批6.5（b0702-12，待真机验）第四轮反馈**：①**右滑手势让位**：新 `widgets/slidable_tracker.dart`（全局登记左滑面板开合，`transaction_actions.dart` 内 _PaneWatcher 监听 actionPaneType），RootShell 裸指针右滑仅在 `!SlidableTracker.anyOpen` 时开抽屉——面板开着时右滑=关面板 ②新全局组件 `widgets/app_toast.dart`（顶部深色胶囊 toast，对齐Codex，轻提示统一用它），AI回复点复制→「已复制」③**字标logo**：用户 GPT 生成两版，选定第二版（藏青+金币爪印，贴主题色），**等用户把文件存到 `Desktop\记账app\图片\logo.png`**→PIL 白底转透明+裁边+压缩→assets/brand/→抽屉头部 Image.asset 替换文字（fallback 保留文字）。
+- **批5.7+批6（b0702-11，待真机验）预算三层重构+喵助手**：①**预算页重构**（GPT复盘用户认可）：首页「看预算」=本月预算卡（总额/已用·剩余/还剩N天·日均可花/**分类进度前5条带预警色**：≥80%金、超支橙）+「预算计划」列表（⋯菜单=编辑/删除，不裸露垃圾桶）+底部新建按钮；「设预算」=**showBudgetSheet 底部模糊弹层**（每月/自定义+账本胶囊、本月可支配预算+**智能建议缩成小按钮**点开折叠区[收入/固定支出/生成]、分类预算、编辑模式预填）；repo 加 `updateBudgetPeriod`；新全局助手 `app_sheet.dart#showBlurSheet`（与手动卡同款模糊弹层，以后大弹层都用它）②**批6喵助手**：已保存记账改**每笔一张明细卡** `_SavedEntryCard`（CatIcon+备注/分类名、灰字日期时间·账本·分类、右侧金额收入金色、底部**改分类芯片**(showIosMenu候选,保留学习闭环)+**删除芯片**(确认后单笔删除,卡片淡化划线'已删除',_RecordMsg.deletedIdx运行时态)，替掉「喵+已记一笔」，msg级撤销删除）；确认卡去猫改纯文字头；`llm_query.dart` 提示词加排版规则（关键数字**加粗**/「- 」列表/短段落/禁其它markdown）。记账卡不跨重启恢复（chat_messages只存文本），deletedIdx不持久化无碍。
+- **批5.6（b0702-10，待真机验）账本封面接入**：用户 GPT 图 8 张已到（默认/餐饮/网购/旅游/美妆/生意/情侣/多人，源图在 `C:\Users\寻逆啊\Desktop\记账app\图片\账本图片`，**还缺：记账(日常)/宠物/母婴/家庭，GPT 在做**）。处理：PIL 缩到 420 宽+256色量化（8张共427KB）进 `assets/book_covers/`（pubspec 已注册）；`book_sheet.dart` BookTemplate 加 cover、封面卡=图+底部渐变压名字+emoji兜底，新增「美妆/多人」模板，「日常生活」暂用 default.png 等专属图；**DB v14**：books 加 `cover` 列，addBook/updateBook 带 cover；抽屉账本列表有封面显示 24px 缩略图。补图时：同 PIL 流程压缩→丢进 assets/book_covers/→给模板补 cover 字段即可。
+- **待办复盘（对照优化文档，2026-07-02 用户点名）**：❌批6喵助手（记账明细卡替"已记一笔"+DeepSeek排版提示词）→下一批；❌统计小组件卡片体系（长按排序/删除/+添加）；❌图表库（热力图/堆叠柱/分组柱/横向条形/雷达/面积/桑基）；❌手动卡「不计入收支」开关(要DB字段)；❌手动卡转账tab；❌二级页面按钮动效扫尾。顺序已和用户定：批6喵助手→批7统计图表+卡片化→批8杂项。
+- **批5.5（b0702-9，待真机验）第三轮真机反馈修正（11条）**：①showManualAddSheet 弹卡前有键盘先 unfocus+等130ms（修AI切手动"先上再下"）②手动卡删拖动把手（下滑关卡手势移到顶栏空白区，顶部padding 14）③**二级面板改浮层**：LayerLink+CompositedTransformTarget挂在被点行，Follower浮层=白雾BackdropFilter盖网格区+被点行在雾上重画一遍保持清晰+面板锚行正下方——不占布局、卡片高度纹丝不动 ④AnimatedPadding/键盘收起AnimatedSize统一250ms easeOutCubic合成一次过渡；金额-备注间细灰线恢复（上轮理解偏了）⑤AI字重 wght330/430 ⑥**抽屉拖动改 Listener 裸指针**（不进手势竞技场：账单行上右滑也能开抽屉、行左滑编辑不冲突；引导阈值 dx>24 且 dx>1.6*dy，方向感知，_settlePointerDrag 按末段速度落定）⑦芯片全圆角胶囊+缩20%(高32/字11/图标12) ⑧抽屉开时主页盖**白色半透明模糊遮罩**(BackdropFilter 5σ+白35%，对齐Codex) ⑨主页卡阴影收敛(blur18/无偏移/黑10%)修左下角灰底 ⑩抽屉宽 0.75(240-320) ⑪新建账本右边距24左移。
+- **批5（b0702-8，待真机验）预算期间模型**：**DB v13** 新表 `budget_periods`（book_id/start_ms/end_ms/recurring_monthly/total/category_budgets JSON/monthly_income/fixed_expenses JSON/created_ms），迁移时把旧 budget 表的单一预算自动搬成「2000年起每月循环」一条（行为不变，旧表保留）。新核心：`core/budget/budget_period.dart`（BudgetPeriod + **BudgetResolver**：effectiveOn 特异性排序=一次性区间>循环、账本专属>通用、start晚>早、created新>旧；monthlyTotalFor 一次性区间按天摊月）、`core/budget/budget_suggestion.dart`（suggestTotal=收入−固定−20%储蓄；historicalWeights 近3月不含本月按顶级归并；split 整元切分零头给最大头）。repo：`budgetPeriods/budgetTotalFor(y,m)/addBudgetPeriod/deleteBudgetPeriod`，**monthlyBudget/categoryBudgets getter 改从期间解析**（老调用方无感），删了 saveMonthlyBudget/saveCategoryBudget/_loadBudget。首页和统计的历史月都改用 budgetTotalFor（**历史月显示当时生效预算**），统计预算卡加 on: 历史月按月末算。`budget_setting_view.dart` 重写=一页式（收入→固定支出行→一键建议按消费结构分配→总额+分类明细折叠→每月循环/自定义期间 SlidingSegment+账本选择→保存；当前生效卡+期间列表可删带确认）。新测试 `budget_period_test.dart`（11个）。
+- **批4（b0702-7，待真机验）统计重构**：`statistics_view.dart` 整体重写——①时间维度=周/月/年/自定义（SlidingSegment 胶囊，自定义走 showDateRangePicker）②右上角 _BookChip 账本切换（showIosMenu+switchBook，≥2本才显示）③首图 _RingCard 环形图（环左中心总额+图例右名称/占比/金额，>6类归「其他」，_kPieColors 猫系7色板）④趋势按维度：周=_WeekBars 7天柱/月和自定义=_DualLineChart 每日双线/年=12月双线（旧「近半年趋势」删除）⑤_ArrowSwitcher 周/月/年通用切换器。`statistics_engine.dart` 加 **RangeSummary/DateTotal + rangeSummary()**（任意区间、含两端、补零、起止颠倒自纠）。新文件 `core/statistics/spending_insights.dart`=**喵的洞察三件套**（纯本地规则）：summaryLines 消费摘要（vs上月总额/涨最多分类/大头占比）、profile 画像（<5笔null→大额冲动型≥35%单笔→月光<5%/稳健≥30%/平衡/无收入=认真记账型）、forecast 线性外推超支预测（月视图 _InsightsCard 展示，仅当月显示预测）。新测试 `spending_insights_test.dart`（13个，含 rangeSummary）。**长按排序/删除卡片/底部+添加图表 属后续增强未做**；桑基图/热力图/雷达图未做（进后续图表库）。
+- **批3.7（b0702-6）第二轮真机反馈修正（11条）**：①AI字体改**可变字重**正文wght350/加粗450（FontVariation，回退w400/w500），用户气泡同350 ②抽屉恢复「更多」折叠（前5项+展开，折叠态也可拖排序，shown=前缀索引直通全局order）③头像改玻璃按钮风格(GlassSurface blur:0) ④右滑开抽屉范围恢复左半屏(screenW*0.5) ⑤**编辑账目统一进 ManualAddSheet 编辑模式**（showEditTransactionSheet 分流：转账走旧卡；edit预填+updateTransaction+learnCategory纠正学习+无再记+保存键+不显账本芯片）⑥手动卡 AnimatedSize 高度过渡 ⑦book_sheet 编辑时 autofocus ⑧主页卡片-分段间距减半(expandedHeight-8/卡片底4/分段顶0) ⑨芯片白底+发丝边+淡影(去灰底) ⑩**新统一入口 showManualAddSheet**：与AI面板同款背景模糊+上滑出场（替代showModalBottomSheet），键盘用AnimatedPadding顶起 ⑪备注聚焦时收起数字键盘让位系统键盘(_noteFocus)+textInputAction.done。
+- **批3.6（b0702-5）发烫修复**：用户反馈"打开App手机很烫"。根因=①`MascotBreath` 永动画 `repeat()` 逼手机 60/120fps 持续渲染 ②首页常驻 6-7 层 `BackdropFilter` 实时模糊每帧重算。修复：`mascot.dart` 改**间歇呼吸**（呼吸2个来回→静止8秒零渲染→循环，+RepaintBoundary 隔离重绘）；`glass.dart` GlassSurface 加 `blur:0` 免模糊快速通道，**纯色/静态背景上的小按钮一律 blur:0**（顶栏3钮/账本胶囊/输入卡内按钮/手动卡按钮/AI面板小件/统计翻月钮已改），只有盖在滚动内容上的大浮层（底部输入卡、AI面板背板、iOS菜单）保留模糊。**性能铁律：不要写 `repeat()` 永动画；新加 GlassSurface 先想背景是不是纯色。**
+- **批3.5（b0702-4）用户真机反馈修正**：①空状态只留猫(184,无文案) ②新建全局组件 `widgets/sliding_segment.dart`（Telegram式滑块平移+AnimatedDefaultTextStyle，主页 _FilterSegment 和手动卡支出/收入都用它，**分段切换以后一律用这个组件**）③AI回答字重 w300→w400（加粗仍 w600，反差一档=Codex 标准）④手动卡：支出/收入缩到 150 宽、模式胶囊对齐 AI 面板(31/12号)、卡片高度改内容自适应(ConstrainedBox+Flexible 消大片空白)、金额 24/w600(咔皮)、去掉备注分隔线和输入框边线、账本/账户芯片弹框从 PopupMenu 换成 showIosMenu（`ios_menu.dart` 加了**靠屏底自动向上弹**逻辑）。**用户设计铁律：同类功能必须同一种设计（弹框/分段/按钮都走全局组件），别再各写各的。**
+- **批1（b0702-1，待真机验）**：`home_view.dart`（猫216/新_FilterSegment/删_InsightStrip）、`main.dart`（PressableScale+底部渐变）、`ai_chat_panel.dart`（_SuggestionGrid玻璃底/_AnswerBubble.showMascot）、`manual_add_sheet.dart`（删今日可花）。
+- **批3（b0702-3，待真机验）抽屉重构**：`main.dart` RootShell 改 Codex 式推开抽屉（AnimationController+Transform，主页右移+圆角+阴影，左缘28px右滑开、点遮罩/左滑/返回键关）；`_DrawerPanel`（字标对齐Codex、功能项 ReorderableDelayedDragStartListener 长按拖动排序→repo.setDrawerOrder 持久化、去掉「更多」折叠、头像挪左下+新建账本胶囊）；账本菜单=加星/编辑/改名/删除（图标在前，`ios_menu.dart` 全局翻转）；`ios_form.dart` 弹窗对齐Codex（左对齐标题+subtitle+双灰胶囊）；**DB v12**：books 加 `starred`+`include_in_total`；**总账本改真聚合**（_loadTransactions 按 include_in_total 聚合，最早的账本=总账本=defaultBookId 不可删）；新文件 `views/books/book_sheet.dart`（新建/编辑账本半屏页，9个模板封面 emoji 占位等用户 GPT 图，规格见 -1.1 批3）。⚠️ 仓库根有已提交的垃圾目录 `qingji-receipt/`（旧拷贝），建议用户 `git rm -r` 清掉。
+- **批2（b0702-2，待真机验）手动记账重构**：`manual_add_sheet.dart` 整体重写（_KindSegment Telegram胶囊 / 咔皮式二级面板 _SubcategoryPanel+_blurIf 模糊收起 / _ChipsRow 日期·账本·账户·标签·待报销 / _AmountCard 输入框风格金额+备注+相册拍照+再记flash提示）；`amount_keypad.dart` 重写成咔皮4×4（1-9/⌫长按清空/+/−/再记/0/./完成，onSaveAgain 可选，编辑页 saveLabel=保存）；`app_repository.dart` 加 `addTransaction(bookId:)` 和 `childrenOfRanked`；`receipt_picker.dart` 拆出 `pickAndSaveReceiptFrom(source)`；新测试 `amount_keypad_widget_test.dart`（4个）。旧 `SubcategoryRow` 仅编辑页还在用。
+
+---
+
+## §0 最新交接（2026-06-28，一次超长 session）
+
+### 0.1 首要在途：截图识别「京东/淘宝订单列表」解析（正在攻）
+- 现象：用京东「我的订单」整页截图记账时，会**漏单、错位（金额配错商品）、把已取消订单也记了**。
+- 已定位真因（用户贴了原始 OCR）：**ML Kit 对京东这种密集彩色页识别很糟——¥ 符号丢失（金额是裸的 `17.70`）、"999"认成"99"、行序打乱**。因为旧判定用 `[¥￥]\d` 认金额 → 认不到 → **`isOrderList` 判 false → 切单代码根本没触发**。
+- 已推的修复（最新提交，构建号 **b0628-3**）：
+  - `screenshot_entry.dart` 里 `isOrderList` 判定**不再依赖 ¥**，改用「共N件」锚点 + 裸两位小数金额。
+  - `order_list_parser.dart`（新，纯逻辑+单测）：按每单一个的「共N件」**确定性切单**，切单时**整单丢弃「已取消/退款/未付款」**；无「共N件」回退到 `screenshot_layout.dart` 的纵向聚类。
+  - `llm_entry_parser.dart` 的 `screenshotExtra` 提示词：多平台结构感知（店铺→商品→金额→共N件→状态）、跳过已取消、不漏单、金额只配同单商品。
+- **待用户真机验 b0628-3**：看①是否触发切单（输入框会出现 `─────` 分块）②取消单丢没丢③漏单补没补。
+- **诚实结论/天花板**：本地 OCR（ML Kit）对京东这类页就是不稳，切单能显著改善但**做不到分毫不差**；要 100% 只有**视觉大模型看图**（通义/智谱 VL，需云端 key）。用户**明确嫌云端麻烦、要纯本地**，所以别擅自上云；可以再优化本地启发式，但要如实告诉他上限。**单个订单详情页截图几乎不会错**，整页列表当"批量草稿"、确认页删改兜底。
+
+### 0.2 本 session 已完成（都在分支上、有单测的已进 CI 硬闸门）
+- **改名**：App 从「轻记」→ **「肥喵记账」**（`AndroidManifest label`）。
+- **AI 记账准确率三连**：
+  - P0-1 大模型统一判意图：`parseWithLLM` 返回 `{intent,entries}`，记账/查账交给 DeepSeek 判；关键词 `ChatIntent`（`chat_intent.dart`）仅离线兜底。**修了"花了"被误判查账的 bug。**
+  - P0-2 商户词典 `merchant_category.dart`（真实 key、kind 感知、最长匹配）：瑞幸→饮料、滴滴→打车…；分类优先级 **用户记忆 > 词典 > 大模型 > 兜底**（`_matchCat` / quick-entry / auto-record 都接了）。
+  - P1 记账卡**一键改分类芯片**（`ai_chat_panel.dart` `_CatChip`/`_pickCategory`/`_catCandidates`）：同大类兄弟子类，点一下=改+学习(`learnCategory`)+若已入库改库(`repo.setTransactionCategory`)。`addTransaction` 现返回 id。
+  - P2 `entry_sanity.dart`（金额≤0/过大→null、未来日期→今天、置信度 clamp，接在 LLM 与本地两条路）；本地解析认**中文数字金额**（`_cnToInt`：一百二/两块五/一万二）。
+- **解析更聪明**：`meal_time.dart`（笼统 `dining` 按时段→早/午/晚餐）；`smart_tags.dart`（报销识别→存账标"待报销"、AA 分摊按人数）；`spending_anomaly.dart`（记完比同类历史贵一大截→温和提醒，仅聊天记账路弹）；`notification_parse.dart`（通知挑支付金额避余额+方向）。
+- **顶级·捕获入口（原生）**：
+  - **分享到肥喵**：`MainActivity.kt`（MethodChannel `feimiao/share`）+ manifest SEND/SEND_MULTIPLE + `share_intake.dart`（全局 navigatorKey，文字→AiQuickEntryView、图片→`recognizeImagePathAndEntry`，与相册选图共用 OCR 管线）。**待真机验。**
+  - **自动记账**：`PaymentNotificationListener.kt`（`NotificationListenerService` 抓微信/支付宝支付通知→粗筛→排队 SharedPreferences）+ channel `feimiao/autorecord`（取队列/查授权/跳设置）+ `auto_record.dart` + `auto_record_sheet.dart`（回前台一键批量确认，不静默乱记）+ 设置页 `auto_record_setting_view.dart`（抽屉入口，含保活引导）。**待真机验（通知文案解析 + 国产 ROM 保活是最大变数）。**
+- **趋势图**：统计页「近半年趋势」支出+收入双线（`statistics_view.dart` `_TrendChart`）。
+- **月度报告**：`monthly_report_view.dart`（本地算的月报 + 猫锐评，统计页入口）。修了双 ¥ bug。
+- **退款=冲账方案1**：`repo.refundTransaction` 记负支出；左滑「编辑/退款/删除」`transaction_actions.dart`（flutter_slidable）。
+- **周期记账**：`recurring_rule.dart` + DB v11 + `recurring_view.dart`（抽屉「定时记账」）。
+- **崩溃修复（重要）**：release 版截图识别崩（NPE `getClass() on null`）根因是 **R8 裁掉了 ML Kit 反射加载的中文模型类** → 已在 `android/app/build.gradle.kts` 的 release 关掉 R8：`isMinifyEnabled=false` + `isShrinkResources=false`。**别再打开**，否则 ML Kit 会被裁崩。
+- **图标**：`app_icon.png` 是完整成品图（内容贴边），CI 里 `rm` 掉自适应 XML 强制传统图标。真正无裁切要用户给「透明背景 logo 前景」做标准自适应——用户没给，**暂搁置**。
+
+### 0.3 构建 / 验证 的变化（覆盖 §二）
+- **提交信息不再用 `M{n}` 流水号**，改**中文描述式**（如「AI记账P2:…」）。
+- **用户在本地 `master` 分支**，推送用 **`git push origin HEAD:Codex/hopeful-wozniak-pr2ne3`**（把 HEAD 推到那个固定分支；直接 `git push -u origin Codex/…` 会 `src refspec … does not match`，因为本地分支名叫 master）。
+- **cowork 环境里没有 `mcp__github__*` 工具**，我读不到 CI 日志；靠用户截图/告知 CI 颜色。Codex 环境若有 `gh` CLI 或 github 工具可自查。
+- **构建水印**：`lib/build_info.dart` 的 `kBuildTag` 显示在 AI 记账页副标题（现 **b0628-3**）。**每次有意义改动就 +1**，让用户一眼确认装的是不是最新包（本 session 反复踩"用户在测旧包"的坑，务必让他先认水印再报问题）。
+- 沙箱/cowork 的 bash **不能 commit/push**（`.git/objects` 无写权限 + 无 git 身份）；**代码编辑靠文件工具落盘到用户磁盘，git 提交推送让用户在自己终端跑**。Codex 在用户机器上则可直接 git。
+- CI 仍是唯一编译闸门：**没有本地 Dart/Flutter，我编译不了；纯逻辑都写了单测让 CI 真验；原生(Kotlin)只能 CI 验编译 + 用户真机验行为。**
+
+### 0.4 又锁定的决策（补充 §三）
+- **AI 记账要做到"顶级"**：方向是①解析准（已大量做）②捕获无摩擦（分享+自动记账）③更聪明（餐次/报销/AA/异常）。**纯本地优先，用户嫌云端 OCR 麻烦——不上云。**
+- **不派子代理**依旧（用户 6-14 决定），一条龙干。
+
+## 一、当前活跃项目
+
+**「轻记 QingJi」安卓版**：`android-app/`，Flutter + sqflite + provider + `decimal`（金额精度）。
+- 开发分支：**`Codex/hopeful-wozniak-pr2ne3`**（所有进度都在这；环境是临时的，代码只认 git）。
+- iOS 版（`ios-app/`，Swift）已**休眠保留不动**（用户没 Mac、侧载失败，转安卓）。
+- 与用户**一律中文**沟通；用户是开发小白，解释要通俗。
+
+## 二、构建 / 验证（没有本地工具链，全靠 CI）
+
+- `.github/workflows/android-ci.yml`（ubuntu runner）：每次推分支 → `flutter pub get` → 生成图标 → `flutter analyze`(非阻断) → **`flutter test`(硬闸门)** → 编译 release APK → 发布到固定 tag `android-latest` 的 Release。
+- **固定下载链接（永不变）**：`https://github.com/178517877qq-sketch/xunni/releases/download/android-latest/qingji.apk`
+- **查构建结果**：优先 `mcp__github__get_release_by_tag`（看 qingji.apk 的 `updated_at` 晚于本次推送即成功——发布步骤只在成功后跑）。`list_workflow_runs` 返回上百KB会爆 token；若必须用，结果会落到本地文件，用 `python3` 读该文件解析 `head_sha/conclusion`。失败再 `get_job_logs`。
+- **提交规范**：commit message 用 `M{n}: 简述` 流水号（当前已到 **M37**）。推送用 `git push -u origin Codex/hopeful-wozniak-pr2ne3`；推前先 `git fetch + rebase`（远端偶有删文件类提交）。
+- **CI 注意**：`android/` 脚手架每次 `flutter create` 重生成，所以 manifest 权限在 CI 里注入（现仅 **INTERNET**；RECORD_AUDIO 已移除）；图标用 `flutter_launcher_icons`（`assets/icon/app_icon.png`）。`assets/`、`pubspec.yaml` 是我们维护的、不会被重生成。
+
+## 三、锁定的产品决策（定了别反复）
+
+- **可爱风路线**（对标咔皮记账），吉祥物=用户自家蓝白英短猫。`lib/widgets/mascot.dart`（7 表情，现 emoji 占位，将来换真猫 PNG）。
+- **猫系配色**（`lib/theme/app_colors.dart`）：主色蓝灰毛 `#7D8B9B`、铜金眼 `#F2B23C`（**收入/高亮**）、粉鼻爪 `#F4A9B8`、超支橙 `#FF9F68`、奶白底 `#FFFDF7`。
+  - **收支语义**：收入=铜金，支出=中性深色(onSurface)，超支/预算超标=橙。**不要用通用红/绿**（多次否决）。
+- **架构**：**无底部 Tab 栏**，单主页 + 左上角抽屉（学咔皮）。抽屉/输入框对齐 Codex 气质。**多次否决底部导航栏改造。**
+- **纯本地 App**：sqflite，**无后端/无登录/无云同步/无多人共享**（多次否决）。
+- **AI 记账接 DeepSeek**（不用 Codex——国产便宜、直连、中文好）。OpenAI 兼容 HTTP，`lib/core/ai/llm_entry_parser.dart`；用户 key 存 `app_settings` 表（设置→AI记账设置）；无 key/失败降级本地规则 `natural_language_entry_parser.dart`。
+- **设计令牌**：`lib/theme/app_tokens.dart`（圆角偏大=萌、间距、动效、字重、文字三级灰度），新 UI 都走它，别再手写魔法数字。
+- **GPT/Gemini 的 review 只挑增量、别照单全收**：它们反复想塞底部Tab、通用蓝/红绿配色、云同步、跟同类用户对比的AI——这些都与上面冲突，**不做**。
+
+## 四、已完成（截至 M37，CI 全绿）
+
+- **输入栏**（`lib/views/home/record_input_bar.dart`）：底部 Codex 式白卡启动器；工具行 `[+] [模式胶囊] … [发送↑]`。模式胶囊=**直接切换**手动/AI 且**显示当前模式**（不是弹选择面板、不显示目标模式）；记住上次选择。`[+]`→`record_extras_sheet.dart`（截图识别/导入/导出）。
+- **AI 面板**（`ai_chat_panel.dart`，`showAiChatPanel`）：一句话→DeepSeek 解析→记账卡（保存/撤销）。**置信度自动入库**：每笔 confidence≥0.9 直接记+撤销提示，否则弹确认卡，缺金额则追问。查账问答走 `llm_query.dart`。
+- **手动卡**（`manual_add_sheet.dart`）：分类网格(大类，按频次排序)+**子类下钻**(`SubcategoryRow`)+金额表达式键盘(`amount_keypad.dart`，含 +/− 连加)+账户/日期/备注/标签。
+- **首页**（`home_view.dart`）：顶部三层卡（结余→收入/支出→预算细条/引导）+ 洞察小条（本月最大支出）+ 按天分组账单流（金额主角·收支分色·emoji 图标）。月份点击进统计页。
+- **二级分类**（核心数据特性）：`category_seed.dart` 两级树（9 大类 + ~50 子类 + emoji + parentKey）；DB `categories` 加 `parent_id`，版本 6；`_applyCategoryTree` 幂等 upsert（建库+迁移共用，**纯增量、绝不动 transactions**）；`repo.categoriesForKindRanked`=顶级大类、`repo.childrenOf(id)`=子类。手动卡 & 编辑页都支持大类→子类下钻。
+- **分类图标=彩色 emoji**（`CategorySeed.emoji` / `emojiOf(key)`，代码侧映射、不入库）。
+- **统计页**（`statistics_view.dart`）：占比饼图/趋势柱/分类排行/预算进度/**环比(vs上月)**，fl_chart。
+- **其它**：多账本（抽屉切换）、资产/账户、预算、存钱目标、分类/标签管理、CSV/Excel 导入（微信/支付宝GBK原生解码+自动归类）、CSV 导出、深浅色主题。全项目已用 `withValues` 替换弃用的 `withOpacity`。
+
+## 五、在途 / 待办
+
+- **⚠️ 二级分类迁移待用户真机验证**：用户升级安装后需确认「旧账目全在、金额对、旧分类(买菜超市/水电网/旅行/宠物/订阅)已并入对应大类」。若用户反馈异常优先修。
+- **Fluent 3D 光泽图标（用户想要）卡点**：微软 fluentui-emoji 多词图标的真实文件夹名无法靠猜，GitHub API 又限流没法枚举 → 现保留彩色 emoji。要做需先拿到「分类 emoji → Fluent 资源路径」的准确全表（换有授权的途径，或人工对照），再在 CI 下载 ~60 个 PNG 到 `assets/cat_icons/`，渲染处用 `Image.asset` + emoji 兜底。
+- **可选打磨**（价值不高）：弹窗统一抽 `appSheet()`；分类管理页按大类分组；导入自动归类映射到子类；语音（已砍，国产ROM无谷歌语音；要做得接云端ASR，需用户给key+成本）。
+- 旧待办：手动卡备注 TextField 可能与键盘抢焦点（`resizeToAvoidBottomInset:false`）。
+
+## 六、工作方式
+
+- **不派子代理**（用户 2026-06-14 决定）：当前模型本人一条龙干完（找码/读/写/验/汇报）。需查码自己用 Grep/Glob/Read。
+- 改动一律推 CI 验证，**绿了再说"完成"**；推送后用后台 sleep 等约 9 分钟再查结果（前台 sleep 被拦，用 `run_in_background`）。
+- 中文沟通、对小白讲通俗、**方案定了别反复**。

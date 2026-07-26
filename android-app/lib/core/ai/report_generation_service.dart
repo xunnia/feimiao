@@ -6,8 +6,10 @@ import '../models/transaction_record.dart';
 import '../money_format.dart';
 import '../statistics/statistics_engine.dart';
 import 'ai_provider_config.dart';
+import 'llm_entry_parser.dart' show sanitizeNoteForLlm;
 import 'llm_query.dart';
 import 'report_document.dart';
+import 'report_execution_fence.dart';
 
 typedef ReportStageCallback = Future<void> Function(String stage);
 
@@ -17,26 +19,51 @@ class ReportGenerationService {
   static Future<ReportEntity> generate(
     AppRepository repo,
     ReportJobEntity job, {
+    ReportGenerationLease? lease,
     ReportStageCallback? onStage,
   }) async {
+    final executionLease = lease ??
+        (await repo.acquireReportGenerationLease()).bind(
+          jobId: job.id,
+          jobUuid: job.uuid,
+        );
+    if (!executionLease.matchesJob(jobId: job.id, jobUuid: job.uuid)) {
+      throw const ReportGenerationInvalidated('report job lease mismatch');
+    }
     final config = repo.aiProviderConfigFor(AiTaskType.report);
     if (!config.hasKey) {
-      await repo.updateReportJob(
-        job.id,
-        status: 'failed',
-        error: '未配置报告 AI API Key',
+      await repo.guardReportGeneration(
+        executionLease,
+        () => repo.updateReportJob(
+          job.id,
+          expectedUuid: job.uuid,
+          status: 'failed',
+          error: '未配置报告 AI API Key',
+        ),
       );
       throw StateError('report AI API key is missing');
     }
 
     Future<void> stage(String value, {String? status}) async {
-      await repo.updateReportJob(job.id, status: status, stage: value);
+      await repo.guardReportGeneration(
+        executionLease,
+        () => repo.updateReportJob(
+          job.id,
+          expectedUuid: job.uuid,
+          status: status,
+          stage: value,
+        ),
+      );
       await onStage?.call(value);
     }
 
     await stage('collect', status: 'running');
-    final data = _ReportData(repo, job);
-    final context = data.buildContext();
+    late final _ReportData data;
+    late final String context;
+    await repo.guardReportGeneration(executionLease, () async {
+      data = _ReportData(repo, job);
+      context = data.buildContext();
+    });
     await stage('generate');
 
     String answer;
@@ -68,10 +95,14 @@ class ReportGenerationService {
     await stage('save');
     final markdown = ReportDocumentFormatter.markdown(job.title, answer);
     final summary = ReportDocumentFormatter.summary(markdown);
-    return repo.completeReportJob(
-      jobId: job.id,
-      summary: summary,
-      markdown: markdown,
+    return repo.guardReportGeneration(
+      executionLease,
+      () => repo.completeReportJob(
+        jobId: job.id,
+        expectedJobUuid: job.uuid,
+        summary: summary,
+        markdown: markdown,
+      ),
     );
   }
 }
@@ -234,7 +265,7 @@ class _ReportData {
         final transaction = item.transaction;
         buffer.writeln(
           '- ${_date(transaction.date)}｜${transaction.categoryNameZh}｜'
-          '${MoneyFormat.string(item.net)}｜${transaction.note}',
+          '${MoneyFormat.string(item.net)}｜${sanitizeNoteForLlm(transaction.note)}',
         );
       }
     }
@@ -253,7 +284,7 @@ class _ReportData {
           : transaction.amount;
       buffer.writeln(
         '${_date(transaction.date)}|$kind|${transaction.categoryNameZh}|'
-        '${MoneyFormat.string(amount)}|${transaction.note}',
+        '${MoneyFormat.string(amount)}|${sanitizeNoteForLlm(transaction.note)}',
       );
     }
     return buffer.toString();

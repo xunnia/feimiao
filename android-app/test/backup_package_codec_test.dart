@@ -1,9 +1,11 @@
 import 'dart:convert';
+import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:archive/archive.dart';
 import 'package:crypto/crypto.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:path/path.dart' as p;
 import 'package:qingji/core/backup/backup_package_codec.dart';
 
 Uint8List _zip(Archive archive) =>
@@ -27,6 +29,37 @@ void main() {
     expect(decoded.databaseVersion, 36);
     expect(decoded.files.keys, contains('asset_media/thumbnails/asset.png'));
     expect(decoded.manifest['contains'], containsPair('assetMedia', true));
+  });
+
+  test('encodeToFile 流式打包与 encode 同格式，decode 原样读回', () async {
+    final tmp = await Directory.systemTemp.createTemp('feimiao_codec_test');
+    addTearDown(() => tmp.delete(recursive: true));
+    final db = File(p.join(tmp.path, 'qingji.db'))
+      ..writeAsBytesSync([1, 2, 3]);
+    final receipt = File(p.join(tmp.path, 'receipt.jpg'))
+      ..writeAsBytesSync(List<int>.generate(300, (i) => i % 256));
+    final out = p.join(tmp.path, 'backup.zip');
+
+    await BackupPackageCodec.encodeToFile(
+      files: [
+        BackupPayloadFile(archivePath: 'database/qingji.db', file: db),
+        BackupPayloadFile(archivePath: 'receipts/receipt.jpg', file: receipt),
+      ],
+      outputPath: out,
+      databaseVersion: 41,
+      createdAt: DateTime.utc(2026, 7, 26),
+    );
+
+    final decoded = BackupPackageCodec.decode(File(out).readAsBytesSync());
+    expect(decoded.version, 2);
+    expect(decoded.databaseVersion, 41);
+    expect(decoded.files['database/qingji.db'], [1, 2, 3]);
+    expect(
+      decoded.files['receipts/receipt.jpg'],
+      List<int>.generate(300, (i) => i % 256),
+    );
+    expect(decoded.manifest['contains'], containsPair('receipts', true));
+    expect(decoded.manifest['contains'], containsPair('assetMedia', false));
   });
 
   test('v1 package remains readable', () {

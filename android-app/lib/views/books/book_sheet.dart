@@ -248,6 +248,7 @@ class _BookSheetState extends State<_BookSheet> {
                   ),
                   AppSwitch(
                     value: _includeInTotal,
+                    semanticLabel: '账单计入总账本',
                     onChanged: (v) => setState(() => _includeInTotal = v),
                   ),
                 ],

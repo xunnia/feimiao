@@ -1509,33 +1509,23 @@ class _DailyResolution {
   }) : reasons = List.unmodifiable(reasons);
 }
 
+/// 金额入库前统一归一到 2 位小数（四舍五入）。
+/// AI 解析、外部导入、手输余额等来源可能带来超精度金额，绝不能原样落库。
+Decimal normalizeMoneyAmount(Decimal value) => value.round(scale: 2);
+
 int decimalToBudgetCents(Decimal amount) {
-  var raw = amount.toString();
-  var sign = 1;
-  if (raw.startsWith('-')) {
-    sign = -1;
-    raw = raw.substring(1);
-  }
-  final parts = raw.split('.');
-  final whole = int.parse(parts.first.isEmpty ? '0' : parts.first);
-  final fraction = parts.length > 1 ? parts[1] : '';
-  if (fraction.length > 2 &&
-      fraction.substring(2).split('').any((digit) => digit != '0')) {
-    throw ArgumentError.value(amount, 'amount', 'must use integer cents');
-  }
-  final cents = int.parse(fraction.padRight(2, '0').substring(0, 2));
-  return sign * (whole * 100 + cents);
+  // 超过 2 位小数的金额四舍五入到分。这里绝不能抛异常：读取路径
+  // （主页/统计/预算/小组件）会对全库交易行调用本函数，一条脏数据
+  // 抛出来就是每次启动都崩且用户无法自救。
+  return (amount * Decimal.fromInt(100)).round().toBigInt().toInt();
 }
 
 int? _validBudgetCents(Decimal amount) {
-  try {
-    final cents = decimalToBudgetCents(amount);
-    return cents < 0 ? null : cents;
-  } on ArgumentError {
-    return null;
-  } on FormatException {
-    return null;
-  }
+  // 预算计划金额要求整分：超精度视为无效输入（上层报 conflict），不猜测。
+  // 交易行聚合则直接走 decimalToBudgetCents（永不抛、四舍五入到分）。
+  if (amount < Decimal.zero) return null;
+  if (amount != normalizeMoneyAmount(amount)) return null;
+  return decimalToBudgetCents(amount);
 }
 
 Decimal? budgetDecimalFromCents(int? cents) {

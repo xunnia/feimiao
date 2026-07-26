@@ -5,6 +5,7 @@ import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:workmanager/workmanager.dart';
 
 import '../../data/app_repository.dart';
+import 'report_execution_fence.dart';
 import 'report_generation_service.dart';
 
 const String _reportWorkerTask = 'feimiao.generate_report';
@@ -15,24 +16,46 @@ void reportWorkerCallbackDispatcher() {
   Workmanager().executeTask((task, inputData) async {
     DartPluginRegistrant.ensureInitialized();
     if (task != _reportWorkerTask) return true;
-    final jobId = (inputData?['jobId'] as num?)?.toInt();
-    if (jobId == null || jobId <= 0) return true;
+    final lease = ReportGenerationLease.tryFromWorkerInput(inputData);
+    if (lease == null) return true;
+    final jobId = lease.jobId!;
 
     final repo = AppRepository();
     var repoReady = false;
     try {
-      await repo.init();
+      // Opening the live SQLite file must not overlap a restore replacement.
+      await lease.guard(
+        repo.init,
+        readJobUuid: (_) async => lease.jobUuid,
+      );
       repoReady = true;
-      final job = await repo.reportJobById(jobId);
+      // 隐私闸门：用户没同意 AI 隐私说明时，后台绝不把账本上下文发出去。
+      // 任务保持排队（不标失败、不弹 UI），等用户在前台确认后由面板续跑。
+      if (!repo.aiPrivacyAccepted) return true;
+      final job = await repo.guardReportGeneration(
+        lease,
+        () => repo.reportJobById(jobId),
+      );
       if (job == null || job.status == 'completed' || job.status == 'failed') {
         return true;
       }
-      final report = await ReportGenerationService.generate(repo, job);
-      await ReportTaskScheduler.showCompletedNotification(
-        jobId: job.id,
-        reportId: report.id,
-        title: report.title,
+      final report = await ReportGenerationService.generate(
+        repo,
+        job,
+        lease: lease,
       );
+      await repo.guardReportGeneration(
+        lease,
+        () => ReportTaskScheduler.showCompletedNotification(
+          jobId: job.id,
+          reportId: report.id,
+          title: report.title,
+        ),
+      );
+      return true;
+    } on ReportGenerationInvalidated {
+      // A restore committed a different database generation. This stale work
+      // must finish successfully without touching or retrying against it.
       return true;
     } catch (error) {
       // Database/plugin startup failures are transient. Returning success here
@@ -40,7 +63,12 @@ void reportWorkerCallbackDispatcher() {
       if (!repoReady) return false;
       ReportJobEntity? job;
       try {
-        job = await repo.reportJobById(jobId);
+        job = await repo.guardReportGeneration(
+          lease,
+          () => repo.reportJobById(jobId),
+        );
+      } on ReportGenerationInvalidated {
+        return true;
       } catch (_) {
         return false;
       }
@@ -51,18 +79,34 @@ void reportWorkerCallbackDispatcher() {
         DateTime.fromMillisecondsSinceEpoch(job.createdMs),
       );
       if (age >= const Duration(hours: 24)) {
-        await repo.updateReportJob(
-          jobId,
-          status: 'failed',
-          error: '后台生成多次失败：$error',
-        );
+        try {
+          await repo.guardReportGeneration(
+            lease,
+            () => repo.updateReportJob(
+              jobId,
+              expectedUuid: job!.uuid,
+              status: 'failed',
+              error: '后台生成多次失败：$error',
+            ),
+          );
+        } on ReportGenerationInvalidated {
+          return true;
+        }
         return true;
       }
-      await repo.updateReportJob(
-        jobId,
-        status: 'queued',
-        error: '等待后台重试：$error',
-      );
+      try {
+        await repo.guardReportGeneration(
+          lease,
+          () => repo.updateReportJob(
+            jobId,
+            expectedUuid: job!.uuid,
+            status: 'queued',
+            error: '等待后台重试：$error',
+          ),
+        );
+      } on ReportGenerationInvalidated {
+        return true;
+      }
       return false;
     }
   });
@@ -79,7 +123,7 @@ class ReportTaskScheduler {
   static bool get isSupported =>
       !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
 
-  static String _uniqueName(int jobId) => 'feimiao-report-$jobId';
+  static String _uniqueName(String jobUuid) => 'feimiao-report-$jobUuid';
 
   static Future<bool> initialize() async {
     if (!isSupported) return false;
@@ -101,11 +145,22 @@ class ReportTaskScheduler {
   }
 
   static Future<bool> schedule(
-    int jobId, {
+    AppRepository repo,
+    ReportJobEntity job, {
+    ReportGenerationLease? lease,
     bool requestNotificationPermission = true,
   }) async {
     if (!isSupported) return false;
     try {
+      final executionLease = lease ??
+          (await repo.acquireReportGenerationLease()).bind(
+            jobId: job.id,
+            jobUuid: job.uuid,
+          );
+      if (!executionLease.matchesJob(jobId: job.id, jobUuid: job.uuid)) {
+        throw const ReportGenerationInvalidated('report job lease mismatch');
+      }
+      await repo.guardReportGeneration(executionLease, () async {});
       if (!await initialize()) return false;
       if (requestNotificationPermission) {
         await _notifications
@@ -114,9 +169,9 @@ class ReportTaskScheduler {
             ?.requestNotificationsPermission();
       }
       await Workmanager().registerOneOffTask(
-        _uniqueName(jobId),
+        _uniqueName(job.uuid),
         _reportWorkerTask,
-        inputData: {'jobId': jobId},
+        inputData: executionLease.toWorkerInput(),
         constraints: Constraints(networkType: NetworkType.connected),
         existingWorkPolicy: ExistingWorkPolicy.keep,
         backoffPolicy: BackoffPolicy.exponential,
@@ -135,14 +190,18 @@ class ReportTaskScheduler {
     if (!isSupported) return;
     final jobs = await repo.pendingReportJobs();
     for (final job in jobs) {
-      await schedule(job.id, requestNotificationPermission: false);
+      await schedule(
+        repo,
+        job,
+        requestNotificationPermission: false,
+      );
     }
   }
 
-  static Future<void> cancel(int jobId) async {
+  static Future<void> cancel(ReportJobEntity job) async {
     if (!isSupported) return;
     try {
-      await Workmanager().cancelByUniqueName(_uniqueName(jobId));
+      await Workmanager().cancelByUniqueName(_uniqueName(job.uuid));
     } catch (_) {}
   }
 

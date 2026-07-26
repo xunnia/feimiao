@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 与默认深色主页背景一致。 -->
+    <color name="launch_background">#211E1C</color>
+</resources>

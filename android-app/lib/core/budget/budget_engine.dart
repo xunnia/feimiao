@@ -21,6 +21,11 @@ class BudgetStatus {
   final Decimal todayAllowance;
   final bool isOverBudget;
 
+  /// 是否有「今日可用」日度引导。只有一次性区间预算（无循环周期）或
+  /// 历史窗口时，窗口结果里没有当前周期日度状态，此时 spentToday /
+  /// todayAllowance 只是 0 占位，展示层不应画「今日可用」圆环。
+  final bool hasDailyGuidance;
+
   const BudgetStatus({
     required this.monthlyBudget,
     required this.spentThisMonth,
@@ -28,6 +33,7 @@ class BudgetStatus {
     required this.remaining,
     required this.todayAllowance,
     required this.isOverBudget,
+    this.hasDailyGuidance = true,
   });
 
   @override
@@ -39,7 +45,8 @@ class BudgetStatus {
           spentToday == other.spentToday &&
           remaining == other.remaining &&
           todayAllowance == other.todayAllowance &&
-          isOverBudget == other.isOverBudget;
+          isOverBudget == other.isOverBudget &&
+          hasDailyGuidance == other.hasDailyGuidance;
 
   @override
   int get hashCode => Object.hash(
@@ -49,6 +56,7 @@ class BudgetStatus {
         remaining,
         todayAllowance,
         isOverBudget,
+        hasDailyGuidance,
       );
 }
 
@@ -75,6 +83,7 @@ class BudgetEngine {
       remaining: remaining,
       todayAllowance: daily?.todayRemainingAllowanceAmount ?? Decimal.zero,
       isOverBudget: remaining < Decimal.zero,
+      hasDailyGuidance: daily != null,
     );
   }
 

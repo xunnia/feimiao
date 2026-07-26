@@ -82,6 +82,52 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets(
+      'editable refund amount autofocuses and selects the initial value',
+      (tester) async {
+    final repo = _SettlementRepo([_cash]);
+    addTearDown(repo.dispose);
+
+    await tester.pumpWidget(
+      ChangeNotifierProvider<AppRepository>.value(
+        value: repo,
+        child: MaterialApp(
+          home: Scaffold(
+            body: Builder(
+              builder: (context) => TextButton(
+                onPressed: () async {
+                  await showRefundSettlementSheet(
+                    context,
+                    original: _original(),
+                    initialAmount: Decimal.parse('17.5'),
+                    maxAmount: Decimal.fromInt(100),
+                  );
+                },
+                child: const Text('打开退款'),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.text('打开退款'));
+    await tester.pumpAndSettle();
+
+    final editable = tester.widget<EditableText>(
+      find.descendant(
+        of: find.byKey(const Key('refund-settlement-amount')),
+        matching: find.byType(EditableText),
+      ),
+    );
+    expect(tester.testTextInput.isVisible, isTrue);
+    expect(editable.focusNode.hasFocus, isTrue);
+    expect(editable.controller.text, '17.5');
+    expect(
+      editable.controller.selection,
+      const TextSelection(baseOffset: 0, extentOffset: 4),
+    );
+  });
+
   testWidgets('missing settlement date disables confirmation', (tester) async {
     final repo = _SettlementRepo([_cash]);
     addTearDown(repo.dispose);

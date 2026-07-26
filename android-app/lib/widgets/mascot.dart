@@ -66,10 +66,10 @@ class Mascot extends StatelessWidget {
   }
 
   Widget _buildImage(BuildContext context) {
-    // 优先用真猫 PNG（assets/mascot/<mood>.png）；
-    // 文件还没就位 / 加载失败时回退到 emoji 占位，保证不崩。
+    // 优先用真猫 WebP（assets/mascot/<mood>.webp）；
+    // 加载失败时回退到 emoji 占位，保证不崩。
     return Image.asset(
-      'assets/mascot/${mood.name}.png',
+      'assets/mascot/${mood.name}.webp',
       width: size,
       height: size,
       fit: BoxFit.contain,

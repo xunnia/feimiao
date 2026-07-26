@@ -20,6 +20,10 @@ class PaymentNotificationListener : NotificationListenerService() {
 
         val extras = sbn.notification?.extras ?: return
         val title = extras.getCharSequence(Notification.EXTRA_TITLE)?.toString() ?: ""
+        // 微信的普通聊天消息（标题=联系人/群名）里也可能出现「¥xx」+「支付」字样，
+        // 会被下面的粗筛误当成一笔消费。微信的支付/退款系统通知标题固定是
+        // 「微信支付」，不含它的一律不处理；支付宝通知标题不固定，维持原状。
+        if (pkg == WECHAT && !title.contains("微信支付")) return
         val text = extras.getCharSequence(Notification.EXTRA_TEXT)?.toString() ?: ""
         val big = extras.getCharSequence(Notification.EXTRA_BIG_TEXT)?.toString() ?: ""
         val body = listOf(title, big.ifEmpty { text })
@@ -31,6 +35,10 @@ class PaymentNotificationListener : NotificationListenerService() {
         // 粗过滤：必须像一笔钱（含 ¥/￥ 或「数字元」），且像支付/收付款。
         if (!MONEY.containsMatchIn(body)) return
         if (!PAY_WORDS.containsMatchIn(body)) return
+        // 支付宝的聊天/生活号消息（朋友发「我已支付 ¥2000」）也能过上面的
+        // 粗筛。官方交易通知用固定模板措辞，认不出模板的一律不入队——
+        // 漏抓可以手动补记，抓错勾选入账就是脏数据。
+        if (pkg == ALIPAY && !ALIPAY_TXN.containsMatchIn(body)) return
 
         val app = if (pkg == WECHAT) "微信" else "支付宝"
         appendPending(this, app, body, sbn.postTime, sbn.key)
@@ -45,6 +53,15 @@ class PaymentNotificationListener : NotificationListenerService() {
 
         private val MONEY = Regex("[¥￥]|\\d+(\\.\\d+)?\\s*元")
         private val PAY_WORDS = Regex("支付|付款|消费|扣款|到账|收款|收钱|转账|交易")
+
+        // 支付宝官方交易通知的固定模板措辞（「你有一笔 25.00 元的支出」
+        // 「支付宝到账 25.00 元」「向 xx 付款成功」…）。聊天消息是自由文本，
+        // 撞不上这些模板。
+        private val ALIPAY_TXN = Regex(
+            "你有一笔|支付宝到账|成功收款|收款到账|收钱码|付款成功|成功付款|" +
+                "支付成功|交易提醒|退款成功|自动扣款|已扣款|代扣|" +
+                "向.{1,20}付款|转入.{0,10}成功"
+        )
 
         @Synchronized
         fun appendPending(

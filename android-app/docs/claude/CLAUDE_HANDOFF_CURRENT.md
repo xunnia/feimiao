@@ -1,6 +1,6 @@
 # 肥喵记账 Codex 当前交接文档
 
-更新时间：2026-07-14
+更新时间：2026-07-26
 当前 Android 工程：`C:\src\xunni-codex\android-app`  
 新会话第一入口：`docs/claude/CLAUDE_START_HERE.md`
 
@@ -8,8 +8,26 @@
 
 ## 1. 当前交付状态
 
-- 最新本地 APK：`C:\src\xunni-codex\ci-artifacts\releases\feimiao-codex-v1.196.0-198.apk`
-- 版本：`1.196.0+198`
+### 2026-07-26 审计修复批（v1.204.0+206 / b0726-206 / DB v41）
+
+- **背景**：同日先做了两轮多智能体审查（`docs/代码审查报告-2026-07-26.md` 36 条 + `docs/代码审计报告-2026-07-26.md` 43 条，后者含前者去重后的最终清单）。修复分两段：前一会话修 38 条后中断（留下 2 个失败测试），本会话核查盘点后补齐剩余 5 条并修复失败测试。**43 条全部修复**，明细与逐条状态见审计报告顶部状态块。
+- **DB v41**：transactions 新增 `order_no` 列（导入订单号落库，退款支持跨批/跨月挂回历史原单）。v38→v41 迁移等价性测试已同步。
+- **本会话补修的 5 条**：①M3 明确标「收入」的导入行只认平台侧退款强信号（分类/类型列或非「转账备注」的商品列），朋友转账「房租退款」不再被错当退款，复核页完成提示文案同步修正；②M7 退款分摊新增「不属于已跟踪物品」出口（审计行哨兵 link_id=0，免迁移），未跟踪部分的退款不再污染物品成本也不再永卡待分配；③M13 支付宝通知加官方交易模板锚点（聊天/生活号消息不再入队）；④M15 从最近任务恢复时跳过 SEND intent 重放（不重复 OCR）；⑤L4 备份导出改流式（逐文件流式校验和 + ZipFileEncoder 流式写盘，`BackupPackageCodec.encodeToFile`，包格式与 decode 兼容不变）。
+- **验证**：`flutter analyze` 0 error / 0 warning（仅 2 条既有测试 info）；全量 `flutter test` 通过（新增 5 个测试：收入行退款判定、未跟踪分摊 repo/弹层×2、流式备份往返）。
+- **边界**：未出 APK、未发布；Kotlin 两处小改（MainActivity/PaymentNotificationListener）本机无法编译验证，靠 CI/出包时验证。**本分支历史含超 100 MiB 的 APK 推不上 GitHub**，推送仍需走源码快照策略（见下）。
+
+### 2026-07-18 当前启动体验修复（工作区未提交）
+
+- 最新本地验证 APK：`C:\src\xunni-codex\ci-artifacts\releases\feimiao-codex-v1.202.0-204.apk`
+- 版本：`1.202.0+204`；build tag：`b0718-204`；DB：v40。
+- 启动第一原则：**主页第一屏必须带真实当月数据，不允许先画空主页再掉入账单**。首屏前只读账本/当前账本、账户、分类、预算、显示偏好和当月已持久化账单；全历史、资产、报告、定时物化、净资产、备份和旧退款归并在首帧后收敛。
+- 完整 hydration 前，记账、Widget deep link 和冷启动分享会排队；失败时 Widget/自动记账/报告不会读半快照。主题异步读取，抽屉首次打开才构建。
+- Android 12+ 启动主题显式使用 `@drawable/splash_transparent`，并将 splash icon background 设为透明，避免系统回退使用桌面图标。
+- 验证：启动/SQLite 专项 5/5、最终全量 Flutter 测试 **752/752**、`flutter analyze` 0 issue；发布逻辑 9/9，aapt、16 KiB zipalign、固定证书 APK V2 签名通过。APK 120,826,320 字节，SHA256：`3C178D9A6EE37DE806B281BD031058AD60A355E690844099534BAC421C566CC3`。
+- 运行态边界：本轮无可用 Android 设备，未做安装/真机冷启动截图；需用户安装后复验本月数据是否首屏即在。未 commit、未 push、未发布线上。
+
+- 历史已发布基线 APK（非本轮）：`C:\src\xunni-codex\ci-artifacts\releases\feimiao-codex-v1.196.0-198.apk`
+- 历史基线版本：`1.196.0+198`
 - build tag：`b0714-198`
 - 当前开发工作区分支：`codex/feimiao-p0-fixes`；本地功能提交 `1301e44`。因历史含 31 个超过 GitHub 100 MiB 限制的 APK，未改写本地历史，改用无发布产物的源码快照 `6703f8e`（父提交 `61c0c06`）推到 `origin/codex/feimiao-p0-fixes`；当前线上为 v198（releaseId `v198-69ae3ccda9ad`）
 - SHA256：`69AE3CCDA9ADE11D470E444E519CEC01483F701B495199A11EE0C744C1EC9A7E`
@@ -18,7 +36,7 @@
 - 签名：`CN=Feimiao Codex Test, OU=Codex, O=Feimiao, L=Shanghai, ST=Shanghai, C=CN`
 - v198 已包含旧账时间降噪与 DB v40 时间精度地基；707/707、analyze 0 issue、aapt/16K/V2 签名/哈希均通过，已 commit、push 并发布，运行态待用户安装验收。
 
-## 2. 本轮修复摘要（1.196.0+198，本地待用户安装验收）
+## 2. 历史修复摘要（1.196.0+198，本轮启动修复见上方）
 
 ### 1.196.0+198 本轮
 

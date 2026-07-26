@@ -149,6 +149,7 @@ class _RuleCard extends StatelessWidget {
               const SizedBox(width: 4),
               AppSwitch(
                 value: rule.enabled,
+                semanticLabel: '启用$title定时记账',
                 onChanged: (v) => repo.setRecurringEnabled(rule.id, v),
               ),
             ],
@@ -310,6 +311,7 @@ class _RecurringEditSheetState extends State<_RecurringEditSheet> {
                     controller: _amountCtrl,
                     keyboardType:
                         const TextInputType.numberWithOptions(decimal: true),
+                    inputFormatters: moneyInputFormatters(),
                     onChanged: (_) => setState(() {}),
                     decoration: iosInputDecoration(context,
                         hint: '如 1300', prefix: '¥ '),

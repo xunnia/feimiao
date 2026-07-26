@@ -69,6 +69,10 @@ class CategoryTxnsView extends StatelessWidget {
     for (final t in txns) {
       total += repo.netAmountOf(t);
     }
+    // 笔数只算净额为正的家族（口径标准 §7.1）：全额退款家族贡献 0 元，
+    // 不占笔数，否则这里的「共 N 笔」会比统计页环形图的分类笔数大。
+    // 列表本身仍显示全部命中行，方便看到已退掉的原单。
+    final familyCount = repo.expenseFamilyCountOf(txns);
     final sections = groupTxnsByDay(txns);
 
     return Scaffold(
@@ -89,7 +93,7 @@ class CategoryTxnsView extends StatelessWidget {
                   padding: const EdgeInsets.fromLTRB(20, 4, 20, 12),
                   child: Row(
                     children: [
-                      Text('共 ${txns.length} 笔',
+                      Text('共 $familyCount 笔',
                           style: TextStyle(color: scheme.onSurfaceVariant)),
                       const Spacer(),
                       Text(

@@ -12,10 +12,12 @@ import 'package:qingji/core/account/account_movement_projection.dart';
 import 'package:qingji/core/account/net_worth_snapshot.dart';
 import 'package:qingji/core/account/net_worth_verified_checkpoint.dart';
 import 'package:qingji/core/assets/asset_allocation.dart';
+import 'package:qingji/core/backup/backup_package_codec.dart';
 import 'package:qingji/core/budget/budget_window_resolver.dart';
 import 'package:qingji/core/budget/budget_plan_v2.dart';
 import 'package:qingji/core/budget/fixed_commitment.dart';
 import 'package:qingji/core/import/bill_import.dart';
+import 'package:qingji/core/ai/report_execution_fence.dart';
 import 'package:qingji/core/money_format.dart';
 import 'package:qingji/core/models/category_icon_style.dart';
 import 'package:qingji/core/models/recurring_rule.dart';
@@ -998,6 +1000,38 @@ void main() {
     await repo.closeForTest();
   });
 
+  test('当前库损坏成垃圾字节后仍能用完好备份恢复', () async {
+    final repo = await freshRepo();
+    await repo.addTransaction(
+      kind: TransactionKind.expense,
+      amount: Decimal.fromInt(10),
+      accountId: repo.accounts.first.id,
+      date: DateTime(2026, 7, 10),
+      note: '备份内数据',
+    );
+    final backup = await repo.createLocalBackupNow();
+    expect(backup, isNotNull);
+    await repo.closeForTest();
+
+    // 模拟当前库损坏：整个文件写成垃圾字节。
+    final dbPath = p.join(tmp.path, 'qingji.db');
+    await File(dbPath).writeAsString('this is not a sqlite database at all');
+
+    final broken = AppRepository();
+    // 损坏库上 init 失败是预期行为；这里只关心之后的恢复
+    // 不能被「恢复前安全副本做不出来」卡死。
+    try {
+      await broken.init();
+    } catch (_) {}
+
+    expect(await broken.restoreDatabaseFromFile(backup!.path), isTrue);
+    expect(
+      broken.transactions.where((t) => t.note == '备份内数据'),
+      hasLength(1),
+    );
+    await broken.closeForTest();
+  });
+
   test('有效数据库恢复会回到快照且不会保留快照后的流水', () async {
     final repo = await freshRepo();
     await repo.addTransaction(
@@ -1020,6 +1054,140 @@ void main() {
     expect(await repo.restoreDatabaseFromFile(backup!.path), isTrue);
     expect(repo.transactions.where((t) => t.note == '快照内'), hasLength(1));
     expect(repo.transactions.where((t) => t.note == '快照后'), isEmpty);
+    await repo.closeForTest();
+  });
+
+  test('恢复后旧 AI 报告租约不能写入复用同一整数 ID 的新任务', () async {
+    final repo = await freshRepo();
+    final backup = await repo.createLocalBackupNow();
+    expect(backup, isNotNull);
+
+    final oldJob = await repo.createReportJob(
+      question: '旧数据库里的报告',
+      type: 'monthly',
+      title: '旧报告',
+      periodStart: DateTime(2026, 6, 1),
+      periodEnd: DateTime(2026, 6, 30),
+    );
+    final oldLease = (await repo.acquireReportGenerationLease()).bind(
+      jobId: oldJob.id,
+      jobUuid: oldJob.uuid,
+    );
+
+    expect(await repo.restoreDatabaseFromFile(backup!.path), isTrue);
+    final restoredJob = await repo.createReportJob(
+      question: '恢复快照后的报告',
+      type: 'monthly',
+      title: '新报告',
+      periodStart: DateTime(2026, 7, 1),
+      periodEnd: DateTime(2026, 7, 31),
+    );
+    expect(restoredJob.id, oldJob.id, reason: '测试必须覆盖 SQLite 整数 ID 复用');
+    expect(restoredJob.uuid, isNot(oldJob.uuid));
+
+    await expectLater(
+      repo.guardReportGeneration(
+        oldLease,
+        () => repo.updateReportJob(
+          oldJob.id,
+          expectedUuid: oldJob.uuid,
+          status: 'completed',
+        ),
+      ),
+      throwsA(isA<ReportGenerationInvalidated>()),
+    );
+    expect((await repo.reportJobById(restoredJob.id))!.status, 'queued');
+    await repo.closeForTest();
+  });
+
+  test('恢复后立即收敛到期周期账、自动折旧和最终净资产快照', () async {
+    final repo = await freshRepo();
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final depreciationStart = DateTime(now.year - 1, now.month, now.day);
+    final assetId = await repo.addPhysicalAsset(
+      name: '恢复后折旧电脑',
+      currentValue: Decimal.fromInt(2400),
+      purchasePrice: Decimal.fromInt(2400),
+      purchaseDate: depreciationStart,
+    );
+    await repo.configurePhysicalAssetDepreciation(
+      id: assetId,
+      enabled: true,
+      depreciationBase: Decimal.fromInt(2400),
+      salvageValue: Decimal.zero,
+      usefulLifeMonths: 24,
+      startAt: depreciationStart,
+    );
+    await repo.addRecurringRule(
+      kind: TransactionKind.expense,
+      amount: Decimal.fromInt(100),
+      accountId: repo.accounts.first.id,
+      period: RecurPeriod.monthly,
+      startDate: DateTime(2099, 1, 1),
+      totalCount: 1,
+      note: '恢复后到期扣款',
+    );
+    final ruleId = repo.recurringRules.single.id;
+    final backup = await repo.createLocalBackupNow();
+    expect(backup, isNotNull);
+
+    final backupDb = await databaseFactory.openDatabase(
+      backup!.path,
+      options: OpenDatabaseOptions(singleInstance: false),
+    );
+    await backupDb.update(
+      'recurring_rules',
+      {
+        'start_date_ms': today.millisecondsSinceEpoch,
+        'next_due_ms': today.millisecondsSinceEpoch,
+        'anchor_day': today.day,
+        'generated_count': 0,
+      },
+      where: 'id = ?',
+      whereArgs: [ruleId],
+    );
+    await backupDb.close();
+    await repo.addTransaction(
+      kind: TransactionKind.expense,
+      amount: Decimal.fromInt(999),
+      accountId: repo.accounts.first.id,
+      date: today,
+      note: '恢复时应消失的现场流水',
+    );
+
+    expect(await repo.restoreDatabaseFromFile(backup.path), isTrue);
+    expect(
+      repo.transactions.where((item) => item.note == '恢复时应消失的现场流水'),
+      isEmpty,
+    );
+    final recurring = repo.transactions.singleWhere(
+      (item) => item.recurringRuleId == ruleId,
+    );
+    expect(recurring.note, '恢复后到期扣款');
+    expect(repo.recurringRules.single.generatedCount, 1);
+    final recurringAccount = repo.accounts.singleWhere(
+      (account) => account.id == recurring.accountId,
+    );
+    expect(repo.accountBalanceOf(recurringAccount), Decimal.fromInt(-100));
+    final asset = repo.physicalAssetDetailById(assetId)!;
+    expect(asset.currentValue, Decimal.fromInt(1200));
+    expect(
+      repo.valuationsForAsset(assetId).first.source,
+      AssetValueSource.autoDepreciation,
+    );
+    final finalNetWorth = repo.currentNetWorthResult().value!.netWorth;
+    expect(finalNetWorth, Decimal.fromInt(1100));
+    final todayKey = '${today.year.toString().padLeft(4, '0')}-'
+        '${today.month.toString().padLeft(2, '0')}-'
+        '${today.day.toString().padLeft(2, '0')}';
+    final snapshot = repo.netWorthSnapshots.firstWhere(
+      (item) => item.isComputed && item.snapshotDate == todayKey,
+    );
+    expect(snapshot.netWorth, finalNetWorth);
+    expect(snapshot.physicalAssets, Decimal.fromInt(1200));
+    expect(snapshot.cashAssets, Decimal.zero);
+    expect(snapshot.totalLiabilities, Decimal.fromInt(100));
     await repo.closeForTest();
   });
 
@@ -1169,6 +1337,54 @@ void main() {
           .toList();
       expect(leakedStagingEntries, isEmpty, reason: failurePoint);
     }
+    await repo.closeForTest();
+  });
+
+  test('备份包合法但包内数据库是垃圾字节时干净失败，不裸穿异常', () async {
+    final repo = await freshRepo();
+    await repo.addTransaction(
+      kind: TransactionKind.expense,
+      amount: Decimal.fromInt(10),
+      accountId: repo.accounts.first.id,
+      date: DateTime(2026, 7, 13),
+      note: '恢复前数据',
+    );
+    final documents = await Directory(p.join(tmp.path, 'bad_pkg_docs'))
+        .create(recursive: true);
+    final temporary = await Directory(p.join(tmp.path, 'bad_pkg_tmp'))
+        .create(recursive: true);
+    // 合法 zip + 校验和都对，但 database 项是垃圾字节；带上收据触发
+    // 「打开包内库改写附件路径」那条路径。
+    final packageBytes = BackupPackageCodec.encode(
+      files: {
+        'database/qingji.db':
+            Uint8List.fromList(utf8.encode('not a sqlite database')),
+        'receipts/fake.jpg': Uint8List.fromList([1, 2, 3]),
+      },
+      databaseVersion: 1,
+      createdAt: DateTime(2026, 7, 20),
+    );
+    final packageFile = File(p.join(tmp.path, 'bad_package.zip'));
+    await packageFile.writeAsBytes(packageBytes, flush: true);
+
+    expect(
+      await repo.restoreBackupPackage(
+        packageFile.path,
+        temporaryDirectory: temporary,
+        documentsDirectory: documents,
+      ),
+      isFalse,
+    );
+    // 当前数据原样保留，连接仍可继续写入。
+    expect(repo.transactions.where((t) => t.note == '恢复前数据'), hasLength(1));
+    await repo.addTransaction(
+      kind: TransactionKind.expense,
+      amount: Decimal.fromInt(5),
+      accountId: repo.accounts.first.id,
+      date: DateTime(2026, 7, 13),
+      note: '失败后仍可写',
+    );
+    expect(repo.transactions.where((t) => t.note == '失败后仍可写'), hasLength(1));
     await repo.closeForTest();
   });
 
@@ -1655,6 +1871,173 @@ void main() {
     await repo.closeForTest();
   });
 
+  test('B2 下周期计划不会锁死本周期预算，并在边界日无冲突接续', () async {
+    final repo = await freshRepo();
+    final now = DateTime.now();
+    final bookId = repo.currentBookId;
+    final futurePlanId = await repo.addBudgetPlanV2(
+      bookId: bookId,
+      name: '下周期计划',
+      cadence: BudgetPlanCadenceV2.monthly,
+      totalCents: 200000,
+      monthStartDay: 1,
+      startNextCycle: true,
+    );
+    final futurePlan =
+        repo.budgetPlansV2.firstWhere((item) => item.id == futurePlanId);
+
+    final beforeBridge = repo.budgetWindow(BudgetWindowQuery(
+      viewKind: BudgetViewKind.cycle,
+      bookId: bookId,
+      referenceDate: now,
+      asOf: now,
+      knowledgeCutoff: DateTime.now(),
+    ));
+    expect(beforeBridge.planStatus, MetricStatus.unavailable);
+
+    final bridgePlanId = await repo.addBudgetPlanV2(
+      bookId: bookId,
+      name: '本周期计划',
+      cadence: BudgetPlanCadenceV2.monthly,
+      totalCents: 100000,
+      monthStartDay: 1,
+      startNextCycle: false,
+    );
+    final bridgePlan =
+        repo.budgetPlansV2.firstWhere((item) => item.id == bridgePlanId);
+    expect(
+      bridgePlan.endInclusive,
+      futurePlan.anchorStart.subtract(const Duration(days: 1)),
+    );
+
+    final current = repo.budgetWindow(BudgetWindowQuery(
+      viewKind: BudgetViewKind.cycle,
+      bookId: bookId,
+      referenceDate: now,
+      asOf: now,
+      knowledgeCutoff: DateTime.now(),
+    ));
+    expect(current.planStatus, MetricStatus.available);
+    expect(current.plannedCents, 100000);
+
+    final future = repo.budgetWindow(BudgetWindowQuery(
+      viewKind: BudgetViewKind.cycle,
+      bookId: bookId,
+      referenceDate: futurePlan.anchorStart,
+      asOf: futurePlan.anchorStart,
+      knowledgeCutoff: DateTime.now(),
+    ));
+    expect(future.planStatus, MetricStatus.available);
+    expect(future.plannedCents, 200000);
+    expect(future.planSlices.map((slice) => slice.planId).toSet(), {
+      futurePlanId,
+    });
+    await repo.closeForTest();
+  });
+
+  test('B2 已覆盖本周期的主计划仍禁止重复创建', () async {
+    final repo = await freshRepo();
+    final bookId = repo.currentBookId;
+    await repo.addBudgetPlanV2(
+      bookId: bookId,
+      name: '当前计划',
+      cadence: BudgetPlanCadenceV2.monthly,
+      totalCents: 100000,
+      monthStartDay: 1,
+      startNextCycle: false,
+    );
+
+    await expectLater(
+      repo.addBudgetPlanV2(
+        bookId: bookId,
+        name: '重复计划',
+        cadence: BudgetPlanCadenceV2.monthly,
+        totalCents: 200000,
+        monthStartDay: 1,
+        startNextCycle: false,
+      ),
+      throwsA(
+        isA<StateError>().having(
+          (error) => error.message,
+          'message',
+          contains('这个周期已有主预算记录'),
+        ),
+      ),
+    );
+    await repo.closeForTest();
+  });
+
+  test('B2 未生效计划可安全归档，结束日不会早于开始日', () async {
+    var repo = await freshRepo();
+    final bookId = repo.currentBookId;
+    final planId = await repo.addBudgetPlanV2(
+      bookId: bookId,
+      name: '尚未生效',
+      cadence: BudgetPlanCadenceV2.monthly,
+      totalCents: 100000,
+      monthStartDay: 1,
+      startNextCycle: true,
+    );
+    await repo.archiveBudgetPlanV2(planId);
+    var plan = repo.budgetPlansV2.firstWhere((item) => item.id == planId);
+    expect(plan.status, BudgetPlanStatusV2.archived);
+    expect(plan.endInclusive, isNull);
+    await repo.closeForTest();
+
+    repo = AppRepository();
+    await repo.init();
+    plan = repo.budgetPlansV2.firstWhere((item) => item.id == planId);
+    expect(plan.status, BudgetPlanStatusV2.archived);
+    expect(plan.endInclusive, isNull);
+    final future = repo.budgetWindow(BudgetWindowQuery(
+      viewKind: BudgetViewKind.cycle,
+      bookId: bookId,
+      referenceDate: plan.anchorStart,
+      asOf: plan.anchorStart,
+      knowledgeCutoff: DateTime.now(),
+    ));
+    expect(future.planStatus, MetricStatus.unavailable);
+    await repo.closeForTest();
+  });
+
+  test('B2 已归档周期保留历史且不会允许同周期重复主计划', () async {
+    final repo = await freshRepo();
+    final bookId = repo.currentBookId;
+    final planId = await repo.addBudgetPlanV2(
+      bookId: bookId,
+      name: '本周期历史',
+      cadence: BudgetPlanCadenceV2.monthly,
+      totalCents: 100000,
+      monthStartDay: 1,
+      startNextCycle: false,
+    );
+    await repo.archiveBudgetPlanV2(planId);
+
+    await expectLater(
+      repo.addBudgetPlanV2(
+        bookId: bookId,
+        name: '同周期重复',
+        cadence: BudgetPlanCadenceV2.monthly,
+        totalCents: 200000,
+        monthStartDay: 1,
+        startNextCycle: false,
+      ),
+      throwsA(isA<StateError>()),
+    );
+    expect(
+      await repo.addBudgetPlanV2(
+        bookId: bookId,
+        name: '下周期接续',
+        cadence: BudgetPlanCadenceV2.monthly,
+        totalCents: 200000,
+        monthStartDay: 1,
+        startNextCycle: true,
+      ),
+      greaterThan(0),
+    );
+    await repo.closeForTest();
+  });
+
   test('B2 下周期 revision 可重复保存并同步预生成 occurrence', () async {
     var repo = await freshRepo();
     final now = DateTime.now();
@@ -1802,7 +2185,7 @@ void main() {
     expect(precision['dflt_value'], "'legacy_unknown'");
     expect(
       Sqflite.firstIntValue(await check.rawQuery('PRAGMA user_version')),
-      40,
+      41,
     );
     await check.close();
   });
@@ -1889,7 +2272,7 @@ void main() {
     );
     expect(
       Sqflite.firstIntValue(await check.rawQuery('PRAGMA user_version')),
-      40,
+      41,
     );
     await check.close();
   });
@@ -2090,6 +2473,164 @@ void main() {
       ],
     );
     await reopened.closeForTest();
+  });
+
+  test('账户仍被定时规则引用时不能归档，停用规则也不会绕过保护', () async {
+    final repo = await freshRepo();
+    final accountId = await repo.addAccount(name: '定时扣款账户');
+    await repo.addRecurringRule(
+      kind: TransactionKind.expense,
+      amount: Decimal.fromInt(100),
+      accountId: accountId,
+      period: RecurPeriod.monthly,
+      startDate: DateTime(2099, 1, 1),
+      note: '未来房租',
+    );
+    final ruleId = repo.recurringRules.single.id;
+    await repo.setRecurringEnabled(ruleId, false);
+
+    await expectLater(
+      repo.archiveAccount(accountId),
+      throwsA(isA<StateError>()),
+    );
+    expect(
+        repo.activeAccounts.any((account) => account.id == accountId), isTrue);
+
+    await repo.deleteRecurringRule(ruleId);
+    await repo.archiveAccount(accountId);
+    expect(
+      repo.archivedAccounts.any((account) => account.id == accountId),
+      isTrue,
+    );
+    await repo.closeForTest();
+  });
+
+  test('失效账户的到期定时规则不会改扣其他账户或推进进度', () async {
+    var repo = await freshRepo();
+    final accountId = await repo.addAccount(name: '后来失效的定时账户');
+    final tomorrow = DateTime.now().add(const Duration(days: 1));
+    await repo.addRecurringRule(
+      kind: TransactionKind.expense,
+      amount: Decimal.fromInt(66),
+      accountId: accountId,
+      period: RecurPeriod.daily,
+      startDate: DateTime(tomorrow.year, tomorrow.month, tomorrow.day),
+      note: '不能改扣默认账户',
+    );
+    final ruleId = repo.recurringRules.single.id;
+    await repo.closeForTest();
+
+    final todayRaw = DateTime.now();
+    final today = DateTime(todayRaw.year, todayRaw.month, todayRaw.day);
+    final db =
+        await databaseFactory.openDatabase(p.join(tmp.path, 'qingji.db'));
+    await db.update(
+      'accounts',
+      {
+        'status': AccountStatus.archived.storageKey,
+        'archived_ms': DateTime.now().millisecondsSinceEpoch,
+      },
+      where: 'id = ?',
+      whereArgs: [accountId],
+    );
+    await db.update(
+      'recurring_rules',
+      {
+        'next_due_ms': today.millisecondsSinceEpoch,
+        'generated_count': 0,
+        'enabled': 1,
+      },
+      where: 'id = ?',
+      whereArgs: [ruleId],
+    );
+    await db.close();
+
+    repo = await freshRepo();
+    final rule = repo.recurringRules.single;
+    expect(rule.nextDue, today);
+    expect(rule.generatedCount, 0);
+    expect(
+      repo.transactions
+          .where((transaction) => transaction.recurringRuleId == ruleId),
+      isEmpty,
+    );
+    expect(
+      repo.archivedAccounts.any((account) => account.id == accountId),
+      isTrue,
+    );
+    await repo.closeForTest();
+  });
+
+  test('归档与新增或修改定时规则并发时不会留下悬空账户引用', () async {
+    final repo = await freshRepo();
+    final futureDate = DateTime(2099, 1, 1);
+
+    Future<bool> succeeds(Future<void> Function() action) async {
+      try {
+        await action();
+        return true;
+      } catch (_) {
+        return false;
+      }
+    }
+
+    final newRuleAccountId = await repo.addAccount(name: '并发新增目标账户');
+    final addRace = await Future.wait([
+      succeeds(() => repo.archiveAccount(newRuleAccountId)),
+      succeeds(() => repo.addRecurringRule(
+            kind: TransactionKind.expense,
+            amount: Decimal.fromInt(10),
+            accountId: newRuleAccountId,
+            period: RecurPeriod.monthly,
+            startDate: futureDate,
+            note: '并发新增规则',
+          )),
+    ]);
+    expect(addRace.where((result) => result), hasLength(1));
+
+    final sourceAccountId = repo.transactionAccounts.first.id;
+    await repo.addRecurringRule(
+      kind: TransactionKind.expense,
+      amount: Decimal.fromInt(20),
+      accountId: sourceAccountId,
+      period: RecurPeriod.monthly,
+      startDate: futureDate,
+      note: '并发修改规则',
+    );
+    final updateRule = repo.recurringRules.singleWhere(
+      (rule) => rule.note == '并发修改规则',
+    );
+    final updateTargetId = await repo.addAccount(name: '并发修改目标账户');
+    final updateRace = await Future.wait([
+      succeeds(() => repo.archiveAccount(updateTargetId)),
+      succeeds(() => repo.updateRecurringRule(
+            id: updateRule.id,
+            kind: updateRule.txKind,
+            amount: updateRule.amount,
+            categoryId: updateRule.categoryId,
+            accountId: updateTargetId,
+            bookId: updateRule.bookId,
+            note: updateRule.note,
+            period: updateRule.recurPeriod,
+            nextDue: updateRule.nextDue,
+            startDate: updateRule.startDate,
+            endDate: updateRule.endDate,
+            totalCount: updateRule.totalCount,
+          )),
+    ]);
+    expect(updateRace.where((result) => result), hasLength(1));
+    await repo.closeForTest();
+
+    final db =
+        await databaseFactory.openDatabase(p.join(tmp.path, 'qingji.db'));
+    final dangling = Sqflite.firstIntValue(await db.rawQuery('''
+      SELECT COUNT(*)
+      FROM recurring_rules r
+      INNER JOIN accounts a ON a.id = r.account_id
+      WHERE a.status = 'archived'
+    '''));
+    expect(dangling, 0);
+    await db.close();
   });
 
   test('定时记账：记录次数会阻止分期账单无限生成', () async {
@@ -2896,6 +3437,67 @@ void main() {
     await repo.closeForTest();
   });
 
+  test('markReimbursed 对资产关联账单可用：净额归零、报销行落库', () async {
+    final repo = await freshRepo();
+    final account = repo.accounts.first;
+    final cat = repo.categoriesForKindRanked(TransactionKind.expense).first;
+    await repo.addPhysicalAsset(
+      name: '公司报销的显示器',
+      assetType: AssetType.digital,
+      currentValue: Decimal.fromInt(2000),
+      purchasePrice: Decimal.fromInt(2000),
+      sourceType: PhysicalAssetSourceType.newPurchaseWithAccount,
+      paymentAccountId: account.id,
+      purchaseCategoryId: cat.id,
+      purchaseDate: DateTime(2026, 7, 1),
+      occurredAt: DateTime(2026, 7, 1),
+    );
+    final purchase = repo.visibleTransactions.single;
+
+    // 与 refundTransaction 对齐：资产关联账单也能报销（挂冲减行不动原单），
+    // 以前开头的 _assertTransactionMutable 会把这条路径整个堵死。
+    await repo.markReimbursed(
+      purchase.id,
+      settledAt: DateTime(2026, 7, 20),
+      settlementAccountId: account.id,
+    );
+
+    final original =
+        repo.transactions.singleWhere((t) => t.id == purchase.id);
+    expect(original.reimbursable, isFalse);
+    expect(repo.netAmountOf(original), Decimal.zero);
+    final reimbursement = repo.refundsOf(purchase.id).single;
+    expect(reimbursement.eventType, TransactionEventType.reimbursement);
+    await repo.closeForTest();
+  });
+
+  test('撤销报销：删除报销冲减行后原单回到待报销列表', () async {
+    final repo = await freshRepo();
+    final id = await repo.addTransaction(
+      kind: TransactionKind.expense,
+      amount: Decimal.fromInt(66),
+      accountId: repo.accounts.first.id,
+      date: DateTime(2026, 7, 2),
+      note: '待报销打车',
+      reimbursable: true,
+    );
+    await repo.markReimbursed(
+      id,
+      settledAt: DateTime(2026, 7, 15),
+      settlementAccountId: repo.accounts.first.id,
+    );
+    expect(repo.reimbursableTransactions, isEmpty);
+    final reimbursementRow = repo.refundsOf(id).single;
+
+    await repo.deleteTransaction(reimbursementRow.id);
+
+    final original = repo.transactions.singleWhere((t) => t.id == id);
+    expect(original.reimbursable, isTrue);
+    expect(repo.netAmountOf(original), Decimal.fromInt(66));
+    expect(repo.reimbursableTransactions.map((t) => t.id), contains(id));
+    await repo.closeForTest();
+  });
+
   test('退款和报销拒绝不存在的到账账户', () async {
     final repo = await freshRepo();
     final originalId = await repo.addTransaction(
@@ -3278,6 +3880,221 @@ void main() {
     await repo.closeForTest();
   });
 
+  test('账单导入：同批多笔退款不双重扣减，两笔都挂上净额正确', () async {
+    final repo = await freshRepo();
+    final accountId = repo.accounts.first.id;
+    final cat = repo.categoriesForKindRanked(TransactionKind.expense).first;
+
+    final result = await repo.importReviewedBillBatch(
+      accountId: accountId,
+      rows: [
+        (
+          row: ImportedBillRow(
+            date: DateTime(2026, 7, 3),
+            kind: TransactionKind.expense,
+            category: '',
+            note: 'merchant order',
+            amount: Decimal.fromInt(100),
+            merchant: 'merchant',
+            product: 'order',
+            orderNo: 'order-multi-refund',
+          ),
+          categoryKey: cat.key,
+        ),
+      ],
+      refunds: [
+        ImportedBillRow(
+          date: DateTime(2026, 7, 4),
+          kind: TransactionKind.expense,
+          category: '',
+          note: 'refund-40',
+          amount: Decimal.fromInt(40),
+          merchant: 'merchant',
+          orderNo: 'order-multi-refund',
+          isRefund: true,
+        ),
+        ImportedBillRow(
+          date: DateTime(2026, 7, 5),
+          kind: TransactionKind.expense,
+          category: '',
+          note: 'refund-30',
+          amount: Decimal.fromInt(30),
+          merchant: 'merchant',
+          orderNo: 'order-multi-refund',
+          isRefund: true,
+        ),
+      ],
+    );
+
+    expect(result.inserted, 1);
+    expect(result.refundsAttached, 2);
+    expect(result.unresolvedRefunds, 0);
+    final original = repo.visibleTransactions
+        .singleWhere((t) => t.txKind == TransactionKind.expense);
+    expect(repo.refundsOf(original.id), hasLength(2));
+    expect(repo.refundedAmountOf(original.id), Decimal.fromInt(70));
+    expect(repo.netAmountOf(original), Decimal.fromInt(30));
+    // 第二笔退款不能因双重扣减被误判成收入兜底行。
+    expect(
+      repo.visibleTransactions.where((t) => t.txKind == TransactionKind.income),
+      isEmpty,
+    );
+    await repo.closeForTest();
+  });
+
+  test('账单导入：退款单独一批也能靠订单号挂回历史原单', () async {
+    final repo = await freshRepo();
+    final accountId = repo.accounts.first.id;
+    final cat = repo.categoriesForKindRanked(TransactionKind.expense).first;
+
+    final first = await repo.importReviewedBillBatch(
+      accountId: accountId,
+      rows: [
+        (
+          row: ImportedBillRow(
+            date: DateTime(2026, 6, 20),
+            kind: TransactionKind.expense,
+            category: '',
+            note: '六月的订单',
+            amount: Decimal.fromInt(100),
+            merchant: '某店铺',
+            product: '商品',
+            orderNo: 'cross-batch-order-1',
+          ),
+          categoryKey: cat.key,
+        ),
+      ],
+      refunds: const [],
+    );
+    expect(first.inserted, 1);
+
+    // 第二批只有退款：商户留空让启发式配不上，只能靠 order_no 落库配对。
+    final second = await repo.importReviewedBillBatch(
+      accountId: accountId,
+      rows: const [],
+      refunds: [
+        ImportedBillRow(
+          date: DateTime(2026, 7, 10),
+          kind: TransactionKind.expense,
+          category: '',
+          note: '退款',
+          amount: Decimal.fromInt(25),
+          orderNo: 'cross-batch-order-1',
+          isRefund: true,
+        ),
+      ],
+    );
+
+    expect(second.refundsAttached, 1);
+    expect(second.unresolvedRefunds, 0);
+    final original = repo.visibleTransactions
+        .singleWhere((t) => t.txKind == TransactionKind.expense);
+    expect(repo.refundedAmountOf(original.id), Decimal.fromInt(25));
+    expect(repo.netAmountOf(original), Decimal.fromInt(75));
+    await repo.closeForTest();
+  });
+
+  test('账单导入：配不上原单的退款按收入入库，不再静默丢弃', () async {
+    final repo = await freshRepo();
+    final accountId = repo.accounts.first.id;
+
+    final result = await repo.importReviewedBillBatch(
+      accountId: accountId,
+      rows: const [],
+      refunds: [
+        ImportedBillRow(
+          date: DateTime(2026, 7, 6),
+          kind: TransactionKind.expense,
+          category: '',
+          note: '陌生商户退款成功',
+          amount: Decimal.parse('12.34'),
+          merchant: '陌生商户',
+          orderNo: 'no-such-order',
+          isRefund: true,
+        ),
+      ],
+    );
+
+    expect(result.refundsAttached, 0);
+    expect(result.unresolvedRefunds, 1);
+    expect(result.inserted, 1);
+    final income = repo.visibleTransactions.single;
+    expect(income.txKind, TransactionKind.income);
+    expect(income.amount, Decimal.parse('12.34'));
+    expect(income.note, '陌生商户退款成功');
+    // 分类落在收入侧「退款报销」。
+    final catKey =
+        repo.categories.firstWhere((c) => c.id == income.categoryId).key;
+    expect(catKey, 'refund');
+    await repo.closeForTest();
+  });
+
+  test('账单导入：商户名同分并列的退款拒绝模糊配对，走收入兜底', () async {
+    final repo = await freshRepo();
+    final accountId = repo.accounts.first.id;
+    final cat = repo.categoriesForKindRanked(TransactionKind.expense).first;
+
+    // 同商户、同日两笔原单：无订单号退款对它们打分完全相同（并列），
+    // 强行挑第一个就是赌，赌错=退款错挂到别的订单上。
+    final result = await repo.importReviewedBillBatch(
+      accountId: accountId,
+      rows: [
+        (
+          row: ImportedBillRow(
+            date: DateTime(2026, 7, 3),
+            kind: TransactionKind.expense,
+            category: '',
+            note: '京东 · 订单A',
+            amount: Decimal.parse('120.00'),
+            merchant: '京东',
+            product: '订单A',
+          ),
+          categoryKey: cat.key,
+        ),
+        (
+          row: ImportedBillRow(
+            date: DateTime(2026, 7, 3),
+            kind: TransactionKind.expense,
+            category: '',
+            note: '京东 · 订单B',
+            amount: Decimal.parse('80.00'),
+            merchant: '京东',
+            product: '订单B',
+          ),
+          categoryKey: cat.key,
+        ),
+      ],
+      refunds: [
+        ImportedBillRow(
+          date: DateTime(2026, 7, 3),
+          kind: TransactionKind.expense,
+          category: '',
+          note: '退款',
+          amount: Decimal.parse('50.00'),
+          merchant: '京东',
+          product: '退款',
+          isRefund: true,
+        ),
+      ],
+    );
+
+    expect(result.refundsAttached, 0);
+    expect(result.unresolvedRefunds, 1);
+    // 两笔支出 + 一笔兜底收入。
+    expect(result.inserted, 3);
+    final expenses = repo.visibleTransactions
+        .where((t) => t.txKind == TransactionKind.expense)
+        .toList();
+    expect(expenses, hasLength(2));
+    for (final expense in expenses) {
+      expect(repo.refundedAmountOf(expense.id), Decimal.zero);
+    }
+    final income = repo.visibleTransactions
+        .singleWhere((t) => t.txKind == TransactionKind.income);
+    expect(income.amount, Decimal.parse('50.00'));
+    await repo.closeForTest();
+  });
+
   test('肥喵导出恢复：保留原始金额和已退款关系', () async {
     final repo = await freshRepo();
     final cat = repo.categoriesForKindRanked(TransactionKind.expense).first;
@@ -3524,6 +4341,209 @@ void main() {
     await repo.closeForTest();
   });
 
+  test('历史账单所属账户归档后仍可只改备注和日期', () async {
+    final repo = await freshRepo();
+    final accountId = await repo.addAccount(name: '已归档历史账户');
+    final transactionId = await repo.addTransaction(
+      kind: TransactionKind.expense,
+      amount: Decimal.fromInt(20),
+      accountId: accountId,
+      note: '归档前备注',
+      date: DateTime(2026, 4, 1),
+    );
+    await repo.archiveAccount(accountId);
+
+    await repo.updateTransaction(
+      id: transactionId,
+      kind: TransactionKind.expense,
+      amount: Decimal.fromInt(20),
+      accountId: accountId,
+      note: '归档后修正备注',
+      date: DateTime(2026, 4, 2),
+    );
+
+    final edited = repo.visibleTransactions.single;
+    expect(edited.accountId, accountId);
+    expect(edited.settlementAccountId, accountId);
+    expect(edited.note, '归档后修正备注');
+    expect(edited.date, DateTime(2026, 4, 2));
+    await repo.closeForTest();
+  });
+
+  test('归档账户上的普通历史账单不能新改成转账', () async {
+    final repo = await freshRepo();
+    final sourceId = await repo.addAccount(name: '已归档转出账户');
+    final targetId = await repo.addAccount(name: '有效转入账户');
+    final transactionId = await repo.addTransaction(
+      kind: TransactionKind.expense,
+      amount: Decimal.fromInt(30),
+      accountId: sourceId,
+      note: '原本是普通支出',
+      date: DateTime(2026, 4, 1),
+    );
+    await repo.archiveAccount(sourceId);
+
+    await expectLater(
+      repo.updateTransaction(
+        id: transactionId,
+        kind: TransactionKind.transfer,
+        amount: Decimal.fromInt(30),
+        accountId: sourceId,
+        toAccountId: targetId,
+        note: '不应改成转账',
+        date: DateTime(2026, 4, 1),
+      ),
+      throwsArgumentError,
+    );
+    final unchanged = repo.transactionById(transactionId)!;
+    expect(unchanged.txKind, TransactionKind.expense);
+    expect(unchanged.toAccountId, isNull);
+    await repo.closeForTest();
+  });
+
+  test('普通账转为转账会在事务内重新验证源账户而非信任旧缓存', () async {
+    final repo = await freshRepo();
+    final source = repo.accounts.first;
+    final targetId = await repo.addAccount(name: '有效转入账户');
+    final transactionId = await repo.addTransaction(
+      kind: TransactionKind.expense,
+      amount: Decimal.fromInt(30),
+      accountId: source.id,
+      note: '缓存仍显示账户有效',
+      date: DateTime(2026, 4, 1),
+    );
+
+    final directDb = await databaseFactory.openDatabase(
+      p.join(tmp.path, 'qingji.db'),
+      options: OpenDatabaseOptions(singleInstance: false),
+    );
+    await directDb.update(
+      'accounts',
+      {
+        'status': AccountStatus.archived.storageKey,
+        'archived_ms': DateTime.now().millisecondsSinceEpoch,
+      },
+      where: 'id = ?',
+      whereArgs: [source.id],
+    );
+    await directDb.close();
+    expect(
+      repo.accounts
+          .singleWhere((account) => account.id == source.id)
+          .isArchived,
+      isFalse,
+    );
+
+    await expectLater(
+      repo.updateTransaction(
+        id: transactionId,
+        kind: TransactionKind.transfer,
+        amount: Decimal.fromInt(30),
+        accountId: source.id,
+        toAccountId: targetId,
+        note: '不应绕过事务内校验',
+        date: DateTime(2026, 4, 1),
+      ),
+      throwsArgumentError,
+    );
+    final unchanged = repo.transactionById(transactionId)!;
+    expect(unchanged.txKind, TransactionKind.expense);
+    expect(unchanged.toAccountId, isNull);
+    await repo.closeForTest();
+  });
+
+  test('编辑账单更换账户会同步真实结算账户和余额归属', () async {
+    final repo = await freshRepo();
+    final source = repo.accounts.first;
+    final targetId = await repo.addAccount(name: '编辑后的扣款账户');
+    final target =
+        repo.accounts.singleWhere((account) => account.id == targetId);
+    final category =
+        repo.categoriesForKindRanked(TransactionKind.expense).first;
+    await repo.importFeimiaoExportRows([
+      FeimiaoImportRow(
+        uuid: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1',
+        kind: TransactionKind.expense,
+        amount: Decimal.fromInt(50),
+        refunded: Decimal.zero,
+        categoryKey: category.key,
+        accountName: source.name,
+        note: '待更换账户的旧账单',
+        date: DateTime(2026, 5, 1),
+      ),
+    ]);
+    final original = repo.visibleTransactions.single;
+    expect(original.settlementAccountQuality, SettlementQuality.legacyAssumed);
+    expect(repo.accountBalanceOf(source), Decimal.fromInt(-50));
+    expect(repo.accountBalanceOf(target), Decimal.zero);
+
+    await repo.updateTransaction(
+      id: original.id,
+      kind: TransactionKind.expense,
+      amount: original.amount,
+      categoryId: original.categoryId,
+      accountId: targetId,
+      note: original.note,
+      date: original.date,
+    );
+
+    final edited = repo.visibleTransactions.single;
+    expect(edited.accountId, targetId);
+    expect(edited.settlementAccountId, targetId);
+    expect(
+      edited.settlementAccountQuality,
+      SettlementQuality.userConfirmed,
+    );
+    expect(repo.accountBalanceOf(source), Decimal.zero);
+    expect(repo.accountBalanceOf(target), Decimal.fromInt(-50));
+    await repo.closeForTest();
+  });
+
+  test('普通账单改为转账会确认转出账户并正确投影转入账户', () async {
+    final repo = await freshRepo();
+    final source = repo.accounts.first;
+    final targetId = await repo.addAccount(name: '转账目标账户');
+    final target =
+        repo.accounts.singleWhere((account) => account.id == targetId);
+    await repo.importFeimiaoExportRows([
+      FeimiaoImportRow(
+        uuid: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa2',
+        kind: TransactionKind.expense,
+        amount: Decimal.fromInt(75),
+        refunded: Decimal.zero,
+        accountName: source.name,
+        note: '改为内部转账',
+        date: DateTime(2026, 5, 2),
+      ),
+    ]);
+    final original = repo.visibleTransactions.single;
+    expect(original.settlementAccountQuality, SettlementQuality.legacyAssumed);
+
+    await repo.updateTransaction(
+      id: original.id,
+      kind: TransactionKind.transfer,
+      amount: original.amount,
+      accountId: source.id,
+      toAccountId: targetId,
+      note: original.note,
+      date: original.date,
+      excluded: true,
+    );
+
+    final edited = repo.visibleTransactions.single;
+    expect(edited.txKind, TransactionKind.transfer);
+    expect(edited.eventType, TransactionEventType.transfer);
+    expect(edited.settlementAccountId, source.id);
+    expect(
+      edited.settlementAccountQuality,
+      SettlementQuality.userConfirmed,
+    );
+    expect(edited.toAccountId, targetId);
+    expect(repo.accountBalanceOf(source), Decimal.fromInt(-75));
+    expect(repo.accountBalanceOf(target), Decimal.fromInt(75));
+    await repo.closeForTest();
+  });
+
   test('肥喵 CSV 恢复保留转入账户、标签和可报销状态', () async {
     final repo = await freshRepo();
 
@@ -3664,6 +4684,57 @@ void main() {
     );
     expect(await reopened.pendingReportJobs(), isEmpty);
     await reopened.closeForTest();
+  });
+
+  test('报告任务 ID 相同但 UUID 不匹配时拒绝更新和完成', () async {
+    final repo = await freshRepo();
+    final job = await repo.createReportJob(
+      question: '生成安全报告',
+      type: 'monthly',
+      title: 'UUID 防串写报告',
+      periodStart: DateTime(2026, 6, 1),
+      periodEnd: DateTime(2026, 6, 30),
+    );
+    const wrongUuid = 'ffffffffffffffffffffffffffffffff';
+
+    await expectLater(
+      repo.updateReportJob(
+        job.id,
+        expectedUuid: wrongUuid,
+        status: 'running',
+      ),
+      throwsA(isA<StateError>()),
+    );
+    await expectLater(
+      repo.completeReportJob(
+        jobId: job.id,
+        expectedJobUuid: wrongUuid,
+        summary: '不应保存',
+        markdown: '# 不应保存',
+      ),
+      throwsA(isA<StateError>()),
+    );
+    expect((await repo.reportJobById(job.id))?.status, 'queued');
+    expect(repo.reports, isEmpty);
+    expect(
+      (await repo.loadChatMessages()).where((row) => row['role'] == 'report'),
+      isEmpty,
+    );
+
+    await repo.updateReportJob(
+      job.id,
+      expectedUuid: job.uuid,
+      status: 'running',
+    );
+    final report = await repo.completeReportJob(
+      jobId: job.id,
+      expectedJobUuid: job.uuid,
+      summary: '正确 UUID 已保存',
+      markdown: '# 正确 UUID 已保存',
+    );
+    expect(report.summary, '正确 UUID 已保存');
+    expect((await repo.reportJobById(job.id))?.status, 'completed');
+    await repo.closeForTest();
   });
 
   test('后台报告完成事务可安全重试且只生成一份报告和聊天卡', () async {
@@ -4283,6 +5354,73 @@ void main() {
     await repo.closeForTest();
   });
 
+  test('当前账本资产包不泄露其他账本资产、全局快照或负债', () async {
+    var repo = await freshRepo();
+    await repo.addPhysicalAsset(
+      name: '总账本电脑',
+      currentValue: Decimal.fromInt(5000),
+    );
+    final loanAccountId = await repo.addAccount(
+      name: '来源房贷账户',
+      type: AccountType.loan,
+    );
+    await repo.upsertLiabilityProfile(
+      accountId: loanAccountId,
+      type: LiabilityProfileType.mortgage,
+      originalAmount: Decimal.fromInt(100000),
+      currentPrincipal: Decimal.fromInt(80000),
+    );
+    expect(repo.netWorthSnapshots, isNotEmpty);
+    expect(repo.liabilityProfiles, isNotEmpty);
+
+    final privateBookId = await repo.addBook(
+      name: '私有资产导出账本',
+      includeInTotal: false,
+    );
+    await repo.switchBook(privateBookId);
+    await repo.addPhysicalAsset(
+      name: '私有账本相机',
+      currentValue: Decimal.fromInt(3000),
+    );
+
+    final payload = await repo.exportAssetTablesJson();
+    final decoded = jsonDecode(payload) as Map<String, dynamic>;
+    expect(
+      (decoded['assets'] as List)
+          .cast<Map<String, dynamic>>()
+          .map((asset) => asset['name']),
+      ['私有账本相机'],
+    );
+    expect(decoded.containsKey('net_worth_snapshots'), isFalse);
+    expect(decoded.containsKey('liability_profiles'), isFalse);
+    await repo.closeForTest();
+
+    await databaseFactory.deleteDatabase(p.join(tmp.path, 'qingji.db'));
+    repo = await freshRepo();
+    final targetLoanId = await repo.addAccount(
+      name: '接收方房贷账户',
+      type: AccountType.loan,
+    );
+    await repo.upsertLiabilityProfile(
+      accountId: targetLoanId,
+      type: LiabilityProfileType.mortgage,
+      originalAmount: Decimal.fromInt(900000),
+      currentPrincipal: Decimal.fromInt(700000),
+    );
+
+    final result = await repo.importAssetTablesJson(payload);
+    expect(result.assets, 1);
+    expect(result.snapshots, 0);
+    expect(result.liabilities, 0);
+    expect(repo.physicalAssets.single.name, '私有账本相机');
+    expect(repo.liabilityProfiles.single.accountId, targetLoanId);
+    expect(
+      repo.liabilityProfiles.single.currentPrincipal,
+      Decimal.fromInt(700000),
+    );
+    await repo.closeForTest();
+  });
+
   test('资产 P2：全部收回后权益资产不再计入净资产', () async {
     final repo = await freshRepo();
     final account = repo.accounts.first;
@@ -4340,7 +5478,7 @@ void main() {
     await restored.closeForTest();
   });
 
-  test('asset json import maps account references by account name', () async {
+  test('旧版资产 JSON 仍按账户名恢复收回记录和负债档案', () async {
     final repo = await freshRepo();
     final receivableTargetId = await repo.addAccount(
       name: 'Asset target account',
@@ -4375,7 +5513,48 @@ void main() {
       currentPrincipal: Decimal.fromInt(80000),
       repaymentAccountId: repaymentAccountId,
     );
-    final json = await repo.exportAssetTablesJson();
+    final decoded =
+        jsonDecode(await repo.exportAssetTablesJson()) as Map<String, dynamic>;
+    expect(decoded.containsKey('liability_profiles'), isFalse);
+    expect(decoded.containsKey('net_worth_snapshots'), isFalse);
+    decoded['net_worth_snapshots'] = [
+      {
+        'scope_key': 'global',
+        'snapshot_date': '2025-01-01',
+        'total_assets': '120000',
+        'total_liabilities': '80000',
+        'net_worth': '40000',
+        'cash_assets': '40000',
+        'investment_assets': '0',
+        'physical_assets': '0',
+        'receivable_assets': '0',
+        'snapshot_type': 'legacy_unverified',
+        'lineage_key': 'legacy:asset-export',
+        'quality': 'legacy_unverified',
+        'created_ms': DateTime(2025, 1, 1).millisecondsSinceEpoch,
+      },
+    ];
+    decoded['liability_profiles'] = [
+      {
+        'uuid': 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb1',
+        'account_id': liabilityAccountId,
+        'account_name': 'Mortgage account',
+        'liability_type': 'mortgage',
+        'original_amount': '100000',
+        'current_principal': '80000',
+        'interest_rate': '0',
+        'repayment_day': null,
+        'repayment_account_id': repaymentAccountId,
+        'repayment_account_name': 'Repayment card',
+        'start_date_ms': null,
+        'end_date_ms': null,
+        'status': 'active',
+        'note': '',
+        'created_ms': DateTime(2026, 7, 1).millisecondsSinceEpoch,
+        'updated_ms': DateTime(2026, 7, 1).millisecondsSinceEpoch,
+      },
+    ];
+    final legacyJson = jsonEncode(decoded);
     await repo.closeForTest();
     File(p.join(tmp.path, 'qingji.db')).deleteSync();
 
@@ -4411,10 +5590,16 @@ void main() {
       openingBalance: Decimal.zero,
     );
 
-    final result = await restored.importAssetTablesJson(json);
+    final result = await restored.importAssetTablesJson(legacyJson);
 
     expect(result.recoveries, 1);
+    expect(result.snapshots, 1);
     expect(result.liabilities, 1);
+    expect(
+      restored.netWorthSnapshots
+          .any((snapshot) => snapshot.snapshotDate == '2025-01-01'),
+      isTrue,
+    );
     expect(
         restored.receivableRecoveries.single.targetAccountId, restoredTargetId);
     final profile = restored.liabilityProfiles.single;
@@ -4969,6 +6154,77 @@ void main() {
     await repo.closeForTest();
   });
 
+  test('资产 A1：退款可归属订单未跟踪部分，物品成本不被污染', () async {
+    final repo = await freshRepo();
+    final accountId = repo.accounts.first.id;
+    // 订单 ¥100 只跟踪一件 ¥60 的物品，剩 ¥40 是没入库的配件。
+    final transactionId = await repo.addTransaction(
+      kind: TransactionKind.expense,
+      amount: Decimal.fromInt(100),
+      accountId: accountId,
+      date: DateTime(2026, 7, 1),
+      note: '混合订单退配件',
+    );
+    final assetId = await repo.addPhysicalAssetFromTransaction(
+      transactionId: transactionId,
+      name: '显示器',
+      allocatedGrossCents: 6000,
+    );
+    final original = repo.visibleTransactions
+        .singleWhere((transaction) => transaction.id == transactionId);
+    // 退掉的是未跟踪的配件 ¥40：以前只能错摊到显示器或永远卡在待分配。
+    final refundId = await repo.refundTransaction(
+      original,
+      Decimal.fromInt(40),
+      settledAt: DateTime(2026, 7, 2),
+      settlementAccountId: accountId,
+    );
+    final pending =
+        await repo.pendingPhysicalAssetRefundAllocationsForAsset(assetId);
+    expect(pending.single.untrackedLimitCents, 4000);
+
+    await repo.allocatePhysicalAssetRefund(
+      refundTransactionId: refundId,
+      allocationsByAssetId: {assetId: 0},
+      untrackedCents: 4000,
+    );
+    expect(repo.transactionLinksForAsset(assetId).single.costQuality,
+        AssetAllocationCostQuality.exact);
+    expect(repo.physicalAssetAcquisitionCost(assetId).amount,
+        Decimal.fromInt(60));
+    expect(
+      await repo.pendingPhysicalAssetRefundAllocationsForAsset(assetId),
+      isEmpty,
+    );
+
+    // 未跟踪容量已用完（¥40/¥40）：第二笔退款再想归未跟踪要被拒绝。
+    final refund2 = await repo.refundTransaction(
+      repo.visibleTransactions
+          .singleWhere((transaction) => transaction.id == transactionId),
+      Decimal.fromInt(20),
+      settledAt: DateTime(2026, 7, 3),
+      settlementAccountId: accountId,
+    );
+    await expectLater(
+      repo.allocatePhysicalAssetRefund(
+        refundTransactionId: refund2,
+        allocationsByAssetId: {assetId: 0},
+        untrackedCents: 2000,
+      ),
+      throwsStateError,
+    );
+    // 分给物品则正常走通，净成本 60-20=40。
+    await repo.allocatePhysicalAssetRefund(
+      refundTransactionId: refund2,
+      allocationsByAssetId: {assetId: 2000},
+    );
+    expect(repo.physicalAssetAcquisitionCost(assetId).amount,
+        Decimal.fromInt(40));
+    expect(repo.transactionLinksForAsset(assetId).single.costQuality,
+        AssetAllocationCostQuality.exact);
+    await repo.closeForTest();
+  });
+
   test('资产 A2：净资产计入政策变化会提升 scope version 并重算当天快照', () async {
     final repo = await freshRepo();
     final account = repo.accounts.first;
@@ -5185,7 +6441,7 @@ void main() {
     final check = await databaseFactory.openDatabase(path);
     expect(
       Sqflite.firstIntValue(await check.rawQuery('PRAGMA user_version')),
-      40,
+      41,
     );
     final physicalColumns =
         (await check.rawQuery('PRAGMA table_info(physical_assets)'))
@@ -5338,7 +6594,7 @@ void main() {
     final check = await databaseFactory.openDatabase(path);
     expect(
       Sqflite.firstIntValue(await check.rawQuery('PRAGMA user_version')),
-      40,
+      41,
     );
     final afterRows = await check.query(
       'transactions',
@@ -5385,6 +6641,83 @@ void main() {
       ],
     );
     await check.close();
+  });
+
+  test('deleteTag 从账单摘除标签并 bump updated_ms', () async {
+    final repo = await freshRepo();
+    final tagId = await repo.addTag(name: '出差', colorValue: 0xFF123456);
+    final keepTagId = await repo.addTag(name: '保留', colorValue: 0xFF654321);
+    final txId = await repo.addTransaction(
+      kind: TransactionKind.expense,
+      amount: Decimal.fromInt(30),
+      accountId: repo.accounts.first.id,
+      date: DateTime(2026, 7, 1),
+      tagIds: [tagId, keepTagId],
+      note: '带标签',
+    );
+    final dbPath = p.join(tmp.path, 'qingji.db');
+    // repo 的库还开着：读侧连接必须 singleInstance:false，否则 sqflite 单实例
+    // 复用会把 repo 的连接一起 close 掉，后面 deleteTag 报 database_closed。
+    final before = await databaseFactory.openDatabase(
+      dbPath,
+      options: OpenDatabaseOptions(readOnly: true, singleInstance: false),
+    );
+    final beforeMs = Sqflite.firstIntValue(await before.rawQuery(
+      'SELECT updated_ms FROM transactions WHERE id = ?',
+      [txId],
+    ))!;
+    await before.close();
+    await Future<void>.delayed(const Duration(milliseconds: 10));
+
+    await repo.deleteTag(tagId);
+
+    expect(repo.tags.where((t) => t.id == tagId), isEmpty);
+    final tx = repo.transactions.singleWhere((t) => t.id == txId);
+    expect(tx.tagIds, [keepTagId]);
+    // 标签被摘除的账单要同步 bump 同步戳，不留「内容变了戳没变」的行。
+    final after = await databaseFactory.openDatabase(
+      dbPath,
+      options: OpenDatabaseOptions(readOnly: true, singleInstance: false),
+    );
+    final afterMs = Sqflite.firstIntValue(await after.rawQuery(
+      'SELECT updated_ms FROM transactions WHERE id = ?',
+      [txId],
+    ))!;
+    await after.close();
+    expect(afterMs, greaterThan(beforeMs));
+    await repo.closeForTest();
+  });
+
+  test('v13 预算搬迁失败后启动自愈会把老预算搬进 budget_periods', () async {
+    final seeded = await freshRepo();
+    expect(seeded.budgetPeriods, isEmpty);
+    await seeded.closeForTest();
+
+    // 模拟「v13 搬迁 try/catch 吞了异常」后的库：旧 budget 表有数据、
+    // budget_periods 空、自愈标记不存在。
+    final db = await databaseFactory.openDatabase(p.join(tmp.path, 'qingji.db'));
+    await db.execute(
+        'CREATE TABLE IF NOT EXISTS budget (id INTEGER PRIMARY KEY AUTOINCREMENT, category_key TEXT, amount TEXT NOT NULL)');
+    await db.insert('budget', {'category_key': null, 'amount': '3000'});
+    await db.insert('budget', {'category_key': 'dining', 'amount': '800'});
+    await db.delete(
+      'app_settings',
+      where: 'key = ?',
+      whereArgs: ['v13_budget_migration_checked'],
+    );
+    await db.close();
+
+    final repo = await freshRepo();
+    final period = repo.budgetPeriods.single;
+    expect(period.total, Decimal.fromInt(3000));
+    expect(period.categoryBudgets['dining'], Decimal.fromInt(800));
+    expect(period.recurringMonthly, isTrue);
+    await repo.closeForTest();
+
+    // 自愈是一次性的：已有预算期间后再启动不会重复搬。
+    final again = await freshRepo();
+    expect(again.budgetPeriods, hasLength(1));
+    await again.closeForTest();
   });
 
   test('v15 → 最新 迁移：老账单原样保留，uuid 回填，hidden 列就位', () async {
@@ -5457,7 +6790,7 @@ void main() {
     final check = await databaseFactory.openDatabase(path);
     final v =
         Sqflite.firstIntValue(await check.rawQuery('PRAGMA user_version'));
-    expect(v, 40); // init 一路升到当前最新版本
+    expect(v, 41); // init 一路升到当前最新版本
     final tableNames = (await check
             .rawQuery("SELECT name FROM sqlite_master WHERE type = 'table'"))
         .map((r) => r['name'])

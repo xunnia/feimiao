@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
@@ -20,6 +21,7 @@ import '../core/account/account_movement_projection.dart';
 import '../core/account/net_worth_snapshot.dart';
 import '../core/account/net_worth_verified_checkpoint.dart';
 import '../core/ai/ai_provider_config.dart';
+import '../core/ai/report_execution_fence.dart';
 import '../core/assets/asset_allocation.dart';
 import '../core/assets/asset_enhancements.dart';
 import '../core/backup/backup_package_codec.dart';
@@ -1458,6 +1460,14 @@ class PendingPhysicalAssetRefundAllocation {
   final int refundCents;
   final List<PhysicalAssetRefundAllocationTarget> targets;
 
+  /// 本次退款还能归到「订单未跟踪部分」的上限（订单毛额减去已入库物品
+  /// 毛额、再扣掉别的退款已占用的未跟踪额度；含本退款当前已归的部分）。
+  /// 0 = 订单全额都在已跟踪物品上，弹层不显示该选项。
+  final int untrackedLimitCents;
+
+  /// 本退款当前已归到未跟踪部分的金额（重新分配时回显用）。
+  final int currentUntrackedCents;
+
   const PendingPhysicalAssetRefundAllocation({
     required this.refundTransactionId,
     required this.originalTransactionId,
@@ -1465,6 +1475,8 @@ class PendingPhysicalAssetRefundAllocation {
     required this.orderLabel,
     required this.refundCents,
     required this.targets,
+    this.untrackedLimitCents = 0,
+    this.currentUntrackedCents = 0,
   });
 
   int get allocatedCents => targets.fold<int>(
@@ -2516,8 +2528,19 @@ class ReportJobEntity {
 // ---------------------------------------------------------------------------
 
 class AppRepository extends ChangeNotifier {
-  static const _dbVersion = 40;
+  static const _dbVersion = 41;
   static const _dbName = 'qingji.db';
+
+  AppRepository({ReportExecutionFence? reportExecutionFence})
+      : _reportExecutionFence =
+            reportExecutionFence ?? ReportExecutionFence.shared;
+
+  final ReportExecutionFence _reportExecutionFence;
+  int _databaseGeneration = 0;
+
+  /// Changes only after a different database snapshot is committed.
+  /// View-level caches use this to drop rows that belonged to the old file.
+  int get databaseGeneration => _databaseGeneration;
 
   /// 行级 uuid（多人共享账本的同步地基）：32 位小写 hex，无需三方库。
   static String _newUuid() {
@@ -2556,7 +2579,49 @@ class AppRepository extends ChangeNotifier {
 
   Database? _db;
 
+  // `_db != null` only means that SQLite has opened the file.  The home page
+  // still cannot safely use accounts/categories/transactions until the
+  // convergence pass has finished.  Keep that distinction explicit so cold
+  // start can paint first without allowing a tap to race the loader.
+  Future<void>? _initFuture;
+  Future<void>? _deferredInitFuture;
+  Completer<void> _readyCompleter = Completer<void>();
+  Completer<void> _fullyReadyCompleter = Completer<void>();
+  bool _isReady = false;
+  bool _isFullyReady = false;
+  bool _deferredInitPending = false;
+  String? _deferredAutoBackupPath;
+  bool _deferredRefundNormalization = false;
+  Object? _initializationError;
+  StackTrace? _initializationErrorStack;
+
   bool get isInitialized => _db != null;
+
+  /// True only after the complete in-memory repository snapshot is usable.
+  bool get isReady => _isReady;
+
+  /// True while the first database snapshot is being assembled. A freshly
+  /// constructed repository used by a widget test is not considered loading;
+  /// this keeps the UI components usable without forcing tests to open SQLite.
+  bool get isInitializing => _initFuture != null && !_isReady;
+
+  /// True after the full ledger, assets and maintenance convergence pass.
+  /// The home page only needs [isReady]; heavier pages can opt into this.
+  bool get isFullyReady => _isFullyReady;
+
+  bool get isHydrating => _deferredInitPending && !_isFullyReady;
+
+  /// Completes after startup convergence, even if initialization failed.
+  /// Callers should check [isReady] afterwards; completing normally prevents a
+  /// background startup task from becoming an unhandled Future error.
+  Future<void> get ready => _readyCompleter.future;
+
+  Future<void> get fullyReady => _fullyReadyCompleter.future;
+
+  Object? get initializationError => _initializationError;
+
+  @visibleForTesting
+  StackTrace? get initializationErrorStack => _initializationErrorStack;
 
   final List<BookEntity> _books = [];
   final List<AccountEntity> _accounts = [];
@@ -2643,7 +2708,8 @@ class AppRepository extends ChangeNotifier {
   final List<String> _statCardOrder = [];
   bool _statCardOrderConfigured = false;
 
-  List<BookEntity> get books => List.unmodifiable(_books);
+  List<BookEntity> get books =>
+      _booksViewCache ??= List.unmodifiable(_books);
   List<AccountEntity> get accounts => List.unmodifiable(_accounts);
   List<AccountEntity> get activeAccounts => List.unmodifiable(
         _accounts.where((account) => !account.isArchived),
@@ -2659,8 +2725,10 @@ class AppRepository extends ChangeNotifier {
               account.currencyCode == 'CNY',
         ),
       );
-  List<CategoryEntity> get categories => List.unmodifiable(_categories);
-  List<TransactionEntity> get transactions => List.unmodifiable(_transactions);
+  List<CategoryEntity> get categories =>
+      _categoriesViewCache ??= List.unmodifiable(_categories);
+  List<TransactionEntity> get transactions =>
+      _transactionsViewCache ??= List.unmodifiable(_transactions);
   TransactionEntity? transactionById(int id) =>
       _allTransactions.where((transaction) => transaction.id == id).firstOrNull;
   int get transactionCount => _transactions.length;
@@ -2794,7 +2862,8 @@ class AppRepository extends ChangeNotifier {
   SavingsGoalEntity? savingsGoalById(int id) =>
       _savingsGoals.where((goal) => goal.id == id).firstOrNull;
   List<TagEntity> get tags => List.unmodifiable(_tags);
-  List<ReportEntity> get reports => List.unmodifiable(_reports);
+  List<ReportEntity> get reports =>
+      _reportsViewCache ??= List.unmodifiable(_reports);
 
   String? tagName(int id) {
     for (final t in _tags) {
@@ -3290,33 +3359,217 @@ class AppRepository extends ChangeNotifier {
   // 初始化
   // ---------------------------------------------------------------------------
 
-  Future<void> init() async {
-    final dbPath = p.join(await getDatabasesPath(), _dbName);
-    final databaseAlreadyExisted = await File(dbPath).exists();
-    await _backupBeforeMigration(dbPath);
-    await _backupBeforeB3A4V39Compat(dbPath);
-    _db = await openDatabase(
-      dbPath,
-      version: _dbVersion,
-      onCreate: _onCreate,
-      onUpgrade: _onUpgrade,
-    );
-    await _runB3A4V39Compat(_db!);
-    if (databaseAlreadyExisted) await _autoPeriodicBackup(dbPath);
-    await _ensureTransactionIndexes(_db!);
-    await _seedIfNeeded();
-    await _ensureDefaultBook();
-    await _normalizeStandaloneRefunds();
-    await _loadAll();
+  Future<void> init({bool fastStartup = false}) {
+    final running = _initFuture;
+    if (running != null) return running;
+
+    // A failed first attempt may be retried by a caller-facing recovery flow.
+    // Give that attempt a fresh barrier while preserving the already completed
+    // Future handed to listeners of the previous attempt.
+    if (_readyCompleter.isCompleted && !_isReady) {
+      _readyCompleter = Completer<void>();
+    }
+    if (_fullyReadyCompleter.isCompleted && !_isFullyReady) {
+      _fullyReadyCompleter = Completer<void>();
+    }
+    final future = _initInternal(fastStartup: fastStartup);
+    _initFuture = future;
+    return future;
+  }
+
+  Future<void> _initInternal({required bool fastStartup}) async {
+    try {
+      final dbPath = p.join(await getDatabasesPath(), _dbName);
+      final databaseAlreadyExisted = await File(dbPath).exists();
+      await _backupBeforeMigration(dbPath);
+      await _backupBeforeB3A4V39Compat(dbPath);
+      _db = await openDatabase(
+        dbPath,
+        version: _dbVersion,
+        onCreate: _onCreate,
+        onUpgrade: _onUpgrade,
+      );
+      await _runB3A4V39Compat(_db!);
+      await _ensureTransactionIndexes(_db!);
+      await _seedIfNeeded();
+      await _ensureDefaultBook();
+      // v13 预算搬迁失败的幂等自愈（只在首次检查时真正查表，之后有标记直接跳过）。
+      await _selfHealLegacyBudgetMigration();
+      if (fastStartup) {
+        // The home only needs the current book, accounts, categories, budget
+        // definition and this month's transactions. Keep the expensive asset,
+        // report, backup and full-history maintenance out of the splash window.
+        await _loadStartupSnapshot();
+        _deferredAutoBackupPath = databaseAlreadyExisted ? dbPath : null;
+        _deferredRefundNormalization = true;
+        _deferredInitPending = true;
+        _markReady();
+        return;
+      }
+
+      if (databaseAlreadyExisted) await _autoPeriodicBackup(dbPath);
+      await _normalizeStandaloneRefunds();
+      await _convergeOpenedDatabase(notify: false);
+      _markReady();
+      _markFullyReady();
+      notifyListeners();
+    } catch (error, stackTrace) {
+      _isReady = false;
+      _isFullyReady = false;
+      _initializationError = error;
+      _initializationErrorStack = stackTrace;
+      if (!_readyCompleter.isCompleted) _readyCompleter.complete();
+      if (!_fullyReadyCompleter.isCompleted) _fullyReadyCompleter.complete();
+      notifyListeners();
+      _initFuture = null;
+      rethrow;
+    }
+  }
+
+  void _markReady() {
+    _isReady = true;
+    _initializationError = null;
+    _initializationErrorStack = null;
+    if (!_readyCompleter.isCompleted) _readyCompleter.complete();
+  }
+
+  void _markFullyReady() {
+    _isFullyReady = true;
+    _deferredInitPending = false;
+    if (!_fullyReadyCompleter.isCompleted) _fullyReadyCompleter.complete();
+  }
+
+  /// Completes the non-critical half of a fast startup. The caller schedules
+  /// this after the first Flutter frame so a large historical database cannot
+  /// steal time from the first raster.
+  Future<void> finishDeferredInitialization() {
+    if (!_deferredInitPending) return fullyReady;
+    final running = _deferredInitFuture;
+    if (running != null) return running;
+    final future = _finishDeferredInitialization();
+    _deferredInitFuture = future;
+    return future;
+  }
+
+  Future<void> _finishDeferredInitialization() async {
+    try {
+      if (!_isReady || _db == null) {
+        _markFullyReady();
+        return;
+      }
+      final backupPath = _deferredAutoBackupPath;
+      _deferredAutoBackupPath = null;
+      if (backupPath != null) await _autoPeriodicBackup(backupPath);
+      if (_deferredRefundNormalization) {
+        _deferredRefundNormalization = false;
+        await _normalizeStandaloneRefunds();
+      }
+      await _convergeOpenedDatabase(notify: false);
+      _markFullyReady();
+      notifyListeners();
+    } catch (error, stackTrace) {
+      _initializationError = error;
+      _initializationErrorStack = stackTrace;
+      if (!_fullyReadyCompleter.isCompleted) _fullyReadyCompleter.complete();
+      rethrow;
+    }
+  }
+
+  Future<void> _loadStartupSnapshot() async {
+    await _loadBooks();
+    await _loadCurrentBook();
+    await Future.wait([
+      _loadAccounts(),
+      _loadCategories(),
+      _loadBudgetPeriods(),
+      _loadBudgetV2(),
+      _loadRecordMode(),
+      _loadMoneyDisplaySettings(),
+      _loadTransactionDisplayPreferences(),
+    ]);
+    await _loadTransactionsForStartupMonth();
+  }
+
+  Future<void> _convergeOpenedDatabase({bool notify = true}) async {
+    await _loadAll(notify: false);
     await _materializeBudgetV2Occurrences();
-    await applyPhysicalAssetDepreciation();
-    // 启动时补记到期的周期账目,再刷新一次交易。
+    await applyPhysicalAssetDepreciation(notify: false);
     await _materializeRecurring();
     await _loadTransactions();
     await _persistCurrentNetWorthSnapshot(
       causes: const {NetWorthSnapshotCause.scheduledRebuild},
       notify: false,
     );
+    if (notify) notifyListeners();
+  }
+
+  /// v13 预算搬迁的核心逻辑（版本迁移和启动自愈共用）：
+  /// 把旧 budget 表的单一预算搬成一条「2000 年起每月循环」的预算期间。
+  /// 调用方保证 budget_periods 表已存在；budget 表不存在时查询抛错由调用方兜。
+  Future<void> _migrateLegacyBudgetIntoPeriods(DatabaseExecutor db) async {
+    final totalRows =
+        await db.query('budget', where: 'category_key IS NULL', limit: 1);
+    if (totalRows.isEmpty) return;
+    final total = Decimal.tryParse(totalRows.first['amount'] as String? ?? '');
+    if (total == null || total <= Decimal.zero) return;
+    final catRows =
+        await db.query('budget', where: 'category_key IS NOT NULL');
+    final cats = <String, String>{};
+    for (final r in catRows) {
+      final k = r['category_key'] as String?;
+      final v = Decimal.tryParse(r['amount'] as String? ?? '');
+      if (k != null && k.isNotEmpty && v != null && v > Decimal.zero) {
+        cats[k] = v.toString();
+      }
+    }
+    await db.insert('budget_periods', {
+      'book_id': null,
+      'start_ms': DateTime(2000, 1, 1).millisecondsSinceEpoch,
+      'end_ms': null,
+      'recurring_monthly': 1,
+      'total': total.toString(),
+      'category_budgets': cats.isEmpty ? '' : jsonEncode(cats),
+      'monthly_income': '',
+      'fixed_expenses': '',
+      'created_ms': DateTime.now().millisecondsSinceEpoch,
+    });
+  }
+
+  static const _kLegacyBudgetMigrationCheckedKey =
+      'v13_budget_migration_checked';
+
+  /// v13 预算搬迁失败的幂等自愈：迁移时那段 try/catch 一旦吞了异常，
+  /// 老预算就永远搬不过来。启动收尾处补一次检查——budget_periods 还是空
+  /// 且旧 budget 表有数据时重跑搬迁；结果无论如何写一个「已检查」标记，
+  /// 避免用户日后删光预算期间时把老预算又复活出来。失败不拦启动、下次再试。
+  Future<void> _selfHealLegacyBudgetMigration() async {
+    try {
+      final db = _db;
+      if (db == null) return;
+      final flag = await db.query(
+        'app_settings',
+        where: 'key = ?',
+        whereArgs: [_kLegacyBudgetMigrationCheckedKey],
+        limit: 1,
+      );
+      if (flag.isNotEmpty) return;
+      final existing = await db.query('budget_periods', limit: 1);
+      if (existing.isEmpty) {
+        final legacyTable = await db.rawQuery(
+          "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'budget'",
+        );
+        if (legacyTable.isNotEmpty) {
+          await _migrateLegacyBudgetIntoPeriods(db);
+        }
+      }
+      await db.insert(
+        'app_settings',
+        {'key': _kLegacyBudgetMigrationCheckedKey, 'value': '1'},
+        conflictAlgorithm: ConflictAlgorithm.replace,
+      );
+    } catch (_) {
+      // 自愈只是兜底，失败不拦启动。
+    }
   }
 
   /// 每周静默本地备份一次（qingji.db.auto-日期.bak，最多保留 3 份）。
@@ -3413,9 +3666,15 @@ class AppRepository extends ChangeNotifier {
       final f = File(dbPath);
       if (!await f.exists()) return;
       final probe = await openReadOnlyDatabase(dbPath);
-      final rows = await probe.rawQuery('PRAGMA user_version');
-      await probe.close();
-      final old = (rows.first.values.first as int?) ?? 0;
+      final int old;
+      try {
+        // 库文件损坏时这句会抛错；必须 finally 关掉 probe，
+        // 否则泄漏的句柄会挡住之后「备份恢复」对库文件的改名/替换。
+        final rows = await probe.rawQuery('PRAGMA user_version');
+        old = (rows.first.values.first as int?) ?? 0;
+      } finally {
+        await probe.close();
+      }
       if (old <= 0 || old >= _dbVersion) return;
       await _createConsistentDatabaseCopy(
         dbPath,
@@ -3715,7 +3974,8 @@ class AppRepository extends ChangeNotifier {
         settlement_quality TEXT NOT NULL DEFAULT 'unknown',
         settlement_account_id INTEGER,
         settlement_account_quality TEXT NOT NULL DEFAULT 'unknown',
-        event_type      TEXT NOT NULL DEFAULT 'legacy_adjustment'
+        event_type      TEXT NOT NULL DEFAULT 'legacy_adjustment',
+        order_no        TEXT NOT NULL DEFAULT ''
       )
     ''');
     await _ensureTransactionIndexes(db);
@@ -3946,36 +4206,9 @@ class AppRepository extends ChangeNotifier {
       await db.execute(_createBudgetPeriodsSql);
       // 老的单一预算自动搬成一条「从很久以前开始的每月循环期间」，
       // 行为与之前完全一致；旧 budget 表保留不动（只加不删）。
+      // 搬迁失败不拦迁移，init 收尾处还有一次幂等自愈兜底。
       try {
-        final totalRows =
-            await db.query('budget', where: 'category_key IS NULL', limit: 1);
-        if (totalRows.isNotEmpty) {
-          final total =
-              Decimal.tryParse(totalRows.first['amount'] as String? ?? '');
-          if (total != null && total > Decimal.zero) {
-            final catRows =
-                await db.query('budget', where: 'category_key IS NOT NULL');
-            final cats = <String, String>{};
-            for (final r in catRows) {
-              final k = r['category_key'] as String?;
-              final v = Decimal.tryParse(r['amount'] as String? ?? '');
-              if (k != null && k.isNotEmpty && v != null && v > Decimal.zero) {
-                cats[k] = v.toString();
-              }
-            }
-            await db.insert('budget_periods', {
-              'book_id': null,
-              'start_ms': DateTime(2000, 1, 1).millisecondsSinceEpoch,
-              'end_ms': null,
-              'recurring_monthly': 1,
-              'total': total.toString(),
-              'category_budgets': cats.isEmpty ? '' : jsonEncode(cats),
-              'monthly_income': '',
-              'fixed_expenses': '',
-              'created_ms': DateTime.now().millisecondsSinceEpoch,
-            });
-          }
-        }
+        await _migrateLegacyBudgetIntoPeriods(db);
       } catch (_) {}
     }
     if (oldVersion < 14) {
@@ -4161,6 +4394,16 @@ class AppRepository extends ChangeNotifier {
       if (!transactionColumns.contains('time_precision')) {
         await db.execute(
           "ALTER TABLE transactions ADD COLUMN time_precision TEXT NOT NULL DEFAULT 'legacy_unknown'",
+        );
+      }
+    }
+    if (oldVersion < 41) {
+      // v41：transactions 加 order_no（商户订单号）。只服务账单导入时
+      // 退款跨批/跨月挂回原单的配对，不进任何统计查询。
+      final v41Columns = await _columnNamesFor(db, 'transactions');
+      if (!v41Columns.contains('order_no')) {
+        await db.execute(
+          "ALTER TABLE transactions ADD COLUMN order_no TEXT NOT NULL DEFAULT ''",
         );
       }
     }
@@ -6120,7 +6363,7 @@ class AppRepository extends ChangeNotifier {
     await _applyCategoryTree(db);
   }
 
-  Future<void> _loadAll() async {
+  Future<void> _loadAll({bool notify = true}) async {
     await _loadBooks();
     await _loadCurrentBook();
     await Future.wait([
@@ -6151,7 +6394,7 @@ class AppRepository extends ChangeNotifier {
       _loadStatCardOrder(),
       _loadStatCustomRange(),
     ]);
-    notifyListeners();
+    if (notify) notifyListeners();
   }
 
   Future<void> _loadSavingsGoals() async {
@@ -6177,6 +6420,7 @@ class AppRepository extends ChangeNotifier {
     _reports
       ..clear()
       ..addAll(rows.map(ReportEntity.fromMap));
+    _reportsViewCache = null;
   }
 
   Future<void> _loadBooks() async {
@@ -6196,6 +6440,7 @@ class AppRepository extends ChangeNotifier {
     _books
       ..clear()
       ..addAll(indexed.map((e) => e.$2));
+    _booksViewCache = null;
   }
 
   Future<void> _ensureDefaultBook() async {
@@ -6381,6 +6626,7 @@ class AppRepository extends ChangeNotifier {
       ..clear()
       ..addAll(rows.map(CategoryEntity.fromMap));
     _allRecordsCache = null;
+    _categoriesViewCache = null;
   }
 
   Future<void> _loadBudgetPeriods() async {
@@ -7086,6 +7332,33 @@ class AppRepository extends ChangeNotifier {
     return id;
   }
 
+  Future<ReportGenerationLease> acquireReportGenerationLease() =>
+      _reportExecutionFence.acquire();
+
+  Future<T> guardReportGeneration<T>(
+    ReportGenerationLease lease,
+    Future<T> Function() action,
+  ) =>
+      lease.guard(
+        action,
+        readJobUuid: _reportJobUuidById,
+      );
+
+  Future<String?> _reportJobUuidById(int id) async {
+    final db = _db;
+    if (db == null) return null;
+    final rows = await db.query(
+      'report_jobs',
+      columns: ['uuid'],
+      where: 'id = ?',
+      whereArgs: [id],
+      limit: 1,
+    );
+    if (rows.isEmpty) return null;
+    final uuid = (rows.single['uuid'] as String? ?? '').trim();
+    return uuid.isEmpty ? null : uuid;
+  }
+
   Future<ReportJobEntity> createReportJob({
     required String question,
     required String type,
@@ -7150,6 +7423,7 @@ class AppRepository extends ChangeNotifier {
 
   Future<void> updateReportJob(
     int id, {
+    String? expectedUuid,
     String? status,
     String? stage,
     String? error,
@@ -7162,12 +7436,17 @@ class AppRepository extends ChangeNotifier {
     if (stage != null) values['stage'] = stage;
     if (error != null) values['error'] = error;
     if (reportId != null) values['report_id'] = reportId;
-    await _db!.update(
+    final where = expectedUuid == null ? 'id = ?' : 'id = ? AND uuid = ?';
+    final whereArgs = <Object?>[id, if (expectedUuid != null) expectedUuid];
+    final updated = await _db!.update(
       'report_jobs',
       values,
-      where: 'id = ?',
-      whereArgs: [id],
+      where: where,
+      whereArgs: whereArgs,
     );
+    if (updated != 1) {
+      throw StateError('report job does not exist or UUID does not match');
+    }
   }
 
   /// 报告正文、聊天报告卡和 job 完成状态原子提交。
@@ -7175,17 +7454,20 @@ class AppRepository extends ChangeNotifier {
   /// 会直接返回既有报告，不会生成第二份文档或第二张聊天卡。
   Future<ReportEntity> completeReportJob({
     required int jobId,
+    String? expectedJobUuid,
     required String summary,
     required String markdown,
   }) async {
     final reportId = await _db!.transaction<int>((txn) async {
       final jobRows = await txn.query(
         'report_jobs',
-        where: 'id = ?',
-        whereArgs: [jobId],
+        where: expectedJobUuid == null ? 'id = ?' : 'id = ? AND uuid = ?',
+        whereArgs: [jobId, if (expectedJobUuid != null) expectedJobUuid],
         limit: 1,
       );
-      if (jobRows.isEmpty) throw StateError('report job does not exist');
+      if (jobRows.isEmpty) {
+        throw StateError('report job does not exist or UUID does not match');
+      }
       final job = jobRows.first;
       final existingReportId = job['report_id'] as int?;
       if (job['status'] == 'completed' && existingReportId != null) {
@@ -7250,7 +7532,7 @@ class AppRepository extends ChangeNotifier {
         }
       }
 
-      await txn.update(
+      final updated = await txn.update(
         'report_jobs',
         {
           'status': 'completed',
@@ -7259,9 +7541,12 @@ class AppRepository extends ChangeNotifier {
           'error': '',
           'updated_ms': now,
         },
-        where: 'id = ?',
-        whereArgs: [jobId],
+        where: expectedJobUuid == null ? 'id = ?' : 'id = ? AND uuid = ?',
+        whereArgs: [jobId, if (expectedJobUuid != null) expectedJobUuid],
       );
+      if (updated != 1) {
+        throw StateError('report job does not exist or UUID does not match');
+      }
       return id;
     });
     await _loadReports();
@@ -7504,11 +7789,39 @@ class AppRepository extends ChangeNotifier {
       _recurringRules.where((r) => r.bookId == _currentBookId).toList()
         ..sort((a, b) => a.nextDueMs.compareTo(b.nextDueMs));
 
+  int recurringRuleCountForAccount(int accountId) =>
+      _recurringRules.where((rule) => rule.accountId == accountId).length;
+
   Future<void> _loadRecurringRules() async {
     final rows = await _db!.query('recurring_rules');
     _recurringRules
       ..clear()
       ..addAll(rows.map(RecurringRule.fromMap));
+  }
+
+  Future<void> _assertRecurringAccountAvailable(
+    DatabaseExecutor db,
+    int? accountId,
+  ) async {
+    if (accountId == null) throw ArgumentError('定时记账必须选择账户');
+    if (!await _isSupportedTransactionAccountInDb(db, accountId)) {
+      throw ArgumentError('定时记账账户不存在、已归档或币种不受支持');
+    }
+  }
+
+  Future<bool> _isSupportedTransactionAccountInDb(
+    DatabaseExecutor db,
+    int? accountId,
+  ) async {
+    if (accountId == null) return false;
+    final rows = await db.query(
+      'accounts',
+      columns: ['id'],
+      where: 'id = ? AND is_deleted = 0 AND status = ? AND currency_code = ?',
+      whereArgs: [accountId, AccountStatus.active.storageKey, 'CNY'],
+      limit: 1,
+    );
+    return rows.isNotEmpty;
   }
 
   Future<void> addRecurringRule({
@@ -7523,30 +7836,31 @@ class AppRepository extends ChangeNotifier {
     DateTime? endDate,
     int? totalCount,
   }) async {
-    if (accountId != null && !_isSupportedTransactionAccountId(accountId)) {
-      throw ArgumentError('定时记账账户不存在或币种不受支持');
-    }
+    amount = normalizeMoneyAmount(amount);
     final normalizedTotalCount =
         totalCount != null && totalCount > 0 ? totalCount : null;
     final targetBookId = bookId != null && _books.any((b) => b.id == bookId)
         ? bookId
         : _currentBookId;
-    await _db!.insert('recurring_rules', {
-      'book_id': targetBookId,
-      'kind': kind.toJson(),
-      'amount': amount.toString(),
-      'category_id': categoryId,
-      'account_id': accountId,
-      'note': note,
-      'period': period.toJson(),
-      'start_date_ms': startDate.millisecondsSinceEpoch,
-      'next_due_ms': startDate.millisecondsSinceEpoch,
-      'enabled': 1,
-      'anchor_day': startDate.day,
-      'end_date_ms': endDate?.millisecondsSinceEpoch,
-      'total_count': normalizedTotalCount,
-      'generated_count': 0,
-      'created_ms': DateTime.now().millisecondsSinceEpoch,
+    await _db!.transaction((txn) async {
+      await _assertRecurringAccountAvailable(txn, accountId);
+      await txn.insert('recurring_rules', {
+        'book_id': targetBookId,
+        'kind': kind.toJson(),
+        'amount': amount.toString(),
+        'category_id': categoryId,
+        'account_id': accountId,
+        'note': note,
+        'period': period.toJson(),
+        'start_date_ms': startDate.millisecondsSinceEpoch,
+        'next_due_ms': startDate.millisecondsSinceEpoch,
+        'enabled': 1,
+        'anchor_day': startDate.day,
+        'end_date_ms': endDate?.millisecondsSinceEpoch,
+        'total_count': normalizedTotalCount,
+        'generated_count': 0,
+        'created_ms': DateTime.now().millisecondsSinceEpoch,
+      });
     });
     await _loadRecurringRules();
     await _materializeRecurring(); // 起始日若已过则立即补记
@@ -7571,32 +7885,33 @@ class AppRepository extends ChangeNotifier {
     DateTime? endDate,
     int? totalCount,
   }) async {
-    if (accountId != null && !_isSupportedTransactionAccountId(accountId)) {
-      throw ArgumentError('定时记账账户不存在或币种不受支持');
-    }
+    amount = normalizeMoneyAmount(amount);
     final normalizedTotalCount =
         totalCount != null && totalCount > 0 ? totalCount : null;
     final targetBookId =
         bookId != null && _books.any((b) => b.id == bookId) ? bookId : null;
-    await _db!.update(
-      'recurring_rules',
-      {
-        if (targetBookId != null) 'book_id': targetBookId,
-        'kind': kind.toJson(),
-        'amount': amount.toString(),
-        'category_id': categoryId,
-        'account_id': accountId,
-        'note': note,
-        'period': period.toJson(),
-        'start_date_ms': (startDate ?? nextDue).millisecondsSinceEpoch,
-        'next_due_ms': nextDue.millisecondsSinceEpoch,
-        'anchor_day': (startDate ?? nextDue).day,
-        'end_date_ms': endDate?.millisecondsSinceEpoch,
-        'total_count': normalizedTotalCount,
-      },
-      where: 'id = ?',
-      whereArgs: [id],
-    );
+    await _db!.transaction((txn) async {
+      await _assertRecurringAccountAvailable(txn, accountId);
+      await txn.update(
+        'recurring_rules',
+        {
+          if (targetBookId != null) 'book_id': targetBookId,
+          'kind': kind.toJson(),
+          'amount': amount.toString(),
+          'category_id': categoryId,
+          'account_id': accountId,
+          'note': note,
+          'period': period.toJson(),
+          'start_date_ms': (startDate ?? nextDue).millisecondsSinceEpoch,
+          'next_due_ms': nextDue.millisecondsSinceEpoch,
+          'anchor_day': (startDate ?? nextDue).day,
+          'end_date_ms': endDate?.millisecondsSinceEpoch,
+          'total_count': normalizedTotalCount,
+        },
+        where: 'id = ?',
+        whereArgs: [id],
+      );
+    });
     await _loadRecurringRules();
     notifyListeners();
   }
@@ -7628,12 +7943,22 @@ class AppRepository extends ChangeNotifier {
     final now = DateTime.now();
     final cutoff = DateTime(now.year, now.month, now.day, 23, 59, 59)
         .millisecondsSinceEpoch;
-    final supportedAccountIds = transactionAccounts.map((a) => a.id).toSet();
-    final fallbackAccount = supportedAccountIds.firstOrNull;
     var changed = false;
     await _db!.transaction((txn) async {
+      final supportedAccountRows = await txn.query(
+        'accounts',
+        columns: ['id'],
+        where: 'is_deleted = 0 AND status = ? AND currency_code = ?',
+        whereArgs: [AccountStatus.active.storageKey, 'CNY'],
+      );
+      final supportedAccountIds =
+          supportedAccountRows.map((row) => row['id'] as int).toSet();
       for (final rule in List<RecurringRule>.from(_recurringRules)) {
         if (!rule.enabled) continue;
+        // A recurring rule represents an explicit payment source. If that
+        // source is no longer available, keep the occurrence pending until
+        // the user repairs the rule instead of charging another account.
+        if (!supportedAccountIds.contains(rule.accountId)) continue;
         var due = rule.nextDue;
         var generatedCount = rule.generatedCount;
         final totalCount = rule.totalCount;
@@ -7667,9 +7992,7 @@ class AppRepository extends ChangeNotifier {
             limit: 1,
           );
           if (existing.isEmpty) {
-            final accountId = supportedAccountIds.contains(rule.accountId)
-                ? rule.accountId
-                : fallbackAccount;
+            final accountId = rule.accountId!;
             final kind = TransactionKind.fromJson(rule.kind);
             final transactionId = await txn.insert('transactions', {
               ..._syncStampNew(),
@@ -7690,9 +8013,8 @@ class AppRepository extends ChangeNotifier {
               'settled_ms': dueMs,
               'settlement_quality': SettlementQuality.legacyAssumed.storageKey,
               'settlement_account_id': accountId,
-              'settlement_account_quality': accountId == null
-                  ? SettlementQuality.unknown.storageKey
-                  : SettlementQuality.legacyAssumed.storageKey,
+              'settlement_account_quality':
+                  SettlementQuality.legacyAssumed.storageKey,
               'event_type': _eventTypeForKind(kind).storageKey,
             });
             await txn.insert('recurring_occurrences', {
@@ -7748,6 +8070,29 @@ class AppRepository extends ChangeNotifier {
     _allTransactions
       ..clear()
       ..addAll(all);
+    _applyCurrentBookTransactionView();
+  }
+
+  /// Fast-start query for the only ledger window visible on the first home
+  /// frame. The full query still runs in [finishDeferredInitialization].
+  Future<void> _loadTransactionsForStartupMonth() async {
+    final now = DateTime.now();
+    final start = DateTime(now.year, now.month);
+    final end = DateTime(now.year, now.month + 1);
+    final bookIds = _bookIdsForCurrentView();
+    final placeholders = List.filled(bookIds.length, '?').join(',');
+    final rows = await _queryTransactions(
+      where: 't.date_ms >= ? AND t.date_ms < ? AND '
+          't.book_id IN ($placeholders)',
+      args: [
+        start.millisecondsSinceEpoch,
+        end.millisecondsSinceEpoch,
+        ...bookIds,
+      ],
+    );
+    _allTransactions
+      ..clear()
+      ..addAll(rows);
     _applyCurrentBookTransactionView();
   }
 
@@ -7869,6 +8214,17 @@ class AppRepository extends ChangeNotifier {
   List<TransactionEntity>? _visibleTxCache;
   List<TransactionEntity>? _globalVisibleTxCache;
   List<TransactionRecord>? _allRecordsCache;
+  List<TransactionEntity>? _visibleTxViewCache; // 稳定引用，供 select<> 用
+  List<TransactionRecord>? _allRecordsViewCache; // 稳定引用，供 select<> 用
+
+  // 稳定引用缓存：对应 _books/_categories/_transactions/_reports 的
+  // UnmodifiableListView 包装。只在底层列表被整体重载（clear+addAll）
+  // 时置 null，让 select<AppRepository, List<T>>(r=>r.xxx) 能通过
+  // 对象标识判断是否真正变化，避免每次 notifyListeners 都触发重建。
+  List<BookEntity>? _booksViewCache;
+  List<CategoryEntity>? _categoriesViewCache;
+  List<TransactionEntity>? _transactionsViewCache;
+  List<ReportEntity>? _reportsViewCache;
 
   void _invalidateTxDerived() {
     _refundTotalsCache = null;
@@ -7876,6 +8232,9 @@ class AppRepository extends ChangeNotifier {
     _visibleTxCache = null;
     _globalVisibleTxCache = null;
     _allRecordsCache = null;
+    _transactionsViewCache = null;
+    _visibleTxViewCache = null;
+    _allRecordsViewCache = null;
   }
 
   Map<int, Decimal> get _refundTotals =>
@@ -8069,9 +8428,9 @@ class AppRepository extends ChangeNotifier {
       final receiptsDir = Directory(p.join(docs.path, 'receipts'));
       final assetMediaDir = Directory(p.join(docs.path, 'asset_media'));
 
-      final files = <String, Uint8List>{
-        'database/$_dbName': await dbCopy.readAsBytes(),
-      };
+      final files = <BackupPayloadFile>[
+        BackupPayloadFile(archivePath: 'database/$_dbName', file: dbCopy),
+      ];
       await _collectBackupDirectory(
         source: receiptsDir,
         archiveRoot: 'receipts',
@@ -8083,18 +8442,19 @@ class AppRepository extends ChangeNotifier {
         output: files,
       );
       final stamp = DateTime.now();
-      final zipBytes = BackupPackageCodec.encode(
-        files: files,
-        databaseVersion: _dbVersion,
-        createdAt: stamp,
-      );
       final name = 'feimiao-backup-${stamp.year}'
           '${stamp.month.toString().padLeft(2, '0')}'
           '${stamp.day.toString().padLeft(2, '0')}-'
           '${stamp.hour.toString().padLeft(2, '0')}'
           '${stamp.minute.toString().padLeft(2, '0')}.zip';
       final out = File(p.join(tmp.path, name));
-      await out.writeAsBytes(zipBytes, flush: true);
+      // 流式打包：收据/照片多的库不再把全部字节 + 整包 zip 同时读进内存。
+      await BackupPackageCodec.encodeToFile(
+        files: files,
+        outputPath: out.path,
+        databaseVersion: _dbVersion,
+        createdAt: stamp,
+      );
       return out;
     } finally {
       try {
@@ -8108,7 +8468,7 @@ class AppRepository extends ChangeNotifier {
   Future<void> _collectBackupDirectory({
     required Directory source,
     required String archiveRoot,
-    required Map<String, Uint8List> output,
+    required List<BackupPayloadFile> output,
   }) async {
     if (!await source.exists()) return;
     await for (final entry
@@ -8119,7 +8479,8 @@ class AppRepository extends ChangeNotifier {
         archiveRoot,
         p.split(relative).join('/'),
       );
-      output[archivePath] = await entry.readAsBytes();
+      // 只登记文件引用，内容由流式打包器逐个读取。
+      output.add(BackupPayloadFile(archivePath: archivePath, file: entry));
     }
   }
 
@@ -8146,6 +8507,23 @@ class AppRepository extends ChangeNotifier {
     try {
       final dbPath = p.join(work.path, _dbName);
       await File(dbPath).writeAsBytes(databaseBytes, flush: true);
+
+      // 先做完整性校验，再打开包内库改写附件路径：合法 zip 里塞非法 db
+      // 字节时必须走干净的失败分支，不能让 DatabaseException 从这里裸穿。
+      try {
+        final check = await openReadOnlyDatabase(dbPath);
+        try {
+          final quick = await check.rawQuery('PRAGMA quick_check');
+          if (quick.isEmpty ||
+              quick.first.values.first.toString().toLowerCase() != 'ok') {
+            return false;
+          }
+        } finally {
+          await check.close();
+        }
+      } catch (_) {
+        return false;
+      }
 
       final docs =
           documentsDirectory ?? await getApplicationDocumentsDirectory();
@@ -8191,76 +8569,83 @@ class AppRepository extends ChangeNotifier {
       if (receiptPathByName.isNotEmpty ||
           originalPathByName.isNotEmpty ||
           thumbnailPathByName.isNotEmpty) {
-        final db = await openDatabase(dbPath, singleInstance: false);
+        // 包内库虽过了 quick_check，也可能缺表/缺列（人为构造的包）。
+        // 改写失败一律当作「包不合法」干净返回 false，异常不裸穿。
         try {
-          final transactionRows = await db.query(
-            'transactions',
-            columns: ['id', 'image_path'],
-            where: "image_path <> ''",
-          );
-          for (final row in transactionRows) {
-            final oldPath = row['image_path'] as String? ?? '';
-            final mapped = receiptPathByName[p.basename(oldPath)];
-            if (mapped != null) {
-              await db.update(
-                'transactions',
-                {'image_path': mapped},
-                where: 'id = ?',
-                whereArgs: [row['id']],
-              );
-            }
-          }
-          final tables = await db.rawQuery(
-            "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'physical_assets'",
-          );
-          if (tables.isNotEmpty) {
-            final columns =
-                (await db.rawQuery('PRAGMA table_info(physical_assets)'))
-                    .map((row) => row['name'])
-                    .whereType<String>()
-                    .toSet();
-            final selectedColumns = <String>[
-              'id',
-              'photo_path',
-              'invoice_path'
-            ];
-            if (columns.contains('thumbnail_path')) {
-              selectedColumns.add('thumbnail_path');
-            }
-            final assetRows = await db.query(
-              'physical_assets',
-              columns: selectedColumns,
+          final db = await openDatabase(dbPath, singleInstance: false);
+          try {
+            final transactionRows = await db.query(
+              'transactions',
+              columns: ['id', 'image_path'],
+              where: "image_path <> ''",
             );
-            for (final row in assetRows) {
-              final changes = <String, Object?>{};
-              final photo = row['photo_path'] as String? ?? '';
-              final invoice = row['invoice_path'] as String? ?? '';
-              final thumbnail = row['thumbnail_path'] as String? ?? '';
-              final mappedPhoto = originalPathByName[p.basename(photo)];
-              final mappedInvoice = originalPathByName[p.basename(invoice)] ??
-                  receiptPathByName[p.basename(invoice)];
-              final mappedThumbnail =
-                  thumbnailPathByName[p.basename(thumbnail)];
-              if (mappedPhoto != null) changes['photo_path'] = mappedPhoto;
-              if (mappedInvoice != null) {
-                changes['invoice_path'] = mappedInvoice;
-              }
-              if (columns.contains('thumbnail_path') &&
-                  mappedThumbnail != null) {
-                changes['thumbnail_path'] = mappedThumbnail;
-              }
-              if (changes.isNotEmpty) {
+            for (final row in transactionRows) {
+              final oldPath = row['image_path'] as String? ?? '';
+              final mapped = receiptPathByName[p.basename(oldPath)];
+              if (mapped != null) {
                 await db.update(
-                  'physical_assets',
-                  changes,
+                  'transactions',
+                  {'image_path': mapped},
                   where: 'id = ?',
                   whereArgs: [row['id']],
                 );
               }
             }
+            final tables = await db.rawQuery(
+              "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'physical_assets'",
+            );
+            if (tables.isNotEmpty) {
+              final columns =
+                  (await db.rawQuery('PRAGMA table_info(physical_assets)'))
+                      .map((row) => row['name'])
+                      .whereType<String>()
+                      .toSet();
+              final selectedColumns = <String>[
+                'id',
+                'photo_path',
+                'invoice_path'
+              ];
+              if (columns.contains('thumbnail_path')) {
+                selectedColumns.add('thumbnail_path');
+              }
+              final assetRows = await db.query(
+                'physical_assets',
+                columns: selectedColumns,
+              );
+              for (final row in assetRows) {
+                final changes = <String, Object?>{};
+                final photo = row['photo_path'] as String? ?? '';
+                final invoice = row['invoice_path'] as String? ?? '';
+                final thumbnail = row['thumbnail_path'] as String? ?? '';
+                final mappedPhoto = originalPathByName[p.basename(photo)];
+                final mappedInvoice =
+                    originalPathByName[p.basename(invoice)] ??
+                        receiptPathByName[p.basename(invoice)];
+                final mappedThumbnail =
+                    thumbnailPathByName[p.basename(thumbnail)];
+                if (mappedPhoto != null) changes['photo_path'] = mappedPhoto;
+                if (mappedInvoice != null) {
+                  changes['invoice_path'] = mappedInvoice;
+                }
+                if (columns.contains('thumbnail_path') &&
+                    mappedThumbnail != null) {
+                  changes['thumbnail_path'] = mappedThumbnail;
+                }
+                if (changes.isNotEmpty) {
+                  await db.update(
+                    'physical_assets',
+                    changes,
+                    where: 'id = ?',
+                    whereArgs: [row['id']],
+                  );
+                }
+              }
+            }
+          } finally {
+            await db.close();
           }
-        } finally {
-          await db.close();
+        } catch (_) {
+          return false;
         }
       }
 
@@ -8292,6 +8677,23 @@ class AppRepository extends ChangeNotifier {
       _restoreDatabaseFromFile(srcPath);
 
   Future<bool> _restoreDatabaseFromFile(
+    String srcPath, {
+    Directory? replacementReceipts,
+    Directory? replacementAssetMedia,
+    Directory? documentsDirectory,
+    void Function(String step)? onRestoreStep,
+  }) =>
+      _reportExecutionFence.withRestoreBarrier(
+        () => _replaceDatabaseFromFile(
+          srcPath,
+          replacementReceipts: replacementReceipts,
+          replacementAssetMedia: replacementAssetMedia,
+          documentsDirectory: documentsDirectory,
+          onRestoreStep: onRestoreStep,
+        ),
+      );
+
+  Future<bool> _replaceDatabaseFromFile(
     String srcPath, {
     Directory? replacementReceipts,
     Directory? replacementAssetMedia,
@@ -8341,11 +8743,28 @@ class AppRepository extends ChangeNotifier {
       }
       final current = File(dbPath);
       if (await current.exists()) {
-        await _createConsistentDatabaseCopy(
-          dbPath,
-          bakPath,
-          sourceDb: _db,
-        );
+        // 恢复前给当前库留一份安全副本。当前库已损坏时一致性快照必然失败，
+        // 但副本只是兜底动作，绝不能反过来卡死恢复本身：先降级成普通文件
+        // 复制（连同 -wal/-shm），再失败就跳过副本，恢复流程照常继续。
+        try {
+          await _createConsistentDatabaseCopy(
+            dbPath,
+            bakPath,
+            sourceDb: _db,
+          );
+        } catch (_) {
+          try {
+            await current.copy(bakPath);
+            for (final suffix in ['-wal', '-shm']) {
+              final sidecar = File('$dbPath$suffix');
+              if (await sidecar.exists()) {
+                await sidecar.copy('$bakPath$suffix');
+              }
+            }
+          } catch (_) {
+            // 副本实在做不出来就只能跳过：宁可少一份兜底，也不能放弃恢复。
+          }
+        }
       }
     } catch (_) {
       try {
@@ -8409,14 +8828,15 @@ class AppRepository extends ChangeNotifier {
       await _runB3A4V39Compat(_db!);
       await _ensureDefaultBook();
       await _normalizeStandaloneRefunds();
-      await _loadAll();
-      await _materializeBudgetV2Occurrences();
+      await _convergeOpenedDatabase(notify: false);
       await _cleanupCommittedRestore(
         dbPath: dbPath,
         oldPath: oldPath,
         oldReceipts: oldReceipts,
         oldAssetMedia: oldAssetMedia,
       );
+      _databaseGeneration++;
+      notifyListeners();
       return true;
     } catch (_) {
       try {
@@ -8480,9 +8900,10 @@ class AppRepository extends ChangeNotifier {
           onUpgrade: _onUpgrade,
         );
         await _runB3A4V39Compat(_db!);
+        await _ensureDefaultBook();
         await _normalizeStandaloneRefunds();
-        await _loadAll();
-        await _materializeBudgetV2Occurrences();
+        await _convergeOpenedDatabase(notify: false);
+        notifyListeners();
       } catch (_) {}
       return false;
     }
@@ -8697,6 +9118,14 @@ class AppRepository extends ChangeNotifier {
         where: 'id = ?',
         whereArgs: [refundId],
       );
+      // 归并出来的退款和手动退款同口径：原单挂着实物资产时更新资产分摊
+      // （标待分配 / 单资产全额自动分配）并刷新购置价缓存。
+      await _applyNewRefundToAssetAllocations(
+        db,
+        originalTransactionId: origId,
+        refundTransactionId: refundId,
+        refundCents: decimalToBudgetCents(refundAmount).abs(),
+      );
       attached[origId] = (attached[origId] ?? Decimal.zero) + refundAmount;
     }
   }
@@ -8829,7 +9258,7 @@ class AppRepository extends ChangeNotifier {
     final values = <String, Object?>{
       'book_id': bookId ?? _currentBookId,
       'kind': kind.toJson(),
-      'amount': amount.toString(),
+      'amount': normalizeMoneyAmount(amount).toString(),
       'currency_code': normalizedCurrency,
       'category_id': categoryId,
       'account_id': accountId,
@@ -8899,17 +9328,30 @@ class AppRepository extends ChangeNotifier {
         (account) =>
             account.id == accountId &&
             !account.isDeleted &&
+            !account.isArchived &&
             account.currencyCode == 'CNY',
       );
 
-  /// 当前账本视角下所有「待报销」的支出（金额大的在前）。
-  List<TransactionEntity> get reimbursableTransactions => _transactions
-      .where((t) =>
-          t.reimbursable &&
-          t.txKind == TransactionKind.expense &&
-          t.amount > Decimal.zero)
-      .toList()
-    ..sort((a, b) => b.amount.compareTo(a.amount));
+  /// 当前账本视角下所有「待报销」的支出（净额大的在前）。
+  ///
+  /// 过滤和排序都按**净额**：一笔账先收到退款、净额归 0 之后就没有待报销
+  /// 金额了，不该继续占一笔（口径标准 §7.1）。按原额过滤会让「N 笔」和用
+  /// 净额算出来的合计对不上，明细页和待报销页也会给出不同的笔数。
+  ///
+  /// 注意：这里用 [LedgerPolicy.netAmountWith]（净额）而不是
+  /// [LedgerPolicy.userAmountWith]（用户可见金额）。`excluded: true` 的行
+  /// 不计入统计，但只要净额仍为正，就仍需要被报销——两者是独立语义。
+  List<TransactionEntity> get reimbursableTransactions {
+    final refundTotals = _refundTotals;
+    return _transactions
+        .where((t) =>
+            t.reimbursable &&
+            t.txKind == TransactionKind.expense &&
+            LedgerPolicy.netAmountWith(t, refundTotals) > Decimal.zero)
+        .toList()
+      ..sort((a, b) => LedgerPolicy.netAmountWith(b, refundTotals)
+          .compareTo(LedgerPolicy.netAmountWith(a, refundTotals)));
+  }
 
   /// 标记一笔已报销：钱报销回来了 = 这笔不算自己的支出，
   /// 所以像退款一样给它补一笔「补满净额」的退款让净额归 0（用户 0703 拍板），
@@ -8919,7 +9361,10 @@ class AppRepository extends ChangeNotifier {
     required DateTime settledAt,
     required int settlementAccountId,
   }) async {
-    await _assertTransactionMutable(id);
+    // 刻意不做 _assertTransactionMutable（与 refundTransaction 对齐）：
+    // 报销和退款一样只是给原单挂冲减行，不改写原单本身；资产关联账单的
+    // 分摊由下面的 _applyNewRefundToAssetAllocations 处理，断言反而会把
+    // 「资产关联账单报销」这条路径整个堵死。
     if (!_accounts.any((account) =>
         account.id == settlementAccountId &&
         !account.isDeleted &&
@@ -8979,6 +9424,13 @@ class AppRepository extends ChangeNotifier {
       );
     });
     await _refreshTransactionRows(familyRoots: {id});
+    // 与 refundTransaction 对齐：报销同样是一笔冲减，已匹配这笔账单的
+    // 固定支出 occurrence 需要回到待复核状态，不能带着旧金额继续算。
+    final reimbursedRoot =
+        _allTransactions.where((t) => t.id == id).firstOrNull;
+    if (reimbursedRoot != null) {
+      await _markBudgetOccurrenceRefundReview(reimbursedRoot);
+    }
     await _loadPhysicalAssetData(refreshSnapshot: false);
     await _refreshCurrentNetWorthSnapshotBestEffort(
       const {NetWorthSnapshotCause.refund},
@@ -9017,6 +9469,7 @@ class AppRepository extends ChangeNotifier {
     required DateTime settledAt,
     required int settlementAccountId,
   }) async {
+    refundAmount = normalizeMoneyAmount(refundAmount);
     if (refundAmount <= Decimal.zero) {
       throw ArgumentError('refund amount must be greater than zero');
     }
@@ -9100,7 +9553,9 @@ class AppRepository extends ChangeNotifier {
   }) async {
     final rows = await _db!.query(
       'transactions',
-      columns: ['refund_of', 'event_type', 'currency_code'],
+      // uuid 必须在列里：锚点吸收集合存的是事务 uuid，漏了它下面的
+      // eventUuid 恒退化成 id 字符串，两个 StateError 护栏全部变死代码。
+      columns: ['refund_of', 'event_type', 'currency_code', 'uuid'],
       where: 'id = ?',
       whereArgs: [transactionId],
       limit: 1,
@@ -9123,7 +9578,9 @@ class AppRepository extends ChangeNotifier {
         account.currencyCode == currencyCode)) {
       throw ArgumentError('到账账户不存在或币种不受支持');
     }
-    final eventUuid = row['uuid'] as String? ?? transactionId.toString();
+    final rawUuid = row['uuid'] as String? ?? '';
+    // 与 createAccountBalanceCheckpoint 存吸收集合时的口径一致。
+    final eventUuid = rawUuid.isEmpty ? transactionId.toString() : rawUuid;
     final coveringCheckpoints = _checkpointCoveredUnknownEventIds.entries
         .where((entry) => entry.value.contains(eventUuid))
         .map((entry) => _accountBalanceCheckpoints
@@ -9174,6 +9631,16 @@ class AppRepository extends ChangeNotifier {
             growable: false,
           ));
 
+  /// 稳定引用版本，供 select<AppRepository, List<TransactionEntity>>() 使用。
+  /// 底层列表变化时随 _invalidateTxDerived() 一起失效。
+  /// 调用方不得对返回值排序或修改——需要可变副本请用 List.of(repo.visibleTransactionsRef)。
+  List<TransactionEntity> get visibleTransactionsRef =>
+      _visibleTxViewCache ??= List.unmodifiable(
+        _visibleTxCache ??= _transactions.where((t) => t.refundOf == null).toList(
+              growable: false,
+            ),
+      );
+
   /// 某笔账单的退款明细行（按时间正序）。
   List<TransactionEntity> refundsOf(int id) =>
       (_transactions.where((t) => t.refundOf == id).toList())
@@ -9193,6 +9660,12 @@ class AppRepository extends ChangeNotifier {
   /// 用户可见统计金额：排除不计入行，附着式退款归并到原账单净额。O(1)。
   Decimal userAmountOf(TransactionEntity t) =>
       LedgerPolicy.userAmountWith(t, _refundTotals);
+
+  /// 一批账单里算几笔支出（口径标准 §7.1 的 `expenseCount`）：只数净额为正的
+  /// 原始消费家族。页面要显示「N 笔」一律走这里，别自己 `.length`，
+  /// 否则全额退款家族会把笔数撑大、和统计页对不上。
+  int expenseFamilyCountOf(Iterable<TransactionEntity> transactions) =>
+      LedgerPolicy.expenseFamilyCount(transactions, _refundTotals);
 
   AccountSettlementEvent _accountSettlementEvent(
     TransactionEntity transaction,
@@ -10414,6 +10887,7 @@ class AppRepository extends ChangeNotifier {
     String imagePath = '',
     bool excluded = false,
   }) async {
+    amount = normalizeMoneyAmount(amount);
     if (amount <= Decimal.zero) {
       throw ArgumentError('transaction amount must be greater than zero');
     }
@@ -10423,7 +10897,7 @@ class AppRepository extends ChangeNotifier {
     await _db!.transaction((txn) async {
       final rows = await txn.query(
         'transactions',
-        columns: ['kind', 'refund_of'],
+        columns: ['kind', 'account_id', 'to_account_id', 'refund_of'],
         where: 'id = ?',
         whereArgs: [id],
         limit: 1,
@@ -10431,6 +10905,29 @@ class AppRepository extends ChangeNotifier {
       if (rows.isEmpty) throw StateError('transaction does not exist');
       if (rows.first['refund_of'] != null) {
         throw StateError('退款明细不能直接编辑，请在原账单中管理退款。');
+      }
+      final previousKind =
+          TransactionKind.fromJson(rows.first['kind'] as String);
+      final accountChanged = rows.first['account_id'] != accountId;
+      final toAccountChanged = rows.first['to_account_id'] != toAccountId;
+      final changedToTransfer = previousKind != TransactionKind.transfer &&
+          kind == TransactionKind.transfer;
+      if ((accountChanged || changedToTransfer) &&
+          !(await _isSupportedTransactionAccountInDb(txn, accountId))) {
+        throw ArgumentError('记账账户不存在、已归档或币种不受支持');
+      }
+      if (kind == TransactionKind.transfer) {
+        if (toAccountId == null || toAccountId == accountId) {
+          throw ArgumentError('转入账户不存在或与转出账户相同');
+        }
+        if ((toAccountChanged || changedToTransfer) &&
+            !(await _isSupportedTransactionAccountInDb(txn, toAccountId))) {
+          throw ArgumentError('转入账户不存在、已归档或币种不受支持');
+        }
+      } else if (toAccountId != null &&
+          toAccountChanged &&
+          !(await _isSupportedTransactionAccountInDb(txn, toAccountId))) {
+        throw ArgumentError('到账账户不存在、已归档或币种不受支持');
       }
       final refunded = await _refundedAmountInDb(txn, id);
       if (refunded > Decimal.zero) {
@@ -10454,9 +10951,15 @@ class AppRepository extends ChangeNotifier {
         'reimbursable': reimbursable ? 1 : 0,
         'image_path': imagePath,
         'excluded': excluded ? 1 : 0,
-        // Editing the user-facing attribution fields must not silently
-        // replace or upgrade the independently evidenced settlement data.
+        // Preserve independent settlement evidence for ordinary edits. An
+        // explicit source-account change (or conversion to a transfer) is
+        // itself user confirmation of the account that actually settled it.
         'event_type': _eventTypeForKind(kind).storageKey,
+        if (accountChanged || changedToTransfer)
+          'settlement_account_id': accountId,
+        if (accountChanged || changedToTransfer)
+          'settlement_account_quality':
+              SettlementQuality.userConfirmed.storageKey,
         'updated_ms': updatedMs,
       };
       if (timePrecision != null) {
@@ -10574,265 +11077,293 @@ class AppRepository extends ChangeNotifier {
           row.settlementAccountName.trim(),
       ],
     };
-    for (final name in accountNames) {
-      final key = normalizedName(name);
-      if (accountIdsByName.containsKey(key)) continue;
-      final id = await _db!.insert('accounts', {
-        'uuid': _newUuid(),
-        'name': name,
-        'currency_code': 'CNY',
-        'type': AccountType.cash.storageKey,
-        'opening_balance': '0',
-        'include_in_net_worth': 1,
-        'institution': '',
-        'sort_order': nextAccountSort++,
-        'created_ms': 0,
-        'updated_ms': DateTime.now().millisecondsSinceEpoch,
-        'opening_balance_effective_ms': null,
-        'opening_balance_sequence': 0,
-        'opening_balance_quality':
-            AccountOpeningBalanceQuality.legacyUnknown.storageKey,
-        'status': AccountStatus.active.storageKey,
-      });
-      accountIdsByName[key] = id;
-      createdAccounts = true;
-    }
-
-    int? accountIdByName(String name) {
-      final key = normalizedName(name);
-      if (key.isEmpty) return transactionAccounts.firstOrNull?.id;
-      return accountIdsByName[key];
-    }
-
-    final tagIdsByName = <String, int>{
-      for (final tag in _tags) normalizedName(tag.name): tag.id,
-    };
     var createdTags = false;
-    final tagNames = <String>{
-      for (final row in rows)
-        for (final name in row.tagNames)
-          if (name.trim().isNotEmpty) name.trim(),
-    };
-    for (final name in tagNames) {
-      final key = normalizedName(name);
-      if (tagIdsByName.containsKey(key)) continue;
-      final id = await _db!.insert('tags', {
-        'name': name,
-        'color': 0xFF7D8B9B,
-      });
-      tagIdsByName[key] = id;
-      createdTags = true;
-    }
-
-    String tagIdsFor(FeimiaoImportRow row) => row.tagNames
-        .map((name) => tagIdsByName[normalizedName(name)])
-        .whereType<int>()
-        .toSet()
-        .join(',');
-
-    int? categoryIdFor(FeimiaoImportRow row) {
-      if (row.categoryKey.isNotEmpty) {
-        final byKey = _categories
-            .where((c) => c.key == row.categoryKey && c.kind == row.kind)
-            .firstOrNull;
-        if (byKey != null) return byKey.id;
+    // 整个逐行导入（含新建账户/标签、账单、退款行）包在一个事务里：
+    // 中途任何一行失败都整体回滚，不会留下半截导入的脏数据。
+    await _db!.transaction((txn) async {
+      for (final name in accountNames) {
+        final key = normalizedName(name);
+        if (accountIdsByName.containsKey(key)) continue;
+        final id = await txn.insert('accounts', {
+          'uuid': _newUuid(),
+          'name': name,
+          'currency_code': 'CNY',
+          'type': AccountType.cash.storageKey,
+          'opening_balance': '0',
+          'include_in_net_worth': 1,
+          'institution': '',
+          'sort_order': nextAccountSort++,
+          'created_ms': 0,
+          'updated_ms': DateTime.now().millisecondsSinceEpoch,
+          'opening_balance_effective_ms': null,
+          'opening_balance_sequence': 0,
+          'opening_balance_quality':
+              AccountOpeningBalanceQuality.legacyUnknown.storageKey,
+          'status': AccountStatus.active.storageKey,
+        });
+        accountIdsByName[key] = id;
+        createdAccounts = true;
       }
-      if (row.categoryName.isNotEmpty) {
-        final byName = _categories
-            .where((c) => c.nameZh == row.categoryName && c.kind == row.kind)
-            .firstOrNull;
-        if (byName != null) return byName.id;
+
+      int? accountIdByName(String name) {
+        final key = normalizedName(name);
+        if (key.isEmpty) return transactionAccounts.firstOrNull?.id;
+        return accountIdsByName[key];
       }
-      return null;
-    }
 
-    String nextUuid(String raw) {
-      final u = raw.trim();
-      if (u.length == 32) return u;
-      return _newUuid();
-    }
-
-    Map<String, Object?> baseMap(FeimiaoImportRow row) {
-      final accountId = accountIdByName(row.accountName);
-      final toAccountId = row.toAccountName.trim().isEmpty
-          ? null
-          : accountIdByName(row.toAccountName);
-      final hasExplicitSettlementDate = row.settlementQuality != null;
-      final hasExplicitSettlementAccount = row.settlementAccountQuality != null;
-      final settlementAccountId = row.settlementAccountName.trim().isEmpty
-          ? null
-          : accountIdByName(row.settlementAccountName);
-      final now = DateTime.now().millisecondsSinceEpoch;
-      return {
-        'book_id': _currentBookId,
-        'kind': row.kind.toJson(),
-        'amount': row.amount.toString(),
-        'currency_code': 'CNY',
-        'category_id': categoryIdFor(row),
-        'account_id': accountId,
-        'to_account_id': toAccountId,
-        'note': row.note,
-        'date_ms': row.date.millisecondsSinceEpoch,
-        'time_precision': row.timePrecision.storageKey,
-        'tags': tagIdsFor(row),
-        'reimbursable': row.reimbursable ? 1 : 0,
-        'image_path': '',
-        'excluded': row.excluded ? 1 : 0,
-        'created_ms': now,
-        'settled_ms': hasExplicitSettlementDate
-            ? row.settledAt?.millisecondsSinceEpoch
-            : row.date.millisecondsSinceEpoch,
-        'settlement_quality':
-            (row.settlementQuality ?? SettlementQuality.legacyAssumed)
-                .storageKey,
-        'settlement_account_id':
-            hasExplicitSettlementAccount ? settlementAccountId : accountId,
-        'settlement_account_quality':
-            (row.settlementAccountQuality ?? SettlementQuality.legacyAssumed)
-                .storageKey,
-        'event_type': (row.eventType ?? _eventTypeForKind(row.kind)).storageKey,
-        'updated_ms': now,
+      final tagIdsByName = <String, int>{
+        for (final tag in _tags) normalizedName(tag.name): tag.id,
       };
-    }
+      final tagNames = <String>{
+        for (final row in rows)
+          for (final name in row.tagNames)
+            if (name.trim().isNotEmpty) name.trim(),
+      };
+      for (final name in tagNames) {
+        final key = normalizedName(name);
+        if (tagIdsByName.containsKey(key)) continue;
+        final id = await txn.insert('tags', {
+          'name': name,
+          'color': 0xFF7D8B9B,
+        });
+        tagIdsByName[key] = id;
+        createdTags = true;
+      }
 
-    final explicitRefundParents = {
-      for (final r in rows)
-        if (r.refundOfUuid.trim().isNotEmpty) r.refundOfUuid.trim(),
-    };
-    final originals = rows.where((r) => r.refundOfUuid.trim().isEmpty).toList();
-    for (final row in originals) {
-      final uuid = nextUuid(row.uuid);
-      if (existingUuids.contains(uuid)) {
-        final existing = await _db!.query(
-          'transactions',
-          columns: ['id'],
-          where: 'uuid = ?',
-          whereArgs: [uuid],
-          limit: 1,
-        );
-        if (existing.isNotEmpty) {
-          uuidToId[uuid] = existing.first['id'] as int;
+      String tagIdsFor(FeimiaoImportRow row) => row.tagNames
+          .map((name) => tagIdsByName[normalizedName(name)])
+          .whereType<int>()
+          .toSet()
+          .join(',');
+
+      int? categoryIdFor(FeimiaoImportRow row) {
+        if (row.categoryKey.isNotEmpty) {
+          final byKey = _categories
+              .where((c) => c.key == row.categoryKey && c.kind == row.kind)
+              .firstOrNull;
+          if (byKey != null) return byKey.id;
         }
-        skipped++;
-        continue;
+        if (row.categoryName.isNotEmpty) {
+          final byName = _categories
+              .where((c) => c.nameZh == row.categoryName && c.kind == row.kind)
+              .firstOrNull;
+          if (byName != null) return byName.id;
+        }
+        return null;
       }
-      final fp = _importFingerprint(
-        kind: row.kind,
-        amount: row.amount,
-        date: row.date,
-        note: row.note,
-        categoryId: categoryIdFor(row),
-        accountId: accountIdByName(row.accountName),
-      );
-      if (row.uuid.isEmpty &&
-          _consumeExistingImportFingerprint(existingFingerprints, fp) != null) {
-        skipped++;
-        continue;
-      }
-      final id = await _db!.insert('transactions', {
-        ...baseMap(row),
-        'uuid': uuid,
-        'refund_of': null,
-      });
-      uuidToId[uuid] = id;
-      existingUuids.add(uuid);
-      inserted++;
 
-      if (row.refunded > Decimal.zero &&
-          row.amount > Decimal.zero &&
-          !explicitRefundParents.contains(uuid)) {
-        if (row.refunded > row.amount) {
+      String nextUuid(String raw) {
+        final u = raw.trim();
+        if (u.length == 32) return u;
+        return _newUuid();
+      }
+
+      Map<String, Object?> baseMap(FeimiaoImportRow row) {
+        final accountId = accountIdByName(row.accountName);
+        final toAccountId = row.toAccountName.trim().isEmpty
+            ? null
+            : accountIdByName(row.toAccountName);
+        final hasExplicitSettlementDate = row.settlementQuality != null;
+        final hasExplicitSettlementAccount =
+            row.settlementAccountQuality != null;
+        final settlementAccountId = row.settlementAccountName.trim().isEmpty
+            ? null
+            : accountIdByName(row.settlementAccountName);
+        final now = DateTime.now().millisecondsSinceEpoch;
+        return {
+          'book_id': _currentBookId,
+          'kind': row.kind.toJson(),
+          // 金额写库前统一归一（2 位小数），和手动记账口径一致。
+          'amount': normalizeMoneyAmount(row.amount).toString(),
+          'currency_code': 'CNY',
+          'category_id': categoryIdFor(row),
+          'account_id': accountId,
+          'to_account_id': toAccountId,
+          'note': row.note,
+          'date_ms': row.date.millisecondsSinceEpoch,
+          'time_precision': row.timePrecision.storageKey,
+          'tags': tagIdsFor(row),
+          'reimbursable': row.reimbursable ? 1 : 0,
+          'image_path': '',
+          'excluded': row.excluded ? 1 : 0,
+          'created_ms': now,
+          'settled_ms': hasExplicitSettlementDate
+              ? row.settledAt?.millisecondsSinceEpoch
+              : row.date.millisecondsSinceEpoch,
+          'settlement_quality':
+              (row.settlementQuality ?? SettlementQuality.legacyAssumed)
+                  .storageKey,
+          'settlement_account_id':
+              hasExplicitSettlementAccount ? settlementAccountId : accountId,
+          'settlement_account_quality':
+              (row.settlementAccountQuality ?? SettlementQuality.legacyAssumed)
+                  .storageKey,
+          'event_type':
+              (row.eventType ?? _eventTypeForKind(row.kind)).storageKey,
+          'updated_ms': now,
+        };
+      }
+
+      final explicitRefundParents = {
+        for (final r in rows)
+          if (r.refundOfUuid.trim().isNotEmpty) r.refundOfUuid.trim(),
+      };
+      final originals =
+          rows.where((r) => r.refundOfUuid.trim().isEmpty).toList();
+      for (final row in originals) {
+        final uuid = nextUuid(row.uuid);
+        if (existingUuids.contains(uuid)) {
+          final existing = await txn.query(
+            'transactions',
+            columns: ['id'],
+            where: 'uuid = ?',
+            whereArgs: [uuid],
+            limit: 1,
+          );
+          if (existing.isNotEmpty) {
+            uuidToId[uuid] = existing.first['id'] as int;
+          }
           skipped++;
           continue;
         }
-        await _db!.insert('transactions', {
+        final fp = _importFingerprint(
+          kind: row.kind,
+          amount: normalizeMoneyAmount(row.amount),
+          date: row.date,
+          note: row.note,
+        );
+        if (row.uuid.isEmpty &&
+            _consumeExistingImportFingerprint(existingFingerprints, fp) !=
+                null) {
+          skipped++;
+          continue;
+        }
+        final id = await txn.insert('transactions', {
           ...baseMap(row),
-          'amount': (Decimal.zero - row.refunded).toString(),
-          'note': '退款',
-          'uuid': _newUuid(),
-          'refund_of': id,
-          'settled_ms': null,
-          'settlement_quality': SettlementQuality.unknown.storageKey,
-          'event_type': TransactionEventType.refund.storageKey,
+          'uuid': uuid,
+          'refund_of': null,
         });
+        uuidToId[uuid] = id;
+        existingUuids.add(uuid);
+        inserted++;
+
+        if (row.refunded > Decimal.zero &&
+            row.amount > Decimal.zero &&
+            !explicitRefundParents.contains(uuid)) {
+          if (row.refunded > row.amount) {
+            skipped++;
+            continue;
+          }
+          final refunded = normalizeMoneyAmount(row.refunded);
+          final refundId = await txn.insert('transactions', {
+            ...baseMap(row),
+            'amount': (Decimal.zero - refunded).toString(),
+            'note': '退款',
+            'uuid': _newUuid(),
+            'refund_of': id,
+            'settled_ms': null,
+            'settlement_quality': SettlementQuality.unknown.storageKey,
+            'event_type': TransactionEventType.refund.storageKey,
+          });
+          // 和手动退款同口径：原单挂着实物资产时更新资产分摊并刷新
+          // 购置价缓存（资产页「分配退款」入口才会出现）。
+          await _applyNewRefundToAssetAllocations(
+            txn,
+            originalTransactionId: id,
+            refundTransactionId: refundId,
+            refundCents: decimalToBudgetCents(refunded).abs(),
+          );
+          refundsAttached++;
+        }
+      }
+
+      final refunds = rows.where((r) => r.refundOfUuid.trim().isNotEmpty);
+      for (final row in refunds) {
+        final uuid = nextUuid(row.uuid);
+        if (existingUuids.contains(uuid)) {
+          skipped++;
+          continue;
+        }
+        final originalId = uuidToId[row.refundOfUuid.trim()];
+        if (originalId == null) {
+          skipped++;
+          continue;
+        }
+        final requestedRefund = normalizeMoneyAmount(row.amount.abs());
+        final originalRows = await txn.query(
+          'transactions',
+          columns: ['amount'],
+          where: 'id = ?',
+          whereArgs: [originalId],
+          limit: 1,
+        );
+        if (originalRows.isEmpty) {
+          skipped++;
+          continue;
+        }
+        final originalAmount =
+            Decimal.tryParse(originalRows.first['amount'] as String? ?? '') ??
+                Decimal.zero;
+        var existingRefunded = Decimal.zero;
+        final existingRefundRows = await txn.query(
+          'transactions',
+          columns: ['amount'],
+          where: 'refund_of = ?',
+          whereArgs: [originalId],
+        );
+        for (final existingRefund in existingRefundRows) {
+          existingRefunded +=
+              (Decimal.tryParse(existingRefund['amount'] as String? ?? '') ??
+                      Decimal.zero)
+                  .abs();
+        }
+        if (requestedRefund > originalAmount - existingRefunded) {
+          skipped++;
+          continue;
+        }
+        final inferredEventType = row.eventType ??
+            (row.note.trim() == '报销到账'
+                ? TransactionEventType.reimbursement
+                : TransactionEventType.refund);
+        final refundMap = <String, Object?>{
+          ...baseMap(row),
+          'amount': (Decimal.zero - requestedRefund).toString(),
+          'note': row.note.trim().isEmpty ? '退款' : row.note,
+          'uuid': uuid,
+          'refund_of': originalId,
+          'event_type': inferredEventType.storageKey,
+        };
+        if (row.settlementQuality == null) {
+          refundMap['settled_ms'] = null;
+          refundMap['settlement_quality'] =
+              SettlementQuality.unknown.storageKey;
+        }
+        if (row.settlementAccountQuality == null &&
+            inferredEventType == TransactionEventType.reimbursement) {
+          refundMap['settlement_account_id'] = null;
+          refundMap['settlement_account_quality'] =
+              SettlementQuality.unknown.storageKey;
+        }
+        final refundId = await txn.insert('transactions', refundMap);
+        // 同上：导入的退款也要参与原单的资产分摊。
+        await _applyNewRefundToAssetAllocations(
+          txn,
+          originalTransactionId: originalId,
+          refundTransactionId: refundId,
+          refundCents: decimalToBudgetCents(requestedRefund).abs(),
+        );
+        existingUuids.add(uuid);
         refundsAttached++;
       }
-    }
-
-    final refunds = rows.where((r) => r.refundOfUuid.trim().isNotEmpty);
-    for (final row in refunds) {
-      final uuid = nextUuid(row.uuid);
-      if (existingUuids.contains(uuid)) {
-        skipped++;
-        continue;
-      }
-      final originalId = uuidToId[row.refundOfUuid.trim()];
-      if (originalId == null) {
-        skipped++;
-        continue;
-      }
-      final requestedRefund = row.amount.abs();
-      final originalRows = await _db!.query(
-        'transactions',
-        columns: ['amount'],
-        where: 'id = ?',
-        whereArgs: [originalId],
-        limit: 1,
-      );
-      if (originalRows.isEmpty) {
-        skipped++;
-        continue;
-      }
-      final originalAmount =
-          Decimal.tryParse(originalRows.first['amount'] as String? ?? '') ??
-              Decimal.zero;
-      var existingRefunded = Decimal.zero;
-      final existingRefundRows = await _db!.query(
-        'transactions',
-        columns: ['amount'],
-        where: 'refund_of = ?',
-        whereArgs: [originalId],
-      );
-      for (final existingRefund in existingRefundRows) {
-        existingRefunded +=
-            (Decimal.tryParse(existingRefund['amount'] as String? ?? '') ??
-                    Decimal.zero)
-                .abs();
-      }
-      if (requestedRefund > originalAmount - existingRefunded) {
-        skipped++;
-        continue;
-      }
-      final inferredEventType = row.eventType ??
-          (row.note.trim() == '报销到账'
-              ? TransactionEventType.reimbursement
-              : TransactionEventType.refund);
-      final refundMap = <String, Object?>{
-        ...baseMap(row),
-        'amount': (Decimal.zero - requestedRefund).toString(),
-        'note': row.note.trim().isEmpty ? '退款' : row.note,
-        'uuid': uuid,
-        'refund_of': originalId,
-        'event_type': inferredEventType.storageKey,
-      };
-      if (row.settlementQuality == null) {
-        refundMap['settled_ms'] = null;
-        refundMap['settlement_quality'] = SettlementQuality.unknown.storageKey;
-      }
-      if (row.settlementAccountQuality == null &&
-          inferredEventType == TransactionEventType.reimbursement) {
-        refundMap['settlement_account_id'] = null;
-        refundMap['settlement_account_quality'] =
-            SettlementQuality.unknown.storageKey;
-      }
-      await _db!.insert('transactions', refundMap);
-      existingUuids.add(uuid);
-      refundsAttached++;
-    }
+    });
 
     if (createdAccounts) await _loadAccounts();
     if (createdTags) await _loadTags();
     await _loadTransactions();
+    if (refundsAttached > 0) {
+      // 退款可能改动了资产分摊/购置价缓存，把内存态一并刷新。
+      await _loadPhysicalAssetData(refreshSnapshot: false);
+    }
     await _refreshCurrentNetWorthSnapshotBestEffort(
       const {
         NetWorthSnapshotCause.transaction,
@@ -10847,13 +11378,14 @@ class AppRepository extends ChangeNotifier {
     );
   }
 
+  /// 导入去重指纹。只用「账单本身」的稳定字段（方向+金额+分钟+备注）：
+  /// 分类/账户是用户本次导入时选的，重复导入同一份账单时常常不同，
+  /// 掺进指纹会让去重失效、整批翻倍。
   String _importFingerprint({
     required TransactionKind kind,
     required Decimal amount,
     required DateTime date,
     required String note,
-    int? categoryId,
-    int? accountId,
   }) {
     final minute = DateTime(
       date.year,
@@ -10866,8 +11398,6 @@ class AppRepository extends ChangeNotifier {
       kind.toJson(),
       amount.toString(),
       minute.millisecondsSinceEpoch.toString(),
-      (categoryId ?? 0).toString(),
-      (accountId ?? 0).toString(),
       note.trim(),
     ].join('|');
   }
@@ -10903,21 +11433,10 @@ class AppRepository extends ChangeNotifier {
         amount: Decimal.parse(r['amount'] as String),
         date: DateTime.fromMillisecondsSinceEpoch(r['date_ms'] as int),
         note: r['note'] as String? ?? '',
-        categoryId: r['category_id'] as int?,
-        accountId: r['account_id'] as int?,
       );
       (result[fp] ??= <int>[]).add(r['id'] as int);
     }
     return result;
-  }
-
-  bool _looksLikeImportedRefund(ImportedBillRow row) {
-    if (row.isRefund) return true;
-    final text = '${row.category} ${row.note} ${row.merchant} ${row.product}';
-    return text.contains('退款') ||
-        text.contains('退回') ||
-        text.contains('退货') ||
-        text.toLowerCase().contains('refund');
   }
 
   String _refundMatchKey(String text) {
@@ -10960,7 +11479,10 @@ class AppRepository extends ChangeNotifier {
     final normalRows = <({ImportedBillRow row, String? categoryKey})>[];
     final refundRows = <ImportedBillRow>[...refunds];
     for (final item in rows) {
-      if (_looksLikeImportedRefund(item.row)) {
+      // 只信解析阶段的 isRefund 判定。以前这里还按「退款/退货」关键词
+      // 二次抓捕，会把用户在复核页已归好类的正常支出（退货运费险等）
+      // 重新抢进退款队列。
+      if (item.row.isRefund) {
         refundRows.add(item.row);
       } else {
         normalRows.add(item);
@@ -10970,13 +11492,14 @@ class AppRepository extends ChangeNotifier {
     await _db!.transaction((txn) async {
       Future<void> insertRow(ImportedBillRow r, String? key) async {
         final categoryId = idOf(key, r.kind);
+        // 金额统一走 normalizeMoneyAmount（保留 2 位小数），和手动记账口径一致；
+        // 指纹也用归一后的金额，保证和库里已存行的指纹能对上。
+        final amount = normalizeMoneyAmount(r.amount);
         final fp = _importFingerprint(
           kind: r.kind,
-          amount: r.amount,
+          amount: amount,
           date: r.date,
           note: r.note,
-          categoryId: categoryId,
-          accountId: accountId,
         );
         final existingId = _consumeExistingImportFingerprint(existing, fp);
         if (existingId != null) {
@@ -10988,7 +11511,7 @@ class AppRepository extends ChangeNotifier {
         final id = await txn.insert('transactions', {
           'book_id': _currentBookId,
           'kind': r.kind.toJson(),
-          'amount': r.amount.toString(),
+          'amount': amount.toString(),
           'currency_code': 'CNY',
           'category_id': categoryId,
           'account_id': accountId,
@@ -10997,6 +11520,8 @@ class AppRepository extends ChangeNotifier {
           'date_ms': r.date.millisecondsSinceEpoch,
           'time_precision': r.timePrecision.storageKey,
           'tags': '',
+          // 商户订单号落库：以后跨批/跨月导入的退款靠它挂回这笔原单。
+          'order_no': r.orderNo,
           ..._settlementFields(
             settledAt: r.date,
             settlementAccountId: accountId,
@@ -11010,9 +11535,27 @@ class AppRepository extends ChangeNotifier {
         insertedRows.add((id: id, row: r, categoryId: categoryId));
       }
 
-      int? findRefundOriginalId(ImportedBillRow r) {
-        final exact = r.orderNo.isEmpty ? null : orderToId[r.orderNo];
-        if (exact != null) return exact;
+      Future<int?> findRefundOriginalId(ImportedBillRow r) async {
+        if (r.orderNo.isNotEmpty) {
+          final exact = orderToId[r.orderNo];
+          if (exact != null) return exact;
+          // 跨批/跨月配对：原单可能是之前某次导入落库的（order_no 已持久化）。
+          // 只认同账本、非退款的支出行；金额上限仍由调用方的 remaining 校验兜底。
+          final historical = await txn.query(
+            'transactions',
+            columns: ['id'],
+            where: 'order_no = ? AND refund_of IS NULL AND kind = ? '
+                'AND book_id = ?',
+            whereArgs: [
+              r.orderNo,
+              TransactionKind.expense.toJson(),
+              _currentBookId,
+            ],
+            orderBy: 'id ASC',
+            limit: 1,
+          );
+          if (historical.isNotEmpty) return historical.first['id'] as int;
+        }
         final rMerchant = _refundMatchKey(r.merchant);
         final rText = _refundMatchKey('${r.product} ${r.note}');
         var bestScore = -1;
@@ -11047,8 +11590,11 @@ class AppRepository extends ChangeNotifier {
             bestScoreCount++;
           }
         }
+        // 同分并列 = 有歧义：即使商户名强匹配（≥8 分）也拒绝配对，
+        // 走 unresolved 收入兜底——错挂到别的订单比配不上更伤信任。
+        final uniqueStrongMatch = bestScore >= 8 && bestScoreCount == 1;
         final uniqueSameDayAmountFit = bestScore >= 5 && bestScoreCount == 1;
-        return bestScore >= 8 || uniqueSameDayAmountFit ? bestId : null;
+        return uniqueStrongMatch || uniqueSameDayAmountFit ? bestId : null;
       }
 
       for (final item in normalRows) {
@@ -11056,9 +11602,48 @@ class AppRepository extends ChangeNotifier {
       }
 
       for (final r in refundRows) {
-        final origId = findRefundOriginalId(r);
+        final origId = await findRefundOriginalId(r);
         if (origId == null) {
+          // 配不上原单的退款不再静默丢弃（那是真实到账的钱）：按收入入库，
+          // 分类落收入侧「退款报销」（兜底其他收入），备注保留原文，
+          // 用户可事后手改；unresolvedRefunds 仍计数，供导入完成提示用。
           unresolvedRefunds++;
+          final incomeAmount = normalizeMoneyAmount(r.amount.abs());
+          final fallbackNote = r.note.trim().isEmpty ? '退款' : r.note;
+          final fallbackFp = _importFingerprint(
+            kind: TransactionKind.income,
+            amount: incomeAmount,
+            date: r.date,
+            note: fallbackNote,
+          );
+          if (_consumeExistingImportFingerprint(existing, fallbackFp) != null) {
+            skipped++;
+            continue;
+          }
+          final fallbackCategoryId = idOf('refund', TransactionKind.income) ??
+              idOf('otherIncome', TransactionKind.income);
+          await txn.insert('transactions', {
+            'book_id': _currentBookId,
+            'kind': TransactionKind.income.toJson(),
+            'amount': incomeAmount.toString(),
+            'currency_code': 'CNY',
+            'category_id': fallbackCategoryId,
+            'account_id': accountId,
+            'to_account_id': null,
+            'note': fallbackNote,
+            'date_ms': r.date.millisecondsSinceEpoch,
+            'time_precision': r.timePrecision.storageKey,
+            'tags': '',
+            'order_no': r.orderNo,
+            ..._settlementFields(
+              settledAt: r.date,
+              settlementAccountId: accountId,
+              eventType: TransactionEventType.income,
+              dateQuality: SettlementQuality.exact,
+            ),
+            ..._syncStampNew(),
+          });
+          inserted++;
           continue;
         }
         final origRows = await txn.query(
@@ -11077,7 +11662,7 @@ class AppRepository extends ChangeNotifier {
         final timePrecision = TransactionTimePrecisionX.fromStorage(
           orig['time_precision'] as String?,
         );
-        final requestedRefund = r.amount.abs();
+        final requestedRefund = normalizeMoneyAmount(r.amount.abs());
         var dbRefunded = Decimal.zero;
         final refundRowsForOriginal = await txn.query(
           'transactions',
@@ -11090,9 +11675,9 @@ class AppRepository extends ChangeNotifier {
               (Decimal.tryParse(row['amount'] as String? ?? '') ?? Decimal.zero)
                   .abs();
         }
-        final remaining = originalAmount -
-            dbRefunded -
-            (attachedRefunds[origId] ?? Decimal.zero);
+        // 剩余可退只认库里的事实：事务内 query 已能看到本批刚插入的退款行，
+        // 再叠加 attachedRefunds 会把同一笔退款扣两次（同批多笔退款被误拒）。
+        final remaining = originalAmount - dbRefunded;
         if (remaining <= Decimal.zero || requestedRefund > remaining) {
           unresolvedRefunds++;
           continue;
@@ -11103,14 +11688,12 @@ class AppRepository extends ChangeNotifier {
           amount: refundAmount,
           date: DateTime.fromMillisecondsSinceEpoch(dateMs),
           note: '退款',
-          categoryId: categoryId,
-          accountId: accountId,
         );
         if (_consumeExistingImportFingerprint(existing, fp) != null) {
           skipped++;
           continue;
         }
-        await txn.insert('transactions', {
+        final refundId = await txn.insert('transactions', {
           'book_id': _currentBookId,
           'kind': TransactionKind.expense.toJson(),
           'amount': refundAmount.toString(),
@@ -11121,6 +11704,7 @@ class AppRepository extends ChangeNotifier {
           'date_ms': dateMs,
           'time_precision': timePrecision.storageKey,
           'refund_of': origId,
+          'order_no': r.orderNo,
           ..._settlementFields(
             settledAt: r.date,
             settlementAccountId: accountId,
@@ -11129,6 +11713,15 @@ class AppRepository extends ChangeNotifier {
           ),
           ..._syncStampNew(),
         });
+        // 和手动退款（refundTransaction）同口径：原单挂着实物资产时，
+        // 把退款摊进资产分摊（单资产全额场景自动分配，否则标待分配）
+        // 并刷新购置价缓存，资产页「分配退款」入口才会出现。
+        await _applyNewRefundToAssetAllocations(
+          txn,
+          originalTransactionId: origId,
+          refundTransactionId: refundId,
+          refundCents: decimalToBudgetCents(requestedRefund).abs(),
+        );
         attachedRefunds[origId] =
             (attachedRefunds[origId] ?? Decimal.zero) + requestedRefund;
         refundsAttached++;
@@ -11137,6 +11730,10 @@ class AppRepository extends ChangeNotifier {
 
     await _normalizeStandaloneRefunds();
     await _loadTransactions();
+    if (refundsAttached > 0) {
+      // 退款可能改动了资产分摊/购置价缓存，把内存态一并刷新。
+      await _loadPhysicalAssetData(refreshSnapshot: false);
+    }
     await _refreshCurrentNetWorthSnapshotBestEffort(
       const {
         NetWorthSnapshotCause.transaction,
@@ -11180,7 +11777,7 @@ class AppRepository extends ChangeNotifier {
     await _db!.transaction((txn) async {
       final rows = await txn.query(
         'transactions',
-        columns: ['id', 'refund_of'],
+        columns: ['id', 'refund_of', 'event_type'],
         where: 'id = ? OR refund_of = ?',
         whereArgs: [id, id],
       );
@@ -11198,6 +11795,20 @@ class AppRepository extends ChangeNotifier {
       await txn.delete('transactions',
           where: 'id = ? OR refund_of = ?', whereArgs: [id, id]);
       if (familyRoot != id) {
+        // 撤销报销：删除的是「报销到账」冲减行时，原单要回到待报销队列，
+        // 否则这笔钱既没真报销回来、又从待报销列表里消失了。
+        if ((selected?['event_type'] as String?) ==
+            TransactionEventType.reimbursement.storageKey) {
+          await txn.update(
+            'transactions',
+            {
+              'reimbursable': 1,
+              'updated_ms': DateTime.now().millisecondsSinceEpoch,
+            },
+            where: 'id = ?',
+            whereArgs: [familyRoot],
+          );
+        }
         // 退款行删除后再按剩余有效退款重算；若在删除前计算，会把
         // 即将删除的退款误判成“尚未分配”。
         await _refreshOrderAllocationQuality(txn, familyRoot);
@@ -11302,6 +11913,14 @@ class AppRepository extends ChangeNotifier {
   /// 以前每次访问都是全量 O(n²) 重算）；返回副本防调用方 sort 弄脏缓存。
   List<TransactionRecord> get allRecords =>
       List.of(_allRecordsCache ??= _buildAllRecords());
+
+  /// 稳定引用版本，供 select<> / identical() 缓存判断使用。
+  /// 底层 _transactions 变化时随 _invalidateTxDerived() 一起失效。
+  /// 调用方不得排序或修改返回值。
+  List<TransactionRecord> get allRecordsRef =>
+      _allRecordsViewCache ??= List.unmodifiable(
+        _allRecordsCache ??= _buildAllRecords(),
+      );
 
   List<TransactionRecord> _buildAllRecords() =>
       _buildUserRecords(_transactions, _refundTotals);
@@ -11570,15 +12189,30 @@ class AppRepository extends ChangeNotifier {
       weekStart: weekStart,
       nextCycle: startNextCycle,
     );
-    final overlaps = _budgetPlansV2.any((plan) =>
-        plan.isPrimary &&
-        plan.bookId == bookId &&
-        plan.status == BudgetPlanStatusV2.active &&
-        (plan.endInclusive == null ||
-            !plan.endInclusive!.isBefore(cycle.start)));
-    if (overlaps) {
-      throw StateError('这个账本已有会与新计划重叠的主预算，请先归档旧计划。');
+    final alreadyCoversStart = _budgetPlansV2.any((plan) =>
+        plan.isPrimary && plan.bookId == bookId && plan.covers(cycle.start));
+    if (alreadyCoversStart) {
+      throw StateError('这个周期已有主预算记录，请调整现有计划，或选择下周期生效。');
     }
+    final futurePlans = _budgetPlansV2
+        .where((plan) =>
+            plan.isPrimary &&
+            plan.bookId == bookId &&
+            plan.status == BudgetPlanStatusV2.active &&
+            plan.anchorStart.isAfter(cycle.start) &&
+            (plan.endInclusive == null ||
+                !plan.endInclusive!.isBefore(cycle.start)))
+        .toList();
+    // A plan scheduled for the next cycle must not lock the current cycle out.
+    // Keep that future plan intact and make this one a bounded bridge ending
+    // the day before the earliest scheduled plan starts.
+    DateTime? nextPlanStart;
+    for (final plan in futurePlans) {
+      if (nextPlanStart == null || plan.anchorStart.isBefore(nextPlanStart)) {
+        nextPlanStart = plan.anchorStart;
+      }
+    }
+    final bridgeEndInclusive = nextPlanStart?.subtract(const Duration(days: 1));
     late final int planId;
     await _db!.transaction((txn) async {
       planId = await txn.insert('budget_plans', {
@@ -11593,7 +12227,9 @@ class AppRepository extends ChangeNotifier {
         'month_start_day':
             cadence == BudgetPlanCadenceV2.monthly ? monthStartDay : null,
         'week_start': cadence == BudgetPlanCadenceV2.weekly ? weekStart : null,
-        'end_day': null,
+        'end_day': bridgeEndInclusive == null
+            ? null
+            : budgetCivilDayKey(bridgeEndInclusive),
         'status': BudgetPlanStatusV2.active.storageKey,
         'created_ms': nowMs,
         'updated_ms': nowMs,
@@ -11621,6 +12257,7 @@ class AppRepository extends ChangeNotifier {
         monthStartDay:
             cadence == BudgetPlanCadenceV2.monthly ? monthStartDay : null,
         weekStart: cadence == BudgetPlanCadenceV2.weekly ? weekStart : null,
+        endInclusive: bridgeEndInclusive,
       );
       await _insertBudgetOccurrencesForRevision(
         txn,
@@ -12001,10 +12638,13 @@ class AppRepository extends ChangeNotifier {
   Future<void> archiveBudgetPlanV2(int planId) async {
     final plan = _budgetPlansV2.where((item) => item.id == planId).firstOrNull;
     if (plan == null || plan.status == BudgetPlanStatusV2.archived) return;
-    final cycle = plan.cycleFor(DateTime.now());
+    final today = DateTime.now();
+    final cycle = plan.cycleFor(today);
     final archiveEnd = plan.isSpecial
         ? budgetCivilDayKey(plan.endInclusive!)
-        : cycle.endDayKey;
+        : today.isBefore(plan.anchorStart)
+            ? null
+            : cycle.endDayKey;
     final nowMs = max(
       DateTime.now().millisecondsSinceEpoch,
       plan.updatedMs + 1,
@@ -13460,23 +14100,34 @@ class AppRepository extends ChangeNotifier {
       final refundCents = decimalToBudgetCents(refund.amount).abs();
       final allocated = allocatedByLink.values.fold<int>(0, (a, b) => a + b);
       if (allocated >= refundCents) continue;
+      final orderTx = _allTransactions
+          .where((transaction) => transaction.id == refund.refundOf)
+          .firstOrNull;
+      final orderLabel = (orderTx?.note.trim().isNotEmpty ?? false)
+          ? orderTx!.note.trim()
+          : '账单 #${refund.refundOf}';
+      // 订单里没被物品跟踪的部分也能吃退款：算出本退款还能归多少给它。
+      final orderGrossCents =
+          orderTx == null ? 0 : decimalToBudgetCents(orderTx.amount).abs();
+      final trackedGross = orderLinks.fold<int>(
+          0, (sum, link) => sum + link.allocatedGrossCents);
+      final currentUntracked =
+          allocatedByLink[_untrackedRefundLinkId] ?? 0;
+      final orderUntracked =
+          await _untrackedRefundCentsForOrder(_db!, refund.refundOf!);
+      final untrackedLimit = max(
+          0,
+          orderGrossCents -
+              trackedGross -
+              (orderUntracked - currentUntracked));
       result.add(PendingPhysicalAssetRefundAllocation(
         refundTransactionId: refund.id,
         originalTransactionId: refund.refundOf!,
         refundDateMs: refund.settledMs ?? refund.dateMs,
-        orderLabel: _allTransactions
-                    .where((transaction) => transaction.id == refund.refundOf)
-                    .firstOrNull
-                    ?.note
-                    .trim()
-                    .isNotEmpty ==
-                true
-            ? _allTransactions
-                .firstWhere((transaction) => transaction.id == refund.refundOf)
-                .note
-                .trim()
-            : '账单 #${refund.refundOf}',
+        orderLabel: orderLabel,
         refundCents: refundCents,
+        untrackedLimitCents: untrackedLimit,
+        currentUntrackedCents: currentUntracked,
         targets: [
           for (final link in orderLinks)
             PhysicalAssetRefundAllocationTarget(
@@ -13789,6 +14440,26 @@ class AppRepository extends ChangeNotifier {
     }
   }
 
+  /// 「归属未跟踪部分」的哨兵 link id：订单里退款属于没被任何物品跟踪的
+  /// 那部分时，审计行的 asset_transaction_link_id 记 0（真实 link id 从 1 起，
+  /// 撤销/改派路径查不到 id=0 的 link 会自然跳过 link 侧回退）。
+  static const int _untrackedRefundLinkId = 0;
+
+  /// 某订单全部退款里已归到「未跟踪部分」的合计（active 审计行）。
+  Future<int> _untrackedRefundCentsForOrder(
+    DatabaseExecutor db,
+    int transactionId,
+  ) async {
+    return Sqflite.firstIntValue(await db.rawQuery('''
+          SELECT COALESCE(SUM(ara.allocated_refund_cents), 0)
+          FROM asset_refund_allocations ara
+          JOIN transactions t ON t.id = ara.refund_transaction_id
+          WHERE t.refund_of = ? AND ara.status = 'active'
+            AND ara.asset_transaction_link_id = ?
+        ''', [transactionId, _untrackedRefundLinkId])) ??
+        0;
+  }
+
   Future<void> _refreshOrderAllocationQuality(
     DatabaseExecutor db,
     int transactionId,
@@ -13811,8 +14482,11 @@ class AppRepository extends ChangeNotifier {
       0,
       (sum, row) => sum + (row['allocated_refund_cents'] as int? ?? 0),
     );
+    // 归到「未跟踪部分」的退款也算已解决：不能让这类订单永远卡在待分配。
+    final untrackedRefund =
+        await _untrackedRefundCentsForOrder(db, transactionId);
     final validRefund = await _validOrderRefundCents(db, transactionId);
-    final quality = allocatedRefund < validRefund
+    final quality = allocatedRefund + untrackedRefund < validRefund
         ? AssetAllocationCostQuality.pendingRefundAllocation
         : links.any(
             (row) => (row['allocated_gross_cents'] as int? ?? 0) <= 0,
@@ -13999,10 +14673,11 @@ class AppRepository extends ChangeNotifier {
   Future<void> allocatePhysicalAssetRefund({
     required int refundTransactionId,
     required Map<int, int> allocationsByAssetId,
+    int untrackedCents = 0,
   }) async {
-    if (allocationsByAssetId.isEmpty ||
-        allocationsByAssetId.values.any((cents) => cents < 0)) {
-      throw ArgumentError('退款分配不能为空或包含负数');
+    if (allocationsByAssetId.values.any((cents) => cents < 0) ||
+        untrackedCents < 0) {
+      throw ArgumentError('退款分配不能包含负数');
     }
     int? originalId;
     await _db!.transaction((txn) async {
@@ -14023,8 +14698,10 @@ class AppRepository extends ChangeNotifier {
       ).abs();
       final requested =
           allocationsByAssetId.values.fold<int>(0, (a, b) => a + b);
-      if (requested != refundCents) {
-        throw StateError('本次退款必须完整分配到具体物品');
+      // 退款可以部分（甚至全部）属于订单里没入库跟踪的部分——强制全摊到
+      // 已跟踪物品会污染资产成本。物品分配 + 未跟踪归属必须恰好等于退款额。
+      if (requested + untrackedCents != refundCents) {
+        throw StateError('物品分配与未跟踪归属合计必须等于本次退款金额');
       }
 
       final oldAudit = await txn.query(
@@ -14101,11 +14778,12 @@ class AppRepository extends ChangeNotifier {
         whereArgs: [originalId],
         limit: 1,
       );
+      final orderGrossCents = decimalToBudgetCents(
+        Decimal.tryParse(orderRows.first['amount'] as String? ?? '') ??
+            Decimal.zero,
+      ).abs();
       AssetAllocationPolicy.validate(
-        orderGrossCents: decimalToBudgetCents(
-          Decimal.tryParse(orderRows.first['amount'] as String? ?? '') ??
-              Decimal.zero,
-        ).abs(),
+        orderGrossCents: orderGrossCents,
         validOrderRefundCents: await _validOrderRefundCents(txn, originalId!),
         lines: [
           for (final link in allLinks)
@@ -14117,6 +14795,26 @@ class AppRepository extends ChangeNotifier {
                 )
         ],
       );
+      if (untrackedCents > 0) {
+        // 未跟踪归属的容量 = 订单毛额 − 已跟踪物品毛额 − 别的退款已占用的
+        // 未跟踪额度（本退款旧的未跟踪审计行刚在上面被置 reversed，不重算）。
+        final trackedGross = allLinks.fold<int>(
+          0,
+          (sum, row) => sum + (row['allocated_gross_cents'] as int? ?? 0),
+        );
+        final alreadyUntracked =
+            await _untrackedRefundCentsForOrder(txn, originalId!);
+        if (untrackedCents + alreadyUntracked >
+            orderGrossCents - trackedGross) {
+          throw StateError('归到未跟踪部分的退款超过订单里未跟踪的金额');
+        }
+        await _auditRefundAllocation(
+          txn,
+          linkId: _untrackedRefundLinkId,
+          refundTransactionId: refundTransactionId,
+          cents: untrackedCents,
+        );
+      }
       for (final entry in allocationsByAssetId.entries) {
         if (entry.value == 0) continue;
         final link =
@@ -14177,6 +14875,20 @@ class AppRepository extends ChangeNotifier {
         );
         affectedAssets.add(link['asset_id'] as int);
         affectedOrders.add(link['transaction_id'] as int);
+      } else if ((audit['asset_transaction_link_id'] as int? ?? -1) ==
+          _untrackedRefundLinkId) {
+        // 未跟踪归属行没有 link 可回退，但订单的分配质量仍要重算
+        //（退款事件此刻可能已删，查不到就留给下次分配动作刷新）。
+        final txRows = await db.query(
+          'transactions',
+          columns: ['refund_of'],
+          where: 'id = ?',
+          whereArgs: [audit['refund_transaction_id']],
+          limit: 1,
+        );
+        final orderId =
+            txRows.isEmpty ? null : txRows.first['refund_of'] as int?;
+        if (orderId != null) affectedOrders.add(orderId);
       }
       await db.update(
         'asset_refund_allocations',
@@ -15114,7 +15826,10 @@ class AppRepository extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<int> applyPhysicalAssetDepreciation({DateTime? asOf}) async {
+  Future<int> applyPhysicalAssetDepreciation({
+    DateTime? asOf,
+    bool notify = true,
+  }) async {
     final at = asOf ?? DateTime.now();
     var changed = 0;
     final candidates = _allPhysicalAssets.where(
@@ -15188,8 +15903,8 @@ class AppRepository extends ChangeNotifier {
       }
     });
     if (changed > 0) {
-      await _loadPhysicalAssetData();
-      notifyListeners();
+      await _loadPhysicalAssetData(refreshSnapshot: notify);
+      if (notify) notifyListeners();
     }
     return changed;
   }
@@ -16842,6 +17557,8 @@ class AppRepository extends ChangeNotifier {
     LiabilityProfileStatus status = LiabilityProfileStatus.active,
     String note = '',
   }) async {
+    originalAmount = normalizeMoneyAmount(originalAmount);
+    currentPrincipal = normalizeMoneyAmount(currentPrincipal);
     final rate = interestRate ?? Decimal.zero;
     if (originalAmount < Decimal.zero ||
         currentPrincipal < Decimal.zero ||
@@ -16994,25 +17711,6 @@ class AppRepository extends ChangeNotifier {
           'created_ms': a.createdMs,
           'updated_ms': a.updatedMs,
         };
-    Map<String, Object?> liabilityMap(LiabilityProfileEntity p) => {
-          'id': p.id,
-          'uuid': p.uuid,
-          'account_id': p.accountId,
-          'account_name': accountNameOf(p.accountId),
-          'liability_type': p.type.storageKey,
-          'original_amount': p.originalAmount.toString(),
-          'current_principal': p.currentPrincipal.toString(),
-          'interest_rate': p.interestRate.toString(),
-          'repayment_day': p.repaymentDay,
-          'repayment_account_id': p.repaymentAccountId,
-          'repayment_account_name': accountNameOf(p.repaymentAccountId),
-          'start_date_ms': p.startDateMs,
-          'end_date_ms': p.endDateMs,
-          'status': p.status.storageKey,
-          'note': p.note,
-          'created_ms': p.createdMs,
-          'updated_ms': p.updatedMs,
-        };
     return const JsonEncoder.withIndent('  ').convert({
       'format': 'feimiao-assets',
       'version': 6,
@@ -17130,38 +17828,6 @@ class AppRepository extends ChangeNotifier {
               'note': recovery.note,
               'created_ms': recovery.createdMs,
             }
-      ],
-      'net_worth_snapshots': [
-        for (final snapshot in _netWorthSnapshots)
-          {
-            'id': snapshot.id,
-            'scope_key': snapshot.scopeKey,
-            'snapshot_date': snapshot.snapshotDate,
-            'total_assets': snapshot.totalAssets.toString(),
-            'total_liabilities': snapshot.totalLiabilities.toString(),
-            'net_worth': snapshot.netWorth.toString(),
-            'cash_assets': snapshot.cashAssets.toString(),
-            'investment_assets': snapshot.investmentAssets.toString(),
-            'physical_assets': snapshot.physicalAssets.toString(),
-            'receivable_assets': snapshot.receivableAssets.toString(),
-            'snapshot_type': snapshot.snapshotType,
-            'lineage_key': snapshot.lineageKey,
-            'as_of_ms': snapshot.asOfMs,
-            'knowledge_cutoff_ms': snapshot.knowledgeCutoffMs,
-            'timezone': snapshot.timezone,
-            'scope_version': snapshot.scopeVersion,
-            'calculation_version': snapshot.calculationVersion,
-            'currency_coverage_json': snapshot.currencyCoverageJson,
-            'quality': snapshot.quality.storageKey,
-            'cause_set_json': snapshot.causeSetJson,
-            'reasons_json': snapshot.reasonsJson,
-            'valuation_coverage_json': snapshot.valuationCoverageJson,
-            'provisional': snapshot.provisional ? 1 : 0,
-            'created_ms': snapshot.createdMs,
-          }
-      ],
-      'liability_profiles': [
-        for (final profile in _liabilityProfiles) liabilityMap(profile)
       ],
     });
   }
@@ -18381,7 +19047,8 @@ class AppRepository extends ChangeNotifier {
       'name': name,
       'currency_code': normalizedCurrency,
       'type': type.storageKey,
-      'opening_balance': (openingBalance ?? Decimal.zero).toString(),
+      'opening_balance':
+          normalizeMoneyAmount(openingBalance ?? Decimal.zero).toString(),
       'include_in_net_worth': includeInNetWorth ? 1 : 0,
       'institution': institution,
       'created_ms': now,
@@ -18462,16 +19129,28 @@ class AppRepository extends ChangeNotifier {
     final existing = _accounts.where((account) => account.id == id).firstOrNull;
     if (existing == null || existing.isArchived) return;
     final now = DateTime.now().millisecondsSinceEpoch;
-    await _db!.update(
-      'accounts',
-      {
-        'status': AccountStatus.archived.storageKey,
-        'archived_ms': now,
-        'updated_ms': now,
-      },
-      where: 'id = ?',
-      whereArgs: [id],
-    );
+    await _db!.transaction((txn) async {
+      final referencedRuleCount = Sqflite.firstIntValue(
+            await txn.rawQuery(
+              'SELECT COUNT(*) FROM recurring_rules WHERE account_id = ?',
+              [id],
+            ),
+          ) ??
+          0;
+      if (referencedRuleCount > 0) {
+        throw StateError('该账户仍被定时记账使用，请先修改或删除相关规则。');
+      }
+      await txn.update(
+        'accounts',
+        {
+          'status': AccountStatus.archived.storageKey,
+          'archived_ms': now,
+          'updated_ms': now,
+        },
+        where: 'id = ?',
+        whereArgs: [id],
+      );
+    });
     await _loadAccounts();
     await _refreshCurrentNetWorthSnapshotBestEffort(
       const {NetWorthSnapshotCause.account},
@@ -18506,6 +19185,7 @@ class AppRepository extends ChangeNotifier {
     String note = '',
     DateTime? effectiveAt,
   }) async {
+    targetBalance = normalizeMoneyAmount(targetBalance);
     final account =
         _accounts.where((candidate) => candidate.id == accountId).firstOrNull;
     if (account == null) throw StateError('账户不存在');
@@ -19028,25 +19708,34 @@ class AppRepository extends ChangeNotifier {
         (plan) => plan.isSpecial && plan.expenseScope.tagIds.contains(id))) {
       throw StateError('这个标签仍被专项追踪历史使用，暂时不能删除。');
     }
-    await _db!.delete('tags', where: 'id = ?', whereArgs: [id]);
-    final rows = await _db!.rawQuery(
-      "SELECT id, tags FROM transactions WHERE tags LIKE ?",
-      ['%$id%'],
-    );
-    for (final r in rows) {
-      final raw = (r['tags'] as String?) ?? '';
-      if (raw.isEmpty) continue;
-      final kept = raw
-          .split(',')
-          .map((s) => int.tryParse(s.trim()))
-          .whereType<int>()
-          .where((tid) => tid != id)
-          .join(',');
-      if (kept != raw) {
-        await _db!.update('transactions', {'tags': kept},
-            where: 'id = ?', whereArgs: [r['id']]);
+    // 删标签 + 从所有账单 tags 里摘除要在同一事务里完成（要么全成要么全不成），
+    // 摘除过的账单同步 bump updated_ms（同步戳），别留「内容变了戳没变」的行。
+    await _db!.transaction((txn) async {
+      await txn.delete('tags', where: 'id = ?', whereArgs: [id]);
+      final rows = await txn.rawQuery(
+        "SELECT id, tags FROM transactions WHERE tags LIKE ?",
+        ['%$id%'],
+      );
+      final updatedMs = DateTime.now().millisecondsSinceEpoch;
+      for (final r in rows) {
+        final raw = (r['tags'] as String?) ?? '';
+        if (raw.isEmpty) continue;
+        final kept = raw
+            .split(',')
+            .map((s) => int.tryParse(s.trim()))
+            .whereType<int>()
+            .where((tid) => tid != id)
+            .join(',');
+        if (kept != raw) {
+          await txn.update(
+            'transactions',
+            {'tags': kept, 'updated_ms': updatedMs},
+            where: 'id = ?',
+            whereArgs: [r['id']],
+          );
+        }
       }
-    }
+    });
     await _loadTags();
     await _loadTransactions();
     notifyListeners();

@@ -1,6 +1,5 @@
 import 'dart:convert';
 import 'dart:io';
-import 'dart:isolate';
 import 'dart:typed_data';
 
 import 'package:charset_converter/charset_converter.dart';
@@ -8,6 +7,7 @@ import 'package:csv/csv.dart';
 import 'package:decimal/decimal.dart';
 import 'package:excel/excel.dart' hide Border;
 import 'package:file_picker/file_picker.dart';
+import 'package:flutter/foundation.dart' show compute, visibleForTesting;
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:path_provider/path_provider.dart';
@@ -133,22 +133,22 @@ class _ImportExportViewState extends State<ImportExportView> {
           t.timePrecision.storageKey,
           t.settledAt == null ? '' : _dateFmt.format(t.settledAt!),
           t.settlementQuality.storageKey,
-          settlementAccountName,
+          _csvTextCell(settlementAccountName),
           t.settlementAccountQuality.storageKey,
           t.eventType.storageKey,
           _kindZh(t.txKind),
-          t.txKind == TransactionKind.transfer
+          _csvTextCell(t.txKind == TransactionKind.transfer
               ? '${t.accountName}→${t.toAccountName}'
-              : (t.categoryNameZh.isNotEmpty ? t.categoryNameZh : '未分类'),
+              : (t.categoryNameZh.isNotEmpty ? t.categoryNameZh : '未分类')),
           t.categoryKey,
           net.toString(),
           t.amount.toString(),
           refunded.toString(),
           t.excluded ? '否' : '是',
-          t.accountName,
-          t.toAccountName,
-          t.note,
-          tagNames,
+          _csvTextCell(t.accountName),
+          _csvTextCell(t.toAccountName),
+          _csvTextCell(t.note),
+          _csvTextCell(tagNames),
           t.reimbursable ? '是' : '否',
           t.refundOf == null ? '账单' : '退款',
           t.uuid,
@@ -159,9 +159,11 @@ class _ImportExportViewState extends State<ImportExportView> {
 
       final dir = await getTemporaryDirectory();
       final bookName = repo.currentBook?.name ?? '账本';
+      // 文件名里的账本名要过滤非法字符（分享文案仍用原名）。
+      final safeBookName = _sanitizeFileName(bookName);
       final stamp = DateFormat('yyyyMMdd_HHmm').format(DateTime.now());
       final file = File(
-        '${dir.path}/肥喵记账_${bookName}_${range.fileSuffix}_$stamp.csv',
+        '${dir.path}/肥喵记账_${safeBookName}_${range.fileSuffix}_$stamp.csv',
       );
       // 加 UTF-8 BOM，Excel 打开不乱码
       await file.writeAsString('﻿$csv');
@@ -169,7 +171,7 @@ class _ImportExportViewState extends State<ImportExportView> {
       final files = <XFile>[XFile(file.path, mimeType: 'text/csv')];
       if (assetCount > 0) {
         final assetFile = File(
-          '${dir.path}/肥喵资产_${bookName}_$stamp.json',
+          '${dir.path}/肥喵资产_${safeBookName}_$stamp.json',
         );
         await assetFile.writeAsString(await repo.exportAssetTablesJson());
         files.add(XFile(assetFile.path, mimeType: 'application/json'));
@@ -245,13 +247,10 @@ class _ImportExportViewState extends State<ImportExportView> {
       }
       final _ParsedImportFile parsed;
       if (ext == 'xlsx' || ext == 'xls') {
-        final payload = TransferableTypedData.fromList([bytes]);
-        parsed = await Isolate.run(
-          () => _parseXlsxImport(payload.materialize().asUint8List()),
-        );
+        parsed = await compute(_parseXlsxImport, bytes);
       } else {
         final text = await _decodeCsvBytes(bytes);
-        parsed = await Isolate.run(() => _parseCsvImport(text));
+        parsed = await compute(_parseCsvImport, text);
       }
       final feimiaoRows = parsed.feimiaoRows;
       if (feimiaoRows != null) {
@@ -492,6 +491,9 @@ _ParsedImportFile _parseCsvImport(String text) {
 
 _ParsedImportFile _parseXlsxImport(Uint8List bytes) {
   final excel = Excel.decodeBytes(bytes);
+  // 逐 sheet 尝试：第一个真正解析出账目行（或肥喵备份行）的 sheet 生效，
+  // 避免账单藏在第二个 sheet（首个 sheet 是说明/汇总页）时直接报失败。
+  _ParsedImportFile? firstAttempt; // 全失败时用首个非空 sheet 的结果做诊断
   for (final name in excel.tables.keys) {
     final sheet = excel.tables[name];
     if (sheet == null || sheet.rows.isEmpty) continue;
@@ -499,9 +501,14 @@ _ParsedImportFile _parseXlsxImport(Uint8List bytes) {
       for (final row in sheet.rows)
         [for (final cell in row) (cell?.value?.toString() ?? '').trim()],
     ];
-    if (table.isNotEmpty) return _parseImportTable(table);
+    if (table.isEmpty) continue;
+    final parsed = _parseImportTable(table);
+    final ok = parsed.feimiaoRows != null ||
+        (parsed.billResult?.rows.isNotEmpty ?? false);
+    if (ok) return parsed;
+    firstAttempt ??= parsed;
   }
-  return _parseImportTable(const <List<String>>[]);
+  return firstAttempt ?? _parseImportTable(const <List<String>>[]);
 }
 
 _ParsedImportFile _parseImportTable(List<List<String>> table) {
@@ -526,6 +533,31 @@ String formatFeimiaoTransactionDateForTest(
 @visibleForTesting
 List<FeimiaoImportRow>? parseFeimiaoRowsForTest(List<List<String>> table) =>
     _parseFeimiaoRows(table);
+
+/// Exercises the same isolate boundary as the real CSV import flow.
+/// Keeping the callback top-level prevents Dart's closure over-capture from
+/// retaining this page's State/BuildContext/WidgetsFlutterBinding graph.
+@visibleForTesting
+Future<List<FeimiaoImportRow>?> parseFeimiaoCsvInBackgroundForTest(
+  String text,
+) async =>
+    (await compute(_parseCsvImport, text)).feimiaoRows;
+
+/// CSV 公式注入防护：自由文本单元格（备注/账户名/标签/分类名等）若以
+/// = + - @ 或制表符开头，前面补一个单引号中和，Excel/WPS 打开时不会当公式执行。
+/// 只用于文本列；金额/日期列不要套（负号净额不能被改）。
+String _csvTextCell(String value) {
+  if (value.isEmpty) return value;
+  const risky = ['=', '+', '-', '@', '\t'];
+  return risky.contains(value[0]) ? "'$value" : value;
+}
+
+/// 文件名安全化：过滤 Windows/Android 非法字符（\ / : * ? " < > |）
+/// 和控制符，替换成 _，避免账本名里带这些字符时导出直接失败。
+String _sanitizeFileName(String name) {
+  final cleaned = name.replaceAll(RegExp(r'[\\/:*?"<>|\x00-\x1f]'), '_');
+  return cleaned.trim().isEmpty ? '账本' : cleaned;
+}
 
 String _formatFeimiaoTransactionDate(
   DateTime date,

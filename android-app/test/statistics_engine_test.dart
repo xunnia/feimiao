@@ -199,6 +199,68 @@ void main() {
     });
   });
 
+  group('StatisticsEngine – rangeSummary', () {
+    test('daily buckets follow calendar days across the range', () {
+      final records = [
+        _rec(
+            kind: TransactionKind.expense,
+            amount: Decimal.fromInt(30),
+            categoryName: '餐饮',
+            date: _date(2026, 6, 1)),
+        _rec(
+            kind: TransactionKind.income,
+            amount: Decimal.fromInt(100),
+            categoryName: '工资',
+            date: _date(2026, 6, 3)),
+        _rec(
+            kind: TransactionKind.expense,
+            amount: Decimal.fromInt(20),
+            categoryName: '交通',
+            date: _date(2026, 6, 7)),
+        // 区间之外应被排除
+        _rec(
+            kind: TransactionKind.expense,
+            amount: Decimal.fromInt(999),
+            categoryName: '餐饮',
+            date: _date(2026, 6, 8)),
+      ];
+      // 起止带时刻也要归一到日历日（含两端）。
+      final summary = StatisticsEngine.rangeSummary(
+        records,
+        start: DateTime(2026, 6, 1, 8, 30),
+        end: DateTime(2026, 6, 7, 22, 15),
+      );
+      expect(summary.dayCount, 7);
+      expect(summary.dailyTotals.length, 7);
+      expect(summary.dailyTotals.first.date, DateTime(2026, 6, 1));
+      expect(summary.dailyTotals.last.date, DateTime(2026, 6, 7));
+      expect(summary.dailyTotals[0].expense, Decimal.fromInt(30));
+      expect(summary.dailyTotals[2].income, Decimal.fromInt(100));
+      expect(summary.dailyTotals[6].expense, Decimal.fromInt(20));
+      expect(summary.totalExpense, Decimal.fromInt(50));
+      expect(summary.totalIncome, Decimal.fromInt(100));
+    });
+
+    test('reversed start and end are normalized', () {
+      final records = [
+        _rec(
+            kind: TransactionKind.expense,
+            amount: Decimal.fromInt(10),
+            categoryName: '餐饮',
+            date: _date(2026, 6, 2)),
+      ];
+      final summary = StatisticsEngine.rangeSummary(
+        records,
+        start: DateTime(2026, 6, 3),
+        end: DateTime(2026, 6, 1),
+      );
+      expect(summary.start, DateTime(2026, 6, 1));
+      expect(summary.end, DateTime(2026, 6, 3));
+      expect(summary.dayCount, 3);
+      expect(summary.dailyTotals[1].expense, Decimal.fromInt(10));
+    });
+  });
+
   group('StatisticsEngine – yearlySummary', () {
     test('yearly totals and monthly buckets', () {
       final records = [

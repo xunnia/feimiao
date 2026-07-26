@@ -45,10 +45,28 @@ jobs:
           xcodebuild build \
             -project ios-app/QingJi.xcodeproj \
             -scheme QingJi \
+            -configuration Debug \
             -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath build-simulator \
             CODE_SIGNING_ALLOWED=NO \
             | tail -100
           exit ${PIPESTATUS[0]}
+      - name: Package simulator app for Appetize
+        run: |
+          APP_PATH="build-simulator/Build/Products/Debug-iphonesimulator/QingJi.app"
+          if [ ! -d "$APP_PATH" ]; then
+            echo "::error::Simulator app was not produced at $APP_PATH"
+            find build-simulator/Build/Products -name "*.app" -print || true
+            exit 1
+          fi
+          ditto -c -k --keepParent "$APP_PATH" QingJi-simulator.zip
+          unzip -tq QingJi-simulator.zip
+          file "$APP_PATH/QingJi"
+          ls -lh QingJi-simulator.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: QingJi-simulator-app
+          path: QingJi-simulator.zip
 
   simulator-screenshots:
     name: 模拟器截图

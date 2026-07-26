@@ -44,7 +44,9 @@ class BudgetTransactionFamilyAdapter {
   ///
   /// Fully refunded families are intentionally retained. Dropping them would
   /// lose purchase-order counts and make a frozen knowledge cutoff impossible
-  /// to reproduce.
+  /// to reproduce. Legacy standalone negative expense rows (no refundOfId)
+  /// are retained as single-row families with a negative net amount so the
+  /// budget projection matches the statistics ledger.
   static List<ConsumptionExpenseFamily> build(
     Iterable<BudgetTransactionFamilyEvent> events,
   ) {
@@ -58,7 +60,24 @@ class BudgetTransactionFamilyAdapter {
 
     final families = <ConsumptionExpenseFamily>[];
     for (final root in source) {
-      if (!root.isExpense || root.refundOfId != null || root.amountMinor <= 0) {
+      if (!root.isExpense || root.refundOfId != null || root.amountMinor == 0) {
+        continue;
+      }
+      if (root.amountMinor < 0) {
+        // 遗留的独立负支出行（老版本退款/报销未挂原单时的冲账产物）：
+        // 保留为净额为负的单行家族，不做分类拆分、不附着退款。丢弃它
+        // 会让预算口径少冲减这部分金额，与统计口径（原始行直接求和）
+        // 在主页同一张卡上对不上。
+        families.add(ConsumptionExpenseFamily(
+          id: root.id.trim(),
+          bookId: root.bookId,
+          currencyCode: root.currencyCode.trim().toUpperCase(),
+          attributionDate: root.attributionDate,
+          createdAt: root.createdAt,
+          originalAmountMinor: root.amountMinor,
+          countsInIncomeExpense: root.countsInIncomeExpense,
+          countsInBudget: root.countsInBudget,
+        ));
         continue;
       }
       final rootId = root.id.trim();

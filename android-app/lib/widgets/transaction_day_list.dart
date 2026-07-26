@@ -54,7 +54,7 @@ class TxDayCard extends StatelessWidget {
           type: MaterialType.transparency,
           child: Column(
             children: [
-              _TxDaySectionHeader(section: section),
+              TxDaySectionHeader(section: section),
               for (int i = 0; i < section.items.length; i++) ...[
                 if (i > 0)
                   Container(
@@ -72,10 +72,10 @@ class TxDayCard extends StatelessWidget {
   }
 }
 
-class _TxDaySectionHeader extends StatelessWidget {
+class TxDaySectionHeader extends StatelessWidget {
   final TxSection section;
 
-  const _TxDaySectionHeader({required this.section});
+  const TxDaySectionHeader({super.key, required this.section});
 
   String _dateLabel() {
     final now = DateTime.now();
@@ -103,34 +103,108 @@ class _TxDaySectionHeader extends StatelessWidget {
     final hasExpense = totalExpense > Decimal.zero;
     final hasIncome = totalIncome > Decimal.zero;
 
-    TextStyle? small() => Theme.of(context).textTheme.labelSmall?.copyWith(
-          fontWeight: FontWeight.w400,
+    final dateLabel = _dateLabel();
+    final dateStyle = Theme.of(context).textTheme.labelMedium?.copyWith(
           color: scheme.onSurfaceVariant,
-          fontFamily: 'Nunito',
-          // ignore: deprecated_member_use
-          fontFeatures: const [FontFeature.tabularFigures()],
+          fontWeight: FontWeight.w500,
         );
+    final totalStyle = Theme.of(context).textTheme.labelSmall?.copyWith(
+      fontWeight: FontWeight.w400,
+      color: scheme.onSurfaceVariant,
+      fontFamily: 'Nunito',
+      // ignore: deprecated_member_use
+      fontFeatures: const [FontFeature.tabularFigures()],
+    );
+    final totals = <String>[
+      if (hasExpense)
+        '支 ${MoneyFormat.string(totalExpense).replaceAll('¥', '')}',
+      if (hasIncome) '收 ${MoneyFormat.string(totalIncome).replaceAll('¥', '')}',
+    ];
+
+    double textWidth(String text, TextStyle? style) {
+      final painter = TextPainter(
+        text: TextSpan(text: text, style: style),
+        maxLines: 1,
+        textDirection: Directionality.of(context),
+        textScaler: MediaQuery.textScalerOf(context),
+      )..layout();
+      return painter.width;
+    }
 
     return Padding(
       padding: const EdgeInsets.fromLTRB(14, 12, 14, 8),
-      child: Row(
-        children: [
-          Text(
-            _dateLabel(),
-            style: Theme.of(context).textTheme.labelMedium?.copyWith(
-                  color: scheme.onSurfaceVariant,
-                  fontWeight: FontWeight.w500,
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final totalsWidth = totals.fold<double>(
+            0,
+            (sum, text) => sum + textWidth(text, totalStyle),
+          );
+          final gapsWidth =
+              totals.isEmpty ? 0.0 : 12.0 + (totals.length - 1) * 8;
+          final fitsOneLine =
+              textWidth(dateLabel, dateStyle) + totalsWidth + gapsWidth <=
+                  constraints.maxWidth;
+
+          if (fitsOneLine) {
+            return Row(
+              children: [
+                Text(
+                  dateLabel,
+                  key: const ValueKey('tx-day-header-date'),
+                  style: dateStyle,
                 ),
-          ),
-          const Spacer(),
-          if (hasExpense)
-            Text('支 ${MoneyFormat.string(totalExpense).replaceAll('¥', '')}',
-                style: small()),
-          if (hasExpense && hasIncome) const SizedBox(width: 8),
-          if (hasIncome)
-            Text('收 ${MoneyFormat.string(totalIncome).replaceAll('¥', '')}',
-                style: small()),
-        ],
+                const Spacer(),
+                for (var i = 0; i < totals.length; i++) ...[
+                  if (i > 0) const SizedBox(width: 8),
+                  Text(totals[i], style: totalStyle),
+                ],
+              ],
+            );
+          }
+
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text(
+                dateLabel,
+                key: const ValueKey('tx-day-header-date'),
+                style: dateStyle,
+              ),
+              if (totals.isNotEmpty) ...[
+                const SizedBox(height: 4),
+                Wrap(
+                  alignment: WrapAlignment.end,
+                  spacing: 8,
+                  runSpacing: 2,
+                  children: [
+                    for (var i = 0; i < totals.length; i++)
+                      ConstrainedBox(
+                        constraints: BoxConstraints(
+                          maxWidth: constraints.maxWidth,
+                        ),
+                        child: Semantics(
+                          label: totals[i],
+                          child: ExcludeSemantics(
+                            child: FittedBox(
+                              key: ValueKey('tx-day-total-$i'),
+                              fit: BoxFit.scaleDown,
+                              alignment: Alignment.centerRight,
+                              child: Text(
+                                totals[i],
+                                maxLines: 1,
+                                softWrap: false,
+                                style: totalStyle,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+              ],
+            ],
+          );
+        },
       ),
     );
   }

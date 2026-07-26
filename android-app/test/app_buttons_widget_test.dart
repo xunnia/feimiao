@@ -1,3 +1,5 @@
+import 'dart:ui' show Tristate;
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:qingji/widgets/app_buttons.dart';
@@ -30,6 +32,7 @@ void main() {
   });
 
   testWidgets('AppSwitch 关闭态灰槽可见、两态同尺寸（iOS 经典形态）', (tester) async {
+    var switched = false;
     await tester.pumpWidget(
       MaterialApp(
         home: Scaffold(
@@ -38,7 +41,8 @@ void main() {
               AppSwitch(
                 key: const ValueKey('switch-off'),
                 value: false,
-                onChanged: (_) {},
+                semanticLabel: '计入净资产',
+                onChanged: (value) => switched = value,
               ),
               AppSwitch(
                 key: const ValueKey('switch-on'),
@@ -81,5 +85,13 @@ void main() {
         40,
       );
     }
+    expect(tester.getSize(find.byKey(const ValueKey('switch-off'))),
+        const Size(48, 48));
+    final semantics =
+        tester.getSemantics(find.byKey(const ValueKey('switch-off')));
+    expect(semantics.label, '计入净资产');
+    expect(semantics.flagsCollection.isToggled, Tristate.isFalse);
+    await tester.tap(find.byKey(const ValueKey('switch-off')));
+    expect(switched, isTrue);
   });
 }

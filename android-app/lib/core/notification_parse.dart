@@ -11,23 +11,30 @@ class NotificationParse {
   static final RegExp _refundCtx =
       RegExp(r'退款|退回|已退|refund', caseSensitive: false);
 
-  static final RegExp _amt = RegExp(r'[¥￥]\s*(\d+(?:\.\d{1,2})?)');
-  static final RegExp _yuan = RegExp(r'(\d+(?:\.\d{1,2})?)\s*元');
+  // 金额数字支持千位分隔符（1,280.00 / 12,000）与普通形态（1280 / 23.5）。
+  static final RegExp _amt =
+      RegExp(r'[¥￥]\s*((?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d{1,2})?)');
+  static final RegExp _yuan =
+      RegExp(r'((?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d{1,2})?)\s*元');
   static final RegExp _payCtx = RegExp(r'支付|付款|实付|扣款|消费|到账|收款|收钱|花');
   static final RegExp _balCtx = RegExp(r'余额|零钱|可用|额度|账户余');
+
+  /// 匹配串里剥掉千位分隔符再交给 Decimal（金额永不走 double）。
+  static Decimal? _parseAmount(String raw) =>
+      Decimal.tryParse(raw.replaceAll(',', ''));
 
   /// 从通知文本里挑出本次交易金额。
   static Decimal? pickAmount(String text) {
     final matches = _amt.allMatches(text).toList();
     if (matches.isEmpty) {
       final m = _yuan.firstMatch(text);
-      return m != null ? Decimal.tryParse(m.group(1)!) : null;
+      return m != null ? _parseAmount(m.group(1)!) : null;
     }
     final len = text.length;
     Decimal? balanceFallback; // 只剩余额可选时的兜底
     Decimal? firstNonBalance;
     for (final m in matches) {
-      final val = Decimal.tryParse(m.group(1)!);
+      final val = _parseAmount(m.group(1)!);
       if (val == null) continue;
       final preStart = m.start - 8 < 0 ? 0 : m.start - 8;
       final pre = text.substring(preStart, m.start);

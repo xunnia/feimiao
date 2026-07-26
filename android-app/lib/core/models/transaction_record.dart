@@ -41,6 +41,20 @@ class TransactionRecord {
     this.timePrecision = TransactionTimePrecision.legacyUnknown,
   });
 
+  /// 笔数口径（STATISTICS_CALCULATION_STANDARD §7.1 的 `expenseCount`）：
+  /// **净额为正的原始消费家族**才算一笔。record 流的 [amount] 已经是净额，
+  /// 所以全额退款家族在这里是 0、legacy 独立负支出是负数，两者都不占笔数。
+  ///
+  /// 凡是要显示「N 笔支出」的地方一律走这里，别自己 `.length`——否则同一批账
+  /// 在不同页面会给出不同笔数。实体形态（[TransactionEntity]）请用
+  /// `LedgerPolicy.countsAsExpenseFamily`，两者是同一条规则的两种形状。
+  bool get countsAsExpenseFamily =>
+      kind == TransactionKind.expense && amount > Decimal.zero;
+
+  /// 收入笔数：计入普通收入、金额为正的收入事件。
+  bool get countsAsIncomeEvent =>
+      kind == TransactionKind.income && amount > Decimal.zero;
+
   /// 自动生成 ID 的工厂构造器（方便测试和内部创建）。
   factory TransactionRecord.create({
     required TransactionKind kind,

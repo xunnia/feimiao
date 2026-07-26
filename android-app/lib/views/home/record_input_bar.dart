@@ -42,21 +42,33 @@ class _RecordInputBarState extends State<RecordInputBar> {
     }
   }
 
-  void _setMode(bool ai) {
+  Future<void> _setMode(bool ai) async {
+    final repo = context.read<AppRepository>();
+    if (repo.isInitializing) await repo.ready;
+    if (repo.isHydrating) await repo.fullyReady;
+    if (!mounted || (!repo.isFullyReady && repo.initializationError != null)) {
+      return;
+    }
     if (_isAiMode != ai) {
       Haptics.selection();
       setState(() => _isAiMode = ai);
     }
-    context.read<AppRepository>().setRecordAiMode(ai);
+    await repo.setRecordAiMode(ai);
   }
 
   // ── 打开手动大卡片 ─────────────────────────────────────────────────────────
 
   Future<void> _openEntry(bool ai) async {
-    _setMode(ai);
-    if (!_sheetOpen) {
-      setState(() => _sheetOpen = true);
+    if (_sheetOpen) return;
+    final repo = context.read<AppRepository>();
+    if (repo.isInitializing) await repo.ready;
+    if (repo.isHydrating) await repo.fullyReady;
+    if (!mounted || (!repo.isFullyReady && repo.initializationError != null)) {
+      return;
     }
+    await _setMode(ai);
+    if (!mounted) return;
+    setState(() => _sheetOpen = true);
     try {
       await showRecordEntrySheet(
         context,

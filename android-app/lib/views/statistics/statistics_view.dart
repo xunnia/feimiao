@@ -228,7 +228,7 @@ class _StatisticsViewState extends State<StatisticsView> {
       ),
       body: Consumer<AppRepository>(
         builder: (context, repo, _) {
-          final records = repo.allRecords;
+          final records = repo.allRecordsRef;
           return Column(
             children: [
               Padding(
@@ -3399,25 +3399,53 @@ class _CompareBarsH extends StatelessWidget {
 }
 
 /// 近 12 月收支堆叠柱：柱高=当月收支较大者；深色=花掉的，金色=结余，橙色=超支。
-class _StackedBars12 extends StatelessWidget {
+/// 12 次 monthlySummary 计算在 initState/didUpdateWidget 里缓存，
+/// records 引用不变（来自 allRecordsRef）+ endMonth 不变时跳过重算。
+class _StackedBars12 extends StatefulWidget {
   final List<TransactionRecord> records;
   final DateTime endMonth;
 
   const _StackedBars12({required this.records, required this.endMonth});
 
   @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
+  State<_StackedBars12> createState() => _StackedBars12State();
+}
+
+class _StackedBars12State extends State<_StackedBars12> {
+  late List<DateTime> _months;
+  late List<double> _exp;
+  late List<double> _inc;
+  late double _maxV;
+  late bool _any;
+
+  @override
+  void initState() {
+    super.initState();
+    _compute();
+  }
+
+  @override
+  void didUpdateWidget(_StackedBars12 old) {
+    super.didUpdateWidget(old);
+    // records 来自 allRecordsRef（稳定引用），只在真正变化时重算
+    if (!identical(widget.records, old.records) ||
+        widget.endMonth != old.endMonth) {
+      _compute();
+    }
+  }
+
+  void _compute() {
     final months = <DateTime>[];
     for (var i = 11; i >= 0; i--) {
-      months.add(DateTime(endMonth.year, endMonth.month - i, 1));
+      months.add(
+          DateTime(widget.endMonth.year, widget.endMonth.month - i, 1));
     }
     final exp = <double>[];
     final inc = <double>[];
     var maxV = 0.0;
     var any = false;
     for (final m in months) {
-      final s = StatisticsEngine.monthlySummary(records,
+      final s = StatisticsEngine.monthlySummary(widget.records,
           year: m.year, month: m.month);
       final e =
           MoneyFormat.toDouble(s.totalExpense).clamp(0.0, double.infinity);
@@ -3429,14 +3457,24 @@ class _StackedBars12 extends StatelessWidget {
       if (top > maxV) maxV = top;
       if (top > 0) any = true;
     }
-    if (!any) {
+    _months = months;
+    _exp = exp;
+    _inc = inc;
+    _maxV = maxV;
+    _any = any;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    if (!_any) {
       return Text('近 12 个月还没有记录',
           style: TextStyle(fontSize: 12, color: scheme.onSurfaceVariant));
     }
 
     final spentColor = AppColors.expense(scheme);
     final savedColor = AppColors.income(scheme);
-    final step = _niceStep(maxV);
+    final step = _niceStep(_maxV);
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -3455,14 +3493,14 @@ class _StackedBars12 extends StatelessWidget {
           height: 170,
           child: BarChart(
             BarChartData(
-              maxY: ((maxV / step).floor() + 1) * step,
+              maxY: ((_maxV / step).floor() + 1) * step,
               barTouchData: BarTouchData(
                 touchTooltipData: BarTouchTooltipData(
                   getTooltipItem: (g, gi, rod, ri) {
                     final i = g.x.toInt();
                     return BarTooltipItem(
-                      '${months[i].month}月\n支 ${MoneyFormat.axisLabel(exp[i])}  '
-                      '收 ${MoneyFormat.axisLabel(inc[i])}',
+                      '${_months[i].month}月\n支 ${MoneyFormat.axisLabel(_exp[i])}  '
+                      '收 ${MoneyFormat.axisLabel(_inc[i])}',
                       TextStyle(
                           color: scheme.onSurface,
                           fontSize: 11,
@@ -3472,26 +3510,26 @@ class _StackedBars12 extends StatelessWidget {
                 ),
               ),
               barGroups: [
-                for (var i = 0; i < months.length; i++)
+                for (var i = 0; i < _months.length; i++)
                   BarChartGroupData(
                     x: i,
                     barRods: [
                       BarChartRodData(
-                        toY: exp[i] > inc[i] ? exp[i] : inc[i],
+                        toY: _exp[i] > _inc[i] ? _exp[i] : _inc[i],
                         width: 12,
                         borderRadius: const BorderRadius.vertical(
                             top: Radius.circular(3)),
                         rodStackItems: [
                           // 花掉的部分（不超过收入的那截）
                           BarChartRodStackItem(
-                              0, exp[i] < inc[i] ? exp[i] : inc[i], spentColor),
+                              0, _exp[i] < _inc[i] ? _exp[i] : _inc[i], spentColor),
                           // 结余（收入 > 支出）
-                          if (inc[i] > exp[i])
-                            BarChartRodStackItem(exp[i], inc[i], savedColor),
+                          if (_inc[i] > _exp[i])
+                            BarChartRodStackItem(_exp[i], _inc[i], savedColor),
                           // 超支（支出 > 收入）
-                          if (exp[i] > inc[i])
+                          if (_exp[i] > _inc[i])
                             BarChartRodStackItem(
-                                inc[i], exp[i], AppColors.warning),
+                                _inc[i], _exp[i], AppColors.warning),
                         ],
                       ),
                     ],
@@ -3519,13 +3557,13 @@ class _StackedBars12 extends StatelessWidget {
                     reservedSize: 20,
                     getTitlesWidget: (v, meta) {
                       final i = v.toInt();
-                      if (i < 0 || i >= months.length || i.isOdd) {
+                      if (i < 0 || i >= _months.length || i.isOdd) {
                         return const SizedBox.shrink();
                       }
                       return Padding(
                         padding: const EdgeInsets.only(top: 5),
                         child: Text(
-                          '${months[i].month}月',
+                          '${_months[i].month}月',
                           style: TextStyle(
                               fontSize: 9, color: scheme.onSurfaceVariant),
                         ),

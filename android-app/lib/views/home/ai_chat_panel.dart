@@ -14,6 +14,7 @@ import 'package:provider/provider.dart';
 
 import '../../core/ai/chat_intent.dart';
 import '../../core/ai/ai_provider_config.dart';
+import '../../core/ai/category_query.dart';
 import '../../core/ai/llm_entry_parser.dart';
 import '../../core/ai/llm_query.dart';
 import '../../core/ai/bill_categorizer.dart';
@@ -21,6 +22,7 @@ import '../../core/ai/merchant_category.dart';
 import '../../core/ai/query_range.dart';
 import '../../core/budget/budget_window_resolver.dart';
 import '../../core/ai/refund_matcher.dart';
+import '../../core/ai/report_execution_fence.dart';
 import '../../core/ai/report_job_runtime.dart';
 import '../../core/ai/report_task_scheduler.dart';
 import '../../core/ai/smart_suggestions.dart';
@@ -53,6 +55,34 @@ import '../common/category_picker_sheet.dart';
 import '../reports/report_views.dart';
 import '../settings/ai_privacy_consent.dart';
 import 'record_extras_sheet.dart';
+
+const Duration kAiBackgroundResponseNoticeDelay = Duration(seconds: 15);
+const double kAiResponseActionTouchExtent = 36;
+const double kAiResponseActionIconExtent = 17.2;
+
+@visibleForTesting
+int aiTypewriterLength(String text) => text.characters.length;
+
+@visibleForTesting
+String aiTypewriterPrefix(String text, int graphemeCount) {
+  final graphemes = text.characters;
+  final count = graphemeCount <= 0
+      ? 0
+      : graphemeCount >= graphemes.length
+          ? graphemes.length
+          : graphemeCount;
+  return graphemes.take(count).join();
+}
+
+String aiThinkingStatusText({
+  required Duration elapsed,
+  required bool canContinueInBackground,
+}) {
+  if (elapsed.compareTo(kAiBackgroundResponseNoticeDelay) < 0) {
+    return '思考中…';
+  }
+  return canContinueInBackground ? '喵会在后台继续处理，完成后会显示在这里。' : '喵还在思考，完成后会显示在这里。';
+}
 
 @visibleForTesting
 String formatBudgetContextForAi(BudgetWindowResult result) {
@@ -137,37 +167,62 @@ Future<void> showAiChatPanel(
   }
 }
 
-/// 会话历史（同一次 App 运行内复用：关闭再打开仍能看到过往对话）。
-/// 跨重启由 chat_messages 表持久化，按「对话保存时长」设置自动清理超期。
-final List<_Msg> _chatHistory = <_Msg>[];
+class _ChatMemoryState {
+  _ChatMemoryState(this.databaseGeneration);
 
-/// 本次 App 运行是否已从数据库恢复过历史（只恢复一次，之后内存复用）。
-bool _chatRestored = false;
-bool _chatRestoreInProgress = false;
-int _chatHistoryEpoch = 0;
-final Set<int> _chatRowIdsInMemory = <int>{};
-final Map<String, int> _pendingChatSignatures = <String, int>{};
+  final List<_Msg> history = <_Msg>[];
+  final Set<int> rowIdsInMemory = <int>{};
+  final Map<String, int> pendingSignatures = <String, int>{};
+  bool restored = false;
+  bool restoreInProgress = false;
+  int epoch = 0;
+  int databaseGeneration;
+
+  void reset({required bool restored, int? databaseGeneration}) {
+    history.clear();
+    rowIdsInMemory.clear();
+    pendingSignatures.clear();
+    epoch++;
+    this.restored = restored;
+    restoreInProgress = false;
+    if (databaseGeneration != null) {
+      this.databaseGeneration = databaseGeneration;
+    }
+  }
+}
+
+/// 会话内存必须跟仓库实例绑定。测试、数据库恢复或未来切换用户时，不同
+/// AppRepository 的行 id 都可能从 1 开始，不能共享恢复锁或去重集合。
+final Map<AppRepository, _ChatMemoryState> _chatMemoryByRepository =
+    Map<AppRepository, _ChatMemoryState>.identity();
+
+_ChatMemoryState _chatMemoryFor(AppRepository repository) {
+  final state = _chatMemoryByRepository.putIfAbsent(
+    repository,
+    () => _ChatMemoryState(repository.databaseGeneration),
+  );
+  if (state.databaseGeneration != repository.databaseGeneration) {
+    state.reset(
+      restored: false,
+      databaseGeneration: repository.databaseGeneration,
+    );
+  }
+  return state;
+}
 
 String _chatSignature(String role, String text, String question) =>
     '$role\u0000$text\u0000$question';
 
 /// 清空内存中的会话历史（设置页「清空对话」时同步调用，避免本次运行还残留）。
-void clearChatHistoryMemory() {
-  _chatHistory.clear();
-  _chatRowIdsInMemory.clear();
-  _pendingChatSignatures.clear();
-  _chatHistoryEpoch++;
-  _chatRestored = true;
-}
+void clearChatHistoryMemory(AppRepository repository) =>
+    _chatMemoryFor(repository).reset(restored: true);
 
 @visibleForTesting
 void resetChatHistoryForTesting() {
-  _chatHistory.clear();
-  _chatRowIdsInMemory.clear();
-  _pendingChatSignatures.clear();
-  _chatHistoryEpoch++;
-  _chatRestored = false;
-  _chatRestoreInProgress = false;
+  for (final state in _chatMemoryByRepository.values) {
+    state.reset(restored: false);
+  }
+  _chatMemoryByRepository.clear();
 }
 
 @visibleForTesting
@@ -212,6 +267,26 @@ bool aiQuestionMatchesTransaction(
   }
   final amount = transaction.amount.abs().toString();
   return amount.length >= 2 && rawQuestion.contains(amount);
+}
+
+AiCategoryScope? _aiCategoryScopeFor(
+  AppRepository repo,
+  String question,
+) {
+  final byId = {for (final category in repo.categories) category.id: category};
+  final options = [
+    for (final category in repo.categories)
+      if (category.kind == TransactionKind.expense)
+        AiCategoryOption(
+          id: category.id,
+          key: category.key,
+          nameZh: category.nameZh,
+          nameEn: category.nameEn,
+          parentKey:
+              category.parentId == null ? null : byId[category.parentId!]?.key,
+        ),
+  ];
+  return resolveAiCategoryScope(question, options);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -278,7 +353,9 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
   final GlobalKey _latestUserMsgKey = GlobalKey(
     debugLabel: 'latest-user-message',
   );
-  final List<_Msg> _msgs = _chatHistory;
+  late final AppRepository _chatRepository;
+  late final _ChatMemoryState _chatMemory;
+  late final List<_Msg> _msgs;
   _UserMsg? _latestUserMsg;
   bool _busy = false;
   final ValueNotifier<bool> _visualsReady = ValueNotifier<bool>(false);
@@ -304,6 +381,17 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
   bool _keyboardHadOpened = false;
   late bool _historyViewportReady;
   bool _historyRevealScheduled = false;
+  late int _observedDatabaseGeneration;
+
+  List<_Msg> get _chatHistory => _chatMemory.history;
+  Set<int> get _chatRowIdsInMemory => _chatMemory.rowIdsInMemory;
+  Map<String, int> get _pendingChatSignatures => _chatMemory.pendingSignatures;
+  int get _chatHistoryEpoch => _chatMemory.epoch;
+  bool get _chatRestored => _chatMemory.restored;
+  set _chatRestored(bool value) => _chatMemory.restored = value;
+  bool get _chatRestoreInProgress => _chatMemory.restoreInProgress;
+  set _chatRestoreInProgress(bool value) =>
+      _chatMemory.restoreInProgress = value;
 
   // 对话态聊天窗高度占比（半屏 0.58 / 全屏 0.94），及拖拽中标记。
   double _heightFrac = 0.58;
@@ -344,8 +432,13 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
   @override
   void initState() {
     super.initState();
+    _chatRepository = context.read<AppRepository>();
+    _chatMemory = _chatMemoryFor(_chatRepository);
+    _observedDatabaseGeneration = _chatRepository.databaseGeneration;
+    _msgs = _chatMemory.history;
     _historyViewportReady = _chatRestored && _msgs.isEmpty;
     WidgetsBinding.instance.addObserver(this);
+    _chatRepository.addListener(_onRepositoryChanged);
     ReportJobRuntime.revision.addListener(_onReportJobRevision);
     final init = widget.initialText?.trim();
     if (init != null && init.isNotEmpty) {
@@ -359,16 +452,15 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
     // 复用会话历史：清掉残留的"思考中"，滚到底显示最新。
     _msgs.removeWhere((m) => m is _ThinkingMsg);
     _busy = false;
-    // 跨重启恢复：本次运行第一次打开时，从数据库读回历史对话。
-    if (!_chatRestored && !_chatRestoreInProgress) {
+    // 首次打开恢复完整历史；再次打开增量读取 Worker 在后台写入的新报告卡。
+    if (!_chatRestoreInProgress) {
+      final appendNew = _chatRestored;
       _chatRestoreInProgress = true;
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        unawaited(_restoreHistory());
+        unawaited(_restoreHistory(appendNew: appendNew));
       });
-    } else if (_chatRestoreInProgress) {
+    } else {
       _waitForSharedHistoryRestore();
-    } else if (_msgs.isNotEmpty) {
-      _scheduleInitialHistoryReveal();
     }
     WidgetsBinding.instance.addPostFrameCallback((_) {
       unawaited(_resumePendingReportJob());
@@ -383,19 +475,40 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
         _waitForSharedHistoryRestore();
         return;
       }
-      // The panel that owned the shared restore may have been dismissed while
-      // its database read was in flight. In that case it clears the in-flight
-      // flag from finally, but cannot commit the rows because it is unmounted.
-      // Let the mounted waiter take ownership instead of revealing an empty
-      // history until the user closes and opens the assistant yet again.
-      if (!_chatRestored) {
-        _chatRestoreInProgress = true;
-        unawaited(_restoreHistory());
-        return;
-      }
-      setState(() {});
-      _scheduleInitialHistoryReveal();
+      // The owner may have been dismissed before either an initial or an
+      // incremental read could commit. Re-read from the mounted waiter; row and
+      // report-id deduplication keeps this safe if the owner did finish.
+      _chatRestoreInProgress = true;
+      unawaited(_restoreHistory(appendNew: _chatRestored));
     });
+  }
+
+  void _onRepositoryChanged() {
+    final generation = _chatRepository.databaseGeneration;
+    if (generation == _observedDatabaseGeneration) return;
+    _observedDatabaseGeneration = generation;
+    _chatMemory.reset(
+      restored: false,
+      databaseGeneration: generation,
+    );
+    _observedReportJobId = null;
+    _thinkingStatusTimer?.cancel();
+    _thinkingStatusTimer = null;
+    if (!mounted) return;
+    setState(() {
+      _latestUserMsg = null;
+      _busy = false;
+      _historyViewportReady = false;
+      _historyRevealScheduled = false;
+    });
+    if (!_chatRestoreInProgress) {
+      _chatRestoreInProgress = true;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) unawaited(_restoreHistory());
+      });
+    } else {
+      _waitForSharedHistoryRestore();
+    }
   }
 
   @override
@@ -690,21 +803,32 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
   }
 
   /// 从数据库恢复历史对话（超期的已在 loadChatMessages 内清理）。
-  Future<void> _restoreHistory() async {
+  Future<void> _restoreHistory({bool appendNew = false}) async {
     final restoreEpoch = _chatHistoryEpoch;
+    final appendIndex = _chatHistory.length;
     var keepLatestUserAnchored = false;
     try {
       if (!mounted) return;
-      final repo = context.read<AppRepository>();
+      final repo = _chatRepository;
       if (!repo.isInitialized) return;
       final rows = await repo.loadChatMessages();
       if (!mounted || restoreEpoch != _chatHistoryEpoch) return;
+      if (appendNew &&
+          rows.any((row) => (row['role'] as String?) == 'report')) {
+        // A WorkManager isolate owns a different repository cache. Refresh the
+        // main isolate before rebuilding report cards from rows it just wrote.
+        await repo.reloadReportsFromStorage();
+        if (!mounted || restoreEpoch != _chatHistoryEpoch) return;
+      }
       final restored = <({int id, _Msg message})>[];
       final pendingSignatures = Map<String, int>.of(_pendingChatSignatures);
       for (final r in rows) {
         final rowId = (r['id'] as num?)?.toInt();
-        if (rowId == null || _chatRowIdsInMemory.contains(rowId)) continue;
+        if (rowId == null) continue;
         final role = (r['role'] as String?) ?? 'info';
+        final rowAlreadyKnown = _chatRowIdsInMemory.contains(rowId);
+        // Background regeneration updates the original report row in place.
+        if (rowAlreadyKnown && role != 'report') continue;
         final text = (r['text'] as String?) ?? '';
         final question = (r['question'] as String?) ?? '';
         final signature = _chatSignature(role, text, question);
@@ -742,12 +866,45 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
       }
       if (!mounted || restoreEpoch != _chatHistoryEpoch) return;
       // 消息可能在上面的异步报告恢复期间刚刚入库；提交 UI 前再去重一次。
-      restored.removeWhere((item) => _chatRowIdsInMemory.contains(item.id));
+      restored.removeWhere(
+        (item) =>
+            _chatRowIdsInMemory.contains(item.id) &&
+            item.message is! _ReportMsg,
+      );
       keepLatestUserAnchored = _latestUserMsg != null;
       if (restored.isNotEmpty) {
         setState(() {
-          _chatHistory.insertAll(0, restored.map((item) => item.message));
-          _chatRowIdsInMemory.addAll(restored.map((item) => item.id));
+          final messages = <_Msg>[];
+          final reportIndexes = <int, int>{
+            for (var i = 0; i < _chatHistory.length; i++)
+              if (_chatHistory[i] case final _ReportMsg reportMessage)
+                reportMessage.report.id: i,
+          };
+          final queuedReportIds = <int>{};
+          for (final item in restored) {
+            final message = item.message;
+            if (message is _ReportMsg) {
+              _chatRowIdsInMemory.add(item.id);
+              final existingIndex = reportIndexes[message.report.id];
+              if (existingIndex != null) {
+                _chatHistory[existingIndex] = message;
+                continue;
+              }
+              if (!queuedReportIds.add(message.report.id)) continue;
+            } else if (_chatRowIdsInMemory.contains(item.id)) {
+              continue;
+            }
+            _chatRowIdsInMemory.add(item.id);
+            messages.add(message);
+          }
+          if (appendNew) {
+            _chatHistory.insertAll(
+              min(appendIndex, _chatHistory.length),
+              messages,
+            );
+          } else {
+            _chatHistory.insertAll(0, messages);
+          }
         });
       }
       _chatRestored = true;
@@ -973,6 +1130,7 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _chatRepository.removeListener(_onRepositoryChanged);
     ReportJobRuntime.revision.removeListener(_onReportJobRevision);
     _openSettleTimer?.cancel();
     _focusTimer?.cancel();
@@ -1017,7 +1175,6 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
         if (current != null && current.kind != kind) {
           setState(() {
             current.kind = kind;
-            current.tick = 0;
           });
         }
         return;
@@ -1069,6 +1226,20 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
     final repo = context.read<AppRepository>();
     final jobs = await repo.pendingReportJobs();
     if (!mounted || jobs.isEmpty) return;
+    // 未同意 AI 隐私说明：恢复的任务不上传账本内容，保持 pending 并提示，
+    // 等用户在喵助手里重新发起（走同意弹窗）后再继续。
+    if (!repo.aiPrivacyAccepted) {
+      const prompt = '有一份报告在等待生成：先同意 AI 隐私说明（重新发起一次报告即可确认）后才会继续。';
+      final alreadyPrompted =
+          _msgs.any((m) => m is _InfoMsg && m.text == prompt);
+      if (!alreadyPrompted) {
+        setState(() {
+          _started = true;
+          _msgs.add(_InfoMsg(prompt));
+        });
+      }
+      return;
+    }
     final job = jobs.first;
     _observedReportJobId = job.id;
     final kind = switch (job.stage) {
@@ -1093,11 +1264,22 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
     } else if (currentThinking.kind != kind) {
       setState(() {
         currentThinking.kind = kind;
-        currentThinking.tick = 0;
       });
     }
-    final scheduled = await ReportTaskScheduler.schedule(job.id);
-    if (scheduled || ReportJobRuntime.isActive(job.id)) return;
+    final lease = (await repo.acquireReportGenerationLease()).bind(
+      jobId: job.id,
+      jobUuid: job.uuid,
+    );
+    final scheduled = await ReportTaskScheduler.schedule(
+      repo,
+      job,
+      lease: lease,
+    );
+    if (scheduled) {
+      _setThinkingCanContinueInBackground(true);
+      return;
+    }
+    if (ReportJobRuntime.isActive(lease.runtimeKey)) return;
     unawaited(_runQuery(job.question, repository: repo, resumeJob: job));
   }
 
@@ -1115,6 +1297,8 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
   void _scheduleInitialHistoryReveal({
     bool keepLatestUserAnchored = false,
     int positioningPass = 0,
+    double? previousMaxScrollExtent,
+    double? previousPixels,
   }) {
     if (_historyViewportReady || _historyRevealScheduled) return;
     _historyRevealScheduled = true;
@@ -1122,16 +1306,9 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
       _historyRevealScheduled = false;
       if (!mounted) return;
       if (_scroll.hasClients) {
+        var targetIsBuilt = true;
         if (keepLatestUserAnchored) {
           final latestContext = _latestUserMsgKey.currentContext;
-          if (latestContext == null && positioningPass == 0) {
-            _scroll.jumpTo(_scroll.position.maxScrollExtent);
-            _scheduleInitialHistoryReveal(
-              keepLatestUserAnchored: true,
-              positioningPass: 1,
-            );
-            return;
-          }
           if (latestContext != null) {
             Scrollable.ensureVisible(
               latestContext,
@@ -1140,11 +1317,41 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
               duration: Duration.zero,
             );
           } else {
+            targetIsBuilt = false;
             _scroll.jumpTo(_scroll.position.maxScrollExtent);
           }
         } else {
           _scroll.jumpTo(_scroll.position.maxScrollExtent);
         }
+        final position = _scroll.position;
+        final maxScrollExtent = position.maxScrollExtent;
+        final extentIsStable = previousMaxScrollExtent != null &&
+            (maxScrollExtent - previousMaxScrollExtent).abs() <= 0.5;
+        final pixelsAreStable = previousPixels != null &&
+            (position.pixels - previousPixels).abs() <= 0.5;
+        final positionIsStable = keepLatestUserAnchored ||
+            (position.pixels - maxScrollExtent).abs() <= 0.5;
+        if (positioningPass < 6 &&
+            (!targetIsBuilt ||
+                !extentIsStable ||
+                !pixelsAreStable ||
+                !positionIsStable)) {
+          _scheduleInitialHistoryReveal(
+            keepLatestUserAnchored: keepLatestUserAnchored,
+            positioningPass: positioningPass + 1,
+            previousMaxScrollExtent: maxScrollExtent,
+            previousPixels: position.pixels,
+          );
+          return;
+        }
+      } else if (_msgs.isNotEmpty && positioningPass < 6) {
+        _scheduleInitialHistoryReveal(
+          keepLatestUserAnchored: keepLatestUserAnchored,
+          positioningPass: positioningPass + 1,
+          previousMaxScrollExtent: previousMaxScrollExtent,
+          previousPixels: previousPixels,
+        );
+        return;
       }
       setState(() => _historyViewportReady = true);
     });
@@ -1217,7 +1424,7 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
 
   void _restartThinkingTicker() {
     _thinkingStatusTimer?.cancel();
-    _thinkingStatusTimer = Timer.periodic(const Duration(milliseconds: 1600), (
+    _thinkingStatusTimer = Timer.periodic(const Duration(seconds: 1), (
       _,
     ) {
       final msg = _currentThinkingMsg();
@@ -1226,7 +1433,7 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
         _thinkingStatusTimer = null;
         return;
       }
-      setState(() => msg.tick++);
+      setState(() {});
       if (_observedReportJobId != null) {
         unawaited(_syncReportJobState());
       }
@@ -1238,14 +1445,22 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
     if (msg == null) return;
     if (!mounted) {
       msg.kind = kind;
-      msg.tick = 0;
       return;
     }
     setState(() {
       msg.kind = kind;
-      msg.tick = 0;
     });
     _restartThinkingTicker();
+  }
+
+  void _setThinkingCanContinueInBackground(bool value) {
+    final msg = _currentThinkingMsg();
+    if (msg == null || msg.canContinueInBackground == value) return;
+    if (!mounted) {
+      msg.canContinueInBackground = value;
+      return;
+    }
+    setState(() => msg.canContinueInBackground = value);
   }
 
   // ── 发送：先判意图（查账 or 记账）再分流 ────────────────────────────────
@@ -1308,7 +1523,8 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
           if (res.intent == LlmIntent.query) {
             await _runQuery(text, repository: repo);
           } else {
-            await _applyRecord(res.entries);
+            // repo 在 await 前已捕获传入：解析期间用户关掉面板也不能丢账。
+            await _applyRecord(res.entries, repository: repo);
           }
           return;
         }
@@ -1323,7 +1539,11 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
       final hint = !aiConfig.hasKey
           ? '还没配 AI key，喵先用本地规则记（单笔）'
           : 'AI 没连上, 喵先用本地规则记了（单笔）';
-      await _applyRecord([NaturalLanguageEntryParser.parse(text)], hint: hint);
+      await _applyRecord(
+        [NaturalLanguageEntryParser.parse(text)],
+        hint: hint,
+        repository: repo,
+      );
     }
   }
 
@@ -1502,12 +1722,19 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
   }
 
   // ── 记账流：给定解析结果，匹配分类 → 高置信自动入库/否则确认卡 ──────────────
-  Future<void> _applyRecord(List<ParsedEntry> results, {String? hint}) async {
-    final repo = context.read<AppRepository>();
+  /// [repository] 由调用方在 await LLM 之前捕获传入：解析期间用户关掉面板后
+  /// context.read 会抛，导致整批解析结果被静默丢掉。unmounted 时高置信条目
+  /// 仍然入库落库（对齐查账路径 !mounted 也落库的做法），低置信至少留一条
+  /// 聊天消息提示，只跳过 setState/UI 部分。
+  Future<void> _applyRecord(
+    List<ParsedEntry> results, {
+    String? hint,
+    AppRepository? repository,
+  }) async {
+    final repo = repository ?? context.read<AppRepository>();
     _setThinkingKind(_ThinkingKind.recordMatch);
     final cats = results.map((e) => _matchCat(repo, e)).toList();
 
-    if (!mounted) return;
     // 高置信(每笔>=0.9且金额有效) → 直接入库 + 撤销；否则弹确认卡
     final highConfidence = hint == null &&
         results.length <= 5 &&
@@ -1520,7 +1747,7 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
     _RecordMsg? autoMsg;
     String persistText = '';
     String persistRole = 'info';
-    setState(() {
+    void applyMessages() {
       _msgs.removeWhere((m) => m is _ThinkingMsg);
       if (results.isEmpty) {
         _msgs.add(_InfoMsg('喵没看懂这句，换个说法试试？', error: true));
@@ -1532,6 +1759,11 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
         // 认出了内容但没金额 → 追问，而不是弹一张存不了的死卡
         _msgs.add(_InfoMsg('喵没认出金额～再说一句金额吧，比如「奶茶 18」'));
         persistText = '喵没认出金额～再说一句金额吧，比如「奶茶 18」';
+      } else if (!mounted && !highConfidence) {
+        // 面板已关且这批需要确认卡：不静默丢，留一条提示进聊天历史。
+        final n = results.where((e) => e.amount != null).length;
+        persistText = '刚才有 $n 笔解析结果因页面关闭未确认，请重新发送';
+        _msgs.add(_InfoMsg(persistText));
       } else {
         if (hint != null) _msgs.add(_InfoMsg(hint));
         final msg = _RecordMsg(entries: results, cats: cats);
@@ -1541,16 +1773,22 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
         persistText = hint != null ? '$hint · 已记 $n 笔' : '已记 $n 笔';
       }
       _busy = false;
-    });
+    }
+
+    if (mounted) {
+      setState(applyMessages);
+    } else {
+      applyMessages();
+    }
     if (persistText.isNotEmpty) {
       await _addChatMessage(repo, role: persistRole, text: persistText);
     }
-    // 高置信：自动保存（卡片随即进入已存/可撤销态）
+    // 高置信：自动保存（卡片随即进入已存/可撤销态；unmounted 也照样入库）
     if (autoMsg != null) {
-      await _save(autoMsg!);
+      await _save(autoMsg!, repository: repo);
       if (mounted) _snack('喵直接记好了，不对就点卡片上的撤销');
     }
-    _scrollToLatestUserMessage();
+    if (mounted) _scrollToLatestUserMessage();
   }
 
   // ── 查账流 ──────────────────────────────────────────────────────────────
@@ -1575,27 +1813,78 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
     if (reportType != null) {
       aiConfig = repo.aiProviderConfigFor(AiTaskType.report);
     }
+    // 隐私闸门下沉到每个真正上传数据的入口：查账/报告都要先同意，不能只靠
+    // _send 的记账分支拦。未同意就不发起请求；resume 的任务保持 pending
+    // （启动恢复路径已在 _resumePendingReportJob 里提前拦掉，不会到这弹窗）。
+    if (aiConfig.hasKey && !repo.aiPrivacyAccepted) {
+      final consented = mounted && await ensureAiPrivacyConsent(context);
+      if (!consented) {
+        const prompt = '未同意 AI 隐私说明，喵不会把账本内容发出去。';
+        void declineUi() {
+          _msgs.removeWhere((m) => m is _ThinkingMsg);
+          _msgs.add(_InfoMsg(prompt));
+          _busy = false;
+        }
+
+        if (mounted) {
+          setState(declineUi);
+          _scrollToLatestUserMessage();
+        } else {
+          declineUi();
+        }
+        return;
+      }
+    }
     var reportJob = resumeJob;
+    ReportGenerationLease? reportLease;
     if (reportType != null && aiConfig.hasKey) {
-      reportJob ??= await repo.createReportJob(
-        question: text,
-        type: reportType,
-        title: reportTitle!,
-        periodStart: reportPeriod!.start,
-        periodEnd: reportPeriod.end,
-        bookId: reportBookId,
+      try {
+        final baseLease = await repo.acquireReportGenerationLease();
+        reportJob ??= await repo.guardReportGeneration(
+          baseLease,
+          () => repo.createReportJob(
+            question: text,
+            type: reportType,
+            title: reportTitle!,
+            periodStart: reportPeriod!.start,
+            periodEnd: reportPeriod.end,
+            bookId: reportBookId,
+          ),
+        );
+        final activeJob = reportJob;
+        if (activeJob == null) {
+          throw StateError('report job was not created');
+        }
+        reportLease = baseLease.bind(
+          jobId: activeJob.id,
+          jobUuid: activeJob.uuid,
+        );
+      } on ReportGenerationInvalidated {
+        _handleInvalidatedReport();
+        return;
+      }
+      final activeJob = reportJob;
+      if (activeJob == null) {
+        _handleInvalidatedReport();
+        return;
+      }
+      _observedReportJobId = activeJob.id;
+      final scheduled = await ReportTaskScheduler.schedule(
+        repo,
+        activeJob,
+        lease: reportLease,
       );
-      _observedReportJobId = reportJob.id;
-      final scheduled = await ReportTaskScheduler.schedule(reportJob.id);
       if (scheduled) {
         _setThinkingKind(_ThinkingKind.reportCollect);
+        _setThinkingCanContinueInBackground(true);
         _restartThinkingTicker();
         return;
       }
-      if (!ReportJobRuntime.claim(reportJob.id)) return;
+      if (!ReportJobRuntime.claim(reportLease.runtimeKey)) return;
       await _setReportJobStage(
         repo,
         reportJob,
+        lease: reportLease,
         status: 'running',
         stage: 'collect',
       );
@@ -1611,15 +1900,20 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
       answer = '查账要先配 AI key 哦～去「我的 → AI 记账设置」填一下，喵就能帮你分析啦';
     } else {
       try {
-        final transactionsText = reportType == null
-            ? _buildTxnContext(repo, question: text)
-            : _buildReportContext(
-                repo,
-                title: reportTitle!,
-                type: reportType,
-                period: reportPeriod!,
-                bookId: reportBookId,
-              );
+        late final String transactionsText;
+        if (reportType == null) {
+          transactionsText = _buildTxnContext(repo, question: text);
+        } else {
+          await repo.guardReportGeneration(reportLease!, () async {
+            transactionsText = _buildReportContext(
+              repo,
+              title: reportTitle!,
+              type: reportType,
+              period: reportPeriod!,
+              bookId: reportBookId,
+            );
+          });
+        }
         if (reportType == null) {
           _setThinkingKind(_ThinkingKind.queryAnswer);
           answer = await LlmQuery.ask(
@@ -1629,7 +1923,12 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
           );
         } else {
           _setThinkingKind(_ThinkingKind.reportGenerate);
-          await _setReportJobStage(repo, reportJob, stage: 'generate');
+          await _setReportJobStage(
+            repo,
+            reportJob,
+            lease: reportLease,
+            stage: 'generate',
+          );
           answer = await _askReportOrBuildLocalFallback(
             repo: repo,
             reportTitle: reportTitle!,
@@ -1637,12 +1936,17 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
             reportPeriod: reportPeriod!,
             reportBookId: reportBookId,
             reportJob: reportJob,
+            reportLease: reportLease,
             config: aiConfig,
             transactionsText: transactionsText,
           );
         }
         // 报告类本地兜底也应该生成文档卡片，避免用户只看到“没连上”。
         aiAnswered = true;
+      } on ReportGenerationInvalidated {
+        _releaseReportJob(reportJob, reportLease);
+        _handleInvalidatedReport();
+        return;
       } on LlmQueryException catch (e) {
         answer = _friendlyAiError(e);
       } catch (e) {
@@ -1659,10 +1963,8 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
       await _saveGeneratedReport(
         repo: repo,
         reportJob: reportJob,
-        reportType: reportType,
-        reportPeriod: reportPeriod!,
+        reportLease: reportLease,
         reportTitle: reportTitle!,
-        reportBookId: reportBookId,
         answer: answer,
         question: text,
       );
@@ -1672,6 +1974,7 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
       await _setReportJobStage(
         repo,
         reportJob,
+        lease: reportLease,
         status: 'failed',
         error: answer,
       );
@@ -1691,65 +1994,45 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
       setState(() => addAnswerMessage(animate: true));
       _scrollToLatestUserMessage();
     } finally {
-      _releaseReportJob(reportJob);
+      _releaseReportJob(reportJob, reportLease);
     }
   }
 
   Future<void> _saveGeneratedReport({
     required AppRepository repo,
     required ReportJobEntity? reportJob,
-    required String reportType,
-    required DateTimeRange reportPeriod,
+    required ReportGenerationLease? reportLease,
     required String reportTitle,
-    required int? reportBookId,
     required String answer,
     required String question,
   }) async {
     try {
+      if (reportJob == null || reportLease == null) {
+        throw StateError('report job lease is missing');
+      }
       _setThinkingKind(_ThinkingKind.reportSave);
-      await _setReportJobStage(repo, reportJob, stage: 'save');
-      final markdown = _reportMarkdown(reportTitle, answer);
-      final summary = _reportSummary(markdown);
-      final regeneratingReportId = reportJob?.reportId;
-      final int id;
-      if (regeneratingReportId == null) {
-        id = await repo.addReport(
-          type: reportType,
-          title: reportTitle,
-          summary: summary,
-          markdown: markdown,
-          periodStart: reportPeriod.start,
-          periodEnd: reportPeriod.end,
-          bookId: reportBookId,
-        );
-      } else {
-        id = regeneratingReportId;
-        await repo.updateReportContent(
-          id,
-          summary: summary,
-          markdown: markdown,
-          title: reportTitle,
-        );
-      }
-      final report = await repo.getReport(id);
-      if (report == null) {
-        throw StateError('report row missing after save');
-      }
-      if (regeneratingReportId == null) {
-        await _addChatMessage(
-          repo,
-          role: 'report',
-          text: encodeReportChatMessage(report, summary),
-          question: question,
-        );
-      }
       await _setReportJobStage(
         repo,
         reportJob,
-        status: 'completed',
+        lease: reportLease,
         stage: 'save',
-        reportId: report.id,
       );
+      final markdown = _reportMarkdown(reportTitle, answer);
+      final summary = _reportSummary(markdown);
+      final uiDatabaseGeneration = repo.databaseGeneration;
+      final report = await repo.guardReportGeneration(
+        reportLease,
+        () => repo.completeReportJob(
+          jobId: reportJob.id,
+          expectedJobUuid: reportJob.uuid,
+          summary: summary,
+          markdown: markdown,
+        ),
+      );
+      if (repo.databaseGeneration != uiDatabaseGeneration) {
+        _handleInvalidatedReport();
+        return;
+      }
       void addReportMessage({required bool animate}) {
         _msgs.removeWhere((message) => message is _ThinkingMsg);
         _msgs.add(
@@ -1769,10 +2052,13 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
       }
       setState(() => addReportMessage(animate: true));
       _scrollToLatestUserMessage();
+    } on ReportGenerationInvalidated {
+      _handleInvalidatedReport();
     } catch (error) {
       await _setReportJobStage(
         repo,
         reportJob,
+        lease: reportLease,
         status: 'failed',
         error: error.toString(),
       );
@@ -1788,13 +2074,14 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
         addFailureMessage();
       }
     } finally {
-      _releaseReportJob(reportJob);
+      _releaseReportJob(reportJob, reportLease);
     }
   }
 
   Future<void> _setReportJobStage(
     AppRepository repo,
     ReportJobEntity? job, {
+    ReportGenerationLease? lease,
     String? status,
     String? stage,
     String? error,
@@ -1802,21 +2089,44 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
   }) async {
     if (job == null) return;
     try {
-      await repo.updateReportJob(
-        job.id,
-        status: status,
-        stage: stage,
-        error: error,
-        reportId: reportId,
-      );
+      Future<void> update() => repo.updateReportJob(
+            job.id,
+            expectedUuid: job.uuid,
+            status: status,
+            stage: stage,
+            error: error,
+            reportId: reportId,
+          );
+      if (lease == null) {
+        await update();
+      } else {
+        await repo.guardReportGeneration(lease, update);
+      }
     } catch (_) {
       // Job metadata must never block generation or saving the report itself.
     }
   }
 
-  void _releaseReportJob(ReportJobEntity? job) {
-    if (job == null) return;
-    ReportJobRuntime.release(job.id);
+  void _releaseReportJob(
+    ReportJobEntity? job,
+    ReportGenerationLease? lease,
+  ) {
+    if (job == null || lease == null) return;
+    ReportJobRuntime.release(lease.runtimeKey);
+  }
+
+  void _handleInvalidatedReport() {
+    void clearPendingUi() {
+      _msgs.removeWhere((message) => message is _ThinkingMsg);
+      _busy = false;
+      _observedReportJobId = null;
+    }
+
+    if (mounted) {
+      setState(clearPendingUi);
+    } else {
+      clearPendingUi();
+    }
   }
 
   Future<String> _askReportOrBuildLocalFallback({
@@ -1826,6 +2136,7 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
     required DateTimeRange reportPeriod,
     required int? reportBookId,
     required ReportJobEntity? reportJob,
+    required ReportGenerationLease? reportLease,
     required AiProviderConfig config,
     required String transactionsText,
   }) async {
@@ -1843,7 +2154,12 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
     }
 
     _setThinkingKind(_ThinkingKind.reportFallback);
-    await _setReportJobStage(repo, reportJob, stage: 'fallback');
+    await _setReportJobStage(
+      repo,
+      reportJob,
+      lease: reportLease,
+      stage: 'fallback',
+    );
     try {
       return await LlmQuery.ask(
         question: '请生成一份完整 Markdown 报告：$reportTitle。'
@@ -1873,17 +2189,38 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
   String _buildTxnContext(AppRepository repo, {required String question}) {
     final now = DateTime.now();
     final range = QueryRange.parse(question, now);
-    final comparisonBlock = _buildMonthComparisonBlock(repo, question, now);
+    final categoryScope = _aiCategoryScopeFor(repo, question);
+    final comparisonBlock = _buildMonthComparisonBlock(
+      repo,
+      question,
+      now,
+      categoryScope: categoryScope,
+    );
     // 只喂「可见订单」（退款行已挂到原订单里，不单独喂），且金额取**净额**
     // （原额−已退）。否则 AI 会看到散落的退款负数行 → 无中生有「某某退款」、
     // 又把已退到 140 的订单仍当 150 算。喂净额=AI 看到的就是用户实际花的。
-    final allTxns = repo.visibleTransactions.where((t) => !t.excluded).toList()
+    final visible = repo.visibleTransactions.where((t) => !t.excluded).toList()
       ..sort((a, b) => b.date.compareTo(a.date));
+    // 时间范围和分类范围是两个正交筛选条件；之前只应用了前者，导致
+    // “这个月购物花了多少”把餐饮、交通等全月支出也算进来了。
+    final allTxns = categoryScope == null
+        ? visible
+        : visible
+            .where((t) => categoryScope.matches(
+                  categoryId: t.categoryId,
+                  categoryKey: t.categoryKey,
+                ))
+            .toList(growable: false);
     var txns = allTxns;
     List<TransactionEntity> historicalMatches = const [];
     var limit = 240;
     if (range != null) {
       txns = txns.where((t) => range.covers(t.date)).toList();
+    } else if (categoryScope != null) {
+      // 没有时间词时，分类本身就是全库检索条件；绝不能再用最近账目补
+      // 其它分类，否则模型又会看到与问题无关的流水。
+      historicalMatches = allTxns;
+      txns = historicalMatches.take(limit).toList(growable: false);
     } else {
       historicalMatches = allTxns
           .where((t) => aiQuestionMatchesTransaction(question, t))
@@ -1898,7 +2235,7 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
           selected.add(transaction);
           selectedIds.add(transaction.id);
         }
-        for (final transaction in allTxns) {
+        for (final transaction in visible) {
           if (selected.length >= limit) break;
           if (selectedIds.add(transaction.id)) selected.add(transaction);
         }
@@ -1907,6 +2244,12 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
     }
     final sb = StringBuffer();
     sb.writeln('今天是 ${now.year}-${now.month}-${now.day}。');
+    if (categoryScope != null) {
+      sb.writeln(
+        '【分类筛选已锁定】本次只统计支出分类「${categoryScope.labels.join('、')}」'
+        '及其子分类；其它分类一律不计入下面的金额和明细。',
+      );
+    }
     sb.writeln(_buildBudgetContextBlock(
       repo,
       question: question,
@@ -1935,9 +2278,26 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
         }
       }
       sb.writeln(
-        '【本期准确合计（务必直接引用，不要自己再加总明细）】'
+        '【${categoryScope == null ? '本期' : '本期分类'}准确合计（务必直接引用，不要自己再加总明细）】'
         '支出 ${MoneyFormat.string(totalExp)}，'
         '收入 ${MoneyFormat.string(totalInc)}。',
+      );
+    } else if (categoryScope != null) {
+      var matchedExpense = Decimal.zero;
+      var matchedIncome = Decimal.zero;
+      for (final transaction in historicalMatches) {
+        if (transaction.txKind == TransactionKind.expense) {
+          matchedExpense += repo.netAmountOf(transaction);
+        } else if (transaction.txKind == TransactionKind.income) {
+          matchedIncome += transaction.amount;
+        }
+      }
+      sb.writeln(
+        '未指定日期，已检索全库符合分类范围的 ${historicalMatches.length} 笔账目。',
+      );
+      sb.writeln(
+        '【分类查询准确合计（务必直接引用）】支出 ${MoneyFormat.string(matchedExpense)}，'
+        '收入 ${MoneyFormat.string(matchedIncome)}。',
       );
     } else if (historicalMatches.isNotEmpty) {
       var matchedExpense = Decimal.zero;
@@ -1977,7 +2337,8 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
       final net =
           t.txKind == TransactionKind.expense ? repo.netAmountOf(t) : t.amount;
       sb.writeln(
-        '$d|$k|${t.categoryNameZh}|${MoneyFormat.string(net)}|${t.note}',
+        '$d|$k|${t.categoryNameZh}|${MoneyFormat.string(net)}'
+        '|${sanitizeNoteForLlm(t.note)}',
       );
     }
     return sb.toString();
@@ -2195,7 +2556,8 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
       for (final e in topTxns.take(20)) {
         final t = e.txn;
         sb.writeln(
-          '- ${fmtDate(t.date)}｜${t.categoryNameZh}｜${MoneyFormat.string(e.net)}｜${t.note}',
+          '- ${fmtDate(t.date)}｜${t.categoryNameZh}｜${MoneyFormat.string(e.net)}'
+          '｜${sanitizeNoteForLlm(t.note)}',
         );
       }
     }
@@ -2209,7 +2571,8 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
           : (t.txKind == TransactionKind.transfer ? '转账' : '支出');
       final amount = t.txKind == TransactionKind.expense ? netOf(t) : t.amount;
       sb.writeln(
-        '${fmtDate(t.date)}|$kind|${t.categoryNameZh}|${MoneyFormat.string(amount)}|${t.note}',
+        '${fmtDate(t.date)}|$kind|${t.categoryNameZh}|${MoneyFormat.string(amount)}'
+        '|${sanitizeNoteForLlm(t.note)}',
       );
     }
     return sb.toString();
@@ -2463,8 +2826,9 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
   String _buildMonthComparisonBlock(
     AppRepository repo,
     String question,
-    DateTime now,
-  ) {
+    DateTime now, {
+    AiCategoryScope? categoryScope,
+  }) {
     final q = question.trim();
     final asksMonthCompare = (q.contains('上月') || q.contains('上个月')) &&
         (q.contains('本月') ||
@@ -2483,7 +2847,17 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
     final sameDay = min(now.day, lastMonthDays);
     final lastSameDayEnd = DateTime(now.year, now.month - 1, sameDay + 1);
 
-    final visible = repo.visibleTransactions.where((t) => !t.excluded).toList();
+    final visible = repo.visibleTransactions
+        .where((t) => !t.excluded)
+        .where(
+          (t) =>
+              categoryScope == null ||
+              categoryScope.matches(
+                categoryId: t.categoryId,
+                categoryKey: t.categoryKey,
+              ),
+        )
+        .toList();
     final thisMonth = _periodSummary(repo, visible, thisStart, thisEnd);
     final lastMonth = _periodSummary(repo, visible, lastStart, lastEnd);
     final lastSameDay = _periodSummary(
@@ -2511,7 +2885,7 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
     final diffSameDay = thisMonth.expense - lastSameDay.expense;
     return '''
 
-【本月/上月比较的准确汇总】
+ 【本月/上月比较的准确汇总${categoryScope == null ? '' : '（仅${categoryScope.labels.join('、')}分类）'}】
 下面这些数字由本地账本全量计算，和首页/统计口径一致，必须优先使用；不要因为明细列表截断就说没有上月数据。
 ${line('本月截至今天', thisStart, thisEnd, thisMonth)}
 ${line('上月全月', lastStart, lastEnd, lastMonth)}
@@ -2572,14 +2946,19 @@ ${line('上月同期', lastStart, lastSameDayEnd, lastSameDay)}
   }
 
   // ── 保存这张卡里的账目 ──────────────────────────────────────────────────
-  Future<void> _save(_RecordMsg msg) async {
+  /// msg 活在跨面板共享内存里：写库循环开始后，saved/txnIds 回填和
+  /// _persistRecord 必须无条件执行（中途 unmount 也一样），否则卡片会
+  /// 永远停在「保存中」、已入库的账目丢掉卡片状态。只有 setState 受
+  /// mounted 保护。[repository] 供 unmounted 调用方（_applyRecord）传入。
+  Future<void> _save(_RecordMsg msg, {AppRepository? repository}) async {
     if (msg.saved || msg.saving) return;
-    setState(() => msg.saving = true);
+    msg.saving = true;
+    if (mounted) setState(() {});
     try {
-      final repo = context.read<AppRepository>();
+      final repo = repository ?? context.read<AppRepository>();
       final accountId = repo.transactionAccounts.firstOrNull?.id;
       if (accountId == null) {
-        _snack('请先在「资产管理」里加一个账户');
+        if (mounted) _snack('请先在「资产管理」里加一个账户');
         return;
       }
       // 入库前先算「异常提醒」（用当前历史，尚不含本次）：只提醒第一笔明显偏高的支出。
@@ -2643,10 +3022,9 @@ ${line('上月同期', lastStart, lastSameDayEnd, lastSameDay)}
         }
       }
       if (savedCount == 0) {
-        _snack('这几笔没认出金额，先补上金额再存～');
+        if (mounted) _snack('这几笔没认出金额，先补上金额再存～');
         return;
       }
-      if (!mounted) return;
       // 记完反馈:按实际入账日期统计，避免跨天/补记时次数锚到今天。
       final mainCat = feedbackCat ?? fallbackCat;
       final feedback = MeowInsights.recordFeedback(
@@ -2654,30 +3032,36 @@ ${line('上月同期', lastStart, lastSameDayEnd, lastSameDay)}
         mainCat?.nameZh ?? '',
         date: feedbackDate ?? fallbackDate,
       );
-      Haptics.of(Haptic.success);
-      setState(() {
-        msg.saved = true;
-        msg.txnIds = ids;
-        msg.savedIds = ids.whereType<int>().toList();
-        msg.savedFeedback = feedback;
-        if (anomalyNote != null) _msgs.add(_InfoMsg(anomalyNote));
-      });
+      // 账已经写进库了：卡片状态回填/落库无条件执行，unmount 只跳过 UI。
+      msg.saved = true;
+      msg.txnIds = ids;
+      msg.savedIds = ids.whereType<int>().toList();
+      msg.savedFeedback = feedback;
+      if (anomalyNote != null) _msgs.add(_InfoMsg(anomalyNote));
+      if (mounted) {
+        Haptics.of(Haptic.success);
+        setState(() {});
+      }
       if (anomalyNote != null) {
         await _addChatMessage(repo, role: 'info', text: anomalyNote);
       }
-      await _persistRecord(msg);
+      await _persistRecord(msg, repository: repo);
     } catch (error) {
       if (mounted) _snack('保存失败：$error');
     } finally {
-      if (mounted) setState(() => msg.saving = false);
+      msg.saving = false;
+      if (mounted) setState(() {});
     }
   }
 
   /// 把一张记账卡持久化到 chat_messages（首次 insert 拿行 id，之后 update），
   /// 供关 App 重开后重建卡片、芯片（改分类/删除）继续可用。只持久化已保存的卡。
-  Future<void> _persistRecord(_RecordMsg msg) async {
+  Future<void> _persistRecord(
+    _RecordMsg msg, {
+    AppRepository? repository,
+  }) async {
     if (!msg.saved) return;
-    final repo = context.read<AppRepository>();
+    final repo = repository ?? context.read<AppRepository>();
     final json = encodeRecordCard(
       entries: msg.entries,
       catIds: [for (final c in msg.cats) c?.id],
@@ -3219,8 +3603,9 @@ ${line('上月同期', lastStart, lastSameDayEnd, lastSameDay)}
       destructive: true,
     );
     if (!ok || !mounted) return;
-    await context.read<AppRepository>().clearChatMessages();
-    if (mounted) setState(clearChatHistoryMemory);
+    final repo = context.read<AppRepository>();
+    await repo.clearChatMessages();
+    if (mounted) setState(() => clearChatHistoryMemory(repo));
   }
 
   // 卡中卡输入框：浅底圆角框 + 工具行。
@@ -3332,15 +3717,25 @@ ${line('上月同期', lastStart, lastSameDayEnd, lastSameDay)}
       return;
     }
     final report = m.report;
-    final job = await repo.createReportJob(
-      question: m.question,
-      type: report.type,
-      title: report.title,
-      periodStart: report.periodStart,
-      periodEnd: report.periodEnd,
-      bookId: report.bookId,
-      reportId: report.id,
-    );
+    late final ReportJobEntity job;
+    try {
+      final baseLease = await repo.acquireReportGenerationLease();
+      job = await repo.guardReportGeneration(
+        baseLease,
+        () => repo.createReportJob(
+          question: m.question,
+          type: report.type,
+          title: report.title,
+          periodStart: report.periodStart,
+          periodEnd: report.periodEnd,
+          bookId: report.bookId,
+          reportId: report.id,
+        ),
+      );
+    } on ReportGenerationInvalidated {
+      _handleInvalidatedReport();
+      return;
+    }
     if (!mounted) return;
     setState(() {
       _msgs.remove(m);
@@ -3351,14 +3746,7 @@ ${line('上月同期', lastStart, lastSameDayEnd, lastSameDay)}
     _scrollToBottom();
     try {
       await _runQuery(m.question, repository: repo, resumeJob: job);
-    } catch (error) {
-      await _setReportJobStage(
-        repo,
-        job,
-        status: 'failed',
-        error: error.toString(),
-      );
-      _releaseReportJob(job);
+    } catch (_) {
       if (!mounted) return;
       setState(() {
         _msgs.removeWhere((msg) => msg is _ThinkingMsg);
@@ -3478,29 +3866,14 @@ class _UserMsg extends _Msg {
 
 class _ThinkingMsg extends _Msg {
   _ThinkingKind kind;
-  int tick;
+  bool canContinueInBackground;
   final DateTime startedAt;
 
-  _ThinkingMsg(this.kind, {DateTime? startedAt})
-      : tick = 0,
+  _ThinkingMsg(
+    this.kind, {
+    DateTime? startedAt,
+  })  : canContinueInBackground = false,
         startedAt = startedAt ?? DateTime.now();
-
-  String get label {
-    final labels = switch (kind) {
-      _ThinkingKind.intent => const ['识别意图', '理解这句话', '判断任务'],
-      _ThinkingKind.recordParse => const ['拆分账单', '提取金额', '识别日期'],
-      _ThinkingKind.recordMatch => const ['匹配分类', '校对账本', '准备结果'],
-      _ThinkingKind.queryCollect => const ['整理账本', '筛选记录', '读取上下文'],
-      _ThinkingKind.queryAnswer => const ['计算金额', '组织回答', '核对结论'],
-      _ThinkingKind.reportCollect => const ['汇总周期', '整理明细', '准备报告'],
-      _ThinkingKind.reportGenerate => const ['分析结构', '生成报告', '打磨建议'],
-      _ThinkingKind.reportFallback => const ['换用简版生成', '保留关键结论', '整理报告'],
-      _ThinkingKind.reportSave => const ['保存文档', '生成报告卡片', '整理摘要'],
-    };
-    return labels[tick % labels.length];
-  }
-
-  int get elapsedSeconds => DateTime.now().difference(startedAt).inSeconds;
 }
 
 enum _ThinkingKind {
@@ -4020,51 +4393,21 @@ class _ThinkingBubble extends StatelessWidget {
     return Padding(
       padding: const EdgeInsets.only(bottom: 10),
       child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
         children: [
-          SizedBox(
-            width: 46,
-            child: Transform.translate(
-              offset: const Offset(-6, 0),
-              child: const Mascot(
-                mood: MascotMood.thinking,
-                size: 56,
-                animate: true,
-              ),
-            ),
-          ),
-          const SizedBox(width: 2),
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text(
-                msg.label,
-                style: TextStyle(
-                  color: scheme.onSurfaceVariant,
-                  fontSize: 14,
-                  fontWeight: FontWeight.w400,
-                ),
-              ),
-              if (msg.elapsedSeconds >= 8)
-                Padding(
-                  padding: const EdgeInsets.only(top: 2),
-                  child: Text(
-                    '${msg.elapsedSeconds} 秒',
-                    style: TextStyle(
-                      color: scheme.onSurfaceVariant.withValues(alpha: 0.62),
-                      fontSize: 11,
-                    ),
-                  ),
-                ),
-            ],
+          const Mascot(
+            mood: MascotMood.thinking,
+            size: 32,
+            animate: true,
           ),
           const SizedBox(width: 8),
-          SizedBox(
-            width: 13,
-            height: 13,
-            child: CircularProgressIndicator(
-              strokeWidth: 1.8,
-              color: scheme.primary,
+          Flexible(
+            child: Text(
+              aiThinkingStatusText(
+                elapsed: DateTime.now().difference(msg.startedAt),
+                canContinueInBackground: msg.canContinueInBackground,
+              ),
+              style: AppType.secondary(scheme),
             ),
           ),
         ],
@@ -4124,13 +4467,13 @@ class _ClaudeActionButton extends StatelessWidget {
           behavior: HitTestBehavior.opaque,
           onTap: onTap,
           child: SizedBox(
-            width: 36,
-            height: 36,
+            width: kAiResponseActionTouchExtent,
+            height: kAiResponseActionTouchExtent,
             child: Center(
               child: SvgPicture.string(
                 svg,
-                width: 21.5,
-                height: 21.5,
+                width: kAiResponseActionIconExtent,
+                height: kAiResponseActionIconExtent,
                 colorFilter: ColorFilter.mode(color, BlendMode.srcIn),
               ),
             ),
@@ -4165,6 +4508,7 @@ class _AnswerBubble extends StatefulWidget {
 
 class _AnswerBubbleState extends State<_AnswerBubble> {
   int _shown = 0;
+  late final int _graphemeCount;
   bool _liked = false;
   bool _disliked = false;
   Timer? _timer;
@@ -4172,8 +4516,9 @@ class _AnswerBubbleState extends State<_AnswerBubble> {
   @override
   void initState() {
     super.initState();
+    _graphemeCount = aiTypewriterLength(widget.text);
     if (!widget.animate) {
-      _shown = widget.text.length;
+      _shown = _graphemeCount;
       return;
     }
     _timer = Timer.periodic(const Duration(milliseconds: 28), (t) {
@@ -4181,13 +4526,13 @@ class _AnswerBubbleState extends State<_AnswerBubble> {
         t.cancel();
         return;
       }
-      if (_shown >= widget.text.length) {
+      if (_shown >= _graphemeCount) {
         t.cancel();
         widget.onShown?.call();
         return;
       }
       setState(() {
-        _shown = (_shown + 2).clamp(0, widget.text.length);
+        _shown = (_shown + 2).clamp(0, _graphemeCount);
       });
     });
   }
@@ -4317,8 +4662,8 @@ class _AnswerBubbleState extends State<_AnswerBubble> {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final shownText = widget.text.substring(0, _shown);
-    final done = _shown >= widget.text.length;
+    final shownText = aiTypewriterPrefix(widget.text, _shown);
+    final done = _shown >= _graphemeCount;
     // Claude-like answer typography: soft body text and restrained emphasis.
     final baseStyle = TextStyle(
       fontSize: 15.5,

@@ -66,6 +66,49 @@ void main() {
     expect(result.cycle!.endExclusive, DateTime(2026, 7, 6));
   });
 
+  test('cycle math stays on civil days regardless of time of day', () {
+    // 周期天数/边界一律走日历日算术（不依赖 Duration 24 小时），
+    // 传入带时刻的日期也要归一到当天。
+    final result = _day(DateTime(2026, 7, 15, 23, 30));
+    final cycle = result.cycle!;
+    expect(cycle.startInclusive, DateTime(2026, 7, 1));
+    expect(cycle.endInclusive, DateTime(2026, 7, 31));
+    expect(cycle.dayCount, 31);
+  });
+
+  test('one-off special plan cycle spans inclusive civil days', () {
+    final plan = BudgetPlan(
+      id: 1,
+      uuid: 'special',
+      bookId: 1,
+      timezone: 'Asia/Shanghai',
+      name: '旅行专项',
+      role: 'special',
+      cadence: BudgetPlanCadence.oneOff,
+      anchorStart: DateTime(2026, 9, 28),
+      endInclusive: DateTime(2026, 10, 4),
+      expenseScope: BudgetExpenseScopeV2(categoryKeys: ['travel']),
+    );
+    final cycle = plan.cycleFor(DateTime(2026, 10, 1));
+    expect(cycle.startInclusive, DateTime(2026, 9, 28));
+    expect(cycle.endExclusive, DateTime(2026, 10, 5));
+    expect(cycle.dayCount, 7);
+  });
+
+  test('resolveWindow conserves the monthly total across calendar days', () {
+    final window = BudgetPlanV2Resolver.resolveWindow(
+      startInclusive: DateTime(2026, 7, 1),
+      endExclusive: DateTime(2026, 8, 1),
+      bookId: 1,
+      knowledgeCutoff: DateTime(9999, 12, 31),
+      plans: [_monthly()],
+      revisions: [_revision(DateTime(2026, 1, 1), 300000)],
+      overrides: const [],
+    );
+    expect(window.status, BudgetPlanDayStatusV2.available);
+    expect(window.plannedCents, 300000);
+  });
+
   test('revision changes only at a full cycle boundary', () {
     final revisions = [
       BudgetPlanRevision(

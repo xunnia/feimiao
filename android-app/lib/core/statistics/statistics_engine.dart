@@ -137,7 +137,7 @@ class RangeSummary {
 
   Decimal get balance => totalIncome - totalExpense;
 
-  int get dayCount => end.difference(start).inDays + 1;
+  int get dayCount => _calendarDaysBetween(start, end) + 1;
 }
 
 /// 年度统计结果（消费年报的数据基础）。
@@ -201,18 +201,21 @@ class StatisticsEngine {
     TransactionRecord record,
   ) {
     final category = _expenseCategory(record);
+    // 笔数只认净额为正的家族（口径标准 §7.1）：全额退款家族净额是 0，
+    // 一分钱不贡献，就不该占一笔；legacy 负支出冲账行同理。金额照原样累加。
+    final countsAsFamily = record.countsAsExpenseFamily ? 1 : 0;
     final bucket = totals[category.identity];
     if (bucket == null) {
       totals[category.identity] = _CategoryBucket(
         key: category.key,
         name: category.name,
         total: record.amount,
-        count: 1,
+        count: countsAsFamily,
       );
       return;
     }
     bucket.total += record.amount;
-    bucket.count += 1;
+    bucket.count += countsAsFamily;
   }
 
   static List<CategoryTotal> _buildCategoryTotals(
@@ -346,7 +349,7 @@ class StatisticsEngine {
       s = e;
       e = tmp;
     }
-    final endExclusive = e.add(const Duration(days: 1));
+    final endExclusive = _addCalendarDays(e, 1);
 
     var totalExpense = Decimal.zero;
     var totalIncome = Decimal.zero;
@@ -359,7 +362,7 @@ class StatisticsEngine {
       if (record.kind == TransactionKind.transfer) continue;
       final d = DateTime(record.date.year, record.date.month, record.date.day);
       if (d.isBefore(s) || !d.isBefore(endExclusive)) continue;
-      final idx = d.difference(s).inDays;
+      final idx = _calendarDaysBetween(s, d);
 
       switch (record.kind) {
         case TransactionKind.expense:
@@ -376,10 +379,10 @@ class StatisticsEngine {
 
     final byCategory = _buildCategoryTotals(categoryTotals, totalExpense);
 
-    final dayCount = endExclusive.difference(s).inDays;
+    final dayCount = _calendarDaysBetween(s, endExclusive);
     final daily = List.generate(dayCount, (i) {
       return DateTotal(
-        date: s.add(Duration(days: i)),
+        date: _addCalendarDays(s, i),
         expense: dayExpense[i] ?? Decimal.zero,
         income: dayIncome[i] ?? Decimal.zero,
       );
@@ -401,3 +404,17 @@ class StatisticsEngine {
     return DateTime(year, month + 1, 0).day;
   }
 }
+
+/// 日历日差值。不能用本地 DateTime 的 difference：有夏令时的时区里
+/// 「差 23/25 小时」的两天 inDays 会算成 0 或 2 天。统一先归一到
+/// UTC（无夏令时）再求差，天数精确。
+int _calendarDaysBetween(DateTime from, DateTime to) =>
+    DateTime.utc(to.year, to.month, to.day)
+        .difference(DateTime.utc(from.year, from.month, from.day))
+        .inDays;
+
+/// 日历日加减。不能用 add(Duration(days:))：夏令时切换日只有 23/25
+/// 小时，加 24 小时会落到前/后一天的 23:00/01:00。用构造器让 Dart
+/// 自动进位归一化，结果永远是目标日历日的 0 点。
+DateTime _addCalendarDays(DateTime value, int days) =>
+    DateTime(value.year, value.month, value.day + days);

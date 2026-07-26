@@ -2,18 +2,29 @@ name: Android CI
 
 on:
   push:
-    branches: [claude/new-session-4kh1ll, claude/hopeful-wozniak-pr2ne3, main]
+    branches:
+      - "claude/**"
+      - "codex/**"
+      - main
+    paths:
+      - "android-app/**"
+      - ".github/workflows/android-ci.yml"
+  pull_request:
     paths:
       - "android-app/**"
       - ".github/workflows/android-ci.yml"
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
+
+concurrency:
+  group: android-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build-apk:
-    name: 构建安卓 APK
+    name: Validate and build Android APK
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -27,59 +38,54 @@ jobs:
         with:
           channel: stable
 
-      - name: 生成 android/ 脚手架（不覆盖 lib/ 与 pubspec）
+      - name: Prepare Android scaffold and plugin compileSdk compatibility
         run: |
-          # 在临时目录生成标准 Flutter 工程，只把 android/ 与 .metadata 拷回，
-          # 保证我们手写的 lib/、pubspec.yaml 是唯一权威来源。
           flutter create --platforms=android --org com.qingji --project-name qingji /tmp/scaffold
           if [ ! -d android-app/android ]; then
             cp -r /tmp/scaffold/android android-app/android
           fi
           [ -f android-app/.metadata ] || cp /tmp/scaffold/.metadata android-app/.metadata
-          # release 包默认不带联网权限（只有 debug 自动带），手动注入，否则 DeepSeek 等网络请求全失败
+
           MANIFEST=android-app/android/app/src/main/AndroidManifest.xml
           grep -q 'android.permission.INTERNET' "$MANIFEST" || \
             sed -i '/<manifest/a\    <uses-permission android:name="android.permission.INTERNET"/>' "$MANIFEST"
-          grep permission "$MANIFEST"
-          # 部分插件（file_picker/image_picker 依赖的 flutter_plugin_android_lifecycle）
-          # 要求 compileSdk≥36，且插件模块不继承 app 的 compileSdk。
-          # 用 Gradle init 脚本统一把所有模块的 compileSdk 提到 36。
+
+          # The app pins compileSdk in build.gradle.kts. This init script only
+          # raises Flutter plugin subprojects that still declare an older SDK.
           mkdir -p "$HOME/.gradle/init.d"
           cp android-app/ci/compileSdk36.init.gradle "$HOME/.gradle/init.d/compileSdk36.gradle"
-          echo ">> installed compileSdk36 init script"
 
-      - name: 拉取依赖
+      - name: Resolve dependencies
         working-directory: android-app
         run: flutter pub get
 
-      - name: 生成桌面图标（各分辨率 mipmap）
+      - name: Validate release tooling
+        working-directory: android-app
+        run: |
+          bash -n ci/publish_update.sh
+          bash -n ci/verify_release_apk.sh
+          node --test ci/release_gate.test.mjs
+
+      - name: Generate launcher icons
         working-directory: android-app
         run: |
           dart run flutter_launcher_icons
-          # app_icon.png 是「完整成品图标」(内容铺满+自带圆角)，不适合 Android 自适应图标
-          # (自适应会裁掉约 16% 边缘 / 放大)。删掉自适应 XML，强制用传统图标：
-          # 整张图直接显示，由桌面统一做圆角遮罩，不再被裁切。
           rm -f android/app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml
           rm -f android/app/src/main/res/mipmap-anydpi-v26/ic_launcher_round.xml
-          echo ">> 已移除自适应图标 XML，强制传统图标"
 
-      - name: 静态分析（error 阻断，warning/info 放行）
-        # 别再让编译错漏到打 APK 才炸：单元测试只编译它引用的文件，
-        # 没被测试覆盖的页面里的错误只有 analyze 能提前拦住。
+      - name: Analyze
         working-directory: android-app
         run: flutter analyze --no-fatal-infos --no-fatal-warnings
 
-      - name: 跑单元测试（移植正确性的硬性闸门）
+      - name: Test
         working-directory: android-app
         run: |
-          # repo 层测试用 sqflite_common_ffi 跑真 SQLite，需要系统 libsqlite3。
           sudo apt-get install -y libsqlite3-dev \
             || (sudo apt-get update && sudo apt-get install -y libsqlite3-dev)
           flutter test
 
-      - name: 注入固定 release 签名（有 Secret 才签，否则回落 debug）
-        # 不写死钥匙到仓库：从 GitHub Secrets 解出 keystore + 生成 key.properties，
-        # 让 CI 用和本地同一把 release 钥匙签名，这样每次下载的包都能直接覆盖更新、不用卸载。
+      - name: Configure fixed release signing
+        if: github.event_name == 'push' && github.ref == 'refs/heads/codex/feimiao-p0-fixes'
         working-directory: android-app
         env:
           KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
@@ -87,51 +93,117 @@ jobs:
           KEY_PW: ${{ secrets.ANDROID_KEY_PASSWORD }}
           KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
         run: |
-          if [ -n "$KEYSTORE_B64" ]; then
-            echo "$KEYSTORE_B64" | base64 -d > android/app/upload-keystore.jks
-            cat > android/key.properties <<EOF
-          storePassword=$STORE_PW
-          keyPassword=$KEY_PW
-          keyAlias=$KEY_ALIAS
-          storeFile=upload-keystore.jks
-          EOF
-            echo ">> 已配置固定 release 签名"
-          else
-            echo ">> 未提供 keystore Secret，回落到 debug 签名（每次签名会变）"
-          fi
+          missing=0
+          for variable in KEYSTORE_B64 STORE_PW KEY_PW KEY_ALIAS; do
+            if [ -z "${!variable:-}" ]; then
+              echo "::error::Required release-signing secret is missing: $variable"
+              missing=1
+            fi
+          done
+          [ "$missing" -eq 0 ] || exit 1
 
-      - name: 构建 release APK（瘦身，可直接安装）
-        # 有 key.properties 时用固定 release 钥匙签名；否则回落 debug（仅用于无 Secret 的环境）。
+          umask 077
+          printf '%s' "$KEYSTORE_B64" | base64 --decode > android/app/upload-keystore.jks
+          {
+            printf 'storePassword=%s\n' "$STORE_PW"
+            printf 'keyPassword=%s\n' "$KEY_PW"
+            printf 'keyAlias=%s\n' "$KEY_ALIAS"
+            printf 'storeFile=upload-keystore.jks\n'
+          } > android/key.properties
+
+          keytool -list \
+            -keystore android/app/upload-keystore.jks \
+            -storepass "$STORE_PW" \
+            -alias "$KEY_ALIAS" > /dev/null
+
+      - name: Build release APK
         working-directory: android-app
         run: flutter build apk --release
 
-      - name: 收集 APK
+      - name: Verify release identity
+        if: github.event_name == 'push' && github.ref == 'refs/heads/codex/feimiao-p0-fixes'
+        working-directory: android-app
+        env:
+          VERSION_URL: https://updates.xunni9481.dpdns.org/version.json
+        run: |
+          APK=build/app/outputs/flutter-apk/app-release.apk
+          bash ci/verify_release_apk.sh "$APK"
+
+          PUBSPEC_VERSION=$(awk '/^version:[[:space:]]*/ { print $2; exit }' pubspec.yaml)
+          VERSION_NAME=${PUBSPEC_VERSION%+*}
+          VERSION_CODE=${PUBSPEC_VERSION##*+}
+          SHA256=$(sha256sum < "$APK" | awk '{print $1}')
+          RELEASE_ID="v${VERSION_CODE}-${SHA256:0:12}"
+
+          VERSION_NAME="$VERSION_NAME" \
+          VERSION_CODE="$VERSION_CODE" \
+          SHA256="$SHA256" \
+          RELEASE_ID="$RELEASE_ID" \
+          node - <<'NODE' > build/release-candidate.json
+          const candidate = {
+            versionName: process.env.VERSION_NAME,
+            versionCode: Number(process.env.VERSION_CODE),
+            sha256: process.env.SHA256,
+            releaseId: process.env.RELEASE_ID,
+          };
+          process.stdout.write(JSON.stringify(candidate, null, 2));
+          NODE
+
+          curl --fail --silent --show-error --location --max-time 30 \
+            "$VERSION_URL" -o build/release-current.json
+
+          DECISION=$(node ci/release_gate.mjs \
+            --candidate build/release-candidate.json \
+            --current build/release-current.json \
+            --candidate-apk "$APK")
+          printf 'release gate decision: %s\n' "$DECISION"
+
+      - name: Collect release APK
+        if: github.event_name == 'push' && github.ref == 'refs/heads/codex/feimiao-p0-fixes'
         run: |
           SRC=android-app/build/app/outputs/flutter-apk/app-release.apk
-          ls -lh "$SRC"
-          cp "$SRC" 肥喵记账.apk
+          test -f "$SRC"
+          cp "$SRC" "肥喵记账.apk"
+          ls -lh "肥喵记账.apk"
 
-      - uses: actions/upload-artifact@v4
+      - name: Upload verified APK artifact
+        if: github.event_name == 'push' && github.ref == 'refs/heads/codex/feimiao-p0-fixes'
+        uses: actions/upload-artifact@v4
         with:
           name: feimiao-apk
           path: 肥喵记账.apk
+          if-no-files-found: error
 
-      # 老命名的 qingji.apk 资产删掉，Release 页只留一个正确命名的包
-      - name: 清理旧命名资产
-        if: github.event_name == 'push'
+  publish-github-release:
+    name: Publish verified GitHub release
+    if: github.event_name == 'push' && github.ref == 'refs/heads/codex/feimiao-p0-fixes'
+    needs: build-apk
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: feimiao-apk
+          path: release
+
+      - name: Check downloaded artifact
+        run: test -s "release/肥喵记账.apk"
+
+      - name: Remove obsolete release asset
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
         run: gh release delete-asset android-latest qingji.apk -y || true
 
-      # 传到固定 tag 的 GitHub Release，给用户一个稳定下载链接（不污染 git 历史）
-      - name: 发布到 GitHub Release
-        if: github.event_name == 'push'
+      - name: Publish GitHub release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: android-latest
           name: 肥喵记账 安卓测试版（最新）
           prerelease: true
-          files: 肥喵记账.apk
+          overwrite_files: true
+          files: release/肥喵记账.apk
           body: |
-            肥喵记账安卓测试版，每次代码更新自动重新构建。
-            手机浏览器直接下载 肥喵记账.apk 安装即可（需在系统里允许「安装未知来源应用」）。
+            肥喵记账安卓测试版。每次受保护分支更新后自动验证、构建并替换此安装包。
+            手机浏览器直接下载“肥喵记账.apk”安装即可。

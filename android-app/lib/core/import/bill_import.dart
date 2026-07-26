@@ -234,8 +234,10 @@ class _ColumnMap {
       counterparty: _find(header, ['交易对方', '对方', '商户']),
       product: _find(header, ['商品', '摘要']),
       note: _find(header, ['备注', '说明'], avoid: ['商品']),
-      // 商户订单号优先（退款与原单一致）；交易订单号退款带后缀，不能用来配对。
-      order: _findFirst(header, ['商户订单号', '交易订单号', '订单号']),
+      // 商户号优先（退款与原单一致）；交易号退款常带后缀，不能用来配对。
+      // 微信表头叫「商户单号/交易单号」（不含「订」字），也要能匹配上。
+      order: _findFirst(
+          header, ['商户订单号', '商户单号', '交易订单号', '交易单号', '订单号']),
     );
   }
 
@@ -251,15 +253,42 @@ class _ColumnMap {
     final party = _at(row, counterparty).trim();
     final prod = _at(row, product).trim();
     final noteText = _at(row, note).trim();
-    final orderNo = _at(row, order).trim();
+    // 「/」是占位符（无单号），不能当真实单号：否则占位行之间会互相
+    // 「精确配对」，退款被挂到不相干的原单上。
+    final orderNoRaw = _at(row, order).trim();
+    final orderNo = orderNoRaw == '/' ? '' : orderNoRaw;
 
     // 退款行：支付宝把它标「不计收支」，但要挂回原单让净额归零，不能直接跳过。
     // 识别：交易分类/商品/备注/对方含退款信号。
     final refundText = '$cat $prod $noteText $party';
-    final isRefund = refundText.contains('退款') ||
+    final hasRefundWord = refundText.contains('退款') ||
         refundText.contains('退回') ||
         refundText.contains('退货') ||
         refundText.toLowerCase().contains('refund');
+    // 收/支列（或类型列）明确标「支出」的行是真实消费：像「退货运费险」
+    // 保费、商品名带「支持7天退货」的正常购物行都带退款字样，误判成退款
+    // 会导致丢行或错误冲减原单（真退款行是「不计收支」或「收入」）。
+    final dirText = '${_at(row, direction)} ${_at(row, kindType)}';
+    final explicitlyExpense = dirText.contains('支') && !dirText.contains('不计');
+    // 明确标「收入」的行要更谨慎：朋友转账还钱备注「房租退款」是真实收入，
+    // 误判成退款会把收入错挂成原单冲减。只认**平台写的**强信号——分类列/
+    // 类型列标退款、或商品列带退款且不是「转账备注:xx」这类用户自由文本；
+    // 备注列和对方名是用户可写的，不作数。「不计收支」行维持宽松判定。
+    final explicitlyIncome = !explicitlyExpense &&
+        dirText.contains('收') &&
+        !dirText.contains('不计');
+    final kindTypeText = _at(row, kindType).trim();
+    bool refundWordIn(String s) =>
+        s.contains('退款') ||
+        s.contains('退回') ||
+        s.contains('退货') ||
+        s.toLowerCase().contains('refund');
+    final platformRefundSignal = refundWordIn(cat) ||
+        refundWordIn(kindTypeText) ||
+        (refundWordIn(prod) && !prod.contains('转账备注'));
+    final isRefund = hasRefundWord &&
+        !explicitlyExpense &&
+        (!explicitlyIncome || platformRefundSignal);
 
     // 非退款行照常判方向；「不计收支/中性」（提现/还款/失败交易）→ 跳过。
     final kind = isRefund ? TransactionKind.expense : _resolveKind(row, amt);

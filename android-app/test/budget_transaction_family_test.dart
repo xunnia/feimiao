@@ -108,6 +108,44 @@ void main() {
       expect(projected.value!.expenseCount, 0);
     });
 
+    test('retains a legacy standalone negative row and nets budget spend', () {
+      // 遗留独立冲账行：正支出 100 元 + 无 refundOfId 的负行 -30 元。
+      // 预算口径已用应为 70 元，与统计口径（原始行求和）一致。
+      final families = BudgetTransactionFamilyAdapter.build([
+        _root(),
+        _root(id: 'legacy-neg-1', amountMinor: -3000),
+      ]);
+
+      expect(families, hasLength(2));
+      final legacy =
+          families.singleWhere((family) => family.id == 'legacy-neg-1');
+      expect(legacy.originalAmountMinor, -3000);
+      expect(legacy.refunds, isEmpty);
+      expect(legacy.categoryAllocations, isEmpty);
+
+      final projected = ConsumptionProjection.resolve(
+        query: _query(knowledgeCutoff: _at(7, 13)),
+        expenseFamilies: families,
+      );
+      expect(projected.value!.budgetExpenseMinor, 7000);
+      // 冲账行不是订单，不参与订单/笔数统计。
+      expect(projected.value!.purchaseOrderCount, 1);
+      expect(projected.value!.expenseCount, 1);
+    });
+
+    test('clamps budget spend to zero when only negative rows remain', () {
+      final families = BudgetTransactionFamilyAdapter.build([
+        _root(id: 'legacy-neg-only', amountMinor: -3000),
+      ]);
+
+      final projected = ConsumptionProjection.resolve(
+        query: _query(knowledgeCutoff: _at(7, 13)),
+        expenseFamilies: families,
+      );
+      expect(projected.value!.budgetExpenseMinor, 0);
+      expect(projected.value!.purchaseOrderCount, 0);
+    });
+
     test('knowledge cutoff sees gross before refund and net after it', () {
       final families = BudgetTransactionFamilyAdapter.build([
         _root(),

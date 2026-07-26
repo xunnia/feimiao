@@ -39,9 +39,21 @@ class QueryRange {
       return QueryRange(first, DateTime(now.year, now.month, 0));
     }
     if (q.contains('今年')) {
+      // 「今年3月」是问那个月，不是问整年——整年分支抢先会让 AI
+      // 拿全年合计当单月答案报出来。
+      final month = _explicitMonth(q);
+      if (month != null) {
+        return QueryRange(
+            DateTime(now.year, month, 1), DateTime(now.year, month + 1, 0));
+      }
       return QueryRange(DateTime(now.year, 1, 1), today);
     }
     if (q.contains('去年')) {
+      final month = _explicitMonth(q);
+      if (month != null) {
+        final y = now.year - 1;
+        return QueryRange(DateTime(y, month, 1), DateTime(y, month + 1, 0));
+      }
       return QueryRange(DateTime(now.year - 1, 1, 1),
           DateTime(now.year - 1, 12, 31));
     }
@@ -67,6 +79,23 @@ class QueryRange {
       }
     }
     return null;
+  }
+
+  /// 问题里明确写出的**唯一**月份（「3月」「五月」），没有则 null。
+  /// 出现多个月份（「1月到6月」「3月和5月对比」）或月份区间连接词时也返回
+  /// null——收窄成单月会算错，让调用方走整年分支（超集喂数，答案仍正确）。
+  static int? _explicitMonth(String q) {
+    final re = RegExp(r'(\d{1,2}|[一二三四五六七八九十]{1,2})\s*月(?!份?底|初)');
+    final matches = re.allMatches(q).toList();
+    if (matches.length != 1) return null;
+    // 「1到6月」「1-6月」这类只有一个「月」字的区间写法：认连接词。
+    final rangeLike = RegExp(
+        r'(\d{1,2}|[一二三四五六七八九十]{1,2})\s*月?\s*(?:到|至|~|～|—|－|-|和|与|跟)'
+        r'\s*(\d{1,2}|[一二三四五六七八九十]{1,2})\s*月');
+    if (rangeLike.hasMatch(q)) return null;
+    final g = matches.first.group(1)!;
+    final month = int.tryParse(g) ?? _cnDigits[g] ?? 0;
+    return (month >= 1 && month <= 12) ? month : null;
   }
 
   /// [d] 是否落在范围内（忽略时间部分）。

@@ -1413,7 +1413,9 @@ class _BudgetPlanV2SheetState extends State<_BudgetPlanV2Sheet> {
   BudgetPlanCadenceV2 _cadence = BudgetPlanCadenceV2.monthly;
   int _weekStart = DateTime.monday;
   int? _bookId;
-  bool _startNextCycle = true;
+  // 新用户第一次打开预算时，默认让预算立即作用于本周期；下周期是
+  // 明确的进阶选择，不能因为默认值让用户误以为“预算没生效”。
+  bool _startNextCycle = false;
   bool _initialized = false;
   bool _saving = false;
   String? _error;
@@ -1687,6 +1689,7 @@ class _BudgetPlanV2SheetState extends State<_BudgetPlanV2Sheet> {
                   ),
                   const SizedBox(height: 10),
                   SlidingSegment<bool>(
+                    key: const ValueKey('budget-start-cycle-segment'),
                     items: const [(true, '下周期生效'), (false, '本周期生效')],
                     value: _startNextCycle,
                     onChanged: (value) =>
@@ -1727,6 +1730,7 @@ class _BudgetPlanV2SheetState extends State<_BudgetPlanV2Sheet> {
                     controller: _totalController,
                     keyboardType:
                         const TextInputType.numberWithOptions(decimal: true),
+                    inputFormatters: moneyInputFormatters(),
                     decoration: iosInputDecoration(context, hint: '0.00'),
                   ),
                 ),
@@ -1746,6 +1750,7 @@ class _BudgetPlanV2SheetState extends State<_BudgetPlanV2Sheet> {
                       controller: _incomeController,
                       keyboardType:
                           const TextInputType.numberWithOptions(decimal: true),
+                      inputFormatters: moneyInputFormatters(),
                       decoration: iosInputDecoration(context, hint: '用于回显和建议'),
                     ),
                   ),
@@ -1768,6 +1773,7 @@ class _BudgetPlanV2SheetState extends State<_BudgetPlanV2Sheet> {
                                   keyboardType:
                                       const TextInputType.numberWithOptions(
                                           decimal: true),
+                                  inputFormatters: moneyInputFormatters(),
                                   decoration:
                                       iosInputDecoration(context, hint: '0.00'),
                                 ),
@@ -1873,6 +1879,7 @@ class _FixedTemplateEditor extends StatelessWidget {
                           controller: draft.amount,
                           keyboardType: const TextInputType.numberWithOptions(
                               decimal: true),
+                          inputFormatters: moneyInputFormatters(),
                           decoration: iosInputDecoration(context, hint: '金额'),
                         ),
                       ),
@@ -2431,6 +2438,7 @@ class _BudgetSheetState extends State<_BudgetSheet> {
                           controller: _totalCtrl,
                           keyboardType: const TextInputType.numberWithOptions(
                               decimal: true),
+                          inputFormatters: moneyInputFormatters(),
                           onChanged: (_) => setState(() {}),
                           decoration: iosInputDecoration(context,
                               hint: '如 4000', prefix: '¥ '),
@@ -2489,6 +2497,7 @@ class _BudgetSheetState extends State<_BudgetSheet> {
                             controller: _incomeCtrl,
                             keyboardType: const TextInputType.numberWithOptions(
                                 decimal: true),
+                            inputFormatters: moneyInputFormatters(),
                             decoration: iosInputDecoration(context,
                                 hint: '不填就按近 3 个月平均支出算', prefix: '¥ '),
                           ),
@@ -2580,6 +2589,7 @@ class _BudgetSheetState extends State<_BudgetSheet> {
                             controller: _catCtrl(c.key),
                             keyboardType: const TextInputType.numberWithOptions(
                                 decimal: true),
+                            inputFormatters: moneyInputFormatters(),
                             textAlign: TextAlign.end,
                             onChanged: (_) => setState(() {}),
                             decoration: iosInputDecoration(context,

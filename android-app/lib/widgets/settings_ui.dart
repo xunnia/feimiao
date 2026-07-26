@@ -15,7 +15,13 @@ import 'pressable_scale.dart';
 class AppSwitch extends StatelessWidget {
   final bool value;
   final ValueChanged<bool>? onChanged;
-  const AppSwitch({super.key, required this.value, required this.onChanged});
+  final String? semanticLabel;
+  const AppSwitch({
+    super.key,
+    required this.value,
+    required this.onChanged,
+    this.semanticLabel,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -28,38 +34,54 @@ class AppSwitch extends StatelessWidget {
             : const Color(0xFF111111))
         : scheme.onSurface.withValues(alpha: dark ? 0.28 : 0.16);
     final thumbColor = value && dark ? const Color(0xFF1C1A18) : Colors.white;
-    return Opacity(
-      opacity: enabled ? 1 : 0.45,
-      child: PressableScale(
-        pressedScale: 0.96,
-        onPressed: enabled ? () => onChanged!(!value) : null,
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 180),
-          curve: Curves.easeOutCubic,
-          width: 40,
-          height: 24,
-          padding: const EdgeInsets.all(2.5),
-          decoration: BoxDecoration(
-            color: trackColor,
-            borderRadius: BorderRadius.circular(999),
-          ),
-          child: AnimatedAlign(
-            duration: const Duration(milliseconds: 180),
-            curve: Curves.easeOutCubic,
-            alignment: value ? Alignment.centerRight : Alignment.centerLeft,
-            child: Container(
-              width: 19,
-              height: 19,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                color: thumbColor,
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withValues(alpha: 0.14),
-                    blurRadius: 4,
-                    offset: const Offset(0, 1),
+    void toggle() => onChanged!(!value);
+    return Semantics(
+      label: semanticLabel,
+      toggled: value,
+      enabled: enabled,
+      onTap: enabled ? toggle : null,
+      child: ExcludeSemantics(
+        child: Opacity(
+          opacity: enabled ? 1 : 0.45,
+          child: PressableScale(
+            pressedScale: 0.96,
+            onPressed: enabled ? toggle : null,
+            child: SizedBox(
+              width: 48,
+              height: 48,
+              child: Center(
+                child: AnimatedContainer(
+                  duration: const Duration(milliseconds: 180),
+                  curve: Curves.easeOutCubic,
+                  width: 40,
+                  height: 24,
+                  padding: const EdgeInsets.all(2.5),
+                  decoration: BoxDecoration(
+                    color: trackColor,
+                    borderRadius: BorderRadius.circular(999),
                   ),
-                ],
+                  child: AnimatedAlign(
+                    duration: const Duration(milliseconds: 180),
+                    curve: Curves.easeOutCubic,
+                    alignment:
+                        value ? Alignment.centerRight : Alignment.centerLeft,
+                    child: Container(
+                      width: 19,
+                      height: 19,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: thumbColor,
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withValues(alpha: 0.14),
+                            blurRadius: 4,
+                            offset: const Offset(0, 1),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
               ),
             ),
           ),
@@ -226,10 +248,13 @@ class SettingsRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    return InkWell(
+    final content = InkWell(
       onTap: onTap,
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 13),
+        padding: EdgeInsets.symmetric(
+          horizontal: 16,
+          vertical: trailing is AppSwitch ? 4 : 13,
+        ),
         child: Row(
           children: [
             if (leading != null) ...[
@@ -266,6 +291,7 @@ class SettingsRow extends StatelessWidget {
         ),
       ),
     );
+    return trailing is AppSwitch ? MergeSemantics(child: content) : content;
   }
 }
 

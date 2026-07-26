@@ -7,6 +7,7 @@ import '../core/haptics.dart';
 import '../core/models/transaction_kind.dart';
 import '../data/app_repository.dart';
 import '../views/transactions/edit_transaction_sheet.dart';
+import 'app_toast.dart';
 import 'refund_settlement_sheet.dart';
 import 'slidable_tracker.dart';
 
@@ -105,9 +106,19 @@ class _TransactionSlidableState extends State<TransactionSlidable> {
       behavior: HitTestBehavior.opaque,
       onTap: () async {
         Haptics.of(Haptic.warning);
-        await context
-            .read<AppRepository>()
-            .deleteTransaction(widget.transaction.id);
+        try {
+          await context
+              .read<AppRepository>()
+              .deleteTransaction(widget.transaction.id);
+        } on StateError catch (e) {
+          // 仓储层的保护性拦截（如「这笔退款已经用于确认物品退货…」）
+          // 要说给用户听，不能静默吞掉让删除看起来没反应。
+          if (!mounted) return;
+          showAppToast(context, e.message, icon: Icons.error_outline);
+        } catch (_) {
+          if (!mounted) return;
+          showAppToast(context, '删除失败，请重试', icon: Icons.error_outline);
+        }
       },
       child: Container(
         color: _kDelete,

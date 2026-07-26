@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../../core/ai/ai_provider_config.dart';
 import '../../data/app_repository.dart';
 import '../../widgets/ios_dialogs.dart';
 
@@ -9,7 +10,14 @@ import '../../widgets/ios_dialogs.dart';
 Future<bool> ensureAiPrivacyConsent(BuildContext context) async {
   final repo = context.read<AppRepository>();
   if (repo.aiPrivacyAccepted) return true;
-  final providerName = repo.aiProviderConfig.providerLabel;
+  // 同意一次对所有路由生效，所以文案要列出所有已配置路由（记账/喵助手/报告）
+  // 的服务商，不能只写记账那一路。
+  final providerNames = <String>[];
+  for (final task in AiTaskType.values) {
+    final label = repo.aiProviderConfigFor(task).providerLabel;
+    if (!providerNames.contains(label)) providerNames.add(label);
+  }
+  final providerName = providerNames.join('、');
   final ok = await showConfirmDialog(
     context,
     title: '使用 AI 前请确认',

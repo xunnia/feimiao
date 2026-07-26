@@ -105,6 +105,7 @@ class SavingsGoalsView extends StatelessWidget {
         controller: ctrl,
         autofocus: true,
         keyboardType: const TextInputType.numberWithOptions(decimal: true),
+        inputFormatters: moneyInputFormatters(),
         decoration: iosInputDecoration(context, prefix: '¥ ', hint: '0.00'),
       ),
     );
@@ -254,6 +255,7 @@ class _SavingsGoalEditSheetState extends State<_SavingsGoalEditSheet> {
                         keyboardType: const TextInputType.numberWithOptions(
                           decimal: true,
                         ),
+                        inputFormatters: moneyInputFormatters(),
                         textInputAction: TextInputAction.done,
                         onSubmitted: (_) {
                           if (_valid) _save();

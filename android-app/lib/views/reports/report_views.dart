@@ -1,14 +1,11 @@
-import 'package:decimal/decimal.dart';
 import 'package:flutter/cupertino.dart' show CupertinoIcons;
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../../core/ai/ai_provider_config.dart';
-import '../../core/ai/llm_query.dart';
+import '../../core/ai/report_execution_fence.dart';
+import '../../core/ai/report_generation_service.dart';
 import '../../core/ai/report_job_runtime.dart';
-import '../../core/models/transaction_kind.dart';
-import '../../core/money_format.dart';
-import '../../core/statistics/statistics_engine.dart';
 import '../../data/app_repository.dart';
 import '../../theme/app_colors.dart';
 import '../../widgets/app_buttons.dart';
@@ -18,6 +15,7 @@ import '../../widgets/ios_menu.dart';
 import '../../widgets/pressable_scale.dart';
 import '../../widgets/settings_ui.dart';
 import '../common/app_sheet.dart';
+import '../settings/ai_privacy_consent.dart';
 
 Future<void> showReportLibrarySheet(BuildContext context) {
   return showBlurSheet<void>(
@@ -279,63 +277,69 @@ class _ReportLibrarySheetState extends State<_ReportLibrarySheet> {
       _regeneratingReportIds.remove(report.id);
       return;
     }
+    // 隐私闸门：重新生成同样会把账本上下文发给 AI，必须先同意。
+    final consented = await ensureAiPrivacyConsent(context);
+    if (!consented || !mounted) {
+      if (mounted) showAppToast(context, '未同意 AI 隐私说明，报告不会重新生成');
+      _regeneratingReportIds.remove(report.id);
+      return;
+    }
     ReportJobEntity? job;
+    ReportGenerationLease? lease;
+    String? runtimeKey;
     try {
-      job = await repo.createReportJob(
-        question: '重新生成${report.title}',
-        type: report.type,
-        title: report.title,
-        periodStart: report.periodStart,
-        periodEnd: report.periodEnd,
-        bookId: report.bookId,
-        reportId: report.id,
+      final baseLease = await repo.acquireReportGenerationLease();
+      final createdJob = await repo.guardReportGeneration(
+        baseLease,
+        () => repo.createReportJob(
+          question: '重新生成${report.title}',
+          type: report.type,
+          title: report.title,
+          periodStart: report.periodStart,
+          periodEnd: report.periodEnd,
+          bookId: report.bookId,
+          reportId: report.id,
+        ),
       );
-      if (!ReportJobRuntime.claim(job.id)) {
-        await repo.updateReportJob(
-          job.id,
-          status: 'failed',
-          error: 'duplicate in-process report job',
-        );
+      job = createdJob;
+      lease = baseLease.bind(
+        jobId: createdJob.id,
+        jobUuid: createdJob.uuid,
+      );
+      runtimeKey = lease.runtimeKey;
+      if (!ReportJobRuntime.claim(runtimeKey)) {
         return;
       }
-      await repo.updateReportJob(
-        job.id,
-        status: 'running',
-        stage: 'generate',
-      );
       if (mounted) showAppToast(context, '正在重新生成报告…');
-      final answer = await LlmQuery.askReport(
-        reportTitle: report.title,
-        reportType: report.type,
-        config: aiConfig,
-        transactionsText: _buildReportContext(repo, report),
+      final uiDatabaseGeneration = repo.databaseGeneration;
+      await ReportGenerationService.generate(
+        repo,
+        createdJob,
+        lease: lease,
       );
-      final markdown = _ensureReportMarkdown(report.title, answer);
-      await repo.updateReportContent(
-        report.id,
-        summary: _reportSummaryFromMarkdown(markdown),
-        markdown: markdown,
-      );
-      await repo.updateReportJob(
-        job.id,
-        status: 'completed',
-        stage: 'save',
-        reportId: report.id,
-      );
+      if (repo.databaseGeneration != uiDatabaseGeneration) {
+        throw const ReportGenerationInvalidated();
+      }
       if (mounted) showAppToast(context, '报告已重新生成');
+    } on ReportGenerationInvalidated {
+      if (mounted) showAppToast(context, '数据库已恢复，本次重新生成已取消');
     } catch (error) {
-      if (job != null) {
+      if (job != null && lease != null) {
         try {
-          await repo.updateReportJob(
-            job.id,
-            status: 'failed',
-            error: error.toString(),
+          await repo.guardReportGeneration(
+            lease,
+            () => repo.updateReportJob(
+              job!.id,
+              expectedUuid: job.uuid,
+              status: 'failed',
+              error: error.toString(),
+            ),
           );
         } catch (_) {}
       }
       if (mounted) showAppToast(context, '重新生成失败，稍后再试');
     } finally {
-      if (job != null) ReportJobRuntime.release(job.id);
+      if (runtimeKey != null) ReportJobRuntime.release(runtimeKey);
       _regeneratingReportIds.remove(report.id);
     }
   }
@@ -460,200 +464,6 @@ class ReportReaderView extends StatelessWidget {
       ),
     );
   }
-}
-
-String _ensureReportMarkdown(String title, String answer) {
-  final trimmed = answer.trim();
-  if (trimmed.startsWith('# ')) return trimmed;
-  return '# $title\n\n$trimmed';
-}
-
-String _reportSummaryFromMarkdown(String markdown) {
-  final summaryLines = <String>[];
-  var inLeadSection = false;
-  for (final raw in markdown.split('\n')) {
-    final line = raw.trim();
-    if (RegExp(r'^##\s+(本月一句话|摘要)').hasMatch(line)) {
-      inLeadSection = true;
-      continue;
-    }
-    if (inLeadSection && RegExp(r'^#{1,6}\s+').hasMatch(line)) break;
-    if (!inLeadSection || line.isEmpty || line.startsWith('|')) continue;
-    final cleaned = line
-        .replaceFirst(RegExp(r'^\s*[-*]\s+'), '')
-        .replaceAll('**', '')
-        .trim();
-    if (cleaned.isNotEmpty) summaryLines.add(cleaned);
-  }
-
-  final cleanedLines = summaryLines.isNotEmpty ? summaryLines : <String>[];
-  if (cleanedLines.isEmpty) {
-    for (final raw in markdown.split('\n')) {
-      final line = raw.trim();
-      if (line.isEmpty || line.startsWith('|')) continue;
-      if (RegExp(r'^#{1,6}\s+').hasMatch(line)) continue;
-      final cleaned = line
-          .replaceFirst(RegExp(r'^\s*[-*]\s+'), '')
-          .replaceAll('**', '')
-          .trim();
-      if (cleaned.isNotEmpty) cleanedLines.add(cleaned);
-    }
-  }
-  final cleaned = cleanedLines.join(' ');
-  if (cleaned.length <= 160) return cleaned;
-  return '${cleaned.substring(0, 160)}…';
-}
-
-String _buildReportContext(AppRepository repo, ReportEntity report) {
-  final start = DateTime(
-    report.periodStart.year,
-    report.periodStart.month,
-    report.periodStart.day,
-  );
-  final endExclusive = DateTime(
-    report.periodEnd.year,
-    report.periodEnd.month,
-    report.periodEnd.day,
-  ).add(const Duration(days: 1));
-  final days = endExclusive.difference(start).inDays.clamp(1, 366);
-  final prevEnd = start;
-  final prevStart = start.subtract(Duration(days: days));
-
-  bool inRange(TransactionEntity t, DateTime s, DateTime e) =>
-      !t.date.isBefore(s) && t.date.isBefore(e) && !t.excluded;
-
-  final visibleTransactions = report.bookId == null
-      ? repo.visibleTransactions
-      : repo.visibleTransactionsForBookView(report.bookId!);
-  final records = report.bookId == null
-      ? repo.allRecords
-      : repo.recordsForBookView(report.bookId!);
-  Decimal netOf(TransactionEntity transaction) => report.bookId == null
-      ? repo.netAmountOf(transaction)
-      : repo.netAmountAcrossBooks(transaction);
-  final current = visibleTransactions
-      .where((t) => inRange(t, start, endExclusive))
-      .toList()
-    ..sort((a, b) => b.date.compareTo(a.date));
-  final previous =
-      visibleTransactions.where((t) => inRange(t, prevStart, prevEnd));
-  final categorySummary = StatisticsEngine.rangeSummary(
-    records,
-    start: start,
-    end: report.periodEnd,
-  );
-
-  ({Decimal expense, Decimal income, int expenseCount}) summarize(
-    Iterable<TransactionEntity> rows,
-  ) {
-    var expense = Decimal.zero;
-    var income = Decimal.zero;
-    var expenseCount = 0;
-    for (final t in rows) {
-      if (t.txKind == TransactionKind.expense) {
-        final net = netOf(t);
-        if (net > Decimal.zero) {
-          expense += net;
-          expenseCount++;
-        }
-      } else if (t.txKind == TransactionKind.income) {
-        income += t.amount;
-      }
-    }
-    return (expense: expense, income: income, expenseCount: expenseCount);
-  }
-
-  final curSummary = summarize(current);
-  final prevSummary = summarize(previous);
-  final avgExpense = curSummary.expenseCount == 0
-      ? Decimal.zero
-      : Decimal.parse(
-          (curSummary.expense.toDouble() / curSummary.expenseCount)
-              .toStringAsFixed(2),
-        );
-
-  final weekTotals = <int, Decimal>{};
-  for (final t in current) {
-    if (t.txKind != TransactionKind.expense) continue;
-    final net = netOf(t);
-    if (net <= Decimal.zero) continue;
-    final dayOffset = t.date.difference(start).inDays;
-    final week = dayOffset ~/ 7 + 1;
-    weekTotals[week] = (weekTotals[week] ?? Decimal.zero) + net;
-  }
-
-  final cats = categorySummary.expenseByCategory;
-  final topTxns = current
-      .where((t) => t.txKind == TransactionKind.expense)
-      .map((t) => (txn: t, net: netOf(t)))
-      .where((e) => e.net > Decimal.zero)
-      .toList()
-    ..sort((a, b) => b.net.compareTo(a.net));
-
-  String fmtDate(DateTime d) =>
-      '${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
-  String percent(Decimal part, Decimal total) {
-    if (total <= Decimal.zero) return '0.0%';
-    return '${(part.toDouble() / total.toDouble() * 100).toStringAsFixed(1)}%';
-  }
-
-  final sb = StringBuffer()
-    ..writeln('报告标题：${report.title}')
-    ..writeln(
-        '报告周期：${start.year}-${start.month}-${start.day} 至 ${report.periodEnd.year}-${report.periodEnd.month}-${report.periodEnd.day}')
-    ..writeln('【本期准确合计】')
-    ..writeln('- 支出：${MoneyFormat.string(curSummary.expense)}')
-    ..writeln('- 收入：${MoneyFormat.string(curSummary.income)}')
-    ..writeln(
-        '- 结余：${MoneyFormat.string(curSummary.income - curSummary.expense)}')
-    ..writeln('- 支出笔数：${curSummary.expenseCount} 笔')
-    ..writeln('- 笔均支出：${MoneyFormat.string(avgExpense)}')
-    ..writeln()
-    ..writeln('【上一周期参考】')
-    ..writeln('- 支出：${MoneyFormat.string(prevSummary.expense)}')
-    ..writeln('- 收入：${MoneyFormat.string(prevSummary.income)}')
-    ..writeln('- 支出笔数：${prevSummary.expenseCount} 笔')
-    ..writeln()
-    ..writeln('【分类支出明细（按金额降序）】');
-  if (cats.isEmpty) {
-    sb.writeln('无支出分类数据。');
-  } else {
-    for (final e in cats.take(12)) {
-      sb.writeln(
-          '${e.name}|${MoneyFormat.string(e.total)}|${percent(e.total, curSummary.expense)}');
-    }
-  }
-  sb
-    ..writeln()
-    ..writeln('【单笔最大的支出】');
-  if (topTxns.isEmpty) {
-    sb.writeln('无支出明细。');
-  } else {
-    for (final e in topTxns.take(10)) {
-      final t = e.txn;
-      sb.writeln(
-          '${fmtDate(t.date)}|${t.categoryNameZh}|${MoneyFormat.string(e.net)}|${t.note}');
-    }
-  }
-  sb
-    ..writeln()
-    ..writeln('【时间分布（按 7 天一段）】');
-  for (final e in weekTotals.entries.toList()
-    ..sort((a, b) => a.key.compareTo(b.key))) {
-    sb.writeln('第${e.key}段|${MoneyFormat.string(e.value)}');
-  }
-  sb
-    ..writeln()
-    ..writeln('【账目明细（最近最多 180 条，金额为退款后净额）】');
-  for (final t in current.take(180)) {
-    final kind = t.txKind == TransactionKind.income
-        ? '收'
-        : (t.txKind == TransactionKind.transfer ? '转' : '支');
-    final amount = t.txKind == TransactionKind.expense ? netOf(t) : t.amount;
-    sb.writeln(
-        '${fmtDate(t.date)}|$kind|${t.categoryNameZh}|${MoneyFormat.string(amount)}|${t.note}');
-  }
-  return sb.toString();
 }
 
 String _reportTypeLabel(String type) {

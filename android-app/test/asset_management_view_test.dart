@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
 import 'package:qingji/core/assets/asset_allocation.dart';
+import 'package:qingji/core/models/recurring_rule.dart';
 import 'package:qingji/data/app_repository.dart';
 import 'package:qingji/core/models/transaction_kind.dart';
 import 'package:qingji/views/settings/accounts_view.dart';
@@ -193,6 +194,51 @@ void main() {
     expect(find.text('跨账本押金'), findsNothing);
     expect(find.textContaining('/天'), findsOneWidget);
     expect(find.textContaining('数码设备 · 在用'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('被定时记账占用的账户会解释原因且不会从详情归档', (tester) async {
+    final repo = AppRepository();
+    await tester.runAsync(repo.init);
+    addTearDown(() => tester.runAsync(repo.closeForTest));
+    final accountId = await tester.runAsync(
+      () => repo.addAccount(name: '定时扣款账户'),
+    );
+    await tester.runAsync(
+      () => repo.addRecurringRule(
+        kind: TransactionKind.expense,
+        amount: Decimal.fromInt(88),
+        accountId: accountId,
+        period: RecurPeriod.monthly,
+        startDate: DateTime(2099, 1, 1),
+        note: '未来固定支出',
+      ),
+    );
+
+    await pumpAccountsView(tester, repo);
+    await tester.tap(find.text('资金'));
+    await pumpViewAnimations(tester);
+    await tester.tap(find.text('定时扣款账户').first);
+    await tester.pumpAndSettle();
+
+    expect(
+      find.text('1 个定时记账仍使用此账户，先修改或删除相关规则'),
+      findsOneWidget,
+    );
+    await tester.tap(
+      find.byKey(ValueKey('account-archive-action-$accountId')),
+    );
+    await tester.pump();
+
+    expect(find.text('请先修改或删除使用此账户的定时记账'), findsOneWidget);
+    expect(
+      repo.activeAccounts.any((account) => account.id == accountId),
+      isTrue,
+    );
+    expect(
+      repo.archivedAccounts.any((account) => account.id == accountId),
+      isFalse,
+    );
     expect(tester.takeException(), isNull);
   });
 

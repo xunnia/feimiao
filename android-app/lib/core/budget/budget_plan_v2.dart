@@ -187,6 +187,20 @@ DateTime budgetCivilDayFromKey(int key) {
 DateTime _budgetDay(DateTime value) =>
     DateTime(value.year, value.month, value.day);
 
+/// 日历日差值。不能用本地 DateTime 的 difference：有夏令时的时区里
+/// 「差 23/25 小时」的两天 inDays 会算成 0 或 2 天。统一先归一到
+/// UTC（无夏令时）再求差，天数精确。
+int _calendarDaysBetween(DateTime from, DateTime to) =>
+    DateTime.utc(to.year, to.month, to.day)
+        .difference(DateTime.utc(from.year, from.month, from.day))
+        .inDays;
+
+/// 日历日加减。不能用 add(Duration(days:))：夏令时切换日只有 23/25
+/// 小时，加 24 小时会落到前/后一天的 23:00/01:00。用构造器让 Dart
+/// 自动进位归一化，结果永远是目标日历日的 0 点。
+DateTime _addCalendarDays(DateTime value, int days) =>
+    DateTime(value.year, value.month, value.day + days);
+
 class BudgetFixedTemplateV2 {
   final String id;
   final String name;
@@ -301,16 +315,16 @@ class BudgetPlanV2 {
       return BudgetPlanCycleV2(
         planId: id,
         start: anchorStart,
-        endExclusive: endInclusive!.add(const Duration(days: 1)),
+        endExclusive: _addCalendarDays(endInclusive!, 1),
       );
     }
     if (cadence == BudgetPlanCadenceV2.weekly) {
       final delta = (value.weekday - weekStart! + 7) % 7;
-      final start = value.subtract(Duration(days: delta));
+      final start = _addCalendarDays(value, -delta);
       return BudgetPlanCycleV2(
         planId: id,
         start: start,
-        endExclusive: start.add(const Duration(days: 7)),
+        endExclusive: _addCalendarDays(start, 7),
       );
     }
     final anchor = monthStartDay!;
@@ -337,9 +351,9 @@ class BudgetPlanCycleV2 {
     required this.endExclusive,
   });
 
-  int get dayCount => endExclusive.difference(start).inDays;
+  int get dayCount => _calendarDaysBetween(start, endExclusive);
   DateTime get startInclusive => start;
-  DateTime get endInclusive => endExclusive.subtract(const Duration(days: 1));
+  DateTime get endInclusive => _addCalendarDays(endExclusive, -1);
   int get startDayKey => budgetCivilDayKey(start);
   int get endDayKey => budgetCivilDayKey(endInclusive);
 
@@ -426,8 +440,7 @@ class BudgetCycleOverrideV2 {
     this.updatedMs = 0,
   })  : cycleStart = _budgetDay(cycleStart),
         cycleEndInclusive = _budgetDay(
-          cycleEndInclusive ??
-              cycleEndExclusive!.subtract(const Duration(days: 1)),
+          cycleEndInclusive ?? _addCalendarDays(cycleEndExclusive!, -1),
         ) {
     if (cycleEndInclusive == null && cycleEndExclusive == null) {
       throw ArgumentError('Override requires a cycle end.');
@@ -589,7 +602,7 @@ class BudgetPlanV2Resolver {
         reason: 'Inherited category budgets exceed the cycle target.',
       );
     }
-    final offset = value.difference(cycle.start).inDays;
+    final offset = _calendarDaysBetween(cycle.start, value);
     return BudgetPlanDayResolutionV2(
       status: BudgetPlanDayStatusV2.available,
       plan: plan,
@@ -625,7 +638,7 @@ class BudgetPlanV2Resolver {
     final planIds = <int>{};
     for (var day = start;
         day.isBefore(end);
-        day = day.add(const Duration(days: 1))) {
+        day = _addCalendarDays(day, 1)) {
       final result = resolveDay(
         day: day,
         bookId: bookId,

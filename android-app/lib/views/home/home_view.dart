@@ -111,9 +111,16 @@ class _HomeViewState extends State<HomeView> {
       year: _year,
       month: _month,
     );
-    final budgetWindow = repo.budgetForCalendarMonth(monthDate);
-    final monthBudget = budgetWindow.plannedAmount;
-    final budgetStatus = BudgetEngine.fromWindowResult(budgetWindow);
+    // Cold start paints the home shell before the repository has selected a
+    // real book. Budget queries require a positive book id, so show the normal
+    // no-budget state for this brief window and rebuild with real data when
+    // repository initialization notifies listeners.
+    final budgetWindow =
+        repo.currentBookId > 0 ? repo.budgetForCalendarMonth(monthDate) : null;
+    final monthBudget = budgetWindow?.plannedAmount;
+    final budgetStatus = budgetWindow == null
+        ? null
+        : BudgetEngine.fromWindowResult(budgetWindow);
 
     // 所选月的交易 + 收支筛选（退款行不单独显示，挂在原账单里）。
     final monthTx = repo.visibleTransactions
@@ -160,7 +167,18 @@ class _HomeViewState extends State<HomeView> {
             ),
           ),
         ),
-        if (monthTx.isEmpty)
+        // Do not show the first-use cat while SQLite is still converging. That
+        // false empty state is especially jarring for existing users: it
+        // appears for a moment and then the real ledger drops in underneath.
+        if (repo.isInitializing)
+          SliverFillRemaining(
+            hasScrollBody: false,
+            child: Padding(
+              padding: EdgeInsets.only(bottom: widget.bottomInset),
+              child: const SizedBox.shrink(),
+            ),
+          )
+        else if (monthTx.isEmpty)
           SliverFillRemaining(
             hasScrollBody: false,
             child: Padding(
@@ -181,10 +199,10 @@ class _HomeViewState extends State<HomeView> {
           if (sections.isEmpty)
             SliverToBoxAdapter(child: _FilterEmptyHint(filter: _filter))
           else
-            for (final s in sections)
-              SliverToBoxAdapter(
-                child: TxDayCard(section: s),
-              ),
+            SliverList.builder(
+              itemCount: sections.length,
+              itemBuilder: (_, i) => TxDayCard(section: sections[i]),
+            ),
           SliverToBoxAdapter(child: SizedBox(height: widget.bottomInset)),
         ],
       ],

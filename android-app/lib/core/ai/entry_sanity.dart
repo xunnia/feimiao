@@ -9,7 +9,10 @@ import 'natural_language_entry_parser.dart';
 /// - 金额 ≤ 0 或大得离谱（> 1 亿）→ 视为「没识别出金额」(null)，
 ///   这样不会自动入库，会礼貌追问，而不是存一笔天文数字。
 ///   注意：退款是「负支出」，由上层单独处理，这里不针对负数（解析阶段金额本就为正）。
+/// - 金额四舍五入到 2 位小数（模型算 AA「总额÷N」会给 33.3333 这种超精度数）。
 /// - 日期晚于今天（未来）→ 收敛到今天（记账几乎都是过去/当下，未来多是解析错误）。
+/// - 日期太久远（> 400 天前）→ 置信度压到 0.6 以下，强制走确认卡而不是
+///   静默自动入库（多半是模型把年份打错，钱会被记到用户看不见的多年前）。
 /// - 置信度 clamp 到 0~1。
 class EntrySanity {
   EntrySanity._();
@@ -20,7 +23,7 @@ class EntrySanity {
   static ParsedEntry clean(ParsedEntry e, {DateTime? now}) {
     final today = now ?? DateTime.now();
 
-    Decimal? amt = e.amount;
+    Decimal? amt = e.amount?.round(scale: 2);
     if (amt != null && (amt <= Decimal.zero || amt > maxAmount)) {
       amt = null;
     }
@@ -30,7 +33,9 @@ class EntrySanity {
     final d0 = DateTime(d.year, d.month, d.day);
     if (d0.isAfter(t0)) d = today;
 
-    final conf = e.confidence.clamp(0.0, 1.0);
+    var conf = e.confidence.clamp(0.0, 1.0);
+    final ancientCutoff = DateTime(today.year, today.month, today.day - 400);
+    if (d0.isBefore(ancientCutoff) && conf > 0.6) conf = 0.6;
 
     return ParsedEntry(
       amount: amt,

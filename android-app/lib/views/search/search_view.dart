@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:ui' show ImageFilter;
 
 import 'package:decimal/decimal.dart';
@@ -64,6 +65,12 @@ String moneyRangeLabel(Decimal? minAmount, Decimal? maxAmount) {
 class _SearchViewState extends State<SearchView> {
   final TextEditingController _ctrl = TextEditingController();
   String _q = '';
+  Timer? _debounce;
+
+  // 过滤结果缓存：每次击键防抖300ms后重算，避免 build 内全表扫描
+  List<TransactionEntity> _results = const [];
+  List<TxSection> _sections = const [];
+  Map<int, Decimal> _refundTotals = const {};
 
   TransactionKind? _kind;
   DateTimeRange? _range;
@@ -73,10 +80,20 @@ class _SearchViewState extends State<SearchView> {
   Decimal? _maxAmt;
 
   @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // repo 数据变化（新增/删除账单）时立即重算
+    _runFilter();
+  }
+
+  @override
   void dispose() {
     _ctrl.dispose();
+    _debounce?.cancel();
     super.dispose();
   }
+
+  bool get _active => _q.trim().isNotEmpty || _hasFilter;
 
   bool get _hasFilter =>
       _kind != null ||
@@ -85,6 +102,36 @@ class _SearchViewState extends State<SearchView> {
       _tagId != null ||
       _minAmt != null ||
       _maxAmt != null;
+
+  void _scheduleFilter() {
+    _debounce?.cancel();
+    _debounce = Timer(const Duration(milliseconds: 300), _runFilter);
+  }
+
+  void _runFilter() {
+    if (!mounted) return;
+    if (!_active) {
+      if (_results.isNotEmpty || _sections.isNotEmpty) {
+        setState(() {
+          _results = const [];
+          _sections = const [];
+          _refundTotals = const {};
+        });
+      }
+      return;
+    }
+    final repo = context.read<AppRepository>();
+    final q = _q.trim();
+    final all = repo.transactions;
+    final rt = LedgerPolicy.refundTotals(all);
+    final r = repo.visibleTransactions.where((t) => _pass(t, q, rt)).toList();
+    final secs = groupTxnsByDay(r);
+    setState(() {
+      _results = r;
+      _sections = secs;
+      _refundTotals = rt;
+    });
+  }
 
   String _two(int n) => n.toString().padLeft(2, '0');
 
@@ -130,18 +177,7 @@ class _SearchViewState extends State<SearchView> {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final repo = context.watch<AppRepository>();
-    final q = _q.trim();
-    final active = q.isNotEmpty || _hasFilter;
-    final all = repo.transactions;
-    final refundTotals = LedgerPolicy.refundTotals(all);
-    final results = !active
-        ? const <TransactionEntity>[]
-        : repo.visibleTransactions
-            .where((t) => _pass(t, q, refundTotals))
-            .toList();
-
-    final sections = groupTxnsByDay(results);
-    final showSummary = active && results.isNotEmpty;
+    final showSummary = _active && _results.isNotEmpty;
     final topChromeHeight =
         _searchTopFilterHeight + (showSummary ? _searchTopSummaryHeight : 0);
 
@@ -155,7 +191,7 @@ class _SearchViewState extends State<SearchView> {
       body: Stack(
         children: [
           Positioned.fill(
-            child: !active
+            child: !_active
                 ? Padding(
                     padding: EdgeInsets.only(
                       top: topChromeHeight,
@@ -163,7 +199,7 @@ class _SearchViewState extends State<SearchView> {
                     ),
                     child: _hint(scheme, '输入关键词或选筛选条件', MascotMood.idle),
                   )
-                : results.isEmpty
+                : _results.isEmpty
                     ? Padding(
                         padding: EdgeInsets.only(
                           top: topChromeHeight,
@@ -171,14 +207,13 @@ class _SearchViewState extends State<SearchView> {
                         ),
                         child: _hint(scheme, '没找到符合条件的账单', MascotMood.empty),
                       )
-                    : ListView(
+                    : ListView.builder(
                         padding: EdgeInsets.only(
                           top: topChromeHeight + 8,
                           bottom: _searchBottomChromeHeight,
                         ),
-                        children: [
-                          for (final s in sections) TxDayCard(section: s),
-                        ],
+                        itemCount: _sections.length,
+                        itemBuilder: (_, i) => TxDayCard(section: _sections[i]),
                       ),
           ),
           Positioned(
@@ -197,7 +232,7 @@ class _SearchViewState extends State<SearchView> {
               children: [
                 _filterBar(scheme, repo),
                 if (showSummary)
-                  _summaryCard(scheme, repo, results, refundTotals),
+                  _summaryCard(scheme, repo, _results, _refundTotals),
               ],
             ),
           ),
@@ -212,7 +247,7 @@ class _SearchViewState extends State<SearchView> {
             left: 0,
             right: 0,
             bottom: 0,
-            child: _searchInputBar(scheme, q),
+            child: _searchInputBar(scheme, _q),
           ),
         ],
       ),
@@ -231,12 +266,14 @@ class _SearchViewState extends State<SearchView> {
     for (final t in rows) {
       final amount = LedgerPolicy.userAmountWith(t, refundTotals);
       if (amount == Decimal.zero) continue;
+      // 笔数只数净额为正的家族（口径标准 §7.1）：legacy 独立负支出会冲减
+      // 合计，但它不是一笔正支出，不能占笔数。
       if (t.txKind == TransactionKind.expense) {
         exp += amount;
-        expN++;
+        if (amount > Decimal.zero) expN++;
       } else if (t.txKind == TransactionKind.income) {
         inc += amount;
-        incN++;
+        if (amount > Decimal.zero) incN++;
       }
     }
     Widget col(String label, int n, Decimal amt, Color color) => Expanded(
@@ -309,7 +346,10 @@ class _SearchViewState extends State<SearchView> {
                 child: TextField(
                   controller: _ctrl,
                   autofocus: true,
-                  onChanged: (v) => setState(() => _q = v),
+                  onChanged: (v) {
+                    setState(() => _q = v);
+                    _scheduleFilter();
+                  },
                   textInputAction: TextInputAction.search,
                   cursorColor: scheme.primary,
                   style: TextStyle(
@@ -406,6 +446,7 @@ class _SearchViewState extends State<SearchView> {
                     _minAmt = null;
                     _maxAmt = null;
                   });
+                  _runFilter();
                 },
                 child: const Text('清除'),
               ),
@@ -471,7 +512,10 @@ class _SearchViewState extends State<SearchView> {
           label: o.$2,
           icon:
               _kind == o.$1 ? Icons.check_circle : Icons.radio_button_unchecked,
-          onTap: () => setState(() => _kind = o.$1),
+          onTap: () {
+              setState(() => _kind = o.$1);
+              _runFilter();
+            },
         ),
     ]);
   }
@@ -492,7 +536,10 @@ class _SearchViewState extends State<SearchView> {
       first: DateTime(2015),
       last: DateTime(2100),
     );
-    if (r != null) setState(() => _range = r);
+    if (r != null) {
+      setState(() => _range = r);
+      _runFilter();
+    }
   }
 
   void _pickAccount(BuildContext anchor, AppRepository repo) {
@@ -503,7 +550,10 @@ class _SearchViewState extends State<SearchView> {
         icon: _accountId == null
             ? Icons.check_circle
             : Icons.radio_button_unchecked,
-        onTap: () => setState(() => _accountId = null),
+        onTap: () {
+          setState(() => _accountId = null);
+          _runFilter();
+        },
       ),
       for (final a in repo.accounts)
         IosMenuItem(
@@ -511,7 +561,10 @@ class _SearchViewState extends State<SearchView> {
           icon: a.id == _accountId
               ? Icons.check_circle
               : Icons.radio_button_unchecked,
-          onTap: () => setState(() => _accountId = a.id),
+          onTap: () {
+            setState(() => _accountId = a.id);
+            _runFilter();
+          },
         ),
     ]);
   }
@@ -523,7 +576,10 @@ class _SearchViewState extends State<SearchView> {
         label: '全部',
         icon:
             _tagId == null ? Icons.check_circle : Icons.radio_button_unchecked,
-        onTap: () => setState(() => _tagId = null),
+        onTap: () {
+          setState(() => _tagId = null);
+          _runFilter();
+        },
       ),
       for (final t in repo.tags)
         IosMenuItem(
@@ -531,7 +587,10 @@ class _SearchViewState extends State<SearchView> {
           icon: t.id == _tagId
               ? Icons.check_circle
               : Icons.radio_button_unchecked,
-          onTap: () => setState(() => _tagId = t.id),
+          onTap: () {
+            setState(() => _tagId = t.id);
+            _runFilter();
+          },
         ),
     ]);
   }
@@ -564,6 +623,7 @@ class _SearchViewState extends State<SearchView> {
                         controller: minC,
                         keyboardType: const TextInputType.numberWithOptions(
                             decimal: true),
+                        inputFormatters: moneyInputFormatters(),
                         decoration:
                             iosInputDecoration(ctx, hint: '最低', prefix: '¥ '),
                       ),
@@ -578,6 +638,7 @@ class _SearchViewState extends State<SearchView> {
                         controller: maxC,
                         keyboardType: const TextInputType.numberWithOptions(
                             decimal: true),
+                        inputFormatters: moneyInputFormatters(),
                         decoration:
                             iosInputDecoration(ctx, hint: '最高', prefix: '¥ '),
                       ),
@@ -591,6 +652,7 @@ class _SearchViewState extends State<SearchView> {
                       _minAmt = Decimal.tryParse(minC.text.trim());
                       _maxAmt = Decimal.tryParse(maxC.text.trim());
                     });
+                    _runFilter();
                     FocusScope.of(context).unfocus();
                     Navigator.pop(ctx);
                   },

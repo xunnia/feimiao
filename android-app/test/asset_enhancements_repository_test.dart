@@ -779,7 +779,7 @@ void main() {
     await repo.closeForTest();
   });
 
-  test('v38 到 v40 等价迁移保留 B2 与资产证据并初始化 A4 字段', () async {
+  test('v38 到 v41 等价迁移保留 B2 与资产证据并初始化 A4 字段', () async {
     var repo = await freshRepo();
     final planId = await repo.addBudgetPlanV2(
       bookId: repo.currentBookId,
@@ -866,7 +866,7 @@ void main() {
     db = await databaseFactory.openDatabase(dbPath);
     expect(
       Sqflite.firstIntValue(await db.rawQuery('PRAGMA user_version')),
-      40,
+      41,
     );
     expect(
       await _captureV38Evidence(db, planId: planId, assetId: assetId),

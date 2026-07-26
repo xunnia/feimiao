@@ -1,32 +1,13 @@
-// Gradle init 脚本（CI 拷到 ~/.gradle/init.d/ 自动生效）：
+// CI installs this repository-owned init script into ~/.gradle/init.d.
 //
-//  1) 强制所有模块（app + 各插件）使用 compileSdk 36
-//     —— file_picker/image_picker 依赖的 flutter_plugin_android_lifecycle
-//        要求 compileSdk≥36，而插件模块各自按较低版本编译，会导致
-//        assembleRelease 的 AAR 元数据检查失败。
-//
-//  2) 给 :app 补上 ML Kit 中文文字识别模型（中文模型本身也识别英文/数字）；
-//     插件代码还引用了日/韩/天城文的 *Options 类，我们不打包这三个模型，
-//     用 -dontwarn 规则让 R8 忽略这些缺类（运行时不会走到那些分支）。
+// The application pins compileSdk 36 and declares the Chinese ML Kit model in
+// android/app/build.gradle.kts. This compatibility shim is only for Flutter
+// plugin subprojects that still declare an older compileSdk of their own.
 allprojects {
     afterEvaluate { project ->
-        if (project.hasProperty("android")) {
+        if (project.name != "app" && project.hasProperty("android")) {
             project.android {
                 compileSdkVersion 36
-            }
-            if (project.name == "app") {
-                project.dependencies.add("implementation",
-                    "com.google.mlkit:text-recognition-chinese:16.0.1")
-                // 写一份 dontwarn 规则并挂到所有 buildType 的 proguard 配置
-                def keep = new File(project.projectDir, "mlkit-dontwarn.pro")
-                keep.text = """
--dontwarn com.google.mlkit.vision.text.japanese.**
--dontwarn com.google.mlkit.vision.text.korean.**
--dontwarn com.google.mlkit.vision.text.devanagari.**
-"""
-                project.android.buildTypes.all { bt ->
-                    bt.proguardFiles keep
-                }
             }
         }
     }

@@ -284,7 +284,16 @@ class ConsumptionProjection {
       )) {
         continue;
       }
-      if (family.originalAmountMinor <= 0) {
+      if (family.originalAmountMinor < 0) {
+        // 遗留的独立冲账负行（老版本退款/报销不挂原单的产物）：不算
+        // 订单数、不进分类明细，只按带符号金额冲减预算口径的已用，让
+        // 预算口径和统计口径（原始行直接求和）在同一窗口内保持一致。
+        if (family.countsInBudget) {
+          budgetExpenseMinor += family.originalAmountMinor;
+        }
+        continue;
+      }
+      if (family.originalAmountMinor == 0) {
         conflictReasons.add(MetricReason(
           code: MetricReasonCode.invalidInput,
           message: 'Expense family amount must be positive.',
@@ -414,6 +423,10 @@ class ConsumptionProjection {
         resolver: resolverName,
       );
     }
+
+    // 遗留负行冲减后聚合结果可能为负（窗口里只有冲账没有正支出）。
+    // 「预算已用」语义上不为负，钳到 0。
+    if (budgetExpenseMinor < 0) budgetExpenseMinor = 0;
 
     final categoryResults = categories.values
         .where((category) => category.amountMinor > 0)

@@ -58,6 +58,7 @@ class ThemeSettingsView extends StatelessWidget {
                 max: 1,
                 activeColor: theme.preset.controlAccent,
                 onChanged: theme.setIntensity,
+                onChangeEnd: (_) => theme.persistNow(),
               ),
             ]),
             const SizedBox(height: 18),
@@ -73,6 +74,7 @@ class ThemeSettingsView extends StatelessWidget {
               max: 0.90,
               activeColor: theme.preset.controlAccent,
               onChanged: theme.setCardAlpha,
+              onChangeEnd: (_) => theme.persistNow(),
             ),
           ]),
           const SizedBox(height: 14),
@@ -207,6 +209,7 @@ class _SliderRow extends StatelessWidget {
   final double max;
   final Color activeColor;
   final ValueChanged<double> onChanged;
+  final ValueChanged<double>? onChangeEnd;
 
   const _SliderRow({
     required this.leadingIcon,
@@ -217,6 +220,7 @@ class _SliderRow extends StatelessWidget {
     required this.max,
     required this.activeColor,
     required this.onChanged,
+    this.onChangeEnd,
   });
 
   @override
@@ -240,6 +244,7 @@ class _SliderRow extends StatelessWidget {
                 activeColor: activeColor,
                 thumbColor: scheme.surface,
                 onChanged: onChanged,
+                onChangeEnd: onChangeEnd,
               ),
             ),
           ),

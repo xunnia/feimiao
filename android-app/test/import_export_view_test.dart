@@ -1,3 +1,4 @@
+import 'package:csv/csv.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:qingji/core/transaction_time.dart';
 import 'package:qingji/views/settings/import_export_view.dart';
@@ -82,6 +83,26 @@ void main() {
       ),
       '2026-07-13 09:06',
     );
+  });
+
+  test('本 App 导出的 CSV 可跨 isolate 重新导入', () async {
+    final header = feimiaoCsvHeaderForTest();
+    final csv = const ListToCsvConverter().convert([
+      header,
+      _rowFor(
+        header,
+        timePrecision: TransactionTimePrecision.exact.storageKey,
+      ),
+    ]);
+
+    final rows = await parseFeimiaoCsvInBackgroundForTest('\ufeff$csv');
+
+    expect(rows, isNotNull);
+    expect(rows, hasLength(1));
+    expect(rows!.single.uuid, '1234567890abcdef1234567890abcdef');
+    expect(rows.single.amount.toString(), '30');
+    expect(rows.single.categoryKey, 'subscription');
+    expect(rows.single.timePrecision, TransactionTimePrecision.exact);
   });
 }
 

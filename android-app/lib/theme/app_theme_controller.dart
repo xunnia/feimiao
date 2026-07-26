@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -127,6 +128,11 @@ class AppThemeController extends ChangeNotifier {
   static final AppThemeController instance = AppThemeController._();
 
   static const _fileName = 'theme_prefs.json';
+  static const _saveDebounce = Duration(milliseconds: 240);
+
+  Timer? _saveTimer;
+  Future<void> _saveQueue = Future<void>.value();
+  Future<void>? _loadFuture;
 
   // 默认值 = 当前线上观感。
   String presetKey = 'warm';
@@ -141,7 +147,12 @@ class AppThemeController extends ChangeNotifier {
   /// 暮夜色卡强制深色（与系统深浅色设置正交，选它就是要夜的样子）。
   bool get forceDark => preset.forceDark;
 
-  Future<void> load() async {
+  Future<void> load() => _loadFuture ??= _loadInternal();
+
+  Future<void> _loadInternal() async {
+    final oldPreset = presetKey;
+    final oldIntensity = bgIntensity;
+    final oldCardAlpha = cardAlpha;
     try {
       final dir = await getApplicationSupportDirectory();
       final f = File('${dir.path}/$_fileName');
@@ -156,18 +167,51 @@ class AppThemeController extends ChangeNotifier {
       // 读不到就用默认，不拦启动。
     }
     _applyToColors();
+    // Theme loading now happens after the first frame. Notify the provider so
+    // a persisted dark/custom theme is applied without blocking cold start.
+    if (oldPreset != presetKey ||
+        oldIntensity != bgIntensity ||
+        oldCardAlpha != cardAlpha) {
+      notifyListeners();
+    }
   }
 
-  Future<void> _save() async {
-    try {
-      final dir = await getApplicationSupportDirectory();
-      final f = File('${dir.path}/$_fileName');
-      await f.writeAsString(jsonEncode(AppThemePreferences(
+  AppThemePreferences _preferencesSnapshot() => AppThemePreferences(
         presetKey: presetKey,
         bgIntensity: bgIntensity,
         cardAlpha: cardAlpha,
-      ).toJson()));
+      );
+
+  Future<void> _writePreferences(AppThemePreferences preferences) async {
+    try {
+      final dir = await getApplicationSupportDirectory();
+      final f = File('${dir.path}/$_fileName');
+      await f.writeAsString(jsonEncode(preferences.toJson()), flush: true);
     } catch (_) {}
+  }
+
+  void _enqueueSave(AppThemePreferences preferences) {
+    _saveQueue = _saveQueue.then((_) => _writePreferences(preferences));
+  }
+
+  void _scheduleSave({required bool debounce}) {
+    _saveTimer?.cancel();
+    if (!debounce) {
+      _enqueueSave(_preferencesSnapshot());
+      return;
+    }
+    _saveTimer = Timer(_saveDebounce, () {
+      _saveTimer = null;
+      _enqueueSave(_preferencesSnapshot());
+    });
+  }
+
+  /// 滑杆松手或页面退出时立即把最终值排到串行写入队列中。
+  Future<void> persistNow() async {
+    _saveTimer?.cancel();
+    _saveTimer = null;
+    _enqueueSave(_preferencesSnapshot());
+    await _saveQueue;
   }
 
   /// 把当前主题算成具体颜色灌进 AppColors 的运行时字段。
@@ -187,10 +231,10 @@ class AppThemeController extends ChangeNotifier {
     );
   }
 
-  void _commit() {
+  void _commit({bool debounceSave = false}) {
     _applyToColors();
     notifyListeners();
-    _save();
+    _scheduleSave(debounce: debounceSave);
   }
 
   void setPreset(String key) {
@@ -200,12 +244,12 @@ class AppThemeController extends ChangeNotifier {
 
   void setIntensity(double v) {
     bgIntensity = v.clamp(0.0, 1.0).toDouble();
-    _commit();
+    _commit(debounceSave: true);
   }
 
   void setCardAlpha(double v) {
     cardAlpha = v.clamp(0.25, 0.90).toDouble();
-    _commit();
+    _commit(debounceSave: true);
   }
 
   void resetDefault() {

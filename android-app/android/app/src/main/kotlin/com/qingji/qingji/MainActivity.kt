@@ -200,6 +200,9 @@ class MainActivity : FlutterActivity() {
         if (intent.action != Intent.ACTION_SEND &&
             intent.action != Intent.ACTION_SEND_MULTIPLE
         ) return
+        // 从最近任务恢复时系统会重放原始 SEND intent（进程被杀后 removeExtra
+        // 只改掉进程内副本、写不回 task record），不能当成新分享再 OCR 一遍。
+        if (intent.flags and Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY != 0) return
         val type = intent.type ?: return
         val payload: Map<String, String?>? = when {
             type.startsWith("image/") -> {
@@ -218,7 +221,13 @@ class MainActivity : FlutterActivity() {
                 if (!text.isNullOrBlank()) mapOf("type" to "text", "text" to text) else null
             }
             else -> null
-        } ?: return
+        }
+        // 参照上面 feimiao_open 分支：处理完立刻把分享数据从 intent 上清掉。
+        // Activity 被系统重建时 getIntent() 会原样重放旧 intent，不清会把同一张
+        // 截图/同一段文字再次送去记账；清掉后 extras 取不到值，本分支安全跳过。
+        intent.removeExtra(Intent.EXTRA_STREAM)
+        intent.removeExtra(Intent.EXTRA_TEXT)
+        if (payload == null) return
 
         if (push) {
             channel?.invokeMethod("onShare", payload)
@@ -230,6 +239,7 @@ class MainActivity : FlutterActivity() {
     /// 把分享进来的 content:// 图片复制到 App 缓存目录，返回可读文件路径（供 ML Kit OCR）。
     private fun copyToCache(uri: Uri): String? {
         return try {
+            cleanupSharedCache()
             val input = contentResolver.openInputStream(uri) ?: return null
             val file = File(cacheDir, "shared_${System.currentTimeMillis()}.jpg")
             file.outputStream().use { out -> input.copyTo(out) }
@@ -237,6 +247,24 @@ class MainActivity : FlutterActivity() {
             file.absolutePath
         } catch (e: Exception) {
             null
+        }
+    }
+
+    /// 清掉超过 24 小时的历史分享缓存图（shared_*.jpg），避免 cacheDir 越积越大。
+    /// 清理失败不影响本次分享。
+    private fun cleanupSharedCache() {
+        try {
+            val expireBefore = System.currentTimeMillis() - 24L * 60 * 60 * 1000
+            cacheDir.listFiles()?.forEach { f ->
+                if (f.isFile &&
+                    f.name.startsWith("shared_") &&
+                    f.name.endsWith(".jpg") &&
+                    f.lastModified() < expireBefore
+                ) {
+                    f.delete()
+                }
+            }
+        } catch (_: Exception) {
         }
     }
 

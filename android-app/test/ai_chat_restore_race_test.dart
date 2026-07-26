@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:flutter_svg/flutter_svg.dart';
 import 'package:provider/provider.dart';
 import 'package:qingji/core/budget/budget_window_resolver.dart';
 import 'package:qingji/data/app_repository.dart';
@@ -13,6 +14,7 @@ class _ChatRaceRepository extends AppRepository {
   final Completer<void> releaseLoad = Completer<void>();
   final Completer<void> userInsertStarted = Completer<void>();
   final Completer<void> releaseUserInsert = Completer<void>();
+  Completer<void>? nextLoadGate;
   final List<Map<String, Object?>> rows = <Map<String, Object?>>[
     {
       'id': 1,
@@ -22,11 +24,17 @@ class _ChatRaceRepository extends AppRepository {
       'created_ms': 1,
     },
   ];
+  final Map<int, ReportEntity> reportsById = <int, ReportEntity>{};
   int _nextId = 2;
+  int _databaseGeneration = 0;
   int loadCalls = 0;
+  int reportReloadCalls = 0;
 
   @override
   bool get isInitialized => true;
+
+  @override
+  int get databaseGeneration => _databaseGeneration;
 
   @override
   int get currentBookId => _book.id;
@@ -59,7 +67,26 @@ class _ChatRaceRepository extends AppRepository {
     loadCalls++;
     if (!loadStarted.isCompleted) loadStarted.complete();
     await releaseLoad.future;
+    final gate = nextLoadGate;
+    nextLoadGate = null;
+    if (gate != null) await gate.future;
     return rows.map(Map<String, Object?>.of).toList(growable: false);
+  }
+
+  @override
+  Future<ReportEntity?> getReport(int id) async => reportsById[id];
+
+  @override
+  Future<void> reloadReportsFromStorage() async {
+    reportReloadCalls++;
+  }
+
+  void commitRestoredRows(List<Map<String, Object?>> restoredRows) {
+    rows
+      ..clear()
+      ..addAll(restoredRows.map(Map<String, Object?>.of));
+    _databaseGeneration++;
+    notifyListeners();
   }
 
   @override
@@ -131,10 +158,12 @@ void main() {
     repo.rows
       ..clear()
       ..addAll(List.generate(30, (index) {
+        final content =
+            index < 20 ? '短消息' : List.filled(10, '后段故意使用很长的聊天内容').join('，');
         return {
           'id': index + 1,
           'role': 'user',
-          'text': '历史消息 $index',
+          'text': '历史消息 $index：$content',
           'question': '',
           'created_ms': index + 1,
         };
@@ -175,9 +204,26 @@ void main() {
       reason: '定位回调完成的这一帧仍不能把错误位置画出来',
     );
 
-    await tester.pump();
+    var revealPass = -1;
+    for (var pass = 0; pass < 10; pass++) {
+      await tester.pump();
+      if (viewport().opacity == 1) {
+        revealPass = pass;
+        break;
+      }
+      expect(viewport().opacity, 0, reason: '滚动范围稳定前历史区必须保持隐藏');
+    }
+    expect(revealPass, greaterThanOrEqualTo(1));
     expect(viewport().opacity, 1);
-    expect(list.controller!.position.pixels, position.maxScrollExtent);
+    final stablePixels = list.controller!.position.pixels;
+    final stableMaxScrollExtent = list.controller!.position.maxScrollExtent;
+    expect(stablePixels, stableMaxScrollExtent);
+    for (var frame = 0; frame < 3; frame++) {
+      await tester.pump();
+      expect(viewport().opacity, 1);
+      expect(list.controller!.position.pixels, stablePixels);
+      expect(list.controller!.position.maxScrollExtent, stableMaxScrollExtent);
+    }
 
     await tester.pumpWidget(const SizedBox.shrink());
     resetChatHistoryForTesting();
@@ -220,6 +266,361 @@ void main() {
 
     expect(repo.loadCalls, 2, reason: '挂载中的等待者必须接管被卸载实例的恢复');
     expect(find.text('旧消息'), findsOneWidget);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    resetChatHistoryForTesting();
+  });
+
+  testWidgets('同一仓库恢复数据库后会丢弃旧行 ID 内存并读取新快照', (tester) async {
+    resetChatHistoryForTesting();
+    final repo = _ChatRaceRepository();
+
+    await tester.pumpWidget(
+      ChangeNotifierProvider<AppRepository>.value(
+        value: repo,
+        child: MaterialApp(
+          home: Scaffold(
+            body: AiChatPanel(fullScreen: true, onSwitchToManual: () {}),
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+    repo.releaseLoad.complete();
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 20)),
+    );
+    await tester.pump();
+    await tester.pump();
+    expect(find.text('旧消息'), findsOneWidget);
+
+    repo.commitRestoredRows([
+      {
+        'id': 1,
+        'role': 'user',
+        'text': '恢复快照里的消息',
+        'question': '',
+        'created_ms': 1,
+      },
+    ]);
+    await tester.pump();
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 20)),
+    );
+    for (var i = 0; i < 4; i++) {
+      await tester.pump(const Duration(milliseconds: 20));
+    }
+
+    expect(repo.loadCalls, 2);
+    expect(find.text('旧消息'), findsNothing);
+    expect(find.text('恢复快照里的消息'), findsOneWidget);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    resetChatHistoryForTesting();
+  });
+
+  testWidgets('同进程重新打开会增量恢复后台写入的报告卡且不重复', (tester) async {
+    resetChatHistoryForTesting();
+    final repo = _ChatRaceRepository();
+
+    Widget panel() => ChangeNotifierProvider<AppRepository>.value(
+          value: repo,
+          child: MaterialApp(
+            home: Scaffold(
+              body: AiChatPanel(
+                fullScreen: true,
+                onSwitchToManual: () {},
+              ),
+            ),
+          ),
+        );
+
+    await tester.pumpWidget(panel());
+    await tester.pump();
+    await tester.runAsync(() => repo.loadStarted.future);
+    repo.releaseLoad.complete();
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 20)),
+    );
+    await tester.pump();
+    await tester.pump();
+
+    expect(find.text('旧消息'), findsOneWidget);
+    expect(repo.loadCalls, 1);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pump();
+
+    const report = ReportEntity(
+      id: 42,
+      bookId: 1,
+      type: 'monthly',
+      title: '2026年6月消费月报',
+      summary: '后台报告摘要唯一标记',
+      markdown: '# 2026年6月消费月报\n\n后台报告正文',
+      periodStartMs: 1780243200000,
+      periodEndMs: 1782835199000,
+      createdMs: 1782835200000,
+    );
+    repo.reportsById[report.id] = report;
+    repo.rows.add({
+      'id': 2,
+      'role': 'report',
+      'text': encodeReportChatMessage(report, report.summary),
+      'question': '生成 6 月月报',
+      'created_ms': 2,
+    });
+
+    await tester.pumpWidget(panel());
+    await tester.pump();
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 20)),
+    );
+    for (var i = 0; i < 4; i++) {
+      await tester.pump(const Duration(milliseconds: 20));
+    }
+
+    expect(repo.loadCalls, 2, reason: '同进程重开也必须查询后台新增的聊天行');
+    expect(find.text('旧消息'), findsOneWidget);
+    expect(find.text('后台报告摘要唯一标记'), findsOneWidget);
+    expect(find.text('2026年6月消费月报'), findsOneWidget);
+
+    // 再次重建不能把同一条持久化 report row 插入第二遍。
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pump();
+    await tester.pumpWidget(panel());
+    await tester.pump();
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 20)),
+    );
+    for (var i = 0; i < 4; i++) {
+      await tester.pump(const Duration(milliseconds: 20));
+    }
+
+    expect(repo.loadCalls, 3);
+    expect(find.text('后台报告摘要唯一标记'), findsOneWidget);
+    expect(find.text('2026年6月消费月报'), findsOneWidget);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    resetChatHistoryForTesting();
+  });
+
+  testWidgets('同一报告行原地更新后会刷新现有报告卡', (tester) async {
+    resetChatHistoryForTesting();
+    final repo = _ChatRaceRepository();
+    const oldReport = ReportEntity(
+      id: 42,
+      bookId: 1,
+      type: 'monthly',
+      title: '6月月报',
+      summary: '旧报告摘要',
+      markdown: '# 旧报告',
+      periodStartMs: 1780243200000,
+      periodEndMs: 1782835199000,
+      createdMs: 1782835200000,
+    );
+    const updatedReport = ReportEntity(
+      id: 42,
+      bookId: 1,
+      type: 'monthly',
+      title: '6月月报',
+      summary: '后台重新生成后的摘要',
+      markdown: '# 新报告',
+      periodStartMs: 1780243200000,
+      periodEndMs: 1782835199000,
+      createdMs: 1782835300000,
+    );
+    repo.reportsById[42] = oldReport;
+    repo.rows.add({
+      'id': 2,
+      'role': 'report',
+      'text': encodeReportChatMessage(oldReport, oldReport.summary),
+      'question': '重新生成 6 月月报',
+      'created_ms': 2,
+    });
+
+    Widget panel() => ChangeNotifierProvider<AppRepository>.value(
+          value: repo,
+          child: MaterialApp(
+            home: Scaffold(
+              body: AiChatPanel(
+                fullScreen: true,
+                onSwitchToManual: () {},
+              ),
+            ),
+          ),
+        );
+
+    await tester.pumpWidget(panel());
+    await tester.pump();
+    repo.releaseLoad.complete();
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 20)),
+    );
+    await tester.pump();
+    await tester.pump();
+    expect(find.text('旧报告摘要'), findsOneWidget);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    repo.reportsById[42] = updatedReport;
+    repo.rows.last['text'] =
+        encodeReportChatMessage(updatedReport, updatedReport.summary);
+    await tester.pumpWidget(panel());
+    await tester.pump();
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 20)),
+    );
+    for (var i = 0; i < 4; i++) {
+      await tester.pump(const Duration(milliseconds: 20));
+    }
+
+    expect(find.text('旧报告摘要'), findsNothing);
+    expect(find.text('后台重新生成后的摘要'), findsOneWidget);
+    expect(repo.reportReloadCalls, 1);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    resetChatHistoryForTesting();
+  });
+
+  testWidgets('增量恢复负责人关闭后新面板会接管后台消息加载', (tester) async {
+    resetChatHistoryForTesting();
+    final repo = _ChatRaceRepository();
+
+    Widget panel() => ChangeNotifierProvider<AppRepository>.value(
+          value: repo,
+          child: MaterialApp(
+            home: Scaffold(
+              body: AiChatPanel(
+                fullScreen: true,
+                onSwitchToManual: () {},
+              ),
+            ),
+          ),
+        );
+
+    await tester.pumpWidget(panel());
+    await tester.pump();
+    repo.releaseLoad.complete();
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 20)),
+    );
+    await tester.pump();
+    await tester.pumpWidget(const SizedBox.shrink());
+
+    const report = ReportEntity(
+      id: 43,
+      bookId: 1,
+      type: 'monthly',
+      title: '接管恢复月报',
+      summary: '接管后可见的后台摘要',
+      markdown: '# 接管恢复月报',
+      periodStartMs: 1780243200000,
+      periodEndMs: 1782835199000,
+      createdMs: 1782835200000,
+    );
+    repo.reportsById[report.id] = report;
+    repo.rows.add({
+      'id': 2,
+      'role': 'report',
+      'text': encodeReportChatMessage(report, report.summary),
+      'question': '生成报告',
+      'created_ms': 2,
+    });
+    final gate = Completer<void>();
+    repo.nextLoadGate = gate;
+
+    await tester.pumpWidget(panel());
+    await tester.pump();
+    await tester.runAsync(() async {
+      while (repo.loadCalls < 2) {
+        await Future<void>.delayed(const Duration(milliseconds: 1));
+      }
+    });
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pumpWidget(panel());
+    await tester.pump(const Duration(milliseconds: 20));
+
+    gate.complete();
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 20)),
+    );
+    for (var i = 0; i < 5; i++) {
+      await tester.pump(const Duration(milliseconds: 20));
+    }
+
+    expect(repo.loadCalls, 3, reason: '挂载中的面板必须接管被卸载实例的增量读取');
+    expect(find.text('接管后可见的后台摘要'), findsOneWidget);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    resetChatHistoryForTesting();
+  });
+
+  testWidgets('思考初始文案简洁且回答图标保留点击热区', (tester) async {
+    resetChatHistoryForTesting();
+    final repo = _ChatRaceRepository();
+    repo.releaseLoad.complete();
+    await tester.pumpWidget(
+      ChangeNotifierProvider<AppRepository>.value(
+        value: repo,
+        child: MaterialApp(
+          home: Scaffold(
+            body: AiChatPanel(fullScreen: true, onSwitchToManual: () {}),
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    final input = find.byKey(const ValueKey('ai-chat-input-field'));
+    await tester.enterText(input, '帮我看看本月支出');
+    await tester.testTextInput.receiveAction(TextInputAction.send);
+    await tester.pump();
+    await tester.runAsync(() => repo.userInsertStarted.future);
+    expect(find.text('思考中…'), findsOneWidget);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    repo.releaseUserInsert.complete();
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 20)),
+    );
+    resetChatHistoryForTesting();
+
+    final answerRepo = _ChatRaceRepository();
+    answerRepo.rows
+      ..clear()
+      ..add({
+        'id': 1,
+        'role': 'answer',
+        'text': '已完成的回答',
+        'question': '',
+        'created_ms': 1,
+      });
+    answerRepo.releaseLoad.complete();
+    await tester.pumpWidget(
+      ChangeNotifierProvider<AppRepository>.value(
+        value: answerRepo,
+        child: MaterialApp(
+          home: Scaffold(
+            body: AiChatPanel(fullScreen: true, onSwitchToManual: () {}),
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 20)),
+    );
+    await tester.pump();
+    await tester.pump();
+
+    final copyButton = find.byTooltip('复制');
+    expect(copyButton, findsOneWidget);
+    expect(tester.getSize(copyButton), const Size(36, 36));
+    final copyIcon = tester.widget<SvgPicture>(
+      find.descendant(of: copyButton, matching: find.byType(SvgPicture)),
+    );
+    expect(copyIcon.width, 17.2);
+    expect(copyIcon.height, 17.2);
 
     await tester.pumpWidget(const SizedBox.shrink());
     resetChatHistoryForTesting();

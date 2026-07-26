@@ -8,14 +8,14 @@ import 'package:flutter/foundation.dart';
 class ReportJobRuntime {
   ReportJobRuntime._();
 
-  static final Set<int> _activeIds = <int>{};
+  static final Set<String> _activeKeys = <String>{};
   static final ValueNotifier<int> revision = ValueNotifier<int>(0);
 
-  static bool isActive(int id) => _activeIds.contains(id);
+  static bool isActive(String key) => _activeKeys.contains(key);
 
-  static bool claim(int id) => _activeIds.add(id);
+  static bool claim(String key) => _activeKeys.add(key);
 
-  static void release(int id) {
-    if (_activeIds.remove(id)) revision.value++;
+  static void release(String key) {
+    if (_activeKeys.remove(key)) revision.value++;
   }
 }

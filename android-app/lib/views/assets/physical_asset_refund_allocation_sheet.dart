@@ -37,12 +37,20 @@ class PhysicalAssetRefundAllocationData {
   final String orderLabel;
   final List<PhysicalAssetRefundAllocationTargetData> targets;
 
+  /// 本次退款最多能归到「订单未跟踪部分」的金额；0 = 不显示该选项。
+  final int untrackedLimitCents;
+
+  /// 本次退款当前已归到未跟踪部分的金额（重新分配时回显）。
+  final int currentUntrackedCents;
+
   const PhysicalAssetRefundAllocationData({
     required this.refundTransactionId,
     required this.refundCents,
     required this.occurredAt,
     required this.orderLabel,
     required this.targets,
+    this.untrackedLimitCents = 0,
+    this.currentUntrackedCents = 0,
   });
 }
 
@@ -51,6 +59,7 @@ typedef PhysicalAssetRefundAllocationLoader
 typedef PhysicalAssetRefundAllocationSubmitter = Future<void> Function(
   int refundTransactionId,
   Map<int, int> allocationsByAssetId,
+  int untrackedCents,
 );
 
 Future<void> showPhysicalAssetRefundAllocationSheet(
@@ -184,6 +193,7 @@ class _RefundAllocationCard extends StatefulWidget {
 
 class _RefundAllocationCardState extends State<_RefundAllocationCard> {
   late final Map<int, TextEditingController> _controllers;
+  late final TextEditingController _untrackedController;
   bool _saving = false;
 
   @override
@@ -197,6 +207,11 @@ class _RefundAllocationCardState extends State<_RefundAllocationCard> {
               : _plainAmount(target.currentRefundAllocationCents),
         ),
     };
+    _untrackedController = TextEditingController(
+      text: widget.data.currentUntrackedCents == 0
+          ? ''
+          : _plainAmount(widget.data.currentUntrackedCents),
+    );
   }
 
   @override
@@ -204,6 +219,7 @@ class _RefundAllocationCardState extends State<_RefundAllocationCard> {
     for (final controller in _controllers.values) {
       controller.dispose();
     }
+    _untrackedController.dispose();
     super.dispose();
   }
 
@@ -224,10 +240,23 @@ class _RefundAllocationCardState extends State<_RefundAllocationCard> {
     return values;
   }
 
+  /// 归到「订单未跟踪部分」的金额；非法或超上限返回 null。
+  int? get _untrackedCents {
+    if (widget.data.untrackedLimitCents <= 0) return 0;
+    final raw = _untrackedController.text.trim();
+    if (raw.isEmpty) return 0;
+    final amount = Decimal.tryParse(raw.replaceAll(',', ''));
+    if (amount == null || amount < Decimal.zero) return null;
+    final cents = decimalToBudgetCents(amount);
+    if (cents > widget.data.untrackedLimitCents) return null;
+    return cents;
+  }
+
   int? get _totalCents {
     final allocations = _allocations;
-    if (allocations == null) return null;
-    return allocations.values.fold<int>(0, (sum, cents) => sum + cents);
+    final untracked = _untrackedCents;
+    if (allocations == null || untracked == null) return null;
+    return allocations.values.fold<int>(untracked, (sum, cents) => sum + cents);
   }
 
   bool get _canSubmit =>
@@ -285,6 +314,10 @@ class _RefundAllocationCardState extends State<_RefundAllocationCard> {
             if (i > 0) const SizedBox(height: 13),
             _buildTargetField(context, widget.data.targets[i]),
           ],
+          if (widget.data.untrackedLimitCents > 0) ...[
+            const SizedBox(height: 13),
+            _buildUntrackedField(context),
+          ],
           const SizedBox(height: 14),
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
@@ -333,6 +366,26 @@ class _RefundAllocationCardState extends State<_RefundAllocationCard> {
         ),
         controller: _controllers[target.assetId],
         keyboardType: const TextInputType.numberWithOptions(decimal: true),
+        inputFormatters: moneyInputFormatters(),
+        textInputAction: TextInputAction.next,
+        onChanged: (_) => setState(() {}),
+        decoration: iosInputDecoration(context, hint: '0.00', prefix: '¥ '),
+      ),
+    );
+  }
+
+  Widget _buildUntrackedField(BuildContext context) {
+    return AppLabeledField(
+      label: '不属于已跟踪物品',
+      helperText:
+          '订单里没入库的部分（本次最多 ${_money(widget.data.untrackedLimitCents)}），不影响任何物品的购置成本',
+      child: TextField(
+        key: Key(
+          'asset-refund-untracked-${widget.data.refundTransactionId}',
+        ),
+        controller: _untrackedController,
+        keyboardType: const TextInputType.numberWithOptions(decimal: true),
+        inputFormatters: moneyInputFormatters(),
         textInputAction: TextInputAction.next,
         onChanged: (_) => setState(() {}),
         decoration: iosInputDecoration(context, hint: '0.00', prefix: '¥ '),
@@ -349,10 +402,15 @@ class _RefundAllocationCardState extends State<_RefundAllocationCard> {
 
   Future<void> _submit() async {
     final allocations = _allocations;
-    if (allocations == null || !_canSubmit) return;
+    final untracked = _untrackedCents;
+    if (allocations == null || untracked == null || !_canSubmit) return;
     setState(() => _saving = true);
     try {
-      await widget.submit(widget.data.refundTransactionId, allocations);
+      await widget.submit(
+        widget.data.refundTransactionId,
+        allocations,
+        untracked,
+      );
       if (!mounted) return;
       showAppToast(context, '退款已分配，物品购置成本已更新');
       widget.onCompleted();

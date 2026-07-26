@@ -1,8 +1,41 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../theme/app_colors.dart';
 import '../theme/app_tokens.dart';
 import 'ios_dialogs.dart';
+
+/// 金额输入通用限制：数字 + 最多 2 位小数（可选负号）。
+/// 所有钱相关的输入框都应该带上它——超精度金额落库曾导致读取路径崩溃。
+List<TextInputFormatter> moneyInputFormatters({bool allowNegative = false}) =>
+    [_MoneyTextInputFormatter(allowNegative: allowNegative)];
+
+class _MoneyTextInputFormatter extends TextInputFormatter {
+  final bool allowNegative;
+  _MoneyTextInputFormatter({required this.allowNegative});
+
+  static final _positive = RegExp(r'^\d{0,10}(\.\d{0,2})?$');
+  static final _signed = RegExp(r'^-?\d{0,10}(\.\d{0,2})?$');
+
+  @override
+  TextEditingValue formatEditUpdate(
+    TextEditingValue oldValue,
+    TextEditingValue newValue,
+  ) {
+    final pattern = allowNegative ? _signed : _positive;
+    if (pattern.hasMatch(newValue.text)) return newValue;
+    // 粘贴的金额常带千分位逗号（如「1,234.56」）：剥掉逗号再校验，
+    // 合法就接受剥后的文本（光标移到末尾），仍不合法才退回旧值。
+    final stripped = newValue.text.replaceAll(',', '');
+    if (stripped != newValue.text && pattern.hasMatch(stripped)) {
+      return TextEditingValue(
+        text: stripped,
+        selection: TextSelection.collapsed(offset: stripped.length),
+      );
+    }
+    return oldValue;
+  }
+}
 
 /// 表单字段的常驻标签。字段名始终显示，hint 只负责给示例或格式提示。
 class AppLabeledField extends StatelessWidget {

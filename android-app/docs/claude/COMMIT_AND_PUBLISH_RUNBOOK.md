@@ -19,6 +19,8 @@
 
 **铁律：所有 bash 脚本必须在 Git Bash 里跑，不能用 PowerShell 里的 `bash`（那是 WSL，处理不了 Windows 路径，`stat`/`sha256sum` 第一步就挂）。**
 
+GitHub Android CI 的门禁：Pull Request 以及 `codex/**`、`claude/**`、`main` 的 push 都执行 release 脚本语法/单测、analyze、Flutter 全量测试和 release 编译；只有权威发布分支 `codex/feimiao-p0-fixes` 的 push 能签名、上传 artifact 和覆盖 `android-latest`。该分支必须配置 `ANDROID_KEYSTORE_BASE64`、`ANDROID_KEYSTORE_PASSWORD`、`ANDROID_KEY_PASSWORD`、`ANDROID_KEY_ALIAS` 四个 Secret，任意一个缺失都会失败，绝不发布临时 debug 签名包。验包后 CI 还会读取线上 `version.json`：只允许更高 versionCode，或与线上完全相同的幂等身份；同 versionCode 但 versionName/SHA/releaseId 不同会失败，读取线上状态失败也会关闭发布。只有门禁通过才上传 artifact。同一分支的新 push 会取消旧的在途构建，避免旧包晚完成后反向覆盖新版。
+
 ---
 
 ## A. 提交 commit
@@ -34,28 +36,24 @@ find android-app/lib android-app/test -name "*.dart" -mmin -2
 
 ### A.2 精确 stage（**绝不用 `git add .`**）
 
-只加代码/测试/文档/版本文件 + **当前这一个** release APK：
+只加源代码、测试、脚本、文档和版本文件。**APK 和其本地 SHA 文件不进 Git**，它们只保存在本机忽略目录、GitHub Release 或 Cloudflare：
 
 ```bash
 cd /c/src/xunni-codex
 git add android-app/lib android-app/test android-app/docs \
-        android-app/CHANGELOG_CODEX.md android-app/pubspec.yaml
+        android-app/ci android-app/CHANGELOG_CODEX.md android-app/pubspec.yaml
 # 如果动了原生层再加：git add android-app/android
-# 当前 release APK（只加最终那一个，不加中间迭代包）：
-git add ci-artifacts/releases/feimiao-codex-v<versionName>-<versionCode>.apk \
-        ci-artifacts/releases/feimiao-codex-v<versionName>-<versionCode>.apk.sha256.txt
+# 如果动了 CI/忽略规则再加：git add .github/workflows/android-ci.yml .gitignore
+# AGENTS.md 是正式交接文件，只有确实更新了交接内容时才单独 git add AGENTS.md。
 ```
 
-**必须排除、绝不能进提交的东西**（`git add .` 会把它们扫进来，所以别用）：
-- codex 工作垃圾：`.codex/`、`.playwright-cli/`、`AGENTS.md`、`android-app/outputs/`
-- 中间迭代 APK（只留最终发布那一版）
-- 旧 release APK 的**删除**状态（`D ci-artifacts/releases/...`）——这是清理旧包，**单独提一笔**，别混进功能提交
+**必须排除、绝不能进提交的东西**：`.codex/`、`.playwright-cli/`、`android-app/outputs/`、Wrangler 本机账号缓存、所有 APK 和本地 SHA 产物。根 `.gitignore` 已拦截新产物；历史里已有 APK 的删除应作为仓库清理单独提交，别混进功能提交。
 
 ### A.3 核对暂存区没混入垃圾
 
 ```bash
-git diff --cached --name-only | grep -iE "\.codex|outputs/|AGENTS|playwright" && echo "⚠️有垃圾误入,撤销:git restore --staged <文件>" || echo "✓干净"
-git diff --cached --name-only | grep "\.apk$"   # 应只有 1 个 APK
+git diff --cached --name-only | grep -iE "\.codex|outputs/|playwright" && echo "⚠️有垃圾误入,撤销:git restore --staged <文件>" || echo "✓干净"
+git diff --cached --name-only | grep -iE "\.apk($|\.)" && echo "⚠️APK/哈希不应进入 Git" || echo "✓无 APK 产物"
 ```
 
 ### A.4 提交（消息格式固定）
@@ -99,19 +97,16 @@ flutter build apk --release --no-pub
 
 ```bash
 cd /c/src/xunni-codex/android-app
-AAPT=$(ls "$LOCALAPPDATA/Android/Sdk/build-tools/"*/aapt.exe | tail -1)
-"$AAPT" dump badging build/app/outputs/flutter-apk/app-release.apk | head -1   # 核对 versionCode/versionName/包名
 export JAVA_HOME="/c/Program Files/Android/Android Studio/jbr"
-SIGNER=$(ls "$LOCALAPPDATA/Android/Sdk/build-tools/"*/apksigner.bat | tail -1)
-"$SIGNER" verify --print-certs build/app/outputs/flutter-apk/app-release.apk 2>&1 | grep "certificate DN"
-# 归档到 releases 并记录哈希
+bash ci/verify_release_apk.sh build/app/outputs/flutter-apk/app-release.apk
+# 本机归档目录已被根 .gitignore 忽略，只用于交付和复验
 cd /c/src/xunni-codex
 cp android-app/build/app/outputs/flutter-apk/app-release.apk ci-artifacts/releases/feimiao-codex-v<versionName>-<versionCode>.apk
 SHA=$(sha256sum < ci-artifacts/releases/feimiao-codex-v<versionName>-<versionCode>.apk | awk '{print $1}')
 echo "${SHA^^}" > ci-artifacts/releases/feimiao-codex-v<versionName>-<versionCode>.apk.sha256.txt
 echo "$SHA"
 ```
-必须核对：包名 `com.qingji.qingji.codex`、versionCode 对、签名 `CN=Feimiao Codex Test, OU=Codex, O=Feimiao, L=Shanghai, ST=Shanghai, C=CN`。签名不对=覆盖安装失败/数据丢，**停止**。
+验证脚本会同时核对包名、内部 versionName/versionCode、16 KiB ZIP 对齐、APK Signature Scheme v2、严格 DN，以及固定证书 SHA-256 `4E99C399D4D246BD9C6B08B1D641248BD0846E7AE650C3A766E30FA67483D507`。任一不符都会停止。
 
 ---
 
@@ -127,12 +122,13 @@ bash ci/publish_update.sh \
   "C:\src\xunni-codex\ci-artifacts\releases\feimiao-codex-v<versionName>-<versionCode>.apk" \
   "<versionName>" "<versionCode>" "<给用户看的更新说明>"
 ```
-脚本干的事（**原子设计**，理解这点就不怕中途失败）：
-1. 把 APK 切成 24MB 分片，逐个传 `apk:<releaseId>:<i>`（releaseId = `v<versionCode>-<sha256前12位>`）
-2. 传 manifest `apk:<releaseId>:manifest`
-3. **最后**才切换 `version.json`
+脚本干的事（**先门禁、后原子上传**）：
+1. 用 `aapt`、`zipalign` 和 `apksigner` 核对包名、APK 内部版本、16 KiB 对齐、v2 签名、严格 DN 与固定证书指纹；工具缺失直接失败。
+2. 生成候选发布身份并读取线上 `version.json`，交给 `release_gate.mjs` 统一判断：versionCode 更高才继续上传；完整身份与线上一致则按幂等成功直接结束；降级、同 versionCode 不同身份、网络或 JSON 异常都直接失败。分片上传完成后、切换指针前会再次读取线上身份，阻止并发发布把新版本覆盖回旧版本。
+3. 把 APK 切成 24MB 分片并逐个上传，每个 KV 写入最多重试 5 次。
+4. 传 manifest `apk:<releaseId>:manifest`，**最后**才切换 `version.json`。
 
-所以**任何一步在切 version.json 之前失败，线上都还是旧版本，生产环境零风险**，直接重跑即可。
+所以**任何一步在切 version.json 之前失败，线上都还是旧版本，生产环境零风险**，直接重跑即可；若上一次其实已经切换成功，重跑会识别为同一身份并幂等结束，不会重复上传。
 
 ### C.2 线上验证（发完必做，三重）
 
@@ -150,28 +146,9 @@ cat /tmp/dl*.bin | sha256sum   # 必须 == 归档 APK 的 sha256
 ```
 `sha256`/`releaseId` 里若出现 `\` 前缀 = 污染（历史事故），发布脚本已改 stdin 计算，不该再出现；万一出现，直接改写 KV 的 `version.json` 和 manifest 的 sha256 字段为干净 64 位 hex 即可（chunk 键名保持原样）。
 
-### C.3 网络抖动兜底（脚本反复 `fetch failed` 时用）
+### C.3 网络抖动兜底
 
-Cloudflare 连接从本机偶尔抽风，脚本不断点续、每次从 chunk 0 重传很浪费。改**逐分片带重试手动传**（version.json 仍最后传，保原子）：
-
-```bash
-SP=/tmp/pub; rm -rf $SP; mkdir $SP
-APK=/c/src/xunni-codex/ci-artifacts/releases/feimiao-codex-v<versionName>-<versionCode>.apk
-split -b 24m -d -a 2 "$APK" "$SP/chunk-"          # 切片
-cd /c/src/xunni-codex/android-app/ci/update-worker
-NSID=34c07e0793ea4fb8a526dd28eb1aa1b0
-RID=v<versionCode>-<sha前12>
-KV="npx --yes wrangler kv key put --namespace-id=$NSID --remote"
-# 逐片重试
-i=0; for f in "$SP"/chunk-*; do
-  for t in 1 2 3 4 5 6; do $KV "apk:$RID:$i" --path "$f" && break; sleep 3; done; i=$((i+1)); done
-# 写 manifest.json = {releaseId,chunks:N,size:<字节>,sha256:<64位>} 后:
-$KV "apk:$RID:manifest" --path /tmp/manifest.json
-# 最后原子切换 version.json = {versionName,versionCode,url,notes,sizeBytes,sha256,releaseId}
-$KV "version.json" --path /tmp/version.json
-# url 固定为: https://updates.xunni9481.dpdns.org/feimiao-latest.apk?release=<releaseId>
-```
-写 manifest/version.json 的字段照 C.1 脚本里的 node 段一模一样，或参考已发布版本的 version.json。
+发布脚本已经对每个 KV 写入做 5 次重试。仍失败时直接重跑同一条 `publish_update.sh` 命令；在 `version.json` 成功切换前，客户端始终看到旧版，已经切换成功则会幂等结束。**不要手工上传或改写 `version.json` 绕过验包和发布身份门禁。**
 
 ### C.4 Worker 源码改动后要重新部署
 
@@ -201,11 +178,11 @@ cd /c/src/xunni-codex/android-app/ci/update-worker && npx wrangler deploy
 | `git add .` | 扫进 codex 垃圾/中间包/删除 | 精确 add 指定路径 |
 | 别人写一半时提交 | 半成品被固化、编译挂 | 先 `git status`+`find -mmin -2` 确认停手 |
 | Cloudflare 连接抖动 | 脚本 `fetch failed` | 逐分片带重试(C.3);原子设计保证线上不坏 |
-| 签名 keystore 不对 | 覆盖安装失败/数据丢 | `codex-upload-keystore.jks` alias `codexupload`;apksigner 核对 DN |
+| 签名 keystore 不对 | 覆盖安装失败/数据丢 | `verify_release_apk.sh` 同时核对完整签名、严格 DN 和固定 SHA-256 指纹 |
 | 版本号只改 1-2 处 | 装包/更新异常 | 四处同步(pubspec/app_version/build_info/local.properties) |
 
 ## F. 快速检查清单
 
 **提交前**：□ 工作树停手 □ 精确 stage □ 无垃圾/中间包/删除混入 □ 消息含验证数字
-**出包前**：□ 四处版本同步 □ analyze 0 □ test exit0+All passed □ aapt 版本对 □ 签名 DN 对 □ sha 记录
+**出包前**：□ 四处版本同步 □ analyze 0 □ test exit0+All passed □ 验包脚本通过（包名/内部版本/16 KiB/v2/签名指纹） □ sha 记录
 **发布后**：□ version.json 版本对+sha 干净 □ 逐分片拼接哈希==源 □ 文档三处更新

@@ -8,7 +8,8 @@ plugins {
 }
 
 // 固定 release 签名：读 android/key.properties（已在 .gitignore，不会进仓库）。
-// 文件不存在时回落到 debug 签名，保证其他机器/CI 仍能编译。
+// 文件不存在时仅为本地开发/非发布校验回落到 debug 签名；CI push 发布
+// 会强制要求固定密钥并在上传前核对证书 SHA-256。
 val keystoreProperties = Properties()
 val keystorePropertiesFile = rootProject.file("key.properties")
 if (keystorePropertiesFile.exists()) {
@@ -31,7 +32,9 @@ val hasReleaseKeystore = keystorePropertiesFile.exists() &&
 
 android {
     namespace = "com.qingji.qingji"
-    compileSdk = flutter.compileSdkVersion
+    // Keep the app build reproducible outside CI. Some Flutter plugins still
+    // need the repository init script to raise their own subproject SDK.
+    compileSdk = 36
     ndkVersion = flutter.ndkVersion
 
     compileOptions {
@@ -83,6 +86,9 @@ android {
 
 dependencies {
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")
+    // Chinese OCR must be part of the app dependency graph. Do not inject this
+    // from a machine-level Gradle init script: local and CI builds must match.
+    implementation("com.google.mlkit:text-recognition-chinese:16.0.1")
 }
 
 kotlin {

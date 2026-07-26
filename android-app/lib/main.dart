@@ -1,3 +1,4 @@
+import 'dart:async' show unawaited;
 import 'dart:ui' show ImageFilter;
 
 import 'package:flutter/material.dart';
@@ -44,7 +45,7 @@ import 'views/transactions/reimburse_view.dart';
 import 'views/transactions/transaction_list_view.dart';
 import 'widgets/app_page_route.dart';
 
-void main() async {
+Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
     statusBarColor: Colors.transparent,
@@ -55,15 +56,20 @@ void main() async {
   ));
 
   final repo = AppRepository();
-  await repo.init();
-  await ReportTaskScheduler.initialize();
-  await ReportTaskScheduler.reschedulePending(repo);
-  WidgetSnapshotService.instance.attach(repo);
-  // 主题偏好要在首帧前灌进 AppColors，否则会闪一下默认暖橙再切换。
-  await AppThemeController.instance.load();
 
-  ShareIntake.init(); // 「分享到肥喵」：监听系统分享，自动记账
-  _autoRecordWatcher.start(); // 自动记账：回到 App 时读取通知队列、弹确认表
+  // 启动页只等待“主页核心快照”：账本、账户、分类、预算和当月账单。
+  // 这几项完成后立刻 runApp，用户第一眼就能看到真实本月数据；资产、报告、
+  // 全历史和维护任务由首帧后的第二阶段继续处理。
+  final repositoryCoreInit = _initializeRepository(repo, fastStartup: true);
+  unawaited(AppThemeController.instance.load());
+  // 先注册原生分享通道；数据库未 ready 时由 ShareIntake 自己排队，避免
+  // 用户在启动窗口内从别的 App 分享内容而丢失 intent。
+  ShareIntake.init(
+    repositoryReady: repo.fullyReady,
+    repositoryReadyCheck: () => repo.isFullyReady,
+  );
+  await repo.ready;
+  final repositoryFullyReady = _scheduleDeferredConvergence(repo);
 
   runApp(
     MultiProvider(
@@ -75,6 +81,105 @@ void main() async {
       child: const QingJiApp(),
     ),
   );
+
+  // WorkManager / 通知通道初始化可能触发磁盘和 Binder I/O，不属于主页
+  // 首帧的必要条件。等主页已经画出后再恢复后台报告，避免冷启动露出白屏。
+  schedulePostFrameServices(repo, repositoryReady: repositoryFullyReady);
+  _schedulePostFrameStartupServices(repo, repositoryFullyReady);
+
+  // Core init is awaited through repo.ready above. Keep a reference alive so
+  // an unexpected error is still logged by the existing boundary.
+  await repositoryCoreInit;
+}
+
+/// 首帧之后继续加载全库、资产和维护数据。这个 barrier 不参与首帧，
+/// 但报告/小组件/自动记账等后台服务要等它完成，避免读取半快照。
+Future<void> _scheduleDeferredConvergence(AppRepository repo) {
+  WidgetsBinding.instance.addPostFrameCallback((_) {
+    unawaited(repo.finishDeferredInitialization().catchError((error, stack) {
+      debugPrint('deferred repository convergence failed: $error');
+      debugPrint('$stack');
+    }));
+  });
+  return repo.fullyReady;
+}
+
+/// 初始化失败不能把用户挡在启动页；后续需要数据库的操作仍会保留原有
+/// 错误边界，下一次启动可以再次尝试初始化。
+Future<void> _initializeRepository(
+  AppRepository repo, {
+  bool fastStartup = false,
+}) async {
+  try {
+    await repo.init(fastStartup: fastStartup);
+  } catch (error, stackTrace) {
+    debugPrint('initialize app repository failed: $error');
+    debugPrint('$stackTrace');
+  }
+}
+
+/// Widget 图片渲染和自动记账的首帧回调都放到数据库完成之后，避免
+/// 它们在首页刚显示时抢占 UI isolate 或读取半初始化的数据。
+void _schedulePostFrameStartupServices(
+  AppRepository repo,
+  Future<void> repositoryReady,
+) {
+  WidgetsBinding.instance.addPostFrameCallback((_) {
+    unawaited(_startPostFrameStartupServices(repo, repositoryReady));
+  });
+}
+
+Future<void> _startPostFrameStartupServices(
+  AppRepository repo,
+  Future<void> repositoryReady,
+) async {
+  await repositoryReady;
+  if (!repo.isFullyReady) return;
+  WidgetSnapshotService.instance.attach(repo);
+  _autoRecordWatcher.start();
+}
+
+/// 把不影响首页展示的原生服务延后到 Flutter 第一帧之后。
+///
+/// 可注入回调是为了让回归测试验证“首帧前绝不启动后台调度器”，生产环境
+/// 不传参数时使用真正的报告调度实现。
+void schedulePostFrameServices(
+  AppRepository repo, {
+  Future<void>? repositoryReady,
+  Future<bool> Function()? initializeReportScheduler,
+  Future<void> Function(AppRepository repo)? rescheduleReports,
+}) {
+  final initialize =
+      initializeReportScheduler ?? ReportTaskScheduler.initialize;
+  final reschedule = rescheduleReports ?? ReportTaskScheduler.reschedulePending;
+  WidgetsBinding.instance.addPostFrameCallback((_) {
+    unawaited(
+      _startPostFrameServices(
+        repo,
+        initialize,
+        reschedule,
+        repositoryReady: repositoryReady,
+      ),
+    );
+  });
+}
+
+Future<void> _startPostFrameServices(
+  AppRepository repo,
+  Future<bool> Function() initialize,
+  Future<void> Function(AppRepository repo) reschedule, {
+  Future<void>? repositoryReady,
+}) async {
+  try {
+    if (repositoryReady != null) {
+      await repositoryReady;
+      if (!repo.isFullyReady) return;
+    }
+    if (await initialize()) await reschedule(repo);
+  } catch (error) {
+    // 后台报告恢复失败不能反过来影响首页；创建报告时仍会按需再次初始化。
+    debugPrint('initialize deferred app services failed: $error');
+  }
 }
 
 /// 自动记账巡查：App 首帧后与每次回到前台时读取支付通知，用户明确处理后
@@ -160,8 +265,19 @@ class RootShellState extends State<RootShell>
   bool _ptrDragging = false;
   double _ptrLastX = 0;
   double _ptrLastDx = 0;
+  // 抽屉包含封面图片、可重排列表和多个菜单项；它不参与主页首帧，
+  // 第一次真正打开时再构建，避免冷启动白白做一整棵隐藏子树。
+  bool _drawerBuilt = false;
 
-  void _openDrawer() => _drawerCtl.animateTo(1, curve: Curves.easeOutCubic);
+  void _ensureDrawerBuilt() {
+    if (!_drawerBuilt && mounted) setState(() => _drawerBuilt = true);
+  }
+
+  void _openDrawer() {
+    _ensureDrawerBuilt();
+    _drawerCtl.animateTo(1, curve: Curves.easeOutCubic);
+  }
+
   void _closeDrawer() => _drawerCtl.animateTo(0, curve: Curves.easeOutCubic);
 
   @override
@@ -225,22 +341,23 @@ class RootShellState extends State<RootShell>
             body: Stack(
               children: [
                 // ── 底层：抽屉面板（固定不动，主页推开后露出来）──
-                Positioned(
-                  left: 0,
-                  top: 0,
-                  bottom: 0,
-                  width: drawerW,
-                  child: IgnorePointer(
-                    ignoring: _drawerCtl.value < 0.01,
-                    child: ExcludeSemantics(
-                      excluding: _drawerCtl.value < 0.01,
-                      child: _DrawerPanel(
-                        onClose: _closeDrawer,
-                        closed: _drawerCtl.value < 0.01,
+                if (_drawerBuilt)
+                  Positioned(
+                    left: 0,
+                    top: 0,
+                    bottom: 0,
+                    width: drawerW,
+                    child: IgnorePointer(
+                      ignoring: _drawerCtl.value < 0.01,
+                      child: ExcludeSemantics(
+                        excluding: _drawerCtl.value < 0.01,
+                        child: _DrawerPanel(
+                          onClose: _closeDrawer,
+                          closed: _drawerCtl.value < 0.01,
+                        ),
                       ),
                     ),
                   ),
-                ),
                 // ── 上层：主页面卡片，右移 + 圆角 + 阴影 ──
                 // 拖动手势用 Listener 裸指针：不进手势竞技场，所以在账单行
                 // （有左滑操作的 Slidable）上右滑也能拉出抽屉，互不打架。
@@ -266,6 +383,7 @@ class RootShellState extends State<RootShell>
                           (open
                               ? total.dx < 0
                               : total.dx > 0 && !SlidableTracker.anyOpen)) {
+                        _ensureDrawerBuilt();
                         _ptrDragging = true;
                         _ptrLastX = e.position.dx;
                       }

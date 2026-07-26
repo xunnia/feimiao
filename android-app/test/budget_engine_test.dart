@@ -117,6 +117,55 @@ void main() {
       expect(status.todayAllowance, Decimal.zero);
     });
 
+    test('hasDailyGuidance is true only when daily guidance exists', () {
+      // 当前循环周期内：有日度引导。
+      final current = resolveWindow(
+        reference: DateTime(2026, 6),
+        asOf: DateTime(2026, 6, 10, 23, 59),
+      );
+      expect(BudgetEngine.fromWindowResult(current)!.hasDailyGuidance, isTrue);
+
+      // 历史窗口：日度字段只是 0 占位，不应画「今日可用」。
+      final historical = resolveWindow(
+        reference: DateTime(2026, 3),
+        asOf: DateTime(2026, 7, 10),
+        planEnd: DateTime(2026, 5, 31),
+      );
+      expect(
+        BudgetEngine.fromWindowResult(historical)!.hasDailyGuidance,
+        isFalse,
+      );
+    });
+
+    test('one-off period only yields no daily guidance', () {
+      // 只有一次性区间预算（非每月循环）时没有当前循环周期，
+      // 主页不应显示「今日可用 ¥0.00」满环。
+      final asOf = DateTime(2026, 6, 10);
+      final result = BudgetWindowResolver.resolve(
+        query: BudgetWindowQuery(
+          viewKind: BudgetViewKind.calendarMonth,
+          bookId: 1,
+          referenceDate: DateTime(2026, 6),
+          asOf: asOf,
+          knowledgeCutoff: asOf,
+        ),
+        periods: [
+          BudgetPeriod(
+            id: 1,
+            bookId: 1,
+            start: DateTime(2026, 6, 1),
+            end: DateTime(2026, 6, 30),
+            total: Decimal.fromInt(3000),
+            recurringMonthly: false,
+          ),
+        ],
+      );
+      final status = BudgetEngine.fromWindowResult(result)!;
+      expect(status.hasDailyGuidance, isFalse);
+      expect(status.spentToday, Decimal.zero);
+      expect(status.todayAllowance, Decimal.zero);
+    });
+
     test('todayAllowance', () {
       // 6 月预算 3000；6 月 1~9 日花 900，今天（10 日）花 50。
       // 今日可花 = (3000 - 900) / 21 - 50 = 50

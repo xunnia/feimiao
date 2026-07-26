@@ -4,43 +4,113 @@
 # Usage:
 #   ./publish_update.sh <apk-path> <versionName> <versionCode> "<release notes>"
 #
-# Safety rules:
-# - APK chunks are written under a versioned release id: apk:<releaseId>:<index>.
-# - version.json is updated only after every chunk and manifest has uploaded.
-# - version.json is generated with Node JSON.stringify so notes can contain quotes
-#   and newlines safely.
+# The script verifies package/version/signing identity and evaluates the full
+# online release identity before uploading a single byte. version.json switches last.
 
 set -euo pipefail
 
-APK="${1:?apk path required}"
-VNAME="${2:?versionName required}"
-VCODE="${3:?versionCode required}"
+fail() {
+  echo "publish failed: $*" >&2
+  exit 1
+}
+
+require_command() {
+  command -v "$1" >/dev/null 2>&1 || fail "required command is missing: $1"
+}
+
+[ "$#" -ge 3 ] && [ "$#" -le 4 ] || \
+  fail "usage: $0 <apk-path> <versionName> <versionCode> [release notes]"
+
+APK="$1"
+VNAME="$2"
+VCODE="$3"
 NOTES="${4:-修复问题并改进体验。}"
+[[ "$VCODE" =~ ^[0-9]+$ ]] || fail "versionCode must be an integer"
+
+for command_name in awk curl mktemp node npx split stat; do
+  require_command "$command_name"
+done
+if ! command -v sha256sum >/dev/null 2>&1 && ! command -v shasum >/dev/null 2>&1; then
+  fail "sha256sum or shasum is required"
+fi
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+bash "$SCRIPT_DIR/verify_release_apk.sh" "$APK" "$VNAME" "$VCODE"
+
+if [ ! -f "$APK" ] && command -v cygpath >/dev/null 2>&1; then
+  APK="$(cygpath -u "$APK")"
+fi
+[ -s "$APK" ] || fail "APK does not exist or is empty: $APK"
+
+TMP="$(mktemp -d)"
+trap 'rm -rf "$TMP"' EXIT
 
 SIZE=$(stat -c%s "$APK" 2>/dev/null || stat -f%z "$APK")
-# 用 stdin 喂 sha256sum：直接传 Windows 路径时文件名含反斜杠，
-# GNU coreutils 会在哈希前加 "\" 转义标志，污染 releaseId 和 sha256 字段。
 SHA256=$(
   sha256sum < "$APK" 2>/dev/null | awk '{print $1}' ||
   shasum -a 256 < "$APK" | awk '{print $1}'
 )
+[[ "$SHA256" =~ ^[0-9a-fA-F]{64}$ ]] || fail "could not calculate a clean APK SHA-256"
+SHA256="$(printf '%s' "$SHA256" | tr '[:upper:]' '[:lower:]')"
 RELEASE_ID="v${VCODE}-${SHA256:0:12}"
 
-NSID="34c07e0793ea4fb8a526dd28eb1aa1b0"
-WRANGLER="npx --yes --registry=https://registry.npmmirror.com wrangler"
-KV="$WRANGLER kv key put --namespace-id=$NSID --remote"
+VNAME="$VNAME" VCODE="$VCODE" SHA256="$SHA256" RELEASE_ID="$RELEASE_ID" \
+  node - <<'NODE' > "$TMP/candidate.json"
+const candidate = {
+  versionName: process.env.VNAME,
+  versionCode: Number(process.env.VCODE),
+  sha256: process.env.SHA256,
+  releaseId: process.env.RELEASE_ID,
+};
+process.stdout.write(JSON.stringify(candidate, null, 2));
+NODE
 
-TMP=$(mktemp -d)
-trap 'rm -rf "$TMP"' EXIT
+VERSION_URL="${FEIMIAO_VERSION_URL:-https://updates.xunni9481.dpdns.org/version.json}"
+echo "checking online version: $VERSION_URL"
+curl --fail --silent --show-error --location --max-time 30 \
+  "$VERSION_URL" -o "$TMP/online-version.json"
+
+GATE_DECISION="$(node "$SCRIPT_DIR/release_gate.mjs" \
+  --candidate "$TMP/candidate.json" \
+  --current "$TMP/online-version.json" \
+  --candidate-apk "$APK")"
+case "$GATE_DECISION" in
+  advance)
+    echo "release gate verified: candidate advances the online release"
+    ;;
+  idempotent)
+    echo "release already published with the same identity; nothing to upload"
+    exit 0
+    ;;
+  *)
+    fail "unexpected release gate decision: $GATE_DECISION"
+    ;;
+esac
+
+NSID="34c07e0793ea4fb8a526dd28eb1aa1b0"
+WRANGLER=(npx --yes --registry=https://registry.npmmirror.com wrangler)
+kv_put() {
+  local attempt
+  for attempt in 1 2 3 4 5; do
+    if "${WRANGLER[@]}" kv key put --namespace-id="$NSID" --remote "$@"; then
+      return 0
+    fi
+    echo "KV upload failed (attempt $attempt/5); retrying..." >&2
+    sleep 3
+  done
+  fail "KV upload failed after 5 attempts: $1"
+}
 
 split -b 24m -d -a 2 "$APK" "$TMP/chunk-"
-CHUNKS=$(ls "$TMP"/chunk-* | wc -l)
+CHUNK_FILES=("$TMP"/chunk-*)
+CHUNKS="${#CHUNK_FILES[@]}"
+[ "$CHUNKS" -gt 0 ] || fail "APK split produced no chunks"
 echo "APK $((SIZE / 1024 / 1024)) MB -> $CHUNKS chunks, release=$RELEASE_ID"
 
 i=0
-for f in "$TMP"/chunk-*; do
-  echo "  upload chunk $i/$CHUNKS"
-  $KV "apk:$RELEASE_ID:$i" --path "$f"
+for file in "${CHUNK_FILES[@]}"; do
+  echo "upload chunk $((i + 1))/$CHUNKS"
+  kv_put "apk:$RELEASE_ID:$i" --path "$file"
   i=$((i + 1))
 done
 
@@ -53,7 +123,7 @@ const manifest = {
 };
 process.stdout.write(JSON.stringify(manifest, null, 2));
 NODE
-$KV "apk:$RELEASE_ID:manifest" --path "$TMP/manifest.json"
+kv_put "apk:$RELEASE_ID:manifest" --path "$TMP/manifest.json"
 
 VNAME="$VNAME" VCODE="$VCODE" NOTES="$NOTES" SIZE="$SIZE" SHA256="$SHA256" RELEASE_ID="$RELEASE_ID" node - <<'NODE' > "$TMP/version.json"
 const releaseId = process.env.RELEASE_ID;
@@ -68,7 +138,32 @@ const version = {
 };
 process.stdout.write(JSON.stringify(version, null, 2));
 NODE
-$KV "version.json" --path "$TMP/version.json"
+
+# Re-check immediately before the pointer switch. Another publisher may have
+# advanced production while this process was uploading chunks; never overwrite
+# that newer identity with an older candidate.
+curl --fail --silent --show-error --location --max-time 30 \
+  "$VERSION_URL" -o "$TMP/online-version-final.json"
+FINAL_GATE_DECISION="$(node "$SCRIPT_DIR/release_gate.mjs" \
+  --candidate "$TMP/candidate.json" \
+  --current "$TMP/online-version-final.json" \
+  --candidate-apk "$APK")"
+case "$FINAL_GATE_DECISION" in
+  advance)
+    echo "final release gate verified: production still allows this candidate"
+    ;;
+  idempotent)
+    echo "the same release identity became current during upload; pointer is already correct"
+    exit 0
+    ;;
+  *)
+    fail "unexpected final release gate decision: $FINAL_GATE_DECISION"
+    ;;
+esac
+
+# Atomic pointer switch: this is the first operation that makes the new build
+# visible to clients.
+kv_put "version.json" --path "$TMP/version.json"
 
 echo "published v$VNAME ($VCODE), sha256=$SHA256"
-echo "https://updates.xunni9481.dpdns.org/version.json"
+echo "$VERSION_URL"

@@ -160,6 +160,29 @@ class _AiAccountSettingsPageState extends State<_AiAccountSettingsPage> {
     });
   }
 
+  /// 自定义服务地址必须走 https：http 明文会把 API Key 和账本上下文裸奔。
+  /// 本机调试地址（localhost / 127.0.0.1 / ::1）除外。
+  static bool _isInsecureBaseUrl(String raw) {
+    final url = raw.trim().toLowerCase();
+    if (!url.startsWith('http://')) return false;
+    final host = Uri.tryParse(url)?.host ?? '';
+    return !(host == 'localhost' || host == '127.0.0.1' || host == '::1');
+  }
+
+  /// 校验自定义地址，非 https 时 toast 提示并返回 false（拦下保存/测试）。
+  /// key 为空时放行（没有 key 就不会发出任何数据，且「清除 Key」不能被拦）。
+  bool _ensureSecureBaseUrl() {
+    if (_provider != AiProviderType.custom) return true;
+    if (_keyCtrl.text.trim().isEmpty) return true;
+    if (!_isInsecureBaseUrl(_baseUrlCtrl.text)) return true;
+    showAppToast(
+      context,
+      '为保护数据安全，自定义服务地址必须是 https',
+      icon: Icons.error_outline,
+    );
+    return false;
+  }
+
   AiProviderConfig _formConfig() {
     if (_provider == AiProviderType.custom) {
       return AiProviderConfig.custom(
@@ -174,6 +197,7 @@ class _AiAccountSettingsPageState extends State<_AiAccountSettingsPage> {
 
   Future<void> _save() async {
     if (_saving) return;
+    if (!_ensureSecureBaseUrl()) return;
     setState(() => _saving = true);
     final repo = context.read<AppRepository>();
     try {
@@ -197,6 +221,7 @@ class _AiAccountSettingsPageState extends State<_AiAccountSettingsPage> {
       showAppToast(context, '先填写 API Key', icon: Icons.info_outline);
       return;
     }
+    if (!_ensureSecureBaseUrl()) return;
     setState(() => _testing = true);
     try {
       await LlmQuery.testConnection(config);

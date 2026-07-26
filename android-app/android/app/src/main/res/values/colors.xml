@@ -1,4 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <color name="ic_launcher_background">#2E5090</color>
+    <!-- 与默认主页顶部暖色接近，冷启动窗口不再闪纯白。 -->
+    <color name="launch_background">#FAE0B0</color>
 </resources>

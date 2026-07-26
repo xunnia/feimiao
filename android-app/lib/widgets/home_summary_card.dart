@@ -127,7 +127,7 @@ class HomeSummaryCard extends StatelessWidget {
                 sway: 0,
                 alignment: Alignment.centerRight,
                 child: Image.asset(
-                  'assets/mascot/${isOverspend ? 'overspend' : 'idle'}.png',
+                  'assets/mascot/${isOverspend ? 'overspend' : 'idle'}.webp',
                   height: 96,
                   fit: BoxFit.fitHeight,
                 ),
@@ -572,7 +572,10 @@ class _BudgetBody extends StatelessWidget {
     final String ringText;
     final double ringVal;
     final Color ringColor;
-    if (isCurrentMonth) {
+    // 只有一次性区间预算（无循环周期）时窗口结果没有日度引导，
+    // spentToday/todayAllowance 只是 0 占位——此时画「今日可用 ¥0.00」
+    // 满环是误导，退回和历史月一样的「已用 %」圆环。
+    if (isCurrentMonth && s.hasDailyGuidance) {
       final today = s.todayAllowance;
       final todayNeg = today < Decimal.zero;
       final dayEnv = s.spentToday + (todayNeg ? Decimal.zero : today);

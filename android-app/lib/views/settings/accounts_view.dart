@@ -1498,6 +1498,9 @@ class _AccountDetailSheetState extends State<_AccountDetailSheet> {
         .take(3)
         .toList();
     final trend = repo.accountBalanceTrend(current, days: _trendDays);
+    final recurringRuleCount = repo.recurringRules
+        .where((rule) => rule.accountId == current.id)
+        .length;
     final qualityText = movement.unknownSettlementAccountCount > 0
         ? '${movement.unknownSettlementAccountCount} 笔到账账户待确认，当前余额只能部分核对'
         : movement.unknownSettlementDateCount > 0
@@ -1579,14 +1582,22 @@ class _AccountDetailSheetState extends State<_AccountDetailSheet> {
                       onTap: () => _showCalibration(context, current),
                     ),
                     SettingsRow(
+                      key: ValueKey('account-archive-action-${current.id}'),
                       leading: Icon(current.isArchived
                           ? Icons.unarchive_outlined
                           : Icons.archive_outlined),
                       title: current.isArchived ? '恢复到账户列表' : '归档账户',
                       subtitle: current.isArchived
                           ? '恢复后可继续用于新记账'
-                          : '只移出默认列表，余额和净资产不变',
-                      onTap: () => _toggleArchive(context, repo, current),
+                          : recurringRuleCount > 0
+                              ? '$recurringRuleCount 个定时记账仍使用此账户，先修改或删除相关规则'
+                              : '只移出默认列表，余额和净资产不变',
+                      onTap: () => _toggleArchive(
+                        context,
+                        repo,
+                        current,
+                        recurringRuleCount: recurringRuleCount,
+                      ),
                     ),
                   ],
                 ),
@@ -1651,15 +1662,17 @@ class _AccountDetailSheetState extends State<_AccountDetailSheet> {
   }
 
   Future<void> _toggleArchive(
-    BuildContext context,
-    AppRepository repo,
-    AccountEntity account,
-  ) async {
+      BuildContext context, AppRepository repo, AccountEntity account,
+      {required int recurringRuleCount}) async {
     if (account.isArchived) {
       await repo.restoreArchivedAccount(account.id);
       if (!context.mounted) return;
       showAppToast(context, '已恢复「${account.name}」');
       Navigator.pop(context);
+      return;
+    }
+    if (recurringRuleCount > 0) {
+      showAppToast(context, '请先修改或删除使用此账户的定时记账');
       return;
     }
     final confirmed = await showConfirmDialog(
@@ -1669,7 +1682,14 @@ class _AccountDetailSheetState extends State<_AccountDetailSheet> {
       confirmText: '归档',
     );
     if (!confirmed) return;
-    await repo.archiveAccount(account.id);
+    try {
+      await repo.archiveAccount(account.id);
+    } on StateError {
+      if (context.mounted) {
+        showAppToast(context, '账户状态刚刚变化，请先检查相关定时记账');
+      }
+      return;
+    }
     if (!context.mounted) return;
     showAppToast(context, '已归档「${account.name}」');
     Navigator.pop(context);
@@ -1825,6 +1845,8 @@ class _AccountBalanceCalibrationSheetState
                               signed: true,
                               decimal: true,
                             ),
+                            inputFormatters:
+                                moneyInputFormatters(allowNegative: true),
                             decoration:
                                 iosInputDecoration(context, hint: '输入当前实际余额'),
                             onChanged: (_) => setState(() {}),
@@ -3775,6 +3797,8 @@ Future<void> _showPhysicalAssetRefundAllocation(
             refundCents: item.refundCents,
             occurredAt: DateTime.fromMillisecondsSinceEpoch(item.refundDateMs),
             orderLabel: item.orderLabel,
+            untrackedLimitCents: item.untrackedLimitCents,
+            currentUntrackedCents: item.currentUntrackedCents,
             targets: [
               for (final target in item.targets)
                 PhysicalAssetRefundAllocationTargetData(
@@ -3789,10 +3813,11 @@ Future<void> _showPhysicalAssetRefundAllocation(
           ),
       ];
     },
-    submit: (refundTransactionId, allocationsByAssetId) =>
+    submit: (refundTransactionId, allocationsByAssetId, untrackedCents) =>
         repo.allocatePhysicalAssetRefund(
       refundTransactionId: refundTransactionId,
       allocationsByAssetId: allocationsByAssetId,
+      untrackedCents: untrackedCents,
     ),
   );
 }
@@ -4460,6 +4485,7 @@ class _ReceivableAssetFormSheetState extends State<_ReceivableAssetFormSheet> {
                       keyboardType: const TextInputType.numberWithOptions(
                         decimal: true,
                       ),
+                      inputFormatters: moneyInputFormatters(),
                       decoration: iosInputDecoration(context, hint: '原始金额'),
                       onChanged: (_) {
                         if (!_editing) _remainingCtrl.text = _originalCtrl.text;
@@ -4473,6 +4499,7 @@ class _ReceivableAssetFormSheetState extends State<_ReceivableAssetFormSheet> {
                       keyboardType: const TextInputType.numberWithOptions(
                         decimal: true,
                       ),
+                      inputFormatters: moneyInputFormatters(),
                       decoration: iosInputDecoration(context, hint: '剩余可收回金额'),
                       onChanged: (_) => setState(() {}),
                     ),
@@ -4616,6 +4643,7 @@ class _ReceivableRecoverySheetState extends State<_ReceivableRecoverySheet> {
                   keyboardType: const TextInputType.numberWithOptions(
                     decimal: true,
                   ),
+                  inputFormatters: moneyInputFormatters(),
                   decoration: iosInputDecoration(context, hint: '收回金额'),
                   onChanged: (_) => setState(() {}),
                 ),
@@ -4911,6 +4939,7 @@ class _PhysicalAssetFormSheetState extends State<_PhysicalAssetFormSheet> {
                         controller: _currentCtrl,
                         keyboardType: const TextInputType.numberWithOptions(
                             decimal: true),
+                        inputFormatters: moneyInputFormatters(),
                         decoration: iosInputDecoration(
                           context,
                           prefix: '¥ ',
@@ -4940,6 +4969,7 @@ class _PhysicalAssetFormSheetState extends State<_PhysicalAssetFormSheet> {
                         showCursor: !_purchasePriceLocked,
                         keyboardType: const TextInputType.numberWithOptions(
                             decimal: true),
+                        inputFormatters: moneyInputFormatters(),
                         decoration: iosInputDecoration(
                           context,
                           prefix: '¥ ',
@@ -5362,6 +5392,7 @@ class _AssetValueSheetState extends State<_AssetValueSheet> {
                     autofocus: true,
                     keyboardType:
                         const TextInputType.numberWithOptions(decimal: true),
+                    inputFormatters: moneyInputFormatters(),
                     decoration: iosInputDecoration(
                       context,
                       prefix: '¥ ',
@@ -5819,6 +5850,7 @@ class _AssetDepreciationSheetState extends State<_AssetDepreciationSheet> {
                       controller: _baseCtrl,
                       keyboardType:
                           const TextInputType.numberWithOptions(decimal: true),
+                      inputFormatters: moneyInputFormatters(),
                       decoration: iosInputDecoration(context, prefix: '¥ '),
                       onChanged: (_) => setState(() {}),
                     ),
@@ -5830,6 +5862,7 @@ class _AssetDepreciationSheetState extends State<_AssetDepreciationSheet> {
                       controller: _salvageCtrl,
                       keyboardType:
                           const TextInputType.numberWithOptions(decimal: true),
+                      inputFormatters: moneyInputFormatters(),
                       decoration: iosInputDecoration(context, prefix: '¥ '),
                       onChanged: (_) => setState(() {}),
                     ),
@@ -5970,6 +6003,7 @@ class _AssetSellSheetState extends State<_AssetSellSheet> {
                     autofocus: true,
                     keyboardType:
                         const TextInputType.numberWithOptions(decimal: true),
+                    inputFormatters: moneyInputFormatters(),
                     decoration: iosInputDecoration(context,
                         prefix: '¥ ', hint: '实际成交金额'),
                     onChanged: (_) => setState(() {}),
@@ -5983,6 +6017,7 @@ class _AssetSellSheetState extends State<_AssetSellSheet> {
                     controller: _feeCtrl,
                     keyboardType:
                         const TextInputType.numberWithOptions(decimal: true),
+                    inputFormatters: moneyInputFormatters(),
                     decoration: iosInputDecoration(context, prefix: '¥ '),
                     onChanged: (_) => setState(() {}),
                   ),
@@ -6567,6 +6602,8 @@ class _AccountFormSheetState extends State<_AccountFormSheet> {
                         signed: true,
                         decimal: true,
                       ),
+                      inputFormatters:
+                          moneyInputFormatters(allowNegative: true),
                       decoration: iosInputDecoration(
                         context,
                         hint: _type.liability ? '当前欠款（可填负数）' : '期初余额',
@@ -6620,6 +6657,7 @@ class _AccountFormSheetState extends State<_AccountFormSheet> {
                                       const TextInputType.numberWithOptions(
                                     decimal: true,
                                   ),
+                                  inputFormatters: moneyInputFormatters(),
                                   decoration: iosInputDecoration(
                                     context,
                                     hint: '原始金额（可选）',
@@ -6633,6 +6671,8 @@ class _AccountFormSheetState extends State<_AccountFormSheet> {
                                       const TextInputType.numberWithOptions(
                                     decimal: true,
                                   ),
+                                  inputFormatters:
+                                      moneyInputFormatters(allowNegative: true),
                                   decoration: iosInputDecoration(
                                     context,
                                     hint: '剩余本金/当前欠款（可选）',

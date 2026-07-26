@@ -112,53 +112,21 @@ ${hints.map((h) => '${h.phrase}→${h.categoryKey}').join('、')}''';
     final userContent =
         fromScreenshot ? '下面是支付/账单截图的 OCR 文字，请从中提取交易：\n\n$text' : text;
 
-    final requestBody = jsonEncode({
-      'model': provider.model,
-      'messages': [
-        {'role': 'system', 'content': sys},
-        {'role': 'user', 'content': userContent},
-      ],
-      'response_format': {'type': 'json_object'},
-      'temperature': 0.2, // 抽取类任务调低，减少同句不同解析的随机性
-      'stream': false,
-    });
-
-    late http.Response response;
-    try {
-      response = await http
-          .post(
-            provider.chatCompletionsUri,
-            headers: {
-              'Authorization': 'Bearer ${provider.apiKey}',
-              'Content-Type': 'application/json',
-            },
-            body: requestBody,
-          )
-          .timeout(const Duration(seconds: _timeoutSeconds));
-    } catch (e) {
-      throw LlmParseException('网络请求失败：$e');
-    }
-
-    if (response.statusCode != 200) {
-      throw LlmParseException(
-          '${provider.providerLabel} 返回错误 ${response.statusCode}：${response.body}');
-    }
-
-    // 取 choices[0].message.content
-    late Map<String, dynamic> outer;
-    try {
-      outer = jsonDecode(response.body) as Map<String, dynamic>;
-    } catch (e) {
-      throw LlmParseException('响应 JSON 解析失败：$e');
-    }
-
-    final content = (() {
-      try {
-        return (outer['choices'] as List).first['message']['content'] as String;
-      } catch (e) {
-        throw LlmParseException('响应结构异常，无法取到 content：$e');
-      }
-    })();
+    // 兼容模型回退（对齐 llm_query 的 _postWithModelFallback）：
+    // 首选模型 400/404 或报模型不存在时，换下一个候选模型重试。
+    final content = await _postChatContentWithFallback(
+      provider: provider,
+      bodyForModel: (model) => {
+        'model': model,
+        'messages': [
+          {'role': 'system', 'content': sys},
+          {'role': 'user', 'content': userContent},
+        ],
+        'response_format': {'type': 'json_object'},
+        'temperature': 0.2, // 抽取类任务调低，减少同句不同解析的随机性
+        'stream': false,
+      },
+    );
 
     // 解析 content 里的 entries 数组
     late Map<String, dynamic> parsed;
@@ -215,17 +183,73 @@ ${hints.map((h) => '${h.phrase}→${h.categoryKey}').join('、')}''';
 categoryKey 只能从这里选（拿不准用 $fallbackKey）：
 $catList
 规则：看商户在卖什么就归哪类；京东/淘宝/拼多多/美团这类万能平台按最可能的大类(购物/餐饮)；个人转账/看不出来源或用途的用 $fallbackKey。''';
-    final requestBody = jsonEncode({
-      'model': provider.model,
-      'messages': [
-        {'role': 'system', 'content': sys},
-        {'role': 'user', 'content': merchantLines},
-      ],
-      'response_format': {'type': 'json_object'},
-      'temperature': 0.2,
-      'stream': false,
-    });
+    // 兼容模型回退：与 parseWithLLM 共用同一套候选模型重试逻辑。
+    final content = await _postChatContentWithFallback(
+      provider: provider,
+      bodyForModel: (model) => {
+        'model': model,
+        'messages': [
+          {'role': 'system', 'content': sys},
+          {'role': 'user', 'content': merchantLines},
+        ],
+        'response_format': {'type': 'json_object'},
+        'temperature': 0.2,
+        'stream': false,
+      },
+    );
+    try {
+      final parsed = jsonDecode(content) as Map<String, dynamic>;
+      return {
+        for (final e in parsed.entries)
+          if (e.value is String && (e.value as String).isNotEmpty)
+            e.key: e.value as String
+      };
+    } catch (e) {
+      throw LlmParseException('AI 归类结果解析失败：$e');
+    }
+  }
 
+  // ---------------------------------------------------------------------------
+  // 请求（带兼容模型回退）
+  // ---------------------------------------------------------------------------
+
+  /// 遍历 [AiProviderConfig.modelCandidates] 发 Chat Completions 请求，
+  /// 返回 choices[0].message.content。首选模型报 400/404 或错误信息带
+  /// model/unsupported 等字样时换下一个候选重试（对齐 llm_query 的做法）。
+  static Future<String> _postChatContentWithFallback({
+    required AiProviderConfig provider,
+    required Map<String, dynamic> Function(String model) bodyForModel,
+  }) async {
+    LlmParseException? lastError;
+    final models = provider.modelCandidates;
+    for (final model in models) {
+      try {
+        return await _postChatContent(
+          provider: provider,
+          body: bodyForModel(model),
+        );
+      } on LlmParseException catch (e) {
+        lastError = e;
+        if (model == models.last || !_shouldRetryWithCompatModel(e)) rethrow;
+      }
+    }
+    throw lastError ?? const LlmParseException('未知错误');
+  }
+
+  static bool _shouldRetryWithCompatModel(LlmParseException e) {
+    final statusCode = e.statusCode;
+    if (statusCode == 400 || statusCode == 404) return true;
+    final m = e.message.toLowerCase();
+    return m.contains('model') ||
+        m.contains('unsupported') ||
+        m.contains('invalid') ||
+        m.contains('parameter');
+  }
+
+  static Future<String> _postChatContent({
+    required AiProviderConfig provider,
+    required Map<String, dynamic> body,
+  }) async {
     late http.Response response;
     try {
       response = await http
@@ -235,28 +259,34 @@ $catList
               'Authorization': 'Bearer ${provider.apiKey}',
               'Content-Type': 'application/json',
             },
-            body: requestBody,
+            body: jsonEncode(body),
           )
           .timeout(const Duration(seconds: _timeoutSeconds));
     } catch (e) {
       throw LlmParseException('网络请求失败：$e');
     }
+
+    // 用 bodyBytes 显式按 UTF-8 解码：响应头不带 charset 时 .body 按
+    // latin1 解，中文备注会以乱码入库。
+    final bodyText = utf8.decode(response.bodyBytes, allowMalformed: true);
     if (response.statusCode != 200) {
       throw LlmParseException(
-          '${provider.providerLabel} 返回错误 ${response.statusCode}');
+        '${provider.providerLabel} 返回错误 ${response.statusCode}：$bodyText',
+        statusCode: response.statusCode,
+      );
+    }
+
+    // 取 choices[0].message.content
+    late Map<String, dynamic> outer;
+    try {
+      outer = jsonDecode(bodyText) as Map<String, dynamic>;
+    } catch (e) {
+      throw LlmParseException('响应 JSON 解析失败：$e');
     }
     try {
-      final outer = jsonDecode(response.body) as Map<String, dynamic>;
-      final content =
-          (outer['choices'] as List).first['message']['content'] as String;
-      final parsed = jsonDecode(content) as Map<String, dynamic>;
-      return {
-        for (final e in parsed.entries)
-          if (e.value is String && (e.value as String).isNotEmpty)
-            e.key: e.value as String
-      };
+      return (outer['choices'] as List).first['message']['content'] as String;
     } catch (e) {
-      throw LlmParseException('AI 归类结果解析失败：$e');
+      throw LlmParseException('响应结构异常，无法取到 content：$e');
     }
   }
 
@@ -328,6 +358,15 @@ $catList
   }
 }
 
+/// 备注拼进 LLM 上下文（「日期|收支|分类|金额|备注」竖线对齐格式）前的清洗：
+/// 换行/回车换成空格、竖线（半角 | 与全角 ｜）换成 ／，防止用户备注里的
+/// 换行或竖线伪造出新的账目行/列，注入假数据误导 AI。
+String sanitizeNoteForLlm(String note) => note
+    .replaceAll('\r', ' ')
+    .replaceAll('\n', ' ')
+    .replaceAll('|', '／')
+    .replaceAll('｜', '／');
+
 /// 用户意图：记一笔账 / 查询已有账目。
 enum LlmIntent { record, query }
 
@@ -338,10 +377,12 @@ class LlmParseResult {
   const LlmParseResult({required this.intent, required this.entries});
 }
 
-/// LLM 解析过程中的异常，携带可读中文消息。
+/// LLM 解析过程中的异常，携带可读中文消息（HTTP 错误时带状态码，
+/// 供兼容模型回退判断 400/404）。
 class LlmParseException implements Exception {
   final String message;
-  const LlmParseException(this.message);
+  final int? statusCode;
+  const LlmParseException(this.message, {this.statusCode});
 
   @override
   String toString() => 'LlmParseException: $message';

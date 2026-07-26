@@ -47,6 +47,26 @@ void main() {
 
       expect(r.rows[1].kind, TransactionKind.income);
       expect(r.rows[1].amount, Decimal.parse('100.00'));
+
+      // 微信表头是「交易单号/商户单号」（不含「订」字）：orderNo 必须能
+      // 匹配上，且优先取商户单号（不是交易单号）。
+      expect(coffee.orderNo, isNotEmpty);
+      expect(coffee.orderNo, '2');
+      expect(r.rows[1].orderNo, '4');
+    });
+
+    test('订单号占位符「/」置空，不参与退款配对', () {
+      const csv = '''
+交易时间,交易类型,交易对方,商品,收/支,金额(元),支付方式,当前状态,交易单号,商户单号,备注
+2024-01-05 12:30:00,商户消费,店A,商品A,支出,¥10.00,零钱,支付成功,T1,/,
+2024-01-06 12:30:00,商户消费,店B,商品B,支出,¥20.00,零钱,支付成功,T2,/,
+''';
+      final r = BillImporter.parseString(csv);
+      expect(r.rows.length, 2);
+      for (final row in r.rows) {
+        // '/' 是占位符不是真实单号，保留会让占位行之间互相伪配对。
+        expect(row.orderNo, isEmpty);
+      }
     });
 
     test('支付宝账单：全角括号表头 + 不计收支跳过', () {
@@ -109,6 +129,52 @@ void main() {
       final refund = r.rows.firstWhere((e) => e.isRefund);
       expect(refund.amount, Decimal.parse('88.00'));
       expect(refund.orderNo, 'ORDER88'); // 与原单同号 → ingest 挂回归零
+    });
+
+    test('收/支列标「支出」的行即使带退款字样也是正常支出（退货运费险不误判）', () {
+      const csv = '''
+交易时间,交易分类,交易对方,对方账号,商品说明,收/支,金额,收/付款方式,交易状态,交易订单号,商户订单号,备注,
+2026-06-11 10:00:00,保险,蚂蚁保,/,退货运费险,支出,0.66,余额,交易成功,T1,ORDERX,,
+2026-06-12 11:00:00,服饰,某旗舰店,/,连衣裙(支持7天退货),支出,199.00,余额,交易成功,T2,ORDERY,,
+''';
+      final r = BillImporter.parseString(csv);
+      expect(r.rows.length, 2);
+      for (final row in r.rows) {
+        expect(row.isRefund, isFalse, reason: row.note);
+        expect(row.kind, TransactionKind.expense);
+      }
+    });
+
+    test('明确「收入」行：用户自由文本带退款字样是真实收入，平台分类标退款才是退款', () {
+      // 朋友转账还钱（转账备注:房租退款）和备注列写「退款」的收入都是真钱，
+      // 误判成退款会被错挂成原单冲减、收入凭空消失。
+      const wechat = '''
+交易时间,交易类型,交易对方,商品,收/支,金额(元),支付方式,当前状态,交易单号,商户单号,备注
+2026-06-15 12:00:00,转账,朋友小李,转账备注:房租退款,收入,¥2000.00,零钱,已收钱,T9,/,
+''';
+      final w = BillImporter.parseString(wechat);
+      expect(w.rows.length, 1);
+      expect(w.rows[0].isRefund, isFalse);
+      expect(w.rows[0].kind, TransactionKind.income);
+
+      const generic = '''
+日期,收/支,金额,交易对方,备注
+2026-03-01,收入,300,同事,饭钱退款
+''';
+      final g = BillImporter.parseString(generic);
+      expect(g.rows.length, 1);
+      expect(g.rows[0].isRefund, isFalse);
+      expect(g.rows[0].kind, TransactionKind.income);
+
+      // 平台在「交易分类」列写的退款是强信号：标「收入」的真退款仍要挂回原单。
+      const alipay = '''
+交易时间,交易分类,交易对方,对方账号,商品说明,收/支,金额,收/付款方式,交易状态,交易订单号,商户订单号,备注,
+2026-06-12 21:22:06,退款,某旗舰店,/,连衣裙 退款,收入,199.00,余额,交易成功,A2,ORDERY,,
+''';
+      final a = BillImporter.parseString(alipay);
+      expect(a.rows.length, 1);
+      expect(a.rows[0].isRefund, isTrue);
+      expect(a.rows[0].orderNo, 'ORDERY');
     });
 
     test('金额带千分位和符号也能解析', () {

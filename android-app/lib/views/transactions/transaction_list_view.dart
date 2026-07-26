@@ -2,7 +2,6 @@ import 'package:decimal/decimal.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
-import '../../core/models/transaction_kind.dart';
 import '../../core/money_format.dart';
 import '../../data/app_repository.dart';
 import '../../theme/app_colors.dart';
@@ -46,8 +45,9 @@ class _TransactionListViewState extends State<TransactionListView> {
       body: Consumer<AppRepository>(
         builder: (context, repo, _) {
           final all = repo.visibleTransactions;
-          final pending =
-              all.where((t) => t.reimbursable).toList(growable: false);
+          // 待报销列表以 repo 为单一真源，别在页面里自己 filter——
+          // 否则这里的「N 笔」和待报销页的会对不上（口径标准 §7.1）。
+          final pending = repo.reimbursableTransactions;
           final shown = _onlyReimbursable ? pending : all;
 
           return Column(
@@ -56,15 +56,16 @@ class _TransactionListViewState extends State<TransactionListView> {
                 _FilterBar(
                   onlyReimbursable: _onlyReimbursable,
                   pendingCount: pending.length,
-                  pendingTotal:
-                      pending.fold(Decimal.zero, (sum, t) => sum + t.amount),
+                  pendingTotal: pending.fold(
+                    Decimal.zero,
+                    (sum, t) => sum + repo.netAmountOf(t),
+                  ),
                   onToggle: (v) => setState(() => _onlyReimbursable = v),
                 ),
               Expanded(
                 child: shown.isEmpty
                     ? _EmptyState(onlyReimbursable: _onlyReimbursable)
-                    : _TransactionSectionList(
-                        sections: _groupByDay(shown), repo: repo),
+                    : _TransactionSectionList(sections: _groupByDay(shown)),
               ),
             ],
           );
@@ -133,9 +134,8 @@ class _FilterBar extends StatelessWidget {
 
 class _TransactionSectionList extends StatelessWidget {
   final List<_DaySection> sections;
-  final AppRepository repo;
 
-  const _TransactionSectionList({required this.sections, required this.repo});
+  const _TransactionSectionList({required this.sections});
 
   @override
   Widget build(BuildContext context) {
@@ -150,68 +150,14 @@ class _TransactionSectionList extends StatelessWidget {
       itemBuilder: (context, index) {
         final item = items[index];
         if (item is _DaySection) {
-          return _SectionHeader(section: item);
+          return TxDaySectionHeader(
+            section: TxSection(day: item.day, items: item.items),
+          );
         } else if (item is TransactionEntity) {
           return _DismissibleRow(transaction: item);
         }
         return const SizedBox.shrink();
       },
-    );
-  }
-}
-
-class _SectionHeader extends StatelessWidget {
-  final _DaySection section;
-
-  const _SectionHeader({required this.section});
-
-  String _dateLabel() {
-    final now = DateTime.now();
-    final today = DateTime(now.year, now.month, now.day);
-    final yesterday = today.subtract(const Duration(days: 1));
-    if (section.day == today) return '今天';
-    if (section.day == yesterday) return '昨天';
-    return '${section.day.month}月${section.day.day}日 ${_weekday(section.day.weekday)}';
-  }
-
-  String _weekday(int w) => const ['一', '二', '三', '四', '五', '六', '日'][w - 1];
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    final expenseItems =
-        section.items.where((t) => t.txKind == TransactionKind.expense);
-    String subtitle = '';
-    if (expenseItems.isNotEmpty) {
-      final total = expenseItems.fold(
-        Decimal.zero,
-        (sum, t) => sum + t.amount,
-      );
-      subtitle = '支出 ${MoneyFormat.string(total)}';
-    }
-
-    return Container(
-      padding: const EdgeInsets.fromLTRB(16, 16, 16, 6),
-      color: scheme.surface,
-      child: Row(
-        children: [
-          Text(
-            _dateLabel(),
-            style: Theme.of(context).textTheme.labelMedium?.copyWith(
-                  color: scheme.onSurfaceVariant,
-                  fontWeight: FontWeight.w600,
-                ),
-          ),
-          const Spacer(),
-          if (subtitle.isNotEmpty)
-            Text(
-              subtitle,
-              style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                    color: scheme.onSurfaceVariant,
-                  ),
-            ),
-        ],
-      ),
     );
   }
 }

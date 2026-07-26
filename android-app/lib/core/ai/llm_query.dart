@@ -26,7 +26,9 @@ class LlmQuery {
     final systemPrompt = '''你是「喵助手」，一只蓝白英短猫记账助理。根据下面的账目数据回答用户的问题。
 要求：口语化、简短亲切、可以带一点猫咪语气（偶尔用「喵」）；涉及金额要给具体数字（单位元）；
 算不出或数据里没有就如实说不知道，绝不编造。
-**账目里若给了「本期准确合计」，回答总额时必须直接引用那个数，绝不自己把明细一条条加起来（你手算会错）。**
+**账目里若给了「本期准确合计」「本期分类准确合计」或「分类查询准确合计」，回答总额时必须直接引用那个数，绝不自己把明细一条条加起来（你手算会错）。**
+如果账目上下文出现「分类筛选已锁定」，只能使用该分类及其子分类的合计和明细；
+禁止把其它分类的数字混进答案，也不要把全月总支出冒充分类支出。若筛选合计为 0，直接如实回答 0。
 
 排版（对齐 Claude 的可读性，结构清晰有层次）：
 - 先给**一句话结论**，再展开细节；
@@ -247,8 +249,11 @@ $transactionsText''';
       throw LlmQueryException('网络请求失败：$e');
     }
 
+    // 必须用 bodyBytes 显式按 UTF-8 解码：响应头不带 charset 时
+    // http 包的 .body 按 latin1 解，中文全变乱码且会入库。
+    final bodyText = utf8.decode(resp.bodyBytes, allowMalformed: true);
     if (resp.statusCode != 200) {
-      final snippet = _bodySnippet(resp.body);
+      final snippet = _bodySnippet(bodyText);
       throw LlmQueryException(
         '${config.providerLabel} 返回错误 ${resp.statusCode}'
         '${snippet.isEmpty ? '' : '：$snippet'}',
@@ -257,7 +262,7 @@ $transactionsText''';
     }
 
     try {
-      final outer = jsonDecode(resp.body) as Map<String, dynamic>;
+      final outer = jsonDecode(bodyText) as Map<String, dynamic>;
       final content =
           (outer['choices'] as List).first['message']['content'] as String;
       final text = content.trim();
@@ -289,8 +294,9 @@ $transactionsText''';
       throw LlmQueryException('网络请求失败：$e');
     }
 
+    final bodyText = utf8.decode(resp.bodyBytes, allowMalformed: true);
     if (resp.statusCode != 200) {
-      final snippet = _bodySnippet(resp.body);
+      final snippet = _bodySnippet(bodyText);
       throw LlmQueryException(
         '${config.providerLabel} Responses 返回错误 ${resp.statusCode}'
         '${snippet.isEmpty ? '' : '：$snippet'}',
@@ -299,7 +305,7 @@ $transactionsText''';
     }
 
     try {
-      final outer = jsonDecode(resp.body) as Map<String, dynamic>;
+      final outer = jsonDecode(bodyText) as Map<String, dynamic>;
       final text = _extractResponsesText(outer).trim();
       if (text.isEmpty) throw const LlmQueryException('空回答');
       return text;

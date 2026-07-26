@@ -90,9 +90,24 @@ class _BackupViewState extends State<BackupView> {
     if (!ok) return;
 
     final lower = path.toLowerCase();
-    final success = lower.endsWith('.zip')
-        ? await repo.restoreBackupPackage(path)
-        : await repo.restoreDatabaseFromFile(path);
+    final bool success;
+    try {
+      success = lower.endsWith('.zip')
+          ? await repo.restoreBackupPackage(path)
+          : await repo.restoreDatabaseFromFile(path);
+    } on StateError catch (e) {
+      // 恢复中途的保护性拦截（如快照完整性校验失败）要说给用户听，
+      // 不能静默吞掉让恢复看起来没反应。
+      if (context.mounted) {
+        showAppToast(context, '恢复失败：${e.message}', icon: Icons.error_outline);
+      }
+      return;
+    } catch (_) {
+      if (context.mounted) {
+        showAppToast(context, '恢复失败，请重试', icon: Icons.error_outline);
+      }
+      return;
+    }
     if (context.mounted) {
       showAppToast(
         context,
@@ -246,7 +261,22 @@ class _BackupViewState extends State<BackupView> {
       destructive: true,
     );
     if (!ok || !context.mounted) return;
-    final success = await repo.restoreDatabaseFromFile(f.path);
+    final bool success;
+    try {
+      success = await repo.restoreDatabaseFromFile(f.path);
+    } on StateError catch (e) {
+      if (context.mounted) {
+        showAppToast(context, '恢复失败：${e.message}', icon: Icons.error_outline);
+      }
+      if (mounted) _reloadBackups();
+      return;
+    } catch (_) {
+      if (context.mounted) {
+        showAppToast(context, '恢复失败，请重试', icon: Icons.error_outline);
+      }
+      if (mounted) _reloadBackups();
+      return;
+    }
     if (context.mounted) {
       showAppToast(
         context,
