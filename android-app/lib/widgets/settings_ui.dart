@@ -182,6 +182,26 @@ class SheetHeader extends StatelessWidget {
 }
 
 /// 分组白卡：内部各行用发丝线分隔（图二那样）。传入若干 [SettingsRow]。
+/// 分组白卡的标准装饰（与 [SettingsGroup] 同款）：AppColors.card 填充 +
+/// 连续曲率圆角，无阴影无描边。自定义内容卡不方便直接用 SettingsGroup 时
+/// 套这个，别再手写 BoxDecoration(阴影/描边/魔法圆角)。
+ShapeDecoration appCardDecoration(ColorScheme scheme) => ShapeDecoration(
+      color: AppColors.card(scheme),
+      shape: ContinuousRectangleBorder(
+        borderRadius: BorderRadius.circular(34),
+      ),
+    );
+
+/// 分组白卡里的标准行分隔线（与 [SettingsGroup] 同款，左缩进 16）。
+Widget appCardDivider(ColorScheme scheme) => Padding(
+      padding: const EdgeInsets.only(left: 16),
+      child: Divider(
+        height: 0.5,
+        thickness: 0.5,
+        color: scheme.outlineVariant.withValues(alpha: 0.5),
+      ),
+    );
+
 class SettingsGroup extends StatelessWidget {
   final List<Widget> children;
   final EdgeInsets margin;

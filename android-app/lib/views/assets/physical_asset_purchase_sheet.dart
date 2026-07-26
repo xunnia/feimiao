@@ -13,9 +13,11 @@ import '../../theme/app_colors.dart';
 import '../../theme/app_tokens.dart';
 import '../../widgets/app_buttons.dart';
 import '../../widgets/app_date_picker.dart';
+import '../../widgets/app_empty_state.dart';
 import '../../widgets/app_toast.dart';
 import '../../widgets/ios_form.dart';
 import '../../widgets/ios_menu.dart';
+import '../../widgets/mascot.dart';
 import '../../widgets/settings_ui.dart';
 import '../../widgets/sliding_segment.dart';
 import '../common/app_sheet.dart';
@@ -135,7 +137,7 @@ class _PhysicalAssetPurchaseSheetState
   Widget build(BuildContext context) {
     return ConstrainedBox(
       constraints: BoxConstraints(
-        maxHeight: MediaQuery.sizeOf(context).height * 0.92,
+        maxHeight: MediaQuery.sizeOf(context).height * 0.9,
       ),
       child: Column(
         mainAxisSize: MainAxisSize.min,
@@ -158,7 +160,6 @@ class _PhysicalAssetPurchaseSheetState
   }
 
   Widget _buildTransactionStep() {
-    final scheme = Theme.of(context).colorScheme;
     final candidates = _candidates;
     return Column(
       children: [
@@ -175,8 +176,10 @@ class _PhysicalAssetPurchaseSheetState
         ),
         Expanded(
           child: candidates.isEmpty
-              ? Center(
-                  child: Text('没有可分配的支出账单', style: AppType.secondary(scheme)),
+              ? const AppEmptyState(
+                  mood: MascotMood.empty,
+                  title: '没有可分配的支出账单',
+                  message: '记一笔支出后，再回来把它加入物品',
                 )
               : ListView.separated(
                   padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
@@ -202,11 +205,12 @@ class _PhysicalAssetPurchaseSheetState
             ? '支出账单'
             : transaction.categoryNameZh
         : transaction.note.trim();
+    final cardDecoration = appCardDecoration(scheme);
     return Material(
-      color: AppColors.card(scheme),
-      borderRadius: BorderRadius.circular(8),
+      color: cardDecoration.color,
+      shape: cardDecoration.shape,
+      clipBehavior: Clip.antiAlias,
       child: InkWell(
-        borderRadius: BorderRadius.circular(8),
         onTap: () => _selectCandidate(candidate),
         child: Padding(
           padding: const EdgeInsets.all(14),
@@ -218,7 +222,7 @@ class _PhysicalAssetPurchaseSheetState
                 alignment: Alignment.center,
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
-                  color: scheme.surfaceContainerHighest.withValues(alpha: 0.62),
+                  color: AppColors.iconCircleFill(scheme),
                 ),
                 child: const Icon(Icons.receipt_long_outlined, size: 19),
               ),
@@ -234,7 +238,7 @@ class _PhysicalAssetPurchaseSheetState
                     const SizedBox(height: 3),
                     Text(
                       '${_dateText(transaction.date)} · $bookName',
-                      style: AppType.caption(scheme),
+                      style: AppType.secondary(scheme),
                     ),
                     const SizedBox(height: 3),
                     Text(
@@ -496,8 +500,7 @@ class _PhysicalAssetPurchaseSheetState
               borderRadius: BorderRadius.circular(8),
               child: _media == null
                   ? ColoredBox(
-                      color:
-                          scheme.surfaceContainerHighest.withValues(alpha: 0.6),
+                      color: AppColors.iconCircleFill(scheme),
                       child: Icon(assetTypeIcon(_assetType),
                           color: AppTextColor.secondary(scheme)),
                     )

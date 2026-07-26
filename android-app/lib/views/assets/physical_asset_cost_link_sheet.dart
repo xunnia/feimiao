@@ -8,6 +8,7 @@ import '../../theme/app_tokens.dart';
 import '../../widgets/app_buttons.dart';
 import '../../widgets/app_toast.dart';
 import '../../widgets/ios_form.dart';
+import '../../widgets/mascot.dart';
 import '../../widgets/settings_ui.dart';
 import '../../widgets/sliding_segment.dart';
 import '../common/app_sheet.dart';
@@ -242,7 +243,7 @@ class _PhysicalAssetCostLinkSheetState
     }
     if (_candidates.isEmpty) {
       return const _CostLinkMessage(
-        icon: Icons.receipt_long_outlined,
+        mood: MascotMood.empty,
         title: '没有可关联的支出',
         message: '记下一笔支出后，再回来补充物品成本。',
       );
@@ -373,15 +374,11 @@ class _InlineEmptySearch extends StatelessWidget {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     return Padding(
-      padding: const EdgeInsets.fromLTRB(24, 24, 24, 32),
+      padding: const EdgeInsets.fromLTRB(24, 16, 24, 32),
       child: Column(
         children: [
-          Icon(
-            Icons.search_off,
-            size: 34,
-            color: AppTextColor.secondary(scheme),
-          ),
-          const SizedBox(height: 10),
+          const Mascot(mood: MascotMood.empty, size: 64, animate: true),
+          const SizedBox(height: 8),
           Text('没有匹配的支出', style: AppType.rowTitle(scheme)),
           const SizedBox(height: 4),
           Text('换个名称、账本或金额试试。', style: AppType.secondary(scheme)),
@@ -392,19 +389,21 @@ class _InlineEmptySearch extends StatelessWidget {
 }
 
 class _CostLinkMessage extends StatelessWidget {
-  final IconData icon;
+  final IconData? icon;
+  final MascotMood? mood;
   final String title;
   final String message;
   final String? actionLabel;
   final VoidCallback? onAction;
 
   const _CostLinkMessage({
-    required this.icon,
+    this.icon,
+    this.mood,
     required this.title,
     required this.message,
     this.actionLabel,
     this.onAction,
-  });
+  }) : assert(icon != null || mood != null, '空态/异常态必须给图标或猫其一');
 
   @override
   Widget build(BuildContext context) {
@@ -415,7 +414,11 @@ class _CostLinkMessage extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(icon, size: 38, color: AppTextColor.secondary(scheme)),
+            // 空态用猫（守「空状态只放猫」标准）；加载失败等异常态仍用图标。
+            if (mood != null)
+              Mascot(mood: mood!, size: 72, animate: true)
+            else
+              Icon(icon, size: 38, color: AppTextColor.secondary(scheme)),
             const SizedBox(height: 12),
             Text(title, style: AppType.rowTitle(scheme)),
             const SizedBox(height: 5),

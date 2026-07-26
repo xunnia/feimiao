@@ -255,8 +255,8 @@ void main() {
     expect(repo.globalActiveReceivables, hasLength(1));
     expect(find.byKey(const Key('asset-overview')), findsOneWidget);
     expect(find.text('净资产'), findsOneWidget);
-    expect(find.text('净资产估算趋势'), findsOneWidget);
-    expect(find.text('自动计算，不代表完整核对'), findsOneWidget);
+    expect(find.text('净资产趋势'), findsOneWidget);
+    expect(find.text('自动估算'), findsOneWidget);
     expect(find.text('本月收支净额'), findsNothing);
     expect(find.textContaining('本月收支净额'), findsNothing);
     expect(tester.takeException(), isNull);
@@ -1016,12 +1016,13 @@ void main() {
         ]));
 
     await pumpAccountsView(tester, repo);
-    expect(find.text('净资产（按已知金额）'), findsOneWidget);
-    expect(find.textContaining('账户含待确认或历史推定'), findsOneWidget);
+    expect(find.text('净资产'), findsOneWidget);
+    expect(find.text('部分金额待确认'), findsOneWidget);
+    expect(find.textContaining('个账户的到账信息待确认'), findsOneWidget);
 
     await tester.tap(find.text('资金'));
     await pumpViewAnimations(tester);
-    expect(find.textContaining('到账账户待确认'), findsOneWidget);
+    expect(find.textContaining('· 待确认'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 }

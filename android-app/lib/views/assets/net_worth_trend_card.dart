@@ -7,6 +7,7 @@ import '../../core/budget/budget_window_resolver.dart';
 import '../../core/money_format.dart';
 import '../../theme/app_colors.dart';
 import '../../theme/app_tokens.dart';
+import '../../widgets/settings_ui.dart';
 
 class NetWorthEstimatedTrendCard extends StatelessWidget {
   final NetWorthTrendResult trend;
@@ -19,16 +20,13 @@ class NetWorthEstimatedTrendCard extends StatelessWidget {
     final latestChange = trend.changes.isEmpty ? null : trend.changes.last;
     return Container(
       padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
-      decoration: BoxDecoration(
-        color: AppColors.card(scheme),
-        borderRadius: BorderRadius.circular(8),
-      ),
+      decoration: appCardDecoration(scheme),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text('净资产估算趋势', style: AppType.rowTitle(scheme)),
+          Text('净资产趋势', style: AppType.rowTitle(scheme)),
           const SizedBox(height: 3),
-          Text('自动计算，不代表完整核对', style: AppType.caption(scheme)),
+          Text('自动估算', style: AppType.caption(scheme)),
           const SizedBox(height: 12),
           if (!trend.hasTrend)
             SizedBox(
@@ -63,20 +61,27 @@ class NetWorthEstimatedTrendCard extends StatelessWidget {
             ),
             const SizedBox(height: 8),
             if (latestChange != null)
-              Text(
-                '较上一可比点 ${latestChange.amountDeltaMinor >= 0 ? '+' : '-'}'
-                '${MoneyFormat.string(
-                  budgetDecimalFromCents(
-                    latestChange.amountDeltaMinor.abs(),
-                  )!,
-                )}',
-                style: AppType.secondary(scheme).copyWith(
-                  fontFamily: 'Nunito',
+              Text.rich(
+                TextSpan(
+                  style: AppType.secondary(scheme),
+                  children: [
+                    const TextSpan(text: '较上次 '),
+                    TextSpan(
+                      text:
+                          '${latestChange.amountDeltaMinor >= 0 ? '+' : '-'}'
+                          '${MoneyFormat.string(
+                            budgetDecimalFromCents(
+                              latestChange.amountDeltaMinor.abs(),
+                            )!,
+                          )}',
+                      style: const TextStyle(fontFamily: 'Nunito'),
+                    ),
+                  ],
                 ),
               ),
             if (trend.breaks.isNotEmpty) ...[
               const SizedBox(height: 3),
-              Text('口径变化或旧快照处已断开', style: AppType.caption(scheme)),
+              Text('统计范围变化处断开', style: AppType.caption(scheme)),
             ],
           ],
         ],
@@ -90,7 +95,7 @@ String _trendSemanticsLabel(NetWorthTrendResult trend) {
       .expand((segment) => segment.points)
       .toList(growable: false)
     ..sort((a, b) => a.lineage.asOf.compareTo(b.lineage.asOf));
-  if (points.length < 2) return '净资产估算趋势，暂无足够的可比数据';
+  if (points.length < 2) return '净资产趋势，暂无足够的可比数据';
   final first = points.first;
   final last = points.last;
   String day(DateTime value) => '${value.year}年${value.month}月${value.day}日';
@@ -99,7 +104,7 @@ String _trendSemanticsLabel(NetWorthTrendResult trend) {
       );
   final breakText =
       trend.breaks.isEmpty ? '' : '，其中有${trend.breaks.length}处因统计口径变化断开';
-  return '净资产估算趋势，共${points.length}个可比点，'
+  return '净资产趋势，共${points.length}个可比点，'
       '${day(first.lineage.asOf)}为${amount(first.netWorthMinor)}，'
       '${day(last.lineage.asOf)}为${amount(last.netWorthMinor)}$breakText';
 }

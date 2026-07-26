@@ -72,7 +72,6 @@ class _AccountsViewState extends State<AccountsView> {
       appBar: AppBar(
         leading: const AppBackButton(),
         title: const Text('资产管理'),
-        centerTitle: true,
         actions: [
           Padding(
             padding: const EdgeInsets.only(right: 10),
@@ -100,7 +99,7 @@ class _AccountsViewState extends State<AccountsView> {
                     ? '${movement.unknownSettlementDateCount} 笔到账日期待确认'
                     : movement.assumedAccountCount > 0 ||
                             movement.assumedSettlementDateCount > 0
-                        ? '含历史推定数据'
+                        ? '含估算数据'
                         : null;
             balances.add(_AccountBalance(
               account: account,
@@ -222,7 +221,7 @@ class _AccountsViewState extends State<AccountsView> {
       if (accountQualityIssueCount > 0)
         _AssetPendingItem(
           icon: Icons.account_balance_wallet_outlined,
-          text: '$accountQualityIssueCount 个账户含待确认或历史推定的到账信息',
+          text: '$accountQualityIssueCount 个账户的到账信息待确认',
           onTap: () => setState(() => _view = _AssetView.funds),
         ),
       if (warrantyReminderCount > 0)
@@ -248,7 +247,7 @@ class _AccountsViewState extends State<AccountsView> {
       if (physicalReviewCount > 0)
         _AssetPendingItem(
           icon: Icons.fact_check_outlined,
-          text: '$physicalReviewCount 件历史物品的状态与计入口径待确认',
+          text: '$physicalReviewCount 件历史物品待确认',
           onTap: () => setState(() {
             _view = _AssetView.items;
             _itemsVisibility = _AssetListVisibility.archived;
@@ -258,7 +257,7 @@ class _AccountsViewState extends State<AccountsView> {
       if (receivableReviewCount > 0)
         _AssetPendingItem(
           icon: Icons.assignment_late_outlined,
-          text: '$receivableReviewCount 项历史权益的状态与计入口径待确认',
+          text: '$receivableReviewCount 项历史权益待确认',
           onTap: () => setState(() {
             _view = _AssetView.funds;
             _fundsVisibility = _AssetListVisibility.archived;
@@ -301,7 +300,7 @@ class _AccountsViewState extends State<AccountsView> {
         if (unsupportedCurrencies.isNotEmpty) ...[
           const SizedBox(height: 10),
           _HintBox(
-            text: '当前为人民币口径，未含 ${unsupportedCurrencies.join('、')} 外币资产或负债。',
+            text: '净资产按人民币计算，未含 ${unsupportedCurrencies.join('、')} 外币资产或负债。',
           ),
         ],
         if (pending.isNotEmpty) ...[
@@ -320,8 +319,8 @@ class _AccountsViewState extends State<AccountsView> {
               context,
               title: '核对当前净资产',
               message: staleCount > 0
-                  ? '有 $staleCount 件物品使用超过 90 天的最近估值。继续表示你接受这些估值日期；其他数据缺口仍只会保存为“部分核对”。'
-                  : '将冻结当前所有计入对象的余额和估值证据。数据仍有缺口时会保存为“部分核对”，不会冒充完整确认。',
+                  ? '有 $staleCount 件物品使用超过 90 天的最近估值。继续表示你接受这些估值日期；数据仍有缺口时会保存为“部分核对”。'
+                  : '会保存当前所有金额作为核对记录。数据仍有缺口时会保存为“部分核对”，不会冒充完整确认。',
               confirmText: staleCount > 0 ? '接受并核对' : '开始核对',
             );
             if (!confirmed) return;
@@ -887,11 +886,7 @@ class _VerifiedNetWorthCard extends StatelessWidget {
     final latestDate = latest?.header.asOf.toLocal();
     return Container(
       padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: AppColors.card(scheme),
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: AppColors.hairline(scheme)),
-      ),
+      decoration: appCardDecoration(scheme),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -904,7 +899,7 @@ class _VerifiedNetWorthCard extends StatelessWidget {
           ),
           const SizedBox(height: 4),
           if (latest == null)
-            Text('还没有冻结过完整资产证据。', style: AppType.secondary(scheme))
+            Text('还没做过完整核对', style: AppType.secondary(scheme))
           else ...[
             Text(
               '${latest.header.completeness == NetWorthVerifiedCheckpointCompleteness.complete ? '完整核对' : '部分核对'}'
@@ -944,7 +939,7 @@ class _VerifiedNetWorthCard extends StatelessWidget {
               ),
             ] else ...[
               const SizedBox(height: 4),
-              Text('再完成一次相同口径的完整核对后显示变化。', style: AppType.caption(scheme)),
+              Text('再完成一次完整核对后显示变化。', style: AppType.caption(scheme)),
             ],
           ],
         ],
@@ -1002,43 +997,53 @@ class _AssetSummaryCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final negative = netWorth < Decimal.zero;
+    final heroText = MoneyFormat.string(netWorth);
+    final heroStyle = TextStyle(
+      fontFamily: 'Nunito',
+      fontSize: 34,
+      height: 1.15,
+      fontWeight: FontWeight.w700,
+      color: negative ? AppColors.warning : scheme.onSurface,
+    );
+    final excludedCount = accountCount - includedCount;
     return Container(
       padding: const EdgeInsets.fromLTRB(16, 14, 16, 13),
-      decoration: BoxDecoration(
-        color: AppColors.card(scheme),
-        borderRadius: BorderRadius.circular(AppRadius.lg),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.04),
-            blurRadius: 12,
-            offset: const Offset(0, 2),
-          ),
-        ],
-      ),
+      decoration: appCardDecoration(scheme),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         mainAxisSize: MainAxisSize.min,
         children: [
           Text(
-            partial ? '净资产（按已知金额）' : '净资产',
+            '净资产',
             style: AppType.secondary(scheme),
           ),
           const SizedBox(height: 6),
-          Text(
-            MoneyFormat.string(netWorth),
+          Text.rich(
+            // ¥ 符号铜金点缀、数字主色；负数整体超支橙。
+            !negative && heroText.startsWith('¥')
+                ? TextSpan(children: [
+                    TextSpan(
+                      text: '¥',
+                      style: heroStyle.copyWith(color: kCatGold),
+                    ),
+                    TextSpan(text: heroText.substring(1)),
+                  ])
+                : TextSpan(text: heroText),
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
-            style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                  fontFamily: 'Nunito',
-                  fontWeight: FontWeight.w600,
-                  color: negative ? AppColors.warning : scheme.onSurface,
-                ),
+            style: heroStyle,
           ),
-          const SizedBox(height: 6),
-          Text(
-            '$includedCount/$accountCount 项计入 · 全局人民币口径',
-            style: AppType.caption(scheme),
-          ),
+          if (partial) ...[
+            const SizedBox(height: 4),
+            Text('部分金额待确认', style: AppType.caption(scheme)),
+          ],
+          if (excludedCount > 0) ...[
+            const SizedBox(height: 4),
+            Text(
+              '$excludedCount 项未计入净资产',
+              style: AppType.caption(scheme),
+            ),
+          ],
           const SizedBox(height: 13),
           _AssetMetricPair(
             left: _AssetMetric(
@@ -1117,24 +1122,30 @@ class _AssetMetric extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    // 次级指标降两级：13px 最弱灰标签 + 15px Nunito 数值（紧凑两列网格）。
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       mainAxisSize: MainAxisSize.min,
       children: [
         Text(
           label,
-          style: AppType.caption(scheme),
+          style: TextStyle(
+            fontSize: 13,
+            fontWeight: FontWeight.w400,
+            color: AppTextColor.hint(scheme),
+          ),
         ),
-        const SizedBox(height: 4),
+        const SizedBox(height: 3),
         Text(
           MoneyFormat.string(value),
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
-          style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                fontFamily: 'Nunito',
-                fontWeight: FontWeight.w500,
-                color: color,
-              ),
+          style: TextStyle(
+            fontFamily: 'Nunito',
+            fontSize: 15,
+            fontWeight: FontWeight.w500,
+            color: color,
+          ),
         ),
       ],
     );
@@ -1165,11 +1176,7 @@ class _AssetAnalysisCard extends StatelessWidget {
     ].where((item) => item.$2 > Decimal.zero).toList();
     return Container(
       padding: const EdgeInsets.fromLTRB(16, 13, 16, 14),
-      decoration: BoxDecoration(
-        color: AppColors.card(scheme),
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: AppColors.hairline(scheme)),
-      ),
+      decoration: appCardDecoration(scheme),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -1267,8 +1274,7 @@ class _AssetStructureRow extends StatelessWidget {
                 child: LinearProgressIndicator(
                   value: ratio,
                   minHeight: 5,
-                  backgroundColor:
-                      scheme.surfaceContainerHighest.withValues(alpha: 0.55),
+                  backgroundColor: AppColors.iconCircleFill(scheme),
                   color: scheme.onSurface.withValues(alpha: 0.78),
                 ),
               ),
@@ -1293,17 +1299,7 @@ class _AccountGroupCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     return Container(
-      decoration: BoxDecoration(
-        color: AppColors.card(scheme),
-        borderRadius: BorderRadius.circular(AppRadius.lg),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.04),
-            blurRadius: 10,
-            offset: const Offset(0, 2),
-          ),
-        ],
-      ),
+      decoration: appCardDecoration(scheme),
       clipBehavior: Clip.antiAlias,
       child: Column(
         mainAxisSize: MainAxisSize.min,
@@ -1325,13 +1321,7 @@ class _AccountGroupCard extends StatelessWidget {
             ),
           ),
           for (int i = 0; i < group.items.length; i++) ...[
-            if (i > 0)
-              Divider(
-                height: 0.5,
-                thickness: 0.5,
-                indent: 62,
-                color: scheme.outlineVariant.withValues(alpha: 0.5),
-              ),
+            if (i > 0) appCardDivider(scheme),
             _AccountBalanceTile(
               item: group.items[i],
               onTap: () => onTap(group.items[i].account),
@@ -1360,6 +1350,26 @@ class _AccountBalanceTile extends StatelessWidget {
         .liabilityProfileForAccount(item.account.id);
     final negative = item.balance < Decimal.zero;
     final muted = !item.account.includeInNetWorth;
+    // 副标题减负：最多「类型 + 1 个附加段」，
+    // 优先级 = 每月N日还款 > 机构 > 「待确认」 > 「不计入」。
+    final extra = profile?.repaymentDay != null
+        ? '每月${profile!.repaymentDay}日还款'
+        : item.account.institution.isNotEmpty
+            ? item.account.institution
+            : item.qualityText != null
+                ? '待确认'
+                : !item.account.includeInNetWorth
+                    ? '不计入'
+                    : null;
+    final subtitleText = [
+      item.account.type.label,
+      if (extra != null) extra,
+    ].join(' · ');
+    final subtitleStyle =
+        (Theme.of(context).textTheme.labelSmall ?? const TextStyle()).copyWith(
+      color: muted ? AppTextColor.hint(scheme) : AppTextColor.secondary(scheme),
+      fontWeight: FontWeight.w400,
+    );
     return InkWell(
       onTap: onTap,
       child: Padding(
@@ -1371,7 +1381,7 @@ class _AccountBalanceTile extends StatelessWidget {
               height: 34,
               alignment: Alignment.center,
               decoration: BoxDecoration(
-                color: scheme.surfaceContainerHighest.withValues(alpha: 0.58),
+                color: AppColors.iconCircleFill(scheme),
                 shape: BoxShape.circle,
               ),
               child: Icon(
@@ -1400,27 +1410,11 @@ class _AccountBalanceTile extends StatelessWidget {
                         ),
                   ),
                   const SizedBox(height: 3),
-                  Text(
-                    [
-                      item.account.type.label,
-                      if (item.account.institution.isNotEmpty)
-                        item.account.institution,
-                      item.account.currencyCode,
-                      if (profile != null) profile.type.label,
-                      if (profile?.repaymentDay != null)
-                        '每月${profile!.repaymentDay}日还款',
-                      if (item.qualityText != null) item.qualityText!,
-                      if (!item.account.includeInNetWorth) '不计入净资产',
-                    ].join(' · '),
+                  Text.rich(
+                    // Nunito 只套在数字子串上（中文混排拆 TextSpan）。
+                    _digitAwareSpan(subtitleText, subtitleStyle),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                          color: muted
-                              ? AppTextColor.hint(scheme)
-                              : AppTextColor.secondary(scheme),
-                          fontFamily: 'Nunito',
-                          fontWeight: FontWeight.w400,
-                        ),
                   ),
                 ],
               ),
@@ -1507,7 +1501,7 @@ class _AccountDetailSheetState extends State<_AccountDetailSheet> {
             ? '${movement.unknownSettlementDateCount} 笔到账日期待确认，已计入当前余额但无法精确归入历史趋势'
             : movement.assumedAccountCount > 0 ||
                     movement.assumedSettlementDateCount > 0
-                ? '余额包含历史推定的到账日期或账户'
+                ? '余额含估算的到账日期或账户'
                 : balanceResult.status != MetricStatus.available
                     ? '余额仍有待确认信息，当前只能部分核对'
                     : balanceResult.value!.checkpoint != null
@@ -1536,11 +1530,7 @@ class _AccountDetailSheetState extends State<_AccountDetailSheet> {
               children: [
                 Container(
                   padding: const EdgeInsets.all(16),
-                  decoration: BoxDecoration(
-                    color: AppColors.card(scheme),
-                    borderRadius: BorderRadius.circular(AppRadius.lg),
-                    border: Border.all(color: AppColors.hairline(scheme)),
-                  ),
+                  decoration: appCardDecoration(scheme),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
@@ -1577,7 +1567,7 @@ class _AccountDetailSheetState extends State<_AccountDetailSheet> {
                     SettingsRow(
                       leading: const Icon(Icons.fact_check_outlined),
                       title: '校准余额',
-                      subtitle: '按现在的实际余额建立绝对锚点，不计入收支',
+                      subtitle: '按现在的实际余额修正，不计入收支',
                       trailing: const Icon(Icons.chevron_right, size: 18),
                       onTap: () => _showCalibration(context, current),
                     ),
@@ -1634,7 +1624,12 @@ class _AccountDetailSheetState extends State<_AccountDetailSheet> {
                         label: '机构',
                         value: current.institution,
                       ),
-                    _DetailRow(label: '币种', value: current.currencyCode),
+                    _DetailRow(
+                      label: '币种',
+                      value: current.currencyCode == 'CNY'
+                          ? '人民币'
+                          : current.currencyCode,
+                    ),
                     _DetailRow(
                       label: '净资产',
                       value: current.includeInNetWorth ? '计入净资产' : '不计入净资产',
@@ -1710,6 +1705,26 @@ class _AccountDetailSheetState extends State<_AccountDetailSheet> {
     await repo.reverseAccountBalanceCheckpoint(checkpoint.id);
     if (context.mounted) showAppToast(context, '已撤销余额校准');
   }
+}
+
+/// 中文混排文案里只给数字子串套 Nunito（UI 标准：Nunito 只准用于纯数字/金额）。
+TextSpan _digitAwareSpan(String text, TextStyle base) {
+  final spans = <TextSpan>[];
+  var cursor = 0;
+  for (final match in RegExp(r'[0-9][0-9,.]*').allMatches(text)) {
+    if (match.start > cursor) {
+      spans.add(TextSpan(text: text.substring(cursor, match.start)));
+    }
+    spans.add(TextSpan(
+      text: text.substring(match.start, match.end),
+      style: base.copyWith(fontFamily: 'Nunito'),
+    ));
+    cursor = match.end;
+  }
+  if (cursor < text.length) {
+    spans.add(TextSpan(text: text.substring(cursor)));
+  }
+  return TextSpan(style: base, children: spans);
 }
 
 String _shortDateTime(int milliseconds) {
@@ -1833,25 +1848,21 @@ class _AccountBalanceCalibrationSheetState
                     ),
                     Padding(
                       padding: const EdgeInsets.fromLTRB(14, 10, 14, 10),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text('实际余额', style: AppType.caption(scheme)),
-                          const SizedBox(height: 6),
-                          TextField(
-                            controller: _targetController,
-                            autofocus: true,
-                            keyboardType: const TextInputType.numberWithOptions(
-                              signed: true,
-                              decimal: true,
-                            ),
-                            inputFormatters:
-                                moneyInputFormatters(allowNegative: true),
-                            decoration:
-                                iosInputDecoration(context, hint: '输入当前实际余额'),
-                            onChanged: (_) => setState(() {}),
+                      child: AppLabeledField(
+                        label: '实际余额',
+                        child: TextField(
+                          controller: _targetController,
+                          autofocus: true,
+                          keyboardType: const TextInputType.numberWithOptions(
+                            signed: true,
+                            decimal: true,
                           ),
-                        ],
+                          inputFormatters:
+                              moneyInputFormatters(allowNegative: true),
+                          decoration:
+                              iosInputDecoration(context, hint: '例如 1234.56'),
+                          onChanged: (_) => setState(() {}),
+                        ),
                       ),
                     ),
                     _DetailRow(
@@ -1868,26 +1879,22 @@ class _AccountBalanceCalibrationSheetState
                     ),
                     Padding(
                       padding: const EdgeInsets.fromLTRB(14, 10, 14, 12),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text('说明（可选）', style: AppType.caption(scheme)),
-                          const SizedBox(height: 6),
-                          TextField(
-                            controller: _noteController,
-                            minLines: 2,
-                            maxLines: 3,
-                            decoration:
-                                iosInputDecoration(context, hint: '例如：微信实际余额'),
-                          ),
-                        ],
+                      child: AppLabeledField(
+                        label: '说明（可选）',
+                        child: TextField(
+                          controller: _noteController,
+                          minLines: 2,
+                          maxLines: 3,
+                          decoration:
+                              iosInputDecoration(context, hint: '例如 微信实际余额'),
+                        ),
                       ),
                     ),
                   ],
                 ),
                 const SizedBox(height: 10),
                 Text(
-                  '校准会建立绝对余额锚点，不会生成收入、支出或现金流。旧到账信息只在账户已确认时由本次余额吸收。',
+                  '以本次填写的实际余额为准，之前的差额会自动修正，不会生成收入、支出或现金流。',
                   style: AppType.caption(scheme),
                 ),
               ],
@@ -1933,11 +1940,7 @@ class _AccountBalanceTrendCard extends StatelessWidget {
     final scheme = Theme.of(context).colorScheme;
     return Container(
       padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: AppColors.card(scheme),
-        borderRadius: BorderRadius.circular(AppRadius.lg),
-        border: Border.all(color: AppColors.hairline(scheme)),
-      ),
+      decoration: appCardDecoration(scheme),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -1975,7 +1978,7 @@ class _AccountBalanceTrendCard extends StatelessWidget {
           ),
           const SizedBox(height: 10),
           if (trend == null)
-            Text('历史期初时点无法证明，完成一次余额校准后再显示可信趋势。',
+            Text('历史起点待确认，完成一次余额校准后显示趋势。',
                 style: AppType.secondary(scheme))
           else if (!trend!.hasTrend)
             Text('已建立可信起点，积累更多结算活动后显示趋势。', style: AppType.secondary(scheme))
@@ -2189,17 +2192,7 @@ class _PhysicalAssetGroupCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     return Container(
-      decoration: BoxDecoration(
-        color: AppColors.card(scheme),
-        borderRadius: BorderRadius.circular(16),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.04),
-            blurRadius: 10,
-            offset: const Offset(0, 2),
-          ),
-        ],
-      ),
+      decoration: appCardDecoration(scheme),
       clipBehavior: Clip.antiAlias,
       child: Column(
         mainAxisSize: MainAxisSize.min,
@@ -2221,13 +2214,7 @@ class _PhysicalAssetGroupCard extends StatelessWidget {
             ),
           ),
           for (int i = 0; i < assets.length; i++) ...[
-            if (i > 0)
-              Divider(
-                height: 0.5,
-                thickness: 0.5,
-                indent: 62,
-                color: scheme.outlineVariant.withValues(alpha: 0.5),
-              ),
+            if (i > 0) appCardDivider(scheme),
             _PhysicalAssetTile(
               asset: assets[i],
               onTap: () => onTap(assets[i]),
@@ -2270,7 +2257,7 @@ class _PhysicalAssetTile extends StatelessWidget {
               height: 34,
               alignment: Alignment.center,
               decoration: BoxDecoration(
-                color: scheme.surfaceContainerHighest.withValues(alpha: 0.58),
+                color: AppColors.iconCircleFill(scheme),
                 shape: BoxShape.circle,
               ),
               child: Icon(
@@ -2305,9 +2292,9 @@ class _PhysicalAssetTile extends StatelessWidget {
                       _physicalAssetStatusLabel(asset),
                       if (asset.inclusionQuality ==
                           AssetInclusionQuality.needsReview)
-                        '计入口径待确认'
+                        '待确认'
                       else if (!asset.includeInNetWorth)
-                        '不计入净资产',
+                        '不计入',
                     ].join(' · '),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
@@ -2435,17 +2422,7 @@ class _ReceivableAssetGroupCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     return Container(
-      decoration: BoxDecoration(
-        color: AppColors.card(scheme),
-        borderRadius: BorderRadius.circular(16),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.04),
-            blurRadius: 10,
-            offset: const Offset(0, 2),
-          ),
-        ],
-      ),
+      decoration: appCardDecoration(scheme),
       clipBehavior: Clip.antiAlias,
       child: Column(
         mainAxisSize: MainAxisSize.min,
@@ -2467,13 +2444,7 @@ class _ReceivableAssetGroupCard extends StatelessWidget {
             ),
           ),
           for (int i = 0; i < assets.length; i++) ...[
-            if (i > 0)
-              Divider(
-                height: 0.5,
-                thickness: 0.5,
-                indent: 62,
-                color: scheme.outlineVariant.withValues(alpha: 0.5),
-              ),
+            if (i > 0) appCardDivider(scheme),
             _ReceivableAssetTile(
               asset: assets[i],
               onTap: () => onTap(assets[i]),
@@ -2498,6 +2469,18 @@ class _ReceivableAssetTile extends StatelessWidget {
         context.watch<AppRepository>().dueReminderForReceivable(asset);
     final dueText = _receivableDueReminderText(dueReminder);
     final muted = !asset.countsInNetWorth;
+    // 副标题减负：最多「类型 + 1 个附加段」，
+    // 优先级 = 非默认状态 > 对象 > 「待确认」 > 「不计入」。
+    final statusLabel = _receivableStatusLabel(asset);
+    final extra = asset.economicStatus != ReceivableEconomicStatus.active
+        ? statusLabel
+        : asset.counterparty.isNotEmpty
+            ? asset.counterparty
+            : asset.inclusionQuality == AssetInclusionQuality.needsReview
+                ? '待确认'
+                : !asset.includeInNetWorth
+                    ? '不计入'
+                    : null;
     return InkWell(
       onTap: onTap,
       child: Padding(
@@ -2509,7 +2492,7 @@ class _ReceivableAssetTile extends StatelessWidget {
               height: 34,
               alignment: Alignment.center,
               decoration: BoxDecoration(
-                color: scheme.surfaceContainerHighest.withValues(alpha: 0.58),
+                color: AppColors.iconCircleFill(scheme),
                 shape: BoxShape.circle,
               ),
               child: Icon(
@@ -2541,13 +2524,7 @@ class _ReceivableAssetTile extends StatelessWidget {
                   Text(
                     [
                       asset.type.label,
-                      _receivableStatusLabel(asset),
-                      if (asset.counterparty.isNotEmpty) asset.counterparty,
-                      if (asset.inclusionQuality ==
-                          AssetInclusionQuality.needsReview)
-                        '计入口径待确认'
-                      else if (!asset.includeInNetWorth)
-                        '不计入净资产',
+                      if (extra != null) extra,
                     ].join(' · '),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
@@ -2566,7 +2543,7 @@ class _ReceivableAssetTile extends StatelessWidget {
                       overflow: TextOverflow.ellipsis,
                       style: AppType.caption(scheme).copyWith(
                         color: dueReminder.status == AssetReminderStatus.expired
-                            ? scheme.error
+                            ? AppColors.warning
                             : AppTextColor.secondary(scheme),
                       ),
                     ),
@@ -2800,8 +2777,8 @@ class _ReceivableAssetDetailSheet extends StatelessWidget {
                         children: [
                           SettingsRow(
                             leading: const Icon(Icons.fact_check_outlined),
-                            title: '确认状态与计入口径',
-                            subtitle: '确认后结束迁移待处理状态',
+                            title: '确认状态与是否计入',
+                            subtitle: '确认后不再提醒',
                             trailing: const Icon(Icons.chevron_right, size: 18),
                             onTap: () => _showReviewSheet(context, current),
                           ),
@@ -3087,7 +3064,7 @@ class _PhysicalAssetDetailPage extends StatelessWidget {
                 current.countsInNetWorth ? '计入净资产' : '不计入净资产',
               ),
               if (current.inclusionQuality == AssetInclusionQuality.needsReview)
-                const _InfoPill('计入口径待确认'),
+                const _InfoPill('待确认'),
             ],
           ),
           if (current.purchaseDate == null) ...[
@@ -3347,8 +3324,8 @@ class _PhysicalAssetDetailPage extends StatelessWidget {
               if (current.inclusionQuality == AssetInclusionQuality.needsReview)
                 SettingsRow(
                   leading: const Icon(Icons.fact_check_outlined),
-                  title: '确认状态与计入口径',
-                  subtitle: '确认后结束迁移待处理状态',
+                  title: '确认状态与是否计入',
+                  subtitle: '确认后不再提醒',
                   trailing: const Icon(Icons.chevron_right, size: 18),
                   onTap: () => _showReviewSheet(context, current),
                 ),
@@ -4018,7 +3995,7 @@ class _PhysicalAssetReviewSheetState extends State<_PhysicalAssetReviewSheet> {
           Padding(
             padding: const EdgeInsets.fromLTRB(24, 4, 24, 18),
             child: Text(
-              '确认只修正历史迁移中无法还原的信息，不会生成账单或改变当前估值。',
+              '确认只补全历史数据里缺失的信息，不会生成账单或改变当前估值。',
               style: AppType.caption(scheme),
             ),
           ),
@@ -4249,7 +4226,7 @@ class _InfoPill extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
       decoration: BoxDecoration(
-        color: scheme.surfaceContainerHighest.withValues(alpha: 0.52),
+        color: AppColors.iconCircleFill(scheme),
         borderRadius: BorderRadius.circular(999),
       ),
       child: Text(
@@ -4270,11 +4247,7 @@ class _DetailSection extends StatelessWidget {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     return Container(
-      decoration: BoxDecoration(
-        color: AppColors.card(scheme),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: AppColors.hairline(scheme)),
-      ),
+      decoration: appCardDecoration(scheme),
       clipBehavior: Clip.antiAlias,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -4289,14 +4262,7 @@ class _DetailSection extends StatelessWidget {
             ),
           ),
           for (var i = 0; i < children.length; i++) ...[
-            if (i > 0)
-              Divider(
-                height: 0.5,
-                thickness: 0.5,
-                indent: 14,
-                endIndent: 14,
-                color: AppColors.hairline(scheme),
-              ),
+            if (i > 0) appCardDivider(scheme),
             children[i],
           ],
         ],
@@ -4465,69 +4431,107 @@ class _ReceivableAssetFormSheetState extends State<_ReceivableAssetFormSheet> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    TextField(
-                      controller: _nameCtrl,
-                      autofocus: true,
-                      decoration: iosInputDecoration(context, hint: '权益名称'),
-                      onChanged: (_) => setState(() {}),
-                    ),
-                    const SizedBox(height: 12),
-                    _EnumDropdown<ReceivableAssetType>(
-                      value: _type,
-                      values: ReceivableAssetType.values,
-                      labelOf: (value) => value.label,
-                      hint: '权益类型',
-                      onChanged: (value) => setState(() => _type = value),
-                    ),
-                    const SizedBox(height: 12),
-                    TextField(
-                      controller: _originalCtrl,
-                      keyboardType: const TextInputType.numberWithOptions(
-                        decimal: true,
+                    AppLabeledField(
+                      label: '权益名称',
+                      child: TextField(
+                        controller: _nameCtrl,
+                        autofocus: true,
+                        decoration:
+                            iosInputDecoration(context, hint: '例如 房租押金'),
+                        onChanged: (_) => setState(() {}),
                       ),
-                      inputFormatters: moneyInputFormatters(),
-                      decoration: iosInputDecoration(context, hint: '原始金额'),
-                      onChanged: (_) {
-                        if (!_editing) _remainingCtrl.text = _originalCtrl.text;
-                        setState(() {});
-                      },
                     ),
-                    const SizedBox(height: 12),
-                    TextField(
-                      controller: _remainingCtrl,
-                      readOnly: _editing,
-                      keyboardType: const TextInputType.numberWithOptions(
-                        decimal: true,
+                    const SizedBox(height: 14),
+                    AppLabeledField(
+                      label: '权益类型',
+                      child: _EnumDropdown<ReceivableAssetType>(
+                        value: _type,
+                        values: ReceivableAssetType.values,
+                        labelOf: (value) => value.label,
+                        hint: '选择类型',
+                        onChanged: (value) => setState(() => _type = value),
                       ),
-                      inputFormatters: moneyInputFormatters(),
-                      decoration: iosInputDecoration(context, hint: '剩余可收回金额'),
-                      onChanged: (_) => setState(() {}),
                     ),
-                    const SizedBox(height: 12),
-                    TextField(
-                      controller: _counterpartyCtrl,
-                      decoration:
-                          iosInputDecoration(context, hint: '对方/机构（可选）'),
+                    const SizedBox(height: 14),
+                    AppLabeledField(
+                      label: '原始金额',
+                      child: TextField(
+                        controller: _originalCtrl,
+                        keyboardType: const TextInputType.numberWithOptions(
+                          decimal: true,
+                        ),
+                        inputFormatters: moneyInputFormatters(),
+                        decoration: iosInputDecoration(
+                          context,
+                          prefix: '¥ ',
+                          hint: '例如 2000',
+                        ),
+                        onChanged: (_) {
+                          if (!_editing) {
+                            _remainingCtrl.text = _originalCtrl.text;
+                          }
+                          setState(() {});
+                        },
+                      ),
                     ),
-                    const SizedBox(height: 12),
+                    const SizedBox(height: 14),
+                    AppLabeledField(
+                      label: '剩余可收回金额',
+                      child: TextField(
+                        controller: _remainingCtrl,
+                        readOnly: _editing,
+                        keyboardType: const TextInputType.numberWithOptions(
+                          decimal: true,
+                        ),
+                        inputFormatters: moneyInputFormatters(),
+                        decoration: iosInputDecoration(
+                          context,
+                          prefix: '¥ ',
+                          hint: '例如 2000',
+                        ),
+                        onChanged: (_) => setState(() {}),
+                      ),
+                    ),
+                    const SizedBox(height: 14),
+                    AppLabeledField(
+                      label: '对方/机构（可选）',
+                      child: TextField(
+                        controller: _counterpartyCtrl,
+                        decoration:
+                            iosInputDecoration(context, hint: '例如 房东、健身房'),
+                      ),
+                    ),
+                    const SizedBox(height: 14),
                     if (_editing) ...[
                       const _HintBox(
                         text: '剩余金额和状态请通过收回、损失、归档或恢复操作修改。',
                       ),
-                      const SizedBox(height: 12),
+                      const SizedBox(height: 14),
                     ],
-                    TextField(
-                      controller: _noteCtrl,
-                      minLines: 2,
-                      maxLines: 4,
-                      decoration: iosInputDecoration(context, hint: '备注'),
+                    AppLabeledField(
+                      label: '备注（可选）',
+                      child: TextField(
+                        controller: _noteCtrl,
+                        minLines: 2,
+                        maxLines: 4,
+                        decoration:
+                            iosInputDecoration(context, hint: '押金合同、约定日期等'),
+                      ),
                     ),
-                    const SizedBox(height: 12),
-                    _SwitchRow(
-                      title: '计入净资产',
-                      subtitle: '关闭后仍保留权益记录，但不进入净资产合计',
-                      value: _includeInNetWorth,
-                      onChanged: (v) => setState(() => _includeInNetWorth = v),
+                    const SizedBox(height: 14),
+                    SettingsGroup(
+                      margin: EdgeInsets.zero,
+                      children: [
+                        SettingsRow(
+                          title: '计入净资产',
+                          subtitle: '关闭后仍保留权益记录，但不进入净资产合计',
+                          trailing: AppSwitch(
+                            value: _includeInNetWorth,
+                            onChanged: (v) =>
+                                setState(() => _includeInNetWorth = v),
+                          ),
+                        ),
+                      ],
                     ),
                     if (remaining > original) ...[
                       const SizedBox(height: 12),
@@ -4637,27 +4641,40 @@ class _ReceivableRecoverySheetState extends State<_ReceivableRecoverySheet> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                TextField(
-                  controller: _amountCtrl,
-                  autofocus: true,
-                  keyboardType: const TextInputType.numberWithOptions(
-                    decimal: true,
+                AppLabeledField(
+                  label: '收回金额',
+                  child: TextField(
+                    controller: _amountCtrl,
+                    autofocus: true,
+                    keyboardType: const TextInputType.numberWithOptions(
+                      decimal: true,
+                    ),
+                    inputFormatters: moneyInputFormatters(),
+                    decoration: iosInputDecoration(
+                      context,
+                      prefix: '¥ ',
+                      hint: '例如 500',
+                    ),
+                    onChanged: (_) => setState(() {}),
                   ),
-                  inputFormatters: moneyInputFormatters(),
-                  decoration: iosInputDecoration(context, hint: '收回金额'),
-                  onChanged: (_) => setState(() {}),
                 ),
-                const SizedBox(height: 12),
-                _AccountDropdown(
-                  value: _accountId,
-                  accounts: repo.accounts,
-                  hint: '到账账户',
-                  onChanged: (value) => setState(() => _accountId = value),
+                const SizedBox(height: 14),
+                AppLabeledField(
+                  label: '到账账户',
+                  child: _AccountDropdown(
+                    value: _accountId,
+                    accounts: repo.accounts,
+                    hint: '选择到账账户',
+                    onChanged: (value) => setState(() => _accountId = value),
+                  ),
                 ),
-                const SizedBox(height: 12),
-                TextField(
-                  controller: _noteCtrl,
-                  decoration: iosInputDecoration(context, hint: '备注'),
+                const SizedBox(height: 14),
+                AppLabeledField(
+                  label: '备注（可选）',
+                  child: TextField(
+                    controller: _noteCtrl,
+                    decoration: iosInputDecoration(context, hint: '例如 退租结清'),
+                  ),
                 ),
                 const SizedBox(height: 12),
                 const _HintBox(
@@ -5257,8 +5274,7 @@ class _PhysicalAssetFormSheetState extends State<_PhysicalAssetFormSheet> {
               child: previewPath.isNotEmpty && File(previewPath).existsSync()
                   ? Image.file(File(previewPath), fit: BoxFit.cover)
                   : ColoredBox(
-                      color:
-                          scheme.surfaceContainerHighest.withValues(alpha: 0.6),
+                      color: AppColors.iconCircleFill(scheme),
                       child: Icon(
                         _assetIcon(_assetType),
                         color: AppTextColor.secondary(scheme),
@@ -6043,16 +6059,22 @@ class _AssetSellSheetState extends State<_AssetSellSheet> {
                   onTap: _pickSoldAt,
                 ),
                 const SizedBox(height: 12),
-                _AccountDropdown(
-                  value: _accountId,
-                  accounts: repo.accounts,
-                  hint: '收款账户',
-                  onChanged: (value) => setState(() => _accountId = value),
+                AppLabeledField(
+                  label: '收款账户',
+                  child: _AccountDropdown(
+                    value: _accountId,
+                    accounts: repo.accounts,
+                    hint: '选择收款账户',
+                    onChanged: (value) => setState(() => _accountId = value),
+                  ),
                 ),
                 const SizedBox(height: 12),
-                TextField(
-                  controller: _noteCtrl,
-                  decoration: iosInputDecoration(context, hint: '备注（可选）'),
+                AppLabeledField(
+                  label: '备注（可选）',
+                  child: TextField(
+                    controller: _noteCtrl,
+                    decoration: iosInputDecoration(context, hint: '例如 闲鱼出售'),
+                  ),
                 ),
               ],
             ),
@@ -6452,7 +6474,7 @@ class _HintBox extends StatelessWidget {
       width: double.infinity,
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: scheme.surfaceContainerHighest.withValues(alpha: 0.42),
+        color: AppColors.iconCircleFill(scheme),
         borderRadius: BorderRadius.circular(14),
       ),
       child: Text(
@@ -6563,74 +6585,91 @@ class _AccountFormSheetState extends State<_AccountFormSheet> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    TextField(
-                      controller: _nameCtrl,
-                      autofocus: true,
-                      textCapitalization: TextCapitalization.words,
-                      decoration: iosInputDecoration(context, hint: '账户名称'),
-                      onChanged: (_) => setState(() {}),
-                    ),
-                    const SizedBox(height: 12),
-                    _AccountTypePicker(
-                      value: _type,
-                      onChanged: (next) => setState(() {
-                        _type = next;
-                        if (next == AccountType.credit) {
-                          _liabilityType = LiabilityProfileType.creditCard;
-                        } else if (next == AccountType.loan &&
-                            _liabilityType == LiabilityProfileType.creditCard) {
-                          _liabilityType = LiabilityProfileType.other;
-                        }
-                      }),
-                    ),
-                    const SizedBox(height: 12),
-                    TextField(
-                      controller: _currencyCtrl,
-                      readOnly: true,
-                      decoration: iosInputDecoration(
-                        context,
-                        hint: _currencyCtrl.text == 'CNY'
-                            ? '人民币 CNY'
-                            : '${_currencyCtrl.text}（仅保留，不计入净资产）',
+                    AppLabeledField(
+                      label: '账户名称',
+                      child: TextField(
+                        controller: _nameCtrl,
+                        autofocus: true,
+                        textCapitalization: TextCapitalization.words,
+                        decoration:
+                            iosInputDecoration(context, hint: '例如 招行储蓄卡'),
+                        onChanged: (_) => setState(() {}),
                       ),
-                    ),
-                    const SizedBox(height: 12),
-                    TextField(
-                      controller: _openingCtrl,
-                      readOnly: _editing,
-                      keyboardType: const TextInputType.numberWithOptions(
-                        signed: true,
-                        decimal: true,
-                      ),
-                      inputFormatters:
-                          moneyInputFormatters(allowNegative: true),
-                      decoration: iosInputDecoration(
-                        context,
-                        hint: _type.liability ? '当前欠款（可填负数）' : '期初余额',
-                      ),
-                      onChanged: (_) => setState(() {}),
-                    ),
-                    if (_editing) ...[
-                      const SizedBox(height: 5),
-                      Text(
-                        '期初余额用于建立账户起点，修改当前余额请在账户详情选择“校准余额”。',
-                        style: AppType.caption(Theme.of(context).colorScheme),
-                      ),
-                    ],
-                    const SizedBox(height: 12),
-                    TextField(
-                      controller: _institutionCtrl,
-                      textCapitalization: TextCapitalization.words,
-                      decoration:
-                          iosInputDecoration(context, hint: '机构/银行（可选）'),
                     ),
                     const SizedBox(height: 14),
-                    _SwitchRow(
-                      title: '计入净资产',
-                      subtitle: '关闭后仍显示账户，但不计入顶部合计',
-                      value: _includeInNetWorth,
-                      onChanged: (value) =>
-                          setState(() => _includeInNetWorth = value),
+                    AppLabeledField(
+                      label: '账户类型',
+                      child: _AccountTypePicker(
+                        value: _type,
+                        onChanged: (next) => setState(() {
+                          _type = next;
+                          if (next == AccountType.credit) {
+                            _liabilityType = LiabilityProfileType.creditCard;
+                          } else if (next == AccountType.loan &&
+                              _liabilityType ==
+                                  LiabilityProfileType.creditCard) {
+                            _liabilityType = LiabilityProfileType.other;
+                          }
+                        }),
+                      ),
+                    ),
+                    const SizedBox(height: 14),
+                    AppLabeledField(
+                      label: '币种',
+                      child: _ReadOnlyValueField(
+                        text: _currencyCtrl.text == 'CNY'
+                            ? '人民币'
+                            : '${_currencyCtrl.text}（仅保留，不计入净资产）',
+                        icon: Icons.currency_yuan,
+                      ),
+                    ),
+                    const SizedBox(height: 14),
+                    AppLabeledField(
+                      label: _type.liability ? '当前欠款' : '期初余额',
+                      helperText: _editing
+                          ? '期初余额用于建立账户起点，修改当前余额请在账户详情选择“校准余额”。'
+                          : null,
+                      child: TextField(
+                        controller: _openingCtrl,
+                        readOnly: _editing,
+                        keyboardType: const TextInputType.numberWithOptions(
+                          signed: true,
+                          decimal: true,
+                        ),
+                        inputFormatters:
+                            moneyInputFormatters(allowNegative: true),
+                        decoration: iosInputDecoration(
+                          context,
+                          prefix: '¥ ',
+                          hint: _type.liability ? '例如 -3000（可填负数）' : '例如 1000',
+                        ),
+                        onChanged: (_) => setState(() {}),
+                      ),
+                    ),
+                    const SizedBox(height: 14),
+                    AppLabeledField(
+                      label: '机构/银行（可选）',
+                      child: TextField(
+                        controller: _institutionCtrl,
+                        textCapitalization: TextCapitalization.words,
+                        decoration:
+                            iosInputDecoration(context, hint: '例如 招商银行'),
+                      ),
+                    ),
+                    const SizedBox(height: 14),
+                    SettingsGroup(
+                      margin: EdgeInsets.zero,
+                      children: [
+                        SettingsRow(
+                          title: '计入净资产',
+                          subtitle: '关闭后仍显示账户，但不计入顶部合计',
+                          trailing: AppSwitch(
+                            value: _includeInNetWorth,
+                            onChanged: (value) =>
+                                setState(() => _includeInNetWorth = value),
+                          ),
+                        ),
+                      ],
                     ),
                     if (_type.liability) ...[
                       const SizedBox(height: 14),
@@ -6642,92 +6681,119 @@ class _AccountFormSheetState extends State<_AccountFormSheet> {
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.stretch,
                               children: [
-                                _EnumDropdown<LiabilityProfileType>(
-                                  value: _liabilityType,
-                                  values: LiabilityProfileType.values,
-                                  labelOf: (value) => value.label,
-                                  hint: '负债类型',
-                                  onChanged: (value) =>
-                                      setState(() => _liabilityType = value),
-                                ),
-                                const SizedBox(height: 10),
-                                TextField(
-                                  controller: _liabilityOriginalCtrl,
-                                  keyboardType:
-                                      const TextInputType.numberWithOptions(
-                                    decimal: true,
+                                AppLabeledField(
+                                  label: '负债类型',
+                                  child: _EnumDropdown<LiabilityProfileType>(
+                                    value: _liabilityType,
+                                    values: LiabilityProfileType.values,
+                                    labelOf: (value) => value.label,
+                                    hint: '选择类型',
+                                    onChanged: (value) =>
+                                        setState(() => _liabilityType = value),
                                   ),
-                                  inputFormatters: moneyInputFormatters(),
-                                  decoration: iosInputDecoration(
-                                    context,
-                                    hint: '原始金额（可选）',
-                                  ),
-                                  onChanged: (_) => setState(() {}),
                                 ),
-                                const SizedBox(height: 10),
-                                TextField(
-                                  controller: _liabilityPrincipalCtrl,
-                                  keyboardType:
-                                      const TextInputType.numberWithOptions(
-                                    decimal: true,
+                                const SizedBox(height: 12),
+                                AppLabeledField(
+                                  label: '原始金额（可选）',
+                                  child: TextField(
+                                    controller: _liabilityOriginalCtrl,
+                                    keyboardType:
+                                        const TextInputType.numberWithOptions(
+                                      decimal: true,
+                                    ),
+                                    inputFormatters: moneyInputFormatters(),
+                                    decoration: iosInputDecoration(
+                                      context,
+                                      prefix: '¥ ',
+                                      hint: '例如 12000',
+                                    ),
+                                    onChanged: (_) => setState(() {}),
                                   ),
-                                  inputFormatters:
-                                      moneyInputFormatters(allowNegative: true),
-                                  decoration: iosInputDecoration(
-                                    context,
-                                    hint: '剩余本金/当前欠款（可选）',
+                                ),
+                                const SizedBox(height: 12),
+                                AppLabeledField(
+                                  label: '剩余本金/当前欠款（可选）',
+                                  child: TextField(
+                                    controller: _liabilityPrincipalCtrl,
+                                    keyboardType:
+                                        const TextInputType.numberWithOptions(
+                                      decimal: true,
+                                    ),
+                                    inputFormatters: moneyInputFormatters(
+                                        allowNegative: true),
+                                    decoration: iosInputDecoration(
+                                      context,
+                                      prefix: '¥ ',
+                                      hint: '例如 8000',
+                                    ),
+                                    onChanged: (_) => setState(() {}),
                                   ),
-                                  onChanged: (_) => setState(() {}),
                                 ),
-                                const SizedBox(height: 10),
-                                TextField(
-                                  controller: _liabilityRateCtrl,
-                                  keyboardType:
-                                      const TextInputType.numberWithOptions(
-                                    decimal: true,
+                                const SizedBox(height: 12),
+                                AppLabeledField(
+                                  label: '年化利率 %（可选）',
+                                  child: TextField(
+                                    controller: _liabilityRateCtrl,
+                                    keyboardType:
+                                        const TextInputType.numberWithOptions(
+                                      decimal: true,
+                                    ),
+                                    decoration: iosInputDecoration(
+                                      context,
+                                      hint: '例如 3.5',
+                                    ),
+                                    onChanged: (_) => setState(() {}),
                                   ),
-                                  decoration: iosInputDecoration(
-                                    context,
-                                    hint: '年化利率 %（可选）',
+                                ),
+                                const SizedBox(height: 12),
+                                AppLabeledField(
+                                  label: '每月还款日（可选）',
+                                  child: TextField(
+                                    controller: _repaymentDayCtrl,
+                                    keyboardType: TextInputType.number,
+                                    decoration: iosInputDecoration(
+                                      context,
+                                      hint: '1-31，例如 9',
+                                    ),
+                                    onChanged: (_) => setState(() {}),
                                   ),
-                                  onChanged: (_) => setState(() {}),
                                 ),
-                                const SizedBox(height: 10),
-                                TextField(
-                                  controller: _repaymentDayCtrl,
-                                  keyboardType: TextInputType.number,
-                                  decoration: iosInputDecoration(
-                                    context,
-                                    hint: '每月还款日 1-31（可选）',
+                                const SizedBox(height: 12),
+                                AppLabeledField(
+                                  label: '默认还款账户（可选）',
+                                  child: _AccountDropdown(
+                                    value: _repaymentAccountId,
+                                    accounts: repo.accounts
+                                        .where(
+                                            (a) => a.id != widget.account?.id)
+                                        .toList(),
+                                    hint: '选择账户',
+                                    onChanged: (value) => setState(
+                                        () => _repaymentAccountId = value),
                                   ),
-                                  onChanged: (_) => setState(() {}),
                                 ),
-                                const SizedBox(height: 10),
-                                _AccountDropdown(
-                                  value: _repaymentAccountId,
-                                  accounts: repo.accounts
-                                      .where((a) => a.id != widget.account?.id)
-                                      .toList(),
-                                  hint: '默认还款账户（可选）',
-                                  onChanged: (value) => setState(
-                                      () => _repaymentAccountId = value),
+                                const SizedBox(height: 12),
+                                AppLabeledField(
+                                  label: '负债状态',
+                                  child: _EnumDropdown<LiabilityProfileStatus>(
+                                    value: _liabilityStatus,
+                                    values: LiabilityProfileStatus.values,
+                                    labelOf: (value) => value.label,
+                                    hint: '选择状态',
+                                    onChanged: (value) => setState(
+                                        () => _liabilityStatus = value),
+                                  ),
                                 ),
-                                const SizedBox(height: 10),
-                                _EnumDropdown<LiabilityProfileStatus>(
-                                  value: _liabilityStatus,
-                                  values: LiabilityProfileStatus.values,
-                                  labelOf: (value) => value.label,
-                                  hint: '负债状态',
-                                  onChanged: (value) =>
-                                      setState(() => _liabilityStatus = value),
-                                ),
-                                const SizedBox(height: 10),
-                                TextField(
-                                  controller: _liabilityNoteCtrl,
-                                  minLines: 2,
-                                  maxLines: 4,
-                                  decoration:
-                                      iosInputDecoration(context, hint: '负债备注'),
+                                const SizedBox(height: 12),
+                                AppLabeledField(
+                                  label: '负债备注（可选）',
+                                  child: TextField(
+                                    controller: _liabilityNoteCtrl,
+                                    minLines: 2,
+                                    maxLines: 4,
+                                    decoration: iosInputDecoration(context,
+                                        hint: '例如 房贷、分期说明'),
+                                  ),
                                 ),
                                 if (!_liabilityInputValid) ...[
                                   const SizedBox(height: 10),
@@ -6884,22 +6950,20 @@ class _TypeChip extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    return GestureDetector(
-      behavior: HitTestBehavior.opaque,
-      onTap: onTap,
+    // 选中态走主色（UI 标准：强调/选中 = scheme.primary）+ 按压反馈。
+    return PressableScale(
+      onPressed: onTap,
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 160),
         curve: Curves.easeOutCubic,
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
         decoration: BoxDecoration(
           color: selected
-              ? scheme.onSurface.withValues(alpha: 0.08)
+              ? scheme.primary.withValues(alpha: 0.12)
               : AppColors.card(scheme),
           borderRadius: BorderRadius.circular(999),
           border: Border.all(
-            color: selected
-                ? scheme.onSurface.withValues(alpha: 0.48)
-                : AppColors.hairline(scheme),
+            color: selected ? scheme.primary : AppColors.hairline(scheme),
           ),
         ),
         child: Text(
@@ -6907,7 +6971,7 @@ class _TypeChip extends StatelessWidget {
           style: Theme.of(context).textTheme.labelMedium?.copyWith(
                 fontWeight: FontWeight.w400,
                 color: selected
-                    ? AppTextColor.primary(scheme)
+                    ? scheme.primary
                     : AppTextColor.secondary(scheme),
               ),
         ),
@@ -6916,56 +6980,3 @@ class _TypeChip extends StatelessWidget {
   }
 }
 
-class _SwitchRow extends StatelessWidget {
-  final String title;
-  final String subtitle;
-  final bool value;
-  final ValueChanged<bool> onChanged;
-
-  const _SwitchRow({
-    required this.title,
-    required this.subtitle,
-    required this.value,
-    required this.onChanged,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return Container(
-      padding: const EdgeInsets.fromLTRB(12, 10, 10, 10),
-      decoration: BoxDecoration(
-        color: AppColors.card(scheme),
-        borderRadius: BorderRadius.circular(AppRadius.md),
-        border: Border.all(color: AppColors.hairline(scheme)),
-      ),
-      child: Row(
-        children: [
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(
-                  title,
-                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                        fontWeight: FontWeight.w400,
-                      ),
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  subtitle,
-                  style: AppType.secondary(scheme),
-                ),
-              ],
-            ),
-          ),
-          AppSwitch(
-            value: value,
-            onChanged: onChanged,
-          ),
-        ],
-      ),
-    );
-  }
-}

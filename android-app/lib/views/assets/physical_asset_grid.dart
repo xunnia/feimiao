@@ -11,9 +11,11 @@ import '../../data/app_repository.dart';
 import '../../theme/app_colors.dart';
 import '../../theme/app_tokens.dart';
 import '../../widgets/app_buttons.dart';
+import '../../widgets/app_empty_state.dart';
 import '../../widgets/app_toast.dart';
 import '../../widgets/ios_form.dart';
 import '../../widgets/ios_menu.dart';
+import '../../widgets/mascot.dart';
 import '../../widgets/pressable_scale.dart';
 
 class PhysicalAssetGrid extends StatefulWidget {
@@ -57,7 +59,6 @@ class _PhysicalAssetGridState extends State<PhysicalAssetGrid> {
 
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
     final filtered = _filtered;
     return Column(
       children: [
@@ -108,11 +109,10 @@ class _PhysicalAssetGridState extends State<PhysicalAssetGrid> {
         ),
         Expanded(
           child: filtered.isEmpty
-              ? Center(
-                  child: Text(
-                    widget.assets.isEmpty ? '还没有物品' : '没有匹配的物品',
-                    style: AppType.secondary(scheme),
-                  ),
+              ? AppEmptyState(
+                  mood: MascotMood.empty,
+                  title: widget.assets.isEmpty ? '还没有物品' : '没有匹配的物品',
+                  message: widget.assets.isEmpty ? '记一笔购买账单，就能追踪它的使用成本啦' : null,
                 )
               : LayoutBuilder(
                   builder: (context, constraints) {
@@ -127,8 +127,10 @@ class _PhysicalAssetGridState extends State<PhysicalAssetGrid> {
                         crossAxisCount: singleColumn ? 1 : 2,
                         crossAxisSpacing: 10,
                         mainAxisSpacing: 10,
+                        // 2 栏卡片改矮胖为瘦高（0.78→0.66），给底部文字行留够高度，
+                        // 否则窄屏上名称+说明+提醒三行会被固定宽高比裁成溢出碎块。
                         childAspectRatio:
-                            singleColumn ? (largeText ? 1.75 : 2.25) : 0.78,
+                            singleColumn ? (largeText ? 1.75 : 2.25) : 0.66,
                       ),
                       itemCount: filtered.length,
                       itemBuilder: (context, index) => _AssetGridCard(
@@ -240,8 +242,8 @@ class _AssetGridCard extends StatelessWidget {
                   : Column(
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
-                        Expanded(flex: 6, child: image),
-                        Expanded(flex: 5, child: content),
+                        Expanded(flex: 5, child: image),
+                        Expanded(flex: 6, child: content),
                       ],
                     ),
             ),
@@ -311,12 +313,12 @@ class _AssetCardText extends StatelessWidget {
             overflow: TextOverflow.ellipsis,
             style: AppType.rowTitle(scheme),
           ),
-          const SizedBox(height: 4),
+          const SizedBox(height: 3),
           Text(
             subtitle,
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
-            style: AppType.caption(scheme),
+            style: AppType.secondary(scheme),
           ),
           const Spacer(),
           Text(
@@ -334,7 +336,7 @@ class _AssetCardText extends StatelessWidget {
             key: Key('physical-asset-secondary-${asset.id}'),
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
-            style: AppType.caption(scheme),
+            style: AppType.secondary(scheme),
           ),
         ],
       ),
@@ -384,7 +386,7 @@ class _AssetImagePlaceholder extends StatelessWidget {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     return ColoredBox(
-      color: scheme.surfaceContainerHighest.withValues(alpha: 0.62),
+      color: AppColors.iconCircleFill(scheme),
       child: Center(
         child: Icon(
           assetTypeIcon(asset.assetType),

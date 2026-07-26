@@ -8,6 +8,7 @@ import '../../theme/app_tokens.dart';
 import '../../widgets/app_buttons.dart';
 import '../../widgets/app_toast.dart';
 import '../../widgets/ios_form.dart';
+import '../../widgets/mascot.dart';
 import '../../widgets/settings_ui.dart';
 import '../common/app_sheet.dart';
 
@@ -146,7 +147,7 @@ class _PhysicalAssetRefundAllocationSheetState
                   final items = snapshot.data ?? const [];
                   if (items.isEmpty) {
                     return const _RefundAllocationMessage(
-                      icon: Icons.check_circle_outline,
+                      mood: MascotMood.success,
                       title: '退款都已分配',
                       message: '关联物品的净购置成本已经更新。',
                     );
@@ -269,11 +270,7 @@ class _RefundAllocationCardState extends State<_RefundAllocationCard> {
     final remaining = total == null ? null : widget.data.refundCents - total;
     return Container(
       padding: const EdgeInsets.fromLTRB(16, 15, 16, 15),
-      decoration: BoxDecoration(
-        color: AppColors.card(scheme),
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: AppColors.hairline(scheme)),
-      ),
+      decoration: appCardDecoration(scheme),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -295,7 +292,7 @@ class _RefundAllocationCardState extends State<_RefundAllocationCard> {
                     const SizedBox(height: 3),
                     Text(
                       _dateText(widget.data.occurredAt),
-                      style: AppType.caption(scheme),
+                      style: AppType.secondary(scheme),
                     ),
                   ],
                 ),
@@ -322,7 +319,7 @@ class _RefundAllocationCardState extends State<_RefundAllocationCard> {
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
             decoration: BoxDecoration(
-              color: scheme.surfaceContainerHighest.withValues(alpha: 0.55),
+              color: AppColors.iconCircleFill(scheme),
               borderRadius: BorderRadius.circular(10),
             ),
             child: Row(
@@ -423,19 +420,21 @@ class _RefundAllocationCardState extends State<_RefundAllocationCard> {
 }
 
 class _RefundAllocationMessage extends StatelessWidget {
-  final IconData icon;
+  final IconData? icon;
+  final MascotMood? mood;
   final String title;
   final String message;
   final String? actionLabel;
   final VoidCallback? onAction;
 
   const _RefundAllocationMessage({
-    required this.icon,
+    this.icon,
+    this.mood,
     required this.title,
     required this.message,
     this.actionLabel,
     this.onAction,
-  });
+  }) : assert(icon != null || mood != null, '空态/异常态必须给图标或猫其一');
 
   @override
   Widget build(BuildContext context) {
@@ -446,7 +445,12 @@ class _RefundAllocationMessage extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(icon, size: 38, color: AppTextColor.secondary(scheme)),
+            // 空态/完成态用猫（守「空状态只放猫」标准）；
+            // 加载失败等异常态仍用图标，别拿猫报错误。
+            if (mood != null)
+              Mascot(mood: mood!, size: 72, animate: true)
+            else
+              Icon(icon, size: 38, color: AppTextColor.secondary(scheme)),
             const SizedBox(height: 12),
             Text(title, style: AppType.rowTitle(scheme)),
             const SizedBox(height: 5),

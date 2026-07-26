@@ -178,6 +178,11 @@ class AppColors {
       scheme.brightness == Brightness.dark
           ? const Color(0xFF3B3733)
           : const Color(0xFFF2F2F7);
+
+  /// 图标圆底/小占位块统一填充。别再各写各的
+  /// `surfaceContainerHighest.withValues(alpha: 0.42~0.62)` 魔法数。
+  static Color iconCircleFill(ColorScheme scheme) =>
+      scheme.surfaceContainerHighest.withValues(alpha: 0.55);
 }
 
 // ---------------------------------------------------------------------------

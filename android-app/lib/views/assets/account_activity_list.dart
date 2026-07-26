@@ -6,6 +6,7 @@ import '../../core/budget/budget_window_resolver.dart';
 import '../../core/money_format.dart';
 import '../../theme/app_colors.dart';
 import '../../theme/app_tokens.dart';
+import '../../widgets/settings_ui.dart';
 
 class AccountActivityList extends StatelessWidget {
   final List<AccountActivityItem> items;
@@ -18,15 +19,9 @@ class AccountActivityList extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Padding(
-          padding: const EdgeInsets.only(left: 4, bottom: 7),
-          child: Text('近期活动', style: AppType.sectionLabel(scheme)),
-        ),
+        const SettingsSectionLabel('近期活动'),
         Container(
-          decoration: BoxDecoration(
-            color: AppColors.card(scheme),
-            borderRadius: BorderRadius.circular(8),
-          ),
+          decoration: appCardDecoration(scheme),
           clipBehavior: Clip.antiAlias,
           child: items.isEmpty
               ? Padding(
@@ -37,13 +32,7 @@ class AccountActivityList extends StatelessWidget {
               : Column(
                   children: [
                     for (var index = 0; index < items.length; index++) ...[
-                      if (index > 0)
-                        Divider(
-                          height: 0.5,
-                          thickness: 0.5,
-                          indent: 16,
-                          color: AppColors.hairline(scheme),
-                        ),
+                      if (index > 0) appCardDivider(scheme),
                       _ActivityRow(item: items[index]),
                     ],
                   ],
@@ -85,7 +74,7 @@ class _ActivityRow extends StatelessWidget {
             alignment: Alignment.center,
             decoration: BoxDecoration(
               shape: BoxShape.circle,
-              color: scheme.surfaceContainerHighest.withValues(alpha: 0.6),
+              color: AppColors.iconCircleFill(scheme),
             ),
             child: Icon(
               inflow ? Icons.call_received : Icons.call_made,
