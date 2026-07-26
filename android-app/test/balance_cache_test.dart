@@ -193,6 +193,15 @@ void main() {
       netWorthBefore - Decimal.fromInt(30),
     );
 
+    // 双保险回归网（对抗审查发现）：写路径中途 _persistCurrentNetWorthSnapshot
+    // 在 notifyListeners 之前读 memo 化的 currentNetWorthResult——若
+    // _invalidateTxDerived 里的 _invalidateBalanceDerived() 被删，此处 memo
+    // 已热（上面读过），当天快照会把写前的旧净资产静默落盘。断言快照=写后
+    // 净资产，把这层失效兜进测试。
+    final todaySnapshot =
+        repo.netWorthSnapshots.where((snapshot) => snapshot.isComputed).first;
+    expect(todaySnapshot.netWorth, netWorthBefore - Decimal.fromInt(30));
+
     final trendCountAfterWrite = repo.trendRecomputeCount;
     final trendRefreshed = repo.accountBalanceTrend(
       repo.accounts.singleWhere((item) => item.id == accountId),

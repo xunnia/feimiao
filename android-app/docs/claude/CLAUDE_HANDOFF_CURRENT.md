@@ -35,7 +35,12 @@
 - **v208 APK 已构建并核验**：aapt=`com.qingji.qingji.codex`/208/1.206.0；16K zipalign 过；V2 唯一 Codex 证书。归档 `ci-artifacts/releases/feimiao-codex-v1.206.0-208.apk`，110,666,663 字节，SHA256 `451A56DD4550FCC4E5774ADB9A7E3D2E31A966EA5792F884230D0290A765E13A`。**未发布线上**（线上仍 v206，v207/v208 都等用户点头再发；用户从电脑直接传包安装）。本地功能提交 `39995ee`，远端源码快照 `09aa437`。
 - P2（accounts_view 拆模块/性能缓存/情感化）可选排期。动 UI 前必读 UI_DESIGN_STANDARD.md。
 
-### 2026-07-27 资产UI P2 重构批（🔄施工B进行中：拆分/性能/情感化全部完成，验收交付阶段）
+### 2026-07-27 资产UI P2 重构批（✅已完成总验收，v1.207.0+209 / b0727-209 / DB 仍 v41）
+
+- **对抗审查处置完毕（2026-07-27 续接会话）**：journal 4 路结果全在。①测试质量维度：零问题 ②物品卡溢出发现：复核**驳回**（real:false，旧版同条件也溢，非本次回归）③**有效发现 1 条已修**：balance_cache_test 没兜住「双保险」失效层——用例⑤补断言「写后当天 computed 快照净资产=写后净资产」，并做了反向验证（临时摘掉 _invalidateTxDerived 里的 _invalidateBalanceDerived → 测试红；恢复 → 绿），回归网确认有效。
+- **总验收**：analyze 0 error 0 warning（2 条老 info）；全量 `flutter test` **808/808**（bump 后重跑）。
+- **v209 APK 已构建核验归档**：aapt=`com.qingji.qingji.codex`/209/1.207.0；16K zipalign；V2 唯一 Codex 证书。`ci-artifacts/releases/feimiao-codex-v1.207.0-209.apk`，110,666,531 字节，SHA256 `44B235922691F6DB995572B27478EEFEFC0884634AD76DA83F7C4D6681AA74EB`。
+- **用户已拍板（2026-07-27）：推送完发布 v209 上线**（发布状态见 §4）。
 
 - **P2 定义**：`资产UI优化方案-2026-07-26.md` §四 三件事：①accounts_view.dart(7333行) 拆模块+四处收口（死代码/图标映射/PickerField/照片选择器）②性能缓存 ③情感化（猫探头/成功猫 toast/趋势渐变）。
 - **施工依据材料（全部已归档进仓库，别重新侦察）**：`docs/claude/P2侦察报告-2026-07-27.md`——6 路侦察报告合集（拆分依赖图/PickerField 四套/照片胶水三份/图标差异/性能热点+缓存方案/情感化素材），**附录含施工A工作流脚本原文（拆分改名总表 SPLIT_SPEC + 九段任务书）**。
@@ -60,7 +65,7 @@
   - **全量 flutter test：808/808 全过**（803 基线 + 5 新缓存用例），exit 0。
   - **渲染图已出**：after `outputs/asset_ui_review/after_p2/`（7 张，含 p2_07=编辑物品+FakeViewPadding 伪键盘的修复证据图）；对比图 `outputs/asset_ui_review/compare_p2/`（5 张，P1 vs P2），已发用户过目（尚未回复拍板）。渲染脚本临时拷进 test/ 跑完已删，原件在施工B会话 scratchpad `tmp_asset_ui_p2_render_test.dart`（丢了就照 after_p1 那版改：输出目录/p2_07 那段 FakeViewPadding(bottom:600)）。
   - 对抗审查工作流（拆分等价/缓存正确性/UI铁律/测试质量 4 维+逐条复核）**发起但用户额度耗尽时未跑完**：4 路中 1 路（test 维度）已回报**零问题**。journal：`~/.claude/projects/C--src-xunni-codex/a86b7f00-6c65-4beb-8553-07d51f8bce67/subagents/workflows/wf_d4379b23-5d5/journal.jsonl`（每路一条 result）。接手时若 journal 已有 4 条 result 就直接看结论；没有就重发一轮审查（或人工抽查缓存失效点+拆分引用即可，全量测试已绿兜底）。
-- **❌ 剩余（按顺序，接手从这里继续）**：①看对抗审查结论、处置发现（如有）②版本 bump **1.207.0+209 / b0727-209**（pubspec+app_version.dart+build_info.dart 三处）③build apk + verify_release_apk.sh（先 export JAVA_HOME="C:\Program Files\Android\Android Studio\jbr"）④归档 sha256 ⑤更新本文档终稿 ⑥最终 commit ⑦源码快照推 origin。**未拍板前不发布线上（线上仍 v206）。等用户对 compare_p2 对比图点头。**
+- ~~剩余清单~~ **已全部完成（2026-07-27 续接会话）**：审查处置✅ bump 1.207.0+209✅ APK 构建核验归档✅ 文档终稿✅；commit+快照+发布状态见本节顶部和 §4。
 - **⚠️ 断点落盘（额度告急时做的保底）**：施工B 全部成果（S5/S6/性能/情感化/两条bug修复/本文档/渲染对比图）本地 WIP commit **749df31**；源码快照 **5c97564** 已推 origin/codex/feimiao-p0-fixes（parent=40ebb59，不含发布产物）。**下次推快照前先 `git ls-remote origin codex/feimiao-p0-fixes` 拿远端 tip 当 parent**（这次就是拿手册里的旧 parent bc8095a 被拒了一回）。**33 个旧 APK 删除状态（D）刻意未提交**；⚠️ `android-app/outputs/` 里躺着一个未跟踪的 110MB 旧 APK（feimiao-codex-v1.203.0-205.apk），`git add android-app` 会把它扫进来，提交前记得排除。版本号未 bump（仍 1.206.0+208 / b0727-208），DB 仍 v41，线上仍 v206。
 
 ### 2026-07-18 当前启动体验修复（工作区未提交）
@@ -240,15 +245,15 @@
 - 另带上 178 后补的小组件快照指纹跳渲。
 - 上一轮（1.176.0+178，已上线）：更新校验加固、深色状态栏、退款净额索引化、transactions 索引、去重复模糊层。
 
-## 3. 验证记录（最新 = v208，2026-07-27）
+## 3. 验证记录（最新 = v209，2026-07-27）
 
 已完成：
 
 - `flutter analyze --no-pub --no-fatal-infos --no-fatal-warnings`：0 issue（仅 2 条既有测试 info）。
-- `flutter test --no-pub --concurrency=1`：**803/803** 通过（注意：管道会吞退出码，结果落文件再查 `$?`）。
-- `flutter build apk --release --no-pub --build-name 1.206.0 --build-number 208`：成功。
-- `verify_release_apk.sh`（含 aapt/16K zipalign/apksigner）：`com.qingji.qingji.codex` / 208 / 1.206.0 / V2 唯一 Codex 签名，证书 SHA256 `4e99c399d4d246bd9c6b08b1d641248bd0846e7ae650c3a766e30fa67483d507`。跑它前先 `export JAVA_HOME="C:\Program Files\Android\Android Studio\jbr"`。
-- APK：110,666,663 字节；SHA256 `451A56DD4550FCC4E5774ADB9A7E3D2E31A966EA5792F884230D0290A765E13A`，归档与 sidecar 一致。v207（P0 批，`feimiao-codex-v1.205.0-207.apk`，SHA256 `3528D5DF...51EADA`）保留为回退包。
+- `flutter test --no-pub --concurrency=1`：**808/808** 通过（803 基线+5 缓存用例；注意：管道会吞退出码，结果落文件再查 `$?`）。
+- `flutter build apk --release --no-pub --build-name 1.207.0 --build-number 209`：成功。
+- `verify_release_apk.sh`（含 aapt/16K zipalign/apksigner）：`com.qingji.qingji.codex` / 209 / 1.207.0 / V2 唯一 Codex 签名，证书 SHA256 `4e99c399d4d246bd9c6b08b1d641248bd0846e7ae650c3a766e30fa67483d507`。跑它前先 `export JAVA_HOME="C:\Program Files\Android\Android Studio\jbr"`。
+- APK：110,666,531 字节；SHA256 `44B235922691F6DB995572B27478EEFEFC0884634AD76DA83F7C4D6681AA74EB`，归档与 sidecar 一致。v208（P1 批）/v207（P0 批）保留为回退包。
 - 离屏渲染截图已做（对比图见 outputs/asset_ui_review/），模拟器/真机安装按惯例跳过；运行态由用户自行安装验收，不能宣称已通过真机验证。
 
 ## 4. 线上上传状态
@@ -290,9 +295,9 @@
 
 ## 5. 版本文件同步状态
 
-- `pubspec.yaml`：`version: 1.206.0+208`
-- `lib/core/app_version.dart`：`version = '1.206.0'`，`buildNumber = 208`
-- `lib/build_info.dart`：`kBuildTag = 'b0727-208'`
+- `pubspec.yaml`：`version: 1.207.0+209`
+- `lib/core/app_version.dart`：`version = '1.207.0'`，`buildNumber = 209`
+- `lib/build_info.dart`：`kBuildTag = 'b0727-209'`
 - `android/local.properties`：Flutter release 构建已读取 `1.204.0+206`；该文件通常不入 git
 - DB：**v41**（v40 交易时间精度之上，transactions 新增 `order_no`；导入退款支持跨批/跨月挂回历史原单）
 - 版本规矩：每次推送 minor+1、versionCode+1、kBuildTag 同步（b月日-versionCode）
