@@ -5,16 +5,15 @@ import 'package:provider/provider.dart';
 import '../core/account/account_movement_projection.dart';
 import '../core/money_format.dart';
 import '../data/app_repository.dart';
-import '../theme/app_colors.dart';
 import '../theme/app_tokens.dart';
 import '../views/common/app_sheet.dart';
 import 'app_buttons.dart';
 import 'app_date_picker.dart';
+import 'app_picker_field.dart';
 import 'app_toast.dart';
 import 'ios_dialogs.dart';
 import 'ios_form.dart';
 import 'ios_menu.dart';
-import 'pressable_scale.dart';
 import 'settings_ui.dart';
 
 class RefundSettlementResult {
@@ -267,7 +266,7 @@ class _RefundSettlementSheetState extends State<RefundSettlementSheet> {
                               _amountEdited = true;
                             }),
                           )
-                        : _ReadOnlySettlementField(
+                        : AppReadOnlyField(
                             key: const Key('refund-settlement-amount'),
                             text: MoneyFormat.string(
                               widget.initialAmount,
@@ -278,12 +277,12 @@ class _RefundSettlementSheetState extends State<RefundSettlementSheet> {
                   const SizedBox(height: 14),
                   AppLabeledField(
                     label: '到账日期',
-                    child: _SettlementPickerField(
+                    child: AppPickerField(
                       key: const Key('refund-settlement-date'),
                       text: _settledAt == null ? null : _dateLabel(_settledAt!),
                       hint: '选择到账日期',
-                      icon: Icons.calendar_today_outlined,
-                      onPressed: _pickDate,
+                      trailingIcon: Icons.calendar_today_outlined,
+                      onTap: (_) => _pickDate(),
                     ),
                   ),
                   const SizedBox(height: 14),
@@ -292,32 +291,28 @@ class _RefundSettlementSheetState extends State<RefundSettlementSheet> {
                     helperText: accounts.isEmpty
                         ? '请先添加一个 ${widget.original.currencyCode} 账户'
                         : null,
-                    child: Builder(
-                      builder: (menuContext) => _SettlementPickerField(
-                        key: const Key('refund-settlement-account'),
-                        text: selectedAccount?.name,
-                        hint: '选择到账账户',
-                        icon: Icons.account_balance_wallet_outlined,
-                        onPressed: accounts.isEmpty
-                            ? null
-                            : () => showIosMenu(
-                                  menuContext,
-                                  [
-                                    for (final account in accounts)
-                                      IosMenuItem(
-                                        label: account.name,
-                                        icon: Icons
-                                            .account_balance_wallet_outlined,
-                                        selected: account.id == _accountId,
-                                        onTap: () => setState(
-                                          () => _accountId = account.id,
-                                        ),
+                    child: AppPickerField(
+                      key: const Key('refund-settlement-account'),
+                      text: selectedAccount?.name,
+                      hint: '选择到账账户',
+                      trailingIcon: Icons.account_balance_wallet_outlined,
+                      onTap: accounts.isEmpty
+                          ? null
+                          : (menuCtx) => showPickerMenu(
+                                menuCtx,
+                                [
+                                  for (final account in accounts)
+                                    IosMenuItem(
+                                      label: account.name,
+                                      icon: Icons
+                                          .account_balance_wallet_outlined,
+                                      selected: account.id == _accountId,
+                                      onTap: () => setState(
+                                        () => _accountId = account.id,
                                       ),
-                                  ],
-                                  alignToAnchorLeft: true,
-                                  width: _menuWidth(menuContext),
-                                ),
-                      ),
+                                    ),
+                                ],
+                              ),
                     ),
                   ),
                 ],
@@ -458,78 +453,6 @@ class _RefundSettlementSheetState extends State<RefundSettlementSheet> {
   }
 }
 
-class _SettlementPickerField extends StatelessWidget {
-  final String? text;
-  final String hint;
-  final IconData icon;
-  final VoidCallback? onPressed;
-
-  const _SettlementPickerField({
-    super.key,
-    required this.text,
-    required this.hint,
-    required this.icon,
-    required this.onPressed,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    final hasText = text != null && text!.isNotEmpty;
-    return PressableScale(
-      onPressed: onPressed,
-      child: Container(
-        constraints: const BoxConstraints(minHeight: 42),
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-        decoration: BoxDecoration(
-          color: AppColors.inputFill(scheme),
-          borderRadius: BorderRadius.circular(AppRadius.sm),
-        ),
-        child: Row(
-          children: [
-            Expanded(
-              child: Text(
-                hasText ? text! : hint,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: AppType.body(scheme).copyWith(
-                  color: hasText ? scheme.onSurface : AppTextColor.hint(scheme),
-                ),
-              ),
-            ),
-            const SizedBox(width: 8),
-            Icon(icon, size: 18, color: AppTextColor.secondary(scheme)),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _ReadOnlySettlementField extends StatelessWidget {
-  final String text;
-
-  const _ReadOnlySettlementField({super.key, required this.text});
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return Container(
-      constraints: const BoxConstraints(minHeight: 42),
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-      decoration: BoxDecoration(
-        color: AppColors.inputFill(scheme),
-        borderRadius: BorderRadius.circular(AppRadius.sm),
-      ),
-      alignment: Alignment.centerLeft,
-      child: Text(
-        text,
-        style: AppType.body(scheme).copyWith(fontFamily: 'Nunito'),
-      ),
-    );
-  }
-}
-
 String _dateLabel(DateTime date) =>
     '${date.year}/${date.month.toString().padLeft(2, '0')}/${date.day.toString().padLeft(2, '0')}';
 
@@ -537,12 +460,4 @@ String _trimDecimal(Decimal amount) {
   var text = amount.toString();
   if (text.endsWith('.00')) text = text.substring(0, text.length - 3);
   return text;
-}
-
-double _menuWidth(BuildContext context) {
-  final renderObject = context.findRenderObject();
-  final fieldWidth =
-      renderObject is RenderBox ? renderObject.size.width : 260.0;
-  final screenMax = MediaQuery.sizeOf(context).width - 16;
-  return fieldWidth.clamp(220.0, screenMax).toDouble();
 }

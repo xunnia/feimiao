@@ -1,6 +1,6 @@
 # 肥喵记账 Codex 当前交接文档
 
-更新时间：2026-07-26
+更新时间：2026-07-27（P2 施工中断点，见下方 P2 段）
 当前 Android 工程：`C:\src\xunni-codex\android-app`  
 新会话第一入口：`docs/claude/CLAUDE_START_HERE.md`
 
@@ -34,6 +34,28 @@
 - **验收**：analyze 0 error 0 warning（2 条老 info）；全量 `flutter test` **803/803**（asset_management_view_test 多 1 个导航闭环断言用例）；P0→P1 对比图 7 张 `outputs/asset_ui_review/compare_p1/`（P1 原图 `after_p1/`）。
 - **v208 APK 已构建并核验**：aapt=`com.qingji.qingji.codex`/208/1.206.0；16K zipalign 过；V2 唯一 Codex 证书。归档 `ci-artifacts/releases/feimiao-codex-v1.206.0-208.apk`，110,666,663 字节，SHA256 `451A56DD4550FCC4E5774ADB9A7E3D2E31A966EA5792F884230D0290A765E13A`。**未发布线上**（线上仍 v206，v207/v208 都等用户点头再发；用户从电脑直接传包安装）。本地功能提交 `39995ee`，远端源码快照 `09aa437`。
 - P2（accounts_view 拆模块/性能缓存/情感化）可选排期。动 UI 前必读 UI_DESIGN_STANDARD.md。
+
+### 2026-07-27 资产UI P2 重构批（🔄施工中断点——接手先读这段，用户额度耗尽中断）
+
+- **P2 定义**：`资产UI优化方案-2026-07-26.md` §四 三件事：①accounts_view.dart(7333行) 拆模块+四处收口（死代码/图标映射/PickerField/照片选择器）②性能缓存 ③情感化（猫探头/成功猫 toast/趋势渐变）。
+- **施工依据材料（全部已归档进仓库，别重新侦察）**：`docs/claude/P2侦察报告-2026-07-27.md`——6 路侦察报告合集（拆分依赖图/PickerField 四套/照片胶水三份/图标差异/性能热点+缓存方案/情感化素材），**附录含施工A工作流脚本原文（拆分改名总表 SPLIT_SPEC + 九段任务书），重跑未完成段直接照抄对应段 prompt**。
+- **已完成段（每段完成时 analyze 0 error 0 warning + asset_management_view_test 全过）**：
+  - ✅ S1 全局标准件 `lib/widgets/app_picker_field.dart`（AppPickerField/AppReadOnlyField/showPickerMenu），4 套重复实现全收口：accounts_view `_IosPickerField`、recurring_view `_PickerField`（含 409-443 内联起始日期块、账户/账本菜单升级 selected: 写法）、physical_asset_purchase_sheet `_PickerField`（InkWell→PressableScale、chevron_right→下箭头）、refund_settlement_sheet `_SettlementPickerField`。**以后「点击弹菜单选值」字段一律用 AppPickerField，别再手搓。**
+  - ✅ S2 图标合一+死代码：删 `_PhysicalAssetGroupCard`+`_PhysicalAssetTile`（171 行死代码）；删私有 `_assetIcon`，统一用 physical_asset_grid.dart 公开 `assetTypeIcon`；**已拍板取值（用户未过目，可推翻）**：digital=devices_other_outlined（线框系统一）、appliance=kitchen_outlined（维持）。
+  - ✅ S3 照片胶水合一：新 `lib/views/assets/asset_media_picker.dart`（sharedAssetMediaStore/pickAssetPhoto，统一 replaceFile 原子换图），三处胶水改接。**发票路线（_pickInvoice/绕开 AssetMediaStore）刻意不动**，动磁盘布局风险大。
+  - ✅ S4 表单基件簇 → `lib/views/assets/asset_form_kit.dart`（418 行：AssetEnumDropdown/AssetAccountDropdown/AssetCategoryDropdown/AssetNullableDateField/AssetHintBox/AssetDetailSection/AssetDetailRow/AssetActionButton/AssetMenuFilterButton + parseAssetDecimalInput/assetDateText/digitAwareAmountSpan 等公开助手）。
+  - ✅ S7 权益簇 → `receivable_detail_page.dart`(476行) + `receivable_sheets.dart`(507行)。
+  - ✅ S8 物品簇 → `physical_asset_detail_page.dart`(1147行) + `physical_asset_sheets.dart`(1014行) + `physical_asset_form_sheet.dart`(664行)。⚠️ 发现待决策项：私有 `_physicalAssetStatusLabel`（在 detail_page）与 physical_asset_grid.dart 公开 `physicalAssetStatusLabel` **不等价**（usageStatus.unknown 时前者「持有中」后者「待确认」），按规矩保留两套未合并，合一留后续拍板。
+  - ✅ S9 收尾 → `asset_add_entry_sheet.dart`(200行，AssetAddEntrySheet)；accounts_view 无 unused import、旧私有名零残留。**终检：accounts_view.dart 2733 行（原 7333）；analyze 0 error 0 warning；8 个资产测试文件 81 用例全过。**
+- **✅ 断点已落盘**：施工A 全部成果（上述代码+本文档+侦察报告）已 WIP commit（见 git log 最新「WIP: 资产UI P2 施工A落盘」），树在提交时点=编译绿+资产测试绿。
+- **❌ 未完成（按顺序做）**：
+  1. **S5 总览+资金簇重跑**（agent 因 API 连接中断死亡未执行，非代码问题）：`asset_overview_cards.dart` + `funds_tab_cards.dart` 不存在，_AssetSummaryCard/_VerifiedNetWorthCard/_AssetPendingCard/_AssetAnalysisCard/_AssetEmptyState/_AccountBalance/_AccountGroup(Card)/_AccountBalanceTile/_ZeroBalanceAccountsCard/_FundsArchive* 两簇（约 1200 行）还在 accounts_view.dart。照侦察报告附录 SPLIT_SPEC 改名总表做。
+  2. **S6 账户簇重跑**（同上，0 个 tool call 就死了）：`account_detail_page.dart` + `account_form_sheet.dart` 不存在，_AccountDetailPage(+State)/_CheckpointRow/_AccountBalanceCalibrationSheet/_AccountBalanceTrendCard(+Painter)/_AccountFormSheet(+State)/_AccountTypePicker/_TypeChip（约 700 行）还在 accounts_view.dart。做完 S5+S6 后 accounts_view 应 <900 行。
+  3. **性能缓存**：照侦察报告§五方案（revision 计数挂 notifyListeners 覆写 + 当天维度 + per-account 余额 memo + 趋势 memo + 净资产 memo + _txById 索引 + 物品卡 watch→read + 加 @visibleForTesting 计数器和失效测试）。资产页现状一次 build ≈ 3×账户数次全量交易重放，账户详情页趋势 ~91 次/帧最重。
+  4. **情感化三件**：照侦察报告§六（净资产合并卡猫探头：Stack+Positioned top-8/right-4+MascotBreath(bob:2,sway:0,centerRight)+idle.webp 高~80、ListView 顶部 padding 4→≥12 防裁切；showAppToast 加可选 mascot 参数配成功猫：净资产核对完成/余额已核对/权益收回 _save 补 toast[现在收回成功无任何提示]；两个趋势 CustomPainter 加 per-segment 渐变填充 withValues 0.18→0）。
+  5. **验收交付**：全量 flutter test（基线 803，结果落文件查 $?）→ 对抗审查 → 渲染对比图（方法见方案文档§六）→ 版本 bump **1.207.0+209 / b0727-209**（pubspec+app_version.dart+build_info.dart 三处）→ build apk + verify_release_apk.sh（先 export JAVA_HOME）→ 归档 sha256 → 更新本文档 → commit（**别混入 33 个旧 APK 删除状态**）→ 源码快照推 origin（parent=上一快照 09aa437）。**未拍板前不发布线上（线上仍 v206）。**
+- **⚠️ 接手第一步**：`flutter analyze --no-pub --no-fatal-infos --no-fatal-warnings`（WIP 提交时点已验绿，重跑确认环境即可）+ `flutter test test/asset_management_view_test.dart` 验资产 UI，然后从上面「未完成」第 1 条（S5 重跑）继续。
+- **⚠️ 工作树状态**：施工A 成果已 WIP commit；工作树剩 33 个旧 APK 删除状态（D）——老规矩别混进功能提交。版本号未 bump（仍 1.206.0+208 / b0727-208），DB 仍 v41，线上仍 v206。
 
 ### 2026-07-18 当前启动体验修复（工作区未提交）
 

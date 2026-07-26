@@ -14,6 +14,8 @@ import '../../widgets/app_buttons.dart';
 import '../../widgets/app_toast.dart';
 import '../../widgets/pressable_scale.dart';
 
+import 'asset_form_kit.dart';
+
 /// 纯展示的物品网格：搜索/筛选状态由上层（资产管理页）统一持有，
 /// 这里只负责把已筛好的 assets 摆成响应式网格。
 class PhysicalAssetGrid extends StatelessWidget {
@@ -231,7 +233,7 @@ class _AssetCardText extends StatelessWidget {
           ),
           const Spacer(),
           Text.rich(
-            _digitAwareSpan(
+            digitAwareAmountSpan(
               primaryText,
               (Theme.of(context).textTheme.bodyMedium ?? const TextStyle())
                   .copyWith(fontWeight: FontWeight.w600),
@@ -251,26 +253,6 @@ class _AssetCardText extends StatelessWidget {
       ),
     );
   }
-}
-
-/// 中文混排文案里只给数字子串套 Nunito（UI 标准：Nunito 只准用于纯数字/金额）。
-TextSpan _digitAwareSpan(String text, TextStyle base) {
-  final spans = <TextSpan>[];
-  var cursor = 0;
-  for (final match in RegExp(r'[0-9][0-9,.]*').allMatches(text)) {
-    if (match.start > cursor) {
-      spans.add(TextSpan(text: text.substring(cursor, match.start)));
-    }
-    spans.add(TextSpan(
-      text: text.substring(match.start, match.end),
-      style: base.copyWith(fontFamily: 'Nunito'),
-    ));
-    cursor = match.end;
-  }
-  if (cursor < text.length) {
-    spans.add(TextSpan(text: text.substring(cursor)));
-  }
-  return TextSpan(style: base, children: spans);
 }
 
 String? _warrantyReminderText(AssetReminderState reminder) {
@@ -328,7 +310,7 @@ class _AssetImagePlaceholder extends StatelessWidget {
 }
 
 IconData assetTypeIcon(AssetType type) => switch (type) {
-      AssetType.digital => Icons.devices_other,
+      AssetType.digital => Icons.devices_other_outlined,
       AssetType.appliance => Icons.kitchen_outlined,
       AssetType.vehicle => Icons.directions_car_outlined,
       AssetType.property => Icons.home_work_outlined,

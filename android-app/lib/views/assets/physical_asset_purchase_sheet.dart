@@ -1,9 +1,9 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:decimal/decimal.dart';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
-import 'package:path_provider/path_provider.dart';
 
 import '../../core/assets/asset_media_store.dart';
 import '../../core/budget/budget_window_resolver.dart';
@@ -14,6 +14,7 @@ import '../../theme/app_tokens.dart';
 import '../../widgets/app_buttons.dart';
 import '../../widgets/app_date_picker.dart';
 import '../../widgets/app_empty_state.dart';
+import '../../widgets/app_picker_field.dart';
 import '../../widgets/app_toast.dart';
 import '../../widgets/ios_form.dart';
 import '../../widgets/ios_menu.dart';
@@ -21,6 +22,7 @@ import '../../widgets/mascot.dart';
 import '../../widgets/settings_ui.dart';
 import '../../widgets/sliding_segment.dart';
 import '../common/app_sheet.dart';
+import 'asset_media_picker.dart';
 import 'physical_asset_grid.dart';
 
 Future<int?> showPhysicalAssetPurchaseSheet(
@@ -93,7 +95,7 @@ class _PhysicalAssetPurchaseSheetState
   @override
   void dispose() {
     if (!_saved && _media != null && _mediaStore != null) {
-      _mediaStore!.deleteFiles(_media!);
+      unawaited(_mediaStore!.deleteFiles(_media!));
     }
     for (final controller in [
       _searchController,
@@ -347,22 +349,25 @@ class _PhysicalAssetPurchaseSheetState
           const SizedBox(height: 14),
           AppLabeledField(
             label: '物品分类',
-            child: Builder(
-              builder: (menuContext) => _PickerField(
-                text: _assetType.label,
-                icon: assetTypeIcon(_assetType),
-                onTap: () => showIosMenu(
-                  menuContext,
-                  [
-                    for (final type in AssetType.values)
-                      IosMenuItem(
-                        label: type.label,
-                        icon: assetTypeIcon(type),
-                        selected: type == _assetType,
-                        onTap: () => setState(() => _assetType = type),
-                      ),
-                  ],
-                ),
+            child: AppPickerField(
+              text: _assetType.label,
+              hint: '选择分类',
+              leading: Icon(
+                assetTypeIcon(_assetType),
+                size: 18,
+                color: AppTextColor.secondary(scheme),
+              ),
+              onTap: (menuCtx) => showPickerMenu(
+                menuCtx,
+                [
+                  for (final type in AssetType.values)
+                    IosMenuItem(
+                      label: type.label,
+                      icon: assetTypeIcon(type),
+                      selected: type == _assetType,
+                      onTap: () => setState(() => _assetType = type),
+                    ),
+                ],
               ),
             ),
           ),
@@ -463,10 +468,11 @@ class _PhysicalAssetPurchaseSheetState
           const SizedBox(height: 12),
           AppLabeledField(
             label: '保修到期日（可选）',
-            child: _PickerField(
-              text: _warrantyUntil == null ? '未设置' : _dateText(_warrantyUntil!),
-              icon: Icons.event_outlined,
-              onTap: _pickWarrantyDate,
+            child: AppPickerField(
+              text: _warrantyUntil == null ? null : _dateText(_warrantyUntil!),
+              hint: '未设置',
+              trailingIcon: Icons.event_outlined,
+              onTap: (_) => _pickWarrantyDate(),
             ),
           ),
           const SizedBox(height: 12),
@@ -556,25 +562,14 @@ class _PhysicalAssetPurchaseSheetState
   }
 
   Future<void> _pickMedia(ImageSource source) async {
-    final picked = await ImagePicker().pickImage(
-      source: source,
-      imageQuality: 92,
+    final next = await pickAssetPhoto(
+      context,
+      source,
+      previous: _media,
     );
-    if (picked == null || !mounted) return;
-    try {
-      _mediaStore ??= AssetMediaStore(
-        applicationRoot: await getApplicationDocumentsDirectory(),
-      );
-      final next = _media == null
-          ? await _mediaStore!.importFile(picked.path)
-          : await _mediaStore!.replaceFile(
-              sourcePath: picked.path,
-              previous: _media!,
-            );
-      if (mounted) setState(() => _media = next);
-    } on AssetMediaException catch (error) {
-      if (mounted) showAppToast(context, error.message);
-    }
+    if (next == null) return;
+    _mediaStore ??= await sharedAssetMediaStore();
+    if (mounted) setState(() => _media = next);
   }
 
   Future<void> _pickWarrantyDate() async {
@@ -635,43 +630,6 @@ class _PhysicalAssetPurchaseSheetState
         setState(() => _saving = false);
       }
     }
-  }
-}
-
-class _PickerField extends StatelessWidget {
-  final String text;
-  final IconData icon;
-  final VoidCallback onTap;
-
-  const _PickerField({
-    required this.text,
-    required this.icon,
-    required this.onTap,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return Material(
-      color: AppColors.inputFill(scheme),
-      borderRadius: BorderRadius.circular(12),
-      child: InkWell(
-        borderRadius: BorderRadius.circular(12),
-        onTap: onTap,
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
-          child: Row(
-            children: [
-              Icon(icon, size: 18, color: AppTextColor.secondary(scheme)),
-              const SizedBox(width: 9),
-              Expanded(child: Text(text, style: AppType.body(scheme))),
-              Icon(Icons.chevron_right,
-                  size: 18, color: AppTextColor.secondary(scheme)),
-            ],
-          ),
-        ),
-      ),
-    );
   }
 }
 

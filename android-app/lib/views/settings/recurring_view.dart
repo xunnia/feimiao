@@ -13,6 +13,7 @@ import '../../data/app_repository.dart';
 import '../../theme/app_colors.dart';
 import '../../widgets/app_empty_state.dart';
 import '../../widgets/app_date_picker.dart';
+import '../../widgets/app_picker_field.dart';
 import '../../widgets/ios_form.dart';
 import '../../widgets/settings_ui.dart';
 import '../../widgets/ios_menu.dart';
@@ -322,67 +323,72 @@ class _RecurringEditSheetState extends State<_RecurringEditSheet> {
                   Row(
                     children: [
                       Expanded(
-                        child: _PickerField(
+                        child: AppLabeledField(
                           label: '分类',
-                          value: selCat == null ? '选择分类' : selCat.nameZh,
-                          placeholder: selCat == null,
-                          leading: selCat == null
-                              ? null
-                              : CatIcon(
-                                  categoryKey: selCat.key,
-                                  emoji: CategorySeed.emojiOf(selCat.key),
-                                  size: 20,
-                                ),
-                          onTapMenu: (menuCtx) async {
-                            final picked = await showCategoryPickerSheet(
-                              context,
-                              kind: _kind,
-                              selectedId: _categoryId,
-                              title: _kind == TransactionKind.income
-                                  ? '选择收入分类'
-                                  : '选择支出分类',
-                            );
-                            if (picked != null && mounted) {
-                              setState(() => _categoryId = picked.id);
-                            }
-                          },
+                          child: AppPickerField(
+                            text: selCat?.nameZh,
+                            hint: '选择分类',
+                            leading: selCat == null
+                                ? null
+                                : CatIcon(
+                                    categoryKey: selCat.key,
+                                    emoji: CategorySeed.emojiOf(selCat.key),
+                                    size: 20,
+                                  ),
+                            onTap: (menuCtx) async {
+                              final picked = await showCategoryPickerSheet(
+                                context,
+                                kind: _kind,
+                                selectedId: _categoryId,
+                                title: _kind == TransactionKind.income
+                                    ? '选择收入分类'
+                                    : '选择支出分类',
+                              );
+                              if (picked != null && mounted) {
+                                setState(() => _categoryId = picked.id);
+                              }
+                            },
+                          ),
                         ),
                       ),
                       const SizedBox(width: 10),
                       Expanded(
-                        child: _PickerField(
+                        child: AppLabeledField(
                           label: '账户',
-                          value: selAcc?.name ?? '选择账户',
-                          placeholder: selAcc == null,
-                          onTapMenu: (menuCtx) => showIosMenu(menuCtx, [
-                            for (final a in accounts)
-                              IosMenuItem(
-                                label: a.name,
-                                icon: a.id == _accountId
-                                    ? Icons.check_circle
-                                    : Icons.radio_button_unchecked,
-                                onTap: () => setState(() => _accountId = a.id),
-                              ),
-                          ]),
+                          child: AppPickerField(
+                            text: selAcc?.name,
+                            hint: '选择账户',
+                            onTap: (menuCtx) => showPickerMenu(menuCtx, [
+                              for (final a in accounts)
+                                IosMenuItem(
+                                  label: a.name,
+                                  icon: Icons.account_balance_wallet_outlined,
+                                  selected: a.id == _accountId,
+                                  onTap: () =>
+                                      setState(() => _accountId = a.id),
+                                ),
+                            ]),
+                          ),
                         ),
                       ),
                     ],
                   ),
                   const SizedBox(height: 14),
-                  _PickerField(
+                  AppLabeledField(
                     label: '账本',
-                    value: selBook?.name ?? '选择账本',
-                    placeholder: selBook == null,
-                    onTapMenu: (menuCtx) => showIosMenu(menuCtx, [
-                      for (final b in books)
-                        IosMenuItem(
-                          label: b.name,
-                          icon: b.id == _bookId
-                              ? Icons.check_circle
-                              : Icons.radio_button_unchecked,
-                          onTap: () => setState(() => _bookId = b.id),
-                        ),
-                    ]),
+                    child: AppPickerField(
+                      text: selBook?.name,
+                      hint: '选择账本',
+                      onTap: (menuCtx) => showPickerMenu(menuCtx, [
+                        for (final b in books)
+                          IosMenuItem(
+                            label: b.name,
+                            icon: Icons.menu_book_outlined,
+                            selected: b.id == _bookId,
+                            onTap: () => setState(() => _bookId = b.id),
+                          ),
+                      ]),
+                    ),
                   ),
                   const SizedBox(height: 14),
 
@@ -407,38 +413,24 @@ class _RecurringEditSheetState extends State<_RecurringEditSheet> {
                   const SizedBox(height: 14),
 
                   // 起始日期
-                  Text('起始日期',
-                      style: TextStyle(
-                          fontSize: 13, color: scheme.onSurfaceVariant)),
-                  const SizedBox(height: 6),
-                  PressableScale(
-                    onPressed: () async {
-                      final picked = await showAppDatePicker(
-                        context,
-                        initial: _startDate,
-                        first: DateTime(2015),
-                        last: DateTime(2100),
-                        title: '开始日期',
-                      );
-                      if (picked != null) setState(() => _startDate = picked);
-                    },
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 14, vertical: 12),
-                      decoration: BoxDecoration(
-                        color: AppColors.inputFill(scheme),
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      child: Row(
-                        children: [
-                          Text(_dateStr(_startDate),
-                              style: TextStyle(
-                                  fontSize: 14, color: scheme.onSurface)),
-                          const Spacer(),
-                          Icon(Icons.calendar_today_outlined,
-                              size: 16, color: scheme.onSurfaceVariant),
-                        ],
-                      ),
+                  AppLabeledField(
+                    label: '起始日期',
+                    child: AppPickerField(
+                      text: _dateStr(_startDate),
+                      hint: '选择日期',
+                      trailingIcon: Icons.calendar_today_outlined,
+                      onTap: (_) async {
+                        final picked = await showAppDatePicker(
+                          context,
+                          initial: _startDate,
+                          first: DateTime(2015),
+                          last: DateTime(2100),
+                          title: '开始日期',
+                        );
+                        if (picked != null) {
+                          setState(() => _startDate = picked);
+                        }
+                      },
                     ),
                   ),
                   const SizedBox(height: 14),
@@ -708,71 +700,6 @@ class _RecurringRecordedStatus extends StatelessWidget {
             ],
         ],
       ),
-    );
-  }
-}
-
-/// 标签 + 值的选择框：点开走 showIosMenu（对齐全局设计，替代原生 Dropdown）。
-class _PickerField extends StatelessWidget {
-  final String label;
-  final String value;
-  final bool placeholder;
-  final Widget? leading;
-  final void Function(BuildContext menuCtx) onTapMenu;
-
-  const _PickerField({
-    required this.label,
-    required this.value,
-    required this.placeholder,
-    this.leading,
-    required this.onTapMenu,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(label,
-            style: TextStyle(fontSize: 13, color: scheme.onSurfaceVariant)),
-        const SizedBox(height: 6),
-        Builder(
-          builder: (menuCtx) => PressableScale(
-            onPressed: () => onTapMenu(menuCtx),
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-              decoration: BoxDecoration(
-                color: AppColors.inputFill(scheme),
-                borderRadius: BorderRadius.circular(12),
-              ),
-              child: Row(
-                children: [
-                  if (leading != null) ...[
-                    leading!,
-                    const SizedBox(width: 8),
-                  ],
-                  Expanded(
-                    child: Text(
-                      value,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        fontSize: 14,
-                        color: placeholder
-                            ? scheme.onSurfaceVariant
-                            : scheme.onSurface,
-                      ),
-                    ),
-                  ),
-                  Icon(Icons.expand_more,
-                      size: 18, color: scheme.onSurfaceVariant),
-                ],
-              ),
-            ),
-          ),
-        ),
-      ],
     );
   }
 }
