@@ -32,6 +32,7 @@
 - **六项全部落地**：①总览重组：净资产 hero+趋势合并一张卡、「净资产核对」「生成报告」收进 AppBar 右上 ⋯ 菜单、待处理只留保修到期/权益逾期两类任务型、其余五类（账户到账/历史物品/历史权益/外币/缺购买日期）进「数据待完善」弹层、无核对记录时核对空态卡不渲染；②资金页：分组头余额小计（多币种组不显示、守诚实）、¥0 账户收进「已清零账户 (N)」折叠卡、**筛选行删除**+列表底部「已归档 N 项 ›」入口+归档视图返回条、`_FundsKind` 种类筛选彻底删除；③物品页：五层筛选收成 搜索框+一行三颗轻量「文字+⌄」下拉（`_LightFilterDropdown`，非默认值变主色），PhysicalAssetGrid 退成纯展示、搜索/分类状态上提；④详情容器统一：账户/权益详情从半屏弹层改**全屏主题页**（`_AccountDetailPage`/`_ReceivableAssetDetailPage`，AppBackButton+⋯菜单，**修了用户真机 bug：账户详情白底无主题+顶到状态栏**）、物品 ⋯ 菜单分层（一级常用 6 项+「更多操作…」二级收报废/丢失/赠送/撤销类）、IosMenuItem 加 key 字段；⑤新增入口：三个 tab 右上 + 统一开一张「添加」弹层（资金/物品两组），内嵌最近 3 笔候选账单一步直达填写物品表单；⑥生成报告后直接 openReportReader 打开阅读器。
 - **用户 2026-07-26/27 拍板的三条视觉修正已全部落地**（别做反）：①渐变背景上的输入框=半透明 AppColors.card+hairline（物品搜索框，代码有注释）②筛选控件不用重胶囊、用轻量「文字+⌄」；资金页直接删筛选行 ③净资产主数字 ¥ 符号与数字同色 onSurface（不用铜金；负数整体超支橙不变）。
 - **验收**：analyze 0 error 0 warning（2 条老 info）；全量 `flutter test` **803/803**（asset_management_view_test 多 1 个导航闭环断言用例）；P0→P1 对比图 7 张 `outputs/asset_ui_review/compare_p1/`（P1 原图 `after_p1/`）。
+- **v208 APK 已构建并核验**：aapt=`com.qingji.qingji.codex`/208/1.206.0；16K zipalign 过；V2 唯一 Codex 证书。归档 `ci-artifacts/releases/feimiao-codex-v1.206.0-208.apk`，110,666,663 字节，SHA256 `451A56DD4550FCC4E5774ADB9A7E3D2E31A966EA5792F884230D0290A765E13A`。**未发布线上**（线上仍 v206，v207/v208 都等用户点头再发；用户从电脑直接传包安装）。本地功能提交 `39995ee`，远端源码快照 `09aa437`。
 - P2（accounts_view 拆模块/性能缓存/情感化）可选排期。动 UI 前必读 UI_DESIGN_STANDARD.md。
 
 ### 2026-07-18 当前启动体验修复（工作区未提交）
@@ -211,16 +212,16 @@
 - 另带上 178 后补的小组件快照指纹跳渲。
 - 上一轮（1.176.0+178，已上线）：更新校验加固、深色状态栏、退款净额索引化、transactions 索引、去重复模糊层。
 
-## 3. 验证记录（最新 = v206，2026-07-26）
+## 3. 验证记录（最新 = v208，2026-07-27）
 
 已完成：
 
 - `flutter analyze --no-pub --no-fatal-infos --no-fatal-warnings`：0 issue（仅 2 条既有测试 info）。
-- `flutter test --no-pub --concurrency=1`：**802/802** 通过（注意：管道会吞退出码，结果落文件再查 `$?`）。
-- `flutter build apk --release --no-pub --build-name 1.204.0 --build-number 206`：成功。
-- `verify_release_apk.sh`（含 aapt/16K zipalign/apksigner）：`com.qingji.qingji.codex` / 206 / 1.204.0 / V2 唯一 Codex 签名，证书 SHA256 `4e99c399d4d246bd9c6b08b1d641248bd0846e7ae650c3a766e30fa67483d507`。跑它前先 `export JAVA_HOME="C:\Program Files\Android\Android Studio\jbr"`。
-- APK：110,666,547 字节；SHA256 `CF261263D66B835F3617D921E5438B189646B5CEEE31C94DC9ED09DF1A561C4F`，归档与 sidecar 一致。
-- 模拟器、真机安装和截图按用户要求跳过；运行态由用户自行安装验收，不能宣称已通过真机验证。
+- `flutter test --no-pub --concurrency=1`：**803/803** 通过（注意：管道会吞退出码，结果落文件再查 `$?`）。
+- `flutter build apk --release --no-pub --build-name 1.206.0 --build-number 208`：成功。
+- `verify_release_apk.sh`（含 aapt/16K zipalign/apksigner）：`com.qingji.qingji.codex` / 208 / 1.206.0 / V2 唯一 Codex 签名，证书 SHA256 `4e99c399d4d246bd9c6b08b1d641248bd0846e7ae650c3a766e30fa67483d507`。跑它前先 `export JAVA_HOME="C:\Program Files\Android\Android Studio\jbr"`。
+- APK：110,666,663 字节；SHA256 `451A56DD4550FCC4E5774ADB9A7E3D2E31A966EA5792F884230D0290A765E13A`，归档与 sidecar 一致。v207（P0 批，`feimiao-codex-v1.205.0-207.apk`，SHA256 `3528D5DF...51EADA`）保留为回退包。
+- 离屏渲染截图已做（对比图见 outputs/asset_ui_review/），模拟器/真机安装按惯例跳过；运行态由用户自行安装验收，不能宣称已通过真机验证。
 
 ## 4. 线上上传状态
 - ✅ **v206 已由 Claude 于 2026-07-26 提交、推送并发布上线**：`1.204.0+206` / `b0726-206` / DB v41；本地功能提交 `b2dc7a9`，远端源码快照 `ae5fdb5` 位于 `origin/codex/feimiao-p0-fixes`，Cloudflare releaseId `v206-cf261263d66b`。发布后验证：公网 `version.json` 返回 206、全量下载 110,666,547 字节拼接 SHA256 与源 APK 完全一致。运行态由用户自行安装确认（用户已知可从电脑直接传包安装，绕开 30KB/s 的直连下载）。
