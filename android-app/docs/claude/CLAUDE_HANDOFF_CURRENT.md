@@ -61,7 +61,7 @@
   - **渲染图已出**：after `outputs/asset_ui_review/after_p2/`（7 张，含 p2_07=编辑物品+FakeViewPadding 伪键盘的修复证据图）；对比图 `outputs/asset_ui_review/compare_p2/`（5 张，P1 vs P2），已发用户过目（尚未回复拍板）。渲染脚本临时拷进 test/ 跑完已删，原件在施工B会话 scratchpad `tmp_asset_ui_p2_render_test.dart`（丢了就照 after_p1 那版改：输出目录/p2_07 那段 FakeViewPadding(bottom:600)）。
   - 对抗审查工作流（拆分等价/缓存正确性/UI铁律/测试质量 4 维+逐条复核）**发起但用户额度耗尽时未跑完**：4 路中 1 路（test 维度）已回报**零问题**。journal：`~/.claude/projects/C--src-xunni-codex/a86b7f00-6c65-4beb-8553-07d51f8bce67/subagents/workflows/wf_d4379b23-5d5/journal.jsonl`（每路一条 result）。接手时若 journal 已有 4 条 result 就直接看结论；没有就重发一轮审查（或人工抽查缓存失效点+拆分引用即可，全量测试已绿兜底）。
 - **❌ 剩余（按顺序，接手从这里继续）**：①看对抗审查结论、处置发现（如有）②版本 bump **1.207.0+209 / b0727-209**（pubspec+app_version.dart+build_info.dart 三处）③build apk + verify_release_apk.sh（先 export JAVA_HOME="C:\Program Files\Android\Android Studio\jbr"）④归档 sha256 ⑤更新本文档终稿 ⑥最终 commit ⑦源码快照推 origin。**未拍板前不发布线上（线上仍 v206）。等用户对 compare_p2 对比图点头。**
-- **⚠️ 断点落盘（额度告急时做的保底）**：施工B 全部成果（S5/S6/性能/情感化/两条bug修复/本文档/渲染对比图）已 WIP commit 到本地 codex/feimiao-p0-fixes，并推了源码快照到 origin（哈希见 git log 最新两条；快照 parent=bc8095a，不含发布产物）。**33 个旧 APK 删除状态（D）刻意未提交**——老规矩别混进功能提交。版本号未 bump（仍 1.206.0+208 / b0727-208），DB 仍 v41，线上仍 v206。
+- **⚠️ 断点落盘（额度告急时做的保底）**：施工B 全部成果（S5/S6/性能/情感化/两条bug修复/本文档/渲染对比图）本地 WIP commit **749df31**；源码快照 **5c97564** 已推 origin/codex/feimiao-p0-fixes（parent=40ebb59，不含发布产物）。**下次推快照前先 `git ls-remote origin codex/feimiao-p0-fixes` 拿远端 tip 当 parent**（这次就是拿手册里的旧 parent bc8095a 被拒了一回）。**33 个旧 APK 删除状态（D）刻意未提交**；⚠️ `android-app/outputs/` 里躺着一个未跟踪的 110MB 旧 APK（feimiao-codex-v1.203.0-205.apk），`git add android-app` 会把它扫进来，提交前记得排除。版本号未 bump（仍 1.206.0+208 / b0727-208），DB 仍 v41，线上仍 v206。
 
 ### 2026-07-18 当前启动体验修复（工作区未提交）
 
