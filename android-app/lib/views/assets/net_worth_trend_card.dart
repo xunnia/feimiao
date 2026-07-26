@@ -12,7 +12,14 @@ import '../../widgets/settings_ui.dart';
 class NetWorthEstimatedTrendCard extends StatelessWidget {
   final NetWorthTrendResult trend;
 
-  const NetWorthEstimatedTrendCard({super.key, required this.trend});
+  /// true = 嵌入外层合并卡（不画自己的卡片装饰），标题与「较上次」行照旧。
+  final bool embedded;
+
+  const NetWorthEstimatedTrendCard({
+    super.key,
+    required this.trend,
+    this.embedded = false,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -20,7 +27,7 @@ class NetWorthEstimatedTrendCard extends StatelessWidget {
     final latestChange = trend.changes.isEmpty ? null : trend.changes.last;
     return Container(
       padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
-      decoration: appCardDecoration(scheme),
+      decoration: embedded ? null : appCardDecoration(scheme),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [

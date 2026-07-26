@@ -24,6 +24,7 @@ import '../../theme/app_colors.dart';
 import '../../theme/app_tokens.dart';
 import '../../widgets/app_buttons.dart';
 import '../../widgets/app_date_picker.dart';
+import '../../widgets/app_empty_state.dart';
 import '../../widgets/app_page_route.dart';
 import '../../widgets/app_toast.dart';
 import '../../widgets/ios_dialogs.dart';
@@ -40,11 +41,10 @@ import '../assets/physical_asset_grid.dart';
 import '../assets/physical_asset_purchase_sheet.dart';
 import '../assets/physical_asset_refund_allocation_sheet.dart';
 import '../common/app_sheet.dart';
+import '../reports/report_views.dart';
 import '../../widgets/sliding_segment.dart';
 
 enum _AssetView { overview, funds, items }
-
-enum _FundsKind { all, accounts, investment, receivable, liabilities }
 
 enum _AssetListVisibility { active, archived }
 
@@ -60,10 +60,18 @@ class AccountsView extends StatefulWidget {
 
 class _AccountsViewState extends State<AccountsView> {
   _AssetView _view = _AssetView.overview;
-  _FundsKind _fundsKind = _FundsKind.all;
   _AssetListVisibility _fundsVisibility = _AssetListVisibility.active;
+  bool _zeroBalanceAccountsExpanded = false;
   _AssetListVisibility _itemsVisibility = _AssetListVisibility.active;
   _ItemKind _itemKind = _ItemKind.all;
+  AssetType? _itemType;
+  final _itemSearchController = TextEditingController();
+
+  @override
+  void dispose() {
+    _itemSearchController.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -73,6 +81,16 @@ class _AccountsViewState extends State<AccountsView> {
         leading: const AppBackButton(),
         title: const Text('资产管理'),
         actions: [
+          if (_view == _AssetView.overview)
+            Padding(
+              padding: const EdgeInsets.only(right: 8),
+              child: Builder(
+                builder: (buttonContext) => AppCircleButton(
+                  icon: Icons.more_horiz,
+                  onPressed: () => _showOverviewMenu(buttonContext),
+                ),
+              ),
+            ),
           Padding(
             padding: const EdgeInsets.only(right: 10),
             child: AppCircleButton(
@@ -112,8 +130,6 @@ class _AccountsViewState extends State<AccountsView> {
                   item.account.includeInNetWorth &&
                   item.account.currencyCode == 'CNY')
               .toList();
-          final unsupportedCurrencies =
-              repo.unsupportedNetWorthCurrencyCodes.toList()..sort();
           final countedPhysicalCount =
               repo.physicalAssetsCountedInNetWorth.length;
           final countedReceivableCount =
@@ -151,13 +167,7 @@ class _AccountsViewState extends State<AccountsView> {
                       repo,
                       breakdown: breakdown,
                       physicalAssets: physicalAssets,
-                      archivedAssets: archivedAssets,
                       receivableAssets: receivableAssets,
-                      archivedReceivables: archivedReceivables,
-                      unsupportedCurrencies: unsupportedCurrencies,
-                      accountQualityIssueCount: includedBalances
-                          .where((item) => item.qualityText != null)
-                          .length,
                       netWorthPartial:
                           netWorthResult.status != MetricStatus.available,
                       includedCount: includedCount,
@@ -165,7 +175,6 @@ class _AccountsViewState extends State<AccountsView> {
                     ),
                   _AssetView.funds => _buildFunds(
                       context,
-                      repo,
                       balances: balances,
                       receivableAssets: receivableAssets,
                       archivedReceivables: archivedReceivables,
@@ -189,28 +198,14 @@ class _AccountsViewState extends State<AccountsView> {
     AppRepository repo, {
     required NetWorthBreakdown breakdown,
     required List<PhysicalAssetEntity> physicalAssets,
-    required List<PhysicalAssetEntity> archivedAssets,
     required List<ReceivableAssetEntity> receivableAssets,
-    required List<ReceivableAssetEntity> archivedReceivables,
-    required List<String> unsupportedCurrencies,
-    required int accountQualityIssueCount,
     required bool netWorthPartial,
     required int includedCount,
     required int totalCount,
   }) {
-    final allPhysical = [...physicalAssets, ...archivedAssets];
-    final allReceivables = [...receivableAssets, ...archivedReceivables];
-    final physicalReviewCount = allPhysical
-        .where((a) => a.inclusionQuality == AssetInclusionQuality.needsReview)
-        .length;
-    final receivableReviewCount = allReceivables
-        .where((a) => a.inclusionQuality == AssetInclusionQuality.needsReview)
-        .length;
-    final missingPurchaseDateCount = physicalAssets
-        .where((a) =>
-            a.economicStatus == PhysicalAssetEconomicStatus.owned &&
-            a.purchaseDate == null)
-        .length;
+    final scheme = Theme.of(context).colorScheme;
+    // 待处理卡只留「用户要去做事」的任务型条目；
+    // 数据口径类条目收进右上 ⋯ 菜单的「数据待完善」弹层。
     final warrantyReminderCount = physicalAssets
         .where((asset) => repo.warrantyReminderForAsset(asset).needsAttention)
         .length;
@@ -218,12 +213,6 @@ class _AccountsViewState extends State<AccountsView> {
         .where((asset) => repo.dueReminderForReceivable(asset).needsAttention)
         .length;
     final pending = <_AssetPendingItem>[
-      if (accountQualityIssueCount > 0)
-        _AssetPendingItem(
-          icon: Icons.account_balance_wallet_outlined,
-          text: '$accountQualityIssueCount 个账户的到账信息待确认',
-          onTap: () => setState(() => _view = _AssetView.funds),
-        ),
       if (warrantyReminderCount > 0)
         _AssetPendingItem(
           icon: Icons.verified_user_outlined,
@@ -241,8 +230,108 @@ class _AccountsViewState extends State<AccountsView> {
           onTap: () => setState(() {
             _view = _AssetView.funds;
             _fundsVisibility = _AssetListVisibility.active;
-            _fundsKind = _FundsKind.receivable;
           }),
+        ),
+    ];
+    final fundsAssets = breakdown.cashAssets +
+        breakdown.investmentAssets +
+        breakdown.receivableAssets;
+    final fundsNetWorth = fundsAssets - breakdown.totalLiabilities;
+    final hasVerifiedCheckpoint = repo.verifiedNetWorthCheckpoints.any(
+      (checkpoint) =>
+          checkpoint.header.status == NetWorthVerifiedCheckpointStatus.active,
+    );
+
+    return ListView(
+      key: const Key('asset-overview'),
+      padding: const EdgeInsets.fromLTRB(16, 4, 16, 32),
+      children: [
+        // hero 数字 + 迷你趋势合成一张卡（数字上、趋势下）。
+        Container(
+          decoration: appCardDecoration(scheme),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              _AssetSummaryCard(
+                netWorth: breakdown.netWorth,
+                fundsAssets: fundsAssets,
+                physicalAssets: breakdown.physicalAssets,
+                fundsNetWorth: fundsNetWorth,
+                liabilityTotal: breakdown.totalLiabilities,
+                totalAssets: breakdown.totalAssets,
+                includedCount: includedCount,
+                accountCount: totalCount,
+                partial: netWorthPartial,
+                embedded: true,
+              ),
+              appCardDivider(scheme),
+              NetWorthEstimatedTrendCard(
+                trend: repo.netWorthEstimatedTrend,
+                embedded: true,
+              ),
+            ],
+          ),
+        ),
+        if (pending.isNotEmpty) ...[
+          const SizedBox(height: 12),
+          _AssetPendingCard(items: pending),
+        ],
+        if (hasVerifiedCheckpoint) ...[
+          const SizedBox(height: 12),
+          _VerifiedNetWorthCard(
+            checkpoints: repo.verifiedNetWorthCheckpoints,
+            comparison: repo.latestVerifiedNetWorthComparison,
+          ),
+        ],
+        const SizedBox(height: 12),
+        _AssetAnalysisCard(breakdown: breakdown),
+      ],
+    );
+  }
+
+  /// 数据口径类待完善条目（非任务型）：账户到账待确认 / 历史物品、权益待确认 /
+  /// 外币未含 / 缺购买日期。从右上 ⋯ 菜单的「数据待完善」弹层进入。
+  List<_AssetPendingItem> _dataCompletionItems(AppRepository repo) {
+    final accounts = repo.accounts.where((a) => !a.isDeleted).toList();
+    var accountQualityIssueCount = 0;
+    for (final account in accounts) {
+      if (!account.includeInNetWorth || account.currencyCode != 'CNY') {
+        continue;
+      }
+      final movement = repo.accountBalanceResultOf(account).value!.movement;
+      final hasIssue = movement.unknownSettlementAccountCount > 0 ||
+          movement.unknownSettlementDateCount > 0 ||
+          movement.assumedAccountCount > 0 ||
+          movement.assumedSettlementDateCount > 0;
+      if (hasIssue) accountQualityIssueCount++;
+    }
+    final allPhysical = [
+      ...repo.globalActivePhysicalAssets,
+      ...repo.globalArchivedPhysicalAssets,
+    ];
+    final allReceivables = [
+      ...repo.globalActiveReceivables,
+      ...repo.globalArchivedReceivables,
+    ];
+    final physicalReviewCount = allPhysical
+        .where((a) => a.inclusionQuality == AssetInclusionQuality.needsReview)
+        .length;
+    final receivableReviewCount = allReceivables
+        .where((a) => a.inclusionQuality == AssetInclusionQuality.needsReview)
+        .length;
+    final missingPurchaseDateCount = repo.globalActivePhysicalAssets
+        .where((a) =>
+            a.economicStatus == PhysicalAssetEconomicStatus.owned &&
+            a.purchaseDate == null)
+        .length;
+    final unsupportedCurrencies =
+        repo.unsupportedNetWorthCurrencyCodes.toList()..sort();
+    return <_AssetPendingItem>[
+      if (accountQualityIssueCount > 0)
+        _AssetPendingItem(
+          icon: Icons.account_balance_wallet_outlined,
+          text: '$accountQualityIssueCount 个账户的到账信息待确认',
+          onTap: () => setState(() => _view = _AssetView.funds),
         ),
       if (physicalReviewCount > 0)
         _AssetPendingItem(
@@ -261,7 +350,6 @@ class _AccountsViewState extends State<AccountsView> {
           onTap: () => setState(() {
             _view = _AssetView.funds;
             _fundsVisibility = _AssetListVisibility.archived;
-            _fundsKind = _FundsKind.receivable;
           }),
         ),
       if (unsupportedCurrencies.isNotEmpty)
@@ -277,159 +365,189 @@ class _AccountsViewState extends State<AccountsView> {
           onTap: () => setState(() => _view = _AssetView.items),
         ),
     ];
-    final fundsAssets = breakdown.cashAssets +
-        breakdown.investmentAssets +
-        breakdown.receivableAssets;
-    final fundsNetWorth = fundsAssets - breakdown.totalLiabilities;
+  }
 
-    return ListView(
-      key: const Key('asset-overview'),
-      padding: const EdgeInsets.fromLTRB(16, 4, 16, 32),
-      children: [
-        _AssetSummaryCard(
-          netWorth: breakdown.netWorth,
-          fundsAssets: fundsAssets,
-          physicalAssets: breakdown.physicalAssets,
-          fundsNetWorth: fundsNetWorth,
-          liabilityTotal: breakdown.totalLiabilities,
-          totalAssets: breakdown.totalAssets,
-          includedCount: includedCount,
-          accountCount: totalCount,
-          partial: netWorthPartial,
+  void _showOverviewMenu(BuildContext anchorContext) {
+    final repo = context.read<AppRepository>();
+    final dataItems = _dataCompletionItems(repo);
+    showIosMenu(anchorContext, [
+      IosMenuItem(
+        label: '净资产核对',
+        icon: Icons.fact_check_outlined,
+        onTap: () => _verifyNetWorth(context, repo),
+      ),
+      IosMenuItem(
+        label: '生成报告',
+        icon: Icons.description_outlined,
+        onTap: () => _generateAssetReport(context, repo),
+      ),
+      if (dataItems.isNotEmpty)
+        IosMenuItem(
+          label: '数据待完善 (${dataItems.length})',
+          icon: Icons.rule_outlined,
+          onTap: () => _showDataCompletionSheet(context, dataItems),
         ),
-        if (unsupportedCurrencies.isNotEmpty) ...[
-          const SizedBox(height: 10),
-          _HintBox(
-            text: '净资产按人民币计算，未含 ${unsupportedCurrencies.join('、')} 外币资产或负债。',
-          ),
-        ],
-        if (pending.isNotEmpty) ...[
-          const SizedBox(height: 12),
-          _AssetPendingCard(items: pending.take(3).toList()),
-        ],
-        const SizedBox(height: 12),
-        NetWorthEstimatedTrendCard(trend: repo.netWorthEstimatedTrend),
-        const SizedBox(height: 12),
-        _VerifiedNetWorthCard(
-          checkpoints: repo.verifiedNetWorthCheckpoints,
-          comparison: repo.latestVerifiedNetWorthComparison,
-          onVerify: () async {
-            final staleCount = repo.stalePhysicalValuationCount();
-            final confirmed = await showConfirmDialog(
-              context,
-              title: '核对当前净资产',
-              message: staleCount > 0
-                  ? '有 $staleCount 件物品使用超过 90 天的最近估值。继续表示你接受这些估值日期；数据仍有缺口时会保存为“部分核对”。'
-                  : '会保存当前所有金额作为核对记录。数据仍有缺口时会保存为“部分核对”，不会冒充完整确认。',
-              confirmText: staleCount > 0 ? '接受并核对' : '开始核对',
-            );
-            if (!confirmed) return;
-            final checkpoint = await repo.createVerifiedNetWorthCheckpoint(
-              acceptStaleValuations: staleCount > 0,
-            );
-            if (!context.mounted) return;
-            showAppToast(
-              context,
-              checkpoint.header.completeness ==
-                      NetWorthVerifiedCheckpointCompleteness.complete
-                  ? '已完成净资产核对'
-                  : '已保存部分核对，待确认项仍会保留',
-            );
-          },
+    ]);
+  }
+
+  Future<void> _verifyNetWorth(BuildContext context, AppRepository repo) async {
+    final staleCount = repo.stalePhysicalValuationCount();
+    final confirmed = await showConfirmDialog(
+      context,
+      title: '核对当前净资产',
+      message: staleCount > 0
+          ? '有 $staleCount 件物品使用超过 90 天的最近估值。继续表示你接受这些估值日期；数据仍有缺口时会保存为“部分核对”。'
+          : '会保存当前所有金额作为核对记录。数据仍有缺口时会保存为“部分核对”，不会冒充完整确认。',
+      confirmText: staleCount > 0 ? '接受并核对' : '开始核对',
+    );
+    if (!confirmed) return;
+    final checkpoint = await repo.createVerifiedNetWorthCheckpoint(
+      acceptStaleValuations: staleCount > 0,
+    );
+    if (!context.mounted) return;
+    showAppToast(
+      context,
+      checkpoint.header.completeness ==
+              NetWorthVerifiedCheckpointCompleteness.complete
+          ? '已完成净资产核对'
+          : '已保存部分核对，待确认项仍会保留',
+    );
+  }
+
+  Future<void> _generateAssetReport(
+    BuildContext context,
+    AppRepository repo,
+  ) async {
+    final id = await repo.createAssetReport();
+    final report = await repo.getReport(id);
+    if (!context.mounted) return;
+    if (report == null) {
+      showAppToast(context, '报告生成失败，请重试', icon: Icons.error_outline);
+      return;
+    }
+    openReportReader(context, report);
+  }
+
+  void _showDataCompletionSheet(
+    BuildContext context,
+    List<_AssetPendingItem> items,
+  ) {
+    showBlurSheet<void>(
+      context,
+      child: SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            SheetHeader(
+              title: '数据待完善',
+              onClose: () => Navigator.pop(context),
+            ),
+            SettingsGroup(
+              margin: const EdgeInsets.fromLTRB(16, 4, 16, 18),
+              children: [
+                for (final item in items)
+                  SettingsRow(
+                    leading: Icon(item.icon),
+                    title: item.text,
+                    trailing: const Icon(Icons.chevron_right, size: 18),
+                    onTap: () {
+                      Navigator.pop(context);
+                      item.onTap();
+                    },
+                  ),
+              ],
+            ),
+          ],
         ),
-        const SizedBox(height: 12),
-        _AssetAnalysisCard(
-          breakdown: breakdown,
-          onReport: () async {
-            await repo.createAssetReport();
-            if (context.mounted) {
-              showAppToast(context, '已生成当前资产分析报告');
-            }
-          },
-        ),
-      ],
+      ),
     );
   }
 
   Widget _buildFunds(
-    BuildContext context,
-    AppRepository repo, {
+    BuildContext context, {
     required List<_AccountBalance> balances,
     required List<ReceivableAssetEntity> receivableAssets,
     required List<ReceivableAssetEntity> archivedReceivables,
   }) {
-    final showAccounts = _fundsKind != _FundsKind.receivable;
-    final sourceBalances = _fundsVisibility == _AssetListVisibility.archived
-        ? balances.where((item) => item.account.isArchived)
-        : balances.where((item) => !item.account.isArchived);
-    final filteredBalances = showAccounts
-        ? sourceBalances.where((item) {
-            final account = item.account;
-            final profile = repo.liabilityProfileForAccount(account.id);
-            final isLiability = item.balance < Decimal.zero ||
-                account.type == AccountType.credit ||
-                account.type == AccountType.loan ||
-                profile != null;
-            return switch (_fundsKind) {
-              _FundsKind.all => true,
-              _FundsKind.accounts =>
-                account.type != AccountType.investment && !isLiability,
-              _FundsKind.investment => account.type == AccountType.investment,
-              _FundsKind.receivable => false,
-              _FundsKind.liabilities => isLiability,
-            };
-          }).toList()
-        : <_AccountBalance>[];
-    final sourceReceivables = _fundsVisibility == _AssetListVisibility.archived
-        ? archivedReceivables
-        : receivableAssets;
-    final filteredReceivables =
-        (_fundsKind == _FundsKind.all || _fundsKind == _FundsKind.receivable)
-            ? sourceReceivables
-            : <ReceivableAssetEntity>[];
-    final groups = _groupBalances(filteredBalances);
-    final isEmpty = groups.isEmpty && filteredReceivables.isEmpty;
+    // 种类筛选已删除：列表本就按账户类型分组，够用；只留「当前项目/已归档」一维切换。
+    final showArchived = _fundsVisibility == _AssetListVisibility.archived;
+    final activeBalances =
+        balances.where((item) => !item.account.isArchived).toList();
+    final archivedBalances =
+        balances.where((item) => item.account.isArchived).toList();
+    final archivedCount = archivedBalances.length + archivedReceivables.length;
+    final currentBalances = showArchived ? archivedBalances : activeBalances;
+    final currentReceivables =
+        showArchived ? archivedReceivables : receivableAssets;
+    // ¥0 账户只在「当前项目」视图折叠进底部卡；归档视图原样平铺，不折叠。
+    final zeroItems = showArchived
+        ? const <_AccountBalance>[]
+        : [
+            for (final group in _groupBalances(currentBalances
+                .where((item) => item.balance == Decimal.zero)
+                .toList()))
+              ...group.items,
+          ];
+    final nonZeroBalances = showArchived
+        ? currentBalances
+        : currentBalances.where((item) => item.balance != Decimal.zero).toList();
+    final groups = _groupBalances(nonZeroBalances);
+    final hasArchiveLink = !showArchived && archivedCount > 0;
+    final isEmpty = groups.isEmpty &&
+        currentReceivables.isEmpty &&
+        zeroItems.isEmpty &&
+        !hasArchiveLink;
 
     return Column(
       key: const Key('asset-funds'),
       children: [
-        _AssetFilterBar(
-          first: _MenuFilterButton<_FundsKind>(
-            value: _fundsKind,
-            values: _FundsKind.values,
-            labelOf: _fundsKindLabel,
-            iconOf: _fundsKindIcon,
-            onChanged: (value) => setState(() => _fundsKind = value),
-          ),
-          second: _MenuFilterButton<_AssetListVisibility>(
-            value: _fundsVisibility,
-            values: _AssetListVisibility.values,
-            labelOf: _visibilityLabel,
-            iconOf: (value) => value == _AssetListVisibility.active
-                ? Icons.visibility_outlined
-                : Icons.archive_outlined,
-            onChanged: (value) => setState(() => _fundsVisibility = value),
-          ),
-        ),
         Expanded(
           child: isEmpty
               ? const _AssetEmptyState()
               : ListView(
-                  padding: const EdgeInsets.fromLTRB(16, 2, 16, 32),
+                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
                   children: [
-                    if (filteredReceivables.isNotEmpty)
+                    if (showArchived) ...[
+                      _FundsArchiveBackRow(
+                        onTap: () => setState(() =>
+                            _fundsVisibility = _AssetListVisibility.active),
+                      ),
+                      const SizedBox(height: 6),
+                    ],
+                    if (currentReceivables.isNotEmpty)
                       _ReceivableAssetGroupCard(
-                        assets: filteredReceivables,
+                        assets: currentReceivables,
                         onTap: (asset) => _showReceivableDetail(context, asset),
                       ),
                     for (final group in groups) ...[
-                      if (filteredReceivables.isNotEmpty ||
+                      if (currentReceivables.isNotEmpty ||
                           group != groups.first)
                         const SizedBox(height: 12),
                       _AccountGroupCard(
                         group: group,
                         onTap: (account) =>
                             _showAccountDetail(context, account),
+                      ),
+                    ],
+                    if (zeroItems.isNotEmpty) ...[
+                      if (groups.isNotEmpty || currentReceivables.isNotEmpty)
+                        const SizedBox(height: 12),
+                      _ZeroBalanceAccountsCard(
+                        items: zeroItems,
+                        expanded: _zeroBalanceAccountsExpanded,
+                        onToggleExpanded: () => setState(() =>
+                            _zeroBalanceAccountsExpanded =
+                                !_zeroBalanceAccountsExpanded),
+                        onTap: (account) =>
+                            _showAccountDetail(context, account),
+                      ),
+                    ],
+                    if (hasArchiveLink) ...[
+                      const SizedBox(height: 12),
+                      _FundsArchiveEntryRow(
+                        count: archivedCount,
+                        onTap: () => setState(() => _fundsVisibility =
+                            _AssetListVisibility.archived),
                       ),
                     ],
                   ],
@@ -444,12 +562,14 @@ class _AccountsViewState extends State<AccountsView> {
     required List<PhysicalAssetEntity> physicalAssets,
     required List<PhysicalAssetEntity> archivedAssets,
   }) {
+    final scheme = Theme.of(context).colorScheme;
     final source = _itemsVisibility == _AssetListVisibility.archived
         ? archivedAssets
         : physicalAssets;
+    final query = _itemSearchController.text.trim().toLowerCase();
     final filtered = source.where((asset) {
       final owned = asset.economicStatus == PhysicalAssetEconomicStatus.owned;
-      return switch (_itemKind) {
+      final kindMatched = switch (_itemKind) {
         _ItemKind.all => true,
         _ItemKind.active =>
           owned && asset.usageStatus == PhysicalAssetUsageStatus.active,
@@ -457,52 +577,117 @@ class _AccountsViewState extends State<AccountsView> {
           owned && asset.usageStatus == PhysicalAssetUsageStatus.idle,
         _ItemKind.ended => !owned,
       };
-    }).toList();
-    final activeCount = physicalAssets
-        .where((a) =>
-            a.economicStatus == PhysicalAssetEconomicStatus.owned &&
-            a.usageStatus == PhysicalAssetUsageStatus.active)
-        .length;
-    final idleCount = physicalAssets
-        .where((a) =>
-            a.economicStatus == PhysicalAssetEconomicStatus.owned &&
-            a.usageStatus == PhysicalAssetUsageStatus.idle)
-        .length;
-    final endedCount = physicalAssets
-        .where((a) => a.economicStatus != PhysicalAssetEconomicStatus.owned)
-        .length;
+      if (!kindMatched) return false;
+      if (_itemType != null && asset.assetType != _itemType) return false;
+      if (query.isEmpty) return true;
+      return [
+        asset.name,
+        asset.brand,
+        asset.model,
+        asset.note,
+        asset.location,
+      ].any((value) => value.toLowerCase().contains(query));
+    }).toList(growable: false);
+    final allEmpty = physicalAssets.isEmpty && archivedAssets.isEmpty;
+    // 直接压在渐变背景上的输入框用半透明卡底+发丝边，不透明 inputFill 会突兀。
+    final hairlineBorder = OutlineInputBorder(
+      borderRadius: BorderRadius.circular(12),
+      borderSide: BorderSide(color: AppColors.hairline(scheme)),
+    );
 
     return Column(
       key: const Key('asset-items'),
       children: [
-        _ItemCountLine(
-          activeCount: activeCount,
-          idleCount: idleCount,
-          endedCount: endedCount,
-        ),
-        _AssetFilterBar(
-          first: _MenuFilterButton<_ItemKind>(
-            value: _itemKind,
-            values: _ItemKind.values,
-            labelOf: _itemKindLabel,
-            iconOf: _itemKindIcon,
-            onChanged: (value) => setState(() => _itemKind = value),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 2, 16, 6),
+          child: TextField(
+            key: const Key('asset-grid-search'),
+            controller: _itemSearchController,
+            textInputAction: TextInputAction.search,
+            decoration: iosInputDecoration(
+              context,
+              hint: '搜索物品',
+            ).copyWith(
+              prefixIcon: const Icon(Icons.search, size: 19),
+              fillColor: AppColors.card(scheme),
+              border: hairlineBorder,
+              enabledBorder: hairlineBorder,
+            ),
+            onChanged: (_) => setState(() {}),
           ),
-          second: _MenuFilterButton<_AssetListVisibility>(
-            value: _itemsVisibility,
-            values: _AssetListVisibility.values,
-            labelOf: _visibilityLabel,
-            iconOf: (value) => value == _AssetListVisibility.active
-                ? Icons.visibility_outlined
-                : Icons.archive_outlined,
-            onChanged: (value) => setState(() => _itemsVisibility = value),
+        ),
+        SizedBox(
+          width: double.infinity,
+          child: SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 6),
+            child: Row(
+              children: [
+                _LightFilterDropdown(
+                  label: _itemKindLabel(_itemKind),
+                  active: _itemKind != _ItemKind.all,
+                  itemsBuilder: () => [
+                    for (final kind in _ItemKind.values)
+                      IosMenuItem(
+                        label: _itemKindLabel(kind),
+                        icon: _itemKindIcon(kind),
+                        selected: kind == _itemKind,
+                        onTap: () => setState(() => _itemKind = kind),
+                      ),
+                  ],
+                ),
+                const SizedBox(width: 14),
+                _LightFilterDropdown(
+                  label: _itemType?.label ?? '全部分类',
+                  active: _itemType != null,
+                  itemsBuilder: () => [
+                    IosMenuItem(
+                      label: '全部分类',
+                      icon: Icons.inventory_2_outlined,
+                      selected: _itemType == null,
+                      onTap: () => setState(() => _itemType = null),
+                    ),
+                    for (final type in AssetType.values)
+                      IosMenuItem(
+                        label: type.label,
+                        icon: assetTypeIcon(type),
+                        selected: type == _itemType,
+                        onTap: () => setState(() => _itemType = type),
+                      ),
+                  ],
+                ),
+                const SizedBox(width: 14),
+                _LightFilterDropdown(
+                  label: _visibilityLabel(_itemsVisibility),
+                  active: _itemsVisibility != _AssetListVisibility.active,
+                  itemsBuilder: () => [
+                    for (final visibility in _AssetListVisibility.values)
+                      IosMenuItem(
+                        label: _visibilityLabel(visibility),
+                        icon: visibility == _AssetListVisibility.active
+                            ? Icons.visibility_outlined
+                            : Icons.archive_outlined,
+                        selected: visibility == _itemsVisibility,
+                        onTap: () =>
+                            setState(() => _itemsVisibility = visibility),
+                      ),
+                  ],
+                ),
+              ],
+            ),
           ),
         ),
         Expanded(
-          child: PhysicalAssetGrid(
-            assets: filtered,
-            onTap: (asset) => _showAssetDetail(context, asset),
-          ),
+          child: filtered.isEmpty
+              ? AppEmptyState(
+                  mood: MascotMood.empty,
+                  title: allEmpty ? '还没有物品' : '没有匹配的物品',
+                  message: allEmpty ? '记一笔购买账单，就能追踪它的使用成本啦' : null,
+                )
+              : PhysicalAssetGrid(
+                  assets: filtered,
+                  onTap: (asset) => _showAssetDetail(context, asset),
+                ),
         ),
       ],
     );
@@ -524,41 +709,20 @@ class _AccountsViewState extends State<AccountsView> {
     return groups;
   }
 
-  void _showAddForCurrentView(BuildContext context) {
-    switch (_view) {
-      case _AssetView.overview:
-        _showAddSheet(context);
-      case _AssetView.funds:
-        _showFundsAddSheet(context);
-      case _AssetView.items:
-        _showAddAssetSheet(context);
-    }
-  }
+  /// 右上 ＋ 在三个 tab 行为一致：一律打开同一张统一「添加」弹层。
+  void _showAddForCurrentView(BuildContext context) => _showAddSheet(context);
 
   void _showAddSheet(BuildContext context) {
+    final repo = context.read<AppRepository>();
+    // 「从最近账单加入」一步直达：预取最近几笔可加入的支出账单内嵌进弹层。
+    final recentCandidates = repo
+        .eligiblePhysicalAssetPurchaseTransactions()
+        .take(3)
+        .toList(growable: false);
     showBlurSheet<void>(
       context,
       child: _AddAssetEntrySheet(
-        onAccount: () {
-          Navigator.pop(context);
-          _showAddAccountSheet(context);
-        },
-        onPhysicalAsset: () {
-          Navigator.pop(context);
-          _showAddAssetSheet(context);
-        },
-        onReceivableAsset: () {
-          Navigator.pop(context);
-          _showAddReceivableSheet(context);
-        },
-      ),
-    );
-  }
-
-  void _showFundsAddSheet(BuildContext context) {
-    showBlurSheet<void>(
-      context,
-      child: _AddAssetEntrySheet(
+        recentCandidates: recentCandidates,
         onAccount: () {
           Navigator.pop(context);
           _showAddAccountSheet(context);
@@ -566,31 +730,6 @@ class _AccountsViewState extends State<AccountsView> {
         onReceivableAsset: () {
           Navigator.pop(context);
           _showAddReceivableSheet(context);
-        },
-      ),
-    );
-  }
-
-  void _showAddAccountSheet(BuildContext context) {
-    showBlurSheet<void>(
-      context,
-      child: const _AccountFormSheet(),
-    );
-  }
-
-  void _showAddAssetSheet(BuildContext context) {
-    showBlurSheet<void>(
-      context,
-      child: _AddPhysicalAssetChoiceSheet(
-        onFromTransaction: () {
-          Navigator.pop(context);
-          Future.microtask(() {
-            if (!context.mounted) return;
-            showPhysicalAssetPurchaseSheet(
-              context,
-              repository: context.read<AppRepository>(),
-            );
-          });
         },
         onNewPurchase: () {
           Navigator.pop(context);
@@ -601,6 +740,24 @@ class _AccountsViewState extends State<AccountsView> {
               child: const _PhysicalAssetFormSheet(
                 sourceType: PhysicalAssetSourceType.newPurchaseWithAccount,
               ),
+            );
+          });
+        },
+        onFromTransaction: () {
+          Navigator.pop(context);
+          Future.microtask(() {
+            if (!context.mounted) return;
+            showPhysicalAssetPurchaseSheet(context, repository: repo);
+          });
+        },
+        onRecentCandidate: (candidate) {
+          Navigator.pop(context);
+          Future.microtask(() {
+            if (!context.mounted) return;
+            showPhysicalAssetPurchaseSheet(
+              context,
+              repository: repo,
+              initialCandidate: candidate,
             );
           });
         },
@@ -618,6 +775,13 @@ class _AccountsViewState extends State<AccountsView> {
     );
   }
 
+  void _showAddAccountSheet(BuildContext context) {
+    showBlurSheet<void>(
+      context,
+      child: const _AccountFormSheet(),
+    );
+  }
+
   void _showAddReceivableSheet(BuildContext context) {
     showBlurSheet<void>(
       context,
@@ -625,28 +789,13 @@ class _AccountsViewState extends State<AccountsView> {
     );
   }
 
-  void _showEditReceivableSheet(
-    BuildContext context,
-    ReceivableAssetEntity asset,
-  ) {
-    showBlurSheet<void>(
-      context,
-      child: _ReceivableAssetFormSheet(asset: asset),
-    );
-  }
-
   void _showReceivableDetail(
     BuildContext context,
     ReceivableAssetEntity asset,
   ) {
-    showBlurSheet<void>(
-      context,
-      child: _ReceivableAssetDetailSheet(
-        asset: asset,
-        onEdit: () {
-          Navigator.pop(context);
-          _showEditReceivableSheet(context, asset);
-        },
+    Navigator.of(context).push(
+      AppPageRoute<void>(
+        builder: (_) => _ReceivableAssetDetailPage(asset: asset),
       ),
     );
   }
@@ -662,42 +811,14 @@ class _AccountsViewState extends State<AccountsView> {
     );
   }
 
-  void _showEditSheet(BuildContext context, AccountEntity account) {
-    showBlurSheet<void>(
-      context,
-      child: _AccountFormSheet(account: account),
-    );
-  }
-
   void _showAccountDetail(BuildContext context, AccountEntity account) {
-    showBlurSheet<void>(
-      context,
-      child: _AccountDetailSheet(
-        account: account,
-        onEdit: () {
-          Navigator.pop(context);
-          _showEditSheet(context, account);
-        },
+    Navigator.of(context).push(
+      AppPageRoute<void>(
+        builder: (_) => _AccountDetailPage(account: account),
       ),
     );
   }
 }
-
-String _fundsKindLabel(_FundsKind value) => switch (value) {
-      _FundsKind.all => '全部资金',
-      _FundsKind.accounts => '账户',
-      _FundsKind.investment => '投资',
-      _FundsKind.receivable => '权益',
-      _FundsKind.liabilities => '负债',
-    };
-
-IconData _fundsKindIcon(_FundsKind value) => switch (value) {
-      _FundsKind.all => Icons.account_balance_wallet_outlined,
-      _FundsKind.accounts => Icons.account_balance_outlined,
-      _FundsKind.investment => Icons.trending_up,
-      _FundsKind.receivable => Icons.assignment_return_outlined,
-      _FundsKind.liabilities => Icons.request_quote_outlined,
-    };
 
 String _visibilityLabel(_AssetListVisibility value) => switch (value) {
       _AssetListVisibility.active => '当前项目',
@@ -755,48 +876,39 @@ class _MenuFilterButton<T> extends StatelessWidget {
   }
 }
 
-class _AssetFilterBar extends StatelessWidget {
-  final Widget first;
-  final Widget second;
+/// 轻量文字下拉（用户 2026-07-26 拍板）：无底无边框的「文字+⌄」，
+/// 和顶部分段胶囊拉开层级；选中非默认值时整体变主色表示筛选已激活。
+class _LightFilterDropdown extends StatelessWidget {
+  final String label;
+  final bool active;
+  final List<IosMenuItem> Function() itemsBuilder;
 
-  const _AssetFilterBar({required this.first, required this.second});
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 4, 16, 10),
-      child: Row(
-        children: [
-          first,
-          const SizedBox(width: 8),
-          second,
-        ],
-      ),
-    );
-  }
-}
-
-class _ItemCountLine extends StatelessWidget {
-  final int activeCount;
-  final int idleCount;
-  final int endedCount;
-
-  const _ItemCountLine({
-    required this.activeCount,
-    required this.idleCount,
-    required this.endedCount,
+  const _LightFilterDropdown({
+    required this.label,
+    required this.active,
+    required this.itemsBuilder,
   });
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(20, 6, 20, 2),
-      child: Align(
-        alignment: Alignment.centerLeft,
-        child: Text(
-          '在用 $activeCount · 闲置 $idleCount · 已结束 $endedCount',
-          style: AppType.secondary(scheme),
+    final color = active ? scheme.primary : AppTextColor.secondary(scheme);
+    return Builder(
+      builder: (menuContext) => PressableScale(
+        onPressed: () => showIosMenu(menuContext, itemsBuilder()),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 6),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                label,
+                style: AppType.secondary(scheme).copyWith(color: color),
+              ),
+              const SizedBox(width: 2),
+              Icon(Icons.keyboard_arrow_down, size: 16, color: color),
+            ],
+          ),
         ),
       ),
     );
@@ -863,12 +975,10 @@ class _AssetPendingCard extends StatelessWidget {
 class _VerifiedNetWorthCard extends StatelessWidget {
   final List<NetWorthVerifiedCheckpoint> checkpoints;
   final NetWorthVerifiedCheckpointComparison? comparison;
-  final Future<void> Function() onVerify;
 
   const _VerifiedNetWorthCard({
     required this.checkpoints,
     required this.comparison,
-    required this.onVerify,
   });
 
   @override
@@ -880,30 +990,24 @@ class _VerifiedNetWorthCard extends StatelessWidget {
         .toList()
       ..sort((left, right) => right.header.asOf.compareTo(left.header.asOf));
     final latest = ordered.firstOrNull;
-    final change = comparison?.later.header.id == latest?.header.id
+    // 核对入口在右上 ⋯ 菜单；没有任何核对记录时整卡不渲染。
+    if (latest == null) return const SizedBox.shrink();
+    final change = comparison?.later.header.id == latest.header.id
         ? comparison?.change
         : null;
-    final latestDate = latest?.header.asOf.toLocal();
+    final latestDate = latest.header.asOf.toLocal();
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: appCardDecoration(scheme),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
-            children: [
-              Expanded(child: Text('净资产核对', style: AppType.rowTitle(scheme))),
-              AppPillButton(
-                  label: latest == null ? '首次核对' : '再次核对', onPressed: onVerify),
-            ],
-          ),
+          Text('净资产核对', style: AppType.rowTitle(scheme)),
           const SizedBox(height: 4),
-          if (latest == null)
-            Text('还没做过完整核对', style: AppType.secondary(scheme))
-          else ...[
+          ...[
             Text(
               '${latest.header.completeness == NetWorthVerifiedCheckpointCompleteness.complete ? '完整核对' : '部分核对'}'
-              ' · ${latestDate!.year}/${latestDate.month}/${latestDate.day} '
+              ' · ${latestDate.year}/${latestDate.month}/${latestDate.day} '
               '${latestDate.hour.toString().padLeft(2, '0')}:'
               '${latestDate.minute.toString().padLeft(2, '0')}',
               style: AppType.secondary(scheme),
@@ -981,6 +1085,9 @@ class _AssetSummaryCard extends StatelessWidget {
   final int accountCount;
   final bool partial;
 
+  /// true = 嵌入外层合并卡（不画自己的卡片装饰）。
+  final bool embedded;
+
   const _AssetSummaryCard({
     required this.netWorth,
     required this.fundsAssets,
@@ -991,6 +1098,7 @@ class _AssetSummaryCard extends StatelessWidget {
     required this.includedCount,
     required this.accountCount,
     required this.partial,
+    this.embedded = false,
   });
 
   @override
@@ -1008,7 +1116,7 @@ class _AssetSummaryCard extends StatelessWidget {
     final excludedCount = accountCount - includedCount;
     return Container(
       padding: const EdgeInsets.fromLTRB(16, 14, 16, 13),
-      decoration: appCardDecoration(scheme),
+      decoration: embedded ? null : appCardDecoration(scheme),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         mainAxisSize: MainAxisSize.min,
@@ -1018,17 +1126,9 @@ class _AssetSummaryCard extends StatelessWidget {
             style: AppType.secondary(scheme),
           ),
           const SizedBox(height: 6),
-          Text.rich(
-            // ¥ 符号铜金点缀、数字主色；负数整体超支橙。
-            !negative && heroText.startsWith('¥')
-                ? TextSpan(children: [
-                    TextSpan(
-                      text: '¥',
-                      style: heroStyle.copyWith(color: kCatGold),
-                    ),
-                    TextSpan(text: heroText.substring(1)),
-                  ])
-                : TextSpan(text: heroText),
+          Text(
+            // ¥ 符号与数字同色（用户 2026-07-26 拍板：铜金 ¥ 突兀）；负数整体超支橙。
+            heroText,
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
             style: heroStyle,
@@ -1154,12 +1254,8 @@ class _AssetMetric extends StatelessWidget {
 
 class _AssetAnalysisCard extends StatelessWidget {
   final NetWorthBreakdown breakdown;
-  final Future<void> Function() onReport;
 
-  const _AssetAnalysisCard({
-    required this.breakdown,
-    required this.onReport,
-  });
+  const _AssetAnalysisCard({required this.breakdown});
 
   @override
   Widget build(BuildContext context) {
@@ -1180,18 +1276,10 @@ class _AssetAnalysisCard extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
-            children: [
-              Text(
-                '资产结构',
-                style: AppType.rowTitle(scheme),
-              ),
-              const Spacer(),
-              AppPillButton(
-                label: '生成报告',
-                onPressed: () => onReport(),
-              ),
-            ],
+          // 「生成报告」入口在右上 ⋯ 菜单。
+          Text(
+            '资产结构',
+            style: AppType.rowTitle(scheme),
           ),
           const SizedBox(height: 8),
           if (items.isEmpty)
@@ -1298,6 +1386,15 @@ class _AccountGroupCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    // 组内币种不一致时不硬加，避免算出一个混币种的假小计（数据诚实性优先）。
+    final currencies =
+        group.items.map((item) => item.account.currencyCode).toSet();
+    final showSubtotal = currencies.length == 1;
+    final subtotal = group.items
+        .fold<Decimal>(Decimal.zero, (sum, item) => sum + item.balance);
+    final subtotalStyle = AppType.secondary(scheme).copyWith(
+      color: subtotal < Decimal.zero ? AppColors.warning : null,
+    );
     return Container(
       decoration: appCardDecoration(scheme),
       clipBehavior: Clip.antiAlias,
@@ -1317,6 +1414,20 @@ class _AccountGroupCard extends StatelessWidget {
                   '${group.items.length} 个账户',
                   style: AppType.caption(scheme),
                 ),
+                if (showSubtotal) ...[
+                  const Spacer(),
+                  Text.rich(
+                    _digitAwareSpan(
+                      MoneyFormat.string(
+                        subtotal,
+                        currencyCode: currencies.single,
+                      ),
+                      subtotalStyle,
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ],
               ],
             ),
           ),
@@ -1462,17 +1573,117 @@ class _AccountBalanceTile extends StatelessWidget {
       };
 }
 
-class _AccountDetailSheet extends StatefulWidget {
-  final AccountEntity account;
-  final VoidCallback onEdit;
+/// ¥0 账户折叠卡：余额为 0 的账户不再散在各分组里，统一收进这里（默认收起）。
+class _ZeroBalanceAccountsCard extends StatelessWidget {
+  final List<_AccountBalance> items;
+  final bool expanded;
+  final VoidCallback onToggleExpanded;
+  final ValueChanged<AccountEntity> onTap;
 
-  const _AccountDetailSheet({required this.account, required this.onEdit});
+  const _ZeroBalanceAccountsCard({
+    required this.items,
+    required this.expanded,
+    required this.onToggleExpanded,
+    required this.onTap,
+  });
 
   @override
-  State<_AccountDetailSheet> createState() => _AccountDetailSheetState();
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Container(
+      decoration: appCardDecoration(scheme),
+      clipBehavior: Clip.antiAlias,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          InkWell(
+            key: const Key('zero-balance-accounts-toggle'),
+            onTap: onToggleExpanded,
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(16, 12, 14, 12),
+              child: Row(
+                children: [
+                  Text(
+                    '已清零账户 (${items.length})',
+                    style: AppType.rowTitle(scheme),
+                  ),
+                  const Spacer(),
+                  Icon(
+                    expanded ? Icons.expand_less : Icons.expand_more,
+                    size: 20,
+                    color: AppTextColor.secondary(scheme),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          if (expanded)
+            for (int i = 0; i < items.length; i++) ...[
+              appCardDivider(scheme),
+              _AccountBalanceTile(
+                item: items[i],
+                onTap: () => onTap(items[i].account),
+              ),
+            ],
+        ],
+      ),
+    );
+  }
 }
 
-class _AccountDetailSheetState extends State<_AccountDetailSheet> {
+/// 资金页底部入口：当前项目视图下有归档账户/权益时显示，点开切到归档视图。
+class _FundsArchiveEntryRow extends StatelessWidget {
+  final int count;
+  final VoidCallback onTap;
+
+  const _FundsArchiveEntryRow({required this.count, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(12),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 10),
+        child: Center(
+          child: Text('已归档 $count 项 ›', style: AppType.secondary(scheme)),
+        ),
+      ),
+    );
+  }
+}
+
+/// 归档视图顶部返回条，点回切回当前项目视图。
+class _FundsArchiveBackRow extends StatelessWidget {
+  final VoidCallback onTap;
+
+  const _FundsArchiveBackRow({required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(12),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 8),
+        child: Text('‹ 返回当前项目', style: AppType.secondary(scheme)),
+      ),
+    );
+  }
+}
+
+class _AccountDetailPage extends StatefulWidget {
+  final AccountEntity account;
+
+  const _AccountDetailPage({required this.account});
+
+  @override
+  State<_AccountDetailPage> createState() => _AccountDetailPageState();
+}
+
+class _AccountDetailPageState extends State<_AccountDetailPage> {
   int _trendDays = 90;
 
   @override
@@ -1511,138 +1722,166 @@ class _AccountDetailSheetState extends State<_AccountDetailSheet> {
                             ? '从账户建立时点起可信'
                             : null;
     final scheme = Theme.of(context).colorScheme;
-    return Padding(
-      padding: EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(context).bottom),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          SheetHeader(
-            title: current.name,
-            onClose: () => Navigator.pop(context),
-            actionLabel: '编辑',
-            onAction: widget.onEdit,
-          ),
-          Flexible(
-            child: ListView(
-              shrinkWrap: true,
-              padding: const EdgeInsets.fromLTRB(16, 4, 16, 18),
-              children: [
-                Container(
-                  padding: const EdgeInsets.all(16),
-                  decoration: appCardDecoration(scheme),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text('当前余额', style: AppType.secondary(scheme)),
-                      const SizedBox(height: 6),
-                      Text(
-                        MoneyFormat.string(
-                          balance,
-                          currencyCode: current.currencyCode,
-                        ),
-                        style:
-                            Theme.of(context).textTheme.headlineSmall?.copyWith(
-                                  fontFamily: 'Nunito',
-                                  fontWeight: FontWeight.w600,
-                                  color: balance < Decimal.zero
-                                      ? AppColors.warning
-                                      : scheme.onSurface,
-                                ),
-                      ),
-                      if (qualityText != null) ...[
-                        const SizedBox(height: 8),
-                        Text(
-                          qualityText,
-                          style: AppType.caption(scheme),
-                        ),
-                      ],
-                    ],
-                  ),
+    return Scaffold(
+      backgroundColor: Colors.transparent,
+      appBar: AppBar(
+        leading: const AppBackButton(),
+        title: Text(current.name),
+        actions: [
+          Padding(
+            padding: const EdgeInsets.only(right: 10),
+            child: Builder(
+              builder: (menuContext) => AppCircleButton(
+                icon: Icons.more_horiz,
+                onPressed: () => _showMoreMenu(
+                  menuContext,
+                  repo,
+                  current,
+                  recurringRuleCount: recurringRuleCount,
                 ),
-                const SizedBox(height: 12),
-                SettingsGroup(
-                  margin: EdgeInsets.zero,
-                  children: [
-                    SettingsRow(
-                      leading: const Icon(Icons.fact_check_outlined),
-                      title: '校准余额',
-                      subtitle: '按现在的实际余额修正，不计入收支',
-                      trailing: const Icon(Icons.chevron_right, size: 18),
-                      onTap: () => _showCalibration(context, current),
-                    ),
-                    SettingsRow(
-                      key: ValueKey('account-archive-action-${current.id}'),
-                      leading: Icon(current.isArchived
-                          ? Icons.unarchive_outlined
-                          : Icons.archive_outlined),
-                      title: current.isArchived ? '恢复到账户列表' : '归档账户',
-                      subtitle: current.isArchived
-                          ? '恢复后可继续用于新记账'
-                          : recurringRuleCount > 0
-                              ? '$recurringRuleCount 个定时记账仍使用此账户，先修改或删除相关规则'
-                              : '只移出默认列表，余额和净资产不变',
-                      onTap: () => _toggleArchive(
-                        context,
-                        repo,
-                        current,
-                        recurringRuleCount: recurringRuleCount,
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 12),
-                _AccountBalanceTrendCard(
-                  trend: trend,
-                  days: _trendDays,
-                  onDaysChanged: (days) => setState(() => _trendDays = days),
-                ),
-                if (checkpoints.isNotEmpty) ...[
-                  const SizedBox(height: 12),
-                  _DetailSection(
-                    title: '余额核对记录',
-                    children: [
-                      for (final checkpoint in checkpoints)
-                        _CheckpointRow(
-                          checkpoint: checkpoint,
-                          reversed: repo.isAccountBalanceCheckpointReversed(
-                            checkpoint.id,
-                          ),
-                          onReverse: () =>
-                              _reverseCheckpoint(context, repo, checkpoint),
-                        ),
-                    ],
-                  ),
-                ],
-                const SizedBox(height: 12),
-                _DetailSection(
-                  title: '账户资料',
-                  children: [
-                    _DetailRow(label: '类型', value: current.type.label),
-                    if (current.institution.isNotEmpty)
-                      _DetailRow(
-                        label: '机构',
-                        value: current.institution,
-                      ),
-                    _DetailRow(
-                      label: '币种',
-                      value: current.currencyCode == 'CNY'
-                          ? '人民币'
-                          : current.currencyCode,
-                    ),
-                    _DetailRow(
-                      label: '净资产',
-                      value: current.includeInNetWorth ? '计入净资产' : '不计入净资产',
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 12),
-                AccountActivityList(items: activities),
-              ],
+              ),
             ),
           ),
         ],
       ),
+      body: ListView(
+        padding: const EdgeInsets.fromLTRB(16, 4, 16, 32),
+        children: [
+          Container(
+            padding: const EdgeInsets.all(16),
+            decoration: appCardDecoration(scheme),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('当前余额', style: AppType.secondary(scheme)),
+                const SizedBox(height: 6),
+                Text(
+                  MoneyFormat.string(
+                    balance,
+                    currencyCode: current.currencyCode,
+                  ),
+                  style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                        fontFamily: 'Nunito',
+                        fontWeight: FontWeight.w600,
+                        color: balance < Decimal.zero
+                            ? AppColors.warning
+                            : scheme.onSurface,
+                      ),
+                ),
+                if (qualityText != null) ...[
+                  const SizedBox(height: 8),
+                  Text(
+                    qualityText,
+                    style: AppType.caption(scheme),
+                  ),
+                ],
+              ],
+            ),
+          ),
+          const SizedBox(height: 12),
+          SettingsGroup(
+            margin: EdgeInsets.zero,
+            children: [
+              SettingsRow(
+                leading: const Icon(Icons.fact_check_outlined),
+                title: '校准余额',
+                subtitle: '按现在的实际余额修正，不计入收支',
+                trailing: const Icon(Icons.chevron_right, size: 18),
+                onTap: () => _showCalibration(context, current),
+              ),
+              if (!current.isArchived && recurringRuleCount > 0)
+                SettingsRow(
+                  leading: const Icon(Icons.schedule_outlined),
+                  title: '定时记账',
+                  subtitle:
+                      '$recurringRuleCount 个定时记账仍使用此账户，先修改或删除相关规则',
+                ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          _AccountBalanceTrendCard(
+            trend: trend,
+            days: _trendDays,
+            onDaysChanged: (days) => setState(() => _trendDays = days),
+          ),
+          if (checkpoints.isNotEmpty) ...[
+            const SizedBox(height: 12),
+            _DetailSection(
+              title: '余额核对记录',
+              children: [
+                for (final checkpoint in checkpoints)
+                  _CheckpointRow(
+                    checkpoint: checkpoint,
+                    reversed: repo.isAccountBalanceCheckpointReversed(
+                      checkpoint.id,
+                    ),
+                    onReverse: () =>
+                        _reverseCheckpoint(context, repo, checkpoint),
+                  ),
+              ],
+            ),
+          ],
+          const SizedBox(height: 12),
+          _DetailSection(
+            title: '账户资料',
+            children: [
+              _DetailRow(label: '类型', value: current.type.label),
+              if (current.institution.isNotEmpty)
+                _DetailRow(
+                  label: '机构',
+                  value: current.institution,
+                ),
+              _DetailRow(
+                label: '币种',
+                value: current.currencyCode == 'CNY'
+                    ? '人民币'
+                    : current.currencyCode,
+              ),
+              _DetailRow(
+                label: '净资产',
+                value: current.includeInNetWorth ? '计入净资产' : '不计入净资产',
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          AccountActivityList(items: activities),
+        ],
+      ),
+    );
+  }
+
+  /// 右上角 ⋯ 菜单：编辑资料、归档/恢复等动作类操作都收在这里，正文只留信息区。
+  void _showMoreMenu(
+    BuildContext menuContext,
+    AppRepository repo,
+    AccountEntity current, {
+    required int recurringRuleCount,
+  }) {
+    showIosMenu(
+      menuContext,
+      [
+        IosMenuItem(
+          label: '编辑资料',
+          icon: Icons.edit_outlined,
+          onTap: () => showBlurSheet<void>(
+            context,
+            child: _AccountFormSheet(account: current),
+          ),
+        ),
+        IosMenuItem(
+          key: ValueKey('account-archive-action-${current.id}'),
+          label: current.isArchived ? '恢复到账户列表' : '归档账户',
+          icon: current.isArchived
+              ? Icons.unarchive_outlined
+              : Icons.archive_outlined,
+          onTap: () => _toggleArchive(
+            context,
+            repo,
+            current,
+            recurringRuleCount: recurringRuleCount,
+          ),
+        ),
+      ],
     );
   }
 
@@ -2068,110 +2307,191 @@ class _AccountBalanceTrendPainter extends CustomPainter {
       oldDelegate.gridColor != gridColor;
 }
 
+/// 统一「添加」弹层：三个 tab 的右上 ＋ 都开它。
+/// 资金=添加账户/添加权益；物品=新购买记账/从最近账单加入/手工补录物品。
+/// 「从最近账单加入」行下方内嵌最近几笔可加入的支出账单，点行一步直达表单。
 class _AddAssetEntrySheet extends StatelessWidget {
-  final VoidCallback? onAccount;
-  final VoidCallback? onPhysicalAsset;
-  final VoidCallback? onReceivableAsset;
+  final VoidCallback onAccount;
+  final VoidCallback onReceivableAsset;
+  final VoidCallback onNewPurchase;
+  final VoidCallback onFromTransaction;
+  final VoidCallback onManual;
+  final List<AssetPurchaseAllocationCandidate> recentCandidates;
+  final ValueChanged<AssetPurchaseAllocationCandidate> onRecentCandidate;
 
   const _AddAssetEntrySheet({
-    this.onAccount,
-    this.onPhysicalAsset,
-    this.onReceivableAsset,
+    required this.onAccount,
+    required this.onReceivableAsset,
+    required this.onNewPurchase,
+    required this.onFromTransaction,
+    required this.onManual,
+    required this.recentCandidates,
+    required this.onRecentCandidate,
   });
 
   @override
   Widget build(BuildContext context) {
     return SafeArea(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          SheetHeader(
-            title: '新增资产',
-            onClose: () => Navigator.pop(context),
-          ),
-          SettingsGroup(
-            margin: const EdgeInsets.fromLTRB(16, 4, 16, 18),
-            children: [
-              if (onAccount != null)
-                SettingsRow(
-                  leading: const Icon(Icons.account_balance_wallet_outlined),
-                  title: '新增账户',
-                  subtitle: '现金、银行卡、信用卡、存款、贷款',
-                  trailing: const Icon(Icons.chevron_right, size: 18),
-                  onTap: onAccount,
+      child: ConstrainedBox(
+        constraints: BoxConstraints(
+          maxHeight: MediaQuery.sizeOf(context).height * 0.9,
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            SheetHeader(
+              title: '添加',
+              onClose: () => Navigator.pop(context),
+            ),
+            Flexible(
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.only(bottom: 18),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    const SettingsSectionLabel('资金'),
+                    SettingsGroup(
+                      margin: const EdgeInsets.fromLTRB(16, 0, 16, 0),
+                      children: [
+                        SettingsRow(
+                          leading:
+                              const Icon(Icons.account_balance_wallet_outlined),
+                          title: '添加账户',
+                          subtitle: '现金、银行卡、信用卡、存款、贷款',
+                          trailing: const Icon(Icons.chevron_right, size: 18),
+                          onTap: onAccount,
+                        ),
+                        SettingsRow(
+                          leading: const Icon(Icons.assignment_return_outlined),
+                          title: '添加权益',
+                          subtitle: '押金、借出款、应收款、预付余额',
+                          trailing: const Icon(Icons.chevron_right, size: 18),
+                          onTap: onReceivableAsset,
+                        ),
+                      ],
+                    ),
+                    const SettingsSectionLabel('物品'),
+                    SettingsGroup(
+                      margin: const EdgeInsets.fromLTRB(16, 0, 16, 0),
+                      children: [
+                        SettingsRow(
+                          leading: const Icon(Icons.shopping_bag_outlined),
+                          title: '新购买记账',
+                          subtitle: '选择付款账户，购买日同时写入物品和支出',
+                          trailing: const Icon(Icons.chevron_right, size: 18),
+                          onTap: onNewPurchase,
+                        ),
+                        SettingsRow(
+                          leading: const Icon(Icons.receipt_long_outlined),
+                          title: '从最近账单加入',
+                          subtitle: '继承购买日期和账本，不会重复记支出',
+                          trailing: const Icon(Icons.chevron_right, size: 18),
+                          onTap: onFromTransaction,
+                        ),
+                        for (final candidate in recentCandidates)
+                          _RecentPurchaseCandidateRow(
+                            candidate: candidate,
+                            onTap: () => onRecentCandidate(candidate),
+                          ),
+                        SettingsRow(
+                          leading: const Icon(Icons.edit_note_outlined),
+                          title: '手工补录物品',
+                          subtitle: '适合旧物、赠品或没有购买账单的物品',
+                          trailing: const Icon(Icons.chevron_right, size: 18),
+                          onTap: onManual,
+                        ),
+                      ],
+                    ),
+                  ],
                 ),
-              if (onPhysicalAsset != null)
-                SettingsRow(
-                  leading: const Icon(Icons.inventory_2_outlined),
-                  title: '添加实物资产',
-                  subtitle: '手机、电脑、车辆、房产、贵重物品',
-                  trailing: const Icon(Icons.chevron_right, size: 18),
-                  onTap: onPhysicalAsset,
-                ),
-              if (onReceivableAsset != null)
-                SettingsRow(
-                  leading: const Icon(Icons.assignment_return_outlined),
-                  title: '添加权益资产',
-                  subtitle: '押金、借出款、应收款、预付余额',
-                  trailing: const Icon(Icons.chevron_right, size: 18),
-                  onTap: onReceivableAsset,
-                ),
-            ],
-          ),
-        ],
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
 }
 
-class _AddPhysicalAssetChoiceSheet extends StatelessWidget {
-  final VoidCallback onFromTransaction;
-  final VoidCallback onNewPurchase;
-  final VoidCallback onManual;
+/// 「从最近账单加入」行下内嵌的候选账单行：点一下直达「填写物品信息」表单。
+class _RecentPurchaseCandidateRow extends StatelessWidget {
+  final AssetPurchaseAllocationCandidate candidate;
+  final VoidCallback onTap;
 
-  const _AddPhysicalAssetChoiceSheet({
-    required this.onFromTransaction,
-    required this.onNewPurchase,
-    required this.onManual,
+  const _RecentPurchaseCandidateRow({
+    required this.candidate,
+    required this.onTap,
   });
 
   @override
   Widget build(BuildContext context) {
-    return SafeArea(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          SheetHeader(
-            title: '添加物品',
-            onClose: () => Navigator.pop(context),
-          ),
-          SettingsGroup(
-            margin: const EdgeInsets.fromLTRB(16, 4, 16, 18),
-            children: [
-              SettingsRow(
-                leading: const Icon(Icons.receipt_long_outlined),
-                title: '从最近账单加入',
-                subtitle: '继承购买日期和账本，不会重复记支出',
-                trailing: const Icon(Icons.chevron_right, size: 18),
-                onTap: onFromTransaction,
+    final scheme = Theme.of(context).colorScheme;
+    final transaction = candidate.transaction;
+    final note = transaction.note.trim();
+    final title = note.isEmpty
+        ? transaction.categoryNameZh.isEmpty
+            ? '支出账单'
+            : transaction.categoryNameZh
+        : note;
+    final date = transaction.date;
+    final dateText = '${date.year}-${date.month.toString().padLeft(2, '0')}-'
+        '${date.day.toString().padLeft(2, '0')}';
+    return InkWell(
+      onTap: onTap,
+      child: Padding(
+        // 左侧多缩进一档，表明从属于上面的「从最近账单加入」。
+        padding: const EdgeInsets.fromLTRB(28, 9, 16, 9),
+        child: Row(
+          children: [
+            Container(
+              width: 28,
+              height: 28,
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                color: AppColors.iconCircleFill(scheme),
+                shape: BoxShape.circle,
               ),
-              SettingsRow(
-                leading: const Icon(Icons.shopping_bag_outlined),
-                title: '新购买，同时记账',
-                subtitle: '选择付款账户，购买日同时写入物品和支出',
-                trailing: const Icon(Icons.chevron_right, size: 18),
-                onTap: onNewPurchase,
+              child: Icon(
+                Icons.receipt_long_outlined,
+                size: 15,
+                color: AppTextColor.secondary(scheme),
               ),
-              SettingsRow(
-                leading: const Icon(Icons.edit_note_outlined),
-                title: '手工补录物品',
-                subtitle: '适合旧物、赠品或没有购买账单的物品',
-                trailing: const Icon(Icons.chevron_right, size: 18),
-                onTap: onManual,
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    title,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: AppType.body(scheme),
+                  ),
+                  const SizedBox(height: 2),
+                  Text.rich(
+                    _digitAwareSpan(dateText, AppType.caption(scheme)),
+                  ),
+                ],
               ),
-            ],
-          ),
-        ],
+            ),
+            const SizedBox(width: 10),
+            Text(
+              MoneyFormat.string(transaction.amount),
+              style: AppType.body(scheme).copyWith(
+                fontFamily: 'Nunito',
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            const SizedBox(width: 4),
+            Icon(
+              Icons.chevron_right,
+              size: 16,
+              color: AppTextColor.secondary(scheme),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -2652,14 +2972,10 @@ bool _decimalInputValid(String raw, {bool required = false}) {
   return Decimal.tryParse(normalized) != null;
 }
 
-class _ReceivableAssetDetailSheet extends StatelessWidget {
+class _ReceivableAssetDetailPage extends StatelessWidget {
   final ReceivableAssetEntity asset;
-  final VoidCallback onEdit;
 
-  const _ReceivableAssetDetailSheet({
-    required this.asset,
-    required this.onEdit,
-  });
+  const _ReceivableAssetDetailPage({required this.asset});
 
   @override
   Widget build(BuildContext context) {
@@ -2672,165 +2988,174 @@ class _ReceivableAssetDetailSheet extends StatelessWidget {
                 ReceivableEconomicStatus.partialRecovered);
     final recoveries = repo.recoveriesForReceivableAsset(current.id).take(5);
     final events = repo.eventsForReceivableAsset(current.id).take(6).toList();
-    return Padding(
-      padding: EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(context).bottom),
-      child: ConstrainedBox(
-        constraints: BoxConstraints(
-          maxHeight: MediaQuery.sizeOf(context).height * 0.9,
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            SheetHeader(
-              title: current.name,
-              onClose: () => Navigator.pop(context),
-              actionLabel: '编辑',
-              onAction: onEdit,
-            ),
-            Flexible(
-              child: SingleChildScrollView(
-                padding: const EdgeInsets.fromLTRB(16, 4, 16, 18),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    _DetailSection(
-                      title: '权益信息',
-                      children: [
-                        _DetailRow(label: '类型', value: current.type.label),
-                        _DetailRow(
-                          label: '状态',
-                          value: _receivableStatusLabel(current),
-                        ),
-                        _DetailRow(
-                          label: '剩余金额',
-                          value: MoneyFormat.string(current.remainingAmount),
-                        ),
-                        _DetailRow(
-                          label: '原始金额',
-                          value: MoneyFormat.string(current.originalAmount),
-                        ),
-                        if (current.counterparty.isNotEmpty)
-                          _DetailRow(
-                            label: '对象',
-                            value: current.counterparty,
-                          ),
-                        _DetailRow(
-                          label: '到期日',
-                          value: current.dueDate == null
-                              ? '未填写'
-                              : '${_dateText(current.dueDate)} · ${_reminderDetailText(
-                                  dueReminder,
-                                  upcomingLabel: '还有',
-                                  dueTodayLabel: '今天到期',
-                                  expiredLabel: '已逾期',
-                                  inactiveLabel: '已结束跟踪',
-                                )}',
-                        ),
-                        _DetailRow(
-                          label: '净资产',
-                          value: current.countsInNetWorth ? '计入净资产' : '不计入净资产',
-                        ),
-                        if (current.note.isNotEmpty)
-                          _DetailRow(label: '备注', value: current.note),
-                      ],
-                    ),
-                    const SizedBox(height: 12),
-                    Row(
-                      children: [
-                        Expanded(
-                          child: _AssetActionButton(
-                            label: '收回',
-                            icon: Icons.savings_outlined,
-                            onTap: canRecover
-                                ? () => _showRecoverSheet(context, current)
-                                : null,
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: _AssetActionButton(
-                            label: current.isArchived ? '恢复' : '归档',
-                            icon: current.isArchived
-                                ? Icons.unarchive_outlined
-                                : Icons.archive_outlined,
-                            onTap: () => _toggleArchive(context, repo, current),
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: _AssetActionButton(
-                            label: '损失',
-                            icon: Icons.money_off_csred_outlined,
-                            onTap: canRecover
-                                ? () => _markLost(context, repo, current)
-                                : null,
-                          ),
-                        ),
-                      ],
-                    ),
-                    if (current.inclusionQuality ==
-                        AssetInclusionQuality.needsReview) ...[
-                      const SizedBox(height: 12),
-                      SettingsGroup(
-                        margin: EdgeInsets.zero,
-                        children: [
-                          SettingsRow(
-                            leading: const Icon(Icons.fact_check_outlined),
-                            title: '确认状态与是否计入',
-                            subtitle: '确认后不再提醒',
-                            trailing: const Icon(Icons.chevron_right, size: 18),
-                            onTap: () => _showReviewSheet(context, current),
-                          ),
-                        ],
-                      ),
-                    ],
-                    if (recoveries.isNotEmpty) ...[
-                      const SizedBox(height: 12),
-                      _DetailSection(
-                        title: '收回历史',
-                        children: [
-                          for (final recovery in recoveries)
-                            _DetailRow(
-                              label: _dateText(recovery.recoveredAt),
-                              value: MoneyFormat.string(recovery.amount),
-                            ),
-                        ],
-                      ),
-                      const SizedBox(height: 8),
-                      _AssetActionButton(
-                        label: '撤销最近一次收回',
-                        icon: Icons.undo,
-                        onTap: () => _undoLatestRecovery(
-                          context,
-                          repo,
-                          recoveries.first,
-                        ),
-                      ),
-                    ],
-                    const SizedBox(height: 12),
-                    _DetailSection(
-                      title: '最近事件',
-                      children: events.isEmpty
-                          ? const [
-                              _DetailRow(label: '暂无', value: '还没有权益事件'),
-                            ]
-                          : [
-                              for (final event in events)
-                                _DetailRow(
-                                  label: event.eventType.label,
-                                  value:
-                                      '${_dateText(event.occurredAt)}${event.value == null ? '' : ' · ${MoneyFormat.string(event.value!)}'}',
-                                ),
-                            ],
-                    ),
-                  ],
+    return Scaffold(
+      backgroundColor: Colors.transparent,
+      appBar: AppBar(
+        leading: const AppBackButton(),
+        title: Text(current.name),
+        actions: [
+          Padding(
+            padding: const EdgeInsets.only(right: 10),
+            child: Builder(
+              builder: (menuContext) => AppCircleButton(
+                icon: Icons.more_horiz,
+                onPressed: () => _showMoreMenu(
+                  menuContext,
+                  context,
+                  repo,
+                  current,
+                  canRecover: canRecover,
                 ),
               ),
             ),
-          ],
-        ),
+          ),
+        ],
       ),
+      body: ListView(
+        padding: const EdgeInsets.fromLTRB(16, 4, 16, 32),
+        children: [
+          _DetailSection(
+            title: '权益信息',
+            children: [
+              _DetailRow(label: '类型', value: current.type.label),
+              _DetailRow(
+                label: '状态',
+                value: _receivableStatusLabel(current),
+              ),
+              _DetailRow(
+                label: '剩余金额',
+                value: MoneyFormat.string(current.remainingAmount),
+              ),
+              _DetailRow(
+                label: '原始金额',
+                value: MoneyFormat.string(current.originalAmount),
+              ),
+              if (current.counterparty.isNotEmpty)
+                _DetailRow(
+                  label: '对象',
+                  value: current.counterparty,
+                ),
+              _DetailRow(
+                label: '到期日',
+                value: current.dueDate == null
+                    ? '未填写'
+                    : '${_dateText(current.dueDate)} · ${_reminderDetailText(
+                        dueReminder,
+                        upcomingLabel: '还有',
+                        dueTodayLabel: '今天到期',
+                        expiredLabel: '已逾期',
+                        inactiveLabel: '已结束跟踪',
+                      )}',
+              ),
+              _DetailRow(
+                label: '净资产',
+                value: current.countsInNetWorth ? '计入净资产' : '不计入净资产',
+              ),
+              if (current.note.isNotEmpty)
+                _DetailRow(label: '备注', value: current.note),
+            ],
+          ),
+          const SizedBox(height: 12),
+          _AssetActionButton(
+            label: '收回',
+            icon: Icons.savings_outlined,
+            onTap: canRecover
+                ? () => _showRecoverSheet(context, current)
+                : null,
+          ),
+          if (current.inclusionQuality ==
+              AssetInclusionQuality.needsReview) ...[
+            const SizedBox(height: 12),
+            SettingsGroup(
+              margin: EdgeInsets.zero,
+              children: [
+                SettingsRow(
+                  leading: const Icon(Icons.fact_check_outlined),
+                  title: '确认状态与是否计入',
+                  subtitle: '确认后不再提醒',
+                  trailing: const Icon(Icons.chevron_right, size: 18),
+                  onTap: () => _showReviewSheet(context, current),
+                ),
+              ],
+            ),
+          ],
+          if (recoveries.isNotEmpty) ...[
+            const SizedBox(height: 12),
+            _DetailSection(
+              title: '收回历史',
+              children: [
+                for (final recovery in recoveries)
+                  _DetailRow(
+                    label: _dateText(recovery.recoveredAt),
+                    value: MoneyFormat.string(recovery.amount),
+                  ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            _AssetActionButton(
+              label: '撤销最近一次收回',
+              icon: Icons.undo,
+              onTap: () => _undoLatestRecovery(
+                context,
+                repo,
+                recoveries.first,
+              ),
+            ),
+          ],
+          const SizedBox(height: 12),
+          _DetailSection(
+            title: '最近事件',
+            children: events.isEmpty
+                ? const [
+                    _DetailRow(label: '暂无', value: '还没有权益事件'),
+                  ]
+                : [
+                    for (final event in events)
+                      _DetailRow(
+                        label: event.eventType.label,
+                        value:
+                            '${_dateText(event.occurredAt)}${event.value == null ? '' : ' · ${MoneyFormat.string(event.value!)}'}',
+                      ),
+                  ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// 右上角 ⋯ 菜单：编辑资料、标记损失、归档/恢复等动作类操作收在这里。
+  void _showMoreMenu(
+    BuildContext menuContext,
+    BuildContext pageContext,
+    AppRepository repo,
+    ReceivableAssetEntity current, {
+    required bool canRecover,
+  }) {
+    showIosMenu(
+      menuContext,
+      [
+        IosMenuItem(
+          label: '编辑资料',
+          icon: Icons.edit_outlined,
+          onTap: () => showBlurSheet<void>(
+            pageContext,
+            child: _ReceivableAssetFormSheet(asset: current),
+          ),
+        ),
+        if (canRecover)
+          IosMenuItem(
+            label: '标记损失',
+            icon: Icons.money_off_csred_outlined,
+            onTap: () => _markLost(pageContext, repo, current),
+          ),
+        IosMenuItem(
+          label: current.isArchived ? '恢复到列表' : '归档',
+          icon: current.isArchived
+              ? Icons.unarchive_outlined
+              : Icons.archive_outlined,
+          onTap: () => _toggleArchive(pageContext, repo, current),
+        ),
+      ],
     );
   }
 
@@ -3379,6 +3704,7 @@ class _PhysicalAssetDetailPage extends StatelessWidget {
     );
   }
 
+  /// 一级 ⋯ 菜单：只放高频操作，低频的终止/撤销类收进「更多操作…」二级菜单。
   void _showMoreMenu(
     BuildContext menuContext,
     BuildContext pageContext,
@@ -3386,16 +3712,6 @@ class _PhysicalAssetDetailPage extends StatelessWidget {
     PhysicalAssetEntity asset,
   ) {
     final owned = asset.economicStatus == PhysicalAssetEconomicStatus.owned;
-    final hasPurchaseLink = repo.transactionLinksForAsset(asset.id).any(
-          (link) =>
-              link.linkType == AssetTransactionLinkType.sourceTransaction ||
-              link.linkType == AssetTransactionLinkType.purchaseTransaction,
-        );
-    final canUndoTerminal =
-        (asset.economicStatus == PhysicalAssetEconomicStatus.scrapped ||
-                asset.economicStatus == PhysicalAssetEconomicStatus.lost ||
-                asset.economicStatus == PhysicalAssetEconomicStatus.gifted) &&
-            repo.canUndoPhysicalAssetTerminalStatus(asset.id);
     showIosMenu(
       menuContext,
       [
@@ -3440,6 +3756,41 @@ class _PhysicalAssetDetailPage extends StatelessWidget {
             icon: Icons.undo,
             onTap: () => _undoSale(pageContext, repo, asset),
           ),
+        IosMenuItem(
+          label: '更多操作…',
+          icon: Icons.more_horiz,
+          onTap: () => _showMoreActionsMenu(
+            menuContext,
+            pageContext,
+            repo,
+            asset,
+          ),
+        ),
+      ],
+    );
+  }
+
+  /// 二级「更多操作…」菜单：退货、报废、丢失、赠送等终止类和归档操作。
+  void _showMoreActionsMenu(
+    BuildContext menuContext,
+    BuildContext pageContext,
+    AppRepository repo,
+    PhysicalAssetEntity asset,
+  ) {
+    final owned = asset.economicStatus == PhysicalAssetEconomicStatus.owned;
+    final hasPurchaseLink = repo.transactionLinksForAsset(asset.id).any(
+          (link) =>
+              link.linkType == AssetTransactionLinkType.sourceTransaction ||
+              link.linkType == AssetTransactionLinkType.purchaseTransaction,
+        );
+    final canUndoTerminal =
+        (asset.economicStatus == PhysicalAssetEconomicStatus.scrapped ||
+                asset.economicStatus == PhysicalAssetEconomicStatus.lost ||
+                asset.economicStatus == PhysicalAssetEconomicStatus.gifted) &&
+            repo.canUndoPhysicalAssetTerminalStatus(asset.id);
+    showIosMenu(
+      menuContext,
+      [
         if (owned && hasPurchaseLink)
           IosMenuItem(
             label: '确认退货',
@@ -5164,7 +5515,7 @@ class _PhysicalAssetFormSheetState extends State<_PhysicalAssetFormSheet> {
           final confirmed = await showConfirmDialog(
             context,
             title: '确认其他来源',
-            message: '这不会减少账户余额，也不会生成支出记录。若是最近购买，建议改选“新购买，同时记账”。',
+            message: '这不会减少账户余额，也不会生成支出记录。若是最近购买，建议改选“新购买记账”。',
             confirmText: '仍然保存',
           );
           if (!confirmed) return;

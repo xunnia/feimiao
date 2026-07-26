@@ -26,7 +26,13 @@
 
 - 复盘方案：`docs/claude/资产UI优化方案-2026-07-26.md`（P0 快赢 / P1 结构 / P2 重构）。P0 全部落地：术语人话化全扫（口径/证据/锚点/推定等内部词清零、·CNY 全删）、净资产卡重排（34px Nunito 主数字+铜金 ¥）、卡片规格统一（appCardDecoration/appCardDivider/iconCircleFill 三个新全局零件）、物品网格裁切 bug 修复、scheme.error 红清零、_SwitchRow 删除换 SettingsRow+AppSwitch、三表单铺 AppLabeledField、_TypeChip 主色化、空态换猫。明细与验收状态见方案文档 §五点五。
 - **验收**：analyze 0 error 0 warning；全量测试 **802/802**；before/after 对比图 7 张 `outputs/asset_ui_review/compare/`。
-- **⏭️ 下一步：P1 结构批**（方案文档 §三，6 项：总览重组/资金页小计+清零折叠/物品筛选收口/详情容器统一/新增入口统一/生成报告反馈闭环），P2（accounts_view 拆模块/性能缓存/情感化）可选排期。动 UI 前必读 UI_DESIGN_STANDARD.md。
+- **v207 APK 已构建并核验**：aapt=`com.qingji.qingji.codex`/207/1.205.0；16K zipalign 过；V2 唯一 Codex 证书。归档 `ci-artifacts/releases/feimiao-codex-v1.205.0-207.apk`，110,666,579 字节，SHA256 `3528D5DFA9D069B84EBE86111681890A938402E5CEC3249096341C7D3F51EADA`。**未发布线上**（线上仍 v206；用户从电脑直接传包安装，绕开 30KB/s 直连）。本地功能提交 `992ff8c`，远端源码快照 `a63456c`。
+### 2026-07-27 P1 结构批（✅已完成验收，v1.206.0+208 / b0727-208 / DB 仍 v41）
+
+- **六项全部落地**：①总览重组：净资产 hero+趋势合并一张卡、「净资产核对」「生成报告」收进 AppBar 右上 ⋯ 菜单、待处理只留保修到期/权益逾期两类任务型、其余五类（账户到账/历史物品/历史权益/外币/缺购买日期）进「数据待完善」弹层、无核对记录时核对空态卡不渲染；②资金页：分组头余额小计（多币种组不显示、守诚实）、¥0 账户收进「已清零账户 (N)」折叠卡、**筛选行删除**+列表底部「已归档 N 项 ›」入口+归档视图返回条、`_FundsKind` 种类筛选彻底删除；③物品页：五层筛选收成 搜索框+一行三颗轻量「文字+⌄」下拉（`_LightFilterDropdown`，非默认值变主色），PhysicalAssetGrid 退成纯展示、搜索/分类状态上提；④详情容器统一：账户/权益详情从半屏弹层改**全屏主题页**（`_AccountDetailPage`/`_ReceivableAssetDetailPage`，AppBackButton+⋯菜单，**修了用户真机 bug：账户详情白底无主题+顶到状态栏**）、物品 ⋯ 菜单分层（一级常用 6 项+「更多操作…」二级收报废/丢失/赠送/撤销类）、IosMenuItem 加 key 字段；⑤新增入口：三个 tab 右上 + 统一开一张「添加」弹层（资金/物品两组），内嵌最近 3 笔候选账单一步直达填写物品表单；⑥生成报告后直接 openReportReader 打开阅读器。
+- **用户 2026-07-26/27 拍板的三条视觉修正已全部落地**（别做反）：①渐变背景上的输入框=半透明 AppColors.card+hairline（物品搜索框，代码有注释）②筛选控件不用重胶囊、用轻量「文字+⌄」；资金页直接删筛选行 ③净资产主数字 ¥ 符号与数字同色 onSurface（不用铜金；负数整体超支橙不变）。
+- **验收**：analyze 0 error 0 warning（2 条老 info）；全量 `flutter test` **803/803**（asset_management_view_test 多 1 个导航闭环断言用例）；P0→P1 对比图 7 张 `outputs/asset_ui_review/compare_p1/`（P1 原图 `after_p1/`）。
+- P2（accounts_view 拆模块/性能缓存/情感化）可选排期。动 UI 前必读 UI_DESIGN_STANDARD.md。
 
 ### 2026-07-18 当前启动体验修复（工作区未提交）
 
@@ -255,9 +261,9 @@
 
 ## 5. 版本文件同步状态
 
-- `pubspec.yaml`：`version: 1.205.0+207`
-- `lib/core/app_version.dart`：`version = '1.205.0'`，`buildNumber = 207`
-- `lib/build_info.dart`：`kBuildTag = 'b0726-207'`
+- `pubspec.yaml`：`version: 1.206.0+208`
+- `lib/core/app_version.dart`：`version = '1.206.0'`，`buildNumber = 208`
+- `lib/build_info.dart`：`kBuildTag = 'b0727-208'`
 - `android/local.properties`：Flutter release 构建已读取 `1.204.0+206`；该文件通常不入 git
 - DB：**v41**（v40 交易时间精度之上，transactions 新增 `order_no`；导入退款支持跨批/跨月挂回历史原单）
 - 版本规矩：每次推送 minor+1、versionCode+1、kBuildTag 同步（b月日-versionCode）

@@ -218,6 +218,9 @@ void main() {
     await pumpAccountsView(tester, repo);
     await tester.tap(find.text('资金'));
     await pumpViewAnimations(tester);
+    // 新账户余额为 0，默认折叠进「已清零账户」卡，先展开再点。
+    await tester.tap(find.byKey(const Key('zero-balance-accounts-toggle')));
+    await tester.pump();
     await tester.tap(find.text('定时扣款账户').first);
     await tester.pumpAndSettle();
 
@@ -225,6 +228,9 @@ void main() {
       find.text('1 个定时记账仍使用此账户，先修改或删除相关规则'),
       findsOneWidget,
     );
+    // 归档动作已收进详情页右上角 ⋯ 菜单，先开菜单再点。
+    await tester.tap(find.byIcon(Icons.more_horiz));
+    await tester.pumpAndSettle();
     await tester.tap(
       find.byKey(ValueKey('account-archive-action-$accountId')),
     );
@@ -335,6 +341,38 @@ void main() {
       DateTime(2026, 7, 13),
     );
     expect(repo.transactions.length, transactionCount);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('统一添加弹层内嵌最近账单，点行一步直达填写物品信息', (tester) async {
+    final repo = AppRepository();
+    await tester.runAsync(repo.init);
+    addTearDown(() => tester.runAsync(repo.closeForTest));
+    await tester.runAsync(() => repo.addTransaction(
+          kind: TransactionKind.expense,
+          amount: Decimal.fromInt(499),
+          accountId: repo.accounts.first.id,
+          date: DateTime(2026, 7, 20),
+          note: '降噪耳机订单',
+        ));
+    await pumpAccountsView(tester, repo);
+
+    // 总览 tab 的右上 ＋ 也开统一「添加」弹层（三个 tab 行为一致）。
+    await tester.tap(find.byIcon(Icons.add));
+    await pumpViewAnimations(tester);
+    expect(find.text('添加账户'), findsOneWidget);
+    expect(find.text('添加权益'), findsOneWidget);
+    expect(find.text('新购买记账'), findsOneWidget);
+    expect(find.text('从最近账单加入'), findsOneWidget);
+    expect(find.text('手工补录物品'), findsOneWidget);
+    // 「从最近账单加入」下方内嵌最近可加入的支出账单行。
+    expect(find.text('降噪耳机订单'), findsOneWidget);
+
+    // 点内嵌账单行一步直达「填写物品信息」表单，跳过完整账单列表。
+    await tester.tap(find.text('降噪耳机订单'));
+    await pumpViewAnimations(tester);
+    expect(find.text('填写物品信息'), findsOneWidget);
+    expect(find.byKey(const Key('asset-purchase-search')), findsNothing);
     expect(tester.takeException(), isNull);
   });
 
@@ -941,6 +979,9 @@ void main() {
       isNull,
     );
     await openPhysicalAssetMoreMenu(tester);
+    // 终止/撤销类操作收进了「更多操作…」二级菜单。
+    await tester.tap(find.text('更多操作…'));
+    await tester.pumpAndSettle();
     await tester.scrollUntilVisible(
       find.text('撤销结束持有'),
       180,
@@ -1018,10 +1059,18 @@ void main() {
     await pumpAccountsView(tester, repo);
     expect(find.text('净资产'), findsOneWidget);
     expect(find.text('部分金额待确认'), findsOneWidget);
+
+    // 到账待确认属于数据口径类条目，收进右上 ⋯ 菜单的「数据待完善」弹层。
+    await tester.tap(find.byIcon(Icons.more_horiz));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('数据待完善'), findsOneWidget);
+    await tester.tap(find.textContaining('数据待完善'));
+    await tester.pumpAndSettle();
     expect(find.textContaining('个账户的到账信息待确认'), findsOneWidget);
 
-    await tester.tap(find.text('资金'));
-    await pumpViewAnimations(tester);
+    // 点条目 = 关弹层并跳到资金页。
+    await tester.tap(find.textContaining('个账户的到账信息待确认'));
+    await tester.pumpAndSettle();
     expect(find.textContaining('· 待确认'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });

@@ -7,6 +7,8 @@ import 'glass.dart';
 
 /// iOS 风浮动菜单的一项。
 class IosMenuItem {
+  /// 可选：给菜单行挂 Key，方便测试定位（如归档动作行）。
+  final Key? key;
   final String label;
   final IconData icon;
   final bool destructive;
@@ -14,6 +16,7 @@ class IosMenuItem {
   final VoidCallback onTap;
 
   const IosMenuItem({
+    this.key,
     required this.label,
     required this.icon,
     this.destructive = false,
@@ -143,7 +146,7 @@ class _IosMenuCard extends StatelessWidget {
                         color: AppColors.hairline(Theme.of(context).colorScheme,
                             strength: 1.3),
                       ),
-                    _IosMenuRow(item: items[i]),
+                    _IosMenuRow(key: items[i].key, item: items[i]),
                   ],
                 ],
               ),
@@ -158,7 +161,7 @@ class _IosMenuCard extends StatelessWidget {
 class _IosMenuRow extends StatelessWidget {
   final IosMenuItem item;
 
-  const _IosMenuRow({required this.item});
+  const _IosMenuRow({super.key, required this.item});
 
   @override
   Widget build(BuildContext context) {

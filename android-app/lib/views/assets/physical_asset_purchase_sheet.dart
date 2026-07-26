@@ -27,12 +27,14 @@ Future<int?> showPhysicalAssetPurchaseSheet(
   BuildContext context, {
   required AppRepository repository,
   int? bookId,
+  AssetPurchaseAllocationCandidate? initialCandidate,
 }) {
   return showBlurSheet<int>(
     context,
     child: PhysicalAssetPurchaseSheet(
       repository: repository,
       bookId: bookId,
+      initialCandidate: initialCandidate,
     ),
   );
 }
@@ -41,10 +43,15 @@ class PhysicalAssetPurchaseSheet extends StatefulWidget {
   final AppRepository repository;
   final int? bookId;
 
+  /// 预选的购买账单：从「添加」弹层的最近账单行进来时直达第 2 步表单，
+  /// 跳过完整账单列表（「重选」仍可回到列表）。
+  final AssetPurchaseAllocationCandidate? initialCandidate;
+
   const PhysicalAssetPurchaseSheet({
     super.key,
     required this.repository,
     this.bookId,
+    this.initialCandidate,
   });
 
   @override
@@ -75,6 +82,13 @@ class _PhysicalAssetPurchaseSheetState
   String? _formError;
   AssetMediaFiles? _media;
   AssetMediaStore? _mediaStore;
+
+  @override
+  void initState() {
+    super.initState();
+    final initial = widget.initialCandidate;
+    if (initial != null) _applyCandidate(initial);
+  }
 
   @override
   void dispose() {
@@ -267,7 +281,7 @@ class _PhysicalAssetPurchaseSheetState
     );
   }
 
-  void _selectCandidate(AssetPurchaseAllocationCandidate candidate) {
+  void _applyCandidate(AssetPurchaseAllocationCandidate candidate) {
     final defaultRefund = candidate.remainingRefundCents
         .clamp(
           0,
@@ -278,7 +292,11 @@ class _PhysicalAssetPurchaseSheetState
     _refundController.text = _decimalText(defaultRefund);
     _valueController.text =
         _decimalText(candidate.remainingGrossCents - defaultRefund);
-    setState(() => _candidate = candidate);
+    _candidate = candidate;
+  }
+
+  void _selectCandidate(AssetPurchaseAllocationCandidate candidate) {
+    setState(() => _applyCandidate(candidate));
   }
 
   Widget _buildForm() {

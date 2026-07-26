@@ -11,14 +11,12 @@ import '../../data/app_repository.dart';
 import '../../theme/app_colors.dart';
 import '../../theme/app_tokens.dart';
 import '../../widgets/app_buttons.dart';
-import '../../widgets/app_empty_state.dart';
 import '../../widgets/app_toast.dart';
-import '../../widgets/ios_form.dart';
-import '../../widgets/ios_menu.dart';
-import '../../widgets/mascot.dart';
 import '../../widgets/pressable_scale.dart';
 
-class PhysicalAssetGrid extends StatefulWidget {
+/// 纯展示的物品网格：搜索/筛选状态由上层（资产管理页）统一持有，
+/// 这里只负责把已筛好的 assets 摆成响应式网格。
+class PhysicalAssetGrid extends StatelessWidget {
   final List<PhysicalAssetEntity> assets;
   final ValueChanged<PhysicalAssetEntity> onTap;
 
@@ -29,120 +27,31 @@ class PhysicalAssetGrid extends StatefulWidget {
   });
 
   @override
-  State<PhysicalAssetGrid> createState() => _PhysicalAssetGridState();
-}
-
-class _PhysicalAssetGridState extends State<PhysicalAssetGrid> {
-  final _searchController = TextEditingController();
-  AssetType? _type;
-
-  @override
-  void dispose() {
-    _searchController.dispose();
-    super.dispose();
-  }
-
-  List<PhysicalAssetEntity> get _filtered {
-    final query = _searchController.text.trim().toLowerCase();
-    return widget.assets.where((asset) {
-      if (_type != null && asset.assetType != _type) return false;
-      if (query.isEmpty) return true;
-      return [
-        asset.name,
-        asset.brand,
-        asset.model,
-        asset.note,
-        asset.location,
-      ].any((value) => value.toLowerCase().contains(query));
-    }).toList(growable: false);
-  }
-
-  @override
   Widget build(BuildContext context) {
-    final filtered = _filtered;
-    return Column(
-      children: [
-        Padding(
-          padding: const EdgeInsets.fromLTRB(16, 2, 16, 8),
-          child: Row(
-            children: [
-              Expanded(
-                child: TextField(
-                  key: const Key('asset-grid-search'),
-                  controller: _searchController,
-                  textInputAction: TextInputAction.search,
-                  decoration: iosInputDecoration(
-                    context,
-                    hint: '搜索物品',
-                  ).copyWith(
-                    prefixIcon: const Icon(Icons.search, size: 19),
-                  ),
-                  onChanged: (_) => setState(() {}),
-                ),
-              ),
-              const SizedBox(width: 8),
-              Builder(
-                builder: (buttonContext) => AppPillButton(
-                  label: _type?.label ?? '全部分类',
-                  onPressed: () => showIosMenu(
-                    buttonContext,
-                    [
-                      IosMenuItem(
-                        label: '全部分类',
-                        icon: Icons.inventory_2_outlined,
-                        selected: _type == null,
-                        onTap: () => setState(() => _type = null),
-                      ),
-                      for (final type in AssetType.values)
-                        IosMenuItem(
-                          label: type.label,
-                          icon: assetTypeIcon(type),
-                          selected: _type == type,
-                          onTap: () => setState(() => _type = type),
-                        ),
-                    ],
-                  ),
-                ),
-              ),
-            ],
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final textScale = MediaQuery.textScalerOf(context).scale(1);
+        final largeText = textScale >= 1.3;
+        final singleColumn = constraints.maxWidth < 360 || largeText;
+        return GridView.builder(
+          key: const Key('physical-asset-grid'),
+          padding: const EdgeInsets.fromLTRB(16, 2, 16, 32),
+          gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+            crossAxisCount: singleColumn ? 1 : 2,
+            crossAxisSpacing: 10,
+            mainAxisSpacing: 10,
+            // 2 栏卡片改矮胖为瘦高（0.78→0.66），给底部文字行留够高度，
+            // 否则窄屏上名称+说明+提醒三行会被固定宽高比裁成溢出碎块。
+            childAspectRatio: singleColumn ? (largeText ? 1.75 : 2.25) : 0.66,
           ),
-        ),
-        Expanded(
-          child: filtered.isEmpty
-              ? AppEmptyState(
-                  mood: MascotMood.empty,
-                  title: widget.assets.isEmpty ? '还没有物品' : '没有匹配的物品',
-                  message: widget.assets.isEmpty ? '记一笔购买账单，就能追踪它的使用成本啦' : null,
-                )
-              : LayoutBuilder(
-                  builder: (context, constraints) {
-                    final textScale = MediaQuery.textScalerOf(context).scale(1);
-                    final largeText = textScale >= 1.3;
-                    final singleColumn =
-                        constraints.maxWidth < 360 || largeText;
-                    return GridView.builder(
-                      key: const Key('physical-asset-grid'),
-                      padding: const EdgeInsets.fromLTRB(16, 2, 16, 32),
-                      gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-                        crossAxisCount: singleColumn ? 1 : 2,
-                        crossAxisSpacing: 10,
-                        mainAxisSpacing: 10,
-                        // 2 栏卡片改矮胖为瘦高（0.78→0.66），给底部文字行留够高度，
-                        // 否则窄屏上名称+说明+提醒三行会被固定宽高比裁成溢出碎块。
-                        childAspectRatio:
-                            singleColumn ? (largeText ? 1.75 : 2.25) : 0.66,
-                      ),
-                      itemCount: filtered.length,
-                      itemBuilder: (context, index) => _AssetGridCard(
-                        asset: filtered[index],
-                        horizontal: singleColumn,
-                        onTap: () => widget.onTap(filtered[index]),
-                      ),
-                    );
-                  },
-                ),
-        ),
-      ],
+          itemCount: assets.length,
+          itemBuilder: (context, index) => _AssetGridCard(
+            asset: assets[index],
+            horizontal: singleColumn,
+            onTap: () => onTap(assets[index]),
+          ),
+        );
+      },
     );
   }
 }
