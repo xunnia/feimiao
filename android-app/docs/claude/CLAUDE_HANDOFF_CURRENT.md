@@ -47,7 +47,7 @@
   - ✅ S7 权益簇 → `receivable_detail_page.dart`(476行) + `receivable_sheets.dart`(507行)。
   - ✅ S8 物品簇 → `physical_asset_detail_page.dart`(1147行) + `physical_asset_sheets.dart`(1014行) + `physical_asset_form_sheet.dart`(664行)。⚠️ 发现待决策项：私有 `_physicalAssetStatusLabel`（在 detail_page）与 physical_asset_grid.dart 公开 `physicalAssetStatusLabel` **不等价**（usageStatus.unknown 时前者「持有中」后者「待确认」），按规矩保留两套未合并，合一留后续拍板。
   - ✅ S9 收尾 → `asset_add_entry_sheet.dart`(200行，AssetAddEntrySheet)；accounts_view 无 unused import、旧私有名零残留。**终检：accounts_view.dart 2733 行（原 7333）；analyze 0 error 0 warning；8 个资产测试文件 81 用例全过。**
-- **✅ 断点已落盘**：施工A 全部成果（上述代码+本文档+侦察报告）已 WIP commit（见 git log 最新「WIP: 资产UI P2 施工A落盘」），树在提交时点=编译绿+资产测试绿。
+- **✅ 断点已落盘**：施工A 全部成果（上述代码+本文档+侦察报告）已 WIP commit `e0ec79d`，远端源码快照 `bc8095a` 已推 origin/codex/feimiao-p0-fixes（parent=39371b1，不含发布产物）。树在提交时点=编译绿+资产测试绿。下次推快照 parent 用 `bc8095a`。
 - **❌ 未完成（按顺序做）**：
   1. **S5 总览+资金簇重跑**（agent 因 API 连接中断死亡未执行，非代码问题）：`asset_overview_cards.dart` + `funds_tab_cards.dart` 不存在，_AssetSummaryCard/_VerifiedNetWorthCard/_AssetPendingCard/_AssetAnalysisCard/_AssetEmptyState/_AccountBalance/_AccountGroup(Card)/_AccountBalanceTile/_ZeroBalanceAccountsCard/_FundsArchive* 两簇（约 1200 行）还在 accounts_view.dart。照侦察报告附录 SPLIT_SPEC 改名总表做。
   2. **S6 账户簇重跑**（同上，0 个 tool call 就死了）：`account_detail_page.dart` + `account_form_sheet.dart` 不存在，_AccountDetailPage(+State)/_CheckpointRow/_AccountBalanceCalibrationSheet/_AccountBalanceTrendCard(+Painter)/_AccountFormSheet(+State)/_AccountTypePicker/_TypeChip（约 700 行）还在 accounts_view.dart。做完 S5+S6 后 accounts_view 应 <900 行。
