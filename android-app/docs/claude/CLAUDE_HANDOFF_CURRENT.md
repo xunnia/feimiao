@@ -13,8 +13,20 @@
 - **背景**：同日先做了两轮多智能体审查（`docs/代码审查报告-2026-07-26.md` 36 条 + `docs/代码审计报告-2026-07-26.md` 43 条，后者含前者去重后的最终清单）。修复分两段：前一会话修 38 条后中断（留下 2 个失败测试），本会话核查盘点后补齐剩余 5 条并修复失败测试。**43 条全部修复**，明细与逐条状态见审计报告顶部状态块。
 - **DB v41**：transactions 新增 `order_no` 列（导入订单号落库，退款支持跨批/跨月挂回历史原单）。v38→v41 迁移等价性测试已同步。
 - **本会话补修的 5 条**：①M3 明确标「收入」的导入行只认平台侧退款强信号（分类/类型列或非「转账备注」的商品列），朋友转账「房租退款」不再被错当退款，复核页完成提示文案同步修正；②M7 退款分摊新增「不属于已跟踪物品」出口（审计行哨兵 link_id=0，免迁移），未跟踪部分的退款不再污染物品成本也不再永卡待分配；③M13 支付宝通知加官方交易模板锚点（聊天/生活号消息不再入队）；④M15 从最近任务恢复时跳过 SEND intent 重放（不重复 OCR）；⑤L4 备份导出改流式（逐文件流式校验和 + ZipFileEncoder 流式写盘，`BackupPackageCodec.encodeToFile`，包格式与 decode 兼容不变）。
-- **验证**：`flutter analyze` 0 error / 0 warning（仅 2 条既有测试 info）；全量 `flutter test` 通过（新增 5 个测试：收入行退款判定、未跟踪分摊 repo/弹层×2、流式备份往返）。
-- **边界**：未出 APK、未发布；Kotlin 两处小改（MainActivity/PaymentNotificationListener）本机无法编译验证，靠 CI/出包时验证。**本分支历史含超 100 MiB 的 APK 推不上 GitHub**，推送仍需走源码快照策略（见下）。
+- **验证**：`flutter analyze` 0 error / 0 warning（仅 2 条既有测试 info）；全量 `flutter test` **802/802** 通过（新增 5 个测试：收入行退款判定、未跟踪分摊 repo/弹层×2、流式备份往返）。
+- **✅ 已全部交付（2026-07-26 晚）**：
+  - 本地功能提交 `b2dc7a9`（59 文件，含两份审查/审计报告和上会话遗留的 money_normalization_test.dart；ci-artifacts 的 33 个旧 APK 删除状态**刻意未提交**，按规矩别混功能提交）。
+  - GitHub 源码快照 `ae5fdb5` 已推到 `origin/codex/feimiao-p0-fixes`（快照=HEAD 树剔除 ci-artifacts/releases 大 APK，parent=远端上一个快照 482aed4；**直推本地分支必失败**，历史里有 31 个 >100MiB 的 APK）。
+  - Release APK 已构建并全套核验：aapt=`com.qingji.qingji.codex`/206/1.204.0/肥喵记账；16K zipalign 过；apksigner V2 唯一 Codex 证书（SHA256 `4E99C399...83D507`）。归档 `ci-artifacts/releases/feimiao-codex-v1.204.0-206.apk`，110,666,547 字节，SHA256 `CF261263D66B835F3617D921E5438B189646B5CEEE31C94DC9ED09DF1A561C4F`（比 v198 小 10MB=mascot WebP 压缩的收益）。apksigner 需要 `JAVA_HOME="C:\Program Files\Android\Android Studio\jbr"`。
+  - **线上已发布**：`ci/publish_update.sh` 发布成功，releaseId `v206-cf261263d66b`；发布后验证过 version.json（返回 206/哈希一致）+ 全量下载拼接哈希与源 APK 完全一致。
+- **⚠️ 用户报应用内更新下载只有 30KB/s——已诊断，待用户拍板方案**：直连探针显示大陆流量被调度到 Cloudflare 阿姆斯特丹节点（CF-RAY AMS），免费版对大陆就这样，晚高峰 30KB/s 正常、波动 10 倍。包本身完好。已告知用户可直接从电脑传 APK 到手机安装。**根治方案候选**：A=发布脚本双写腾讯云 COS/阿里 OSS 国内源+version.json 指向它（推荐，需用户开账号给 key）；B=App 进程内下载器改多线程分段（治标，零外部依赖）；C=优选 IP（custom domain 模式下不可行，已排除）。
+- Kotlin 两处小改（MainActivity 分享重放守卫 / PaymentNotificationListener 支付宝模板锚点 ALIPAY_TXN）已随 v206 APK 编译通过；**运行态锚点覆盖面待真机验**：如果用户反馈支付宝某种官方通知没被自动记账抓到，把通知文案要来、往 ALIPAY_TXN 正则加一个模板词即可（宁漏抓不错抓是既定取舍）。
+
+### 2026-07-26 在途：资产管理 UI 全面复盘（进行中）
+
+- 用户嫌**资产管理 UI 太丑**，要求全面复盘找优化空间。已定原则：**先出方案供用户拍板，不直接动 UI**。
+- 已启动 4 智能体并行复盘：①结构盘点（入口/三视图/全部二级页弹层清单）②UI 规范合规审计（对照 `docs/claude/UI_DESIGN_STANDARD.md`+全局组件找违规）③视觉/信息层级批判 ④离屏真实渲染截图（真中文字体+真图标，产出到 `outputs/asset_ui_review/*.png`，做法参考曾经的抽屉对比图：FontLoader 加载 C:/Windows/Fonts/msyh.ttc + flutter cache 的 MaterialIcons）。
+- **如果本会话中断没出结果**：复盘结论没落盘的话直接重做上述 4 路分析即可；关键量尺=UI_DESIGN_STANDARD.md 三总原则（同类同设计/非重点降号变灰/语义色铁律），资产主文件=`lib/views/settings/accounts_view.dart`（6971 行）+ `lib/views/assets/`（6 个文件）。产出物预期=按优先级排序的优化清单（快赢 vs 重做），写进 `docs/claude/` 供下批实施。
 
 ### 2026-07-18 当前启动体验修复（工作区未提交）
 
@@ -193,21 +205,20 @@
 - 另带上 178 后补的小组件快照指纹跳渲。
 - 上一轮（1.176.0+178，已上线）：更新校验加固、深色状态栏、退款净额索引化、transactions 索引、去重复模糊层。
 
-## 3. 验证记录
+## 3. 验证记录（最新 = v206，2026-07-26）
 
 已完成：
 
-- `flutter analyze --no-pub --no-fatal-infos --no-fatal-warnings`：0 issue。
-- `flutter test --no-pub --concurrency=1`：707/707 通过。
-- `flutter build apk --release --no-pub --build-name 1.196.0 --build-number 198`：成功。
-- `aapt`：`com.qingji.qingji.codex` / `versionCode=198` / `versionName=1.196.0` / `肥喵记账`。
-- `zipalign -c -P 16 4`：通过。
-- `apksigner verify --print-certs`：唯一 Codex V2 签名；证书 SHA256 `4e99c399d4d246bd9c6b08b1d641248bd0846e7ae650c3a766e30fa67483d507`。
-- APK：120,641,920 字节；SHA256 `69AE3CCDA9ADE11D470E444E519CEC01483F701B495199A11EE0C744C1EC9A7E` 与归档目录复制件及 sidecar 一致。
+- `flutter analyze --no-pub --no-fatal-infos --no-fatal-warnings`：0 issue（仅 2 条既有测试 info）。
+- `flutter test --no-pub --concurrency=1`：**802/802** 通过（注意：管道会吞退出码，结果落文件再查 `$?`）。
+- `flutter build apk --release --no-pub --build-name 1.204.0 --build-number 206`：成功。
+- `verify_release_apk.sh`（含 aapt/16K zipalign/apksigner）：`com.qingji.qingji.codex` / 206 / 1.204.0 / V2 唯一 Codex 签名，证书 SHA256 `4e99c399d4d246bd9c6b08b1d641248bd0846e7ae650c3a766e30fa67483d507`。跑它前先 `export JAVA_HOME="C:\Program Files\Android\Android Studio\jbr"`。
+- APK：110,666,547 字节；SHA256 `CF261263D66B835F3617D921E5438B189646B5CEEE31C94DC9ED09DF1A561C4F`，归档与 sidecar 一致。
 - 模拟器、真机安装和截图按用户要求跳过；运行态由用户自行安装验收，不能宣称已通过真机验证。
 
 ## 4. 线上上传状态
-- ✅ **v198 已由 Codex 于 2026-07-14 提交、推送并发布上线**：`1.196.0+198` / `b0714-198`；本地功能提交 `1301e44`，远端无产物源码快照 `6703f8e` 位于 `origin/codex/feimiao-p0-fixes`，Cloudflare releaseId `v198-69ae3ccda9ad`。公网 `version.json`、KV manifest、5 分片逐片内容、拼接 SHA256 与 Range 响应均已验证；运行态由用户自行安装确认。
+- ✅ **v206 已由 Claude 于 2026-07-26 提交、推送并发布上线**：`1.204.0+206` / `b0726-206` / DB v41；本地功能提交 `b2dc7a9`，远端源码快照 `ae5fdb5` 位于 `origin/codex/feimiao-p0-fixes`，Cloudflare releaseId `v206-cf261263d66b`。发布后验证：公网 `version.json` 返回 206、全量下载 110,666,547 字节拼接 SHA256 与源 APK 完全一致。运行态由用户自行安装确认（用户已知可从电脑直接传包安装，绕开 30KB/s 的直连下载）。
+- ↩️ **v198 历史基线**：`1.196.0+198` / `b0714-198`；本地提交 `1301e44`，快照 `6703f8e`，Cloudflare releaseId `v198-69ae3ccda9ad`（已被 v206 覆盖）。
 - ↩️ **v197 APK/sidecar 原样保留**：作为本轮升级前本地回退基线，不代表 DB v40 运行后的无损降级方案。
 - ↩️ **v196 APK/sidecar 原样保留**：作为前一轮回退基线，不代表 DB v40 运行后的无损降级方案。
 - ✅ **v195 已由 Claude 于 2026-07-14 发布并逐分片验证**：releaseId `v195-3c502eb61f4e`，version.json 返回 195、sha256 干净、5 分片拼接哈希与源 APK 完全一致。发布时 Cloudflare 连接抖动，改用逐分片带重试上传（version.json 最后原子切换，过程中线上保持 185 不受影响）。
@@ -244,11 +255,12 @@
 
 ## 5. 版本文件同步状态
 
-- `pubspec.yaml`：`version: 1.196.0+198`
-- `lib/core/app_version.dart`：`version = '1.196.0'`，`buildNumber = 198`
-- `lib/build_info.dart`：`kBuildTag = 'b0714-198'`
-- `android/local.properties`：Flutter release 构建已读取 `1.196.0+198`；该文件通常不入 git
-- DB：v40（在 v39 资产/预算结构上新增交易时间精度；存量日期和值不改写）
+- `pubspec.yaml`：`version: 1.204.0+206`
+- `lib/core/app_version.dart`：`version = '1.204.0'`，`buildNumber = 206`
+- `lib/build_info.dart`：`kBuildTag = 'b0726-206'`
+- `android/local.properties`：Flutter release 构建已读取 `1.204.0+206`；该文件通常不入 git
+- DB：**v41**（v40 交易时间精度之上，transactions 新增 `order_no`；导入退款支持跨批/跨月挂回历史原单）
+- 版本规矩：每次推送 minor+1、versionCode+1、kBuildTag 同步（b月日-versionCode）
 
 ## 6. 接手规则
 
