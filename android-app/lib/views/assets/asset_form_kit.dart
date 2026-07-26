@@ -158,44 +158,6 @@ class AssetAccountDropdown extends StatelessWidget {
   }
 }
 
-class AssetCategoryDropdown extends StatelessWidget {
-  final int? value;
-  final List<CategoryEntity> categories;
-  final String hint;
-  final ValueChanged<int?> onChanged;
-
-  const AssetCategoryDropdown({
-    super.key,
-    required this.value,
-    required this.categories,
-    required this.hint,
-    required this.onChanged,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final selected =
-        categories.where((category) => category.id == value).firstOrNull;
-    return AppPickerField(
-      key: ValueKey(value),
-      text: selected?.nameZh,
-      hint: hint,
-      onTap: (menuCtx) => showPickerMenu(
-        menuCtx,
-        [
-          for (final category in categories)
-            IosMenuItem(
-              label: category.nameZh,
-              icon: Icons.category_outlined,
-              selected: category.id == value,
-              onTap: () => onChanged(category.id),
-            ),
-        ],
-      ),
-    );
-  }
-}
-
 class AssetNullableDateField extends StatelessWidget {
   final Key fieldKey;
   final DateTime? value;

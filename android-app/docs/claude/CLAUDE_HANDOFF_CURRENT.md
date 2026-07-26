@@ -35,6 +35,13 @@
 - **v208 APK 已构建并核验**：aapt=`com.qingji.qingji.codex`/208/1.206.0；16K zipalign 过；V2 唯一 Codex 证书。归档 `ci-artifacts/releases/feimiao-codex-v1.206.0-208.apk`，110,666,663 字节，SHA256 `451A56DD4550FCC4E5774ADB9A7E3D2E31A966EA5792F884230D0290A765E13A`。**未发布线上**（线上仍 v206，v207/v208 都等用户点头再发；用户从电脑直接传包安装）。本地功能提交 `39995ee`，远端源码快照 `09aa437`。
 - P2（accounts_view 拆模块/性能缓存/情感化）可选排期。动 UI 前必读 UI_DESIGN_STANDARD.md。
 
+### 2026-07-27 v210 弹层修复批（✅已完成总验收，v1.208.0+210 / b0727-210 / DB 仍 v41）
+
+- **用户真机三条反馈（v209）全修**：①**弹层顶进状态栏**（手工补录/新购买表单，键盘顶起后头部压住时钟）——根因=showBlurSheet 路由 `SafeArea(top:false)`；路由层打开顶部安全区，12+ 弹层一次全修；同类隐患一并排查：appSheet 路由加 `useSafeArea:true`、自动记账确认表、主页月份选择器同修，其余小弹层无此风险。②**支出分类选择不统一**——新购买表单的平铺菜单改全局分类选择器 `showCategoryPickerSheet`（彩色网格+二级展开），废弃的 AssetCategoryDropdown 删除。③**添加弹层头部大空隙**——根因=弹层内部 SafeArea 在屏底弹层里垫了状态栏高度；路由层修复后内部 SafeArea 自动去重（SafeArea 会从子树 MediaQuery 移除已消费 padding），头部贴顶。
+- **验收**：analyze 0/0（2 老 info）；全量 **808/808**；三张证据图（伪键盘+伪状态栏离屏渲染）`outputs/asset_ui_review/v210_fixes/`。
+- **v210 APK 已构建核验归档**：aapt=`com.qingji.qingji.codex`/210/1.208.0；16K/V2 过。`ci-artifacts/releases/feimiao-codex-v1.208.0-210.apk`，110,666,443 字节，SHA256 `3164A10907987B1E0E37193EBD2DE06635E8F7BEB4685E916263C16F798AF79A`。**未发布线上**（线上仍 v209，等用户点头）。
+- **⏭️ 用户已拍板（2026-07-27）：按资产对标方案 A→B→D→C 顺序开工**（方案=`docs/claude/资产功能对标与优化方案-2026-07-27.md`；A批=信用卡账期三件套/借贷按人/房贷向导+清 A5 欠账）。每阶段完成即更新本文档（用户铁律）。
+
 ### 2026-07-27 资产UI P2 重构批（✅已完成总验收，v1.207.0+209 / b0727-209 / DB 仍 v41）
 
 - **对抗审查处置完毕（2026-07-27 续接会话）**：journal 4 路结果全在。①测试质量维度：零问题 ②物品卡溢出发现：复核**驳回**（real:false，旧版同条件也溢，非本次回归）③**有效发现 1 条已修**：balance_cache_test 没兜住「双保险」失效层——用例⑤补断言「写后当天 computed 快照净资产=写后净资产」，并做了反向验证（临时摘掉 _invalidateTxDerived 里的 _invalidateBalanceDerived → 测试红；恢复 → 绿），回归网确认有效。
@@ -246,15 +253,15 @@
 - 另带上 178 后补的小组件快照指纹跳渲。
 - 上一轮（1.176.0+178，已上线）：更新校验加固、深色状态栏、退款净额索引化、transactions 索引、去重复模糊层。
 
-## 3. 验证记录（最新 = v209，2026-07-27）
+## 3. 验证记录（最新 = v210，2026-07-27）
 
 已完成：
 
 - `flutter analyze --no-pub --no-fatal-infos --no-fatal-warnings`：0 issue（仅 2 条既有测试 info）。
-- `flutter test --no-pub --concurrency=1`：**808/808** 通过（803 基线+5 缓存用例；注意：管道会吞退出码，结果落文件再查 `$?`）。
-- `flutter build apk --release --no-pub --build-name 1.207.0 --build-number 209`：成功。
-- `verify_release_apk.sh`（含 aapt/16K zipalign/apksigner）：`com.qingji.qingji.codex` / 209 / 1.207.0 / V2 唯一 Codex 签名，证书 SHA256 `4e99c399d4d246bd9c6b08b1d641248bd0846e7ae650c3a766e30fa67483d507`。跑它前先 `export JAVA_HOME="C:\Program Files\Android\Android Studio\jbr"`。
-- APK：110,666,531 字节；SHA256 `44B235922691F6DB995572B27478EEFEFC0884634AD76DA83F7C4D6681AA74EB`，归档与 sidecar 一致。v208（P1 批）/v207（P0 批）保留为回退包。
+- `flutter test --no-pub --concurrency=1`：**808/808** 通过（注意：管道会吞退出码，结果落文件再查 `$?`）。
+- `flutter build apk --release --no-pub --build-name 1.208.0 --build-number 210`：成功。
+- `verify_release_apk.sh`（含 aapt/16K zipalign/apksigner）：`com.qingji.qingji.codex` / 210 / 1.208.0 / V2 唯一 Codex 签名，证书 SHA256 `4e99c399d4d246bd9c6b08b1d641248bd0846e7ae650c3a766e30fa67483d507`。跑它前先 `export JAVA_HOME="C:\Program Files\Android\Android Studio\jbr"`。
+- APK：110,666,443 字节；SHA256 `3164A10907987B1E0E37193EBD2DE06635E8F7BEB4685E916263C16F798AF79A`，归档与 sidecar 一致。v209（线上）/v208/v207 保留为回退包。
 - 离屏渲染截图已做（对比图见 outputs/asset_ui_review/），模拟器/真机安装按惯例跳过；运行态由用户自行安装验收，不能宣称已通过真机验证。
 
 ## 4. 线上上传状态
@@ -297,9 +304,9 @@
 
 ## 5. 版本文件同步状态
 
-- `pubspec.yaml`：`version: 1.207.0+209`
-- `lib/core/app_version.dart`：`version = '1.207.0'`，`buildNumber = 209`
-- `lib/build_info.dart`：`kBuildTag = 'b0727-209'`
+- `pubspec.yaml`：`version: 1.208.0+210`
+- `lib/core/app_version.dart`：`version = '1.208.0'`，`buildNumber = 210`
+- `lib/build_info.dart`：`kBuildTag = 'b0727-210'`
 - `android/local.properties`：Flutter release 构建已读取 `1.204.0+206`；该文件通常不入 git
 - DB：**v41**（v40 交易时间精度之上，transactions 新增 `order_no`；导入退款支持跨批/跨月挂回历史原单）
 - 版本规矩：每次推送 minor+1、versionCode+1、kBuildTag 同步（b月日-versionCode）

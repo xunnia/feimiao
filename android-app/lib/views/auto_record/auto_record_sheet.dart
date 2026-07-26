@@ -18,6 +18,8 @@ Future<List<String>?> showAutoRecordSheet(
   return showModalBottomSheet<List<String>>(
     context: context,
     isScrollControlled: true,
+    // 候选多时弹层会撑很高，顶部让出状态栏。
+    useSafeArea: true,
     backgroundColor: Colors.transparent,
     builder: (_) => _AutoRecordSheet(items: items),
   );

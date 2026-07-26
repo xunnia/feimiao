@@ -16,6 +16,8 @@ Future<T?> appSheet<T>(
   return showModalBottomSheet<T>(
     context: context,
     isScrollControlled: isScrollControlled,
+    // 弹层撑满时顶部必须让出状态栏（真机键盘顶起后会怼进状态栏）。
+    useSafeArea: true,
     backgroundColor: Theme.of(context).colorScheme.surface,
     shape: const RoundedRectangleBorder(
       borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
@@ -34,8 +36,10 @@ Future<T?> showBlurSheet<T>(BuildContext context, {required Widget child}) {
     barrierLabel: '关闭',
     barrierColor: Colors.black.withValues(alpha: 0.12),
     transitionDuration: const Duration(milliseconds: 240),
+    // 顶部安全区必须开：键盘把弹层顶到屏幕顶时，头部不许进状态栏
+    // （SafeArea 会把已消费的 top padding 从子树 MediaQuery 移除，
+    // 各弹层内部自带的 SafeArea 不会二次垫高）。
     pageBuilder: (ctx, _, __) => SafeArea(
-      top: false,
       child: AnimatedPadding(
         duration: const Duration(milliseconds: 250),
         curve: Curves.easeOutCubic,

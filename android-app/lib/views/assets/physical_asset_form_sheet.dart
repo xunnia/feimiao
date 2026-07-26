@@ -20,6 +20,7 @@ import '../../widgets/ios_dialogs.dart';
 import '../../widgets/ios_form.dart';
 import '../../widgets/settings_ui.dart';
 import '../../widgets/sliding_segment.dart';
+import '../common/category_picker_sheet.dart';
 import 'asset_form_kit.dart';
 import 'asset_media_picker.dart';
 import 'physical_asset_grid.dart';
@@ -253,12 +254,25 @@ class _PhysicalAssetFormSheetState extends State<PhysicalAssetFormSheet> {
                       const SizedBox(height: 14),
                       AppLabeledField(
                         label: '支出分类',
-                        child: AssetCategoryDropdown(
-                          value: _purchaseCategoryId,
-                          categories: expenseCategories,
+                        // 分类选择统一走全局分类选择器（彩色图标网格+二级展开），
+                        // 不再用平铺菜单——同类功能同一种设计。
+                        child: AppPickerField(
+                          text: expenseCategories
+                              .where((c) => c.id == _purchaseCategoryId)
+                              .firstOrNull
+                              ?.nameZh,
                           hint: '选择支出分类',
-                          onChanged: (value) =>
-                              setState(() => _purchaseCategoryId = value),
+                          onTap: (_) async {
+                            final picked = await showCategoryPickerSheet(
+                              context,
+                              kind: TransactionKind.expense,
+                              selectedId: _purchaseCategoryId,
+                              title: '选择支出分类',
+                            );
+                            if (picked != null && mounted) {
+                              setState(() => _purchaseCategoryId = picked.id);
+                            }
+                          },
                         ),
                       ),
                     ],
