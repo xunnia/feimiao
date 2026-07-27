@@ -7,6 +7,7 @@ import 'package:provider/provider.dart';
 
 import 'core/auto_record.dart';
 import 'core/ai/report_task_scheduler.dart';
+import 'core/assets/repayment_reminder.dart';
 import 'core/haptics.dart';
 import 'core/widgets/widget_snapshot_service.dart';
 import 'data/app_repository.dart';
@@ -137,6 +138,7 @@ Future<void> _startPostFrameStartupServices(
   if (!repo.isFullyReady) return;
   WidgetSnapshotService.instance.attach(repo);
   _autoRecordWatcher.start();
+  _repaymentReminderWatcher.start(repo);
 }
 
 /// 把不影响首页展示的原生服务延后到 Flutter 第一帧之后。
@@ -218,6 +220,39 @@ class _AutoRecordWatcher with WidgetsBindingObserver {
 }
 
 final _autoRecordWatcher = _AutoRecordWatcher();
+
+/// 还款提醒巡查：App 首帧后与每次回到前台重排一次通知（A 批第 5 段）。
+/// 挂 repo.notifyListeners 会因为每笔记账都触发而重排得太频繁；档案变化
+/// 本身不常见，App 启动/回前台重算一次足够覆盖，选这个最简单可靠的时机。
+class _RepaymentReminderWatcher with WidgetsBindingObserver {
+  bool _busy = false;
+  AppRepository? _repo;
+
+  void start(AppRepository repo) {
+    _repo = repo;
+    WidgetsBinding.instance.addObserver(this);
+    WidgetsBinding.instance.addPostFrameCallback((_) => _run());
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) _run();
+  }
+
+  Future<void> _run() async {
+    final repo = _repo;
+    if (repo == null || _busy) return;
+    _busy = true;
+    try {
+      await RepaymentReminderScheduler.reschedule(repo);
+    } catch (_) {
+    } finally {
+      _busy = false;
+    }
+  }
+}
+
+final _repaymentReminderWatcher = _RepaymentReminderWatcher();
 
 class QingJiApp extends StatelessWidget {
   const QingJiApp({super.key});

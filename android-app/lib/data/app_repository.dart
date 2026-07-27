@@ -830,6 +830,9 @@ enum LiabilityProfileType {
   mortgage,
   carLoan,
   consumerLoan,
+
+  /// A2 借贷按人：向个人借入的钱（counterparty = 借入对象姓名）。
+  personalBorrow,
   other,
 }
 
@@ -839,6 +842,7 @@ extension LiabilityProfileTypeX on LiabilityProfileType {
         LiabilityProfileType.mortgage => 'mortgage',
         LiabilityProfileType.carLoan => 'car_loan',
         LiabilityProfileType.consumerLoan => 'consumer_loan',
+        LiabilityProfileType.personalBorrow => 'personal_borrow',
         LiabilityProfileType.other => 'other',
       };
 
@@ -847,6 +851,7 @@ extension LiabilityProfileTypeX on LiabilityProfileType {
         LiabilityProfileType.mortgage => '房贷',
         LiabilityProfileType.carLoan => '车贷',
         LiabilityProfileType.consumerLoan => '消费贷',
+        LiabilityProfileType.personalBorrow => '个人借入',
         LiabilityProfileType.other => '其他负债',
       };
 
@@ -1913,6 +1918,15 @@ class LiabilityProfileEntity {
   final int? endDateMs;
   final LiabilityProfileStatus status;
   final String note;
+
+  /// 信用卡账单日（每月 1-31）；null = 未设置。
+  final int? statementDay;
+
+  /// 信用卡额度；null = 未设置（Decimal 字符串存储）。
+  final Decimal? creditLimit;
+
+  /// 借入对象姓名（personalBorrow 用）；空 = 无对象。
+  final String counterparty;
   final int createdMs;
   final int updatedMs;
 
@@ -1930,6 +1944,9 @@ class LiabilityProfileEntity {
     this.endDateMs,
     this.status = LiabilityProfileStatus.active,
     this.note = '',
+    this.statementDay,
+    this.creditLimit,
+    this.counterparty = '',
     this.createdMs = 0,
     this.updatedMs = 0,
   }) : interestRate = interestRate ?? Decimal.zero;
@@ -1946,7 +1963,17 @@ class LiabilityProfileEntity {
 
   DateTime? nextRepaymentDate({DateTime? now}) {
     final day = repaymentDay;
-    if (day == null || day < 1 || day > 31) return null;
+    if (day == null || day < 1 || day > 31) {
+      // A2 个人借入：没设每月还款日、但约了一次性还款日（endDate）时，
+      // 到期日就是它。到期已过也照样返回（daysUntilRepayment 会是负数），
+      // 逾期的欠款该被看见，不该悄悄消失。只对 personalBorrow 生效——
+      // 房贷/车贷的 endDate 是「贷款结清日」，不是单次还款日。
+      if (type == LiabilityProfileType.personalBorrow && endDateMs != null) {
+        final due = endDate!;
+        return DateTime(due.year, due.month, due.day);
+      }
+      return null;
+    }
     final base = now ?? DateTime.now();
     DateTime candidate(int year, int month) {
       final last = DateTime(year, month + 1, 0).day;
@@ -1988,9 +2015,33 @@ class LiabilityProfileEntity {
         endDateMs: m['end_date_ms'] as int?,
         status: LiabilityProfileStatusX.fromStorage(m['status'] as String?),
         note: m['note'] as String? ?? '',
+        statementDay: m['statement_day'] as int?,
+        creditLimit: Decimal.tryParse(m['credit_limit'] as String? ?? ''),
+        counterparty: m['counterparty'] as String? ?? '',
         createdMs: m['created_ms'] as int? ?? 0,
         updatedMs: m['updated_ms'] as int? ?? 0,
       );
+
+  Map<String, Object?> toMap() => {
+        'id': id,
+        'uuid': uuid,
+        'account_id': accountId,
+        'liability_type': type.storageKey,
+        'original_amount': originalAmount.toString(),
+        'current_principal': currentPrincipal.toString(),
+        'interest_rate': interestRate.toString(),
+        'repayment_day': repaymentDay,
+        'repayment_account_id': repaymentAccountId,
+        'start_date_ms': startDateMs,
+        'end_date_ms': endDateMs,
+        'status': status.storageKey,
+        'note': note,
+        'statement_day': statementDay,
+        'credit_limit': creditLimit?.toString(),
+        'counterparty': counterparty,
+        'created_ms': createdMs,
+        'updated_ms': updatedMs,
+      };
 }
 
 class BookEntity {
@@ -2528,7 +2579,7 @@ class ReportJobEntity {
 // ---------------------------------------------------------------------------
 
 class AppRepository extends ChangeNotifier {
-  static const _dbVersion = 41;
+  static const _dbVersion = 42;
   static const _dbName = 'qingji.db';
 
   AppRepository({ReportExecutionFence? reportExecutionFence})
@@ -2691,6 +2742,8 @@ class AppRepository extends ChangeNotifier {
   int _chatRetentionDays = 30;
   bool _aiPrivacyAccepted = false;
   bool _widgetPrivacyMode = false;
+  /// 还款提醒本地通知开关（A 批第 5 段），默认开。
+  bool _repaymentReminderEnabled = true;
   int _moneyDecimalPlaces = 2;
   MoneyIntegerRoundingMode _moneyIntegerRoundingMode =
       MoneyIntegerRoundingMode.round;
@@ -3357,6 +3410,7 @@ class AppRepository extends ChangeNotifier {
   bool get recordAiMode => _recordAiMode;
   bool get aiPrivacyAccepted => _aiPrivacyAccepted;
   bool get widgetPrivacyMode => _widgetPrivacyMode;
+  bool get repaymentReminderEnabled => _repaymentReminderEnabled;
   int get moneyDecimalPlaces => _moneyDecimalPlaces;
   MoneyIntegerRoundingMode get moneyIntegerRoundingMode =>
       _moneyIntegerRoundingMode;
@@ -4061,6 +4115,7 @@ class AppRepository extends ChangeNotifier {
         amount      TEXT NOT NULL,
         category_id INTEGER,
         account_id  INTEGER,
+        to_account_id INTEGER,
         note        TEXT NOT NULL DEFAULT '',
         period      TEXT NOT NULL,
         start_date_ms INTEGER NOT NULL DEFAULT 0,
@@ -4187,6 +4242,7 @@ class AppRepository extends ChangeNotifier {
           amount      TEXT NOT NULL,
           category_id INTEGER,
           account_id  INTEGER,
+          to_account_id INTEGER,
           note        TEXT NOT NULL DEFAULT '',
           period      TEXT NOT NULL,
           start_date_ms INTEGER NOT NULL DEFAULT 0,
@@ -4414,6 +4470,42 @@ class AppRepository extends ChangeNotifier {
       if (!v41Columns.contains('order_no')) {
         await db.execute(
           "ALTER TABLE transactions ADD COLUMN order_no TEXT NOT NULL DEFAULT ''",
+        );
+      }
+    }
+    if (oldVersion < 42) {
+      // v42（资产 A 批）：liability_profiles 加信用卡账期两列 + 借入对象。
+      // statement_day = 账单日(1-31)；credit_limit = 额度（Decimal 字符串）；
+      // counterparty = 借入对象姓名（personalBorrow 用）。幂等：老库若已被
+      // _ensureLiabilityTables 用新版建表 SQL 建出全列，这里逐列检查后跳过。
+      final v42Columns = await _columnNamesFor(db, 'liability_profiles');
+      if (v42Columns.isNotEmpty) {
+        if (!v42Columns.contains('statement_day')) {
+          await db.execute(
+            'ALTER TABLE liability_profiles ADD COLUMN statement_day INTEGER',
+          );
+        }
+        if (!v42Columns.contains('credit_limit')) {
+          await db.execute(
+            'ALTER TABLE liability_profiles ADD COLUMN credit_limit TEXT',
+          );
+        }
+        if (!v42Columns.contains('counterparty')) {
+          await db.execute(
+            "ALTER TABLE liability_profiles ADD COLUMN counterparty TEXT NOT NULL DEFAULT ''",
+          );
+        }
+      } else {
+        // 极老库还没有 liability_profiles 表：直接按新版全列建。
+        await _ensureLiabilityTables(db);
+      }
+      // v42（资产 A 批·A3）：recurring_rules 加 to_account_id，周期记账
+      // 支持转账（房贷向导的每月自动还款）。同样逐列检查保持幂等。
+      final v42RecurringColumns = await _columnNamesFor(db, 'recurring_rules');
+      if (v42RecurringColumns.isNotEmpty &&
+          !v42RecurringColumns.contains('to_account_id')) {
+        await db.execute(
+          'ALTER TABLE recurring_rules ADD COLUMN to_account_id INTEGER',
         );
       }
     }
@@ -5798,6 +5890,9 @@ class AppRepository extends ChangeNotifier {
         end_date_ms          INTEGER,
         status               TEXT NOT NULL DEFAULT 'active',
         note                 TEXT NOT NULL DEFAULT '',
+        statement_day        INTEGER,
+        credit_limit         TEXT,
+        counterparty         TEXT NOT NULL DEFAULT '',
         created_ms           INTEGER NOT NULL DEFAULT 0,
         updated_ms           INTEGER NOT NULL DEFAULT 0
       )
@@ -6390,6 +6485,7 @@ class AppRepository extends ChangeNotifier {
       _loadRecordMode(),
       _loadAiPrivacyAccepted(),
       _loadWidgetPrivacyMode(),
+      _loadRepaymentReminderEnabled(),
       _loadMoneyDisplaySettings(),
       _loadCategoryIconStyle(),
       _loadTransactionDisplayPreferences(),
@@ -7035,6 +7131,29 @@ class AppRepository extends ChangeNotifier {
     await _db!.insert(
       'app_settings',
       {'key': 'widget_privacy_mode', 'value': enabled ? '1' : '0'},
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+    notifyListeners();
+  }
+
+  Future<void> _loadRepaymentReminderEnabled() async {
+    final rows = await _db!.query(
+      'app_settings',
+      where: 'key = ?',
+      whereArgs: ['repayment_reminder_enabled'],
+      limit: 1,
+    );
+    // 没存过=老用户/新建库：默认开（还款提醒方案拍板的默认值）。
+    _repaymentReminderEnabled =
+        rows.isEmpty || (rows.first['value'] as String?) == '1';
+  }
+
+  Future<void> setRepaymentReminderEnabled(bool enabled) async {
+    if (_repaymentReminderEnabled == enabled) return;
+    _repaymentReminderEnabled = enabled;
+    await _db!.insert(
+      'app_settings',
+      {'key': 'repayment_reminder_enabled', 'value': enabled ? '1' : '0'},
       conflictAlgorithm: ConflictAlgorithm.replace,
     );
     notifyListeners();
@@ -7822,6 +7941,21 @@ class AppRepository extends ChangeNotifier {
     }
   }
 
+  /// kind=transfer 的周期规则必须有可用的转入账户（且不能和转出相同）。
+  Future<void> _assertRecurringTransferTarget(
+    DatabaseExecutor db, {
+    required TransactionKind kind,
+    required int? accountId,
+    required int? toAccountId,
+  }) async {
+    if (kind != TransactionKind.transfer) return;
+    if (toAccountId == null ||
+        toAccountId == accountId ||
+        !await _isSupportedTransactionAccountInDb(db, toAccountId)) {
+      throw ArgumentError('转入账户不存在、已归档或与转出账户相同');
+    }
+  }
+
   Future<bool> _isSupportedTransactionAccountInDb(
     DatabaseExecutor db,
     int? accountId,
@@ -7842,6 +7976,7 @@ class AppRepository extends ChangeNotifier {
     required Decimal amount,
     int? categoryId,
     int? accountId,
+    int? toAccountId,
     int? bookId,
     String note = '',
     required RecurPeriod period,
@@ -7857,12 +7992,20 @@ class AppRepository extends ChangeNotifier {
         : _currentBookId;
     await _db!.transaction((txn) async {
       await _assertRecurringAccountAvailable(txn, accountId);
+      await _assertRecurringTransferTarget(
+        txn,
+        kind: kind,
+        accountId: accountId,
+        toAccountId: toAccountId,
+      );
       await txn.insert('recurring_rules', {
         'book_id': targetBookId,
         'kind': kind.toJson(),
         'amount': amount.toString(),
-        'category_id': categoryId,
+        'category_id': kind == TransactionKind.transfer ? null : categoryId,
         'account_id': accountId,
+        'to_account_id':
+            kind == TransactionKind.transfer ? toAccountId : null,
         'note': note,
         'period': period.toJson(),
         'start_date_ms': startDate.millisecondsSinceEpoch,
@@ -7890,6 +8033,7 @@ class AppRepository extends ChangeNotifier {
     required Decimal amount,
     int? categoryId,
     int? accountId,
+    int? toAccountId,
     int? bookId,
     String note = '',
     required RecurPeriod period,
@@ -7905,14 +8049,22 @@ class AppRepository extends ChangeNotifier {
         bookId != null && _books.any((b) => b.id == bookId) ? bookId : null;
     await _db!.transaction((txn) async {
       await _assertRecurringAccountAvailable(txn, accountId);
+      await _assertRecurringTransferTarget(
+        txn,
+        kind: kind,
+        accountId: accountId,
+        toAccountId: toAccountId,
+      );
       await txn.update(
         'recurring_rules',
         {
           if (targetBookId != null) 'book_id': targetBookId,
           'kind': kind.toJson(),
           'amount': amount.toString(),
-          'category_id': categoryId,
+          'category_id': kind == TransactionKind.transfer ? null : categoryId,
           'account_id': accountId,
+          'to_account_id':
+              kind == TransactionKind.transfer ? toAccountId : null,
           'note': note,
           'period': period.toJson(),
           'start_date_ms': (startDate ?? nextDue).millisecondsSinceEpoch,
@@ -7972,6 +8124,12 @@ class AppRepository extends ChangeNotifier {
         // source is no longer available, keep the occurrence pending until
         // the user repairs the rule instead of charging another account.
         if (!supportedAccountIds.contains(rule.accountId)) continue;
+        // 转账规则同理：转入账户失效时不落单腿流水（钱会凭空消失），
+        // 挂起等用户修规则。
+        if (rule.txKind == TransactionKind.transfer &&
+            !supportedAccountIds.contains(rule.toAccountId)) {
+          continue;
+        }
         var due = rule.nextDue;
         var generatedCount = rule.generatedCount;
         final totalCount = rule.totalCount;
@@ -8013,9 +8171,11 @@ class AppRepository extends ChangeNotifier {
               'kind': rule.kind,
               'amount': rule.amountStr,
               'currency_code': 'CNY',
-              'category_id': rule.categoryId,
+              'category_id':
+                  kind == TransactionKind.transfer ? null : rule.categoryId,
               'account_id': accountId,
-              'to_account_id': null,
+              'to_account_id':
+                  kind == TransactionKind.transfer ? rule.toAccountId : null,
               'note': rule.note.isEmpty ? '周期记账' : rule.note,
               'date_ms': dueMs,
               'time_precision': TransactionTimePrecision.dateOnly.storageKey,
@@ -17215,15 +17375,33 @@ class AppRepository extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// [interestAmount]（A2 借贷按人）：收回时对方多还的利息部分。
+  ///
+  /// 现有收回语义对「amount 超过剩余金额」有明确拒绝（撤销链依赖
+  /// amount ≤ remaining），A 批不破坏它：本金收回仍走 [amount]（≤剩余），
+  /// 超本金差额由调用方拆出来放 [interestAmount]，这里另记一笔**收入**
+  /// （分类=投资理财-利息，见 [_interestCategoryFor]，入 [targetAccountId]），
+  /// 其流水 id 写进收回事件 metadata（interest_transaction_id），撤销收回时
+  /// 一并删除，审计链闭合。interestAmount > 0 时必须给 targetAccountId
+  /// （利息是真钱，必须有到账账户，否则就是编数）。
   Future<void> recoverReceivableAsset({
     required int id,
     required Decimal amount,
     int? targetAccountId,
     DateTime? recoveredAt,
     String note = '',
+    Decimal? interestAmount,
   }) async {
     if (amount <= Decimal.zero) {
       throw ArgumentError('收回金额必须大于 0');
+    }
+    final interest =
+        interestAmount == null ? Decimal.zero : normalizeMoneyAmount(interestAmount);
+    if (interest < Decimal.zero) {
+      throw ArgumentError('利息金额不能为负');
+    }
+    if (interest > Decimal.zero && targetAccountId == null) {
+      throw ArgumentError('记利息收入需要指定到账账户');
     }
     final at = recoveredAt ?? DateTime.now();
     final timePrecision = recoveredAt == null
@@ -17261,6 +17439,7 @@ class AppRepository extends ChangeNotifier {
         asset.originalAmount,
       );
       int? transactionId;
+      int? interestTransactionId;
       if (targetAccountId != null) {
         transactionId = await txn.insert('transactions', {
           'book_id': asset.bookId ?? _currentBookId,
@@ -17284,6 +17463,38 @@ class AppRepository extends ChangeNotifier {
           ),
           ..._syncStampNew(),
         });
+        if (interest > Decimal.zero) {
+          // 超本金的利息是真收入（不像本金收回那样 excluded），单独一笔，
+          // 分类=投资理财-利息（容错查找），撤销收回时随收回记录一并删除。
+          interestTransactionId = await txn.insert('transactions', {
+            'book_id': asset.bookId ?? _currentBookId,
+            'kind': TransactionKind.income.toJson(),
+            'amount': interest.toString(),
+            'currency_code': asset.currencyCode,
+            'category_id': _interestCategoryFor(TransactionKind.income)?.id,
+            'account_id': targetAccountId,
+            'to_account_id': null,
+            'note': '借出利息：${asset.name}',
+            'date_ms': at.millisecondsSinceEpoch,
+            'time_precision': timePrecision.storageKey,
+            'tags': '',
+            'reimbursable': 0,
+            'image_path': '',
+            'excluded': 0,
+            // 事件类型必须是 income：三套结算引擎（movement legs /
+            // projection / activity）对 interest 事件一律按流出记账（那是
+            // 还款利息=支出的契约，UI 标签也是「利息费用」）。这笔是收进来
+            // 的利息，打 interest 会让账户余额反向少两倍。利息语义由
+            // 分类（投资理财-利息）、备注和收回事件 metadata 的
+            // interest_transaction_id 承载，审计不丢。
+            ..._settlementFields(
+              settledAt: at,
+              settlementAccountId: targetAccountId,
+              eventType: TransactionEventType.income,
+            ),
+            ..._syncStampNew(),
+          });
+        }
       }
       await txn.update(
         'receivable_assets',
@@ -17321,6 +17532,9 @@ class AppRepository extends ChangeNotifier {
           'previous_include_in_net_worth': asset.includeInNetWorth,
           if (targetAccountId != null) 'target_account_id': targetAccountId,
           if (transactionId != null) 'transaction_id': transactionId,
+          if (interestTransactionId != null)
+            'interest_transaction_id': interestTransactionId,
+          if (interest > Decimal.zero) 'interest_amount': interest.toString(),
         },
       );
       await txn.insert('receivable_recoveries', {
@@ -17424,6 +17638,17 @@ class AppRepository extends ChangeNotifier {
           'transactions',
           where: 'id = ? OR refund_of = ?',
           whereArgs: [recovery.transactionId, recovery.transactionId],
+        );
+      }
+      // A2：这笔收回若带了利息收入（超本金部分），撤销时一并删，审计闭合。
+      final interestTxId = int.tryParse(
+        metadata['interest_transaction_id']?.toString() ?? '',
+      );
+      if (interestTxId != null) {
+        await txn.delete(
+          'transactions',
+          where: 'id = ?',
+          whereArgs: [interestTxId],
         );
       }
       await txn.delete('receivable_recoveries',
@@ -17681,6 +17906,9 @@ class AppRepository extends ChangeNotifier {
     DateTime? endDate,
     LiabilityProfileStatus status = LiabilityProfileStatus.active,
     String note = '',
+    int? statementDay,
+    Decimal? creditLimit,
+    String counterparty = '',
   }) async {
     originalAmount = normalizeMoneyAmount(originalAmount);
     currentPrincipal = normalizeMoneyAmount(currentPrincipal);
@@ -17692,6 +17920,12 @@ class AppRepository extends ChangeNotifier {
     }
     if (repaymentDay != null && (repaymentDay < 1 || repaymentDay > 31)) {
       throw ArgumentError('还款日必须在 1 到 31 之间');
+    }
+    if (statementDay != null && (statementDay < 1 || statementDay > 31)) {
+      throw ArgumentError('账单日必须在 1 到 31 之间');
+    }
+    if (creditLimit != null && creditLimit < Decimal.zero) {
+      throw ArgumentError('额度不能为负');
     }
     final existing = liabilityProfileForAccount(accountId);
     final nowMs = DateTime.now().millisecondsSinceEpoch;
@@ -17707,6 +17941,11 @@ class AppRepository extends ChangeNotifier {
       'end_date_ms': endDate?.millisecondsSinceEpoch,
       'status': status.storageKey,
       'note': note.trim(),
+      'statement_day': statementDay,
+      'credit_limit': creditLimit == null
+          ? null
+          : normalizeMoneyAmount(creditLimit).toString(),
+      'counterparty': counterparty.trim(),
       'updated_ms': nowMs,
     };
     late int id;
@@ -17745,6 +17984,434 @@ class AppRepository extends ChangeNotifier {
     );
     notifyListeners();
   }
+
+  /// 利息/手续费类分类查找（A 批还款/收回超本金部分入账用）。
+  ///
+  /// 查找顺序（诚实可回答「这笔数落在哪」）：
+  /// - 收入侧：key 含 interest（种子=investment 下的 inc_interest「利息」）
+  ///   → 名称含「利息」→ 顶级「其他收入」→ null（未分类）。
+  /// - 支出侧：key 含 interest → 「其他-手续费」(other_fee / 名称含手续费)
+  ///   → 顶级「其他」→ null。种子里没有独立「利息支出」分类，唯一带
+  ///   「利息」字样的是「房贷利息」(house_loan)，非房贷场景挂它会说谎，
+  ///   所以支出侧不按名称匹配利息、直接落手续费。
+  CategoryEntity? _interestCategoryFor(TransactionKind kind) {
+    final all = categoriesForKind(kind);
+    for (final c in all) {
+      if (c.key.toLowerCase().contains('interest') && !c.hidden) return c;
+    }
+    if (kind == TransactionKind.income) {
+      for (final c in all) {
+        if (c.nameZh.contains('利息') && !c.hidden) return c;
+      }
+      for (final c in all) {
+        if (c.isTopLevel && c.key == 'otherIncome') return c;
+      }
+    } else {
+      for (final c in all) {
+        if ((c.key == 'other_fee' || c.nameZh.contains('手续费')) && !c.hidden) {
+          return c;
+        }
+      }
+      for (final c in all) {
+        if (c.isTopLevel && c.key == 'other') return c;
+      }
+    }
+    return null;
+  }
+
+  /// A 批「还款」动作（守 V2.1 锁定：不做本息 ledger 化、不改历史数据）。
+  ///
+  /// 语义：从 [fromAccountId] 划 [amount] 去还 [profileId] 挂的负债账户。
+  /// - 本金部分 = min(amount, currentPrincipal)：记一笔转账
+  ///   （还款账户 → 负债账户），档案 currentPrincipal 同额递减（减到 0 为止）。
+  /// - 超出本金的差额：自动追加一笔支出（分类=利息/手续费，见
+  ///   [_interestCategoryFor]），从还款账户出——总划扣 = amount，账户余额
+  ///   与档案本金都能对上账。
+  /// - 档案 currentPrincipal 本来就是 0（如信用卡：欠款在账户负余额上，
+  ///   档案不跟踪本金）：整笔按转账处理，不产生利息支出——此时没有
+  ///   「本金基准」，把差额说成利息就是编数。
+  /// - 本金减到 0 且类型是 personalBorrow：status 置 paidOff（已结清，
+  ///   复用现有枚举，不新造状态）。
+  ///
+  /// 返回各部分金额与流水 id，调用方（UI）据此给出诚实的结果提示。
+  Future<
+      ({
+        int? transferTransactionId,
+        int? interestTransactionId,
+        Decimal principalPaid,
+        Decimal interestPaid,
+      })> repayLiabilityProfile({
+    required int profileId,
+    required Decimal amount,
+    required int fromAccountId,
+    DateTime? date,
+    String note = '',
+  }) async {
+    amount = normalizeMoneyAmount(amount);
+    if (amount <= Decimal.zero) {
+      throw ArgumentError('还款金额必须大于 0');
+    }
+    final profile =
+        _liabilityProfiles.where((p) => p.id == profileId).firstOrNull;
+    if (profile == null) throw StateError('负债档案不存在');
+    if (!_isSupportedTransactionAccountId(fromAccountId)) {
+      throw ArgumentError('还款账户不存在或币种不受支持');
+    }
+    if (!_isSupportedTransactionAccountId(profile.accountId)) {
+      throw ArgumentError('负债账户不存在或币种不受支持');
+    }
+    if (fromAccountId == profile.accountId) {
+      throw ArgumentError('还款账户不能是负债账户本身');
+    }
+    final at = date ?? DateTime.now();
+    final timePrecision = date == null
+        ? TransactionTimePrecision.entryClock
+        : TransactionTimePrecision.dateOnly;
+    final hasPrincipal = profile.currentPrincipal > Decimal.zero;
+    final principalPaid = hasPrincipal
+        ? (amount < profile.currentPrincipal
+            ? amount
+            : profile.currentPrincipal)
+        : Decimal.zero;
+    final interestPaid = hasPrincipal ? amount - principalPaid : Decimal.zero;
+    final transferAmount = hasPrincipal ? principalPaid : amount;
+    final liabilityAccountName = _accounts
+            .where((a) => a.id == profile.accountId)
+            .firstOrNull
+            ?.name ??
+        '负债账户';
+    final interestCategory = interestPaid > Decimal.zero
+        ? _interestCategoryFor(TransactionKind.expense)
+        : null;
+    int? transferTxId;
+    int? interestTxId;
+    await _db!.transaction((txn) async {
+      if (transferAmount > Decimal.zero) {
+        transferTxId = await txn.insert('transactions', {
+          'book_id': _currentBookId,
+          'kind': TransactionKind.transfer.toJson(),
+          'amount': transferAmount.toString(),
+          'currency_code': 'CNY',
+          'category_id': null,
+          'account_id': fromAccountId,
+          'to_account_id': profile.accountId,
+          'note': note.trim().isEmpty ? '还款：$liabilityAccountName' : note.trim(),
+          'date_ms': at.millisecondsSinceEpoch,
+          'time_precision': timePrecision.storageKey,
+          'tags': '',
+          'reimbursable': 0,
+          'image_path': '',
+          'excluded': 0,
+          // 事件类型必须是 transfer：三套结算引擎（movement projection /
+          // balance legs / activity）对 principalPayment 都只记付款账户的
+          // 单腿流出，负债账户收不到入账、钱会凭空消失；kind=transfer 的
+          // 行走 transfer 事件才是双腿记账（付款账户出、负债账户入）。
+          ..._settlementFields(
+            settledAt: at,
+            settlementAccountId: fromAccountId,
+            eventType: TransactionEventType.transfer,
+          ),
+          ..._syncStampNew(),
+        });
+      }
+      if (interestPaid > Decimal.zero) {
+        interestTxId = await txn.insert('transactions', {
+          'book_id': _currentBookId,
+          'kind': TransactionKind.expense.toJson(),
+          'amount': interestPaid.toString(),
+          'currency_code': 'CNY',
+          'category_id': interestCategory?.id,
+          'account_id': fromAccountId,
+          'to_account_id': null,
+          'note': '还款利息：$liabilityAccountName',
+          'date_ms': at.millisecondsSinceEpoch,
+          'time_precision': timePrecision.storageKey,
+          'tags': '',
+          'reimbursable': 0,
+          'image_path': '',
+          'excluded': 0,
+          ..._settlementFields(
+            settledAt: at,
+            settlementAccountId: fromAccountId,
+            eventType: TransactionEventType.interest,
+          ),
+          ..._syncStampNew(),
+        });
+      }
+      if (principalPaid > Decimal.zero) {
+        final newPrincipal = profile.currentPrincipal - principalPaid;
+        final settled = newPrincipal <= Decimal.zero &&
+            profile.type == LiabilityProfileType.personalBorrow;
+        await txn.update(
+          'liability_profiles',
+          {
+            'current_principal': newPrincipal.toString(),
+            if (settled) 'status': LiabilityProfileStatus.paidOff.storageKey,
+            'updated_ms': DateTime.now().millisecondsSinceEpoch,
+          },
+          where: 'id = ?',
+          whereArgs: [profileId],
+        );
+      }
+    });
+    await _loadTransactions();
+    await _loadLiabilityProfiles();
+    await _refreshCurrentNetWorthSnapshotBestEffort(const {
+      NetWorthSnapshotCause.transfer,
+      NetWorthSnapshotCause.transaction,
+      NetWorthSnapshotCause.liability,
+    });
+    notifyListeners();
+    return (
+      transferTransactionId: transferTxId,
+      interestTransactionId: interestTxId,
+      principalPaid: principalPaid,
+      interestPaid: interestPaid,
+    );
+  }
+
+  /// 「最近要还」：活跃负债档案里设了还款日的，按下次还款日升序。
+  ///
+  /// 只含 [withinDays] 天内到期的（含今天，daysLeft 0..withinDays）。
+  /// account 可能为 null（档案挂的账户被删/归档时不瞎编账户名，交 UI 兜底）。
+  List<
+      ({
+        LiabilityProfileEntity profile,
+        AccountEntity? account,
+        DateTime nextDate,
+        int daysLeft,
+      })> upcomingRepayments({int withinDays = 10, DateTime? now}) {
+    final base = now ?? DateTime.now();
+    final result = <({
+      LiabilityProfileEntity profile,
+      AccountEntity? account,
+      DateTime nextDate,
+      int daysLeft,
+    })>[];
+    for (final profile in _liabilityProfiles) {
+      if (profile.status != LiabilityProfileStatus.active) continue;
+      final next = profile.nextRepaymentDate(now: base);
+      final daysLeft = profile.daysUntilRepayment(now: base);
+      if (next == null || daysLeft == null) continue;
+      if (daysLeft > withinDays) continue;
+      result.add((
+        profile: profile,
+        account: _accounts
+            .where((a) => a.id == profile.accountId && !a.isDeleted)
+            .firstOrNull,
+        nextDate: next,
+        daysLeft: daysLeft,
+      ));
+    }
+    result.sort((a, b) => a.nextDate.compareTo(b.nextDate));
+    return result;
+  }
+
+  /// A2 借贷按人：记一笔向个人的借入。
+  ///
+  /// 取舍（数据诚实性优先）：
+  /// - **每笔借入 = 一个独立的 loan 账户「借入·对象名」+ 一份 personalBorrow
+  ///   档案**。不往同一对象的旧档案里合并追加——合并会把两笔不同日期的借入
+  ///   压成一条「金额相加、日期取旧」的假记录；且档案与账户一一对应
+  ///   （upsert 按 accountId），同一对象再借就再建一个账户（名字加序号），
+  ///   借贷往来页按 counterparty 聚合，对用户仍是「一个人一张卡」。
+  /// - 选了入账账户 [toAccountId]：记一笔转账（借入账户 → 入账账户），
+  ///   钱的去向有账可查；没选：借入账户期初余额直接记 -金额——欠款是真的，
+  ///   但钱去了记账之外，不编造一笔不存在的到账流水。
+  /// - [dueDate]（约定还款日）存进档案 endDate，作为一次性到期日进
+  ///   「最近要还」（见 [LiabilityProfileEntity.nextRepaymentDate]）。
+  ///
+  /// 返回负债档案 id。
+  Future<int> addPersonalBorrow({
+    required String counterparty,
+    required Decimal amount,
+    int? toAccountId,
+    DateTime? dueDate,
+    String note = '',
+  }) async {
+    final person = counterparty.trim();
+    if (person.isEmpty) throw ArgumentError('借入对象姓名不能为空');
+    amount = normalizeMoneyAmount(amount);
+    if (amount <= Decimal.zero) throw ArgumentError('借入金额必须大于 0');
+    if (toAccountId != null &&
+        !_isSupportedTransactionAccountId(toAccountId)) {
+      throw ArgumentError('入账账户不存在或币种不受支持');
+    }
+    final baseName = '借入·$person';
+    final usedNames =
+        _accounts.where((a) => !a.isDeleted).map((a) => a.name).toSet();
+    var name = baseName;
+    var suffix = 2;
+    while (usedNames.contains(name)) {
+      name = '$baseName·${suffix++}';
+    }
+    final now = DateTime.now();
+    final loanAccountId = await addAccount(
+      name: name,
+      type: AccountType.loan,
+      openingBalance: toAccountId == null ? -amount : Decimal.zero,
+    );
+    if (toAccountId != null) {
+      await addTransaction(
+        kind: TransactionKind.transfer,
+        amount: amount,
+        accountId: loanAccountId,
+        toAccountId: toAccountId,
+        note: note.trim().isEmpty ? '借入：$person' : note.trim(),
+        date: now,
+      );
+    }
+    return upsertLiabilityProfile(
+      accountId: loanAccountId,
+      type: LiabilityProfileType.personalBorrow,
+      originalAmount: amount,
+      currentPrincipal: amount,
+      startDate: now,
+      endDate: dueDate,
+      counterparty: person,
+      note: note,
+    );
+  }
+
+  /// A3 房贷/大额分期向导：一次事务里建齐「loan 账户 + 负债档案 + 每月
+  /// 自动还款的周期转账规则」三件套——要么全建成，要么全不建。
+  ///
+  /// 数据语义（守 V2.1 锁定，不做本息拆分）：
+  /// - loan 账户期初余额 = -剩余本金，欠款如实进净资产；
+  /// - 周期规则 = 每月还款日从 [fromAccountId] 转 [monthlyPayment] 到
+  ///   loan 账户；首期取「今天起最近的还款日」（含今天，当天到期立即记）；
+  ///   anchor_day = 还款日，短月自动落月末、长月回到原日。
+  /// - [annualRate] 只存进档案展示，不参与任何计算；月供含息，自动转账
+  ///   会按月供全额抵减贷款账户余额——本息拆分是独立批（A5）的范围，
+  ///   这里不冒充。手动「还款」路径（repayLiabilityProfile）才做档案本金
+  ///   递减+超额记利息。
+  Future<({int accountId, int profileId, int ruleId})> createLoanWizardSetup({
+    required LiabilityProfileType type,
+    required String name,
+    required Decimal totalAmount,
+    required Decimal remainingPrincipal,
+    Decimal? annualRate,
+    required Decimal monthlyPayment,
+    required int repaymentDay,
+    required int fromAccountId,
+  }) async {
+    final trimmedName = name.trim();
+    if (trimmedName.isEmpty) throw ArgumentError('名称不能为空');
+    totalAmount = normalizeMoneyAmount(totalAmount);
+    remainingPrincipal = normalizeMoneyAmount(remainingPrincipal);
+    monthlyPayment = normalizeMoneyAmount(monthlyPayment);
+    final rate = annualRate ?? Decimal.zero;
+    if (totalAmount <= Decimal.zero) throw ArgumentError('贷款总额必须大于 0');
+    if (remainingPrincipal <= Decimal.zero) {
+      throw ArgumentError('剩余本金必须大于 0');
+    }
+    if (monthlyPayment <= Decimal.zero) throw ArgumentError('每月还款额必须大于 0');
+    if (rate < Decimal.zero) throw ArgumentError('年利率不能为负');
+    if (repaymentDay < 1 || repaymentDay > 31) {
+      throw ArgumentError('还款日必须在 1 到 31 之间');
+    }
+    if (!_isSupportedTransactionAccountId(fromAccountId)) {
+      throw ArgumentError('扣款账户不存在、已归档或币种不受支持');
+    }
+    final now = DateTime.now();
+    final nowMs = now.millisecondsSinceEpoch;
+    final firstDue = _nextDueForDayOfMonth(repaymentDay, now);
+    late int accountId;
+    late int profileId;
+    late int ruleId;
+    await _db!.transaction((txn) async {
+      accountId = await txn.insert('accounts', {
+        'uuid': _newUuid(),
+        'name': trimmedName,
+        'currency_code': 'CNY',
+        'type': AccountType.loan.storageKey,
+        'opening_balance': (-remainingPrincipal).toString(),
+        'include_in_net_worth': 1,
+        'institution': '',
+        'created_ms': nowMs,
+        'updated_ms': nowMs,
+        'opening_balance_effective_ms': nowMs,
+        'opening_balance_sequence': 0,
+        'opening_balance_quality':
+            AccountOpeningBalanceQuality.exact.storageKey,
+        'status': AccountStatus.active.storageKey,
+      });
+      profileId = await txn.insert('liability_profiles', {
+        'uuid': _newUuid(),
+        'account_id': accountId,
+        'liability_type': type.storageKey,
+        'original_amount': totalAmount.toString(),
+        'current_principal': remainingPrincipal.toString(),
+        'interest_rate': rate.toString(),
+        'repayment_day': repaymentDay,
+        'repayment_account_id': fromAccountId,
+        'start_date_ms': null,
+        'end_date_ms': null,
+        'status': LiabilityProfileStatus.active.storageKey,
+        'note': '',
+        'statement_day': null,
+        'credit_limit': null,
+        'counterparty': '',
+        'created_ms': nowMs,
+        'updated_ms': nowMs,
+      });
+      ruleId = await txn.insert('recurring_rules', {
+        'book_id': _currentBookId,
+        'kind': TransactionKind.transfer.toJson(),
+        'amount': monthlyPayment.toString(),
+        'category_id': null,
+        'account_id': fromAccountId,
+        'to_account_id': accountId,
+        'note': '$trimmedName还款',
+        'period': RecurPeriod.monthly.toJson(),
+        'start_date_ms': firstDue.millisecondsSinceEpoch,
+        'next_due_ms': firstDue.millisecondsSinceEpoch,
+        'enabled': 1,
+        'anchor_day': repaymentDay,
+        'end_date_ms': null,
+        'total_count': null,
+        'generated_count': 0,
+        'created_ms': nowMs,
+      });
+    });
+    await _loadAccounts();
+    await _loadLiabilityProfiles();
+    await _loadRecurringRules();
+    await _materializeRecurring(); // 首期若今天到期则立即记账
+    await _loadTransactions();
+    await _refreshCurrentNetWorthSnapshotBestEffort(const {
+      NetWorthSnapshotCause.account,
+      NetWorthSnapshotCause.liability,
+      NetWorthSnapshotCause.scheduledRebuild,
+    });
+    notifyListeners();
+    return (accountId: accountId, profileId: profileId, ruleId: ruleId);
+  }
+
+  /// 从 [now] 起最近一个「每月第 [day] 日」（含今天）。短月夹取到月末，
+  /// 与 [RecurPeriod.advance] 的夹取规则一致。
+  static DateTime _nextDueForDayOfMonth(int day, DateTime now) {
+    DateTime clampToMonth(int year, int month) {
+      final lastDay = DateTime(year, month + 1, 0).day;
+      return DateTime(year, month, day < lastDay ? day : lastDay);
+    }
+
+    final today = DateTime(now.year, now.month, now.day);
+    final thisMonth = clampToMonth(now.year, now.month);
+    if (!thisMonth.isBefore(today)) return thisMonth;
+    final nextYear = now.month == 12 ? now.year + 1 : now.year;
+    final nextMonth = now.month == 12 ? 1 : now.month + 1;
+    return clampToMonth(nextYear, nextMonth);
+  }
+
+  /// A2 借贷往来时间线：某负债账户名下的转账流水（跨账本查全量）。
+  /// 转入该账户（to_account_id 命中）= 还款；从该账户转出 = 借入到账。
+  List<TransactionEntity> transfersInvolvingAccount(int accountId) =>
+      _allTransactions
+          .where((t) =>
+              t.txKind == TransactionKind.transfer &&
+              (t.accountId == accountId || t.toAccountId == accountId))
+          .toList();
 
   Future<String> exportAssetTablesJson() async {
     final assetIds = _physicalAssets.map((a) => a.id).toSet();
@@ -19118,6 +19785,11 @@ class AppRepository extends ChangeNotifier {
               str(raw, 'status'),
             ).storageKey,
             'note': str(raw, 'note'),
+            'statement_day': intOrNull(raw['statement_day']),
+            'credit_limit': raw['credit_limit'] == null
+                ? null
+                : Decimal.tryParse(str(raw, 'credit_limit'))?.toString(),
+            'counterparty': str(raw, 'counterparty'),
             'created_ms':
                 intOr(raw['created_ms'], DateTime.now().millisecondsSinceEpoch),
             'updated_ms':

@@ -6,6 +6,7 @@ import 'package:decimal/decimal.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../../core/assets/credit_card_terms.dart';
 import '../../core/money_format.dart';
 import '../../core/statistics/metric_contract.dart';
 import '../../data/app_repository.dart';
@@ -56,6 +57,16 @@ class _AccountDetailPageState extends State<AccountDetailPage> {
     final recurringRuleCount = repo.recurringRules
         .where((rule) => rule.accountId == current.id)
         .length;
+    // 信用卡账期：账单日和还款日都填了才有可诚实计算的免息期（引擎口径
+    // 见 credit_card_terms.dart 注释），缺一个就整行不显示，不猜。
+    final liabilityProfile = repo.liabilityProfileForAccount(current.id);
+    final creditTerms = liabilityProfile == null
+        ? null
+        : CreditCardTerms.compute(
+            statementDay: liabilityProfile.statementDay,
+            repaymentDay: liabilityProfile.repaymentDay,
+            now: DateTime.now(),
+          );
     final qualityText = movement.unknownSettlementAccountCount > 0
         ? '${movement.unknownSettlementAccountCount} 笔到账账户待确认，当前余额只能部分核对'
         : movement.unknownSettlementDateCount > 0
@@ -139,6 +150,14 @@ class _AccountDetailPageState extends State<AccountDetailPage> {
                 trailing: const Icon(Icons.chevron_right, size: 18),
                 onTap: () => _showCalibration(context, current),
               ),
+              if (creditTerms != null)
+                SettingsRow(
+                  key: const Key('credit-interest-free-row'),
+                  leading: const Icon(Icons.credit_score_outlined),
+                  title: '今天消费免息 ${creditTerms.interestFreeDays} 天',
+                  subtitle: '账单日 ${liabilityProfile!.statementDay} 日 · '
+                      '还款日 ${liabilityProfile.repaymentDay} 日',
+                ),
               if (!current.isArchived && recurringRuleCount > 0)
                 SettingsRow(
                   leading: const Icon(Icons.schedule_outlined),

@@ -3,7 +3,7 @@ description: "肥喵记账 - 可爱又聪明的记账猫"
 publish_to: 'none'
 # 版本规则（用户 0703 拍板）：1.0 起步，每次推 GitHub 构建 minor +1（1.1、1.2…）。
 # 加号后是 Android versionCode，必须只增不减，否则手机拒绝覆盖安装。
-version: 1.208.0+210
+version: 1.209.0+211
 
 environment:
   sdk: '>=3.4.0 <4.0.0'
@@ -35,6 +35,9 @@ dependencies:
   workmanager: ^0.9.0+3
   flutter_secure_storage: ^10.3.1
   flutter_local_notifications: ^22.0.1
+  # flutter_local_notifications 的 zonedSchedule 需要它；本来就是它的
+  # 传递依赖（pubspec.lock 已锁 0.11.1），这里显式声明避免隐式依赖。
+  timezone: ^0.11.1
 
 dev_dependencies:
   flutter_test:

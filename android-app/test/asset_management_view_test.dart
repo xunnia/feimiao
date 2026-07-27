@@ -369,10 +369,41 @@ void main() {
     expect(find.text('降噪耳机订单'), findsOneWidget);
 
     // 点内嵌账单行一步直达「填写物品信息」表单，跳过完整账单列表。
+    // （资金组多了「房贷/分期向导」行后，物品组会落到测试视口折叠线下，
+    // 先滚进可视区再点。）
+    await tester.ensureVisible(find.text('降噪耳机订单'));
+    await tester.pumpAndSettle();
     await tester.tap(find.text('降噪耳机订单'));
     await pumpViewAnimations(tester);
     expect(find.text('填写物品信息'), findsOneWidget);
     expect(find.byKey(const Key('asset-purchase-search')), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('添加弹层的房贷/分期向导入口打开向导，表单没填完创建不可点', (tester) async {
+    final repo = AppRepository();
+    await tester.runAsync(repo.init);
+    addTearDown(() => tester.runAsync(repo.closeForTest));
+    await pumpAccountsView(tester, repo);
+
+    await tester.tap(find.byIcon(Icons.add));
+    await pumpViewAnimations(tester);
+    await tester
+        .ensureVisible(find.byKey(const Key('add-entry-loan-wizard')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('add-entry-loan-wizard')));
+    await pumpViewAnimations(tester);
+
+    // 向导弹层已打开：标题 + 类型默认房贷 + 关键字段都在。
+    expect(find.text('一次设好账户、档案和每月自动还款'), findsOneWidget);
+    expect(find.byKey(const Key('loan-wizard-name')), findsOneWidget);
+    expect(find.byKey(const Key('loan-wizard-total')), findsOneWidget);
+    expect(find.byKey(const Key('loan-wizard-monthly')), findsOneWidget);
+    // 必填项没填完时「创建」不可点（数据诚实性：不许半套三件套落库）。
+    final createButton = tester.widget<AppPillButton>(
+      find.byKey(const Key('loan-wizard-create')),
+    );
+    expect(createButton.onPressed, isNull);
     expect(tester.takeException(), isNull);
   });
 
@@ -386,6 +417,10 @@ void main() {
     await pumpViewAnimations(tester);
     await tester.tap(find.byIcon(Icons.add));
     await pumpViewAnimations(tester);
+    // 「添加」弹层加了「房贷/分期向导」行后，本行在 800×600 测试视口
+    // 落到折叠线下，先滚进可视区再点。
+    await tester.ensureVisible(find.text('手工补录物品'));
+    await tester.pumpAndSettle();
     await tester.tap(find.text('手工补录物品'));
     await pumpViewAnimations(tester);
 
@@ -1073,6 +1108,172 @@ void main() {
     await tester.tap(find.textContaining('个账户的到账信息待确认'));
     await tester.pumpAndSettle();
     expect(find.textContaining('· 待确认'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('A1 信用卡账期：最近要还卡、还款弹层与免息期行闭环', (tester) async {
+    final repo = AppRepository();
+    await tester.runAsync(repo.init);
+    addTearDown(() => tester.runAsync(repo.closeForTest));
+    final now = DateTime.now();
+    late int creditId;
+    late int payerId;
+    await tester.runAsync(() async {
+      payerId = repo.accounts.first.id;
+      creditId = await repo.addAccount(
+        name: '花花信用卡',
+        type: AccountType.credit,
+      );
+      await repo.addTransaction(
+        kind: TransactionKind.expense,
+        amount: Decimal.fromInt(250),
+        accountId: creditId,
+        date: now,
+        note: '信用卡消费',
+      );
+      await repo.upsertLiabilityProfile(
+        accountId: creditId,
+        type: LiabilityProfileType.creditCard,
+        originalAmount: Decimal.zero,
+        currentPrincipal: Decimal.zero,
+        repaymentDay: now.day,
+        statementDay: 15,
+        repaymentAccountId: payerId,
+      );
+    });
+    final profileId = repo.liabilityProfileForAccount(creditId)!.id;
+    final transactionCount = repo.transactions.length;
+    await pumpAccountsView(tester, repo);
+
+    await tester.tap(find.text('资金'));
+    await pumpViewAnimations(tester);
+    // 「最近要还」卡置顶：今天到期 → 「MM-dd · 今天」。
+    expect(find.text('最近要还'), findsOneWidget);
+    final dueDateText = '${now.month.toString().padLeft(2, '0')}-'
+        '${now.day.toString().padLeft(2, '0')}';
+    expect(find.text('$dueDateText · 今天'), findsOneWidget);
+    // 信用卡账户行副标题从「每月N日还款」改为天数口径（今天=「今天还款」）。
+    expect(find.textContaining('今天还款'), findsOneWidget);
+    expect(find.textContaining('每月${now.day}日还款'), findsNothing);
+
+    // 行内「还款」→ 还款弹层：金额预填账户负余额绝对值、付款账户预选档案默认。
+    await tester.tap(find.byKey(Key('upcoming-repay-$profileId')));
+    await pumpViewAnimations(tester);
+    final amountField = tester.widget<TextField>(
+      find.byKey(const Key('repayment-amount')),
+    );
+    expect(amountField.controller!.text, '250');
+    expect(find.text(repo.accounts.first.name), findsOneWidget);
+
+    final confirm = tester.widget<AppPillButton>(
+      find.byKey(const Key('repayment-confirm')),
+    );
+    expect(confirm.onPressed, isNotNull);
+    await tester.runAsync(() async {
+      confirm.onPressed!();
+      for (var attempt = 0;
+          attempt < 100 && repo.transactions.length == transactionCount;
+          attempt++) {
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+      }
+    });
+    await pumpViewAnimations(tester);
+    expect(find.text('已还款'), findsOneWidget);
+
+    // 落库=一笔转账（付款账户 → 信用卡），信用卡欠款归零；本金为 0 不编利息。
+    final transfer = repo.transactions
+        .where((t) => t.txKind == TransactionKind.transfer)
+        .single;
+    expect(transfer.amount, Decimal.fromInt(250));
+    expect(transfer.accountId, payerId);
+    expect(transfer.toAccountId, creditId);
+    final creditAccount =
+        repo.accounts.singleWhere((account) => account.id == creditId);
+    expect(repo.accountBalanceOf(creditAccount), Decimal.zero);
+
+    // 等 toast 消失后进账户详情：账单日+还款日都填了 → 显示免息期行。
+    await tester.pump(const Duration(seconds: 3));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('zero-balance-accounts-toggle')));
+    await tester.pump();
+    await tester.tap(find.text('花花信用卡').last);
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('credit-interest-free-row')), findsOneWidget);
+    expect(find.textContaining('今天消费免息'), findsOneWidget);
+    expect(find.textContaining('账单日 15 日'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('A2 借贷往来：入口、按人聚合、还款弹层与结清闭环', (tester) async {
+    final repo = AppRepository();
+    await tester.runAsync(repo.init);
+    addTearDown(() => tester.runAsync(repo.closeForTest));
+    late int payerId;
+    late int loanOutId;
+    late int profileId;
+    await tester.runAsync(() async {
+      payerId = repo.accounts.first.id;
+      loanOutId = await repo.addReceivableAsset(
+        name: '借款给张三',
+        type: ReceivableAssetType.loanOut,
+        originalAmount: Decimal.fromInt(300),
+        counterparty: '张三',
+      );
+      profileId = await repo.addPersonalBorrow(
+        counterparty: '李四',
+        amount: Decimal.fromInt(500),
+        toAccountId: payerId,
+        dueDate: DateTime.now().add(const Duration(days: 3)),
+      );
+    });
+    await pumpAccountsView(tester, repo);
+
+    await tester.tap(find.text('资金'));
+    await pumpViewAnimations(tester);
+    // 借入进「最近要还」（一次性还款日），借贷往来入口行出现。
+    expect(find.text('最近要还'), findsOneWidget);
+    expect(find.text('借入·李四'), findsWidgets);
+    expect(find.byKey(const Key('lending-entry')), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('lending-entry')));
+    await tester.pumpAndSettle();
+
+    // 按人聚合：张三=TA欠我（借出剩余）、李四=我欠TA（借入剩余本金）。
+    expect(find.text('张三'), findsOneWidget);
+    expect(find.text('李四'), findsOneWidget);
+    expect(find.text('TA欠我'), findsOneWidget);
+    expect(find.text('我欠TA'), findsOneWidget);
+
+    // 展开李四卡：时间线有「借入」行；「还款」直达还款弹层并预填剩余本金。
+    await tester.tap(find.byKey(const Key('lending-party-李四')));
+    await tester.pumpAndSettle();
+    expect(find.text('借入'), findsOneWidget);
+    await tester.tap(find.byKey(Key('lending-repay-$profileId')));
+    await pumpViewAnimations(tester);
+    final amountField = tester.widget<TextField>(
+      find.byKey(const Key('repayment-amount')),
+    );
+    expect(amountField.controller!.text, '500');
+    Navigator.of(tester.element(find.byKey(const Key('repayment-amount'))))
+        .pop();
+    await tester.pumpAndSettle();
+
+    // 数据层还清后页面实时收敛：净额变「已结清」，时间线出现还款行。
+    await tester.runAsync(() => repo.repayLiabilityProfile(
+          profileId: profileId,
+          amount: Decimal.fromInt(500),
+          fromAccountId: payerId,
+        ));
+    await pumpViewAnimations(tester);
+    expect(find.text('已结清'), findsOneWidget);
+    expect(find.text('还款'), findsOneWidget);
+
+    // 张三卡的「收回」走现有收回权益流程。
+    await tester.tap(find.byKey(const Key('lending-party-张三')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(Key('lending-recover-$loanOutId')));
+    await pumpViewAnimations(tester);
+    expect(find.text('收回权益'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 }

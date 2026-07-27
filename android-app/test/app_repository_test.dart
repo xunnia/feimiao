@@ -2185,7 +2185,7 @@ void main() {
     expect(precision['dflt_value'], "'legacy_unknown'");
     expect(
       Sqflite.firstIntValue(await check.rawQuery('PRAGMA user_version')),
-      41,
+      42,
     );
     await check.close();
   });
@@ -2272,7 +2272,7 @@ void main() {
     );
     expect(
       Sqflite.firstIntValue(await check.rawQuery('PRAGMA user_version')),
-      41,
+      42,
     );
     await check.close();
   });
@@ -2473,6 +2473,72 @@ void main() {
       ],
     );
     await reopened.closeForTest();
+  });
+
+  test('定时记账支持转账：到期生成转账流水两腿余额正确，缺转入账户则拒绝', () async {
+    final repo = await freshRepo();
+    final fromId = await repo.addAccount(
+      name: '转出账户',
+      openingBalance: Decimal.fromInt(500),
+    );
+    final toId = await repo.addAccount(name: '转入账户');
+
+    // 转账规则必须有转入账户，且不能与转出账户相同。
+    await expectLater(
+      repo.addRecurringRule(
+        kind: TransactionKind.transfer,
+        amount: Decimal.fromInt(100),
+        accountId: fromId,
+        period: RecurPeriod.monthly,
+        startDate: DateTime(2099, 1, 1),
+      ),
+      throwsArgumentError,
+    );
+    await expectLater(
+      repo.addRecurringRule(
+        kind: TransactionKind.transfer,
+        amount: Decimal.fromInt(100),
+        accountId: fromId,
+        toAccountId: fromId,
+        period: RecurPeriod.monthly,
+        startDate: DateTime(2099, 1, 1),
+      ),
+      throwsArgumentError,
+    );
+    expect(repo.recurringRules, isEmpty);
+
+    // 起始日已过 → 立即补记一笔转账（materialize 的 transfer 执行路径）。
+    final now = DateTime.now();
+    final yesterday = DateTime(now.year, now.month, now.day)
+        .subtract(const Duration(days: 1));
+    await repo.addRecurringRule(
+      kind: TransactionKind.transfer,
+      amount: Decimal.fromInt(100),
+      accountId: fromId,
+      toAccountId: toId,
+      period: RecurPeriod.monthly,
+      startDate: yesterday,
+      note: '房贷还款',
+    );
+    final rule = repo.recurringRules.single;
+    expect(rule.txKind, TransactionKind.transfer);
+    expect(rule.toAccountId, toId);
+    expect(rule.generatedCount, 1);
+
+    final tx =
+        repo.transactions.singleWhere((t) => t.recurringRuleId == rule.id);
+    expect(tx.txKind, TransactionKind.transfer);
+    expect(tx.accountId, fromId);
+    expect(tx.toAccountId, toId);
+    expect(tx.categoryId, isNull);
+
+    final fromAccount =
+        repo.accounts.singleWhere((account) => account.id == fromId);
+    final toAccount =
+        repo.accounts.singleWhere((account) => account.id == toId);
+    expect(repo.accountBalanceOf(fromAccount), Decimal.fromInt(400));
+    expect(repo.accountBalanceOf(toAccount), Decimal.fromInt(100));
+    await repo.closeForTest();
   });
 
   test('账户仍被定时规则引用时不能归档，停用规则也不会绕过保护', () async {
@@ -6441,7 +6507,7 @@ void main() {
     final check = await databaseFactory.openDatabase(path);
     expect(
       Sqflite.firstIntValue(await check.rawQuery('PRAGMA user_version')),
-      41,
+      42,
     );
     final physicalColumns =
         (await check.rawQuery('PRAGMA table_info(physical_assets)'))
@@ -6594,7 +6660,7 @@ void main() {
     final check = await databaseFactory.openDatabase(path);
     expect(
       Sqflite.firstIntValue(await check.rawQuery('PRAGMA user_version')),
-      41,
+      42,
     );
     final afterRows = await check.query(
       'transactions',
@@ -6790,7 +6856,7 @@ void main() {
     final check = await databaseFactory.openDatabase(path);
     final v =
         Sqflite.firstIntValue(await check.rawQuery('PRAGMA user_version'));
-    expect(v, 41); // init 一路升到当前最新版本
+    expect(v, 42); // init 一路升到当前最新版本
     final tableNames = (await check
             .rawQuery("SELECT name FROM sqlite_master WHERE type = 'table'"))
         .map((r) => r['name'])
@@ -6828,6 +6894,15 @@ void main() {
     );
     expect(tableNames, contains('net_worth_snapshots'));
     expect(tableNames, contains('liability_profiles'));
+    // v42：账期两列 + 借入对象列就位。
+    final liabilityColumnNames =
+        (await check.rawQuery('PRAGMA table_info(liability_profiles)'))
+            .map((row) => row['name'])
+            .toSet();
+    expect(
+      liabilityColumnNames,
+      containsAll(['statement_day', 'credit_limit', 'counterparty']),
+    );
     expect(tableNames, contains('recurring_occurrences'));
     expect(tableNames, contains('auto_record_occurrences'));
     expect(tableNames, contains('report_jobs'));

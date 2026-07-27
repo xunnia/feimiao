@@ -11,6 +11,7 @@ import '../../widgets/ios_form.dart';
 import '../../widgets/pressable_scale.dart';
 import '../../widgets/settings_ui.dart';
 import 'asset_form_kit.dart';
+import 'loan_wizard_sheet.dart';
 
 class AccountFormSheet extends StatefulWidget {
   final AccountEntity? account;
@@ -29,7 +30,7 @@ class _AccountFormSheetState extends State<AccountFormSheet> {
   late final TextEditingController _liabilityOriginalCtrl;
   late final TextEditingController _liabilityPrincipalCtrl;
   late final TextEditingController _liabilityRateCtrl;
-  late final TextEditingController _repaymentDayCtrl;
+  late final TextEditingController _creditLimitCtrl;
   late final TextEditingController _liabilityNoteCtrl;
   late AccountType _type;
   late bool _includeInNetWorth;
@@ -37,8 +38,18 @@ class _AccountFormSheetState extends State<AccountFormSheet> {
   late LiabilityProfileType _liabilityType;
   late LiabilityProfileStatus _liabilityStatus;
   int? _repaymentAccountId;
+  int? _repaymentDay;
+  int? _statementDay;
+
+  /// 编辑时已存在的负债档案；保存时把本表单不管的字段（counterparty、
+  /// 起止日期）原样透传，别把 A2 借贷侧写进去的数据抹掉。
+  LiabilityProfileEntity? _profile;
 
   bool get _editing => widget.account != null;
+
+  /// 信用卡账期字段（账单日/额度）只对信用卡档案有意义，别的负债类型
+  /// 展示这些字段就是引导用户填没意义的数。
+  bool get _isCreditCard => _liabilityType == LiabilityProfileType.creditCard;
 
   @override
   void initState() {
@@ -54,14 +65,15 @@ class _AccountFormSheetState extends State<AccountFormSheet> {
     final profile = account == null
         ? null
         : context.read<AppRepository>().liabilityProfileForAccount(account.id);
+    _profile = profile;
     _liabilityOriginalCtrl =
         TextEditingController(text: profile?.originalAmount.toString() ?? '');
     _liabilityPrincipalCtrl =
         TextEditingController(text: profile?.currentPrincipal.toString() ?? '');
     _liabilityRateCtrl =
         TextEditingController(text: profile?.interestRate.toString() ?? '');
-    _repaymentDayCtrl =
-        TextEditingController(text: profile?.repaymentDay?.toString() ?? '');
+    _creditLimitCtrl =
+        TextEditingController(text: profile?.creditLimit?.toString() ?? '');
     _liabilityNoteCtrl = TextEditingController(text: profile?.note ?? '');
     _liabilityType = profile?.type ??
         (_type == AccountType.credit
@@ -69,6 +81,8 @@ class _AccountFormSheetState extends State<AccountFormSheet> {
             : LiabilityProfileType.other);
     _liabilityStatus = profile?.status ?? LiabilityProfileStatus.active;
     _repaymentAccountId = profile?.repaymentAccountId;
+    _repaymentDay = profile?.repaymentDay;
+    _statementDay = profile?.statementDay;
   }
 
   @override
@@ -80,7 +94,7 @@ class _AccountFormSheetState extends State<AccountFormSheet> {
     _liabilityOriginalCtrl.dispose();
     _liabilityPrincipalCtrl.dispose();
     _liabilityRateCtrl.dispose();
-    _repaymentDayCtrl.dispose();
+    _creditLimitCtrl.dispose();
     _liabilityNoteCtrl.dispose();
     super.dispose();
   }
@@ -206,7 +220,18 @@ class _AccountFormSheetState extends State<AccountFormSheet> {
                                 label: '负债类型',
                                 child: AssetEnumDropdown<LiabilityProfileType>(
                                   value: _liabilityType,
-                                  values: LiabilityProfileType.values,
+                                  // 「个人借入」档案由借贷流程创建（带对象、
+                                  // 一次性还款日语义），不在账户表单里手选；
+                                  // 已是借入档案的编辑时保留可见。
+                                  values: [
+                                    for (final type
+                                        in LiabilityProfileType.values)
+                                      if (type !=
+                                              LiabilityProfileType
+                                                  .personalBorrow ||
+                                          _liabilityType == type)
+                                        type,
+                                  ],
                                   labelOf: (value) => value.label,
                                   hint: '选择类型',
                                   onChanged: (value) =>
@@ -266,22 +291,54 @@ class _AccountFormSheetState extends State<AccountFormSheet> {
                                   onChanged: (_) => setState(() {}),
                                 ),
                               ),
+                              if (_isCreditCard) ...[
+                                const SizedBox(height: 12),
+                                AppLabeledField(
+                                  label: '账单日（可选）',
+                                  child: AssetDayOfMonthDropdown(
+                                    key: const Key('liability-statement-day'),
+                                    value: _statementDay,
+                                    hint: '选择每月出账日',
+                                    onChanged: (value) =>
+                                        setState(() => _statementDay = value),
+                                  ),
+                                ),
+                              ],
                               const SizedBox(height: 12),
                               AppLabeledField(
-                                label: '每月还款日（可选）',
-                                child: TextField(
-                                  controller: _repaymentDayCtrl,
-                                  keyboardType: TextInputType.number,
-                                  decoration: iosInputDecoration(
-                                    context,
-                                    hint: '1-31，例如 9',
-                                  ),
-                                  onChanged: (_) => setState(() {}),
+                                label: '还款日（可选）',
+                                child: AssetDayOfMonthDropdown(
+                                  key: const Key('liability-repayment-day'),
+                                  value: _repaymentDay,
+                                  hint: '选择每月还款日',
+                                  onChanged: (value) =>
+                                      setState(() => _repaymentDay = value),
                                 ),
                               ),
+                              if (_isCreditCard) ...[
+                                const SizedBox(height: 12),
+                                AppLabeledField(
+                                  label: '信用额度（可选）',
+                                  child: TextField(
+                                    key: const Key('liability-credit-limit'),
+                                    controller: _creditLimitCtrl,
+                                    keyboardType:
+                                        const TextInputType.numberWithOptions(
+                                      decimal: true,
+                                    ),
+                                    inputFormatters: moneyInputFormatters(),
+                                    decoration: iosInputDecoration(
+                                      context,
+                                      prefix: '¥ ',
+                                      hint: '例如 20000',
+                                    ),
+                                    onChanged: (_) => setState(() {}),
+                                  ),
+                                ),
+                              ],
                               const SizedBox(height: 12),
                               AppLabeledField(
-                                label: '默认还款账户（可选）',
+                                label: '还款账户（可选）',
                                 child: AssetAccountDropdown(
                                   value: _repaymentAccountId,
                                   accounts: repo.accounts
@@ -319,11 +376,28 @@ class _AccountFormSheetState extends State<AccountFormSheet> {
                               if (!_liabilityInputValid) ...[
                                 const SizedBox(height: 10),
                                 const AssetHintBox(
-                                  text: '负债金额和利率不能为负；还款日必须在 1 到 31 之间。',
+                                  text: '负债金额、额度和利率不能为负。',
                                 ),
                               ],
                             ],
                           ),
+                        ),
+                      ],
+                    ),
+                  ],
+                  // 新建贷款账户时给向导指路：账户+档案+每月自动还款一次设好。
+                  if (!_editing && _type == AccountType.loan) ...[
+                    const SizedBox(height: 14),
+                    SettingsGroup(
+                      margin: EdgeInsets.zero,
+                      children: [
+                        SettingsRow(
+                          key: const Key('account-form-loan-wizard'),
+                          leading: const Icon(Icons.home_work_outlined),
+                          title: '要按月自动记还款？',
+                          subtitle: '用房贷/分期向导，一次设好这三样',
+                          trailing: const Icon(Icons.chevron_right, size: 18),
+                          onTap: _openLoanWizard,
                         ),
                       ],
                     ),
@@ -335,6 +409,18 @@ class _AccountFormSheetState extends State<AccountFormSheet> {
         ],
       ),
     );
+  }
+
+  /// 关掉本表单再开向导（同屏只留一层弹层）；跳转用 NavigatorState，
+  /// 本表单 pop 之后 context 就没了。
+  void _openLoanWizard() {
+    final navigator = Navigator.of(context);
+    Navigator.pop(context);
+    Future.microtask(() {
+      final ctx = navigator.context;
+      if (!ctx.mounted) return;
+      showLoanWizardSheet(ctx);
+    });
   }
 
   Future<void> _save() async {
@@ -379,23 +465,38 @@ class _AccountFormSheetState extends State<AccountFormSheet> {
       return;
     }
     final hasAny = [
-      _liabilityOriginalCtrl.text,
-      _liabilityPrincipalCtrl.text,
-      _liabilityRateCtrl.text,
-      _repaymentDayCtrl.text,
-      _liabilityNoteCtrl.text,
-    ].any((text) => text.trim().isNotEmpty);
+          _liabilityOriginalCtrl.text,
+          _liabilityPrincipalCtrl.text,
+          _liabilityRateCtrl.text,
+          if (_isCreditCard) _creditLimitCtrl.text,
+          _liabilityNoteCtrl.text,
+        ].any((text) => text.trim().isNotEmpty) ||
+        _repaymentDay != null ||
+        (_isCreditCard && _statementDay != null) ||
+        _repaymentAccountId != null ||
+        _profile != null;
     if (!hasAny) return;
+    final creditLimitText = _creditLimitCtrl.text.trim().replaceAll(',', '');
     await repo.upsertLiabilityProfile(
       accountId: accountId,
       type: _liabilityType,
       originalAmount: _parseDecimal(_liabilityOriginalCtrl.text),
       currentPrincipal: _parseDecimal(_liabilityPrincipalCtrl.text),
       interestRate: _parseDecimal(_liabilityRateCtrl.text),
-      repaymentDay: int.tryParse(_repaymentDayCtrl.text.trim()),
+      repaymentDay: _repaymentDay,
       repaymentAccountId: _repaymentAccountId,
       status: _liabilityStatus,
       note: _liabilityNoteCtrl.text,
+      // 账期两字段只对信用卡有意义；类型改成别的负债时一并清空，
+      // 不留一个「房贷带账单日」的假数据。
+      statementDay: _isCreditCard ? _statementDay : null,
+      creditLimit: _isCreditCard && creditLimitText.isNotEmpty
+          ? Decimal.tryParse(creditLimitText)
+          : null,
+      // 本表单不管的字段原样透传，别抹掉借贷侧写入的数据。
+      startDate: _profile?.startDate,
+      endDate: _profile?.endDate,
+      counterparty: _profile?.counterparty ?? '',
     );
   }
 
@@ -416,6 +517,7 @@ class _AccountFormSheetState extends State<AccountFormSheet> {
       _liabilityOriginalCtrl.text,
       _liabilityPrincipalCtrl.text,
       _liabilityRateCtrl.text,
+      if (_isCreditCard) _creditLimitCtrl.text,
     ];
     for (final field in fields) {
       final normalized = field.trim().replaceAll(',', '');
@@ -423,10 +525,7 @@ class _AccountFormSheetState extends State<AccountFormSheet> {
       final value = Decimal.tryParse(normalized);
       if (value == null || value < Decimal.zero) return false;
     }
-    final dayText = _repaymentDayCtrl.text.trim();
-    if (dayText.isEmpty) return true;
-    final day = int.tryParse(dayText);
-    return day != null && day >= 1 && day <= 31;
+    return true;
   }
 }
 

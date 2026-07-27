@@ -85,10 +85,13 @@ enum RecurPeriod {
 class RecurringRule {
   final int id;
   final int bookId;
-  final String kind; // expense / income
+  final String kind; // expense / income / transfer
   final String amountStr;
   final int? categoryId;
   final int? accountId;
+
+  /// 仅 kind=transfer 用：转入账户（A3 房贷向导的每月自动还款走它）。
+  final int? toAccountId;
   final String note;
   final String period; // RecurPeriod.name
   final int startDateMs;
@@ -106,6 +109,7 @@ class RecurringRule {
     required this.amountStr,
     required this.categoryId,
     required this.accountId,
+    this.toAccountId,
     required this.note,
     required this.period,
     required this.startDateMs,
@@ -143,6 +147,7 @@ class RecurringRule {
         amountStr: (m['amount'] as String?) ?? '0',
         categoryId: m['category_id'] as int?,
         accountId: m['account_id'] as int?,
+        toAccountId: m['to_account_id'] as int?,
         note: (m['note'] as String?) ?? '',
         period: (m['period'] as String?) ?? 'monthly',
         startDateMs:

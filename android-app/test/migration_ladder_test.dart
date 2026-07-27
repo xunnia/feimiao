@@ -126,7 +126,7 @@ void main() {
     await _buildV3Db();
 
     final repo = AppRepository();
-    await repo.init(); // 触发 v3→41 全迁移
+    await repo.init(); // 触发 v3→42 全迁移
 
     // 两笔账单都应该存在，且 book_id 不为空（挂上了默认账本）
     expect(repo.transactions, hasLength(2));
@@ -147,6 +147,21 @@ void main() {
         .map((r) => r['name'])
         .toSet();
     expect(columnNames, contains('order_no'));
+    // v42：liability_profiles 应带上账期两列 + 借入对象列。
+    final liabilityColumns =
+        (await check.rawQuery('PRAGMA table_info(liability_profiles)'))
+            .map((r) => r['name'])
+            .toSet();
+    expect(
+      liabilityColumns,
+      containsAll(['statement_day', 'credit_limit', 'counterparty']),
+    );
+    // v42：recurring_rules 应带上 to_account_id（A3 周期转账/房贷向导）。
+    final recurringColumns =
+        (await check.rawQuery('PRAGMA table_info(recurring_rules)'))
+            .map((r) => r['name'])
+            .toSet();
+    expect(recurringColumns, contains('to_account_id'));
     await check.close();
   });
 
@@ -270,7 +285,7 @@ void main() {
     await db.close();
 
     final repo = AppRepository();
-    await repo.init(); // 触发 v12→41 迁移，v13 搬预算
+    await repo.init(); // 触发 v12→42 迁移，v13 搬预算
 
     // v13 应该把 legacy budget 行搬成一条 budget_period
     expect(repo.budgetPeriods, hasLength(1));
@@ -458,7 +473,7 @@ void main() {
     await db.close();
 
     final repo = AppRepository();
-    await repo.init(); // v18→41，v19 修日期 + 删孤儿
+    await repo.init(); // v18→42，v19 修日期 + 删孤儿
 
     // 孤儿退款被删后：原单 + 退款行 = 2 条
     expect(repo.transactions, hasLength(2));
@@ -646,7 +661,7 @@ void main() {
     await db.close();
 
     final repo = AppRepository();
-    await repo.init(); // v24→41，v25 回填 anchor_day
+    await repo.init(); // v24→42，v25 回填 anchor_day
 
     await repo.closeForTest();
     final check = await databaseFactory.openDatabase(path);

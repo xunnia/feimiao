@@ -14,6 +14,8 @@ import 'asset_form_kit.dart';
 class AssetAddEntrySheet extends StatelessWidget {
   final VoidCallback onAccount;
   final VoidCallback onReceivableAsset;
+  final VoidCallback onBorrow;
+  final VoidCallback onLoanWizard;
   final VoidCallback onNewPurchase;
   final VoidCallback onFromTransaction;
   final VoidCallback onManual;
@@ -24,6 +26,8 @@ class AssetAddEntrySheet extends StatelessWidget {
     super.key,
     required this.onAccount,
     required this.onReceivableAsset,
+    required this.onBorrow,
+    required this.onLoanWizard,
     required this.onNewPurchase,
     required this.onFromTransaction,
     required this.onManual,
@@ -69,6 +73,22 @@ class AssetAddEntrySheet extends StatelessWidget {
                           subtitle: '押金、借出款、应收款、预付余额',
                           trailing: const Icon(Icons.chevron_right, size: 18),
                           onTap: onReceivableAsset,
+                        ),
+                        SettingsRow(
+                          key: const Key('add-entry-borrow'),
+                          leading: const Icon(Icons.call_received_outlined),
+                          title: '记一笔借入',
+                          subtitle: '向别人借的钱，按人管理',
+                          trailing: const Icon(Icons.chevron_right, size: 18),
+                          onTap: onBorrow,
+                        ),
+                        SettingsRow(
+                          key: const Key('add-entry-loan-wizard'),
+                          leading: const Icon(Icons.home_work_outlined),
+                          title: '房贷/分期向导',
+                          subtitle: '一次设好账户、档案和每月自动还款',
+                          trailing: const Icon(Icons.chevron_right, size: 18),
+                          onTap: onLoanWizard,
                         ),
                       ],
                     ),

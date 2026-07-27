@@ -9,6 +9,7 @@ import 'package:image_picker/image_picker.dart';
 import 'package:provider/provider.dart';
 
 import '../../core/app_version.dart';
+import '../../core/assets/repayment_reminder.dart';
 import '../../core/money_format.dart';
 import '../../core/models/transaction_card_display.dart';
 import '../../data/app_repository.dart';
@@ -153,6 +154,26 @@ class SettingsView extends StatelessWidget {
                         ],
                       ),
                       onTap: () => showMoneyDisplaySheet(context),
+                    ),
+                  ]),
+                  const _SectionHeader(label: '提醒'),
+                  _Group(children: [
+                    _SwitchTile(
+                      icon: CupertinoIcons.bell,
+                      title: '还款提醒',
+                      subtitle: '信用卡/贷款/借入还款日前一天和当天各提醒一次',
+                      value: repo.repaymentReminderEnabled,
+                      onChanged: (enabled) async {
+                        await repo.setRepaymentReminderEnabled(enabled);
+                        // 开：立刻按新状态重排；关：撤销全部已排的还款提醒
+                        // 通知——别等下次回前台才生效，用户点了开关要马上
+                        // 看得出效果。
+                        if (enabled) {
+                          await RepaymentReminderScheduler.reschedule(repo);
+                        } else {
+                          await RepaymentReminderScheduler.cancelAll();
+                        }
+                      },
                     ),
                   ]),
                   const _SectionHeader(label: '小组件'),

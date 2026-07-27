@@ -126,12 +126,19 @@ class AssetAccountDropdown extends StatelessWidget {
   final String hint;
   final ValueChanged<int?> onChanged;
 
+  /// 可选字段用：菜单首项多一个 [noneLabel]（= 选回 null）。
+  /// 选中 null 时字段显示 hint，不显示 noneLabel——「没选」如实呈现为没选。
+  final bool allowNone;
+  final String noneLabel;
+
   const AssetAccountDropdown({
     super.key,
     required this.value,
     required this.accounts,
     required this.hint,
     required this.onChanged,
+    this.allowNone = false,
+    this.noneLabel = '暂不选择',
   });
 
   @override
@@ -145,12 +152,61 @@ class AssetAccountDropdown extends StatelessWidget {
       onTap: (menuCtx) => showPickerMenu(
         menuCtx,
         [
+          if (allowNone)
+            IosMenuItem(
+              label: noneLabel,
+              icon: Icons.block_outlined,
+              selected: value == null,
+              onTap: () => onChanged(null),
+            ),
           for (final account in accounts)
             IosMenuItem(
               label: account.name,
               icon: Icons.account_balance_wallet_outlined,
               selected: account.id == value,
               onTap: () => onChanged(account.id),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+/// 「每月第几日」选择字段（账单日/还款日用）：AppPickerField 弹 1-31 菜单，
+/// 首项「不设置」= 清空（可空语义，跟数据层 null 对齐）。
+class AssetDayOfMonthDropdown extends StatelessWidget {
+  final int? value;
+  final String hint;
+  final ValueChanged<int?> onChanged;
+
+  const AssetDayOfMonthDropdown({
+    super.key,
+    required this.value,
+    required this.hint,
+    required this.onChanged,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return AppPickerField(
+      key: ValueKey(value),
+      text: value == null ? null : '每月 $value 日',
+      hint: hint,
+      onTap: (menuCtx) => showPickerMenu(
+        menuCtx,
+        [
+          IosMenuItem(
+            label: '不设置',
+            icon: Icons.block_outlined,
+            selected: value == null,
+            onTap: () => onChanged(null),
+          ),
+          for (var day = 1; day <= 31; day++)
+            IosMenuItem(
+              label: '$day 日',
+              icon: Icons.today_outlined,
+              selected: day == value,
+              onTap: () => onChanged(day),
             ),
         ],
       ),

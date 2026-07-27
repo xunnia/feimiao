@@ -29,8 +29,12 @@ import '../assets/physical_asset_detail_page.dart';
 import '../assets/physical_asset_form_sheet.dart';
 import '../assets/physical_asset_grid.dart';
 import '../assets/physical_asset_purchase_sheet.dart';
+import '../assets/borrow_form_sheet.dart';
+import '../assets/lending_view.dart';
+import '../assets/loan_wizard_sheet.dart';
 import '../assets/receivable_detail_page.dart';
 import '../assets/receivable_sheets.dart';
+import '../assets/repayment_sheet.dart';
 import '../common/app_sheet.dart';
 import '../reports/report_views.dart';
 import '../../widgets/sliding_segment.dart';
@@ -169,6 +173,14 @@ class _AccountsViewState extends State<AccountsView> {
                       balances: balances,
                       receivableAssets: receivableAssets,
                       archivedReceivables: archivedReceivables,
+                      upcomingRepayments: repo.upcomingRepayments(),
+                      // 借贷往来入口：有借出权益或个人借入档案才显示。
+                      hasLendingData: [
+                            ...receivableAssets,
+                            ...archivedReceivables,
+                          ].any((a) => a.type == ReceivableAssetType.loanOut) ||
+                          repo.liabilityProfiles.any((p) =>
+                              p.type == LiabilityProfileType.personalBorrow),
                     ),
                   _AssetView.items => _buildItems(
                       context,
@@ -485,6 +497,8 @@ class _AccountsViewState extends State<AccountsView> {
     required List<FundsAccountBalance> balances,
     required List<ReceivableAssetEntity> receivableAssets,
     required List<ReceivableAssetEntity> archivedReceivables,
+    required List<UpcomingRepaymentItem> upcomingRepayments,
+    required bool hasLendingData,
   }) {
     // 种类筛选已删除：列表本就按账户类型分组，够用；只留「当前项目/已归档」一维切换。
     final showArchived = _fundsVisibility == _AssetListVisibility.archived;
@@ -512,10 +526,12 @@ class _AccountsViewState extends State<AccountsView> {
             .toList();
     final groups = _groupBalances(nonZeroBalances);
     final hasArchiveLink = !showArchived && archivedCount > 0;
+    final showLendingEntry = !showArchived && hasLendingData;
     final isEmpty = groups.isEmpty &&
         currentReceivables.isEmpty &&
         zeroItems.isEmpty &&
-        !hasArchiveLink;
+        !hasArchiveLink &&
+        !showLendingEntry;
 
     return Column(
       key: const Key('asset-funds'),
@@ -531,6 +547,22 @@ class _AccountsViewState extends State<AccountsView> {
                         onTap: () => setState(() =>
                             _fundsVisibility = _AssetListVisibility.active),
                       ),
+                      const SizedBox(height: 6),
+                    ],
+                    // 「最近要还」置顶：10 天内到期的还款比静态列表更紧急。
+                    if (!showArchived && upcomingRepayments.isNotEmpty) ...[
+                      UpcomingRepaymentsCard(
+                        items: upcomingRepayments,
+                        onRepay: (item) => _showRepaymentSheet(context, item),
+                      ),
+                      if (currentReceivables.isNotEmpty ||
+                          groups.isNotEmpty ||
+                          zeroItems.isNotEmpty)
+                        const SizedBox(height: 12),
+                    ],
+                    // 借贷往来入口：紧跟「最近要还」，与已归档入口同款轻量行。
+                    if (showLendingEntry) ...[
+                      LendingEntryRow(onTap: () => _openLending(context)),
                       const SizedBox(height: 6),
                     ],
                     if (currentReceivables.isNotEmpty)
@@ -750,6 +782,23 @@ class _AccountsViewState extends State<AccountsView> {
           Navigator.pop(context);
           _showAddReceivableSheet(context);
         },
+        onBorrow: () {
+          Navigator.pop(context);
+          Future.microtask(() {
+            if (!context.mounted) return;
+            showBlurSheet<void>(
+              context,
+              child: const BorrowFormSheet(),
+            );
+          });
+        },
+        onLoanWizard: () {
+          Navigator.pop(context);
+          Future.microtask(() {
+            if (!context.mounted) return;
+            showLoanWizardSheet(context);
+          });
+        },
         onNewPurchase: () {
           Navigator.pop(context);
           Future.microtask(() {
@@ -805,6 +854,21 @@ class _AccountsViewState extends State<AccountsView> {
     showBlurSheet<void>(
       context,
       child: const ReceivableAssetFormSheet(),
+    );
+  }
+
+  void _showRepaymentSheet(BuildContext context, UpcomingRepaymentItem item) {
+    showBlurSheet<void>(
+      context,
+      child: RepaymentSheet(profile: item.profile),
+    );
+  }
+
+  void _openLending(BuildContext context) {
+    Navigator.of(context).push(
+      AppPageRoute<void>(
+        builder: (_) => const LendingView(),
+      ),
     );
   }
 

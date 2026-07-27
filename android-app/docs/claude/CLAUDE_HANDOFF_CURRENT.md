@@ -1,6 +1,6 @@
 # 肥喵记账 Codex 当前交接文档
 
-更新时间：2026-07-27（P2 施工中断点，见下方 P2 段）
+更新时间：2026-07-27（A 批终稿，见下方 A 批段）
 当前 Android 工程：`C:\src\xunni-codex\android-app`  
 新会话第一入口：`docs/claude/CLAUDE_START_HERE.md`
 
@@ -40,7 +40,18 @@
 - **用户真机三条反馈（v209）全修**：①**弹层顶进状态栏**（手工补录/新购买表单，键盘顶起后头部压住时钟）——根因=showBlurSheet 路由 `SafeArea(top:false)`；路由层打开顶部安全区，12+ 弹层一次全修；同类隐患一并排查：appSheet 路由加 `useSafeArea:true`、自动记账确认表、主页月份选择器同修，其余小弹层无此风险。②**支出分类选择不统一**——新购买表单的平铺菜单改全局分类选择器 `showCategoryPickerSheet`（彩色网格+二级展开），废弃的 AssetCategoryDropdown 删除。③**添加弹层头部大空隙**——根因=弹层内部 SafeArea 在屏底弹层里垫了状态栏高度；路由层修复后内部 SafeArea 自动去重（SafeArea 会从子树 MediaQuery 移除已消费 padding），头部贴顶。
 - **验收**：analyze 0/0（2 老 info）；全量 **808/808**；三张证据图（伪键盘+伪状态栏离屏渲染）`outputs/asset_ui_review/v210_fixes/`。
 - **v210 APK 已构建核验归档**：aapt=`com.qingji.qingji.codex`/210/1.208.0；16K/V2 过。`ci-artifacts/releases/feimiao-codex-v1.208.0-210.apk`，110,666,443 字节，SHA256 `3164A10907987B1E0E37193EBD2DE06635E8F7BEB4685E916263C16F798AF79A`。**未发布线上**（线上仍 v209，等用户点头）。
-- **⏭️ 用户已拍板（2026-07-27）：按资产对标方案 A→B→D→C 顺序开工**。**🔄 A 批施工中**：规格=方案文档 §二点五（**范围纠偏：A5 ledger 迁移仍是独立批，A 批只做产品层**）；工作流 6 段串行（①DB v42+免息期引擎 ②账期UI ③借贷往来页 ④房贷向导 ⑤还款提醒 ⑥验收），完整任务书在工作流脚本 `C:\Users\寻逆啊\.claude\projects\C--src-xunni-codex\0775c34a-7109-42fb-b5ab-bab67ef5ca2f\workflows\scripts\asset-batch-a-wf_06caa166-89d.js`（磁盘可读）。**若中断接手**：git status+diff 看做到哪段，按脚本任务书补完；完成后收尾=全量测试→渲染证据图→bump 1.209.0+211/b0727-211→本文档 A 批终稿→commit+快照（parent 先 ls-remote 拿 tip）→APK v211。每阶段完成即更新本文档（用户铁律）。
+- **⏭️ 用户已拍板（2026-07-27）：按资产对标方案 A→B→D→C 顺序开工**。**✅ A 批已完成，见下方 A 批段**。
+
+### 2026-07-27 资产功能对标 A 批（✅已完成总验收，v1.209.0+211 / b0727-211 / DB v42）
+
+- **范围（守 V2.1 锁定）**：A 批只做产品层，不动 ledger 迁移（A5 独立批）。6 段串行工作流全部完成：①DB v42+免息期引擎 ②账期UI ③借贷往来页 ④房贷向导 ⑤还款提醒 ⑥验收。
+- **A1 信用卡账期**：DB v42 = liability_profiles 加 `statement_day`（账单日1-31）+ `credit_limit`（额度，Decimal字符串）；新 `core/assets/credit_card_terms.dart`（105行，纯逻辑可单测：当前账单周期/最近还款日/今天消费免息天数）；信用卡账户表单补账单日/还款日/额度三字段；资金页「最近要还」卡（10天内到期还款按日排，行内「还款」=预填转账弹层+本金递减）；`repayment_reminder.dart`（220行）处理本地通知调度（还款日前1天+当天，幂等调度）。
+- **A2 借贷往来**：DB v42 = liability_profiles 加 `counterparty`（借入对象姓名）；recurring_rules 加 `to_account_id`（支持转账类型的周期记账，房贷向导的每月自动还款依赖此列）；`lending_view.dart`（391行，按人聚合借出receivable.loanOut+借入personalBorrow 净额+时间线）；`borrow_form_sheet.dart`（189行）；资金页有借贷数据时显示入口。还款/收回超本金部分自动记利息（收入=投资理财-利息/支出=利息分类）。
+- **A3 房贷/分期向导**：`loan_wizard_sheet.dart`（352行，一键创建=loan账户+liability档案+每月周期还款规则）；本息拆分不做（A5范围），利率只存档展示。recurring_view 已适配新转账类型的周期规则展示。
+- **A4 还款提醒**：`repayment_sheet.dart`（180行，还款确认+金额录入+一键转账落库）；settings_view 加「还款提醒」开关；`main.dart` 注册 repayment_reminder 通知 channel。
+- **验收**：analyze **0 error 0 warning**（2 条老 info）；全量 `flutter test` **841/841** 全过（比 v210 基线 +33 个测试：credit_card_terms_test 覆盖免息期引擎逻辑、repayment_reminder_test 覆盖通知调度、app_repository_test/migration_ladder_test 补 v42 迁移等价性、asset_management_view_test 补借贷往来导航用例）。
+- **v211 APK 已构建并核验**：aapt=`com.qingji.qingji.codex`/211/1.209.0/肥喵记账；16K zipalign 过；V2 唯一 Codex 证书（SHA256 `4E99C399...83D507`）。归档 `ci-artifacts/releases/feimiao-codex-v1.209.0-211.apk`，**111,813,999 字节**，SHA256 `95AF6B5BFA34F5235EF13EB9CC83986B9D2B9829E25410B3472F85F7E4AFBDB8`。**未发布线上**（线上仍 v209；用户从电脑直接传包安装）。
+- **⏭️ 下一步**：B 批（净资产补完，含 A3b/A5 老欠账）→ D 批（差异化小件）→ C 批（投资层，押后）。开工前先读 `docs/droid/资产功能对标与优化方案-2026-07-27.md` §三~§四。
 
 ### 2026-07-27 资产UI P2 重构批（✅已完成总验收，v1.207.0+209 / b0727-209 / DB 仍 v41）
 
@@ -253,16 +264,16 @@
 - 另带上 178 后补的小组件快照指纹跳渲。
 - 上一轮（1.176.0+178，已上线）：更新校验加固、深色状态栏、退款净额索引化、transactions 索引、去重复模糊层。
 
-## 3. 验证记录（最新 = v210，2026-07-27）
+## 3. 验证记录（最新 = v211，2026-07-27）
 
 已完成：
 
 - `flutter analyze --no-pub --no-fatal-infos --no-fatal-warnings`：0 issue（仅 2 条既有测试 info）。
-- `flutter test --no-pub --concurrency=1`：**808/808** 通过（注意：管道会吞退出码，结果落文件再查 `$?`）。
-- `flutter build apk --release --no-pub --build-name 1.208.0 --build-number 210`：成功。
-- `verify_release_apk.sh`（含 aapt/16K zipalign/apksigner）：`com.qingji.qingji.codex` / 210 / 1.208.0 / V2 唯一 Codex 签名，证书 SHA256 `4e99c399d4d246bd9c6b08b1d641248bd0846e7ae650c3a766e30fa67483d507`。跑它前先 `export JAVA_HOME="C:\Program Files\Android\Android Studio\jbr"`。
-- APK：110,666,443 字节；SHA256 `3164A10907987B1E0E37193EBD2DE06635E8F7BEB4685E916263C16F798AF79A`，归档与 sidecar 一致。v209（线上）/v208/v207 保留为回退包。
-- 离屏渲染截图已做（对比图见 outputs/asset_ui_review/），模拟器/真机安装按惯例跳过；运行态由用户自行安装验收，不能宣称已通过真机验证。
+- `flutter test --no-pub --concurrency=1`：**841/841** 通过（注意：管道会吞退出码，结果落文件再查 `$?`）。
+- `flutter build apk --release --no-pub --build-name 1.209.0 --build-number 211`：成功。
+- `verify_release_apk.sh`（含 aapt/16K zipalign/apksigner）：`com.qingji.qingji.codex` / 211 / 1.209.0 / V2 唯一 Codex 签名，证书 SHA256 `4e99c399d4d246bd9c6b08b1d641248bd0846e7ae650c3a766e30fa67483d507`。跑它前先 `export JAVA_HOME="C:\Program Files\Android\Android Studio\jbr"`。
+- APK：111,813,999 字节；SHA256 `95AF6B5BFA34F5235EF13EB9CC83986B9D2B9829E25410B3472F85F7E4AFBDB8`，归档与 sidecar 一致。v210/v209（线上）保留为回退包。
+- 离屏渲染截图：A 批为逻辑/数据层功能，无新 UI 对比图（A批截图可在真机安装后验收）；模拟器/真机安装按惯例跳过；运行态由用户自行安装验收。
 
 ## 4. 线上上传状态
 - ✅ **v209 已由 Claude 于 2026-07-27 发布上线（用户拍板）**：`1.207.0+209` / `b0727-209` / DB v41；releaseId `v209-44b235922691`。发布后验证：公网 version.json 返回 209、sha256 `44b23592...aa74eb` 与源 APK 一致、sizeBytes 110,666,531 一致（全量下载哈希核验另记）。本地功能提交与快照见 P2 段。v207/v208 APK 归档保留为回退包（未单独发布）。
@@ -304,11 +315,11 @@
 
 ## 5. 版本文件同步状态
 
-- `pubspec.yaml`：`version: 1.208.0+210`
-- `lib/core/app_version.dart`：`version = '1.208.0'`，`buildNumber = 210`
-- `lib/build_info.dart`：`kBuildTag = 'b0727-210'`
-- `android/local.properties`：Flutter release 构建已读取 `1.204.0+206`；该文件通常不入 git
-- DB：**v41**（v40 交易时间精度之上，transactions 新增 `order_no`；导入退款支持跨批/跨月挂回历史原单）
+- `pubspec.yaml`：`version: 1.209.0+211`
+- `lib/core/app_version.dart`：`version = '1.209.0'`，`buildNumber = 211`
+- `lib/build_info.dart`：`kBuildTag = 'b0727-211'`
+- `android/local.properties`：Flutter release 构建已读取 `1.209.0+211`；该文件通常不入 git
+- DB：**v42**（v41 订单号之上，liability_profiles 加 statement_day/credit_limit/counterparty；recurring_rules 加 to_account_id）
 - 版本规矩：每次推送 minor+1、versionCode+1、kBuildTag 同步（b月日-versionCode）
 
 ## 6. 接手规则

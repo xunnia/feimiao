@@ -5,6 +5,7 @@ import 'package:decimal/decimal.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:path/path.dart' as p;
 import 'package:qingji/core/assets/asset_allocation.dart';
+import 'package:qingji/core/account/account_movement_projection.dart';
 import 'package:qingji/core/budget/budget_plan_v2.dart';
 import 'package:qingji/core/models/transaction_kind.dart';
 import 'package:qingji/data/app_repository.dart';
@@ -779,7 +780,7 @@ void main() {
     await repo.closeForTest();
   });
 
-  test('v38 到 v41 等价迁移保留 B2 与资产证据并初始化 A4 字段', () async {
+  test('v38 到 v42 等价迁移保留 B2 与资产证据并初始化 A4 字段', () async {
     var repo = await freshRepo();
     final planId = await repo.addBudgetPlanV2(
       bookId: repo.currentBookId,
@@ -866,7 +867,7 @@ void main() {
     db = await databaseFactory.openDatabase(dbPath);
     expect(
       Sqflite.firstIntValue(await db.rawQuery('PRAGMA user_version')),
-      41,
+      42,
     );
     expect(
       await _captureV38Evidence(db, planId: planId, assetId: assetId),
@@ -880,6 +881,15 @@ void main() {
     expect(assetColumns,
         containsAll(['usage_tracking_enabled', 'savings_goal_id']));
     expect(goalColumns, containsAll(['uuid', 'updated_ms']));
+    // v42：liability_profiles 账期两列 + 借入对象列在等价迁移后仍在。
+    final liabilityColumns = await _columnNames(db, 'liability_profiles');
+    expect(
+      liabilityColumns,
+      containsAll(['statement_day', 'credit_limit', 'counterparty']),
+    );
+    // v42：recurring_rules 加 to_account_id（A3 周期转账/房贷向导）。
+    final recurringColumns = await _columnNames(db, 'recurring_rules');
+    expect(recurringColumns, contains('to_account_id'));
     expect(
       usageColumns,
       containsAll([
@@ -1606,6 +1616,312 @@ void main() {
           .map((candidate) => candidate.transaction.id),
       isNot(contains(transactionId)),
     );
+    await repo.closeForTest();
+  });
+
+  test('A2 借入：入账转账、一次性还款日与还款闭环', () async {
+    final repo = await freshRepo();
+    final payerId = repo.accounts.first.id;
+    final payerBefore =
+        repo.accountBalanceOf(repo.accounts.singleWhere((a) => a.id == payerId));
+    final profileId = await repo.addPersonalBorrow(
+      counterparty: '李四',
+      amount: Decimal.fromInt(500),
+      toAccountId: payerId,
+      dueDate: DateTime.now().add(const Duration(days: 3)),
+    );
+    final profile =
+        repo.liabilityProfiles.singleWhere((p) => p.id == profileId);
+    expect(profile.type, LiabilityProfileType.personalBorrow);
+    expect(profile.counterparty, '李四');
+    expect(profile.currentPrincipal, Decimal.fromInt(500));
+    final loanAccount =
+        repo.accounts.singleWhere((a) => a.id == profile.accountId);
+    expect(loanAccount.name, '借入·李四');
+    expect(loanAccount.type, AccountType.loan);
+    // 入账转账双腿：借入账户 -500、入账账户 +500，钱的去向有账可查。
+    expect(repo.accountBalanceOf(loanAccount), Decimal.fromInt(-500));
+    expect(
+      repo.accountBalanceOf(
+            repo.accounts.singleWhere((a) => a.id == payerId),
+          ) -
+          payerBefore,
+      Decimal.fromInt(500),
+    );
+    final inflow = repo.transfersInvolvingAccount(loanAccount.id).single;
+    expect(inflow.accountId, loanAccount.id);
+    expect(inflow.toAccountId, payerId);
+
+    // 一次性还款日进「最近要还」。
+    final upcoming = repo.upcomingRepayments();
+    expect(upcoming.single.profile.id, profileId);
+    expect(upcoming.single.daysLeft, 3);
+
+    // 部分还款：本金递减、不编利息；还清：paidOff + 最近要还清空 + 账户归零。
+    final partial = await repo.repayLiabilityProfile(
+      profileId: profileId,
+      amount: Decimal.fromInt(200),
+      fromAccountId: payerId,
+    );
+    expect(partial.principalPaid, Decimal.fromInt(200));
+    expect(partial.interestPaid, Decimal.zero);
+    expect(
+      repo.liabilityProfiles
+          .singleWhere((p) => p.id == profileId)
+          .currentPrincipal,
+      Decimal.fromInt(300),
+    );
+    await repo.repayLiabilityProfile(
+      profileId: profileId,
+      amount: Decimal.fromInt(300),
+      fromAccountId: payerId,
+    );
+    expect(
+      repo.liabilityProfiles.singleWhere((p) => p.id == profileId).status,
+      LiabilityProfileStatus.paidOff,
+    );
+    expect(repo.upcomingRepayments(), isEmpty);
+    expect(
+      repo.accountBalanceOf(
+        repo.accounts.singleWhere((a) => a.id == loanAccount.id),
+      ),
+      Decimal.zero,
+    );
+    // 时间线口径：转入借入账户的两笔还款转账都查得到。
+    final repayments = repo
+        .transfersInvolvingAccount(loanAccount.id)
+        .where((t) => t.toAccountId == loanAccount.id)
+        .toList();
+    expect(repayments.length, 2);
+    await repo.closeForTest();
+  });
+
+  test('A2 还款超本金：差额自动记利息支出，本金转账与账户余额都对得上', () async {
+    final repo = await freshRepo();
+    final payerId = repo.accounts.first.id;
+    final payerBefore = repo.accountBalanceOf(
+      repo.accounts.singleWhere((a) => a.id == payerId),
+    );
+    final profileId = await repo.addPersonalBorrow(
+      counterparty: '钱七',
+      amount: Decimal.fromInt(500),
+      toAccountId: payerId,
+    );
+    final profile =
+        repo.liabilityProfiles.singleWhere((p) => p.id == profileId);
+
+    // 还 520：本金只有 500，多出的 20 是利息，必须拆成单独一笔支出。
+    final result = await repo.repayLiabilityProfile(
+      profileId: profileId,
+      amount: Decimal.fromInt(520),
+      fromAccountId: payerId,
+    );
+    expect(result.principalPaid, Decimal.fromInt(500));
+    expect(result.interestPaid, Decimal.fromInt(20));
+    expect(result.transferTransactionId, isNotNull);
+    expect(result.interestTransactionId, isNotNull);
+
+    // 本金转账 = 500（不是 520）：负债账户恰好归零，档案结清。
+    final loanAccount =
+        repo.accounts.singleWhere((a) => a.id == profile.accountId);
+    expect(repo.accountBalanceOf(loanAccount), Decimal.zero);
+    expect(
+      repo.liabilityProfiles.singleWhere((p) => p.id == profileId).status,
+      LiabilityProfileStatus.paidOff,
+    );
+
+    // 利息 20 = 真支出（excluded=0、事件类型 interest、从还款账户出）。
+    final interestTx = repo.visibleTransactions
+        .singleWhere((t) => t.id == result.interestTransactionId);
+    expect(interestTx.txKind, TransactionKind.expense);
+    expect(interestTx.amount, Decimal.fromInt(20));
+    expect(interestTx.excluded, isFalse);
+    expect(interestTx.eventType, TransactionEventType.interest);
+    expect(interestTx.accountId, payerId);
+    expect(interestTx.note, contains('还款利息'));
+
+    // 还款账户净变化 = +500（借入到账）- 520（还款总划扣）= -20。
+    expect(
+      repo.accountBalanceOf(
+            repo.accounts.singleWhere((a) => a.id == payerId),
+          ) -
+          payerBefore,
+      Decimal.fromInt(-20),
+    );
+    await repo.closeForTest();
+  });
+
+  test('A2 借出收回带利息：利息记真收入，撤销收回时一并删除', () async {
+    final repo = await freshRepo();
+    final account = repo.accounts.first;
+    final assetId = await repo.addReceivableAsset(
+      name: '借给张三',
+      type: ReceivableAssetType.loanOut,
+      originalAmount: Decimal.fromInt(1000),
+    );
+
+    // 利息>0 却不给到账账户：利息是真钱，必须拒绝。
+    await expectLater(
+      repo.recoverReceivableAsset(
+        id: assetId,
+        amount: Decimal.fromInt(1000),
+        interestAmount: Decimal.fromInt(30),
+      ),
+      throwsArgumentError,
+    );
+
+    await repo.recoverReceivableAsset(
+      id: assetId,
+      amount: Decimal.fromInt(1000),
+      targetAccountId: account.id,
+      interestAmount: Decimal.fromInt(30),
+      recoveredAt: DateTime(2026, 7, 20),
+    );
+    // 本金收回 1000 = excluded 形态转换；利息 30 = 真收入（进统计）。
+    final interestTx = repo.visibleTransactions.singleWhere(
+      (t) => t.txKind == TransactionKind.income && !t.excluded,
+    );
+    expect(interestTx.amount, Decimal.fromInt(30));
+    // 事件类型必须是 income（不是 interest）：三套结算引擎把 interest
+    // 事件一律当流出，收入行打 interest 会让账户余额反向。
+    expect(interestTx.eventType, TransactionEventType.income);
+    expect(interestTx.note, contains('借出利息'));
+    expect(
+      repo.allRecords
+          .where((r) => r.kind == TransactionKind.income)
+          .single
+          .amount,
+      Decimal.fromInt(30),
+    );
+    expect(repo.accountBalanceOf(account), Decimal.fromInt(1030));
+
+    // 撤销收回：本金流水和利息流水一并删，账户余额回到 0，审计链闭合。
+    await repo.undoReceivableRecovery(repo.receivableRecoveries.single.id);
+    expect(repo.visibleTransactions, isEmpty);
+    expect(
+      repo.allRecords.where((r) => r.kind == TransactionKind.income),
+      isEmpty,
+    );
+    expect(repo.accountBalanceOf(account), Decimal.zero);
+    expect(
+      repo.receivableAssets
+          .singleWhere((a) => a.id == assetId)
+          .remainingAmount,
+      Decimal.fromInt(1000),
+    );
+    await repo.closeForTest();
+  });
+
+  test('A2 借入：无入账账户走期初负余额、同名对象加序号、逾期为负天数', () async {
+    final repo = await freshRepo();
+    final firstId = await repo.addPersonalBorrow(
+      counterparty: '王五',
+      amount: Decimal.fromInt(300),
+    );
+    final first = repo.liabilityProfiles.singleWhere((p) => p.id == firstId);
+    final firstAccount =
+        repo.accounts.singleWhere((a) => a.id == first.accountId);
+    expect(firstAccount.name, '借入·王五');
+    // 不选入账账户：不编造到账流水，欠款如实落在期初负余额上。
+    expect(repo.transfersInvolvingAccount(firstAccount.id), isEmpty);
+    expect(repo.accountBalanceOf(firstAccount), Decimal.fromInt(-300));
+
+    final secondId = await repo.addPersonalBorrow(
+      counterparty: '王五',
+      amount: Decimal.fromInt(200),
+      dueDate: DateTime.now().subtract(const Duration(days: 2)),
+    );
+    final second = repo.liabilityProfiles.singleWhere((p) => p.id == secondId);
+    // 每笔借入独立档案+独立账户（同名加序号），日期金额不合并造假。
+    expect(second.accountId, isNot(first.accountId));
+    expect(
+      repo.accounts.singleWhere((a) => a.id == second.accountId).name,
+      '借入·王五·2',
+    );
+    // 逾期的一次性还款日照样出现在「最近要还」，daysLeft 为负数。
+    final upcoming = repo.upcomingRepayments();
+    expect(upcoming.single.profile.id, secondId);
+    expect(upcoming.single.daysLeft, -2);
+
+    await expectLater(
+      repo.addPersonalBorrow(counterparty: '  ', amount: Decimal.one),
+      throwsArgumentError,
+    );
+    await expectLater(
+      repo.addPersonalBorrow(counterparty: '赵六', amount: Decimal.zero),
+      throwsArgumentError,
+    );
+    await repo.closeForTest();
+  });
+
+  test('A3 房贷向导：一次事务建齐账户/档案/周期转账，首期当天到期立即记账', () async {
+    final repo = await freshRepo();
+    final payerId = await repo.addAccount(
+      name: '工资卡',
+      openingBalance: Decimal.fromInt(20000),
+    );
+    final today = DateTime.now();
+
+    // 非法输入不落任何一件套。
+    await expectLater(
+      repo.createLoanWizardSetup(
+        type: LiabilityProfileType.mortgage,
+        name: '房贷',
+        totalAmount: Decimal.fromInt(1000000),
+        remainingPrincipal: Decimal.fromInt(800000),
+        monthlyPayment: Decimal.zero,
+        repaymentDay: today.day,
+        fromAccountId: payerId,
+      ),
+      throwsArgumentError,
+    );
+    expect(repo.recurringRules, isEmpty);
+
+    final result = await repo.createLoanWizardSetup(
+      type: LiabilityProfileType.mortgage,
+      name: '房贷',
+      totalAmount: Decimal.fromInt(1000000),
+      remainingPrincipal: Decimal.fromInt(800000),
+      annualRate: Decimal.parse('3.1'),
+      monthlyPayment: Decimal.fromInt(5000),
+      repaymentDay: today.day,
+      fromAccountId: payerId,
+    );
+
+    // 账户：loan、计入净资产。
+    final loanAccount =
+        repo.accounts.singleWhere((a) => a.id == result.accountId);
+    expect(loanAccount.type, AccountType.loan);
+    expect(loanAccount.includeInNetWorth, isTrue);
+
+    // 档案：类型/金额/还款日/扣款账户如实入档，利率只存档展示。
+    final profile = repo.liabilityProfileForAccount(result.accountId)!;
+    expect(profile.id, result.profileId);
+    expect(profile.type, LiabilityProfileType.mortgage);
+    expect(profile.originalAmount, Decimal.fromInt(1000000));
+    expect(profile.currentPrincipal, Decimal.fromInt(800000));
+    expect(profile.interestRate, Decimal.parse('3.1'));
+    expect(profile.repaymentDay, today.day);
+    expect(profile.repaymentAccountId, payerId);
+
+    // 周期规则：每月转账（扣款账户 → 贷款账户），锚定还款日。
+    final rule = repo.recurringRules.singleWhere((r) => r.id == result.ruleId);
+    expect(rule.txKind, TransactionKind.transfer);
+    expect(rule.accountId, payerId);
+    expect(rule.toAccountId, result.accountId);
+    expect(rule.anchorDay, today.day);
+    expect(rule.generatedCount, 1);
+
+    // 还款日 = 今天 → 首期立即记账，两腿余额正确：
+    // 工资卡 20000-5000，贷款账户 -800000+5000（不做本息拆分，按月供全额）。
+    final tx = repo.transactions
+        .singleWhere((t) => t.recurringRuleId == result.ruleId);
+    expect(tx.txKind, TransactionKind.transfer);
+    expect(tx.accountId, payerId);
+    expect(tx.toAccountId, result.accountId);
+    final payer = repo.accounts.singleWhere((a) => a.id == payerId);
+    expect(repo.accountBalanceOf(payer), Decimal.fromInt(15000));
+    expect(repo.accountBalanceOf(loanAccount), Decimal.fromInt(-795000));
     await repo.closeForTest();
   });
 }

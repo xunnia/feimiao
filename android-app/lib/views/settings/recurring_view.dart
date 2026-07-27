@@ -88,12 +88,21 @@ class _RuleCard extends StatelessWidget {
     final title = rule.note.isNotEmpty
         ? rule.note
         : (cat?.nameZh ??
-            (rule.txKind == TransactionKind.income ? '收入' : '支出'));
+            switch (rule.txKind) {
+              TransactionKind.income => '收入',
+              TransactionKind.transfer => '转账',
+              _ => '支出',
+            });
     final amtColor = rule.txKind == TransactionKind.income
         ? AppColors.income(scheme)
         : scheme.onSurface;
-    final amtText =
-        '${rule.txKind == TransactionKind.income ? '+' : '-'}${MoneyFormat.string(rule.amount)}';
+    // 转账不带正负号：账户间划转不是收也不是支。
+    final sign = switch (rule.txKind) {
+      TransactionKind.income => '+',
+      TransactionKind.transfer => '',
+      _ => '-',
+    };
+    final amtText = '$sign${MoneyFormat.string(rule.amount)}';
 
     return Container(
       margin: const EdgeInsets.only(bottom: 10),
@@ -182,6 +191,10 @@ class _RecurringEditSheetState extends State<_RecurringEditSheet> {
   late final TextEditingController _countCtrl;
   int? _categoryId;
   int? _accountId;
+
+  /// 仅转账规则用（A3 房贷向导创建的自动还款）。表单里转账不提供
+  /// 收/支切换——kind 保持 transfer，改的是转出/转入账户。
+  int? _toAccountId;
   int? _bookId;
   late RecurPeriod _period;
   late DateTime _startDate;
@@ -198,6 +211,7 @@ class _RecurringEditSheetState extends State<_RecurringEditSheet> {
     _noteCtrl = TextEditingController(text: r?.note ?? '');
     _categoryId = r?.categoryId;
     _accountId = r?.accountId;
+    _toAccountId = r?.toAccountId;
     _bookId = r?.bookId;
     _period = r?.recurPeriod ?? RecurPeriod.monthly;
     _startDate = _dateOnly(r?.startDate ?? DateTime.now());
@@ -220,6 +234,8 @@ class _RecurringEditSheetState extends State<_RecurringEditSheet> {
 
   int? get _countLimit => int.tryParse(_countCtrl.text.trim());
 
+  bool get _isTransfer => _kind == TransactionKind.transfer;
+
   bool get _endConfigValid {
     return switch (_endMode) {
       _RecurringEndMode.none => true,
@@ -237,7 +253,10 @@ class _RecurringEditSheetState extends State<_RecurringEditSheet> {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final repo = context.read<AppRepository>();
-    final cats = repo.categoriesForKind(_kind).where((c) => !c.hidden).toList();
+    // 转账规则没有分类语义，别去查分类树。
+    final cats = _isTransfer
+        ? const <CategoryEntity>[]
+        : repo.categoriesForKind(_kind).where((c) => !c.hidden).toList();
     final accounts = repo.transactionAccounts;
     final books = repo.books;
     if (_bookId == null || !books.any((b) => b.id == _bookId)) {
@@ -246,6 +265,10 @@ class _RecurringEditSheetState extends State<_RecurringEditSheet> {
     // 账户:为空或指向已删除账户时,回落到第一个(否则 Dropdown 会断言崩)。
     if (_accountId == null || !accounts.any((a) => a.id == _accountId)) {
       _accountId = accounts.firstOrNull?.id;
+    }
+    // 转入账户失效时清空，如实呈现「没选」，不悄悄换成别的账户。
+    if (_toAccountId != null && !accounts.any((a) => a.id == _toAccountId)) {
+      _toAccountId = null;
     }
     // 若当前选中分类不在本类型下,清空。这里必须包含二级分类:
     // 用户常选「房租」这类子分类,只校验一级分类会在返回后立刻被清空。
@@ -258,9 +281,12 @@ class _RecurringEditSheetState extends State<_RecurringEditSheet> {
         amount > Decimal.zero &&
         _accountId != null &&
         _bookId != null &&
+        (!_isTransfer ||
+            (_toAccountId != null && _toAccountId != _accountId)) &&
         _endConfigValid;
     final selCat = cats.where((c) => c.id == _categoryId).firstOrNull;
     final selAcc = accounts.where((a) => a.id == _accountId).firstOrNull;
+    final selToAcc = accounts.where((a) => a.id == _toAccountId).firstOrNull;
     final selBook = books.where((b) => b.id == _bookId).firstOrNull;
     final screenH = MediaQuery.sizeOf(context).height;
 
@@ -281,26 +307,36 @@ class _RecurringEditSheetState extends State<_RecurringEditSheet> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  // 收支
-                  Center(
-                    child: SizedBox(
-                      width: 200,
-                      child: SlidingSegment<TransactionKind>(
-                        items: const [
-                          (TransactionKind.expense, '支出'),
-                          (TransactionKind.income, '收入'),
-                        ],
-                        value: _kind,
-                        onChanged: (v) {
-                          Haptics.selection();
-                          setState(() {
-                            _kind = v;
-                            _categoryId = null;
-                          });
-                        },
+                  // 收支（转账规则不给切收/支：kind 保持 transfer，
+                  // 表单改成转出/转入账户两个字段）
+                  if (_isTransfer)
+                    const AppLabeledField(
+                      label: '类型',
+                      child: AppReadOnlyField(
+                        text: '转账（账户间划转）',
+                        icon: Icons.swap_horiz_rounded,
+                      ),
+                    )
+                  else
+                    Center(
+                      child: SizedBox(
+                        width: 200,
+                        child: SlidingSegment<TransactionKind>(
+                          items: const [
+                            (TransactionKind.expense, '支出'),
+                            (TransactionKind.income, '收入'),
+                          ],
+                          value: _kind,
+                          onChanged: (v) {
+                            Haptics.selection();
+                            setState(() {
+                              _kind = v;
+                              _categoryId = null;
+                            });
+                          },
+                        ),
                       ),
                     ),
-                  ),
                   const SizedBox(height: 16),
 
                   // 金额
@@ -319,7 +355,56 @@ class _RecurringEditSheetState extends State<_RecurringEditSheet> {
                   ),
                   const SizedBox(height: 14),
 
-                  // 分类 + 账户（showIosMenu 选择，同全局设计）
+                  // 分类 + 账户（showIosMenu 选择，同全局设计）；
+                  // 转账规则改成 转出账户 + 转入账户。
+                  if (_isTransfer)
+                    Row(
+                      children: [
+                        Expanded(
+                          child: AppLabeledField(
+                            label: '转出账户',
+                            child: AppPickerField(
+                              text: selAcc?.name,
+                              hint: '选择账户',
+                              onTap: (menuCtx) => showPickerMenu(menuCtx, [
+                                for (final a in accounts)
+                                  IosMenuItem(
+                                    label: a.name,
+                                    icon:
+                                        Icons.account_balance_wallet_outlined,
+                                    selected: a.id == _accountId,
+                                    onTap: () =>
+                                        setState(() => _accountId = a.id),
+                                  ),
+                              ]),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: AppLabeledField(
+                            label: '转入账户',
+                            child: AppPickerField(
+                              text: selToAcc?.name,
+                              hint: '选择账户',
+                              onTap: (menuCtx) => showPickerMenu(menuCtx, [
+                                for (final a in accounts)
+                                  if (a.id != _accountId)
+                                    IosMenuItem(
+                                      label: a.name,
+                                      icon: Icons
+                                          .account_balance_wallet_outlined,
+                                      selected: a.id == _toAccountId,
+                                      onTap: () =>
+                                          setState(() => _toAccountId = a.id),
+                                    ),
+                              ]),
+                            ),
+                          ),
+                        ),
+                      ],
+                    )
+                  else
                   Row(
                     children: [
                       Expanded(
@@ -578,6 +663,7 @@ class _RecurringEditSheetState extends State<_RecurringEditSheet> {
         amount: amount,
         categoryId: _categoryId,
         accountId: _accountId,
+        toAccountId: _isTransfer ? _toAccountId : null,
         bookId: _bookId,
         note: note,
         period: _period,
@@ -592,6 +678,7 @@ class _RecurringEditSheetState extends State<_RecurringEditSheet> {
         amount: amount,
         categoryId: _categoryId,
         accountId: _accountId,
+        toAccountId: _isTransfer ? _toAccountId : null,
         bookId: _bookId,
         note: note,
         period: _period,
