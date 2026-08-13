@@ -3,6 +3,7 @@ import 'dart:ui' show ImageFilter;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:provider/provider.dart';
 
 import 'core/auto_record.dart';
@@ -268,9 +269,15 @@ class QingJiApp extends StatelessWidget {
       theme: AppTheme.light(),
       darkTheme: AppTheme.dark(),
       themeMode: appTheme.forceDark ? ThemeMode.dark : ThemeMode.system,
-      // 暖渐变背景由转场器按路由注入（app_colors.dart 的
-      // _GradientCupertinoTransitionsBuilder）：每页自带不透明渐变底，
-      // 转场不透视、合成器按不透明页优化，不在这里全局铺。
+      localizationsDelegates: const [
+        GlobalMaterialLocalizations.delegate,
+        GlobalWidgetsLocalizations.delegate,
+        GlobalCupertinoLocalizations.delegate,
+      ],
+      supportedLocales: const [
+        Locale('zh', 'CN'),
+        Locale('en', 'US'),
+      ],
       home: const RootShell(),
     );
   }

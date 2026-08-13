@@ -113,6 +113,7 @@ class _AiAccountSettingsPageState extends State<_AiAccountSettingsPage> {
   bool _obscure = true;
   bool _saving = false;
   bool _testing = false;
+  bool _fetchingModels = false;
 
   @override
   void initState() {
@@ -241,6 +242,52 @@ class _AiAccountSettingsPageState extends State<_AiAccountSettingsPage> {
     }
   }
 
+  Future<void> _fetchModels() async {
+    final config = _formConfig();
+    if (!config.hasKey) {
+      showAppToast(context, '先填写 API Key', icon: Icons.info_outline);
+      return;
+    }
+    if (!_ensureSecureBaseUrl()) return;
+    setState(() => _fetchingModels = true);
+    try {
+      final models = await LlmQuery.fetchModels(config);
+      if (!mounted) return;
+      // 打开模型管理页面
+      final repo = context.read<AppRepository>();
+      final current = List<String>.from(repo.availableModels);
+      final selected = await showModalBottomSheet<List<String>>(
+        context: context,
+        isScrollControlled: true,
+        useSafeArea: true,
+        backgroundColor: Colors.transparent,
+        builder: (ctx) => _ModelManagerSheet(
+          allModels: models,
+          savedModels: current,
+        ),
+      );
+      if (selected != null && mounted) {
+        await context.read<AppRepository>().saveAvailableModels(selected);
+        // 如果当前模型输入框的值不在新列表里，更新为第一个
+        if (selected.isNotEmpty &&
+            !selected.contains(_modelCtrl.text.trim())) {
+          setState(() => _modelCtrl.text = selected.first);
+        }
+        showAppToast(context, '已保存 ${selected.length} 个模型');
+      }
+    } catch (e) {
+      if (mounted) {
+        showAppToast(
+          context,
+          '获取模型失败：${_shortError(e)}',
+          icon: Icons.error_outline,
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _fetchingModels = false);
+    }
+  }
+
   Future<void> _clearCurrentKey() async {
     _keyCtrl.clear();
     await _save();
@@ -347,14 +394,11 @@ class _AiAccountSettingsPageState extends State<_AiAccountSettingsPage> {
                     padding: const EdgeInsets.fromLTRB(16, 8, 16, 14),
                     child: AppLabeledField(
                       label: '普通模型',
-                      child: TextField(
+                      child: _ModelDropdownOrInput(
                         controller: _modelCtrl,
-                        autocorrect: false,
-                        enableSuggestions: false,
-                        decoration: iosInputDecoration(
-                          context,
-                          hint: AiProviderConfig.customDefaultModel,
-                        ),
+                        availableModels: repo.availableModels,
+                        onFetchModels: _fetchingModels ? null : _fetchModels,
+                        isFetching: _fetchingModels,
                       ),
                     ),
                   ),
@@ -1123,4 +1167,264 @@ void _push(BuildContext context, Widget page) {
   Navigator.of(context).push(
     AppPageRoute<void>(builder: (_) => page),
   );
+}
+
+// ---------------------------------------------------------------------------
+// 普通模型下拉选择 + 获取按钮组件
+// ---------------------------------------------------------------------------
+
+class _ModelDropdownOrInput extends StatelessWidget {
+  final TextEditingController controller;
+  final List<String> availableModels;
+  final VoidCallback? onFetchModels;
+  final bool isFetching;
+
+  const _ModelDropdownOrInput({
+    required this.controller,
+    required this.availableModels,
+    required this.onFetchModels,
+    required this.isFetching,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Row(
+      children: [
+        Expanded(
+          child: availableModels.isEmpty
+              ? TextField(
+                  controller: controller,
+                  autocorrect: false,
+                  enableSuggestions: false,
+                  decoration: iosInputDecoration(
+                    context,
+                    hint: AiProviderConfig.customDefaultModel,
+                  ),
+                )
+              : _ModelDropdown(
+                  controller: controller,
+                  models: availableModels,
+                ),
+        ),
+        const SizedBox(width: 8),
+        SizedBox(
+          height: 44,
+          child: OutlinedButton(
+            onPressed: onFetchModels,
+            style: OutlinedButton.styleFrom(
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              side: BorderSide(
+                color: scheme.outline.withValues(alpha: 0.4),
+              ),
+            ),
+            child: isFetching
+                ? SizedBox(
+                    width: 14,
+                    height: 14,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      color: scheme.primary,
+                    ),
+                  )
+                : Text(
+                    availableModels.isEmpty ? '获取模型' : '重新获取',
+                    style: const TextStyle(fontSize: 13),
+                  ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _ModelDropdown extends StatefulWidget {
+  final TextEditingController controller;
+  final List<String> models;
+
+  const _ModelDropdown({
+    required this.controller,
+    required this.models,
+  });
+
+  @override
+  State<_ModelDropdown> createState() => _ModelDropdownState();
+}
+
+class _ModelDropdownState extends State<_ModelDropdown> {
+  String? _selected;
+
+  @override
+  void initState() {
+    super.initState();
+    final current = widget.controller.text.trim();
+    _selected = widget.models.contains(current) ? current : widget.models.first;
+    // 确保 controller 和 _selected 同步
+    if (widget.controller.text != _selected) {
+      widget.controller.text = _selected!;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Container(
+      height: 44,
+      padding: const EdgeInsets.symmetric(horizontal: 12),
+      decoration: BoxDecoration(
+        color: scheme.surfaceContainerHighest.withValues(alpha: 0.5),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(
+          color: scheme.outline.withValues(alpha: 0.2),
+        ),
+      ),
+      child: DropdownButton<String>(
+        value: _selected,
+        isExpanded: true,
+        underline: const SizedBox.shrink(),
+        icon: Icon(Icons.arrow_drop_down, color: scheme.onSurfaceVariant),
+        style: TextStyle(
+          fontSize: 15,
+          color: scheme.onSurface,
+        ),
+        items: widget.models
+            .map((m) => DropdownMenuItem(value: m, child: Text(m)))
+            .toList(),
+        onChanged: (value) {
+          if (value == null) return;
+          setState(() => _selected = value);
+          widget.controller.text = value;
+        },
+      ),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 模型管理底部抽屉
+// ---------------------------------------------------------------------------
+
+class _ModelManagerSheet extends StatefulWidget {
+  final List<String> allModels;
+  final List<String> savedModels;
+
+  const _ModelManagerSheet({
+    required this.allModels,
+    required this.savedModels,
+  });
+
+  @override
+  State<_ModelManagerSheet> createState() => _ModelManagerSheetState();
+}
+
+class _ModelManagerSheetState extends State<_ModelManagerSheet> {
+  late final List<String> _kept;
+
+  @override
+  void initState() {
+    super.initState();
+    // 已保存的放前面，其余按原顺序追加
+    final savedSet = widget.savedModels.toSet();
+    _kept = [
+      ...widget.savedModels.where((m) => widget.allModels.contains(m)),
+      ...widget.allModels.where((m) => !savedSet.contains(m)),
+    ];
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Container(
+      constraints: BoxConstraints(
+        maxHeight: MediaQuery.of(context).size.height * 0.85,
+      ),
+      decoration: BoxDecoration(
+        color: scheme.surface,
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      child: Column(
+        children: [
+          // 拖动条
+          Padding(
+            padding: const EdgeInsets.only(top: 10, bottom: 4),
+            child: Center(
+              child: Container(
+                width: 36,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: scheme.onSurfaceVariant.withValues(alpha: 0.25),
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+            ),
+          ),
+          // 标题栏
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 8, 16, 8),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        '选择可用模型',
+                        style: TextStyle(
+                          fontSize: 17,
+                          fontWeight: FontWeight.w600,
+                          color: scheme.onSurface,
+                        ),
+                      ),
+                      Text(
+                        '删除不需要的，只保留常用的',
+                        style: AppType.secondary(scheme),
+                      ),
+                    ],
+                  ),
+                ),
+                TextButton(
+                  onPressed: () => Navigator.pop(context, _kept),
+                  child: const Text('完成'),
+                ),
+              ],
+            ),
+          ),
+          const Divider(height: 1),
+          // 模型列表（可删除）
+          Flexible(
+            child: ReorderableListView.builder(
+              padding: const EdgeInsets.only(bottom: 32),
+              itemCount: _kept.length,
+              onReorder: (oldIndex, newIndex) {
+                setState(() {
+                  if (newIndex > oldIndex) newIndex--;
+                  final item = _kept.removeAt(oldIndex);
+                  _kept.insert(newIndex, item);
+                });
+              },
+              itemBuilder: (context, index) {
+                final model = _kept[index];
+                return ListTile(
+                  key: ValueKey(model),
+                  leading: Icon(
+                    Icons.drag_handle,
+                    color: scheme.onSurfaceVariant.withValues(alpha: 0.4),
+                  ),
+                  title: Text(model, style: const TextStyle(fontSize: 14)),
+                  trailing: IconButton(
+                    icon: Icon(
+                      Icons.remove_circle_outline,
+                      color: AppColors.warning,
+                      size: 20,
+                    ),
+                    onPressed: () => setState(() => _kept.removeAt(index)),
+                  ),
+                );
+              },
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 }

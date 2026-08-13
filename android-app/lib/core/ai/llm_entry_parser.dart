@@ -70,9 +70,10 @@ ${hints.map((h) => '${h.phrase}→${h.categoryKey}').join('、')}''';
 收入：$incomeList$habitBlock
 
 【输出格式】
-{"intent":"record或query","entries":[{"amount":数字,"kind":"expense或income","categoryKey":"最匹配的key","date":"YYYY-MM-DD或YYYY-MM-DDTHH:mm:ss","note":"简短备注","confidence":0到1}]}
+{"intent":"record或query或chat","entries":[{"amount":数字,"kind":"expense或income","categoryKey":"最匹配的key","date":"YYYY-MM-DD或YYYY-MM-DDTHH:mm:ss","note":"简短备注","confidence":0到1}]}
 - intent="record"：用户在**记一笔账**（描述花了/买了/收到多少钱），哪怕很口语（如"坐公交花了一块""中午吃了碗面15"）。entries 填解析出的账目。
 - intent="query"：用户在**问**已有账目或要分析（如"这月吃饭花了多少""最大一笔是哪个""我花得多不多"）。这时 entries 给空数组 []。
+- intent="chat"：用户在**闲聊**，不涉及记账或查账（如"hi""你好""今天天气怎样""讲个笑话"）。这时 entries 给空数组 []。
 - 拿不准时**优先当 record**（这是记账助手，多数输入是在记账）。
 
 【规则】
@@ -138,9 +139,16 @@ ${hints.map((h) => '${h.phrase}→${h.categoryKey}').join('、')}''';
 
     // 意图：截图一律记账；否则读模型给的 intent，缺省/拿不准当 record。
     final intentStr = (parsed['intent'] as String?)?.toLowerCase();
-    final intent = (!fromScreenshot && intentStr == 'query')
-        ? LlmIntent.query
-        : LlmIntent.record;
+    final LlmIntent intent;
+    if (fromScreenshot) {
+      intent = LlmIntent.record;
+    } else if (intentStr == 'query') {
+      intent = LlmIntent.query;
+    } else if (intentStr == 'chat') {
+      intent = LlmIntent.chat;
+    } else {
+      intent = LlmIntent.record;
+    }
 
     final result = <ParsedEntry>[];
     final rawEntries = parsed['entries'];
@@ -368,7 +376,7 @@ String sanitizeNoteForLlm(String note) => note
     .replaceAll('｜', '／');
 
 /// 用户意图：记一笔账 / 查询已有账目。
-enum LlmIntent { record, query }
+enum LlmIntent { record, query, chat }
 
 /// parseWithLLM 的结果：意图 + 解析出的账目（query 时 entries 可为空）。
 class LlmParseResult {

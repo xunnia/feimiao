@@ -23,14 +23,15 @@ class LlmQuery {
     required String transactionsText,
   }) async {
     final provider = _resolveConfig(apiKey: apiKey, config: config);
-    final systemPrompt = '''你是「喵助手」，一只蓝白英短猫记账助理。根据下面的账目数据回答用户的问题。
-要求：口语化、简短亲切、可以带一点猫咪语气（偶尔用「喵」）；涉及金额要给具体数字（单位元）；
-算不出或数据里没有就如实说不知道，绝不编造。
+    final systemPrompt = '''你是「喵助手」，一只蓝白英短猫助手，有账本数据作为参考。
+性格：口语化、简短亲切，可以带一点猫咪语气（偶尔用「喵」）。
+能力：可以回答任何问题——记账查账、消费分析、日常聊天、知识问答都可以。
+账本相关回答规则：涉及金额要给具体数字（单位元）；算不出或数据里没有就如实说不知道，绝不编造。
 **账目里若给了「本期准确合计」「本期分类准确合计」或「分类查询准确合计」，回答总额时必须直接引用那个数，绝不自己把明细一条条加起来（你手算会错）。**
 如果账目上下文出现「分类筛选已锁定」，只能使用该分类及其子分类的合计和明细；
 禁止把其它分类的数字混进答案，也不要把全月总支出冒充分类支出。若筛选合计为 0，直接如实回答 0。
 
-排版（对齐 Claude 的可读性，结构清晰有层次）：
+排版（结构清晰有层次）：
 - 先给**一句话结论**，再展开细节；
 - 分几块时用 `## 小标题` 起头（如「## 大头在哪」），标题上下各空一行；
 - 段落之间空一行；同一段别超过两句，别一大坨；
@@ -377,6 +378,55 @@ $transactionsText''';
       throw LlmQueryException('${provider.providerLabel} API Key 未配置');
     }
     return provider;
+  }
+
+  /// 从服务商获取可用模型列表（调用 /v1/models 端点）
+  static Future<List<String>> fetchModels(AiProviderConfig config) async {
+    if (!config.hasKey) {
+      throw LlmQueryException('${config.providerLabel} API Key 未配置');
+    }
+    // 构建 /v1/models URI
+    var raw = config.baseUrl.trim().replaceAll(RegExp(r'/+$'), '');
+    if (raw.isEmpty) raw = AiProviderConfig.customDefaultBaseUrl;
+    final uri = raw.endsWith('/v1')
+        ? Uri.parse('$raw/models')
+        : Uri.parse('$raw/v1/models');
+
+    late http.Response resp;
+    try {
+      resp = await http.get(
+        uri,
+        headers: {
+          'Authorization': 'Bearer ${config.apiKey}',
+          'Content-Type': 'application/json',
+        },
+      ).timeout(const Duration(seconds: 15));
+    } catch (e) {
+      throw LlmQueryException('获取模型列表失败：$e');
+    }
+
+    if (resp.statusCode == 401 || resp.statusCode == 403) {
+      throw LlmQueryException('API Key 无效或无权限（${resp.statusCode}）');
+    }
+    if (resp.statusCode != 200) {
+      throw LlmQueryException('获取模型列表失败（${resp.statusCode}）');
+    }
+
+    try {
+      final json = jsonDecode(resp.body) as Map<String, dynamic>;
+      final data = json['data'] as List<dynamic>?;
+      if (data == null) throw LlmQueryException('响应格式错误：缺少 data 字段');
+      final models = data
+          .map((e) => e['id']?.toString())
+          .whereType<String>()
+          .where((s) => s.isNotEmpty)
+          .toList();
+      if (models.isEmpty) throw LlmQueryException('未获取到任何模型');
+      return models;
+    } catch (e) {
+      if (e is LlmQueryException) rethrow;
+      throw LlmQueryException('解析模型列表失败：$e');
+    }
   }
 }
 

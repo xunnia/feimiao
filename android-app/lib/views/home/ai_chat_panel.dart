@@ -1075,6 +1075,33 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
     widget.onSwitchToManual();
   }
 
+  void _showModelPicker(BuildContext context) {
+    final repo = context.read<AppRepository>();
+    final models = repo.availableModels;
+    if (models.isEmpty) {
+      showAppToast(context, '先去 AI 账号设置获取模型列表', icon: Icons.info_outline);
+      return;
+    }
+    final currentModel = repo.aiProviderConfigFor(AiTaskType.chatQuery).model;
+    showModalBottomSheet<void>(
+      context: context,
+      useSafeArea: true,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) => _ModelPickerSheet(
+        models: models,
+        currentModel: currentModel,
+        currentEffort: repo.aiReasoningEffortFor(AiTaskType.chatQuery),
+        onSelected: (model, effort) async {
+          // 只更新模型和思考强度，不碰 API Key
+          await repo.saveAiAdvancedConfig(
+            customModel: model,
+            chatReasoningEffort: effort,
+          );
+        },
+      ),
+    );
+  }
+
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
@@ -1522,6 +1549,9 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
           );
           if (res.intent == LlmIntent.query) {
             await _runQuery(text, repository: repo);
+          } else if (res.intent == LlmIntent.chat) {
+            // 闲聊：直接走 LlmQuery.ask，不带账目上下文
+            await _runQuery(text, repository: repo, chatOnly: true);
           } else {
             // repo 在 await 前已捕获传入：解析期间用户关掉面板也不能丢账。
             await _applyRecord(res.entries, repository: repo);
@@ -1796,9 +1826,47 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
     String text, {
     AppRepository? repository,
     ReportJobEntity? resumeJob,
+    bool chatOnly = false,
   }) async {
     final repo = repository ?? context.read<AppRepository>();
     var aiConfig = repo.aiProviderConfigFor(AiTaskType.chatQuery);
+
+    // 闲聊模式：直接发送，不带账目上下文，不走报告流程
+    if (chatOnly) {
+      if (!aiConfig.hasKey) {
+        if (mounted) {
+          setState(() {
+            _msgs.removeWhere((m) => m is _ThinkingMsg);
+            _msgs.add(_InfoMsg('还没配 AI key，喵先用本地规则记（单笔）'));
+            _busy = false;
+          });
+        }
+        return;
+      }
+      _setThinkingKind(_ThinkingKind.queryAnswer);
+      String answer;
+      try {
+        answer = await LlmQuery.ask(
+          question: text,
+          config: aiConfig,
+          transactionsText: '',
+        );
+      } on LlmQueryException catch (e) {
+        answer = _friendlyAiError(e);
+      } catch (e) {
+        answer = '喵没连上 AI（${_shortAiError(e)}），待会儿再问问？';
+      }
+      await _addChatMessage(repo, role: 'assistant', text: answer);
+      if (mounted) {
+        setState(() {
+          _msgs.removeWhere((m) => m is _ThinkingMsg);
+          _msgs.add(_AnswerMsg(answer, question: text));
+          _busy = false;
+        });
+        _scrollToLatestUserMessage();
+      }
+      return;
+    }
     final reportType = resumeJob?.type ?? _reportTypeOf(text);
     final reportPeriod = resumeJob != null
         ? DateTimeRange(start: resumeJob.periodStart, end: resumeJob.periodEnd)
@@ -3677,7 +3745,10 @@ ${line('上月同期', lastStart, lastSameDayEnd, lastSameDay)}
                     onTap: () => showRecordExtrasSheet(context),
                   ),
                   const SizedBox(width: 6),
-                  _Pill(isAi: true, onTap: _switchToManual),
+                  _ModelPill(
+                    repo: context.watch<AppRepository>(),
+                    onTap: () => _showModelPicker(context),
+                  ),
                   const Spacer(),
                   ValueListenableBuilder<bool>(
                     valueListenable: _hasInputText,
@@ -5506,6 +5577,48 @@ class _Pill extends StatelessWidget {
   }
 }
 
+/// 模型切换药丸按钮（替代原来的 [AI 记账] 按钮）
+class _ModelPill extends StatelessWidget {
+  final AppRepository repo;
+  final VoidCallback onTap;
+
+  const _ModelPill({required this.repo, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final config = repo.aiProviderConfigFor(AiTaskType.chatQuery);
+    final model = config.model.trim();
+    // 最多显示 12 个字符
+    final label = model.length > 12 ? '${model.substring(0, 12)}…' : model;
+
+    return PressableScale(
+      onPressed: onTap,
+      child: GlassSurface(
+        radius: 15,
+        blur: 0,
+        padding: const EdgeInsets.symmetric(horizontal: 11),
+        child: SizedBox(
+          height: 31,
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.smart_toy_outlined, size: 14, color: scheme.onSurfaceVariant),
+              const SizedBox(width: 5),
+              Text(
+                label.isEmpty ? '选择模型' : label,
+                style: TextStyle(fontSize: 12, color: scheme.onSurfaceVariant),
+              ),
+              const SizedBox(width: 2),
+              Icon(Icons.arrow_drop_down, size: 16, color: scheme.onSurfaceVariant),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _CircleBtn extends StatelessWidget {
   final IconData icon;
   final VoidCallback? onTap;
@@ -5555,6 +5668,228 @@ class _CircleBtn extends StatelessWidget {
             child: Icon(icon, size: 17, color: scheme.onSurfaceVariant),
           ),
         ),
+      ),
+    );
+  }
+}
+
+/// 模型选择底部抽屉
+class _ModelPickerSheet extends StatefulWidget {
+  final List<String> models;
+  final String currentModel;
+  final AiReasoningEffort currentEffort;
+  final Future<void> Function(String model, AiReasoningEffort effort) onSelected;
+
+  const _ModelPickerSheet({
+    required this.models,
+    required this.currentModel,
+    required this.currentEffort,
+    required this.onSelected,
+  });
+
+  @override
+  State<_ModelPickerSheet> createState() => _ModelPickerSheetState();
+}
+
+class _ModelPickerSheetState extends State<_ModelPickerSheet> {
+  late String _selectedModel;
+  late AiReasoningEffort _selectedEffort;
+
+  @override
+  void initState() {
+    super.initState();
+    _selectedModel = widget.currentModel;
+    _selectedEffort = widget.currentEffort;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    // Effort 档位映射：参考 Claude 桌面端
+    const effortLevels = [
+      (AiReasoningEffort.none, '关闭'),
+      (AiReasoningEffort.low, 'Low'),
+      (AiReasoningEffort.medium, 'Medium'),
+      (AiReasoningEffort.high, 'High'),
+      (AiReasoningEffort.xhigh, 'Max'),
+    ];
+    final effortIndex = effortLevels.indexWhere((e) => e.$1 == _selectedEffort);
+    final clampedIndex = effortIndex < 0 ? 0 : effortIndex;
+
+    return Container(
+      constraints: BoxConstraints(
+        maxHeight: MediaQuery.of(context).size.height * 0.75,
+      ),
+      decoration: BoxDecoration(
+        color: scheme.surface,
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          // 拖动条
+          Padding(
+            padding: const EdgeInsets.only(top: 8, bottom: 2),
+            child: Center(
+              child: Container(
+                width: 36,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: scheme.onSurfaceVariant.withValues(alpha: 0.2),
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+            ),
+          ),
+          // 标题 + 完成按钮
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 4, 8, 4),
+            child: Row(
+              children: [
+                Text(
+                  '选择模型',
+                  style: AppType.rowTitle(scheme),
+                ),
+                const Spacer(),
+                TextButton(
+                  onPressed: () async {
+                    Navigator.pop(context);
+                    await widget.onSelected(_selectedModel, _selectedEffort);
+                  },
+                  child: Text(
+                    '完成',
+                    style: TextStyle(
+                      color: scheme.primary,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          Divider(height: 1, color: AppColors.hairline(scheme)),
+          // 模型列表（紧凑行）
+          Flexible(
+            child: ListView.builder(
+              shrinkWrap: true,
+              padding: const EdgeInsets.symmetric(vertical: 4),
+              itemCount: widget.models.length,
+              itemBuilder: (context, i) {
+                final model = widget.models[i];
+                final selected = model == _selectedModel;
+                return InkWell(
+                  onTap: () => setState(() => _selectedModel = model),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 11,
+                    ),
+                    child: Row(
+                      children: [
+                        if (selected)
+                          Icon(CupertinoIcons.checkmark, size: 15, color: scheme.primary)
+                        else
+                          const SizedBox(width: 15),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Text(
+                            model,
+                            style: TextStyle(
+                              fontSize: 15,
+                              fontWeight: selected ? FontWeight.w500 : FontWeight.w400,
+                              color: selected ? scheme.primary : scheme.onSurface,
+                            ),
+                          ),
+                        ),
+                        Text(
+                          '${i + 1}',
+                          style: TextStyle(
+                            fontSize: 13,
+                            color: scheme.onSurfaceVariant.withValues(alpha: 0.4),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+          Divider(height: 1, color: AppColors.hairline(scheme)),
+          // Effort 行
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 10, 16, 4),
+            child: Row(
+              children: [
+                Text(
+                  '思考强度',
+                  style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w500,
+                    color: scheme.onSurface,
+                  ),
+                ),
+                const SizedBox(width: 6),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: scheme.primary.withValues(alpha: 0.1),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Text(
+                    effortLevels[clampedIndex].$2,
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w500,
+                      color: scheme.primary,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(8, 0, 8, 4),
+            child: Row(
+              children: [
+                Text(
+                  '快',
+                  style: TextStyle(
+                    fontSize: 11,
+                    color: scheme.onSurfaceVariant.withValues(alpha: 0.5),
+                  ),
+                ),
+                Expanded(
+                  child: SliderTheme(
+                    data: SliderTheme.of(context).copyWith(
+                      trackHeight: 3,
+                      thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 8),
+                      overlayShape: const RoundSliderOverlayShape(overlayRadius: 16),
+                    ),
+                    child: Slider(
+                      value: clampedIndex.toDouble(),
+                      min: 0,
+                      max: (effortLevels.length - 1).toDouble(),
+                      divisions: effortLevels.length - 1,
+                      onChanged: (value) {
+                        final idx = value.round();
+                        setState(() => _selectedEffort = effortLevels[idx].$1);
+                      },
+                    ),
+                  ),
+                ),
+                Text(
+                  '强',
+                  style: TextStyle(
+                    fontSize: 11,
+                    color: scheme.onSurfaceVariant.withValues(alpha: 0.5),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          SizedBox(height: MediaQuery.of(context).padding.bottom + 8),
+        ],
       ),
     );
   }

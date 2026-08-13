@@ -2736,6 +2736,8 @@ class AppRepository extends ChangeNotifier {
   String _customAiBaseUrl = AiProviderConfig.customDefaultBaseUrl;
   String _customAiModel = AiProviderConfig.customDefaultModel;
   String _reportAiModel = AiProviderConfig.customReportDefaultModel;
+  /// 用户筛选后保留的可用模型列表（逗号分隔持久化）
+  List<String> _availableModels = [];
   AiProviderType _recordAiProviderType = AiProviderType.deepseek;
   AiProviderType _chatAiProviderType = AiProviderType.deepseek;
   AiProviderType _reportAiProviderType = AiProviderType.custom;
@@ -3339,6 +3341,8 @@ class AppRepository extends ChangeNotifier {
   String get customAiBaseUrl => _customAiBaseUrl;
   String get customAiModel => _customAiModel;
   String get reportAiModel => _reportAiModel;
+  /// 用户筛选后保留的可用模型列表，空表示未获取过
+  List<String> get availableModels => List.unmodifiable(_availableModels);
 
   AiProviderType aiProviderTypeFor(AiTaskType task) => switch (task) {
         AiTaskType.recordParse => _recordAiProviderType,
@@ -7036,6 +7040,10 @@ class AppRepository extends ChangeNotifier {
     _reportAiModel = (settings['report_ai_model'] ?? '').trim().isEmpty
         ? AiProviderConfig.customReportDefaultModel
         : settings['report_ai_model']!.trim();
+    final rawModels = settings['available_ai_models'] ?? '';
+    _availableModels = rawModels.isEmpty
+        ? []
+        : rawModels.split(',').where((s) => s.isNotEmpty).toList();
 
     _deepSeekApiKey = await _loadSecretWithLegacyFallback(
       secureKey: 'deepseek_api_key',
@@ -13662,12 +13670,24 @@ class AppRepository extends ChangeNotifier {
         );
     setting('custom_ai_model', _customAiModel);
     setting('report_ai_model', _reportAiModel);
+    setting('available_ai_models', _availableModels.join(','));
     setting('ai_chat_endpoint_type', _chatAiEndpointType.storageKey);
     setting('ai_report_endpoint_type', _reportAiEndpointType.storageKey);
     setting('ai_chat_reasoning_effort', _chatAiReasoningEffort.storageKey);
     setting('ai_report_reasoning_effort', _reportAiReasoningEffort.storageKey);
     setting('ai_task_config_version', '2');
     await batch.commit(noResult: true);
+    notifyListeners();
+  }
+
+  /// 保存用户筛选后的可用模型列表
+  Future<void> saveAvailableModels(List<String> models) async {
+    _availableModels = List<String>.from(models);
+    await _db!.insert(
+      'app_settings',
+      {'key': 'available_ai_models', 'value': _availableModels.join(',')},
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
     notifyListeners();
   }
 

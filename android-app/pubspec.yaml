@@ -3,7 +3,7 @@ description: "肥喵记账 - 可爱又聪明的记账猫"
 publish_to: 'none'
 # 版本规则（用户 0703 拍板）：1.0 起步，每次推 GitHub 构建 minor +1（1.1、1.2…）。
 # 加号后是 Android versionCode，必须只增不减，否则手机拒绝覆盖安装。
-version: 1.210.0+222
+version: 1.213.0+226
 
 environment:
   sdk: '>=3.4.0 <4.0.0'
@@ -11,10 +11,12 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
+  flutter_localizations:
+    sdk: flutter
   cupertino_icons: ^1.0.8
   archive: ^3.6.1
   crypto: ^3.0.7
-  intl: ^0.19.0
+  intl: ^0.20.2
   decimal: ^3.0.0
   sqflite: ^2.3.3
   path: ^1.9.0
