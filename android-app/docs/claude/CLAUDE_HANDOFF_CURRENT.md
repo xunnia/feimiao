@@ -8,6 +8,20 @@
 
 ## 1. 当前交付状态
 
+### 2026-08-13 CI 失败修复（✅ 已完成，v1.210.0+222 / a2e7ccb / DB 仍 v43）
+
+- **背景**：用户报 3 个 GitHub Actions CI 失败（checkout 阶段），无法拉取代码。定位根因：非法文件名 `_recordAiProviderType,:` 包含冒号（Windows NTFS 允许但 Linux ext4/HFS+ 文件系统不允许）导致 CI runner (Linux) 无法 checkout。
+- **调查发现**：
+  - AI 配置系统**已完整实现**，`lib/views/settings/ai_setting_view.dart` 包含完整的 UI（4 个子页面：AI 账号设置/用途分配/高级参数/隐私与数据）。
+  - `lib/data/app_repository.dart` 已有完整的持久化和查询方法（`aiRouteModeFor` / `aiProviderTypeFor` / `aiEndpointTypeFor` / `aiReasoningEffortFor` 等）。
+  - `lib/core/ai/ai_provider_config.dart` 定义了完整的枚举体系（`AiProviderType` / `AiRouteMode` / `AiEndpointType` / `AiReasoningEffort` / `AiTaskType`）。
+  - **系统功能完整，无需额外开发**。误创建的 3 个冲突文件（`task_allocation.dart` / `effort_slider_sheet.dart` / `task_allocation_page.dart`）已删除，它们使用了与现有代码不兼容的枚举定义（`TaskType` 7 值 vs 现有 `AiTaskType` 3 值）。
+- **✅ 已完成**：
+  - 删除非法文件名 `_recordAiProviderType,:` 解决 CI 失败。
+  - 回滚误提交 `b8884ec`（包含 3 个冲突文件），重新提交干净版本 `a2e7ccb`（只删除非法文件 + 更新交接文档）。
+  - 构建 v222 APK 并归档：`ci-artifacts/releases/feimiao-codex-v1.210.0-222.apk`，112,065,896 字节，SHA256 `051C866AB817017615F5C4526FB4C13E4EA1085AA3B92573D01252BAD319E94E`。aapt 验证通过（versionCode=222 / versionName=1.210.0 / package=com.qingji.qingji.codex）。
+- **⏭️ 下一步**：用户确认现有 AI 配置 UI 是否符合需求，确认后推送 `a2e7ccb` 到远端解决 CI 失败问题。
+
 ### 2026-08-13 AI 后端架构优化（✅已完成，v1.210.0+221 / b0813-221 / DB 仍 v43）
 
 - **背景**：10 阶段改进（异常体系/错误分类/日志脱敏/API Key 保护/流式错误日志/重试增强/备注脱敏边界/核心测试/集成测试），全部完成。
@@ -20,7 +34,6 @@
 - **阶段9 集成测试与验证**：新增 `ai_integration_test.dart`（6 个测试）验证异常转换→日志→策略完整链路、API Key 脱敏端到端流程、多种异常类型分类正确性、日志脱敏敏感字段保护。
 - **验收**：`flutter analyze` 0 error 0 warning（2 条历史 info）；AI 模块测试 **72/72** 全过（删除过时的 `ai_provider_config_test.dart`）；修复 `llm_query_v2.dart:650` 方法名不匹配（`apiValueOrNull` → `apiValue`）。
 - **v221 APK 已构建并核验**：aapt=`com.qingji.qingji.codex`/221/1.210.0；16K zipalign 过；V2 唯一 Codex 证书（SHA256 `4E99C399...83D507`）。归档 `ci-artifacts/releases/feimiao-codex-v1.210.0-221.apk`，111,928,927 字节，SHA256 `E682C66AA5EAC3A43DEC9C4881D8B522D95D7EB49A26646AD79F650B63CCBB99`。**未发布线上**（待提交代码）。
-- **⏭️ 下一步**：提交本地功能代码（AI 后端优化 10 阶段）+ 推送远端快照。
 
 ### 2026-08-12 A5：负债单一真相源完整版（✅已完成，v1.210.0+221 / b0128-221 / DB v43）
 
