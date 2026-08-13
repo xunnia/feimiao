@@ -267,7 +267,7 @@ class _PhysicalAssetPurchaseSheetState
               ),
               const SizedBox(width: 10),
               Text(
-                MoneyFormat.string(transaction.amount),
+                MoneyFormat.string(transaction.amount, currencyCode: transaction.currencyCode),
                 style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                       fontFamily: 'Nunito',
                       fontWeight: FontWeight.w600,

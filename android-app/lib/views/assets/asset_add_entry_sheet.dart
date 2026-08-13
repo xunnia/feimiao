@@ -200,7 +200,7 @@ class _RecentPurchaseCandidateRow extends StatelessWidget {
             ),
             const SizedBox(width: 10),
             Text(
-              MoneyFormat.string(transaction.amount),
+              MoneyFormat.string(transaction.amount, currencyCode: transaction.currencyCode),
               style: AppType.body(scheme).copyWith(
                 fontFamily: 'Nunito',
                 fontWeight: FontWeight.w600,

@@ -60,6 +60,10 @@ void main() {
 
   Future<void> pumpViewAnimations(WidgetTester tester) async {
     await tester.pump();
+    // sqflite 的隔离区写入在 fake_async 内用真实 Future 响应，需要让出一次
+    // 真实事件循环（runAsync）才能把 pending timer 清空，否则 teardown 时
+    // 会出现 "Pending timers" 测试失败。
+    await tester.runAsync(() => Future<void>.delayed(Duration.zero));
     await tester.pump(const Duration(milliseconds: 500));
   }
 
@@ -173,6 +177,13 @@ void main() {
     expect(find.text('总览'), findsOneWidget);
     expect(find.text('资金'), findsOneWidget);
     expect(find.text('物品'), findsOneWidget);
+    // 默认显示物品页（用户偏好持久化后的默认值）。
+    expect(find.byKey(const Key('asset-items')), findsOneWidget);
+    expect(find.byKey(const Key('asset-overview')), findsNothing);
+    expect(find.byKey(const Key('asset-funds')), findsNothing);
+
+    await tester.tap(find.text('总览'));
+    await pumpViewAnimations(tester);
     expect(find.byKey(const Key('asset-overview')), findsOneWidget);
     expect(find.byKey(const Key('asset-funds')), findsNothing);
     expect(find.byKey(const Key('asset-items')), findsNothing);
@@ -259,8 +270,11 @@ void main() {
     expect(repo.receivableAssets, isEmpty);
     expect(repo.globalActivePhysicalAssets, hasLength(1));
     expect(repo.globalActiveReceivables, hasLength(1));
+    // 默认显示物品，切到总览才能看到净资产。
+    await tester.tap(find.text('总览'));
+    await pumpViewAnimations(tester);
     expect(find.byKey(const Key('asset-overview')), findsOneWidget);
-    expect(find.text('净资产'), findsOneWidget);
+    expect(find.textContaining('净资产'), findsOneWidget);
     expect(find.text('净资产趋势'), findsOneWidget);
     expect(find.text('自动估算'), findsOneWidget);
     expect(find.text('本月收支净额'), findsNothing);
@@ -749,6 +763,9 @@ void main() {
       textScaler: const TextScaler.linear(1.4),
     );
 
+    // 默认显示物品，切到总览才能看到待办提醒。
+    await tester.tap(find.text('总览'));
+    await pumpViewAnimations(tester);
     expect(find.textContaining('物品保修即将到期或已过期'), findsOneWidget);
     expect(find.textContaining('权益即将到期或已逾期'), findsOneWidget);
     expect(tester.takeException(), isNull);
@@ -1093,7 +1110,10 @@ void main() {
         ]));
 
     await pumpAccountsView(tester, repo);
-    expect(find.text('净资产'), findsOneWidget);
+    // 默认显示物品，切到总览才能看到净资产数据。
+    await tester.tap(find.text('总览'));
+    await pumpViewAnimations(tester);
+    expect(find.textContaining('净资产'), findsOneWidget);
     expect(find.text('部分金额待确认'), findsOneWidget);
 
     // 到账待确认属于数据口径类条目，收进右上 ⋯ 菜单的「数据待完善」弹层。

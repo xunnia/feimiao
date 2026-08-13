@@ -85,7 +85,12 @@ class MonthlyPaceCard extends StatelessWidget {
       final comparableDay = math.min(cutoffDay, monthEndDay);
       samples.add(
         _PaceSample(
-          label: '${7 - offset}',
+          // 标签必须是真实月份。曾经写成 '${7 - offset}'（柱子序号 1..6），
+          // 而当月那根用真实月份，X 轴就变成「1 2 3 4 5 6 8月」——
+          // 前六个是序号、最后一个是月份，两种口径混在一条轴上，
+          // 用户会以为上个月的数据丢了。DateTime 会自动归一负数月份
+          // （如 year=2026/month=-1 → 2025 年 11 月），跨年也正确。
+          label: '${m.month}月',
           full: _expenseInMonth(m, throughDay: monthEndDay),
           pace: _expenseInMonth(m, throughDay: comparableDay),
           current: false,

@@ -2318,7 +2318,9 @@ class _BudgetRingCard extends StatelessWidget {
     final over = ratio > 1.0;
     final ringColor =
         over ? AppColors.warning : AppColors.budgetHealthy(scheme);
-    final pctText = '${(ratio * 100).round()}%';
+    // 文字与环图用同一个舍入后的值，避免「显示 100% 但环未满」的割裂。
+    final displayRatio = (ratio * 100).round() / 100.0;
+    final pctText = '${(displayRatio * 100).toInt()}%';
     final lastDay =
         DateTime(displayedMonth.year, displayedMonth.month + 1, 0).day;
     final daysLeft = isCurrentMonth ? lastDay - DateTime.now().day : 0;
@@ -2337,7 +2339,7 @@ class _BudgetRingCard extends StatelessWidget {
                   width: 92,
                   height: 92,
                   child: BudgetProgressRing(
-                    value: ratio.clamp(0.0, 1.0),
+                    value: displayRatio.clamp(0.0, 1.0),
                     strokeWidth: 9,
                     activeColor: ringColor,
                   ),
@@ -3013,7 +3015,8 @@ class _CategoryRanking extends StatelessWidget {
 
     return Column(
       children: items.map((item) {
-        final pct = (item.share * 100).toStringAsFixed(0);
+        final displayShare = ((item.share * 100).round()) / 100.0;
+        final pct = (displayShare * 100).toInt();
         final key = _keyForName(item.name);
         return GestureDetector(
           behavior: HitTestBehavior.opaque,
@@ -3084,7 +3087,7 @@ class _CategoryRanking extends StatelessWidget {
                 ClipRRect(
                   borderRadius: BorderRadius.circular(3),
                   child: LinearProgressIndicator(
-                    value: item.share.clamp(0.0, 1.0),
+                    value: displayShare.clamp(0.0, 1.0),
                     minHeight: 5,
                     color: scheme.onSurfaceVariant.withValues(alpha: 0.66),
                     backgroundColor:

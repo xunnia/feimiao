@@ -253,8 +253,10 @@ class TxRow extends StatelessWidget {
       transaction.amount < Decimal.zero;
 
   String get _amountText {
-    if (_isRefund) return '+${MoneyFormat.string(transaction.amount.abs())}';
-    final text = MoneyFormat.string(transaction.amount);
+    if (_isRefund) {
+      return '+${MoneyFormat.string(transaction.amount.abs(), currencyCode: transaction.currencyCode)}';
+    }
+    final text = MoneyFormat.string(transaction.amount, currencyCode: transaction.currencyCode);
     switch (transaction.txKind) {
       case TransactionKind.expense:
         return '-$text';
@@ -355,7 +357,7 @@ class TxRow extends StatelessWidget {
           const SizedBox(width: AppSpacing.md),
           if (hasRefund) ...[
             Text(
-              MoneyFormat.string(transaction.amount),
+              MoneyFormat.string(transaction.amount, currencyCode: transaction.currencyCode),
               style: Theme.of(context).textTheme.labelSmall?.copyWith(
                     color: AppTextColor.hint(scheme),
                     decoration: TextDecoration.lineThrough,
@@ -365,8 +367,8 @@ class TxRow extends StatelessWidget {
             const SizedBox(width: 6),
             Text(
               net <= Decimal.zero
-                  ? MoneyFormat.string(net)
-                  : '-${MoneyFormat.string(net)}',
+                  ? MoneyFormat.string(net, currencyCode: transaction.currencyCode)
+                  : '-${MoneyFormat.string(net, currencyCode: transaction.currencyCode)}',
               style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                 color: scheme.onSurface,
                 fontWeight: FontWeight.w600,

@@ -499,3 +499,40 @@ class FundsArchiveBackRow extends StatelessWidget {
     );
   }
 }
+
+/// A5：余额口径升级入口横幅。有待迁移的负债账户时显示在资金页顶部。
+class LiabilityMigrationBannerRow extends StatelessWidget {
+  final VoidCallback onTap;
+
+  const LiabilityMigrationBannerRow({super.key, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        decoration: BoxDecoration(
+          color: scheme.primaryContainer,
+          borderRadius: BorderRadius.circular(AppRadius.md),
+        ),
+        child: Row(
+          children: [
+            Icon(Icons.upgrade_rounded, size: 18, color: scheme.onPrimaryContainer),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                '负债账户余额口径可升级',
+                style: AppType.secondary(scheme).copyWith(
+                  color: scheme.onPrimaryContainer,
+                ),
+              ),
+            ),
+            Icon(Icons.chevron_right, size: 18, color: scheme.onPrimaryContainer),
+          ],
+        ),
+      ),
+    );
+  }
+}

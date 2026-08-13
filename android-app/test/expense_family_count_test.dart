@@ -12,7 +12,6 @@ import 'package:qingji/core/models/transaction_kind.dart';
 import 'package:qingji/core/models/transaction_record.dart';
 import 'package:qingji/core/statistics/statistics_engine.dart';
 import 'package:qingji/data/app_repository.dart';
-import 'package:sqflite/sqflite.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 TransactionRecord _record({

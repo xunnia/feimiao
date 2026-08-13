@@ -1,5 +1,6 @@
 // 资产总览页卡片，从 accounts_view.dart 拆出。
 import 'package:decimal/decimal.dart';
+import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
 
 import '../../core/account/net_worth_verified_checkpoint.dart';
@@ -68,6 +69,29 @@ class AssetPendingCard extends StatelessWidget {
   }
 }
 
+/// D2b: 计算连续核对月份数（已激活记录，从最近月份往前连续）。
+int _computeCheckInStreak(List<NetWorthVerifiedCheckpoint> ordered) {
+  // ordered 已按 asOf 降序排列
+  if (ordered.isEmpty) return 0;
+  int streak = 1;
+  var prevLocal = ordered[0].header.asOf.toLocal();
+  var prevYM = (prevLocal.year, prevLocal.month);
+  for (var i = 1; i < ordered.length; i++) {
+    final curLocal = ordered[i].header.asOf.toLocal();
+    final curYM = (curLocal.year, curLocal.month);
+    // 计算 prevYM 的上一个月
+    final expYear = prevYM.$2 == 1 ? prevYM.$1 - 1 : prevYM.$1;
+    final expMonth = prevYM.$2 == 1 ? 12 : prevYM.$2 - 1;
+    if (curYM.$1 == expYear && curYM.$2 == expMonth) {
+      streak++;
+      prevYM = curYM;
+    } else {
+      break;
+    }
+  }
+  return streak;
+}
+
 class VerifiedNetWorthCard extends StatelessWidget {
   final List<NetWorthVerifiedCheckpoint> checkpoints;
   final NetWorthVerifiedCheckpointComparison? comparison;
@@ -93,18 +117,38 @@ class VerifiedNetWorthCard extends StatelessWidget {
         ? comparison?.change
         : null;
     final latestDate = latest.header.asOf.toLocal();
+    final streak = _computeCheckInStreak(ordered); // D2b
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: appCardDecoration(scheme),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text('净资产核对', style: AppType.rowTitle(scheme)),
+          Row(
+            children: [
+              Text('净资产核对', style: AppType.rowTitle(scheme)),
+              const Spacer(),
+              // D2b: 连续核对月份徽章，streak ≥ 2 才显示
+              if (streak >= 2)
+                Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: scheme.primaryContainer,
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Text(
+                    '连续$streak月核对 🎯',
+                    style: AppType.caption(scheme),
+                  ),
+                ),
+            ],
+          ),
           const SizedBox(height: 4),
           ...[
             Text(
               '${latest.header.completeness == NetWorthVerifiedCheckpointCompleteness.complete ? '完整核对' : '部分核对'}'
-              ' · ${latestDate.year}/${latestDate.month}/${latestDate.day} '
+              ' · ${latestDate.year}/${latestDate.month.toString().padLeft(2, '0')}/${latestDate.day.toString().padLeft(2, '0')} '
               '${latestDate.hour.toString().padLeft(2, '0')}:'
               '${latestDate.minute.toString().padLeft(2, '0')}',
               style: AppType.secondary(scheme),
@@ -198,7 +242,7 @@ class AssetSummaryCard extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         children: [
           Text(
-            '净资产',
+            '净资产（按 CNY 计）',
             style: AppType.secondary(scheme),
           ),
           const SizedBox(height: 6),
@@ -328,6 +372,14 @@ class _AssetMetric extends StatelessWidget {
   }
 }
 
+// 资产配置环图固定配色（四类资产，饱和度中等，深浅色均可读）。
+const _kAllocationColors = [
+  Color(0xFF6B9FD4), // 流动资金
+  Color(0xFF68B09B), // 投资余额
+  Color(0xFFAB8EC6), // 权益资产
+  Color(0xFFE8A068), // 计入物品
+];
+
 class AssetAnalysisCard extends StatelessWidget {
   final NetWorthBreakdown breakdown;
 
@@ -340,12 +392,18 @@ class AssetAnalysisCard extends StatelessWidget {
         ? null
         : breakdown.totalLiabilities.toDouble() /
             breakdown.totalAssets.toDouble();
+    final rawItems = [
+      ('流动资金', breakdown.cashAssets),
+      ('投资余额', breakdown.investmentAssets),
+      ('权益资产', breakdown.receivableAssets),
+      ('计入物品', breakdown.physicalAssets),
+    ];
+    // 只渲染金额 > 0 的段；保留颜色索引对应关系。
     final items = [
-      ('流动资金', breakdown.cashAssets, Icons.account_balance_wallet_outlined),
-      ('投资余额', breakdown.investmentAssets, Icons.trending_up),
-      ('权益资产', breakdown.receivableAssets, Icons.assignment_return_outlined),
-      ('计入的物品', breakdown.physicalAssets, Icons.inventory_2_outlined),
-    ].where((item) => item.$2 > Decimal.zero).toList();
+      for (var i = 0; i < rawItems.length; i++)
+        if (rawItems[i].$2 > Decimal.zero) (rawItems[i].$1, rawItems[i].$2, i),
+    ];
+    final hasData = items.isNotEmpty;
     return Container(
       padding: const EdgeInsets.fromLTRB(16, 13, 16, 14),
       decoration: appCardDecoration(scheme),
@@ -353,99 +411,122 @@ class AssetAnalysisCard extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           // 「生成报告」入口在右上 ⋯ 菜单。
-          Text(
-            '资产结构',
-            style: AppType.rowTitle(scheme),
-          ),
-          const SizedBox(height: 8),
-          if (items.isEmpty)
-            Text(
-              '暂无可分析的资产数据',
-              style: AppType.secondary(scheme),
-            )
+          Text('资产结构', style: AppType.rowTitle(scheme)),
+          const SizedBox(height: 12),
+          if (!hasData)
+            Text('暂无可分析的资产数据', style: AppType.secondary(scheme))
           else
-            for (final item in items) ...[
-              _AssetStructureRow(
-                label: item.$1,
-                value: item.$2,
-                total: breakdown.totalAssets,
-                icon: item.$3,
-              ),
-              const SizedBox(height: 8),
-            ],
-          Text(
-            liabilityRate == null
-                ? '负债率：暂无资产数据'
-                : '负债率：${(liabilityRate * 100).toStringAsFixed(1)}%',
-            style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                  color: AppTextColor.secondary(scheme),
-                  fontWeight: FontWeight.w400,
-                ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _AssetStructureRow extends StatelessWidget {
-  final String label;
-  final Decimal value;
-  final Decimal total;
-  final IconData icon;
-
-  const _AssetStructureRow({
-    required this.label,
-    required this.value,
-    required this.total,
-    required this.icon,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    final ratio = total <= Decimal.zero
-        ? 0.0
-        : (value.toDouble() / total.toDouble()).clamp(0.0, 1.0);
-    return Row(
-      children: [
-        Icon(icon, size: 16, color: AppTextColor.secondary(scheme)),
-        const SizedBox(width: 8),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
+            IntrinsicHeight(
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.center,
                 children: [
-                  Expanded(
-                    child: Text(
-                      label,
-                      style: AppType.secondary(scheme),
+                  // ── 左：环图（donut），中心显示总资产金额 ──
+                  SizedBox(
+                    width: 110,
+                    height: 110,
+                    child: Stack(
+                      alignment: Alignment.center,
+                      children: [
+                        PieChart(
+                          PieChartData(
+                            sections: [
+                              for (final item in items)
+                                PieChartSectionData(
+                                  value: item.$2.toDouble(),
+                                  color:
+                                      _kAllocationColors[item.$3],
+                                  radius: 22,
+                                  title: '',
+                                  showTitle: false,
+                                ),
+                            ],
+                            centerSpaceRadius: 33,
+                            sectionsSpace: 2,
+                          ),
+                        ),
+                        Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(
+                              '总资产',
+                              style: TextStyle(
+                                fontSize: 10,
+                                color: AppTextColor.hint(scheme),
+                              ),
+                            ),
+                            Text(
+                              '${MoneyFormat.string(breakdown.totalAssets)} CNY',
+                              style: TextStyle(
+                                fontFamily: 'Nunito',
+                                fontSize: 11,
+                                fontWeight: FontWeight.w600,
+                                color: scheme.onSurface,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
                     ),
                   ),
-                  Text(
-                    MoneyFormat.string(value),
-                    style: Theme.of(context).textTheme.labelMedium?.copyWith(
-                          fontFamily: 'Nunito',
-                          fontWeight: FontWeight.w500,
-                        ),
+                  const SizedBox(width: 14),
+                  // ── 右：图例（圆点 + 分类 + 金额 + 占比）──
+                  Expanded(
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        for (final item in items)
+                          Padding(
+                            padding:
+                                const EdgeInsets.symmetric(vertical: 4),
+                            child: Row(
+                              children: [
+                                Container(
+                                  width: 8,
+                                  height: 8,
+                                  decoration: BoxDecoration(
+                                    color: _kAllocationColors[item.$3],
+                                    shape: BoxShape.circle,
+                                  ),
+                                ),
+                                const SizedBox(width: 6),
+                                Expanded(
+                                  child: Text(
+                                    item.$1,
+                                    style: AppType.secondary(scheme),
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ),
+                                Text(
+                                  MoneyFormat.string(item.$2),
+                                  style: TextStyle(
+                                    fontFamily: 'Nunito',
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w500,
+                                    color: scheme.onSurface,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                      ],
+                    ),
                   ),
                 ],
               ),
-              const SizedBox(height: 5),
-              ClipRRect(
-                borderRadius: BorderRadius.circular(999),
-                child: LinearProgressIndicator(
-                  value: ratio,
-                  minHeight: 5,
-                  backgroundColor: AppColors.iconCircleFill(scheme),
-                  color: scheme.onSurface.withValues(alpha: 0.78),
-                ),
-              ),
-            ],
-          ),
-        ),
-      ],
+            ),
+          if (liabilityRate != null) ...[
+            const SizedBox(height: 8),
+            Text(
+              '负债率：${(liabilityRate * 100).toStringAsFixed(1)}%',
+              style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                    color: AppTextColor.secondary(scheme),
+                    fontWeight: FontWeight.w400,
+                  ),
+            ),
+          ],
+        ],
+      ),
     );
   }
 }

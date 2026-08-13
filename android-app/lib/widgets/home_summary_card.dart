@@ -471,7 +471,11 @@ class _BudgetBody extends StatelessWidget {
             .toDouble()
         : 0.0;
     final ratio = rawRatio.clamp(0.0, 1.0);
-    final pct = (rawRatio * 100).round();
+    final pct = rawRatio > 1.0
+        ? '100%+'
+        : rawRatio < 0.0
+            ? '0.0%'
+            : '${(rawRatio * 100).toStringAsFixed(1)}%';
 
     final now = DateTime.now();
     final daysInMonth = DateTime(now.year, now.month + 1, 0).day;
@@ -531,7 +535,7 @@ class _BudgetBody extends StatelessWidget {
                 borderRadius: BorderRadius.circular(6),
               ),
               child: Text(
-                '$pct%',
+                pct,
                 style: theme.textTheme.labelSmall?.copyWith(
                   color: scheme.primary,
                   fontWeight: FontWeight.w500,
@@ -599,7 +603,7 @@ class _BudgetBody extends StatelessWidget {
       ringVal = ratio;
       ringColor = over ? AppColors.warning : AppColors.budgetHealthy(scheme);
       ringLabel = '已用';
-      ringText = '$pct%';
+      ringText = pct;
     }
 
     return Row(

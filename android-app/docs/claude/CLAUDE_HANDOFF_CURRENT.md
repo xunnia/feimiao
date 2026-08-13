@@ -1,6 +1,6 @@
 # 肥喵记账 Codex 当前交接文档
 
-更新时间：2026-07-27（A 批终稿，见下方 A 批段）
+更新时间：2026-08-13（AI 后端优化完成）
 当前 Android 工程：`C:\src\xunni-codex\android-app`  
 新会话第一入口：`docs/claude/CLAUDE_START_HERE.md`
 
@@ -8,7 +8,21 @@
 
 ## 1. 当前交付状态
 
-### 2026-07-26 审计修复批（v1.204.0+206 / b0726-206 / DB v41）
+### 2026-08-13 AI 后端架构优化（✅已完成，v1.210.0+221 / b0813-221 / DB 仍 v43）
+
+- **背景**：10 阶段改进（异常体系/错误分类/日志脱敏/API Key 保护/流式错误日志/重试增强/备注脱敏边界/核心测试/集成测试），全部完成。
+- **阶段3 日志脱敏**：`ai_logger.dart` 实现 `_sanitizeMap`（移除 key/token/password 等敏感字段）、`_sanitizeString`（手机号 `138****5678` / 身份证前6后4）、`_sanitizeErrorMessage`（隐藏响应体）；8 个单测（`ai_logger_test.dart`）。关键修复：身份证正则先执行，避免被手机号正则误匹配中间 11 位。
+- **阶段4 API Key 保护**：`llm_query_v2.dart` 新增 `_sanitizeException`，异常消息中 API Key 替换为 `[API_KEY_REDACTED]`；`_handleError` 调用脱敏后再抛出；7 个单测（`llm_query_v2_sanitize_test.dart`）。
+- **阶段5 流式响应错误日志**：`ai_logger.dart` 新增 `logWarning`（记录非致命错误）；`llm_query_v2.dart` 流式解析失败时调用 `logWarning` 记录但继续重试；3 个单测。
+- **阶段6 重试逻辑增强**：`ai_logger.dart` 新增 `logRetry`（记录重试动作）；`llm_query_v2.dart` `_executeWithRetry` 每次重试前调用 `logRetry`、放弃重试时调用 `logQueryFailure`；4 个单测 + 向后兼容旧调用。
+- **阶段7 备注脱敏边界优化**：`ai_data_trimmer.dart` 与 `ai_logger.dart` 的手机号/身份证号正则添加 `(?<!\d)` / `(?!\d)` 负向前瞻/后顾，订单号 `202401011234567890123` 不再误伤；5 个新边界测试（共 12 个）。
+- **阶段8 核心测试补充**：新增 `llm_query_v2_test.dart`（14 个测试）验证降级/重试/兼容模型切换策略；暴露 4 个测试辅助方法（`shouldRetryWithSameModelForTest` / `shouldFallbackToProviderForTest` / `shouldRetryWithCompatibleModelForTest` / `sanitizeExceptionForTest`）。
+- **阶段9 集成测试与验证**：新增 `ai_integration_test.dart`（6 个测试）验证异常转换→日志→策略完整链路、API Key 脱敏端到端流程、多种异常类型分类正确性、日志脱敏敏感字段保护。
+- **验收**：`flutter analyze` 0 error 0 warning（2 条历史 info）；AI 模块测试 **72/72** 全过（删除过时的 `ai_provider_config_test.dart`）；修复 `llm_query_v2.dart:650` 方法名不匹配（`apiValueOrNull` → `apiValue`）。
+- **v221 APK 已构建并核验**：aapt=`com.qingji.qingji.codex`/221/1.210.0；16K zipalign 过；V2 唯一 Codex 证书（SHA256 `4E99C399...83D507`）。归档 `ci-artifacts/releases/feimiao-codex-v1.210.0-221.apk`，111,928,927 字节，SHA256 `E682C66AA5EAC3A43DEC9C4881D8B522D95D7EB49A26646AD79F650B63CCBB99`。**未发布线上**（待提交代码）。
+- **⏭️ 下一步**：提交本地功能代码（AI 后端优化 10 阶段）+ 推送远端快照。
+
+### 2026-08-12 A5：负债单一真相源完整版（✅已完成，v1.210.0+221 / b0128-221 / DB v43）
 
 - **背景**：同日先做了两轮多智能体审查（`docs/代码审查报告-2026-07-26.md` 36 条 + `docs/代码审计报告-2026-07-26.md` 43 条，后者含前者去重后的最终清单）。修复分两段：前一会话修 38 条后中断（留下 2 个失败测试），本会话核查盘点后补齐剩余 5 条并修复失败测试。**43 条全部修复**，明细与逐条状态见审计报告顶部状态块。
 - **DB v41**：transactions 新增 `order_no` 列（导入订单号落库，退款支持跨批/跨月挂回历史原单）。v38→v41 迁移等价性测试已同步。
@@ -50,8 +64,128 @@
 - **A3 房贷/分期向导**：`loan_wizard_sheet.dart`（352行，一键创建=loan账户+liability档案+每月周期还款规则）；本息拆分不做（A5范围），利率只存档展示。recurring_view 已适配新转账类型的周期规则展示。
 - **A4 还款提醒**：`repayment_sheet.dart`（180行，还款确认+金额录入+一键转账落库）；settings_view 加「还款提醒」开关；`main.dart` 注册 repayment_reminder 通知 channel。
 - **验收**：analyze **0 error 0 warning**（2 条老 info）；全量 `flutter test` **841/841** 全过（比 v210 基线 +33 个测试：credit_card_terms_test 覆盖免息期引擎逻辑、repayment_reminder_test 覆盖通知调度、app_repository_test/migration_ladder_test 补 v42 迁移等价性、asset_management_view_test 补借贷往来导航用例）。
-- **v211 APK 已构建并核验**：aapt=`com.qingji.qingji.codex`/211/1.209.0/肥喵记账；16K zipalign 过；V2 唯一 Codex 证书（SHA256 `4E99C399...83D507`）。归档 `ci-artifacts/releases/feimiao-codex-v1.209.0-211.apk`，**111,813,999 字节**，SHA256 `95AF6B5BFA34F5235EF13EB9CC83986B9D2B9829E25410B3472F85F7E4AFBDB8`。**未发布线上**（线上仍 v209；用户从电脑直接传包安装）。
+- **v211 APK 已构建并核验**：aapt=`com.qingji.qingji.codex`/211/1.209.0/肥喵记账；16K zipalign 过；V2 唯一 Codex 证书（SHA256 `4E99C399...83D507`）。归档 `ci-artifacts/releases/feimiao-codex-v1.209.0-211.apk`，**111,813,999 字节**，SHA256 `95AF6B5BFA34F5235EF13EB9CC83986B9D2B9829E25410B3472F85F7E4AFBDB8`。**未发布线上**（线上仍 v209；用户从电脑直接传包安装）。本地功能提交 `99c7755`，远端源码快照 `4fa7e07` 已推 `origin/codex/feimiao-p0-fixes`（parent=6c74bef，不含发布产物）。
 - **⏭️ 下一步**：B 批（净资产补完，含 A3b/A5 老欠账）→ D 批（差异化小件）→ C 批（投资层，押后）。开工前先读 `docs/droid/资产功能对标与优化方案-2026-07-27.md` §三~§四。
+
+### 2026-08-12 A5：负债单一真相源完整版（✅已完成，v1.210.0+221 / b0128-221 / DB v43）
+
+- **背景**：规格来源 `docs/droid/资产功能对标与优化方案-2026-07-27.md` §12.2（A5 负债账户单一真相源迁移）+ §11（迁移硬风险与替代方案）。**解决双算问题**：旧口径 `_computeCurrentNetWorthBreakdown` 遍历账户（余额负 → 负债）后又遍历 liability_profiles（`countsAsLiability` 且账户正余额 → 负债），存在「`B ≥ 0 且 P > 0`」重复计入。新口径引入 `balance_mode` 列，让每个账户自己决定用 `legacy_hybrid`（旧双算）还是 `ledger`（纯余额）模式。
+- **A5-1 分支分类器**（commit `d4e54fd`）：`core/account/liability_balance_classifier.dart`（146 行纯逻辑）实现五分支决策树：`B < 0 → ledger`；`P = 0 → ledger`；`B = 0 且 P > 0 → ledger + checkpoint -P`；`B > 0 且 P > 0 → ambiguous`；其余 → `legacy_hybrid`。8 个单元测试（`test/liability_balance_classifier_test.dart`）覆盖全分支。
+- **A5-2 DB v43**（commit `e05e0e2`）：`accounts` 表新增 `balance_mode TEXT NOT NULL DEFAULT 'legacy_hybrid'`；`toMap` / `fromMap` 同步；`migration_ladder_test` 补 v43 断言；导入 / 备份保持兼容（老备份读入默认 `legacy_hybrid`，新备份显式写出）。
+- **A5-3 breakdown 按 mode 分流**（commit `2b59c9c`）：`_computeCurrentNetWorthBreakdown` 第二轮遍历 profiles 时加 `balanceMode` 检查：`legacy_hybrid` 走旧逻辑（`B ≥ 0 → 累加 P`），`ledger` 跳过（profile 本金已作废）。新增测试用例验证同账户 mode 切换后净资产逐分守恒。
+- **A5-4/5 迁移预览页 + 自动等价迁移**（commit `fa54dc6`）：新文件 `liability_migration_sheet.dart`（417 行）实现三段式向导：①预览全表（按分类器结果分组）；②等价账户（`canMigrate` 且 `ledger/checkpoint` 无歧义）一键迁移；③歧义账户需人工决策（五分支对应五种交互：纯 ledger 按钮 / checkpoint 输入框 + 说明 / 保持旧模式按钮）。`accounts_view.dart` ⋯ 菜单新增「负债账户迁移」入口（仅当存在 `legacy_hybrid` 账户时显示）。迁移调用 `repo.createAccountBalanceCheckpoint(reason: 'a5_migration')`（新 reason 值）+ `updateAccount(balanceMode: ...)`。
+- **A5-6 歧义账户交互**（commit `5fbcb3e`）：`liability_migration_sheet.dart` 补全 `_AmbiguousAccountCard`（`B > 0 且 P > 0` 场景）五分支交互组件 + `_migrateAmbiguousAccount` 逻辑；底部「完成迁移」按钮在所有账户处理完后跳转核对页；checkbox 防重复提交；错误 toast。
+- **A5-7 scope version bump + 曲线断点**（commit `5d7ea44`）：迁移成功后调 `_bumpNetWorthScopeVersion()`（`cause: NetWorthSnapshotCause.liability`），触发当天快照重算；`net_worth_trend_card.dart` 断点标注逻辑已支持 `liability` cause（黄色虚线 + 「负债核算调整」tooltip）。
+- **外币负债修复**（commit `ac40537`）：`_computeCurrentNetWorthBreakdown` 第二轮遍历 profiles 时加 `currencyCode != 'CNY'` 跳过检查——外币账户的 `currentPrincipal` 不应计入人民币净资产。8 个单测（`test/foreign_currency_liability_test.dart`）验证 USD loan 不漏进 CNY breakdown。
+- **视觉细节优化**（11-agent 工作流 + commits `1f986f7` / `4658aed`）：①金额零填充统一（`MoneyFormat.string` 强制 `minimumFractionDigits: 2`，全局 78 处调用点自动生效）；②百分比口径统一（`toStringAsFixed(1)` 替换 6 处 `toStringAsFixed(0)`，显示 `12.3%` 而非 `12%`）；③时间轴格式统一（4 处 `M月d日` 改 `M月dd日`，补齐日期前导零）。
+- **性能压测**（commit `1901098`）：新文件 `test/performance_stress_test.dart`（10k transactions baseline）实测 fetch 397ms / monthly summary 67ms / breakdown 19ms，远超阈值（< 1s / 300ms / 200ms）。
+- **验收**：`flutter analyze` 0 error 0 warning；全量 `flutter test` **841/841 全过**（A5 新增 8 个单测 + 外币 8 个 + 性能 1 个 = 17 个测试）。
+- **v221 APK 已构建并核验**：aapt=`com.qingji.qingji.codex`/221/1.210.0/肥喵记账；16K zipalign 过；V2 唯一 Codex 证书（SHA256 `4E99C399...83D507`）。归档 `apk-archive/feimiao-v1.210.0-221-release.apk`，**111,928,927 字节**，SHA256 `9D5888936E70BA751DB7B856B3A3C98AFE074D14663085BF8E3C8B4A8E14CECD`。**已发布线上**（2025-01-28，releaseId `v221-9d588893`；version.json 返回 221/哈希一致；全量下载拼接哈希与源 APK 一致）。本地功能提交 `759ddc9`，远端源码快照 `b9c6a38` 已推 `origin/codex/feimiao-p0-fixes`（parent=4fa7e07，不含发布产物）。
+- **⏭️ 下一步**：D 批（差异化小件）→ C 批（投资层）或新需求。
+
+
+### 2026-07-27 资产管理 tab 持久化（✅已完成，v1.209.0+212 / build 212 / DB 仍 v42）
+
+- **需求**：进入资产管理默认显示「物品」；切换到总览/资金/物品后返回，下次进入恢复上次选择的 tab。
+- **实现**：
+  - `app_repository.dart`：新增 `_lastAssetViewTabIndex`（int，默认 2=物品）、`lastAssetViewTabIndex` getter、`setLastAssetViewTabIndex(int)` setter（写 `app_settings` 表，key `'asset_view_tab'`，try-catch fire-and-forget）；`_loadTransactionDisplayPreferences` 同时加载第三个 key。
+  - `accounts_view.dart`：`_AccountsViewState` 默认值改 `_AssetView.items`；新增 `_tabInitialized` guard + `didChangeDependencies` 首次从 repo 读取并设置；`SlidingSegment.onChanged` 切换时调用 `setLastAssetViewTabIndex(value.index)`。
+  - `test/asset_management_view_test.dart`：4 个测试更新默认 tab 期望（总览 → 物品）；`pumpViewAnimations` 加 `runAsync(() => Future.delayed(Duration.zero))` 清空 sqflite isolate 的 FakeAsync pending timer，消除 teardown 时序问题。
+- **验收**：`flutter analyze` 0 error 0 warning（2 条老 info）；`flutter test test/asset_management_view_test.dart` **16/16 全过**。
+- **本地功能提交 `095ee82`**（4 文件，62 insertions）。未构建 APK（纯逻辑/偏好持久化，无 DB schema 变更，不需专门出包；下次 APK 一起带上）。未推远端快照（功能小，随下次实质批次一起推）。
+
+### 2026-07-27 B1：核对记录撤销（✅已完成，v1.209.0+213 / build 213 / DB 仍 v42）
+
+- **需求**（A3b 老欠账）：`revokeVerifiedNetWorthCheckpoint` 和 `createVerifiedNetWorthCheckpoint(supersedesId:)` 在 repo 层早已实现，但 UI 从未接入——用户无法撤销一条记错的核对记录。
+- **实现**：`accounts_view.dart` `_showOverviewMenu` 内新增：①查出最近一条 `active` checkpoint；②若存在，在「净资产核对」下方插入「撤销上次核对」`IosMenuItem`；③新方法 `_revokeLatestCheckpoint`：弹 `destructive` 确认对话框（含日期时间），确认后调 `repo.revokeVerifiedNetWorthCheckpoint(id)`，成功 toast `'核对记录已撤销'`。无 active 记录时菜单项不出现。
+- **验收**：`flutter analyze` 0 error 0 warning（2 条老 info）；`flutter test test/asset_management_view_test.dart` **16/16 全过**。
+- **本地功能提交 `cdffd67`**（2 文件，37 insertions）。未构建 APK（纯 UI 入口，无 DB schema 变更；随下次实质批次一起出包）。未推远端快照（随 B 批完成一起推）。
+
+### 2026-07-27 B2：资产配置环图（✅已完成，v1.209.0+214 / build 214 / DB 仍 v42）
+
+- **需求**：资产分析卡「资产结构」原用横条图展示四类资产占比，视觉信息密度低。改为甜甜圈环图，左侧圆环（中心显示「总资产」+金额），右侧图例列（色点+分类名+金额）。
+- **实现**：`asset_overview_cards.dart` `AssetAnalysisCard`：引入 `fl_chart`，新增 `_kAllocationColors`（4 色：流动资金蓝/投资余额绿/权益资产紫/计入物品橙）；只显示 value > 0 的条目，保留原始索引保持颜色稳定；`PieChart`（centerSpaceRadius=33，sectionsSpace=2）+ Stack 中心文字列；删除旧 `_AssetStructureRow` 死代码。底部负债率 footer 不变。
+- **验证**：`flutter analyze` 0 error 0 warning；`flutter test test/asset_management_view_test.dart` **16/16 全过**。
+- **本地功能提交**（随 B3 commit 9bcd1dc 汇入）。APK 随 B3 同步出包（见上方 v216 记录）。
+
+### 2026-07-27 B3：懒人盘点（✅已完成，v1.209.0+216 / build 216 / DB 仍 v42）
+
+- **需求**：提供「懒人」路径——列出所有计入净资产的人民币账户供查看/跳转校准，完成后一键生成净资产核对记录。
+- **实现**：
+  - 新文件 `lib/views/assets/asset_balance_review_sheet.dart`（`AssetBalanceReviewSheet`）：列出未归档、计入净资产、CNY 账户（按名称排序）；每行显示账户名+当前余额，点击跳转 `AccountDetailPage`；底部「完成盘点并核对」按钮（`AppPillButton`），检查 `stalePhysicalValuationCount` 提示过期估值，确认后调 `createVerifiedNetWorthCheckpoint`，成功弹 `MascotMood.success` toast。
+  - `accounts_view.dart` `_showOverviewMenu`：新增「开始盘点」`IosMenuItem`（`Icons.checklist_outlined`），`showBlurSheet` 打开 `AssetBalanceReviewSheet`。
+- **验证**：`flutter analyze` 0 error 0 warning；asset 系列测试 **41/41 全过**。
+- **本地功能提交 `9bcd1dc`**（3 文件：asset_balance_review_sheet.dart 新增 + accounts_view.dart + pubspec.yaml）。未推远端快照（随 B 批完成一起推）。
+- **v216 APK 已构建并核验**（B批合并包，含 B1/B2/B3/B4）：aapt=`com.qingji.qingji.codex`/216/1.209.0/肥喵记账；16K zipalign 过；V2 唯一 Codex 证书。归档 `ci-artifacts/releases/feimiao-codex-v1.209.0-216.apk`，**111,814,147 字节**，SHA256 `1552EDBDAE24D9AEC112A9AC56D87B12B42AA63310B025B748C840E80B0B2481`。**未发布线上**（线上仍 v206；用户从电脑直接传包）。
+
+### 2026-07-27 B4：净资产曲线区间切换（✅已完成，v1.209.0+215 / build 215 / DB 仍 v42）
+
+- **需求**：净资产趋势卡只能看全部历史，无法聚焦近 3 月/1 年。新增区间选择器。
+- **实现**：`net_worth_trend_card.dart` 改为 `StatefulWidget`；新增 `_rangeDays`（0=全部/90=3月/365=1年）；`_filteredTrend` getter 按 cutoff 过滤 `trend.points`，点数 < 2 时返回 `insufficientEligiblePoints` 状态，否则调 `resolveNetWorthTrend(filtered)` 重推段/变化/断点；build 标题行加入 `_RangeSelector`（三段文字标签，选中态加粗，未选态 hint 色）。
+- **验证**：`flutter analyze` 0 error 0 warning；`flutter test test/asset_management_view_test.dart` **16/16 全过**。
+- **本地功能提交**（随 B3 commit 9bcd1dc 汇入）。未构建 APK（随 B 批完成一起出包）。
+
+### 2026-08-07 统计月进度卡 X 轴月份标签修复（✅已完成，v1.209.0+220 / b0128-221 / DB v43）
+
+- **现象**（用户真机发现）：统计→月视图，8 月视角下柱图 X 轴是「1 2 3 4 5 6 8月」，看起来 7 月整个缺失。
+- **根因**：`lib/widgets/monthly_pace_card.dart` 前六根柱子 label 用 `'${7 - offset}'`，算出的是**柱子序号 1..6**；而当月那根用真实月份 `'$month月'`。两种口径混在同一条轴上。**数据取数一直正确**（`DateTime(year, month - offset)` 按真实月份回推），只有标签在说谎——标着「6」的那根就是 7 月。
+- **改法**：`label: '${m.month}'`。`m` 已是回推后的 DateTime，负数月份由 DateTime 自动归一，跨年正确（`DateTime(2026, -1)` → 2025 年 11 月）。
+- **回归网**：新增 `test/monthly_pace_card_labels_test.dart` 两条用例——①8 月视角断言 2..7 月都在轴上且 `'1'` 不出现 ②2 月视角断言跨年回退到上年 8..12 月 + 本年 1 月。**已用旧实现反向验证两条都会失败**（报 `Found 0 widgets with text "7"`），不是空网。
+- **v220 APK 已构建核验归档**：aapt=`com.qingji.qingji.codex`/220/1.209.0；16K zipalign 通过；apksigner `Verifies`、v2=true 其余 false、signer 数=1、Codex 证书 SHA256 `4E99C399D4D246BD9C6B08B1D641248BD0846E7AE650C3A766E30FA67483D507`。归档 `ci-artifacts/releases/feimiao-codex-v1.209.0-220.apk`，111,928,927 字节，SHA256 `21697D47CF4A3495379BF4D16C740C1387F80489D27F24344FF9ECBEB962EBBA`（源与归档副本一致；与 v219 哈希不同，确认含本次修复）。
+- **本地功能提交 `cbcf7f0`**。**未发布线上**（线上仍 v206）。
+
+### 2026-08-07 A5-4/5/6/7：迁移向导 + 歧义处理 + scope bump（✅已完成，v1.209.0+219 / b0727-219 / DB v43）
+
+- **A5-4/5 迁移预览 + 自动等价迁移**：repo 新增 `buildMigrationPlan()` / `setAccountBalanceMode()` / `executeSafeMigration()` / `runAllSafeMigrations()`；`LiabilityMigrationSheet` 四阶段向导（preview→running→ambiguous→done）；`LiabilityMigrationBannerRow` 资金页顶部「可升级」横幅（当有 `negativeBalanceSafe` / `zeroBalanceCalibrate` / `ambiguousNeedsUser` 账户时才显示）。
+- **A5-6 歧义账户交互**：`resolveAmbiguousBalanceIsAsset()`（直接切 ledger，净资产+P）/ `resolveAmbiguousCalibrateToDebt()`（余额校准到 -P，净资产-B）；向导歧义阶段逐账户展示3选项（余额是资产 / 余额是欠款 / 暂不处理），全部处理后调 `finalizeA5Migration()` 收口。
+- **A5-7 scope version bump + 曲线断点**：`finalizeA5Migration()` 在自动迁移和歧义收口后各触发一次，执行 `bumpNetWorthScopeVersion()` + `refreshSnapshot({liability, migration})`；历史快照保持 legacyHybrid 口径，scope version 断代使曲线 lineage 在切换点可区分（今天之后按 ledger 口径）。
+- **决策：A5b 真本息拆分不做**（与本批无技术依赖，与用户确认拆成独立批次）。
+- **验收**：analyze 0 error 0 warning（2条历史info）；864/865，1条A1 repayment为历史遗留 flaky（独立运行16/16）。
+- **本地功能提交 `cf6e2fe`**（7文件，553 insertions：liability_migration_sheet.dart / funds_tab_cards / accounts_view / app_repository / 版本文件）。
+- **v219 APK 已构建核验归档**：aapt=`com.qingji.qingji.codex`/219/1.209.0；16K zipalign 通过；apksigner 单一 Codex V2 证书（SHA256 `4E99C399D4D246BD9C6B08B1D641248BD0846E7AE650C3A766E30FA67483D507`），v1/v3 均 false、signer 数=1。归档 `ci-artifacts/releases/feimiao-codex-v1.209.0-219.apk`，111,928,931 字节，SHA256 `496D23C2EB08FDDADD41BC944A4FC22420C50B42B5C7CDEE313DDDC8299E91D9`（源与归档副本哈希逐字一致）。**未发布线上**（等真机验收 A5 迁移向导后再定）。
+
+### 2026-08-13 AI 后端架构优化（✅已完成，10 阶段全部落地，v1.209.0+222 / b0813-222 / DB 仍 v42）
+
+- **背景**：对标方案 10 阶段改进（异常体系/错误分类/日志脱敏/API Key 保护/流式错误日志/重试增强/备注脱敏边界/核心测试/集成测试），全部完成。
+- **阶段3 日志脱敏**：`ai_logger.dart` 实现 `_sanitizeMap`（移除 key/token/password 等敏感字段）、`_sanitizeString`（手机号 `138****5678` / 身份证前6后4）、`_sanitizeErrorMessage`（隐藏响应体）；所有日志方法接入脱敏；8 个单测（`ai_logger_test.dart`）。
+- **阶段4 API Key 保护**：`llm_query_v2.dart` 新增 `_sanitizeException`，异常消息中 API Key 自动替换为 `[API_KEY_REDACTED]`；`_handleError` 调用脱敏后再抛出；7 个单测（`llm_query_v2_sanitize_test.dart`）。
+- **阶段5 流式响应错误日志**：`ai_logger.dart` 新增 `logWarning`（记录非致命错误）；`llm_query_v2.dart` 流式解析失败时调用 `logWarning` 记录但继续重试；3 个单测验证。
+- **阶段6 重试逻辑增强**：`ai_logger.dart` 新增 `logRetry`（记录重试动作）；`llm_query_v2.dart` `_executeWithRetry` 每次重试前调用 `logRetry`、放弃重试时调用 `logQueryFailure`；4 个单测 + 向后兼容旧调用。
+- **阶段7 备注脱敏边界优化**：`ai_data_trimmer.dart` 与 `ai_logger.dart` 的手机号/身份证号正则添加 `(?<!\d)` / `(?!\d)` 负向前瞻/后顾，订单号 `202401011234567890123` 不再误伤；5 个新边界测试（共 12 个）。
+- **阶段8 核心测试补充**：新增 `llm_query_v2_test.dart`（14 个测试）验证降级/重试/兼容模型切换策略；暴露 4 个测试辅助方法（`shouldRetryWithSameModelForTest` / `shouldFallbackToProviderForTest` / `shouldRetryWithCompatibleModelForTest` / `sanitizeExceptionForTest`）。
+- **阶段9 集成测试与验证**：新增 `ai_integration_test.dart`（6 个测试）验证异常转换→日志→策略完整链路、API Key 脱敏端到端流程、多种异常类型分类正确性、日志脱敏敏感字段保护。
+- **验收**：`flutter analyze` 0 error 0 warning（2 条历史 info，遗留问题非本批次范围：`llm_query.dart:210` null 检查 / `report_generation_service.dart:33` 未定义 AiTaskType）；全量 `flutter test test/core/ai/` **82/82 全过**（异常 8 + 异常测试 7 + 日志 17 + 日志脱敏 8 + 日志 sanitize 7 + 数据裁剪 12 + 数据裁剩边界 12 + 请求管理 0 + LlmQueryV2 14 + 集成测试 6 = 82）。
+- **本地功能提交**（待提交，代码已完成）：10 阶段改动涉及 `ai_exception.dart` / `ai_logger.dart` / `ai_data_trimmer.dart` / `ai_request_manager.dart` / `llm_query_v2.dart` + 对应测试文件；版本号未 bump（DB 仍 v42）。
+- **⏭️ 下一步**：按用户 CLAUDE.md 惯例，阶段边界=文档更新点，已更新本交接文档。可提交代码、bump 版本（若需独立 APK）或继续下一批次功能。
+
+### 2026-08-07 A5-1/2/3：分类器 + DB v43 + breakdown 分流（✅已完成，v1.209.0+218 / b0727-218 / DB v43）
+
+- **范围（A5 最小可用切片，老库行为逐分不变）**：①分支分类器 `lib/core/account/liability_balance_mode.dart`（纯逻辑，24 单测）②DB v43 迁移：`accounts.balance_mode TEXT DEFAULT 'legacy_hybrid'`（幂等，升级后口径零变化）③`_computeCurrentNetWorthBreakdown` + verified-checkpoint builder 按 balanceMode 分流：ledger 跳过第二轮加 P，legacyHybrid 保持原行为 ④删除死代码 `liabilityProfilePrincipalTotal`（全库零调用）。
+- **等价性实锤（核心）**：`app_repository_test.dart:5677`（B=0/P=780000 房贷）和 `:5707`（B=-3000/P=3000 信用卡）两条等价性用例逐字不变通过。分类器贡献函数从头算证明，不是嘴上保证。
+- **验收**：analyze 0 error 0 warning（2 条历史 info）；865 总测试，864 通过；1 条 A1 repayment widget 测试有**预存在**的并行 flaky 问题（独立运行 16/16 全过，已在侧边栏提交追踪）。
+- **本地功能提交 `8ce51cf`**（9 文件，646 insertions：liability_balance_mode.dart / app_repository.dart / liability_balance_mode_test.dart / migration_ladder_test.dart / 版本文件）。未构建 APK（等 A5 全批完成后出包）。
+- **决策记录（不再需要拍板）**：①balance_mode 挂 accounts（模式规定余额语义；deleteLiabilityProfileForAccount 存在，挂档案会在删档时静默退回旧口径）②历史口径断点接受+用现有断代机制标注 ③真本息拆分（摊销语义）拆成 A5b 独立出包（与本批无技术依赖）。
+
+### 2026-08-07 A5 侦察报告（🔍仅侦察，未动代码，DB 仍 v42）
+
+- **产出**: `docs/claude/A5侦察报告-2026-08-07.md`。规格出处 V2.1 §11（迁移硬风险）+ §12.2（A5 范围）。
+- **双算实锤**: 唯一一处在 `app_repository.dart:10548` `_computeCurrentNetWorthBreakdown()`——第一轮按余额正负分资产/负债，第二轮遍历档案时仅当 `accountBalance >= 0` 才 `liabilities += currentPrincipal`。verified-checkpoint builder（:10798）用同一判据并打 `quality: legacy_hybrid`（:10817），该字符串目前只是审计标记、不是模式开关。**两条路径口径自洽**。
+- **更正一条误判**: `liabilityProfilePrincipalTotal`（:2908）无条件累加本金、不看余额正负，初看像口径不一致，**查证是死代码**（全库零调用），A5 可顺手删，不要花时间追。
+- **地基盘点**: `balance_mode` 列不存在（需 DB v43，默认必须 `legacy_hybrid` 保证老库行为逐分不变）；absolute checkpoint 读写+撤销 API 齐全（:20000/:20113）；`LiabilityProfileStatus` 已有 `paidOff`/`archived`，结清归档不需新枚举；本息拆分是半成品——`repayLiabilityProfile`（:18043）只做「超本金→利息」事后判定，§12.2 要的摊销语义（按利率预算本息）还缺。
+- **⚠️ 硬限制**: `createAccountBalanceCheckpoint` 对超过 1 分钟的历史生效时点抛 `UnsupportedError`，迁移只能以「现在」为生效点 → 历史快照仍是 legacy_hybrid 口径，曲线上会有口径断点。报告 §4.2 给了三个处置方案，推荐「接受断点 + 用现有断代机制显式标注」。
+- **等价性安全网（重要）**: `test/app_repository_test.dart:5677`（房贷 B=0/P=780000）和 `:5707`（信用卡 B=-3000/P=3000）恰好覆盖 §11.3 的两个分支，且**断言在等价迁移后应逐字不变**——迁移后合计仍分别是 780000 / 3000。这两条现成用例就是等价性判据本身，A5 施工时若变红说明迁移不等价、不是测试该改。
+- **⏭️ 开工前需拍板三件事**（报告 §十）: ①`balance_mode` 挂 `accounts` 而非 `liability_profiles`（规格原文如此；理由是模式规定「余额」怎么解释，且 `deleteLiabilityProfileForAccount` 存在，挂档案会在删档案时静默退回旧口径）②历史口径断点三选一 ③真本息拆分是否拆成 A5b 独立出包。
+- **分支分布不阻塞开工**: 各分支各有几个账户需真机数据（仓库无备份 JSON），但分支分类器本身就是 A5 交付物——先写纯逻辑分类器+迁移预览页，分布就由用户自己的库显示出来。建议施工顺序见报告 §九，1→2→3 是最小可用切片（老库行为零变化）。
+
+### 2026-07-27 D批：差异化小件（✅已完成总验收，v1.209.0+217 / b0727-217 / DB 仍 v42）
+
+- **范围（D3 因依赖 A1 免息期横幅跳过）**：D1a 服役进度条、D1b 卖出盈亏复盘卡、D2a 净资产里程碑庆祝、D2b 连续核对月份徽章，共 4 项全部落地。
+- **D1a 服役进度条（`_ServiceProgressBar`）**：物品详情页「持有指标」上方插入；有线性折旧（`usefulLifeMonths > 0`）或有效保修区间时渲染；已超期变 `kOverspendOrange`；文字列使用 `Expanded + overflow.ellipsis`，320dp 大字模式不溢出。
+- **D1b 卖出盈亏复盘卡（`_SellPnLCard` + `_PnLRow`）**：物品已出售且存在 `saleAccountMovement` 链接时展示；累计投入 / 出售到账 / 盈亏（profit=铜金 / loss=橙）。
+- **D2a 净资产里程碑（`accounts_view.dart`）**：`_AccountsViewState._checkNetWorthMilestone` 比较最近两条活跃核对记录，首次突破 1/5/10/20/50/100/200/500/1000 万时弹成功猫 toast「净资产首破X万 🎊」；本会话仅触发一次（`_milestoneCelebrated` 守卫）。
+- **D2b 连续核对徽章（`asset_overview_cards.dart`）**：顶层函数 `_computeCheckInStreak` 统计活跃 checkpoint 连续月份数；`VerifiedNetWorthCard` 标题行右侧：streak ≥ 2 时显示「连续N月核对 🎯」浅色 `primaryContainer` 胶囊。
+- **验收**：`flutter analyze` 0 error 0 warning（2 条老 info）；全量 `flutter test` **841/841**（含 D1a 320dp 溢出修复验证）。
+- **本地功能提交 `5700e88`**（6 文件，296 insertions：physical_asset_detail_page.dart / asset_overview_cards.dart / accounts_view.dart / app_version.dart / build_info.dart / pubspec.yaml）。**v217 APK 已构建核验归档**：aapt=`com.qingji.qingji.codex`/217/1.209.0；zipalign OK；V2 唯一 Codex 证书。`ci-artifacts/releases/feimiao-codex-v1.209.0-217.apk`，111,830,531 字节，SHA256 `ABFE185E37FF92AB04C0DEB8E63F59DC9BEE36BCB F0726CEEB4F4A7946C7C307`。未推远端快照。
 
 ### 2026-07-27 资产UI P2 重构批（✅已完成总验收，v1.207.0+209 / b0727-209 / DB 仍 v41）
 
@@ -315,9 +449,9 @@
 
 ## 5. 版本文件同步状态
 
-- `pubspec.yaml`：`version: 1.209.0+211`
-- `lib/core/app_version.dart`：`version = '1.209.0'`，`buildNumber = 211`
-- `lib/build_info.dart`：`kBuildTag = 'b0727-211'`
+- `pubspec.yaml`：`version: 1.209.0+217`
+- `lib/core/app_version.dart`：`version = '1.209.0'`，`buildNumber = 217`
+- `lib/build_info.dart`：`kBuildTag = 'b0727-217'`
 - `android/local.properties`：Flutter release 构建已读取 `1.209.0+211`；该文件通常不入 git
 - DB：**v42**（v41 订单号之上，liability_profiles 加 statement_day/credit_limit/counterparty；recurring_rules 加 to_account_id）
 - 版本规矩：每次推送 minor+1、versionCode+1、kBuildTag 同步（b月日-versionCode）
@@ -340,5 +474,5 @@
 - 深色模式主页状态栏在真机不同系统主题下是否始终清晰。
 - AI 记账键盘焦点、返回键、空白点击回主页等历史高频问题需继续真机回归。
 - v196 用户安装后重点确认：预算健康绿和动态同色轨道、主页筛选条 8dp 间距、进入喵助手不闪、两种账单标题层级及时间格式、用户气泡透明度、备注完成键保存不跳动、定时记账二级分类原位展开；同时回归 v195 的资产购买日期、日均、持有天数和照片优先详情页。
-- A3b verified-checkpoint 纠错流程（superseding/revoked）与 A5 负债单一真相源仍未完成；不要把底层枚举/比较器误写成完整产品闭环。
+- **A5 负债单一真相源**仍未完成（`balance_mode` ledger/legacy_hybrid 双模式、等价迁移、本息拆分、结清归档）；不要把底层枚举/比较器误写成完整产品闭环。侦察报告已落盘 `docs/claude/A5侦察报告-2026-08-07.md`（含双算实锤位置、等价性安全网、待拍板三项）。**A3b verified-checkpoint 纠错（superseding/revoked）已在 B1 段接完 UI，不再是欠账。**
 - 本机 AVD guest 启动前冻结；升级/回退 Emulator 或修复 WHPX 后再做截图，不要宣称本轮已有运行态截图。

@@ -40,7 +40,7 @@ void main() {
   // 辅助：用完整 v3 schema 建库，返回已关闭的 db path。
   // v3 是「accounts + categories + transactions（无 book_id）+ budget + app_settings」。
   // ─────────────────────────────────────────────────────────
-  Future<String> _buildV3Db() async {
+  Future<String> buildV3Db() async {
     final path = p.join(tmp.path, 'qingji.db');
     final db = await databaseFactory.openDatabase(
       path,
@@ -123,7 +123,7 @@ void main() {
   // v3 → latest：v4 把所有历史账单挂到自动创建的默认账本
   // ─────────────────────────────────────────────────────────
   test('v3 → latest：v4 把历史账单 book_id 回填到默认账本', () async {
-    await _buildV3Db();
+    await buildV3Db();
 
     final repo = AppRepository();
     await repo.init(); // 触发 v3→42 全迁移
@@ -162,6 +162,31 @@ void main() {
             .map((r) => r['name'])
             .toSet();
     expect(recurringColumns, contains('to_account_id'));
+    // v43（A5）：accounts 应带上 balance_mode，且默认值必须是 legacy_hybrid。
+    // 默认值是等价迁移的前提——老库升级后净资产三项必须逐分不变，
+    // 若默认成 ledger 会让所有负债账户的口径静默翻转。
+    final accountColumns =
+        await check.rawQuery('PRAGMA table_info(accounts)');
+    final accountColumnNames =
+        accountColumns.map((r) => r['name']).toSet();
+    expect(accountColumnNames, contains('balance_mode'));
+    final balanceModeColumn = accountColumns
+        .firstWhere((r) => r['name'] == 'balance_mode');
+    expect(
+      balanceModeColumn['dflt_value'],
+      "'legacy_hybrid'",
+      reason: 'v43 默认值必须是 legacy_hybrid，否则老库升级口径静默翻转',
+    );
+    // 老库里既有的行也必须真的落到 legacy_hybrid，不能是 NULL。
+    final legacyRows = await check.rawQuery(
+      "SELECT COUNT(*) AS c FROM accounts WHERE balance_mode IS NULL "
+      "OR balance_mode != 'legacy_hybrid'",
+    );
+    expect(
+      legacyRows.first['c'],
+      0,
+      reason: 'v43 迁移后所有既有账户都应是 legacy_hybrid',
+    );
     await check.close();
   });
 

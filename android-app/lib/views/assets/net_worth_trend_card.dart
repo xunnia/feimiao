@@ -10,7 +10,7 @@ import '../../theme/app_colors.dart';
 import '../../theme/app_tokens.dart';
 import '../../widgets/settings_ui.dart';
 
-class NetWorthEstimatedTrendCard extends StatelessWidget {
+class NetWorthEstimatedTrendCard extends StatefulWidget {
   final NetWorthTrendResult trend;
 
   /// true = 嵌入外层合并卡（不画自己的卡片装饰），标题与「较上次」行照旧。
@@ -23,18 +23,66 @@ class NetWorthEstimatedTrendCard extends StatelessWidget {
   });
 
   @override
+  State<NetWorthEstimatedTrendCard> createState() =>
+      _NetWorthEstimatedTrendCardState();
+}
+
+class _NetWorthEstimatedTrendCardState
+    extends State<NetWorthEstimatedTrendCard> {
+  int _rangeDays = 0; // 0=全部, 90=3个月, 365=1年
+
+  NetWorthTrendResult get _filteredTrend {
+    if (_rangeDays == 0 || !widget.trend.hasTrend) return widget.trend;
+    final cutoff = DateTime.now().subtract(Duration(days: _rangeDays));
+    // 从全量 points 里截取时间窗口内的点，然后重新 resolve 确保 segment/change 逻辑一致。
+    final filtered = widget.trend.points
+        .where((point) =>
+            !point.lineage.asOf.isBefore(cutoff))
+        .toList();
+    if (filtered.length < 2) {
+      return NetWorthTrendResult(
+        status: NetWorthTrendStatus.insufficientEligiblePoints,
+        points: filtered,
+        isolatedPoints: const [],
+        segments: const [],
+        breaks: const [],
+        changes: const [],
+      );
+    }
+    return resolveNetWorthTrend(filtered);
+  }
+
+  @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    final trend = _filteredTrend;
     final latestChange = trend.changes.isEmpty ? null : trend.changes.last;
     return Container(
       padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
-      decoration: embedded ? null : appCardDecoration(scheme),
+      decoration: widget.embedded ? null : appCardDecoration(scheme),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text('净资产趋势', style: AppType.rowTitle(scheme)),
-          const SizedBox(height: 3),
-          Text('自动估算', style: AppType.caption(scheme)),
+          Row(
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('净资产趋势', style: AppType.rowTitle(scheme)),
+                    const SizedBox(height: 3),
+                    Text('自动估算', style: AppType.caption(scheme)),
+                  ],
+                ),
+              ),
+              // 区间选择器（3月/1年/全部）
+              if (widget.trend.hasTrend)
+                _RangeSelector(
+                  value: _rangeDays,
+                  onChanged: (days) => setState(() => _rangeDays = days),
+                ),
+            ],
+          ),
           const SizedBox(height: 12),
           if (!trend.hasTrend)
             SizedBox(
@@ -42,9 +90,12 @@ class NetWorthEstimatedTrendCard extends StatelessWidget {
               child: Align(
                 alignment: Alignment.centerLeft,
                 child: Text(
-                  trend.status == NetWorthTrendStatus.noComparablePairs
-                      ? '已有快照的口径不同，暂不连线比较'
-                      : '至少积累 2 个可比快照后显示趋势',
+                  _rangeDays > 0
+                      ? '该时间段内快照不足'
+                      : widget.trend.status ==
+                              NetWorthTrendStatus.noComparablePairs
+                          ? '已有快照的口径不同，暂不连线比较'
+                          : '至少积累 2 个可比快照后显示趋势',
                   style: AppType.secondary(scheme),
                 ),
               ),
@@ -94,6 +145,44 @@ class NetWorthEstimatedTrendCard extends StatelessWidget {
           ],
         ],
       ),
+    );
+  }
+}
+
+// 区间选择器：3个月 / 1年 / 全部，轻量文字按钮样式。
+class _RangeSelector extends StatelessWidget {
+  final int value; // 0=全部, 90=3月, 365=1年
+  final ValueChanged<int> onChanged;
+
+  const _RangeSelector({required this.value, required this.onChanged});
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    const options = [(90, '3月'), (365, '1年'), (0, '全部')];
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        for (final option in options)
+          GestureDetector(
+            onTap: () => onChanged(option.$1),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+              child: Text(
+                option.$2,
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: value == option.$1
+                      ? FontWeight.w600
+                      : FontWeight.w400,
+                  color: value == option.$1
+                      ? scheme.onSurface
+                      : AppTextColor.hint(scheme),
+                ),
+              ),
+            ),
+          ),
+      ],
     );
   }
 }

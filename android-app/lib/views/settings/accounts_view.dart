@@ -22,9 +22,12 @@ import '../../widgets/settings_ui.dart';
 import '../assets/account_detail_page.dart';
 import '../assets/account_form_sheet.dart';
 import '../assets/asset_add_entry_sheet.dart';
+import '../assets/asset_balance_review_sheet.dart';
 import '../assets/asset_overview_cards.dart';
 import '../assets/funds_tab_cards.dart';
+import '../assets/liability_migration_sheet.dart';
 import '../assets/net_worth_trend_card.dart';
+import '../../core/account/liability_balance_mode.dart';
 import '../assets/physical_asset_detail_page.dart';
 import '../assets/physical_asset_form_sheet.dart';
 import '../assets/physical_asset_grid.dart';
@@ -54,18 +57,83 @@ class AccountsView extends StatefulWidget {
 }
 
 class _AccountsViewState extends State<AccountsView> {
-  _AssetView _view = _AssetView.overview;
+  _AssetView _view = _AssetView.items;
+  bool _tabInitialized = false;
   _AssetListVisibility _fundsVisibility = _AssetListVisibility.active;
   bool _zeroBalanceAccountsExpanded = false;
   _AssetListVisibility _itemsVisibility = _AssetListVisibility.active;
   _ItemKind _itemKind = _ItemKind.all;
   AssetType? _itemType;
   final _itemSearchController = TextEditingController();
+  // D2a: 本次会话是否已弹出里程碑庆祝（防重复）。
+  bool _milestoneCelebrated = false;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (!_tabInitialized) {
+      _tabInitialized = true;
+      final repo = context.read<AppRepository>();
+      final idx = repo.lastAssetViewTabIndex;
+      // idx 已在 repo 侧做过范围校验（0-2），直接用。
+      _view = _AssetView.values[idx];
+      // D2a: 首次进入时检查净资产里程碑。
+      _checkNetWorthMilestone(repo);
+    }
+  }
 
   @override
   void dispose() {
     _itemSearchController.dispose();
     super.dispose();
+  }
+
+  /// D2a: 比较最近两条活跃核对记录，若净资产首次突破里程碑则庆祝。
+  /// 里程碑（分/fen）：1万、5万、10万、20万、50万、100万、200万、500万、1000万。
+  void _checkNetWorthMilestone(AppRepository repo) {
+    if (_milestoneCelebrated) return;
+    const milestones = <int>[
+      1000000,   // 1万
+      5000000,   // 5万
+      10000000,  // 10万
+      20000000,  // 20万
+      50000000,  // 50万
+      100000000, // 100万
+      200000000, // 200万
+      500000000, // 500万
+      1000000000, // 1000万
+    ];
+    final ordered = repo.verifiedNetWorthCheckpoints
+        .where((c) =>
+            c.header.status == NetWorthVerifiedCheckpointStatus.active)
+        .toList()
+      ..sort((a, b) => b.header.asOf.compareTo(a.header.asOf));
+    if (ordered.length < 2) return;
+    final latest = ordered[0].header.totals.netWorthMinor;
+    final prev = ordered[1].header.totals.netWorthMinor;
+    if (latest <= prev) return; // 净资产下降，不庆祝
+    // 找到被突破的最高里程碑
+    int? crossed;
+    for (final m in milestones) {
+      if (latest >= m && prev < m) crossed = m;
+    }
+    if (crossed == null) return;
+    _milestoneCelebrated = true;
+    final label = _milestoneLabel(crossed);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      showAppToast(
+        context,
+        '净资产首破$label 🎊',
+        mascot: MascotMood.success,
+      );
+    });
+  }
+
+  /// 将里程碑分值格式化为「X万」「XX万」等标签。
+  static String _milestoneLabel(int minor) {
+    final wan = minor ~/ 1000000;
+    return wan >= 10000 ? '${wan ~/ 10000}亿' : '$wan万';
   }
 
   @override
@@ -152,7 +220,12 @@ class _AccountsViewState extends State<AccountsView> {
                     (_AssetView.items, '物品'),
                   ],
                   value: _view,
-                  onChanged: (value) => setState(() => _view = value),
+                  onChanged: (value) {
+                    setState(() => _view = value);
+                    context
+                        .read<AppRepository>()
+                        .setLastAssetViewTabIndex(value.index);
+                  },
                 ),
               ),
               Expanded(
@@ -181,6 +254,12 @@ class _AccountsViewState extends State<AccountsView> {
                           ].any((a) => a.type == ReceivableAssetType.loanOut) ||
                           repo.liabilityProfiles.any((p) =>
                               p.type == LiabilityProfileType.personalBorrow),
+                      // A5：有尚未迁移到 ledger 口径的活跃负债档案时显示升级横幅。
+                      hasMigrationWork: repo.buildMigrationPlan().any((item) =>
+                          item.branch !=
+                              LiabilityMigrationBranch.alreadyLedger &&
+                          item.branch !=
+                              LiabilityMigrationBranch.noPrincipalSafe),
                     ),
                   _AssetView.items => _buildItems(
                       context,
@@ -398,11 +477,32 @@ class _AccountsViewState extends State<AccountsView> {
   void _showOverviewMenu(BuildContext anchorContext) {
     final repo = context.read<AppRepository>();
     final dataItems = _dataCompletionItems(repo);
+    // 找最近一条 active 核对记录，用于「撤销」入口。
+    final latestActive = (repo.verifiedNetWorthCheckpoints
+            .where((c) =>
+                c.header.status == NetWorthVerifiedCheckpointStatus.active)
+            .toList()
+          ..sort((a, b) => b.header.asOf.compareTo(a.header.asOf)))
+        .firstOrNull;
     showIosMenu(anchorContext, [
       IosMenuItem(
         label: '净资产核对',
         icon: Icons.fact_check_outlined,
         onTap: () => _verifyNetWorth(context, repo),
+      ),
+      if (latestActive != null)
+        IosMenuItem(
+          label: '撤销上次核对',
+          icon: Icons.undo_outlined,
+          onTap: () => _revokeLatestCheckpoint(context, repo, latestActive),
+        ),
+      IosMenuItem(
+        label: '开始盘点',
+        icon: Icons.checklist_outlined,
+        onTap: () => showBlurSheet<void>(
+          context,
+          child: const AssetBalanceReviewSheet(),
+        ),
       ),
       IosMenuItem(
         label: '生成报告',
@@ -441,6 +541,28 @@ class _AccountsViewState extends State<AccountsView> {
           : '已保存部分核对，待确认项仍会保留',
       mascot: MascotMood.success,
     );
+  }
+
+  Future<void> _revokeLatestCheckpoint(
+    BuildContext context,
+    AppRepository repo,
+    NetWorthVerifiedCheckpoint checkpoint,
+  ) async {
+    final date = checkpoint.header.asOf.toLocal();
+    final confirmed = await showConfirmDialog(
+      context,
+      title: '撤销核对记录',
+      message: '确定要撤销 ${date.year}/${date.month}/${date.day} '
+          '${date.hour.toString().padLeft(2, '0')}:'
+          '${date.minute.toString().padLeft(2, '0')} 的核对记录吗？'
+          '该记录将不再计入净资产变化分析。',
+      confirmText: '撤销',
+      destructive: true,
+    );
+    if (!confirmed) return;
+    await repo.revokeVerifiedNetWorthCheckpoint(checkpoint.header.id!);
+    if (!context.mounted) return;
+    showAppToast(context, '核对记录已撤销', icon: Icons.undo);
   }
 
   Future<void> _generateAssetReport(
@@ -499,6 +621,7 @@ class _AccountsViewState extends State<AccountsView> {
     required List<ReceivableAssetEntity> archivedReceivables,
     required List<UpcomingRepaymentItem> upcomingRepayments,
     required bool hasLendingData,
+    bool hasMigrationWork = false,
   }) {
     // 种类筛选已删除：列表本就按账户类型分组，够用；只留「当前项目/已归档」一维切换。
     final showArchived = _fundsVisibility == _AssetListVisibility.archived;
@@ -563,6 +686,13 @@ class _AccountsViewState extends State<AccountsView> {
                     // 借贷往来入口：紧跟「最近要还」，与已归档入口同款轻量行。
                     if (showLendingEntry) ...[
                       LendingEntryRow(onTap: () => _openLending(context)),
+                      const SizedBox(height: 6),
+                    ],
+                    // A5：余额口径升级横幅——有待迁移的负债账户时置顶。
+                    if (!showArchived && hasMigrationWork) ...[
+                      LiabilityMigrationBannerRow(
+                        onTap: () => _openMigrationSheet(context),
+                      ),
                       const SizedBox(height: 6),
                     ],
                     if (currentReceivables.isNotEmpty)
@@ -868,6 +998,17 @@ class _AccountsViewState extends State<AccountsView> {
     Navigator.of(context).push(
       AppPageRoute<void>(
         builder: (_) => const LendingView(),
+      ),
+    );
+  }
+
+  /// A5：打开余额口径升级向导。
+  void _openMigrationSheet(BuildContext context) {
+    appSheet<void>(
+      context,
+      child: ChangeNotifierProvider.value(
+        value: context.read<AppRepository>(),
+        child: const LiabilityMigrationSheet(),
       ),
     );
   }

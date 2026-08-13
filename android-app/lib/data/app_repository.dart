@@ -18,6 +18,7 @@ import '../core/budget/fixed_commitment.dart';
 import '../core/account/account_activity.dart';
 import '../core/account/account_balance_checkpoint.dart';
 import '../core/account/account_movement_projection.dart';
+import '../core/account/liability_balance_mode.dart';
 import '../core/account/net_worth_snapshot.dart';
 import '../core/account/net_worth_verified_checkpoint.dart';
 import '../core/ai/ai_provider_config.dart';
@@ -135,6 +136,11 @@ class AccountEntity {
   final int? lastVerifiedMs;
   final int? verificationIntervalDays;
 
+  /// A5 负债余额口径。`legacyHybrid`（默认）= 正余额算资产且 active 档案
+  /// 本金另算负债；`ledger` = 余额是唯一真相，档案本金不进总负债。
+  /// 老库升级和老备份读入都必须回落 legacyHybrid，否则口径静默翻转。
+  final LiabilityBalanceMode balanceMode;
+
   const AccountEntity({
     required this.id,
     this.uuid = '',
@@ -155,6 +161,7 @@ class AccountEntity {
     this.archivedMs,
     this.lastVerifiedMs,
     this.verificationIntervalDays,
+    this.balanceMode = LiabilityBalanceMode.legacyHybrid,
   });
 
   bool get isArchived => status == AccountStatus.archived;
@@ -180,6 +187,7 @@ class AccountEntity {
         'archived_ms': archivedMs,
         'last_verified_ms': lastVerifiedMs,
         'verification_interval_days': verificationIntervalDays,
+        'balance_mode': balanceMode.storageKey,
       };
 
   factory AccountEntity.fromMap(Map<String, Object?> m) => AccountEntity(
@@ -206,6 +214,10 @@ class AccountEntity {
         archivedMs: m['archived_ms'] as int?,
         lastVerifiedMs: m['last_verified_ms'] as int?,
         verificationIntervalDays: m['verification_interval_days'] as int?,
+        // 缺列/未知值一律 legacyHybrid（见 LiabilityBalanceModeX.fromStorage）。
+        balanceMode: LiabilityBalanceModeX.fromStorage(
+          m['balance_mode'] as String?,
+        ),
       );
 }
 
@@ -2579,7 +2591,7 @@ class ReportJobEntity {
 // ---------------------------------------------------------------------------
 
 class AppRepository extends ChangeNotifier {
-  static const _dbVersion = 42;
+  static const _dbVersion = 43;
   static const _dbName = 'qingji.db';
 
   AppRepository({ReportExecutionFence? reportExecutionFence})
@@ -2752,6 +2764,8 @@ class AppRepository extends ChangeNotifier {
       TransactionCardDisplayMode.contentFirst;
   UserMessageBubbleStyle _userMessageBubbleStyle =
       UserMessageBubbleStyle.followCardOpacity;
+  // 资产管理上次选中的 tab（0=总览, 1=资金, 2=物品），默认物品。
+  int _lastAssetViewTabIndex = 2;
   String _profileNickname = '';
   String _profileAvatarPath = '';
 
@@ -2903,11 +2917,6 @@ class AppRepository extends ChangeNotifier {
       _liabilityProfiles
           .where((profile) => profile.accountId == accountId)
           .firstOrNull;
-  Decimal get liabilityProfilePrincipalTotal =>
-      _liabilityProfiles.where((p) => p.countsAsLiability).fold<Decimal>(
-            Decimal.zero,
-            (sum, profile) => sum + profile.currentPrincipal,
-          );
   Set<String> get unsupportedNetWorthCurrencyCodes => {
         for (final account in _accounts)
           if (!account.isDeleted &&
@@ -3418,6 +3427,7 @@ class AppRepository extends ChangeNotifier {
   TransactionCardDisplayMode get transactionCardDisplayMode =>
       _transactionCardDisplayMode;
   UserMessageBubbleStyle get userMessageBubbleStyle => _userMessageBubbleStyle;
+  int get lastAssetViewTabIndex => _lastAssetViewTabIndex;
 
   // ---------------------------------------------------------------------------
   // 初始化
@@ -3948,6 +3958,17 @@ class AppRepository extends ChangeNotifier {
     _db = null;
   }
 
+  /// 测试用：暴露内部 DB 实例（用于测试需要绕过 repo API 直接插数据的场景，
+  /// 如外币账户——真实 app 还不支持新增，但老数据可能有）。
+  @visibleForTesting
+  Database get debugDb => _db!;
+
+  /// 测试用：重新加载账户列表（插入后需要调用）。
+  @visibleForTesting
+  Future<void> reloadForTest() async {
+    await _loadAccounts();
+  }
+
   Future<void> _onCreate(Database db, int version) async {
     await db.execute('''
       CREATE TABLE accounts (
@@ -3970,7 +3991,8 @@ class AppRepository extends ChangeNotifier {
         status                TEXT NOT NULL DEFAULT 'active',
         archived_ms           INTEGER,
         last_verified_ms      INTEGER,
-        verification_interval_days INTEGER
+        verification_interval_days INTEGER,
+        balance_mode          TEXT NOT NULL DEFAULT 'legacy_hybrid'
       )
     ''');
     await _ensureAccountCheckpointTables(db);
@@ -4506,6 +4528,24 @@ class AppRepository extends ChangeNotifier {
           !v42RecurringColumns.contains('to_account_id')) {
         await db.execute(
           'ALTER TABLE recurring_rules ADD COLUMN to_account_id INTEGER',
+        );
+      }
+    }
+    if (oldVersion < 43) {
+      // v43（A5 负债单一真相源）：accounts 加 balance_mode。
+      //
+      // 默认值必须是 'legacy_hybrid' —— 老库升级后净资产三项逐分不变，
+      // 这是等价迁移的前提。切 ledger 只能由用户走迁移流程显式触发，
+      // 绝不能因为升级而静默发生（口径翻转会让净资产悄悄变化）。
+      //
+      // 挂 accounts 而非 liability_profiles 是有意的：模式规定的是「余额」
+      // 怎么解释，而余额是账户的属性；且 deleteLiabilityProfileForAccount
+      // 存在，模式挂档案上会被删档案带走、已迁移账户静默退回旧解释。
+      // 详见 core/account/liability_balance_mode.dart 的类文档。
+      final v43Columns = await _columnNamesFor(db, 'accounts');
+      if (v43Columns.isNotEmpty && !v43Columns.contains('balance_mode')) {
+        await db.execute(
+          "ALTER TABLE accounts ADD COLUMN balance_mode TEXT NOT NULL DEFAULT 'legacy_hybrid'",
         );
       }
     }
@@ -7249,10 +7289,11 @@ class AppRepository extends ChangeNotifier {
     const keys = [
       'transaction_card_display_mode',
       'user_message_bubble_style',
+      'asset_view_tab',
     ];
     final rows = await _db!.query(
       'app_settings',
-      where: 'key IN (?, ?)',
+      where: 'key IN (?, ?, ?)',
       whereArgs: keys,
     );
     final settings = {
@@ -7265,6 +7306,10 @@ class AppRepository extends ChangeNotifier {
     _userMessageBubbleStyle = UserMessageBubbleStyleX.fromStorage(
       settings['user_message_bubble_style'],
     );
+    final tabIdx = int.tryParse(settings['asset_view_tab'] ?? '');
+    if (tabIdx != null && tabIdx >= 0 && tabIdx <= 2) {
+      _lastAssetViewTabIndex = tabIdx;
+    }
   }
 
   Future<void> setTransactionCardDisplayMode(
@@ -7291,6 +7336,19 @@ class AppRepository extends ChangeNotifier {
       conflictAlgorithm: ConflictAlgorithm.replace,
     );
     notifyListeners();
+  }
+
+  Future<void> setLastAssetViewTabIndex(int index) async {
+    if (_lastAssetViewTabIndex == index) return;
+    _lastAssetViewTabIndex = index;
+    // 纯导航偏好，fire-and-forget；数据库已关闭时静默忽略（测试 teardown 时序）。
+    try {
+      await _db!.insert(
+        'app_settings',
+        {'key': 'asset_view_tab', 'value': index.toString()},
+        conflictAlgorithm: ConflictAlgorithm.replace,
+      );
+    } catch (_) {}
   }
 
   String get profileNickname => _profileNickname;
@@ -10554,6 +10612,13 @@ class AppRepository extends ChangeNotifier {
       if (account == null || account.isDeleted || !account.includeInNetWorth) {
         continue;
       }
+      // 外币负债不计入 CNY 净资产（与第一轮循环的币种过滤一致）
+      if (account.currencyCode != 'CNY') {
+        continue;
+      }
+      // A5：ledger 口径下余额是唯一真相，档案本金只作合同资料，不进总负债。
+      // legacyHybrid（默认）保留老算法：正余额算资产、本金另算负债（双算）。
+      if (account.balanceMode.isLedger) continue;
       final accountBalance = accountBalances[account.id] ?? Decimal.zero;
       if (accountBalance >= Decimal.zero) {
         liabilities += profile.currentPrincipal;
@@ -10785,6 +10850,11 @@ class AppRepository extends ChangeNotifier {
           (accountBalances[account.id] ?? Decimal.zero) < Decimal.zero) {
         continue;
       }
+      // A5：ledger 口径下档案本金不进总负债（余额是唯一真相），因此
+      // 也不该在核对快照里留一条 liability_profile 项——否则核对总额
+      // 会和 breakdown 对不上。必须与 _computeCurrentNetWorthBreakdown
+      // 第二轮的分流条件保持一致。
+      if (account.balanceMode.isLedger) continue;
       items.add(NetWorthVerifiedCheckpointItem(
         objectType: 'liability_profile',
         objectUuid:
@@ -18205,6 +18275,164 @@ class AppRepository extends ChangeNotifier {
     }
     result.sort((a, b) => a.nextDate.compareTo(b.nextDate));
     return result;
+  }
+
+  /// A5：构建迁移计划——对所有「未删除、计入净资产、人民币」账户分类。
+  ///
+  /// 纯 in-memory，无 IO，调用频率可以高。
+  /// 结果包含 [LiabilityMigrationBranch.alreadyLedger]，UI 用它判断「全部完成」。
+  List<LiabilityMigrationPlanItem> buildMigrationPlan() {
+    final plan = <LiabilityMigrationPlanItem>[];
+    for (final account in _accounts) {
+      if (account.isDeleted ||
+          !account.includeInNetWorth ||
+          account.currencyCode != 'CNY') {
+        continue;
+      }
+      final profile = liabilityProfileForAccount(account.id);
+      final balance = accountBalanceOf(account);
+      final principal = profile?.currentPrincipal ?? Decimal.zero;
+      final countsAsLiability = profile?.countsAsLiability ?? false;
+      plan.add(LiabilityMigrationClassifier.classify(
+        accountId: account.id,
+        balance: balance,
+        principal: principal,
+        principalCountsAsLiability: countsAsLiability,
+        currentMode: account.balanceMode,
+      ));
+    }
+    return plan;
+  }
+
+  /// A5：将账户切换到指定余额口径并刷新净资产快照。
+  ///
+  /// [bumpScope]：切换口径是「净资产计入政策变化」，需要 bump scope version，
+  /// 否则历史快照会和新口径混在同一 lineage 里显得跳变。批量迁移时传 false，
+  /// 由 [runAllSafeMigrations] 统一 bump 一次。
+  Future<void> setAccountBalanceMode(
+    int accountId,
+    LiabilityBalanceMode mode, {
+    bool bumpScope = true,
+  }) async {
+    await _db!.update(
+      'accounts',
+      {
+        'balance_mode': mode.storageKey,
+        'updated_ms': DateTime.now().millisecondsSinceEpoch,
+      },
+      where: 'id = ?',
+      whereArgs: [accountId],
+    );
+    await _loadAccounts();
+    if (bumpScope) {
+      await _bumpNetWorthScopeVersion();
+      await _refreshCurrentNetWorthSnapshotBestEffort(
+        const {NetWorthSnapshotCause.liability, NetWorthSnapshotCause.migration},
+      );
+    }
+    notifyListeners();
+  }
+
+  /// A5：对单个账户执行等价迁移（仅接受安全分支）。
+  ///
+  /// - [zeroBalanceCalibrate]：先创建 checkpoint 把余额校准到 `-P`，再切 ledger。
+  ///   checkpoint 的「现在」时点要求满足——此方法在当前时点即时执行，符合。
+  /// - 其余安全分支：直接切 ledger，余额不变，三项合计逐分不变。
+  ///
+  /// [bumpScope] 传 false 时，调用方负责在批量结束后统一 bump。
+  Future<void> executeSafeMigration(
+    LiabilityMigrationPlanItem item, {
+    bool bumpScope = false,
+  }) async {
+    assert(item.branch.isAutoSafe, '仅安全分支可自动迁移');
+    if (item.branch == LiabilityMigrationBranch.zeroBalanceCalibrate) {
+      // 先把余额校准到 -P，使后续 ledger 口径下负余额直接代表欠款。
+      // note 写明迁移来源，方便审计时区分「用户手动校准」和「系统迁移校准」。
+      await createAccountBalanceCheckpoint(
+        accountId: item.accountId,
+        targetBalance: item.calibrationTarget!,
+        note: 'A5 迁移：余额从 ${item.balance} 校准到 ${item.calibrationTarget}',
+      );
+    }
+    await setAccountBalanceMode(
+      item.accountId,
+      LiabilityBalanceMode.ledger,
+      bumpScope: bumpScope,
+    );
+  }
+
+  /// A5：批量执行所有安全分支的等价迁移。
+  ///
+  /// 返回实际迁移的账户数。完成后统一 bump scope version 并刷新快照，
+  /// 历史曲线在今天这个节点会看到口径切换的断代标注。
+  /// 歧义账户（[LiabilityMigrationBranch.ambiguousNeedsUser]）不在此处理，
+  /// 由 UI 逐一引导。
+  Future<int> runAllSafeMigrations() async {
+    final plan = buildMigrationPlan()
+        .where((item) => item.branch.isAutoSafe)
+        .toList();
+    if (plan.isEmpty) return 0;
+    for (final item in plan) {
+      await executeSafeMigration(item, bumpScope: false);
+    }
+    // 统一 bump scope + 重算今天快照（A5-7）。
+    await _bumpNetWorthScopeVersion();
+    await _refreshCurrentNetWorthSnapshotBestEffort(
+      const {NetWorthSnapshotCause.liability, NetWorthSnapshotCause.migration},
+    );
+    notifyListeners();
+    return plan.length;
+  }
+
+  /// A5 §11.4 选项②：歧义账户「余额就是真实资产，不再双算本金」。
+  ///
+  /// 操作：保持余额不变，直接切 ledger——正余额仍算资产，profile 本金不再
+  /// 另算进负债。净资产变化 = +P（少了一条本金负债）。
+  /// 适用场景：信用卡溢缴款、押金账户、档案本金已过期/不再有效。
+  /// A5：全批迁移收口——统一 bump scope version + 刷新快照（A5-7）。
+  ///
+  /// UI 在所有歧义账户都处理完后调用一次。若只有安全分支，[runAllSafeMigrations]
+  /// 内部已 bump，调用方无需再调此方法；但重复调用无害（多 bump 一次版本号）。
+  Future<void> finalizeA5Migration() async {
+    await _bumpNetWorthScopeVersion();
+    await _refreshCurrentNetWorthSnapshotBestEffort(
+      const {NetWorthSnapshotCause.liability, NetWorthSnapshotCause.migration},
+    );
+    notifyListeners();
+  }
+
+  Future<void> resolveAmbiguousBalanceIsAsset(
+    int accountId, {
+    bool bumpScope = true,
+  }) async {
+    await setAccountBalanceMode(
+      accountId,
+      LiabilityBalanceMode.ledger,
+      bumpScope: bumpScope,
+    );
+  }
+
+  /// A5 §11.4 选项③：歧义账户「正余额不是资产，以档案本金为准切 ledger」。
+  ///
+  /// 操作：用 absolute checkpoint 把余额校准到 `-P` 再切 ledger。
+  /// 净资产变化 = -B（少了 B 这笔虚增资产），三项明确变化，**必须由用户确认**。
+  /// 适用场景：账户余额正数是录反了（应是欠款）或维修记录缺失。
+  Future<void> resolveAmbiguousCalibrateToDebt(
+    int accountId,
+    Decimal targetBalance, {
+    bool bumpScope = true,
+  }) async {
+    assert(targetBalance <= Decimal.zero, '校准目标余额必须 ≤ 0');
+    await createAccountBalanceCheckpoint(
+      accountId: accountId,
+      targetBalance: targetBalance,
+      note: 'A5 迁移：歧义账户余额校准到 $targetBalance（选项③）',
+    );
+    await setAccountBalanceMode(
+      accountId,
+      LiabilityBalanceMode.ledger,
+      bumpScope: bumpScope,
+    );
   }
 
   /// A2 借贷按人：记一笔向个人的借入。

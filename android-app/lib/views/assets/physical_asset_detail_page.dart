@@ -114,6 +114,20 @@ class PhysicalAssetDetailPage extends StatelessWidget {
           )}${cost.isExact ? '' : ' · 待确认'}';
     final metrics = _resolveMetrics(repo, current, cost);
     final owned = current.economicStatus == PhysicalAssetEconomicStatus.owned;
+    final saleLinks = links
+        .where(
+          (l) => l.linkType == AssetTransactionLinkType.saleAccountMovement,
+        )
+        .toList();
+    final saleProceeds = saleLinks.fold(
+      Decimal.zero,
+      (sum, l) => sum + repo.physicalAssetLinkCurrentAmount(l),
+    );
+    final hasFullInvestment = cost.isExact &&
+        additional.isExact &&
+        metrics.cumulativeHoldingInvestment.isExact;
+    final investmentAmount =
+        hasFullInvestment ? metrics.cumulativeHoldingInvestment.value! : null;
     final hasPendingRefundAllocation = links.any(
       (link) =>
           link.costQuality ==
@@ -223,6 +237,15 @@ class PhysicalAssetDetailPage extends StatelessWidget {
                 const _InfoPill('待确认'),
             ],
           ),
+          // D1b: 卖出盈亏复盘卡
+          if (!owned && saleLinks.isNotEmpty) ...[
+            const SizedBox(height: 12),
+            _SellPnLCard(
+              currencyCode: current.currencyCode,
+              saleProceeds: saleProceeds,
+              investment: investmentAmount,
+            ),
+          ],
           if (current.purchaseDate == null) ...[
             const SizedBox(height: 12),
             SettingsGroup(
@@ -244,6 +267,8 @@ class PhysicalAssetDetailPage extends StatelessWidget {
               ],
             ),
           ],
+          // D1a: 服役进度条
+          _ServiceProgressBar(asset: current, metrics: metrics),
           const SizedBox(height: 12),
           AssetDetailSection(
             title: '持有指标',
@@ -1051,6 +1076,178 @@ class _InfoPill extends StatelessWidget {
       child: Text(
         text,
         style: AppType.caption(scheme),
+      ),
+    );
+  }
+}
+
+/// D1a 服役进度条：有线性折旧（usefulLifeMonths > 0）或保修区间时显示。
+class _ServiceProgressBar extends StatelessWidget {
+  final PhysicalAssetEntity asset;
+  final PhysicalAssetMetrics metrics;
+
+  const _ServiceProgressBar({
+    required this.asset,
+    required this.metrics,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final heldDays = metrics.heldDays.isExact ? metrics.heldDays.value! : null;
+    if (heldDays == null) return const SizedBox.shrink();
+
+    int lifespanDays;
+    String lifespanLabel;
+
+    if (asset.hasLinearDepreciation && asset.usefulLifeMonths > 0) {
+      lifespanDays = (asset.usefulLifeMonths * 30.44).round();
+      lifespanLabel = '预计 ${asset.usefulLifeMonths} 个月';
+    } else if (asset.warrantyUntil != null && asset.purchaseDate != null) {
+      lifespanDays =
+          asset.warrantyUntil!.difference(asset.purchaseDate!).inDays;
+      lifespanLabel = '保修至 ${assetDateText(asset.warrantyUntil)}';
+    } else {
+      return const SizedBox.shrink();
+    }
+
+    if (lifespanDays <= 0) return const SizedBox.shrink();
+
+    final scheme = Theme.of(context).colorScheme;
+    final ratio = (heldDays / lifespanDays).clamp(0.0, 1.0);
+    // 文字与进度条用同一个舍入后的值，避免「显示 100% 但条子没满」的割裂。
+    final displayRatio = ((ratio * 100).round() / 100.0).clamp(0.0, 1.0);
+    final pct = (displayRatio * 100).toInt();
+    final exceeds = heldDays > lifespanDays;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Expanded(
+              child: Text(
+                '服役 $pct%${exceeds ? ' · 已超期' : ''}',
+                style: AppType.secondary(scheme),
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+            const SizedBox(width: 6),
+            Text(lifespanLabel, style: AppType.caption(scheme)),
+          ],
+        ),
+        const SizedBox(height: 5),
+        ClipRRect(
+          borderRadius: BorderRadius.circular(4),
+          child: LinearProgressIndicator(
+            value: displayRatio,
+            minHeight: 6,
+            backgroundColor: scheme.surfaceContainerHighest,
+            valueColor: AlwaysStoppedAnimation<Color>(
+              exceeds ? kOverspendOrange : scheme.primary,
+            ),
+          ),
+        ),
+        const SizedBox(height: 12),
+      ],
+    );
+  }
+}
+
+/// D1b 卖出盈亏复盘卡：已出售物品且有出售到账关联时显示。
+class _SellPnLCard extends StatelessWidget {
+  final String currencyCode;
+  final Decimal saleProceeds;
+  final Decimal? investment;
+
+  const _SellPnLCard({
+    required this.currencyCode,
+    required this.saleProceeds,
+    required this.investment,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final pnl = investment != null ? saleProceeds - investment! : null;
+    final profit = pnl != null && pnl >= Decimal.zero;
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+      decoration: BoxDecoration(
+        color: AppColors.iconCircleFill(scheme),
+        borderRadius: BorderRadius.circular(AppRadius.md),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('卖出复盘', style: AppType.rowTitle(scheme)),
+                const SizedBox(height: 6),
+                _PnLRow(
+                  label: '累计投入',
+                  value: investment != null
+                      ? MoneyFormat.string(investment!,
+                          currencyCode: currencyCode)
+                      : '待确认',
+                  scheme: scheme,
+                ),
+                _PnLRow(
+                  label: '出售到账',
+                  value:
+                      MoneyFormat.string(saleProceeds, currencyCode: currencyCode),
+                  scheme: scheme,
+                ),
+              ],
+            ),
+          ),
+          if (pnl != null) ...[
+            const SizedBox(width: 12),
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                Text(profit ? '盈利' : '亏损', style: AppType.caption(scheme)),
+                const SizedBox(height: 2),
+                Text(
+                  '${profit ? '+' : ''}${MoneyFormat.string(pnl, currencyCode: currencyCode)}',
+                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                        fontFamily: 'Nunito',
+                        fontWeight: FontWeight.w700,
+                        color: profit
+                            ? AppColors.income(scheme)
+                            : AppColors.warning,
+                      ),
+                ),
+              ],
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _PnLRow extends StatelessWidget {
+  final String label;
+  final String value;
+  final ColorScheme scheme;
+
+  const _PnLRow({
+    required this.label,
+    required this.value,
+    required this.scheme,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(top: 2),
+      child: Row(
+        children: [
+          Text('$label ', style: AppType.caption(scheme)),
+          Text(value, style: AppType.secondary(scheme)),
+        ],
       ),
     );
   }

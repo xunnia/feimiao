@@ -2185,7 +2185,7 @@ void main() {
     expect(precision['dflt_value'], "'legacy_unknown'");
     expect(
       Sqflite.firstIntValue(await check.rawQuery('PRAGMA user_version')),
-      42,
+      43,
     );
     await check.close();
   });
@@ -2272,7 +2272,7 @@ void main() {
     );
     expect(
       Sqflite.firstIntValue(await check.rawQuery('PRAGMA user_version')),
-      42,
+      43,
     );
     await check.close();
   });
@@ -6507,7 +6507,7 @@ void main() {
     final check = await databaseFactory.openDatabase(path);
     expect(
       Sqflite.firstIntValue(await check.rawQuery('PRAGMA user_version')),
-      42,
+      43,
     );
     final physicalColumns =
         (await check.rawQuery('PRAGMA table_info(physical_assets)'))
@@ -6660,7 +6660,7 @@ void main() {
     final check = await databaseFactory.openDatabase(path);
     expect(
       Sqflite.firstIntValue(await check.rawQuery('PRAGMA user_version')),
-      42,
+      43,
     );
     final afterRows = await check.query(
       'transactions',
@@ -6856,7 +6856,7 @@ void main() {
     final check = await databaseFactory.openDatabase(path);
     final v =
         Sqflite.firstIntValue(await check.rawQuery('PRAGMA user_version'));
-    expect(v, 42); // init 一路升到当前最新版本
+    expect(v, 43); // init 一路升到当前最新版本
     final tableNames = (await check
             .rawQuery("SELECT name FROM sqlite_master WHERE type = 'table'"))
         .map((r) => r['name'])
