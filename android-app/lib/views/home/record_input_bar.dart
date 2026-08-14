@@ -146,6 +146,7 @@ class _RecordInputBarState extends State<RecordInputBar> {
                     isAi: _isAiMode,
                     onTap: () => _setMode(!_isAiMode),
                   ),
+                  const SizedBox(width: 6),
                   const Spacer(),
                   _ToolCircleButton(
                     icon: Icons.arrow_upward,
@@ -189,7 +190,7 @@ class _ToolCircleButton extends StatelessWidget {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 模式胶囊（透明底 + 淡阴影，swap_horiz 前置图标，不加粗）
+// 模式胶囊（透明底 + 淡阴影，swap_horiz 前置图标,不加粗）
 // ─────────────────────────────────────────────────────────────────────────────
 
 class _ModePill extends StatelessWidget {

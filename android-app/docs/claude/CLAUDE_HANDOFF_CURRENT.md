@@ -1,12 +1,46 @@
 # 肥喵记账 Codex 当前交接文档
 
-更新时间：2026-08-14（Claude API 适配完成）
+更新时间：2026-08-15（喵助手 UI 四项优化完成）
 当前 Android 工程：`C:\src\xunni-codex\android-app`  
 新会话第一入口：`docs/claude/CLAUDE_START_HERE.md`
 
 > 本文只保留当前有效状态。历史流水看 `CHANGELOG_CODEX.md` 和 git 历史。
 
 ## 1. 当前交付状态
+
+### 2026-08-15 喵助手 UI 四项优化（✅ 已完成，v1.221.0+234 / b0815-234 / DB 仍 v43）
+
+- **需求 #1：模型列表弹窗改造**（`lib/widgets/model_selector_sheet.dart`）：
+  - 字体从 15px 缩小到 13px
+  - 去掉行间细横线（删除所有 Divider）
+  - 选中模型不加粗（w500 → w400）
+  - 选中标记 ✓ 移到最左边（Leading 位置）
+  - 行距减小（vertical padding 11 → 8）
+  - 弹窗背景半透明（alpha 0.95）
+
+- **需求 #2：喵助手输入框改动**（`lib/views/assistant/meow_assistant_view.dart`）：
+  - 输入框透明效果（已有 GlassSurface 玻璃效果，保持不变）
+  - "记一记"占位文字加粗（w400 → w500）
+  - 加号按钮去掉圆圈（改为裸 IconButton，无背景）
+
+- **需求 #3：Claude 原生 API 支持**：
+  - **已完全实现，无需修改**。现有代码已正确实现 `/v1/messages` 端点调用和 `thinking` 参数映射。
+  - 自动检测：`shouldUseClaudeMessages` 属性检测模型名/baseUrl 是否包含 "claude" 或 "anthropic"
+  - 思考深度：`claudeBudgetTokens` 已按档位（Minimal→1024, Low→4096, Medium→8192, High→16384, Max→32768）正确映射
+
+- **需求 #4：Effort 滑块 UI 改造**（`lib/widgets/effort_slider_sheet.dart`，全新组件 480+ 行）：
+  - **标签区**：Effort (灰色 w300) + 当前档位 (深墨色 onSurface)
+  - **Faster/Smarter 标签**：放在滑条左右上方（不在两侧）
+  - **滑条样式**（完全对齐图二）：较粗轨道 (6px)、方形圆角滑块 (20x20，圆角 4)、深灰已过/浅灰未到、档位圆点刻度
+  - **Ultra 专属动画**：紫色渐变流动效果（AnimationController + CustomPainter）
+  - **档位重新定义**（6档）：Low → Medium → High → Extra → Max → Ultra（去掉 Minimal，从 Low 开始）
+  - **透明效果**：半透明主题墙（对齐模型弹窗）
+  - **集成位置**：主页底栏（`record_input_bar.dart`）和喵助手页面（`meow_assistant_view.dart`）显示当前模型/Effort，点击弹出选择器
+  - **数据持久化**：新增 `app_repository.dart` 的 `setChatReasoningEffort` 方法，选择立即保存到 `app_settings` 表
+
+- **验证**：`flutter analyze --no-fatal-infos --no-fatal-warnings` **0 error**（仅 27 条历史 info/warning）
+- **Release APK**：`C:\src\xunni-codex\ci-artifacts\releases\feimiao-codex-v1.221.0-234.apk`，113,928,192 字节（109 MB），SHA256 `D295CCE3078D0D64F273CB67561B0DC297CEF823C1D983CE14EB1B1BD4EAB39A`。
+- **真机边界**：用户自行安装验收，重点验证：①模型列表弹窗视觉（字体/行距/标记位置/透明度）②喵助手输入框占位文字加粗和加号无圆圈 ③Effort 滑块完整交互（6档选择/Ultra 紫色动画/持久化）④主页和喵助手底栏模型/Effort 显示正确
 
 ### 2026-08-14 Claude API 适配（✅ 已完成，未构建 APK，DB 仍 v43）
 

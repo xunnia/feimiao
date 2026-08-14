@@ -3442,6 +3442,20 @@ class AppRepository extends ChangeNotifier {
         AiTaskType.report => _chatAiReasoningEffort,
       };
 
+  /// 公开的 getter，用于 UI 显示当前喵助手的 Effort
+  AiReasoningEffort get chatReasoningEffort => _chatAiReasoningEffort;
+
+  /// 公开的 setter，用于 UI 更新喵助手的 Effort
+  Future<void> setChatReasoningEffort(AiReasoningEffort effort) async {
+    if (_chatAiReasoningEffort == effort) return;
+    _chatAiReasoningEffort = effort;
+    await _db?.execute(
+      'INSERT OR REPLACE INTO app_settings (key, value) VALUES (?, ?)',
+      ['ai_chat_reasoning_effort', effort.storageKey],
+    );
+    notifyListeners();
+  }
+
   AiProviderConfig get aiProviderConfig =>
       aiProviderConfigFor(AiTaskType.recordParse);
 

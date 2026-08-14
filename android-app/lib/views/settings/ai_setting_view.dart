@@ -685,7 +685,7 @@ class _ProviderModelListBoxState extends State<_ProviderModelListBox> {
         Container(
           constraints: const BoxConstraints(maxHeight: 200),
           decoration: BoxDecoration(
-            color: Colors.transparent,
+            color: scheme.surface.withValues(alpha: 0.7),
             borderRadius: BorderRadius.circular(14),
             border: Border.all(
               color: AppColors.hairline(scheme),
@@ -694,15 +694,10 @@ class _ProviderModelListBoxState extends State<_ProviderModelListBox> {
           ),
           child: ClipRRect(
             borderRadius: BorderRadius.circular(13.5),
-            child: ListView.separated(
+            child: ListView.builder(
               shrinkWrap: true,
               padding: EdgeInsets.zero,
               itemCount: widget.availableModels.length,
-              separatorBuilder: (_, __) => Divider(
-                height: 0.5,
-                indent: 0,
-                color: AppColors.hairline(scheme),
-              ),
               itemBuilder: (context, index) {
                 final model = widget.availableModels[index];
                 final isSelected = model == selected;
@@ -715,28 +710,33 @@ class _ProviderModelListBoxState extends State<_ProviderModelListBox> {
                   child: Padding(
                     padding: const EdgeInsets.symmetric(
                       horizontal: 14,
-                      vertical: 10,
+                      vertical: 7,
                     ),
                     child: Row(
                       children: [
+                        if (isSelected)
+                          Padding(
+                            padding: const EdgeInsets.only(right: 8),
+                            child: Icon(
+                              Icons.check,
+                              size: 16,
+                              color: scheme.primary,
+                            ),
+                          )
+                        else
+                          const SizedBox(width: 24),
                         Expanded(
                           child: Text(
                             model,
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                             style: TextStyle(
-                              fontSize: 14,
+                              fontSize: 13,
                               fontWeight: FontWeight.w400,
                               color: scheme.onSurface,
                             ),
                           ),
                         ),
-                        if (isSelected)
-                          Icon(
-                            Icons.check,
-                            size: 16,
-                            color: scheme.primary,
-                          ),
                       ],
                     ),
                   ),

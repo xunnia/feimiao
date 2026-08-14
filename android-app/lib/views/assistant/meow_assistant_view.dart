@@ -200,49 +200,58 @@ class _MeowAssistantViewState extends State<MeowAssistantView> {
             child: Padding(
               padding: const EdgeInsets.fromLTRB(12, 6, 12, 10),
               child: AppGlassInputShell(
-                padding: const EdgeInsets.fromLTRB(14, 12, 10, 10),
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.end,
+                padding: const EdgeInsets.fromLTRB(14, 14, 10, 10),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    AppCircleButton(
-                      icon: Icons.add,
-                      iconSize: 20,
-                      onPressed: () => showRecordExtrasSheet(context),
-                    ),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: TextField(
-                        controller: _ctrl,
-                        minLines: 1,
-                        maxLines: 4,
-                        textInputAction: TextInputAction.send,
-                        onSubmitted: (_) => _send(),
-                        onChanged: (_) => setState(() {}),
-                        cursorColor: scheme.primary,
-                        style: const TextStyle(
-                          fontSize: 15,
-                          fontWeight: FontWeight.w300,
+                    TextField(
+                      controller: _ctrl,
+                      minLines: 1,
+                      maxLines: 4,
+                      textInputAction: TextInputAction.send,
+                      onSubmitted: (_) => _send(),
+                      onChanged: (_) => setState(() {}),
+                      cursorColor: scheme.primary,
+                      style: const TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w300,
+                      ),
+                      decoration: InputDecoration(
+                        hintText: '记一记',
+                        hintStyle: TextStyle(
+                          fontSize: 17,
+                          fontWeight: FontWeight.w500,
+                          color:
+                              scheme.onSurfaceVariant.withValues(alpha: 0.55),
                         ),
-                        decoration: InputDecoration(
-                          hintText: '记一记',
-                          hintStyle: TextStyle(
-                            fontSize: 14,
-                            fontWeight: FontWeight.w400,
-                            color:
-                                scheme.onSurfaceVariant.withValues(alpha: 0.5),
-                          ),
-                          border: InputBorder.none,
-                          isCollapsed: true,
-                          contentPadding:
-                              const EdgeInsets.symmetric(vertical: 8),
-                        ),
+                        border: InputBorder.none,
+                        isCollapsed: true,
+                        contentPadding: EdgeInsets.zero,
                       ),
                     ),
-                    const SizedBox(width: 10),
-                    AppGlassInputIconButton(
-                      icon: Icons.arrow_upward,
-                      onPressed: sendEnabled ? _send : null,
-                      color: scheme.onSurfaceVariant,
+                    const SizedBox(height: 10),
+                    Row(
+                      children: [
+                        IconButton(
+                          icon: Icon(
+                            Icons.add,
+                            size: 20,
+                            color: scheme.onSurfaceVariant,
+                          ),
+                          onPressed: () => showRecordExtrasSheet(context),
+                          padding: EdgeInsets.zero,
+                          constraints: const BoxConstraints(),
+                        ),
+                        const SizedBox(width: 12),
+                        _EffortPill(),
+                        const Spacer(),
+                        AppGlassInputIconButton(
+                          icon: Icons.arrow_upward,
+                          onPressed: sendEnabled ? _send : null,
+                          color: scheme.onSurfaceVariant,
+                        ),
+                      ],
                     ),
                   ],
                 ),
