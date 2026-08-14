@@ -3,12 +3,14 @@ import 'package:provider/provider.dart';
 import 'package:decimal/decimal.dart';
 
 import '../../core/ai/llm_query.dart';
+import '../../core/ai/ai_provider_config.dart';
 import '../../core/models/transaction_kind.dart';
 import '../../core/money_format.dart';
 import '../../data/app_repository.dart';
 import '../../widgets/app_buttons.dart';
 import '../../widgets/glass_input.dart';
 import '../../widgets/mascot.dart';
+import '../home/record_extras_sheet.dart';
 import '../settings/ai_privacy_consent.dart';
 
 /// 喵助手页：进入自动生成本月消费分析报告，可继续对话追问。
@@ -62,7 +64,7 @@ class _MeowAssistantViewState extends State<MeowAssistantView> {
 
   Future<void> _ask(String question, {bool auto = false}) async {
     final repo = context.read<AppRepository>();
-    final aiConfig = repo.aiProviderConfig;
+    final aiConfig = repo.aiProviderConfigFor(AiTaskType.chatQuery);
     if (!aiConfig.hasKey) {
       setState(() => _msgs
           .add(_Msg(false, '喵还没连上 AI～去「我的 → AI 记账设置」填个 API Key，我就能帮你分析账单啦。')));
@@ -198,9 +200,16 @@ class _MeowAssistantViewState extends State<MeowAssistantView> {
             child: Padding(
               padding: const EdgeInsets.fromLTRB(12, 6, 12, 10),
               child: AppGlassInputShell(
+                padding: const EdgeInsets.fromLTRB(14, 12, 10, 10),
                 child: Row(
                   crossAxisAlignment: CrossAxisAlignment.end,
                   children: [
+                    AppCircleButton(
+                      icon: Icons.add,
+                      iconSize: 20,
+                      onPressed: () => showRecordExtrasSheet(context),
+                    ),
+                    const SizedBox(width: 10),
                     Expanded(
                       child: TextField(
                         controller: _ctrl,
@@ -210,16 +219,17 @@ class _MeowAssistantViewState extends State<MeowAssistantView> {
                         onSubmitted: (_) => _send(),
                         onChanged: (_) => setState(() {}),
                         cursorColor: scheme.primary,
-                        style: TextStyle(
-                          fontSize: 17,
-                          color: scheme.onSurface,
+                        style: const TextStyle(
+                          fontSize: 15,
+                          fontWeight: FontWeight.w300,
                         ),
                         decoration: InputDecoration(
-                          hintText: '问问喵助手…',
+                          hintText: '记一记',
                           hintStyle: TextStyle(
-                            fontSize: 17,
+                            fontSize: 14,
+                            fontWeight: FontWeight.w400,
                             color:
-                                scheme.onSurfaceVariant.withValues(alpha: 0.55),
+                                scheme.onSurfaceVariant.withValues(alpha: 0.5),
                           ),
                           border: InputBorder.none,
                           isCollapsed: true,

@@ -371,7 +371,12 @@ $transactionsText''';
     for (int i = 0; i < models.length; i++) {
       final model = models[i];
       try {
-        final body = bodyForModel(model);
+        var body = bodyForModel(model);
+
+        // Claude 格式转换
+        if (config.isClaudeModel) {
+          body = _convertToClaudeFormat(body, config);
+        }
 
         if (config.shouldUseResponses) {
           return await _postResponses(
@@ -414,16 +419,27 @@ $transactionsText''';
     required Map<String, dynamic> body,
     required int timeoutSeconds,
   }) async {
+    final isClaude = config.isClaudeModel;
+    final uri = isClaude ? config.messagesUri : config.chatCompletionsUri;
+
     late http.Response resp;
 
     try {
+      final headers = {
+        'Content-Type': 'application/json',
+      };
+
+      if (isClaude) {
+        headers['x-api-key'] = config.apiKey;
+        headers['anthropic-version'] = '2023-06-01';
+      } else {
+        headers['Authorization'] = 'Bearer ${config.apiKey}';
+      }
+
       resp = await http
           .post(
-            config.chatCompletionsUri,
-            headers: {
-              'Authorization': 'Bearer ${config.apiKey}',
-              'Content-Type': 'application/json',
-            },
+            uri,
+            headers: headers,
             body: jsonEncode(body),
           )
           .timeout(Duration(seconds: timeoutSeconds));
@@ -456,15 +472,30 @@ $transactionsText''';
           provider: config.providerLabel,
           model: body['model'] as String,
           durationMs: 0,
-          promptTokens: usage['prompt_tokens'] as int?,
-          completionTokens: usage['completion_tokens'] as int?,
+          promptTokens: usage['prompt_tokens'] as int? ?? usage['input_tokens'] as int?,
+          completionTokens: usage['completion_tokens'] as int? ?? usage['output_tokens'] as int?,
           totalTokens: usage['total_tokens'] as int?,
         );
       }
 
-      final content =
-          (outer['choices'] as List).first['message']['content'] as String;
-      final text = content.trim();
+      // 提取响应文本
+      final String text;
+      if (isClaude) {
+        // Claude 格式: content 是数组
+        final content = outer['content'] as List?;
+        if (content == null || content.isEmpty) {
+          throw const AiEmptyResponseException('Claude 返回空 content');
+        }
+        final textBlock = content.firstWhere(
+          (block) => block['type'] == 'text',
+          orElse: () => <String, dynamic>{},
+        );
+        text = (textBlock['text'] as String? ?? '').trim();
+      } else {
+        // OpenAI 格式
+        final content = (outer['choices'] as List).first['message']['content'] as String;
+        text = content.trim();
+      }
 
       if (text.isEmpty) {
         throw const AiEmptyResponseException('AI 返回空内容');
@@ -484,20 +515,69 @@ $transactionsText''';
     required void Function(String chunk) onChunk,
     required void Function(String fullAnswer) onDone,
   }) async {
-    final body = {
-      'model': config.modelCandidates.first,
-      'messages': messages,
-      'stream': true,
-    };
+    final isClaude = config.isClaudeModel;
+    final uri = isClaude ? config.messagesUri : config.chatCompletionsUri;
+
+    final Map<String, dynamic> body;
+
+    if (isClaude) {
+      // Claude 原生格式
+      final systemMessages = messages.where((m) => m['role'] == 'system').toList();
+      final userMessages = messages.where((m) => m['role'] != 'system').toList();
+
+      body = {
+        'model': config.modelCandidates.first,
+        'messages': userMessages,
+        'stream': true,
+        'max_tokens': 4096,
+      };
+
+      // 合并 system prompt
+      if (systemMessages.isNotEmpty) {
+        body['system'] = systemMessages.map((m) => m['content']).join('\n\n');
+      }
+
+      // thinking 参数映射
+      if (config.reasoningEffort != AiReasoningEffort.none) {
+        final budgetTokens = switch (config.reasoningEffort) {
+          AiReasoningEffort.minimal => 1024,
+          AiReasoningEffort.low => 4096,
+          AiReasoningEffort.medium => 8192,
+          AiReasoningEffort.high => 16384,
+          AiReasoningEffort.xhigh => 32768,
+          AiReasoningEffort.ultra => 65536,
+          _ => 8192,
+        };
+        body['thinking'] = {
+          'type': 'enabled',
+          'budget_tokens': budgetTokens,
+        };
+      }
+    } else {
+      // OpenAI 兼容格式
+      body = {
+        'model': config.modelCandidates.first,
+        'messages': messages,
+        'stream': true,
+      };
+    }
 
     late http.StreamedResponse resp;
 
     try {
-      final request = http.Request('POST', config.chatCompletionsUri)
-        ..headers.addAll({
-          'Authorization': 'Bearer ${config.apiKey}',
-          'Content-Type': 'application/json',
-        })
+      final headers = {
+        'Content-Type': 'application/json',
+      };
+
+      if (isClaude) {
+        headers['x-api-key'] = config.apiKey;
+        headers['anthropic-version'] = '2023-06-01';
+      } else {
+        headers['Authorization'] = 'Bearer ${config.apiKey}';
+      }
+
+      final request = http.Request('POST', uri)
+        ..headers.addAll(headers)
         ..body = jsonEncode(body);
 
       resp = await request.send().timeout(Duration(seconds: timeoutSeconds));
@@ -525,29 +605,59 @@ $transactionsText''';
           .transform(utf8.decoder)
           .transform(const LineSplitter())
           .listen((line) {
-            if (line.isEmpty || !line.startsWith('data: ')) return;
+            if (line.isEmpty) return;
 
-            final data = line.substring(6);
-            if (data == '[DONE]') return;
+            if (isClaude) {
+              // Claude SSE 格式: "data: {...}"
+              if (!line.startsWith('data: ')) return;
+              final data = line.substring(6);
 
-            try {
-              final json = jsonDecode(data) as Map<String, dynamic>;
-              final delta = json['choices']?[0]?['delta'];
-              final content = delta?['content'] as String?;
+              try {
+                final json = jsonDecode(data) as Map<String, dynamic>;
+                final type = json['type'] as String?;
 
-              if (content != null && content.isNotEmpty) {
-                fullAnswer.write(content);
-                onChunk(content);
+                if (type == 'content_block_delta') {
+                  final delta = json['delta'];
+                  final content = delta?['text'] as String?;
+
+                  if (content != null && content.isNotEmpty) {
+                    fullAnswer.write(content);
+                    onChunk(content);
+                  }
+                }
+              } catch (e) {
+                AiLogger.logWarning(
+                  taskType: 'stream_parse_chunk',
+                  provider: config.providerLabel,
+                  model: config.modelCandidates.first,
+                  warning: 'Claude 流式响应单条解析失败: $e',
+                  extra: {'chunk_data': data.substring(0, data.length > 100 ? 100 : data.length)},
+                );
               }
-            } catch (e) {
-              // 记录单条解析错误，继续处理后续数据
-              AiLogger.logWarning(
-                taskType: 'stream_parse_chunk',
-                provider: config.providerLabel,
-                model: config.modelCandidates.first,
-                warning: '流式响应单条解析失败: $e',
-                extra: {'chunk_data': data.substring(0, data.length > 100 ? 100 : data.length)},
-              );
+            } else {
+              // OpenAI 格式
+              if (!line.startsWith('data: ')) return;
+              final data = line.substring(6);
+              if (data == '[DONE]') return;
+
+              try {
+                final json = jsonDecode(data) as Map<String, dynamic>;
+                final delta = json['choices']?[0]?['delta'];
+                final content = delta?['content'] as String?;
+
+                if (content != null && content.isNotEmpty) {
+                  fullAnswer.write(content);
+                  onChunk(content);
+                }
+              } catch (e) {
+                AiLogger.logWarning(
+                  taskType: 'stream_parse_chunk',
+                  provider: config.providerLabel,
+                  model: config.modelCandidates.first,
+                  warning: '流式响应单条解析失败: $e',
+                  extra: {'chunk_data': data.substring(0, data.length > 100 ? 100 : data.length)},
+                );
+              }
             }
           })
           .asFuture();
@@ -786,6 +896,61 @@ $transactionsText''';
   @visibleForTesting
   static bool shouldRetryWithCompatibleModelForTest(AiException error) {
     return error is AiModelNotSupportedException || error is AiBadRequestException;
+  }
+
+  /// 将 OpenAI 格式的请求体转换为 Claude 格式
+  static Map<String, dynamic> _convertToClaudeFormat(
+    Map<String, dynamic> openaiBody,
+    AiProviderConfig config,
+  ) {
+    final messages = openaiBody['messages'] as List<dynamic>?;
+    if (messages == null) return openaiBody;
+
+    // 分离 system 和 非 system 消息
+    final systemMessages = <String>[];
+    final userMessages = <Map<String, dynamic>>[];
+
+    for (final msg in messages) {
+      if (msg is! Map<String, dynamic>) continue;
+      final role = msg['role'] as String?;
+      final content = msg['content'];
+
+      if (role == 'system') {
+        systemMessages.add(_stringContent(content));
+      } else {
+        userMessages.add(msg);
+      }
+    }
+
+    final claudeBody = <String, dynamic>{
+      'model': openaiBody['model'],
+      'messages': userMessages,
+      'max_tokens': 4096,
+    };
+
+    // 合并所有 system prompt
+    if (systemMessages.isNotEmpty) {
+      claudeBody['system'] = systemMessages.join('\n\n');
+    }
+
+    // thinking 参数映射
+    if (config.reasoningEffort != AiReasoningEffort.none) {
+      final budgetTokens = switch (config.reasoningEffort) {
+        AiReasoningEffort.minimal => 1024,
+        AiReasoningEffort.low => 4096,
+        AiReasoningEffort.medium => 8192,
+        AiReasoningEffort.high => 16384,
+        AiReasoningEffort.xhigh => 32768,
+        AiReasoningEffort.ultra => 65536,
+        _ => 8192,
+      };
+      claudeBody['thinking'] = {
+        'type': 'enabled',
+        'budget_tokens': budgetTokens,
+      };
+    }
+
+    return claudeBody;
   }
 
   static AiProviderConfig _resolveConfig({

@@ -10,8 +10,10 @@ import '../../theme/app_tokens.dart';
 import '../../widgets/app_buttons.dart';
 import '../../widgets/app_page_route.dart';
 import '../../widgets/app_toast.dart';
+import '../../widgets/ios_dialogs.dart';
 import '../../widgets/ios_form.dart';
 import '../../widgets/settings_ui.dart';
+import '../common/app_sheet.dart';
 
 /// AI 设置：入口页负责分组，具体配置拆到子页面。
 class AiSettingView extends StatelessWidget {
@@ -47,23 +49,13 @@ class AiSettingView extends StatelessWidget {
                 SettingsRow(
                   title: '用途分配',
                   trailing: _ValueChevron(
-                    value:
-                        '${repo.aiRouteModeFor(AiTaskType.recordParse).label} · ${repo.aiResolvedProviderLabelFor(AiTaskType.recordParse)}',
+                    value: repo.aiResolvedProviderLabelFor(
+                      AiTaskType.recordParse,
+                    ),
                   ),
                   onTap: () => _push(
                     context,
                     const _AiUsageRoutingPage(),
-                  ),
-                ),
-                SettingsRow(
-                  title: '高级参数设置',
-                  trailing: _ValueChevron(
-                    value:
-                        '${repo.aiEndpointTypeFor(AiTaskType.report).label} · ${repo.aiReasoningEffortFor(AiTaskType.report).label}',
-                  ),
-                  onTap: () => _push(
-                    context,
-                    const _AiAdvancedSettingsPage(),
                   ),
                 ),
                 SettingsRow(
@@ -79,7 +71,7 @@ class AiSettingView extends StatelessWidget {
             const Padding(
               padding: EdgeInsets.fromLTRB(24, 8, 24, 0),
               child: _CaptionText(
-                '自动分配会根据任务选择可用服务：记账优先速度，报告优先分析能力。',
+                '普通记账可单独选择服务商；喵助手和报告跟随当前对话模型。',
               ),
             ),
           ],
@@ -89,11 +81,9 @@ class AiSettingView extends StatelessWidget {
   }
 
   static String _accountSummary(AppRepository repo) {
-    final selected = repo.aiProviderLabel(repo.aiProviderType);
-    final keyReady = repo.aiProviderType == AiProviderType.custom
-        ? (repo.customAiApiKey?.trim().isNotEmpty ?? false)
-        : (repo.deepSeekApiKey?.trim().isNotEmpty ?? false);
-    return '$selected · ${keyReady ? '已配置' : '未配置'}';
+    final providers = repo.aiProviders;
+    final configured = providers.where((provider) => provider.hasKey).length;
+    return '$configured/${providers.length} 个服务商';
   }
 }
 
@@ -105,130 +95,127 @@ class _AiAccountSettingsPage extends StatefulWidget {
 }
 
 class _AiAccountSettingsPageState extends State<_AiAccountSettingsPage> {
-  late AiProviderType _provider;
-  late final TextEditingController _displayNameCtrl;
-  late final TextEditingController _keyCtrl;
-  late final TextEditingController _baseUrlCtrl;
-  late final TextEditingController _modelCtrl;
-  bool _obscure = true;
-  bool _saving = false;
-  bool _testing = false;
-  bool _fetchingModels = false;
-
-  @override
-  void initState() {
-    super.initState();
-    final repo = context.read<AppRepository>();
-    _provider = repo.aiProviderType;
-    _displayNameCtrl = TextEditingController(text: repo.customAiDisplayName);
-    _keyCtrl = TextEditingController(text: _apiKeyFor(repo, _provider));
-    _baseUrlCtrl = TextEditingController(text: repo.customAiBaseUrl);
-    _modelCtrl = TextEditingController(text: repo.customAiModel);
-  }
+  final Map<String, _ProviderDraft> _drafts = {};
+  final Set<String> _expanded = {};
+  final Set<String> _busy = {};
 
   @override
   void dispose() {
-    _displayNameCtrl.dispose();
-    _keyCtrl.dispose();
-    _baseUrlCtrl.dispose();
-    _modelCtrl.dispose();
+    for (final draft in _drafts.values) {
+      draft.dispose();
+    }
     super.dispose();
   }
 
-  String _apiKeyFor(AppRepository repo, AiProviderType type) {
-    return type == AiProviderType.custom
-        ? (repo.customAiApiKey ?? '')
-        : (repo.deepSeekApiKey ?? '');
+  _ProviderDraft _draftFor(AiConfiguredProvider provider) {
+    return _drafts.putIfAbsent(
+      provider.id,
+      () => _ProviderDraft(provider),
+    );
   }
 
-  void _switchProvider(AiProviderType type) {
-    if (_provider == type) return;
-    final repo = context.read<AppRepository>();
-    setState(() {
-      _provider = type;
-      _keyCtrl.text = _apiKeyFor(repo, type);
-      if (type == AiProviderType.custom) {
-        if (_displayNameCtrl.text.trim().isEmpty) {
-          _displayNameCtrl.text = '自定义';
-        }
-        if (_baseUrlCtrl.text.trim().isEmpty) {
-          _baseUrlCtrl.text = AiProviderConfig.customDefaultBaseUrl;
-        }
-        if (_modelCtrl.text.trim().isEmpty) {
-          _modelCtrl.text = AiProviderConfig.customDefaultModel;
+  Future<void> _addProvider() async {
+    try {
+      final provider =
+          await context.read<AppRepository>().addAiConfiguredProvider();
+      if (!mounted) return;
+      setState(() => _expanded.add(provider.id));
+    } catch (error) {
+      if (mounted) {
+        showAppToast(
+          context,
+          '添加失败：${_shortError(error)}',
+          icon: Icons.error_outline,
+        );
+      }
+    }
+  }
+
+  Future<void> _deleteProvider(AiConfiguredProvider provider) async {
+    if (provider.builtIn || _busy.contains(provider.id)) return;
+    final confirmed = await showConfirmDialog(
+      context,
+      title: '删除${provider.label}？',
+      message: '该服务商的地址、密钥和已保留模型会一并移除。',
+      confirmText: '删除',
+      destructive: true,
+    );
+    if (!confirmed || !mounted) return;
+    setState(() => _busy.add(provider.id));
+    try {
+      await context
+          .read<AppRepository>()
+          .deleteAiConfiguredProvider(provider.id);
+      if (!mounted) return;
+      setState(() {
+        final draft = _drafts.remove(provider.id);
+        draft?.dispose();
+        _expanded.remove(provider.id);
+      });
+    } catch (error) {
+      if (mounted) {
+        showAppToast(
+          context,
+          '删除失败：${_shortError(error)}',
+          icon: Icons.error_outline,
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _busy.remove(provider.id));
+    }
+  }
+
+  Future<void> _saveProvider(
+    AiConfiguredProvider provider,
+    _ProviderDraft draft,
+  ) async {
+    if (_busy.contains(provider.id) || !_ensureSecureBaseUrl(provider, draft)) {
+      return;
+    }
+    setState(() => _busy.add(provider.id));
+    try {
+      final models = draft.models;
+      final model = _selectedModel(draft);
+      final updated = provider.copyWith(
+        displayName: draft.displayName.text.trim(),
+        baseUrl: draft.baseUrl.text.trim(),
+        apiKey: draft.apiKey.text.trim(),
+        model: model,
+        models: models,
+      );
+      try {
+        await context.read<AppRepository>().saveAiConfiguredProvider(updated);
+        if (mounted) showAppToast(context, '${draft.label}已保存');
+      } catch (error) {
+        if (mounted) {
+          showAppToast(
+            context,
+            '保存失败：${_shortError(error)}',
+            icon: Icons.error_outline,
+          );
         }
       }
-    });
-  }
-
-  /// 自定义服务地址必须走 https：http 明文会把 API Key 和账本上下文裸奔。
-  /// 本机调试地址（localhost / 127.0.0.1 / ::1）除外。
-  static bool _isInsecureBaseUrl(String raw) {
-    final url = raw.trim().toLowerCase();
-    if (!url.startsWith('http://')) return false;
-    final host = Uri.tryParse(url)?.host ?? '';
-    return !(host == 'localhost' || host == '127.0.0.1' || host == '::1');
-  }
-
-  /// 校验自定义地址，非 https 时 toast 提示并返回 false（拦下保存/测试）。
-  /// key 为空时放行（没有 key 就不会发出任何数据，且「清除 Key」不能被拦）。
-  bool _ensureSecureBaseUrl() {
-    if (_provider != AiProviderType.custom) return true;
-    if (_keyCtrl.text.trim().isEmpty) return true;
-    if (!_isInsecureBaseUrl(_baseUrlCtrl.text)) return true;
-    showAppToast(
-      context,
-      '为保护数据安全，自定义服务地址必须是 https',
-      icon: Icons.error_outline,
-    );
-    return false;
-  }
-
-  AiProviderConfig _formConfig() {
-    if (_provider == AiProviderType.custom) {
-      return AiProviderConfig.custom(
-        apiKey: _keyCtrl.text,
-        baseUrl: _baseUrlCtrl.text,
-        model: _modelCtrl.text,
-        displayName: _displayNameCtrl.text,
-      );
-    }
-    return AiProviderConfig.deepSeek(apiKey: _keyCtrl.text);
-  }
-
-  Future<void> _save() async {
-    if (_saving) return;
-    if (!_ensureSecureBaseUrl()) return;
-    setState(() => _saving = true);
-    final repo = context.read<AppRepository>();
-    try {
-      await repo.saveAiProviderConfig(
-        type: _provider,
-        apiKey: _keyCtrl.text,
-        customDisplayName: _displayNameCtrl.text,
-        customBaseUrl: _baseUrlCtrl.text,
-        customModel: _modelCtrl.text,
-        reportModel: repo.reportAiModel,
-      );
-      if (mounted) showAppToast(context, 'AI 账号已保存');
     } finally {
-      if (mounted) setState(() => _saving = false);
+      if (mounted) setState(() => _busy.remove(provider.id));
     }
   }
 
-  Future<void> _testConnection() async {
-    final config = _formConfig();
+  Future<void> _testProvider(
+    AiConfiguredProvider provider,
+    _ProviderDraft draft,
+  ) async {
+    if (_busy.contains(provider.id)) return;
+    final config = _formConfig(provider, draft);
     if (!config.hasKey) {
       showAppToast(context, '先填写 API Key', icon: Icons.info_outline);
       return;
     }
-    if (!_ensureSecureBaseUrl()) return;
-    setState(() => _testing = true);
+    if (!_ensureSecureBaseUrl(provider, draft)) return;
+    setState(() => _busy.add(provider.id));
     try {
-      await LlmQuery.testConnection(config);
-      if (mounted) {
-        showAppToast(context, '${config.providerLabel} 连接成功');
-      }
+      final testConfig = config.copyWith(model: _selectedModel(draft));
+      await LlmQuery.testConnection(testConfig);
+      if (mounted) showAppToast(context, '${draft.label}连接成功');
     } catch (e) {
       if (mounted) {
         showAppToast(
@@ -238,214 +225,556 @@ class _AiAccountSettingsPageState extends State<_AiAccountSettingsPage> {
         );
       }
     } finally {
-      if (mounted) setState(() => _testing = false);
+      if (mounted) setState(() => _busy.remove(provider.id));
     }
   }
 
-  Future<void> _fetchModels() async {
-    final config = _formConfig();
+  Future<void> _manageModels(
+    AiConfiguredProvider provider,
+    _ProviderDraft draft,
+  ) async {
+    if (_busy.contains(provider.id)) return;
+    final config = _formConfig(provider, draft);
     if (!config.hasKey) {
       showAppToast(context, '先填写 API Key', icon: Icons.info_outline);
       return;
     }
-    if (!_ensureSecureBaseUrl()) return;
-    setState(() => _fetchingModels = true);
+    if (!_ensureSecureBaseUrl(provider, draft)) return;
+    final result = await showBlurSheet<List<String>>(
+      context,
+      child: _ProviderModelManagerSheet(
+        providerLabel: draft.label,
+        config: config,
+        savedModels: draft.models,
+      ),
+    );
+    if (result == null || !mounted) return;
+    final selectedModel = result.contains(draft.selectedModel)
+        ? draft.selectedModel
+        : result.firstOrNull;
     try {
-      final models = await LlmQuery.fetchModels(config);
-      if (!mounted) return;
-      // 打开模型管理页面
-      final repo = context.read<AppRepository>();
-      final current = List<String>.from(repo.availableModels);
-      final selected = await showModalBottomSheet<List<String>>(
-        context: context,
-        isScrollControlled: true,
-        useSafeArea: true,
-        backgroundColor: Colors.transparent,
-        builder: (ctx) => _ModelManagerSheet(
-          allModels: models,
-          savedModels: current,
-        ),
+      final updated = provider.copyWith(
+        displayName: draft.displayName.text.trim(),
+        baseUrl: draft.baseUrl.text.trim(),
+        apiKey: draft.apiKey.text.trim(),
+        model: selectedModel,
+        models: result,
       );
-      if (selected != null && mounted) {
-        await context.read<AppRepository>().saveAvailableModels(selected);
-        // 如果当前模型输入框的值不在新列表里，更新为第一个
-        if (selected.isNotEmpty &&
-            !selected.contains(_modelCtrl.text.trim())) {
-          setState(() => _modelCtrl.text = selected.first);
-        }
-        showAppToast(context, '已保存 ${selected.length} 个模型');
-      }
-    } catch (e) {
+      await context.read<AppRepository>().saveAiConfiguredProvider(updated);
+      if (!mounted) return;
+      setState(() {
+        draft.models
+          ..clear()
+          ..addAll(result);
+        draft.selectedModel = selectedModel ?? '';
+      });
+      showAppToast(context, '已保留 ${result.length} 个模型');
+    } catch (error) {
       if (mounted) {
         showAppToast(
           context,
-          '获取模型失败：${_shortError(e)}',
+          '保存模型失败：${_shortError(error)}',
           icon: Icons.error_outline,
         );
       }
-    } finally {
-      if (mounted) setState(() => _fetchingModels = false);
     }
   }
 
-  Future<void> _clearCurrentKey() async {
-    _keyCtrl.clear();
-    await _save();
+  bool _ensureSecureBaseUrl(
+    AiConfiguredProvider provider,
+    _ProviderDraft draft,
+  ) {
+    if (provider.type != AiProviderType.custom ||
+        draft.apiKey.text.trim().isEmpty ||
+        !_isInsecureBaseUrl(draft.baseUrl.text)) {
+      return true;
+    }
+    showAppToast(
+      context,
+      '为保护数据安全，自定义服务地址必须是 https',
+      icon: Icons.error_outline,
+    );
+    return false;
+  }
+
+  AiProviderConfig _formConfig(
+    AiConfiguredProvider provider,
+    _ProviderDraft draft,
+  ) {
+    return provider.toConfig().copyWith(
+          apiKey: draft.apiKey.text,
+          baseUrl: draft.baseUrl.text,
+          model: _selectedModel(draft),
+          displayName: draft.displayName.text,
+        );
+  }
+
+  String _selectedModel(_ProviderDraft draft) {
+    final selected = draft.selectedModel.trim();
+    if (selected.isNotEmpty) return selected;
+    return draft.models.firstOrNull ?? AiProviderConfig.customDefaultModel;
+  }
+
+  static bool _isInsecureBaseUrl(String raw) {
+    final url = raw.trim().toLowerCase();
+    if (!url.startsWith('http://')) return false;
+    final host = Uri.tryParse(url)?.host ?? '';
+    return !(host == 'localhost' || host == '127.0.0.1' || host == '::1');
   }
 
   @override
   Widget build(BuildContext context) {
-    final repo = context.watch<AppRepository>();
-    final isCustom = _provider == AiProviderType.custom;
-    final hasSavedKey = _provider == AiProviderType.custom
-        ? (repo.customAiApiKey?.trim().isNotEmpty ?? false)
-        : (repo.deepSeekApiKey?.trim().isNotEmpty ?? false);
+    final providers = context.watch<AppRepository>().aiProviders;
 
     return Scaffold(
       appBar: AppBar(
         leading: const AppBackButton(),
         title: const Text('AI 账号设置'),
         centerTitle: true,
+        actions: [
+          Padding(
+            padding: const EdgeInsets.only(right: 12),
+            child: AppCircleButton(
+              icon: CupertinoIcons.add,
+              onPressed: _addProvider,
+            ),
+          ),
+        ],
       ),
       body: SafeArea(
         child: ListView(
           physics: const BouncingScrollPhysics(),
-          padding: const EdgeInsets.only(top: 8, bottom: 32),
+          padding: const EdgeInsets.fromLTRB(0, 8, 0, 32),
           children: [
-            const SettingsSectionLabel('服务'),
-            SettingsGroup(
-              children: [
-                Padding(
-                  padding: const EdgeInsets.all(14),
-                  child: _ChoiceWrap<AiProviderType>(
-                    values: AiProviderType.values,
-                    value: _provider,
-                    labelOf: (type) => repo.aiProviderLabel(type),
-                    onChanged: _switchProvider,
-                  ),
-                ),
-              ],
-            ),
-            const SettingsSectionLabel('密钥'),
-            SettingsGroup(
-              children: [
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 12, 16, 14),
-                  child: AppLabeledField(
-                    label: 'API Key',
-                    child: TextField(
-                      controller: _keyCtrl,
-                      obscureText: _obscure,
-                      autocorrect: false,
-                      enableSuggestions: false,
-                      keyboardType: TextInputType.visiblePassword,
-                      decoration: iosInputDecoration(
-                        context,
-                        hint: 'sk-xxxxxxxxxxxxxxxx',
-                      ).copyWith(
-                        suffixIcon: IconButton(
-                          icon: Icon(
-                            _obscure
-                                ? Icons.visibility_outlined
-                                : Icons.visibility_off_outlined,
-                          ),
-                          onPressed: () => setState(() => _obscure = !_obscure),
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-              ],
-            ),
-            if (isCustom) ...[
-              const SettingsSectionLabel('自定义服务'),
-              SettingsGroup(
-                children: [
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
-                    child: AppLabeledField(
-                      label: '服务名称',
-                      child: TextField(
-                        controller: _displayNameCtrl,
-                        decoration: iosInputDecoration(
-                          context,
-                          hint: '例如 GPT 中转站',
-                        ),
-                      ),
-                    ),
-                  ),
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
-                    child: AppLabeledField(
-                      label: '基础地址',
-                      child: TextField(
-                        controller: _baseUrlCtrl,
-                        autocorrect: false,
-                        enableSuggestions: false,
-                        keyboardType: TextInputType.url,
-                        decoration: iosInputDecoration(
-                          context,
-                          hint: AiProviderConfig.customDefaultBaseUrl,
-                        ),
-                      ),
-                    ),
-                  ),
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(16, 8, 16, 14),
-                    child: AppLabeledField(
-                      label: '普通模型',
-                      child: _ModelDropdownOrInput(
-                        controller: _modelCtrl,
-                        availableModels: repo.availableModels,
-                        onFetchModels: _fetchingModels ? null : _fetchModels,
-                        isFetching: _fetchingModels,
-                      ),
-                    ),
-                  ),
-                ],
+            const SettingsSectionLabel('服务商'),
+            for (final provider in providers)
+              _ProviderCard(
+                key: ValueKey(provider.id),
+                provider: provider,
+                draft: _draftFor(provider),
+                expanded: _expanded.contains(provider.id),
+                busy: _busy.contains(provider.id),
+                onToggle: () => setState(() {
+                  if (!_expanded.add(provider.id)) {
+                    _expanded.remove(provider.id);
+                  }
+                }),
+                onSave: () => _saveProvider(provider, _draftFor(provider)),
+                onTest: () => _testProvider(provider, _draftFor(provider)),
+                onManageModels: () =>
+                    _manageModels(provider, _draftFor(provider)),
+                onDelete:
+                    provider.builtIn ? null : () => _deleteProvider(provider),
               ),
-            ],
-            Padding(
-              padding: const EdgeInsets.fromLTRB(24, 8, 24, 18),
-              child: _CaptionText(
-                isCustom
-                    ? '适用于 GPT 官方、中转站或其他 OpenAI 兼容服务。API Key 只保存在本机。'
-                    : '适合记账等高频任务，响应快且成本更容易控制。',
-              ),
-            ),
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _ProviderDraft {
+  final TextEditingController displayName;
+  final TextEditingController apiKey;
+  final TextEditingController baseUrl;
+  final TextEditingController model;
+  final List<String> models;
+  bool obscureKey = true;
+
+  _ProviderDraft(AiConfiguredProvider provider)
+      : displayName = TextEditingController(text: provider.displayName),
+        apiKey = TextEditingController(text: provider.apiKey),
+        baseUrl = TextEditingController(text: provider.baseUrl),
+        model = TextEditingController(text: provider.model),
+        models = List<String>.from(provider.models);
+
+  String get selectedModel => model.text;
+
+  set selectedModel(String value) => model.text = value;
+
+  String get label {
+    final value = displayName.text.trim();
+    return value.isEmpty ? '自定义服务' : value;
+  }
+
+  void dispose() {
+    displayName.dispose();
+    apiKey.dispose();
+    baseUrl.dispose();
+    model.dispose();
+  }
+}
+
+class _ProviderCard extends StatelessWidget {
+  final AiConfiguredProvider provider;
+  final _ProviderDraft draft;
+  final bool expanded;
+  final bool busy;
+  final VoidCallback onToggle;
+  final VoidCallback onSave;
+  final VoidCallback onTest;
+  final VoidCallback onManageModels;
+  final VoidCallback? onDelete;
+
+  const _ProviderCard({
+    super.key,
+    required this.provider,
+    required this.draft,
+    required this.expanded,
+    required this.busy,
+    required this.onToggle,
+    required this.onSave,
+    required this.onTest,
+    required this.onManageModels,
+    required this.onDelete,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final model = draft.selectedModel.trim().isEmpty
+        ? (draft.models.firstOrNull ?? provider.model)
+        : draft.selectedModel.trim();
+    return Container(
+      margin: const EdgeInsets.fromLTRB(16, 6, 16, 6),
+      decoration: appCardDecoration(scheme),
+      clipBehavior: Clip.antiAlias,
+      child: Column(
+        children: [
+          InkWell(
+            onTap: onToggle,
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(16, 13, 12, 13),
               child: Row(
                 children: [
-                  Expanded(
-                    child: OutlinedButton(
-                      onPressed: (_saving || _testing) ? null : _testConnection,
-                      child: Text(_testing ? '测试中…' : '测试连接'),
+                  Container(
+                    width: 36,
+                    height: 36,
+                    decoration: BoxDecoration(
+                      color: scheme.primary.withValues(alpha: 0.10),
+                      shape: BoxShape.circle,
+                    ),
+                    child: Icon(
+                      provider.type == AiProviderType.deepseek
+                          ? CupertinoIcons.sparkles
+                          : CupertinoIcons.cloud,
+                      size: 18,
+                      color: scheme.primary,
                     ),
                   ),
                   const SizedBox(width: 10),
                   Expanded(
-                    child: FilledButton(
-                      onPressed: (_saving || _testing) ? null : _save,
-                      child: Text(_saving ? '保存中…' : '保存'),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            Flexible(
+                              child: Text(
+                                draft.label,
+                                overflow: TextOverflow.ellipsis,
+                                style: AppType.rowTitle(scheme).copyWith(
+                                  fontWeight: FontWeight.normal,
+                                ),
+                              ),
+                            ),
+                            if (provider.builtIn) ...[
+                              const SizedBox(width: 6),
+                              Text('内置', style: AppType.caption(scheme)),
+                            ],
+                          ],
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          provider.hasKey || draft.apiKey.text.trim().isNotEmpty
+                              ? model
+                              : '未配置 API Key',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: AppType.secondary(scheme).copyWith(
+                            fontWeight: FontWeight.normal,
+                          ),
+                        ),
+                      ],
                     ),
+                  ),
+                  if (onDelete != null)
+                    Padding(
+                      padding: const EdgeInsets.only(right: 8),
+                      child: IconButton(
+                        icon: const Icon(CupertinoIcons.trash, size: 17),
+                        onPressed: onDelete,
+                        padding: EdgeInsets.zero,
+                        constraints: const BoxConstraints(),
+                      ),
+                    ),
+                  const SizedBox(width: 4),
+                  Icon(
+                    expanded
+                        ? CupertinoIcons.chevron_up
+                        : CupertinoIcons.chevron_down,
+                    size: 18,
+                    color: scheme.onSurfaceVariant,
                   ),
                 ],
               ),
             ),
-            if (hasSavedKey)
-              Padding(
-                padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
-                child: OutlinedButton(
-                  style: OutlinedButton.styleFrom(
-                    // 守不用红铁律：危险操作用超支橙。
-                    foregroundColor: AppColors.warning,
+          ),
+          if (expanded) ...[
+            Divider(height: 0.5, color: AppColors.hairline(scheme)),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 14, 16, 4),
+              child: Column(
+                children: [
+                  AppLabeledField(
+                    label: 'API Key',
+                    child: TextField(
+                      controller: draft.apiKey,
+                      obscureText: draft.obscureKey,
+                      autocorrect: false,
+                      enableSuggestions: false,
+                      style: const TextStyle(fontWeight: FontWeight.normal),
+                      decoration: iosInputDecoration(
+                        context,
+                        hint: '输入 API Key',
+                      ).copyWith(
+                        filled: true,
+                        fillColor: Colors.transparent,
+                        suffixIcon: IconButton(
+                          icon: Icon(
+                            draft.obscureKey
+                                ? CupertinoIcons.eye
+                                : CupertinoIcons.eye_slash,
+                            size: 18,
+                          ),
+                          onPressed: () => _toggleObscure(context),
+                          padding: EdgeInsets.zero,
+                          constraints: const BoxConstraints(),
+                        ),
+                      ),
+                    ),
                   ),
-                  onPressed: (_saving || _testing) ? null : _clearCurrentKey,
-                  child: Text('清除${repo.aiProviderLabel(_provider)}密钥'),
-                ),
+                  const SizedBox(height: 12),
+                  AppLabeledField(
+                    label: '基础地址',
+                    child: TextField(
+                      controller: draft.baseUrl,
+                      readOnly: provider.builtIn,
+                      autocorrect: false,
+                      enableSuggestions: false,
+                      style: const TextStyle(fontWeight: FontWeight.w300),
+                      decoration: iosInputDecoration(
+                        context,
+                        hint: 'https://api.example.com',
+                      ).copyWith(
+                        filled: true,
+                        fillColor: Colors.transparent,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  AppLabeledField(
+                    label: '服务商名称（可选）',
+                    child: TextField(
+                      controller: draft.displayName,
+                      readOnly: provider.builtIn,
+                      autocorrect: false,
+                      style: const TextStyle(fontWeight: FontWeight.w300),
+                      decoration: iosInputDecoration(
+                        context,
+                        hint: provider.type.label,
+                      ).copyWith(
+                        filled: true,
+                        fillColor: Colors.transparent,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  AppLabeledField(
+                    label: '模型列表',
+                    child: _ProviderModelListBox(
+                      draft: draft,
+                      availableModels: draft.models,
+                      onFetchModels: onManageModels,
+                      isFetching: busy,
+                      onTest: onTest,
+                    ),
+                  ),
+                  const SizedBox(height: 14),
+                  Row(
+                    children: [
+                      AppPillButton(
+                        label: busy ? '获取中' : '从上游获取',
+                        onPressed: busy ? null : onManageModels,
+                      ),
+                      const SizedBox(width: 8),
+                      AppPillButton(
+                        label: '测试连接',
+                        onPressed: busy ? null : onTest,
+                      ),
+                      const Spacer(),
+                      AppPillButton(
+                        label: busy ? '保存中' : '保存',
+                        onPressed: busy ? null : onSave,
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+                ],
               ),
+            ),
           ],
+        ],
+      ),
+    );
+  }
+
+  void _toggleObscure(BuildContext context) {
+    // The draft is intentionally mutable so text controllers survive collapse.
+    draft.obscureKey = !draft.obscureKey;
+    (context as Element).markNeedsBuild();
+  }
+}
+
+class _ProviderModelListBox extends StatefulWidget {
+  final _ProviderDraft draft;
+  final List<String> availableModels;
+  final VoidCallback? onFetchModels;
+  final bool isFetching;
+  final VoidCallback onTest;
+
+  const _ProviderModelListBox({
+    required this.draft,
+    required this.availableModels,
+    required this.onFetchModels,
+    required this.isFetching,
+    required this.onTest,
+  });
+
+  @override
+  State<_ProviderModelListBox> createState() => _ProviderModelListBoxState();
+}
+
+class _ProviderModelListBoxState extends State<_ProviderModelListBox> {
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final selected = widget.availableModels.contains(widget.draft.selectedModel)
+        ? widget.draft.selectedModel
+        : widget.availableModels.firstOrNull;
+
+    if (widget.availableModels.isEmpty) {
+      return TextField(
+        controller: widget.draft.model,
+        autocorrect: false,
+        enableSuggestions: false,
+        style: const TextStyle(fontWeight: FontWeight.normal),
+        decoration: iosInputDecoration(
+          context,
+          hint: AiProviderConfig.customDefaultModel,
+        ).copyWith(
+          filled: true,
+          fillColor: Colors.transparent,
+        ),
+      );
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Container(
+          constraints: const BoxConstraints(maxHeight: 200),
+          decoration: BoxDecoration(
+            color: Colors.transparent,
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(
+              color: AppColors.hairline(scheme),
+              width: 0.5,
+            ),
+          ),
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(13.5),
+            child: ListView.separated(
+              shrinkWrap: true,
+              padding: EdgeInsets.zero,
+              itemCount: widget.availableModels.length,
+              separatorBuilder: (_, __) => Divider(
+                height: 0.5,
+                indent: 0,
+                color: AppColors.hairline(scheme),
+              ),
+              itemBuilder: (context, index) {
+                final model = widget.availableModels[index];
+                final isSelected = model == selected;
+                return InkWell(
+                  onTap: () {
+                    setState(() {
+                      widget.draft.selectedModel = model;
+                    });
+                  },
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 14,
+                      vertical: 10,
+                    ),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            model,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              fontSize: 14,
+                              fontWeight: FontWeight.w400,
+                              color: scheme.onSurface,
+                            ),
+                          ),
+                        ),
+                        if (isSelected)
+                          Icon(
+                            Icons.check,
+                            size: 16,
+                            color: scheme.primary,
+                          ),
+                      ],
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _RadioDot extends StatelessWidget {
+  final bool selected;
+
+  const _RadioDot({required this.selected});
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 160),
+      width: 22,
+      height: 22,
+      padding: const EdgeInsets.all(4),
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        border: Border.all(
+          color: selected ? scheme.primary : scheme.outlineVariant,
+          width: 1.4,
+        ),
+      ),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 160),
+        decoration: BoxDecoration(
+          color: selected ? scheme.primary : Colors.transparent,
+          shape: BoxShape.circle,
         ),
       ),
     );
@@ -460,39 +789,34 @@ class _AiUsageRoutingPage extends StatefulWidget {
 }
 
 class _AiUsageRoutingPageState extends State<_AiUsageRoutingPage> {
-  late AiRouteMode _recordRouteMode;
-  late AiRouteMode _chatRouteMode;
-  late AiRouteMode _reportRouteMode;
-  late AiProviderType _recordProvider;
-  late AiProviderType _chatProvider;
-  late AiProviderType _reportProvider;
+  String? _selectedProviderId;
   bool _saving = false;
 
   @override
   void initState() {
     super.initState();
     final repo = context.read<AppRepository>();
-    _recordRouteMode = repo.aiRouteModeFor(AiTaskType.recordParse);
-    _chatRouteMode = repo.aiRouteModeFor(AiTaskType.chatQuery);
-    _reportRouteMode = repo.aiRouteModeFor(AiTaskType.report);
-    _recordProvider = repo.aiProviderTypeFor(AiTaskType.recordParse);
-    _chatProvider = repo.aiProviderTypeFor(AiTaskType.chatQuery);
-    _reportProvider = repo.aiProviderTypeFor(AiTaskType.report);
+    final current = repo.aiProviderById(repo.recordAiProviderId);
+    _selectedProviderId = current?.hasKey == true
+        ? current?.id
+        : repo.aiProviders.where((provider) => provider.hasKey).firstOrNull?.id;
   }
 
   Future<void> _save() async {
-    if (_saving) return;
+    final id = _selectedProviderId;
+    if (_saving || id == null || id.isEmpty) return;
     setState(() => _saving = true);
     try {
-      await context.read<AppRepository>().saveAiTaskRouting(
-            recordRouteMode: _recordRouteMode,
-            chatRouteMode: _chatRouteMode,
-            reportRouteMode: _reportRouteMode,
-            recordProviderType: _recordProvider,
-            chatProviderType: _chatProvider,
-            reportProviderType: _reportProvider,
-          );
-      if (mounted) showAppToast(context, '用途分配已保存');
+      await context.read<AppRepository>().setRecordAiProvider(id);
+      if (mounted) showAppToast(context, '普通记账服务商已保存');
+    } catch (error) {
+      if (mounted) {
+        showAppToast(
+          context,
+          '保存失败：${_shortError(error)}',
+          icon: Icons.error_outline,
+        );
+      }
     } finally {
       if (mounted) setState(() => _saving = false);
     }
@@ -500,12 +824,31 @@ class _AiUsageRoutingPageState extends State<_AiUsageRoutingPage> {
 
   @override
   Widget build(BuildContext context) {
-    final repo = context.watch<AppRepository>();
+    final providers = context.watch<AppRepository>().aiProviders;
+    final selected = providers.any(
+            (provider) => provider.id == _selectedProviderId && provider.hasKey)
+        ? _selectedProviderId
+        : providers.where((provider) => provider.hasKey).firstOrNull?.id;
+    if (selected != _selectedProviderId) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) setState(() => _selectedProviderId = selected);
+      });
+    }
+
     return Scaffold(
       appBar: AppBar(
         leading: const AppBackButton(),
         title: const Text('用途分配'),
         centerTitle: true,
+        actions: [
+          Padding(
+            padding: const EdgeInsets.only(right: 12),
+            child: AppPillButton(
+              label: _saving ? '保存中…' : '保存',
+              onPressed: _saving || selected == null ? null : _save,
+            ),
+          ),
+        ],
       ),
       body: SafeArea(
         child: ListView(
@@ -515,277 +858,34 @@ class _AiUsageRoutingPageState extends State<_AiUsageRoutingPage> {
             const Padding(
               padding: EdgeInsets.fromLTRB(16, 8, 16, 8),
               child: _InfoBox(
-                text:
-                    '自动模式会按任务选择更合适的 AI：普通记账优先速度，报告生成优先深度。没有配置对应密钥时，会自动回退到可用服务。',
+                text: '这里仅设置普通记账使用的服务商。喵助手和报告跟随当前对话模型。',
               ),
             ),
-            const SettingsSectionLabel('分配规则'),
+            const SettingsSectionLabel('普通记账'),
             SettingsGroup(
               children: [
-                _RouteEditor(
-                  task: AiTaskType.recordParse,
-                  subtitle: '一句话记账、截图识别、导入分类，优先最快响应',
-                  mode: _recordRouteMode,
-                  provider: _recordProvider,
-                  resolvedLabel: _resolvedLabel(
-                    repo,
-                    AiTaskType.recordParse,
-                    _recordRouteMode,
-                    _recordProvider,
-                  ),
-                  onModeChanged: (value) =>
-                      setState(() => _recordRouteMode = value),
-                  onProviderChanged: (value) =>
-                      setState(() => _recordProvider = value),
-                ),
-                _RouteEditor(
-                  task: AiTaskType.chatQuery,
-                  subtitle: '日常查账、消费问答，优先稳定和响应速度',
-                  mode: _chatRouteMode,
-                  provider: _chatProvider,
-                  resolvedLabel: _resolvedLabel(
-                    repo,
-                    AiTaskType.chatQuery,
-                    _chatRouteMode,
-                    _chatProvider,
-                  ),
-                  onModeChanged: (value) =>
-                      setState(() => _chatRouteMode = value),
-                  onProviderChanged: (value) =>
-                      setState(() => _chatProvider = value),
-                ),
-                _RouteEditor(
-                  task: AiTaskType.report,
-                  subtitle: '周报、月报、年报，优先结构、洞察和长文质量',
-                  mode: _reportRouteMode,
-                  provider: _reportProvider,
-                  resolvedLabel: _resolvedLabel(
-                    repo,
-                    AiTaskType.report,
-                    _reportRouteMode,
-                    _reportProvider,
-                  ),
-                  onModeChanged: (value) =>
-                      setState(() => _reportRouteMode = value),
-                  onProviderChanged: (value) =>
-                      setState(() => _reportProvider = value),
-                ),
-              ],
-            ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 18, 16, 0),
-              child: FilledButton(
-                onPressed: _saving ? null : _save,
-                child: Text(_saving ? '保存中…' : '保存用途分配'),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  String _resolvedLabel(
-    AppRepository repo,
-    AiTaskType task,
-    AiRouteMode mode,
-    AiProviderType provider,
-  ) {
-    final resolved =
-        mode == AiRouteMode.fixed ? provider : _autoProviderTypeFor(repo, task);
-    return repo.aiProviderLabel(resolved);
-  }
-
-  AiProviderType _autoProviderTypeFor(AppRepository repo, AiTaskType task) {
-    final hasDeepSeek = repo.deepSeekApiKey?.trim().isNotEmpty ?? false;
-    final hasCustom = repo.customAiApiKey?.trim().isNotEmpty ?? false;
-    if (task == AiTaskType.report) {
-      if (hasCustom) return AiProviderType.custom;
-      if (hasDeepSeek) return AiProviderType.deepseek;
-      return AiProviderType.custom;
-    }
-    if (hasDeepSeek) return AiProviderType.deepseek;
-    if (hasCustom) return AiProviderType.custom;
-    return AiProviderType.deepseek;
-  }
-}
-
-class _AiAdvancedSettingsPage extends StatefulWidget {
-  const _AiAdvancedSettingsPage();
-
-  @override
-  State<_AiAdvancedSettingsPage> createState() =>
-      _AiAdvancedSettingsPageState();
-}
-
-class _AiAdvancedSettingsPageState extends State<_AiAdvancedSettingsPage> {
-  late final TextEditingController _normalModelCtrl;
-  late final TextEditingController _reportModelCtrl;
-  late AiEndpointType _chatEndpoint;
-  late AiEndpointType _reportEndpoint;
-  late AiReasoningEffort _chatReasoning;
-  late AiReasoningEffort _reportReasoning;
-  bool _saving = false;
-
-  @override
-  void initState() {
-    super.initState();
-    final repo = context.read<AppRepository>();
-    _normalModelCtrl = TextEditingController(text: repo.customAiModel);
-    _reportModelCtrl = TextEditingController(text: repo.reportAiModel);
-    _chatEndpoint = repo.aiEndpointTypeFor(AiTaskType.chatQuery);
-    _reportEndpoint = repo.aiEndpointTypeFor(AiTaskType.report);
-    _chatReasoning = repo.aiReasoningEffortFor(AiTaskType.chatQuery);
-    _reportReasoning = repo.aiReasoningEffortFor(AiTaskType.report);
-  }
-
-  @override
-  void dispose() {
-    _normalModelCtrl.dispose();
-    _reportModelCtrl.dispose();
-    super.dispose();
-  }
-
-  Future<void> _save() async {
-    if (_saving) return;
-    setState(() => _saving = true);
-    try {
-      await context.read<AppRepository>().saveAiAdvancedConfig(
-            customModel: _normalModelCtrl.text,
-            reportModel: _reportModelCtrl.text,
-            chatEndpointType: _chatEndpoint,
-            reportEndpointType: _reportEndpoint,
-            chatReasoningEffort: _chatReasoning,
-            reportReasoningEffort: _reportReasoning,
-          );
-      if (mounted) showAppToast(context, '高级参数已保存');
-    } finally {
-      if (mounted) setState(() => _saving = false);
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        leading: const AppBackButton(),
-        title: const Text('高级参数设置'),
-        centerTitle: true,
-      ),
-      body: SafeArea(
-        child: ListView(
-          physics: const BouncingScrollPhysics(),
-          padding: const EdgeInsets.only(top: 8, bottom: 32),
-          children: [
-            const SettingsSectionLabel('模型'),
-            SettingsGroup(
-              children: [
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
-                  child: AppLabeledField(
-                    label: '普通模型',
-                    child: TextField(
-                      controller: _normalModelCtrl,
-                      autocorrect: false,
-                      enableSuggestions: false,
-                      decoration: iosInputDecoration(
-                        context,
-                        hint: AiProviderConfig.customDefaultModel,
-                      ),
+                for (final provider in providers)
+                  SettingsRow(
+                    leading: Icon(
+                      provider.type == AiProviderType.deepseek
+                          ? CupertinoIcons.sparkles
+                          : CupertinoIcons.cloud,
                     ),
+                    title: provider.label,
+                    subtitle: provider.hasKey ? '已配置 API Key' : '未配置 API Key',
+                    trailing: _RadioDot(selected: provider.id == selected),
+                    onTap: provider.hasKey
+                        ? () =>
+                            setState(() => _selectedProviderId = provider.id)
+                        : null,
                   ),
-                ),
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 14),
-                  child: AppLabeledField(
-                    label: '报告模型',
-                    child: TextField(
-                      controller: _reportModelCtrl,
-                      autocorrect: false,
-                      enableSuggestions: false,
-                      decoration: iosInputDecoration(
-                        context,
-                        hint: AiProviderConfig.customReportDefaultModel,
-                      ),
-                    ),
-                  ),
-                ),
               ],
             ),
-            const SettingsSectionLabel('接口'),
-            SettingsGroup(
-              children: [
-                _ChoiceEditor<AiEndpointType>(
-                  title: '喵助手接口',
-                  subtitle: 'OpenAI 官方建议 Responses；普通兼容站可用 Chat Completions',
-                  values: const [
-                    AiEndpointType.auto,
-                    AiEndpointType.chatCompletions,
-                    AiEndpointType.responses,
-                  ],
-                  value: _chatEndpoint,
-                  labelOf: (value) => value.label,
-                  onChanged: (value) => setState(() => _chatEndpoint = value),
-                ),
-                _ChoiceEditor<AiEndpointType>(
-                  title: '报告接口',
-                  subtitle: '报告默认使用 Responses，方便长文和深度思考',
-                  values: const [
-                    AiEndpointType.auto,
-                    AiEndpointType.chatCompletions,
-                    AiEndpointType.responses,
-                  ],
-                  value: _reportEndpoint,
-                  labelOf: (value) => value.label,
-                  onChanged: (value) => setState(() => _reportEndpoint = value),
-                ),
-              ],
-            ),
-            const SettingsSectionLabel('思考深度'),
-            SettingsGroup(
-              children: [
-                _ChoiceEditor<AiReasoningEffort>(
-                  title: '喵助手',
-                  subtitle: '日常问答建议 Low 或关闭，避免拖慢反馈',
-                  values: const [
-                    AiReasoningEffort.none,
-                    AiReasoningEffort.low,
-                    AiReasoningEffort.medium,
-                    AiReasoningEffort.high,
-                  ],
-                  value: _chatReasoning,
-                  labelOf: (value) => value.label,
-                  onChanged: (value) => setState(() => _chatReasoning = value),
-                ),
-                _ChoiceEditor<AiReasoningEffort>(
-                  title: '报告生成',
-                  subtitle: '月报、年报建议 XHigh，换取更完整的分析',
-                  values: const [
-                    AiReasoningEffort.none,
-                    AiReasoningEffort.medium,
-                    AiReasoningEffort.high,
-                    AiReasoningEffort.xhigh,
-                  ],
-                  value: _reportReasoning,
-                  labelOf: (value) => value.label,
-                  onChanged: (value) =>
-                      setState(() => _reportReasoning = value),
-                ),
-              ],
-            ),
-            const Padding(
-              padding: EdgeInsets.fromLTRB(24, 8, 24, 18),
-              child: _CaptionText(
-                '普通记账始终使用轻量接口并关闭思考，优先保证响应速度。',
+            if (providers.isEmpty)
+              const Padding(
+                padding: EdgeInsets.fromLTRB(24, 8, 24, 0),
+                child: _CaptionText('请先在 AI 账号设置中添加服务商。'),
               ),
-            ),
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              child: FilledButton(
-                onPressed: _saving ? null : _save,
-                child: Text(_saving ? '保存中…' : '保存高级参数'),
-              ),
-            ),
           ],
         ),
       ),
@@ -869,184 +969,6 @@ class _AiPrivacyDataPage extends StatelessWidget {
   }
 }
 
-class _RouteEditor extends StatelessWidget {
-  final AiTaskType task;
-  final String subtitle;
-  final AiRouteMode mode;
-  final AiProviderType provider;
-  final String resolvedLabel;
-  final ValueChanged<AiRouteMode> onModeChanged;
-  final ValueChanged<AiProviderType> onProviderChanged;
-
-  const _RouteEditor({
-    required this.task,
-    required this.subtitle,
-    required this.mode,
-    required this.provider,
-    required this.resolvedLabel,
-    required this.onModeChanged,
-    required this.onProviderChanged,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final repo = context.watch<AppRepository>();
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 13, 16, 14),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(task.label,
-              style: AppType.rowTitle(Theme.of(context).colorScheme)),
-          const SizedBox(height: 3),
-          _MutedText(subtitle),
-          const SizedBox(height: 12),
-          _ChoiceWrap<AiRouteMode>(
-            values: AiRouteMode.values,
-            value: mode,
-            labelOf: (value) => value.label,
-            onChanged: onModeChanged,
-          ),
-          const SizedBox(height: 10),
-          AnimatedSwitcher(
-            duration: const Duration(milliseconds: 180),
-            switchInCurve: Curves.easeOutCubic,
-            switchOutCurve: Curves.easeOutCubic,
-            child: mode == AiRouteMode.fixed
-                ? Align(
-                    key: const ValueKey('fixed'),
-                    alignment: Alignment.centerLeft,
-                    child: _ChoiceWrap<AiProviderType>(
-                      values: AiProviderType.values,
-                      value: provider,
-                      labelOf: (value) => repo.aiProviderLabel(value),
-                      onChanged: onProviderChanged,
-                    ),
-                  )
-                : _AutoResolvedLine(
-                    key: const ValueKey('auto'),
-                    label: resolvedLabel,
-                  ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _ChoiceEditor<T> extends StatelessWidget {
-  final String title;
-  final String subtitle;
-  final List<T> values;
-  final T value;
-  final String Function(T value) labelOf;
-  final ValueChanged<T> onChanged;
-
-  const _ChoiceEditor({
-    required this.title,
-    required this.subtitle,
-    required this.values,
-    required this.value,
-    required this.labelOf,
-    required this.onChanged,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 13, 16, 14),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(title, style: AppType.rowTitle(Theme.of(context).colorScheme)),
-          const SizedBox(height: 3),
-          _MutedText(subtitle),
-          const SizedBox(height: 12),
-          _ChoiceWrap<T>(
-            values: values,
-            value: value,
-            labelOf: labelOf,
-            onChanged: onChanged,
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _ChoiceWrap<T> extends StatelessWidget {
-  final List<T> values;
-  final T value;
-  final String Function(T value) labelOf;
-  final ValueChanged<T> onChanged;
-
-  const _ChoiceWrap({
-    required this.values,
-    required this.value,
-    required this.labelOf,
-    required this.onChanged,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Wrap(
-      spacing: 8,
-      runSpacing: 8,
-      children: [
-        for (final item in values)
-          _ChoiceChipButton(
-            label: labelOf(item),
-            selected: item == value,
-            onTap: () => onChanged(item),
-          ),
-      ],
-    );
-  }
-}
-
-class _ChoiceChipButton extends StatelessWidget {
-  final String label;
-  final bool selected;
-  final VoidCallback onTap;
-
-  const _ChoiceChipButton({
-    required this.label,
-    required this.selected,
-    required this.onTap,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return InkWell(
-      borderRadius: BorderRadius.circular(999),
-      onTap: onTap,
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 150),
-        curve: Curves.easeOutCubic,
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
-        decoration: BoxDecoration(
-          color: selected
-              ? scheme.primary.withValues(alpha: 0.12)
-              : scheme.surfaceContainerHighest.withValues(alpha: 0.42),
-          borderRadius: BorderRadius.circular(999),
-          border: Border.all(
-            color: selected ? scheme.primary : AppColors.hairline(scheme),
-          ),
-        ),
-        child: Text(
-          label,
-          style: TextStyle(
-            fontSize: 12,
-            fontWeight: selected ? FontWeight.w500 : FontWeight.w400,
-            color: selected ? scheme.primary : AppTextColor.secondary(scheme),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
 class _InfoBox extends StatelessWidget {
   final String text;
 
@@ -1063,24 +985,6 @@ class _InfoBox extends StatelessWidget {
         borderRadius: BorderRadius.circular(16),
       ),
       child: _MutedText(text),
-    );
-  }
-}
-
-class _AutoResolvedLine extends StatelessWidget {
-  final String label;
-
-  const _AutoResolvedLine({super.key, required this.label});
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return Text(
-      '自动选择：$label',
-      style: Theme.of(context).textTheme.bodySmall?.copyWith(
-            color: scheme.primary,
-            fontWeight: FontWeight.w400,
-          ),
     );
   }
 }
@@ -1170,257 +1074,170 @@ void _push(BuildContext context, Widget page) {
 }
 
 // ---------------------------------------------------------------------------
-// 普通模型下拉选择 + 获取按钮组件
+// 模型管理底部抽屉
 // ---------------------------------------------------------------------------
 
-class _ModelDropdownOrInput extends StatelessWidget {
-  final TextEditingController controller;
-  final List<String> availableModels;
-  final VoidCallback? onFetchModels;
-  final bool isFetching;
+class _ProviderModelManagerSheet extends StatefulWidget {
+  final String providerLabel;
+  final AiProviderConfig config;
+  final List<String> savedModels;
 
-  const _ModelDropdownOrInput({
-    required this.controller,
-    required this.availableModels,
-    required this.onFetchModels,
-    required this.isFetching,
+  const _ProviderModelManagerSheet({
+    required this.providerLabel,
+    required this.config,
+    required this.savedModels,
   });
 
   @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return Row(
-      children: [
-        Expanded(
-          child: availableModels.isEmpty
-              ? TextField(
-                  controller: controller,
-                  autocorrect: false,
-                  enableSuggestions: false,
-                  decoration: iosInputDecoration(
-                    context,
-                    hint: AiProviderConfig.customDefaultModel,
-                  ),
-                )
-              : _ModelDropdown(
-                  controller: controller,
-                  models: availableModels,
-                ),
-        ),
-        const SizedBox(width: 8),
-        SizedBox(
-          height: 44,
-          child: OutlinedButton(
-            onPressed: onFetchModels,
-            style: OutlinedButton.styleFrom(
-              padding: const EdgeInsets.symmetric(horizontal: 12),
-              side: BorderSide(
-                color: scheme.outline.withValues(alpha: 0.4),
-              ),
-            ),
-            child: isFetching
-                ? SizedBox(
-                    width: 14,
-                    height: 14,
-                    child: CircularProgressIndicator(
-                      strokeWidth: 2,
-                      color: scheme.primary,
-                    ),
-                  )
-                : Text(
-                    availableModels.isEmpty ? '获取模型' : '重新获取',
-                    style: const TextStyle(fontSize: 13),
-                  ),
-          ),
-        ),
-      ],
-    );
-  }
+  State<_ProviderModelManagerSheet> createState() =>
+      _ProviderModelManagerSheetState();
 }
 
-class _ModelDropdown extends StatefulWidget {
-  final TextEditingController controller;
-  final List<String> models;
-
-  const _ModelDropdown({
-    required this.controller,
-    required this.models,
-  });
-
-  @override
-  State<_ModelDropdown> createState() => _ModelDropdownState();
-}
-
-class _ModelDropdownState extends State<_ModelDropdown> {
-  String? _selected;
+class _ProviderModelManagerSheetState
+    extends State<_ProviderModelManagerSheet> {
+  late final List<String> _kept;
+  final Set<String> _removed = {};
+  bool _refreshing = false;
 
   @override
   void initState() {
     super.initState();
-    final current = widget.controller.text.trim();
-    _selected = widget.models.contains(current) ? current : widget.models.first;
-    // 确保 controller 和 _selected 同步
-    if (widget.controller.text != _selected) {
-      widget.controller.text = _selected!;
+    _kept = <String>[];
+    final seen = <String>{};
+    for (final value in widget.savedModels) {
+      final model = value.trim();
+      if (model.isNotEmpty && seen.add(model)) _kept.add(model);
+    }
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _refreshFromUpstream();
+    });
+  }
+
+  Future<void> _refreshFromUpstream() async {
+    if (_refreshing) return;
+    setState(() => _refreshing = true);
+    try {
+      final models = await LlmQuery.fetchModels(widget.config);
+      if (!mounted) return;
+      final seen = _kept.toSet();
+      setState(() {
+        for (final value in models) {
+          final model = value.trim();
+          if (model.isNotEmpty &&
+              !_removed.contains(model) &&
+              seen.add(model)) {
+            _kept.add(model);
+          }
+        }
+      });
+      if (mounted) showAppToast(context, '已从上游更新 ${models.length} 个模型');
+    } catch (error) {
+      if (mounted) {
+        showAppToast(
+          context,
+          '获取模型失败：${_shortError(error)}',
+          icon: Icons.error_outline,
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _refreshing = false);
     }
   }
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    return Container(
-      height: 44,
-      padding: const EdgeInsets.symmetric(horizontal: 12),
-      decoration: BoxDecoration(
-        color: scheme.surfaceContainerHighest.withValues(alpha: 0.5),
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(
-          color: scheme.outline.withValues(alpha: 0.2),
-        ),
-      ),
-      child: DropdownButton<String>(
-        value: _selected,
-        isExpanded: true,
-        underline: const SizedBox.shrink(),
-        icon: Icon(Icons.arrow_drop_down, color: scheme.onSurfaceVariant),
-        style: TextStyle(
-          fontSize: 15,
-          color: scheme.onSurface,
-        ),
-        items: widget.models
-            .map((m) => DropdownMenuItem(value: m, child: Text(m)))
-            .toList(),
-        onChanged: (value) {
-          if (value == null) return;
-          setState(() => _selected = value);
-          widget.controller.text = value;
-        },
-      ),
-    );
-  }
-}
-
-// ---------------------------------------------------------------------------
-// 模型管理底部抽屉
-// ---------------------------------------------------------------------------
-
-class _ModelManagerSheet extends StatefulWidget {
-  final List<String> allModels;
-  final List<String> savedModels;
-
-  const _ModelManagerSheet({
-    required this.allModels,
-    required this.savedModels,
-  });
-
-  @override
-  State<_ModelManagerSheet> createState() => _ModelManagerSheetState();
-}
-
-class _ModelManagerSheetState extends State<_ModelManagerSheet> {
-  late final List<String> _kept;
-
-  @override
-  void initState() {
-    super.initState();
-    // 已保存的放前面，其余按原顺序追加
-    final savedSet = widget.savedModels.toSet();
-    _kept = [
-      ...widget.savedModels.where((m) => widget.allModels.contains(m)),
-      ...widget.allModels.where((m) => !savedSet.contains(m)),
-    ];
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return Container(
+    return ConstrainedBox(
       constraints: BoxConstraints(
         maxHeight: MediaQuery.of(context).size.height * 0.85,
       ),
-      decoration: BoxDecoration(
-        color: scheme.surface,
-        borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
-      ),
       child: Column(
         children: [
-          // 拖动条
+          SheetHeader(
+            title: '模型管理',
+            subtitle: '${widget.providerLabel} · ${_kept.length} 个模型',
+            onClose: () => Navigator.pop(context),
+            actionLabel: '保存',
+            onAction: _kept.isEmpty
+                ? null
+                : () => Navigator.pop(context, List<String>.from(_kept)),
+          ),
           Padding(
-            padding: const EdgeInsets.only(top: 10, bottom: 4),
-            child: Center(
-              child: Container(
-                width: 36,
-                height: 4,
-                decoration: BoxDecoration(
-                  color: scheme.onSurfaceVariant.withValues(alpha: 0.25),
-                  borderRadius: BorderRadius.circular(2),
-                ),
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child:
+                  Text('${_kept.length} 个模型', style: AppType.secondary(scheme)),
+            ),
+          ),
+          Flexible(
+            child: Container(
+              margin: const EdgeInsets.symmetric(horizontal: 16),
+              padding: const EdgeInsets.symmetric(vertical: 4),
+              decoration: BoxDecoration(
+                color: AppColors.inputFill(scheme),
+                borderRadius: BorderRadius.circular(14),
+              ),
+              child: _kept.isEmpty
+                  ? Center(
+                      child: Padding(
+                        padding: const EdgeInsets.all(32),
+                        child:
+                            Text('还没有保留模型', style: AppType.secondary(scheme)),
+                      ),
+                    )
+                  : ListView.separated(
+                      padding: EdgeInsets.zero,
+                      itemCount: _kept.length,
+                      separatorBuilder: (_, __) => Divider(
+                        height: 0.5,
+                        indent: 14,
+                        color: AppColors.hairline(scheme),
+                      ),
+                      itemBuilder: (context, index) {
+                        final model = _kept[index];
+                        return ListTile(
+                          dense: true,
+                          title: Text(
+                            model,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(fontSize: 14),
+                          ),
+                          trailing: AppCircleButton(
+                            icon: CupertinoIcons.minus_circle,
+                            iconSize: 18,
+                            size: 30,
+                            onPressed: () => setState(() {
+                              _removed.add(model);
+                              _kept.removeAt(index);
+                            }),
+                          ),
+                        );
+                      },
+                    ),
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 10, 16, 4),
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: Text(
+                '从上游获取只会新增模型，不会恢复你已删除的模型。',
+                style: AppType.caption(scheme),
               ),
             ),
           ),
-          // 标题栏
           Padding(
-            padding: const EdgeInsets.fromLTRB(20, 8, 16, 8),
-            child: Row(
-              children: [
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        '选择可用模型',
-                        style: TextStyle(
-                          fontSize: 17,
-                          fontWeight: FontWeight.w600,
-                          color: scheme.onSurface,
-                        ),
-                      ),
-                      Text(
-                        '删除不需要的，只保留常用的',
-                        style: AppType.secondary(scheme),
-                      ),
-                    ],
-                  ),
-                ),
-                TextButton(
-                  onPressed: () => Navigator.pop(context, _kept),
-                  child: const Text('完成'),
-                ),
-              ],
+            padding: EdgeInsets.fromLTRB(
+              16,
+              4,
+              16,
+              MediaQuery.of(context).padding.bottom + 12,
             ),
-          ),
-          const Divider(height: 1),
-          // 模型列表（可删除）
-          Flexible(
-            child: ReorderableListView.builder(
-              padding: const EdgeInsets.only(bottom: 32),
-              itemCount: _kept.length,
-              onReorder: (oldIndex, newIndex) {
-                setState(() {
-                  if (newIndex > oldIndex) newIndex--;
-                  final item = _kept.removeAt(oldIndex);
-                  _kept.insert(newIndex, item);
-                });
-              },
-              itemBuilder: (context, index) {
-                final model = _kept[index];
-                return ListTile(
-                  key: ValueKey(model),
-                  leading: Icon(
-                    Icons.drag_handle,
-                    color: scheme.onSurfaceVariant.withValues(alpha: 0.4),
-                  ),
-                  title: Text(model, style: const TextStyle(fontSize: 14)),
-                  trailing: IconButton(
-                    icon: Icon(
-                      Icons.remove_circle_outline,
-                      color: AppColors.warning,
-                      size: 20,
-                    ),
-                    onPressed: () => setState(() => _kept.removeAt(index)),
-                  ),
-                );
-              },
+            child: AppPillButton(
+              label: _refreshing ? '获取中' : '从上游获取',
+              onPressed: _refreshing ? null : _refreshFromUpstream,
             ),
           ),
         ],

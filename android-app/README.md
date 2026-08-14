@@ -1,17 +1,24 @@
-# qingji
+# 肥喵记账 Android
 
-A new Flutter project.
+肥喵记账是一款以“可爱、简单、可信”为核心的 Flutter 个人记账应用，覆盖日常记账、AI 辅助、预算、统计、账户、资产、负债、存钱目标、导入导出和本地备份。
 
-## Getting Started
+## 项目入口
 
-This project is a starting point for a Flutter application.
+- 项目管理总纲：[`docs/PROJECT_MANAGEMENT.md`](docs/PROJECT_MANAGEMENT.md)
+- 当前状态交接：[`docs/claude/CLAUDE_START_HERE.md`](docs/claude/CLAUDE_START_HERE.md)
+- 最新详细交接：[`docs/claude/CLAUDE_HANDOFF_CURRENT.md`](docs/claude/CLAUDE_HANDOFF_CURRENT.md)
+- 统计与账务口径：[`docs/claude/STATISTICS_CALCULATION_STANDARD.md`](docs/claude/STATISTICS_CALCULATION_STANDARD.md)
+- UI 设计标准：[`docs/claude/UI_DESIGN_STANDARD.md`](docs/claude/UI_DESIGN_STANDARD.md)
+- 提交与发布手册：[`docs/claude/COMMIT_AND_PUBLISH_RUNBOOK.md`](docs/claude/COMMIT_AND_PUBLISH_RUNBOOK.md)
 
-A few resources to get you started if this is your first Flutter project:
+## 本地启动
 
-- [Learn Flutter](https://docs.flutter.dev/get-started/learn-flutter)
-- [Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Flutter learning resources](https://docs.flutter.dev/reference/learning-resources)
+```powershell
+cd C:\src\xunni-codex\android-app
+flutter pub get
+flutter analyze --no-fatal-infos --no-fatal-warnings
+flutter test --concurrency=1
+flutter run
+```
 
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+Windows 上多个 Repository 测试会共用 SQLite 测试路径，稳定执行时使用 `--concurrency=1`。发版前必须按提交与发布手册完成版本同步、完整测试、Release 构建、16 KiB 对齐、签名和哈希验证。

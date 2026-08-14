@@ -65,4 +65,83 @@ void main() {
     expect(ChatIntent.isQuery(''), isFalse);
     expect(ChatIntent.isQuery('   '), isFalse);
   });
+  group('ChatIntent.classify free chat fallback', () {
+    test('casual messages are not treated as records', () {
+      expect(ChatIntent.classify('你好呀'), ChatIntentKind.chat);
+      expect(ChatIntent.classify('讲个笑话'), ChatIntentKind.chat);
+      expect(ChatIntent.classify('今天心情不错'), ChatIntentKind.chat);
+      expect(ChatIntent.classify('今天天气怎么样'), ChatIntentKind.chat);
+      expect(ChatIntent.classify('你好吗？'), ChatIntentKind.chat);
+      expect(ChatIntent.classify('法国人口有多少'), ChatIntentKind.chat);
+      expect(
+        ChatIntent.classify('给我推荐 3 部电影', hasArabicAmount: true),
+        ChatIntentKind.chat,
+      );
+      expect(
+        ChatIntent.classify('写一篇 500 字短文', hasArabicAmount: true),
+        ChatIntentKind.chat,
+      );
+      expect(
+        ChatIntent.classify('GPT-5 有什么特点', hasArabicAmount: true),
+        ChatIntentKind.chat,
+      );
+      expect(
+        ChatIntent.classify('2 的 10 次方是多少', hasArabicAmount: true),
+        ChatIntentKind.chat,
+      );
+      expect(
+        ChatIntent.classify('今天 20 度穿什么', hasArabicAmount: true),
+        ChatIntentKind.chat,
+      );
+      expect(ChatIntent.classify('看看退款政策'), ChatIntentKind.chat);
+      expect(ChatIntent.classify('总结这篇消费税文章'), ChatIntentKind.chat);
+      expect(ChatIntent.classify('工资多少需要交税'), ChatIntentKind.chat);
+      expect(ChatIntent.classify('预算如何制定'), ChatIntentKind.chat);
+      expect(
+        ChatIntent.classify('推荐 3 张信用卡', hasArabicAmount: true),
+        ChatIntentKind.chat,
+      );
+      expect(ChatIntent.classify('推荐打车软件'), ChatIntentKind.chat);
+      expect(ChatIntent.classify('怎么打车更便宜'), ChatIntentKind.chat);
+      expect(ChatIntent.classify('工资是什么'), ChatIntentKind.chat);
+      expect(ChatIntent.classify('红包怎么写祝福语'), ChatIntentKind.chat);
+    });
+
+    test('record semantics remain unchanged', () {
+      expect(
+        ChatIntent.classify('午饭 28', hasArabicAmount: true),
+        ChatIntentKind.record,
+      );
+      expect(
+        ChatIntent.classify('奶茶 18', hasArabicAmount: true),
+        ChatIntentKind.record,
+      );
+      expect(ChatIntent.classify('打车二十五'), ChatIntentKind.record);
+      expect(
+        ChatIntent.classify('停车 12 元', hasArabicAmount: true),
+        ChatIntentKind.record,
+      );
+      expect(
+        ChatIntent.classify('¥88 买书', hasArabicAmount: true),
+        ChatIntentKind.record,
+      );
+      expect(
+        ChatIntent.classify('地铁 4', hasArabicAmount: true),
+        ChatIntentKind.record,
+      );
+      expect(
+        ChatIntent.classify('房租 2800', hasArabicAmount: true),
+        ChatIntentKind.record,
+      );
+    });
+
+    test('ledger summaries without a question mark remain queries', () {
+      expect(ChatIntent.classify('本月花了多少'), ChatIntentKind.query);
+      expect(ChatIntent.classify('查一下本月支出'), ChatIntentKind.query);
+      expect(ChatIntent.classify('总结上个月消费'), ChatIntentKind.query);
+      expect(ChatIntent.classify('看看我上周都买了什么'), ChatIntentKind.query);
+      expect(ChatIntent.classify('汇总今年收入'), ChatIntentKind.query);
+      expect(ChatIntent.classify('复盘本周餐饮'), ChatIntentKind.query);
+    });
+  });
 }

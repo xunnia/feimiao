@@ -136,7 +136,7 @@ class AppPillButton extends StatelessWidget {
                 softWrap: false,
                 style: TextStyle(
                   fontSize: 15,
-                  fontWeight: FontWeight.w400,
+                  fontWeight: FontWeight.w300,
                   color: enabled
                       ? scheme.onSurface
                       : scheme.onSurfaceVariant.withValues(alpha: 0.38),

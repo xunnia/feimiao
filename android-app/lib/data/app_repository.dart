@@ -2736,8 +2736,15 @@ class AppRepository extends ChangeNotifier {
   String _customAiBaseUrl = AiProviderConfig.customDefaultBaseUrl;
   String _customAiModel = AiProviderConfig.customDefaultModel;
   String _reportAiModel = AiProviderConfig.customReportDefaultModel;
+
   /// 用户筛选后保留的可用模型列表（逗号分隔持久化）
   List<String> _availableModels = [];
+
+  /// 多服务商配置。API Key 只保存在安全存储中，列表本身仅含元数据。
+  final List<AiConfiguredProvider> _aiProviders = [];
+  String? _recordAiProviderId;
+  String? _chatCurrentProviderId;
+  String? _chatCurrentModel;
   AiProviderType _recordAiProviderType = AiProviderType.deepseek;
   AiProviderType _chatAiProviderType = AiProviderType.deepseek;
   AiProviderType _reportAiProviderType = AiProviderType.custom;
@@ -2756,6 +2763,7 @@ class AppRepository extends ChangeNotifier {
   int _chatRetentionDays = 30;
   bool _aiPrivacyAccepted = false;
   bool _widgetPrivacyMode = false;
+
   /// 还款提醒本地通知开关（A 批第 5 段），默认开。
   bool _repaymentReminderEnabled = true;
   int _moneyDecimalPlaces = 2;
@@ -2788,8 +2796,7 @@ class AppRepository extends ChangeNotifier {
   final List<String> _statCardOrder = [];
   bool _statCardOrderConfigured = false;
 
-  List<BookEntity> get books =>
-      _booksViewCache ??= List.unmodifiable(_books);
+  List<BookEntity> get books => _booksViewCache ??= List.unmodifiable(_books);
   List<AccountEntity> get accounts => List.unmodifiable(_accounts);
   List<AccountEntity> get activeAccounts => List.unmodifiable(
         _accounts.where((account) => !account.isArchived),
@@ -3341,13 +3348,50 @@ class AppRepository extends ChangeNotifier {
   String get customAiBaseUrl => _customAiBaseUrl;
   String get customAiModel => _customAiModel;
   String get reportAiModel => _reportAiModel;
+
   /// 用户筛选后保留的可用模型列表，空表示未获取过
   List<String> get availableModels => List.unmodifiable(_availableModels);
 
+  /// 所有已配置服务商（API Key 不会写入该对象的持久化 JSON）。
+  List<AiConfiguredProvider> get aiProviders => List.unmodifiable(_aiProviders);
+
+  AiConfiguredProvider? aiProviderById(String? id) {
+    final key = id?.trim();
+    if (key == null || key.isEmpty) return null;
+    for (final provider in _aiProviders) {
+      if (provider.id == key) return provider;
+    }
+    return null;
+  }
+
+  String? get recordAiProviderId => _recordAiProviderId;
+  String? get chatCurrentProviderId => _chatCurrentProviderId;
+  String? get chatCurrentModel => _chatCurrentModel;
+
+  /// 模型身份必须包含 providerId，允许不同服务商提供同名模型。
+  List<AiModelOption> get aiChatModelOptions {
+    final result = <AiModelOption>[];
+    final seen = <String>{};
+    for (final provider in _aiProviders) {
+      if (!provider.hasKey) continue;
+      for (final model in provider.models) {
+        final option = AiModelOption(
+          providerId: provider.id,
+          providerLabel: provider.label,
+          model: model,
+        );
+        if (seen.add(option.key)) result.add(option);
+      }
+    }
+    return List.unmodifiable(result);
+  }
+
   AiProviderType aiProviderTypeFor(AiTaskType task) => switch (task) {
         AiTaskType.recordParse => _recordAiProviderType,
-        AiTaskType.chatQuery => _chatAiProviderType,
-        AiTaskType.report => _reportAiProviderType,
+        AiTaskType.chatQuery =>
+          aiProviderById(_chatCurrentProviderId)?.type ?? _chatAiProviderType,
+        AiTaskType.report =>
+          aiProviderById(_chatCurrentProviderId)?.type ?? _chatAiProviderType,
       };
 
   AiRouteMode aiRouteModeFor(AiTaskType task) => switch (task) {
@@ -3380,7 +3424,11 @@ class AppRepository extends ChangeNotifier {
       type == AiProviderType.custom ? _customAiDisplayName : type.label;
 
   String aiResolvedProviderLabelFor(AiTaskType task) =>
-      aiProviderLabel(aiResolvedProviderTypeFor(task));
+      task == AiTaskType.recordParse
+          ? (aiProviderById(_recordAiProviderId)?.label ??
+              aiProviderLabel(aiResolvedProviderTypeFor(task)))
+          : (aiProviderById(_chatCurrentProviderId)?.label ??
+              aiProviderLabel(aiResolvedProviderTypeFor(task)));
 
   AiEndpointType aiEndpointTypeFor(AiTaskType task) => switch (task) {
         AiTaskType.recordParse => _recordAiEndpointType,
@@ -3391,13 +3439,35 @@ class AppRepository extends ChangeNotifier {
   AiReasoningEffort aiReasoningEffortFor(AiTaskType task) => switch (task) {
         AiTaskType.recordParse => _recordAiReasoningEffort,
         AiTaskType.chatQuery => _chatAiReasoningEffort,
-        AiTaskType.report => _reportAiReasoningEffort,
+        AiTaskType.report => _chatAiReasoningEffort,
       };
 
   AiProviderConfig get aiProviderConfig =>
       aiProviderConfigFor(AiTaskType.recordParse);
 
   AiProviderConfig aiProviderConfigFor(AiTaskType task) {
+    if (task == AiTaskType.recordParse) {
+      final selected = aiProviderById(_recordAiProviderId);
+      if (selected != null) {
+        return selected.toConfig(
+          effortOverride: _recordAiReasoningEffort,
+        );
+      }
+    }
+    if (task == AiTaskType.chatQuery || task == AiTaskType.report) {
+      final selected = aiProviderById(_chatCurrentProviderId) ??
+          _firstUsableProvider() ??
+          aiProviderById(_chatAiProviderType.storageKey);
+      if (selected != null) {
+        final selectedModel = _chatCurrentModel?.trim();
+        return selected.toConfig(
+          modelOverride: selectedModel == null || selectedModel.isEmpty
+              ? selected.model
+              : selectedModel,
+          effortOverride: _chatAiReasoningEffort,
+        );
+      }
+    }
     final type = aiResolvedProviderTypeFor(task);
     if (type == AiProviderType.custom) {
       return AiProviderConfig.custom(
@@ -3418,7 +3488,8 @@ class AppRepository extends ChangeNotifier {
   bool get hasAiApiKey => aiProviderConfig.hasKey;
   bool get hasAnyAiApiKey =>
       (_deepSeekApiKey?.trim().isNotEmpty ?? false) ||
-      (_customAiApiKey?.trim().isNotEmpty ?? false);
+      (_customAiApiKey?.trim().isNotEmpty ?? false) ||
+      _aiProviders.any((provider) => provider.hasKey);
 
   bool get recordAiMode => _recordAiMode;
   bool get aiPrivacyAccepted => _aiPrivacyAccepted;
@@ -3590,8 +3661,7 @@ class AppRepository extends ChangeNotifier {
     if (totalRows.isEmpty) return;
     final total = Decimal.tryParse(totalRows.first['amount'] as String? ?? '');
     if (total == null || total <= Decimal.zero) return;
-    final catRows =
-        await db.query('budget', where: 'category_key IS NOT NULL');
+    final catRows = await db.query('budget', where: 'category_key IS NOT NULL');
     final cats = <String, String>{};
     for (final r in catRows) {
       final k = r['category_key'] as String?;
@@ -7001,8 +7071,13 @@ class AppRepository extends ChangeNotifier {
       'custom_ai_base_url',
       'custom_ai_model',
       'report_ai_model',
+      'available_ai_models',
       'deepseek_api_key',
       'custom_ai_api_key',
+      'ai_providers_json',
+      'ai_record_provider_id',
+      'chat_current_provider_id',
+      'chat_current_model',
       'ai_record_provider_type',
       'ai_chat_provider_type',
       'ai_report_provider_type',
@@ -7102,6 +7177,170 @@ class AppRepository extends ChangeNotifier {
       settings['ai_report_reasoning_effort'],
       fallback: AiReasoningEffort.xhigh,
     );
+    await _loadConfiguredAiProviders(settings);
+  }
+
+  AiConfiguredProvider? _firstUsableProvider({String? excludingId}) {
+    final candidates = _aiProviders.where(
+      (provider) => provider.id != excludingId,
+    );
+    return candidates.where((provider) => provider.hasKey).firstOrNull ??
+        candidates.firstOrNull;
+  }
+
+  Future<void> _loadConfiguredAiProviders(Map<String, String> settings) async {
+    final decodedProviders = <AiConfiguredProvider>[];
+    final raw = settings['ai_providers_json']?.trim() ?? '';
+    if (raw.isNotEmpty) {
+      try {
+        final decoded = jsonDecode(raw);
+        if (decoded is List) {
+          for (final entry in decoded.whereType<Map>()) {
+            final metadata = Map<String, dynamic>.from(entry);
+            final id = (metadata['id'] as String? ?? '').trim();
+            if (id.isEmpty || decodedProviders.any((item) => item.id == id)) {
+              continue;
+            }
+            final key = await _loadConfiguredProviderSecret(id);
+            final legacyKey = id == 'legacy-custom' ? _customAiApiKey : null;
+            decodedProviders.add(
+              AiConfiguredProvider.fromJson(
+                metadata,
+                apiKey: key ?? legacyKey ?? '',
+              ).copyWith(builtIn: id == 'deepseek'),
+            );
+          }
+        }
+      } catch (_) {
+        // Malformed metadata fails closed into the legacy migration below.
+      }
+    }
+
+    var deepSeek = decodedProviders
+        .where((provider) => provider.id == 'deepseek')
+        .firstOrNull;
+    if (deepSeek == null) {
+      final legacyModels = _aiProviderType == AiProviderType.deepseek
+          ? _availableModels
+          : const <String>[];
+      deepSeek = AiConfiguredProvider(
+        id: 'deepseek',
+        type: AiProviderType.deepseek,
+        displayName: 'DeepSeek',
+        baseUrl: AiProviderConfig.deepSeekBaseUrl,
+        apiKey: _deepSeekApiKey ?? '',
+        model: AiProviderConfig.deepSeekModel,
+        models: legacyModels,
+        endpointType: AiEndpointType.chatCompletions,
+        builtIn: true,
+      );
+      decodedProviders.insert(0, deepSeek);
+    } else {
+      deepSeek = deepSeek.copyWith(
+        type: AiProviderType.deepseek,
+        displayName: 'DeepSeek',
+        baseUrl: AiProviderConfig.deepSeekBaseUrl,
+        apiKey: deepSeek.apiKey.trim().isEmpty
+            ? (_deepSeekApiKey ?? '')
+            : deepSeek.apiKey,
+        builtIn: true,
+      );
+      decodedProviders[decodedProviders
+          .indexWhere((item) => item.id == 'deepseek')] = deepSeek;
+    }
+    // The legacy DeepSeek secret predates provider-scoped storage. Seed the
+    // new namespace once so future provider metadata reloads do not depend on
+    // the compatibility key.
+    if (deepSeek.apiKey.trim().isNotEmpty) {
+      await _saveSecret(
+        secureKey: _providerSecretKey(deepSeek.id),
+        legacySettingKey: _providerSecretKey(deepSeek.id),
+        configuredSettingKey: '${_providerSecretKey(deepSeek.id)}_configured',
+        value: deepSeek.apiKey,
+      );
+    }
+
+    final hasLegacyCustom = (_customAiApiKey?.trim().isNotEmpty ?? false) ||
+        _aiProviderType == AiProviderType.custom ||
+        _customAiDisplayName != '自定义' ||
+        _customAiBaseUrl != AiProviderConfig.customDefaultBaseUrl ||
+        _customAiModel != AiProviderConfig.customDefaultModel;
+    if (hasLegacyCustom &&
+        !decodedProviders.any((provider) => provider.id == 'legacy-custom')) {
+      final legacyCustom = AiConfiguredProvider(
+        id: 'legacy-custom',
+        type: AiProviderType.custom,
+        displayName: _customAiDisplayName,
+        baseUrl: _customAiBaseUrl,
+        apiKey: _customAiApiKey ?? '',
+        model: _customAiModel,
+        models: _aiProviderType == AiProviderType.custom
+            ? _availableModels
+            : const <String>[],
+        endpointType: AiEndpointType.auto,
+      );
+      decodedProviders.add(legacyCustom);
+      if (legacyCustom.apiKey.trim().isNotEmpty) {
+        await _saveSecret(
+          secureKey: _providerSecretKey(legacyCustom.id),
+          legacySettingKey: _providerSecretKey(legacyCustom.id),
+          configuredSettingKey:
+              '${_providerSecretKey(legacyCustom.id)}_configured',
+          value: legacyCustom.apiKey,
+        );
+      }
+    }
+
+    _aiProviders
+      ..clear()
+      ..addAll(decodedProviders);
+
+    String? providerIdForLegacyType(AiProviderType type) {
+      if (type == AiProviderType.deepseek) return 'deepseek';
+      return _aiProviders
+          .where((provider) => provider.type == AiProviderType.custom)
+          .firstOrNull
+          ?.id;
+    }
+
+    final requestedRecordId = settings['ai_record_provider_id']?.trim();
+    _recordAiProviderId = aiProviderById(requestedRecordId) != null
+        ? requestedRecordId
+        : providerIdForLegacyType(_recordAiProviderType);
+    _recordAiProviderId ??= _firstUsableProvider()?.id;
+
+    final requestedChatId = settings['chat_current_provider_id']?.trim();
+    _chatCurrentProviderId = aiProviderById(requestedChatId) != null
+        ? requestedChatId
+        : providerIdForLegacyType(_chatAiProviderType);
+    _chatCurrentProviderId ??= _firstUsableProvider()?.id;
+    final chatProvider = aiProviderById(_chatCurrentProviderId);
+    final requestedModel = settings['chat_current_model']?.trim();
+    _chatCurrentModel = requestedModel != null &&
+            requestedModel.isNotEmpty &&
+            (chatProvider?.models.contains(requestedModel) ?? false)
+        ? requestedModel
+        : chatProvider?.model;
+
+    // Persist the normalized representation once. This keeps migrations
+    // idempotent while retaining all legacy settings for downgrade safety.
+    await _persistAiProviderMetadata(notify: false);
+  }
+
+  Future<String?> _loadConfiguredProviderSecret(String id) async {
+    final secureKey = 'ai_provider_api_key_$id';
+    final secure = await SecureKeyStore.read(secureKey);
+    if (secure != null && secure.trim().isNotEmpty) return secure.trim();
+    final rows = await _db!.query(
+      'app_settings',
+      columns: const ['value'],
+      where: 'key = ?',
+      whereArgs: [secureKey],
+      limit: 1,
+    );
+    if (rows.isEmpty) return null;
+    final fallback = (rows.first['value'] as String? ?? '').trim();
+    return fallback.isEmpty ? null : fallback;
   }
 
   Future<String?> _loadSecretWithLegacyFallback({
@@ -8070,8 +8309,7 @@ class AppRepository extends ChangeNotifier {
         'amount': amount.toString(),
         'category_id': kind == TransactionKind.transfer ? null : categoryId,
         'account_id': accountId,
-        'to_account_id':
-            kind == TransactionKind.transfer ? toAccountId : null,
+        'to_account_id': kind == TransactionKind.transfer ? toAccountId : null,
         'note': note,
         'period': period.toJson(),
         'start_date_ms': startDate.millisecondsSinceEpoch,
@@ -8715,7 +8953,7 @@ class AppRepository extends ChangeNotifier {
     try {
       await db.delete(
         'app_settings',
-        where: 'key IN (?, ?)',
+        where: "key IN (?, ?) OR key LIKE 'ai_provider_api_key_%'",
         whereArgs: ['deepseek_api_key', 'custom_ai_api_key'],
       );
     } finally {
@@ -8930,9 +9168,8 @@ class AppRepository extends ChangeNotifier {
                 final invoice = row['invoice_path'] as String? ?? '';
                 final thumbnail = row['thumbnail_path'] as String? ?? '';
                 final mappedPhoto = originalPathByName[p.basename(photo)];
-                final mappedInvoice =
-                    originalPathByName[p.basename(invoice)] ??
-                        receiptPathByName[p.basename(invoice)];
+                final mappedInvoice = originalPathByName[p.basename(invoice)] ??
+                    receiptPathByName[p.basename(invoice)];
                 final mappedThumbnail =
                     thumbnailPathByName[p.basename(thumbnail)];
                 if (mappedPhoto != null) changes['photo_path'] = mappedPhoto;
@@ -9948,9 +10185,10 @@ class AppRepository extends ChangeNotifier {
   /// 调用方不得对返回值排序或修改——需要可变副本请用 List.of(repo.visibleTransactionsRef)。
   List<TransactionEntity> get visibleTransactionsRef =>
       _visibleTxViewCache ??= List.unmodifiable(
-        _visibleTxCache ??= _transactions.where((t) => t.refundOf == null).toList(
-              growable: false,
-            ),
+        _visibleTxCache ??=
+            _transactions.where((t) => t.refundOf == null).toList(
+                  growable: false,
+                ),
       );
 
   /// 某笔账单的退款明细行（按时间正序）。
@@ -13454,10 +13692,316 @@ class AppRepository extends ChangeNotifier {
   // ---------------------------------------------------------------------------
 
   Future<void> saveApiKey(String key) async {
-    await saveAiProviderConfig(
-      type: AiProviderType.deepseek,
-      apiKey: key,
+    final provider = aiProviderById('deepseek');
+    if (provider != null) {
+      await saveAiConfiguredProvider(provider.copyWith(apiKey: key));
+      return;
+    }
+    await saveAiProviderConfig(type: AiProviderType.deepseek, apiKey: key);
+  }
+
+  String _providerSecretKey(String providerId) =>
+      'ai_provider_api_key_${providerId.trim()}';
+
+  /// Persist the provider catalog and the two task selections in one place.
+  /// API keys are deliberately kept outside this JSON payload.
+  Future<void> _persistAiProviderMetadata({
+    bool notify = true,
+    bool resetPrivacyConsent = false,
+  }) async {
+    final batch = _db!.batch();
+    void setting(String key, String value) => batch.insert(
+          'app_settings',
+          {'key': key, 'value': value},
+          conflictAlgorithm: ConflictAlgorithm.replace,
+        );
+
+    setting(
+      'ai_providers_json',
+      jsonEncode(_aiProviders.map((provider) => provider.toJson()).toList()),
     );
+    setting('ai_record_provider_id', _recordAiProviderId ?? '');
+    setting('chat_current_provider_id', _chatCurrentProviderId ?? '');
+    setting('chat_current_model', _chatCurrentModel ?? '');
+    setting('ai_provider_type', _aiProviderType.storageKey);
+    setting('custom_ai_display_name', _customAiDisplayName);
+    setting('custom_ai_base_url', _customAiBaseUrl);
+    setting('custom_ai_model', _customAiModel);
+    setting('report_ai_model', _reportAiModel);
+    setting('ai_record_provider_type', _recordAiProviderType.storageKey);
+    setting('ai_chat_provider_type', _chatAiProviderType.storageKey);
+    setting('ai_report_provider_type', _reportAiProviderType.storageKey);
+    setting('ai_record_route_mode', _recordAiRouteMode.storageKey);
+    setting('ai_chat_route_mode', _chatAiRouteMode.storageKey);
+    setting('ai_report_route_mode', _reportAiRouteMode.storageKey);
+    setting('ai_record_endpoint_type', _recordAiEndpointType.storageKey);
+    setting('ai_chat_endpoint_type', _chatAiEndpointType.storageKey);
+    setting('ai_report_endpoint_type', _reportAiEndpointType.storageKey);
+    setting('ai_record_reasoning_effort', _recordAiReasoningEffort.storageKey);
+    setting('ai_chat_reasoning_effort', _chatAiReasoningEffort.storageKey);
+    setting('ai_report_reasoning_effort', _reportAiReasoningEffort.storageKey);
+    setting('ai_task_config_version', '3');
+    if (resetPrivacyConsent) {
+      _aiPrivacyAccepted = false;
+      setting('ai_privacy_accepted', '0');
+    }
+    await batch.commit(noResult: true);
+    if (notify) notifyListeners();
+  }
+
+  /// Add or edit one configured provider. The DeepSeek entry is always kept as
+  /// the built-in provider and cannot be renamed into a custom entry.
+  Future<void> saveAiConfiguredProvider(AiConfiguredProvider provider) async {
+    var id = provider.id.trim();
+    if (provider.type == AiProviderType.deepseek) id = 'deepseek';
+    if (id.isEmpty) id = _newUuid();
+
+    final existing = aiProviderById(id);
+    if (existing?.builtIn == true && provider.type != AiProviderType.deepseek) {
+      throw StateError('内置服务商不能改为自定义服务商');
+    }
+
+    final isDeepSeek =
+        id == 'deepseek' || provider.type == AiProviderType.deepseek;
+    final type = isDeepSeek ? AiProviderType.deepseek : AiProviderType.custom;
+    final displayName = isDeepSeek
+        ? AiProviderType.deepseek.label
+        : (provider.displayName.trim().isEmpty
+            ? AiProviderType.custom.label
+            : provider.displayName.trim());
+    final baseUrl = isDeepSeek
+        ? AiProviderConfig.deepSeekBaseUrl
+        : (provider.baseUrl.trim().isEmpty
+            ? AiProviderConfig.customDefaultBaseUrl
+            : provider.baseUrl.trim());
+    final model = provider.model.trim().isEmpty
+        ? (isDeepSeek
+            ? AiProviderConfig.deepSeekModel
+            : AiProviderConfig.customDefaultModel)
+        : provider.model.trim();
+    final models = <String>{
+      model,
+      ...provider.models
+          .map((value) => value.trim())
+          .where((value) => value.isNotEmpty),
+    }.toList();
+    final storedKey = await _saveSecret(
+      secureKey: _providerSecretKey(id),
+      legacySettingKey: _providerSecretKey(id),
+      configuredSettingKey: '${_providerSecretKey(id)}_configured',
+      value: provider.apiKey,
+    );
+
+    if (isDeepSeek) {
+      _deepSeekApiKey = await _saveSecret(
+        secureKey: 'deepseek_api_key',
+        legacySettingKey: 'deepseek_api_key',
+        configuredSettingKey: 'deepseek_api_key_configured',
+        value: provider.apiKey,
+      );
+      _aiProviderType = AiProviderType.deepseek;
+    } else if (id == 'legacy-custom') {
+      _customAiApiKey = storedKey;
+      _customAiDisplayName = displayName;
+      _customAiBaseUrl = baseUrl;
+      _customAiModel = model;
+      _aiProviderType = AiProviderType.custom;
+    }
+
+    final updated = AiConfiguredProvider(
+      id: id,
+      type: type,
+      displayName: displayName,
+      baseUrl: baseUrl,
+      apiKey: storedKey ?? '',
+      model: model,
+      models: models,
+      endpointType:
+          isDeepSeek ? AiEndpointType.chatCompletions : provider.endpointType,
+      reasoningEffort: provider.reasoningEffort,
+      builtIn: isDeepSeek,
+    );
+    final index = _aiProviders.indexWhere((item) => item.id == id);
+    if (index == -1) {
+      _aiProviders.add(updated);
+    } else {
+      _aiProviders[index] = updated;
+    }
+
+    _recordAiProviderId ??= id;
+    _chatCurrentProviderId ??= id;
+    if (aiProviderById(_recordAiProviderId) == null) _recordAiProviderId = id;
+    if (aiProviderById(_chatCurrentProviderId) == null) {
+      _chatCurrentProviderId = id;
+    }
+    final selected = aiProviderById(_chatCurrentProviderId);
+    if (selected != null &&
+        (_chatCurrentModel == null ||
+            !selected.models.contains(_chatCurrentModel))) {
+      _chatCurrentModel = selected.model;
+    }
+    _recordAiProviderType = aiProviderById(_recordAiProviderId)?.type ?? type;
+    _chatAiProviderType = aiProviderById(_chatCurrentProviderId)?.type ?? type;
+    _reportAiProviderType = _chatAiProviderType;
+    await _persistAiProviderMetadata(
+      notify: false,
+      resetPrivacyConsent: true,
+    );
+    notifyListeners();
+  }
+
+  Future<AiConfiguredProvider> addAiConfiguredProvider({
+    String displayName = '自定义服务商',
+    String baseUrl = AiProviderConfig.customDefaultBaseUrl,
+    String apiKey = '',
+    String model = AiProviderConfig.customDefaultModel,
+    Iterable<String> models = const [],
+    AiEndpointType endpointType = AiEndpointType.auto,
+    AiReasoningEffort reasoningEffort = AiReasoningEffort.none,
+  }) async {
+    final provider = AiConfiguredProvider(
+      id: _newUuid(),
+      type: AiProviderType.custom,
+      displayName: displayName,
+      baseUrl: baseUrl,
+      apiKey: apiKey,
+      model: model,
+      models: models,
+      endpointType: endpointType,
+      reasoningEffort: reasoningEffort,
+    );
+    await saveAiConfiguredProvider(provider);
+    return aiProviderById(provider.id) ?? provider;
+  }
+
+  Future<void> deleteAiConfiguredProvider(String providerId) async {
+    final id = providerId.trim();
+    final provider = aiProviderById(id);
+    if (provider == null) return;
+    if (provider.builtIn || id == 'deepseek') {
+      throw StateError('内置 DeepSeek 不能删除');
+    }
+    _aiProviders.removeWhere((item) => item.id == id);
+    await SecureKeyStore.delete(_providerSecretKey(id));
+    await _db!.delete(
+      'app_settings',
+      where: 'key IN (?, ?)',
+      whereArgs: [
+        _providerSecretKey(id),
+        '${_providerSecretKey(id)}_configured',
+      ],
+    );
+    if (id == 'legacy-custom') {
+      await _saveSecret(
+        secureKey: 'custom_ai_api_key',
+        legacySettingKey: 'custom_ai_api_key',
+        configuredSettingKey: 'custom_ai_api_key_configured',
+        value: '',
+      );
+      _customAiApiKey = null;
+    }
+    final changedActiveProvider =
+        _recordAiProviderId == id || _chatCurrentProviderId == id;
+    final fallback = _firstUsableProvider();
+    if (_recordAiProviderId == id) _recordAiProviderId = fallback?.id;
+    if (_chatCurrentProviderId == id) {
+      _chatCurrentProviderId = fallback?.id;
+      _chatCurrentModel = fallback?.model;
+    }
+    _recordAiProviderType =
+        aiProviderById(_recordAiProviderId)?.type ?? AiProviderType.deepseek;
+    _chatAiProviderType =
+        aiProviderById(_chatCurrentProviderId)?.type ?? AiProviderType.deepseek;
+    _reportAiProviderType = _chatAiProviderType;
+    await _persistAiProviderMetadata(
+      notify: false,
+      resetPrivacyConsent: changedActiveProvider,
+    );
+    notifyListeners();
+  }
+
+  Future<void> saveAiProviderModels(
+    String providerId,
+    List<String> models, {
+    String? selectedModel,
+  }) async {
+    final provider = aiProviderById(providerId);
+    if (provider == null) throw StateError('服务商不存在');
+    final normalized = <String>[];
+    final seen = <String>{};
+    for (final raw in models) {
+      final model = raw.trim();
+      if (model.isNotEmpty && seen.add(model)) normalized.add(model);
+    }
+    final chosen = selectedModel?.trim();
+    final primary = chosen != null && chosen.isNotEmpty && seen.contains(chosen)
+        ? chosen
+        : (normalized.firstOrNull ?? provider.model);
+    final updated = provider.copyWith(model: primary, models: normalized);
+    _aiProviders[_aiProviders.indexWhere((item) => item.id == provider.id)] =
+        updated;
+    _availableModels = List<String>.from(updated.models);
+    if (_chatCurrentProviderId == provider.id &&
+        !_chatCurrentModelIn(updated)) {
+      _chatCurrentModel = updated.model;
+    }
+    await _persistAiProviderMetadata(notify: false);
+    await _db!.insert(
+      'app_settings',
+      {'key': 'available_ai_models', 'value': _availableModels.join(',')},
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+    notifyListeners();
+  }
+
+  bool _chatCurrentModelIn(AiConfiguredProvider provider) =>
+      _chatCurrentModel != null && provider.models.contains(_chatCurrentModel);
+
+  Future<void> setRecordAiProvider(String providerId) async {
+    final provider = aiProviderById(providerId.trim());
+    if (provider == null) throw StateError('服务商不存在');
+    if (!provider.hasKey) throw StateError('请先配置该服务商的 API Key');
+    final providerChanged = _recordAiProviderId != provider.id;
+    _recordAiProviderId = provider.id;
+    _recordAiProviderType = provider.type;
+    _recordAiRouteMode = AiRouteMode.fixed;
+    await _persistAiProviderMetadata(
+      notify: false,
+      resetPrivacyConsent: providerChanged,
+    );
+    notifyListeners();
+  }
+
+  Future<void> saveChatModelSelection({
+    required String providerId,
+    required String model,
+    AiReasoningEffort? reasoningEffort,
+  }) async {
+    final provider = aiProviderById(providerId.trim());
+    if (provider == null) throw StateError('服务商不存在');
+    if (!provider.hasKey) throw StateError('请先配置该服务商的 API Key');
+    final selectedModel = model.trim();
+    if (selectedModel.isEmpty ||
+        (provider.models.isNotEmpty &&
+            !provider.models.contains(selectedModel))) {
+      throw StateError('模型不在该服务商的已保存列表中');
+    }
+    final providerChanged = _chatCurrentProviderId != provider.id;
+    _chatCurrentProviderId = provider.id;
+    _chatCurrentModel = selectedModel;
+    _chatAiProviderType = provider.type;
+    _reportAiProviderType = provider.type;
+    _chatAiRouteMode = AiRouteMode.fixed;
+    _reportAiRouteMode = AiRouteMode.fixed;
+    if (reasoningEffort != null) {
+      _chatAiReasoningEffort = reasoningEffort;
+      _reportAiReasoningEffort = reasoningEffort;
+    }
+    await _persistAiProviderMetadata(
+      notify: false,
+      resetPrivacyConsent: providerChanged,
+    );
+    notifyListeners();
   }
 
   Future<void> saveAiProviderConfig({
@@ -14486,15 +15030,11 @@ class AppRepository extends ChangeNotifier {
           orderTx == null ? 0 : decimalToBudgetCents(orderTx.amount).abs();
       final trackedGross = orderLinks.fold<int>(
           0, (sum, link) => sum + link.allocatedGrossCents);
-      final currentUntracked =
-          allocatedByLink[_untrackedRefundLinkId] ?? 0;
+      final currentUntracked = allocatedByLink[_untrackedRefundLinkId] ?? 0;
       final orderUntracked =
           await _untrackedRefundCentsForOrder(_db!, refund.refundOf!);
-      final untrackedLimit = max(
-          0,
-          orderGrossCents -
-              trackedGross -
-              (orderUntracked - currentUntracked));
+      final untrackedLimit = max(0,
+          orderGrossCents - trackedGross - (orderUntracked - currentUntracked));
       result.add(PendingPhysicalAssetRefundAllocation(
         refundTransactionId: refund.id,
         originalTransactionId: refund.refundOf!,
@@ -14831,8 +15371,7 @@ class AppRepository extends ChangeNotifier {
           JOIN transactions t ON t.id = ara.refund_transaction_id
           WHERE t.refund_of = ? AND ara.status = 'active'
             AND ara.asset_transaction_link_id = ?
-        ''', [transactionId, _untrackedRefundLinkId])) ??
-        0;
+        ''', [transactionId, _untrackedRefundLinkId])) ?? 0;
   }
 
   Future<void> _refreshOrderAllocationQuality(
@@ -17485,8 +18024,9 @@ class AppRepository extends ChangeNotifier {
     if (amount <= Decimal.zero) {
       throw ArgumentError('收回金额必须大于 0');
     }
-    final interest =
-        interestAmount == null ? Decimal.zero : normalizeMoneyAmount(interestAmount);
+    final interest = interestAmount == null
+        ? Decimal.zero
+        : normalizeMoneyAmount(interestAmount);
     if (interest < Decimal.zero) {
       throw ArgumentError('利息金额不能为负');
     }
@@ -18165,11 +18705,9 @@ class AppRepository extends ChangeNotifier {
         : Decimal.zero;
     final interestPaid = hasPrincipal ? amount - principalPaid : Decimal.zero;
     final transferAmount = hasPrincipal ? principalPaid : amount;
-    final liabilityAccountName = _accounts
-            .where((a) => a.id == profile.accountId)
-            .firstOrNull
-            ?.name ??
-        '负债账户';
+    final liabilityAccountName =
+        _accounts.where((a) => a.id == profile.accountId).firstOrNull?.name ??
+            '负债账户';
     final interestCategory = interestPaid > Decimal.zero
         ? _interestCategoryFor(TransactionKind.expense)
         : null;
@@ -18185,7 +18723,8 @@ class AppRepository extends ChangeNotifier {
           'category_id': null,
           'account_id': fromAccountId,
           'to_account_id': profile.accountId,
-          'note': note.trim().isEmpty ? '还款：$liabilityAccountName' : note.trim(),
+          'note':
+              note.trim().isEmpty ? '还款：$liabilityAccountName' : note.trim(),
           'date_ms': at.millisecondsSinceEpoch,
           'time_precision': timePrecision.storageKey,
           'tags': '',
@@ -18347,7 +18886,10 @@ class AppRepository extends ChangeNotifier {
     if (bumpScope) {
       await _bumpNetWorthScopeVersion();
       await _refreshCurrentNetWorthSnapshotBestEffort(
-        const {NetWorthSnapshotCause.liability, NetWorthSnapshotCause.migration},
+        const {
+          NetWorthSnapshotCause.liability,
+          NetWorthSnapshotCause.migration
+        },
       );
     }
     notifyListeners();
@@ -18388,9 +18930,8 @@ class AppRepository extends ChangeNotifier {
   /// 歧义账户（[LiabilityMigrationBranch.ambiguousNeedsUser]）不在此处理，
   /// 由 UI 逐一引导。
   Future<int> runAllSafeMigrations() async {
-    final plan = buildMigrationPlan()
-        .where((item) => item.branch.isAutoSafe)
-        .toList();
+    final plan =
+        buildMigrationPlan().where((item) => item.branch.isAutoSafe).toList();
     if (plan.isEmpty) return 0;
     for (final item in plan) {
       await executeSafeMigration(item, bumpScope: false);
@@ -18481,8 +19022,7 @@ class AppRepository extends ChangeNotifier {
     if (person.isEmpty) throw ArgumentError('借入对象姓名不能为空');
     amount = normalizeMoneyAmount(amount);
     if (amount <= Decimal.zero) throw ArgumentError('借入金额必须大于 0');
-    if (toAccountId != null &&
-        !_isSupportedTransactionAccountId(toAccountId)) {
+    if (toAccountId != null && !_isSupportedTransactionAccountId(toAccountId)) {
       throw ArgumentError('入账账户不存在或币种不受支持');
     }
     final baseName = '借入·$person';

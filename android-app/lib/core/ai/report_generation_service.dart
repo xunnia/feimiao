@@ -30,7 +30,7 @@ class ReportGenerationService {
     if (!executionLease.matchesJob(jobId: job.id, jobUuid: job.uuid)) {
       throw const ReportGenerationInvalidated('report job lease mismatch');
     }
-    final config = repo.aiProviderConfigFor(AiTaskType.report);
+    final config = repo.aiProviderConfigFor(AiTaskType.chatQuery);
     if (!config.hasKey) {
       await repo.guardReportGeneration(
         executionLease,

@@ -1,12 +1,44 @@
 # 肥喵记账 Codex 当前交接文档
 
-更新时间：2026-08-13（AI 后端优化完成）
+更新时间：2026-08-14（Claude API 适配完成）
 当前 Android 工程：`C:\src\xunni-codex\android-app`  
 新会话第一入口：`docs/claude/CLAUDE_START_HERE.md`
 
 > 本文只保留当前有效状态。历史流水看 `CHANGELOG_CODEX.md` 和 git 历史。
 
 ## 1. 当前交付状态
+
+### 2026-08-14 Claude API 适配（✅ 已完成，未构建 APK，DB 仍 v43）
+
+- **背景**：在 AI 多服务商架构基础上，为应用添加 Claude API 原生支持，使其可以同时使用 OpenAI 兼容接口和 Claude 原生接口。
+- **核心改动**：
+  - `ai_provider_config.dart`：新增 `isClaudeModel` getter（检测模型名和 baseUrl），新增 `messagesUri` 统一端点，删除重复定义，统一使用 `messagesUri` 替代 `claudeMessagesUri`。
+  - `llm_query_v2.dart`：`_postWithModelFallback` 在发送前转换 Claude 格式，`_postChat` 适配 Claude 请求头和响应解析，`_streamChat` 直接构建 Claude 格式并支持流式响应，新增 `_convertToClaudeFormat` 格式转换函数，支持 `thinking` 参数映射。
+  - `llm_entry_parser.dart`：`_postChatContent` 支持 Claude 格式转换和响应解析，修复认证头（Claude 使用 `x-api-key` 而非 `Authorization: Bearer`），新增 `_convertToClaudeFormat` 和 `_stringContent` 辅助函数。
+  - `llm_query.dart`：统一使用 `messagesUri` 替代 `claudeMessagesUri`。
+  - `meow_assistant_view.dart`：添加 `record_extras_sheet.dart` 导入（修复编译错误）。
+- **格式差异**：端点（`/v1/messages` vs `/v1/chat/completions`）、认证（`x-api-key` vs `Authorization: Bearer`）、消息结构（`system` 独立字段 vs 混在 `messages` 中）、响应格式（`content[0].text` vs `choices[0].message.content`）。
+- **验证**：`flutter analyze` **0 error**（25 issues 仅 warning/info）；AI 模块测试 **75/75** 全过（异常 8 + 数据脱敏 17 + 日志 25 + 重试 14 + 集成 6 + 配置 3 + 裁剪 12）。
+- **详细文档**：`docs/claude/Claude_API_适配总结.md`。
+- **未构建 APK**：代码改动已完成并验证，等待与其他功能一起出包。
+
+### 2026-08-14 项目治理与仓库清理（仅文档/维护）
+
+- 新增 `docs/PROJECT_MANAGEMENT.md` 作为项目管理总纲；工程 README、docs 索引和 `CLAUDE_START_HERE.md` 已接入。以后项目状态/范围/流程/路线/风险/产物保留读总纲，当前实现细节继续读本文件，财务与 UI 分别服从既有锁定标准。
+- 删除 `android-app/build`、`.dart_tool`、`android/.gradle`、重复归档和日志；保留 v1.214 当前 APK 与 v1.213 上一 APK。标准 `git gc --prune=now` 完成且 `git fsck` 通过。
+- 仓库约 5.73 GiB → 0.85 GiB，释放约 4.88 GiB；`.git` 约 3.15 GiB → 615 MiB。根 `.gitignore` 已阻止新 APK/AAB、本地 release 和生成证据进入提交。
+- 本次未动业务代码，不重跑 Flutter 测试/构建；清理后首次运行 Flutter 命令先执行 `flutter pub get`。
+
+### 2026-08-14 AI 多服务商与喵助手模型切换（✅ 功能与门禁完成，v1.214.0+227 / b0814-227 / DB 仍 v43）
+
+- **账号设置重构**：支持任意数量的 OpenAI 兼容服务商；DeepSeek 是唯一内置且不可删除的服务商，自定义服务商可新增、折叠、编辑和删除。API Key、基础地址和服务名称统一使用透明 `iosInputDecoration`；密钥按稳定 provider ID 独立存储，元数据 JSON 和完整备份都不包含密钥。
+- **模型管理闭环**：每个服务商独立请求 `{baseUrl}/v1/models`（已有 `/v1` 时不重复拼接），使用 Bearer Key；模型弹层显示数量、支持逐项删除、从上游增量刷新与保存。模型列表按服务商隔离，同名模型使用 `(providerId, model)` 身份，不会串线。
+- **用途分配简化**：只保留普通记账服务商选择，未配置 Key 的服务商不可选；高级参数入口移除。喵助手和报告生成统一跟随喵助手输入框当前选中的服务商、模型与 Effort。
+- **喵助手模型切换**：Claude 风模型/Effort 弹层跨服务商分组展示；点模型即刻持久化 `chat_current_provider_id + chat_current_model`，下一条消息立即使用。删除当前服务商会回退到其他可用服务商；重启后选择保持。
+- **闲聊解除**：本地先做 record/query/chat 三态分流。普通闲聊和知识问答直接走当前聊天模型且不附带账本上下文；只有明确记账才调用普通记账服务商，避免闲聊被双发或误写成账。切换实际接收数据的服务商会重置隐私授权，同服务商内换模型不重复弹授权。
+- **验证**：本批定向回归 **42/42** 通过，覆盖 provider 重启持久化/删除回退/DeepSeek 禁删/同名模型、隐私授权切换、模型接口 URL/Bearer/去重/401、备份格式、闲聊数字误判与原记账/查账语义。`flutter analyze --no-pub --no-fatal-infos --no-fatal-warnings` **0 error**；按用户明确要求没有重复已完成的 581 项全量测试。
+- **Release APK**：`C:\src\xunni-codex\ci-artifacts\releases\feimiao-codex-v1.214.0-227.apk`，113,928,115 字节，SHA256 `E81925A62DA5C0EC2E3BFB9D8E1A4C759713BA7DF3A829076C024CC3413B9B1A`。项目严格验包通过：`com.qingji.qingji.codex / 227 / 1.214.0`、16 KiB ZIP 对齐、APK Signature Scheme v2、唯一签名者和固定 Codex 证书 SHA256 `4E99C399D4D246BD9C6B08B1D641248BD0846E7AE650C3A766E30FA67483D507`。
+- **真机边界**：用户自行安装验收，本轮不做模拟器或截图验收。重点验证步骤见本节最终产物说明。
 
 ### 2026-08-13 CI 失败修复（✅ 已完成，v1.210.0+222 / a2e7ccb / DB 仍 v43）
 

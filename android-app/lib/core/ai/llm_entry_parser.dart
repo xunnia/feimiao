@@ -259,15 +259,32 @@ $catList
     required Map<String, dynamic> body,
   }) async {
     late http.Response response;
+
+    // Claude 格式转换
+    var requestBody = body;
+    var uri = provider.chatCompletionsUri;
+    if (provider.isClaudeModel) {
+      requestBody = _convertToClaudeFormat(body, provider);
+      uri = provider.messagesUri;
+    }
+
     try {
+      final headers = <String, String>{
+        'Content-Type': 'application/json',
+      };
+
+      if (provider.isClaudeModel) {
+        headers['x-api-key'] = provider.apiKey;
+        headers['anthropic-version'] = '2023-06-01';
+      } else {
+        headers['Authorization'] = 'Bearer ${provider.apiKey}';
+      }
+
       response = await http
           .post(
-            provider.chatCompletionsUri,
-            headers: {
-              'Authorization': 'Bearer ${provider.apiKey}',
-              'Content-Type': 'application/json',
-            },
-            body: jsonEncode(body),
+            uri,
+            headers: headers,
+            body: jsonEncode(requestBody),
           )
           .timeout(const Duration(seconds: _timeoutSeconds));
     } catch (e) {
@@ -284,13 +301,30 @@ $catList
       );
     }
 
-    // 取 choices[0].message.content
+    // 解析响应
     late Map<String, dynamic> outer;
     try {
       outer = jsonDecode(bodyText) as Map<String, dynamic>;
     } catch (e) {
       throw LlmParseException('响应 JSON 解析失败：$e');
     }
+
+    // Claude 格式：content[0].text
+    if (provider.isClaudeModel) {
+      try {
+        final content = outer['content'] as List;
+        for (final block in content) {
+          if (block is Map<String, dynamic> && block['type'] == 'text') {
+            return block['text'] as String;
+          }
+        }
+        throw LlmParseException('Claude 响应中未找到 text 内容块');
+      } catch (e) {
+        throw LlmParseException('Claude 响应结构异常：$e');
+      }
+    }
+
+    // OpenAI 格式：choices[0].message.content
     try {
       return (outer['choices'] as List).first['message']['content'] as String;
     } catch (e) {
@@ -395,3 +429,72 @@ class LlmParseException implements Exception {
   @override
   String toString() => 'LlmParseException: $message';
 }
+
+/// 将 OpenAI 格式的请求体转换为 Claude 格式
+Map<String, dynamic> _convertToClaudeFormat(
+  Map<String, dynamic> openaiBody,
+  AiProviderConfig config,
+) {
+  final messages = openaiBody['messages'] as List<dynamic>?;
+  if (messages == null) return openaiBody;
+
+  // 分离 system 和 非 system 消息
+  final systemMessages = <String>[];
+  final userMessages = <Map<String, dynamic>>[];
+
+  for (final msg in messages) {
+    if (msg is! Map<String, dynamic>) continue;
+    final role = msg['role'] as String?;
+    final content = msg['content'];
+
+    if (role == 'system') {
+      systemMessages.add(_stringContent(content));
+    } else {
+      userMessages.add(msg);
+    }
+  }
+
+  final claudeBody = <String, dynamic>{
+    'model': openaiBody['model'],
+    'messages': userMessages,
+    'max_tokens': 4096,
+  };
+
+  // 合并所有 system prompt
+  if (systemMessages.isNotEmpty) {
+    claudeBody['system'] = systemMessages.join('\n\n');
+  }
+
+  // thinking 参数映射
+  if (config.reasoningEffort != AiReasoningEffort.none) {
+    final budgetTokens = switch (config.reasoningEffort) {
+      AiReasoningEffort.minimal => 1024,
+      AiReasoningEffort.low => 4096,
+      AiReasoningEffort.medium => 8192,
+      AiReasoningEffort.high => 16384,
+      AiReasoningEffort.xhigh => 32768,
+      AiReasoningEffort.ultra => 65536,
+      _ => 8192,
+    };
+    claudeBody['thinking'] = {
+      'type': 'enabled',
+      'budget_tokens': budgetTokens,
+    };
+  }
+
+  return claudeBody;
+}
+
+/// 辅助函数：从 content 提取字符串
+String _stringContent(dynamic content) {
+  if (content is String) return content;
+  if (content is List) {
+    return content
+        .whereType<Map<String, dynamic>>()
+        .where((m) => m['type'] == 'text')
+        .map((m) => m['text'] as String? ?? '')
+        .join(' ');
+  }
+  return '';
+}
+

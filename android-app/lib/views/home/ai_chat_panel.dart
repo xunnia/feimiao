@@ -51,6 +51,7 @@ import '../../widgets/ios_menu.dart';
 import '../../widgets/mascot.dart';
 import '../../widgets/pressable_scale.dart';
 import '../../widgets/refund_settlement_sheet.dart';
+import '../../widgets/settings_ui.dart';
 import '../common/category_picker_sheet.dart';
 import '../reports/report_views.dart';
 import '../settings/ai_privacy_consent.dart';
@@ -1075,30 +1076,118 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
     widget.onSwitchToManual();
   }
 
-  void _showModelPicker(BuildContext context) {
+  void _showModelPicker(BuildContext anchor) {
     final repo = context.read<AppRepository>();
-    final models = repo.availableModels;
-    if (models.isEmpty) {
+    final options = repo.aiChatModelOptions;
+    if (options.isEmpty) {
       showAppToast(context, '先去 AI 账号设置获取模型列表', icon: Icons.info_outline);
       return;
     }
-    final currentModel = repo.aiProviderConfigFor(AiTaskType.chatQuery).model;
-    showModalBottomSheet<void>(
-      context: context,
-      useSafeArea: true,
-      backgroundColor: Colors.transparent,
-      builder: (ctx) => _ModelPickerSheet(
-        models: models,
-        currentModel: currentModel,
-        currentEffort: repo.aiReasoningEffortFor(AiTaskType.chatQuery),
-        onSelected: (model, effort) async {
-          // 只更新模型和思考强度，不碰 API Key
-          await repo.saveAiAdvancedConfig(
-            customModel: model,
-            chatReasoningEffort: effort,
+    final currentConfig = repo.aiProviderConfigFor(AiTaskType.chatQuery);
+    final currentKey =
+        '${repo.chatCurrentProviderId} ${repo.chatCurrentModel ?? currentConfig.model}';
+
+    // 小气泡弹窗：对齐 Claude 桌面端 Models 列表
+    _showFloatingPopup(
+      anchor: anchor,
+      width: 260,
+      child: _ModelMenuCard(
+        options: options,
+        currentKey: currentKey,
+        onSelected: (option) async {
+          final effort = repo.aiReasoningEffortFor(AiTaskType.chatQuery);
+          await repo.saveChatModelSelection(
+            providerId: option.providerId,
+            model: option.model,
+            reasoningEffort: effort,
           );
         },
       ),
+    );
+  }
+
+  /// Effort 小气泡弹窗：对齐 Claude 桌面端 Effort 滑块面板
+  void _showEffortMenu(BuildContext anchor) {
+    final repo = context.read<AppRepository>();
+    final current = repo.aiReasoningEffortFor(AiTaskType.chatQuery);
+
+    _showFloatingPopup(
+      anchor: anchor,
+      width: 260,
+      child: _EffortPopupCard(
+        currentEffort: current,
+        onChanged: (effort) async {
+          final providerId = repo.chatCurrentProviderId ?? '';
+          final model = repo.chatCurrentModel ??
+              repo.aiProviderConfigFor(AiTaskType.chatQuery).model;
+          if (providerId.isEmpty || model.isEmpty) return;
+          await repo.saveChatModelSelection(
+            providerId: providerId,
+            model: model,
+            reasoningEffort: effort,
+          );
+        },
+      ),
+    );
+  }
+
+  /// 通用浮动气泡：计算锚点位置，从下方向上弹出
+  void _showFloatingPopup({
+    required BuildContext anchor,
+    required double width,
+    required Widget child,
+  }) {
+    final box = anchor.findRenderObject() as RenderBox?;
+    if (box == null) return;
+    final pos = box.localToGlobal(Offset.zero);
+    final anchorTop = pos.dy;
+    final anchorLeft = pos.dx;
+    final screen = MediaQuery.of(context).size;
+    const margin = 8.0;
+
+    double left = anchorLeft;
+    if (left + width > screen.width - margin) {
+      left = screen.width - margin - width;
+    }
+    if (left < margin) left = margin;
+
+    showGeneralDialog<void>(
+      context: context,
+      barrierDismissible: true,
+      barrierLabel: '关闭',
+      barrierColor: Colors.transparent,
+      transitionDuration: const Duration(milliseconds: 160),
+      pageBuilder: (_, __, ___) => const SizedBox.shrink(),
+      transitionBuilder: (ctx, anim, _, __) {
+        final curved =
+            CurvedAnimation(parent: anim, curve: Curves.easeOutBack);
+        return Stack(
+          children: [
+            Positioned(
+              left: left,
+              top: anchorTop - 8,
+              child: FractionalTranslation(
+                translation: const Offset(0, -1),
+                child: FadeTransition(
+                  opacity: anim,
+                  child: ScaleTransition(
+                    alignment: Alignment.bottomLeft,
+                    scale:
+                        Tween<double>(begin: 0.82, end: 1.0).animate(curved),
+                    child: ConstrainedBox(
+                      constraints: BoxConstraints(
+                        maxWidth: width,
+                        maxHeight: screen.height * 0.6,
+                      ),
+                      child: child,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        );
+      },
     );
   }
 
@@ -1521,21 +1610,22 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
       return;
     }
 
+    final localIntent = _localIntent(text);
+    if (localIntent == ChatIntentKind.query) {
+      await _runQuery(text, repository: repo);
+      return;
+    }
+    if (localIntent == ChatIntentKind.chat) {
+      await _runQuery(text, repository: repo, chatOnly: true);
+      return;
+    }
+
     final aiConfig = repo.aiProviderConfigFor(AiTaskType.recordParse);
-    // 有 key：让大模型在同一次调用里判「记账/查账」并解析（意图判断最准，
-    // 不再靠脆弱的关键词，"坐公交花了一块"这类不会再被误当查账）。
+    // 本地已经确认是记账，再交给普通记账服务商提取金额与分类。闲聊和
+    // 查账不会先经过这里，避免发给错误服务商并产生一次多余请求。
     if (aiConfig.hasKey) {
       final consented = await ensureAiPrivacyConsent(context);
       if (!mounted) return;
-      if (!consented && _looksLikeQuery(text)) {
-        setState(() {
-          _msgs.removeWhere((m) => m is _ThinkingMsg);
-          _msgs.add(_InfoMsg('未同意 AI 隐私说明，喵不会把账本内容发出去。'));
-          _busy = false;
-        });
-        _scrollToLatestUserMessage();
-        return;
-      }
       try {
         if (consented) {
           _setThinkingKind(_ThinkingKind.recordParse);
@@ -1562,26 +1652,19 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
         // 调用失败 → 落到下面的离线兜底
       }
     }
-    // 无 key / 调用失败：关键词判意图（ChatIntent）+ 本地规则兜底。
-    if (_looksLikeQuery(text)) {
-      await _runQuery(text, repository: repo);
-    } else {
-      final hint = !aiConfig.hasKey
-          ? '还没配 AI key，喵先用本地规则记（单笔）'
-          : 'AI 没连上, 喵先用本地规则记了（单笔）';
-      await _applyRecord(
-        [NaturalLanguageEntryParser.parse(text)],
-        hint: hint,
-        repository: repo,
-      );
-    }
+    // 无 key、拒绝上传或调用失败：只在本机解析这笔记录。
+    final hint =
+        !aiConfig.hasKey ? '还没配 AI key，喵先用本地规则记（单笔）' : 'AI 没连上, 喵先用本地规则记了（单笔）';
+    await _applyRecord(
+      [NaturalLanguageEntryParser.parse(text)],
+      hint: hint,
+      repository: repo,
+    );
   }
 
-  /// 意图判断：是「记账」还是「查账」。逻辑见 [ChatIntent]（纯逻辑，有单测）。
-  /// 记账优先——"花了/吃/打车 + 金额(含口语一块)"都算记账，只有真在问数据才查账。
-  bool _looksLikeQuery(String t) => ChatIntent.isQuery(
-        t,
-        hasArabicAmount: NaturalLanguageEntryParser.extractAmount(t) != null,
+  ChatIntentKind _localIntent(String text) => ChatIntent.classify(
+        text,
+        hasArabicAmount: NaturalLanguageEntryParser.extractAmount(text) != null,
       );
 
   RefundMatchResult _matchRefund(AppRepository repo, String text) {
@@ -1837,12 +1920,13 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
         if (mounted) {
           setState(() {
             _msgs.removeWhere((m) => m is _ThinkingMsg);
-            _msgs.add(_InfoMsg('还没配 AI key，喵先用本地规则记（单笔）'));
+            _msgs.add(_InfoMsg('还没有可用的喵助手模型，请先到 AI 账号设置中配置'));
             _busy = false;
           });
         }
         return;
       }
+      // 闲聊不带账本数据，无需隐私授权确认
       _setThinkingKind(_ThinkingKind.queryAnswer);
       String answer;
       try {
@@ -1850,6 +1934,7 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
           question: text,
           config: aiConfig,
           transactionsText: '',
+          priorTurns: _recentTurns(),
         );
       } on LlmQueryException catch (e) {
         answer = _friendlyAiError(e);
@@ -1878,9 +1963,7 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
     final reportBookId = resumeJob != null
         ? resumeJob.bookId
         : (reportType == null ? null : repo.currentBook?.id);
-    if (reportType != null) {
-      aiConfig = repo.aiProviderConfigFor(AiTaskType.report);
-    }
+    // 报告也跟随喵助手当前选中的服务商和模型；普通记账解析仍使用独立配置。
     // 隐私闸门下沉到每个真正上传数据的入口：查账/报告都要先同意，不能只靠
     // _send 的记账分支拦。未同意就不发起请求；resume 的任务保持 pending
     // （启动恢复路径已在 _resumePendingReportJob 里提前拦掉，不会到这弹窗）。
@@ -1988,6 +2071,7 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
             question: text,
             config: aiConfig,
             transactionsText: transactionsText,
+            priorTurns: _recentTurns(),
           );
         } else {
           _setThinkingKind(_ThinkingKind.reportGenerate);
@@ -3745,10 +3829,22 @@ ${line('上月同期', lastStart, lastSameDayEnd, lastSameDay)}
                     onTap: () => showRecordExtrasSheet(context),
                   ),
                   const SizedBox(width: 6),
-                  _ModelPill(
-                    repo: context.watch<AppRepository>(),
-                    onTap: () => _showModelPicker(context),
-                  ),
+                  if (widget.fullScreen) ...[
+                    Builder(
+                      builder: (btnCtx) => _ModelPill(
+                        repo: context.watch<AppRepository>(),
+                        onTap: () => _showModelPicker(btnCtx),
+                      ),
+                    ),
+                    const SizedBox(width: 4),
+                    Builder(
+                      builder: (btnCtx) => _EffortLabel(
+                        repo: context.watch<AppRepository>(),
+                        onTap: () => _showEffortMenu(btnCtx),
+                      ),
+                    ),
+                  ] else
+                    _AiModeSwitchPill(onTap: _switchToManual),
                   const Spacer(),
                   ValueListenableBuilder<bool>(
                     valueListenable: _hasInputText,
@@ -3767,6 +3863,21 @@ ${line('上月同期', lastStart, lastSameDayEnd, lastSameDay)}
     );
   }
 
+  /// 取最近 N 轮对话（user+assistant 交替），用于多轮上下文。
+  /// 只取 _UserMsg / _AnswerMsg，跳过记账卡/报告/信息提示等。
+  List<Map<String, String>> _recentTurns({int maxTurns = 6}) {
+    final result = <Map<String, String>>[];
+    for (final msg in _msgs.reversed) {
+      if (result.length >= maxTurns * 2) break;
+      if (msg is _AnswerMsg) {
+        result.insert(0, {'role': 'assistant', 'content': msg.text});
+      } else if (msg is _UserMsg) {
+        result.insert(0, {'role': 'user', 'content': msg.text});
+      }
+    }
+    return result;
+  }
+
   void _regenerate(_AnswerMsg m) {
     if (_busy || m.question.isEmpty) return;
     setState(() {
@@ -3782,7 +3893,7 @@ ${line('上月同期', lastStart, lastSameDayEnd, lastSameDay)}
   Future<void> _regenerateReport(_ReportMsg m) async {
     if (_busy || m.question.isEmpty) return;
     final repo = context.read<AppRepository>();
-    final aiConfig = repo.aiProviderConfigFor(AiTaskType.report);
+    final aiConfig = repo.aiProviderConfigFor(AiTaskType.chatQuery);
     if (!aiConfig.hasKey) {
       showAppToast(context, '先去「我的 → AI 记账设置」填写 API Key');
       return;
@@ -5539,59 +5650,15 @@ class _HeaderActionCluster extends StatelessWidget {
   }
 }
 
-class _Pill extends StatelessWidget {
-  final bool isAi;
+/// 主页嵌入式 AI 面板底栏：「AI 记账」胶囊，点击切回手动模式。
+/// 只在 !fullScreen 时使用，fullScreen（喵助手）用 _ModelPill。
+class _AiModeSwitchPill extends StatelessWidget {
   final VoidCallback onTap;
-
-  const _Pill({required this.isAi, required this.onTap});
+  const _AiModeSwitchPill({required this.onTap});
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    return PressableScale(
-      onPressed: onTap,
-      child: GlassSurface(
-        radius: 15,
-        blur: 0, // 面板背景已经模糊过，无需叠加
-        padding: const EdgeInsets.symmetric(horizontal: 11),
-        child: SizedBox(
-          height: 31,
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(
-                isAi ? Icons.auto_awesome : Icons.edit_outlined,
-                size: 14,
-                color: scheme.onSurfaceVariant,
-              ),
-              const SizedBox(width: 6),
-              Text(
-                isAi ? 'AI 记账' : '手动记账',
-                style: TextStyle(fontSize: 12, color: scheme.onSurfaceVariant),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-/// 模型切换药丸按钮（替代原来的 [AI 记账] 按钮）
-class _ModelPill extends StatelessWidget {
-  final AppRepository repo;
-  final VoidCallback onTap;
-
-  const _ModelPill({required this.repo, required this.onTap});
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    final config = repo.aiProviderConfigFor(AiTaskType.chatQuery);
-    final model = config.model.trim();
-    // 最多显示 12 个字符
-    final label = model.length > 12 ? '${model.substring(0, 12)}…' : model;
-
     return PressableScale(
       onPressed: onTap,
       child: GlassSurface(
@@ -5603,20 +5670,579 @@ class _ModelPill extends StatelessWidget {
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(Icons.smart_toy_outlined, size: 14, color: scheme.onSurfaceVariant),
+              Icon(Icons.auto_awesome,
+                  size: 13, color: scheme.onSurfaceVariant),
               const SizedBox(width: 5),
               Text(
-                label.isEmpty ? '选择模型' : label,
-                style: TextStyle(fontSize: 12, color: scheme.onSurfaceVariant),
+                'AI 记账',
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w300,
+                  color: scheme.onSurfaceVariant,
+                ),
               ),
-              const SizedBox(width: 2),
-              Icon(Icons.arrow_drop_down, size: 16, color: scheme.onSurfaceVariant),
             ],
           ),
         ),
       ),
     );
   }
+}
+
+/// 模型切换药丸：只显示模型名，无图标无箭头
+class _ModelPill extends StatelessWidget {
+  final AppRepository repo;
+  final VoidCallback onTap;
+
+  const _ModelPill({required this.repo, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final config = repo.aiProviderConfigFor(AiTaskType.chatQuery);
+    final model = config.model.trim();
+    final label = model.length > 22 ? '${model.substring(0, 22)}…' : model;
+
+    return PressableScale(
+      onPressed: onTap,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 6),
+        child: Text(
+          label.isEmpty ? '选择模型' : label,
+          style: TextStyle(fontSize: 12, color: scheme.onSurfaceVariant),
+        ),
+      ),
+    );
+  }
+}
+
+/// Effort 文字标签：无外框，点击弹气泡弹窗
+class _EffortLabel extends StatelessWidget {
+  final AppRepository repo;
+  final VoidCallback onTap;
+
+  const _EffortLabel({required this.repo, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final effort = repo.aiReasoningEffortFor(AiTaskType.chatQuery);
+    final label = switch (effort) {
+      AiReasoningEffort.none => 'Low', // 默认显示 Low
+      AiReasoningEffort.minimal => 'Low',
+      AiReasoningEffort.low => 'Low',
+      AiReasoningEffort.medium => 'Medium',
+      AiReasoningEffort.high => 'High',
+      AiReasoningEffort.xhigh => 'Extra',
+      AiReasoningEffort.max => 'Max',
+      AiReasoningEffort.ultra => 'Ultra',
+    };
+
+    return PressableScale(
+      onPressed: onTap,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 6),
+        child: Text(
+          label,
+          style: TextStyle(fontSize: 12, color: scheme.onSurfaceVariant),
+        ),
+      ),
+    );
+  }
+}
+
+/// 模型列表气泡卡：白色圆角卡，标题 Models，每行模型名+序号+当前✓
+class _ModelMenuCard extends StatelessWidget {
+  final List<AiModelOption> options;
+  final String currentKey;
+  final ValueChanged<AiModelOption> onSelected;
+
+  const _ModelMenuCard({
+    required this.options,
+    required this.currentKey,
+    required this.onSelected,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Material(
+      type: MaterialType.transparency,
+      child: Container(
+        decoration: BoxDecoration(
+          color: scheme.surface.withValues(alpha: 0.92),
+          borderRadius: BorderRadius.circular(14),
+          boxShadow: const [
+            BoxShadow(
+              color: Color(0x22000000),
+              blurRadius: 20,
+              offset: Offset(0, 6),
+            ),
+          ],
+        ),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(14),
+          child: BackdropFilter(
+            filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(14, 10, 14, 4),
+                  child: Text(
+                    'Models',
+                    style: AppType.caption(scheme),
+                  ),
+                ),
+                for (var i = 0; i < options.length; i++)
+                  _ModelMenuRow(
+                    model: options[i].model,
+                    index: i + 1,
+                    selected: options[i].key == currentKey,
+                    onTap: () {
+                      Navigator.of(context).pop();
+                      onSelected(options[i]);
+                    },
+                  ),
+                const SizedBox(height: 6),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _ModelMenuRow extends StatelessWidget {
+  final String model;
+  final int index;
+  final bool selected;
+  final VoidCallback onTap;
+
+  const _ModelMenuRow({
+    required this.model,
+    required this.index,
+    required this.selected,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return InkWell(
+      onTap: onTap,
+      splashFactory: NoSplash.splashFactory,
+      highlightColor: AppColors.hairline(scheme),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
+        child: Row(
+          children: [
+            // 选中标记移到最左边（数字左侧）
+            SizedBox(
+              width: 18,
+              child: selected
+                  ? Icon(CupertinoIcons.checkmark,
+                      size: 12, color: scheme.primary)
+                  : null,
+            ),
+            const SizedBox(width: 6),
+            Text(
+              '$index',
+              style: TextStyle(
+                fontSize: 12,
+                color: scheme.onSurfaceVariant.withValues(alpha: 0.55),
+              ),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                model,
+                style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w400,
+                  color: scheme.onSurface,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Effort 气泡卡：白色圆角卡，标题 Effort+当前档，横向滑块 Faster→Smarter
+/// 档位：Low/Medium/High/Extra/Max/Ultra（去掉 Minimal，共 6 档）
+class _EffortPopupCard extends StatefulWidget {
+  final AiReasoningEffort currentEffort;
+  final ValueChanged<AiReasoningEffort> onChanged;
+
+  const _EffortPopupCard({
+    required this.currentEffort,
+    required this.onChanged,
+  });
+
+  @override
+  State<_EffortPopupCard> createState() => _EffortPopupCardState();
+}
+
+class _EffortPopupCardState extends State<_EffortPopupCard>
+    with TickerProviderStateMixin {
+  // Low/Medium/High/Extra/Max/Ultra 六档（去掉 Minimal）
+  static const _levels = [
+    (AiReasoningEffort.low, 'Low'),
+    (AiReasoningEffort.medium, 'Medium'),
+    (AiReasoningEffort.high, 'High'),
+    (AiReasoningEffort.xhigh, 'Extra'),
+    (AiReasoningEffort.max, 'Max'),
+    (AiReasoningEffort.ultra, 'Ultra'),
+  ];
+
+  late int _index;
+  late AnimationController _ultraCtrl;
+
+  @override
+  void initState() {
+    super.initState();
+    _index = _levels.indexWhere((e) => e.$1 == widget.currentEffort);
+    if (_index < 0) _index = 0; // 默认 Low
+    _ultraCtrl = AnimationController(
+      vsync: this,
+      duration: const Duration(seconds: 2),
+    )..repeat();
+  }
+
+  @override
+  void dispose() {
+    _ultraCtrl.dispose();
+    super.dispose();
+  }
+
+  bool get _isUltra => _levels[_index].$1 == AiReasoningEffort.ultra;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final currentLabel = _levels[_index].$2;
+    final isUltra = _isUltra;
+
+    return Material(
+      type: MaterialType.transparency,
+      child: Container(
+        decoration: BoxDecoration(
+          color: scheme.surface.withValues(alpha: 0.92),
+          borderRadius: BorderRadius.circular(14),
+          boxShadow: const [
+            BoxShadow(
+              color: Color(0x22000000),
+              blurRadius: 20,
+              offset: Offset(0, 6),
+            ),
+          ],
+        ),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(14),
+          child: BackdropFilter(
+            filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 14),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // 标题行：Effort（灰色 w100）+ 当前档（深黑/紫色）
+                  Row(
+                    children: [
+                      Text(
+                        'Effort',
+                        style: TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w400,
+                          color: scheme.onSurfaceVariant,
+                        ),
+                      ),
+                      const SizedBox(width: 6),
+                      if (isUltra)
+                        AnimatedBuilder(
+                          animation: _ultraCtrl,
+                          builder: (_, __) => ShaderMask(
+                            shaderCallback: (bounds) => LinearGradient(
+                              begin: Alignment(
+                                  -1.0 + _ultraCtrl.value * 2, 0),
+                              end: Alignment(
+                                  1.0 + _ultraCtrl.value * 2, 0),
+                              colors: const [
+                                Color(0xFF9B59B6),
+                                Color(0xFFCE93D8),
+                                Color(0xFF7E57C2),
+                                Color(0xFF9B59B6),
+                              ],
+                            ).createShader(bounds),
+                            child: Text(
+                              currentLabel,
+                              style: const TextStyle(
+                                fontSize: 14,
+                                fontWeight: FontWeight.w600,
+                                color: Colors.white,
+                              ),
+                            ),
+                          ),
+                        )
+                      else
+                        Text(
+                          currentLabel,
+                          style: TextStyle(
+                            fontSize: 14,
+                            fontWeight: FontWeight.w600,
+                            color: scheme.onSurface,
+                          ),
+                        ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  // Faster / Smarter 标签在滑条上方
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 4),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Text('Faster',
+                            style: TextStyle(
+                                fontSize: 11,
+                                color: scheme.onSurfaceVariant
+                                    .withValues(alpha: 0.6))),
+                        Text('Smarter',
+                            style: TextStyle(
+                                fontSize: 11,
+                                color: scheme.onSurfaceVariant
+                                    .withValues(alpha: 0.6))),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  // 自定义滑条
+                  SizedBox(
+                    height: 36,
+                    child: _EffortSlider(
+                      index: _index,
+                      count: _levels.length,
+                      isUltra: isUltra,
+                      ultraAnimation: _ultraCtrl,
+                      onChanged: (i) {
+                        setState(() => _index = i);
+                        widget.onChanged(_levels[i].$1);
+                      },
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// 自定义 Effort 滑条：圆角方形 thumb，深浅灰轨道，刻度点，Ultra 紫色动画
+class _EffortSlider extends StatefulWidget {
+  final int index;
+  final int count;
+  final bool isUltra;
+  final Animation<double> ultraAnimation;
+  final ValueChanged<int> onChanged;
+
+  const _EffortSlider({
+    required this.index,
+    required this.count,
+    required this.isUltra,
+    required this.ultraAnimation,
+    required this.onChanged,
+  });
+
+  @override
+  State<_EffortSlider> createState() => _EffortSliderState();
+}
+
+class _EffortSliderState extends State<_EffortSlider> {
+  late int _drag;
+
+  @override
+  void initState() {
+    super.initState();
+    _drag = widget.index;
+  }
+
+  @override
+  void didUpdateWidget(_EffortSlider oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.index != widget.index) _drag = widget.index;
+  }
+
+  void _handleTapOrDrag(Offset local, double width) {
+    final step = width / (widget.count - 1);
+    final i = (local.dx / step).round().clamp(0, widget.count - 1);
+    if (i != _drag) {
+      setState(() => _drag = i);
+      widget.onChanged(i);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTapDown: (d) =>
+          _handleTapOrDrag(d.localPosition, context.size?.width ?? 200),
+      onHorizontalDragUpdate: (d) =>
+          _handleTapOrDrag(d.localPosition, context.size?.width ?? 200),
+      child: AnimatedBuilder(
+        animation: widget.ultraAnimation,
+        builder: (_, __) => CustomPaint(
+          painter: _EffortTrackPainter(
+            index: _drag,
+            count: widget.count,
+            isUltra: widget.isUltra,
+            ultraT: widget.ultraAnimation.value,
+            scheme: Theme.of(context).colorScheme,
+          ),
+          child: const SizedBox.expand(),
+        ),
+      ),
+    );
+  }
+}
+
+class _EffortTrackPainter extends CustomPainter {
+  final int index;
+  final int count;
+  final bool isUltra;
+  final double ultraT;
+  final ColorScheme scheme;
+
+  const _EffortTrackPainter({
+    required this.index,
+    required this.count,
+    required this.isUltra,
+    required this.ultraT,
+    required this.scheme,
+  });
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    const trackH = 8.0; // 更粗的轨道
+    const thumbW = 18.0; // 方形 thumb 宽度
+    const thumbH = 18.0; // 方形 thumb 高度
+    const thumbR = 5.0; // 圆角半径
+    final cy = size.height / 2;
+    final step = size.width / (count - 1);
+    final thumbX = index * step;
+
+    // 轨道背景（浅灰）
+    final trackPaint = Paint()
+      ..color = scheme.onSurface.withValues(alpha: 0.16)
+      ..strokeCap = StrokeCap.round;
+    final trackRect =
+        Rect.fromLTWH(0, cy - trackH / 2, size.width, trackH);
+    canvas.drawRRect(
+        RRect.fromRectAndRadius(trackRect, const Radius.circular(4)),
+        trackPaint);
+
+    // 已滑过部分（深灰略蓝 or 紫色渐变）
+    if (thumbX > 0) {
+      if (isUltra) {
+        final gradient = LinearGradient(
+          begin: Alignment(-1 + ultraT * 1.4, 0),
+          end: Alignment(1 + ultraT * 1.4, 0),
+          colors: const [
+            Color(0xFF7B1FA2),
+            Color(0xFFCE93D8),
+            Color(0xFF9B59B6),
+            Color(0xFF7E57C2),
+          ],
+        );
+        final activeRect =
+            Rect.fromLTWH(0, cy - trackH / 2, thumbX, trackH);
+        final activePaint = Paint()
+          ..shader =
+              gradient.createShader(Rect.fromLTWH(0, 0, size.width, trackH))
+          ..strokeCap = StrokeCap.round;
+        canvas.drawRRect(
+            RRect.fromRectAndRadius(
+                activeRect, const Radius.circular(4)),
+            activePaint);
+      } else {
+        final activePaint = Paint()
+          ..color = Color.lerp(
+              scheme.onSurface.withValues(alpha: 0.60),
+              const Color(0xFF5A7A9B),
+              0.15)!
+          ..strokeCap = StrokeCap.round;
+        final activeRect =
+            Rect.fromLTWH(0, cy - trackH / 2, thumbX, trackH);
+        canvas.drawRRect(
+            RRect.fromRectAndRadius(
+                activeRect, const Radius.circular(4)),
+            activePaint);
+      }
+    }
+
+    // 刻度点（浅灰圆点）
+    final dotPaint = Paint()..color = scheme.onSurface.withValues(alpha: 0.30);
+    for (var i = 0; i < count; i++) {
+      final x = i * step;
+      if ((x - thumbX).abs() > thumbW / 2 + 3) {
+        canvas.drawCircle(Offset(x, cy), 3.0, dotPaint);
+      }
+    }
+
+    // 方形圆角 thumb
+    final thumbRect = Rect.fromCenter(
+        center: Offset(thumbX, cy), width: thumbW, height: thumbH);
+    if (isUltra) {
+      final gradient = LinearGradient(
+        begin: Alignment.topLeft,
+        end: Alignment.bottomRight,
+        colors: const [Color(0xFF9B59B6), Color(0xFF7E57C2)],
+      );
+      final thumbPaint = Paint()
+        ..shader = gradient.createShader(thumbRect);
+      canvas.drawRRect(
+          RRect.fromRectAndRadius(thumbRect, const Radius.circular(thumbR)),
+          thumbPaint);
+    } else {
+      final thumbPaint = Paint()
+        ..color = scheme.surface
+        ..style = PaintingStyle.fill;
+      final thumbShadowPaint = Paint()
+        ..color = Colors.black.withValues(alpha: 0.18)
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 3);
+      canvas.drawRRect(
+          RRect.fromRectAndRadius(
+              thumbRect.inflate(1), const Radius.circular(thumbR + 1)),
+          thumbShadowPaint);
+      canvas.drawRRect(
+          RRect.fromRectAndRadius(thumbRect, const Radius.circular(thumbR)),
+          thumbPaint);
+      // thumb 内部阴影线
+      final innerPaint = Paint()
+        ..color = scheme.onSurface.withValues(alpha: 0.08)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1;
+      canvas.drawRRect(
+          RRect.fromRectAndRadius(
+              thumbRect.deflate(0.5), const Radius.circular(thumbR - 0.5)),
+          innerPaint);
+    }
+  }
+
+  @override
+  bool shouldRepaint(_EffortTrackPainter old) =>
+      old.index != index ||
+      old.isUltra != isUltra ||
+      old.ultraT != ultraT ||
+      old.scheme != scheme;
 }
 
 class _CircleBtn extends StatelessWidget {
@@ -5674,13 +6300,202 @@ class _CircleBtn extends StatelessWidget {
 }
 
 /// 模型选择底部抽屉
-class _ModelPickerSheet extends StatefulWidget {
+class _ProviderModelPickerSheet extends StatefulWidget {
+  final List<AiModelOption> options;
+  final String? currentProviderId;
+  final String currentModel;
+  final AiReasoningEffort currentEffort;
+  final Future<void> Function(
+    AiModelOption option,
+    AiReasoningEffort effort,
+  ) onSelected;
+
+  const _ProviderModelPickerSheet({
+    required this.options,
+    required this.currentProviderId,
+    required this.currentModel,
+    required this.currentEffort,
+    required this.onSelected,
+  });
+
+  @override
+  State<_ProviderModelPickerSheet> createState() =>
+      _ProviderModelPickerSheetState();
+}
+
+class _ProviderModelPickerSheetState extends State<_ProviderModelPickerSheet> {
+  late AiModelOption _selected;
+  late AiReasoningEffort _effort;
+
+  @override
+  void initState() {
+    super.initState();
+    _selected = widget.options.firstWhere(
+      (option) =>
+          option.providerId == widget.currentProviderId &&
+          option.model == widget.currentModel,
+      orElse: () => widget.options.first,
+    );
+    _effort = widget.currentEffort;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    const levels = [
+      (AiReasoningEffort.none, '关闭'),
+      (AiReasoningEffort.minimal, 'Minimal'),
+      (AiReasoningEffort.low, 'Low'),
+      (AiReasoningEffort.medium, 'Medium'),
+      (AiReasoningEffort.high, 'High'),
+      (AiReasoningEffort.xhigh, 'Max'),
+    ];
+    var effortIndex = levels.indexWhere((entry) => entry.$1 == _effort);
+    if (effortIndex < 0) effortIndex = 0;
+    final groups = <String, List<AiModelOption>>{};
+    for (final option in widget.options) {
+      groups.putIfAbsent(option.providerId, () => []).add(option);
+    }
+    return ConstrainedBox(
+      constraints: BoxConstraints(
+        maxHeight: MediaQuery.of(context).size.height * 0.78,
+      ),
+      child: Column(
+        children: [
+          SheetHeader(
+            title: 'Models',
+            subtitle: '${widget.options.length} 个可用模型',
+            onClose: () => Navigator.pop(context),
+            actionLabel: '完成',
+            onAction: () async {
+              Navigator.pop(context);
+              await widget.onSelected(_selected, _effort);
+            },
+          ),
+          Flexible(
+            child: ListView(
+              padding: const EdgeInsets.symmetric(vertical: 3),
+              children: [
+                for (final group in groups.entries) ...[
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 10, 16, 4),
+                    child: Text(
+                      group.value.first.providerLabel,
+                      style: AppType.caption(scheme),
+                    ),
+                  ),
+                  for (var index = 0; index < group.value.length; index++)
+                    _ProviderModelOptionRow(
+                      option: group.value[index],
+                      index: index + 1,
+                      selected: group.value[index].key == _selected.key,
+                      onTap: () async {
+                        final option = group.value[index];
+                        setState(() => _selected = option);
+                        await widget.onSelected(option, _effort);
+                      },
+                    ),
+                ],
+              ],
+            ),
+          ),
+          Divider(height: 1, color: AppColors.hairline(scheme)),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 10, 16, 2),
+            child: Row(
+              children: [
+                Text('Effort', style: AppType.rowTitle(scheme)),
+                const Spacer(),
+                Text(levels[effortIndex].$2, style: AppType.secondary(scheme)),
+              ],
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 10),
+            child: Row(
+              children: [
+                Text('Faster', style: AppType.caption(scheme)),
+                Expanded(
+                  child: Slider(
+                    value: effortIndex.toDouble(),
+                    min: 0,
+                    max: (levels.length - 1).toDouble(),
+                    divisions: levels.length - 1,
+                    onChanged: (value) => setState(
+                      () => _effort = levels[value.round()].$1,
+                    ),
+                  ),
+                ),
+                Text('Smarter', style: AppType.caption(scheme)),
+              ],
+            ),
+          ),
+          SizedBox(height: MediaQuery.of(context).padding.bottom + 6),
+        ],
+      ),
+    );
+  }
+}
+
+class _ProviderModelOptionRow extends StatelessWidget {
+  final AiModelOption option;
+  final int index;
+  final bool selected;
+  final VoidCallback onTap;
+
+  const _ProviderModelOptionRow({
+    required this.option,
+    required this.index,
+    required this.selected,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return InkWell(
+      onTap: onTap,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+        child: Row(
+          children: [
+            SizedBox(
+              width: 18,
+              child: selected
+                  ? Icon(
+                      CupertinoIcons.checkmark,
+                      size: 16,
+                      color: scheme.primary,
+                    )
+                  : null,
+            ),
+            const SizedBox(width: 9),
+            Expanded(
+              child: Text(
+                option.model,
+                style: TextStyle(
+                  fontSize: 15,
+                  fontWeight: selected ? FontWeight.w500 : FontWeight.w400,
+                  color: scheme.onSurface,
+                ),
+              ),
+            ),
+            Text('$index', style: AppType.caption(scheme)),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _LegacyModelPickerSheet extends StatefulWidget {
   final List<String> models;
   final String currentModel;
   final AiReasoningEffort currentEffort;
-  final Future<void> Function(String model, AiReasoningEffort effort) onSelected;
+  final Future<void> Function(String model, AiReasoningEffort effort)
+      onSelected;
 
-  const _ModelPickerSheet({
+  const _LegacyModelPickerSheet({
     required this.models,
     required this.currentModel,
     required this.currentEffort,
@@ -5688,10 +6503,11 @@ class _ModelPickerSheet extends StatefulWidget {
   });
 
   @override
-  State<_ModelPickerSheet> createState() => _ModelPickerSheetState();
+  State<_LegacyModelPickerSheet> createState() =>
+      _LegacyModelPickerSheetState();
 }
 
-class _ModelPickerSheetState extends State<_ModelPickerSheet> {
+class _LegacyModelPickerSheetState extends State<_LegacyModelPickerSheet> {
   late String _selectedModel;
   late AiReasoningEffort _selectedEffort;
 
@@ -5787,7 +6603,8 @@ class _ModelPickerSheetState extends State<_ModelPickerSheet> {
                     child: Row(
                       children: [
                         if (selected)
-                          Icon(CupertinoIcons.checkmark, size: 15, color: scheme.primary)
+                          Icon(CupertinoIcons.checkmark,
+                              size: 15, color: scheme.primary)
                         else
                           const SizedBox(width: 15),
                         const SizedBox(width: 10),
@@ -5796,8 +6613,10 @@ class _ModelPickerSheetState extends State<_ModelPickerSheet> {
                             model,
                             style: TextStyle(
                               fontSize: 15,
-                              fontWeight: selected ? FontWeight.w500 : FontWeight.w400,
-                              color: selected ? scheme.primary : scheme.onSurface,
+                              fontWeight:
+                                  selected ? FontWeight.w500 : FontWeight.w400,
+                              color:
+                                  selected ? scheme.primary : scheme.onSurface,
                             ),
                           ),
                         ),
@@ -5805,7 +6624,8 @@ class _ModelPickerSheetState extends State<_ModelPickerSheet> {
                           '${i + 1}',
                           style: TextStyle(
                             fontSize: 13,
-                            color: scheme.onSurfaceVariant.withValues(alpha: 0.4),
+                            color:
+                                scheme.onSurfaceVariant.withValues(alpha: 0.4),
                           ),
                         ),
                       ],
@@ -5831,7 +6651,8 @@ class _ModelPickerSheetState extends State<_ModelPickerSheet> {
                 ),
                 const SizedBox(width: 6),
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
                   decoration: BoxDecoration(
                     color: scheme.primary.withValues(alpha: 0.1),
                     borderRadius: BorderRadius.circular(8),
@@ -5863,8 +6684,10 @@ class _ModelPickerSheetState extends State<_ModelPickerSheet> {
                   child: SliderTheme(
                     data: SliderTheme.of(context).copyWith(
                       trackHeight: 3,
-                      thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 8),
-                      overlayShape: const RoundSliderOverlayShape(overlayRadius: 16),
+                      thumbShape:
+                          const RoundSliderThumbShape(enabledThumbRadius: 8),
+                      overlayShape:
+                          const RoundSliderOverlayShape(overlayRadius: 16),
                     ),
                     child: Slider(
                       value: clampedIndex.toDouble(),

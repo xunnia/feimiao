@@ -1,1 +1,14 @@
 *.log
+
+# Local build and release artifacts. Release binaries belong in local/remote
+# artifact storage, never in source-control history.
+*.apk
+*.aab
+*.apk.sha256.txt
+/apk-archive/
+/ci-artifacts/releases/
+/android-app/ci-artifacts/
+
+# Generated visual/browser evidence is local unless explicitly curated.
+/android-app/outputs/
+/.playwright-cli/

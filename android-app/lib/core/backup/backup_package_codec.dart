@@ -79,7 +79,11 @@ class BackupPackageCodec {
         'receipts': files.keys.any((name) => name.startsWith('receipts/')),
         'assetMedia': files.keys.any((name) => name.startsWith('asset_media/')),
       },
-      'excludes': const ['deepseek_api_key', 'custom_ai_api_key'],
+      'excludes': const [
+        'deepseek_api_key',
+        'custom_ai_api_key',
+        'ai_provider_api_key_*',
+      ],
       'checksums': checksums,
     };
     final manifestBytes = Uint8List.fromList(utf8.encode(jsonEncode(manifest)));
@@ -124,7 +128,11 @@ class BackupPackageCodec {
         'receipts': names.any((name) => name.startsWith('receipts/')),
         'assetMedia': names.any((name) => name.startsWith('asset_media/')),
       },
-      'excludes': const ['deepseek_api_key', 'custom_ai_api_key'],
+      'excludes': const [
+        'deepseek_api_key',
+        'custom_ai_api_key',
+        'ai_provider_api_key_*',
+      ],
       'checksums': checksums,
     };
     final manifestBytes = Uint8List.fromList(utf8.encode(jsonEncode(manifest)));

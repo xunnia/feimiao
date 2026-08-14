@@ -21,6 +21,7 @@ class LlmQuery {
     String? apiKey,
     AiProviderConfig? config,
     required String transactionsText,
+    List<Map<String, String>> priorTurns = const [],
   }) async {
     final provider = _resolveConfig(apiKey: apiKey, config: config);
     final systemPrompt = '''你是「喵助手」，一只蓝白英短猫助手，有账本数据作为参考。
@@ -40,6 +41,11 @@ class LlmQuery {
 
 $transactionsText''';
 
+    final history = [
+      for (final turn in priorTurns)
+        {'role': turn['role']!, 'content': turn['content']!},
+    ];
+
     return _postWithModelFallback(
       config: provider,
       timeoutSeconds: _timeoutSeconds,
@@ -47,6 +53,7 @@ $transactionsText''';
         'model': model,
         'messages': [
           {'role': 'system', 'content': systemPrompt},
+          ...history,
           {'role': 'user', 'content': question},
         ],
         'stream': false,
@@ -145,6 +152,13 @@ $transactionsText''';
     for (final model in models) {
       try {
         final body = bodyForModel(model);
+        if (config.shouldUseClaudeMessages) {
+          return await _postClaudeMessages(
+            config: config,
+            body: body,
+            timeoutSeconds: timeoutSeconds,
+          );
+        }
         if (config.shouldUseResponses) {
           return await _postResponses(
             config: config,
@@ -274,6 +288,91 @@ $transactionsText''';
     }
   }
 
+  /// Claude 原生 /v1/messages 端点（带 thinking 参数）
+  static Future<String> _postClaudeMessages({
+    required AiProviderConfig config,
+    required Map<String, dynamic> body,
+    required int timeoutSeconds,
+  }) async {
+    // 从 chat-completions 格式转换为 Claude Messages 格式
+    final messages = body['messages'] as List? ?? [];
+    String? systemPrompt;
+    final claudeMessages = <Map<String, dynamic>>[];
+    for (final msg in messages) {
+      if (msg is! Map) continue;
+      final role = (msg['role'] as String?)?.trim() ?? 'user';
+      final content = _stringContent(msg['content']).trim();
+      if (content.isEmpty) continue;
+      if (role == 'system') {
+        systemPrompt = content;
+      } else {
+        claudeMessages.add({'role': role, 'content': content});
+      }
+    }
+
+    final claudeBody = <String, dynamic>{
+      'model': body['model'],
+      'messages': claudeMessages,
+      'max_tokens': (body['max_tokens'] as int?) ?? 4096,
+    };
+    if (systemPrompt != null) claudeBody['system'] = systemPrompt;
+
+    // 思考深度参数
+    final budget = config.reasoningEffort.claudeBudgetTokens;
+    if (budget != null) {
+      claudeBody['thinking'] = {
+        'type': 'enabled',
+        'budget_tokens': budget,
+      };
+      // thinking 模式下 temperature 必须为 1
+      claudeBody['temperature'] = 1;
+    }
+
+    late http.Response resp;
+    try {
+      resp = await http
+          .post(
+            config.messagesUri,
+            headers: {
+              'x-api-key': config.apiKey,
+              'anthropic-version': '2023-06-01',
+              'content-type': 'application/json',
+            },
+            body: jsonEncode(claudeBody),
+          )
+          .timeout(Duration(seconds: timeoutSeconds));
+    } catch (e) {
+      throw LlmQueryException('Claude Messages 请求失败：$e');
+    }
+
+    final bodyText = utf8.decode(resp.bodyBytes, allowMalformed: true);
+    if (resp.statusCode != 200) {
+      final snippet = _bodySnippet(bodyText);
+      throw LlmQueryException(
+        '${config.providerLabel} Messages 返回错误 ${resp.statusCode}'
+        '${snippet.isEmpty ? '' : '：$snippet'}',
+        statusCode: resp.statusCode,
+      );
+    }
+
+    try {
+      final outer = jsonDecode(bodyText) as Map<String, dynamic>;
+      final contentList = outer['content'] as List?;
+      if (contentList == null) throw const LlmQueryException('空回答');
+      final text = contentList
+          .whereType<Map>()
+          .where((c) => c['type'] == 'text')
+          .map((c) => (c['text'] as String?)?.trim() ?? '')
+          .where((t) => t.isNotEmpty)
+          .join('\n')
+          .trim();
+      if (text.isEmpty) throw const LlmQueryException('空回答');
+      return text;
+    } catch (e) {
+      throw LlmQueryException('Claude Messages 响应解析失败：$e');
+    }
+  }
+
   static Future<String> _postResponses({
     required AiProviderConfig config,
     required Map<String, dynamic> body,
@@ -381,7 +480,10 @@ $transactionsText''';
   }
 
   /// 从服务商获取可用模型列表（调用 /v1/models 端点）
-  static Future<List<String>> fetchModels(AiProviderConfig config) async {
+  static Future<List<String>> fetchModels(
+    AiProviderConfig config, {
+    http.Client? client,
+  }) async {
     if (!config.hasKey) {
       throw LlmQueryException('${config.providerLabel} API Key 未配置');
     }
@@ -394,13 +496,14 @@ $transactionsText''';
 
     late http.Response resp;
     try {
-      resp = await http.get(
-        uri,
-        headers: {
-          'Authorization': 'Bearer ${config.apiKey}',
-          'Content-Type': 'application/json',
-        },
-      ).timeout(const Duration(seconds: 15));
+      final headers = {
+        'Authorization': 'Bearer ${config.apiKey}',
+        'Content-Type': 'application/json',
+      };
+      final request = client == null
+          ? http.get(uri, headers: headers)
+          : client.get(uri, headers: headers);
+      resp = await request.timeout(const Duration(seconds: 15));
     } catch (e) {
       throw LlmQueryException('获取模型列表失败：$e');
     }
@@ -415,13 +518,17 @@ $transactionsText''';
     try {
       final json = jsonDecode(resp.body) as Map<String, dynamic>;
       final data = json['data'] as List<dynamic>?;
-      if (data == null) throw LlmQueryException('响应格式错误：缺少 data 字段');
+      if (data == null) {
+        throw const LlmQueryException('响应格式错误：缺少 data 字段');
+      }
       final models = data
           .map((e) => e['id']?.toString())
           .whereType<String>()
+          .map((value) => value.trim())
           .where((s) => s.isNotEmpty)
+          .toSet()
           .toList();
-      if (models.isEmpty) throw LlmQueryException('未获取到任何模型');
+      if (models.isEmpty) throw const LlmQueryException('未获取到任何模型');
       return models;
     } catch (e) {
       if (e is LlmQueryException) rethrow;

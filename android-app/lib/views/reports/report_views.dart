@@ -271,7 +271,7 @@ class _ReportLibrarySheetState extends State<_ReportLibrarySheet> {
       return;
     }
     final repo = context.read<AppRepository>();
-    final aiConfig = repo.aiProviderConfigFor(AiTaskType.report);
+    final aiConfig = repo.aiProviderConfigFor(AiTaskType.chatQuery);
     if (!aiConfig.hasKey) {
       showAppToast(context, '先去「我的 → AI 记账设置」填写 API Key');
       _regeneratingReportIds.remove(report.id);
