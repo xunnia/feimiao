@@ -94,7 +94,7 @@ jobs:
             -destination "platform=iOS Simulator,name=$DEVICE" \
             -derivedDataPath build \
             CODE_SIGNING_ALLOWED=NO \
-            | tail -40
+            | tee xcodebuild-parity.log
           test ${PIPESTATUS[0]} -eq 0
       - name: Capture screens
         run: |

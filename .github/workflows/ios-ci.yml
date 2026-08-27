@@ -57,7 +57,7 @@ jobs:
             -destination 'generic/platform=iOS Simulator' \
             -derivedDataPath build-simulator \
             CODE_SIGNING_ALLOWED=NO \
-            | tail -100
+            | tee xcodebuild-simulator.log
           exit ${PIPESTATUS[0]}
       - name: Package simulator app for Appetize
         run: |
@@ -108,7 +108,7 @@ jobs:
             -destination "platform=iOS Simulator,name=$DEVICE" \
             -derivedDataPath build-tests \
             CODE_SIGNING_ALLOWED=NO \
-            | tail -80
+            | tee xcodebuild-tests.log
           test ${PIPESTATUS[0]} -eq 0
 
   simulator-screenshots:
@@ -152,7 +152,7 @@ jobs:
             -destination "platform=iOS Simulator,name=$DEVICE" \
             -derivedDataPath build \
             CODE_SIGNING_ALLOWED=NO \
-            | tail -30
+            | tee xcodebuild-screenshots.log
           exit ${PIPESTATUS[0]}
       - name: Launch app and capture screenshots
         run: |
@@ -258,7 +258,7 @@ jobs:
             -sdk iphoneos \
             -derivedDataPath build \
             CODE_SIGNING_ALLOWED=NO \
-            | tail -30
+            | tee xcodebuild-release.log
           exit ${PIPESTATUS[0]}
       - name: Build no-extension fallback (unsigned)
         # 免费 Personal Team 可能无法签 App Groups/扩展；这个版本只保留主 App，
@@ -273,7 +273,7 @@ jobs:
             -derivedDataPath build-noext \
             CODE_SIGN_ENTITLEMENTS="$free_entitlements" \
             CODE_SIGNING_ALLOWED=NO \
-            | tail -30
+            | tee xcodebuild-noext.log
           exit ${PIPESTATUS[0]}
       - name: Package IPA (完整版 + 免费团队无扩展兜底版)
         run: |
