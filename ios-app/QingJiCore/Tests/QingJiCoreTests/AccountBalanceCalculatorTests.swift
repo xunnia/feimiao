@@ -79,10 +79,10 @@ final class AccountBalanceIdentityTests: XCTestCase {
                 amount: -20,
                 accountID: originalAccountID,
                 accountName: "银行卡",
+                date: date,
                 settlementAccountID: refundAccountID,
                 eventType: .refund,
-                refundOfID: originalID,
-                date: date
+                refundOfID: originalID
             ),
         ]
 
