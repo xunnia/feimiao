@@ -147,9 +147,9 @@ final class BillImportTests: XCTestCase {
             categoryName: "饮料酒水",
             categoryKey: "dining_drink",
             accountName: "微信",
+            note: "午后咖啡",
             merchant: "瑞幸",
             product: "拿铁",
-            note: "午后咖啡",
             date: date
         )
 

@@ -943,7 +943,8 @@ struct MeowAssistantView: View {
             month: components.month ?? 1
         )
         let recent = usableRecords.prefix(16).map {
-            "\($0.date.formatted(.dateTime.month().day())) \($0.note.isEmpty ? \"未命名\" : $0.note) \($0.amount)"
+            let note = $0.note.isEmpty ? "未命名" : $0.note
+            return "\($0.date.formatted(.dateTime.month().day())) \(note) \($0.amount)"
         }.joined(separator: "；")
         let memory = AIMemoryStore.promptBlock(
             memories: aiMemories,
