@@ -70,7 +70,7 @@
       "android": "android-app/outputs/parity/budget-android.png",
       "ios": "ci-artifacts/ios-screenshots/08-budget.png",
       "iosRoute": "settings/budget",
-      "notes": "总预算、周期窗口、今日可花和分类预算；固定承诺与高级周期修订属于后续批次。"
+      "notes": "总预算、周期窗口、今日可花、分类预算、固定承诺模板和当前/下一周期 occurrence；匹配/跳过/退款复核由操作回归补充。"
     },
     {
       "id": "reconcile",

@@ -1,6 +1,7 @@
 import UIKit
 import SwiftUI
 import SwiftData
+import QingJiCore
 
 /// 资产中心：资金、物品和权益使用同一张净资产摘要，明细按原生 iOS 交互展开。
 struct AssetsView: View {
@@ -244,6 +245,7 @@ struct AssetsView: View {
     }
 
     private func physicalRow(_ asset: PhysicalAsset) -> some View {
+        let metrics = try? AssetStore.metrics(for: asset, in: context, asOf: AppClock.now)
         Button {
             editingAsset = asset
         } label: {
@@ -258,6 +260,11 @@ struct AssetsView: View {
                     Text("\(asset.kind.label) · \(asset.lifecycle.label)")
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                    if let daily = metrics?.dailyHoldingCost.value {
+                        Text("日均持有 \(MoneyFormat.string(daily, currencyCode: asset.currencyCode))")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
                 }
                 Spacer(minLength: 8)
                 Text(MoneyFormat.string(asset.currentValue, currencyCode: asset.currencyCode))

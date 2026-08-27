@@ -275,6 +275,10 @@ enum AssetEventKind: String, CaseIterable, Hashable, Identifiable {
     case restored
     case usageAdded
     case depreciation
+    case transactionLinked = "transaction_linked"
+    case transactionUnlinked = "transaction_unlinked"
+    case costLinked = "cost_linked"
+    case costUnlinked = "cost_unlinked"
 
     var id: String { rawValue }
     var label: String {
@@ -292,6 +296,10 @@ enum AssetEventKind: String, CaseIterable, Hashable, Identifiable {
         case .restored: return "恢复"
         case .usageAdded: return "使用次数"
         case .depreciation: return "折旧"
+        case .transactionLinked: return "关联账单"
+        case .transactionUnlinked: return "解除账单关联"
+        case .costLinked: return "关联持有成本"
+        case .costUnlinked: return "解除持有成本"
         }
     }
 }

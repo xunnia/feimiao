@@ -33,7 +33,7 @@
 | 微信/支付宝导入 | bill_import.dart、bill_review_view.dart | PaymentBillImporter.swift、ImportReviewView.swift、BillRecordSaver | 已有列名定位、中文/英文金额、GBK 入口、商品优先分类、商户分组、退款订单号匹配 | 真实导出文件、重复导入、退款/不计收支/0 元行 |
 | 完整备份 | backup_package_codec.dart、SQLite/ZIP | BackupStore.swift、AndroidBackupImporter.swift、BackupView.swift | 已有 canonical JSON/ZIP、manifest/SHA-256、Android SQLite 只读转换、媒体安装、本机恢复点；恢复默认完整替换，另保留显式合并模式 | 旧 Android v48 ZIP、附件、失败回滚、真机恢复 |
 | 报告库/月报 | report_views.dart、monthly_report_view.dart | ReportsView.swift、ReportStore.swift | 已有本地月报、阅读、置顶、删除、后台择机刷新基础 | 同一统计结果、Markdown/表格、后台限制说明 |
-| 资产物品 | views/assets/physical_asset_* | AssetsView.swift、AssetStore.swift、ExtendedModels.swift | 已有档案、估值、照片路径、生命周期、使用次数、折旧字段和基础 UI | 购置/估值/出售/退货/报废/丢失/赠送、资产成本和退款分摊 |
+| 资产物品 | views/assets/physical_asset_* | AssetsView.swift、AssetStore.swift、ExtendedModels.swift、QingJiCore AssetMetrics/Allocation | 已有档案、估值、照片路径、生命周期、使用次数、持有天数/日均成本/每次成本/保值率和分摊校验基础 | 购置/估值/出售/退货/报废/丢失/赠送的详情操作、资产成本自动关联和退款分摊 UI |
 | 权益/应收 | receivable_*、lending_view.dart | AssetsView.swift、AssetStore.swift | 已有应收、部分收回、损失、归档和恢复基础 | 回收流水、剩余金额、净资产 |
 | 负债/还款 | liability_*、loan_wizard_sheet.dart、repayment_sheet.dart | LiabilitiesView.swift、LiabilityStore | 已有信用卡/房贷/车贷/个人借入档案、还款基础和利息拆分 | 本金/利息、账户余额、信用卡字段、还款向导 |
 | 还款提醒 | repayment_reminder.dart + Android 通知 | RepaymentReminderScheduler.swift + UserNotifications | 已有前一天/当天本地通知排程和设置开关 | 权限拒绝、日期边界、系统通知实际到达 |

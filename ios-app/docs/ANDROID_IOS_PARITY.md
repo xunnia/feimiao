@@ -28,13 +28,13 @@ iOS 的导航、控件、动效和玻璃材质按 Apple 原生规范重新设计
 | 退款/报销冲减 | `transaction_actions.dart` | 已实现挂原交易、原日期冲减 | 待逻辑回归与截图 |
 | 待报销 | `reimburse_view.dart` | 已接入报销抵消到 0 | 待 CI 编译与截图 |
 | 周/月/年度/自定义统计 | `statistics_view.dart` | 已接入 QingJiCore 净额统计与原生 Charts | 待 CI 编译与成对截图 |
-| 月度预算 | `budget_setting_view.dart` | 已有总预算、周期窗口、今日可花、分类预算、预算计划、专项追踪和固定承诺 occurrence 物化 | 固定承诺账单匹配/跳过/退款复核、完整修订编辑仍待 CI 后续收口 |
+| 月度预算 | `budget_setting_view.dart` | 已有总预算、周期窗口、今日可花、分类预算、预算计划、专项追踪、固定承诺 occurrence 物化及匹配/跳过/重置/退款复核基础流程 | 完整历史修订编辑仍待 CI 后续收口 |
 | 账户/分类/对账 | 设置页相关页面 | 已有基础版 | 待 CI 运行 |
 | 导入复核与完整备份 | `bill_review_view.dart`、`backup_package_codec.dart` | 已有商品优先分类、商户分组、AI 兜底、退款匹配；iOS 已接入 Android v1/v2 原始 SQLite ZIP 校验、只读转换、收据/资产媒体安装、失败回滚和完整替换恢复；AI 运行记录/定时报表随 canonical v9 保存 | 待 Xcode 27 CI 与真机用真实备份验收 |
 | AI Chats/多服务商 | `ai_chat_panel.dart` | 已接入 iOS 原生 AI 账号、Keychain、模型目录、三类流式端点、ChatGPT/Codex PKCE OAuth、401 刷新、Chats 会话列表、图片/文件附件和基础喵助手；来源/结构化账单动作仍待后续批次 | 待 CI 编译与网络回归 |
 | 存钱目标 | `savings_goals_view.dart` | 已实现目标、进度、归档/恢复 | 待 CI 编译与截图 |
 | 定时记账 | `recurring_view.dart` | 已实现日/周/月/年规则、转账、幂等补记 | 待 CI 编译与核心回归 |
-| 资产/负债/净资产 | `views/assets` | 已实现 iOS 基础档案、生命周期、还款、组件净资产与快照 | 待 CI 编译、细节补齐与截图 |
+| 资产/负债/净资产 | `views/assets` | 已实现 iOS 基础档案、生命周期、持有指标计算、还款、组件净资产与快照 | 待 CI 编译、资产详情操作/分摊 UI 与截图 |
 | 报告/后台任务/提醒 | `reports`、Worker | 已有本地月报库、阅读/置顶/删除和 `BGTaskScheduler` 择机刷新；AI 定时报表保存计划并用本地通知提醒前台生成，不能承诺 iOS 后台固定联网 | 待 Xcode 27 编译、后台触发和真机验收 |
 | Widget/快捷指令/分享 | Android 原生通道 | Widget、App Intent、Share Extension 已有基础版；分享文本/截图会进入 AI 记一笔 | 待 CI 编译与截图 |
 | 通知自动记账 | `PaymentNotificationListener` | iOS 无等价系统权限 | 用分享/OCR/快捷指令替代 |

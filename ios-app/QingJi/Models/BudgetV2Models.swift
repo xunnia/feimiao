@@ -330,9 +330,11 @@ enum BudgetCommitmentStore {
         )
         let start = Calendar.current.startOfDay(for: occurrence.cycleStart)
         let end = Calendar.current.startOfDay(for: occurrence.cycleEndInclusive)
-        return try context.fetch(FetchDescriptor<MoneyTransaction>(sortBy: [
+        let transactions = try context.fetch(FetchDescriptor<MoneyTransaction>(sortBy: [
             SortDescriptor(\.date, order: .reverse)
-        ])).filter { transaction in
+        ]))
+        let records = transactions.map(\.record)
+        return transactions.filter { transaction in
             transaction.kind == .expense &&
             transaction.amount > 0 &&
             transaction.refundOfID == nil &&
@@ -340,6 +342,7 @@ enum BudgetCommitmentStore {
             transaction.book?.stableID == plan.bookID &&
             transaction.currencyCode == plan.currencyCode &&
             !linkedFamilies.contains(transaction.stableID.uuidString) &&
+            LedgerPolicy.refundStatus(for: transaction.record, in: records).remainingAmount > 0 &&
             Calendar.current.startOfDay(for: transaction.date) >= start &&
             Calendar.current.startOfDay(for: transaction.date) <= end
         }

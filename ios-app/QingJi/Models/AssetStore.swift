@@ -9,6 +9,9 @@ enum AssetStore {
         case invalidAmount
         case invalidWarranty
         case endedAsset
+        case invalidTransaction
+        case duplicateTransaction
+        case allocationInvalid
 
         var errorDescription: String? {
             switch self {
@@ -16,6 +19,9 @@ enum AssetStore {
             case .invalidAmount: return "资产金额不能为负。"
             case .invalidWarranty: return "保修到期日不能早于购买日期。"
             case .endedAsset: return "已出售、退货、报废、丢失或赠送的资产不能继续编辑价值。"
+            case .invalidTransaction: return "只能关联同账本、同币种的普通支出。"
+            case .duplicateTransaction: return "这笔支出已经关联了其他物品或当前资产。"
+            case .allocationInvalid: return "物品分配金额超过订单可用金额。"
             }
         }
     }
@@ -37,6 +43,236 @@ enum AssetStore {
         try context.fetch(FetchDescriptor<AssetUsageEvent>(sortBy: [
             SortDescriptor(\AssetUsageEvent.occurredAt, order: .reverse)
         ])).filter { $0.assetID == asset.stableID }
+    }
+
+    /// 使用与 Android 相同的“购置成本 + 后续净支出”口径计算资产指标。
+    /// 有精确分摊记录时优先使用分；没有关联记录的历史/手工资产回退到
+    /// `purchasePrice`，不会把未知成本伪装成 0。
+    static func metrics(
+        for asset: PhysicalAsset,
+        in context: ModelContext,
+        asOf: Date = Date()
+    ) throws -> PhysicalAssetMetrics {
+        let links = try context.fetch(FetchDescriptor<AssetTransactionLink>())
+            .filter { $0.assetID == asset.stableID }
+        let transactions = try context.fetch(FetchDescriptor<MoneyTransaction>())
+        let records = transactions.map(\.record)
+        let transactionByID = Dictionary(uniqueKeysWithValues: transactions.map { ($0.stableID, $0) })
+        var acquisition = Decimal.zero
+        var additional = Decimal.zero
+        if links.isEmpty {
+            acquisition = MoneyNormalization.roundToCents(asset.purchasePrice)
+        } else {
+            for link in links {
+                if let transaction = transactionByID[link.transactionID],
+                   link.linkTypeRaw != AssetTransactionLinkType.sourceTransaction.rawValue,
+                   link.linkTypeRaw != AssetTransactionLinkType.purchaseTransaction.rawValue {
+                    let net = LedgerPolicy.refundStatus(
+                        for: transaction.record,
+                        in: records
+                    ).remainingAmount
+                    additional += max(net, Decimal.zero)
+                    continue
+                }
+                let gross = link.allocatedGrossCents > 0
+                    ? Decimal(link.allocatedGrossCents) / Decimal(100)
+                    : link.amount
+                let refund = Decimal(link.allocatedRefundCents) / Decimal(100)
+                let net = max(gross - refund, Decimal.zero)
+                switch link.linkTypeRaw {
+                case AssetTransactionLinkType.sourceTransaction.rawValue,
+                     AssetTransactionLinkType.purchaseTransaction.rawValue:
+                    acquisition += net
+                default:
+                    additional += net
+                }
+            }
+        }
+        if acquisition == .zero && asset.purchasePrice > .zero {
+            acquisition = MoneyNormalization.roundToCents(asset.purchasePrice)
+        }
+        let hasValuation = try context.fetch(FetchDescriptor<AssetValuation>())
+            .contains { $0.assetID == asset.stableID }
+        let calendar = Calendar.current
+        return AssetMetrics.resolve(
+            PhysicalAssetMetricInput(
+                netAcquisitionCost: MoneyNormalization.roundToCents(acquisition),
+                additionalNetCost: MoneyNormalization.roundToCents(additional),
+                currentNetValue: MoneyNormalization.roundToCents(asset.currentValue),
+                purchasedAt: asset.purchaseDate,
+                endedAt: asset.endedAt,
+                isEconomicallyOwned: asset.lifecycle == .owned || asset.lifecycle == .idle,
+                hasKnownValuation: hasValuation,
+                hasComparableCurrency: asset.currencyCode.uppercased() == "CNY",
+                usageTrackingEnabled: asset.usageTrackingEnabled,
+                usageCount: asset.usageCount
+            ),
+            asOf: asOf,
+            calendar: calendar
+        )
+    }
+
+    static func costTransactions(
+        for asset: PhysicalAsset,
+        in context: ModelContext,
+        query: String = ""
+    ) throws -> [MoneyTransaction] {
+        guard !asset.isDeleted,
+              asset.lifecycle == .owned || asset.lifecycle == .idle,
+              let bookID = asset.bookID else { return [] }
+        let normalized = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let allLinks = try context.fetch(FetchDescriptor<AssetTransactionLink>())
+        let linkedTransactionIDs = Set(allLinks.map(\.transactionID))
+        let records = try context.fetch(FetchDescriptor<MoneyTransaction>())
+        return records
+            .filter { transaction in
+                transaction.kind == .expense &&
+                transaction.amount > 0 &&
+                transaction.refundOfID == nil &&
+                !transaction.isExcluded &&
+                transaction.book?.stableID == bookID &&
+                transaction.currencyCode == asset.currencyCode &&
+                !linkedTransactionIDs.contains(transaction.stableID) &&
+                (normalized.isEmpty ||
+                 transaction.note.lowercased().contains(normalized) ||
+                 transaction.category?.name.lowercased().contains(normalized) == true ||
+                 transaction.amount.description.contains(normalized))
+            }
+            .sorted { $0.date > $1.date }
+    }
+
+    /// 将一笔已有支出作为物品的后续持有成本关联；关联本身不改变账单。
+    @discardableResult
+    static func linkCost(
+        _ asset: PhysicalAsset,
+        transaction: MoneyTransaction,
+        type: AssetTransactionLinkType,
+        in context: ModelContext
+    ) throws -> AssetTransactionLink {
+        guard type != .sourceTransaction,
+              type != .purchaseTransaction,
+              type != .saleAccountMovement else { throw Error.invalidTransaction }
+        guard costTransactions(for: asset, in: context)
+            .contains(where: { $0.stableID == transaction.stableID }) else {
+            throw Error.invalidTransaction
+        }
+        let net = LedgerPolicy.refundStatus(
+            for: transaction.record,
+            in: try context.fetch(FetchDescriptor<MoneyTransaction>())
+        ).remainingAmount
+        guard net > 0 else { throw Error.invalidTransaction }
+        let link = AssetTransactionLink(
+            assetID: asset.stableID,
+            transactionID: transaction.stableID,
+            linkTypeRaw: type.rawValue,
+            amount: MoneyNormalization.roundToCents(net)
+        )
+        link.costQualityRaw = AssetAllocationCostQuality.exact.rawValue
+        link.note = type.label
+        context.insert(link)
+        context.insert(AssetEvent(
+            assetID: asset.stableID,
+            kind: .costLinked,
+            value: link.amount,
+            note: "\(type.label) · \(transaction.note)"
+        ))
+        try context.save()
+        return link
+    }
+
+    static func unlinkCost(
+        _ link: AssetTransactionLink,
+        in context: ModelContext
+    ) throws {
+        guard link.linkTypeRaw != AssetTransactionLinkType.sourceTransaction.rawValue,
+              link.linkTypeRaw != AssetTransactionLinkType.purchaseTransaction.rawValue,
+              link.linkTypeRaw != AssetTransactionLinkType.saleAccountMovement.rawValue else {
+            throw Error.invalidTransaction
+        }
+        let assetID = link.assetID
+        context.delete(link)
+        context.insert(AssetEvent(
+            assetID: assetID,
+            kind: .costUnlinked,
+            note: "解除持有成本关联"
+        ))
+        try context.save()
+    }
+
+    /// 给多件物品订单建立购置成本分配，遵守“毛额、退款、净额均不能超订单”规则。
+    @discardableResult
+    static func linkPurchaseAllocation(
+        _ asset: PhysicalAsset,
+        transaction: MoneyTransaction,
+        grossCents: Int,
+        refundCents: Int = 0,
+        in context: ModelContext
+    ) throws -> AssetTransactionLink {
+        guard transaction.kind == .expense,
+              transaction.amount > 0,
+              transaction.refundOfID == nil,
+              !transaction.isExcluded,
+              transaction.book?.stableID == asset.bookID,
+              transaction.currencyCode == asset.currencyCode else {
+            throw Error.invalidTransaction
+        }
+        let allTransactions = try context.fetch(FetchDescriptor<MoneyTransaction>())
+        let refundStatus = LedgerPolicy.refundStatus(for: transaction.record, in: allTransactions.map(\.record))
+        let orderGross = MoneyNormalization.cents(transaction.amount)
+        let validRefund = MoneyNormalization.cents(refundStatus.refundedAmount)
+        let otherLines = try context.fetch(FetchDescriptor<AssetTransactionLink>())
+            .filter {
+                $0.transactionID == transaction.stableID &&
+                ($0.linkTypeRaw == AssetTransactionLinkType.sourceTransaction.rawValue ||
+                 $0.linkTypeRaw == AssetTransactionLinkType.purchaseTransaction.rawValue)
+            }
+            .map {
+                AssetAllocationLine(
+                    assetID: $0.assetID,
+                    grossCents: $0.allocatedGrossCents,
+                    refundCents: $0.allocatedRefundCents
+                )
+            }
+        let lines = otherLines + [AssetAllocationLine(
+            assetID: asset.stableID,
+            grossCents: grossCents,
+            refundCents: refundCents
+        )]
+        do {
+            _ = try AssetAllocationPolicy.validate(
+                orderGrossCents: orderGross,
+                validOrderRefundCents: validRefund,
+                lines: lines
+            )
+        } catch {
+            throw Error.allocationInvalid
+        }
+        guard !otherLines.contains(where: { $0.assetID == asset.stableID }) else {
+            throw Error.duplicateTransaction
+        }
+        let link = AssetTransactionLink(
+            assetID: asset.stableID,
+            transactionID: transaction.stableID,
+            linkTypeRaw: AssetTransactionLinkType.sourceTransaction.rawValue,
+            amount: Decimal(grossCents - refundCents) / Decimal(100)
+        )
+        link.allocatedGrossCents = grossCents
+        link.allocatedRefundCents = refundCents
+        link.costQualityRaw = AssetAllocationCostQuality.partial.rawValue
+        link.note = "从已有账单分配"
+        context.insert(link)
+        asset.acquisitionCostSourceRaw = AssetAcquisitionCostSource.transactionAllocations.rawValue
+        asset.purchasePrice = MoneyNormalization.roundToCents(
+            Decimal(grossCents - refundCents) / Decimal(100)
+        )
+        context.insert(AssetEvent(
+            assetID: asset.stableID,
+            kind: .transactionLinked,
+            value: link.amount,
+            note: "从已有账单分配"
+        ))
+        try context.save()
+        return link
     }
 
     @discardableResult
