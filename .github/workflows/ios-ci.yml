@@ -57,7 +57,7 @@ jobs:
             -configuration Debug \
             -destination 'generic/platform=iOS Simulator' \
             -derivedDataPath build-simulator \
-            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_ALLOWED=NO 2>&1 \
             | tee xcodebuild-simulator.log
           build_status=${PIPESTATUS[0]}
           set -e
@@ -114,7 +114,7 @@ jobs:
             -scheme QingJi \
             -destination "platform=iOS Simulator,name=$DEVICE" \
             -derivedDataPath build-tests \
-            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_ALLOWED=NO 2>&1 \
             | tee xcodebuild-tests.log
           build_status=${PIPESTATUS[0]}
           set -e
@@ -164,7 +164,7 @@ jobs:
             -scheme QingJi \
             -destination "platform=iOS Simulator,name=$DEVICE" \
             -derivedDataPath build \
-            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_ALLOWED=NO 2>&1 \
             | tee xcodebuild-screenshots.log
           build_status=${PIPESTATUS[0]}
           set -e
@@ -276,7 +276,7 @@ jobs:
             -configuration Release \
             -sdk iphoneos \
             -derivedDataPath build \
-            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_ALLOWED=NO 2>&1 \
             | tee xcodebuild-release.log
           build_status=${PIPESTATUS[0]}
           set -e
@@ -297,7 +297,7 @@ jobs:
             -sdk iphoneos \
             -derivedDataPath build-noext \
             CODE_SIGN_ENTITLEMENTS="$free_entitlements" \
-            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_ALLOWED=NO 2>&1 \
             | tee xcodebuild-noext.log
           build_status=${PIPESTATUS[0]}
           set -e

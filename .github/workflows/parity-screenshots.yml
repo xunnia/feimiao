@@ -94,7 +94,7 @@ jobs:
             -scheme QingJi \
             -destination "platform=iOS Simulator,name=$DEVICE" \
             -derivedDataPath build \
-            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_ALLOWED=NO 2>&1 \
             | tee xcodebuild-parity.log
           build_status=${PIPESTATUS[0]}
           set -e
