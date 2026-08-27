@@ -37,7 +37,7 @@ enum BudgetStore {
         calendar: Calendar = .current
     ) -> BudgetStatus {
         let scopedCategoryKey = categoryKey ?? budget.categoryKey
-        BudgetEngine.status(
+        return BudgetEngine.status(
             budget: budget.amount,
             cycle: budget.cycle,
             referenceDate: referenceDate,
