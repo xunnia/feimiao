@@ -40,7 +40,10 @@ final class LedgerStoreTests: XCTestCase {
             kind: .expense,
             emoji: "🍜"
         )
-        [book, cash, bank, dining].forEach { stack.context.insert($0) }
+        stack.context.insert(book)
+        stack.context.insert(cash)
+        stack.context.insert(bank)
+        stack.context.insert(dining)
         try stack.context.save()
         return (book, cash, bank, dining)
     }

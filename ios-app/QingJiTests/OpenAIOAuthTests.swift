@@ -1,6 +1,7 @@
 import XCTest
 @testable import QingJi
 
+@MainActor
 final class OpenAIOAuthTests: XCTestCase {
     func testPKCEUsesRFC7636Challenge() {
         let verifier = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"

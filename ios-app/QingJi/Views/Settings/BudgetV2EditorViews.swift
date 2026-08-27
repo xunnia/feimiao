@@ -86,14 +86,7 @@ struct BudgetV2PlanEditorView: View {
 
                 Section("分类额度") {
                     ForEach(expenseCategories) { category in
-                        HStack(spacing: 10) {
-                            Label("\(category.emoji) \(category.name)", systemImage: category.symbol)
-                            Spacer()
-                            TextField("不设", text: categoryAmountBinding(for: category.key))
-                            .multilineTextAlignment(.trailing)
-                            .keyboardType(.decimalPad)
-                            .frame(width: 92)
-                        }
+                        categoryBudgetRow(category)
                     }
                     Text("分类额度合计不能超过周期总额。")
                         .font(.footnote)
@@ -191,6 +184,17 @@ struct BudgetV2PlanEditorView: View {
             get: { categoryAmounts[key] ?? "" },
             set: { categoryAmounts[key] = $0 }
         )
+    }
+
+    private func categoryBudgetRow(_ category: TxCategory) -> some View {
+        HStack(spacing: 10) {
+            Label("\(category.emoji) \(category.name)", systemImage: category.symbol)
+            Spacer()
+            TextField("不设", text: categoryAmountBinding(for: category.key))
+                .multilineTextAlignment(.trailing)
+                .keyboardType(.decimalPad)
+                .frame(width: 92)
+        }
     }
 
     private func templateIndex(for id: String) -> Int {

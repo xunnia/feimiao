@@ -42,7 +42,7 @@ final class AIProviderClientTests: XCTestCase {
         XCTAssertNotNil(body["thinking"] as? [String: String])
     }
 
-    func testResponsesBodySeparatesSystemInstructions() {
+    func testResponsesBodySeparatesSystemInstructions() throws {
         let account = AIProviderAccount(
             name: "OpenAI",
             type: .custom,
