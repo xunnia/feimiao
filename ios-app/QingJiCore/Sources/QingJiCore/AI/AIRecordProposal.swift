@@ -102,13 +102,19 @@ public enum AIRecordProposalCodec {
             return rounded
         }()
 
-        let category = (item["categoryKey"] as? String ?? item["catKey"] as? String)
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .flatMap { key in
-                guard !key.isEmpty,
-                      allowedCategoryKeys == nil || allowedCategoryKeys!.contains(key) else { return nil }
-                return key
+        // Keep the optional transformation explicit. Swift 6 can otherwise
+        // select the throwing Optional.flatMap overload and fail to infer U.
+        let category: String? = {
+            guard let raw = item["categoryKey"] as? String ?? item["catKey"] as? String else {
+                return nil
             }
+            let key = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !key.isEmpty,
+                  allowedCategoryKeys == nil || allowedCategoryKeys!.contains(key) else {
+                return nil
+            }
+            return key
+        }()
         let note = (item["note"] as? String ?? "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
         let rawDate = (item["date"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
