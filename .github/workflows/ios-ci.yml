@@ -50,6 +50,7 @@ jobs:
         run: xcodegen generate --spec ios-app/project.yml --project ios-app
       - name: Build for iOS Simulator (no signing)
         run: |
+          set +e
           xcodebuild build \
             -project ios-app/QingJi.xcodeproj \
             -scheme QingJi \
@@ -59,6 +60,7 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             | tee xcodebuild-simulator.log
           build_status=${PIPESTATUS[0]}
+          set -e
           if [ "$build_status" -ne 0 ]; then
             grep -n -E 'error:|fatal error|BUILD FAILED' xcodebuild-simulator.log | tail -200 || true
           fi
@@ -106,6 +108,7 @@ jobs:
             DEVICE=$(xcrun simctl list devices available | grep "iPhone" | head -n 1 | sed -E 's/^[[:space:]]*//; s/ \(.*$//')
           fi
           test -n "$DEVICE"
+          set +e
           xcodebuild test \
             -project ios-app/QingJi.xcodeproj \
             -scheme QingJi \
@@ -114,6 +117,7 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             | tee xcodebuild-tests.log
           build_status=${PIPESTATUS[0]}
+          set -e
           if [ "$build_status" -ne 0 ]; then
             grep -n -E 'error:|fatal error|BUILD FAILED' xcodebuild-tests.log | tail -200 || true
           fi
@@ -154,6 +158,7 @@ jobs:
           fi
           echo "DEVICE=$DEVICE" >> "$GITHUB_ENV"
           echo "使用模拟器：$DEVICE"
+          set +e
           xcodebuild build \
             -project ios-app/QingJi.xcodeproj \
             -scheme QingJi \
@@ -162,6 +167,7 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             | tee xcodebuild-screenshots.log
           build_status=${PIPESTATUS[0]}
+          set -e
           if [ "$build_status" -ne 0 ]; then
             grep -n -E 'error:|fatal error|BUILD FAILED' xcodebuild-screenshots.log | tail -200 || true
           fi
@@ -263,6 +269,7 @@ jobs:
       - name: Build Release for device (unsigned)
         # iOS 设备 SDK 不允许 ad-hoc 签名，这里完全不签名，交给 Sideloadly/AltStore 重签
         run: |
+          set +e
           xcodebuild build \
             -project ios-app/QingJi.xcodeproj \
             -scheme QingJi \
@@ -272,6 +279,7 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             | tee xcodebuild-release.log
           build_status=${PIPESTATUS[0]}
+          set -e
           if [ "$build_status" -ne 0 ]; then
             grep -n -E 'error:|fatal error|BUILD FAILED' xcodebuild-release.log | tail -200 || true
           fi
@@ -281,6 +289,7 @@ jobs:
         # 并用空 entitlement 构建，交给用户侧载工具重签。
         run: |
           free_entitlements="$PWD/ios-app/QingJi/QingJi-free.entitlements"
+          set +e
           xcodebuild build \
             -project ios-app/QingJi.xcodeproj \
             -scheme QingJi \
@@ -291,6 +300,7 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             | tee xcodebuild-noext.log
           build_status=${PIPESTATUS[0]}
+          set -e
           if [ "$build_status" -ne 0 ]; then
             grep -n -E 'error:|fatal error|BUILD FAILED' xcodebuild-noext.log | tail -200 || true
           fi

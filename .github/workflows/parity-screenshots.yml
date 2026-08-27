@@ -88,6 +88,7 @@ jobs:
           fi
           test -n "$DEVICE"
           echo "DEVICE=$DEVICE" >> "$GITHUB_ENV"
+          set +e
           xcodebuild build \
             -project ios-app/QingJi.xcodeproj \
             -scheme QingJi \
@@ -96,6 +97,7 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             | tee xcodebuild-parity.log
           build_status=${PIPESTATUS[0]}
+          set -e
           if [ "$build_status" -ne 0 ]; then
             grep -n -E 'error:|fatal error|BUILD FAILED' xcodebuild-parity.log | tail -200 || true
           fi
