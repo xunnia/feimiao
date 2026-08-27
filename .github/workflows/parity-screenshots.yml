@@ -75,6 +75,8 @@ jobs:
           sudo xcode-select -s "$XCODE_APP"
           xcodebuild -version
       - name: Install XcodeGen
+        env:
+          HOMEBREW_NO_REQUIRE_TAP_TRUST: "1"
         run: brew install xcodegen
       - name: Generate project
         run: xcodegen generate --spec ios-app/project.yml --project ios-app
