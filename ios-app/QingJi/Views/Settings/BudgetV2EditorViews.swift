@@ -93,7 +93,7 @@ struct BudgetV2PlanEditorView: View {
                         .foregroundStyle(.secondary)
                 }
 
-                Section("固定承诺") {
+                Section {
                     if fixedTemplates.isEmpty {
                         Text("可选：房租、订阅、保险等固定支出会在每个周期单独预留。")
                             .font(.footnote)
@@ -136,6 +136,8 @@ struct BudgetV2PlanEditorView: View {
                     } label: {
                         Label("添加固定承诺", systemImage: "plus.circle")
                     }
+                } header: {
+                    Text("固定承诺")
                 } footer: {
                     Text(cadence == .monthly
                          ? "每月日期限制为 1–28 日，避免月底周期在不同月份漂移。"

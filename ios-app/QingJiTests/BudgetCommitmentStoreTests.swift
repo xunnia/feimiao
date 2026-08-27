@@ -88,7 +88,12 @@ final class BudgetCommitmentStoreTests: XCTestCase {
             account: account,
             book: book
         )
-        [book, account, category, plan, occurrence, transaction].forEach(context.insert)
+        context.insert(book)
+        context.insert(account)
+        context.insert(category)
+        context.insert(plan)
+        context.insert(occurrence)
+        context.insert(transaction)
         try context.save()
 
         XCTAssertEqual(try BudgetCommitmentStore.matchCandidates(for: occurrence, in: context).count, 1)
@@ -103,8 +108,8 @@ final class BudgetCommitmentStoreTests: XCTestCase {
             category: category,
             account: account,
             book: book,
-            refundOfID: transaction.stableID,
-            eventType: .refund
+            eventType: .refund,
+            refundOfID: transaction.stableID
         )
         context.insert(refund)
         try context.save()
