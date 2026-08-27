@@ -108,7 +108,7 @@ struct BudgetV2PlanEditorView: View {
                     }
                     ForEach(fixedTemplates) { template in
                         let templateID = template.id
-                        let index = fixedTemplates.firstIndex(where: { $0.id == templateID }) ?? 0
+                        let index = templateIndex(for: templateID)
                         VStack(alignment: .leading, spacing: 8) {
                             TextField("例如 房租 / 订阅", text: Binding(
                                 get: { fixedTemplates[index].name },
@@ -193,7 +193,11 @@ struct BudgetV2PlanEditorView: View {
         )
     }
 
-    private func deleteTemplateButton(id: UUID) -> some View {
+    private func templateIndex(for id: String) -> Int {
+        fixedTemplates.firstIndex(where: { $0.id == id }) ?? 0
+    }
+
+    private func deleteTemplateButton(id: String) -> some View {
         Button("删除这项", role: .destructive) {
             fixedTemplates.removeAll { $0.id == id }
         }

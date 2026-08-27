@@ -327,8 +327,8 @@ final class MoneyTransaction {
             attachmentPath: attachmentPath,
             orderNo: orderNo,
             recurringRuleID: recurringRuleID,
-            isExcluded: isExcluded,
-            refundOfID: refundOfID
+            refundOfID: refundOfID,
+            isExcluded: isExcluded
         )
     }
 
