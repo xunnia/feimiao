@@ -21,7 +21,6 @@ enum SavingsGoalStore {
 
     static func goals(in context: ModelContext) throws -> [SavingsGoal] {
         try context.fetch(FetchDescriptor<SavingsGoal>(sortBy: [
-            SortDescriptor(\SavingsGoal.isArchived),
             SortDescriptor(\SavingsGoal.updatedAt, order: .reverse)
         ]))
     }

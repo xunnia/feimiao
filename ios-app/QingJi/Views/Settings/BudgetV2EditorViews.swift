@@ -89,10 +89,7 @@ struct BudgetV2PlanEditorView: View {
                         HStack(spacing: 10) {
                             Label("\(category.emoji) \(category.name)", systemImage: category.symbol)
                             Spacer()
-                            TextField("不设", text: Binding(
-                                get: { categoryAmounts[category.key] ?? "" },
-                                set: { categoryAmounts[category.key] = $0 }
-                            ))
+                            TextField("不设", text: categoryAmountBinding(for: category.key))
                             .multilineTextAlignment(.trailing)
                             .keyboardType(.decimalPad)
                             .frame(width: 92)
@@ -192,9 +189,16 @@ struct BudgetV2PlanEditorView: View {
         }
     }
 
+    private func categoryAmountBinding(for key: String) -> Binding<String> {
+        Binding<String>(
+            get: { categoryAmounts[key] ?? "" },
+            set: { categoryAmounts[key] = $0 }
+        )
+    }
+
     private var parsedFixedTemplates: [BudgetFixedTemplateV2]? {
-        let allowedDue = cadence == .monthly ? (1...28) : (1...7)
-        fixedTemplates.compactMap { draft in
+        let allowedDue: ClosedRange<Int> = cadence == .monthly ? 1...28 : 1...7
+        return fixedTemplates.compactMap { draft -> BudgetFixedTemplateV2? in
             let cleanName = draft.name.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !cleanName.isEmpty,
                   let value = Decimal(string: draft.amount.replacingOccurrences(of: ",", with: "")),

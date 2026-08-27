@@ -194,16 +194,22 @@ enum ZipArchive {
         // ZIP entries (RFC 1951); ZIP does not store a zlib header or Adler-32
         // trailer around each entry.
         var output = Data(repeating: 0, count: max(expectedSize, 1))
-        let decoded = output.withUnsafeMutableBytes { destination in
-            data.withUnsafeBytes { source in
-                compression_decode_buffer(
-                    destination.bindMemory(to: UInt8.self).baseAddress,
+        let decoded: Int? = output.withUnsafeMutableBytes { destination in
+            guard let destinationBase = destination.bindMemory(to: UInt8.self).baseAddress else {
+                return nil
+            }
+            return data.withUnsafeBytes { source in
+                guard let sourceBase = source.bindMemory(to: UInt8.self).baseAddress else {
+                    return nil
+                }
+                return Int(compression_decode_buffer(
+                    destinationBase,
                     output.count,
-                    source.bindMemory(to: UInt8.self).baseAddress,
+                    sourceBase,
                     data.count,
                     nil,
                     COMPRESSION_ZLIB
-                )
+                ))
             }
         }
         guard decoded == expectedSize else { throw ZipArchiveError.invalidArchive }

@@ -12,6 +12,12 @@ public struct ImportedBillResult: Sendable {
     public let source: BillSource
     public let records: [TransactionRecord]
     public let skippedRowCount: Int
+
+    public init(source: BillSource, records: [TransactionRecord], skippedRowCount: Int) {
+        self.source = source
+        self.records = records
+        self.skippedRowCount = skippedRowCount
+    }
 }
 
 public enum BillImportError: Error, Equatable {

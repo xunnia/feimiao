@@ -183,22 +183,13 @@ struct SettingsView: View {
                     Text("完整备份会保留账本、资产和附件；密钥类凭据不会导出。")
                 }
 
-                Section("提醒") {
+                Section {
                     Toggle("还款提醒", isOn: $repaymentReminderEnabled)
                         .onChange(of: repaymentReminderEnabled) { _, enabled in
-                            Task { @MainActor in
-                                if enabled {
-                                    guard await RepaymentReminderScheduler.requestAuthorization() else {
-                                        repaymentReminderEnabled = false
-                                        importMessage = "系统没有允许通知，请到设置中打开通知权限。"
-                                        return
-                                    }
-                                    await RepaymentReminderScheduler.reschedule(context: context)
-                                } else {
-                                    await RepaymentReminderScheduler.cancelAll()
-                                }
-                            }
+                            updateRepaymentReminder(enabled)
                         }
+                } header: {
+                    Text("提醒")
                 } footer: {
                     Text("信用卡、贷款和个人借入会在还款日前一天及当天提醒；通知时间由 iOS 系统管理。")
                 }
@@ -295,6 +286,21 @@ struct SettingsView: View {
                 Button("好") { importMessage = nil }
             } message: {
                 Text(importMessage ?? "")
+            }
+        }
+    }
+
+    private func updateRepaymentReminder(_ enabled: Bool) {
+        Task { @MainActor in
+            if enabled {
+                guard await RepaymentReminderScheduler.requestAuthorization() else {
+                    repaymentReminderEnabled = false
+                    importMessage = "系统没有允许通知，请到设置中打开通知权限。"
+                    return
+                }
+                await RepaymentReminderScheduler.reschedule(context: context)
+            } else {
+                await RepaymentReminderScheduler.cancelAll()
             }
         }
     }
@@ -425,12 +431,13 @@ enum BillRecordSaver {
                 settlementAccountID: account?.stableID,
                 settlementAccountQuality: account == nil ? .unknown : .userConfirmed,
                 eventType: record.eventType,
+                attachmentPath: record.attachmentPath,
+                orderNo: record.orderNo,
                 reimbursable: record.reimbursable,
+                refundOfID: record.refundOfID,
                 isReimbursed: record.isReimbursed,
                 isExcluded: record.isExcluded,
-                tagNames: record.tags.joined(separator: ","),
-                attachmentPath: record.attachmentPath,
-                orderNo: record.orderNo
+                tagNames: record.tags.joined(separator: ",")
             )
             context.insert(transaction)
             if transaction.kind == .expense && !record.orderNo.isEmpty {

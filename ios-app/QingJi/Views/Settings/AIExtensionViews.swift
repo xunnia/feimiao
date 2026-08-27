@@ -180,7 +180,7 @@ struct AIExtensionSettingsView: View {
                     .id("\(skill.id)-\(refreshToken)")
                 }
             }
-            Section("受控连接器") {
+            Section {
                 ForEach(AIExtensionCatalog.connectors) { connector in
                     Toggle(isOn: binding(forConnector: connector.id)) {
                         VStack(alignment: .leading, spacing: 3) {
@@ -192,6 +192,8 @@ struct AIExtensionSettingsView: View {
                     }
                     .id("\(connector.id)-\(refreshToken)")
                 }
+            } header: {
+                Text("受控连接器")
             } footer: {
                 Text("联网搜索只访问公开网页；本地模型伴侣只允许本机回环地址，不会执行远程脚本或命令。")
             }

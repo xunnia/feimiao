@@ -191,7 +191,7 @@ enum OpenAIOAuth {
             if let expiresIn = object["expires_in"] as? NSNumber {
                 return Date().addingTimeInterval(expiresIn.doubleValue)
             }
-            return expiresAt(from: accessToken)
+            return Self.expiresAt(from: accessToken)
         }()
         return OpenAIOAuthTokens(
             accessToken: accessToken,

@@ -65,7 +65,7 @@ enum WidgetSnapshotWriter {
             : (budgetRemaining >= 0 ? money(budgetRemaining) : "超 \(money(-budgetRemaining))")
         let budgetHint = budget == nil
             ? "未设置预算 · 已展示本月支出"
-            : "已用 \(money(budgetStatus?.spentThisMonth ?? summary.totalExpense)) / \(money(budget.amount))"
+            : "已用 \(money(budgetStatus?.spentThisMonth ?? summary.totalExpense)) / \(money(budget?.amount ?? 0))"
 
         let categoryTotals = summary.expenseByCategory.prefix(3).map { item in
             let ratio = summary.totalExpense > 0
@@ -104,7 +104,7 @@ enum WidgetSnapshotWriter {
             categories: categoryTotals
         )
         guard let data = try? JSONEncoder().encode(snapshot) else { return }
-        try? data.write(to: container.appendingPathComponent(fileName), options: .atomic)
+        try? data.write(to: container.appendingPathComponent(fileName), options: Data.WritingOptions.atomic)
         WidgetCenter.shared.reloadAllTimelines()
     }
 }

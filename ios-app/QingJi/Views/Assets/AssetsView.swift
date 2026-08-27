@@ -246,7 +246,7 @@ struct AssetsView: View {
 
     private func physicalRow(_ asset: PhysicalAsset) -> some View {
         let metrics = try? AssetStore.metrics(for: asset, in: context, asOf: AppClock.now)
-        Button {
+        return Button {
             editingAsset = asset
         } label: {
             HStack(spacing: 12) {
@@ -695,9 +695,9 @@ private struct ReceivableEditor: View {
                     name: name,
                     kind: kind,
                     originalAmount: amount,
-                    book: books.first { $0.stableID == bookID },
                     counterparty: counterparty,
                     dueDate: dueDateEnabled ? dueDate : nil,
+                    book: books.first { $0.stableID == bookID },
                     note: note,
                     includeInNetWorth: includeInNetWorth
                 )

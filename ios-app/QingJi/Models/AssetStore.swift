@@ -28,7 +28,6 @@ enum AssetStore {
 
     static func visibleAssets(in context: ModelContext) throws -> [PhysicalAsset] {
         try context.fetch(FetchDescriptor<PhysicalAsset>(sortBy: [
-            SortDescriptor(\PhysicalAsset.isDeleted),
             SortDescriptor(\PhysicalAsset.updatedAt, order: .reverse)
         ])).filter { !$0.isDeleted && $0.lifecycle != .archived }
     }
@@ -152,13 +151,14 @@ enum AssetStore {
         guard type != .sourceTransaction,
               type != .purchaseTransaction,
               type != .saleAccountMovement else { throw Error.invalidTransaction }
-        guard costTransactions(for: asset, in: context)
+        guard try costTransactions(for: asset, in: context)
             .contains(where: { $0.stableID == transaction.stableID }) else {
             throw Error.invalidTransaction
         }
+        let records = try context.fetch(FetchDescriptor<MoneyTransaction>()).map(\.record)
         let net = LedgerPolicy.refundStatus(
             for: transaction.record,
-            in: try context.fetch(FetchDescriptor<MoneyTransaction>())
+            in: records
         ).remainingAmount
         guard net > 0 else { throw Error.invalidTransaction }
         let link = AssetTransactionLink(

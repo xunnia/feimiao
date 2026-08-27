@@ -155,42 +155,56 @@ struct MeowAssistantView: View {
     private var modelMenu: some View {
         Menu {
             ForEach(providerStore.enabledAccounts) { account in
-                Section(account.displayName) {
-                    ForEach(account.modelCandidates, id: .self) { model in
-                        Button {
-                            providerStore.setModel(model, for: account.id)
-                        } label: {
-                            if providerStore.selectedAccountID == account.id &&
-                                providerStore.selectedAccount?.model == model {
-                                Label(model, systemImage: "checkmark")
-                            } else {
-                                Text(model)
-                            }
-                        }
-                    }
-                }
+                modelMenuSection(for: account)
             }
             if let current = providerStore.selectedAccount {
-                Section("思考强度 · \(current.displayName)") {
-                    ForEach(AIReasoningEffort.allCases) { effort in
-                        Button {
-                            providerStore.setEffort(effort, for: current.id)
-                        } label: {
-                            if current.effort == effort {
-                                Label(effort.label, systemImage: "checkmark")
-                            } else {
-                                Text(effort.label)
-                            }
-                        }
-                    }
-                }
+                effortMenuSection(for: current)
             }
         } label: {
             Image(systemName: "slider.horizontal.3")
         }
         .accessibilityLabel(providerStore.selectedAccount.map {
-            "($0.displayName) · ($0.model) · ($0.effort.label)"
+            "\($0.displayName) · \($0.model) · \($0.effort.label)"
         } ?? "选择 AI 模型")
+    }
+
+    @ViewBuilder
+    private func modelMenuSection(for account: AIProviderAccount) -> some View {
+        Section {
+            ForEach(account.modelCandidates, id: \.self) { model in
+                Button {
+                    providerStore.setModel(model, for: account.id)
+                } label: {
+                    Label(
+                        model,
+                        systemImage: providerStore.selectedAccountID == account.id &&
+                            providerStore.selectedAccount?.model == model
+                            ? "checkmark"
+                            : "circle"
+                    )
+                }
+            }
+        } header: {
+            Text(account.displayName)
+        }
+    }
+
+    @ViewBuilder
+    private func effortMenuSection(for account: AIProviderAccount) -> some View {
+        Section {
+            ForEach(AIReasoningEffort.allCases) { effort in
+                Button {
+                    providerStore.setEffort(effort, for: account.id)
+                } label: {
+                    Label(
+                        effort.label,
+                        systemImage: account.effort == effort ? "checkmark" : "circle"
+                    )
+                }
+            }
+        } header: {
+            Text("思考强度 · \(account.displayName)")
+        }
     }
 
     private var welcome: some View {
@@ -1124,23 +1138,12 @@ private struct AIRecordCardView: View {
                     .foregroundStyle(.secondary)
 
                     if !deleted, card.saved, let onChangeCategory {
-                        Menu {
-                            ForEach(categoryOptions[entry.kind.rawValue] ?? [], id: \.key) { option in
-                                Button {
-                                    onChange(index, option.key)
-                                } label: {
-                                    if option.key == key {
-                                        Label(option.name, systemImage: "checkmark")
-                                    } else {
-                                        Text(option.name)
-                                    }
-                                }
-                            }
-                        } label: {
-                            Label("改分类", systemImage: "tag")
-                                .font(.caption)
-                        }
-                        .buttonStyle(.bordered)
+                        categoryMenu(
+                            index: index,
+                            selectedKey: key,
+                            options: categoryOptions[entry.kind.rawValue] ?? [],
+                            onChange: onChangeCategory
+                        )
                     }
                 }
                 .opacity(deleted ? 0.55 : 1)
@@ -1172,7 +1175,6 @@ private struct AIRecordCardView: View {
                     }
                 }
             }
-
             if !card.feedback.isEmpty {
                 Text(card.feedback)
                     .font(.caption)
@@ -1185,6 +1187,30 @@ private struct AIRecordCardView: View {
             RoundedRectangle(cornerRadius: 16)
                 .stroke(Color.accentColor.opacity(0.16), lineWidth: 1)
         }
+    }
+
+    private func categoryMenu(
+        index: Int,
+        selectedKey: String,
+        options: [(key: String, name: String)],
+        onChange: @escaping (Int, String) -> Void
+    ) -> some View {
+        Menu {
+            ForEach(options, id: \.key) { option in
+                Button {
+                    onChange(index, option.key)
+                } label: {
+                    Label(
+                        option.name,
+                        systemImage: option.key == selectedKey ? "checkmark" : "circle"
+                    )
+                }
+            }
+        } label: {
+            Label("改分类", systemImage: "tag")
+                .font(.caption)
+        }
+        .buttonStyle(.bordered)
     }
 }
 

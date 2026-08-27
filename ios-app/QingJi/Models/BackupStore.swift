@@ -952,8 +952,8 @@ enum BackupStore {
                 key: item.key,
                 name: item.name,
                 symbol: item.symbol,
-                emoji: item.emoji,
                 kind: item.kind,
+                emoji: item.emoji,
                 parentKey: item.parentKey,
                 sortOrder: item.sortOrder
             )

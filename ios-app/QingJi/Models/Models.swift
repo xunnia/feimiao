@@ -288,7 +288,7 @@ final class MoneyTransaction {
                 ?? category?.name
                 ?? ""
         }()
-        TransactionRecord(
+        return TransactionRecord(
             id: stableID,
             kind: kind,
             amount: amount,

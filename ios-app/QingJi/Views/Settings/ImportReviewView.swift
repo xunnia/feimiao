@@ -33,9 +33,9 @@ struct ImportReviewView: View {
                     kind: .expense,
                     amount: 280,
                     categoryKey: "shop_digital_acc",
+                    note: "京东 · 机械键盘",
                     merchant: "京东-订单编号349126",
                     product: "机械键盘",
-                    note: "京东 · 机械键盘",
                     date: date(1),
                     timePrecision: .exact,
                     eventType: .expense,
@@ -44,8 +44,8 @@ struct ImportReviewView: View {
                 TransactionRecord(
                     kind: .expense,
                     amount: 48,
-                    merchant: "M&X*^O^*",
                     note: "转账",
+                    merchant: "M&X*^O^*",
                     date: date(2),
                     timePrecision: .exact,
                     eventType: .expense
@@ -53,8 +53,8 @@ struct ImportReviewView: View {
                 TransactionRecord(
                     kind: .expense,
                     amount: 26,
-                    merchant: "M&X*^O^*",
                     note: "日常消费",
+                    merchant: "M&X*^O^*",
                     date: date(3),
                     timePrecision: .exact,
                     eventType: .expense
@@ -62,9 +62,9 @@ struct ImportReviewView: View {
                 TransactionRecord(
                     kind: .expense,
                     amount: -280,
+                    note: "退款 · 机械键盘",
                     merchant: "京东",
                     product: "机械键盘退款",
-                    note: "退款 · 机械键盘",
                     date: now,
                     timePrecision: .exact,
                     eventType: .refund,
