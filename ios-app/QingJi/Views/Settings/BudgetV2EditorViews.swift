@@ -135,10 +135,7 @@ struct BudgetV2PlanEditorView: View {
                                 .multilineTextAlignment(.trailing)
                                 .frame(width: 96)
                             }
-                            Button("删除这项", role: .destructive) {
-                                fixedTemplates.removeAll { $0.id == templateID }
-                            }
-                            .font(.caption)
+                            deleteTemplateButton(id: templateID)
                         }
                     }
                     Button {
@@ -194,6 +191,13 @@ struct BudgetV2PlanEditorView: View {
             get: { categoryAmounts[key] ?? "" },
             set: { categoryAmounts[key] = $0 }
         )
+    }
+
+    private func deleteTemplateButton(id: UUID) -> some View {
+        Button("删除这项", role: .destructive) {
+            fixedTemplates.removeAll { $0.id == id }
+        }
+        .font(.caption)
     }
 
     private var parsedFixedTemplates: [BudgetFixedTemplateV2]? {

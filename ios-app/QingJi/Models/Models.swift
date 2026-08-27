@@ -288,20 +288,28 @@ final class MoneyTransaction {
                 ?? category?.name
                 ?? ""
         }()
+        let categoryName = category?.name ?? ""
+        let categoryKey = category?.key ?? ""
+        let topCategoryKey = category?.parentKey ?? category?.key ?? ""
+        let accountID = account?.stableID
+        let accountName = account?.name ?? ""
+        let toAccountID = toAccount?.stableID
+        let toAccountName = toAccount?.name ?? ""
+        let bookID = book?.stableID
         return TransactionRecord(
             id: stableID,
             kind: kind,
             amount: amount,
             currencyCode: currencyCode,
-            categoryName: category?.name ?? "",
-            categoryKey: category?.key ?? "",
+            categoryName: categoryName,
+            categoryKey: categoryKey,
             topCategoryName: topCategoryName,
-            topCategoryKey: category?.parentKey ?? category?.key ?? "",
-            accountID: account?.stableID,
-            accountName: account?.name ?? "",
-            toAccountID: toAccount?.stableID,
-            toAccountName: toAccount?.name ?? "",
-            bookID: book?.stableID,
+            topCategoryKey: topCategoryKey,
+            accountID: accountID,
+            accountName: accountName,
+            toAccountID: toAccountID,
+            toAccountName: toAccountName,
+            bookID: bookID,
             note: note,
             merchant: merchantName,
             product: productName,

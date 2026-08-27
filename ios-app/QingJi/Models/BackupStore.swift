@@ -953,9 +953,9 @@ enum BackupStore {
                 name: item.name,
                 symbol: item.symbol,
                 kind: item.kind,
+                sortOrder: item.sortOrder,
                 emoji: item.emoji,
-                parentKey: item.parentKey,
-                sortOrder: item.sortOrder
+                parentKey: item.parentKey
             )
             if categoriesByKey[item.key] == nil { context.insert(category) }
             category.name = item.name
