@@ -12,7 +12,7 @@ enum AppClock {
         }
 
         let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime, .withDashInDate, .withColonSeparatorInTime]
+        formatter.formatOptions = [.withInternetDateTime, .withDashSeparatorInDate, .withColonSeparatorInTime]
         return formatter.date(from: raw)
     }()
 
