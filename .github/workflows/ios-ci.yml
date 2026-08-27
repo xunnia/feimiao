@@ -58,7 +58,11 @@ jobs:
             -derivedDataPath build-simulator \
             CODE_SIGNING_ALLOWED=NO \
             | tee xcodebuild-simulator.log
-          exit ${PIPESTATUS[0]}
+          build_status=${PIPESTATUS[0]}
+          if [ "$build_status" -ne 0 ]; then
+            grep -n -E 'error:|fatal error|BUILD FAILED' xcodebuild-simulator.log | tail -200 || true
+          fi
+          exit "$build_status"
       - name: Package simulator app for Appetize
         run: |
           APP_PATH="build-simulator/Build/Products/Debug-iphonesimulator/QingJi.app"
@@ -109,7 +113,11 @@ jobs:
             -derivedDataPath build-tests \
             CODE_SIGNING_ALLOWED=NO \
             | tee xcodebuild-tests.log
-          test ${PIPESTATUS[0]} -eq 0
+          build_status=${PIPESTATUS[0]}
+          if [ "$build_status" -ne 0 ]; then
+            grep -n -E 'error:|fatal error|BUILD FAILED' xcodebuild-tests.log | tail -200 || true
+          fi
+          test "$build_status" -eq 0
 
   simulator-screenshots:
     name: 模拟器截图
@@ -153,7 +161,11 @@ jobs:
             -derivedDataPath build \
             CODE_SIGNING_ALLOWED=NO \
             | tee xcodebuild-screenshots.log
-          exit ${PIPESTATUS[0]}
+          build_status=${PIPESTATUS[0]}
+          if [ "$build_status" -ne 0 ]; then
+            grep -n -E 'error:|fatal error|BUILD FAILED' xcodebuild-screenshots.log | tail -200 || true
+          fi
+          exit "$build_status"
       - name: Launch app and capture screenshots
         run: |
           xcrun simctl bootstatus "$DEVICE" -b
@@ -259,7 +271,11 @@ jobs:
             -derivedDataPath build \
             CODE_SIGNING_ALLOWED=NO \
             | tee xcodebuild-release.log
-          exit ${PIPESTATUS[0]}
+          build_status=${PIPESTATUS[0]}
+          if [ "$build_status" -ne 0 ]; then
+            grep -n -E 'error:|fatal error|BUILD FAILED' xcodebuild-release.log | tail -200 || true
+          fi
+          exit "$build_status"
       - name: Build no-extension fallback (unsigned)
         # 免费 Personal Team 可能无法签 App Groups/扩展；这个版本只保留主 App，
         # 并用空 entitlement 构建，交给用户侧载工具重签。
@@ -274,7 +290,11 @@ jobs:
             CODE_SIGN_ENTITLEMENTS="$free_entitlements" \
             CODE_SIGNING_ALLOWED=NO \
             | tee xcodebuild-noext.log
-          exit ${PIPESTATUS[0]}
+          build_status=${PIPESTATUS[0]}
+          if [ "$build_status" -ne 0 ]; then
+            grep -n -E 'error:|fatal error|BUILD FAILED' xcodebuild-noext.log | tail -200 || true
+          fi
+          exit "$build_status"
       - name: Package IPA (完整版 + 免费团队无扩展兜底版)
         run: |
           # 完整版（含桌面小组件）

@@ -95,7 +95,11 @@ jobs:
             -derivedDataPath build \
             CODE_SIGNING_ALLOWED=NO \
             | tee xcodebuild-parity.log
-          test ${PIPESTATUS[0]} -eq 0
+          build_status=${PIPESTATUS[0]}
+          if [ "$build_status" -ne 0 ]; then
+            grep -n -E 'error:|fatal error|BUILD FAILED' xcodebuild-parity.log | tail -200 || true
+          fi
+          test "$build_status" -eq 0
       - name: Capture screens
         run: |
           xcrun simctl bootstatus "$DEVICE" -b
