@@ -43,6 +43,90 @@ final class BudgetEngineTests: XCTestCase {
         let status = BudgetEngine.status(monthlyBudget: 3000, records: records, on: date(10), calendar: calendar)
         XCTAssertEqual(status.spentThisMonth, 100)
     }
+
+    func testExcludedAndRefundRecordsDoNotOverstateBudget() {
+        let originalID = UUID()
+        let records = [
+            TransactionRecord(id: originalID, kind: .expense, amount: 100, date: date(5)),
+            TransactionRecord(kind: .expense, amount: -40, date: date(5), refundOfID: originalID),
+            TransactionRecord(kind: .expense, amount: 900, date: date(5), isExcluded: true),
+        ]
+        let status = BudgetEngine.status(monthlyBudget: 3000, records: records, on: date(10), calendar: calendar)
+        XCTAssertEqual(status.spentThisMonth, 60)
+    }
+
+    func testWeeklyBudgetUsesMondayThroughSundayWindow() {
+        let records = [
+            TransactionRecord(kind: .expense, amount: 40, date: date(8)),
+            TransactionRecord(kind: .expense, amount: 25, date: date(14)),
+            TransactionRecord(kind: .expense, amount: 90, date: date(15)),
+        ]
+
+        let status = BudgetEngine.status(
+            budget: 140,
+            cycle: .weekly,
+            referenceDate: date(10),
+            records: records,
+            calendar: calendar
+        )
+
+        XCTAssertEqual(status.spentThisMonth, 65)
+        XCTAssertEqual(status.spentToday, 0)
+        XCTAssertEqual(status.remaining, 75)
+    }
+
+    func testCustomBudgetIncludesBothBoundaryDays() {
+        let records = [
+            TransactionRecord(kind: .expense, amount: 10, date: date(5)),
+            TransactionRecord(kind: .expense, amount: 20, date: date(7)),
+            TransactionRecord(kind: .expense, amount: 30, date: date(8)),
+        ]
+
+        let status = BudgetEngine.status(
+            budget: 100,
+            cycle: .custom,
+            referenceDate: date(7),
+            customStart: date(5),
+            customEnd: date(7),
+            records: records,
+            calendar: calendar
+        )
+
+        XCTAssertEqual(status.spentThisMonth, 30)
+        XCTAssertEqual(status.spentToday, 20)
+        XCTAssertEqual(status.remaining, 70)
+    }
+
+    func testCategoryBudgetIncludesChildrenButNotOtherCategories() {
+        let records = [
+            TransactionRecord(
+                kind: .expense,
+                amount: 40,
+                categoryKey: "dining_lunch",
+                topCategoryKey: "dining",
+                date: date(5)
+            ),
+            TransactionRecord(
+                kind: .expense,
+                amount: 25,
+                categoryKey: "shopping",
+                topCategoryKey: "shopping",
+                date: date(6)
+            ),
+        ]
+
+        let status = BudgetEngine.status(
+            budget: 100,
+            cycle: .monthly,
+            referenceDate: date(10),
+            categoryKey: "dining",
+            records: records,
+            calendar: calendar
+        )
+
+        XCTAssertEqual(status.spentThisMonth, 40)
+        XCTAssertEqual(status.remaining, 60)
+    }
 }
 
 final class AccountBalanceCalculatorTests: XCTestCase {

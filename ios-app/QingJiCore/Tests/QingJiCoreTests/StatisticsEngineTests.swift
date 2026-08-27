@@ -54,4 +54,79 @@ final class StatisticsEngineTests: XCTestCase {
         XCTAssertEqual(summary.dailyTotals.count, 28)
         XCTAssertTrue(summary.expenseByCategory.isEmpty)
     }
+
+    func testRefundAndExcludedRecordsUseNetAmount() {
+        let originalID = UUID()
+        let records = [
+            TransactionRecord(id: originalID, kind: .expense, amount: 100, categoryName: "购物", date: date(2026, 6, 10)),
+            TransactionRecord(kind: .expense, amount: -35, categoryName: "购物", date: date(2026, 6, 10), refundOfID: originalID),
+            TransactionRecord(kind: .expense, amount: 500, categoryName: "其他", date: date(2026, 6, 10), isExcluded: true),
+        ]
+        let summary = StatisticsEngine.monthlySummary(of: records, year: 2026, month: 6, calendar: calendar)
+        XCTAssertEqual(summary.totalExpense, 65)
+        XCTAssertEqual(summary.expenseByCategory.first?.total, 65)
+        XCTAssertEqual(summary.expenseByCategory.first?.count, 1)
+    }
+
+    func testPeriodSummaryIncludesBothEndpointsAndPreservesEmptyDays() {
+        let records = [
+            TransactionRecord(kind: .expense, amount: 30, categoryName: "餐饮", date: date(2026, 6, 29)),
+            TransactionRecord(kind: .income, amount: 100, categoryName: "工资", date: date(2026, 6, 30)),
+            TransactionRecord(kind: .expense, amount: 20, categoryName: "交通", date: date(2026, 7, 1)),
+            TransactionRecord(kind: .transfer, amount: 999, date: date(2026, 6, 30)),
+        ]
+
+        let summary = StatisticsEngine.periodSummary(
+            of: records,
+            start: date(2026, 6, 29),
+            end: date(2026, 7, 1),
+            calendar: calendar
+        )
+
+        XCTAssertEqual(summary.totalExpense, 50)
+        XCTAssertEqual(summary.totalIncome, 100)
+        XCTAssertEqual(summary.balance, 50)
+        XCTAssertEqual(summary.dailyTotals.count, 3)
+        XCTAssertEqual(summary.dailyTotals.map { calendar.component(.day, from: $0.date) }, [29, 30, 1])
+        XCTAssertEqual(summary.dailyTotals[1].income, 100)
+        XCTAssertEqual(summary.dailyTotals[1].expense, 0)
+        XCTAssertEqual(summary.expenseByCategory.map(\.name), ["餐饮", "交通"])
+    }
+
+    func testPeriodSummaryNormalizesReversedDates() {
+        let summary = StatisticsEngine.periodSummary(
+            of: [
+                TransactionRecord(kind: .expense, amount: 12, date: date(2026, 6, 30)),
+            ],
+            start: date(2026, 7, 1),
+            end: date(2026, 6, 30),
+            calendar: calendar
+        )
+
+        XCTAssertEqual(summary.start, calendar.startOfDay(for: date(2026, 6, 30)))
+        XCTAssertEqual(summary.end, calendar.startOfDay(for: date(2026, 7, 1)))
+        XCTAssertEqual(summary.totalExpense, 12)
+        XCTAssertEqual(summary.dailyTotals.count, 2)
+    }
+
+    func testCategoryTotalsPreferStableTopLevelCategoryName() {
+        let summary = StatisticsEngine.monthlySummary(
+            of: [
+                TransactionRecord(
+                    kind: .expense,
+                    amount: 28,
+                    categoryName: "数码配件",
+                    categoryKey: "shop_digital_acc",
+                    topCategoryName: "购物消费",
+                    topCategoryKey: "shopping",
+                    date: date(2026, 6, 8)
+                )
+            ],
+            year: 2026,
+            month: 6,
+            calendar: calendar
+        )
+
+        XCTAssertEqual(summary.expenseByCategory.first?.name, "购物消费")
+    }
 }

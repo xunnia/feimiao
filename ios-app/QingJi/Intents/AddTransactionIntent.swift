@@ -37,18 +37,19 @@ struct AddTransactionIntent: AppIntent {
         }
         let fallbackKey = kind == .income ? "otherIncome" : CategorySeed.fallbackExpenseKey
         let category = matched ?? categories.first { $0.key == fallbackKey }
-        let account = (try? context.fetch(FetchDescriptor<Account>(sortBy: [SortDescriptor(\.sortOrder)])))?.first
+        let account = (try? context.fetch(FetchDescriptor<Account>(sortBy: [SortDescriptor(\.sortOrder)])))?
+            .first(where: { !$0.isDeleted && $0.status == .active })
 
-        let transaction = MoneyTransaction(
+        let transaction = try LedgerStore.createTransaction(
+            in: context,
             amount: Decimal(amount),
             kind: kind,
+            date: Date(),
             note: note ?? "",
-            currencyCode: account?.currencyCode ?? "CNY",
             category: category,
-            account: account
+            account: account,
+            book: (try? context.fetch(FetchDescriptor<Book>(sortBy: [SortDescriptor(\.sortOrder)])))?.first
         )
-        context.insert(transaction)
-        try context.save()
 
         let amountText = MoneyFormat.string(transaction.amount, currencyCode: transaction.currencyCode)
         return .result(dialog: "已记一笔：\(category?.name ?? "") \(amountText)")

@@ -4,88 +4,124 @@ import SwiftData
 import Charts
 import QingJiCore
 
-/// 月度统计：收支卡片 + 分类占比扇形图 + 每日支出柱状图 + 分类排行。
+/// 统计页：周 / 月 / 年 / 自定义四种时间维度。
+///
+/// 展示层只负责选择时间和绘图，金额、退款折叠和“不计入收支”过滤全部交给
+/// QingJiCore 的 StatisticsEngine，保证 iOS 与 Android 共用同一账务口径。
 struct MonthlyStatsView: View {
-    /// 复用 AppRouter 定义的枚举；本地 typealias 保持代码可读性。
     private typealias Scope = AppRouter.StatsScope
 
     @Environment(AppRouter.self) private var router
-
     @Query private var transactions: [MoneyTransaction]
     @Query private var budgets: [Budget]
-    @State private var displayedMonth = Date()
 
-    private var summary: MonthlySummary {
+    @State private var displayedMonth = AppClock.now
+    @State private var weekStart = Calendar.current.startOfDay(for: AppClock.now)
+    @State private var customStartDate = Calendar.current.startOfDay(for: AppClock.now)
+    @State private var customEndDate = Calendar.current.startOfDay(for: AppClock.now)
+    @AppStorage("qingji.stats.custom.start") private var savedCustomStart: Double = 0
+    @AppStorage("qingji.stats.custom.end") private var savedCustomEnd: Double = 0
+
+    private var scopedTransactions: [MoneyTransaction] {
+        LedgerScope.filter(transactions, selectedBookID: router.selectedBookID)
+    }
+
+    private var records: [TransactionRecord] {
+        scopedTransactions.map(\.record)
+    }
+
+    private var monthSummary: MonthlySummary {
         let components = Calendar.current.dateComponents([.year, .month], from: displayedMonth)
         return StatisticsEngine.monthlySummary(
-            of: transactions.map(\.record),
+            of: records,
             year: components.year ?? 2026,
             month: components.month ?? 1
         )
     }
 
-    private var yearlySummary: YearlySummary {
-        let year = Calendar.current.component(.year, from: displayedMonth)
-        return StatisticsEngine.yearlySummary(of: transactions.map(\.record), year: year)
+    private var yearSummary: YearlySummary {
+        StatisticsEngine.yearlySummary(
+            of: records,
+            year: Calendar.current.component(.year, from: displayedMonth)
+        )
+    }
+
+    private var weekSummary: PeriodSummary {
+        StatisticsEngine.periodSummary(
+            of: records,
+            start: weekStart,
+            end: Calendar.current.date(byAdding: .day, value: 6, to: weekStart) ?? weekStart
+        )
+    }
+
+    private var customSummary: PeriodSummary {
+        StatisticsEngine.periodSummary(of: records, start: customStartDate, end: customEndDate)
     }
 
     private var monthlyBudget: Budget? {
-        budgets.first { $0.categoryKey == nil && $0.amount > 0 }
+        BudgetStore.effectiveTotalBudget(
+            from: budgets,
+            selectedBookID: router.selectedBookID
+        )
     }
 
     private var currencyCode: String {
-        transactions.first?.currencyCode ?? Locale.current.currency?.identifier ?? "CNY"
+        scopedTransactions.first?.currencyCode ?? "CNY"
     }
 
     var body: some View {
-        // 用 Bindable 包装 @Observable 对象，让 Picker 绑定到 router.statsScope
         @Bindable var router = router
+
         NavigationStack {
             ScrollView {
                 VStack(spacing: 20) {
                     Picker("范围", selection: $router.statsScope) {
-                        Text("月度").tag(Scope.month)
-                        Text("年度").tag(Scope.year)
+                        Text("周").tag(Scope.week)
+                        Text("月").tag(Scope.month)
+                        Text("年").tag(Scope.year)
+                        Text("自定义").tag(Scope.custom)
                     }
                     .pickerStyle(.segmented)
 
-                    if router.statsScope == .month {
-                        monthSwitcher
-                        totalsCards
+                    switch router.statsScope {
+                    case .week:
+                        weekHeader
+                        periodContent(weekSummary)
+                    case .month:
+                        monthHeader
+                        totalsCards(
+                            expense: monthSummary.totalExpense,
+                            income: monthSummary.totalIncome,
+                            balance: monthSummary.balance
+                        )
                         if let budget = monthlyBudget {
                             budgetProgress(budget)
                         }
-                        if summary.expenseByCategory.isEmpty {
-                            ContentUnavailableView(
-                                "本月还没有支出",
-                                systemImage: "chart.pie",
-                                description: Text("记几笔之后这里会出现分析图表")
-                            )
-                            .padding(.top, 40)
-                        } else {
-                            categoryPieChart
-                            dailyBarChart
-                            categoryRanking
-                        }
-                    } else {
+                        monthlyContent
+                    case .year:
+                        yearHeader
                         yearlyContent
+                    case .custom:
+                        customHeader
+                        periodContent(customSummary)
                     }
-                    // 注：router.statsScope 在深链触发后由 AppRouter 更新，
-                    // Picker 绑定确保 UI 与路由状态同步。
                 }
                 .padding()
             }
+            .background(Color(.systemGroupedBackground))
             .navigationTitle("统计")
+            .onAppear(perform: restoreDateSelections)
         }
     }
 
-    private var monthSwitcher: some View {
+    private var monthHeader: some View {
         HStack {
             Button {
                 shiftMonth(by: -1)
             } label: {
                 Image(systemName: "chevron.left")
             }
+            .buttonStyle(.bordered)
             Spacer()
             Text(displayedMonth, format: .dateTime.year().month())
                 .font(.headline)
@@ -95,23 +131,135 @@ struct MonthlyStatsView: View {
             } label: {
                 Image(systemName: "chevron.right")
             }
-            .disabled(Calendar.current.isDate(displayedMonth, equalTo: Date(), toGranularity: .month))
-        }
-        .padding(.horizontal, 4)
-    }
-
-    private func shiftMonth(by value: Int) {
-        if let newDate = Calendar.current.date(byAdding: .month, value: value, to: displayedMonth) {
-            displayedMonth = newDate
+            .buttonStyle(.bordered)
+            .disabled(Calendar.current.isDate(displayedMonth, equalTo: AppClock.now, toGranularity: .month))
         }
     }
 
-    private var totalsCards: some View {
+    private var weekHeader: some View {
+        HStack {
+            Button {
+                shiftWeek(by: -7)
+            } label: {
+                Image(systemName: "chevron.left")
+            }
+            .buttonStyle(.bordered)
+            Spacer()
+            VStack(spacing: 2) {
+                Text("本周")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Text(weekStart, format: .dateTime.month().day())
+                Text(weekEnd, format: .dateTime.month().day())
+                    .foregroundStyle(.secondary)
+            }
+            .font(.headline)
+            Spacer()
+            Button {
+                shiftWeek(by: 7)
+            } label: {
+                Image(systemName: "chevron.right")
+            }
+            .buttonStyle(.bordered)
+            .disabled(weekEnd >= Calendar.current.startOfDay(for: AppClock.now))
+        }
+    }
+
+    private var yearHeader: some View {
+        HStack {
+            Button {
+                shiftYear(by: -1)
+            } label: {
+                Image(systemName: "chevron.left")
+            }
+            .buttonStyle(.bordered)
+            Spacer()
+            Text(displayedMonth, format: .dateTime.year())
+                .font(.headline)
+            Spacer()
+            Button {
+                shiftYear(by: 1)
+            } label: {
+                Image(systemName: "chevron.right")
+            }
+            .buttonStyle(.bordered)
+            .disabled(Calendar.current.component(.year, from: displayedMonth) >= Calendar.current.component(.year, from: AppClock.now))
+        }
+    }
+
+    private var customHeader: some View {
+        VStack(spacing: 10) {
+            HStack {
+                Label("开始", systemImage: "calendar")
+                    .foregroundStyle(.secondary)
+                Spacer()
+                DatePicker("开始日期", selection: $customStartDate, in: ...AppClock.now, displayedComponents: .date)
+                    .labelsHidden()
+                    .datePickerStyle(.compact)
+            }
+            HStack {
+                Label("结束", systemImage: "calendar.badge.checkmark")
+                    .foregroundStyle(.secondary)
+                Spacer()
+                DatePicker("结束日期", selection: $customEndDate, in: customStartDate...AppClock.now, displayedComponents: .date)
+                    .labelsHidden()
+                    .datePickerStyle(.compact)
+            }
+        }
+        .font(.subheadline)
+        .padding(12)
+        .glassEffect(.regular, in: .rect(cornerRadius: 16))
+        .onChange(of: customStartDate) { _, newValue in
+            customStartDate = Calendar.current.startOfDay(for: newValue)
+            if customEndDate < customStartDate {
+                customEndDate = customStartDate
+            }
+            persistCustomRange()
+        }
+        .onChange(of: customEndDate) { _, newValue in
+            customEndDate = Calendar.current.startOfDay(for: newValue)
+            if customEndDate < customStartDate {
+                customEndDate = customStartDate
+            }
+            persistCustomRange()
+        }
+    }
+
+    private var weekEnd: Date {
+        Calendar.current.date(byAdding: .day, value: 6, to: weekStart) ?? weekStart
+    }
+
+    private var monthlyContent: some View {
+        Group {
+            if monthSummary.expenseByCategory.isEmpty {
+                emptyState(title: "本月还没有支出", systemImage: "chart.pie", message: "记几笔之后这里会出现分析图表")
+            } else {
+                categoryPieChart(monthSummary.expenseByCategory)
+                monthlyDailyBarChart
+                categoryRanking(monthSummary.expenseByCategory)
+            }
+        }
+    }
+
+    private func periodContent(_ summary: PeriodSummary) -> some View {
+        VStack(spacing: 20) {
+            totalsCards(expense: summary.totalExpense, income: summary.totalIncome, balance: summary.balance)
+            if summary.expenseByCategory.isEmpty {
+                emptyState(title: "这个区间还没有支出", systemImage: "chart.pie", message: "记几笔之后这里会出现分析图表")
+            } else {
+                categoryPieChart(summary.expenseByCategory)
+                periodDailyBarChart(summary.dailyTotals)
+                categoryRanking(summary.expenseByCategory)
+            }
+        }
+    }
+
+    private func totalsCards(expense: Decimal, income: Decimal, balance: Decimal) -> some View {
         GlassEffectContainer(spacing: 12) {
             HStack(spacing: 12) {
-                totalCard(title: "支出", amount: summary.totalExpense, color: Color.expense)
-                totalCard(title: "收入", amount: summary.totalIncome, color: Color.income)
-                totalCard(title: "结余", amount: summary.balance, color: summary.balance >= 0 ? Color.income : Color.warning)
+                totalCard(title: "支出", amount: expense, color: Color.expense)
+                totalCard(title: "收入", amount: income, color: Color.income)
+                totalCard(title: "结余", amount: balance, color: balance >= 0 ? Color.income : Color.warning)
             }
         }
     }
@@ -132,11 +280,11 @@ struct MonthlyStatsView: View {
         .glassEffect(.regular, in: .rect(cornerRadius: 16))
     }
 
-    private var categoryPieChart: some View {
+    private func categoryPieChart(_ categories: [CategoryTotal]) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("支出构成")
                 .font(.headline)
-            Chart(summary.expenseByCategory.prefix(8), id: \.name) { item in
+            Chart(categories.prefix(8), id: \.name) { item in
                 SectorMark(
                     angle: .value("金额", MoneyFormat.double(item.total)),
                     innerRadius: .ratio(0.6),
@@ -150,11 +298,11 @@ struct MonthlyStatsView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private var dailyBarChart: some View {
+    private var monthlyDailyBarChart: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("每日支出")
                 .font(.headline)
-            Chart(summary.dailyTotals, id: \.day) { item in
+            Chart(monthSummary.dailyTotals, id: \.day) { item in
                 BarMark(
                     x: .value("日", item.day),
                     y: .value("支出", MoneyFormat.double(item.expense))
@@ -166,96 +314,30 @@ struct MonthlyStatsView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    /// 月度预算执行条 + 今日可花。
-    private func budgetProgress(_ budget: Budget) -> some View {
-        let status = BudgetEngine.status(monthlyBudget: budget.amount, records: transactions.map(\.record))
-        let ratio = min(MoneyFormat.double(status.spentThisMonth) / max(MoneyFormat.double(budget.amount), 0.01), 1)
-        return VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Text("本月预算")
-                    .font(.headline)
-                Spacer()
-                Text("\(MoneyFormat.string(status.spentThisMonth, currencyCode: currencyCode)) / \(MoneyFormat.string(budget.amount, currencyCode: currencyCode))")
-                    .font(.subheadline.monospacedDigit())
-                    .foregroundStyle(status.isOverBudget ? Color.warning : Color.secondary)
-            }
-            ProgressView(value: ratio)
-                .tint(status.isOverBudget ? Color.warning : .accentColor)
-            if Calendar.current.isDate(displayedMonth, equalTo: Date(), toGranularity: .month) {
-                Text(status.todayAllowance >= 0
-                     ? "今日还可以花 \(MoneyFormat.string(status.todayAllowance, currencyCode: currencyCode))"
-                     : "今日已超出节奏 \(MoneyFormat.string(-status.todayAllowance, currencyCode: currencyCode))，缓一缓")
-                    .font(.footnote)
-                    .foregroundStyle(status.todayAllowance >= 0 ? Color.secondary : Color.warning)
-            }
-        }
-        .padding(12)
-        .glassEffect(.regular, in: .rect(cornerRadius: 16))
-    }
-
-    /// 年度报告：12 个月支出走势 + 全年收支 + 分类排行。
-    private var yearlyContent: some View {
-        VStack(spacing: 20) {
-            let yearly = yearlySummary
-            GlassEffectContainer(spacing: 12) {
-                HStack(spacing: 12) {
-                    totalCard(title: "全年支出", amount: yearly.totalExpense, color: Color.expense)
-                    totalCard(title: "全年收入", amount: yearly.totalIncome, color: Color.income)
-                    totalCard(title: "全年结余", amount: yearly.balance, color: yearly.balance >= 0 ? Color.income : Color.warning)
-                }
-            }
-            if yearly.totalExpense == 0 && yearly.totalIncome == 0 {
-                ContentUnavailableView(
-                    "今年还没有账目",
-                    systemImage: "chart.bar",
-                    description: Text("记几笔之后这里会出现年度报告")
+    private func periodDailyBarChart(_ dailyTotals: [PeriodDailyTotal]) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("每日支出")
+                .font(.headline)
+            Chart(dailyTotals, id: \.date) { item in
+                BarMark(
+                    x: .value("日", item.date, unit: .day),
+                    y: .value("支出", MoneyFormat.double(item.expense))
                 )
-                .padding(.top, 40)
-            } else {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("每月支出")
-                        .font(.headline)
-                    Chart(Array(yearly.monthlyExpenses.enumerated()), id: \.offset) { index, amount in
-                        BarMark(
-                            x: .value("月", index + 1),
-                            y: .value("支出", MoneyFormat.double(amount))
-                        )
-                        .foregroundStyle(Color.accentColor.gradient)
-                    }
-                    .chartXAxis {
-                        AxisMarks(values: Array(1...12))
-                    }
-                    .frame(height: 160)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-
-                VStack(alignment: .leading, spacing: 12) {
-                    Text("全年分类排行")
-                        .font(.headline)
-                    ForEach(yearly.expenseByCategory.prefix(10), id: \.name) { item in
-                        HStack {
-                            Text(item.name)
-                                .font(.subheadline)
-                            Spacer()
-                            Text(MoneyFormat.string(item.total, currencyCode: currencyCode))
-                                .font(.subheadline.monospacedDigit())
-                            Text(item.share.formatted(.percent.precision(.fractionLength(0))))
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                                .frame(width: 44, alignment: .trailing)
-                        }
-                    }
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
+                .foregroundStyle(Color.accentColor.gradient)
             }
+            .chartXAxis {
+                AxisMarks(values: .stride(by: .day))
+            }
+            .frame(height: 160)
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private var categoryRanking: some View {
+    private func categoryRanking(_ categories: [CategoryTotal]) -> some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("分类排行")
                 .font(.headline)
-            ForEach(summary.expenseByCategory, id: \.name) { item in
+            ForEach(categories, id: \.name) { item in
                 VStack(spacing: 4) {
                     HStack {
                         Text(item.name)
@@ -277,5 +359,121 @@ struct MonthlyStatsView: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// 月度预算执行条 + 今日可花。
+    private func budgetProgress(_ budget: Budget) -> some View {
+        let status = BudgetStore.status(
+            for: budget,
+            transactions: scopedTransactions,
+            referenceDate: displayedMonth
+        )
+        let ratio = min(MoneyFormat.double(status.spentThisMonth) / max(MoneyFormat.double(budget.amount), 0.01), 1)
+        return VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("本月预算")
+                    .font(.headline)
+                Spacer()
+                Text("\(MoneyFormat.string(status.spentThisMonth, currencyCode: currencyCode)) / \(MoneyFormat.string(budget.amount, currencyCode: currencyCode))")
+                    .font(.subheadline.monospacedDigit())
+                    .foregroundStyle(status.isOverBudget ? Color.warning : Color.secondary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+            }
+            ProgressView(value: ratio)
+                .tint(status.isOverBudget ? Color.warning : .accentColor)
+            if Calendar.current.isDate(displayedMonth, equalTo: AppClock.now, toGranularity: .month) {
+                Text(status.todayAllowance >= 0
+                     ? "今日还可以花 \(MoneyFormat.string(status.todayAllowance, currencyCode: currencyCode))"
+                     : "今日已超出节奏 \(MoneyFormat.string(-status.todayAllowance, currencyCode: currencyCode))，缓一缓")
+                    .font(.footnote)
+                    .foregroundStyle(status.todayAllowance >= 0 ? Color.secondary : Color.warning)
+            }
+        }
+        .padding(12)
+        .glassEffect(.regular, in: .rect(cornerRadius: 16))
+    }
+
+    private var yearlyContent: some View {
+        VStack(spacing: 20) {
+            let summary = yearSummary
+            totalsCards(expense: summary.totalExpense, income: summary.totalIncome, balance: summary.balance)
+            if summary.totalExpense == 0 && summary.totalIncome == 0 {
+                emptyState(title: "今年还没有账目", systemImage: "chart.bar", message: "记几笔之后这里会出现年度报告")
+            } else {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("每月支出")
+                        .font(.headline)
+                    Chart(Array(summary.monthlyExpenses.enumerated()), id: \.offset) { index, amount in
+                        BarMark(
+                            x: .value("月", index + 1),
+                            y: .value("支出", MoneyFormat.double(amount))
+                        )
+                        .foregroundStyle(Color.accentColor.gradient)
+                    }
+                    .chartXAxis {
+                        AxisMarks(values: Array(1...12))
+                    }
+                    .frame(height: 160)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                categoryRanking(summary.expenseByCategory)
+            }
+        }
+    }
+
+    private func emptyState(title: LocalizedStringKey, systemImage: String, message: LocalizedStringKey) -> some View {
+        ContentUnavailableView(title, systemImage: systemImage, description: Text(message))
+            .padding(.top, 40)
+    }
+
+    private func shiftMonth(by value: Int) {
+        if let newDate = Calendar.current.date(byAdding: .month, value: value, to: displayedMonth) {
+            displayedMonth = newDate
+        }
+    }
+
+    private func shiftWeek(by value: Int) {
+        guard let newDate = Calendar.current.date(byAdding: .day, value: value, to: weekStart) else { return }
+        weekStart = monday(of: newDate)
+    }
+
+    private func shiftYear(by value: Int) {
+        if let newDate = Calendar.current.date(byAdding: .year, value: value, to: displayedMonth) {
+            displayedMonth = newDate
+        }
+    }
+
+    private func restoreDateSelections() {
+        weekStart = monday(of: AppClock.now)
+        if savedCustomStart > 0 {
+            customStartDate = Calendar.current.startOfDay(for: Date(timeIntervalSince1970: savedCustomStart))
+        } else {
+            let now = AppClock.now
+            customStartDate = Calendar.current.date(
+                from: Calendar.current.dateComponents([.year, .month], from: now)
+            ) ?? Calendar.current.startOfDay(for: now)
+        }
+        if savedCustomEnd > 0 {
+            customEndDate = Calendar.current.startOfDay(for: Date(timeIntervalSince1970: savedCustomEnd))
+        } else {
+            customEndDate = Calendar.current.startOfDay(for: AppClock.now)
+        }
+        if customEndDate < customStartDate {
+            customEndDate = customStartDate
+        }
+    }
+
+    private func persistCustomRange() {
+        savedCustomStart = customStartDate.timeIntervalSince1970
+        savedCustomEnd = customEndDate.timeIntervalSince1970
+    }
+
+    private func monday(of date: Date) -> Date {
+        let calendar = Calendar.current
+        let day = calendar.startOfDay(for: date)
+        let weekday = calendar.component(.weekday, from: day)
+        let daysFromMonday = (weekday + 5) % 7
+        return calendar.date(byAdding: .day, value: -daysFromMonday, to: day) ?? day
     }
 }

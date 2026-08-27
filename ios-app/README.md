@@ -1,8 +1,11 @@
-# 轻记 QingJi — iOS 极简记账
+# 肥喵记账 Feimiao — iOS 原生版
 
 「3 秒记一笔、漏了能补平、超支提前说」的本地优先 iOS 记账 App。
 
-面向 **iOS 26+**，全面采用 **Liquid Glass（液态玻璃）** 设计语言：快记键盘、分类网格、统计卡片均使用 `glassEffect` 交互玻璃，TabBar 滚动自动收起。
+Android 与 iOS 共享产品口径，但 iOS 使用原生 SwiftUI、WidgetKit、Vision、Speech 和 Liquid Glass 控件。
+对齐验收记录见 [docs/ANDROID_IOS_PARITY.md](docs/ANDROID_IOS_PARITY.md)。
+
+面向 **iOS 26+**，可安装到你的 iOS 27 beta。界面采用 **Liquid Glass（液态玻璃）** 设计语言：快记键盘、分类网格、统计卡片均使用 `glassEffect` 交互玻璃，TabBar 滚动自动收起。云端 CI 使用 GitHub 官方 `macos-26` runner；若镜像提供 Xcode 27 就优先选择，否则用镜像内 Xcode 26.x/iOS 26 SDK 编译，运行目标仍覆盖 iOS 27。
 
 产品定位与市场调研见 [docs/product-analysis.md](../docs/product-analysis.md)。
 
@@ -18,12 +21,13 @@ ios-app/
 │   ├── Models/          #   SwiftData 模型、容器、种子数据
 │   ├── Views/           #   快记 / 明细 / 统计 / 设置
 │   └── Intents/         #   App Intents（Siri、快捷指令）
+├── QingJiShare/         # 系统分享扩展（文本/支付截图 → AI 记一笔）
 └── QingJiWidget/        # 锁屏/桌面「记一笔」小组件
 ```
 
 ## 本地运行
 
-需要 macOS + **Xcode 26** 以上（Liquid Glass API 需要 iOS 26 SDK）。没有 Mac 时由 GitHub Actions（`.github/workflows/ios-ci.yml`）在云端 macOS 上自动编译和跑测试。
+本地运行需要 Apple silicon Mac、macOS Tahoe 26.4+ 和 Xcode 26.x/27。没有 Mac 时由 GitHub Actions（`.github/workflows/ios-ci.yml`）在云端 macOS 上自动编译、跑核心测试并生成模拟器截图；Windows 不能替代 Xcode 完成 iOS 设备签名。CI 会同时提供完整版和移除 Widget/Share Extension、使用空 entitlements 的免费团队无扩展兜底包；两种 IPA 都仍需用户自己的 Apple Account 重签。
 
 ```bash
 brew install xcodegen
@@ -52,8 +56,6 @@ swift test
 3. 设置 → 辅助功能 → 触控 → 轻点背面 → 双击，绑定该快捷指令；
 4. 在微信/支付宝支付完成页双击手机背面即可自动入账。
 
-## 路线图
+## 迁移路线
 
-- **Phase 1（当前）**：极简快记、分类智能排序、账户与转账、明细、月统计、小组件、快捷指令、CSV 导入导出、中英双语
-- **Phase 2**：AI 录入（自然语言/语音/截图票据识别）、自动分类学习
-- **Phase 3**：预算与「今日可花」、每周对账（账平机制）、消费年报、家庭共享账本
+完整的 Android 功能盘点、iOS 平台差异、分阶段施工和 7 天签名交付说明见 [`docs/IOS_MIGRATION_PLAN.md`](docs/IOS_MIGRATION_PLAN.md)。逐项对账和 Android/iOS 成对截图规则见 [`docs/ANDROID_IOS_PARITY.md`](docs/ANDROID_IOS_PARITY.md)。

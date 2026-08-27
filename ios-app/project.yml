@@ -7,8 +7,8 @@ options:
 settings:
   base:
     SWIFT_VERSION: "5.0"
-    MARKETING_VERSION: "0.1.0"
-    CURRENT_PROJECT_VERSION: "1"
+    MARKETING_VERSION: "0.2.0"
+    CURRENT_PROJECT_VERSION: "2"
 packages:
   QingJiCore:
     path: QingJiCore
@@ -17,26 +17,72 @@ targets:
     type: application
     platform: iOS
     sources:
-      - QingJi
+      - path: QingJi
+        excludes:
+          - QingJi-free.entitlements
     dependencies:
       - package: QingJiCore
       - target: QingJiWidget
+      - target: QingJiShare
+      - sdk: Compression.framework
+      - sdk: AuthenticationServices.framework
+      - sdk: Network.framework
+      - sdk: Security.framework
+      - sdk: WidgetKit.framework
+      - sdk: UserNotifications.framework
+      - sdk: libsqlite3.tbd
+    entitlements:
+      path: QingJi/QingJi.entitlements
     info:
       path: QingJi/Info.plist
       properties:
-        CFBundleDisplayName: 轻记
+        CFBundleDisplayName: 肥喵记账
         CFBundleShortVersionString: $(MARKETING_VERSION)
         UILaunchScreen: {}
         ITSAppUsesNonExemptEncryption: false
+        BGTaskSchedulerPermittedIdentifiers:
+          - com.qingji.app.report-refresh
+        UIBackgroundModes:
+          - processing
         CFBundleURLTypes:
           - CFBundleURLName: com.qingji.app
             CFBundleURLSchemes:
               - qingji
         NSMicrophoneUsageDescription: 语音记账需要使用麦克风。
         NSSpeechRecognitionUsageDescription: 把你的话转成文字以便快速记账，识别在设备上完成。
+        NSPhotoLibraryUsageDescription: 选择支付截图或账单照片用于识别和记账。
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.qingji.app
+        TARGETED_DEVICE_FAMILY: "1"
+    scheme:
+      testTargets:
+        - QingJiTests
+  QingJiShare:
+    type: app-extension
+    platform: iOS
+    sources:
+      - QingJiShare
+    dependencies:
+      - sdk: Social.framework
+    entitlements:
+      path: QingJiShare/QingJiShare.entitlements
+    info:
+      path: QingJiShare/Info.plist
+      properties:
+        CFBundleDisplayName: 肥喵记账
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.share-services
+          NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).ShareViewController
+          NSExtensionAttributes:
+            NSExtensionActivationRule:
+              NSExtensionActivationSupportsText: true
+              NSExtensionActivationSupportsImageWithMaxCount: 1
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.qingji.app.share
         TARGETED_DEVICE_FAMILY: "1"
   QingJiWidget:
     type: app-extension
@@ -44,14 +90,29 @@ targets:
     sources:
       - QingJiWidget
     dependencies:
+      - package: QingJiCore
       - sdk: WidgetKit.framework
       - sdk: SwiftUI.framework
+    entitlements:
+      path: QingJiWidget/QingJiWidget.entitlements
     info:
       path: QingJiWidget/Info.plist
       properties:
-        CFBundleDisplayName: 轻记
+        CFBundleDisplayName: 肥喵记账
         NSExtension:
           NSExtensionPointIdentifier: com.apple.widgetkit-extension
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.qingji.app.widget
+  QingJiTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - QingJiTests
+    dependencies:
+      - target: QingJi
+      - package: QingJiCore
+      - sdk: libsqlite3.tbd
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.qingji.app.tests

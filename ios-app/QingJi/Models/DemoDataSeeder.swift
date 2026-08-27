@@ -15,10 +15,41 @@ enum DemoDataSeeder {
         let categories = insertCategories(context: context)
         // 再写账户
         let accounts = insertAccounts(context: context)
+        let book = Book(name: "总账本", includeInTotal: true, isDefault: true)
+        context.insert(book)
         // 写交易流水（覆盖近几个月，让年度图和月度图都有内容）
-        insertTransactions(context: context, categories: categories, accounts: accounts)
-        // 写月度预算
-        context.insert(Budget(amount: 3000))
+        insertTransactions(context: context, categories: categories, accounts: accounts, book: book)
+        // 与 android-app/integration_test/parity_screenshots_test.dart 保持同一
+        // 个账本、同一周期和同一分类预算。截图只有在共享这组输入时才有对账意义。
+        let calendar = Calendar.current
+        let now = AppClock.now
+        let monthStart = calendar.date(from: calendar.dateComponents(
+            [.year, .month],
+            from: now
+        )) ?? now
+        context.insert(Budget(
+            amount: 3000,
+            bookID: book.stableID,
+            periodStart: monthStart,
+            cycleRaw: BudgetCycle.monthly.rawValue
+        ))
+        context.insert(Budget(
+            amount: 600,
+            categoryKey: "dining",
+            bookID: book.stableID,
+            periodStart: monthStart,
+            cycleRaw: BudgetCycle.monthly.rawValue
+        ))
+        context.insert(Budget(
+            amount: 800,
+            categoryKey: "shopping",
+            bookID: book.stableID,
+            periodStart: monthStart,
+            cycleRaw: BudgetCycle.monthly.rawValue
+        ))
+        insertSavingsGoals(context: context)
+        insertRecurringRules(context: context, categories: categories, accounts: accounts, book: book)
+        insertReports(context: context, book: book)
         try? context.save()
     }
 
@@ -32,7 +63,9 @@ enum DemoDataSeeder {
                 name: seed.nameZh,
                 symbol: seed.symbol,
                 kind: seed.kind,
-                sortOrder: index
+                sortOrder: index,
+                emoji: seed.emoji,
+                parentKey: seed.parentKey
             )
             context.insert(cat)
             map[seed.key] = cat
@@ -44,9 +77,9 @@ enum DemoDataSeeder {
 
     private static func insertAccounts(context: ModelContext) -> [Account] {
         let defs: [(String, AccountKind, Decimal)] = [
-            ("现金",  .cash,     500),
-            ("微信",  .weChat,  2380),
-            ("银行卡", .bankCard, 12600),
+            ("现金",       .cash,       0),
+            ("Parity银行卡", .bankCard, 12000),
+            ("Parity信用卡", .creditCard, -1800),
         ]
         return defs.enumerated().map { index, item in
             let acc = Account(name: item.0, kind: item.1, currencyCode: "CNY", sortOrder: index)
@@ -58,13 +91,14 @@ enum DemoDataSeeder {
 
     // MARK: - 交易流水
 
-    /// 生成约 28 条真实感流水，分布在近 4 个月（本月占多数）。
+    /// 生成约 30 条真实感流水，分布在近 4 个月（本月占多数）。
     private static func insertTransactions(
         context: ModelContext,
         categories: [String: TxCategory],
-        accounts: [Account]
+        accounts: [Account],
+        book: Book
     ) {
-        let wechat  = accounts.first { $0.kind == .weChat }   ?? accounts[0]
+        let wechat  = accounts.first { $0.kind == .cash }     ?? accounts[0]
         let bank    = accounts.first { $0.kind == .bankCard } ?? accounts[0]
         let cash    = accounts.first { $0.kind == .cash }     ?? accounts[0]
 
@@ -73,7 +107,7 @@ enum DemoDataSeeder {
             categories[key] ?? categories["other"]
         }
 
-        let now = Date()
+        let now = AppClock.now
         // 生成相对 now 的偏移日期
         func daysAgo(_ n: Int) -> Date {
             Calendar.current.date(byAdding: .day, value: -n, to: now) ?? now
@@ -106,6 +140,7 @@ enum DemoDataSeeder {
             (500,  .income,  "redPacket",    "朋友红包",          wechat, "CNY"),
         ]
 
+        var lunchTransaction: MoneyTransaction?
         for (index, row) in thisMonth.enumerated() {
             let (amount, kind, catKey, note, account, currency) = row
             let tx = MoneyTransaction(
@@ -115,10 +150,53 @@ enum DemoDataSeeder {
                 note: note,
                 currencyCode: currency,
                 category: cat(catKey),
-                account: account
+                account: account,
+                book: book,
+                timePrecision: .entryClock
             )
             context.insert(tx)
+            if index == 0 { lunchTransaction = tx }
         }
+
+        if let lunchTransaction {
+            context.insert(MoneyTransaction(
+                amount: -15,
+                kind: .expense,
+                date: lunchTransaction.date,
+                note: "部分退款",
+                currencyCode: lunchTransaction.currencyCode,
+                category: lunchTransaction.category,
+                account: lunchTransaction.account,
+                book: lunchTransaction.book,
+                timePrecision: lunchTransaction.timePrecision,
+                // 安卓 fixture 的退款在原账单日期归属统计，但结算时点是
+                // 截图时的当天；两条日期不能混用。
+                settledAt: daysAgo(0),
+                settlementQuality: .userConfirmed,
+                settlementAccountID: cash.stableID,
+                settlementAccountQuality: .userConfirmed,
+                eventType: .refund,
+                orderNo: lunchTransaction.orderNo,
+                refundOfID: lunchTransaction.stableID
+            ))
+        }
+
+        context.insert(MoneyTransaction(
+            amount: 120,
+            kind: .transfer,
+            date: daysAgo(10),
+            note: "账户转入",
+            currencyCode: cash.currencyCode,
+            account: cash,
+            toAccount: bank,
+            book: book,
+            timePrecision: .entryClock,
+            settledAt: daysAgo(10),
+            settlementQuality: .userConfirmed,
+            settlementAccountID: cash.stableID,
+            settlementAccountQuality: .userConfirmed,
+            eventType: .transfer
+        ))
 
         // 上月流水（让月度统计图有对比）
         let lastMonth: [(Decimal, TransactionKind, String, String, Account)] = [
@@ -139,7 +217,9 @@ enum DemoDataSeeder {
                 note: note,
                 currencyCode: "CNY",
                 category: cat(catKey),
-                account: account
+                account: account,
+                book: book,
+                timePrecision: .entryClock
             )
             context.insert(tx)
         }
@@ -161,9 +241,149 @@ enum DemoDataSeeder {
                 note: note,
                 currencyCode: "CNY",
                 category: cat(catKey),
-                account: bank
+                account: bank,
+                book: book,
+                timePrecision: .entryClock
             )
             context.insert(tx)
         }
+    }
+
+    // MARK: - 存钱目标与定时记账
+
+    private static func insertSavingsGoals(context: ModelContext) {
+        context.insert(SavingsGoal(
+            name: "东京旅行",
+            emoji: "✈️",
+            targetAmount: 12000,
+            savedAmount: 6800,
+            note: "今年秋天出发"
+        ))
+    }
+
+    private static func insertRecurringRules(
+        context: ModelContext,
+        categories: [String: TxCategory],
+        accounts: [Account],
+        book: Book
+    ) {
+        let bank = accounts.first { $0.kind == .bankCard } ?? accounts[0]
+        let calendar = Calendar.current
+        let startDate = calendar.date(byAdding: .day, value: 3, to: calendar.startOfDay(for: AppClock.now)) ?? AppClock.now
+
+        context.insert(RecurringRule(
+            amount: 3200,
+            kind: .expense,
+            bookID: book.stableID,
+            categoryKey: categories["housing"]?.key,
+            accountID: bank.stableID,
+            note: "房租",
+            period: .monthly,
+            startDate: startDate,
+            firstDueDate: startDate,
+            endDate: nil,
+            totalCount: nil
+        ))
+    }
+
+    private static func insertAssetData(
+        context: ModelContext,
+        accounts: [Account],
+        book: Book
+    ) {
+        let now = AppClock.now
+        let phone = PhysicalAsset(
+            name: "iPhone Air",
+            kind: .digital,
+            purchasePrice: 6999,
+            currentValue: 5800,
+            currencyCode: "CNY",
+            bookID: book.stableID
+        )
+        phone.brand = "Apple"
+        phone.model = "iPhone Air"
+        phone.location = "随身"
+        phone.purchaseDate = Calendar.current.date(byAdding: .month, value: -3, to: now)
+        phone.warrantyUntil = Calendar.current.date(byAdding: .year, value: 1, to: now)
+        phone.usageTrackingEnabled = true
+        phone.usageCount = 86
+        phone.note = "演示物品资产"
+        context.insert(phone)
+        context.insert(AssetEvent(
+            assetID: phone.stableID,
+            kind: .created,
+            occurredAt: phone.purchaseDate ?? now,
+            value: phone.currentValue,
+            note: "从购买记录建立"
+        ))
+        context.insert(AssetValuation(
+            assetID: phone.stableID,
+            value: phone.currentValue,
+            sourceRaw: "purchase",
+            valuedAt: phone.purchaseDate ?? now,
+            note: "初始当前价值"
+        ))
+
+        let receivable = ReceivableAsset(
+            name: "借给小林",
+            originalAmount: 1500,
+            kind: .loanOut,
+            bookID: book.stableID
+        )
+        receivable.remainingAmount = 800
+        receivable.lifecycle = .partiallyRecovered
+        receivable.counterparty = "小林"
+        receivable.dueDate = Calendar.current.date(byAdding: .day, value: 18, to: now)
+        receivable.note = "分两次收回"
+        context.insert(receivable)
+        context.insert(ReceivableRecovery(
+            receivableID: receivable.stableID,
+            amount: 700,
+            recoveredAt: Calendar.current.date(byAdding: .day, value: -4, to: now) ?? now,
+            note: "第一次收回"
+        ))
+
+        let credit = accounts.first { $0.kind == .creditCard }
+        if let credit {
+            credit.initialBalance = -1800
+            credit.balanceMode = .ledger
+            let profile = LiabilityProfile(
+                accountID: credit.stableID,
+                kind: .creditCard,
+                originalPrincipal: 3000,
+                currentPrincipal: 1800,
+                currencyCode: "CNY"
+            )
+            profile.statementDay = 5
+            profile.paymentDay = 20
+            profile.creditLimit = 12000
+            profile.note = "演示信用卡"
+            context.insert(profile)
+        }
+    }
+
+    private static func insertReports(context: ModelContext, book: Book) {
+        let now = AppClock.now
+        let calendar = Calendar.current
+        let components = calendar.dateComponents([.year, .month], from: now)
+        guard let start = calendar.date(from: DateComponents(
+            year: components.year,
+            month: components.month,
+            day: 1
+        )),
+        let nextStart = calendar.date(byAdding: .month, value: 1, to: start),
+        let end = calendar.date(byAdding: .second, value: -1, to: nextStart) else { return }
+        let report = ReportRecord(
+            bookID: book.stableID,
+            type: "monthly",
+            title: "\(components.year ?? 0)年\(components.month ?? 0)月账单报告",
+            summary: "支出 ¥1,017.90 · 收入 ¥620.00",
+            markdown: "# \(components.year ?? 0)年\(components.month ?? 0)月账单报告\n\n- 支出：¥1,017.90\n- 收入：¥620.00\n- 结余：¥-397.90\n\n## 支出分类\n\n- 餐饮：¥151.00（4笔）\n- 购物：¥478.00（2笔）\n- 出行：¥53.00（3笔）\n- 食品：¥208.00（2笔）",
+            periodStart: start,
+            periodEnd: end,
+            createdAt: now,
+            pinnedAt: nil
+        )
+        context.insert(report)
     }
 }

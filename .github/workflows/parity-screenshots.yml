@@ -1,0 +1,181 @@
+name: Android iOS parity screenshots
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - "feature/**"
+      - "codex/**"
+      - main
+    paths:
+      - "android-app/**"
+      - "ios-app/**"
+      - ".github/workflows/parity-screenshots.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: parity-screenshots-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  android-screenshots:
+    name: Android 模拟器截图
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+      - name: Resolve Android dependencies
+        working-directory: android-app
+        run: flutter pub get
+      - name: Capture parity screens
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          target: google_apis
+          arch: x86_64
+          profile: pixel_2
+          force-avd-creation: false
+          emulator-options: -no-window -no-audio -no-boot-anim
+          disable-animations: true
+          working-directory: android-app
+          script: >-
+            flutter drive
+            --driver=test_driver/integration_test.dart
+            --target=integration_test/parity_screenshots_test.dart
+            --device-id emulator-5554
+            --no-pub
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android-parity-screenshots
+          path: android-app/outputs/parity/
+          if-no-files-found: error
+
+  ios-screenshots:
+    name: iOS 模拟器截图
+    # 使用 GitHub 官方公开的 macOS 26 runner；如果镜像装有 Xcode 27
+    # 就优先使用，否则用 Xcode 26.x 编译 iOS 26 目标（可运行于 iOS 27）。
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v5
+      - name: Select Xcode 27 (fallback to Xcode 26)
+        run: |
+          XCODE_APP=$(ls -d /Applications/Xcode_27*.app 2>/dev/null | sort -V | tail -n 1)
+          if [ -z "$XCODE_APP" ]; then
+            XCODE_APP=$(ls -d /Applications/Xcode_26*.app 2>/dev/null | sort -V | tail -n 1)
+          fi
+          test -n "$XCODE_APP"
+          sudo xcode-select -s "$XCODE_APP"
+          xcodebuild -version
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      - name: Generate project
+        run: xcodegen generate --spec ios-app/project.yml --project ios-app
+      - name: Build for simulator
+        run: |
+          DEVICE=$(xcrun simctl list devices available | grep -E "iPhone Air \(" | head -n 1 | sed -E 's/^[[:space:]]*//; s/ \(.*$//')
+          if [ -z "$DEVICE" ]; then
+            DEVICE=$(xcrun simctl list devices available | grep "iPhone" | head -n 1 | sed -E 's/^[[:space:]]*//; s/ \(.*$//')
+          fi
+          test -n "$DEVICE"
+          echo "DEVICE=$DEVICE" >> "$GITHUB_ENV"
+          xcodebuild build \
+            -project ios-app/QingJi.xcodeproj \
+            -scheme QingJi \
+            -destination "platform=iOS Simulator,name=$DEVICE" \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO \
+            | tail -40
+          test ${PIPESTATUS[0]} -eq 0
+      - name: Capture screens
+        run: |
+          xcrun simctl bootstatus "$DEVICE" -b
+          APP_PATH=$(find build/Build/Products -name "QingJi.app" -not -path "*PlugIns*" | head -n 1)
+          test -d "$APP_PATH"
+          xcrun simctl install "$DEVICE" "$APP_PATH"
+          mkdir -p ci-artifacts/ios-screenshots
+          shoot() {
+            local screen="$1" name="$2"
+            xcrun simctl terminate "$DEVICE" com.qingji.app 2>/dev/null || true
+            SIMCTL_CHILD_QINGJI_DEMO=1 \
+            SIMCTL_CHILD_QINGJI_DEMO_NOW="2026-08-27T12:00:00+08:00" \
+            SIMCTL_CHILD_QINGJI_SCREEN="$screen" \
+            xcrun simctl launch "$DEVICE" com.qingji.app >/dev/null
+            sleep 4
+            xcrun simctl io "$DEVICE" screenshot "ci-artifacts/ios-screenshots/$name.png"
+          }
+          shoot home 01-home
+          shoot quickadd 02-quickadd
+          shoot transactions 03-transactions
+          shoot stats-week 04-stats-week
+          shoot stats-month 05-stats-month
+          shoot stats-year 06-stats-year
+          shoot stats-custom 07-stats-custom
+          shoot budget 08-budget
+          shoot reconcile 09-reconcile
+          shoot reimburse 10-reimburse
+          shoot savings 11-savings
+          shoot recurring 12-recurring
+          shoot assets 13-assets
+          shoot liabilities 14-liabilities
+          shoot net-worth 15-net-worth
+          shoot books 16-books
+          shoot settings/accounts 17-accounts
+          shoot settings/categories 18-categories
+          shoot settings/tags 19-tags
+          shoot settings 20-settings
+          shoot ai 21-ai
+          shoot settings/ai 22-ai-settings
+          shoot settings/import-review 23-import-review
+          shoot settings/reports 24-reports
+          shoot settings/memory 25-memory
+          shoot settings/ai-tasks 26-ai-tasks
+          shoot settings/ai-diagnostics 27-ai-diagnostics
+          shoot settings/ai-search 28-ai-search
+          shoot settings/ai-memory 29-ai-memory
+          shoot settings/ai-extensions 30-ai-extensions
+          shoot settings/ai-schedules 31-ai-schedules
+          shoot settings/ai-local 32-ai-local
+          shoot settings/backup 33-backup
+          shoot settings/theme 34-theme
+          shoot settings/display 35-display
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ios-parity-screenshots
+          path: ci-artifacts/ios-screenshots/
+          if-no-files-found: error
+
+  compare:
+    name: 生成双端对比报告
+    needs: [android-screenshots, ios-screenshots]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v4
+        with:
+          name: android-parity-screenshots
+          path: android-app/outputs/parity
+      - uses: actions/download-artifact@v4
+        with:
+          name: ios-parity-screenshots
+          path: ci-artifacts/ios-screenshots
+      - name: Compare screenshots
+        run: |
+          python3 ios-app/tools/compare_png.py \
+            --manifest ios-app/tools/screenshot_manifest.json \
+            --root . \
+            --output ci-artifacts/screenshot-report.json \
+            --require-complete
+      - uses: actions/upload-artifact@v4
+        with:
+          name: parity-screenshot-report
+          path: |
+            ci-artifacts/screenshot-report.json
+            ci-artifacts/screenshot-report.md

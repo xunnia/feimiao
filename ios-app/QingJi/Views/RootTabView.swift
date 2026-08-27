@@ -1,7 +1,7 @@
 import SwiftUI
 
 enum AppTab: Hashable {
-    case quickAdd, transactions, statistics, settings
+    case home, quickAdd, transactions, statistics, settings
 }
 
 struct RootTabView: View {
@@ -11,6 +11,9 @@ struct RootTabView: View {
         // 用 Bindable 包装 @Observable 对象，让 TabView 绑定到 router.selectedTab
         @Bindable var router = router
         TabView(selection: $router.selectedTab) {
+            HomeView()
+                .tabItem { Label("首页", systemImage: "house") }
+                .tag(AppTab.home)
             QuickAddView()
                 .tabItem { Label("记一笔", systemImage: "plus.circle.fill") }
                 .tag(AppTab.quickAdd)

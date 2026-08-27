@@ -2,7 +2,7 @@ name: iOS CI
 
 on:
   push:
-    branches: [claude/new-session-4kh1ll, main]
+    branches: ["claude/**", "codex/**", "feature/**", main]
     paths:
       - "ios-app/**"
       - ".github/workflows/ios-ci.yml"
@@ -14,7 +14,10 @@ permissions:
 jobs:
   core-tests:
     name: 核心逻辑单元测试
-    runs-on: macos-15
+    # GitHub-hosted runner 的公开标签是 macos-26；Xcode 27 目前仍是
+    # 镜像预览，不存在稳定的 xcode-27 runner 标签。脚本会优先选已安装
+    # 的 Xcode 27，否则使用 macOS 26 镜像内的 Xcode 26.x/iOS 26 SDK。
+    runs-on: macos-26
     steps:
       - uses: actions/checkout@v5
       - name: swift test (QingJiCore)
@@ -23,18 +26,21 @@ jobs:
   build-app:
     name: 编译 iOS App
     # XcodeGen 生成的是 Xcode 16+ 工程格式（objectVersion 77）；Liquid Glass 需要 Xcode 26 SDK
-    runs-on: macos-15
+    runs-on: macos-26
     steps:
       - uses: actions/checkout@v5
-      - name: Select Xcode 26
+      - name: Select Xcode 27 (fallback to Xcode 26)
         run: |
           ls -d /Applications/Xcode*.app
-          XCODE_26=$(ls -d /Applications/Xcode_26*.app 2>/dev/null | sort -V | tail -n 1)
-          if [ -z "$XCODE_26" ]; then
-            echo "::error::runner 上没有 Xcode 26，无法编译 iOS 26 / Liquid Glass 工程"
+          XCODE_APP=$(ls -d /Applications/Xcode_27*.app 2>/dev/null | sort -V | tail -n 1)
+          if [ -z "$XCODE_APP" ]; then
+            XCODE_APP=$(ls -d /Applications/Xcode_26*.app 2>/dev/null | sort -V | tail -n 1)
+          fi
+          if [ -z "$XCODE_APP" ]; then
+            echo "::error::runner 上没有 Xcode 27 或 Xcode 26，无法编译 Liquid Glass 工程"
             exit 1
           fi
-          sudo xcode-select -s "$XCODE_26"
+          sudo xcode-select -s "$XCODE_APP"
           xcodebuild -version
       - name: Install XcodeGen
         run: brew install xcodegen
@@ -68,26 +74,65 @@ jobs:
           name: QingJi-simulator-app
           path: QingJi-simulator.zip
 
-  simulator-screenshots:
-    name: 模拟器截图
-    runs-on: macos-15
+  app-tests:
+    name: App 层 XCTest
+    runs-on: macos-26
     steps:
       - uses: actions/checkout@v5
-      - name: Select Xcode 26
+      - name: Select Xcode 27 (fallback to Xcode 26)
         run: |
-          XCODE_26=$(ls -d /Applications/Xcode_26*.app 2>/dev/null | sort -V | tail -n 1)
-          if [ -z "$XCODE_26" ]; then
-            echo "::error::runner 上没有 Xcode 26"
+          XCODE_APP=$(ls -d /Applications/Xcode_27*.app 2>/dev/null | sort -V | tail -n 1)
+          if [ -z "$XCODE_APP" ]; then
+            XCODE_APP=$(ls -d /Applications/Xcode_26*.app 2>/dev/null | sort -V | tail -n 1)
+          fi
+          test -n "$XCODE_APP"
+          sudo xcode-select -s "$XCODE_APP"
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      - name: Generate Xcode project
+        run: xcodegen generate --spec ios-app/project.yml --project ios-app
+      - name: Test app target on iPhone simulator
+        run: |
+          DEVICE=$(xcrun simctl list devices available | grep -E "iPhone Air \(" | head -n 1 | sed -E 's/^[[:space:]]*//; s/ \(.*$//')
+          if [ -z "$DEVICE" ]; then
+            DEVICE=$(xcrun simctl list devices available | grep "iPhone" | head -n 1 | sed -E 's/^[[:space:]]*//; s/ \(.*$//')
+          fi
+          test -n "$DEVICE"
+          xcodebuild test \
+            -project ios-app/QingJi.xcodeproj \
+            -scheme QingJi \
+            -destination "platform=iOS Simulator,name=$DEVICE" \
+            -derivedDataPath build-tests \
+            CODE_SIGNING_ALLOWED=NO \
+            | tail -80
+          test ${PIPESTATUS[0]} -eq 0
+
+  simulator-screenshots:
+    name: 模拟器截图
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v5
+      - name: Select Xcode 27 (fallback to Xcode 26)
+        run: |
+          XCODE_APP=$(ls -d /Applications/Xcode_27*.app 2>/dev/null | sort -V | tail -n 1)
+          if [ -z "$XCODE_APP" ]; then
+            XCODE_APP=$(ls -d /Applications/Xcode_26*.app 2>/dev/null | sort -V | tail -n 1)
+          fi
+          if [ -z "$XCODE_APP" ]; then
+            echo "::error::runner 上没有 Xcode 27 或 Xcode 26"
             exit 1
           fi
-          sudo xcode-select -s "$XCODE_26"
+          sudo xcode-select -s "$XCODE_APP"
       - name: Install XcodeGen
         run: brew install xcodegen
       - name: Generate Xcode project
         run: xcodegen generate --spec ios-app/project.yml --project ios-app
       - name: Build for a concrete simulator
         run: |
-          DEVICE=$(xcrun simctl list devices available | grep "iPhone" | head -n 1 | sed -E 's/^[[:space:]]*//; s/ \(.*$//')
+          DEVICE=$(xcrun simctl list devices available | grep -E "iPhone Air \(" | head -n 1 | sed -E 's/^[[:space:]]*//; s/ \(.*$//')
+          if [ -z "$DEVICE" ]; then
+            DEVICE=$(xcrun simctl list devices available | grep "iPhone" | head -n 1 | sed -E 's/^[[:space:]]*//; s/ \(.*$//')
+          fi
           if [ -z "$DEVICE" ]; then
             echo "::error::没有可用的 iPhone 模拟器"
             xcrun simctl list devices
@@ -119,63 +164,78 @@ jobs:
             local screen="$1" name="$2"
             xcrun simctl terminate "$DEVICE" com.qingji.app 2>/dev/null || true
             sleep 1
-            SIMCTL_CHILD_QINGJI_DEMO=1 SIMCTL_CHILD_QINGJI_SCREEN="$screen" \
+              SIMCTL_CHILD_QINGJI_DEMO=1 \
+              SIMCTL_CHILD_QINGJI_DEMO_NOW="2026-08-27T12:00:00+08:00" \
+              SIMCTL_CHILD_QINGJI_SCREEN="$screen" \
               xcrun simctl launch "$DEVICE" com.qingji.app
             sleep 5
             xcrun simctl io "$DEVICE" screenshot "screenshots/$name.png"
           }
 
-          shoot "quickadd"     "01-quickadd"
-          shoot "transactions" "02-transactions"
-          shoot "stats-month"  "03-stats-month"
-          shoot "stats-year"   "04-stats-year"
-          shoot "budget"       "05-budget"
-          shoot "reconcile"    "06-reconcile"
-          shoot "settings"     "07-settings"
-          shoot "ai"           "08-ai"
+          shoot "home"         "01-home"
+          shoot "quickadd"     "02-quickadd"
+          shoot "transactions" "03-transactions"
+          shoot "stats-week"   "04-stats-week"
+          shoot "stats-month"  "05-stats-month"
+          shoot "stats-year"   "06-stats-year"
+          shoot "stats-custom" "07-stats-custom"
+          shoot "budget"       "08-budget"
+          shoot "reconcile"    "09-reconcile"
+          shoot "reimburse"    "10-reimburse"
+          shoot "savings"      "11-savings"
+          shoot "recurring"    "12-recurring"
+          shoot "assets"       "13-assets"
+          shoot "liabilities"  "14-liabilities"
+          shoot "net-worth"    "15-net-worth"
+          shoot "books"        "16-books"
+          shoot "settings/accounts" "17-accounts"
+          shoot "settings/categories" "18-categories"
+          shoot "settings/tags"  "19-tags"
+          shoot "settings"     "20-settings"
+          shoot "ai"           "21-ai"
+          shoot "settings/ai"  "22-ai-settings"
+          shoot "settings/import-review" "23-import-review"
+          shoot "settings/reports" "24-reports"
+          shoot "settings/memory" "25-memory"
+          shoot "settings/ai-tasks" "26-ai-tasks"
+          shoot "settings/ai-diagnostics" "27-ai-diagnostics"
+          shoot "settings/ai-search" "28-ai-search"
+          shoot "settings/ai-memory" "29-ai-memory"
+          shoot "settings/ai-extensions" "30-ai-extensions"
+          shoot "settings/ai-schedules" "31-ai-schedules"
+          shoot "settings/ai-local" "32-ai-local"
+          shoot "settings/backup" "33-backup"
+          shoot "settings/theme" "34-theme"
+          shoot "settings/display" "35-display"
 
-          # 校验：8 张图若全部相同（md5 唯一值=1）说明导航又失败了，直接让 CI 报错
+          # 校验：35 张图若全部相同说明导航又失败了，直接让 CI 报错
           UNIQUE=$(md5 -q screenshots/*.png | sort -u | wc -l | tr -d ' ')
-          echo "不同截图数量：$UNIQUE / 8"
+          echo "不同截图数量：$UNIQUE / 35"
           if [ "$UNIQUE" -le 1 ]; then
-            echo "::error::8 张截图完全相同，深链/启动参数导航未生效"
+            echo "::error::35 张截图完全相同，深链/启动参数导航未生效"
             exit 1
           fi
       - uses: actions/upload-artifact@v4
         with:
           name: simulator-screenshots
           path: screenshots/
-      # 把截图提交回分支，方便在受限网络环境（或手机上）直接查看
-      - name: Commit screenshots back to branch
-        if: github.event_name == 'push'
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          mkdir -p ci-artifacts
-          rm -rf ci-artifacts/screenshots
-          cp -R screenshots ci-artifacts/screenshots
-          git add ci-artifacts
-          if git diff --cached --quiet; then
-            echo "截图无变化，跳过提交"
-            exit 0
-          fi
-          git commit -m "ci: 更新模拟器截图 [skip ci]"
-          git pull --rebase origin "${GITHUB_REF_NAME}"
-          git push origin HEAD:"${GITHUB_REF_NAME}"
 
   unsigned-ipa:
     name: 打包未签名 IPA（AltStore 侧载用）
-    runs-on: macos-15
+    runs-on: macos-26
     steps:
       - uses: actions/checkout@v5
-      - name: Select Xcode 26
+      - name: Select Xcode 27 (fallback to Xcode 26)
         run: |
-          XCODE_26=$(ls -d /Applications/Xcode_26*.app 2>/dev/null | sort -V | tail -n 1)
-          if [ -z "$XCODE_26" ]; then
-            echo "::error::runner 上没有 Xcode 26"
+          XCODE_APP=$(ls -d /Applications/Xcode_27*.app 2>/dev/null | sort -V | tail -n 1)
+          if [ -z "$XCODE_APP" ]; then
+            XCODE_APP=$(ls -d /Applications/Xcode_26*.app 2>/dev/null | sort -V | tail -n 1)
+          fi
+          if [ -z "$XCODE_APP" ]; then
+            echo "::error::runner 上没有 Xcode 27 或 Xcode 26"
             exit 1
           fi
-          sudo xcode-select -s "$XCODE_26"
+          sudo xcode-select -s "$XCODE_APP"
       - name: Install XcodeGen
         run: brew install xcodegen
       - name: Generate Xcode project
@@ -192,15 +252,33 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             | tail -30
           exit ${PIPESTATUS[0]}
-      - name: Package IPA (完整版 + 无小组件版)
+      - name: Build no-extension fallback (unsigned)
+        # 免费 Personal Team 可能无法签 App Groups/扩展；这个版本只保留主 App，
+        # 并用空 entitlement 构建，交给用户侧载工具重签。
+        run: |
+          free_entitlements="$PWD/ios-app/QingJi/QingJi-free.entitlements"
+          xcodebuild build \
+            -project ios-app/QingJi.xcodeproj \
+            -scheme QingJi \
+            -configuration Release \
+            -sdk iphoneos \
+            -derivedDataPath build-noext \
+            CODE_SIGN_ENTITLEMENTS="$free_entitlements" \
+            CODE_SIGNING_ALLOWED=NO \
+            | tail -30
+          exit ${PIPESTATUS[0]}
+      - name: Package IPA (完整版 + 免费团队无扩展兜底版)
         run: |
           # 完整版（含桌面小组件）
+          rm -rf Payload Payload-noext
           mkdir -p Payload
           cp -R build/Build/Products/Release-iphoneos/QingJi.app Payload/QingJi.app
           zip -qry QingJi-unsigned.ipa Payload
-          # 无小组件版（剥掉 PlugIns，免费 Apple ID 侧载更易成功）
-          rm -rf Payload/QingJi.app/PlugIns
-          zip -qry QingJi-noext.ipa Payload
+          # 无扩展版：使用空 entitlements 的第二次构建，再剥掉 PlugIns。
+          mkdir -p Payload-noext/Payload
+          cp -R build-noext/Build/Products/Release-iphoneos/QingJi.app Payload-noext/Payload/QingJi.app
+          rm -rf Payload-noext/Payload/QingJi.app/PlugIns
+          (cd Payload-noext && zip -qry ../QingJi-noext.ipa Payload)
           ls -lh QingJi-unsigned.ipa QingJi-noext.ipa
       - uses: actions/upload-artifact@v4
         with:
@@ -208,24 +286,63 @@ jobs:
           path: |
             QingJi-unsigned.ipa
             QingJi-noext.ipa
-      # 把 IPA 提交回分支，提供固定下载链接（Sideloadly/AltStore 侧载用）
-      - name: Commit IPA back to branch
-        if: github.event_name == 'push'
+
+  paired-screenshot-report:
+    name: 双端截图对比报告
+    needs: [simulator-screenshots]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v4
+        with:
+          name: simulator-screenshots
+          path: ci-artifacts/ios-screenshots
+      - name: Generate screenshot parity report
+        run: |
+          python3 ios-app/tools/compare_png.py \
+            --manifest ios-app/tools/screenshot_manifest.json \
+            --root . \
+            --output ci-artifacts/screenshot-report.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: screenshot-parity-report
+          path: |
+            ci-artifacts/screenshot-report.json
+            ci-artifacts/screenshot-report.md
+
+  collect-ios-artifacts:
+    name: 汇总 iOS 截图和 IPA
+    if: github.event_name == 'push'
+    needs: [simulator-screenshots, unsigned-ipa, paired-screenshot-report]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.ref_name }}
+          fetch-depth: 0
+      - uses: actions/download-artifact@v4
+        with:
+          name: simulator-screenshots
+          path: ci-artifacts/ios-screenshots
+      - uses: actions/download-artifact@v4
+        with:
+          name: QingJi-unsigned-ipa
+          path: ci-artifacts/releases
+      - uses: actions/download-artifact@v4
+        with:
+          name: screenshot-parity-report
+          path: ci-artifacts
+      - name: Commit artifacts back to branch
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          mkdir -p ci-artifacts
-          cp QingJi-unsigned.ipa ci-artifacts/QingJi-unsigned.ipa
-          cp QingJi-noext.ipa ci-artifacts/QingJi-noext.ipa
-          git add ci-artifacts
+          git add ci-artifacts/ios-screenshots
+          git add ci-artifacts/screenshot-report.json ci-artifacts/screenshot-report.md
+          git add -f ci-artifacts/releases/QingJi-unsigned.ipa ci-artifacts/releases/QingJi-noext.ipa
           if git diff --cached --quiet; then
-            echo "IPA 无变化，跳过提交"
+            echo "iOS 产物无变化，跳过提交"
             exit 0
           fi
-          git commit -m "ci: 更新 IPA（完整版 + 无小组件版）[skip ci]"
-          git pull --rebase origin "${GITHUB_REF_NAME}" || true
-          git push origin HEAD:"${GITHUB_REF_NAME}" || {
-            sleep 5
-            git pull --rebase origin "${GITHUB_REF_NAME}"
-            git push origin HEAD:"${GITHUB_REF_NAME}"
-          }
+          git commit -m "ci: 更新 iOS 截图与 IPA [skip ci]"
+          git pull --rebase origin "${GITHUB_REF_NAME}"
+          git push origin HEAD:"${GITHUB_REF_NAME}"

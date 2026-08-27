@@ -1,6 +1,7 @@
 import Foundation
 import Speech
 import AVFoundation
+import Observation
 
 /// 语音记账的听写封装：按住/点击麦克风 → 实时转写中文 → 喂给一句话解析器。
 @MainActor

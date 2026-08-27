@@ -1,6 +1,7 @@
 import UIKit
 import SwiftUI
 import SwiftData
+import PhotosUI
 import QingJiCore
 
 /// 核心快记页：打开 App 即是键盘，目标 3 秒记完一笔。
@@ -13,20 +14,32 @@ struct QuickAddView: View {
     private var allCategories: [TxCategory]
     @Query(sort: \Account.sortOrder)
     private var accounts: [Account]
+    @Query(sort: \Book.sortOrder)
+    private var books: [Book]
+    @Query(sort: \Tag.sortOrder)
+    private var tags: [Tag]
 
     @State private var kind: TransactionKind = .expense
     @State private var expression = AmountExpression()
     @State private var selectedCategory: TxCategory?
-    @State private var selectedAccount: Account?
-    @State private var transferTarget: Account?
-    @State private var date = Date()
+    @State private var selectedAccountID: UUID?
+    @State private var selectedBook: Book?
+    @State private var transferTargetID: UUID?
+    @State private var date = AppClock.now
     @State private var note = ""
     @State private var rankedKeys: [String] = []
     @State private var showSavedToast = false
     @State private var budgetStatus: BudgetStatus?
+    @State private var showMoreDetails = false
+    @State private var isReimbursable = false
+    @State private var isExcluded = false
+    @State private var selectedTagNames: Set<String> = []
+    @State private var attachmentPath = ""
+    @State private var saveError: String?
 
     private var visibleCategories: [TxCategory] {
-        let matching = allCategories.filter { $0.kind == kind }
+        let matching = allCategories.filter { $0.kind == kind && !$0.isArchived }
+            .filter { $0.parentKey == nil }
         guard !rankedKeys.isEmpty else { return matching }
         let order = Dictionary(rankedKeys.enumerated().map { ($1, $0) }, uniquingKeysWith: { a, _ in a })
         return matching.sorted {
@@ -34,13 +47,31 @@ struct QuickAddView: View {
         }
     }
 
+    private var childCategories: [TxCategory] {
+        allCategories.filter { $0.kind == kind && !$0.isArchived && $0.parentKey != nil }
+    }
+
+    private var usableAccounts: [Account] {
+        accounts.filter { !$0.isDeleted && $0.status == .active }
+    }
+
     /// 首次启动种子数据异步写入，account 选择要随查询结果就绪而兜底。
     private var effectiveAccount: Account? {
-        selectedAccount ?? accounts.first
+        usableAccounts.first(where: { $0.stableID == selectedAccountID }) ?? usableAccounts.first
+    }
+
+    private var effectiveTransferTarget: Account? {
+        usableAccounts.first(where: { $0.stableID == transferTargetID })
     }
 
     private var currencyCode: String {
-        effectiveAccount?.currencyCode ?? Locale.current.currency?.identifier ?? "CNY"
+        effectiveAccount?.currencyCode ?? "CNY"
+    }
+
+    private var effectiveBook: Book? {
+        selectedBook
+            ?? books.first(where: { $0.stableID == router.selectedBookID })
+            ?? books.first
     }
 
     var body: some View {
@@ -67,7 +98,11 @@ struct QuickAddView: View {
                     if kind == .transfer {
                         transferPickers
                     } else {
-                        CategoryGrid(categories: visibleCategories, selected: $selectedCategory)
+                        CategoryGrid(
+                            categories: visibleCategories,
+                            childCategories: childCategories,
+                            selected: $selectedCategory
+                        )
                     }
                 }
 
@@ -92,8 +127,45 @@ struct QuickAddView: View {
             ), onDismiss: {
                 refreshRanking()
                 loadBudgetStatus()
+                router.clearPendingShare()
             }) {
-                AIQuickEntryView()
+                AIQuickEntryView(
+                    initialText: router.pendingShareText,
+                    sharedImageFileName: router.pendingShareImageFileName
+                )
+            }
+            .sheet(isPresented: Binding(
+                get: { router.showAssistant },
+                set: { router.showAssistant = $0 }
+            )) {
+                MeowAssistantView()
+            }
+            .fullScreenCover(isPresented: Binding(
+                get: { router.showChats },
+                set: { router.showChats = $0 }
+            )) {
+                NavigationStack {
+                    AIChatsView()
+                }
+            }
+            .sheet(isPresented: $showMoreDetails) {
+                QuickAddDetailsSheet(
+                    kind: kind,
+                    tags: tags,
+                    isReimbursable: $isReimbursable,
+                    isExcluded: $isExcluded,
+                    selectedTagNames: $selectedTagNames,
+                    attachmentPath: $attachmentPath
+                )
+                .presentationDetents([.medium, .large])
+            }
+            .alert("无法保存", isPresented: Binding(
+                get: { saveError != nil },
+                set: { if !$0 { saveError = nil } }
+            )) {
+                Button("好") { saveError = nil }
+            } message: {
+                Text(saveError ?? "")
             }
             .overlay(alignment: .top) {
                 if showSavedToast {
@@ -107,8 +179,8 @@ struct QuickAddView: View {
             .onAppear(perform: prepareDefaults)
             .onChange(of: kind) { resetCategorySelection() }
             .onChange(of: accounts.count) {
-                if selectedAccount == nil { selectedAccount = accounts.first }
-                if transferTarget == nil { resetCategorySelection() }
+                if selectedAccountID == nil { selectedAccountID = usableAccounts.first?.stableID }
+                if transferTargetID == nil { resetCategorySelection() }
             }
             .onChange(of: allCategories.count) { resetCategorySelection() }
         }
@@ -135,16 +207,18 @@ struct QuickAddView: View {
 
     private var transferPickers: some View {
         VStack(spacing: 16) {
-            Picker("从", selection: $selectedAccount) {
-                ForEach(accounts) { account in
-                    Text(account.name).tag(Optional(account))
+            Picker("从", selection: $selectedAccountID) {
+                Text("请选择账户").tag(Optional<UUID>.none)
+                ForEach(usableAccounts) { account in
+                    Text(account.name).tag(Optional(account.stableID))
                 }
             }
             Image(systemName: "arrow.down")
                 .foregroundStyle(.secondary)
-            Picker("到", selection: $transferTarget) {
-                ForEach(accounts) { account in
-                    Text(account.name).tag(Optional(account))
+            Picker("到", selection: $transferTargetID) {
+                Text("请选择账户").tag(Optional<UUID>.none)
+                ForEach(usableAccounts) { account in
+                    Text(account.name).tag(Optional(account.stableID))
                 }
             }
         }
@@ -153,31 +227,58 @@ struct QuickAddView: View {
     }
 
     private var detailBar: some View {
-        HStack(spacing: 12) {
-            if kind != .transfer {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 12) {
+                if kind != .transfer {
+                    Menu {
+                        ForEach(usableAccounts) { account in
+                            Button(account.name) { selectedAccountID = account.stableID }
+                        }
+                    } label: {
+                        Label(effectiveAccount?.name ?? String(localized: "账户"), systemImage: effectiveAccount?.kind.symbol ?? "wallet.pass")
+                            .font(.subheadline)
+                            .lineLimit(1)
+                    }
+                }
                 Menu {
-                    ForEach(accounts) { account in
-                        Button(account.name) { selectedAccount = account }
+                    ForEach(books) { book in
+                        Button {
+                            selectedBook = book
+                        } label: {
+                            if book.persistentModelID == effectiveBook?.persistentModelID {
+                                Label(book.name, systemImage: "checkmark")
+                            } else {
+                                Text(book.name)
+                            }
+                        }
                     }
                 } label: {
-                    Label(effectiveAccount?.name ?? String(localized: "账户"), systemImage: effectiveAccount?.kind.symbol ?? "wallet.pass")
+                    Label(effectiveBook?.name ?? "账本", systemImage: "book.closed")
                         .font(.subheadline)
                         .lineLimit(1)
                 }
+                DatePicker("日期", selection: $date, displayedComponents: .date)
+                    .labelsHidden()
+                    .datePickerStyle(.compact)
+                TextField("备注…", text: $note)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.subheadline)
+                    .frame(minWidth: 110)
+                Button {
+                    showMoreDetails = true
+                } label: {
+                    Label("更多", systemImage: "ellipsis.circle")
+                        .font(.subheadline)
+                }
+                .buttonStyle(.bordered)
             }
-            DatePicker("日期", selection: $date, displayedComponents: .date)
-                .labelsHidden()
-                .datePickerStyle(.compact)
-            TextField("备注…", text: $note)
-                .textFieldStyle(.roundedBorder)
-                .font(.subheadline)
+            .padding(.horizontal)
+            .padding(.vertical, 8)
         }
-        .padding(.horizontal)
-        .padding(.vertical, 8)
     }
 
     private func prepareDefaults() {
-        if selectedAccount == nil { selectedAccount = accounts.first }
+        if selectedAccountID == nil { selectedAccountID = usableAccounts.first?.stableID }
         refreshRanking()
         resetCategorySelection()
         loadBudgetStatus()
@@ -206,20 +307,28 @@ struct QuickAddView: View {
 
     /// 设置过预算时计算「今日可花」。
     private func loadBudgetStatus() {
-        guard let budget = ((try? context.fetch(FetchDescriptor<Budget>())) ?? []).first(where: { $0.categoryKey == nil }),
-              budget.amount > 0 else {
+        let budgets = (try? context.fetch(FetchDescriptor<Budget>())) ?? []
+        guard let budget = BudgetStore.effectiveTotalBudget(
+            from: budgets,
+            selectedBookID: router.selectedBookID
+        ), budget.amount > 0 else {
             budgetStatus = nil
             return
         }
         let all = (try? context.fetch(FetchDescriptor<MoneyTransaction>())) ?? []
-        budgetStatus = BudgetEngine.status(monthlyBudget: budget.amount, records: all.map(\.record))
+        let scoped = LedgerScope.filter(all, selectedBookID: router.selectedBookID)
+        budgetStatus = BudgetStore.status(
+            for: budget,
+            transactions: scoped,
+            referenceDate: AppClock.now
+        )
     }
 
     private func resetCategorySelection() {
         if kind == .transfer {
             selectedCategory = nil
-            if transferTarget == nil {
-                transferTarget = accounts.first { $0.persistentModelID != selectedAccount?.persistentModelID }
+            if transferTargetID == nil {
+                transferTargetID = usableAccounts.first { $0.stableID != selectedAccountID }?.stableID
             }
         } else if selectedCategory?.kind != kind {
             selectedCategory = visibleCategories.first
@@ -236,7 +345,7 @@ struct QuickAddView: View {
             return (key, transaction.date)
         }
         rankedKeys = CategoryRanker.rank(
-            defaultOrder: allCategories.map(\.key),
+            defaultOrder: allCategories.filter { !$0.isArchived }.map(\.key),
             usages: usages
         )
     }
@@ -245,29 +354,57 @@ struct QuickAddView: View {
         let amount = expression.value
         guard amount > 0 else { return }
 
-        let transaction: MoneyTransaction
-        switch kind {
-        case .transfer:
-            guard let from = effectiveAccount, let to = transferTarget,
-                  from.persistentModelID != to.persistentModelID else { return }
-            transaction = MoneyTransaction(
-                amount: amount, kind: .transfer, date: date, note: note,
-                currencyCode: currencyCode, account: from, toAccount: to
-            )
-        case .expense, .income:
-            guard let category = selectedCategory else { return }
-            transaction = MoneyTransaction(
-                amount: amount, kind: kind, date: date, note: note,
-                currencyCode: currencyCode, category: category, account: effectiveAccount
-            )
+        do {
+            switch kind {
+            case .transfer:
+                guard let from = effectiveAccount, let to = effectiveTransferTarget,
+                      from.persistentModelID != to.persistentModelID else {
+                    saveError = LedgerStore.Error.invalidTransfer.localizedDescription
+                    return
+                }
+                try LedgerStore.createTransaction(
+                    in: context,
+                    amount: amount,
+                    kind: .transfer,
+                    date: date,
+                    note: note,
+                    account: from,
+                    toAccount: to,
+                    book: effectiveBook,
+                    tags: Array(selectedTagNames),
+                    isExcluded: isExcluded,
+                    attachmentPath: attachmentPath
+                )
+            case .expense, .income:
+                guard let category = selectedCategory else { return }
+                try LedgerStore.createTransaction(
+                    in: context,
+                    amount: amount,
+                    kind: kind,
+                    date: date,
+                    note: note,
+                    category: category,
+                    account: effectiveAccount,
+                    book: effectiveBook,
+                    tags: Array(selectedTagNames),
+                    reimbursable: kind == .expense && isReimbursable,
+                    isExcluded: isExcluded,
+                    attachmentPath: attachmentPath
+                )
+            }
+        } catch {
+            saveError = error.localizedDescription
+            return
         }
-        context.insert(transaction)
-        try? context.save()
 
         UINotificationFeedbackGenerator().notificationOccurred(.success)
         expression.clear()
         note = ""
-        date = Date()
+        date = AppClock.now
+        isReimbursable = false
+        isExcluded = false
+        selectedTagNames.removeAll()
+        attachmentPath = ""
         refreshRanking()
         loadBudgetStatus()
 
@@ -275,6 +412,105 @@ struct QuickAddView: View {
         Task {
             try? await Task.sleep(for: .seconds(1.5))
             withAnimation { showSavedToast = false }
+        }
+    }
+}
+
+private struct QuickAddDetailsSheet: View {
+    @Environment(\.dismiss) private var dismiss
+
+    let kind: TransactionKind
+    let tags: [Tag]
+    @Binding var isReimbursable: Bool
+    @Binding var isExcluded: Bool
+    @Binding var selectedTagNames: Set<String>
+    @Binding var attachmentPath: String
+    @State private var photoItem: PhotosPickerItem?
+    @State private var attachmentError: String?
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("收支选项") {
+                    if kind == .expense {
+                        Toggle("待报销", isOn: $isReimbursable)
+                    }
+                    Toggle("不计入收支统计", isOn: $isExcluded)
+                }
+                if !tags.isEmpty {
+                    Section("标签") {
+                        ForEach(tags) { tag in
+                            Button {
+                                if selectedTagNames.contains(tag.name) {
+                                    selectedTagNames.remove(tag.name)
+                                } else {
+                                    selectedTagNames.insert(tag.name)
+                                }
+                            } label: {
+                                HStack {
+                                    Text(tag.name)
+                                        .foregroundStyle(.primary)
+                                    Spacer()
+                                    if selectedTagNames.contains(tag.name) {
+                                        Image(systemName: "checkmark")
+                                            .foregroundStyle(Color.accentColor)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                Section("附件") {
+                    PhotosPicker(selection: $photoItem, matching: .images) {
+                        Label(
+                            attachmentPath.isEmpty ? "附加照片" : "更换照片",
+                            systemImage: attachmentPath.isEmpty ? "camera" : "photo"
+                        )
+                    }
+                    if !attachmentPath.isEmpty {
+                        HStack {
+                            Label("已附照片", systemImage: "paperclip")
+                                .foregroundStyle(.secondary)
+                            Spacer()
+                            Button("移除", role: .destructive) {
+                                AttachmentStore.remove(attachmentPath)
+                                attachmentPath = ""
+                            }
+                        }
+                    }
+                }
+            }
+            .navigationTitle("更多选项")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("完成") { dismiss() }
+                }
+            }
+            .onChange(of: photoItem) { _, item in
+                guard let item else { return }
+                Task {
+                    do {
+                        guard let data = try await item.loadTransferable(type: Data.self) else { return }
+                        let path = try AttachmentStore.save(data: data)
+                        await MainActor.run {
+                            if !attachmentPath.isEmpty { AttachmentStore.remove(attachmentPath) }
+                            attachmentPath = path
+                            photoItem = nil
+                        }
+                    } catch {
+                        await MainActor.run { attachmentError = error.localizedDescription }
+                    }
+                }
+            }
+            .alert("无法添加照片", isPresented: Binding(
+                get: { attachmentError != nil },
+                set: { if !$0 { attachmentError = nil } }
+            )) {
+                Button("好") { attachmentError = nil }
+            } message: {
+                Text(attachmentError ?? "")
+            }
         }
     }
 }

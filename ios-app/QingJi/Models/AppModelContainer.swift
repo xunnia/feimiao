@@ -9,7 +9,41 @@ import SwiftData
 /// 并灌入演示数据，用于 CI 截图。真实用户和打包的 IPA 不受影响。
 enum AppModelContainer {
     static let shared: ModelContainer = {
-        let schema = Schema([Account.self, TxCategory.self, MoneyTransaction.self, Budget.self])
+        let schema = Schema([
+            Account.self,
+            Book.self,
+            TxCategory.self,
+            Tag.self,
+            MoneyTransaction.self,
+            Budget.self,
+            SavingsGoal.self,
+            RecurringRule.self,
+            RecurringOccurrence.self,
+            PhysicalAsset.self,
+            AssetEvent.self,
+            AssetUsageEvent.self,
+            AssetTransactionLink.self,
+            AssetRefundAllocation.self,
+            AssetValuation.self,
+            ReceivableAsset.self,
+            ReceivableRecovery.self,
+            LiabilityProfile.self,
+            NetWorthSnapshot.self,
+            AIChatSession.self,
+            AIChatMessage.self,
+            AIMemoryRecord.self,
+            AIRequestRunRecord.self,
+            AIRequestEventRecord.self,
+            AIReportScheduleRecord.self,
+            BudgetPlanRecord.self,
+            BudgetPlanRevisionRecord.self,
+            BudgetCycleOverrideRecord.self,
+            BudgetCommitmentOccurrenceRecord.self,
+            BudgetChangeEventRecord.self,
+            ReportRecord.self,
+            AccountBalanceCheckpointRecord.self,
+            NetWorthVerifiedCheckpointRecord.self,
+        ])
         do {
             // 演示模式：内存容器，CI 截图专用
             if ProcessInfo.processInfo.environment["QINGJI_DEMO"] == "1" {

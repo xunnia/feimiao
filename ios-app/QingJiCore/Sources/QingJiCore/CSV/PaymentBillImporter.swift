@@ -7,7 +7,7 @@ public enum BillSource: String, Sendable {
     case unknown
 }
 
-/// 导入结果：成功解析的流水 + 被跳过的行数（不计收支、退款中等）。
+/// 导入结果：成功解析的流水 + 被跳过的行数。
 public struct ImportedBillResult: Sendable {
     public let source: BillSource
     public let records: [TransactionRecord]
@@ -31,44 +31,52 @@ public enum PaymentBillImporter {
     public static func importBill(fromCSV text: String) throws -> ImportedBillResult {
         let rows = CSVParser.parse(text)
         guard let headerIndex = rows.firstIndex(where: { row in
-            row.contains { $0.contains("交易时间") }
+            row.contains { cell in
+                let header = normalizeHeader(cell)
+                return header.contains("交易时间") || header.contains("日期") || header == "时间" ||
+                    header.contains("时间") || header.contains("收/支") || header.contains("收支") ||
+                    header == "date" || header == "time" || header == "kind"
+            } && row.contains {
+                let header = normalizeHeader($0)
+                return header.contains("金额") || header == "amount"
+            }
         }) else {
             throw BillImportError.unrecognizedFormat
         }
 
-        let header = rows[headerIndex].map {
-            $0.trimmingCharacters(in: .whitespacesAndNewlines)
-        }
+        let header = rows[headerIndex].map(normalizeHeader)
         func column(_ candidates: String...) -> Int? {
             for name in candidates {
-                if let index = header.firstIndex(where: { $0.hasPrefix(name) }) {
+                let normalizedName = normalizeHeader(name)
+                if let index = header.firstIndex(where: { $0.hasPrefix(normalizedName) }) {
                     return index
                 }
             }
             return nil
         }
 
-        guard let timeColumn = column("交易时间"),
-              let inOutColumn = column("收/支"),
-              let amountColumn = column("金额") else {
+        guard let timeColumn = column(
+            "交易时间", "交易创建时间", "付款时间", "日期", "记账时间", "创建时间", "时间", "date", "time"
+        ),
+              let amountColumn = column("金额", "amount") else {
             throw BillImportError.unrecognizedFormat
         }
-        let counterpartyColumn = column("交易对方")
-        let productColumn = column("商品说明", "商品")
-        let alipayCategoryColumn = column("交易分类")
+        let inOutColumn = column("收/支", "收支", "收入/支出", "direction")
+        let kindColumn = column("类型", "交易类型", "收支类型", "收入/支出", "业务类型", "kind")
+        let counterpartyColumn = column("交易对方", "merchant")
+        let productColumn = column("商品说明", "商品", "product")
+        let noteColumn = column("交易备注", "付款备注", "备注", "note")
+        let alipayCategoryColumn = column("交易分类", "category")
         let statusColumn = column("当前状态", "交易状态")
+        let orderColumn = column("商户订单号", "商户单号", "交易订单号", "交易单号", "订单号", "order_no")
 
         let source: BillSource = detectSource(preamble: rows[..<headerIndex], header: header)
-
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
 
         var records: [TransactionRecord] = []
         var skipped = 0
 
-        for row in rows[(headerIndex + 1)...] {
-            guard row.count > max(timeColumn, inOutColumn, amountColumn) else {
+        for row in rows.dropFirst(headerIndex + 1) {
+            guard row.count > max(timeColumn, amountColumn) else {
                 skipped += 1
                 continue
             }
@@ -77,40 +85,87 @@ public enum PaymentBillImporter {
                 return row[index].trimmingCharacters(in: .whitespacesAndNewlines)
             }
 
-            let kind: TransactionKind
-            switch cell(inOutColumn) {
-            case "支出": kind = .expense
-            case "收入": kind = .income
-            default:
-                // "/"、"不计收支" 等中性交易（零钱提现、互转）不导入
+            guard let parsedAmount = parseAmount(cell(amountColumn)), parsedAmount != 0,
+                  let date = parseDate(cell(timeColumn)) else {
                 skipped += 1
                 continue
             }
 
+            let direction = cell(inOutColumn)
+            let type = cell(kindColumn)
+            let category = cell(alipayCategoryColumn)
+            let product = cell(productColumn)
+            let counterparty = cell(counterpartyColumn)
+            let extraNote = cell(noteColumn)
+            let order = cell(orderColumn) == "/" ? "" : cell(orderColumn)
             let status = cell(statusColumn)
-            if status.contains("退款") || status.contains("关闭") || status.contains("失败") {
-                skipped += 1
-                continue
-            }
-
-            guard let amount = parseAmount(cell(amountColumn)), amount > 0,
-                  let date = formatter.date(from: cell(timeColumn)) else {
-                skipped += 1
-                continue
-            }
-
-            let note = [cell(counterpartyColumn), cell(productColumn)]
-                .filter { !$0.isEmpty && $0 != "/" }
+            let refundText = [category, type, product, counterparty, status]
                 .joined(separator: " ")
+            let hasRefundSignal = containsRefundSignal(refundText)
+            let directionText = "\(direction) \(type)"
+            let isExplicitExpense = directionText.contains("支") && !directionText.contains("不计")
+            let isExplicitIncome = directionText.contains("收") && !directionText.contains("不计") && !isExplicitExpense
+            let platformRefundSignal = containsRefundSignal(category) ||
+                containsRefundSignal(type) ||
+                (containsRefundSignal(product) && !product.contains("转账备注"))
+            let isRefund = hasRefundSignal && !isExplicitExpense &&
+                (!isExplicitIncome || platformRefundSignal)
+
+            // 微信有时把已经全额退款的原消费行标为“支出 + 已全额退款”，
+            // 这不是可独立入账的支出，也不是可挂回原单的退款子行。
+            if status.contains("关闭") || status.contains("失败") ||
+                (status.contains("退款") && !isRefund) {
+                skipped += 1
+                continue
+            }
+
+            let resolvedKind: TransactionKind?
+            if isRefund {
+                resolvedKind = .expense
+            } else {
+                resolvedKind = resolveKind(direction: direction, type: type, amount: parsedAmount)
+            }
+            guard let kind = resolvedKind else {
+                skipped += 1
+                continue
+            }
+
+            let noteParts = [counterparty, product, extraNote]
+                .filter { !$0.isEmpty && $0 != "/" }
+                .reduce(into: [String]()) { parts, value in
+                    if !parts.contains(value) { parts.append(value) }
+                }
+            let note = noteParts.joined(separator: " · ")
+            let classificationNote = [category, note].filter { !$0.isEmpty }.joined(separator: " ")
+            let guess = isRefund
+                ? BillCategoryGuess.none
+                : BillCategorizer.classify(
+                    merchant: counterparty,
+                    product: product,
+                    note: classificationNote,
+                    kind: kind
+                )
+            let seed = guess.key.flatMap(CategorySeed.byKey)
 
             records.append(TransactionRecord(
                 kind: kind,
-                amount: amount,
+                amount: isRefund ? -absolute(parsedAmount) : absolute(parsedAmount),
                 currencyCode: "CNY",
-                categoryName: cell(alipayCategoryColumn),
+                categoryName: isRefund ? "" : category,
+                categoryKey: isRefund ? "" : (guess.key ?? ""),
+                topCategoryName: isRefund ? "" : (seed.flatMap { item in
+                    guard let parentKey = item.parentKey else { return item.nameZh }
+                    return CategorySeed.byKey(parentKey)?.nameZh ?? item.nameZh
+                } ?? ""),
+                topCategoryKey: isRefund ? "" : (seed?.parentKey ?? seed?.key ?? ""),
+                merchant: counterparty,
+                product: product == "/" ? "" : product,
                 accountName: "",
                 note: note,
-                date: date
+                date: date,
+                timePrecision: containsClock(cell(timeColumn)) ? .exact : .dateOnly,
+                eventType: isRefund ? .refund : .defaultFor(kind),
+                orderNo: order
             ))
         }
 
@@ -119,13 +174,69 @@ public enum PaymentBillImporter {
 
     /// 去掉金额里的货币符号与千分位，如 "¥1,234.50" -> 1234.50。
     static func parseAmount(_ text: String) -> Decimal? {
-        let cleaned = text
-            .replacingOccurrences(of: "¥", with: "")
-            .replacingOccurrences(of: "￥", with: "")
-            .replacingOccurrences(of: ",", with: "")
-            .trimmingCharacters(in: .whitespaces)
+        let cleaned = text.filter { $0.isNumber || $0 == "." || $0 == "-" || $0 == "+" }
         guard !cleaned.isEmpty else { return nil }
         return Decimal(string: cleaned)
+    }
+
+    private static func normalizeHeader(_ text: String) -> String {
+        text.trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: "\u{FEFF}", with: "")
+            .replacingOccurrences(of: " ", with: "")
+            .replacingOccurrences(of: "　", with: "")
+            .replacingOccurrences(of: "（", with: "(")
+            .replacingOccurrences(of: "）", with: ")")
+    }
+
+    private static func containsRefundSignal(_ text: String) -> Bool {
+        text.contains("退款") || text.contains("退回") || text.contains("退货") ||
+            text.localizedCaseInsensitiveContains("refund")
+    }
+
+    private static func resolveKind(direction: String, type: String, amount: Decimal) -> TransactionKind? {
+        for value in [direction, type] where !value.isEmpty {
+            let normalized = value.lowercased()
+            if normalized == "expense" { return .expense }
+            if normalized == "income" { return .income }
+            if normalized == "transfer" { return .transfer }
+            if value.contains("不计") || value.contains("中性") || value == "/" {
+                return nil
+            }
+            if value.contains("收") && !value.contains("支") { return .income }
+            if value.contains("支") && !value.contains("收") { return .expense }
+        }
+        return amount < 0 ? .expense : .income
+    }
+
+    private static func parseDate(_ text: String) -> Date? {
+        let value = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        // XLSX 日期单元格常以 1899-12-30 为基准的序列值保存；这里只在
+        // 日期列解析它，金额仍始终走 Decimal。
+        if let serial = Double(value), serial > 1, serial < 100_000 {
+            return Date(timeIntervalSince1970: (serial - 25_569) * 86_400)
+        }
+        if let iso = ISO8601DateFormatter().date(from: value.replacingOccurrences(of: " ", with: "T")) {
+            return iso
+        }
+        for format in [
+            "yyyy-MM-dd HH:mm:ss", "yyyy-MM-dd HH:mm",
+            "yyyy/MM/dd HH:mm:ss", "yyyy/MM/dd HH:mm",
+            "yyyy-MM-dd", "yyyy/MM/dd"
+        ] {
+            let formatter = DateFormatter()
+            formatter.locale = Locale(identifier: "en_US_POSIX")
+            formatter.dateFormat = format
+            if let date = formatter.date(from: value) { return date }
+        }
+        return nil
+    }
+
+    private static func containsClock(_ value: String) -> Bool {
+        value.range(of: #"(?:T|\s)\d{1,2}:\d{2}"#, options: .regularExpression) != nil
+    }
+
+    private static func absolute(_ value: Decimal) -> Decimal {
+        value < 0 ? -value : value
     }
 
     private static func detectSource(preamble: ArraySlice<[String]>, header: [String]) -> BillSource {
