@@ -203,11 +203,13 @@ struct SettingsView: View {
                     Text("信用卡、贷款和个人借入会在还款日前一天及当天提醒；通知时间由 iOS 系统管理。")
                 }
 
-                Section("小组件") {
+                Section {
                     Toggle("隐藏小组件金额", isOn: $widgetPrivacyMode)
                         .onChange(of: widgetPrivacyMode) { _, _ in
                             WidgetCenter.shared.reloadAllTimelines()
                         }
+                } header: {
+                    Text("小组件")
                 } footer: {
                     Text("开启后，小组件保留分类和进度，但不显示具体金额。")
                 }

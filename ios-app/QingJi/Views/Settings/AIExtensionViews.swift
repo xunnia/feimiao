@@ -487,7 +487,7 @@ struct AIDiagnosticsView: View {
 
     var body: some View {
         List {
-            Section("服务商健康") {
+            Section {
                 if providers.isEmpty {
                     Text("还没有 AI 运行记录")
                         .foregroundStyle(.secondary)
@@ -513,6 +513,8 @@ struct AIDiagnosticsView: View {
                         }
                     }
                 }
+            } header: {
+                Text("服务商健康")
             } footer: {
                 Text("诊断只显示阶段、次数和脱敏错误，不保存或展示 API Key、完整提示词、账本原文或模型思考内容。")
             }

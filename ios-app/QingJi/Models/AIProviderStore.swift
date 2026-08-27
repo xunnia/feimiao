@@ -498,17 +498,17 @@ final class AIProviderStore {
 
     func refreshModels(for account: AIProviderAccount) async throws -> [String] {
         var active = account
-        var secret = secret(for: active.id)
+        var credential = secret(for: active.id)
         let models: [String]
         do {
-            models = try await AIProviderClient.fetchModels(account: active, secret: secret)
+            models = try await AIProviderClient.fetchModels(account: active, secret: credential)
         } catch {
             guard active.authMethod == .oauth,
                   case AIProviderError.http(let status, _) = error,
                   status == 401 else { throw error }
             active = try await refreshOAuth(for: active)
-            secret = secret(for: active.id)
-            models = try await AIProviderClient.fetchModels(account: active, secret: secret)
+            credential = secret(for: active.id)
+            models = try await AIProviderClient.fetchModels(account: active, secret: credential)
         }
         replaceModels(for: account.id, with: models)
         return models

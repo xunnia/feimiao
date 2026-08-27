@@ -1234,9 +1234,6 @@ enum AndroidBackupImporter {
             receivableRecoveries: receivableRecoveries,
             liabilities: liabilities,
             netWorthSnapshots: netWorthSnapshots,
-            accountBalanceCheckpoints: accountBalanceCheckpoints,
-            netWorthVerifiedCheckpoints: netWorthVerifiedCheckpoints,
-            netWorthVerifiedItems: netWorthVerifiedItems,
             aiChatSessions: aiChatSessions,
             aiChatMessages: aiChatMessages,
             aiMemories: aiMemories,
@@ -1248,7 +1245,10 @@ enum AndroidBackupImporter {
             budgetCycleOverridesV2: budgetCycleOverridesV2,
             budgetCommitmentOccurrencesV2: budgetCommitmentOccurrencesV2,
             budgetChangeEventsV2: budgetChangeEventsV2,
-            reports: reports
+            reports: reports,
+            accountBalanceCheckpoints: accountBalanceCheckpoints,
+            netWorthVerifiedCheckpoints: netWorthVerifiedCheckpoints,
+            netWorthVerifiedItems: netWorthVerifiedItems
         )
     }
 

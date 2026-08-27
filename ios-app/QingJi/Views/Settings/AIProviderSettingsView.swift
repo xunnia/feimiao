@@ -68,7 +68,7 @@ struct AIProviderSettingsView: View {
                 }
             }
 
-            Section("账号迁移") {
+            Section {
                 Button {
                     exportConfiguration()
                 } label: {
@@ -79,15 +79,19 @@ struct AIProviderSettingsView: View {
                 } label: {
                     Label("导入账号配置", systemImage: "square.and.arrow.down")
                 }
+            } header: {
+                Text("账号迁移")
             } footer: {
                 Text("JSON 只包含服务商、模型和显示设置，不包含 API Key；导入新账号后需在本机重新填写密钥。")
             }
 
-            Section("隐私与数据") {
+            Section {
                 Button("重置所有服务商授权", role: .destructive) {
                     AIPrivacyConsentStore.reset()
                     message = "已重置。下次向服务商发送问题时会重新确认。"
                 }
+            } header: {
+                Text("隐私与数据")
             } footer: {
                 Text("授权按服务商保存；同一服务商切换模型不会重复确认，切换服务商会重新确认。")
             }

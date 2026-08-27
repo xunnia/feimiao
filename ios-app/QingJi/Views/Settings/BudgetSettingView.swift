@@ -52,7 +52,7 @@ struct BudgetSettingView: View {
 
     var body: some View {
         Form {
-            Section("预算计划") {
+            Section {
                 ForEach(activeBudgetPlansV2, id: \.stableID) { plan in
                     budgetPlanRow(plan)
                 }
@@ -69,12 +69,14 @@ struct BudgetSettingView: View {
                         Label("专项追踪", systemImage: "scope")
                     }
                 }
+            } header: {
+                Text("预算计划")
             } footer: {
                 Text("预算计划按生效周期保存；专项追踪不会并入总预算。")
             }
 
             if !currentFixedOccurrences.isEmpty {
-                Section("本周期固定承诺") {
+                Section {
                     ForEach(currentFixedOccurrences) { occurrence in
                         HStack(spacing: 10) {
                             Image(systemName: "calendar.badge.clock")
@@ -118,6 +120,8 @@ struct BudgetSettingView: View {
                             .accessibilityLabel("固定承诺操作")
                         }
                     }
+                } header: {
+                    Text("本周期固定承诺")
                 } footer: {
                     Text("固定承诺只预留预算，不会自动创建账单；账单匹配、跳过和退款复核只改变承诺状态，不修改原账单。")
                 }
@@ -166,7 +170,7 @@ struct BudgetSettingView: View {
                 }
             }
 
-            Section("分类预算") {
+            Section {
                 ForEach(categoryBudgets) { budget in
                     categoryBudgetRow(budget)
                 }
@@ -177,6 +181,8 @@ struct BudgetSettingView: View {
                 } label: {
                     Label("添加分类预算", systemImage: "plus.circle")
                 }
+            } header: {
+                Text("分类预算")
             } footer: {
                 Text("分类预算只用于拆分查看，不会和总预算重复相加。")
             }

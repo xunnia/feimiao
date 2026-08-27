@@ -6,7 +6,9 @@ final class BackupPackageTests: XCTestCase {
         let bookID = UUID()
         let accountID = UUID()
         let transactionID = UUID()
+        let date = Date(timeIntervalSince1970: 1_700_000_000)
         let package = FeimiaoBackupPackage(
+            exportedAt: date,
             books: [BackupBook(id: bookID, name: "总账本", isDefault: true)],
             accounts: [BackupAccount(id: accountID, name: "微信", kind: .weChat, initialBalance: 12.34)],
             categories: [BackupCategory(key: "dining", name: "餐饮", symbol: "fork.knife", kind: .expense)],
@@ -14,7 +16,7 @@ final class BackupPackageTests: XCTestCase {
                 id: transactionID,
                 amount: -20,
                 kind: .expense,
-                date: Date(timeIntervalSince1970: 1_700_000_000),
+                date: date,
                 note: "退款",
                 merchant: "某商户",
                 product: "订单商品",
@@ -71,6 +73,7 @@ final class BackupPackageTests: XCTestCase {
         let date = Date(timeIntervalSince1970: 1_700_000_000)
         let package = FeimiaoBackupPackage(
             schemaVersion: 4,
+            exportedAt: date,
             aiChatSessions: [BackupAIChatSession(
                 id: sessionID,
                 title: "本月消费",
@@ -110,6 +113,7 @@ final class BackupPackageTests: XCTestCase {
         let date = Date(timeIntervalSince1970: 1_700_000_000)
         let package = FeimiaoBackupPackage(
             schemaVersion: 3,
+            exportedAt: date,
             savingsGoals: [BackupSavingsGoal(
                 id: goalID,
                 name: "旅行",
@@ -160,6 +164,7 @@ final class BackupPackageTests: XCTestCase {
         let date = Date(timeIntervalSince1970: 1_700_000_000)
         let package = FeimiaoBackupPackage(
             schemaVersion: FeimiaoBackupPackage.currentSchemaVersion,
+            exportedAt: date,
             aiMemories: [BackupAIMemory(
                 id: memoryID,
                 phrase: "不吃辣",
@@ -190,6 +195,7 @@ final class BackupPackageTests: XCTestCase {
         let date = Date(timeIntervalSince1970: 1_700_000_000)
         let package = FeimiaoBackupPackage(
             schemaVersion: FeimiaoBackupPackage.currentSchemaVersion,
+            exportedAt: date,
             aiRequestRuns: [BackupAIRequestRun(
                 id: runID,
                 modeRaw: "record",

@@ -420,7 +420,7 @@ struct AIQuickEntryView: View {
 
     @ViewBuilder
     private func refundSection(_ result: RefundMatchResult) -> some View {
-        Section("退款确认") {
+        Section {
             if let candidate = result.candidate, let amount = result.amount {
                 LabeledContent("原账单") {
                     Text(candidate.label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "原支出" : candidate.label)
@@ -450,6 +450,8 @@ struct AIQuickEntryView: View {
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
+        } header: {
+            Text("退款确认")
         } footer: {
             Text("退款会作为原账单的附着冲减，按原账单日期进入统计，不会新增一笔收入。")
         }
