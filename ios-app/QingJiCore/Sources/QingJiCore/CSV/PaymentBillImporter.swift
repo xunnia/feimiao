@@ -158,10 +158,10 @@ public enum PaymentBillImporter {
                     return CategorySeed.byKey(parentKey)?.nameZh ?? item.nameZh
                 } ?? ""),
                 topCategoryKey: isRefund ? "" : (seed?.parentKey ?? seed?.key ?? ""),
-                merchant: counterparty,
-                product: product == "/" ? "" : product,
                 accountName: "",
                 note: note,
+                merchant: counterparty,
+                product: product == "/" ? "" : product,
                 date: date,
                 timePrecision: containsClock(cell(timeColumn)) ? .exact : .dateOnly,
                 eventType: isRefund ? .refund : .defaultFor(kind),
