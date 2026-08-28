@@ -5,6 +5,12 @@ import QingJiCore
 
 /// 流水明细：按天分组、显示当日小计，支持搜索与左滑删除。
 struct TransactionListView: View {
+    let searchMode: Bool
+
+    init(searchMode: Bool = false) {
+        self.searchMode = searchMode
+    }
+
     @Environment(AppRouter.self) private var router
     @Environment(\.modelContext) private var context
     @Query(sort: \MoneyTransaction.date, order: .reverse)
@@ -128,8 +134,18 @@ struct TransactionListView: View {
                     list
                 }
             }
-            .navigationTitle("明细")
-            .searchable(text: $searchText, prompt: "搜索备注、分类、账户")
+            .navigationTitle(searchMode ? "搜索" : "明细")
+            .modifier(
+                ConditionalSearchable(
+                    enabled: !searchMode,
+                    text: $searchText
+                )
+            )
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                if searchMode {
+                    TransactionSearchInput(text: $searchText)
+                }
+            }
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
@@ -293,6 +309,51 @@ struct TransactionListView: View {
             .replacingOccurrences(of: "　", with: " ")
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .lowercased()
+    }
+}
+
+private struct ConditionalSearchable: ViewModifier {
+    let enabled: Bool
+    @Binding var text: String
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if enabled {
+            content.searchable(text: $text, prompt: "搜索备注、分类、账户")
+        } else {
+            content
+        }
+    }
+}
+
+private struct TransactionSearchInput: View {
+    @Binding var text: String
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "magnifyingglass")
+                .foregroundStyle(.secondary)
+            TextField("搜索备注、分类、账户", text: $text)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .submitLabel(.search)
+            if !text.isEmpty {
+                Button {
+                    text = ""
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(.tertiary)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("清除搜索")
+            }
+        }
+        .padding(.horizontal, 14)
+        .frame(minHeight: 52)
+        .glassEffect(.regular, in: .rect(cornerRadius: 20))
+        .padding(.horizontal, 16)
+        .padding(.top, 8)
+        .padding(.bottom, 8)
     }
 }
 

@@ -33,7 +33,11 @@ struct AccountsView: View {
         List {
             Section {
                 ForEach(activeAccounts) { account in
-                    accountRow(account)
+                    NavigationLink {
+                        AccountDetailView(account: account)
+                    } label: {
+                        accountRow(account)
+                    }
                         .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                             Button {
                                 editingAccount = account
@@ -60,7 +64,11 @@ struct AccountsView: View {
             if !archivedAccounts.isEmpty {
                 Section("已归档") {
                     ForEach(archivedAccounts) { account in
-                        accountRow(account, isArchived: true)
+                        NavigationLink {
+                            AccountDetailView(account: account)
+                        } label: {
+                            accountRow(account, isArchived: true)
+                        }
                             .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                                 Button {
                                     restore(account)
@@ -161,10 +169,6 @@ struct AccountsView: View {
                     .foregroundStyle(.secondary)
             }
         }
-        .contentShape(Rectangle())
-        .onTapGesture {
-            editingAccount = account
-        }
         .foregroundStyle(isArchived ? Color.secondary : Color.primary)
     }
 
@@ -212,7 +216,7 @@ struct AccountsView: View {
     }
 }
 
-private struct AccountEditorSheet: View {
+struct AccountEditorSheet: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var context
 

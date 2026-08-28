@@ -2,7 +2,7 @@ import SwiftUI
 import SwiftData
 
 enum AppTab: Hashable {
-    case home, quickAdd, transactions, statistics, settings
+    case home, quickAdd, search, transactions, statistics, settings
 }
 
 struct RootTabView: View {
@@ -17,6 +17,8 @@ struct RootTabView: View {
                     switch route {
                     case .quickAdd:
                         QuickAddView()
+                    case .search:
+                        TransactionListView(searchMode: true)
                     case .transactions:
                         TransactionListView()
                     case .statistics:
@@ -36,6 +38,7 @@ struct RootTabView: View {
             }
             switch route {
             case .quickAdd: router.selectedTab = .quickAdd
+            case .search: router.selectedTab = .search
             case .transactions: router.selectedTab = .transactions
             case .statistics: router.selectedTab = .statistics
             case .settings: router.selectedTab = .settings
@@ -76,6 +79,12 @@ struct RootTabView: View {
             }
         }
         .animation(.snappy(duration: 0.24), value: drawerPresented)
+        .fullScreenCover(isPresented: Binding(
+            get: { router.showAssistant },
+            set: { router.showAssistant = $0 }
+        )) {
+            MeowAssistantView()
+        }
     }
 
     private func syncPath() {
@@ -85,6 +94,8 @@ struct RootTabView: View {
             next = []
         case .quickAdd:
             next = [.quickAdd]
+        case .search:
+            next = [.search]
         case .transactions:
             next = [.transactions]
         case .statistics:
@@ -154,7 +165,7 @@ private struct AppDrawerView: View {
         ("square.and.arrow.down", "导入导出", .settingsDestination(.importReview)),
         ("arrow.uturn.backward.circle", "待报销", .settingsDestination(.reimburse)),
         ("clock.badge", "定时记账", .settingsDestination(.recurring)),
-        ("bell", "自动记账", .settings)
+        ("bell", "自动记账", .settingsDestination(.autoRecord))
     ]
 
     var body: some View {

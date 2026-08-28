@@ -134,12 +134,6 @@ struct QuickAddView: View {
                     sharedImageFileName: router.pendingShareImageFileName
                 )
             }
-            .sheet(isPresented: Binding(
-                get: { router.showAssistant },
-                set: { router.showAssistant = $0 }
-            )) {
-                MeowAssistantView()
-            }
             .fullScreenCover(isPresented: Binding(
                 get: { router.showChats },
                 set: { router.showChats = $0 }

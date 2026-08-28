@@ -10,6 +10,7 @@ final class AppRouter {
     /// 只把页面内部控件和转场换成 SwiftUI 原生实现。
     enum Route: Hashable {
         case quickAdd
+        case search
         case transactions
         case statistics
         case settings
@@ -32,7 +33,7 @@ final class AppRouter {
 
     /// 设置页接到深链后要 push 的子页面。
     enum SettingsDestination: Hashable {
-        case books, accounts, categories, tags, memory, aiMemory, aiTasks, aiExtensions, aiSchedules, aiSearch, aiDiagnostics, aiLocal, budget, reconcile, reimburse, savings, recurring, assets, assetDetail, liabilities, netWorth, importReview, reports, backup, display, theme, ai
+        case books, accounts, categories, tags, memory, aiMemory, aiTasks, aiExtensions, aiSchedules, aiSearch, aiDiagnostics, aiLocal, budget, reconcile, reimburse, savings, recurring, assets, assetDetail, liabilities, netWorth, importReview, reports, backup, display, theme, autoRecord, ai
     }
     var settingsPushTarget: SettingsDestination? = nil
 
@@ -76,6 +77,7 @@ final class AppRouter {
 
         switch normalizedScreen {
         case "home":        selectedTab = .home
+        case "search":      selectedTab = .search
         case "transactions": selectedTab = .transactions
         case "stats-week", "stats/week":  selectedTab = .statistics; statsScope = .week
         case "stats-month", "stats/month":  selectedTab = .statistics; statsScope = .month
@@ -111,6 +113,7 @@ final class AppRouter {
         case "backup":       selectedTab = .settings; settingsPushTarget = .backup
         case "display":      selectedTab = .settings; settingsPushTarget = .display
         case "theme":        selectedTab = .settings; settingsPushTarget = .theme
+        case "auto-record", "autorecord": selectedTab = .settings; settingsPushTarget = .autoRecord
         case "ai":           selectedTab = .quickAdd;   showChats = true
         case "ai-settings":  selectedTab = .settings;   settingsPushTarget = .ai
         default:             selectedTab = .quickAdd
@@ -140,6 +143,9 @@ final class AppRouter {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak self] in
                 self?.showChats = true
             }
+
+        case "search":
+            selectedTab = .search
 
         case "transactions":
             selectedTab   = .transactions
@@ -185,6 +191,7 @@ final class AppRouter {
             case "backup":    settingsPushTarget = .backup
             case "display":   settingsPushTarget = .display
             case "theme":     settingsPushTarget = .theme
+            case "auto-record", "autorecord": settingsPushTarget = .autoRecord
             default:          settingsPushTarget = nil
             }
 

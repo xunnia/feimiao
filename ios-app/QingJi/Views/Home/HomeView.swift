@@ -121,8 +121,8 @@ struct HomeView: View {
                 .padding(.bottom, 24)
             }
             .background(Color(.systemGroupedBackground))
-            // 首页的主操作必须和 Android 一样固定在底部；其它页面仍使用
-            // iOS 原生 TabBar/NavigationStack。底部输入框内的材质与动效使用
+            // 首页的主操作必须和 Android 一样固定在底部；其它页面沿用根导航栈。
+            // 底部输入框内的材质与动效使用
             // iOS 原生 Liquid Glass，但不改变 Android 的功能入口。
             .safeAreaInset(edge: .bottom, spacing: 0) {
                 HomeRecordInputBar()
@@ -143,7 +143,7 @@ struct HomeView: View {
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
-                        router.selectedTab = .transactions
+                        router.selectedTab = .search
                     } label: {
                         Image(systemName: "magnifyingglass")
                             .font(.title3)
@@ -191,14 +191,6 @@ struct HomeView: View {
                     showMonthPicker = false
                 }
                 .presentationDetents([.medium])
-            }
-            .sheet(isPresented: Binding(
-                get: { router.showAssistant },
-                set: { router.showAssistant = $0 }
-            )) {
-                NavigationStack {
-                    MeowAssistantView()
-                }
             }
             .toolbar(.hidden, for: .tabBar)
         }

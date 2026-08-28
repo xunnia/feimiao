@@ -221,24 +221,29 @@ struct AssetsView: View {
                     transactions: transactions,
                     checkpoints: checkpoints
                 )
-                HStack(spacing: 12) {
-                    Image(systemName: account.kind.symbol)
-                        .frame(width: 34, height: 34)
-                        .background(Color.accentColor.opacity(0.12), in: .circle)
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text(account.name)
-                            .font(.body.weight(.medium))
-                        Text("\(account.kind.isLiability ? "负债账户" : "资产账户") · \(account.currencyCode)")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                NavigationLink {
+                    AccountDetailView(account: account)
+                } label: {
+                    HStack(spacing: 12) {
+                        Image(systemName: account.kind.symbol)
+                            .frame(width: 34, height: 34)
+                            .background(Color.accentColor.opacity(0.12), in: .circle)
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(account.name)
+                                .font(.body.weight(.medium))
+                            Text("\(account.kind.isLiability ? "负债账户" : "资产账户") · \(account.currencyCode)")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Text(MoneyFormat.string(balance, currencyCode: account.currencyCode))
+                            .font(.subheadline.monospacedDigit().weight(.semibold))
+                            .foregroundStyle(balance < 0 ? Color.warning : Color.primary)
                     }
-                    Spacer()
-                    Text(MoneyFormat.string(balance, currencyCode: account.currencyCode))
-                        .font(.subheadline.monospacedDigit().weight(.semibold))
-                        .foregroundStyle(balance < 0 ? Color.red : Color.primary)
+                    .padding(12)
+                    .background(.thinMaterial, in: .rect(cornerRadius: 14))
                 }
-                .padding(12)
-                .background(.thinMaterial, in: .rect(cornerRadius: 14))
+                .buttonStyle(.plain)
             }
         }
     }

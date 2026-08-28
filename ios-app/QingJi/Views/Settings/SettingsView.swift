@@ -29,6 +29,11 @@ struct SettingsView: View {
             List {
                 Section("管理") {
                     NavigationLink {
+                        AutoRecordView()
+                    } label: {
+                        Label("自动记账", systemImage: "bell")
+                    }
+                    NavigationLink {
                         AIProviderSettingsView()
                     } label: {
                         Label("AI 与喵助手", systemImage: "sparkles")
@@ -295,6 +300,7 @@ struct SettingsView: View {
         case .backup:    BackupView()
         case .display:   TransactionDisplaySettingsView()
         case .theme:     ThemeSettingsView()
+        case .autoRecord: AutoRecordView()
         }
     }
 
