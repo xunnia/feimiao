@@ -239,7 +239,7 @@ Future<void> _captureDisplaySettings(
   expect(navigator, isNotNull);
   unawaited(
     navigator!.push<void>(
-      MaterialPageRoute<void>(builder: (_) => const _DisplayCaptureShell()),
+      _parityPageRoute<void>(const _DisplayCaptureShell()),
     ),
   );
   await _pumpFor(tester, const Duration(milliseconds: 600));
@@ -249,6 +249,12 @@ Future<void> _captureDisplaySettings(
   if (navigator.canPop()) navigator.pop<void>();
   await _pumpFor(tester, const Duration(milliseconds: 300));
 }
+
+PageRoute<T> _parityPageRoute<T>(Widget page) => PageRouteBuilder<T>(
+      pageBuilder: (_, __, ___) => page,
+      transitionDuration: Duration.zero,
+      reverseTransitionDuration: Duration.zero,
+    );
 
 /// Advance the fake clock in bounded steps without waiting for every
 /// repeating animation to become idle. The parity driver only needs a stable
@@ -347,14 +353,17 @@ Future<void> _capturePage(
   Widget page,
   IntegrationTestWidgetsFlutterBinding binding,
 ) async {
+  debugPrint('PARITY_PAGE_BEGIN name=$name');
   final navigator = ShareIntake.navigatorKey.currentState;
   expect(navigator, isNotNull);
   unawaited(
-      navigator!.push<void>(MaterialPageRoute<void>(builder: (_) => page)));
+    navigator!.push<void>(_parityPageRoute<void>(page)),
+  );
   await _pumpFor(tester, const Duration(milliseconds: 700));
   await _takeScreenshot(tester, binding, name);
   navigator.pop<void>();
   await _pumpFor(tester, const Duration(milliseconds: 350));
+  debugPrint('PARITY_PAGE_END name=$name');
 }
 
 Future<void> _captureReports(
@@ -365,7 +374,7 @@ Future<void> _captureReports(
   expect(navigator, isNotNull);
   unawaited(
     navigator!.push<void>(
-      MaterialPageRoute<void>(builder: (_) => const _ReportCaptureShell()),
+      _parityPageRoute<void>(const _ReportCaptureShell()),
     ),
   );
   await _pumpFor(tester, const Duration(milliseconds: 900));
@@ -411,7 +420,7 @@ Future<void> _captureAssetTab(
   expect(navigator, isNotNull);
   unawaited(
     navigator!.push<void>(
-      MaterialPageRoute<void>(builder: (_) => const AccountsView()),
+      _parityPageRoute<void>(const AccountsView()),
     ),
   );
   await _pumpFor(tester, const Duration(milliseconds: 700));
@@ -449,7 +458,7 @@ Future<void> _captureStatistics(
   expect(navigator, isNotNull);
   unawaited(
     navigator!.push<void>(
-      MaterialPageRoute<void>(builder: (_) => const StatisticsView()),
+      _parityPageRoute<void>(const StatisticsView()),
     ),
   );
   await _pumpFor(tester, const Duration(milliseconds: 700));
@@ -471,12 +480,16 @@ Future<void> _takeScreenshot(
   // The Android integration plugin replaces the Flutter surface with an
   // ImageView for capture. It must be converted only once per test; the
   // binding restores it automatically during test teardown.
+  debugPrint(
+    'PARITY_CAPTURE_BEGIN name=$name surfaceConverted=$_surfaceConverted',
+  );
   if (!_surfaceConverted) {
     await binding.convertFlutterSurfaceToImage();
     _surfaceConverted = true;
   }
   await tester.pump();
   await binding.takeScreenshot(name);
+  debugPrint('PARITY_CAPTURE_DONE name=$name');
 }
 
 Future<void> _ensureFixture(AppRepository repo) async {
