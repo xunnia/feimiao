@@ -253,7 +253,13 @@ Future<void> _captureDisplaySettings(
 }
 
 PageRoute<T> _parityPageRoute<T>(Widget page) => PageRouteBuilder<T>(
-      pageBuilder: (_, __, ___) => page,
+      // Some Android settings surfaces are normally presented inside a
+      // material bottom sheet rather than a Scaffold. Keep direct parity
+      // pushes under the same transparent Material ancestor.
+      pageBuilder: (_, __, ___) => Material(
+        color: Colors.transparent,
+        child: page,
+      ),
       transitionDuration: Duration.zero,
       reverseTransitionDuration: Duration.zero,
     );
