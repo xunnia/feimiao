@@ -294,9 +294,12 @@ struct PhysicalAssetDetailView: View {
             DetailCard(title: "账单关联", systemImage: "link") {
                 ForEach(assetLinks, id: \.stableID) { link in
                     let transaction = transactions.first { $0.stableID == link.transactionID }
+                    let linkType = AssetTransactionLinkType(
+                        rawValue: link.linkTypeRaw
+                    ) ?? .otherCost
                     HStack(alignment: .top, spacing: 8) {
                         VStack(alignment: .leading, spacing: 3) {
-                            Text(link.linkType.label)
+                            Text(linkType.label)
                                 .font(.subheadline.weight(.medium))
                             Text(transaction?.note.isEmpty == false ? transaction!.note : "交易记录")
                                 .font(.caption)
@@ -305,7 +308,9 @@ struct PhysicalAssetDetailView: View {
                         Spacer()
                         Text(MoneyFormat.string(link.amount, currencyCode: asset.currencyCode))
                             .font(.subheadline.monospacedDigit().weight(.semibold))
-                        if link.linkType != .sourceTransaction && link.linkType != .purchaseTransaction && link.linkType != .saleAccountMovement {
+                        if linkType != .sourceTransaction &&
+                            linkType != .purchaseTransaction &&
+                            linkType != .saleAccountMovement {
                             Button {
                                 perform { try AssetStore.unlinkCost(link, in: context) }
                             } label: {
@@ -398,7 +403,7 @@ struct PhysicalAssetDetailView: View {
 
     private func retentionText(_ ratio: Decimal) -> String {
         let percentage = NSDecimalNumber(decimal: ratio).doubleValue * 100
-        return "\(percentage.formatted(.number.precision(.fractionLength(1)))%)"
+        return percentage.formatted(.number.precision(.fractionLength(1))) + "%"
     }
 }
 
