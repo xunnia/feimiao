@@ -186,14 +186,27 @@ jobs:
           # （SIMCTL_CHILD_ 前缀的环境变量会被 simctl 转发给 App。）
           shoot() {
             local screen="$1" name="$2"
+            echo "CAPTURE_BEGIN name=$name screen=$screen"
             xcrun simctl terminate "$DEVICE" com.qingji.app 2>/dev/null || true
             sleep 1
-              SIMCTL_CHILD_QINGJI_DEMO=1 \
+            if ! SIMCTL_CHILD_QINGJI_DEMO=1 \
               SIMCTL_CHILD_QINGJI_DEMO_NOW="2026-08-27T12:00:00+08:00" \
               SIMCTL_CHILD_QINGJI_SCREEN="$screen" \
-              xcrun simctl launch "$DEVICE" com.qingji.app
+              xcrun simctl launch "$DEVICE" com.qingji.app; then
+              echo "::error::CAPTURE_LAUNCH_FAILED name=$name screen=$screen"
+              xcrun simctl spawn "$DEVICE" log show --last 30s --style compact \
+                --predicate 'process == "QingJi"' || true
+              return 1
+            fi
             sleep 8
-            xcrun simctl io "$DEVICE" screenshot "screenshots/$name.png"
+            if ! xcrun simctl io "$DEVICE" screenshot "screenshots/$name.png"; then
+              echo "::error::CAPTURE_SCREENSHOT_FAILED name=$name screen=$screen"
+              xcrun simctl spawn "$DEVICE" log show --last 30s --style compact \
+                --predicate 'process == "QingJi"' || true
+              return 1
+            fi
+            test -s "screenshots/$name.png"
+            echo "CAPTURE_DONE name=$name screen=$screen"
           }
 
           shoot "home"         "01-home"
@@ -242,9 +255,13 @@ jobs:
             exit 1
           fi
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: simulator-screenshots
-          path: screenshots/
+          path: |
+            screenshots/
+            xcodebuild-screenshots.log
+          if-no-files-found: warn
 
   unsigned-ipa:
     name: 打包未签名 IPA（AltStore 侧载用）

@@ -9,6 +9,15 @@ struct RootTabView: View {
     @Environment(AppRouter.self) private var router
     @State private var path: [AppRouter.Route] = []
     @State private var drawerPresented = false
+    @State private var didFinishInitialSync = false
+
+    init() {
+        // CI and deep-link launches must start with the destination already in
+        // the stack.  Waiting for onAppear to push it lets NavigationStack
+        // publish its initial [] value first, which previously reset the
+        // router to home and left the requested page blank.
+        _path = State(initialValue: Self.initialPath())
+    }
 
     var body: some View {
         NavigationStack(path: $path) {
@@ -28,9 +37,15 @@ struct RootTabView: View {
                     }
                 }
         }
-        .onAppear(perform: syncPath)
+        .onAppear {
+            DispatchQueue.main.async {
+                syncPath()
+                didFinishInitialSync = true
+            }
+        }
         .onChange(of: router.selectedTab) { _, _ in syncPath() }
         .onChange(of: path) { _, newPath in
+            guard didFinishInitialSync else { return }
             guard let route = newPath.first else {
                 router.settingsPushTarget = nil
                 router.selectedTab = .home
@@ -48,7 +63,7 @@ struct RootTabView: View {
         // settingsPushTarget，这保证冷启动和用户点击走同一条导航链。
         .onOpenURL { url in
             router.handle(url: url)
-            syncPath()
+            DispatchQueue.main.async { syncPath() }
         }
         .overlay {
             if drawerPresented {
@@ -90,20 +105,44 @@ struct RootTabView: View {
     private func syncPath() {
         let next: [AppRouter.Route]
         switch router.selectedTab {
-        case .home:
-            next = []
-        case .quickAdd:
-            next = [.quickAdd]
-        case .search:
-            next = [.search]
-        case .transactions:
-            next = [.transactions]
-        case .statistics:
-            next = [.statistics]
-        case .settings:
-            next = [.settings]
+        case .home: next = []
+        case .quickAdd: next = [.quickAdd]
+        case .search: next = [.search]
+        case .transactions: next = [.transactions]
+        case .statistics: next = [.statistics]
+        case .settings: next = [.settings]
         }
         if path != next { path = next }
+    }
+
+    private static func initialPath() -> [AppRouter.Route] {
+        guard let screen = ProcessInfo.processInfo.environment["QINGJI_SCREEN"],
+              !screen.isEmpty else {
+            return []
+        }
+        if screen == "settings/ai" {
+            return [.settings]
+        }
+        let normalized = screen.hasPrefix("settings/")
+            ? String(screen.dropFirst("settings/".count))
+            : screen
+        switch normalized {
+        case "home": return []
+        case "quickadd": return [.quickAdd]
+        case "search": return [.search]
+        case "transactions": return [.transactions]
+        case "stats-month", "stats-week", "stats/year", "stats/week", "stats-year", "stats-custom", "stats/month":
+            return [.statistics]
+        case "budget", "reconcile", "reimburse", "books", "accounts", "categories", "tags",
+             "memory", "ai-memory", "ai-tasks", "ai-extensions", "ai-schedules", "ai-search",
+             "ai-diagnostics", "ai-local", "savings", "recurring", "assets", "assets/detail",
+             "assets-detail", "liabilities", "net-worth", "import-review", "import", "import-export",
+             "reports", "settings", "backup", "display", "theme", "money-display", "auto-record",
+             "autorecord", "ai-settings":
+            return [.settings]
+        case "ai": return [.quickAdd]
+        default: return []
+        }
     }
 
     private func navigate(to destination: DrawerDestination) {
