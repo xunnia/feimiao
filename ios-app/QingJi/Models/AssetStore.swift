@@ -302,7 +302,8 @@ enum AssetStore {
         location: String = "",
         warrantyUntil: Date? = nil,
         note: String = "",
-        includeInNetWorth: Bool = true
+        includeInNetWorth: Bool = true,
+        sourceType: PhysicalAssetSourceType = .historicalExisting
     ) throws -> PhysicalAsset {
         let normalizedPurchasePrice = MoneyNormalization.roundToCents(purchasePrice)
         let normalizedCurrentValue = MoneyNormalization.roundToCents(currentValue)
@@ -323,6 +324,10 @@ enum AssetStore {
             bookID: book?.stableID
         )
         asset.purchaseDate = purchaseDate
+        asset.sourceType = sourceType
+        asset.acquisitionCostSourceRaw = normalizedPurchasePrice > 0
+            ? AssetAcquisitionCostSource.manual.rawValue
+            : AssetAcquisitionCostSource.manualUnknown.rawValue
         asset.brand = brand.trimmingCharacters(in: .whitespacesAndNewlines)
         asset.model = model.trimmingCharacters(in: .whitespacesAndNewlines)
         asset.location = location.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -347,6 +352,82 @@ enum AssetStore {
             note: "初始当前价值"
         ))
         try context.save()
+        return asset
+    }
+
+    /// 新购买物品：创建资产的同时生成一笔 asset_purchase 支出，并把两者绑定。
+    @discardableResult
+    static func createPurchased(
+        in context: ModelContext,
+        name: String,
+        kind: PhysicalAssetKind,
+        purchasePrice: Decimal,
+        currentValue: Decimal,
+        account: Account,
+        category: TxCategory? = nil,
+        book: Book? = nil,
+        purchaseDate: Date,
+        brand: String = "",
+        model: String = "",
+        location: String = "",
+        warrantyUntil: Date? = nil,
+        note: String = "",
+        includeInNetWorth: Bool = true
+    ) throws -> PhysicalAsset {
+        let normalizedPrice = MoneyNormalization.roundToCents(purchasePrice)
+        guard normalizedPrice > 0,
+              !account.isDeleted,
+              account.status == .active,
+              account.currencyCode == "CNY" else {
+            throw Error.invalidTransaction
+        }
+        guard category == nil || category?.kind == .expense else {
+            throw Error.invalidTransaction
+        }
+        let asset = try create(
+            in: context,
+            name: name,
+            kind: kind,
+            purchasePrice: normalizedPrice,
+            currentValue: currentValue,
+            currencyCode: account.currencyCode,
+            book: book,
+            purchaseDate: purchaseDate,
+            brand: brand,
+            model: model,
+            location: location,
+            warrantyUntil: warrantyUntil,
+            note: note,
+            includeInNetWorth: includeInNetWorth,
+            sourceType: .newPurchaseWithAccount
+        )
+        let transaction = MoneyTransaction(
+            amount: normalizedPrice,
+            kind: .expense,
+            date: purchaseDate,
+            note: note.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                ? "购买：\(name)"
+                : note,
+            merchantName: name,
+            currencyCode: account.currencyCode,
+            category: category,
+            account: account,
+            book: book,
+            timePrecision: .dateOnly,
+            settledAt: purchaseDate,
+            settlementQuality: .userConfirmed,
+            settlementAccountID: account.stableID,
+            settlementAccountQuality: .userConfirmed,
+            eventType: .assetPurchase
+        )
+        context.insert(transaction)
+        try context.save()
+        _ = try linkPurchaseAllocation(
+            asset,
+            transaction: transaction,
+            grossCents: MoneyNormalization.cents(normalizedPrice),
+            in: context
+        )
         return asset
     }
 

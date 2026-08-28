@@ -205,6 +205,57 @@ final class AssetStoreTests: XCTestCase {
         XCTAssertTrue(asset.depreciationPaused)
     }
 
+    func testNewPurchaseCreatesAssetPurchaseTransactionAndAllocation() throws {
+        let stack = try Stack()
+        let book = Book(name: "测试账本", isDefault: true)
+        let cash = Account(name: "现金", kind: .cash)
+        cash.initialBalance = 500
+        let category = TxCategory(
+            key: "shopping",
+            name: "购物",
+            symbol: "bag",
+            kind: .expense
+        )
+        stack.context.insert(book)
+        stack.context.insert(cash)
+        stack.context.insert(category)
+        try stack.context.save()
+
+        let purchaseDate = Date(timeIntervalSince1970: 1_705_000_000)
+        let asset = try AssetStore.createPurchased(
+            in: stack.context,
+            name: "新键盘",
+            kind: .tools,
+            purchasePrice: 100,
+            currentValue: 90,
+            account: cash,
+            category: category,
+            book: book,
+            purchaseDate: purchaseDate
+        )
+        XCTAssertEqual(asset.sourceType, .newPurchaseWithAccount)
+        XCTAssertEqual(asset.purchasePrice, 100)
+        XCTAssertEqual(
+            try stack.context.fetchCount(FetchDescriptor<MoneyTransaction>()),
+            1
+        )
+        let transaction = try XCTUnwrap(
+            stack.context.fetch(FetchDescriptor<MoneyTransaction>()).first
+        )
+        XCTAssertEqual(transaction.eventType, .assetPurchase)
+        XCTAssertEqual(transaction.amount, 100)
+        let links = try stack.context.fetch(FetchDescriptor<AssetTransactionLink>())
+        XCTAssertEqual(links.count, 1)
+        XCTAssertEqual(links[0].allocatedGrossCents, 10_000)
+        XCTAssertEqual(
+            LedgerStore.accountBalance(
+                for: cash,
+                transactions: [transaction]
+            ),
+            400
+        )
+    }
+
     func testLinearDepreciationReachesMonthlyValueWithoutCashflow() throws {
         let stack = try Stack()
         let asset = PhysicalAsset(

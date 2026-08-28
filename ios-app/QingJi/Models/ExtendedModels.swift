@@ -138,6 +138,26 @@ final class RecurringOccurrence {
     }
 }
 
+enum PhysicalAssetSourceType: String, CaseIterable, Hashable, Identifiable {
+    case historicalExisting = "historical_existing"
+    case newPurchaseWithAccount = "new_purchase_with_account"
+    case giftReceived = "gift_received"
+    case inheritance
+    case manualOther = "manual_other"
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .historicalExisting: return "历史已有"
+        case .newPurchaseWithAccount: return "新购买并记账"
+        case .giftReceived: return "别人赠送"
+        case .inheritance: return "继承或转入"
+        case .manualOther: return "其他来源"
+        }
+    }
+}
+
 enum PhysicalAssetKind: String, CaseIterable, Hashable, Identifiable {
     case digital
     case appliance
@@ -240,6 +260,11 @@ final class PhysicalAsset {
     var lifecycle: PhysicalAssetLifecycle {
         get { PhysicalAssetLifecycle(rawValue: lifecycleRaw) ?? .owned }
         set { lifecycleRaw = newValue.rawValue }
+    }
+
+    var sourceType: PhysicalAssetSourceType {
+        get { PhysicalAssetSourceType(rawValue: sourceTypeRaw) ?? .historicalExisting }
+        set { sourceTypeRaw = newValue.rawValue }
     }
 
     init(

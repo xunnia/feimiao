@@ -268,6 +268,7 @@ struct PhysicalAssetDetailView: View {
     private var assetInfoSection: some View {
         DetailCard(title: "资产信息", systemImage: "shippingbox") {
             DetailRow(label: "类型", value: asset.kind.label)
+            DetailRow(label: "来源", value: asset.sourceType.label)
             DetailRow(label: "状态", value: asset.lifecycle.label)
             DetailRow(label: "购买日期", value: dateText(asset.purchaseDate))
             DetailRow(label: "保修到期", value: dateText(asset.warrantyUntil))

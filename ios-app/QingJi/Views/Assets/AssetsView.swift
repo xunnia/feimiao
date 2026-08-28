@@ -427,13 +427,20 @@ struct PhysicalAssetEditor: View {
     @Environment(\.modelContext) private var context
     @Query(sort: \Book.sortOrder)
     private var books: [Book]
+    @Query(sort: \Account.sortOrder)
+    private var accounts: [Account]
+    @Query(sort: \TxCategory.sortOrder)
+    private var categories: [TxCategory]
 
     let asset: PhysicalAsset?
     @State private var name: String
     @State private var kind: PhysicalAssetKind
+    @State private var sourceType: PhysicalAssetSourceType
     @State private var purchasePriceText: String
     @State private var currentValueText: String
     @State private var bookID: UUID?
+    @State private var paymentAccountID: UUID?
+    @State private var purchaseCategoryKey: String?
     @State private var purchaseDateEnabled: Bool
     @State private var purchaseDate: Date
     @State private var brand: String
@@ -446,14 +453,21 @@ struct PhysicalAssetEditor: View {
     @State private var errorMessage: String?
 
     init(asset: PhysicalAsset?) {
+        let initialSourceType = asset?.sourceType ?? .historicalExisting
         self.asset = asset
         _name = State(initialValue: asset?.name ?? "")
         _kind = State(initialValue: asset?.kind ?? .other)
+        _sourceType = State(initialValue: initialSourceType)
         _purchasePriceText = State(initialValue: asset.map { "\($0.purchasePrice)" } ?? "")
         _currentValueText = State(initialValue: asset.map { "\($0.currentValue)" } ?? "")
         _bookID = State(initialValue: asset?.bookID)
-        _purchaseDateEnabled = State(initialValue: asset?.purchaseDate != nil)
+        _purchaseDateEnabled = State(
+            initialValue: asset?.purchaseDate != nil ||
+                (asset == nil && initialSourceType == .newPurchaseWithAccount)
+        )
         _purchaseDate = State(initialValue: asset?.purchaseDate ?? Date())
+        _paymentAccountID = State(initialValue: nil)
+        _purchaseCategoryKey = State(initialValue: nil)
         _brand = State(initialValue: asset?.brand ?? "")
         _model = State(initialValue: asset?.model ?? "")
         _location = State(initialValue: asset?.location ?? "")
@@ -471,11 +485,23 @@ struct PhysicalAssetEditor: View {
         Decimal(string: currentValueText.replacingOccurrences(of: ",", with: ""))
     }
 
+    private var isNewPurchase: Bool {
+        asset == nil && sourceType == .newPurchaseWithAccount
+    }
+
     private var canSave: Bool {
         guard !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-              let purchasePrice,
-              let currentValue else { return false }
-        return purchasePrice >= 0 && currentValue >= 0
+              let currentValue,
+              currentValue >= 0 else { return false }
+        if !purchasePriceText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            guard let purchasePrice, purchasePrice >= 0 else { return false }
+        }
+        if isNewPurchase {
+            guard let purchasePrice, purchasePrice > 0,
+                  paymentAccountID != nil,
+                  purchaseDateEnabled else { return false }
+        }
+        return true
     }
 
     var body: some View {
@@ -486,6 +512,34 @@ struct PhysicalAssetEditor: View {
                     Picker("类型", selection: $kind) {
                         ForEach(PhysicalAssetKind.allCases) { kind in
                             Text(kind.label).tag(kind)
+                        }
+                    }
+                    if asset == nil {
+                        Picker("物品来源", selection: $sourceType) {
+                            ForEach(PhysicalAssetSourceType.allCases) { source in
+                                Text(source.label).tag(source)
+                            }
+                        }
+                        if isNewPurchase {
+                            Picker("付款账户", selection: $paymentAccountID) {
+                                Text("选择账户").tag(Optional<UUID>.none)
+                                ForEach(accounts.filter {
+                                    !$0.isDeleted &&
+                                    $0.status == .active &&
+                                    $0.currencyCode == "CNY"
+                                }) { account in
+                                    Text(account.name).tag(Optional(account.stableID))
+                                }
+                            }
+                            Picker("支出分类", selection: $purchaseCategoryKey) {
+                                Text("不指定").tag(Optional<String>.none)
+                                ForEach(categories.filter {
+                                    $0.kind == .expense && !$0.isArchived
+                                }) { category in
+                                    Text("\(category.emoji) \(category.name)")
+                                        .tag(Optional(category.key))
+                                }
+                            }
                         }
                     }
                     TextField("购置成本", text: $purchasePriceText)
@@ -504,6 +558,7 @@ struct PhysicalAssetEditor: View {
                     TextField("型号（可选）", text: $model)
                     TextField("存放位置（可选）", text: $location)
                     Toggle("记录购买日期", isOn: $purchaseDateEnabled)
+                        .disabled(isNewPurchase)
                     if purchaseDateEnabled {
                         DatePicker("购买日期", selection: $purchaseDate, displayedComponents: .date)
                     }
@@ -515,10 +570,19 @@ struct PhysicalAssetEditor: View {
                 Section {
                     Toggle("计入净资产", isOn: $includeInNetWorth)
                     TextField("备注（可选）", text: $note, axis: .vertical)
-                        .lineLimit(2...4)
+                    .lineLimit(2...4)
                 }
             }
-            .navigationTitle(asset == nil ? "新增物品" : "编辑物品")
+            .onChange(of: sourceType) { _, next in
+                if next == .newPurchaseWithAccount {
+                    purchaseDateEnabled = true
+                }
+            }
+            .navigationTitle(
+                asset == nil
+                    ? (isNewPurchase ? "记录新购买" : "新增物品")
+                    : "编辑物品"
+            )
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -541,7 +605,8 @@ struct PhysicalAssetEditor: View {
     }
 
     private func save() {
-        guard let purchasePrice, let currentValue, canSave else { return }
+        guard let currentValue, canSave else { return }
+        let purchasePrice = purchasePrice ?? .zero
         let cleanPurchaseDate = purchaseDateEnabled ? purchaseDate : nil
         let cleanWarranty = warrantyEnabled ? warrantyUntil : nil
         do {
@@ -562,6 +627,32 @@ struct PhysicalAssetEditor: View {
                     note: note,
                     includeInNetWorth: includeInNetWorth
                 )
+            } else if isNewPurchase {
+                guard let paymentAccountID,
+                      let paymentAccount = accounts.first(where: {
+                          $0.stableID == paymentAccountID
+                      }),
+                      let cleanPurchaseDate else { return }
+                let purchaseCategory = categories.first {
+                    $0.key == purchaseCategoryKey && $0.kind == .expense
+                }
+                _ = try AssetStore.createPurchased(
+                    in: context,
+                    name: name,
+                    kind: kind,
+                    purchasePrice: purchasePrice,
+                    currentValue: currentValue,
+                    account: paymentAccount,
+                    category: purchaseCategory,
+                    book: books.first { $0.stableID == bookID },
+                    purchaseDate: cleanPurchaseDate,
+                    brand: brand,
+                    model: model,
+                    location: location,
+                    warrantyUntil: cleanWarranty,
+                    note: note,
+                    includeInNetWorth: includeInNetWorth
+                )
             } else {
                 _ = try AssetStore.create(
                     in: context,
@@ -576,7 +667,8 @@ struct PhysicalAssetEditor: View {
                     location: location,
                     warrantyUntil: cleanWarranty,
                     note: note,
-                    includeInNetWorth: includeInNetWorth
+                    includeInNetWorth: includeInNetWorth,
+                    sourceType: sourceType
                 )
             }
             dismiss()
