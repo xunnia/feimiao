@@ -169,6 +169,76 @@ final class AssetStoreTests: XCTestCase {
         )
     }
 
+    func testHistoricalValuationDoesNotOverwriteCurrentValue() throws {
+        let stack = try Stack()
+        let asset = PhysicalAsset(
+            name: "测试相机",
+            kind: .digital,
+            purchasePrice: 1_000,
+            currentValue: 800
+        )
+        let january10 = Date(timeIntervalSince1970: 1_705_000_000)
+        let january11 = january10.addingTimeInterval(86_400)
+        stack.context.insert(asset)
+        stack.context.insert(AssetValuation(
+            assetID: asset.stableID,
+            value: 800,
+            valuedAt: january10
+        ))
+        try stack.context.save()
+
+        _ = try AssetStore.updateCurrentValue(
+            asset,
+            value: 700,
+            at: january10.addingTimeInterval(-86_400),
+            in: stack.context
+        )
+        XCTAssertEqual(asset.currentValue, 800)
+
+        _ = try AssetStore.updateCurrentValue(
+            asset,
+            value: 650,
+            at: january11,
+            in: stack.context
+        )
+        XCTAssertEqual(asset.currentValue, 650)
+        XCTAssertTrue(asset.depreciationPaused)
+    }
+
+    func testLinearDepreciationReachesMonthlyValueWithoutCashflow() throws {
+        let stack = try Stack()
+        let asset = PhysicalAsset(
+            name: "测试电脑",
+            kind: .digital,
+            purchasePrice: 1_000,
+            currentValue: 1_000
+        )
+        let start = Date(timeIntervalSince1970: 1_704_067_200)
+        let asOf = Date(timeIntervalSince1970: 1_711_929_600)
+        asset.purchaseDate = start
+        stack.context.insert(asset)
+        stack.context.insert(AssetValuation(assetID: asset.stableID, value: 1_000, valuedAt: start))
+        try stack.context.save()
+
+        try AssetStore.configureDepreciation(
+            asset,
+            enabled: true,
+            base: 1_000,
+            salvageValue: 100,
+            usefulLifeMonths: 10,
+            startAt: start,
+            at: start,
+            in: stack.context
+        )
+        XCTAssertEqual(try AssetStore.applyDepreciation(asOf: asOf, in: stack.context), 1)
+        XCTAssertLessThan(asset.currentValue, 1_000)
+        XCTAssertGreaterThanOrEqual(asset.currentValue, 100)
+        XCTAssertEqual(
+            try stack.context.fetchCount(FetchDescriptor<MoneyTransaction>()),
+            0
+        )
+    }
+
     func testTerminalAssetStatusZeroesValueAndCanBeUndone() throws {
         let stack = try Stack()
         let asset = PhysicalAsset(

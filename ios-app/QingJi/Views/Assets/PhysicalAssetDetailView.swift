@@ -1,5 +1,8 @@
 import SwiftUI
 import SwiftData
+import PhotosUI
+import UniformTypeIdentifiers
+import UIKit
 import QingJiCore
 
 /// 物品详情页。资产列表只负责浏览，所有会改变资产生命周期或成本口径的操作
@@ -30,6 +33,8 @@ struct PhysicalAssetDetailView: View {
         case value
         case sale
         case cost
+        case evidence
+        case depreciation
 
         var id: String { rawValue }
     }
@@ -105,6 +110,12 @@ struct PhysicalAssetDetailView: View {
                         .presentationDetents([.medium, .large])
                 case .cost:
                     AssetCostLinkSheet(asset: asset)
+                        .presentationDetents([.medium, .large])
+                case .evidence:
+                    AssetEvidenceSheet(asset: asset)
+                        .presentationDetents([.medium, .large])
+                case .depreciation:
+                    AssetDepreciationSheet(asset: asset)
                         .presentationDetents([.medium, .large])
                 }
             }
@@ -265,6 +276,14 @@ struct PhysicalAssetDetailView: View {
             if !asset.location.isEmpty { DetailRow(label: "位置", value: asset.location) }
             if !asset.note.isEmpty { DetailRow(label: "备注", value: asset.note) }
             DetailRow(label: "净资产", value: asset.includeInNetWorth ? "计入" : "不计入")
+            DetailRow(label: "照片", value: asset.photoPath.isEmpty ? "未添加" : "已添加")
+            DetailRow(label: "凭证", value: asset.invoicePath.isEmpty ? "未添加" : "已添加")
+            DetailRow(
+                label: "折旧",
+                value: asset.depreciationMethod == "linear"
+                    ? "线性折旧 · \(asset.usefulLifeMonths) 个月\(asset.depreciationPaused ? " · 已暂停" : "")"
+                    : "未开启"
+            )
         }
     }
 
@@ -332,6 +351,8 @@ struct PhysicalAssetDetailView: View {
     @ViewBuilder
     private var actionMenu: some View {
         Button("编辑资料") { activeSheet = .editor }
+        Button("照片与凭证") { activeSheet = .evidence }
+        Button("折旧设置") { activeSheet = .depreciation }
         if isOwned {
             Button(asset.lifecycle == .idle ? "标记为在用" : "标记为闲置") {
                 perform {
@@ -655,6 +676,258 @@ private struct AssetCostLinkSheet: View {
     private func link(_ transaction: MoneyTransaction) {
         do {
             _ = try AssetStore.linkCost(asset, transaction: transaction, type: type, in: context)
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+}
+
+private struct AssetEvidenceSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.modelContext) private var context
+
+    let asset: PhysicalAsset
+    @State private var photoItem: PhotosPickerItem?
+    @State private var photoPath: String
+    @State private var invoicePath: String
+    @State private var note = ""
+    @State private var importingInvoice = false
+    @State private var errorMessage: String?
+
+    init(asset: PhysicalAsset) {
+        self.asset = asset
+        _photoPath = State(initialValue: asset.photoPath)
+        _invoicePath = State(initialValue: asset.invoicePath)
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("物品照片") {
+                    photoPreview
+                        .frame(maxWidth: .infinity)
+                    PhotosPicker(selection: $photoItem, matching: .images) {
+                        Label("从相册选择", systemImage: "photo.on.rectangle")
+                    }
+                    if !photoPath.isEmpty {
+                        Button("移除照片", role: .destructive) {
+                            photoPath = ""
+                        }
+                    }
+                }
+                Section("发票与保修单") {
+                    TextField("受管文件路径", text: $invoicePath)
+                        .textInputAutocapitalization(.never)
+                    Button {
+                        importingInvoice = true
+                    } label: {
+                        Label("选择 PDF 或图片", systemImage: "paperclip")
+                    }
+                    if !invoicePath.isEmpty {
+                        Button("移除凭证", role: .destructive) {
+                            invoicePath = ""
+                        }
+                    }
+                }
+                Section {
+                    TextField("说明（可选）", text: $note, axis: .vertical)
+                        .lineLimit(2...4)
+                }
+            }
+            .navigationTitle("照片与凭证")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("取消") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("保存") { save() }
+                }
+            }
+            .onChange(of: photoItem) { _, item in
+                if let item { importPhoto(item) }
+            }
+            .fileImporter(
+                isPresented: $importingInvoice,
+                allowedContentTypes: [.pdf, .image],
+                allowsMultipleSelection: false
+            ) { result in
+                importInvoice(result)
+            }
+            .alert("无法保存", isPresented: Binding(
+                get: { errorMessage != nil },
+                set: { if !$0 { errorMessage = nil } }
+            )) {
+                Button("好") {}
+            } message: {
+                Text(errorMessage ?? "")
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var photoPreview: some View {
+        if let url = AttachmentStore.url(for: photoPath),
+           let image = UIImage(contentsOfFile: url.path) {
+            Image(uiImage: image)
+                .resizable()
+                .scaledToFit()
+                .frame(maxHeight: 170)
+                .clipShape(.rect(cornerRadius: 12))
+        } else {
+            ContentUnavailableView("还没有照片", systemImage: "photo")
+        }
+    }
+
+    private func importPhoto(_ item: PhotosPickerItem) {
+        Task { @MainActor in
+            do {
+                guard let data = try await item.loadTransferable(type: Data.self) else { return }
+                photoPath = try AttachmentStore.save(data: data, fileExtension: "jpg")
+                photoItem = nil
+            } catch {
+                errorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    private func importInvoice(_ result: Result<[URL], Error>) {
+        do {
+            guard let source = try result.get().first else { return }
+            let accessing = source.startAccessingSecurityScopedResource()
+            defer {
+                if accessing { source.stopAccessingSecurityScopedResource() }
+            }
+            let data = try Data(contentsOf: source)
+            let extensionName = source.pathExtension.isEmpty ? "bin" : source.pathExtension
+            invoicePath = try AttachmentStore.save(data: data, fileExtension: extensionName)
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private func save() {
+        do {
+            let oldPhotoPath = asset.photoPath
+            let oldInvoicePath = asset.invoicePath
+            try AssetStore.updateEvidence(
+                asset,
+                photoPath: photoPath,
+                thumbnailPath: photoPath,
+                invoicePath: invoicePath,
+                note: note,
+                in: context
+            )
+            if !oldPhotoPath.isEmpty && oldPhotoPath != photoPath {
+                AttachmentStore.remove(oldPhotoPath)
+            }
+            if !oldInvoicePath.isEmpty && oldInvoicePath != invoicePath {
+                AttachmentStore.remove(oldInvoicePath)
+            }
+            dismiss()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+}
+
+private struct AssetDepreciationSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.modelContext) private var context
+
+    let asset: PhysicalAsset
+    @State private var enabled: Bool
+    @State private var baseText: String
+    @State private var salvageText: String
+    @State private var monthsText: String
+    @State private var startDate: Date
+    @State private var note = ""
+    @State private var errorMessage: String?
+
+    init(asset: PhysicalAsset) {
+        self.asset = asset
+        _enabled = State(initialValue: asset.depreciationMethod == "linear")
+        let base = asset.depreciationBase > 0 ? asset.depreciationBase : asset.purchasePrice
+        _baseText = State(initialValue: base.description)
+        _salvageText = State(initialValue: asset.salvageValue.description)
+        _monthsText = State(initialValue: asset.usefulLifeMonths > 0 ? String(asset.usefulLifeMonths) : "")
+        _startDate = State(initialValue: asset.depreciationStartDate ?? asset.purchaseDate ?? Date())
+    }
+
+    private var base: Decimal? {
+        Decimal(string: baseText.replacingOccurrences(of: ",", with: ""))
+    }
+
+    private var salvage: Decimal? {
+        Decimal(string: salvageText.replacingOccurrences(of: ",", with: ""))
+    }
+
+    private var months: Int? { Int(monthsText.trimmingCharacters(in: .whitespacesAndNewlines)) }
+
+    private var valid: Bool {
+        guard enabled else { return true }
+        guard let base, let salvage, let months else { return false }
+        return base > 0 && salvage >= 0 && salvage <= base && months > 0
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    Toggle("启用线性折旧", isOn: $enabled)
+                    if enabled {
+                        TextField("折旧基准金额", text: $baseText)
+                            .keyboardType(.decimalPad)
+                        TextField("预计残值", text: $salvageText)
+                            .keyboardType(.decimalPad)
+                        TextField("使用寿命（月）", text: $monthsText)
+                            .keyboardType(.numberPad)
+                        DatePicker("折旧开始日期", selection: $startDate, displayedComponents: .date)
+                    }
+                } footer: {
+                    Text("按完整月份把价值降到残值，不生成普通收支；手动更新估值后会暂停自动折旧。")
+                }
+                Section {
+                    TextField("说明（可选）", text: $note, axis: .vertical)
+                        .lineLimit(2...4)
+                }
+            }
+            .navigationTitle("折旧设置")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("取消") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("保存") { save() }
+                        .disabled(!valid)
+                }
+            }
+            .alert("无法保存", isPresented: Binding(
+                get: { errorMessage != nil },
+                set: { if !$0 { errorMessage = nil } }
+            )) {
+                Button("好") {}
+            } message: {
+                Text(errorMessage ?? "")
+            }
+        }
+    }
+
+    private func save() {
+        do {
+            try AssetStore.configureDepreciation(
+                asset,
+                enabled: enabled,
+                base: base ?? .zero,
+                salvageValue: salvage ?? .zero,
+                usefulLifeMonths: months ?? 0,
+                startAt: enabled ? startDate : nil,
+                note: note,
+                in: context
+            )
+            _ = try AssetStore.applyDepreciation(asOf: AppClock.now, in: context)
+            dismiss()
         } catch {
             errorMessage = error.localizedDescription
         }

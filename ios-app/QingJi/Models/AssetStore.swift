@@ -383,6 +383,9 @@ enum AssetStore {
         asset.kind = kind
         asset.purchasePrice = normalizedPurchasePrice
         asset.currentValue = normalizedCurrentValue
+        if previousValue != normalizedCurrentValue {
+            asset.depreciationPaused = true
+        }
         asset.bookID = book?.stableID
         asset.purchaseDate = purchaseDate
         asset.warrantyUntil = warrantyUntil
@@ -526,8 +529,18 @@ enum AssetStore {
         }
         let normalized = MoneyNormalization.roundToCents(value)
         guard normalized >= 0 else { throw Error.invalidAmount }
-        asset.currentValue = normalized
-        asset.updatedAt = date
+        let latestValuation = try context.fetch(FetchDescriptor<AssetValuation>(
+            sortBy: [
+                SortDescriptor(\.valuedAt, order: .reverse),
+                SortDescriptor(\.createdAt, order: .reverse),
+            ]
+        )).first { $0.assetID == asset.stableID }
+        let becomesCurrent = latestValuation == nil || date >= latestValuation!.valuedAt
+        if becomesCurrent {
+            asset.currentValue = normalized
+            asset.depreciationPaused = true
+            asset.updatedAt = date
+        }
         let valuation = AssetValuation(
             assetID: asset.stableID,
             value: normalized,
@@ -545,6 +558,150 @@ enum AssetStore {
         ))
         try context.save()
         return valuation
+    }
+
+    /// 更新资产照片、缩略图和发票/保修单路径；数据库只保存受管目录中的相对路径。
+    static func updateEvidence(
+        _ asset: PhysicalAsset,
+        photoPath: String,
+        thumbnailPath: String? = nil,
+        invoicePath: String,
+        note: String = "",
+        at date: Date = Date(),
+        in context: ModelContext
+    ) throws {
+        asset.photoPath = photoPath.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let thumbnailPath {
+            asset.thumbnailPath = thumbnailPath.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        asset.invoicePath = invoicePath.trimmingCharacters(in: .whitespacesAndNewlines)
+        asset.updatedAt = date
+        context.insert(AssetEvent(
+            assetID: asset.stableID,
+            kind: .edited,
+            occurredAt: date,
+            note: note.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                ? "更新资产凭证"
+                : note
+        ))
+        try context.save()
+    }
+
+    /// 配置或关闭线性折旧。关闭后清空折旧字段，重新保存配置会恢复自动折旧。
+    static func configureDepreciation(
+        _ asset: PhysicalAsset,
+        enabled: Bool,
+        base: Decimal = .zero,
+        salvageValue: Decimal = .zero,
+        usefulLifeMonths: Int = 0,
+        startAt: Date? = nil,
+        note: String = "",
+        at date: Date = Date(),
+        in context: ModelContext
+    ) throws {
+        if enabled {
+            let normalizedBase = MoneyNormalization.roundToCents(base)
+            let normalizedSalvage = MoneyNormalization.roundToCents(salvageValue)
+            guard normalizedBase > 0,
+                  normalizedSalvage >= 0,
+                  normalizedSalvage <= normalizedBase,
+                  usefulLifeMonths > 0,
+                  let startAt else {
+                throw Error.invalidAmount
+            }
+            if let purchaseDate = asset.purchaseDate,
+               Calendar.current.startOfDay(for: startAt) <
+               Calendar.current.startOfDay(for: purchaseDate) {
+                throw Error.invalidWarranty
+            }
+            asset.depreciationMethod = "linear"
+            asset.depreciationBase = normalizedBase
+            asset.salvageValue = normalizedSalvage
+            asset.usefulLifeMonths = usefulLifeMonths
+            asset.depreciationStartDate = startAt
+            asset.depreciationPaused = false
+        } else {
+            asset.depreciationMethod = ""
+            asset.depreciationBase = .zero
+            asset.salvageValue = .zero
+            asset.usefulLifeMonths = 0
+            asset.depreciationStartDate = nil
+            asset.depreciationPaused = false
+        }
+        asset.updatedAt = date
+        context.insert(AssetEvent(
+            assetID: asset.stableID,
+            kind: .depreciation,
+            occurredAt: date,
+            value: enabled ? asset.depreciationBase : nil,
+            note: note.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                ? (enabled ? "设置线性折旧" : "关闭自动折旧")
+                : note
+        ))
+        try context.save()
+    }
+
+    /// 应用截至指定日期的线性折旧；只降低当前价值，不生成普通收支流水。
+    @discardableResult
+    static func applyDepreciation(
+        asOf: Date = Date(),
+        in context: ModelContext
+    ) throws -> Int {
+        let assets = try context.fetch(FetchDescriptor<PhysicalAsset>())
+            .filter {
+                !$0.isDeleted &&
+                ($0.lifecycle == .owned || $0.lifecycle == .idle) &&
+                $0.depreciationMethod == "linear" &&
+                !$0.depreciationPaused &&
+                $0.depreciationStartDate != nil &&
+                $0.usefulLifeMonths > 0
+            }
+        let calendar = Calendar.current
+        var changed = 0
+        for asset in assets {
+            guard let start = asset.depreciationStartDate,
+                  !asOf.isBefore(start) else { continue }
+            let startMonth = calendar.date(
+                from: calendar.dateComponents([.year, .month], from: start)
+            ) ?? start
+            let endMonth = calendar.date(
+                from: calendar.dateComponents([.year, .month], from: asOf)
+            ) ?? asOf
+            let elapsed = min(
+                max(calendar.dateComponents([.month], from: startMonth, to: endMonth).month ?? 0, 0),
+                asset.usefulLifeMonths
+            )
+            guard elapsed > 0 else { continue }
+            let depreciable = asset.depreciationBase - asset.salvageValue
+            guard depreciable > 0 else { continue }
+            var monthly = Decimal.zero
+            var left = depreciable
+            var right = Decimal(asset.usefulLifeMonths)
+            NSDecimalDivide(&monthly, &left, &right, .plain)
+            var target = asset.depreciationBase - monthly * Decimal(elapsed)
+            if target < asset.salvageValue { target = asset.salvageValue }
+            target = MoneyNormalization.roundToCents(target)
+            guard target < asset.currentValue else { continue }
+            asset.currentValue = target
+            asset.updatedAt = asOf
+            context.insert(AssetValuation(
+                assetID: asset.stableID,
+                value: target,
+                sourceRaw: "auto_depreciation",
+                valuedAt: asOf,
+                note: "自动线性折旧"
+            ))
+            context.insert(AssetEvent(
+                assetID: asset.stableID,
+                kind: .depreciation,
+                occurredAt: asOf,
+                value: target,
+                note: "自动线性折旧"
+            ))
+            changed += 1
+        }
+        if changed > 0 { try context.save() }
+        return changed
     }
 
     /// 出售物品：出售到账作为 asset_sale 事件收入写入，但明确排除普通收支统计。
