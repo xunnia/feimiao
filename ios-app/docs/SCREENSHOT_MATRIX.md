@@ -6,7 +6,7 @@ Markdown 报告。
 
 ## 当前基线
 
-- Android：`1.262.0+276` / `b0827-276` / DB v48。
+- Android：`1.265.0+279` / `b0828-279` / DB v48。
 - iOS：deployment target 26.0，CI 使用 GitHub macos-26，优先 Xcode 27、否则 Xcode 26.x/iOS 26 SDK。
 - 演示数据：启动参数 `QINGJI_DEMO=1` 与 `QINGJI_DEMO_NOW=2026-08-27T12:00:00+08:00`，语言和币种固定为测试 fixture。
 - iOS 路由：`QINGJI_SCREEN`，避免 `simctl openurl` 的系统确认弹窗。

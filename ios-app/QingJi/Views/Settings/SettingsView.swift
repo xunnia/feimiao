@@ -23,6 +23,8 @@ struct SettingsView: View {
     @AppStorage("qingji.widgetPrivacyMode") private var widgetPrivacyMode = false
 
     var body: some View {
+        @Bindable var router = router
+
         NavigationStack {
             List {
                 Section("管理") {
@@ -213,42 +215,11 @@ struct SettingsView: View {
                 }
             }
             .navigationTitle("设置")
-            // 深链路由：qingji://settings/budget 或 /reconcile 时 push 对应子页面
-            .navigationDestination(isPresented: Binding(
-                get: { router.settingsPushTarget != nil },
-                set: { if !$0 { router.settingsPushTarget = nil } }
-            )) {
-                switch router.settingsPushTarget {
-                case .ai:        AIProviderSettingsView()
-                case .books:     BooksView()
-                case .accounts:  AccountsView()
-                case .categories: CategoriesView()
-                case .tags:      TagsView()
-                case .memory:    MemoryView()
-                case .aiMemory:  AIMemoryView()
-                case .aiTasks:   AITaskCenterView()
-                case .aiExtensions: AIExtensionSettingsView()
-                case .aiSchedules: AIReportScheduleView()
-                case .aiSearch:  AIUnifiedSearchView()
-                case .aiDiagnostics: AIDiagnosticsView()
-                case .aiLocal: LocalModelCompanionView()
-                case .budget:    BudgetSettingView()
-                case .reconcile: ReconcileView()
-                case .reimburse: ReimburseView()
-                case .savings:   SavingsGoalsView()
-                case .recurring: RecurringRulesView()
-                case .assets:    AssetsView()
-                case .assetDetail: AssetsView(opensFirstDetail: true)
-                case .liabilities: LiabilitiesView()
-                case .netWorth:  NetWorthView()
-                case .importReview:
-                    ImportReviewView(result: ImportReviewView.demoResult()) { _, _ in }
-                case .reports:   ReportsView()
-                case .backup:    BackupView()
-                case .display:   TransactionDisplaySettingsView()
-                case .theme:     ThemeSettingsView()
-                case nil:        EmptyView()
-                }
+            // 深链路由：用 item 绑定目标本身，而不是只绑定一个 Bool。
+            // 这样冷启动时每个 settings/* 页面都会按实际目标惰性创建，
+            // 不会因为 NavigationStack 首帧尚未建立而落到空目的地。
+            .navigationDestination(item: $router.settingsPushTarget) { target in
+                settingsDestinationView(target)
             }
             .fileImporter(
                 isPresented: $showImporter,
@@ -288,6 +259,42 @@ struct SettingsView: View {
             } message: {
                 Text(importMessage ?? "")
             }
+        }
+    }
+
+    @ViewBuilder
+    private func settingsDestinationView(
+        _ target: AppRouter.SettingsDestination
+    ) -> some View {
+        switch target {
+        case .ai:        AIProviderSettingsView()
+        case .books:     BooksView()
+        case .accounts:  AccountsView()
+        case .categories: CategoriesView()
+        case .tags:      TagsView()
+        case .memory:    MemoryView()
+        case .aiMemory:  AIMemoryView()
+        case .aiTasks:   AITaskCenterView()
+        case .aiExtensions: AIExtensionSettingsView()
+        case .aiSchedules: AIReportScheduleView()
+        case .aiSearch:  AIUnifiedSearchView()
+        case .aiDiagnostics: AIDiagnosticsView()
+        case .aiLocal: LocalModelCompanionView()
+        case .budget:    BudgetSettingView()
+        case .reconcile: ReconcileView()
+        case .reimburse: ReimburseView()
+        case .savings:   SavingsGoalsView()
+        case .recurring: RecurringRulesView()
+        case .assets:    AssetsView()
+        case .assetDetail: AssetsView(opensFirstDetail: true)
+        case .liabilities: LiabilitiesView()
+        case .netWorth:  NetWorthView()
+        case .importReview:
+            ImportReviewView(result: ImportReviewView.demoResult()) { _, _ in }
+        case .reports:   ReportsView()
+        case .backup:    BackupView()
+        case .display:   TransactionDisplaySettingsView()
+        case .theme:     ThemeSettingsView()
         }
     }
 

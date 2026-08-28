@@ -3,7 +3,7 @@ description: "肥喵记账 - 可爱又聪明的记账猫"
 publish_to: 'none'
 # 版本规则（用户 0703 拍板）：1.0 起步，每次推 GitHub 构建 minor +1（1.1、1.2…）。
 # 加号后是 Android versionCode，必须只增不减，否则手机拒绝覆盖安装。
-version: 1.264.0+278
+version: 1.265.0+279
 
 environment:
   sdk: '>=3.4.0 <4.0.0'
@@ -35,7 +35,9 @@ dependencies:
   flutter_svg: ^2.0.10+1
   flutter_slidable: ^3.1.1
   image: ^4.3.0
-  workmanager: ^0.9.0+3
+  # 0.10.9 pulls workmanager_android 0.10.8, which fixes the AGP 9 /
+  # android.builtInKotlin=false plugin-compilation path (upstream #722).
+  workmanager: ^0.10.9
   flutter_secure_storage: ^10.3.1
   url_launcher: ^6.3.2
   flutter_local_notifications: ^22.0.1

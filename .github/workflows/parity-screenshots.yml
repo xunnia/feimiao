@@ -123,7 +123,9 @@ jobs:
             SIMCTL_CHILD_QINGJI_DEMO_NOW="2026-08-27T12:00:00+08:00" \
             SIMCTL_CHILD_QINGJI_SCREEN="$screen" \
             xcrun simctl launch "$DEVICE" com.qingji.app >/dev/null
-            sleep 4
+            # Some SwiftData destinations perform their first query during
+            # cold launch. Give the route time to render before capture.
+            sleep 8
             xcrun simctl io "$DEVICE" screenshot "ci-artifacts/ios-screenshots/$name.png"
           }
           shoot home 01-home
@@ -161,6 +163,9 @@ jobs:
           shoot settings/backup 33-backup
           shoot settings/theme 34-theme
           shoot settings/display 35-display
+
+          python3 ios-app/tools/check_screenshot_nonempty.py \
+            ci-artifacts/ios-screenshots/*.png
       - uses: actions/upload-artifact@v4
         with:
           name: ios-parity-screenshots

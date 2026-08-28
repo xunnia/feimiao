@@ -3,8 +3,11 @@
 这份表是 iOS 原生迁移的验收入口。目标是业务行为、数据口径和入口能力一致；
 iOS 的导航、控件、动效和玻璃材质按 Apple 原生规范重新设计，不追求逐像素复制 Android。
 
-当前 Android 基线：`1.262.0+276` / `b0827-276` / 数据库 v48；该批次已由用户确认收口，
+当前 Android 基线：`1.265.0+279` / `b0828-279` / 数据库 v48；该批次已由用户确认收口，
 可作为当前成对截图和逻辑对账基线。真实 OAuth、provider 网络和真机体验仍单独标记为待验收。
+
+首页的结构性入口与 Android 保持一致：顶部账本/搜索/菜单和底部「记一记」输入框必须存在；
+iOS 只在按钮反馈、系统菜单、键盘、转场和 Liquid Glass 材质上做原生增强，不能用通用快捷操作卡替代主入口。
 
 ## 截图规则
 
@@ -14,7 +17,7 @@ iOS 的导航、控件、动效和玻璃材质按 Apple 原生规范重新设计
 - 文件命名：`<功能>/<场景>-android.png` 与 `<功能>/<场景>-ios.png`。
 - iOS CI 产物目录：`ci-artifacts/ios-screenshots/`；Android 现有 golden 仍保留在 `android-app/outputs/`。
 - 成对场景和报告由 `ios-app/tools/screenshot_manifest.json` 与 `ios-app/tools/compare_png.py` 管理，报告会区分“缺失截图”“尺寸不一致”和“已比较”。
-- Android 端已加入真实页面的 integration_test/parity_screenshots_test.dart，由 .github/workflows/parity-screenshots.yml 在 Android 模拟器和 iOS 模拟器分别采集 35 个场景，再生成同一份报告。
+- Android 端已加入真实页面的 integration_test/parity_screenshots_test.dart，由 .github/workflows/parity-screenshots.yml 在 Android 模拟器和 iOS 模拟器分别采集 35 个场景，再生成同一份报告；iOS 另有内容区非空门禁，白屏截图会直接让 job 失败。
 - 当前工作树没有在线 Android 设备，也没有本机 Xcode；因此“CI 已配置”不等于“截图已通过”。Pixel 2 与 iPhone 模拟器物理尺寸不同，报告会如实记录尺寸差异，不把原生 UI 的像素差异伪装成业务一致。
 
 ## 当前批次

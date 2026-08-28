@@ -1,3 +1,9 @@
+## 2026-08-28 v1.265.0+279 Android CI 编译修复与 iOS 首页入口对齐
+
+- **Android CI**：升级 Workmanager 到 `0.10.9`（Android 实现 `0.10.8`），修复 AGP 9 + `android.builtInKotlin=false` 下 Kotlin 插件未编译、`GeneratedPluginRegistrant.java` 找不到 `WorkmanagerPlugin` 的 clean-runner 错误；上游修复对应 Workmanager #722。
+- **iOS 首页**：移除首页与安卓主流程冲突的快捷操作卡，补齐顶部菜单/搜索/账本入口、收支筛选和底部「记一记」输入框；手动/AI 分流保留 iOS Liquid Glass 和原生按压反馈。
+- **路由与截图门禁**：设置深链改为目标值绑定，iOS 截图脚本新增内容区非空检查；冷启动截图等待时间延长，避免保存白屏 PNG 冒充通过。
+- **本地验证**：Android debug APK 构建成功；Flutter analyze 无 error；全量 Flutter **1127/1127**。iOS 需由 macOS CI 完成编译和截图复验。
 
 ## 2026-08-28 v1.264.0+278 全局 UI 收口（Codex，本地交付候选）
 
@@ -2240,3 +2246,17 @@ $env:FLUTTER_ROOT='C:\src\flutter'
 - **验证**：Claude/Chats 定向 **18/18**；串行全量 Flutter **1084/1084**；`flutter analyze --no-fatal-infos --no-fatal-warnings` exit 0（40 条既有 info/warning）。
 - **交付**：Release APK `C:\src\xunni-codex\ci-artifacts\releases\feimiao-codex-v1.257.0-270.apk`，116,937,094 字节，SHA256 `C168DBC4E3A93784B4320736AD4A232D9290B97E7D7E6B9DDEC320E9B333120B`；release identity gate 已确认 `com.qingji.qingji.codex / 1.257.0 / 270`、16 KiB 对齐、APK V2 和固定 Codex 证书均正确。
 - **运行态边界**：本机无在线 Android 设备，真实 provider/OAuth、IME、相册权限和安装冷启动仍需用户设备验收；源码未提交、未推送、未发布线上。
+## 2026-08-28 v1.265.0+279 OAuth 稳定性与性能专项
+
+- GPT OAuth 按 Cockpit 当前流程补齐 `chatgpt.com/codex/desktop-auth` hosted 登录封装、客户端版本/稳定 ID 参数和官方桌面身份头。
+- 浏览器已成功回调但 Token 交换失败时，保留回调状态并对瞬时网络/网关错误做有界重试；Android keep-alive 会清理旧流程残留 callback 文件，避免新授权被旧状态吞掉。
+- 账号刷新增加并发写入保护，旧 refresh 结果不能覆盖用户刚完成的新授权。
+- 指定账本记录流按数据版本缓存，喵助手建议不再每次打开都排序全量账单；10k 流水重复 `recordsForBookView` 从约 3.8–5.0s 降至约 0.10–0.16s。
+- Gemini 授权调研记录见 `docs/oauth-gemini-research-2026-08-28.md`；本版本不内置 Cockpit/Antigravity 私有 Google OAuth client secret。
+
+## 2026-08-28 v1.265.0+279 Android CI 编译修复与 iOS 首页入口对齐
+
+- **Android CI**：升级 Workmanager 到 `0.10.9`（Android 实现 `0.10.8`），修复 AGP 9 + `android.builtInKotlin=false` 下 Kotlin 插件未编译、`GeneratedPluginRegistrant.java` 找不到 `WorkmanagerPlugin` 的 clean-runner 错误；上游修复对应 Workmanager #722。
+- **iOS 首页**：移除首页与安卓主流程冲突的快捷操作卡，补齐顶部菜单/搜索/账本入口、收支筛选和底部「记一记」输入框；手动/AI 分流保留 iOS Liquid Glass 和原生按压反馈。
+- **路由与截图门禁**：设置深链改为目标值绑定，iOS 截图脚本新增内容区非空检查；冷启动截图等待时间延长，避免保存白屏 PNG 冒充通过。
+- **本地验证**：Android debug APK 构建成功；Flutter analyze 无 error；全量 Flutter **1127/1127**。iOS 需由 macOS CI 完成编译和截图复验。
