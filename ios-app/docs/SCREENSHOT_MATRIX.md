@@ -6,7 +6,7 @@ Markdown 报告。
 
 ## 当前基线
 
-- Android：`1.265.0+279` / `b0828-279` / DB v48。
+- Android：`1.269.0+283` / `b0829-283` / DB v48。
 - iOS：deployment target 26.0，CI 使用 GitHub macos-26，优先 Xcode 27、否则 Xcode 26.x/iOS 26 SDK。
 - 演示数据：启动参数 `QINGJI_DEMO=1` 与 `QINGJI_DEMO_NOW=2026-08-27T12:00:00+08:00`，语言和币种固定为测试 fixture。
 - iOS 路由：`QINGJI_SCREEN`，避免 `simctl openurl` 的系统确认弹窗。
@@ -42,7 +42,7 @@ Liquid Glass、SF Symbols、原生转场和触觉反馈，因此与 Flutter/Mate
 
 | 场景 | iOS 路由 | Android 截图 | iOS 截图 | 状态 |
 |---|---|---|---|---|
-| 首页、记一笔、明细 | `home` / `quickadd` / `transactions` | 待设备采集 | CI 已配置 | 待成对对比 |
+| 首页、记一笔、明细 | `home` / `quickadd` / `transactions` | Parity #51 已采集 | Parity #51 已采集 | 已完成成对对比 |
 | 周/月/年/自定义统计 | `stats/week` / `stats/month` / `stats/year` / `stats/custom` | 待设备采集 | CI 已配置 | 待成对对比 |
 | 预算、对账、待报销 | `settings/budget` / `settings/reconcile` / `settings/reimburse` | 待设备采集 | CI 已配置 | 待成对对比 |
 | 存钱、定时记账 | `settings/savings` / `settings/recurring` | 待设备采集 | CI 已配置 | 待成对对比 |
