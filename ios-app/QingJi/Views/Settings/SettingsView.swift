@@ -18,7 +18,7 @@ struct SettingsView: View {
 
         NavigationStack {
             List {
-                Section("管理") {
+                Section {
                     NavigationLink {
                         AIProviderSettingsView()
                     } label: {
@@ -29,6 +29,8 @@ struct SettingsView: View {
                     } label: {
                         Label("备份与恢复", systemImage: "archivebox")
                     }
+                } header: {
+                    Text("管理")
                 } footer: {
                     Text("AI、备份和恢复是设置页的系统级选项；预算、资产和导入等业务入口位于主页抽屉。")
                 }
@@ -51,20 +53,24 @@ struct SettingsView: View {
                     }
                 }
 
-                Section("提醒") {
+                Section {
                     Toggle("还款提醒", isOn: $repaymentReminderEnabled)
                         .onChange(of: repaymentReminderEnabled) { _, enabled in
                             updateRepaymentReminder(enabled)
                         }
+                } header: {
+                    Text("提醒")
                 } footer: {
                     Text("信用卡、贷款和个人借入会在还款日前一天及当天提醒；通知时间由 iOS 系统管理。")
                 }
 
-                Section("小组件") {
+                Section {
                     Toggle("隐藏小组件金额", isOn: $widgetPrivacyMode)
                         .onChange(of: widgetPrivacyMode) { _, _ in
                             WidgetCenter.shared.reloadAllTimelines()
                         }
+                } header: {
+                    Text("小组件")
                 } footer: {
                     Text("开启后，小组件保留分类和进度，但不显示具体金额。")
                 }
