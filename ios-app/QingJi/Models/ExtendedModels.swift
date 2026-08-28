@@ -141,6 +141,7 @@ final class RecurringOccurrence {
 enum PhysicalAssetSourceType: String, CaseIterable, Hashable, Identifiable {
     case historicalExisting = "historical_existing"
     case newPurchaseWithAccount = "new_purchase_with_account"
+    case fromTransaction = "from_transaction"
     case giftReceived = "gift_received"
     case inheritance
     case manualOther = "manual_other"
@@ -151,6 +152,7 @@ enum PhysicalAssetSourceType: String, CaseIterable, Hashable, Identifiable {
         switch self {
         case .historicalExisting: return "历史已有"
         case .newPurchaseWithAccount: return "新购买并记账"
+        case .fromTransaction: return "从已有账单加入"
         case .giftReceived: return "别人赠送"
         case .inheritance: return "继承或转入"
         case .manualOther: return "其他来源"

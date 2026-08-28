@@ -431,6 +431,8 @@ struct PhysicalAssetEditor: View {
     private var accounts: [Account]
     @Query(sort: \TxCategory.sortOrder)
     private var categories: [TxCategory]
+    @Query(sort: \MoneyTransaction.date, order: .reverse)
+    private var sourceTransactions: [MoneyTransaction]
 
     let asset: PhysicalAsset?
     @State private var name: String
@@ -441,6 +443,9 @@ struct PhysicalAssetEditor: View {
     @State private var bookID: UUID?
     @State private var paymentAccountID: UUID?
     @State private var purchaseCategoryKey: String?
+    @State private var sourceTransactionID: UUID?
+    @State private var allocationGrossText: String
+    @State private var allocationRefundText: String
     @State private var purchaseDateEnabled: Bool
     @State private var purchaseDate: Date
     @State private var brand: String
@@ -468,6 +473,9 @@ struct PhysicalAssetEditor: View {
         _purchaseDate = State(initialValue: asset?.purchaseDate ?? Date())
         _paymentAccountID = State(initialValue: nil)
         _purchaseCategoryKey = State(initialValue: nil)
+        _sourceTransactionID = State(initialValue: nil)
+        _allocationGrossText = State(initialValue: "")
+        _allocationRefundText = State(initialValue: "0")
         _brand = State(initialValue: asset?.brand ?? "")
         _model = State(initialValue: asset?.model ?? "")
         _location = State(initialValue: asset?.location ?? "")
@@ -489,6 +497,32 @@ struct PhysicalAssetEditor: View {
         asset == nil && sourceType == .newPurchaseWithAccount
     }
 
+    private var isTransactionSource: Bool {
+        asset == nil && sourceType == .fromTransaction
+    }
+
+    private var eligibleSourceTransactions: [MoneyTransaction] {
+        sourceTransactions.filter {
+            $0.kind == .expense &&
+            $0.amount > 0 &&
+            $0.refundOfID == nil &&
+            !$0.isExcluded &&
+            $0.currencyCode == "CNY"
+        }
+    }
+
+    private var sourceTransaction: MoneyTransaction? {
+        eligibleSourceTransactions.first { $0.stableID == sourceTransactionID }
+    }
+
+    private var allocationGross: Decimal? {
+        Decimal(string: allocationGrossText.replacingOccurrences(of: ",", with: ""))
+    }
+
+    private var allocationRefund: Decimal? {
+        Decimal(string: allocationRefundText.replacingOccurrences(of: ",", with: ""))
+    }
+
     private var canSave: Bool {
         guard !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               let currentValue,
@@ -500,6 +534,15 @@ struct PhysicalAssetEditor: View {
             guard let purchasePrice, purchasePrice > 0,
                   paymentAccountID != nil,
                   purchaseDateEnabled else { return false }
+        }
+        if isTransactionSource {
+            guard let sourceTransaction,
+                  let allocationGross,
+                  let allocationRefund,
+                  allocationGross > 0,
+                  allocationRefund >= 0,
+                  allocationRefund <= allocationGross,
+                  allocationGross <= sourceTransaction.amount else { return false }
         }
         return true
     }
@@ -541,9 +584,38 @@ struct PhysicalAssetEditor: View {
                                 }
                             }
                         }
+                        if isTransactionSource {
+                            Picker("购买账单", selection: $sourceTransactionID) {
+                                Text("选择账单").tag(Optional<UUID>.none)
+                                ForEach(eligibleSourceTransactions) { transaction in
+                                    Text("\(transaction.note.isEmpty ? "未命名支出" : transaction.note) · \(MoneyFormat.string(transaction.amount, currencyCode: transaction.currencyCode))")
+                                        .tag(Optional(transaction.stableID))
+                                }
+                            }
+                            TextField("本物品分配毛额", text: $allocationGrossText)
+                                .keyboardType(.decimalPad)
+                            TextField("其中已退款", text: $allocationRefundText)
+                                .keyboardType(.decimalPad)
+                            if let allocationGross, let allocationRefund,
+                               allocationGross >= allocationRefund {
+                                LabeledContent(
+                                    "净购置成本",
+                                    value: MoneyFormat.string(
+                                        allocationGross - allocationRefund,
+                                        currencyCode: "CNY"
+                                    )
+                                )
+                            }
+                        }
                     }
-                    TextField("购置成本", text: $purchasePriceText)
-                        .keyboardType(.decimalPad)
+                    if isTransactionSource {
+                        Text("购置成本由原账单分配金额计算，不能单独修改。")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    } else {
+                        TextField("购置成本", text: $purchasePriceText)
+                            .keyboardType(.decimalPad)
+                    }
                     TextField("当前估值", text: $currentValueText)
                         .keyboardType(.decimalPad)
                     Picker("账本", selection: $bookID) {
@@ -574,8 +646,19 @@ struct PhysicalAssetEditor: View {
                 }
             }
             .onChange(of: sourceType) { _, next in
-                if next == .newPurchaseWithAccount {
+                if next == .newPurchaseWithAccount || next == .fromTransaction {
                     purchaseDateEnabled = true
+                }
+            }
+            .onChange(of: sourceTransactionID) { _, id in
+                guard let id,
+                      let transaction = eligibleSourceTransactions.first(where: {
+                          $0.stableID == id
+                      }) else { return }
+                purchaseDateEnabled = true
+                purchaseDate = transaction.date
+                if allocationGrossText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    allocationGrossText = transaction.amount.description
                 }
             }
             .navigationTitle(
@@ -624,6 +707,25 @@ struct PhysicalAssetEditor: View {
                     brand: brand,
                     model: model,
                     location: location,
+                    note: note,
+                    includeInNetWorth: includeInNetWorth
+                )
+            } else if isTransactionSource {
+                guard let sourceTransaction,
+                      let allocationGross,
+                      let allocationRefund else { return }
+                _ = try AssetStore.createFromTransaction(
+                    in: context,
+                    transaction: sourceTransaction,
+                    name: name,
+                    kind: kind,
+                    allocatedGrossCents: MoneyNormalization.cents(allocationGross),
+                    allocatedRefundCents: MoneyNormalization.cents(allocationRefund),
+                    currentValue: currentValue,
+                    brand: brand,
+                    model: model,
+                    location: location,
+                    warrantyUntil: cleanWarranty,
                     note: note,
                     includeInNetWorth: includeInNetWorth
                 )

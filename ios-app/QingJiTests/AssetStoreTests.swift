@@ -256,6 +256,49 @@ final class AssetStoreTests: XCTestCase {
         )
     }
 
+    func testExistingPurchaseCanBeSplitAcrossMultipleAssets() throws {
+        let stack = try Stack()
+        let book = Book(name: "测试账本", isDefault: true)
+        let cash = Account(name: "现金", kind: .cash)
+        stack.context.insert(book)
+        stack.context.insert(cash)
+        try stack.context.save()
+        let purchaseDate = Date(timeIntervalSince1970: 1_705_000_000)
+        let original = try LedgerStore.createTransaction(
+            in: stack.context,
+            amount: 120,
+            kind: .expense,
+            date: purchaseDate,
+            note: "两件商品",
+            account: cash,
+            book: book
+        )
+
+        let first = try AssetStore.createFromTransaction(
+            in: stack.context,
+            transaction: original,
+            name: "商品 A",
+            kind: .other,
+            allocatedGrossCents: 7_000,
+            currentValue: 65
+        )
+        let second = try AssetStore.createFromTransaction(
+            in: stack.context,
+            transaction: original,
+            name: "商品 B",
+            kind: .other,
+            allocatedGrossCents: 5_000,
+            currentValue: 45
+        )
+        XCTAssertEqual(first.sourceType, .fromTransaction)
+        XCTAssertEqual(second.sourceType, .fromTransaction)
+        XCTAssertEqual(first.purchasePrice, 70)
+        XCTAssertEqual(second.purchasePrice, 50)
+        let links = try stack.context.fetch(FetchDescriptor<AssetTransactionLink>())
+        XCTAssertEqual(links.count, 2)
+        XCTAssertEqual(links.map(\.allocatedGrossCents).reduce(0, +), 12_000)
+    }
+
     func testLinearDepreciationReachesMonthlyValueWithoutCashflow() throws {
         let stack = try Stack()
         let asset = PhysicalAsset(

@@ -431,6 +431,63 @@ enum AssetStore {
         return asset
     }
 
+    /// 从既有支出账单加入物品；多物品订单必须显式给出本物品的毛额和退款分摊。
+    @discardableResult
+    static func createFromTransaction(
+        in context: ModelContext,
+        transaction: MoneyTransaction,
+        name: String,
+        kind: PhysicalAssetKind,
+        allocatedGrossCents: Int,
+        allocatedRefundCents: Int = 0,
+        currentValue: Decimal? = nil,
+        brand: String = "",
+        model: String = "",
+        location: String = "",
+        warrantyUntil: Date? = nil,
+        note: String = "",
+        includeInNetWorth: Bool = true
+    ) throws -> PhysicalAsset {
+        guard transaction.kind == .expense,
+              transaction.amount > 0,
+              transaction.refundOfID == nil,
+              !transaction.isExcluded,
+              transaction.currencyCode == "CNY" else {
+            throw Error.invalidTransaction
+        }
+        guard allocatedGrossCents > 0,
+              allocatedRefundCents >= 0,
+              allocatedRefundCents <= allocatedGrossCents else {
+            throw Error.allocationInvalid
+        }
+        let net = Decimal(allocatedGrossCents - allocatedRefundCents) / Decimal(100)
+        let asset = try create(
+            in: context,
+            name: name,
+            kind: kind,
+            purchasePrice: net,
+            currentValue: currentValue ?? net,
+            currencyCode: transaction.currencyCode,
+            book: transaction.book,
+            purchaseDate: transaction.date,
+            brand: brand,
+            model: model,
+            location: location,
+            warrantyUntil: warrantyUntil,
+            note: note,
+            includeInNetWorth: includeInNetWorth,
+            sourceType: .fromTransaction
+        )
+        _ = try linkPurchaseAllocation(
+            asset,
+            transaction: transaction,
+            grossCents: allocatedGrossCents,
+            refundCents: allocatedRefundCents,
+            in: context
+        )
+        return asset
+    }
+
     static func update(
         _ asset: PhysicalAsset,
         in context: ModelContext,
