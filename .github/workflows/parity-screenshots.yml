@@ -49,9 +49,9 @@ jobs:
           profile: pixel_2
           force-avd-creation: false
           emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -no-audio -no-boot-anim -camera-back none
-          emulator-boot-timeout: 900
-          disable-linux-hw-accel: false
-          disable-animations: true
+          emulator-boot-timeout: 1200
+          disable-linux-hw-accel: true
+          disable-animations: false
           working-directory: android-app
           script: >-
             flutter drive
