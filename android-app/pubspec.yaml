@@ -3,7 +3,7 @@ description: "肥喵记账 - 可爱又聪明的记账猫"
 publish_to: 'none'
 # 版本规则（用户 0703 拍板）：1.0 起步，每次推 GitHub 构建 minor +1（1.1、1.2…）。
 # 加号后是 Android versionCode，必须只增不减，否则手机拒绝覆盖安装。
-version: 1.265.0+279
+version: 1.268.0+282
 
 environment:
   sdk: '>=3.4.0 <4.0.0'
@@ -26,7 +26,9 @@ dependencies:
   csv: ^6.0.0
   share_plus: ^10.0.0
   path_provider: ^2.1.0
-  file_picker: ^8.0.0
+  # 10.3.10 uses flutter.compileSdkVersion; 8.x hard-codes android-34 and
+  # fails the current Android 36 AAR metadata check.
+  file_picker: ^10.3.10
   charset_converter: ^2.2.0
   excel: ^2.1.0
   image_picker: ^1.1.0

@@ -186,29 +186,36 @@ jobs:
           # （SIMCTL_CHILD_ 前缀的环境变量会被 simctl 转发给 App。）
           shoot() {
             local screen="$1" name="$2"
-            echo "CAPTURE_BEGIN name=$name screen=$screen"
-            xcrun simctl terminate "$DEVICE" com.qingji.app 2>/dev/null || true
-            sleep 1
-            if ! SIMCTL_CHILD_QINGJI_DEMO=1 \
-              SIMCTL_CHILD_QINGJI_DEMO_NOW="2026-08-27T12:00:00+08:00" \
-              SIMCTL_CHILD_QINGJI_SCREEN="$screen" \
-              xcrun simctl launch "$DEVICE" com.qingji.app; then
-              echo "::error::CAPTURE_LAUNCH_FAILED name=$name screen=$screen"
-              xcrun simctl spawn "$DEVICE" log show --last 30s --style compact \
-                --predicate 'process == "QingJi"' || true
-              return 1
-            fi
-            # 年度图表、预算承诺物化和对账表单首次冷启动会触发较重的
-            # SwiftData 查询；给它们足够时间完成首帧，避免把加载中的空根视图当截图。
-            sleep 14
-            if ! xcrun simctl io "$DEVICE" screenshot "screenshots/$name.png"; then
-              echo "::error::CAPTURE_SCREENSHOT_FAILED name=$name screen=$screen"
-              xcrun simctl spawn "$DEVICE" log show --last 30s --style compact \
-                --predicate 'process == "QingJi"' || true
-              return 1
-            fi
-            test -s "screenshots/$name.png"
-            echo "CAPTURE_DONE name=$name screen=$screen"
+            local output="screenshots/$name.png"
+            local attempt
+            for attempt in 1 2 3; do
+              echo "CAPTURE_BEGIN name=$name screen=$screen attempt=$attempt"
+              xcrun simctl terminate "$DEVICE" com.qingji.app 2>/dev/null || true
+              sleep 1
+              if ! SIMCTL_CHILD_QINGJI_DEMO=1 \
+                SIMCTL_CHILD_QINGJI_DEMO_NOW="2026-08-27T12:00:00+08:00" \
+                SIMCTL_CHILD_QINGJI_SCREEN="$screen" \
+                xcrun simctl launch "$DEVICE" com.qingji.app; then
+                echo "::warning::CAPTURE_LAUNCH_FAILED name=$name screen=$screen attempt=$attempt"
+                continue
+              fi
+              # 年度图表、预算承诺物化和对账表单首次冷启动会触发较重的
+              # SwiftData 查询；给它们足够时间完成首帧，避免把加载中的空根视图当截图。
+              sleep 14
+              if ! xcrun simctl io "$DEVICE" screenshot "$output" || ! test -s "$output"; then
+                echo "::warning::CAPTURE_SCREENSHOT_FAILED name=$name screen=$screen attempt=$attempt"
+                continue
+              fi
+              if python3 ios-app/tools/check_screenshot_nonempty.py "$output"; then
+                echo "CAPTURE_DONE name=$name screen=$screen attempt=$attempt"
+                return 0
+              fi
+              echo "::warning::CAPTURE_NONEMPTY_FAILED name=$name screen=$screen attempt=$attempt"
+            done
+            echo "::error::CAPTURE_FAILED_AFTER_RETRIES name=$name screen=$screen"
+            xcrun simctl spawn "$DEVICE" log show --last 30s --style compact \
+              --predicate 'process == "QingJi"' || true
+            return 1
           }
 
           shoot "home"         "01-home"
