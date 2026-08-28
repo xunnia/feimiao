@@ -383,12 +383,9 @@ Future<void> _captureReports(
   await _pumpFor(tester, const Duration(milliseconds: 900));
   expect(find.text('报告'), findsAtLeastNWidgets(1));
   await _takeScreenshot(tester, binding, 'reports-android');
-  // The report library is a modal sheet. Close it and the capture shell so a
-  // future route (or a rerun in the same process) starts from a clean stack.
-  if (navigator.canPop()) navigator.pop<void>();
-  await _pumpFor(tester, const Duration(milliseconds: 300));
-  if (navigator.canPop()) navigator.pop<void>();
-  await _pumpFor(tester, const Duration(milliseconds: 300));
+  // Leave the final report sheet mounted. Popping a modal and its capture
+  // shell immediately after PixelCopy can trigger a framework disposal error;
+  // the test process is ending, so the runner can reclaim both routes.
 }
 
 class _ReportCaptureShell extends StatefulWidget {
