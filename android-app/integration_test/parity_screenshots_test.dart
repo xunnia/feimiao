@@ -361,9 +361,10 @@ Future<void> _capturePage(
   );
   await _pumpFor(tester, const Duration(milliseconds: 700));
   await _takeScreenshot(tester, binding, name);
-  navigator.pop<void>();
-  await _pumpFor(tester, const Duration(milliseconds: 350));
-  debugPrint('PARITY_PAGE_END name=$name');
+  // Keep captured routes mounted until the driver exits. Repeatedly popping
+  // opaque routes while the Android surface is an ImageView can make Flutter
+  // tear down a live widget tree before the next frame is delivered.
+  debugPrint('PARITY_PAGE_READY name=$name');
 }
 
 Future<void> _captureReports(
@@ -429,8 +430,6 @@ Future<void> _captureAssetTab(
   await tester.tap(option.first);
   await _pumpFor(tester, const Duration(milliseconds: 600));
   await _takeScreenshot(tester, binding, name);
-  navigator.pop<void>();
-  await _pumpFor(tester, const Duration(milliseconds: 350));
 }
 
 Future<void> _captureBooks(
@@ -468,8 +467,6 @@ Future<void> _captureStatistics(
     await _pumpFor(tester, const Duration(milliseconds: 500));
   }
   await _takeScreenshot(tester, binding, name);
-  navigator.pop<void>();
-  await _pumpFor(tester, const Duration(milliseconds: 350));
 }
 
 Future<void> _takeScreenshot(
