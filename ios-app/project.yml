@@ -24,7 +24,7 @@ targets:
       - package: QingJiCore
       - target: QingJiWidget
       - target: QingJiShare
-      - sdk: Compression.framework
+      - sdk: libcompression.tbd
       - sdk: AuthenticationServices.framework
       - sdk: Network.framework
       - sdk: Security.framework
