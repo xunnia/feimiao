@@ -39,10 +39,13 @@ import 'package:qingji/widgets/app_buttons.dart';
 /// This is deliberately an integration test instead of a production demo
 /// switch: the real Flutter widgets are rendered on a real Android emulator,
 /// while the fixture is inserted through the same repository API a user uses.
+bool _surfaceConverted = false;
+
 void main() {
   final binding = IntegrationTestWidgetsFlutterBinding.ensureInitialized();
 
   testWidgets('capture Android parity screens', (tester) async {
+    _surfaceConverted = false;
     await app.main();
     await _pumpFor(tester, const Duration(seconds: 2));
 
@@ -466,9 +469,12 @@ Future<void> _takeScreenshot(
   String name,
 ) async {
   // The Android integration plugin replaces the Flutter surface with an
-  // ImageView for capture. The binding restores it automatically during test
-  // teardown; keeping one binding for this sequence lets every route render.
-  await binding.convertFlutterSurfaceToImage();
+  // ImageView for capture. It must be converted only once per test; the
+  // binding restores it automatically during test teardown.
+  if (!_surfaceConverted) {
+    await binding.convertFlutterSurfaceToImage();
+    _surfaceConverted = true;
+  }
   await tester.pump();
   await binding.takeScreenshot(name);
 }
