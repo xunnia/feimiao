@@ -69,7 +69,7 @@ struct RootTabView: View {
                         .frame(width: min(proxy.size.width * 0.78, 320))
                         .frame(maxHeight: .infinity)
                         .background(.regularMaterial)
-                        .clipShape(.rect(topTrailingRadius: 26, bottomTrailingRadius: 26))
+                        .clipShape(.rect(bottomTrailingRadius: 26, topTrailingRadius: 26))
                         .shadow(color: .black.opacity(0.18), radius: 24, x: 8, y: 0)
                         .transition(.move(edge: .leading))
                     }
@@ -162,7 +162,7 @@ private struct AppDrawerView: View {
         ("cat.fill", "喵助手", .assistant),
         ("square.grid.2x2", "分类管理", .settingsDestination(.categories)),
         ("tag", "标签管理", .settingsDestination(.tags)),
-        ("square.and.arrow.down", "导入导出", .settingsDestination(.importReview)),
+        ("square.and.arrow.down", "导入导出", .settingsDestination(.importExport)),
         ("arrow.uturn.backward.circle", "待报销", .settingsDestination(.reimburse)),
         ("clock.badge", "定时记账", .settingsDestination(.recurring)),
         ("bell", "自动记账", .settingsDestination(.autoRecord))

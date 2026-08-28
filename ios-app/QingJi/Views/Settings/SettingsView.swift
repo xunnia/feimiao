@@ -1,6 +1,5 @@
 import SwiftUI
 import SwiftData
-import UniformTypeIdentifiers
 import WidgetKit
 import QingJiCore
 
@@ -10,15 +9,7 @@ struct SettingsView: View {
     /// NavigationStack 读取后 push 对应子页面。
     @Environment(AppRouter.self) private var router
 
-    @Query(sort: \MoneyTransaction.date, order: .reverse)
-    private var transactions: [MoneyTransaction]
-
-    @State private var showImporter = false
-    @State private var showExporter = false
-    @State private var exportDocument = CSVDocument()
-    @State private var importMessage: String?
-    @State private var pendingImport: ImportedBillResult?
-    @State private var showImportReview = false
+    @State private var settingsMessage: String?
     @AppStorage("qingji.repaymentReminderEnabled") private var repaymentReminderEnabled = true
     @AppStorage("qingji.widgetPrivacyMode") private var widgetPrivacyMode = false
 
@@ -29,125 +20,20 @@ struct SettingsView: View {
             List {
                 Section("管理") {
                     NavigationLink {
-                        AutoRecordView()
-                    } label: {
-                        Label("自动记账", systemImage: "bell")
-                    }
-                    NavigationLink {
                         AIProviderSettingsView()
                     } label: {
-                        Label("AI 与喵助手", systemImage: "sparkles")
+                        Label("AI 记账设置", systemImage: "sparkles")
                     }
                     NavigationLink {
-                        AIChatsView()
+                        BackupView()
                     } label: {
-                        Label("Chats", systemImage: "bubble.left.and.bubble.right")
+                        Label("备份与恢复", systemImage: "archivebox")
                     }
-                    NavigationLink {
-                        BooksView()
-                    } label: {
-                        Label("账本管理", systemImage: "book.closed")
-                    }
-                    NavigationLink {
-                        AccountsView()
-                    } label: {
-                        Label("账户管理", systemImage: "creditcard")
-                    }
-                    NavigationLink {
-                        CategoriesView()
-                    } label: {
-                        Label("分类管理", systemImage: "square.grid.2x2")
-                    }
-                    NavigationLink {
-                        TagsView()
-                    } label: {
-                        Label("标签管理", systemImage: "tag")
-                    }
-                    NavigationLink {
-                        MemoryView()
-                    } label: {
-                        Label("喵学到的分类", systemImage: "brain.head.profile")
-                    }
-                    NavigationLink {
-                        AIMemoryView()
-                    } label: {
-                        Label("可控记忆", systemImage: "lock.shield")
-                    }
-                    NavigationLink {
-                        AITaskCenterView()
-                    } label: {
-                        Label("AI 任务中心", systemImage: "waveform")
-                    }
-                    NavigationLink {
-                        AIExtensionSettingsView()
-                    } label: {
-                        Label("技能与连接", systemImage: "link")
-                    }
-                    NavigationLink {
-                        AIReportScheduleView()
-                    } label: {
-                        Label("定时报表", systemImage: "calendar.badge.clock")
-                    }
-                    NavigationLink {
-                        AIUnifiedSearchView()
-                    } label: {
-                        Label("AI 统一搜索", systemImage: "magnifyingglass")
-                    }
-                    NavigationLink {
-                        AIDiagnosticsView()
-                    } label: {
-                        Label("AI 诊断", systemImage: "waveform.path.ecg")
-                    }
-                    NavigationLink {
-                        LocalModelCompanionView()
-                    } label: {
-                        Label("本地模型伴侣", systemImage: "desktopcomputer")
-                    }
-                    NavigationLink {
-                        BudgetSettingView()
-                    } label: {
-                        Label("月度预算", systemImage: "gauge.with.needle")
-                    }
-                    NavigationLink {
-                        SavingsGoalsView()
-                    } label: {
-                        Label("存钱目标", systemImage: "target")
-                    }
-                    NavigationLink {
-                        RecurringRulesView()
-                    } label: {
-                        Label("定时记账", systemImage: "clock.badge")
-                    }
-                    NavigationLink {
-                        AssetsView()
-                    } label: {
-                        Label("资产管理", systemImage: "shippingbox")
-                    }
-                    NavigationLink {
-                        LiabilitiesView()
-                    } label: {
-                        Label("负债管理", systemImage: "minus.circle")
-                    }
-                    NavigationLink {
-                        NetWorthView()
-                    } label: {
-                        Label("净资产", systemImage: "chart.line.uptrend.xyaxis")
-                    }
-                    NavigationLink {
-                        ReportsView()
-                    } label: {
-                        Label("报告", systemImage: "doc.text.magnifyingglass")
-                    }
-                    NavigationLink {
-                        ReconcileView()
-                    } label: {
-                        Label("对账", systemImage: "checkmark.seal")
-                    }
-                    NavigationLink {
-                        ReimburseView()
-                    } label: {
-                        Label("待报销", systemImage: "arrow.uturn.backward.circle")
-                    }
+                } footer: {
+                    Text("AI、备份和恢复是设置页的系统级选项；预算、资产和导入等业务入口位于主页抽屉。")
+                }
+
+                Section("显示") {
                     NavigationLink {
                         TransactionDisplaySettingsView()
                     } label: {
@@ -158,56 +44,27 @@ struct SettingsView: View {
                     } label: {
                         Label("主题外观", systemImage: "paintbrush")
                     }
-                }
-
-                Section {
-                    Button {
-                        showImporter = true
-                    } label: {
-                        Label("导入微信 / 支付宝账单", systemImage: "square.and.arrow.down")
-                    }
-                    Button {
-                        let visible = LedgerPolicy.userRecords(from: transactions.map(\.record))
-                        exportDocument = CSVDocument(text: CSVExporter.export(visible))
-                        showExporter = true
-                    } label: {
-                        Label("导出全部账目为 CSV", systemImage: "square.and.arrow.up")
-                    }
-                    .disabled(transactions.isEmpty)
-                } header: {
-                    Text("数据")
-                } footer: {
-                    Text("在微信「我-服务-钱包-账单」或支付宝「我的-账单」申请导出 CSV 账单后，从文件 App 导入。数据只保存在你的设备和 iCloud。")
-                }
-
-                Section {
                     NavigationLink {
-                        BackupView()
+                        MoneyDisplaySettingsView()
                     } label: {
-                        Label("备份与恢复", systemImage: "archivebox")
+                        Label("金额显示", systemImage: "yensign.circle")
                     }
-                } footer: {
-                    Text("完整备份会保留账本、资产和附件；密钥类凭据不会导出。")
                 }
 
-                Section {
+                Section("提醒") {
                     Toggle("还款提醒", isOn: $repaymentReminderEnabled)
                         .onChange(of: repaymentReminderEnabled) { _, enabled in
                             updateRepaymentReminder(enabled)
                         }
-                } header: {
-                    Text("提醒")
                 } footer: {
                     Text("信用卡、贷款和个人借入会在还款日前一天及当天提醒；通知时间由 iOS 系统管理。")
                 }
 
-                Section {
+                Section("小组件") {
                     Toggle("隐藏小组件金额", isOn: $widgetPrivacyMode)
                         .onChange(of: widgetPrivacyMode) { _, _ in
                             WidgetCenter.shared.reloadAllTimelines()
                         }
-                } header: {
-                    Text("小组件")
                 } footer: {
                     Text("开启后，小组件保留分类和进度，但不显示具体金额。")
                 }
@@ -220,49 +77,16 @@ struct SettingsView: View {
                 }
             }
             .navigationTitle("设置")
-            // 深链路由：用 item 绑定目标本身，而不是只绑定一个 Bool。
-            // 这样冷启动时每个 settings/* 页面都会按实际目标惰性创建，
-            // 不会因为 NavigationStack 首帧尚未建立而落到空目的地。
             .navigationDestination(item: $router.settingsPushTarget) { target in
                 settingsDestinationView(target)
             }
-            .fileImporter(
-                isPresented: $showImporter,
-                allowedContentTypes: [
-                    .commaSeparatedText,
-                    .plainText,
-                    UTType(filenameExtension: "xlsx") ?? .data,
-                    .data
-                ]
-            ) { result in
-                handleImport(result)
-            }
-            .fileExporter(
-                isPresented: $showExporter,
-                document: exportDocument,
-                contentType: .commaSeparatedText,
-                defaultFilename: "qingji-export"
-            ) { _ in }
-            .sheet(isPresented: $showImportReview) {
-                if let pendingImport {
-                    ImportReviewView(result: pendingImport) { count, skipped in
-                        importMessage = "成功导入 \(count) 笔，跳过 \(skipped) 行中性或无效交易。"
-                        self.pendingImport = nil
-                    }
-                }
-            }
-            .alert(
-                "导入结果",
-                isPresented: Binding(
-                    get: { importMessage != nil },
-                    set: { isPresented in
-                        if !isPresented { importMessage = nil }
-                    }
-                )
-            ) {
-                Button("好") { importMessage = nil }
+            .alert("设置", isPresented: Binding(
+                get: { settingsMessage != nil },
+                set: { if !$0 { settingsMessage = nil } }
+            )) {
+                Button("好") { settingsMessage = nil }
             } message: {
-                Text(importMessage ?? "")
+                Text(settingsMessage ?? "")
             }
         }
     }
@@ -296,10 +120,12 @@ struct SettingsView: View {
         case .netWorth:  NetWorthView()
         case .importReview:
             ImportReviewView(result: ImportReviewView.demoResult()) { _, _ in }
+        case .importExport: ImportExportView()
         case .reports:   ReportsView()
         case .backup:    BackupView()
         case .display:   TransactionDisplaySettingsView()
         case .theme:     ThemeSettingsView()
+        case .moneyDisplay: MoneyDisplaySettingsView()
         case .autoRecord: AutoRecordView()
         }
     }
@@ -309,7 +135,7 @@ struct SettingsView: View {
             if enabled {
                 guard await RepaymentReminderScheduler.requestAuthorization() else {
                     repaymentReminderEnabled = false
-                    importMessage = "系统没有允许通知，请到设置中打开通知权限。"
+                    settingsMessage = "系统没有允许通知，请到设置中打开通知权限。"
                     return
                 }
                 await RepaymentReminderScheduler.reschedule(context: context)
@@ -321,35 +147,6 @@ struct SettingsView: View {
 
     private var appVersion: String {
         Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0"
-    }
-
-    private func handleImport(_ result: Result<URL, Error>) {
-        do {
-            let url = try result.get()
-            guard url.startAccessingSecurityScopedResource() else {
-                importMessage = String(localized: "无法读取所选文件")
-                return
-            }
-            defer { url.stopAccessingSecurityScopedResource() }
-
-            let data = try Data(contentsOf: url)
-            let imported: ImportedBillResult
-            if url.pathExtension.lowercased() == "xlsx" {
-                imported = try XLSXBillImporter.importBill(from: data)
-            } else {
-                guard let text = BillTextDecoder.decode(data) else {
-                    importMessage = String(localized: "无法识别文件编码")
-                    return
-                }
-                imported = try PaymentBillImporter.importBill(fromCSV: text)
-            }
-            pendingImport = imported
-            showImportReview = true
-        } catch is BillImportError {
-            importMessage = String(localized: "无法识别账单格式，请确认是微信或支付宝导出的 CSV 文件。")
-        } catch {
-            importMessage = error.localizedDescription
-        }
     }
 
 }

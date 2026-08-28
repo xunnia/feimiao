@@ -33,7 +33,7 @@ final class AppRouter {
 
     /// 设置页接到深链后要 push 的子页面。
     enum SettingsDestination: Hashable {
-        case books, accounts, categories, tags, memory, aiMemory, aiTasks, aiExtensions, aiSchedules, aiSearch, aiDiagnostics, aiLocal, budget, reconcile, reimburse, savings, recurring, assets, assetDetail, liabilities, netWorth, importReview, reports, backup, display, theme, autoRecord, ai
+        case books, accounts, categories, tags, memory, aiMemory, aiTasks, aiExtensions, aiSchedules, aiSearch, aiDiagnostics, aiLocal, budget, reconcile, reimburse, savings, recurring, assets, assetDetail, liabilities, netWorth, importReview, importExport, reports, backup, display, theme, moneyDisplay, autoRecord, ai
     }
     var settingsPushTarget: SettingsDestination? = nil
 
@@ -108,6 +108,7 @@ final class AppRouter {
         case "liabilities":  selectedTab = .settings;   settingsPushTarget = .liabilities
         case "net-worth":    selectedTab = .settings;   settingsPushTarget = .netWorth
         case "import-review": selectedTab = .settings; settingsPushTarget = .importReview
+        case "import", "import-export": selectedTab = .settings; settingsPushTarget = .importExport
         case "reports":      selectedTab = .settings; settingsPushTarget = .reports
         case "settings":     selectedTab = .settings
         case "backup":       selectedTab = .settings; settingsPushTarget = .backup
@@ -186,11 +187,13 @@ final class AppRouter {
             case "liabilities": settingsPushTarget = .liabilities
             case "net-worth": settingsPushTarget = .netWorth
             case "import-review": settingsPushTarget = .importReview
+            case "import", "import-export": settingsPushTarget = .importExport
             case "reports": settingsPushTarget = .reports
             case "ai":        settingsPushTarget = .ai
             case "backup":    settingsPushTarget = .backup
             case "display":   settingsPushTarget = .display
             case "theme":     settingsPushTarget = .theme
+            case "money-display": settingsPushTarget = .moneyDisplay
             case "auto-record", "autorecord": settingsPushTarget = .autoRecord
             default:          settingsPushTarget = nil
             }
