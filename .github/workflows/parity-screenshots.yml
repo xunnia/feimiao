@@ -131,7 +131,9 @@ jobs:
             }
             # Some SwiftData destinations perform their first query during
             # cold launch. Give the route time to render before capture.
-            sleep 8
+            # 年度图表、预算承诺物化和对账表单首次冷启动会触发较重的
+            # SwiftData 查询；给它们足够时间完成首帧，避免把加载中的空根视图当截图。
+            sleep 14
             xcrun simctl io "$DEVICE" screenshot "ci-artifacts/ios-screenshots/$name.png" || {
               echo "::error::CAPTURE_SCREENSHOT_FAILED name=$name screen=$screen"
               xcrun simctl spawn "$DEVICE" log show --last 30s --style compact \
