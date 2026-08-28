@@ -18,7 +18,7 @@ struct ImportExportView: View {
 
     var body: some View {
         List {
-            Section("导入") {
+            Section {
                 Button {
                     showImporter = true
                 } label: {
@@ -29,11 +29,13 @@ struct ImportExportView: View {
                 } label: {
                     Label("查看导入复核示例", systemImage: "checklist")
                 }
+            } header: {
+                Text("导入")
             } footer: {
                 Text("从文件 App 选择微信或支付宝导出的 CSV / XLSX。所有记录会先进入复核页，确认后才保存。")
             }
 
-            Section("导出") {
+            Section {
                 Button {
                     let visible = LedgerPolicy.userRecords(from: transactions.map(\.record))
                     exportDocument = CSVDocument(text: CSVExporter.export(visible))
@@ -42,6 +44,8 @@ struct ImportExportView: View {
                     Label("导出全部账目为 CSV", systemImage: "square.and.arrow.up")
                 }
                 .disabled(transactions.isEmpty)
+            } header: {
+                Text("导出")
             } footer: {
                 Text("导出的 CSV 不包含 AI API Key；请把导出文件保存到你信任的位置。")
             }
