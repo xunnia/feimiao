@@ -55,6 +55,9 @@ void main() {
     await _pumpFor(tester, const Duration(milliseconds: 500));
 
     await _takeScreenshot(tester, binding, 'home-overview-android');
+    // The drawer button belongs to the root shell. Capture it before pushing
+    // page routes that intentionally remain mounted for the rest of the run.
+    await _captureBooks(tester, binding);
 
     await _capturePage(
       tester,
@@ -122,7 +125,6 @@ void main() {
       '总览',
       binding,
     );
-    await _captureBooks(tester, binding);
     // Accounts, reconciliation, liabilities and net worth are intentionally
     // represented by the Android asset hub's corresponding tabs.
     await _captureAssetTab(tester, 'accounts-android', '资金', binding);
