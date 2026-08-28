@@ -20,6 +20,15 @@ struct QingJiApp: App {
             RootTabView()
                 .environment(router)
                 .environment(aiProviderStore)
+                // Android parity uses the Chinese fixture labels. Keep the
+                // CI screenshots language-aligned without changing the real
+                // app's user-selected system locale.
+                .environment(
+                    \.locale,
+                    ProcessInfo.processInfo.environment["QINGJI_DEMO"] == "1"
+                        ? Locale(identifier: "zh-Hans")
+                        : Locale.current
+                )
                 .task {
                     // 演示模式下 DemoDataSeeder 已在容器初始化时完成种子，
                     // 正常模式走正常首启分类/账户种子。

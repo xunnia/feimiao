@@ -24,8 +24,8 @@ iOS 只在按钮反馈、系统菜单、键盘、转场和 Liquid Glass 材质�
 
 | 功能 | Android 基线 | iOS 状态 | 截图状态 |
 |---|---|---|---|
-| 首页月度总览 | `home_view.dart` | 已实现原生首页 | 待 CI 运行 |
-| 手动支出/收入/转账 | `quick_add_view.dart` | 已接入账本、账户、分类 | 待 CI 运行 |
+| 首页月度总览 | `home_view.dart` | 已实现 Android 同结构首页、月选择、预算与底部记账输入框 | 待最新 CI 成对截图 |
+| 手动支出/收入/转账 | `quick_add_view.dart` | 已接入账本、账户、分类和原生键盘 | 待最新 CI 成对截图 |
 | 账本切换与新建 | 抽屉账本 | 已实现账本模型与管理页 | 待 CI 运行 |
 | 交易明细与搜索 | `transaction_day_list.dart` | 已实现基础列表、搜索、编辑 | 待 CI 运行 |
 | 退款/报销冲减 | `transaction_actions.dart` | 已实现挂原交易、原日期冲减 | 待逻辑回归与截图 |

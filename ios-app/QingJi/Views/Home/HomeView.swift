@@ -26,7 +26,11 @@ struct HomeView: View {
     private var transactions: [MoneyTransaction]
     @Query(sort: \Book.sortOrder)
     private var books: [Book]
+    @Query private var budgets: [Budget]
     @State private var transactionFilter: HomeTransactionFilter = .all
+    @State private var displayedMonth = AppClock.now
+    @State private var monthPickerDate = AppClock.now
+    @State private var showMonthPicker = false
 
     init(onOpenDrawer: (() -> Void)? = nil) {
         self.onOpenDrawer = onOpenDrawer
@@ -45,13 +49,34 @@ struct HomeView: View {
         return "总账本"
     }
 
-    private var monthSummary: MonthlySummary {
-        let now = AppClock.now
-        let components = Calendar.current.dateComponents([.year, .month], from: now)
+    private var now: Date { AppClock.now }
+
+    private var displayedMonthSummary: MonthlySummary {
+        let components = Calendar.current.dateComponents([.year, .month], from: displayedMonth)
         return StatisticsEngine.monthlySummary(
             of: includedTransactions.map(\.record),
             year: components.year ?? 2000,
             month: components.month ?? 1
+        )
+    }
+
+    private var totalBudget: Budget? {
+        BudgetStore.effectiveTotalBudget(
+            from: budgets,
+            selectedBookID: router.selectedBookID
+        )
+    }
+
+    private var displayedBudgetStatus: BudgetStatus? {
+        guard let totalBudget else { return nil }
+        return BudgetStore.status(
+            for: totalBudget,
+            transactions: includedTransactions,
+            referenceDate: Calendar.current.isDate(
+                displayedMonth,
+                equalTo: now,
+                toGranularity: .month
+            ) ? now : displayedMonth
         )
     }
 
@@ -60,10 +85,9 @@ struct HomeView: View {
     }
 
     private var recentTransactions: [MoneyTransaction] {
-        let now = AppClock.now
         let monthTransactions = includedTransactions.filter {
             $0.refundOfID == nil &&
-            Calendar.current.isDate($0.date, equalTo: now, toGranularity: .month)
+            Calendar.current.isDate($0.date, equalTo: displayedMonth, toGranularity: .month)
         }
         let filtered = monthTransactions.filter { transaction in
             switch transactionFilter {
@@ -158,6 +182,16 @@ struct HomeView: View {
                     .accessibilityLabel("当前账本：\(selectedBookName)")
                 }
             }
+            .sheet(isPresented: $showMonthPicker) {
+                MonthPickerSheet(
+                    selection: $monthPickerDate,
+                    maximumDate: now
+                ) {
+                    displayedMonth = startOfMonth(monthPickerDate)
+                    showMonthPicker = false
+                }
+                .presentationDetents([.medium])
+            }
             .sheet(isPresented: Binding(
                 get: { router.showAssistant },
                 set: { router.showAssistant = $0 }
@@ -181,49 +215,73 @@ struct HomeView: View {
     }
 
     private var summaryCard: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            HStack {
-                Text("月度总览")
+        let summary = displayedMonthSummary
+        return VStack(alignment: .leading, spacing: 14) {
+            HStack(spacing: 8) {
+                Button {
+                    monthPickerDate = displayedMonth
+                    showMonthPicker = true
+                } label: {
+                    HStack(spacing: 5) {
+                        Text(displayedMonth, format: .dateTime.year().month())
+                        Image(systemName: "chevron.down")
+                            .font(.caption.weight(.semibold))
+                    }
                     .font(.subheadline.weight(.medium))
+                    .foregroundStyle(.primary)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("选择月份")
+
+                Button {
+                    router.statsScope = .month
+                    router.selectedTab = .statistics
+                } label: {
+                    HStack(spacing: 4) {
+                        Text("统计")
+                        Image(systemName: "chevron.right")
+                            .font(.caption2.weight(.semibold))
+                    }
+                    .font(.caption)
                     .foregroundStyle(.secondary)
+                    .padding(.horizontal, 10)
+                    .frame(minHeight: 28)
+                    .glassEffect(.regular.interactive(), in: .capsule)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("查看统计")
                 Spacer()
-                Text("本月")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
             }
-            Text(MoneyFormat.string(monthSummary.balance, currencyCode: currencyCode))
-                .font(.system(size: 34, weight: .bold, design: .rounded))
-                .contentTransition(.numericText())
 
-            HStack(spacing: 12) {
-                amountColumn(title: "收入", amount: monthSummary.totalIncome, color: .income, symbol: "arrow.down.left")
-                amountColumn(title: "支出", amount: monthSummary.totalExpense, color: .primary, symbol: "arrow.up.right")
+            if let totalBudget, let status = displayedBudgetStatus {
+                BudgetSummaryBody(
+                    summary: summary,
+                    status: status,
+                    budget: totalBudget.amount,
+                    isCurrentMonth: Calendar.current.isDate(displayedMonth, equalTo: now, toGranularity: .month),
+                    currencyCode: currencyCode
+                )
+            } else {
+                NoBudgetSummaryBody(
+                    summary: summary,
+                    currencyCode: currencyCode
+                ) {
+                    router.settingsPushTarget = .budget
+                    router.selectedTab = .settings
+                }
             }
         }
-        .padding(18)
+        .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .glassEffect(.regular, in: .rect(cornerRadius: 22))
-    }
-
-    private func amountColumn(title: String, amount: Decimal, color: Color, symbol: String) -> some View {
-        HStack(spacing: 8) {
-            Image(systemName: symbol)
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(color)
-                .frame(width: 26, height: 26)
-                .background(color.opacity(0.12), in: .circle)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(title)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                Text(MoneyFormat.string(amount, currencyCode: currencyCode))
-                    .font(.subheadline.weight(.semibold).monospacedDigit())
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.7)
-            }
-            Spacer(minLength: 0)
+        .overlay(alignment: .topTrailing) {
+            Image("mascot-idle")
+                .resizable()
+                .scaledToFit()
+                .frame(width: 88, height: 88)
+                .offset(x: 4, y: -6)
+                .allowsHitTesting(false)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .glassEffect(.regular, in: .rect(cornerRadius: 20))
     }
 
     private var recentSection: some View {
@@ -255,6 +313,208 @@ struct HomeView: View {
                 }
                 .padding(.horizontal, 14)
                 .background(.background, in: .rect(cornerRadius: 18))
+            }
+        }
+    }
+
+    private func startOfMonth(_ date: Date) -> Date {
+        Calendar.current.date(
+            from: Calendar.current.dateComponents([.year, .month], from: date)
+        ) ?? date
+    }
+}
+
+private struct BudgetSummaryBody: View {
+    let summary: MonthlySummary
+    let status: BudgetStatus
+    let budget: Decimal
+    let isCurrentMonth: Bool
+    let currencyCode: String
+
+    private var ratio: Double {
+        guard budget > 0 else { return 0 }
+        return min(max(MoneyFormat.double(status.spentThisMonth) / MoneyFormat.double(budget), 0), 1)
+    }
+
+    private var percentText: String {
+        let raw = budget > 0 ? MoneyFormat.double(status.spentThisMonth) / MoneyFormat.double(budget) : 0
+        return raw > 1 ? "100%+" : "\(Int((raw * 100).rounded()))%"
+    }
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 12) {
+            VStack(alignment: .leading, spacing: 10) {
+                Label(
+                    isCurrentMonth
+                        ? (status.isOverBudget ? "月预算已超" : "月预算剩余")
+                        : (status.isOverBudget ? "该月超预算" : "该月预算剩余"),
+                    systemImage: "rectangle.portrait.and.arrow.right"
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                Text(MoneyFormat.string(status.remaining, currencyCode: currencyCode))
+                    .font(.system(size: 27, weight: .medium, design: .rounded))
+                    .foregroundStyle(status.isOverBudget ? Color.warning : .primary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.65)
+                    .contentTransition(.numericText())
+
+                HStack(spacing: 0) {
+                    metric(title: "收入", amount: summary.totalIncome, color: .income)
+                    Divider().frame(height: 32).padding(.horizontal, 14)
+                    metric(title: "支出", amount: summary.totalExpense, color: .primary)
+                }
+
+                ProgressView(value: ratio)
+                    .tint(status.isOverBudget ? Color.warning : Color.accentColor)
+                HStack {
+                    Text(percentText)
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(status.isOverBudget ? Color.warning : Color.accentColor)
+                    Spacer()
+                    Text("预算 \(MoneyFormat.string(budget, currencyCode: currencyCode))")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            Spacer(minLength: 0)
+            TodayAllowanceRing(
+                status: status,
+                currencyCode: currencyCode,
+                isCurrentMonth: isCurrentMonth
+            )
+        }
+    }
+
+    private func metric(title: String, amount: Decimal, color: Color) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title).font(.caption).foregroundStyle(.secondary)
+            Text(MoneyFormat.string(amount, currencyCode: currencyCode))
+                .font(.subheadline.monospacedDigit())
+                .foregroundStyle(color)
+                .lineLimit(1)
+                .minimumScaleFactor(0.65)
+        }
+    }
+}
+
+private struct NoBudgetSummaryBody: View {
+    let summary: MonthlySummary
+    let currencyCode: String
+    let onOpenBudget: () -> Void
+
+    var body: some View {
+        VStack(spacing: 12) {
+            HStack(spacing: 0) {
+                metric(title: "支出", amount: summary.totalExpense, color: .primary)
+                Divider().frame(height: 42).padding(.horizontal, 18)
+                metric(title: "收入", amount: summary.totalIncome, color: .income)
+            }
+            HStack {
+                Text("结余 \(MoneyFormat.string(summary.balance, currencyCode: currencyCode))")
+                    .font(.caption)
+                    .foregroundStyle(summary.balance < 0 ? Color.warning : .secondary)
+                Spacer()
+                Button(action: onOpenBudget) {
+                    Label("设置预算", systemImage: "chevron.right")
+                        .labelStyle(TrailingIconLabelStyle())
+                        .font(.caption)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(Color.accentColor)
+            }
+        }
+    }
+
+    private func metric(title: String, amount: Decimal, color: Color) -> some View {
+        VStack(spacing: 4) {
+            Text(title).font(.caption).foregroundStyle(.secondary)
+            Text(MoneyFormat.string(amount, currencyCode: currencyCode))
+                .font(.system(size: 23, weight: .medium, design: .rounded))
+                .foregroundStyle(color)
+                .lineLimit(1)
+                .minimumScaleFactor(0.65)
+        }
+        .frame(maxWidth: .infinity)
+    }
+}
+
+private struct TrailingIconLabelStyle: LabelStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        HStack(spacing: 4) {
+            configuration.title
+            configuration.icon
+        }
+    }
+}
+
+private struct TodayAllowanceRing: View {
+    let status: BudgetStatus
+    let currencyCode: String
+    let isCurrentMonth: Bool
+
+    private var value: Double {
+        guard isCurrentMonth else {
+            return status.monthlyBudget > 0
+                ? min(max(MoneyFormat.double(status.spentThisMonth) / MoneyFormat.double(status.monthlyBudget), 0), 1)
+                : 0
+        }
+        if status.todayAllowance < 0 { return 0 }
+        let envelope = status.spentToday + status.todayAllowance
+        return envelope > 0
+            ? min(max(MoneyFormat.double(status.todayAllowance) / MoneyFormat.double(envelope), 0), 1)
+            : 1
+    }
+
+    var body: some View {
+        ZStack {
+            Circle()
+                .stroke(Color.accentColor.opacity(0.14), lineWidth: 9)
+            Circle()
+                .trim(from: 0, to: value)
+                .stroke(
+                    status.todayAllowance < 0 ? Color.warning : Color.accentColor,
+                    style: StrokeStyle(lineWidth: 9, lineCap: .round)
+                )
+                .rotationEffect(.degrees(-90))
+            VStack(spacing: 2) {
+                Text(isCurrentMonth ? "今日可用" : "已用")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                Text(isCurrentMonth
+                     ? MoneyFormat.string(status.todayAllowance, currencyCode: currencyCode)
+                     : "\(Int((value * 100).rounded()))%")
+                    .font(.caption.weight(.medium).monospacedDigit())
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.6)
+            }
+        }
+        .frame(width: 80, height: 80)
+    }
+}
+
+private struct MonthPickerSheet: View {
+    @Binding var selection: Date
+    let maximumDate: Date
+    let onConfirm: () -> Void
+
+    var body: some View {
+        NavigationStack {
+            DatePicker(
+                "月份",
+                selection: $selection,
+                in: ...maximumDate,
+                displayedComponents: .date
+            )
+            .datePickerStyle(.wheel)
+            .labelsHidden()
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .navigationTitle("选择月份")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("完成", action: onConfirm)
+                }
             }
         }
     }
