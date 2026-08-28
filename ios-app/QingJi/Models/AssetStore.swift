@@ -798,7 +798,7 @@ enum AssetStore {
         var changed = 0
         for asset in assets {
             guard let start = asset.depreciationStartDate,
-                  !asOf.isBefore(start) else { continue }
+                  asOf >= start else { continue }
             let startMonth = calendar.date(
                 from: calendar.dateComponents([.year, .month], from: start)
             ) ?? start
@@ -960,10 +960,7 @@ enum AssetStore {
             rawValue: metadata["previous_lifecycle"] as? String ?? "owned"
         ) ?? .owned
         let previousInclude = (metadata["previous_include_in_net_worth"] as? String) != "0"
-        let previousEndedAt = (metadata["previous_ended_at"] as? String).flatMap {
-            guard let seconds = Double($0), !seconds.isZero else { return nil }
-            return Date(timeIntervalSince1970: seconds)
-        }
+        let previousEndedAt = dateFromMetadata(metadata["previous_ended_at"])
         let links = try context.fetch(FetchDescriptor<AssetTransactionLink>())
             .filter {
                 $0.assetID == asset.stableID &&
@@ -1101,10 +1098,7 @@ enum AssetStore {
             rawValue: metadata["previous_lifecycle"] as? String ?? "owned"
         ) ?? .owned
         let previousInclude = (metadata["previous_include_in_net_worth"] as? String) != "0"
-        let previousEndedAt = (metadata["previous_ended_at"] as? String).flatMap {
-            guard let seconds = Double($0), !seconds.isZero else { return nil }
-            return Date(timeIntervalSince1970: seconds)
-        }
+        let previousEndedAt = dateFromMetadata(metadata["previous_ended_at"])
         asset.lifecycle = previousLifecycle == .idle ? .idle : .owned
         asset.currentValue = MoneyNormalization.roundToCents(previousValue)
         asset.includeInNetWorth = previousInclude
@@ -1198,10 +1192,7 @@ enum AssetStore {
             rawValue: metadata["previous_lifecycle"] as? String ?? "owned"
         ) ?? .owned
         let previousInclude = (metadata["previous_include_in_net_worth"] as? String) != "0"
-        let previousEndedAt = (metadata["previous_ended_at"] as? String).flatMap {
-            guard let seconds = Double($0), !seconds.isZero else { return nil }
-            return Date(timeIntervalSince1970: seconds)
-        }
+        let previousEndedAt = dateFromMetadata(metadata["previous_ended_at"])
         asset.lifecycle = previousLifecycle == .idle ? .idle : .owned
         asset.currentValue = MoneyNormalization.roundToCents(previousValue)
         asset.includeInNetWorth = previousInclude
@@ -1238,6 +1229,15 @@ enum AssetStore {
             return nil
         }
         return values
+    }
+
+    private static func dateFromMetadata(_ value: Any?) -> Date? {
+        guard let text = value as? String,
+              let seconds = Double(text),
+              !seconds.isZero else {
+            return nil
+        }
+        return Date(timeIntervalSince1970: seconds)
     }
 
     private static func validate(
