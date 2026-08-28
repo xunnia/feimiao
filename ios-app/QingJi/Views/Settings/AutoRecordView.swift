@@ -24,7 +24,7 @@ struct AutoRecordView: View {
                 Text("安卓端的通知监听服务可以在后台发现付款通知；iOS 不向第三方应用开放同等的全局通知读取权限，因此不会在后台偷偷读取其他 App 的通知。")
             }
 
-            Section("可用的自动入口") {
+            Section {
                 NavigationLink {
                     AIQuickEntryView()
                 } label: {
@@ -64,16 +64,20 @@ struct AutoRecordView: View {
                     Image(systemName: "wand.and.stars")
                         .foregroundStyle(Color.accentColor)
                 }
+            } header: {
+                Text("可用的自动入口")
             } footer: {
                 Text("分享扩展和快捷指令仍由你主动触发；识别结果会先进入肥喵的记账流程，账目不会因为一条通知被静默写入。")
             }
 
-            Section("提醒") {
+            Section {
                 Button {
                     UIApplication.shared.open(URL(string: UIApplication.openSettingsURLString)!)
                 } label: {
                     Label("打开肥喵的系统设置", systemImage: "gearshape")
                 }
+            } header: {
+                Text("提醒")
             } footer: {
                 Text("可在系统设置中管理照片、麦克风、通知和 Siri 权限。")
             }
