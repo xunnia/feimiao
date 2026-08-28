@@ -23,7 +23,7 @@ final class AppRouter {
 
     /// 设置页接到深链后要 push 的子页面。
     enum SettingsDestination: Hashable {
-        case books, accounts, categories, tags, memory, aiMemory, aiTasks, aiExtensions, aiSchedules, aiSearch, aiDiagnostics, aiLocal, budget, reconcile, reimburse, savings, recurring, assets, liabilities, netWorth, importReview, reports, backup, display, theme, ai
+        case books, accounts, categories, tags, memory, aiMemory, aiTasks, aiExtensions, aiSchedules, aiSearch, aiDiagnostics, aiLocal, budget, reconcile, reimburse, savings, recurring, assets, assetDetail, liabilities, netWorth, importReview, reports, backup, display, theme, ai
     }
     var settingsPushTarget: SettingsDestination? = nil
 
@@ -90,6 +90,9 @@ final class AppRouter {
         case "ai-local":       selectedTab = .settings; settingsPushTarget = .aiLocal
         case "savings":      selectedTab = .settings;   settingsPushTarget = .savings
         case "recurring":    selectedTab = .settings;   settingsPushTarget = .recurring
+        case "assets-detail", "assets/detail":
+            selectedTab = .settings
+            settingsPushTarget = .assetDetail
         case "assets":       selectedTab = .settings;   settingsPushTarget = .assets
         case "liabilities":  selectedTab = .settings;   settingsPushTarget = .liabilities
         case "net-worth":    selectedTab = .settings;   settingsPushTarget = .netWorth
@@ -161,7 +164,10 @@ final class AppRouter {
             case "ai-local": settingsPushTarget = .aiLocal
             case "savings":   settingsPushTarget = .savings
             case "recurring": settingsPushTarget = .recurring
-            case "assets":    settingsPushTarget = .assets
+            case "assets":
+                settingsPushTarget = path.dropFirst().first == "detail"
+                    ? .assetDetail
+                    : .assets
             case "liabilities": settingsPushTarget = .liabilities
             case "net-worth": settingsPushTarget = .netWorth
             case "import-review": settingsPushTarget = .importReview

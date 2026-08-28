@@ -42,6 +42,8 @@ struct AssetsView: View {
     @State private var recoveryAsset: ReceivableAsset?
     @State private var terminalAsset: PhysicalAsset?
     @State private var errorMessage: String?
+    let opensFirstDetail: Bool
+    @State private var didOpenLaunchDetail = false
 
     private var currentBreakdown: NetWorthStore.Breakdown {
         NetWorthStore.breakdown(
@@ -60,6 +62,10 @@ struct AssetsView: View {
 
     private var visibleReceivables: [ReceivableAsset] {
         receivables.filter { !$0.isDeleted && $0.lifecycle != .archived }
+    }
+
+    init(opensFirstDetail: Bool = false) {
+        self.opensFirstDetail = opensFirstDetail
     }
 
     var body: some View {
@@ -86,6 +92,12 @@ struct AssetsView: View {
             .padding(.vertical, 12)
         }
         .background(Color(.systemGroupedBackground))
+        .onAppear {
+            guard opensFirstDetail, !didOpenLaunchDetail,
+                  let first = visibleAssets.first else { return }
+            didOpenLaunchDetail = true
+            detailAsset = first
+        }
         .navigationTitle("资产管理")
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
