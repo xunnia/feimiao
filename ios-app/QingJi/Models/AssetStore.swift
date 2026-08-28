@@ -12,6 +12,12 @@ enum AssetStore {
         case invalidTransaction
         case duplicateTransaction
         case allocationInvalid
+        case invalidSale
+        case saleAccountMissing
+        case saleNotFound
+        case returnRequiresPurchaseLink
+        case returnNotAvailable
+        case invalidTerminalStatus
 
         var errorDescription: String? {
             switch self {
@@ -22,6 +28,12 @@ enum AssetStore {
             case .invalidTransaction: return "只能关联同账本、同币种的普通支出。"
             case .duplicateTransaction: return "这笔支出已经关联了其他物品或当前资产。"
             case .allocationInvalid: return "物品分配金额超过订单可用金额。"
+            case .invalidSale: return "出售金额或出售费用不合法。"
+            case .saleAccountMissing: return "收款账户不存在、已停用或币种不一致。"
+            case .saleNotFound: return "找不到可撤销的出售记录。"
+            case .returnRequiresPurchaseLink: return "多物品订单需要先完成购置成本分配，才能确认退货。"
+            case .returnNotAvailable: return "这件物品当前没有可退回的购置账单。"
+            case .invalidTerminalStatus: return "当前资产状态不能执行这个结束持有操作。"
             }
         }
     }
@@ -498,6 +510,439 @@ enum AssetStore {
             note: "撤销使用次数"
         ))
         try context.save()
+    }
+
+    /// 只更新当前估值，不改购置成本；每次更新都会追加估值记录。
+    @discardableResult
+    static func updateCurrentValue(
+        _ asset: PhysicalAsset,
+        value: Decimal,
+        at date: Date = Date(),
+        note: String = "手动更新当前价值",
+        in context: ModelContext
+    ) throws -> AssetValuation {
+        guard asset.lifecycle == .owned || asset.lifecycle == .idle else {
+            throw Error.endedAsset
+        }
+        let normalized = MoneyNormalization.roundToCents(value)
+        guard normalized >= 0 else { throw Error.invalidAmount }
+        asset.currentValue = normalized
+        asset.updatedAt = date
+        let valuation = AssetValuation(
+            assetID: asset.stableID,
+            value: normalized,
+            sourceRaw: "manual",
+            valuedAt: date,
+            note: note
+        )
+        context.insert(valuation)
+        context.insert(AssetEvent(
+            assetID: asset.stableID,
+            kind: .valuationUpdated,
+            occurredAt: date,
+            value: normalized,
+            note: note
+        ))
+        try context.save()
+        return valuation
+    }
+
+    /// 出售物品：出售到账作为 asset_sale 事件收入写入，但明确排除普通收支统计。
+    /// 这样账户余额会增加，资产净值会减少，报表不会把出售本金误当成工资收入。
+    @discardableResult
+    static func sell(
+        _ asset: PhysicalAsset,
+        grossProceeds: Decimal,
+        fee: Decimal = .zero,
+        account: Account? = nil,
+        at date: Date = Date(),
+        note: String = "",
+        in context: ModelContext
+    ) throws -> MoneyTransaction? {
+        guard asset.lifecycle == .owned || asset.lifecycle == .idle else {
+            throw Error.invalidSale
+        }
+        let gross = MoneyNormalization.roundToCents(grossProceeds)
+        let normalizedFee = MoneyNormalization.roundToCents(fee)
+        guard gross >= 0, normalizedFee >= 0, normalizedFee <= gross else {
+            throw Error.invalidSale
+        }
+        guard asset.currencyCode.uppercased() == "CNY" else {
+            throw Error.saleAccountMissing
+        }
+        if let account,
+           account.isDeleted || account.status != .active ||
+           account.currencyCode != asset.currencyCode {
+            throw Error.saleAccountMissing
+        }
+        let net = gross - normalizedFee
+        let previousValue = asset.currentValue
+        let previousLifecycle = asset.lifecycle
+        let previousInclude = asset.includeInNetWorth
+        let previousEndedAt = asset.endedAt
+        let books = try context.fetch(FetchDescriptor<Book>())
+        let book = books.first { $0.stableID == asset.bookID }
+        let cleanedNote = note.trimmingCharacters(in: .whitespacesAndNewlines)
+        var saleTransaction: MoneyTransaction?
+        if let account, net > 0 {
+            let transaction = MoneyTransaction(
+                amount: net,
+                kind: .income,
+                date: date,
+                note: cleanedNote.isEmpty ? "资产出售：\(asset.name)" : cleanedNote,
+                merchantName: asset.name,
+                currencyCode: asset.currencyCode,
+                book: book,
+                timePrecision: .dateOnly,
+                settledAt: date,
+                settlementQuality: .userConfirmed,
+                settlementAccountID: account.stableID,
+                settlementAccountQuality: .userConfirmed,
+                eventType: .assetSale,
+                isExcluded: true
+            )
+            context.insert(transaction)
+            saleTransaction = transaction
+        }
+        asset.lifecycle = .sold
+        asset.currentValue = .zero
+        asset.includeInNetWorth = false
+        asset.endedAt = date
+        asset.updatedAt = date
+        if let saleTransaction {
+            let link = AssetTransactionLink(
+                assetID: asset.stableID,
+                transactionID: saleTransaction.stableID,
+                linkTypeRaw: AssetTransactionLinkType.saleAccountMovement.rawValue,
+                amount: net
+            )
+            link.costQualityRaw = AssetAllocationCostQuality.exact.rawValue
+            link.note = "出售到账，不计入普通收入"
+            context.insert(link)
+        }
+        context.insert(AssetValuation(
+            assetID: asset.stableID,
+            value: .zero,
+            sourceRaw: "sale",
+            valuedAt: date,
+            note: cleanedNote
+        ))
+        context.insert(AssetEvent(
+            assetID: asset.stableID,
+            kind: .sold,
+            occurredAt: date,
+            value: net,
+            note: cleanedNote,
+            metadataJSON: metadataJSON([
+                "gross_sale_amount": gross.description,
+                "sale_fee": normalizedFee.description,
+                "net_proceeds": net.description,
+                "previous_value": previousValue.description,
+                "previous_lifecycle": previousLifecycle.rawValue,
+                "previous_include_in_net_worth": previousInclude ? "1" : "0",
+                "previous_ended_at": previousEndedAt?.timeIntervalSince1970.description ?? "",
+                "transaction_id": saleTransaction?.stableID.uuidString ?? ""
+            ])
+        ))
+        try context.save()
+        return saleTransaction
+    }
+
+    /// 撤销出售时删除出售专用到账流水，恢复出售前的价值和持有状态。
+    static func undoSale(
+        _ asset: PhysicalAsset,
+        at date: Date = Date(),
+        in context: ModelContext
+    ) throws {
+        guard asset.lifecycle == .sold else { throw Error.saleNotFound }
+        let events = try events(for: asset, in: context)
+        let saleEvent = events.first { $0.kind == .sold }
+        let metadata = saleEvent.flatMap { eventMetadata($0) } ?? [:]
+        let previousValue = Decimal(
+            string: metadata["previous_value"] as? String ?? ""
+        ) ?? asset.currentValue
+        let previousLifecycle = PhysicalAssetLifecycle(
+            rawValue: metadata["previous_lifecycle"] as? String ?? "owned"
+        ) ?? .owned
+        let previousInclude = (metadata["previous_include_in_net_worth"] as? String) != "0"
+        let previousEndedAt = (metadata["previous_ended_at"] as? String).flatMap {
+            guard let seconds = Double($0), !seconds.isZero else { return nil }
+            return Date(timeIntervalSince1970: seconds)
+        }
+        let links = try context.fetch(FetchDescriptor<AssetTransactionLink>())
+            .filter {
+                $0.assetID == asset.stableID &&
+                $0.linkTypeRaw == AssetTransactionLinkType.saleAccountMovement.rawValue
+            }
+            .sorted { $0.createdAt > $1.createdAt }
+        if let link = links.first {
+            let transactions = try context.fetch(FetchDescriptor<MoneyTransaction>())
+            for child in transactions where child.refundOfID == link.transactionID {
+                context.delete(child)
+            }
+            if let transaction = transactions.first(where: { $0.stableID == link.transactionID }) {
+                context.delete(transaction)
+            }
+            context.delete(link)
+        }
+        asset.lifecycle = previousLifecycle == .owned || previousLifecycle == .idle
+            ? previousLifecycle
+            : .owned
+        asset.currentValue = MoneyNormalization.roundToCents(previousValue)
+        asset.includeInNetWorth = previousInclude
+        asset.endedAt = previousEndedAt
+        asset.updatedAt = date
+        context.insert(AssetValuation(
+            assetID: asset.stableID,
+            value: asset.currentValue,
+            sourceRaw: "manual",
+            valuedAt: date,
+            note: "撤销出售，恢复出售前价值"
+        ))
+        context.insert(AssetEvent(
+            assetID: asset.stableID,
+            kind: .restored,
+            occurredAt: date,
+            value: asset.currentValue,
+            note: "撤销出售"
+        ))
+        try context.save()
+    }
+
+    /// 确认退货：仅允许购置来源完整覆盖原账单的物品，避免多物品订单被整单误退。
+    @discardableResult
+    static func returnToPurchase(
+        _ asset: PhysicalAsset,
+        at date: Date = Date(),
+        note: String = "退货退款",
+        in context: ModelContext
+    ) throws -> MoneyTransaction {
+        guard asset.lifecycle == .owned || asset.lifecycle == .idle else {
+            throw Error.returnNotAvailable
+        }
+        let purchaseLinks = try context.fetch(FetchDescriptor<AssetTransactionLink>())
+            .filter {
+                $0.assetID == asset.stableID &&
+                ($0.linkTypeRaw == AssetTransactionLinkType.sourceTransaction.rawValue ||
+                 $0.linkTypeRaw == AssetTransactionLinkType.purchaseTransaction.rawValue)
+            }
+        guard purchaseLinks.count == 1,
+              let link = purchaseLinks.first else {
+            throw Error.returnRequiresPurchaseLink
+        }
+        let transactions = try context.fetch(FetchDescriptor<MoneyTransaction>())
+        guard let original = transactions.first(where: { $0.stableID == link.transactionID }) else {
+            throw Error.returnNotAvailable
+        }
+        let status = LedgerPolicy.refundStatus(
+            for: original.record,
+            in: transactions.map(\.record)
+        )
+        guard status.remainingAmount > 0 else { throw Error.returnNotAvailable }
+        let allocatedGross = link.allocatedGrossCents > 0
+            ? Decimal(link.allocatedGrossCents) / Decimal(100)
+            : link.amount
+        let allocatedRefund = Decimal(link.allocatedRefundCents) / Decimal(100)
+        let allocatedNet = max(allocatedGross - allocatedRefund, .zero)
+        guard allocatedNet == status.remainingAmount else {
+            throw Error.returnRequiresPurchaseLink
+        }
+        let previousValue = asset.currentValue
+        let previousLifecycle = asset.lifecycle
+        let previousInclude = asset.includeInNetWorth
+        let previousEndedAt = asset.endedAt
+        let refund = try LedgerStore.createOffset(
+            for: original,
+            amount: status.remainingAmount,
+            note: note,
+            eventType: .refund,
+            settlementAccount: original.account,
+            settledAt: date,
+            in: context
+        )
+        asset.lifecycle = .returned
+        asset.currentValue = .zero
+        asset.includeInNetWorth = false
+        asset.endedAt = date
+        asset.updatedAt = date
+        context.insert(AssetValuation(
+            assetID: asset.stableID,
+            value: .zero,
+            sourceRaw: "status_zero",
+            valuedAt: date,
+            note: "确认退货"
+        ))
+        context.insert(AssetEvent(
+            assetID: asset.stableID,
+            kind: .returned,
+            occurredAt: date,
+            value: status.remainingAmount,
+            note: note,
+            metadataJSON: metadataJSON([
+                "refund_transaction_id": refund.stableID.uuidString,
+                "previous_value": previousValue.description,
+                "previous_lifecycle": previousLifecycle.rawValue,
+                "previous_include_in_net_worth": previousInclude ? "1" : "0",
+                "previous_ended_at": previousEndedAt?.timeIntervalSince1970.description ?? ""
+            ])
+        ))
+        try context.save()
+        return refund
+    }
+
+    /// 撤销退货状态只恢复物品本身；原账单退款保留，和 Android 的审计语义一致。
+    static func undoReturn(
+        _ asset: PhysicalAsset,
+        at date: Date = Date(),
+        in context: ModelContext
+    ) throws {
+        guard asset.lifecycle == .returned else { throw Error.returnNotAvailable }
+        let returnedEvent = try events(for: asset, in: context).first { $0.kind == .returned }
+        let metadata = returnedEvent.flatMap { eventMetadata($0) } ?? [:]
+        let previousValue = Decimal(
+            string: metadata["previous_value"] as? String ?? ""
+        ) ?? asset.currentValue
+        let previousLifecycle = PhysicalAssetLifecycle(
+            rawValue: metadata["previous_lifecycle"] as? String ?? "owned"
+        ) ?? .owned
+        let previousInclude = (metadata["previous_include_in_net_worth"] as? String) != "0"
+        let previousEndedAt = (metadata["previous_ended_at"] as? String).flatMap {
+            guard let seconds = Double($0), !seconds.isZero else { return nil }
+            return Date(timeIntervalSince1970: seconds)
+        }
+        asset.lifecycle = previousLifecycle == .idle ? .idle : .owned
+        asset.currentValue = MoneyNormalization.roundToCents(previousValue)
+        asset.includeInNetWorth = previousInclude
+        asset.endedAt = previousEndedAt
+        asset.updatedAt = date
+        context.insert(AssetValuation(
+            assetID: asset.stableID,
+            value: asset.currentValue,
+            sourceRaw: "manual",
+            valuedAt: date,
+            note: "撤销退货，恢复退货前价值"
+        ))
+        context.insert(AssetEvent(
+            assetID: asset.stableID,
+            kind: .restored,
+            occurredAt: date,
+            value: asset.currentValue,
+            note: "撤销退货"
+        ))
+        try context.save()
+    }
+
+    /// 报废、丢失、赠送属于终止持有，不生成虚构的收入或支出。
+    static func end(
+        _ asset: PhysicalAsset,
+        lifecycle: PhysicalAssetLifecycle,
+        at date: Date = Date(),
+        note: String = "",
+        in context: ModelContext
+    ) throws {
+        guard lifecycle == .disposed || lifecycle == .lost || lifecycle == .gifted else {
+            throw Error.invalidTerminalStatus
+        }
+        guard asset.lifecycle == .owned || asset.lifecycle == .idle else {
+            throw Error.invalidTerminalStatus
+        }
+        let previousValue = asset.currentValue
+        let previousLifecycle = asset.lifecycle
+        let previousInclude = asset.includeInNetWorth
+        let previousEndedAt = asset.endedAt
+        asset.lifecycle = lifecycle
+        asset.currentValue = .zero
+        asset.includeInNetWorth = false
+        asset.endedAt = date
+        asset.updatedAt = date
+        let eventKind: AssetEventKind = switch lifecycle {
+        case .disposed: .disposed
+        case .lost: .lost
+        case .gifted: .gifted
+        default: .edited
+        }
+        context.insert(AssetValuation(
+            assetID: asset.stableID,
+            value: .zero,
+            sourceRaw: "status_zero",
+            valuedAt: date,
+            note: note
+        ))
+        context.insert(AssetEvent(
+            assetID: asset.stableID,
+            kind: eventKind,
+            occurredAt: date,
+            value: .zero,
+            note: note,
+            metadataJSON: metadataJSON([
+                "previous_value": previousValue.description,
+                "previous_lifecycle": previousLifecycle.rawValue,
+                "previous_include_in_net_worth": previousInclude ? "1" : "0",
+                "previous_ended_at": previousEndedAt?.timeIntervalSince1970.description ?? ""
+            ])
+        ))
+        try context.save()
+    }
+
+    static func undoEnd(
+        _ asset: PhysicalAsset,
+        at date: Date = Date(),
+        in context: ModelContext
+    ) throws {
+        guard asset.lifecycle == .disposed || asset.lifecycle == .lost || asset.lifecycle == .gifted else {
+            throw Error.invalidTerminalStatus
+        }
+        let event = try events(for: asset, in: context).first {
+            $0.kind == .disposed || $0.kind == .lost || $0.kind == .gifted
+        }
+        let metadata = event.flatMap { eventMetadata($0) } ?? [:]
+        let previousValue = Decimal(
+            string: metadata["previous_value"] as? String ?? ""
+        ) ?? asset.currentValue
+        let previousLifecycle = PhysicalAssetLifecycle(
+            rawValue: metadata["previous_lifecycle"] as? String ?? "owned"
+        ) ?? .owned
+        let previousInclude = (metadata["previous_include_in_net_worth"] as? String) != "0"
+        let previousEndedAt = (metadata["previous_ended_at"] as? String).flatMap {
+            guard let seconds = Double($0), !seconds.isZero else { return nil }
+            return Date(timeIntervalSince1970: seconds)
+        }
+        asset.lifecycle = previousLifecycle == .idle ? .idle : .owned
+        asset.currentValue = MoneyNormalization.roundToCents(previousValue)
+        asset.includeInNetWorth = previousInclude
+        asset.endedAt = previousEndedAt
+        asset.updatedAt = date
+        context.insert(AssetValuation(
+            assetID: asset.stableID,
+            value: asset.currentValue,
+            sourceRaw: "manual",
+            valuedAt: date,
+            note: "撤销结束持有"
+        ))
+        context.insert(AssetEvent(
+            assetID: asset.stableID,
+            kind: .restored,
+            occurredAt: date,
+            value: asset.currentValue,
+            note: "撤销结束持有"
+        ))
+        try context.save()
+    }
+
+    private static func metadataJSON(_ values: [String: String]) -> String {
+        guard let data = try? JSONSerialization.data(withJSONObject: values, options: [.sortedKeys]) else {
+            return "{}"
+        }
+        return String(data: data, encoding: .utf8) ?? "{}"
+    }
+
+    private static func eventMetadata(_ event: AssetEvent) -> [String: Any]? {
+        guard let data = event.metadataJSON.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data),
+              let values = object as? [String: Any] else {
+            return nil
+        }
+        return values
     }
 
     private static func validate(

@@ -105,4 +105,31 @@ final class AccountBalanceIdentityTests: XCTestCase {
             20
         )
     }
+
+    func testExcludedAssetSaleStillMovesSettlementAccount() {
+        let accountID = UUID()
+        let date = Date(timeIntervalSince1970: 1_700_000_000)
+        let records = [
+            TransactionRecord(
+                kind: .income,
+                amount: 480,
+                accountID: accountID,
+                accountName: "现金",
+                date: date,
+                settlementAccountID: accountID,
+                eventType: .assetSale,
+                isExcluded: true
+            ),
+        ]
+
+        XCTAssertEqual(
+            AccountBalanceCalculator.balance(
+                accountName: "现金",
+                initialBalance: 20,
+                records: records,
+                accountID: accountID
+            ),
+            500
+        )
+    }
 }

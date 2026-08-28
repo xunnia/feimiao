@@ -37,7 +37,7 @@ struct AssetsView: View {
     @State private var selectedTab: AssetTab = .funds
     @State private var showNewAsset = false
     @State private var showNewReceivable = false
-    @State private var editingAsset: PhysicalAsset?
+    @State private var detailAsset: PhysicalAsset?
     @State private var editingReceivable: ReceivableAsset?
     @State private var recoveryAsset: ReceivableAsset?
     @State private var terminalAsset: PhysicalAsset?
@@ -110,8 +110,8 @@ struct AssetsView: View {
             PhysicalAssetEditor(asset: nil)
                 .presentationDetents([.large])
         }
-        .sheet(item: $editingAsset) { asset in
-            PhysicalAssetEditor(asset: asset)
+        .sheet(item: $detailAsset) { asset in
+            PhysicalAssetDetailView(asset: asset)
                 .presentationDetents([.large])
         }
         .sheet(isPresented: $showNewReceivable) {
@@ -247,7 +247,7 @@ struct AssetsView: View {
     private func physicalRow(_ asset: PhysicalAsset) -> some View {
         let metrics = try? AssetStore.metrics(for: asset, in: context, asOf: AppClock.now)
         return Button {
-            editingAsset = asset
+            detailAsset = asset
         } label: {
             HStack(spacing: 12) {
                 Image(systemName: asset.kind.symbolName)
@@ -422,7 +422,7 @@ private extension PhysicalAssetKind {
     }
 }
 
-private struct PhysicalAssetEditor: View {
+struct PhysicalAssetEditor: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var context
     @Query(sort: \Book.sortOrder)

@@ -12,8 +12,6 @@ public enum AccountBalanceCalculator {
     ) -> Decimal {
         var balance = initialBalance
         for record in records {
-            if record.isExcluded { continue }
-
             // 新写入事件按结算账户投影；旧版只有 kind/account 时走兼容分支。
             let fallbackSource = matches(
                 id: record.accountID,

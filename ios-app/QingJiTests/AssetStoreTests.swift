@@ -1,9 +1,34 @@
 import XCTest
 import SwiftData
+import QingJiCore
 @testable import QingJi
 
 @MainActor
 final class AssetStoreTests: XCTestCase {
+    private final class Stack {
+        let container: ModelContainer
+        let context: ModelContext
+
+        init() throws {
+            let schema = Schema([
+                Account.self,
+                Book.self,
+                TxCategory.self,
+                MoneyTransaction.self,
+                PhysicalAsset.self,
+                AssetEvent.self,
+                AssetUsageEvent.self,
+                AssetTransactionLink.self,
+                AssetRefundAllocation.self,
+                AssetValuation.self,
+            ])
+            let configuration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
+            let modelContainer = try ModelContainer(for: schema, configurations: [configuration])
+            container = modelContainer
+            context = ModelContext(modelContainer)
+        }
+    }
+
     func testMetricsUsePurchaseCostAndShowDailyHoldingCost() throws {
         let schema = Schema([
             PhysicalAsset.self,
@@ -33,5 +58,143 @@ final class AssetStoreTests: XCTestCase {
         XCTAssertEqual(metrics.cumulativeHoldingInvestment.value, 1_000)
         XCTAssertEqual(metrics.dailyHoldingCost.value, 100)
         XCTAssertEqual(metrics.valueRetentionRatio.value, Decimal(string: "0.88"))
+    }
+
+    func testSellingMovesCashWithoutEnteringNormalIncomeAndCanBeUndone() throws {
+        let stack = try Stack()
+        let book = Book(name: "测试账本", isDefault: true)
+        let cash = Account(name: "现金", kind: .cash)
+        cash.initialBalance = 100
+        let asset = PhysicalAsset(
+            name: "测试相机",
+            kind: .digital,
+            purchasePrice: 1_000,
+            currentValue: 800,
+            bookID: book.stableID
+        )
+        asset.purchaseDate = Date(timeIntervalSince1970: 1_690_000_000)
+        stack.context.insert(book)
+        stack.context.insert(cash)
+        stack.context.insert(asset)
+        try stack.context.save()
+
+        let soldAt = Date(timeIntervalSince1970: 1_700_000_000)
+        let sale = try AssetStore.sell(
+            asset,
+            grossProceeds: 500,
+            fee: 20,
+            account: cash,
+            at: soldAt,
+            in: stack.context
+        )
+        let saleTransaction = try XCTUnwrap(sale)
+        XCTAssertEqual(saleTransaction.amount, 480)
+        XCTAssertEqual(saleTransaction.kind, .income)
+        XCTAssertEqual(saleTransaction.eventType, .assetSale)
+        XCTAssertTrue(saleTransaction.isExcluded)
+        XCTAssertEqual(asset.lifecycle, .sold)
+        XCTAssertEqual(asset.currentValue, 0)
+        XCTAssertFalse(asset.includeInNetWorth)
+        XCTAssertEqual(
+            LedgerStore.accountBalance(
+                for: cash,
+                transactions: try stack.context.fetch(FetchDescriptor<MoneyTransaction>())
+            ),
+            580
+        )
+
+        try AssetStore.undoSale(asset, at: soldAt.addingTimeInterval(60), in: stack.context)
+        XCTAssertEqual(asset.lifecycle, .owned)
+        XCTAssertEqual(asset.currentValue, 800)
+        XCTAssertTrue(asset.includeInNetWorth)
+        XCTAssertEqual(
+            try stack.context.fetchCount(FetchDescriptor<MoneyTransaction>()),
+            0
+        )
+    }
+
+    func testReturnRefundsCompletePurchaseAndUndoKeepsRefundAudit() throws {
+        let stack = try Stack()
+        let book = Book(name: "测试账本", isDefault: true)
+        let cash = Account(name: "现金", kind: .cash)
+        let asset = PhysicalAsset(
+            name: "测试耳机",
+            kind: .digital,
+            purchasePrice: 80,
+            currentValue: 50,
+            bookID: book.stableID
+        )
+        asset.purchaseDate = Date(timeIntervalSince1970: 1_690_000_000)
+        stack.context.insert(book)
+        stack.context.insert(cash)
+        stack.context.insert(asset)
+        try stack.context.save()
+        let original = try LedgerStore.createTransaction(
+            in: stack.context,
+            amount: 80,
+            kind: .expense,
+            date: asset.purchaseDate!,
+            note: "耳机购置",
+            account: cash,
+            book: book
+        )
+        _ = try AssetStore.linkPurchaseAllocation(
+            asset,
+            transaction: original,
+            grossCents: 8_000,
+            in: stack.context
+        )
+
+        let returnedAt = Date(timeIntervalSince1970: 1_700_000_000)
+        let refund = try AssetStore.returnToPurchase(
+            asset,
+            at: returnedAt,
+            in: stack.context
+        )
+        XCTAssertEqual(refund.amount, -80)
+        XCTAssertEqual(refund.refundOfID, original.stableID)
+        XCTAssertEqual(asset.lifecycle, .returned)
+        XCTAssertEqual(asset.currentValue, 0)
+        XCTAssertEqual(
+            try stack.context.fetchCount(FetchDescriptor<MoneyTransaction>()),
+            2
+        )
+
+        try AssetStore.undoReturn(asset, at: returnedAt.addingTimeInterval(60), in: stack.context)
+        XCTAssertEqual(asset.lifecycle, .owned)
+        XCTAssertEqual(asset.currentValue, 50)
+        XCTAssertEqual(
+            try stack.context.fetchCount(FetchDescriptor<MoneyTransaction>()),
+            2
+        )
+    }
+
+    func testTerminalAssetStatusZeroesValueAndCanBeUndone() throws {
+        let stack = try Stack()
+        let asset = PhysicalAsset(
+            name: "测试物品",
+            kind: .other,
+            purchasePrice: 100,
+            currentValue: 60
+        )
+        stack.context.insert(asset)
+        try stack.context.save()
+
+        let endedAt = Date(timeIntervalSince1970: 1_700_000_000)
+        try AssetStore.end(
+            asset,
+            lifecycle: .disposed,
+            at: endedAt,
+            note: "损坏",
+            in: stack.context
+        )
+        XCTAssertEqual(asset.lifecycle, .disposed)
+        XCTAssertEqual(asset.currentValue, 0)
+        XCTAssertFalse(asset.includeInNetWorth)
+
+        try AssetStore.undoEnd(asset, at: endedAt.addingTimeInterval(60), in: stack.context)
+        XCTAssertEqual(asset.lifecycle, .owned)
+        XCTAssertEqual(asset.currentValue, 60)
+        XCTAssertTrue(asset.includeInNetWorth)
     }
 }
