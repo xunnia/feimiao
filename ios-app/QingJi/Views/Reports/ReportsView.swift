@@ -12,8 +12,7 @@ struct ReportsView: View {
     @State private var message: String?
 
     var body: some View {
-        NavigationStack {
-            Group {
+        Group {
                 if reports.isEmpty {
                     ContentUnavailableView(
                         "还没有报告",
@@ -75,7 +74,6 @@ struct ReportsView: View {
             } message: {
                 Text(message ?? "")
             }
-        }
     }
 }
 

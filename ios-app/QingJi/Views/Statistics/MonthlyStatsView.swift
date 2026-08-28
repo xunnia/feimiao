@@ -72,8 +72,7 @@ struct MonthlyStatsView: View {
     var body: some View {
         @Bindable var router = router
 
-        NavigationStack {
-            ScrollView {
+        ScrollView {
                 VStack(spacing: 20) {
                     Picker("范围", selection: $router.statsScope) {
                         Text("周").tag(Scope.week)
@@ -111,7 +110,6 @@ struct MonthlyStatsView: View {
             .background(Color(.systemGroupedBackground))
             .navigationTitle("统计")
             .onAppear(perform: restoreDateSelections)
-        }
     }
 
     private var monthHeader: some View {

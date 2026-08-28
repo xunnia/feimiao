@@ -116,8 +116,7 @@ struct TransactionListView: View {
     }
 
     var body: some View {
-        NavigationStack {
-            Group {
+        Group {
                 if transactions.isEmpty {
                     ContentUnavailableView(
                         "还没有账目",
@@ -190,7 +189,6 @@ struct TransactionListView: View {
             } message: {
                 Text(deleteError ?? "")
             }
-        }
     }
 
     private var list: some View {

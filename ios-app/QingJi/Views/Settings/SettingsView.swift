@@ -16,8 +16,7 @@ struct SettingsView: View {
     var body: some View {
         @Bindable var router = router
 
-        NavigationStack {
-            List {
+        List {
                 Section {
                     NavigationLink {
                         AIProviderSettingsView()
@@ -94,7 +93,6 @@ struct SettingsView: View {
             } message: {
                 Text(settingsMessage ?? "")
             }
-        }
     }
 
     @ViewBuilder

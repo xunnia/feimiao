@@ -75,8 +75,7 @@ struct QuickAddView: View {
     }
 
     var body: some View {
-        NavigationStack {
-            VStack(spacing: 0) {
+        VStack(spacing: 0) {
                 Picker("类型", selection: $kind) {
                     Text("支出").tag(TransactionKind.expense)
                     Text("收入").tag(TransactionKind.income)
@@ -177,7 +176,6 @@ struct QuickAddView: View {
                 if transferTargetID == nil { resetCategorySelection() }
             }
             .onChange(of: allCategories.count) { resetCategorySelection() }
-        }
     }
 
     private var amountDisplay: some View {

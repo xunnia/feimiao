@@ -109,8 +109,7 @@ struct HomeView: View {
     }
 
     var body: some View {
-        NavigationStack {
-            ScrollView {
+        ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
                     summaryCard
                     filterSegment
@@ -192,8 +191,7 @@ struct HomeView: View {
                 }
                 .presentationDetents([.medium])
             }
-            .toolbar(.hidden, for: .tabBar)
-        }
+        .toolbar(.hidden, for: .tabBar)
     }
 
     private var filterSegment: some View {
