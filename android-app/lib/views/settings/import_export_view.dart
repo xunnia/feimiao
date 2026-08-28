@@ -812,23 +812,12 @@ class _ActionCard extends StatelessWidget {
             const SizedBox(height: 12),
             Align(
               alignment: Alignment.centerRight,
-              child: SizedBox(
+              child: AppPillButton(
+                label: buttonLabel,
+                onPressed: onPressed,
                 width: 108,
                 height: 42,
-                child: OutlinedButton(
-                  onPressed: onPressed,
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: scheme.onSurface,
-                    backgroundColor: Colors.transparent,
-                    side: BorderSide(color: AppColors.hairline(scheme)),
-                    padding: const EdgeInsets.symmetric(horizontal: 16),
-                    textStyle: const TextStyle(
-                      fontSize: 15,
-                      fontWeight: FontWeight.w500,
-                    ),
-                  ),
-                  child: Text(buttonLabel),
-                ),
+                borderColor: AppColors.hairline(scheme),
               ),
             ),
           ],

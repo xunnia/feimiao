@@ -139,8 +139,25 @@ class _AiQuickEntryViewState extends State<AiQuickEntryView> {
       bool usedFallback = false;
       String fallbackHint = '';
 
-      if (aiConfig.hasKey) {
-        final consented = await ensureAiPrivacyConsent(context);
+      if (aiConfig.hasCredential) {
+        final skillEnabled = repo.aiSkillAllowsTool(
+          'ledger_assistant',
+          'create_transactions',
+        );
+        if (!skillEnabled) {
+          if (mounted) {
+            setState(() {
+              _loading = false;
+              _usedFallback = true;
+              _fallbackHint = '记账助手已关闭，已取消联网解析';
+            });
+          }
+          return;
+        }
+        final consented = await ensureAiPrivacyConsent(
+          context,
+          config: aiConfig,
+        );
         if (!consented) {
           if (mounted) {
             setState(() {
@@ -338,7 +355,7 @@ class _AiQuickEntryViewState extends State<AiQuickEntryView> {
   @override
   Widget build(BuildContext context) {
     final repo = context.watch<AppRepository>();
-    final hasKey = repo.hasAiApiKey;
+    final hasKey = repo.hasAiCredential;
     final entries = _entries;
     final scheme = Theme.of(context).colorScheme;
 
@@ -350,12 +367,12 @@ class _AiQuickEntryViewState extends State<AiQuickEntryView> {
         actions: [
           // 快捷跳转 AI 设置
           if (!hasKey)
-            TextButton(
+            AppPillButton(
+              label: '配置',
               onPressed: () => Navigator.push(
                 context,
                 AppPageRoute<void>(builder: (_) => const AiSettingView()),
               ),
-              child: const Text('配置'),
             ),
         ],
       ),
@@ -526,18 +543,14 @@ class _AiQuickEntryViewState extends State<AiQuickEntryView> {
                 const SizedBox(height: 16),
                 _QuickRefundCard(result: _pendingRefund!),
                 const SizedBox(height: 12),
-                FilledButton(
+                AppPillButton(
+                  width: double.infinity,
+                  height: 44,
+                  loading: _saving,
                   onPressed: _saving ? null : _saveAll,
-                  child: _saving
-                      ? const SizedBox(
-                          width: 18,
-                          height: 18,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2,
-                            color: Colors.white,
-                          ),
-                        )
-                      : const Text('附着到原订单'),
+                  label: '附着到原订单',
+                  fillColor: scheme.onSurface,
+                  foregroundColor: scheme.surface,
                 ),
               ],
 
@@ -558,20 +571,16 @@ class _AiQuickEntryViewState extends State<AiQuickEntryView> {
                 const SizedBox(height: 8),
 
                 // 全部保存按钮
-                FilledButton(
+                AppPillButton(
+                  width: double.infinity,
+                  height: 44,
+                  loading: _saving,
                   onPressed: (!_hasValidEntry || _saving) ? null : _saveAll,
-                  child: _saving
-                      ? const SizedBox(
-                          width: 18,
-                          height: 18,
-                          child: CircularProgressIndicator(
-                              strokeWidth: 2, color: Colors.white),
-                        )
-                      : Text(
-                          entries.length > 1
-                              ? '全部保存（${entries.length} 笔）'
-                              : '保存这笔',
-                        ),
+                  label: entries.length > 1
+                      ? '全部保存（${entries.length} 笔）'
+                      : '保存这笔',
+                  fillColor: scheme.onSurface,
+                  foregroundColor: scheme.surface,
                 ),
               ],
             ],

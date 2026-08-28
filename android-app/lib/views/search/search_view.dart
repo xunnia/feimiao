@@ -435,7 +435,8 @@ class _SearchViewState extends State<SearchView> {
           if (_hasFilter)
             Padding(
               padding: const EdgeInsets.symmetric(vertical: 8),
-              child: TextButton(
+              child: AppPillButton(
+                label: '清除',
                 onPressed: () {
                   FocusScope.of(context).unfocus();
                   setState(() {
@@ -448,7 +449,8 @@ class _SearchViewState extends State<SearchView> {
                   });
                   _runFilter();
                 },
-                child: const Text('清除'),
+                height: 32,
+                padding: const EdgeInsets.symmetric(horizontal: 12),
               ),
             ),
         ],

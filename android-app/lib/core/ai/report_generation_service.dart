@@ -5,13 +5,23 @@ import '../models/transaction_kind.dart';
 import '../models/transaction_record.dart';
 import '../money_format.dart';
 import '../statistics/statistics_engine.dart';
-import 'ai_provider_config.dart';
 import 'llm_entry_parser.dart' show sanitizeNoteForLlm;
 import 'llm_query.dart';
 import 'report_document.dart';
 import 'report_execution_fence.dart';
 
 typedef ReportStageCallback = Future<void> Function(String stage);
+
+class ReportJobConfigurationUnavailable implements Exception {
+  final String message;
+
+  const ReportJobConfigurationUnavailable([
+    this.message = '报告使用的服务商或模型已失效，请修复后重试',
+  ]);
+
+  @override
+  String toString() => message;
+}
 
 class ReportGenerationService {
   ReportGenerationService._();
@@ -30,8 +40,23 @@ class ReportGenerationService {
     if (!executionLease.matchesJob(jobId: job.id, jobUuid: job.uuid)) {
       throw const ReportGenerationInvalidated('report job lease mismatch');
     }
-    final config = repo.aiProviderConfigFor(AiTaskType.chatQuery);
-    if (!config.hasKey) {
+    // Jobs may run long after the user switches Chats. Always resolve from
+    // the provider/model/effort captured on the job, never from the current
+    // global chat selection.
+    final config = repo.aiProviderConfigForReportJob(job);
+    if (config == null) {
+      await repo.guardReportGeneration(
+        executionLease,
+        () => repo.updateReportJob(
+          job.id,
+          expectedUuid: job.uuid,
+          status: 'queued',
+          error: '报告使用的服务商或模型已失效，请修复后重试',
+        ),
+      );
+      throw const ReportJobConfigurationUnavailable();
+    }
+    if (!config.hasCredential) {
       await repo.guardReportGeneration(
         executionLease,
         () => repo.updateReportJob(
@@ -69,6 +94,16 @@ class ReportGenerationService {
     String answer;
     LlmQueryException? firstError;
     try {
+      // A scheduled worker has no foreground thinking object to timestamp.
+      // Persist the first model-processing moment once, so reopening Chats
+      // can show the same elapsed duration instead of starting from reopen.
+      await repo.guardReportGeneration(
+        executionLease,
+        () => repo.markReportJobModelStarted(
+          job.id,
+          expectedUuid: job.uuid,
+        ),
+      );
       answer = await LlmQuery.askReport(
         reportTitle: job.title,
         reportType: job.type,

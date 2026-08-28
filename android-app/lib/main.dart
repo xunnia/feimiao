@@ -8,6 +8,7 @@ import 'package:provider/provider.dart';
 
 import 'core/auto_record.dart';
 import 'core/ai/report_task_scheduler.dart';
+import 'core/ai/openai_codex_oauth.dart';
 import 'core/assets/repayment_reminder.dart';
 import 'core/haptics.dart';
 import 'core/widgets/widget_snapshot_service.dart';
@@ -20,17 +21,14 @@ import 'widgets/app_buttons.dart';
 import 'widgets/app_line_icon.dart';
 import 'widgets/app_toast.dart';
 import 'widgets/book_switch_chip.dart';
-import 'widgets/glass.dart';
-import 'widgets/pressable_scale.dart';
 import 'widgets/slidable_tracker.dart';
 import 'widgets/ios_dialogs.dart';
 import 'widgets/ios_form.dart';
 import 'widgets/ios_menu.dart';
 import 'views/books/book_sheet.dart';
-import 'views/home/ai_chat_panel.dart';
 import 'views/home/home_view.dart';
-import 'views/home/manual_add_sheet.dart';
 import 'views/home/record_input_bar.dart';
+import 'views/assistant/meow_assistant_view.dart';
 import 'views/savings/savings_goals_view.dart';
 import 'views/search/search_view.dart';
 import 'views/settings/accounts_view.dart';
@@ -83,6 +81,7 @@ Future<void> main() async {
       child: const QingJiApp(),
     ),
   );
+  _openAiOAuthWatcher.start(repo);
 
   // WorkManager / 通知通道初始化可能触发磁盘和 Binder I/O，不属于主页
   // 首帧的必要条件。等主页已经画出后再恢复后台报告，避免冷启动露出白屏。
@@ -178,7 +177,12 @@ Future<void> _startPostFrameServices(
       await repositoryReady;
       if (!repo.isFullyReady) return;
     }
-    if (await initialize()) await reschedule(repo);
+    if (await initialize()) {
+      await reschedule(repo);
+      if (repo.isInitialized) {
+        await ReportTaskScheduler.scheduleDueAiReports(repo);
+      }
+    }
   } catch (error) {
     // 后台报告恢复失败不能反过来影响首页；创建报告时仍会按需再次初始化。
     debugPrint('initialize deferred app services failed: $error');
@@ -254,6 +258,79 @@ class _RepaymentReminderWatcher with WidgetsBindingObserver {
 }
 
 final _repaymentReminderWatcher = _RepaymentReminderWatcher();
+
+/// OAuth opens the system browser, so Android can pause or recreate the
+/// activity before the browser reaches localhost. Check and recover the
+/// persisted callback listener whenever the app returns to the foreground.
+class _OpenAiOAuthWatcher with WidgetsBindingObserver {
+  bool _started = false;
+  AppRepository? _repo;
+  Future<void>? _recovering;
+
+  void start(AppRepository repo) {
+    if (_started) return;
+    _started = true;
+    _repo = repo;
+    WidgetsBinding.instance.addObserver(this);
+    unawaited(_recoverPending());
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      // Let the service health-check the existing listener first. Forcing a
+      // close/rebind on every resume creates a refusal window while Chrome
+      // may be returning the OAuth callback.
+      unawaited(_recoverPending());
+    }
+  }
+
+  Future<void> _recoverPending() {
+    final active = _recovering;
+    if (active != null) {
+      // A previous recovery may be waiting for the browser callback. The
+      // service health-check is already part of that same recovery; do not
+      // start a competing close/rebind while it is active.
+      return active;
+    }
+    final future = _recoverPendingInternal();
+    _recovering = future;
+    return future.whenComplete(() {
+      if (identical(_recovering, future)) _recovering = null;
+    });
+  }
+
+  Future<void> _recoverPendingInternal() async {
+    final repo = _repo;
+    if (repo == null) return;
+    try {
+      final available = await OpenAiCodexOAuth.service.resumePending();
+      if (!available) return;
+      // A pending flow without a provider id is not an account-settings flow
+      // (for example a future standalone OAuth consumer); leave its future to
+      // that caller instead of saving into an arbitrary account.
+      final providerId =
+          OpenAiCodexOAuth.service.pendingProviderId?.trim() ?? '';
+      if (providerId.isEmpty) return;
+      final tokens = await OpenAiCodexOAuth.service.waitForPendingCompletion();
+      if (tokens == null) return;
+      final models = await OpenAiCodexOAuth.service.fetchModels(tokens);
+      await repo.saveAiOAuthTokens(
+        providerId: providerId,
+        tokens: tokens,
+        models: models.map((model) => model.slug).toList(growable: false),
+      );
+    } catch (error, stackTrace) {
+      // The settings page also awaits the same completion and presents the
+      // actionable error. The global watcher must never surface an uncaught
+      // async exception over the home screen.
+      debugPrint('resume GPT OAuth flow failed: $error');
+      debugPrint('$stackTrace');
+    }
+  }
+}
+
+final _openAiOAuthWatcher = _OpenAiOAuthWatcher();
 
 class QingJiApp extends StatelessWidget {
   const QingJiApp({super.key});
@@ -395,6 +472,7 @@ class RootShellState extends State<RootShell>
                         excluding: _drawerCtl.value < 0.01,
                         child: _DrawerPanel(
                           onClose: _closeDrawer,
+                          onOpen: _openDrawer,
                           closed: _drawerCtl.value < 0.01,
                         ),
                       ),
@@ -736,10 +814,17 @@ class _DrawerPanel extends StatefulWidget {
   /// 关抽屉（收回主页面卡片）。
   final VoidCallback onClose;
 
+  /// Chats 页左上角需要重新打开的是真实主页抽屉。
+  final VoidCallback onOpen;
+
   /// 抽屉是否已完全关闭。面板常驻不销毁，关上时用它把「更多」折叠态收回去。
   final bool closed;
 
-  const _DrawerPanel({required this.onClose, required this.closed});
+  const _DrawerPanel({
+    required this.onClose,
+    required this.onOpen,
+    required this.closed,
+  });
 
   @override
   State<_DrawerPanel> createState() => _DrawerPanelState();
@@ -818,27 +903,8 @@ class _DrawerPanelState extends State<_DrawerPanel> {
   void _pushAssistant() {
     Navigator.of(context).push(
       AppPageRoute<void>(
-        builder: (_) => AiChatPanel(
-          fullScreen: true,
-          onSwitchToManual: _openManualFromDrawer,
-        ),
+        builder: (_) => MeowAssistantView(onOpenHomeDrawer: widget.onOpen),
       ),
-    );
-  }
-
-  void _openManualFromDrawer() {
-    if (Navigator.of(context).canPop()) {
-      Navigator.of(context).pop();
-    }
-    showManualAddSheet(
-      context,
-      fastSwitch: true,
-      onSwitchToAi: () {
-        Navigator.of(context, rootNavigator: true).pop();
-        Future<void>.delayed(const Duration(milliseconds: 28), () {
-          if (mounted) _pushAssistant();
-        });
-      },
     );
   }
 
@@ -889,23 +955,23 @@ class _DrawerPanelState extends State<_DrawerPanel> {
               // 对齐 Claude 的会话菜单：加星 / 编辑 / 改名 / 删除
               IosMenuItem(
                 label: b.starred ? '取消加星' : '加星',
-                icon: b.starred ? Icons.star : Icons.star_outline,
+                lineIcon: AppLineIcons.star,
                 onTap: () => repo.setBookStarred(b.id, !b.starred),
               ),
               IosMenuItem(
                 label: '编辑',
-                icon: Icons.edit_outlined,
+                lineIcon: AppLineIcons.pencil,
                 onTap: () => showBookSheet(context, edit: b),
               ),
               IosMenuItem(
                 label: '改名',
-                icon: Icons.drive_file_rename_outline,
+                lineIcon: AppLineIcons.pencil,
                 onTap: () => _showRenameBookDialog(b, repo),
               ),
               if (deletable)
                 IosMenuItem(
                   label: '删除',
-                  icon: Icons.delete_outline,
+                  lineIcon: AppLineIcons.trash,
                   destructive: true,
                   onTap: () => _confirmDeleteBook(b, repo),
                 ),
@@ -1231,21 +1297,11 @@ class _SearchIconButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return PressableScale(
+    return AppCircleButton(
+      icon: Icons.search,
+      semanticLabel: '搜索',
       onPressed: () => Navigator.of(context).push(
         AppPageRoute<void>(builder: (_) => const SearchView()),
-      ),
-      child: SizedBox(
-        width: 38,
-        height: 38,
-        child: GlassSurface(
-          circle: true,
-          blur: 0, // 纯色背景，模糊看不出来，省 GPU
-          child: Center(
-            child: Icon(Icons.search, size: 19, color: scheme.onSurfaceVariant),
-          ),
-        ),
       ),
     );
   }
@@ -1256,47 +1312,8 @@ class _MenuGlyphButton extends StatelessWidget {
   final VoidCallback onTap;
   const _MenuGlyphButton({required this.onTap});
 
-  Widget _bar(ColorScheme scheme, double w) => Container(
-        width: w,
-        height: 1.5,
-        decoration: BoxDecoration(
-          color: scheme.onSurfaceVariant,
-          borderRadius: BorderRadius.circular(1),
-        ),
-      );
-
   @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return PressableScale(
-      onPressed: onTap,
-      child: SizedBox(
-        width: 38,
-        height: 38,
-        // 统一玻璃圆钮 + 三条左对齐横线（最下一条半长）。
-        child: GlassSurface(
-          circle: true,
-          blur: 0, // 纯色背景，模糊看不出来，省 GPU
-          child: Center(
-            child: SizedBox(
-              width: 16,
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  _bar(scheme, 16),
-                  const SizedBox(height: 3),
-                  _bar(scheme, 16),
-                  const SizedBox(height: 3),
-                  _bar(scheme, 8),
-                ],
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
+  Widget build(BuildContext context) => AppDrawerButton(onPressed: onTap);
 }
 
 class _DrawerItem extends StatelessWidget {

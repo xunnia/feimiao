@@ -1,7 +1,6 @@
 // 性能压力测试：大数据量下的表现。
 // 生成 10 年、10 万条流水，验证关键路径性能。
 import 'dart:io';
-import 'dart:math' as math;
 
 import 'package:decimal/decimal.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -60,30 +59,29 @@ void main() {
         categoryIds.add(cat.id);
       }
 
-      // 3. 生成 1 万条流水（3 年，每天 ~9 条，实战级别）
+      // 3. 生成 1 万条流水（3 年，每天 ~9 条，实战级别）。
+      // 使用仓库已有的批量导入入口：逐笔 addTransaction 还会为每行
+      // 刷新余额快照、派生缓存和监听器，测到的是 UI 写路径而不是
+      // 10k 记录的读取性能，且会把这个基准拖过超时。
       sw.reset();
       final startDate = DateTime(2023, 1, 1);
       const totalTransactions = 10000;
-
+      final drafts = <TransactionDraft>[];
       for (int i = 0; i < totalTransactions; i++) {
         final daysOffset = (i * 1095) ~/ totalTransactions;
         final date = startDate.add(Duration(days: daysOffset));
         final amount = Decimal.parse('${10 + (i % 500)}');
         final categoryId = categoryIds[i % categoryIds.length];
-
-        await repo.addTransaction(
+        drafts.add(TransactionDraft(
           kind: TransactionKind.expense,
           amount: amount,
           accountId: accountId,
           date: date,
           categoryId: categoryId,
           note: i % 100 == 0 ? '压测记录 $i' : '',
-        );
-
-        if ((i + 1) % 2000 == 0) {
-          print('Generated ${i + 1} transactions in ${sw.elapsedMilliseconds}ms');
-        }
+        ));
       }
+      await repo.importTransactions(drafts);
       final generationTime = sw.elapsedMilliseconds;
       print('✓ Generated $totalTransactions transactions in ${generationTime}ms');
 

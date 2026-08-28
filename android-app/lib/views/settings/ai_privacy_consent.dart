@@ -7,17 +7,16 @@ import '../../widgets/ios_dialogs.dart';
 
 /// AI 隐私确认：走全局确认弹窗（2026-07-09 视觉升级批统一，
 /// 用户点名旧的 Material AlertDialog 丑）。
-Future<bool> ensureAiPrivacyConsent(BuildContext context) async {
+Future<bool> ensureAiPrivacyConsent(
+  BuildContext context, {
+  AiProviderConfig? config,
+}) async {
   final repo = context.read<AppRepository>();
-  if (repo.aiPrivacyAccepted) return true;
-  // 同意一次对所有路由生效，所以文案要列出所有已配置路由（记账/喵助手/报告）
-  // 的服务商，不能只写记账那一路。
-  final providerNames = <String>[];
-  for (final task in AiTaskType.values) {
-    final label = repo.aiProviderConfigFor(task).providerLabel;
-    if (!providerNames.contains(label)) providerNames.add(label);
+  final target = config ?? repo.aiProviderConfigFor(AiTaskType.chatQuery);
+  if (!target.hasCredential || repo.aiPrivacyAcceptedFor(target)) {
+    return target.hasCredential;
   }
-  final providerName = providerNames.join('、');
+  final providerName = target.providerLabel;
   final ok = await showConfirmDialog(
     context,
     title: '使用 AI 前请确认',
@@ -28,7 +27,7 @@ Future<bool> ensureAiPrivacyConsent(BuildContext context) async {
     cancelText: '暂不使用',
   );
   if (ok) {
-    await repo.setAiPrivacyAccepted(true);
+    await repo.setAiPrivacyAccepted(true, forConfig: target);
     return true;
   }
   return false;

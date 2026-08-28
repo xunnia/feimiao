@@ -29,9 +29,6 @@ void reportWorkerCallbackDispatcher() {
         readJobUuid: (_) async => lease.jobUuid,
       );
       repoReady = true;
-      // 隐私闸门：用户没同意 AI 隐私说明时，后台绝不把账本上下文发出去。
-      // 任务保持排队（不标失败、不弹 UI），等用户在前台确认后由面板续跑。
-      if (!repo.aiPrivacyAccepted) return true;
       final job = await repo.guardReportGeneration(
         lease,
         () => repo.reportJobById(jobId),
@@ -39,6 +36,14 @@ void reportWorkerCallbackDispatcher() {
       if (job == null || job.status == 'completed' || job.status == 'failed') {
         return true;
       }
+      // 隐私闸门：用户没同意当前任务实际接收方时，后台绝不把账本上下文发出去。
+      // 任务保持排队（不标失败、不弹 UI），等用户在前台确认后由面板续跑。
+      final config = repo.aiProviderConfigForReportJob(job);
+      if (!repo.aiSkillAllowsTool('report_writer', 'read_ledger')) {
+        return true;
+      }
+      if (config == null) return true;
+      if (!repo.aiPrivacyAcceptedFor(config)) return true;
       final report = await ReportGenerationService.generate(
         repo,
         job,
@@ -56,6 +61,10 @@ void reportWorkerCallbackDispatcher() {
     } on ReportGenerationInvalidated {
       // A restore committed a different database generation. This stale work
       // must finish successfully without touching or retrying against it.
+      return true;
+    } on ReportJobConfigurationUnavailable {
+      // The captured provider/model is unavailable. Keep the job queued until
+      // the user repairs that exact account instead of retrying another one.
       return true;
     } catch (error) {
       // Database/plugin startup failures are transient. Returning success here
@@ -197,6 +206,65 @@ class ReportTaskScheduler {
       );
     }
   }
+
+  /// Materialize due user-created schedules into the same durable report job
+  /// queue used by foreground Chats. Each schedule is advanced only after its
+  /// job is created, so opening the app twice cannot duplicate a report.
+  static Future<void> scheduleDueAiReports(AppRepository repo) async {
+    if (!isSupported) return;
+    // Keep a due schedule due while the user has intentionally disabled the
+    // report skill.  Once re-enabled, the next startup can materialize it
+    // without losing the scheduled occurrence.
+    if (!repo.aiSkillAllowsTool('report_writer', 'read_ledger')) return;
+    final due = await repo.dueAiReportSchedules();
+    final now = DateTime.now();
+    for (final schedule in due) {
+      final period = _schedulePeriod(schedule.periodKind, now);
+      try {
+        final job = await repo.createReportJobFromSchedule(
+          schedule: schedule,
+          periodStart: period.$1,
+          periodEnd: period.$2,
+          now: now,
+        );
+        if (job != null) await scheduleJobSilently(repo, job);
+      } catch (error) {
+        debugPrint('schedule due AI report failed: $error');
+      }
+    }
+  }
+
+  static Future<void> scheduleJobSilently(
+    AppRepository repo,
+    ReportJobEntity job,
+  ) =>
+      schedule(
+        repo,
+        job,
+        requestNotificationPermission: false,
+      );
+
+  static (DateTime, DateTime) _schedulePeriod(String kind, DateTime now) {
+    if (kind == 'weekly') {
+      final currentMonday = DateTime(now.year, now.month, now.day)
+          .subtract(Duration(days: now.weekday - 1));
+      final start = currentMonday.subtract(const Duration(days: 7));
+      // ReportGenerationService treats periodEnd as an inclusive civil day;
+      // the previous week's last day is Sunday, not the current Monday.
+      return (start, start.add(const Duration(days: 6)));
+    }
+    final start = DateTime(now.year, now.month, 1);
+    final end = start.subtract(const Duration(milliseconds: 1));
+    final previous = DateTime(start.year, start.month - 1, 1);
+    return (previous, end);
+  }
+
+  @visibleForTesting
+  static (DateTime, DateTime) schedulePeriodForTest(
+    String kind,
+    DateTime now,
+  ) =>
+      _schedulePeriod(kind, now);
 
   static Future<void> cancel(ReportJobEntity job) async {
     if (!isSupported) return;

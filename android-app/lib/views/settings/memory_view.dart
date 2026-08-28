@@ -116,9 +116,11 @@ class _MemoryRow extends StatelessWidget {
               ],
             ),
           ),
-          IconButton(
-            icon: Icon(Icons.close, size: 18, color: scheme.onSurfaceVariant),
-            tooltip: '删除这条记忆',
+          AppCircleButton.custom(
+            iconWidget: Icon(Icons.close, size: 18, color: scheme.onSurfaceVariant),
+            size: 30,
+            iconSize: 18,
+            semanticLabel: '删除这条记忆',
             onPressed: () async {
               final ok = await showConfirmDialog(
                 context,

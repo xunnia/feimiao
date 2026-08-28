@@ -18,9 +18,15 @@ class MeowInsights {
     final now = DateTime.now();
 
     // 1. 超预算
-    final budgetStatus = BudgetEngine.fromWindowResult(
-      repo.budgetForCalendarMonth(DateTime(now.year, now.month)),
-    );
+    // The assistant can be rendered before the repository has created or
+    // restored a book (for example on a first-run screenshot or cold start).
+    // BudgetWindowQuery intentionally rejects the sentinel id 0, so skip the
+    // budget insight until there is a real book rather than querying it.
+    final budgetStatus = repo.currentBookId > 0
+        ? BudgetEngine.fromWindowResult(
+            repo.budgetForCalendarMonth(DateTime(now.year, now.month)),
+          )
+        : null;
     if (budgetStatus != null && budgetStatus.remaining < Decimal.zero) {
       return '这个月有点超预算啦,剩下的日子省着点喵~有啥想问的随时说。';
     }

@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 import '../data/app_repository.dart';
 import '../core/ai/ai_provider_config.dart';
 import 'app_buttons.dart';
+import '../views/common/app_sheet.dart';
 
 /// Effort 滑块选择器（半屏弹窗）
 ///
@@ -11,13 +12,12 @@ import 'app_buttons.dart';
 /// - Faster/Smarter 标签在滑条左右上方
 /// - 滑条：较粗轨道、带圆角的方形滑块、深灰已过/浅灰未到、档位刻度圆点
 /// - Ultra 专属：紫色渐变动画
-/// - 档位：Low → Medium → High → Extra → Max → Ultra (共6档)
+/// - 档位：Low → Medium → High → Extra → Max → Ultra
 Future<void> showEffortSliderSheet(BuildContext context) async {
-  await showModalBottomSheet(
-    context: context,
-    isScrollControlled: true,
-    backgroundColor: Colors.transparent,
-    builder: (_) => const _EffortSliderSheet(),
+  await showBlurSheet<void>(
+    context,
+    radius: 28,
+    child: const _EffortSliderSheet(),
   );
 }
 
@@ -30,7 +30,7 @@ class _EffortSliderSheet extends StatefulWidget {
 
 class _EffortSliderSheetState extends State<_EffortSliderSheet>
     with SingleTickerProviderStateMixin {
-  late int _value; // 0=Low, 1=Medium, 2=High, 3=Extra, 4=Max, 5=Ultra
+  late int _value;
   late AnimationController _ultraAnimController;
 
   static const _efforts = [
@@ -42,20 +42,28 @@ class _EffortSliderSheetState extends State<_EffortSliderSheet>
     AiReasoningEffort.ultra,
   ];
 
-  static const _labels = ['Low', 'Medium', 'High', 'Extra', 'Max', 'Ultra'];
+  static const _labels = [
+    'Low',
+    'Medium',
+    'High',
+    'Extra',
+    'Max',
+    'Ultracode',
+  ];
 
   @override
   void initState() {
     super.initState();
     final repo = context.read<AppRepository>();
     final current = repo.chatReasoningEffort;
-    _value = _efforts.indexOf(current).clamp(0, 5);
+    _value = _efforts.indexOf(current);
+    if (_value < 0) _value = 0;
 
     _ultraAnimController = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 2000),
     );
-    if (_value == 5) {
+    if (_value == _efforts.length - 1) {
       _ultraAnimController.repeat();
     }
   }
@@ -67,10 +75,10 @@ class _EffortSliderSheetState extends State<_EffortSliderSheet>
   }
 
   void _onChange(double v) {
-    final newValue = v.round().clamp(0, 5);
+    final newValue = v.round().clamp(0, _efforts.length - 1);
     if (newValue != _value) {
       setState(() => _value = newValue);
-      if (newValue == 5) {
+      if (newValue == _efforts.length - 1) {
         _ultraAnimController.repeat();
       } else {
         _ultraAnimController.stop();
@@ -87,7 +95,7 @@ class _EffortSliderSheetState extends State<_EffortSliderSheet>
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final isUltra = _value == 5;
+    final isUltra = _value == _efforts.length - 1;
 
     return GestureDetector(
       onTap: () => Navigator.of(context).pop(),
@@ -166,7 +174,8 @@ class _EffortSliderSheetState extends State<_EffortSliderSheet>
                               'Smarter',
                               style: TextStyle(
                                 fontSize: 12,
-                                color: scheme.onSurfaceVariant,
+                                color: scheme.onSurfaceVariant
+                                    .withValues(alpha: 0.48),
                               ),
                             ),
                           ],
@@ -202,7 +211,7 @@ class _EffortSliderSheetState extends State<_EffortSliderSheet>
       height: 48,
       child: SliderTheme(
         data: SliderThemeData(
-          trackHeight: 6,
+          trackHeight: 7.2,
           thumbShape: const _SquareThumbShape(size: 20),
           overlayShape: SliderComponentShape.noOverlay,
           activeTrackColor: isUltra
@@ -212,8 +221,7 @@ class _EffortSliderSheetState extends State<_EffortSliderSheet>
           thumbColor: scheme.surface,
           tickMarkShape: const _DotTickMarkShape(),
           activeTickMarkColor: Colors.transparent,
-          inactiveTickMarkColor:
-              scheme.onSurfaceVariant.withValues(alpha: 0.3),
+          inactiveTickMarkColor: scheme.onSurfaceVariant.withValues(alpha: 0.3),
         ),
         child: Stack(
           children: [
@@ -226,7 +234,7 @@ class _EffortSliderSheetState extends State<_EffortSliderSheet>
                     return CustomPaint(
                       painter: _UltraGradientPainter(
                         progress: _ultraAnimController.value,
-                        trackHeight: 6,
+                        trackHeight: 7.2,
                       ),
                     );
                   },
@@ -236,8 +244,8 @@ class _EffortSliderSheetState extends State<_EffortSliderSheet>
             Slider(
               value: _value.toDouble(),
               min: 0,
-              max: 5,
-              divisions: 5,
+              max: (_efforts.length - 1).toDouble(),
+              divisions: _efforts.length - 1,
               onChanged: _onChange,
             ),
           ],

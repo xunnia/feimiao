@@ -31,6 +31,7 @@ import '../../widgets/pressable_scale.dart';
 import '../../widgets/settings_ui.dart';
 import '../../widgets/sliding_segment.dart';
 import 'category_txns_view.dart';
+import '../common/app_sheet.dart';
 import '../../widgets/app_page_route.dart';
 
 /// 图表 Y 轴的「漂亮步长」：把最大值凑成 100/200/500/1000/2000/5000… 这类整齐刻度。
@@ -874,14 +875,11 @@ class _ManagedCards extends StatelessWidget {
   }
 
   /// 图表库弹层：开关每张卡（开=追加到底部，关=移除）。全维度同一份配置。
-  static void showCardLibrary(BuildContext context, AppRepository repo) {
-    showModalBottomSheet<void>(
-      context: context,
-      backgroundColor: Theme.of(context).colorScheme.surface,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      builder: (ctx) {
+  static Future<void> showCardLibrary(
+      BuildContext context, AppRepository repo) async {
+    await appSheet<void>(
+      context,
+      child: Builder(builder: (ctx) {
         var localVisible = visibleKeys(repo);
         return StatefulBuilder(
           builder: (ctx2, setLocal) {
@@ -920,7 +918,7 @@ class _ManagedCards extends StatelessWidget {
             );
           },
         );
-      },
+      }),
     );
   }
 }

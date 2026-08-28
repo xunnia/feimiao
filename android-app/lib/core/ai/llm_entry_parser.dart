@@ -1,13 +1,18 @@
 import 'dart:convert';
+import 'dart:io' show File;
+import 'dart:math' as math;
 
 import 'package:decimal/decimal.dart';
+import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:http/http.dart' as http;
 
 import '../models/transaction_kind.dart';
+import '../media/chat_attachment.dart';
 import '../transaction_time.dart';
 import 'ai_provider_config.dart';
 import 'entry_sanity.dart';
 import 'natural_language_entry_parser.dart';
+import 'openai_codex_oauth.dart';
 
 /// DeepSeek 大模型解析器：把一句话拆成多笔 [ParsedEntry]。
 ///
@@ -17,6 +22,48 @@ class LlmEntryParser {
   LlmEntryParser._();
 
   static const _timeoutSeconds = 20;
+
+  // The public Chat Completions `response_format=json_object` shape is not
+  // accepted by ChatGPT's private Codex Responses endpoint. The official
+  // client uses `text.format=json_schema`; keeping the schema here lets the
+  // homepage record flow use the same authenticated GPT models as Chats.
+  static const Map<String, dynamic> _recordOutputSchema = {
+    'type': 'object',
+    'additionalProperties': false,
+    'properties': {
+      'intent': {
+        'type': 'string',
+        'enum': ['record', 'query', 'chat'],
+      },
+      'entries': {
+        'type': 'array',
+        'items': {
+          'type': 'object',
+          'additionalProperties': false,
+          'properties': {
+            'amount': {'type': 'number'},
+            'kind': {
+              'type': 'string',
+              'enum': ['expense', 'income'],
+            },
+            'categoryKey': {'type': 'string'},
+            'date': {'type': 'string'},
+            'note': {'type': 'string'},
+            'confidence': {'type': 'number'},
+          },
+          'required': [
+            'amount',
+            'kind',
+            'categoryKey',
+            'date',
+            'note',
+            'confidence',
+          ],
+        },
+      },
+    },
+    'required': ['intent', 'entries'],
+  };
 
   // ---------------------------------------------------------------------------
   // 公开入口
@@ -39,8 +86,14 @@ class LlmEntryParser {
     List<({String phrase, String categoryKey})> learnedHints = const [],
     DateTime? now,
     bool fromScreenshot = false,
+    bool forceRecord = false,
+    String? imagePath,
+    List<String> imagePaths = const [],
+    List<ChatAttachment> attachments = const [],
   }) async {
-    final provider = _resolveConfig(apiKey: apiKey, config: config);
+    final provider = await OpenAiCodexOAuth.ensureFreshConfig(
+      _resolveConfig(apiKey: apiKey, config: config),
+    );
     final today = now ?? DateTime.now();
     String fmt(DateTime d) =>
         '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
@@ -93,6 +146,13 @@ ${hints.map((h) => '${h.phrase}→${h.categoryKey}').join('、')}''';
 输入：这个月吃饭花了多少
 输出：{"intent":"query","entries":[]}''';
 
+    const forcedRecordExtra = '''
+
+【本次来自首页记账入口】
+- 用户此处是在记录收支，不提供闲聊或查账能力；intent 必须输出 "record"。
+- 像“失业金到账 2250”“补贴入账 500”“13号收款 300”都是收入记录；提取金额、收入分类和日期。
+- 如果金额或信息不完整，仍输出 intent="record"，entries 可为空；不要改成 query 或 chat。''';
+
     // 截图模式:OCR 文本含界面噪声,加一段专门的提取规则。
     const screenshotExtra = '''
 
@@ -109,9 +169,33 @@ ${hints.map((h) => '${h.phrase}→${h.categoryKey}').join('、')}''';
   例：「舒肤佳沐浴露…¥32.04…维达抽纸…¥15.9」必须记成 舒肤佳=32.04、维达=15.9，**不要**错位成维达=32.04。
 - 能识别交易时间（如 2026-06-20 12:30）就输出完整日期和时分；只有日期时只输出日期；识别不到用今天。
 - 普通单笔支付页就只记一笔。''';
-    final sys = fromScreenshot ? systemPrompt + screenshotExtra : systemPrompt;
+    final sys =
+        (fromScreenshot ? systemPrompt + screenshotExtra : systemPrompt) +
+            (forceRecord ? forcedRecordExtra : '');
     final userContent =
         fromScreenshot ? '下面是支付/账单截图的 OCR 文字，请从中提取交易：\n\n$text' : text;
+    final allImagePaths = <String>[
+      if (imagePath?.trim().isNotEmpty == true) imagePath!.trim(),
+      ...imagePaths.map((item) => item.trim()).where((item) => item.isNotEmpty),
+    ];
+    final imageDataUris = <String>[
+      for (final path in allImagePaths)
+        if (await _imageDataUri(path) case final String uri) uri,
+    ];
+    final attachmentParts = <Map<String, dynamic>>[
+      for (final uri in imageDataUris)
+        {
+          'type': 'image_url',
+          'image_url': {'url': uri},
+        },
+      ...await _chatAttachmentParts(attachments),
+    ];
+    final messageContent = attachmentParts.isEmpty
+        ? userContent
+        : <Map<String, dynamic>>[
+            {'type': 'text', 'text': userContent},
+            ...attachmentParts,
+          ];
 
     // 兼容模型回退（对齐 llm_query 的 _postWithModelFallback）：
     // 首选模型 400/404 或报模型不存在时，换下一个候选模型重试。
@@ -121,9 +205,10 @@ ${hints.map((h) => '${h.phrase}→${h.categoryKey}').join('、')}''';
         'model': model,
         'messages': [
           {'role': 'system', 'content': sys},
-          {'role': 'user', 'content': userContent},
+          {'role': 'user', 'content': messageContent},
         ],
         'response_format': {'type': 'json_object'},
+        'response_schema': _recordOutputSchema,
         'temperature': 0.2, // 抽取类任务调低，减少同句不同解析的随机性
         'stream': false,
       },
@@ -140,7 +225,7 @@ ${hints.map((h) => '${h.phrase}→${h.categoryKey}').join('、')}''';
     // 意图：截图一律记账；否则读模型给的 intent，缺省/拿不准当 record。
     final intentStr = (parsed['intent'] as String?)?.toLowerCase();
     final LlmIntent intent;
-    if (fromScreenshot) {
+    if (fromScreenshot || forceRecord) {
       intent = LlmIntent.record;
     } else if (intentStr == 'query') {
       intent = LlmIntent.query;
@@ -176,7 +261,9 @@ ${hints.map((h) => '${h.phrase}→${h.categoryKey}').join('、')}''';
     AiProviderConfig? config,
   }) async {
     if (items.isEmpty) return const {};
-    final provider = _resolveConfig(apiKey: apiKey, config: config);
+    final provider = await OpenAiCodexOAuth.ensureFreshConfig(
+      _resolveConfig(apiKey: apiKey, config: config),
+    );
     final catList = categories.map((c) => '${c.key}:${c.name}').join('、');
     final kindName = kind == TransactionKind.income ? '收入' : '支出';
     final fallbackKey =
@@ -230,15 +317,44 @@ $catList
   }) async {
     LlmParseException? lastError;
     final models = provider.modelCandidates;
+    var activeProvider = provider;
+    var unauthorizedRetried = false;
+    var initialNetworkRetried = false;
     for (final model in models) {
-      try {
-        return await _postChatContent(
-          provider: provider,
-          body: bodyForModel(model),
-        );
-      } on LlmParseException catch (e) {
-        lastError = e;
-        if (model == models.last || !_shouldRetryWithCompatModel(e)) rethrow;
+      while (true) {
+        try {
+          return await _postChatContent(
+            provider: activeProvider,
+            body: bodyForModel(model),
+          );
+        } on LlmParseException catch (e) {
+          if (_shouldRetryInitialNetwork(
+            e,
+            alreadyRetried: initialNetworkRetried,
+          )) {
+            initialNetworkRetried = true;
+            await Future<void>.delayed(const Duration(milliseconds: 180));
+            continue;
+          }
+          if (!unauthorizedRetried &&
+              e.statusCode == 401 &&
+              activeProvider.isOpenAiCodexOAuth) {
+            try {
+              activeProvider = await OpenAiCodexOAuth.service
+                  .refreshAfterUnauthorized(activeProvider);
+              unauthorizedRetried = true;
+              continue;
+            } on OpenAiCodexOAuthException catch (refreshError) {
+              throw LlmParseException(
+                'GPT Token 刷新失败：${refreshError.message}',
+                statusCode: refreshError.statusCode,
+              );
+            }
+          }
+          lastError = e;
+          if (model == models.last || !_shouldRetryWithCompatModel(e)) rethrow;
+          break;
+        }
       }
     }
     throw lastError ?? const LlmParseException('未知错误');
@@ -254,6 +370,21 @@ $catList
         m.contains('parameter');
   }
 
+  static bool _shouldRetryInitialNetwork(
+    LlmParseException error, {
+    required bool alreadyRetried,
+  }) =>
+      !alreadyRetried &&
+      error.statusCode == null &&
+      error.message.startsWith('网络请求失败');
+
+  @visibleForTesting
+  static bool shouldRetryInitialNetworkForTest(
+    LlmParseException error, {
+    required bool alreadyRetried,
+  }) =>
+      _shouldRetryInitialNetwork(error, alreadyRetried: alreadyRetried);
+
   static Future<String> _postChatContent({
     required AiProviderConfig provider,
     required Map<String, dynamic> body,
@@ -263,24 +394,23 @@ $catList
     // Claude 格式转换
     var requestBody = body;
     var uri = provider.chatCompletionsUri;
-    if (provider.isClaudeModel) {
+    if (provider.shouldUseClaudeMessages) {
       requestBody = _convertToClaudeFormat(body, provider);
       uri = provider.messagesUri;
+    } else if (provider.shouldUseResponses) {
+      requestBody = _responsesBodyFromChatBody(body, provider);
+      uri = provider.responsesUri;
     }
+    // `response_schema` is an internal conversion hint and must never leak to
+    // Chat Completions/Claude relays that do not know this field.
+    requestBody = Map<String, dynamic>.from(requestBody)
+      ..remove('response_schema');
 
+    final client = http.Client();
     try {
-      final headers = <String, String>{
-        'Content-Type': 'application/json',
-      };
+      final headers = provider.authHeaders();
 
-      if (provider.isClaudeModel) {
-        headers['x-api-key'] = provider.apiKey;
-        headers['anthropic-version'] = '2023-06-01';
-      } else {
-        headers['Authorization'] = 'Bearer ${provider.apiKey}';
-      }
-
-      response = await http
+      response = await client
           .post(
             uri,
             headers: headers,
@@ -289,6 +419,8 @@ $catList
           .timeout(const Duration(seconds: _timeoutSeconds));
     } catch (e) {
       throw LlmParseException('网络请求失败：$e');
+    } finally {
+      client.close();
     }
 
     // 用 bodyBytes 显式按 UTF-8 解码：响应头不带 charset 时 .body 按
@@ -301,7 +433,22 @@ $catList
       );
     }
 
-    // 解析响应
+    if (provider.shouldUseResponses) {
+      try {
+        final text = provider.isOpenAiCodexOAuth
+            ? _extractResponsesSseText(bodyText)
+            : _extractResponsesText(jsonDecode(bodyText));
+        if (text.trim().isEmpty) {
+          throw const LlmParseException('Responses 响应中未找到 text 内容');
+        }
+        return text;
+      } catch (e) {
+        if (e is LlmParseException) rethrow;
+        throw LlmParseException('Responses 响应结构异常：$e');
+      }
+    }
+
+    // 解析 Chat/Claude 响应
     late Map<String, dynamic> outer;
     try {
       outer = jsonDecode(bodyText) as Map<String, dynamic>;
@@ -310,7 +457,7 @@ $catList
     }
 
     // Claude 格式：content[0].text
-    if (provider.isClaudeModel) {
+    if (provider.shouldUseClaudeMessages) {
       try {
         final content = outer['content'] as List;
         for (final block in content) {
@@ -332,6 +479,128 @@ $catList
     }
   }
 
+  static Map<String, dynamic> _responsesBodyFromChatBody(
+    Map<String, dynamic> chatBody,
+    AiProviderConfig config,
+  ) {
+    final instructions = <String>[];
+    final input = <Map<String, dynamic>>[];
+    final messages = chatBody['messages'];
+    if (messages is List) {
+      for (final item in messages) {
+        if (item is! Map) continue;
+        final role = (item['role'] as String?)?.trim().toLowerCase() ?? 'user';
+        final rawContent = item['content'];
+        final content = _stringContent(rawContent).trim();
+        if (content.isEmpty && rawContent is! List) continue;
+        if (role == 'system' || role == 'developer') {
+          instructions.add(content);
+          continue;
+        }
+        input.add({
+          'type': 'message',
+          'role': role == 'assistant' ? 'assistant' : 'user',
+          'content': _convertOpenAiContentToResponses(
+            rawContent,
+            assistant: role == 'assistant',
+          ),
+        });
+      }
+    }
+    final instructionText = instructions.join('\n\n').trim();
+    final body = <String, dynamic>{
+      'model': chatBody['model'],
+      'instructions': instructionText.isEmpty
+          ? 'You are a helpful assistant.'
+          : instructionText,
+      'input': input,
+      'store': false,
+      'stream': config.isOpenAiCodexOAuth,
+    };
+    final effort = config.reasoningEffort.codexResponsesApiValue;
+    if (effort != null) body['reasoning'] = {'effort': effort};
+    final responseFormat = chatBody['response_format'];
+    if (responseFormat is Map && responseFormat['type'] == 'json_object') {
+      final schema = chatBody['response_schema'];
+      if (schema is Map) {
+        body['text'] = {
+          'format': {
+            'type': 'json_schema',
+            'name': 'codex_output_schema',
+            'strict': true,
+            'schema': Map<String, dynamic>.from(schema),
+          },
+        };
+      }
+    }
+    return body;
+  }
+
+  static String _extractResponsesSseText(String body) {
+    final buffer = StringBuffer();
+    String? completed;
+    for (final line in const LineSplitter().convert(body)) {
+      if (!line.startsWith('data:')) continue;
+      final data = line.substring(5).trimLeft();
+      if (data == '[DONE]') break;
+      try {
+        final decoded = jsonDecode(data);
+        if (decoded is Map) {
+          final event = Map<String, dynamic>.from(decoded);
+          final type = event['type']?.toString().toLowerCase() ?? '';
+          if (type == 'response.failed') {
+            throw LlmParseException(
+                'Responses 生成失败：${event['response'] ?? ''}');
+          }
+          if (type == 'response.output_text.done') {
+            final text = event['text'];
+            if (text is String && text.trim().isNotEmpty) completed = text;
+          } else if (type == 'response.completed') {
+            final response = event['response'];
+            if (response is Map) {
+              final text = _extractResponsesText(
+                Map<String, dynamic>.from(response),
+              );
+              if (text.isNotEmpty) completed = text;
+            }
+          }
+          final delta = event['delta'];
+          if (delta is String && delta.isNotEmpty) buffer.write(delta);
+        }
+      } on LlmParseException {
+        rethrow;
+      } catch (_) {
+        // Ignore vendor-specific SSE comments/events that are not JSON.
+      }
+    }
+    final result = buffer.toString().trim();
+    return result.isNotEmpty ? result : (completed ?? '');
+  }
+
+  static String _extractResponsesText(Object? decoded) {
+    if (decoded is! Map) return '';
+    final outer = Map<String, dynamic>.from(decoded);
+    final outputText = outer['output_text'];
+    if (outputText is String && outputText.trim().isNotEmpty) return outputText;
+    final buffer = StringBuffer();
+    void walk(Object? value) {
+      if (value is Map) {
+        final type = value['type']?.toString();
+        final text = value['text'];
+        if ((type == 'output_text' || type == 'text') && text is String) {
+          if (text.trim().isNotEmpty) buffer.writeln(text.trim());
+        }
+        walk(value['content']);
+        walk(value['output']);
+      } else if (value is List) {
+        for (final item in value) walk(item);
+      }
+    }
+
+    walk(outer['output']);
+    return buffer.toString().trim();
+  }
+
   // ---------------------------------------------------------------------------
   // 内部转换
   // ---------------------------------------------------------------------------
@@ -342,8 +611,15 @@ $catList
   }) {
     final provider =
         config ?? AiProviderConfig.deepSeek(apiKey: apiKey?.trim() ?? '');
-    if (!provider.hasKey) {
-      throw LlmParseException('${provider.providerLabel} API Key 未配置');
+    if (!provider.hasCredential) {
+      throw LlmParseException(
+          '${provider.providerLabel} API Key 或 OAuth 凭据未配置');
+    }
+    if (!provider.hasBaseUrl) {
+      throw LlmParseException('${provider.providerLabel} 基础地址未配置');
+    }
+    if (!provider.hasModel) {
+      throw LlmParseException('${provider.providerLabel} 模型未配置');
     }
     return provider;
   }
@@ -400,6 +676,43 @@ $catList
   }
 }
 
+List<Map<String, dynamic>> _convertOpenAiContentToResponses(
+  Object? content, {
+  required bool assistant,
+}) {
+  if (content is! List) {
+    return [
+      {
+        'type': assistant ? 'output_text' : 'input_text',
+        'text': content?.toString() ?? '',
+      },
+    ];
+  }
+  return [
+    for (final part in content)
+      if (part is Map && part['type'] == 'text')
+        {
+          'type': assistant ? 'output_text' : 'input_text',
+          'text': part['text']?.toString() ?? '',
+        }
+      else if (part is Map && part['type'] == 'image_url')
+        {
+          'type': 'input_image',
+          'image_url':
+              (part['image_url'] is Map ? part['image_url']['url'] : null)
+                  ?.toString(),
+        }
+      else if (part is Map && part['type'] == 'file')
+        {
+          'type': 'input_file',
+          'filename': (part['file'] is Map ? part['file']['filename'] : null)
+              ?.toString(),
+          'file_data': (part['file'] is Map ? part['file']['file_data'] : null)
+              ?.toString(),
+        },
+  ];
+}
+
 /// 备注拼进 LLM 上下文（「日期|收支|分类|金额|备注」竖线对齐格式）前的清洗：
 /// 换行/回车换成空格、竖线（半角 | 与全角 ｜）换成 ／，防止用户备注里的
 /// 换行或竖线伪造出新的账目行/列，注入假数据误导 AI。
@@ -431,6 +744,50 @@ class LlmParseException implements Exception {
 }
 
 /// 将 OpenAI 格式的请求体转换为 Claude 格式
+Future<String?> _imageDataUri(String? imagePath) async {
+  final path = imagePath?.trim() ?? '';
+  if (path.isEmpty) return null;
+  final file = File(path);
+  if (!await file.exists()) {
+    throw LlmParseException('图片文件不存在');
+  }
+  final bytes = await file.readAsBytes();
+  if (bytes.isEmpty) throw const LlmParseException('图片文件为空');
+  final ext = path.split('.').last.toLowerCase();
+  final mime = switch (ext) {
+    'png' => 'image/png',
+    'webp' => 'image/webp',
+    'gif' => 'image/gif',
+    _ => 'image/jpeg',
+  };
+  return 'data:$mime;base64,${base64Encode(bytes)}';
+}
+
+Future<List<Map<String, dynamic>>> _chatAttachmentParts(
+  Iterable<ChatAttachment> attachments,
+) async {
+  final parts = <Map<String, dynamic>>[];
+  for (final attachment in attachments) {
+    final file = File(attachment.path);
+    if (!await file.exists()) throw LlmParseException('附件文件不存在');
+    final bytes = await file.readAsBytes();
+    if (bytes.isEmpty) throw const LlmParseException('附件文件为空');
+    final dataUri = 'data:${attachment.mimeType};base64,${base64Encode(bytes)}';
+    if (attachment.isImage) {
+      parts.add({
+        'type': 'image_url',
+        'image_url': {'url': dataUri},
+      });
+    } else {
+      parts.add({
+        'type': 'file',
+        'file': {'filename': attachment.name, 'file_data': dataUri},
+      });
+    }
+  }
+  return parts;
+}
+
 Map<String, dynamic> _convertToClaudeFormat(
   Map<String, dynamic> openaiBody,
   AiProviderConfig config,
@@ -450,14 +807,23 @@ Map<String, dynamic> _convertToClaudeFormat(
     if (role == 'system') {
       systemMessages.add(_stringContent(content));
     } else {
-      userMessages.add(msg);
+      userMessages.add({
+        ...msg,
+        'content': _convertOpenAiContentToClaude(content),
+      });
     }
   }
+
+  final budgetTokens = config.reasoningEffort.claudeBudgetTokens;
+  final requestedMaxTokens = (openaiBody['max_tokens'] as int?) ?? 4096;
+  final maxTokens = budgetTokens == null
+      ? requestedMaxTokens
+      : math.max(requestedMaxTokens, budgetTokens + 4096);
 
   final claudeBody = <String, dynamic>{
     'model': openaiBody['model'],
     'messages': userMessages,
-    'max_tokens': 4096,
+    'max_tokens': maxTokens,
   };
 
   // 合并所有 system prompt
@@ -466,23 +832,69 @@ Map<String, dynamic> _convertToClaudeFormat(
   }
 
   // thinking 参数映射
-  if (config.reasoningEffort != AiReasoningEffort.none) {
-    final budgetTokens = switch (config.reasoningEffort) {
-      AiReasoningEffort.minimal => 1024,
-      AiReasoningEffort.low => 4096,
-      AiReasoningEffort.medium => 8192,
-      AiReasoningEffort.high => 16384,
-      AiReasoningEffort.xhigh => 32768,
-      AiReasoningEffort.ultra => 65536,
-      _ => 8192,
-    };
+  if (budgetTokens != null) {
     claudeBody['thinking'] = {
       'type': 'enabled',
       'budget_tokens': budgetTokens,
     };
+    claudeBody['temperature'] = 1;
   }
 
   return claudeBody;
+}
+
+Object _convertOpenAiContentToClaude(Object? content) {
+  if (content is! List) return content ?? '';
+  return [
+    for (final part in content)
+      if (part is Map) ...[
+        if (part['type'] == 'text')
+          {'type': 'text', 'text': part['text']?.toString() ?? ''}
+        else if (part['type'] == 'image_url')
+          {
+            'type': 'image',
+            'source': {
+              'type': 'base64',
+              'media_type': _mimeFromDataUri(
+                (part['image_url'] is Map ? part['image_url']['url'] : null)
+                    ?.toString(),
+              ),
+              'data': _base64FromDataUri(
+                (part['image_url'] is Map ? part['image_url']['url'] : null)
+                    ?.toString(),
+              ),
+            },
+          }
+        else if (part['type'] == 'file')
+          {
+            'type': 'document',
+            'source': {
+              'type': 'base64',
+              'media_type': _mimeFromDataUri(
+                (part['file'] is Map ? part['file']['file_data'] : null)
+                    ?.toString(),
+              ),
+              'data': _base64FromDataUri(
+                (part['file'] is Map ? part['file']['file_data'] : null)
+                    ?.toString(),
+              ),
+            },
+            'title': (part['file'] is Map ? part['file']['filename'] : null)
+                ?.toString(),
+          },
+      ],
+  ];
+}
+
+String _mimeFromDataUri(String? uri) {
+  final match = RegExp(r'^data:([^;]+);base64,').firstMatch(uri ?? '');
+  return match?.group(1) ?? 'image/jpeg';
+}
+
+String _base64FromDataUri(String? uri) {
+  final value = uri ?? '';
+  final comma = value.indexOf(',');
+  return comma < 0 ? value : value.substring(comma + 1);
 }
 
 /// 辅助函数：从 content 提取字符串
@@ -497,4 +909,3 @@ String _stringContent(dynamic content) {
   }
   return '';
 }
-

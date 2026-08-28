@@ -1,5 +1,14 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.INTERNET"/>
+    <!-- GPT OAuth needs a short-lived foreground service while Chrome follows
+         the localhost callback. Without it Android may reclaim the paused
+         Flutter Activity and Chrome receives ERR_CONNECTION_REFUSED. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC"/>
+    <!-- Claude 风格加号面板：读取近期图片缩略图；photo_manager 会按系统版本申请实际权限。 -->
+    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES"/>
+    <uses-permission android:name="android.permission.READ_MEDIA_VISUAL_USER_SELECTED"/>
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32"/>
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
     <!-- App 内检查更新：下载新 APK 后调系统安装器覆盖安装。 -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES"/>
@@ -11,6 +20,7 @@
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher_legacy"
         android:roundIcon="@mipmap/ic_launcher_legacy"
+        android:networkSecurityConfig="@xml/oauth_network_security_config"
         android:allowBackup="false"
         android:fullBackupContent="false"
         android:dataExtractionRules="@xml/data_extraction_rules">
@@ -106,6 +116,13 @@
                 <action android:name="android.service.notification.NotificationListenerService"/>
             </intent-filter>
         </service>
+
+        <service
+            android:name=".OAuthKeepAliveService"
+            android:exported="false"
+            android:stopWithTask="false"
+            android:process=":oauth"
+            android:foregroundServiceType="dataSync" />
 
         <!-- 还款提醒本地通知：flutter_local_notifications v16+ 起不再自带
              这两个 receiver，靠 zonedSchedule 排的通知要靠它俩才能真正

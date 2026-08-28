@@ -113,7 +113,7 @@ class _RecordInputBarState extends State<RecordInputBar> {
         padding: const EdgeInsets.fromLTRB(12, 6, 12, 10),
         child: AppGlassInputShell(
           key: const ValueKey('home-record-input-shell'),
-          padding: const EdgeInsets.fromLTRB(14, 14, 10, 10),
+          padding: AppGlassInputShell.standardPadding,
           child: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -125,10 +125,8 @@ class _RecordInputBarState extends State<RecordInputBar> {
                   padding: const EdgeInsets.only(bottom: 2),
                   child: Text(
                     '记一记',
-                    style: TextStyle(
-                      fontSize: 17,
-                      color: scheme.onSurfaceVariant.withValues(alpha: 0.55),
-                    ),
+                    key: const ValueKey('home-record-input-hint'),
+                    style: AppGlassInputShell.standardHintStyle(scheme),
                   ),
                 ),
               ),
@@ -149,6 +147,7 @@ class _RecordInputBarState extends State<RecordInputBar> {
                   const SizedBox(width: 6),
                   const Spacer(),
                   _ToolCircleButton(
+                    key: const ValueKey('home-record-send-button'),
                     icon: Icons.arrow_upward,
                     onTap: _onSend,
                   ),
@@ -173,6 +172,7 @@ class _ToolCircleButton extends StatelessWidget {
   final VoidCallback onTap;
 
   const _ToolCircleButton({
+    super.key,
     required this.icon,
     required this.onTap,
   });

@@ -272,13 +272,21 @@ class _ReportLibrarySheetState extends State<_ReportLibrarySheet> {
     }
     final repo = context.read<AppRepository>();
     final aiConfig = repo.aiProviderConfigFor(AiTaskType.chatQuery);
-    if (!aiConfig.hasKey) {
-      showAppToast(context, '先去「我的 → AI 记账设置」填写 API Key');
+    if (!aiConfig.hasCredential) {
+      showAppToast(context, '先去「我的 → AI 记账设置」配置 API Key 或 OAuth');
+      _regeneratingReportIds.remove(report.id);
+      return;
+    }
+    if (!repo.aiSkillAllowsTool('report_writer', 'read_ledger')) {
+      showAppToast(context, '报告生成助手已关闭，请先在 AI 设置中重新开启');
       _regeneratingReportIds.remove(report.id);
       return;
     }
     // 隐私闸门：重新生成同样会把账本上下文发给 AI，必须先同意。
-    final consented = await ensureAiPrivacyConsent(context);
+    final consented = await ensureAiPrivacyConsent(
+      context,
+      config: aiConfig,
+    );
     if (!consented || !mounted) {
       if (mounted) showAppToast(context, '未同意 AI 隐私说明，报告不会重新生成');
       _regeneratingReportIds.remove(report.id);

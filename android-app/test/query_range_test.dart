@@ -91,6 +91,15 @@ void main() {
       expect(r.end, DateTime(2026, 7, 3));
     });
 
+    test('今日/昨日是单日范围', () {
+      final today = QueryRange.parse('今日支出', now)!;
+      expect(today.start, DateTime(2026, 7, 3));
+      expect(today.end, DateTime(2026, 7, 3));
+      final yesterday = QueryRange.parse('昨日花了多少', now)!;
+      expect(yesterday.start, DateTime(2026, 7, 2));
+      expect(yesterday.end, DateTime(2026, 7, 2));
+    });
+
     test('无时间词返回 null', () {
       expect(QueryRange.parse('我最大的一笔支出是什么', now), isNull);
       expect(QueryRange.parse('记一笔午饭20', now), isNull);

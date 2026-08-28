@@ -97,9 +97,12 @@ class _AutoRecordSettingViewState extends State<AutoRecordSettingView>
           ),
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16),
-            child: OutlinedButton(
-              onPressed: AutoRecord.openSettings,
-              child: Text(_enabled ? '打开系统设置' : '开启通知使用权'),
+            child: Align(
+              alignment: Alignment.centerRight,
+              child: AppPillButton(
+                label: _enabled ? '打开系统设置' : '开启通知使用权',
+                onPressed: AutoRecord.openSettings,
+              ),
             ),
           ),
           Padding(

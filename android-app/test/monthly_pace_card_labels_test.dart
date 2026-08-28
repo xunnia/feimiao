@@ -53,7 +53,7 @@ void main() {
 
     for (final month in [2, 3, 4, 5, 6, 7]) {
       expect(
-        find.text('$month'),
+        find.text('${month}月'),
         findsOneWidget,
         reason: '$month 月应该在 X 轴上（7 月曾因序号标签而看起来丢失）',
       );
@@ -63,7 +63,7 @@ void main() {
     // 旧实现的序号标签是 1..6：'1' 在正确实现里不该出现
     // （8 月往前推六个月是 2..7 月，不含 1 月）。
     expect(
-      find.text('1'),
+      find.text('1月'),
       findsNothing,
       reason: '不该再出现柱子序号标签',
     );
@@ -75,7 +75,7 @@ void main() {
 
     for (final month in [8, 9, 10, 11, 12, 1]) {
       expect(
-        find.text('$month'),
+        find.text('${month}月'),
         findsOneWidget,
         reason: '跨年月份 $month 应正确显示（DateTime 归一负数月份）',
       );

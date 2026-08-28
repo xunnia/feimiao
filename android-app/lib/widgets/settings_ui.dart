@@ -29,9 +29,7 @@ class AppSwitch extends StatelessWidget {
     final enabled = onChanged != null;
     final dark = scheme.brightness == Brightness.dark;
     final trackColor = value
-        ? (dark
-            ? Colors.white.withValues(alpha: 0.92)
-            : const Color(0xFF111111))
+        ? scheme.primary.withValues(alpha: dark ? 0.92 : 0.88)
         : scheme.onSurface.withValues(alpha: dark ? 0.28 : 0.16);
     final thumbColor = value && dark ? const Color(0xFF1C1A18) : Colors.white;
     void toggle() => onChanged!(!value);
@@ -91,6 +89,77 @@ class AppSwitch extends StatelessWidget {
   }
 }
 
+/// 多选列表统一勾选件：保留轻量方形视觉，实际触控区域 48dp，
+/// 用于导入/自动记账/专项追踪等“可同时选多个”场景。
+class AppCheckmark extends StatelessWidget {
+  final bool value;
+  final ValueChanged<bool>? onChanged;
+  final String? semanticLabel;
+  /// When a whole row owns the gesture, render this as a passive control so a
+  /// tap on the checkmark cannot toggle the value twice through two gesture
+  /// recognizers.
+  final bool interactive;
+
+  const AppCheckmark({
+    super.key,
+    required this.value,
+    required this.onChanged,
+    this.semanticLabel,
+    this.interactive = true,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final enabled = interactive && onChanged != null;
+    final visualEnabled = !interactive || onChanged != null;
+    void toggle() => onChanged!(!value);
+    final control = SizedBox(
+      width: AppHitTarget.min,
+      height: AppHitTarget.min,
+      child: Center(
+        child: AnimatedContainer(
+          duration: AppMotion.fast,
+          curve: AppMotion.enter,
+          width: 22,
+          height: 22,
+          decoration: BoxDecoration(
+            color: value ? scheme.primary : Colors.transparent,
+            borderRadius: BorderRadius.circular(7),
+            border: Border.all(
+              color: value
+                  ? scheme.primary
+                  : scheme.onSurface.withValues(alpha: 0.26),
+              width: 1.4,
+            ),
+          ),
+          child: value
+              ? Icon(Icons.check_rounded, size: 16, color: scheme.onPrimary)
+              : null,
+        ),
+      ),
+    );
+    return Semantics(
+      label: interactive ? semanticLabel : null,
+      checked: value,
+      enabled: enabled,
+      onTap: enabled ? toggle : null,
+      child: ExcludeSemantics(
+        child: Opacity(
+          opacity: visualEnabled ? 1 : 0.42,
+          child: interactive
+              ? PressableScale(
+                  onPressed: enabled ? toggle : null,
+                  pressedScale: 0.92,
+                  child: control,
+                )
+              : control,
+        ),
+      ),
+    );
+  }
+}
+
 /// 半屏弹层统一顶部（对齐图二）：左上角 ✕ 关闭 + 居中标题（字重 w500）
 /// + 右上角可选操作按钮（保存/确认，取代占地方的底部大长条按钮）+ 可选副标题。
 /// [onAction] 为 null 时操作按钮置灰不可点（表单未填完等）。
@@ -116,6 +185,10 @@ class SheetHeader extends StatelessWidget {
     final scheme = Theme.of(context).colorScheme;
     const sideInset = 12.0;
     const controlSize = 34.0;
+    // AppCircleButton keeps a 48dp hit box around its smaller visual circle.
+    // Pull the wrapper out by the half-overflow so the visible circle, rather
+    // than the invisible hit box, remains exactly 12dp from the sheet edge.
+    const closeInset = sideInset - (AppHitTarget.min - controlSize) / 2;
     const headerHeight = controlSize + sideInset * 2;
     return Column(
       mainAxisSize: MainAxisSize.min,
@@ -128,18 +201,14 @@ class SheetHeader extends StatelessWidget {
               Center(
                 child: Text(
                   title,
-                  style: TextStyle(
-                    fontSize: 17,
-                    fontWeight: FontWeight.w500,
-                    color: scheme.onSurface,
-                  ),
+                  style: AppType.sheetTitle(scheme),
                 ),
               ),
               if (onClose != null)
                 Align(
                   alignment: Alignment.centerLeft,
                   child: Padding(
-                    padding: const EdgeInsets.only(left: sideInset),
+                    padding: const EdgeInsets.only(left: closeInset),
                     child: AppCircleButton(
                       icon: CupertinoIcons.xmark,
                       iconSize: 18,
@@ -268,12 +337,15 @@ class SettingsRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    final compactTrailing = trailing is AppSwitch ||
+        trailing is AppPillButton ||
+        trailing is AppCircleButton;
     final content = InkWell(
       onTap: onTap,
       child: Padding(
         padding: EdgeInsets.symmetric(
           horizontal: 16,
-          vertical: trailing is AppSwitch ? 4 : 13,
+          vertical: compactTrailing ? 4 : 13,
         ),
         child: Row(
           children: [
@@ -305,7 +377,15 @@ class SettingsRow extends StatelessWidget {
             ),
             if (trailing != null) ...[
               const SizedBox(width: 12),
-              trailing!,
+              // 长中文/大字号下，右侧值和箭头必须参与约束，不能把
+              // 左侧标题行推出屏幕；开关自身仍保留 48dp 最小热区。
+              Flexible(
+                fit: FlexFit.loose,
+                child: Align(
+                  alignment: Alignment.centerRight,
+                  child: trailing!,
+                ),
+              ),
             ],
           ],
         ),

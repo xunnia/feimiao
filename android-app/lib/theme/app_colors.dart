@@ -2,6 +2,8 @@ import 'package:flutter/cupertino.dart' show CupertinoPageTransitionsBuilder;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show SystemUiOverlayStyle;
 
+import 'app_tokens.dart';
+
 // ---------------------------------------------------------------------------
 // 猫色板：从用户家蓝白英短猫取色
 // ---------------------------------------------------------------------------
@@ -254,6 +256,13 @@ class AppTheme {
 
     return ThemeData(
       colorScheme: cs,
+      // Nunito is the app's Latin face; Noto Sans SC is the explicit CJK
+      // fallback used by the real device and the screenshot harness. Without
+      // this at the theme boundary, standalone Chats labels can render tofu
+      // boxes in Flutter's desktop/offline renderer even though input fields
+      // provide their own fallback.
+      fontFamily: 'Nunito',
+      fontFamilyFallback: const ['NotoSansSC'],
       // 透明：透出 MaterialApp builder 铺的全局暖渐变背景（warmBackground）。
       scaffoldBackgroundColor: Colors.transparent,
       useMaterial3: true,
@@ -284,11 +293,7 @@ class AppTheme {
           systemNavigationBarColor: Colors.transparent,
           systemNavigationBarIconBrightness: Brightness.dark,
         ),
-        titleTextStyle: TextStyle(
-          fontSize: 17,
-          fontWeight: FontWeight.w600,
-          color: cs.onSurface,
-        ),
+        titleTextStyle: AppType.pageTitle(cs),
         iconTheme: IconThemeData(color: cs.onSurface, size: 21),
         actionsIconTheme: IconThemeData(color: cs.onSurface, size: 21),
       ),
@@ -354,6 +359,8 @@ class AppTheme {
 
     return ThemeData(
       colorScheme: cs,
+      fontFamily: 'Nunito',
+      fontFamilyFallback: const ['NotoSansSC'],
       scaffoldBackgroundColor: const Color(0xFF211E1C),
       useMaterial3: true,
       platform: TargetPlatform.iOS,
@@ -372,11 +379,7 @@ class AppTheme {
           systemNavigationBarColor: Colors.transparent,
           systemNavigationBarIconBrightness: Brightness.light,
         ),
-        titleTextStyle: TextStyle(
-          fontSize: 17,
-          fontWeight: FontWeight.w600,
-          color: cs.onSurface,
-        ),
+        titleTextStyle: AppType.pageTitle(cs),
         iconTheme: IconThemeData(color: cs.onSurface, size: 21),
         actionsIconTheme: IconThemeData(color: cs.onSurface, size: 21),
       ),

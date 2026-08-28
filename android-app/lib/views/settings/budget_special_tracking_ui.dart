@@ -391,12 +391,13 @@ class _BudgetSpecialTrackingSheetState
                             style: const TextStyle(fontSize: 20),
                           ),
                           title: category.name,
-                          trailing: Checkbox(
+                          trailing: AppCheckmark(
+                            interactive: false,
                             key: ValueKey(
                               'budget-special-category-${category.key}',
                             ),
                             value: _categoryKeys.contains(category.key),
-                            onChanged: (_) => _toggleCategory(category.key),
+                            onChanged: null,
                           ),
                           onTap: () => _toggleCategory(category.key),
                         ),
@@ -411,10 +412,11 @@ class _BudgetSpecialTrackingSheetState
                         SettingsRow(
                           leading: _TagSwatch(color: Color(tag.colorValue)),
                           title: tag.name,
-                          trailing: Checkbox(
+                          trailing: AppCheckmark(
+                            interactive: false,
                             key: ValueKey('budget-special-tag-${tag.id}'),
                             value: _tagIds.contains(tag.id),
-                            onChanged: (_) => _toggleTag(tag.id),
+                            onChanged: null,
                           ),
                           onTap: () => _toggleTag(tag.id),
                         ),

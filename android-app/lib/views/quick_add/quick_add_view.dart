@@ -12,7 +12,9 @@ import '../../theme/app_colors.dart';
 import '../../theme/app_tokens.dart';
 import '../../widgets/app_buttons.dart';
 import '../../widgets/app_date_picker.dart';
+import '../../widgets/app_line_icon.dart';
 import '../../widgets/app_toast.dart';
+import '../../widgets/ios_menu.dart';
 import 'ai_quick_entry_view.dart';
 import 'amount_keypad.dart';
 import 'category_grid.dart';
@@ -113,9 +115,9 @@ class _QuickAddViewState extends State<QuickAddView> {
         title: const Text('记一笔'),
         centerTitle: true,
         actions: [
-          IconButton(
-            icon: const Icon(Icons.auto_awesome_outlined),
-            tooltip: 'AI 记账',
+          AppCircleButton(
+            icon: Icons.auto_awesome_outlined,
+            semanticLabel: 'AI 记账',
             onPressed: () => Navigator.push(
               context,
               AppPageRoute<void>(
@@ -337,17 +339,31 @@ class _AccountButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return PopupMenuButton<int>(
-      initialValue: account?.id,
-      onSelected: onChanged,
-      itemBuilder: (_) => accounts
-          .map((a) => PopupMenuItem(value: a.id, child: Text(a.name)))
-          .toList(),
-      child: Chip(
-        avatar: const Icon(Icons.account_balance_wallet_outlined, size: 16),
-        label: Text(account?.name ?? '账户'),
-        visualDensity: VisualDensity.compact,
-        padding: const EdgeInsets.symmetric(horizontal: 4),
+    return Builder(
+      builder: (menuContext) => GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: accounts.isEmpty
+            ? null
+            : () => showIosMenu(
+                  menuContext,
+                  [
+                    for (final item in accounts)
+                      IosMenuItem(
+                        label: item.name,
+                        lineIcon: AppLineIcons.wallet,
+                        selected: item.id == account?.id,
+                        onTap: () => onChanged(item.id),
+                      ),
+                  ],
+                  width: 220,
+                  alignToAnchorLeft: true,
+                ),
+        child: Chip(
+          avatar: const Icon(Icons.account_balance_wallet_outlined, size: 16),
+          label: Text(account?.name ?? '账户'),
+          visualDensity: VisualDensity.compact,
+          padding: const EdgeInsets.symmetric(horizontal: 4),
+        ),
       ),
     );
   }

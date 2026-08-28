@@ -20,8 +20,10 @@ import '../../widgets/pressable_scale.dart';
 import '../../widgets/sliding_segment.dart';
 import '../../widgets/tag_selector.dart';
 import '../common/receipt_picker.dart';
+import '../common/app_sheet.dart';
 import '../quick_add/amount_keypad.dart';
 import '../quick_add/category_grid.dart';
+import '../../widgets/settings_ui.dart';
 
 /// 打开手动记账 / 编辑账目大卡（**统一入口**：背景高斯模糊 + 底部上滑，
 /// 与 AI 记账面板同一套出场，别再用无模糊的 showModalBottomSheet）。
@@ -466,20 +468,20 @@ class _ManualAddSheetState extends State<ManualAddSheet> {
 
   // ── 标签选择小弹层 ────────────────────────────────────────────────────────
   Future<void> _pickTags() async {
-    await showModalBottomSheet<void>(
-      context: context,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      builder: (ctx) => SafeArea(
+    await showBlurSheet<void>(
+      context,
+      radius: 28,
+      child: Builder(builder: (ctx) => SafeArea(
         child: Padding(
-          padding: const EdgeInsets.fromLTRB(16, 16, 16, 16),
+          padding: const EdgeInsets.only(bottom: 8),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text('选标签', style: Theme.of(ctx).textTheme.titleMedium),
-              const SizedBox(height: 12),
+              SheetHeader(
+                title: '选标签',
+                onClose: () => Navigator.pop(ctx),
+              ),
               StatefulBuilder(
                 builder: (ctx2, setLocal) => TagSelector(
                   selectedIds: _tagIds,
@@ -493,7 +495,7 @@ class _ManualAddSheetState extends State<ManualAddSheet> {
             ],
           ),
         ),
-      ),
+      )),
     );
   }
 

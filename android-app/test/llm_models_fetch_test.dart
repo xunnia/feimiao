@@ -64,4 +64,162 @@ void main() {
       ),
     );
   });
+
+  test('fetchModels refuses a blank custom base URL before making a request',
+      () async {
+    var called = false;
+    final client = MockClient((_) async {
+      called = true;
+      return http.Response('{}', 200);
+    });
+
+    await expectLater(
+      LlmQuery.fetchModels(
+        config.copyWith(baseUrl: ''),
+        client: client,
+      ),
+      throwsA(
+        isA<LlmQueryException>().having(
+          (error) => error.message,
+          'message',
+          contains('基础地址未配置'),
+        ),
+      ),
+    );
+    expect(called, isFalse);
+  });
+
+  test('fetchModels uses native Claude headers', () async {
+    const claude = AiProviderConfig(
+      type: AiProviderType.custom,
+      apiKey: 'anthropic-key',
+      baseUrl: 'https://api.anthropic.com/v1',
+      model: 'claude-sonnet-5',
+    );
+    final client = MockClient((request) async {
+      expect(request.url.toString(), 'https://api.anthropic.com/v1/models');
+      expect(request.headers['x-api-key'], 'anthropic-key');
+      expect(request.headers['anthropic-version'], '2023-06-01');
+      expect(request.headers['authorization'], isNull);
+      return http.Response('{"data":[{"id":"claude-sonnet-5"}]}', 200);
+    });
+
+    expect(
+      await LlmQuery.fetchModels(claude, client: client),
+      const ['claude-sonnet-5'],
+    );
+  });
+
+  test('fetchModels keeps Bearer auth for Claude-named custom relays',
+      () async {
+    final relay = config.copyWith(model: 'claude-sonnet-5');
+    final client = MockClient((request) async {
+      expect(request.url.toString(), 'https://o10.top/v1/models');
+      expect(request.headers['authorization'], 'Bearer test-key');
+      expect(request.headers['x-api-key'], isNull);
+      expect(request.headers['anthropic-version'], isNull);
+      return http.Response('{"data":[{"id":"claude-sonnet-5"}]}', 200);
+    });
+
+    expect(
+      await LlmQuery.fetchModels(relay, client: client),
+      const ['claude-sonnet-5'],
+    );
+  });
+
+  test('fetchModels honors explicit Claude Messages on a custom relay',
+      () async {
+    final relay = config.copyWith(
+      model: 'claude-sonnet-5',
+      endpointType: AiEndpointType.anthropicMessages,
+    );
+    final client = MockClient((request) async {
+      expect(request.url.toString(), 'https://o10.top/v1/models');
+      expect(request.headers['x-api-key'], 'test-key');
+      expect(request.headers['anthropic-version'], '2023-06-01');
+      expect(request.headers['authorization'], isNull);
+      return http.Response('{"data":[{"id":"claude-sonnet-5"}]}', 200);
+    });
+
+    expect(
+      await LlmQuery.fetchModels(relay, client: client),
+      const ['claude-sonnet-5'],
+    );
+  });
+
+  test('OAuth Claude relay uses Bearer instead of x-api-key', () async {
+    final relay = config.copyWith(
+      model: 'claude-sonnet-5',
+      endpointType: AiEndpointType.anthropicMessages,
+      authMethod: AiAuthMethod.oauth,
+    );
+    final client = MockClient((request) async {
+      expect(request.headers['authorization'], 'Bearer test-key');
+      expect(request.headers['x-api-key'], isNull);
+      return http.Response('{"data":[{"id":"claude-sonnet-5"}]}', 200);
+    });
+    expect(
+      await LlmQuery.fetchModels(relay, client: client),
+      const ['claude-sonnet-5'],
+    );
+  });
+
+  test('fetchModels accepts a models array and string entries', () async {
+    final client = MockClient((request) async {
+      expect(request.url.toString(), 'https://o10.top/v1/models');
+      return http.Response(
+        jsonEncode({
+          'models': [
+            'model-a',
+            {'name': 'model-b'}
+          ]
+        }),
+        200,
+      );
+    });
+
+    expect(
+      await LlmQuery.fetchModels(config, client: client),
+      const ['model-a', 'model-b'],
+    );
+  });
+
+  test('fetchModels tries a non-v1 models path after a 404', () async {
+    final client = MockClient((request) async {
+      if (request.url.toString() == 'https://o10.top/v1/models') {
+        return http.Response('{}', 404);
+      }
+      expect(request.url.toString(), 'https://o10.top/models');
+      return http.Response('{"data":[{"id":"model-a"}]}', 200);
+    });
+
+    expect(
+      await LlmQuery.fetchModels(config, client: client),
+      const ['model-a'],
+    );
+  });
+
+  test('fetchModels tries the alternate path after a primary timeout',
+      () async {
+    var calls = 0;
+    final client = MockClient((request) async {
+      calls++;
+      if (request.url.toString() == 'https://o10.top/v1/models') {
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+        return http.Response('{}', 200);
+      }
+      expect(request.url.toString(), 'https://o10.top/models');
+      return http.Response('{"data":[{"id":"model-a"}]}', 200);
+    });
+
+    expect(
+      await LlmQuery.fetchModels(
+        config,
+        client: client,
+        timeout: const Duration(milliseconds: 1),
+      ),
+      const ['model-a'],
+    );
+    expect(calls, 2);
+  });
 }

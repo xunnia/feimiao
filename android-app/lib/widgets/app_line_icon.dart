@@ -38,6 +38,29 @@ class AppLineIcon extends StatelessWidget {
 }
 
 abstract final class AppLineIcons {
+  static const copy = AppLineIconData(
+    '<rect width="13" height="13" x="8" y="8" rx="2.5"/>'
+    '<path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3"/>',
+  );
+  static const star = AppLineIconData(
+    '<path d="m12 2.8 2.75 5.57 6.15.9-4.45 4.33 1.05 6.12L12 16.82l-5.5 2.9 1.05-6.12L3.1 9.27l6.15-.9Z"/>',
+  );
+  static const pencil = AppLineIconData(
+    '<path d="m14.4 5.1 4.5 4.5"/>'
+    '<path d="M4 20l1.25-5.2L16.8 3.25a1.75 1.75 0 0 1 2.48 0l1.47 1.47a1.75 1.75 0 0 1 0 2.48L9.2 18.75Z"/>'
+    '<path d="m5.25 14.8 3.95 3.95"/>',
+  );
+  static const trash = AppLineIconData(
+    '<path d="M4 7h16M9 3h6l1 4H8Z"/>'
+    '<path d="m6 7 1 14h10l1-14M10 11v6M14 11v6"/>',
+  );
+  static const textSelect = AppLineIconData(
+    '<path d="M5 4H3v4M19 4h2v4M5 20H3v-4M19 20h2v-4"/>'
+    '<path d="M8 8h8M12 8v8M9.5 16h5"/>',
+  );
+  static const chat = AppLineIconData(
+    '<path d="M20 11.5a7.5 7.5 0 0 1-7.5 7.5H7l-4 3v-5.1A7.5 7.5 0 1 1 20 11.5Z"/>',
+  );
   static const chart = AppLineIconData(
     '<path d="M4 19V9"/><path d="M10 19V5"/>'
     '<path d="M16 19v-7"/><path d="M22 19H2"/>',

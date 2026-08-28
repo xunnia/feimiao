@@ -1,3 +1,309 @@
+
+## 2026-08-28 v1.264.0+278 全局 UI 收口（Codex，本地交付候选）
+
+- **公共 UI 契约**：在 `AppType`、`AppControl`、`AppHitTarget` 中收口字号、视觉尺寸和触控尺寸；圆形按钮保留 34/38px 视觉大小，独立操作热区至少 48dp，顶栏按钮不再撑高布局。
+- **弹窗与设置**：AI 记忆、本地伴侣地址、自动记账候选、收据来源、月份选择、标签、来源、图表库和个人中心等入口统一使用毛玻璃弹层、`SheetHeader`、`SettingsGroup/SettingsRow` 和胶囊动作；设置页移除私有重复行组件。
+- **按钮、菜单和选择件**：统一圆形/胶囊按钮的禁用、加载、边框、图标和语义标签；新增 `AppCheckmark`，避免整行与勾选件重复响应；选项菜单危险色统一为肥喵警示橙。
+- **响应式与字体**：修复 AI 账号尾部值在大字号下溢出；统一菜单/弹窗/操作文字 Token；覆盖 320dp、200% 字体、深色主题和 CJK/Latin 混排。
+- **视觉证据**：新增 `outputs/global_ui/settings.png`、`outputs/global_ui/gallery.png`；刷新 AI 账号、输入框、Claude 加号/图片和 Chats golden，实际截图人工复核通过。
+- **验证**：Dart analyze 无 error（64 条既有 warning/info）；串行全量 Flutter **1124/1124**；全局 UI、设置表单、资产滚动、AI 账号、输入框、Claude/Chats 视觉回归全部通过。
+- **APK**：`C:\src\xunni-codex\ci-artifacts\releases\feimiao-codex-v1.264.0-278.apk`，116,596,258 字节，SHA256 `3BFC09913BB28C0CC783C30773C459570B7195BCE321DAF530FF2A9DCE6FF07C`；包名 `com.qingji.qingji.codex`，versionName `1.264.0`，versionCode `278`；16KiB 对齐、APK v2 和固定证书 gate 通过。
+- **边界**：本机无在线 ADB，真实 ChatGPT OAuth、provider 网络、IME、相册和真机字体观感仍需用户在可联网 Android 设备验收；未修改 `ios-app/**` 及指定 Android `integration_test`/`test_driver` 文件。
+
+## 2026-08-28 v1.263.0+277 深度审计补修（Codex，本地交付候选）
+
+- **OAuth 凭据完整性**：Cockpit refresh-only 账号在首次模型目录/请求前强制交换 access token；报告、隐私确认、账单复核和快速记账不再把 OAuth 误判为无 API Key。
+- **报告思考计时**：`model_started_ms` 只在真正调用模型前 compare-and-set 写入；排队/上下文/WorkManager 交接不计入时长，恢复未开始模型的任务不伪造创建时间，CAS 赢家会回写 UI。
+- **回复与字体**：富文本显式 Nunito + Noto Sans SC fallback，修复 CJK 方块；正文裸来源 URL 移入来源操作栏/上拉面板，中文标点不会吞掉后续正文。
+- **截图证据**：思考、来源、三图和 Claude 加号 golden 改为真实暖背景整屏，人工复核通过；Claude/Chats 视觉回归 **16/16**。
+- **验证**：Flutter analyze 无 error（60 条既有 warning/info）；全量 Flutter **1118/1118**；OAuth/账号与报告计时定向回归通过；Release identity gate 通过。
+- **APK**：`C:\src\xunni-codex\ci-artifacts\releases\feimiao-codex-v1.263.0-277.apk`，117,071,394 字节，SHA256 `C31C24AF83AD5A4BC3BAD245D86536EB60CA124DCB1E54F3ED4C32F0AEAEE509`；包名 `com.qingji.qingji.codex`，versionName `1.263.0`，versionCode `277`。
+- **边界**：本机无在线 ADB，真实 ChatGPT OAuth/Token/官方模型请求、IME、相册和字体观感仍需用户在可联网 Android 设备验收；未修改 `ios-app/**` 及指定 Android 集成测试文件。
+
+## 2026-08-27 v1.262.0+276 交付前收口：附件累计上限与报告思考起点
+
+- **附件可靠性**：喵助手草稿现在在每次添加附件时统一执行每条消息最多 3 张图片、10 个文件的限制；重复打开相册或从“添加文件”选择图片也会计入同一上限，超出的附件即时提示并不进入草稿，不再等发送时整批失败。
+- **报告思考计时**：报告任务新增 `model_started_ms`（DB v48），首次模型处理时间使用 compare-and-set 持久化；前台、WorkManager 和恢复路径共享同一个时间点，重新打开 Chats 不会把“思考了 Xs”重置为重新打开的时刻。
+- **验证**：`flutter analyze --no-pub --no-fatal-infos --no-fatal-warnings` exit 0（57 条既有 warning/info）；全量 Flutter **1114/1114**；附件/报告迁移/会话恢复/思考与输入框定向回归通过。
+- **交付**：Release APK [feimiao-codex-v1.262.0-276.apk](C:\src\xunni-codex\ci-artifacts\releases\feimiao-codex-v1.262.0-276.apk)，117,071,394 字节，SHA256 `A3839FFBBE94104866888EA73A0ECBD7A303C2E6A67AE4447FEFE41B18268A6B`；包名 `com.qingji.qingji.codex`，versionName `1.262.0`，versionCode `276`，16 KiB 对齐、APK V2、固定证书 gate 通过。
+- **运行态边界**：本机 `adb devices` 无在线设备，未执行新包安装/冷启动；真实 ChatGPT OAuth、Token 交换、官方模型目录/Responses、系统相册/文件选择器、IME 和视觉观感仍需用户在可联网 Android 设备验收。iOS 与指定的 Android `integration_test`/`test_driver` 文件本轮未修改。
+
+## 2026-08-27 v1.261.0+275 AI 分层能力与 8-27 需求收口
+
+- **正确性与安全**：AI run/event 持久化、幂等和 flow ownership 完成；结构化账单提案以数据库事务原子提交并支持撤销；reasoning 事件只保存字符数摘要，不保存原始思考文本；服务商健康、连接器协议/主机白名单、图片大小/数量与本地 companion 回环限制完成。
+- **体验与效率**：上下文检查器接入按轮压缩与预算；后台任务中心、可控记忆、诊断页和统一搜索完成；前台/后台请求有 120 秒收口，首条消息等待 ready barrier，短回复、表格横滑、来源和操作栏按参考图收紧。
+- **8-27 UI**：全局选项弹层和半屏表单统一白色轻模糊/灰幕/圆角；Claude 风格加号菜单支持近期图片多选、编号、相册/文件入口和上传进度；思考状态、摘要、消息操作、模型/Effort 选中态、透明输入框及三图满宽布局完成。
+- **扩展能力**：受控内部技能/连接器、定时报表配置和本地模型 companion service 保留为显式可控入口，不开放任意 shell、远程 MCP 或自动财务写入。
+- **验证**：Dart 分析无 error（56 条既有 warning/info）；全量 Flutter **1109/1109**；本轮 AI/UI/图片/思考/来源/模型/菜单定向回归及视觉回归通过。真实 OAuth、provider 网络、IME、系统相册/文件选择器和 Android 真机安装冷启动仍需用户设备验收。
+- **交付**：Release APK `C:\src\xunni-codex\ci-artifacts\releases\feimiao-codex-v1.261.0-275.apk`，117,038,626 字节，SHA256 `04692649468A63A11FC22E0DF4530A3DAFC36EFD2EA3BCB9FE41533B1F39C8C2`；包名 `com.qingji.qingji.codex`，versionName `1.261.0`，versionCode `275`，16 KiB 对齐、APK V2、固定证书通过。
+
+## 2026-08-27 v1.260.0+274 参考图对齐修复
+
+- 三图消息改为参考图的聊天内容区满宽方形三等分，保留左右内容边距和卡片间细间距；不再越过聊天视口边界，也不再使用 3:4 竖向卡片。
+- 思考 flow ownership 修复、120 秒有限收口、真实附件解码和后台报告轮询保持不变。
+- **验证与交付**：串行全量 Flutter **1094/1094**、严格 Claude/Chats 视觉 **16/16**、AI 请求/重试/Responses **36/36**、AI/UI/会话/图片/思考/来源/模型/菜单 **104/104**、静态分析 exit 0（45 条既有 info/warning）；Release APK `C:\src\xunni-codex\ci-artifacts\releases\feimiao-codex-v1.260.0-274.apk` 已构建并通过 release identity gate，116,446,150 字节，SHA256 `2A603BF8B063F26D6FD393591D7440275FE652CE81EA6CA6935595A1E85F36EA`。
+
+## 2026-08-27 v1.260.0+273 后台思考流程与三图布局最终修复（Codex，本地交付）
+
+- **思考流程根因修复**：报告交给 WorkManager 后，发送 Future 不再提前释放 flow ownership；计时器和报告轮询会持续到任务完成、失败或 120 秒 UI 交接，避免消息永久停留在“正在思考”。失败状态也会释放旧 flow，迟到回调不会污染新消息。
+- **图片边界**：生产历史区三张已发送图片突破聊天内容两侧内边距，真实图片一行 3:4 卡片贴合 390dp 聊天视口；输入框草稿仍首屏三格，第四张可横向查看。
+- **版本与验证**：`flutter analyze --no-pub --no-fatal-infos --no-fatal-warnings` exit 0（45 条既有 info/warning）；串行全量 Flutter **1094/1094**；严格 Claude/Chats 视觉回归 **16/16**；生产历史区三图边界、恢复竞态和思考状态回归通过。
+- **APK**：`C:\src\xunni-codex\ci-artifacts\releases\feimiao-codex-v1.260.0-273.apk`，116,446,150 字节，SHA256 `4D5034CD5F6288C6E53EC8F78633288E89588BDB579B0A9D18C2044ACDAF15DE`；包名 `com.qingji.qingji.codex`，versionName `1.260.0`，versionCode `273`，16 KiB 对齐、APK V2、固定证书 gate 通过。
+- **边界**：本机无在线 ADB；真实 ChatGPT OAuth/Token、官方模型目录、provider Responses、IME、系统文件选择器和真机字体观感仍需用户在可联网 Android 设备验收。源码未提交、未推送、未发布线上。
+
+## 2026-08-27 v1.259.0+272 设置页模型列表字号、思考超时与三图布局收口（Codex，本地交付）
+
+- **模型列表字号**：修复设置页模型列表仍使用 16px 的遗漏；列表模型名和手动模型输入统一为 `15px`、`w300`，输入框底部模型名称/Effort 标准保持不变。
+- **本次补修**：整条前台 AI 流程及解析/附件请求增加 120 秒超时；请求 ownership 继续隔离旧流程；发送三图从正方形改为一行 3:4 竖向卡片，并补充对应回归断言。
+- **回归验证**：新增设置页模型列表和思考超时/三图比例 Widget 断言；全量 Flutter **1093/1093**；AI 请求/重试/Responses **36/36**；AI/UI/会话/图片/思考/来源/模型/菜单 **104/104**；Claude/Chats 视觉 **16/16**；Flutter analyze exit 0（43 条既有 info/warning）。
+- **APK**：`C:\src\xunni-codex\ci-artifacts\releases\feimiao-codex-v1.259.0-272.apk`，116,446,150 字节，SHA256 `D28375B51E697B432714EA5B937C5AA0596A42863952BA0FB2F7A24A37A2EEDD`；包名 `com.qingji.qingji.codex`，versionName `1.259.0`，versionCode `272`，16 KiB 对齐、APK V2、固定证书 gate 通过。
+- **边界**：本机无在线 ADB；真实 ChatGPT OAuth/Token、官方模型目录、provider Responses、IME、系统文件选择器和真机字体观感仍需用户在可联网 Android 设备验收。源码未提交、未推送、未发布线上。
+
+## 2026-08-26 v1.258.0+271 请求竞态与图片验收收口（Codex，本地交付）
+
+- **请求可靠性**：修复 `AiRequestManager` 的请求 ownership 竞态；旧请求的 `finally`、延迟 Token、停止回调不会清理或消费同一任务的新请求，取消等待改为类型安全并观察底层 Future，避免首条/重试/连续发送互相污染。
+- **图片验收**：截图测试改用真实书本封面图片并等待 `Image.file` 异步解码；发送消息中的三张图片真实可见，输入框草稿首屏保留三张并支持横向查看更多。
+- **版本与交付**：版本 `1.258.0+271`，build tag `b0826-271`；全量 Flutter **1090/1090**，AI 请求/重试/Responses **36/36**，AI/UI/会话/图片/思考/来源/模型/菜单 **104/104**，Claude/Chats 视觉 **16/16**；analyze exit 0（40 条既有 info/warning）。
+- **APK**：`C:\src\xunni-codex\ci-artifacts\releases\feimiao-codex-v1.258.0-271.apk`，116,993,515 字节，SHA256 `BAB34815FD6CEF36FA6CD2008BEB9BE95B59CD5E8CCB29194926E9C326C73EB3`；包名 `com.qingji.qingji.codex`，versionName `1.258.0`，versionCode `271`，16 KiB 对齐、APK V2、固定证书 gate 通过。
+- **边界**：本机无在线 ADB；真实 ChatGPT OAuth/Token、官方模型目录、provider Responses、IME、系统文件选择器和真机字体观感仍需用户在可联网 Android 设备验收。源码未提交、未推送、未发布线上。
+
+## 2026-08-25 v1.255.0+268 本批十项 AI 体验收口（Codex，本地交付）
+
+- **思考与回复**：加入“思考中/思考了 Xs”、可展开处理摘要和来源面板；回复操作栏、链接处理、结构化表格和横向滚动完成，短回复底部留白收紧并保留上拉回弹。
+- **消息操作**：长按自己的消息显示灰色高亮、发送时间，支持复制、编辑、选择文本和震动反馈，不再提供重复发送。
+- **输入与路由**：普通记账可选模型/Effort；首条消息等待 AI 配置就绪；主页非空输入直接走 AI 记账；聊天/记账图片走各自多模态流程。
+- **Claude 风格**：喵助手加号、Add files、图片入口和服务商卡片边界统一，原有导入/导出能力保留在设置入口。
+- **验证**：Flutter analyze exit 0（34 条既有 info）；串行全量 Flutter 测试 **1065/1065**；Gradle `assembleRelease` 成功；APK 包名、版本、16 KiB 对齐、APK V2 和固定 Codex 证书 gate 通过。
+- **交付**：APK [`feimiao-codex-v1.255.0-268.apk`](C:\src\xunni-codex\ci-artifacts\releases\feimiao-codex-v1.255.0-268.apk)，116,069,242 字节，SHA256 `F70BB00313FFBB5EF487C5A3959AEC7284FB2EC62F395608E9390F7B8982E091`；版本 `1.255.0+268`，build tag `b0825-268`。
+- **运行态边界**：本机无在线 ADB 设备，未执行真机安装/冷启动及真实 provider/OAuth 网络验收；以上仍需用户在可联网 Android 设备安装后确认。
+
+## 2026-08-25 v1.254.0+267 AI 首条消息与回复版式修复（Codex，本地交付）
+
+- **首条消息**：启动快路径提前加载 AI 配置，发送前等待 Repository ready barrier，避免刚打开应用时第一条消息误走“未连接 AI”而第二条才成功。
+- **回复布局**：短回复在内容区底部锚定，收紧回复与输入框之间的异常留白；Markdown 表格改为结构化渲染，支持表头、分隔线、列对齐和数字右对齐，长回复更接近常见 AI 应用排版。
+- **回复操作**：普通回复与报告回复补齐分享、更多操作入口和统一操作图标。
+- **验证**：Flutter analyze exit 0（33 条既有 info）；串行全量 Flutter 测试 **1065/1065**；Gradle `assembleRelease` 成功；归档 APK 的包名、版本、16 KiB 对齐、APK V2 和固定 Codex 证书 gate 通过。
+- **交付**：APK [`feimiao-codex-v1.254.0-267.apk`](C:\src\xunni-codex\ci-artifacts\releases\feimiao-codex-v1.254.0-267.apk)，115,856,118 字节，SHA256 `519174271F8AD13E730A08B38B654959E546F8781448151AAC9E3F73D10575FF`；版本 `1.254.0+267`，build tag `b0825-267`。
+- **运行态边界**：本机无在线 ADB 设备，未执行真机安装/冷启动及真实 provider/OAuth 网络验收；以上仍需用户在可联网 Android 设备安装后确认。
+
+## 2026-08-25 v1.253.0+266 OAuth/主页 GPT 记账与喵助手滚动修复（Codex，本地交付）
+
+- **OAuth 稳定性**：401 时对 GPT access token 做一次共享强制刷新并重试；模型目录 401 自动刷新，目录网络超时/连接失败有限重试；授权回调成功后保留原生 localhost 监听短暂窗口，Chrome 重复回调继续返回成功页。
+- **GPT 记账链路**：主页 AI 记账改用官方 Codex Responses `text.format=json_schema` 结构，避免 Chat Completions 的 `json_object` 被官方 Responses 拒绝；OAuth 登录后模型目录短暂不可用时仍保存 Token 和可用官方默认模型。
+- **设置与喵助手**：OAuth Token、授权地址、基础地址、服务商名称和模型输入框统一为认证方式/上游格式同款半透明样式；喵助手历史底部空白改为小间距，滚动回弹限制在 88dp 内。
+- **验证**：Flutter analyze exit 0（33 条既有 info）；串行全量 Flutter 测试 **1059/1059**；Gradle `assembleRelease` 成功；APK 包名、版本、16 KiB 对齐、APK V2 和固定 Codex 证书 gate 通过；本机当前无在线 ADB 设备，未冒充完成真机安装/真实 OAuth 验收。
+- **交付**：APK [`feimiao-codex-v1.253.0-266.apk`](C:\src\xunni-codex\ci-artifacts\releases\feimiao-codex-v1.253.0-266.apk)，115,511,398 字节，SHA256 `DB37C1B2E668938B4FB527906EDD4FD704F49AD6E3AC93A58BDF3F20A36D420E`；版本 `1.253.0+266`，build tag `b0825-266`。
+
+## 2026-08-25 v1.252.0+265 Cockpit AI 账号 JSON 导入/导出（Codex，本地交付）
+
+- **账号文件**：AI 账号设置新增 JSON 文件导入、剪贴板粘贴和 Cockpit 兼容导出；解析支持 Cockpit flat OAuth、多账号数组、OpenAI `auth.json`、Sub2API `accounts[].credentials` 及常见通用 API Key/OAuth 字段。
+- **安全与冲突**：API Key、access token、refresh token、id token 只写入平台安全存储，普通 `ai_providers_json` 元数据不包含凭据；导入预览支持更新已有账号、新建副本、跳过，并可控制“同步加入 API 服务”。
+- **官方模型**：OAuth 导入后若文件没有模型目录，会用导入 Token 尝试获取 GPT/Codex 官方模型；离线时仍保留可用的默认模型，后续可在账号页重新获取。
+- **验证**：Flutter analyze exit 0（33 条既有 info）；全量 Flutter 测试 **1059/1059**；Gradle `assembleRelease` 成功；APK 包名、版本、16 KiB 对齐、APK V2 和固定 Codex 证书均通过；16037 ADB 模拟器安装/冷启动成功，未执行真实账号 OAuth/Token 网络验收。
+- **交付**：APK [`feimiao-codex-v1.252.0-265.apk`](C:\src\xunni-codex\ci-artifacts\releases\feimiao-codex-v1.252.0-265.apk)，115,511,398 字节，SHA256 `08E43A3816B6A8832CAC46DDF165A1B7D12F97BADE2AF124F710EE8C28528DD5`；版本 `1.252.0+265`，build tag `b0825-265`。
+
+## 2026-08-25 v1.251.0+264 GPT OAuth 流程竞态彻底收口与本地 APK（Codex，本地交付）
+
+- **竞态修复**：OAuth 流程增加 flow generation/ownership；启动、恢复、取消及 native 保活调用串行化。旧流程的延迟 Token 返回、`finally` 清理、停止请求、ready marker 或 callback 消费，都不能关闭或清理新流程的 1455/1457 监听。
+- **Android 保活**：`MainActivity` 与隔离进程 `OAuthKeepAliveService` 的 start/stop/takeCallback 均携带并校验 flowId；旧流程不会消费新流程回调，也不会误停新前台服务。此前已验证的 PKCE/state、IPv4/IPv6 回环、Token 交换/刷新、GPT 模型目录和粘贴回调兜底保持不变。
+- **验证**：OAuth 定向回归 **11/11**；全量 Flutter 测试 **1052/1052**；Flutter analyze exit 0（33 条既有 info）；Gradle `:app:assembleRelease` 成功；APK 身份、16 KiB zipalign、APK V2 和固定 Codex 证书均通过。
+- **交付**：APK `[feimiao-codex-v1.251.0-264.apk](C:\src\xunni-codex\ci-artifacts\releases\feimiao-codex-v1.251.0-264.apk)`（116,052,358 字节），SHA256 `002e92221345770ff61bbbdf3b0fd174681dd0b7a1a90d3e9ed26ea927c5f8ee`；包名 `com.qingji.qingji.codex` / versionName `1.251.0` / versionCode `264`。
+- **运行态边界**：本机默认 ADB 5037 落在 Windows 保留端口段，已用 16037 启动 ADB；专用模拟器 QEMU 可启动但设备持续 `offline`，因此本包尚未完成安装/冷启动和新包设备级 OAuth 冒烟。真实 ChatGPT 账号登录、Token 交换、官方模型目录及 Responses 请求仍需用户在可联网设备安装后验收；OpenAI `unsupported_country_region` 属外部网络限制，不等同于回调失败。
+
+## 2026-08-24 v1.249.0+262 GPT OAuth 保活超时收口与最终 APK（Codex，本地交付）
+
+- **最终收口**：OAuth 前台保活服务在授权完成、取消、过期或恢复失败时停止；若用户关闭浏览器不返回，6 分钟自动退出，不留下永久通知。
+- **验证**：串行全量 Flutter 测试 **1051/1051**；OAuth/账号设置定向测试 **12/12**；Flutter analyze exit 0（33 条既有 info）；Gradle release 构建、归档 APK release gate 和 Manifest 服务权限检查通过。
+- **交付**：APK `[feimiao-codex-v1.249.0-262.apk](C:\src\xunni-codex\ci-artifacts\releases\feimiao-codex-v1.249.0-262.apk)`（115,281,574 字节），SHA256 `9a928363851bafbe8f1031d1cfcf2c92edc609cf87039ff35cff59cc1531dcde`；包名 `com.qingji.qingji.codex` / versionName `1.249.0` / versionCode `262`。
+- **运行态边界**：当前无 Android 真机/AVD，真实账号登录、Chrome 回调和冷启动安装仍需用户安装本包验证；源码未提交、未推送、未发布线上。
+
+## 2026-08-24 v1.248.0+261 GPT OAuth localhost 回调保活修复（Codex，本地交付）
+
+- **根因修复**：Android 打开外部 Chrome/Custom Tab 后，Flutter Activity 进入后台可能被系统回收，Dart 的 `localhost:1455/1457` 监听随进程消失，授权完成后浏览器因此出现 `ERR_CONNECTION_REFUSED`。
+- **Android 保活**：新增短时 `OAuthKeepAliveService` 前台服务；OAuth 启动前保活，Token 交换、取消、过期或恢复失败后停止，确保浏览器跳转期间监听进程不被回收。
+- **回调监听**：IPv4 改为包含回环的全接口监听（仍受 PKCE/state 保护），恢复健康探测同时尝试 IPv4/IPv6；1455 失败仍回退 1457，粘贴回调继续保留。
+- **版本同步**：`pubspec.yaml`、`lib/core/app_version.dart`、`lib/build_info.dart`、`android/local.properties` 同步为 `1.248.0+261` / `b0824-261`。
+- **验证**：OAuth/账号设置定向测试 **12/12**；串行全量 Flutter 测试 **1051/1051**；Flutter analyze exit 0（33 条既有 info）；Gradle release 构建和 release gate 通过。
+- **交付**：APK `[feimiao-codex-v1.248.0-261.apk](C:\src\xunni-codex\ci-artifacts\releases\feimiao-codex-v1.248.0-261.apk)`（115,281,574 字节），SHA256 `d2b896e6e09a028192c4e96b875b56f163eb85eb127ce5c9a9c292fd919c77e2`；包名 `com.qingji.qingji.codex` / versionName `1.248.0` / versionCode `261`。
+- **运行态边界**：当前无 Android 真机/AVD，未执行真实账号登录、Chrome 回调和冷启动安装验证；请安装本包后重点验证 GPT OAuth，源码未提交、未推送、未发布线上。
+
+## 2026-08-24 v1.247.0+260 OAuth 官方模型登录修复与最终 APK（Codex，本地交付）
+
+- **OAuth 回调稳定性**：GPT OAuth 优先监听 IPv4 `127.0.0.1`，1455 端口失败时自动切换 1457；恢复前台时先做健康检查，不强制关闭仍可用的监听，IPv6 继续作为补充回调地址。
+- **官方模型链路**：授权后交换并刷新官方 ChatGPT/Codex Token，从 `chatgpt.com/backend-api/codex/models` 获取账号实际模型；请求走官方 `/codex/responses` 并携带 `ChatGPT-Account-Id`。
+- **版本同步**：`pubspec.yaml`、`lib/core/app_version.dart`、`lib/build_info.dart` 同步为 `1.247.0+260` / `b0824-260`。
+- **验证**：Flutter analyze exit 0（33 条既有 info）；串行全量 Flutter 测试 **1051/1051**；release gate 校验包名、版本、16 KiB 对齐、APK V2 和固定证书均通过；Gradle `assembleRelease` 成功。
+- **交付**：APK `[feimiao-codex-v1.247.0-260.apk](C:\src\xunni-codex\ci-artifacts\releases\feimiao-codex-v1.247.0-260.apk)`（115,281,466 字节），SHA256 `9d7a95099f84bf76c61409e05c54ae8d3ffa92b6c95952f383ee4805ac8a53d1`；包名 `com.qingji.qingji.codex` / versionName `1.247.0` / versionCode `260`。
+- **运行态边界**：`adb devices` 当前无连接 Android 真机，真实 OAuth 出口、官方模型网络、安装/冷启动、IME 和中文字体观感仍需用户安装后验收；源码未提交、未推送、未发布线上。
+
+## 2026-08-24 v1.246.0+259 喵助手 Claude 风格面板干净重建（Codex，本地 APK）
+
+- 参考图比例收口：Camera/近期图片卡统一为 94dp 方卡；首屏默认从系统相册读取近期图片并横向滑动，权限或媒体列表加载时使用同尺寸占位，无图片时才显示紧凑 Photos 兜底。
+- 联网搜索开关归位到喵助手加号面板，供应商设置页不再展示；新增全局 Chats `Tool access`（Auto/Off）持久化，Off 会关闭账本上下文、报告工具和联网搜索工具。
+- Tool access 说明拆成账本查询与统计、记账与分类、图片识别、联网搜索四类；新增整屏视觉和权限回归。
+- **版本同步**：`pubspec.yaml`、`lib/core/app_version.dart`、`lib/build_info.dart`、`android/local.properties` 已同步为 `1.246.0+259` / `b0824-259`。
+- **验证**：干净构建后静态分析 exit 0（33 条既有 info）；Claude 加号/输入框定向视觉回归 **8/8**；此前同一源码全量 Flutter 测试 **1051/1051**；`git diff --check` 通过。
+- **交付**：APK `C:\src\xunni-codex\ci-artifacts\releases\feimiao-codex-v1.246.0-259.apk`（115,281,466 字节），SHA256 `4eda522926fab151ea47cfd0d7113b66ffd1b5269159a237bf90566429f603dc`；aapt、16 KiB zipalign、APK V2 固定证书和 release identity gate 通过。
+- **运行态边界**：`adb devices` 当前没有连接 Android 设备，未执行真机安装/冷启动；真实相册权限、IME、OAuth/provider 网络和字体观感仍需安装此 APK 后验收。源码未提交、未推送、未发布线上。
+
+## 2026-08-24 v1.244.0+257 喵助手 Claude 风格加号菜单与功能归位（Codex，本地交付候选）
+
+- **聊天快捷提醒**：普通喵助手 Chats 不再显示主页「记一记」快捷提醒；主页 AI 记账建议保持不变。
+- **输入与加号**：聊天输入正文使用 `w350`；加号保留 36px 触控区，图形缩小 20% 为 26.4px，改为 GPT 风格细圆角线条，并与模型/思考强度保持同一水平线。
+- **Claude 风格加号菜单**：新增 `Add to Chat` 底部圆角面板，提供 Camera/Photos、Add files、Tool access、Web search；不显示 Add to project、Connectors，也不重复显示截图识别、导入账单、导出账单。
+- **比例与弹层**：加号菜单改走全局 `showBlurSheet`，从底部上滑并模糊后面的聊天内容；截图按 390×844 整屏验收。照片入口改为紧凑小卡，面板左右留白、操作行和圆角收敛到 Claude 参考图比例。
+- **功能归位**：选图/添加图片继续进入现有截图 OCR 记账链路；导入账单、导出账单继续保留在设置页；主页原有记账加号入口不变。
+- **截图字体修复**：Windows 离屏截图按实机注册应用 Nunito、Noto Sans SC CJK fallback、`MaterialIcons` 和 `packages/cupertino_icons/CupertinoIcons`；输入框、模型/Effort、聊天正文、问候语和所有操作图标不再显示中文/图标方框。截图前重新挂载 Widget，避免字体缓存造成半成品截图。已人工检查 `outputs/ai_chat_input_alignment/`、`outputs/ai_chat_claude/`。
+- **验证**：定向输入框/Claude UI 回归 **10/10**（golden 零差异），串行全量 Flutter 测试 **1049/1049**，静态分析 exit 0（33 条既有 info）。已生成并检查 `outputs/ai_chat_claude/ai_chat_add_sheet.png`。
+- **版本同步**：`pubspec.yaml`、`lib/core/app_version.dart`、`lib/build_info.dart`、`android/local.properties` 同步为 `1.244.0+257` / `b0824-257`。
+- **交付**：APK `C:\src\xunni-codex\ci-artifacts\releases\feimiao-codex-v1.244.0-257.apk`（114,936,226 字节），SHA256 `7cc057a84437acd4d9947234feb2130491fae2ee97029bde0af92e687f50950e`；aapt、16 KiB zipalign、APK V2 固定证书和 release identity gate `validated`。源码仍未提交、未推送、未发布线上。
+- **后续源码收口**：本条之后的面板比例/模糊弹层调整已通过截图回归，但尚未递增版本或重建 APK，待用户确认视觉后出下一包。
+
+## 2026-08-24 v1.243.0+256 喵助手输入框最终字号与底部控件对齐（Codex，本地交付候选）
+
+- **输入框字号**：模型名称与当前思考强度（包括 `High`）统一为 `15px`；模型列表字号保持 `15px`。
+- **输入框布局**：模型名称改为自然宽度排列，`High` 不再被 `Expanded` 推到最右侧；两者之间仅保留约一个空白符宽度（4dp）。
+- **加号与基线**：无圆底加号的两条线由 `22px` 增至 `33px`（长度增加 50%）；加号、模型名称和思考强度统一垂直中心线，触控区域仍为 36px。
+- **版本同步**：`pubspec.yaml`、`lib/core/app_version.dart`、`lib/build_info.dart`、`android/local.properties` 同步为 `1.243.0+256` / `b0824-256`。
+- **验证**：串行全量 Flutter 测试 **1048/1048**；静态分析 exit 0（28 条既有 info）；release gate **9/9**；Release 构建成功；aapt、16 KiB zipalign、APK V2 与固定证书等价门禁通过。真实 Android 真机/IME 和中文字体观感仍需用户安装验收。
+- **交付**：APK `C:\src\xunni-codex\ci-artifacts\releases\feimiao-codex-v1.243.0-256.apk`（114,902,818 字节），SHA256 `4db579d9f5315f98e0f14acdb0fe7c86d56685551d11e81d62bd8594cd2d468a`；源码仍未提交、未推送、未发布线上。
+
+## 2026-08-24 v1.242.0+255 OAuth 网络路径与输入框字号修复（Codex，本地交付候选）
+
+- **OAuth 网络路径**：Android GPT OAuth 使用 Chrome Custom Tabs，沿用系统 Chrome 的 Cookie、代理和出口网络；PKCE/state、1455/1457 localhost 回调、恢复重绑、Token 刷新、GPT 模型目录和粘贴回调兜底保持不变。
+- **输入框布局**：全屏输入区移除多余 `Spacer`，模型名称不再被压缩到约 4px；输入框模型名称为 `19px`，`High/Low` 思考强度为 `16px`，模型列表为 `15px`；选中时才显示灰底，Effort 滑块不变。
+- **验证**：analyze exit 0（28 条既有 info）；串行全量 Flutter 测试 **1048/1048**；release gate **9/9**；APK 身份门禁通过（包名、版本、16 KiB 对齐、APK V2、固定证书）。真实 Android OAuth、provider 网络和 IME 仍需用户安装后验收。
+- **交付**：APK `C:\src\xunni-codex\ci-artifacts\releases\feimiao-codex-v1.242.0-255.apk`（114,902,818 字节），SHA256 `2a7177a0e3cc26bd9cea048f79b01247983d2adedd5e14afaa9ea7be367c091e`；源码仍未提交、未推送、未发布线上。
+
+## 2026-08-23 v1.241.0+254 OAuth 回调与聊天字号修复（Codex，本地交付候选）
+
+- **聊天字重**：用户发送文字与 AI 回复正文默认可变字重调整为 `w350`（比上一版减少 w50）；标题和关键强调保持层级差异。
+- **字号收口**：输入框底部当前模型名称为 `19px`；思考强度 `High/Low` 为 `17px`；模型选择列表（含兼容列表）为 `15px`。滑块、输入框正文和布局不变。
+- **OAuth 回调**：Android GPT OAuth 改用应用内 WebView 打开授权页，增加 localhost 明文回调的最小网络安全配置，避免外部 Chrome 切后台后 Dart 回调监听被回收；PKCE/state、Token 交换/刷新、模型目录和粘贴地址兜底保持不变。
+- **版本同步**：`pubspec.yaml`、`lib/core/app_version.dart`、`lib/build_info.dart`、`android/local.properties` 同步为 `1.241.0+254` / `b0823-254`。
+- **验证**：Flutter analyze exit 0（28 条既有 info）；OAuth/UI 定向回归 **21/21**；全量 Flutter 测试 **1048/1048**；release gate **9/9**；APK 验包通过（包名、版本、16 KiB 对齐、APK V2、固定证书）。
+- **交付**：APK `C:\src\xunni-codex\ci-artifacts\releases\feimiao-codex-v1.241.0-254.apk`（114,902,818 字节），SHA256 `665951676d33a6012582e875715b050cb4e7518881d3dad770801328213bbf5f`；源码仍未提交、未推送、未发布线上。
+
+## 2026-08-23 v1.240.0+253 输入框模型与思考强度字号微调（Codex，本地交付候选）
+
+- **输入框字号**：输入框底部当前模型名称从 17px 调整为 18px；`Low`/思考强度同步为 18px，保持同字号。
+- **模型列表字号**：模型选择列表名称从 17px 调整为 16px；不改变模型列表布局、滑块或模型前缀规则。
+- **版本同步**：`pubspec.yaml`、`lib/core/app_version.dart`、`lib/build_info.dart`、`android/local.properties` 同步为 `1.240.0+253` / `b0823-253`。
+- **验证**：静态分析 exit 0（27 条既有 info）；全量 Flutter 测试 **1047/1047** 通过；Release 验包通过（包名、版本、16 KiB 对齐、APK V2、固定证书）。
+- **交付**：APK `C:\src\xunni-codex\ci-artifacts\releases\feimiao-codex-v1.240.0-253.apk`（114,902,382 字节），SHA256 `bdbcf4b809185089aa3b87408df90ddfde3f1cb8cb0ac8245e04cc61399668a6`；源码仍未提交、未推送、未发布线上。
+
+## 2026-08-23 v1.239.0+252 OAuth 回调稳定性与 Cockpit 风格授权页（Codex，本地交付候选）
+
+- **localhost 回调**：OAuth 回调监听改为 IPv6 优先并补 IPv4，兼容 Android/Chrome 将 `localhost` 解析为 `::1` 或 `127.0.0.1`；应用从浏览器恢复时会按原注册端口重绑，端口释放有短重试，不改变已签发的 PKCE/state。
+- **授权流程恢复**：OAuth 状态继续安全持久化；Activity 重建或恢复后，应用级 watcher 会接管待完成流程，自动换 Token、获取 GPT/Codex 模型并保存到对应服务商，不再依赖设置页实例必须存活。
+- **授权成功页**：本地回调返回 Cockpit 同款紫色成功页，显示“✅ 授权成功 / 您可以关闭此窗口并返回应用”；Android 优先使用 Custom Tab 保持回调监听，平台不支持时回退系统浏览器，粘贴回调仍保留兜底。
+- **稳定性**：全局 Toast 的关闭计时器改为可取消，页面销毁不再遗留 1.2 秒 pending timer。
+- **验证**：OAuth 定向测试 **9/9**（含强制重绑、成功页和 Token 交换）；Flutter analyze exit 0（27 条既有 info）；固定并发全量 Flutter 测试 **1047/1047**。
+- **交付**：版本 `1.239.0+252` / `b0823-252`；真实 OpenAI 授权、Android 浏览器和模型目录仍需用户真机安装后验收。
+
+## 2026-08-23 v1.238.0+251 主页 AI 记账直达模型与输入字号修复（Codex，本地交付验收）
+
+- **主页 AI 记账路由**：主页输入不再在请求前调用本地 `ChatIntent`/退款意图拦截；任何非空自然语言都会进入记账模型请求，继续使用 `forceRecord: true` 保证按记账结构解析。空文本、忙碌状态和隐私授权仍保留为必要门槛；没有 key、拒绝授权或请求失败时才落到离线单笔解析。全屏喵助手的闲聊、查账和知识问答分流不变。
+- **输入框字号**：模型名称字号调整为 17px，思考强度文字同步为 17px，生产模型列表也统一为 17px；模型/Effort 默认无灰底、选中才显示灰底，滑块不改。
+- **回归证据**：定向 AI/模型/喵助手测试 **37/37**，AI 账号页 **2/2**；截图 golden **14/14**（输入框、模型/Effort、Chats、账号页）；Flutter analyze exit 0（27 条既有 info）；固定并发全量 Flutter 测试 **1047/1047**。当前源码截图已检查；测试环境缺完整中文字体，中文观感保留真机验收项。
+- **交付**：版本已递增到 `1.238.0+251` / `b0823-251`；APK `C:\src\xunni-codex\ci-artifacts\releases\feimiao-codex-v1.238.0-251.apk`（114,771,310 字节），SHA256 `7fb41172c6b231193e2dc788228c85a7c55cddd0920c68c02a165bc68acb4957`；包名/版本、16 KiB 对齐、APK V2 固定证书和 release identity gate 已通过。
+
+## 2026-08-23 普通问答提示词放开排版（Codex，本地定向验收）
+
+- **普通问答**：移除喵助手查账/聊天提示词中的强制 Markdown 标题、列表、加粗、段落长度和短回复限制，让回答按问题自然展开。
+- **性格**：将“口语化、简短亲切”调整为“口语化、亲切”；保留金额引用、分类范围和数据不足如实回答等账目准确性约束。
+- **报告边界**：月报/周报/年报仍保留独立的文档结构模板，不受普通聊天提示词调整影响。
+- **验证**：AI/账号/模型/喵助手定向测试 **55/55**、普通问答提示词回归 **1/1** 通过；全量 Flutter 测试 **1032/1032** 通过；`flutter analyze --no-pub --no-fatal-infos --no-fatal-warnings` exit 0，仅有既有 27 条 info。
+
+## 2026-08-22 v1.236.0+249 喵助手/Chats/多服务商需求最终验收（Codex，本地交付候选）
+
+- **输入框统一**：喵助手输入区与主页「记一记」统一尺寸、透明度、内边距和提醒文字；左下角加号去掉圆底并与模型/Effort 同组左移；发送按钮保持同一右边界。
+- **模型与思考强度**：模型名和 Effort 默认不显示灰底，选中时才显示；字号统一加大，模型长名称按可用宽度完整缩放；两者外部间距固定 `4dp`，Effort 滑块保持原样；模型列表不显示服务商前缀。
+- **Chats 与聊天**：搜索栏/关闭按钮统一 `38dp`，首次点击搜索会唤起输入法；会话卡使用灰色半透明底和 Claude 风格图标；会话及聊天正文恢复正常 `w400`，Chats 字号和字重按最终规格收口；筛选与长按菜单文字为 `w400`。
+- **AI 账号与上下文**：多服务商、多 Key、启停开关、OAuth Token/API Key、Chat Completions/Responses/Anthropic Messages 上游格式、模型获取兼容回退、会话级 provider/model/Effort、查账上下文裁剪和分类纠正记忆均已落地。该历史条目当时的 OAuth 仍是过渡实现；随后版本已补齐 PKCE、state、localhost 回调、Token 刷新和 GPT 模型目录。
+- **截图证据**：重新生成并检查 `outputs/ai_chat_input_alignment/`、`outputs/chats/chats_current.png`、`outputs/ai_account/ai_account_current.png`、`outputs/ai_chat_claude/`；定向 golden/UI 回归 **14/14** 通过。
+- **验证**：`flutter test --no-pub --concurrency=1` **1023/1023** 通过；`flutter analyze --no-pub --no-fatal-infos --no-fatal-warnings` exit 0（25 条既有 info）；release 验包通过（包名、版本、16 KiB 对齐、APK V2 固定证书）；release identity gate `validated`。
+- **Release APK**：`C:\src\xunni-codex\ci-artifacts\releases\feimiao-codex-v1.236.0-249.apk`，`114,607,518` 字节；SHA256 `198577F0DED835DCA0170D0D0D0D0D441C7245E8BFBF817369C69D121D16D1D751`；sidecar 同目录保存。
+- **运行态边界**：未提交、未推送、未发布线上；真实 provider 网络、Android 真机安装、IME 动画和系统中文字体观感仍待用户安装验收。
+
+## 2026-08-21 v1.235.0+248 模型获取回退与模型/Effort 间距收口（Codex，本地验收完成，待用户安装）
+
+- **模型获取**：模型目录请求在 `/v1/models` 超时、连接异常或非认证 HTTP 错误时继续尝试兼容的 `/models` 路径；401/403 仍明确提示认证错误。官方 Anthropic 端点使用原生请求头，自定义 Claude 中转继续使用 Bearer。
+- **模型保留**：目录暂时为空或获取失败时，仍保留当前配置模型；用户明确删除的模型不会被自动复活。
+- **输入区间距**：模型名称与思考强度外部间距固定为 `4dp`，标签内边距保留少量视觉空隙，避免黏连或出现不合理大空隙。
+- **验证**：模型获取/AI provider 定向回归 **41/41**，喵助手输入区与 Claude 视觉回归 **8/8**；`flutter analyze --no-pub --no-fatal-infos --no-fatal-warnings` exit 0（24 条既有 info）；全量 Flutter 测试 **1012/1012**；aapt、16 KiB zipalign、APK V2 固定证书验包全部通过。
+- **截图证据**：已检查 `outputs/ai_chat_input_alignment/assistant_fullscreen.png`、`outputs/ai_chat_input_alignment/ai_chat_input_alignment.png`、`outputs/ai_chat_claude/ai_chat_claude_models.png`、`outputs/ai_chat_claude/ai_chat_messages.png` 和 `outputs/chats/chats_current.png`；模型/Effort 间距、输入框透明卡、Chats 和聊天字阶均符合定向断言。
+- **Release APK**：`C:\src\xunni-codex\ci-artifacts\releases\feimiao-codex-v1.235.0-248.apk`，`114,239,919` 字节；SHA256 `0C0B317724ED1C87C9B805C62CE0D1DE5DFCD28E4D70B9137B3A8319A3E918E6`；包名/版本 `com.qingji.qingji.codex / 1.235.0 / 248`，16 KiB 对齐、APK V2 和固定 Codex 证书通过。
+
+## 2026-08-21 v1.234.0+247 模型/Effort 间距微调（Codex，本地已验收，待用户安装）
+
+- **模型与思考强度间距**：外部控件间距由 `8dp` 收窄为 `4dp`；两侧标签仍保留自身内边距，视觉上保持少量空隙但不再显得松散，也不影响点击区域。
+- **回归验证**：喵助手输入区与 Claude 风格模型/Effort 定向测试 **8/8 通过**；`flutter analyze --no-pub --no-fatal-infos --no-fatal-warnings` exit 0，仅有既有 info。
+- **Release APK**：`C:\src\xunni-codex\ci-artifacts\releases\feimiao-codex-v1.234.0-247.apk`，`114,239,919` 字节，SHA256 `EBA7E6FC5D7F8CECFCFB3E8177D95129BF724078CE41A11C39E174C19236F99C`；包名/版本 `com.qingji.qingji.codex / 1.234.0 / 247`，16 KiB 对齐、APK V2 和固定 Codex 证书通过。
+- **运行态边界**：未提交、未推送、未发布线上；真实 provider、Android 真机安装和 IME 动画仍待用户验收。
+
+## 2026-08-21 v1.233.0+246 喵助手模型/Effort 间距与聊天字重修正（Codex，本地已验收，待用户安装）
+
+- **输入区统一**：喵助手与主页「记一记」共用输入卡尺寸、透明度、内边距和提示字阶；加号为无圆底图标，并和模型/思考强度一起靠左下；发送按钮保持与主页相同右边界。
+- **模型与思考强度**：两者固定保持 `8dp` 的小间距；模型名按可用宽度完整缩放；默认态不显示灰底，选中态才显示；输入区字号 `16px`，模型列表字号 `15px`；模型列表不拼接服务商前缀，思考强度滑块保持原样。
+- **聊天字重**：用户发送内容、AI 回复、问候语和提示语恢复正常 `w400`，移除会造成过细渲染的 `wght=330/350` 可变字重；关键强调仍保留独立加粗样式。
+- **Chats**：会话卡标题最终为 `13px / w400`，正文、提示和搜索交互继续沿用统一轻量字阶；搜索首次点击会正常唤起输入法，关闭按钮与搜索栏均为 `38dp`。
+- **模型获取**：自定义 OpenAI 兼容中转即使模型名包含 Claude 也使用 Bearer；仅官方 Anthropic 端点使用原生 Claude 请求头，并支持 `/v1/models` 不可用时的 `/models` 回退。
+- **截图证据**：`outputs/ai_chat_input_alignment/`、`outputs/chats/chats_current.png`、`outputs/ai_chat_claude/` 已重新生成并通过 golden 回归。
+- **本地验收**：Flutter analyze exit 0（24 条既有 info）；喵助手/Chats/模型定向回归与 golden 截图均通过；全量 Flutter 测试仍有 1 个既有资产页信用卡“已还款”文案断言失败（`test/asset_management_view_test.dart:1204`，与本批无关）。
+- **Release APK**：`C:\src\xunni-codex\ci-artifacts\releases\feimiao-codex-v1.233.0-246.apk`，`114,239,919` 字节，SHA256 `846779AEAEF8ECA27106E19019DBAF757F91B8B29992256CBE6E7F8D449A39FA`；包名/版本 `com.qingji.qingji.codex / 1.233.0 / 246`，16 KiB 对齐、APK V2 和固定 Codex 证书通过。
+- **运行态边界**：未提交、未推送、未发布线上；真实 provider、Android 真机安装、IME 动画和实际交互仍待用户安装验收。
+
+## 2026-08-21 v1.230.0+243 喵助手输入区间距收口与完整回归（Codex，本地待用户安装验收）
+
+- **输入区统一**：喵助手输入框与主页「记一记」统一尺寸、透明度、内边距和提示文字；加号去掉圆底，并与模型/Effort 控件一起左移。模型名称与思考强度之间保持 6dp 的紧凑间距，既不黏连也不产生大空隙。
+- **模型/Effort 状态**：默认态不显示灰底，选中态才显示；输入区文字为 16px、模型列表文字为 15px，Effort 滑块保持不变。
+- **Chats 字阶**：会话标题、聊天正文和相关辅助文字缩小一档，正文降为约 14.5px / w200，避免喵助手聊天内容过重。
+- **验证**：`flutter analyze --no-pub --no-fatal-infos --no-fatal-warnings` exit 0（24 条既有 info）；Flutter 全量测试 **1008/1008** 通过；喵助手/输入区 golden 截图已更新并复验。
+- **Release APK**：`C:\src\xunni-codex\ci-artifacts\releases\feimiao-codex-v1.230.0-243.apk`，114,239,919 字节，SHA256 `E2AD24C3787F980FECFDA1FC9221633E3071D766EFB7F55D2069D0ADC6078AF3`；包名/版本 `com.qingji.qingji.codex / 1.230.0 / 243`，16 KiB 对齐、APK V2 和固定 Codex 证书通过。
+- **运行态边界**：未提交、未推送、未发布线上；真实 provider、Android 真机安装、IME 动画和实际交互仍待用户安装验收。
+
+## 2026-08-20 v1.228.0+241 Chats 会话与喵助手模型切换交付（Codex，本地待用户安装验收）
+
+- **Chats 会话入口**：喵助手先进入会话选择页；唯一置顶且不可删除的「记一记」会话承接主页账单，普通聊天会话支持新增、搜索、全部/加星筛选、长按重命名/加星/删除。
+- **会话级 AI 配置**：每个普通会话独立保存服务商、模型和 Effort；删除服务商模型后，引用它的会话在事务中回写到可用主模型，保留标题、星标和 Effort。报告任务同时冻结发起会话的模型配置。
+- **主页边界**：主页 AI 入口强制只记账，闲聊、知识问答和查账在本地拦截，不写入主页历史也不调用模型；这些操作只在喵助手会话中生效。
+- **Claude 风格交互**：Models 浮层固定 `195×224dp`，Effort 浮层固定 `222×102dp`；Effort 从 Low 起步，包含 Low/Medium/High/Extra/Max/Ultracode，模型行 hover/focus、序号、选中勾和 Ultracode 紫色轨道均由生产组件渲染。
+- **本轮视觉收口**：筛选浮层锚定在右上角并把当前勾选放到左侧；会话卡使用主题半透明 `AppColors.card/selectedCard`、18dp 圆角、68dp 最小高度和 34dp 灰色聊天图标；搜索栏改为单层半透明表面；底部控件移除重复 SafeArea；跨服务商同名模型显示服务商前缀；Effort 当前值使用灰色文字。
+- **截图证据**：暖色主题 golden 截图位于 `android-app/outputs/chats/chats_current.png`，已核对背景、半透明卡片、单层搜索栏和底部安全区布局。
+- **请求链稳定性**：自定义服务商默认使用流式 `/v1/responses`；Responses SSE 会正确处理完成、停止、`[DONE]`、失败和不完整事件，不因空行提前结束。
+- **验证**：同一 SDK 的 `dart analyze --format machine` exit 0（21 条既有 info/lint）；Chats 定向 Widget 测试 **4/4** 通过；全量 Flutter 测试本轮 **997/998**，唯一失败是与 Chats 无关的资产信用卡测试文案断言；本轮改动已包含在 release 编译中。
+- **Release APK**：`C:\src\xunni-codex\ci-artifacts\releases\feimiao-codex-v1.228.0-241.apk`，114,157,999 字节，SHA256 `C4F49FEFF5378E19D23D238F8746DEC55B84C310624B9354C40F66031C25F33E`；包名/版本 `com.qingji.qingji.codex / 1.228.0 / 241`，16 KiB 对齐、APK V2 和固定 Codex 证书通过。
+- **运行态边界**：未提交、未推送、未发布线上；真实 provider 网络、Android 真机安装、IME 动画和实际交互仍由用户安装验收。
+
+## 2026-08-19 v1.225.0+238 喵助手 Claude 风格模型/Effort 浮层对齐（Codex，本地待用户安装验收）
+
+- **Models 浮层**：模型列表改为 Claude 桌面端同款紧凑白卡，固定宽 `195dp`、行高 `24dp`、右侧序号和选中勾；支持跨服务商模型列表，点选后立即持久化并影响下一条消息。
+- **交互态**：模型行的鼠标悬停/键盘聚焦使用显式浅灰圆角背景，参考图中的 hover 行在桌面指针和 golden 截图中稳定可见。
+- **Effort 浮层**：固定宽 `222dp`、高 `102dp`，标题、帮助标记、Faster/Smarter 标签和滑条留白按参考图对齐；保留 `Off → Minimal → Low → Medium → High → Extra → Max → Ultracode`，Ultracode 使用紫色颗粒高光轨道。
+- **视觉回归**：新增 `test/ai_chat_claude_visual_test.dart`，锁定 Models `195×224` 和 Effort `222×102` 的布局断言，并保留三张 PNG golden 证据。
+- **验证**：Claude 视觉验收 **2/2**、AI/喵助手相关回归 **180/180**、`flutter analyze --no-fatal-infos --no-fatal-warnings` exit 0（24 条既有 info）；未重复此前已通过的 970 项全量测试。
+- **Release APK**：`C:\src\xunni-codex\ci-artifacts\releases\feimiao-codex-v1.225.0-238.apk`，113,698,691 字节，SHA256 `E9E7E22C72E0D2309623F2E3CD8237F907EB115402676FF836B2D91F824BCB97`；包名/版本 `com.qingji.qingji.codex / 1.225.0 / 238`，16 KiB 对齐、APK V2 和固定 Codex 证书通过。
+- **运行态边界**：未提交、未推送、未发布线上；真实 provider、Android 真机安装、IME 动画和实际交互仍由用户安装验收。
+
+## 2026-08-19 v1.224.0+237 主页仅记账入口收口（Codex，本地待用户安装验收）
+
+- **主页不再承接闲聊或查账**：主页 AI 面板启用强制 `recordOnly` 契约，发送前就在写历史和网络调用之前拦截闲聊、知识问答和账本查询；提示用户到全屏「喵助手」完成这些操作。
+- **记账路径保持可用且更稳**：主页仍接受普通收支和可确定的历史退款；即使模型错误回传 query/chat，也会按记账路径处理。建议缓存按主页/喵助手模式隔离，主页不恢复报告任务或展示历史问答卡。
+- **收入解析补齐**：支持“13号失业金到账2250”“社保补贴到账”等收入语句，能保留日期并归入补贴收入。
+- **验证**：`flutter analyze --no-pub --no-fatal-infos --no-fatal-warnings` exit 0（25 条既有 info）；全量 Flutter 测试 **970/970** 通过。
+- **Release APK**：`C:\src\xunni-codex\ci-artifacts\releases\feimiao-codex-v1.224.0-237.apk`，113,682,307 字节，SHA256 `F84EB42B67F595351AE375426AFA9E8DF7742BB33DCAFB6C51441C09ECD9E4A9`；包名/版本 `com.qingji.qingji.codex / 1.224.0 / 237`，16 KiB 对齐、APK V2 和固定 Codex 证书通过。
+- **运行态边界**：未提交、未推送、未发布线上；真实 provider、Android 真机输入法与实际交互仍由用户安装验收。
+
+## 2026-08-16 v1.223.0+236 AI 兼容性审查收尾与全量验收（Codex，本地待用户安装验收）
+
+- **AI 兼容性问题全部收口**：保留用户删除模型、跨服务商模型列表滚动与标识、透明输入框、服务商/模型安全回退、隐私授权只在接收方变化时重置、Claude 原生端点与 Effort 参数映射，以及闲聊/查账/记账三态分流修复。
+- **补修本批验收中发现的 5 项失败**：资产页测试改为精确匹配净资产值标题；月度进度测试按真实月份标签校验；10k 性能基准改用仓库批量导入入口，避免逐笔副作用刷新污染读取性能指标。
+- **验证**：`flutter analyze --no-pub --no-fatal-infos --no-fatal-warnings` 0 error；全量 Flutter 测试 **967/967**；定向 AI 回归仍全通过。
+- **Release APK**：`C:\src\xunni-codex\ci-artifacts\releases\feimiao-codex-v1.223.0-236.apk`，113,682,307 字节，SHA256 `856A3875C1E8FE405D73C1869038F393092868649C25DA04C35861868F9B9465`；包名/版本 `com.qingji.qingji.codex / 1.223.0 / 236`，16 KiB 对齐、APK V2 签名和固定 Codex 证书通过。
+- **清理**：删除 build、`.dart_tool`、Flutter 依赖临时清单、Wrangler 本地账号缓存、旧 v1.221 APK 和旧 Playwright 页面快照；保留 v1.222 回退包、当前 v1.223 包、CI iOS 产物与 `android-app/outputs` 已登记视觉证据。
+- **运行态边界**：真实服务商网络、Android 真机安装、IME 动画和截图仍待用户安装验收；本批未提交、未推送、未发布线上。
+
 ## 2026-08-14 项目治理与本地存储清理（Codex，仅文档/维护）
 
 - 新增 `docs/PROJECT_MANAGEMENT.md` 项目管理总纲，统一当前看板、产品范围、文档权威层级、架构边界、需求状态流、DoR/DoD、验证矩阵、版本/分支/发布/回退、路线图、风险登记和磁盘保留规则；重写工程 README 与 docs 索引，并从 `CLAUDE_START_HERE.md` 建立入口。
@@ -1889,3 +2195,48 @@ $env:FLUTTER_ROOT='C:\src\flutter'
 - 验证：`flutter analyze --no-pub` 通过；`flutter build apk --release --no-pub` 成功；APK 内部资源抽查确认 6 个目标 SVG 均已打包，且保留顶部高光。
 - APK：`C:\src\xunni-codex\ci-artifacts\releases\feimiao-codex-v1.169.0-171.apk`，大小 `111,409,563` 字节，SHA256：`50AD0848FE416288B434A8ABFE93FE30B75113B0C9C8E9EFDCFFC09755A04722`。`aapt dump badging` 确认 `com.qingji.qingji.codex` / `versionCode=171` / `versionName=1.169.0` / 应用名 `肥喵记账`；`apksigner verify --print-certs` 确认证书仍为 `CN=Feimiao Codex Test, OU=Codex, O=Feimiao, L=Shanghai, ST=Shanghai, C=CN`。
 - 本地对比预览：`C:\Users\寻逆啊\Documents\Codex\2026-07-04\xian\outputs\icon_refine_car_wash_toll_compare.svg`。
+## 2026-08-16 v1.222.0+235（AI 兼容性审查修复，待用户安装验收）
+
+- 修复模型管理刷新会复活用户已删除模型；跨服务商模型列表可滚动并显示服务商；AI 输入字段统一回到主题透明填充。
+- 修复清空/新增/删除服务商后的即时回退与模型校正；仅改元数据不再误重置隐私授权。
+- Claude 原生请求尊重显式 endpoint，统一 thinking budget、`max_tokens` 和 `temperature`；Effort 保留关闭、Minimal、Low、Medium、Extra、Max、Ultra 全档位。
+- 闲聊分流补齐今日/昨日/近 N 天，购买建议不再误走普通记账，无问号账本摘要可以查账。
+- 清理本轮可再生 Flutter/Gradle/Dart 缓存、日志和旧重复 APK；移除被误跟踪的 `.wrangler` 账号缓存并加入忽略规则，保留当前包与上一包作为回退。
+- 定向测试：AI provider 56/56、意图/日期/模型接口 47/47、AI 核心 77/77、AI Chat Widget 31/31；静态分析 0 error。
+- 全工程 959 项实际执行，954 通过；5 项既有资产页/月份轴/性能基线失败未混入本批修复。Release APK 已归档：113,682,307 字节，SHA256 `889D493B04232C2B6B807E74CC39A1764786B8B9555815287559E0685F622ED9`，包名/版本 `com.qingji.qingji.codex / 1.222.0 / 235`，16 KiB 对齐、V2 签名和固定证书通过。真机、真实 provider API 和截图未验证。
+## 2026-08-21 v1.231.0+244 喵助手模型布局与模型获取修复（Codex，本地待验包）
+
+- **输入区布局**：模型名与思考强度保持 6dp 紧凑间距，模型名使用可用宽度完整缩放；模型/思考强度组不再与 Spacer 平分宽度，发送按钮继续固定右边界。
+- **Chats 字阶**：标题调整为 19px / w400；设置页模型列表同步放大一号。
+- **模型获取**：自定义 OpenAI 兼容中转即使使用 Claude 模型名也继续使用 Bearer；仅官方 Anthropic 端点发送原生 Claude 请求头。
+- **验证**：待本轮 analyze、全量测试和 release APK 验包完成后补齐证据。
+## 2026-08-24 v1.242.0+255 OAuth 网络路径与输入框字号修复（Codex，待用户真机验收）
+
+- **OAuth 网络路径**：Android GPT OAuth 使用 Chrome Custom Tabs，沿用系统 Chrome 的 Cookie、代理和出口网络；PKCE/state、1455/1457 localhost 回调、恢复重绑、Token 刷新、GPT 模型目录和粘贴回调兜底保持不变。
+- **输入框布局**：全屏输入区移除多余 `Spacer`，模型名称不再被压缩到约 4px；输入框模型名称为 `19px`，`High/Low` 思考强度为 `16px`，模型列表为 `15px`；选中时才显示灰底，Effort 滑块不变。
+- **验证**：构建前重新执行 analyze、全量 Flutter 测试和 release APK 门禁；真实 Android OAuth、provider 网络和 IME 仍需用户安装后验收。
+- **版本同步**：`pubspec.yaml`、`lib/core/app_version.dart`、`lib/build_info.dart`、`android/local.properties` 同步为 `1.242.0+255` / `b0824-255`。
+## 2026-08-24 v1.242.0+255 OAuth 网络路径与输入框字号修复（Codex，本地交付候选）
+
+- **OAuth 网络路径**：Android GPT OAuth 使用 Chrome Custom Tabs，沿用系统 Chrome 的 Cookie、代理和出口网络；PKCE/state、1455/1457 localhost 回调、恢复重绑、Token 刷新、GPT 模型目录和粘贴回调兜底保持不变。
+- **输入框布局**：全屏输入区移除多余 `Spacer`，模型名称不再被压缩到约 4px；输入框模型名称为 `19px`，`High/Low` 思考强度为 `16px`，模型列表为 `15px`；选中时才显示灰底，Effort 滑块不变。
+- **验证**：analyze exit 0（28 条既有 info）；串行全量 Flutter 测试 **1048/1048**；release gate **9/9**；APK 身份门禁通过（包名、版本、16 KiB 对齐、APK V2、固定证书）。真实 Android OAuth、provider 网络和 IME 仍需用户安装后验收。
+- **交付**：APK `C:\src\xunni-codex\ci-artifacts\releases\feimiao-codex-v1.242.0-255.apk`（114,902,818 字节），SHA256 `2a7177a0e3cc26bd9cea048f79b01247983d2adedd5e14afaa9ea7be367c091e`；源码仍未提交、未推送、未发布线上。
+## 2026-08-25 v1.250.0+263 GPT OAuth 原生回调竞态与流隔离最终收口（Codex，本地交付）
+
+- **停止竞态修复**：OAuth 保活停止改为 `stopService()` + 有界等待，不再发送会与 `startForegroundService()` 竞争的 STOP Intent；MainActivity 的停止等待放到后台线程。
+- **恢复稳定性**：启动时先按当前 OAuth state 检查 ready 标记并做真实 `127.0.0.1` TCP 探测，健康监听直接复用，Activity 重建不会制造新的拒绝窗口。
+- **回调隔离**：ready 标记携带 flow/state；原生服务仅接受当前 state，错误 state 返回 400，不覆盖已有 callback；新授权会清理废弃回调；监听只绑定回环 IPv4，IPv6 仅作附加监听。
+- **设备级证据**：在线模拟器安装/冷启动成功；真实 Chrome Custom Tab 打开官方授权 URL，`:oauth` 前台服务 `startForegroundCount=1`；端口转发访问 1455 的错误 state=400、正确 state=200；无 `ForegroundServiceDidNotStartInTimeException`。
+- **验证**：全量 Flutter 测试 **1051/1051**；`flutter analyze --no-pub --no-fatal-infos --no-fatal-warnings` exit 0（33 条既有 info）；Gradle `:app:assembleRelease` 成功；APK 包名 `com.qingji.qingji.codex` / versionName `1.250.0` / versionCode `263`，16 KiB 对齐与 V2 签名通过。
+- **交付**：APK `[feimiao-codex-v1.250.0-263.apk](C:\src\xunni-codex\ci-artifacts\releases\feimiao-codex-v1.250.0-263.apk)`（115,970,438 字节），SHA256 `B2FDF2AF9BCADD5AAAD82529655905CAAD5B640F16E4BEC8010CB5B8B8F70568`；证书 SHA-256 `4e99c399d4d246bd9c6b08b1d641248bd0846e7ae650c3a766e30fa67483d507`。
+- **边界**：模拟器未执行真实 ChatGPT 账号交互，因此 Token 交换、官方模型列表非空和 Responses 实际回复待用户在可联网设备登录后确认；源码未提交、未推送、未发布线上。
+## 2026-08-26 v1.257.0+270 Claude/iOS 弹窗与 AI 回复体验收口（Codex，本地交付候选）
+
+- **统一弹窗**：全局 `showIosMenu` 改为 Claude/iOS 风格中性灰遮罩、锚点镂空、磨砂圆角、缩放淡入和统一细线图标；长按菜单、Chats 菜单、模型/Effort 选择共享同一视觉壳，点击带震动反馈。
+- **消息操作**：长按自己发送的消息原位放大约 1.18 倍并高亮，显示发送时间，支持复制、编辑、选择文本；选择文本直接在原消息气泡内调用系统选区，不再出现居中白框，也不提供重复发送。
+- **思考与来源**：思考中显示动效，完成后显示思考耗时并可展开简短过程，过程与正文用灰线分隔；来源 favicon 和数量放在回答操作栏最右侧，正文不再追加来源段落。
+- **图片与排版**：发送图片保留真实缩略图，三张图片同排，超出数量可横向滑动；Markdown 表格按列对齐并支持横向滚动，短回复底部留白保持收紧。
+- **验证**：Claude/Chats 定向 **18/18**；串行全量 Flutter **1084/1084**；`flutter analyze --no-fatal-infos --no-fatal-warnings` exit 0（40 条既有 info/warning）。
+- **交付**：Release APK `C:\src\xunni-codex\ci-artifacts\releases\feimiao-codex-v1.257.0-270.apk`，116,937,094 字节，SHA256 `C168DBC4E3A93784B4320736AD4A232D9290B97E7D7E6B9DDEC320E9B333120B`；release identity gate 已确认 `com.qingji.qingji.codex / 1.257.0 / 270`、16 KiB 对齐、APK V2 和固定 Codex 证书均正确。
+- **运行态边界**：本机无在线 Android 设备，真实 provider/OAuth、IME、相册权限和安装冷启动仍需用户设备验收；源码未提交、未推送、未发布线上。

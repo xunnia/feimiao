@@ -3,6 +3,7 @@ import 'dart:ui' show Tristate;
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:qingji/widgets/app_buttons.dart';
+import 'package:qingji/widgets/glass.dart';
 import 'package:qingji/widgets/settings_ui.dart';
 
 void main() {
@@ -26,9 +27,16 @@ void main() {
       ),
     );
 
-    final size = tester.getSize(find.byKey(const ValueKey('pill')));
-    expect(size.height, 34);
-    expect(size.width, lessThan(96));
+    final hitSize = tester.getSize(find.byKey(const ValueKey('pill')));
+    expect(hitSize.height, greaterThanOrEqualTo(48));
+    expect(hitSize.width, lessThan(96));
+    final visualSize = tester.getSize(
+      find.descendant(
+        of: find.byKey(const ValueKey('pill')),
+        matching: find.byType(GlassSurface),
+      ),
+    );
+    expect(visualSize.height, 34);
   });
 
   testWidgets('AppSwitch 关闭态灰槽可见、两态同尺寸（iOS 经典形态）', (tester) async {

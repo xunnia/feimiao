@@ -471,18 +471,19 @@ class _GoalCard extends StatelessWidget {
             const SizedBox(height: 4),
             Row(
               children: [
-                TextButton.icon(
+                AppPillButton(
+                  label: '取出',
                   onPressed: onWithdraw,
-                  icon: const Icon(Icons.remove, size: 18),
-                  label: const Text('取出'),
-                  style: TextButton.styleFrom(
-                      foregroundColor: scheme.onSurfaceVariant),
+                  leading: const Icon(Icons.remove),
+                  foregroundColor: scheme.onSurfaceVariant,
                 ),
                 const Spacer(),
-                FilledButton.icon(
+                AppPillButton(
+                  label: '存入',
                   onPressed: onDeposit,
-                  icon: const Icon(Icons.add, size: 18),
-                  label: const Text('存入'),
+                  leading: const Icon(Icons.add),
+                  fillColor: scheme.onSurface,
+                  foregroundColor: scheme.surface,
                 ),
               ],
             ),

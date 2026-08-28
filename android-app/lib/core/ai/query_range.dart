@@ -9,16 +9,28 @@ class QueryRange {
   const QueryRange(this.start, this.end);
 
   static const _cnDigits = {
-    '一': 1, '二': 2, '三': 3, '四': 4, '五': 5, '六': 6,
-    '七': 7, '八': 8, '九': 9, '十': 10, '十一': 11, '十二': 12,
+    '一': 1,
+    '二': 2,
+    '三': 3,
+    '四': 4,
+    '五': 5,
+    '六': 6,
+    '七': 7,
+    '八': 8,
+    '九': 9,
+    '十': 10,
+    '十一': 11,
+    '十二': 12,
   };
 
   static QueryRange? parse(String question, DateTime now) {
     final q = question.trim();
     final today = DateTime(now.year, now.month, now.day);
 
-    if (q.contains('今天')) return QueryRange(today, today);
-    if (q.contains('昨天')) {
+    if (q.contains('今天') || q.contains('今日')) {
+      return QueryRange(today, today);
+    }
+    if (q.contains('昨天') || q.contains('昨日')) {
       final d = today.subtract(const Duration(days: 1));
       return QueryRange(d, d);
     }
@@ -27,8 +39,7 @@ class QueryRange {
       return QueryRange(monday, today);
     }
     if (q.contains('上周') || q.contains('上个星期')) {
-      final monday =
-          today.subtract(Duration(days: today.weekday - 1 + 7));
+      final monday = today.subtract(Duration(days: today.weekday - 1 + 7));
       return QueryRange(monday, monday.add(const Duration(days: 6)));
     }
     if (q.contains('本月') || q.contains('这个月') || q.contains('这月')) {
@@ -54,21 +65,21 @@ class QueryRange {
         final y = now.year - 1;
         return QueryRange(DateTime(y, month, 1), DateTime(y, month + 1, 0));
       }
-      return QueryRange(DateTime(now.year - 1, 1, 1),
-          DateTime(now.year - 1, 12, 31));
+      return QueryRange(
+          DateTime(now.year - 1, 1, 1), DateTime(now.year - 1, 12, 31));
     }
 
     // 最近 / 近 N 天
     final recent = RegExp(r'[最]?近\s*(\d{1,3})\s*天').firstMatch(q);
     if (recent != null) {
       final n = int.parse(recent.group(1)!).clamp(1, 366);
-      return QueryRange(
-          today.subtract(Duration(days: n - 1)), today);
+      return QueryRange(today.subtract(Duration(days: n - 1)), today);
     }
 
     // 「5月」「五月」「2026年5月」：默认今年；还没到的月份按去年算。
-    final m = RegExp(r'(?:(\d{4})\s*年)?\s*(\d{1,2}|[一二三四五六七八九十]{1,2})\s*月(?!份?底|初)')
-        .firstMatch(q);
+    final m =
+        RegExp(r'(?:(\d{4})\s*年)?\s*(\d{1,2}|[一二三四五六七八九十]{1,2})\s*月(?!份?底|初)')
+            .firstMatch(q);
     if (m != null) {
       final month = int.tryParse(m.group(2)!) ?? _cnDigits[m.group(2)!] ?? 0;
       if (month >= 1 && month <= 12) {
@@ -89,9 +100,9 @@ class QueryRange {
     final matches = re.allMatches(q).toList();
     if (matches.length != 1) return null;
     // 「1到6月」「1-6月」这类只有一个「月」字的区间写法：认连接词。
-    final rangeLike = RegExp(
-        r'(\d{1,2}|[一二三四五六七八九十]{1,2})\s*月?\s*(?:到|至|~|～|—|－|-|和|与|跟)'
-        r'\s*(\d{1,2}|[一二三四五六七八九十]{1,2})\s*月');
+    final rangeLike =
+        RegExp(r'(\d{1,2}|[一二三四五六七八九十]{1,2})\s*月?\s*(?:到|至|~|～|—|－|-|和|与|跟)'
+            r'\s*(\d{1,2}|[一二三四五六七八九十]{1,2})\s*月');
     if (rangeLike.hasMatch(q)) return null;
     final g = matches.first.group(1)!;
     final month = int.tryParse(g) ?? _cnDigits[g] ?? 0;

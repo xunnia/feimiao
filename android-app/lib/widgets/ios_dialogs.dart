@@ -3,6 +3,7 @@ import 'dart:ui' show ImageFilter;
 import 'package:flutter/material.dart';
 
 import '../theme/app_colors.dart';
+import '../theme/app_tokens.dart';
 
 /// 确认弹窗（2026-07-10 二轮对齐 iOS Cloudflare 客户端原图，用户逐条点名）：
 /// 磨砂卡（透色不透字）+ 发丝细边 + 标题/正文左对齐（16/w500 + 灰正文）
@@ -44,6 +45,35 @@ Future<bool> showConfirmDialog(
     },
   );
   return result ?? false;
+}
+
+/// 使用统一毛玻璃外壳展示阻塞或自定义内容。
+/// 与 [showConfirmDialog] 共用遮罩和入场动效，避免页面再直接调用
+/// Material 的 AlertDialog/showDialog。
+Future<T?> showFrostedDialog<T>(
+  BuildContext context, {
+  required Widget child,
+  bool barrierDismissible = true,
+  String barrierLabel = '关闭',
+}) {
+  return showGeneralDialog<T>(
+    context: context,
+    barrierDismissible: barrierDismissible,
+    barrierLabel: barrierLabel,
+    barrierColor: Colors.black.withValues(alpha: 0.35),
+    transitionDuration: const Duration(milliseconds: 200),
+    pageBuilder: (_, __, ___) => child,
+    transitionBuilder: (ctx, anim, _, page) {
+      final curved = CurvedAnimation(parent: anim, curve: Curves.easeOutBack);
+      return FadeTransition(
+        opacity: anim,
+        child: ScaleTransition(
+          scale: Tween<double>(begin: 0.92, end: 1.0).animate(curved),
+          child: page,
+        ),
+      );
+    },
+  );
 }
 
 /// 磨砂弹窗卡（图二 Cloudflare 风）：背景高斯模糊——只透出底下的颜色、
@@ -149,8 +179,7 @@ class DialogPillButton extends StatelessWidget {
           label,
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
-          style: TextStyle(
-            fontSize: 15,
+          style: AppType.action(scheme).copyWith(
             fontWeight: FontWeight.w500,
             color: foreground ?? scheme.primary,
           ),
@@ -188,18 +217,14 @@ class _ConfirmCard extends StatelessWidget {
           Text(
             title,
             textAlign: TextAlign.start,
-            style: TextStyle(
-              fontSize: 16,
-              fontWeight: FontWeight.w500,
-              color: scheme.onSurface,
-            ),
+            style: AppType.sheetTitle(scheme).copyWith(fontSize: 16),
           ),
           if (message != null && message!.isNotEmpty) ...[
             const SizedBox(height: 10),
             Text(
               message!,
               textAlign: TextAlign.start,
-              style: TextStyle(
+              style: AppType.secondary(scheme).copyWith(
                 fontSize: 14,
                 height: 1.55,
                 color: dialogBodyColor(scheme),

@@ -867,7 +867,7 @@ void main() {
     db = await databaseFactory.openDatabase(dbPath);
     expect(
       Sqflite.firstIntValue(await db.rawQuery('PRAGMA user_version')),
-      43,
+      48,
     );
     expect(
       await _captureV38Evidence(db, planId: planId, assetId: assetId),
@@ -1622,8 +1622,8 @@ void main() {
   test('A2 借入：入账转账、一次性还款日与还款闭环', () async {
     final repo = await freshRepo();
     final payerId = repo.accounts.first.id;
-    final payerBefore =
-        repo.accountBalanceOf(repo.accounts.singleWhere((a) => a.id == payerId));
+    final payerBefore = repo
+        .accountBalanceOf(repo.accounts.singleWhere((a) => a.id == payerId));
     final profileId = await repo.addPersonalBorrow(
       counterparty: '李四',
       amount: Decimal.fromInt(500),
@@ -1804,9 +1804,7 @@ void main() {
     );
     expect(repo.accountBalanceOf(account), Decimal.zero);
     expect(
-      repo.receivableAssets
-          .singleWhere((a) => a.id == assetId)
-          .remainingAmount,
+      repo.receivableAssets.singleWhere((a) => a.id == assetId).remainingAmount,
       Decimal.fromInt(1000),
     );
     await repo.closeForTest();

@@ -108,6 +108,11 @@ class ChatIntent {
     '本周',
     '这周',
     '上周',
+    '今天',
+    '今日',
+    '昨天',
+    '昨日',
+    '最近',
     '今年',
     '去年',
     '账本',
@@ -137,11 +142,15 @@ class ChatIntent {
     '付了',
     '付款',
     '买了',
-    '买',
     '充值',
     '吃了',
     '喝了',
     '收到',
+    '到账',
+    '到帐',
+    '入账',
+    '入帐',
+    '收款',
     '发红包',
     '发了',
     '赚',
@@ -182,6 +191,14 @@ class ChatIntent {
     '网费',
     '快递',
     '药费',
+    '失业金',
+    '失业保险',
+    '社保',
+    '补贴',
+    '津贴',
+    '养老金',
+    '退休金',
+    '公积金',
     '红包',
     '工资',
     '奖金',
@@ -215,7 +232,8 @@ class ChatIntent {
 
     // 1) 明确查账动作，或「问句信号 + 财务语义」→ 查账。
     final hasFinanceContext = financeQueryWords.any(t.contains);
-    final hasLedgerScope = ledgerScopeWords.any(t.contains);
+    final hasRelativeRange = RegExp(r'(?:最近|近\s*\d{1,3}\s*天)').hasMatch(t);
+    final hasLedgerScope = ledgerScopeWords.any(t.contains) || hasRelativeRange;
     if (explicitQueryActions.any(t.contains) ||
         (hasLedgerScope &&
             hasFinanceContext &&
@@ -229,14 +247,32 @@ class ChatIntent {
           : ChatIntentKind.chat;
     }
 
-    // 2) 带货币单位的金额，或「裸数字 + 明确收支语境」，才算记账。
     final hasExplicitAmount = hasColloquialAmount(t);
     final hasRecordContext = recordContextWords.any(t.contains);
     final hasTrailingChineseAmount = RegExp(r'[零一二两三四五六七八九十百千万]+$').hasMatch(t);
+    final hasRecordAction = recordActionWords.any(t.contains);
+
+    // 简短的账本摘要常省略问号（如“今天收入”“本周餐饮”）。只要有
+    // 明确的账本范围和财务词，且没有金额/记账动作，就按查账处理；这样
+    // 不会把它们误送进普通闲聊分支。
+    final hasSummaryFinanceContext =
+        financeQueryWords.where((word) => word != '买').any(t.contains);
+    if (hasLedgerScope &&
+        hasSummaryFinanceContext &&
+        !hasExplicitAmount &&
+        !hasRecordAction &&
+        !(hasArabicAmount && hasRecordContext) &&
+        !(hasTrailingChineseAmount && hasRecordContext)) {
+      return ChatIntentKind.query;
+    }
+
+    // 2) 带货币单位的金额，或「裸数字 + 明确收支语境」，才算记账。
     if (hasExplicitAmount ||
         (hasArabicAmount && hasRecordContext) ||
         (hasTrailingChineseAmount && hasRecordContext) ||
-        recordActionWords.any(t.contains)) {
+        (hasArabicAmount && t.contains('买')) ||
+        (hasTrailingChineseAmount && t.contains('买')) ||
+        hasRecordAction) {
       return ChatIntentKind.record;
     }
 

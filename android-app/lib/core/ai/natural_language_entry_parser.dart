@@ -217,6 +217,18 @@ class NaturalLanguageEntryParser {
       '报销',
       '收到红包',
       '收红包',
+      '收款',
+      '到账',
+      '到帐',
+      '入账',
+      '入帐',
+      '失业金',
+      '失业保险',
+      '社保',
+      '补贴',
+      '津贴',
+      '养老金',
+      '退休金',
       '分红',
       '利息',
       '卖了',
@@ -242,6 +254,32 @@ class NaturalLanguageEntryParser {
     for (final (word, offset) in offsets) {
       if (text.contains(word)) {
         return _applyExplicitTime(text, now.add(Duration(days: offset)));
+      }
+    }
+
+    // “13号失业金到账 2250”这类补记很常见。只识别未带年月的日号，
+    // 避免把完整日期里的“13日”错误套回当前月份。
+    final hasExplicitYearOrMonth = RegExp(r'\d{1,4}\s*[年月]').hasMatch(text);
+    final dayMatch = hasExplicitYearOrMonth
+        ? null
+        : RegExp(r'(?<!\d)([1-3]?\d)\s*[号日](?!\d)').firstMatch(text);
+    if (dayMatch != null) {
+      final day = int.tryParse(dayMatch.group(1) ?? '');
+      final lastDay = DateTime(now.year, now.month + 1, 0).day;
+      if (day != null && day >= 1 && day <= lastDay) {
+        return _applyExplicitTime(
+          text,
+          DateTime(
+            now.year,
+            now.month,
+            day,
+            now.hour,
+            now.minute,
+            now.second,
+            now.millisecond,
+            now.microsecond,
+          ),
+        );
       }
     }
     return _applyExplicitTime(text, now);
@@ -393,10 +431,14 @@ class NaturalLanguageEntryParser {
 
   static const _incomeKeywords = [
     ('salary', ['工资', '发薪', '薪水', 'salary']),
+    ('inc_salary_allow', ['餐补', '交通补', '住房补', '通讯补']),
     ('bonus', ['奖金', '年终奖', 'bonus']),
     ('investment', ['理财', '基金', '股票', '分红', '利息', 'investment']),
+    ('pension', ['养老金', '退休金']),
+    ('inc_subsidy', ['失业金', '失业保险', '社保', '政府补助', '补助', '补贴', '津贴']),
     ('redPacket', ['红包']),
     ('refund', ['退款', '退了', '报销', 'refund']),
+    ('otherIncome', ['到账', '到帐', '入账', '入帐', '收款']),
   ];
 
   static String? _detectCategory(String text, {required TransactionKind kind}) {

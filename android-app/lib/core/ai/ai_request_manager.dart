@@ -22,22 +22,57 @@ class AiRequestManager {
       final existing = _activeRequests[taskId];
       if (existing != null) {
         existing.cancel();
-        await existing.completer.future.catchError((_) {});
+        try {
+          await existing.completer.future;
+        } catch (_) {
+          // Cancellation is the expected outcome before the replacement owns
+          // this taskId. A typed catchError handler cannot safely return null
+          // for every generic request result.
+        }
       }
     }
 
     final controller = _RequestController<T>();
+    // The completer is an internal cancellation latch. It is intentionally
+    // not the Future returned to callers, so it must always have an error
+    // listener. Otherwise a failed request can be reported twice: once to
+    // the caller and once as an unhandled asynchronous exception here.
+    unawaited(controller.completer.future.then<void>(
+      (_) {},
+      onError: (_, __) {},
+    ));
     _activeRequests[taskId] = controller;
 
+    final requestFuture = Future<T>.sync(request);
+    // A cancelled request may still finish at the transport layer because the
+    // callback does not expose an abort handle. Keep observing that losing
+    // future so a later socket error never becomes an unhandled exception.
+    unawaited(requestFuture.then<void>(
+      (_) {},
+      onError: (_, __) {},
+    ));
+
     try {
-      final result = await request();
-      controller.completer.complete(result);
+      final result = await Future.any<T>([
+        requestFuture,
+        controller.completer.future,
+      ]);
+      if (!controller.completer.isCompleted) {
+        controller.completer.complete(result);
+      }
       return result;
-    } catch (e) {
-      controller.completer.completeError(e);
+    } catch (e, stackTrace) {
+      if (!controller.completer.isCompleted) {
+        controller.completer.completeError(e, stackTrace);
+      }
       rethrow;
     } finally {
-      _activeRequests.remove(taskId);
+      // A request with the same taskId may already have replaced this one.
+      // Only the current owner may clear the slot; otherwise an old finally
+      // makes the new request impossible to cancel or replace.
+      if (identical(_activeRequests[taskId], controller)) {
+        _activeRequests.remove(taskId);
+      }
     }
   }
 
@@ -82,14 +117,15 @@ class AiRequestManager {
               taskType: taskType,
               provider: provider,
               model: model,
-              warning: '重试 $maxRetries 次后放弃: ${e is AiException ? e.message : e.toString()}',
+              warning:
+                  '重试 $maxRetries 次后放弃: ${e is AiException ? e.message : e.toString()}',
             );
           }
           rethrow;
         }
 
-        final canRetry = shouldRetry?.call(e) ??
-          (e is AiException && e.shouldRetry);
+        final canRetry =
+            shouldRetry?.call(e) ?? (e is AiException && e.shouldRetry);
 
         if (!canRetry) {
           // 记录不可重试错误
@@ -98,7 +134,8 @@ class AiRequestManager {
               taskType: taskType,
               provider: provider,
               model: model,
-              warning: '遇到不可重试错误: ${e is AiException ? e.message : e.toString()}',
+              warning:
+                  '遇到不可重试错误: ${e is AiException ? e.message : e.toString()}',
             );
           }
           rethrow;
@@ -161,7 +198,7 @@ class AiRequestManager {
     if (code == 400) {
       if (message.toLowerCase().contains('token') &&
           (message.toLowerCase().contains('limit') ||
-           message.toLowerCase().contains('exceed'))) {
+              message.toLowerCase().contains('exceed'))) {
         return AiTokenLimitException(message, statusCode: code);
       }
       return AiBadRequestException(message, statusCode: code);
@@ -176,8 +213,8 @@ class AiRequestManager {
   }
 
   static int? _parseRetryAfter(String message) {
-    final match = RegExp(r'retry.{0,10}?(\d+)', caseSensitive: false)
-        .firstMatch(message);
+    final match =
+        RegExp(r'retry.{0,10}?(\d+)', caseSensitive: false).firstMatch(message);
     if (match != null) {
       return int.tryParse(match.group(1) ?? '');
     }

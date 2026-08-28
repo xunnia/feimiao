@@ -14,9 +14,11 @@ import '../../core/money_format.dart';
 import '../../core/models/transaction_card_display.dart';
 import '../../data/app_repository.dart';
 import '../../theme/app_colors.dart';
+import '../../theme/app_tokens.dart';
 import '../../widgets/app_buttons.dart';
 import 'theme_settings_view.dart';
 import '../../widgets/app_toast.dart';
+import '../common/app_sheet.dart';
 import '../../widgets/ios_form.dart';
 import '../../widgets/ios_menu.dart';
 import '../../widgets/settings_ui.dart';
@@ -29,20 +31,17 @@ import '../../widgets/app_page_route.dart';
 
 /// 设置：ChatGPT 式全屏弹窗（图二）——圆顶角卡从底部滑出，右上角 ✕，
 /// 无标题文字，头像居中开场。别再从抽屉 push 全屏页。
-Future<void> showSettingsSheet(BuildContext context) {
-  return showModalBottomSheet<void>(
-    context: context,
-    isScrollControlled: true,
-    useSafeArea: false,
-    backgroundColor: Colors.transparent,
-    barrierColor: Colors.black.withValues(alpha: 0.3),
-    builder: (_) => const FractionallySizedBox(
+Future<void> showSettingsSheet(BuildContext context) async {
+  await showBlurSheet<void>(
+    context,
+    radius: 28,
+    barrierOpacity: 0.3,
+    child: const FractionallySizedBox(
       heightFactor: 0.96,
       child: SettingsView(),
     ),
   );
 }
-
 /// 设置页内容：iOS 风分组——灰底白卡 + 发丝分隔。作为弹窗内容渲染。
 class SettingsView extends StatelessWidget {
   const SettingsView({super.key});
@@ -51,6 +50,18 @@ class SettingsView extends StatelessWidget {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final repo = context.watch<AppRepository>();
+
+    Future<void> setRepaymentReminder(bool enabled) async {
+      await repo.setRepaymentReminderEnabled(enabled);
+      // 开关和整行点击必须走同一条副作用路径，避免只点文字时
+      // 状态变了但系统通知没有重新排程。
+      if (enabled) {
+        await RepaymentReminderScheduler.reschedule(repo);
+      } else {
+        await RepaymentReminderScheduler.cancelAll();
+      }
+    }
+
     return ClipRRect(
       borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
       child: Container(
@@ -75,44 +86,47 @@ class SettingsView extends StatelessWidget {
                     avatarPath: repo.profileAvatarPath,
                     onTap: () => showEditProfileSheet(context),
                   ),
-                  const _SectionHeader(label: '管理'),
+                  const SettingsSectionLabel('管理'),
                   // 抽屉功能列表里已有的入口（预算/资产/分类等）这里不重复——
                   // 设置页只放抽屉没有的：AI 设置、备份恢复、显示、小组件、关于。
-                  _Group(children: [
-                    _Tile(
-                      icon: CupertinoIcons.sparkles,
+                  SettingsGroup(children: [
+                    SettingsRow(
+                      leading: const Icon(CupertinoIcons.sparkles),
                       title: 'AI 记账设置',
+                      trailing: const Icon(CupertinoIcons.chevron_forward,
+                          size: 18),
                       onTap: () => Navigator.push(
                         context,
                         AppPageRoute<void>(
                             builder: (_) => const AiSettingView()),
                       ),
                     ),
-                    _Tile(
-                      icon: CupertinoIcons.cloud_upload,
+                    SettingsRow(
+                      leading: const Icon(CupertinoIcons.cloud_upload),
                       title: '备份与恢复',
+                      trailing: const Icon(CupertinoIcons.chevron_forward,
+                          size: 18),
                       onTap: () => Navigator.push(
                         context,
                         AppPageRoute<void>(builder: (_) => const BackupView()),
                       ),
                     ),
                   ]),
-                  const _SectionHeader(label: '显示'),
-                  _Group(children: [
-                    _Tile(
-                      icon: CupertinoIcons.rectangle_3_offgrid,
+                  const SettingsSectionLabel('显示'),
+                  SettingsGroup(children: [
+                    SettingsRow(
+                      leading: const Icon(CupertinoIcons.rectangle_3_offgrid),
                       title: '账单与聊天显示',
                       trailing: Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          Text(
-                            repo.transactionCardDisplayMode.label,
-                            style: Theme.of(context)
-                                .textTheme
-                                .bodyMedium
-                                ?.copyWith(
-                                  color: scheme.onSurfaceVariant,
-                                ),
+                          Flexible(
+                            child: Text(
+                              repo.transactionCardDisplayMode.label,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: AppType.trailingValue(scheme),
+                            ),
                           ),
                           const SizedBox(width: 6),
                           Icon(
@@ -124,29 +138,30 @@ class SettingsView extends StatelessWidget {
                       ),
                       onTap: () => showTransactionDisplaySettings(context),
                     ),
-                    _Tile(
-                      icon: CupertinoIcons.paintbrush,
+                    SettingsRow(
+                      leading: const Icon(CupertinoIcons.paintbrush),
                       title: '主题外观',
+                      trailing: const Icon(CupertinoIcons.chevron_forward,
+                          size: 18),
                       onTap: () => Navigator.push(
                         context,
                         AppPageRoute<void>(
                             builder: (_) => const ThemeSettingsView()),
                       ),
                     ),
-                    _Tile(
-                      icon: CupertinoIcons.money_yen_circle,
+                    SettingsRow(
+                      leading: const Icon(CupertinoIcons.money_yen_circle),
                       title: '金额显示',
                       trailing: Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          Text(
-                            moneyDisplayLabel(repo),
-                            style: Theme.of(context)
-                                .textTheme
-                                .bodyMedium
-                                ?.copyWith(
-                                  color: scheme.onSurfaceVariant,
-                                ),
+                          Flexible(
+                            child: Text(
+                              moneyDisplayLabel(repo),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: AppType.trailingValue(scheme),
+                            ),
                           ),
                           const SizedBox(width: 6),
                           Icon(CupertinoIcons.chevron_forward,
@@ -156,40 +171,41 @@ class SettingsView extends StatelessWidget {
                       onTap: () => showMoneyDisplaySheet(context),
                     ),
                   ]),
-                  const _SectionHeader(label: '提醒'),
-                  _Group(children: [
-                    _SwitchTile(
-                      icon: CupertinoIcons.bell,
+                  const SettingsSectionLabel('提醒'),
+                  SettingsGroup(children: [
+                    SettingsRow(
+                      leading: const Icon(CupertinoIcons.bell),
                       title: '还款提醒',
                       subtitle: '信用卡/贷款/借入还款日前一天和当天各提醒一次',
-                      value: repo.repaymentReminderEnabled,
-                      onChanged: (enabled) async {
-                        await repo.setRepaymentReminderEnabled(enabled);
-                        // 开：立刻按新状态重排；关：撤销全部已排的还款提醒
-                        // 通知——别等下次回前台才生效，用户点了开关要马上
-                        // 看得出效果。
-                        if (enabled) {
-                          await RepaymentReminderScheduler.reschedule(repo);
-                        } else {
-                          await RepaymentReminderScheduler.cancelAll();
-                        }
-                      },
+                      trailing: AppSwitch(
+                        value: repo.repaymentReminderEnabled,
+                        semanticLabel: '还款提醒',
+                        onChanged: setRepaymentReminder,
+                      ),
+                      onTap: () =>
+                          setRepaymentReminder(!repo.repaymentReminderEnabled),
                     ),
                   ]),
-                  const _SectionHeader(label: '小组件'),
-                  _Group(children: [
-                    _SwitchTile(
-                      icon: CupertinoIcons.eye_slash,
+                  const SettingsSectionLabel('小组件'),
+                  SettingsGroup(children: [
+                    SettingsRow(
+                      leading: const Icon(CupertinoIcons.eye_slash),
                       title: '隐藏金额',
                       subtitle: '桌面小组件不显示具体金额',
-                      value: repo.widgetPrivacyMode,
-                      onChanged: repo.setWidgetPrivacyMode,
+                      trailing: AppSwitch(
+                        value: repo.widgetPrivacyMode,
+                        semanticLabel: '隐藏金额',
+                        onChanged: repo.setWidgetPrivacyMode,
+                      ),
+                      onTap: () => repo.setWidgetPrivacyMode(
+                        !repo.widgetPrivacyMode,
+                      ),
                     ),
                   ]),
-                  const _SectionHeader(label: '关于'),
-                  _Group(children: [
-                    _Tile(
-                      icon: CupertinoIcons.arrow_down_circle,
+                  const SettingsSectionLabel('关于'),
+                  SettingsGroup(children: [
+                    SettingsRow(
+                      leading: const Icon(CupertinoIcons.arrow_down_circle),
                       title: '检查更新',
                       // 版本号只留这一处（关于行不再重复；关于弹层里另有完整版本）。
                       trailing: Text(
@@ -204,9 +220,11 @@ class SettingsView extends StatelessWidget {
                         await checkAppUpdate(context);
                       },
                     ),
-                    _Tile(
-                      icon: CupertinoIcons.info_circle,
+                    SettingsRow(
+                      leading: const Icon(CupertinoIcons.info_circle),
                       title: '关于',
+                      trailing: const Icon(CupertinoIcons.chevron_forward,
+                          size: 18),
                       onTap: () => _showAboutSheet(context),
                     ),
                   ]),
@@ -231,7 +249,6 @@ class SettingsView extends StatelessWidget {
     );
   }
 }
-
 class _ProfileHeaderCard extends StatelessWidget {
   final String nickname;
   final String avatarPath;
@@ -311,7 +328,6 @@ class _ProfileHeaderCard extends StatelessWidget {
     );
   }
 }
-
 class _ProfileAvatar extends StatelessWidget {
   final String nickname;
   final String avatarPath;
@@ -383,13 +399,11 @@ class _ProfileAvatar extends StatelessWidget {
     );
   }
 }
-
-Future<void> showEditProfileSheet(BuildContext context) {
-  return showModalBottomSheet<void>(
-    context: context,
-    isScrollControlled: true,
-    backgroundColor: Colors.transparent,
-    builder: (_) => const _EditProfileSheet(),
+Future<void> showEditProfileSheet(BuildContext context) async {
+  await showBlurSheet<void>(
+    context,
+    radius: 30,
+    child: const _EditProfileSheet(),
   );
 }
 
@@ -625,42 +639,39 @@ String _roundingModeSubtitle(MoneyIntegerRoundingMode mode) {
   };
 }
 
-void showMoneyDisplaySheet(BuildContext context) {
-  showModalBottomSheet<void>(
-    context: context,
-    isScrollControlled: true,
-    backgroundColor: Theme.of(context).colorScheme.surface,
-    shape: const RoundedRectangleBorder(
-      borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-    ),
-    builder: (_) => const _MoneyDisplaySheet(),
+Future<void> showMoneyDisplaySheet(BuildContext context) async {
+  await showBlurSheet<void>(
+    context,
+    radius: 28,
+    child: const _MoneyDisplaySheet(),
   );
 }
-
-void _showAboutSheet(BuildContext context) {
-  showModalBottomSheet<void>(
-    context: context,
-    isScrollControlled: true,
-    backgroundColor: Colors.transparent,
-    builder: (ctx) {
-      final scheme = Theme.of(ctx).colorScheme;
-      return SafeArea(
-        child: Container(
-          margin: const EdgeInsets.all(10),
-          decoration: BoxDecoration(
-            color: AppColors.appBg(scheme),
-            borderRadius: BorderRadius.circular(30),
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              SheetHeader(title: '关于', onClose: () => Navigator.pop(ctx)),
-              Padding(
-                padding: const EdgeInsets.fromLTRB(18, 10, 18, 22),
-                child: _Group(children: [
-                  _Tile(
-                    icon: Icons.article_outlined,
+Future<void> _showAboutSheet(BuildContext context) async {
+  await showBlurSheet<void>(
+    context,
+    radius: 30,
+    child: Builder(
+      builder: (ctx) {
+        final scheme = Theme.of(ctx).colorScheme;
+        return SafeArea(
+          child: Container(
+            margin: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: AppColors.appBg(scheme),
+              borderRadius: BorderRadius.circular(30),
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                SheetHeader(title: '关于', onClose: () => Navigator.pop(ctx)),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(18, 10, 18, 22),
+                  child: SettingsGroup(children: [
+                  SettingsRow(
+                    leading: const Icon(Icons.article_outlined),
                     title: '使用条款',
+                    trailing: const Icon(CupertinoIcons.chevron_forward,
+                        size: 18),
                     onTap: () => _showTextSheet(
                       ctx,
                       title: '使用条款',
@@ -668,9 +679,11 @@ void _showAboutSheet(BuildContext context) {
                           '肥喵记账用于个人记账、账单整理和消费分析。你需要自行确认录入、导入和 AI 识别结果是否准确。\n\nAI 记账和 AI 分析可能产生错误，涉及金额、分类、退款和统计结论时，请以你的真实账单和银行、支付平台记录为准。\n\n你应妥善保管自己的设备、备份文件和 API Key。因误删、误导入、第三方服务异常或设备故障造成的数据损失，建议优先通过备份恢复。',
                     ),
                   ),
-                  _Tile(
-                    icon: Icons.lock_outline,
+                  SettingsRow(
+                    leading: const Icon(Icons.lock_outline),
                     title: '隐私政策',
+                    trailing: const Icon(CupertinoIcons.chevron_forward,
+                        size: 18),
                     onTap: () => _showTextSheet(
                       ctx,
                       title: '隐私政策',
@@ -678,8 +691,8 @@ void _showAboutSheet(BuildContext context) {
                           '肥喵记账默认将账本数据保存在本机。完整备份会包含账本数据库和收据图片，但不会包含 AI API Key。\n\n当你使用 AI 解析或 AI 分析时，相关文本、账单摘要或你输入的问题可能会发送给你配置的 AI 服务提供方，用于生成结果。请避免提交身份证号、银行卡号、验证码等敏感信息。\n\n导入、导出和分享备份文件由你主动触发。请只把备份文件保存到你信任的位置。',
                     ),
                   ),
-                  _Tile(
-                    icon: Icons.info_outline,
+                  SettingsRow(
+                    leading: const Icon(Icons.info_outline),
                     title: AppVersion.name,
                     trailing: Text(
                       AppVersion.fullDisplay,
@@ -689,54 +702,48 @@ void _showAboutSheet(BuildContext context) {
                           ),
                     ),
                   ),
-                ]),
-              ),
-            ],
+                  ]),
+                ),
+              ],
+            ),
           ),
-        ),
-      );
-    },
+        );
+      },
+    ),
   );
 }
-
-void _showTextSheet(
+Future<void> _showTextSheet(
   BuildContext context, {
   required String title,
   required String body,
-}) {
-  showModalBottomSheet<void>(
-    context: context,
-    isScrollControlled: true,
-    backgroundColor: Colors.transparent,
-    builder: (ctx) {
-      final scheme = Theme.of(ctx).colorScheme;
-      return SafeArea(
-        child: Container(
-          margin: const EdgeInsets.all(10),
-          decoration: BoxDecoration(
-            color: AppColors.appBg(scheme),
-            borderRadius: BorderRadius.circular(30),
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              SheetHeader(title: title, onClose: () => Navigator.pop(ctx)),
-              Padding(
-                padding: const EdgeInsets.fromLTRB(24, 10, 24, 28),
-                child: Text(
-                  body,
-                  style: Theme.of(ctx).textTheme.bodyMedium?.copyWith(
-                        height: 1.55,
-                        color: scheme.onSurface,
-                        fontWeight: FontWeight.w300,
-                      ),
+}) async {
+  await showBlurSheet<void>(
+    context,
+    radius: 30,
+    child: Builder(
+      builder: (ctx) {
+        final scheme = Theme.of(ctx).colorScheme;
+        return SafeArea(
+          child: Container(
+            margin: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: AppColors.appBg(scheme),
+              borderRadius: BorderRadius.circular(30),
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                SheetHeader(title: title, onClose: () => Navigator.pop(ctx)),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(24, 10, 24, 28),
+                  child: Text(body, style: AppType.body(scheme)),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
-        ),
-      );
-    },
+        );
+      },
+    ),
   );
 }
 
@@ -891,154 +898,6 @@ class _MoneyDisplaySheetState extends State<_MoneyDisplaySheet> {
           ),
         ),
       ),
-    );
-  }
-}
-
-/// 分组小标题（灰、细）。
-class _SectionHeader extends StatelessWidget {
-  final String label;
-
-  const _SectionHeader({required this.label});
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(20, 16, 16, 6),
-      child: Text(
-        label,
-        // 图二（ChatGPT 设置）规格：加一号 +w100，明确中灰。
-        style: TextStyle(
-          fontSize: 13.5,
-          fontWeight: FontWeight.w500,
-          color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.5),
-        ),
-      ),
-    );
-  }
-}
-
-/// 白色圆角分组卡：内含若干行，发丝线分隔（左缩进对齐图标后）。
-class _Group extends StatelessWidget {
-  final List<Widget> children;
-
-  const _Group({required this.children});
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return Container(
-      margin: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-      // 连续曲率圆角（近似 iOS 超椭圆）：视觉约 22，比普通圆角自然。
-      decoration: ShapeDecoration(
-        color: AppColors.card(scheme),
-        shape: ContinuousRectangleBorder(
-          borderRadius: BorderRadius.circular(34),
-        ),
-        shadows: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.04),
-            blurRadius: 10,
-            offset: const Offset(0, 2),
-          ),
-        ],
-      ),
-      clipBehavior: Clip.antiAlias,
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          for (int i = 0; i < children.length; i++) ...[
-            if (i > 0)
-              Divider(
-                height: 0.5,
-                thickness: 0.5,
-                indent: 54,
-                color: scheme.outlineVariant.withValues(alpha: 0.5),
-              ),
-            children[i],
-          ],
-        ],
-      ),
-    );
-  }
-}
-
-/// 设置行：图标 + 标题 +（值 / 箭头）。
-class _Tile extends StatelessWidget {
-  final IconData icon;
-  final String title;
-  final Widget? trailing;
-  final VoidCallback? onTap;
-
-  const _Tile({
-    required this.icon,
-    required this.title,
-    this.trailing,
-    this.onTap,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return ListTile(
-      leading: Icon(icon, size: 22, color: scheme.onSurface),
-      minLeadingWidth: 0,
-      horizontalTitleGap: 12,
-      title: Text(
-        title,
-        style: Theme.of(context)
-            .textTheme
-            .bodyLarge
-            ?.copyWith(fontSize: 15.5, fontWeight: FontWeight.w400),
-      ),
-      trailing: trailing ??
-          (onTap != null
-              ? Icon(CupertinoIcons.chevron_forward,
-                  size: 18, color: scheme.outline)
-              : null),
-      onTap: onTap,
-    );
-  }
-}
-
-class _SwitchTile extends StatelessWidget {
-  final IconData icon;
-  final String title;
-  final String subtitle;
-  final bool value;
-  final ValueChanged<bool> onChanged;
-
-  const _SwitchTile({
-    required this.icon,
-    required this.title,
-    required this.subtitle,
-    required this.value,
-    required this.onChanged,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return ListTile(
-      leading: Icon(icon, size: 22, color: scheme.onSurface),
-      minLeadingWidth: 0,
-      horizontalTitleGap: 12,
-      title: Text(
-        title,
-        style: Theme.of(context)
-            .textTheme
-            .bodyLarge
-            ?.copyWith(fontSize: 15.5, fontWeight: FontWeight.w400),
-      ),
-      subtitle: Text(
-        subtitle,
-        style: Theme.of(context).textTheme.bodySmall?.copyWith(
-              color: scheme.onSurfaceVariant,
-              fontWeight: FontWeight.w400,
-            ),
-      ),
-      trailing: AppSwitch(value: value, onChanged: onChanged),
-      onTap: () => onChanged(!value),
     );
   }
 }

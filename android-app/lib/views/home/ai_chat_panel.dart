@@ -1,22 +1,36 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 import 'dart:math';
 import 'dart:ui' show ImageFilter;
 
 import 'package:decimal/decimal.dart';
+import 'package:crypto/crypto.dart';
 import 'package:flutter/cupertino.dart' show CupertinoIcons;
 import 'package:flutter/foundation.dart' show kDebugMode, visibleForTesting;
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart' show RendererBinding;
+import 'package:flutter/physics.dart' show SpringDescription;
 import 'package:flutter/services.dart'
     show Clipboard, ClipboardData, SystemChannels;
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:provider/provider.dart';
+import 'package:share_plus/share_plus.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/ai/chat_intent.dart';
 import '../../core/ai/ai_provider_config.dart';
+import '../../core/ai/ai_attachment_pipeline.dart';
+import '../../core/ai/ai_context.dart';
+import '../../core/ai/ai_run.dart';
+import '../../core/ai/ai_tool_registry.dart';
+import '../../core/ai/ai_extensions.dart';
+import '../../core/ai/chat_session.dart';
 import '../../core/ai/category_query.dart';
 import '../../core/ai/llm_entry_parser.dart';
 import '../../core/ai/llm_query.dart';
+import '../../core/ai/llm_query_v2.dart';
+import '../../core/ai/web_search.dart';
 import '../../core/ai/bill_categorizer.dart';
 import '../../core/ai/merchant_category.dart';
 import '../../core/ai/query_range.dart';
@@ -36,6 +50,7 @@ import '../../core/models/category_seed.dart';
 import '../../core/models/transaction_card_display.dart';
 import '../../core/models/transaction_kind.dart';
 import '../../core/meow_insights.dart';
+import '../../core/media/chat_attachment.dart';
 import '../../core/money_format.dart';
 import '../../core/statistics/metric_contract.dart';
 import '../../core/statistics/statistics_engine.dart';
@@ -44,8 +59,10 @@ import '../../data/app_repository.dart';
 import '../../theme/app_colors.dart';
 import '../../theme/app_tokens.dart';
 import '../../widgets/app_buttons.dart';
+import '../../widgets/app_line_icon.dart';
 import '../../widgets/app_toast.dart';
 import '../../widgets/glass.dart';
+import '../../widgets/glass_input.dart';
 import '../../widgets/ios_dialogs.dart';
 import '../../widgets/ios_menu.dart';
 import '../../widgets/mascot.dart';
@@ -53,13 +70,201 @@ import '../../widgets/pressable_scale.dart';
 import '../../widgets/refund_settlement_sheet.dart';
 import '../../widgets/settings_ui.dart';
 import '../common/category_picker_sheet.dart';
+import '../common/app_sheet.dart';
 import '../reports/report_views.dart';
 import '../settings/ai_privacy_consent.dart';
-import 'record_extras_sheet.dart';
+import 'chat_add_sheet.dart';
 
 const Duration kAiBackgroundResponseNoticeDelay = Duration(seconds: 15);
 const double kAiResponseActionTouchExtent = 36;
 const double kAiResponseActionIconExtent = 17.2;
+// The transport has its own per-socket idle limits, but OAuth refresh, web
+// search preparation and attachment decoding happen before that transport is
+// opened. Keep the UI from waiting forever when one of those stages wedges.
+const Duration _kAiChatRequestTimeout = Duration(seconds: 90);
+const Duration _kAiChatPersistenceTimeout = Duration(seconds: 8);
+const Duration _kAiForegroundThinkingTimeout = Duration(seconds: 120);
+const int _kAiContextTokenBudget = 12000;
+// Final ownership guard for work that happens before/after the transport
+// (OAuth refresh, search preparation, attachment decoding and persistence).
+// A stalled future must never leave the visible flow locked forever.
+const Duration _kAiFlowTimeout = Duration(seconds: 120);
+// A report may legitimately continue in WorkManager after the foreground
+// panel is dismissed, but the foreground UI still needs a finite hand-off
+// point.  Without this cap a queued worker (offline, quota-limited, or stuck
+// during startup) leaves the only visible thinking row alive indefinitely.
+const Duration _kAiBackgroundThinkingTimeout = Duration(seconds: 120);
+// The selector labels are intentionally compact: one 15px whitespace glyph
+// (about 4dp at the app font) separates the model from the effort value.
+const double _aiChatSelectorFontSize = 15;
+const double _aiChatSelectionGap = 4;
+
+/// Maximum visual overscroll for the chat history. The content still springs
+/// back to the real edge on release, but a long upward pull cannot expose a
+/// full blank screen below a short reply.
+const double kAiChatMaxOverscroll = 88;
+
+enum _InputSelection { model, effort }
+
+/// Shows the same Claude-style floating selector used by the live Chats input
+/// bar. Settings pages use this entry point too, so model and effort selection
+/// do not drift into a second visual implementation.
+void showAiFloatingPopup({
+  required BuildContext context,
+  required BuildContext anchor,
+  required double width,
+  required Widget child,
+  VoidCallback? onClosed,
+}) {
+  final box = anchor.findRenderObject() as RenderBox?;
+  if (box == null) return;
+  final pos = box.localToGlobal(Offset.zero);
+  final anchorRect = pos & box.size;
+  final anchorTop = pos.dy;
+  final anchorLeft = pos.dx;
+  // Resolve the viewport from the actual FlutterView rather than a potentially
+  // stale route MediaQuery. During a surface-size/rotation transition the
+  // latter can still report the test/default 800×600 view while the rendered
+  // device is 390×844, placing the selector partly outside the hit-test root.
+  final view = View.of(anchor);
+  final renderViews = RendererBinding.instance.renderViews;
+  final screen = renderViews.isEmpty
+      ? Size(
+          view.physicalSize.width / view.devicePixelRatio,
+          view.physicalSize.height / view.devicePixelRatio,
+        )
+      : renderViews.first.size;
+  const margin = 8.0;
+
+  double left = anchorLeft;
+  if (left + width > screen.width - margin) {
+    left = screen.width - margin - width;
+  }
+  if (left < margin) left = margin;
+
+  final popup = showGeneralDialog<void>(
+    context: context,
+    barrierDismissible: true,
+    barrierLabel: '关闭',
+    barrierColor: Colors.transparent,
+    transitionDuration: const Duration(milliseconds: 160),
+    pageBuilder: (_, __, ___) => const SizedBox.shrink(),
+    transitionBuilder: (ctx, anim, _, __) {
+      final curved = CurvedAnimation(parent: anim, curve: Curves.easeOutCubic);
+      return Stack(
+        children: [
+          Positioned.fill(
+            child: FadeTransition(
+              opacity: anim,
+              child: AppMenuScrim(
+                highlightRect: anchorRect.inflate(2),
+                radius: min(12, anchorRect.shortestSide / 2 + 4),
+              ),
+            ),
+          ),
+          Positioned(
+            left: left,
+            top: anchorTop - 8,
+            child: FractionalTranslation(
+              translation: const Offset(0, -1),
+              child: FadeTransition(
+                opacity: anim,
+                child: ScaleTransition(
+                  alignment: Alignment.bottomLeft,
+                  scale: Tween<double>(begin: 0.96, end: 1.0).animate(curved),
+                  child: ConstrainedBox(
+                    constraints: BoxConstraints(
+                      maxWidth: width,
+                      maxHeight: screen.height * 0.6,
+                    ),
+                    child: child,
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ],
+      );
+    },
+  );
+  if (onClosed != null) unawaited(popup.whenComplete(onClosed));
+}
+
+/// Public bridge for settings pages to use the production model list card.
+void showAiModelPickerPopup({
+  required BuildContext context,
+  required BuildContext anchor,
+  required List<AiModelOption> options,
+  required String currentKey,
+  required ValueChanged<AiModelOption> onSelected,
+  VoidCallback? onClosed,
+}) {
+  showAiFloatingPopup(
+    context: context,
+    anchor: anchor,
+    width: 195,
+    onClosed: onClosed,
+    child: _ModelMenuCard(
+      options: options,
+      currentKey: currentKey,
+      onSelected: onSelected,
+    ),
+  );
+}
+
+/// Public bridge for settings pages to use the production effort slider card.
+void showAiEffortPickerPopup({
+  required BuildContext context,
+  required BuildContext anchor,
+  required AiReasoningEffort currentEffort,
+  required ValueChanged<AiReasoningEffort> onChanged,
+  VoidCallback? onClosed,
+}) {
+  showAiFloatingPopup(
+    context: context,
+    anchor: anchor,
+    width: 222,
+    onClosed: onClosed,
+    child: _EffortPopupCard(
+      currentEffort: currentEffort,
+      onChanged: onChanged,
+    ),
+  );
+}
+
+/// Chats use iOS-style bouncing, but a short capped overscroll.  The chat
+/// history is allowed to move just enough to show the spring-back gesture;
+/// it must not expose a full screen of blank space after the final message.
+class _ChatBouncingScrollPhysics extends BouncingScrollPhysics {
+  const _ChatBouncingScrollPhysics({
+    super.parent = const AlwaysScrollableScrollPhysics(),
+  });
+
+  @override
+  _ChatBouncingScrollPhysics applyTo(ScrollPhysics? ancestor) {
+    return _ChatBouncingScrollPhysics(parent: buildParent(ancestor));
+  }
+
+  @override
+  double applyBoundaryConditions(ScrollMetrics position, double value) {
+    final lower = position.minScrollExtent - kAiChatMaxOverscroll;
+    final upper = position.maxScrollExtent + kAiChatMaxOverscroll;
+    if (value < lower) return value - lower;
+    if (value > upper) return value - upper;
+    return 0;
+  }
+
+  @override
+  double frictionFactor(double overscrollFraction) =>
+      (0.24 * pow(1 - overscrollFraction.clamp(0.0, 1.0), 2)).toDouble();
+
+  @override
+  SpringDescription get spring => const SpringDescription(
+        mass: 0.72,
+        stiffness: 155,
+        damping: 14.5,
+      );
+}
 
 @visibleForTesting
 int aiTypewriterLength(String text) => text.characters.length;
@@ -80,9 +285,99 @@ String aiThinkingStatusText({
   required bool canContinueInBackground,
 }) {
   if (elapsed.compareTo(kAiBackgroundResponseNoticeDelay) < 0) {
-    return '思考中…';
+    return '正在思考';
   }
   return canContinueInBackground ? '喵会在后台继续处理，完成后会显示在这里。' : '喵还在思考，完成后会显示在这里。';
+}
+
+@visibleForTesting
+double sentAttachmentTileWidth(double availableWidth, int attachmentCount) {
+  if (attachmentCount <= 1) return availableWidth;
+  final visibleCount = min(attachmentCount, 3);
+  return (availableWidth - (visibleCount - 1) * 6) / visibleCount;
+}
+
+/// GPT/Claude 的三图消息使用内容区内等宽的方形缩略卡。三张图片共享
+/// 同一行，保留聊天内容两侧的小边距和卡片之间的细间距，不把原图拉成
+/// 竖长卡片，也不越过聊天视口的内容边界。
+@visibleForTesting
+double sentAttachmentTileHeight(double availableWidth, int attachmentCount) {
+  final tileWidth = sentAttachmentTileWidth(availableWidth, attachmentCount);
+  if (attachmentCount == 3) return tileWidth;
+  return attachmentCount <= 1 ? min(availableWidth, 238) : tileWidth;
+}
+
+/// Draft attachments reserve exactly three equal image slots in the composer.
+/// The fourth item starts outside the viewport and is reached by horizontal
+/// scrolling instead of leaking a distracting partial tile into the first page.
+@visibleForTesting
+double draftAttachmentTileWidth(double availableWidth) =>
+    max(0, (availableWidth - 16) / 3);
+
+/// Returns only the incoming draft attachments that fit the per-message
+/// budgets after [existing] has already been added.  Both the photo picker and
+/// the generic file picker use this boundary, so an image chosen as a file
+/// cannot bypass the three-image limit by being added in a later round.
+@visibleForTesting
+List<ChatAttachment> fitDraftAttachments(
+  Iterable<ChatAttachment> existing,
+  Iterable<ChatAttachment> incoming,
+) {
+  var remainingImages = AiAttachmentPipeline.maxImages -
+      existing.where((attachment) => attachment.isImage).length;
+  var remainingFiles = AiAttachmentPipeline.maxFiles -
+      existing.where((attachment) => !attachment.isImage).length;
+  final accepted = <ChatAttachment>[];
+  for (final attachment in incoming) {
+    if (attachment.isImage) {
+      if (remainingImages <= 0) continue;
+      remainingImages--;
+    } else {
+      if (remainingFiles <= 0) continue;
+      remainingFiles--;
+    }
+    accepted.add(attachment);
+  }
+  return List.unmodifiable(accepted);
+}
+
+@visibleForTesting
+bool aiThinkingShouldExpireForTest({
+  required Duration elapsed,
+  required bool canContinueInBackground,
+}) =>
+    elapsed.compareTo(
+      canContinueInBackground
+          ? _kAiBackgroundThinkingTimeout
+          : _kAiForegroundThinkingTimeout,
+    ) >=
+    0;
+
+@visibleForTesting
+bool aiFlowKeepsBackgroundOwnershipForTest({
+  required int flowId,
+  required int? activeFlowId,
+  required int? backgroundFlowId,
+}) =>
+    activeFlowId == flowId && backgroundFlowId == flowId;
+
+@visibleForTesting
+ScrollPhysics aiChatScrollPhysicsForTesting() =>
+    const _ChatBouncingScrollPhysics();
+
+/// 主页与普通 Chats 共用输入面板，但发送前的意图策略不同：主页的
+/// 「AI 记账」入口必须把任何非空自然语言交给记账模型，不能先由本地
+/// 规则把它判成闲聊或查账；普通 Chats 才使用本地意图分流。
+@visibleForTesting
+ChatIntentKind resolveAiPanelIntent({
+  required bool recordOnly,
+  required String text,
+}) {
+  if (recordOnly) return ChatIntentKind.record;
+  return ChatIntent.classify(
+    text,
+    hasArabicAmount: NaturalLanguageEntryParser.extractAmount(text) != null,
+  );
 }
 
 @visibleForTesting
@@ -132,6 +427,8 @@ Future<void> showAiChatPanel(
   bool fullScreen = false,
   bool fastSwitch = false,
   bool replaceCurrent = false,
+  bool recordOnly = true,
+  String sessionId = ChatSession.recordId,
 }) async {
   final route = PageRouteBuilder<void>(
     opaque: false,
@@ -145,6 +442,8 @@ Future<void> showAiChatPanel(
       initialText: initialText,
       fullScreen: fullScreen,
       fastSwitch: fastSwitch,
+      recordOnly: recordOnly,
+      sessionId: sessionId,
     ),
     transitionsBuilder: (ctx, anim, _, child) {
       final curved = CurvedAnimation(parent: anim, curve: Curves.easeOutCubic);
@@ -192,14 +491,21 @@ class _ChatMemoryState {
   }
 }
 
-/// 会话内存必须跟仓库实例绑定。测试、数据库恢复或未来切换用户时，不同
-/// AppRepository 的行 id 都可能从 1 开始，不能共享恢复锁或去重集合。
-final Map<AppRepository, _ChatMemoryState> _chatMemoryByRepository =
-    Map<AppRepository, _ChatMemoryState>.identity();
+/// 会话内存同时以仓库实例和会话 id 隔离。普通会话不能共用「记一记」的
+/// 行 id、恢复锁或 pending 签名，否则会在切换后把历史串到另一张会话里。
+final Map<AppRepository, Map<String, _ChatMemoryState>>
+    _chatMemoryByRepository =
+    Map<AppRepository, Map<String, _ChatMemoryState>>.identity();
 
-_ChatMemoryState _chatMemoryFor(AppRepository repository) {
-  final state = _chatMemoryByRepository.putIfAbsent(
+_ChatMemoryState _chatMemoryFor(AppRepository repository, String sessionId) {
+  final sessions = _chatMemoryByRepository.putIfAbsent(
     repository,
+    () => <String, _ChatMemoryState>{},
+  );
+  final normalizedId =
+      sessionId.trim().isEmpty ? ChatSession.recordId : sessionId.trim();
+  final state = sessions.putIfAbsent(
+    normalizedId,
     () => _ChatMemoryState(repository.databaseGeneration),
   );
   if (state.databaseGeneration != repository.databaseGeneration) {
@@ -214,14 +520,20 @@ _ChatMemoryState _chatMemoryFor(AppRepository repository) {
 String _chatSignature(String role, String text, String question) =>
     '$role\u0000$text\u0000$question';
 
-/// 清空内存中的会话历史（设置页「清空对话」时同步调用，避免本次运行还残留）。
-void clearChatHistoryMemory(AppRepository repository) =>
-    _chatMemoryFor(repository).reset(restored: true);
+/// 只清空一个会话的内存历史。数据库和内存必须使用同一个 session id，
+/// 否则在「记一记」清空记录时会误伤其他 Chats，或在当前运行中重新显示旧消息。
+void clearChatHistoryMemory(AppRepository repository, String sessionId) {
+  final normalizedId =
+      sessionId.trim().isEmpty ? ChatSession.recordId : sessionId.trim();
+  _chatMemoryByRepository[repository]?[normalizedId]?.reset(restored: true);
+}
 
 @visibleForTesting
 void resetChatHistoryForTesting() {
-  for (final state in _chatMemoryByRepository.values) {
-    state.reset(restored: false);
+  for (final sessions in _chatMemoryByRepository.values) {
+    for (final state in sessions.values) {
+      state.reset(restored: false);
+    }
   }
   _chatMemoryByRepository.clear();
 }
@@ -315,6 +627,13 @@ const String _icThumbUpFill = '$_lucideHeaderFill<path d="M7 10v12"/>'
     '<path d="M15 5.88 14 10h5.83a2 2 0 0 1 1.92 2.56l-2.33 8A2 2 0 0 1 17.5 22H4a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2h2.76a2 2 0 0 0 1.79-1.11L12 2a3.13 3.13 0 0 1 3 3.88Z"/></svg>';
 const String _icThumbDownFill = '$_lucideHeaderFill<path d="M17 14V2"/>'
     '<path d="M9 18.12 10 14H4.17a2 2 0 0 1-1.92-2.56l2.33-8A2 2 0 0 1 6.5 2H20a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-2.76a2 2 0 0 0-1.79 1.11L12 22a3.13 3.13 0 0 1-3-3.88Z"/></svg>';
+const String _icShare = '$_lucideHeader<circle cx="18" cy="5" r="3"/>'
+    '<circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/>'
+    '<path d="m8.59 13.51 6.83 3.98M15.41 6.51 8.59 10.49"/></svg>';
+const String _icMore =
+    '$_lucideHeader<circle cx="12" cy="5" r="1" fill="#000"/>'
+    '<circle cx="12" cy="12" r="1" fill="#000"/>'
+    '<circle cx="12" cy="19" r="1" fill="#000"/></svg>';
 
 /// 「来记一笔吧」聊天面板：一句话 → AI 解析 → 记账确认卡（可保存/撤销）。
 /// 语音用键盘自带听写打到输入框即可，不再内置录音识别。
@@ -334,6 +653,19 @@ class AiChatPanel extends StatefulWidget {
   /// 重新显示后再恢复，避免切换帧同时跑键盘、模糊和猫猫动画。
   final bool active;
 
+  /// 主页的一句话入口只负责记账；全屏「喵助手」才允许查账和闲聊。
+  /// 这个开关必须由入口显式传入，不能再靠 fullScreen/fastSwitch 猜用途。
+  final bool recordOnly;
+
+  /// 所属 Chats 会话。主页和唯一「记一记」会话都使用 record；普通会话
+  /// 有独立的消息、模型和思考强度。
+  final String sessionId;
+
+  /// Optional prefilled attachment draft. Production entry points currently
+  /// start empty; this also lets widget tests exercise the real composer state
+  /// without mocking the platform photo picker.
+  final List<ChatAttachment> initialDraftAttachments;
+
   const AiChatPanel({
     super.key,
     required this.onSwitchToManual,
@@ -341,6 +673,9 @@ class AiChatPanel extends StatefulWidget {
     this.fullScreen = false,
     this.fastSwitch = false,
     this.active = true,
+    required this.recordOnly,
+    this.sessionId = ChatSession.recordId,
+    this.initialDraftAttachments = const [],
   });
 
   @override
@@ -358,7 +693,27 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
   late final _ChatMemoryState _chatMemory;
   late final List<_Msg> _msgs;
   _UserMsg? _latestUserMsg;
+  _UserMsg? _selectedUserMsg;
+  _UserMsg? _textSelectingUserMsg;
+  OverlayEntry? _textSelectionScrim;
+  late final List<ChatAttachment> _draftAttachments;
   bool _busy = false;
+  // Every send/retry owns one monotonically increasing flow.  A timed-out or
+  // detached request may still deliver a late callback; that callback must
+  // never complete, mutate, or clear the thinking state belonging to a newer
+  // flow.
+  int _nextFlowId = 0;
+  int? _activeFlowId;
+  // A report handed to WorkManager outlives the synchronous send future. Keep
+  // its flow ownership until the persisted job completes or the UI timeout
+  // hands it off, otherwise the thinking ticker and completion poll stop with
+  // the send callback and leave a permanent "正在思考" row.
+  int? _backgroundFlowId;
+  // Production sends always provide a flow id. Keep a one-shot nonce for
+  // legacy/test callers that do not, so independent sends are not merged
+  // while retries within one flow remain idempotent.
+  int _unscopedRunNonce = 0;
+  int? _thinkingTickerFlowId;
   final ValueNotifier<bool> _visualsReady = ValueNotifier<bool>(false);
   final ValueNotifier<bool> _hasInputText = ValueNotifier<bool>(false);
   final ValueNotifier<bool> _imeVisualsActive = ValueNotifier<bool>(false);
@@ -370,7 +725,10 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
   Timer? _restoreTimer;
   Timer? _suggestionTimer;
   Timer? _thinkingStatusTimer;
+  Timer? _reportPollTimer;
+  Future<void>? _pendingUserPersistence;
   int? _observedReportJobId;
+  int? _observedReportFlowId;
   bool _reportStatusSyncing = false;
   DateTime? _lastFocusRequestAt;
   DateTime? _inputFocusGuardUntil;
@@ -379,10 +737,16 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
   int _focusRepairAttempts = 0;
   bool _autoFocusPending = false;
   bool _inputSessionActive = false;
+  _InputSelection? _activeInputSelection;
   bool _keyboardHadOpened = false;
   late bool _historyViewportReady;
   bool _historyRevealScheduled = false;
   late int _observedDatabaseGeneration;
+
+  String get _sessionId {
+    final value = widget.sessionId.trim();
+    return value.isEmpty ? ChatSession.recordId : value;
+  }
 
   List<_Msg> get _chatHistory => _chatMemory.history;
   Set<int> get _chatRowIdsInMemory => _chatMemory.rowIdsInMemory;
@@ -394,6 +758,195 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
   set _chatRestoreInProgress(bool value) =>
       _chatMemory.restoreInProgress = value;
 
+  int _beginFlow() {
+    final id = ++_nextFlowId;
+    _activeFlowId = id;
+    return id;
+  }
+
+  bool _ownsFlow(int? flowId) => flowId == null || _activeFlowId == flowId;
+
+  void _finishFlow(int flowId) {
+    if (_backgroundFlowId == flowId) {
+      _backgroundFlowId = null;
+    }
+    if (_activeFlowId == flowId) {
+      _activeFlowId = null;
+      if (_thinkingTickerFlowId == flowId) {
+        _thinkingTickerFlowId = null;
+      }
+    }
+  }
+
+  bool _keepsBackgroundFlow(int flowId) =>
+      aiFlowKeepsBackgroundOwnershipForTest(
+        flowId: flowId,
+        activeFlowId: _activeFlowId,
+        backgroundFlowId: _backgroundFlowId,
+      );
+
+  Future<void> _handleUnexpectedFlowError(
+    int flowId,
+    Object error,
+    StackTrace stackTrace,
+  ) async {
+    // A late failure from an older request is deliberately ignored.  The
+    // current flow owns the only visible thinking row and is responsible for
+    // its own completion.
+    if (!_ownsFlow(flowId)) return;
+    if (!_busy && _currentThinkingMsg(flowId) == null) return;
+    // A transport/DB failure must release a previously handed-off flow too.
+    // The background job may still finish and be picked up by polling, but it
+    // no longer owns a foreground thinking row after this visible error.
+    if (_backgroundFlowId == flowId) _backgroundFlowId = null;
+    if (kDebugMode) {
+      debugPrint('ai chat flow $flowId failed: $error');
+      debugPrint('$stackTrace');
+    }
+    const prompt = '喵这次处理失败了，请检查网络后重试';
+    _completeThinking(flowId: flowId);
+    if (mounted) {
+      setState(() {
+        _msgs.add(_InfoMsg(prompt, error: true));
+        _busy = false;
+      });
+      _scrollToLatestUserMessage();
+    } else {
+      _busy = false;
+    }
+    try {
+      await _addChatMessage(
+        _chatRepository,
+        role: 'info_err',
+        text: prompt,
+      );
+    } catch (_) {
+      // A database failure must not turn a visible, recoverable UI error into
+      // another unhandled exception.
+    }
+  }
+
+  AiProviderConfig _chatConfig(AppRepository repository) =>
+      repository.aiProviderConfigForChatSession(_sessionId).forChatStreaming();
+
+  AiReasoningEffort _chatEffort(AppRepository repository) =>
+      repository.chatReasoningEffortForSession(_sessionId);
+
+  String? _chatProviderId(AppRepository repository) =>
+      repository.chatProviderIdForSession(_sessionId);
+
+  String _aiInputDigest(
+    String text,
+    Iterable<ChatAttachment> attachments,
+  ) {
+    final material = StringBuffer(text.trim());
+    for (final attachment in attachments) {
+      material
+        ..write('\u0000')
+        ..write(attachment.path)
+        ..write('\u0000')
+        ..write(attachment.mimeType)
+        ..write('\u0000')
+        ..write(attachment.isImage);
+    }
+    return sha256.convert(utf8.encode(material.toString())).toString();
+  }
+
+  Future<AiRun?> _beginAiRun({
+    required AppRepository repository,
+    required AiRunMode mode,
+    required AiProviderConfig config,
+    required String input,
+    List<ChatAttachment> attachments = const [],
+    int? flowId,
+    String contextDigest = '',
+  }) async {
+    if (!config.hasCredential) return null;
+    final inputDigest = _aiInputDigest(input, attachments);
+    // The flow id is the logical-send boundary. Including wall-clock time
+    // here made an accidental duplicate impossible to deduplicate because
+    // every retry generated a different key. Keep the key stable for one
+    // flow; independent unscoped callers get a one-shot nonce instead.
+    final flowScope = flowId?.toString() ?? 'unscoped-${++_unscopedRunNonce}';
+    final idempotencyKey = sha256
+        .convert(utf8.encode(
+          '${_sessionId}|${mode.storageKey}|$inputDigest|$flowScope',
+        ))
+        .toString();
+    final run = await repository.createOrGetAiRun(
+      sessionId: _sessionId,
+      mode: mode,
+      config: config,
+      idempotencyKey: idempotencyKey,
+      inputDigest: inputDigest,
+      contextDigest: contextDigest,
+    );
+    await repository.updateAiRun(run.id, status: AiRunStatus.preparing);
+    await repository.appendAiRunEvent(
+      run.id,
+      AiRunEventType.stageChanged,
+      payload: {
+        'stage': 'preparing',
+        'flowId': flowId,
+        'attachmentCount': attachments.length,
+      },
+    );
+    return run;
+  }
+
+  void _recordRunEvent(
+    AppRepository repository,
+    String? runId,
+    AiRunEventType type, {
+    Map<String, Object?> payload = const {},
+  }) {
+    if (runId == null || runId.isEmpty) return;
+    unawaited(() async {
+      try {
+        await repository.appendAiRunEvent(runId, type, payload: payload);
+      } catch (_) {}
+    }());
+  }
+
+  void _setRunStatus(
+    AppRepository? repository,
+    String? runId,
+    AiRunStatus status, {
+    String? resultJson,
+  }) {
+    if (repository == null || runId == null || runId.isEmpty) return;
+    unawaited(() async {
+      try {
+        await repository.updateAiRun(
+          runId,
+          status: status,
+          resultJson: resultJson,
+        );
+      } catch (_) {}
+    }());
+  }
+
+  Future<void> _saveChatSelection(
+    AppRepository repository, {
+    required String providerId,
+    required String model,
+    required AiReasoningEffort effort,
+  }) async {
+    if (_sessionId == ChatSession.recordId) {
+      await repository.saveChatModelSelection(
+        providerId: providerId,
+        model: model,
+        reasoningEffort: effort,
+      );
+    }
+    await repository.saveChatSessionSelection(
+      sessionId: _sessionId,
+      providerId: providerId,
+      model: model,
+      effort: effort,
+    );
+  }
+
   // 对话态聊天窗高度占比（半屏 0.58 / 全屏 0.94），及拖拽中标记。
   double _heightFrac = 0.58;
   bool _dragging = false;
@@ -404,6 +957,7 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
   static List<String>? _suggestionCache;
   static int _suggestionCacheContentFingerprint = -1;
   static int _suggestionCacheTimeKey = -1;
+  static bool? _suggestionCacheRecordOnly;
 
   List<String> _picked = _defaultSuggestions;
   bool _pickInit = false;
@@ -419,12 +973,19 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
 
   /// 只展示有账本证据的确定性建议；证据不足时宁可少展示，也不随机补满。
   List<String> _pickSuggestions(AppRepository repo) {
+    // 普通 Chats 是自由对话，不显示主页「记一记」快捷提醒。主页 AI
+    // 记账仍走下面完整的智能建议链路。
+    if (!widget.recordOnly) return const [];
     final now = DateTime.now();
-    return SmartSuggestionEngine.build(
+    final suggestions = SmartSuggestionEngine.build(
       records: repo.allRecords,
       now: now,
       hasActiveBudget: _hasSuggestionBudget(repo),
-    ).map((suggestion) => suggestion.text).toList(growable: false);
+    );
+    final visible = widget.recordOnly
+        ? suggestions.where((s) => s.kind == SmartSuggestionKind.record)
+        : suggestions;
+    return visible.map((suggestion) => suggestion.text).toList(growable: false);
   }
 
   bool _hasSuggestionBudget(AppRepository repo) =>
@@ -433,8 +994,10 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
   @override
   void initState() {
     super.initState();
+    _draftAttachments = List<ChatAttachment>.of(widget.initialDraftAttachments);
+    _hasInputText.value = _draftAttachments.isNotEmpty;
     _chatRepository = context.read<AppRepository>();
-    _chatMemory = _chatMemoryFor(_chatRepository);
+    _chatMemory = _chatMemoryFor(_chatRepository, _sessionId);
     _observedDatabaseGeneration = _chatRepository.databaseGeneration;
     _msgs = _chatMemory.history;
     _historyViewportReady = _chatRestored && _msgs.isEmpty;
@@ -488,13 +1051,18 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
     final generation = _chatRepository.databaseGeneration;
     if (generation == _observedDatabaseGeneration) return;
     _observedDatabaseGeneration = generation;
+    _activeFlowId = null;
+    _thinkingTickerFlowId = null;
     _chatMemory.reset(
       restored: false,
       databaseGeneration: generation,
     );
     _observedReportJobId = null;
+    _observedReportFlowId = null;
     _thinkingStatusTimer?.cancel();
     _thinkingStatusTimer = null;
+    _reportPollTimer?.cancel();
+    _reportPollTimer = null;
     if (!mounted) return;
     setState(() {
       _latestUserMsg = null;
@@ -812,7 +1380,9 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
       if (!mounted) return;
       final repo = _chatRepository;
       if (!repo.isInitialized) return;
-      final rows = await repo.loadChatMessages();
+      final rows = _sessionId == ChatSession.recordId
+          ? await repo.loadChatMessages()
+          : await repo.loadChatSessionMessages(_sessionId);
       if (!mounted || restoreEpoch != _chatHistoryEpoch) return;
       if (appendNew &&
           rows.any((row) => (row['role'] as String?) == 'report')) {
@@ -844,9 +1414,22 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
         }
         _Msg? message;
         if (role == 'user') {
-          message = _UserMsg(text);
-        } else if (role == 'answer') {
-          message = _AnswerMsg(text, question: question, shown: true);
+          message = _UserMsg(
+            text,
+            attachments: ChatAttachment.decodeList(r['attachments_json']),
+            chatRowId: rowId,
+            sentAt: DateTime.fromMillisecondsSinceEpoch(
+              (r['created_ms'] as num?)?.toInt() ?? 0,
+            ),
+          );
+        } else if (role == 'answer' || role == 'assistant') {
+          message = _AnswerMsg(
+            text,
+            question: question,
+            shown: true,
+            chatRowId: rowId,
+            sources: AiWebSearchContext.decodeSources(r['attachments_json']),
+          );
         } else if (role == 'report') {
           message = await _restoreReportMessage(
             text,
@@ -929,16 +1512,44 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
     required String role,
     String text = '',
     String question = '',
+    List<ChatAttachment> attachments = const [],
+    List<AiWebSource> sources = const [],
   }) async {
+    if (role != 'user') {
+      // A locked/slow SQLite write must not hold every subsequent assistant
+      // message forever. The user bubble is already visible, so after this
+      // short ordering barrier we can continue rendering and let the late
+      // write finish in the background.
+      try {
+        await _pendingUserPersistence?.timeout(_kAiChatPersistenceTimeout);
+      } catch (error, stackTrace) {
+        if (kDebugMode) {
+          debugPrint('chat user persistence barrier timed out/failed: $error');
+          debugPrint('$stackTrace');
+        }
+      }
+    }
     final signature = _chatSignature(role, text, question);
     _pendingChatSignatures.update(signature, (count) => count + 1,
         ifAbsent: () => 1);
     try {
-      final id = await repo.addChatMessage(
-        role: role,
-        text: text,
-        question: question,
-      );
+      final id = _sessionId == ChatSession.recordId &&
+              attachments.isEmpty &&
+              sources.isEmpty
+          ? await repo.addChatMessage(
+              role: role,
+              text: text,
+              question: question,
+            )
+          : await repo.addChatSessionMessage(
+              sessionId: _sessionId,
+              role: role,
+              text: text,
+              question: question,
+              attachmentsJson: attachments.isNotEmpty
+                  ? ChatAttachment.encodeList(attachments)
+                  : AiWebSearchContext.encodeSources(sources),
+            );
       _chatRowIdsInMemory.add(id);
       return id;
     } finally {
@@ -951,15 +1562,33 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
     }
   }
 
+  /// Keep the user-before-answer write ordering, but put a finite bound on it.
+  /// A blocked SQLite write must not leave the visible response in thinking
+  /// forever; the timed future still observes failures from the source.
+  Future<int?> _awaitChatPersistence(Future<int> persistence) async {
+    try {
+      return await persistence.timeout(_kAiChatPersistenceTimeout);
+    } catch (error, stackTrace) {
+      if (kDebugMode) {
+        debugPrint('chat response persistence timed out/failed: $error');
+        debugPrint('$stackTrace');
+      }
+      return null;
+    }
+  }
+
   Future<int> _addChatRecordMessage(
     AppRepository repo,
     String json,
   ) async {
+    await _pendingUserPersistence;
     final signature = _chatSignature('record', json, '');
     _pendingChatSignatures.update(signature, (count) => count + 1,
         ifAbsent: () => 1);
     try {
-      final id = await repo.addChatRecordMessage(json);
+      final id = _sessionId == ChatSession.recordId
+          ? await repo.addChatRecordMessage(json)
+          : await repo.addChatRecordMessage(json, sessionId: _sessionId);
       _chatRowIdsInMemory.add(id);
       return id;
     } finally {
@@ -1010,6 +1639,8 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
         txnIds: d.txnIds,
         savedIds: d.txnIds.whereType<int>().toList(),
         savedFeedback: d.feedback,
+        aiRunId: d.aiRunId,
+        rolledBack: d.rolledBack,
         chatRowId: rowId,
       );
       msg.deletedIdx.addAll(d.deleted);
@@ -1042,7 +1673,8 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
   }
 
   void _onInputChanged() {
-    final hasText = _ctrl.text.trim().isNotEmpty;
+    final hasText =
+        _ctrl.text.trim().isNotEmpty || _draftAttachments.isNotEmpty;
     if (_hasInputText.value != hasText) {
       _hasInputText.value = hasText;
     }
@@ -1083,23 +1715,29 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
       showAppToast(context, '先去 AI 账号设置获取模型列表', icon: Icons.info_outline);
       return;
     }
-    final currentConfig = repo.aiProviderConfigFor(AiTaskType.chatQuery);
+    final currentConfig = _chatConfig(repo);
     final currentKey =
-        '${repo.chatCurrentProviderId} ${repo.chatCurrentModel ?? currentConfig.model}';
+        '${_chatProviderId(repo) ?? ''}\u0000${currentConfig.model}';
+
+    if (mounted) {
+      setState(() => _activeInputSelection = _InputSelection.model);
+    }
 
     // 小气泡弹窗：对齐 Claude 桌面端 Models 列表
     _showFloatingPopup(
       anchor: anchor,
-      width: 260,
+      width: 195,
+      onClosed: _clearActiveInputSelection,
       child: _ModelMenuCard(
         options: options,
         currentKey: currentKey,
         onSelected: (option) async {
-          final effort = repo.aiReasoningEffortFor(AiTaskType.chatQuery);
-          await repo.saveChatModelSelection(
+          final effort = _chatEffort(repo);
+          await _saveChatSelection(
+            repo,
             providerId: option.providerId,
             model: option.model,
-            reasoningEffort: effort,
+            effort: effort,
           );
         },
       ),
@@ -1109,26 +1747,36 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
   /// Effort 小气泡弹窗：对齐 Claude 桌面端 Effort 滑块面板
   void _showEffortMenu(BuildContext anchor) {
     final repo = context.read<AppRepository>();
-    final current = repo.aiReasoningEffortFor(AiTaskType.chatQuery);
+    final current = _chatEffort(repo);
+
+    if (mounted) {
+      setState(() => _activeInputSelection = _InputSelection.effort);
+    }
 
     _showFloatingPopup(
       anchor: anchor,
-      width: 260,
+      width: 222,
+      onClosed: _clearActiveInputSelection,
       child: _EffortPopupCard(
         currentEffort: current,
         onChanged: (effort) async {
-          final providerId = repo.chatCurrentProviderId ?? '';
-          final model = repo.chatCurrentModel ??
-              repo.aiProviderConfigFor(AiTaskType.chatQuery).model;
+          final providerId = _chatProviderId(repo) ?? '';
+          final model = _chatConfig(repo).model;
           if (providerId.isEmpty || model.isEmpty) return;
-          await repo.saveChatModelSelection(
+          await _saveChatSelection(
+            repo,
             providerId: providerId,
             model: model,
-            reasoningEffort: effort,
+            effort: effort,
           );
         },
       ),
     );
+  }
+
+  void _clearActiveInputSelection() {
+    if (!mounted || _activeInputSelection == null) return;
+    setState(() => _activeInputSelection = null);
   }
 
   /// 通用浮动气泡：计算锚点位置，从下方向上弹出
@@ -1136,58 +1784,14 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
     required BuildContext anchor,
     required double width,
     required Widget child,
+    VoidCallback? onClosed,
   }) {
-    final box = anchor.findRenderObject() as RenderBox?;
-    if (box == null) return;
-    final pos = box.localToGlobal(Offset.zero);
-    final anchorTop = pos.dy;
-    final anchorLeft = pos.dx;
-    final screen = MediaQuery.of(context).size;
-    const margin = 8.0;
-
-    double left = anchorLeft;
-    if (left + width > screen.width - margin) {
-      left = screen.width - margin - width;
-    }
-    if (left < margin) left = margin;
-
-    showGeneralDialog<void>(
+    showAiFloatingPopup(
       context: context,
-      barrierDismissible: true,
-      barrierLabel: '关闭',
-      barrierColor: Colors.transparent,
-      transitionDuration: const Duration(milliseconds: 160),
-      pageBuilder: (_, __, ___) => const SizedBox.shrink(),
-      transitionBuilder: (ctx, anim, _, __) {
-        final curved =
-            CurvedAnimation(parent: anim, curve: Curves.easeOutBack);
-        return Stack(
-          children: [
-            Positioned(
-              left: left,
-              top: anchorTop - 8,
-              child: FractionalTranslation(
-                translation: const Offset(0, -1),
-                child: FadeTransition(
-                  opacity: anim,
-                  child: ScaleTransition(
-                    alignment: Alignment.bottomLeft,
-                    scale:
-                        Tween<double>(begin: 0.82, end: 1.0).animate(curved),
-                    child: ConstrainedBox(
-                      constraints: BoxConstraints(
-                        maxWidth: width,
-                        maxHeight: screen.height * 0.6,
-                      ),
-                      child: child,
-                    ),
-                  ),
-                ),
-              ),
-            ),
-          ],
-        );
-      },
+      anchor: anchor,
+      width: width,
+      child: child,
+      onClosed: onClosed,
     );
   }
 
@@ -1202,6 +1806,7 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
 
   void _primeSuggestions() {
     final repo = context.read<AppRepository>();
+    final recordOnly = widget.recordOnly;
     final now = DateTime.now();
     final timeKey =
         (now.year * 10000 + now.month * 100 + now.day) * 100 + now.hour;
@@ -1214,7 +1819,8 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
     final cached = _suggestionCache;
     if (cached != null &&
         _suggestionCacheContentFingerprint == contentFingerprint &&
-        _suggestionCacheTimeKey == timeKey) {
+        _suggestionCacheTimeKey == timeKey &&
+        _suggestionCacheRecordOnly == recordOnly) {
       _picked = cached;
       return;
     }
@@ -1233,6 +1839,7 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
       final latestRecords = latestRepo.allRecords;
       final latestHasActiveBudget = _hasSuggestionBudget(latestRepo);
       _suggestionCache = next;
+      _suggestionCacheRecordOnly = widget.recordOnly;
       _suggestionCacheContentFingerprint =
           SmartSuggestionEngine.contentFingerprint(
         records: latestRecords,
@@ -1245,6 +1852,8 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
 
   @override
   void dispose() {
+    _textSelectionScrim?.remove();
+    _textSelectionScrim = null;
     WidgetsBinding.instance.removeObserver(this);
     _chatRepository.removeListener(_onRepositoryChanged);
     ReportJobRuntime.revision.removeListener(_onReportJobRevision);
@@ -1254,6 +1863,7 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
     _restoreTimer?.cancel();
     _suggestionTimer?.cancel();
     _thinkingStatusTimer?.cancel();
+    _reportPollTimer?.cancel();
     _focusKeepAliveTimer?.cancel();
     _focusStabilizeTimer?.cancel();
     _visualsReady.dispose();
@@ -1271,13 +1881,33 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
     unawaited(_syncReportJobState());
   }
 
+  void _startReportPolling() {
+    if (_reportPollTimer != null || _observedReportJobId == null) return;
+    _reportPollTimer = Timer.periodic(const Duration(seconds: 5), (_) {
+      if (!mounted || _observedReportJobId == null) {
+        _reportPollTimer?.cancel();
+        _reportPollTimer = null;
+        return;
+      }
+      unawaited(_syncReportJobState());
+    });
+  }
+
+  void _stopReportPolling() {
+    _reportPollTimer?.cancel();
+    _reportPollTimer = null;
+  }
+
   Future<void> _syncReportJobState() async {
-    if (!mounted || _reportStatusSyncing) return;
+    if (!mounted || widget.recordOnly || _reportStatusSyncing) return;
     _reportStatusSyncing = true;
     try {
       final repo = context.read<AppRepository>();
-      final jobs = await repo.pendingReportJobs();
+      final jobs = await repo.pendingReportJobs(sessionId: _sessionId);
       if (!mounted) return;
+      final observedFlowId = _observedReportFlowId;
+      final currentThinking =
+          observedFlowId == null ? null : _currentThinkingMsg(observedFlowId);
       if (jobs.isNotEmpty) {
         final job = jobs.first;
         _observedReportJobId = job.id;
@@ -1287,12 +1917,25 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
           'save' => _ThinkingKind.reportSave,
           _ => _ThinkingKind.reportCollect,
         };
-        final current = _currentThinkingMsg();
-        if (current != null && current.kind != kind) {
+        // A completed foreground flow may have handed the job to
+        // WorkManager. Never retag a newer, unrelated send just because the
+        // old report is still pending.
+        if (currentThinking != null && currentThinking.kind != kind) {
           setState(() {
-            current.kind = kind;
+            currentThinking.kind = kind;
           });
         }
+        final startedMs = job.modelStartedMs;
+        if (currentThinking != null &&
+            startedMs != null &&
+            currentThinking.modelStartedAt == null) {
+          setState(() {
+            currentThinking.markModelStarted(
+              DateTime.fromMillisecondsSinceEpoch(startedMs),
+            );
+          });
+        }
+        _startReportPolling();
         return;
       }
 
@@ -1303,8 +1946,14 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
         await repo.reloadReportsFromStorage();
         final report = await repo.getReport(observed!.reportId!);
         if (!mounted || report == null) return;
+        final ownsObservedFlow = observedFlowId != null &&
+            _ownsFlow(observedFlowId) &&
+            _currentThinkingMsg(observedFlowId) != null;
+        if (ownsObservedFlow) {
+          _completeThinking(flowId: observedFlowId);
+          _finishFlow(observedFlowId!);
+        }
         setState(() {
-          _msgs.removeWhere((message) => message is _ThinkingMsg);
           _msgs.removeWhere(
             (message) =>
                 message is _ReportMsg && message.report.id == report.id,
@@ -1317,20 +1966,39 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
               shown: true,
             ),
           );
-          _busy = false;
+          if (ownsObservedFlow) _busy = false;
         });
         _observedReportJobId = null;
+        _observedReportFlowId = null;
+        _stopReportPolling();
         _scrollToLatestUserMessage();
         return;
       }
       if (observed?.status == 'failed') {
         if (!mounted) return;
+        final ownsObservedFlow = observedFlowId != null &&
+            _ownsFlow(observedFlowId) &&
+            _currentThinkingMsg(observedFlowId) != null;
+        if (ownsObservedFlow) {
+          _completeThinking(flowId: observedFlowId);
+          _finishFlow(observedFlowId!);
+        }
         setState(() {
-          _msgs.removeWhere((message) => message is _ThinkingMsg);
           _msgs.add(_InfoMsg('报告生成失败，请检查 AI 设置后重新生成', error: true));
-          _busy = false;
+          if (ownsObservedFlow) _busy = false;
         });
         _observedReportJobId = null;
+        _observedReportFlowId = null;
+        _stopReportPolling();
+      }
+    } on Object catch (error, stackTrace) {
+      // This method is called from timers and revision listeners. A transient
+      // SQLite/restore failure must not become an unhandled asynchronous error
+      // or strand a visible flow in its previous thinking state; the next
+      // poll/reopen can retry from the persisted job.
+      if (kDebugMode) {
+        debugPrint('report status sync failed: $error');
+        debugPrint('$stackTrace');
       }
     } finally {
       _reportStatusSyncing = false;
@@ -1338,13 +2006,34 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
   }
 
   Future<void> _resumePendingReportJob() async {
-    if (!mounted) return;
+    if (!mounted || widget.recordOnly) return;
     final repo = context.read<AppRepository>();
-    final jobs = await repo.pendingReportJobs();
+    late final List<ReportJobEntity> jobs;
+    try {
+      jobs = await repo.pendingReportJobs(sessionId: _sessionId);
+    } on Object catch (error, stackTrace) {
+      if (kDebugMode) {
+        debugPrint('pending report lookup failed: $error');
+        debugPrint('$stackTrace');
+      }
+      return;
+    }
     if (!mounted || jobs.isEmpty) return;
+    final job = jobs.first;
+    final jobConfig = repo.aiProviderConfigForReportJob(job);
+    if (jobConfig == null) {
+      const prompt = '报告使用的服务商或模型已失效，请修复该账号后重试。';
+      if (!_msgs.any((m) => m is _InfoMsg && m.text == prompt)) {
+        setState(() {
+          _started = true;
+          _msgs.add(_InfoMsg(prompt, error: true));
+        });
+      }
+      return;
+    }
     // 未同意 AI 隐私说明：恢复的任务不上传账本内容，保持 pending 并提示，
     // 等用户在喵助手里重新发起（走同意弹窗）后再继续。
-    if (!repo.aiPrivacyAccepted) {
+    if (!repo.aiPrivacyAcceptedFor(jobConfig)) {
       const prompt = '有一份报告在等待生成：先同意 AI 隐私说明（重新发起一次报告即可确认）后才会继续。';
       final alreadyPrompted =
           _msgs.any((m) => m is _InfoMsg && m.text == prompt);
@@ -1356,15 +2045,16 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
       }
       return;
     }
-    final job = jobs.first;
+    final flowId = _beginFlow();
     _observedReportJobId = job.id;
+    _observedReportFlowId = flowId;
     final kind = switch (job.stage) {
       'generate' => _ThinkingKind.reportGenerate,
       'fallback' => _ThinkingKind.reportFallback,
       'save' => _ThinkingKind.reportSave,
       _ => _ThinkingKind.reportCollect,
     };
-    final currentThinking = _currentThinkingMsg();
+    final currentThinking = _currentThinkingMsg(flowId);
     if (currentThinking == null) {
       setState(() {
         _started = true;
@@ -1372,31 +2062,60 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
         _msgs.add(
           _ThinkingMsg(
             kind,
-            startedAt: DateTime.fromMillisecondsSinceEpoch(job.createdMs),
+            flowId: flowId,
           ),
         );
       });
-      _restartThinkingTicker();
+      _restartThinkingTicker(flowId: flowId);
     } else if (currentThinking.kind != kind) {
       setState(() {
         currentThinking.kind = kind;
       });
     }
-    final lease = (await repo.acquireReportGenerationLease()).bind(
-      jobId: job.id,
-      jobUuid: job.uuid,
-    );
+    // A persisted timestamp is authoritative when a worker has already
+    // reached the model. Queued/collecting jobs intentionally stay without a
+    // model start until the foreground path is about to call the model.
+    final persistedModelStartMs = job.modelStartedMs;
+    if (persistedModelStartMs != null) {
+      _markModelThinkingStarted(
+        flowId,
+        value: DateTime.fromMillisecondsSinceEpoch(persistedModelStartMs),
+      );
+    }
+    late final ReportGenerationLease lease;
+    try {
+      lease = (await repo.acquireReportGenerationLease()).bind(
+        jobId: job.id,
+        jobUuid: job.uuid,
+      );
+    } on Object catch (error, stackTrace) {
+      await _handleUnexpectedFlowError(flowId, error, stackTrace);
+      _finishFlow(flowId);
+      return;
+    }
     final scheduled = await ReportTaskScheduler.schedule(
       repo,
       job,
       lease: lease,
     );
     if (scheduled) {
-      _setThinkingCanContinueInBackground(true);
+      _setThinkingCanContinueInBackground(true, flowId: flowId);
+      _startReportPolling();
       return;
     }
-    if (ReportJobRuntime.isActive(lease.runtimeKey)) return;
-    unawaited(_runQuery(job.question, repository: repo, resumeJob: job));
+    if (ReportJobRuntime.isActive(lease.runtimeKey)) {
+      _setThinkingCanContinueInBackground(true, flowId: flowId);
+      _startReportPolling();
+      return;
+    }
+    unawaited(
+      _runQuerySafely(
+        flowId,
+        job.question,
+        repository: repo,
+        resumeJob: job,
+      ),
+    );
   }
 
   void _scrollToBottom() {
@@ -1524,41 +2243,143 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
 
   double _latestUserAnchorBottomPadding(double viewportHeight) {
     if (_latestUserMsg == null) return 8;
-    return max(140.0, viewportHeight - 104.0);
+    // Keep a small breathing room below the last user message while the
+    // response is being generated.  Once the response is complete, do not
+    // reserve a viewport-sized spacer that turns a normal upward drag into a
+    // large blank region.
+    if (_busy) return min(96.0, max(24.0, viewportHeight - 180.0));
+    return 8.0;
+  }
+
+  /// Keep a short conversation visually attached to the composer instead of
+  /// leaving the response/action row stranded at the top of a tall viewport.
+  /// Once the messages are taller than the viewport the constrained column
+  /// naturally grows and the normal scroll position is unchanged.
+  Widget _messageHistoryList(BoxConstraints constraints) {
+    const topPadding = 2.0;
+    const horizontalPadding = 16.0;
+    final bottomPadding = _latestUserAnchorBottomPadding(constraints.maxHeight);
+    final minContentHeight = max(
+      0.0,
+      constraints.maxHeight - topPadding - bottomPadding,
+    );
+    return ListView(
+      controller: _scroll,
+      physics: const _ChatBouncingScrollPhysics(),
+      padding: EdgeInsets.fromLTRB(
+        horizontalPadding,
+        topPadding,
+        horizontalPadding,
+        bottomPadding,
+      ),
+      children: [
+        ConstrainedBox(
+          constraints: BoxConstraints(minHeight: minContentHeight),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            mainAxisAlignment: MainAxisAlignment.end,
+            children: [
+              for (var i = 0; i < _msgs.length; i++)
+                _buildMsg(_msgs[i], isLast: i == _msgs.length - 1),
+            ],
+          ),
+        ),
+      ],
+    );
   }
 
   // 轻提示统一走全局 app_toast（同类功能同一种设计）。
   void _snack(String msg) =>
       showAppToast(context, msg, icon: Icons.info_outline);
 
-  _ThinkingMsg? _currentThinkingMsg() {
+  _ThinkingMsg? _currentThinkingMsg([int? flowId]) {
     for (final msg in _msgs.reversed) {
-      if (msg is _ThinkingMsg) return msg;
+      if (msg is _ThinkingMsg && (flowId == null || msg.flowId == flowId)) {
+        return msg;
+      }
     }
     return null;
   }
 
-  void _restartThinkingTicker() {
+  void _markModelThinkingStarted(int? flowId, {DateTime? value}) {
+    _currentThinkingMsg(flowId)?.markModelStarted(value);
+  }
+
+  void _restartThinkingTicker({int? flowId}) {
+    final tickerFlowId = flowId ?? _activeFlowId;
+    _thinkingTickerFlowId = tickerFlowId;
     _thinkingStatusTimer?.cancel();
     _thinkingStatusTimer = Timer.periodic(const Duration(seconds: 1), (
       _,
     ) {
-      final msg = _currentThinkingMsg();
-      if (!mounted || msg == null) {
+      final msg = _currentThinkingMsg(tickerFlowId);
+      if (!mounted ||
+          !_ownsFlow(tickerFlowId) ||
+          msg == null ||
+          msg.completed) {
         _thinkingStatusTimer?.cancel();
         _thinkingStatusTimer = null;
         return;
       }
       setState(() {});
+      // A request can stall before the HTTP stream is opened (OAuth refresh,
+      // search preparation, or attachment decoding). The transport timeout
+      // cannot see those stages, so release the foreground UI explicitly.
+      if (aiThinkingShouldExpireForTest(
+        elapsed: msg.elapsed,
+        canContinueInBackground: msg.canContinueInBackground,
+      )) {
+        _finishStalledThinking(flowId: tickerFlowId);
+        return;
+      }
       if (_observedReportJobId != null) {
         unawaited(_syncReportJobState());
       }
     });
   }
 
-  void _setThinkingKind(_ThinkingKind kind) {
-    final msg = _currentThinkingMsg();
+  void _finishStalledThinking({int? flowId}) {
+    final msg = _currentThinkingMsg(flowId);
+    if (msg == null || msg.completed) return;
+    final continuesInBackground = msg.canContinueInBackground;
+    _completeThinking(flowId: flowId);
+    // The transport/DB future may finish later. Release this flow now so its
+    // late callbacks cannot consume a newer send.
+    if (flowId != null) _finishFlow(flowId);
+    if (!mounted) return;
+    setState(() {
+      _msgs.add(
+        _InfoMsg(
+          continuesInBackground ? '喵会在后台继续处理，完成后会显示在这里。' : '喵这次处理超时了，请检查网络后重试',
+          error: !continuesInBackground,
+        ),
+      );
+      _busy = false;
+    });
+    if (continuesInBackground) {
+      // Keep polling the persisted job after the foreground flow has been
+      // released. A later report completion must not mutate a newer send's
+      // thinking row, but it should still appear in this open conversation.
+      _observedReportFlowId = null;
+      _startReportPolling();
+    }
+    _scrollToLatestUserMessage();
+  }
+
+  void _setThinkingKind(_ThinkingKind kind, {int? flowId}) {
+    if (!_ownsFlow(flowId)) return;
+    final msg = _currentThinkingMsg(flowId);
     if (msg == null) return;
+    if (msg.kind == kind && msg.steps.isNotEmpty) {
+      _restartThinkingTicker(flowId: flowId);
+      return;
+    }
+    final now = DateTime.now();
+    final previous = msg.steps.lastOrNull;
+    if (previous != null && previous.completedAt == null) {
+      previous.completedAt = now;
+    }
+    msg.steps.add(_ThinkingStep(kind: kind, startedAt: now));
     if (!mounted) {
       msg.kind = kind;
       return;
@@ -1566,11 +2387,64 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
     setState(() {
       msg.kind = kind;
     });
-    _restartThinkingTicker();
+    _restartThinkingTicker(flowId: flowId);
   }
 
-  void _setThinkingCanContinueInBackground(bool value) {
-    final msg = _currentThinkingMsg();
+  void _completeThinking({
+    Iterable<AiWebSource> sources = const [],
+    int? flowId,
+  }) {
+    if (!_ownsFlow(flowId)) return;
+    final msg = _currentThinkingMsg(flowId);
+    if (msg == null || msg.completed) return;
+    final now = DateTime.now();
+    final current = msg.steps.lastOrNull;
+    if (current != null && current.completedAt == null) {
+      current.completedAt = now;
+    }
+    msg.completedAt = now;
+    _addThinkingSources(msg, sources);
+    final hasProviderSummary = msg.steps.any(
+      (step) => step.detail.trim().isNotEmpty,
+    );
+    msg.hidden = msg.elapsed < const Duration(seconds: 3) &&
+        !hasProviderSummary &&
+        msg.sources.isEmpty;
+    // Longer or tool-backed work stays as a tappable elapsed summary. Short
+    // answers transition directly from the status label to body text.
+    if (mounted) setState(() {});
+    _thinkingStatusTimer?.cancel();
+    _thinkingStatusTimer = null;
+  }
+
+  void _addThinkingSources(
+    _ThinkingMsg msg,
+    Iterable<AiWebSource> sources,
+  ) {
+    var changed = false;
+    for (final source in sources) {
+      final url = source.url.trim();
+      if (url.isEmpty || msg.sources.any((item) => item.url == url)) continue;
+      msg.sources.add(source);
+      changed = true;
+    }
+    if (changed && msg.completed) msg.hidden = false;
+    if (changed && mounted) setState(() {});
+  }
+
+  void _setThinkingCanContinueInBackground(bool value, {int? flowId}) {
+    if (!_ownsFlow(flowId)) return;
+    // The synchronous send future is allowed to finish once the report is
+    // owned by WorkManager, but this flow remains the owner of its thinking
+    // row until polling observes completion or the capped hand-off fires.
+    if (flowId != null) {
+      if (value) {
+        _backgroundFlowId = flowId;
+      } else if (_backgroundFlowId == flowId) {
+        _backgroundFlowId = null;
+      }
+    }
+    final msg = _currentThinkingMsg(flowId);
     if (msg == null || msg.canContinueInBackground == value) return;
     if (!mounted) {
       msg.canContinueInBackground = value;
@@ -1579,93 +2453,312 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
     setState(() => msg.canContinueInBackground = value);
   }
 
-  // ── 发送：先判意图（查账 or 记账）再分流 ────────────────────────────────
+  // ── 发送：主页直接交给 AI 记账，普通 Chats 再按意图分流 ────────────────
+  Future<void> _addDraftAttachments(
+    List<ChatAttachment> attachments,
+  ) async {
+    if (!mounted || attachments.isEmpty || _busy) return;
+    // The picker limits one selection to three images, but users can open it
+    // repeatedly (and the generic file picker can return image files too).
+    // Enforce the same per-message budget at the draft boundary so a later
+    // send cannot be rejected because the UI allowed an impossible 3+1 draft.
+    final accepted = fitDraftAttachments(_draftAttachments, attachments);
+    final acceptedImages =
+        accepted.where((attachment) => attachment.isImage).length;
+    final acceptedFiles = accepted.length - acceptedImages;
+    final incomingImages =
+        attachments.where((attachment) => attachment.isImage).length;
+    final incomingFiles = attachments.length - incomingImages;
+    final rejectedImages = incomingImages - acceptedImages;
+    final rejectedFiles = incomingFiles - acceptedFiles;
+    if (accepted.isNotEmpty) {
+      setState(() => _draftAttachments.addAll(accepted));
+      _hasInputText.value = true;
+      _requestInputFocus(bypassThrottle: true);
+    }
+    if (mounted && (rejectedImages > 0 || rejectedFiles > 0)) {
+      final parts = <String>[];
+      if (rejectedImages > 0) parts.add('最多添加 3 张图片');
+      if (rejectedFiles > 0) parts.add('最多添加 10 个文件');
+      _snack('${parts.join('，')}，超出的附件未添加');
+    }
+  }
+
   Future<void> _send([String? preset]) async {
     final text = (preset ?? _ctrl.text).trim();
-    if (text.isEmpty || _busy) return;
+    final attachments = List<ChatAttachment>.unmodifiable(_draftAttachments);
+    if ((text.isEmpty && attachments.isEmpty) || _busy) return;
+    final flowId = _beginFlow();
+    try {
+      await _sendImpl(preset, flowId).timeout(_kAiFlowTimeout);
+    } catch (error, stackTrace) {
+      await _handleUnexpectedFlowError(flowId, error, stackTrace);
+    } finally {
+      if (!_keepsBackgroundFlow(flowId)) _finishFlow(flowId);
+    }
+  }
+
+  Future<void> _sendImpl(String? preset, int flowId) async {
+    final text = (preset ?? _ctrl.text).trim();
+    final requestedAttachments =
+        List<ChatAttachment>.unmodifiable(_draftAttachments);
+    if ((text.isEmpty && requestedAttachments.isEmpty) || _busy) return;
+
+    final repo = context.read<AppRepository>();
+    // The send button can be tapped during the fast-start hydration window.
+    // Wait for the ready snapshot before resolving the record provider too;
+    // otherwise this branch (unlike _runQuery) could still fall back locally
+    // on the very first message and only use AI from the second one onward.
+    if (repo.isInitializing) {
+      await repo.ready;
+      if (!mounted) return;
+    }
+    if (widget.recordOnly &&
+        !repo.aiSkillAllowsTool('ledger_assistant', 'create_transactions')) {
+      _snack('记账助手已关闭，请先在 AI 设置中重新开启');
+      return;
+    }
+    final attachmentBatch =
+        await AiAttachmentPipeline.validate(requestedAttachments);
+    if (!attachmentBatch.isValid) {
+      final reason = attachmentBatch.rejected
+          .map((check) => check.error)
+          .where((error) => error.trim().isNotEmpty)
+          .join('、');
+      _snack(reason.isEmpty ? '附件无法发送，请重新选择' : '附件无法发送：$reason');
+      return;
+    }
+    final attachments = attachmentBatch.accepted;
+    // 主页的 AI 记账入口不做本地意图拦截。用户输入的任何自然语言都
+    // 先交给记账模型，由 forceRecord 提示词决定如何提取；否则“没被
+    // 本地规则识别”的表达会根本没有发到 AI。
+    final localIntent = attachments.isNotEmpty && !widget.recordOnly
+        ? ChatIntentKind.chat
+        : resolveAiPanelIntent(recordOnly: widget.recordOnly, text: text);
+    final refund = widget.recordOnly ? null : _matchRefund(repo, text);
+    // Chats 中的普通会话是闲聊/问答上下文；账本变更始终归入唯一的
+    // 「记一记」会话，不能因用户在某个聊天里顺口提到一笔消费就把它
+    // 分散到多个会话中。
+    if (!widget.recordOnly &&
+        (localIntent == ChatIntentKind.record || refund!.isRefundMutation)) {
+      Haptics.light();
+      _snack('记账请使用置顶的「记一记」会话');
+      return;
+    }
 
     Haptics.light();
-    final repo = context.read<AppRepository>();
     _ctrl.clear();
+    _draftAttachments.clear();
+    _hasInputText.value = false;
     _clearInputFocusIntent();
     _focus.unfocus();
-    final userMsg = _UserMsg(text);
+    final userMsg = _UserMsg(
+      text,
+      attachments: attachments,
+      sentAt: DateTime.now(),
+    );
     setState(() {
       _started = true;
       _latestUserMsg = userMsg;
       _msgs.add(userMsg);
-      _msgs.add(_ThinkingMsg(_ThinkingKind.intent));
+      _msgs.add(_ThinkingMsg(_ThinkingKind.intent, flowId: flowId));
       _busy = true;
     });
-    _restartThinkingTicker();
+    _restartThinkingTicker(flowId: flowId);
     _scrollToLatestUserMessage();
-    await _addChatMessage(repo, role: 'user', text: text);
-    if (!mounted) return;
+    final userPersistence = _addChatMessage(
+      repo,
+      role: 'user',
+      text: text,
+      attachments: attachments,
+    );
+    late final Future<void> persistenceBarrier;
+    persistenceBarrier = userPersistence.then<void>(
+      (rowId) => userMsg.chatRowId = rowId,
+      onError: (Object error, StackTrace stackTrace) {
+        if (kDebugMode) {
+          debugPrint('chat user message persistence failed: $error');
+          debugPrint('$stackTrace');
+        }
+      },
+    ).whenComplete(() {
+      if (identical(_pendingUserPersistence, persistenceBarrier)) {
+        _pendingUserPersistence = null;
+      }
+    });
+    _pendingUserPersistence = persistenceBarrier;
+
+    if (attachments.isNotEmpty && !widget.recordOnly) {
+      await _runQuery(
+        text.isEmpty ? '请查看我发送的附件并直接回答。' : text,
+        repository: repo,
+        chatOnly: true,
+        attachments: attachments,
+        flowId: flowId,
+      ).timeout(_kAiFlowTimeout);
+      return;
+    }
 
     // 历史订单退款不是一笔新收入。先用本地确定性规则匹配原支出，只有
     // 唯一强匹配且金额合法时才附着退款；所有不确定情况都停下来追问。
-    final refund = _matchRefund(repo, text);
-    if (refund.isRefundMutation) {
-      await _applyRefund(refund, repo);
+    if (!widget.recordOnly && refund!.isRefundMutation) {
+      await _applyRefund(refund, repo, flowId: flowId);
       return;
     }
 
-    final localIntent = _localIntent(text);
     if (localIntent == ChatIntentKind.query) {
-      await _runQuery(text, repository: repo);
+      await _runQuery(
+        text,
+        repository: repo,
+        flowId: flowId,
+      ).timeout(_kAiFlowTimeout);
       return;
     }
     if (localIntent == ChatIntentKind.chat) {
-      await _runQuery(text, repository: repo, chatOnly: true);
+      await _runQuery(
+        text,
+        repository: repo,
+        chatOnly: true,
+        flowId: flowId,
+      ).timeout(_kAiFlowTimeout);
       return;
     }
 
     final aiConfig = repo.aiProviderConfigFor(AiTaskType.recordParse);
-    // 本地已经确认是记账，再交给普通记账服务商提取金额与分类。闲聊和
-    // 查账不会先经过这里，避免发给错误服务商并产生一次多余请求。
-    if (aiConfig.hasKey) {
-      final consented = await ensureAiPrivacyConsent(context);
+    AiRun? recordRun;
+    // 主页输入已经进入记账模型路径；普通 Chats 的闲聊/查账才会在
+    // 上面的 localIntent 分支提前转到聊天链路。
+    if (aiConfig.hasCredential) {
+      final consented = await ensureAiPrivacyConsent(
+        context,
+        config: aiConfig,
+      );
       if (!mounted) return;
       try {
         if (consented) {
-          _setThinkingKind(_ThinkingKind.recordParse);
+          _markModelThinkingStarted(flowId);
+          recordRun = await _beginAiRun(
+            repository: repo,
+            mode: AiRunMode.record,
+            config: aiConfig,
+            input: text,
+            attachments: attachments,
+            flowId: flowId,
+          );
+          _setThinkingKind(_ThinkingKind.recordParse, flowId: flowId);
+          final startedAt = DateTime.now();
           final res = await LlmEntryParser.parseWithLLM(
-            text: text,
+            text: text.isEmpty
+                ? '请识别附件中的消费或收入；有多笔就逐笔提取，没有可记账内容就返回空 entries。'
+                : text,
+            attachments: attachments,
             config: aiConfig,
             // 用户真实分类（含自建、去隐藏）+ 学习习惯，AI 往用户的分类里归、模仿其选择。
             expenseCats: repo.llmCategoryOptions(TransactionKind.expense),
             incomeCats: repo.llmCategoryOptions(TransactionKind.income),
             learnedHints: repo.llmLearnedHints,
-          );
-          if (res.intent == LlmIntent.query) {
-            await _runQuery(text, repository: repo);
+            forceRecord: widget.recordOnly,
+          ).timeout(_kAiChatRequestTimeout);
+          if (recordRun != null) {
+            await repo.recordAiProviderSuccess(
+              recordRun!.config.providerId,
+              DateTime.now().difference(startedAt).inMilliseconds,
+            );
+            await repo.updateAiRun(recordRun!.id, status: AiRunStatus.thinking);
+            _recordRunEvent(
+              repo,
+              recordRun!.id,
+              AiRunEventType.stageChanged,
+              payload: {'stage': 'parsed', 'entries': res.entries.length},
+            );
+          }
+          // 主页始终把模型结果当作记账结果；即使模型误写 intent，也不
+          // 能把主页输入转去闲聊或查账。
+          if (widget.recordOnly || res.intent == LlmIntent.record) {
+            final homeRefund =
+                widget.recordOnly ? _matchRefund(repo, text) : null;
+            if (homeRefund?.isRefundMutation == true) {
+              await _applyRefund(homeRefund!, repo, flowId: flowId);
+            } else {
+              await _applyRecord(
+                res.entries,
+                repository: repo,
+                flowId: flowId,
+                runId: recordRun?.id,
+              );
+            }
+          } else if (res.intent == LlmIntent.query) {
+            await _runQuery(
+              text,
+              repository: repo,
+              flowId: flowId,
+            ).timeout(_kAiFlowTimeout);
           } else if (res.intent == LlmIntent.chat) {
             // 闲聊：直接走 LlmQuery.ask，不带账目上下文
-            await _runQuery(text, repository: repo, chatOnly: true);
-          } else {
-            // repo 在 await 前已捕获传入：解析期间用户关掉面板也不能丢账。
-            await _applyRecord(res.entries, repository: repo);
+            await _runQuery(
+              text,
+              repository: repo,
+              chatOnly: true,
+              flowId: flowId,
+            ).timeout(_kAiFlowTimeout);
           }
           return;
         }
-      } catch (_) {
-        // 调用失败 → 落到下面的离线兜底
+      } catch (error) {
+        if (recordRun != null) {
+          await repo.recordAiProviderFailure(
+            recordRun!.config.providerId,
+            _shortAiError(error),
+          );
+          await repo.markAiRunFailed(
+            recordRun!.id,
+            code: error is LlmQueryException
+                ? 'llm_request_failed'
+                : 'parse_failed',
+            message: _shortAiError(error),
+          );
+        }
+        // 图片/文件已经持久化到会话，不能把真实上传失败伪装成“本地规则
+        // 记好了”。本地解析器看不到附件内容，明确告诉用户失败原因并保留
+        // 原消息，用户可直接重试；纯文字仍保留原有离线单笔兜底。
+        if (attachments.isNotEmpty) {
+          final prompt = _attachmentFailureText(error);
+          await _addChatMessage(
+            repo,
+            role: 'info_err',
+            text: prompt,
+          );
+          _completeThinking(flowId: flowId);
+          if (mounted && _ownsFlow(flowId)) {
+            setState(() {
+              _msgs.add(_InfoMsg(prompt, error: true));
+              _busy = false;
+            });
+            _scrollToLatestUserMessage();
+          }
+          return;
+        }
+        // 纯文字调用失败 → 落到下面的离线兜底。
       }
     }
-    // 无 key、拒绝上传或调用失败：只在本机解析这笔记录。
-    final hint =
-        !aiConfig.hasKey ? '还没配 AI key，喵先用本地规则记（单笔）' : 'AI 没连上, 喵先用本地规则记了（单笔）';
+    // 无 key、拒绝上传或调用失败：只在本机解析这笔记录。若是明确退款，
+    // 仍使用确定性附着流程，避免离线兜底把退款写成普通收入。
+    final homeRefund = widget.recordOnly ? _matchRefund(repo, text) : null;
+    if (homeRefund?.isRefundMutation == true) {
+      await _applyRefund(homeRefund!, repo, flowId: flowId);
+      return;
+    }
+    final hint = !aiConfig.hasCredential
+        ? '还没配 AI key，喵先用本地规则记（单笔）'
+        : 'AI 没连上，喵先用本地规则记了（单笔）';
     await _applyRecord(
       [NaturalLanguageEntryParser.parse(text)],
       hint: hint,
       repository: repo,
+      flowId: flowId,
+      runId: recordRun?.id,
     );
   }
-
-  ChatIntentKind _localIntent(String text) => ChatIntent.classify(
-        text,
-        hasArabicAmount: NaturalLanguageEntryParser.extractAmount(text) != null,
-      );
 
   RefundMatchResult _matchRefund(AppRepository repo, String text) {
     return RefundMatcher.match(
@@ -1711,16 +2804,14 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
     }
   }
 
-  Future<void> _applyRefund(
-    RefundMatchResult result,
-    AppRepository repo,
-  ) async {
-    _setThinkingKind(_ThinkingKind.recordMatch);
+  Future<void> _applyRefund(RefundMatchResult result, AppRepository repo,
+      {int? flowId}) async {
+    _setThinkingKind(_ThinkingKind.recordMatch, flowId: flowId);
     if (result.status != RefundMatchStatus.matched) {
       final prompt = _refundPrompt(result);
       if (mounted) {
+        _completeThinking(flowId: flowId);
         setState(() {
-          _msgs.removeWhere((message) => message is _ThinkingMsg);
           _msgs.add(_InfoMsg(prompt));
           _busy = false;
         });
@@ -1738,8 +2829,8 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
     if (original == null) {
       const prompt = '原订单刚刚发生了变化，退款没有写入。请重新说一次';
       if (mounted) {
+        _completeThinking(flowId: flowId);
         setState(() {
-          _msgs.removeWhere((message) => message is _ThinkingMsg);
           _msgs.add(_InfoMsg(prompt));
           _busy = false;
         });
@@ -1762,8 +2853,8 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
     if (!mounted) return;
     if (settlement == null) {
       const prompt = '已取消这笔退款，本次没有写入账本';
+      _completeThinking(flowId: flowId);
       setState(() {
-        _msgs.removeWhere((message) => message is _ThinkingMsg);
         _msgs.add(_InfoMsg(prompt));
         _busy = false;
       });
@@ -1783,8 +2874,8 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
     } on Object catch (_) {
       const prompt = '原订单或可退金额刚刚发生了变化，退款没有写入。请核对后重试';
       if (mounted) {
+        _completeThinking(flowId: flowId);
         setState(() {
-          _msgs.removeWhere((message) => message is _ThinkingMsg);
           _msgs.add(_InfoMsg(prompt));
           _busy = false;
         });
@@ -1823,9 +2914,9 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
         debugPrint('refund chat card persistence failed: $error');
       }
     }
-    if (mounted) {
+    if (mounted && _ownsFlow(flowId)) {
+      _completeThinking(flowId: flowId);
       setState(() {
-        _msgs.removeWhere((item) => item is _ThinkingMsg);
         _msgs.add(message);
         _busy = false;
       });
@@ -1843,13 +2934,16 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
     List<ParsedEntry> results, {
     String? hint,
     AppRepository? repository,
+    int? flowId,
+    String? runId,
   }) async {
     final repo = repository ?? context.read<AppRepository>();
-    _setThinkingKind(_ThinkingKind.recordMatch);
+    _setThinkingKind(_ThinkingKind.recordMatch, flowId: flowId);
     final cats = results.map((e) => _matchCat(repo, e)).toList();
 
-    // 高置信(每笔>=0.9且金额有效) → 直接入库 + 撤销；否则弹确认卡
-    final highConfidence = hint == null &&
+    // 高置信且当前工具策略允许时直接入库；多笔、低置信或“按需确认”
+    // 策略始终停在提案卡，用户明确点击后才写账。
+    final confidenceOk = hint == null &&
         results.length <= 5 &&
         results.every(
           (e) =>
@@ -1857,11 +2951,17 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
               e.amount! > Decimal.zero &&
               e.confidence >= 0.9,
         );
+    final highConfidence = !AiToolRegistry.needsConfirmation(
+      'create_transactions',
+      policy: AiToolRegistry.policyFromChatAccess(repo.chatToolAccess),
+      recordMode: widget.recordOnly,
+      highConfidence: confidenceOk,
+      itemCount: results.length,
+    );
     _RecordMsg? autoMsg;
     String persistText = '';
     String persistRole = 'info';
     void applyMessages() {
-      _msgs.removeWhere((m) => m is _ThinkingMsg);
       if (results.isEmpty) {
         _msgs.add(_InfoMsg('喵没看懂这句，换个说法试试？', error: true));
         persistText = '喵没看懂这句，换个说法试试？';
@@ -1879,7 +2979,7 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
         _msgs.add(_InfoMsg(persistText));
       } else {
         if (hint != null) _msgs.add(_InfoMsg(hint));
-        final msg = _RecordMsg(entries: results, cats: cats);
+        final msg = _RecordMsg(entries: results, cats: cats, aiRunId: runId);
         _msgs.add(msg);
         if (highConfidence) autoMsg = msg;
         final n = results.where((e) => e.amount != null).length;
@@ -1888,6 +2988,7 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
       _busy = false;
     }
 
+    _completeThinking(flowId: flowId);
     if (mounted) {
       setState(applyMessages);
     } else {
@@ -1895,6 +2996,41 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
     }
     if (persistText.isNotEmpty) {
       await _addChatMessage(repo, role: persistRole, text: persistText);
+    }
+    if (runId != null && runId.isNotEmpty) {
+      if (results.isEmpty) {
+        await repo.updateAiRun(
+          runId,
+          status: AiRunStatus.completed,
+          resultJson: jsonEncode({'entries': 0}),
+          requiresConfirmation: false,
+        );
+        _recordRunEvent(
+          repo,
+          runId,
+          AiRunEventType.completed,
+          payload: {'entries': 0},
+        );
+      } else {
+        final proposal = AiLedgerProposal(
+          runId: runId,
+          items: [
+            for (var i = 0; i < results.length; i++)
+              AiLedgerProposalItem(
+                amount: results[i].amount?.toString() ?? '',
+                kind: results[i].kind.toJson(),
+                categoryKey: cats[i]?.key ?? '',
+                date: results[i].date.toIso8601String(),
+                note: results[i].note,
+                confidence: results[i].confidence,
+              ),
+          ],
+          requiresConfirmation: !highConfidence,
+          explanation: hint ?? '',
+          createdMs: DateTime.now().millisecondsSinceEpoch,
+        );
+        await repo.saveAiRunProposal(runId, proposal);
+      }
     }
     // 高置信：自动保存（卡片随即进入已存/可撤销态；unmounted 也照样入库）
     if (autoMsg != null) {
@@ -1905,51 +3041,454 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
   }
 
   // ── 查账流 ──────────────────────────────────────────────────────────────
+  /// 喵助手的正常问答统一走 V2 流式链路。Responses 服务商强制使用
+  /// `/v1/responses`，DeepSeek 原生和 Claude 原生仍保留各自协议。
+  Future<_StreamingAnswer> _askStreamingAnswer({
+    required String question,
+    required AiProviderConfig config,
+    required String transactionsText,
+    List<Map<String, String>> priorTurns = const [],
+    String? imagePath,
+    List<ChatAttachment> attachments = const [],
+    int? flowId,
+    String? runId,
+    AppRepository? repository,
+  }) async {
+    final result = Completer<_StreamingAnswer>();
+    final chunks = StringBuffer();
+    final receivedSources = <AiWebSource>[];
+    _AnswerMsg? liveMessage;
+    var requestExpired = false;
+    final runStartedAt = DateTime.now();
+
+    void rememberSources(Iterable<AiWebSource> sources) {
+      if (requestExpired || !_ownsFlow(flowId)) return;
+      final seen = receivedSources.map((source) => source.url).toSet();
+      for (final source in sources) {
+        if (source.url.trim().isEmpty || !seen.add(source.url)) continue;
+        receivedSources.add(source);
+      }
+      if (liveMessage != null) {
+        liveMessage!.sources
+          ..clear()
+          ..addAll(receivedSources);
+      }
+    }
+
+    void showChunk(String chunk) {
+      if (requestExpired || !_ownsFlow(flowId) || chunk.isEmpty) return;
+      if (chunks.isEmpty) {
+        _completeThinking(sources: receivedSources, flowId: flowId);
+        _setRunStatus(repository, runId, AiRunStatus.streaming);
+        _recordRunEvent(
+          repository ?? _chatRepository,
+          runId,
+          AiRunEventType.stageChanged,
+          payload: {'stage': 'streaming'},
+        );
+      }
+      chunks.write(chunk);
+      if (!mounted) return;
+      if (liveMessage == null) {
+        final message = _AnswerMsg(
+          chunks.toString(),
+          question: question,
+          // 内容已经由 SSE 抵达，不能再从头播放一次本地打字机动画。
+          shown: true,
+          streaming: true,
+        );
+        liveMessage = message;
+        setState(() {
+          _msgs.add(message);
+        });
+        _scrollToLatestUserMessage();
+        return;
+      }
+      setState(() => liveMessage!.text = chunks.toString());
+    }
+
+    await LlmQueryV2.askStream(
+      question: question,
+      config: config,
+      transactionsText: transactionsText,
+      priorTurns: priorTurns,
+      imagePath: imagePath,
+      attachments: attachments,
+      onChunk: showChunk,
+      onSources: (sources) {
+        if (requestExpired || !_ownsFlow(flowId)) return;
+        rememberSources(sources);
+        final thinking = _currentThinkingMsg();
+        if (thinking != null && _ownsFlow(flowId)) {
+          _addThinkingSources(thinking, sources);
+        }
+        _recordRunEvent(
+          repository ?? _chatRepository,
+          runId,
+          AiRunEventType.source,
+          payload: {'count': sources.length},
+        );
+      },
+      onReasoningSummary: (summary) {
+        if (requestExpired || !_ownsFlow(flowId)) return;
+        final thinking = _currentThinkingMsg(flowId);
+        if (thinking == null || thinking.completed) return;
+        final normalized = summary.replaceAll(RegExp(r'\s+'), ' ').trim();
+        if (normalized.isEmpty) return;
+        final current = thinking.steps.lastOrNull;
+        if (current == null) return;
+        final combined = '${current.detail} $normalized'.trim();
+        current.detail = combined.length > 420
+            ? combined.substring(combined.length - 420)
+            : combined;
+        if (mounted) setState(() {});
+        _recordRunEvent(
+          repository ?? _chatRepository,
+          runId,
+          AiRunEventType.reasoning,
+          payload: {
+            'characters': normalized.length,
+          },
+        );
+      },
+      onDone: (answer) {
+        if (requestExpired) return;
+        // 以服务端最终文本为准。大多数 Responses 网关会发 delta；若没有
+        // delta，保留旧路径在调用方完整展示最终回答。
+        final completed = answer.isEmpty ? chunks.toString() : answer;
+        if (repository != null) {
+          unawaited(() async {
+            try {
+              final providerId = runId == null || runId.isEmpty
+                  ? (config.providerId ?? config.type.storageKey)
+                  : (await repository.aiRunById(runId))?.config.providerId ??
+                      config.providerId ??
+                      config.type.storageKey;
+              await repository.recordAiProviderSuccess(
+                providerId,
+                DateTime.now().difference(runStartedAt).inMilliseconds,
+              );
+            } catch (_) {}
+          }());
+        }
+        if (_ownsFlow(flowId)) {
+          _completeThinking(sources: receivedSources, flowId: flowId);
+        }
+        if (liveMessage != null && mounted && _ownsFlow(flowId)) {
+          setState(() {
+            liveMessage!
+              ..text = completed
+              ..streaming = false;
+          });
+        }
+        _setRunStatus(
+          repository,
+          runId,
+          AiRunStatus.completed,
+          resultJson: jsonEncode({
+            'characters': completed.length,
+            'sources': receivedSources.length,
+          }),
+        );
+        _recordRunEvent(
+          repository ?? _chatRepository,
+          runId,
+          AiRunEventType.completed,
+          payload: {
+            'characters': completed.length,
+            'sources': receivedSources.length,
+          },
+        );
+        if (!result.isCompleted) {
+          result.complete(
+            _StreamingAnswer(
+              completed,
+              renderedInUi: liveMessage != null,
+              sources: List<AiWebSource>.unmodifiable(receivedSources),
+              message: liveMessage,
+            ),
+          );
+        }
+      },
+      onError: (error) {
+        if (requestExpired) return;
+        if (repository != null) {
+          unawaited(() async {
+            try {
+              final providerId = runId == null || runId.isEmpty
+                  ? (config.providerId ?? config.type.storageKey)
+                  : (await repository.aiRunById(runId))?.config.providerId ??
+                      config.providerId ??
+                      config.type.storageKey;
+              await repository.recordAiProviderFailure(
+                  providerId, error.message);
+            } catch (_) {}
+          }());
+        }
+        if (runId != null && runId.isNotEmpty) {
+          unawaited(() async {
+            try {
+              await (repository ?? _chatRepository).markAiRunFailed(
+                runId,
+                code: 'stream_failed',
+                message: error.message,
+              );
+            } catch (_) {}
+          }());
+        }
+        if (_ownsFlow(flowId)) _completeThinking(flowId: flowId);
+        final partial = chunks.toString();
+        // A dropped SSE connection must never erase text the user has already
+        // read. Finish the visible bubble as an interrupted partial answer;
+        // the normal answer actions still expose retry/continue generation.
+        if (partial.trim().isNotEmpty) {
+          if (liveMessage != null && mounted && _ownsFlow(flowId)) {
+            setState(() {
+              liveMessage!
+                ..text = partial
+                ..streaming = false
+                ..interrupted = true;
+            });
+          }
+          if (!result.isCompleted) {
+            result.complete(_StreamingAnswer(
+              partial,
+              renderedInUi: liveMessage != null,
+              sources: List<AiWebSource>.unmodifiable(receivedSources),
+              message: liveMessage,
+            ));
+          }
+          return;
+        }
+        if (!result.isCompleted) {
+          result.completeError(
+            LlmQueryException(error.message, statusCode: error.statusCode),
+          );
+        }
+      },
+    ).timeout(
+      _kAiChatRequestTimeout,
+      onTimeout: () {
+        requestExpired = true;
+        _completeThinking(flowId: flowId);
+        if (runId != null && runId.isNotEmpty) {
+          unawaited(() async {
+            try {
+              await (repository ?? _chatRepository).markAiRunFailed(
+                runId,
+                code: 'timeout',
+                message: 'AI 请求超时，请检查网络后重试',
+              );
+            } catch (_) {}
+          }());
+        }
+        if (!result.isCompleted) {
+          result.completeError(
+            const LlmQueryException('AI 请求超时，请检查网络后重试'),
+          );
+        }
+      },
+    );
+    // 某些兼容网关可能在 HTTP 流结束时既不发 completed/DONE，也不触发
+    // 解析器回调。不能把这个异常状态传成永久的「思考中」；已有正文就收尾，
+    // 没有正文则交给上层统一显示可重试的错误卡。
+    if (!result.isCompleted) {
+      final partial = chunks.toString();
+      if (partial.trim().isNotEmpty) {
+        result.complete(
+          _StreamingAnswer(
+            partial,
+            renderedInUi: liveMessage != null,
+            sources: List<AiWebSource>.unmodifiable(receivedSources),
+            message: liveMessage,
+          ),
+        );
+      } else {
+        if (_ownsFlow(flowId)) _completeThinking(flowId: flowId);
+        if (runId != null && runId.isNotEmpty) {
+          unawaited(() async {
+            try {
+              await (repository ?? _chatRepository).markAiRunFailed(
+                runId,
+                code: 'stream_incomplete',
+                message: 'AI 流式响应未完成',
+              );
+            } catch (_) {}
+          }());
+        }
+        result.completeError(const LlmQueryException('AI 流式响应未完成'));
+      }
+    }
+    return result.future;
+  }
+
   Future<void> _runQuery(
     String text, {
     AppRepository? repository,
     ReportJobEntity? resumeJob,
     bool chatOnly = false,
+    String? imagePath,
+    List<ChatAttachment> attachments = const [],
+    int? flowId,
   }) async {
+    if (!_ownsFlow(flowId)) return;
     final repo = repository ?? context.read<AppRepository>();
-    var aiConfig = repo.aiProviderConfigFor(AiTaskType.chatQuery);
+    // A fast-start home can become interactive while the repository is still
+    // hydrating.  Do not resolve the provider from its pre-hydration defaults:
+    // that made the first tap report "没连上 AI" while the second tap worked
+    // after the deferred settings load completed.
+    if (repo.isInitializing) {
+      await repo.ready;
+      if (!mounted || !_ownsFlow(flowId)) return;
+    }
+    // Claude's Tool access control applies to the whole Chats session, not
+    // to a provider. With tools off, a query/report must stay a plain chat
+    // request and must not read ledger context or create a report document.
+    // A persisted report job owns the provider/model/Effort captured when it
+    // was queued.  Foreground recovery must use that snapshot too; otherwise
+    // a later Chats selection silently changes which service receives the
+    // report.
+    final resumedReportConfig =
+        resumeJob == null ? null : repo.aiProviderConfigForReportJob(resumeJob);
+    if (resumeJob != null && resumedReportConfig == null) {
+      const prompt = '报告使用的服务商或模型已失效，请修复该账号后重试。';
+      _completeThinking(flowId: flowId);
+      if (mounted && _ownsFlow(flowId)) {
+        setState(() {
+          _msgs.add(_InfoMsg(prompt, error: true));
+          _busy = false;
+        });
+        _scrollToLatestUserMessage();
+      }
+      return;
+    }
+    var aiConfig = resumeJob == null ? _chatConfig(repo) : resumedReportConfig!;
 
     // 闲聊模式：直接发送，不带账目上下文，不走报告流程
     if (chatOnly) {
-      if (!aiConfig.hasKey) {
-        if (mounted) {
+      if (!aiConfig.hasCredential) {
+        if (mounted && _ownsFlow(flowId)) {
+          _completeThinking(flowId: flowId);
           setState(() {
-            _msgs.removeWhere((m) => m is _ThinkingMsg);
             _msgs.add(_InfoMsg('还没有可用的喵助手模型，请先到 AI 账号设置中配置'));
             _busy = false;
           });
         }
         return;
       }
-      // 闲聊不带账本数据，无需隐私授权确认
-      _setThinkingKind(_ThinkingKind.queryAnswer);
+      // 即使闲聊不带账本，用户的文字/图片仍会发送给实际服务商；隐私
+      // 同意按接收方隔离，不能因为没有账本上下文就绕过授权。
+      if (!repo.aiPrivacyAcceptedFor(aiConfig)) {
+        final consented = mounted &&
+            await ensureAiPrivacyConsent(
+              context,
+              config: aiConfig,
+            );
+        if (!consented) {
+          const prompt = '未同意 AI 隐私说明，喵不会把这条消息发出去。';
+          _completeThinking(flowId: flowId);
+          if (mounted && _ownsFlow(flowId)) {
+            setState(() {
+              _msgs.add(_InfoMsg(prompt));
+              _busy = false;
+            });
+            _scrollToLatestUserMessage();
+          }
+          return;
+        }
+      }
+      _setThinkingKind(_ThinkingKind.queryAnswer, flowId: flowId);
+      _markModelThinkingStarted(flowId);
+      final queryRun = await _beginAiRun(
+        repository: repo,
+        mode: AiRunMode.chat,
+        config: aiConfig,
+        input: text,
+        attachments: attachments,
+        flowId: flowId,
+      );
+      final memoryPrompt = repo.aiMemoryPromptBlock(
+        text,
+        sessionId: _sessionId,
+      );
+      final matchedMemories = repo.aiMemoriesForPrompt(
+        text,
+        sessionId: _sessionId,
+      );
       String answer;
+      var answerAlreadyRendered = false;
+      var answerSources = <AiWebSource>[];
+      _AnswerMsg? streamedMessage;
       try {
-        answer = await LlmQuery.ask(
+        final streamed = await _askStreamingAnswer(
           question: text,
           config: aiConfig,
-          transactionsText: '',
-          priorTurns: _recentTurns(),
+          transactionsText: memoryPrompt,
+          // _send 已把本轮用户消息放进 _msgs；askStream 会在请求末尾
+          // 自己追加 [question]，因此上下文只带此前轮次，不能重复当前问题。
+          priorTurns: _recentTurns(excludeNewestUser: true),
+          imagePath: imagePath,
+          attachments: attachments,
+          flowId: flowId,
+          runId: queryRun?.id,
+          repository: repo,
         );
+        answer = streamed.text;
+        answerAlreadyRendered = streamed.renderedInUi;
+        answerSources = streamed.sources;
+        streamedMessage = streamed.message;
+        for (final memory in matchedMemories) {
+          unawaited(repo.markAiMemoryUsed(memory.id));
+        }
       } on LlmQueryException catch (e) {
         answer = _friendlyAiError(e);
+        if (queryRun != null) {
+          await repo.markAiRunFailed(
+            queryRun.id,
+            code: 'llm_request_failed',
+            message: e.message,
+          );
+        }
       } catch (e) {
         answer = '喵没连上 AI（${_shortAiError(e)}），待会儿再问问？';
+        if (queryRun != null) {
+          await repo.markAiRunFailed(
+            queryRun.id,
+            code: 'request_failed',
+            message: _shortAiError(e),
+          );
+        }
       }
-      await _addChatMessage(repo, role: 'assistant', text: answer);
-      if (mounted) {
+      if (!_ownsFlow(flowId)) return;
+      final answerRowId = await _awaitChatPersistence(_addChatMessage(
+        repo,
+        role: 'answer',
+        text: answer,
+        question: text,
+        sources: answerSources,
+      ));
+      _AnswerMsg? createdMessage;
+      void attachRowId(int rowId) {
+        streamedMessage?.chatRowId = rowId;
+        createdMessage?.chatRowId = rowId;
+      }
+
+      if (mounted && _ownsFlow(flowId)) {
+        _completeThinking(flowId: flowId);
         setState(() {
-          _msgs.removeWhere((m) => m is _ThinkingMsg);
-          _msgs.add(_AnswerMsg(answer, question: text));
+          if (!answerAlreadyRendered) {
+            createdMessage = _AnswerMsg(
+              answer,
+              question: text,
+              sources: answerSources,
+            );
+            _msgs.add(createdMessage!);
+          }
           _busy = false;
         });
         _scrollToLatestUserMessage();
       }
+      if (answerRowId != null) attachRowId(answerRowId);
       return;
     }
     final reportType = resumeJob?.type ?? _reportTypeOf(text);
@@ -1963,21 +3502,51 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
     final reportBookId = resumeJob != null
         ? resumeJob.bookId
         : (reportType == null ? null : repo.currentBook?.id);
+    if (reportType != null && !repo.aiSkillEnabled('report_writer')) {
+      const prompt = '报告生成助手已关闭，请先在 AI 设置中重新开启。';
+      _completeThinking(flowId: flowId);
+      if (mounted && _ownsFlow(flowId)) {
+        setState(() {
+          _msgs.add(_InfoMsg(prompt));
+          _busy = false;
+        });
+        _scrollToLatestUserMessage();
+      }
+      return;
+    }
+    if (!chatOnly &&
+        reportType == null &&
+        !repo.aiSkillAllowsTool('ledger_analyst', 'read_ledger')) {
+      const prompt = '账本分析助手已关闭，请先在 AI 设置中重新开启。';
+      _completeThinking(flowId: flowId);
+      if (mounted && _ownsFlow(flowId)) {
+        setState(() {
+          _msgs.add(_InfoMsg(prompt));
+          _busy = false;
+        });
+        _scrollToLatestUserMessage();
+      }
+      return;
+    }
     // 报告也跟随喵助手当前选中的服务商和模型；普通记账解析仍使用独立配置。
     // 隐私闸门下沉到每个真正上传数据的入口：查账/报告都要先同意，不能只靠
     // _send 的记账分支拦。未同意就不发起请求；resume 的任务保持 pending
     // （启动恢复路径已在 _resumePendingReportJob 里提前拦掉，不会到这弹窗）。
-    if (aiConfig.hasKey && !repo.aiPrivacyAccepted) {
-      final consented = mounted && await ensureAiPrivacyConsent(context);
+    if (aiConfig.hasCredential && !repo.aiPrivacyAcceptedFor(aiConfig)) {
+      final consented = mounted &&
+          await ensureAiPrivacyConsent(
+            context,
+            config: aiConfig,
+          );
       if (!consented) {
         const prompt = '未同意 AI 隐私说明，喵不会把账本内容发出去。';
         void declineUi() {
-          _msgs.removeWhere((m) => m is _ThinkingMsg);
           _msgs.add(_InfoMsg(prompt));
           _busy = false;
         }
 
-        if (mounted) {
+        _completeThinking(flowId: flowId);
+        if (mounted && _ownsFlow(flowId)) {
           setState(declineUi);
           _scrollToLatestUserMessage();
         } else {
@@ -1986,9 +3555,19 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
         return;
       }
     }
+    final queryRun = aiConfig.hasCredential
+        ? await _beginAiRun(
+            repository: repo,
+            mode: reportType == null ? AiRunMode.query : AiRunMode.report,
+            config: aiConfig,
+            input: text,
+            attachments: attachments,
+            flowId: flowId,
+          )
+        : null;
     var reportJob = resumeJob;
     ReportGenerationLease? reportLease;
-    if (reportType != null && aiConfig.hasKey) {
+    if (reportType != null && aiConfig.hasCredential) {
       try {
         final baseLease = await repo.acquireReportGenerationLease();
         reportJob ??= await repo.guardReportGeneration(
@@ -2000,6 +3579,7 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
             periodStart: reportPeriod!.start,
             periodEnd: reportPeriod.end,
             bookId: reportBookId,
+            sessionId: _sessionId,
           ),
         );
         final activeJob = reportJob;
@@ -2011,27 +3591,45 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
           jobUuid: activeJob.uuid,
         );
       } on ReportGenerationInvalidated {
-        _handleInvalidatedReport();
+        _handleInvalidatedReport(flowId: flowId);
         return;
       }
       final activeJob = reportJob;
       if (activeJob == null) {
-        _handleInvalidatedReport();
+        _handleInvalidatedReport(flowId: flowId);
         return;
       }
       _observedReportJobId = activeJob.id;
+      _observedReportFlowId = flowId;
       final scheduled = await ReportTaskScheduler.schedule(
         repo,
         activeJob,
         lease: reportLease,
       );
       if (scheduled) {
-        _setThinkingKind(_ThinkingKind.reportCollect);
-        _setThinkingCanContinueInBackground(true);
-        _restartThinkingTicker();
+        _setRunStatus(repo, queryRun?.id, AiRunStatus.background);
+        _recordRunEvent(
+          repo,
+          queryRun?.id,
+          AiRunEventType.stageChanged,
+          payload: {'stage': 'background'},
+        );
+        _setThinkingKind(_ThinkingKind.reportCollect, flowId: flowId);
+        _setThinkingCanContinueInBackground(true, flowId: flowId);
+        _restartThinkingTicker(flowId: flowId);
+        _startReportPolling();
         return;
       }
-      if (!ReportJobRuntime.claim(reportLease.runtimeKey)) return;
+      if (!ReportJobRuntime.claim(reportLease.runtimeKey)) {
+        // Another foreground/worker owner is already generating this report.
+        // Keep observing its persisted job, but do not leave this flow in an
+        // unowned, permanently spinning state.
+        _setThinkingCanContinueInBackground(true, flowId: flowId);
+        _setRunStatus(repo, queryRun?.id, AiRunStatus.background);
+        _restartThinkingTicker(flowId: flowId);
+        _startReportPolling();
+        return;
+      }
       await _setReportJobStage(
         repo,
         reportJob,
@@ -2044,16 +3642,44 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
       reportType == null
           ? _ThinkingKind.queryCollect
           : _ThinkingKind.reportCollect,
+      flowId: flowId,
     );
     var aiAnswered = false;
+    var answerAlreadyRendered = false;
+    var answerSources = <AiWebSource>[];
+    _AnswerMsg? streamedMessage;
+    final priorTurns = _recentTurns(excludeNewestUser: true);
     String answer;
-    if (!aiConfig.hasKey) {
+    if (!aiConfig.hasCredential) {
       answer = '查账要先配 AI key 哦～去「我的 → AI 记账设置」填一下，喵就能帮你分析啦';
     } else {
       try {
         late final String transactionsText;
+        late final AiContextSnapshot contextSnapshot;
+        final memoryMatches = reportType == null
+            ? repo.aiMemoriesForPrompt(text, sessionId: _sessionId)
+            : const <AiMemory>[];
         if (reportType == null) {
-          transactionsText = _buildTxnContext(repo, question: text);
+          final ledgerContext = _buildTxnContext(repo, question: text);
+          final memoryPrompt = repo.aiMemoryPromptBlock(
+            text,
+            sessionId: _sessionId,
+          );
+          transactionsText = [ledgerContext, memoryPrompt]
+              .where((value) => value.trim().isNotEmpty)
+              .join('\n\n');
+          contextSnapshot = AiContextInspector.inspect(
+            question: text,
+            historyTurns: priorTurns.length,
+            ledgerRows: repo.visibleTransactions.length,
+            memoryItems: memoryMatches.length,
+            attachmentCount: attachments.length,
+            estimatedPromptCharacters: transactionsText.length +
+                text.length +
+                priorTurns.fold<int>(
+                    0, (sum, turn) => sum + (turn['content']?.length ?? 0)),
+            maxTokens: _kAiContextTokenBudget,
+          );
         } else {
           await repo.guardReportGeneration(reportLease!, () async {
             transactionsText = _buildReportContext(
@@ -2064,17 +3690,57 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
               bookId: reportBookId,
             );
           });
+          contextSnapshot = AiContextInspector.inspect(
+            question: text,
+            historyTurns: priorTurns.length,
+            ledgerRows: repo.visibleTransactions.length,
+            memoryItems: repo.categoryMemories.length,
+            attachmentCount: attachments.length,
+            estimatedPromptCharacters: transactionsText.length +
+                text.length +
+                priorTurns.fold<int>(
+                    0, (sum, turn) => sum + (turn['content']?.length ?? 0)),
+            maxTokens: _kAiContextTokenBudget,
+          );
+        }
+        if (queryRun != null) {
+          await repo.updateAiRun(
+            queryRun.id,
+            contextDigest: contextSnapshot.digest,
+          );
+          _recordRunEvent(
+            repo,
+            queryRun.id,
+            AiRunEventType.contextReady,
+            payload: {
+              'estimatedTokens': contextSnapshot.estimatedTokens,
+              'blocks': contextSnapshot.blocks.length,
+              'truncated': contextSnapshot.truncated,
+            },
+          );
         }
         if (reportType == null) {
-          _setThinkingKind(_ThinkingKind.queryAnswer);
-          answer = await LlmQuery.ask(
+          _setThinkingKind(_ThinkingKind.queryAnswer, flowId: flowId);
+          final streamed = await _askStreamingAnswer(
             question: text,
             config: aiConfig,
             transactionsText: transactionsText,
-            priorTurns: _recentTurns(),
+            // 同上：避免把刚发送的问题作为历史又追加一遍。
+            priorTurns: priorTurns,
+            imagePath: imagePath,
+            flowId: flowId,
+            runId: queryRun?.id,
+            repository: repo,
           );
+          answer = streamed.text;
+          answerAlreadyRendered = streamed.renderedInUi;
+          answerSources = streamed.sources;
+          streamedMessage = streamed.message;
+          for (final memory in memoryMatches) {
+            unawaited(repo.markAiMemoryUsed(memory.id));
+          }
         } else {
-          _setThinkingKind(_ThinkingKind.reportGenerate);
+          _setThinkingKind(_ThinkingKind.reportGenerate, flowId: flowId);
           await _setReportJobStage(
             repo,
             reportJob,
@@ -2091,18 +3757,33 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
             reportLease: reportLease,
             config: aiConfig,
             transactionsText: transactionsText,
+            flowId: flowId,
           );
         }
         // 报告类本地兜底也应该生成文档卡片，避免用户只看到“没连上”。
         aiAnswered = true;
       } on ReportGenerationInvalidated {
         _releaseReportJob(reportJob, reportLease);
-        _handleInvalidatedReport();
+        _handleInvalidatedReport(flowId: flowId);
         return;
       } on LlmQueryException catch (e) {
         answer = _friendlyAiError(e);
+        if (queryRun != null) {
+          await repo.markAiRunFailed(
+            queryRun.id,
+            code: 'llm_request_failed',
+            message: e.message,
+          );
+        }
       } catch (e) {
         answer = '喵没连上 AI（${_shortAiError(e)}），待会儿再问问？';
+        if (queryRun != null) {
+          await repo.markAiRunFailed(
+            queryRun.id,
+            code: 'request_failed',
+            message: _shortAiError(e),
+          );
+        }
       }
     }
     // 保留 markdown 原文，交给 _AnswerBubble 轻量渲染（**加粗** / 列表 / 标题）。
@@ -2119,6 +3800,19 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
         reportTitle: reportTitle!,
         answer: answer,
         question: text,
+        flowId: flowId,
+      );
+      _setRunStatus(
+        repo,
+        queryRun?.id,
+        AiRunStatus.completed,
+        resultJson: jsonEncode({'report': true}),
+      );
+      _recordRunEvent(
+        repo,
+        queryRun?.id,
+        AiRunEventType.completed,
+        payload: {'report': true},
       );
       return;
     }
@@ -2132,21 +3826,70 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
       );
     }
     try {
-      await _addChatMessage(repo, role: 'answer', text: answer, question: text);
+      if (!_ownsFlow(flowId)) return;
+      final answerRowId = await _awaitChatPersistence(_addChatMessage(
+        repo,
+        role: 'answer',
+        text: answer,
+        question: text,
+        sources: answerSources,
+      ));
+      _AnswerMsg? createdMessage;
+      void attachRowId(int rowId) {
+        streamedMessage?.chatRowId = rowId;
+        createdMessage?.chatRowId = rowId;
+      }
+
+      _completeThinking(flowId: flowId);
       void addAnswerMessage({required bool animate}) {
-        _msgs.removeWhere((m) => m is _ThinkingMsg);
-        _msgs.add(_AnswerMsg(answer, question: text, shown: !animate));
+        if (!answerAlreadyRendered) {
+          createdMessage = _AnswerMsg(
+            answer,
+            question: text,
+            shown: !animate,
+            sources: answerSources,
+          );
+          _msgs.add(createdMessage!);
+        }
         _busy = false;
       }
 
+      if (!_ownsFlow(flowId)) return;
       if (!mounted) {
         addAnswerMessage(animate: false);
         return;
       }
-      setState(() => addAnswerMessage(animate: true));
+      setState(() => addAnswerMessage(animate: !answerAlreadyRendered));
       _scrollToLatestUserMessage();
+      if (answerRowId != null) attachRowId(answerRowId);
     } finally {
       _releaseReportJob(reportJob, reportLease);
+    }
+  }
+
+  Future<void> _runQuerySafely(
+    int flowId,
+    String text, {
+    AppRepository? repository,
+    ReportJobEntity? resumeJob,
+    bool chatOnly = false,
+    String? imagePath,
+    List<ChatAttachment> attachments = const [],
+  }) async {
+    try {
+      await _runQuery(
+        text,
+        repository: repository,
+        resumeJob: resumeJob,
+        chatOnly: chatOnly,
+        imagePath: imagePath,
+        attachments: attachments,
+        flowId: flowId,
+      ).timeout(_kAiFlowTimeout);
+    } catch (error, stackTrace) {
+      await _handleUnexpectedFlowError(flowId, error, stackTrace);
+    } finally {
+      if (!_keepsBackgroundFlow(flowId)) _finishFlow(flowId);
     }
   }
 
@@ -2157,12 +3900,14 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
     required String reportTitle,
     required String answer,
     required String question,
+    int? flowId,
   }) async {
     try {
+      if (!_ownsFlow(flowId)) return;
       if (reportJob == null || reportLease == null) {
         throw StateError('report job lease is missing');
       }
-      _setThinkingKind(_ThinkingKind.reportSave);
+      _setThinkingKind(_ThinkingKind.reportSave, flowId: flowId);
       await _setReportJobStage(
         repo,
         reportJob,
@@ -2182,11 +3927,11 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
         ),
       );
       if (repo.databaseGeneration != uiDatabaseGeneration) {
-        _handleInvalidatedReport();
+        _handleInvalidatedReport(flowId: flowId);
         return;
       }
+      if (!_ownsFlow(flowId)) return;
       void addReportMessage({required bool animate}) {
-        _msgs.removeWhere((message) => message is _ThinkingMsg);
         _msgs.add(
           _ReportMsg(
             report,
@@ -2198,15 +3943,23 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
         _busy = false;
       }
 
+      _completeThinking(flowId: flowId);
       if (!mounted) {
         addReportMessage(animate: false);
+        _observedReportJobId = null;
+        _observedReportFlowId = null;
+        _stopReportPolling();
         return;
       }
       setState(() => addReportMessage(animate: true));
+      _observedReportJobId = null;
+      _observedReportFlowId = null;
+      _stopReportPolling();
       _scrollToLatestUserMessage();
     } on ReportGenerationInvalidated {
-      _handleInvalidatedReport();
+      _handleInvalidatedReport(flowId: flowId);
     } catch (error) {
+      if (!_ownsFlow(flowId)) return;
       await _setReportJobStage(
         repo,
         reportJob,
@@ -2215,16 +3968,19 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
         error: error.toString(),
       );
       void addFailureMessage() {
-        _msgs.removeWhere((message) => message is _ThinkingMsg);
         _msgs.add(_InfoMsg('报告保存失败，请稍后重新生成', error: true));
         _busy = false;
       }
 
+      _completeThinking(flowId: flowId);
       if (mounted) {
         setState(addFailureMessage);
       } else {
         addFailureMessage();
       }
+      _observedReportJobId = null;
+      _observedReportFlowId = null;
+      _stopReportPolling();
     } finally {
       _releaseReportJob(reportJob, reportLease);
     }
@@ -2259,6 +4015,43 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
     }
   }
 
+  Future<void> _persistReportModelStarted(
+    AppRepository repo,
+    ReportJobEntity? job,
+    ReportGenerationLease? lease,
+    int? flowId,
+  ) async {
+    if (job == null) return;
+    final startedAt = _currentThinkingMsg(flowId)?.modelStartedAt;
+    if (startedAt == null) return;
+    Future<int?> write() => repo.markReportJobModelStarted(
+          job.id,
+          expectedUuid: job.uuid,
+          startedMs: startedAt.millisecondsSinceEpoch,
+        );
+    try {
+      late final int? persistedMs;
+      if (lease == null) {
+        persistedMs = await write();
+      } else {
+        persistedMs = await repo.guardReportGeneration(lease, write);
+      }
+      // Another foreground/worker owner may win the compare-and-set with an
+      // earlier timestamp. Reflect the durable winner locally so this panel's
+      // summary agrees with the next poll/reopen.
+      final current = _currentThinkingMsg(flowId);
+      if (current != null && persistedMs != null) {
+        current.modelStartedAt =
+            DateTime.fromMillisecondsSinceEpoch(persistedMs);
+        if (mounted && _ownsFlow(flowId)) setState(() {});
+      }
+    } catch (_) {
+      // The worker/service also records a missing timestamp immediately before
+      // its model call. A transient foreground write failure must not prevent
+      // the report from running or turn a recoverable UI into an error.
+    }
+  }
+
   void _releaseReportJob(
     ReportJobEntity? job,
     ReportGenerationLease? lease,
@@ -2267,13 +4060,16 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
     ReportJobRuntime.release(lease.runtimeKey);
   }
 
-  void _handleInvalidatedReport() {
+  void _handleInvalidatedReport({int? flowId}) {
+    if (!_ownsFlow(flowId)) return;
     void clearPendingUi() {
-      _msgs.removeWhere((message) => message is _ThinkingMsg);
       _busy = false;
       _observedReportJobId = null;
+      _observedReportFlowId = null;
+      _stopReportPolling();
     }
 
+    _completeThinking(flowId: flowId);
     if (mounted) {
       setState(clearPendingUi);
     } else {
@@ -2291,8 +4087,22 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
     required ReportGenerationLease? reportLease,
     required AiProviderConfig config,
     required String transactionsText,
+    int? flowId,
   }) async {
     LlmQueryException? firstError;
+    // This is the first point where the foreground flow is about to let a
+    // provider process the report. Do not timestamp queueing, privacy
+    // confirmation, context collection, or WorkManager hand-off as model
+    // thinking time. The worker applies the same rule in
+    // ReportGenerationService.generate().
+    final modelStartedAt = DateTime.now();
+    _markModelThinkingStarted(flowId, value: modelStartedAt);
+    await _persistReportModelStarted(
+      repo,
+      reportJob,
+      reportLease,
+      flowId,
+    );
     try {
       return await LlmQuery.askReport(
         reportTitle: reportTitle,
@@ -2305,7 +4115,7 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
       debugPrint('askReport failed: ${e.message}');
     }
 
-    _setThinkingKind(_ThinkingKind.reportFallback);
+    _setThinkingKind(_ThinkingKind.reportFallback, flowId: flowId);
     await _setReportJobStage(
       repo,
       reportJob,
@@ -2956,6 +4766,20 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
 
   String _friendlyAiError(LlmQueryException e) {
     final code = e.statusCode;
+    final message = e.message.trim();
+    if (RegExp(r'(图片|附件)文件(不存在|为空)').hasMatch(message)) {
+      return '附件读取失败：${_shortAiError(message)}。图片仍保留在消息里，请重新选择后再试。';
+    }
+    if (code == 413 || message.toLowerCase().contains('too large')) {
+      return '附件发送失败：文件超过当前服务商允许的大小，请压缩图片或减少一次发送的数量。';
+    }
+    if (code == 400 ||
+        code == 415 ||
+        RegExp(r'(image|vision|附件|图片).*(unsupported|不支持|invalid)',
+                caseSensitive: false)
+            .hasMatch(message)) {
+      return '当前模型或上游格式没有接受这次附件，请换用支持图片的模型，或检查服务商的上游格式。';
+    }
     if (code == 401 || code == 403) {
       return '喵没连上 AI：API Key 可能无效或没有权限，去「我的 → AI 记账设置」检查一下。';
     }
@@ -2965,7 +4789,40 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
     if (e.message.contains('TimeoutException') || e.message.contains('超时')) {
       return '喵没连上 AI：这次请求超时了，账单多的时候可以稍后重试。';
     }
+    if (code != null && code >= 500) {
+      return 'AI 服务暂时异常（HTTP $code），消息和附件都已保留，稍后可以直接重试。';
+    }
+    if (message.contains('响应解析') || message.contains('响应结构')) {
+      return 'AI 已返回内容，但应用没能正确读取响应（${_shortAiError(message)}）。';
+    }
     return '喵没连上 AI（${_shortAiError(e.message)}），待会儿再问问？';
+  }
+
+  String _attachmentFailureText(Object error) {
+    if (error is LlmParseException) {
+      final message = error.message.trim();
+      final code = error.statusCode;
+      if (RegExp(r'(图片|附件)文件(不存在|为空)').hasMatch(message)) {
+        return '附件读取失败：${_shortAiError(message)}。请重新选择后再试。';
+      }
+      if (code == 413 || message.toLowerCase().contains('too large')) {
+        return '附件发送失败：文件超过当前服务商允许的大小，请压缩图片或减少一次发送的数量。';
+      }
+      if (code == 400 || code == 415) {
+        return '当前模型或上游格式没有接受这次附件，请换用支持图片的模型，或检查服务商的上游格式。';
+      }
+      if (code == 401 || code == 403) {
+        return '附件发送失败：当前 AI 账号没有权限或登录已失效，请检查 AI 账号设置。';
+      }
+      if (message.startsWith('网络请求失败')) {
+        return '附件已保留，但发送时网络连接失败；请检查网络后直接重试。';
+      }
+      if (code != null && code >= 500) {
+        return '附件已保留，但 AI 服务暂时异常（HTTP $code），稍后可以直接重试。';
+      }
+      return 'AI 没能处理这次附件（${_shortAiError(message)}），图片仍保留在消息里。';
+    }
+    return '附件已保留，但 AI 处理失败（${_shortAiError(error)}），请稍后直接重试。';
   }
 
   String _shortAiError(Object error) {
@@ -3106,11 +4963,19 @@ ${line('上月同期', lastStart, lastSameDayEnd, lastSameDay)}
     if (msg.saved || msg.saving) return;
     msg.saving = true;
     if (mounted) setState(() {});
+    final repo = repository ?? context.read<AppRepository>();
+    var aiRunCommitted = false;
     try {
-      final repo = repository ?? context.read<AppRepository>();
       final accountId = repo.transactionAccounts.firstOrNull?.id;
       if (accountId == null) {
         if (mounted) _snack('请先在「资产管理」里加一个账户');
+        if (msg.aiRunId != null) {
+          await repo.markAiRunFailed(
+            msg.aiRunId!,
+            code: 'missing_account',
+            message: '没有可用记账账户',
+          );
+        }
         return;
       }
       // 入库前先算「异常提醒」（用当前历史，尚不含本次）：只提醒第一笔明显偏高的支出。
@@ -3137,21 +5002,22 @@ ${line('上月同期', lastStart, lastSameDayEnd, lastSameDay)}
         if (anomalyNote != null) break;
       }
 
-      // 按条目逐笔入库,记下每笔的 id(无金额的占位 null),用于之后按条目改分类。
-      final ids = <int?>[];
+      // 先组装草稿，再一次性写入 SQLite。这样多笔提案不会在中途
+      // 异常时留下半批账；有 AI run 时，run 终态也和账单在同一事务中提交。
+      final ids = List<int?>.filled(msg.entries.length, null);
+      final drafts = <TransactionDraft>[];
+      final draftIndexes = <int>[];
       CategoryEntity? feedbackCat;
       DateTime? feedbackDate;
       CategoryEntity? fallbackCat;
       DateTime? fallbackDate;
-      int savedCount = 0;
       for (int i = 0; i < msg.entries.length; i++) {
         final e = msg.entries[i];
         final amt = e.amount;
         if (amt == null || amt <= Decimal.zero) {
-          ids.add(null);
           continue;
         }
-        final id = await repo.addTransaction(
+        drafts.add(TransactionDraft(
           kind: e.kind,
           amount: amt,
           categoryId: msg.cats[i]?.id,
@@ -3160,9 +5026,8 @@ ${line('上月同期', lastStart, lastSameDayEnd, lastSameDay)}
           date: e.date,
           timePrecision: e.timePrecision,
           reimbursable: SmartTags.isReimbursable(e.note), // 出差/报销自动标待报销
-        );
-        ids.add(id);
-        savedCount++;
+        ));
+        draftIndexes.add(i);
         final cat = msg.cats[i];
         if (cat != null) {
           fallbackCat ??= cat;
@@ -3173,10 +5038,21 @@ ${line('上月同期', lastStart, lastSameDayEnd, lastSameDay)}
           }
         }
       }
-      if (savedCount == 0) {
+      if (drafts.isEmpty) {
         if (mounted) _snack('这几笔没认出金额，先补上金额再存～');
         return;
       }
+      final insertedIds = await repo.addTransactionDraftsAtomically(
+        drafts,
+        runId: msg.aiRunId,
+      );
+      if (insertedIds.length != draftIndexes.length) {
+        throw StateError('AI 记账提交结果数量不一致');
+      }
+      for (var i = 0; i < draftIndexes.length; i++) {
+        ids[draftIndexes[i]] = insertedIds[i];
+      }
+      aiRunCommitted = msg.aiRunId != null && msg.aiRunId!.trim().isNotEmpty;
       // 记完反馈:按实际入账日期统计，避免跨天/补记时次数锚到今天。
       final mainCat = feedbackCat ?? fallbackCat;
       final feedback = MeowInsights.recordFeedback(
@@ -3199,6 +5075,15 @@ ${line('上月同期', lastStart, lastSameDayEnd, lastSameDay)}
       }
       await _persistRecord(msg, repository: repo);
     } catch (error) {
+      // 原子提交已经完成后，聊天卡持久化失败不应把一个已完成的 run
+      // 改写成失败；下次打开仍可从账本和任务中心恢复。
+      if (msg.aiRunId != null && !aiRunCommitted) {
+        await repo.markAiRunFailed(
+          msg.aiRunId!,
+          code: 'commit_failed',
+          message: error.toString(),
+        );
+      }
       if (mounted) _snack('保存失败：$error');
     } finally {
       msg.saving = false;
@@ -3221,6 +5106,8 @@ ${line('上月同期', lastStart, lastSameDayEnd, lastSameDay)}
       saved: msg.saved,
       feedback: msg.savedFeedback,
       deleted: msg.deletedIdx,
+      aiRunId: msg.aiRunId,
+      rolledBack: msg.rolledBack,
     );
     if (msg.chatRowId == null) {
       msg.chatRowId = await _addChatRecordMessage(repo, json);
@@ -3290,6 +5177,39 @@ ${line('上月同期', lastStart, lastSameDayEnd, lastSameDay)}
     Haptics.selection();
     setState(() => msg.deletedIdx.add(i));
     await _persistRecord(msg); // 把删除状态写回持久化卡
+  }
+
+  Future<void> _undoRecord(_RecordMsg msg) async {
+    final runId = msg.aiRunId;
+    if (runId == null || runId.trim().isEmpty || msg.rolledBack) return;
+    final ok = await showConfirmDialog(
+      context,
+      title: '撤销本次 AI 记账？',
+      message: '只会撤销这次 AI 实际写入的账单，不影响其他记录。',
+      confirmText: '撤销',
+      destructive: true,
+    );
+    if (!ok) return;
+    final repo = context.read<AppRepository>();
+    final changed = await repo.undoAiRun(runId);
+    if (!changed) {
+      if (mounted) _snack('这次记账已经撤销，或没有可撤销的记录');
+      return;
+    }
+    msg.rolledBack = true;
+    msg.deletedIdx.addAll(
+      [
+        for (var i = 0; i < msg.txnIds.length; i++)
+          if (msg.txnIds[i] != null) i
+      ],
+    );
+    msg.savedFeedback = '本次 AI 记账已撤销';
+    await _persistRecord(msg, repository: repo);
+    if (mounted) {
+      Haptics.selection();
+      setState(() {});
+      _snack('本次 AI 记账已撤销');
+    }
   }
 
   // ── build ───────────────────────────────────────────────────────────────
@@ -3381,27 +5301,21 @@ ${line('上月同期', lastStart, lastSameDayEnd, lastSameDay)}
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     const _GreetingLine(),
-                    const SizedBox(height: 14),
-                    Padding(
-                      padding: const EdgeInsets.only(left: 0),
-                      child: _SuggestionGrid(items: _picked, onTap: _fillInput),
-                    ),
+                    if (widget.recordOnly) ...[
+                      const SizedBox(height: 14),
+                      Padding(
+                        padding: const EdgeInsets.only(left: 0),
+                        child:
+                            _SuggestionGrid(items: _picked, onTap: _fillInput),
+                      ),
+                    ],
                   ],
                 ),
               ),
             )
           : LayoutBuilder(
-              builder: (context, constraints) => ListView.builder(
-                controller: _scroll,
-                padding: EdgeInsets.fromLTRB(
-                  16,
-                  4,
-                  16,
-                  _latestUserAnchorBottomPadding(constraints.maxHeight),
-                ),
-                itemCount: _msgs.length,
-                itemBuilder: (_, i) =>
-                    _buildMsg(_msgs[i], isLast: i == _msgs.length - 1),
+              builder: (context, constraints) => _messageHistoryList(
+                constraints,
               ),
             ),
     );
@@ -3416,6 +5330,7 @@ ${line('上月同期', lastStart, lastSameDayEnd, lastSameDay)}
             child: Stack(
               children: [
                 Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
                     const SizedBox(height: headerHeight),
                     Expanded(child: content),
@@ -3513,10 +5428,11 @@ ${line('上月同期', lastStart, lastSameDayEnd, lastSameDay)}
                                 ),
                               ),
                               SizedBox(height: compact ? 8 : 12),
-                              _SuggestionGrid(
-                                items: _picked,
-                                onTap: _fillInput,
-                              ),
+                              if (widget.recordOnly)
+                                _SuggestionGrid(
+                                  items: _picked,
+                                  onTap: _fillInput,
+                                ),
                             ],
                           )
                         : const SizedBox(
@@ -3552,6 +5468,7 @@ ${line('上月同期', lastStart, lastSameDayEnd, lastSameDay)}
             _focus.hasFocus || _inputFocusGuardActive || _inputSessionActive;
         final frac = (focused ? 1.0 : _heightFrac).clamp(0.35, 1.0);
         return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             Expanded(
               child: GestureDetector(
@@ -3586,22 +5503,8 @@ ${line('上月同期', lastStart, lastSameDayEnd, lastSameDay)}
                   Expanded(
                     child: _historyViewport(
                       LayoutBuilder(
-                        builder: (context, constraints) => ListView.builder(
-                          controller: _scroll,
-                          padding: EdgeInsets.fromLTRB(
-                            16,
-                            2,
-                            16,
-                            _latestUserAnchorBottomPadding(
-                              constraints.maxHeight,
-                            ),
-                          ),
-                          itemCount: _msgs.length,
-                          itemBuilder: (_, i) => _buildMsg(
-                            _msgs[i],
-                            isLast: i == _msgs.length - 1,
-                          ),
-                        ),
+                        builder: (context, constraints) =>
+                            _messageHistoryList(constraints),
                       ),
                     ),
                   ),
@@ -3750,14 +5653,21 @@ ${line('上月同期', lastStart, lastSameDayEnd, lastSameDay)}
     final ok = await showConfirmDialog(
       context,
       title: '删除对话记录？',
-      message: '喵助手的聊天记录会全部清空，不可恢复。',
+      message: '只会清空当前会话的聊天记录，不会影响其他会话。删除后不可恢复。',
       confirmText: '删除',
       destructive: true,
     );
     if (!ok || !mounted) return;
     final repo = context.read<AppRepository>();
-    await repo.clearChatMessages();
-    if (mounted) setState(() => clearChatHistoryMemory(repo));
+    await repo.clearChatSessionMessages(_sessionId);
+    if (mounted) {
+      setState(() => clearChatHistoryMemory(repo, _sessionId));
+    }
+  }
+
+  Future<void> _setChatWebSearchEnabled(bool enabled) async {
+    final repo = context.read<AppRepository>();
+    await repo.setChatWebSearchEnabled(enabled);
   }
 
   // 卡中卡输入框：浅底圆角框 + 工具行。
@@ -3765,99 +5675,154 @@ ${line('上月同期', lastStart, lastSameDayEnd, lastSameDay)}
   Widget _inputBox(BuildContext context, {bool blurEnabled = true}) {
     final scheme = Theme.of(context).colorScheme;
     return TextFieldTapRegion(
-      child: Container(
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(28),
-          boxShadow: const [
-            BoxShadow(
-              color: Color(0x14000000),
-              blurRadius: 14,
-              offset: Offset(0, 2),
-            ),
-          ],
-        ),
-        child: GlassSurface(
-          radius: 28,
-          blur: 10,
-          blurEnabled: blurEnabled,
-          opacity: blurEnabled ? 0.55 : 0.9,
-          padding: const EdgeInsets.fromLTRB(14, 12, 10, 10),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Listener(
-                behavior: HitTestBehavior.translucent,
-                onPointerDown: (_) => _handleInputPointerDown(),
-                child: TextField(
-                  key: const ValueKey('ai-chat-input-field'),
-                  controller: _ctrl,
-                  focusNode: _focus,
-                  autofocus: false,
-                  minLines: 1,
-                  maxLines: 4,
-                  textInputAction: TextInputAction.send,
-                  onTap: () => _requestInputFocus(bypassThrottle: true),
-                  onSubmitted: (_) => _send(),
-                  style: const TextStyle(
-                    fontSize: 15,
-                    fontWeight: FontWeight.w300,
-                  ),
-                  decoration: InputDecoration(
-                    hintText: '记一记',
-                    hintStyle: TextStyle(
-                      fontSize: 14,
-                      color: scheme.onSurfaceVariant.withValues(alpha: 0.5),
+      child: AppGlassInputShell(
+        key: const ValueKey('ai-chat-input-shell'),
+        // Keep the denser blur used by the assistant input before the shell
+        // unification. Opacity and dimensions remain shared with the home bar.
+        blur: 10,
+        blurEnabled: blurEnabled,
+        opacity: 0.4,
+        padding: AppGlassInputShell.standardPadding,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            if (_draftAttachments.isNotEmpty) ...[
+              _AttachmentDraftStrip(
+                attachments: _draftAttachments,
+                onRemove: (index) {
+                  setState(() => _draftAttachments.removeAt(index));
+                  _onInputChanged();
+                },
+              ),
+              const SizedBox(height: 10),
+            ],
+            Listener(
+              behavior: HitTestBehavior.translucent,
+              onPointerDown: (_) => _handleInputPointerDown(),
+              child: Padding(
+                padding: const EdgeInsets.only(bottom: 2),
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(minHeight: 24),
+                  child: TextField(
+                    key: const ValueKey('ai-chat-input-field'),
+                    controller: _ctrl,
+                    focusNode: _focus,
+                    autofocus: false,
+                    minLines: 1,
+                    maxLines: 4,
+                    textInputAction: TextInputAction.send,
+                    onTap: () => _requestInputFocus(bypassThrottle: true),
+                    onSubmitted: (_) => _send(),
+                    style: const TextStyle(
+                      fontSize: 17,
+                      height: 1.2,
+                      fontWeight: FontWeight.w400,
+                      fontFamilyFallback: _cjkFontFallback,
+                      fontVariations: [FontVariation('wght', 350)],
                     ),
-                    filled: false,
-                    border: InputBorder.none,
-                    enabledBorder: InputBorder.none,
-                    focusedBorder: InputBorder.none,
-                    disabledBorder: InputBorder.none,
-                    errorBorder: InputBorder.none,
-                    focusedErrorBorder: InputBorder.none,
-                    isDense: true,
-                    contentPadding: EdgeInsets.zero,
+                    decoration: InputDecoration(
+                      hintText: widget.recordOnly ? '记一记' : '聊点什么',
+                      hintStyle: AppGlassInputShell.standardHintStyle(scheme),
+                      filled: false,
+                      border: InputBorder.none,
+                      enabledBorder: InputBorder.none,
+                      focusedBorder: InputBorder.none,
+                      disabledBorder: InputBorder.none,
+                      errorBorder: InputBorder.none,
+                      focusedErrorBorder: InputBorder.none,
+                      isDense: true,
+                      contentPadding: EdgeInsets.zero,
+                    ),
                   ),
                 ),
               ),
-              const SizedBox(height: 4),
-              Row(
-                children: [
-                  _CircleBtn(
+            ),
+            const SizedBox(height: 10),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                Transform.translate(
+                  offset: const Offset(-4, 2),
+                  child: _CircleBtn(
+                    key: const ValueKey('ai-chat-plus-button'),
                     icon: Icons.add,
-                    onTap: () => showRecordExtrasSheet(context),
+                    // The home record composer keeps its original circular
+                    // plus background; ordinary Chats keeps the Claude-style
+                    // bare rounded glyph. These branches intentionally stay
+                    // independent so a home keyboard transition cannot alter
+                    // the Chats attachment control.
+                    plain: widget.fullScreen || !widget.recordOnly,
+                    onTap: () {
+                      final repo = context.read<AppRepository>();
+                      showChatAddSheet(
+                        context,
+                        webSearchEnabled: repo.chatWebSearchAllowed,
+                        onWebSearchChanged: _setChatWebSearchEnabled,
+                        toolAccess: repo.chatToolAccess,
+                        onToolAccessChanged: repo.setChatToolAccess,
+                        onAttachmentsPicked: _addDraftAttachments,
+                      );
+                    },
                   ),
-                  const SizedBox(width: 6),
-                  if (widget.fullScreen) ...[
-                    Builder(
-                      builder: (btnCtx) => _ModelPill(
-                        repo: context.watch<AppRepository>(),
-                        onTap: () => _showModelPicker(btnCtx),
-                      ),
-                    ),
-                    const SizedBox(width: 4),
-                    Builder(
-                      builder: (btnCtx) => _EffortLabel(
-                        repo: context.watch<AppRepository>(),
-                        onTap: () => _showEffortMenu(btnCtx),
-                      ),
-                    ),
-                  ] else
-                    _AiModeSwitchPill(onTap: _switchToManual),
-                  const Spacer(),
-                  ValueListenableBuilder<bool>(
-                    valueListenable: _hasInputText,
-                    builder: (context, hasText, _) => _CircleBtn(
-                      icon: Icons.arrow_upward,
-                      filled: true,
-                      onTap: (hasText && !_busy) ? () => _send() : null,
+                ),
+                const SizedBox(width: 4),
+                if (widget.fullScreen) ...[
+                  Expanded(
+                    child: Row(
+                      mainAxisSize: MainAxisSize.max,
+                      crossAxisAlignment: CrossAxisAlignment.center,
+                      children: [
+                        Flexible(
+                          fit: FlexFit.loose,
+                          child: Transform.translate(
+                            offset: const Offset(-4, 2),
+                            child: Builder(
+                              builder: (btnCtx) => _ModelPill(
+                                model: _chatConfig(
+                                  context.watch<AppRepository>(),
+                                ).model,
+                                selected: _activeInputSelection ==
+                                    _InputSelection.model,
+                                onTap: () => _showModelPicker(btnCtx),
+                              ),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: _aiChatSelectionGap),
+                        Transform.translate(
+                          offset: const Offset(-4, 2),
+                          child: Builder(
+                            builder: (btnCtx) => _EffortLabel(
+                              effort: _chatEffort(
+                                context.watch<AppRepository>(),
+                              ),
+                              selected: _activeInputSelection ==
+                                  _InputSelection.effort,
+                              onTap: () => _showEffortMenu(btnCtx),
+                            ),
+                          ),
+                        ),
+                      ],
                     ),
                   ),
-                ],
-              ),
-            ],
-          ),
+                ] else
+                  _AiModeSwitchPill(
+                    key: const ValueKey('ai-chat-mode-switch-pill'),
+                    onTap: _switchToManual,
+                  ),
+                if (!widget.fullScreen) const Spacer(),
+                ValueListenableBuilder<bool>(
+                  valueListenable: _hasInputText,
+                  builder: (context, hasText, _) => _CircleBtn(
+                    key: const ValueKey('ai-chat-send-button'),
+                    icon: Icons.arrow_upward,
+                    onTap: (hasText && !_busy) ? () => _send() : null,
+                  ),
+                ),
+              ],
+            ),
+          ],
         ),
       ),
     );
@@ -3865,40 +5830,203 @@ ${line('上月同期', lastStart, lastSameDayEnd, lastSameDay)}
 
   /// 取最近 N 轮对话（user+assistant 交替），用于多轮上下文。
   /// 只取 _UserMsg / _AnswerMsg，跳过记账卡/报告/信息提示等。
-  List<Map<String, String>> _recentTurns({int maxTurns = 6}) {
+  List<Map<String, String>> _recentTurns({
+    int maxTurns = 6,
+    bool excludeNewestUser = false,
+  }) {
     final result = <Map<String, String>>[];
+    var newestUserExcluded = !excludeNewestUser;
     for (final msg in _msgs.reversed) {
       if (result.length >= maxTurns * 2) break;
       if (msg is _AnswerMsg) {
         result.insert(0, {'role': 'assistant', 'content': msg.text});
       } else if (msg is _UserMsg) {
+        if (!newestUserExcluded) {
+          newestUserExcluded = true;
+          continue;
+        }
         result.insert(0, {'role': 'user', 'content': msg.text});
       }
     }
-    return result;
+    return AiContextCompressor.compactTurns(result);
   }
 
-  void _regenerate(_AnswerMsg m) {
+  Future<void> _regenerate(_AnswerMsg m) async {
     if (_busy || m.question.isEmpty) return;
+    final flowId = _beginFlow();
+    final answerIndex = _msgs.indexOf(m);
+    _ThinkingMsg? oldThinking;
+    if (answerIndex > 0 && _msgs[answerIndex - 1] is _ThinkingMsg) {
+      oldThinking = _msgs[answerIndex - 1] as _ThinkingMsg;
+    }
     setState(() {
       _msgs.remove(m);
-      _msgs.add(_ThinkingMsg(_ThinkingKind.queryCollect));
+      if (oldThinking != null) _msgs.remove(oldThinking);
+      _msgs.add(_ThinkingMsg(_ThinkingKind.queryCollect, flowId: flowId));
       _busy = true;
     });
-    _restartThinkingTicker();
+    final rowId = m.chatRowId;
+    try {
+      if (rowId != null) {
+        _chatRowIdsInMemory.remove(rowId);
+        await context.read<AppRepository>().deleteChatSessionMessage(
+              sessionId: _sessionId,
+              messageId: rowId,
+            );
+      }
+    } catch (error, stackTrace) {
+      await _handleUnexpectedFlowError(flowId, error, stackTrace);
+      _finishFlow(flowId);
+      return;
+    }
+    if (!mounted || !_ownsFlow(flowId)) {
+      _finishFlow(flowId);
+      return;
+    }
+    _restartThinkingTicker(flowId: flowId);
     _scrollToBottom();
-    _runQuery(m.question);
+    unawaited(_runQuerySafely(flowId, m.question));
+  }
+
+  void _continueAnswer(_AnswerMsg m) {
+    if (_busy || m.question.isEmpty || m.text.trim().isEmpty) return;
+    final flowId = _beginFlow();
+    setState(() {
+      _msgs.add(_ThinkingMsg(_ThinkingKind.queryAnswer, flowId: flowId));
+      _busy = true;
+    });
+    _restartThinkingTicker(flowId: flowId);
+    _scrollToBottom();
+    unawaited(
+      _runQuerySafely(
+        flowId,
+        '上一次回答因网络中断停在下面，请直接从中断处继续，不要重复已经给出的内容。\n\n'
+        '原问题：${m.question}\n\n已完成部分：${m.text}',
+        chatOnly: true,
+      ),
+    );
+  }
+
+  String _messageTimeLabel(DateTime time) {
+    final local = time.toLocal();
+    final hh = local.hour.toString().padLeft(2, '0');
+    final mm = local.minute.toString().padLeft(2, '0');
+    final now = DateTime.now();
+    final today = DateUtils.isSameDay(local, now);
+    final yesterday = DateUtils.isSameDay(
+      local,
+      now.subtract(const Duration(days: 1)),
+    );
+    if (today) return '今天 $hh:$mm';
+    if (yesterday) return '昨天 $hh:$mm';
+    return '${local.month}月${local.day}日 $hh:$mm';
+  }
+
+  void _dismissTextSelection(_UserMsg message) {
+    if (!identical(_textSelectingUserMsg, message)) return;
+    _textSelectionScrim?.remove();
+    _textSelectionScrim = null;
+    if (mounted) setState(() => _textSelectingUserMsg = null);
+  }
+
+  Future<void> _showTextSelection(
+    _UserMsg message,
+    Rect anchor,
+  ) async {
+    if (!mounted || message.text.trim().isEmpty) return;
+    _textSelectionScrim?.remove();
+    _textSelectionScrim = null;
+    setState(() => _textSelectingUserMsg = message);
+    // Paint a neutral scrim above the page with a cut-out for the actual
+    // message. The read-only EditableText remains in the original bubble and
+    // inserts its native handles/toolbar above this entry on the next frame.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !identical(_textSelectingUserMsg, message)) return;
+      final overlay = Overlay.of(context, rootOverlay: true);
+      final highlight = _scaledMessageRect(anchor).inflate(1.5);
+      final entry = OverlayEntry(
+        builder: (_) => Stack(
+          children: [
+            Positioned.fill(
+              child: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: () => _dismissTextSelection(message),
+              ),
+            ),
+            Positioned.fill(
+              child: AppMenuScrim(
+                highlightRect: highlight,
+                radius: 21,
+              ),
+            ),
+          ],
+        ),
+      );
+      _textSelectionScrim = entry;
+      overlay.insert(entry);
+    });
+  }
+
+  Future<void> _showUserMessageMenu(
+    BuildContext anchor,
+    _UserMsg message,
+  ) async {
+    final text = message.text.trim();
+    if (text.isEmpty) return;
+    Haptics.medium();
+    final box = anchor.findRenderObject() as RenderBox?;
+    if (box == null) return;
+    final rect = box.localToGlobal(Offset.zero) & box.size;
+    if (mounted) setState(() => _selectedUserMsg = message);
+    try {
+      await showGeneralDialog<void>(
+        context: context,
+        barrierDismissible: true,
+        barrierLabel: '消息操作',
+        barrierColor: Colors.transparent,
+        transitionDuration: const Duration(milliseconds: 170),
+        pageBuilder: (_, __, ___) => _MessageActionOverlay(
+          anchor: rect,
+          timeLabel: _messageTimeLabel(message.sentAt),
+          onCopy: () {
+            Clipboard.setData(ClipboardData(text: message.text));
+            if (mounted) showAppToast(context, '已复制');
+          },
+          onEdit: () {
+            if (_busy) {
+              _snack('当前正在处理，请稍候再编辑');
+              return;
+            }
+            _ctrl.value = TextEditingValue(
+              text: message.text,
+              selection: TextSelection.collapsed(offset: message.text.length),
+            );
+            _requestInputFocus(bypassThrottle: true);
+          },
+          onSelectText: () => unawaited(_showTextSelection(message, rect)),
+        ),
+        transitionBuilder: (_, animation, __, child) => FadeTransition(
+          opacity: animation,
+          child: child,
+        ),
+      );
+    } finally {
+      if (mounted && identical(_selectedUserMsg, message)) {
+        setState(() => _selectedUserMsg = null);
+      }
+    }
   }
 
   Future<void> _regenerateReport(_ReportMsg m) async {
     if (_busy || m.question.isEmpty) return;
     final repo = context.read<AppRepository>();
-    final aiConfig = repo.aiProviderConfigFor(AiTaskType.chatQuery);
-    if (!aiConfig.hasKey) {
+    final aiConfig = _chatConfig(repo);
+    if (!aiConfig.hasCredential) {
       showAppToast(context, '先去「我的 → AI 记账设置」填写 API Key');
       return;
     }
     final report = m.report;
+    final flowId = _beginFlow();
     late final ReportJobEntity job;
     try {
       final baseLease = await repo.acquireReportGenerationLease();
@@ -3912,6 +6040,7 @@ ${line('上月同期', lastStart, lastSameDayEnd, lastSameDay)}
           periodEnd: report.periodEnd,
           bookId: report.bookId,
           reportId: report.id,
+          sessionId: _sessionId,
         ),
       );
     } on ReportGenerationInvalidated {
@@ -3921,28 +6050,55 @@ ${line('上月同期', lastStart, lastSameDayEnd, lastSameDay)}
     if (!mounted) return;
     setState(() {
       _msgs.remove(m);
-      _msgs.add(_ThinkingMsg(_ThinkingKind.reportCollect));
+      _msgs.add(_ThinkingMsg(_ThinkingKind.reportCollect, flowId: flowId));
       _busy = true;
     });
-    _restartThinkingTicker();
+    _restartThinkingTicker(flowId: flowId);
     _scrollToBottom();
     try {
-      await _runQuery(m.question, repository: repo, resumeJob: job);
-    } catch (_) {
-      if (!mounted) return;
+      await _runQuery(
+        m.question,
+        repository: repo,
+        resumeJob: job,
+        flowId: flowId,
+      ).timeout(_kAiFlowTimeout);
+    } catch (error, stackTrace) {
+      await _handleUnexpectedFlowError(flowId, error, stackTrace);
+      if (!mounted || !_ownsFlow(flowId)) {
+        _finishFlow(flowId);
+        return;
+      }
+      _completeThinking(flowId: flowId);
       setState(() {
-        _msgs.removeWhere((msg) => msg is _ThinkingMsg);
         _msgs.add(m);
         _msgs.add(_InfoMsg('报告重新生成失败，稍后再试', error: true));
         _busy = false;
       });
     }
+    _finishFlow(flowId);
     _scrollToBottom();
   }
 
   Widget _buildMsg(_Msg m, {bool isLast = false}) {
+    // 首页只展示本次记账输入及其账卡；全屏喵助手的历史问答/报告不在这里
+    // 重新出现，避免用户误以为主页仍支持聊天或查账。
+    if (widget.recordOnly &&
+        ((m is _UserMsg && !identical(m, _latestUserMsg)) ||
+            m is _AnswerMsg ||
+            m is _ReportMsg)) {
+      return const SizedBox.shrink();
+    }
     if (m is _UserMsg) {
-      final bubble = _UserBubble(text: m.text);
+      final bubble = _UserBubble(
+        text: m.text,
+        attachments: m.attachments,
+        fullBleedAttachments: true,
+        selected: identical(_selectedUserMsg, m) ||
+            identical(_textSelectingUserMsg, m),
+        textSelectionMode: identical(_textSelectingUserMsg, m),
+        onSelectionDismissed: () => _dismissTextSelection(m),
+        onLongPress: (anchor) => unawaited(_showUserMessageMenu(anchor, m)),
+      );
       return identical(m, _latestUserMsg)
           ? KeyedSubtree(key: _latestUserMsgKey, child: bubble)
           : bubble;
@@ -3953,8 +6109,16 @@ ${line('上月同期', lastStart, lastSameDayEnd, lastSameDay)}
       return _AnswerBubble(
         text: m.text,
         animate: !m.shown,
+        streaming: m.streaming,
+        interrupted: m.interrupted,
+        sources: m.sources,
         onShown: () => m.shown = true,
-        onRegenerate: m.question.isEmpty ? null : () => _regenerate(m),
+        onRegenerate: widget.recordOnly || m.question.isEmpty
+            ? null
+            : () => _regenerate(m),
+        onContinue: widget.recordOnly || !m.interrupted || m.question.isEmpty
+            ? null
+            : () => _continueAnswer(m),
         // 猫只出现在最后一条回复下（对齐 Claude），历史回复不重复放猫。
         showMascot: isLast,
       );
@@ -3962,7 +6126,9 @@ ${line('上月同期', lastStart, lastSameDayEnd, lastSameDay)}
     if (m is _ReportMsg) {
       return _ReportBubble(
         msg: m,
-        onRegenerate: m.question.isEmpty ? null : () => _regenerateReport(m),
+        onRegenerate: widget.recordOnly || m.question.isEmpty
+            ? null
+            : () => _regenerateReport(m),
         showMascot: isLast,
       );
     }
@@ -3974,6 +6140,7 @@ ${line('上月同期', lastStart, lastSameDayEnd, lastSameDay)}
         onSave: m.saving ? null : () => _save(m),
         onChangeCategory: (i) => _showCategoryPicker(m, i),
         onDeleteEntry: (i) => _deleteEntry(m, i),
+        onUndo: m.rolledBack ? null : () => _undoRecord(m),
       );
     }
     if (m is _RefundMsg) return _RefundBubble(msg: m);
@@ -4043,19 +6210,66 @@ abstract class _Msg {}
 
 class _UserMsg extends _Msg {
   final String text;
-  _UserMsg(this.text);
+  final DateTime sentAt;
+  final List<ChatAttachment> attachments;
+  int? chatRowId;
+  _UserMsg(
+    this.text, {
+    this.attachments = const [],
+    this.chatRowId,
+    DateTime? sentAt,
+  }) : sentAt = sentAt ?? DateTime.now();
 }
 
 class _ThinkingMsg extends _Msg {
   _ThinkingKind kind;
+  final int? flowId;
   bool canContinueInBackground;
   final DateTime startedAt;
+  DateTime? modelStartedAt;
+  DateTime? completedAt;
+  bool expanded = false;
+  bool hidden = false;
+  final List<_ThinkingStep> steps;
+  final List<AiWebSource> sources = <AiWebSource>[];
 
   _ThinkingMsg(
     this.kind, {
+    this.flowId,
     DateTime? startedAt,
+    List<_ThinkingStep>? steps,
   })  : canContinueInBackground = false,
-        startedAt = startedAt ?? DateTime.now();
+        startedAt = startedAt ?? DateTime.now(),
+        steps = steps ?? <_ThinkingStep>[] {
+    if (this.steps.isEmpty) {
+      this.steps.add(_ThinkingStep(kind: kind, startedAt: this.startedAt));
+    }
+  }
+
+  bool get completed => completedAt != null;
+
+  void markModelStarted([DateTime? value]) {
+    modelStartedAt ??= value ?? DateTime.now();
+  }
+
+  Duration get elapsed =>
+      (completedAt ?? DateTime.now()).difference(modelStartedAt ?? startedAt);
+}
+
+class _ThinkingStep {
+  final _ThinkingKind kind;
+  final DateTime startedAt;
+  DateTime? completedAt;
+  String detail;
+
+  _ThinkingStep({
+    required this.kind,
+    required this.startedAt,
+    this.completedAt,
+    this.detail = '',
+  });
+
+  Duration get elapsed => (completedAt ?? DateTime.now()).difference(startedAt);
 }
 
 enum _ThinkingKind {
@@ -4068,6 +6282,7 @@ enum _ThinkingKind {
   reportGenerate,
   reportFallback,
   reportSave,
+  webSearch,
 }
 
 class _InfoMsg extends _Msg {
@@ -4077,10 +6292,35 @@ class _InfoMsg extends _Msg {
 }
 
 class _AnswerMsg extends _Msg {
-  final String text;
+  String text;
   final String question;
+  final List<AiWebSource> sources;
   bool shown;
-  _AnswerMsg(this.text, {this.question = '', this.shown = false});
+  bool streaming;
+  int? chatRowId;
+  bool interrupted = false;
+  _AnswerMsg(
+    this.text, {
+    this.question = '',
+    List<AiWebSource>? sources,
+    this.shown = false,
+    this.streaming = false,
+    this.chatRowId,
+  }) : sources = sources ?? <AiWebSource>[];
+}
+
+class _StreamingAnswer {
+  final String text;
+  final bool renderedInUi;
+  final List<AiWebSource> sources;
+  final _AnswerMsg? message;
+
+  const _StreamingAnswer(
+    this.text, {
+    required this.renderedInUi,
+    this.sources = const [],
+    this.message,
+  });
 }
 
 class _ReportMsg extends _Msg {
@@ -4112,6 +6352,11 @@ class _RecordMsg extends _Msg {
   /// 用它把最新状态写回，跨重启恢复。null=还没持久化。
   int? chatRowId;
 
+  /// Durable AI operation which produced this card. Used for one-tap undo and
+  /// diagnostics; legacy cards leave this null.
+  final String? aiRunId;
+  bool rolledBack = false;
+
   _RecordMsg({
     required this.entries,
     required this.cats,
@@ -4119,6 +6364,8 @@ class _RecordMsg extends _Msg {
     this.savedIds = const [],
     this.txnIds = const [],
     this.savedFeedback = '',
+    this.aiRunId,
+    this.rolledBack = false,
     this.chatRowId,
   });
 }
@@ -4233,6 +6480,8 @@ class DecodedRecordCard {
   final bool saved;
   final String feedback;
   final Set<int> deleted;
+  final String? aiRunId;
+  final bool rolledBack;
   const DecodedRecordCard({
     required this.entries,
     required this.catIds,
@@ -4240,6 +6489,8 @@ class DecodedRecordCard {
     required this.saved,
     required this.feedback,
     required this.deleted,
+    this.aiRunId,
+    this.rolledBack = false,
   });
 }
 
@@ -4252,6 +6503,8 @@ String encodeRecordCard({
   required bool saved,
   required String feedback,
   required Set<int> deleted,
+  String? aiRunId,
+  bool rolledBack = false,
 }) {
   final list = <Map<String, dynamic>>[];
   for (var i = 0; i < entries.length; i++) {
@@ -4272,6 +6525,8 @@ String encodeRecordCard({
     'saved': saved,
     'feedback': feedback,
     'deleted': deleted.toList(),
+    if (aiRunId != null && aiRunId.trim().isNotEmpty) 'aiRunId': aiRunId,
+    if (rolledBack) 'rolledBack': true,
     'entries': list,
   });
 }
@@ -4320,6 +6575,8 @@ DecodedRecordCard decodeRecordCard(String json) {
     saved: (map['saved'] as bool?) ?? true,
     feedback: (map['feedback'] as String?) ?? '',
     deleted: deleted,
+    aiRunId: (map['aiRunId'] as String?)?.trim(),
+    rolledBack: map['rolledBack'] == true,
   );
 }
 
@@ -4503,6 +6760,37 @@ bool _shouldCreateReportDocument({
 // 消息气泡
 // ─────────────────────────────────────────────────────────────────────────────
 
+// Chat body copy is intentionally quieter than the input control. Keep the
+// values in one place so user messages, answers, reports, and notices stay at
+// the same visual scale when the panel is used as a full Chats conversation.
+const double _chatBodyFontSize = 15.5;
+const double _chatBodyLineHeight = 1.48;
+const _cjkFontFallback = <String>['NotoSansSC'];
+
+TextStyle _chatBodyStyle(
+  ColorScheme scheme, {
+  double fontSize = _chatBodyFontSize,
+  double? height = _chatBodyLineHeight,
+  FontWeight fontWeight = FontWeight.w400,
+  double? variableWeight = 350,
+  Color? color,
+}) =>
+    TextStyle(
+      fontSize: fontSize,
+      height: height,
+      fontWeight: fontWeight,
+      // Rich/SelectableText spans do not always inherit ThemeData.fontFamily
+      // on the Windows screenshot engine. Set the app's Latin face explicitly
+      // so CJK fallback is resolved consistently instead of painting a .notdef
+      // block for otherwise valid characters.
+      fontFamily: 'Nunito',
+      fontFamilyFallback: _cjkFontFallback,
+      fontVariations: variableWeight == null
+          ? null
+          : [FontVariation('wght', variableWeight)],
+      color: color ?? scheme.onSurface.withValues(alpha: 0.9),
+    );
+
 List<InlineSpan> _chatNumberSpans(String text, TextStyle base) {
   final spans = <InlineSpan>[];
   final numberStyle = base.copyWith(
@@ -4524,9 +6812,73 @@ List<InlineSpan> _chatNumberSpans(String text, TextStyle base) {
   return spans;
 }
 
-class _UserBubble extends StatelessWidget {
+class _UserBubble extends StatefulWidget {
   final String text;
-  const _UserBubble({required this.text});
+  final List<ChatAttachment> attachments;
+  final bool fullBleedAttachments;
+  final bool selected;
+  final bool textSelectionMode;
+  final VoidCallback? onSelectionDismissed;
+  final ValueChanged<BuildContext>? onLongPress;
+
+  const _UserBubble({
+    required this.text,
+    this.attachments = const [],
+    this.fullBleedAttachments = false,
+    this.selected = false,
+    this.textSelectionMode = false,
+    this.onSelectionDismissed,
+    this.onLongPress,
+  });
+
+  @override
+  State<_UserBubble> createState() => _UserBubbleState();
+}
+
+class _UserBubbleState extends State<_UserBubble> {
+  late final TextEditingController _selectionController;
+  final FocusNode _selectionFocus = FocusNode();
+  final GlobalKey<EditableTextState> _editableKey =
+      GlobalKey<EditableTextState>();
+
+  @override
+  void initState() {
+    super.initState();
+    _selectionController = TextEditingController(text: widget.text);
+    if (widget.textSelectionMode) _scheduleNativeSelection();
+  }
+
+  @override
+  void didUpdateWidget(covariant _UserBubble oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.text != widget.text) {
+      _selectionController.text = widget.text;
+    }
+    if (!oldWidget.textSelectionMode && widget.textSelectionMode) {
+      _scheduleNativeSelection();
+    } else if (oldWidget.textSelectionMode && !widget.textSelectionMode) {
+      _selectionFocus.unfocus();
+    }
+  }
+
+  void _scheduleNativeSelection() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !widget.textSelectionMode || widget.text.isEmpty) return;
+      _selectionController.selection = TextSelection(
+        baseOffset: 0,
+        extentOffset: widget.text.length,
+      );
+      _selectionFocus.requestFocus();
+      _editableKey.currentState?.showToolbar();
+    });
+  }
+
+  @override
+  void dispose() {
+    _selectionController.dispose();
+    _selectionFocus.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -4534,68 +6886,859 @@ class _UserBubble extends StatelessWidget {
     final bubbleStyle = context.select<AppRepository, UserMessageBubbleStyle>(
       (repo) => repo.userMessageBubbleStyle,
     );
-    final bubbleColor = bubbleStyle == UserMessageBubbleStyle.followCardOpacity
-        ? AppColors.card(scheme)
-        : scheme.surfaceContainerHighest;
-    const textStyle = TextStyle(
+    final bubbleColor = widget.selected
+        ? scheme.surface.withValues(alpha: 0.96)
+        : bubbleStyle == UserMessageBubbleStyle.followCardOpacity
+            ? AppColors.card(scheme)
+            : scheme.surfaceContainerHighest;
+    final textStyle = _chatBodyStyle(
+      scheme,
       fontSize: 15,
-      fontWeight: FontWeight.w400,
-      fontVariations: [FontVariation('wght', 330)],
+      height: null,
+      color: scheme.onSurface,
     );
-    return Align(
-      alignment: Alignment.centerRight,
-      child: Container(
-        margin: const EdgeInsets.only(bottom: 10, left: 40),
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-        decoration: BoxDecoration(
+    final hasAttachments = widget.attachments.isNotEmpty;
+    final hasText = widget.text.trim().isNotEmpty;
+
+    Widget buildTextContent() {
+      if (!hasText) return const SizedBox.shrink();
+      if (widget.textSelectionMode) {
+        return DefaultSelectionStyle(
+          selectionColor: const Color(0xFF0A84FF).withValues(alpha: 0.28),
+          child: EditableText(
+            key: _editableKey,
+            controller: _selectionController,
+            focusNode: _selectionFocus,
+            readOnly: true,
+            showCursor: false,
+            forceLine: false,
+            maxLines: null,
+            style: textStyle,
+            cursorColor: const Color(0xFF0A84FF),
+            backgroundCursorColor: scheme.surface,
+            selectionColor: const Color(0xFF0A84FF).withValues(alpha: 0.28),
+            selectionControls: materialTextSelectionControls,
+            onTapOutside: (_) {
+              _selectionFocus.unfocus();
+              widget.onSelectionDismissed?.call();
+            },
+            contextMenuBuilder: (context, state) =>
+                AdaptiveTextSelectionToolbar.editableText(
+              editableTextState: state,
+            ),
+          ),
+        );
+      }
+      return Text.rich(
+        TextSpan(children: _chatNumberSpans(widget.text, textStyle)),
+        style: textStyle,
+      );
+    }
+
+    BoxDecoration textSurfaceDecoration() => BoxDecoration(
           color: bubbleColor,
+          border: widget.selected
+              ? Border.all(
+                  color: scheme.onSurface.withValues(alpha: 0.13),
+                  width: 0.7,
+                )
+              : null,
           borderRadius: const BorderRadius.only(
             topLeft: Radius.circular(16),
             topRight: Radius.circular(16),
             bottomLeft: Radius.circular(16),
             bottomRight: Radius.circular(4),
           ),
+          boxShadow: widget.selected
+              ? [
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: 0.14),
+                    blurRadius: 24,
+                    offset: const Offset(0, 9),
+                  ),
+                ]
+              : null,
+        );
+
+    Widget buildTextSurface() => AnimatedContainer(
+          key: const ValueKey('ai-chat-user-bubble-surface'),
+          duration: const Duration(milliseconds: 150),
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+          decoration: textSurfaceDecoration(),
+          child: buildTextContent(),
+        );
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        Widget bubble = Align(
+          alignment: Alignment.centerRight,
+          child: Padding(
+            // Attachments follow the Claude/GPT layout: the image strip uses
+            // the whole chat content width, while text remains a compact right
+            // bubble.
+            padding: EdgeInsets.only(bottom: 10, left: hasAttachments ? 0 : 40),
+            child: Builder(
+              builder: (bubbleContext) => GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onLongPress:
+                    widget.textSelectionMode || widget.onLongPress == null
+                        ? null
+                        : () => widget.onLongPress!(bubbleContext),
+                child: AnimatedScale(
+                  key: const ValueKey('ai-chat-user-bubble-scale'),
+                  scale: widget.selected ? 1.18 : 1,
+                  alignment: Alignment.centerRight,
+                  duration: const Duration(milliseconds: 170),
+                  curve: Curves.easeOutBack,
+                  child: hasAttachments
+                      ? SizedBox(
+                          width: double.infinity,
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            crossAxisAlignment: CrossAxisAlignment.end,
+                            children: [
+                              _SentAttachmentGrid(
+                                attachments: widget.attachments,
+                              ),
+                              if (hasText) ...[
+                                const SizedBox(height: 8),
+                                buildTextSurface(),
+                              ],
+                            ],
+                          ),
+                        )
+                      : buildTextSurface(),
+                ),
+              ),
+            ),
+          ),
+        );
+
+        // The history list already supplies the reference layout's small
+        // horizontal content inset. Attachment rows use that full available
+        // width directly, so three square cards fill the chat content area
+        // without touching the physical screen edges.
+        return bubble;
+      },
+    );
+  }
+}
+
+class _ThinkingBubble extends StatefulWidget {
+  final _ThinkingMsg msg;
+  const _ThinkingBubble({required this.msg});
+
+  @override
+  State<_ThinkingBubble> createState() => _ThinkingBubbleState();
+}
+
+class _ThinkingBubbleState extends State<_ThinkingBubble>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller;
+
+  _ThinkingMsg get msg => widget.msg;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1350),
+    );
+    if (!msg.completed) _controller.repeat();
+  }
+
+  @override
+  void didUpdateWidget(covariant _ThinkingBubble oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (msg.completed) {
+      _controller.stop();
+    } else if (!_controller.isAnimating) {
+      _controller.repeat();
+    }
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  String _durationLabel(Duration duration) {
+    final seconds = duration.inSeconds;
+    if (seconds < 60) return '${seconds}s';
+    return '${seconds ~/ 60}m ${seconds % 60}s';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (msg.hidden) return const SizedBox.shrink();
+    final scheme = Theme.of(context).colorScheme;
+    final secondary = AppTextColor.secondary(scheme);
+    if (!msg.completed) {
+      final thinkingColor = scheme.onSurfaceVariant.withValues(alpha: 0.84);
+      final statusText = aiThinkingStatusText(
+        elapsed: msg.elapsed,
+        canContinueInBackground: msg.canContinueInBackground,
+      );
+      final displayStatus =
+          statusText == '喵还在思考，完成后会显示在这里。' ? '正在思考 · 完成后会显示在这里。' : statusText;
+      return Padding(
+        padding: const EdgeInsets.only(bottom: 10),
+        child: AnimatedBuilder(
+          animation: _controller,
+          builder: (context, child) => ShaderMask(
+            blendMode: BlendMode.srcIn,
+            shaderCallback: (bounds) => LinearGradient(
+              begin: Alignment(-1.8 + _controller.value * 3.6, 0),
+              end: Alignment(-0.8 + _controller.value * 3.6, 0),
+              colors: [
+                thinkingColor.withValues(alpha: 0.46),
+                thinkingColor,
+                thinkingColor.withValues(alpha: 0.46),
+              ],
+            ).createShader(bounds),
+            child: child,
+          ),
+          child: Text(
+            key: const ValueKey('ai-chat-thinking-label'),
+            displayStatus,
+            style: _chatBodyStyle(
+              scheme,
+              fontSize: 15,
+              height: null,
+              variableWeight: null,
+              color: thinkingColor,
+            ),
+          ),
         ),
-        child: Text.rich(
-          TextSpan(children: _chatNumberSpans(text, textStyle)),
-          style: textStyle,
-        ),
+      );
+    }
+    final summaries = <String>[];
+    for (final step in msg.steps) {
+      final summary = step.detail.trim();
+      if (summary.isNotEmpty && !summaries.contains(summary)) {
+        summaries.add(summary);
+      }
+    }
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          InkWell(
+            borderRadius: BorderRadius.circular(8),
+            onTap: () => setState(() => msg.expanded = !msg.expanded),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 3),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    '思考了 ${_durationLabel(msg.elapsed)}',
+                    style: _chatBodyStyle(scheme,
+                        fontSize: 15,
+                        height: null,
+                        variableWeight: null,
+                        color: scheme.onSurface.withValues(alpha: 0.46)),
+                  ),
+                  const SizedBox(width: 3),
+                  AnimatedRotation(
+                    turns: msg.expanded ? 0.25 : 0,
+                    duration: const Duration(milliseconds: 170),
+                    child: Icon(Icons.chevron_right_rounded,
+                        size: 18, color: secondary),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          AnimatedSize(
+            duration: const Duration(milliseconds: 190),
+            curve: Curves.easeOutCubic,
+            child: msg.expanded
+                ? Padding(
+                    key: const ValueKey('ai-chat-thinking-details'),
+                    padding: const EdgeInsets.only(top: 7, right: 28),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        if (summaries.isEmpty && msg.sources.isEmpty)
+                          Text(
+                            '模型没有返回可展示的思考摘要。',
+                            style: TextStyle(
+                              fontSize: 13,
+                              height: 1.5,
+                              color: secondary,
+                            ),
+                          ),
+                        for (var index = 0;
+                            index < summaries.length;
+                            index++) ...[
+                          if (index > 0) const SizedBox(height: 7),
+                          Text(
+                            summaries[index],
+                            style: TextStyle(
+                              fontSize: 13,
+                              height: 1.5,
+                              color: secondary,
+                            ),
+                          ),
+                        ],
+                        if (msg.sources.isNotEmpty) ...[
+                          if (summaries.isNotEmpty) const SizedBox(height: 7),
+                          Text(
+                            '搜索并参考了 ${msg.sources.length} 个公开来源',
+                            style: TextStyle(
+                              fontSize: 13,
+                              height: 1.5,
+                              color: secondary,
+                            ),
+                          ),
+                        ],
+                        const SizedBox(height: 9),
+                        Divider(
+                          height: 1,
+                          thickness: 0.6,
+                          color: scheme.outlineVariant.withValues(alpha: 0.62),
+                        ),
+                      ],
+                    ),
+                  )
+                : const SizedBox.shrink(),
+          ),
+        ],
       ),
     );
   }
 }
 
-class _ThinkingBubble extends StatelessWidget {
-  final _ThinkingMsg msg;
-  const _ThinkingBubble({required this.msg});
+class _AttachmentDraftStrip extends StatelessWidget {
+  final List<ChatAttachment> attachments;
+  final ValueChanged<int> onRemove;
+
+  const _AttachmentDraftStrip({
+    required this.attachments,
+    required this.onRemove,
+  });
 
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 10),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.center,
-        children: [
-          const Mascot(
-            mood: MascotMood.thinking,
-            size: 32,
-            animate: true,
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final tileSize = draftAttachmentTileWidth(constraints.maxWidth);
+        return SizedBox(
+          key: const ValueKey('ai-chat-attachment-draft-strip'),
+          height: tileSize,
+          child: ListView.separated(
+            scrollDirection: Axis.horizontal,
+            itemCount: attachments.length,
+            separatorBuilder: (_, __) => const SizedBox(width: 8),
+            itemBuilder: (context, index) {
+              final attachment = attachments[index];
+              return _AttachmentTile(
+                key: ValueKey('ai-chat-draft-attachment-$index'),
+                attachment: attachment,
+                size: tileSize,
+                onRemove: () => onRemove(index),
+              );
+            },
           ),
-          const SizedBox(width: 8),
-          Flexible(
-            child: Text(
-              aiThinkingStatusText(
-                elapsed: DateTime.now().difference(msg.startedAt),
-                canContinueInBackground: msg.canContinueInBackground,
+        );
+      },
+    );
+  }
+}
+
+Rect _scaledMessageRect(Rect anchor, {double scale = 1.18}) {
+  final width = anchor.width * scale;
+  final height = anchor.height * scale;
+  return Rect.fromLTWH(
+    anchor.right - width,
+    anchor.center.dy - height / 2,
+    width,
+    height,
+  );
+}
+
+class _MessageActionOverlay extends StatelessWidget {
+  final Rect anchor;
+  final String timeLabel;
+  final VoidCallback onCopy;
+  final VoidCallback onEdit;
+  final VoidCallback onSelectText;
+
+  const _MessageActionOverlay({
+    required this.anchor,
+    required this.timeLabel,
+    required this.onCopy,
+    required this.onEdit,
+    required this.onSelectText,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final screen = MediaQuery.sizeOf(context);
+    const menuWidth = 218.0;
+    const estimatedMenuHeight = 172.0;
+    final highlighted = _scaledMessageRect(anchor).inflate(1.5);
+    var menuTop = highlighted.bottom + 8;
+    if (menuTop + estimatedMenuHeight > screen.height - 16) {
+      menuTop = highlighted.top - estimatedMenuHeight - 8;
+      if (menuTop < 16) {
+        menuTop = 16;
+      }
+    }
+    final menuLeft = (anchor.right - menuWidth)
+        .clamp(12.0, screen.width - menuWidth - 12)
+        .toDouble();
+    return Material(
+      type: MaterialType.transparency,
+      child: Stack(
+        children: [
+          Positioned.fill(
+            child: AppMenuScrim(
+              highlightRect: highlighted,
+              radius: 21,
+            ),
+          ),
+          Positioned(
+            left: menuLeft,
+            top: menuTop,
+            width: menuWidth,
+            child: TweenAnimationBuilder<double>(
+              tween: Tween(begin: 0.84, end: 1),
+              duration: const Duration(milliseconds: 170),
+              curve: Curves.easeOutBack,
+              builder: (_, value, child) => Transform.scale(
+                scale: value,
+                alignment: menuTop < highlighted.top
+                    ? Alignment.bottomRight
+                    : Alignment.topRight,
+                child: child,
               ),
-              style: AppType.secondary(scheme),
+              child: _MessageActionCard(
+                timeLabel: timeLabel,
+                onCopy: () {
+                  Navigator.of(context).pop();
+                  onCopy();
+                },
+                onEdit: () {
+                  Navigator.of(context).pop();
+                  onEdit();
+                },
+                onSelectText: () {
+                  Navigator.of(context).pop();
+                  WidgetsBinding.instance
+                      .addPostFrameCallback((_) => onSelectText());
+                },
+              ),
             ),
           ),
         ],
       ),
     );
   }
+}
+
+class _MessageActionCard extends StatelessWidget {
+  final String timeLabel;
+  final VoidCallback onCopy;
+  final VoidCallback onEdit;
+  final VoidCallback onSelectText;
+
+  const _MessageActionCard({
+    required this.timeLabel,
+    required this.onCopy,
+    required this.onEdit,
+    required this.onSelectText,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(22),
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 24, sigmaY: 24),
+        child: Container(
+          decoration: BoxDecoration(
+            color: scheme.surface.withValues(alpha: 0.82),
+            borderRadius: BorderRadius.circular(22),
+            border: Border.all(
+              color: scheme.outlineVariant.withValues(alpha: 0.52),
+              width: 0.7,
+            ),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.16),
+                blurRadius: 30,
+                offset: const Offset(0, 12),
+              ),
+            ],
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(14, 10, 14, 5),
+                child: Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text(timeLabel,
+                      style: TextStyle(
+                          fontSize: 12,
+                          color: scheme.onSurfaceVariant,
+                          fontWeight: FontWeight.w400)),
+                ),
+              ),
+              _MessageActionRow(
+                  icon: AppLineIcons.copy, label: '复制', onTap: onCopy),
+              _MessageActionRow(
+                  icon: AppLineIcons.pencil, label: '编辑', onTap: onEdit),
+              _MessageActionRow(
+                  icon: AppLineIcons.textSelect,
+                  label: '选择文本',
+                  onTap: onSelectText),
+              const SizedBox(height: 5),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _MessageActionRow extends StatelessWidget {
+  final AppLineIconData icon;
+  final String label;
+  final VoidCallback onTap;
+
+  const _MessageActionRow({
+    required this.icon,
+    required this.label,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(12),
+      splashFactory: NoSplash.splashFactory,
+      highlightColor: scheme.onSurface.withValues(alpha: 0.055),
+      child: Container(
+        height: 42,
+        margin: const EdgeInsets.symmetric(horizontal: 5),
+        padding: const EdgeInsets.symmetric(horizontal: 10),
+        child: Row(
+          children: [
+            AppLineIcon(icon, size: 20, color: scheme.onSurface),
+            const SizedBox(width: 12),
+            Text(label,
+                style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w400,
+                    color: scheme.onSurface)),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _SentAttachmentGrid extends StatelessWidget {
+  final List<ChatAttachment> attachments;
+
+  const _SentAttachmentGrid({required this.attachments});
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final fallback = min(MediaQuery.sizeOf(context).width, 420.0);
+        final width =
+            constraints.hasBoundedWidth ? constraints.maxWidth : fallback;
+        final tileWidth = sentAttachmentTileWidth(width, attachments.length);
+        // Three-image messages follow the reference layout: equal square
+        // cards, tiny gaps, and the full chat content width.
+        final tileHeight = sentAttachmentTileHeight(width, attachments.length);
+        if (attachments.length <= 3) {
+          return SizedBox(
+            width: width,
+            height: tileHeight,
+            child: Row(
+              children: [
+                for (var index = 0; index < attachments.length; index++) ...[
+                  if (index > 0) const SizedBox(width: 6),
+                  _AttachmentTile(
+                    attachment: attachments[index],
+                    width: tileWidth,
+                    height: tileHeight,
+                  ),
+                ],
+              ],
+            ),
+          );
+        }
+        return SizedBox(
+          width: width,
+          height: tileHeight,
+          child: ListView.separated(
+            scrollDirection: Axis.horizontal,
+            itemCount: attachments.length,
+            separatorBuilder: (_, __) => const SizedBox(width: 6),
+            itemBuilder: (context, index) => _AttachmentTile(
+              attachment: attachments[index],
+              width: tileWidth,
+              height: tileHeight,
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _AttachmentTile extends StatelessWidget {
+  final ChatAttachment attachment;
+  final double? size;
+  final double? width;
+  final double? height;
+  final VoidCallback? onRemove;
+
+  const _AttachmentTile({
+    super.key,
+    required this.attachment,
+    this.size,
+    this.width,
+    this.height,
+    this.onRemove,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final tileWidth = width ?? size ?? 78;
+    final tileHeight = height ?? size ?? 78;
+    final content = attachment.isImage
+        ? Image.file(
+            File(attachment.path),
+            width: tileWidth,
+            height: tileHeight,
+            fit: BoxFit.cover,
+            errorBuilder: (_, __, ___) => _fileFallback(scheme),
+          )
+        : _fileFallback(scheme);
+    return Stack(
+      clipBehavior: Clip.none,
+      children: [
+        ClipRRect(
+          borderRadius: BorderRadius.circular(14),
+          child: SizedBox(width: tileWidth, height: tileHeight, child: content),
+        ),
+        if (onRemove != null)
+          Positioned(
+            top: -5,
+            right: -5,
+            child: GestureDetector(
+              key: const ValueKey('ai-chat-remove-attachment'),
+              onTap: onRemove,
+              child: Container(
+                width: 22,
+                height: 22,
+                decoration: BoxDecoration(
+                  color: scheme.onSurface.withValues(alpha: 0.78),
+                  shape: BoxShape.circle,
+                  border: Border.all(color: scheme.surface, width: 1.5),
+                ),
+                child:
+                    Icon(Icons.close_rounded, size: 14, color: scheme.surface),
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+
+  Widget _fileFallback(ColorScheme scheme) => Container(
+        color: scheme.surfaceContainerHighest,
+        padding: const EdgeInsets.all(8),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.insert_drive_file_outlined,
+                size: 27, color: scheme.onSurfaceVariant),
+            const SizedBox(height: 5),
+            Text(
+              attachment.name,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              textAlign: TextAlign.center,
+              style: TextStyle(fontSize: 10, color: scheme.onSurface),
+            ),
+          ],
+        ),
+      );
+}
+
+/// Claude 手机端风格的来源面板：默认半屏，可上拉查看全部来源，松手由
+/// DraggableScrollableSheet 自带弹簧回到最近的停靠位置；不会把来源挤进正文。
+class _SourcesDraggableSheet extends StatelessWidget {
+  final List<AiWebSource> sources;
+
+  const _SourcesDraggableSheet({required this.sources});
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return DraggableScrollableSheet(
+      expand: false,
+      initialChildSize: 0.46,
+      minChildSize: 0.30,
+      maxChildSize: 0.92,
+      builder: (sheetContext, controller) => Container(
+        decoration: BoxDecoration(
+          color: scheme.surface.withValues(alpha: 0.98),
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
+          border:
+              Border.all(color: scheme.outlineVariant.withValues(alpha: 0.42)),
+        ),
+        child: SafeArea(
+          top: false,
+          child: ListView(
+            controller: controller,
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 26),
+            children: [
+              Center(
+                child: Container(
+                  width: 38,
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: scheme.onSurfaceVariant.withValues(alpha: 0.28),
+                    borderRadius: BorderRadius.circular(4),
+                  ),
+                ),
+              ),
+              SheetHeader(
+                title: '来源',
+                subtitle: '${sources.length} 个公开网页来源',
+                onClose: () => Navigator.of(sheetContext).pop(),
+              ),
+              for (final source in sources) _SourcePanelRow(source: source),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _SourcePanelRow extends StatelessWidget {
+  final AiWebSource source;
+
+  const _SourcePanelRow({required this.source});
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final uri = Uri.tryParse(source.url);
+    final host = uri?.host.replaceFirst(RegExp(r'^www\.'), '') ?? '网页来源';
+    final title = source.title.trim().isEmpty ? host : source.title.trim();
+    final faviconUri = host.isEmpty
+        ? null
+        : Uri.parse(
+            'https://www.google.com/s2/favicons?domain=${Uri.encodeComponent(host)}&sz=64',
+          );
+    return InkWell(
+      borderRadius: BorderRadius.circular(14),
+      onTap: uri == null || !(uri.scheme == 'https' || uri.scheme == 'http')
+          ? null
+          : () => launchUrl(uri, mode: LaunchMode.externalApplication),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 12),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            ClipRRect(
+              borderRadius: BorderRadius.circular(7),
+              child: SizedBox(
+                width: 30,
+                height: 30,
+                child: faviconUri == null
+                    ? ColoredBox(
+                        color: scheme.surfaceContainerHighest,
+                        child: Center(
+                          child: Text(
+                            _sourceInitial(host),
+                            style: TextStyle(
+                              fontSize: 11,
+                              fontWeight: FontWeight.w600,
+                              color: scheme.onSurfaceVariant,
+                            ),
+                          ),
+                        ),
+                      )
+                    : Image.network(
+                        faviconUri.toString(),
+                        fit: BoxFit.cover,
+                        errorBuilder: (_, __, ___) => ColoredBox(
+                          color: scheme.surfaceContainerHighest,
+                          child: Center(
+                            child: Text(
+                              _sourceInitial(host),
+                              style: TextStyle(
+                                fontSize: 11,
+                                fontWeight: FontWeight.w600,
+                                color: scheme.onSurfaceVariant,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(title,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                          fontSize: 15, fontWeight: FontWeight.w500)),
+                  const SizedBox(height: 3),
+                  Text(host,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                          fontSize: 12, color: scheme.onSurfaceVariant)),
+                  if (source.snippet.trim().isNotEmpty) ...[
+                    const SizedBox(height: 4),
+                    Text(source.snippet.trim(),
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                            fontSize: 12,
+                            height: 1.35,
+                            color: scheme.onSurfaceVariant
+                                .withValues(alpha: 0.82))),
+                  ],
+                ],
+              ),
+            ),
+            const SizedBox(width: 8),
+            Icon(CupertinoIcons.arrow_up_right,
+                size: 16, color: scheme.onSurfaceVariant),
+          ],
+        ),
+      ),
+    );
+  }
+
+  String _sourceInitial(String host) =>
+      host.isEmpty ? '源' : host.characters.first.toUpperCase();
 }
 
 class _InfoBubble extends StatelessWidget {
@@ -4606,9 +7749,12 @@ class _InfoBubble extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final textStyle = TextStyle(
+    // 守不用红铁律：错误提示用超支橙；普通说明走标准中灰。
+    final textStyle = _chatBodyStyle(
+      scheme,
       fontSize: 14,
-      // 守不用红铁律：错误提示用超支橙；普通说明走标准中灰。
+      height: null,
+      variableWeight: null,
       color: error ? AppColors.warning : AppTextColor.secondary(scheme),
     );
     // 去掉左边的小猫（记账确认这类信息太多猫了），只留文字。
@@ -4666,21 +7812,279 @@ class _ClaudeActionButton extends StatelessWidget {
   }
 }
 
+class _SourceActionButton extends StatelessWidget {
+  final List<AiWebSource> sources;
+  final VoidCallback onTap;
+
+  const _SourceActionButton({required this.sources, required this.onTap});
+
+  Uri? _favicon(AiWebSource source) {
+    final host = Uri.tryParse(source.url)?.host ?? '';
+    if (host.isEmpty) return null;
+    return Uri.parse(
+      'https://www.google.com/s2/favicons?domain=${Uri.encodeComponent(host)}&sz=64',
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final visible = sources.take(3).toList(growable: false);
+    final stackWidth = visible.isEmpty ? 0.0 : 18.0 + (visible.length - 1) * 11;
+    return Tooltip(
+      message: '${sources.length} 个来源',
+      child: Semantics(
+        container: true,
+        button: true,
+        label: '${sources.length} 个来源',
+        child: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTap: onTap,
+          child: SizedBox(
+            height: kAiResponseActionTouchExtent,
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                SizedBox(
+                  width: stackWidth,
+                  height: 20,
+                  child: Stack(
+                    children: [
+                      for (var index = 0; index < visible.length; index++)
+                        Positioned(
+                          left: index * 11,
+                          child: Container(
+                            width: 20,
+                            height: 20,
+                            padding: const EdgeInsets.all(1.2),
+                            decoration: BoxDecoration(
+                              color: scheme.surface,
+                              shape: BoxShape.circle,
+                              border: Border.all(
+                                color: scheme.outlineVariant
+                                    .withValues(alpha: 0.72),
+                                width: 0.6,
+                              ),
+                            ),
+                            child: ClipOval(
+                              child: _SourceFavicon(
+                                uri: _favicon(visible[index]),
+                                source: visible[index],
+                              ),
+                            ),
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 5),
+                Text(
+                  '${sources.length} 个来源',
+                  style: TextStyle(
+                    fontSize: 12.5,
+                    fontWeight: FontWeight.w400,
+                    color: AppTextColor.secondary(scheme),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _SourceFavicon extends StatelessWidget {
+  final Uri? uri;
+  final AiWebSource source;
+
+  const _SourceFavicon({required this.uri, required this.source});
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    Widget fallback() {
+      final host =
+          Uri.tryParse(source.url)?.host.replaceFirst('www.', '') ?? '';
+      final initial = host.isEmpty ? '源' : host.characters.first.toUpperCase();
+      return ColoredBox(
+        color: scheme.surfaceContainerHighest,
+        child: Center(
+          child: Text(
+            initial,
+            style: TextStyle(
+              fontSize: 9,
+              fontWeight: FontWeight.w600,
+              color: scheme.onSurfaceVariant,
+            ),
+          ),
+        ),
+      );
+    }
+
+    if (uri == null) return fallback();
+    return Image.network(
+      uri.toString(),
+      fit: BoxFit.cover,
+      errorBuilder: (_, __, ___) => fallback(),
+    );
+  }
+}
+
+enum _MarkdownTableAlignment { left, center, right }
+
+/// A real table block rather than a monospaced pipe-delimited paragraph.
+/// Equal/flexible columns keep every row aligned; a horizontal scroll view
+/// preserves long English values without squeezing the surrounding answer.
+class _MarkdownTable extends StatelessWidget {
+  final List<List<String>> rows;
+  final List<_MarkdownTableAlignment> alignments;
+  final TextStyle textStyle;
+  final List<InlineSpan> Function(String text, TextStyle style) spanBuilder;
+
+  const _MarkdownTable({
+    required this.rows,
+    required this.alignments,
+    required this.textStyle,
+    required this.spanBuilder,
+  });
+
+  Alignment _alignment(_MarkdownTableAlignment value) => switch (value) {
+        _MarkdownTableAlignment.center => Alignment.center,
+        _MarkdownTableAlignment.right => Alignment.centerRight,
+        _MarkdownTableAlignment.left => Alignment.centerLeft,
+      };
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final columnCount = rows.fold<int>(
+      0,
+      (count, row) => max(count, row.length),
+    );
+    if (columnCount < 2 || rows.isEmpty) return const SizedBox.shrink();
+    final normalizedRows = [
+      for (final row in rows)
+        [
+          for (var i = 0; i < columnCount; i++) i < row.length ? row[i] : '',
+        ],
+    ];
+    return Padding(
+      key: const ValueKey('ai-chat-markdown-table'),
+      padding: const EdgeInsets.only(top: 6, bottom: 10),
+      child: LayoutBuilder(
+        builder: (context, constraints) => SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          child: ConstrainedBox(
+            constraints: BoxConstraints(minWidth: constraints.maxWidth),
+            child: Table(
+              defaultVerticalAlignment: TableCellVerticalAlignment.middle,
+              // Intrinsic widths keep long headers/cells on one visual line;
+              // the surrounding horizontal scroll view then behaves like
+              // Claude instead of squeezing every column into the viewport.
+              columnWidths: {
+                for (var i = 0; i < columnCount; i++)
+                  i: const IntrinsicColumnWidth(),
+              },
+              border: TableBorder(
+                horizontalInside: BorderSide(
+                  color: scheme.outlineVariant.withValues(alpha: 0.58),
+                  width: 0.7,
+                ),
+                bottom: BorderSide(
+                  color: scheme.outlineVariant.withValues(alpha: 0.72),
+                  width: 0.8,
+                ),
+              ),
+              children: [
+                for (var rowIndex = 0;
+                    rowIndex < normalizedRows.length;
+                    rowIndex++)
+                  TableRow(
+                    decoration: rowIndex == 0
+                        ? BoxDecoration(
+                            color: scheme.surfaceContainerHighest.withValues(
+                              alpha: 0.28,
+                            ),
+                          )
+                        : null,
+                    children: [
+                      for (var column = 0; column < columnCount; column++)
+                        Padding(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 9,
+                            vertical: 8,
+                          ),
+                          child: Align(
+                            alignment: _alignment(
+                              column < alignments.length
+                                  ? alignments[column]
+                                  : _MarkdownTableAlignment.left,
+                            ),
+                            child: SelectableText.rich(
+                              TextSpan(
+                                style: rowIndex == 0
+                                    ? textStyle.copyWith(
+                                        fontWeight: FontWeight.w600,
+                                      )
+                                    : textStyle,
+                                children: spanBuilder(
+                                  normalizedRows[rowIndex][column],
+                                  rowIndex == 0
+                                      ? textStyle.copyWith(
+                                          fontWeight: FontWeight.w600,
+                                        )
+                                      : textStyle,
+                                ),
+                              ),
+                              maxLines: 1,
+                              textAlign: switch (column < alignments.length
+                                  ? alignments[column]
+                                  : _MarkdownTableAlignment.left) {
+                                _MarkdownTableAlignment.center =>
+                                  TextAlign.center,
+                                _MarkdownTableAlignment.right =>
+                                  TextAlign.right,
+                                _MarkdownTableAlignment.left => TextAlign.left,
+                              },
+                            ),
+                          ),
+                        ),
+                    ],
+                  ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 // ── 查账回答气泡（喵助手回答，打字机流式）────────────────────────────────────
 class _AnswerBubble extends StatefulWidget {
   final String text;
+  final List<AiWebSource> sources;
   final bool animate;
+  final bool streaming;
+  final bool interrupted;
   final VoidCallback? onShown;
   final VoidCallback? onRegenerate;
+  final VoidCallback? onContinue;
 
   /// 是否在操作图标下放猫：只有列表最后一条回复为 true（对齐 Claude）。
   final bool showMascot;
 
   const _AnswerBubble({
     required this.text,
+    this.sources = const [],
     this.animate = true,
+    this.streaming = false,
+    this.interrupted = false,
     this.onShown,
     this.onRegenerate,
+    this.onContinue,
     this.showMascot = false,
   });
 
@@ -4690,7 +8094,7 @@ class _AnswerBubble extends StatefulWidget {
 
 class _AnswerBubbleState extends State<_AnswerBubble> {
   int _shown = 0;
-  late final int _graphemeCount;
+  int _graphemeCount = 0;
   bool _liked = false;
   bool _disliked = false;
   Timer? _timer;
@@ -4717,6 +8121,24 @@ class _AnswerBubbleState extends State<_AnswerBubble> {
         _shown = (_shown + 2).clamp(0, _graphemeCount);
       });
     });
+  }
+
+  @override
+  void didUpdateWidget(covariant _AnswerBubble oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.text == widget.text &&
+        oldWidget.animate == widget.animate &&
+        oldWidget.streaming == widget.streaming) {
+      return;
+    }
+    _graphemeCount = aiTypewriterLength(widget.text);
+    if (!widget.animate) {
+      _timer?.cancel();
+      _timer = null;
+      _shown = _graphemeCount;
+    } else {
+      _shown = _shown.clamp(0, _graphemeCount);
+    }
   }
 
   @override
@@ -4751,11 +8173,11 @@ class _AnswerBubbleState extends State<_AnswerBubble> {
     );
   }
 
-  // Claude-like emphasis: only one quiet step above body text.
-  // 不支持可变字重的机型回退到 fontWeight w500。
+  // Claude-like emphasis: keep the same hierarchy after the body weight is
+  // lowered by 50. Unsupported variable-font devices fall back to w500.
   TextStyle _boldOf(TextStyle base) => base.copyWith(
         fontWeight: FontWeight.w500,
-        fontVariations: const [FontVariation('wght', 470)],
+        fontVariations: const [FontVariation('wght', 420)],
       );
 
   TextStyle _numberOf(TextStyle base, [TextStyle? style]) {
@@ -4787,19 +8209,48 @@ class _AnswerBubbleState extends State<_AnswerBubble> {
     }
   }
 
+  /// 回答正文不直接铺开裸 URL。已知来源会在“处理摘要”里提供可点击
+  /// 的来源卡；模型偶尔直接输出的链接从正文移除，避免把来源再次混进
+  /// 正文（Markdown 链接仍保留用户可读的标签）。
+  String _displaySafeLinks(String text) {
+    final markdownLink = RegExp(
+      r'\[([^\]]+)\]\((https?://[^)\s]+)\)',
+      caseSensitive: false,
+    );
+    var result = text.replaceAllMapped(markdownLink, (match) {
+      final label = match.group(1)?.trim() ?? '';
+      return label.isEmpty ? '打开链接' : label;
+    });
+    final bareLink = RegExp(
+      // Stop at both ASCII delimiters and common CJK punctuation. Without
+      // the latter a URL followed by "，来源…" would consume the rest of the
+      // sentence and silently remove legitimate answer text.
+      r'https?://[^\s<>()[\]{}，。；：！？、]+',
+      caseSensitive: false,
+    );
+    result = result.replaceAllMapped(bareLink, (_) => '');
+    return result
+        .replaceAll(RegExp(r'[ \t]{2,}'), ' ')
+        .replaceAllMapped(
+          RegExp(r' +([，。；：！？])'),
+          (match) => match.group(1)!,
+        )
+        .trim();
+  }
+
   // 轻量 markdown → 富文本：处理 **加粗**、行首 - / * 列表、# 标题；保留可选中。
   List<InlineSpan> _mdSpans(String text, TextStyle base) {
     final spans = <InlineSpan>[];
     final lines = text.split('\n');
     final headerStyle = base.copyWith(
-      fontSize: (base.fontSize ?? 15.5) + 0.4,
+      fontSize: (base.fontSize ?? _chatBodyFontSize) + 0.4,
       fontWeight: FontWeight.w500,
-      fontVariations: const [FontVariation('wght', 520)],
+      fontVariations: const [FontVariation('wght', 470)],
       color: base.color,
     );
     void newline() => spans.add(const TextSpan(text: '\n'));
     for (int li = 0; li < lines.length; li++) {
-      var line = lines[li].replaceAll('__', '');
+      var line = _displaySafeLinks(lines[li].replaceAll('__', ''));
       // 空行 = 段落间距（比普通换行大半行，给呼吸空间）。
       if (line.trim().isEmpty) {
         spans.add(const TextSpan(text: '\n', style: TextStyle(fontSize: 6)));
@@ -4841,35 +8292,165 @@ class _AnswerBubbleState extends State<_AnswerBubble> {
     return spans;
   }
 
+  List<String> _tableCells(String line) {
+    var value = line.trim();
+    if (value.startsWith('|')) value = value.substring(1);
+    if (value.endsWith('|') && !value.endsWith(r'\|')) {
+      value = value.substring(0, value.length - 1);
+    }
+    if (!value.contains('|')) return const [];
+    return value
+        .split('|')
+        .map((cell) => cell.trim().replaceAll(r'\|', '|'))
+        .toList();
+  }
+
+  bool _isTableSeparator(String line) {
+    final cells = _tableCells(line);
+    if (cells.length < 2) return false;
+    return cells.every(
+      (cell) => RegExp(r'^:?-{3,}:?$').hasMatch(cell.replaceAll(' ', '')),
+    );
+  }
+
+  List<_MarkdownTableAlignment> _tableAlignments(String line) {
+    return [
+      for (final cell in _tableCells(line))
+        switch (cell.replaceAll(' ', '')) {
+          final value when value.startsWith(':') && value.endsWith(':') =>
+            _MarkdownTableAlignment.center,
+          final value when value.endsWith(':') => _MarkdownTableAlignment.right,
+          _ => _MarkdownTableAlignment.left,
+        },
+    ];
+  }
+
+  /// Splits prose and complete Markdown tables into separate render blocks.
+  /// A pipe line is only promoted when the following line is a valid Markdown
+  /// separator, so an in-progress streamed answer still renders as normal text.
+  List<Widget> _markdownWidgets(String text, TextStyle baseStyle) {
+    final widgets = <Widget>[];
+    final prose = <String>[];
+    final lines = text.split('\n');
+
+    void flushProse() {
+      if (prose.isEmpty) return;
+      final proseText = prose.join('\n');
+      widgets.add(
+        SelectableText.rich(
+          TextSpan(
+            style: baseStyle,
+            children: _mdSpans(proseText, baseStyle),
+          ),
+        ),
+      );
+      prose.clear();
+    }
+
+    var index = 0;
+    while (index < lines.length) {
+      final header = _tableCells(lines[index]);
+      if (header.length >= 2 &&
+          index + 1 < lines.length &&
+          _isTableSeparator(lines[index + 1])) {
+        flushProse();
+        final alignments = _tableAlignments(lines[index + 1]);
+        final rows = <List<String>>[header];
+        index += 2;
+        while (index < lines.length) {
+          final row = _tableCells(lines[index]);
+          if (row.length < 2) break;
+          rows.add(row);
+          index++;
+        }
+        widgets.add(
+          _MarkdownTable(
+            rows: rows,
+            alignments: alignments,
+            textStyle: baseStyle,
+            spanBuilder: _mdSpans,
+          ),
+        );
+        continue;
+      }
+      prose.add(lines[index]);
+      index++;
+    }
+    flushProse();
+    return widgets;
+  }
+
+  Future<void> _shareAnswer(BuildContext context) async {
+    try {
+      await Share.share(widget.text, subject: '喵助手回答');
+    } catch (_) {
+      if (context.mounted) showAppToast(context, '分享失败，请稍后再试');
+    }
+  }
+
+  Future<void> _showSources(BuildContext context) async {
+    if (widget.sources.isEmpty) return;
+    await showDraggableAppSheet<void>(
+      context,
+      child: _SourcesDraggableSheet(sources: widget.sources),
+    );
+  }
+
+  void _showMoreActions(BuildContext context) {
+    showIosMenu(context, [
+      IosMenuItem(
+        label: '复制回答',
+        icon: Icons.copy_outlined,
+        onTap: () {
+          Clipboard.setData(ClipboardData(text: widget.text));
+          if (context.mounted) showAppToast(context, '已复制');
+        },
+      ),
+      IosMenuItem(
+        label: '分享回答',
+        icon: Icons.ios_share_outlined,
+        onTap: () => unawaited(_shareAnswer(context)),
+      ),
+      if (widget.onRegenerate != null)
+        IosMenuItem(
+          label: '重新生成',
+          icon: Icons.refresh_rounded,
+          onTap: widget.onRegenerate!,
+        ),
+    ]);
+  }
+
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final shownText = aiTypewriterPrefix(widget.text, _shown);
-    final done = _shown >= _graphemeCount;
+    final done = !widget.streaming && _shown >= _graphemeCount;
     // Claude-like answer typography: soft body text and restrained emphasis.
-    final baseStyle = TextStyle(
-      fontSize: 15.5,
-      height: 1.48,
-      fontWeight: FontWeight.w400,
-      fontVariations: const [FontVariation('wght', 350)],
-      color: scheme.onSurface.withValues(alpha: 0.9),
-    );
+    final baseStyle = _chatBodyStyle(scheme);
     return Padding(
-      padding: const EdgeInsets.only(bottom: 16, right: 8),
+      padding: const EdgeInsets.only(bottom: 8, right: 8),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           // 回答正文：全宽、无气泡（对标 Claude），轻量 markdown 渲染。
-          SelectableText.rich(
-            TextSpan(
-              style: baseStyle,
-              children: _mdSpans(shownText, baseStyle),
-            ),
-          ),
+          ..._markdownWidgets(shownText, baseStyle),
           if (done) ...[
+            if (widget.interrupted) ...[
+              const SizedBox(height: 5),
+              AppPillButton(
+                key: const ValueKey('ai-chat-continue-answer'),
+                label: '连接中断，继续生成',
+                onPressed: widget.onContinue,
+                leading: const Icon(Icons.refresh_rounded),
+                foregroundColor: scheme.onSurfaceVariant,
+                height: 34,
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+              ),
+            ],
             const SizedBox(height: 4),
             // 操作图标行（对标 Claude：裸图标、细线、浅灰）。
             Row(
+              key: const ValueKey('ai-chat-answer-actions'),
               children: [
                 _action(_icCopy, '复制', () {
                   Clipboard.setData(ClipboardData(text: widget.text));
@@ -4895,6 +8476,15 @@ class _AnswerBubbleState extends State<_AnswerBubble> {
                 ),
                 if (widget.onRegenerate != null)
                   _action(_icRetry, '重新生成', widget.onRegenerate!),
+                _action(_icShare, '分享', () => unawaited(_shareAnswer(context))),
+                _action(_icMore, '更多', () => _showMoreActions(context)),
+                if (widget.sources.isNotEmpty) ...[
+                  const Spacer(),
+                  _SourceActionButton(
+                    sources: widget.sources,
+                    onTap: () => unawaited(_showSources(context)),
+                  ),
+                ],
               ],
             ),
             if (widget.showMascot) ...[
@@ -4947,16 +8537,10 @@ class _ReportBubbleState extends State<_ReportBubble> {
     final scheme = Theme.of(context).colorScheme;
     final msg = widget.msg;
     final summary = msg.summary.isNotEmpty ? msg.summary : msg.report.summary;
-    final textStyle = TextStyle(
-      fontSize: 15.5,
-      height: 1.48,
-      fontWeight: FontWeight.w400,
-      fontVariations: const [FontVariation('wght', 350)],
-      color: scheme.onSurface.withValues(alpha: 0.9),
-    );
+    final textStyle = _chatBodyStyle(scheme);
     msg.shown = true;
     return Padding(
-      padding: const EdgeInsets.only(bottom: 16, right: 8),
+      padding: const EdgeInsets.only(bottom: 8, right: 8),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -4972,6 +8556,7 @@ class _ReportBubbleState extends State<_ReportBubble> {
           ReportDocumentCard(report: msg.report, compact: true),
           const SizedBox(height: 4),
           Row(
+            key: const ValueKey('ai-chat-report-actions'),
             children: [
               _action(_icCopy, '复制', () {
                 Clipboard.setData(ClipboardData(text: msg.report.markdown));
@@ -4997,6 +8582,39 @@ class _ReportBubbleState extends State<_ReportBubble> {
               ),
               if (widget.onRegenerate != null)
                 _action(_icRetry, '重新生成', widget.onRegenerate!),
+              _action(
+                _icShare,
+                '分享',
+                () => unawaited(
+                  Share.share(msg.report.markdown, subject: msg.report.title),
+                ),
+              ),
+              _action(
+                _icMore,
+                '更多',
+                () => showIosMenu(context, [
+                  IosMenuItem(
+                    label: '复制报告',
+                    icon: Icons.copy_outlined,
+                    onTap: () {
+                      Clipboard.setData(
+                        ClipboardData(text: msg.report.markdown),
+                      );
+                      showAppToast(context, '已复制报告');
+                    },
+                  ),
+                  IosMenuItem(
+                    label: '分享报告',
+                    icon: Icons.ios_share_outlined,
+                    onTap: () => unawaited(
+                      Share.share(
+                        msg.report.markdown,
+                        subject: msg.report.title,
+                      ),
+                    ),
+                  ),
+                ]),
+              ),
             ],
           ),
           if (widget.showMascot) ...[
@@ -5007,6 +8625,129 @@ class _ReportBubbleState extends State<_ReportBubble> {
       ),
     );
   }
+}
+
+/// Production message typography fixture used by screenshot tests. Keeping
+/// this on the real bubble widgets catches regressions that an input-only
+/// screenshot would miss.
+@visibleForTesting
+Widget buildAiChatMessageTypographyForTesting({
+  String userText = '午饭花了 20 元',
+  String answerText = '今天支出 **¥20.00**，记在餐饮。',
+  String infoText = '已保存这笔记录',
+}) {
+  return Column(
+    mainAxisSize: MainAxisSize.min,
+    crossAxisAlignment: CrossAxisAlignment.stretch,
+    children: [
+      KeyedSubtree(
+        key: const ValueKey('ai-chat-message-typography-user'),
+        child: _UserBubble(text: userText),
+      ),
+      KeyedSubtree(
+        key: const ValueKey('ai-chat-message-typography-answer'),
+        child: _AnswerBubble(
+          text: answerText,
+          animate: false,
+          streaming: false,
+        ),
+      ),
+      KeyedSubtree(
+        key: const ValueKey('ai-chat-message-typography-info'),
+        child: _InfoBubble(text: infoText),
+      ),
+    ],
+  );
+}
+
+/// Production fixtures for the two-stage GPT-style user-message interaction.
+/// Tests use the real bubble and action overlay, so regressions cannot hide in
+/// a separate mock implementation.
+@visibleForTesting
+Widget buildAiChatUserTextSelectionForTesting({
+  String text = '点击启动计费就这样了',
+  VoidCallback? onSelectionDismissed,
+}) =>
+    _UserBubble(
+      text: text,
+      selected: true,
+      textSelectionMode: true,
+      onSelectionDismissed: onSelectionDismissed,
+    );
+
+@visibleForTesting
+Widget buildAiChatUserMessageForTesting({
+  String text = '',
+  List<ChatAttachment> attachments = const [],
+}) =>
+    _UserBubble(
+      text: text,
+      attachments: attachments,
+      fullBleedAttachments: true,
+    );
+
+@visibleForTesting
+Widget buildAiChatThinkingForTesting({
+  bool completed = false,
+  bool expanded = false,
+  Duration elapsed = const Duration(seconds: 4),
+  String summary = '核对了公开数据并整理出关键变化。',
+  int sourceCount = 0,
+}) {
+  final started = DateTime.now().subtract(elapsed);
+  final step = _ThinkingStep(
+    kind: _ThinkingKind.queryAnswer,
+    startedAt: started,
+    completedAt: completed ? started.add(elapsed) : null,
+    detail: summary,
+  );
+  final message = _ThinkingMsg(
+    _ThinkingKind.queryAnswer,
+    startedAt: started,
+    steps: [step],
+  )..expanded = expanded;
+  if (completed) message.completedAt = started.add(elapsed);
+  for (var i = 0; i < sourceCount; i++) {
+    message.sources.add(
+      AiWebSource(
+        title: '公开来源 ${i + 1}',
+        url: 'https://example$i.com/article',
+      ),
+    );
+  }
+  return _ThinkingBubble(msg: message);
+}
+
+@visibleForTesting
+Widget buildAiChatMessageActionOverlayForTesting({
+  required Rect anchor,
+  String timeLabel = '今天 23:39',
+}) =>
+    _MessageActionOverlay(
+      anchor: anchor,
+      timeLabel: timeLabel,
+      onCopy: () {},
+      onEdit: () {},
+      onSelectText: () {},
+    );
+
+@visibleForTesting
+TextStyle aiChatMessageBodyStyleForTesting(ColorScheme scheme) =>
+    _chatBodyStyle(scheme);
+
+@visibleForTesting
+Widget buildAiChatAnswerForTesting({
+  String text =
+      '| 指数 | 收盘 | 涨跌 |\n| --- | ---: | :---: |\n| 纳斯达克 | 25,980.19 | -0.76% |',
+  List<AiWebSource> sources = const [],
+}) {
+  return _AnswerBubble(
+    text: text,
+    sources: sources,
+    animate: false,
+    streaming: false,
+    showMascot: false,
+  );
 }
 
 // ── 喵助手打开时主动说的一句洞察 ──────────────────────────────────────────────
@@ -5021,10 +8762,10 @@ class _GreetingLine extends StatelessWidget {
     return Text(
       g,
       style: TextStyle(
-        fontSize: 15,
+        fontSize: 16,
         height: 1.45,
         fontWeight: FontWeight.w400,
-        fontVariations: const [FontVariation('wght', 330)],
+        fontFamilyFallback: _cjkFontFallback,
         color: scheme.onSurface,
       ),
     );
@@ -5150,6 +8891,7 @@ class _RecordBubble extends StatelessWidget {
   final _RecordMsg msg;
   final String bookName;
   final VoidCallback? onSave;
+  final VoidCallback? onUndo;
   final void Function(int index) onChangeCategory;
   final void Function(int index) onDeleteEntry;
 
@@ -5157,6 +8899,7 @@ class _RecordBubble extends StatelessWidget {
     required this.msg,
     required this.bookName,
     required this.onSave,
+    required this.onUndo,
     required this.onChangeCategory,
     required this.onDeleteEntry,
   });
@@ -5202,14 +8945,14 @@ class _RecordBubble extends StatelessWidget {
                       onChangeCategory: () => onChangeCategory(i),
                     ),
                   const SizedBox(height: 10),
-                  SizedBox(
+                  AppPillButton(
                     width: double.infinity,
-                    child: FilledButton(
-                      onPressed: onSave,
-                      child: Text(
-                        msg.saving ? '正在保存' : (n > 1 ? '记下这 $n 笔' : '记下'),
-                      ),
-                    ),
+                    height: 44,
+                    loading: msg.saving,
+                    onPressed: msg.saving ? null : onSave,
+                    label: n > 1 ? '记下这 $n 笔' : '记下',
+                    fillColor: scheme.onSurface,
+                    foregroundColor: scheme.surface,
                   ),
                 ],
               ),
@@ -5234,6 +8977,15 @@ class _RecordBubble extends StatelessWidget {
               canAct: i < msg.txnIds.length && msg.txnIds[i] != null,
               onChangeCategory: () => onChangeCategory(i),
               onDelete: () => onDeleteEntry(i),
+            ),
+          if (msg.aiRunId != null && msg.aiRunId!.isNotEmpty)
+            Align(
+              alignment: Alignment.centerLeft,
+              child: _ActionChip(
+                icon: CupertinoIcons.arrow_uturn_left,
+                label: msg.rolledBack ? '本次已撤销' : '撤销本次 AI 记账',
+                onTap: onUndo ?? () {},
+              ),
             ),
           if (msg.savedFeedback.isNotEmpty)
             Padding(
@@ -5654,7 +9406,7 @@ class _HeaderActionCluster extends StatelessWidget {
 /// 只在 !fullScreen 时使用，fullScreen（喵助手）用 _ModelPill。
 class _AiModeSwitchPill extends StatelessWidget {
   final VoidCallback onTap;
-  const _AiModeSwitchPill({required this.onTap});
+  const _AiModeSwitchPill({super.key, required this.onTap});
 
   @override
   Widget build(BuildContext context) {
@@ -5689,69 +9441,214 @@ class _AiModeSwitchPill extends StatelessWidget {
   }
 }
 
-/// 模型切换药丸：只显示模型名，无图标无箭头
+/// 模型切换胶囊：对齐 Claude 桌面端底栏的浅灰值标签。
 class _ModelPill extends StatelessWidget {
-  final AppRepository repo;
+  final String model;
+  final bool selected;
   final VoidCallback onTap;
 
-  const _ModelPill({required this.repo, required this.onTap});
+  const _ModelPill({
+    required this.model,
+    required this.selected,
+    required this.onTap,
+  });
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final config = repo.aiProviderConfigFor(AiTaskType.chatQuery);
-    final model = config.model.trim();
-    final label = model.length > 22 ? '${model.substring(0, 22)}…' : model;
+    final currentModel = model.trim();
+    final label = currentModel.isEmpty ? '选择模型' : currentModel;
+    final textStyle = TextStyle(
+      fontSize: _aiChatSelectorFontSize,
+      height: 1.2,
+      fontWeight: FontWeight.w400,
+      fontFamilyFallback: _cjkFontFallback,
+      color: scheme.onSurfaceVariant,
+    );
+
+    final content = Container(
+      key: const ValueKey('ai-chat-model-pill'),
+      padding: const EdgeInsets.symmetric(vertical: 2),
+      decoration: selected
+          ? BoxDecoration(
+              color: scheme.onSurface.withValues(alpha: 0.075),
+              borderRadius: BorderRadius.circular(4),
+            )
+          : null,
+      // A long gateway model must stay readable rather than being clipped
+      // under the effort label. The scaler only changes size when the
+      // available width is genuinely insufficient.
+      child: _ScaledSingleLineText(
+        key: const ValueKey('ai-chat-model-label'),
+        text: label,
+        style: textStyle,
+      ),
+    );
 
     return PressableScale(
       onPressed: onTap,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 6),
-        child: Text(
-          label.isEmpty ? '选择模型' : label,
-          style: TextStyle(fontSize: 12, color: scheme.onSurfaceVariant),
-        ),
-      ),
+      child: content,
     );
   }
 }
 
-/// Effort 文字标签：无外框，点击弹气泡弹窗
+class _ScaledSingleLineText extends StatelessWidget {
+  final String text;
+  final TextStyle style;
+
+  const _ScaledSingleLineText({
+    super.key,
+    required this.text,
+    required this.style,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    // TextPainter does not automatically receive the ambient DefaultTextStyle
+    // used by the Text widget below. Merge it explicitly so font fallbacks
+    // (especially CJK glyphs in screenshot/desktop renderers) are respected
+    // during both measurement and painting.
+    final resolvedStyle = DefaultTextStyle.of(context).style.merge(style);
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final painter = TextPainter(
+          text: TextSpan(text: text, style: resolvedStyle),
+          textDirection: Directionality.of(context),
+          maxLines: 1,
+        )..layout();
+        final available = constraints.maxWidth;
+        // Flex may ask for an intrinsic pass with a zero/tiny max width. Do
+        // not let that probe permanently collapse the label's natural size.
+        final minimumUsefulWidth = style.fontSize ?? 14;
+        if (!available.isFinite ||
+            available <= minimumUsefulWidth ||
+            painter.width <= available) {
+          return Text(
+            text,
+            maxLines: 1,
+            softWrap: false,
+            overflow: TextOverflow.visible,
+            style: resolvedStyle,
+          );
+        }
+        final scale = available <= 0 ? 0.0 : available / painter.width;
+        return SizedBox(
+          width: available,
+          height: painter.height,
+          child: Align(
+            alignment: Alignment.centerLeft,
+            child: Transform.scale(
+              alignment: Alignment.centerLeft,
+              scale: scale,
+              child: SizedBox(
+                width: painter.width,
+                height: painter.height,
+                child: Text(
+                  text,
+                  maxLines: 1,
+                  softWrap: false,
+                  overflow: TextOverflow.visible,
+                  style: resolvedStyle,
+                ),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+/// Effort 胶囊：对齐 Claude 桌面端底栏的当前值标签。
 class _EffortLabel extends StatelessWidget {
-  final AppRepository repo;
+  final AiReasoningEffort effort;
+  final bool selected;
   final VoidCallback onTap;
 
-  const _EffortLabel({required this.repo, required this.onTap});
+  const _EffortLabel({
+    required this.effort,
+    required this.selected,
+    required this.onTap,
+  });
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final effort = repo.aiReasoningEffortFor(AiTaskType.chatQuery);
-    final label = switch (effort) {
-      AiReasoningEffort.none => 'Low', // 默认显示 Low
-      AiReasoningEffort.minimal => 'Low',
-      AiReasoningEffort.low => 'Low',
-      AiReasoningEffort.medium => 'Medium',
-      AiReasoningEffort.high => 'High',
-      AiReasoningEffort.xhigh => 'Extra',
-      AiReasoningEffort.max => 'Max',
-      AiReasoningEffort.ultra => 'Ultra',
-    };
+    final label = effort == AiReasoningEffort.ultra
+        ? 'Ultracode'
+        : (effort == AiReasoningEffort.none ||
+                effort == AiReasoningEffort.minimal
+            ? 'Low'
+            : effort.label);
 
     return PressableScale(
       onPressed: onTap,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 6),
+      child: Container(
+        key: const ValueKey('ai-chat-effort-pill'),
+        padding: const EdgeInsets.symmetric(vertical: 2),
+        decoration: selected
+            ? BoxDecoration(
+                color: scheme.onSurface.withValues(alpha: 0.075),
+                borderRadius: BorderRadius.circular(4),
+              )
+            : null,
         child: Text(
           label,
-          style: TextStyle(fontSize: 12, color: scheme.onSurfaceVariant),
+          style: TextStyle(
+            fontSize: _aiChatSelectorFontSize,
+            height: 1.2,
+            fontWeight: FontWeight.w400,
+            fontFamilyFallback: _cjkFontFallback,
+            color: scheme.onSurfaceVariant,
+          ),
         ),
       ),
     );
   }
 }
 
-/// 模型列表气泡卡：白色圆角卡，标题 Models，每行模型名+序号+当前✓
+/// Exposes the live bottom selection controls to focused visual tests without
+/// booting chat history or the keyboard lifecycle.
+@visibleForTesting
+Widget buildClaudeInputPillsForTesting({
+  required bool modelSelected,
+  required bool effortSelected,
+  String model = 'claude-sonnet-5',
+  double? maxWidth,
+}) {
+  return SizedBox(
+    width: maxWidth,
+    child: Row(
+      mainAxisSize: maxWidth == null ? MainAxisSize.min : MainAxisSize.max,
+      crossAxisAlignment: CrossAxisAlignment.center,
+      children: [
+        if (maxWidth == null)
+          _ModelPill(
+            model: model,
+            selected: modelSelected,
+            onTap: () {},
+          )
+        else
+          Flexible(
+            fit: FlexFit.loose,
+            child: _ModelPill(
+              model: model,
+              selected: modelSelected,
+              onTap: () {},
+            ),
+          ),
+        const SizedBox(width: _aiChatSelectionGap),
+        _EffortLabel(
+          effort: AiReasoningEffort.max,
+          selected: effortSelected,
+          onTap: () {},
+        ),
+      ],
+    ),
+  );
+}
+
+/// 模型列表气泡卡：Claude 桌面端同款的紧凑白卡、右对齐编号和选中勾。
 class _ModelMenuCard extends StatelessWidget {
   final List<AiModelOption> options;
   final String currentKey;
@@ -5768,45 +9665,164 @@ class _ModelMenuCard extends StatelessWidget {
     final scheme = Theme.of(context).colorScheme;
     return Material(
       type: MaterialType.transparency,
-      child: Container(
-        decoration: BoxDecoration(
-          color: scheme.surface.withValues(alpha: 0.92),
-          borderRadius: BorderRadius.circular(14),
-          boxShadow: const [
-            BoxShadow(
-              color: Color(0x22000000),
-              blurRadius: 20,
-              offset: Offset(0, 6),
+      child: _ClaudePopupSurface(
+        captureKey: const ValueKey('ai-chat-model-popup'),
+        width: 195,
+        radius: 11,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(11, 9, 11, 3),
+              child: Text(
+                'Models',
+                style: TextStyle(
+                  fontSize: 13,
+                  height: 1.15,
+                  fontWeight: FontWeight.w400,
+                  color: scheme.onSurfaceVariant.withValues(alpha: 0.85),
+                ),
+              ),
+            ),
+            ConstrainedBox(
+              constraints: const BoxConstraints(maxHeight: 340),
+              child: ListView.builder(
+                shrinkWrap: true,
+                padding: const EdgeInsets.only(bottom: 5),
+                physics: const BouncingScrollPhysics(),
+                itemCount: options.length,
+                itemBuilder: (context, index) {
+                  final option = options[index];
+                  return _ModelMenuRow(
+                    option: option,
+                    index: index + 1,
+                    selected: option.key == currentKey,
+                    onTap: () {
+                      Navigator.of(context).pop();
+                      onSelected(option);
+                    },
+                  );
+                },
+              ),
             ),
           ],
         ),
-        child: ClipRRect(
-          borderRadius: BorderRadius.circular(14),
-          child: BackdropFilter(
-            filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(14, 10, 14, 4),
-                  child: Text(
-                    'Models',
-                    style: AppType.caption(scheme),
+      ),
+    );
+  }
+}
+
+/// Exposes the production Claude-style popup cards to focused visual tests.
+/// The builders intentionally return the same private widgets used by the
+/// live panel, so screenshot coverage does not need to boot the full chat
+/// history, suggestion timers, or keyboard lifecycle.
+@visibleForTesting
+Widget buildClaudeModelPopupForTesting({
+  required List<AiModelOption> options,
+  required String currentKey,
+  required ValueChanged<AiModelOption> onSelected,
+}) =>
+    _ModelMenuCard(
+      options: options,
+      currentKey: currentKey,
+      onSelected: onSelected,
+    );
+
+class _ModelMenuRow extends StatefulWidget {
+  final AiModelOption option;
+  final int index;
+  final bool selected;
+  final VoidCallback onTap;
+
+  const _ModelMenuRow({
+    required this.option,
+    required this.index,
+    required this.selected,
+    required this.onTap,
+  });
+
+  @override
+  State<_ModelMenuRow> createState() => _ModelMenuRowState();
+}
+
+class _ModelMenuRowState extends State<_ModelMenuRow> {
+  bool _hovered = false;
+  bool _focused = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final highlighted = widget.selected || _hovered || _focused;
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 3),
+      child: MouseRegion(
+        cursor: SystemMouseCursors.click,
+        onEnter: (_) => setState(() => _hovered = true),
+        onExit: (_) => setState(() => _hovered = false),
+        child: Focus(
+          onFocusChange: (value) => setState(() => _focused = value),
+          child: Material(
+            color: highlighted
+                ? scheme.onSurface.withValues(
+                    alpha: widget.selected ? 0.065 : 0.04,
+                  )
+                : Colors.transparent,
+            borderRadius: BorderRadius.circular(8),
+            child: InkWell(
+              onTap: widget.onTap,
+              borderRadius: BorderRadius.circular(8),
+              splashFactory: NoSplash.splashFactory,
+              hoverColor: Colors.transparent,
+              focusColor: Colors.transparent,
+              highlightColor: scheme.onSurface.withValues(alpha: 0.04),
+              child: SizedBox(
+                height: 24,
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 8),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          widget.option.model,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontSize: 15,
+                            height: 1.1,
+                            fontWeight: FontWeight.w400,
+                            color: scheme.onSurface,
+                          ),
+                        ),
+                      ),
+                      if (widget.selected)
+                        SizedBox(
+                          width: 17,
+                          child: Icon(
+                            CupertinoIcons.checkmark,
+                            size: 13,
+                            color: scheme.primary,
+                          ),
+                        )
+                      else
+                        const SizedBox(width: 17),
+                      SizedBox(
+                        width: 12,
+                        child: Text(
+                          '${widget.index}',
+                          textAlign: TextAlign.right,
+                          style: TextStyle(
+                            fontSize: 12,
+                            height: 1.1,
+                            color:
+                                scheme.onSurfaceVariant.withValues(alpha: 0.7),
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
                 ),
-                for (var i = 0; i < options.length; i++)
-                  _ModelMenuRow(
-                    model: options[i].model,
-                    index: i + 1,
-                    selected: options[i].key == currentKey,
-                    onTap: () {
-                      Navigator.of(context).pop();
-                      onSelected(options[i]);
-                    },
-                  ),
-                const SizedBox(height: 6),
-              ],
+              ),
             ),
           ),
         ),
@@ -5815,66 +9831,63 @@ class _ModelMenuCard extends StatelessWidget {
   }
 }
 
-class _ModelMenuRow extends StatelessWidget {
-  final String model;
-  final int index;
-  final bool selected;
-  final VoidCallback onTap;
+/// Claude 式浮层底板：细边、白底和低扩散阴影。
+class _ClaudePopupSurface extends StatelessWidget {
+  final Key? captureKey;
+  final double width;
+  final double radius;
+  final Widget child;
 
-  const _ModelMenuRow({
-    required this.model,
-    required this.index,
-    required this.selected,
-    required this.onTap,
+  const _ClaudePopupSurface({
+    this.captureKey,
+    required this.width,
+    required this.radius,
+    required this.child,
   });
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    return InkWell(
-      onTap: onTap,
-      splashFactory: NoSplash.splashFactory,
-      highlightColor: AppColors.hairline(scheme),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
-        child: Row(
-          children: [
-            // 选中标记移到最左边（数字左侧）
-            SizedBox(
-              width: 18,
-              child: selected
-                  ? Icon(CupertinoIcons.checkmark,
-                      size: 12, color: scheme.primary)
-                  : null,
-            ),
-            const SizedBox(width: 6),
-            Text(
-              '$index',
-              style: TextStyle(
-                fontSize: 12,
-                color: scheme.onSurfaceVariant.withValues(alpha: 0.55),
+    return RepaintBoundary(
+      key: captureKey,
+      child: SizedBox(
+        width: width,
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(radius),
+            boxShadow: const [
+              BoxShadow(
+                color: Color(0x29000000),
+                blurRadius: 20,
+                offset: Offset(0, 7),
               ),
-            ),
-            const SizedBox(width: 8),
-            Expanded(
-              child: Text(
-                model,
-                style: TextStyle(
-                  fontSize: 13,
-                  fontWeight: FontWeight.w400,
-                  color: scheme.onSurface,
+            ],
+          ),
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(radius),
+            child: BackdropFilter(
+              filter: ImageFilter.blur(sigmaX: 8, sigmaY: 8),
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  color: scheme.surface.withValues(alpha: 0.96),
+                  borderRadius: BorderRadius.circular(radius),
+                  border: Border.all(
+                    color: scheme.outlineVariant.withValues(alpha: 0.58),
+                    width: 0.7,
+                  ),
                 ),
+                child: child,
               ),
             ),
-          ],
+          ),
         ),
       ),
     );
   }
 }
 
-/// Effort 气泡卡：白色圆角卡，标题 Effort+当前档，横向滑块 Faster→Smarter
-/// 档位：Low/Medium/High/Extra/Max/Ultra（去掉 Minimal，共 6 档）
+/// Effort 气泡卡：Claude 桌面端同款紧凑面板。
+/// 保留全部内部档位，视觉标签只改变展示名，不改变实际请求参数。
 class _EffortPopupCard extends StatefulWidget {
   final AiReasoningEffort currentEffort;
   final ValueChanged<AiReasoningEffort> onChanged;
@@ -5890,14 +9903,14 @@ class _EffortPopupCard extends StatefulWidget {
 
 class _EffortPopupCardState extends State<_EffortPopupCard>
     with TickerProviderStateMixin {
-  // Low/Medium/High/Extra/Max/Ultra 六档（去掉 Minimal）
+  // 喵助手从 Low 起步；旧数据库中的 none/minimal 会在仓储层归一到 Low。
   static const _levels = [
     (AiReasoningEffort.low, 'Low'),
     (AiReasoningEffort.medium, 'Medium'),
     (AiReasoningEffort.high, 'High'),
     (AiReasoningEffort.xhigh, 'Extra'),
     (AiReasoningEffort.max, 'Max'),
-    (AiReasoningEffort.ultra, 'Ultra'),
+    (AiReasoningEffort.ultra, 'Ultracode'),
   ];
 
   late int _index;
@@ -5911,7 +9924,8 @@ class _EffortPopupCardState extends State<_EffortPopupCard>
     _ultraCtrl = AnimationController(
       vsync: this,
       duration: const Duration(seconds: 2),
-    )..repeat();
+    );
+    if (_isUltra) _ultraCtrl.repeat();
   }
 
   @override
@@ -5930,121 +9944,144 @@ class _EffortPopupCardState extends State<_EffortPopupCard>
 
     return Material(
       type: MaterialType.transparency,
-      child: Container(
-        decoration: BoxDecoration(
-          color: scheme.surface.withValues(alpha: 0.92),
-          borderRadius: BorderRadius.circular(14),
-          boxShadow: const [
-            BoxShadow(
-              color: Color(0x22000000),
-              blurRadius: 20,
-              offset: Offset(0, 6),
-            ),
-          ],
-        ),
-        child: ClipRRect(
-          borderRadius: BorderRadius.circular(14),
-          child: BackdropFilter(
-            filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(16, 12, 16, 14),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
+      child: _ClaudePopupSurface(
+        captureKey: const ValueKey('ai-chat-effort-popup'),
+        width: 222,
+        radius: 11,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(10, 12, 10, 13),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
                 children: [
-                  // 标题行：Effort（灰色 w100）+ 当前档（深黑/紫色）
-                  Row(
-                    children: [
-                      Text(
-                        'Effort',
-                        style: TextStyle(
-                          fontSize: 14,
-                          fontWeight: FontWeight.w400,
-                          color: scheme.onSurfaceVariant,
-                        ),
-                      ),
-                      const SizedBox(width: 6),
-                      if (isUltra)
-                        AnimatedBuilder(
-                          animation: _ultraCtrl,
-                          builder: (_, __) => ShaderMask(
-                            shaderCallback: (bounds) => LinearGradient(
-                              begin: Alignment(
-                                  -1.0 + _ultraCtrl.value * 2, 0),
-                              end: Alignment(
-                                  1.0 + _ultraCtrl.value * 2, 0),
-                              colors: const [
-                                Color(0xFF9B59B6),
-                                Color(0xFFCE93D8),
-                                Color(0xFF7E57C2),
-                                Color(0xFF9B59B6),
-                              ],
-                            ).createShader(bounds),
-                            child: Text(
-                              currentLabel,
-                              style: const TextStyle(
-                                fontSize: 14,
-                                fontWeight: FontWeight.w600,
-                                color: Colors.white,
+                  Text(
+                    'Effort',
+                    style: TextStyle(
+                      fontSize: 14,
+                      height: 1.15,
+                      fontWeight: FontWeight.w400,
+                      color: scheme.onSurfaceVariant.withValues(alpha: 0.85),
+                    ),
+                  ),
+                  const SizedBox(width: 5),
+                  Flexible(
+                    fit: FlexFit.loose,
+                    child: isUltra
+                        ? AnimatedBuilder(
+                            animation: _ultraCtrl,
+                            builder: (_, __) => ShaderMask(
+                              shaderCallback: (bounds) => LinearGradient(
+                                begin: Alignment(
+                                  -1.0 + _ultraCtrl.value * 2,
+                                  0,
+                                ),
+                                end: Alignment(
+                                  1.0 + _ultraCtrl.value * 2,
+                                  0,
+                                ),
+                                colors: const [
+                                  Color(0xFF6152B8),
+                                  Color(0xFF9C86E8),
+                                  Color(0xFF5C4AA8),
+                                  Color(0xFF6152B8),
+                                ],
+                              ).createShader(bounds),
+                              child: Text(
+                                currentLabel,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(
+                                  fontSize: 14,
+                                  height: 1.15,
+                                  fontWeight: FontWeight.w500,
+                                  color: Colors.white,
+                                ),
+                              ),
+                            ),
+                          )
+                        : Text(
+                            currentLabel,
+                            key: const ValueKey('ai-chat-effort-value'),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              fontSize: 14,
+                              height: 1.15,
+                              fontWeight: FontWeight.w500,
+                              color: scheme.onSurfaceVariant.withValues(
+                                alpha: 0.78,
                               ),
                             ),
                           ),
-                        )
-                      else
-                        Text(
-                          currentLabel,
-                          style: TextStyle(
-                            fontSize: 14,
-                            fontWeight: FontWeight.w600,
-                            color: scheme.onSurface,
-                          ),
-                        ),
-                    ],
-                  ),
-                  const SizedBox(height: 12),
-                  // Faster / Smarter 标签在滑条上方
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 4),
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        Text('Faster',
-                            style: TextStyle(
-                                fontSize: 11,
-                                color: scheme.onSurfaceVariant
-                                    .withValues(alpha: 0.6))),
-                        Text('Smarter',
-                            style: TextStyle(
-                                fontSize: 11,
-                                color: scheme.onSurfaceVariant
-                                    .withValues(alpha: 0.6))),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(height: 4),
-                  // 自定义滑条
-                  SizedBox(
-                    height: 36,
-                    child: _EffortSlider(
-                      index: _index,
-                      count: _levels.length,
-                      isUltra: isUltra,
-                      ultraAnimation: _ultraCtrl,
-                      onChanged: (i) {
-                        setState(() => _index = i);
-                        widget.onChanged(_levels[i].$1);
-                      },
-                    ),
                   ),
                 ],
               ),
-            ),
+              const SizedBox(height: 14),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 1),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text(
+                      'Faster',
+                      style: TextStyle(
+                        fontSize: 12,
+                        height: 1.1,
+                        color: scheme.onSurfaceVariant.withValues(alpha: 0.75),
+                      ),
+                    ),
+                    Text(
+                      'Smarter',
+                      style: TextStyle(
+                        fontSize: 12,
+                        height: 1.1,
+                        color: scheme.onSurfaceVariant.withValues(alpha: 0.48),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 10),
+              SizedBox(
+                key: const ValueKey('ai-chat-effort-slider'),
+                height: 24,
+                child: _EffortSlider(
+                  index: _index,
+                  count: _levels.length,
+                  isUltra: isUltra,
+                  ultraAnimation: _ultraCtrl,
+                  onChanged: (i) {
+                    final wasUltra = _isUltra;
+                    setState(() => _index = i);
+                    final nowUltra = _isUltra;
+                    if (nowUltra && !wasUltra) {
+                      _ultraCtrl.repeat();
+                    } else if (!nowUltra && wasUltra) {
+                      _ultraCtrl.stop();
+                    }
+                    widget.onChanged(_levels[i].$1);
+                  },
+                ),
+              ),
+            ],
           ),
         ),
       ),
     );
   }
 }
+
+@visibleForTesting
+Widget buildClaudeEffortPopupForTesting({
+  required AiReasoningEffort currentEffort,
+  required ValueChanged<AiReasoningEffort> onChanged,
+}) =>
+    _EffortPopupCard(
+      currentEffort: currentEffort,
+      onChanged: onChanged,
+    );
 
 /// 自定义 Effort 滑条：圆角方形 thumb，深浅灰轨道，刻度点，Ultra 紫色动画
 class _EffortSlider extends StatefulWidget {
@@ -6082,8 +10119,10 @@ class _EffortSliderState extends State<_EffortSlider> {
   }
 
   void _handleTapOrDrag(Offset local, double width) {
-    final step = width / (widget.count - 1);
-    final i = (local.dx / step).round().clamp(0, widget.count - 1);
+    const edgePad = 9.0;
+    final usable = max(1.0, width - edgePad * 2);
+    final step = usable / (widget.count - 1);
+    final i = ((local.dx - edgePad) / step).round().clamp(0, widget.count - 1);
     if (i != _drag) {
       setState(() => _drag = i);
       widget.onChanged(i);
@@ -6131,69 +10170,87 @@ class _EffortTrackPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
-    const trackH = 8.0; // 更粗的轨道
-    const thumbW = 18.0; // 方形 thumb 宽度
-    const thumbH = 18.0; // 方形 thumb 高度
-    const thumbR = 5.0; // 圆角半径
+    const trackH = 22.0;
+    const thumbW = 18.0;
+    const thumbH = 18.0;
+    const thumbR = 5.0;
+    const edgePad = 9.0;
     final cy = size.height / 2;
-    final step = size.width / (count - 1);
-    final thumbX = index * step;
+    final usable = max(1.0, size.width - edgePad * 2);
+    final step = usable / (count - 1);
+    final thumbX = edgePad + index * step;
 
-    // 轨道背景（浅灰）
+    // Claude 的滑条是完整的圆角灰色底轨，活动段只覆盖到滑块。
     final trackPaint = Paint()
       ..color = scheme.onSurface.withValues(alpha: 0.16)
       ..strokeCap = StrokeCap.round;
-    final trackRect =
-        Rect.fromLTWH(0, cy - trackH / 2, size.width, trackH);
-    canvas.drawRRect(
-        RRect.fromRectAndRadius(trackRect, const Radius.circular(4)),
-        trackPaint);
+    final trackRect = Rect.fromLTWH(0, cy - trackH / 2, size.width, trackH);
+    final trackRRect = RRect.fromRectAndRadius(
+      trackRect,
+      const Radius.circular(5),
+    );
+    canvas.drawRRect(trackRRect, trackPaint);
 
-    // 已滑过部分（深灰略蓝 or 紫色渐变）
+    // 已滑过部分（普通档位为柔和深灰，Ultracode 为像素化紫色高光）。
     if (thumbX > 0) {
       if (isUltra) {
+        final activeRect = Rect.fromLTWH(0, cy - trackH / 2, thumbX, trackH);
+        final activeRRect = RRect.fromRectAndRadius(
+          activeRect,
+          const Radius.circular(5),
+        );
+        canvas.save();
+        canvas.clipRRect(activeRRect);
         final gradient = LinearGradient(
           begin: Alignment(-1 + ultraT * 1.4, 0),
           end: Alignment(1 + ultraT * 1.4, 0),
           colors: const [
-            Color(0xFF7B1FA2),
-            Color(0xFFCE93D8),
-            Color(0xFF9B59B6),
-            Color(0xFF7E57C2),
+            Color(0xFFC7B9EE),
+            Color(0xFFE1DAF8),
+            Color(0xFFA99AE0),
+            Color(0xFFD2C8F3),
           ],
         );
-        final activeRect =
-            Rect.fromLTWH(0, cy - trackH / 2, thumbX, trackH);
-        final activePaint = Paint()
-          ..shader =
-              gradient.createShader(Rect.fromLTWH(0, 0, size.width, trackH))
-          ..strokeCap = StrokeCap.round;
-        canvas.drawRRect(
-            RRect.fromRectAndRadius(
-                activeRect, const Radius.circular(4)),
-            activePaint);
+        canvas.drawRect(
+          activeRect,
+          Paint()..shader = gradient.createShader(activeRect),
+        );
+        // 参考 Claude Ultracode 的颗粒高光，而不是平滑紫色渐变。
+        const cell = 4.0;
+        final cols = (activeRect.width / cell).ceil();
+        final rows = (activeRect.height / cell).ceil();
+        for (var row = 0; row < rows; row++) {
+          for (var col = 0; col < cols; col++) {
+            final phase = (col * 17 + row * 31) % 9;
+            final shimmer = sin((col * 0.55) + ultraT * pi * 2 + row * 0.3);
+            if ((phase + row) % 3 == 0 || shimmer > 0.82) {
+              final alpha = (0.08 + (shimmer + 1) * 0.06).clamp(0.04, 0.2);
+              canvas.drawRect(
+                Rect.fromLTWH(col * cell, cy - trackH / 2 + row * cell,
+                    cell - 0.5, cell - 0.5),
+                Paint()..color = Colors.white.withValues(alpha: alpha),
+              );
+            }
+          }
+        }
+        canvas.restore();
       } else {
         final activePaint = Paint()
-          ..color = Color.lerp(
-              scheme.onSurface.withValues(alpha: 0.60),
-              const Color(0xFF5A7A9B),
-              0.15)!
+          ..color = scheme.onSurface.withValues(alpha: 0.22)
           ..strokeCap = StrokeCap.round;
-        final activeRect =
-            Rect.fromLTWH(0, cy - trackH / 2, thumbX, trackH);
+        final activeRect = Rect.fromLTWH(0, cy - trackH / 2, thumbX, trackH);
         canvas.drawRRect(
-            RRect.fromRectAndRadius(
-                activeRect, const Radius.circular(4)),
+            RRect.fromRectAndRadius(activeRect, const Radius.circular(5)),
             activePaint);
       }
     }
 
-    // 刻度点（浅灰圆点）
+    // 刻度点（参考截图的细小灰点）。
     final dotPaint = Paint()..color = scheme.onSurface.withValues(alpha: 0.30);
     for (var i = 0; i < count; i++) {
-      final x = i * step;
+      final x = edgePad + i * step;
       if ((x - thumbX).abs() > thumbW / 2 + 3) {
-        canvas.drawCircle(Offset(x, cy), 3.0, dotPaint);
+        canvas.drawCircle(Offset(x, cy), 1.7, dotPaint);
       }
     }
 
@@ -6201,13 +10258,12 @@ class _EffortTrackPainter extends CustomPainter {
     final thumbRect = Rect.fromCenter(
         center: Offset(thumbX, cy), width: thumbW, height: thumbH);
     if (isUltra) {
-      final gradient = LinearGradient(
+      const gradient = LinearGradient(
         begin: Alignment.topLeft,
         end: Alignment.bottomRight,
-        colors: const [Color(0xFF9B59B6), Color(0xFF7E57C2)],
+        colors: [Color(0xFF9B59B6), Color(0xFF7E57C2)],
       );
-      final thumbPaint = Paint()
-        ..shader = gradient.createShader(thumbRect);
+      final thumbPaint = Paint()..shader = gradient.createShader(thumbRect);
       canvas.drawRRect(
           RRect.fromRectAndRadius(thumbRect, const Radius.circular(thumbR)),
           thumbPaint);
@@ -6248,55 +10304,93 @@ class _EffortTrackPainter extends CustomPainter {
 class _CircleBtn extends StatelessWidget {
   final IconData icon;
   final VoidCallback? onTap;
-  final bool filled;
+  final bool plain;
 
   const _CircleBtn({
+    super.key,
     required this.icon,
     required this.onTap,
-    this.filled = false,
+    this.plain = false,
   });
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    if (filled) {
-      final active = onTap != null;
+    if (plain) {
       return PressableScale(
         onPressed: onTap,
-        child: Container(
+        child: SizedBox(
           width: 36,
           height: 36,
-          decoration: BoxDecoration(
-            color: active
-                ? scheme.secondary
-                : scheme.onSurface.withValues(alpha: 0.12),
-            shape: BoxShape.circle,
-          ),
-          child: Icon(
-            icon,
-            size: 18,
-            color: active
-                ? scheme.onSecondary
-                : scheme.onSurface.withValues(alpha: 0.38),
+          child: Center(
+            child: icon == Icons.add
+                ? SizedBox(
+                    width: 26.4,
+                    height: 26.4,
+                    child: CustomPaint(
+                      key: const ValueKey('ai-chat-plus-glyph'),
+                      painter: _RoundedPlusPainter(
+                        color: onTap == null
+                            ? scheme.onSurfaceVariant.withValues(alpha: 0.38)
+                            : scheme.onSurfaceVariant,
+                      ),
+                    ),
+                  )
+                : Icon(
+                    icon,
+                    size: 18,
+                    color: onTap == null
+                        ? scheme.onSurfaceVariant.withValues(alpha: 0.38)
+                        : scheme.onSurfaceVariant,
+                  ),
           ),
         ),
       );
     }
-    return PressableScale(
+
+    // The send control keeps its glass circle; the assistant plus opts out
+    // through [plain] while retaining the same touch extent.
+    return AppGlassInputIconButton(
+      icon: icon,
       onPressed: onTap,
-      child: SizedBox(
-        width: 34,
-        height: 34,
-        child: GlassSurface(
-          circle: true,
-          blur: 0, // 面板背景已经模糊过，无需叠加
-          child: Center(
-            child: Icon(icon, size: 17, color: scheme.onSurfaceVariant),
-          ),
-        ),
-      ),
+      color: scheme.onSurfaceVariant,
     );
   }
+}
+
+/// GPT-style plus: a compact mark with a thin, rounded stroke and rounded
+/// terminals. The 26.4px canvas and 15.4px visible line are 20% smaller than
+/// the previous 33px Material glyph's roughly 19.2px visible mark; the
+/// surrounding 36px box remains the touch target shared with the send button.
+class _RoundedPlusPainter extends CustomPainter {
+  final Color color;
+
+  const _RoundedPlusPainter({required this.color});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = color
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 2.1
+      ..strokeCap = StrokeCap.round;
+    final center = size.center(Offset.zero);
+    const half = 7.7;
+    canvas.drawLine(
+      Offset(center.dx - half, center.dy),
+      Offset(center.dx + half, center.dy),
+      paint,
+    );
+    canvas.drawLine(
+      Offset(center.dx, center.dy - half),
+      Offset(center.dx, center.dy + half),
+      paint,
+    );
+  }
+
+  @override
+  bool shouldRepaint(_RoundedPlusPainter oldDelegate) =>
+      oldDelegate.color != color;
 }
 
 /// 模型选择底部抽屉
@@ -6343,12 +10437,12 @@ class _ProviderModelPickerSheetState extends State<_ProviderModelPickerSheet> {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     const levels = [
-      (AiReasoningEffort.none, '关闭'),
-      (AiReasoningEffort.minimal, 'Minimal'),
       (AiReasoningEffort.low, 'Low'),
       (AiReasoningEffort.medium, 'Medium'),
       (AiReasoningEffort.high, 'High'),
-      (AiReasoningEffort.xhigh, 'Max'),
+      (AiReasoningEffort.xhigh, 'Extra'),
+      (AiReasoningEffort.max, 'Max'),
+      (AiReasoningEffort.ultra, 'Ultra'),
     ];
     var effortIndex = levels.indexWhere((entry) => entry.$1 == _effort);
     if (effortIndex < 0) effortIndex = 0;
@@ -6523,11 +10617,12 @@ class _LegacyModelPickerSheetState extends State<_LegacyModelPickerSheet> {
     final scheme = Theme.of(context).colorScheme;
     // Effort 档位映射：参考 Claude 桌面端
     const effortLevels = [
-      (AiReasoningEffort.none, '关闭'),
       (AiReasoningEffort.low, 'Low'),
       (AiReasoningEffort.medium, 'Medium'),
       (AiReasoningEffort.high, 'High'),
-      (AiReasoningEffort.xhigh, 'Max'),
+      (AiReasoningEffort.xhigh, 'Extra'),
+      (AiReasoningEffort.max, 'Max'),
+      (AiReasoningEffort.ultra, 'Ultra'),
     ];
     final effortIndex = effortLevels.indexWhere((e) => e.$1 == _selectedEffort);
     final clampedIndex = effortIndex < 0 ? 0 : effortIndex;
@@ -6543,45 +10638,14 @@ class _LegacyModelPickerSheetState extends State<_LegacyModelPickerSheet> {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          // 拖动条
-          Padding(
-            padding: const EdgeInsets.only(top: 8, bottom: 2),
-            child: Center(
-              child: Container(
-                width: 36,
-                height: 4,
-                decoration: BoxDecoration(
-                  color: scheme.onSurfaceVariant.withValues(alpha: 0.2),
-                  borderRadius: BorderRadius.circular(2),
-                ),
-              ),
-            ),
-          ),
-          // 标题 + 完成按钮
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 4, 8, 4),
-            child: Row(
-              children: [
-                Text(
-                  '选择模型',
-                  style: AppType.rowTitle(scheme),
-                ),
-                const Spacer(),
-                TextButton(
-                  onPressed: () async {
-                    Navigator.pop(context);
-                    await widget.onSelected(_selectedModel, _selectedEffort);
-                  },
-                  child: Text(
-                    '完成',
-                    style: TextStyle(
-                      color: scheme.primary,
-                      fontWeight: FontWeight.w500,
-                    ),
-                  ),
-                ),
-              ],
-            ),
+          SheetHeader(
+            title: '选择模型',
+            onClose: () => Navigator.pop(context),
+            actionLabel: '完成',
+            onAction: () async {
+              Navigator.pop(context);
+              await widget.onSelected(_selectedModel, _selectedEffort);
+            },
           ),
           Divider(height: 1, color: AppColors.hairline(scheme)),
           // 模型列表（紧凑行）

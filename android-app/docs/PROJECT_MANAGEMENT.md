@@ -2,7 +2,7 @@
 title: 肥喵记账项目管理总纲
 version: 1.0
 status: active
-updated: 2026-08-14
+updated: 2026-08-28
 scope: Android Flutter 主工程
 ---
 
@@ -19,23 +19,23 @@ scope: Android Flutter 主工程
 | 平台 | Android 为当前主交付平台；仓库另有独立 `ios-app`，不与 Android 批次混做 |
 | 技术栈 | Flutter / Dart、Provider、SQLite(sqflite)、Android 原生 Worker/Widget |
 | 当前分支 | `feature/ai-model-selector` |
-| 当前工作版本 | `1.214.0+227`，build tag `b0814-227` |
-| 数据库版本 | v43 |
+| 当前工作版本 | `1.264.0+278`，build tag `b0828-278` |
+| 数据库版本 | v48 |
 | Android 身份 | `com.qingji.qingji.codex`，min SDK 24，compile/target SDK 36 |
-| 当前批次 | AI 多服务商、模型管理、喵助手模型即时切换、报告跟随、闲聊与隐私分流 |
-| 自动验证 | 本批定向 42/42；静态分析 0 error；按用户要求未重复既有 581 项全量测试 |
-| 运行态验证 | 用户真机安装验收待进行；本批不宣称截图或真机通过 |
-| 当前 APK | `C:\src\xunni-codex\ci-artifacts\releases\feimiao-codex-v1.214.0-227.apk` |
-| 当前 APK SHA256 | `E81925A62DA5C0EC2E3BFB9D8E1A4C759713BA7DF3A829076C024CC3413B9B1A` |
-| 回退 APK | `C:\src\xunni-codex\ci-artifacts\releases\feimiao-codex-v1.213.0-226.apk` |
-| 发布状态 | 当前包是本地交付候选；未在本次工作中验证或改变线上版本 |
+| 当前批次 | 全局 UI 收口：公共按钮/菜单/弹层/设置行/字体/颜色/触控热区/响应式；AI 与 Chats 既有能力保持不变 |
+| 自动验证 | Dart analyze 无 error（64 条既有 warning/info）；串行全量 Flutter **1124/1124**；全局 UI、附件累计上限、refresh-only OAuth 首次交换、报告计时语义、AI 请求/重试/Responses、AI/UI/会话/图片/思考/来源/模型/菜单及严格 Claude/Chats 视觉回归通过；Gradle Release 构建与 release identity gate 通过 |
+| 运行态验证 | 本轮无在线 ADB 设备；真实 provider API、IME、OAuth 出口地区和账号 JSON 实际网络导入仍待用户设备 |
+| 当前 APK | 本轮最终门禁后归档为 `feimiao-codex-v1.264.0-278.apk` |
+| 当前 APK SHA256 | `3BFC09913BB28C0CC783C30773C459570B7195BCE321DAF530FF2A9DCE6FF07C`（116,596,258 字节） |
+| 回退 APK | `C:\src\xunni-codex\ci-artifacts\releases\feimiao-codex-v1.260.0-274.apk` |
+| 发布状态 | 当前包是本地交付候选；本轮无在线 Android 设备，未验证真实账号 Token/模型请求，未改变线上版本 |
 | 工作树状态 | 当前 AI 批代码、测试、版本和文档尚未提交；不得把本表误解为已推送/已上线 |
 
 ### 1.1 当前最近三个门
 
-1. **真机验收门**：用户安装 v1.214，检查多服务商、模型获取、模型切换、报告跟随和闲聊分流。
+1. **真机验收门**：用户安装 v1.264.0+278，检查全局弹层/按钮/设置行、窄屏大字和深色观感，同时复核首条消息、输入框、模型/Effort、Chats、图片流程及 AI/OAuth 网络路径。
 2. **源码集成门**：根据真机反馈修复；无阻断后精确提交当前工作树，并决定是否合入权威发布分支。
-3. **发布门**：发布前重新执行完整门禁。当前“按用户要求未重复全量测试”只适用于本地交付，不自动等价于线上发布授权。
+3. **发布门**：发布前重新执行完整门禁；当前包已完成本地完整回归，但不自动等价于线上发布授权。
 
 ## 2. 项目章程
 
@@ -307,9 +307,9 @@ Windows 上 Repository 测试使用 `--concurrency=1`，避免多个测试文件
 
 ### 9.3 当前验证债务
 
-- v1.214 当前批按用户要求只跑定向 42/42，没有重复既有 581 项全量测试。
-- 因此本地安装候选可以交给用户，但正式发布前应重新执行当前 HEAD/工作树对应的完整测试，除非用户再次明确接受缩减门禁。
-- analyze 当前为 0 error，但仍有历史 deprecated/unused/test lint 等非阻断诊断；新批次不得继续增加无说明 warning。
+- 2026-08-20 已实际执行当前工作树全量 **998/998**；此前资产页标题匹配、月份轴标签和 10k 性能基准的失败也已修复并纳入回归。
+- 本批 AI/喵助手与 Chats 定向回归、Claude 视觉布局回归均已通过；analyze 0 error，仅历史 warning/info。
+- 真实 provider 网络、Android 真机安装/IME/截图仍未验证；当前 APK 可交给用户安装验收，但不应把本地构建等价为线上发布。
 
 ## 10. 分支、提交与版本
 
@@ -331,10 +331,10 @@ Windows 上 Repository 测试使用 `--concurrency=1`，避免多个测试文件
 
 | 版本 | 示例 | 规则 |
 |---|---|---|
-| versionName | `1.214.0` | 用户可见，按当前项目约定逐批递增 |
-| versionCode | `227` | Android 覆盖安装身份，只增不减 |
-| buildTag | `b0814-227` | 真机快速确认包，日期 + versionCode |
-| DB version | `43` | 只在 schema/迁移变化时增加，不跟每个 APK 增加 |
+| versionName | `1.261.0` | 用户可见，按当前项目约定逐批递增 |
+| versionCode | `275` | Android 覆盖安装身份，只增不减 |
+| buildTag | `b0827-275` | 真机快速确认包，日期 + versionCode |
+| DB version | `47` | 只在 schema/迁移变化时增加，不跟每个 APK 增加 |
 | calculationVersion | `1` | 统计口径合同版本，不能用 DB/versionCode 代替 |
 
 版本至少同步：`pubspec.yaml`、`lib/core/app_version.dart`、`lib/build_info.dart`、本机 `android/local.properties`。APK 内部版本以 aapt 结果为最终证据。

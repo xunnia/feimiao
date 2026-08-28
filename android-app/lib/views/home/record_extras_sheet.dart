@@ -5,17 +5,15 @@ import '../../widgets/settings_ui.dart';
 import '../quick_add/screenshot_entry.dart';
 import '../settings/import_export_view.dart';
 import '../../widgets/app_page_route.dart';
+import '../common/app_sheet.dart';
 
 /// 「更多功能」底部面板：支付截图识别 / 导入账单 / 导出账单。
 /// 首页输入栏与 AI 面板的 [+] 共用，保证两处行为一致。
 void showRecordExtrasSheet(BuildContext context) {
-  showModalBottomSheet<void>(
-    context: context,
-    backgroundColor: Theme.of(context).colorScheme.surface,
-    shape: const RoundedRectangleBorder(
-      borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-    ),
-    builder: (ctx) => SafeArea(
+  showBlurSheet<void>(
+    context,
+    radius: 28,
+    child: Builder(builder: (ctx) => SafeArea(
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
@@ -62,6 +60,6 @@ void showRecordExtrasSheet(BuildContext context) {
           const SizedBox(height: 12),
         ],
       ),
-    ),
+      )),
   );
 }

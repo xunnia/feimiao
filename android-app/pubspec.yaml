@@ -3,7 +3,7 @@ description: "肥喵记账 - 可爱又聪明的记账猫"
 publish_to: 'none'
 # 版本规则（用户 0703 拍板）：1.0 起步，每次推 GitHub 构建 minor +1（1.1、1.2…）。
 # 加号后是 Android versionCode，必须只增不减，否则手机拒绝覆盖安装。
-version: 1.221.0+234
+version: 1.264.0+278
 
 environment:
   sdk: '>=3.4.0 <4.0.0'
@@ -30,18 +30,22 @@ dependencies:
   charset_converter: ^2.2.0
   excel: ^2.1.0
   image_picker: ^1.1.0
+  photo_manager: ^3.12.0
   google_mlkit_text_recognition: ^0.13.0
   flutter_svg: ^2.0.10+1
   flutter_slidable: ^3.1.1
   image: ^4.3.0
   workmanager: ^0.9.0+3
   flutter_secure_storage: ^10.3.1
+  url_launcher: ^6.3.2
   flutter_local_notifications: ^22.0.1
   # flutter_local_notifications 的 zonedSchedule 需要它；本来就是它的
   # 传递依赖（pubspec.lock 已锁 0.11.1），这里显式声明避免隐式依赖。
   timezone: ^0.11.1
 
 dev_dependencies:
+  integration_test:
+    sdk: flutter
   flutter_test:
     sdk: flutter
   flutter_lints: ^4.0.0
@@ -51,6 +55,8 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+  shaders:
+    - shaders/ink_sparkle.frag
   assets:
     - assets/mascot/
     - assets/cat_icons/

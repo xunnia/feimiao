@@ -22,6 +22,12 @@ import '../core/account/liability_balance_mode.dart';
 import '../core/account/net_worth_snapshot.dart';
 import '../core/account/net_worth_verified_checkpoint.dart';
 import '../core/ai/ai_provider_config.dart';
+import '../core/ai/ai_account_json.dart';
+import '../core/ai/ai_provider_health.dart';
+import '../core/ai/ai_run.dart';
+import '../core/ai/ai_extensions.dart';
+import '../core/ai/chat_session.dart';
+import '../core/ai/openai_codex_oauth.dart';
 import '../core/ai/report_execution_fence.dart';
 import '../core/assets/asset_allocation.dart';
 import '../core/assets/asset_enhancements.dart';
@@ -2293,6 +2299,10 @@ class TransactionDraft {
   final DateTime date;
   final TransactionTimePrecision timePrecision;
   final List<int> tagIds;
+  final bool reimbursable;
+  final String imagePath;
+  final bool excluded;
+  final int? bookId;
 
   const TransactionDraft({
     required this.kind,
@@ -2303,7 +2313,40 @@ class TransactionDraft {
     required this.date,
     this.timePrecision = TransactionTimePrecision.legacyUnknown,
     this.tagIds = const [],
+    this.reimbursable = false,
+    this.imagePath = '',
+    this.excluded = false,
+    this.bookId,
   });
+
+  TransactionDraft copyWith({
+    TransactionKind? kind,
+    Decimal? amount,
+    int? categoryId,
+    int? accountId,
+    String? note,
+    DateTime? date,
+    TransactionTimePrecision? timePrecision,
+    List<int>? tagIds,
+    bool? reimbursable,
+    String? imagePath,
+    bool? excluded,
+    int? bookId,
+  }) =>
+      TransactionDraft(
+        kind: kind ?? this.kind,
+        amount: amount ?? this.amount,
+        categoryId: categoryId ?? this.categoryId,
+        accountId: accountId ?? this.accountId,
+        note: note ?? this.note,
+        date: date ?? this.date,
+        timePrecision: timePrecision ?? this.timePrecision,
+        tagIds: tagIds ?? this.tagIds,
+        reimbursable: reimbursable ?? this.reimbursable,
+        imagePath: imagePath ?? this.imagePath,
+        excluded: excluded ?? this.excluded,
+        bookId: bookId ?? this.bookId,
+      );
 }
 
 class FeimiaoImportRow {
@@ -2530,9 +2573,28 @@ class ReportEntity {
       );
 }
 
+String _reportJobSessionId(Object? value) {
+  final id = value?.toString().trim() ?? '';
+  return id.isEmpty ? ChatSession.recordId : id;
+}
+
+AiReasoningEffort _reportJobEffort(Object? value) {
+  final effort = AiReasoningEffortX.fromStorage(
+    value?.toString(),
+    fallback: AiReasoningEffort.low,
+  );
+  return effort == AiReasoningEffort.none || effort == AiReasoningEffort.minimal
+      ? AiReasoningEffort.low
+      : effort;
+}
+
 class ReportJobEntity {
   final int id;
   final String uuid;
+  final String sessionId;
+  final String providerId;
+  final String model;
+  final AiReasoningEffort effort;
   final int? bookId;
   final int? reportId;
   final String question;
@@ -2543,12 +2605,23 @@ class ReportJobEntity {
   final String status;
   final String stage;
   final String error;
+
+  /// The first moment the selected model was actually allowed to process the
+  /// request.  This is separate from [createdMs] because privacy confirmation,
+  /// context collection and worker hand-off can all happen before the model
+  /// starts.  Keeping it on the job makes the thinking summary stable across
+  /// process death and reopening Chats.
+  final int? modelStartedMs;
   final int createdMs;
   final int updatedMs;
 
   const ReportJobEntity({
     required this.id,
     required this.uuid,
+    required this.sessionId,
+    required this.providerId,
+    required this.model,
+    required this.effort,
     this.bookId,
     this.reportId,
     required this.question,
@@ -2559,6 +2632,7 @@ class ReportJobEntity {
     required this.status,
     required this.stage,
     required this.error,
+    this.modelStartedMs,
     required this.createdMs,
     required this.updatedMs,
   });
@@ -2571,6 +2645,10 @@ class ReportJobEntity {
   factory ReportJobEntity.fromMap(Map<String, Object?> row) => ReportJobEntity(
         id: row['id'] as int,
         uuid: row['uuid'] as String? ?? '',
+        sessionId: _reportJobSessionId(row['session_id']),
+        providerId: row['provider_id'] as String? ?? '',
+        model: row['model'] as String? ?? '',
+        effort: _reportJobEffort(row['effort']),
         bookId: row['book_id'] as int?,
         reportId: row['report_id'] as int?,
         question: row['question'] as String? ?? '',
@@ -2581,6 +2659,7 @@ class ReportJobEntity {
         status: row['status'] as String? ?? 'queued',
         stage: row['stage'] as String? ?? 'collect',
         error: row['error'] as String? ?? '',
+        modelStartedMs: (row['model_started_ms'] as num?)?.toInt(),
         createdMs: row['created_ms'] as int? ?? 0,
         updatedMs: row['updated_ms'] as int? ?? 0,
       );
@@ -2591,7 +2670,7 @@ class ReportJobEntity {
 // ---------------------------------------------------------------------------
 
 class AppRepository extends ChangeNotifier {
-  static const _dbVersion = 43;
+  static const _dbVersion = 48;
   static const _dbName = 'qingji.db';
 
   AppRepository({ReportExecutionFence? reportExecutionFence})
@@ -2720,6 +2799,12 @@ class AppRepository extends ChangeNotifier {
   final List<SavingsGoalEntity> _savingsGoals = [];
   final List<TagEntity> _tags = [];
   final List<ReportEntity> _reports = [];
+  final List<ChatSession> _chatSessions = [];
+  final Map<String, AiProviderHealth> _aiProviderHealth = {};
+  final List<AiMemory> _aiMemories = [];
+  final List<AiReportSchedule> _aiReportSchedules = [];
+  final Map<String, bool> _aiSkillState = {};
+  final Map<String, bool> _aiConnectorState = {};
 
   int _currentBookId = 0;
 
@@ -2743,6 +2828,7 @@ class AppRepository extends ChangeNotifier {
   /// 多服务商配置。API Key 只保存在安全存储中，列表本身仅含元数据。
   final List<AiConfiguredProvider> _aiProviders = [];
   String? _recordAiProviderId;
+  String? _recordAiModel;
   String? _chatCurrentProviderId;
   String? _chatCurrentModel;
   AiProviderType _recordAiProviderType = AiProviderType.deepseek;
@@ -2757,11 +2843,18 @@ class AppRepository extends ChangeNotifier {
   AiReasoningEffort _recordAiReasoningEffort = AiReasoningEffort.none;
   AiReasoningEffort _chatAiReasoningEffort = AiReasoningEffort.low;
   AiReasoningEffort _reportAiReasoningEffort = AiReasoningEffort.xhigh;
+  bool _chatWebSearchEnabled = true;
+  AiChatToolAccess _chatToolAccess = AiChatToolAccess.auto;
 
   /// 记账模式偏好：true=AI 记账，false=手动记账（持久化）。
   bool _recordAiMode = false;
   int _chatRetentionDays = 30;
   bool _aiPrivacyAccepted = false;
+
+  /// Consent is keyed by the actual request recipient.  The legacy boolean
+  /// remains for compatibility with old databases/UI, but request paths must
+  /// use [aiPrivacyAcceptedFor] so switching providers cannot reuse consent.
+  final Set<String> _aiPrivacyConsentKeys = <String>{};
   bool _widgetPrivacyMode = false;
 
   /// 还款提醒本地通知开关（A 批第 5 段），默认开。
@@ -2945,6 +3038,98 @@ class AppRepository extends ChangeNotifier {
   List<TagEntity> get tags => List.unmodifiable(_tags);
   List<ReportEntity> get reports =>
       _reportsViewCache ??= List.unmodifiable(_reports);
+
+  /// Claude 风格 Chats 列表。列表始终包含唯一不可删除的「记一记」会话。
+  List<ChatSession> get chatSessions => List.unmodifiable(_chatSessions);
+
+  ChatSession get recordChatSession => _chatSessions.firstWhere(
+        (session) => session.isRecord || session.id == ChatSession.recordId,
+        orElse: () => ChatSession(
+          id: ChatSession.recordId,
+          title: ChatSession.recordTitle,
+          createdAt: DateTime.fromMillisecondsSinceEpoch(0),
+          updatedAt: DateTime.fromMillisecondsSinceEpoch(0),
+          isRecord: true,
+        ),
+      );
+
+  ChatSession? chatSessionById(String? sessionId) {
+    final id = sessionId?.trim();
+    if (id == null || id.isEmpty) return recordChatSession;
+    return _chatSessions.where((session) => session.id == id).firstOrNull;
+  }
+
+  /// Returns the model owner for one Chats conversation without mutating the
+  /// global record-session selection. This is the read path used while a
+  /// normal conversation is open, so switching its model cannot affect any
+  /// other conversation.
+  String? chatProviderIdForSession(String? sessionId) {
+    final id = sessionId?.trim();
+    if (id == null || id.isEmpty || id == ChatSession.recordId) {
+      return _chatCurrentProviderId;
+    }
+    return chatSessionById(id)?.providerId ?? _chatCurrentProviderId;
+  }
+
+  AiReasoningEffort chatReasoningEffortForSession(String? sessionId) {
+    final id = sessionId?.trim();
+    if (id == null || id.isEmpty || id == ChatSession.recordId) {
+      return _chatAiReasoningEffort;
+    }
+    final effort = chatSessionById(id)?.effort ?? _chatAiReasoningEffort;
+    return effort == AiReasoningEffort.none ||
+            effort == AiReasoningEffort.minimal
+        ? AiReasoningEffort.low
+        : effort;
+  }
+
+  AiProviderConfig aiProviderConfigForChatSession(String? sessionId) {
+    final id = sessionId?.trim();
+    if (id == null || id.isEmpty || id == ChatSession.recordId) {
+      return aiProviderConfigFor(AiTaskType.chatQuery);
+    }
+    final session = chatSessionById(id);
+    final provider = _selectedOrUsableProvider(session?.providerId) ??
+        _selectedOrUsableProvider(_chatCurrentProviderId);
+    if (provider == null) return aiProviderConfigFor(AiTaskType.chatQuery);
+    final chosen = session?.model?.trim();
+    final validModel = chosen != null &&
+        chosen.isNotEmpty &&
+        (provider.models.isEmpty || provider.models.contains(chosen));
+    final config = _providerConfig(
+      provider,
+      modelOverride: validModel ? chosen : provider.model,
+      effortOverride: chatReasoningEffortForSession(id),
+    );
+    return config.copyWith(
+      webSearchEnabled: chatWebSearchAllowed,
+    );
+  }
+
+  /// Resolves the immutable AI selection captured when a report job was
+  /// created. A provider can later be removed, disabled, lose its credential,
+  /// or have the captured model removed; in those cases return null and keep
+  /// the job paused. Silently routing a report to a different recipient would
+  /// change its privacy boundary, billing and result semantics.
+  AiProviderConfig? aiProviderConfigForReportJob(ReportJobEntity job) {
+    final snapshotId = job.providerId.trim();
+    final snapshotProvider = aiProviderById(snapshotId);
+    if (snapshotProvider == null || !snapshotProvider.isUsable) return null;
+    final model = job.model.trim();
+    if (model.isEmpty || snapshotProvider.excludedModels.contains(model)) {
+      return null;
+    }
+    if (snapshotProvider.models.isNotEmpty &&
+        !snapshotProvider.models.contains(model)) {
+      return null;
+    }
+    final effort = _reportJobEffort(job.effort.storageKey);
+    return _providerConfig(
+      snapshotProvider,
+      modelOverride: model,
+      effortOverride: effort,
+    );
+  }
 
   String? tagName(int id) {
     for (final t in _tags) {
@@ -3355,6 +3540,19 @@ class AppRepository extends ChangeNotifier {
   /// 所有已配置服务商（API Key 不会写入该对象的持久化 JSON）。
   List<AiConfiguredProvider> get aiProviders => List.unmodifiable(_aiProviders);
 
+  /// 每个服务商最近请求的成功/失败和冷却状态。健康数据只包含诊断
+  /// 元数据，不包含 API key、请求正文或账本内容。
+  List<AiProviderHealth> get aiProviderHealth =>
+      List.unmodifiable(_aiProviderHealth.values.toList());
+
+  AiProviderHealth aiProviderHealthFor(String? providerId) {
+    final id = providerId?.trim() ?? '';
+    if (id.isEmpty) {
+      return const AiProviderHealth(providerId: '');
+    }
+    return _aiProviderHealth[id] ?? AiProviderHealth(providerId: id);
+  }
+
   AiConfiguredProvider? aiProviderById(String? id) {
     final key = id?.trim();
     if (key == null || key.isEmpty) return null;
@@ -3365,6 +3563,7 @@ class AppRepository extends ChangeNotifier {
   }
 
   String? get recordAiProviderId => _recordAiProviderId;
+  String? get recordAiModel => _recordAiModel;
   String? get chatCurrentProviderId => _chatCurrentProviderId;
   String? get chatCurrentModel => _chatCurrentModel;
 
@@ -3373,8 +3572,18 @@ class AppRepository extends ChangeNotifier {
     final result = <AiModelOption>[];
     final seen = <String>{};
     for (final provider in _aiProviders) {
-      if (!provider.hasKey) continue;
-      for (final model in provider.models) {
+      if (!provider.isUsable) continue;
+      // Keep a configured current model usable when a provider's catalog
+      // endpoint is unavailable. An explicitly removed model stays excluded.
+      final catalog = provider.models
+          .where((model) => !provider.excludedModels.contains(model))
+          .toList();
+      final effectiveCatalog = catalog.isEmpty &&
+              provider.model.trim().isNotEmpty &&
+              !provider.excludedModels.contains(provider.model.trim())
+          ? <String>[provider.model.trim()]
+          : catalog;
+      for (final model in effectiveCatalog) {
         final option = AiModelOption(
           providerId: provider.id,
           providerLabel: provider.label,
@@ -3384,6 +3593,27 @@ class AppRepository extends ChangeNotifier {
       }
     }
     return List.unmodifiable(result);
+  }
+
+  /// Models that can be selected for a configured provider. If its upstream
+  /// catalogue is temporarily unavailable, retain the explicitly configured
+  /// primary model so an existing account remains selectable.
+  List<String> aiModelsForProvider(String? providerId) {
+    final provider = aiProviderById(providerId);
+    if (provider == null) return const [];
+    final models = provider.models
+        .map((model) => model.trim())
+        .where(
+          (model) =>
+              model.isNotEmpty && !provider.excludedModels.contains(model),
+        )
+        .toSet()
+        .toList(growable: false);
+    if (models.isNotEmpty) return List.unmodifiable(models);
+    final primary = provider.model.trim();
+    return primary.isEmpty || provider.excludedModels.contains(primary)
+        ? const []
+        : List.unmodifiable([primary]);
   }
 
   AiProviderType aiProviderTypeFor(AiTaskType task) => switch (task) {
@@ -3408,8 +3638,12 @@ class AppRepository extends ChangeNotifier {
   }
 
   AiProviderType _autoAiProviderTypeFor(AiTaskType task) {
-    final hasDeepSeek = _deepSeekApiKey?.trim().isNotEmpty ?? false;
-    final hasCustom = _customAiApiKey?.trim().isNotEmpty ?? false;
+    final hasDeepSeek = _aiProviders
+        .where((provider) => provider.type == AiProviderType.deepseek)
+        .any((provider) => provider.isUsable);
+    final hasCustom = _aiProviders
+        .where((provider) => provider.type == AiProviderType.custom)
+        .any((provider) => provider.isUsable);
     if (task == AiTaskType.report) {
       if (hasCustom) return AiProviderType.custom;
       if (hasDeepSeek) return AiProviderType.deepseek;
@@ -3445,8 +3679,46 @@ class AppRepository extends ChangeNotifier {
   /// 公开的 getter，用于 UI 显示当前喵助手的 Effort
   AiReasoningEffort get chatReasoningEffort => _chatAiReasoningEffort;
 
+  /// 联网搜索属于喵助手当前会话能力，不再跟随某个供应商账号保存。
+  bool get chatWebSearchEnabled => _chatWebSearchEnabled;
+
+  /// Effective permission after the global Chats preference and the explicit
+  /// connector gate are both applied.  Keep the preference getter above
+  /// independent so toggling a connector does not erase the user's choice.
+  bool get chatWebSearchAllowed =>
+      _chatWebSearchEnabled && aiConnectorEnabled('web_search');
+
+  /// Tool access is a Chats-level permission, independent of the selected
+  /// provider. `onDemand` keeps tools unloaded until a request explicitly
+  /// needs them; `alwaysAvailable` exposes them on every turn.
+  AiChatToolAccess get chatToolAccess => _chatToolAccess;
+
+  Future<void> setChatToolAccess(AiChatToolAccess access) async {
+    if (_chatToolAccess == access) return;
+    _chatToolAccess = access;
+    await _db?.execute(
+      'INSERT OR REPLACE INTO app_settings (key, value) VALUES (?, ?)',
+      ['ai_chat_tool_access', access.storageKey],
+    );
+    notifyListeners();
+  }
+
+  Future<void> setChatWebSearchEnabled(bool enabled) async {
+    if (_chatWebSearchEnabled == enabled) return;
+    _chatWebSearchEnabled = enabled;
+    await _db?.execute(
+      'INSERT OR REPLACE INTO app_settings (key, value) VALUES (?, ?)',
+      ['ai_chat_web_search_enabled', enabled ? '1' : '0'],
+    );
+    notifyListeners();
+  }
+
   /// 公开的 setter，用于 UI 更新喵助手的 Effort
   Future<void> setChatReasoningEffort(AiReasoningEffort effort) async {
+    if (effort == AiReasoningEffort.none ||
+        effort == AiReasoningEffort.minimal) {
+      effort = AiReasoningEffort.low;
+    }
     if (_chatAiReasoningEffort == effort) return;
     _chatAiReasoningEffort = effort;
     await _db?.execute(
@@ -3459,26 +3731,63 @@ class AppRepository extends ChangeNotifier {
   AiProviderConfig get aiProviderConfig =>
       aiProviderConfigFor(AiTaskType.recordParse);
 
+  AiProviderConfig _providerConfig(
+    AiConfiguredProvider provider, {
+    String? modelOverride,
+    AiReasoningEffort? effortOverride,
+  }) {
+    final config = provider.toConfig(
+      modelOverride: modelOverride,
+      effortOverride: effortOverride,
+    );
+    if (provider.authMethod != AiAuthMethod.oauth) return config;
+    return config.copyWith(
+      oauthTokenSaver: (
+        accessToken,
+        refreshToken,
+        expiresAtMs,
+        accountId,
+      ) =>
+          _saveRefreshedAiOAuthTokens(
+        provider.id,
+        accessToken,
+        refreshToken,
+        expiresAtMs,
+        accountId,
+      ),
+    );
+  }
+
   AiProviderConfig aiProviderConfigFor(AiTaskType task) {
     if (task == AiTaskType.recordParse) {
-      final selected = aiProviderById(_recordAiProviderId);
+      final selected = _selectedOrUsableProvider(_recordAiProviderId);
       if (selected != null) {
-        return selected.toConfig(
+        return _providerConfig(
+          selected,
+          modelOverride: _validModelForProvider(selected, _recordAiModel)
+              ? _recordAiModel!.trim()
+              : selected.model,
           effortOverride: _recordAiReasoningEffort,
         );
       }
     }
     if (task == AiTaskType.chatQuery || task == AiTaskType.report) {
-      final selected = aiProviderById(_chatCurrentProviderId) ??
-          _firstUsableProvider() ??
+      final selected = _selectedOrUsableProvider(_chatCurrentProviderId) ??
           aiProviderById(_chatAiProviderType.storageKey);
       if (selected != null) {
         final selectedModel = _chatCurrentModel?.trim();
-        return selected.toConfig(
-          modelOverride: selectedModel == null || selectedModel.isEmpty
+        final config = _providerConfig(
+          selected,
+          modelOverride: selectedModel == null ||
+                  selectedModel.isEmpty ||
+                  !selected.models.contains(selectedModel)
               ? selected.model
               : selectedModel,
           effortOverride: _chatAiReasoningEffort,
+        );
+        return config.copyWith(
+          webSearchEnabled:
+              task == AiTaskType.chatQuery && chatWebSearchAllowed,
         );
       }
     }
@@ -3491,22 +3800,40 @@ class AppRepository extends ChangeNotifier {
         endpointType: aiEndpointTypeFor(task),
         reasoningEffort: aiReasoningEffortFor(task),
         displayName: _customAiDisplayName,
+        webSearchEnabled: task == AiTaskType.chatQuery && chatWebSearchAllowed,
       );
     }
     return AiProviderConfig.deepSeek(
       apiKey: _deepSeekApiKey ?? '',
       displayName: AiProviderType.deepseek.label,
+      webSearchEnabled: task == AiTaskType.chatQuery && chatWebSearchAllowed,
     );
   }
 
   bool get hasAiApiKey => aiProviderConfig.hasKey;
+
+  /// True when the selected record-parse account has either an API key or an
+  /// OAuth refresh token that can be exchanged for an access token.
+  bool get hasAiCredential => aiProviderConfig.hasCredential;
   bool get hasAnyAiApiKey =>
       (_deepSeekApiKey?.trim().isNotEmpty ?? false) ||
       (_customAiApiKey?.trim().isNotEmpty ?? false) ||
-      _aiProviders.any((provider) => provider.hasKey);
+      _aiProviders.any((provider) => provider.isUsable);
 
   bool get recordAiMode => _recordAiMode;
-  bool get aiPrivacyAccepted => _aiPrivacyAccepted;
+
+  /// Whether the currently selected Chats recipient has consent.
+  ///
+  /// Keep this getter as a compatibility/UI convenience; all network paths
+  /// that already resolved a concrete config use [aiPrivacyAcceptedFor].
+  bool get aiPrivacyAccepted =>
+      aiPrivacyAcceptedFor(aiProviderConfigFor(AiTaskType.chatQuery));
+
+  bool aiPrivacyAcceptedFor(AiProviderConfig config) {
+    final key = config.privacyReceiverKey;
+    return key.isNotEmpty && _aiPrivacyConsentKeys.contains(key);
+  }
+
   bool get widgetPrivacyMode => _widgetPrivacyMode;
   bool get repaymentReminderEnabled => _repaymentReminderEnabled;
   int get moneyDecimalPlaces => _moneyDecimalPlaces;
@@ -3554,6 +3881,8 @@ class AppRepository extends ChangeNotifier {
       );
       await _runB3A4V39Compat(_db!);
       await _ensureTransactionIndexes(_db!);
+      await _ensureAiRunTables(_db!);
+      await _ensureAiExtensionTables(_db!);
       await _seedIfNeeded();
       await _ensureDefaultBook();
       // v13 预算搬迁失败的幂等自愈（只在首次检查时真正查表，之后有标记直接跳过）。
@@ -3646,9 +3975,22 @@ class AppRepository extends ChangeNotifier {
       _loadCategories(),
       _loadBudgetPeriods(),
       _loadBudgetV2(),
+      // AI settings are needed before the first frame is interactive.  The
+      // fast-start path used to defer this load to the full convergence pass,
+      // so a user who sent the first Chats message immediately after launch
+      // could see the no-provider fallback; the second message worked after
+      // the deferred loader had finished.  Keep credentials/provider/model
+      // selection on the same ready barrier as the home ledger snapshot.
+      _loadApiKey(),
+      _loadAiPrivacyAccepted(),
       _loadRecordMode(),
       _loadMoneyDisplaySettings(),
       _loadTransactionDisplayPreferences(),
+      _loadChatSessions(),
+      _loadAiProviderHealth(),
+      _loadAiMemories(),
+      _loadAiReportSchedules(),
+      _loadAiExtensionSettings(),
     ]);
     await _loadTransactionsForStartupMonth();
   }
@@ -4199,9 +4541,12 @@ class AppRepository extends ChangeNotifier {
         role       TEXT NOT NULL,
         text       TEXT NOT NULL DEFAULT '',
         question   TEXT NOT NULL DEFAULT '',
+        session_id TEXT NOT NULL DEFAULT 'record',
+        attachments_json TEXT NOT NULL DEFAULT '',
         created_ms INTEGER NOT NULL
       )
     ''');
+    await _ensureChatSessionTables(db);
 
     await db.execute(_createReportsSql);
     await _ensureAssetTables(db);
@@ -4241,6 +4586,8 @@ class AppRepository extends ChangeNotifier {
     await _ensureRecurringOccurrences(db);
     await _ensureAutoRecordOccurrences(db);
     await _ensureReportJobs(db);
+    await _ensureAiRunTables(db);
+    await _ensureAiExtensionTables(db);
   }
 
   Future<void> _onUpgrade(Database db, int oldVersion, int newVersion) async {
@@ -4637,7 +4984,158 @@ class AppRepository extends ChangeNotifier {
         );
       }
     }
+    if (oldVersion < 44) {
+      // v44：Claude 风格 Chats 会话列表。旧消息全部归入唯一「记一记」会话，
+      // 新建的普通会话独立保存模型、思考强度与消息归属。
+      await _ensureChatSessionTables(db);
+    }
+    if (oldVersion < 45) {
+      // v45：报告任务属于发起它的 Chats 会话，并冻结当时选择的
+      // 服务商/模型/思考强度。旧任务没有来源会话可还原，统一归入「记一记」。
+      await _ensureReportJobs(db);
+    }
+    if (oldVersion < 46) {
+      final columns = await _columnNamesFor(db, 'chat_messages');
+      if (columns.isNotEmpty && !columns.contains('attachments_json')) {
+        await db.execute(
+          "ALTER TABLE chat_messages ADD COLUMN attachments_json TEXT NOT NULL DEFAULT ''",
+        );
+      }
+    }
+    if (oldVersion < 47) {
+      await _ensureAiRunTables(db);
+    }
+    if (oldVersion < 48) {
+      // v48：持久化报告真正开始进入模型处理的时间点。恢复 Chats 时
+      // 沿用这个时间，避免每次重开都把“思考了 Xs”重置为当前时刻。
+      await _ensureReportJobs(db);
+    }
     await _ensureTransactionIndexes(db);
+  }
+
+  /// Optional AI companion data is kept in separate, append-friendly tables.
+  /// They are also ensured on every open so installs upgraded before this
+  /// feature do not need a destructive migration/version bump.
+  static Future<void> _ensureAiExtensionTables(DatabaseExecutor db) async {
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS ai_memories (
+        id           TEXT PRIMARY KEY,
+        phrase       TEXT NOT NULL,
+        content      TEXT NOT NULL DEFAULT '',
+        source       TEXT NOT NULL DEFAULT 'user',
+        session_id   TEXT NOT NULL DEFAULT '',
+        consent      INTEGER NOT NULL DEFAULT 0,
+        status       TEXT NOT NULL DEFAULT 'active',
+        created_ms   INTEGER NOT NULL DEFAULT 0,
+        updated_ms   INTEGER NOT NULL DEFAULT 0,
+        last_used_ms INTEGER
+      )
+    ''');
+    await db.execute('''
+      CREATE INDEX IF NOT EXISTS idx_ai_memories_status_updated
+      ON ai_memories(status, updated_ms DESC)
+    ''');
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS ai_report_schedules (
+        id           TEXT PRIMARY KEY,
+        session_id   TEXT NOT NULL DEFAULT 'record',
+        title        TEXT NOT NULL DEFAULT '',
+        report_type  TEXT NOT NULL DEFAULT 'monthly',
+        period_kind  TEXT NOT NULL DEFAULT 'monthly',
+        day_value    INTEGER NOT NULL DEFAULT 1,
+        enabled      INTEGER NOT NULL DEFAULT 1,
+        next_run_ms  INTEGER NOT NULL DEFAULT 0,
+        provider_id  TEXT NOT NULL DEFAULT '',
+        model        TEXT NOT NULL DEFAULT '',
+        effort       TEXT NOT NULL DEFAULT 'low',
+        created_ms   INTEGER NOT NULL DEFAULT 0,
+        updated_ms   INTEGER NOT NULL DEFAULT 0
+      )
+    ''');
+    await db.execute('''
+      CREATE INDEX IF NOT EXISTS idx_ai_report_schedules_due
+      ON ai_report_schedules(enabled, next_run_ms ASC)
+    ''');
+  }
+
+  /// Creates the conversation catalog and upgrades the pre-session message
+  /// table without disturbing existing history. This is intentionally
+  /// idempotent because restore candidates and old test databases can enter
+  /// the migration path more than once.
+  static Future<void> _ensureChatSessionTables(DatabaseExecutor db) async {
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS chat_sessions (
+        session_id TEXT PRIMARY KEY,
+        title      TEXT NOT NULL,
+        created_ms INTEGER NOT NULL,
+        updated_ms INTEGER NOT NULL,
+        starred    INTEGER NOT NULL DEFAULT 0,
+        is_record  INTEGER NOT NULL DEFAULT 0,
+        provider_id TEXT NOT NULL DEFAULT '',
+        model      TEXT NOT NULL DEFAULT '',
+        effort     TEXT NOT NULL DEFAULT 'low'
+      )
+    ''');
+
+    if (await _tableExists(db, 'chat_messages')) {
+      final columns = await _columnNamesFor(db, 'chat_messages');
+      if (!columns.contains('session_id')) {
+        await db.execute(
+          "ALTER TABLE chat_messages ADD COLUMN session_id TEXT NOT NULL DEFAULT 'record'",
+        );
+      }
+      await db.execute(
+        "UPDATE chat_messages SET session_id = 'record' WHERE session_id IS NULL OR session_id = ''",
+      );
+    }
+
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final settings = await db.query(
+      'app_settings',
+      columns: const ['key', 'value'],
+      where: 'key IN (?, ?, ?)',
+      whereArgs: [
+        'chat_current_provider_id',
+        'chat_current_model',
+        'ai_chat_reasoning_effort',
+      ],
+    );
+    final values = <String, String>{
+      for (final row in settings)
+        (row['key'] as String): (row['value'] as String? ?? ''),
+    };
+    await db.insert(
+      'chat_sessions',
+      {
+        'session_id': ChatSession.recordId,
+        'title': ChatSession.recordTitle,
+        'created_ms': now,
+        'updated_ms': now,
+        'starred': 0,
+        'is_record': 1,
+        'provider_id': values['chat_current_provider_id'] ?? '',
+        'model': values['chat_current_model'] ?? '',
+        'effort': values['ai_chat_reasoning_effort']?.trim().isNotEmpty == true
+            ? values['ai_chat_reasoning_effort']
+            : AiReasoningEffort.low.storageKey,
+      },
+      conflictAlgorithm: ConflictAlgorithm.ignore,
+    );
+    // If a malformed restore contains more than one record row, retain the
+    // canonical row and demote the others to ordinary sessions instead of
+    // allowing an ambiguous delete-protected state.
+    await db.update(
+      'chat_sessions',
+      {'is_record': 0},
+      where: 'session_id <> ? AND is_record = 1',
+      whereArgs: [ChatSession.recordId],
+    );
+    await db.update(
+      'chat_sessions',
+      {'title': ChatSession.recordTitle, 'is_record': 1},
+      where: 'session_id = ?',
+      whereArgs: [ChatSession.recordId],
+    );
   }
 
   static Future<bool> _tableExists(
@@ -6150,6 +6648,10 @@ class AppRepository extends ChangeNotifier {
       CREATE TABLE IF NOT EXISTS report_jobs (
         id              INTEGER PRIMARY KEY AUTOINCREMENT,
         uuid            TEXT NOT NULL UNIQUE,
+        session_id      TEXT NOT NULL DEFAULT 'record',
+        provider_id     TEXT NOT NULL DEFAULT '',
+        model           TEXT NOT NULL DEFAULT '',
+        effort          TEXT NOT NULL DEFAULT 'low',
         book_id         INTEGER,
         report_id       INTEGER,
         question        TEXT NOT NULL DEFAULT '',
@@ -6160,13 +6662,129 @@ class AppRepository extends ChangeNotifier {
         status          TEXT NOT NULL DEFAULT 'queued',
         stage           TEXT NOT NULL DEFAULT 'collect',
         error           TEXT NOT NULL DEFAULT '',
+        model_started_ms INTEGER,
         created_ms      INTEGER NOT NULL DEFAULT 0,
         updated_ms      INTEGER NOT NULL DEFAULT 0
       )
     ''');
+    final columns = await _columnNamesFor(db, 'report_jobs');
+    if (!columns.contains('session_id')) {
+      await db.execute(
+        "ALTER TABLE report_jobs ADD COLUMN session_id TEXT NOT NULL DEFAULT 'record'",
+      );
+    }
+    if (!columns.contains('provider_id')) {
+      await db.execute(
+        "ALTER TABLE report_jobs ADD COLUMN provider_id TEXT NOT NULL DEFAULT ''",
+      );
+    }
+    if (!columns.contains('model')) {
+      await db.execute(
+        "ALTER TABLE report_jobs ADD COLUMN model TEXT NOT NULL DEFAULT ''",
+      );
+    }
+    if (!columns.contains('effort')) {
+      await db.execute(
+        "ALTER TABLE report_jobs ADD COLUMN effort TEXT NOT NULL DEFAULT 'low'",
+      );
+    }
+    if (!columns.contains('model_started_ms')) {
+      await db.execute(
+        'ALTER TABLE report_jobs ADD COLUMN model_started_ms INTEGER',
+      );
+    }
+    // A restored/hand-edited SQLite file can still carry null or blank values
+    // despite the defaults. Keep legacy tasks visible but only in the fixed
+    // record conversation; a later worker will use the normal fallback config.
+    await db.execute(
+      "UPDATE report_jobs SET session_id = 'record' "
+      "WHERE session_id IS NULL OR trim(session_id) = ''",
+    );
+    await db.execute(
+      "UPDATE report_jobs SET provider_id = '' WHERE provider_id IS NULL",
+    );
+    await db.execute(
+      "UPDATE report_jobs SET model = '' WHERE model IS NULL",
+    );
+    await db.execute(
+      "UPDATE report_jobs SET effort = 'low' "
+      "WHERE effort IS NULL OR trim(effort) = '' "
+      "OR effort IN ('none', 'minimal')",
+    );
     await db.execute('''
       CREATE INDEX IF NOT EXISTS idx_report_jobs_status_updated
       ON report_jobs(status, updated_ms DESC)
+    ''');
+    await db.execute('''
+      CREATE INDEX IF NOT EXISTS idx_report_jobs_session_status_created
+      ON report_jobs(session_id, status, created_ms ASC, id ASC)
+    ''');
+  }
+
+  /// Persistent AI run/event ledger.  This is deliberately append-oriented:
+  /// a request can outlive a screen, be resumed after process death, and still
+  /// be audited without storing credentials or raw ledger context.
+  static Future<void> _ensureAiRunTables(DatabaseExecutor db) async {
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS ai_runs (
+        id                    TEXT PRIMARY KEY,
+        idempotency_key       TEXT NOT NULL UNIQUE,
+        session_id            TEXT NOT NULL DEFAULT 'record',
+        mode                  TEXT NOT NULL DEFAULT 'chat',
+        provider_id           TEXT NOT NULL DEFAULT '',
+        provider_label        TEXT NOT NULL DEFAULT '',
+        model                 TEXT NOT NULL DEFAULT '',
+        effort                TEXT NOT NULL DEFAULT 'none',
+        endpoint_type         TEXT NOT NULL DEFAULT 'auto',
+        status                TEXT NOT NULL DEFAULT 'queued',
+        input_digest          TEXT NOT NULL DEFAULT '',
+        context_digest        TEXT NOT NULL DEFAULT '',
+        proposal_json         TEXT NOT NULL DEFAULT '',
+        result_json           TEXT NOT NULL DEFAULT '',
+        error_code            TEXT NOT NULL DEFAULT '',
+        error_message         TEXT NOT NULL DEFAULT '',
+        retry_count           INTEGER NOT NULL DEFAULT 0,
+        requires_confirmation INTEGER NOT NULL DEFAULT 0,
+        created_ms            INTEGER NOT NULL DEFAULT 0,
+        updated_ms            INTEGER NOT NULL DEFAULT 0
+      )
+    ''');
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS ai_run_events (
+        id           INTEGER PRIMARY KEY AUTOINCREMENT,
+        run_id       TEXT NOT NULL,
+        sequence     INTEGER NOT NULL,
+        type         TEXT NOT NULL,
+        payload_json TEXT NOT NULL DEFAULT '{}',
+        created_ms   INTEGER NOT NULL DEFAULT 0,
+        UNIQUE(run_id, sequence)
+      )
+    ''');
+    await db.execute('''
+      CREATE INDEX IF NOT EXISTS idx_ai_runs_session_updated
+      ON ai_runs(session_id, updated_ms DESC)
+    ''');
+    await db.execute('''
+      CREATE INDEX IF NOT EXISTS idx_ai_runs_status_updated
+      ON ai_runs(status, updated_ms DESC)
+    ''');
+    await db.execute('''
+      CREATE INDEX IF NOT EXISTS idx_ai_run_events_run_sequence
+      ON ai_run_events(run_id, sequence ASC)
+    ''');
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS ai_provider_health (
+        provider_id            TEXT PRIMARY KEY,
+        success_count          INTEGER NOT NULL DEFAULT 0,
+        failure_count          INTEGER NOT NULL DEFAULT 0,
+        consecutive_failures   INTEGER NOT NULL DEFAULT 0,
+        last_success_ms        INTEGER,
+        last_failure_ms        INTEGER,
+        cooldown_until_ms      INTEGER,
+        average_latency_ms     INTEGER NOT NULL DEFAULT 0,
+        last_error             TEXT NOT NULL DEFAULT '',
+        updated_ms             INTEGER NOT NULL DEFAULT 0
+      )
     ''');
   }
 
@@ -6624,6 +7242,11 @@ class AppRepository extends ChangeNotifier {
       _loadSavingsGoals(),
       _loadTags(),
       _loadReports(),
+      _loadChatSessions(),
+      _loadAiProviderHealth(),
+      _loadAiMemories(),
+      _loadAiReportSchedules(),
+      _loadAiExtensionSettings(),
       _loadDrawerOrder(),
       _loadStatCardOrder(),
       _loadStatCustomRange(),
@@ -6655,6 +7278,114 @@ class AppRepository extends ChangeNotifier {
       ..clear()
       ..addAll(rows.map(ReportEntity.fromMap));
     _reportsViewCache = null;
+  }
+
+  Future<void> _loadAiProviderHealth() async {
+    final rows = await _db!.query('ai_provider_health');
+    _aiProviderHealth
+      ..clear()
+      ..addEntries(
+        rows.map((row) {
+          final health = AiProviderHealth.fromMap(row);
+          return MapEntry(health.providerId, health);
+        }).where((entry) => entry.key.trim().isNotEmpty),
+      );
+  }
+
+  Future<void> _loadAiMemories() async {
+    final rows = await _db!.query(
+      'ai_memories',
+      where: "status = 'active' AND consent = 1",
+      orderBy: 'updated_ms DESC, created_ms DESC',
+    );
+    _aiMemories
+      ..clear()
+      ..addAll(rows.map(AiMemory.fromMap));
+  }
+
+  Future<void> _loadAiReportSchedules() async {
+    final rows = await _db!.query(
+      'ai_report_schedules',
+      orderBy: 'enabled DESC, next_run_ms ASC, created_ms ASC',
+    );
+    _aiReportSchedules
+      ..clear()
+      ..addAll(rows.map(AiReportSchedule.fromMap));
+  }
+
+  Future<void> _loadAiExtensionSettings() async {
+    final rows = await _db!.query(
+      'app_settings',
+      columns: const ['key', 'value'],
+      where: 'key IN (?, ?)',
+      whereArgs: const ['ai_skill_state', 'ai_connector_state'],
+    );
+    final values = {
+      for (final row in rows)
+        row['key']?.toString() ?? '': row['value']?.toString() ?? '',
+    };
+    _aiSkillState
+      ..clear()
+      ..addAll(decodeAiSkillState(values['ai_skill_state'] ?? ''));
+    _aiConnectorState
+      ..clear()
+      ..addAll(decodeAiSkillState(values['ai_connector_state'] ?? ''));
+  }
+
+  /// Local model companion settings are ordinary non-secret preferences. The
+  /// companion client still validates the endpoint as loopback before making
+  /// any request; persistence must not silently turn this into a remote proxy.
+  Future<({String endpoint, String model, bool enabled})>
+      loadAiLocalModelCompanionSettings() async {
+    const defaultEndpoint = 'http://127.0.0.1:8787';
+    final db = _db;
+    if (db == null) {
+      return (
+        endpoint: defaultEndpoint,
+        model: '',
+        enabled: false,
+      );
+    }
+    final rows = await db.query(
+      'app_settings',
+      columns: const ['key', 'value'],
+      where: 'key IN (?, ?, ?)',
+      whereArgs: const [
+        'ai_local_companion_endpoint',
+        'ai_local_companion_model',
+        'ai_local_companion_enabled',
+      ],
+    );
+    final values = {
+      for (final row in rows)
+        row['key']?.toString() ?? '': row['value']?.toString() ?? '',
+    };
+    final endpoint = values['ai_local_companion_endpoint']?.trim() ?? '';
+    return (
+      endpoint: endpoint.isEmpty ? defaultEndpoint : endpoint,
+      model: values['ai_local_companion_model']?.trim() ?? '',
+      enabled: values['ai_local_companion_enabled'] == '1',
+    );
+  }
+
+  Future<void> saveAiLocalModelCompanionSettings({
+    required String endpoint,
+    required String model,
+    required bool enabled,
+  }) async {
+    final db = _db;
+    if (db == null) return;
+    final batch = db.batch();
+    void setting(String key, String value) => batch.insert(
+          'app_settings',
+          {'key': key, 'value': value},
+          conflictAlgorithm: ConflictAlgorithm.replace,
+        );
+    setting('ai_local_companion_endpoint', endpoint.trim());
+    setting('ai_local_companion_model', model.trim());
+    setting('ai_local_companion_enabled', enabled ? '1' : '0');
+    await batch.commit(noResult: true);
+    notifyListeners();
   }
 
   Future<void> _loadBooks() async {
@@ -7090,6 +7821,7 @@ class AppRepository extends ChangeNotifier {
       'custom_ai_api_key',
       'ai_providers_json',
       'ai_record_provider_id',
+      'ai_record_model',
       'chat_current_provider_id',
       'chat_current_model',
       'ai_record_provider_type',
@@ -7103,6 +7835,8 @@ class AppRepository extends ChangeNotifier {
       'ai_report_endpoint_type',
       'ai_record_reasoning_effort',
       'ai_chat_reasoning_effort',
+      'ai_chat_web_search_enabled',
+      'ai_chat_tool_access',
       'ai_report_reasoning_effort',
       'ai_task_config_version',
     ];
@@ -7187,19 +7921,83 @@ class AppRepository extends ChangeNotifier {
       settings['ai_chat_reasoning_effort'],
       fallback: AiReasoningEffort.low,
     );
+    if (_chatAiReasoningEffort == AiReasoningEffort.none ||
+        _chatAiReasoningEffort == AiReasoningEffort.minimal) {
+      _chatAiReasoningEffort = AiReasoningEffort.low;
+    }
     _reportAiReasoningEffort = AiReasoningEffortX.fromStorage(
       settings['ai_report_reasoning_effort'],
       fallback: AiReasoningEffort.xhigh,
     );
     await _loadConfiguredAiProviders(settings);
+    final storedChatSearch = settings['ai_chat_web_search_enabled'];
+    _chatWebSearchEnabled =
+        storedChatSearch == null ? true : storedChatSearch == '1';
+    _chatToolAccess = AiChatToolAccessX.fromStorage(
+      settings['ai_chat_tool_access'],
+    );
   }
 
   AiConfiguredProvider? _firstUsableProvider({String? excludingId}) {
     final candidates = _aiProviders.where(
       (provider) => provider.id != excludingId,
     );
-    return candidates.where((provider) => provider.hasKey).firstOrNull ??
-        candidates.firstOrNull;
+    final usable = candidates.where((provider) => provider.isUsable).toList();
+    if (usable.isEmpty) return null;
+    final ready = usable
+        .where((provider) => !aiProviderHealthFor(provider.id).isCoolingDown)
+        .firstOrNull;
+    // A cooldown is a routing hint, not a permanent disable. If every
+    // configured account is cooling down, retain the previous fallback so a
+    // user can still explicitly retry instead of being locked out.
+    return ready ?? usable.first;
+  }
+
+  /// Resolve only fully configured providers. An enabled account with a key
+  /// but no address/model is intentionally not selected: it is still visible
+  /// in settings so the user can finish it without sending a request through
+  /// a default endpoint or model.
+  AiConfiguredProvider? _selectedOrUsableProvider(String? id) {
+    final selected = aiProviderById(id);
+    if (selected?.isUsable == true) {
+      return selected;
+    }
+    return _firstUsableProvider();
+  }
+
+  bool _validModelForProvider(
+    AiConfiguredProvider provider,
+    String? model,
+  ) {
+    final value = model?.trim() ?? '';
+    if (value.isEmpty || provider.excludedModels.contains(value)) return false;
+    return aiModelsForProvider(provider.id).contains(value);
+  }
+
+  String? _fallbackModelForProvider(AiConfiguredProvider? provider) {
+    if (provider == null) return null;
+    final primary = provider.model.trim();
+    if (_validModelForProvider(provider, primary)) return primary;
+    return aiModelsForProvider(provider.id).firstOrNull;
+  }
+
+  /// Keeps the normal-recording provider/model pair internally consistent
+  /// after provider availability or model-catalogue changes.
+  void _repairRecordAiSelection({String? excludingProviderId}) {
+    var provider = aiProviderById(_recordAiProviderId);
+    if (provider?.isUsable != true || provider?.id == excludingProviderId) {
+      provider = _firstUsableProvider(excludingId: excludingProviderId);
+      _recordAiProviderId = provider?.id;
+    }
+    if (provider == null) {
+      _recordAiModel = null;
+      _recordAiProviderType = AiProviderType.deepseek;
+      return;
+    }
+    _recordAiModel = _validModelForProvider(provider, _recordAiModel)
+        ? _recordAiModel!.trim()
+        : _fallbackModelForProvider(provider);
+    _recordAiProviderType = provider.type;
   }
 
   Future<void> _loadConfiguredAiProviders(Map<String, String> settings) async {
@@ -7216,11 +8014,16 @@ class AppRepository extends ChangeNotifier {
               continue;
             }
             final key = await _loadConfiguredProviderSecret(id);
+            final oauthRefreshToken =
+                await _loadConfiguredProviderOAuthRefreshToken(id);
+            final oauthIdToken = await _loadConfiguredProviderOAuthIdToken(id);
             final legacyKey = id == 'legacy-custom' ? _customAiApiKey : null;
             decodedProviders.add(
               AiConfiguredProvider.fromJson(
                 metadata,
                 apiKey: key ?? legacyKey ?? '',
+                oauthIdToken: oauthIdToken ?? '',
+                oauthRefreshToken: oauthRefreshToken ?? '',
               ).copyWith(builtIn: id == 'deepseek'),
             );
           }
@@ -7322,12 +8125,27 @@ class AppRepository extends ChangeNotifier {
         ? requestedRecordId
         : providerIdForLegacyType(_recordAiProviderType);
     _recordAiProviderId ??= _firstUsableProvider()?.id;
+    final usableRecordProvider = _selectedOrUsableProvider(_recordAiProviderId);
+    if (usableRecordProvider != null && usableRecordProvider.isUsable) {
+      _recordAiProviderId = usableRecordProvider.id;
+    }
+    final recordProvider = aiProviderById(_recordAiProviderId);
+    final requestedRecordModel = settings['ai_record_model']?.trim();
+    _recordAiModel = recordProvider != null &&
+            _validModelForProvider(recordProvider, requestedRecordModel)
+        ? requestedRecordModel
+        : _fallbackModelForProvider(recordProvider);
 
     final requestedChatId = settings['chat_current_provider_id']?.trim();
     _chatCurrentProviderId = aiProviderById(requestedChatId) != null
         ? requestedChatId
         : providerIdForLegacyType(_chatAiProviderType);
     _chatCurrentProviderId ??= _firstUsableProvider()?.id;
+    final usableChatProvider =
+        _selectedOrUsableProvider(_chatCurrentProviderId);
+    if (usableChatProvider != null && usableChatProvider.isUsable) {
+      _chatCurrentProviderId = usableChatProvider.id;
+    }
     final chatProvider = aiProviderById(_chatCurrentProviderId);
     final requestedModel = settings['chat_current_model']?.trim();
     _chatCurrentModel = requestedModel != null &&
@@ -7355,6 +8173,18 @@ class AppRepository extends ChangeNotifier {
     if (rows.isEmpty) return null;
     final fallback = (rows.first['value'] as String? ?? '').trim();
     return fallback.isEmpty ? null : fallback;
+  }
+
+  Future<String?> _loadConfiguredProviderOAuthRefreshToken(String id) async {
+    final value = await SecureKeyStore.read(_providerOAuthRefreshKey(id));
+    final trimmed = value?.trim() ?? '';
+    return trimmed.isEmpty ? null : trimmed;
+  }
+
+  Future<String?> _loadConfiguredProviderOAuthIdToken(String id) async {
+    final value = await SecureKeyStore.read(_providerOAuthIdTokenKey(id));
+    final trimmed = value?.trim() ?? '';
+    return trimmed.isEmpty ? null : trimmed;
   }
 
   Future<String?> _loadSecretWithLegacyFallback({
@@ -7401,17 +8231,74 @@ class AppRepository extends ChangeNotifier {
       whereArgs: ['ai_privacy_accepted'],
       limit: 1,
     );
-    _aiPrivacyAccepted =
+    final legacyAccepted =
         rows.isNotEmpty && (rows.first['value'] as String?) == '1';
+    final consentRows = await _db!.query(
+      'app_settings',
+      where: 'key = ?',
+      whereArgs: ['ai_privacy_consent_keys'],
+      limit: 1,
+    );
+    _aiPrivacyConsentKeys.clear();
+    if (consentRows.isNotEmpty) {
+      try {
+        final decoded = jsonDecode(
+          (consentRows.first['value'] as String?) ?? '',
+        );
+        if (decoded is List) {
+          _aiPrivacyConsentKeys.addAll(
+            decoded
+                .map((value) => value.toString().trim())
+                .where((value) => value.isNotEmpty),
+          );
+        }
+      } catch (_) {
+        // A malformed consent setting fails closed and can be re-established
+        // by the next explicit confirmation.
+      }
+    }
+    // Old versions only recorded a global bit with no recipient identity.
+    // Do not silently apply it to every provider; require one confirmation
+    // after upgrade so the user sees the current actual recipient.
+    _aiPrivacyAccepted = legacyAccepted && _aiPrivacyConsentKeys.isNotEmpty;
   }
 
-  Future<void> setAiPrivacyAccepted(bool accepted) async {
-    _aiPrivacyAccepted = accepted;
-    await _db!.insert(
+  Future<void> setAiPrivacyAccepted(
+    bool accepted, {
+    AiProviderConfig? forConfig,
+  }) async {
+    if (accepted) {
+      final config = forConfig ?? aiProviderConfigFor(AiTaskType.chatQuery);
+      final key = config.privacyReceiverKey;
+      if (key.isEmpty) return;
+      _aiPrivacyConsentKeys.add(key);
+    } else if (forConfig == null) {
+      // The settings-page revoke action is intentionally global and removes
+      // every recipient grant; a later request will ask again for its target.
+      _aiPrivacyConsentKeys.clear();
+    } else {
+      _aiPrivacyConsentKeys.remove(forConfig.privacyReceiverKey);
+    }
+    _aiPrivacyAccepted = _aiPrivacyConsentKeys.contains(
+      aiProviderConfigFor(AiTaskType.chatQuery).privacyReceiverKey,
+    );
+    final db = _db;
+    if (db == null) return;
+    final batch = db.batch();
+    batch.insert(
       'app_settings',
-      {'key': 'ai_privacy_accepted', 'value': accepted ? '1' : '0'},
+      {'key': 'ai_privacy_accepted', 'value': _aiPrivacyAccepted ? '1' : '0'},
       conflictAlgorithm: ConflictAlgorithm.replace,
     );
+    batch.insert(
+      'app_settings',
+      {
+        'key': 'ai_privacy_consent_keys',
+        'value': jsonEncode(_aiPrivacyConsentKeys.toList()..sort()),
+      },
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+    await batch.commit(noResult: true);
     notifyListeners();
   }
 
@@ -7740,8 +8627,275 @@ class AppRepository extends ChangeNotifier {
 
   /// 读取保存的对话（先清理超期，再按时间正序返回）。
   Future<List<Map<String, Object?>>> loadChatMessages() async {
+    return loadChatSessionMessages(ChatSession.recordId);
+  }
+
+  Future<void> _loadChatSessions() async {
+    final db = _db;
+    if (db == null) return;
+    await _ensureChatSessionTables(db);
+    final rows = await db.query(
+      'chat_sessions',
+      orderBy: 'is_record DESC, starred DESC, updated_ms DESC, created_ms DESC',
+    );
+    _chatSessions
+      ..clear()
+      ..addAll(rows.map(ChatSession.fromMap));
+  }
+
+  /// Loads the session catalog and repairs the record-session invariant when
+  /// opening a database restored from an older or interrupted snapshot.
+  Future<List<ChatSession>> loadChatSessions() async {
+    await _loadChatSessions();
+    return chatSessions;
+  }
+
+  /// Creates an ordinary conversation. The current Chats model selection is
+  /// copied as the initial per-session selection, so switching conversations
+  /// never silently changes another conversation's model.
+  Future<ChatSession> createChatSession({
+    String title = '新对话',
+    String? providerId,
+    String? model,
+    AiReasoningEffort? effort,
+  }) async {
+    final db = _db;
+    if (db == null) throw StateError('repository is not initialized');
+    final now = DateTime.now();
+    final session = ChatSession(
+      id: _newUuid(),
+      title: title.trim().isEmpty ? '新对话' : title.trim(),
+      createdAt: now,
+      updatedAt: now,
+      providerId: providerId?.trim().isNotEmpty == true
+          ? providerId!.trim()
+          : _chatCurrentProviderId,
+      model:
+          model?.trim().isNotEmpty == true ? model!.trim() : _chatCurrentModel,
+      effort: effort ?? _chatAiReasoningEffort,
+    );
+    await db.insert('chat_sessions', session.toMap());
+    await _loadChatSessions();
+    notifyListeners();
+    return _chatSessions.firstWhere((item) => item.id == session.id);
+  }
+
+  Future<void> renameChatSession(String sessionId, String title) async {
+    final id = sessionId.trim();
+    final session = _chatSessions.where((item) => item.id == id).firstOrNull;
+    if (session == null) return;
+    if (session.isRecord || id == ChatSession.recordId) {
+      throw StateError('「记一记」会话不能重命名');
+    }
+    final value = title.trim();
+    if (value.isEmpty) throw ArgumentError.value(title, 'title', '标题不能为空');
+    await _db!.update(
+      'chat_sessions',
+      {'title': value, 'updated_ms': DateTime.now().millisecondsSinceEpoch},
+      where: 'session_id = ?',
+      whereArgs: [id],
+    );
+    await _loadChatSessions();
+    notifyListeners();
+  }
+
+  Future<void> setChatSessionStarred(String sessionId, bool starred) async {
+    final id = sessionId.trim();
+    final session = _chatSessions.where((item) => item.id == id).firstOrNull;
+    if (session == null) return;
+    if (session.isRecord || id == ChatSession.recordId) return;
+    await _db!.update(
+      'chat_sessions',
+      {
+        'starred': starred ? 1 : 0,
+        'updated_ms': DateTime.now().millisecondsSinceEpoch,
+      },
+      where: 'session_id = ?',
+      whereArgs: [id],
+    );
+    await _loadChatSessions();
+    notifyListeners();
+  }
+
+  Future<void> deleteChatSession(String sessionId) async {
+    final id = sessionId.trim();
+    if (id.isEmpty || id == ChatSession.recordId) {
+      throw StateError('「记一记」会话不能删除');
+    }
+    final session = _chatSessions.where((item) => item.id == id).firstOrNull;
+    if (session == null) return;
+    if (session.isRecord) throw StateError('「记一记」会话不能删除');
+    await _db!.transaction((txn) async {
+      // A worker can outlive the conversation route. Drop unfinished work
+      // together with a deleted Chat so it cannot later recreate a message
+      // under a session that no longer exists.
+      await txn.delete(
+        'report_jobs',
+        where: "session_id = ? AND status IN ('queued', 'running')",
+        whereArgs: [id],
+      );
+      await txn
+          .delete('chat_messages', where: 'session_id = ?', whereArgs: [id]);
+      await txn
+          .delete('chat_sessions', where: 'session_id = ?', whereArgs: [id]);
+    });
+    await _loadChatSessions();
+    notifyListeners();
+  }
+
+  /// Persists the model selection owned by one conversation.
+  Future<void> saveChatSessionSelection({
+    required String sessionId,
+    String? providerId,
+    String? model,
+    AiReasoningEffort? effort,
+  }) async {
+    final id = sessionId.trim();
+    final session = _chatSessions.where((item) => item.id == id).firstOrNull;
+    if (session == null) throw StateError('会话不存在');
+    final provider = providerId?.trim() ?? session.providerId ?? '';
+    final selectedModel = model?.trim() ?? session.model ?? '';
+    var selectedEffort = effort ?? session.effort;
+    if (selectedEffort == AiReasoningEffort.none ||
+        selectedEffort == AiReasoningEffort.minimal) {
+      selectedEffort = AiReasoningEffort.low;
+    }
+    await _db!.update(
+      'chat_sessions',
+      {
+        'provider_id': provider,
+        'model': selectedModel,
+        'effort': selectedEffort.storageKey,
+        'updated_ms': DateTime.now().millisecondsSinceEpoch,
+      },
+      where: 'session_id = ?',
+      whereArgs: [id],
+    );
+    await _loadChatSessions();
+    notifyListeners();
+  }
+
+  /// Makes a session's model/effort the active global chat selection used by
+  /// the existing AI panel. The panel can call [syncChatSessionSelection]
+  /// after it closes to persist any model switch made while chatting.
+  Future<void> activateChatSession(String sessionId) async {
+    final id = sessionId.trim();
+    final session = _chatSessions.where((item) => item.id == id).firstOrNull;
+    if (session == null) throw StateError('会话不存在');
+    final provider =
+        session.providerId == null ? null : aiProviderById(session.providerId!);
+    if (provider != null) {
+      _chatCurrentProviderId = provider.id;
+      _chatAiProviderType = provider.type;
+      _chatCurrentModel = session.model != null &&
+              (provider.models.isEmpty ||
+                  provider.models.contains(session.model))
+          ? session.model
+          : provider.model;
+    }
+    _chatAiReasoningEffort = session.effort;
+    await _persistAiProviderMetadata(notify: false);
+    notifyListeners();
+  }
+
+  Future<void> syncChatSessionSelection(String sessionId) async {
+    await saveChatSessionSelection(
+      sessionId: sessionId,
+      providerId: _chatCurrentProviderId,
+      model: _chatCurrentModel,
+      effort: _chatAiReasoningEffort,
+    );
+  }
+
+  /// Conversation-scoped history APIs. The original unscoped methods remain
+  /// for backwards compatibility and continue to address 「记一记」 history.
+  Future<List<Map<String, Object?>>> loadChatSessionMessages(
+    String sessionId,
+  ) async {
     await _pruneChatMessages();
-    return _db!.query('chat_messages', orderBy: 'created_ms ASC, id ASC');
+    return _db!.query(
+      'chat_messages',
+      where: 'session_id = ?',
+      whereArgs: [sessionId.trim()],
+      orderBy: 'created_ms ASC, id ASC',
+    );
+  }
+
+  Future<String?> latestChatSessionMessage(String sessionId) async {
+    final rows = await _db!.query(
+      'chat_messages',
+      columns: const ['text', 'question'],
+      where: 'session_id = ?',
+      whereArgs: [sessionId.trim()],
+      orderBy: 'created_ms DESC, id DESC',
+      limit: 1,
+    );
+    if (rows.isEmpty) return null;
+    final text = (rows.first['text'] as String? ?? '').trim();
+    if (text.isNotEmpty) return text;
+    final question = (rows.first['question'] as String? ?? '').trim();
+    return question.isEmpty ? null : question;
+  }
+
+  Future<int> addChatSessionMessage({
+    required String sessionId,
+    required String role,
+    String text = '',
+    String question = '',
+    String attachmentsJson = '',
+  }) async {
+    final id = sessionId.trim();
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final rowId = await _db!.transaction<int>((txn) async {
+      final sessionRows = await txn.query(
+        'chat_sessions',
+        columns: const ['title', 'is_record'],
+        where: 'session_id = ?',
+        whereArgs: [id],
+        limit: 1,
+      );
+      if (sessionRows.isEmpty) throw StateError('会话不存在');
+
+      final rowId = await txn.insert('chat_messages', {
+        'session_id': id,
+        'role': role,
+        'text': text,
+        'question': question,
+        'attachments_json': attachmentsJson,
+        'created_ms': now,
+      });
+
+      final title = (sessionRows.first['title'] as String? ?? '').trim();
+      final isRecord = (sessionRows.first['is_record'] as num?)?.toInt() == 1;
+      final shouldAutoTitle =
+          !isRecord && role == 'user' && (title.isEmpty || title == '新对话');
+      final nextTitle = shouldAutoTitle
+          ? _chatTitleFromMessage(question.trim().isNotEmpty ? question : text)
+          : null;
+      await txn.update(
+        'chat_sessions',
+        {
+          'updated_ms': now,
+          if (nextTitle != null && nextTitle.isNotEmpty) 'title': nextTitle,
+        },
+        where: 'session_id = ?',
+        whereArgs: [id],
+      );
+      return rowId;
+    });
+    // Keep the in-memory Chats catalog in sync while a detail route is open;
+    // this also makes the next list paint reflect the new title/order without
+    // waiting for a restart.
+    await _loadChatSessions();
+    return rowId;
+  }
+
+  static String _chatTitleFromMessage(String raw) {
+    final normalized = raw.replaceAll(RegExp(r'\s+'), ' ').trim();
+    if (normalized.isEmpty) return '';
+    final codePoints = normalized.runes.toList(growable: false);
+    if (codePoints.length <= 28) return normalized;
+    return '${String.fromCharCodes(codePoints.take(27))}…';
   }
 
   /// 追加一条对话消息。
@@ -7750,12 +8904,12 @@ class AppRepository extends ChangeNotifier {
     String text = '',
     String question = '',
   }) async {
-    return _db!.insert('chat_messages', {
-      'role': role,
-      'text': text,
-      'question': question,
-      'created_ms': DateTime.now().millisecondsSinceEpoch,
-    });
+    return addChatSessionMessage(
+      sessionId: ChatSession.recordId,
+      role: role,
+      text: text,
+      question: question,
+    );
   }
 
   Future<int> addReport({
@@ -7818,29 +8972,73 @@ class AppRepository extends ChangeNotifier {
     required DateTime periodEnd,
     int? bookId,
     int? reportId,
+    String sessionId = ChatSession.recordId,
+
+    /// Optional values used by a persisted schedule.  When omitted, the
+    /// source Chat session remains the snapshot authority as before.
+    String? providerIdOverride,
+    String? modelOverride,
+    String? effortOverride,
   }) async {
+    final targetSessionId = _reportJobSessionId(sessionId);
+    final sessionConfig = aiProviderConfigForChatSession(targetSessionId);
+    final requestedProviderId = providerIdOverride?.trim() ?? '';
+    final requestedProvider = requestedProviderId.isEmpty
+        ? null
+        : aiProviderById(requestedProviderId);
+    final snapshotProvider = requestedProvider ??
+        _selectedOrUsableProvider(chatProviderIdForSession(targetSessionId));
+    final snapshotProviderId = snapshotProvider?.id ??
+        (requestedProviderId.isNotEmpty
+            ? requestedProviderId
+            : (sessionConfig.providerId ?? ''));
+    final requestedModel = modelOverride?.trim() ?? '';
+    final snapshotModel = requestedModel.isNotEmpty
+        ? requestedModel
+        : snapshotProvider?.selectedModel ?? sessionConfig.model;
+    final requestedEffort = effortOverride?.trim() ?? '';
+    final snapshotEffort = requestedEffort.isNotEmpty
+        ? _reportJobEffort(requestedEffort)
+        : chatReasoningEffortForSession(targetSessionId);
     final now = DateTime.now().millisecondsSinceEpoch;
-    await _db!.delete(
-      'report_jobs',
-      where: "status IN ('completed', 'failed') AND updated_ms < ?",
-      whereArgs: [now - const Duration(days: 14).inMilliseconds],
-    );
-    final id = await _db!.insert('report_jobs', {
-      'uuid': _newUuid(),
-      'book_id': bookId ?? _currentBookId,
-      'report_id': reportId,
-      'question': question,
-      'type': type,
-      'title': title,
-      'period_start_ms': periodStart.millisecondsSinceEpoch,
-      'period_end_ms': periodEnd.millisecondsSinceEpoch,
-      'status': 'queued',
-      'stage': 'collect',
-      'error': '',
-      'created_ms': now,
-      'updated_ms': now,
+    final db = _db;
+    if (db == null) throw StateError('repository is not initialized');
+    final id = await db.transaction<int>((txn) async {
+      final sessionRows = await txn.query(
+        'chat_sessions',
+        columns: const ['session_id'],
+        where: 'session_id = ?',
+        whereArgs: [targetSessionId],
+        limit: 1,
+      );
+      if (sessionRows.isEmpty) throw StateError('会话不存在');
+      await txn.delete(
+        'report_jobs',
+        where: "status IN ('completed', 'failed') AND updated_ms < ?",
+        whereArgs: [now - const Duration(days: 14).inMilliseconds],
+      );
+      return txn.insert('report_jobs', {
+        'uuid': _newUuid(),
+        'session_id': targetSessionId,
+        'provider_id': snapshotProviderId,
+        'model': snapshotModel,
+        'effort': _reportJobEffort(snapshotEffort.storageKey).storageKey,
+        'book_id': bookId ?? _currentBookId,
+        'report_id': reportId,
+        'question': question,
+        'type': type,
+        'title': title,
+        'period_start_ms': periodStart.millisecondsSinceEpoch,
+        'period_end_ms': periodEnd.millisecondsSinceEpoch,
+        'status': 'queued',
+        'stage': 'collect',
+        'error': '',
+        'model_started_ms': null,
+        'created_ms': now,
+        'updated_ms': now,
+      });
     });
-    final rows = await _db!.query(
+    final rows = await db.query(
       'report_jobs',
       where: 'id = ?',
       whereArgs: [id],
@@ -7849,12 +9047,118 @@ class AppRepository extends ChangeNotifier {
     return ReportJobEntity.fromMap(rows.single);
   }
 
-  Future<List<ReportJobEntity>> pendingReportJobs() async {
+  /// Atomically claims one due schedule, creates its report job with the
+  /// schedule's provider/model/Effort snapshot, and advances next_run_ms.
+  /// Returning null means another caller already claimed the occurrence.
+  Future<ReportJobEntity?> createReportJobFromSchedule({
+    required AiReportSchedule schedule,
+    required DateTime periodStart,
+    required DateTime periodEnd,
+    DateTime? now,
+  }) async {
     final db = _db;
-    if (db == null) return const <ReportJobEntity>[];
+    if (db == null) throw StateError('repository is not initialized');
+    final current = now ?? DateTime.now();
+    final nowMs = current.millisecondsSinceEpoch;
+
+    final jobId = await db.transaction<int?>((txn) async {
+      final dueRows = await txn.query(
+        'ai_report_schedules',
+        where: 'id = ? AND enabled = 1 AND next_run_ms <= ?',
+        whereArgs: [schedule.id.trim(), nowMs],
+        limit: 1,
+      );
+      if (dueRows.isEmpty) return null;
+      final stored = AiReportSchedule.fromMap(dueRows.single);
+      final targetSessionId = _reportJobSessionId(stored.sessionId);
+      final sessionConfig = aiProviderConfigForChatSession(targetSessionId);
+      final requestedProviderId = stored.providerId.trim();
+      final requestedProvider = requestedProviderId.isEmpty
+          ? null
+          : aiProviderById(requestedProviderId);
+      final snapshotProvider = requestedProvider ??
+          _selectedOrUsableProvider(chatProviderIdForSession(targetSessionId));
+      final snapshotProviderId = snapshotProvider?.id ??
+          (requestedProviderId.isNotEmpty
+              ? requestedProviderId
+              : (sessionConfig.providerId ?? ''));
+      final requestedModel = stored.model.trim();
+      final snapshotModel = requestedModel.isNotEmpty
+          ? requestedModel
+          : snapshotProvider?.selectedModel ?? sessionConfig.model;
+      final requestedEffort = stored.effort.trim();
+      final snapshotEffort = requestedEffort.isNotEmpty
+          ? _reportJobEffort(requestedEffort)
+          : chatReasoningEffortForSession(targetSessionId);
+      final sessionRows = await txn.query(
+        'chat_sessions',
+        columns: const ['session_id'],
+        where: 'session_id = ?',
+        whereArgs: [targetSessionId],
+        limit: 1,
+      );
+      if (sessionRows.isEmpty) throw StateError('会话不存在');
+      final inserted = await txn.insert('report_jobs', {
+        'uuid': _newUuid(),
+        'session_id': targetSessionId,
+        'provider_id': snapshotProviderId,
+        'model': snapshotModel,
+        'effort': _reportJobEffort(snapshotEffort.storageKey).storageKey,
+        'book_id': _currentBookId,
+        'report_id': null,
+        'question': '请生成${stored.title}',
+        'type': stored.reportType,
+        'title': stored.title,
+        'period_start_ms': periodStart.millisecondsSinceEpoch,
+        'period_end_ms': periodEnd.millisecondsSinceEpoch,
+        'status': 'queued',
+        'stage': 'collect',
+        'error': '',
+        'model_started_ms': null,
+        'created_ms': nowMs,
+        'updated_ms': nowMs,
+      });
+      final nextRun = _nextAiScheduleRun(
+        periodKind: stored.periodKind,
+        dayValue: stored.dayValue,
+        now: current,
+      );
+      final advanced = await txn.update(
+        'ai_report_schedules',
+        {
+          'next_run_ms': nextRun.millisecondsSinceEpoch,
+          'updated_ms': nowMs,
+        },
+        where: 'id = ? AND enabled = 1 AND next_run_ms <= ?',
+        whereArgs: [stored.id, nowMs],
+      );
+      if (advanced != 1) {
+        throw StateError('定时报表计划已被其他任务领取');
+      }
+      return inserted;
+    });
+    if (jobId == null) return null;
     final rows = await db.query(
       'report_jobs',
-      where: "status IN ('queued', 'running')",
+      where: 'id = ?',
+      whereArgs: [jobId],
+      limit: 1,
+    );
+    await _loadAiReportSchedules();
+    return rows.isEmpty ? null : ReportJobEntity.fromMap(rows.single);
+  }
+
+  Future<List<ReportJobEntity>> pendingReportJobs({String? sessionId}) async {
+    final db = _db;
+    if (db == null) return const <ReportJobEntity>[];
+    final scopedSessionId = sessionId?.trim();
+    final scoped = scopedSessionId != null && scopedSessionId.isNotEmpty;
+    final rows = await db.query(
+      'report_jobs',
+      where: scoped
+          ? "status IN ('queued', 'running') AND session_id = ?"
+          : "status IN ('queued', 'running')",
+      whereArgs: scoped ? [scopedSessionId] : null,
       orderBy: 'created_ms ASC, id ASC',
     );
     return rows.map(ReportJobEntity.fromMap).toList(growable: false);
@@ -7900,6 +9204,50 @@ class AppRepository extends ChangeNotifier {
     }
   }
 
+  /// Records the first model-processing timestamp for a report job.
+  ///
+  /// The write is compare-and-set: a worker retry or a foreground resume can
+  /// race, but neither is allowed to move the original timestamp forward.
+  /// Repeating the call for the same job is therefore harmless, while a stale
+  /// UUID still fails loudly like the other report-job mutations.
+  Future<int?> markReportJobModelStarted(
+    int id, {
+    String? expectedUuid,
+    int? startedMs,
+  }) async {
+    final timestamp = startedMs ?? DateTime.now().millisecondsSinceEpoch;
+    final uuidClause = expectedUuid == null ? '' : ' AND uuid = ?';
+    final whereArgs = <Object?>[
+      id,
+      if (expectedUuid != null) expectedUuid,
+    ];
+    final updated = await _db!.update(
+      'report_jobs',
+      {
+        'model_started_ms': timestamp,
+        'updated_ms': DateTime.now().millisecondsSinceEpoch,
+      },
+      where: 'id = ? AND model_started_ms IS NULL$uuidClause',
+      whereArgs: whereArgs,
+    );
+    if (updated == 1) return timestamp;
+
+    // A prior caller may have won the compare-and-set. Distinguish that
+    // expected no-op from a missing row or a UUID mismatch.
+    final rows = await _db!.query(
+      'report_jobs',
+      columns: const ['uuid', 'model_started_ms'],
+      where: 'id = ?',
+      whereArgs: [id],
+      limit: 1,
+    );
+    if (rows.isEmpty ||
+        (expectedUuid != null && rows.single['uuid'] != expectedUuid)) {
+      throw StateError('report job does not exist or UUID does not match');
+    }
+    return (rows.single['model_started_ms'] as num?)?.toInt();
+  }
+
   /// 报告正文、聊天报告卡和 job 完成状态原子提交。
   /// WorkManager 在进程被杀后可能重试；只要这个事务成功，再次执行同一 job
   /// 会直接返回既有报告，不会生成第二份文档或第二张聊天卡。
@@ -7940,6 +9288,7 @@ class AppRepository extends ChangeNotifier {
           'pinned_ms': 0,
         });
         await txn.insert('chat_messages', {
+          'session_id': _reportJobSessionId(job['session_id']),
           'role': 'report',
           'text': jsonEncode({'reportId': id, 'summary': summary}),
           'question': job['question'] as String? ?? '',
@@ -8133,13 +9482,15 @@ class AppRepository extends ChangeNotifier {
 
   /// 追加一条「记账明细卡」消息（role='record'，结构化数据 JSON 存在 text 列，
   /// 复用现有列免迁移）。返回新行 id，供之后改分类/删除时更新这张卡。
-  Future<int> addChatRecordMessage(String json) async {
-    return _db!.insert('chat_messages', {
-      'role': 'record',
-      'text': json,
-      'question': '',
-      'created_ms': DateTime.now().millisecondsSinceEpoch,
-    });
+  Future<int> addChatRecordMessage(
+    String json, {
+    String sessionId = ChatSession.recordId,
+  }) async {
+    return addChatSessionMessage(
+      sessionId: sessionId,
+      role: 'record',
+      text: json,
+    );
   }
 
   /// 更新某张记账卡的持久化 JSON（用户改分类/删条目后写回最新状态）。
@@ -8148,10 +9499,1008 @@ class AppRepository extends ChangeNotifier {
         where: 'id = ?', whereArgs: [rowId]);
   }
 
-  /// 清空全部对话。
+  /// 只清空指定会话的消息。会话本身和其他会话历史必须保留。
+  Future<void> clearChatSessionMessages(String sessionId) async {
+    final id = sessionId.trim();
+    if (id.isEmpty) throw ArgumentError.value(sessionId, 'sessionId');
+    await _db!.delete(
+      'chat_messages',
+      where: 'session_id = ?',
+      whereArgs: [id],
+    );
+    notifyListeners();
+  }
+
+  /// 删除指定会话中的单条消息。双条件约束避免重试某个 Chat 时误删
+  /// 另一个会话中碰巧具有相同行号语义的内容。
+  Future<void> deleteChatSessionMessage({
+    required String sessionId,
+    required int messageId,
+  }) async {
+    final id = sessionId.trim();
+    if (id.isEmpty) throw ArgumentError.value(sessionId, 'sessionId');
+    if (messageId <= 0) throw ArgumentError.value(messageId, 'messageId');
+    await _db!.delete(
+      'chat_messages',
+      where: 'id = ? AND session_id = ?',
+      whereArgs: [messageId, id],
+    );
+    notifyListeners();
+  }
+
+  /// 兼容旧调用：明确表示清空全部会话。新界面不得用它清空当前会话。
   Future<void> clearChatMessages() async {
     await _db!.delete('chat_messages');
     notifyListeners();
+  }
+
+  // ---------------------------------------------------------------------------
+  // AI run ledger
+  // ---------------------------------------------------------------------------
+
+  /// Create one durable run, or return the existing row for the same
+  /// idempotency key. The operation is deliberately serialized in SQLite so
+  /// a retry cannot create a second logical run.
+  Future<AiRun> createOrGetAiRun({
+    required String sessionId,
+    required AiRunMode mode,
+    required AiProviderConfig config,
+    required String idempotencyKey,
+    String inputDigest = '',
+    String contextDigest = '',
+    bool requiresConfirmation = false,
+  }) async {
+    final key = idempotencyKey.trim();
+    if (key.isEmpty)
+      throw ArgumentError.value(idempotencyKey, 'idempotencyKey');
+    final sid =
+        sessionId.trim().isEmpty ? ChatSession.recordId : sessionId.trim();
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final providerId = (config.providerId?.trim().isNotEmpty ?? false)
+        ? config.providerId!.trim()
+        : config.type.storageKey;
+    final snapshot = AiRunConfigSnapshot(
+      providerId: providerId,
+      providerLabel: config.providerLabel,
+      model: config.model.trim(),
+      effort: config.reasoningEffort.storageKey,
+      endpointType: config.endpointType.storageKey,
+    );
+    var created = false;
+    final run = await _db!.transaction<AiRun>((txn) async {
+      final existing = await txn.query(
+        'ai_runs',
+        where: 'idempotency_key = ?',
+        whereArgs: [key],
+        limit: 1,
+      );
+      if (existing.isNotEmpty) return AiRun.fromMap(existing.first);
+      final id = _newUuid();
+      final value = AiRun(
+        id: id,
+        idempotencyKey: key,
+        sessionId: sid,
+        mode: mode,
+        config: snapshot,
+        status: AiRunStatus.queued,
+        inputDigest: inputDigest,
+        contextDigest: contextDigest,
+        proposalJson: '',
+        resultJson: '',
+        errorCode: '',
+        errorMessage: '',
+        retryCount: 0,
+        requiresConfirmation: requiresConfirmation,
+        createdMs: now,
+        updatedMs: now,
+      );
+      await txn.insert(
+        'ai_runs',
+        value.toMap(),
+        conflictAlgorithm: ConflictAlgorithm.abort,
+      );
+      created = true;
+      return value;
+    });
+    if (created) {
+      await appendAiRunEvent(
+        run.id,
+        AiRunEventType.runStarted,
+        payload: {
+          'mode': run.mode.storageKey,
+          'providerId': run.config.providerId,
+          'model': run.config.model,
+        },
+      );
+    }
+    return run;
+  }
+
+  Future<AiRun?> aiRunById(String id) async {
+    final value = id.trim();
+    if (value.isEmpty) return null;
+    final rows = await _db!.query(
+      'ai_runs',
+      where: 'id = ?',
+      whereArgs: [value],
+      limit: 1,
+    );
+    return rows.isEmpty ? null : AiRun.fromMap(rows.first);
+  }
+
+  Future<AiRun?> aiRunByIdempotencyKey(String key) async {
+    final value = key.trim();
+    if (value.isEmpty) return null;
+    final rows = await _db!.query(
+      'ai_runs',
+      where: 'idempotency_key = ?',
+      whereArgs: [value],
+      limit: 1,
+    );
+    return rows.isEmpty ? null : AiRun.fromMap(rows.first);
+  }
+
+  Future<List<AiRun>> loadAiRuns({String? sessionId, int limit = 100}) async {
+    final safeLimit = limit.clamp(1, 500).toInt();
+    final sid = sessionId?.trim();
+    final rows = await _db!.query(
+      'ai_runs',
+      where: sid == null || sid.isEmpty ? null : 'session_id = ?',
+      whereArgs: sid == null || sid.isEmpty ? null : [sid],
+      orderBy: 'updated_ms DESC, created_ms DESC',
+      limit: safeLimit,
+    );
+    return rows.map(AiRun.fromMap).toList(growable: false);
+  }
+
+  Future<List<AiRunEvent>> loadAiRunEvents(String runId) async {
+    final id = runId.trim();
+    if (id.isEmpty) return const [];
+    final rows = await _db!.query(
+      'ai_run_events',
+      where: 'run_id = ?',
+      whereArgs: [id],
+      orderBy: 'sequence ASC',
+    );
+    return rows.map(AiRunEvent.fromMap).toList(growable: false);
+  }
+
+  /// Append an event with a monotonically increasing sequence number. Event
+  /// payloads are caller-provided summaries; raw prompts and credentials must
+  /// never be passed here.
+  Future<AiRunEvent> appendAiRunEvent(
+    String runId,
+    AiRunEventType type, {
+    Map<String, Object?> payload = const {},
+  }) async {
+    final id = runId.trim();
+    if (id.isEmpty) throw ArgumentError.value(runId, 'runId');
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final event = await _db!.transaction<AiRunEvent>((txn) async {
+      final run = await txn.query(
+        'ai_runs',
+        columns: const ['id'],
+        where: 'id = ?',
+        whereArgs: [id],
+        limit: 1,
+      );
+      if (run.isEmpty) throw StateError('AI run 不存在');
+      final sequenceRows = await txn.rawQuery(
+        'SELECT COALESCE(MAX(sequence), 0) AS sequence '
+        'FROM ai_run_events WHERE run_id = ?',
+        [id],
+      );
+      final sequence =
+          ((sequenceRows.first['sequence'] as num?)?.toInt() ?? 0) + 1;
+      final safePayload = _safeAiRunEventPayload(type, payload);
+      final value = AiRunEvent(
+        runId: id,
+        sequence: sequence,
+        type: type,
+        payload: safePayload,
+        createdMs: now,
+      );
+      final eventId = await txn.insert('ai_run_events', value.toMap());
+      await txn.update(
+        'ai_runs',
+        {'updated_ms': now},
+        where: 'id = ?',
+        whereArgs: [id],
+      );
+      return AiRunEvent(
+        id: eventId,
+        runId: value.runId,
+        sequence: value.sequence,
+        type: value.type,
+        payload: value.payload,
+        createdMs: value.createdMs,
+      );
+    });
+    notifyListeners();
+    return event;
+  }
+
+  /// Insert an event while another AI-run mutation is already inside a
+  /// database transaction. Keeping sequence allocation and the state update
+  /// on the same executor prevents duplicate terminal events when a retry
+  /// races with the original completion.
+  Future<AiRunEvent> _appendAiRunEventInTxn(
+    DatabaseExecutor txn,
+    String runId,
+    AiRunEventType type, {
+    Map<String, Object?> payload = const {},
+    int? createdMs,
+  }) async {
+    final id = runId.trim();
+    final now = createdMs ?? DateTime.now().millisecondsSinceEpoch;
+    final sequenceRows = await txn.rawQuery(
+      'SELECT COALESCE(MAX(sequence), 0) AS sequence '
+      'FROM ai_run_events WHERE run_id = ?',
+      [id],
+    );
+    final sequence =
+        ((sequenceRows.first['sequence'] as num?)?.toInt() ?? 0) + 1;
+    final safePayload = _safeAiRunEventPayload(type, payload);
+    final value = AiRunEvent(
+      runId: id,
+      sequence: sequence,
+      type: type,
+      payload: safePayload,
+      createdMs: now,
+    );
+    final eventId = await txn.insert('ai_run_events', value.toMap());
+    return AiRunEvent(
+      id: eventId,
+      runId: value.runId,
+      sequence: value.sequence,
+      type: value.type,
+      payload: value.payload,
+      createdMs: value.createdMs,
+    );
+  }
+
+  Map<String, Object?> _safeAiRunEventPayload(
+    AiRunEventType type,
+    Map<String, Object?> payload,
+  ) {
+    if (type != AiRunEventType.reasoning) {
+      return Map.unmodifiable(payload);
+    }
+    final raw = payload['characters'] ?? payload['text'];
+    final characters = raw is num
+        ? raw.toInt().clamp(0, 1 << 20)
+        : raw?.toString().length.clamp(0, 1 << 20) ?? 0;
+    return Map.unmodifiable({'characters': characters});
+  }
+
+  Future<AiRun?> updateAiRun(
+    String runId, {
+    AiRunStatus? status,
+    String? contextDigest,
+    String? proposalJson,
+    String? resultJson,
+    String? errorCode,
+    String? errorMessage,
+    int? retryCount,
+    bool? requiresConfirmation,
+  }) async {
+    final id = runId.trim();
+    if (id.isEmpty) return null;
+    final values = <String, Object?>{
+      if (status != null) 'status': status.storageKey,
+      if (contextDigest != null) 'context_digest': contextDigest,
+      if (proposalJson != null) 'proposal_json': proposalJson,
+      if (resultJson != null) 'result_json': resultJson,
+      if (errorCode != null) 'error_code': errorCode,
+      if (errorMessage != null) 'error_message': errorMessage,
+      if (retryCount != null) 'retry_count': retryCount,
+      if (requiresConfirmation != null)
+        'requires_confirmation': requiresConfirmation ? 1 : 0,
+      'updated_ms': DateTime.now().millisecondsSinceEpoch,
+    };
+    await _db!.update('ai_runs', values, where: 'id = ?', whereArgs: [id]);
+    final run = await aiRunById(id);
+    if (run != null) notifyListeners();
+    return run;
+  }
+
+  Future<void> saveAiRunProposal(
+    String runId,
+    AiLedgerProposal proposal,
+  ) async {
+    final needsConfirmation = proposal.requiresConfirmation;
+    await updateAiRun(
+      runId,
+      proposalJson: proposal.encode(),
+      status: needsConfirmation
+          ? AiRunStatus.awaitingConfirmation
+          : AiRunStatus.thinking,
+      requiresConfirmation: needsConfirmation,
+    );
+    await appendAiRunEvent(
+      runId,
+      AiRunEventType.proposalReady,
+      payload: {
+        'items': proposal.items.length,
+        'requiresConfirmation': needsConfirmation,
+      },
+    );
+    if (needsConfirmation) {
+      await appendAiRunEvent(
+        runId,
+        AiRunEventType.confirmationRequired,
+        payload: {'items': proposal.selectedItems.length},
+      );
+    }
+  }
+
+  Future<void> commitAiRun(String runId, Iterable<int> transactionIds) async {
+    final id = runId.trim();
+    if (id.isEmpty) return;
+    final current = await aiRunById(id);
+    if (current == null ||
+        current.status == AiRunStatus.rolledBack ||
+        current.status == AiRunStatus.completed ||
+        current.status == AiRunStatus.failed ||
+        current.status == AiRunStatus.cancelled) {
+      // A repeated callback after a terminal state is intentionally a no-op.
+      return;
+    }
+    final ids = transactionIds.where((value) => value > 0).toSet().toList();
+    final refs = <Map<String, Object?>>[];
+    if (ids.isNotEmpty) {
+      final rows = await _db!.rawQuery(
+        'SELECT id, uuid, created_ms, updated_ms FROM transactions WHERE id IN '
+        '(${List.filled(ids.length, '?').join(',')})',
+        ids,
+      );
+      refs.addAll(rows.map((row) => {
+            'id': (row['id'] as num).toInt(),
+            'uuid': row['uuid']?.toString() ?? '',
+            'createdMs': (row['created_ms'] as num?)?.toInt(),
+            'updatedMs': (row['updated_ms'] as num?)?.toInt(),
+          }));
+    }
+    final result = jsonEncode({
+      'transactionIds': ids,
+      'transactionRefs': refs,
+    });
+    final now = DateTime.now().millisecondsSinceEpoch;
+    await _db!.transaction((txn) async {
+      final locked = await txn.query(
+        'ai_runs',
+        columns: const ['status'],
+        where: 'id = ?',
+        whereArgs: [id],
+        limit: 1,
+      );
+      if (locked.isEmpty ||
+          AiRunStatusX.fromStorage(locked.first['status']) != current.status) {
+        // Another writer won the terminal transition. Do not append another
+        // committed/completed pair or overwrite its result.
+        return;
+      }
+      await txn.update(
+        'ai_runs',
+        {
+          'result_json': result,
+          'status': AiRunStatus.completed.storageKey,
+          'requires_confirmation': 0,
+          'updated_ms': now,
+        },
+        where: 'id = ?',
+        whereArgs: [id],
+      );
+      await _appendAiRunEventInTxn(
+        txn,
+        id,
+        AiRunEventType.committed,
+        payload: {'transactionIds': ids, 'count': ids.length},
+        createdMs: now,
+      );
+      await _appendAiRunEventInTxn(
+        txn,
+        id,
+        AiRunEventType.completed,
+        payload: {'count': ids.length},
+        createdMs: now,
+      );
+    });
+    notifyListeners();
+  }
+
+  Future<void> markAiRunFailed(
+    String runId, {
+    String code = '',
+    required String message,
+  }) async {
+    final id = runId.trim();
+    if (id.isEmpty) return;
+    await updateAiRun(
+      id,
+      status: AiRunStatus.failed,
+      errorCode: code,
+      errorMessage: message.length > 500 ? message.substring(0, 500) : message,
+    );
+    await appendAiRunEvent(
+      id,
+      AiRunEventType.failed,
+      payload: {
+        'code': code,
+        'message': message.length > 240 ? message.substring(0, 240) : message
+      },
+    );
+  }
+
+  Future<void> cancelAiRun(String runId) async {
+    final id = runId.trim();
+    if (id.isEmpty) return;
+    await updateAiRun(id, status: AiRunStatus.cancelled);
+    await appendAiRunEvent(id, AiRunEventType.cancelled);
+  }
+
+  /// Undo only the transactions recorded by this run. UUID matching avoids
+  /// deleting a newer transaction if SQLite ever reuses an integer row id.
+  Future<bool> undoAiRun(String runId) async {
+    final id = runId.trim();
+    final run = await aiRunById(id);
+    if (run == null ||
+        run.status == AiRunStatus.rolledBack ||
+        run.status != AiRunStatus.completed) {
+      return false;
+    }
+    final refs = <({int id, String uuid, int? updatedMs})>[];
+    try {
+      final decoded = jsonDecode(run.resultJson);
+      if (decoded is Map && decoded['transactionRefs'] is List) {
+        for (final value in (decoded['transactionRefs'] as List)) {
+          if (value is! Map) continue;
+          final refId = (value['id'] as num?)?.toInt();
+          if (refId == null || refId <= 0) continue;
+          refs.add((
+            id: refId,
+            uuid: value['uuid']?.toString() ?? '',
+            updatedMs: (value['updatedMs'] as num?)?.toInt(),
+          ));
+        }
+      }
+      if (refs.isEmpty && decoded is Map && decoded['transactionIds'] is List) {
+        for (final value in (decoded['transactionIds'] as List)) {
+          final refId = (value as num?)?.toInt();
+          if (refId != null && refId > 0) {
+            refs.add((id: refId, uuid: '', updatedMs: null));
+          }
+        }
+      }
+    } catch (_) {}
+    var deleted = 0;
+    var skipped = 0;
+    final deletedIds = <int>[];
+    final now = DateTime.now().millisecondsSinceEpoch;
+    await _db!.transaction((txn) async {
+      final locked = await txn.query(
+        'ai_runs',
+        columns: const ['status'],
+        where: 'id = ?',
+        whereArgs: [id],
+        limit: 1,
+      );
+      if (locked.isEmpty ||
+          AiRunStatusX.fromStorage(locked.first['status']) !=
+              AiRunStatus.completed) {
+        return;
+      }
+      for (final ref in refs) {
+        final rows = await txn.query(
+          'transactions',
+          columns: const ['id', 'uuid', 'updated_ms', 'refund_of'],
+          where: 'id = ?',
+          whereArgs: [ref.id],
+          limit: 1,
+        );
+        if (rows.isEmpty) {
+          skipped++;
+          continue;
+        }
+        final row = rows.first;
+        final currentUuid = row['uuid']?.toString() ?? '';
+        final currentUpdated = (row['updated_ms'] as num?)?.toInt();
+        final changedAfterCommit = ref.updatedMs != null &&
+            currentUpdated != null &&
+            currentUpdated != ref.updatedMs;
+        if ((ref.uuid.isNotEmpty &&
+                currentUuid.isNotEmpty &&
+                ref.uuid != currentUuid) ||
+            changedAfterCommit ||
+            row['refund_of'] != null) {
+          // Never delete a transaction edited after the AI run, nor a refund
+          // row whose family may now belong to a later user action.
+          skipped++;
+          continue;
+        }
+        final childRows = await txn.query(
+          'transactions',
+          columns: const ['id'],
+          where: 'refund_of = ?',
+          whereArgs: [ref.id],
+          limit: 1,
+        );
+        if (childRows.isNotEmpty) {
+          skipped++;
+          continue;
+        }
+        await txn.delete(
+          'transactions',
+          where: 'id = ? AND uuid = ?',
+          whereArgs: [ref.id, currentUuid],
+        );
+        deleted++;
+        deletedIds.add(ref.id);
+      }
+      final result = jsonEncode({
+        'transactionIds': refs.map((ref) => ref.id).toList(),
+        'rolledBack': true,
+        'deletedCount': deleted,
+        'skippedCount': skipped,
+      });
+      await txn.update(
+        'ai_runs',
+        {
+          'status': AiRunStatus.rolledBack.storageKey,
+          'result_json': result,
+          'requires_confirmation': 0,
+          'updated_ms': now,
+        },
+        where: 'id = ?',
+        whereArgs: [id],
+      );
+      await _appendAiRunEventInTxn(
+        txn,
+        id,
+        AiRunEventType.rolledBack,
+        payload: {'deletedCount': deleted, 'skippedCount': skipped},
+        createdMs: now,
+      );
+    });
+    if (deletedIds.isNotEmpty) {
+      await _refreshTransactionRows(ids: deletedIds.toSet());
+      await _refreshCurrentNetWorthSnapshotBestEffort(
+        const {NetWorthSnapshotCause.transaction},
+      );
+    }
+    notifyListeners();
+    return deleted > 0 || (refs.isEmpty && run.status == AiRunStatus.completed);
+  }
+
+  Future<AiProviderHealth> recordAiProviderSuccess(
+    String providerId,
+    int latencyMs,
+  ) async {
+    final id = providerId.trim();
+    if (id.isEmpty) return const AiProviderHealth(providerId: '');
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final next = aiProviderHealthFor(id).recordSuccess(
+      latencyMs.clamp(0, 3600000).toInt(),
+      now,
+    );
+    await _db!.insert(
+      'ai_provider_health',
+      next.toMap(),
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+    _aiProviderHealth[id] = next;
+    notifyListeners();
+    return next;
+  }
+
+  Future<AiProviderHealth> recordAiProviderFailure(
+    String providerId,
+    String error,
+  ) async {
+    final id = providerId.trim();
+    if (id.isEmpty) return const AiProviderHealth(providerId: '');
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final next = aiProviderHealthFor(id).recordFailure(error.trim(), now);
+    await _db!.insert(
+      'ai_provider_health',
+      next.toMap(),
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+    _aiProviderHealth[id] = next;
+    notifyListeners();
+    return next;
+  }
+
+  Future<void> resetAiProviderHealth(String providerId) async {
+    final id = providerId.trim();
+    if (id.isEmpty) return;
+    await _db!.delete(
+      'ai_provider_health',
+      where: 'provider_id = ?',
+      whereArgs: [id],
+    );
+    _aiProviderHealth.remove(id);
+    notifyListeners();
+  }
+
+  List<AiMemory> get aiMemories => List.unmodifiable(_aiMemories);
+  List<AiReportSchedule> get aiReportSchedules =>
+      List.unmodifiable(_aiReportSchedules);
+
+  /// Return only explicitly consented memories whose trigger phrase appears
+  /// in the current question. Matching on-device keeps unrelated personal
+  /// facts out of ordinary requests and avoids turning memory into a hidden
+  /// always-on system prompt.
+  List<AiMemory> aiMemoriesForPrompt(
+    String question, {
+    String sessionId = '',
+    int limit = 6,
+  }) {
+    final normalizedQuestion = question.trim().toLowerCase();
+    if (normalizedQuestion.isEmpty) return const [];
+    final normalizedSession = sessionId.trim();
+    final matches = _aiMemories.where((memory) {
+      if (!memory.isActive ||
+          (memory.sessionId.isNotEmpty &&
+              normalizedSession.isNotEmpty &&
+              memory.sessionId != normalizedSession)) {
+        return false;
+      }
+      final phrase = memory.phrase.trim().toLowerCase();
+      return phrase.isNotEmpty && normalizedQuestion.contains(phrase);
+    });
+    return matches.take(limit.clamp(1, 20).toInt()).toList(growable: false);
+  }
+
+  /// Build a short, labelled prompt block from the matching memory subset.
+  /// The content is intentionally capped so one long memory cannot crowd out
+  /// the user's question or ledger context.
+  String aiMemoryPromptBlock(
+    String question, {
+    String sessionId = '',
+    int limit = 6,
+  }) {
+    final matches = aiMemoriesForPrompt(
+      question,
+      sessionId: sessionId,
+      limit: limit,
+    );
+    if (matches.isEmpty) return '';
+    final lines = <String>[];
+    var characters = 0;
+    for (final memory in matches) {
+      final line = '- ${memory.content.trim()}';
+      if (line.length > 360 || characters + line.length > 1200) break;
+      lines.add(line);
+      characters += line.length;
+    }
+    if (lines.isEmpty) return '';
+    return '本次问题匹配到的用户已授权记忆（只作偏好参考，不可覆盖当前问题）：\n'
+        '${lines.join('\n')}';
+  }
+
+  bool aiSkillEnabled(String id) => _aiSkillState[id.trim()] ?? true;
+
+  bool aiSkillAllowsTool(String skillId, String toolId) {
+    final skill = AiSkillRegistry.builtIns
+        .where((item) => item.id == skillId.trim())
+        .firstOrNull;
+    return skill != null &&
+        aiSkillEnabled(skill.id) &&
+        skill.allowedToolIds.contains(toolId.trim());
+  }
+
+  bool aiConnectorEnabled(String id) =>
+      _aiConnectorState[id.trim()] ?? id.trim() == 'web_search';
+
+  Future<void> setAiSkillEnabled(String id, bool enabled) async {
+    final key = id.trim();
+    if (key.isEmpty) return;
+    _aiSkillState[key] = enabled;
+    await _persistAiExtensionSetting('ai_skill_state', _aiSkillState);
+    notifyListeners();
+  }
+
+  Future<void> setAiConnectorEnabled(String id, bool enabled) async {
+    final key = id.trim();
+    if (key.isEmpty) return;
+    _aiConnectorState[key] = enabled;
+    await _persistAiExtensionSetting('ai_connector_state', _aiConnectorState);
+    notifyListeners();
+  }
+
+  Future<void> _persistAiExtensionSetting(
+    String key,
+    Map<String, bool> values,
+  ) async {
+    await _db!.insert(
+      'app_settings',
+      {'key': key, 'value': encodeAiSkillState(values)},
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+  }
+
+  /// Add a memory only after an explicit user consent. Automatic model output
+  /// cannot call this method with consent=false and silently persist a fact.
+  Future<AiMemory?> addAiMemory({
+    required String phrase,
+    required String content,
+    bool consent = false,
+    String source = 'user',
+    String sessionId = '',
+  }) async {
+    final p = phrase.trim();
+    final value = content.trim();
+    if (!consent || p.isEmpty || value.isEmpty) return null;
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final memory = AiMemory(
+      id: _newUuid(),
+      phrase: p,
+      content: value,
+      source: source.trim().isEmpty ? 'user' : source.trim(),
+      sessionId: sessionId.trim(),
+      consent: true,
+      createdMs: now,
+      updatedMs: now,
+    );
+    await _db!.insert('ai_memories', memory.toMap());
+    await _loadAiMemories();
+    notifyListeners();
+    return memory;
+  }
+
+  Future<void> setAiMemoryConsent(String id, bool consent) async {
+    final value = id.trim();
+    if (value.isEmpty) return;
+    await _db!.update(
+      'ai_memories',
+      {
+        'consent': consent ? 1 : 0,
+        'status': consent ? 'active' : 'disabled',
+        'updated_ms': DateTime.now().millisecondsSinceEpoch,
+      },
+      where: 'id = ?',
+      whereArgs: [value],
+    );
+    await _loadAiMemories();
+    notifyListeners();
+  }
+
+  Future<void> deleteAiMemory(String id) async {
+    final value = id.trim();
+    if (value.isEmpty) return;
+    await _db!.delete('ai_memories', where: 'id = ?', whereArgs: [value]);
+    _aiMemories.removeWhere((memory) => memory.id == value);
+    notifyListeners();
+  }
+
+  Future<void> forgetAllAiMemories() async {
+    await _db!.delete('ai_memories');
+    _aiMemories.clear();
+    notifyListeners();
+  }
+
+  Future<void> markAiMemoryUsed(String id) async {
+    final value = id.trim();
+    if (value.isEmpty) return;
+    await _db!.update(
+      'ai_memories',
+      {
+        'last_used_ms': DateTime.now().millisecondsSinceEpoch,
+        'updated_ms': DateTime.now().millisecondsSinceEpoch,
+      },
+      where: 'id = ? AND consent = 1 AND status = \'active\'',
+      whereArgs: [value],
+    );
+  }
+
+  Future<AiReportSchedule> saveAiReportSchedule(
+    AiReportSchedule schedule,
+  ) async {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final id = schedule.id.trim().isEmpty ? _newUuid() : schedule.id.trim();
+    final normalized = AiReportSchedule(
+      id: id,
+      sessionId: schedule.sessionId.trim().isEmpty
+          ? ChatSession.recordId
+          : schedule.sessionId.trim(),
+      title: schedule.title.trim().isEmpty ? '周期账本报告' : schedule.title.trim(),
+      reportType: schedule.reportType.trim().isEmpty
+          ? 'monthly'
+          : schedule.reportType.trim(),
+      periodKind: schedule.periodKind == 'weekly' ? 'weekly' : 'monthly',
+      dayValue: schedule.periodKind == 'weekly'
+          ? schedule.dayValue.clamp(1, 7).toInt()
+          : schedule.dayValue.clamp(1, 28).toInt(),
+      enabled: schedule.enabled,
+      nextRunMs: schedule.nextRunMs > now
+          ? schedule.nextRunMs
+          : _nextAiScheduleRun(
+              periodKind: schedule.periodKind,
+              dayValue: schedule.dayValue,
+              now: DateTime.now(),
+            ).millisecondsSinceEpoch,
+      providerId: schedule.providerId.trim(),
+      model: schedule.model.trim(),
+      effort: schedule.effort.trim().isEmpty ? 'low' : schedule.effort.trim(),
+      createdMs: schedule.createdMs == 0 ? now : schedule.createdMs,
+      updatedMs: now,
+    );
+    await _db!.insert(
+      'ai_report_schedules',
+      normalized.toMap(),
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+    await _loadAiReportSchedules();
+    notifyListeners();
+    return normalized;
+  }
+
+  Future<void> deleteAiReportSchedule(String id) async {
+    final value = id.trim();
+    if (value.isEmpty) return;
+    await _db!.delete(
+      'ai_report_schedules',
+      where: 'id = ?',
+      whereArgs: [value],
+    );
+    _aiReportSchedules.removeWhere((schedule) => schedule.id == value);
+    notifyListeners();
+  }
+
+  Future<List<AiReportSchedule>> dueAiReportSchedules({DateTime? now}) async {
+    final value = (now ?? DateTime.now()).millisecondsSinceEpoch;
+    final rows = await _db!.query(
+      'ai_report_schedules',
+      where: 'enabled = 1 AND next_run_ms <= ?',
+      whereArgs: [value],
+      orderBy: 'next_run_ms ASC',
+    );
+    return rows.map(AiReportSchedule.fromMap).toList(growable: false);
+  }
+
+  Future<void> markAiReportScheduleRun(
+    String id, {
+    DateTime? now,
+  }) async {
+    final schedule =
+        _aiReportSchedules.where((item) => item.id == id).firstOrNull;
+    if (schedule == null) return;
+    final current = now ?? DateTime.now();
+    await saveAiReportSchedule(
+      schedule.copyWith(
+        nextRunMs: _nextAiScheduleRun(
+          periodKind: schedule.periodKind,
+          dayValue: schedule.dayValue,
+          now: current,
+        ).millisecondsSinceEpoch,
+      ),
+    );
+  }
+
+  static DateTime _nextAiScheduleRun({
+    required String periodKind,
+    required int dayValue,
+    required DateTime now,
+  }) {
+    if (periodKind == 'weekly') {
+      var candidate = DateTime(now.year, now.month, now.day, 9);
+      final delta = (dayValue.clamp(1, 7).toInt() - candidate.weekday) % 7;
+      candidate = candidate.add(Duration(days: delta));
+      if (!candidate.isAfter(now))
+        candidate = candidate.add(const Duration(days: 7));
+      return candidate;
+    }
+    var year = now.year;
+    var month = now.month;
+    final day = dayValue.clamp(1, 28).toInt();
+    var candidate = DateTime(year, month, day, 9);
+    if (!candidate.isAfter(now)) {
+      month++;
+      if (month == 13) {
+        year++;
+        month = 1;
+      }
+      candidate = DateTime(year, month, day, 9);
+    }
+    return candidate;
+  }
+
+  /// Search conversations and durable AI runs with the same query text. Raw
+  /// prompts are returned only as short snippets for the local UI; secrets are
+  /// never part of either table.
+  Future<List<Map<String, Object?>>> searchAiHistory(
+    String query, {
+    int limit = 80,
+  }) async {
+    final value = query.trim();
+    if (value.isEmpty) return const [];
+    final safeLimit = limit.clamp(1, 200).toInt();
+    final like = '%$value%';
+    final messages = await _db!.query(
+      'chat_messages',
+      where: 'text LIKE ? OR question LIKE ?',
+      whereArgs: [like, like],
+      orderBy: 'created_ms DESC, id DESC',
+      limit: safeLimit,
+    );
+    final runs = await _db!.query(
+      'ai_runs',
+      where: 'provider_label LIKE ? OR model LIKE ? OR error_message LIKE ?',
+      whereArgs: [like, like, like],
+      orderBy: 'updated_ms DESC, created_ms DESC',
+      limit: safeLimit,
+    );
+    final transactions = await _db!.rawQuery(
+      '''
+      SELECT
+        t.id,
+        t.note,
+        t.amount,
+        t.kind,
+        t.date_ms,
+        t.order_no,
+        c.name_zh AS category_name_zh,
+        a.name AS account_name
+      FROM transactions t
+      LEFT JOIN categories c ON c.id = t.category_id
+      LEFT JOIN accounts a ON a.id = t.account_id
+      WHERE t.refund_of IS NULL
+        AND (
+          t.note LIKE ? OR
+          t.amount LIKE ? OR
+          t.order_no LIKE ? OR
+          c.name_zh LIKE ? OR
+          a.name LIKE ?
+        )
+      ORDER BY t.date_ms DESC, t.id DESC
+      LIMIT ?
+      ''',
+      [like, like, like, like, like, safeLimit],
+    );
+    final result = <Map<String, Object?>>[
+      for (final row in messages)
+        {
+          'kind': 'message',
+          'id': row['id'],
+          'sessionId': row['session_id'],
+          'role': row['role'],
+          'snippet': ((row['question'] as String?)?.trim().isNotEmpty ?? false)
+              ? row['question']
+              : row['text'],
+          'createdMs': row['created_ms'],
+        },
+      for (final row in runs)
+        {
+          'kind': 'run',
+          'id': row['id'],
+          'sessionId': row['session_id'],
+          'role': row['mode'],
+          'snippet':
+              '${row['provider_label'] ?? ''} ${row['model'] ?? ''}'.trim(),
+          'status': row['status'],
+          'createdMs': row['created_ms'],
+        },
+      for (final row in transactions)
+        {
+          'kind': 'transaction',
+          'id': row['id'],
+          'role': row['kind'],
+          'snippet': [
+            row['note']?.toString().trim() ?? '',
+            row['category_name_zh']?.toString().trim() ?? '',
+            row['amount'] == null ? '' : '¥${row['amount']}',
+            row['account_name']?.toString().trim() ?? '',
+          ].where((value) => value.isNotEmpty).join(' · '),
+          'createdMs': row['date_ms'],
+        },
+    ];
+    result.sort(
+      (left, right) => ((right['createdMs'] as num?)?.toInt() ?? 0).compareTo(
+        (left['createdMs'] as num?)?.toInt() ?? 0,
+      ),
+    );
+    return result.take(safeLimit).toList(growable: false);
   }
 
   // ---------------------------------------------------------------------------
@@ -11613,6 +13962,126 @@ class AppRepository extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Insert a set of drafts in one SQLite transaction and return their row ids.
+  ///
+  /// This is used by AI ledger commits so a multi-item proposal cannot leave a
+  /// half-written batch when one row fails.  The run state and its terminal
+  /// events are committed in the same transaction when [runId] is supplied.
+  Future<List<int>> addTransactionDraftsAtomically(
+    List<TransactionDraft> drafts, {
+    String? runId,
+  }) async {
+    if (drafts.isEmpty) return const [];
+    final normalizedRunId = runId?.trim() ?? '';
+    for (final draft in drafts) {
+      if (draft.amount < Decimal.zero) {
+        throw ArgumentError('账单金额不能为负数');
+      }
+      if (!_isSupportedTransactionAccountId(draft.accountId)) {
+        throw ArgumentError('记账账户不存在或币种不受支持');
+      }
+      if (draft.kind == TransactionKind.transfer) {
+        throw ArgumentError('批量记账暂不支持没有转入账户的转账草稿');
+      }
+    }
+
+    final ids = <int>[];
+    final refs = <Map<String, Object?>>[];
+    final now = DateTime.now().millisecondsSinceEpoch;
+    await _db!.transaction((txn) async {
+      AiRunStatus? runStatus;
+      if (normalizedRunId.isNotEmpty) {
+        final rows = await txn.query(
+          'ai_runs',
+          columns: const ['status'],
+          where: 'id = ?',
+          whereArgs: [normalizedRunId],
+          limit: 1,
+        );
+        if (rows.isEmpty) throw StateError('AI run 不存在');
+        runStatus = AiRunStatusX.fromStorage(rows.first['status']);
+        if (runStatus == AiRunStatus.completed ||
+            runStatus == AiRunStatus.rolledBack ||
+            runStatus == AiRunStatus.failed ||
+            runStatus == AiRunStatus.cancelled) {
+          throw StateError('AI run 已结束，不能重复写入账单');
+        }
+      }
+
+      for (final draft in drafts) {
+        final sync = _syncStampNew();
+        final id = await txn.insert('transactions', {
+          'book_id': draft.bookId ?? _currentBookId,
+          'kind': draft.kind.toJson(),
+          'amount': normalizeMoneyAmount(draft.amount).toString(),
+          'currency_code': 'CNY',
+          'category_id': draft.categoryId,
+          'account_id': draft.accountId,
+          'to_account_id': null,
+          'note': draft.note,
+          'date_ms': draft.date.millisecondsSinceEpoch,
+          'time_precision': draft.timePrecision.storageKey,
+          'tags': draft.tagIds.join(','),
+          'reimbursable': draft.reimbursable ? 1 : 0,
+          'image_path': draft.imagePath,
+          'excluded': draft.excluded ? 1 : 0,
+          ..._settlementFields(
+            settledAt: draft.date,
+            settlementAccountId: draft.accountId,
+            eventType: _eventTypeForKind(draft.kind),
+          ),
+          ...sync,
+        });
+        ids.add(id);
+        refs.add({
+          'id': id,
+          'uuid': sync['uuid'],
+          'createdMs': sync['created_ms'],
+          'updatedMs': sync['updated_ms'],
+        });
+      }
+
+      if (normalizedRunId.isNotEmpty) {
+        final result = jsonEncode({
+          'transactionIds': ids,
+          'transactionRefs': refs,
+        });
+        await txn.update(
+          'ai_runs',
+          {
+            'result_json': result,
+            'status': AiRunStatus.completed.storageKey,
+            'requires_confirmation': 0,
+            'updated_ms': now,
+          },
+          where: 'id = ?',
+          whereArgs: [normalizedRunId],
+        );
+        await _appendAiRunEventInTxn(
+          txn,
+          normalizedRunId,
+          AiRunEventType.committed,
+          payload: {'transactionIds': ids, 'count': ids.length},
+          createdMs: now,
+        );
+        await _appendAiRunEventInTxn(
+          txn,
+          normalizedRunId,
+          AiRunEventType.completed,
+          payload: {'count': ids.length},
+          createdMs: now,
+        );
+      }
+    });
+
+    await _refreshTransactionRows(ids: ids.toSet());
+    await _refreshCurrentNetWorthSnapshotBestEffort({
+      NetWorthSnapshotCause.transaction,
+    });
+    notifyListeners();
+    return List.unmodifiable(ids);
+  }
+
   Future<int> importTransactions(List<TransactionDraft> drafts) async {
     if (drafts.isEmpty) return 0;
     final batch = _db!.batch();
@@ -11643,9 +14112,9 @@ class AppRepository extends ChangeNotifier {
     // 批量导入会一次新增任意数量的行；提交后只做一次全量刷新，避免
     // 为几千个 id 生成超长 IN 查询，也不会退化成“每插一行就全表重载”。
     await _loadTransactions();
-    await _refreshCurrentNetWorthSnapshotBestEffort(
-      const {NetWorthSnapshotCause.transaction},
-    );
+    await _refreshCurrentNetWorthSnapshotBestEffort({
+      NetWorthSnapshotCause.transaction,
+    });
     notifyListeners();
     return drafts.length;
   }
@@ -13717,11 +16186,36 @@ class AppRepository extends ChangeNotifier {
   String _providerSecretKey(String providerId) =>
       'ai_provider_api_key_${providerId.trim()}';
 
+  String _providerOAuthRefreshKey(String providerId) =>
+      'ai_provider_oauth_refresh_${providerId.trim()}';
+
+  String _providerOAuthIdTokenKey(String providerId) =>
+      'ai_provider_oauth_id_token_${providerId.trim()}';
+
+  Future<void> _saveOAuthRefreshToken(String providerId, String value) async {
+    final key = _providerOAuthRefreshKey(providerId);
+    final trimmed = value.trim();
+    if (trimmed.isEmpty) {
+      await SecureKeyStore.delete(key);
+      return;
+    }
+    await SecureKeyStore.write(key, trimmed);
+  }
+
+  Future<void> _saveOAuthIdToken(String providerId, String value) async {
+    final key = _providerOAuthIdTokenKey(providerId);
+    final trimmed = value.trim();
+    if (trimmed.isEmpty) {
+      await SecureKeyStore.delete(key);
+      return;
+    }
+    await SecureKeyStore.write(key, trimmed);
+  }
+
   /// Persist the provider catalog and the two task selections in one place.
   /// API keys are deliberately kept outside this JSON payload.
   Future<void> _persistAiProviderMetadata({
     bool notify = true,
-    bool resetPrivacyConsent = false,
   }) async {
     final batch = _db!.batch();
     void setting(String key, String value) => batch.insert(
@@ -13735,6 +16229,7 @@ class AppRepository extends ChangeNotifier {
       jsonEncode(_aiProviders.map((provider) => provider.toJson()).toList()),
     );
     setting('ai_record_provider_id', _recordAiProviderId ?? '');
+    setting('ai_record_model', _recordAiModel ?? '');
     setting('chat_current_provider_id', _chatCurrentProviderId ?? '');
     setting('chat_current_model', _chatCurrentModel ?? '');
     setting('ai_provider_type', _aiProviderType.storageKey);
@@ -13753,12 +16248,10 @@ class AppRepository extends ChangeNotifier {
     setting('ai_report_endpoint_type', _reportAiEndpointType.storageKey);
     setting('ai_record_reasoning_effort', _recordAiReasoningEffort.storageKey);
     setting('ai_chat_reasoning_effort', _chatAiReasoningEffort.storageKey);
+    setting('ai_chat_web_search_enabled', _chatWebSearchEnabled ? '1' : '0');
+    setting('ai_chat_tool_access', _chatToolAccess.storageKey);
     setting('ai_report_reasoning_effort', _reportAiReasoningEffort.storageKey);
     setting('ai_task_config_version', '3');
-    if (resetPrivacyConsent) {
-      _aiPrivacyAccepted = false;
-      setting('ai_privacy_accepted', '0');
-    }
     await batch.commit(noResult: true);
     if (notify) notifyListeners();
   }
@@ -13771,6 +16264,7 @@ class AppRepository extends ChangeNotifier {
     if (id.isEmpty) id = _newUuid();
 
     final existing = aiProviderById(id);
+    final wasActiveRecordProvider = _recordAiProviderId == id;
     if (existing?.builtIn == true && provider.type != AiProviderType.deepseek) {
       throw StateError('内置服务商不能改为自定义服务商');
     }
@@ -13780,31 +16274,37 @@ class AppRepository extends ChangeNotifier {
     final type = isDeepSeek ? AiProviderType.deepseek : AiProviderType.custom;
     final displayName = isDeepSeek
         ? AiProviderType.deepseek.label
-        : (provider.displayName.trim().isEmpty
-            ? AiProviderType.custom.label
-            : provider.displayName.trim());
-    final baseUrl = isDeepSeek
-        ? AiProviderConfig.deepSeekBaseUrl
-        : (provider.baseUrl.trim().isEmpty
-            ? AiProviderConfig.customDefaultBaseUrl
-            : provider.baseUrl.trim());
-    final model = provider.model.trim().isEmpty
-        ? (isDeepSeek
-            ? AiProviderConfig.deepSeekModel
-            : AiProviderConfig.customDefaultModel)
-        : provider.model.trim();
+        : provider.displayName.trim();
+    final baseUrl =
+        isDeepSeek ? AiProviderConfig.deepSeekBaseUrl : provider.baseUrl.trim();
+    final model =
+        isDeepSeek ? AiProviderConfig.deepSeekModel : provider.model.trim();
     final models = <String>{
       model,
       ...provider.models
           .map((value) => value.trim())
           .where((value) => value.isNotEmpty),
     }.toList();
+    final excludedModels = provider.excludedModels
+        .map((value) => value.trim())
+        .where((value) => value.isNotEmpty && !models.contains(value))
+        .toList();
     final storedKey = await _saveSecret(
       secureKey: _providerSecretKey(id),
       legacySettingKey: _providerSecretKey(id),
       configuredSettingKey: '${_providerSecretKey(id)}_configured',
       value: provider.apiKey,
     );
+    final oauthRefreshToken =
+        !isDeepSeek && provider.authMethod == AiAuthMethod.oauth
+            ? provider.oauthRefreshToken.trim()
+            : '';
+    final oauthIdToken =
+        !isDeepSeek && provider.authMethod == AiAuthMethod.oauth
+            ? provider.oauthIdToken.trim()
+            : '';
+    await _saveOAuthRefreshToken(id, oauthRefreshToken);
+    await _saveOAuthIdToken(id, oauthIdToken);
 
     if (isDeepSeek) {
       _deepSeekApiKey = await _saveSecret(
@@ -13830,10 +16330,23 @@ class AppRepository extends ChangeNotifier {
       apiKey: storedKey ?? '',
       model: model,
       models: models,
+      excludedModels: excludedModels,
       endpointType:
           isDeepSeek ? AiEndpointType.chatCompletions : provider.endpointType,
+      authMethod: isDeepSeek ? AiAuthMethod.apiKey : provider.authMethod,
       reasoningEffort: provider.reasoningEffort,
+      webSearchEnabled: provider.webSearchEnabled,
       builtIn: isDeepSeek,
+      enabled: provider.enabled,
+      oauthAuthorizationUrl: provider.oauthAuthorizationUrl.trim().isEmpty &&
+              provider.authMethod == AiAuthMethod.oauth
+          ? AiProviderConfig.openAiOAuthAuthorizationUrl
+          : provider.oauthAuthorizationUrl.trim(),
+      oauthAccountId: provider.oauthAccountId.trim(),
+      accountEmail: provider.accountEmail.trim(),
+      oauthIdToken: oauthIdToken,
+      oauthRefreshToken: oauthRefreshToken,
+      oauthExpiresAtMs: provider.oauthExpiresAtMs,
     );
     final index = _aiProviders.indexWhere((item) => item.id == id);
     if (index == -1) {
@@ -13848,6 +16361,63 @@ class AppRepository extends ChangeNotifier {
     if (aiProviderById(_chatCurrentProviderId) == null) {
       _chatCurrentProviderId = id;
     }
+    if (_recordAiProviderId == id && !updated.isUsable) {
+      _recordAiProviderId =
+          _firstUsableProvider(excludingId: id)?.id ?? _recordAiProviderId;
+    }
+    if (_chatCurrentProviderId == id && !updated.isUsable) {
+      final fallback = _firstUsableProvider(excludingId: id);
+      _chatCurrentProviderId = fallback?.id ?? _chatCurrentProviderId;
+      _chatCurrentModel = fallback?.model;
+    }
+
+    final catalogChanged = existing != null &&
+        (existing.model != updated.model ||
+            existing.models.length != updated.models.length ||
+            existing.models
+                .toSet()
+                .difference(updated.models.toSet())
+                .isNotEmpty ||
+            updated.models
+                .toSet()
+                .difference(existing.models.toSet())
+                .isNotEmpty);
+    if (updated.isUsable && catalogChanged) {
+      await _repairChatSessionsForModelCatalog(
+        providerId: id,
+        validModels: updated.models.toSet(),
+        fallbackModel: updated.model,
+      );
+    }
+
+    // A provider can be owned by many Chats sessions. Once its key is cleared,
+    // those sessions must not retain a dead provider/model pair: the UI would
+    // still show the old model while the resolver silently sent through a
+    // fallback provider. Reassign the rows before publishing the new catalog.
+    if (existing?.isUsable == true && !updated.isUsable) {
+      await _reassignChatSessionsForProvider(id);
+    }
+
+    if (existing != null && wasActiveRecordProvider) {
+      _repairRecordAiSelection(
+        excludingProviderId: updated.isUsable ? null : id,
+      );
+    }
+
+    // A fresh install starts with an unconfigured DeepSeek selection. When
+    // the first keyed custom provider is added, converge the in-memory
+    // selection immediately instead of carrying DeepSeek's model name into
+    // the fallback provider until the next restart.
+    final usableChat = _selectedOrUsableProvider(_chatCurrentProviderId);
+    if (usableChat != null && usableChat.isUsable) {
+      if (_chatCurrentProviderId != usableChat.id) {
+        _chatCurrentProviderId = usableChat.id;
+        _chatCurrentModel = usableChat.model;
+      } else if (_chatCurrentModel == null ||
+          !usableChat.models.contains(_chatCurrentModel)) {
+        _chatCurrentModel = usableChat.model;
+      }
+    }
     final selected = aiProviderById(_chatCurrentProviderId);
     if (selected != null &&
         (_chatCurrentModel == null ||
@@ -13859,19 +16429,77 @@ class AppRepository extends ChangeNotifier {
     _reportAiProviderType = _chatAiProviderType;
     await _persistAiProviderMetadata(
       notify: false,
-      resetPrivacyConsent: true,
     );
     notifyListeners();
   }
 
+  /// Completes a GPT OAuth login and turns the account-specific Codex model
+  /// catalogue into the same provider catalogue used by API-key accounts.
+  Future<AiConfiguredProvider> saveAiOAuthTokens({
+    required String providerId,
+    required OpenAiCodexOAuthTokens tokens,
+    required List<String> models,
+  }) async {
+    final provider = aiProviderById(providerId.trim());
+    if (provider == null) throw StateError('服务商不存在');
+    final normalized = <String>[];
+    final seen = <String>{};
+    for (final raw in models) {
+      final model = raw.trim();
+      if (model.isNotEmpty && seen.add(model)) normalized.add(model);
+    }
+    if (normalized.isEmpty) throw StateError('GPT 账号没有可用模型');
+    final updated = provider.copyWith(
+      displayName: provider.displayName.trim().isEmpty
+          ? 'GPT'
+          : provider.displayName.trim(),
+      baseUrl: AiProviderConfig.openAiCodexBaseUrl,
+      apiKey: tokens.accessToken,
+      model: normalized.first,
+      models: normalized,
+      endpointType: AiEndpointType.responses,
+      authMethod: AiAuthMethod.oauth,
+      oauthAuthorizationUrl: AiProviderConfig.openAiOAuthAuthorizationUrl,
+      oauthAccountId: tokens.accountId ?? provider.oauthAccountId,
+      oauthIdToken: tokens.idToken,
+      oauthRefreshToken: tokens.refreshToken ?? provider.oauthRefreshToken,
+      oauthExpiresAtMs: tokens.expiresAtMs,
+    );
+    await saveAiConfiguredProvider(updated);
+    return aiProviderById(provider.id) ?? updated;
+  }
+
+  Future<void> _saveRefreshedAiOAuthTokens(
+    String providerId,
+    String accessToken,
+    String? refreshToken,
+    int? expiresAtMs,
+    String? accountId,
+  ) async {
+    final provider = aiProviderById(providerId);
+    if (provider == null || provider.authMethod != AiAuthMethod.oauth) return;
+    await saveAiConfiguredProvider(
+      provider.copyWith(
+        apiKey: accessToken,
+        oauthRefreshToken: refreshToken ?? provider.oauthRefreshToken,
+        oauthExpiresAtMs: expiresAtMs ?? provider.oauthExpiresAtMs,
+        oauthAccountId: accountId ?? provider.oauthAccountId,
+      ),
+    );
+  }
+
   Future<AiConfiguredProvider> addAiConfiguredProvider({
-    String displayName = '自定义服务商',
-    String baseUrl = AiProviderConfig.customDefaultBaseUrl,
+    String displayName = '',
+    String baseUrl = '',
     String apiKey = '',
-    String model = AiProviderConfig.customDefaultModel,
+    String model = '',
     Iterable<String> models = const [],
     AiEndpointType endpointType = AiEndpointType.auto,
+    AiAuthMethod authMethod = AiAuthMethod.apiKey,
     AiReasoningEffort reasoningEffort = AiReasoningEffort.none,
+    bool webSearchEnabled = false,
+    bool enabled = true,
+    String oauthAuthorizationUrl = '',
   }) async {
     final provider = AiConfiguredProvider(
       id: _newUuid(),
@@ -13882,11 +16510,129 @@ class AppRepository extends ChangeNotifier {
       model: model,
       models: models,
       endpointType: endpointType,
+      authMethod: authMethod,
       reasoningEffort: reasoningEffort,
+      webSearchEnabled: webSearchEnabled,
+      enabled: enabled,
+      oauthAuthorizationUrl: oauthAuthorizationUrl,
     );
     await saveAiConfiguredProvider(provider);
     return aiProviderById(provider.id) ?? provider;
   }
+
+  /// Import one account from Cockpit/auth.json/Sub2API compatible JSON.
+  ///
+  /// OAuth/API credentials are saved by [saveAiConfiguredProvider] into the
+  /// Android Keystore-backed secure store. The optional existing id is only
+  /// used after the settings UI has shown the user a duplicate preview.
+  Future<AiConfiguredProvider> importAiAccount(
+    AiAccountImportEntry entry, {
+    String? existingProviderId,
+    bool? enabledOverride,
+  }) async {
+    if (!entry.hasCredential) {
+      throw const FormatException('账号没有可用的 API Key 或 OAuth Token');
+    }
+    final existing = existingProviderId == null
+        ? null
+        : aiProviderById(existingProviderId.trim());
+    if (existing?.builtIn == true) {
+      throw StateError('内置服务商不能被账号导入覆盖');
+    }
+    final oauth = entry.authMethod == AiAuthMethod.oauth;
+    final id = existing?.id ?? _newUuid();
+    final model = entry.model.trim().isNotEmpty
+        ? entry.model.trim()
+        : (existing?.model.trim().isNotEmpty == true
+            ? existing!.model.trim()
+            : (oauth ? AiProviderConfig.customDefaultModel : ''));
+    final models = entry.models.isNotEmpty
+        ? entry.models
+        : (existing?.models.isNotEmpty == true ? existing!.models : [model]);
+    final importedCredential = entry.credential.trim().isNotEmpty
+        ? entry.credential.trim()
+        : existing?.apiKey ?? '';
+    final importedAccountId = entry.accountId.trim().isNotEmpty
+        ? entry.accountId.trim()
+        : existing?.oauthAccountId ?? '';
+    final importedEmail = entry.accountEmail.trim().isNotEmpty
+        ? entry.accountEmail.trim()
+        : existing?.accountEmail ?? '';
+    final importedIdToken = entry.idToken.trim().isNotEmpty
+        ? entry.idToken.trim()
+        : existing?.oauthIdToken ?? '';
+    final importedRefreshToken = entry.refreshToken.trim().isNotEmpty
+        ? entry.refreshToken.trim()
+        : existing?.oauthRefreshToken ?? '';
+    final importedBaseUrl = entry.baseUrl.trim().isNotEmpty
+        ? entry.baseUrl.trim()
+        : existing?.baseUrl ?? '';
+    final importedDisplayName = entry.displayName.trim().isNotEmpty
+        ? entry.displayName.trim()
+        : (existing?.displayName.trim().isNotEmpty == true
+            ? existing!.displayName.trim()
+            : (oauth ? 'GPT' : '自定义服务'));
+    final importedEndpoint = entry.endpointType == AiEndpointType.auto
+        ? (existing?.endpointType ?? AiEndpointType.auto)
+        : entry.endpointType;
+    final provider = AiConfiguredProvider(
+      id: id,
+      type: AiProviderType.custom,
+      displayName: importedDisplayName,
+      baseUrl: oauth ? AiProviderConfig.openAiCodexBaseUrl : importedBaseUrl,
+      apiKey: importedCredential,
+      model: model,
+      models: models,
+      endpointType: oauth ? AiEndpointType.responses : importedEndpoint,
+      authMethod: oauth ? AiAuthMethod.oauth : AiAuthMethod.apiKey,
+      enabled: enabledOverride ?? entry.enabled,
+      builtIn: false,
+      oauthAuthorizationUrl:
+          oauth ? AiProviderConfig.openAiOAuthAuthorizationUrl : '',
+      oauthAccountId: oauth ? importedAccountId : '',
+      accountEmail: oauth ? importedEmail : '',
+      oauthIdToken: oauth ? importedIdToken : '',
+      oauthRefreshToken: oauth ? importedRefreshToken : '',
+      // A refresh-only import must immediately try refresh on first use.
+      oauthExpiresAtMs: oauth && entry.accessToken.trim().isEmpty
+          ? (entry.expiresAtMs ?? 0)
+          : (entry.expiresAtMs ?? existing?.oauthExpiresAtMs),
+      reasoningEffort: existing?.reasoningEffort ?? AiReasoningEffort.none,
+      webSearchEnabled: existing?.webSearchEnabled ?? false,
+    );
+    await saveAiConfiguredProvider(provider);
+    return aiProviderById(id) ?? provider;
+  }
+
+  /// Best-effort duplicate match used by the JSON import preview.
+  AiConfiguredProvider? matchingAiProvider(AiAccountImportEntry entry) {
+    final accountId = entry.accountId.trim().toLowerCase();
+    final email = entry.accountEmail.trim().toLowerCase();
+    final sourceId = entry.sourceId.trim().toLowerCase();
+    for (final provider in _aiProviders) {
+      if (accountId.isNotEmpty &&
+          provider.oauthAccountId.trim().toLowerCase() == accountId) {
+        return provider;
+      }
+      if (email.isNotEmpty &&
+          provider.accountEmail.trim().toLowerCase() == email) {
+        return provider;
+      }
+      if (sourceId.isNotEmpty && provider.id.trim().toLowerCase() == sourceId) {
+        return provider;
+      }
+    }
+    return null;
+  }
+
+  /// Returns a Cockpit-compatible multi-account export. This includes active
+  /// credentials by design; the settings UI warns before opening the share
+  /// sheet and writes only to a temporary file.
+  String exportAiAccountsJson({bool includeDisabled = true}) =>
+      AiAccountJsonCodec.encodeCockpit(
+        _aiProviders,
+        includeDisabled: includeDisabled,
+      );
 
   Future<void> deleteAiConfiguredProvider(String providerId) async {
     final id = providerId.trim();
@@ -13897,6 +16643,8 @@ class AppRepository extends ChangeNotifier {
     }
     _aiProviders.removeWhere((item) => item.id == id);
     await SecureKeyStore.delete(_providerSecretKey(id));
+    await SecureKeyStore.delete(_providerOAuthRefreshKey(id));
+    await SecureKeyStore.delete(_providerOAuthIdTokenKey(id));
     await _db!.delete(
       'app_settings',
       where: 'key IN (?, ?)',
@@ -13914,14 +16662,17 @@ class AppRepository extends ChangeNotifier {
       );
       _customAiApiKey = null;
     }
-    final changedActiveProvider =
-        _recordAiProviderId == id || _chatCurrentProviderId == id;
+    // Keep every normal conversation internally consistent with the catalog
+    // mutation. The transaction also makes this safe if a session is opened
+    // while the settings page is deleting the provider.
+    await _reassignChatSessionsForProvider(id);
     final fallback = _firstUsableProvider();
     if (_recordAiProviderId == id) _recordAiProviderId = fallback?.id;
     if (_chatCurrentProviderId == id) {
       _chatCurrentProviderId = fallback?.id;
       _chatCurrentModel = fallback?.model;
     }
+    _repairRecordAiSelection();
     _recordAiProviderType =
         aiProviderById(_recordAiProviderId)?.type ?? AiProviderType.deepseek;
     _chatAiProviderType =
@@ -13929,9 +16680,124 @@ class AppRepository extends ChangeNotifier {
     _reportAiProviderType = _chatAiProviderType;
     await _persistAiProviderMetadata(
       notify: false,
-      resetPrivacyConsent: changedActiveProvider,
     );
     notifyListeners();
+  }
+
+  /// Enable or pause one account without deleting its credential or model
+  /// catalogue.  Pausing the active account immediately rebinds global
+  /// selections and persisted Chats sessions to the next enabled account.
+  Future<void> setAiConfiguredProviderEnabled(
+    String providerId,
+    bool enabled,
+  ) async {
+    final id = providerId.trim();
+    final provider = aiProviderById(id);
+    if (provider == null) throw StateError('服务商不存在');
+    if (provider.enabled == enabled) return;
+
+    final index = _aiProviders.indexWhere((item) => item.id == id);
+    final updated = provider.copyWith(enabled: enabled);
+    _aiProviders[index] = updated;
+
+    final activeRecord = _recordAiProviderId == id;
+    final activeChat = _chatCurrentProviderId == id;
+    if (!enabled) {
+      final fallback = _firstUsableProvider(excludingId: id);
+      if (activeRecord) _recordAiProviderId = fallback?.id;
+      if (activeChat) {
+        _chatCurrentProviderId = fallback?.id;
+        _chatCurrentModel = fallback?.model;
+      }
+      await _reassignChatSessionsForProvider(id);
+    } else {
+      // If this was the only configured account, make re-enabling it useful
+      // immediately instead of leaving the resolver attached to a disabled
+      // or empty placeholder.
+      if (_recordAiProviderId == null ||
+          _selectedOrUsableProvider(_recordAiProviderId) == null) {
+        _recordAiProviderId = id;
+      }
+      if (_chatCurrentProviderId == null ||
+          _selectedOrUsableProvider(_chatCurrentProviderId) == null) {
+        _chatCurrentProviderId = id;
+        _chatCurrentModel = updated.model;
+      }
+    }
+    _repairRecordAiSelection(
+      excludingProviderId: enabled ? null : id,
+    );
+    _recordAiProviderType =
+        aiProviderById(_recordAiProviderId)?.type ?? AiProviderType.deepseek;
+    _chatAiProviderType =
+        aiProviderById(_chatCurrentProviderId)?.type ?? AiProviderType.deepseek;
+    _reportAiProviderType = _chatAiProviderType;
+    await _persistAiProviderMetadata(
+      notify: false,
+    );
+    notifyListeners();
+  }
+
+  /// Rebinds Chats sessions that reference a provider which is no longer
+  /// usable. The replacement is selected deterministically from the current
+  /// provider catalog and the session's Effort/star/title are left untouched.
+  Future<void> _reassignChatSessionsForProvider(String providerId) async {
+    final db = _db;
+    if (db == null || providerId.trim().isEmpty) return;
+    final replacement = _firstUsableProvider(excludingId: providerId.trim());
+    final replacementId = replacement?.id ?? '';
+    final replacementModel = replacement?.model ?? '';
+    final now = DateTime.now().millisecondsSinceEpoch;
+    await db.transaction((txn) async {
+      await txn.update(
+        'chat_sessions',
+        {
+          'provider_id': replacementId,
+          'model': replacementModel,
+          'updated_ms': now,
+        },
+        where: 'provider_id = ?',
+        whereArgs: [providerId.trim()],
+      );
+    });
+    await _loadChatSessions();
+  }
+
+  /// Keeps every conversation's persisted model inside the provider's
+  /// user-approved catalogue. A session may have selected a model that is
+  /// later removed in the model manager; leaving that stale value in SQLite
+  /// would make the session appear to use one model while the resolver sends
+  /// another, and could silently resurrect the removed model after refresh.
+  Future<void> _repairChatSessionsForModelCatalog({
+    required String providerId,
+    required Set<String> validModels,
+    required String fallbackModel,
+  }) async {
+    final db = _db;
+    final id = providerId.trim();
+    final fallback = fallbackModel.trim();
+    if (db == null || id.isEmpty || fallback.isEmpty) return;
+
+    final now = DateTime.now().millisecondsSinceEpoch;
+    await db.transaction((txn) async {
+      final rows = await txn.query(
+        'chat_sessions',
+        columns: const ['session_id', 'model'],
+        where: 'provider_id = ?',
+        whereArgs: [id],
+      );
+      for (final row in rows) {
+        final current = (row['model'] as String? ?? '').trim();
+        if (validModels.contains(current)) continue;
+        await txn.update(
+          'chat_sessions',
+          {'model': fallback, 'updated_ms': now},
+          where: 'session_id = ?',
+          whereArgs: [row['session_id']],
+        );
+      }
+    });
+    await _loadChatSessions();
   }
 
   Future<void> saveAiProviderModels(
@@ -13951,7 +16817,14 @@ class AppRepository extends ChangeNotifier {
     final primary = chosen != null && chosen.isNotEmpty && seen.contains(chosen)
         ? chosen
         : (normalized.firstOrNull ?? provider.model);
-    final updated = provider.copyWith(model: primary, models: normalized);
+    final excluded = provider.excludedModels
+        .where((model) => !normalized.contains(model))
+        .toList();
+    final updated = provider.copyWith(
+      model: primary,
+      models: normalized,
+      excludedModels: excluded,
+    );
     _aiProviders[_aiProviders.indexWhere((item) => item.id == provider.id)] =
         updated;
     _availableModels = List<String>.from(updated.models);
@@ -13959,6 +16832,14 @@ class AppRepository extends ChangeNotifier {
         !_chatCurrentModelIn(updated)) {
       _chatCurrentModel = updated.model;
     }
+    if (_recordAiProviderId == provider.id) {
+      _repairRecordAiSelection();
+    }
+    await _repairChatSessionsForModelCatalog(
+      providerId: provider.id,
+      validModels: updated.models.toSet(),
+      fallbackModel: updated.model,
+    );
     await _persistAiProviderMetadata(notify: false);
     await _db!.insert(
       'app_settings',
@@ -13974,14 +16855,45 @@ class AppRepository extends ChangeNotifier {
   Future<void> setRecordAiProvider(String providerId) async {
     final provider = aiProviderById(providerId.trim());
     if (provider == null) throw StateError('服务商不存在');
-    if (!provider.hasKey) throw StateError('请先配置该服务商的 API Key');
-    final providerChanged = _recordAiProviderId != provider.id;
+    if (!provider.isUsable) throw StateError('请先启用并配置该服务商的 API Key');
+    await saveRecordAiSelection(
+      providerId: provider.id,
+      model: _recordAiProviderId == provider.id &&
+              _validModelForProvider(provider, _recordAiModel)
+          ? _recordAiModel!
+          : _fallbackModelForProvider(provider) ?? '',
+      reasoningEffort: _recordAiReasoningEffort,
+    );
+  }
+
+  /// Atomically saves the complete normal-recording AI selection. Validation
+  /// happens before any in-memory or SQLite state changes, so a stale settings
+  /// page cannot leave provider/model/effort partially updated.
+  Future<void> saveRecordAiSelection({
+    required String providerId,
+    required String model,
+    required AiReasoningEffort reasoningEffort,
+  }) async {
+    final provider = aiProviderById(providerId.trim());
+    if (provider == null) throw StateError('服务商不存在');
+    if (!provider.isUsable) {
+      throw StateError('请先启用并完成该服务商的配置');
+    }
+    final selectedModel = model.trim();
+    if (!_validModelForProvider(provider, selectedModel)) {
+      throw StateError('模型不在该服务商的已保存列表中');
+    }
+    if (!AiReasoningEffort.values.contains(reasoningEffort)) {
+      throw StateError('思考强度无效');
+    }
+
     _recordAiProviderId = provider.id;
+    _recordAiModel = selectedModel;
+    _recordAiReasoningEffort = reasoningEffort;
     _recordAiProviderType = provider.type;
     _recordAiRouteMode = AiRouteMode.fixed;
     await _persistAiProviderMetadata(
       notify: false,
-      resetPrivacyConsent: providerChanged,
     );
     notifyListeners();
   }
@@ -13993,14 +16905,13 @@ class AppRepository extends ChangeNotifier {
   }) async {
     final provider = aiProviderById(providerId.trim());
     if (provider == null) throw StateError('服务商不存在');
-    if (!provider.hasKey) throw StateError('请先配置该服务商的 API Key');
+    if (!provider.isUsable) throw StateError('请先启用并配置该服务商的 API Key');
     final selectedModel = model.trim();
     if (selectedModel.isEmpty ||
         (provider.models.isNotEmpty &&
             !provider.models.contains(selectedModel))) {
       throw StateError('模型不在该服务商的已保存列表中');
     }
-    final providerChanged = _chatCurrentProviderId != provider.id;
     _chatCurrentProviderId = provider.id;
     _chatCurrentModel = selectedModel;
     _chatAiProviderType = provider.type;
@@ -14013,7 +16924,6 @@ class AppRepository extends ChangeNotifier {
     }
     await _persistAiProviderMetadata(
       notify: false,
-      resetPrivacyConsent: providerChanged,
     );
     notifyListeners();
   }
@@ -14038,21 +16948,6 @@ class AppRepository extends ChangeNotifier {
     AiReasoningEffort? chatReasoningEffort,
     AiReasoningEffort? reportReasoningEffort,
   }) async {
-    final oldRouteSignature = [
-      _aiProviderType.storageKey,
-      _customAiDisplayName,
-      _customAiBaseUrl,
-      _recordAiProviderType.storageKey,
-      _chatAiProviderType.storageKey,
-      _reportAiProviderType.storageKey,
-      _recordAiRouteMode.storageKey,
-      _chatAiRouteMode.storageKey,
-      _reportAiRouteMode.storageKey,
-      _recordAiEndpointType.storageKey,
-      _chatAiEndpointType.storageKey,
-      _reportAiEndpointType.storageKey,
-    ].join('|');
-
     _aiProviderType = type;
     _customAiDisplayName =
         (customDisplayName ?? _customAiDisplayName).trim().isEmpty
@@ -14079,6 +16974,10 @@ class AppRepository extends ChangeNotifier {
     _recordAiReasoningEffort =
         recordReasoningEffort ?? _recordAiReasoningEffort;
     _chatAiReasoningEffort = chatReasoningEffort ?? _chatAiReasoningEffort;
+    if (_chatAiReasoningEffort == AiReasoningEffort.none ||
+        _chatAiReasoningEffort == AiReasoningEffort.minimal) {
+      _chatAiReasoningEffort = AiReasoningEffort.low;
+    }
     _reportAiReasoningEffort =
         reportReasoningEffort ?? _reportAiReasoningEffort;
 
@@ -14124,24 +17023,6 @@ class AppRepository extends ChangeNotifier {
     setting('ai_report_reasoning_effort', _reportAiReasoningEffort.storageKey);
     setting('ai_task_config_version', '2');
 
-    final newRouteSignature = [
-      _aiProviderType.storageKey,
-      _customAiDisplayName,
-      _customAiBaseUrl,
-      _recordAiProviderType.storageKey,
-      _chatAiProviderType.storageKey,
-      _reportAiProviderType.storageKey,
-      _recordAiRouteMode.storageKey,
-      _chatAiRouteMode.storageKey,
-      _reportAiRouteMode.storageKey,
-      _recordAiEndpointType.storageKey,
-      _chatAiEndpointType.storageKey,
-      _reportAiEndpointType.storageKey,
-    ].join('|');
-    if (oldRouteSignature != newRouteSignature) {
-      _aiPrivacyAccepted = false;
-      setting('ai_privacy_accepted', '0');
-    }
     await batch.commit(noResult: true);
     notifyListeners();
   }
@@ -14154,15 +17035,6 @@ class AppRepository extends ChangeNotifier {
     required AiProviderType chatProviderType,
     required AiProviderType reportProviderType,
   }) async {
-    final oldRouteSignature = [
-      _recordAiProviderType.storageKey,
-      _chatAiProviderType.storageKey,
-      _reportAiProviderType.storageKey,
-      _recordAiRouteMode.storageKey,
-      _chatAiRouteMode.storageKey,
-      _reportAiRouteMode.storageKey,
-    ].join('|');
-
     _recordAiRouteMode = recordRouteMode;
     _chatAiRouteMode = chatRouteMode;
     _reportAiRouteMode = reportRouteMode;
@@ -14184,18 +17056,6 @@ class AppRepository extends ChangeNotifier {
     setting('ai_report_provider_type', _reportAiProviderType.storageKey);
     setting('ai_task_config_version', '2');
 
-    final newRouteSignature = [
-      _recordAiProviderType.storageKey,
-      _chatAiProviderType.storageKey,
-      _reportAiProviderType.storageKey,
-      _recordAiRouteMode.storageKey,
-      _chatAiRouteMode.storageKey,
-      _reportAiRouteMode.storageKey,
-    ].join('|');
-    if (oldRouteSignature != newRouteSignature) {
-      _aiPrivacyAccepted = false;
-      setting('ai_privacy_accepted', '0');
-    }
     await batch.commit(noResult: true);
     notifyListeners();
   }
@@ -14217,6 +17077,10 @@ class AppRepository extends ChangeNotifier {
     _chatAiEndpointType = chatEndpointType ?? _chatAiEndpointType;
     _reportAiEndpointType = reportEndpointType ?? _reportAiEndpointType;
     _chatAiReasoningEffort = chatReasoningEffort ?? _chatAiReasoningEffort;
+    if (_chatAiReasoningEffort == AiReasoningEffort.none ||
+        _chatAiReasoningEffort == AiReasoningEffort.minimal) {
+      _chatAiReasoningEffort = AiReasoningEffort.low;
+    }
     _reportAiReasoningEffort =
         reportReasoningEffort ?? _reportAiReasoningEffort;
 

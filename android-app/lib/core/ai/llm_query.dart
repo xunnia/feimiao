@@ -1,8 +1,12 @@
+import 'dart:async' show TimeoutException;
 import 'dart:convert';
+import 'dart:math' as math;
 
 import 'package:http/http.dart' as http;
 
 import 'ai_provider_config.dart';
+import 'openai_codex_oauth.dart';
+import 'web_search.dart';
 
 /// 查账问答：把账目数据 + 用户问题发给 DeepSeek，返回一段口语化回答。
 ///
@@ -23,21 +27,20 @@ class LlmQuery {
     required String transactionsText,
     List<Map<String, String>> priorTurns = const [],
   }) async {
-    final provider = _resolveConfig(apiKey: apiKey, config: config);
+    final provider = await OpenAiCodexOAuth.ensureFreshConfig(
+      _resolveConfig(apiKey: apiKey, config: config),
+    );
+    final webSearch = await AiWebSearchContext.prepare(
+      question: question,
+      config: provider,
+    );
     final systemPrompt = '''你是「喵助手」，一只蓝白英短猫助手，有账本数据作为参考。
-性格：口语化、简短亲切，可以带一点猫咪语气（偶尔用「喵」）。
+性格：口语化、亲切，可以带一点猫咪语气（偶尔用「喵」）。
 能力：可以回答任何问题——记账查账、消费分析、日常聊天、知识问答都可以。
 账本相关回答规则：涉及金额要给具体数字（单位元）；算不出或数据里没有就如实说不知道，绝不编造。
 **账目里若给了「本期准确合计」「本期分类准确合计」或「分类查询准确合计」，回答总额时必须直接引用那个数，绝不自己把明细一条条加起来（你手算会错）。**
 如果账目上下文出现「分类筛选已锁定」，只能使用该分类及其子分类的合计和明细；
 禁止把其它分类的数字混进答案，也不要把全月总支出冒充分类支出。若筛选合计为 0，直接如实回答 0。
-
-排版（结构清晰有层次）：
-- 先给**一句话结论**，再展开细节；
-- 分几块时用 `## 小标题` 起头（如「## 大头在哪」），标题上下各空一行；
-- 段落之间空一行；同一段别超过两句，别一大坨；
-- 并列信息用「- 」列表，每条一行；关键结论和重要数字用 **双星号加粗**（如 **¥128.50**、**餐饮**）；
-- 只允许 `##标题`、**加粗**、「- 」列表这几种 Markdown，不要表格、引用、代码块。
 
 $transactionsText''';
 
@@ -46,19 +49,22 @@ $transactionsText''';
         {'role': turn['role']!, 'content': turn['content']!},
     ];
 
-    return _postWithModelFallback(
+    final answer = await _postWithModelFallback(
       config: provider,
       timeoutSeconds: _timeoutSeconds,
       bodyForModel: (model) => {
         'model': model,
         'messages': [
           {'role': 'system', 'content': systemPrompt},
+          if (webSearch.promptBlock.trim().isNotEmpty)
+            {'role': 'system', 'content': webSearch.promptBlock},
           ...history,
           {'role': 'user', 'content': question},
         ],
         'stream': false,
       },
     );
+    return webSearch.annotateAnswer(answer);
   }
 
   static Future<String> askReport({
@@ -68,7 +74,9 @@ $transactionsText''';
     AiProviderConfig? config,
     required String transactionsText,
   }) async {
-    final provider = _resolveConfig(apiKey: apiKey, config: config);
+    final provider = await OpenAiCodexOAuth.ensureFreshConfig(
+      _resolveConfig(apiKey: apiKey, config: config),
+    );
     final typeLabel = switch (reportType) {
       'weekly' => '消费周报',
       'yearly' => '消费年报',
@@ -149,31 +157,47 @@ $transactionsText''';
   }) async {
     LlmQueryException? lastError;
     final models = config.modelCandidates;
-    for (final model in models) {
+    var activeConfig = config;
+    var unauthorizedRetried = false;
+    for (var index = 0; index < models.length; index++) {
+      final model = models[index];
       try {
         final body = bodyForModel(model);
-        if (config.shouldUseClaudeMessages) {
+        if (activeConfig.shouldUseClaudeMessages) {
           return await _postClaudeMessages(
-            config: config,
+            config: activeConfig,
             body: body,
             timeoutSeconds: timeoutSeconds,
           );
         }
-        if (config.shouldUseResponses) {
+        if (activeConfig.shouldUseResponses) {
           return await _postResponses(
-            config: config,
-            body: _responsesBodyFromChatBody(body, config),
+            config: activeConfig,
+            body: _responsesBodyFromChatBody(body, activeConfig),
             timeoutSeconds: timeoutSeconds,
           );
         }
         return await _postChat(
-          config: config,
+          config: activeConfig,
           body: body,
           timeoutSeconds: timeoutSeconds,
         );
       } on LlmQueryException catch (e) {
+        if (!unauthorizedRetried &&
+            e.statusCode == 401 &&
+            activeConfig.isOpenAiCodexOAuth) {
+          unauthorizedRetried = true;
+          activeConfig = await OpenAiCodexOAuth.service
+              .refreshAfterUnauthorized(activeConfig);
+          // The access token may be rotated independently of expires_at.
+          // Retry the same model once before falling back or surfacing 401.
+          index--;
+          continue;
+        }
         lastError = e;
-        if (model == models.last || !_shouldRetryWithCompatModel(e)) rethrow;
+        if (index == models.length - 1 || !_shouldRetryWithCompatModel(e)) {
+          rethrow;
+        }
       }
     }
     throw lastError ?? const LlmQueryException('未知错误');
@@ -193,6 +217,10 @@ $transactionsText''';
     Map<String, dynamic> chatBody,
     AiProviderConfig config,
   ) {
+    if (config.isOpenAiCodexOAuth) {
+      return _codexResponsesBodyFromChatBody(chatBody, config);
+    }
+
     final instructions = <String>[];
     final inputParts = <String>[];
     final messages = chatBody['messages'];
@@ -214,6 +242,9 @@ $transactionsText''';
     final body = <String, dynamic>{
       'model': chatBody['model'],
       'input': inputParts.join('\n\n').trim(),
+      // Public Responses defaults to retaining responses; Chats/report data
+      // must be explicitly non-persistent at the provider boundary.
+      'store': false,
     };
     final instructionText = instructions.join('\n\n').trim();
     if (instructionText.isNotEmpty) body['instructions'] = instructionText;
@@ -221,10 +252,62 @@ $transactionsText''';
     if (maxTokens is int && maxTokens > 0) {
       body['max_output_tokens'] = maxTokens;
     }
-    final effort = config.reasoningEffort.apiValue;
+    final effort = config.reasoningEffort.responsesApiValue;
     if (effort != null) {
       body['reasoning'] = {'effort': effort};
     }
+    final webTools = config.responsesWebSearchTools;
+    if (webTools.isNotEmpty) body['tools'] = webTools;
+    final webIncludes = config.responsesWebSearchIncludes;
+    if (webIncludes.isNotEmpty) body['include'] = webIncludes;
+    return body;
+  }
+
+  static Map<String, dynamic> _codexResponsesBodyFromChatBody(
+    Map<String, dynamic> chatBody,
+    AiProviderConfig config,
+  ) {
+    final instructions = <String>[];
+    final input = <Map<String, dynamic>>[];
+    final messages = chatBody['messages'];
+    if (messages is List) {
+      for (final item in messages) {
+        if (item is! Map) continue;
+        final role = (item['role'] as String?)?.trim().toLowerCase() ?? 'user';
+        final content = _stringContent(item['content']).trim();
+        if (content.isEmpty) continue;
+        if (role == 'system' || role == 'developer') {
+          instructions.add(content);
+          continue;
+        }
+        input.add({
+          'type': 'message',
+          'role': role == 'assistant' ? 'assistant' : 'user',
+          'content': [
+            {
+              'type': role == 'assistant' ? 'output_text' : 'input_text',
+              'text': content,
+            },
+          ],
+        });
+      }
+    }
+    final instructionText = instructions.join('\n\n').trim();
+    final body = <String, dynamic>{
+      'model': chatBody['model'],
+      'instructions': instructionText.isEmpty
+          ? 'You are a helpful assistant.'
+          : instructionText,
+      'input': input,
+      'store': false,
+      'stream': true,
+    };
+    final effort = config.reasoningEffort.codexResponsesApiValue;
+    if (effort != null) body['reasoning'] = {'effort': effort};
+    final webTools = config.responsesWebSearchTools;
+    if (webTools.isNotEmpty) body['tools'] = webTools;
+    final webIncludes = config.responsesWebSearchIncludes;
+    if (webIncludes.isNotEmpty) body['include'] = webIncludes;
     return body;
   }
 
@@ -253,10 +336,7 @@ $transactionsText''';
       resp = await http
           .post(
             config.chatCompletionsUri,
-            headers: {
-              'Authorization': 'Bearer ${config.apiKey}',
-              'Content-Type': 'application/json',
-            },
+            headers: config.authHeaders(),
             body: jsonEncode(body),
           )
           .timeout(Duration(seconds: timeoutSeconds));
@@ -310,15 +390,20 @@ $transactionsText''';
       }
     }
 
+    final budget = config.reasoningEffort.claudeBudgetTokens;
+    final requestedMaxTokens = (body['max_tokens'] as int?) ?? 4096;
+    final maxTokens = budget != null
+        ? math.max(requestedMaxTokens, budget + 4096)
+        : requestedMaxTokens;
+
     final claudeBody = <String, dynamic>{
       'model': body['model'],
       'messages': claudeMessages,
-      'max_tokens': (body['max_tokens'] as int?) ?? 4096,
+      'max_tokens': maxTokens,
     };
     if (systemPrompt != null) claudeBody['system'] = systemPrompt;
 
     // 思考深度参数
-    final budget = config.reasoningEffort.claudeBudgetTokens;
     if (budget != null) {
       claudeBody['thinking'] = {
         'type': 'enabled',
@@ -333,11 +418,7 @@ $transactionsText''';
       resp = await http
           .post(
             config.messagesUri,
-            headers: {
-              'x-api-key': config.apiKey,
-              'anthropic-version': '2023-06-01',
-              'content-type': 'application/json',
-            },
+            headers: config.authHeaders(),
             body: jsonEncode(claudeBody),
           )
           .timeout(Duration(seconds: timeoutSeconds));
@@ -383,10 +464,7 @@ $transactionsText''';
       resp = await http
           .post(
             config.responsesUri,
-            headers: {
-              'Authorization': 'Bearer ${config.apiKey}',
-              'Content-Type': 'application/json',
-            },
+            headers: config.authHeaders(),
             body: jsonEncode(body),
           )
           .timeout(Duration(seconds: timeoutSeconds));
@@ -405,13 +483,71 @@ $transactionsText''';
     }
 
     try {
-      final outer = jsonDecode(bodyText) as Map<String, dynamic>;
-      final text = _extractResponsesText(outer).trim();
+      final String text;
+      if (config.isOpenAiCodexOAuth) {
+        final raw = _extractCodexSseText(bodyText).trim();
+        text = AiWebSearchContext.formatAnswerWithSources(
+          raw,
+          config.webSearchEnabled ? _extractSseSources(bodyText) : const [],
+        );
+      } else {
+        final outer = jsonDecode(bodyText) as Map<String, dynamic>;
+        final raw = _extractResponsesText(outer).trim();
+        text = AiWebSearchContext.formatAnswerWithSources(
+          raw,
+          config.webSearchEnabled ? _extractResponseSources(outer) : const [],
+        );
+      }
       if (text.isEmpty) throw const LlmQueryException('空回答');
       return text;
     } catch (e) {
       throw LlmQueryException('Responses 响应解析失败：$e');
     }
+  }
+
+  static String _extractCodexSseText(String body) {
+    final buffer = StringBuffer();
+    String? completed;
+    for (final line in const LineSplitter().convert(body)) {
+      if (!line.startsWith('data:')) continue;
+      final data = line.substring(5).trimLeft();
+      if (data == '[DONE]') break;
+      try {
+        final decoded = jsonDecode(data);
+        if (decoded is Map) {
+          final event = Map<String, dynamic>.from(decoded);
+          final type = event['type']?.toString().toLowerCase() ?? '';
+          if (type == 'response.failed') {
+            throw LlmQueryException(
+              event['response'] is Map
+                  ? ((event['response'] as Map)['error']?.toString() ??
+                      'Responses 生成失败')
+                  : 'Responses 生成失败',
+            );
+          }
+          if (type == 'response.output_text.done') {
+            final text = event['text'];
+            if (text is String && text.trim().isNotEmpty) completed = text;
+          } else if (type == 'response.completed') {
+            final response = event['response'];
+            if (response is Map) {
+              final text = _extractResponsesText(
+                Map<String, dynamic>.from(response),
+              );
+              if (text.isNotEmpty) completed = text;
+            }
+          }
+          final delta = event['delta'];
+          if (delta is String && delta.isNotEmpty) buffer.write(delta);
+        }
+      } on LlmQueryException {
+        rethrow;
+      } catch (_) {
+        // Ignore vendor-specific SSE comments/events that are not JSON.
+      }
+    }
+    final result = buffer.toString().trim();
+    return result.isNotEmpty ? result : (completed ?? '');
   }
 
   static String _extractResponsesText(Map<String, dynamic> outer) {
@@ -442,6 +578,32 @@ $transactionsText''';
     return buffer.toString().trim();
   }
 
+  static List<AiWebSource> _extractResponseSources(Object? outer) =>
+      AiWebSearchContext.extractResponseSources(outer);
+
+  static List<AiWebSource> _extractSseSources(String body) {
+    final result = <AiWebSource>[];
+    final seen = <String>{};
+    for (final line in const LineSplitter().convert(body)) {
+      if (!line.startsWith('data:')) continue;
+      final data = line.substring(5).trimLeft();
+      if (data == '[DONE]') break;
+      try {
+        final decoded = jsonDecode(data);
+        if (decoded is Map) {
+          for (final source in _extractResponseSources(
+            Map<String, dynamic>.from(decoded),
+          )) {
+            if (seen.add(source.url)) result.add(source);
+          }
+        }
+      } catch (_) {
+        // Ignore non-JSON SSE comments/events.
+      }
+    }
+    return result;
+  }
+
   static String _bodySnippet(String body) {
     final text = body.replaceAll(RegExp(r'\s+'), ' ').trim();
     if (text.isEmpty) return '';
@@ -450,7 +612,9 @@ $transactionsText''';
   }
 
   static Future<void> testConnection(AiProviderConfig config) async {
-    final provider = _resolveConfig(config: config);
+    // 健康检查必须复用 Chats 的端点选择，否则自定义 Responses 中转会
+    // 出现“设置页测试成功、喵助手实际失败”的假阳性。
+    final provider = _resolveConfig(config: config).forChatStreaming();
     await _postWithModelFallback(
       config: provider,
       timeoutSeconds: 15,
@@ -473,8 +637,15 @@ $transactionsText''';
   }) {
     final provider =
         config ?? AiProviderConfig.deepSeek(apiKey: apiKey?.trim() ?? '');
-    if (!provider.hasKey) {
-      throw LlmQueryException('${provider.providerLabel} API Key 未配置');
+    if (!provider.hasCredential) {
+      throw LlmQueryException(
+          '${provider.providerLabel} API Key 或 OAuth 凭据未配置');
+    }
+    if (!provider.hasBaseUrl) {
+      throw LlmQueryException('${provider.providerLabel} 基础地址未配置');
+    }
+    if (!provider.hasModel) {
+      throw LlmQueryException('${provider.providerLabel} 模型未配置');
     }
     return provider;
   }
@@ -483,52 +654,142 @@ $transactionsText''';
   static Future<List<String>> fetchModels(
     AiProviderConfig config, {
     http.Client? client,
+    Duration timeout = const Duration(seconds: 30),
   }) async {
-    if (!config.hasKey) {
-      throw LlmQueryException('${config.providerLabel} API Key 未配置');
+    var provider = await OpenAiCodexOAuth.ensureFreshConfig(config);
+    if (!provider.hasKey) {
+      throw LlmQueryException('${provider.providerLabel} API Key 未配置');
     }
-    // 构建 /v1/models URI
-    var raw = config.baseUrl.trim().replaceAll(RegExp(r'/+$'), '');
-    if (raw.isEmpty) raw = AiProviderConfig.customDefaultBaseUrl;
-    final uri = raw.endsWith('/v1')
-        ? Uri.parse('$raw/models')
-        : Uri.parse('$raw/v1/models');
-
-    late http.Response resp;
-    try {
-      final headers = {
-        'Authorization': 'Bearer ${config.apiKey}',
-        'Content-Type': 'application/json',
-      };
-      final request = client == null
-          ? http.get(uri, headers: headers)
-          : client.get(uri, headers: headers);
-      resp = await request.timeout(const Duration(seconds: 15));
-    } catch (e) {
-      throw LlmQueryException('获取模型列表失败：$e');
+    if (!provider.hasBaseUrl) {
+      throw LlmQueryException('${provider.providerLabel} 基础地址未配置');
     }
 
-    if (resp.statusCode == 401 || resp.statusCode == 403) {
-      throw LlmQueryException('API Key 无效或无权限（${resp.statusCode}）');
-    }
-    if (resp.statusCode != 200) {
-      throw LlmQueryException('获取模型列表失败（${resp.statusCode}）');
-    }
-
-    try {
-      final json = jsonDecode(resp.body) as Map<String, dynamic>;
-      final data = json['data'] as List<dynamic>?;
-      if (data == null) {
-        throw const LlmQueryException('响应格式错误：缺少 data 字段');
+    if (provider.isOpenAiCodexOAuth) {
+      final service = OpenAiCodexOAuthService(client: client);
+      try {
+        final models = await service.fetchModels(
+          OpenAiCodexOAuthTokens(
+            accessToken: provider.apiKey,
+            accountId: provider.oauthAccountId,
+          ),
+        );
+        return models.map((model) => model.slug).toList(growable: false);
+      } on OpenAiCodexOAuthException catch (error) {
+        // A ChatGPT access token can be invalidated before its local expiry
+        // timestamp. Refresh once and retry the catalogue request so the
+        // settings screen does not make the user authorize again.
+        if (error.statusCode == 401 &&
+            provider.oauthRefreshToken.trim().isNotEmpty) {
+          provider =
+              await OpenAiCodexOAuth.service.refreshAfterUnauthorized(provider);
+          try {
+            final models = await service.fetchModels(
+              OpenAiCodexOAuthTokens(
+                accessToken: provider.apiKey,
+                accountId: provider.oauthAccountId,
+              ),
+            );
+            return models.map((model) => model.slug).toList(growable: false);
+          } on OpenAiCodexOAuthException catch (retryError) {
+            throw LlmQueryException(
+              retryError.message,
+              statusCode: retryError.statusCode,
+            );
+          }
+        }
+        throw LlmQueryException(error.message, statusCode: error.statusCode);
       }
-      final models = data
-          .map((e) => e['id']?.toString())
+    }
+
+    final headers = provider.authHeaders()..['Accept'] = 'application/json';
+
+    LlmQueryException? lastFailure;
+    final uris = _modelUris(provider);
+    for (var index = 0; index < uris.length; index++) {
+      final uri = uris[index];
+      late http.Response resp;
+      try {
+        final request = client == null
+            ? http.get(uri, headers: headers)
+            : client.get(uri, headers: headers);
+        resp = await request.timeout(timeout);
+      } on TimeoutException {
+        // Some relays leave /v1/models hanging while exposing the legacy
+        // /models route. Keep trying the alternate URI before surfacing the
+        // timeout, so a slow/unsupported catalog does not make the model list
+        // appear permanently unavailable.
+        lastFailure = const LlmQueryException('获取模型列表超时，请检查服务商地址和网络');
+        continue;
+      } catch (e) {
+        // A connection/DNS failure on one catalog route should not prevent a
+        // compatible fallback route from being tried.
+        lastFailure = LlmQueryException('获取模型列表失败：$e');
+        continue;
+      }
+
+      if (resp.statusCode == 401 || resp.statusCode == 403) {
+        throw LlmQueryException('API Key 无效或无权限（${resp.statusCode}）');
+      }
+      // A few OpenAI-compatible relays expose /models instead of /v1/models,
+      // or return 405/501 for the unsupported route. Try the alternate path
+      // for any non-auth catalog failure; authentication errors remain final.
+      if (resp.statusCode != 200 && index + 1 < uris.length) {
+        lastFailure = LlmQueryException('获取模型列表失败（${resp.statusCode}）');
+        continue;
+      }
+      if (resp.statusCode != 200) {
+        throw LlmQueryException('获取模型列表失败（${resp.statusCode}）');
+      }
+
+      return _decodeModelList(resp.body);
+    }
+    throw lastFailure ?? const LlmQueryException('获取模型列表失败');
+  }
+
+  static List<Uri> _modelUris(AiProviderConfig config) {
+    final primary = config.modelsUri;
+    final path = primary.path;
+    const versionedSuffix = '/v1/models';
+    final alternate = path.endsWith(versionedSuffix)
+        ? primary.replace(
+            path:
+                '${path.substring(0, path.length - versionedSuffix.length)}/models',
+          )
+        : null;
+    if (alternate == null || alternate == primary) return [primary];
+    return [primary, alternate];
+  }
+
+  static List<String> _decodeModelList(String body) {
+    try {
+      final decoded = jsonDecode(body);
+      final dynamic raw = decoded is List
+          ? decoded
+          : decoded is Map<String, dynamic>
+              ? (decoded['data'] ?? decoded['models'])
+              : null;
+      if (raw is! List) {
+        throw const LlmQueryException('响应格式错误：缺少 data/models 字段');
+      }
+      final models = raw
+          .map((entry) {
+            if (entry is String) return entry;
+            if (entry is Map) {
+              return entry['id'] ??
+                  entry['slug'] ??
+                  entry['name'] ??
+                  entry['model'];
+            }
+            return null;
+          })
           .whereType<String>()
           .map((value) => value.trim())
-          .where((s) => s.isNotEmpty)
+          .where((value) => value.isNotEmpty)
           .toSet()
-          .toList();
-      if (models.isEmpty) throw const LlmQueryException('未获取到任何模型');
+          .toList(growable: false);
+      if (models.isEmpty) {
+        throw const LlmQueryException('未获取到任何模型');
+      }
       return models;
     } catch (e) {
       if (e is LlmQueryException) rethrow;

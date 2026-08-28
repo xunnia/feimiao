@@ -6,6 +6,7 @@ import 'package:qingji/core/transaction_time.dart';
 
 // 固定参考时间：2026-06-12 12:00（对应 Swift 测试的 now）。
 final _now = DateTime(2026, 6, 12, 12);
+final _unemploymentNow = DateTime(2026, 8, 18, 12);
 
 void main() {
   group('NaturalLanguageEntryParser', () {
@@ -41,6 +42,29 @@ void main() {
       expect(entry.kind, TransactionKind.income);
       expect(entry.categoryKey, 'salary');
       expect(entry.amount, Decimal.fromInt(20000));
+    });
+
+    test('unemployment benefit on an explicit day -> subsidy income', () {
+      final entry = NaturalLanguageEntryParser.parse(
+        '13号失业金到账2250',
+        at: _unemploymentNow,
+      );
+
+      expect(entry.kind, TransactionKind.income);
+      expect(entry.categoryKey, 'inc_subsidy');
+      expect(entry.amount, Decimal.fromInt(2250));
+      expect(entry.date, DateTime(2026, 8, 13, 12));
+    });
+
+    test('social security allowance received -> subsidy income', () {
+      final entry = NaturalLanguageEntryParser.parse(
+        '社保补贴到账500',
+        at: _unemploymentNow,
+      );
+
+      expect(entry.kind, TransactionKind.income);
+      expect(entry.categoryKey, 'inc_subsidy');
+      expect(entry.amount, Decimal.fromInt(500));
     });
 
     test('refund is income', () {

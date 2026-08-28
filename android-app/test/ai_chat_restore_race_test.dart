@@ -5,6 +5,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:provider/provider.dart';
 import 'package:qingji/core/budget/budget_window_resolver.dart';
+import 'package:qingji/core/media/chat_attachment.dart';
+import 'package:qingji/core/ai/ai_provider_config.dart';
 import 'package:qingji/data/app_repository.dart';
 import 'package:qingji/views/home/ai_chat_panel.dart';
 
@@ -111,6 +113,42 @@ class _ChatRaceRepository extends AppRepository {
   }
 }
 
+class _ExplodingChatRepository extends AppRepository {
+  bool explode = false;
+  int _nextId = 1;
+
+  @override
+  bool get isInitialized => true;
+
+  @override
+  Future<List<Map<String, Object?>>> loadChatMessages() async => const [];
+
+  @override
+  Future<List<Map<String, Object?>>> loadChatSessionMessages(
+    String sessionId,
+  ) async =>
+      const [];
+
+  @override
+  Future<int> addChatMessage({
+    required String role,
+    String text = '',
+    String question = '',
+  }) async =>
+      _nextId++;
+
+  @override
+  AiProviderConfig aiProviderConfigForChatSession(String? sessionId) {
+    return AiProviderConfig.deepSeek(apiKey: '');
+  }
+
+  @override
+  AiProviderConfig aiProviderConfigFor(AiTaskType task) {
+    if (explode) throw StateError('simulated provider resolution failure');
+    return AiProviderConfig.deepSeek(apiKey: '');
+  }
+}
+
 void main() {
   testWidgets('历史恢复与新消息入库交错时不会重复插入新消息', (tester) async {
     resetChatHistoryForTesting();
@@ -119,7 +157,9 @@ void main() {
       ChangeNotifierProvider<AppRepository>.value(
         value: repo,
         child: MaterialApp(
-          home: Scaffold(body: AiChatPanel(onSwitchToManual: () {})),
+          home: Scaffold(
+            body: AiChatPanel(recordOnly: false, onSwitchToManual: () {}),
+          ),
         ),
       ),
     );
@@ -175,6 +215,7 @@ void main() {
         child: MaterialApp(
           home: AiChatPanel(
             fullScreen: true,
+            recordOnly: false,
             onSwitchToManual: () {},
           ),
         ),
@@ -229,6 +270,177 @@ void main() {
     resetChatHistoryForTesting();
   });
 
+  testWidgets('短回答的操作栏贴近输入框，不留下整屏底部空白', (tester) async {
+    resetChatHistoryForTesting();
+    await tester.binding.setSurfaceSize(const Size(390, 844));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final repo = _ChatRaceRepository()
+      ..rows.clear()
+      ..rows.addAll([
+        {
+          'id': 1,
+          'role': 'user',
+          'text': '昨晚纳斯达克怎么样？',
+          'question': '',
+          'created_ms': 1,
+        },
+        {
+          'id': 2,
+          'role': 'answer',
+          'text': '纳斯达克收盘 **25,980.19**，下跌 **0.76%**。',
+          'question': '昨晚纳斯达克怎么样？',
+          'created_ms': 2,
+        },
+      ]);
+
+    await tester.pumpWidget(
+      ChangeNotifierProvider<AppRepository>.value(
+        value: repo,
+        child: MaterialApp(
+          home: AiChatPanel(
+            fullScreen: true,
+            recordOnly: false,
+            onSwitchToManual: () {},
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+    repo.releaseLoad.complete();
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 20)),
+    );
+    for (var i = 0; i < 8; i++) {
+      await tester.pump(const Duration(milliseconds: 20));
+    }
+
+    final actions = tester.getRect(
+      find.byKey(const ValueKey('ai-chat-answer-actions')),
+    );
+    final composer = tester.getRect(
+      find.byKey(const ValueKey('ai-chat-input-shell')),
+    );
+    expect(composer.top - actions.bottom, lessThan(100));
+    expect(tester.takeException(), isNull);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    resetChatHistoryForTesting();
+  });
+
+  testWidgets('生产历史区三张图片使用完整聊天内容宽度', (tester) async {
+    resetChatHistoryForTesting();
+    await tester.binding.setSurfaceSize(const Size(390, 844));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final repo = _ChatRaceRepository()
+      ..rows.clear()
+      ..rows.add({
+        'id': 1,
+        'role': 'user',
+        'text': '请看看这三张图片',
+        'question': '',
+        'created_ms': 1,
+        'attachments_json': ChatAttachment.encodeList([
+          ChatAttachment(
+            kind: ChatAttachmentKind.image,
+            path:
+                r'C:\src\xunni-codex\android-app\assets\book_covers\dining.png',
+            name: '图片1.png',
+            mimeType: 'image/png',
+            sizeBytes: 100,
+          ),
+          ChatAttachment(
+            kind: ChatAttachmentKind.image,
+            path:
+                r'C:\src\xunni-codex\android-app\assets\book_covers\shopping.png',
+            name: '图片2.png',
+            mimeType: 'image/png',
+            sizeBytes: 100,
+          ),
+          ChatAttachment(
+            kind: ChatAttachmentKind.image,
+            path:
+                r'C:\src\xunni-codex\android-app\assets\book_covers\travel.png',
+            name: '图片3.png',
+            mimeType: 'image/png',
+            sizeBytes: 100,
+          ),
+        ]),
+      });
+
+    await tester.pumpWidget(
+      ChangeNotifierProvider<AppRepository>.value(
+        value: repo,
+        child: MaterialApp(
+          home: AiChatPanel(
+            fullScreen: true,
+            recordOnly: false,
+            onSwitchToManual: () {},
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+    repo.releaseLoad.complete();
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 50)),
+    );
+    for (var i = 0; i < 8; i++) {
+      await tester.pump(const Duration(milliseconds: 20));
+    }
+
+    final images = find.byWidgetPredicate(
+      (widget) => widget is Image && widget.image is FileImage,
+    );
+    expect(images, findsNWidgets(3));
+    final rects = [for (var i = 0; i < 3; i++) tester.getRect(images.at(i))];
+    expect(rects.first.left, closeTo(16, 0.5));
+    expect(rects.last.right, closeTo(374, 0.5));
+    expect(rects.map((rect) => rect.width).toList(),
+        everyElement(greaterThan(100)));
+    expect(rects[0].height, closeTo(rects[0].width, 0.5));
+    expect(rects[0].top, closeTo(rects[1].top, 0.1));
+    expect(rects[1].top, closeTo(rects[2].top, 0.1));
+    expect(tester.takeException(), isNull);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    resetChatHistoryForTesting();
+  });
+
+  testWidgets('前置流程异常也会结束思考并显示可重试错误', (tester) async {
+    resetChatHistoryForTesting();
+    final repo = _ExplodingChatRepository();
+    await tester.pumpWidget(
+      ChangeNotifierProvider<AppRepository>.value(
+        value: repo,
+        child: MaterialApp(
+          home: AiChatPanel(
+            fullScreen: true,
+            recordOnly: true,
+            onSwitchToManual: () {},
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+    repo.explode = true;
+    await tester.enterText(
+      find.byKey(const ValueKey('ai-chat-input-field')),
+      '你好',
+    );
+    await tester.testTextInput.receiveAction(TextInputAction.send);
+    await tester.pump();
+    for (var i = 0; i < 6; i++) {
+      await tester.pump(const Duration(milliseconds: 30));
+    }
+
+    expect(find.text('喵这次处理失败了，请检查网络后重试'), findsOneWidget);
+    expect(find.textContaining('正在思考'), findsNothing);
+    expect(tester.takeException(), isNull);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    resetChatHistoryForTesting();
+  });
+
   testWidgets('恢复负责人被关闭后新面板会接管恢复而不是显示空历史', (tester) async {
     resetChatHistoryForTesting();
     final repo = _ChatRaceRepository();
@@ -239,6 +451,7 @@ void main() {
             home: Scaffold(
               body: AiChatPanel(
                 fullScreen: true,
+                recordOnly: false,
                 onSwitchToManual: () {},
               ),
             ),
@@ -280,7 +493,11 @@ void main() {
         value: repo,
         child: MaterialApp(
           home: Scaffold(
-            body: AiChatPanel(fullScreen: true, onSwitchToManual: () {}),
+            body: AiChatPanel(
+              fullScreen: true,
+              recordOnly: false,
+              onSwitchToManual: () {},
+            ),
           ),
         ),
       ),
@@ -329,6 +546,7 @@ void main() {
             home: Scaffold(
               body: AiChatPanel(
                 fullScreen: true,
+                recordOnly: false,
                 onSwitchToManual: () {},
               ),
             ),
@@ -445,6 +663,7 @@ void main() {
             home: Scaffold(
               body: AiChatPanel(
                 fullScreen: true,
+                recordOnly: false,
                 onSwitchToManual: () {},
               ),
             ),
@@ -492,6 +711,7 @@ void main() {
             home: Scaffold(
               body: AiChatPanel(
                 fullScreen: true,
+                recordOnly: false,
                 onSwitchToManual: () {},
               ),
             ),
@@ -555,7 +775,7 @@ void main() {
     resetChatHistoryForTesting();
   });
 
-  testWidgets('思考初始文案简洁且回答图标保留点击热区', (tester) async {
+  testWidgets('思考阶段状态与回答图标保留点击热区', (tester) async {
     resetChatHistoryForTesting();
     final repo = _ChatRaceRepository();
     repo.releaseLoad.complete();
@@ -564,7 +784,11 @@ void main() {
         value: repo,
         child: MaterialApp(
           home: Scaffold(
-            body: AiChatPanel(fullScreen: true, onSwitchToManual: () {}),
+            body: AiChatPanel(
+              fullScreen: true,
+              recordOnly: false,
+              onSwitchToManual: () {},
+            ),
           ),
         ),
       ),
@@ -576,7 +800,7 @@ void main() {
     await tester.testTextInput.receiveAction(TextInputAction.send);
     await tester.pump();
     await tester.runAsync(() => repo.userInsertStarted.future);
-    expect(find.text('思考中…'), findsOneWidget);
+    expect(find.textContaining('正在思考'), findsOneWidget);
 
     await tester.pumpWidget(const SizedBox.shrink());
     repo.releaseUserInsert.complete();
@@ -601,7 +825,11 @@ void main() {
         value: answerRepo,
         child: MaterialApp(
           home: Scaffold(
-            body: AiChatPanel(fullScreen: true, onSwitchToManual: () {}),
+            body: AiChatPanel(
+              fullScreen: true,
+              recordOnly: false,
+              onSwitchToManual: () {},
+            ),
           ),
         ),
       ),

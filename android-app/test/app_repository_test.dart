@@ -2185,7 +2185,7 @@ void main() {
     expect(precision['dflt_value'], "'legacy_unknown'");
     expect(
       Sqflite.firstIntValue(await check.rawQuery('PRAGMA user_version')),
-      43,
+      48,
     );
     await check.close();
   });
@@ -2272,7 +2272,7 @@ void main() {
     );
     expect(
       Sqflite.firstIntValue(await check.rawQuery('PRAGMA user_version')),
-      43,
+      48,
     );
     await check.close();
   });
@@ -3528,8 +3528,7 @@ void main() {
       settlementAccountId: account.id,
     );
 
-    final original =
-        repo.transactions.singleWhere((t) => t.id == purchase.id);
+    final original = repo.transactions.singleWhere((t) => t.id == purchase.id);
     expect(original.reimbursable, isFalse);
     expect(repo.netAmountOf(original), Decimal.zero);
     final reimbursement = repo.refundsOf(purchase.id).single;
@@ -4749,6 +4748,47 @@ void main() {
       reportId: 123,
     );
     expect(await reopened.pendingReportJobs(), isEmpty);
+    await reopened.closeForTest();
+  });
+
+  test('报告任务跨重启保留模型思考起点且只接受首次写入', () async {
+    final repo = await freshRepo();
+    final job = await repo.createReportJob(
+      question: '生成 6 月月报',
+      type: 'monthly',
+      title: '思考起点报告',
+      periodStart: DateTime(2026, 6, 1),
+      periodEnd: DateTime(2026, 6, 30),
+    );
+    expect(job.modelStartedMs, isNull);
+
+    final startedMs = DateTime(2026, 7, 1, 8).millisecondsSinceEpoch;
+    final firstWinner = await repo.markReportJobModelStarted(
+      job.id,
+      expectedUuid: job.uuid,
+      startedMs: startedMs,
+    );
+    expect(firstWinner, startedMs);
+    // A retry/race cannot move the thinking origin forward.
+    final secondWinner = await repo.markReportJobModelStarted(
+      job.id,
+      expectedUuid: job.uuid,
+      startedMs: startedMs + 60 * 1000,
+    );
+    expect(secondWinner, startedMs);
+    expect((await repo.reportJobById(job.id))?.modelStartedMs, startedMs);
+    await repo.closeForTest();
+
+    final reopened = AppRepository();
+    await reopened.init();
+    expect((await reopened.reportJobById(job.id))?.modelStartedMs, startedMs);
+    await expectLater(
+      reopened.markReportJobModelStarted(
+        job.id,
+        expectedUuid: 'wrong-report-job-uuid',
+      ),
+      throwsA(isA<StateError>()),
+    );
     await reopened.closeForTest();
   });
 
@@ -6256,8 +6296,8 @@ void main() {
     );
     expect(repo.transactionLinksForAsset(assetId).single.costQuality,
         AssetAllocationCostQuality.exact);
-    expect(repo.physicalAssetAcquisitionCost(assetId).amount,
-        Decimal.fromInt(60));
+    expect(
+        repo.physicalAssetAcquisitionCost(assetId).amount, Decimal.fromInt(60));
     expect(
       await repo.pendingPhysicalAssetRefundAllocationsForAsset(assetId),
       isEmpty,
@@ -6284,8 +6324,8 @@ void main() {
       refundTransactionId: refund2,
       allocationsByAssetId: {assetId: 2000},
     );
-    expect(repo.physicalAssetAcquisitionCost(assetId).amount,
-        Decimal.fromInt(40));
+    expect(
+        repo.physicalAssetAcquisitionCost(assetId).amount, Decimal.fromInt(40));
     expect(repo.transactionLinksForAsset(assetId).single.costQuality,
         AssetAllocationCostQuality.exact);
     await repo.closeForTest();
@@ -6507,7 +6547,7 @@ void main() {
     final check = await databaseFactory.openDatabase(path);
     expect(
       Sqflite.firstIntValue(await check.rawQuery('PRAGMA user_version')),
-      43,
+      48,
     );
     final physicalColumns =
         (await check.rawQuery('PRAGMA table_info(physical_assets)'))
@@ -6660,7 +6700,7 @@ void main() {
     final check = await databaseFactory.openDatabase(path);
     expect(
       Sqflite.firstIntValue(await check.rawQuery('PRAGMA user_version')),
-      43,
+      48,
     );
     final afterRows = await check.query(
       'transactions',
@@ -6761,7 +6801,8 @@ void main() {
 
     // 模拟「v13 搬迁 try/catch 吞了异常」后的库：旧 budget 表有数据、
     // budget_periods 空、自愈标记不存在。
-    final db = await databaseFactory.openDatabase(p.join(tmp.path, 'qingji.db'));
+    final db =
+        await databaseFactory.openDatabase(p.join(tmp.path, 'qingji.db'));
     await db.execute(
         'CREATE TABLE IF NOT EXISTS budget (id INTEGER PRIMARY KEY AUTOINCREMENT, category_key TEXT, amount TEXT NOT NULL)');
     await db.insert('budget', {'category_key': null, 'amount': '3000'});
@@ -6856,7 +6897,7 @@ void main() {
     final check = await databaseFactory.openDatabase(path);
     final v =
         Sqflite.firstIntValue(await check.rawQuery('PRAGMA user_version'));
-    expect(v, 43); // init 一路升到当前最新版本
+    expect(v, 48); // init 一路升到当前最新版本
     final tableNames = (await check
             .rawQuery("SELECT name FROM sqlite_master WHERE type = 'table'"))
         .map((r) => r['name'])

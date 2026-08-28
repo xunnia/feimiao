@@ -9,19 +9,20 @@ import '../../core/money_format.dart';
 import '../../core/transaction_time.dart';
 import '../../data/app_repository.dart';
 import '../../theme/app_colors.dart';
+import '../common/app_sheet.dart';
+import '../../widgets/app_buttons.dart';
 import '../../widgets/app_toast.dart';
+import '../../widgets/pressable_scale.dart';
+import '../../widgets/settings_ui.dart';
 
 /// 「喵盯到几笔消费」确认表：本地解析后的候选，勾选要记的，一键全部记下。
 /// 不静默直接入账，避免抓错/重复（退款、余额变动等）直接污染账本。
 Future<List<String>?> showAutoRecordSheet(
     BuildContext context, List<AutoCandidate> items) {
-  return showModalBottomSheet<List<String>>(
-    context: context,
-    isScrollControlled: true,
-    // 候选多时弹层会撑很高，顶部让出状态栏。
-    useSafeArea: true,
-    backgroundColor: Colors.transparent,
-    builder: (_) => _AutoRecordSheet(items: items),
+  return showBlurSheet<List<String>>(
+    context,
+    radius: 28,
+    child: _AutoRecordSheet(items: items),
   );
 }
 
@@ -40,6 +41,12 @@ class _AutoRecordSheetState extends State<_AutoRecordSheet> {
   bool _saving = false;
 
   int get _selectedCount => _checked.where((c) => c).length;
+
+  List<String> get _sourceIds => [
+        for (final item in widget.items) item.sourceId,
+      ];
+
+  void _dismiss() => Navigator.of(context).pop(_sourceIds);
 
   Future<void> _saveSelected() async {
     if (_saving) return;
@@ -94,103 +101,56 @@ class _AutoRecordSheetState extends State<_AutoRecordSheet> {
     );
     // 退款项只是提示、不会入账，这一批处理完也一起出队；
     // 否则它们永远不被 ack，每次回前台都重复弹同一批退款通知。
-    Navigator.of(context).pop([
-      for (final item in widget.items) item.sourceId,
-    ]);
+    _dismiss();
   }
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    return Container(
-      decoration: BoxDecoration(
-        color: AppColors.appBg(scheme),
-        borderRadius: const BorderRadius.vertical(top: Radius.circular(22)),
-      ),
-      padding: EdgeInsets.only(
-        left: 16,
-        right: 16,
-        top: 10,
-        bottom: 16 + MediaQuery.of(context).padding.bottom,
-      ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Center(
-            child: Container(
-              width: 36,
-              height: 4,
-              margin: const EdgeInsets.only(bottom: 12),
-              decoration: BoxDecoration(
-                color: scheme.outlineVariant,
-                borderRadius: BorderRadius.circular(2),
-              ),
-            ),
-          ),
-          Text('喵盯到 ${widget.items.length} 笔可能的消费',
-              style:
-                  const TextStyle(fontSize: 17, fontWeight: FontWeight.w600)),
-          const SizedBox(height: 2),
-          Text('勾掉不想记的，其余一键记下',
-              style: TextStyle(fontSize: 12, color: scheme.onSurfaceVariant)),
-          const SizedBox(height: 12),
-          Flexible(
-            child: ListView.separated(
-              shrinkWrap: true,
-              itemCount: widget.items.length,
-              separatorBuilder: (_, __) => const SizedBox(height: 8),
-              itemBuilder: (_, i) => _row(scheme, i),
-            ),
-          ),
-          const SizedBox(height: 12),
-          Row(
+    return SafeArea(
+      child: ConstrainedBox(
+        constraints: BoxConstraints(
+          maxHeight: MediaQuery.sizeOf(context).height * 0.86,
+        ),
+        child: Padding(
+          padding: const EdgeInsets.only(bottom: 8),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Expanded(
-                child: OutlinedButton(
-                  onPressed: _saving
-                      ? null
-                      : () => Navigator.of(context).pop([
-                            for (final item in widget.items) item.sourceId,
-                          ]),
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: scheme.onSurface,
-                    side: BorderSide(
-                      color: scheme.outlineVariant.withValues(alpha: 0.56),
-                      width: 0.7,
-                    ),
-                    minimumSize: const Size.fromHeight(40),
-                    shape: const StadiumBorder(),
-                    textStyle: const TextStyle(
-                      fontSize: 14,
-                      fontWeight: FontWeight.w400,
-                    ),
+              SheetHeader(
+                title: '喵盯到 ${widget.items.length} 笔可能的消费',
+                subtitle: '勾掉不想记的，其余一键记下',
+                onClose: _saving ? null : _dismiss,
+                actionLabel: _saving ? '记账中…' : '记下 $_selectedCount 笔',
+                onAction:
+                    _saving || _selectedCount == 0 ? null : _saveSelected,
+              ),
+              Flexible(
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 4, 16, 0),
+                  child: ListView.separated(
+                    shrinkWrap: true,
+                    physics: const BouncingScrollPhysics(),
+                    itemCount: widget.items.length,
+                    separatorBuilder: (_, __) => const SizedBox(height: 8),
+                    itemBuilder: (_, i) => _row(scheme, i),
                   ),
-                  child: const Text('忽略'),
                 ),
               ),
-              const SizedBox(width: 12),
-              Expanded(
-                flex: 2,
-                child: FilledButton(
-                  onPressed:
-                      (_saving || _selectedCount == 0) ? null : _saveSelected,
-                  style: FilledButton.styleFrom(
-                    backgroundColor: scheme.onSurface,
-                    foregroundColor: scheme.surface,
-                    minimumSize: const Size.fromHeight(40),
-                    shape: const StadiumBorder(),
-                    textStyle: const TextStyle(
-                      fontSize: 14,
-                      fontWeight: FontWeight.w500,
-                    ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+                child: Align(
+                  alignment: Alignment.centerLeft,
+                  child: AppPillButton(
+                    label: '忽略',
+                    onPressed: _saving ? null : _dismiss,
                   ),
-                  child: Text(_saving ? '记账中…' : '记下这 $_selectedCount 笔'),
                 ),
               ),
             ],
           ),
-        ],
+        ),
       ),
     );
   }
@@ -202,10 +162,9 @@ class _AutoRecordSheetState extends State<_AutoRecordSheet> {
     final catName = (key != null ? CategorySeed.byKey(key)?.nameZh : null) ??
         (isIncome ? '其他收入' : '其他');
     final emoji = CategorySeed.emojiOf(c.categoryKey); // emojiOf 接受可空
-    return InkWell(
-      onTap:
+    return PressableScale(
+      onPressed:
           c.isRefund ? null : () => setState(() => _checked[i] = !_checked[i]),
-      borderRadius: BorderRadius.circular(14),
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
         decoration: BoxDecoration(
@@ -214,11 +173,11 @@ class _AutoRecordSheetState extends State<_AutoRecordSheet> {
         ),
         child: Row(
           children: [
-            Checkbox(
+            AppCheckmark(
+              semanticLabel: c.isRefund ? null : '选择这笔账单',
+              interactive: false,
               value: _checked[i],
-              onChanged: c.isRefund
-                  ? null
-                  : (v) => setState(() => _checked[i] = v ?? false),
+              onChanged: null,
             ),
             Text(emoji, style: const TextStyle(fontSize: 20)),
             const SizedBox(width: 10),

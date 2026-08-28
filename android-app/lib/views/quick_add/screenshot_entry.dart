@@ -39,10 +39,10 @@ Future<void> recognizeImagePathAndEntry(
   final navigator = Navigator.of(context);
 
   // 2. 显示识别中遮罩
-  showDialog<void>(
-    context: context,
+  showFrostedDialog<void>(
+    context,
     barrierDismissible: false,
-    builder: (_) => const _RecognizingDialog(),
+    child: const _RecognizingDialog(),
   );
 
   // 3. OCR（同时保留每行坐标，供订单列表分块用）

@@ -42,6 +42,25 @@ class AppSpacing {
   static const double xxl = 32;
 }
 
+/// 交互尺寸与视觉尺寸分离：控件可以保持轻巧的 iOS 视觉大小，
+/// 但实际触控区域必须足够大，避免小屏和无障碍操作误触。
+class AppHitTarget {
+  AppHitTarget._();
+
+  /// Android/Material 无障碍建议的最小可操作区域。
+  static const double min = 48;
+}
+
+/// 公共控件的视觉尺寸。不要在页面里重新发明同类尺寸。
+class AppControl {
+  AppControl._();
+
+  static const double iconVisual = 38;
+  static const double closeVisual = 34;
+  static const double pillHeight = 34;
+  static const double inputPillHeight = 32;
+}
+
 /// 动效时长与曲线令牌。原则：快、轻、不挡操作。
 class AppMotion {
   AppMotion._();
@@ -104,6 +123,14 @@ class AppTextColor {
 class AppType {
   AppType._();
 
+  /// 页面标题（AppBar 主题也使用这一层级）。
+  static TextStyle pageTitle(ColorScheme s) =>
+      TextStyle(fontSize: 17, fontWeight: FontWeight.w600, color: s.onSurface);
+
+  /// 弹层标题：比页面标题轻一档，避免压过弹层内容。
+  static TextStyle sheetTitle(ColorScheme s) =>
+      TextStyle(fontSize: 17, fontWeight: FontWeight.w500, color: s.onSurface);
+
   /// 行标题：设置行 / 编辑块标题。
   static TextStyle rowTitle(ColorScheme s) => TextStyle(
       fontSize: 15.5, fontWeight: FontWeight.w500, color: s.onSurface);
@@ -114,6 +141,18 @@ class AppType {
       fontWeight: FontWeight.w400,
       height: 1.5,
       color: s.onSurface);
+
+  /// 公共动作按钮文字（保存、确认、筛选清除等）。
+  static TextStyle action(ColorScheme s) =>
+      TextStyle(fontSize: 15, fontWeight: FontWeight.w300, color: s.onSurface);
+
+  /// 紧凑选项菜单的主文字。
+  static TextStyle menuItem(Color color) =>
+      TextStyle(fontSize: 16, fontWeight: FontWeight.w400, color: color);
+
+  /// 紧凑选项菜单的副文字。
+  static TextStyle menuSubtitle(Color color) =>
+      TextStyle(fontSize: 12, fontWeight: FontWeight.w400, color: color);
 
   /// 说明/副标题（iOS 式降号变灰）：行副标题、选项说明、弹窗正文同级。
   static TextStyle secondary(ColorScheme s) => TextStyle(

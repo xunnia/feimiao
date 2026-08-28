@@ -123,6 +123,7 @@ class _RecordEntrySheetHostState extends State<_RecordEntrySheetHost>
             child: AiChatPanel(
               fastSwitch: true,
               active: _mode == RecordEntryMode.ai,
+              recordOnly: true,
               onSwitchToManual: () => _setMode(RecordEntryMode.manual),
             ),
           ),

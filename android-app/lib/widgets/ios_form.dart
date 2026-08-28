@@ -75,13 +75,19 @@ class AppLabeledField extends StatelessWidget {
 /// iOS 风输入框样式：圆角 + 浅灰填充 + 无边框（systemGray6 观感）。
 /// 给表单里的 TextField 套用：`decoration: iosInputDecoration(context, hint: '…')`。
 /// 需要 context 取主题：深色模式下填充用暖灰，不再是刺眼的浅灰。
-InputDecoration iosInputDecoration(BuildContext context,
-    {String? hint, String? prefix}) {
-  const radius = 12.0;
+InputDecoration iosInputDecoration(
+  BuildContext context, {
+  String? hint,
+  String? prefix,
+  Color? fillColor,
+  BorderSide? inputBorderSide,
+  double radius = 12.0,
+}) {
   final scheme = Theme.of(context).colorScheme;
+  final enabledSide = inputBorderSide ?? BorderSide.none;
   final border = OutlineInputBorder(
     borderRadius: BorderRadius.circular(radius),
-    borderSide: BorderSide.none,
+    borderSide: enabledSide,
   );
   return InputDecoration(
     hintText: hint,
@@ -93,7 +99,7 @@ InputDecoration iosInputDecoration(BuildContext context,
     ),
     prefixText: prefix,
     filled: true,
-    fillColor: AppColors.inputFill(scheme),
+    fillColor: fillColor ?? AppColors.inputFill(scheme),
     isDense: true,
     counterText: '',
     contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
@@ -181,16 +187,13 @@ class _IosFormCard extends StatelessWidget {
           // 标题左对齐，16/w500（图二规格）。
           Text(
             title,
-            style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w500),
+            style: AppType.sheetTitle(scheme).copyWith(fontSize: 16),
           ),
           if (subtitle != null) ...[
             const SizedBox(height: 4),
             Text(
               subtitle!,
-              style: TextStyle(
-                fontSize: 13,
-                color: scheme.onSurfaceVariant,
-              ),
+              style: AppType.secondary(scheme),
             ),
           ],
           const SizedBox(height: 14),

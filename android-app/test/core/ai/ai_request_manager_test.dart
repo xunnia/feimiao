@@ -58,6 +58,84 @@ void main() {
 
       expect(result, 'done2');
     });
+
+    test('同 taskId 的新请求应立即取消旧请求', () async {
+      final oldRequestGate = Completer<void>();
+      final oldRequestStarted = Completer<void>();
+
+      final oldFuture = AiRequestManager.execute<String>(
+        taskId: 'replace-task',
+        request: () async {
+          oldRequestStarted.complete();
+          await oldRequestGate.future;
+          return 'old';
+        },
+      );
+      await oldRequestStarted.future;
+
+      final newFuture = AiRequestManager.execute<String>(
+        taskId: 'replace-task',
+        request: () async => 'new',
+      );
+
+      await expectLater(
+        oldFuture,
+        throwsA(
+          isA<AiUnknownException>()
+              .having((error) => error.message, 'message', '请求已取消'),
+        ),
+      );
+      expect(await newFuture, 'new');
+
+      // The transport callback may finish later, but it no longer owns the
+      // task result and must not surface another completion/error.
+      oldRequestGate.complete();
+      await Future<void>.delayed(Duration.zero);
+    });
+
+    test('旧并发请求完成时不能清理同 taskId 的新 owner', () async {
+      final firstGate = Completer<void>();
+      final secondGate = Completer<void>();
+      final firstStarted = Completer<void>();
+      final secondStarted = Completer<void>();
+
+      final first = AiRequestManager.execute<String>(
+        taskId: 'ownership-task',
+        allowConcurrent: true,
+        request: () async {
+          firstStarted.complete();
+          await firstGate.future;
+          return 'first';
+        },
+      );
+      await firstStarted.future;
+
+      final second = AiRequestManager.execute<String>(
+        taskId: 'ownership-task',
+        allowConcurrent: true,
+        request: () async {
+          secondStarted.complete();
+          await secondGate.future;
+          return 'second';
+        },
+      );
+      await secondStarted.future;
+
+      firstGate.complete();
+      expect(await first, 'first');
+
+      AiRequestManager.cancel('ownership-task');
+      await expectLater(
+        second,
+        throwsA(
+          isA<AiUnknownException>()
+              .having((error) => error.message, 'message', '请求已取消'),
+        ),
+      );
+
+      secondGate.complete();
+      await Future<void>.delayed(Duration.zero);
+    });
   });
 
   group('AiRequestManager 异常转换测试', () {

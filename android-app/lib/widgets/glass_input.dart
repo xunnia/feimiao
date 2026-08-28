@@ -7,10 +7,23 @@ import 'pressable_scale.dart';
 
 /// Shared Liquid Glass-style shell for bottom input bars and focused text areas.
 class AppGlassInputShell extends StatelessWidget {
+  /// Shared dimensions for the home launcher and assistant input.
+  static const standardPadding = EdgeInsets.fromLTRB(14, 14, 10, 10);
+
+  /// Shared placeholder typography for the home launcher and assistant input.
+  /// Keep the color and alpha here so the two entry points cannot drift apart.
+  static TextStyle standardHintStyle(ColorScheme scheme) => TextStyle(
+        fontSize: 17,
+        fontWeight: FontWeight.w400,
+        fontFamilyFallback: const ['NotoSansSC'],
+        color: scheme.onSurfaceVariant.withValues(alpha: 0.55),
+      );
+
   final Widget child;
   final EdgeInsetsGeometry padding;
   final double radius;
   final double blur;
+  final bool blurEnabled;
   final double opacity;
 
   const AppGlassInputShell({
@@ -19,6 +32,7 @@ class AppGlassInputShell extends StatelessWidget {
     this.padding = const EdgeInsets.fromLTRB(14, 13, 10, 13),
     this.radius = 28,
     this.blur = 6,
+    this.blurEnabled = true,
     this.opacity = 0.4,
   });
 
@@ -40,6 +54,7 @@ class AppGlassInputShell extends StatelessWidget {
       child: ClipRRect(
         borderRadius: BorderRadius.circular(radius),
         child: BackdropFilter(
+          enabled: blurEnabled,
           filter: ImageFilter.blur(sigmaX: blur, sigmaY: blur),
           child: CustomPaint(
             foregroundPainter: GlassEdgePainter(radius: radius),

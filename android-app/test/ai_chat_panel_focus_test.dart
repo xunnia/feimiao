@@ -6,7 +6,7 @@ import 'package:qingji/views/home/ai_chat_panel.dart';
 import 'package:qingji/views/home/manual_add_sheet.dart';
 import 'package:qingji/views/home/record_entry_sheet.dart';
 import 'package:qingji/views/home/record_input_bar.dart';
-import 'package:qingji/widgets/glass.dart';
+import 'package:qingji/widgets/glass_input.dart';
 
 void main() {
   testWidgets('AI input keeps the same focus after user tap', (tester) async {
@@ -16,7 +16,9 @@ void main() {
       ChangeNotifierProvider<AppRepository>.value(
         value: repo,
         child: MaterialApp(
-          home: Scaffold(body: AiChatPanel(onSwitchToManual: () {})),
+          home: Scaffold(
+            body: AiChatPanel(recordOnly: false, onSwitchToManual: () {}),
+          ),
         ),
       ),
     );
@@ -60,7 +62,9 @@ void main() {
       ChangeNotifierProvider<AppRepository>.value(
         value: repo,
         child: MaterialApp(
-          home: Scaffold(body: AiChatPanel(onSwitchToManual: () {})),
+          home: Scaffold(
+            body: AiChatPanel(recordOnly: false, onSwitchToManual: () {}),
+          ),
         ),
       ),
     );
@@ -116,7 +120,7 @@ void main() {
             data: MediaQueryData(
               viewInsets: EdgeInsets.only(bottom: bottomInset),
             ),
-            child: AiChatPanel(onSwitchToManual: () {}),
+            child: AiChatPanel(recordOnly: false, onSwitchToManual: () {}),
           ),
         ),
       );
@@ -162,7 +166,7 @@ void main() {
             data: MediaQueryData(
               viewInsets: EdgeInsets.only(bottom: bottomInset),
             ),
-            child: AiChatPanel(onSwitchToManual: () {}),
+            child: AiChatPanel(recordOnly: false, onSwitchToManual: () {}),
           ),
         ),
       );
@@ -219,7 +223,9 @@ void main() {
       ChangeNotifierProvider<AppRepository>.value(
         value: repo,
         child: MaterialApp(
-          home: Scaffold(body: AiChatPanel(onSwitchToManual: () {})),
+          home: Scaffold(
+            body: AiChatPanel(recordOnly: false, onSwitchToManual: () {}),
+          ),
         ),
       ),
     );
@@ -263,7 +269,7 @@ void main() {
             data: MediaQueryData(
               viewInsets: EdgeInsets.only(bottom: bottomInset),
             ),
-            child: AiChatPanel(onSwitchToManual: () {}),
+            child: AiChatPanel(recordOnly: false, onSwitchToManual: () {}),
           ),
         ),
       );
@@ -318,7 +324,10 @@ void main() {
           home: Scaffold(
             body: Column(
               children: [
-                Expanded(child: AiChatPanel(onSwitchToManual: () {})),
+                Expanded(
+                  child:
+                      AiChatPanel(recordOnly: false, onSwitchToManual: () {}),
+                ),
                 SizedBox(
                   width: 1,
                   height: 1,
@@ -426,25 +435,23 @@ void main() {
     final fieldFinder = find.byKey(const ValueKey('ai-chat-input-field'));
     expect(fieldFinder, findsOneWidget);
     final field = tester.widget<TextField>(fieldFinder);
-    final inputGlass =
-        tester.widgetList<GlassSurface>(find.byType(GlassSurface)).singleWhere(
-              (surface) =>
-                  surface.radius == 28 &&
-                  surface.padding == const EdgeInsets.fromLTRB(14, 12, 10, 10),
-            );
-    final initialBlur = inputGlass.blur;
+    final inputShell = tester.widget<AppGlassInputShell>(
+      find.byKey(const ValueKey('ai-chat-input-shell')),
+    );
+    expect(inputShell.padding, AppGlassInputShell.standardPadding);
+    expect(inputShell.opacity, 0.4);
+    final initialBlur = inputShell.blur;
 
     await tester.pump(const Duration(milliseconds: 4200));
     await tester.pump();
 
     final settledField = tester.widget<TextField>(fieldFinder);
-    final settledGlass =
-        tester.widgetList<GlassSurface>(find.byType(GlassSurface)).singleWhere(
-              (surface) =>
-                  surface.radius == 28 &&
-                  surface.padding == const EdgeInsets.fromLTRB(14, 12, 10, 10),
-            );
-    expect(settledGlass.blur, initialBlur);
+    final settledShell = tester.widget<AppGlassInputShell>(
+      find.byKey(const ValueKey('ai-chat-input-shell')),
+    );
+    expect(settledShell.blur, initialBlur);
+    expect(settledShell.padding, AppGlassInputShell.standardPadding);
+    expect(settledShell.opacity, 0.4);
     expect(settledField.focusNode, same(field.focusNode));
     expect(settledField.focusNode?.hasFocus, isTrue);
     expect(

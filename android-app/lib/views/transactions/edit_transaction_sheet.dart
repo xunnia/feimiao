@@ -6,9 +6,13 @@ import '../../core/amount_expression.dart';
 import '../../core/models/transaction_kind.dart';
 import '../../core/transaction_time.dart';
 import '../../data/app_repository.dart';
+import '../../theme/app_colors.dart';
+import '../../widgets/app_buttons.dart';
 import '../../widgets/app_date_picker.dart';
+import '../../widgets/app_line_icon.dart';
 import '../../widgets/app_toast.dart';
 import '../../widgets/ios_dialogs.dart';
+import '../../widgets/ios_menu.dart';
 import '../../widgets/tag_selector.dart';
 import '../common/receipt_picker.dart';
 import '../home/manual_add_sheet.dart';
@@ -247,14 +251,18 @@ class _EditTransactionSheetState extends State<EditTransactionSheet> {
                         ),
                 ),
                 const SizedBox(width: 8),
-                IconButton(
-                  tooltip: '删除',
-                  icon: Icon(Icons.delete_outline, color: scheme.error),
+                AppCircleButton.custom(
+                  iconWidget: Icon(
+                    Icons.delete_outline,
+                    color: AppColors.warning,
+                  ),
+                  size: 34,
+                  iconSize: 20,
+                  semanticLabel: '删除',
                   onPressed: _delete,
                 ),
-                IconButton(
-                  tooltip: '关闭',
-                  icon: const Icon(Icons.close),
+                AppCloseButton(
+                  size: 34,
                   onPressed: () => Navigator.pop(context),
                 ),
               ],
@@ -382,13 +390,12 @@ class _EditTransactionSheetState extends State<EditTransactionSheet> {
                     ),
                   const Spacer(),
                   if (_imagePath == null)
-                    TextButton.icon(
+                    AppPillButton(
+                      label: '收据',
                       onPressed: _pickReceipt,
-                      icon: const Icon(Icons.photo_camera_outlined, size: 16),
-                      label: const Text('收据'),
-                      style: TextButton.styleFrom(
-                        visualDensity: VisualDensity.compact,
-                      ),
+                      leading: const Icon(Icons.photo_camera_outlined),
+                      height: 32,
+                      padding: const EdgeInsets.symmetric(horizontal: 12),
                     )
                   else
                     Padding(
@@ -456,6 +463,7 @@ class _EditTransactionSheetState extends State<EditTransactionSheet> {
             children: [
               Expanded(
                 child: _accField(context, '从', from?.name ?? '选择', accounts,
+                    selectedId: _selectedAccountId,
                     exclude: _toAccountId,
                     onChanged: (id) => setState(() {
                           _selectedAccountId = id;
@@ -474,6 +482,7 @@ class _EditTransactionSheetState extends State<EditTransactionSheet> {
               ),
               Expanded(
                 child: _accField(context, '到', to?.name ?? '选择', accounts,
+                    selectedId: _toAccountId,
                     exclude: _selectedAccountId,
                     onChanged: (id) => setState(() => _toAccountId = id)),
               ),
@@ -494,7 +503,9 @@ class _EditTransactionSheetState extends State<EditTransactionSheet> {
 
   Widget _accField(BuildContext context, String label, String name,
       List<AccountEntity> accounts,
-      {required int? exclude, required ValueChanged<int?> onChanged}) {
+      {required int? selectedId,
+      required int? exclude,
+      required ValueChanged<int?> onChanged}) {
     final scheme = Theme.of(context).colorScheme;
     final options = accounts.where((a) => a.id != exclude).toList();
     return Column(
@@ -506,32 +517,47 @@ class _EditTransactionSheetState extends State<EditTransactionSheet> {
                 .labelSmall
                 ?.copyWith(color: scheme.onSurfaceVariant)),
         const SizedBox(height: 6),
-        PopupMenuButton<int>(
-          onSelected: onChanged,
-          itemBuilder: (_) => options
-              .map((a) => PopupMenuItem(value: a.id, child: Text(a.name)))
-              .toList(),
-          child: Container(
-            height: 48,
-            padding: const EdgeInsets.symmetric(horizontal: 14),
-            decoration: BoxDecoration(
-              color: scheme.surfaceContainerHigh,
-              borderRadius: BorderRadius.circular(14),
-            ),
-            child: Row(
-              children: [
-                Icon(Icons.account_balance_wallet_outlined,
-                    size: 18, color: scheme.onSurfaceVariant),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(name,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: Theme.of(context).textTheme.bodyMedium),
-                ),
-                Icon(Icons.expand_more,
-                    size: 18, color: scheme.onSurfaceVariant),
-              ],
+        Builder(
+          builder: (menuContext) => GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: options.isEmpty
+                ? null
+                : () => showIosMenu(
+                      menuContext,
+                      [
+                        for (final item in options)
+                          IosMenuItem(
+                            label: item.name,
+                            lineIcon: AppLineIcons.wallet,
+                            selected: item.id == selectedId,
+                            onTap: () => onChanged(item.id),
+                          ),
+                      ],
+                      width: 220,
+                      alignToAnchorLeft: true,
+                    ),
+            child: Container(
+              height: 48,
+              padding: const EdgeInsets.symmetric(horizontal: 14),
+              decoration: BoxDecoration(
+                color: scheme.surfaceContainerHigh,
+                borderRadius: BorderRadius.circular(14),
+              ),
+              child: Row(
+                children: [
+                  Icon(Icons.account_balance_wallet_outlined,
+                      size: 18, color: scheme.onSurfaceVariant),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(name,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: Theme.of(context).textTheme.bodyMedium),
+                  ),
+                  Icon(Icons.expand_more,
+                      size: 18, color: scheme.onSurfaceVariant),
+                ],
+              ),
             ),
           ),
         ),
@@ -575,18 +601,30 @@ class _DetailBar extends StatelessWidget {
       child: Row(
         children: [
           if (showAccount && accounts.isNotEmpty) ...[
-            PopupMenuButton<int>(
-              initialValue: selectedAccount?.id,
-              onSelected: onAccountChanged,
-              itemBuilder: (_) => accounts
-                  .map((a) => PopupMenuItem(value: a.id, child: Text(a.name)))
-                  .toList(),
-              child: Chip(
-                avatar:
-                    const Icon(Icons.account_balance_wallet_outlined, size: 16),
-                label: Text(selectedAccount?.name ?? '账户'),
-                visualDensity: VisualDensity.compact,
-                padding: const EdgeInsets.symmetric(horizontal: 4),
+            Builder(
+              builder: (menuContext) => GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: () => showIosMenu(
+                  menuContext,
+                  [
+                    for (final item in accounts)
+                      IosMenuItem(
+                        label: item.name,
+                        lineIcon: AppLineIcons.wallet,
+                        selected: item.id == selectedAccount?.id,
+                        onTap: () => onAccountChanged(item.id),
+                      ),
+                  ],
+                  width: 220,
+                  alignToAnchorLeft: true,
+                ),
+                child: Chip(
+                  avatar: const Icon(Icons.account_balance_wallet_outlined,
+                      size: 16),
+                  label: Text(selectedAccount?.name ?? '账户'),
+                  visualDensity: VisualDensity.compact,
+                  padding: const EdgeInsets.symmetric(horizontal: 4),
+                ),
               ),
             ),
             const SizedBox(width: 8),

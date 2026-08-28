@@ -100,6 +100,56 @@ class MainActivity : FlutterActivity() {
                 }
             }
 
+        // GPT OAuth callback keep-alive: Chrome is a separate Activity and
+        // Android may reclaim the paused Flutter Activity before it follows
+        // the localhost redirect. Keep the process alive only for the active
+        // OAuth attempt; Flutter stops it after token exchange/cancellation.
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "feimiao/oauth")
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "startKeepAlive" -> {
+                        val ports = call.argument<List<Int>>("ports")
+                            ?.filter { it in 1..65535 }
+                            ?.distinct()
+                            ?: listOf(
+                                OAuthKeepAliveService.DEFAULT_PORT,
+                                OAuthKeepAliveService.FALLBACK_PORT,
+                            )
+                        val flowId = call.argument<String>("flowId")
+                            ?.trim()
+                            ?.ifEmpty { null }
+                        // The service lives in a separate process and binds its
+                        // socket asynchronously. Do not tell Dart to open the
+                        // browser until the port is actually listening.
+                        Thread {
+                            val port = OAuthKeepAliveService.startAndWait(this, ports, flowId)
+                            runOnUiThread { result.success(port) }
+                        }.start()
+                    }
+                    "stopKeepAlive" -> {
+                        // stopAndWait touches the service marker while the
+                        // isolated process is shutting down. Keep that bounded
+                        // wait off the main thread so the Flutter UI remains
+                        // responsive during cancel/completion.
+                        val flowId = call.argument<String>("flowId")
+                            ?.trim()
+                            ?.ifEmpty { null }
+                        Thread {
+                            val stopped = OAuthKeepAliveService.stopAndWait(this, flowId)
+                            runOnUiThread { result.success(stopped) }
+                        }.start()
+                    }
+                    "takeCallback" -> {
+                        val flowId = call.argument<String>("flowId")
+                            ?.trim()
+                            ?.ifEmpty { null }
+                        result.success(OAuthKeepAliveService.takeCallback(this, flowId))
+                    }
+                    "clearCallback" -> result.success(OAuthKeepAliveService.clearCallback(this))
+                    else -> result.notImplemented()
+                }
+            }
+
         // 检查更新通道：下载走系统 DownloadManager（切后台/锁屏/杀进程都继续，
         // 系统通知栏自带进度），下载完 Flutter 侧校验 SHA256 再交系统安装器。
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "feimiao/update")

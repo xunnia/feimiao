@@ -133,6 +133,14 @@ void main() {
         ChatIntent.classify('房租 2800', hasArabicAmount: true),
         ChatIntentKind.record,
       );
+      expect(
+        ChatIntent.classify('13号失业金到账2250', hasArabicAmount: true),
+        ChatIntentKind.record,
+      );
+      expect(
+        ChatIntent.classify('社保补贴到账 500', hasArabicAmount: true),
+        ChatIntentKind.record,
+      );
     });
 
     test('ledger summaries without a question mark remain queries', () {
@@ -142,6 +150,31 @@ void main() {
       expect(ChatIntent.classify('看看我上周都买了什么'), ChatIntentKind.query);
       expect(ChatIntent.classify('汇总今年收入'), ChatIntentKind.query);
       expect(ChatIntent.classify('复盘本周餐饮'), ChatIntentKind.query);
+    });
+
+    test('relative-day and recent-range questions remain queries', () {
+      expect(ChatIntent.classify('今天花了多少钱'), ChatIntentKind.query);
+      expect(ChatIntent.classify('昨天支出多少'), ChatIntentKind.query);
+      expect(ChatIntent.classify('近 7 天买了什么'), ChatIntentKind.query);
+      expect(ChatIntent.classify('最近消费怎么样'), ChatIntentKind.query);
+    });
+
+    test('ledger summaries without question marks remain queries', () {
+      expect(ChatIntent.classify('今天收入'), ChatIntentKind.query);
+      expect(ChatIntent.classify('本周餐饮'), ChatIntentKind.query);
+      expect(
+        ChatIntent.classify('今天买了咖啡 20', hasArabicAmount: true),
+        ChatIntentKind.record,
+      );
+      expect(
+        ChatIntent.classify('买电脑 5000', hasArabicAmount: true),
+        ChatIntentKind.record,
+      );
+    });
+
+    test('purchase advice remains free chat without an amount', () {
+      expect(ChatIntent.classify('我想买一台电脑'), ChatIntentKind.chat);
+      expect(ChatIntent.classify('我想买什么股票'), ChatIntentKind.chat);
     });
   });
 }

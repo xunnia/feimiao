@@ -10,6 +10,7 @@ import 'package:qingji/views/quick_add/category_grid.dart';
 import 'package:qingji/views/savings/savings_goals_view.dart';
 import 'package:qingji/views/settings/import_export_view.dart';
 import 'package:qingji/widgets/app_buttons.dart';
+import 'package:qingji/widgets/glass.dart';
 import 'package:qingji/widgets/ios_form.dart';
 import 'package:qingji/widgets/settings_ui.dart';
 
@@ -35,8 +36,18 @@ void main() {
       ),
     );
 
-    final closeRect = tester.getRect(find.byType(AppCircleButton));
-    final actionRect = tester.getRect(find.byType(AppPillButton));
+    final closeRect = tester.getRect(
+      find.descendant(
+        of: find.byType(AppCircleButton),
+        matching: find.byType(GlassSurface),
+      ),
+    );
+    final actionRect = tester.getRect(
+      find.descendant(
+        of: find.byType(AppPillButton),
+        matching: find.byType(GlassSurface),
+      ),
+    );
     final titleRect = tester.getRect(find.text('表单标题'));
     final title = tester.widget<Text>(find.text('表单标题'));
 
@@ -181,7 +192,7 @@ void main() {
       const MaterialApp(home: ImportExportView()),
     );
 
-    final buttons = find.byType(OutlinedButton);
+    final buttons = find.byType(AppPillButton);
     expect(buttons, findsNWidgets(2));
     expect(find.text('导出'), findsOneWidget);
     expect(find.text('导入'), findsOneWidget);

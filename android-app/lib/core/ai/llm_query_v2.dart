@@ -1,5 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io' show File;
+import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:http/http.dart' as http;
@@ -10,6 +12,9 @@ import 'ai_logger.dart';
 import 'ai_prompt_templates.dart';
 import 'ai_provider_config.dart';
 import 'ai_request_manager.dart';
+import 'openai_codex_oauth.dart';
+import 'web_search.dart';
+import '../media/chat_attachment.dart';
 
 /// AI 查询服务 V2：集成流式响应、日志、异常处理、数据裁剪、并发控制、
 /// Token 计数、fallback 等优化。
@@ -18,9 +23,60 @@ import 'ai_request_manager.dart';
 class LlmQueryV2 {
   LlmQueryV2._();
 
+  static final http.Client _httpClient = http.Client();
+
   static const _defaultTimeoutSeconds = 30;
   static const _reportTimeoutSeconds = 90;
   static const _streamTimeoutSeconds = 60;
+  static const _streamIdleTimeoutSeconds = 75;
+
+  static Future<String?> _imageDataUri(String? imagePath) async {
+    final path = imagePath?.trim() ?? '';
+    if (path.isEmpty) return null;
+    final file = File(path);
+    if (!await file.exists()) {
+      throw const AiNetworkException('图片文件不存在');
+    }
+    final bytes = await file.readAsBytes();
+    if (bytes.isEmpty) throw const AiNetworkException('图片文件为空');
+    final ext = path.split('.').last.toLowerCase();
+    final mime = switch (ext) {
+      'png' => 'image/png',
+      'webp' => 'image/webp',
+      'gif' => 'image/gif',
+      _ => 'image/jpeg',
+    };
+    return 'data:$mime;base64,${base64Encode(bytes)}';
+  }
+
+  static Future<List<Map<String, dynamic>>> _attachmentParts(
+    Iterable<ChatAttachment> attachments,
+  ) async {
+    final parts = <Map<String, dynamic>>[];
+    for (final attachment in attachments) {
+      final file = File(attachment.path);
+      if (!await file.exists()) throw const AiNetworkException('附件文件不存在');
+      final bytes = await file.readAsBytes();
+      if (bytes.isEmpty) throw const AiNetworkException('附件文件为空');
+      final dataUri =
+          'data:${attachment.mimeType};base64,${base64Encode(bytes)}';
+      if (attachment.isImage) {
+        parts.add({
+          'type': 'image_url',
+          'image_url': {'url': dataUri},
+        });
+      } else {
+        parts.add({
+          'type': 'file',
+          'file': {
+            'filename': attachment.name,
+            'file_data': dataUri,
+          },
+        });
+      }
+    }
+    return parts;
+  }
 
   /// 流式问答：逐字返回 AI 回答，实时渲染
   ///
@@ -35,13 +91,24 @@ class LlmQueryV2 {
     required void Function(String chunk) onChunk,
     required void Function(String fullAnswer) onDone,
     required void Function(AiException error) onError,
+    void Function(Iterable<AiWebSource> sources)? onSources,
+    void Function(String summary)? onReasoningSummary,
     String? taskId,
+    List<Map<String, String>> priorTurns = const [],
+    String? imagePath,
+    List<ChatAttachment> attachments = const [],
   }) async {
     final tid = taskId ?? 'ask_stream_${DateTime.now().millisecondsSinceEpoch}';
     final startTime = DateTime.now();
 
     try {
-      final provider = _resolveConfig(apiKey: apiKey, config: config);
+      final provider = await OpenAiCodexOAuth.ensureFreshConfig(
+        _resolveConfig(apiKey: apiKey, config: config),
+      );
+      final webSearch = await AiWebSearchContext.prepare(
+        question: question,
+        config: provider,
+      );
 
       AiLogger.logQueryStart(
         taskType: 'ask_stream',
@@ -50,29 +117,129 @@ class LlmQueryV2 {
         estimatedTokens: AiDataTrimmer.estimateTokens(transactionsText),
       );
 
+      final imageDataUri = await _imageDataUri(imagePath);
+      final attachmentParts = await _attachmentParts(attachments);
+      if (imageDataUri != null) {
+        attachmentParts.insert(0, {
+          'type': 'image_url',
+          'image_url': {'url': imageDataUri},
+        });
+      }
+      final userContent = attachmentParts.isEmpty
+          ? question
+          : <Map<String, dynamic>>[
+              {'type': 'text', 'text': question},
+              ...attachmentParts,
+            ];
+      final messages = <Map<String, dynamic>>[
+        {'role': 'system', 'content': AiPromptTemplates.systemPrompt},
+        if (transactionsText.trim().isNotEmpty)
+          {'role': 'system', 'content': '账目上下文：\n$transactionsText'},
+        if (webSearch.promptBlock.trim().isNotEmpty)
+          {'role': 'system', 'content': webSearch.promptBlock},
+        ...priorTurns.map(
+          (turn) => <String, dynamic>{
+            'role': turn['role'] ?? 'user',
+            'content': turn['content'] ?? '',
+          },
+        ),
+        {'role': 'user', 'content': userContent},
+      ];
+      var requestProvider = provider;
+      var unauthorizedRetried = false;
+      var transientNetworkRetried = false;
+      var streamProducedOutput = false;
+
+      void handleChunk(String chunk) {
+        if (chunk.isNotEmpty) streamProducedOutput = true;
+        onChunk(chunk);
+      }
+
+      void handleSources(Iterable<AiWebSource> sources) {
+        final sourceList = sources.toList(growable: false);
+        if (sourceList.isNotEmpty) streamProducedOutput = true;
+        final combined = <AiWebSource>[];
+        final seen = <String>{};
+        for (final source in [
+          ...?webSearch.response?.sources,
+          ...sourceList,
+        ]) {
+          if (source.url.trim().isNotEmpty && seen.add(source.url.trim())) {
+            combined.add(source);
+          }
+        }
+        onSources?.call(combined);
+      }
+
+      void handleReasoningSummary(String summary) {
+        if (summary.trim().isNotEmpty) streamProducedOutput = true;
+        onReasoningSummary?.call(summary);
+      }
+
+      void handleDone(String fullAnswer) {
+        final duration = DateTime.now().difference(startTime).inMilliseconds;
+        AiLogger.logQuerySuccess(
+          taskType: 'ask_stream',
+          provider: requestProvider.providerLabel,
+          model: requestProvider.modelCandidates.first,
+          durationMs: duration,
+        );
+        onDone(webSearch.annotateAnswer(fullAnswer));
+      }
+
+      Future<void> performStream() => _streamChat(
+            config: requestProvider,
+            messages: messages,
+            timeoutSeconds: _streamTimeoutSeconds,
+            onChunk: handleChunk,
+            onSources: handleSources,
+            onReasoningSummary: handleReasoningSummary,
+            onDone: handleDone,
+          );
+
       await AiRequestManager.execute(
         taskId: tid,
         allowConcurrent: false,
-        request: () => _streamChat(
-          config: provider,
-          messages: [
-            {'role': 'system', 'content': AiPromptTemplates.systemPrompt},
-            {'role': 'system', 'content': '账目上下文：\n$transactionsText'},
-            {'role': 'user', 'content': question},
-          ],
-          timeoutSeconds: _streamTimeoutSeconds,
-          onChunk: onChunk,
-          onDone: (fullAnswer) {
-            final duration = DateTime.now().difference(startTime).inMilliseconds;
-            AiLogger.logQuerySuccess(
-              taskType: 'ask_stream',
-              provider: provider.providerLabel,
-              model: provider.modelCandidates.first,
-              durationMs: duration,
-            );
-            onDone(fullAnswer);
-          },
-        ),
+        request: () async {
+          while (true) {
+            try {
+              return await performStream();
+            } catch (error) {
+              final aiError = AiRequestManager.wrapException(error);
+              if (!unauthorizedRetried &&
+                  !streamProducedOutput &&
+                  aiError.statusCode == 401 &&
+                  requestProvider.isOpenAiCodexOAuth) {
+                unauthorizedRetried = true;
+                requestProvider = await OpenAiCodexOAuth.service
+                    .refreshAfterUnauthorized(requestProvider);
+                continue;
+              }
+              // Android may hand the first request to a stale keep-alive
+              // socket immediately after app resume or provider hydration.
+              // Retry exactly once only before any text, reasoning, or source
+              // event has reached the UI. Replaying after visible output would
+              // duplicate an answer the user has already started reading.
+              if (_shouldRetryFirstPacket(
+                aiError,
+                streamProducedOutput: streamProducedOutput,
+                alreadyRetried: transientNetworkRetried,
+              )) {
+                transientNetworkRetried = true;
+                AiLogger.logRetry(
+                  taskType: 'ask_stream_first_packet',
+                  provider: requestProvider.providerLabel,
+                  fromModel: requestProvider.modelCandidates.first,
+                  toModel: requestProvider.modelCandidates.first,
+                  reason: aiError.message,
+                );
+                await Future<void>.delayed(const Duration(milliseconds: 180));
+                continue;
+              }
+              rethrow;
+            }
+          }
+        },
       );
     } catch (e) {
       final duration = DateTime.now().difference(startTime).inMilliseconds;
@@ -105,7 +272,13 @@ class LlmQueryV2 {
     final startTime = DateTime.now();
 
     try {
-      final provider = _resolveConfig(apiKey: apiKey, config: config);
+      final provider = await OpenAiCodexOAuth.ensureFreshConfig(
+        _resolveConfig(apiKey: apiKey, config: config),
+      );
+      final webSearch = await AiWebSearchContext.prepare(
+        question: question,
+        config: provider,
+      );
 
       AiLogger.logQueryStart(
         taskType: 'ask',
@@ -130,11 +303,13 @@ class LlmQueryV2 {
               'messages': [
                 {'role': 'system', 'content': AiPromptTemplates.systemPrompt},
                 {'role': 'system', 'content': '账目上下文：\n$transactionsText'},
+                if (webSearch.promptBlock.trim().isNotEmpty)
+                  {'role': 'system', 'content': webSearch.promptBlock},
                 {'role': 'user', 'content': question},
               ],
               'stream': false,
             },
-          ),
+          ).then(webSearch.annotateAnswer),
         ),
       );
 
@@ -179,7 +354,9 @@ class LlmQueryV2 {
     final startTime = DateTime.now();
 
     try {
-      final provider = _resolveConfig(apiKey: apiKey, config: config);
+      final provider = await OpenAiCodexOAuth.ensureFreshConfig(
+        _resolveConfig(apiKey: apiKey, config: config),
+      );
       final typeLabel = switch (reportType) {
         'weekly' => '消费周报',
         'yearly' => '消费年报',
@@ -304,7 +481,9 @@ $transactionsText''';
     final startTime = DateTime.now();
 
     try {
-      final provider = _resolveConfig(config: config);
+      final provider = await OpenAiCodexOAuth.ensureFreshConfig(
+        _resolveConfig(config: config),
+      );
 
       AiLogger.logQueryStart(
         taskType: 'test_connection',
@@ -367,32 +546,49 @@ $transactionsText''';
   }) async {
     AiException? lastError;
     final models = config.modelCandidates;
+    var activeConfig = config;
+    var unauthorizedRetried = false;
 
     for (int i = 0; i < models.length; i++) {
       final model = models[i];
       try {
         var body = bodyForModel(model);
 
-        // Claude 格式转换
-        if (config.isClaudeModel) {
-          body = _convertToClaudeFormat(body, config);
+        // Claude 原生端点必须先转换格式，并绕过 Responses 分支。
+        if (activeConfig.shouldUseClaudeMessages) {
+          body = _convertToClaudeFormat(body, activeConfig);
+          return await _postChat(
+            config: activeConfig,
+            body: body,
+            timeoutSeconds: timeoutSeconds,
+          );
         }
 
-        if (config.shouldUseResponses) {
+        if (activeConfig.shouldUseResponses) {
           return await _postResponses(
-            config: config,
-            body: _responsesBodyFromChatBody(body, config),
+            config: activeConfig,
+            body: _responsesBodyFromChatBody(body, activeConfig),
             timeoutSeconds: timeoutSeconds,
           );
         }
 
         return await _postChat(
-          config: config,
+          config: activeConfig,
           body: body,
           timeoutSeconds: timeoutSeconds,
         );
       } catch (e) {
         lastError = AiRequestManager.wrapException(e);
+
+        if (!unauthorizedRetried &&
+            lastError.statusCode == 401 &&
+            activeConfig.isOpenAiCodexOAuth) {
+          unauthorizedRetried = true;
+          activeConfig = await OpenAiCodexOAuth.service
+              .refreshAfterUnauthorized(activeConfig);
+          i--;
+          continue;
+        }
 
         // 最后一个模型失败直接抛出
         if (i == models.length - 1) rethrow;
@@ -419,24 +615,15 @@ $transactionsText''';
     required Map<String, dynamic> body,
     required int timeoutSeconds,
   }) async {
-    final isClaude = config.isClaudeModel;
+    final isClaude = config.shouldUseClaudeMessages;
     final uri = isClaude ? config.messagesUri : config.chatCompletionsUri;
 
     late http.Response resp;
 
     try {
-      final headers = {
-        'Content-Type': 'application/json',
-      };
+      final headers = config.authHeaders();
 
-      if (isClaude) {
-        headers['x-api-key'] = config.apiKey;
-        headers['anthropic-version'] = '2023-06-01';
-      } else {
-        headers['Authorization'] = 'Bearer ${config.apiKey}';
-      }
-
-      resp = await http
+      resp = await _httpClient
           .post(
             uri,
             headers: headers,
@@ -446,7 +633,8 @@ $transactionsText''';
     } on TimeoutException {
       throw const AiNetworkException('请求超时');
     } catch (e) {
-      throw _sanitizeException(AiNetworkException('网络请求失败', originalError: e), config.apiKey);
+      throw _sanitizeException(
+          AiNetworkException('网络请求失败', originalError: e), config.apiKey);
     }
 
     final bodyText = utf8.decode(resp.bodyBytes, allowMalformed: true);
@@ -472,8 +660,10 @@ $transactionsText''';
           provider: config.providerLabel,
           model: body['model'] as String,
           durationMs: 0,
-          promptTokens: usage['prompt_tokens'] as int? ?? usage['input_tokens'] as int?,
-          completionTokens: usage['completion_tokens'] as int? ?? usage['output_tokens'] as int?,
+          promptTokens:
+              usage['prompt_tokens'] as int? ?? usage['input_tokens'] as int?,
+          completionTokens: usage['completion_tokens'] as int? ??
+              usage['output_tokens'] as int?,
           totalTokens: usage['total_tokens'] as int?,
         );
       }
@@ -493,7 +683,8 @@ $transactionsText''';
         text = (textBlock['text'] as String? ?? '').trim();
       } else {
         // OpenAI 格式
-        final content = (outer['choices'] as List).first['message']['content'] as String;
+        final content =
+            (outer['choices'] as List).first['message']['content'] as String;
         text = content.trim();
       }
 
@@ -504,7 +695,8 @@ $transactionsText''';
       return text;
     } catch (e) {
       if (e is AiException) rethrow;
-      throw _sanitizeException(AiResponseParseException('响应解析失败', originalError: e), config.apiKey);
+      throw _sanitizeException(
+          AiResponseParseException('响应解析失败', originalError: e), config.apiKey);
     }
   }
 
@@ -514,22 +706,32 @@ $transactionsText''';
     required int timeoutSeconds,
     required void Function(String chunk) onChunk,
     required void Function(String fullAnswer) onDone,
+    void Function(Iterable<AiWebSource> sources)? onSources,
+    void Function(String summary)? onReasoningSummary,
   }) async {
-    final isClaude = config.isClaudeModel;
-    final uri = isClaude ? config.messagesUri : config.chatCompletionsUri;
+    final isClaude = config.shouldUseClaudeMessages;
+    final isResponses = !isClaude && config.shouldUseResponses;
+    final uri = _streamUri(config);
 
     final Map<String, dynamic> body;
 
     if (isClaude) {
       // Claude 原生格式
-      final systemMessages = messages.where((m) => m['role'] == 'system').toList();
-      final userMessages = messages.where((m) => m['role'] != 'system').toList();
+      final systemMessages =
+          messages.where((m) => m['role'] == 'system').toList();
+      final userMessages =
+          messages.where((m) => m['role'] != 'system').toList();
 
+      final budgetTokens = config.reasoningEffort.claudeBudgetTokens;
+      final maxTokens =
+          budgetTokens == null ? 4096 : math.max(4096, budgetTokens + 4096);
       body = {
         'model': config.modelCandidates.first,
-        'messages': userMessages,
+        'messages': [
+          for (final message in userMessages) _messageForClaude(message),
+        ],
         'stream': true,
-        'max_tokens': 4096,
+        'max_tokens': maxTokens,
       };
 
       // 合并 system prompt
@@ -538,133 +740,253 @@ $transactionsText''';
       }
 
       // thinking 参数映射
-      if (config.reasoningEffort != AiReasoningEffort.none) {
-        final budgetTokens = switch (config.reasoningEffort) {
-          AiReasoningEffort.minimal => 1024,
-          AiReasoningEffort.low => 4096,
-          AiReasoningEffort.medium => 8192,
-          AiReasoningEffort.high => 16384,
-          AiReasoningEffort.xhigh => 32768,
-          AiReasoningEffort.ultra => 65536,
-          _ => 8192,
-        };
+      if (budgetTokens != null) {
         body['thinking'] = {
           'type': 'enabled',
           'budget_tokens': budgetTokens,
         };
+        body['temperature'] = 1;
       }
+    } else if (isResponses) {
+      // Responses API 的流式格式使用 input/instructions，而不是
+      // Chat Completions 的 messages。转换器同时注入 reasoning.effort。
+      body = _responsesStreamBody(config: config, messages: messages);
     } else {
-      // OpenAI 兼容格式
-      body = {
-        'model': config.modelCandidates.first,
-        'messages': messages,
-        'stream': true,
-      };
+      body = _chatCompletionsStreamBody(config: config, messages: messages);
     }
 
-    late http.StreamedResponse resp;
-
+    // A stream owns its client for the complete response lifetime. This avoids
+    // reusing a poisoned keep-alive socket on the first request after resume;
+    // a bounded first-packet retry in askStream therefore gets a fresh socket.
+    final streamClient = http.Client();
     try {
-      final headers = {
-        'Content-Type': 'application/json',
-      };
-
-      if (isClaude) {
-        headers['x-api-key'] = config.apiKey;
-        headers['anthropic-version'] = '2023-06-01';
-      } else {
-        headers['Authorization'] = 'Bearer ${config.apiKey}';
+      late http.StreamedResponse resp;
+      try {
+        final headers = config.authHeaders();
+        final request = http.Request('POST', uri)
+          ..headers.addAll(headers)
+          ..body = jsonEncode(body);
+        resp = await streamClient
+            .send(request)
+            .timeout(Duration(seconds: timeoutSeconds));
+      } on TimeoutException {
+        throw const AiNetworkException('请求超时');
+      } catch (e) {
+        throw _sanitizeException(
+            AiNetworkException('网络请求失败', originalError: e), config.apiKey);
       }
 
-      final request = http.Request('POST', uri)
-        ..headers.addAll(headers)
-        ..body = jsonEncode(body);
+      if (resp.statusCode != 200) {
+        final bodyText = await resp.stream.bytesToString();
+        throw _sanitizeException(
+          AiRequestManager.wrapException(
+            Exception(_bodySnippet(bodyText)),
+            statusCode: resp.statusCode,
+          ),
+          config.apiKey,
+        );
+      }
 
-      resp = await request.send().timeout(Duration(seconds: timeoutSeconds));
-    } on TimeoutException {
-      throw const AiNetworkException('请求超时');
-    } catch (e) {
-      throw _sanitizeException(AiNetworkException('网络请求失败', originalError: e), config.apiKey);
-    }
+      final fullAnswer = StringBuffer();
+      final webSources = <AiWebSource>[];
+      final webSourceUrls = <String>{};
+      String? completedAnswer;
+      var streamCompleted = false;
 
-    if (resp.statusCode != 200) {
-      final bodyText = await resp.stream.bytesToString();
-      throw _sanitizeException(
-        AiRequestManager.wrapException(
-          Exception(_bodySnippet(bodyText)),
-          statusCode: resp.statusCode,
-        ),
-        config.apiKey,
-      );
-    }
+      try {
+        await for (final line in resp.stream
+            .transform(utf8.decoder)
+            .transform(const LineSplitter())
+            .timeout(const Duration(seconds: _streamIdleTimeoutSeconds))) {
+          // SSE 用空行分隔事件；它不是流的结束信号。
+          if (line.isEmpty) continue;
 
-    final fullAnswer = StringBuffer();
+          if (isClaude) {
+            // Claude SSE 格式: "data: {...}"
+            if (!line.startsWith('data: ')) continue;
+            final data = line.substring(6);
 
-    try {
-      await resp.stream
-          .transform(utf8.decoder)
-          .transform(const LineSplitter())
-          .listen((line) {
-            if (line.isEmpty) return;
+            try {
+              final json = jsonDecode(data) as Map<String, dynamic>;
+              final type = json['type'] as String?;
 
-            if (isClaude) {
-              // Claude SSE 格式: "data: {...}"
-              if (!line.startsWith('data: ')) return;
-              final data = line.substring(6);
+              if (type == 'content_block_delta') {
+                final delta = json['delta'];
+                final content = delta?['text'] as String?;
+                final thinking = delta?['thinking'] as String?;
 
-              try {
-                final json = jsonDecode(data) as Map<String, dynamic>;
-                final type = json['type'] as String?;
-
-                if (type == 'content_block_delta') {
-                  final delta = json['delta'];
-                  final content = delta?['text'] as String?;
-
-                  if (content != null && content.isNotEmpty) {
-                    fullAnswer.write(content);
-                    onChunk(content);
-                  }
+                if (thinking != null && thinking.trim().isNotEmpty) {
+                  onReasoningSummary?.call(thinking);
                 }
-              } catch (e) {
-                AiLogger.logWarning(
-                  taskType: 'stream_parse_chunk',
-                  provider: config.providerLabel,
-                  model: config.modelCandidates.first,
-                  warning: 'Claude 流式响应单条解析失败: $e',
-                  extra: {'chunk_data': data.substring(0, data.length > 100 ? 100 : data.length)},
-                );
-              }
-            } else {
-              // OpenAI 格式
-              if (!line.startsWith('data: ')) return;
-              final data = line.substring(6);
-              if (data == '[DONE]') return;
-
-              try {
-                final json = jsonDecode(data) as Map<String, dynamic>;
-                final delta = json['choices']?[0]?['delta'];
-                final content = delta?['content'] as String?;
 
                 if (content != null && content.isNotEmpty) {
                   fullAnswer.write(content);
                   onChunk(content);
                 }
-              } catch (e) {
-                AiLogger.logWarning(
-                  taskType: 'stream_parse_chunk',
-                  provider: config.providerLabel,
-                  model: config.modelCandidates.first,
-                  warning: '流式响应单条解析失败: $e',
-                  extra: {'chunk_data': data.substring(0, data.length > 100 ? 100 : data.length)},
-                );
               }
+              if (type == 'message_stop') streamCompleted = true;
+            } catch (e) {
+              if (e is AiException) rethrow;
+              AiLogger.logWarning(
+                taskType: 'stream_parse_chunk',
+                provider: config.providerLabel,
+                model: config.modelCandidates.first,
+                warning: 'Claude 流式响应单条解析失败: $e',
+                extra: {
+                  'chunk_data':
+                      data.substring(0, data.length > 100 ? 100 : data.length)
+                },
+              );
             }
-          })
-          .asFuture();
+          } else if (isResponses) {
+            // Responses SSE: response.output_text.delta 携带增量文本。
+            // 标准 SSE 会先发 event/注释行，再发 data 行；这些行不是流结束
+            // 信号，不能 return 整个 _streamChat，否则上层 Completer 会永久等
+            // 不到 onDone/onError。兼容 `data:` 后没有空格的网关。
+            if (!line.startsWith('data:')) continue;
+            final data = line.substring(5).trimLeft();
+            if (data == '[DONE]') {
+              streamCompleted = true;
+              break;
+            }
+            try {
+              final decoded = jsonDecode(data.trim());
+              if (decoded is Map) {
+                final event = Map<String, dynamic>.from(decoded);
+                for (final source in _extractResponsesSources(event)) {
+                  if (webSourceUrls.add(source.url)) webSources.add(source);
+                }
+                final type = event['type']?.toString().toLowerCase() ?? '';
+                final reasoningSummary = _responsesReasoningSummaryDelta(event);
+                if (reasoningSummary != null) {
+                  onReasoningSummary?.call(reasoningSummary);
+                }
+                if (type == 'response.failed') {
+                  final response = event['response'];
+                  final error = response is Map ? response['error'] : null;
+                  final message = error is Map
+                      ? error['message']?.toString()
+                      : error?.toString();
+                  throw AiServerException(
+                    (message == null || message.trim().isEmpty)
+                        ? 'Responses 生成失败'
+                        : message.trim(),
+                  );
+                }
+                if (type == 'response.incomplete') {
+                  final response = event['response'];
+                  final details =
+                      response is Map ? response['incomplete_details'] : null;
+                  final reason = details is Map
+                      ? details['reason']?.toString()
+                      : details?.toString();
+                  throw AiTokenLimitException(
+                    reason == null || reason.trim().isEmpty
+                        ? 'Responses 输出未完成'
+                        : 'Responses 输出未完成：${reason.trim()}',
+                  );
+                }
+                if (type == 'response.output_text.done') {
+                  final text = event['text'];
+                  if (text is String && text.trim().isNotEmpty) {
+                    completedAnswer = text;
+                  }
+                } else if (type == 'response.completed') {
+                  final response = event['response'];
+                  if (response is Map) {
+                    final text = _extractResponsesText(
+                      Map<String, dynamic>.from(response),
+                    );
+                    if (text.isNotEmpty) completedAnswer = text;
+                  }
+                  streamCompleted = true;
+                }
+              }
+              final content = _responsesStreamDelta(data);
+              if (content != null) {
+                fullAnswer.write(content);
+                onChunk(content);
+              }
+            } catch (e) {
+              if (e is AiException) rethrow;
+              AiLogger.logWarning(
+                taskType: 'stream_parse_chunk',
+                provider: config.providerLabel,
+                model: config.modelCandidates.first,
+                warning: 'Responses 流式响应单条解析失败: $e',
+                extra: {
+                  'chunk_data':
+                      data.substring(0, data.length > 100 ? 100 : data.length)
+                },
+              );
+            }
+          } else {
+            // OpenAI 格式
+            if (!line.startsWith('data: ')) continue;
+            final data = line.substring(6);
+            if (data == '[DONE]') {
+              streamCompleted = true;
+              break;
+            }
 
-      onDone(fullAnswer.toString());
-    } catch (e) {
-      throw _sanitizeException(AiResponseParseException('流式响应解析失败', originalError: e), config.apiKey);
+            try {
+              final json = jsonDecode(data) as Map<String, dynamic>;
+              final delta = json['choices']?[0]?['delta'];
+              final content = delta?['content'] as String?;
+
+              if (content != null && content.isNotEmpty) {
+                fullAnswer.write(content);
+                onChunk(content);
+              }
+            } catch (e) {
+              AiLogger.logWarning(
+                taskType: 'stream_parse_chunk',
+                provider: config.providerLabel,
+                model: config.modelCandidates.first,
+                warning: '流式响应单条解析失败: $e',
+                extra: {
+                  'chunk_data':
+                      data.substring(0, data.length > 100 ? 100 : data.length)
+                },
+              );
+            }
+          }
+
+          // 服务端可能在业务终止事件后保持 HTTP 连接；无需等物理断连。
+          if (streamCompleted) break;
+        }
+
+        final streamedAnswer = fullAnswer.toString();
+        // `response.output_text.done`/`response.completed` may carry the
+        // provider's canonical full text after a gateway emitted only part of
+        // the deltas. Prefer it when it is at least as complete; otherwise
+        // retain the longer accumulated stream so a malformed final event
+        // cannot erase text the user already saw.
+        final finalAnswer = completedAnswer?.trim() ?? '';
+        final rawAnswer = finalAnswer.isNotEmpty &&
+                finalAnswer.length >= streamedAnswer.trim().length
+            ? finalAnswer
+            : streamedAnswer;
+        final answer = AiWebSearchContext.formatAnswerWithSources(
+          rawAnswer,
+          config.webSearchEnabled ? webSources : const [],
+        );
+        if (answer.trim().isEmpty) {
+          throw const AiEmptyResponseException('Responses 流式响应为空');
+        }
+        onSources?.call(webSources);
+        onDone(answer);
+      } on TimeoutException {
+        throw const AiNetworkException('流式响应超时，服务端长时间没有返回内容');
+      } on AiException {
+        rethrow;
+      } catch (e) {
+        throw _sanitizeException(
+            AiResponseParseException('流式响应解析失败', originalError: e),
+            config.apiKey);
+      }
+    } finally {
+      streamClient.close();
     }
   }
 
@@ -676,20 +998,18 @@ $transactionsText''';
     late http.Response resp;
 
     try {
-      resp = await http
+      resp = await _httpClient
           .post(
             config.responsesUri,
-            headers: {
-              'Authorization': 'Bearer ${config.apiKey}',
-              'Content-Type': 'application/json',
-            },
+            headers: config.authHeaders(),
             body: jsonEncode(body),
           )
           .timeout(Duration(seconds: timeoutSeconds));
     } on TimeoutException {
       throw const AiNetworkException('请求超时');
     } catch (e) {
-      throw _sanitizeException(AiNetworkException('网络请求失败', originalError: e), config.apiKey);
+      throw _sanitizeException(
+          AiNetworkException('网络请求失败', originalError: e), config.apiKey);
     }
 
     final bodyText = utf8.decode(resp.bodyBytes, allowMalformed: true);
@@ -705,8 +1025,23 @@ $transactionsText''';
     }
 
     try {
-      final outer = jsonDecode(bodyText) as Map<String, dynamic>;
-      final text = _extractResponsesText(outer).trim();
+      final String text;
+      if (config.isOpenAiCodexOAuth) {
+        final raw = _extractResponsesSseText(bodyText).trim();
+        text = AiWebSearchContext.formatAnswerWithSources(
+          raw,
+          config.webSearchEnabled
+              ? _extractResponsesSseSources(bodyText)
+              : const [],
+        );
+      } else {
+        final outer = jsonDecode(bodyText) as Map<String, dynamic>;
+        final raw = _extractResponsesText(outer).trim();
+        text = AiWebSearchContext.formatAnswerWithSources(
+          raw,
+          config.webSearchEnabled ? _extractResponsesSources(outer) : const [],
+        );
+      }
 
       if (text.isEmpty) {
         throw const AiEmptyResponseException('Responses 返回空内容');
@@ -715,14 +1050,139 @@ $transactionsText''';
       return text;
     } catch (e) {
       if (e is AiException) rethrow;
-      throw _sanitizeException(AiResponseParseException('Responses 响应解析失败', originalError: e), config.apiKey);
+      throw _sanitizeException(
+          AiResponseParseException('Responses 响应解析失败', originalError: e),
+          config.apiKey);
     }
+  }
+
+  static String _extractResponsesSseText(String body) {
+    final buffer = StringBuffer();
+    String? completed;
+    for (final line in const LineSplitter().convert(body)) {
+      if (!line.startsWith('data:')) continue;
+      final data = line.substring(5).trimLeft();
+      if (data == '[DONE]') break;
+      try {
+        final decoded = jsonDecode(data);
+        if (decoded is Map) {
+          final event = Map<String, dynamic>.from(decoded);
+          final type = event['type']?.toString().toLowerCase() ?? '';
+          if (type == 'response.failed') {
+            final response = event['response'];
+            final error = response is Map ? response['error'] : null;
+            final message =
+                error is Map ? error['message']?.toString() : error?.toString();
+            throw AiServerException(
+              message == null || message.trim().isEmpty
+                  ? 'Responses 生成失败'
+                  : message.trim(),
+            );
+          }
+          if (type == 'response.incomplete') {
+            throw const AiTokenLimitException('Responses 输出未完成');
+          }
+          if (type == 'response.output_text.done') {
+            final text = event['text'];
+            if (text is String && text.trim().isNotEmpty) completed = text;
+          } else if (type == 'response.completed') {
+            final response = event['response'];
+            if (response is Map) {
+              final text = _extractResponsesText(
+                Map<String, dynamic>.from(response),
+              );
+              if (text.isNotEmpty) completed = text;
+            }
+          }
+        }
+        final delta = _responsesStreamDelta(data);
+        if (delta != null) buffer.write(delta);
+      } on AiException {
+        rethrow;
+      } catch (_) {
+        // Ignore non-JSON SSE comments and vendor-specific events.
+      }
+    }
+    final result = buffer.toString().trim();
+    return result.isNotEmpty ? result : (completed ?? '');
+  }
+
+  static List<AiWebSource> _extractResponsesSseSources(String body) {
+    final result = <AiWebSource>[];
+    final seen = <String>{};
+    for (final line in const LineSplitter().convert(body)) {
+      if (!line.startsWith('data:')) continue;
+      final data = line.substring(5).trimLeft();
+      if (data == '[DONE]') break;
+      try {
+        final decoded = jsonDecode(data);
+        if (decoded is Map) {
+          for (final source in _extractResponsesSources(
+            Map<String, dynamic>.from(decoded),
+          )) {
+            if (seen.add(source.url)) result.add(source);
+          }
+        }
+      } catch (_) {
+        // Ignore non-JSON SSE comments/events.
+      }
+    }
+    return result;
+  }
+
+  static Map<String, dynamic> _messageForClaude(Map<String, dynamic> message) {
+    final content = message['content'];
+    if (content is! List) return message;
+    return {
+      ...message,
+      'content': [
+        for (final part in content)
+          if (part is Map && part['type'] == 'text')
+            {'type': 'text', 'text': part['text']?.toString() ?? ''}
+          else if (part is Map && part['type'] == 'image_url')
+            {
+              'type': 'image',
+              'source': {
+                'type': 'base64',
+                'media_type': _mimeFromDataUri(
+                  (part['image_url'] is Map ? part['image_url']['url'] : null)
+                      ?.toString(),
+                ),
+                'data': _base64FromDataUri(
+                  (part['image_url'] is Map ? part['image_url']['url'] : null)
+                      ?.toString(),
+                ),
+              },
+            }
+          else if (part is Map && part['type'] == 'file')
+            {
+              'type': 'document',
+              'source': {
+                'type': 'base64',
+                'media_type': _mimeFromDataUri(
+                  (part['file'] is Map ? part['file']['file_data'] : null)
+                      ?.toString(),
+                ),
+                'data': _base64FromDataUri(
+                  (part['file'] is Map ? part['file']['file_data'] : null)
+                      ?.toString(),
+                ),
+              },
+              'title': (part['file'] is Map ? part['file']['filename'] : null)
+                  ?.toString(),
+            },
+      ],
+    };
   }
 
   static Map<String, dynamic> _responsesBodyFromChatBody(
     Map<String, dynamic> chatBody,
     AiProviderConfig config,
   ) {
+    if (config.isOpenAiCodexOAuth) {
+      return _codexResponsesBodyFromChatBody(chatBody, config);
+    }
+
     final instructions = <String>[];
     final inputParts = <String>[];
     final messages = chatBody['messages'];
@@ -731,8 +1191,9 @@ $transactionsText''';
       for (final item in messages) {
         if (item is! Map) continue;
         final role = (item['role'] as String?)?.trim().toLowerCase() ?? 'user';
-        final content = _stringContent(item['content']).trim();
-        if (content.isEmpty) continue;
+        final rawContent = item['content'];
+        final content = _stringContent(rawContent).trim();
+        if (content.isEmpty && rawContent is! List) continue;
 
         if (role == 'system' || role == 'developer') {
           instructions.add(content);
@@ -744,9 +1205,23 @@ $transactionsText''';
       }
     }
 
+    final imageMessage = messages is List
+        ? messages.whereType<Map>().where((item) {
+            final content = item['content'];
+            return content is List &&
+                content.any((part) =>
+                    part is Map &&
+                    (part['type'] == 'image_url' || part['type'] == 'file'));
+          }).toList()
+        : const <Map>[];
     final body = <String, dynamic>{
       'model': chatBody['model'],
-      'input': inputParts.join('\n\n').trim(),
+      'input': imageMessage.isEmpty
+          ? inputParts.join('\n\n').trim()
+          : _responsesInputFromMessages(messages),
+      // Ledger context is user data; never opt into the Responses service's
+      // server-side retention default for public OpenAI or compatible relays.
+      'store': false,
     };
 
     final instructionText = instructions.join('\n\n').trim();
@@ -757,12 +1232,258 @@ $transactionsText''';
       body['max_output_tokens'] = maxTokens;
     }
 
-    final effort = config.reasoningEffort.apiValue;
+    final effort = config.reasoningEffort.responsesApiValue;
     if (effort != null) {
       body['reasoning'] = {'effort': effort};
     }
+    final webTools = config.responsesWebSearchTools;
+    if (webTools.isNotEmpty) body['tools'] = webTools;
+    final webIncludes = config.responsesWebSearchIncludes;
+    if (webIncludes.isNotEmpty) body['include'] = webIncludes;
 
     return body;
+  }
+
+  static List<Map<String, dynamic>> _responsesInputFromMessages(
+    Object? rawMessages,
+  ) {
+    if (rawMessages is! List) return const [];
+    final input = <Map<String, dynamic>>[];
+    for (final item in rawMessages) {
+      if (item is! Map) continue;
+      final role = (item['role']?.toString().trim().toLowerCase() ?? 'user');
+      if (role == 'system' || role == 'developer') continue;
+      final content = item['content'];
+      final parts = <Map<String, dynamic>>[];
+      if (content is List) {
+        for (final part in content) {
+          if (part is Map && part['type'] == 'text') {
+            parts.add({
+              'type': role == 'assistant' ? 'output_text' : 'input_text',
+              'text': part['text']?.toString() ?? '',
+            });
+          } else if (part is Map && part['type'] == 'image_url') {
+            parts.add({
+              'type': 'input_image',
+              'image_url':
+                  (part['image_url'] is Map ? part['image_url']['url'] : null)
+                      ?.toString(),
+            });
+          } else if (part is Map && part['type'] == 'file') {
+            parts.add({
+              'type': 'input_file',
+              'filename':
+                  (part['file'] is Map ? part['file']['filename'] : null)
+                      ?.toString(),
+              'file_data':
+                  (part['file'] is Map ? part['file']['file_data'] : null)
+                      ?.toString(),
+            });
+          }
+        }
+      } else if (content != null) {
+        parts.add({
+          'type': role == 'assistant' ? 'output_text' : 'input_text',
+          'text': content.toString(),
+        });
+      }
+      if (parts.isNotEmpty) {
+        input.add({
+          'type': 'message',
+          'role': role == 'assistant' ? 'assistant' : 'user',
+          'content': parts,
+        });
+      }
+    }
+    return input;
+  }
+
+  static String _mimeFromDataUri(String? uri) {
+    final match = RegExp(r'^data:([^;]+);base64,').firstMatch(uri ?? '');
+    return match?.group(1) ?? 'image/jpeg';
+  }
+
+  static String _base64FromDataUri(String? uri) {
+    final value = uri ?? '';
+    final comma = value.indexOf(',');
+    return comma < 0 ? value : value.substring(comma + 1);
+  }
+
+  /// ChatGPT subscription OAuth is backed by the Codex Responses endpoint,
+  /// whose wire contract is stricter than the public OpenAI Responses API:
+  /// instructions must be non-empty, input must be a message array, and the
+  /// endpoint only accepts streamed, non-stored responses.
+  static Map<String, dynamic> _codexResponsesBodyFromChatBody(
+    Map<String, dynamic> chatBody,
+    AiProviderConfig config,
+  ) {
+    final instructions = <String>[];
+    final input = <Map<String, dynamic>>[];
+    final messages = chatBody['messages'];
+
+    if (messages is List) {
+      for (final item in messages) {
+        if (item is! Map) continue;
+        final role = (item['role'] as String?)?.trim().toLowerCase() ?? 'user';
+        final rawContent = item['content'];
+        final content = _stringContent(rawContent).trim();
+        if (content.isEmpty && rawContent is! List) continue;
+        if (role == 'system' || role == 'developer') {
+          instructions.add(content);
+          continue;
+        }
+        final outputType = role == 'assistant' ? 'output_text' : 'input_text';
+        input.add(
+          rawContent is List &&
+                  rawContent.any(
+                    (part) =>
+                        part is Map &&
+                        (part['type'] == 'image_url' || part['type'] == 'file'),
+                  )
+              ? _responsesInputFromMessages([item]).single
+              : {
+                  'type': 'message',
+                  'role': role == 'assistant' ? 'assistant' : 'user',
+                  'content': [
+                    {'type': outputType, 'text': content},
+                  ],
+                },
+        );
+      }
+    }
+
+    final body = <String, dynamic>{
+      'model': chatBody['model'],
+      'instructions': instructions.join('\n\n').trim().isEmpty
+          ? 'You are a helpful assistant.'
+          : instructions.join('\n\n').trim(),
+      'input': input,
+      'store': false,
+      'stream': true,
+    };
+    final effort = config.reasoningEffort.codexResponsesApiValue;
+    if (effort != null) body['reasoning'] = {'effort': effort};
+    final webTools = config.responsesWebSearchTools;
+    if (webTools.isNotEmpty) body['tools'] = webTools;
+    final webIncludes = config.responsesWebSearchIncludes;
+    if (webIncludes.isNotEmpty) body['include'] = webIncludes;
+    return body;
+  }
+
+  static Map<String, dynamic> _responsesStreamBody({
+    required AiProviderConfig config,
+    required List<Map<String, dynamic>> messages,
+  }) {
+    return _responsesBodyFromChatBody(
+      {
+        'model': config.modelCandidates.first,
+        'messages': messages,
+        'max_tokens': config.reasoningEffort.responsesMaxOutputTokens,
+      },
+      config,
+    )..['stream'] = true;
+  }
+
+  static Map<String, dynamic> _chatCompletionsStreamBody({
+    required AiProviderConfig config,
+    required List<Map<String, dynamic>> messages,
+  }) {
+    final body = <String, dynamic>{
+      'model': config.modelCandidates.first,
+      'messages': messages,
+      'stream': true,
+    };
+    // DeepSeek 的原生 SSE 是 Chat Completions，但当前模型支持
+    // reasoning_effort。显式开启 thinking，以免服务端默认策略改变时
+    // Effort 滑条变成只有视觉反馈。
+    final effort =
+        config.isDeepSeek ? config.reasoningEffort.deepSeekApiValue : null;
+    if (effort != null) {
+      body['thinking'] = const {'type': 'enabled'};
+      body['reasoning_effort'] = effort;
+    }
+    return body;
+  }
+
+  static Uri _streamUri(AiProviderConfig config) {
+    if (config.shouldUseClaudeMessages) return config.messagesUri;
+    if (config.shouldUseResponses) return config.responsesUri;
+    return config.chatCompletionsUri;
+  }
+
+  /// 从一条 Responses SSE data 负载中提取真正的文本增量。
+  ///
+  /// 官方会在 `response.output_text.done` 里重发完整文本；该事件不能
+  /// 当作增量写入，否则流式回答会在结束时重复一遍。
+  static String? _responsesStreamDelta(String data) {
+    final payload = data.trim();
+    if (payload.isEmpty || payload == '[DONE]') return null;
+
+    final decoded = jsonDecode(payload);
+    if (decoded is! Map) return null;
+    final json = Map<String, dynamic>.from(decoded);
+    final type = json['type']?.toString().toLowerCase() ?? '';
+
+    // 标准 Responses 协议：`delta` 是唯一可追加的文本字段。
+    final delta = json['delta'];
+    if (delta is String &&
+        delta.isNotEmpty &&
+        (type.contains('output_text.delta') ||
+            type.contains('content_part.delta') ||
+            type.isEmpty)) {
+      return delta;
+    }
+
+    // 部分兼容网关未标注 event type，直接用 text/output_text 放增量。
+    // 正式 `*.done`/`*.completed` 会带完整文本，必须过滤以避免重复。
+    final isTerminal = type.endsWith('.done') || type.contains('completed');
+    if (isTerminal ||
+        (!type.contains('output_text') &&
+            !type.contains('content_part') &&
+            type.isNotEmpty)) {
+      return null;
+    }
+    final fallback = json['text'] ?? json['output_text'];
+    return fallback is String && fallback.isNotEmpty ? fallback : null;
+  }
+
+  /// Only provider-authored, user-displayable reasoning summary deltas are
+  /// surfaced. App-side phase labels are deliberately excluded so the UI does
+  /// not invent a process such as “organising the answer”. `done` events often
+  /// repeat the full summary after deltas and therefore must not be appended.
+  static String? _responsesReasoningSummaryDelta(
+    Map<String, dynamic> event,
+  ) {
+    final type = event['type']?.toString().trim().toLowerCase() ?? '';
+    if (!type.contains('reasoning') || !type.contains('summary')) return null;
+    if (type.endsWith('.done')) return null;
+
+    final delta = event['delta'];
+    if (delta is String && delta.trim().isNotEmpty) return delta;
+    if (delta is Map) {
+      final text = (delta['text'] ?? delta['content'])?.toString() ?? '';
+      if (text.trim().isNotEmpty) return text;
+    }
+    final part = event['part'];
+    if (part is Map) {
+      final text = (part['text'] ?? part['content'])?.toString() ?? '';
+      if (text.trim().isNotEmpty) return text;
+    }
+    return null;
+  }
+
+  static String? _responsesCompletedText(String data) {
+    final payload = data.trim();
+    if (payload.isEmpty || payload == '[DONE]') return null;
+    final decoded = jsonDecode(payload);
+    if (decoded is! Map) return null;
+    final event = Map<String, dynamic>.from(decoded);
+    if (event['type']?.toString().toLowerCase() != 'response.completed') {
+      return null;
+    }
+    final response = event['response'];
+    if (response is! Map) return null;
+    return _extractResponsesText(Map<String, dynamic>.from(response));
   }
 
   static String _stringContent(Object? content) {
@@ -810,6 +1531,12 @@ $transactionsText''';
     return buffer.toString().trim();
   }
 
+  /// Responses places web citations in `annotations` on output text parts.
+  /// Walk the complete response because gateways differ in whether they put
+  /// the annotations on the output item, content part, or terminal event.
+  static List<AiWebSource> _extractResponsesSources(Object? outer) =>
+      AiWebSearchContext.extractResponseSources(outer);
+
   static String _bodySnippet(String body) {
     final text = body.replaceAll(RegExp(r'\s+'), ' ').trim();
     if (text.isEmpty) return '';
@@ -822,22 +1549,26 @@ $transactionsText''';
     if (apiKey.isEmpty) return exception;
 
     // 清理异常消息
-    final sanitizedMessage = exception.message.replaceAll(apiKey, '[API_KEY_REDACTED]');
+    final sanitizedMessage =
+        exception.message.replaceAll(apiKey, '[API_KEY_REDACTED]');
 
     // 清理 originalError 中的 API Key（如果是 Exception）
     Object? sanitizedOriginalError = exception.originalError;
     if (sanitizedOriginalError is Exception) {
       final originalErrorString = sanitizedOriginalError.toString();
       if (originalErrorString.contains(apiKey)) {
-        sanitizedOriginalError = Exception(originalErrorString.replaceAll(apiKey, '[API_KEY_REDACTED]'));
+        sanitizedOriginalError = Exception(
+            originalErrorString.replaceAll(apiKey, '[API_KEY_REDACTED]'));
       }
     }
 
     // 根据异常类型重建
     if (exception is AiNetworkException) {
-      return AiNetworkException(sanitizedMessage, originalError: sanitizedOriginalError);
+      return AiNetworkException(sanitizedMessage,
+          originalError: sanitizedOriginalError);
     } else if (exception is AiAuthException) {
-      return AiAuthException(sanitizedMessage, statusCode: exception.statusCode);
+      return AiAuthException(sanitizedMessage,
+          statusCode: exception.statusCode);
     } else if (exception is AiRateLimitException) {
       return AiRateLimitException(
         sanitizedMessage,
@@ -845,15 +1576,19 @@ $transactionsText''';
         retryAfterSeconds: exception.retryAfterSeconds,
       );
     } else if (exception is AiTokenLimitException) {
-      return AiTokenLimitException(sanitizedMessage, statusCode: exception.statusCode);
+      return AiTokenLimitException(sanitizedMessage,
+          statusCode: exception.statusCode);
     } else if (exception is AiServerException) {
-      return AiServerException(sanitizedMessage, statusCode: exception.statusCode);
+      return AiServerException(sanitizedMessage,
+          statusCode: exception.statusCode);
     } else if (exception is AiResponseParseException) {
-      return AiResponseParseException(sanitizedMessage, originalError: sanitizedOriginalError);
+      return AiResponseParseException(sanitizedMessage,
+          originalError: sanitizedOriginalError);
     } else if (exception is AiConfigException) {
       return AiConfigException(sanitizedMessage);
     } else if (exception is AiModelNotSupportedException) {
-      return AiModelNotSupportedException(sanitizedMessage, statusCode: exception.statusCode);
+      return AiModelNotSupportedException(sanitizedMessage,
+          statusCode: exception.statusCode);
     } else if (exception is AiEmptyResponseException) {
       return AiEmptyResponseException(sanitizedMessage);
     } else if (exception is AiBadRequestException) {
@@ -877,7 +1612,8 @@ $transactionsText''';
 
   /// 测试辅助：暴露 _sanitizeException 供单测验证
   @visibleForTesting
-  static AiException sanitizeExceptionForTest(AiException exception, String apiKey) =>
+  static AiException sanitizeExceptionForTest(
+          AiException exception, String apiKey) =>
       _sanitizeException(exception, apiKey);
 
   /// 测试辅助：判断是否应该降级到其他服务商
@@ -892,11 +1628,72 @@ $transactionsText''';
     return error.shouldRetry && !error.shouldFallback;
   }
 
+  static bool _shouldRetryFirstPacket(
+    AiException error, {
+    required bool streamProducedOutput,
+    required bool alreadyRetried,
+  }) =>
+      error is AiNetworkException && !streamProducedOutput && !alreadyRetried;
+
+  /// 测试辅助：首包网络重试只允许发生一次，且任何可见输出后禁止重放。
+  @visibleForTesting
+  static bool shouldRetryFirstPacketForTest(
+    AiException error, {
+    required bool streamProducedOutput,
+    required bool alreadyRetried,
+  }) =>
+      _shouldRetryFirstPacket(
+        error,
+        streamProducedOutput: streamProducedOutput,
+        alreadyRetried: alreadyRetried,
+      );
+
   /// 测试辅助：判断是否应该用兼容模型重试
   @visibleForTesting
   static bool shouldRetryWithCompatibleModelForTest(AiException error) {
-    return error is AiModelNotSupportedException || error is AiBadRequestException;
+    return error is AiModelNotSupportedException ||
+        error is AiBadRequestException;
   }
+
+  /// 测试辅助：构造喵助手实际使用的 Responses 流式请求体。
+  @visibleForTesting
+  static Map<String, dynamic> responsesStreamBodyForTest({
+    required AiProviderConfig config,
+    required List<Map<String, dynamic>> messages,
+  }) =>
+      _responsesStreamBody(config: config, messages: messages);
+
+  /// 测试辅助：构造 Chat Completions 流式请求体（含 DeepSeek Effort 映射）。
+  @visibleForTesting
+  static Map<String, dynamic> chatCompletionsStreamBodyForTest({
+    required AiProviderConfig config,
+    required List<Map<String, dynamic>> messages,
+  }) =>
+      _chatCompletionsStreamBody(config: config, messages: messages);
+
+  /// 测试辅助：确认 Claude Messages 的图片/文件 block wire format。
+  @visibleForTesting
+  static Map<String, dynamic> messageForClaudeForTest(
+          Map<String, dynamic> message) =>
+      _messageForClaude(message);
+
+  /// 测试辅助：从一条 SSE `data:` 负载取出可追加的文本增量。
+  @visibleForTesting
+  static String? responsesStreamDeltaForTest(String data) =>
+      _responsesStreamDelta(data);
+
+  @visibleForTesting
+  static String? responsesCompletedTextForTest(String data) =>
+      _responsesCompletedText(data);
+
+  @visibleForTesting
+  static String? responsesReasoningSummaryDeltaForTest(
+          Map<String, dynamic> event) =>
+      _responsesReasoningSummaryDelta(event);
+
+  /// 测试辅助：确认喵助手流式请求选用的服务端端点。
+  @visibleForTesting
+  static Uri streamUriForTest(AiProviderConfig config) => _streamUri(config);
 
   /// 将 OpenAI 格式的请求体转换为 Claude 格式
   static Map<String, dynamic> _convertToClaudeFormat(
@@ -922,10 +1719,15 @@ $transactionsText''';
       }
     }
 
+    final budgetTokens = config.reasoningEffort.claudeBudgetTokens;
+    final requestedMaxTokens = (openaiBody['max_tokens'] as int?) ?? 4096;
+    final maxTokens = budgetTokens == null
+        ? requestedMaxTokens
+        : math.max(requestedMaxTokens, budgetTokens + 4096);
     final claudeBody = <String, dynamic>{
       'model': openaiBody['model'],
       'messages': userMessages,
-      'max_tokens': 4096,
+      'max_tokens': maxTokens,
     };
 
     // 合并所有 system prompt
@@ -934,20 +1736,12 @@ $transactionsText''';
     }
 
     // thinking 参数映射
-    if (config.reasoningEffort != AiReasoningEffort.none) {
-      final budgetTokens = switch (config.reasoningEffort) {
-        AiReasoningEffort.minimal => 1024,
-        AiReasoningEffort.low => 4096,
-        AiReasoningEffort.medium => 8192,
-        AiReasoningEffort.high => 16384,
-        AiReasoningEffort.xhigh => 32768,
-        AiReasoningEffort.ultra => 65536,
-        _ => 8192,
-      };
+    if (budgetTokens != null) {
       claudeBody['thinking'] = {
         'type': 'enabled',
         'budget_tokens': budgetTokens,
       };
+      claudeBody['temperature'] = 1;
     }
 
     return claudeBody;
@@ -959,8 +1753,15 @@ $transactionsText''';
   }) {
     final provider =
         config ?? AiProviderConfig.deepSeek(apiKey: apiKey?.trim() ?? '');
-    if (!provider.hasKey) {
-      throw AiConfigException('${provider.providerLabel} API Key 未配置');
+    if (!provider.hasCredential) {
+      throw AiConfigException(
+          '${provider.providerLabel} API Key 或 OAuth 凭据未配置');
+    }
+    if (!provider.hasBaseUrl) {
+      throw AiConfigException('${provider.providerLabel} 基础地址未配置');
+    }
+    if (!provider.hasModel) {
+      throw AiConfigException('${provider.providerLabel} 模型未配置');
     }
     return provider;
   }

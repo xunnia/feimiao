@@ -4,14 +4,16 @@ import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:path_provider/path_provider.dart';
 
+import '../../widgets/app_buttons.dart';
+import '../../widgets/settings_ui.dart';
 import 'app_sheet.dart';
 
 /// 弹「拍照 / 从相册选」选择，选一张收据图片 → 复制到 App 文档目录 →
 /// 返回持久化后的本地路径。用户取消返回 null。
 Future<String?> pickAndSaveReceipt(BuildContext context) async {
-  final source = await appSheet<ImageSource>(
+  final source = await showBlurSheet<ImageSource>(
     context,
-    isScrollControlled: false,
+    radius: 28,
     child: const _SourceSheet(),
   );
   if (source == null) return null;
@@ -47,27 +49,32 @@ class _SourceSheet extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return SafeArea(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          const SizedBox(height: 8),
-          ListTile(
-            leading: const Icon(Icons.photo_camera_outlined),
-            title: const Text('拍照'),
-            onTap: () => Navigator.pop(context, ImageSource.camera),
-          ),
-          ListTile(
-            leading: const Icon(Icons.photo_library_outlined),
-            title: const Text('从相册选'),
-            onTap: () => Navigator.pop(context, ImageSource.gallery),
-          ),
-          ListTile(
-            leading: const Icon(Icons.close),
-            title: const Text('取消'),
-            onTap: () => Navigator.pop(context),
-          ),
-          const SizedBox(height: 8),
-        ],
+      child: Padding(
+        padding: const EdgeInsets.only(bottom: 8),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            SheetHeader(
+              title: '添加收据',
+              onClose: () => Navigator.pop(context),
+            ),
+            SettingsGroup(
+              margin: const EdgeInsets.fromLTRB(16, 4, 16, 8),
+              children: [
+                SettingsRow(
+                  leading: const Icon(Icons.photo_camera_outlined),
+                  title: '拍照',
+                  onTap: () => Navigator.pop(context, ImageSource.camera),
+                ),
+                SettingsRow(
+                  leading: const Icon(Icons.photo_library_outlined),
+                  title: '从相册选',
+                  onTap: () => Navigator.pop(context, ImageSource.gallery),
+                ),
+              ],
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -134,37 +141,49 @@ class ReceiptThumb extends StatelessWidget {
 
 /// 全屏查看收据图（可双指缩放）。
 void showReceiptViewer(BuildContext context, String path) {
-  showDialog<void>(
+  showGeneralDialog<void>(
     context: context,
-    builder: (ctx) => Dialog(
-      backgroundColor: Colors.black,
-      insetPadding: const EdgeInsets.all(12),
-      child: Stack(
-        children: [
-          InteractiveViewer(
-            minScale: 0.8,
-            maxScale: 4,
-            child: Center(
-              child: Image.file(
-                File(path),
-                errorBuilder: (_, __, ___) => const Padding(
-                  padding: EdgeInsets.all(40),
-                  child: Icon(Icons.broken_image_outlined,
-                      color: Colors.white, size: 48),
+    barrierDismissible: true,
+    barrierLabel: '关闭图片',
+    barrierColor: Colors.black.withValues(alpha: 0.92),
+    transitionDuration: const Duration(milliseconds: 160),
+    pageBuilder: (ctx, _, __) => Material(
+      color: Colors.transparent,
+      child: SafeArea(
+        child: Stack(
+          children: [
+            Positioned.fill(
+              child: InteractiveViewer(
+                minScale: 0.8,
+                maxScale: 4,
+                child: Center(
+                  child: Image.file(
+                    File(path),
+                    errorBuilder: (_, __, ___) => const Padding(
+                      padding: EdgeInsets.all(40),
+                      child: Icon(Icons.broken_image_outlined,
+                          color: Colors.white, size: 48),
+                    ),
+                  ),
                 ),
               ),
             ),
-          ),
-          Positioned(
-            right: 2,
-            top: 2,
-            child: IconButton(
-              icon: const Icon(Icons.close, color: Colors.white),
-              onPressed: () => Navigator.pop(ctx),
+            Positioned(
+              right: 8,
+              top: 8,
+              child: AppCircleButton(
+                icon: Icons.close,
+                semanticLabel: '关闭图片',
+                onPressed: () => Navigator.pop(ctx),
+              ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
+    ),
+    transitionBuilder: (ctx, animation, _, child) => FadeTransition(
+      opacity: animation,
+      child: child,
     ),
   );
 }

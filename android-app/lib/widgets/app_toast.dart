@@ -1,9 +1,13 @@
+import 'dart:async';
+
+import 'dart:ui' show ImageFilter;
+
 import 'package:flutter/material.dart';
 
 import 'mascot.dart';
 
 /// 顶部轻提示（对齐 Claude 的「已复制」toast）：
-/// 深色小胶囊从顶部滑入，停 1.2 秒后淡出。全 App 的轻提示统一用它。
+/// 深色半透明小胶囊从顶部滑入，停约 1 秒后淡出。全 App 的轻提示统一用它。
 /// [mascot] 非空时用猫表情替代图标（如记账/核对成功配 MascotMood.success）。
 void showAppToast(BuildContext context, String text,
     {IconData icon = Icons.check_circle, MascotMood? mascot}) {
@@ -38,6 +42,8 @@ class _Toast extends StatefulWidget {
 }
 
 class _ToastState extends State<_Toast> with SingleTickerProviderStateMixin {
+  Timer? _dismissTimer;
+
   late final AnimationController _c = AnimationController(
     vsync: this,
     duration: const Duration(milliseconds: 220),
@@ -51,13 +57,16 @@ class _ToastState extends State<_Toast> with SingleTickerProviderStateMixin {
 
   Future<void> _run() async {
     await _c.forward();
-    await Future<void>.delayed(const Duration(milliseconds: 1200));
-    if (mounted) await _c.reverse();
-    widget.onDone();
+    if (!mounted) return;
+    _dismissTimer = Timer(const Duration(milliseconds: 1050), () async {
+      if (mounted) await _c.reverse();
+      if (mounted) widget.onDone();
+    });
   }
 
   @override
   void dispose() {
+    _dismissTimer?.cancel();
     _c.dispose();
     super.dispose();
   }
@@ -87,36 +96,48 @@ class _ToastState extends State<_Toast> with SingleTickerProviderStateMixin {
               // 长文案（如错误信息）别顶出屏幕：限宽 + 最多两行。
               constraints: BoxConstraints(
                   maxWidth: MediaQuery.sizeOf(context).width - 48),
-              // 配猫图（22px）时上下内距略收，胶囊不至于被撑得太高。
-              padding: EdgeInsets.symmetric(
-                  horizontal: 14, vertical: widget.mascot == null ? 8 : 6),
-              decoration: BoxDecoration(
-                color: Colors.black.withValues(alpha: 0.78),
+              child: ClipRRect(
                 borderRadius: BorderRadius.circular(999),
-              ),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  if (widget.mascot != null)
-                    // Mascot 自带加载失败回退 emoji，不会崩。
-                    Mascot(mood: widget.mascot!, size: 22, animate: false)
-                  else
-                    Icon(widget.icon, size: 14, color: Colors.white),
-                  const SizedBox(width: 6),
-                  Flexible(
-                    child: Text(
-                      widget.text,
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        fontSize: 13,
-                        color: Colors.white,
-                        fontWeight: FontWeight.w500,
-                        decoration: TextDecoration.none,
+                child: BackdropFilter(
+                  filter: ImageFilter.blur(sigmaX: 7, sigmaY: 7),
+                  child: Container(
+                    padding: EdgeInsets.symmetric(
+                        horizontal: 14,
+                        vertical: widget.mascot == null ? 8 : 6),
+                    decoration: BoxDecoration(
+                      color: Colors.black.withValues(alpha: 0.70),
+                      borderRadius: BorderRadius.circular(999),
+                      border: Border.all(
+                        color: Colors.white.withValues(alpha: 0.10),
+                        width: 0.6,
                       ),
                     ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        if (widget.mascot != null)
+                          // Mascot 自带加载失败回退 emoji，不会崩。
+                          Mascot(mood: widget.mascot!, size: 22, animate: false)
+                        else
+                          Icon(widget.icon, size: 15, color: Colors.white),
+                        const SizedBox(width: 6),
+                        Flexible(
+                          child: Text(
+                            widget.text,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              fontSize: 14,
+                              color: Colors.white,
+                              fontWeight: FontWeight.w400,
+                              decoration: TextDecoration.none,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
-                ],
+                ),
               ),
             ),
           ),

@@ -204,16 +204,10 @@ class _BackupViewState extends State<BackupView> {
                           ),
                     ),
                     const SizedBox(height: 12),
-                    OutlinedButton(
+                    AppPillButton(
+                      label: '立即备份',
                       onPressed: () => _createLocalBackup(context),
-                      style: OutlinedButton.styleFrom(
-                        foregroundColor: scheme.onSurface,
-                        side: BorderSide(color: AppColors.hairline(scheme)),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(999),
-                        ),
-                      ),
-                      child: const Text('立即备份'),
+                      borderColor: AppColors.hairline(scheme),
                     ),
                     const SizedBox(height: 8),
                     if (files.isEmpty)
@@ -411,41 +405,16 @@ class _Card extends StatelessWidget {
                 ),
           ),
           const SizedBox(height: 12),
-          SizedBox(
-            width: double.infinity,
-            child: danger
-                ? OutlinedButton(
-                    onPressed: onTap,
-                    style: OutlinedButton.styleFrom(
-                      foregroundColor: AppColors.warning,
-                      side: BorderSide(
-                        color: AppColors.warning.withValues(alpha: 0.72),
-                        width: 0.8,
-                      ),
-                      minimumSize: const Size.fromHeight(42),
-                      shape: const StadiumBorder(),
-                      textStyle: const TextStyle(
-                        fontSize: 14,
-                        fontWeight: FontWeight.w400,
-                      ),
-                    ),
-                    child: Text(buttonText),
-                  )
-                : FilledButton(
-                    onPressed: onTap,
-                    style: FilledButton.styleFrom(
-                      backgroundColor: AppColors.card(scheme),
-                      foregroundColor: scheme.onSurface,
-                      side: BorderSide(color: AppColors.hairline(scheme)),
-                      minimumSize: const Size.fromHeight(42),
-                      shape: const StadiumBorder(),
-                      textStyle: const TextStyle(
-                        fontSize: 14,
-                        fontWeight: FontWeight.w400,
-                      ),
-                    ),
-                    child: Text(buttonText),
-                  ),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: AppPillButton(
+              label: buttonText,
+              onPressed: onTap,
+              foregroundColor: danger ? AppColors.warning : scheme.onSurface,
+              borderColor: danger
+                  ? AppColors.warning.withValues(alpha: 0.72)
+                  : AppColors.hairline(scheme),
+            ),
           ),
         ],
       ),
