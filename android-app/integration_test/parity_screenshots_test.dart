@@ -44,12 +44,12 @@ void main() {
 
   testWidgets('capture Android parity screens', (tester) async {
     await app.main();
-    await tester.pumpAndSettle(const Duration(seconds: 2));
+    await _pumpFor(tester, const Duration(seconds: 2));
 
     final repo = _repositoryFromNavigator();
     await repo.fullyReady;
     await _ensureFixture(repo);
-    await tester.pumpAndSettle(const Duration(milliseconds: 500));
+    await _pumpFor(tester, const Duration(milliseconds: 500));
 
     await _takeScreenshot(tester, binding, 'home-overview-android');
 
@@ -239,12 +239,26 @@ Future<void> _captureDisplaySettings(
       MaterialPageRoute<void>(builder: (_) => const _DisplayCaptureShell()),
     ),
   );
-  await tester.pumpAndSettle(const Duration(milliseconds: 600));
+  await _pumpFor(tester, const Duration(milliseconds: 600));
   await _takeScreenshot(tester, binding, 'display-android');
   if (navigator.canPop()) navigator.pop<void>();
-  await tester.pumpAndSettle(const Duration(milliseconds: 300));
+  await _pumpFor(tester, const Duration(milliseconds: 300));
   if (navigator.canPop()) navigator.pop<void>();
-  await tester.pumpAndSettle(const Duration(milliseconds: 300));
+  await _pumpFor(tester, const Duration(milliseconds: 300));
+}
+
+/// Advance the fake clock in bounded steps without waiting for every
+/// repeating animation to become idle. The parity driver only needs a stable
+/// amount of render time; an unbounded pumpAndSettle can hang forever on the
+/// home screen's live widgets.
+Future<void> _pumpFor(WidgetTester tester, Duration duration) async {
+  const quantum = Duration(milliseconds: 100);
+  var remaining = duration;
+  while (remaining > Duration.zero) {
+    final step = remaining < quantum ? remaining : quantum;
+    await tester.pump(step);
+    remaining -= step;
+  }
 }
 
 class _DisplayCaptureShell extends StatefulWidget {
@@ -334,10 +348,10 @@ Future<void> _capturePage(
   expect(navigator, isNotNull);
   unawaited(
       navigator!.push<void>(MaterialPageRoute<void>(builder: (_) => page)));
-  await tester.pumpAndSettle(const Duration(milliseconds: 700));
+  await _pumpFor(tester, const Duration(milliseconds: 700));
   await _takeScreenshot(tester, binding, name);
   navigator.pop<void>();
-  await tester.pumpAndSettle(const Duration(milliseconds: 350));
+  await _pumpFor(tester, const Duration(milliseconds: 350));
 }
 
 Future<void> _captureReports(
@@ -351,15 +365,15 @@ Future<void> _captureReports(
       MaterialPageRoute<void>(builder: (_) => const _ReportCaptureShell()),
     ),
   );
-  await tester.pumpAndSettle(const Duration(milliseconds: 900));
+  await _pumpFor(tester, const Duration(milliseconds: 900));
   expect(find.text('报告'), findsAtLeastNWidgets(1));
   await _takeScreenshot(tester, binding, 'reports-android');
   // The report library is a modal sheet. Close it and the capture shell so a
   // future route (or a rerun in the same process) starts from a clean stack.
   if (navigator.canPop()) navigator.pop<void>();
-  await tester.pumpAndSettle(const Duration(milliseconds: 300));
+  await _pumpFor(tester, const Duration(milliseconds: 300));
   if (navigator.canPop()) navigator.pop<void>();
-  await tester.pumpAndSettle(const Duration(milliseconds: 300));
+  await _pumpFor(tester, const Duration(milliseconds: 300));
 }
 
 class _ReportCaptureShell extends StatefulWidget {
@@ -397,14 +411,14 @@ Future<void> _captureAssetTab(
       MaterialPageRoute<void>(builder: (_) => const AccountsView()),
     ),
   );
-  await tester.pumpAndSettle(const Duration(milliseconds: 700));
+  await _pumpFor(tester, const Duration(milliseconds: 700));
   final option = find.text(tab);
   expect(option, findsAtLeastNWidgets(1));
   await tester.tap(option.first);
-  await tester.pumpAndSettle(const Duration(milliseconds: 600));
+  await _pumpFor(tester, const Duration(milliseconds: 600));
   await _takeScreenshot(tester, binding, name);
   navigator.pop<void>();
-  await tester.pumpAndSettle(const Duration(milliseconds: 350));
+  await _pumpFor(tester, const Duration(milliseconds: 350));
 }
 
 Future<void> _captureBooks(
@@ -414,12 +428,12 @@ Future<void> _captureBooks(
   final button = find.byType(AppDrawerButton);
   expect(button, findsAtLeastNWidgets(1));
   await tester.tap(button.first);
-  await tester.pumpAndSettle(const Duration(milliseconds: 700));
+  await _pumpFor(tester, const Duration(milliseconds: 700));
   expect(find.text('我的账本'), findsOneWidget);
   await _takeScreenshot(tester, binding, 'books-android');
   final size = tester.view.physicalSize / tester.view.devicePixelRatio;
   await tester.tapAt(Offset(size.width - 8, size.height / 2));
-  await tester.pumpAndSettle(const Duration(milliseconds: 500));
+  await _pumpFor(tester, const Duration(milliseconds: 500));
 }
 
 Future<void> _captureStatistics(
@@ -435,15 +449,15 @@ Future<void> _captureStatistics(
       MaterialPageRoute<void>(builder: (_) => const StatisticsView()),
     ),
   );
-  await tester.pumpAndSettle(const Duration(milliseconds: 700));
+  await _pumpFor(tester, const Duration(milliseconds: 700));
   final option = find.text(range);
   if (option.evaluate().isNotEmpty) {
     await tester.tap(option.first);
-    await tester.pumpAndSettle(const Duration(milliseconds: 500));
+    await _pumpFor(tester, const Duration(milliseconds: 500));
   }
   await _takeScreenshot(tester, binding, name);
   navigator.pop<void>();
-  await tester.pumpAndSettle(const Duration(milliseconds: 350));
+  await _pumpFor(tester, const Duration(milliseconds: 350));
 }
 
 Future<void> _takeScreenshot(

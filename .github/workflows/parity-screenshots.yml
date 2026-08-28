@@ -22,6 +22,7 @@ concurrency:
 jobs:
   android-screenshots:
     name: Android 模拟器截图
+    timeout-minutes: 30
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -67,6 +68,7 @@ jobs:
 
   ios-screenshots:
     name: iOS 模拟器截图
+    timeout-minutes: 45
     # 使用 GitHub 官方公开的 macOS 26 runner；如果镜像装有 Xcode 27
     # 就优先使用，否则用 Xcode 26.x 编译 iOS 26 目标（可运行于 iOS 27）。
     runs-on: macos-26
