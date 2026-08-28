@@ -191,9 +191,13 @@ jobs:
         if: always()
         with:
           name: ios-parity-screenshots
-          path: |
-            ci-artifacts/ios-screenshots/
-            xcodebuild-parity.log
+          path: ci-artifacts/ios-screenshots/*.png
+          if-no-files-found: warn
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ios-parity-screenshot-diagnostics
+          path: xcodebuild-parity.log
           if-no-files-found: warn
 
   compare:

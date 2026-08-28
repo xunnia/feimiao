@@ -267,9 +267,13 @@ jobs:
         if: always()
         with:
           name: simulator-screenshots
-          path: |
-            screenshots/
-            xcodebuild-screenshots.log
+          path: screenshots/*.png
+          if-no-files-found: warn
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: simulator-screenshot-diagnostics
+          path: xcodebuild-screenshots.log
           if-no-files-found: warn
 
   unsigned-ipa:
