@@ -4,11 +4,11 @@
 
 ## 基线与验收原则
 
-- Android 成对截图基线：1.262.0+276、b0827-276、DB v48。
-- Android 自动证据：Flutter analyze 0 error、全量测试 1114/1114；真实 OAuth、provider 网络、IME 和真机仍是用户设备验收项。
+- Android 成对截图基线：1.265.0+279、b0828-279、DB v48。
+- Android 自动证据：Flutter analyze 0 error、全量测试 1127/1127；真实 OAuth、provider 网络、IME 和真机仍是用户设备验收项。
 - iOS 工程：原生 SwiftUI + SwiftData + QingJiCore；部署目标 iOS 26.0，可运行于 iOS 27 beta。
 - iOS 当前状态：源码和核心测试正在施工，Windows 没有 Swift/Xcode，尚未取得 Xcode 编译、模拟器截图和 iPhone 真机证据。
-- “一致”指同一输入得到相同的金额、类型、分类、日期、账本、账户、净额、预算和统计结果；导航、按钮、转场、材质和动效允许按平台原生设计不同。
+- “一致”指同一输入得到相同的金额、类型、分类、日期、账本、账户、净额、预算和统计结果，且页面结构、主入口和导航层级一一对应；按钮触感、转场、材质、系统控件和动效可以用平台原生实现，但不能删掉或替换 Android 的功能入口。
 
 ## 功能矩阵
 

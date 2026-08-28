@@ -6,6 +6,15 @@ import Observation
 @Observable
 final class AppRouter {
 
+    /// Android 使用单一主页 + 抽屉 + push 页面；iOS 保持同一信息架构，
+    /// 只把页面内部控件和转场换成 SwiftUI 原生实现。
+    enum Route: Hashable {
+        case quickAdd
+        case transactions
+        case statistics
+        case settings
+    }
+
     // MARK: - Tab 选中
 
     var selectedTab: AppTab = .home

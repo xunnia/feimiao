@@ -21,11 +21,16 @@ private enum HomeTransactionFilter: String, CaseIterable, Hashable {
 /// 账本筛选遵守安卓端的「计入总账」约定；退款子记录保留在统计中，但不在首页重复列出。
 struct HomeView: View {
     @Environment(AppRouter.self) private var router
+    let onOpenDrawer: (() -> Void)?
     @Query(sort: \MoneyTransaction.date, order: .reverse)
     private var transactions: [MoneyTransaction]
     @Query(sort: \Book.sortOrder)
     private var books: [Book]
     @State private var transactionFilter: HomeTransactionFilter = .all
+
+    init(onOpenDrawer: (() -> Void)? = nil) {
+        self.onOpenDrawer = onOpenDrawer
+    }
 
     private var includedTransactions: [MoneyTransaction] {
         LedgerScope.filter(transactions, selectedBookID: router.selectedBookID)
@@ -102,35 +107,15 @@ struct HomeView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
-                    Menu {
-                        Button {
-                            router.selectedTab = .transactions
-                        } label: {
-                            Label("全部明细", systemImage: "list.bullet")
-                        }
-                        Button {
-                            router.selectedTab = .statistics
-                        } label: {
-                            Label("统计", systemImage: "chart.pie")
-                        }
-                        Button {
-                            router.showAssistant = true
-                        } label: {
-                            Label("打开喵助手", systemImage: "cat.fill")
-                        }
-                        Divider()
-                        Button {
-                            router.selectedTab = .settings
-                        } label: {
-                            Label("设置", systemImage: "gearshape")
-                        }
+                    Button {
+                        onOpenDrawer?()
                     } label: {
                         Image(systemName: "line.3.horizontal")
                             .font(.title3)
                             .frame(width: 44, height: 44)
                             .glassEffect(.regular.interactive(), in: .circle)
                     }
-                    .accessibilityLabel("菜单")
+                    .accessibilityLabel("打开菜单")
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {

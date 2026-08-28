@@ -5,7 +5,7 @@
 Android 与 iOS 共享产品口径，但 iOS 使用原生 SwiftUI、WidgetKit、Vision、Speech 和 Liquid Glass 控件。
 对齐验收记录见 [docs/ANDROID_IOS_PARITY.md](docs/ANDROID_IOS_PARITY.md)。
 
-面向 **iOS 26+**，可安装到你的 iOS 27 beta。界面采用 **Liquid Glass（液态玻璃）** 设计语言：主页保留 Android 同款底部「记一记」输入框，快记键盘、分类网格、统计卡片使用 `glassEffect` 交互玻璃；二级页面再使用 iOS 原生 TabBar/NavigationStack 和系统转场。云端 CI 使用 GitHub 官方 `macos-26` runner；若镜像提供 Xcode 27 就优先选择，否则用镜像内 Xcode 26.x/iOS 26 SDK 编译，运行目标仍覆盖 iOS 27。
+面向 **iOS 26+**，可安装到你的 iOS 27 beta。界面采用 **Liquid Glass（液态玻璃）** 设计语言：主页保留 Android 同款单页结构、顶部抽屉和底部「记一记」输入框，快记键盘、分类网格、统计卡片使用 `glassEffect` 交互玻璃；二级页面沿用 Android 的 push 信息架构，再用 iOS 原生导航、系统转场和触觉反馈增强。云端 CI 使用 GitHub 官方 `macos-26` runner；若镜像提供 Xcode 27 就优先选择，否则用镜像内 Xcode 26.x/iOS 26 SDK 编译，运行目标仍覆盖 iOS 27。
 
 产品定位与市场调研见 [docs/product-analysis.md](../docs/product-analysis.md)。
 
