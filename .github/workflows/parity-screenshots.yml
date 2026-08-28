@@ -51,7 +51,9 @@ jobs:
           force-avd-creation: false
           emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -no-audio -no-boot-anim -camera-back none
           emulator-boot-timeout: 1200
-          disable-linux-hw-accel: true
+          # KVM 权限已在上一步开启；保留硬件加速，否则 1080x1920 的
+          # Flutter 截图会退化为 --accel off，启动和渲染都可能长时间卡住。
+          disable-linux-hw-accel: false
           disable-animations: false
           working-directory: android-app
           script: >-
