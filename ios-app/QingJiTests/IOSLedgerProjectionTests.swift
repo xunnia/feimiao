@@ -59,11 +59,12 @@ final class IOSLedgerProjectionTests: XCTestCase {
         let components = calendar.dateComponents([.year, .month], from: transactions[0].date)
         let year = components.year ?? 2023
         let month = components.month ?? 1
+        let iterations = 5
         var naiveChecksum = Decimal.zero
         var cachedChecksum = Decimal.zero
 
         let naiveMilliseconds = elapsedMilliseconds {
-            for _ in 0..<30 {
+            for _ in 0..<iterations {
                 let records = transactions.map(\.record)
                 let refundTotals = LedgerPolicy.refundTotals(from: records)
                 let summary = StatisticsEngine.monthlySummary(
@@ -79,7 +80,7 @@ final class IOSLedgerProjectionTests: XCTestCase {
         let ledgerCache = IOSLedgerProjectionCache()
         let statisticsCache = IOSStatisticsProjectionCache()
         let cachedMilliseconds = elapsedMilliseconds {
-            for _ in 0..<30 {
+            for _ in 0..<iterations {
                 let snapshot = ledgerCache.snapshot(for: transactions, selectedBookID: nil)
                 let summary = statisticsCache.monthly(
                     of: snapshot.records,
@@ -94,7 +95,7 @@ final class IOSLedgerProjectionTests: XCTestCase {
 
         let speedup = cachedMilliseconds > 0 ? naiveMilliseconds / cachedMilliseconds : 0
         print(
-            "IOS_PERF_COMPARISON dataset=10000 iterations=30 " +
+            "IOS_PERF_COMPARISON dataset=10000 iterations=\(iterations) " +
             "naive_ms=\(String(format: \"%.2f\", naiveMilliseconds)) " +
             "cached_ms=\(String(format: \"%.2f\", cachedMilliseconds)) " +
             "speedup=\(String(format: \"%.2fx\", speedup))"

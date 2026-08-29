@@ -129,6 +129,9 @@ jobs:
           set -e
           if [ "$build_status" -ne 0 ]; then
             grep -n -E 'error:|fatal error|BUILD FAILED' xcodebuild-tests.log | tail -200 || true
+            grep -n -E 'error:|fatal error|BUILD FAILED|Test Case.*failed|XCTAssert|IOS_PERF_COMPARISON' xcodebuild-tests.log | tail -200 | while IFS= read -r line; do
+              echo "::error title=App XCTest::$line"
+            done
           fi
           test "$build_status" -eq 0
       - uses: actions/upload-artifact@v4
