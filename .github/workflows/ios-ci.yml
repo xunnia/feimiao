@@ -361,33 +361,10 @@ jobs:
             QingJi-unsigned.ipa
             QingJi-noext.ipa
 
-  paired-screenshot-report:
-    name: 双端截图对比报告
-    needs: [simulator-screenshots]
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-      - uses: actions/download-artifact@v4
-        with:
-          name: simulator-screenshots
-          path: ci-artifacts/ios-screenshots
-      - name: Generate screenshot parity report
-        run: |
-          python3 ios-app/tools/compare_png.py \
-            --manifest ios-app/tools/screenshot_manifest.json \
-            --root . \
-            --output ci-artifacts/screenshot-report.json
-      - uses: actions/upload-artifact@v4
-        with:
-          name: screenshot-parity-report
-          path: |
-            ci-artifacts/screenshot-report.json
-            ci-artifacts/screenshot-report.md
-
   collect-ios-artifacts:
     name: 汇总 iOS 截图和 IPA
     if: github.event_name == 'push'
-    needs: [simulator-screenshots, unsigned-ipa, paired-screenshot-report]
+    needs: [simulator-screenshots, unsigned-ipa]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -402,16 +379,11 @@ jobs:
         with:
           name: QingJi-unsigned-ipa
           path: ci-artifacts/releases
-      - uses: actions/download-artifact@v4
-        with:
-          name: screenshot-parity-report
-          path: ci-artifacts
       - name: Commit artifacts back to branch
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add ci-artifacts/ios-screenshots
-          git add ci-artifacts/screenshot-report.json ci-artifacts/screenshot-report.md
           git add -f ci-artifacts/releases/QingJi-unsigned.ipa ci-artifacts/releases/QingJi-noext.ipa
           if git diff --cached --quiet; then
             echo "iOS 产物无变化，跳过提交"
