@@ -5,10 +5,10 @@
 ## 基线与验收原则
 
 - Android 成对截图基线：1.270.0+284、b0829-284、DB v48。
-- Android 自动证据：Flutter analyze 0 error、全量测试 1134/1134；Parity #58 已按 1.270.0+284 重新采集 38 张 Android/iOS 成对截图，并通过完整性对比；真实 OAuth、provider 网络、IME 和真机仍是用户设备验收项。
+- Android 自动证据：Flutter analyze 0 error、全量测试 1134/1134；Parity #61 已按 1.270.0+284 重新采集 39 张 Android/iOS 成对截图，并通过完整性对比；真实 OAuth、provider 网络、IME 和真机仍是用户设备验收项。
 - iOS 工程：原生 SwiftUI + SwiftData + QingJiCore；部署目标 iOS 26.0，可运行于 iOS 27 beta。
 - iOS 当前状态：原生 SwiftUI/SwiftData 工程已建立，核心逻辑、App XCTest、模拟器构建和截图由 macOS CI 验证；Windows 仍没有 Swift/Xcode，iPhone Air 真机和真实账号网络行为仍待设备验收。
-- “一致”指同一输入得到相同的金额、类型、分类、日期、账本、账户、净额、预算和统计结果，且页面结构、主入口和导航层级一一对应；按钮触感、转场、材质、系统控件和动效可以用平台原生实现，但不能删掉或替换 Android 的功能入口。Parity #58 的 38 个场景已通过双端非空与成对完整性门禁；像素差异仍按平台材质如实记录。
+- “一致”指同一输入得到相同的金额、类型、分类、日期、账本、账户、净额、预算和统计结果，且页面结构、主入口和导航层级一一对应；按钮触感、转场、材质、系统控件和动效可以用平台原生实现，但不能删掉或替换 Android 的功能入口。Parity #61 的 39 个场景已通过双端非空与成对完整性门禁；像素差异仍按平台材质如实记录。
 
 ## 功能矩阵
 
@@ -62,7 +62,7 @@
 
 截图基线由 tools/screenshot_manifest.json 管理；Android 采集入口是
 android-app/integration_test/parity_screenshots_test.dart，iOS 采集入口是
-.github/workflows/parity-screenshots.yml。Parity #58 已在 GitHub Actions 生成完整报告；
+.github/workflows/parity-screenshots.yml。Parity #61 已在 GitHub Actions 生成完整报告；
 Windows 仍没有 Xcode，不能在本机启动 iOS 模拟器。
 
 ## iOS 27 与交付边界
