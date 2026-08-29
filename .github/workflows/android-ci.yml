@@ -64,7 +64,7 @@ jobs:
         run: |
           bash -n ci/publish_update.sh
           bash -n ci/verify_release_apk.sh
-          node --test ci/release_gate.test.mjs
+          node --test ci/release_gate.test.mjs ci/retention_policy.test.mjs
 
       - name: Generate launcher icons
         working-directory: android-app

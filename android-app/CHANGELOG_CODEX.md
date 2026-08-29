@@ -8,6 +8,7 @@
 - **OAuth 多账号**：授权 URL 增加 `prompt=select_account`，普通浏览器回退时也会进入账号选择页，不再静默复用个人空间；PKCE/state、Ephemeral/无痕优先、原生回调保活和失败恢复继续保留。
 - **真实验收**：测试账号 OAuth 回调 HTTP 200、Token 交换 HTTP 200、官方 Codex 模型目录 HTTP 200（6 个模型）、Responses 实际请求 HTTP 200 且收到正文；Flutter 全量 `1134/1134`，Dart analyze 无 error。
 - **UI 证据**：本轮 9 组 before/after/并排标注图和总览图位于 `outputs/ui_comparisons/2026-08-29/`，原始截图保留在 `before/`，改后截图保留在 `after/`。
+- **线上发布**：已发布到 Cloudflare KV，releaseId=`v284-65be62b73c2b`；公网 `version.json`、Range 响应和完整 APK 下载哈希均与本地包一致。发布脚本现在自动保留当前版本与上一版本，清理更旧 release 键。
 
 ## 2026-08-29 v1.269.0+283 GPT OAuth 回调时序与多账号兼容修复
 

@@ -70,6 +70,86 @@ echo "checking online version: $VERSION_URL"
 curl --fail --silent --show-error --location --max-time 30 \
   "$VERSION_URL" -o "$TMP/online-version.json"
 
+NSID="34c07e0793ea4fb8a526dd28eb1aa1b0"
+WRANGLER=(npx --yes --registry=https://registry.npmmirror.com wrangler)
+kv_put() {
+  local attempt
+  for attempt in 1 2 3 4 5; do
+    if NO_COLOR=1 "${WRANGLER[@]}" kv key put --namespace-id="$NSID" --remote "$@"; then
+      return 0
+    fi
+    echo "KV upload failed (attempt $attempt/5); retrying..." >&2
+    sleep 3
+  done
+  fail "KV upload failed after 5 attempts: $1"
+}
+
+kv_delete() {
+  local key="$1"
+  local attempt
+  for attempt in 1 2 3 4 5; do
+    if NO_COLOR=1 "${WRANGLER[@]}" kv key delete --namespace-id="$NSID" --remote "$key"; then
+      return 0
+    fi
+    echo "KV delete failed for $key (attempt $attempt/5); retrying..." >&2
+    sleep 3
+  done
+  fail "KV delete failed after 5 attempts: $key"
+}
+
+# Keep the active release and one complete previous release. This runs after
+# the version pointer has been switched, and also on an idempotent rerun, so a
+# transient cleanup failure can be repaired without re-uploading the APK.
+retain_recent_releases() {
+  echo "checking retention policy: keep current and previous release"
+  # Read the pointer directly from KV rather than the public Worker URL. A
+  # CDN edge may briefly serve an older no-cache response while another
+  # publisher is advancing production; deleting against that stale view could
+  # remove the concurrently published release.
+  NO_COLOR=1 "${WRANGLER[@]}" kv key get \
+    --namespace-id="$NSID" --remote version.json > "$TMP/online-version-retention.json"
+  node "$SCRIPT_DIR/release_gate.mjs" \
+    --candidate "$TMP/candidate.json" \
+    --current "$TMP/online-version-retention.json" \
+    --candidate-apk "$APK" >/dev/null
+
+  NO_COLOR=1 "${WRANGLER[@]}" kv key list \
+    --namespace-id="$NSID" --remote > "$TMP/retention-keys.json"
+  node "$SCRIPT_DIR/retention_policy.mjs" \
+    --keys "$TMP/retention-keys.json" \
+    --current-release "$RELEASE_ID" \
+    --keep 2 > "$TMP/retention-plan.json"
+
+  RETENTION_PLAN_FILE="$TMP/retention-plan.json" node - <<'NODE'
+const fs = require('node:fs');
+const plan = JSON.parse(fs.readFileSync(process.env.RETENTION_PLAN_FILE, 'utf8'));
+console.log(`retention keep releases=${plan.keepReleaseIds.join(',')} delete keys=${plan.deleteKeys.length}`);
+NODE
+
+  RETENTION_PLAN_FILE="$TMP/retention-plan.json" node - <<'NODE' > "$TMP/retention-delete.txt"
+const fs = require('node:fs');
+const plan = JSON.parse(fs.readFileSync(process.env.RETENTION_PLAN_FILE, 'utf8'));
+for (const key of plan.deleteKeys) console.log(key);
+NODE
+  while IFS= read -r key; do
+    [ -n "$key" ] || continue
+    kv_delete "$key"
+  done < "$TMP/retention-delete.txt"
+
+  NO_COLOR=1 "${WRANGLER[@]}" kv key list \
+    --namespace-id="$NSID" --remote > "$TMP/retention-keys-final.json"
+  node "$SCRIPT_DIR/retention_policy.mjs" \
+    --keys "$TMP/retention-keys-final.json" \
+    --current-release "$RELEASE_ID" \
+    --keep 2 \
+    --assert-clean > "$TMP/retention-final.json"
+  RETENTION_FINAL_FILE="$TMP/retention-final.json" node - <<'NODE'
+const fs = require('node:fs');
+const plan = JSON.parse(fs.readFileSync(process.env.RETENTION_FINAL_FILE, 'utf8'));
+console.log(`retention verified: ${plan.keepReleaseIds.length} release(s), ${plan.keepKeys.length} key(s)`);
+NODE
+}
+
 GATE_DECISION="$(node "$SCRIPT_DIR/release_gate.mjs" \
   --candidate "$TMP/candidate.json" \
   --current "$TMP/online-version.json" \
@@ -79,27 +159,14 @@ case "$GATE_DECISION" in
     echo "release gate verified: candidate advances the online release"
     ;;
   idempotent)
-    echo "release already published with the same identity; nothing to upload"
+    echo "release already published with the same identity; repairing retention without upload"
+    retain_recent_releases
     exit 0
     ;;
   *)
     fail "unexpected release gate decision: $GATE_DECISION"
     ;;
 esac
-
-NSID="34c07e0793ea4fb8a526dd28eb1aa1b0"
-WRANGLER=(npx --yes --registry=https://registry.npmmirror.com wrangler)
-kv_put() {
-  local attempt
-  for attempt in 1 2 3 4 5; do
-    if "${WRANGLER[@]}" kv key put --namespace-id="$NSID" --remote "$@"; then
-      return 0
-    fi
-    echo "KV upload failed (attempt $attempt/5); retrying..." >&2
-    sleep 3
-  done
-  fail "KV upload failed after 5 attempts: $1"
-}
 
 split -b 24m -d -a 2 "$APK" "$TMP/chunk-"
 CHUNK_FILES=("$TMP"/chunk-*)
@@ -154,6 +221,7 @@ case "$FINAL_GATE_DECISION" in
     ;;
   idempotent)
     echo "the same release identity became current during upload; pointer is already correct"
+    retain_recent_releases
     exit 0
     ;;
   *)
@@ -164,6 +232,8 @@ esac
 # Atomic pointer switch: this is the first operation that makes the new build
 # visible to clients.
 kv_put "version.json" --path "$TMP/version.json"
+
+retain_recent_releases
 
 echo "published v$VNAME ($VCODE), sha256=$SHA256"
 echo "$VERSION_URL"
