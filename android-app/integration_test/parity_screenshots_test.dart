@@ -11,7 +11,6 @@ import 'package:qingji/core/import/bill_import.dart';
 import 'package:qingji/data/app_repository.dart';
 import 'package:qingji/main.dart' as app;
 import 'package:qingji/share_intake.dart';
-import 'package:qingji/theme/app_theme_controller.dart';
 import 'package:qingji/views/assistant/meow_assistant_view.dart';
 import 'package:qingji/views/assets/account_detail_page.dart';
 import 'package:qingji/views/quick_add/quick_add_view.dart';
@@ -50,19 +49,7 @@ void main() {
   testWidgets('capture Android parity screens', (tester) async {
     _surfaceConverted = false;
     await app.main();
-    // The emulator may retain a previous theme preference between AVD jobs.
-    // Parity evidence must use the Android default warm light presentation.
-    final theme = AppThemeController.instance;
-    theme.setPreset('warm');
-    theme.setIntensity(1.0);
-    theme.setCardAlpha(0.40);
     await _pumpFor(tester, const Duration(seconds: 2));
-    // App startup loads the persisted preference asynchronously. Apply the
-    // capture baseline again after that window without awaiting disk I/O.
-    theme.setPreset('warm');
-    theme.setIntensity(1.0);
-    theme.setCardAlpha(0.40);
-    await _pumpFor(tester, const Duration(milliseconds: 500));
 
     final repo = _repositoryFromNavigator();
     await repo.fullyReady;
