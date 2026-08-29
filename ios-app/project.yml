@@ -21,8 +21,9 @@ targets:
         excludes:
           - QingJi-free.entitlements
           - Resources/CategoryIcons
-    resources:
       - path: QingJi/Resources/CategoryIcons
+        type: folder
+        buildPhase: resources
     dependencies:
       - package: QingJiCore
       - target: QingJiWidget
