@@ -109,6 +109,7 @@ void main() {
       const ReimburseView(),
       binding,
     );
+    await _captureReimburseSettlement(tester, binding);
     await _capturePage(
       tester,
       'savings-android',
@@ -501,6 +502,24 @@ Future<void> _captureQuickAddIncome(
   await _takeScreenshot(tester, binding, 'quickadd-income-android');
 }
 
+Future<void> _captureReimburseSettlement(
+  WidgetTester tester,
+  IntegrationTestWidgetsFlutterBinding binding,
+) async {
+  final navigator = ShareIntake.navigatorKey.currentState;
+  expect(navigator, isNotNull);
+  unawaited(
+    navigator!.push<void>(_parityPageRoute<void>(const ReimburseView())),
+  );
+  await _pumpFor(tester, const Duration(milliseconds: 700));
+  final pendingRow = find.text('朋友聚餐 AA');
+  expect(pendingRow, findsAtLeastNWidgets(1));
+  await tester.tap(pendingRow.first);
+  await _pumpFor(tester, const Duration(milliseconds: 700));
+  expect(find.text('报销到账'), findsAtLeastNWidgets(1));
+  await _takeScreenshot(tester, binding, 'reimburse-settlement-android');
+}
+
 Future<void> _captureStatistics(
   WidgetTester tester,
   IntegrationTestWidgetsFlutterBinding binding,
@@ -759,6 +778,7 @@ Future<void> _ensureFixture(AppRepository repo) async {
       account: row.account,
       note: row.note,
       date: thisMonthDate(index),
+      reimbursable: row.note == '朋友聚餐 AA',
       sourceID: 'parity-v1-current-$index',
     );
   }

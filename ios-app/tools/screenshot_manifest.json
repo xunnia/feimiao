@@ -311,6 +311,14 @@
       "ios": "ci-artifacts/ios-screenshots/39-account-detail.png",
       "iosRoute": "settings/accounts/detail",
       "notes": "同一现金账户的余额、趋势、校准入口和流水活动；iOS 使用原生 sheet 展示详情。"
+    },
+    {
+      "id": "reimburse-settlement",
+      "feature": "报销到账操作态",
+      "android": "android-app/outputs/parity/reimburse-settlement-android.png",
+      "ios": "ci-artifacts/ios-screenshots/40-reimburse-settlement.png",
+      "iosRoute": "settings/reimburse/settlement",
+      "notes": "同一待报销账单的到账账户、到账日期和抵消金额确认界面；确认按钮保留平台原生交互。"
     }
   ]
 }

@@ -117,6 +117,7 @@ struct SettingsView: View {
         case .budget:    BudgetSettingView()
         case .reconcile: ReconcileView()
         case .reimburse: ReimburseView()
+        case .reimburseSettlement: ReimburseView(opensFirstSettlement: true)
         case .savings:   SavingsGoalsView()
         case .recurring: RecurringRulesView()
         case .assets:    AssetsView(startsOnPhysical: true)

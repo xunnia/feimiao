@@ -170,7 +170,8 @@ enum DemoDataSeeder {
                 category: cat(catKey),
                 account: account,
                 book: book,
-                timePrecision: .entryClock
+                timePrecision: .entryClock,
+                reimbursable: note == "朋友聚餐 AA"
             )
             context.insert(tx)
             if index == 0 { lunchTransaction = tx }

@@ -33,7 +33,7 @@ final class AppRouter {
 
     /// 设置页接到深链后要 push 的子页面。
     enum SettingsDestination: Hashable {
-        case books, accounts, accountDetail, categories, tags, memory, aiMemory, aiTasks, aiExtensions, aiSchedules, aiSearch, aiDiagnostics, aiLocal, budget, reconcile, reimburse, savings, recurring, assets, assetDetail, liabilities, netWorth, importReview, importExport, reports, backup, display, theme, moneyDisplay, autoRecord, ai
+        case books, accounts, accountDetail, categories, tags, memory, aiMemory, aiTasks, aiExtensions, aiSchedules, aiSearch, aiDiagnostics, aiLocal, budget, reconcile, reimburse, reimburseSettlement, savings, recurring, assets, assetDetail, liabilities, netWorth, importReview, importExport, reports, backup, display, theme, moneyDisplay, autoRecord, ai
     }
     var settingsPushTarget: SettingsDestination? = nil
 
@@ -104,6 +104,9 @@ final class AppRouter {
         case "budget":       selectedTab = .settings;   settingsPushTarget = .budget
         case "reconcile":    selectedTab = .settings;   settingsPushTarget = .reconcile
         case "reimburse":    selectedTab = .settings;   settingsPushTarget = .reimburse
+        case "reimburse/settlement":
+            selectedTab = .settings
+            settingsPushTarget = .reimburseSettlement
         case "books":        selectedTab = .settings;   settingsPushTarget = .books
         case "accounts":     selectedTab = .settings;   settingsPushTarget = .accounts
         case "categories":   selectedTab = .settings;   settingsPushTarget = .categories
@@ -185,7 +188,10 @@ final class AppRouter {
             switch path.first {
             case "budget":    settingsPushTarget = .budget
             case "reconcile": settingsPushTarget = .reconcile
-            case "reimburse": settingsPushTarget = .reimburse
+            case "reimburse":
+                settingsPushTarget = path.dropFirst().first == "settlement"
+                    ? .reimburseSettlement
+                    : .reimburse
             case "books":     settingsPushTarget = .books
             case "accounts":
                 settingsPushTarget = path.dropFirst().first == "detail"

@@ -12,6 +12,8 @@ struct ReimburseView: View {
 
     @State private var selectedTransaction: MoneyTransaction?
     @State private var errorMessage: String?
+    let opensFirstSettlement: Bool
+    @State private var didOpenLaunchSettlement = false
 
     private var pending: [MoneyTransaction] {
         transactions.filter {
@@ -31,6 +33,10 @@ struct ReimburseView: View {
 
     private var usableAccounts: [Account] {
         accounts.filter { !$0.isDeleted && $0.status == .active }
+    }
+
+    init(opensFirstSettlement: Bool = false) {
+        self.opensFirstSettlement = opensFirstSettlement
     }
 
     var body: some View {
@@ -96,6 +102,17 @@ struct ReimburseView: View {
         } message: {
             Text(errorMessage ?? "")
         }
+        .onAppear(perform: openLaunchSettlementIfNeeded)
+        .onChange(of: transactions.count) { _, _ in
+            openLaunchSettlementIfNeeded()
+        }
+    }
+
+    private func openLaunchSettlementIfNeeded() {
+        guard opensFirstSettlement, !didOpenLaunchSettlement,
+              let first = pending.first else { return }
+        didOpenLaunchSettlement = true
+        selectedTransaction = first
     }
 
     private func reimburseRow(_ transaction: MoneyTransaction) -> some View {

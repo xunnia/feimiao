@@ -141,6 +141,7 @@ struct RootTabView: View {
              "ai-diagnostics", "ai-local", "savings", "recurring", "assets", "assets/detail",
              "assets-detail", "liabilities", "net-worth", "import-review", "import", "import-export",
              "accounts/detail", "accounts-detail",
+             "reimburse/settlement",
              "reports", "settings", "backup", "display", "theme", "money-display", "auto-record",
              "autorecord", "ai-settings":
             return [.settings]
