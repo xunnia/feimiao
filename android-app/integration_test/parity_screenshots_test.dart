@@ -54,6 +54,17 @@ void main() {
     await _ensureFixture(repo);
     await _pumpFor(tester, const Duration(milliseconds: 500));
 
+    final augustIncome = repo.transactions
+        .where(
+          (transaction) =>
+              transaction.txKind == TransactionKind.income &&
+              transaction.date.year == 2026 &&
+              transaction.date.month == 8,
+        )
+        .fold<Decimal>(
+            Decimal.zero, (sum, transaction) => sum + transaction.amount);
+    expect(augustIncome, Decimal.parse('620'));
+
     await _takeScreenshot(tester, binding, 'home-overview-android');
     // The drawer button belongs to the root shell. Capture it before pushing
     // page routes that intentionally remain mounted for the rest of the run.
@@ -546,6 +557,14 @@ Future<void> _ensureFixture(AppRepository repo) async {
     return DateTime(day.year, day.month, day.day, 12);
   }
 
+  DateTime thisMonthDate(int index) {
+    if (index < 14) return daysAgo(index * 2);
+    // Keep the two income rows inside the same month. The original spacing
+    // calculation put indexes 14 and 15 in July, making the home summary
+    // incorrectly show zero income despite the fixture containing ¥620.
+    return DateTime(now.year, now.month, 27 - (index - 14) * 2, 12);
+  }
+
   Future<int> add({
     required TransactionKind kind,
     required String amount,
@@ -701,7 +720,7 @@ Future<void> _ensureFixture(AppRepository repo) async {
       categoryKey: row.category,
       account: row.account,
       note: row.note,
-      date: daysAgo(index * 2),
+      date: thisMonthDate(index),
       sourceID: 'parity-v1-current-$index',
     );
   }

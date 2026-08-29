@@ -112,6 +112,15 @@ enum DemoDataSeeder {
         func daysAgo(_ n: Int) -> Date {
             Calendar.current.date(byAdding: .day, value: -n, to: now) ?? now
         }
+        func thisMonthDate(_ index: Int) -> Date {
+            guard index >= 14 else { return daysAgo(index * 2) }
+            // Keep the two income rows inside the current month. Spacing all
+            // 16 rows by two days would move indexes 14 and 15 into July.
+            var components = Calendar.current.dateComponents([.year, .month], from: now)
+            components.day = 27 - (index - 14) * 2
+            components.hour = 12
+            return Calendar.current.date(from: components) ?? now
+        }
         func monthsAgo(_ m: Int, day: Int) -> Date {
             var comps = Calendar.current.dateComponents([.year, .month], from: now)
             comps.month = (comps.month ?? 1) - m
@@ -146,7 +155,7 @@ enum DemoDataSeeder {
             let tx = MoneyTransaction(
                 amount: amount,
                 kind: kind,
-                date: daysAgo(index * 2),   // 每条间隔 2 天，铺满本月
+                date: thisMonthDate(index), // 支出按 2 天间隔，收入固定留在本月
                 note: note,
                 currencyCode: currency,
                 category: cat(catKey),
