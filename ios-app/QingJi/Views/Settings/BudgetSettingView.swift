@@ -34,7 +34,11 @@ struct BudgetSettingView: View {
     @State private var matchingOccurrence: BudgetCommitmentOccurrenceRecord?
 
     private var totalBudget: Budget? {
-        BudgetStore.effectiveTotalBudget(from: budgets, selectedBookID: router.selectedBookID)
+        BudgetStore.effectiveTotalBudget(
+            from: budgets,
+            selectedBookID: router.selectedBookID,
+            fallbackBookID: books.first(where: \.isDefault)?.stableID
+        )
     }
 
     private var parsedAmount: Decimal? {
