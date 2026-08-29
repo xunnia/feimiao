@@ -56,15 +56,7 @@ jobs:
           disable-linux-hw-accel: false
           disable-animations: false
           working-directory: android-app
-          script: |
-            set -o pipefail
-            flutter drive \
-              --driver=test_driver/integration_test.dart \
-              --target=integration_test/parity_screenshots_test.dart \
-              --device-id emulator-5554 \
-              --no-pub \
-              --dart-define=QINGJI_PARITY_CAPTURE=true \
-              2>&1 | tee "$GITHUB_WORKSPACE/android-parity-drive.log"
+          script: bash tooling/run_parity_capture.sh
       - uses: actions/upload-artifact@v4
         if: always()
         with:
