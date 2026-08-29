@@ -48,4 +48,24 @@ enum BudgetStore {
             calendar: calendar
         )
     }
+
+    static func status(
+        for budget: Budget,
+        records: [TransactionRecord],
+        categoryKey: String? = nil,
+        referenceDate: Date = Date(),
+        calendar: Calendar = .current
+    ) -> BudgetStatus {
+        let scopedCategoryKey = categoryKey ?? budget.categoryKey
+        return BudgetEngine.status(
+            budget: budget.amount,
+            cycle: budget.cycle,
+            referenceDate: referenceDate,
+            customStart: budget.periodStart,
+            customEnd: budget.periodEnd,
+            categoryKey: scopedCategoryKey,
+            records: records,
+            calendar: calendar
+        )
+    }
 }

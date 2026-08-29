@@ -21,56 +21,15 @@ struct MonthlyStatsView: View {
     @State private var customEndDate = Calendar.current.startOfDay(for: AppClock.now)
     @AppStorage("qingji.stats.custom.start") private var savedCustomStart: Double = 0
     @AppStorage("qingji.stats.custom.end") private var savedCustomEnd: Double = 0
-
-    private var scopedTransactions: [MoneyTransaction] {
-        LedgerScope.filter(transactions, selectedBookID: router.selectedBookID)
-    }
-
-    private var records: [TransactionRecord] {
-        scopedTransactions.map(\.record)
-    }
-
-    private var monthSummary: MonthlySummary {
-        let components = Calendar.current.dateComponents([.year, .month], from: displayedMonth)
-        return StatisticsEngine.monthlySummary(
-            of: records,
-            year: components.year ?? 2026,
-            month: components.month ?? 1
-        )
-    }
-
-    private var yearSummary: YearlySummary {
-        StatisticsEngine.yearlySummary(
-            of: records,
-            year: Calendar.current.component(.year, from: displayedMonth)
-        )
-    }
-
-    private var weekSummary: PeriodSummary {
-        StatisticsEngine.periodSummary(
-            of: records,
-            start: weekStart,
-            end: Calendar.current.date(byAdding: .day, value: 6, to: weekStart) ?? weekStart
-        )
-    }
-
-    private var customSummary: PeriodSummary {
-        StatisticsEngine.periodSummary(of: records, start: customStartDate, end: customEndDate)
-    }
-
-    private var monthlyBudget: Budget? {
-        BudgetStore.effectiveTotalBudget(
-            from: budgets,
-            selectedBookID: router.selectedBookID
-        )
-    }
-
-    private var currencyCode: String {
-        scopedTransactions.first?.currencyCode ?? "CNY"
-    }
+    @State private var projectionCache = IOSLedgerProjectionCache()
+    @State private var statisticsCache = IOSStatisticsProjectionCache()
 
     var body: some View {
         @Bindable var router = router
+        let snapshot = projectionCache.snapshot(
+            for: transactions,
+            selectedBookID: router.selectedBookID
+        )
 
         ScrollView {
                 VStack(spacing: 20) {
@@ -84,25 +43,13 @@ struct MonthlyStatsView: View {
 
                     switch router.statsScope {
                     case .week:
-                        weekHeader
-                        periodContent(weekSummary)
+                        weekContent(snapshot: snapshot)
                     case .month:
-                        monthHeader
-                        totalsCards(
-                            expense: monthSummary.totalExpense,
-                            income: monthSummary.totalIncome,
-                            balance: monthSummary.balance
-                        )
-                        if let budget = monthlyBudget {
-                            budgetProgress(budget)
-                        }
-                        monthlyContent
+                        monthContent(snapshot: snapshot)
                     case .year:
-                        yearHeader
-                        yearlyContent
+                        yearContent(snapshot: snapshot)
                     case .custom:
-                        customHeader
-                        periodContent(customSummary)
+                        customContent(snapshot: snapshot)
                     }
                 }
                 .padding()
@@ -227,42 +174,127 @@ struct MonthlyStatsView: View {
         Calendar.current.date(byAdding: .day, value: 6, to: weekStart) ?? weekStart
     }
 
-    private var monthlyContent: some View {
+    private func weekContent(snapshot: IOSLedgerSnapshot) -> some View {
+        let summary = statisticsCache.period(
+            of: snapshot.records,
+            revision: snapshot.revision,
+            start: weekStart,
+            end: Calendar.current.date(byAdding: .day, value: 6, to: weekStart) ?? weekStart
+        )
+        return VStack(spacing: 20) {
+            weekHeader
+            periodContent(summary, currencyCode: snapshot.scopedCurrencyCode)
+        }
+    }
+
+    private func monthContent(snapshot: IOSLedgerSnapshot) -> some View {
+        let components = Calendar.current.dateComponents([.year, .month], from: displayedMonth)
+        let summary = statisticsCache.monthly(
+            of: snapshot.records,
+            revision: snapshot.revision,
+            year: components.year ?? 2026,
+            month: components.month ?? 1
+        )
+        let budget = BudgetStore.effectiveTotalBudget(
+            from: budgets,
+            selectedBookID: router.selectedBookID
+        )
+        return VStack(spacing: 20) {
+            monthHeader
+            totalsCards(
+                expense: summary.totalExpense,
+                income: summary.totalIncome,
+                balance: summary.balance,
+                currencyCode: snapshot.scopedCurrencyCode
+            )
+            if let budget {
+                budgetProgress(
+                    budget,
+                    records: snapshot.records,
+                    revision: snapshot.revision,
+                    currencyCode: snapshot.scopedCurrencyCode
+                )
+            }
+            monthlyContent(summary: summary, currencyCode: snapshot.scopedCurrencyCode)
+        }
+    }
+
+    private func yearContent(snapshot: IOSLedgerSnapshot) -> some View {
+        let summary = statisticsCache.yearly(
+            of: snapshot.records,
+            revision: snapshot.revision,
+            year: Calendar.current.component(.year, from: displayedMonth)
+        )
+        return VStack(spacing: 20) {
+            yearHeader
+            yearlyContent(summary: summary, currencyCode: snapshot.scopedCurrencyCode)
+        }
+    }
+
+    private func customContent(snapshot: IOSLedgerSnapshot) -> some View {
+        let summary = statisticsCache.period(
+            of: snapshot.records,
+            revision: snapshot.revision,
+            start: customStartDate,
+            end: customEndDate
+        )
+        return VStack(spacing: 20) {
+            customHeader
+            periodContent(summary, currencyCode: snapshot.scopedCurrencyCode)
+        }
+    }
+
+    private func monthlyContent(summary: MonthlySummary, currencyCode: String) -> some View {
         Group {
-            if monthSummary.expenseByCategory.isEmpty {
+            if summary.expenseByCategory.isEmpty {
                 emptyState(title: "本月还没有支出", systemImage: "chart.pie", message: "记几笔之后这里会出现分析图表")
             } else {
-                categoryPieChart(monthSummary.expenseByCategory)
-                monthlyDailyBarChart
-                categoryRanking(monthSummary.expenseByCategory)
+                categoryPieChart(summary.expenseByCategory)
+                monthlyDailyBarChart(summary)
+                categoryRanking(summary.expenseByCategory, currencyCode: currencyCode)
             }
         }
     }
 
-    private func periodContent(_ summary: PeriodSummary) -> some View {
+    private func periodContent(_ summary: PeriodSummary, currencyCode: String) -> some View {
         VStack(spacing: 20) {
-            totalsCards(expense: summary.totalExpense, income: summary.totalIncome, balance: summary.balance)
+            totalsCards(
+                expense: summary.totalExpense,
+                income: summary.totalIncome,
+                balance: summary.balance,
+                currencyCode: currencyCode
+            )
             if summary.expenseByCategory.isEmpty {
                 emptyState(title: "这个区间还没有支出", systemImage: "chart.pie", message: "记几笔之后这里会出现分析图表")
             } else {
                 categoryPieChart(summary.expenseByCategory)
                 periodDailyBarChart(summary.dailyTotals)
-                categoryRanking(summary.expenseByCategory)
+                categoryRanking(summary.expenseByCategory, currencyCode: currencyCode)
             }
         }
     }
 
-    private func totalsCards(expense: Decimal, income: Decimal, balance: Decimal) -> some View {
+    private func totalsCards(
+        expense: Decimal,
+        income: Decimal,
+        balance: Decimal,
+        currencyCode: String
+    ) -> some View {
         GlassEffectContainer(spacing: 12) {
             HStack(spacing: 12) {
-                totalCard(title: "支出", amount: expense, color: Color.expense)
-                totalCard(title: "收入", amount: income, color: Color.income)
-                totalCard(title: "结余", amount: balance, color: balance >= 0 ? Color.income : Color.warning)
+                totalCard(title: "支出", amount: expense, color: Color.expense, currencyCode: currencyCode)
+                totalCard(title: "收入", amount: income, color: Color.income, currencyCode: currencyCode)
+                totalCard(title: "结余", amount: balance, color: balance >= 0 ? Color.income : Color.warning, currencyCode: currencyCode)
             }
         }
     }
 
-    private func totalCard(title: LocalizedStringKey, amount: Decimal, color: Color) -> some View {
+    private func totalCard(
+        title: LocalizedStringKey,
+        amount: Decimal,
+        color: Color,
+        currencyCode: String
+    ) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             Text(title)
                 .font(.caption)
@@ -296,11 +328,11 @@ struct MonthlyStatsView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private var monthlyDailyBarChart: some View {
+    private func monthlyDailyBarChart(_ summary: MonthlySummary) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("每日支出")
                 .font(.headline)
-            Chart(monthSummary.dailyTotals, id: \.day) { item in
+            Chart(summary.dailyTotals, id: \.day) { item in
                 BarMark(
                     x: .value("日", item.day),
                     y: .value("支出", MoneyFormat.double(item.expense))
@@ -331,7 +363,7 @@ struct MonthlyStatsView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private func categoryRanking(_ categories: [CategoryTotal]) -> some View {
+    private func categoryRanking(_ categories: [CategoryTotal], currencyCode: String) -> some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("分类排行")
                 .font(.headline)
@@ -360,10 +392,16 @@ struct MonthlyStatsView: View {
     }
 
     /// 月度预算执行条 + 今日可花。
-    private func budgetProgress(_ budget: Budget) -> some View {
-        let status = BudgetStore.status(
+    private func budgetProgress(
+        _ budget: Budget,
+        records: [TransactionRecord],
+        revision: IOSLedgerDataRevision,
+        currencyCode: String
+    ) -> some View {
+        let status = statisticsCache.status(
             for: budget,
-            transactions: scopedTransactions,
+            records: records,
+            revision: revision,
             referenceDate: displayedMonth
         )
         let ratio = min(MoneyFormat.double(status.spentThisMonth) / max(MoneyFormat.double(budget.amount), 0.01), 1)
@@ -392,10 +430,14 @@ struct MonthlyStatsView: View {
         .glassEffect(.regular, in: .rect(cornerRadius: 16))
     }
 
-    private var yearlyContent: some View {
+    private func yearlyContent(summary: YearlySummary, currencyCode: String) -> some View {
         VStack(spacing: 20) {
-            let summary = yearSummary
-            totalsCards(expense: summary.totalExpense, income: summary.totalIncome, balance: summary.balance)
+            totalsCards(
+                expense: summary.totalExpense,
+                income: summary.totalIncome,
+                balance: summary.balance,
+                currencyCode: currencyCode
+            )
             if summary.totalExpense == 0 && summary.totalIncome == 0 {
                 emptyState(title: "今年还没有账目", systemImage: "chart.bar", message: "记几笔之后这里会出现年度报告")
             } else {
@@ -415,7 +457,7 @@ struct MonthlyStatsView: View {
                     .frame(height: 160)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
-                categoryRanking(summary.expenseByCategory)
+                categoryRanking(summary.expenseByCategory, currencyCode: currencyCode)
             }
         }
     }

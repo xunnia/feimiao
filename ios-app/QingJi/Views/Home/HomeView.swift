@@ -31,14 +31,11 @@ struct HomeView: View {
     @State private var displayedMonth = AppClock.now
     @State private var monthPickerDate = AppClock.now
     @State private var showMonthPicker = false
+    @State private var projectionCache = IOSLedgerProjectionCache()
+    @State private var statisticsCache = IOSStatisticsProjectionCache()
 
     init(onOpenDrawer: (() -> Void)? = nil) {
         self.onOpenDrawer = onOpenDrawer
-    }
-
-    private var includedTransactions: [MoneyTransaction] {
-        LedgerScope.filter(transactions, selectedBookID: router.selectedBookID)
-            .filter { !$0.isExcluded }
     }
 
     private var selectedBookName: String {
@@ -49,71 +46,60 @@ struct HomeView: View {
         return "总账本"
     }
 
-    private var now: Date { AppClock.now }
-
-    private var displayedMonthSummary: MonthlySummary {
+    var body: some View {
+        let now = AppClock.now
+        let snapshot = projectionCache.snapshot(
+            for: transactions,
+            selectedBookID: router.selectedBookID
+        )
         let components = Calendar.current.dateComponents([.year, .month], from: displayedMonth)
-        return StatisticsEngine.monthlySummary(
-            of: includedTransactions.map(\.record),
+        let summary = statisticsCache.monthly(
+            of: snapshot.includedRecords,
+            revision: snapshot.revision,
             year: components.year ?? 2000,
             month: components.month ?? 1
         )
-    }
-
-    private var totalBudget: Budget? {
-        BudgetStore.effectiveTotalBudget(
+        let totalBudget = BudgetStore.effectiveTotalBudget(
             from: budgets,
             selectedBookID: router.selectedBookID
         )
-    }
-
-    private var displayedBudgetStatus: BudgetStatus? {
-        guard let totalBudget else { return nil }
-        return BudgetStore.status(
-            for: totalBudget,
-            transactions: includedTransactions,
-            referenceDate: Calendar.current.isDate(
-                displayedMonth,
-                equalTo: now,
-                toGranularity: .month
-            ) ? now : displayedMonth
-        )
-    }
-
-    private var currencyCode: String {
-        includedTransactions.first?.currencyCode ?? "CNY"
-    }
-
-    private var recentTransactions: [MoneyTransaction] {
-        let monthTransactions = includedTransactions.filter {
-            $0.refundOfID == nil &&
-            Calendar.current.isDate($0.date, equalTo: displayedMonth, toGranularity: .month)
+        let budgetStatus = totalBudget.map { budget in
+            statisticsCache.status(
+                for: budget,
+                records: snapshot.includedRecords,
+                revision: snapshot.revision,
+                referenceDate: Calendar.current.isDate(
+                    displayedMonth,
+                    equalTo: now,
+                    toGranularity: .month
+                ) ? now : displayedMonth
+            )
         }
-        let filtered = monthTransactions.filter { transaction in
+        let recentTransactions = Array(snapshot.includedTransactions.filter { transaction in
+            guard transaction.refundOfID == nil,
+                  Calendar.current.isDate(transaction.date, equalTo: displayedMonth, toGranularity: .month)
+            else { return false }
             switch transactionFilter {
-            case .all: true
-            case .expense: transaction.kind == .expense
-            case .income: transaction.kind == .income
+            case .all: return true
+            case .expense: return transaction.kind == .expense
+            case .income: return transaction.kind == .income
             }
-        }
-        return filtered
-            .prefix(8)
-            .map { $0 }
-    }
+        }.prefix(8))
 
-    private var refundByID: [UUID: Decimal] {
-        includedTransactions.reduce(into: [:]) { result, transaction in
-            guard let originalID = transaction.refundOfID, transaction.amount < 0 else { return }
-            result[originalID, default: 0] += -transaction.amount
-        }
-    }
-
-    var body: some View {
         ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
-                    summaryCard
+                    summaryCard(
+                        summary: summary,
+                        totalBudget: totalBudget,
+                        status: budgetStatus,
+                        currencyCode: snapshot.includedCurrencyCode,
+                        now: now
+                    )
                     filterSegment
-                    recentSection
+                    recentSection(
+                        transactions: recentTransactions,
+                        refundByID: snapshot.includedRefundTotals
+                    )
                 }
                 .padding(.horizontal, 16)
                 .padding(.top, 12)
@@ -204,8 +190,13 @@ struct HomeView: View {
         .accessibilityLabel("账目范围")
     }
 
-    private var summaryCard: some View {
-        let summary = displayedMonthSummary
+    private func summaryCard(
+        summary: MonthlySummary,
+        totalBudget: Budget?,
+        status: BudgetStatus?,
+        currencyCode: String,
+        now: Date
+    ) -> some View {
         return VStack(alignment: .leading, spacing: 14) {
             HStack(spacing: 8) {
                 Button {
@@ -243,7 +234,7 @@ struct HomeView: View {
                 Spacer()
             }
 
-            if let totalBudget, let status = displayedBudgetStatus {
+            if let totalBudget, let status {
                 BudgetSummaryBody(
                     summary: summary,
                     status: status,
@@ -274,7 +265,10 @@ struct HomeView: View {
         .glassEffect(.regular, in: .rect(cornerRadius: 20))
     }
 
-    private var recentSection: some View {
+    private func recentSection(
+        transactions: [MoneyTransaction],
+        refundByID: [UUID: Decimal]
+    ) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
                 Text("最近账目")
@@ -284,19 +278,19 @@ struct HomeView: View {
                     .font(.subheadline)
             }
 
-            if recentTransactions.isEmpty {
+            if transactions.isEmpty {
                 ContentUnavailableView("还没有账目", systemImage: "tray", description: Text("记下第一笔，肥喵就开始帮你整理"))
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 20)
             } else {
                 VStack(spacing: 0) {
-                    ForEach(Array(recentTransactions.enumerated()), id: \.element.persistentModelID) { index, transaction in
+                    ForEach(Array(transactions.enumerated()), id: \.element.persistentModelID) { index, transaction in
                         TransactionRow(
                             transaction: transaction,
                             refundAmount: refundByID[transaction.stableID] ?? 0
                         )
                             .padding(.vertical, 8)
-                        if index < recentTransactions.count - 1 {
+                        if index < transactions.count - 1 {
                             Divider()
                         }
                     }

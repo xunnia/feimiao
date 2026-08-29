@@ -31,53 +31,113 @@ struct TransactionListView: View {
     @State private var toDate: Date?
     @State private var minimumAmountText = ""
     @State private var maximumAmountText = ""
+    @State private var projectionCache = IOSLedgerProjectionCache()
+    @State private var listProjectionCache = TransactionListProjectionCache()
 
-    private var scopedTransactions: [MoneyTransaction] {
-        LedgerScope.filter(transactions, selectedBookID: router.selectedBookID)
-    }
-
-    private var filtered: [MoneyTransaction] {
-        let active = scopedTransactions.filter { $0.refundOfID == nil }
+    private func makeProjection(from snapshot: IOSLedgerSnapshot) -> TransactionListProjection {
+        let active = snapshot.scopedTransactions.filter { $0.refundOfID == nil }
         let calendar = Calendar.current
         let start = fromDate.map { calendar.startOfDay(for: $0) }
         let endExclusive = toDate.flatMap { calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: $0)) }
         let minimumAmount = parsedAmount(minimumAmountText)
         let maximumAmount = parsedAmount(maximumAmountText)
-
-        return active.filter { transaction in
-            if let kindFilter, transaction.kind != kindFilter { return false }
-            if let accountFilterID, transaction.account?.stableID != accountFilterID { return false }
-            if let tagFilterID,
-               let tagName = tags.first(where: { $0.stableID == tagFilterID })?.name,
-               !transaction.tags.contains(tagName) {
-                return false
-            }
-            if let start, transaction.date < start { return false }
-            if let endExclusive, transaction.date >= endExclusive { return false }
-
-            let displayedAmount = absolute(netAmount(for: transaction))
-            if let minimumAmount, displayedAmount < minimumAmount { return false }
-            if let maximumAmount, displayedAmount > maximumAmount { return false }
-
-            guard !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return true }
-            let query = normalizedSearchText(searchText)
-            let categoryName = transaction.category?.name
-                ?? (transaction.kind == .transfer ? "转账" : "未分类")
-            let searchValues = [
-                categoryName,
-                transaction.category?.key ?? "",
-                transaction.note,
-                transaction.account?.name ?? "",
-                transaction.toAccount?.name ?? "",
-                transaction.orderNo,
-                transaction.tags.joined(separator: " "),
-                transaction.amount.description,
-                netAmount(for: transaction).description,
-                NSDecimalNumber(decimal: transaction.amount).stringValue,
-                NSDecimalNumber(decimal: netAmount(for: transaction)).stringValue,
-            ]
-            return searchValues.contains { normalizedSearchText($0).contains(query) }
+        let query = normalizedSearchText(searchText)
+        let selectedTagName = tagFilterID.flatMap { tagID in
+            tags.first(where: { $0.stableID == tagID })?.name
         }
+        let refundTotals = snapshot.refundTotals
+        var filtered: [MoneyTransaction] = []
+        filtered.reserveCapacity(active.count)
+        var summary = TransactionListSummary()
+        var netAmounts: [UUID: Decimal] = [:]
+        netAmounts.reserveCapacity(active.count)
+
+        for transaction in active {
+            if let kindFilter, transaction.kind != kindFilter { continue }
+            if let accountFilterID, transaction.account?.stableID != accountFilterID { continue }
+            if let selectedTagName, !transaction.tags.contains(selectedTagName) { continue }
+            if let start, transaction.date < start { continue }
+            if let endExclusive, transaction.date >= endExclusive { continue }
+
+            let netAmount = LedgerPolicy.netAmount(
+                of: snapshot.record(for: transaction),
+                refundTotals: refundTotals
+            )
+            let displayedAmount = absolute(netAmount)
+            if let minimumAmount, displayedAmount < minimumAmount { continue }
+            if let maximumAmount, displayedAmount > maximumAmount { continue }
+
+            if !query.isEmpty {
+                let categoryName = transaction.category?.name
+                    ?? (transaction.kind == .transfer ? "转账" : "未分类")
+                let searchValues = [
+                    categoryName,
+                    transaction.category?.key ?? "",
+                    transaction.note,
+                    transaction.account?.name ?? "",
+                    transaction.toAccount?.name ?? "",
+                    transaction.orderNo,
+                    transaction.tags.joined(separator: " "),
+                    transaction.amount.description,
+                    netAmount.description,
+                    NSDecimalNumber(decimal: transaction.amount).stringValue,
+                    NSDecimalNumber(decimal: netAmount).stringValue,
+                ]
+                guard searchValues.contains(where: { normalizedSearchText($0).contains(query) }) else {
+                    continue
+                }
+            }
+
+            filtered.append(transaction)
+            netAmounts[transaction.stableID] = netAmount
+            guard !transaction.isExcluded else { continue }
+            switch transaction.kind {
+            case .expense where netAmount > 0:
+                summary.expense += netAmount
+                summary.expenseCount += 1
+            case .income where netAmount > 0:
+                summary.income += netAmount
+                summary.incomeCount += 1
+            default:
+                break
+            }
+        }
+
+        var grouped: [Date: [MoneyTransaction]] = [:]
+        grouped.reserveCapacity(filtered.count)
+        for transaction in filtered {
+            grouped[calendar.startOfDay(for: transaction.date), default: []].append(transaction)
+        }
+        let sections = grouped.keys.sorted(by: >).map { day in
+            let items = grouped[day] ?? []
+            var expense = Decimal(0)
+            var income = Decimal(0)
+            for transaction in items where !transaction.isExcluded {
+                let amount = netAmounts[transaction.stableID] ?? 0
+                switch transaction.kind {
+                case .expense:
+                    expense += Swift.max(amount, Decimal.zero)
+                case .income:
+                    income += Swift.max(amount, Decimal.zero)
+                case .transfer:
+                    break
+                }
+            }
+            return TransactionDaySection(
+                day: day,
+                items: items,
+                expense: expense,
+                income: income,
+                currencyCode: items.first?.currencyCode ?? "CNY"
+            )
+        }
+
+        return TransactionListProjection(
+            filtered: filtered,
+            summary: summary,
+            sections: sections,
+            refundByID: refundTotals.mapValues { $0 < 0 ? -$0 : $0 }
+        )
     }
 
     private var hasActiveFilters: Bool {
@@ -86,36 +146,30 @@ struct TransactionListView: View {
             !maximumAmountText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
-    private var summary: TransactionListSummary {
-        filtered.reduce(into: TransactionListSummary()) { result, transaction in
-            guard !transaction.isExcluded else { return }
-            let amount = netAmount(for: transaction)
-            switch transaction.kind {
-            case .expense where amount > 0:
-                result.expense += amount
-                result.expenseCount += 1
-            case .income where amount > 0:
-                result.income += amount
-                result.incomeCount += 1
-            default:
-                break
-            }
-        }
-    }
-
-    private var sections: [(day: Date, items: [MoneyTransaction])] {
-        let calendar = Calendar.current
-        return Dictionary(grouping: filtered) { calendar.startOfDay(for: $0.date) }
-            .sorted { $0.key > $1.key }
-            .map { (day: $0.key, items: $0.value) }
-    }
-
-    private var refundByID: [UUID: Decimal] {
-        LedgerPolicy.refundTotals(from: scopedTransactions.map(\.record))
-            .mapValues { $0 < 0 ? -$0 : $0 }
-    }
-
     var body: some View {
+        let snapshot = projectionCache.snapshot(
+            for: transactions,
+            selectedBookID: router.selectedBookID
+        )
+        let projection = listProjectionCache.projection(
+            for: snapshot,
+            filter: TransactionListFilterKey(
+                searchText: normalizedSearchText(searchText),
+                kind: kindFilter,
+                accountID: accountFilterID,
+                tagID: tagFilterID,
+                tagName: tagFilterID.flatMap { tagID in
+                    tags.first(where: { $0.stableID == tagID })?.name
+                },
+                fromDate: fromDate,
+                toDate: toDate,
+                minimumAmountText: minimumAmountText,
+                maximumAmountText: maximumAmountText
+            )
+        ) {
+            makeProjection(from: snapshot)
+        }
+
         Group {
                 if transactions.isEmpty {
                     ContentUnavailableView(
@@ -123,14 +177,14 @@ struct TransactionListView: View {
                         systemImage: "tray",
                         description: Text("去「记一笔」页开始记账吧")
                     )
-                } else if filtered.isEmpty {
+                } else if projection.filtered.isEmpty {
                     ContentUnavailableView(
                         "没有匹配账目",
                         systemImage: "line.3.horizontal.decrease.circle",
                         description: Text("试试调整搜索条件或筛选范围")
                     )
                 } else {
-                    list
+                    list(projection)
                 }
             }
             .navigationTitle(searchMode ? "搜索" : "明细")
@@ -191,19 +245,19 @@ struct TransactionListView: View {
             }
     }
 
-    private var list: some View {
+    private func list(_ projection: TransactionListProjection) -> some View {
         List {
             if !searchText.isEmpty || hasActiveFilters {
                 Section {
-                    summaryCard
+                    summaryCard(projection.summary)
                 }
             }
-            ForEach(sections, id: \.day) { section in
+            ForEach(projection.sections, id: \.day) { section in
                 Section {
                     ForEach(section.items) { transaction in
                         TransactionRow(
                             transaction: transaction,
-                            refundAmount: refundByID[transaction.stableID] ?? 0
+                            refundAmount: projection.refundByID[transaction.stableID] ?? 0
                         )
                             .contentShape(Rectangle())
                             .onTapGesture { editingTransaction = transaction }
@@ -226,7 +280,7 @@ struct TransactionListView: View {
         .listStyle(.plain)
     }
 
-    private var summaryCard: some View {
+    private func summaryCard(_ summary: TransactionListSummary) -> some View {
         HStack(spacing: 0) {
             summaryColumn(
                 title: "支出",
@@ -262,33 +316,19 @@ struct TransactionListView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private func sectionHeader(_ section: (day: Date, items: [MoneyTransaction])) -> some View {
-        let expense = section.items
-            .filter { $0.kind == .expense && !$0.isExcluded }
-            .reduce(Decimal(0)) { $0 + Swift.max(netAmount(for: $1), Decimal.zero) }
-        let income = section.items
-            .filter { $0.kind == .income && !$0.isExcluded }
-            .reduce(Decimal(0)) { $0 + Swift.max(netAmount(for: $1), Decimal.zero) }
+    private func sectionHeader(_ section: TransactionDaySection) -> some View {
         return HStack {
             Text(section.day, format: .dateTime.month().day().weekday())
             Spacer()
-            if expense > 0 {
-                Text("支出 \(MoneyFormat.string(expense, currencyCode: section.items.first?.currencyCode ?? "CNY"))")
+            if section.expense > 0 {
+                Text("支出 \(MoneyFormat.string(section.expense, currencyCode: section.currencyCode))")
             }
-            if income > 0 {
-                Text("收入 \(MoneyFormat.string(income, currencyCode: section.items.first?.currencyCode ?? "CNY"))")
+            if section.income > 0 {
+                Text("收入 \(MoneyFormat.string(section.income, currencyCode: section.currencyCode))")
                     .foregroundStyle(Color.income)
             }
         }
         .font(.footnote)
-    }
-
-    private func netAmount(for transaction: MoneyTransaction) -> Decimal {
-        LedgerPolicy.netAmount(of: transaction.record, refundTotals: refundTotals)
-    }
-
-    private var refundTotals: [UUID: Decimal] {
-        LedgerPolicy.refundTotals(from: scopedTransactions.map(\.record))
     }
 
     private func parsedAmount(_ text: String) -> Decimal? {
@@ -360,6 +400,57 @@ private struct TransactionListSummary {
     var expenseCount = 0
     var income: Decimal = 0
     var incomeCount = 0
+}
+
+private struct TransactionDaySection {
+    let day: Date
+    let items: [MoneyTransaction]
+    let expense: Decimal
+    let income: Decimal
+    let currencyCode: String
+}
+
+private struct TransactionListProjection {
+    let filtered: [MoneyTransaction]
+    let summary: TransactionListSummary
+    let sections: [TransactionDaySection]
+    let refundByID: [UUID: Decimal]
+}
+
+private struct TransactionListFilterKey: Equatable {
+    let searchText: String
+    let kind: TransactionKind?
+    let accountID: UUID?
+    let tagID: UUID?
+    let tagName: String?
+    let fromDate: Date?
+    let toDate: Date?
+    let minimumAmountText: String
+    let maximumAmountText: String
+}
+
+private final class TransactionListProjectionCache {
+    private var lastRevision: IOSLedgerDataRevision?
+    private var lastFilter: TransactionListFilterKey?
+    private var lastProjection: TransactionListProjection?
+
+    func projection(
+        for snapshot: IOSLedgerSnapshot,
+        filter: TransactionListFilterKey,
+        build: () -> TransactionListProjection
+    ) -> TransactionListProjection {
+        if let lastProjection,
+           lastRevision == snapshot.revision,
+           lastFilter == filter {
+            return lastProjection
+        }
+
+        let projection = build()
+        lastRevision = snapshot.revision
+        lastFilter = filter
+        lastProjection = projection
+        return projection
+    }
 }
 
 private struct TransactionFilterValues {
