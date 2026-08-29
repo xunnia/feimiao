@@ -77,12 +77,16 @@ jobs:
             test -x "$gradle_bin"
             echo "GRADLE_BIN=$gradle_bin"
             "$gradle_bin" --version
-            test -f gradlew
-            ls -l gradlew
-            cp gradlew gradlew-wrapper-original
+            if [ -f gradlew ]; then
+              echo "Existing gradlew found; preserving it for diagnostics"
+              ls -l gradlew
+              cp gradlew gradlew-wrapper-original
+            else
+              echo "No tracked gradlew found; creating a system-Gradle shim"
+            fi
             printf '#!/usr/bin/env bash\nexec "%s" "$@"\n' "$gradle_bin" > gradlew
             chmod 755 gradlew
-            ls -l gradlew gradlew-wrapper-original
+            ls -l gradlew gradlew-wrapper-original 2>/dev/null || ls -l gradlew
             ./gradlew --version
             echo "ANDROID_GRADLE_ROUTE_END status=0"
           } 2>&1 | tee "$route_log"
