@@ -39,7 +39,8 @@ jobs:
         working-directory: android-app
         run: flutter pub get
       - name: Setup Gradle 9.1 for GitHub runner
-        uses: gradle/actions/setup-gradle@v4
+        id: setup-gradle
+        uses: gradle/actions/setup-gradle@v6
         with:
           gradle-version: "9.1.0"
       - name: Route Flutter through cached Gradle
@@ -52,14 +53,34 @@ jobs:
             echo "PWD=$PWD"
             echo "JAVA_HOME=${JAVA_HOME:-}"
             echo "GRADLE_HOME=${GRADLE_HOME:-}"
+            echo "RUNNER_TOOL_CACHE=${RUNNER_TOOL_CACHE:-}"
             command -v java || true
             command -v gradle || true
             java -version
-            gradle --version
+
+            gradle_bin="$(command -v gradle || true)"
+            if [ -z "$gradle_bin" ] && [ -n "${GRADLE_HOME:-}" ]; then
+              candidate="$GRADLE_HOME/bin/gradle"
+              if [ -x "$candidate" ]; then gradle_bin="$candidate"; fi
+            fi
+            if [ -z "$gradle_bin" ]; then
+              for search_root in "${RUNNER_TOOL_CACHE:-}" "$HOME/.gradle"; do
+                if [ -z "$search_root" ] || [ ! -d "$search_root" ]; then continue; fi
+                candidate="$(find "$search_root" -type f -path '*/bin/gradle' -perm -111 2>/dev/null | head -n 1)"
+                if [ -n "$candidate" ]; then
+                  gradle_bin="$candidate"
+                  break
+                fi
+              done
+            fi
+            test -n "$gradle_bin"
+            test -x "$gradle_bin"
+            echo "GRADLE_BIN=$gradle_bin"
+            "$gradle_bin" --version
             test -f gradlew
             ls -l gradlew
             cp gradlew gradlew-wrapper-original
-            printf '#!/usr/bin/env bash\nexec gradle "$@"\n' > gradlew
+            printf '#!/usr/bin/env bash\nexec "%s" "$@"\n' "$gradle_bin" > gradlew
             chmod 755 gradlew
             ls -l gradlew gradlew-wrapper-original
             ./gradlew --version
