@@ -53,12 +53,16 @@ void main() {
     // The emulator may retain a previous theme preference between AVD jobs.
     // Parity evidence must use the Android default warm light presentation.
     final theme = AppThemeController.instance;
-    await theme.load();
     theme.setPreset('warm');
     theme.setIntensity(1.0);
     theme.setCardAlpha(0.40);
-    await theme.persistNow();
     await _pumpFor(tester, const Duration(seconds: 2));
+    // App startup loads the persisted preference asynchronously. Apply the
+    // capture baseline again after that window without awaiting disk I/O.
+    theme.setPreset('warm');
+    theme.setIntensity(1.0);
+    theme.setCardAlpha(0.40);
+    await _pumpFor(tester, const Duration(milliseconds: 500));
 
     final repo = _repositoryFromNavigator();
     await repo.fullyReady;
