@@ -20,6 +20,9 @@ struct AccountsView: View {
     @State private var showAddSheet = false
     @State private var editingAccount: Account?
     @State private var errorMessage: String?
+    let opensFirstDetail: Bool
+    @State private var launchDetailAccount: Account?
+    @State private var didOpenLaunchDetail = false
 
     private var activeAccounts: [Account] {
         accounts.filter { !$0.isDeleted && $0.status == .active }
@@ -27,6 +30,10 @@ struct AccountsView: View {
 
     private var archivedAccounts: [Account] {
         accounts.filter { $0.isDeleted || $0.status != .active }
+    }
+
+    init(opensFirstDetail: Bool = false) {
+        self.opensFirstDetail = opensFirstDetail
     }
 
     var body: some View {
@@ -107,6 +114,10 @@ struct AccountsView: View {
             AccountEditorSheet(account: account, nextSortOrder: account.sortOrder)
                 .presentationDetents([.medium, .large])
         }
+        .sheet(item: $launchDetailAccount) { account in
+            AccountDetailView(account: account)
+                .presentationDetents([.large])
+        }
         .alert("操作失败", isPresented: Binding(
             get: { errorMessage != nil },
             set: { if !$0 { errorMessage = nil } }
@@ -114,6 +125,12 @@ struct AccountsView: View {
             Button("好") { errorMessage = nil }
         } message: {
             Text(errorMessage ?? "")
+        }
+        .onAppear {
+            guard opensFirstDetail, !didOpenLaunchDetail,
+                  let account = activeAccounts.first else { return }
+            didOpenLaunchDetail = true
+            launchDetailAccount = account
         }
     }
 

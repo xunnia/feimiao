@@ -172,6 +172,7 @@ jobs:
           shoot net-worth 15-net-worth
           shoot books 16-books
           shoot settings/accounts 17-accounts
+          shoot settings/accounts/detail 39-account-detail
           shoot settings/categories 18-categories
           shoot settings/tags 19-tags
           shoot settings 20-settings

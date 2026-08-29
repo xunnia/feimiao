@@ -12,6 +12,7 @@ import 'package:qingji/data/app_repository.dart';
 import 'package:qingji/main.dart' as app;
 import 'package:qingji/share_intake.dart';
 import 'package:qingji/views/assistant/meow_assistant_view.dart';
+import 'package:qingji/views/assets/account_detail_page.dart';
 import 'package:qingji/views/quick_add/quick_add_view.dart';
 import 'package:qingji/views/assets/physical_asset_detail_page.dart';
 import 'package:qingji/views/reports/report_views.dart';
@@ -240,6 +241,14 @@ void main() {
         assetId: detailAsset.id,
         fallbackAsset: detailAsset,
       ),
+      binding,
+    );
+    final detailAccount = repo.transactionAccounts
+        .firstWhere((account) => account.type == AccountType.cash);
+    await _capturePage(
+      tester,
+      'account-detail-android',
+      AccountDetailPage(account: detailAccount),
       binding,
     );
     await _capturePage(

@@ -33,7 +33,7 @@ final class AppRouter {
 
     /// 设置页接到深链后要 push 的子页面。
     enum SettingsDestination: Hashable {
-        case books, accounts, categories, tags, memory, aiMemory, aiTasks, aiExtensions, aiSchedules, aiSearch, aiDiagnostics, aiLocal, budget, reconcile, reimburse, savings, recurring, assets, assetDetail, liabilities, netWorth, importReview, importExport, reports, backup, display, theme, moneyDisplay, autoRecord, ai
+        case books, accounts, accountDetail, categories, tags, memory, aiMemory, aiTasks, aiExtensions, aiSchedules, aiSearch, aiDiagnostics, aiLocal, budget, reconcile, reimburse, savings, recurring, assets, assetDetail, liabilities, netWorth, importReview, importExport, reports, backup, display, theme, moneyDisplay, autoRecord, ai
     }
     var settingsPushTarget: SettingsDestination? = nil
 
@@ -122,6 +122,9 @@ final class AppRouter {
             selectedTab = .settings
             settingsPushTarget = .assetDetail
         case "assets":       selectedTab = .settings;   settingsPushTarget = .assets
+        case "accounts-detail", "accounts/detail":
+            selectedTab = .settings
+            settingsPushTarget = .accountDetail
         case "liabilities":  selectedTab = .settings;   settingsPushTarget = .liabilities
         case "net-worth":    selectedTab = .settings;   settingsPushTarget = .netWorth
         case "import-review": selectedTab = .settings; settingsPushTarget = .importReview
@@ -184,7 +187,10 @@ final class AppRouter {
             case "reconcile": settingsPushTarget = .reconcile
             case "reimburse": settingsPushTarget = .reimburse
             case "books":     settingsPushTarget = .books
-            case "accounts":  settingsPushTarget = .accounts
+            case "accounts":
+                settingsPushTarget = path.dropFirst().first == "detail"
+                    ? .accountDetail
+                    : .accounts
             case "categories": settingsPushTarget = .categories
             case "tags":      settingsPushTarget = .tags
             case "memory":    settingsPushTarget = .memory

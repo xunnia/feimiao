@@ -103,6 +103,7 @@ struct SettingsView: View {
         case .ai:        AIProviderSettingsView()
         case .books:     BooksView()
         case .accounts:  AccountsView()
+        case .accountDetail: AccountsView(opensFirstDetail: true)
         case .categories: CategoriesView()
         case .tags:      TagsView()
         case .memory:    MemoryView()
