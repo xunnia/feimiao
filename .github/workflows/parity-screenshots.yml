@@ -229,18 +229,30 @@ jobs:
             --root . \
             --output ci-artifacts/screenshot-report.json \
             --require-complete
+      - name: Build visual Android/iOS comparison sheets
+        run: |
+          python3 ios-app/tools/make_ios_ui_comparisons.py \
+            --root . \
+            --manifest ios-app/tools/screenshot_manifest.json \
+            --output-dir ci-artifacts/parity-comparisons
       - uses: actions/upload-artifact@v4
         with:
           name: parity-screenshot-report
           path: |
             ci-artifacts/screenshot-report.json
             ci-artifacts/screenshot-report.md
+      - uses: actions/upload-artifact@v4
+        with:
+          name: parity-visual-comparisons
+          path: ci-artifacts/parity-comparisons/*.png
+          if-no-files-found: error
       - name: Commit parity report back to branch
         if: github.event_name == 'push'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add -f ci-artifacts/screenshot-report.json ci-artifacts/screenshot-report.md
+          git add -f ci-artifacts/parity-comparisons
           if git diff --cached --quiet; then
             echo "双端截图报告无变化，跳过提交"
             exit 0

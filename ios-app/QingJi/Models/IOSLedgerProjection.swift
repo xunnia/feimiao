@@ -40,43 +40,83 @@ struct IOSLedgerDataRevision: Equatable, Hashable {
     let digest: Int
 
     init(_ transactions: [MoneyTransaction], selectedBookID: UUID? = nil) {
-        var hasher = Hasher()
-        hasher.combine(transactions.count)
-        hasher.combine(selectedBookID)
+        var state: UInt64 = 14_695_981_039_346_656_037
+        state = Self.mix(state, UInt64(transactions.count))
+        state = Self.mix(state, Self.uuidBits(selectedBookID))
         for transaction in transactions {
-            hasher.combine(transaction.stableID)
-            hasher.combine(transaction.amount.description)
-            hasher.combine(transaction.kindRaw)
-            hasher.combine(transaction.date)
-            hasher.combine(transaction.note)
-            hasher.combine(transaction.merchantName)
-            hasher.combine(transaction.productName)
-            hasher.combine(transaction.currencyCode)
-            hasher.combine(transaction.updatedAt)
-            hasher.combine(transaction.timePrecisionRaw)
-            hasher.combine(transaction.settledAt)
-            hasher.combine(transaction.settlementAccountID)
-            hasher.combine(transaction.eventTypeRaw)
-            hasher.combine(transaction.attachmentPath)
-            hasher.combine(transaction.orderNo)
-            hasher.combine(transaction.recurringRuleID)
-            hasher.combine(transaction.reimbursable)
-            hasher.combine(transaction.refundOfID)
-            hasher.combine(transaction.isReimbursed)
-            hasher.combine(transaction.isExcluded)
-            hasher.combine(transaction.tagNames)
-            hasher.combine(transaction.category?.key ?? "")
-            hasher.combine(transaction.category?.name ?? "")
-            hasher.combine(transaction.category?.parentKey ?? "")
-            hasher.combine(transaction.account?.stableID)
-            hasher.combine(transaction.account?.name ?? "")
-            hasher.combine(transaction.toAccount?.stableID)
-            hasher.combine(transaction.toAccount?.name ?? "")
-            hasher.combine(transaction.book?.stableID)
-            hasher.combine(transaction.book?.includeInTotal)
+            state = Self.mix(state, Self.uuidBits(transaction.stableID))
+            state = Self.mix(state, Self.stringBits(transaction.amount.description))
+            state = Self.mix(state, Self.stringBits(transaction.kindRaw))
+            state = Self.mix(state, transaction.date.timeIntervalSinceReferenceDate.bitPattern)
+            state = Self.mix(state, Self.stringBits(transaction.note))
+            state = Self.mix(state, Self.stringBits(transaction.merchantName))
+            state = Self.mix(state, Self.stringBits(transaction.productName))
+            state = Self.mix(state, Self.stringBits(transaction.currencyCode))
+            state = Self.mix(state, transaction.updatedAt.timeIntervalSinceReferenceDate.bitPattern)
+            state = Self.mix(state, Self.stringBits(transaction.timePrecisionRaw))
+            state = Self.mix(state, Self.dateBits(transaction.settledAt))
+            state = Self.mix(state, Self.uuidBits(transaction.settlementAccountID))
+            state = Self.mix(state, Self.stringBits(transaction.eventTypeRaw))
+            state = Self.mix(state, Self.stringBits(transaction.attachmentPath))
+            state = Self.mix(state, Self.stringBits(transaction.orderNo))
+            state = Self.mix(state, Self.uuidBits(transaction.recurringRuleID))
+            state = Self.mix(state, Self.boolBits(
+                transaction.reimbursable,
+                transaction.refundOfID != nil,
+                transaction.isReimbursed,
+                transaction.isExcluded
+            ))
+            state = Self.mix(state, Self.uuidBits(transaction.refundOfID))
+            state = Self.mix(state, Self.stringBits(transaction.tagNames))
+            state = Self.mix(state, Self.stringBits(transaction.category?.key ?? ""))
+            state = Self.mix(state, Self.stringBits(transaction.category?.name ?? ""))
+            state = Self.mix(state, Self.stringBits(transaction.category?.parentKey ?? ""))
+            state = Self.mix(state, Self.dateBits(transaction.category?.updatedAt))
+            state = Self.mix(state, Self.uuidBits(transaction.account?.stableID))
+            state = Self.mix(state, Self.stringBits(transaction.account?.name ?? ""))
+            state = Self.mix(state, Self.dateBits(transaction.account?.updatedAt))
+            state = Self.mix(state, Self.uuidBits(transaction.toAccount?.stableID))
+            state = Self.mix(state, Self.stringBits(transaction.toAccount?.name ?? ""))
+            state = Self.mix(state, Self.dateBits(transaction.toAccount?.updatedAt))
+            state = Self.mix(state, Self.uuidBits(transaction.book?.stableID))
+            state = Self.mix(state, Self.stringBits(transaction.book?.name ?? ""))
+            state = Self.mix(state, Self.boolBits(transaction.book?.includeInTotal ?? true))
+            state = Self.mix(state, Self.dateBits(transaction.book?.updatedAt))
         }
         count = transactions.count
-        digest = hasher.finalize()
+        digest = Int(truncatingIfNeeded: state)
+    }
+
+    private static func mix(_ state: UInt64, _ value: UInt64) -> UInt64 {
+        var result = (state ^ value) &* 1_099_511_628_211
+        result ^= result >> 31
+        return result
+    }
+
+    private static func stringBits(_ value: String) -> UInt64 {
+        var result: UInt64 = 14_695_981_039_346_656_037
+        for byte in value.utf8 {
+            result ^= UInt64(byte)
+            result &*= 1_099_511_628_211
+        }
+        return result
+    }
+
+    private static func uuidBits(_ value: UUID?) -> UInt64 {
+        guard let value else { return 0 }
+        return stringBits(value.uuidString)
+    }
+
+    private static func dateBits(_ value: Date?) -> UInt64 {
+        value?.timeIntervalSinceReferenceDate.bitPattern ?? 0
+    }
+
+    private static func boolBits(_ values: Bool...) -> UInt64 {
+        var result: UInt64 = 0
+        for (offset, value) in values.enumerated() where value {
+            result |= UInt64(1) << UInt64(offset)
+        }
+        return result
     }
 }
 
