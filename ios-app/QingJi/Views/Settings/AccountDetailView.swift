@@ -181,7 +181,7 @@ struct AccountDetailView: View {
                     Image(systemName: "ellipsis")
                         .frame(width: 44, height: 44)
                 }
-                .buttonStyle(.glass)
+                .buttonStyle(.glass(.clear))
                 .accessibilityLabel("账户操作")
             }
         }
@@ -286,7 +286,7 @@ struct AccountDetailView: View {
                 .padding(14)
                 .contentShape(Rectangle())
             }
-            .buttonStyle(.glass)
+            .buttonStyle(.glass(.clear))
         }
         .glassEffect(.regular, in: .rect(cornerRadius: 14))
     }
@@ -343,7 +343,7 @@ struct AccountDetailView: View {
                             checkpointToReverse = checkpoint
                         }
                         .font(.caption.weight(.semibold))
-                        .buttonStyle(.glass)
+                        .buttonStyle(.glass(.clear))
                         .controlSize(.small)
                     } else {
                         Text("已撤销")

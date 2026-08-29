@@ -346,7 +346,7 @@ struct AIQuickEntryView: View {
                     }
                     .font(.subheadline)
                 }
-                .buttonStyle(.glass)
+                .buttonStyle(.glass(.clear))
 
                 Text(entry.date, format: entry.timePrecision.carriesClock
                      ? .dateTime.month().day().hour().minute()

@@ -68,7 +68,7 @@ struct MonthlyStatsView: View {
             } label: {
                 Image(systemName: "chevron.left")
             }
-            .buttonStyle(.glass)
+            .buttonStyle(.glass(.clear))
             Spacer()
             Text(displayedMonth, format: .dateTime.year().month())
                 .font(.headline)
@@ -78,7 +78,7 @@ struct MonthlyStatsView: View {
             } label: {
                 Image(systemName: "chevron.right")
             }
-            .buttonStyle(.glass)
+            .buttonStyle(.glass(.clear))
             .disabled(Calendar.current.isDate(displayedMonth, equalTo: AppClock.now, toGranularity: .month))
         }
     }
@@ -90,7 +90,7 @@ struct MonthlyStatsView: View {
             } label: {
                 Image(systemName: "chevron.left")
             }
-            .buttonStyle(.glass)
+            .buttonStyle(.glass(.clear))
             Spacer()
             VStack(spacing: 2) {
                 Text("本周")
@@ -107,7 +107,7 @@ struct MonthlyStatsView: View {
             } label: {
                 Image(systemName: "chevron.right")
             }
-            .buttonStyle(.glass)
+            .buttonStyle(.glass(.clear))
             .disabled(weekEnd >= Calendar.current.startOfDay(for: AppClock.now))
         }
     }
@@ -119,7 +119,7 @@ struct MonthlyStatsView: View {
             } label: {
                 Image(systemName: "chevron.left")
             }
-            .buttonStyle(.glass)
+            .buttonStyle(.glass(.clear))
             Spacer()
             Text(displayedMonth, format: .dateTime.year())
                 .font(.headline)
@@ -129,7 +129,7 @@ struct MonthlyStatsView: View {
             } label: {
                 Image(systemName: "chevron.right")
             }
-            .buttonStyle(.glass)
+            .buttonStyle(.glass(.clear))
             .disabled(Calendar.current.component(.year, from: displayedMonth) >= Calendar.current.component(.year, from: AppClock.now))
         }
     }

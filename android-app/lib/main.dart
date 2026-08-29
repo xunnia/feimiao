@@ -45,6 +45,8 @@ import 'views/transactions/reimburse_view.dart';
 import 'views/transactions/transaction_list_view.dart';
 import 'widgets/app_page_route.dart';
 
+const bool _parityCapture = bool.fromEnvironment('QINGJI_PARITY_CAPTURE');
+
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(

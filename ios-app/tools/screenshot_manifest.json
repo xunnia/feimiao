@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
   "baseline": {
-    "androidVersion": "1.274.0+288",
-    "androidWatermark": "b0830-288",
+    "androidVersion": "1.275.0+289",
+    "androidWatermark": "b0830-289",
     "androidDatabaseVersion": 48,
     "iosDeploymentTarget": "26.0",
     "fixture": "QINGJI_DEMO=1; QINGJI_DEMO_NOW=2026-08-27T12:00:00+08:00"

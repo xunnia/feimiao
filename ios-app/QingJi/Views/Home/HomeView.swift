@@ -124,7 +124,7 @@ struct HomeView: View {
                             .font(.title3)
                             .frame(width: 44, height: 44)
                     }
-                    .buttonStyle(.glass)
+                    .buttonStyle(.glass(.clear))
                     .accessibilityLabel("打开菜单")
                 }
             ToolbarItem(placement: .topBarTrailing) {
@@ -135,7 +135,7 @@ struct HomeView: View {
                         .font(.title3)
                         .frame(width: 44, height: 44)
                 }
-                .buttonStyle(.glass)
+                .buttonStyle(.glass(.clear))
                 .accessibilityLabel("搜索明细")
             }
             ToolbarItem(placement: .topBarTrailing) {
@@ -164,7 +164,7 @@ struct HomeView: View {
                     .frame(minWidth: 100, minHeight: 44)
                     .padding(.horizontal, 8)
                 }
-                .buttonStyle(.glass)
+                .buttonStyle(.glass(.clear))
                 .accessibilityLabel("当前账本：\(selectedBookName)")
             }
             }
@@ -212,7 +212,7 @@ struct HomeView: View {
                     .font(.subheadline.weight(.medium))
                     .foregroundStyle(.primary)
                 }
-                .buttonStyle(.glass)
+                .buttonStyle(.glass(.clear))
                 .accessibilityLabel("选择月份")
 
                 Button {
@@ -229,7 +229,7 @@ struct HomeView: View {
                     .padding(.horizontal, 10)
                     .frame(minHeight: 28)
                 }
-                .buttonStyle(.glass)
+                .buttonStyle(.glass(.clear))
                 .accessibilityLabel("查看统计")
                 Spacer()
             }
@@ -404,7 +404,7 @@ private struct NoBudgetSummaryBody: View {
                         .labelStyle(TrailingIconLabelStyle())
                         .font(.caption)
                 }
-                .buttonStyle(.glass)
+                .buttonStyle(.glass(.clear))
                 .foregroundStyle(Color.accentColor)
             }
         }
@@ -532,7 +532,7 @@ private struct HomeRecordInputBar: View {
                             .font(.headline.weight(.semibold))
                             .frame(width: 42, height: 42)
                     }
-                    .buttonStyle(.glass)
+                    .buttonStyle(.glass(.clear))
                     .glassEffectID("entry-add", in: glassNamespace)
                     .accessibilityLabel("添加一笔")
 
@@ -549,7 +549,7 @@ private struct HomeRecordInputBar: View {
                         .padding(.horizontal, 12)
                         .frame(height: 36)
                     }
-                    .buttonStyle(.glass)
+                    .buttonStyle(.glass(.clear))
                     .glassEffectID(isAIMode ? "entry-ai" : "entry-manual", in: glassNamespace)
                     .accessibilityLabel("切换到\(isAIMode ? "手动记账" : "AI 记账")")
 
@@ -569,22 +569,13 @@ private struct HomeRecordInputBar: View {
         }
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .glassEffect(.regular, in: .rect(cornerRadius: 26))
+        .glassEffect(
+            .regular.tint(Color.accentColor.opacity(0.10)),
+            in: .rect(cornerRadius: 26)
+        )
         .padding(.horizontal, 12)
         .padding(.top, 8)
         .padding(.bottom, 10)
-        .background {
-            LinearGradient(
-                colors: [
-                    Color(.systemGroupedBackground).opacity(0),
-                    Color(.systemGroupedBackground).opacity(0.92),
-                    Color(.systemGroupedBackground)
-                ],
-                startPoint: .top,
-                endPoint: .bottom
-            )
-            .ignoresSafeArea(edges: .bottom)
-        }
         .sheet(isPresented: $showManualEntry) {
             QuickAddView()
                 .presentationDetents([.large])

@@ -239,7 +239,7 @@ struct PhysicalAssetDetailView: View {
                 .font(.subheadline.weight(.medium))
                 .frame(maxWidth: .infinity, minHeight: 42)
         }
-        .buttonStyle(.glass)
+        .buttonStyle(.glass(.clear))
         .tint(.accentColor)
         .disabled(!enabled)
         .accessibilityLabel(title)

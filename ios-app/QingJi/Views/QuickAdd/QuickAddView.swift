@@ -274,7 +274,7 @@ struct QuickAddView: View {
                     Label("更多", systemImage: "ellipsis.circle")
                         .font(.subheadline)
                 }
-                .buttonStyle(.glass)
+                .buttonStyle(.glass(.clear))
             }
             .padding(.horizontal)
             .padding(.vertical, 8)

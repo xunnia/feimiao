@@ -85,7 +85,7 @@ struct MeowAssistantView: View {
                                 Image(systemName: "bubble.left.and.bubble.right")
                                     .frame(width: 38, height: 38)
                             }
-                            .buttonStyle(.glass)
+                            .buttonStyle(.glass(.clear))
                             .accessibilityLabel("Chats")
                             NavigationLink {
                                 AIProviderSettingsView()
@@ -93,7 +93,7 @@ struct MeowAssistantView: View {
                                 Image(systemName: "gearshape")
                                     .frame(width: 38, height: 38)
                             }
-                            .buttonStyle(.glass)
+                            .buttonStyle(.glass(.clear))
                             .accessibilityLabel("AI 设置")
                         }
                     }
@@ -339,7 +339,7 @@ struct MeowAssistantView: View {
                         .font(.headline.weight(.semibold))
                         .frame(width: 34, height: 34)
                 }
-                .buttonStyle(.glass)
+                .buttonStyle(.glass(.clear))
                 .accessibilityLabel("添加附件")
 
                 TextField("问问你的账本", text: $draft, axis: .vertical)
@@ -371,7 +371,10 @@ struct MeowAssistantView: View {
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
-        .glassEffect(.regular, in: .rect(cornerRadius: 26))
+        .glassEffect(
+            .regular.tint(Color.accentColor.opacity(0.08)),
+            in: .rect(cornerRadius: 26)
+        )
         .padding(.horizontal, 12)
         .onChange(of: photoItems) { _, items in
             guard !items.isEmpty else { return }
@@ -1185,7 +1188,7 @@ private struct AIRecordCardView: View {
                 HStack {
                     if let onUndo, !card.rolledBack {
                         Button("撤销本次 AI 记账", action: onUndo)
-                            .buttonStyle(.glass)
+                            .buttonStyle(.glass(.clear))
                     }
                     ForEach(Array(card.entries.enumerated()), id: \.offset) { index, _ in
                         if !card.deletedIndices.contains(index), let onDeleteEntry {
@@ -1194,7 +1197,7 @@ private struct AIRecordCardView: View {
                             } label: {
                                 Image(systemName: "trash")
                             }
-                            .buttonStyle(.glass)
+                            .buttonStyle(.glass(.clear))
                             .accessibilityLabel("删除第 \(index + 1) 笔")
                         }
                     }
@@ -1235,7 +1238,7 @@ private struct AIRecordCardView: View {
             Label("改分类", systemImage: "tag")
                 .font(.caption)
         }
-        .buttonStyle(.glass)
+        .buttonStyle(.glass(.clear))
     }
 }
 

@@ -229,7 +229,7 @@ private struct AppDrawerView: View {
                         Image(systemName: "xmark")
                             .frame(width: 38, height: 38)
                     }
-                    .buttonStyle(.glass)
+                    .buttonStyle(.glass(.clear))
                     .accessibilityLabel("关闭菜单")
                 }
                 .padding(.horizontal, 16)
@@ -321,7 +321,7 @@ private struct AppDrawerView: View {
             .frame(minHeight: 48)
             .background(selected ? Color.accentColor.opacity(0.12) : .clear, in: .rect(cornerRadius: 12))
         }
-         .buttonStyle(.glass)
+         .buttonStyle(.glass(.clear))
     }
 }
 

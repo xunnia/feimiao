@@ -36,7 +36,7 @@ struct LiquidGlassChrome: ViewModifier {
     func body(content: Content) -> some View {
         content
             .tint(Color.accentColor)
-            .buttonStyle(.glass)
+            .buttonStyle(.glass(.clear))
             .toolbarBackground(.hidden, for: .navigationBar)
     }
 }
@@ -71,7 +71,7 @@ struct LiquidGlassIconButton: View {
                 .font(.headline.weight(.semibold))
                 .frame(width: 44, height: 44)
         }
-        .buttonStyle(.glass)
+        .buttonStyle(.glass(.clear))
         .accessibilityLabel(accessibilityLabel)
     }
 }
@@ -99,7 +99,7 @@ struct LiquidGlassPillButton: View {
             Button(action: action) {
                 Text(title)
             }
-                .buttonStyle(.glass)
+                .buttonStyle(.glass(.clear))
         }
     }
 }

@@ -63,7 +63,7 @@ struct AmountKeypad: View {
                 .frame(maxWidth: .infinity)
                 .frame(height: keyHeight)
         }
-        .buttonStyle(.glass)
+        .buttonStyle(.glass(.clear))
     }
 
     private func functionKey(systemImage: String, action: @escaping () -> Void) -> some View {
@@ -76,6 +76,6 @@ struct AmountKeypad: View {
                 .frame(maxWidth: .infinity)
                 .frame(height: keyHeight)
         }
-        .buttonStyle(.glass)
+        .buttonStyle(.glass(.clear))
     }
 }
