@@ -61,16 +61,11 @@ Future<void> main() async {
   // 这几项完成后立刻 runApp，用户第一眼就能看到真实本月数据；资产、报告、
   // 全历史和维护任务由首帧后的第二阶段继续处理。
   final repositoryCoreInit = _initializeRepository(repo, fastStartup: true);
-  if (_parityCapture) {
-    // Parity runs must be deterministic even when the emulator reuses an
-    // application-support directory from an earlier dark-theme run.
-    final parityTheme = AppThemeController.instance;
-    parityTheme.setPreset('warm');
-    parityTheme.setIntensity(1.0);
-    parityTheme.setCardAlpha(0.40);
-  } else {
-    unawaited(AppThemeController.instance.load());
-  }
+  // Do not read or write the persisted theme during parity startup. The
+  // capture flag forces the light ThemeMode below, while the static AppColors
+  // defaults already provide the Android warm palette. Normal launches keep
+  // loading the user's saved theme.
+  if (!_parityCapture) unawaited(AppThemeController.instance.load());
   // 先注册原生分享通道；数据库未 ready 时由 ShareIntake 自己排队，避免
   // 用户在启动窗口内从别的 App 分享内容而丢失 intent。
   ShareIntake.init(
