@@ -39,8 +39,10 @@ struct QuickAddView: View {
     @State private var didApplyLaunchKind = false
 
     private var visibleCategories: [TxCategory] {
+        // Android's QuickAddView passes the complete ordered category list to
+        // CategoryGrid. Keep the same flat sequence on iOS; subcategories are
+        // selectable entries here rather than a second hidden panel.
         let matching = allCategories.filter { $0.kind == kind && !$0.isArchived }
-            .filter { $0.parentKey == nil }
         guard !rankedKeys.isEmpty else { return matching }
         let order = Dictionary(rankedKeys.enumerated().map { ($1, $0) }, uniquingKeysWith: { a, _ in a })
         return matching.sorted {
@@ -100,7 +102,7 @@ struct QuickAddView: View {
                     } else {
                         CategoryGrid(
                             categories: visibleCategories,
-                            childCategories: childCategories,
+                            childCategories: [],
                             selected: $selectedCategory
                         )
                     }

@@ -63,6 +63,7 @@ jobs:
             --target=integration_test/parity_screenshots_test.dart
             --device-id emulator-5554
             --no-pub
+            --dart-define=QINGJI_PARITY_CAPTURE=true
       - uses: actions/upload-artifact@v4
         with:
           name: android-parity-screenshots

@@ -345,7 +345,9 @@ class QingJiApp extends StatelessWidget {
       navigatorKey: ShareIntake.navigatorKey,
       theme: AppTheme.light(),
       darkTheme: AppTheme.dark(),
-      themeMode: appTheme.forceDark ? ThemeMode.dark : ThemeMode.system,
+      themeMode: _parityCapture
+          ? ThemeMode.light
+          : (appTheme.forceDark ? ThemeMode.dark : ThemeMode.system),
       localizationsDelegates: const [
         GlobalMaterialLocalizations.delegate,
         GlobalWidgetsLocalizations.delegate,
