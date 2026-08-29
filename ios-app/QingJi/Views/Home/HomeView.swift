@@ -61,7 +61,8 @@ struct HomeView: View {
         )
         let totalBudget = BudgetStore.effectiveTotalBudget(
             from: budgets,
-            selectedBookID: router.selectedBookID
+            selectedBookID: router.selectedBookID,
+            fallbackBookID: books.first(where: \.isDefault)?.stableID
         )
         let budgetStatus = totalBudget.map { budget in
             statisticsCache.status(
@@ -126,49 +127,46 @@ struct HomeView: View {
                     .buttonStyle(.glass)
                     .accessibilityLabel("打开菜单")
                 }
-                ToolbarItemGroup(placement: .topBarTrailing) {
-                    GlassEffectContainer(spacing: 8) {
-                        HStack(spacing: 8) {
-                            Button {
-                                router.selectedTab = .search
-                            } label: {
-                                Image(systemName: "magnifyingglass")
-                                    .font(.title3)
-                                    .frame(width: 44, height: 44)
-                            }
-                            .buttonStyle(.glass)
-                            .accessibilityLabel("搜索明细")
-
-                            Menu {
-                                Button {
-                                    router.selectedBookID = nil
-                                } label: {
-                                    Label("总账本", systemImage: router.selectedBookID == nil ? "checkmark" : "book.closed")
-                                }
-                                ForEach(books) { book in
-                                    Button {
-                                        router.selectedBookID = book.stableID
-                                    } label: {
-                                        Label(book.name, systemImage: router.selectedBookID == book.stableID ? "checkmark" : "book.closed")
-                                    }
-                                }
-                            } label: {
-                                HStack(spacing: 5) {
-                                    Image(systemName: "book.closed")
-                                    Text(selectedBookName)
-                                        .lineLimit(1)
-                                    Image(systemName: "chevron.down")
-                                        .font(.caption.weight(.semibold))
-                                }
-                                .font(.subheadline.weight(.medium))
-                                .frame(minWidth: 100, minHeight: 44)
-                                .padding(.horizontal, 8)
-                            }
-                            .buttonStyle(.glass)
-                            .accessibilityLabel("当前账本：\(selectedBookName)")
+            ToolbarItem(placement: .topBarTrailing) {
+                Button {
+                    router.selectedTab = .search
+                } label: {
+                    Image(systemName: "magnifyingglass")
+                        .font(.title3)
+                        .frame(width: 44, height: 44)
+                }
+                .buttonStyle(.glass)
+                .accessibilityLabel("搜索明细")
+            }
+            ToolbarItem(placement: .topBarTrailing) {
+                Menu {
+                    Button {
+                        router.selectedBookID = nil
+                    } label: {
+                        Label("总账本", systemImage: router.selectedBookID == nil ? "checkmark" : "book.closed")
+                    }
+                    ForEach(books) { book in
+                        Button {
+                            router.selectedBookID = book.stableID
+                        } label: {
+                            Label(book.name, systemImage: router.selectedBookID == book.stableID ? "checkmark" : "book.closed")
                         }
                     }
+                } label: {
+                    HStack(spacing: 5) {
+                        Image(systemName: "book.closed")
+                        Text(selectedBookName)
+                            .lineLimit(1)
+                        Image(systemName: "chevron.down")
+                            .font(.caption.weight(.semibold))
+                    }
+                    .font(.subheadline.weight(.medium))
+                    .frame(minWidth: 100, minHeight: 44)
+                    .padding(.horizontal, 8)
                 }
+                .buttonStyle(.glass)
+                .accessibilityLabel("当前账本：\(selectedBookName)")
+            }
             }
             .sheet(isPresented: $showMonthPicker) {
                 MonthPickerSheet(
@@ -256,15 +254,15 @@ struct HomeView: View {
         }
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
+        .glassEffect(.regular.tint(Color.orange.opacity(0.08)), in: .rect(cornerRadius: 20))
         .overlay(alignment: .topTrailing) {
-            Image("mascot-idle")
+            Image(status?.isOverBudget == true ? "MascotOverspend" : "MascotIdle")
                 .resizable()
                 .scaledToFit()
-                .frame(width: 88, height: 88)
-                .offset(x: 4, y: -6)
+                .frame(width: 118, height: 118)
+                .offset(x: 6, y: -10)
                 .allowsHitTesting(false)
         }
-            .glassEffect(.regular.tint(Color.accentColor.opacity(0.07)), in: .rect(cornerRadius: 20))
     }
 
     private func recentSection(
@@ -298,7 +296,7 @@ struct HomeView: View {
                     }
                 }
                 .padding(.horizontal, 14)
-                .background(.background, in: .rect(cornerRadius: 18))
+                .glassEffect(.regular, in: .rect(cornerRadius: 18))
             }
         }
     }
@@ -571,7 +569,7 @@ private struct HomeRecordInputBar: View {
         }
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .glassEffect(.regular.tint(Color.accentColor.opacity(0.06)), in: .rect(cornerRadius: 26))
+        .glassEffect(.regular, in: .rect(cornerRadius: 26))
         .padding(.horizontal, 12)
         .padding(.top, 8)
         .padding(.bottom, 10)

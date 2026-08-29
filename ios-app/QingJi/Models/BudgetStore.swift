@@ -5,13 +5,15 @@ import QingJiCore
 enum BudgetStore {
     static func effectiveTotalBudget(
         from budgets: [Budget],
-        selectedBookID: UUID?
+        selectedBookID: UUID?,
+        fallbackBookID: UUID? = nil
     ) -> Budget? {
+        let preferredBookID = selectedBookID ?? fallbackBookID
         let candidates = budgets.filter { budget in
             budget.isActive && budget.categoryKey == nil &&
-            (budget.bookID == selectedBookID || budget.bookID == nil)
+            (budget.bookID == selectedBookID || budget.bookID == fallbackBookID || budget.bookID == nil)
         }
-        return candidates.first(where: { $0.bookID == selectedBookID })
+        return candidates.first(where: { $0.bookID == preferredBookID })
             ?? candidates.first(where: { $0.bookID == nil })
     }
 

@@ -312,7 +312,8 @@ struct QuickAddView: View {
         let budgets = (try? context.fetch(FetchDescriptor<Budget>())) ?? []
         guard let budget = BudgetStore.effectiveTotalBudget(
             from: budgets,
-            selectedBookID: router.selectedBookID
+            selectedBookID: router.selectedBookID,
+            fallbackBookID: effectiveBook?.stableID
         ), budget.amount > 0 else {
             budgetStatus = nil
             return

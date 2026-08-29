@@ -14,6 +14,8 @@ struct MonthlyStatsView: View {
     @Environment(AppRouter.self) private var router
     @Query private var transactions: [MoneyTransaction]
     @Query private var budgets: [Budget]
+    @Query(sort: \Book.sortOrder)
+    private var books: [Book]
 
     @State private var displayedMonth = AppClock.now
     @State private var weekStart = Calendar.current.startOfDay(for: AppClock.now)
@@ -197,7 +199,8 @@ struct MonthlyStatsView: View {
         )
         let budget = BudgetStore.effectiveTotalBudget(
             from: budgets,
-            selectedBookID: router.selectedBookID
+            selectedBookID: router.selectedBookID,
+            fallbackBookID: books.first(where: \.isDefault)?.stableID
         )
         return VStack(spacing: 20) {
             monthHeader
