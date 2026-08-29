@@ -214,6 +214,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+      - name: Install comparison tooling
+        run: python3 -m pip install --disable-pip-version-check --user Pillow
       - uses: actions/download-artifact@v4
         with:
           name: android-parity-screenshots
