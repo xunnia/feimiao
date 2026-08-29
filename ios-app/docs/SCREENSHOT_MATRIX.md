@@ -24,7 +24,7 @@ Markdown 报告。
      --output ci-artifacts/screenshot-report.json
    ```
 
-4. `.github/workflows/parity-screenshots.yml` 会在两个模拟器任务都成功后生成成对报告，并使用 `--require-complete`。Parity #57 已对 37 个场景通过这个 gate；Pixel 2 与 iPhone Air 的物理尺寸差异会标记为 `dimension_mismatch` 并保留在报告中，不会被伪装成像素一致，也不会把有效成对证据误判为缺图。
+4. `.github/workflows/parity-screenshots.yml` 会在两个模拟器任务都成功后生成成对报告，并使用 `--require-complete`。Parity #58 已对 38 个场景通过这个 gate；Pixel 2 与 iPhone Air 的物理尺寸差异会标记为 `dimension_mismatch` 并保留在报告中，不会被伪装成像素一致，也不会把有效成对证据误判为缺图。
 
 ## 判定口径
 
@@ -42,18 +42,19 @@ Liquid Glass、SF Symbols、原生转场和触觉反馈，因此与 Flutter/Mate
 
 | 场景 | iOS 路由 | Android 截图 | iOS 截图 | 状态 |
 |---|---|---|---|---|
-| 首页、记一笔、明细 | `home` / `quickadd` / `transactions` | Parity #57 已采集 | Parity #57 已采集 | 已完成成对对比 |
-| 周/月/年/自定义统计 | `stats/week` / `stats/month` / `stats/year` / `stats/custom` | Parity #57 已采集 | Parity #57 已采集 | 已完成成对对比 |
-| 预算、对账、待报销 | `settings/budget` / `settings/reconcile` / `settings/reimburse` | Parity #57 已采集 | Parity #57 已采集 | 已完成成对对比 |
-| 存钱、定时记账 | `settings/savings` / `settings/recurring` | Parity #57 已采集 | Parity #57 已采集 | 已完成成对对比 |
-| 资产、负债、净资产 | `settings/assets` / `settings/liabilities` / `settings/net-worth` | Parity #57 已采集 | Parity #57 已采集 | 已完成成对对比 |
-| 账本、设置、AI 入口 | `books` / `settings` / `ai` / `settings/ai` | Parity #57 已采集 | Parity #57 已采集 | 已完成成对对比 |
-| 导入复核与商户批量分类 | `settings/import-review` | Parity #57 已采集 | Parity #57 已采集 | 已完成成对对比 |
-| 报告库与月报阅读 | `settings/reports` | Parity #57 已采集 | Parity #57 已采集 | 已完成成对对比 |
-| 喵学到的分类 | settings/memory | Parity #57 已采集 | Parity #57 已采集 | 已完成成对对比 |
-| AI 任务/诊断/统一搜索 | settings/ai-tasks 等 | Parity #57 已采集 | Parity #57 已采集 | 已完成成对对比 |
-| AI 可控记忆/技能/定时报表/本地伴侣 | settings/ai-memory 等 | Parity #57 已采集 | Parity #57 已采集 | 已完成成对对比 |
-| 备份/主题/账单显示 | settings/backup 等 | Parity #57 已采集 | Parity #57 已采集 | 已完成成对对比 |
-| 收入记账与物品资产详情操作态 | `quickadd/income` / `settings/assets/detail` | Parity #57 已采集 | Parity #57 已采集 | 已完成成对对比 |
+| 首页、记一笔、明细 | `home` / `quickadd` / `transactions` | Parity #58 已采集 | Parity #58 已采集 | 已完成成对对比 |
+| 周/月/年/自定义统计 | `stats/week` / `stats/month` / `stats/year` / `stats/custom` | Parity #58 已采集 | Parity #58 已采集 | 已完成成对对比 |
+| 预算、对账、待报销 | `settings/budget` / `settings/reconcile` / `settings/reimburse` | Parity #58 已采集 | Parity #58 已采集 | 已完成成对对比 |
+| 存钱、定时记账 | `settings/savings` / `settings/recurring` | Parity #58 已采集 | Parity #58 已采集 | 已完成成对对比 |
+| 资产、负债、净资产 | `settings/assets` / `settings/liabilities` / `settings/net-worth` | Parity #58 已采集 | Parity #58 已采集 | 已完成成对对比 |
+| 账本、设置、AI 入口 | `books` / `settings` / `ai` / `settings/ai` | Parity #58 已采集 | Parity #58 已采集 | 已完成成对对比 |
+| 导入复核与商户批量分类 | `settings/import-review` | Parity #58 已采集 | Parity #58 已采集 | 已完成成对对比 |
+| 报告库与月报阅读 | `settings/reports` | Parity #58 已采集 | Parity #58 已采集 | 已完成成对对比 |
+| 喵学到的分类 | settings/memory | Parity #58 已采集 | Parity #58 已采集 | 已完成成对对比 |
+| AI 任务/诊断/统一搜索 | settings/ai-tasks 等 | Parity #58 已采集 | Parity #58 已采集 | 已完成成对对比 |
+| AI 可控记忆/技能/定时报表/本地伴侣 | settings/ai-memory 等 | Parity #58 已采集 | Parity #58 已采集 | 已完成成对对比 |
+| 备份/主题/账单显示 | settings/backup 等 | Parity #58 已采集 | Parity #58 已采集 | 已完成成对对比 |
+| 收入记账与物品资产详情操作态 | `quickadd/income` / `settings/assets/detail` | Parity #58 已采集 | Parity #58 已采集 | 已完成成对对比 |
+| 账户详情操作态 | `settings/accounts/detail` | Parity #58 已采集 | Parity #58 已采集 | 已完成成对对比 |
 
 这份表只记录证据状态，不把“代码已写”冒充“真机已验收”。
