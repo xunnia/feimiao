@@ -251,7 +251,15 @@ private struct RecurringRuleEditor: View {
                         Picker("分类", selection: $categoryKey) {
                             Text("请选择分类").tag("")
                             ForEach(eligibleCategories) { category in
-                                Text(category.parentKey == nil ? category.name : "└ \(category.name)")
+                                Label {
+                                    Text(category.parentKey == nil ? category.name : "└ \(category.name)")
+                                } icon: {
+                                    CategoryIcon(
+                                        categoryKey: category.key,
+                                        emoji: category.emoji,
+                                        size: 24
+                                    )
+                                }
                                     .tag(category.key)
                             }
                         }

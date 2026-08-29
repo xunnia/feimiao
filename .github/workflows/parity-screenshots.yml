@@ -26,6 +26,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+      - name: Verify Android and iOS category icon assets
+        run: python3 ios-app/tools/check_category_icon_parity.py
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -43,10 +45,48 @@ jobs:
       - name: Route Flutter through cached Gradle
         working-directory: android-app/android
         run: |
-          gradle --version
-          cp gradlew gradlew-wrapper-original
-          printf '#!/usr/bin/env bash\nexec gradle "$@"\n' > gradlew
-          chmod +x gradlew
+          set -u
+          route_log="$GITHUB_WORKSPACE/android-gradle-route.log"
+          {
+            echo "ANDROID_GRADLE_ROUTE_BEGIN"
+            echo "PWD=$PWD"
+            echo "JAVA_HOME=${JAVA_HOME:-}"
+            echo "GRADLE_HOME=${GRADLE_HOME:-}"
+            command -v java || true
+            command -v gradle || true
+            java -version
+            gradle --version
+            test -f gradlew
+            ls -l gradlew
+            cp gradlew gradlew-wrapper-original
+            printf '#!/usr/bin/env bash\nexec gradle "$@"\n' > gradlew
+            chmod 755 gradlew
+            ls -l gradlew gradlew-wrapper-original
+            ./gradlew --version
+            echo "ANDROID_GRADLE_ROUTE_END status=0"
+          } 2>&1 | tee "$route_log"
+          status=${PIPESTATUS[0]}
+          echo "ANDROID_GRADLE_ROUTE_EXIT status=$status" | tee -a "$route_log"
+          exit "$status"
+      - name: Publish Android Gradle route diagnostics
+        if: always()
+        run: |
+          {
+            echo "### Android Gradle route diagnostics"
+            echo '```text'
+            if [ -f android-gradle-route.log ]; then
+              tail -n 200 android-gradle-route.log
+            else
+              echo "android-gradle-route.log was not created"
+            fi
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: android-gradle-route-log
+          path: android-gradle-route.log
+          if-no-files-found: warn
       - name: Enable KVM group permissions
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules

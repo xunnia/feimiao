@@ -282,7 +282,11 @@ struct MeowAssistantView: View {
                                 deleteRecordEntry(turnID: turn.id, index: index)
                             },
                             categoryLabels: Dictionary(
-                                categories.map { ($0.key, "\($0.emoji) \($0.name)") },
+                                categories.map { ($0.key, $0.name) },
+                                uniquingKeysWith: { first, _ in first }
+                            ),
+                            categoryEmojis: Dictionary(
+                                categories.map { ($0.key, $0.emoji) },
                                 uniquingKeysWith: { first, _ in first }
                             ),
                             categoryOptions: Dictionary(
@@ -1003,6 +1007,7 @@ private struct AssistantMessageBubble: View {
     let onChangeRecordCategory: ((Int, String) -> Void)?
     let onDeleteRecordEntry: ((Int) -> Void)?
     let categoryLabels: [String: String]
+    let categoryEmojis: [String: String]
     let categoryOptions: [String: [(key: String, name: String)]]
     @AppStorage("qingji.userMessageBubbleStyle") private var bubbleStyleRaw = UserMessageBubbleStyle.followCardOpacity.rawValue
 
@@ -1050,6 +1055,7 @@ private struct AssistantMessageBubble: View {
                 AIRecordCardView(
                     card: recordCard,
                     categoryLabels: categoryLabels,
+                    categoryEmojis: categoryEmojis,
                     categoryOptions: categoryOptions,
                     onSave: onSaveRecord,
                     onUndo: onUndoRecord,
@@ -1105,6 +1111,7 @@ private struct AssistantMessageBubble: View {
 private struct AIRecordCardView: View {
     let card: AIRecordCardState
     let categoryLabels: [String: String]
+    let categoryEmojis: [String: String]
     let categoryOptions: [String: [(key: String, name: String)]]
     let onSave: (() -> Void)?
     let onUndo: (() -> Void)?
@@ -1119,13 +1126,21 @@ private struct AIRecordCardView: View {
             ForEach(Array(card.entries.enumerated()), id: \.offset) { index, entry in
                 let deleted = card.deletedIndices.contains(index)
                 let key = card.categoryKey(at: index) ?? ""
-                let label = categoryLabels[key] ?? (entry.kind == .income ? "💵 其他收入" : "📦 其他")
+                let label = categoryLabels[key] ?? (entry.kind == .income ? "其他收入" : "其他")
+                let emoji = categoryEmojis[key] ?? (entry.kind == .income ? "💵" : "📦")
                 let amount = entry.amount.map {
                     MoneyFormat.string($0, currencyCode: "CNY")
                 } ?? "未识别金额"
 
                 VStack(alignment: .leading, spacing: 7) {
                     HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        if card.saved {
+                            CategoryIcon(
+                                categoryKey: key,
+                                emoji: emoji,
+                                size: 30
+                            )
+                        }
                         Text(label)
                             .lineLimit(1)
                             .foregroundStyle(deleted ? .secondary : .primary)

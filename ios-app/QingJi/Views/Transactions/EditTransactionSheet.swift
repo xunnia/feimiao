@@ -208,7 +208,16 @@ struct EditTransactionSheet: View {
                         Picker("分类", selection: $categoryKey) {
                             Text("未分类").tag("")
                             ForEach(allCategories.filter { $0.kind == transaction.kind }) { item in
-                                Label(item.name, systemImage: item.symbol).tag(item.key)
+                                Label {
+                                    Text(item.name)
+                                } icon: {
+                                    CategoryIcon(
+                                        categoryKey: item.key,
+                                        emoji: item.emoji,
+                                        size: 24
+                                    )
+                                }
+                                .tag(item.key)
                             }
                         }
                     }

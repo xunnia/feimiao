@@ -371,8 +371,15 @@ struct MonthlyStatsView: View {
             Text("分类排行")
                 .font(.headline)
             ForEach(categories, id: \.name) { item in
+                let seed = CategorySeed.all.first { $0.nameZh == item.name }
                 VStack(spacing: 4) {
                     HStack {
+                        CategoryIcon(
+                            categoryKey: seed?.key ?? "",
+                            emoji: seed?.emoji ?? "🏷️",
+                            size: 28
+                        )
+                        .accessibilityHidden(true)
                         Text(item.name)
                             .font(.subheadline)
                         Text("\(item.count) 笔")
