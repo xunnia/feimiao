@@ -2167,14 +2167,14 @@ class _BudgetSheetState extends State<_BudgetSheet> {
     final income = Decimal.tryParse(_incomeCtrl.text.trim());
     final total = income != null && income > Decimal.zero
         ? BudgetSuggestion.suggestFromIncome(income)
-        : BudgetSuggestion.averageMonthlySpend(repo.allRecords,
+        : BudgetSuggestion.averageMonthlySpend(repo.allRecordsRef,
             now: DateTime.now());
     if (total == null) {
       setState(() => _formError = '最近还没什么支出记录，填一下月收入喵就能按 80% 帮你算');
       return;
     }
     final weights = BudgetSuggestion.historicalWeights(
-      repo.allRecords,
+      repo.allRecordsRef,
       now: DateTime.now(),
       topKeyOfName: _topKeyOf,
     );

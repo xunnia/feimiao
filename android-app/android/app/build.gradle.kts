@@ -86,6 +86,10 @@ android {
 
 dependencies {
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")
+    // Use Chrome's isolated Custom Tab for GPT OAuth when the device supports
+    // it. This keeps an OAuth attempt out of the user's normal browser
+    // cookies, so another ChatGPT/Google account can be selected reliably.
+    implementation("androidx.browser:browser:1.9.0")
     // Chinese OCR must be part of the app dependency graph. Do not inject this
     // from a machine-level Gradle init script: local and CI builds must match.
     implementation("com.google.mlkit:text-recognition-chinese:16.0.1")

@@ -192,6 +192,68 @@ void main() {
     expect(ring.color, AppColors.budgetHealthy(AppTheme.light().colorScheme));
   });
 
+  testWidgets(
+      'home budget card uses 15px month label and rounds overage percent',
+      (tester) async {
+    final summary = MonthlySummary(
+      year: 2026,
+      month: 8,
+      totalExpense: Decimal.zero,
+      totalIncome: Decimal.zero,
+      expenseByCategory: [],
+      dailyTotals: [],
+    );
+    final status = BudgetStatus(
+      monthlyBudget: Decimal.fromInt(100),
+      spentThisMonth: Decimal.parse('125.5'),
+      spentToday: Decimal.zero,
+      remaining: Decimal.parse('-25.5'),
+      todayAllowance: Decimal.zero,
+      isOverBudget: true,
+    );
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: AppTheme.light(),
+        home: Scaffold(
+          body: HomeSummaryCard(
+            monthDate: DateTime(2026, 8),
+            isCurrentMonth: true,
+            summary: summary,
+            budgetStatus: status,
+            budget: Decimal.fromInt(100),
+          ),
+        ),
+      ),
+    );
+
+    final monthLabel = tester.widget<Text>(
+      find.byKey(const ValueKey('home-summary-month-label')),
+    );
+    final monthSpan = monthLabel.textSpan! as TextSpan;
+    final spans = monthSpan.children!.whereType<TextSpan>().toList();
+    expect(spans.map((span) => span.text).join(), '2026年8月');
+    expect(spans[0].style?.fontSize, 15);
+    expect(spans[2].style?.fontSize, 15);
+    expect(spans[1].style?.fontSize, 15);
+    expect(spans[3].style?.fontSize, 15);
+    expect(spans[0].style?.fontWeight, FontWeight.w500);
+    expect(spans[2].style?.fontWeight, FontWeight.w500);
+    expect(spans[1].style?.fontWeight, FontWeight.w400);
+    expect(spans[3].style?.fontWeight, FontWeight.w400);
+    expect(
+      tester
+          .widget<Text>(
+            find.byKey(const ValueKey('home-budget-percent')),
+          )
+          .data,
+      '126%',
+    );
+
+    final overLabel = tester.widget<Text>(find.text('月预算已超'));
+    expect(overLabel.style?.fontVariations, hasLength(1));
+    expect(overLabel.style?.fontVariations?.single.value, 350);
+  });
+
   testWidgets('home filter has the same gap above and below', (tester) async {
     tester.view.physicalSize = const Size(411, 900);
     tester.view.devicePixelRatio = 1;

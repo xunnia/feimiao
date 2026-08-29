@@ -25,6 +25,15 @@ class OpenAiCodexOAuth {
   static const codexResponsesPath = '/codex/responses';
   static const redirectUri = 'http://localhost:1455/auth/callback';
   static const fallbackRedirectUri = 'http://localhost:1457/auth/callback';
+  static const hostedAuthorizationEndpoint =
+      'https://chatgpt.com/codex/desktop-auth';
+  // Cockpit tracks the official Codex desktop client version separately from
+  // the API catalogue's client_version query. Keep the latter at 0.146.0 and
+  // use this value only for the hosted login envelope.
+  static const authorizationAppVersion = '26.820.60940';
+  static const authorizationOriginator = 'Codex Desktop';
+  static const authorizationUserAgent =
+      'Codex Desktop/$authorizationAppVersion';
   // Keep this in sync with the scope set used by the official Codex login
   // helper. The connector scopes are part of the current ChatGPT consent
   // contract even when this app does not expose connectors yet.
@@ -43,7 +52,15 @@ class OpenAiCodexOAuth {
 
   static bool isAuthorizationUrl(String raw) {
     final uri = Uri.tryParse(raw.trim());
-    return uri?.scheme == 'https' && uri?.host == 'auth.openai.com';
+    if (uri?.scheme != 'https') return false;
+    if (uri?.host == 'auth.openai.com' && uri?.path == '/oauth/authorize') {
+      return true;
+    }
+    if (uri?.host == 'chatgpt.com' && uri?.path == '/codex/desktop-auth') {
+      final nested = uri?.queryParameters['authorize_url'];
+      return nested == null || isAuthorizationUrl(nested);
+    }
+    return false;
   }
 
   static Uri modelsUri({String clientVersion = defaultClientVersion}) {
@@ -62,9 +79,15 @@ class OpenAiCodexOAuth {
     required String state,
     String redirect = redirectUri,
     String authorizationUrl = authorizationEndpoint,
+    bool hosted = false,
+    String stableId = '',
   }) {
-    final base =
+    var base =
         Uri.tryParse(authorizationUrl) ?? Uri.parse(authorizationEndpoint);
+    if (base.host == 'chatgpt.com' && base.path == '/codex/desktop-auth') {
+      final nested = base.queryParameters['authorize_url'];
+      base = Uri.tryParse(nested ?? '') ?? Uri.parse(authorizationEndpoint);
+    }
     final query = <String, String>{
       ...base.queryParameters,
       'response_type': 'code',
@@ -75,10 +98,28 @@ class OpenAiCodexOAuth {
       'code_challenge_method': 'S256',
       'id_token_add_organizations': 'true',
       'codex_cli_simplified_flow': 'true',
+      'codex_streamlined_login': 'true',
+      'codex_app_version': authorizationAppVersion,
+      // Force the account chooser even when the device falls back to a
+      // regular browser profile. Ephemeral/Incognito Custom Tabs isolate
+      // cookies when available, but older Android Chrome builds otherwise
+      // silently reuse the currently active ChatGPT workspace.
+      'prompt': 'select_account',
       'state': state,
-      'originator': originator,
+      'originator': authorizationOriginator,
+      if (stableId.trim().isNotEmpty)
+        'source_surface_stable_id': stableId.trim(),
+      if (stableId.trim().isNotEmpty) 'codex_origin_stable_id': stableId.trim(),
     };
-    return base.replace(queryParameters: query).toString();
+    final direct = base.replace(queryParameters: query).toString();
+    if (!hosted) return direct;
+    return Uri.parse(hostedAuthorizationEndpoint).replace(
+      queryParameters: {
+        'authorize_url': direct,
+        'codex_streamlined_login': 'true',
+        'no_universal_links': '1',
+      },
+    ).toString();
   }
 
   static String generateVerifier([Random? random]) {
@@ -202,6 +243,50 @@ class OpenAiCodexOAuthKeepAlive {
     }
   }
 
+  /// Opens GPT authorization in Chrome's isolated Custom Tab when available.
+  /// A false result means the device/browser is too old or has no supported
+  /// Chrome provider; callers should use the external-browser fallback.
+  static Future<bool> openEphemeralBrowser(String url) async {
+    try {
+      return await _channel.invokeMethod<bool>(
+            'openEphemeralOAuth',
+            <String, dynamic>{'url': url},
+          ) ??
+          false;
+    } on MissingPluginException {
+      return false;
+    } on PlatformException {
+      return false;
+    } on FlutterError {
+      return false;
+    }
+  }
+
+  /// Opens GPT authorization in a Chrome Incognito tab when Ephemeral Custom
+  /// Tabs are unavailable. This is the compatibility path for older Chrome
+  /// versions and still isolates the account cookies from the regular profile.
+  static Future<bool> openIncognitoBrowser(String url) async {
+    try {
+      return await _channel.invokeMethod<bool>(
+            'openIncognitoOAuth',
+            <String, dynamic>{'url': url},
+          ) ??
+          false;
+    } on MissingPluginException {
+      return false;
+    } on PlatformException {
+      return false;
+    } on FlutterError {
+      return false;
+    }
+  }
+
+  /// Removes a native callback only after the owning flow has completed (or
+  /// been explicitly cancelled). Keeping this separate from takeCallback is
+  /// what makes process-death recovery safe.
+  static Future<bool> clearNativeCallback({String? flowId}) =>
+      clearCallback(flowId: flowId);
+
   static Future<String?> takeCallback({String? flowId}) async {
     try {
       return await _channel.invokeMethod<String>(
@@ -219,9 +304,15 @@ class OpenAiCodexOAuthKeepAlive {
     }
   }
 
-  static Future<bool> clearCallback() async {
+  static Future<bool> clearCallback({String? flowId}) async {
     try {
-      return await _channel.invokeMethod<bool>('clearCallback') ?? false;
+      return await _channel.invokeMethod<bool>(
+            'clearCallback',
+            <String, dynamic>{
+              if (flowId != null && flowId.trim().isNotEmpty) 'flowId': flowId,
+            },
+          ) ??
+          false;
     } on MissingPluginException {
       return false;
     } on PlatformException {
@@ -309,8 +400,10 @@ class OpenAiCodexOAuthSession {
 
 class OpenAiCodexOAuthService {
   static const _pendingKey = 'ai_codex_oauth_pending_v1';
+  static const _stableIdKey = 'ai_codex_oauth_stable_id_v1';
   static const _callbackPort = 1455;
   static const _fallbackCallbackPort = 1457;
+  static const _pendingLifetime = Duration(minutes: 10);
 
   final http.Client _client;
   // Keep one listener per loopback family. Browsers are free to resolve
@@ -403,6 +496,14 @@ class OpenAiCodexOAuthService {
     if (generation != _flowGeneration) {
       throw const OpenAiCodexOAuthException('OAuth 授权已被新的授权流程替换');
     }
+    if (Platform.isAndroid && nativePort == null) {
+      // A Dart HttpServer is not durable while the browser is foregrounded on
+      // Android. Refuse to launch rather than opening a URL that will later
+      // land on ERR_CONNECTION_REFUSED at localhost:1455.
+      throw const OpenAiCodexOAuthException(
+        'Android GPT OAuth 回调监听未启动，授权页未打开，请重试',
+      );
+    }
     if (nativePort != null) {
       _nativeCallbackPort = nativePort;
       servers = const <HttpServer>[];
@@ -418,12 +519,15 @@ class OpenAiCodexOAuthService {
     }
     final redirectPort = nativePort ?? servers.first.port;
     final redirectUri = OpenAiCodexOAuth.redirectUriForPort(redirectPort);
+    final stableId = await _loadOrCreateStableId();
     final authUrl = OpenAiCodexOAuth.buildAuthorizationUrl(
       codeChallenge: challenge,
       state: state,
       redirect: redirectUri,
       authorizationUrl:
           authorizationUrl ?? OpenAiCodexOAuth.authorizationEndpoint,
+      hosted: true,
+      stableId: stableId,
     );
     final pending = _PendingOAuthState(
       providerId: providerId ?? '',
@@ -431,8 +535,7 @@ class OpenAiCodexOAuthService {
       state: state,
       authorizationUrl: authUrl,
       redirectUri: redirectUri,
-      expiresAtMs:
-          DateTime.now().add(const Duration(minutes: 5)).millisecondsSinceEpoch,
+      expiresAtMs: DateTime.now().add(_pendingLifetime).millisecondsSinceEpoch,
     );
     _pending = pending;
     try {
@@ -477,6 +580,13 @@ class OpenAiCodexOAuthService {
     if (pending.expiresAtMs <= DateTime.now().millisecondsSinceEpoch) {
       await _cancelInternal();
       return false;
+    }
+    // A callback URL is persisted before token exchange. If a previous
+    // exchange failed after the browser already completed, recovery can retry
+    // the code directly and does not need to reopen or rebind localhost.
+    if (pending.callbackUrl.trim().isNotEmpty) {
+      _ensurePendingCompletion(pending, generation);
+      return true;
     }
     final pendingPort = Uri.tryParse(pending.redirectUri)?.port;
     if (Platform.isAndroid && pendingPort != null && pendingPort > 0) {
@@ -571,11 +681,12 @@ class OpenAiCodexOAuthService {
     final callback = _callback;
     if (callback != null && !callback.isCompleted) {
       callback.complete(uri);
-      return _completion!;
+      final completion = _completion;
+      if (completion != null) return completion;
     }
     return _exchangeCallback(
       uri,
-      pending,
+      _pending ?? pending,
       generation: _flowGeneration,
     );
   }
@@ -604,7 +715,7 @@ class OpenAiCodexOAuthService {
     // A callback captured by an abandoned flow must never be consumed by the
     // next authorization attempt. Pending-flow recovery does not call cancel,
     // so a still-valid callback remains available across Activity recreation.
-    await _clearNativeCallback();
+    await _clearNativeCallback(flowId: canceledFlowId);
   }
 
   Future<List<OpenAiCodexModel>> fetchModels(
@@ -788,6 +899,7 @@ class OpenAiCodexOAuthService {
     _PendingOAuthState pending,
     int generation,
   ) async {
+    var exchanged = false;
     try {
       if (!_ownsFlow(pending, generation)) {
         throw const OpenAiCodexOAuthException('OAuth 授权已被新的授权流程替换');
@@ -797,15 +909,30 @@ class OpenAiCodexOAuthService {
         throw const OpenAiCodexOAuthException('OAuth 授权已被新的授权流程替换');
       }
       _validateCallback(uri, pending);
-      return await _exchangeCallback(
+      final remembered = await _rememberCallback(pending, uri, generation);
+      final tokens = await _exchangeCallback(
         uri,
-        pending,
+        remembered,
         generation: generation,
       );
+      exchanged = true;
+      return tokens;
     } finally {
       // A stale completion is deliberately not allowed to clean up shared
       // listeners. The replacement flow owns those resources now.
-      await _cleanupPendingIfCurrent(pending, generation);
+      await _cleanupPendingIfCurrent(
+        pending,
+        generation,
+        preserveNativeForRecovery: !exchanged,
+      );
+      // Keep the persisted pending state (including the callback code) after
+      // a token-exchange failure so a resumed app can retry without forcing
+      // the user through the browser again. Reset only the in-memory waiters;
+      // a future recovery call will create a fresh completion.
+      if (_ownsFlow(pending, generation)) {
+        _callback = null;
+        _completion = null;
+      }
     }
   }
 
@@ -818,6 +945,11 @@ class OpenAiCodexOAuthService {
   }
 
   Future<Uri> _waitForCallback(_PendingOAuthState pending) {
+    final persisted = pending.callbackUrl.trim();
+    if (persisted.isNotEmpty) {
+      final uri = Uri.tryParse(persisted);
+      if (uri != null) return Future<Uri>.value(uri);
+    }
     final callback = _callback!.future;
     if (_nativeCallbackPort == null) return callback;
     // The native service is in a separate process, so it cannot invoke the
@@ -844,9 +976,26 @@ class OpenAiCodexOAuthService {
     throw const OpenAiCodexOAuthException('OAuth 授权已超时，请重新开始');
   }
 
+  Future<_PendingOAuthState> _rememberCallback(
+    _PendingOAuthState pending,
+    Uri uri,
+    int generation,
+  ) async {
+    if (!_ownsFlow(pending, generation)) {
+      throw const OpenAiCodexOAuthException('OAuth 授权已被新的授权流程替换');
+    }
+    final callbackUrl = uri.toString();
+    if (pending.callbackUrl == callbackUrl) return pending;
+    final updated = pending.copyWith(callbackUrl: callbackUrl);
+    _pending = updated;
+    await _persistPending(updated);
+    return updated;
+  }
+
   Future<OpenAiCodexOAuthTokens> _exchangeCallback(
       Uri uri, _PendingOAuthState pending,
       {required int generation}) async {
+    pending = await _rememberCallback(pending, uri, generation);
     final code = uri.queryParameters['code']?.trim() ?? '';
     final tokens = await _exchangeCode(
       code: code,
@@ -867,6 +1016,7 @@ class OpenAiCodexOAuthService {
     // finishing.
     await Future<void>.delayed(const Duration(milliseconds: 1200));
     await _stopNativeIfCurrent(generation, flowId: pending.state);
+    await _clearNativeCallback(flowId: pending.state);
     if (!_ownsFlow(pending, generation)) {
       throw const OpenAiCodexOAuthException('OAuth 授权已被新的授权流程替换');
     }
@@ -878,19 +1028,112 @@ class OpenAiCodexOAuthService {
     return tokens;
   }
 
+  static const _tokenRequestAttempts = 3;
+  static const _tokenRequestTimeout = Duration(seconds: 30);
+
+  static bool _isRetryableTokenStatus(int statusCode) =>
+      statusCode == 408 ||
+      statusCode == 425 ||
+      statusCode == 429 ||
+      statusCode == 500 ||
+      statusCode == 502 ||
+      statusCode == 503 ||
+      statusCode == 504;
+
+  static String _tokenFailureDetail(http.Response response) {
+    final raw = utf8.decode(response.bodyBytes, allowMalformed: true).trim();
+    if (raw.isEmpty) return '';
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is Map) {
+        final code =
+            (decoded['error'] ?? decoded['error_code'])?.toString().trim();
+        final description = (decoded['error_description'] ??
+                decoded['message'] ??
+                decoded['detail'])
+            ?.toString()
+            .trim();
+        final parts = [
+          if (code != null && code.isNotEmpty) code,
+          if (description != null && description.isNotEmpty) description,
+        ];
+        if (parts.isNotEmpty) {
+          final value = parts.join(': ').replaceAll(RegExp(r'\s+'), ' ');
+          return value.length <= 180 ? value : '${value.substring(0, 177)}...';
+        }
+      }
+    } catch (_) {
+      // Some gateway failures are plain text; keep only a short diagnostic.
+    }
+    final value = raw.replaceAll(RegExp(r'\s+'), ' ');
+    return value.length <= 180 ? value : '${value.substring(0, 177)}...';
+  }
+
+  /// Token endpoints occasionally return a transient gateway/rate-limit
+  /// response while the browser session is still settling. Retry only those
+  /// statuses and transport failures; invalid codes/credentials (4xx other
+  /// than 408/425/429) remain fail-fast and are never retried.
+  Future<http.Response> _postTokenWithRetry({
+    required String operation,
+    required Map<String, String> body,
+    bool jsonBody = false,
+    bool includeIdentityHeaders = false,
+  }) async {
+    Object? lastNetworkError;
+    http.Response? lastRetryableResponse;
+    final headers = <String, String>{
+      if (jsonBody) 'Content-Type': 'application/json',
+      if (includeIdentityHeaders) ...{
+        'User-Agent': OpenAiCodexOAuth.authorizationUserAgent,
+        'originator': OpenAiCodexOAuth.authorizationOriginator,
+      },
+    };
+    // The authorization-code exchange intentionally uses the raw OAuth
+    // client contract from Cockpit/official Codex: form body, no Codex
+    // runtime identity headers. Refresh requests are a separate API and use
+    // the official JSON + identity-header contract below.
+    final requestBody = jsonBody ? jsonEncode(body) : body;
+    for (var attempt = 0; attempt < _tokenRequestAttempts; attempt++) {
+      try {
+        final response = await _client
+            .post(
+              Uri.parse(OpenAiCodexOAuth.tokenEndpoint),
+              headers: headers.isEmpty ? null : headers,
+              body: requestBody,
+            )
+            .timeout(_tokenRequestTimeout);
+        if (!_isRetryableTokenStatus(response.statusCode) ||
+            attempt == _tokenRequestAttempts - 1) {
+          return response;
+        }
+        lastRetryableResponse = response;
+      } on TimeoutException catch (error) {
+        lastNetworkError = error;
+      } on SocketException catch (error) {
+        lastNetworkError = error;
+      } on http.ClientException catch (error) {
+        lastNetworkError = error;
+      }
+      if (attempt < _tokenRequestAttempts - 1) {
+        await Future<void>.delayed(
+          Duration(milliseconds: 250 * (1 << attempt)),
+        );
+      }
+    }
+    final retryableResponse = lastRetryableResponse;
+    if (retryableResponse != null) return retryableResponse;
+    throw OpenAiCodexOAuthException(
+      '$operation网络失败，请稍后重试：${lastNetworkError ?? '连接中断'}',
+    );
+  }
+
   Future<OpenAiCodexOAuthTokens> _exchangeCode({
     required String code,
     required String verifier,
     required String redirectUri,
   }) async {
-    final response = await _client.post(
-      Uri.parse(OpenAiCodexOAuth.tokenEndpoint),
-      headers: const {
-        'Accept': 'application/json',
-        'Content-Type': 'application/x-www-form-urlencoded',
-        'User-Agent': OpenAiCodexOAuth.userAgent,
-        'originator': OpenAiCodexOAuth.originator,
-      },
+    final response = await _postTokenWithRetry(
+      operation: 'GPT 授权换取 Token',
       body: {
         'grant_type': 'authorization_code',
         'code': code,
@@ -898,10 +1141,12 @@ class OpenAiCodexOAuthService {
         'client_id': OpenAiCodexOAuth.clientId,
         'code_verifier': verifier,
       },
-    ).timeout(const Duration(seconds: 30));
+    );
     if (response.statusCode < 200 || response.statusCode >= 300) {
+      final detail = _tokenFailureDetail(response);
       throw OpenAiCodexOAuthException(
-        'GPT 授权换取 Token 失败（${response.statusCode}）',
+        'GPT 授权换取 Token 失败（${response.statusCode}）'
+        '${detail.isEmpty ? '' : '：$detail'}',
         statusCode: response.statusCode,
       );
     }
@@ -912,23 +1157,21 @@ class OpenAiCodexOAuthService {
     required String refreshToken,
     String? previousAccountId,
   }) async {
-    final response = await _client.post(
-      Uri.parse(OpenAiCodexOAuth.tokenEndpoint),
-      headers: const {
-        'Accept': 'application/json',
-        'Content-Type': 'application/x-www-form-urlencoded',
-        'User-Agent': OpenAiCodexOAuth.userAgent,
-        'originator': OpenAiCodexOAuth.originator,
-      },
+    final response = await _postTokenWithRetry(
+      operation: 'GPT Token 刷新',
+      jsonBody: true,
+      includeIdentityHeaders: true,
       body: {
         'grant_type': 'refresh_token',
         'refresh_token': refreshToken,
         'client_id': OpenAiCodexOAuth.clientId,
       },
-    ).timeout(const Duration(seconds: 30));
+    );
     if (response.statusCode < 200 || response.statusCode >= 300) {
+      final detail = _tokenFailureDetail(response);
       throw OpenAiCodexOAuthException(
-        'GPT Token 刷新失败（${response.statusCode}），请重新授权',
+        'GPT Token 刷新失败（${response.statusCode}）'
+        '${detail.isEmpty ? '' : '：$detail'}，请重新授权',
         statusCode: response.statusCode,
       );
     }
@@ -1119,6 +1362,14 @@ class OpenAiCodexOAuthService {
     await SecureKeyStore.write(_pendingKey, jsonEncode(pending.toJson()));
   }
 
+  Future<String> _loadOrCreateStableId() async {
+    final stored = (await SecureKeyStore.read(_stableIdKey))?.trim() ?? '';
+    if (stored.isNotEmpty) return stored;
+    final generated = OpenAiCodexOAuth.generateVerifier();
+    await SecureKeyStore.write(_stableIdKey, generated);
+    return generated;
+  }
+
   bool _ownsFlow(_PendingOAuthState pending, int generation) =>
       generation == _flowGeneration && _pending?.state == pending.state;
 
@@ -1151,19 +1402,43 @@ class OpenAiCodexOAuthService {
     });
   }
 
-  Future<void> _clearNativeCallback() async {
-    await _exclusiveNative(OpenAiCodexOAuthKeepAlive.clearCallback);
+  Future<void> _clearNativeCallback({String? flowId}) async {
+    await _exclusiveNative(
+      () => OpenAiCodexOAuthKeepAlive.clearNativeCallback(flowId: flowId),
+    );
   }
 
   Future<void> _cleanupPendingIfCurrent(
     _PendingOAuthState pending,
     int generation,
+    {bool preserveNativeForRecovery = false}
   ) async {
     await _exclusiveFlow(() async {
       if (!_ownsFlow(pending, generation)) return;
       await _stopServer();
       if (!_ownsFlow(pending, generation)) return;
+      if (preserveNativeForRecovery && pending.callbackUrl.trim().isNotEmpty) {
+        // The browser has already delivered a valid callback, but a transient
+        // token failure may finish before Chrome has rendered the success
+        // response. Keep the native endpoint alive briefly so Chrome never
+        // turns that successful callback into ERR_CONNECTION_REFUSED, and so
+        // the foreground app can retry the saved code without another login.
+        unawaited(_stopFailedNativeAfterGrace(pending, generation));
+      } else {
+        await _stopNativeIfCurrent(generation, flowId: pending.state);
+      }
+    });
+  }
+
+  Future<void> _stopFailedNativeAfterGrace(
+    _PendingOAuthState pending,
+    int generation,
+  ) async {
+    await Future<void>.delayed(const Duration(seconds: 30));
+    await _exclusiveFlow(() async {
+      if (!_ownsFlow(pending, generation)) return;
       await _stopNativeIfCurrent(generation, flowId: pending.state);
+      if (_ownsFlow(pending, generation)) _nativeCallbackPort = null;
     });
   }
 
@@ -1359,6 +1634,7 @@ class _PendingOAuthState {
   final String state;
   final String authorizationUrl;
   final String redirectUri;
+  final String callbackUrl;
   final int expiresAtMs;
 
   const _PendingOAuthState({
@@ -1367,6 +1643,7 @@ class _PendingOAuthState {
     required this.state,
     required this.authorizationUrl,
     required this.redirectUri,
+    this.callbackUrl = '',
     required this.expiresAtMs,
   });
 
@@ -1376,8 +1653,19 @@ class _PendingOAuthState {
         'state': state,
         'authorizationUrl': authorizationUrl,
         'redirectUri': redirectUri,
+        'callbackUrl': callbackUrl,
         'expiresAtMs': expiresAtMs,
       };
+
+  _PendingOAuthState copyWith({String? callbackUrl}) => _PendingOAuthState(
+        providerId: providerId,
+        codeVerifier: codeVerifier,
+        state: state,
+        authorizationUrl: authorizationUrl,
+        redirectUri: redirectUri,
+        callbackUrl: callbackUrl ?? this.callbackUrl,
+        expiresAtMs: expiresAtMs,
+      );
 
   factory _PendingOAuthState.fromJson(Map<String, dynamic> json) =>
       _PendingOAuthState(
@@ -1387,6 +1675,7 @@ class _PendingOAuthState {
         authorizationUrl: json['authorizationUrl']?.toString() ?? '',
         redirectUri:
             json['redirectUri']?.toString() ?? OpenAiCodexOAuth.redirectUri,
+        callbackUrl: json['callbackUrl']?.toString() ?? '',
         expiresAtMs: int.tryParse(json['expiresAtMs']?.toString() ?? '') ?? 0,
       );
 }

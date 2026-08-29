@@ -60,7 +60,7 @@ class _MonthlyReportViewState extends State<MonthlyReportView> {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final repo = context.watch<AppRepository>();
-    final records = repo.allRecords;
+    final records = repo.allRecordsRef;
 
     final cur =
         StatisticsEngine.monthlySummary(records, year: _year, month: _month);

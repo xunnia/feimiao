@@ -9,6 +9,30 @@ import 'package:qingji/views/home/record_input_bar.dart';
 import 'package:qingji/widgets/glass_input.dart';
 
 void main() {
+  testWidgets('普通 Chats 进入时不显示主页预算洞察', (tester) async {
+    final repo = AppRepository();
+    addTearDown(repo.dispose);
+
+    await tester.pumpWidget(
+      ChangeNotifierProvider<AppRepository>.value(
+        value: repo,
+        child: MaterialApp(
+          home: Scaffold(
+            body: AiChatPanel(
+              fullScreen: true,
+              recordOnly: false,
+              onSwitchToManual: () {},
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 120));
+
+    expect(find.byKey(const ValueKey('ai-chat-greeting')), findsNothing);
+  });
+
   testWidgets('AI input keeps the same focus after user tap', (tester) async {
     final repo = AppRepository();
 

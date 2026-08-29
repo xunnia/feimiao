@@ -95,6 +95,7 @@ class AppCheckmark extends StatelessWidget {
   final bool value;
   final ValueChanged<bool>? onChanged;
   final String? semanticLabel;
+
   /// When a whole row owns the gesture, render this as a passive control so a
   /// tap on the checkmark cannot toggle the value twice through two gesture
   /// recognizers.
@@ -170,6 +171,11 @@ class SheetHeader extends StatelessWidget {
   final String? actionLabel;
   final VoidCallback? onAction;
   final Key? actionKey;
+
+  /// Optional local adjustment for sheets whose content has an outer inset
+  /// but whose close control must align to a reference design. The title and
+  /// right-side action keep their normal center/edge alignment.
+  final double closeExtraInset;
   const SheetHeader({
     super.key,
     required this.title,
@@ -178,6 +184,7 @@ class SheetHeader extends StatelessWidget {
     this.actionLabel,
     this.onAction,
     this.actionKey,
+    this.closeExtraInset = 0,
   });
 
   @override
@@ -208,7 +215,9 @@ class SheetHeader extends StatelessWidget {
                 Align(
                   alignment: Alignment.centerLeft,
                   child: Padding(
-                    padding: const EdgeInsets.only(left: closeInset),
+                    padding: EdgeInsets.only(
+                      left: closeInset + closeExtraInset,
+                    ),
                     child: AppCircleButton(
                       icon: CupertinoIcons.xmark,
                       iconSize: 18,

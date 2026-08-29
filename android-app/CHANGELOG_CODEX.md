@@ -1,3 +1,37 @@
+
+## 2026-08-29 v1.270.0+284 UI 收口与 GPT OAuth 账号选择修复
+
+- **Chats 进入态**：普通聊天不再显示主页“本月超预算”提醒；保留记账入口的预算提示。
+- **主页预算卡**：月份标签统一 15px，数字使用 w500；超过预算显示实际整数百分比并四舍五入；“月预算已超”字重增加 w50；窄屏底部预算文字改为可收缩布局，避免横向溢出。
+- **月份选择器**：恢复参考半屏布局；年份左右箭头取消圆形表面但保留 48dp 热区；修正左上角关闭按钮位置。
+- **Chats/AI 账号**：Chats 标题字重增加 w100、相对时间字重增加 w50；AI 账号删除按钮移除圆圈并降低图标灰度。
+- **OAuth 多账号**：授权 URL 增加 `prompt=select_account`，普通浏览器回退时也会进入账号选择页，不再静默复用个人空间；PKCE/state、Ephemeral/无痕优先、原生回调保活和失败恢复继续保留。
+- **真实验收**：测试账号 OAuth 回调 HTTP 200、Token 交换 HTTP 200、官方 Codex 模型目录 HTTP 200（6 个模型）、Responses 实际请求 HTTP 200 且收到正文；Flutter 全量 `1134/1134`，Dart analyze 无 error。
+- **UI 证据**：本轮 9 组 before/after/并排标注图和总览图位于 `outputs/ui_comparisons/2026-08-29/`，原始截图保留在 `before/`，改后截图保留在 `after/`。
+
+## 2026-08-29 v1.269.0+283 GPT OAuth 回调时序与多账号兼容修复
+
+- **修复回调监听竞态**：Android 前台恢复不再因瞬时健康探测失败先停止当前 OAuth 服务；同一 flow 只做唤醒/修复，避免 Chrome 回调期间出现 `localhost:1455 ERR_CONNECTION_REFUSED`。
+- **修复失败页误导**：Token 交换临时失败时保留已捕获的回调和原生监听 30 秒，允许应用直接重试并避免浏览器把成功回调刷新成拒绝页；成功、取消和过期仍会清理服务。
+- **多账号登录**：Ephemeral Custom Tab 不可用时改用 Chrome Incognito 标签隔离 Cookie，避免直接复用当前个人空间；补充 Android 11+ Chrome 包可见性声明。
+- **可靠性**：原生监听端口支持快速重认证复用；保留 PKCE/state、flowId 隔离、回调持久化和手动粘贴回调兜底。
+- **验证**：OAuth/设置定向回归通过；Flutter 全量测试 `1129/1129`；Gradle `:app:compileDebugKotlin` 成功。真实账号/网络仍需在联网 Android 真机安装后验收。
+
+## 2026-08-29 v1.268.0+282 GPT OAuth Android 回调与账号隔离修复
+
+- **修复个人空间复用**：补充 Android 11+ Custom Tabs 服务可见性声明，让 Chrome Ephemeral Custom Tab 探测真正生效；支持的 Chrome 会使用隔离 Cookie 会话，不再直接带入当前个人空间。
+- **修复 localhost 拒绝**：Android 原生 OAuth 保活监听未成功绑定时不再退回易失的 Dart 监听，也不再打开授权页；原生服务启动等待窗口延长到 10 秒，避免慢设备在授权过程中丢失 `localhost:1455` 回调。
+- **保持恢复能力**：PKCE/state、回调持久化、flowId 隔离、Token 失败重试和手动粘贴回调继续保留。
+- **验证**：OAuth/设置/账号定向回归 `39/39`；Gradle `:app:compileDebugKotlin` 成功。真实 Google/ChatGPT 账号切换和网络请求仍需联网 Android 真机验收。
+
+## 2026-08-29 v1.267.0+281 GPT OAuth 多账号与回调恢复修复
+
+- **隔离登录会话**：Android 优先使用 Chrome 137+/AndroidX Browser 1.9 的 Ephemeral Custom Tab，GPT 授权不再复用当前 Chrome 的个人空间，可在授权页选择其他 ChatGPT/Google 账号；旧浏览器自动回退外部浏览器和手动回调。
+- **授权码交换对齐官方**：授权码交换恢复 Cockpit/官方 Codex 的原始表单请求，不附加运行时身份头；Token 刷新使用官方 JSON 请求和 Codex Desktop 身份头，减少授权端拒绝。
+- **失败可恢复**：浏览器回调先持久化；原生回调文件按 flowId 读取与清理，Token 交换中途进程被回收或失败后可回到应用继续重试，旧授权流程不能删除新流程回调。
+- **诊断**：Token 失败提示保留安全的状态码/错误摘要，便于区分授权码失效、网络故障和服务端错误，不暴露 Token。
+- **验证**：Flutter analyze exit 0；OAuth/设置/账号定向回归 `39/39`；全量 Flutter `1129/1129`；Gradle `:app:compileDebugKotlin` 成功。真实 Google/ChatGPT 登录和官方模型请求仍需联网 Android 真机验收。
+
 ## 2026-08-28 v1.265.0+279 Android CI 编译修复与 iOS 首页入口对齐
 
 - **Android CI**：升级 Workmanager 到 `0.10.9`（Android 实现 `0.10.8`），修复 AGP 9 + `android.builtInKotlin=false` 下 Kotlin 插件未编译、`GeneratedPluginRegistrant.java` 找不到 `WorkmanagerPlugin` 的 clean-runner 错误；上游修复对应 Workmanager #722。
@@ -2260,3 +2294,8 @@ $env:FLUTTER_ROOT='C:\src\flutter'
 - **iOS 首页**：移除首页与安卓主流程冲突的快捷操作卡，补齐顶部菜单/搜索/账本入口、收支筛选和底部「记一记」输入框；手动/AI 分流保留 iOS Liquid Glass 和原生按压反馈。
 - **路由与截图门禁**：设置深链改为目标值绑定，iOS 截图脚本新增内容区非空检查；冷启动截图等待时间延长，避免保存白屏 PNG 冒充通过。
 - **本地验证**：Android debug APK 构建成功；Flutter analyze 无 error；全量 Flutter **1127/1127**。iOS 需由 macOS CI 完成编译和截图复验。
+## 2026-08-28 v1.266.0+280 OAuth 等待窗口与性能收口
+
+- GPT OAuth 浏览器 pending 有效期与 Cockpit 对齐为 10 分钟，Android 原生回调监听保留 1 分钟收尾余量；回调持久化、临时失败重试和旧 state 清理继续保留。
+- 喵助手建议缓存使用仓库对象身份比较，避免极低概率的 identity hash 复用导致跨仓库显示旧建议。
+- 性能专项最终验证见 `docs/performance-review-2026-08-28.md`；本包包含账本视图缓存、稳定顺序上下文和重复排序削减。

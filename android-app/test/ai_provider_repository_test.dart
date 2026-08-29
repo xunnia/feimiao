@@ -785,4 +785,39 @@ void main() {
     );
     await repo.closeForTest();
   });
+
+  test('stale OAuth refresh cannot overwrite a newer credential', () async {
+    final repo = AppRepository();
+    await repo.init();
+    final provider = AiConfiguredProvider(
+      id: 'oauth-cas',
+      type: AiProviderType.custom,
+      displayName: 'GPT OAuth',
+      baseUrl: AiProviderConfig.openAiCodexBaseUrl,
+      apiKey: 'new-access',
+      model: 'gpt-5',
+      models: const ['gpt-5'],
+      endpointType: AiEndpointType.responses,
+      authMethod: AiAuthMethod.oauth,
+      oauthAccountId: 'acct-cas',
+      oauthRefreshToken: 'new-refresh',
+    );
+    await repo.saveAiConfiguredProvider(provider);
+
+    // Simulate a refresh that began before a newer OAuth authorization. The
+    // compare-and-set precondition must reject the stale result.
+    await repo.saveAiConfiguredProvider(
+      provider.copyWith(
+        apiKey: 'stale-access',
+        oauthRefreshToken: 'stale-refresh',
+      ),
+      expectedAccessToken: 'old-access',
+      expectedRefreshToken: 'old-refresh',
+    );
+
+    final current = repo.aiProviderById(provider.id)!;
+    expect(current.apiKey, 'new-access');
+    expect(current.oauthRefreshToken, 'new-refresh');
+    await repo.closeForTest();
+  });
 }

@@ -71,6 +71,8 @@ class _SearchViewState extends State<SearchView> {
   List<TransactionEntity> _results = const [];
   List<TxSection> _sections = const [];
   Map<int, Decimal> _refundTotals = const {};
+  int? _lastFilterRevision;
+  String? _lastFilterKey;
 
   TransactionKind? _kind;
   DateTimeRange? _range;
@@ -110,7 +112,14 @@ class _SearchViewState extends State<SearchView> {
 
   void _runFilter() {
     if (!mounted) return;
-    if (!_active) {
+    final active = _active;
+    final filterKey = _filterKey();
+    // Keep the empty state usable even when this reusable view is embedded
+    // without a repository provider; only an active search needs the ledger.
+    if (!active) {
+      if (_lastFilterRevision == null && _lastFilterKey == filterKey) return;
+      _lastFilterRevision = null;
+      _lastFilterKey = filterKey;
       if (_results.isNotEmpty || _sections.isNotEmpty) {
         setState(() {
           _results = const [];
@@ -121,10 +130,19 @@ class _SearchViewState extends State<SearchView> {
       return;
     }
     final repo = context.read<AppRepository>();
+    if (_lastFilterRevision == repo.dataRevision &&
+        _lastFilterKey == filterKey) {
+      return;
+    }
+    _lastFilterRevision = repo.dataRevision;
+    _lastFilterKey = filterKey;
     final q = _q.trim();
     final all = repo.transactions;
     final rt = LedgerPolicy.refundTotals(all);
-    final r = repo.visibleTransactions.where((t) => _pass(t, q, rt)).toList();
+    final normalizedQuery = normalizeSearchText(q);
+    final r = repo.visibleTransactionsRef
+        .where((t) => _pass(t, normalizedQuery, rt))
+        .toList();
     final secs = groupTxnsByDay(r);
     setState(() {
       _results = r;
@@ -133,17 +151,31 @@ class _SearchViewState extends State<SearchView> {
     });
   }
 
+  String _filterKey() {
+    final range = _range;
+    return [
+      _q.trim(),
+      _kind?.name ?? '',
+      range == null ? '' : range.start.millisecondsSinceEpoch.toString(),
+      range == null ? '' : range.end.millisecondsSinceEpoch.toString(),
+      _accountId?.toString() ?? '',
+      _tagId?.toString() ?? '',
+      _minAmt?.toString() ?? '',
+      _maxAmt?.toString() ?? '',
+    ].join('|');
+  }
+
   String _two(int n) => n.toString().padLeft(2, '0');
 
   bool _pass(
     TransactionEntity t,
-    String q,
+    String normalizedQuery,
     Map<int, Decimal> refundTotals,
   ) {
     final userAmount = LedgerPolicy.userAmountWith(t, refundTotals);
-    final query = normalizeSearchText(q);
-    if (query.isNotEmpty) {
-      bool contains(String value) => normalizeSearchText(value).contains(query);
+    if (normalizedQuery.isNotEmpty) {
+      bool contains(String value) =>
+          normalizeSearchText(value).contains(normalizedQuery);
       // 分类名空时按列表里显示的「未分类」参与匹配，搜「未分类」才搜得到。
       final catName = t.categoryNameZh.isNotEmpty
           ? t.categoryNameZh
@@ -515,9 +547,9 @@ class _SearchViewState extends State<SearchView> {
           icon:
               _kind == o.$1 ? Icons.check_circle : Icons.radio_button_unchecked,
           onTap: () {
-              setState(() => _kind = o.$1);
-              _runFilter();
-            },
+            setState(() => _kind = o.$1);
+            _runFilter();
+          },
         ),
     ]);
   }

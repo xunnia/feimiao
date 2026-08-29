@@ -81,15 +81,39 @@ class OAuthKeepAliveService : Service() {
         ): Int? {
             val normalized = ports.filter { it in 1..65535 }.distinct()
                 .ifEmpty { listOf(DEFAULT_PORT, FALLBACK_PORT) }
-            // Activity recreation/resume must not tear down a healthy listener
-            // while Chrome is about to deliver the redirect. Only reuse a
-            // marker that belongs to this exact OAuth state and answers a real
-            // IPv4 TCP probe; otherwise it is safe to stop and rebind.
             val existing = flowId?.let { readyPort(context, it) }
             if (existing != null && existing in normalized && isPortReachable(existing)) {
                 return existing
             }
-            // A previous OAuth attempt may still be winding down while a new
+
+            // Activity recreation/resume must not tear down a listener owned by
+            // the active OAuth flow. The old implementation called
+            // stopService() whenever the marker was momentarily missing or a
+            // probe raced the service process. Chrome could then reach
+            // localhost during that gap and show ERR_CONNECTION_REFUSED.
+            // Nudge the service first; its onStartCommand() repairs a dead
+            // listener and replaces a listener from an older flow. If that
+            // repair cannot publish a live port, leave the service alone and
+            // let the next foreground resume retry instead of creating another
+            // refusal window.
+            if (flowId != null) {
+                if (!start(context, normalized, flowId)) return null
+                repeat(100) {
+                    val ready = readyPort(context, flowId)
+                    if (ready != null && ready in normalized && isPortReachable(ready)) {
+                        return ready
+                    }
+                    try {
+                        Thread.sleep(100)
+                    } catch (_: InterruptedException) {
+                        Thread.currentThread().interrupt()
+                        return null
+                    }
+                }
+                return null
+            }
+
+            // A different OAuth attempt may still be winding down while a new
             // one is being started (for example, cancel() immediately followed
             // by start()). Stop it through the component API and wait until its
             // ready marker disappears before binding the next listener. Sending
@@ -101,9 +125,13 @@ class OAuthKeepAliveService : Service() {
             // is confirmed, so never trust the marker from before this call.
             File(context.applicationContext.filesDir, READY_FILE).delete()
             if (!start(context, normalized, flowId)) return null
-            repeat(40) {
+            // Slow ROMs may need several seconds to create the isolated
+            // foreground-service process. Never fall back to a Dart listener
+            // on Android: it disappears as soon as Flutter is backgrounded
+            // and produces the misleading localhost refusal page.
+            repeat(100) {
                 val ready = readyPort(context, flowId)
-                if (ready != null && ready in normalized) return ready
+                if (ready != null && ready in normalized && isPortReachable(ready)) return ready
                 try {
                     Thread.sleep(100)
                 } catch (_: InterruptedException) {
@@ -215,15 +243,35 @@ class OAuthKeepAliveService : Service() {
             }
         }
 
-        fun clearCallback(context: Context): Boolean {
+        fun clearCallback(context: Context, expectedFlowId: String? = null): Boolean {
             return try {
-                File(context.applicationContext.filesDir, CALLBACK_FILE).delete()
+                val file = File(context.applicationContext.filesDir, CALLBACK_FILE)
+                if (!file.isFile) return false
+                if (!expectedFlowId.isNullOrBlank() &&
+                    callbackState(file.readText(StandardCharsets.UTF_8)) != expectedFlowId
+                ) {
+                    return false
+                }
+                file.delete()
             } catch (_: Exception) {
                 false
             }
         }
 
-        /** Atomically consume a callback captured by the native listener. */
+        private fun callbackState(value: String): String? {
+            return try {
+                Uri.parse(value).getQueryParameter("state")?.trim()
+            } catch (_: Exception) {
+                null
+            }
+        }
+
+        /**
+         * Read the callback captured by the native listener without deleting
+         * it. Flutter persists the URL before exchanging the code; keeping a
+         * native copy until token exchange succeeds lets a reclaimed process
+         * recover the callback on the next foreground resume.
+         */
         fun takeCallback(context: Context, expectedFlowId: String? = null): String? {
             val file = File(context.applicationContext.filesDir, CALLBACK_FILE)
             return try {
@@ -240,7 +288,6 @@ class OAuthKeepAliveService : Service() {
                     // file in place so the current poller can claim it.
                     if (callbackFlowId != expectedFlowId) return null
                 }
-                file.delete()
                 value.takeIf { it.isNotEmpty() }
             } catch (_: Exception) {
                 null
@@ -278,7 +325,8 @@ class OAuthKeepAliveService : Service() {
         val requestedFlowId = intent?.getStringExtra(EXTRA_FLOW_ID)?.trim()
             ?.ifEmpty { null }
             ?: readyFlowId(this)
-        if (callbackServer == null || callbackServer?.flowId != requestedFlowId) {
+        val sameFlow = callbackServer?.flowId == requestedFlowId
+        if (!sameFlow || callbackServer?.isHealthy() != true) {
             callbackServer?.stop()
             val requested = intent?.getIntegerArrayListExtra(EXTRA_PORTS)
                 ?.filter { it in 1..65535 }
@@ -299,11 +347,10 @@ class OAuthKeepAliveService : Service() {
             // window while the service process is reused.
             callbackServer?.rewriteReady()
         }
-        // Pending OAuth state expires in five minutes. Keep one extra minute
-        // as a safety margin, but never leave a permanent notification when a
-        // user closes the browser without completing the flow.
+        // Match Cockpit's ten-minute browser OAuth window and keep one extra
+        // minute for the final localhost redirect/token hand-off.
         handler.removeCallbacks(timeout)
-        handler.postDelayed(timeout, 6 * 60 * 1000L)
+        handler.postDelayed(timeout, 11 * 60 * 1000L)
         return START_STICKY
     }
 
@@ -348,7 +395,23 @@ class OAuthKeepAliveService : Service() {
         fun start() {
             if (!running.compareAndSet(false, true)) return
             readyFile.delete()
-            callbackCaptured.set(callbackFile.isFile)
+            // A callback file can survive a killed Flutter process. It may
+            // belong to an older OAuth flow; treating any existing file as a
+            // captured callback would make the next valid redirect return a
+            // misleading success page without recording its new code. Keep a
+            // file only when its state belongs to this exact flow.
+            val retainsCallback = if (flowId.isNullOrBlank() || !callbackFile.isFile) {
+                false
+            } else {
+                val existingState = try {
+                    callbackState(callbackFile.readText(StandardCharsets.UTF_8))
+                } catch (_: Exception) {
+                    null
+                }
+                existingState == flowId
+            }
+            if (!retainsCallback) callbackFile.delete()
+            callbackCaptured.set(retainsCallback)
             val worker = Thread({ bindAndServe() }, "feimiao-oauth-listener")
             synchronized(lock) { workers += worker }
             worker.start()
@@ -433,7 +496,10 @@ class OAuthKeepAliveService : Service() {
         private fun tryBind(port: Int, address: String): ServerSocket? {
             return try {
                 ServerSocket().apply {
-                    reuseAddress = false
+                    // Re-authentication can follow cancellation immediately;
+                    // allowing the loopback socket to be reused avoids a short
+                    // TIME_WAIT window being mistaken for a listener failure.
+                    reuseAddress = true
                     bind(InetSocketAddress(InetAddress.getByName(address), port), 32)
                 }
             } catch (_: Exception) {
@@ -445,6 +511,10 @@ class OAuthKeepAliveService : Service() {
             synchronized(lock) {
                 if (running.get()) sockets += socket else socket.close()
             }
+        }
+
+        fun isHealthy(): Boolean = synchronized(lock) {
+            running.get() && boundPort != null && sockets.any { !it.isClosed }
         }
 
         private fun acceptLoop(server: ServerSocket, port: Int) {

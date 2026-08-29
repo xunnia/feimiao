@@ -185,13 +185,48 @@ class _MonthSelectorPill extends StatelessWidget {
               child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Text(
-                    '${monthDate.year}年${monthDate.month}月',
-                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                          fontSize: 14,
-                          fontWeight: FontWeight.w400,
-                          color: scheme.onSurface,
+                  Text.rich(
+                    key: const ValueKey('home-summary-month-label'),
+                    TextSpan(
+                      children: [
+                        TextSpan(
+                          text: '${monthDate.year}',
+                          style:
+                              Theme.of(context).textTheme.titleMedium?.copyWith(
+                                    fontSize: 15,
+                                    fontWeight: FontWeight.w500,
+                                    color: scheme.onSurface,
+                                  ),
                         ),
+                        TextSpan(
+                          text: '年',
+                          style:
+                              Theme.of(context).textTheme.titleMedium?.copyWith(
+                                    fontSize: 15,
+                                    fontWeight: FontWeight.w400,
+                                    color: scheme.onSurface,
+                                  ),
+                        ),
+                        TextSpan(
+                          text: '${monthDate.month}',
+                          style:
+                              Theme.of(context).textTheme.titleMedium?.copyWith(
+                                    fontSize: 15,
+                                    fontWeight: FontWeight.w500,
+                                    color: scheme.onSurface,
+                                  ),
+                        ),
+                        TextSpan(
+                          text: '月',
+                          style:
+                              Theme.of(context).textTheme.titleMedium?.copyWith(
+                                    fontSize: 15,
+                                    fontWeight: FontWeight.w400,
+                                    color: scheme.onSurface,
+                                  ),
+                        ),
+                      ],
+                    ),
                   ),
                   const SizedBox(width: 4),
                   Icon(
@@ -471,11 +506,19 @@ class _BudgetBody extends StatelessWidget {
             .toDouble()
         : 0.0;
     final ratio = rawRatio.clamp(0.0, 1.0);
-    final pct = rawRatio > 1.0
-        ? '100%+'
-        : rawRatio < 0.0
-            ? '0.0%'
-            : '${(rawRatio * 100).toStringAsFixed(1)}%';
+    // 预算卡只显示整数百分比；超过 100% 也展示实际比例，避免
+    // “100%+” 丢失用户最需要的超支幅度。先在 Decimal 中四舍五入，
+    // 不把 125.5% 交给截断过的 double，确保边界值显示为 126%。
+    final percentDecimal = budget > Decimal.zero
+        ? (s.spentThisMonth * Decimal.fromInt(100) / budget).toDecimal(
+            scaleOnInfinitePrecision: 8,
+            toBigInt: (value) => value.round(),
+          )
+        : Decimal.zero;
+    final pctValue = percentDecimal < Decimal.zero
+        ? BigInt.zero
+        : percentDecimal.round().toBigInt();
+    final pct = '$pctValue%';
 
     final now = DateTime.now();
     final daysInMonth = DateTime(now.year, now.month + 1, 0).day;
@@ -504,6 +547,9 @@ class _BudgetBody extends StatelessWidget {
               style: theme.textTheme.labelSmall?.copyWith(
                 color: AppTextColor.hint(scheme),
                 fontWeight: FontWeight.w300,
+                fontVariations: over
+                    ? const [FontVariation('wght', 350)]
+                    : const [FontVariation('wght', 300)],
               ),
             ),
           ],
@@ -535,6 +581,7 @@ class _BudgetBody extends StatelessWidget {
                 borderRadius: BorderRadius.circular(6),
               ),
               child: Text(
+                key: const ValueKey('home-budget-percent'),
                 pct,
                 style: theme.textTheme.labelSmall?.copyWith(
                   color: scheme.primary,
@@ -543,28 +590,36 @@ class _BudgetBody extends StatelessWidget {
                 ),
               ),
             ),
-            const Spacer(),
-            Text.rich(
-              TextSpan(
-                children: [
+            const SizedBox(width: 6),
+            Expanded(
+              child: Align(
+                alignment: Alignment.centerRight,
+                child: Text.rich(
                   TextSpan(
-                    text: _moneyText(budget, maskAmounts),
-                    style: theme.textTheme.labelSmall?.copyWith(
-                      color: AppTextColor.secondary(scheme),
-                      fontWeight: FontWeight.w400,
-                      fontFamily: 'Nunito',
-                      fontFeatures: const [FontFeature.tabularFigures()],
-                    ),
-                  ),
-                  if (isCurrentMonth)
-                    TextSpan(
-                      text: ' · 剩 $remainingDays 天',
-                      style: theme.textTheme.labelSmall?.copyWith(
-                        color: AppTextColor.hint(scheme),
-                        fontWeight: FontWeight.w300,
+                    children: [
+                      TextSpan(
+                        text: _moneyText(budget, maskAmounts),
+                        style: theme.textTheme.labelSmall?.copyWith(
+                          color: AppTextColor.secondary(scheme),
+                          fontWeight: FontWeight.w400,
+                          fontFamily: 'Nunito',
+                          fontFeatures: const [FontFeature.tabularFigures()],
+                        ),
                       ),
-                    ),
-                ],
+                      if (isCurrentMonth)
+                        TextSpan(
+                          text: ' · 剩 $remainingDays 天',
+                          style: theme.textTheme.labelSmall?.copyWith(
+                            color: AppTextColor.hint(scheme),
+                            fontWeight: FontWeight.w300,
+                          ),
+                        ),
+                    ],
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  textAlign: TextAlign.right,
+                ),
               ),
             ),
           ],

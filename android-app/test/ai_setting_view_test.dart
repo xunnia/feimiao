@@ -8,6 +8,7 @@ import 'package:qingji/core/ai/ai_provider_config.dart';
 import 'package:qingji/data/app_repository.dart';
 import 'package:qingji/theme/app_colors.dart';
 import 'package:qingji/views/settings/ai_setting_view.dart';
+import 'package:qingji/widgets/app_buttons.dart';
 import 'package:qingji/widgets/settings_ui.dart';
 import 'package:url_launcher/url_launcher.dart';
 
@@ -79,10 +80,12 @@ void main() {
 
   setUpAll(loadScreenshotFonts);
 
-  test('Android GPT OAuth stays on the browser network path', () {
+  test(
+      'Android GPT OAuth falls back to an external browser when isolation is unavailable',
+      () {
     expect(
       openAiOAuthLaunchMode(isAndroid: true),
-      LaunchMode.inAppBrowserView,
+      LaunchMode.externalApplication,
     );
     expect(
       openAiOAuthLaunchMode(isAndroid: false),
@@ -140,6 +143,7 @@ void main() {
     expect(find.text('Claude Gateway'), findsOneWidget);
     expect(find.text('未配置凭据'), findsOneWidget);
     expect(find.byIcon(CupertinoIcons.chevron_down), findsNothing);
+    expect(find.byType(AppPlainIconButton), findsNWidgets(2));
 
     final card = tester.getRect(find.byKey(const ValueKey('claude-gateway')));
     final accountSwitch = tester.getRect(

@@ -47,6 +47,43 @@ Future<void> _pumpCard(WidgetTester tester, DateTime anchor) async {
 }
 
 void main() {
+  test('月度进度一次扫描仍保留完整月与同期截止日口径', () {
+    final records = <TransactionRecord>[
+      TransactionRecord(
+        id: 'current-before',
+        kind: TransactionKind.expense,
+        amount: Decimal.fromInt(10),
+        date: DateTime(2026, 8, 5),
+      ),
+      TransactionRecord(
+        id: 'current-after',
+        kind: TransactionKind.expense,
+        amount: Decimal.fromInt(99),
+        date: DateTime(2026, 8, 20),
+      ),
+      TransactionRecord(
+        id: 'short-month-after',
+        kind: TransactionKind.expense,
+        amount: Decimal.fromInt(20),
+        date: DateTime(2026, 2, 28),
+      ),
+    ];
+    final samples = computeMonthlyPaceSamples(
+      records: records,
+      year: 2026,
+      month: 8,
+      isCurrentMonth: true,
+      now: DateTime(2026, 8, 15),
+    );
+
+    expect(samples, hasLength(7));
+    expect(samples.last.full, Decimal.fromInt(10));
+    expect(samples.last.pace, Decimal.fromInt(10));
+    final february = samples.firstWhere((sample) => sample.label == '2月');
+    expect(february.full, Decimal.fromInt(20));
+    expect(february.pace, Decimal.zero);
+  });
+
   testWidgets('X 轴标注真实月份，上个月不会从轴上消失', (tester) async {
     // 8 月视角：前六根柱子应是 2..7 月，最后一根是「8月」。
     await _pumpCard(tester, DateTime(2026, 8));

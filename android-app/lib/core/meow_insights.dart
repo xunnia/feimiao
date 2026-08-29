@@ -14,7 +14,7 @@ class MeowInsights {
   /// 喵助手打开时主动冒的一句话(无数据返回 null)。
   /// 优先级:超预算 → 比上月多花最多的分类 → 本月花得最多 → 兜底招呼。
   static String? greeting(AppRepository repo) {
-    final records = repo.allRecords;
+    final records = repo.allRecordsRef;
     final now = DateTime.now();
 
     // 1. 超预算

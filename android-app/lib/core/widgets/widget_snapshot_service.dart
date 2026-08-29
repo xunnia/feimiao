@@ -179,7 +179,7 @@ class WidgetSnapshotService with WidgetsBindingObserver {
     }
 
     final summary = StatisticsEngine.monthlySummary(
-      repo.allRecords,
+      repo.allRecordsRef,
       year: today.year,
       month: today.month,
     );
@@ -223,7 +223,7 @@ class WidgetSnapshotService with WidgetsBindingObserver {
     await Future<void>.delayed(const Duration(milliseconds: 16));
     final paceBytes = await renderWidgetToPng(
       MonthlyPaceCard(
-        records: repo.allRecords,
+        records: repo.allRecordsRef,
         summary: summary,
         year: today.year,
         month: today.month,
@@ -343,7 +343,7 @@ class FeimiaoWidgetSnapshotBuilder {
     final privacy = repo.widgetPrivacyMode;
 
     final summary = StatisticsEngine.monthlySummary(
-      repo.allRecords,
+      repo.allRecordsRef,
       year: today.year,
       month: today.month,
     );

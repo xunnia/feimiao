@@ -15,6 +15,13 @@ String _jwtPayload(Map<String, dynamic> payload) {
   return 'header.$encoded.signature';
 }
 
+String _oauthState(String authorizationUrl) {
+  final outer = Uri.parse(authorizationUrl);
+  final nested = outer.queryParameters['authorize_url'];
+  final inner = nested == null ? outer : Uri.parse(nested);
+  return inner.queryParameters['state']!;
+}
+
 void main() {
   test('GPT OAuth authorization URL keeps the official scope and redirect', () {
     final url = Uri.parse(
@@ -32,6 +39,30 @@ void main() {
       contains('api.connectors.read api.connectors.invoke'),
     );
     expect(url.queryParameters['code_challenge_method'], 'S256');
+  });
+
+  test('GPT OAuth hosted URL matches Cockpit desktop login envelope', () {
+    final url = Uri.parse(
+      OpenAiCodexOAuth.buildAuthorizationUrl(
+        codeChallenge: 'challenge',
+        state: 'state',
+        hosted: true,
+        stableId: 'stable-id',
+      ),
+    );
+    expect(url.host, 'chatgpt.com');
+    expect(url.path, '/codex/desktop-auth');
+    expect(url.queryParameters['codex_streamlined_login'], 'true');
+    expect(url.queryParameters['no_universal_links'], '1');
+    final inner = Uri.parse(url.queryParameters['authorize_url']!);
+    expect(inner.host, 'auth.openai.com');
+    expect(inner.queryParameters['codex_streamlined_login'], 'true');
+    expect(inner.queryParameters['codex_app_version'],
+        OpenAiCodexOAuth.authorizationAppVersion);
+    expect(inner.queryParameters['prompt'], 'select_account');
+    expect(inner.queryParameters['source_surface_stable_id'], 'stable-id');
+    expect(inner.queryParameters['codex_origin_stable_id'], 'stable-id');
+    expect(OpenAiCodexOAuth.isAuthorizationUrl(url.toString()), isTrue);
   });
 
   test('JWT account id supports namespaced, direct and organization claims',
@@ -183,7 +214,7 @@ void main() {
       host: '127.0.0.1',
       queryParameters: {
         'code': 'authorization-code',
-        'state': authorization.queryParameters['state']!,
+        'state': _oauthState(authorization.toString()),
       },
     );
 
@@ -202,6 +233,54 @@ void main() {
       expect(tokens.accountId, 'acct-callback');
     } finally {
       httpClient.close(force: true);
+      await service.cancel();
+    }
+  });
+
+  test('failed token exchange keeps callback for an in-app retry', () async {
+    var tokenCalls = 0;
+    final client = MockClient((request) async {
+      tokenCalls++;
+      // The authorization-code exchange is deliberately a raw OAuth request;
+      // Codex runtime identity headers belong to refresh/API calls only.
+      expect(request.headers['originator'], isNull);
+      expect(request.headers['user-agent'], isNull);
+      if (tokenCalls <= 3) {
+        return http.Response('temporary gateway failure', 503);
+      }
+      return http.Response(
+        jsonEncode({
+          'access_token': 'recovered-access',
+          'refresh_token': 'recovered-refresh',
+          'chatgpt_account_id': 'acct-recovered',
+          'expires_in': 3600,
+        }),
+        200,
+      );
+    });
+    final service = OpenAiCodexOAuthService(client: client);
+    final session = await service.start(providerId: 'provider-retry');
+    final authorization = Uri.parse(session.authorizationUrl);
+    final callback = Uri.parse(session.redirectUri).replace(
+      queryParameters: {
+        'code': 'authorization-code',
+        'state': _oauthState(authorization.toString()),
+      },
+    );
+
+    try {
+      await expectLater(
+        service.submitCallbackUrl(callback.toString()),
+        throwsA(isA<OpenAiCodexOAuthException>()),
+      );
+
+      // The browser has already completed. Recovery must reuse the persisted
+      // callback instead of forcing a second authorization page.
+      final recovered = await service.waitForPendingCompletion();
+      expect(recovered?.accessToken, 'recovered-access');
+      expect(recovered?.accountId, 'acct-recovered');
+      expect(tokenCalls, 4);
+    } finally {
       await service.cancel();
     }
   });
@@ -225,7 +304,7 @@ void main() {
     final callback = Uri.parse(session.redirectUri).replace(
       queryParameters: {
         'code': 'authorization-code',
-        'state': authorization.queryParameters['state']!,
+        'state': _oauthState(authorization.toString()),
       },
     );
     final tokens = await service.submitCallbackUrl(callback.toString());
@@ -267,7 +346,7 @@ void main() {
         host: '127.0.0.1',
         queryParameters: {
           'code': 'authorization-code',
-          'state': authorization.queryParameters['state']!,
+          'state': _oauthState(authorization.toString()),
         },
       );
       final httpClient = io.HttpClient();
@@ -311,7 +390,10 @@ void main() {
     final client = MockClient((request) async {
       refreshCalls++;
       expect(request.url.toString(), 'https://auth.openai.com/oauth/token');
-      expect(request.body, contains('grant_type=refresh_token'));
+      expect(request.body, contains('"grant_type":"refresh_token"'));
+      expect(request.headers['content-type'], 'application/json');
+      expect(request.headers['originator'],
+          OpenAiCodexOAuth.authorizationOriginator);
       return http.Response(
         jsonEncode({
           'access_token': 'refreshed-access',

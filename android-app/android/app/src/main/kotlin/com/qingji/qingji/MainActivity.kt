@@ -7,6 +7,8 @@ import android.provider.Settings
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.util.Base64
+import androidx.browser.customtabs.CustomTabsClient
+import androidx.browser.customtabs.CustomTabsIntent
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
@@ -107,6 +109,18 @@ class MainActivity : FlutterActivity() {
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "feimiao/oauth")
             .setMethodCallHandler { call, result ->
                 when (call.method) {
+                    "openEphemeralOAuth" -> {
+                        val url = call.argument<String>("url")?.trim()
+                        result.success(
+                            if (url.isNullOrBlank()) false else openEphemeralOAuth(url)
+                        )
+                    }
+                    "openIncognitoOAuth" -> {
+                        val url = call.argument<String>("url")?.trim()
+                        result.success(
+                            if (url.isNullOrBlank()) false else openIncognitoOAuth(url)
+                        )
+                    }
                     "startKeepAlive" -> {
                         val ports = call.argument<List<Int>>("ports")
                             ?.filter { it in 1..65535 }
@@ -145,7 +159,12 @@ class MainActivity : FlutterActivity() {
                             ?.ifEmpty { null }
                         result.success(OAuthKeepAliveService.takeCallback(this, flowId))
                     }
-                    "clearCallback" -> result.success(OAuthKeepAliveService.clearCallback(this))
+                    "clearCallback" -> {
+                        val flowId = call.argument<String>("flowId")
+                            ?.trim()
+                            ?.ifEmpty { null }
+                        result.success(OAuthKeepAliveService.clearCallback(this, flowId))
+                    }
                     else -> result.notImplemented()
                 }
             }
@@ -223,6 +242,68 @@ class MainActivity : FlutterActivity() {
         // 冷启动带进来的分享：先存着，等 Dart 起来主动取。
         handleIntent(intent, push = false)
     }
+
+    /**
+     * Open GPT OAuth in a browser session with an isolated cookie jar.
+     *
+     * Chrome 137+ exposes Ephemeral Custom Tabs through AndroidX Browser
+     * 1.9.0.  Unlike a regular Custom Tab, it cannot reuse the user's current
+     * ChatGPT/Google session, which is required when authorizing a second
+     * account. Older browsers return false and Dart falls back to the normal
+     * browser/manual callback path.
+     */
+    private fun openEphemeralOAuth(url: String): Boolean {
+        return try {
+            val preferred = preferredChromePackages()
+            val browser = CustomTabsClient.getPackageName(this, preferred)
+                ?: return false
+            if (!CustomTabsClient.isEphemeralBrowsingSupported(this, browser)) {
+                return false
+            }
+            val customTabs = CustomTabsIntent.Builder()
+                .setShowTitle(true)
+                .setEphemeralBrowsingEnabled(true)
+                .build()
+            customTabs.intent.setPackage(browser)
+            customTabs.launchUrl(this, Uri.parse(url))
+            true
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    /**
+     * Older Chrome builds do not expose Ephemeral Custom Tabs but still
+     * understand the documented Incognito-tab intent extra. It gives OAuth a
+     * fresh cookie jar, so adding a second ChatGPT/Google account does not
+     * silently reuse the current personal space.
+     */
+    private fun openIncognitoOAuth(url: String): Boolean {
+        val extra = "com.google.android.apps.chrome.EXTRA_OPEN_NEW_INCOGNITO_TAB"
+        for (browser in preferredChromePackages()) {
+            try {
+                val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {
+                    setPackage(browser)
+                    putExtra(extra, true)
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                if (intent.resolveActivity(packageManager) == null) continue
+                startActivity(intent)
+                return true
+            } catch (_: Exception) {
+                // Try the next installed Chrome channel before normal browser
+                // fallback is selected by the Dart caller.
+            }
+        }
+        return false
+    }
+
+    private fun preferredChromePackages(): List<String> = listOf(
+        "com.android.chrome",
+        "com.chrome.beta",
+        "com.chrome.dev",
+        "com.chrome.canary",
+    )
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)

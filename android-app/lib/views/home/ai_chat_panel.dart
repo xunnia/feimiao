@@ -955,7 +955,9 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
 
   static const List<String> _defaultSuggestions = [];
   static List<String>? _suggestionCache;
-  static int _suggestionCacheContentFingerprint = -1;
+  static AppRepository? _suggestionCacheRepository;
+  static int _suggestionCacheDataRevision = -1;
+  static bool? _suggestionCacheHasActiveBudget;
   static int _suggestionCacheTimeKey = -1;
   static bool? _suggestionCacheRecordOnly;
 
@@ -978,7 +980,7 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
     if (!widget.recordOnly) return const [];
     final now = DateTime.now();
     final suggestions = SmartSuggestionEngine.build(
-      records: repo.allRecords,
+      records: repo.allRecordsRef,
       now: now,
       hasActiveBudget: _hasSuggestionBudget(repo),
     );
@@ -1810,15 +1812,12 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
     final now = DateTime.now();
     final timeKey =
         (now.year * 10000 + now.month * 100 + now.day) * 100 + now.hour;
-    final records = repo.allRecords;
     final hasActiveBudget = _hasSuggestionBudget(repo);
-    final contentFingerprint = SmartSuggestionEngine.contentFingerprint(
-      records: records,
-      hasActiveBudget: hasActiveBudget,
-    );
     final cached = _suggestionCache;
     if (cached != null &&
-        _suggestionCacheContentFingerprint == contentFingerprint &&
+        identical(_suggestionCacheRepository, repo) &&
+        _suggestionCacheDataRevision == repo.dataRevision &&
+        _suggestionCacheHasActiveBudget == hasActiveBudget &&
         _suggestionCacheTimeKey == timeKey &&
         _suggestionCacheRecordOnly == recordOnly) {
       _picked = cached;
@@ -1836,15 +1835,12 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
                   100 +
               latestNow.hour;
       final next = _pickSuggestions(latestRepo);
-      final latestRecords = latestRepo.allRecords;
       final latestHasActiveBudget = _hasSuggestionBudget(latestRepo);
       _suggestionCache = next;
       _suggestionCacheRecordOnly = widget.recordOnly;
-      _suggestionCacheContentFingerprint =
-          SmartSuggestionEngine.contentFingerprint(
-        records: latestRecords,
-        hasActiveBudget: latestHasActiveBudget,
-      );
+      _suggestionCacheRepository = latestRepo;
+      _suggestionCacheDataRevision = latestRepo.dataRevision;
+      _suggestionCacheHasActiveBudget = latestHasActiveBudget;
       _suggestionCacheTimeKey = latestTimeKey;
       if (mounted) setState(() => _picked = next);
     });
@@ -4161,8 +4157,13 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
     // 只喂「可见订单」（退款行已挂到原订单里，不单独喂），且金额取**净额**
     // （原额−已退）。否则 AI 会看到散落的退款负数行 → 无中生有「某某退款」、
     // 又把已退到 140 的订单仍当 150 算。喂净额=AI 看到的就是用户实际花的。
-    final visible = repo.visibleTransactions.where((t) => !t.excluded).toList()
-      ..sort((a, b) => b.date.compareTo(a.date));
+    // The repository's visible reference is already ordered by
+    // date-desc/id-desc at the SQL/incremental-refresh boundary. Re-sorting
+    // this full list for every AI question was an avoidable O(n log n) stall;
+    // preserve that invariant while filtering excluded rows.
+    final visible = repo.visibleTransactionsRef
+        .where((t) => !t.excluded)
+        .toList(growable: false);
     // 时间范围和分类范围是两个正交筛选条件；之前只应用了前者，导致
     // “这个月购物花了多少”把餐饮、交通等全月支出也算进来了。
     final allTxns = categoryScope == null
@@ -4382,14 +4383,13 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
         ? repo.visibleTransactions
         : repo.visibleTransactionsForBookView(bookId);
     final records =
-        bookId == null ? repo.allRecords : repo.recordsForBookView(bookId);
+        bookId == null ? repo.allRecordsRef : repo.recordsForBookView(bookId);
     Decimal netOf(TransactionEntity transaction) => bookId == null
         ? repo.netAmountOf(transaction)
         : repo.netAmountAcrossBooks(transaction);
     final current = visibleTransactions
         .where((t) => inRange(t, start, endExclusive))
-        .toList()
-      ..sort((a, b) => b.date.compareTo(a.date));
+        .toList(growable: false);
     final previous = visibleTransactions.where(
       (t) => inRange(t, prevStart, prevEnd),
     );
@@ -4571,14 +4571,13 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
         ? repo.visibleTransactions
         : repo.visibleTransactionsForBookView(bookId);
     final records =
-        bookId == null ? repo.allRecords : repo.recordsForBookView(bookId);
+        bookId == null ? repo.allRecordsRef : repo.recordsForBookView(bookId);
     Decimal netOf(TransactionEntity transaction) => bookId == null
         ? repo.netAmountOf(transaction)
         : repo.netAmountAcrossBooks(transaction);
     final current = visibleTransactions
         .where((t) => inRange(t, start, endExclusive))
-        .toList()
-      ..sort((a, b) => b.date.compareTo(a.date));
+        .toList(growable: false);
     final previous = visibleTransactions
         .where((t) => inRange(t, prevStart, prevEnd))
         .toList();
@@ -5300,7 +5299,12 @@ ${line('上月同期', lastStart, lastSameDayEnd, lastSameDay)}
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const _GreetingLine(),
+                    // 预算/记账提示只属于主页「记一记」入口；普通 Chats
+                    // 是独立聊天，不在进入会话时插入本月预算洞察。
+                    if (widget.recordOnly)
+                      const _GreetingLine(
+                        key: ValueKey('ai-chat-greeting'),
+                      ),
                     if (widget.recordOnly) ...[
                       const SizedBox(height: 14),
                       Padding(
@@ -8752,7 +8756,7 @@ Widget buildAiChatAnswerForTesting({
 
 // ── 喵助手打开时主动说的一句洞察 ──────────────────────────────────────────────
 class _GreetingLine extends StatelessWidget {
-  const _GreetingLine();
+  const _GreetingLine({super.key});
 
   @override
   Widget build(BuildContext context) {

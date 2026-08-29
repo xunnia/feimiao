@@ -1,4 +1,5 @@
 import 'package:decimal/decimal.dart';
+import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:flutter/material.dart';
 import 'package:flutter/cupertino.dart' show CupertinoIcons;
 import 'package:provider/provider.dart';
@@ -13,6 +14,8 @@ import '../../data/app_repository.dart';
 import '../../widgets/home_summary_card.dart';
 import '../../widgets/mascot.dart';
 import '../../widgets/app_buttons.dart';
+import '../../widgets/pressable_scale.dart';
+import '../../theme/app_tokens.dart';
 import '../../widgets/settings_ui.dart';
 import '../../widgets/sliding_segment.dart';
 import '../../widgets/transaction_day_list.dart';
@@ -88,7 +91,7 @@ class _HomeViewState extends State<HomeView> {
       child: _HomeMonthPickerSheet(
         initial: DateTime(_year, _month),
         last: DateTime.now(),
-        records: repo.allRecords,
+        records: repo.allRecordsRef,
       ),
     );
     if (picked == null || !mounted) return;
@@ -106,7 +109,7 @@ class _HomeViewState extends State<HomeView> {
     final monthDate = DateTime(_year, _month);
 
     final summary = StatisticsEngine.monthlySummary(
-      repo.allRecords,
+      repo.allRecordsRef,
       year: _year,
       month: _month,
     );
@@ -224,6 +227,18 @@ class _HomeMonthPickerSheet extends StatefulWidget {
   State<_HomeMonthPickerSheet> createState() => _HomeMonthPickerSheetState();
 }
 
+@visibleForTesting
+Widget buildHomeMonthPickerForTesting({
+  DateTime? initial,
+  DateTime? last,
+  List<TransactionRecord> records = const [],
+}) =>
+    _HomeMonthPickerSheet(
+      initial: initial ?? DateTime(2026, 8),
+      last: last ?? DateTime(2026, 8, 28),
+      records: records,
+    );
+
 class _HomeMonthPickerSheetState extends State<_HomeMonthPickerSheet> {
   late int _year = widget.initial.year;
   static const int _firstYear = 2015;
@@ -259,6 +274,7 @@ class _HomeMonthPickerSheetState extends State<_HomeMonthPickerSheet> {
               title: '月份选择',
               subtitle: '月统计起始日：每月 1 号',
               onClose: () => Navigator.pop(context),
+              closeExtraInset: 8,
             ),
             const SizedBox(height: 8),
             Container(
@@ -347,12 +363,38 @@ class _YearArrow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return AppCircleButton(
-      icon: icon,
-      size: 34,
-      iconSize: 20,
-      semanticLabel: enabled ? '切换年份' : '没有更多年份',
-      onPressed: enabled ? onTap : null,
+    final scheme = Theme.of(context).colorScheme;
+    final label = enabled ? '切换年份' : '没有更多年份';
+    return Semantics(
+      button: true,
+      enabled: enabled,
+      label: label,
+      onTap: enabled ? onTap : null,
+      child: Tooltip(
+        message: label,
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(
+            minWidth: AppHitTarget.min,
+            minHeight: AppHitTarget.min,
+          ),
+          child: PressableScale(
+            onPressed: enabled ? onTap : null,
+            child: SizedBox(
+              width: 34,
+              height: 34,
+              child: Center(
+                child: Icon(
+                  icon,
+                  size: 20,
+                  color: enabled
+                      ? scheme.onSurface
+                      : scheme.onSurfaceVariant.withValues(alpha: 0.4),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
     );
   }
 }

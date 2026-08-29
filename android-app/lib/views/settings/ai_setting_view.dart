@@ -29,12 +29,13 @@ import '../common/app_sheet.dart';
 import '../home/ai_chat_panel.dart';
 import 'ai_companion_views.dart';
 
-/// Use Android Custom Tabs so GPT authorization follows the user's normal
-/// Chrome/VPN/proxy network path. The localhost listener is IPv4/IPv6 aware
-/// and is rebound by the lifecycle watcher when Android resumes the app.
+/// Keep the Dart fallback on the external browser. Android first attempts an
+/// isolated Custom Tab, then a Chrome Incognito tab through the native OAuth
+/// channel; only when both are unavailable do we reuse the regular browser
+/// profile. The manual callback field remains available for network failures.
 LaunchMode openAiOAuthLaunchMode({bool? isAndroid}) =>
     (isAndroid ?? Platform.isAndroid)
-        ? LaunchMode.inAppBrowserView
+        ? LaunchMode.externalApplication
         : LaunchMode.inAppBrowserView;
 
 /// AI 设置：入口页负责分组，具体配置拆到子页面。
@@ -394,6 +395,8 @@ class _AiAccountSettingsPageState extends State<_AiAccountSettingsPage> {
           displayName: draft.displayName.text,
         );
     if (draft.authMethod != AiAuthMethod.oauth) return config;
+    final expectedAccessToken = provider.apiKey.trim();
+    final expectedRefreshToken = provider.oauthRefreshToken.trim();
     return config.copyWith(
       oauthTokenSaver: (
         accessToken,
@@ -404,6 +407,12 @@ class _AiAccountSettingsPageState extends State<_AiAccountSettingsPage> {
         final current =
             context.read<AppRepository>().aiProviderById(provider.id) ??
                 provider;
+        if ((expectedAccessToken.isNotEmpty &&
+                current.apiKey.trim() != expectedAccessToken) ||
+            (expectedRefreshToken.isNotEmpty &&
+                current.oauthRefreshToken.trim() != expectedRefreshToken)) {
+          return;
+        }
         await context.read<AppRepository>().saveAiConfiguredProvider(
               current.copyWith(
                 apiKey: accessToken,
@@ -447,18 +456,20 @@ class _AiAccountSettingsPageState extends State<_AiAccountSettingsPage> {
         providerId: provider.id,
         authorizationUrl: raw,
       );
-      // Keep GPT login in Chrome Custom Tabs on Android so the authorization
-      // request uses the same network/proxy route as the user's browser. The
-      // localhost listener is rebound on resume; manual callback paste stays
-      // available if the OS still reclaims the Dart process.
       final authorizationUri = Uri.parse(session.authorizationUrl);
-      final opened = await launchUrl(
-            authorizationUri,
-            mode: openAiOAuthLaunchMode(),
-          ) ||
+      final isolated = Platform.isAndroid &&
+          await OpenAiCodexOAuthKeepAlive.openEphemeralBrowser(
+            authorizationUri.toString(),
+          );
+      final incognito = !isolated &&
+          Platform.isAndroid &&
+          await OpenAiCodexOAuthKeepAlive.openIncognitoBrowser(
+            authorizationUri.toString(),
+          );
+      final opened = isolated || incognito ||
           await launchUrl(
             authorizationUri,
-            mode: LaunchMode.externalApplication,
+            mode: openAiOAuthLaunchMode(),
           );
       if (!opened) {
         await OpenAiCodexOAuth.service.cancel();
@@ -1276,7 +1287,7 @@ class _ProviderCard extends StatelessWidget {
                   if (onDelete != null)
                     Padding(
                       padding: const EdgeInsets.only(right: 8),
-                      child: AppCircleButton.custom(
+                      child: AppPlainIconButton.custom(
                         iconWidget: Icon(
                           CupertinoIcons.trash,
                           size: 17,
@@ -1334,7 +1345,8 @@ class _ProviderCard extends StatelessWidget {
                               : CupertinoIcons.eye_slash,
                           size: 30,
                           iconSize: 18,
-                          semanticLabel: draft.obscureKey ? '显示 API Key' : '隐藏 API Key',
+                          semanticLabel:
+                              draft.obscureKey ? '显示 API Key' : '隐藏 API Key',
                           onPressed: () => _toggleObscure(context),
                         ),
                       ),

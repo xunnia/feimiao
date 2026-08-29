@@ -98,7 +98,7 @@ void main() {
     expect(find.text('Chats'), findsOneWidget);
     final chatsTitle = tester.widget<Text>(find.text('Chats'));
     expect(chatsTitle.style?.fontSize, 19);
-    expect(chatsTitle.style?.fontWeight, FontWeight.w400);
+    expect(chatsTitle.style?.fontWeight, FontWeight.w500);
     expect(find.byKey(const ValueKey('chat-session-card-record')), findsOne);
     expect(find.byKey(const ValueKey('chat-session-card-alpha')), findsOne);
     expect(find.byKey(const ValueKey('chat-new-button')), findsOne);
@@ -114,6 +114,18 @@ void main() {
     final sessionTitle = tester.widget<Text>(find.text('Claude 模型咨询'));
     expect(sessionTitle.style?.fontSize, 14);
     expect(sessionTitle.style?.fontWeight, FontWeight.w400);
+    final sessionTime = tester.widget<Text>(
+      find
+          .byWidgetPredicate(
+            (widget) =>
+                widget is Text &&
+                widget.style?.fontVariations?.length == 1 &&
+                widget.style?.fontVariations?.single.value == 350,
+          )
+          .first,
+    );
+    expect(sessionTime.style?.fontVariations, hasLength(1));
+    expect(sessionTime.style?.fontVariations?.single.value, 350);
 
     final newChatRect = tester.getRect(
       find.byKey(const ValueKey('chat-new-button')),

@@ -167,8 +167,7 @@ class _ReportData {
       repo.recordsForBookView(reportBookId);
   late final List<TransactionEntity> current = visible
       .where((transaction) => _inRange(transaction, start, endExclusive))
-      .toList()
-    ..sort((a, b) => b.date.compareTo(a.date));
+      .toList(growable: false);
   late final List<TransactionEntity> previous = visible
       .where((transaction) => _inRange(transaction, previousStart, previousEnd))
       .toList(growable: false);

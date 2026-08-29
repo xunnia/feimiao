@@ -109,6 +109,56 @@ class AppCircleButton extends StatelessWidget {
   }
 }
 
+/// 无表面图标按钮：给需要弱化的次要操作（例如账号卡片删除）保留
+/// 48dp 热区，但不再绘制圆形底。导航和主要操作仍使用 [AppCircleButton]。
+class AppPlainIconButton extends StatelessWidget {
+  final IconData? icon;
+  final Widget? iconWidget;
+  final VoidCallback? onPressed;
+  final double size;
+  final double iconSize;
+  final String? semanticLabel;
+
+  const AppPlainIconButton({
+    super.key,
+    required this.icon,
+    required this.onPressed,
+    this.size = AppControl.closeVisual,
+    this.iconSize = 18,
+    this.semanticLabel,
+  }) : iconWidget = null;
+
+  const AppPlainIconButton.custom({
+    super.key,
+    required this.iconWidget,
+    required this.onPressed,
+    this.size = AppControl.closeVisual,
+    this.iconSize = 18,
+    this.semanticLabel,
+  }) : icon = null;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return _buttonHitTarget(
+      visualSize: size,
+      onPressed: onPressed,
+      semanticLabel: semanticLabel ?? _labelForIcon(icon),
+      child: PressableScale(
+        onPressed: onPressed,
+        child: SizedBox(
+          width: size,
+          height: size,
+          child: Center(
+            child: iconWidget ??
+                Icon(icon, size: iconSize, color: scheme.onSurfaceVariant),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 /// The compact menu button used by the home header and the Chats header.
 /// Keeping the three bars here prevents the two entry points from drifting.
 class AppDrawerButton extends StatelessWidget {

@@ -2689,6 +2689,12 @@ class AppRepository extends ChangeNotifier {
   /// 121 处 notifyListeners 调用点零改动就全部接入失效。
   int _revision = 0;
 
+  /// 当前内存账本快照的单调版本，供只读视图缓存使用。
+  ///
+  /// 这是一个不包含业务数据的版本号：任何仓库写路径完成通知时都会递增，
+  /// 因此调用方可以用它判断本地派生缓存是否需要重建，而不用重新扫描全部流水。
+  int get dataRevision => _revision;
+
   @override
   void notifyListeners() {
     _revision++;
@@ -2827,6 +2833,7 @@ class AppRepository extends ChangeNotifier {
 
   /// 多服务商配置。API Key 只保存在安全存储中，列表本身仅含元数据。
   final List<AiConfiguredProvider> _aiProviders = [];
+  final Map<String, Future<void>> _aiProviderWriteTails = {};
   String? _recordAiProviderId;
   String? _recordAiModel;
   String? _chatCurrentProviderId;
@@ -3741,6 +3748,8 @@ class AppRepository extends ChangeNotifier {
       effortOverride: effortOverride,
     );
     if (provider.authMethod != AiAuthMethod.oauth) return config;
+    final expectedAccessToken = provider.apiKey.trim();
+    final expectedRefreshToken = provider.oauthRefreshToken.trim();
     return config.copyWith(
       oauthTokenSaver: (
         accessToken,
@@ -3754,6 +3763,8 @@ class AppRepository extends ChangeNotifier {
         refreshToken,
         expiresAtMs,
         accountId,
+        expectedAccessToken: expectedAccessToken,
+        expectedRefreshToken: expectedRefreshToken,
       ),
     );
   }
@@ -7406,6 +7417,7 @@ class AppRepository extends ChangeNotifier {
       ..clear()
       ..addAll(indexed.map((e) => e.$2));
     _booksViewCache = null;
+    _invalidateBookViewCaches();
     _invalidateBalanceDerived();
   }
 
@@ -7595,6 +7607,7 @@ class AppRepository extends ChangeNotifier {
       ..addAll(rows.map(CategoryEntity.fromMap));
     _allRecordsCache = null;
     _categoriesViewCache = null;
+    _invalidateBookViewCaches();
   }
 
   Future<void> _loadBudgetPeriods() async {
@@ -11057,6 +11070,17 @@ class AppRepository extends ChangeNotifier {
   List<TransactionEntity>? _visibleTxViewCache; // 稳定引用，供 select<> 用
   List<TransactionRecord>? _allRecordsViewCache; // 稳定引用，供 select<> 用
 
+  // 指定账本的 AI/报告上下文会重复请求同一份记录流。缓存保存已经完成
+  // category/refund 归并的记录对象，避免每次请求都重新 new 全量
+  // TransactionRecord；对外仍返回可变副本，保持原方法的调用约定。
+  final Map<int, List<TransactionRecord>> _bookRecordsCache = {};
+  final Map<int, List<TransactionEntity>> _bookVisibleTxCache = {};
+  int? _bookViewCacheRevision;
+  int _bookRecordsCacheBuildCount = 0;
+
+  @visibleForTesting
+  int get bookRecordsCacheBuildCount => _bookRecordsCacheBuildCount;
+
   // 稳定引用缓存：对应 _books/_categories/_transactions/_reports 的
   // UnmodifiableListView 包装。只在底层列表被整体重载（clear+addAll）
   // 时置 null，让 select<AppRepository, List<T>>(r=>r.xxx) 能通过
@@ -11076,7 +11100,20 @@ class AppRepository extends ChangeNotifier {
     _visibleTxViewCache = null;
     _allRecordsViewCache = null;
     _txByIdCache = null;
+    _invalidateBookViewCaches();
     _invalidateBalanceDerived();
+  }
+
+  void _invalidateBookViewCaches() {
+    _bookRecordsCache.clear();
+    _bookVisibleTxCache.clear();
+    _bookViewCacheRevision = null;
+  }
+
+  void _ensureBookViewCachesFresh() {
+    if (_bookViewCacheRevision == _revision) return;
+    _invalidateBookViewCaches();
+    _bookViewCacheRevision = _revision;
   }
 
   Map<int, TransactionEntity>? _txByIdCache;
@@ -15012,18 +15049,29 @@ class AppRepository extends ChangeNotifier {
       _buildUserRecords(_transactions, _refundTotals);
 
   List<TransactionEntity> visibleTransactionsForBookView(int bookId) {
+    _ensureBookViewCachesFresh();
+    final cached = _bookVisibleTxCache[bookId];
+    if (cached != null) return List.of(cached);
     final allowed = _bookIdsForView(bookId).toSet();
-    return _globalVisibleTransactions
+    final result = _globalVisibleTransactions
         .where((transaction) =>
             transaction.bookId != null && allowed.contains(transaction.bookId))
         .toList(growable: false);
+    _bookVisibleTxCache[bookId] = result;
+    return List.of(result);
   }
 
   List<TransactionRecord> recordsForBookView(int bookId) {
+    _ensureBookViewCachesFresh();
+    final cached = _bookRecordsCache[bookId];
+    if (cached != null) return List.of(cached);
     final allowed = _bookIdsForView(bookId).toSet();
     final transactions = _allTransactions.where((transaction) =>
         transaction.bookId != null && allowed.contains(transaction.bookId));
-    return _buildUserRecords(transactions, _globalRefundTotals);
+    final result = _buildUserRecords(transactions, _globalRefundTotals);
+    _bookRecordsCache[bookId] = List.unmodifiable(result);
+    _bookRecordsCacheBuildCount++;
+    return List.of(result);
   }
 
   List<TransactionRecord> _buildUserRecords(
@@ -16258,12 +16306,58 @@ class AppRepository extends ChangeNotifier {
 
   /// Add or edit one configured provider. The DeepSeek entry is always kept as
   /// the built-in provider and cannot be renamed into a custom entry.
-  Future<void> saveAiConfiguredProvider(AiConfiguredProvider provider) async {
+  Future<void> saveAiConfiguredProvider(
+    AiConfiguredProvider provider, {
+    String? expectedAccessToken,
+    String? expectedRefreshToken,
+  }) {
+    final key = provider.type == AiProviderType.deepseek
+        ? 'deepseek'
+        : provider.id.trim().isEmpty
+            ? '__new__'
+            : provider.id.trim();
+    final previous = _aiProviderWriteTails[key] ?? Future<void>.value();
+    final gate = Completer<void>();
+    _aiProviderWriteTails[key] = gate.future;
+    return () async {
+      await previous;
+      try {
+        await _saveAiConfiguredProvider(
+          provider,
+          expectedAccessToken: expectedAccessToken,
+          expectedRefreshToken: expectedRefreshToken,
+        );
+      } finally {
+        if (!gate.isCompleted) gate.complete();
+        if (identical(_aiProviderWriteTails[key], gate.future)) {
+          _aiProviderWriteTails.remove(key);
+        }
+      }
+    }();
+  }
+
+  Future<void> _saveAiConfiguredProvider(
+    AiConfiguredProvider provider, {
+    String? expectedAccessToken,
+    String? expectedRefreshToken,
+  }) async {
     var id = provider.id.trim();
     if (provider.type == AiProviderType.deepseek) id = 'deepseek';
     if (id.isEmpty) id = _newUuid();
 
     final existing = aiProviderById(id);
+    bool expectedMatches(AiConfiguredProvider? current) {
+      if (expectedAccessToken == null && expectedRefreshToken == null) {
+        return true;
+      }
+      if (current == null) return false;
+      return (expectedAccessToken == null ||
+              current.apiKey.trim() == expectedAccessToken.trim()) &&
+          (expectedRefreshToken == null ||
+              current.oauthRefreshToken.trim() == expectedRefreshToken.trim());
+    }
+
+    if (!expectedMatches(existing)) return;
     final wasActiveRecordProvider = _recordAiProviderId == id;
     if (existing?.builtIn == true && provider.type != AiProviderType.deepseek) {
       throw StateError('内置服务商不能改为自定义服务商');
@@ -16305,6 +16399,28 @@ class AppRepository extends ChangeNotifier {
             : '';
     await _saveOAuthRefreshToken(id, oauthRefreshToken);
     await _saveOAuthIdToken(id, oauthIdToken);
+
+    // The credential writes above yield to the event loop. A newer
+    // reauthorization may have committed while they were in flight; restore
+    // its secure values and abandon this stale refresh instead of overwriting
+    // the provider metadata below.
+    final latestAfterSecrets = aiProviderById(id);
+    if (!expectedMatches(latestAfterSecrets)) {
+      if (latestAfterSecrets != null) {
+        await _saveSecret(
+          secureKey: _providerSecretKey(id),
+          legacySettingKey: _providerSecretKey(id),
+          configuredSettingKey: '${_providerSecretKey(id)}_configured',
+          value: latestAfterSecrets.apiKey,
+        );
+        await _saveOAuthRefreshToken(
+          id,
+          latestAfterSecrets.oauthRefreshToken,
+        );
+        await _saveOAuthIdToken(id, latestAfterSecrets.oauthIdToken);
+      }
+      return;
+    }
 
     if (isDeepSeek) {
       _deepSeekApiKey = await _saveSecret(
@@ -16348,6 +16464,7 @@ class AppRepository extends ChangeNotifier {
       oauthRefreshToken: oauthRefreshToken,
       oauthExpiresAtMs: provider.oauthExpiresAtMs,
     );
+    if (!expectedMatches(aiProviderById(id))) return;
     final index = _aiProviders.indexWhere((item) => item.id == id);
     if (index == -1) {
       _aiProviders.add(updated);
@@ -16470,14 +16587,24 @@ class AppRepository extends ChangeNotifier {
   }
 
   Future<void> _saveRefreshedAiOAuthTokens(
-    String providerId,
-    String accessToken,
-    String? refreshToken,
-    int? expiresAtMs,
-    String? accountId,
-  ) async {
+      String providerId,
+      String accessToken,
+      String? refreshToken,
+      int? expiresAtMs,
+      String? accountId,
+      {required String expectedAccessToken,
+      required String expectedRefreshToken}) async {
     final provider = aiProviderById(providerId);
     if (provider == null || provider.authMethod != AiAuthMethod.oauth) return;
+    // A user can reauthorize an account while an older request is still
+    // refreshing it. Never let that stale continuation overwrite the newer
+    // access/refresh-token pair (Cockpit applies the same freshness guard).
+    if ((expectedAccessToken.isNotEmpty &&
+            provider.apiKey.trim() != expectedAccessToken) ||
+        (expectedRefreshToken.isNotEmpty &&
+            provider.oauthRefreshToken.trim() != expectedRefreshToken)) {
+      return;
+    }
     await saveAiConfiguredProvider(
       provider.copyWith(
         apiKey: accessToken,
@@ -16485,6 +16612,8 @@ class AppRepository extends ChangeNotifier {
         oauthExpiresAtMs: expiresAtMs ?? provider.oauthExpiresAtMs,
         oauthAccountId: accountId ?? provider.oauthAccountId,
       ),
+      expectedAccessToken: expectedAccessToken,
+      expectedRefreshToken: expectedRefreshToken,
     );
   }
 

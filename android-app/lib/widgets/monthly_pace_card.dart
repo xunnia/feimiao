@@ -2,6 +2,7 @@ import 'dart:math' as math;
 
 import 'package:decimal/decimal.dart';
 import 'package:flutter/cupertino.dart' show CupertinoIcons;
+import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:flutter/material.dart';
 
 import '../core/models/cat_svg_icon.dart';
@@ -44,17 +45,6 @@ class MonthlyPaceCard extends StatelessWidget {
     this.onOpenAllExpenseActivity,
   });
 
-  Decimal _expenseInMonth(DateTime m, {required int throughDay}) {
-    var total = Decimal.zero;
-    for (final r in records) {
-      if (r.kind != TransactionKind.expense) continue;
-      if (r.date.year != m.year || r.date.month != m.month) continue;
-      if (r.date.day > throughDay) continue;
-      total += r.amount;
-    }
-    return total;
-  }
-
   void _openAllExpenseActivity(
     List<CategoryTotal> categories,
     int cutoffDay,
@@ -75,36 +65,14 @@ class MonthlyPaceCard extends StatelessWidget {
     final lastDay = DateTime(year, month + 1, 0).day;
     final today = DateTime.now();
     final cutoffDay = isCurrentMonth ? math.min(today.day, lastDay) : lastDay;
-    final currentMonth = DateTime(year, month);
-    final current = _expenseInMonth(currentMonth, throughDay: cutoffDay);
-
-    final samples = <_PaceSample>[];
-    for (var offset = 6; offset >= 1; offset--) {
-      final m = DateTime(year, month - offset);
-      final monthEndDay = DateTime(m.year, m.month + 1, 0).day;
-      final comparableDay = math.min(cutoffDay, monthEndDay);
-      samples.add(
-        _PaceSample(
-          // 标签必须是真实月份。曾经写成 '${7 - offset}'（柱子序号 1..6），
-          // 而当月那根用真实月份，X 轴就变成「1 2 3 4 5 6 8月」——
-          // 前六个是序号、最后一个是月份，两种口径混在一条轴上，
-          // 用户会以为上个月的数据丢了。DateTime 会自动归一负数月份
-          // （如 year=2026/month=-1 → 2025 年 11 月），跨年也正确。
-          label: '${m.month}月',
-          full: _expenseInMonth(m, throughDay: monthEndDay),
-          pace: _expenseInMonth(m, throughDay: comparableDay),
-          current: false,
-        ),
-      );
-    }
-    samples.add(
-      _PaceSample(
-        label: '$month月',
-        full: current,
-        pace: current,
-        current: true,
-      ),
+    final samples = computeMonthlyPaceSamples(
+      records: records,
+      year: year,
+      month: month,
+      isCurrentMonth: isCurrentMonth,
+      now: today,
     );
+    final current = samples.last.pace;
 
     final comparable = samples
         .where((s) => !s.current && s.pace > Decimal.zero)
@@ -259,18 +227,86 @@ class MonthlyPaceCard extends StatelessWidget {
   }
 }
 
-class _PaceSample {
+class MonthlyPaceSample {
   final String label;
   final Decimal full;
   final Decimal pace;
   final bool current;
 
-  const _PaceSample({
+  const MonthlyPaceSample({
     required this.label,
     required this.full,
     required this.pace,
     required this.current,
   });
+}
+
+/// Computes the six historical pace bars and the current-month bar in one
+/// pass over [records]. Keeping this pure makes the expensive path measurable
+/// without involving Flutter layout or chart painting.
+@visibleForTesting
+List<MonthlyPaceSample> computeMonthlyPaceSamples({
+  required List<TransactionRecord> records,
+  required int year,
+  required int month,
+  required bool isCurrentMonth,
+  DateTime? now,
+}) {
+  final currentMonth = DateTime(year, month);
+  final today = now ?? DateTime.now();
+  final lastDay = DateTime(year, month + 1, 0).day;
+  final cutoffDay = isCurrentMonth ? math.min(today.day, lastDay) : lastDay;
+  final months = <DateTime>[
+    for (var offset = 6; offset >= 1; offset--) DateTime(year, month - offset),
+    currentMonth,
+  ];
+  final monthKeys = <int>{
+    for (final value in months) value.year * 100 + value.month,
+  };
+  final cutoffs = <int, int>{
+    for (final value in months)
+      value.year * 100 + value.month: value == currentMonth
+          ? cutoffDay
+          : math.min(
+              cutoffDay,
+              DateTime(value.year, value.month + 1, 0).day,
+            ),
+  };
+  final fullByMonth = <int, Decimal>{};
+  final paceByMonth = <int, Decimal>{};
+  for (final record in records) {
+    if (record.kind != TransactionKind.expense) continue;
+    final key = record.date.year * 100 + record.date.month;
+    if (!monthKeys.contains(key)) continue;
+    fullByMonth[key] = (fullByMonth[key] ?? Decimal.zero) + record.amount;
+    if (record.date.day <= cutoffs[key]!) {
+      paceByMonth[key] = (paceByMonth[key] ?? Decimal.zero) + record.amount;
+    }
+  }
+
+  final samples = <MonthlyPaceSample>[];
+  for (final value in months.take(6)) {
+    final key = value.year * 100 + value.month;
+    samples.add(
+      MonthlyPaceSample(
+        label: '${value.month}月',
+        full: fullByMonth[key] ?? Decimal.zero,
+        pace: paceByMonth[key] ?? Decimal.zero,
+        current: false,
+      ),
+    );
+  }
+  final currentKey = year * 100 + month;
+  final current = paceByMonth[currentKey] ?? Decimal.zero;
+  samples.add(
+    MonthlyPaceSample(
+      label: '$month月',
+      full: current,
+      pace: current,
+      current: true,
+    ),
+  );
+  return List.unmodifiable(samples);
 }
 
 class _PaceMetric extends StatelessWidget {
@@ -330,7 +366,7 @@ class _PaceMetric extends StatelessWidget {
 }
 
 class _PaceBarsChart extends StatelessWidget {
-  final List<_PaceSample> samples;
+  final List<MonthlyPaceSample> samples;
   final Decimal average;
 
   /// 整个柱图区总高（含底部月份标签）；小组件紧凑模式传小值。
@@ -432,7 +468,7 @@ class _PaceBarsChart extends StatelessWidget {
 }
 
 class _PaceBar extends StatelessWidget {
-  final _PaceSample sample;
+  final MonthlyPaceSample sample;
   final double maxValue;
   final double height;
   final Color currentColor;
