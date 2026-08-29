@@ -63,8 +63,17 @@ jobs:
           set -e
           if [ "$build_status" -ne 0 ]; then
             grep -n -E 'error:|fatal error|BUILD FAILED' xcodebuild-simulator.log | tail -200 || true
+            grep -n -E 'error:|fatal error|BUILD FAILED' xcodebuild-simulator.log | tail -200 | while IFS= read -r line; do
+              echo "::error title=Xcode compiler::$line"
+            done
           fi
           exit "$build_status"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: build-app-diagnostics
+          path: xcodebuild-simulator.log
+          if-no-files-found: warn
       - name: Package simulator app for Appetize
         run: |
           APP_PATH="build-simulator/Build/Products/Debug-iphonesimulator/QingJi.app"

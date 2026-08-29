@@ -545,7 +545,6 @@ private struct HomeRecordInputBar: View {
                     } label: {
                         HStack(spacing: 6) {
                             Image(systemName: isAIMode ? "sparkles" : "pencil")
-                                .symbolEffect(.replace, value: isAIMode)
                             Text(isAIMode ? "AI 记账" : "手动记账")
                         }
                         .font(.subheadline)
