@@ -220,6 +220,7 @@ jobs:
 
           shoot "home"         "01-home"
           shoot "quickadd"     "02-quickadd"
+          shoot "quickadd/income" "37-quickadd-income"
           shoot "transactions" "03-transactions"
           shoot "stats-week"   "04-stats-week"
           shoot "stats-month"  "05-stats-month"
@@ -231,6 +232,7 @@ jobs:
           shoot "savings"      "11-savings"
           shoot "recurring"    "12-recurring"
           shoot "assets"       "13-assets"
+          shoot "settings/assets/detail" "38-assets-detail"
           shoot "liabilities"  "14-liabilities"
           shoot "net-worth"    "15-net-worth"
           shoot "books"        "16-books"
@@ -258,9 +260,9 @@ jobs:
 
           # 校验：35 张图若全部相同说明导航又失败了，直接让 CI 报错
           UNIQUE=$(md5 -q screenshots/*.png | sort -u | wc -l | tr -d ' ')
-          echo "不同截图数量：$UNIQUE / 35"
+          echo "不同截图数量：$UNIQUE / 37"
           if [ "$UNIQUE" -le 1 ]; then
-            echo "::error::35 张截图完全相同，深链/启动参数导航未生效"
+            echo "::error::截图全部相同，深链/启动参数导航未生效"
             exit 1
           fi
       - uses: actions/upload-artifact@v4

@@ -287,6 +287,22 @@
       "ios": "ci-artifacts/ios-screenshots/35-display.png",
       "iosRoute": "settings/display",
       "notes": "内容优先/分类优先和用户气泡背景策略。"
+    },
+    {
+      "id": "quick-add-income",
+      "feature": "收入记账操作态",
+      "android": "android-app/outputs/parity/quickadd-income-android.png",
+      "ios": "ci-artifacts/ios-screenshots/37-quickadd-income.png",
+      "iosRoute": "quickadd/income",
+      "notes": "同一记一笔页面切换到收入类型；键盘、分类和账户入口保留平台原生表现。"
+    },
+    {
+      "id": "asset-detail",
+      "feature": "物品资产详情操作态",
+      "android": "android-app/outputs/parity/asset-detail-android.png",
+      "ios": "ci-artifacts/ios-screenshots/38-assets-detail.png",
+      "iosRoute": "settings/assets/detail",
+      "notes": "同一演示物品的估值、持有指标、账单关联和出售/退货入口；操作按钮允许原生布局差异。"
     }
   ]
 }

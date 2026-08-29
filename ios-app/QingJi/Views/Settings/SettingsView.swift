@@ -118,8 +118,8 @@ struct SettingsView: View {
         case .reimburse: ReimburseView()
         case .savings:   SavingsGoalsView()
         case .recurring: RecurringRulesView()
-        case .assets:    AssetsView()
-        case .assetDetail: AssetsView(opensFirstDetail: true)
+        case .assets:    AssetsView(startsOnPhysical: true)
+        case .assetDetail: AssetsView(opensFirstDetail: true, startsOnPhysical: true)
         case .liabilities: LiabilitiesView()
         case .netWorth:  NetWorthView()
         case .importReview:

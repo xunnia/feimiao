@@ -155,6 +155,7 @@ jobs:
           }
           shoot home 01-home
           shoot quickadd 02-quickadd
+          shoot quickadd/income 37-quickadd-income
           shoot transactions 03-transactions
           shoot stats-week 04-stats-week
           shoot stats-month 05-stats-month
@@ -166,6 +167,7 @@ jobs:
           shoot savings 11-savings
           shoot recurring 12-recurring
           shoot assets 13-assets
+          shoot settings/assets/detail 38-assets-detail
           shoot liabilities 14-liabilities
           shoot net-worth 15-net-worth
           shoot books 16-books

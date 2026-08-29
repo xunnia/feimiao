@@ -42,6 +42,10 @@ final class AppRouter {
     /// 记一笔页接到 qingji://ai 时弹出 AI 记账 sheet。
     var showAISheet: Bool = false
 
+    /// CI parity only: open the real quick-add page on the income segment.
+    /// Normal launches keep the Android default of expense.
+    var quickAddStartsWithIncome = false
+
     /// AI 深链打开 Chats 会话列表。
     var showChats: Bool = false
 
@@ -63,6 +67,19 @@ final class AppRouter {
 
     /// 把启动参数映射到初始路由状态。
     private func applyLaunchScreen(_ screen: String) {
+        if screen == "home/drawer" {
+            selectedTab = .home
+            return
+        }
+        if screen == "books" {
+            selectedTab = .home
+            return
+        }
+        if screen == "quickadd/income" {
+            selectedTab = .quickAdd
+            quickAddStartsWithIncome = true
+            return
+        }
         if screen == "settings/ai" {
             selectedTab = .settings
             settingsPushTarget = .ai

@@ -36,6 +36,7 @@ struct QuickAddView: View {
     @State private var selectedTagNames: Set<String> = []
     @State private var attachmentPath = ""
     @State private var saveError: String?
+    @State private var didApplyLaunchKind = false
 
     private var visibleCategories: [TxCategory] {
         let matching = allCategories.filter { $0.kind == kind && !$0.isArchived }
@@ -169,7 +170,15 @@ struct QuickAddView: View {
                         .transition(.move(edge: .top).combined(with: .opacity))
                 }
             }
-            .onAppear(perform: prepareDefaults)
+            .onAppear {
+                if !didApplyLaunchKind {
+                    didApplyLaunchKind = true
+                    if router.quickAddStartsWithIncome {
+                        kind = .income
+                    }
+                }
+                prepareDefaults()
+            }
             .onChange(of: kind) { resetCategorySelection() }
             .onChange(of: accounts.count) {
                 if selectedAccountID == nil { selectedAccountID = usableAccounts.first?.stableID }

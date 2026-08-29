@@ -13,6 +13,7 @@ import 'package:qingji/main.dart' as app;
 import 'package:qingji/share_intake.dart';
 import 'package:qingji/views/assistant/meow_assistant_view.dart';
 import 'package:qingji/views/quick_add/quick_add_view.dart';
+import 'package:qingji/views/assets/physical_asset_detail_page.dart';
 import 'package:qingji/views/reports/report_views.dart';
 import 'package:qingji/views/savings/savings_goals_view.dart';
 import 'package:qingji/views/settings/accounts_view.dart';
@@ -76,6 +77,7 @@ void main() {
       const QuickAddView(),
       binding,
     );
+    await _captureQuickAddIncome(tester, binding);
     await _capturePage(
       tester,
       'transactions-android',
@@ -230,6 +232,16 @@ void main() {
       binding,
     );
     await _captureDisplaySettings(tester, binding);
+    final detailAsset = await _ensureAssetDetailFixture(repo);
+    await _capturePage(
+      tester,
+      'asset-detail-android',
+      PhysicalAssetDetailPage(
+        assetId: detailAsset.id,
+        fallbackAsset: detailAsset,
+      ),
+      binding,
+    );
     await _capturePage(
       tester,
       'import-review-android',
@@ -461,6 +473,23 @@ Future<void> _captureBooks(
   final size = tester.view.physicalSize / tester.view.devicePixelRatio;
   await tester.tapAt(Offset(size.width - 8, size.height / 2));
   await _pumpFor(tester, const Duration(milliseconds: 500));
+}
+
+Future<void> _captureQuickAddIncome(
+  WidgetTester tester,
+  IntegrationTestWidgetsFlutterBinding binding,
+) async {
+  final navigator = ShareIntake.navigatorKey.currentState;
+  expect(navigator, isNotNull);
+  unawaited(
+    navigator!.push<void>(_parityPageRoute<void>(const QuickAddView())),
+  );
+  await _pumpFor(tester, const Duration(milliseconds: 700));
+  final income = find.text('收入');
+  expect(income, findsAtLeastNWidgets(1));
+  await tester.tap(income.first);
+  await _pumpFor(tester, const Duration(milliseconds: 500));
+  await _takeScreenshot(tester, binding, 'quickadd-income-android');
 }
 
 Future<void> _captureStatistics(
@@ -894,6 +923,33 @@ Future<void> _ensureFixture(AppRepository repo) async {
     );
   }
   await _ensureReport(repo);
+}
+
+Future<PhysicalAssetEntity> _ensureAssetDetailFixture(
+  AppRepository repo,
+) async {
+  final existing = repo.globalActivePhysicalAssets.firstOrNull;
+  if (existing != null) return existing;
+
+  final assetId = await repo.addPhysicalAsset(
+    name: 'iPhone Air',
+    assetType: AssetType.digital,
+    currentValue: Decimal.parse('5800'),
+    purchasePrice: Decimal.parse('6999'),
+    sourceType: PhysicalAssetSourceType.historicalExisting,
+    purchaseDate: DateTime(2026, 5, 27, 12),
+    brand: 'Apple',
+    model: 'iPhone Air',
+    location: '随身',
+    warrantyUntil: DateTime(2027, 8, 27, 12),
+    note: '演示物品资产',
+    includeInNetWorth: true,
+    occurredAt: DateTime(2026, 5, 27, 12),
+  );
+  await repo.fullyReady;
+  final asset = repo.physicalAssetDetailById(assetId);
+  if (asset == null) throw StateError('资产演示数据写入后无法读取');
+  return asset;
 }
 
 Future<void> _ensureReport(AppRepository repo) async {

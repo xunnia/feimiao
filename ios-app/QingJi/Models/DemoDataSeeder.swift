@@ -49,6 +49,15 @@ enum DemoDataSeeder {
         ))
         insertSavingsGoals(context: context)
         insertRecurringRules(context: context, categories: categories, accounts: accounts, book: book)
+        // Keep the base 35-screen fixture aligned with Android, which starts
+        // the asset hub without an existing physical asset. The detail
+        // operation screen opts into the richer asset fixture explicitly.
+        let launchScreen = ProcessInfo.processInfo.environment["QINGJI_SCREEN"] ?? ""
+        if launchScreen == "assets/detail" ||
+            launchScreen == "assets-detail" ||
+            launchScreen == "settings/assets/detail" {
+            insertAssetData(context: context, accounts: accounts, book: book)
+        }
         insertReports(context: context, book: book)
         try? context.save()
     }

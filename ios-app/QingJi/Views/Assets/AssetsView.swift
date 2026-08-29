@@ -64,8 +64,11 @@ struct AssetsView: View {
         receivables.filter { !$0.isDeleted && $0.lifecycle != .archived }
     }
 
-    init(opensFirstDetail: Bool = false) {
+    init(opensFirstDetail: Bool = false, startsOnPhysical: Bool = false) {
         self.opensFirstDetail = opensFirstDetail
+        _selectedTab = State(
+            initialValue: startsOnPhysical || opensFirstDetail ? .physical : .funds
+        )
     }
 
     var body: some View {

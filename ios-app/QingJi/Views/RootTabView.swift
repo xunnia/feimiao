@@ -17,6 +17,7 @@ struct RootTabView: View {
         // publish its initial [] value first, which previously reset the
         // router to home and left the requested page blank.
         _path = State(initialValue: Self.initialPath())
+        _drawerPresented = State(initialValue: Self.initialDrawerPresented())
     }
 
     var body: some View {
@@ -128,7 +129,9 @@ struct RootTabView: View {
             : screen
         switch normalized {
         case "home": return []
+        case "home/drawer": return []
         case "quickadd": return [.quickAdd]
+        case "quickadd/income": return [.quickAdd]
         case "search": return [.search]
         case "transactions": return [.transactions]
         case "stats-month", "stats-week", "stats/year", "stats/week", "stats-year", "stats-custom", "stats/month":
@@ -143,6 +146,11 @@ struct RootTabView: View {
         case "ai": return [.quickAdd]
         default: return []
         }
+    }
+
+    private static func initialDrawerPresented() -> Bool {
+        let screen = ProcessInfo.processInfo.environment["QINGJI_SCREEN"] ?? ""
+        return screen == "home/drawer" || screen == "books"
     }
 
     private func navigate(to destination: DrawerDestination) {
