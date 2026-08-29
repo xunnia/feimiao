@@ -12,23 +12,12 @@ struct LiquidGlassBackdrop: View {
                 colors: [
                     Color.accentColor.opacity(0.10),
                     Color.purple.opacity(0.045),
-                    Color(uiColor: .systemGroupedBackground).opacity(0.02)
+                    Color(uiColor: .systemGroupedBackground).opacity(0.02),
+                    Color(uiColor: .systemGroupedBackground)
                 ],
                 startPoint: .topLeading,
                 endPoint: .bottomTrailing
             )
-
-            Circle()
-                .fill(Color.accentColor.opacity(0.10))
-                .frame(width: 240, height: 240)
-                .blur(radius: 58)
-                .offset(x: 150, y: -330)
-
-            Circle()
-                .fill(Color.purple.opacity(0.06))
-                .frame(width: 210, height: 210)
-                .blur(radius: 64)
-                .offset(x: -150, y: 360)
         }
         .accessibilityHidden(true)
     }
