@@ -57,6 +57,7 @@ jobs:
           disable-animations: false
           working-directory: android-app
           script: >-
+            adb shell cmd uimode night no &&
             flutter drive
             --driver=test_driver/integration_test.dart
             --target=integration_test/parity_screenshots_test.dart
