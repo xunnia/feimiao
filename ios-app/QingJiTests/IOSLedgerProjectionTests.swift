@@ -96,9 +96,9 @@ final class IOSLedgerProjectionTests: XCTestCase {
         let speedup = cachedMilliseconds > 0 ? naiveMilliseconds / cachedMilliseconds : 0
         print(
             "IOS_PERF_COMPARISON dataset=10000 iterations=\(iterations) " +
-            "naive_ms=\(String(format: \"%.2f\", naiveMilliseconds)) " +
-            "cached_ms=\(String(format: \"%.2f\", cachedMilliseconds)) " +
-            "speedup=\(String(format: \"%.2fx\", speedup))"
+            "naive_ms=\(String(format: "%.2f", naiveMilliseconds)) " +
+            "cached_ms=\(String(format: "%.2f", cachedMilliseconds)) " +
+            "speedup=\(String(format: "%.2fx", speedup))"
         )
         XCTAssertNotEqual(naiveChecksum, .zero)
         XCTAssertNotEqual(cachedChecksum, .zero)
