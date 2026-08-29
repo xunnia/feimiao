@@ -36,24 +36,17 @@ jobs:
       - name: Resolve Android dependencies
         working-directory: android-app
         run: flutter pub get
-      - name: Select Gradle distribution for GitHub runner
+      - name: Setup Gradle 9.1 for GitHub runner
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "9.1.0"
+      - name: Route Flutter through cached Gradle
         working-directory: android-app/android
         run: |
-          sed -i \
-            's#https\\://mirrors.cloud.tencent.com/gradle/gradle-9.1.0-all.zip#https\\://services.gradle.org/distributions/gradle-9.1.0-all.zip#' \
-            gradle/wrapper/gradle-wrapper.properties
-      - uses: gradle/actions/setup-gradle@v4
-      - name: Warm Gradle wrapper
-        working-directory: android-app/android
-        run: |
-          for attempt in 1 2 3; do
-            if ./gradlew --version; then
-              exit 0
-            fi
-            echo "Gradle wrapper download failed on attempt $attempt"
-            sleep $((attempt * 5))
-          done
-          exit 1
+          gradle --version
+          cp gradlew gradlew-wrapper-original
+          printf '#!/usr/bin/env bash\nexec gradle "$@"\n' > gradlew
+          chmod +x gradlew
       - name: Enable KVM group permissions
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
