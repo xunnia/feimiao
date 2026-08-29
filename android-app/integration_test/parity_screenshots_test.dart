@@ -512,9 +512,11 @@ Future<void> _captureReimburseSettlement(
     navigator!.push<void>(_parityPageRoute<void>(const ReimburseView())),
   );
   await _pumpFor(tester, const Duration(milliseconds: 700));
-  final pendingRow = find.text('朋友聚餐 AA');
-  expect(pendingRow, findsAtLeastNWidgets(1));
-  await tester.tap(pendingRow.first);
+  final settleButton = find.text('已报销');
+  expect(settleButton, findsAtLeastNWidgets(1));
+  // The base reimburse page remains mounted for the rest of the capture run;
+  // tap the action on the topmost page rather than its hidden earlier copy.
+  await tester.tap(settleButton.last);
   await _pumpFor(tester, const Duration(milliseconds: 700));
   expect(find.text('报销到账'), findsAtLeastNWidgets(1));
   await _takeScreenshot(tester, binding, 'reimburse-settlement-android');
