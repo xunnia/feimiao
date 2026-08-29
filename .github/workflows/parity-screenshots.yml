@@ -56,21 +56,20 @@ jobs:
           disable-linux-hw-accel: false
           disable-animations: false
           working-directory: android-app
-          script: >-
-            set -o pipefail;
-            adb shell cmd uimode night no &&
-            flutter drive
-            --driver=test_driver/integration_test.dart
-            --target=integration_test/parity_screenshots_test.dart
-            --device-id emulator-5554
-            --no-pub
-            --dart-define=QINGJI_PARITY_CAPTURE=true 2>&1 |
-            tee parity-flutter-drive.log
+          script: |
+            set -o pipefail
+            flutter drive \
+              --driver=test_driver/integration_test.dart \
+              --target=integration_test/parity_screenshots_test.dart \
+              --device-id emulator-5554 \
+              --no-pub \
+              --dart-define=QINGJI_PARITY_CAPTURE=true \
+              2>&1 | tee "$GITHUB_WORKSPACE/android-parity-drive.log"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: android-parity-drive-log
-          path: android-app/parity-flutter-drive.log
+          path: android-parity-drive.log
           if-no-files-found: warn
       - uses: actions/upload-artifact@v4
         if: always()
