@@ -94,7 +94,7 @@ struct AssetsView: View {
             .padding(.horizontal)
             .padding(.vertical, 12)
         }
-        .background(Color(.systemGroupedBackground))
+        .liquidGlassCanvas()
         .onAppear {
             guard opensFirstDetail, !didOpenLaunchDetail,
                   let first = visibleAssets.first else { return }
@@ -244,7 +244,7 @@ struct AssetsView: View {
                             .foregroundStyle(balance < 0 ? Color.warning : Color.primary)
                     }
                     .padding(12)
-                    .background(.thinMaterial, in: .rect(cornerRadius: 14))
+                    .glassEffect(.regular, in: .rect(cornerRadius: 14))
                 }
                 .buttonStyle(.plain)
             }
@@ -292,7 +292,7 @@ struct AssetsView: View {
                     .foregroundStyle(.primary)
             }
             .padding(12)
-            .background(.thinMaterial, in: .rect(cornerRadius: 14))
+            .glassEffect(.regular, in: .rect(cornerRadius: 14))
         }
         .buttonStyle(.plain)
         .contextMenu {
@@ -381,13 +381,13 @@ struct AssetsView: View {
                 if asset.remainingAmount > 0 {
                     Button("收回") { recoveryAsset = asset }
                         .font(.caption.weight(.semibold))
-                        .buttonStyle(.borderedProminent)
+                        .buttonStyle(.glassProminent)
                         .controlSize(.mini)
                 }
             }
         }
         .padding(12)
-        .background(.thinMaterial, in: .rect(cornerRadius: 14))
+        .glassEffect(.regular, in: .rect(cornerRadius: 14))
         .contextMenu {
             Button {
                 do { try ReceivableStore.archive(asset, in: context) }

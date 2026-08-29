@@ -76,7 +76,7 @@ struct PhysicalAssetDetailView: View {
                 .padding(.horizontal, 16)
                 .padding(.vertical, 12)
             }
-            .background(Color(.systemGroupedBackground))
+            .liquidGlassCanvas()
             .navigationTitle(asset.name)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -158,6 +158,7 @@ struct PhysicalAssetDetailView: View {
             } message: {
                 Text(errorMessage ?? "")
             }
+            .liquidGlassChrome()
         }
     }
 
@@ -238,7 +239,7 @@ struct PhysicalAssetDetailView: View {
                 .font(.subheadline.weight(.medium))
                 .frame(maxWidth: .infinity, minHeight: 42)
         }
-        .buttonStyle(.bordered)
+        .buttonStyle(.glass)
         .tint(.accentColor)
         .disabled(!enabled)
         .accessibilityLabel(title)
@@ -419,7 +420,7 @@ private struct DetailCard<Content: View>: View {
             content
         }
         .padding(14)
-        .background(.thinMaterial, in: .rect(cornerRadius: 16))
+        .glassEffect(.regular, in: .rect(cornerRadius: 16))
     }
 }
 

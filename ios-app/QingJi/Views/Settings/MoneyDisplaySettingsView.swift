@@ -75,6 +75,8 @@ struct MoneyDisplaySettingsView: View {
                     .foregroundStyle(.secondary)
             }
         }
+        .scrollContentBackground(.hidden)
+        .liquidGlassCanvas()
         .navigationTitle("金额显示")
         .navigationBarTitleDisplayMode(.inline)
     }

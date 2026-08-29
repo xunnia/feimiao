@@ -278,6 +278,8 @@ struct TransactionListView: View {
             }
         }
         .listStyle(.plain)
+        .scrollContentBackground(.hidden)
+        .liquidGlassCanvas()
     }
 
     private func summaryCard(_ summary: TransactionListSummary) -> some View {

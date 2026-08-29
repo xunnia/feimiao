@@ -58,6 +58,8 @@ struct AITaskCenterView: View {
             }
         }
         .listStyle(.insetGrouped)
+        .scrollContentBackground(.hidden)
+        .liquidGlassCanvas()
         .navigationTitle("AI 任务中心")
         .navigationBarTitleDisplayMode(.inline)
     }
@@ -155,6 +157,8 @@ struct AITaskDetailView: View {
             }
         }
         .listStyle(.insetGrouped)
+        .scrollContentBackground(.hidden)
+        .liquidGlassCanvas()
         .navigationTitle("AI 任务详情")
         .navigationBarTitleDisplayMode(.inline)
     }
@@ -199,6 +203,8 @@ struct AIExtensionSettingsView: View {
             }
         }
         .listStyle(.insetGrouped)
+        .scrollContentBackground(.hidden)
+        .liquidGlassCanvas()
         .navigationTitle("技能与连接")
         .navigationBarTitleDisplayMode(.inline)
     }
@@ -300,6 +306,8 @@ struct AIReportScheduleView: View {
             }
         }
         .listStyle(.insetGrouped)
+        .scrollContentBackground(.hidden)
+        .liquidGlassCanvas()
         .navigationTitle("定时报表")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -462,6 +470,8 @@ struct AIUnifiedSearchView: View {
             }
         }
         .listStyle(.insetGrouped)
+        .scrollContentBackground(.hidden)
+        .liquidGlassCanvas()
         .navigationTitle("统一搜索")
         .navigationBarTitleDisplayMode(.inline)
         .searchable(text: $query, prompt: "搜索账单、对话或 AI 任务")
@@ -522,6 +532,8 @@ struct AIDiagnosticsView: View {
             }
         }
         .listStyle(.insetGrouped)
+        .scrollContentBackground(.hidden)
+        .liquidGlassCanvas()
         .navigationTitle("AI 诊断")
         .navigationBarTitleDisplayMode(.inline)
     }

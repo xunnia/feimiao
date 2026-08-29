@@ -158,7 +158,7 @@ struct AccountDetailView: View {
             .padding(.horizontal, 16)
             .padding(.vertical, 12)
         }
-        .background(Color(.systemGroupedBackground))
+        .liquidGlassCanvas()
         .navigationTitle(currentAccount.name)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -180,8 +180,8 @@ struct AccountDetailView: View {
                 } label: {
                     Image(systemName: "ellipsis")
                         .frame(width: 44, height: 44)
-                        .glassEffect(.regular.interactive(), in: .circle)
                 }
+                .buttonStyle(.glass)
                 .accessibilityLabel("账户操作")
             }
         }
@@ -286,9 +286,9 @@ struct AccountDetailView: View {
                 .padding(14)
                 .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.glass)
         }
-        .background(Color(.secondarySystemGroupedBackground), in: .rect(cornerRadius: 14))
+        .glassEffect(.regular, in: .rect(cornerRadius: 14))
     }
 
     private var trendCard: some View {
@@ -318,7 +318,7 @@ struct AccountDetailView: View {
             .foregroundStyle(.secondary)
         }
         .padding(14)
-        .background(Color(.secondarySystemGroupedBackground), in: .rect(cornerRadius: 14))
+        .glassEffect(.regular, in: .rect(cornerRadius: 14))
     }
 
     private var checkpointSection: some View {
@@ -343,7 +343,7 @@ struct AccountDetailView: View {
                             checkpointToReverse = checkpoint
                         }
                         .font(.caption.weight(.semibold))
-                        .buttonStyle(.bordered)
+                        .buttonStyle(.glass)
                         .controlSize(.small)
                     } else {
                         Text("已撤销")
@@ -357,7 +357,7 @@ struct AccountDetailView: View {
                 }
             }
         }
-        .background(Color(.secondarySystemGroupedBackground), in: .rect(cornerRadius: 14))
+        .glassEffect(.regular, in: .rect(cornerRadius: 14))
     }
 
     private var accountInfoSection: some View {
@@ -374,7 +374,7 @@ struct AccountDetailView: View {
             infoRow("币种", currentAccount.currencyCode == "CNY" ? "人民币" : currentAccount.currencyCode)
             infoRow("净资产", currentAccount.includeInNetWorth ? "计入净资产" : "不计入净资产")
         }
-        .background(Color(.secondarySystemGroupedBackground), in: .rect(cornerRadius: 14))
+        .glassEffect(.regular, in: .rect(cornerRadius: 14))
     }
 
     private var activitySection: some View {
@@ -418,7 +418,7 @@ struct AccountDetailView: View {
                 }
             }
         }
-        .background(Color(.secondarySystemGroupedBackground), in: .rect(cornerRadius: 14))
+        .glassEffect(.regular, in: .rect(cornerRadius: 14))
     }
 
     private func infoRow(_ title: String, _ value: String) -> some View {

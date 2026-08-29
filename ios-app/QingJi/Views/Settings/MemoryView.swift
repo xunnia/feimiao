@@ -47,6 +47,8 @@ struct MemoryView: View {
                     }
                 }
                 .listStyle(.insetGrouped)
+                .scrollContentBackground(.hidden)
+                .liquidGlassCanvas()
             }
         }
         .navigationTitle("喵学到的分类")

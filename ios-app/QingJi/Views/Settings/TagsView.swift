@@ -52,6 +52,8 @@ struct TagsView: View {
             }
         }
         .listStyle(.insetGrouped)
+        .scrollContentBackground(.hidden)
+        .liquidGlassCanvas()
         .navigationTitle("标签管理")
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {

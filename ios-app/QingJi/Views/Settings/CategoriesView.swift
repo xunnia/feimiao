@@ -73,6 +73,8 @@ struct CategoriesView: View {
             }
         }
         .listStyle(.insetGrouped)
+        .scrollContentBackground(.hidden)
+        .liquidGlassCanvas()
         .navigationTitle("分类管理")
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {

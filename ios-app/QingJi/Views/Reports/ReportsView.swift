@@ -43,6 +43,8 @@ struct ReportsView: View {
                         }
                     }
                     .listStyle(.insetGrouped)
+                    .scrollContentBackground(.hidden)
+                    .liquidGlassCanvas()
                 }
             }
             .navigationTitle("报告")

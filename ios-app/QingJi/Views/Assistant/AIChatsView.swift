@@ -95,6 +95,8 @@ struct AIChatsView: View {
             }
         }
         .listStyle(.insetGrouped)
+        .scrollContentBackground(.hidden)
+        .liquidGlassCanvas()
         .navigationTitle("Chats")
         .searchable(text: $searchText, prompt: "搜索会话")
         .toolbar {

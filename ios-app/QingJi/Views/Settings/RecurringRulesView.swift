@@ -50,6 +50,8 @@ struct RecurringRulesView: View {
             }
         }
         .listStyle(.insetGrouped)
+        .scrollContentBackground(.hidden)
+        .liquidGlassCanvas()
         .navigationTitle("定时记账")
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {

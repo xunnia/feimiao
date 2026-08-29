@@ -110,6 +110,7 @@ struct QuickAddView: View {
                 AmountKeypad(expression: $expression, onSave: save)
                     .padding(.bottom, 8)
             }
+            .liquidGlassCanvas()
             .navigationTitle("记一笔")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -271,7 +272,7 @@ struct QuickAddView: View {
                     Label("更多", systemImage: "ellipsis.circle")
                         .font(.subheadline)
                 }
-                .buttonStyle(.bordered)
+                .buttonStyle(.glass)
             }
             .padding(.horizontal)
             .padding(.vertical, 8)

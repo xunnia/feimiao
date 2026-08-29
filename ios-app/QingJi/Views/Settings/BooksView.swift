@@ -48,6 +48,8 @@ struct BooksView: View {
             }
         }
         .listStyle(.insetGrouped)
+        .scrollContentBackground(.hidden)
+        .liquidGlassCanvas()
         .navigationTitle("账本管理")
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {

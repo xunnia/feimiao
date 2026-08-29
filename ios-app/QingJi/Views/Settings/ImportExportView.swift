@@ -51,6 +51,8 @@ struct ImportExportView: View {
             }
         }
         .listStyle(.insetGrouped)
+        .scrollContentBackground(.hidden)
+        .liquidGlassCanvas()
         .navigationTitle("导入导出")
         .navigationBarTitleDisplayMode(.inline)
         .fileImporter(

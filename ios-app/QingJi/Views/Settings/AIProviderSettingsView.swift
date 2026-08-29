@@ -120,6 +120,8 @@ struct AIProviderSettingsView: View {
             }
         }
         .listStyle(.insetGrouped)
+        .scrollContentBackground(.hidden)
+        .liquidGlassCanvas()
         .navigationTitle("AI 与喵助手")
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {

@@ -81,6 +81,8 @@ struct SettingsView: View {
                         .foregroundStyle(.secondary)
                 }
             }
+            .scrollContentBackground(.hidden)
+            .liquidGlassCanvas()
             .navigationTitle("设置")
             .navigationDestination(item: $router.settingsPushTarget) { target in
                 settingsDestinationView(target)

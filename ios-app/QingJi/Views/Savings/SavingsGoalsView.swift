@@ -63,6 +63,8 @@ struct SavingsGoalsView: View {
             }
         }
         .listStyle(.insetGrouped)
+        .scrollContentBackground(.hidden)
+        .liquidGlassCanvas()
         .navigationTitle("存钱目标")
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {

@@ -186,6 +186,8 @@ struct ImportReviewView: View {
                 }
             }
             .listStyle(.insetGrouped)
+            .scrollContentBackground(.hidden)
+            .liquidGlassCanvas()
             .navigationTitle("导入复核")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

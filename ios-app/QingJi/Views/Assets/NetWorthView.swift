@@ -87,6 +87,8 @@ struct NetWorthView: View {
             }
         }
         .listStyle(.insetGrouped)
+        .scrollContentBackground(.hidden)
+        .liquidGlassCanvas()
         .navigationTitle("净资产")
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {

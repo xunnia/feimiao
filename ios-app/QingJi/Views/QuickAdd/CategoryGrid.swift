@@ -25,7 +25,11 @@ struct CategoryGrid: View {
                                     .font(.system(size: 25))
                                     .frame(width: 48, height: 48)
                                     .background(
-                                        isSelected ? Color.accentColor.opacity(0.84) : Color(.secondarySystemBackground),
+                                        isSelected ? Color.accentColor.opacity(0.18) : Color.clear,
+                                        in: .circle
+                                    )
+                                    .glassEffect(
+                                        .regular.tint(isSelected ? Color.accentColor.opacity(0.22) : .clear).interactive(),
                                         in: .circle
                                     )
                                     .overlay {
@@ -70,7 +74,11 @@ struct CategoryGrid: View {
                                         .font(.system(size: 21))
                                         .frame(width: 40, height: 40)
                                         .background(
-                                            isSelected ? Color.accentColor.opacity(0.18) : Color(.secondarySystemBackground),
+                                            isSelected ? Color.accentColor.opacity(0.16) : Color.clear,
+                                            in: .circle
+                                        )
+                                        .glassEffect(
+                                            .regular.tint(isSelected ? Color.accentColor.opacity(0.20) : .clear).interactive(),
                                             in: .circle
                                         )
                                         .overlay {
@@ -89,7 +97,7 @@ struct CategoryGrid: View {
                     }
                 }
                 .padding(12)
-                .background(Color(.secondarySystemBackground).opacity(0.45), in: .rect(cornerRadius: 16))
+                .glassEffect(.regular, in: .rect(cornerRadius: 16))
             }
         }
         .padding(.horizontal, 16)

@@ -84,6 +84,8 @@ struct ReimburseView: View {
                     }
                 }
                 .listStyle(.insetGrouped)
+                .scrollContentBackground(.hidden)
+                .liquidGlassCanvas()
             }
         }
         .navigationTitle("待报销")

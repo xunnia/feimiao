@@ -30,6 +30,8 @@ struct ThemeSettingsView: View {
                     .foregroundStyle(.secondary)
             }
         }
+        .scrollContentBackground(.hidden)
+        .liquidGlassCanvas()
         .navigationTitle("主题外观")
         .navigationBarTitleDisplayMode(.inline)
     }

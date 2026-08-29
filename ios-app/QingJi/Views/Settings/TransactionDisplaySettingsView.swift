@@ -53,6 +53,8 @@ struct TransactionDisplaySettingsView: View {
                 }
             }
         }
+        .scrollContentBackground(.hidden)
+        .liquidGlassCanvas()
         .navigationTitle("账单与聊天显示")
         .navigationBarTitleDisplayMode(.inline)
     }

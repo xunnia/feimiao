@@ -83,6 +83,8 @@ struct AutoRecordView: View {
             }
         }
         .listStyle(.insetGrouped)
+        .scrollContentBackground(.hidden)
+        .liquidGlassCanvas()
         .navigationTitle("自动记账")
         .navigationBarTitleDisplayMode(.inline)
     }

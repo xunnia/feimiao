@@ -57,6 +57,8 @@ struct LocalModelCompanionView: View {
                      : "地址必须是 http://localhost、127.0.0.1 或 [::1] 回环地址。")
             }
         }
+        .scrollContentBackground(.hidden)
+        .liquidGlassCanvas()
         .navigationTitle("本地模型伴侣")
         .navigationBarTitleDisplayMode(.inline)
         .alert("本地模型伴侣", isPresented: Binding(

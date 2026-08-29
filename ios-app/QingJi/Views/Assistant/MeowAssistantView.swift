@@ -68,7 +68,7 @@ struct MeowAssistantView: View {
                 }
                 composer
             }
-            .background(Color(.systemGroupedBackground))
+            .liquidGlassCanvas()
             .navigationTitle(titleOverride ?? (requestedSessionID == nil ? "喵助手" : "新对话"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -76,20 +76,26 @@ struct MeowAssistantView: View {
                     Button("完成") { dismiss() }
                 }
                 ToolbarItem(placement: .topBarTrailing) {
-                    HStack(spacing: 14) {
-                        modelMenu
-                        NavigationLink {
-                            AIChatsView()
-                        } label: {
-                            Image(systemName: "bubble.left.and.bubble.right")
+                    GlassEffectContainer(spacing: 8) {
+                        HStack(spacing: 8) {
+                            modelMenu
+                            NavigationLink {
+                                AIChatsView()
+                            } label: {
+                                Image(systemName: "bubble.left.and.bubble.right")
+                                    .frame(width: 38, height: 38)
+                            }
+                            .buttonStyle(.glass)
+                            .accessibilityLabel("Chats")
+                            NavigationLink {
+                                AIProviderSettingsView()
+                            } label: {
+                                Image(systemName: "gearshape")
+                                    .frame(width: 38, height: 38)
+                            }
+                            .buttonStyle(.glass)
+                            .accessibilityLabel("AI 设置")
                         }
-                        .accessibilityLabel("Chats")
-                        NavigationLink {
-                            AIProviderSettingsView()
-                        } label: {
-                            Image(systemName: "gearshape")
-                        }
-                        .accessibilityLabel("AI 设置")
                     }
                 }
             }
@@ -149,6 +155,7 @@ struct MeowAssistantView: View {
             .onDisappear {
                 requestTask?.cancel()
             }
+            .liquidGlassChrome()
         }
     }
 
@@ -214,7 +221,7 @@ struct MeowAssistantView: View {
                     .font(.system(size: 42))
                     .foregroundStyle(Color.accentColor)
                     .frame(width: 82, height: 82)
-                    .background(Color.accentColor.opacity(0.12), in: .circle)
+                    .glassEffect(.regular.tint(Color.accentColor.opacity(0.16)), in: .circle)
 
                 VStack(spacing: 6) {
                     Text("你好，我是喵助手")
@@ -308,7 +315,8 @@ struct MeowAssistantView: View {
             if !attachments.isEmpty {
                 attachmentStrip
             }
-            HStack(alignment: .bottom, spacing: 10) {
+            GlassEffectContainer(spacing: 8) {
+                HStack(alignment: .bottom, spacing: 10) {
                 Menu {
                     PhotosPicker(
                         selection: $photoItems,
@@ -335,7 +343,7 @@ struct MeowAssistantView: View {
                     .textFieldStyle(.plain)
                     .padding(.horizontal, 14)
                     .padding(.vertical, 10)
-                    .background(.background, in: .rect(cornerRadius: 18))
+                    .glassEffect(.regular.interactive(), in: .rect(cornerRadius: 18))
                     .onSubmit {
                         if !isSending { send() }
                     }
@@ -354,11 +362,13 @@ struct MeowAssistantView: View {
                 .buttonStyle(.glassProminent)
                 .disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && attachments.isEmpty && !isSending)
                 .accessibilityLabel(isSending ? "停止生成" : "发送")
+                }
             }
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
-        .background(.ultraThinMaterial)
+        .glassEffect(.regular, in: .rect(cornerRadius: 26))
+        .padding(.horizontal, 12)
         .onChange(of: photoItems) { _, items in
             guard !items.isEmpty else { return }
             importPhotos(items)
@@ -387,7 +397,7 @@ struct MeowAssistantView: View {
                     }
                     .padding(.horizontal, 9)
                     .padding(.vertical, 6)
-                    .background(.background, in: .capsule)
+                    .glassEffect(.regular, in: .capsule)
                 }
             }
             .padding(.horizontal, 4)
@@ -1160,7 +1170,7 @@ private struct AIRecordCardView: View {
                 HStack {
                     if let onUndo, !card.rolledBack {
                         Button("撤销本次 AI 记账", action: onUndo)
-                            .buttonStyle(.bordered)
+                            .buttonStyle(.glass)
                     }
                     ForEach(Array(card.entries.enumerated()), id: \.offset) { index, _ in
                         if !card.deletedIndices.contains(index), let onDeleteEntry {
@@ -1169,7 +1179,7 @@ private struct AIRecordCardView: View {
                             } label: {
                                 Image(systemName: "trash")
                             }
-                            .buttonStyle(.bordered)
+                            .buttonStyle(.glass)
                             .accessibilityLabel("删除第 \(index + 1) 笔")
                         }
                     }
@@ -1210,7 +1220,7 @@ private struct AIRecordCardView: View {
             Label("改分类", systemImage: "tag")
                 .font(.caption)
         }
-        .buttonStyle(.bordered)
+        .buttonStyle(.glass)
     }
 }
 

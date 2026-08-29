@@ -38,6 +38,8 @@ struct RootTabView: View {
                     }
                 }
         }
+        .liquidGlassChrome()
+        .liquidGlassCanvas()
         .onAppear {
             DispatchQueue.main.async {
                 syncPath()
@@ -84,7 +86,7 @@ struct RootTabView: View {
                         )
                         .frame(width: min(proxy.size.width * 0.78, 320))
                         .frame(maxHeight: .infinity)
-                        .background(.regularMaterial)
+                         .liquidGlassSurface(cornerRadius: 26)
                         .clipShape(.rect(bottomTrailingRadius: 26, topTrailingRadius: 26))
                         .shadow(color: .black.opacity(0.18), radius: 24, x: 8, y: 0)
                         .transition(.move(edge: .leading))
@@ -226,9 +228,8 @@ private struct AppDrawerView: View {
                     Button(action: onClose) {
                         Image(systemName: "xmark")
                             .frame(width: 38, height: 38)
-                            .glassEffect(.regular.interactive(), in: .circle)
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(.glass)
                     .accessibilityLabel("关闭菜单")
                 }
                 .padding(.horizontal, 16)
@@ -320,7 +321,7 @@ private struct AppDrawerView: View {
             .frame(minHeight: 48)
             .background(selected ? Color.accentColor.opacity(0.12) : .clear, in: .rect(cornerRadius: 12))
         }
-        .buttonStyle(.plain)
+         .buttonStyle(.glass)
     }
 }
 

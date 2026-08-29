@@ -69,6 +69,8 @@ struct BackupView: View {
             }
         }
         .listStyle(.insetGrouped)
+        .scrollContentBackground(.hidden)
+        .liquidGlassCanvas()
         .navigationTitle("备份与恢复")
         .navigationBarTitleDisplayMode(.inline)
         .fileExporter(

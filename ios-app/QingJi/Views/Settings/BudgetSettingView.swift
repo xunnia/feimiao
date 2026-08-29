@@ -187,6 +187,8 @@ struct BudgetSettingView: View {
                 Text("分类预算只用于拆分查看，不会和总预算重复相加。")
             }
         }
+        .scrollContentBackground(.hidden)
+        .liquidGlassCanvas()
         .navigationTitle("月度预算")
         .alert("预算", isPresented: Binding(
             get: { message != nil },

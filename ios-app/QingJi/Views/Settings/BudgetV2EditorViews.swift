@@ -466,6 +466,8 @@ struct BudgetCommitmentMatchView: View {
                 }
             }
             .listStyle(.insetGrouped)
+            .scrollContentBackground(.hidden)
+            .liquidGlassCanvas()
             .navigationTitle("匹配固定承诺")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

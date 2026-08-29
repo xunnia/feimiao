@@ -105,7 +105,7 @@ struct HomeView: View {
                 .padding(.top, 12)
                 .padding(.bottom, 24)
             }
-            .background(Color(.systemGroupedBackground))
+            .liquidGlassCanvas()
             // 首页的主操作必须和 Android 一样固定在底部；其它页面沿用根导航栈。
             // 底部输入框内的材质与动效使用
             // iOS 原生 Liquid Glass，但不改变 Android 的功能入口。
@@ -122,49 +122,52 @@ struct HomeView: View {
                         Image(systemName: "line.3.horizontal")
                             .font(.title3)
                             .frame(width: 44, height: 44)
-                            .glassEffect(.regular.interactive(), in: .circle)
                     }
+                    .buttonStyle(.glass)
                     .accessibilityLabel("打开菜单")
                 }
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button {
-                        router.selectedTab = .search
-                    } label: {
-                        Image(systemName: "magnifyingglass")
-                            .font(.title3)
-                            .frame(width: 44, height: 44)
-                            .glassEffect(.regular.interactive(), in: .circle)
-                    }
-                    .accessibilityLabel("搜索明细")
-                }
-                ToolbarItem(placement: .topBarTrailing) {
-                    Menu {
-                        Button {
-                            router.selectedBookID = nil
-                        } label: {
-                            Label("总账本", systemImage: router.selectedBookID == nil ? "checkmark" : "book.closed")
-                        }
-                        ForEach(books) { book in
+                ToolbarItemGroup(placement: .topBarTrailing) {
+                    GlassEffectContainer(spacing: 8) {
+                        HStack(spacing: 8) {
                             Button {
-                                router.selectedBookID = book.stableID
+                                router.selectedTab = .search
                             } label: {
-                                Label(book.name, systemImage: router.selectedBookID == book.stableID ? "checkmark" : "book.closed")
+                                Image(systemName: "magnifyingglass")
+                                    .font(.title3)
+                                    .frame(width: 44, height: 44)
                             }
+                            .buttonStyle(.glass)
+                            .accessibilityLabel("搜索明细")
+
+                            Menu {
+                                Button {
+                                    router.selectedBookID = nil
+                                } label: {
+                                    Label("总账本", systemImage: router.selectedBookID == nil ? "checkmark" : "book.closed")
+                                }
+                                ForEach(books) { book in
+                                    Button {
+                                        router.selectedBookID = book.stableID
+                                    } label: {
+                                        Label(book.name, systemImage: router.selectedBookID == book.stableID ? "checkmark" : "book.closed")
+                                    }
+                                }
+                            } label: {
+                                HStack(spacing: 5) {
+                                    Image(systemName: "book.closed")
+                                    Text(selectedBookName)
+                                        .lineLimit(1)
+                                    Image(systemName: "chevron.down")
+                                        .font(.caption.weight(.semibold))
+                                }
+                                .font(.subheadline.weight(.medium))
+                                .frame(minWidth: 100, minHeight: 44)
+                                .padding(.horizontal, 8)
+                            }
+                            .buttonStyle(.glass)
+                            .accessibilityLabel("当前账本：\(selectedBookName)")
                         }
-                    } label: {
-                        HStack(spacing: 5) {
-                            Image(systemName: "book.closed")
-                            Text(selectedBookName)
-                                .lineLimit(1)
-                            Image(systemName: "chevron.down")
-                                .font(.caption.weight(.semibold))
-                        }
-                        .font(.subheadline.weight(.medium))
-                        .frame(minWidth: 100, minHeight: 44)
-                        .padding(.horizontal, 8)
-                        .glassEffect(.regular.interactive(), in: .capsule)
                     }
-                    .accessibilityLabel("当前账本：\(selectedBookName)")
                 }
             }
             .sheet(isPresented: $showMonthPicker) {
@@ -211,7 +214,7 @@ struct HomeView: View {
                     .font(.subheadline.weight(.medium))
                     .foregroundStyle(.primary)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.glass)
                 .accessibilityLabel("选择月份")
 
                 Button {
@@ -227,9 +230,8 @@ struct HomeView: View {
                     .foregroundStyle(.secondary)
                     .padding(.horizontal, 10)
                     .frame(minHeight: 28)
-                    .glassEffect(.regular.interactive(), in: .capsule)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.glass)
                 .accessibilityLabel("查看统计")
                 Spacer()
             }
@@ -262,7 +264,7 @@ struct HomeView: View {
                 .offset(x: 4, y: -6)
                 .allowsHitTesting(false)
         }
-        .glassEffect(.regular, in: .rect(cornerRadius: 20))
+            .glassEffect(.regular.tint(Color.accentColor.opacity(0.07)), in: .rect(cornerRadius: 20))
     }
 
     private func recentSection(
@@ -404,7 +406,7 @@ private struct NoBudgetSummaryBody: View {
                         .labelStyle(TrailingIconLabelStyle())
                         .font(.caption)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.glass)
                 .foregroundStyle(Color.accentColor)
             }
         }
@@ -512,6 +514,7 @@ private struct HomeRecordInputBar: View {
     @AppStorage("qingji.recordAiMode") private var isAIMode = false
     @State private var showManualEntry = false
     @State private var showAIEntry = false
+    @Namespace private var glassNamespace
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -524,46 +527,52 @@ private struct HomeRecordInputBar: View {
             .buttonStyle(.plain)
             .accessibilityLabel("打开\(isAIMode ? "AI 记账" : "手动记账")")
 
-            HStack(spacing: 8) {
-                Button(action: openSelectedEntry) {
-                    Image(systemName: "plus")
-                        .font(.headline.weight(.semibold))
-                        .frame(width: 42, height: 42)
-                        .glassEffect(.regular.interactive(), in: .circle)
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("添加一笔")
-
-                Button {
-                    isAIMode.toggle()
-                } label: {
-                    HStack(spacing: 6) {
-                        Image(systemName: isAIMode ? "sparkles" : "pencil")
-                        Text(isAIMode ? "AI 记账" : "手动记账")
+            GlassEffectContainer(spacing: 8) {
+                HStack(spacing: 8) {
+                    Button(action: openSelectedEntry) {
+                        Image(systemName: "plus")
+                            .font(.headline.weight(.semibold))
+                            .frame(width: 42, height: 42)
                     }
-                    .font(.subheadline)
-                    .padding(.horizontal, 12)
-                    .frame(height: 36)
-                    .glassEffect(.regular.interactive(), in: .capsule)
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("切换到\(isAIMode ? "手动记账" : "AI 记账")")
+                    .buttonStyle(.glass)
+                    .glassEffectID("entry-add", in: glassNamespace)
+                    .accessibilityLabel("添加一笔")
 
-                Spacer(minLength: 0)
+                    Button {
+                        withAnimation(.snappy(duration: 0.32)) {
+                            isAIMode.toggle()
+                        }
+                    } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: isAIMode ? "sparkles" : "pencil")
+                                .symbolEffect(.replace, value: isAIMode)
+                            Text(isAIMode ? "AI 记账" : "手动记账")
+                        }
+                        .font(.subheadline)
+                        .padding(.horizontal, 12)
+                        .frame(height: 36)
+                    }
+                    .buttonStyle(.glass)
+                    .glassEffectID(isAIMode ? "entry-ai" : "entry-manual", in: glassNamespace)
+                    .accessibilityLabel("切换到\(isAIMode ? "手动记账" : "AI 记账")")
 
-                Button(action: openSelectedEntry) {
-                    Image(systemName: "arrow.up")
-                        .font(.headline.weight(.semibold))
-                        .frame(width: 42, height: 42)
-                        .glassEffect(.regular.interactive(), in: .circle)
+                    Spacer(minLength: 0)
+
+                    Button(action: openSelectedEntry) {
+                        Image(systemName: "arrow.up")
+                            .font(.headline.weight(.semibold))
+                            .frame(width: 42, height: 42)
+                    }
+                    .buttonStyle(.glassProminent)
+                    .tint(Color.accentColor)
+                    .glassEffectID("entry-open", in: glassNamespace)
+                    .accessibilityLabel("打开\(isAIMode ? "AI 记账" : "手动记账")")
                 }
-                .buttonStyle(.plain)
-                .accessibilityLabel("打开\(isAIMode ? "AI 记账" : "手动记账")")
             }
         }
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .glassEffect(.regular.interactive(), in: .rect(cornerRadius: 26))
+        .glassEffect(.regular.tint(Color.accentColor.opacity(0.06)), in: .rect(cornerRadius: 26))
         .padding(.horizontal, 12)
         .padding(.top, 8)
         .padding(.bottom, 10)

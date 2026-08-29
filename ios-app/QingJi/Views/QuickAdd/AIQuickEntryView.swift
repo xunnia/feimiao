@@ -151,6 +151,7 @@ struct AIQuickEntryView: View {
                 speech.stop()
                 cloudTask?.cancel()
             }
+            .liquidGlassChrome()
             .sheet(item: $pendingConsentAccount) { account in
                 AIPrivacyConsentSheet(
                     account: account,
@@ -338,7 +339,7 @@ struct AIQuickEntryView: View {
                     Label(category?.name ?? "未分类", systemImage: category == nil ? "tag" : "tag.fill")
                         .font(.subheadline)
                 }
-                .buttonStyle(.bordered)
+                .buttonStyle(.glass)
 
                 Text(entry.date, format: entry.timePrecision.carriesClock
                      ? .dateTime.month().day().hour().minute()

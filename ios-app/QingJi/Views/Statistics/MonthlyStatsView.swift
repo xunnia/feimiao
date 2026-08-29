@@ -54,7 +54,7 @@ struct MonthlyStatsView: View {
                 }
                 .padding()
             }
-            .background(Color(.systemGroupedBackground))
+            .liquidGlassCanvas()
             .navigationTitle("统计")
             .onAppear(perform: restoreDateSelections)
     }
@@ -66,7 +66,7 @@ struct MonthlyStatsView: View {
             } label: {
                 Image(systemName: "chevron.left")
             }
-            .buttonStyle(.bordered)
+            .buttonStyle(.glass)
             Spacer()
             Text(displayedMonth, format: .dateTime.year().month())
                 .font(.headline)
@@ -76,7 +76,7 @@ struct MonthlyStatsView: View {
             } label: {
                 Image(systemName: "chevron.right")
             }
-            .buttonStyle(.bordered)
+            .buttonStyle(.glass)
             .disabled(Calendar.current.isDate(displayedMonth, equalTo: AppClock.now, toGranularity: .month))
         }
     }
@@ -88,7 +88,7 @@ struct MonthlyStatsView: View {
             } label: {
                 Image(systemName: "chevron.left")
             }
-            .buttonStyle(.bordered)
+            .buttonStyle(.glass)
             Spacer()
             VStack(spacing: 2) {
                 Text("本周")
@@ -105,7 +105,7 @@ struct MonthlyStatsView: View {
             } label: {
                 Image(systemName: "chevron.right")
             }
-            .buttonStyle(.bordered)
+            .buttonStyle(.glass)
             .disabled(weekEnd >= Calendar.current.startOfDay(for: AppClock.now))
         }
     }
@@ -117,7 +117,7 @@ struct MonthlyStatsView: View {
             } label: {
                 Image(systemName: "chevron.left")
             }
-            .buttonStyle(.bordered)
+            .buttonStyle(.glass)
             Spacer()
             Text(displayedMonth, format: .dateTime.year())
                 .font(.headline)
@@ -127,7 +127,7 @@ struct MonthlyStatsView: View {
             } label: {
                 Image(systemName: "chevron.right")
             }
-            .buttonStyle(.bordered)
+            .buttonStyle(.glass)
             .disabled(Calendar.current.component(.year, from: displayedMonth) >= Calendar.current.component(.year, from: AppClock.now))
         }
     }

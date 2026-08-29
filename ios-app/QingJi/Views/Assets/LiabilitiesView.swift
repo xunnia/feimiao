@@ -46,6 +46,8 @@ struct LiabilitiesView: View {
             }
         }
         .listStyle(.insetGrouped)
+        .scrollContentBackground(.hidden)
+        .liquidGlassCanvas()
         .navigationTitle("负债管理")
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
@@ -114,7 +116,7 @@ struct LiabilitiesView: View {
                 if profile.lifecycle == .active {
                     Button("还款") { repaymentProfile = profile }
                         .font(.caption.weight(.semibold))
-                        .buttonStyle(.borderedProminent)
+                        .buttonStyle(.glassProminent)
                         .controlSize(.mini)
                 }
             }

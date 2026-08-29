@@ -30,6 +30,8 @@ struct ReconcileView: View {
                 accountSection(account)
             }
         }
+        .scrollContentBackground(.hidden)
+        .liquidGlassCanvas()
         .navigationTitle("对账")
         .alert("无法保存校准", isPresented: Binding(
             get: { errorMessage != nil },
