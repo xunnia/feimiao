@@ -694,10 +694,11 @@ struct TransactionRow: View {
             card.secondary
         ])
         HStack(spacing: 12) {
-            Image(systemName: iconName)
-                .frame(width: 36, height: 36)
-                .background(Color(.secondarySystemBackground))
-                .clipShape(Circle())
+            CategoryIcon(
+                categoryKey: iconCategoryKey,
+                emoji: iconEmoji,
+                size: 36
+            )
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(card.title)
@@ -746,10 +747,17 @@ struct TransactionRow: View {
         .padding(.vertical, 2)
     }
 
-    private var iconName: String {
+    private var iconCategoryKey: String {
         switch transaction.kind {
-        case .transfer: return "arrow.left.arrow.right"
-        default: return transaction.category?.symbol ?? "tag"
+        case .transfer: return "transfer"
+        default: return transaction.category?.key ?? ""
+        }
+    }
+
+    private var iconEmoji: String {
+        switch transaction.kind {
+        case .transfer: return "↔️"
+        default: return transaction.category?.emoji ?? "🏷️"
         }
     }
 

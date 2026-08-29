@@ -119,10 +119,11 @@ struct ReimburseView: View {
 
     private func reimburseRow(_ transaction: MoneyTransaction) -> some View {
         HStack(spacing: 12) {
-            Image(systemName: transaction.category?.symbol ?? "receipt")
-                .foregroundStyle(Color.accentColor)
-                .frame(width: 36, height: 36)
-                .background(Color.accentColor.opacity(0.12), in: .circle)
+            CategoryIcon(
+                categoryKey: transaction.category?.key ?? "",
+                emoji: transaction.category?.emoji ?? "🏷️",
+                size: 36
+            )
             VStack(alignment: .leading, spacing: 4) {
                 Text(transaction.category?.name ?? "未分类")
                     .font(.body.weight(.medium))

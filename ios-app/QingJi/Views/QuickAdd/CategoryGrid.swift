@@ -21,22 +21,19 @@ struct CategoryGrid: View {
                             UISelectionFeedbackGenerator().selectionChanged()
                         } label: {
                             VStack(spacing: 4) {
-                                Text(category.emoji)
-                                    .font(.system(size: 25))
-                                    .frame(width: 48, height: 48)
-                                    .background(
-                                        isSelected ? Color.accentColor.opacity(0.18) : Color.clear,
-                                        in: .circle
+                                ZStack {
+                                    CategoryIcon(
+                                        categoryKey: category.key,
+                                        emoji: category.emoji,
+                                        size: 48
                                     )
-                                    .glassEffect(
-                                        .regular.tint(isSelected ? Color.accentColor.opacity(0.22) : .clear).interactive(),
-                                        in: .circle
-                                    )
-                                    .overlay {
-                                        if isSelected {
-                                            Circle().stroke(Color.accentColor, lineWidth: 2)
-                                        }
+                                    if isSelected {
+                                        RoundedRectangle(cornerRadius: 11, style: .continuous)
+                                            .stroke(Color.accentColor, lineWidth: 2)
                                     }
+                                }
+                                .frame(width: 48, height: 48)
+                                .contentShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
                                 Text(category.name)
                                     .font(.caption)
                                     .lineLimit(1)
@@ -70,22 +67,19 @@ struct CategoryGrid: View {
                                 UISelectionFeedbackGenerator().selectionChanged()
                             } label: {
                                 VStack(spacing: 4) {
-                                    Text(category.emoji)
-                                        .font(.system(size: 21))
-                                        .frame(width: 40, height: 40)
-                                        .background(
-                                            isSelected ? Color.accentColor.opacity(0.16) : Color.clear,
-                                            in: .circle
+                                    ZStack {
+                                        CategoryIcon(
+                                            categoryKey: category.key,
+                                            emoji: category.emoji,
+                                            size: 40
                                         )
-                                        .glassEffect(
-                                            .regular.tint(isSelected ? Color.accentColor.opacity(0.20) : .clear).interactive(),
-                                            in: .circle
-                                        )
-                                        .overlay {
-                                            if isSelected {
-                                                Circle().stroke(Color.accentColor, lineWidth: 1.5)
-                                            }
+                                        if isSelected {
+                                            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                                .stroke(Color.accentColor, lineWidth: 1.5)
                                         }
+                                    }
+                                    .frame(width: 40, height: 40)
+                                    .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                                     Text(category.name)
                                         .font(.caption2)
                                         .lineLimit(1)

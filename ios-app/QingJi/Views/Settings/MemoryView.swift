@@ -24,8 +24,11 @@ struct MemoryView: View {
                         ForEach(items) { item in
                             let category = CategorySeed.byKey(item.categoryKey)
                             HStack(spacing: 12) {
-                                Text(category?.emoji ?? "🏷️")
-                                    .font(.title3)
+                                CategoryIcon(
+                                    categoryKey: item.categoryKey,
+                                    emoji: category?.emoji ?? "🏷️",
+                                    size: 36
+                                )
                                 VStack(alignment: .leading, spacing: 3) {
                                     Text(item.merchant)
                                         .font(.body.weight(.medium))

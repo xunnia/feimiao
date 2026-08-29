@@ -17,6 +17,7 @@ struct CategoriesView: View {
     @State private var editingCategory: TxCategory?
     @State private var mergeSource: TxCategory?
     @State private var errorMessage: String?
+    @State private var showIconStyle = false
 
     private var activeTopLevel: [TxCategory] {
         allCategories
@@ -104,6 +105,14 @@ struct CategoriesView: View {
                 }
                 .accessibilityLabel("新建分类")
             }
+            ToolbarItem(placement: .topBarTrailing) {
+                Button {
+                    showIconStyle = true
+                } label: {
+                    Image(systemName: "paintpalette")
+                }
+                .accessibilityLabel("图标样式")
+            }
         }
         .sheet(isPresented: $showEditor) {
             CategoryEditorSheet(
@@ -123,6 +132,10 @@ struct CategoriesView: View {
             }
             .presentationDetents([.medium])
         }
+        .sheet(isPresented: $showIconStyle) {
+            CategoryIconStyleSheet()
+                .presentationDetents([.medium])
+        }
         .alert("操作失败", isPresented: Binding(
             get: { errorMessage != nil },
             set: { if !$0 { errorMessage = nil } }
@@ -136,10 +149,11 @@ struct CategoriesView: View {
     @ViewBuilder
     private func categoryRow(_ category: TxCategory, indented: Bool = false, isArchived: Bool = false) -> some View {
         HStack(spacing: 12) {
-            Text(category.emoji)
-                .font(indented ? .body : .title3)
-                .frame(width: indented ? 28 : 36, height: indented ? 28 : 36)
-                .background(Color.accentColor.opacity(isArchived ? 0.06 : 0.12), in: .circle)
+            CategoryIcon(
+                categoryKey: category.key,
+                emoji: category.emoji,
+                size: indented ? 28 : 36
+            )
                 .opacity(isArchived ? 0.55 : 1)
 
             VStack(alignment: .leading, spacing: 3) {
@@ -327,17 +341,7 @@ private struct CategoryEditorSheet: View {
     let editing: TxCategory?
     let nextSortOrder: Int
     @State private var name: String
-    @State private var symbol: String
-    @State private var emoji: String
     @State private var errorMessage: String?
-
-    private static let symbolChoices = [
-        ("tag", "🏷️"), ("fork.knife", "🍽️"), ("cart", "🛒"), ("bus", "🚌"),
-        ("bag", "🛍️"), ("gamecontroller", "🎮"), ("house", "🏠"), ("bolt", "⚡"),
-        ("cross.case", "🏥"), ("book", "📚"), ("airplane", "✈️"), ("pawprint", "🐾"),
-        ("gift", "🎁"), ("cup.and.saucer", "☕"), ("tshirt", "👕"), ("fuelpump", "⛽"),
-        ("music.note", "🎵"), ("phone", "📱"), ("wifi", "📶"), ("banknote", "💴"),
-    ]
 
     init(kind: TransactionKind, parentKey: String?, editing: TxCategory?, nextSortOrder: Int) {
         self.kind = kind
@@ -345,8 +349,6 @@ private struct CategoryEditorSheet: View {
         self.editing = editing
         self.nextSortOrder = nextSortOrder
         _name = State(initialValue: editing?.name ?? "")
-        _symbol = State(initialValue: editing?.symbol ?? "tag")
-        _emoji = State(initialValue: editing?.emoji ?? "🏷️")
     }
 
     var body: some View {
@@ -358,30 +360,10 @@ private struct CategoryEditorSheet: View {
                     Text(editing == nil ? (parentKey == nil ? "新建一级分类" : "新建子分类") : "重命名分类")
                 }
 
-                Section("图标") {
-                    LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 5), spacing: 14) {
-                        ForEach(Self.symbolChoices, id: \.0) { choice in
-                            Button {
-                                symbol = choice.0
-                                emoji = choice.1
-                            } label: {
-                                VStack(spacing: 4) {
-                                    Text(choice.1)
-                                        .font(.title2)
-                                    Image(systemName: choice.0)
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                }
-                                .frame(maxWidth: .infinity)
-                                .padding(.vertical, 7)
-                                .background(
-                                    symbol == choice.0 ? Color.accentColor.opacity(0.15) : Color.clear,
-                                    in: .rect(cornerRadius: 10)
-                                )
-                            }
-                            .buttonStyle(.plain)
-                        }
-                    }
+                Section {
+                    Text("自建分类沿用 Android 同款 🏷️ 兜底图标；内置分类可在分类管理页切换面性或线性图标。")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
                 }
             }
             .navigationTitle(editing == nil ? "新建分类" : "重命名")
@@ -411,17 +393,15 @@ private struct CategoryEditorSheet: View {
         guard !cleanName.isEmpty else { return }
         if let editing {
             editing.name = cleanName
-            editing.symbol = symbol
-            editing.emoji = emoji
             editing.updatedAt = Date()
         } else {
             context.insert(TxCategory(
                 key: "custom_\(UUID().uuidString)",
                 name: cleanName,
-                symbol: symbol,
+                symbol: "tag",
                 kind: kind,
                 sortOrder: nextSortOrder,
-                emoji: emoji,
+                emoji: "🏷️",
                 parentKey: parentKey
             ))
         }
@@ -474,6 +454,72 @@ private struct CategoryMergeSheet: View {
             }
             .onAppear {
                 targetKey = targets.first?.key ?? ""
+            }
+        }
+    }
+}
+
+private struct CategoryIconStyleSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @State private var selectedRaw: String
+
+    private let previewKeys = [
+        "dining", "shopping", "transport", "car",
+        "housing", "medical", "salary", "other",
+    ]
+
+    init() {
+        _selectedRaw = State(
+            initialValue: UserDefaults.standard.string(forKey: "qingji.categoryIconStyle")
+                ?? CategoryIconStyle.filled.rawValue
+        )
+    }
+
+    private var selectedStyle: CategoryIconStyle {
+        CategoryIconStyle(rawValue: selectedRaw) ?? .filled
+    }
+
+    var body: some View {
+        NavigationStack {
+            VStack(alignment: .leading, spacing: 18) {
+                Picker("风格", selection: $selectedRaw) {
+                    ForEach(CategoryIconStyle.allCases) { style in
+                        Text(style.title).tag(style.rawValue)
+                    }
+                }
+                .pickerStyle(.segmented)
+
+                Text("与 Android 共用同一套分类图标；面性和线性只改变图形笔画，不改变分类颜色和 key。")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+
+                LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 4), spacing: 14) {
+                    ForEach(previewKeys, id: \.self) { key in
+                        CategoryIcon(
+                            categoryKey: key,
+                            emoji: CategorySeed.emojiOf(key),
+                            size: 42,
+                            style: selectedStyle
+                        )
+                    }
+                }
+                .frame(maxWidth: .infinity)
+                Spacer(minLength: 0)
+            }
+            .padding(20)
+            .liquidGlassCanvas()
+            .navigationTitle("图标样式")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("取消") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("保存") {
+                        UserDefaults.standard.set(selectedRaw, forKey: "qingji.categoryIconStyle")
+                        dismiss()
+                    }
+                }
             }
         }
     }

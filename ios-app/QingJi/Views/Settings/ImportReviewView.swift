@@ -346,7 +346,11 @@ struct ImportReviewView: View {
         fallback: String = "未分类"
     ) -> some View {
         HStack(spacing: 6) {
-            Text(category?.emoji ?? "🏷️")
+            CategoryIcon(
+                categoryKey: category?.key ?? "",
+                emoji: category?.emoji ?? "🏷️",
+                size: 24
+            )
             Text(category?.name ?? fallback)
             Image(systemName: "chevron.up.chevron.down")
                 .font(.caption2)

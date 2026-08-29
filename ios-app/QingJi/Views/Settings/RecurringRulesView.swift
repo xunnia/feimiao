@@ -88,14 +88,17 @@ struct RecurringRulesView: View {
         let target = accounts.first { $0.stableID == rule.toAccountID }
         let book = books.first { $0.stableID == rule.bookID }
         let category = categories.first { $0.key == rule.categoryKey && $0.kind == rule.kind }
+        let iconKey = rule.kind == .transfer ? "transfer" : (category?.key ?? "")
+        let iconEmoji = rule.kind == .transfer ? "↔️" : (category?.emoji ?? "🏷️")
 
         return VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 10) {
-                Image(systemName: rule.kind == .transfer ? "arrow.left.arrow.right" : "clock")
-                    .font(.headline)
-                    .foregroundStyle(rule.isEnabled && !rule.isCompleted ? Color.accentColor : Color.secondary)
-                    .frame(width: 36, height: 36)
-                    .background(Color.accentColor.opacity(0.12), in: .circle)
+                CategoryIcon(
+                    categoryKey: iconKey,
+                    emoji: iconEmoji,
+                    size: 36
+                )
+                .opacity(rule.isEnabled && !rule.isCompleted ? 1 : 0.55)
                 VStack(alignment: .leading, spacing: 3) {
                     Text(rule.kind == .transfer ? "转账" : (category?.name ?? "未分类"))
                         .font(.body.weight(.medium))

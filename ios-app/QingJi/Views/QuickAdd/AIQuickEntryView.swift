@@ -336,8 +336,15 @@ struct AIQuickEntryView: View {
                         }
                     }
                 } label: {
-                    Label(category?.name ?? "未分类", systemImage: category == nil ? "tag" : "tag.fill")
-                        .font(.subheadline)
+                    HStack(spacing: 6) {
+                        CategoryIcon(
+                            categoryKey: category?.key ?? "",
+                            emoji: category?.emoji ?? "🏷️",
+                            size: 24
+                        )
+                        Text(category?.name ?? "未分类")
+                    }
+                    .font(.subheadline)
                 }
                 .buttonStyle(.glass)
 

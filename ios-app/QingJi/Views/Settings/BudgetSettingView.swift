@@ -335,7 +335,11 @@ struct BudgetSettingView: View {
             showCategoryBudgetSheet = true
         } label: {
             HStack(spacing: 10) {
-                Text(category?.emoji ?? "🏷️")
+                CategoryIcon(
+                    categoryKey: category?.key ?? "",
+                    emoji: category?.emoji ?? "🏷️",
+                    size: 32
+                )
                 VStack(alignment: .leading, spacing: 2) {
                     Text(category?.name ?? "未分类")
                         .foregroundStyle(.primary)
@@ -367,7 +371,16 @@ struct BudgetSettingView: View {
                 Picker("分类", selection: $categoryBudgetKey) {
                     Text("选择分类").tag(nil as String?)
                     ForEach(categories.filter { $0.kind == .expense }) { category in
-                        Text("\(category.emoji) \(category.name)").tag(Optional(category.key))
+                        Label {
+                            Text(category.name)
+                        } icon: {
+                            CategoryIcon(
+                                categoryKey: category.key,
+                                emoji: category.emoji,
+                                size: 24
+                            )
+                        }
+                        .tag(Optional(category.key))
                     }
                 }
                 TextField("预算金额", text: $categoryBudgetAmountText)

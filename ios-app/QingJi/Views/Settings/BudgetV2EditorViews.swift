@@ -190,7 +190,12 @@ struct BudgetV2PlanEditorView: View {
 
     private func categoryBudgetRow(_ category: TxCategory) -> some View {
         HStack(spacing: 10) {
-            Label("\(category.emoji) \(category.name)", systemImage: category.symbol)
+            CategoryIcon(
+                categoryKey: category.key,
+                emoji: category.emoji,
+                size: 32
+            )
+            Text(category.name)
             Spacer()
             TextField("不设", text: categoryAmountBinding(for: category.key))
                 .multilineTextAlignment(.trailing)
@@ -337,7 +342,14 @@ struct BudgetV2SpecialEditorView: View {
                                 else { selectedCategoryKeys.remove(category.key) }
                             }
                         )) {
-                            Label("\(category.emoji) \(category.name)", systemImage: category.symbol)
+                            HStack(spacing: 8) {
+                                CategoryIcon(
+                                    categoryKey: category.key,
+                                    emoji: category.emoji,
+                                    size: 28
+                                )
+                                Text(category.name)
+                            }
                         }
                     }
                 }

@@ -599,7 +599,15 @@ struct PhysicalAssetEditor: View {
                                 ForEach(categories.filter {
                                     $0.kind == .expense && !$0.isArchived
                                 }) { category in
-                                    Text("\(category.emoji) \(category.name)")
+                                    Label {
+                                        Text(category.name)
+                                    } icon: {
+                                        CategoryIcon(
+                                            categoryKey: category.key,
+                                            emoji: category.emoji,
+                                            size: 24
+                                        )
+                                    }
                                         .tag(Optional(category.key))
                                 }
                             }
