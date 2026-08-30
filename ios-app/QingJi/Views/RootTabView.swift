@@ -10,6 +10,7 @@ struct RootTabView: View {
     @State private var path: [AppRouter.Route] = []
     @State private var drawerPresented = false
     @State private var didFinishInitialSync = false
+    @State private var demoQuickAddPresented = false
 
     init() {
         // CI and deep-link launches must start with the destination already in
@@ -42,7 +43,15 @@ struct RootTabView: View {
         .liquidGlassCanvas()
         .onAppear {
             DispatchQueue.main.async {
-                syncPath()
+                let screen = ProcessInfo.processInfo.environment["QINGJI_SCREEN"] ?? ""
+                if screen == "quickadd" || screen == "quickadd/income" {
+                    router.quickAddStartsWithIncome = screen == "quickadd/income"
+                    router.selectedTab = .home
+                    path = []
+                    demoQuickAddPresented = true
+                } else {
+                    syncPath()
+                }
                 didFinishInitialSync = true
             }
         }
@@ -103,6 +112,12 @@ struct RootTabView: View {
         )) {
             MeowAssistantView()
         }
+        .sheet(isPresented: $demoQuickAddPresented) {
+            QuickAddView()
+                .presentationDetents([.fraction(0.92), .large])
+                .presentationDragIndicator(.hidden)
+                .presentationCornerRadius(28)
+        }
     }
 
     private func syncPath() {
@@ -132,8 +147,8 @@ struct RootTabView: View {
         switch normalized {
         case "home": return []
         case "home/drawer": return []
-        case "quickadd": return [.quickAdd]
-        case "quickadd/income": return [.quickAdd]
+        case "quickadd": return []
+        case "quickadd/income": return []
         case "search": return [.search]
         case "transactions": return [.transactions]
         case "stats-month", "stats-week", "stats/year", "stats/week", "stats-year", "stats-custom", "stats/month":

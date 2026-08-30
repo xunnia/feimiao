@@ -13,6 +13,8 @@ struct QuickAddView: View {
 
     @Query(filter: #Predicate<TxCategory> { !$0.isArchived }, sort: \TxCategory.sortOrder)
     private var allCategories: [TxCategory]
+    @Query(sort: \MoneyTransaction.date, order: .reverse)
+    private var transactions: [MoneyTransaction]
     @Query(sort: \Account.sortOrder)
     private var accounts: [Account]
     @Query(sort: \Book.sortOrder)
@@ -28,7 +30,6 @@ struct QuickAddView: View {
     @State private var transferTargetID: UUID?
     @State private var date = AppClock.now
     @State private var note = ""
-    @State private var rankedKeys: [String] = []
     @State private var showSavedToast = false
     @State private var budgetStatus: BudgetStatus?
     @State private var showMoreDetails = false
@@ -48,10 +49,17 @@ struct QuickAddView: View {
         let matching = allCategories.filter {
             $0.kind == kind && !$0.isArchived && $0.parentKey == nil
         }
-        guard !rankedKeys.isEmpty else { return matching }
-        let order = Dictionary(rankedKeys.enumerated().map { ($1, $0) }, uniquingKeysWith: { a, _ in a })
+        // Android groups every transaction's category into its top-level
+        // parent, then sorts by descending count and stable seed order.
+        var usageCounts: [String: Int] = [:]
+        for transaction in transactions where transaction.kind == kind {
+            guard let category = transaction.category else { continue }
+            usageCounts[category.parentKey ?? category.key, default: 0] += 1
+        }
         return matching.sorted {
-            order[$0.key, default: .max] < order[$1.key, default: .max]
+            let left = usageCounts[$0.key, default: 0]
+            let right = usageCounts[$1.key, default: 0]
+            return left == right ? $0.sortOrder < $1.sortOrder : left > right
         }
     }
 
@@ -98,7 +106,7 @@ struct QuickAddView: View {
                     )
                 }
             }
-            .frame(maxHeight: kind == .transfer ? 184 : 236)
+            .frame(maxHeight: 184)
 
             chipsRow
                 .padding(.top, 8)
@@ -119,7 +127,6 @@ struct QuickAddView: View {
                 get: { router.showAISheet },
                 set: { router.showAISheet = $0 }
             ), onDismiss: {
-                refreshRanking()
                 loadBudgetStatus()
                 router.clearPendingShare()
             }) {
@@ -211,7 +218,7 @@ struct QuickAddView: View {
                 Text("转账").tag(TransactionKind.transfer)
             }
             .pickerStyle(.segmented)
-            .frame(width: 218)
+            .frame(width: 198)
 
             Spacer(minLength: 0)
 
@@ -220,8 +227,10 @@ struct QuickAddView: View {
             } label: {
                 Label("手动记账", systemImage: "pencil")
                     .font(.subheadline.weight(.medium))
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
             }
-            .liquidGlassPillControl(horizontalPadding: 12, minHeight: 44)
+            .liquidGlassPillControl(horizontalPadding: 10, minHeight: 44)
             .tint(.primary)
             .accessibilityLabel("切换到 AI 记账")
 
@@ -240,8 +249,8 @@ struct QuickAddView: View {
     }
 
     private var chipsRow: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 8) {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 6) {
                 manualChip(title: dateLabel, systemImage: "calendar") {
                     showDatePicker = true
                 }
@@ -284,6 +293,27 @@ struct QuickAddView: View {
                 }
             }
             .padding(.horizontal, 12)
+
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    manualChip(title: dateLabel, systemImage: "calendar") { showDatePicker = true }
+                    if kind != .transfer {
+                        manualChip(title: effectiveAccount?.name ?? "账户", systemImage: "wallet.pass") {
+                            showMoreDetails = true
+                        }
+                    }
+                    manualChip(title: "标签", systemImage: "tag") { showMoreDetails = true }
+                    if kind == .expense {
+                        manualChip(title: "待报销", systemImage: "receipt", selected: isReimbursable, warning: true) {
+                            isReimbursable.toggle()
+                        }
+                    }
+                    manualChip(title: "不计入", systemImage: "eye.slash", selected: isExcluded) {
+                        isExcluded.toggle()
+                    }
+                }
+                .padding(.horizontal, 12)
+            }
         }
         .frame(height: 38)
     }
@@ -291,7 +321,7 @@ struct QuickAddView: View {
     private var amountNoteCard: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(alignment: .firstTextBaseline, spacing: 5) {
-                Text(MoneyFormat.symbol(of: currencyCode))
+                Text(currencyCode.uppercased() == "CNY" ? "¥" : MoneyFormat.symbol(of: currencyCode))
                     .font(.system(size: 17, weight: .medium, design: .rounded))
                 Text(expression.displayText)
                     .font(.system(size: 24, weight: .semibold, design: .rounded))
@@ -505,7 +535,6 @@ struct QuickAddView: View {
 
     private func prepareDefaults() {
         if selectedAccountID == nil { selectedAccountID = usableAccounts.first?.stableID }
-        refreshRanking()
         resetCategorySelection()
         loadBudgetStatus()
     }
@@ -560,21 +589,6 @@ struct QuickAddView: View {
         } else if selectedCategory?.kind != kind {
             selectedCategory = visibleCategories.first
         }
-    }
-
-    /// 取最近 300 笔流水，让常用、当前时段常见的分类排前面。
-    private func refreshRanking() {
-        var descriptor = FetchDescriptor<MoneyTransaction>(sortBy: [SortDescriptor(\.date, order: .reverse)])
-        descriptor.fetchLimit = 300
-        let recent = (try? context.fetch(descriptor)) ?? []
-        let usages = recent.compactMap { transaction -> (String, Date)? in
-            guard let key = transaction.category?.key else { return nil }
-            return (key, transaction.date)
-        }
-        rankedKeys = CategoryRanker.rank(
-            defaultOrder: allCategories.filter { !$0.isArchived }.map(\.key),
-            usages: usages
-        )
     }
 
     private func saveAndDismiss() {
@@ -641,7 +655,6 @@ struct QuickAddView: View {
         isExcluded = false
         selectedTagNames.removeAll()
         attachmentPath = ""
-        refreshRanking()
         loadBudgetStatus()
 
         withAnimation(.spring) { showSavedToast = true }
