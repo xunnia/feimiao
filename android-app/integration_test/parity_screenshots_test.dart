@@ -13,7 +13,7 @@ import 'package:qingji/main.dart' as app;
 import 'package:qingji/share_intake.dart';
 import 'package:qingji/views/assistant/meow_assistant_view.dart';
 import 'package:qingji/views/assets/account_detail_page.dart';
-import 'package:qingji/views/quick_add/quick_add_view.dart';
+import 'package:qingji/views/home/manual_add_sheet.dart';
 import 'package:qingji/views/assets/physical_asset_detail_page.dart';
 import 'package:qingji/views/reports/report_views.dart';
 import 'package:qingji/views/savings/savings_goals_view.dart';
@@ -75,7 +75,7 @@ void main() {
     await _capturePage(
       tester,
       'quick-add-android',
-      const QuickAddView(),
+      const _ManualAddCapturePage(),
       binding,
     );
     await _captureQuickAddIncome(tester, binding);
@@ -489,17 +489,44 @@ Future<void> _captureQuickAddIncome(
   WidgetTester tester,
   IntegrationTestWidgetsFlutterBinding binding,
 ) async {
-  final navigator = ShareIntake.navigatorKey.currentState;
-  expect(navigator, isNotNull);
-  unawaited(
-    navigator!.push<void>(_parityPageRoute<void>(const QuickAddView())),
-  );
-  await _pumpFor(tester, const Duration(milliseconds: 700));
   final income = find.text('收入');
   expect(income, findsAtLeastNWidgets(1));
-  await tester.tap(income.first);
+  // The base parity page already has the real ManualAddSheet open. Switch
+  // that same sheet so both captures share the production route and layout.
+  await tester.tap(income.last);
   await _pumpFor(tester, const Duration(milliseconds: 500));
   await _takeScreenshot(tester, binding, 'quickadd-income-android');
+}
+
+/// Opens the production bottom-sheet entry point used by the home input bar.
+/// Keeping this as a tiny route shell makes the capture deterministic while
+/// preserving the actual ManualAddSheet transition and barrier.
+class _ManualAddCapturePage extends StatefulWidget {
+  const _ManualAddCapturePage();
+
+  @override
+  State<_ManualAddCapturePage> createState() => _ManualAddCapturePageState();
+}
+
+class _ManualAddCapturePageState extends State<_ManualAddCapturePage> {
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      unawaited(
+        showManualAddSheet(
+          context,
+          onSwitchToAi: () {},
+        ),
+      );
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return const Scaffold(body: SizedBox.shrink());
+  }
 }
 
 Future<void> _captureReimburseSettlement(
