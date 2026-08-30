@@ -1,10 +1,16 @@
 # 肥喵记账 Codex 当前交接文档
 
-更新时间：2026-08-30（GPT OAuth Android 默认流程修复，v1.278.0+292；本轮无在线 Android 设备）
+更新时间：2026-08-30（GPT OAuth 旧设备授权状态迁移，v1.279.0+293；本轮无在线 Android 设备）
 当前 Android 工程：`C:\src\xunni-codex\android-app`  
 新会话第一入口：`docs/claude/CLAUDE_START_HERE.md`
 
 > 本文只保留当前有效状态。历史流水看 `CHANGELOG_CODEX.md` 和 git 历史。
+
+## -1.0.10. 2026-08-30 GPT OAuth 旧设备授权状态迁移（v1.279.0+293）
+
+- Android 普通“GPT OAuth 授权”只走 Cockpit 默认的浏览器 PKCE + localhost 回调，不调用 device-auth user-code 接口。
+- 旧版本遗留的设备授权 pending 状态在读取时直接清理；设备授权状态不再持久化，避免升级后恢复旧轮询再次触发 `unsupported_country_region` 403。浏览器 PKCE pending 仍持久化，Activity 重建后可恢复。
+- 当前无在线 Android ADB；真机 VPN、Chrome Custom Tab、账号选择、localhost 回调、模型目录与 Responses 仍需安装本包后在目标手机复测。
 
 ## -1.0.9. 2026-08-30 GPT OAuth Android 默认流程修复（v1.278.0+292）
 

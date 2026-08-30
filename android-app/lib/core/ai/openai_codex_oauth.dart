@@ -1850,7 +1850,15 @@ class OpenAiCodexOAuthService {
         final pending = _PendingOAuthState.fromJson(
           Map<String, dynamic>.from(decoded),
         );
-        if (pending.expiresAtMs > DateTime.now().millisecondsSinceEpoch) {
+        // Device-code authorization is an explicit, in-process fallback. Do
+        // not resurrect it after an app upgrade/restart: the user-code
+        // endpoint is region-gated and the old Android default could leave a
+        // stale pending record that sends the next launch back to a 403.
+        // Cockpit follows the same rule and never persists device sessions.
+        if (pending.isDeviceAuth) {
+          await SecureKeyStore.delete(_pendingKey);
+        } else if (pending.expiresAtMs >
+            DateTime.now().millisecondsSinceEpoch) {
           _pending = pending;
         } else {
           await SecureKeyStore.delete(_pendingKey);
@@ -1862,6 +1870,14 @@ class OpenAiCodexOAuthService {
   }
 
   Future<void> _persistPending(_PendingOAuthState pending) async {
+    // A device-code session is tied to the current process poller. Persisting
+    // it lets a later app launch resume a region-restricted flow that can no
+    // longer be completed. Keep only loopback PKCE state on disk so browser
+    // callbacks remain recoverable across Activity recreation.
+    if (pending.isDeviceAuth) {
+      await SecureKeyStore.delete(_pendingKey);
+      return;
+    }
     await SecureKeyStore.write(_pendingKey, jsonEncode(pending.toJson()));
   }
 

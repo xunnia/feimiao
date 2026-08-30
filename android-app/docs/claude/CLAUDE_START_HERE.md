@@ -8,6 +8,12 @@
 
 项目范围、优先级、交付门禁、路线图、风险与产物保留规则统一见 `../PROJECT_MANAGEMENT.md`。本文件负责“当前实现状态”，不再承担完整项目管理职责。
 
+## 0.0.5 GPT OAuth 旧设备授权状态迁移（v1.279.0+293）
+
+- Android 普通 GPT OAuth 入口只走 Cockpit 默认的浏览器 PKCE + localhost:1455/1457 回调。
+- 旧版遗留的 device-auth pending 状态会在升级后清理，且设备授权状态不再持久化，避免应用恢复时继续访问地区受限的 user-code 接口并返回 403。
+- APK：`C:\src\xunni-codex\ci-artifacts\releases\feimiao-codex-v1.279.0-293.apk`，SHA256 `2B5B85A5636C1F6E8C2E2F345B93B1E35680AA2020DBD613CD33A83F61F4C307`；无在线 ADB，真机复测仍需目标手机。
+
 ## 0.0.4 GPT OAuth Android 默认流程状态（v1.278.0+292）
 
 - Android 普通“GPT OAuth 授权”不再先请求地区受限的设备授权码；改回 Cockpit 默认的 `auth.openai.com/oauth/authorize` PKCE 浏览器流程。

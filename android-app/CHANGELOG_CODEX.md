@@ -1,3 +1,11 @@
+## 2026-08-30 v1.279.0+293 GPT OAuth 旧设备授权状态迁移
+
+- **根因补齐**：Android 普通授权入口继续只走 Cockpit 默认的浏览器 PKCE 流程；升级后发现旧版本可能在安全存储里遗留 device-auth 状态，启动恢复器会继续轮询地区受限的设备授权接口，造成用户明明安装新包仍看到 `unsupported_country_region` 403。
+- **迁移修复**：设备授权会话不再写入持久化安全存储；读取到旧设备授权状态时立即清理，不再恢复或轮询。浏览器 PKCE 的 state、verifier、回调地址仍会持久化，Android Activity 重建后可继续完成 localhost 回调。
+- **Cockpit 对齐**：对照当前开源实现，默认 `start_oauth_login` 为 PKCE + localhost:1455，device-auth 是独立显式流程，并且 Cockpit 不持久化设备授权状态。
+- **验证**：OAuth/JSON/Responses/设置定向 `126/126`；Flutter 全量 `1171/1171`；Dart analyze 无 error；Release 构建及包身份门禁通过（16 KiB、V2、固定证书）。APK `C:\src\xunni-codex\ci-artifacts\releases\feimiao-codex-v1.279.0-293.apk`，117,543,353 字节，SHA256 `2B5B85A5636C1F6E8C2E2F345B93B1E35680AA2020DBD613CD33A83F61F4C307`。
+- **边界**：本机无在线 Android ADB，真实手机 VPN、Chrome 账号选择、localhost 回调和网络出口仍需安装后复测；未使用 Plus 账号。
+
 ## 2026-08-30 v1.278.0+292 GPT OAuth Android 默认流程修复
 
 - **修复截图中的 403**：Android“GPT OAuth 授权”不再先调用地区受限的设备授权码接口；恢复 Cockpit 默认的 `auth.openai.com/oauth/authorize` PKCE 浏览器流程。原生 localhost 回调保活、账号选择隔离、Token 交换/刷新和模型目录获取继续保留。
