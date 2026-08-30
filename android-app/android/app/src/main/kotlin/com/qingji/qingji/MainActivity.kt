@@ -2,6 +2,7 @@ package com.qingji.qingji
 
 import android.content.Context
 import android.content.Intent
+import android.net.ConnectivityManager
 import android.net.Uri
 import android.provider.Settings
 import android.security.keystore.KeyGenParameterSpec
@@ -13,6 +14,10 @@ import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 import java.io.File
+import java.net.InetSocketAddress
+import java.net.Proxy
+import java.net.ProxySelector
+import java.net.URI
 import java.security.KeyStore
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
@@ -121,6 +126,12 @@ class MainActivity : FlutterActivity() {
                             if (url.isNullOrBlank()) false else openIncognitoOAuth(url)
                         )
                     }
+                    "openChromeOAuth" -> {
+                        val url = call.argument<String>("url")?.trim()
+                        result.success(
+                            if (url.isNullOrBlank()) false else openChromeOAuth(url)
+                        )
+                    }
                     "startKeepAlive" -> {
                         val ports = call.argument<List<Int>>("ports")
                             ?.filter { it in 1..65535 }
@@ -164,6 +175,23 @@ class MainActivity : FlutterActivity() {
                             ?.trim()
                             ?.ifEmpty { null }
                         result.success(OAuthKeepAliveService.clearCallback(this, flowId))
+                    }
+                    else -> result.notImplemented()
+                }
+            }
+
+        // Android system HTTP proxy bridge. Full-device VPNs need no proxy
+        // override; proxy-based VPN apps expose this value for Chrome but not
+        // to Dart's HttpClient unless it is forwarded explicitly.
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "feimiao/network")
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "getSystemProxy" -> result.success(systemProxyInfo())
+                    "getSystemProxyForUrl" -> {
+                        val url = call.argument<String>("url")?.trim()
+                        result.success(
+                            if (url.isNullOrBlank()) null else systemProxyRouteForUrl(url)
+                        )
                     }
                     else -> result.notImplemented()
                 }
@@ -298,12 +326,145 @@ class MainActivity : FlutterActivity() {
         return false
     }
 
+    private fun openChromeOAuth(url: String): Boolean {
+        for (browser in preferredChromePackages()) {
+            try {
+                val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {
+                    setPackage(browser)
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                if (intent.resolveActivity(packageManager) == null) continue
+                startActivity(intent)
+                return true
+            } catch (_: Exception) {
+                // Try the next installed Chrome channel.
+            }
+        }
+        return false
+    }
+
     private fun preferredChromePackages(): List<String> = listOf(
         "com.android.chrome",
         "com.chrome.beta",
         "com.chrome.dev",
         "com.chrome.canary",
     )
+
+    private fun systemProxyInfo(): Map<String, Any?> {
+        val connectivity = getSystemService(Context.CONNECTIVITY_SERVICE)
+            as? ConnectivityManager
+        val proxy = connectivity?.defaultProxy
+        val hasPac = !proxy?.pacFileUrl?.toString().isNullOrBlank()
+        // Chrome follows PAC files through Android's ProxySelector, while
+        // Dart's HttpClient only sees a fixed host/port. Resolve the common
+        // AI endpoints natively so proxy-based VPNs route app traffic the
+        // same way as the browser even when ProxyInfo.host is empty.
+        val pacRoutes = linkedMapOf<String, Map<String, Any?>>()
+        for (host in listOf(
+            "auth.openai.com",
+            "chatgpt.com",
+            "api.openai.com",
+            "api.anthropic.com",
+            "api.deepseek.com",
+            "api.duckduckgo.com",
+        )) {
+            val route = proxySelectorRoute(host)
+            if (route != null) pacRoutes[host] = route
+        }
+        return mapOf(
+            // A PAC-backed ProxyInfo can still expose a host/port fallback.
+            // Do not turn that fallback into a global Dart proxy: each target
+            // must be evaluated by ProxySelector instead.
+            "host" to if (hasPac) null else proxy?.host,
+            "port" to if (hasPac) null else proxy?.port,
+            "pacUrl" to proxy?.pacFileUrl?.toString(),
+            "exclusionList" to proxy?.exclusionList?.toList().orEmpty(),
+            "routes" to pacRoutes,
+        )
+    }
+
+    private fun proxySelectorRoute(host: String): Map<String, Any?>? {
+        return try {
+            val selected = ProxySelector.getDefault()
+                ?.select(URI("https://$host"))
+                .orEmpty()
+            val proxy = selected.firstOrNull { candidate ->
+                candidate.type() != Proxy.Type.DIRECT &&
+                    candidate.address() is InetSocketAddress
+            } ?: return null
+            val address = proxy.address() as InetSocketAddress
+            val routeHost = address.hostString.trim()
+            val routePort = address.port
+            if (routeHost.isEmpty() || routePort <= 0 || routePort > 65535) {
+                return null
+            }
+            mapOf(
+                "host" to routeHost,
+                "port" to routePort,
+                "type" to when (proxy.type()) {
+                    Proxy.Type.SOCKS -> "socks"
+                    Proxy.Type.HTTP -> "http"
+                    else -> "direct"
+                },
+            )
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    private fun systemProxyRouteForUrl(rawUrl: String): Map<String, Any?> {
+        return try {
+            val uri = URI(rawUrl)
+            val selected = ProxySelector.getDefault()?.select(uri).orEmpty()
+            val candidate = selected.firstOrNull { it.type() != Proxy.Type.DIRECT }
+            val selectedAddress = candidate
+                ?.takeUnless { it.type() == Proxy.Type.DIRECT }
+                ?.address() as? InetSocketAddress
+            val selectedHost = selectedAddress?.hostString?.trim().orEmpty()
+            val selectedPort = selectedAddress?.port ?: 0
+            if (selectedHost.isNotEmpty() && selectedPort in 1..65535) {
+                return mapOf(
+                    "host" to selectedHost,
+                    "port" to selectedPort,
+                    "type" to when (candidate?.type()) {
+                        Proxy.Type.SOCKS -> "socks"
+                        Proxy.Type.HTTP -> "http"
+                        else -> "direct"
+                    },
+                )
+            }
+            // ProxySelector may report DIRECT for a fixed Android default
+            // proxy. Preserve that older bridge path before concluding that
+            // the target should bypass the proxy.
+            val connectivity = getSystemService(Context.CONNECTIVITY_SERVICE)
+                as? ConnectivityManager
+            val proxy = connectivity?.defaultProxy
+            val hasPac = !proxy?.pacFileUrl?.toString().isNullOrBlank()
+            if (hasPac || selected.isNotEmpty()) {
+                // ProxySelector explicitly returned DIRECT (or could not
+                // resolve a proxy for this PAC target); honor that decision.
+                return mapOf("type" to "direct")
+            }
+            val host = proxy?.host?.trim().orEmpty()
+            val port = proxy?.port ?: 0
+            if (host.isEmpty() || port <= 0 || port > 65535) {
+                mapOf("type" to "direct")
+            } else {
+                mapOf("host" to host, "port" to port, "type" to "http")
+            }
+        } catch (_: Exception) {
+            val connectivity = getSystemService(Context.CONNECTIVITY_SERVICE)
+                as? ConnectivityManager
+            val proxy = connectivity?.defaultProxy
+            val host = proxy?.host?.trim().orEmpty()
+            val port = proxy?.port ?: 0
+            if (host.isEmpty() || port <= 0 || port > 65535) {
+                mapOf("type" to "direct")
+            } else {
+                mapOf("host" to host, "port" to port, "type" to "http")
+            }
+        }
+    }
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)

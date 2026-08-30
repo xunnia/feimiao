@@ -1,10 +1,52 @@
 # 肥喵记账 Codex 当前交接文档
 
-更新时间：2026-08-28（全局 UI 收口，v1.264.0+278；本轮无在线 Android 设备）
+更新时间：2026-08-30（GPT OAuth/JSON 最终链路修复，v1.277.0+291；本轮无在线 Android 设备）
 当前 Android 工程：`C:\src\xunni-codex\android-app`  
 新会话第一入口：`docs/claude/CLAUDE_START_HERE.md`
 
 > 本文只保留当前有效状态。历史流水看 `CHANGELOG_CODEX.md` 和 git 历史。
+
+## -1.0.8. 2026-08-30 GPT OAuth/JSON 最终链路修复（v1.277.0+291）
+
+- 官方 ChatGPT/Codex Responses 端点要求 `stream=true`；普通问答、主页记账、报告和连接测试的缓冲 Responses 传输层现在统一强制流式标志，并保留官方会话/请求元数据。
+- 聊天请求补齐按目标地址的 Android 系统代理/PAC 解析；设备授权码、PKCE/state、Token 刷新、模型目录重试和首包重试继续保留。
+- 本机真实 Cockpit 完整备份解析出 10 个 Codex 账号（5 OAuth、5 API Key）且无警告；指定测试账号的模型目录 HTTP 200、真实 Responses HTTP 200 并解析 `OK`，肥喵 `LlmQueryV2` 与主页 `LlmQuery` 路径均通过。
+- 验证：OAuth/Responses/JSON/仓库定向回归 `113/113`；Flutter 全量 `1171/1171`；Dart analyze 无 error；Gradle `:app:compileDebugKotlin` 成功。APK：`C:\src\xunni-codex\ci-artifacts\releases\feimiao-codex-v1.277.0-291.apk`，SHA256 `43DAC969193535B39EBC08EE133546C0C63F3E78C64720829389CF635A754F28`，16 KiB/V2/固定证书 gate 通过。
+- 当前无在线 Android ADB，真机 VPN、Chrome Custom Tab、设备码轮询、输入法和字体观感仍需在目标手机安装后复测；未使用 Plus 账号。
+
+## -1.0.7. 2026-08-30 GPT OAuth 与 Cockpit JSON 最终修复（v1.276.0+290）
+
+- Android GPT OAuth 默认改用官方设备授权码：`deviceauth/usercode` -> 官方 `codex/device` -> 403/404 轮询 `deviceauth/token` -> PKCE 校验 -> `deviceauth/callback` Token 兑换；不再依赖 Android 可能被回收的 localhost 回调。桌面/手动 localhost 回调路径保留。
+- Token 响应邮箱回填账号身份；主页记账、报告、设置连接测试、喵助手遇到 Codex 不支持模型会重新读取官方模型目录并重试；附件解析和导入后请求动态刷新系统代理。
+- Cockpit 完整备份/PAT/共享 workspace/API Key 目录导入规则保持并补齐；真实本机备份解析 10 个 Codex 账号，仓库重启后仍可用。
+- 验证：OAuth `19/19`、JSON/AI/模型目录 `44/44`、仓库导入 `3/3`、Flutter `1168/1168`、Dart analyze 无 error（86 条既有 warning/info）。APK：`C:\src\xunni-codex\ci-artifacts\releases\feimiao-codex-v1.276.0-290.apk`，SHA256 `F762CA8B5E5C478A55EEFB879F5549E66C81662CD1838CBD5347D1AD2CD9D8DF`。
+- 本机无在线 ADB，手机真实出口、VPN 分流和设备码真实轮询仍待目标手机安装复测。
+
+## -1.0.6. 2026-08-30 月份选择弹窗回退（v1.275.0+289）
+
+- 主页月份选择弹窗恢复用户提供的旧版参考图二：使用普通底部弹层和自然暗化背景，移除关闭圆圈及高斯模糊。
+- 弹层标题改为左侧“月份选择”，右侧同一行显示“月统计起始日：每月 1 号”；年份箭头恢复无圆形视觉底，保留原有可点击热区、年份切换、月份网格和数据计算。
+- 可视化证据保存在 `outputs/ui_comparisons/2026-08-30/`：`before/month_picker_before.png`、`month_picker_after.png`、`month_picker_before_after.png`。原截图未覆盖，对比图带 1/2/3 编号标注。
+- 定向月份/全局 UI 测试 `3/3`，Flutter 全量 `1164/1164`，Dart analyze exit 0（无 error，84 条既有 warning/info）。
+- Release APK：`C:\src\xunni-codex\ci-artifacts\releases\feimiao-codex-v1.275.0-289.apk`，117,445,045 字节，SHA256 `196FED571B03372A4F89211034759E89061A8AF00B72163DD1542D27C4C4B56B`；16 KiB 对齐、APK V2、固定证书 gate 通过。
+- 本轮未发布线上；本机无在线 Android 设备，真实 OAuth/JSON 导入、手机 VPN 分流、Chrome Custom Tab、IME 和真机观感仍需用户设备验收。
+
+## -1.0.5. 2026-08-30 OAuth 网络与 Cockpit JSON 导入修复（v1.274.0+288）
+
+- Cockpit 完整备份现在识别 `accounts.platforms.codex.exported_data` 和单独 `exported_data` 传输段，只抽取 Codex 凭据；本机真实备份解析 9 个账号（5 个 OAuth），无解析警告。
+- `at-...` 个人访问令牌按官方 Codex `whoami` 流程获取工作区 ID，并持久化到账号配置；模型目录、身份查询和 401 刷新复用同一 OAuth service/client。
+- OAuth/JSON/模型目录定向回归 `53/53`，Flutter 全量 `1164/1164`，Dart analyze 无 error。
+- APK：`C:\src\xunni-codex\ci-artifacts\releases\feimiao-codex-v1.274.0-288.apk`，117,445,049 字节，SHA256 `9459F72F75845DF38D53385FA7B60E731B695BDC749673BAC6EA79A854D19035`；16 KiB/V2/固定证书 gate 通过。
+- 本机无在线 ADB；手机 VPN 分流、Chrome Custom Tab、真实 OAuth/模型请求及 JSON 导入仍需目标手机验收。
+
+## -1.0.4. 2026-08-29 GPT OAuth 与 Cockpit JSON 导入稳定性修复（v1.272.0+286）
+
+- OAuth 授权入口恢复官方直达 `auth.openai.com/oauth/authorize` 的 PKCE 流程；`chatgpt.com/codex/desktop-auth` 仅保留为可选成功页封装，不再作为前置授权页，避免已登录浏览器直接复用个人空间。Android 仍优先 Ephemeral/无痕 Chrome，普通兜底明确使用外部浏览器。
+- OAuth Token 交换成功先持久化凭据；模型目录是独立的可恢复步骤，临时网络/VPN/代理失败不会让成功登录被丢弃。Android 系统 HTTP 代理在请求前动态刷新，OAuth、模型目录、Responses 和普通 AI 请求共享该路由；localhost 回调始终直连。
+- Cockpit/CPA JSON 导入修复 workspace `account_id` 共享导致的错误去重；支持 `token_data`、JSON Lines、嵌套 JSON 字符串、UTF-8 BOM/UTF-16，以及缺少地址/模型的标准 API Key 默认值。批量导入延迟索引写入并在末尾一次提交，避免大文件逐账号重写和逐账号拉模型目录。
+- 验证：OAuth/JSON/代理/设置/模型目录定向 **78 项**，串行 Flutter 全量 **1157/1157**，Dart analyze 无 error；Release APK 身份门禁通过（16 KiB、V2、固定证书）。
+- APK：`C:\src\xunni-codex\ci-artifacts\releases\feimiao-codex-v1.272.0-286.apk`，117,363,129 字节，SHA256 `7FAEE2C959F784CC45A29F4BFB4F4DB2796B08F23FCBF28FEED7740135482D0D`。
+- 本机 Android 模拟器在独立 ADB 端口下仍无法进入 `device`（持续 offline/无 guest 启动完成），因此没有把安装、Ephemeral Custom Tab、手机 VPN 出口、IME 或真实设备 OAuth 写成已验收；需用户在开启 VPN 的 Android 真机安装此包复测。
 
 ## -1.0.3. 2026-08-28 全局 UI 收口（v1.264.0+278）
 

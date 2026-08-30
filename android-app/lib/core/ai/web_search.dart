@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 
 import 'ai_provider_config.dart';
+import 'system_network_proxy.dart';
 
 /// A source returned by either the provider-native search tool or the local
 /// adapter used for non-Responses providers.
@@ -68,6 +69,7 @@ class DuckDuckGoSearchAdapter implements AiWebSearchAdapter {
       'no_redirect': '1',
       'skip_disambig': '1',
     });
+    await SystemNetworkProxy.refreshFor(uri);
     final response = await _client.get(uri,
         headers: const {'Accept': 'application/json'}).timeout(timeout);
     // DuckDuckGo may return 202 (accepted) while still including a complete

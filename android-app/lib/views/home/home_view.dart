@@ -13,16 +13,11 @@ import '../../core/statistics/statistics_engine.dart';
 import '../../data/app_repository.dart';
 import '../../widgets/home_summary_card.dart';
 import '../../widgets/mascot.dart';
-import '../../widgets/app_buttons.dart';
-import '../../widgets/pressable_scale.dart';
-import '../../theme/app_tokens.dart';
-import '../../widgets/settings_ui.dart';
 import '../../widgets/sliding_segment.dart';
 import '../../widgets/transaction_day_list.dart';
 import '../statistics/statistics_view.dart';
 import '../settings/budget_setting_view.dart';
 import '../../widgets/app_page_route.dart';
-import '../common/app_sheet.dart';
 
 enum _TxFilter { all, expense, income }
 
@@ -85,10 +80,18 @@ class _HomeViewState extends State<HomeView> {
 
   Future<void> _pickMonth() async {
     final repo = context.read<AppRepository>();
-    final picked = await showBlurSheet<DateTime>(
-      context,
-      radius: 28,
-      child: _HomeMonthPickerSheet(
+    // The home month selector intentionally follows the original lightweight
+    // sheet (the reference design): dim the page without the heavyweight
+    // blurred overlay used by form sheets.
+    final picked = await showModalBottomSheet<DateTime>(
+      context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
+      backgroundColor: Theme.of(context).colorScheme.surface,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (_) => _HomeMonthPickerSheet(
         initial: DateTime(_year, _month),
         last: DateTime.now(),
         records: repo.allRecordsRef,
@@ -270,13 +273,28 @@ class _HomeMonthPickerSheetState extends State<_HomeMonthPickerSheet> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            SheetHeader(
-              title: '月份选择',
-              subtitle: '月统计起始日：每月 1 号',
-              onClose: () => Navigator.pop(context),
-              closeExtraInset: 8,
+            Row(
+              children: [
+                Text(
+                  '月份选择',
+                  style: TextStyle(
+                    fontSize: 22,
+                    fontWeight: FontWeight.w400,
+                    color: scheme.onSurface,
+                  ),
+                ),
+                const Spacer(),
+                Text(
+                  '月统计起始日：每月 1 号',
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w400,
+                    color: scheme.onSurfaceVariant.withValues(alpha: 0.72),
+                  ),
+                ),
+              ],
             ),
-            const SizedBox(height: 8),
+            const SizedBox(height: 22),
             Container(
               height: 52,
               decoration: BoxDecoration(
@@ -364,35 +382,18 @@ class _YearArrow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final label = enabled ? '切换年份' : '没有更多年份';
-    return Semantics(
-      button: true,
-      enabled: enabled,
-      label: label,
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
       onTap: enabled ? onTap : null,
-      child: Tooltip(
-        message: label,
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(
-            minWidth: AppHitTarget.min,
-            minHeight: AppHitTarget.min,
-          ),
-          child: PressableScale(
-            onPressed: enabled ? onTap : null,
-            child: SizedBox(
-              width: 34,
-              height: 34,
-              child: Center(
-                child: Icon(
-                  icon,
-                  size: 20,
-                  color: enabled
-                      ? scheme.onSurface
-                      : scheme.onSurfaceVariant.withValues(alpha: 0.4),
-                ),
-              ),
-            ),
-          ),
+      child: SizedBox(
+        width: 52,
+        height: 52,
+        child: Icon(
+          icon,
+          size: 20,
+          color: enabled
+              ? scheme.onSurfaceVariant.withValues(alpha: 0.58)
+              : scheme.onSurfaceVariant.withValues(alpha: 0.22),
         ),
       ),
     );

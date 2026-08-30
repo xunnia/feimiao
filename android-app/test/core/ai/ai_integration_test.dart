@@ -126,7 +126,8 @@ void main() {
 
     test('异常链路:wrapException -> 日志 -> 策略判断', () {
       // 场景1: HTTP 401 -> AiAuthException -> 应该降级
-      final e401 = AiRequestManager.wrapException('Unauthorized', statusCode: 401);
+      final e401 =
+          AiRequestManager.wrapException('Unauthorized', statusCode: 401);
       expect(e401, isA<AiAuthException>());
       expect(LlmQueryV2.shouldFallbackToProviderForTest(e401), true);
       expect(
@@ -150,15 +151,25 @@ void main() {
       expect((e429 as AiRateLimitException).retryAfterSeconds, 60);
 
       // 场景3: HTTP 500 -> AiServerException -> 应该重试但不是用相同模型（因为也要降级）
-      final e500 = AiRequestManager.wrapException('Internal Server Error', statusCode: 500);
+      final e500 = AiRequestManager.wrapException('Internal Server Error',
+          statusCode: 500);
       expect(e500, isA<AiServerException>());
       expect(e500.shouldRetry, true);
       expect(LlmQueryV2.shouldFallbackToProviderForTest(e500), true);
 
       // 场景4: HTTP 404 -> AiModelNotSupportedException -> 应该切换兼容模型
-      final e404 = AiRequestManager.wrapException('Model not found', statusCode: 404);
+      final e404 =
+          AiRequestManager.wrapException('Model not found', statusCode: 404);
       expect(e404, isA<AiModelNotSupportedException>());
       expect(LlmQueryV2.shouldRetryWithCompatibleModelForTest(e404), true);
+
+      // ChatGPT/Codex uses 400 for the same condition, unlike many relays
+      // that use 404. It must remain eligible for model recovery.
+      final e400 = AiRequestManager.wrapException(
+        '{"detail":"Unsupported model"}',
+        statusCode: 400,
+      );
+      expect(e400, isA<AiModelNotSupportedException>());
     });
 
     test('日志脱敏：敏感字段保护', () {

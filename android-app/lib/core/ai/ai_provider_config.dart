@@ -248,6 +248,13 @@ class AiProviderConfig {
   static const customDefaultBaseUrl = 'https://api.openai.com/v1';
   static const customDefaultModel = 'gpt-5-mini';
   static const customReportDefaultModel = 'gpt-5';
+  // The ChatGPT subscription/Codex endpoint has a separate catalogue from
+  // the public API. Keep a known Codex-safe fallback when the live catalogue
+  // cannot be reached during OAuth or account import.
+  // Cockpit's current Codex fallback set is gpt-5.5/gpt-5.4/gpt-5.4-mini;
+  // gpt-5 is not a stable subscription-catalogue id. Use the broadly
+  // available gpt-5.4 when a live model catalogue is temporarily unavailable.
+  static const openAiCodexDefaultModel = 'gpt-5.4';
   static const openAiOAuthAuthorizationUrl =
       'https://auth.openai.com/oauth/authorize';
   static const openAiCodexBaseUrl = 'https://chatgpt.com/backend-api';

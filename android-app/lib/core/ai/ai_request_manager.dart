@@ -201,6 +201,16 @@ class AiRequestManager {
               message.toLowerCase().contains('exceed'))) {
         return AiTokenLimitException(message, statusCode: code);
       }
+      // The ChatGPT/Codex backend reports an account-incompatible model as a
+      // 400 (for example `Unsupported model`), while many OpenAI-compatible
+      // relays use 404. Preserve the model-fallback path for both forms.
+      final lower = message.toLowerCase();
+      if (lower.contains('unsupported model') ||
+          lower.contains('model not found') ||
+          lower.contains('unknown model') ||
+          lower.contains('invalid model')) {
+        return AiModelNotSupportedException(message, statusCode: code);
+      }
       return AiBadRequestException(message, statusCode: code);
     }
     if (code == 404) {

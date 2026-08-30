@@ -5,6 +5,7 @@ import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:qingji/core/ai/ai_provider_config.dart';
 import 'package:qingji/core/ai/llm_query.dart';
+import 'package:qingji/core/ai/openai_codex_oauth.dart';
 
 void main() {
   const config = AiProviderConfig(
@@ -182,6 +183,48 @@ void main() {
       await LlmQuery.fetchModels(config, client: client),
       const ['model-a', 'model-b'],
     );
+  });
+
+  test('fetchModels shares the injected client for PAT identity and catalog',
+      () async {
+    var calls = 0;
+    String? savedAccountId;
+    final client = MockClient((request) async {
+      calls++;
+      if (calls == 1) {
+        expect(
+          request.url.toString(),
+          OpenAiCodexOAuth.personalAccessTokenWhoAmIEndpoint,
+        );
+        return http.Response(
+          '{"email":"pat@example.com","chatgpt_user_id":"u-1",'
+          '"chatgpt_account_id":"acct-pat","chatgpt_plan_type":"pro",'
+          '"chatgpt_account_is_fedramp":false}',
+          200,
+        );
+      }
+      expect(request.url.path, '/backend-api/codex/models');
+      expect(request.headers['chatgpt-account-id'], 'acct-pat');
+      return http.Response('{"models":[{"slug":"gpt-pat"}]}', 200);
+    });
+    final config = AiProviderConfig(
+      type: AiProviderType.custom,
+      apiKey: 'at-personal-token',
+      baseUrl: AiProviderConfig.openAiCodexBaseUrl,
+      model: 'gpt-pat',
+      endpointType: AiEndpointType.responses,
+      authMethod: AiAuthMethod.oauth,
+      oauthTokenSaver: (access, refresh, expiresAt, accountId) async {
+        savedAccountId = accountId;
+      },
+    );
+
+    expect(
+      await LlmQuery.fetchModels(config, client: client),
+      const ['gpt-pat'],
+    );
+    expect(calls, 2);
+    expect(savedAccountId, 'acct-pat');
   });
 
   test('fetchModels tries a non-v1 models path after a 404', () async {

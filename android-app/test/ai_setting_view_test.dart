@@ -80,9 +80,7 @@ void main() {
 
   setUpAll(loadScreenshotFonts);
 
-  test(
-      'Android GPT OAuth falls back to an external browser when isolation is unavailable',
-      () {
+  test('Android GPT OAuth fallback stays in the external browser', () {
     expect(
       openAiOAuthLaunchMode(isAndroid: true),
       LaunchMode.externalApplication,

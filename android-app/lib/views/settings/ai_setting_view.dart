@@ -1,4 +1,3 @@
-import 'dart:convert';
 import 'dart:io' show File, Platform;
 
 import 'package:flutter/cupertino.dart' show CupertinoIcons;
@@ -29,10 +28,11 @@ import '../common/app_sheet.dart';
 import '../home/ai_chat_panel.dart';
 import 'ai_companion_views.dart';
 
-/// Keep the Dart fallback on the external browser. Android first attempts an
-/// isolated Custom Tab, then a Chrome Incognito tab through the native OAuth
-/// channel; only when both are unavailable do we reuse the regular browser
-/// profile. The manual callback field remains available for network failures.
+/// Keep Android's OAuth browser leg on Chrome. It first attempts an isolated
+/// Custom Tab, then a Chrome Incognito tab, then a normal Chrome tab; only when
+/// Chrome is unavailable does it use the generic browser resolver. The latter
+/// is deliberately last because an installed ChatGPT app can otherwise claim
+/// auth.openai.com and silently reuse its current personal workspace.
 LaunchMode openAiOAuthLaunchMode({bool? isAndroid}) =>
     (isAndroid ?? Platform.isAndroid)
         ? LaunchMode.externalApplication
@@ -449,6 +449,11 @@ class _AiAccountSettingsPageState extends State<_AiAccountSettingsPage> {
       return;
     }
 
+    if (Platform.isAndroid) {
+      await _openOpenAiDeviceAuthorization(provider, draft);
+      return;
+    }
+
     if (_busy.contains(provider.id)) return;
     setState(() => _busy.add(provider.id));
     try {
@@ -466,7 +471,15 @@ class _AiAccountSettingsPageState extends State<_AiAccountSettingsPage> {
           await OpenAiCodexOAuthKeepAlive.openIncognitoBrowser(
             authorizationUri.toString(),
           );
-      final opened = isolated || incognito ||
+      final chrome = !isolated &&
+          !incognito &&
+          Platform.isAndroid &&
+          await OpenAiCodexOAuthKeepAlive.openChromeBrowser(
+            authorizationUri.toString(),
+          );
+      final opened = isolated ||
+          incognito ||
+          chrome ||
           await launchUrl(
             authorizationUri,
             mode: openAiOAuthLaunchMode(),
@@ -488,6 +501,81 @@ class _AiAccountSettingsPageState extends State<_AiAccountSettingsPage> {
         showAppToast(
           context,
           'GPT 授权失败：${_shortError(error)}。也可以粘贴回调地址重试。',
+          icon: Icons.error_outline,
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _busy.remove(provider.id));
+    }
+  }
+
+  Future<void> _openOpenAiDeviceAuthorization(
+    AiConfiguredProvider provider,
+    _ProviderDraft draft,
+  ) async {
+    if (_busy.contains(provider.id)) return;
+    setState(() => _busy.add(provider.id));
+    try {
+      final session = await OpenAiCodexOAuth.service.startDeviceAuth(
+        providerId: provider.id,
+      );
+      await Clipboard.setData(ClipboardData(text: session.userCode));
+      if (!mounted) {
+        await OpenAiCodexOAuth.service.cancel();
+        return;
+      }
+      final proceed = await showConfirmDialog(
+        context,
+        title: 'GPT 设备授权',
+        message: '授权码 ${session.userCode} 已复制。\n'
+            '打开官方页面后粘贴授权码并选择账号；此方式不使用 localhost 回调。',
+        confirmText: '打开授权页',
+      );
+      if (!proceed || !mounted) {
+        await OpenAiCodexOAuth.service.cancel();
+        return;
+      }
+      final verificationUri = Uri.parse(session.verificationUrl);
+      final isolated = await OpenAiCodexOAuthKeepAlive.openEphemeralBrowser(
+        verificationUri.toString(),
+      );
+      final incognito = !isolated &&
+          await OpenAiCodexOAuthKeepAlive.openIncognitoBrowser(
+            verificationUri.toString(),
+          );
+      final chrome = !isolated &&
+          !incognito &&
+          await OpenAiCodexOAuthKeepAlive.openChromeBrowser(
+            verificationUri.toString(),
+          );
+      final opened = isolated ||
+          incognito ||
+          chrome ||
+          await launchUrl(
+            verificationUri,
+            mode: openAiOAuthLaunchMode(),
+          );
+      if (!opened) {
+        await OpenAiCodexOAuth.service.cancel();
+        if (mounted) {
+          showAppToast(context, '无法打开 GPT 设备授权页', icon: Icons.error_outline);
+        }
+        return;
+      }
+      if (mounted) {
+        showAppToast(
+          context,
+          '授权码已复制，完成网页授权后返回肥喵记账',
+          icon: Icons.info_outline,
+        );
+      }
+      final tokens = await session.completion;
+      await _finishOpenAiOAuth(provider, draft, tokens);
+    } catch (error) {
+      if (mounted) {
+        showAppToast(
+          context,
+          'GPT 设备授权失败：${_shortError(error)}',
           icon: Icons.error_outline,
         );
       }
@@ -552,33 +640,69 @@ class _AiAccountSettingsPageState extends State<_AiAccountSettingsPage> {
     _ProviderDraft draft,
     OpenAiCodexOAuthTokens tokens,
   ) async {
-    List<OpenAiCodexModel> models = const [];
+    // Persist the token exchange before attempting model discovery. OAuth
+    // login and catalogue discovery are separate network operations; a
+    // transient VPN/proxy or 401 must not make a successful login disappear.
+    final fallbackModels = <String>[];
+    final seenFallback = <String>{};
+    for (final candidate in [
+      draft.selectedModel,
+      provider.selectedModel,
+      provider.model,
+      AiProviderConfig.openAiCodexDefaultModel,
+    ]) {
+      final value = candidate.trim();
+      if (value.isNotEmpty && seenFallback.add(value)) {
+        fallbackModels.add(value);
+      }
+    }
+    var saved = await context.read<AppRepository>().saveAiOAuthTokens(
+          providerId: provider.id,
+          tokens: tokens,
+          models: fallbackModels,
+        );
+    draft.apiKey.text = saved.apiKey;
+    draft.baseUrl.text = saved.baseUrl;
+    draft.model.text = saved.model;
+    draft.models
+      ..clear()
+      ..addAll(saved.models);
+    draft.endpointType = saved.endpointType;
+    draft.authMethod = saved.authMethod;
+
+    List<String> models = const [];
     Object? modelFetchError;
     try {
-      models = await OpenAiCodexOAuth.service.fetchModels(tokens);
+      // Route discovery through the same config path as normal requests. It
+      // shares refresh-token persistence and retries an expired/rotated access
+      // token instead of querying the just-exchanged token in isolation.
+      models = await LlmQuery.fetchModels(_formConfig(saved, draft));
     } catch (error) {
       // Token exchange is the login result.  A transient /codex/models
       // failure must not discard a valid OAuth account; save a known official
       // model and let the user refresh the catalogue later.
       modelFetchError = error;
     }
-    final modelNames = <String>[];
-    final seen = <String>{};
-    for (final candidate in [
-      ...models.map((model) => model.slug),
-      draft.selectedModel,
-      provider.selectedModel,
-      provider.model,
-      AiProviderConfig.customDefaultModel,
-    ]) {
-      final value = candidate.trim();
-      if (value.isNotEmpty && seen.add(value)) modelNames.add(value);
+    if (models.isNotEmpty) {
+      final modelNames = <String>[];
+      final seen = <String>{};
+      for (final candidate in models) {
+        final value = candidate.trim();
+        if (value.isNotEmpty && seen.add(value)) modelNames.add(value);
+      }
+      final latest = context.read<AppRepository>().aiProviderById(saved.id);
+      if (latest != null && modelNames.isNotEmpty) {
+        await context.read<AppRepository>().saveAiConfiguredProvider(
+              latest.copyWith(
+                model: modelNames.first,
+                models: modelNames,
+              ),
+            );
+        saved = context.read<AppRepository>().aiProviderById(saved.id) ??
+            latest.copyWith(model: modelNames.first, models: modelNames);
+      }
     }
-    final saved = await context.read<AppRepository>().saveAiOAuthTokens(
-          providerId: provider.id,
-          tokens: tokens,
-          models: modelNames,
-        );
+    saved = context.read<AppRepository>().aiProviderById(saved.id) ?? saved;
     draft.apiKey.text = saved.apiKey;
     draft.baseUrl.text = saved.baseUrl;
     draft.model.text = saved.model;
@@ -615,15 +739,24 @@ class _AiAccountSettingsPageState extends State<_AiAccountSettingsPage> {
         type: FileType.custom,
         allowedExtensions: ['json', 'txt'],
         withData: true,
+        // Android document providers may return a content:// identifier with
+        // no directly readable filesystem path. Keep a stream fallback so a
+        // valid Cockpit export is not rejected just because it came from
+        // Drive, Downloads, or another document provider.
+        withReadStream: true,
         allowMultiple: false,
       );
       if (result == null || result.files.isEmpty) return;
       final file = result.files.single;
-      final text = file.bytes != null
-          ? utf8.decode(file.bytes!, allowMalformed: true)
-          : file.path == null
-              ? ''
-              : await File(file.path!).readAsString();
+      final bytes = file.bytes ??
+          (file.readStream == null
+              ? null
+              : await file.readStream!.fold<List<int>>(
+                  <int>[],
+                  (buffer, chunk) => buffer..addAll(chunk),
+                )) ??
+          (file.path == null ? null : await File(file.path!).readAsBytes());
+      final text = bytes == null ? '' : AiAccountJsonCodec.decodeBytes(bytes);
       await _reviewAndImportAccounts(text);
     } catch (error) {
       if (mounted) {
@@ -679,6 +812,13 @@ class _AiAccountSettingsPageState extends State<_AiAccountSettingsPage> {
     var imported = 0;
     var skipped = 0;
     var modelFetchFailed = 0;
+    final activeChoices = selections
+        .where((choice) => choice.action != _AiAccountImportAction.skip)
+        .toList(growable: false);
+    final deferBatchMetadata = activeChoices.length > 1;
+    final oauthCatalogCandidates =
+        activeChoices.where((choice) => choice.account.isOAuth).length;
+    var modelCatalogFetched = false;
     try {
       for (final choice in selections) {
         if (choice.action == _AiAccountImportAction.skip) {
@@ -692,29 +832,48 @@ class _AiAccountSettingsPageState extends State<_AiAccountSettingsPage> {
               ? duplicate?.id
               : null,
           enabledOverride: choice.enabled,
+          persistMetadata: !deferBatchMetadata,
+          notify: !deferBatchMetadata,
         );
         imported++;
         // Cockpit exports normally omit the model catalogue. Fetch it once so
         // a successful OAuth import is immediately usable with official GPT
         // models; an offline device can still use the saved fallback model.
-        if (choice.account.isOAuth &&
+        // A large Cockpit export can contain hundreds of OAuth identities.
+        // Importing them must not become one blocking model request per
+        // account. The fallback model is already usable; discover a catalogue
+        // automatically only for a single-account import. Every account card
+        // retains its explicit “获取模型” action for later refresh.
+        final shouldFetchCatalog = choice.account.isOAuth &&
             saved.models.length <= 1 &&
-            choice.account.accessToken.trim().isNotEmpty &&
-            saved.oauthAccountId.trim().isNotEmpty) {
+            oauthCatalogCandidates == 1 &&
+            !modelCatalogFetched;
+        if (shouldFetchCatalog) {
           try {
-            final tokens = OpenAiCodexOAuthTokens(
-              accessToken: choice.account.accessToken,
-              refreshToken: choice.account.refreshToken,
-              idToken: choice.account.idToken,
-              accountId: saved.oauthAccountId,
-              expiresAtMs: choice.account.expiresAtMs,
+            // Use the same refresh + /codex/models path as a real ChatGPT
+            // request. This also makes refresh-only Cockpit exports usable:
+            // ensureFreshConfig exchanges the refresh token, persists the
+            // rotated pair, then model discovery runs with that new token.
+            final fetchDraft = _draftFor(saved);
+            fetchDraft.apiKey.text = saved.apiKey;
+            fetchDraft.baseUrl.text = saved.baseUrl;
+            fetchDraft.model.text = saved.model;
+            fetchDraft.models
+              ..clear()
+              ..addAll(saved.models);
+            fetchDraft.endpointType = saved.endpointType;
+            fetchDraft.authMethod = saved.authMethod;
+            final models = await LlmQuery.fetchModels(
+              _formConfig(saved, fetchDraft),
             );
-            final models = await OpenAiCodexOAuth.service.fetchModels(tokens);
-            await repo.saveAiOAuthTokens(
-              providerId: saved.id,
-              tokens: tokens,
-              models: models.map((model) => model.slug).toList(),
+            final latest = repo.aiProviderById(saved.id) ?? saved;
+            await repo.saveAiConfiguredProvider(
+              latest.copyWith(
+                model: models.first,
+                models: models,
+              ),
             );
+            modelCatalogFetched = true;
           } catch (_) {
             modelFetchFailed++;
           }
@@ -741,6 +900,19 @@ class _AiAccountSettingsPageState extends State<_AiAccountSettingsPage> {
         );
       }
     } finally {
+      if (deferBatchMetadata) {
+        try {
+          await repo.commitAiAccountImportBatch();
+        } catch (error) {
+          if (mounted) {
+            showAppToast(
+              context,
+              '账号索引保存失败：${_shortError(error)}',
+              icon: Icons.error_outline,
+            );
+          }
+        }
+      }
       if (mounted) setState(() => _busy.remove('__json_import__'));
     }
   }
@@ -2164,9 +2336,18 @@ class _CaptionText extends StatelessWidget {
 }
 
 String _shortError(Object e) {
-  final text = e.toString().replaceFirst('LlmQueryException: ', '').trim();
-  if (text.length <= 42) return text;
-  return '${text.substring(0, 42)}…';
+  final text = switch (e) {
+    OpenAiCodexOAuthException(:final message) => message,
+    LlmQueryException(:final message) => message,
+    _ => e
+        .toString()
+        .replaceFirst('LlmQueryException: ', '')
+        .replaceFirst('OpenAiCodexOAuthException: ', '')
+        .trim(),
+  };
+  final normalized = text.replaceAll(RegExp(r'\s+'), ' ').trim();
+  if (normalized.length <= 120) return normalized;
+  return '${normalized.substring(0, 117)}…';
 }
 
 void _push(BuildContext context, Widget page) {

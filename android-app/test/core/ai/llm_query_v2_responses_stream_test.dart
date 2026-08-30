@@ -77,6 +77,29 @@ void main() {
     expect(body['reasoning'], {'effort': 'high'});
   });
 
+  test('官方 Codex 的非流式调用也强制使用 stream=true', () {
+    const codex = AiProviderConfig(
+      type: AiProviderType.custom,
+      apiKey: 'access-token',
+      baseUrl: AiProviderConfig.openAiCodexBaseUrl,
+      model: 'gpt-5.4',
+      endpointType: AiEndpointType.responses,
+      authMethod: AiAuthMethod.oauth,
+      oauthAccountId: 'acct-test',
+    );
+    final body = LlmQueryV2.responsesTransportBodyForTest(
+      config: codex,
+      body: const {'model': 'gpt-5.4', 'input': 'ping', 'stream': false},
+    );
+    expect(body['stream'], isTrue);
+
+    final regular = LlmQueryV2.responsesTransportBodyForTest(
+      config: config,
+      body: const {'model': 'gpt-5', 'input': 'ping', 'stream': false},
+    );
+    expect(regular['stream'], isFalse);
+  });
+
   test('开启联网搜索时 Responses 请求携带 web_search 工具', () {
     final searchConfig = config.copyWith(webSearchEnabled: true);
     final body = LlmQueryV2.responsesStreamBodyForTest(

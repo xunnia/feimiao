@@ -13,6 +13,7 @@ import 'ai_prompt_templates.dart';
 import 'ai_provider_config.dart';
 import 'ai_request_manager.dart';
 import 'openai_codex_oauth.dart';
+import 'system_network_proxy.dart';
 import 'web_search.dart';
 import '../media/chat_attachment.dart';
 
@@ -23,7 +24,12 @@ import '../media/chat_attachment.dart';
 class LlmQueryV2 {
   LlmQueryV2._();
 
-  static final http.Client _httpClient = http.Client();
+  // HttpClient captures dart:io HttpOverrides at construction time. Keep the
+  // shared client lazy so Android's system proxy/VPN bridge installed in
+  // main() is applied to non-streaming Responses and Chat requests too.
+  static http.Client? _httpClient;
+
+  static http.Client get _client => _httpClient ??= http.Client();
 
   static const _defaultTimeoutSeconds = 30;
   static const _reportTimeoutSeconds = 90;
@@ -148,6 +154,7 @@ class LlmQueryV2 {
       var requestProvider = provider;
       var unauthorizedRetried = false;
       var transientNetworkRetried = false;
+      var codexCatalogRetried = false;
       var streamProducedOutput = false;
 
       void handleChunk(String chunk) {
@@ -214,6 +221,19 @@ class LlmQueryV2 {
                 requestProvider = await OpenAiCodexOAuth.service
                     .refreshAfterUnauthorized(requestProvider);
                 continue;
+              }
+              if (!codexCatalogRetried &&
+                  requestProvider.isOpenAiCodexOAuth &&
+                  _isUnsupportedModelError(aiError)) {
+                codexCatalogRetried = true;
+                final refreshed = await _configWithLiveCodexModel(
+                  requestProvider,
+                );
+                if (refreshed != null &&
+                    refreshed.model != requestProvider.model) {
+                  requestProvider = refreshed;
+                  continue;
+                }
               }
               // Android may hand the first request to a stale keep-alive
               // socket immediately after app resume or provider hydration.
@@ -545,9 +565,10 @@ $transactionsText''';
     required Map<String, dynamic> Function(String model) bodyForModel,
   }) async {
     AiException? lastError;
-    final models = config.modelCandidates;
+    var models = config.modelCandidates;
     var activeConfig = config;
     var unauthorizedRetried = false;
+    var codexCatalogRetried = false;
 
     for (int i = 0; i < models.length; i++) {
       final model = models[i];
@@ -590,6 +611,19 @@ $transactionsText''';
           continue;
         }
 
+        if (!codexCatalogRetried &&
+            activeConfig.isOpenAiCodexOAuth &&
+            _isUnsupportedModelError(lastError)) {
+          codexCatalogRetried = true;
+          final refreshed = await _configWithLiveCodexModel(activeConfig);
+          if (refreshed != null && refreshed.model != activeConfig.model) {
+            activeConfig = refreshed;
+            models = [refreshed.model];
+            i = -1;
+            continue;
+          }
+        }
+
         // 最后一个模型失败直接抛出
         if (i == models.length - 1) rethrow;
 
@@ -610,20 +644,66 @@ $transactionsText''';
     throw lastError ?? const AiUnknownException('未知错误');
   }
 
+  static bool _isUnsupportedModelError(AiException error) {
+    final message = error.message.toLowerCase();
+    return (error.statusCode == 400 || error.statusCode == 404) &&
+        (message.contains('unsupported model') ||
+            message.contains('model not found') ||
+            message.contains('unknown model') ||
+            message.contains('invalid model'));
+  }
+
+  static Future<AiProviderConfig?> _configWithLiveCodexModel(
+    AiProviderConfig config,
+  ) async {
+    try {
+      // Resolve refresh-only/expired imports through the same config path as
+      // normal requests first. Calling fetchModels with a bare access token
+      // would discover the catalogue but leave the subsequent retry with an
+      // empty or stale bearer token.
+      final freshConfig = await OpenAiCodexOAuth.ensureFreshConfig(config);
+      final catalog = await OpenAiCodexOAuth.service.fetchModels(
+        OpenAiCodexOAuthTokens(
+          accessToken: freshConfig.apiKey,
+          accountId: freshConfig.oauthAccountId,
+        ),
+      );
+      final candidates = catalog
+          .map((item) => item.slug.trim())
+          .where((item) => item.isNotEmpty)
+          .toList(growable: false);
+      if (candidates.isEmpty) return null;
+      final model = candidates.firstWhere(
+        (item) => item != freshConfig.model.trim(),
+        orElse: () => candidates.first,
+      );
+      return freshConfig.copyWith(model: model);
+    } on OpenAiCodexOAuthException {
+      // Preserve the original model error; the caller will surface the more
+      // useful unsupported-model/authorization response when discovery also
+      // cannot reach the official catalogue.
+      return null;
+    } catch (_) {
+      return null;
+    }
+  }
+
   static Future<String> _postChat({
     required AiProviderConfig config,
     required Map<String, dynamic> body,
     required int timeoutSeconds,
   }) async {
+    await SystemNetworkProxy.refresh();
     final isClaude = config.shouldUseClaudeMessages;
     final uri = isClaude ? config.messagesUri : config.chatCompletionsUri;
+    await SystemNetworkProxy.refreshFor(uri);
 
     late http.Response resp;
 
     try {
       final headers = config.authHeaders();
 
-      resp = await _httpClient
+      resp = await _client
           .post(
             uri,
             headers: headers,
@@ -755,6 +835,12 @@ $transactionsText''';
       body = _chatCompletionsStreamBody(config: config, messages: messages);
     }
 
+    // Refresh the Android system proxy before constructing the IO client. The
+    // client snapshots HttpOverrides at construction time, so refreshing only
+    // after `http.Client()` would still send the first streamed request direct.
+    await SystemNetworkProxy.refresh(force: true);
+    await SystemNetworkProxy.refreshFor(uri, force: true);
+
     // A stream owns its client for the complete response lifetime. This avoids
     // reusing a poisoned keep-alive socket on the first request after resume;
     // a bounded first-packet retry in askStream therefore gets a fresh socket.
@@ -763,9 +849,23 @@ $transactionsText''';
       late http.StreamedResponse resp;
       try {
         final headers = config.authHeaders();
+        var requestBody = body;
+        if (config.isOpenAiCodexOAuth) {
+          final sessionId = OpenAiCodexOAuth.generateRequestId();
+          requestBody = OpenAiCodexOAuth.prepareCodexResponsesBody(
+            body,
+            sessionId: sessionId,
+          );
+          headers.addAll(
+            OpenAiCodexOAuth.codexRequestHeaders(
+              sessionId: sessionId,
+              stream: true,
+            ),
+          );
+        }
         final request = http.Request('POST', uri)
           ..headers.addAll(headers)
-          ..body = jsonEncode(body);
+          ..body = jsonEncode(requestBody);
         resp = await streamClient
             .send(request)
             .timeout(Duration(seconds: timeoutSeconds));
@@ -995,14 +1095,41 @@ $transactionsText''';
     required Map<String, dynamic> body,
     required int timeoutSeconds,
   }) async {
+    await SystemNetworkProxy.refresh();
+    await SystemNetworkProxy.refreshFor(config.responsesUri);
+    final isCodex = config.isOpenAiCodexOAuth;
+    final sessionId = isCodex ? OpenAiCodexOAuth.generateRequestId() : null;
+    // Official ChatGPT/Codex Responses rejects buffered requests with
+    // `Stream must be set to true`. Reports, connection tests, and regular
+    // `ask()` calls all share this method, so enforce the Codex wire contract
+    // here instead of relying on each caller to remember the flag.
+    final codexBody = _responsesTransportBody(
+      config: config,
+      body: body,
+    );
+    final requestBody = sessionId == null
+        ? codexBody
+        : OpenAiCodexOAuth.prepareCodexResponsesBody(
+            codexBody,
+            sessionId: sessionId,
+          );
+    final headers = config.authHeaders();
+    if (sessionId != null) {
+      headers.addAll(
+        OpenAiCodexOAuth.codexRequestHeaders(
+          sessionId: sessionId,
+          stream: requestBody['stream'] == true,
+        ),
+      );
+    }
     late http.Response resp;
 
     try {
-      resp = await _httpClient
+      resp = await _client
           .post(
             config.responsesUri,
-            headers: config.authHeaders(),
-            body: jsonEncode(body),
+            headers: headers,
+            body: jsonEncode(requestBody),
           )
           .timeout(Duration(seconds: timeoutSeconds));
     } on TimeoutException {
@@ -1662,6 +1789,23 @@ $transactionsText''';
     required List<Map<String, dynamic>> messages,
   }) =>
       _responsesStreamBody(config: config, messages: messages);
+
+  /// Test the final buffered-Responses transport invariant without opening a
+  /// network connection. The official ChatGPT/Codex endpoint rejects
+  /// `stream: false`, including when the caller is the non-streaming `ask()`
+  /// or connection-test path.
+  @visibleForTesting
+  static Map<String, dynamic> responsesTransportBodyForTest({
+    required AiProviderConfig config,
+    required Map<String, dynamic> body,
+  }) =>
+      _responsesTransportBody(config: config, body: body);
+
+  static Map<String, dynamic> _responsesTransportBody({
+    required AiProviderConfig config,
+    required Map<String, dynamic> body,
+  }) =>
+      config.isOpenAiCodexOAuth ? {...body, 'stream': true} : body;
 
   /// 测试辅助：构造 Chat Completions 流式请求体（含 DeepSeek Effort 映射）。
   @visibleForTesting

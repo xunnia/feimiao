@@ -8,7 +8,9 @@ import 'package:provider/provider.dart';
 
 import 'core/auto_record.dart';
 import 'core/ai/report_task_scheduler.dart';
+import 'core/ai/ai_provider_config.dart';
 import 'core/ai/openai_codex_oauth.dart';
+import 'core/ai/system_network_proxy.dart';
 import 'core/assets/repayment_reminder.dart';
 import 'core/haptics.dart';
 import 'core/widgets/widget_snapshot_service.dart';
@@ -49,6 +51,9 @@ const bool _parityCapture = bool.fromEnvironment('QINGJI_PARITY_CAPTURE');
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  // Install before any AI client is constructed so OAuth, model discovery,
+  // and Responses requests can follow Android's system proxy when present.
+  await SystemNetworkProxy.install();
   SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
     statusBarColor: Colors.transparent,
     statusBarIconBrightness: Brightness.dark,
@@ -310,6 +315,7 @@ class _OpenAiOAuthWatcher with WidgetsBindingObserver {
     final repo = _repo;
     if (repo == null) return;
     try {
+      await SystemNetworkProxy.refresh(force: true);
       final available = await OpenAiCodexOAuth.service.resumePending();
       if (!available) return;
       // A pending flow without a provider id is not an account-settings flow
@@ -320,11 +326,25 @@ class _OpenAiOAuthWatcher with WidgetsBindingObserver {
       if (providerId.isEmpty) return;
       final tokens = await OpenAiCodexOAuth.service.waitForPendingCompletion();
       if (tokens == null) return;
-      final models = await OpenAiCodexOAuth.service.fetchModels(tokens);
+      // Token exchange is the durable login result. Model discovery is a
+      // second network request and may fail independently (VPN/proxy warm-up,
+      // transient 5xx, or an Android resume race). Never discard a valid token
+      // just because the catalogue is temporarily unavailable.
+      List<String> models = const [];
+      try {
+        final discovered = await OpenAiCodexOAuth.service.fetchModels(tokens);
+        models = discovered.map((model) => model.slug).toList(growable: false);
+      } catch (error) {
+        debugPrint('resume GPT OAuth model discovery failed: $error');
+      }
+      final fallback = <String>{
+        ...models,
+        AiProviderConfig.openAiCodexDefaultModel,
+      };
       await repo.saveAiOAuthTokens(
         providerId: providerId,
         tokens: tokens,
-        models: models.map((model) => model.slug).toList(growable: false),
+        models: fallback.toList(growable: false),
       );
     } catch (error, stackTrace) {
       // The settings page also awaits the same completion and presents the

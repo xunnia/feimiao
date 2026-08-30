@@ -16310,6 +16310,8 @@ class AppRepository extends ChangeNotifier {
     AiConfiguredProvider provider, {
     String? expectedAccessToken,
     String? expectedRefreshToken,
+    bool persistMetadata = true,
+    bool notify = true,
   }) {
     final key = provider.type == AiProviderType.deepseek
         ? 'deepseek'
@@ -16326,6 +16328,8 @@ class AppRepository extends ChangeNotifier {
           provider,
           expectedAccessToken: expectedAccessToken,
           expectedRefreshToken: expectedRefreshToken,
+          persistMetadata: persistMetadata,
+          notify: notify,
         );
       } finally {
         if (!gate.isCompleted) gate.complete();
@@ -16340,6 +16344,8 @@ class AppRepository extends ChangeNotifier {
     AiConfiguredProvider provider, {
     String? expectedAccessToken,
     String? expectedRefreshToken,
+    bool persistMetadata = true,
+    bool notify = true,
   }) async {
     var id = provider.id.trim();
     if (provider.type == AiProviderType.deepseek) id = 'deepseek';
@@ -16544,9 +16550,16 @@ class AppRepository extends ChangeNotifier {
     _recordAiProviderType = aiProviderById(_recordAiProviderId)?.type ?? type;
     _chatAiProviderType = aiProviderById(_chatCurrentProviderId)?.type ?? type;
     _reportAiProviderType = _chatAiProviderType;
-    await _persistAiProviderMetadata(
-      notify: false,
-    );
+    if (persistMetadata) {
+      await _persistAiProviderMetadata(notify: false);
+    }
+    if (notify) notifyListeners();
+  }
+
+  /// Flushes provider metadata after a batch import. Individual account
+  /// imports can skip this O(n^2) index rewrite and listener notification.
+  Future<void> commitAiAccountImportBatch() async {
+    await _persistAiProviderMetadata(notify: false);
     notifyListeners();
   }
 
@@ -16578,6 +16591,9 @@ class AppRepository extends ChangeNotifier {
       authMethod: AiAuthMethod.oauth,
       oauthAuthorizationUrl: AiProviderConfig.openAiOAuthAuthorizationUrl,
       oauthAccountId: tokens.accountId ?? provider.oauthAccountId,
+      accountEmail: tokens.email?.trim().isNotEmpty == true
+          ? tokens.email!.trim()
+          : provider.accountEmail,
       oauthIdToken: tokens.idToken,
       oauthRefreshToken: tokens.refreshToken ?? provider.oauthRefreshToken,
       oauthExpiresAtMs: tokens.expiresAtMs,
@@ -16658,6 +16674,8 @@ class AppRepository extends ChangeNotifier {
     AiAccountImportEntry entry, {
     String? existingProviderId,
     bool? enabledOverride,
+    bool persistMetadata = true,
+    bool notify = true,
   }) async {
     if (!entry.hasCredential) {
       throw const FormatException('账号没有可用的 API Key 或 OAuth Token');
@@ -16674,7 +16692,11 @@ class AppRepository extends ChangeNotifier {
         ? entry.model.trim()
         : (existing?.model.trim().isNotEmpty == true
             ? existing!.model.trim()
-            : (oauth ? AiProviderConfig.customDefaultModel : ''));
+            : (oauth || entry.source == AiAccountJsonSource.openAiAuth
+                ? (oauth
+                    ? AiProviderConfig.openAiCodexDefaultModel
+                    : AiProviderConfig.customDefaultModel)
+                : ''));
     final models = entry.models.isNotEmpty
         ? entry.models
         : (existing?.models.isNotEmpty == true ? existing!.models : [model]);
@@ -16695,7 +16717,10 @@ class AppRepository extends ChangeNotifier {
         : existing?.oauthRefreshToken ?? '';
     final importedBaseUrl = entry.baseUrl.trim().isNotEmpty
         ? entry.baseUrl.trim()
-        : existing?.baseUrl ?? '';
+        : existing?.baseUrl ??
+            (oauth
+                ? AiProviderConfig.openAiCodexBaseUrl
+                : AiProviderConfig.customDefaultBaseUrl);
     final importedDisplayName = entry.displayName.trim().isNotEmpty
         ? entry.displayName.trim()
         : (existing?.displayName.trim().isNotEmpty == true
@@ -16729,7 +16754,11 @@ class AppRepository extends ChangeNotifier {
       reasoningEffort: existing?.reasoningEffort ?? AiReasoningEffort.none,
       webSearchEnabled: existing?.webSearchEnabled ?? false,
     );
-    await saveAiConfiguredProvider(provider);
+    await saveAiConfiguredProvider(
+      provider,
+      persistMetadata: persistMetadata,
+      notify: notify,
+    );
     return aiProviderById(id) ?? provider;
   }
 
@@ -16738,13 +16767,30 @@ class AppRepository extends ChangeNotifier {
     final accountId = entry.accountId.trim().toLowerCase();
     final email = entry.accountEmail.trim().toLowerCase();
     final sourceId = entry.sourceId.trim().toLowerCase();
-    for (final provider in _aiProviders) {
-      if (accountId.isNotEmpty &&
-          provider.oauthAccountId.trim().toLowerCase() == accountId) {
-        return provider;
+
+    // A workspace/account id can be shared by multiple exported identities.
+    // Prefer the full identity pair, then email, and only use account id by
+    // itself when the incoming entry has no email. This prevents importing a
+    // second Cockpit account from updating the first one in place.
+    if (accountId.isNotEmpty && email.isNotEmpty) {
+      for (final provider in _aiProviders) {
+        if (provider.oauthAccountId.trim().toLowerCase() == accountId &&
+            provider.accountEmail.trim().toLowerCase() == email) {
+          return provider;
+        }
       }
-      if (email.isNotEmpty &&
-          provider.accountEmail.trim().toLowerCase() == email) {
+    }
+    if (email.isNotEmpty) {
+      for (final provider in _aiProviders) {
+        if (provider.accountEmail.trim().toLowerCase() == email) {
+          return provider;
+        }
+      }
+    }
+    for (final provider in _aiProviders) {
+      if (email.isEmpty &&
+          accountId.isNotEmpty &&
+          provider.oauthAccountId.trim().toLowerCase() == accountId) {
         return provider;
       }
       if (sourceId.isNotEmpty && provider.id.trim().toLowerCase() == sourceId) {

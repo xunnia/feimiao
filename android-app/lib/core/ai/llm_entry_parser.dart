@@ -13,6 +13,7 @@ import 'ai_provider_config.dart';
 import 'entry_sanity.dart';
 import 'natural_language_entry_parser.dart';
 import 'openai_codex_oauth.dart';
+import 'system_network_proxy.dart';
 
 /// DeepSeek 大模型解析器：把一句话拆成多笔 [ParsedEntry]。
 ///
@@ -316,11 +317,13 @@ $catList
     required Map<String, dynamic> Function(String model) bodyForModel,
   }) async {
     LlmParseException? lastError;
-    final models = provider.modelCandidates;
+    var models = provider.modelCandidates;
     var activeProvider = provider;
     var unauthorizedRetried = false;
     var initialNetworkRetried = false;
-    for (final model in models) {
+    var codexCatalogRetried = false;
+    for (var index = 0; index < models.length; index++) {
+      final model = models[index];
       while (true) {
         try {
           return await _postChatContent(
@@ -351,6 +354,18 @@ $catList
               );
             }
           }
+          if (!codexCatalogRetried &&
+              activeProvider.isOpenAiCodexOAuth &&
+              _isUnsupportedModelError(e)) {
+            codexCatalogRetried = true;
+            final refreshed = await _configWithLiveCodexModel(activeProvider);
+            if (refreshed != null && refreshed.model != activeProvider.model) {
+              activeProvider = refreshed;
+              models = [refreshed.model];
+              index = -1;
+              break;
+            }
+          }
           lastError = e;
           if (model == models.last || !_shouldRetryWithCompatModel(e)) rethrow;
           break;
@@ -358,6 +373,43 @@ $catList
       }
     }
     throw lastError ?? const LlmParseException('未知错误');
+  }
+
+  static bool _isUnsupportedModelError(LlmParseException error) {
+    final message = error.message.toLowerCase();
+    return (error.statusCode == 400 || error.statusCode == 404) &&
+        (message.contains('unsupported model') ||
+            message.contains('model not found') ||
+            message.contains('unknown model') ||
+            message.contains('invalid model'));
+  }
+
+  static Future<AiProviderConfig?> _configWithLiveCodexModel(
+    AiProviderConfig config,
+  ) async {
+    try {
+      final freshConfig = await OpenAiCodexOAuth.ensureFreshConfig(config);
+      final catalog = await OpenAiCodexOAuth.service.fetchModels(
+        OpenAiCodexOAuthTokens(
+          accessToken: freshConfig.apiKey,
+          accountId: freshConfig.oauthAccountId,
+        ),
+      );
+      final candidates = catalog
+          .map((item) => item.slug.trim())
+          .where((item) => item.isNotEmpty)
+          .toList(growable: false);
+      if (candidates.isEmpty) return null;
+      final model = candidates.firstWhere(
+        (item) => item != freshConfig.model.trim(),
+        orElse: () => candidates.first,
+      );
+      return freshConfig.copyWith(model: model);
+    } on OpenAiCodexOAuthException {
+      return null;
+    } catch (_) {
+      return null;
+    }
   }
 
   static bool _shouldRetryWithCompatModel(LlmParseException e) {
@@ -389,6 +441,7 @@ $catList
     required AiProviderConfig provider,
     required Map<String, dynamic> body,
   }) async {
+    await SystemNetworkProxy.refresh();
     late http.Response response;
 
     // Claude 格式转换
@@ -406,10 +459,27 @@ $catList
     requestBody = Map<String, dynamic>.from(requestBody)
       ..remove('response_schema');
 
+    await SystemNetworkProxy.refreshFor(uri);
+    final sessionId = provider.isOpenAiCodexOAuth
+        ? OpenAiCodexOAuth.generateRequestId()
+        : null;
+    if (sessionId != null) {
+      requestBody = OpenAiCodexOAuth.prepareCodexResponsesBody(
+        requestBody,
+        sessionId: sessionId,
+      );
+    }
+    final headers = provider.authHeaders();
+    if (sessionId != null) {
+      headers.addAll(
+        OpenAiCodexOAuth.codexRequestHeaders(
+          sessionId: sessionId,
+          stream: requestBody['stream'] == true,
+        ),
+      );
+    }
     final client = http.Client();
     try {
-      final headers = provider.authHeaders();
-
       response = await client
           .post(
             uri,

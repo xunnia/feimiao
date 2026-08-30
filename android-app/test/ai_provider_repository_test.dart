@@ -588,6 +588,38 @@ void main() {
     await repo.closeForTest();
   });
 
+  test('imports a real Cockpit full-account JSON object with nested tokens',
+      () async {
+    final repo = AppRepository();
+    await repo.init();
+    final entry = AiAccountJsonCodec.parse('''
+      [{
+        "id": "codex-local-account",
+        "email": "cockpit@example.com",
+        "account_name": "Personal workspace",
+        "auth_mode": "OAuth",
+        "account_id": "acct-cockpit",
+        "tokens": {
+          "id_token": "id-from-cockpit",
+          "access_token": "access-from-cockpit",
+          "refresh_token": "refresh-from-cockpit",
+          "account_id": "acct-cockpit"
+        }
+      }]
+    ''').accounts.single;
+
+    final imported = await repo.importAiAccount(entry);
+    expect(imported.authMethod, AiAuthMethod.oauth);
+    expect(imported.oauthAccountId, 'acct-cockpit');
+    expect(imported.apiKey, 'access-from-cockpit');
+    expect(imported.oauthRefreshToken, 'refresh-from-cockpit');
+    expect(imported.oauthIdToken, 'id-from-cockpit');
+    expect(imported.baseUrl, AiProviderConfig.openAiCodexBaseUrl);
+    expect(imported.isUsable, isTrue);
+
+    await repo.closeForTest();
+  });
+
   test('refresh-only Cockpit OAuth import remains selectable before refresh',
       () async {
     final repo = AppRepository();
@@ -612,6 +644,87 @@ void main() {
       isTrue,
     );
     await repo.closeForTest();
+  });
+
+  test('imports separate Cockpit identities sharing one workspace id',
+      () async {
+    final repo = AppRepository();
+    await repo.init();
+    final first = AiAccountJsonCodec.parse('''
+      {
+        "type": "codex",
+        "email": "first@example.com",
+        "account_id": "shared-workspace",
+        "access_token": "access-first"
+      }
+    ''').accounts.single;
+    final second = AiAccountJsonCodec.parse('''
+      {
+        "type": "codex",
+        "email": "second@example.com",
+        "account_id": "shared-workspace",
+        "access_token": "access-second"
+      }
+    ''').accounts.single;
+
+    final importedFirst = await repo.importAiAccount(first);
+    final importedSecond = await repo.importAiAccount(second);
+
+    expect(importedFirst.id, isNot(importedSecond.id));
+    expect(
+        repo.aiProviders.where((provider) => !provider.builtIn), hasLength(2));
+    expect(repo.matchingAiProvider(first)!.id, importedFirst.id);
+    expect(repo.matchingAiProvider(second)!.id, importedSecond.id);
+    await repo.closeForTest();
+  });
+
+  test('OpenAI auth API-key import receives usable official defaults',
+      () async {
+    final repo = AppRepository();
+    await repo.init();
+    final entry = AiAccountJsonCodec.parse('''
+      {"OPENAI_API_KEY":"sk-imported"}
+    ''').accounts.single;
+
+    final imported = await repo.importAiAccount(entry);
+
+    expect(imported.authMethod, AiAuthMethod.apiKey);
+    expect(imported.baseUrl, AiProviderConfig.customDefaultBaseUrl);
+    expect(imported.model, AiProviderConfig.customDefaultModel);
+    expect(imported.isUsable, isTrue);
+    await repo.closeForTest();
+  });
+
+  test('batch account import flushes deferred provider metadata once',
+      () async {
+    final repo = AppRepository();
+    await repo.init();
+    final entries = [
+      AiAccountJsonCodec.parse('''
+        {"type":"codex","email":"batch-one@example.com","account_id":"shared","access_token":"access-one","refresh_token":"refresh-one"}
+      ''').accounts.single,
+      AiAccountJsonCodec.parse('''
+        {"type":"codex","email":"batch-two@example.com","account_id":"shared","access_token":"access-two","refresh_token":"refresh-two"}
+      ''').accounts.single,
+    ];
+
+    for (final entry in entries) {
+      await repo.importAiAccount(entry, persistMetadata: false, notify: false);
+    }
+    expect(
+        repo.aiProviders.where((provider) => !provider.builtIn), hasLength(2));
+    await repo.commitAiAccountImportBatch();
+    await repo.closeForTest();
+
+    final reopened = AppRepository();
+    await reopened.init();
+    expect(reopened.aiProviders.where((provider) => !provider.builtIn),
+        hasLength(2));
+    expect(
+      reopened.aiProviders.map((provider) => provider.accountEmail),
+      containsAll(<String>['batch-one@example.com', 'batch-two@example.com']),
+    );
+    await reopened.closeForTest();
   });
 
   test('normal recording provider model and effort save and restore together',

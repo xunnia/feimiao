@@ -42,19 +42,26 @@ void main() {
     );
     await tester.pump();
 
-    expect(find.byType(SheetHeader), findsOneWidget);
-    expect(find.byType(AppCircleButton), findsOneWidget);
-    expect(
-      tester.widget<SheetHeader>(find.byType(SheetHeader)).closeExtraInset,
-      8,
+    // The home selector intentionally keeps the original lightweight layout,
+    // rather than the global form-sheet header: title left, helper right, and
+    // no close-circle control inside the sheet.
+    expect(find.byType(SheetHeader), findsNothing);
+    expect(find.byType(AppCircleButton), findsNothing);
+    final title = tester.widget<Text>(find.text('月份选择'));
+    expect(title.style?.fontSize, 22);
+    final subtitle = tester.widget<Text>(
+      find.text('月统计起始日：每月 1 号'),
     );
+    expect(subtitle.style?.fontSize, 13);
     expect(find.text('2026年'), findsOneWidget);
     expect(find.text('8月'), findsOneWidget);
 
     if (Platform.environment['UPDATE_HOME_UI_SCREENSHOTS'] == '1') {
       await expectLater(
         find.byKey(const ValueKey('home-month-picker-capture')),
-        matchesGoldenFile('../outputs/home_ui/month_picker.png'),
+        matchesGoldenFile(
+          '../outputs/ui_comparisons/2026-08-30/month_picker_after.png',
+        ),
       );
     }
   });

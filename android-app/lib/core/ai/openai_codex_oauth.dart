@@ -10,6 +10,7 @@ import 'package:http/http.dart' as http;
 
 import '../security/secure_key_store.dart';
 import 'ai_provider_config.dart';
+import 'system_network_proxy.dart';
 
 /// OpenAI's ChatGPT/Codex OAuth is separate from an OpenAI Platform API key.
 /// Keep the protocol details in one place so API-key providers remain generic.
@@ -20,6 +21,18 @@ class OpenAiCodexOAuth {
   static const authorizationEndpoint =
       'https://auth.openai.com/oauth/authorize';
   static const tokenEndpoint = 'https://auth.openai.com/oauth/token';
+  static const deviceUserCodeEndpoint =
+      'https://auth.openai.com/api/accounts/deviceauth/usercode';
+  static const deviceTokenEndpoint =
+      'https://auth.openai.com/api/accounts/deviceauth/token';
+  static const deviceVerificationUrl = 'https://auth.openai.com/codex/device';
+  static const deviceExchangeRedirectUri =
+      'https://auth.openai.com/deviceauth/callback';
+  // The official Codex client hydrates personal access tokens through this
+  // endpoint before using the ChatGPT backend.  PATs do not carry the
+  // workspace identity that OAuth JWTs normally expose in their claims.
+  static const personalAccessTokenWhoAmIEndpoint =
+      'https://auth.openai.com/api/accounts/v1/user-auth-credential/whoami';
   static const codexBaseUrl = 'https://chatgpt.com/backend-api';
   static const codexModelsPath = '/codex/models';
   static const codexResponsesPath = '/codex/responses';
@@ -43,7 +56,15 @@ class OpenAiCodexOAuth {
   static const userAgent = 'codex_vscode/0.146.0';
   static const defaultClientVersion = '0.146.0';
 
-  static final OpenAiCodexOAuthService service = OpenAiCodexOAuthService();
+  // Do not construct the process-wide HTTP client during library loading.
+  // Android installs the system proxy in `main()` before the first request;
+  // dart:io snapshots HttpOverrides when HttpClient is constructed, so an
+  // eager client would permanently bypass a VPN's HTTP proxy and make the
+  // browser leg succeed while token/model requests return 403.
+  static OpenAiCodexOAuthService? _service;
+
+  static OpenAiCodexOAuthService get service =>
+      _service ??= OpenAiCodexOAuthService();
 
   static Future<AiProviderConfig> ensureFreshConfig(
     AiProviderConfig config,
@@ -53,7 +74,10 @@ class OpenAiCodexOAuth {
   static bool isAuthorizationUrl(String raw) {
     final uri = Uri.tryParse(raw.trim());
     if (uri?.scheme != 'https') return false;
-    if (uri?.host == 'auth.openai.com' && uri?.path == '/oauth/authorize') {
+    if (uri?.host == 'auth.openai.com' &&
+        (uri?.path == '/oauth/authorize' ||
+            uri?.path.isEmpty == true ||
+            uri?.path == '/')) {
       return true;
     }
     if (uri?.host == 'chatgpt.com' && uri?.path == '/codex/desktop-auth') {
@@ -84,6 +108,16 @@ class OpenAiCodexOAuth {
   }) {
     var base =
         Uri.tryParse(authorizationUrl) ?? Uri.parse(authorizationEndpoint);
+    // Older app versions persisted the issuer as `https://auth.openai.com`
+    // without the `/oauth/authorize` path. Normalize that legacy value before
+    // adding query parameters so an existing account still launches the real
+    // OAuth endpoint instead of a generic personal-space page.
+    if (base.host == 'auth.openai.com' &&
+        (base.path.isEmpty || base.path == '/')) {
+      base = Uri.parse(authorizationEndpoint).replace(
+        queryParameters: base.queryParameters,
+      );
+    }
     if (base.host == 'chatgpt.com' && base.path == '/codex/desktop-auth') {
       final nested = base.queryParameters['authorize_url'];
       base = Uri.tryParse(nested ?? '') ?? Uri.parse(authorizationEndpoint);
@@ -131,6 +165,70 @@ class OpenAiCodexOAuth {
   static String codeChallenge(String verifier) {
     final digest = sha256.convert(utf8.encode(verifier));
     return base64UrlEncode(digest.bytes).replaceAll('=', '');
+  }
+
+  /// Generates the UUID-shaped request/session identifiers expected by the
+  /// Codex Responses backend. They are intentionally ephemeral and contain no
+  /// account or credential data.
+  static String generateRequestId([Random? random]) {
+    final source = random ?? Random.secure();
+    final bytes = List<int>.generate(16, (_) => source.nextInt(256));
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    final hex = bytes.map((value) => value.toRadixString(16).padLeft(2, '0'));
+    final value = hex.join();
+    return '${value.substring(0, 8)}-${value.substring(8, 12)}-'
+        '${value.substring(12, 16)}-${value.substring(16, 20)}-'
+        '${value.substring(20)}';
+  }
+
+  /// Adds the session/request metadata used by the official Codex client to
+  /// a Responses request. The backend accepts a fresh session for a single
+  /// turn; callers may pass a stable id when they need prompt-cache affinity.
+  static Map<String, String> codexRequestHeaders({
+    String? sessionId,
+    required bool stream,
+  }) {
+    final id = sessionId?.trim().isNotEmpty == true
+        ? sessionId!.trim()
+        : generateRequestId();
+    return {
+      'Version': defaultClientVersion,
+      'Session-Id': id,
+      'X-Client-Request-Id': id,
+      'Thread-Id': id,
+      'X-Codex-Window-Id': '$id:0',
+      'X-Codex-Turn-Metadata': jsonEncode({
+        'prompt_cache_key': id,
+        'turn_id': generateRequestId(),
+        'window_id': '$id:0',
+      }),
+      'Accept': stream ? 'text/event-stream' : 'application/json',
+    };
+  }
+
+  static Map<String, dynamic> prepareCodexResponsesBody(
+    Map<String, dynamic> body, {
+    String? sessionId,
+  }) {
+    final id = sessionId?.trim().isNotEmpty == true
+        ? sessionId!.trim()
+        : generateRequestId();
+    final prepared = Map<String, dynamic>.from(body);
+    prepared.putIfAbsent('prompt_cache_key', () => id);
+    final metadata = prepared['client_metadata'];
+    final clientMetadata = metadata is Map
+        ? Map<String, dynamic>.from(metadata)
+        : <String, dynamic>{};
+    clientMetadata.putIfAbsent('x-codex-installation-id', () => id);
+    clientMetadata['x-codex-window-id'] = '$id:0';
+    clientMetadata['x-codex-turn-metadata'] = jsonEncode({
+      'prompt_cache_key': id,
+      'turn_id': generateRequestId(),
+      'window_id': '$id:0',
+    });
+    prepared['client_metadata'] = clientMetadata;
+    return prepared;
   }
 
   static String? accountIdFromIdToken(String idToken) {
@@ -184,6 +282,9 @@ class OpenAiCodexOAuth {
       return null;
     }
   }
+
+  static bool isPersonalAccessToken(String token) =>
+      token.trim().toLowerCase().startsWith('at-');
 }
 
 class OpenAiCodexOAuthException implements Exception {
@@ -281,6 +382,26 @@ class OpenAiCodexOAuthKeepAlive {
     }
   }
 
+  /// Opens a normal Chrome tab explicitly. The generic Android resolver may
+  /// hand auth.openai.com to an installed ChatGPT app, which can silently
+  /// reuse its current personal workspace instead of showing the account
+  /// chooser. Keep this fallback on Chrome's browser/network surface.
+  static Future<bool> openChromeBrowser(String url) async {
+    try {
+      return await _channel.invokeMethod<bool>(
+            'openChromeOAuth',
+            <String, dynamic>{'url': url},
+          ) ??
+          false;
+    } on MissingPluginException {
+      return false;
+    } on PlatformException {
+      return false;
+    } on FlutterError {
+      return false;
+    }
+  }
+
   /// Removes a native callback only after the owning flow has completed (or
   /// been explicitly cancelled). Keeping this separate from takeCallback is
   /// what makes process-death recovery safe.
@@ -328,6 +449,7 @@ class OpenAiCodexOAuthTokens {
   final String? refreshToken;
   final String idToken;
   final String? accountId;
+  final String? email;
   final int? expiresAtMs;
 
   const OpenAiCodexOAuthTokens({
@@ -335,6 +457,7 @@ class OpenAiCodexOAuthTokens {
     this.refreshToken,
     this.idToken = '',
     this.accountId,
+    this.email,
     this.expiresAtMs,
   });
 
@@ -345,6 +468,7 @@ class OpenAiCodexOAuthTokens {
         'refreshToken': refreshToken,
         'idToken': idToken,
         'accountId': accountId,
+        'email': email,
         'expiresAtMs': expiresAtMs,
       };
 }
@@ -398,12 +522,30 @@ class OpenAiCodexOAuthSession {
   });
 }
 
+/// Official Codex device-code authorization. It exchanges for the same
+/// ChatGPT OAuth tokens as the loopback flow, but never redirects Chrome to
+/// localhost. This avoids Android/OEM background process limits entirely.
+class OpenAiCodexDeviceAuthSession {
+  final String userCode;
+  final String verificationUrl;
+  final Future<OpenAiCodexOAuthTokens> completion;
+
+  const OpenAiCodexDeviceAuthSession({
+    required this.userCode,
+    required this.verificationUrl,
+    required this.completion,
+  });
+}
+
 class OpenAiCodexOAuthService {
   static const _pendingKey = 'ai_codex_oauth_pending_v1';
   static const _stableIdKey = 'ai_codex_oauth_stable_id_v1';
   static const _callbackPort = 1455;
   static const _fallbackCallbackPort = 1457;
   static const _pendingLifetime = Duration(minutes: 10);
+  static const _devicePendingLifetime = Duration(minutes: 15);
+  static const _deviceRequestTimeout = Duration(seconds: 25);
+  static const _deviceDefaultPollSeconds = 5;
 
   final http.Client _client;
   // Keep one listener per loopback family. Browsers are free to resolve
@@ -415,6 +557,8 @@ class OpenAiCodexOAuthService {
   Future<OpenAiCodexOAuthTokens>? _completion;
   int? _nativeCallbackPort;
   final Map<String, Future<AiProviderConfig>> _refreshInFlight = {};
+  final Map<String, _PersonalAccessTokenIdentity>
+      _personalAccessTokenIdentityCache = {};
 
   // OAuth has two independent asynchronous owners: the settings page and
   // the app-level lifecycle watcher. An older flow must never stop the
@@ -456,6 +600,8 @@ class OpenAiCodexOAuthService {
   /// activity recreation can finish the same account login without relying on
   /// the settings page state that launched the browser.
   String? get pendingProviderId => _pending?.providerId;
+
+  bool get pendingUsesDeviceCode => _pending?.isDeviceAuth ?? false;
 
   OpenAiCodexOAuthService({http.Client? client})
       : _client = client ?? http.Client();
@@ -526,7 +672,12 @@ class OpenAiCodexOAuthService {
       redirect: redirectUri,
       authorizationUrl:
           authorizationUrl ?? OpenAiCodexOAuth.authorizationEndpoint,
-      hosted: true,
+      // The hosted `chatgpt.com/codex/desktop-auth` page is the official
+      // success-page envelope, not a replacement for the authorization
+      // endpoint. Opening it first can reuse the browser's current personal
+      // workspace and skip the account chooser. Start at auth.openai.com so
+      // `prompt=select_account` is honored, then finish on our loopback page.
+      hosted: false,
       stableId: stableId,
     );
     final pending = _PendingOAuthState(
@@ -558,6 +709,49 @@ class OpenAiCodexOAuthService {
     );
   }
 
+  Future<OpenAiCodexDeviceAuthSession> startDeviceAuth({
+    String? providerId,
+  }) =>
+      _exclusiveFlow(() => _startDeviceAuth(providerId: providerId));
+
+  Future<OpenAiCodexDeviceAuthSession> _startDeviceAuth({
+    String? providerId,
+  }) async {
+    await _cancelInternal();
+    final generation = _flowGeneration;
+    final start = await _requestDeviceUserCode();
+    if (generation != _flowGeneration) {
+      throw const OpenAiCodexOAuthException('OAuth 授权已被新的授权流程替换');
+    }
+    final pending = _PendingOAuthState(
+      providerId: providerId?.trim() ?? '',
+      codeVerifier: '',
+      state: OpenAiCodexOAuth.generateVerifier(),
+      authorizationUrl: start.verificationUrl,
+      redirectUri: OpenAiCodexOAuth.deviceExchangeRedirectUri,
+      expiresAtMs:
+          DateTime.now().add(_devicePendingLifetime).millisecondsSinceEpoch,
+      deviceAuthId: start.deviceAuthId,
+      deviceUserCode: start.userCode,
+      devicePollIntervalSeconds: start.pollIntervalSeconds,
+    );
+    _pending = pending;
+    try {
+      await _persistPending(pending);
+    } catch (error) {
+      _pending = null;
+      throw OpenAiCodexOAuthException('无法保存设备授权状态：$error');
+    }
+    _callback = null;
+    _nativeCallbackPort = null;
+    _completion = _completePending(pending, generation);
+    return OpenAiCodexDeviceAuthSession(
+      userCode: start.userCode,
+      verificationUrl: start.verificationUrl,
+      completion: _completion!,
+    );
+  }
+
   /// Recreate the callback listener after Android recreates or suspends the
   /// activity while the external browser is handling authorization. The
   /// persisted redirect URI is authoritative: a resumed flow must listen on
@@ -580,6 +774,11 @@ class OpenAiCodexOAuthService {
     if (pending.expiresAtMs <= DateTime.now().millisecondsSinceEpoch) {
       await _cancelInternal();
       return false;
+    }
+    if (pending.isDeviceAuth) {
+      _nativeCallbackPort = null;
+      _ensurePendingCompletion(pending, generation);
+      return true;
     }
     // A callback URL is persisted before token exchange. If a previous
     // exchange failed after the browser already completed, recovery can retry
@@ -722,19 +921,25 @@ class OpenAiCodexOAuthService {
     OpenAiCodexOAuthTokens tokens, {
     String clientVersion = OpenAiCodexOAuth.defaultClientVersion,
   }) async {
+    await SystemNetworkProxy.refresh();
     if (tokens.accessToken.trim().isEmpty) {
       throw const OpenAiCodexOAuthException('GPT OAuth access token 为空');
     }
-    if (tokens.accountId?.trim().isEmpty ?? true) {
-      throw const OpenAiCodexOAuthException(
-        'GPT OAuth Token 未包含 ChatGPT 账号 ID，请重新授权',
-      );
-    }
+    tokens = await _hydratePersonalAccessToken(tokens);
+    // Cockpit/OpenAI auth.json exports do not always persist account_id as a
+    // separate field; the same identity is present in the JWT auth claim.
+    // Derive it before rejecting the request so an otherwise valid imported
+    // account can fetch the official model catalogue.
+    final accountId = tokens.accountId?.trim().isNotEmpty == true
+        ? tokens.accountId!.trim()
+        : OpenAiCodexOAuth.accountIdFromIdToken(tokens.idToken) ??
+            OpenAiCodexOAuth.accountIdFromIdToken(tokens.accessToken);
     final headers = _codexHeaders(
       accessToken: tokens.accessToken,
-      accountId: tokens.accountId,
+      accountId: accountId,
     )..addAll({'Accept': 'application/json'});
     final uri = OpenAiCodexOAuth.modelsUri(clientVersion: clientVersion);
+    await SystemNetworkProxy.refreshFor(uri);
     late http.Response response;
     Object? lastNetworkError;
     for (var attempt = 0; attempt < 2; attempt++) {
@@ -793,12 +998,43 @@ class OpenAiCodexOAuthService {
   }
 
   Future<AiProviderConfig> ensureFreshConfig(AiProviderConfig config) async {
-    if (!config.isOpenAiCodexOAuth || config.oauthRefreshToken.trim().isEmpty) {
-      return config;
+    var current = config;
+    if (!current.isOpenAiCodexOAuth) return current;
+
+    // Personal access tokens are opaque (`at-...`) and have no JWT auth claim.
+    // Resolve their workspace once, persist it through the existing guarded
+    // saver, and include it in every subsequent Codex request.
+    if (current.oauthAccountId.trim().isEmpty &&
+        OpenAiCodexOAuth.isPersonalAccessToken(current.apiKey)) {
+      final hydrated = await _hydratePersonalAccessToken(
+        OpenAiCodexOAuthTokens(
+          accessToken: current.apiKey,
+          refreshToken: current.oauthRefreshToken,
+          // AiProviderConfig deliberately does not carry the sensitive id
+          // token; it remains in the repository's secure store.
+          idToken: '',
+          accountId: current.oauthAccountId,
+          expiresAtMs: current.oauthExpiresAtMs,
+        ),
+      );
+      final accountId = hydrated.accountId?.trim() ?? '';
+      if (accountId.isNotEmpty) {
+        current = current.copyWith(oauthAccountId: accountId);
+        await current.oauthTokenSaver?.call(
+          current.apiKey,
+          current.oauthRefreshToken,
+          current.oauthExpiresAtMs,
+          accountId,
+        );
+      }
     }
-    final hasAccessToken = config.apiKey.trim().isNotEmpty;
-    final expiresAtMs = config.oauthExpiresAtMs ??
-        OpenAiCodexOAuth.expiresAtFromJwt(config.apiKey);
+
+    if (current.oauthRefreshToken.trim().isEmpty) {
+      return current;
+    }
+    final hasAccessToken = current.apiKey.trim().isNotEmpty;
+    final expiresAtMs = current.oauthExpiresAtMs ??
+        OpenAiCodexOAuth.expiresAtFromJwt(current.apiKey);
     // Cockpit exports may contain only a refresh token.  An absent access
     // token is not an "unknown expiry" case: it must be exchanged before the
     // first request, otherwise callers proceed with an empty Bearer token.
@@ -810,22 +1046,114 @@ class OpenAiCodexOAuthService {
                 DateTime.now()
                     .add(const Duration(minutes: 5))
                     .millisecondsSinceEpoch)) {
-      return config;
+      return current;
     }
     // Several app surfaces can begin a request at the same time (for example
     // Chats and a report refresh). Share one refresh call per account so a
     // rotating refresh token is never redeemed twice concurrently.
-    final key = (config.providerId?.trim().isNotEmpty ?? false)
-        ? config.providerId!.trim()
-        : config.oauthAccountId.trim().isNotEmpty
-            ? config.oauthAccountId.trim()
-            : config.oauthRefreshToken.trim();
+    final key = (current.providerId?.trim().isNotEmpty ?? false)
+        ? current.providerId!.trim()
+        : current.oauthAccountId.trim().isNotEmpty
+            ? current.oauthAccountId.trim()
+            : current.oauthRefreshToken.trim();
     return _refreshConfigShared(
-      config,
+      current,
       key: key,
       fallbackExpiresAtMs: expiresAtMs ??
           DateTime.now().add(const Duration(hours: 1)).millisecondsSinceEpoch,
     );
+  }
+
+  /// Resolve a Cockpit/OpenAI personal access token using the same identity
+  /// endpoint as the official Codex client. OAuth JWTs already carry this
+  /// information and never make this extra request.
+  Future<OpenAiCodexOAuthTokens> _hydratePersonalAccessToken(
+    OpenAiCodexOAuthTokens tokens,
+  ) async {
+    final accessToken = tokens.accessToken.trim();
+    if (!OpenAiCodexOAuth.isPersonalAccessToken(accessToken)) {
+      return tokens;
+    }
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final cached = _personalAccessTokenIdentityCache[accessToken];
+    if (cached != null && cached.expiresAtMs > now) {
+      return OpenAiCodexOAuthTokens(
+        accessToken: accessToken,
+        refreshToken: tokens.refreshToken,
+        idToken: tokens.idToken,
+        accountId: cached.accountId,
+        email: cached.email,
+        expiresAtMs: tokens.expiresAtMs,
+      );
+    }
+    await SystemNetworkProxy.refresh();
+    final uri = Uri.parse(OpenAiCodexOAuth.personalAccessTokenWhoAmIEndpoint);
+    await SystemNetworkProxy.refreshFor(uri);
+    late http.Response response;
+    try {
+      response = await _client.get(
+        uri,
+        headers: {
+          'Authorization': 'Bearer $accessToken',
+          'Accept': 'application/json',
+        },
+      ).timeout(const Duration(seconds: 30));
+    } on TimeoutException {
+      throw const OpenAiCodexOAuthException('GPT 个人访问令牌身份查询超时');
+    } on SocketException catch (error) {
+      throw OpenAiCodexOAuthException('GPT 个人访问令牌身份查询失败：${error.message}');
+    } on http.ClientException catch (error) {
+      throw OpenAiCodexOAuthException('GPT 个人访问令牌身份查询失败：$error');
+    }
+    if (response.statusCode != 200) {
+      throw OpenAiCodexOAuthException(
+        'GPT 个人访问令牌身份查询失败（${response.statusCode}）',
+        statusCode: response.statusCode,
+      );
+    }
+    final decoded = jsonDecode(utf8.decode(response.bodyBytes));
+    if (decoded is! Map) {
+      throw const OpenAiCodexOAuthException('GPT 个人访问令牌身份响应格式错误');
+    }
+    final map = Map<String, dynamic>.from(decoded);
+    final accountId = _firstNonEmptyString(map, const [
+      'chatgpt_account_id',
+      'account_id',
+      'workspace_id',
+    ]);
+    if (accountId == null) {
+      throw const OpenAiCodexOAuthException(
+        'GPT 个人访问令牌身份响应缺少工作区 ID',
+      );
+    }
+    final email = _firstNonEmptyString(map, const ['email']);
+    _personalAccessTokenIdentityCache[accessToken] =
+        _PersonalAccessTokenIdentity(
+      accountId: accountId,
+      email: email,
+      // The identity is stable for a token, but a short TTL lets a revoked
+      // or rotated PAT recover without making every request pay a whoami call.
+      expiresAtMs: now + const Duration(minutes: 10).inMilliseconds,
+    );
+    return OpenAiCodexOAuthTokens(
+      accessToken: accessToken,
+      refreshToken: tokens.refreshToken,
+      idToken: tokens.idToken,
+      accountId: accountId,
+      email: email,
+      expiresAtMs: tokens.expiresAtMs,
+    );
+  }
+
+  static String? _firstNonEmptyString(
+    Map<String, dynamic> map,
+    List<String> keys,
+  ) {
+    for (final key in keys) {
+      final value = map[key]?.toString().trim() ?? '';
+      if (value.isNotEmpty) return value;
+    }
+    return null;
   }
 
   /// Force one refresh after the upstream rejects an otherwise apparently
@@ -895,6 +1223,151 @@ class OpenAiCodexOAuthService {
     return refreshed;
   }
 
+  Future<_DeviceAuthStart> _requestDeviceUserCode() async {
+    await SystemNetworkProxy.refresh(force: true);
+    final uri = Uri.parse(OpenAiCodexOAuth.deviceUserCodeEndpoint);
+    await SystemNetworkProxy.refreshFor(uri, force: true);
+    late http.Response response;
+    try {
+      response = await _client
+          .post(
+            uri,
+            headers: const {
+              'Content-Type': 'application/json',
+              'Accept': 'application/json',
+            },
+            body: jsonEncode({'client_id': OpenAiCodexOAuth.clientId}),
+          )
+          .timeout(_deviceRequestTimeout);
+    } on TimeoutException {
+      throw const OpenAiCodexOAuthException('GPT 设备授权码请求超时');
+    } on SocketException catch (error) {
+      throw OpenAiCodexOAuthException('GPT 设备授权码请求失败：${error.message}');
+    } on http.ClientException catch (error) {
+      throw OpenAiCodexOAuthException('GPT 设备授权码请求失败：$error');
+    }
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      final detail = _tokenFailureDetail(response);
+      throw OpenAiCodexOAuthException(
+        'GPT 设备授权码请求失败（${response.statusCode}）'
+        '${detail.isEmpty ? '' : '：$detail'}',
+        statusCode: response.statusCode,
+      );
+    }
+    final decoded = jsonDecode(utf8.decode(response.bodyBytes));
+    if (decoded is! Map) {
+      throw const OpenAiCodexOAuthException('GPT 设备授权码响应格式错误');
+    }
+    final map = Map<String, dynamic>.from(decoded);
+    final deviceAuthId = map['device_auth_id']?.toString().trim() ?? '';
+    final userCode =
+        (map['user_code'] ?? map['usercode'])?.toString().trim() ?? '';
+    final rawInterval = map['interval'];
+    final interval = rawInterval is num
+        ? rawInterval.toInt()
+        : int.tryParse(rawInterval?.toString() ?? '');
+    if (deviceAuthId.isEmpty || userCode.isEmpty) {
+      throw const OpenAiCodexOAuthException(
+        'GPT 设备授权响应缺少 device_auth_id 或 user_code',
+      );
+    }
+    return _DeviceAuthStart(
+      deviceAuthId: deviceAuthId,
+      userCode: userCode,
+      verificationUrl: OpenAiCodexOAuth.deviceVerificationUrl,
+      pollIntervalSeconds: (interval == null || interval <= 0)
+          ? _deviceDefaultPollSeconds
+          : interval,
+    );
+  }
+
+  Future<OpenAiCodexOAuthTokens> _pollDeviceAuthorization(
+    _PendingOAuthState pending,
+    int generation,
+  ) async {
+    final pollSeconds = pending.devicePollIntervalSeconds <= 0
+        ? _deviceDefaultPollSeconds
+        : pending.devicePollIntervalSeconds;
+    final interval = Duration(seconds: pollSeconds.clamp(1, 30).toInt());
+    while (DateTime.now().millisecondsSinceEpoch < pending.expiresAtMs) {
+      if (!_ownsFlow(pending, generation)) {
+        throw const OpenAiCodexOAuthException('OAuth 授权已被新的授权流程替换');
+      }
+      await SystemNetworkProxy.refresh();
+      final deviceTokenUri = Uri.parse(OpenAiCodexOAuth.deviceTokenEndpoint);
+      await SystemNetworkProxy.refreshFor(deviceTokenUri);
+      http.Response? response;
+      try {
+        response = await _client
+            .post(
+              deviceTokenUri,
+              headers: const {
+                'Content-Type': 'application/json',
+                'Accept': 'application/json',
+              },
+              body: jsonEncode({
+                'device_auth_id': pending.deviceAuthId,
+                'user_code': pending.deviceUserCode,
+              }),
+            )
+            .timeout(_deviceRequestTimeout);
+      } on TimeoutException {
+        // Network transitions while Chrome is foregrounded are expected. Keep
+        // the persisted device session and retry until its official deadline.
+      } on SocketException {
+      } on http.ClientException {}
+
+      if (response != null &&
+          response.statusCode >= 200 &&
+          response.statusCode < 300) {
+        final decoded = jsonDecode(utf8.decode(response.bodyBytes));
+        if (decoded is! Map) {
+          throw const OpenAiCodexOAuthException('GPT 设备授权结果格式错误');
+        }
+        final map = Map<String, dynamic>.from(decoded);
+        final code = map['authorization_code']?.toString().trim() ?? '';
+        final verifier = map['code_verifier']?.toString().trim() ?? '';
+        final challenge = map['code_challenge']?.toString().trim() ?? '';
+        if (code.isEmpty || verifier.isEmpty || challenge.isEmpty) {
+          throw const OpenAiCodexOAuthException(
+            'GPT 设备授权结果缺少授权码或 PKCE 字段',
+          );
+        }
+        if (OpenAiCodexOAuth.codeChallenge(verifier) != challenge) {
+          throw const OpenAiCodexOAuthException('GPT 设备授权 PKCE 校验失败');
+        }
+        final tokens = await _exchangeCode(
+          code: code,
+          verifier: verifier,
+          redirectUri: OpenAiCodexOAuth.deviceExchangeRedirectUri,
+        );
+        if (!_ownsFlow(pending, generation)) {
+          throw const OpenAiCodexOAuthException('OAuth 授权已被新的授权流程替换');
+        }
+        _pending = null;
+        _callback = null;
+        _completion = null;
+        _nativeCallbackPort = null;
+        await SecureKeyStore.delete(_pendingKey);
+        return tokens;
+      }
+
+      if (response != null &&
+          response.statusCode != 403 &&
+          response.statusCode != 404 &&
+          !_isRetryableTokenStatus(response.statusCode)) {
+        final detail = _tokenFailureDetail(response);
+        throw OpenAiCodexOAuthException(
+          'GPT 设备授权轮询失败（${response.statusCode}）'
+          '${detail.isEmpty ? '' : '：$detail'}',
+          statusCode: response.statusCode,
+        );
+      }
+      await Future<void>.delayed(interval);
+    }
+    throw const OpenAiCodexOAuthException('GPT 设备授权已超时，请重新开始');
+  }
+
   Future<OpenAiCodexOAuthTokens> _completePending(
     _PendingOAuthState pending,
     int generation,
@@ -903,6 +1376,11 @@ class OpenAiCodexOAuthService {
     try {
       if (!_ownsFlow(pending, generation)) {
         throw const OpenAiCodexOAuthException('OAuth 授权已被新的授权流程替换');
+      }
+      if (pending.isDeviceAuth) {
+        final tokens = await _pollDeviceAuthorization(pending, generation);
+        exchanged = true;
+        return tokens;
       }
       final uri = await _waitForCallback(pending);
       if (!_ownsFlow(pending, generation)) {
@@ -940,7 +1418,7 @@ class OpenAiCodexOAuthService {
     _PendingOAuthState pending,
     int generation,
   ) {
-    _callback ??= Completer<Uri>();
+    if (!pending.isDeviceAuth) _callback ??= Completer<Uri>();
     _completion ??= _completePending(pending, generation);
   }
 
@@ -1079,6 +1557,9 @@ class OpenAiCodexOAuthService {
     bool jsonBody = false,
     bool includeIdentityHeaders = false,
   }) async {
+    await SystemNetworkProxy.refresh();
+    final uri = Uri.parse(OpenAiCodexOAuth.tokenEndpoint);
+    await SystemNetworkProxy.refreshFor(uri);
     Object? lastNetworkError;
     http.Response? lastRetryableResponse;
     final headers = <String, String>{
@@ -1097,7 +1578,7 @@ class OpenAiCodexOAuthService {
       try {
         final response = await _client
             .post(
-              Uri.parse(OpenAiCodexOAuth.tokenEndpoint),
+              uri,
               headers: headers.isEmpty ? null : headers,
               body: requestBody,
             )
@@ -1195,6 +1676,7 @@ class OpenAiCodexOAuthService {
       throw const OpenAiCodexOAuthException('GPT Token 响应缺少 access_token');
     }
     final idToken = decoded['id_token']?.toString().trim() ?? '';
+    final responseEmail = decoded['email']?.toString().trim() ?? '';
     final expiresIn = decoded['expires_in'];
     final seconds = expiresIn is num
         ? expiresIn.toInt()
@@ -1218,8 +1700,29 @@ class OpenAiCodexOAuthService {
       refreshToken: decoded['refresh_token']?.toString().trim(),
       idToken: idToken,
       accountId: accountId,
+      email: responseEmail.isNotEmpty
+          ? responseEmail
+          : _emailFromJwt(idToken) ?? _emailFromJwt(accessToken),
       expiresAtMs: expiresAtMs,
     );
+  }
+
+  static String? _emailFromJwt(String token) {
+    final parts = token.split('.');
+    if (parts.length < 2) return null;
+    try {
+      final payload = jsonDecode(
+        utf8.decode(base64Url.decode(base64Url.normalize(parts[1]))),
+      );
+      if (payload is! Map) return null;
+      for (final key in const ['email', 'preferred_username', 'upn']) {
+        final value = payload[key]?.toString().trim() ?? '';
+        if (value.isNotEmpty) return value;
+      }
+    } catch (_) {
+      // Some access tokens are opaque; an absent/invalid JWT has no email.
+    }
+    return null;
   }
 
   Future<void> _serveCallbacks(HttpServer server) async {
@@ -1409,10 +1912,8 @@ class OpenAiCodexOAuthService {
   }
 
   Future<void> _cleanupPendingIfCurrent(
-    _PendingOAuthState pending,
-    int generation,
-    {bool preserveNativeForRecovery = false}
-  ) async {
+      _PendingOAuthState pending, int generation,
+      {bool preserveNativeForRecovery = false}) async {
     await _exclusiveFlow(() async {
       if (!_ownsFlow(pending, generation)) return;
       await _stopServer();
@@ -1636,6 +2137,9 @@ class _PendingOAuthState {
   final String redirectUri;
   final String callbackUrl;
   final int expiresAtMs;
+  final String deviceAuthId;
+  final String deviceUserCode;
+  final int devicePollIntervalSeconds;
 
   const _PendingOAuthState({
     required this.providerId,
@@ -1645,7 +2149,13 @@ class _PendingOAuthState {
     required this.redirectUri,
     this.callbackUrl = '',
     required this.expiresAtMs,
+    this.deviceAuthId = '',
+    this.deviceUserCode = '',
+    this.devicePollIntervalSeconds = 0,
   });
+
+  bool get isDeviceAuth =>
+      deviceAuthId.trim().isNotEmpty && deviceUserCode.trim().isNotEmpty;
 
   Map<String, dynamic> toJson() => {
         'providerId': providerId,
@@ -1655,6 +2165,9 @@ class _PendingOAuthState {
         'redirectUri': redirectUri,
         'callbackUrl': callbackUrl,
         'expiresAtMs': expiresAtMs,
+        'deviceAuthId': deviceAuthId,
+        'deviceUserCode': deviceUserCode,
+        'devicePollIntervalSeconds': devicePollIntervalSeconds,
       };
 
   _PendingOAuthState copyWith({String? callbackUrl}) => _PendingOAuthState(
@@ -1665,6 +2178,9 @@ class _PendingOAuthState {
         redirectUri: redirectUri,
         callbackUrl: callbackUrl ?? this.callbackUrl,
         expiresAtMs: expiresAtMs,
+        deviceAuthId: deviceAuthId,
+        deviceUserCode: deviceUserCode,
+        devicePollIntervalSeconds: devicePollIntervalSeconds,
       );
 
   factory _PendingOAuthState.fromJson(Map<String, dynamic> json) =>
@@ -1677,5 +2193,36 @@ class _PendingOAuthState {
             json['redirectUri']?.toString() ?? OpenAiCodexOAuth.redirectUri,
         callbackUrl: json['callbackUrl']?.toString() ?? '',
         expiresAtMs: int.tryParse(json['expiresAtMs']?.toString() ?? '') ?? 0,
+        deviceAuthId: json['deviceAuthId']?.toString() ?? '',
+        deviceUserCode: json['deviceUserCode']?.toString() ?? '',
+        devicePollIntervalSeconds:
+            int.tryParse(json['devicePollIntervalSeconds']?.toString() ?? '') ??
+                0,
       );
+}
+
+class _DeviceAuthStart {
+  final String deviceAuthId;
+  final String userCode;
+  final String verificationUrl;
+  final int pollIntervalSeconds;
+
+  const _DeviceAuthStart({
+    required this.deviceAuthId,
+    required this.userCode,
+    required this.verificationUrl,
+    required this.pollIntervalSeconds,
+  });
+}
+
+class _PersonalAccessTokenIdentity {
+  final String accountId;
+  final String? email;
+  final int expiresAtMs;
+
+  const _PersonalAccessTokenIdentity({
+    required this.accountId,
+    required this.email,
+    required this.expiresAtMs,
+  });
 }

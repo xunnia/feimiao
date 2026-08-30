@@ -6,6 +6,7 @@ import 'package:http/http.dart' as http;
 
 import 'ai_provider_config.dart';
 import 'openai_codex_oauth.dart';
+import 'system_network_proxy.dart';
 import 'web_search.dart';
 
 /// 查账问答：把账目数据 + 用户问题发给 DeepSeek，返回一段口语化回答。
@@ -156,9 +157,10 @@ $transactionsText''';
     required Map<String, dynamic> Function(String model) bodyForModel,
   }) async {
     LlmQueryException? lastError;
-    final models = config.modelCandidates;
+    var models = config.modelCandidates;
     var activeConfig = config;
     var unauthorizedRetried = false;
+    var codexCatalogRetried = false;
     for (var index = 0; index < models.length; index++) {
       final model = models[index];
       try {
@@ -194,6 +196,18 @@ $transactionsText''';
           index--;
           continue;
         }
+        if (!codexCatalogRetried &&
+            activeConfig.isOpenAiCodexOAuth &&
+            _isUnsupportedModelError(e)) {
+          codexCatalogRetried = true;
+          final refreshed = await _configWithLiveCodexModel(activeConfig);
+          if (refreshed != null && refreshed.model != activeConfig.model) {
+            activeConfig = refreshed;
+            models = [refreshed.model];
+            index = -1;
+            continue;
+          }
+        }
         lastError = e;
         if (index == models.length - 1 || !_shouldRetryWithCompatModel(e)) {
           rethrow;
@@ -201,6 +215,43 @@ $transactionsText''';
       }
     }
     throw lastError ?? const LlmQueryException('未知错误');
+  }
+
+  static bool _isUnsupportedModelError(LlmQueryException error) {
+    final message = error.message.toLowerCase();
+    return (error.statusCode == 400 || error.statusCode == 404) &&
+        (message.contains('unsupported model') ||
+            message.contains('model not found') ||
+            message.contains('unknown model') ||
+            message.contains('invalid model'));
+  }
+
+  static Future<AiProviderConfig?> _configWithLiveCodexModel(
+    AiProviderConfig config,
+  ) async {
+    try {
+      final freshConfig = await OpenAiCodexOAuth.ensureFreshConfig(config);
+      final catalog = await OpenAiCodexOAuth.service.fetchModels(
+        OpenAiCodexOAuthTokens(
+          accessToken: freshConfig.apiKey,
+          accountId: freshConfig.oauthAccountId,
+        ),
+      );
+      final candidates = catalog
+          .map((item) => item.slug.trim())
+          .where((item) => item.isNotEmpty)
+          .toList(growable: false);
+      if (candidates.isEmpty) return null;
+      final model = candidates.firstWhere(
+        (item) => item != freshConfig.model.trim(),
+        orElse: () => candidates.first,
+      );
+      return freshConfig.copyWith(model: model);
+    } on OpenAiCodexOAuthException {
+      return null;
+    } catch (_) {
+      return null;
+    }
   }
 
   static bool _shouldRetryWithCompatModel(LlmQueryException e) {
@@ -331,6 +382,12 @@ $transactionsText''';
     required Map<String, dynamic> body,
     required int timeoutSeconds,
   }) async {
+    await SystemNetworkProxy.refresh();
+    // Resolve PAC/system-proxy routing for this concrete upstream before the
+    // request. OAuth/model discovery already does this; chat-completions must
+    // use the same per-host route or a proxy VPN can make the first message
+    // fail even though the browser and settings test succeed.
+    await SystemNetworkProxy.refreshFor(config.chatCompletionsUri);
     late http.Response resp;
     try {
       resp = await http
@@ -374,6 +431,8 @@ $transactionsText''';
     required Map<String, dynamic> body,
     required int timeoutSeconds,
   }) async {
+    await SystemNetworkProxy.refresh();
+    await SystemNetworkProxy.refreshFor(config.messagesUri);
     // 从 chat-completions 格式转换为 Claude Messages 格式
     final messages = body['messages'] as List? ?? [];
     String? systemPrompt;
@@ -459,13 +518,37 @@ $transactionsText''';
     required Map<String, dynamic> body,
     required int timeoutSeconds,
   }) async {
+    await SystemNetworkProxy.refresh();
+    await SystemNetworkProxy.refreshFor(config.responsesUri);
+    final sessionId =
+        config.isOpenAiCodexOAuth ? OpenAiCodexOAuth.generateRequestId() : null;
+    // The ChatGPT/Codex subscription endpoint only accepts streamed
+    // Responses. Keep this invariant at the transport boundary so report,
+    // connection-test, and other non-streaming callers cannot accidentally
+    // send `stream: false` and receive the upstream 400 "Stream must be set
+    // to true" response.
+    final requestBody = sessionId == null
+        ? body
+        : OpenAiCodexOAuth.prepareCodexResponsesBody(
+            {...body, 'stream': true},
+            sessionId: sessionId,
+          );
+    final headers = config.authHeaders();
+    if (sessionId != null) {
+      headers.addAll(
+        OpenAiCodexOAuth.codexRequestHeaders(
+          sessionId: sessionId,
+          stream: requestBody['stream'] == true,
+        ),
+      );
+    }
     late http.Response resp;
     try {
       resp = await http
           .post(
             config.responsesUri,
-            headers: config.authHeaders(),
-            body: jsonEncode(body),
+            headers: headers,
+            body: jsonEncode(requestBody),
           )
           .timeout(Duration(seconds: timeoutSeconds));
     } catch (e) {
@@ -656,7 +739,14 @@ $transactionsText''';
     http.Client? client,
     Duration timeout = const Duration(seconds: 30),
   }) async {
-    var provider = await OpenAiCodexOAuth.ensureFreshConfig(config);
+    // Keep model discovery, PAT identity hydration, and 401 refresh on one
+    // OAuth service/client.  Tests and callers that inject a client must not
+    // accidentally refresh through the process-global client while discovery
+    // uses the injected transport.
+    final oauthService = client == null
+        ? OpenAiCodexOAuth.service
+        : OpenAiCodexOAuthService(client: client);
+    var provider = await oauthService.ensureFreshConfig(config);
     if (!provider.hasKey) {
       throw LlmQueryException('${provider.providerLabel} API Key 未配置');
     }
@@ -665,9 +755,8 @@ $transactionsText''';
     }
 
     if (provider.isOpenAiCodexOAuth) {
-      final service = OpenAiCodexOAuthService(client: client);
       try {
-        final models = await service.fetchModels(
+        final models = await oauthService.fetchModels(
           OpenAiCodexOAuthTokens(
             accessToken: provider.apiKey,
             accountId: provider.oauthAccountId,
@@ -680,10 +769,9 @@ $transactionsText''';
         // settings screen does not make the user authorize again.
         if (error.statusCode == 401 &&
             provider.oauthRefreshToken.trim().isNotEmpty) {
-          provider =
-              await OpenAiCodexOAuth.service.refreshAfterUnauthorized(provider);
+          provider = await oauthService.refreshAfterUnauthorized(provider);
           try {
-            final models = await service.fetchModels(
+            final models = await oauthService.fetchModels(
               OpenAiCodexOAuthTokens(
                 accessToken: provider.apiKey,
                 accountId: provider.oauthAccountId,
@@ -709,6 +797,7 @@ $transactionsText''';
       final uri = uris[index];
       late http.Response resp;
       try {
+        await SystemNetworkProxy.refreshFor(uri);
         final request = client == null
             ? http.get(uri, headers: headers)
             : client.get(uri, headers: headers);

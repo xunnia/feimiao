@@ -12,6 +12,7 @@ import 'package:qingji/views/home/ai_chat_panel.dart';
 import 'package:qingji/views/home/home_view.dart';
 import 'package:qingji/widgets/app_buttons.dart';
 import 'package:qingji/widgets/home_summary_card.dart';
+import 'package:qingji/widgets/settings_ui.dart';
 
 import 'screenshot_font_support.dart';
 
@@ -110,7 +111,8 @@ void main() {
       ),
     );
     await tester.pump();
-    expect(find.byType(AppCircleButton), findsOneWidget);
+    expect(find.byType(AppCircleButton), findsNothing);
+    expect(find.byType(SheetHeader), findsNothing);
     await capture(
       tester,
       find.byKey(const ValueKey('nine-ui-month-picker-capture')),

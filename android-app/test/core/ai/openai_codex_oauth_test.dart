@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import 'dart:async';
 import 'dart:io' as io;
+import 'dart:math';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
@@ -23,6 +24,20 @@ String _oauthState(String authorizationUrl) {
 }
 
 void main() {
+  test('global OAuth service creates its HTTP client lazily', () {
+    final previous = io.HttpOverrides.current;
+    final tracking = _TrackingHttpOverrides();
+    io.HttpOverrides.global = tracking;
+    try {
+      // The first access constructs the singleton. On Android this happens
+      // only after main() has installed the current system proxy override.
+      expect(OpenAiCodexOAuth.service, isA<OpenAiCodexOAuthService>());
+      expect(tracking.createdClients, 1);
+    } finally {
+      io.HttpOverrides.global = previous;
+    }
+  });
+
   test('GPT OAuth authorization URL keeps the official scope and redirect', () {
     final url = Uri.parse(
       OpenAiCodexOAuth.buildAuthorizationUrl(
@@ -63,6 +78,22 @@ void main() {
     expect(inner.queryParameters['source_surface_stable_id'], 'stable-id');
     expect(inner.queryParameters['codex_origin_stable_id'], 'stable-id');
     expect(OpenAiCodexOAuth.isAuthorizationUrl(url.toString()), isTrue);
+  });
+
+  test('legacy issuer-only OAuth URL normalizes to the authorize endpoint', () {
+    expect(
+      OpenAiCodexOAuth.isAuthorizationUrl('https://auth.openai.com'),
+      isTrue,
+    );
+    final url = Uri.parse(
+      OpenAiCodexOAuth.buildAuthorizationUrl(
+        codeChallenge: 'challenge',
+        state: 'state',
+        authorizationUrl: 'https://auth.openai.com',
+      ),
+    );
+    expect(url.host, 'auth.openai.com');
+    expect(url.path, '/oauth/authorize');
   });
 
   test('JWT account id supports namespaced, direct and organization claims',
@@ -169,6 +200,98 @@ void main() {
     expect(models.single.reasoningEfforts, ['low', 'high']);
   });
 
+  test('GPT model catalog derives account id from the JWT when omitted',
+      () async {
+    final client = MockClient((request) async {
+      expect(request.headers['chatgpt-account-id'], 'acct-from-jwt');
+      return http.Response(
+        jsonEncode({
+          'models': [
+            {'slug': 'gpt-from-jwt'},
+          ],
+        }),
+        200,
+      );
+    });
+    final models = await OpenAiCodexOAuthService(client: client).fetchModels(
+      OpenAiCodexOAuthTokens(
+        accessToken: _jwtPayload({
+          'https://api.openai.com/auth': {
+            'chatgpt_account_id': 'acct-from-jwt',
+          },
+        }),
+        idToken: _jwtPayload({}),
+      ),
+    );
+    expect(models.single.slug, 'gpt-from-jwt');
+  });
+
+  test(
+      'GPT model catalog hydrates personal access token identity before request',
+      () async {
+    var calls = 0;
+    final client = MockClient((request) async {
+      calls++;
+      if (calls == 1) {
+        expect(
+          request.url.toString(),
+          OpenAiCodexOAuth.personalAccessTokenWhoAmIEndpoint,
+        );
+        expect(request.headers['authorization'], 'Bearer at-personal-token');
+        return http.Response(
+          jsonEncode({
+            'email': 'pat@example.com',
+            'chatgpt_user_id': 'user-pat',
+            'chatgpt_account_id': 'acct-pat',
+            'chatgpt_plan_type': 'pro',
+            'chatgpt_account_is_fedramp': false,
+          }),
+          200,
+        );
+      }
+      expect(request.url.path, '/backend-api/codex/models');
+      expect(request.headers['authorization'], 'Bearer at-personal-token');
+      expect(request.headers['chatgpt-account-id'], 'acct-pat');
+      return http.Response(
+        jsonEncode({
+          'models': [
+            {'slug': 'gpt-pat'},
+          ],
+        }),
+        200,
+      );
+    });
+
+    final models = await OpenAiCodexOAuthService(client: client).fetchModels(
+      const OpenAiCodexOAuthTokens(accessToken: 'at-personal-token'),
+    );
+    expect(models.single.slug, 'gpt-pat');
+    expect(calls, 2);
+  });
+
+  test('personal access token identity rejects an invalid token', () async {
+    final client = MockClient((request) async {
+      expect(
+        request.url.toString(),
+        OpenAiCodexOAuth.personalAccessTokenWhoAmIEndpoint,
+      );
+      return http.Response('{}', 403);
+    });
+
+    await expectLater(
+      OpenAiCodexOAuthService(client: client).fetchModels(
+        const OpenAiCodexOAuthTokens(accessToken: 'at-invalid'),
+      ),
+      throwsA(
+        isA<OpenAiCodexOAuthException>().having(
+          (error) => error.statusCode,
+          'statusCode',
+          403,
+        ),
+      ),
+    );
+  });
+
   test('Codex OAuth config emits the required Responses headers', () {
     const config = AiProviderConfig(
       type: AiProviderType.custom,
@@ -188,6 +311,29 @@ void main() {
     expect(headers['Accept'], 'text/event-stream');
   });
 
+  test('Codex request metadata binds one Responses turn to one session', () {
+    final headers = OpenAiCodexOAuth.codexRequestHeaders(
+      sessionId: 'session-1',
+      stream: true,
+    );
+    expect(headers['Version'], OpenAiCodexOAuth.defaultClientVersion);
+    expect(headers['Session-Id'], 'session-1');
+    expect(headers['X-Client-Request-Id'], 'session-1');
+    expect(headers['Thread-Id'], 'session-1');
+    expect(headers['X-Codex-Window-Id'], 'session-1:0');
+    expect(headers['Accept'], 'text/event-stream');
+
+    final body = OpenAiCodexOAuth.prepareCodexResponsesBody(
+      const {'model': 'gpt-5.4', 'input': <Object>[]},
+      sessionId: 'session-1',
+    );
+    expect(body['prompt_cache_key'], 'session-1');
+    final metadata = body['client_metadata'] as Map<String, dynamic>;
+    expect(metadata['x-codex-installation-id'], 'session-1');
+    expect(metadata['x-codex-window-id'], 'session-1:0');
+    expect(metadata['x-codex-turn-metadata'], contains('session-1'));
+  });
+
   test('local callback server completes PKCE flow and exchanges tokens',
       () async {
     final client = MockClient((request) async {
@@ -196,6 +342,7 @@ void main() {
         jsonEncode({
           'access_token': 'access-token',
           'refresh_token': 'refresh-token',
+          'email': 'callback@example.com',
           'id_token': _jwtPayload({
             'https://api.openai.com/auth': {
               'chatgpt_account_id': 'acct-callback',
@@ -208,6 +355,7 @@ void main() {
     });
     final service = OpenAiCodexOAuthService(client: client);
     final session = await service.start();
+    expect(Uri.parse(session.authorizationUrl).host, 'auth.openai.com');
     expect(await service.resumePending(forceRebind: true), isTrue);
     final authorization = Uri.parse(session.authorizationUrl);
     final callback = Uri.parse(session.redirectUri).replace(
@@ -231,10 +379,76 @@ void main() {
       expect(tokens.accessToken, 'access-token');
       expect(tokens.refreshToken, 'refresh-token');
       expect(tokens.accountId, 'acct-callback');
+      expect(tokens.email, 'callback@example.com');
     } finally {
       httpClient.close(force: true);
       await service.cancel();
     }
+  });
+
+  test('official device authorization avoids localhost and exchanges tokens',
+      () async {
+    final verifier = OpenAiCodexOAuth.generateVerifier(Random(7));
+    final challenge = OpenAiCodexOAuth.codeChallenge(verifier);
+    var devicePolls = 0;
+    final client = MockClient((request) async {
+      if (request.url.toString() == OpenAiCodexOAuth.deviceUserCodeEndpoint) {
+        expect(request.method, 'POST');
+        expect(request.body, contains(OpenAiCodexOAuth.clientId));
+        return http.Response(
+          jsonEncode({
+            'device_auth_id': 'device-auth-id',
+            'user_code': 'ABCD-EFGH',
+            'interval': 1,
+          }),
+          200,
+        );
+      }
+      if (request.url.toString() == OpenAiCodexOAuth.deviceTokenEndpoint) {
+        devicePolls++;
+        if (devicePolls == 1) return http.Response('{}', 403);
+        return http.Response(
+          jsonEncode({
+            'authorization_code': 'device-authorization-code',
+            'code_verifier': verifier,
+            'code_challenge': challenge,
+          }),
+          200,
+        );
+      }
+      expect(request.url.toString(), OpenAiCodexOAuth.tokenEndpoint);
+      expect(request.body, contains('device-authorization-code'));
+      expect(
+        request.body,
+        contains(Uri.encodeQueryComponent(
+          OpenAiCodexOAuth.deviceExchangeRedirectUri,
+        )),
+      );
+      return http.Response(
+        jsonEncode({
+          'access_token': 'device-access-token',
+          'refresh_token': 'device-refresh-token',
+          'chatgpt_account_id': 'device-account-id',
+          'expires_in': 3600,
+        }),
+        200,
+      );
+    });
+    final service = OpenAiCodexOAuthService(client: client);
+    final session = await service.startDeviceAuth(providerId: 'provider-1');
+
+    expect(session.userCode, 'ABCD-EFGH');
+    expect(session.verificationUrl, OpenAiCodexOAuth.deviceVerificationUrl);
+    expect(session.verificationUrl, isNot(contains('localhost')));
+    expect(service.pendingProviderId, 'provider-1');
+    expect(service.pendingUsesDeviceCode, isTrue);
+
+    final tokens = await session.completion;
+    expect(tokens.accessToken, 'device-access-token');
+    expect(tokens.refreshToken, 'device-refresh-token');
+    expect(tokens.accountId, 'device-account-id');
+    expect(devicePolls, 2);
+    expect(service.pendingProviderId, isNull);
   });
 
   test('failed token exchange keeps callback for an in-app retry', () async {
@@ -469,4 +683,14 @@ void main() {
     expect(refreshed.oauthRefreshToken, 'first-refresh');
     expect(refreshed.oauthAccountId, 'acct-refresh-only');
   });
+}
+
+class _TrackingHttpOverrides extends io.HttpOverrides {
+  int createdClients = 0;
+
+  @override
+  io.HttpClient createHttpClient(io.SecurityContext? context) {
+    createdClients++;
+    return super.createHttpClient(context);
+  }
 }

@@ -1,12 +1,41 @@
 # Claude 新会话启动入口（先读这里）
 
-更新时间：2026-08-28
+更新时间：2026-08-30
 适用工程：`C:\src\xunni-codex\android-app`  
 严禁触碰：`C:\src\xunni`，除非用户明确要求并确认风险。
 
 这份文件是 Claude 新会话第一入口。旧的 `TASKS_FOR_CODEX.md` 只在用户明确点名具体任务时读取执行，不是默认开工清单。
 
 项目范围、优先级、交付门禁、路线图、风险与产物保留规则统一见 `../PROJECT_MANAGEMENT.md`。本文件负责“当前实现状态”，不再承担完整项目管理职责。
+
+## 0.0.3 GPT OAuth/JSON 最终链路状态（v1.277.0+291）
+
+- 官方 ChatGPT/Codex Responses 拒绝 `stream:false`；普通问答、主页记账、报告和连接测试现在在 OAuth Responses 传输层统一强制 `stream:true`，并保留官方请求元数据。
+- 本机真实 Cockpit 完整备份解析 10 个 Codex 账号且无警告；指定测试账号的官方模型目录和 Responses 均真实返回 200，肥喵主页 `LlmQuery` 与喵助手 `LlmQueryV2` 都解析出 `OK`。
+- 验证：OAuth/Responses/JSON/仓库定向 `113/113`、Flutter 全量 `1171/1171`、analyze 无 error、Gradle Kotlin 编译成功；APK `C:\src\xunni-codex\ci-artifacts\releases\feimiao-codex-v1.277.0-291.apk`，SHA256 `43DAC969193535B39EBC08EE133546C0C63F3E78C64720829389CF635A754F28`，16 KiB/V2/固定证书 gate 通过。
+- 当前无在线 Android ADB；手机 VPN、Chrome Custom Tab、设备码轮询和真机观感仍需安装后复测。未使用 Plus 账号。
+
+## 0.0.2 GPT OAuth 与 Cockpit JSON 最终状态（v1.276.0+290，历史）
+
+- Android GPT OAuth 现在优先官方设备授权码流程，不依赖 localhost 回调；设备码轮询、PKCE 与 Token 兑换按 Cockpit 当前协议实现，旧 localhost/手动粘贴路径仍可用。
+- Token 邮箱回填；主页普通记账、报告、连接测试、喵助手遇到不支持模型会读取账号模型目录并自动换用可用模型；导入后的 refresh-only/PAT 账号按需刷新/补全工作区 ID。
+- Cockpit 完整备份实际解析 10 个 Codex 账号（5 OAuth、5 API Key），重启持久化通过；定向 OAuth `19/19`、JSON/AI/模型目录 `44/44`、仓库 `3/3`、全量 Flutter `1168/1168`，analyze 无 error。
+- 真实测试账号仅完成官方网页授权页、账号选择页和回调可达性验证，未使用 Plus 账号；无在线 ADB，手机出口、VPN 分流和设备码真实轮询待目标手机安装复测。
+
+## 0.0.1 主页月份选择弹窗最新状态（v1.275.0+289）
+
+- 主页月份选择弹窗已按用户提供的旧版参考图二回退：普通底部弹层、自然暗化背景、标题左对齐、统计起始日右对齐同一行。
+- 已移除弹层内关闭圆圈和背景高斯模糊，年份箭头恢复无圆形视觉底；月份网格与数据逻辑保持不变。
+- 前后截图与带编号的左右对比图：`outputs/ui_comparisons/2026-08-30/`；定向回归 `3/3`，全量 Flutter `1164/1164`，analyze 无 error。
+- APK：`C:\src\xunni-codex\ci-artifacts\releases\feimiao-codex-v1.275.0-289.apk`，SHA256 `196FED571B03372A4F89211034759E89061A8AF00B72163DD1542D27C4C4B56B`；本轮未发布线上。
+
+## 0.0 GPT OAuth 与 Cockpit JSON 导入最新状态（v1.274.0+288）
+
+- OAuth 已恢复官方直达授权入口，Token 成功后先保存，模型目录失败可稍后恢复；Android 系统代理动态接管后续请求，普通授权兜底明确走外部浏览器，不把 ChatGPT 当前个人空间当作授权结果。
+- Cockpit/CPA 导入支持完整备份 `accounts.platforms.codex.exported_data`、单独 `exported_data` 传输段、共享 workspace 多账号、`token_data`、JSON Lines、嵌套 payload、BOM/UTF-16 和标准 API Key 默认地址/模型；`at-...` 令牌会先走官方 `whoami` 获取工作区 ID。
+- 定向回归 **53/53**、串行全量 Flutter **1164/1164**、Dart analyze 无 error；最终 Release APK 已通过身份门禁。
+- APK：`C:\src\xunni-codex\ci-artifacts\releases\feimiao-codex-v1.274.0-288.apk`，SHA256 `9459F72F75845DF38D53385FA7B60E731B695BDC749673BAC6EA79A854D19035`。
+- 本机 ADB 模拟器仍 offline，真实 Android 真机 OAuth、手机 VPN 出口、IME 和安装观感尚未验证；不要将本地测试写成真机验收。
 
 ## 0.1 全局 UI 收口最新状态（v1.264.0+278）
 

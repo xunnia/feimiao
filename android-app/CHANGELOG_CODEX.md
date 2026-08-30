@@ -1,4 +1,29 @@
 
+## 2026-08-30 v1.277.0+291 GPT OAuth/JSON 导入最终链路修复
+
+- **官方 Codex Responses**：修复 GPT OAuth 的缓冲请求仍发送 `stream: false` 的问题。官方 ChatGPT/Codex 端点要求 `stream: true`，现在普通问答、主页记账、报告和连接测试共用的 Responses 传输层会统一强制该标志，并保留官方会话/请求元数据。
+- **OAuth 与网络**：保留设备授权码流程、PKCE/state、Token 刷新、模型目录重试、Android 系统代理/PAC 路由和首包重试；聊天请求也补齐按目标地址的代理解析。
+- **Cockpit JSON**：保留完整备份 `accounts.platforms.codex.exported_data`、嵌套 token、refresh-only、PAT、API Key、多账号和 UTF-8/UTF-16 导入支持；本机真实 Cockpit 备份解析出 10 个 Codex 账号且无警告。
+- **验证**：OAuth/Responses/JSON/仓库定向回归 `113/113`；Flutter 全量测试 `1171/1171`；Flutter analyze 无 error；Android `:app:compileDebugKotlin` 成功；指定测试账号真实模型目录 HTTP 200（6 个模型），真实流式 Responses HTTP 200 并解析 `OK`，肥喵 `LlmQueryV2` 与主页 `LlmQuery` 路径均真实返回 `OK`。
+- **边界**：当前设备无在线 Android ADB，未把真机 VPN、Chrome Custom Tab、输入法和实机字体观感写成已验证；APK 构建后需在目标手机安装复测。
+
+## 2026-08-30 v1.275.0+289 月份选择弹窗回退与交付验证
+
+- **月份选择弹窗**：按用户提供的旧版参考图回退为轻量底部弹层；移除弹层内关闭圆圈和背景高斯模糊，标题左对齐、月统计起始日右对齐并保持同一行；年份箭头恢复无圆形视觉底，年份切换和月份网格数据逻辑不变。
+- **回归与证据**：月份选择器/全局 UI 定向回归 `3/3`；Flutter 全量测试 `1164/1164`；Dart analyze exit 0、无 error（84 条既有 warning/info）。前后原图及带编号左右对比图位于 `outputs/ui_comparisons/2026-08-30/`。
+- **APK**：`C:\src\xunni-codex\ci-artifacts\releases\feimiao-codex-v1.275.0-289.apk`，117,445,045 字节，SHA256 `196FED571B03372A4F89211034759E89061A8AF00B72163DD1542D27C4C4B56B`；包名/版本 `com.qingji.qingji.codex / 1.275.0 / 289`，16 KiB 对齐、APK V2 和固定证书 gate 通过。
+- **线上状态**：本轮 APK 只完成本地构建和验收，未发布线上；v1.270.0+284 仍为线上回退版本。
+- **限制**：本机无在线 Android 设备，VPN 分流、Chrome Custom Tab、真实 OAuth/JSON 导入和真机观感仍需在目标手机安装后验证。
+
+## 2026-08-30 v1.274.0+288 OAuth 网络与账号 JSON 导入修复
+
+- **Cockpit 完整备份导入**：识别 `accounts.platforms.codex.exported_data` 和单独 `exported_data` 传输段，只导入 Codex 凭据，不把 Claude 等其它平台混入 GPT 账号。
+- **个人访问令牌**：对 `at-...` 账号按官方 Codex 流程调用 `auth.openai.com/api/accounts/v1/user-auth-credential/whoami` 获取工作区 ID，再请求模型目录和 Responses；身份结果通过现有安全保存回调持久化。
+- **模型目录链路**：模型获取、PAT 身份查询和 401 刷新复用同一个 OAuth service/client，避免注入测试/代理客户端与实际刷新客户端分裂。
+- **验证**：OAuth/JSON/模型目录定向回归 `53/53`；Flutter 全量测试 `1164/1164`；Dart analyze 无 error；本机实际 Cockpit 完整备份解析 9 个 Codex 账号（5 个 OAuth）且 0 条警告。
+- **APK**：`C:\src\xunni-codex\ci-artifacts\releases\feimiao-codex-v1.274.0-288.apk`，117,445,049 字节，SHA256 `9459F72F75845DF38D53385FA7B60E731B695BDC749673BAC6EA79A854D19035`；包名 `com.qingji.qingji.codex`，16 KiB 对齐、APK V2 和固定证书 gate 通过。
+- **限制**：本机无在线 Android 设备，手机 VPN 分流、Chrome Custom Tab 和真实账号闭环仍需在目标手机上验证。
+
 ## 2026-08-29 v1.270.0+284 UI 收口与 GPT OAuth 账号选择修复
 
 - **Chats 进入态**：普通聊天不再显示主页“本月超预算”提醒；保留记账入口的预算提示。
@@ -2300,3 +2325,25 @@ $env:FLUTTER_ROOT='C:\src\flutter'
 - GPT OAuth 浏览器 pending 有效期与 Cockpit 对齐为 10 分钟，Android 原生回调监听保留 1 分钟收尾余量；回调持久化、临时失败重试和旧 state 清理继续保留。
 - 喵助手建议缓存使用仓库对象身份比较，避免极低概率的 identity hash 复用导致跨仓库显示旧建议。
 - 性能专项最终验证见 `docs/performance-review-2026-08-28.md`；本包包含账本视图缓存、稳定顺序上下文和重复排序削减。
+## 2026-08-29 v1.271.0+285 OAuth/账号 JSON 网络与兼容修复
+
+- **OAuth 浏览器路由**：Android 继续优先 Ephemeral Custom Tab/Chrome 无痕；普通兜底改为指定 Chrome，再最后才交给系统通用浏览器，避免已安装 ChatGPT/OpenAI 应用抢占 `auth.openai.com` 后直接复用个人空间。
+- **网络路径**：启动时读取 Android 系统 HTTP 代理并接入 Dart `HttpClient`；OAuth Token、模型目录、Responses 和其它 AI 请求跟随系统代理；`localhost`/`127.0.0.1` 回调始终直连，VPN TUN 全局模式不受影响。
+- **Cockpit JSON**：兼容嵌套 `tokens`/`credentials`、`personal_access_token`、Bearer 请求头、`session_json`/`session`、嵌套账号身份、UTF-8 BOM/UTF-16 和键控账号对象；Agent Identity 会明确提示当前 Android 不支持，避免导入后伪装成可用账号。
+- **模型目录**：没有 `account_id` 时不再本地提前失败，允许官方接口根据 Token 判断；access-token-only 账号可继续尝试模型目录。
+- **验证**：真实 Cockpit 文件解析/落库通过；有效账号官方模型目录 HTTP 200（6 个模型）；官方 Responses HTTP 200，收到输出增量和完成事件；OAuth/JSON/系统代理/设置页定向回归通过。完整套件保留 1 个既有资产测试的定时器清理失败，单独复现通过。
+## 2026-08-29 v1.272.0+286 GPT OAuth 与 Cockpit JSON 导入稳定性修复
+
+- **授权入口**：恢复官方直达 `auth.openai.com/oauth/authorize` 的 PKCE 流程；`chatgpt.com/codex/desktop-auth` 不再作为前置授权页，避免已登录浏览器直接复用个人空间；Android 仍优先使用 Ephemeral/无痕 Chrome，并保留账号选择参数。
+- **授权恢复**：Token 交换成功先保存凭据，模型目录获取失败不会回滚登录；系统代理在请求前动态刷新，VPN/代理晚于应用启动时也能被后续 OAuth、模型和 Responses 请求接管。
+- **JSON 导入**：修复共享 workspace `account_id` 导致多账号被合并；兼容 Cockpit/CPA `token_data`、JSON Lines、嵌套字符串 payload、UTF-8 BOM/UTF-16；API Key 导入缺少地址/模型时使用官方默认值。
+- **批量导入**：多账号导入不再对每个账号逐次重写整份索引或拉取模型目录，完成后一次提交，避免大文件长时间卡住。
+- **验证**：OAuth/JSON/代理/设置/模型目录定向回归 78 项通过；串行全量 Flutter 测试和 Release 包门禁随后执行。
+## 2026-08-30 v1.276.0+290 GPT OAuth 与 Cockpit JSON 最终修复
+
+- **Android OAuth 改用官方设备授权码流程**：使用 `auth.openai.com/api/accounts/deviceauth/usercode` 获取一次性授权码，授权页为官方 `codex/device`，完成后轮询官方设备 Token 接口；不再依赖 Android 后台期间可能被回收的 localhost:1455 回调。设备码轮询的 403/404 等待语义、PKCE 字段校验、`deviceauth/callback` Token 兑换与 Cockpit 当前实现一致；原有桌面/手动 localhost 回调继续保留。
+- **账号身份与模型恢复**：Token 响应邮箱回填到账号身份；主页普通记账、报告、设置连接测试和喵助手请求遇到 Codex `400/404` 不支持模型时，会重新获取该账号官方模型目录并自动重试可用模型。附件记账、JSON 导入后的首次请求也会走动态系统代理刷新。
+- **Cockpit/CPA 导入**：完整备份只导入 Codex `exported_data`，PAT 先按官方 `whoami` 获取工作区 ID；共享 workspace 的不同邮箱分别保留，API Key 目录过滤内部 `codex-auto-review`，refresh-only 账号首次请求前自动换取 access token。
+- **验证**：OAuth `19/19`、Cockpit JSON/AI/模型目录 `44/44`、仓库导入 `3/3`、Flutter 全量 `1168/1168`；Dart analyze 无 error（86 条既有 warning/info）。本机真实 Cockpit 备份解析 10 个 Codex 账号（5 OAuth、5 API Key）并完成仓库重启持久化验证。
+- **APK**：`C:\src\xunni-codex\ci-artifacts\releases\feimiao-codex-v1.276.0-290.apk`，117,526,965 字节，SHA256 `F762CA8B5E5C478A55EEFB879F5549E66C81662CD1838CBD5347D1AD2CD9D8DF`；16 KiB 对齐、APK V2 和固定证书 gate 通过。
+- **真实账号边界**：使用用户授权的测试 Google 账号完成官方授权页、账号选择和 localhost 回调可达性验证，未使用 Plus 账号；当前终端无官方 HTTPS 出口、无在线 ADB，真实 Android 手机的 Token/模型/Responses 出口和 VPN 分流仍需安装后复测。
