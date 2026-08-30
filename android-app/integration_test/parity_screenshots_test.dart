@@ -285,10 +285,11 @@ Future<void> _captureDisplaySettings(
   await _pumpFor(tester, const Duration(milliseconds: 300));
 }
 
-PageRoute<T> _parityPageRoute<T>(Widget page) => PageRouteBuilder<T>(
+PageRoute<T> _parityPageRoute<T>(Widget page, {bool opaque = true}) => PageRouteBuilder<T>(
       // Some Android settings surfaces are normally presented inside a
       // material bottom sheet rather than a Scaffold. Keep direct parity
       // pushes under the same transparent Material ancestor.
+      opaque: opaque,
       pageBuilder: (_, __, ___) => Material(
         color: Colors.transparent,
         child: page,
@@ -398,7 +399,12 @@ Future<void> _capturePage(
   final navigator = ShareIntake.navigatorKey.currentState;
   expect(navigator, isNotNull);
   unawaited(
-    navigator!.push<void>(_parityPageRoute<void>(page)),
+    navigator!.push<void>(
+      _parityPageRoute<void>(
+        page,
+        opaque: name != 'quick-add-android',
+      ),
+    ),
   );
   await _pumpFor(tester, const Duration(milliseconds: 700));
   await _takeScreenshot(tester, binding, name);
@@ -524,9 +530,7 @@ class _ManualAddCapturePageState extends State<_ManualAddCapturePage> {
   }
 
   @override
-  Widget build(BuildContext context) {
-    return const Scaffold(body: SizedBox.shrink());
-  }
+  Widget build(BuildContext context) => const SizedBox.shrink();
 }
 
 Future<void> _captureReimburseSettlement(
