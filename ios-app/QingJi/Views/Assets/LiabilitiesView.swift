@@ -54,6 +54,7 @@ struct LiabilitiesView: View {
                 Button { showEditor = true } label: {
                     Image(systemName: "plus")
                 }
+                .liquidGlassCircleControl()
                 .accessibilityLabel("新建负债")
             }
         }
@@ -116,8 +117,7 @@ struct LiabilitiesView: View {
                 if profile.lifecycle == .active {
                     Button("还款") { repaymentProfile = profile }
                         .font(.caption.weight(.semibold))
-                        .buttonStyle(.glassProminent)
-                        .controlSize(.mini)
+                        .liquidGlassPrimaryPillControl(horizontalPadding: 10, minHeight: 36)
                 }
             }
             .font(.caption2)
@@ -286,10 +286,12 @@ private struct LiabilityEditor: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("取消") { dismiss() }
+                        .liquidGlassPillControl(horizontalPadding: 12, minHeight: 40)
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button(profile == nil ? "创建" : "保存") { save() }
                         .disabled(!canSave)
+                        .liquidGlassPillControl(horizontalPadding: 12, minHeight: 40)
                 }
             }
             .onAppear {
@@ -421,10 +423,12 @@ private struct LiabilityRepaymentSheet: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("取消") { dismiss() }
+                        .liquidGlassPillControl(horizontalPadding: 12, minHeight: 40)
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("确认") { repay() }
                         .disabled(amount == nil || amount! <= 0 || fromAccount == nil)
+                        .liquidGlassPillControl(horizontalPadding: 12, minHeight: 40)
                 }
             }
             .onAppear {

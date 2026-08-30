@@ -58,6 +58,7 @@ struct RecurringRulesView: View {
                 Button { showEditor = true } label: {
                     Image(systemName: "plus")
                 }
+                .liquidGlassCircleControl()
                 .accessibilityLabel("新建定时记账")
             }
         }
@@ -312,10 +313,12 @@ private struct RecurringRuleEditor: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("取消") { dismiss() }
+                        .liquidGlassPillControl(horizontalPadding: 12, minHeight: 40)
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button(rule == nil ? "创建" : "保存") { save() }
                         .disabled(!canSave)
+                        .liquidGlassPillControl(horizontalPadding: 12, minHeight: 40)
                 }
             }
             .onAppear(perform: prepareDefaults)

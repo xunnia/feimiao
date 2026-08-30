@@ -118,6 +118,7 @@ struct AssetsView: View {
                 } label: {
                     Image(systemName: "plus")
                 }
+                .liquidGlassCircleControl()
                 .accessibilityLabel("新增资产")
             }
         }
@@ -381,8 +382,7 @@ struct AssetsView: View {
                 if asset.remainingAmount > 0 {
                     Button("收回") { recoveryAsset = asset }
                         .font(.caption.weight(.semibold))
-                        .buttonStyle(.glassProminent)
-                        .controlSize(.mini)
+                        .liquidGlassPrimaryPillControl(horizontalPadding: 10, minHeight: 36)
                 }
             }
         }
@@ -698,10 +698,12 @@ struct PhysicalAssetEditor: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("取消") { dismiss() }
+                        .liquidGlassPillControl(horizontalPadding: 12, minHeight: 40)
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button(asset == nil ? "创建" : "保存") { save() }
                         .disabled(!canSave)
+                        .liquidGlassPillControl(horizontalPadding: 12, minHeight: 40)
                 }
             }
             .alert("无法保存", isPresented: Binding(
@@ -878,10 +880,12 @@ private struct ReceivableEditor: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("取消") { dismiss() }
+                        .liquidGlassPillControl(horizontalPadding: 12, minHeight: 40)
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button(asset == nil ? "创建" : "保存") { save() }
                         .disabled(amount == nil || amount! <= 0 || name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                        .liquidGlassPillControl(horizontalPadding: 12, minHeight: 40)
                 }
             }
             .alert("无法保存", isPresented: Binding(
@@ -976,10 +980,12 @@ private struct ReceivableRecoverySheet: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("取消") { dismiss() }
+                        .liquidGlassPillControl(horizontalPadding: 12, minHeight: 40)
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("确认") { save() }
                         .disabled(amount == nil || amount! <= 0)
+                        .liquidGlassPillControl(horizontalPadding: 12, minHeight: 40)
                 }
             }
             .alert("无法保存", isPresented: Binding(

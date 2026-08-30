@@ -149,10 +149,12 @@ struct BudgetV2PlanEditorView: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("取消") { dismiss() }
+                        .liquidGlassPillControl(horizontalPadding: 12, minHeight: 40)
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("保存") { save() }
                         .disabled(!canSave)
+                        .liquidGlassPillControl(horizontalPadding: 12, minHeight: 40)
                 }
             }
             .onAppear {
@@ -359,10 +361,12 @@ struct BudgetV2SpecialEditorView: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("取消") { dismiss() }
+                        .liquidGlassPillControl(horizontalPadding: 12, minHeight: 40)
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("保存") { save() }
                         .disabled(!canSave)
+                        .liquidGlassPillControl(horizontalPadding: 12, minHeight: 40)
                 }
             }
             .onAppear {
@@ -485,6 +489,7 @@ struct BudgetCommitmentMatchView: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("取消") { dismiss() }
+                        .liquidGlassPillControl(horizontalPadding: 12, minHeight: 40)
                 }
             }
             .onAppear { reload() }

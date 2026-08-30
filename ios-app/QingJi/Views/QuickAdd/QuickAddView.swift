@@ -120,8 +120,10 @@ struct QuickAddView: View {
                     Button {
                         router.showAISheet = true
                     } label: {
-                        Label("AI 记一笔", systemImage: "sparkles")
+                        Image(systemName: "sparkles")
                     }
+                    .liquidGlassCircleControl()
+                    .accessibilityLabel("AI 记一笔")
                 }
             }
             .sheet(isPresented: Binding(
@@ -243,6 +245,7 @@ struct QuickAddView: View {
                             .font(.subheadline)
                             .lineLimit(1)
                     }
+                    .liquidGlassPillControl(horizontalPadding: 12, minHeight: 40)
                 }
                 Menu {
                     ForEach(books) { book in
@@ -261,6 +264,7 @@ struct QuickAddView: View {
                         .font(.subheadline)
                         .lineLimit(1)
                 }
+                .liquidGlassPillControl(horizontalPadding: 12, minHeight: 40)
                 DatePicker("日期", selection: $date, displayedComponents: .date)
                     .labelsHidden()
                     .datePickerStyle(.compact)
@@ -274,7 +278,7 @@ struct QuickAddView: View {
                     Label("更多", systemImage: "ellipsis.circle")
                         .font(.subheadline)
                 }
-                .buttonStyle(.glass(.clear))
+                .liquidGlassPillControl(horizontalPadding: 12, minHeight: 40)
             }
             .padding(.horizontal)
             .padding(.vertical, 8)
@@ -490,6 +494,7 @@ private struct QuickAddDetailsSheet: View {
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("完成") { dismiss() }
+                        .liquidGlassPillControl(horizontalPadding: 12, minHeight: 40)
                 }
             }
             .onChange(of: photoItem) { _, item in

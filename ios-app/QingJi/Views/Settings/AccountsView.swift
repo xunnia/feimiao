@@ -95,6 +95,7 @@ struct AccountsView: View {
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
                 EditButton()
+                    .liquidGlassPillControl(horizontalPadding: 12, minHeight: 40)
             }
             ToolbarItem(placement: .topBarTrailing) {
                 Button {
@@ -102,6 +103,7 @@ struct AccountsView: View {
                 } label: {
                     Image(systemName: "plus")
                 }
+                .liquidGlassCircleControl()
                 .accessibilityLabel("新建账户")
             }
         }
@@ -320,10 +322,12 @@ struct AccountEditorSheet: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("取消") { dismiss() }
+                        .liquidGlassPillControl(horizontalPadding: 12, minHeight: 40)
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button(account == nil ? "创建" : "保存") { save() }
                         .disabled(!canSave)
+                        .liquidGlassPillControl(horizontalPadding: 12, minHeight: 40)
                 }
             }
             .alert("无法保存", isPresented: Binding(

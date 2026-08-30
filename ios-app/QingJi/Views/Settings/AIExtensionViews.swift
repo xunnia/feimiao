@@ -331,6 +331,7 @@ struct AIReportScheduleView: View {
                 } label: {
                     Image(systemName: "plus")
                 }
+                .liquidGlassCircleControl()
                 .accessibilityLabel("添加每月报告")
             }
         }

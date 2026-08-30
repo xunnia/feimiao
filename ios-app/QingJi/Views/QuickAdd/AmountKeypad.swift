@@ -33,10 +33,13 @@ struct AmountKeypad: View {
                             .font(.headline)
                             .frame(maxWidth: .infinity)
                             .frame(height: keyHeight * 2 + spacing)
-                            .foregroundStyle(.white)
                     }
-                    .buttonStyle(.glassProminent)
-                    .tint(expression.value > 0 ? Color.accentColor : Color.accentColor.opacity(0.35))
+                    .liquidGlassPrimaryKeyControl(
+                        cornerRadius: 26,
+                        tint: expression.value > 0
+                            ? Color.accentColor.opacity(0.90)
+                            : Color.gray.opacity(0.28)
+                    )
                     .disabled(expression.value <= 0)
                 }
                 .frame(width: 84)
@@ -63,7 +66,7 @@ struct AmountKeypad: View {
                 .frame(maxWidth: .infinity)
                 .frame(height: keyHeight)
         }
-        .buttonStyle(.glass(.clear))
+        .liquidGlassKeyControl(cornerRadius: 26)
     }
 
     private func functionKey(systemImage: String, action: @escaping () -> Void) -> some View {
@@ -76,6 +79,6 @@ struct AmountKeypad: View {
                 .frame(maxWidth: .infinity)
                 .frame(height: keyHeight)
         }
-        .buttonStyle(.glass(.clear))
+        .liquidGlassKeyControl(cornerRadius: 26)
     }
 }

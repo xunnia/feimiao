@@ -103,6 +103,7 @@ struct AIQuickEntryView: View {
                         speech.stop()
                         dismiss()
                     }
+                    .liquidGlassPillControl(horizontalPadding: 12, minHeight: 40)
                 }
             }
             .alert("无法保存", isPresented: Binding(
@@ -224,7 +225,7 @@ struct AIQuickEntryView: View {
                 Label(isCloudParsing ? "解析中" : "解析", systemImage: isCloudParsing ? "hourglass" : "sparkles")
                     .frame(maxWidth: .infinity)
             }
-            .buttonStyle(.glassProminent)
+            .liquidGlassPrimaryPillControl(horizontalPadding: 16, minHeight: 48)
             .disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isCloudParsing)
 
             if isRecognizingImage {
@@ -289,7 +290,7 @@ struct AIQuickEntryView: View {
                 )
                 .frame(maxWidth: .infinity)
             }
-            .buttonStyle(.glassProminent)
+            .liquidGlassPrimaryPillControl(horizontalPadding: 16, minHeight: 48)
             .disabled(validEntryCount == 0 || selectedAccount == nil)
         } header: {
             Text(entries.count > 1 ? "识别结果 · \(entries.count) 笔" : "识别结果")
@@ -346,7 +347,7 @@ struct AIQuickEntryView: View {
                     }
                     .font(.subheadline)
                 }
-                .buttonStyle(.glass(.clear))
+                .liquidGlassPillControl(horizontalPadding: 10, minHeight: 40)
 
                 Text(entry.date, format: entry.timePrecision.carriesClock
                      ? .dateTime.month().day().hour().minute()
@@ -447,7 +448,7 @@ struct AIQuickEntryView: View {
                     Label("确认退款并挂回原账单", systemImage: "arrow.uturn.backward.circle.fill")
                         .frame(maxWidth: .infinity)
                 }
-                .buttonStyle(.glassProminent)
+                .liquidGlassPrimaryPillControl(horizontalPadding: 16, minHeight: 48)
                 .disabled(selectedAccount == nil)
             } else if result.status == .ambiguous {
                 Text("找到了多笔可能的原订单，请补充日期或商品；本次不会落账。")

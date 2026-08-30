@@ -162,6 +162,8 @@ struct BudgetSettingView: View {
                 }
                 .disabled(parsedAmount == nil || parsedAmount! < 0 ||
                           (cycle == .custom && endDate < startDate))
+                .liquidGlassPrimaryPillControl(horizontalPadding: 16, minHeight: 48)
+                .frame(maxWidth: .infinity)
             } footer: {
                 Text("设为 0 可停用计划；退款和报销会按原账单净额参与执行。")
             }
@@ -391,10 +393,12 @@ struct BudgetSettingView: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("取消") { showCategoryBudgetSheet = false }
+                        .liquidGlassPillControl(horizontalPadding: 12, minHeight: 40)
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("保存") { saveCategoryBudget() }
                         .disabled(categoryBudgetKey == nil || categoryBudgetAmount == nil || categoryBudgetAmount! < 0)
+                        .liquidGlassPillControl(horizontalPadding: 12, minHeight: 40)
                 }
             }
         }

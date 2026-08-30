@@ -58,6 +58,7 @@ struct TagsView: View {
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
                 EditButton()
+                    .liquidGlassPillControl(horizontalPadding: 12, minHeight: 40)
             }
             ToolbarItem(placement: .topBarTrailing) {
                 Button {
@@ -65,6 +66,7 @@ struct TagsView: View {
                 } label: {
                     Image(systemName: "plus")
                 }
+                .liquidGlassCircleControl()
                 .accessibilityLabel("新建标签")
             }
         }
@@ -226,10 +228,12 @@ private struct TagEditorSheet: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("取消") { dismiss() }
+                        .liquidGlassPillControl(horizontalPadding: 12, minHeight: 40)
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button(tag == nil ? "创建" : "保存") { save() }
                         .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                        .liquidGlassPillControl(horizontalPadding: 12, minHeight: 40)
                 }
             }
             .alert("无法保存", isPresented: Binding(

@@ -193,10 +193,12 @@ struct ImportReviewView: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("取消") { dismiss() }
+                        .liquidGlassPillControl(horizontalPadding: 12, minHeight: 40)
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button(saving ? "导入中" : "确认导入") { commit() }
                         .disabled(saving || result.records.isEmpty || selectedAccount == nil)
+                        .liquidGlassPillControl(horizontalPadding: 12, minHeight: 40)
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
@@ -208,6 +210,7 @@ struct ImportReviewView: View {
                             Image(systemName: "sparkles")
                         }
                     }
+                    .liquidGlassCircleControl()
                     .accessibilityLabel("用 AI 归类待确认商户")
                     .disabled(aiWorking || unresolvedGroups.isEmpty || providerStore.selectedAccount == nil)
                 }

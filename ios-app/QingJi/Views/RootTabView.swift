@@ -227,9 +227,8 @@ private struct AppDrawerView: View {
                     Spacer()
                     Button(action: onClose) {
                         Image(systemName: "xmark")
-                            .frame(width: 38, height: 38)
                     }
-                    .buttonStyle(.glass(.clear))
+                    .liquidGlassCircleControl(size: 44)
                     .accessibilityLabel("关闭菜单")
                 }
                 .padding(.horizontal, 16)
@@ -321,7 +320,11 @@ private struct AppDrawerView: View {
             .frame(minHeight: 48)
             .background(selected ? Color.accentColor.opacity(0.12) : .clear, in: .rect(cornerRadius: 12))
         }
-         .buttonStyle(.glass(.clear))
+        // Drawer rows are already inside one glass drawer surface. Adding a
+        // glass button style to every row creates nested pills and hides the
+        // selection treatment behind a second white layer.
+        .buttonStyle(.plain)
+        .contentShape(Rectangle())
     }
 }
 

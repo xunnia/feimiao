@@ -179,9 +179,8 @@ struct AccountDetailView: View {
                     }
                 } label: {
                     Image(systemName: "ellipsis")
-                        .frame(width: 44, height: 44)
                 }
-                .buttonStyle(.glass(.clear))
+                .liquidGlassCircleControl()
                 .accessibilityLabel("账户操作")
             }
         }
@@ -286,7 +285,8 @@ struct AccountDetailView: View {
                 .padding(14)
                 .contentShape(Rectangle())
             }
-            .buttonStyle(.glass(.clear))
+            .buttonStyle(.plain)
+            .contentShape(Rectangle())
         }
         .glassEffect(.regular, in: .rect(cornerRadius: 14))
     }
@@ -343,7 +343,7 @@ struct AccountDetailView: View {
                             checkpointToReverse = checkpoint
                         }
                         .font(.caption.weight(.semibold))
-                        .buttonStyle(.glass(.clear))
+                        .liquidGlassPillControl(horizontalPadding: 10, minHeight: 36)
                         .controlSize(.small)
                     } else {
                         Text("已撤销")
@@ -578,10 +578,12 @@ private struct AccountCalibrationSheet: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("取消") { dismiss() }
+                        .liquidGlassPillControl(horizontalPadding: 12, minHeight: 40)
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("保存") { save() }
                         .disabled(actualBalance == nil)
+                        .liquidGlassPillControl(horizontalPadding: 12, minHeight: 40)
                 }
             }
             .alert("无法保存", isPresented: Binding(

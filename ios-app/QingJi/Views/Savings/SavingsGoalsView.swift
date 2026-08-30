@@ -71,6 +71,7 @@ struct SavingsGoalsView: View {
                 Button { showEditor = true } label: {
                     Image(systemName: "plus")
                 }
+                .liquidGlassCircleControl()
                 .accessibilityLabel("新建存钱目标")
             }
         }

@@ -86,14 +86,16 @@ struct PhysicalAssetDetailView: View {
                     } label: {
                         Image(systemName: "chevron.left")
                     }
+                    .liquidGlassCircleControl()
                     .accessibilityLabel("返回")
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Menu {
                         actionMenu
                     } label: {
-                        Image(systemName: "ellipsis.circle")
+                        Image(systemName: "ellipsis")
                     }
+                    .liquidGlassCircleControl()
                     .accessibilityLabel("更多资产操作")
                 }
             }
@@ -239,7 +241,7 @@ struct PhysicalAssetDetailView: View {
                 .font(.subheadline.weight(.medium))
                 .frame(maxWidth: .infinity, minHeight: 42)
         }
-        .buttonStyle(.glass(.clear))
+        .liquidGlassPillControl(horizontalPadding: 14, minHeight: 44)
         .tint(.accentColor)
         .disabled(!enabled)
         .accessibilityLabel(title)
@@ -475,9 +477,11 @@ private struct AssetValueUpdateSheet: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("取消") { dismiss() }
+                        .liquidGlassPillControl(horizontalPadding: 12, minHeight: 40)
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("保存") { save() }
+                        .liquidGlassPillControl(horizontalPadding: 12, minHeight: 40)
                         .disabled(value == nil || value! < 0)
                 }
             }
@@ -562,9 +566,11 @@ private struct AssetSaleSheet: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("取消") { dismiss() }
+                        .liquidGlassPillControl(horizontalPadding: 12, minHeight: 40)
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("确认出售") { save() }
+                        .liquidGlassPillControl(horizontalPadding: 12, minHeight: 40)
                         .disabled(!valid)
                 }
             }
@@ -667,6 +673,7 @@ private struct AssetCostLinkSheet: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("完成") { dismiss() }
+                        .liquidGlassPillControl(horizontalPadding: 12, minHeight: 40)
                 }
             }
             .alert("无法关联", isPresented: Binding(
@@ -746,9 +753,11 @@ private struct AssetEvidenceSheet: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("取消") { dismiss() }
+                        .liquidGlassPillControl(horizontalPadding: 12, minHeight: 40)
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("保存") { save() }
+                        .liquidGlassPillControl(horizontalPadding: 12, minHeight: 40)
                 }
             }
             .onChange(of: photoItem) { _, item in
@@ -904,9 +913,11 @@ private struct AssetDepreciationSheet: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("取消") { dismiss() }
+                        .liquidGlassPillControl(horizontalPadding: 12, minHeight: 40)
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("保存") { save() }
+                        .liquidGlassPillControl(horizontalPadding: 12, minHeight: 40)
                         .disabled(!valid)
                 }
             }

@@ -68,7 +68,7 @@ struct MonthlyStatsView: View {
             } label: {
                 Image(systemName: "chevron.left")
             }
-            .buttonStyle(.glass(.clear))
+            .liquidGlassCircleControl(size: 44)
             Spacer()
             Text(displayedMonth, format: .dateTime.year().month())
                 .font(.headline)
@@ -78,7 +78,7 @@ struct MonthlyStatsView: View {
             } label: {
                 Image(systemName: "chevron.right")
             }
-            .buttonStyle(.glass(.clear))
+            .liquidGlassCircleControl(size: 44)
             .disabled(Calendar.current.isDate(displayedMonth, equalTo: AppClock.now, toGranularity: .month))
         }
     }
@@ -90,7 +90,7 @@ struct MonthlyStatsView: View {
             } label: {
                 Image(systemName: "chevron.left")
             }
-            .buttonStyle(.glass(.clear))
+            .liquidGlassCircleControl(size: 44)
             Spacer()
             VStack(spacing: 2) {
                 Text("本周")
@@ -107,7 +107,7 @@ struct MonthlyStatsView: View {
             } label: {
                 Image(systemName: "chevron.right")
             }
-            .buttonStyle(.glass(.clear))
+            .liquidGlassCircleControl(size: 44)
             .disabled(weekEnd >= Calendar.current.startOfDay(for: AppClock.now))
         }
     }
@@ -119,7 +119,7 @@ struct MonthlyStatsView: View {
             } label: {
                 Image(systemName: "chevron.left")
             }
-            .buttonStyle(.glass(.clear))
+            .liquidGlassCircleControl(size: 44)
             Spacer()
             Text(displayedMonth, format: .dateTime.year())
                 .font(.headline)
@@ -129,7 +129,7 @@ struct MonthlyStatsView: View {
             } label: {
                 Image(systemName: "chevron.right")
             }
-            .buttonStyle(.glass(.clear))
+            .liquidGlassCircleControl(size: 44)
             .disabled(Calendar.current.component(.year, from: displayedMonth) >= Calendar.current.component(.year, from: AppClock.now))
         }
     }

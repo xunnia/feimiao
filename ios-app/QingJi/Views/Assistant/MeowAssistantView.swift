@@ -74,6 +74,7 @@ struct MeowAssistantView: View {
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     Button("完成") { dismiss() }
+                        .liquidGlassPillControl(horizontalPadding: 12, minHeight: 40)
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     GlassEffectContainer(spacing: 8) {
@@ -83,17 +84,15 @@ struct MeowAssistantView: View {
                                 AIChatsView()
                             } label: {
                                 Image(systemName: "bubble.left.and.bubble.right")
-                                    .frame(width: 38, height: 38)
                             }
-                            .buttonStyle(.glass(.clear))
+                            .liquidGlassCircleControl(size: 44)
                             .accessibilityLabel("Chats")
                             NavigationLink {
                                 AIProviderSettingsView()
                             } label: {
                                 Image(systemName: "gearshape")
-                                    .frame(width: 38, height: 38)
                             }
-                            .buttonStyle(.glass(.clear))
+                            .liquidGlassCircleControl(size: 44)
                             .accessibilityLabel("AI 设置")
                         }
                     }
@@ -170,6 +169,7 @@ struct MeowAssistantView: View {
         } label: {
             Image(systemName: "slider.horizontal.3")
         }
+        .liquidGlassCircleControl(size: 44)
         .accessibilityLabel(providerStore.selectedAccount.map {
             "\($0.displayName) · \($0.model) · \($0.effort.label)"
         } ?? "选择 AI 模型")
@@ -242,7 +242,8 @@ struct MeowAssistantView: View {
                     } label: {
                         Label("先配置 AI 账号", systemImage: "gearshape")
                     }
-                    .buttonStyle(.glassProminent)
+                    .liquidGlassPrimaryPillControl(horizontalPadding: 16, minHeight: 46)
+                    .frame(maxWidth: .infinity)
                 }
 
                 Text("发送问题时，会把当前账本的月度汇总和近期账目发给你选择的服务商。")
@@ -319,7 +320,7 @@ struct MeowAssistantView: View {
             if !attachments.isEmpty {
                 attachmentStrip
             }
-            GlassEffectContainer(spacing: 8) {
+            GlassEffectContainer(spacing: 10) {
                 HStack(alignment: .bottom, spacing: 10) {
                 Menu {
                     PhotosPicker(
@@ -337,9 +338,8 @@ struct MeowAssistantView: View {
                 } label: {
                     Image(systemName: "plus")
                         .font(.headline.weight(.semibold))
-                        .frame(width: 34, height: 34)
                 }
-                .buttonStyle(.glass(.clear))
+                .liquidGlassCircleControl(size: 44)
                 .accessibilityLabel("添加附件")
 
                 TextField("问问你的账本", text: $draft, axis: .vertical)
@@ -347,7 +347,6 @@ struct MeowAssistantView: View {
                     .textFieldStyle(.plain)
                     .padding(.horizontal, 14)
                     .padding(.vertical, 10)
-                    .glassEffect(.regular.interactive(), in: .rect(cornerRadius: 18))
                     .onSubmit {
                         if !isSending { send() }
                     }
@@ -361,9 +360,8 @@ struct MeowAssistantView: View {
                 } label: {
                     Image(systemName: isSending ? "stop.fill" : "arrow.up")
                         .font(.headline.weight(.semibold))
-                        .frame(width: 42, height: 42)
                 }
-                .buttonStyle(.glassProminent)
+                .liquidGlassPrimaryCircleControl(size: 48)
                 .disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && attachments.isEmpty && !isSending)
                 .accessibilityLabel(isSending ? "停止生成" : "发送")
                 }
@@ -1182,13 +1180,13 @@ private struct AIRecordCardView: View {
 
             if !card.saved, let onSave {
                 Button("确认保存 \(card.entries.count) 笔", action: onSave)
-                    .buttonStyle(.glassProminent)
+                    .liquidGlassPrimaryPillControl()
                     .frame(maxWidth: .infinity)
             } else if card.saved {
                 HStack {
                     if let onUndo, !card.rolledBack {
                         Button("撤销本次 AI 记账", action: onUndo)
-                            .buttonStyle(.glass(.clear))
+                            .liquidGlassPillControl(horizontalPadding: 10, minHeight: 36)
                     }
                     ForEach(Array(card.entries.enumerated()), id: \.offset) { index, _ in
                         if !card.deletedIndices.contains(index), let onDeleteEntry {
@@ -1197,7 +1195,7 @@ private struct AIRecordCardView: View {
                             } label: {
                                 Image(systemName: "trash")
                             }
-                            .buttonStyle(.glass(.clear))
+                            .liquidGlassCircleControl(size: 36)
                             .accessibilityLabel("删除第 \(index + 1) 笔")
                         }
                     }
@@ -1238,7 +1236,7 @@ private struct AIRecordCardView: View {
             Label("改分类", systemImage: "tag")
                 .font(.caption)
         }
-        .buttonStyle(.glass(.clear))
+        .liquidGlassPillControl(horizontalPadding: 10, minHeight: 36)
     }
 }
 

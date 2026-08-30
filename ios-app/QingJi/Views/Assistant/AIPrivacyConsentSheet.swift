@@ -32,7 +32,7 @@ struct AIPrivacyConsentSheet: View {
                     onAccept()
                     dismiss()
                 }
-                .buttonStyle(.glassProminent)
+                .liquidGlassPrimaryPillControl(horizontalPadding: 18, minHeight: 48)
                 .frame(maxWidth: .infinity)
             }
             .padding(22)
@@ -41,6 +41,7 @@ struct AIPrivacyConsentSheet: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("暂不") { dismiss() }
+                        .liquidGlassPillControl(horizontalPadding: 12, minHeight: 40)
                 }
             }
         }

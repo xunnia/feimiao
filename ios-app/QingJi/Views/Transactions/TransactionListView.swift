@@ -208,6 +208,7 @@ struct TransactionListView: View {
                             ? "line.3.horizontal.decrease.circle.fill"
                             : "line.3.horizontal.decrease.circle")
                     }
+                    .liquidGlassPillControl(horizontalPadding: 12, minHeight: 40)
                     .accessibilityLabel(hasActiveFilters ? "已启用筛选" : "筛选账目")
                 }
             }
@@ -594,6 +595,7 @@ private struct TransactionFilterSheet: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("取消") { dismiss() }
+                        .liquidGlassPillControl(horizontalPadding: 12, minHeight: 40)
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("应用") {
@@ -614,6 +616,7 @@ private struct TransactionFilterSheet: View {
                         !isValidRange ||
                         !isValidDateRange
                     )
+                    .liquidGlassPillControl(horizontalPadding: 12, minHeight: 40)
                 }
             }
         }

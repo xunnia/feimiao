@@ -78,6 +78,7 @@ struct ReconcileView: View {
                         reconcile(account: account, actualBalance: actual)
                     }
                 }
+                .liquidGlassPrimaryPillControl(horizontalPadding: 14, minHeight: 44)
             } else if actual != nil {
                 Label("账已平", systemImage: "checkmark.circle.fill")
                     .foregroundStyle(Color.income)
@@ -103,6 +104,7 @@ struct ReconcileView: View {
                             }
                         }
                         .font(.caption)
+                        .liquidGlassPillControl(horizontalPadding: 10, minHeight: 36)
                     }
                 }
             }

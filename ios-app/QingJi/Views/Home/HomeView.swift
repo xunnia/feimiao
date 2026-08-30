@@ -122,9 +122,8 @@ struct HomeView: View {
                     } label: {
                         Image(systemName: "line.3.horizontal")
                             .font(.title3)
-                            .frame(width: 44, height: 44)
                     }
-                    .buttonStyle(.glass(.clear))
+                    .liquidGlassCircleControl()
                     .accessibilityLabel("打开菜单")
                 }
             ToolbarItem(placement: .topBarTrailing) {
@@ -133,9 +132,8 @@ struct HomeView: View {
                 } label: {
                     Image(systemName: "magnifyingglass")
                         .font(.title3)
-                        .frame(width: 44, height: 44)
                 }
-                .buttonStyle(.glass(.clear))
+                .liquidGlassCircleControl()
                 .accessibilityLabel("搜索明细")
             }
             ToolbarItem(placement: .topBarTrailing) {
@@ -161,10 +159,8 @@ struct HomeView: View {
                             .font(.caption.weight(.semibold))
                     }
                     .font(.subheadline.weight(.medium))
-                    .frame(minWidth: 100, minHeight: 44)
-                    .padding(.horizontal, 8)
                 }
-                .buttonStyle(.glass(.clear))
+                .liquidGlassPillControl(horizontalPadding: 14, minWidth: 116)
                 .accessibilityLabel("当前账本：\(selectedBookName)")
             }
             }
@@ -212,7 +208,7 @@ struct HomeView: View {
                     .font(.subheadline.weight(.medium))
                     .foregroundStyle(.primary)
                 }
-                .buttonStyle(.glass(.clear))
+                .liquidGlassPillControl(horizontalPadding: 12, minHeight: 40)
                 .accessibilityLabel("选择月份")
 
                 Button {
@@ -229,7 +225,7 @@ struct HomeView: View {
                     .padding(.horizontal, 10)
                     .frame(minHeight: 28)
                 }
-                .buttonStyle(.glass(.clear))
+                .liquidGlassPillControl(horizontalPadding: 12, minHeight: 40)
                 .accessibilityLabel("查看统计")
                 Spacer()
             }
@@ -276,6 +272,7 @@ struct HomeView: View {
                 Spacer()
                 Button("全部") { router.selectedTab = .transactions }
                     .font(.subheadline)
+                    .liquidGlassPillControl(horizontalPadding: 14, minHeight: 40)
             }
 
             if transactions.isEmpty {
@@ -404,7 +401,7 @@ private struct NoBudgetSummaryBody: View {
                         .labelStyle(TrailingIconLabelStyle())
                         .font(.caption)
                 }
-                .buttonStyle(.glass(.clear))
+                .liquidGlassPillControl(horizontalPadding: 12, minHeight: 38)
                 .foregroundStyle(Color.accentColor)
             }
         }
@@ -498,6 +495,7 @@ private struct MonthPickerSheet: View {
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("完成", action: onConfirm)
+                        .liquidGlassPillControl(horizontalPadding: 12, minHeight: 40)
                 }
             }
         }
@@ -525,14 +523,13 @@ private struct HomeRecordInputBar: View {
             .buttonStyle(.plain)
             .accessibilityLabel("打开\(isAIMode ? "AI 记账" : "手动记账")")
 
-            GlassEffectContainer(spacing: 8) {
+            GlassEffectContainer(spacing: 10) {
                 HStack(spacing: 8) {
                     Button(action: openSelectedEntry) {
                         Image(systemName: "plus")
                             .font(.headline.weight(.semibold))
-                            .frame(width: 42, height: 42)
                     }
-                    .buttonStyle(.glass(.clear))
+                    .liquidGlassCircleControl()
                     .glassEffectID("entry-add", in: glassNamespace)
                     .accessibilityLabel("添加一笔")
 
@@ -547,9 +544,9 @@ private struct HomeRecordInputBar: View {
                         }
                         .font(.subheadline)
                         .padding(.horizontal, 12)
-                        .frame(height: 36)
+                        .frame(minHeight: 44)
                     }
-                    .buttonStyle(.glass(.clear))
+                    .liquidGlassPillControl(horizontalPadding: 0, minHeight: 44)
                     .glassEffectID(isAIMode ? "entry-ai" : "entry-manual", in: glassNamespace)
                     .accessibilityLabel("切换到\(isAIMode ? "手动记账" : "AI 记账")")
 
@@ -558,9 +555,8 @@ private struct HomeRecordInputBar: View {
                     Button(action: openSelectedEntry) {
                         Image(systemName: "arrow.up")
                             .font(.headline.weight(.semibold))
-                            .frame(width: 42, height: 42)
                     }
-                    .buttonStyle(.glassProminent)
+                    .liquidGlassPrimaryCircleControl()
                     .tint(Color.accentColor)
                     .glassEffectID("entry-open", in: glassNamespace)
                     .accessibilityLabel("打开\(isAIMode ? "AI 记账" : "手动记账")")

@@ -65,6 +65,7 @@ struct ReportsView: View {
                     } label: {
                         Image(systemName: "plus")
                     }
+                    .liquidGlassCircleControl()
                     .accessibilityLabel("生成本月报告")
                 }
             }
