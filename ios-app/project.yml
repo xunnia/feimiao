@@ -56,6 +56,7 @@ targets:
         NSMicrophoneUsageDescription: 语音记账需要使用麦克风。
         NSSpeechRecognitionUsageDescription: 把你的话转成文字以便快速记账，识别在设备上完成。
         NSPhotoLibraryUsageDescription: 选择支付截图或账单照片用于识别和记账。
+        NSCameraUsageDescription: 拍摄收据或支付凭证用于记账。
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true
     settings:

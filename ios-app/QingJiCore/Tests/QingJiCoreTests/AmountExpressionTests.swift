@@ -67,6 +67,26 @@ final class AmountExpressionTests: XCTestCase {
         XCTAssertFalse(expression.isCompound)
     }
 
+    func testAdditionAndSubtraction() {
+        var expression = AmountExpression()
+        expression.insertDigit("1")
+        expression.insertDigit("2")
+        expression.beginAddition()
+        expression.insertDigit("3")
+        expression.beginSubtraction()
+        expression.insertDigit("5")
+        XCTAssertEqual(expression.displayText, "12+3-5")
+        XCTAssertEqual(expression.value, 10)
+        XCTAssertTrue(expression.isCompound)
+    }
+
+    func testSubtractionRequiresCurrentNumber() {
+        var expression = AmountExpression()
+        expression.beginSubtraction()
+        XCTAssertEqual(expression.displayText, "0")
+        XCTAssertFalse(expression.isCompound)
+    }
+
     func testDeleteBackwardCrossesTerms() {
         var expression = AmountExpression()
         expression.insertDigit("8")

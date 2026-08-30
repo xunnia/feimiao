@@ -165,6 +165,7 @@ struct HomeView: View {
                     .foregroundStyle(.primary)
                 }
                 .liquidGlassPillControl(horizontalPadding: 14, minWidth: 116)
+                .tint(.primary)
                 .accessibilityLabel("当前账本：\(selectedBookName)")
             }
             }
@@ -664,7 +665,9 @@ private struct HomeRecordInputBar: View {
         .padding(.bottom, 10)
         .sheet(isPresented: $showManualEntry) {
             QuickAddView()
-                .presentationDetents([.large])
+                .presentationDetents([.fraction(0.92), .large])
+                .presentationDragIndicator(.hidden)
+                .presentationCornerRadius(28)
         }
         .sheet(isPresented: $showAIEntry) {
             AIQuickEntryView()

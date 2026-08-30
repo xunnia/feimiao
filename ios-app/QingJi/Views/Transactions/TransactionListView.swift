@@ -204,11 +204,17 @@ struct TransactionListView: View {
                     Button {
                         showFilters = true
                     } label: {
-                        Label("筛选", systemImage: hasActiveFilters
-                            ? "line.3.horizontal.decrease.circle.fill"
-                            : "line.3.horizontal.decrease.circle")
+                        Image(systemName: "line.3.horizontal.decrease")
+                            .overlay(alignment: .topTrailing) {
+                                if hasActiveFilters {
+                                    Circle()
+                                        .fill(Color.warning)
+                                        .frame(width: 7, height: 7)
+                                        .offset(x: 3, y: -3)
+                                }
+                            }
                     }
-                    .liquidGlassPillControl(horizontalPadding: 12, minHeight: 40)
+                    .liquidGlassCircleControl()
                     .accessibilityLabel(hasActiveFilters ? "已启用筛选" : "筛选账目")
                 }
             }
@@ -689,6 +695,8 @@ struct TransactionRow: View {
                     Text(card.title)
                         .font(.body)
                         .lineLimit(1)
+                        .minimumScaleFactor(0.86)
+                        .layoutPriority(1)
                     if refundAmount > 0 {
                         Text("已退 \(MoneyFormat.string(refundAmount, currencyCode: transaction.currencyCode))")
                             .font(.caption2.weight(.medium))
@@ -697,6 +705,7 @@ struct TransactionRow: View {
                             .padding(.vertical, 2)
                             .background(Color.orange.opacity(0.12), in: .rect(cornerRadius: 5))
                             .lineLimit(1)
+                            .fixedSize(horizontal: true, vertical: false)
                     }
                 }
                 if !detail.isEmpty {

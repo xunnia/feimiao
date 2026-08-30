@@ -7,6 +7,7 @@ import QingJiCore
 /// 核心快记页：打开 App 即是键盘，目标 3 秒记完一笔。
 struct QuickAddView: View {
     @Environment(\.modelContext) private var context
+    @Environment(\.dismiss) private var dismiss
     /// 全局路由：qingji://ai 深链会把 router.showAISheet 置 true，触发 AI 记账 sheet。
     @Environment(AppRouter.self) private var router
 
@@ -37,12 +38,16 @@ struct QuickAddView: View {
     @State private var attachmentPath = ""
     @State private var saveError: String?
     @State private var didApplyLaunchKind = false
+    @State private var showDatePicker = false
+    @State private var photoItem: PhotosPickerItem?
+    @State private var showCamera = false
+    @State private var attachmentError: String?
 
     private var visibleCategories: [TxCategory] {
-        // Android's QuickAddView passes the complete ordered category list to
-        // CategoryGrid. Keep the same flat sequence on iOS; subcategories are
-        // selectable entries here rather than a second hidden panel.
-        let matching = allCategories.filter { $0.kind == kind && !$0.isArchived }
+        // 当前 Android 手动记账首屏只显示一级分类；二级分类点父级后展开。
+        let matching = allCategories.filter {
+            $0.kind == kind && !$0.isArchived && $0.parentKey == nil
+        }
         guard !rankedKeys.isEmpty else { return matching }
         let order = Dictionary(rankedKeys.enumerated().map { ($1, $0) }, uniquingKeysWith: { a, _ in a })
         return matching.sorted {
@@ -79,53 +84,37 @@ struct QuickAddView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-                Picker("类型", selection: $kind) {
-                    Text("支出").tag(TransactionKind.expense)
-                    Text("收入").tag(TransactionKind.income)
-                    Text("转账").tag(TransactionKind.transfer)
-                }
-                .pickerStyle(.segmented)
-                .padding(.horizontal)
+            manualHeader
 
-                if let status = budgetStatus, kind == .expense {
-                    todayAllowanceBar(status)
-                        .padding(.horizontal)
-                        .padding(.top, 8)
-                }
-
-                amountDisplay
-                    .padding(.vertical, 12)
-
-                ScrollView {
-                    if kind == .transfer {
-                        transferPickers
-                    } else {
-                        CategoryGrid(
-                            categories: visibleCategories,
-                            childCategories: [],
-                            selected: $selectedCategory
-                        )
-                    }
-                }
-
-                detailBar
-                AmountKeypad(expression: $expression, onSave: save)
-                    .padding(.bottom, 8)
-            }
-            .liquidGlassCanvas()
-            .navigationTitle("记一笔")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button {
-                        router.showAISheet = true
-                    } label: {
-                        Image(systemName: "sparkles")
-                    }
-                    .liquidGlassCircleControl()
-                    .accessibilityLabel("AI 记一笔")
+            ScrollView(.vertical, showsIndicators: false) {
+                if kind == .transfer {
+                    transferPickers
+                        .frame(minHeight: 174)
+                } else {
+                    CategoryGrid(
+                        categories: visibleCategories,
+                        childCategories: childCategories,
+                        selected: $selectedCategory
+                    )
                 }
             }
+            .frame(maxHeight: kind == .transfer ? 184 : 236)
+
+            chipsRow
+                .padding(.top, 8)
+            amountNoteCard
+                .padding(.top, 8)
+            AmountKeypad(
+                expression: $expression,
+                onSave: saveAndDismiss,
+                onSaveAgain: saveAgain,
+                saveLabel: "完成"
+            )
+            .padding(.top, 8)
+            .padding(.bottom, 14)
+        }
+            .background(Color(uiColor: .systemBackground))
+            .toolbar(.hidden, for: .navigationBar)
             .sheet(isPresented: Binding(
                 get: { router.showAISheet },
                 set: { router.showAISheet = $0 }
@@ -158,6 +147,16 @@ struct QuickAddView: View {
                 )
                 .presentationDetents([.medium, .large])
             }
+            .sheet(isPresented: $showDatePicker) {
+                ManualDatePickerSheet(date: $date)
+                    .presentationDetents([.medium])
+            }
+            .sheet(isPresented: $showCamera) {
+                CameraImagePicker { image in
+                    persistImage(image)
+                }
+                .ignoresSafeArea()
+            }
             .alert("无法保存", isPresented: Binding(
                 get: { saveError != nil },
                 set: { if !$0 { saveError = nil } }
@@ -165,6 +164,14 @@ struct QuickAddView: View {
                 Button("好") { saveError = nil }
             } message: {
                 Text(saveError ?? "")
+            }
+            .alert("无法添加照片", isPresented: Binding(
+                get: { attachmentError != nil },
+                set: { if !$0 { attachmentError = nil } }
+            )) {
+                Button("好") { attachmentError = nil }
+            } message: {
+                Text(attachmentError ?? "")
             }
             .overlay(alignment: .top) {
                 if showSavedToast {
@@ -190,6 +197,217 @@ struct QuickAddView: View {
                 if transferTargetID == nil { resetCategorySelection() }
             }
             .onChange(of: allCategories.count) { resetCategorySelection() }
+            .onChange(of: photoItem) { _, item in
+                guard let item else { return }
+                importPhoto(item)
+            }
+    }
+
+    private var manualHeader: some View {
+        HStack(spacing: 10) {
+            Picker("类型", selection: $kind) {
+                Text("支出").tag(TransactionKind.expense)
+                Text("收入").tag(TransactionKind.income)
+                Text("转账").tag(TransactionKind.transfer)
+            }
+            .pickerStyle(.segmented)
+            .frame(width: 218)
+
+            Spacer(minLength: 0)
+
+            Button {
+                router.showAISheet = true
+            } label: {
+                Label("手动记账", systemImage: "pencil")
+                    .font(.subheadline.weight(.medium))
+            }
+            .liquidGlassPillControl(horizontalPadding: 12, minHeight: 44)
+            .tint(.primary)
+            .accessibilityLabel("切换到 AI 记账")
+
+            Button { dismiss() } label: {
+                Image(systemName: "xmark")
+                    .font(.title3.weight(.medium))
+            }
+            .liquidGlassCircleControl(size: 44)
+            .tint(.primary)
+            .accessibilityLabel("关闭手动记账")
+        }
+        .padding(.leading, 16)
+        .padding(.trailing, 12)
+        .padding(.top, 14)
+        .padding(.bottom, 8)
+    }
+
+    private var chipsRow: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                manualChip(title: dateLabel, systemImage: "calendar") {
+                    showDatePicker = true
+                }
+                if books.count > 1 {
+                    Menu {
+                        ForEach(books) { book in
+                            Button(book.name) { selectedBook = book }
+                        }
+                    } label: {
+                        chipLabel(effectiveBook?.name ?? "账本", systemImage: "book.closed")
+                    }
+                    .buttonStyle(.plain)
+                }
+                if kind != .transfer {
+                    Menu {
+                        ForEach(usableAccounts) { account in
+                            Button(account.name) { selectedAccountID = account.stableID }
+                        }
+                    } label: {
+                        chipLabel(effectiveAccount?.name ?? "账户", systemImage: "wallet.pass")
+                    }
+                    .buttonStyle(.plain)
+                }
+                manualChip(
+                    title: selectedTagNames.isEmpty ? "标签" : "\(selectedTagNames.count) 个标签",
+                    systemImage: "tag",
+                    selected: !selectedTagNames.isEmpty
+                ) {
+                    showMoreDetails = true
+                }
+                if kind == .expense {
+                    manualChip(title: "待报销", systemImage: "receipt", selected: isReimbursable, warning: true) {
+                        isReimbursable.toggle()
+                        UISelectionFeedbackGenerator().selectionChanged()
+                    }
+                }
+                manualChip(title: "不计入", systemImage: "eye.slash", selected: isExcluded) {
+                    isExcluded.toggle()
+                    UISelectionFeedbackGenerator().selectionChanged()
+                }
+            }
+            .padding(.horizontal, 12)
+        }
+        .frame(height: 38)
+    }
+
+    private var amountNoteCard: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(alignment: .firstTextBaseline, spacing: 5) {
+                Text(MoneyFormat.symbol(of: currencyCode))
+                    .font(.system(size: 17, weight: .medium, design: .rounded))
+                Text(expression.displayText)
+                    .font(.system(size: 24, weight: .semibold, design: .rounded))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.6)
+                Spacer()
+                if expression.isCompound {
+                    Text("= \(expression.value.formatted())")
+                        .font(.subheadline.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.top, 11)
+            .padding(.bottom, 8)
+
+            Divider()
+                .padding(.horizontal, 16)
+
+            HStack(spacing: 4) {
+                TextField("写备注", text: $note)
+                    .textFieldStyle(.plain)
+                    .font(.subheadline)
+                    .submitLabel(.done)
+                    .onSubmit(saveAndDismiss)
+
+                if let attachmentImage {
+                    Image(uiImage: attachmentImage)
+                        .resizable()
+                        .scaledToFill()
+                        .frame(width: 30, height: 30)
+                        .clipShape(.rect(cornerRadius: 6))
+                        .contextMenu {
+                            Button("移除照片", role: .destructive) {
+                                AttachmentStore.remove(attachmentPath)
+                                attachmentPath = ""
+                            }
+                        }
+                } else {
+                    PhotosPicker(selection: $photoItem, matching: .images) {
+                        Image(systemName: "photo")
+                            .frame(width: 38, height: 38)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("从相册选择")
+
+                    Button {
+                        guard UIImagePickerController.isSourceTypeAvailable(.camera) else {
+                            attachmentError = "当前设备没有可用相机"
+                            return
+                        }
+                        showCamera = true
+                    } label: {
+                        Image(systemName: "camera")
+                            .frame(width: 38, height: 38)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("拍照")
+                }
+            }
+            .padding(.leading, 16)
+            .padding(.trailing, 8)
+            .frame(minHeight: 48)
+        }
+        .background(Color(uiColor: .secondarySystemBackground), in: .rect(cornerRadius: 20))
+        .overlay { RoundedRectangle(cornerRadius: 20).stroke(Color(uiColor: .separator).opacity(0.45), lineWidth: 0.6) }
+        .padding(.horizontal, 12)
+    }
+
+    private var dateLabel: String {
+        let calendar = Calendar.current
+        if calendar.isDate(date, inSameDayAs: AppClock.now) { return "今天" }
+        if let yesterday = calendar.date(byAdding: .day, value: -1, to: AppClock.now),
+           calendar.isDate(date, inSameDayAs: yesterday) { return "昨天" }
+        return "\(calendar.component(.month, from: date))月\(calendar.component(.day, from: date))日"
+    }
+
+    private func manualChip(
+        title: String,
+        systemImage: String,
+        selected: Bool = false,
+        warning: Bool = false,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            chipLabel(title, systemImage: systemImage)
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(selected ? (warning ? Color.warning : Color.accentColor) : .secondary)
+        .background(
+            selected
+                ? (warning ? Color.warning.opacity(0.12) : Color.accentColor.opacity(0.12))
+                : Color(uiColor: .secondarySystemBackground),
+            in: .capsule
+        )
+        .overlay {
+            Capsule().stroke(
+                selected
+                    ? (warning ? Color.warning.opacity(0.60) : Color.accentColor.opacity(0.60))
+                    : Color(uiColor: .separator).opacity(0.42),
+                lineWidth: 0.6
+            )
+        }
+    }
+
+    private func chipLabel(_ title: String, systemImage: String) -> some View {
+        Label(title, systemImage: systemImage)
+            .font(.subheadline)
+            .lineLimit(1)
+            .padding(.horizontal, 10)
+            .frame(height: 32)
+    }
+
+    private var attachmentImage: UIImage? {
+        guard let url = AttachmentStore.url(for: attachmentPath) else { return nil }
+        return UIImage(contentsOfFile: url.path)
     }
 
     private var amountDisplay: some View {
@@ -359,9 +577,18 @@ struct QuickAddView: View {
         )
     }
 
-    private func save() {
+    private func saveAndDismiss() {
+        if save() { dismiss() }
+    }
+
+    private func saveAgain() {
+        _ = save()
+    }
+
+    @discardableResult
+    private func save() -> Bool {
         let amount = expression.value
-        guard amount > 0 else { return }
+        guard amount > 0 else { return false }
 
         do {
             switch kind {
@@ -369,7 +596,7 @@ struct QuickAddView: View {
                 guard let from = effectiveAccount, let to = effectiveTransferTarget,
                       from.persistentModelID != to.persistentModelID else {
                     saveError = LedgerStore.Error.invalidTransfer.localizedDescription
-                    return
+                    return false
                 }
                 try LedgerStore.createTransaction(
                     in: context,
@@ -385,7 +612,7 @@ struct QuickAddView: View {
                     attachmentPath: attachmentPath
                 )
             case .expense, .income:
-                guard let category = selectedCategory else { return }
+                guard let category = selectedCategory else { return false }
                 try LedgerStore.createTransaction(
                     in: context,
                     amount: amount,
@@ -403,7 +630,7 @@ struct QuickAddView: View {
             }
         } catch {
             saveError = error.localizedDescription
-            return
+            return false
         }
 
         UINotificationFeedbackGenerator().notificationOccurred(.success)
@@ -422,7 +649,107 @@ struct QuickAddView: View {
             try? await Task.sleep(for: .seconds(1.5))
             withAnimation { showSavedToast = false }
         }
+        return true
     }
+
+    private func importPhoto(_ item: PhotosPickerItem) {
+        Task { @MainActor in
+            do {
+                guard let data = try await item.loadTransferable(type: Data.self),
+                      let image = UIImage(data: data) else {
+                    throw ManualEntryImageError.invalidImage
+                }
+                persistImage(image)
+                photoItem = nil
+            } catch {
+                attachmentError = error.localizedDescription
+            }
+        }
+    }
+
+    private func persistImage(_ image: UIImage) {
+        do {
+            guard let data = image.jpegData(compressionQuality: 0.88) else {
+                throw ManualEntryImageError.invalidImage
+            }
+            let path = try AttachmentStore.save(data: data, fileExtension: "jpg")
+            if !attachmentPath.isEmpty { AttachmentStore.remove(attachmentPath) }
+            attachmentPath = path
+        } catch {
+            attachmentError = error.localizedDescription
+        }
+    }
+}
+
+private struct ManualDatePickerSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @Binding var date: Date
+
+    var body: some View {
+        NavigationStack {
+            DatePicker(
+                "选择日期",
+                selection: $date,
+                in: Date(timeIntervalSince1970: 946_684_800)...AppClock.now,
+                displayedComponents: .date
+            )
+            .datePickerStyle(.graphical)
+            .padding()
+            .navigationTitle("选择日期")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("完成") { dismiss() }
+                        .liquidGlassPillControl(horizontalPadding: 12, minHeight: 40)
+                }
+            }
+        }
+    }
+}
+
+private struct CameraImagePicker: UIViewControllerRepresentable {
+    let onImage: (UIImage) -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(onImage: onImage)
+    }
+
+    func makeUIViewController(context: Context) -> UIImagePickerController {
+        let controller = UIImagePickerController()
+        controller.sourceType = .camera
+        controller.delegate = context.coordinator
+        return controller
+    }
+
+    func updateUIViewController(_ uiViewController: UIImagePickerController, context: Context) {}
+
+    final class Coordinator: NSObject, UINavigationControllerDelegate, UIImagePickerControllerDelegate {
+        let onImage: (UIImage) -> Void
+
+        init(onImage: @escaping (UIImage) -> Void) {
+            self.onImage = onImage
+        }
+
+        func imagePickerController(
+            _ picker: UIImagePickerController,
+            didFinishPickingMediaWithInfo info: [UIImagePickerController.InfoKey: Any]
+        ) {
+            if let image = info[.originalImage] as? UIImage {
+                onImage(image)
+            }
+            picker.dismiss(animated: true)
+        }
+
+        func imagePickerControllerDidCancel(_ picker: UIImagePickerController) {
+            picker.dismiss(animated: true)
+        }
+    }
+}
+
+private enum ManualEntryImageError: LocalizedError {
+    case invalidImage
+
+    var errorDescription: String? { "这张图片暂时不能用于记账" }
 }
 
 private struct QuickAddDetailsSheet: View {

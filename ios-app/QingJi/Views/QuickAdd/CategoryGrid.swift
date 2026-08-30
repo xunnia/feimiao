@@ -6,6 +6,7 @@ struct CategoryGrid: View {
     let categories: [TxCategory]
     var childCategories: [TxCategory] = []
     @Binding var selected: TxCategory?
+    @State private var expandedParentKey: String?
 
     private let columns = Array(repeating: GridItem(.flexible(), spacing: 8), count: 5)
 
@@ -16,8 +17,14 @@ struct CategoryGrid: View {
                     ForEach(categories) { category in
                         let isSelected = selected?.persistentModelID == category.persistentModelID
                             || selected?.parentKey == category.key
+                        let hasChildren = childCategories.contains { $0.parentKey == category.key }
                         Button {
-                            selected = category
+                            withAnimation(.snappy(duration: 0.24)) {
+                                selected = category
+                                expandedParentKey = hasChildren
+                                    ? (expandedParentKey == category.key ? nil : category.key)
+                                    : nil
+                            }
                             UISelectionFeedbackGenerator().selectionChanged()
                         } label: {
                             VStack(spacing: 4) {
@@ -29,15 +36,24 @@ struct CategoryGrid: View {
                                     )
                                     if isSelected {
                                         RoundedRectangle(cornerRadius: 11, style: .continuous)
-                                            .stroke(Color.accentColor, lineWidth: 2)
+                                            .stroke(Color.secondary, lineWidth: 2)
+                                    }
+                                    if hasChildren {
+                                        Image(systemName: "chevron.down")
+                                            .font(.system(size: 8, weight: .semibold))
+                                            .foregroundStyle(.secondary)
+                                            .frame(width: 17, height: 17)
+                                            .background(Color(uiColor: .systemBackground), in: .circle)
+                                            .overlay { Circle().stroke(Color(uiColor: .separator), lineWidth: 0.5) }
+                                            .offset(x: 21, y: 21)
                                     }
                                 }
                                 .frame(width: 48, height: 48)
                                 .contentShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
                                 Text(category.name)
-                                    .font(.caption)
+                                    .font(.caption.weight(isSelected ? .semibold : .regular))
                                     .lineLimit(1)
-                                    .foregroundStyle(isSelected ? Color.accentColor : .secondary)
+                                    .foregroundStyle(.primary)
                             }
                         }
                         .buttonStyle(.plain)
@@ -45,8 +61,7 @@ struct CategoryGrid: View {
                 }
             }
 
-            if let selectedParentKey,
-               !activeChildren.isEmpty {
+            if expandedParentKey != nil, !activeChildren.isEmpty {
                 VStack(alignment: .leading, spacing: 8) {
                     HStack {
                         Text("细分分类")
@@ -63,7 +78,10 @@ struct CategoryGrid: View {
                         ForEach(activeChildren) { category in
                             let isSelected = selected?.persistentModelID == category.persistentModelID
                             Button {
-                                selected = category
+                                withAnimation(.snappy(duration: 0.20)) {
+                                    selected = category
+                                    expandedParentKey = nil
+                                }
                                 UISelectionFeedbackGenerator().selectionChanged()
                             } label: {
                                 VStack(spacing: 4) {
@@ -97,16 +115,12 @@ struct CategoryGrid: View {
         .padding(.horizontal, 16)
     }
 
-    private var selectedParentKey: String? {
-        selected?.parentKey ?? selected?.key
-    }
-
     private var selectedParentName: String? {
-        categories.first(where: { $0.key == selectedParentKey })?.name
+        categories.first(where: { $0.key == expandedParentKey })?.name
     }
 
     private var activeChildren: [TxCategory] {
-        guard let selectedParentKey else { return [] }
-        return childCategories.filter { $0.parentKey == selectedParentKey }
+        guard let expandedParentKey else { return [] }
+        return childCategories.filter { $0.parentKey == expandedParentKey }
     }
 }
