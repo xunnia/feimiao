@@ -36,6 +36,8 @@ struct RootTabView: View {
                         MonthlyStatsView()
                     case .settings:
                         SettingsView()
+                    case .importReview:
+                        ImportReviewView(result: ImportReviewView.demoResult()) { _, _ in }
                     }
                 }
         }
@@ -69,6 +71,9 @@ struct RootTabView: View {
             case .transactions: router.selectedTab = .transactions
             case .statistics: router.selectedTab = .statistics
             case .settings: router.selectedTab = .settings
+            case .importReview:
+                router.settingsPushTarget = nil
+                router.selectedTab = .settings
             }
         }
         // 所有深链统一由 AppRouter 解析；路径同步后仍由各页面处理自己的
@@ -121,6 +126,19 @@ struct RootTabView: View {
     }
 
     private func syncPath() {
+        // A settings child normally lives under SettingsView. Import review
+        // is also a CI cold-launch target, so keep its dedicated root route
+        // while it is visible; otherwise the selectedTab observer would
+        // immediately replace it with the settings index page.
+        if router.settingsPushTarget == .importReview {
+            router.settingsPushTarget = nil
+            let next: [AppRouter.Route] = [.importReview]
+            if path != next { path = next }
+            return
+        }
+        if path.first == .importReview {
+            return
+        }
         let next: [AppRouter.Route]
         switch router.selectedTab {
         case .home: next = []
@@ -151,12 +169,13 @@ struct RootTabView: View {
         case "quickadd/income": return []
         case "search": return [.search]
         case "transactions": return [.transactions]
+        case "import-review": return [.importReview]
         case "stats-month", "stats-week", "stats/year", "stats/week", "stats-year", "stats-custom", "stats/month":
             return [.statistics]
         case "budget", "reconcile", "reimburse", "books", "accounts", "categories", "tags",
              "memory", "ai-memory", "ai-tasks", "ai-extensions", "ai-schedules", "ai-search",
              "ai-diagnostics", "ai-local", "savings", "recurring", "assets", "assets/detail",
-             "assets-detail", "liabilities", "net-worth", "import-review", "import", "import-export",
+             "assets-detail", "liabilities", "net-worth", "import", "import-export",
              "accounts/detail", "accounts-detail",
              "reimburse/settlement",
              "reports", "settings", "backup", "display", "theme", "money-display", "auto-record",
@@ -194,8 +213,14 @@ struct RootTabView: View {
             router.selectedTab = .quickAdd
             router.showAssistant = true
         case .settingsDestination(let target):
-            router.settingsPushTarget = target
-            router.selectedTab = .settings
+            if target == .importReview {
+                router.settingsPushTarget = nil
+                router.selectedTab = .settings
+                path = [.importReview]
+            } else {
+                router.settingsPushTarget = target
+                router.selectedTab = .settings
+            }
         }
     }
 }
