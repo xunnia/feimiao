@@ -42,11 +42,19 @@ struct QingJiApp: App {
                     try? BudgetCommitmentStore.refreshRefundReviews(
                         in: AppModelContainer.shared.mainContext
                     )
+                    try? RecurringStore.materializeDue(
+                        in: AppModelContainer.shared.mainContext,
+                        now: AppClock.now
+                    )
                     WidgetSnapshotWriter.write(context: AppModelContainer.shared.mainContext)
                     router.consumePendingShare()
                 }
                 .onChange(of: scenePhase) { _, phase in
                     if phase == .active {
+                        try? RecurringStore.materializeDue(
+                            in: AppModelContainer.shared.mainContext,
+                            now: AppClock.now
+                        )
                         WidgetSnapshotWriter.write(context: AppModelContainer.shared.mainContext)
                         if repaymentReminderEnabled {
                             Task { @MainActor in

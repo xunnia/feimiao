@@ -16,9 +16,57 @@ from PIL import Image, ImageDraw, ImageFont
 
 
 UI_SCENES = (
-    ("01-home", "首页 / Liquid Glass 顶部与底部输入框"),
-    ("03-transactions", "明细 / 玻璃背景与输入控件"),
-    ("05-stats-month", "统计 / 原生玻璃翻页控件"),
+    (
+        "01-home",
+        "首页 / 顶栏与底部记账输入框",
+        (
+            (0.11, 0.08, "顶栏菜单改为显式圆形单层玻璃"),
+            (0.72, 0.08, "搜索圆形 + 账本胶囊各自只有一层材质"),
+            (0.50, 0.88, "底部输入框、模式胶囊与圆形发送键统一"),
+        ),
+    ),
+    (
+        "02-quickadd",
+        "手动记账 / 顶栏、详情胶囊与数字键盘",
+        (
+            (0.09, 0.08, "返回键固定为圆形玻璃"),
+            (0.90, 0.08, "AI 入口固定为圆形玻璃"),
+            (0.50, 0.77, "数字键改为圆角矩形，不再使用默认椭圆"),
+        ),
+    ),
+    (
+        "05-stats-month",
+        "统计 / 月份翻页控件",
+        (
+            (0.09, 0.15, "上一月按钮固定为圆形交互玻璃"),
+            (0.91, 0.15, "下一月按钮固定为圆形交互玻璃"),
+        ),
+    ),
+    (
+        "17-accounts",
+        "账户管理 / 编辑与新增",
+        (
+            (0.18, 0.08, "编辑使用文字胶囊"),
+            (0.90, 0.08, "新增使用圆形玻璃"),
+        ),
+    ),
+    (
+        "18-categories",
+        "分类管理 / 收支、图标样式与新增",
+        (
+            (0.12, 0.08, "收支切换入口固定为圆形玻璃"),
+            (0.82, 0.08, "新增与图标样式采用独立圆形热区"),
+        ),
+    ),
+    (
+        "38-assets-detail",
+        "资产详情 / 导航与高频操作",
+        (
+            (0.10, 0.08, "返回键固定为圆形玻璃"),
+            (0.90, 0.08, "更多操作固定为圆形玻璃"),
+            (0.50, 0.28, "高频操作统一为单层文字胶囊"),
+        ),
+    ),
 )
 
 
@@ -47,12 +95,17 @@ def fit(image: Image.Image, max_height: int) -> Image.Image:
     return image.resize((width, max_height), Image.Resampling.LANCZOS)
 
 
-def ios_before_after(before: Image.Image, after: Image.Image, title: str) -> Image.Image:
+def ios_before_after(
+    before: Image.Image,
+    after: Image.Image,
+    title: str,
+    callouts: tuple[tuple[float, float, str], ...],
+) -> Image.Image:
     left = fit(before, 900)
     right = fit(after, 900)
     gap = 28
     header = 82
-    footer = 58
+    footer = 38 + len(callouts) * 27
     canvas = Image.new("RGB", (left.width + gap + right.width, header + max(left.height, right.height) + footer), "#f4f5f7")
     draw = ImageDraw.Draw(canvas)
     draw.text((20, 12), title, fill="#202124", font=font(23, bold=True))
@@ -61,7 +114,22 @@ def ios_before_after(before: Image.Image, after: Image.Image, title: str) -> Ima
     canvas.paste(left, (0, header))
     canvas.paste(right, (left.width + gap, header))
     draw.line((left.width + gap // 2, header, left.width + gap // 2, header + max(left.height, right.height)), fill="#cfd2d6", width=2)
-    draw.text((20, header + max(left.height, right.height) + 18), "变化：原生 .glass / .glassProminent、GlassEffectContainer、玻璃下方内容层与状态动画", fill="#62666d", font=font(14))
+    after_x = left.width + gap
+    for index, (x_ratio, y_ratio, description) in enumerate(callouts, start=1):
+        x = after_x + round(right.width * x_ratio)
+        y = header + round(right.height * y_ratio)
+        radius = 15
+        draw.ellipse((x - radius, y - radius, x + radius, y + radius), fill="#ff7a45", outline="white", width=2)
+        number = str(index)
+        box = draw.textbbox((0, 0), number, font=font(15, bold=True))
+        draw.text(
+            (x - (box[2] - box[0]) / 2, y - (box[3] - box[1]) / 2 - 1),
+            number,
+            fill="white",
+            font=font(15, bold=True),
+        )
+        footer_y = header + max(left.height, right.height) + 12 + (index - 1) * 27
+        draw.text((20, footer_y), f"{index}. {description}", fill="#62666d", font=font(14))
     return canvas
 
 
@@ -102,6 +170,7 @@ def main() -> int:
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--before-dir", type=Path)
     parser.add_argument("--after-dir", type=Path)
+    parser.add_argument("--skip-parity", action="store_true")
     args = parser.parse_args()
 
     manifest = json.loads(args.manifest.read_text(encoding="utf-8"))
@@ -112,34 +181,35 @@ def main() -> int:
 
     parity_images: list[Image.Image] = []
     parity_paths: list[Path] = []
-    for pair in pairs:
-        android_path = args.root / pair["android"]
-        ios_path = args.root / pair["ios"]
-        if not android_path.exists() or not ios_path.exists():
-            missing = [str(path) for path in (android_path, ios_path) if not path.exists()]
-            raise SystemExit("missing parity screenshot(s): " + ", ".join(missing))
-        with Image.open(android_path) as android, Image.open(ios_path) as ios:
-            image = parity_pair(android, ios, f"{pair.get('id', '')} · {pair.get('feature', '')}")
-        output = args.output_dir / f"parity-{pair['id']}.png"
-        image.save(output, format="PNG", optimize=True)
-        parity_paths.append(output)
-        parity_images.append(image)
+    if not args.skip_parity:
+        for pair in pairs:
+            android_path = args.root / pair["android"]
+            ios_path = args.root / pair["ios"]
+            if not android_path.exists() or not ios_path.exists():
+                missing = [str(path) for path in (android_path, ios_path) if not path.exists()]
+                raise SystemExit("missing parity screenshot(s): " + ", ".join(missing))
+            with Image.open(android_path) as android, Image.open(ios_path) as ios:
+                image = parity_pair(android, ios, f"{pair.get('id', '')} · {pair.get('feature', '')}")
+            output = args.output_dir / f"parity-{pair['id']}.png"
+            image.save(output, format="PNG", optimize=True)
+            parity_paths.append(output)
+            parity_images.append(image)
 
-    for sheet_index in range(0, len(parity_images), 9):
-        sheet = contact_sheet(parity_images[sheet_index : sheet_index + 9], columns=3)
-        sheet.save(args.output_dir / f"00-android-ios-parity-{sheet_index // 9 + 1:02d}.png", format="PNG", optimize=True)
+        for sheet_index in range(0, len(parity_images), 9):
+            sheet = contact_sheet(parity_images[sheet_index : sheet_index + 9], columns=3)
+            sheet.save(args.output_dir / f"00-android-ios-parity-{sheet_index // 9 + 1:02d}.png", format="PNG", optimize=True)
 
     ui_paths: list[Path] = []
     if args.before_dir and args.after_dir:
         ui_images: list[Image.Image] = []
-        for stem, title in UI_SCENES:
+        for stem, title, callouts in UI_SCENES:
             before_path = args.before_dir / f"{stem}.png"
             after_path = args.after_dir / f"{stem}.png"
             if not before_path.exists() or not after_path.exists():
                 missing = [str(path) for path in (before_path, after_path) if not path.exists()]
                 raise SystemExit("missing UI screenshot(s): " + ", ".join(missing))
             with Image.open(before_path) as before, Image.open(after_path) as after:
-                image = ios_before_after(before, after, title)
+                image = ios_before_after(before, after, title, callouts)
             output = args.output_dir / f"ui-{stem}-before-after.png"
             image.save(output, format="PNG", optimize=True)
             ui_paths.append(output)

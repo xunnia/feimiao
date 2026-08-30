@@ -254,28 +254,16 @@ struct TransactionListView: View {
                 }
             }
             ForEach(projection.sections, id: \.day) { section in
-                Section {
-                    ForEach(section.items) { transaction in
-                        TransactionRow(
-                            transaction: transaction,
-                            refundAmount: projection.refundByID[transaction.stableID] ?? 0
-                        )
-                            .contentShape(Rectangle())
-                            .onTapGesture { editingTransaction = transaction }
-                    }
-                    .onDelete { offsets in
-                        for index in offsets {
-                            let transaction = section.items[index]
-                            do {
-                                try LedgerStore.delete(transaction, in: context)
-                            } catch {
-                                deleteError = error.localizedDescription
-                            }
-                        }
-                    }
-                } header: {
-                    sectionHeader(section)
-                }
+                TransactionDayCard(
+                    day: section.day,
+                    items: section.items,
+                    refundByID: projection.refundByID,
+                    onSelect: { editingTransaction = $0 },
+                    onDelete: deleteTransaction
+                )
+                .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 6, trailing: 16))
+                .listRowSeparator(.hidden)
+                .listRowBackground(Color.clear)
             }
         }
         .listStyle(.plain)
@@ -319,19 +307,12 @@ struct TransactionListView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private func sectionHeader(_ section: TransactionDaySection) -> some View {
-        return HStack {
-            Text(section.day, format: .dateTime.month().day().weekday())
-            Spacer()
-            if section.expense > 0 {
-                Text("支出 \(MoneyFormat.string(section.expense, currencyCode: section.currencyCode))")
-            }
-            if section.income > 0 {
-                Text("收入 \(MoneyFormat.string(section.income, currencyCode: section.currencyCode))")
-                    .foregroundStyle(Color.income)
-            }
+    private func deleteTransaction(_ transaction: MoneyTransaction) {
+        do {
+            try LedgerStore.delete(transaction, in: context)
+        } catch {
+            deleteError = error.localizedDescription
         }
-        .font(.footnote)
     }
 
     private func parsedAmount(_ text: String) -> Decimal? {
@@ -704,8 +685,20 @@ struct TransactionRow: View {
             )
 
             VStack(alignment: .leading, spacing: 2) {
-                Text(card.title)
-                    .font(.body)
+                HStack(spacing: 6) {
+                    Text(card.title)
+                        .font(.body)
+                        .lineLimit(1)
+                    if refundAmount > 0 {
+                        Text("已退 \(MoneyFormat.string(refundAmount, currencyCode: transaction.currencyCode))")
+                            .font(.caption2.weight(.medium))
+                            .foregroundStyle(Color.orange)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(Color.orange.opacity(0.12), in: .rect(cornerRadius: 5))
+                            .lineLimit(1)
+                    }
+                }
                 if !detail.isEmpty {
                     Text(detail)
                         .font(.caption)
@@ -732,18 +725,19 @@ struct TransactionRow: View {
             Spacer()
             VStack(alignment: .trailing, spacing: 2) {
                 if refundAmount > 0, transaction.amount > 0 {
-                    Text(MoneyFormat.string(transaction.amount, currencyCode: transaction.currencyCode))
-                        .font(.caption.monospacedDigit())
-                        .foregroundStyle(.secondary)
-                        .strikethrough()
-                }
-                Text(amountText)
-                    .font(.body.monospacedDigit().weight(.medium))
-                    .foregroundStyle(amountColor)
-                if refundAmount > 0 {
-                    Text("已退 \(MoneyFormat.string(refundAmount, currencyCode: transaction.currencyCode))")
-                        .font(.caption2)
-                        .foregroundStyle(Color.orange)
+                    HStack(alignment: .firstTextBaseline, spacing: 6) {
+                        Text(MoneyFormat.string(transaction.amount, currencyCode: transaction.currencyCode))
+                            .font(.caption.monospacedDigit())
+                            .foregroundStyle(.secondary)
+                            .strikethrough()
+                        Text(amountText)
+                            .font(.body.monospacedDigit().weight(.medium))
+                            .foregroundStyle(amountColor)
+                    }
+                } else {
+                    Text(amountText)
+                        .font(.body.monospacedDigit().weight(.medium))
+                        .foregroundStyle(amountColor)
                 }
             }
         }
@@ -790,7 +784,7 @@ struct TransactionRow: View {
     private var amountColor: Color {
         if transaction.isExcluded { return .secondary }
         switch transaction.kind {
-        case .expense: return netAmount <= 0 ? .secondary : (netAmount < transaction.amount ? Color.orange : Color.expense)
+        case .expense: return Color.expense
         case .income: return Color.income
         case .transfer: return .secondary
         }

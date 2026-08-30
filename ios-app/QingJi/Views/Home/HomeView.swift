@@ -31,6 +31,7 @@ struct HomeView: View {
     @State private var displayedMonth = AppClock.now
     @State private var monthPickerDate = AppClock.now
     @State private var showMonthPicker = false
+    @State private var editingTransaction: MoneyTransaction?
     @State private var projectionCache = IOSLedgerProjectionCache()
     @State private var statisticsCache = IOSStatisticsProjectionCache()
 
@@ -76,7 +77,7 @@ struct HomeView: View {
                 ) ? now : displayedMonth
             )
         }
-        let recentTransactions = Array(snapshot.includedTransactions.filter { transaction in
+        let visibleTransactions = snapshot.includedTransactions.filter { transaction in
             guard transaction.refundOfID == nil,
                   Calendar.current.isDate(transaction.date, equalTo: displayedMonth, toGranularity: .month)
             else { return false }
@@ -85,10 +86,10 @@ struct HomeView: View {
             case .expense: return transaction.kind == .expense
             case .income: return transaction.kind == .income
             }
-        }.prefix(8))
+        }
 
         ScrollView {
-                VStack(alignment: .leading, spacing: 18) {
+                LazyVStack(alignment: .leading, spacing: 18) {
                     summaryCard(
                         summary: summary,
                         totalBudget: totalBudget,
@@ -98,7 +99,7 @@ struct HomeView: View {
                     )
                     filterSegment
                     recentSection(
-                        transactions: recentTransactions,
+                        transactions: visibleTransactions,
                         refundByID: snapshot.includedRefundTotals
                     )
                 }
@@ -122,6 +123,7 @@ struct HomeView: View {
                     } label: {
                         Image(systemName: "line.3.horizontal")
                             .font(.title3)
+                            .foregroundStyle(.primary)
                     }
                     .liquidGlassCircleControl()
                     .accessibilityLabel("打开菜单")
@@ -132,6 +134,7 @@ struct HomeView: View {
                 } label: {
                     Image(systemName: "magnifyingglass")
                         .font(.title3)
+                        .foregroundStyle(.primary)
                 }
                 .liquidGlassCircleControl()
                 .accessibilityLabel("搜索明细")
@@ -159,6 +162,7 @@ struct HomeView: View {
                             .font(.caption.weight(.semibold))
                     }
                     .font(.subheadline.weight(.medium))
+                    .foregroundStyle(.primary)
                 }
                 .liquidGlassPillControl(horizontalPadding: 14, minWidth: 116)
                 .accessibilityLabel("当前账本：\(selectedBookName)")
@@ -173,6 +177,9 @@ struct HomeView: View {
                     showMonthPicker = false
                 }
                 .presentationDetents([.medium])
+            }
+            .sheet(item: $editingTransaction) { transaction in
+                EditTransactionSheet(transaction: transaction)
             }
         .toolbar(.hidden, for: .tabBar)
     }
@@ -248,15 +255,17 @@ struct HomeView: View {
                 }
             }
         }
-        .padding(16)
+        .padding(.horizontal, 16)
+        .padding(.top, 12)
+        .padding(.bottom, 14)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .glassEffect(.regular.tint(Color.orange.opacity(0.08)), in: .rect(cornerRadius: 20))
+        .glassEffect(.regular, in: .rect(cornerRadius: 20))
         .overlay(alignment: .topTrailing) {
             Image(status?.isOverBudget == true ? "MascotOverspend" : "MascotIdle")
                 .resizable()
                 .scaledToFit()
-                .frame(width: 118, height: 118)
-                .offset(x: 6, y: -10)
+                .frame(width: 96, height: 96)
+                .offset(x: 6, y: -8)
                 .allowsHitTesting(false)
         }
     }
@@ -266,36 +275,47 @@ struct HomeView: View {
         refundByID: [UUID: Decimal]
     ) -> some View {
         VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                Text("最近账目")
-                    .font(.headline)
-                Spacer()
-                Button("全部") { router.selectedTab = .transactions }
-                    .font(.subheadline)
-                    .liquidGlassPillControl(horizontalPadding: 14, minHeight: 40)
-            }
-
             if transactions.isEmpty {
-                ContentUnavailableView("还没有账目", systemImage: "tray", description: Text("记下第一笔，肥喵就开始帮你整理"))
+                ContentUnavailableView(
+                    emptyTitle,
+                    systemImage: "tray",
+                    description: Text("切换上方筛选，或记下这个月的第一笔")
+                )
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 20)
             } else {
-                VStack(spacing: 0) {
-                    ForEach(Array(transactions.enumerated()), id: \.element.persistentModelID) { index, transaction in
-                        TransactionRow(
-                            transaction: transaction,
-                            refundAmount: refundByID[transaction.stableID] ?? 0
-                        )
-                            .padding(.vertical, 8)
-                        if index < transactions.count - 1 {
-                            Divider()
-                        }
-                    }
+                ForEach(dayGroups(transactions)) { group in
+                    TransactionDayCard(
+                        day: group.day,
+                        items: group.items,
+                        refundByID: refundByID,
+                        onSelect: { editingTransaction = $0 }
+                    )
                 }
-                .padding(.horizontal, 14)
-                .glassEffect(.regular, in: .rect(cornerRadius: 18))
             }
         }
+    }
+
+    private var emptyTitle: LocalizedStringKey {
+        switch transactionFilter {
+        case .all: return "这个月还没有账目"
+        case .expense: return "这个月还没有支出记录"
+        case .income: return "这个月还没有收入记录"
+        }
+    }
+
+    private func dayGroups(_ transactions: [MoneyTransaction]) -> [HomeTransactionDayGroup] {
+        let calendar = Calendar.current
+        return Dictionary(grouping: transactions) {
+            calendar.startOfDay(for: $0.date)
+        }
+        .map { day, items in
+            HomeTransactionDayGroup(
+                day: day,
+                items: items.sorted { $0.date > $1.date }
+            )
+        }
+        .sorted { $0.day > $1.day }
     }
 
     private func startOfMonth(_ date: Date) -> Date {
@@ -303,6 +323,12 @@ struct HomeView: View {
             from: Calendar.current.dateComponents([.year, .month], from: date)
         ) ?? date
     }
+}
+
+private struct HomeTransactionDayGroup: Identifiable {
+    let day: Date
+    let items: [MoneyTransaction]
+    var id: Date { day }
 }
 
 private struct BudgetSummaryBody: View {
@@ -319,22 +345,45 @@ private struct BudgetSummaryBody: View {
 
     private var percentText: String {
         let raw = budget > 0 ? MoneyFormat.double(status.spentThisMonth) / MoneyFormat.double(budget) : 0
-        return raw > 1 ? "100%+" : "\(Int((raw * 100).rounded()))%"
+        return "\(max(0, Int((raw * 100).rounded())))%"
+    }
+
+    private var remainingDays: Int {
+        let calendar = Calendar.current
+        let now = AppClock.now
+        let day = calendar.component(.day, from: now)
+        let count = calendar.range(of: .day, in: .month, for: now)?.count ?? day
+        return max(1, count - day + 1)
+    }
+
+    private var footerText: String {
+        let amount = MoneyFormat.string(budget, currencyCode: currencyCode)
+        return isCurrentMonth ? "\(amount) · 剩 \(remainingDays) 天" : amount
+    }
+
+    private var remainingText: String {
+        let absolute = status.remaining < 0 ? -status.remaining : status.remaining
+        let amount = MoneyFormat.string(absolute, currencyCode: currencyCode)
+        return status.isOverBudget ? "-\(amount)" : amount
     }
 
     var body: some View {
         HStack(alignment: .center, spacing: 12) {
             VStack(alignment: .leading, spacing: 10) {
-                Label(
-                    isCurrentMonth
-                        ? (status.isOverBudget ? "月预算已超" : "月预算剩余")
-                        : (status.isOverBudget ? "该月超预算" : "该月预算剩余"),
-                    systemImage: "rectangle.portrait.and.arrow.right"
-                )
-                .font(.caption)
+                HStack(spacing: 7) {
+                    Capsule()
+                        .fill(Color.accentColor)
+                        .frame(width: 2, height: 12)
+                    Text(
+                        isCurrentMonth
+                            ? (status.isOverBudget ? "月预算已超" : "月预算剩余")
+                            : (status.isOverBudget ? "该月超预算" : "该月预算剩余")
+                    )
+                }
+                .font(.caption.weight(.light))
                 .foregroundStyle(.secondary)
-                Text(MoneyFormat.string(status.remaining, currencyCode: currencyCode))
-                    .font(.system(size: 27, weight: .medium, design: .rounded))
+                Text(remainingText)
+                    .font(.system(size: 29, weight: .medium, design: .rounded))
                     .foregroundStyle(status.isOverBudget ? Color.warning : .primary)
                     .lineLimit(1)
                     .minimumScaleFactor(0.65)
@@ -346,14 +395,16 @@ private struct BudgetSummaryBody: View {
                     metric(title: "支出", amount: summary.totalExpense, color: .primary)
                 }
 
-                ProgressView(value: ratio)
-                    .tint(status.isOverBudget ? Color.warning : Color.accentColor)
+                BudgetGradientProgressBar(value: ratio)
                 HStack {
                     Text(percentText)
                         .font(.caption.weight(.medium))
-                        .foregroundStyle(status.isOverBudget ? Color.warning : Color.accentColor)
+                        .foregroundStyle(Color.accentColor)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Color.accentColor.opacity(0.10), in: .rect(cornerRadius: 6))
                     Spacer()
-                    Text("预算 \(MoneyFormat.string(budget, currencyCode: currencyCode))")
+                    Text(footerText)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -364,6 +415,7 @@ private struct BudgetSummaryBody: View {
                 currencyCode: currencyCode,
                 isCurrentMonth: isCurrentMonth
             )
+            .offset(y: 8)
         }
     }
 
@@ -371,11 +423,41 @@ private struct BudgetSummaryBody: View {
         VStack(alignment: .leading, spacing: 2) {
             Text(title).font(.caption).foregroundStyle(.secondary)
             Text(MoneyFormat.string(amount, currencyCode: currencyCode))
-                .font(.subheadline.monospacedDigit())
+                .font(.subheadline.monospacedDigit().weight(.regular))
                 .foregroundStyle(color)
                 .lineLimit(1)
                 .minimumScaleFactor(0.65)
         }
+    }
+}
+
+private struct BudgetGradientProgressBar: View {
+    let value: Double
+
+    var body: some View {
+        GeometryReader { proxy in
+            let clamped = min(max(value, 0), 1)
+            ZStack(alignment: .leading) {
+                Capsule()
+                    .fill(Color.secondary.opacity(0.14))
+                Capsule()
+                    .fill(
+                        LinearGradient(
+                            colors: [
+                                Color(red: 0.48, green: 0.68, blue: 0.38),
+                                Color(red: 0.90, green: 0.69, blue: 0.20),
+                                Color.warning,
+                            ],
+                            startPoint: .leading,
+                            endPoint: .trailing
+                        )
+                    )
+                    .frame(width: proxy.size.width * clamped)
+            }
+        }
+        .frame(height: 7)
+        .accessibilityLabel("预算进度")
+        .accessibilityValue("\(Int(min(max(value, 0), 1) * 100))%")
     }
 }
 
@@ -447,15 +529,21 @@ private struct TodayAllowanceRing: View {
             : 1
     }
 
+    private var ringColor: Color {
+        status.todayAllowance < 0
+            ? Color.warning
+            : Color(red: 0.48, green: 0.68, blue: 0.38)
+    }
+
     var body: some View {
         ZStack {
             Circle()
-                .stroke(Color.accentColor.opacity(0.14), lineWidth: 9)
+                .stroke(ringColor.opacity(0.18), lineWidth: 7)
             Circle()
                 .trim(from: 0, to: value)
                 .stroke(
-                    status.todayAllowance < 0 ? Color.warning : Color.accentColor,
-                    style: StrokeStyle(lineWidth: 9, lineCap: .round)
+                    ringColor,
+                    style: StrokeStyle(lineWidth: 7, lineCap: .round)
                 )
                 .rotationEffect(.degrees(-90))
             VStack(spacing: 2) {
@@ -528,6 +616,7 @@ private struct HomeRecordInputBar: View {
                     Button(action: openSelectedEntry) {
                         Image(systemName: "plus")
                             .font(.headline.weight(.semibold))
+                            .foregroundStyle(.primary)
                     }
                     .liquidGlassCircleControl()
                     .glassEffectID("entry-add", in: glassNamespace)
@@ -543,6 +632,7 @@ private struct HomeRecordInputBar: View {
                             Text(isAIMode ? "AI 记账" : "手动记账")
                         }
                         .font(.subheadline)
+                        .foregroundStyle(.primary)
                         .padding(.horizontal, 12)
                         .frame(minHeight: 44)
                     }
@@ -555,9 +645,9 @@ private struct HomeRecordInputBar: View {
                     Button(action: openSelectedEntry) {
                         Image(systemName: "arrow.up")
                             .font(.headline.weight(.semibold))
+                            .foregroundStyle(.primary)
                     }
-                    .liquidGlassPrimaryCircleControl()
-                    .tint(Color.accentColor)
+                    .liquidGlassCircleControl()
                     .glassEffectID("entry-open", in: glassNamespace)
                     .accessibilityLabel("打开\(isAIMode ? "AI 记账" : "手动记账")")
                 }
@@ -566,7 +656,7 @@ private struct HomeRecordInputBar: View {
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
         .glassEffect(
-            .regular.tint(Color.accentColor.opacity(0.10)),
+            .regular,
             in: .rect(cornerRadius: 26)
         )
         .padding(.horizontal, 12)

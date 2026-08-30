@@ -1,6 +1,9 @@
+import Foundation
 import SwiftUI
 import SwiftData
 import WidgetKit
+import PhotosUI
+import UIKit
 import QingJiCore
 
 struct SettingsView: View {
@@ -10,13 +13,48 @@ struct SettingsView: View {
     @Environment(AppRouter.self) private var router
 
     @State private var settingsMessage: String?
+    @State private var showProfileEditor = false
     @AppStorage("qingji.repaymentReminderEnabled") private var repaymentReminderEnabled = true
     @AppStorage("qingji.widgetPrivacyMode") private var widgetPrivacyMode = false
+    @AppStorage("qingji.profileNickname") private var profileNickname = ""
+    @AppStorage("qingji.profileAvatarPath") private var profileAvatarPath = ""
 
     var body: some View {
         @Bindable var router = router
 
         List {
+                Section {
+                    Button {
+                        showProfileEditor = true
+                    } label: {
+                        VStack(spacing: 10) {
+                            ProfileAvatar(
+                                nickname: profileNickname,
+                                relativePath: profileAvatarPath,
+                                size: 72
+                            )
+                            .overlay(alignment: .bottomTrailing) {
+                                Image(systemName: "pencil")
+                                    .font(.caption.weight(.semibold))
+                                    .frame(width: 24, height: 24)
+                                    .background(.background, in: .circle)
+                                    .overlay { Circle().stroke(Color(uiColor: .separator), lineWidth: 0.5) }
+                            }
+
+                            Text(profileNickname.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                                 ? "点击设置昵称"
+                                 : profileNickname)
+                                .font(.subheadline.weight(.medium))
+                                .foregroundStyle(profileNickname.isEmpty ? .secondary : .primary)
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 8)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(profileNickname.isEmpty ? "点击设置昵称和头像" : "编辑个人资料：\(profileNickname)")
+                }
+                .listRowBackground(Color.clear)
+
                 Section {
                     NavigationLink {
                         AIProviderSettingsView()
@@ -86,6 +124,13 @@ struct SettingsView: View {
             .navigationTitle("设置")
             .navigationDestination(item: $router.settingsPushTarget) { target in
                 settingsDestinationView(target)
+            }
+            .sheet(isPresented: $showProfileEditor) {
+                ProfileEditorSheet(
+                    nickname: $profileNickname,
+                    avatarPath: $profileAvatarPath
+                )
+                .presentationDetents([.medium])
             }
             .alert("设置", isPresented: Binding(
                 get: { settingsMessage != nil },
@@ -157,6 +202,144 @@ struct SettingsView: View {
         Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0"
     }
 
+}
+
+private struct ProfileAvatar: View {
+    let nickname: String
+    let relativePath: String
+    let size: CGFloat
+
+    var body: some View {
+        Group {
+            if let image {
+                Image(uiImage: image)
+                    .resizable()
+                    .scaledToFill()
+            } else if let initial = nickname.trimmingCharacters(in: .whitespacesAndNewlines).first {
+                Text(String(initial))
+                    .font(.title2.weight(.semibold))
+                    .foregroundStyle(Color.accentColor)
+            } else {
+                Image(systemName: "person.fill")
+                    .font(.title2)
+                    .foregroundStyle(Color.accentColor)
+            }
+        }
+        .frame(width: size, height: size)
+        .clipShape(.circle)
+        .glassEffect(.regular.tint(Color.accentColor.opacity(0.10)), in: .circle)
+    }
+
+    private var image: UIImage? {
+        guard let url = AttachmentStore.url(for: relativePath) else { return nil }
+        return UIImage(contentsOfFile: url.path)
+    }
+}
+
+private struct ProfileEditorSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @Binding var nickname: String
+    @Binding var avatarPath: String
+
+    @State private var draftNickname: String
+    @State private var draftAvatarPath: String
+    @State private var photoItem: PhotosPickerItem?
+    @State private var errorMessage: String?
+
+    init(nickname: Binding<String>, avatarPath: Binding<String>) {
+        _nickname = nickname
+        _avatarPath = avatarPath
+        _draftNickname = State(initialValue: nickname.wrappedValue)
+        _draftAvatarPath = State(initialValue: avatarPath.wrappedValue)
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    HStack {
+                        Spacer()
+                        PhotosPicker(selection: $photoItem, matching: .images) {
+                            ProfileAvatar(
+                                nickname: draftNickname,
+                                relativePath: draftAvatarPath,
+                                size: 86
+                            )
+                            .overlay(alignment: .bottomTrailing) {
+                                Image(systemName: "camera.fill")
+                                    .font(.caption)
+                                    .frame(width: 28, height: 28)
+                                    .background(.background, in: .circle)
+                            }
+                        }
+                        .buttonStyle(.plain)
+                        Spacer()
+                    }
+                }
+                .listRowBackground(Color.clear)
+
+                Section("昵称") {
+                    TextField("昵称", text: $draftNickname)
+                        .textInputAutocapitalization(.never)
+                        .onChange(of: draftNickname) { _, value in
+                            if value.count > 20 {
+                                draftNickname = String(value.prefix(20))
+                            }
+                        }
+                }
+            }
+            .scrollContentBackground(.hidden)
+            .liquidGlassCanvas()
+            .navigationTitle("个人资料")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("取消") { dismiss() }
+                        .liquidGlassPillControl(horizontalPadding: 12, minHeight: 40)
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("保存") {
+                        nickname = draftNickname.trimmingCharacters(in: .whitespacesAndNewlines)
+                        avatarPath = draftAvatarPath
+                        dismiss()
+                    }
+                    .liquidGlassPillControl(horizontalPadding: 12, minHeight: 40)
+                }
+            }
+            .onChange(of: photoItem) { _, item in
+                guard let item else { return }
+                Task {
+                    do {
+                        guard let data = try await item.loadTransferable(type: Data.self),
+                              let image = UIImage(data: data),
+                              let jpeg = image.jpegData(compressionQuality: 0.88) else {
+                            throw ProfileImageError.invalidImage
+                        }
+                        let path = try AttachmentStore.save(data: jpeg, fileExtension: "jpg")
+                        await MainActor.run { draftAvatarPath = path }
+                    } catch {
+                        await MainActor.run { errorMessage = error.localizedDescription }
+                    }
+                }
+            }
+            .alert("头像", isPresented: Binding(
+                get: { errorMessage != nil },
+                set: { if !$0 { errorMessage = nil } }
+            )) {
+                Button("好") { errorMessage = nil }
+            } message: {
+                Text(errorMessage ?? "")
+            }
+        }
+    }
+}
+
+private enum ProfileImageError: LocalizedError {
+    case invalidImage
+
+    var errorDescription: String? {
+        "这张图片暂时不能作为头像"
+    }
 }
 
 /// 把导入的账单流水落库：按来源匹配账户、按名称匹配分类，匹配不到用「其他」。
