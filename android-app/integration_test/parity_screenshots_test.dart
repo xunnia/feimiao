@@ -290,8 +290,10 @@ PageRoute<T> _parityPageRoute<T>(Widget page, {bool opaque = true}) => PageRoute
       // material bottom sheet rather than a Scaffold. Keep direct parity
       // pushes under the same transparent Material ancestor.
       opaque: opaque,
-      pageBuilder: (_, __, ___) => Material(
-        color: Colors.transparent,
+      pageBuilder: (context, _, __) => Material(
+        color: opaque
+            ? Theme.of(context).scaffoldBackgroundColor
+            : Colors.transparent,
         child: page,
       ),
       transitionDuration: Duration.zero,
