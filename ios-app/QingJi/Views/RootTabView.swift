@@ -114,7 +114,7 @@ struct RootTabView: View {
         }
         .sheet(isPresented: $demoQuickAddPresented) {
             QuickAddView()
-                .presentationDetents([.fraction(0.92), .large])
+                .presentationDetents([.fraction(0.84), .large])
                 .presentationDragIndicator(.hidden)
                 .presentationCornerRadius(28)
         }

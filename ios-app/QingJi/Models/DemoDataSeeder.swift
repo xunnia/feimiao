@@ -66,13 +66,22 @@ enum DemoDataSeeder {
 
     private static func insertCategories(context: ModelContext) -> [String: TxCategory] {
         var map: [String: TxCategory] = [:]
+        // The Android parity database preserves its long-lived top-category
+        // insertion order. Keep CI tie-breaking identical while leaving child
+        // and income category order on the shared CategorySeed sequence.
+        let androidExpenseTopOrder = [
+            "dining", "shopping", "transport", "car", "housing",
+            "entertainment", "medical", "education", "insurance", "gifts", "other",
+        ]
         for (index, seed) in CategorySeed.all.enumerated() {
+            let sortOrder = androidExpenseTopOrder.firstIndex(of: seed.key)
+                ?? (androidExpenseTopOrder.count + index)
             let cat = TxCategory(
                 key: seed.key,
                 name: seed.nameZh,
                 symbol: seed.symbol,
                 kind: seed.kind,
-                sortOrder: index,
+                sortOrder: sortOrder,
                 emoji: seed.emoji,
                 parentKey: seed.parentKey
             )

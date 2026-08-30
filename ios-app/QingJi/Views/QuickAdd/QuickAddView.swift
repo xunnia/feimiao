@@ -260,7 +260,7 @@ struct QuickAddView: View {
                             Button(book.name) { selectedBook = book }
                         }
                     } label: {
-                        chipLabel(effectiveBook?.name ?? "账本", systemImage: "book.closed")
+                        chipSurface(effectiveBook?.name ?? "账本", systemImage: "book.closed")
                     }
                     .buttonStyle(.plain)
                 }
@@ -270,7 +270,7 @@ struct QuickAddView: View {
                             Button(account.name) { selectedAccountID = account.stableID }
                         }
                     } label: {
-                        chipLabel(effectiveAccount?.name ?? "账户", systemImage: "wallet.pass")
+                        chipSurface(effectiveAccount?.name ?? "账户", systemImage: "wallet.pass")
                     }
                     .buttonStyle(.plain)
                 }
@@ -313,6 +313,7 @@ struct QuickAddView: View {
                         .foregroundStyle(.secondary)
                 }
             }
+            .foregroundStyle(kind == .income ? Color.income : Color.primary)
             .padding(.horizontal, 16)
             .padding(.top, 11)
             .padding(.bottom, 8)
@@ -386,24 +387,31 @@ struct QuickAddView: View {
         action: @escaping () -> Void
     ) -> some View {
         Button(action: action) {
-            chipLabel(title, systemImage: systemImage)
-        }
-        .buttonStyle(.plain)
-        .foregroundStyle(selected ? (warning ? Color.warning : Color.accentColor) : .secondary)
-        .background(
-            selected
-                ? (warning ? Color.warning.opacity(0.12) : Color.accentColor.opacity(0.12))
-                : Color(uiColor: .secondarySystemBackground),
-            in: .capsule
-        )
-        .overlay {
-            Capsule().stroke(
-                selected
-                    ? (warning ? Color.warning.opacity(0.60) : Color.accentColor.opacity(0.60))
-                    : Color(uiColor: .separator).opacity(0.42),
-                lineWidth: 0.6
+            chipSurface(
+                title,
+                systemImage: systemImage,
+                selected: selected,
+                warning: warning
             )
         }
+        .buttonStyle(.plain)
+    }
+
+    private func chipSurface(
+        _ title: String,
+        systemImage: String,
+        selected: Bool = false,
+        warning: Bool = false
+    ) -> some View {
+        let tint = warning ? Color.warning : Color.accentColor
+        return chipLabel(title, systemImage: systemImage)
+            .foregroundStyle(selected ? tint : Color.primary.opacity(0.78))
+            .glassEffect(
+                selected
+                    ? .regular.tint(tint.opacity(0.30)).interactive()
+                    : .regular.interactive(),
+                in: .capsule
+            )
     }
 
     private func chipLabel(_ title: String, systemImage: String) -> some View {
