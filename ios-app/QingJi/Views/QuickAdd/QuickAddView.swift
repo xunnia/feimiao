@@ -211,14 +211,14 @@ struct QuickAddView: View {
     }
 
     private var manualHeader: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: 8) {
             Picker("类型", selection: $kind) {
                 Text("支出").tag(TransactionKind.expense)
                 Text("收入").tag(TransactionKind.income)
                 Text("转账").tag(TransactionKind.transfer)
             }
             .pickerStyle(.segmented)
-            .frame(width: 198)
+            .frame(width: 190)
 
             Spacer(minLength: 0)
 
@@ -230,7 +230,7 @@ struct QuickAddView: View {
                     .lineLimit(1)
                     .fixedSize(horizontal: true, vertical: false)
             }
-            .liquidGlassPillControl(horizontalPadding: 10, minHeight: 44)
+            .liquidGlassPillControl(horizontalPadding: 9, minHeight: 44)
             .tint(.primary)
             .accessibilityLabel("切换到 AI 记账")
 
@@ -249,7 +249,7 @@ struct QuickAddView: View {
     }
 
     private var chipsRow: some View {
-        ViewThatFits(in: .horizontal) {
+        ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 6) {
                 manualChip(title: dateLabel, systemImage: "calendar") {
                     showDatePicker = true
@@ -293,29 +293,8 @@ struct QuickAddView: View {
                 }
             }
             .padding(.horizontal, 12)
-
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 8) {
-                    manualChip(title: dateLabel, systemImage: "calendar") { showDatePicker = true }
-                    if kind != .transfer {
-                        manualChip(title: effectiveAccount?.name ?? "账户", systemImage: "wallet.pass") {
-                            showMoreDetails = true
-                        }
-                    }
-                    manualChip(title: "标签", systemImage: "tag") { showMoreDetails = true }
-                    if kind == .expense {
-                        manualChip(title: "待报销", systemImage: "receipt", selected: isReimbursable, warning: true) {
-                            isReimbursable.toggle()
-                        }
-                    }
-                    manualChip(title: "不计入", systemImage: "eye.slash", selected: isExcluded) {
-                        isExcluded.toggle()
-                    }
-                }
-                .padding(.horizontal, 12)
-            }
         }
-        .frame(height: 38)
+        .frame(height: 36)
     }
 
     private var amountNoteCard: some View {
@@ -429,9 +408,9 @@ struct QuickAddView: View {
 
     private func chipLabel(_ title: String, systemImage: String) -> some View {
         Label(title, systemImage: systemImage)
-            .font(.subheadline)
+            .font(.caption)
             .lineLimit(1)
-            .padding(.horizontal, 10)
+            .padding(.horizontal, 8)
             .frame(height: 32)
     }
 
