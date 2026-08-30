@@ -8,7 +8,14 @@
 
 项目范围、优先级、交付门禁、路线图、风险与产物保留规则统一见 `../PROJECT_MANAGEMENT.md`。本文件负责“当前实现状态”，不再承担完整项目管理职责。
 
-## 0.0.3 GPT OAuth/JSON 最终链路状态（v1.277.0+291）
+## 0.0.4 GPT OAuth Android 默认流程状态（v1.278.0+292）
+
+- Android 普通“GPT OAuth 授权”不再先请求地区受限的设备授权码；改回 Cockpit 默认的 `auth.openai.com/oauth/authorize` PKCE 浏览器流程。
+- 原生回调保活、账号选择隔离、Token 交换/刷新、模型目录和 JSON 导入能力保留；设备码 API 只作为显式可选能力。
+- 验证：OAuth/JSON/Responses/设置定向 `113/113`、Flutter 全量 `1171/1171`、Dart analyze 无 error、Android Kotlin 编译和 Release 构建成功；APK `C:\src\xunni-codex\ci-artifacts\releases\feimiao-codex-v1.278.0-292.apk`，SHA256 `0F893CD39C9386BA4C6D325A6B3C417BA1E3CB311B997BD38400BFA2A6C672FD`，16 KiB/V2/固定证书 gate 通过。
+- 无在线 Android ADB，真机 VPN、Chrome 行为、localhost 回调和实机观感仍需安装后确认。
+
+## 0.0.3 GPT OAuth/JSON 最终链路状态（v1.277.0+291，历史）
 
 - 官方 ChatGPT/Codex Responses 拒绝 `stream:false`；普通问答、主页记账、报告和连接测试现在在 OAuth Responses 传输层统一强制 `stream:true`，并保留官方请求元数据。
 - 本机真实 Cockpit 完整备份解析 10 个 Codex 账号且无警告；指定测试账号的官方模型目录和 Responses 均真实返回 200，肥喵主页 `LlmQuery` 与喵助手 `LlmQueryV2` 都解析出 `OK`。

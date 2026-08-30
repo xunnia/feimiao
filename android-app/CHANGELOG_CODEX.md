@@ -1,3 +1,9 @@
+## 2026-08-30 v1.278.0+292 GPT OAuth Android 默认流程修复
+
+- **修复截图中的 403**：Android“GPT OAuth 授权”不再先调用地区受限的设备授权码接口；恢复 Cockpit 默认的 `auth.openai.com/oauth/authorize` PKCE 浏览器流程。原生 localhost 回调保活、账号选择隔离、Token 交换/刷新和模型目录获取继续保留。
+- **设备授权边界**：设备码 API 仍保留为显式服务能力，但不再作为普通授权按钮的默认入口，避免手机网络出口直接收到 `unsupported_country_region` 后在授权页前失败。
+- **验证**：OAuth/JSON/Responses/设置定向回归 `113/113`；Flutter 全量 `1171/1171`；Dart analyze 无 error；Android `:app:compileDebugKotlin` 与 Release 构建成功；APK 包名、版本、16 KiB 对齐、APK V2 和固定证书 gate 通过。Cockpit 源码对照确认默认入口为 PKCE 浏览器授权；真实手机安装复测仍需目标设备。
+- **APK**：`C:\src\xunni-codex\ci-artifacts\releases\feimiao-codex-v1.278.0-292.apk`，117,543,349 字节，SHA256 `0F893CD39C9386BA4C6D325A6B3C417BA1E3CB311B997BD38400BFA2A6C672FD`。
 
 ## 2026-08-30 v1.277.0+291 GPT OAuth/JSON 导入最终链路修复
 

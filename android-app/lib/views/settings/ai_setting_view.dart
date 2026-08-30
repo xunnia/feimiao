@@ -449,11 +449,11 @@ class _AiAccountSettingsPageState extends State<_AiAccountSettingsPage> {
       return;
     }
 
-    if (Platform.isAndroid) {
-      await _openOpenAiDeviceAuthorization(provider, draft);
-      return;
-    }
-
+    // Keep the normal button on Cockpit's browser PKCE flow. Device
+    // authorization is an explicit optional API, but its user-code endpoint
+    // is region-gated and returns unsupported_country_region on some mobile
+    // exits before a browser/VPN can be used. Android still gets the native
+    // callback keep-alive and isolated Chrome session below.
     if (_busy.contains(provider.id)) return;
     setState(() => _busy.add(provider.id));
     try {
@@ -501,81 +501,6 @@ class _AiAccountSettingsPageState extends State<_AiAccountSettingsPage> {
         showAppToast(
           context,
           'GPT 授权失败：${_shortError(error)}。也可以粘贴回调地址重试。',
-          icon: Icons.error_outline,
-        );
-      }
-    } finally {
-      if (mounted) setState(() => _busy.remove(provider.id));
-    }
-  }
-
-  Future<void> _openOpenAiDeviceAuthorization(
-    AiConfiguredProvider provider,
-    _ProviderDraft draft,
-  ) async {
-    if (_busy.contains(provider.id)) return;
-    setState(() => _busy.add(provider.id));
-    try {
-      final session = await OpenAiCodexOAuth.service.startDeviceAuth(
-        providerId: provider.id,
-      );
-      await Clipboard.setData(ClipboardData(text: session.userCode));
-      if (!mounted) {
-        await OpenAiCodexOAuth.service.cancel();
-        return;
-      }
-      final proceed = await showConfirmDialog(
-        context,
-        title: 'GPT 设备授权',
-        message: '授权码 ${session.userCode} 已复制。\n'
-            '打开官方页面后粘贴授权码并选择账号；此方式不使用 localhost 回调。',
-        confirmText: '打开授权页',
-      );
-      if (!proceed || !mounted) {
-        await OpenAiCodexOAuth.service.cancel();
-        return;
-      }
-      final verificationUri = Uri.parse(session.verificationUrl);
-      final isolated = await OpenAiCodexOAuthKeepAlive.openEphemeralBrowser(
-        verificationUri.toString(),
-      );
-      final incognito = !isolated &&
-          await OpenAiCodexOAuthKeepAlive.openIncognitoBrowser(
-            verificationUri.toString(),
-          );
-      final chrome = !isolated &&
-          !incognito &&
-          await OpenAiCodexOAuthKeepAlive.openChromeBrowser(
-            verificationUri.toString(),
-          );
-      final opened = isolated ||
-          incognito ||
-          chrome ||
-          await launchUrl(
-            verificationUri,
-            mode: openAiOAuthLaunchMode(),
-          );
-      if (!opened) {
-        await OpenAiCodexOAuth.service.cancel();
-        if (mounted) {
-          showAppToast(context, '无法打开 GPT 设备授权页', icon: Icons.error_outline);
-        }
-        return;
-      }
-      if (mounted) {
-        showAppToast(
-          context,
-          '授权码已复制，完成网页授权后返回肥喵记账',
-          icon: Icons.info_outline,
-        );
-      }
-      final tokens = await session.completion;
-      await _finishOpenAiOAuth(provider, draft, tokens);
-    } catch (error) {
-      if (mounted) {
-        showAppToast(
-          context,
-          'GPT 设备授权失败：${_shortError(error)}',
           icon: Icons.error_outline,
         );
       }

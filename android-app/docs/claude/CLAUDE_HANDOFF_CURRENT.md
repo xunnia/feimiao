@@ -1,10 +1,17 @@
 # 肥喵记账 Codex 当前交接文档
 
-更新时间：2026-08-30（GPT OAuth/JSON 最终链路修复，v1.277.0+291；本轮无在线 Android 设备）
+更新时间：2026-08-30（GPT OAuth Android 默认流程修复，v1.278.0+292；本轮无在线 Android 设备）
 当前 Android 工程：`C:\src\xunni-codex\android-app`  
 新会话第一入口：`docs/claude/CLAUDE_START_HERE.md`
 
 > 本文只保留当前有效状态。历史流水看 `CHANGELOG_CODEX.md` 和 git 历史。
+
+## -1.0.9. 2026-08-30 GPT OAuth Android 默认流程修复（v1.278.0+292）
+
+- Android 普通“GPT OAuth 授权”恢复 Cockpit 默认的浏览器 PKCE 流程，不再先调用地区受限的 device-auth user-code 接口；设备码 API 保留但不作为默认入口。
+- Android 继续使用原生 localhost 回调保活、Ephemeral/无痕 Chrome、`prompt=select_account`、Token 交换/刷新和模型目录获取；目标是避免手机直连出口在授权页前收到 `unsupported_country_region`。
+- 验证：OAuth/JSON/Responses/设置定向 `113/113`、Flutter 全量 `1171/1171`、Dart analyze 无 error、Android Kotlin 编译和 Release 构建成功；APK `C:\src\xunni-codex\ci-artifacts\releases\feimiao-codex-v1.278.0-292.apk`，SHA256 `0F893CD39C9386BA4C6D325A6B3C417BA1E3CB311B997BD38400BFA2A6C672FD`，16 KiB/V2/固定证书 gate 通过。
+- 当前无在线 Android ADB，真机 VPN、Chrome Custom Tab、回调和实机观感仍需目标手机安装后复测。
 
 ## -1.0.8. 2026-08-30 GPT OAuth/JSON 最终链路修复（v1.277.0+291）
 
