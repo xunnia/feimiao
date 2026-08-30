@@ -66,22 +66,13 @@ enum DemoDataSeeder {
 
     private static func insertCategories(context: ModelContext) -> [String: TxCategory] {
         var map: [String: TxCategory] = [:]
-        // The Android parity database preserves its long-lived top-category
-        // insertion order. Keep CI tie-breaking identical while leaving child
-        // and income category order on the shared CategorySeed sequence.
-        let androidExpenseTopOrder = [
-            "dining", "shopping", "transport", "car", "housing",
-            "entertainment", "medical", "education", "insurance", "gifts", "other",
-        ]
         for (index, seed) in CategorySeed.all.enumerated() {
-            let sortOrder = androidExpenseTopOrder.firstIndex(of: seed.key)
-                ?? (androidExpenseTopOrder.count + index)
             let cat = TxCategory(
                 key: seed.key,
                 name: seed.nameZh,
                 symbol: seed.symbol,
                 kind: seed.kind,
-                sortOrder: sortOrder,
+                sortOrder: index,
                 emoji: seed.emoji,
                 parentKey: seed.parentKey
             )
@@ -297,7 +288,11 @@ enum DemoDataSeeder {
     ) {
         let bank = accounts.first { $0.kind == .bankCard } ?? accounts[0]
         let calendar = Calendar.current
-        let startDate = calendar.date(byAdding: .day, value: 3, to: calendar.startOfDay(for: AppClock.now)) ?? AppClock.now
+        var dueComponents = calendar.dateComponents([.year, .month], from: AppClock.now)
+        dueComponents.month = (dueComponents.month ?? 1) + 1
+        dueComponents.day = 30
+        dueComponents.hour = 12
+        let startDate = calendar.date(from: dueComponents) ?? AppClock.now
 
         context.insert(RecurringRule(
             amount: 3200,

@@ -983,7 +983,10 @@ Future<void> _ensureFixture(AppRepository repo) async {
       bookId: bookID,
       note: '房租',
       period: RecurPeriod.monthly,
-      startDate: now.add(const Duration(days: 3)),
+      // Keep the rule visible without materializing a ¥3,200 transaction
+      // during CI. The fixture date is Aug 27 while the runner clock may be
+      // Aug 31; using the next month keeps Android and iOS totals identical.
+      startDate: DateTime(now.year, now.month + 1, 30, 12),
     );
   }
   await _ensureReport(repo);
