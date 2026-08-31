@@ -10,6 +10,7 @@ import QingJiCore
 enum LedgerStore {
     enum Error: LocalizedError, Equatable {
         case invalidAmount
+        case invalidAccount
         case invalidTransfer
         case invalidSettlementAccount
         case refundExceedsRemaining
@@ -19,6 +20,7 @@ enum LedgerStore {
         var errorDescription: String? {
             switch self {
             case .invalidAmount: return "金额必须大于 0。"
+            case .invalidAccount: return "账户不存在、已归档或不可用于新账目。"
             case .invalidTransfer: return "转账需要选择两个不同的账户。"
             case .invalidSettlementAccount: return "到账账户不存在或币种不一致。"
             case .refundExceedsRemaining: return "退款金额不能超过剩余可退金额。"
@@ -182,9 +184,13 @@ enum LedgerStore {
                 guard let account = draft.account,
                       let toAccount = draft.toAccount,
                       account.stableID != toAccount.stableID,
+                      isUsableAccount(account),
+                      isUsableAccount(toAccount),
                       account.currencyCode == toAccount.currencyCode else {
                     throw Error.invalidTransfer
                 }
+            } else if let account = draft.account, !isUsableAccount(account) {
+                throw Error.invalidAccount
             }
         }
 
@@ -240,9 +246,14 @@ enum LedgerStore {
         let normalizedAmount = MoneyNormalization.roundToCents(amount)
         guard normalizedAmount > 0 else { throw Error.invalidAmount }
         guard transaction.refundOfID == nil else { throw Error.immutableOffset }
+        if let account, !isUsableAccount(account) {
+            throw Error.invalidAccount
+        }
         if transaction.kind == .transfer {
             guard let account, let toAccount,
                   account.stableID != toAccount.stableID,
+                  isUsableAccount(account),
+                  isUsableAccount(toAccount),
                   account.currencyCode == toAccount.currencyCode else {
                 throw Error.invalidTransfer
             }
@@ -277,6 +288,10 @@ enum LedgerStore {
         transaction.isExcluded = isExcluded
         transaction.updatedAt = Date()
         try context.save()
+    }
+
+    private static func isUsableAccount(_ account: Account) -> Bool {
+        !account.isDeleted && account.status == .active && !account.currencyCode.isEmpty
     }
 
     /// 轻量修改分类，供 AI 记账卡和明细页复用；不改变金额、日期、账户或

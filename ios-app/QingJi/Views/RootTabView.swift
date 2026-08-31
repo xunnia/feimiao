@@ -37,7 +37,7 @@ struct RootTabView: View {
                     case .settings:
                         SettingsView()
                     case .importReview:
-                        ImportReviewView(result: ImportReviewView.demoResult()) { _, _ in }
+                        importReviewDestination
                     }
                 }
         }
@@ -123,6 +123,21 @@ struct RootTabView: View {
                 .presentationDragIndicator(.hidden)
                 .presentationCornerRadius(28)
         }
+    }
+
+    @ViewBuilder
+    private var importReviewDestination: some View {
+        if Self.usesDemoImportReview(environment: ProcessInfo.processInfo.environment) {
+            // The screenshot runner needs a deterministic review surface, but
+            // this fixture must never be reachable from a production entry.
+            ImportReviewView(result: ImportReviewView.demoResult()) { _, _ in }
+        } else {
+            ImportExportView()
+        }
+    }
+
+    static func usesDemoImportReview(environment: [String: String]) -> Bool {
+        environment["QINGJI_DEMO"] == "1"
     }
 
     private func syncPath() {

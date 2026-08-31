@@ -216,25 +216,27 @@ jobs:
           test -d "$APP_PATH"
           xcrun simctl install "$DEVICE" "$APP_PATH"
           mkdir -p ci-artifacts/ios-screenshots
+          runtime_log="ios-screenshot-runtime.log"
+          : > "$runtime_log"
           shoot() {
             local screen="$1" name="$2"
             local output="ci-artifacts/ios-screenshots/$name.png"
             local attempt
             for attempt in 1 2 3; do
-              echo "CAPTURE_BEGIN name=$name screen=$screen attempt=$attempt"
-              xcrun simctl terminate "$DEVICE" com.qingji.app 2>/dev/null || true
+              echo "CAPTURE_BEGIN name=$name screen=$screen attempt=$attempt" | tee -a "$runtime_log"
+              xcrun simctl terminate "$DEVICE" com.qingji.app >> "$runtime_log" 2>&1 || true
               sleep 1
               if ! SIMCTL_CHILD_QINGJI_DEMO=1 \
                 SIMCTL_CHILD_QINGJI_DEMO_NOW="2026-08-27T12:00:00+08:00" \
                 SIMCTL_CHILD_QINGJI_SCREEN="$screen" \
-                xcrun simctl launch "$DEVICE" com.qingji.app >/dev/null; then
+                xcrun simctl launch "$DEVICE" com.qingji.app >> "$runtime_log" 2>&1; then
                 echo "::warning::CAPTURE_LAUNCH_FAILED name=$name screen=$screen attempt=$attempt"
                 continue
               fi
               # Some SwiftData destinations perform their first query during
               # cold launch. Give the route time to render before capture.
               sleep 14
-              if ! xcrun simctl io "$DEVICE" screenshot "$output" || ! test -s "$output"; then
+              if ! xcrun simctl io "$DEVICE" screenshot "$output" >> "$runtime_log" 2>&1 || ! test -s "$output"; then
                 echo "::warning::CAPTURE_SCREENSHOT_FAILED name=$name screen=$screen attempt=$attempt"
                 continue
               fi
@@ -246,7 +248,7 @@ jobs:
             done
             echo "::error::CAPTURE_FAILED_AFTER_RETRIES name=$name screen=$screen"
             xcrun simctl spawn "$DEVICE" log show --last 30s --style compact \
-              --predicate 'process == "QingJi"' || true
+              --predicate 'process == "QingJi"' >> "$runtime_log" 2>&1 || true
             return 1
           }
           shoot home 01-home
@@ -303,7 +305,9 @@ jobs:
         if: always()
         with:
           name: ios-parity-screenshot-diagnostics
-          path: xcodebuild-parity.log
+          path: |
+            xcodebuild-parity.log
+            ios-screenshot-runtime.log
           if-no-files-found: warn
 
   compare:

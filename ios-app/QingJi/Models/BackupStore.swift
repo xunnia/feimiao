@@ -850,6 +850,16 @@ enum BackupStore {
             return try importArchive(data, mode: mode, into: context)
         }
 
+        // JSON restores mutate the current context before the final save. Keep
+        // the mutation transactional just like the ZIP staging path; a decode,
+        // relationship, or save failure must not leave a half-restored ledger.
+        var committed = false
+        defer {
+            if save && !committed {
+                context.rollback()
+            }
+        }
+
         let package: FeimiaoBackupPackage
         do {
             package = try decoder.decode(FeimiaoBackupPackage.self, from: data)
@@ -1768,6 +1778,7 @@ enum BackupStore {
         if save {
             try context.save()
         }
+        committed = true
         return BackupImportSummary(
             books: package.books.count,
             accounts: package.accounts.count,

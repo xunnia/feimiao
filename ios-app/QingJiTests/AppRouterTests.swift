@@ -21,4 +21,14 @@ final class AppRouterTests: XCTestCase {
         XCTAssertEqual(RootTabView.initialPath(for: "transactions"), [.transactions])
         XCTAssertEqual(RootTabView.initialPath(for: "stats/month"), [.statistics])
     }
+
+    func testImportReviewFixtureIsRestrictedToDemoLaunches() {
+        XCTAssertTrue(
+            RootTabView.usesDemoImportReview(environment: ["QINGJI_DEMO": "1"])
+        )
+        XCTAssertFalse(
+            RootTabView.usesDemoImportReview(environment: ["QINGJI_DEMO": "0"])
+        )
+        XCTAssertFalse(RootTabView.usesDemoImportReview(environment: [:]))
+    }
 }
