@@ -237,6 +237,19 @@ void main() {
           'list-wrapper@example.com');
     });
 
+    test('does not unwrap unrelated profile metadata beside a top-level key',
+        () {
+      final result = AiAccountJsonCodec.parse(jsonEncode({
+        'profile': {'name': 'Local profile'},
+        'api_key': 'sk-profile-sibling',
+      }));
+
+      expect(result.accounts, hasLength(1));
+      expect(result.accounts.single.authMethod, AiAuthMethod.apiKey);
+      expect(result.accounts.single.apiKey, 'sk-profile-sibling');
+      expect(result.warnings, isEmpty);
+    });
+
     test('parses a standalone exported_data credential object', () {
       final result = AiAccountJsonCodec.parse(jsonEncode({
         'exported_data': {

@@ -1137,28 +1137,18 @@ class AiAccountJsonCodec {
     }
     if (value is! Map) return false;
     final map = Map<String, dynamic>.from(value);
+    // A wrapper is only document-shaped when it contains an account
+    // collection or a credential itself. `profile`/`user` are deliberately
+    // excluded from this first-level check: ordinary account metadata often
+    // has those keys alongside a real top-level API key. Treating the
+    // metadata as the document would discard the sibling credential before
+    // `_parseRoot` gets a chance to read it.
     const containerKeys = {
       'accounts',
       'providers',
       'items',
       'exported_data',
       'platforms',
-      'data',
-      'payload',
-      'json',
-      'content',
-      'tokens',
-      'token',
-      'token_data',
-      'tokenData',
-      'credentials',
-      'credential',
-      'session',
-      'session_json',
-      'sessionJson',
-      'account',
-      'profile',
-      'user',
     };
     if (map.keys.any(containerKeys.contains)) return true;
     const credentialKeys = {
@@ -1179,7 +1169,37 @@ class AiAccountJsonCodec {
       'key',
       'token',
     };
-    return map.keys.any(credentialKeys.contains);
+    if (map.keys.any(credentialKeys.contains)) return true;
+
+    // Nested account/session envelopes remain valid when the nested value is
+    // itself document-shaped. Recurse only through known wrapper keys so a
+    // random `profile`/`user` metadata object cannot trigger an unwrap.
+    const nestedKeys = {
+      'data',
+      'payload',
+      'json',
+      'content',
+      'tokens',
+      'token',
+      'token_data',
+      'tokenData',
+      'credentials',
+      'credential',
+      'session',
+      'session_json',
+      'sessionJson',
+      'account',
+      'profile',
+      'user',
+    };
+    for (final key in nestedKeys) {
+      final nested = map[key];
+      if ((nested is Map || nested is List) &&
+          _looksLikeEmbeddedDocument(nested)) {
+        return true;
+      }
+    }
+    return false;
   }
 
   static String? _bearerToken(Map<String, dynamic>? headers) {

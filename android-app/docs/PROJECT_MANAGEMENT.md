@@ -19,16 +19,16 @@ scope: Android Flutter 主工程
 | 平台 | Android 为当前主交付平台；仓库另有独立 `ios-app`，不与 Android 批次混做 |
 | 技术栈 | Flutter / Dart、Provider、SQLite(sqflite)、Android 原生 Worker/Widget |
 | 当前分支 | `feature/ai-model-selector` |
-| 当前工作版本 | `1.283.0+297`，build tag `b0901-297` |
+| 当前工作版本 | `1.284.0+298`，build tag `b0901-298` |
 | 数据库版本 | v49 |
 | Android 身份 | `com.qingji.qingji.codex`，min SDK 24，compile/target SDK 36 |
 | 当前批次 | GPT OAuth/Cockpit JSON 高风险边界与共享 AI 传输收口；AI 与 Chats 既有能力保持不变 |
-| 自动验证 | Dart analyze 无 error（91 条既有 warning/info）；OAuth/JSON/传输定向 **48/48**、导入 Controller/仓库定向 **32/32**；串行全量 Flutter **1194/1194**；本机实际 Cockpit 完整备份解析 9 个账号（6 个 OAuth、3 个 API Key），0 警告 |
+| 自动验证 | Dart analyze 无 error（91 条既有 warning/info）；OAuth/JSON/传输/账号验证/导入/仓库/Responses 定向 **289/289**；串行全量 Flutter **1197/1197**；本机实际 Cockpit 完整备份解析 9 个账号（6 个 OAuth、3 个 API Key），0 警告 |
 | 运行态验证 | 本轮使用本地假服务器/协议回归验证 OAuth、模型目录、Responses、JSON 导入和最小 `ping`；本轮无在线 ADB 设备；真实手机 Token、模型、Responses、VPN 出口、Chrome 账号选择和回调仍待用户设备 |
 | 当前 APK | `C:\src\xunni-codex\android-app\build\app\outputs\flutter-apk\app-release.apk` |
-| 当前 APK SHA256 | `8e02474d7bf81e60bc6201b0ffff60024d5fd16cef95057b78ea30944c8a9cd9`（117,658,041 字节） |
-| 回退 APK | `C:\src\xunni-codex\ci-artifacts\releases\feimiao-codex-v1.282.0-296.apk` |
-| 发布状态 | 已发布线上 `releaseId=v297-8e02474d7bf8`；公网 `version.json` 与本地 SHA256 一致，KV 保留当前 `v297` 与上一版 `v296`（13 keys） |
+| 当前 APK SHA256 | `717F0D107DA45B12ED63A549A554A46D1E63F2561135668A9085114FD8BCD567`（117,658,041 字节） |
+| 回退版本 | 线上 Cloudflare KV `v1.283.0+297`（releaseId `v297-8e02474d7bf8`，发布脚本保留为上一版本） |
+| 发布状态 | 待提交后发布 1.284.0+298；发布脚本只保留当前版本与上一版本 |
 | 工作树状态 | Android AI/OAuth/JSON/架构批次已提交 `e998ebc` 并推送；iOS、截图和指定 parity 测试改动保持隔离 |
 
 ### 1.1 当前最近三个门

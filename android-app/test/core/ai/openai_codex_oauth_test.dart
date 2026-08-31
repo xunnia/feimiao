@@ -324,6 +324,64 @@ void main() {
     );
   });
 
+  test('403 region response uses browser token exchange bridge', () async {
+    final bridge = _FakeBrowserBridge(
+      result: jsonEncode({
+        'status': 200,
+        'body': jsonEncode({
+          'access_token': 'browser-access',
+          'refresh_token': 'browser-refresh',
+          'chatgpt_account_id': 'acct-browser',
+        }),
+      }),
+    );
+    final service = OpenAiCodexOAuthService(
+      browserBridge: bridge,
+      platformIsAndroid: true,
+    );
+
+    final tokens = await service.exchangeCodeViaBrowserForTest(
+      response: http.Response(
+        jsonEncode({'error': 'unsupported_country_region'}),
+        403,
+      ),
+      flowId: 'flow-browser',
+      code: 'authorization-code',
+      verifier: 'pkce-verifier',
+      redirectUri: OpenAiCodexOAuth.redirectUri,
+    );
+
+    expect(tokens?.accessToken, 'browser-access');
+    expect(tokens?.refreshToken, 'browser-refresh');
+    expect(tokens?.accountId, 'acct-browser');
+    expect(bridge.openCalls, 1);
+    expect(bridge.takeCalls, 1);
+    expect(bridge.flowId, 'flow-browser');
+    expect(bridge.code, 'authorization-code');
+    expect(bridge.verifier, 'pkce-verifier');
+  });
+
+  test('browser token exchange does not handle unrelated forbidden responses',
+      () async {
+    final bridge = _FakeBrowserBridge(result: '{}');
+    final service = OpenAiCodexOAuthService(
+      browserBridge: bridge,
+      platformIsAndroid: true,
+    );
+
+    final tokens = await service.exchangeCodeViaBrowserForTest(
+      response: http.Response(jsonEncode({'error': 'invalid_grant'}), 403),
+      flowId: 'flow-invalid',
+      code: 'authorization-code',
+      verifier: 'pkce-verifier',
+      redirectUri: OpenAiCodexOAuth.redirectUri,
+    );
+
+    expect(tokens, isNull);
+    expect(bridge.openCalls, 0);
+    expect(bridge.takeCalls, 0);
+  });
+
   test('Codex OAuth config emits the required Responses headers', () {
     const config = AiProviderConfig(
       type: AiProviderType.custom,
@@ -719,6 +777,37 @@ void main() {
     expect(refreshed.oauthRefreshToken, 'first-refresh');
     expect(refreshed.oauthAccountId, 'acct-refresh-only');
   });
+}
+
+class _FakeBrowserBridge implements OpenAiCodexOAuthBrowserBridge {
+  final String result;
+  int openCalls = 0;
+  int takeCalls = 0;
+  String? flowId;
+  String? code;
+  String? verifier;
+
+  _FakeBrowserBridge({required this.result});
+
+  @override
+  Future<bool> openTokenExchange({
+    required String flowId,
+    required String code,
+    required String verifier,
+    required String redirectUri,
+  }) async {
+    openCalls++;
+    this.flowId = flowId;
+    this.code = code;
+    this.verifier = verifier;
+    return true;
+  }
+
+  @override
+  Future<String?> takeTokenExchangeResult({String? flowId}) async {
+    takeCalls++;
+    return result;
+  }
 }
 
 class _TrackingHttpOverrides extends io.HttpOverrides {

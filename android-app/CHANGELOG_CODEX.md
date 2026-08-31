@@ -1,3 +1,12 @@
+## 2026-09-01 v1.284.0+298 OAuth/JSON 最终审计与交付
+
+- **JSON 安全边界**：已解码的嵌套 `data`/`payload`/`content` 仍可展开；普通 `profile`/`user` 元数据不会误吞同级 API key；`exported_data` 单对象、数组、JSONL、BOM/UTF-16、嵌套 token 与显式 `auth_mode` 规则保持兼容。
+- **OAuth 浏览器兜底**：403 `unsupported_country_region` 只在 Android 且错误明确时交给本机浏览器桥接；PKCE code/verifier/flowId 通过 App 私有文件和 loopback 传递，不进入 URL 或第三方服务；测试可注入桥接验证成功与拒绝其他 403。
+- **验证**：Flutter 全量 **1197/1197**；OAuth/JSON/传输/账号验证/导入/仓库/Responses 定向 **289/289**；Dart analyze 0 error（91 条既有 warning/info）；Android `:app:compileDebugKotlin` 成功；Release identity gate 通过（16 KiB、APK V2、固定证书）。
+- **APK**：`C:\src\xunni-codex\android-app\build\app\outputs\flutter-apk\app-release.apk`，117,658,041 字节，SHA256 `717F0D107DA45B12ED63A549A554A46D1E63F2561135668A9085114FD8BCD567`。
+- **线上发布**：待提交后发布到 Cloudflare KV；发布脚本只保留当前版本与上一版本。
+- **实机边界**：当前无在线 Android ADB；Chrome 账号选择、手机 VPN 出口、localhost 回调、安装冷启动和实机字体/输入法仍需目标设备复测；未使用 Plus 账号。
+
 ## 2026-09-01 v1.283.0+297 Cockpit JSON 边界与 AI 传输收口
 
 - **JSON 解析补齐**：支持已解码的 `data`/`payload`/`content` 包装对象和列表，以及 `exported_data` 直接承载单个凭据对象；保持只导入 Codex 凭据并避免把普通元数据误当账号。

@@ -4,7 +4,7 @@ import 'dart:io';
 import 'dart:math';
 
 import 'package:crypto/crypto.dart';
-import 'package:flutter/foundation.dart' show FlutterError;
+import 'package:flutter/foundation.dart' show FlutterError, visibleForTesting;
 import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 
@@ -496,6 +496,46 @@ class OpenAiCodexOAuthKeepAlive {
   }
 }
 
+/// Browser-side bridge used only for the region-restricted token exchange.
+///
+/// The default implementation delegates to the Android MethodChannel. Keeping
+/// this small port injectable lets the 403/browser hand-off be exercised with
+/// a local fake without opening a real browser or exposing credentials in a
+/// test URL.
+abstract interface class OpenAiCodexOAuthBrowserBridge {
+  Future<bool> openTokenExchange({
+    required String flowId,
+    required String code,
+    required String verifier,
+    required String redirectUri,
+  });
+
+  Future<String?> takeTokenExchangeResult({String? flowId});
+}
+
+class _MethodChannelOAuthBrowserBridge
+    implements OpenAiCodexOAuthBrowserBridge {
+  const _MethodChannelOAuthBrowserBridge();
+
+  @override
+  Future<bool> openTokenExchange({
+    required String flowId,
+    required String code,
+    required String verifier,
+    required String redirectUri,
+  }) =>
+      OpenAiCodexOAuthKeepAlive.openBrowserTokenExchange(
+        flowId: flowId,
+        code: code,
+        verifier: verifier,
+        redirectUri: redirectUri,
+      );
+
+  @override
+  Future<String?> takeTokenExchangeResult({String? flowId}) =>
+      OpenAiCodexOAuthKeepAlive.takeTokenExchangeResult(flowId: flowId);
+}
+
 class OpenAiCodexOAuthTokens {
   final String accessToken;
   final String? refreshToken;
@@ -600,6 +640,8 @@ class OpenAiCodexOAuthService {
   static const _deviceDefaultPollSeconds = 5;
 
   final AiHttpTransport _transport;
+  final OpenAiCodexOAuthBrowserBridge _browserBridge;
+  final bool _platformIsAndroid;
   // Keep one listener per loopback family. Browsers are free to resolve
   // `localhost` to either 127.0.0.1 or ::1, while Android devices differ in
   // whether an IPv6 socket accepts IPv4-mapped connections.
@@ -655,8 +697,15 @@ class OpenAiCodexOAuthService {
 
   bool get pendingUsesDeviceCode => _pending?.isDeviceAuth ?? false;
 
-  OpenAiCodexOAuthService({http.Client? client, AiHttpTransport? transport})
-      : _transport = transport ?? AiHttpTransport(client: client);
+  OpenAiCodexOAuthService({
+    http.Client? client,
+    AiHttpTransport? transport,
+    OpenAiCodexOAuthBrowserBridge? browserBridge,
+    @visibleForTesting bool? platformIsAndroid,
+  })  : _transport = transport ?? AiHttpTransport(client: client),
+        _browserBridge =
+            browserBridge ?? const _MethodChannelOAuthBrowserBridge(),
+        _platformIsAndroid = platformIsAndroid ?? Platform.isAndroid;
 
   Future<OpenAiCodexOAuthSession> start({
     String? authorizationUrl,
@@ -684,7 +733,7 @@ class OpenAiCodexOAuthService {
     // service. This keeps localhost:1455 alive even if FlutterActivity and
     // the Dart isolate are reclaimed while Chrome is authorizing. Desktop and
     // test runners retain the original Dart listener.
-    final nativePort = Platform.isAndroid
+    final nativePort = _platformIsAndroid
         ? await _startNative(
             generation: generation,
             flowId: state,
@@ -694,7 +743,7 @@ class OpenAiCodexOAuthService {
     if (generation != _flowGeneration) {
       throw const OpenAiCodexOAuthException('OAuth 授权已被新的授权流程替换');
     }
-    if (Platform.isAndroid && nativePort == null) {
+    if (_platformIsAndroid && nativePort == null) {
       // A Dart HttpServer is not durable while the browser is foregrounded on
       // Android. Refuse to launch rather than opening a URL that will later
       // land on ERR_CONNECTION_REFUSED at localhost:1455.
@@ -840,7 +889,7 @@ class OpenAiCodexOAuthService {
       return true;
     }
     final pendingPort = Uri.tryParse(pending.redirectUri)?.port;
-    if (Platform.isAndroid && pendingPort != null && pendingPort > 0) {
+    if (_platformIsAndroid && pendingPort != null && pendingPort > 0) {
       final nativePort = await _startNative(
         generation: generation,
         ports: <int>[pendingPort, _fallbackCallbackPort],
@@ -1598,6 +1647,26 @@ class OpenAiCodexOAuthService {
     return value.length <= 180 ? value : '${value.substring(0, 177)}...';
   }
 
+  /// Drives the Android-only browser exchange through an injected bridge.
+  /// This is intentionally a test hook: production callers use
+  /// [_exchangeCode] after a real localhost callback, while unit tests can
+  /// verify the 403 hand-off without a browser or a device.
+  @visibleForTesting
+  Future<OpenAiCodexOAuthTokens?> exchangeCodeViaBrowserForTest({
+    required http.Response response,
+    required String flowId,
+    required String code,
+    required String verifier,
+    required String redirectUri,
+  }) =>
+      _exchangeCodeViaBrowserIfNeeded(
+        response: response,
+        flowId: flowId,
+        code: code,
+        verifier: verifier,
+        redirectUri: redirectUri,
+      );
+
   /// Token endpoints occasionally return a transient gateway/rate-limit
   /// response while the browser session is still settling. Retry only those
   /// statuses and transport failures; invalid codes/credentials (4xx other
@@ -1708,11 +1777,11 @@ class OpenAiCodexOAuthService {
     required String verifier,
     required String redirectUri,
   }) async {
-    if (!Platform.isAndroid || flowId == null || flowId.trim().isEmpty) {
+    if (!_platformIsAndroid || flowId == null || flowId.trim().isEmpty) {
       return null;
     }
     if (!_isUnsupportedCountryResponse(response)) return null;
-    final opened = await OpenAiCodexOAuthKeepAlive.openBrowserTokenExchange(
+    final opened = await _browserBridge.openTokenExchange(
       flowId: flowId,
       code: code,
       verifier: verifier,
@@ -1721,7 +1790,7 @@ class OpenAiCodexOAuthService {
     if (!opened) return null;
     final deadline = DateTime.now().add(const Duration(seconds: 45));
     while (DateTime.now().isBefore(deadline)) {
-      final raw = await OpenAiCodexOAuthKeepAlive.takeTokenExchangeResult(
+      final raw = await _browserBridge.takeTokenExchangeResult(
         flowId: flowId,
       );
       if (raw != null && raw.trim().isNotEmpty) {
