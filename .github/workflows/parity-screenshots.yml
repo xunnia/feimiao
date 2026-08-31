@@ -146,6 +146,11 @@ jobs:
             fi
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
+      - name: Verify Android parity screenshot surfaces
+        if: success()
+        run: |
+          python3 ios-app/tools/check_android_parity_screenshots.py \
+            android-app/outputs/parity/*.png
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -285,6 +290,8 @@ jobs:
           shoot settings/display 35-display
 
           python3 ios-app/tools/check_screenshot_nonempty.py \
+            ci-artifacts/ios-screenshots/*.png
+          python3 ios-app/tools/check_screenshot_distinct.py \
             ci-artifacts/ios-screenshots/*.png
       - uses: actions/upload-artifact@v4
         if: always()

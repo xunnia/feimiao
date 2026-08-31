@@ -152,10 +152,13 @@ struct RootTabView: View {
     }
 
     private static func initialPath() -> [AppRouter.Route] {
-        guard let screen = ProcessInfo.processInfo.environment["QINGJI_SCREEN"],
-              !screen.isEmpty else {
-            return []
-        }
+        initialPath(for: ProcessInfo.processInfo.environment["QINGJI_SCREEN"])
+    }
+
+    /// Pure route mapping used by XCTest. Screenshot existence alone cannot
+    /// prove that a cold launch reached the requested page.
+    static func initialPath(for screen: String?) -> [AppRouter.Route] {
+        guard let screen, !screen.isEmpty else { return [] }
         if screen == "settings/ai" {
             return [.settings]
         }

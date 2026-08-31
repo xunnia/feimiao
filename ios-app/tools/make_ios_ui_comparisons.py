@@ -87,8 +87,32 @@ def font(size: int, bold: bool = False) -> ImageFont.ImageFont:
     return ImageFont.load_default()
 
 
+def flatten_alpha(image: Image.Image) -> Image.Image:
+    """Composite transparent captures onto the app's warm page gradient."""
+    rgba = image.convert("RGBA")
+    alpha = rgba.getchannel("A")
+    if alpha.getextrema() == (255, 255):
+        return rgba.convert("RGB")
+
+    width, height = rgba.size
+    background = Image.new("RGB", (width, height))
+    draw = ImageDraw.Draw(background)
+    top = (250, 224, 176)
+    bottom = (255, 253, 247)
+    denominator = max(height - 1, 1)
+    for y in range(height):
+        progress = y / denominator
+        color = tuple(
+            round(top[channel] + (bottom[channel] - top[channel]) * progress)
+            for channel in range(3)
+        )
+        draw.line((0, y, width, y), fill=color)
+    background.paste(rgba, mask=alpha)
+    return background
+
+
 def fit(image: Image.Image, max_height: int) -> Image.Image:
-    image = image.convert("RGB")
+    image = flatten_alpha(image)
     if image.height <= max_height:
         return image.copy()
     width = round(image.width * max_height / image.height)

@@ -277,6 +277,7 @@ jobs:
           shoot "settings/display" "35-display"
 
           python3 ios-app/tools/check_screenshot_nonempty.py screenshots/*.png
+          python3 ios-app/tools/check_screenshot_distinct.py screenshots/*.png
 
           # 校验：35 张图若全部相同说明导航又失败了，直接让 CI 报错
           UNIQUE=$(md5 -q screenshots/*.png | sort -u | wc -l | tr -d ' ')

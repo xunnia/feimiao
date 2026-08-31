@@ -106,7 +106,10 @@ struct QuickAddView: View {
                     )
                 }
             }
-            .frame(maxHeight: 184)
+            // Five columns × two complete rows, matching Android's manual
+            // entry sheet. A taller viewport reveals the top of row three and
+            // makes the two products look like different screens.
+            .frame(height: kind == .transfer ? 174 : 154)
 
             chipsRow
                 .padding(.top, 8)
