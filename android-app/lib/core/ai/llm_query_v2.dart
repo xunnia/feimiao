@@ -833,10 +833,11 @@ $transactionsText''';
       body = _chatCompletionsStreamBody(config: config, messages: messages);
     }
 
-    // A stream owns its client for the complete response lifetime. This avoids
-    // reusing a poisoned keep-alive socket on the first request after resume;
-    // a bounded first-packet retry in askStream therefore gets a fresh socket.
-    final streamTransport = AiHttpTransport();
+    // Streams use the same transport boundary as buffered requests so proxy,
+    // PAC, timeout and route-refresh behavior cannot diverge by entry point.
+    // The bounded first-packet retry in askStream still prevents replay after
+    // any visible output.
+    final streamTransport = _transport;
     try {
       late http.StreamedResponse resp;
       try {
@@ -1080,7 +1081,8 @@ $transactionsText''';
             config.apiKey);
       }
     } finally {
-      streamTransport.close();
+      // The shared transport owns its lifecycle; the stream only owns the
+      // response body and is released by the HTTP client when consumed.
     }
   }
 

@@ -337,6 +337,12 @@ class AiAccountJsonCodec {
       return;
     }
 
+    final rootType = root['type']?.toString().toLowerCase() ?? '';
+    final rootSource = rootType.contains('sub2api') ||
+            root.containsKey('proxies') ||
+            root.containsKey('exported_at')
+        ? AiAccountJsonSource.sub2Api
+        : AiAccountJsonSource.generic;
     final rawAccounts = root['accounts'] ??
         root['providers'] ??
         root['items'] ??
@@ -348,12 +354,6 @@ class AiAccountJsonCodec {
         // catalogue accidentally pasted here still fails closed.
         root['data'];
     if (rawAccounts is List) {
-      final rootType = root['type']?.toString().toLowerCase() ?? '';
-      final rootSource = rootType.contains('sub2api') ||
-              root.containsKey('proxies') ||
-              root.containsKey('exported_at')
-          ? AiAccountJsonSource.sub2Api
-          : AiAccountJsonSource.generic;
       _parseAccountList(
         rawAccounts,
         source: rootSource,
@@ -367,6 +367,17 @@ class AiAccountJsonCodec {
     // than an array. Treat each map value as a candidate while preserving the
     // normal single-account/auth.json path when the values are not objects.
     if (rawAccounts is Map) {
+      // Standalone Cockpit transfers may put one credential-bearing account
+      // directly in `exported_data` (or `accounts`) instead of wrapping it in
+      // an array. Try the map itself before treating it as an id-keyed index.
+      final direct = _parseAccount(
+        Map<String, dynamic>.from(rawAccounts),
+        source: rootSource,
+      );
+      if (direct != null) {
+        accounts.add(direct);
+        return;
+      }
       final values = rawAccounts.values.whereType<Map>();
       if (values.isNotEmpty) {
         for (final value in values) {
@@ -391,9 +402,11 @@ class AiAccountJsonCodec {
 
     final tokens = _map(root['tokens']) ?? _map(root['token']);
     if (tokens != null || _value(root, const ['OPENAI_API_KEY']) != null) {
-      final merged = <String, dynamic>{...root, ...?tokens};
       final parsed =
-          _parseAccount(merged, source: AiAccountJsonSource.openAiAuth);
+          // Let _parseAccount flatten the token envelope itself. Merging it
+          // here would allow a stale nested auth_mode to overwrite an
+          // explicit mode on the root account record.
+          _parseAccount(root, source: AiAccountJsonSource.openAiAuth);
       if (parsed != null) {
         accounts.add(parsed);
       } else {
@@ -644,6 +657,20 @@ class AiAccountJsonCodec {
         _map(input['customHeaders']) ??
         _map(credentials['custom_headers']) ??
         _map(credentials['customHeaders']);
+    // Preserve an explicit mode written on the account record itself. Nested
+    // token/credential envelopes are often stale auxiliary data and must not
+    // silently change an API-key relay into OAuth (or vice versa).
+    final topLevelAuthMode = _string(
+      input,
+      const [
+        'auth_mode',
+        'authMode',
+        'openai_auth_mode',
+        'auth_type',
+        'authType',
+        'authProvider',
+      ],
+    );
 
     final accessToken = _string(merged, const [
           'access_token',
@@ -724,17 +751,20 @@ class AiAccountJsonCodec {
     // OPENAI_API_KEY is present creates an unusable provider with no access
     // token. A real token always wins, while a marker alone is only accepted
     // when no API key is present.
-    final explicitAuthMode = _string(
-          merged,
-          const [
-            'auth_mode',
-            'authMode',
-            'openai_auth_mode',
-            'auth_type',
-            'authType',
-            'authProvider',
-          ],
-        )?.toLowerCase() ??
+    final explicitAuthMode = (topLevelAuthMode?.trim().isNotEmpty == true
+                ? topLevelAuthMode
+                : _string(
+                    merged,
+                    const [
+                      'auth_mode',
+                      'authMode',
+                      'openai_auth_mode',
+                      'auth_type',
+                      'authType',
+                      'authProvider',
+                    ],
+                  ))
+            ?.toLowerCase() ??
         '';
     final rawType = _string(merged, const ['type'])?.toLowerCase() ?? '';
     final explicitApiKey = explicitAuthMode.contains('api') ||
@@ -1082,15 +1112,74 @@ class AiAccountJsonCodec {
     if (value is! Map) return value;
     for (final key in const ['data', 'payload', 'json', 'content']) {
       final candidate = value[key];
-      if (candidate is! String || candidate.trim().isEmpty) continue;
-      try {
-        final decoded = jsonDecode(candidate);
-        if (decoded is Map || decoded is List) return decoded;
-      } catch (_) {
-        // Continue looking for another recognized wrapper key.
+      Object? decodedCandidate = candidate;
+      if (candidate is String) {
+        if (candidate.trim().isEmpty) continue;
+        try {
+          decodedCandidate = jsonDecode(candidate);
+        } catch (_) {
+          // Continue looking for another recognized wrapper key.
+          continue;
+        }
       }
+      if (decodedCandidate is! Map && decodedCandidate is! List) continue;
+      // Only unwrap a document-shaped value. This preserves an account record
+      // that happens to carry an unrelated `data`/`content` metadata field.
+      if (!_looksLikeEmbeddedDocument(decodedCandidate)) continue;
+      return decodedCandidate;
     }
     return value;
+  }
+
+  static bool _looksLikeEmbeddedDocument(Object? value) {
+    if (value is List) {
+      return value.any(_looksLikeEmbeddedDocument);
+    }
+    if (value is! Map) return false;
+    final map = Map<String, dynamic>.from(value);
+    const containerKeys = {
+      'accounts',
+      'providers',
+      'items',
+      'exported_data',
+      'platforms',
+      'data',
+      'payload',
+      'json',
+      'content',
+      'tokens',
+      'token',
+      'token_data',
+      'tokenData',
+      'credentials',
+      'credential',
+      'session',
+      'session_json',
+      'sessionJson',
+      'account',
+      'profile',
+      'user',
+    };
+    if (map.keys.any(containerKeys.contains)) return true;
+    const credentialKeys = {
+      'access_token',
+      'accessToken',
+      'access-token',
+      'personal_access_token',
+      'personalAccessToken',
+      'refresh_token',
+      'refreshToken',
+      'refresh-token',
+      'id_token',
+      'idToken',
+      'api_key',
+      'apiKey',
+      'openai_api_key',
+      'OPENAI_API_KEY',
+      'key',
+      'token',
+    };
+    return map.keys.any(credentialKeys.contains);
   }
 
   static String? _bearerToken(Map<String, dynamic>? headers) {

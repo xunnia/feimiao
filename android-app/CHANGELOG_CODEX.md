@@ -1,3 +1,13 @@
+## 2026-09-01 v1.283.0+297 Cockpit JSON 边界与 AI 传输收口
+
+- **JSON 解析补齐**：支持已解码的 `data`/`payload`/`content` 包装对象和列表，以及 `exported_data` 直接承载单个凭据对象；保持只导入 Codex 凭据并避免把普通元数据误当账号。
+- **认证模式稳定**：账号顶层显式 `auth_mode` 优先于嵌套 token/credentials，API Key 不会因 stale OAuth 字段被误判为 OAuth，OAuth 也不会被 stale API Key 覆盖。
+- **传输边界统一**：`LlmEntryParser` 与 `LlmQueryV2` 流式请求复用共享 `AiHttpTransport`，统一代理/PAC 刷新、超时和重试生命周期，保留 localhost-only companion 的隔离边界。
+- **事务回归加强**：补充禁用账号跳过验证、单账号元数据失败无孤儿凭据、批量回滚恢复选择/健康状态/安全凭据等测试。
+- **验证**：Flutter 全量 **1194/1194**；OAuth/JSON/传输定向 **48/48**；导入 Controller/仓库定向 **32/32**；Dart analyze 0 error（91 条既有 warning/info）；Android `:app:compileDebugKotlin` 成功；Release identity gate 通过（16 KiB、APK V2、固定证书）。
+- **APK**：`C:\src\xunni-codex\android-app\build\app\outputs\flutter-apk\app-release.apk`，117,658,041 字节，SHA256 `8e02474d7bf81e60bc6201b0ffff60024d5fd16cef95057b78ea30944c8a9cd9`。
+- **边界**：当前无在线 Android ADB；手机 Chrome 账号选择、VPN 出口、localhost 回调、安装冷启动和实机字体/输入法观感仍需目标设备复测；未使用 Plus 账号。
+
 ## 2026-08-31 v1.282.0+296 AI 账号导入事务与架构收口
 
 - **导入职责收口**：新增 `AiAccountImportController` 与仓库适配边界，设置页只负责预览选择和结果展示；导入、逐账号验证、模型目录保存和批量提交由应用层统一编排。

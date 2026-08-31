@@ -1,10 +1,20 @@
 # 肥喵记账 Codex 当前交接文档
 
-更新时间：2026-08-31（GPT OAuth、Cockpit JSON 与架构收口，v1.281.0+295；本轮无在线 Android 设备）
+更新时间：2026-09-01（GPT OAuth、Cockpit JSON 与架构收口，v1.283.0+297；本轮无在线 Android 设备）
 当前 Android 工程：`C:\src\xunni-codex\android-app`  
 新会话第一入口：`docs/claude/CLAUDE_START_HERE.md`
 
 > 本文只保留当前有效状态。历史流水看 `CHANGELOG_CODEX.md` 和 git 历史。
+
+## -1.0.14. 2026-09-01 GPT OAuth、Cockpit JSON 与架构收口（v1.283.0+297）
+
+- Cockpit JSON 解析现在可安全展开已解码的 `data`/`payload`/`content` 文档包装，并支持 `exported_data` 直接承载单个凭据对象；普通 metadata 不会被误当成账号。
+- 账号顶层显式 `auth_mode` 优先于嵌套 `tokens`/`credentials`，避免 API Key 因 stale OAuth 字段被导入为 OAuth，或 OAuth 被 stale API Key 覆盖。
+- `LlmEntryParser` 和 `LlmQueryV2` 流式请求复用共享 `AiHttpTransport`，代理/PAC 刷新、超时和重试边界与缓冲请求一致；localhost-only companion 仍保持独立原生 `HttpClient` 边界。
+- 导入回归覆盖停用账号跳过验证、单账号元数据失败不留孤儿凭据、批量回滚恢复用途选择/健康状态/安全凭据。
+- 验证：Flutter 全量 **1194/1194**；OAuth/JSON/传输 **48/48**；导入 Controller/仓库 **32/32**；Dart analyze 0 error（91 条既有 warning/info）；Android `:app:compileDebugKotlin` 成功；Release identity gate 通过（16 KiB、APK V2、固定证书）。
+- APK：`C:\src\xunni-codex\android-app\build\app\outputs\flutter-apk\app-release.apk`，117,658,041 字节，SHA256 `8e02474d7bf81e60bc6201b0ffff60024d5fd16cef95057b78ea30944c8a9cd9`。
+- 本轮无在线 Android ADB；Chrome Ephemeral/账号选择、手机 VPN 出口、localhost 回调、安装冷启动及输入法/字体观感仍需目标手机复测；未使用 Plus 账号。
 
 ## -1.0.13. 2026-08-31 GPT OAuth、Cockpit JSON 与架构收口（v1.281.0+295）
 

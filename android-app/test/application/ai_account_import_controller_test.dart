@@ -52,8 +52,7 @@ void main() {
 
     expect(result.imported, 1);
     expect(result.failed, 1);
-    expect(result.verificationCounts[
-        AiAccountVerificationStatus.available], 1);
+    expect(result.verificationCounts[AiAccountVerificationStatus.available], 1);
     expect(repository.beginCalls, 1);
     expect(repository.commitCalls, 1);
     expect(repository.rollbackCalls, 0);
@@ -86,13 +85,38 @@ void main() {
     expect(result.imported, 2);
     expect(result.failed, 1);
     expect(result.issues.single.message, contains('验证失败'));
-    expect(result.verificationCounts[
-        AiAccountVerificationStatus.networkError], 1);
-    expect(result.verificationCounts[
-        AiAccountVerificationStatus.available], 1);
+    expect(
+        result.verificationCounts[AiAccountVerificationStatus.networkError], 1);
+    expect(result.verificationCounts[AiAccountVerificationStatus.available], 1);
     expect(repository.verifications, contains('provider-0'));
     expect(repository.verifications, contains('provider-1'));
     expect(repository.providers['provider-1']!.model, 'second-model');
+  });
+
+  test('disabled imported account stays disabled and skips verification',
+      () async {
+    final repository = _FakeImportRepository();
+    var verifyCalls = 0;
+    final controller = AiAccountImportController(
+      verifier: (_) async {
+        verifyCalls++;
+        return const AiAccountVerificationResult(
+          status: AiAccountVerificationStatus.available,
+        );
+      },
+    );
+
+    final result = await controller.import(
+      repository,
+      [request(account('disabled@example.com', enabled: false))],
+    );
+
+    expect(result.imported, 1);
+    expect(result.verificationSkipped, 1);
+    expect(result.verificationCounts, isEmpty);
+    expect(verifyCalls, 0);
+    expect(repository.providers.values.single.enabled, isFalse);
+    expect(repository.verifications, isEmpty);
   });
 
   test('final batch commit failure rolls back all imported accounts', () async {
@@ -129,7 +153,8 @@ class _FakeImportRepository implements AiAccountImportRepository {
   int commitCalls = 0;
   int rollbackCalls = 0;
 
-  _FakeImportRepository({this.throwOnEmails = const {}, this.failCommit = false});
+  _FakeImportRepository(
+      {this.throwOnEmails = const {}, this.failCommit = false});
 
   @override
   void beginBatch() {
@@ -170,7 +195,8 @@ class _FakeImportRepository implements AiAccountImportRepository {
   }
 
   @override
-  AiConfiguredProvider? providerById(String providerId) => providers[providerId];
+  AiConfiguredProvider? providerById(String providerId) =>
+      providers[providerId];
 
   @override
   Future<void> recordVerification(

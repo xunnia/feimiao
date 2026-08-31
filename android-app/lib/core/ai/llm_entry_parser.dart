@@ -24,6 +24,10 @@ class LlmEntryParser {
   LlmEntryParser._();
 
   static const _timeoutSeconds = 20;
+  static AiHttpTransport? _sharedTransport;
+
+  static AiHttpTransport get _transport =>
+      _sharedTransport ??= AiHttpTransport();
 
   // The public Chat Completions `response_format=json_object` shape is not
   // accepted by ChatGPT's private Codex Responses endpoint. The official
@@ -478,9 +482,8 @@ $catList
         ),
       );
     }
-    final transport = AiHttpTransport();
     try {
-      response = await transport.post(
+      response = await _transport.post(
         uri,
         headers: headers,
         body: jsonEncode(requestBody),
@@ -489,8 +492,6 @@ $catList
       );
     } catch (e) {
       throw LlmParseException('网络请求失败：$e');
-    } finally {
-      transport.close();
     }
 
     // 用 bodyBytes 显式按 UTF-8 解码：响应头不带 charset 时 .body 按

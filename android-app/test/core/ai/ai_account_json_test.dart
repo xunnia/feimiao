@@ -212,6 +212,47 @@ void main() {
       expect(result.accounts.single.accountId, 'acct-string-envelope');
     });
 
+    test('unwraps already-decoded map and list document wrappers', () {
+      final mapResult = AiAccountJsonCodec.parse(jsonEncode({
+        'data': {
+          'type': 'codex',
+          'email': 'map-wrapper@example.com',
+          'access_token': 'map-access',
+        },
+      }));
+      expect(mapResult.accounts, hasLength(1));
+      expect(mapResult.accounts.single.accountEmail, 'map-wrapper@example.com');
+
+      final listResult = AiAccountJsonCodec.parse(jsonEncode({
+        'payload': [
+          {
+            'type': 'codex',
+            'email': 'list-wrapper@example.com',
+            'access_token': 'list-access',
+          },
+        ],
+      }));
+      expect(listResult.accounts, hasLength(1));
+      expect(listResult.accounts.single.accountEmail,
+          'list-wrapper@example.com');
+    });
+
+    test('parses a standalone exported_data credential object', () {
+      final result = AiAccountJsonCodec.parse(jsonEncode({
+        'exported_data': {
+          'type': 'codex',
+          'email': 'standalone-object@example.com',
+          'access_token': 'standalone-object-access',
+          'account_id': 'acct-standalone-object',
+        },
+      }));
+
+      expect(result.accounts, hasLength(1));
+      expect(result.accounts.single.accountEmail,
+          'standalone-object@example.com');
+      expect(result.accounts.single.accountId, 'acct-standalone-object');
+    });
+
     test('parses the official lowercase openai_api_key field', () {
       final result = AiAccountJsonCodec.parse(jsonEncode({
         'auth_mode': 'apikey',
@@ -242,6 +283,30 @@ void main() {
       expect(account.accessToken, 'stale-access-token');
       expect(account.refreshToken, 'stale-refresh-token');
       expect(account.endpointType, AiEndpointType.chatCompletions);
+    });
+
+    test('top-level auth mode remains authoritative over nested auth mode', () {
+      final topLevelApiKey = AiAccountJsonCodec.parse(jsonEncode({
+        'type': 'codex',
+        'auth_mode': 'apikey',
+        'api_key': 'top-level-api-key',
+        'tokens': {
+          'auth_mode': 'oauth',
+          'access_token': 'stale-oauth-token',
+        },
+      }));
+      expect(topLevelApiKey.accounts.single.authMethod, AiAuthMethod.apiKey);
+
+      final topLevelOAuth = AiAccountJsonCodec.parse(jsonEncode({
+        'type': 'codex',
+        'auth_mode': 'oauth',
+        'access_token': 'top-level-access-token',
+        'credentials': {
+          'auth_mode': 'apikey',
+          'api_key': 'stale-api-key',
+        },
+      }));
+      expect(topLevelOAuth.accounts.single.authMethod, AiAuthMethod.oauth);
     });
 
     test(

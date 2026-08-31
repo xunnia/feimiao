@@ -2,7 +2,7 @@
 title: 肥喵记账项目管理总纲
 version: 1.0
 status: active
-updated: 2026-08-31
+updated: 2026-09-01
 scope: Android Flutter 主工程
 ---
 
@@ -19,15 +19,15 @@ scope: Android Flutter 主工程
 | 平台 | Android 为当前主交付平台；仓库另有独立 `ios-app`，不与 Android 批次混做 |
 | 技术栈 | Flutter / Dart、Provider、SQLite(sqflite)、Android 原生 Worker/Widget |
 | 当前分支 | `feature/ai-model-selector` |
-| 当前工作版本 | `1.281.0+295`，build tag `b0830-295` |
+| 当前工作版本 | `1.283.0+297`，build tag `b0901-297` |
 | 数据库版本 | v49 |
 | Android 身份 | `com.qingji.qingji.codex`，min SDK 24，compile/target SDK 36 |
-| 当前批次 | GPT OAuth 网络/身份稳定性与 Cockpit JSON 导入修复；月份选择弹窗按参考图二回退；AI 与 Chats 既有能力保持不变 |
-| 自动验证 | Dart analyze 无 error（91 条既有 warning/info）；OAuth/JSON/代理/健康/仓库定向回归通过；串行全量 Flutter **1182/1182**；本机实际 Cockpit 完整备份解析 9 个账号（6 个 OAuth、3 个 API Key），0 警告 |
+| 当前批次 | GPT OAuth/Cockpit JSON 高风险边界与共享 AI 传输收口；AI 与 Chats 既有能力保持不变 |
+| 自动验证 | Dart analyze 无 error（91 条既有 warning/info）；OAuth/JSON/传输定向 **48/48**、导入 Controller/仓库定向 **32/32**；串行全量 Flutter **1194/1194**；本机实际 Cockpit 完整备份解析 9 个账号（6 个 OAuth、3 个 API Key），0 警告 |
 | 运行态验证 | 本轮使用本地假服务器/协议回归验证 OAuth、模型目录、Responses、JSON 导入和最小 `ping`；本轮无在线 ADB 设备；真实手机 Token、模型、Responses、VPN 出口、Chrome 账号选择和回调仍待用户设备 |
-| 当前 APK | `feimiao-codex-v1.281.0-295.apk` |
-| 当前 APK SHA256 | `A3960191D17E8CB2E2EA4B4D0310C9A8579B39127F8A317E86E73E1BAC9C07BA`（117,707,189 字节） |
-| 回退 APK | `C:\src\xunni-codex\ci-artifacts\releases\feimiao-codex-v1.260.0-274.apk` |
+| 当前 APK | `C:\src\xunni-codex\android-app\build\app\outputs\flutter-apk\app-release.apk` |
+| 当前 APK SHA256 | `8e02474d7bf81e60bc6201b0ffff60024d5fd16cef95057b78ea30944c8a9cd9`（117,658,041 字节） |
+| 回退 APK | `C:\src\xunni-codex\ci-artifacts\releases\feimiao-codex-v1.282.0-296.apk` |
 | 发布状态 | 当前包已通过本地发布门禁；线上发布需脚本完成后再核验 `version.json` 与 KV 两版本保留 |
 | 工作树状态 | 当前 Android AI/OAuth/JSON/架构批次待精确提交；iOS、截图和指定 parity 测试改动保持隔离 |
 

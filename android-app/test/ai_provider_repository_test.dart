@@ -737,7 +737,27 @@ void main() {
       baseUrl: 'https://baseline.example/v1',
       apiKey: 'baseline-key',
       model: 'baseline-model',
+      models: const ['baseline-model'],
     );
+    await repo.saveRecordAiSelection(
+      providerId: baseline.id,
+      model: 'baseline-model',
+      reasoningEffort: AiReasoningEffort.high,
+    );
+    await repo.saveChatModelSelection(
+      providerId: baseline.id,
+      model: 'baseline-model',
+      reasoningEffort: AiReasoningEffort.high,
+    );
+    await repo.recordAiProviderVerification(
+      baseline.id,
+      status: 'available',
+      message: '',
+      latencyMs: 7,
+    );
+    final baselineRecordId = repo.recordAiProviderId;
+    final baselineChatId = repo.chatCurrentProviderId;
+    final baselineHealth = repo.aiProviderHealthFor(baseline.id).toMap();
     repo.beginAiAccountImportBatch();
     final imported = AiAccountJsonCodec.parse('''
       {"type":"codex","email":"rollback@example.com","account_id":"rollback","access_token":"rollback-access","refresh_token":"rollback-refresh"}
@@ -760,6 +780,22 @@ void main() {
           .any((provider) => provider.accountEmail == 'rollback@example.com'),
       isFalse,
     );
+    expect(repo.recordAiProviderId, baselineRecordId);
+    expect(repo.chatCurrentProviderId, baselineChatId);
+    expect(repo.aiProviderHealthFor(baseline.id).toMap(), baselineHealth);
+    expect(
+      repo.exportAiAccountsJson(),
+      isNot(contains('rollback-access')),
+    );
+    expect(
+      await repo.debugDb.query(
+        'app_settings',
+        columns: const ['key'],
+        where: 'value IN (?, ?)',
+        whereArgs: const ['rollback-access', 'rollback-refresh'],
+      ),
+      isEmpty,
+    );
     await repo.closeForTest();
 
     final reopened = AppRepository();
@@ -770,7 +806,56 @@ void main() {
           .any((provider) => provider.accountEmail == 'rollback@example.com'),
       isFalse,
     );
+    expect(reopened.recordAiProviderId, baselineRecordId);
+    expect(reopened.chatCurrentProviderId, baselineChatId);
+    expect(reopened.aiProviderHealthFor(baseline.id).toMap(), baselineHealth);
     await reopened.closeForTest();
+  });
+
+  test('single account metadata failure leaves no provider or credential',
+      () async {
+    final repo = AppRepository();
+    await repo.init();
+    final beforeIds = repo.aiProviders.map((provider) => provider.id).toSet();
+    await repo.debugDb.execute('''
+      CREATE TRIGGER test_fail_ai_provider_metadata
+      BEFORE INSERT ON app_settings
+      WHEN NEW.key = 'ai_providers_json'
+      BEGIN
+        SELECT RAISE(ABORT, 'forced metadata failure');
+      END
+    ''');
+    final entry = AiAccountJsonCodec.parse('''
+      {
+        "type": "codex",
+        "email": "metadata-failure@example.com",
+        "account_id": "metadata-failure",
+        "access_token": "metadata-failure-access",
+        "refresh_token": "metadata-failure-refresh"
+      }
+    ''').accounts.single;
+
+    await expectLater(repo.importAiAccount(entry), throwsA(anything));
+    expect(repo.aiProviders.map((provider) => provider.id).toSet(), beforeIds);
+    expect(
+      repo.aiProviders.any((provider) =>
+          provider.accountEmail == 'metadata-failure@example.com'),
+      isFalse,
+    );
+    expect(repo.exportAiAccountsJson(), isNot(contains('metadata-failure')));
+    expect(
+      await repo.debugDb.query(
+        'app_settings',
+        columns: const ['key'],
+        where: 'value IN (?, ?)',
+        whereArgs: const [
+          'metadata-failure-access',
+          'metadata-failure-refresh',
+        ],
+      ),
+      isEmpty,
+    );
+    await repo.closeForTest();
   });
 
   test('normal recording provider model and effort save and restore together',
