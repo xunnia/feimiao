@@ -193,7 +193,7 @@ struct RootTabView: View {
         case "budget", "reconcile", "reimburse", "books", "accounts", "categories", "tags",
              "memory", "ai-memory", "ai-tasks", "ai-extensions", "ai-schedules", "ai-search",
              "ai-diagnostics", "ai-local", "savings", "recurring", "assets", "assets/detail",
-             "assets-detail", "liabilities", "net-worth", "import", "import-export",
+             "assets-detail", "liabilities", "net-worth", "lending", "import", "import-export",
              "accounts/detail", "accounts-detail",
              "reimburse/settlement",
              "reports", "settings", "backup", "display", "theme", "money-display", "auto-record",

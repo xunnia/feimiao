@@ -59,5 +59,6 @@ Liquid Glass、SF Symbols、原生转场和触觉反馈，因此与 Flutter/Mate
 | 收入记账与物品资产详情操作态 | `quickadd/income` / `settings/assets/detail` | Parity #61 已采集 | Parity #61 已采集 | 已完成成对对比 |
 | 账户详情操作态 | `settings/accounts/detail` | Parity #61 已采集 | Parity #61 已采集 | 已完成成对对比 |
 | 报销到账操作态 | `settings/reimburse/settlement` | Parity #61 已采集 | Parity #61 已采集 | 已完成成对对比 |
+| 借贷往来按对象聚合 | `lending` | 待本轮重采 | 待本轮重采 | 待重新验收 |
 
 这份表只记录证据状态，不把“代码已写”冒充“真机已验收”。

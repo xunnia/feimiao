@@ -20,6 +20,8 @@ final class AppRouterTests: XCTestCase {
         XCTAssertEqual(RootTabView.initialPath(for: "search"), [.search])
         XCTAssertEqual(RootTabView.initialPath(for: "transactions"), [.transactions])
         XCTAssertEqual(RootTabView.initialPath(for: "stats/month"), [.statistics])
+        XCTAssertEqual(RootTabView.initialPath(for: "lending"), [.settings])
+        XCTAssertEqual(RootTabView.initialPath(for: "settings/lending"), [.settings])
     }
 
     func testImportReviewFixtureIsRestrictedToDemoLaunches() {
@@ -30,5 +32,14 @@ final class AppRouterTests: XCTestCase {
             RootTabView.usesDemoImportReview(environment: ["QINGJI_DEMO": "0"])
         )
         XCTAssertFalse(RootTabView.usesDemoImportReview(environment: [:]))
+    }
+
+    @MainActor
+    func testLendingDeepLinkTargetsTheSettingsDestination() {
+        let router = AppRouter()
+        router.handle(url: URL(string: "qingji://settings/lending")!)
+
+        XCTAssertEqual(router.selectedTab, .settings)
+        XCTAssertEqual(router.settingsPushTarget, .lending)
     }
 }

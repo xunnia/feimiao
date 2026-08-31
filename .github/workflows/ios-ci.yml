@@ -250,6 +250,7 @@ jobs:
           shoot "reconcile"    "09-reconcile"
           shoot "reimburse"    "10-reimburse"
           shoot "settings/reimburse/settlement" "40-reimburse-settlement"
+          shoot "lending"          "41-lending"
           shoot "savings"      "11-savings"
           shoot "recurring"    "12-recurring"
           shoot "assets"       "13-assets"
@@ -281,9 +282,9 @@ jobs:
           python3 ios-app/tools/check_screenshot_nonempty.py screenshots/*.png
           python3 ios-app/tools/check_screenshot_distinct.py screenshots/*.png
 
-          # 校验：35 张图若全部相同说明导航又失败了，直接让 CI 报错
+          # 校验：若所有 40 张图都相同，说明导航又失败了，直接让 CI 报错
           UNIQUE=$(md5 -q screenshots/*.png | sort -u | wc -l | tr -d ' ')
-          echo "不同截图数量：$UNIQUE / 39"
+          echo "不同截图数量：$UNIQUE / 40"
           if [ "$UNIQUE" -le 1 ]; then
             echo "::error::截图全部相同，深链/启动参数导航未生效"
             exit 1

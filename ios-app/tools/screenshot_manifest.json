@@ -319,6 +319,14 @@
       "ios": "ci-artifacts/ios-screenshots/40-reimburse-settlement.png",
       "iosRoute": "settings/reimburse/settlement",
       "notes": "同一待报销账单的到账账户、到账日期和抵消金额确认界面；确认按钮保留平台原生交互。"
+    },
+    {
+      "id": "lending",
+      "feature": "借贷往来",
+      "android": "android-app/outputs/parity/lending-android.png",
+      "ios": "ci-artifacts/ios-screenshots/41-lending.png",
+      "iosRoute": "lending",
+      "notes": "按对象聚合借出权益和个人借入，时间线金额与可执行的收回/还款入口一致。"
     }
   ]
 }

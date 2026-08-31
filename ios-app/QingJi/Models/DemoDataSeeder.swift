@@ -58,6 +58,9 @@ enum DemoDataSeeder {
             launchScreen == "settings/assets/detail" {
             insertAssetData(context: context, accounts: accounts, book: book)
         }
+        if launchScreen == "lending" || launchScreen == "settings/lending" {
+            insertLendingData(context: context, accounts: accounts, book: book)
+        }
         insertReports(context: context, book: book)
         try? context.save()
     }
@@ -383,6 +386,115 @@ enum DemoDataSeeder {
             profile.note = "演示信用卡"
             context.insert(profile)
         }
+    }
+
+    private static func insertLendingData(
+        context: ModelContext,
+        accounts: [Account],
+        book: Book
+    ) {
+        guard let cash = accounts.first(where: { $0.kind == .cash }) else { return }
+        let calendar = Calendar.current
+        let now = AppClock.now
+        let borrowDate = calendar.date(byAdding: .day, value: -12, to: now) ?? now
+        let recoveryDate = calendar.date(byAdding: .day, value: -5, to: now) ?? now
+
+        let loanAccount = Account(
+            name: "借入·小林",
+            kind: .loan,
+            currencyCode: "CNY",
+            sortOrder: accounts.count + 1
+        )
+        loanAccount.balanceMode = .ledger
+        context.insert(loanAccount)
+
+        context.insert(MoneyTransaction(
+            amount: 320,
+            kind: .transfer,
+            date: borrowDate,
+            note: "借入：小林",
+            currencyCode: "CNY",
+            account: loanAccount,
+            toAccount: cash,
+            book: book,
+            timePrecision: .dateOnly,
+            settledAt: borrowDate,
+            settlementQuality: .userConfirmed,
+            settlementAccountID: loanAccount.stableID,
+            settlementAccountQuality: .userConfirmed,
+            eventType: .transfer
+        ))
+
+        let profile = LiabilityProfile(
+            accountID: loanAccount.stableID,
+            kind: .personalBorrow,
+            originalPrincipal: 320,
+            currentPrincipal: 320,
+            currencyCode: "CNY"
+        )
+        profile.counterparty = "小林"
+        profile.startDate = borrowDate
+        profile.dueDate = calendar.date(byAdding: .day, value: 24, to: now)
+        profile.repaymentAccountID = cash.stableID
+        profile.note = "Parity 借入演示"
+        context.insert(profile)
+
+        let receivable = ReceivableAsset(
+            name: "借给小林",
+            originalAmount: 800,
+            kind: .loanOut,
+            bookID: book.stableID,
+            currencyCode: "CNY"
+        )
+        receivable.counterparty = "小林"
+        receivable.remainingAmount = 500
+        receivable.lifecycle = .partiallyRecovered
+        receivable.dueDate = calendar.date(byAdding: .day, value: 15, to: now)
+        receivable.note = "Parity 借出演示"
+        context.insert(receivable)
+        context.insert(AssetEvent(
+            assetID: receivable.stableID,
+            kind: .receivableCreated,
+            occurredAt: borrowDate,
+            value: receivable.originalAmount,
+            note: receivable.note
+        ))
+
+        let recoveryTransaction = MoneyTransaction(
+            amount: 300,
+            kind: .income,
+            date: recoveryDate,
+            note: "收回：小林",
+            currencyCode: "CNY",
+            account: cash,
+            book: book,
+            timePrecision: .dateOnly,
+            settledAt: recoveryDate,
+            settlementQuality: .userConfirmed,
+            settlementAccountID: cash.stableID,
+            settlementAccountQuality: .userConfirmed,
+            eventType: .receivableRecovery,
+            isExcluded: true
+        )
+        context.insert(recoveryTransaction)
+        let recovery = ReceivableRecovery(
+            receivableID: receivable.stableID,
+            amount: 300,
+            recoveredAt: recoveryDate,
+            targetAccountID: cash.stableID,
+            transactionID: recoveryTransaction.stableID,
+            note: "第一次收回"
+        )
+        let recoveryEvent = AssetEvent(
+            assetID: receivable.stableID,
+            kind: .receivableRecovered,
+            occurredAt: recoveryDate,
+            value: 300,
+            note: "第一次收回"
+        )
+        recovery.eventID = recoveryEvent.stableID
+        context.insert(recovery)
+        context.insert(recoveryEvent)
     }
 
     private static func insertReports(context: ModelContext, book: Book) {

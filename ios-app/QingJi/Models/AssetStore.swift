@@ -1582,11 +1582,12 @@ enum ReceivableStore {
 
 /// 负债档案的写入边界；还款会产生转账和必要的利息支出，保持净资产不凭空变化。
 enum LiabilityStore {
-    enum Error: LocalizedError {
+    enum Error: LocalizedError, Equatable {
         case invalidPrincipal
         case invalidRepayment
         case accountMissing
         case sameAccount
+        case invalidCounterparty
 
         var errorDescription: String? {
             switch self {
@@ -1594,6 +1595,7 @@ enum LiabilityStore {
             case .invalidRepayment: return "还款金额必须大于 0，且不能超过当前本金。"
             case .accountMissing: return "还款账户不存在或已停用。"
             case .sameAccount: return "还款账户不能是负债账户本身。"
+            case .invalidCounterparty: return "借入对象不能为空。"
             }
         }
     }
@@ -1688,6 +1690,96 @@ enum LiabilityStore {
         profile.lifecycle = status
         profile.updatedAt = Date()
         try context.save()
+    }
+
+    /// Android「记一笔借入」的同款语义：每笔借入建立独立的贷款账户和
+    /// personalBorrow 档案；若指定收款账户，再建立一笔真实转账，避免把
+    /// 借入金额伪装成普通收入。
+    @discardableResult
+    static func createPersonalBorrow(
+        in context: ModelContext,
+        counterparty: String,
+        amount: Decimal,
+        toAccount: Account? = nil,
+        dueDate: Date? = nil,
+        book: Book? = nil,
+        date: Date = Date(),
+        note: String = ""
+    ) throws -> LiabilityProfile {
+        let person = counterparty.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !person.isEmpty else { throw Error.invalidCounterparty }
+        let normalizedAmount = MoneyNormalization.roundToCents(amount)
+        guard normalizedAmount > 0 else { throw Error.invalidPrincipal }
+        if let toAccount,
+           toAccount.isDeleted || toAccount.status != .active ||
+            toAccount.currencyCode != "CNY" {
+            throw Error.accountMissing
+        }
+
+        let existingAccounts = try context.fetch(FetchDescriptor<Account>())
+        let usedNames = Set(existingAccounts.filter { !$0.isDeleted }.map(\.name))
+        let baseName = "借入·\(person)"
+        var accountName = baseName
+        var suffix = 2
+        while usedNames.contains(accountName) {
+            accountName = "\(baseName)·\(suffix)"
+            suffix += 1
+        }
+        let nextSortOrder = (existingAccounts.map(\.sortOrder).max() ?? -1) + 1
+        let loanAccount = Account(
+            name: accountName,
+            kind: .loan,
+            currencyCode: "CNY",
+            sortOrder: nextSortOrder
+        )
+        loanAccount.initialBalance = toAccount == nil ? -normalizedAmount : .zero
+        loanAccount.openingBalanceEffectiveAt = toAccount == nil ? date : nil
+        loanAccount.openingBalanceQuality = .exact
+        loanAccount.balanceMode = .ledger
+
+        let profile = LiabilityProfile(
+            accountID: loanAccount.stableID,
+            kind: .personalBorrow,
+            originalPrincipal: normalizedAmount,
+            currentPrincipal: normalizedAmount,
+            currencyCode: "CNY"
+        )
+        profile.counterparty = person
+        profile.startDate = date
+        profile.dueDate = dueDate
+        profile.repaymentAccountID = toAccount?.stableID
+        profile.note = note.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        context.insert(loanAccount)
+        if let toAccount {
+            let transfer = MoneyTransaction(
+                amount: normalizedAmount,
+                kind: .transfer,
+                date: date,
+                note: note.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    ? "借入：\(person)"
+                    : note.trimmingCharacters(in: .whitespacesAndNewlines),
+                currencyCode: "CNY",
+                account: loanAccount,
+                toAccount: toAccount,
+                book: book,
+                timePrecision: .dateOnly,
+                settledAt: date,
+                settlementQuality: .userConfirmed,
+                settlementAccountID: loanAccount.stableID,
+                settlementAccountQuality: .userConfirmed,
+                eventType: .transfer
+            )
+            context.insert(transfer)
+        }
+        context.insert(profile)
+        do {
+            try context.save()
+            return profile
+        } catch {
+            context.rollback()
+            throw error
+        }
     }
 
     /// 本金部分建成还款账户 -> 负债账户的转账；若金额超过本金，超出部分作为利息支出。

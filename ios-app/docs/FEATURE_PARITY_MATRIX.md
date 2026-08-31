@@ -37,6 +37,7 @@
 | 报告库/月报 | report_views.dart、monthly_report_view.dart | ReportsView.swift、ReportStore.swift | 已有本地月报、阅读、置顶、删除、后台择机刷新基础 | 同一统计结果、Markdown/表格、后台限制说明 |
 | 资产物品 | views/assets/physical_asset_* | AssetsView.swift、AssetStore.swift、ExtendedModels.swift、QingJiCore AssetMetrics/Allocation | 已有档案、估值、照片路径、生命周期、使用次数、持有天数/日均成本/每次成本/保值率和分摊校验基础 | 购置/估值/出售/退货/报废/丢失/赠送的详情操作、资产成本自动关联和退款分摊 UI |
 | 权益/应收 | receivable_*、lending_view.dart | AssetsView.swift、AssetStore.swift | 已有权益详情、收回历史、最近一次撤销、损失/归档状态；指定到账账户会生成 excluded `receivableRecovery` 流水并可撤销 | 回收流水、剩余金额、净资产、跨端操作链 |
+| 借贷往来 | lending_view.dart、borrow_form_sheet.dart | Views/Assets/LendingView.swift、LiabilityStore | 已按对象聚合借出权益和个人借入，支持时间线、记一笔借入、独立负债账户、真实转入和后续还款入口 | 同一对象聚合、借入转账、还款后本金与账户余额 |
 | 负债/还款 | liability_*、loan_wizard_sheet.dart、repayment_sheet.dart | LiabilitiesView.swift、LiabilityStore | 已有信用卡/房贷/车贷/个人借入档案、还款基础和利息拆分 | 本金/利息、账户余额、信用卡字段、还款向导 |
 | 还款提醒 | repayment_reminder.dart + Android 通知 | RepaymentReminderScheduler.swift + UserNotifications | 已有前一天/当天本地通知排程和设置开关 | 权限拒绝、日期边界、系统通知实际到达 |
 | 净资产 | asset_overview_cards.dart、verified checkpoints | NetWorthView.swift、NetWorthStore.swift | 已有资金/投资/物品/权益/负债拆分、外币待核对、快照；账户校准已接入 | 负债重复计算、外币、快照历史、校准后结果 |

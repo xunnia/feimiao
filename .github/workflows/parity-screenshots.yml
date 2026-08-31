@@ -263,6 +263,7 @@ jobs:
           shoot reconcile 09-reconcile
           shoot reimburse 10-reimburse
           shoot settings/reimburse/settlement 40-reimburse-settlement
+          shoot lending 41-lending
           shoot savings 11-savings
           shoot recurring 12-recurring
           shoot assets 13-assets

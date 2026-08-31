@@ -37,6 +37,7 @@ struct AssetsView: View {
     @State private var selectedTab: AssetTab = .funds
     @State private var showNewAsset = false
     @State private var showNewReceivable = false
+    @State private var showBorrowSheet = false
     @State private var detailAsset: PhysicalAsset?
     @State private var detailReceivable: ReceivableAsset?
     @State private var recoveryAsset: ReceivableAsset?
@@ -115,6 +116,11 @@ struct AssetsView: View {
                     } label: {
                         Label("新增权益", systemImage: "arrow.down.left.circle")
                     }
+                    Button {
+                        showBorrowSheet = true
+                    } label: {
+                        Label("记一笔借入", systemImage: "arrow.down.left")
+                    }
                 } label: {
                     Image(systemName: "plus")
                 }
@@ -133,6 +139,10 @@ struct AssetsView: View {
         .sheet(isPresented: $showNewReceivable) {
             ReceivableEditor(asset: nil)
                 .presentationDetents([.large])
+        }
+        .sheet(isPresented: $showBorrowSheet) {
+            BorrowEntrySheet()
+                .presentationDetents([.medium, .large])
         }
         .sheet(item: $detailReceivable) { asset in
             ReceivableDetailView(asset: asset)
@@ -249,6 +259,33 @@ struct AssetsView: View {
                 }
                 .buttonStyle(.plain)
             }
+            if hasLendingRecords {
+                NavigationLink {
+                    LendingView()
+                } label: {
+                    HStack(spacing: 10) {
+                        Image(systemName: "person.2")
+                            .frame(width: 28)
+                            .foregroundStyle(Color.accentColor)
+                        Text("借贷往来")
+                        Spacer()
+                        Image(systemName: "chevron.right")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(12)
+                    .glassEffect(.regular, in: .rect(cornerRadius: 14))
+                }
+                .buttonStyle(.plain)
+            }
+        }
+    }
+
+    private var hasLendingRecords: Bool {
+        receivables.contains {
+            !$0.isDeleted && $0.kind == .loanOut
+        } || liabilities.contains {
+            $0.kind == .personalBorrow && $0.lifecycle != .archived
         }
     }
 
@@ -1185,7 +1222,7 @@ private struct ReceivableEditor: View {
     }
 }
 
-private struct ReceivableRecoverySheet: View {
+struct ReceivableRecoverySheet: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var context
     @Query(sort: \Account.sortOrder)

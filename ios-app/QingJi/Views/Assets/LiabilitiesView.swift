@@ -357,7 +357,7 @@ private struct LiabilityEditor: View {
     }
 }
 
-private struct LiabilityRepaymentSheet: View {
+struct LiabilityRepaymentSheet: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var context
     @Query(sort: \Account.sortOrder)

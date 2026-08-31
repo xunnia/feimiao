@@ -37,7 +37,7 @@ final class AppRouter {
 
     /// 设置页接到深链后要 push 的子页面。
     enum SettingsDestination: Hashable {
-        case books, accounts, accountDetail, categories, tags, memory, aiMemory, aiTasks, aiExtensions, aiSchedules, aiSearch, aiDiagnostics, aiLocal, budget, reconcile, reimburse, reimburseSettlement, savings, recurring, assets, assetDetail, liabilities, netWorth, importReview, importExport, reports, backup, display, theme, moneyDisplay, autoRecord, ai
+        case books, accounts, accountDetail, categories, tags, memory, aiMemory, aiTasks, aiExtensions, aiSchedules, aiSearch, aiDiagnostics, aiLocal, budget, reconcile, reimburse, reimburseSettlement, savings, recurring, assets, assetDetail, liabilities, netWorth, lending, importReview, importExport, reports, backup, display, theme, moneyDisplay, autoRecord, ai
     }
     var settingsPushTarget: SettingsDestination? = nil
 
@@ -134,6 +134,7 @@ final class AppRouter {
             settingsPushTarget = .accountDetail
         case "liabilities":  selectedTab = .settings;   settingsPushTarget = .liabilities
         case "net-worth":    selectedTab = .settings;   settingsPushTarget = .netWorth
+        case "lending":      selectedTab = .settings;   settingsPushTarget = .lending
         case "import-review": selectedTab = .settings; settingsPushTarget = .importReview
         case "import", "import-export": selectedTab = .settings; settingsPushTarget = .importExport
         case "reports":      selectedTab = .settings; settingsPushTarget = .reports
@@ -178,6 +179,10 @@ final class AppRouter {
         case "transactions":
             selectedTab   = .transactions
 
+        case "lending":
+            selectedTab = .settings
+            settingsPushTarget = .lending
+
         case "stats":
             selectedTab   = .statistics
             switch path.first {
@@ -219,6 +224,7 @@ final class AppRouter {
                     : .assets
             case "liabilities": settingsPushTarget = .liabilities
             case "net-worth": settingsPushTarget = .netWorth
+            case "lending": settingsPushTarget = .lending
             case "import-review": settingsPushTarget = .importReview
             case "import", "import-export": settingsPushTarget = .importExport
             case "reports": settingsPushTarget = .reports

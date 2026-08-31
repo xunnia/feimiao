@@ -14,6 +14,7 @@ import 'package:qingji/share_intake.dart';
 import 'package:qingji/theme/app_colors.dart';
 import 'package:qingji/views/assistant/meow_assistant_view.dart';
 import 'package:qingji/views/assets/account_detail_page.dart';
+import 'package:qingji/views/assets/lending_view.dart';
 import 'package:qingji/views/home/manual_add_sheet.dart';
 import 'package:qingji/views/assets/physical_asset_detail_page.dart';
 import 'package:qingji/views/reports/report_views.dart';
@@ -241,6 +242,8 @@ void main() {
       BillReviewView(rows: _demoImportRows(), source: '支付宝', skipped: 2),
       binding,
     );
+    await _ensureLendingFixture(repo);
+    await _capturePage(tester, 'lending-android', const LendingView(), binding);
     await _captureReports(tester, binding);
   });
 }
@@ -998,6 +1001,60 @@ Future<PhysicalAssetEntity> _ensureAssetDetailFixture(
   final asset = repo.physicalAssetDetailById(assetId);
   if (asset == null) throw StateError('资产演示数据写入后无法读取');
   return asset;
+}
+
+Future<void> _ensureLendingFixture(AppRepository repo) async {
+  final cash = repo.transactionAccounts.firstWhere(
+    (account) => account.type == AccountType.cash,
+  );
+  const person = '小林';
+  if (!repo.globalActiveReceivables.any(
+    (asset) =>
+        asset.type == ReceivableAssetType.loanOut &&
+        asset.counterparty == person,
+  )) {
+    await repo.addReceivableAsset(
+      name: '借给小林',
+      type: ReceivableAssetType.loanOut,
+      originalAmount: Decimal.parse('800'),
+      remainingAmount: Decimal.parse('500'),
+      counterparty: person,
+      dueDate: DateTime(2026, 9, 11, 12),
+      note: 'Parity 借出演示',
+      occurredAt: DateTime(2026, 8, 15, 12),
+    );
+  }
+  if (!repo.liabilityProfiles.any(
+    (profile) =>
+        profile.type == LiabilityProfileType.personalBorrow &&
+        profile.counterparty == person,
+  )) {
+    final loanAccountID = await repo.addAccount(
+      name: '借入·$person',
+      type: AccountType.loan,
+      openingBalance: Decimal.zero,
+    );
+    await repo.addTransaction(
+      kind: TransactionKind.transfer,
+      amount: Decimal.parse('320'),
+      accountId: loanAccountID,
+      toAccountId: cash.id,
+      note: '借入：$person',
+      date: DateTime(2026, 8, 15, 12),
+      bookId: repo.currentBookId,
+    );
+    await repo.upsertLiabilityProfile(
+      accountId: loanAccountID,
+      type: LiabilityProfileType.personalBorrow,
+      originalAmount: Decimal.parse('320'),
+      currentPrincipal: Decimal.parse('320'),
+      startDate: DateTime(2026, 8, 15, 12),
+      endDate: DateTime(2026, 9, 20, 12),
+      counterparty: person,
+      note: 'Parity 借入演示',
+    );
+  }
+  await repo.fullyReady;
 }
 
 Future<void> _ensureReport(AppRepository repo) async {
