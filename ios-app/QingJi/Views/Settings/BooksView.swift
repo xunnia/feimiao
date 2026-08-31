@@ -189,62 +189,109 @@ struct BooksView: View {
     }
 }
 
-private enum BookCoverCatalog {
-    static let choices = ["daily", "food", "shopping", "travel", "pet", "family", "business", "couple"]
+enum BookCoverCatalog {
+    static let choices = [
+        "daily", "food", "shopping", "travel", "beauty", "business",
+        "couple", "multi", "pet", "baby", "family"
+    ]
+
+    /// Android backups may store the source asset path while iOS-created
+    /// books store the canonical key. Normalize both forms before rendering.
+    static func normalized(_ cover: String) -> String {
+        let portablePath = cover.replacingOccurrences(of: "\\", with: "/")
+        let filename = portablePath.split(separator: "/").last.map(String.init) ?? portablePath
+        let stem = filename.split(separator: ".").first.map(String.init) ?? filename
+        switch stem {
+        case "default": return "daily"
+        case "dining": return "food"
+        default: return stem
+        }
+    }
 
     static func name(_ cover: String) -> String {
-        switch cover {
+        switch normalized(cover) {
         case "daily": return "日常"
         case "food": return "餐饮"
         case "shopping": return "网购"
         case "travel": return "旅行"
+        case "beauty": return "美妆"
         case "pet": return "宠物"
+        case "baby": return "母婴"
         case "family": return "家庭"
         case "business": return "生意"
         case "couple": return "情侣"
+        case "multi": return "多人"
         default: return "默认"
         }
     }
 
     static func symbol(_ cover: String) -> String {
-        switch cover {
+        switch normalized(cover) {
         case "daily": return "sun.max.fill"
         case "food": return "fork.knife"
         case "shopping": return "bag.fill"
         case "travel": return "airplane"
+        case "beauty": return "sparkles"
         case "pet": return "pawprint.fill"
+        case "baby": return "figure.and.child.holdinghands"
         case "family": return "house.fill"
         case "business": return "briefcase.fill"
         case "couple": return "heart.fill"
+        case "multi": return "person.3.fill"
         default: return "book.closed.fill"
         }
     }
 
     static func color(_ cover: String) -> Color {
-        switch cover {
+        switch normalized(cover) {
         case "daily": return Color(red: 0.36, green: 0.55, blue: 0.67)
         case "food": return Color(red: 0.78, green: 0.49, blue: 0.35)
         case "shopping": return Color(red: 0.46, green: 0.46, blue: 0.65)
         case "travel": return Color(red: 0.35, green: 0.60, blue: 0.58)
+        case "beauty": return Color(red: 0.72, green: 0.48, blue: 0.64)
         case "pet": return Color(red: 0.68, green: 0.55, blue: 0.42)
+        case "baby": return Color(red: 0.78, green: 0.56, blue: 0.62)
         case "family": return Color(red: 0.55, green: 0.48, blue: 0.63)
         case "business": return Color(red: 0.30, green: 0.39, blue: 0.50)
         case "couple": return Color(red: 0.75, green: 0.42, blue: 0.48)
+        case "multi": return Color(red: 0.48, green: 0.57, blue: 0.50)
         default: return Color.accentColor
+        }
+    }
+
+    static func assetName(_ cover: String) -> String {
+        switch normalized(cover) {
+        case "daily": return "BookCover-default"
+        case "food": return "BookCover-dining"
+        case "shopping": return "BookCover-shopping"
+        case "travel": return "BookCover-travel"
+        case "beauty": return "BookCover-beauty"
+        case "business": return "BookCover-business"
+        case "couple": return "BookCover-couple"
+        case "multi": return "BookCover-multi"
+        case "pet": return "BookCover-pet"
+        case "baby": return "BookCover-baby"
+        case "family": return "BookCover-family"
+        default: return "BookCover-default"
         }
     }
 }
 
-private struct BookCoverView: View {
+struct BookCoverView: View {
     let cover: String
     let size: CGFloat
 
     var body: some View {
-        Image(systemName: BookCoverCatalog.symbol(cover))
-            .font(.system(size: size * 0.38, weight: .semibold))
-            .foregroundStyle(.white)
+        Image(BookCoverCatalog.assetName(cover))
+            .resizable()
+            .scaledToFill()
             .frame(width: size * 0.78, height: size)
             .background(BookCoverCatalog.color(cover), in: .rect(cornerRadius: size * 0.14))
+            .clipShape(.rect(cornerRadius: size * 0.14))
+            .overlay {
+                RoundedRectangle(cornerRadius: size * 0.14)
+                    .stroke(Color.white.opacity(0.26), lineWidth: 0.6)
+            }
             .shadow(color: .black.opacity(0.12), radius: 3, y: 2)
             .accessibilityLabel(BookCoverCatalog.name(cover))
     }

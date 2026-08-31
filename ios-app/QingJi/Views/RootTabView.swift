@@ -310,18 +310,20 @@ private struct AppDrawerView: View {
                             .padding(.horizontal, 16)
                             .padding(.bottom, 4)
 
-                        drawerRow(
-                            icon: "book.closed",
+                        drawerBookRow(
                             title: "总账本",
+                            cover: "daily",
+                            remark: "汇总计入总账的账本",
                             selected: router.selectedBookID == nil
                         ) {
                             router.selectedBookID = nil
                             onClose()
                         }
                         ForEach(books) { book in
-                            drawerRow(
-                                icon: "book.closed",
+                            drawerBookRow(
                                 title: book.name,
+                                cover: book.cover.isEmpty ? "daily" : book.cover,
+                                remark: book.remark,
                                 selected: router.selectedBookID == book.stableID
                             ) {
                                 router.selectedBookID = book.stableID
@@ -381,6 +383,43 @@ private struct AppDrawerView: View {
         // Drawer rows are already inside one glass drawer surface. Adding a
         // glass button style to every row creates nested pills and hides the
         // selection treatment behind a second white layer.
+        .buttonStyle(.plain)
+        .contentShape(Rectangle())
+    }
+
+    private func drawerBookRow(
+        title: String,
+        cover: String,
+        remark: String,
+        selected: Bool = false,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            HStack(spacing: 12) {
+                BookCoverView(cover: cover, size: 38)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title)
+                        .font(.body)
+                        .foregroundStyle(selected ? Color.accentColor : .primary)
+                        .lineLimit(1)
+                    if !remark.isEmpty {
+                        Text(remark)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+                }
+                Spacer(minLength: 8)
+                if selected {
+                    Image(systemName: "checkmark")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(Color.accentColor)
+                }
+            }
+            .padding(.horizontal, 16)
+            .frame(minHeight: 54)
+            .background(selected ? Color.accentColor.opacity(0.12) : .clear, in: .rect(cornerRadius: 12))
+        }
         .buttonStyle(.plain)
         .contentShape(Rectangle())
     }
