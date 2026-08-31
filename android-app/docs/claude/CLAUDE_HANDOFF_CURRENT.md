@@ -1,10 +1,20 @@
 # 肥喵记账 Codex 当前交接文档
 
-更新时间：2026-08-30（GPT OAuth 旧设备授权状态迁移，v1.279.0+293；本轮无在线 Android 设备）
+更新时间：2026-08-31（GPT OAuth、Cockpit JSON 与架构收口，v1.281.0+295；本轮无在线 Android 设备）
 当前 Android 工程：`C:\src\xunni-codex\android-app`  
 新会话第一入口：`docs/claude/CLAUDE_START_HERE.md`
 
 > 本文只保留当前有效状态。历史流水看 `CHANGELOG_CODEX.md` 和 git 历史。
+
+## -1.0.13. 2026-08-31 GPT OAuth、Cockpit JSON 与架构收口（v1.281.0+295）
+
+- OAuth 普通入口固定为官方 PKCE + `auth.openai.com/oauth/authorize` + localhost:1455/1457；Android 原生监听支持 IPv4/IPv6、Activity 重建、重复回调和 flowId 隔离。固定系统代理被 `ProxySelector=DIRECT` 误判时现在回退 `ConnectivityManager.defaultProxy`；Token authorization-code 遇 `unsupported_country_region` 时由 Chrome 本地一次性页面通过浏览器 VPN 完成交换，code/verifier 只在 App 私有文件和本机响应体中传递，不进入 URL/云端。
+- Token 成功后先持久化，再拉官方模型目录并以首个模型执行不带账本内容的最小 `ping`；恢复路径同样执行探测。模型目录失败不丢登录账号，健康记录按阶段保存“可用/需代理/凭据失效/模型不可用/网络失败”。
+- Cockpit JSON 解析完整备份 `accounts.platforms.codex.exported_data`、standalone transfer、auth.json、Sub2API、嵌套 token、refresh-only、PAT、JSON/JSONL、BOM/UTF-16；显式 `auth_mode=apikey` 不会被 `type=codex` 或 stale token 误判。provider 地址、wire format、模型目录、关联 key 会合并；workspace/account_id 单独不去重。导入预览支持更新/副本/跳过，凭据只写安全存储，单账号可重新验证。
+- 新增共享 `AiHttpTransport`，OAuth、模型、Responses、主页记账、Chats、联网搜索共享代理刷新、超时和重试边界；错误/AI run/报告摘要统一脱敏。SQLite 迁移列改为缺列才添加，真实迁移错误不再被空 catch 吞掉，数据库版本升至 v49。
+- 验证：Flutter 全量 **1182/1182**；OAuth/JSON/代理/健康/仓库定向回归通过；Dart analyze 0 error（91 条既有 warning/info）；Android `:app:compileDebugKotlin` 成功；Release gate 通过。2026-08-31 本机完整 Cockpit 备份解析 **9 个 Codex 账号（6 OAuth、3 API Key），0 警告**。
+- APK：`C:\src\xunni-codex\ci-artifacts\releases\feimiao-codex-v1.281.0-295.apk`，117,707,189 字节，SHA256 `A3960191D17E8CB2E2EA4B4D0310C9A8579B39127F8A317E86E73E1BAC9C07BA`。
+- 本轮无在线 Android ADB；Chrome Ephemeral/账号选择、手机 VPN 出口、localhost 回调、显式设备码、安装冷启动及输入法/字体观感仍需目标手机复测；未使用 Plus 账号。
 
 ## -1.0.10. 2026-08-30 GPT OAuth 旧设备授权状态迁移（v1.279.0+293）
 

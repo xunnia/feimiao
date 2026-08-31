@@ -9,6 +9,8 @@ import 'package:provider/provider.dart';
 import 'core/auto_record.dart';
 import 'core/ai/report_task_scheduler.dart';
 import 'core/ai/ai_provider_config.dart';
+import 'core/ai/ai_logger.dart';
+import 'core/ai/llm_query.dart';
 import 'core/ai/openai_codex_oauth.dart';
 import 'core/ai/system_network_proxy.dart';
 import 'core/assets/repayment_reminder.dart';
@@ -335,22 +337,51 @@ class _OpenAiOAuthWatcher with WidgetsBindingObserver {
         final discovered = await OpenAiCodexOAuth.service.fetchModels(tokens);
         models = discovered.map((model) => model.slug).toList(growable: false);
       } catch (error) {
-        debugPrint('resume GPT OAuth model discovery failed: $error');
+        debugPrint(
+          'resume GPT OAuth model discovery failed: '
+          '${AiLogger.sanitizeErrorForDisplay(error.toString())}',
+        );
       }
       final fallback = <String>{
         ...models,
         AiProviderConfig.openAiCodexDefaultModel,
       };
-      await repo.saveAiOAuthTokens(
+      final saved = await repo.saveAiOAuthTokens(
         providerId: providerId,
         tokens: tokens,
         models: fallback.toList(growable: false),
       );
+      if (models.isNotEmpty) {
+        try {
+          final config = repo.aiProviderConfigForProvider(saved.id);
+          if (config == null) throw StateError('GPT 账号配置不存在');
+          await LlmQuery.testConnection(config);
+          await repo.recordAiProviderVerification(
+            saved.id,
+            status: 'available',
+          );
+        } catch (error) {
+          await repo.recordAiProviderVerification(
+            saved.id,
+            status: 'network_error',
+            message: AiLogger.sanitizeErrorForDisplay(error.toString()),
+          );
+        }
+      } else {
+        await repo.recordAiProviderVerification(
+          saved.id,
+          status: 'model_unavailable',
+          message: '模型目录为空',
+        );
+      }
     } catch (error, stackTrace) {
       // The settings page also awaits the same completion and presents the
       // actionable error. The global watcher must never surface an uncaught
       // async exception over the home screen.
-      debugPrint('resume GPT OAuth flow failed: $error');
+      debugPrint(
+        'resume GPT OAuth flow failed: '
+        '${AiLogger.sanitizeErrorForDisplay(error.toString())}',
+      );
       debugPrint('$stackTrace');
     }
   }

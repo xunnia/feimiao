@@ -236,6 +236,15 @@ void main() {
     expect(health.failureCount, 3);
     expect(health.cooldownUntilMs, isNotNull);
 
+    final verified = await repo.recordAiProviderVerification(
+      'openai-test',
+      status: 'needs_proxy',
+      message: 'unsupported_country_region',
+      latencyMs: 240,
+    );
+    expect(verified.verificationStatus, 'needs_proxy');
+    expect(verified.statusLabel, '需要代理/VPN');
+
     expect(
       await repo.addAiMemory(
         phrase: '不要保存',

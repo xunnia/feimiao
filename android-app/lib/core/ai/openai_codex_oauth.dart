@@ -10,7 +10,7 @@ import 'package:http/http.dart' as http;
 
 import '../security/secure_key_store.dart';
 import 'ai_provider_config.dart';
-import 'system_network_proxy.dart';
+import 'ai_http_transport.dart';
 
 /// OpenAI's ChatGPT/Codex OAuth is separate from an OpenAI Platform API key.
 /// Keep the protocol details in one place so API-key providers remain generic.
@@ -402,6 +402,58 @@ class OpenAiCodexOAuthKeepAlive {
     }
   }
 
+  /// Ask the external browser to exchange an authorization code when the
+  /// Android app's own socket is not covered by the user's proxy/VPN. OpenAI
+  /// can reject the app-side request with `unsupported_country_region` even
+  /// though the browser just completed the same login. The native callback
+  /// service hosts a one-shot local page that performs the form POST through
+  /// Chrome's network route and hands only the response back to Flutter.
+  static Future<bool> openBrowserTokenExchange({
+    required String flowId,
+    required String code,
+    required String verifier,
+    required String redirectUri,
+  }) async {
+    try {
+      return await _channel.invokeMethod<bool>(
+            'openBrowserTokenExchange',
+            <String, dynamic>{
+              'flowId': flowId,
+              'code': code,
+              'verifier': verifier,
+              'redirectUri': redirectUri,
+            },
+          ) ??
+          false;
+    } on MissingPluginException {
+      return false;
+    } on PlatformException {
+      return false;
+    } on FlutterError {
+      return false;
+    }
+  }
+
+  /// Reads the one-shot browser token-exchange result. The native service
+  /// leaves it in app-private storage until the owning OAuth flow is cleaned
+  /// up, so an Activity recreation cannot lose a successful exchange.
+  static Future<String?> takeTokenExchangeResult({String? flowId}) async {
+    try {
+      return await _channel.invokeMethod<String>(
+        'takeTokenExchangeResult',
+        <String, dynamic>{
+          if (flowId != null && flowId.trim().isNotEmpty) 'flowId': flowId,
+        },
+      );
+    } on MissingPluginException {
+      return null;
+    } on PlatformException {
+      return null;
+    } on FlutterError {
+      return null;
+    }
+  }
+
   /// Removes a native callback only after the owning flow has completed (or
   /// been explicitly cancelled). Keeping this separate from takeCallback is
   /// what makes process-death recovery safe.
@@ -547,7 +599,7 @@ class OpenAiCodexOAuthService {
   static const _deviceRequestTimeout = Duration(seconds: 25);
   static const _deviceDefaultPollSeconds = 5;
 
-  final http.Client _client;
+  final AiHttpTransport _transport;
   // Keep one listener per loopback family. Browsers are free to resolve
   // `localhost` to either 127.0.0.1 or ::1, while Android devices differ in
   // whether an IPv6 socket accepts IPv4-mapped connections.
@@ -603,8 +655,8 @@ class OpenAiCodexOAuthService {
 
   bool get pendingUsesDeviceCode => _pending?.isDeviceAuth ?? false;
 
-  OpenAiCodexOAuthService({http.Client? client})
-      : _client = client ?? http.Client();
+  OpenAiCodexOAuthService({http.Client? client, AiHttpTransport? transport})
+      : _transport = transport ?? AiHttpTransport(client: client);
 
   Future<OpenAiCodexOAuthSession> start({
     String? authorizationUrl,
@@ -921,7 +973,6 @@ class OpenAiCodexOAuthService {
     OpenAiCodexOAuthTokens tokens, {
     String clientVersion = OpenAiCodexOAuth.defaultClientVersion,
   }) async {
-    await SystemNetworkProxy.refresh();
     if (tokens.accessToken.trim().isEmpty) {
       throw const OpenAiCodexOAuthException('GPT OAuth access token 为空');
     }
@@ -939,14 +990,16 @@ class OpenAiCodexOAuthService {
       accountId: accountId,
     )..addAll({'Accept': 'application/json'});
     final uri = OpenAiCodexOAuth.modelsUri(clientVersion: clientVersion);
-    await SystemNetworkProxy.refreshFor(uri);
     late http.Response response;
     Object? lastNetworkError;
     for (var attempt = 0; attempt < 2; attempt++) {
       try {
-        response = await _client
-            .get(uri, headers: headers)
-            .timeout(const Duration(seconds: 45));
+        response = await _transport.get(
+          uri,
+          headers: headers,
+          timeout: const Duration(seconds: 45),
+          forceRouteRefresh: attempt > 0,
+        );
         lastNetworkError = null;
         break;
       } on TimeoutException catch (error) {
@@ -966,8 +1019,10 @@ class OpenAiCodexOAuthService {
       );
     }
     if (response.statusCode != 200) {
+      final detail = _tokenFailureDetail(response);
       throw OpenAiCodexOAuthException(
-        '获取 GPT 模型失败（${response.statusCode}）',
+        '获取 GPT 模型失败（${response.statusCode}）'
+        '${detail.isEmpty ? '' : '：$detail'}',
         statusCode: response.statusCode,
       );
     }
@@ -1086,18 +1141,18 @@ class OpenAiCodexOAuthService {
         expiresAtMs: tokens.expiresAtMs,
       );
     }
-    await SystemNetworkProxy.refresh();
     final uri = Uri.parse(OpenAiCodexOAuth.personalAccessTokenWhoAmIEndpoint);
-    await SystemNetworkProxy.refreshFor(uri);
     late http.Response response;
     try {
-      response = await _client.get(
+      response = await _transport.get(
         uri,
         headers: {
           'Authorization': 'Bearer $accessToken',
           'Accept': 'application/json',
         },
-      ).timeout(const Duration(seconds: 30));
+        timeout: const Duration(seconds: 30),
+        forceRouteRefresh: true,
+      );
     } on TimeoutException {
       throw const OpenAiCodexOAuthException('GPT 个人访问令牌身份查询超时');
     } on SocketException catch (error) {
@@ -1224,21 +1279,19 @@ class OpenAiCodexOAuthService {
   }
 
   Future<_DeviceAuthStart> _requestDeviceUserCode() async {
-    await SystemNetworkProxy.refresh(force: true);
     final uri = Uri.parse(OpenAiCodexOAuth.deviceUserCodeEndpoint);
-    await SystemNetworkProxy.refreshFor(uri, force: true);
     late http.Response response;
     try {
-      response = await _client
-          .post(
-            uri,
-            headers: const {
-              'Content-Type': 'application/json',
-              'Accept': 'application/json',
-            },
-            body: jsonEncode({'client_id': OpenAiCodexOAuth.clientId}),
-          )
-          .timeout(_deviceRequestTimeout);
+      response = await _transport.post(
+        uri,
+        headers: const {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json',
+        },
+        body: jsonEncode({'client_id': OpenAiCodexOAuth.clientId}),
+        timeout: _deviceRequestTimeout,
+        forceRouteRefresh: true,
+      );
     } on TimeoutException {
       throw const OpenAiCodexOAuthException('GPT 设备授权码请求超时');
     } on SocketException catch (error) {
@@ -1293,24 +1346,21 @@ class OpenAiCodexOAuthService {
       if (!_ownsFlow(pending, generation)) {
         throw const OpenAiCodexOAuthException('OAuth 授权已被新的授权流程替换');
       }
-      await SystemNetworkProxy.refresh();
       final deviceTokenUri = Uri.parse(OpenAiCodexOAuth.deviceTokenEndpoint);
-      await SystemNetworkProxy.refreshFor(deviceTokenUri);
       http.Response? response;
       try {
-        response = await _client
-            .post(
-              deviceTokenUri,
-              headers: const {
-                'Content-Type': 'application/json',
-                'Accept': 'application/json',
-              },
-              body: jsonEncode({
-                'device_auth_id': pending.deviceAuthId,
-                'user_code': pending.deviceUserCode,
-              }),
-            )
-            .timeout(_deviceRequestTimeout);
+        response = await _transport.post(
+          deviceTokenUri,
+          headers: const {
+            'Content-Type': 'application/json',
+            'Accept': 'application/json',
+          },
+          body: jsonEncode({
+            'device_auth_id': pending.deviceAuthId,
+            'user_code': pending.deviceUserCode,
+          }),
+          timeout: _deviceRequestTimeout,
+        );
       } on TimeoutException {
         // Network transitions while Chrome is foregrounded are expected. Keep
         // the persisted device session and retry until its official deadline.
@@ -1479,6 +1529,7 @@ class OpenAiCodexOAuthService {
       code: code,
       verifier: pending.codeVerifier,
       redirectUri: pending.redirectUri,
+      flowId: pending.state,
     );
     if (!_ownsFlow(pending, generation)) {
       throw const OpenAiCodexOAuthException('OAuth 授权已被新的授权流程替换');
@@ -1557,13 +1608,12 @@ class OpenAiCodexOAuthService {
     bool jsonBody = false,
     bool includeIdentityHeaders = false,
   }) async {
-    await SystemNetworkProxy.refresh();
     final uri = Uri.parse(OpenAiCodexOAuth.tokenEndpoint);
-    await SystemNetworkProxy.refreshFor(uri);
     Object? lastNetworkError;
     http.Response? lastRetryableResponse;
     final headers = <String, String>{
-      if (jsonBody) 'Content-Type': 'application/json',
+      'Content-Type':
+          jsonBody ? 'application/json' : 'application/x-www-form-urlencoded',
       if (includeIdentityHeaders) ...{
         'User-Agent': OpenAiCodexOAuth.authorizationUserAgent,
         'originator': OpenAiCodexOAuth.authorizationOriginator,
@@ -1576,13 +1626,13 @@ class OpenAiCodexOAuthService {
     final requestBody = jsonBody ? jsonEncode(body) : body;
     for (var attempt = 0; attempt < _tokenRequestAttempts; attempt++) {
       try {
-        final response = await _client
-            .post(
-              uri,
-              headers: headers.isEmpty ? null : headers,
-              body: requestBody,
-            )
-            .timeout(_tokenRequestTimeout);
+        final response = await _transport.post(
+          uri,
+          headers: headers.isEmpty ? null : headers,
+          body: requestBody,
+          timeout: _tokenRequestTimeout,
+          forceRouteRefresh: attempt > 0,
+        );
         if (!_isRetryableTokenStatus(response.statusCode) ||
             attempt == _tokenRequestAttempts - 1) {
           return response;
@@ -1612,6 +1662,7 @@ class OpenAiCodexOAuthService {
     required String code,
     required String verifier,
     required String redirectUri,
+    String? flowId,
   }) async {
     final response = await _postTokenWithRetry(
       operation: 'GPT 授权换取 Token',
@@ -1624,6 +1675,14 @@ class OpenAiCodexOAuthService {
       },
     );
     if (response.statusCode < 200 || response.statusCode >= 300) {
+      final browserTokens = await _exchangeCodeViaBrowserIfNeeded(
+        response: response,
+        flowId: flowId,
+        code: code,
+        verifier: verifier,
+        redirectUri: redirectUri,
+      );
+      if (browserTokens != null) return browserTokens;
       final detail = _tokenFailureDetail(response);
       throw OpenAiCodexOAuthException(
         'GPT 授权换取 Token 失败（${response.statusCode}）'
@@ -1632,6 +1691,58 @@ class OpenAiCodexOAuthService {
       );
     }
     return _decodeTokens(response.body);
+  }
+
+  bool _isUnsupportedCountryResponse(http.Response response) {
+    if (response.statusCode != 403) return false;
+    final detail = _tokenFailureDetail(response).toLowerCase();
+    return detail.contains('unsupported_country_region') ||
+        detail.contains('unsupported country') ||
+        detail.contains('country, region, or territory');
+  }
+
+  Future<OpenAiCodexOAuthTokens?> _exchangeCodeViaBrowserIfNeeded({
+    required http.Response response,
+    required String? flowId,
+    required String code,
+    required String verifier,
+    required String redirectUri,
+  }) async {
+    if (!Platform.isAndroid || flowId == null || flowId.trim().isEmpty) {
+      return null;
+    }
+    if (!_isUnsupportedCountryResponse(response)) return null;
+    final opened = await OpenAiCodexOAuthKeepAlive.openBrowserTokenExchange(
+      flowId: flowId,
+      code: code,
+      verifier: verifier,
+      redirectUri: redirectUri,
+    );
+    if (!opened) return null;
+    final deadline = DateTime.now().add(const Duration(seconds: 45));
+    while (DateTime.now().isBefore(deadline)) {
+      final raw = await OpenAiCodexOAuthKeepAlive.takeTokenExchangeResult(
+        flowId: flowId,
+      );
+      if (raw != null && raw.trim().isNotEmpty) {
+        try {
+          final decoded = jsonDecode(raw);
+          if (decoded is Map) {
+            final status = int.tryParse(decoded['status']?.toString() ?? '');
+            final body = decoded['body']?.toString() ?? '';
+            if (status != null && status >= 200 && status < 300) {
+              return _decodeTokens(body);
+            }
+          }
+        } catch (_) {
+          // Keep the original direct-exchange diagnostic when the browser
+          // page returns malformed or incomplete data.
+        }
+        return null;
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 250));
+    }
+    return null;
   }
 
   Future<OpenAiCodexOAuthTokens> _refreshToken({

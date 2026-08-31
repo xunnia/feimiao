@@ -160,7 +160,8 @@ class AiLogger {
     // 添加边界检查，避免误伤更长的数字串
     sanitized = sanitized.replaceAllMapped(
       RegExp(r'(?<!\d)\d{17}[\dXx](?!\d)'),
-      (m) => '${m.group(0)!.substring(0, 6)}********${m.group(0)!.substring(14, 18)}',
+      (m) =>
+          '${m.group(0)!.substring(0, 6)}********${m.group(0)!.substring(14, 18)}',
     );
 
     // 手机号脱敏：13812345678 → 138****5678
@@ -180,20 +181,51 @@ class AiLogger {
 
   /// 脱敏错误信息：移除可能包含的敏感数据
   static String _sanitizeErrorMessage(String message) {
-    var sanitized = _sanitizeString(message);
+    var sanitized = sanitizeErrorForDisplay(message);
 
     // 移除可能的 API 响应体片段（通常包含敏感信息）
     if (sanitized.contains('{') || sanitized.contains('[')) {
       // 仅保留前 100 个字符作为上下文
-      sanitized = sanitized.substring(0, sanitized.length > 100 ? 100 : sanitized.length);
+      sanitized = sanitized.substring(
+          0, sanitized.length > 100 ? 100 : sanitized.length);
       sanitized = '$sanitized... [响应体已隐藏]';
     }
 
     return sanitized;
   }
 
+  /// Remove credential-shaped values before an error reaches either a log or
+  /// a settings toast.  Upstream gateways occasionally echo request metadata
+  /// in a JSON error body, so truncating the body alone is not sufficient.
+  static String sanitizeErrorForDisplay(String message) {
+    var sanitized = _sanitizeString(message);
+    sanitized = sanitized.replaceAllMapped(
+      RegExp(
+        r'''((?:"|\b)(?:access[_-]?token|refresh[_-]?token|id[_-]?token|api[_-]?key|authorization|password)(?:"|\b)\s*[:=]\s*["']?)([^"'\s,}]+)''',
+        caseSensitive: false,
+      ),
+      (match) => '${match.group(1)}<redacted>',
+    );
+    sanitized = sanitized.replaceAllMapped(
+      RegExp(r'\bBearer\s+[A-Za-z0-9._~+/=-]+', caseSensitive: false),
+      (_) => 'Bearer <redacted>',
+    );
+    sanitized = sanitized.replaceAllMapped(
+      RegExp(r'\b(?:sk|at)-[A-Za-z0-9_-]{6,}', caseSensitive: false),
+      (_) => '<redacted>',
+    );
+    // JWTs are not always prefixed with `Bearer` in provider error strings.
+    sanitized = sanitized.replaceAllMapped(
+      RegExp(
+          r'\beyJ[A-Za-z0-9_-]{12,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b'),
+      (_) => '<redacted>',
+    );
+    return sanitized;
+  }
+
   static void _log(String event, Map<String, dynamic> data) {
-    final message = '$event: ${data.entries.map((e) => '${e.key}=${e.value}').join(', ')}';
+    final message =
+        '$event: ${data.entries.map((e) => '${e.key}=${e.value}').join(', ')}';
     developer.log(
       message,
       name: 'AiLogger',

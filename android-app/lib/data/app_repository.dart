@@ -23,6 +23,7 @@ import '../core/account/net_worth_snapshot.dart';
 import '../core/account/net_worth_verified_checkpoint.dart';
 import '../core/ai/ai_provider_config.dart';
 import '../core/ai/ai_account_json.dart';
+import '../core/ai/ai_logger.dart';
 import '../core/ai/ai_provider_health.dart';
 import '../core/ai/ai_run.dart';
 import '../core/ai/ai_extensions.dart';
@@ -2670,7 +2671,7 @@ class ReportJobEntity {
 // ---------------------------------------------------------------------------
 
 class AppRepository extends ChangeNotifier {
-  static const _dbVersion = 48;
+  static const _dbVersion = 49;
   static const _dbName = 'qingji.db';
 
   AppRepository({ReportExecutionFence? reportExecutionFence})
@@ -3821,6 +3822,15 @@ class AppRepository extends ChangeNotifier {
     );
   }
 
+  /// Resolve one provider with the same OAuth refresh saver used by normal
+  /// Chats.  Account import/verification must not reconstruct a bare config,
+  /// otherwise a refresh-only Cockpit token would work once in memory and be
+  /// lost on the next request or restart.
+  AiProviderConfig? aiProviderConfigForProvider(String? providerId) {
+    final provider = aiProviderById(providerId);
+    return provider == null ? null : _providerConfig(provider);
+  }
+
   bool get hasAiApiKey => aiProviderConfig.hasKey;
 
   /// True when the selected record-parse account has either an API key or an
@@ -4629,9 +4639,12 @@ class AppRepository extends ChangeNotifier {
         'sort_order': 0,
         'created_ms': DateTime.now().millisecondsSinceEpoch,
       });
-      try {
-        await db.execute('ALTER TABLE transactions ADD COLUMN book_id INTEGER');
-      } catch (_) {}
+      await _addColumnIfMissing(
+        db,
+        table: 'transactions',
+        column: 'book_id',
+        definition: 'book_id INTEGER',
+      );
       await db.execute(
           'UPDATE transactions SET book_id = $defaultBookId WHERE book_id IS NULL');
     }
@@ -4653,31 +4666,37 @@ class AppRepository extends ChangeNotifier {
           color INTEGER NOT NULL DEFAULT 4286351771
         )
       ''');
-      try {
-        await db.execute(
-            "ALTER TABLE transactions ADD COLUMN tags TEXT NOT NULL DEFAULT ''");
-      } catch (_) {}
+      await _addColumnIfMissing(
+        db,
+        table: 'transactions',
+        column: 'tags',
+        definition: "tags TEXT NOT NULL DEFAULT ''",
+      );
     }
     if (oldVersion < 6) {
-      try {
-        try {
-          await db
-              .execute('ALTER TABLE categories ADD COLUMN parent_id INTEGER');
-        } catch (_) {}
-        await _applyCategoryTree(db);
-      } catch (_) {}
+      await _addColumnIfMissing(
+        db,
+        table: 'categories',
+        column: 'parent_id',
+        definition: 'parent_id INTEGER',
+      );
+      await _applyCategoryTree(db);
     }
     if (oldVersion < 7) {
-      try {
-        await db.execute(
-            'ALTER TABLE transactions ADD COLUMN reimbursable INTEGER NOT NULL DEFAULT 0');
-      } catch (_) {}
+      await _addColumnIfMissing(
+        db,
+        table: 'transactions',
+        column: 'reimbursable',
+        definition: 'reimbursable INTEGER NOT NULL DEFAULT 0',
+      );
     }
     if (oldVersion < 8) {
-      try {
-        await db.execute(
-            "ALTER TABLE transactions ADD COLUMN image_path TEXT NOT NULL DEFAULT ''");
-      } catch (_) {}
+      await _addColumnIfMissing(
+        db,
+        table: 'transactions',
+        column: 'image_path',
+        definition: "image_path TEXT NOT NULL DEFAULT ''",
+      );
     }
     if (oldVersion < 9) {
       await db.execute('''
@@ -4726,56 +4745,69 @@ class AppRepository extends ChangeNotifier {
     }
     if (oldVersion < 12) {
       // 账本加星 + 是否计入总账本（默认计入）。
-      try {
-        await db.execute(
-            'ALTER TABLE books ADD COLUMN starred INTEGER NOT NULL DEFAULT 0');
-      } catch (_) {}
-      try {
-        await db.execute(
-            'ALTER TABLE books ADD COLUMN include_in_total INTEGER NOT NULL DEFAULT 1');
-      } catch (_) {}
+      await _addColumnIfMissing(
+        db,
+        table: 'books',
+        column: 'starred',
+        definition: 'starred INTEGER NOT NULL DEFAULT 0',
+      );
+      await _addColumnIfMissing(
+        db,
+        table: 'books',
+        column: 'include_in_total',
+        definition: 'include_in_total INTEGER NOT NULL DEFAULT 1',
+      );
     }
     if (oldVersion < 13) {
       // 预算改「预算期间」模型：阶段性预算，历史月显示当时生效的那份。
       await db.execute(_createBudgetPeriodsSql);
       // 老的单一预算自动搬成一条「从很久以前开始的每月循环期间」，
       // 行为与之前完全一致；旧 budget 表保留不动（只加不删）。
-      // 搬迁失败不拦迁移，init 收尾处还有一次幂等自愈兜底。
-      try {
-        await _migrateLegacyBudgetIntoPeriods(db);
-      } catch (_) {}
+      // 搬迁在同一升级事务中完成；任何真实 SQLite 错误都中止升级，避免
+      // 版本号前进但预算期间只迁了一半。启动自愈仍负责旧版本遗留的重复检查。
+      await _migrateLegacyBudgetIntoPeriods(db);
     }
     if (oldVersion < 14) {
       // 账本封面图（模板成品插画的资源路径）。
-      try {
-        await db.execute(
-            "ALTER TABLE books ADD COLUMN cover TEXT NOT NULL DEFAULT ''");
-      } catch (_) {}
+      await _addColumnIfMissing(
+        db,
+        table: 'books',
+        column: 'cover',
+        definition: "cover TEXT NOT NULL DEFAULT ''",
+      );
     }
     if (oldVersion < 15) {
       // 「不计入收支」：帮人代付等不想进统计/预算的账（记录仍在列表里）。
-      try {
-        await db.execute(
-            'ALTER TABLE transactions ADD COLUMN excluded INTEGER NOT NULL DEFAULT 0');
-      } catch (_) {}
+      await _addColumnIfMissing(
+        db,
+        table: 'transactions',
+        column: 'excluded',
+        definition: 'excluded INTEGER NOT NULL DEFAULT 0',
+      );
     }
     if (oldVersion < 16) {
       // ① 分类可隐藏：删除保护的出路——有历史账单的分类建议隐藏/合并，不硬删。
-      try {
-        await db.execute(
-            'ALTER TABLE categories ADD COLUMN hidden INTEGER NOT NULL DEFAULT 0');
-      } catch (_) {}
+      await _addColumnIfMissing(
+        db,
+        table: 'categories',
+        column: 'hidden',
+        definition: 'hidden INTEGER NOT NULL DEFAULT 0',
+      );
       // ② 多人共享账本的地基：行级 uuid + 变更时间戳。现在先落库并回填，
       //    以后接后端同步时就不用再全表迁移（越晚加越疼）。
       for (final table in ['transactions', 'books']) {
-        try {
-          await db.execute(
-              "ALTER TABLE $table ADD COLUMN uuid TEXT NOT NULL DEFAULT ''");
-        } catch (_) {}
-        try {
-          await db.execute(
-              'ALTER TABLE $table ADD COLUMN updated_ms INTEGER NOT NULL DEFAULT 0');
-        } catch (_) {}
+        await _addColumnIfMissing(
+          db,
+          table: table,
+          column: 'uuid',
+          definition: "uuid TEXT NOT NULL DEFAULT ''",
+        );
+        await _addColumnIfMissing(
+          db,
+          table: table,
+          column: 'updated_ms',
+          definition: 'updated_ms INTEGER NOT NULL DEFAULT 0',
+        );
         // 存量行回填：uuid 用 SQLite 自带 randomblob，无需三方库。
         await db.execute(
             "UPDATE $table SET uuid = lower(hex(randomblob(16))) WHERE uuid = ''");
@@ -4787,10 +4819,12 @@ class AppRepository extends ChangeNotifier {
     if (oldVersion < 17) {
       // 附着式退款：退款行挂到原账单（refund_of=原id），不再作为独立条目
       // 出现在时间线里。老的独立冲账行 refund_of 保持 NULL，仍按旧样显示。
-      try {
-        await db
-            .execute('ALTER TABLE transactions ADD COLUMN refund_of INTEGER');
-      } catch (_) {}
+      await _addColumnIfMissing(
+        db,
+        table: 'transactions',
+        column: 'refund_of',
+        definition: 'refund_of INTEGER',
+      );
     }
     if (oldVersion < 18) {
       // Phase A 分类大改：重跑分类树（幂等 upsert）——新分类插入、改名/重挂父类
@@ -4818,66 +4852,84 @@ class AppRepository extends ChangeNotifier {
     }
     if (oldVersion < 20) {
       // 账本加「备注」列（抽屉账本行放大后显示在名称下方）。
-      try {
-        await db.execute(
-            "ALTER TABLE books ADD COLUMN remark TEXT NOT NULL DEFAULT ''");
-      } catch (_) {}
+      await _addColumnIfMissing(
+        db,
+        table: 'books',
+        column: 'remark',
+        definition: "remark TEXT NOT NULL DEFAULT ''",
+      );
     }
     if (oldVersion < 21) {
       // 账户软删除：保留历史交易 join 到旧账户名，避免删除账户后历史展示空掉。
-      try {
-        await db.execute(
-            'ALTER TABLE accounts ADD COLUMN is_deleted INTEGER NOT NULL DEFAULT 0');
-      } catch (_) {}
-      try {
-        await db
-            .execute('ALTER TABLE accounts ADD COLUMN deleted_at_ms INTEGER');
-      } catch (_) {}
+      await _addColumnIfMissing(
+        db,
+        table: 'accounts',
+        column: 'is_deleted',
+        definition: 'is_deleted INTEGER NOT NULL DEFAULT 0',
+      );
+      await _addColumnIfMissing(
+        db,
+        table: 'accounts',
+        column: 'deleted_at_ms',
+        definition: 'deleted_at_ms INTEGER',
+      );
     }
     if (oldVersion < 22) {
       await db.execute(_createReportsSql);
     }
     if (oldVersion < 23) {
       await db.execute(_createReportsSql);
-      try {
-        await db.execute(
-            'ALTER TABLE reports ADD COLUMN pinned_ms INTEGER NOT NULL DEFAULT 0');
-      } catch (_) {}
+      await _addColumnIfMissing(
+        db,
+        table: 'reports',
+        column: 'pinned_ms',
+        definition: 'pinned_ms INTEGER NOT NULL DEFAULT 0',
+      );
     }
     if (oldVersion < 24) {
-      try {
-        await db.execute(
-            "ALTER TABLE accounts ADD COLUMN type TEXT NOT NULL DEFAULT 'cash'");
-      } catch (_) {}
-      try {
-        await db.execute(
-            "ALTER TABLE accounts ADD COLUMN opening_balance TEXT NOT NULL DEFAULT '0'");
-      } catch (_) {}
-      try {
-        await db.execute(
-            'ALTER TABLE accounts ADD COLUMN include_in_net_worth INTEGER NOT NULL DEFAULT 1');
-      } catch (_) {}
-      try {
-        await db.execute(
-            "ALTER TABLE accounts ADD COLUMN institution TEXT NOT NULL DEFAULT ''");
-      } catch (_) {}
-      try {
-        await db.execute(
-            'ALTER TABLE accounts ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0');
-      } catch (_) {}
+      await _addColumnIfMissing(
+        db,
+        table: 'accounts',
+        column: 'type',
+        definition: "type TEXT NOT NULL DEFAULT 'cash'",
+      );
+      await _addColumnIfMissing(
+        db,
+        table: 'accounts',
+        column: 'opening_balance',
+        definition: "opening_balance TEXT NOT NULL DEFAULT '0'",
+      );
+      await _addColumnIfMissing(
+        db,
+        table: 'accounts',
+        column: 'include_in_net_worth',
+        definition: 'include_in_net_worth INTEGER NOT NULL DEFAULT 1',
+      );
+      await _addColumnIfMissing(
+        db,
+        table: 'accounts',
+        column: 'institution',
+        definition: "institution TEXT NOT NULL DEFAULT ''",
+      );
+      await _addColumnIfMissing(
+        db,
+        table: 'accounts',
+        column: 'sort_order',
+        definition: 'sort_order INTEGER NOT NULL DEFAULT 0',
+      );
     }
     if (oldVersion < 25) {
-      try {
-        await db.execute(
-            'ALTER TABLE recurring_rules ADD COLUMN anchor_day INTEGER NOT NULL DEFAULT 0');
-      } catch (_) {}
-      try {
-        await db.execute('''
-          UPDATE recurring_rules
-          SET anchor_day = CAST(strftime('%d', next_due_ms / 1000, 'unixepoch', 'localtime') AS INTEGER)
-          WHERE anchor_day = 0
-        ''');
-      } catch (_) {}
+      await _addColumnIfMissing(
+        db,
+        table: 'recurring_rules',
+        column: 'anchor_day',
+        definition: 'anchor_day INTEGER NOT NULL DEFAULT 0',
+      );
+      await db.execute('''
+        UPDATE recurring_rules
+        SET anchor_day = CAST(strftime('%d', next_due_ms / 1000, 'unixepoch', 'localtime') AS INTEGER)
+        WHERE anchor_day = 0
+      ''');
     }
     if (oldVersion < 26) {
       await _ensureAssetTables(db);
@@ -5020,6 +5072,11 @@ class AppRepository extends ChangeNotifier {
       // v48：持久化报告真正开始进入模型处理的时间点。恢复 Chats 时
       // 沿用这个时间，避免每次重开都把“思考了 Xs”重置为当前时刻。
       await _ensureReportJobs(db);
+    }
+    if (oldVersion < 49) {
+      // v49：账号健康记录增加显式验证状态。旧记录的空值表示尚未执行
+      // 账号级模型目录 + 最小连接探测，不改变既有成功/失败计数。
+      await _ensureAiRunTables(db);
     }
     await _ensureTransactionIndexes(db);
   }
@@ -5169,6 +5226,21 @@ class AppRepository extends ChangeNotifier {
         .map((row) => row['name'])
         .whereType<String>()
         .toSet();
+  }
+
+  /// Add a migration column only when it is absent.  Historically these
+  /// operations were wrapped in broad empty catches, which made a real SQLite
+  /// failure indistinguishable from an already-applied column and allowed the
+  /// database user_version to advance with a partial schema.
+  static Future<void> _addColumnIfMissing(
+    DatabaseExecutor db, {
+    required String table,
+    required String column,
+    required String definition,
+  }) async {
+    final columns = await _columnNamesFor(db, table);
+    if (columns.contains(column)) return;
+    await db.execute('ALTER TABLE $table ADD COLUMN $definition');
   }
 
   static Future<bool> _indexMatches(
@@ -6794,9 +6866,20 @@ class AppRepository extends ChangeNotifier {
         cooldown_until_ms      INTEGER,
         average_latency_ms     INTEGER NOT NULL DEFAULT 0,
         last_error             TEXT NOT NULL DEFAULT '',
+        verification_status    TEXT NOT NULL DEFAULT '',
         updated_ms             INTEGER NOT NULL DEFAULT 0
       )
     ''');
+    // v49 adds a structured result for the explicit account verification
+    // performed after OAuth/JSON import.  Keep this helper idempotent because
+    // the table is also ensured during cold-start recovery and backup restore.
+    final healthColumns = await _columnNamesFor(db, 'ai_provider_health');
+    if (healthColumns.isNotEmpty &&
+        !healthColumns.contains('verification_status')) {
+      await db.execute(
+        "ALTER TABLE ai_provider_health ADD COLUMN verification_status TEXT NOT NULL DEFAULT ''",
+      );
+    }
   }
 
   static Future<void> _ensureAssetTables(DatabaseExecutor db) async {
@@ -9805,7 +9888,8 @@ class AppRepository extends ChangeNotifier {
       if (proposalJson != null) 'proposal_json': proposalJson,
       if (resultJson != null) 'result_json': resultJson,
       if (errorCode != null) 'error_code': errorCode,
-      if (errorMessage != null) 'error_message': errorMessage,
+      if (errorMessage != null)
+        'error_message': AiLogger.sanitizeErrorForDisplay(errorMessage),
       if (retryCount != null) 'retry_count': retryCount,
       if (requiresConfirmation != null)
         'requires_confirmation': requiresConfirmation ? 1 : 0,
@@ -9929,18 +10013,23 @@ class AppRepository extends ChangeNotifier {
   }) async {
     final id = runId.trim();
     if (id.isEmpty) return;
+    final safeMessage = AiLogger.sanitizeErrorForDisplay(message);
     await updateAiRun(
       id,
       status: AiRunStatus.failed,
       errorCode: code,
-      errorMessage: message.length > 500 ? message.substring(0, 500) : message,
+      errorMessage: safeMessage.length > 500
+          ? safeMessage.substring(0, 500)
+          : safeMessage,
     );
     await appendAiRunEvent(
       id,
       AiRunEventType.failed,
       payload: {
         'code': code,
-        'message': message.length > 240 ? message.substring(0, 240) : message
+        'message': safeMessage.length > 240
+            ? safeMessage.substring(0, 240)
+            : safeMessage
       },
     );
   }
@@ -10113,7 +10202,41 @@ class AppRepository extends ChangeNotifier {
     final id = providerId.trim();
     if (id.isEmpty) return const AiProviderHealth(providerId: '');
     final now = DateTime.now().millisecondsSinceEpoch;
-    final next = aiProviderHealthFor(id).recordFailure(error.trim(), now);
+    final next = aiProviderHealthFor(id).recordFailure(
+      AiLogger.sanitizeErrorForDisplay(error.trim()),
+      now,
+    );
+    await _db!.insert(
+      'ai_provider_health',
+      next.toMap(),
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+    _aiProviderHealth[id] = next;
+    notifyListeners();
+    return next;
+  }
+
+  /// Persist the result of an explicit account verification.  This is kept
+  /// separate from the normal request callbacks so an import can show a
+  /// meaningful diagnosis even before the account is used in a conversation.
+  Future<AiProviderHealth> recordAiProviderVerification(
+    String providerId, {
+    required String status,
+    String message = '',
+    int latencyMs = 0,
+  }) async {
+    final id = providerId.trim();
+    if (id.isEmpty) return const AiProviderHealth(providerId: '');
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final compact = message.replaceAll(RegExp(r'\s+'), ' ').trim();
+    final safeMessage =
+        compact.length <= 240 ? compact : '${compact.substring(0, 237)}...';
+    final next = aiProviderHealthFor(id).recordVerification(
+      status: status,
+      message: safeMessage,
+      latencyMs: latencyMs.clamp(0, 3600000).toInt(),
+      now: now,
+    );
     await _db!.insert(
       'ai_provider_health',
       next.toMap(),
@@ -16247,7 +16370,10 @@ class AppRepository extends ChangeNotifier {
       await SecureKeyStore.delete(key);
       return;
     }
-    await SecureKeyStore.write(key, trimmed);
+    final stored = await SecureKeyStore.write(key, trimmed);
+    if (!stored && Platform.isAndroid) {
+      throw StateError('Android 安全存储不可用，OAuth refresh token 未保存');
+    }
   }
 
   Future<void> _saveOAuthIdToken(String providerId, String value) async {
@@ -16257,7 +16383,10 @@ class AppRepository extends ChangeNotifier {
       await SecureKeyStore.delete(key);
       return;
     }
-    await SecureKeyStore.write(key, trimmed);
+    final stored = await SecureKeyStore.write(key, trimmed);
+    if (!stored && Platform.isAndroid) {
+      throw StateError('Android 安全存储不可用，OAuth id token 未保存');
+    }
   }
 
   /// Persist the provider catalog and the two task selections in one place.
@@ -16352,6 +16481,20 @@ class AppRepository extends ChangeNotifier {
     if (id.isEmpty) id = _newUuid();
 
     final existing = aiProviderById(id);
+    final previousProviders = List<AiConfiguredProvider>.from(_aiProviders);
+    final previousRecordProviderId = _recordAiProviderId;
+    final previousRecordModel = _recordAiModel;
+    final previousChatProviderId = _chatCurrentProviderId;
+    final previousChatModel = _chatCurrentModel;
+    final previousRecordType = _recordAiProviderType;
+    final previousChatType = _chatAiProviderType;
+    final previousReportType = _reportAiProviderType;
+    final previousProviderType = _aiProviderType;
+    final previousCustomKey = _customAiApiKey;
+    final previousCustomName = _customAiDisplayName;
+    final previousCustomBaseUrl = _customAiBaseUrl;
+    final previousCustomModel = _customAiModel;
+    final previousDeepSeekKey = _deepSeekApiKey;
     bool expectedMatches(AiConfiguredProvider? current) {
       if (expectedAccessToken == null && expectedRefreshToken == null) {
         return true;
@@ -16389,12 +16532,7 @@ class AppRepository extends ChangeNotifier {
         .map((value) => value.trim())
         .where((value) => value.isNotEmpty && !models.contains(value))
         .toList();
-    final storedKey = await _saveSecret(
-      secureKey: _providerSecretKey(id),
-      legacySettingKey: _providerSecretKey(id),
-      configuredSettingKey: '${_providerSecretKey(id)}_configured',
-      value: provider.apiKey,
-    );
+    String? storedKey;
     final oauthRefreshToken =
         !isDeepSeek && provider.authMethod == AiAuthMethod.oauth
             ? provider.oauthRefreshToken.trim()
@@ -16403,8 +16541,26 @@ class AppRepository extends ChangeNotifier {
         !isDeepSeek && provider.authMethod == AiAuthMethod.oauth
             ? provider.oauthIdToken.trim()
             : '';
-    await _saveOAuthRefreshToken(id, oauthRefreshToken);
-    await _saveOAuthIdToken(id, oauthIdToken);
+    try {
+      storedKey = await _saveSecret(
+        secureKey: _providerSecretKey(id),
+        legacySettingKey: _providerSecretKey(id),
+        configuredSettingKey: '${_providerSecretKey(id)}_configured',
+        value: provider.apiKey,
+        allowLegacyFallback:
+            !(provider.authMethod == AiAuthMethod.oauth && Platform.isAndroid),
+      );
+      await _saveOAuthRefreshToken(id, oauthRefreshToken);
+      await _saveOAuthIdToken(id, oauthIdToken);
+    } catch (_) {
+      // Secure storage and SQLite metadata are separate durability domains.
+      // If either credential write fails, remove only this attempted account's
+      // partial secret and leave the previous account untouched.
+      try {
+        await _restoreAiProviderSecrets(id, existing);
+      } catch (_) {}
+      rethrow;
+    }
 
     // The credential writes above yield to the event loop. A newer
     // reauthorization may have committed while they were in flight; restore
@@ -16418,6 +16574,9 @@ class AppRepository extends ChangeNotifier {
           legacySettingKey: _providerSecretKey(id),
           configuredSettingKey: '${_providerSecretKey(id)}_configured',
           value: latestAfterSecrets.apiKey,
+          allowLegacyFallback:
+              !(latestAfterSecrets.authMethod == AiAuthMethod.oauth &&
+                  Platform.isAndroid),
         );
         await _saveOAuthRefreshToken(
           id,
@@ -16434,6 +16593,7 @@ class AppRepository extends ChangeNotifier {
         legacySettingKey: 'deepseek_api_key',
         configuredSettingKey: 'deepseek_api_key_configured',
         value: provider.apiKey,
+        allowLegacyFallback: !Platform.isAndroid,
       );
       _aiProviderType = AiProviderType.deepseek;
     } else if (id == 'legacy-custom') {
@@ -16551,7 +16711,33 @@ class AppRepository extends ChangeNotifier {
     _chatAiProviderType = aiProviderById(_chatCurrentProviderId)?.type ?? type;
     _reportAiProviderType = _chatAiProviderType;
     if (persistMetadata) {
-      await _persistAiProviderMetadata(notify: false);
+      try {
+        await _persistAiProviderMetadata(notify: false);
+      } catch (_) {
+        // Restore the in-memory catalog and selection before surfacing the
+        // database error.  Best-effort secret restoration prevents an orphaned
+        // credential when a metadata batch fails after secure writes succeed.
+        _aiProviders
+          ..clear()
+          ..addAll(previousProviders);
+        _recordAiProviderId = previousRecordProviderId;
+        _recordAiModel = previousRecordModel;
+        _chatCurrentProviderId = previousChatProviderId;
+        _chatCurrentModel = previousChatModel;
+        _recordAiProviderType = previousRecordType;
+        _chatAiProviderType = previousChatType;
+        _reportAiProviderType = previousReportType;
+        _aiProviderType = previousProviderType;
+        _customAiApiKey = previousCustomKey;
+        _customAiDisplayName = previousCustomName;
+        _customAiBaseUrl = previousCustomBaseUrl;
+        _customAiModel = previousCustomModel;
+        _deepSeekApiKey = previousDeepSeekKey;
+        try {
+          await _restoreAiProviderSecrets(id, existing);
+        } catch (_) {}
+        rethrow;
+      }
     }
     if (notify) notifyListeners();
   }
@@ -16787,14 +16973,13 @@ class AppRepository extends ChangeNotifier {
         }
       }
     }
-    for (final provider in _aiProviders) {
-      if (email.isEmpty &&
-          accountId.isNotEmpty &&
-          provider.oauthAccountId.trim().toLowerCase() == accountId) {
-        return provider;
-      }
-      if (sourceId.isNotEmpty && provider.id.trim().toLowerCase() == sourceId) {
-        return provider;
+    // Never use a workspace/account id by itself: Cockpit can export several
+    // identities sharing that id. A source id is only safe when it is the
+    // app's persisted provider id; opaque export labels (for example a common
+    // `codex_apikey`) must not collapse unrelated accounts.
+    if (sourceId.isNotEmpty) {
+      for (final provider in _aiProviders) {
+        if (provider.id.trim().toLowerCase() == sourceId) return provider;
       }
     }
     return null;
@@ -17162,6 +17347,7 @@ class AppRepository extends ChangeNotifier {
         legacySettingKey: 'custom_ai_api_key',
         configuredSettingKey: 'custom_ai_api_key_configured',
         value: apiKey,
+        allowLegacyFallback: !Platform.isAndroid,
       );
     } else {
       _deepSeekApiKey = await _saveSecret(
@@ -17169,6 +17355,7 @@ class AppRepository extends ChangeNotifier {
         legacySettingKey: 'deepseek_api_key',
         configuredSettingKey: 'deepseek_api_key_configured',
         value: apiKey,
+        allowLegacyFallback: !Platform.isAndroid,
       );
     }
 
@@ -17293,6 +17480,7 @@ class AppRepository extends ChangeNotifier {
     required String legacySettingKey,
     required String configuredSettingKey,
     required String value,
+    bool allowLegacyFallback = true,
   }) async {
     final trimmed = value.trim();
     if (trimmed.isEmpty) {
@@ -17317,6 +17505,9 @@ class AppRepository extends ChangeNotifier {
           conflictAlgorithm: ConflictAlgorithm.replace,
         );
       } else {
+        if (!allowLegacyFallback && Platform.isAndroid) {
+          throw StateError('Android 安全存储不可用，凭据未保存');
+        }
         // Desktop tests and unsupported platforms do not provide the native
         // secure channel. Keep the app usable there, but Android release builds
         // use Keystore through MainActivity.
@@ -17328,6 +17519,22 @@ class AppRepository extends ChangeNotifier {
       }
       return trimmed;
     }
+  }
+
+  Future<void> _restoreAiProviderSecrets(
+    String id,
+    AiConfiguredProvider? previous,
+  ) async {
+    final apiKey = previous?.apiKey ?? '';
+    await _saveSecret(
+      secureKey: _providerSecretKey(id),
+      legacySettingKey: _providerSecretKey(id),
+      configuredSettingKey: '${_providerSecretKey(id)}_configured',
+      value: apiKey,
+      allowLegacyFallback: !Platform.isAndroid,
+    );
+    await _saveOAuthRefreshToken(id, previous?.oauthRefreshToken ?? '');
+    await _saveOAuthIdToken(id, previous?.oauthIdToken ?? '');
   }
 
   // ---------------------------------------------------------------------------

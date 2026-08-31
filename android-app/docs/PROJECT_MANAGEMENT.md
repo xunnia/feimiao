@@ -2,7 +2,7 @@
 title: 肥喵记账项目管理总纲
 version: 1.0
 status: active
-updated: 2026-08-28
+updated: 2026-08-31
 scope: Android Flutter 主工程
 ---
 
@@ -19,21 +19,21 @@ scope: Android Flutter 主工程
 | 平台 | Android 为当前主交付平台；仓库另有独立 `ios-app`，不与 Android 批次混做 |
 | 技术栈 | Flutter / Dart、Provider、SQLite(sqflite)、Android 原生 Worker/Widget |
 | 当前分支 | `feature/ai-model-selector` |
-| 当前工作版本 | `1.264.0+278`，build tag `b0828-278` |
-| 数据库版本 | v48 |
+| 当前工作版本 | `1.281.0+295`，build tag `b0830-295` |
+| 数据库版本 | v49 |
 | Android 身份 | `com.qingji.qingji.codex`，min SDK 24，compile/target SDK 36 |
-| 当前批次 | 全局 UI 收口：公共按钮/菜单/弹层/设置行/字体/颜色/触控热区/响应式；AI 与 Chats 既有能力保持不变 |
-| 自动验证 | Dart analyze 无 error（64 条既有 warning/info）；串行全量 Flutter **1124/1124**；全局 UI、附件累计上限、refresh-only OAuth 首次交换、报告计时语义、AI 请求/重试/Responses、AI/UI/会话/图片/思考/来源/模型/菜单及严格 Claude/Chats 视觉回归通过；Gradle Release 构建与 release identity gate 通过 |
-| 运行态验证 | 本轮无在线 ADB 设备；真实 provider API、IME、OAuth 出口地区和账号 JSON 实际网络导入仍待用户设备 |
-| 当前 APK | 本轮最终门禁后归档为 `feimiao-codex-v1.264.0-278.apk` |
-| 当前 APK SHA256 | `3BFC09913BB28C0CC783C30773C459570B7195BCE321DAF530FF2A9DCE6FF07C`（116,596,258 字节） |
+| 当前批次 | GPT OAuth 网络/身份稳定性与 Cockpit JSON 导入修复；月份选择弹窗按参考图二回退；AI 与 Chats 既有能力保持不变 |
+| 自动验证 | Dart analyze 无 error（91 条既有 warning/info）；OAuth/JSON/代理/健康/仓库定向回归通过；串行全量 Flutter **1182/1182**；本机实际 Cockpit 完整备份解析 9 个账号（6 个 OAuth、3 个 API Key），0 警告 |
+| 运行态验证 | 本轮使用本地假服务器/协议回归验证 OAuth、模型目录、Responses、JSON 导入和最小 `ping`；本轮无在线 ADB 设备；真实手机 Token、模型、Responses、VPN 出口、Chrome 账号选择和回调仍待用户设备 |
+| 当前 APK | `feimiao-codex-v1.281.0-295.apk` |
+| 当前 APK SHA256 | `A3960191D17E8CB2E2EA4B4D0310C9A8579B39127F8A317E86E73E1BAC9C07BA`（117,707,189 字节） |
 | 回退 APK | `C:\src\xunni-codex\ci-artifacts\releases\feimiao-codex-v1.260.0-274.apk` |
-| 发布状态 | 当前包是本地交付候选；本轮无在线 Android 设备，未验证真实账号 Token/模型请求，未改变线上版本 |
-| 工作树状态 | 当前 AI 批代码、测试、版本和文档尚未提交；不得把本表误解为已推送/已上线 |
+| 发布状态 | 当前包已通过本地发布门禁；线上发布需脚本完成后再核验 `version.json` 与 KV 两版本保留 |
+| 工作树状态 | 当前 Android AI/OAuth/JSON/架构批次待精确提交；iOS、截图和指定 parity 测试改动保持隔离 |
 
 ### 1.1 当前最近三个门
 
-1. **真机验收门**：用户安装 v1.264.0+278，检查全局弹层/按钮/设置行、窄屏大字和深色观感，同时复核首条消息、输入框、模型/Effort、Chats、图片流程及 AI/OAuth 网络路径。
+1. **真机验收门**：用户安装 v1.275.0+289，复核 GPT OAuth、PAT/JSON 导入、模型获取/连接测试及手机 VPN 分流；同时复核月份选择弹窗、首条消息、输入框、模型/Effort、Chats 和图片流程。
 2. **源码集成门**：根据真机反馈修复；无阻断后精确提交当前工作树，并决定是否合入权威发布分支。
 3. **发布门**：发布前重新执行完整门禁；当前包已完成本地完整回归，但不自动等价于线上发布授权。
 

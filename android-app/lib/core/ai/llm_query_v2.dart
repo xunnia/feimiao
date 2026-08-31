@@ -8,12 +8,12 @@ import 'package:http/http.dart' as http;
 
 import 'ai_data_trimmer.dart';
 import 'ai_exception.dart';
+import 'ai_http_transport.dart';
 import 'ai_logger.dart';
 import 'ai_prompt_templates.dart';
 import 'ai_provider_config.dart';
 import 'ai_request_manager.dart';
 import 'openai_codex_oauth.dart';
-import 'system_network_proxy.dart';
 import 'web_search.dart';
 import '../media/chat_attachment.dart';
 
@@ -24,12 +24,13 @@ import '../media/chat_attachment.dart';
 class LlmQueryV2 {
   LlmQueryV2._();
 
-  // HttpClient captures dart:io HttpOverrides at construction time. Keep the
-  // shared client lazy so Android's system proxy/VPN bridge installed in
-  // main() is applied to non-streaming Responses and Chat requests too.
-  static http.Client? _httpClient;
+  // Keep the shared transport lazy so Android's proxy/VPN bridge installed in
+  // main() is applied before the first non-streaming request. Streaming turns
+  // create a short-lived transport below to avoid reusing a poisoned socket.
+  static AiHttpTransport? _sharedTransport;
 
-  static http.Client get _client => _httpClient ??= http.Client();
+  static AiHttpTransport get _transport =>
+      _sharedTransport ??= AiHttpTransport();
 
   static const _defaultTimeoutSeconds = 30;
   static const _reportTimeoutSeconds = 90;
@@ -693,23 +694,20 @@ $transactionsText''';
     required Map<String, dynamic> body,
     required int timeoutSeconds,
   }) async {
-    await SystemNetworkProxy.refresh();
     final isClaude = config.shouldUseClaudeMessages;
     final uri = isClaude ? config.messagesUri : config.chatCompletionsUri;
-    await SystemNetworkProxy.refreshFor(uri);
 
     late http.Response resp;
 
     try {
       final headers = config.authHeaders();
 
-      resp = await _client
-          .post(
-            uri,
-            headers: headers,
-            body: jsonEncode(body),
-          )
-          .timeout(Duration(seconds: timeoutSeconds));
+      resp = await _transport.post(
+        uri,
+        headers: headers,
+        body: jsonEncode(body),
+        timeout: Duration(seconds: timeoutSeconds),
+      );
     } on TimeoutException {
       throw const AiNetworkException('请求超时');
     } catch (e) {
@@ -835,16 +833,10 @@ $transactionsText''';
       body = _chatCompletionsStreamBody(config: config, messages: messages);
     }
 
-    // Refresh the Android system proxy before constructing the IO client. The
-    // client snapshots HttpOverrides at construction time, so refreshing only
-    // after `http.Client()` would still send the first streamed request direct.
-    await SystemNetworkProxy.refresh(force: true);
-    await SystemNetworkProxy.refreshFor(uri, force: true);
-
     // A stream owns its client for the complete response lifetime. This avoids
     // reusing a poisoned keep-alive socket on the first request after resume;
     // a bounded first-packet retry in askStream therefore gets a fresh socket.
-    final streamClient = http.Client();
+    final streamTransport = AiHttpTransport();
     try {
       late http.StreamedResponse resp;
       try {
@@ -866,9 +858,11 @@ $transactionsText''';
         final request = http.Request('POST', uri)
           ..headers.addAll(headers)
           ..body = jsonEncode(requestBody);
-        resp = await streamClient
-            .send(request)
-            .timeout(Duration(seconds: timeoutSeconds));
+        resp = await streamTransport.send(
+          request,
+          timeout: Duration(seconds: timeoutSeconds),
+          forceRouteRefresh: true,
+        );
       } on TimeoutException {
         throw const AiNetworkException('请求超时');
       } catch (e) {
@@ -1086,7 +1080,7 @@ $transactionsText''';
             config.apiKey);
       }
     } finally {
-      streamClient.close();
+      streamTransport.close();
     }
   }
 
@@ -1095,8 +1089,6 @@ $transactionsText''';
     required Map<String, dynamic> body,
     required int timeoutSeconds,
   }) async {
-    await SystemNetworkProxy.refresh();
-    await SystemNetworkProxy.refreshFor(config.responsesUri);
     final isCodex = config.isOpenAiCodexOAuth;
     final sessionId = isCodex ? OpenAiCodexOAuth.generateRequestId() : null;
     // Official ChatGPT/Codex Responses rejects buffered requests with
@@ -1125,13 +1117,13 @@ $transactionsText''';
     late http.Response resp;
 
     try {
-      resp = await _client
-          .post(
-            config.responsesUri,
-            headers: headers,
-            body: jsonEncode(requestBody),
-          )
-          .timeout(Duration(seconds: timeoutSeconds));
+      resp = await _transport.post(
+        config.responsesUri,
+        headers: headers,
+        body: jsonEncode(requestBody),
+        timeout: Duration(seconds: timeoutSeconds),
+        forceRouteRefresh: true,
+      );
     } on TimeoutException {
       throw const AiNetworkException('请求超时');
     } catch (e) {
@@ -1665,7 +1657,9 @@ $transactionsText''';
       AiWebSearchContext.extractResponseSources(outer);
 
   static String _bodySnippet(String body) {
-    final text = body.replaceAll(RegExp(r'\s+'), ' ').trim();
+    final text = AiLogger.sanitizeErrorForDisplay(body)
+        .replaceAll(RegExp(r'\s+'), ' ')
+        .trim();
     if (text.isEmpty) return '';
     if (text.length <= 180) return text;
     return '${text.substring(0, 180)}…';
@@ -1673,19 +1667,30 @@ $transactionsText''';
 
   /// 清理异常消息中的 API Key
   static AiException _sanitizeException(AiException exception, String apiKey) {
-    if (apiKey.isEmpty) return exception;
-
     // 清理异常消息
-    final sanitizedMessage =
-        exception.message.replaceAll(apiKey, '[API_KEY_REDACTED]');
+    var sanitizedMessage = exception.message;
+    if (apiKey.isNotEmpty) {
+      sanitizedMessage = sanitizedMessage.replaceAll(
+        apiKey,
+        '[API_KEY_REDACTED]',
+      );
+    }
+    sanitizedMessage = AiLogger.sanitizeErrorForDisplay(sanitizedMessage);
 
     // 清理 originalError 中的 API Key（如果是 Exception）
     Object? sanitizedOriginalError = exception.originalError;
     if (sanitizedOriginalError is Exception) {
       final originalErrorString = sanitizedOriginalError.toString();
-      if (originalErrorString.contains(apiKey)) {
-        sanitizedOriginalError = Exception(
-            originalErrorString.replaceAll(apiKey, '[API_KEY_REDACTED]'));
+      var sanitizedOriginal = originalErrorString;
+      if (apiKey.isNotEmpty) {
+        sanitizedOriginal = sanitizedOriginal.replaceAll(
+          apiKey,
+          '[API_KEY_REDACTED]',
+        );
+      }
+      sanitizedOriginal = AiLogger.sanitizeErrorForDisplay(sanitizedOriginal);
+      if (sanitizedOriginal != originalErrorString) {
+        sanitizedOriginalError = Exception(sanitizedOriginal);
       }
     }
 

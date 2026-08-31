@@ -10,6 +10,8 @@ import 'package:share_plus/share_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/ai/ai_account_json.dart';
+import '../../core/ai/ai_account_verification.dart';
+import '../../core/ai/ai_logger.dart';
 import '../../core/ai/ai_provider_config.dart';
 import '../../core/ai/ai_provider_health.dart';
 import '../../core/ai/llm_query.dart';
@@ -279,11 +281,30 @@ class _AiAccountSettingsPageState extends State<_AiAccountSettingsPage> {
     }
     if (!_ensureSecureBaseUrl(provider, draft)) return;
     setState(() => _busy.add(provider.id));
+    final started = DateTime.now();
     try {
       final testConfig = config.copyWith(model: _selectedModel(draft));
       await LlmQuery.testConnection(testConfig);
+      try {
+        await context.read<AppRepository>().recordAiProviderVerification(
+              provider.id,
+              status: AiAccountVerificationStatus.available.name,
+              latencyMs: DateTime.now().difference(started).inMilliseconds,
+            );
+      } catch (_) {
+        // Diagnostics must never turn a successful provider probe into a
+        // failed user action (for example while a database is closing).
+      }
       if (mounted) showAppToast(context, '${draft.label}连接成功');
     } catch (e) {
+      try {
+        await context.read<AppRepository>().recordAiProviderVerification(
+              provider.id,
+              status: _verificationStatusForError(e).name,
+              message: _shortError(e),
+              latencyMs: DateTime.now().difference(started).inMilliseconds,
+            );
+      } catch (_) {}
       if (mounted) {
         showAppToast(
           context,
@@ -294,6 +315,75 @@ class _AiAccountSettingsPageState extends State<_AiAccountSettingsPage> {
     } finally {
       if (mounted) setState(() => _busy.remove(provider.id));
     }
+  }
+
+  Future<void> _verifyProvider(
+    AiConfiguredProvider provider,
+    _ProviderDraft draft,
+  ) async {
+    if (_busy.contains(provider.id)) return;
+    final repo = context.read<AppRepository>();
+    final config = repo.aiProviderConfigForProvider(provider.id);
+    if (config == null) {
+      showAppToast(context, '账号配置不存在', icon: Icons.error_outline);
+      return;
+    }
+    setState(() => _busy.add(provider.id));
+    try {
+      final result = await const AiAccountVerificationService().verify(config);
+      await repo.recordAiProviderVerification(
+        provider.id,
+        status: result.status.name,
+        message: result.message,
+        latencyMs: result.latencyMs,
+      );
+      if (result.models.isNotEmpty) {
+        final latest = repo.aiProviderById(provider.id) ?? provider;
+        await repo.saveAiConfiguredProvider(
+          latest.copyWith(
+            model: result.models.first,
+            models: result.models,
+          ),
+        );
+        draft.models
+          ..clear()
+          ..addAll(result.models);
+        draft.selectedModel = result.models.first;
+      }
+      if (mounted) {
+        showAppToast(
+          context,
+          '${draft.label}：${result.summary}',
+          icon: result.isAvailable
+              ? Icons.check_circle_outline
+              : Icons.info_outline,
+        );
+      }
+    } catch (error) {
+      if (mounted) {
+        showAppToast(
+          context,
+          '验证失败：${_shortError(error)}',
+          icon: Icons.error_outline,
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _busy.remove(provider.id));
+    }
+  }
+
+  static AiAccountVerificationStatus _verificationStatusForError(Object error) {
+    final text = error.toString().toLowerCase();
+    if (text.contains('401') || text.contains('403') || text.contains('凭据')) {
+      return AiAccountVerificationStatus.invalidCredential;
+    }
+    if (text.contains('模型') || text.contains('model')) {
+      return AiAccountVerificationStatus.modelUnavailable;
+    }
+    if (text.contains('proxy') || text.contains('vpn') || text.contains('网络')) {
+      return AiAccountVerificationStatus.needsProxy;
+    }
+    return AiAccountVerificationStatus.networkError;
   }
 
   Future<void> _manageModels(
@@ -597,6 +687,7 @@ class _AiAccountSettingsPageState extends State<_AiAccountSettingsPage> {
 
     List<String> models = const [];
     Object? modelFetchError;
+    Object? probeError;
     try {
       // Route discovery through the same config path as normal requests. It
       // shares refresh-token persistence and retries an expired/rotated access
@@ -636,14 +727,37 @@ class _AiAccountSettingsPageState extends State<_AiAccountSettingsPage> {
       ..addAll(saved.models);
     draft.endpointType = saved.endpointType;
     draft.authMethod = saved.authMethod;
+    if (modelFetchError == null) {
+      try {
+        await LlmQuery.testConnection(
+          _formConfig(saved, draft).copyWith(model: saved.selectedModel),
+        );
+      } catch (error) {
+        probeError = error;
+      }
+    }
+    final verificationStatus = modelFetchError != null
+        ? _verificationStatusForError(modelFetchError!)
+        : probeError != null
+            ? _verificationStatusForError(probeError!)
+            : AiAccountVerificationStatus.available;
+    try {
+      await context.read<AppRepository>().recordAiProviderVerification(
+            saved.id,
+            status: verificationStatus.name,
+            message: _shortError(probeError ?? modelFetchError ?? ''),
+          );
+    } catch (_) {}
     if (mounted) {
       setState(() {});
       showAppToast(
         context,
-        modelFetchError == null
-            ? 'GPT 已授权，获取到 ${saved.models.length} 个模型'
-            : 'GPT 已授权，模型目录暂时获取失败，可稍后点“获取模型”',
-        icon: modelFetchError == null
+        modelFetchError != null
+            ? 'GPT 已授权，但模型目录暂时失败，可稍后点“获取模型”'
+            : probeError != null
+                ? 'GPT 已授权，${_shortError(probeError)}'
+                : 'GPT 已授权，获取到 ${saved.models.length} 个模型，连接测试成功',
+        icon: modelFetchError == null && probeError == null
             ? Icons.check_circle_outline
             : Icons.info_outline,
       );
@@ -736,14 +850,13 @@ class _AiAccountSettingsPageState extends State<_AiAccountSettingsPage> {
     setState(() => _busy.add('__json_import__'));
     var imported = 0;
     var skipped = 0;
-    var modelFetchFailed = 0;
+    var verificationSkipped = 0;
+    final verificationCounts = <AiAccountVerificationStatus, int>{};
     final activeChoices = selections
         .where((choice) => choice.action != _AiAccountImportAction.skip)
         .toList(growable: false);
     final deferBatchMetadata = activeChoices.length > 1;
-    final oauthCatalogCandidates =
-        activeChoices.where((choice) => choice.account.isOAuth).length;
-    var modelCatalogFetched = false;
+    const verifier = AiAccountVerificationService();
     try {
       for (final choice in selections) {
         if (choice.action == _AiAccountImportAction.skip) {
@@ -761,53 +874,50 @@ class _AiAccountSettingsPageState extends State<_AiAccountSettingsPage> {
           notify: !deferBatchMetadata,
         );
         imported++;
-        // Cockpit exports normally omit the model catalogue. Fetch it once so
-        // a successful OAuth import is immediately usable with official GPT
-        // models; an offline device can still use the saved fallback model.
-        // A large Cockpit export can contain hundreds of OAuth identities.
-        // Importing them must not become one blocking model request per
-        // account. The fallback model is already usable; discover a catalogue
-        // automatically only for a single-account import. Every account card
-        // retains its explicit “获取模型” action for later refresh.
-        final shouldFetchCatalog = choice.account.isOAuth &&
-            saved.models.length <= 1 &&
-            oauthCatalogCandidates == 1 &&
-            !modelCatalogFetched;
-        if (shouldFetchCatalog) {
-          try {
-            // Use the same refresh + /codex/models path as a real ChatGPT
-            // request. This also makes refresh-only Cockpit exports usable:
-            // ensureFreshConfig exchanges the refresh token, persists the
-            // rotated pair, then model discovery runs with that new token.
-            final fetchDraft = _draftFor(saved);
-            fetchDraft.apiKey.text = saved.apiKey;
-            fetchDraft.baseUrl.text = saved.baseUrl;
-            fetchDraft.model.text = saved.model;
-            fetchDraft.models
-              ..clear()
-              ..addAll(saved.models);
-            fetchDraft.endpointType = saved.endpointType;
-            fetchDraft.authMethod = saved.authMethod;
-            final models = await LlmQuery.fetchModels(
-              _formConfig(saved, fetchDraft),
-            );
-            final latest = repo.aiProviderById(saved.id) ?? saved;
-            await repo.saveAiConfiguredProvider(
-              latest.copyWith(
-                model: models.first,
-                models: models,
-              ),
-            );
-            modelCatalogFetched = true;
-          } catch (_) {
-            modelFetchFailed++;
-          }
+        if (!choice.enabled) {
+          verificationSkipped++;
+          continue;
+        }
+
+        final config = repo.aiProviderConfigForProvider(saved.id);
+        if (config == null) {
+          verificationSkipped++;
+          continue;
+        }
+        final verification = await verifier.verify(config);
+        verificationCounts.update(
+          verification.status,
+          (count) => count + 1,
+          ifAbsent: () => 1,
+        );
+        await repo.recordAiProviderVerification(
+          saved.id,
+          status: verification.status.name,
+          message: verification.message,
+          latencyMs: verification.latencyMs,
+        );
+        // A successful catalogue refresh is persisted without changing the
+        // user's selected enabled/disabled state. Batch imports defer the
+        // metadata index write until every account has been processed.
+        if (verification.models.isNotEmpty) {
+          final latest = repo.aiProviderById(saved.id) ?? saved;
+          await repo.saveAiConfiguredProvider(
+            latest.copyWith(
+              model: verification.models.first,
+              models: verification.models,
+            ),
+            persistMetadata: !deferBatchMetadata,
+            notify: !deferBatchMetadata,
+          );
         }
       }
       if (mounted) {
         final suffix = [
           if (skipped > 0) '跳过 $skipped',
-          if (modelFetchFailed > 0) '模型目录待联网获取 $modelFetchFailed',
+          if (verificationSkipped > 0) '停用账号未验证 $verificationSkipped',
+          for (final status in AiAccountVerificationStatus.values)
+            if ((verificationCounts[status] ?? 0) > 0)
+              '${status.label} ${verificationCounts[status]}',
           if (parsed.warnings.isNotEmpty) parsed.warnings.join('；'),
         ].join('；');
         showAppToast(
@@ -943,6 +1053,7 @@ class _AiAccountSettingsPageState extends State<_AiAccountSettingsPage> {
                 }),
                 onSave: () => _saveProvider(provider, _draftFor(provider)),
                 onTest: () => _testProvider(provider, _draftFor(provider)),
+                onVerify: () => _verifyProvider(provider, _draftFor(provider)),
                 onManageModels: () =>
                     _manageModels(provider, _draftFor(provider)),
                 onEnabledChanged: (value) async {
@@ -1252,6 +1363,7 @@ class _ProviderCard extends StatelessWidget {
   final VoidCallback onToggle;
   final VoidCallback onSave;
   final VoidCallback onTest;
+  final VoidCallback onVerify;
   final VoidCallback onManageModels;
   final ValueChanged<bool> onEnabledChanged;
   final VoidCallback onOAuthAuthorize;
@@ -1269,6 +1381,7 @@ class _ProviderCard extends StatelessWidget {
     required this.onToggle,
     required this.onSave,
     required this.onTest,
+    required this.onVerify,
     required this.onManageModels,
     required this.onEnabledChanged,
     required this.onOAuthAuthorize,
@@ -1617,13 +1730,18 @@ class _ProviderCard extends StatelessWidget {
                     ),
                   ),
                   const SizedBox(height: 14),
-                  Row(
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
                     children: [
+                      AppPillButton(
+                        label: '验证账号',
+                        onPressed: busy ? null : onVerify,
+                      ),
                       AppPillButton(
                         label: '测试连接',
                         onPressed: busy ? null : onTest,
                       ),
-                      const Spacer(),
                       AppPillButton(
                         label: busy ? '保存中' : '保存',
                         onPressed: busy ? null : onSave,
@@ -2270,7 +2388,9 @@ String _shortError(Object e) {
         .replaceFirst('OpenAiCodexOAuthException: ', '')
         .trim(),
   };
-  final normalized = text.replaceAll(RegExp(r'\s+'), ' ').trim();
+  final normalized = AiLogger.sanitizeErrorForDisplay(text)
+      .replaceAll(RegExp(r'\s+'), ' ')
+      .trim();
   if (normalized.length <= 120) return normalized;
   return '${normalized.substring(0, 117)}…';
 }

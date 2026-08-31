@@ -20,6 +20,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/ai/chat_intent.dart';
 import '../../core/ai/ai_provider_config.dart';
+import '../../core/ai/ai_logger.dart';
 import '../../core/ai/ai_attachment_pipeline.dart';
 import '../../core/ai/ai_context.dart';
 import '../../core/ai/ai_run.dart';
@@ -4825,7 +4826,9 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
   }
 
   String _shortAiError(Object error) {
-    final text = error.toString().replaceAll(RegExp(r'\s+'), ' ').trim();
+    final text = AiLogger.sanitizeErrorForDisplay(error.toString())
+        .replaceAll(RegExp(r'\s+'), ' ')
+        .trim();
     if (text.isEmpty) return '未知错误';
     if (text.length <= 80) return text;
     return '${text.substring(0, 80)}…';

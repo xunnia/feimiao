@@ -10,10 +10,11 @@ import '../models/transaction_kind.dart';
 import '../media/chat_attachment.dart';
 import '../transaction_time.dart';
 import 'ai_provider_config.dart';
+import 'ai_http_transport.dart';
+import 'ai_logger.dart';
 import 'entry_sanity.dart';
 import 'natural_language_entry_parser.dart';
 import 'openai_codex_oauth.dart';
-import 'system_network_proxy.dart';
 
 /// DeepSeek 大模型解析器：把一句话拆成多笔 [ParsedEntry]。
 ///
@@ -414,12 +415,13 @@ $catList
 
   static bool _shouldRetryWithCompatModel(LlmParseException e) {
     final statusCode = e.statusCode;
-    if (statusCode == 400 || statusCode == 404) return true;
     final m = e.message.toLowerCase();
-    return m.contains('model') ||
-        m.contains('unsupported') ||
-        m.contains('invalid') ||
-        m.contains('parameter');
+    if (statusCode != 400 && statusCode != 404) return false;
+    return m.contains('unsupported model') ||
+        m.contains('model not found') ||
+        m.contains('unknown model') ||
+        m.contains('invalid model') ||
+        m.contains('model does not exist');
   }
 
   static bool _shouldRetryInitialNetwork(
@@ -441,7 +443,6 @@ $catList
     required AiProviderConfig provider,
     required Map<String, dynamic> body,
   }) async {
-    await SystemNetworkProxy.refresh();
     late http.Response response;
 
     // Claude 格式转换
@@ -459,7 +460,6 @@ $catList
     requestBody = Map<String, dynamic>.from(requestBody)
       ..remove('response_schema');
 
-    await SystemNetworkProxy.refreshFor(uri);
     final sessionId = provider.isOpenAiCodexOAuth
         ? OpenAiCodexOAuth.generateRequestId()
         : null;
@@ -478,27 +478,28 @@ $catList
         ),
       );
     }
-    final client = http.Client();
+    final transport = AiHttpTransport();
     try {
-      response = await client
-          .post(
-            uri,
-            headers: headers,
-            body: jsonEncode(requestBody),
-          )
-          .timeout(const Duration(seconds: _timeoutSeconds));
+      response = await transport.post(
+        uri,
+        headers: headers,
+        body: jsonEncode(requestBody),
+        timeout: const Duration(seconds: _timeoutSeconds),
+        forceRouteRefresh: true,
+      );
     } catch (e) {
       throw LlmParseException('网络请求失败：$e');
     } finally {
-      client.close();
+      transport.close();
     }
 
     // 用 bodyBytes 显式按 UTF-8 解码：响应头不带 charset 时 .body 按
     // latin1 解，中文备注会以乱码入库。
     final bodyText = utf8.decode(response.bodyBytes, allowMalformed: true);
     if (response.statusCode != 200) {
+      final safeBody = AiLogger.sanitizeErrorForDisplay(bodyText);
       throw LlmParseException(
-        '${provider.providerLabel} 返回错误 ${response.statusCode}：$bodyText',
+        '${provider.providerLabel} 返回错误 ${response.statusCode}：$safeBody',
         statusCode: response.statusCode,
       );
     }

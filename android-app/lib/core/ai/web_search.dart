@@ -2,8 +2,9 @@ import 'dart:convert';
 
 import 'package:http/http.dart' as http;
 
+import 'ai_http_transport.dart';
+import 'ai_logger.dart';
 import 'ai_provider_config.dart';
-import 'system_network_proxy.dart';
 
 /// A source returned by either the provider-native search tool or the local
 /// adapter used for non-Responses providers.
@@ -46,12 +47,12 @@ abstract interface class AiWebSearchAdapter {
 /// `web_search`. DuckDuckGo's JSON endpoint returns short public snippets and
 /// URLs, so the app can give the model evidence without proxying ledger data.
 class DuckDuckGoSearchAdapter implements AiWebSearchAdapter {
-  final http.Client _client;
+  final AiHttpTransport _transport;
   final Duration timeout;
 
   DuckDuckGoSearchAdapter(
       {http.Client? client, this.timeout = const Duration(seconds: 3)})
-      : _client = client ?? http.Client();
+      : _transport = AiHttpTransport(client: client);
 
   @override
   Future<AiWebSearchResponse> search(
@@ -69,9 +70,11 @@ class DuckDuckGoSearchAdapter implements AiWebSearchAdapter {
       'no_redirect': '1',
       'skip_disambig': '1',
     });
-    await SystemNetworkProxy.refreshFor(uri);
-    final response = await _client.get(uri,
-        headers: const {'Accept': 'application/json'}).timeout(timeout);
+    final response = await _transport.get(
+      uri,
+      headers: const {'Accept': 'application/json'},
+      timeout: timeout,
+    );
     // DuckDuckGo may return 202 (accepted) while still including a complete
     // JSON payload. Treat every 2xx response as successful instead of turning
     // valid public results into a false "search unavailable" warning.
@@ -382,7 +385,9 @@ class AiWebSearchContext {
   }
 
   static String _shortError(Object error) {
-    final raw = error.toString().replaceFirst(RegExp(r'^.*?:\s*'), '').trim();
+    final raw = AiLogger.sanitizeErrorForDisplay(error.toString())
+        .replaceFirst(RegExp(r'^.*?:\s*'), '')
+        .trim();
     return raw.length > 80 ? '${raw.substring(0, 80)}…' : raw;
   }
 }

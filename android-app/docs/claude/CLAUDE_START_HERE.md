@@ -1,12 +1,20 @@
 # Claude 新会话启动入口（先读这里）
 
-更新时间：2026-08-30
+更新时间：2026-08-31
 适用工程：`C:\src\xunni-codex\android-app`  
 严禁触碰：`C:\src\xunni`，除非用户明确要求并确认风险。
 
 这份文件是 Claude 新会话第一入口。旧的 `TASKS_FOR_CODEX.md` 只在用户明确点名具体任务时读取执行，不是默认开工清单。
 
 项目范围、优先级、交付门禁、路线图、风险与产物保留规则统一见 `../PROJECT_MANAGEMENT.md`。本文件负责“当前实现状态”，不再承担完整项目管理职责。
+
+## 0.0.7 GPT OAuth、Cockpit JSON 与架构收口（v1.281.0+295）
+
+- Android 固定系统代理不再被 `ProxySelector` 的 DIRECT 条目误判；OAuth、模型目录和 Responses 请求会使用 `ConnectivityManager.defaultProxy` 回退路由。Token 交换遇到 `unsupported_country_region` 时，会自动打开 Chrome 本地一次性页面，由浏览器 VPN 网络完成换 Token，再按 flowId 回传；code/verifier 不进入 URL 或第三方云端。
+- 登录成功和恢复路径会先安全保存 Token，再拉官方模型目录并用首个模型执行不带账本内容的 `ping`；目录失败不会丢账号，健康状态会标记具体阶段。Cockpit JSON 导入支持完整备份、refresh-only/PAT/API Key、多账号和编码兼容，显式 API Key 模式优先，单账号可重新验证。
+- 新增共享 `AiHttpTransport` 和 v49 迁移安全边界；OAuth、模型、Responses、主页记账、Chats、联网搜索共用代理刷新/超时/重试和错误脱敏。全量 Flutter **1182/1182**、Dart analyze 0 error、Kotlin 编译和 APK gate 均通过。
+- APK：`C:\src\xunni-codex\ci-artifacts\releases\feimiao-codex-v1.281.0-295.apk`，SHA256 `A3960191D17E8CB2E2EA4B4D0310C9A8579B39127F8A317E86E73E1BAC9C07BA`。
+- 当前无在线 Android ADB；真实手机 Chrome/VPN/localhost 回调、安装冷启动、输入法和字体观感仍需目标手机复测。
 
 ## 0.0.5 GPT OAuth 旧设备授权状态迁移（v1.279.0+293）
 

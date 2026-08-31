@@ -11,6 +11,7 @@ import android.os.Build
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import org.json.JSONObject
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import java.io.BufferedReader
@@ -55,6 +56,9 @@ class OAuthKeepAliveService : Service() {
         private const val EXTRA_FLOW_ID = "oauth_flow_id"
         private const val READY_FILE = "oauth_callback_ready"
         private const val CALLBACK_FILE = "oauth_callback_url"
+        private const val TOKEN_REQUEST_FILE = "oauth_token_exchange_request.json"
+        private const val TOKEN_RESULT_FILE = "oauth_token_exchange_result.json"
+        private const val OPENAI_CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann"
 
         fun start(context: Context, ports: List<Int>, flowId: String? = null): Boolean {
             return try {
@@ -246,15 +250,101 @@ class OAuthKeepAliveService : Service() {
         fun clearCallback(context: Context, expectedFlowId: String? = null): Boolean {
             return try {
                 val file = File(context.applicationContext.filesDir, CALLBACK_FILE)
-                if (!file.isFile) return false
-                if (!expectedFlowId.isNullOrBlank() &&
-                    callbackState(file.readText(StandardCharsets.UTF_8)) != expectedFlowId
-                ) {
-                    return false
+                val request = File(context.applicationContext.filesDir, TOKEN_REQUEST_FILE)
+                val result = File(context.applicationContext.filesDir, TOKEN_RESULT_FILE)
+                var deleted = false
+                listOf(file, request, result).forEach { candidate ->
+                    if (!candidate.isFile) return@forEach
+                    // A late cleanup from an older flow may run after a new
+                    // flow has replaced one of these files.  Decide ownership
+                    // per file instead of deleting the whole set once any one
+                    // file happens to match the old flow id.
+                    val owned = if (expectedFlowId.isNullOrBlank()) {
+                        true
+                    } else if (candidate.name == CALLBACK_FILE) {
+                        callbackState(candidate.readText(StandardCharsets.UTF_8)) ==
+                            expectedFlowId
+                    } else {
+                        fileFlowId(candidate) == expectedFlowId
+                    }
+                    if (owned) deleted = candidate.delete() || deleted
                 }
-                file.delete()
+                deleted
             } catch (_: Exception) {
                 false
+            }
+        }
+
+        /**
+         * Stores a one-shot authorization-code request for the browser page.
+         * The code and verifier never appear in the URL; they stay in the
+         * app-private files directory and are read only by this callback
+         * service. Returns the active localhost port for the page URL.
+         */
+        fun prepareTokenExchange(
+            context: Context,
+            expectedFlowId: String,
+            code: String,
+            verifier: String,
+            redirectUri: String,
+        ): Int? {
+            val flowId = expectedFlowId.trim()
+            if (flowId.isEmpty() || code.trim().isEmpty() ||
+                verifier.trim().isEmpty() || redirectUri.trim().isEmpty()) {
+                return null
+            }
+            val port = readyPort(context, flowId) ?: return null
+            val request = JSONObject()
+                .put("flowId", flowId)
+                .put("code", code.trim())
+                .put("verifier", verifier.trim())
+                .put("redirectUri", redirectUri.trim())
+                .toString()
+            val filesDir = context.applicationContext.filesDir
+            writeAtomicFile(File(filesDir, TOKEN_REQUEST_FILE), request)
+            File(filesDir, TOKEN_RESULT_FILE).delete()
+            return port
+        }
+
+        /** Reads the browser exchange response while retaining it for retry. */
+        fun takeTokenExchangeResult(
+            context: Context,
+            expectedFlowId: String? = null,
+        ): String? {
+            val file = File(context.applicationContext.filesDir, TOKEN_RESULT_FILE)
+            if (!file.isFile) return null
+            return try {
+                val value = file.readText(StandardCharsets.UTF_8).trim()
+                if (value.isEmpty()) return null
+                if (!expectedFlowId.isNullOrBlank() &&
+                    fileFlowId(file, value) != expectedFlowId) {
+                    return null
+                }
+                value
+            } catch (_: Exception) {
+                null
+            }
+        }
+
+        private fun fileFlowId(file: File, content: String? = null): String? {
+            return try {
+                val raw = (content ?: file.readText(StandardCharsets.UTF_8)).trim()
+                JSONObject(raw).optString("flowId").trim().ifEmpty { null }
+            } catch (_: Exception) {
+                null
+            }
+        }
+
+        private fun writeAtomicFile(file: File, value: String) {
+            val temp = File(file.parentFile, "${file.name}.tmp")
+            try {
+                temp.writeText(value, StandardCharsets.UTF_8)
+                if (!temp.renameTo(file)) {
+                    file.writeText(value, StandardCharsets.UTF_8)
+                    temp.delete()
+                }
+            } catch (_: Exception) {
+                temp.delete()
             }
         }
 
@@ -391,6 +481,8 @@ class OAuthKeepAliveService : Service() {
 
         private val readyFile get() = File(filesDir, READY_FILE)
         private val callbackFile get() = File(filesDir, CALLBACK_FILE)
+        private val tokenRequestFile get() = File(filesDir, TOKEN_REQUEST_FILE)
+        private val tokenResultFile get() = File(filesDir, TOKEN_RESULT_FILE)
 
         fun start() {
             if (!running.compareAndSet(false, true)) return
@@ -412,6 +504,15 @@ class OAuthKeepAliveService : Service() {
             }
             if (!retainsCallback) callbackFile.delete()
             callbackCaptured.set(retainsCallback)
+            // A browser exchange request/result belongs to exactly one flow.
+            // Keep it across Activity recreation, but discard stale files when
+            // a new OAuth flow takes ownership of the service.
+            if (flowId.isNullOrBlank() || fileFlowId(tokenRequestFile) != flowId) {
+                tokenRequestFile.delete()
+            }
+            if (flowId.isNullOrBlank() || fileFlowId(tokenResultFile) != flowId) {
+                tokenResultFile.delete()
+            }
             val worker = Thread({ bindAndServe() }, "feimiao-oauth-listener")
             synchronized(lock) { workers += worker }
             worker.start()
@@ -540,44 +641,119 @@ class OAuthKeepAliveService : Service() {
                         InputStreamReader(socket.getInputStream(), StandardCharsets.ISO_8859_1),
                     )
                     val requestLine = reader.readLine() ?: return
-                    // Consume headers so Chrome can finish its request cleanly.
+                    val headerValues = mutableMapOf<String, String>()
                     while (true) {
                         val line = reader.readLine() ?: break
                         if (line.isEmpty()) break
+                        val separator = line.indexOf(':')
+                        if (separator > 0) {
+                            headerValues[line.substring(0, separator).trim().lowercase()] =
+                                line.substring(separator + 1).trim()
+                        }
                     }
                     val parts = requestLine.split(' ')
+                    val method = parts.getOrNull(0)?.uppercase().orEmpty()
                     val target = parts.getOrNull(1) ?: ""
+                    val contentLength = headerValues["content-length"]?.toIntOrNull()
+                        ?.coerceIn(0, 256 * 1024)
+                        ?: 0
+                    val bodyUtf8 = if (contentLength == 0) {
+                        ""
+                    } else {
+                        val bodyChars = CharArray(contentLength)
+                        var offset = 0
+                        while (offset < contentLength) {
+                            val read = reader.read(bodyChars, offset, contentLength - offset)
+                            if (read <= 0) break
+                            offset += read
+                        }
+                        String(bodyChars, 0, offset)
+                            .toByteArray(StandardCharsets.ISO_8859_1)
+                            .toString(StandardCharsets.UTF_8)
+                    }
                     val uri = try {
                         URI(target)
                     } catch (_: Exception) {
                         null
                     }
                     val path = uri?.rawPath ?: ""
-                    if (uri == null || path != "/auth/callback") {
-                        writeResponse(socket, 404, "未找到授权回调")
-                        return
-                    }
-                    val callbackState = Uri.parse(target).getQueryParameter("state")?.trim()
-                    if (flowId != null && callbackState != flowId) {
+                    val queryState = Uri.parse(target).getQueryParameter("state")?.trim()
+                    if (flowId != null && queryState != flowId) {
                         writeResponse(socket, 400, "授权状态不匹配，请返回肥喵记账重试")
                         return
                     }
-                    if (!callbackCaptured.compareAndSet(false, true)) {
-                        // Chrome can retry the redirect or request the page's
-                        // favicon after the first response. It is still the
-                        // same valid callback; returning 409 makes Chrome
-                        // show an error page even though OAuth succeeded.
-                        writeResponse(socket, 200, "授权已接收，请返回肥喵记账")
-                        return
+                    when (path) {
+                        "/auth/callback" -> {
+                            if (!callbackCaptured.compareAndSet(false, true)) {
+                                // Chrome can retry the redirect or request the
+                                // page's favicon after the first response. It
+                                // is still the same valid callback; returning
+                                // 200 avoids a misleading browser error page.
+                                writeResponse(socket, 200, "授权已接收，请返回肥喵记账")
+                                return
+                            }
+                            val callback = if (target.startsWith("http://") ||
+                                target.startsWith("https://")) {
+                                target
+                            } else {
+                                "http://localhost:$port$target"
+                            }
+                            if (!writeAtomic(callbackFile, callback)) {
+                                // Do not tell Chrome that authorization was
+                                // accepted when the hand-off file could not be
+                                // persisted.  Reset the one-shot latch so a
+                                // browser retry can be captured.
+                                callbackCaptured.set(false)
+                                writeResponse(socket, 500, "授权回调暂存失败，请返回肥喵记账重试")
+                                return
+                            }
+                            writeResponse(socket, 200, "授权成功，请返回肥喵记账")
+                        }
+                        "/auth/token-exchange" -> {
+                            val request = readFlowFile(tokenRequestFile, flowId)
+                            if (request == null) {
+                                writeResponse(socket, 404, "授权交换请求已失效，请返回肥喵记账重试")
+                                return
+                            }
+                            writeHtmlResponse(socket, 200, tokenExchangeHtml(flowId.orEmpty(), request))
+                        }
+                        "/auth/token-result" -> {
+                            if (method == "OPTIONS") {
+                                writeCorsResponse(socket, 204, "")
+                                return
+                            }
+                            if (method != "POST") {
+                                writeResponse(socket, 405, "需要 POST 授权交换结果")
+                                return
+                            }
+                            val value = bodyUtf8
+                            if (value.isBlank() || flowId.isNullOrBlank()) {
+                                writeResponse(socket, 400, "授权交换结果为空")
+                                return
+                            }
+                            try {
+                                val resultJson = JSONObject(value)
+                                val status = resultJson.optInt("status", 0)
+                                if (status !in 0..599 || !resultJson.has("body")) {
+                                    writeResponse(socket, 400, "授权交换结果格式错误")
+                                    return
+                                }
+                                val stored = JSONObject()
+                                    .put("flowId", flowId)
+                                    .put("status", status)
+                                    .put("body", resultJson.optString("body"))
+                                    .toString()
+                                if (!writeAtomic(tokenResultFile, stored)) {
+                                    writeResponse(socket, 500, "授权结果暂存失败，请返回肥喵记账重试")
+                                    return
+                                }
+                                writeCorsResponse(socket, 200, "已收到授权结果，请返回肥喵记账")
+                            } catch (_: Exception) {
+                                writeResponse(socket, 400, "授权交换结果格式错误")
+                            }
+                        }
+                        else -> writeResponse(socket, 404, "未找到授权回调")
                     }
-                    val callback = if (target.startsWith("http://") ||
-                        target.startsWith("https://")) {
-                        target
-                    } else {
-                        "http://localhost:$port$target"
-                    }
-                    writeAtomic(callbackFile, callback)
-                    writeResponse(socket, 200, "授权成功，请返回肥喵记账")
                 } catch (_: Exception) {
                     try {
                         writeResponse(socket, 400, "授权回调处理失败")
@@ -621,7 +797,118 @@ class OAuthKeepAliveService : Service() {
             }
         }
 
-        private fun writeAtomic(file: File, value: String) {
+        private fun writeHtmlResponse(socket: Socket, status: Int, body: String) {
+            val bytes = body.toByteArray(StandardCharsets.UTF_8)
+            val header = "HTTP/1.1 $status ${if (status == 200) "OK" else "Bad Request"}\r\n" +
+                "Content-Type: text/html; charset=utf-8\r\n" +
+                "Cache-Control: no-store\r\n" +
+                "Content-Length: ${bytes.size}\r\n" +
+                "Connection: close\r\n\r\n"
+            socket.getOutputStream().use { output ->
+                output.write(header.toByteArray(StandardCharsets.ISO_8859_1))
+                output.write(bytes)
+                output.flush()
+            }
+        }
+
+        private fun writeCorsResponse(socket: Socket, status: Int, message: String) {
+            val bytes = message.toByteArray(StandardCharsets.UTF_8)
+            val header = "HTTP/1.1 $status OK\r\n" +
+                "Content-Type: text/plain; charset=utf-8\r\n" +
+                "Access-Control-Allow-Origin: *\r\n" +
+                "Access-Control-Allow-Methods: POST, OPTIONS\r\n" +
+                "Access-Control-Allow-Headers: content-type\r\n" +
+                "Cache-Control: no-store\r\n" +
+                "Content-Length: ${bytes.size}\r\n" +
+                "Connection: close\r\n\r\n"
+            socket.getOutputStream().use { output ->
+                output.write(header.toByteArray(StandardCharsets.ISO_8859_1))
+                output.write(bytes)
+                output.flush()
+            }
+        }
+
+        private fun readFlowFile(file: File, expectedFlowId: String?): String? {
+            if (!file.isFile) return null
+            return try {
+                val value = file.readText(StandardCharsets.UTF_8).trim()
+                if (value.isEmpty()) return null
+                val json = JSONObject(value)
+                if (!expectedFlowId.isNullOrBlank() &&
+                    json.optString("flowId").trim() != expectedFlowId) return null
+                value
+            } catch (_: Exception) {
+                null
+            }
+        }
+
+        private fun fileFlowId(file: File): String? {
+            return try {
+                JSONObject(file.readText(StandardCharsets.UTF_8))
+                    .optString("flowId")
+                    .trim()
+                    .ifEmpty { null }
+            } catch (_: Exception) {
+                null
+            }
+        }
+
+        private fun tokenExchangeHtml(flowId: String, request: String): String {
+            val json = JSONObject(request)
+            val code = JSONObject.quote(json.optString("code"))
+            val verifier = JSONObject.quote(json.optString("verifier"))
+            val redirectUri = JSONObject.quote(json.optString("redirectUri"))
+            val state = JSONObject.quote(flowId)
+            val resultPath = "/auth/token-result?state=" + Uri.encode(flowId)
+            return """<!doctype html>
+<html lang="zh-CN"><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>正在完成 GPT 授权</title>
+<body style="font-family: sans-serif;text-align:center;padding:20vh 8vw;color:#fff;background:#6b61c7">
+<h1 id="title">正在完成 GPT 授权</h1><p id="message">请保持此页面打开，完成后返回肥喵记账。</p>
+<script>
+(async function () {
+  const code = $code;
+  const verifier = $verifier;
+  const redirectUri = $redirectUri;
+  const state = $state;
+  const payload = new URLSearchParams({
+    grant_type: 'authorization_code',
+    code,
+    redirect_uri: redirectUri,
+    client_id: '$OPENAI_CLIENT_ID',
+    code_verifier: verifier,
+  });
+  let result;
+  try {
+    const response = await fetch('https://auth.openai.com/oauth/token', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/x-www-form-urlencoded', 'Accept': 'application/json'},
+      body: payload.toString(),
+      credentials: 'omit',
+    });
+    result = {status: response.status, body: await response.text()};
+  } catch (error) {
+    result = {status: 0, body: String(error)};
+  }
+  try {
+    await fetch('$resultPath', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(result),
+    });
+    document.getElementById('title').textContent = result.status >= 200 && result.status < 300
+      ? 'GPT 授权成功' : 'GPT 授权未完成';
+    document.getElementById('message').textContent = '请返回肥喵记账继续。';
+  } catch (_) {
+    document.getElementById('title').textContent = '授权结果未回传';
+    document.getElementById('message').textContent = '请返回肥喵记账重试。';
+  }
+})();
+</script></body></html>"""
+        }
+
+        private fun writeAtomic(file: File, value: String): Boolean {
             val temp = File(file.parentFile, "${file.name}.tmp")
             try {
                 temp.writeText(value, StandardCharsets.UTF_8)
@@ -629,8 +916,10 @@ class OAuthKeepAliveService : Service() {
                     file.writeText(value, StandardCharsets.UTF_8)
                     temp.delete()
                 }
+                return file.isFile
             } catch (_: Exception) {
                 temp.delete()
+                return false
             }
         }
 

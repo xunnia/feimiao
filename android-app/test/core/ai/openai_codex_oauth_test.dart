@@ -200,6 +200,38 @@ void main() {
     expect(models.single.reasoningEfforts, ['low', 'high']);
   });
 
+  test('GPT model catalog keeps region errors in the diagnostic message',
+      () async {
+    final client = MockClient((_) async => http.Response(
+          jsonEncode({
+            'error': 'unsupported_country_region',
+            'message': 'country, region, or territory is not supported',
+          }),
+          403,
+        ));
+
+    await expectLater(
+      OpenAiCodexOAuthService(client: client).fetchModels(
+        const OpenAiCodexOAuthTokens(
+          accessToken: 'access-token',
+          accountId: 'acct-region',
+        ),
+      ),
+      throwsA(
+        isA<OpenAiCodexOAuthException>()
+            .having((error) => error.statusCode, 'statusCode', 403)
+            .having(
+              (error) => error.message,
+              'message',
+              allOf(
+                contains('unsupported_country_region'),
+                contains('country, region'),
+              ),
+            ),
+      ),
+    );
+  });
+
   test('GPT model catalog derives account id from the JWT when omitted',
       () async {
     final client = MockClient((request) async {
@@ -459,6 +491,10 @@ void main() {
       // Codex runtime identity headers belong to refresh/API calls only.
       expect(request.headers['originator'], isNull);
       expect(request.headers['user-agent'], isNull);
+      expect(
+        request.headers['content-type'],
+        'application/x-www-form-urlencoded',
+      );
       if (tokenCalls <= 3) {
         return http.Response('temporary gateway failure', 503);
       }

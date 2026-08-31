@@ -9,15 +9,18 @@ void main() {
 
     test('_sanitizeException 应该替换 AiNetworkException 消息中的 API Key', () {
       final exception = AiNetworkException('请求失败: $testApiKey 无效');
-      final sanitized = LlmQueryV2.sanitizeExceptionForTest(exception, testApiKey);
+      final sanitized =
+          LlmQueryV2.sanitizeExceptionForTest(exception, testApiKey);
 
       expect(sanitized.message, contains(sanitizedKey));
       expect(sanitized.message, isNot(contains(testApiKey)));
     });
 
     test('_sanitizeException 应该替换 AiAuthException 消息中的 API Key', () {
-      final exception = AiAuthException('认证失败: API key $testApiKey', statusCode: 401);
-      final sanitized = LlmQueryV2.sanitizeExceptionForTest(exception, testApiKey);
+      final exception =
+          AiAuthException('认证失败: API key $testApiKey', statusCode: 401);
+      final sanitized =
+          LlmQueryV2.sanitizeExceptionForTest(exception, testApiKey);
 
       expect(sanitized.message, contains(sanitizedKey));
       expect(sanitized.message, isNot(contains(testApiKey)));
@@ -30,7 +33,8 @@ void main() {
         statusCode: 429,
         retryAfterSeconds: 60,
       );
-      final sanitized = LlmQueryV2.sanitizeExceptionForTest(exception, testApiKey);
+      final sanitized =
+          LlmQueryV2.sanitizeExceptionForTest(exception, testApiKey);
 
       expect(sanitized.message, contains(sanitizedKey));
       expect(sanitized.message, isNot(contains(testApiKey)));
@@ -38,10 +42,13 @@ void main() {
       expect(sanitized.retryAfterSeconds, 60);
     });
 
-    test('_sanitizeException 应该替换 AiResponseParseException 的 originalError', () {
+    test('_sanitizeException 应该替换 AiResponseParseException 的 originalError',
+        () {
       final originalError = Exception('解析失败: $testApiKey 相关错误');
-      final exception = AiResponseParseException('响应解析失败', originalError: originalError);
-      final sanitized = LlmQueryV2.sanitizeExceptionForTest(exception, testApiKey);
+      final exception =
+          AiResponseParseException('响应解析失败', originalError: originalError);
+      final sanitized =
+          LlmQueryV2.sanitizeExceptionForTest(exception, testApiKey);
 
       final sanitizedOriginal = sanitized.originalError.toString();
       expect(sanitizedOriginal, contains(sanitizedKey));
@@ -50,7 +57,8 @@ void main() {
 
     test('_sanitizeException 应该保留没有 API Key 的异常不变', () {
       final exception = AiNetworkException('普通网络错误');
-      final sanitized = LlmQueryV2.sanitizeExceptionForTest(exception, testApiKey);
+      final sanitized =
+          LlmQueryV2.sanitizeExceptionForTest(exception, testApiKey);
 
       expect(sanitized.message, '普通网络错误');
     });
@@ -69,7 +77,8 @@ void main() {
         statusCode: 500,
         originalError: originalError,
       );
-      final sanitized = LlmQueryV2.sanitizeExceptionForTest(exception, testApiKey);
+      final sanitized =
+          LlmQueryV2.sanitizeExceptionForTest(exception, testApiKey);
 
       expect(sanitized.message, contains(sanitizedKey));
       expect(sanitized.message, isNot(contains(testApiKey)));

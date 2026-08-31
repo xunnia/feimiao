@@ -132,6 +132,48 @@ class MainActivity : FlutterActivity() {
                             if (url.isNullOrBlank()) false else openChromeOAuth(url)
                         )
                     }
+                    "openBrowserTokenExchange" -> {
+                        val flowId = call.argument<String>("flowId")?.trim().orEmpty()
+                        val code = call.argument<String>("code")?.trim().orEmpty()
+                        val verifier = call.argument<String>("verifier")?.trim().orEmpty()
+                        val redirectUri = call.argument<String>("redirectUri")?.trim().orEmpty()
+                        if (flowId.isEmpty() || code.isEmpty() || verifier.isEmpty() ||
+                            redirectUri.isEmpty()) {
+                            result.success(false)
+                        } else {
+                            val port = OAuthKeepAliveService.prepareTokenExchange(
+                                this,
+                                flowId,
+                                code,
+                                verifier,
+                                redirectUri,
+                            )
+                            if (port == null) {
+                                result.success(false)
+                            } else {
+                                val localUrl = Uri.Builder()
+                                    .scheme("http")
+                                    .encodedAuthority("localhost:$port")
+                                    .encodedPath("/auth/token-exchange")
+                                    .appendQueryParameter("state", flowId)
+                                    .build()
+                                    .toString()
+                                val isolated = openEphemeralOAuth(localUrl)
+                                val incognito = !isolated && openIncognitoOAuth(localUrl)
+                                val chrome = !isolated && !incognito && openChromeOAuth(localUrl)
+                                val opened = isolated || incognito || chrome || try {
+                                    startActivity(
+                                        Intent(Intent.ACTION_VIEW, Uri.parse(localUrl))
+                                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                    )
+                                    true
+                                } catch (_: Exception) {
+                                    false
+                                }
+                                result.success(opened)
+                            }
+                        }
+                    }
                     "startKeepAlive" -> {
                         val ports = call.argument<List<Int>>("ports")
                             ?.filter { it in 1..65535 }
@@ -169,6 +211,12 @@ class MainActivity : FlutterActivity() {
                             ?.trim()
                             ?.ifEmpty { null }
                         result.success(OAuthKeepAliveService.takeCallback(this, flowId))
+                    }
+                    "takeTokenExchangeResult" -> {
+                        val flowId = call.argument<String>("flowId")
+                            ?.trim()
+                            ?.ifEmpty { null }
+                        result.success(OAuthKeepAliveService.takeTokenExchangeResult(this, flowId))
                     }
                     "clearCallback" -> {
                         val flowId = call.argument<String>("flowId")
@@ -433,16 +481,19 @@ class MainActivity : FlutterActivity() {
                     },
                 )
             }
-            // ProxySelector may report DIRECT for a fixed Android default
-            // proxy. Preserve that older bridge path before concluding that
-            // the target should bypass the proxy.
+            // ProxySelector always returns at least one entry on Android and
+            // may report only DIRECT for a fixed ConnectivityManager default
+            // proxy. A non-empty list is therefore not evidence that the
+            // target should bypass the proxy. Preserve the fixed host/port
+            // fallback before concluding that the target is truly direct;
+            // PAC-backed routes still honor an explicit DIRECT decision.
             val connectivity = getSystemService(Context.CONNECTIVITY_SERVICE)
                 as? ConnectivityManager
             val proxy = connectivity?.defaultProxy
             val hasPac = !proxy?.pacFileUrl?.toString().isNullOrBlank()
-            if (hasPac || selected.isNotEmpty()) {
-                // ProxySelector explicitly returned DIRECT (or could not
-                // resolve a proxy for this PAC target); honor that decision.
+            if (hasPac) {
+                // PAC explicitly returned DIRECT (or could not resolve a
+                // proxy for this target); honor that per-host decision.
                 return mapOf("type" to "direct")
             }
             val host = proxy?.host?.trim().orEmpty()

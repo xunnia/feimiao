@@ -222,6 +222,28 @@ void main() {
       expect(result.accounts.single.apiKey, 'sk-lowercase-field');
     });
 
+    test('explicit apikey mode wins over stale nested OAuth token fields', () {
+      final result = AiAccountJsonCodec.parse(jsonEncode({
+        'type': 'codex',
+        'auth_mode': 'apikey',
+        'openai_api_key': 'sk-relay-key',
+        'tokens': {
+          'access_token': 'stale-access-token',
+          'refresh_token': 'stale-refresh-token',
+        },
+        'api_base_url': 'https://relay.example/v1',
+        'api_wire_api': 'chat_completions',
+      }));
+
+      expect(result.accounts, hasLength(1));
+      final account = result.accounts.single;
+      expect(account.authMethod, AiAuthMethod.apiKey);
+      expect(account.apiKey, 'sk-relay-key');
+      expect(account.accessToken, 'stale-access-token');
+      expect(account.refreshToken, 'stale-refresh-token');
+      expect(account.endpointType, AiEndpointType.chatCompletions);
+    });
+
     test(
         'uses Cockpit API model catalog without selecting internal review model',
         () {
@@ -288,6 +310,44 @@ void main() {
       expect(bearer.accounts, hasLength(1));
       expect(bearer.accounts.single.accessToken, 'at-header-token');
       expect(bearer.accounts.single.accountId, 'acct-header');
+    });
+
+    test('merges Cockpit provider wire format and catalog by provider id', () {
+      final result = AiAccountJsonCodec.parse(jsonEncode({
+        'schema': 'cockpit-tools.data-transfer',
+        'accounts': {
+          'platforms': {
+            'codex': {
+              'exported_data': [
+                {
+                  'id': 'relay-account',
+                  'auth_mode': 'apikey',
+                  'api_provider_id': 'cmp-relay',
+                  'openai_api_key': 'sk-relay',
+                },
+              ],
+            },
+          },
+        },
+        'config': {
+          'codex_model_providers': [
+            {
+              'id': 'cmp-relay',
+              'name': 'Relay',
+              'baseUrl': 'https://relay.example/v1',
+              'wireApi': 'responses',
+              'modelCatalog': ['gpt-relay'],
+            },
+          ],
+        },
+      }));
+
+      expect(result.accounts, hasLength(1));
+      final account = result.accounts.single;
+      expect(account.baseUrl, 'https://relay.example/v1');
+      expect(account.endpointType, AiEndpointType.responses);
+      expect(account.models, ['gpt-relay']);
+      expect(account.model, 'gpt-relay');
     });
 
     test('parses Cockpit web-session JSON and nested account identity', () {
@@ -479,6 +539,24 @@ void main() {
         containsAll(<String>['one@example.com', 'two@example.com']),
       );
       expect(result.warnings, contains(contains('重复账号')));
+    });
+
+    test('does not de-duplicate accounts by workspace id alone', () {
+      final result = AiAccountJsonCodec.parse(jsonEncode([
+        {
+          'type': 'codex',
+          'account_id': 'shared-workspace',
+          'access_token': 'access-one',
+        },
+        {
+          'type': 'codex',
+          'account_id': 'shared-workspace',
+          'access_token': 'access-two',
+        },
+      ]));
+
+      expect(result.accounts, hasLength(2));
+      expect(result.warnings, isEmpty);
     });
 
     test('Cockpit export includes credentials but metadata JSON does not', () {

@@ -1,3 +1,13 @@
+## 2026-08-31 v1.281.0+295 GPT OAuth、Cockpit JSON 与架构收口
+
+- **OAuth 稳定链路**：普通按钮固定走官方 PKCE + `auth.openai.com/oauth/authorize` + localhost:1455/1457；Android 原生回调保活支持 IPv4/IPv6、Activity 重建、重复回调和 flowId 隔离。修正 `ProxySelector=DIRECT` 但系统存在固定代理时的路由错误；Token authorization-code 交换收到 `unsupported_country_region` 时，使用本机私有一次性页面让 Chrome 通过自身 VPN 完成交换，code/verifier 不进入 URL 或第三方服务。
+- **成功判定完整**：授权 Token 先安全持久化，再获取官方模型目录；登录完成和恢复路径都会用首个模型执行不携带账本内容的最小 `ping`，并在账号健康记录中保存“可用/需代理/凭据失效/模型不可用/网络失败”等阶段状态。目录失败不会丢已登录账号。
+- **Cockpit JSON**：完整备份 `accounts.platforms.codex.exported_data`、standalone transfer、auth.json、Sub2API、嵌套 token、refresh-only、PAT、JSON/JSONL、BOM/UTF-16 均可解析；显式 `auth_mode=apikey` 优先于 stale OAuth 字段；workspace/account_id 单独不再去重；provider 的地址、wire format、模型目录和 API Key 关联会合并。导入预览支持更新/副本/跳过，凭据仅写入安全存储，逐账号可验证并可重试。
+- **架构与数据安全**：新增共享 `AiHttpTransport`；OAuth、模型、Responses、主页记账、Chats、联网搜索共用代理刷新与超时边界。健康状态增加显式验证字段；错误/AI run/报告错误统一脱敏；迁移列改为显式“缺列才添加”，真实 SQLite 错误不再被空 catch 吞掉，数据库版本升至 v49。
+- **验证**：Flutter 全量 **1182/1182**；OAuth/JSON/代理/健康/仓库定向回归通过；Dart analyze 0 error（91 条既有 warning/info）；Android `:app:compileDebugKotlin` 成功；Release gate 通过（包名 `com.qingji.qingji.codex`、版本 `1.281.0+295`、16 KiB、APK V2、固定证书）。本机 2026-08-31 Cockpit 完整备份解析 **9 个 Codex 账号（6 OAuth、3 API Key），0 警告**。
+- **APK**：`C:\src\xunni-codex\ci-artifacts\releases\feimiao-codex-v1.281.0-295.apk`，117,707,189 字节，SHA256 `A3960191D17E8CB2E2EA4B4D0310C9A8579B39127F8A317E86E73E1BAC9C07BA`。
+- **边界**：当前无在线 Android ADB，真实手机 Chrome Ephemeral/账号选择、VPN 出口、localhost 回调、设备码显式流程、安装冷启动和字体/输入法观感仍需目标手机复测；未使用 Plus 账号。
+
 ## 2026-08-30 v1.279.0+293 GPT OAuth 旧设备授权状态迁移
 
 - **根因补齐**：Android 普通授权入口继续只走 Cockpit 默认的浏览器 PKCE 流程；升级后发现旧版本可能在安全存储里遗留 device-auth 状态，启动恢复器会继续轮询地区受限的设备授权接口，造成用户明明安装新包仍看到 `unsupported_country_region` 403。

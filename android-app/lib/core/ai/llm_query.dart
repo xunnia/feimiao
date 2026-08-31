@@ -4,9 +4,9 @@ import 'dart:math' as math;
 
 import 'package:http/http.dart' as http;
 
+import 'ai_http_transport.dart';
 import 'ai_provider_config.dart';
 import 'openai_codex_oauth.dart';
-import 'system_network_proxy.dart';
 import 'web_search.dart';
 
 /// 查账问答：把账目数据 + 用户问题发给 DeepSeek，返回一段口语化回答。
@@ -18,6 +18,10 @@ class LlmQuery {
 
   static const _timeoutSeconds = 30;
   static const _reportTimeoutSeconds = 90;
+  static AiHttpTransport? _sharedTransport;
+
+  static AiHttpTransport get _transport =>
+      _sharedTransport ??= AiHttpTransport();
 
   /// 根据 [transactionsText]（账目上下文）回答 [question]。
   /// 失败抛 [LlmQueryException]。
@@ -53,6 +57,7 @@ $transactionsText''';
     final answer = await _postWithModelFallback(
       config: provider,
       timeoutSeconds: _timeoutSeconds,
+      transport: _transport,
       bodyForModel: (model) => {
         'model': model,
         'messages': [
@@ -138,6 +143,7 @@ $transactionsText''';
     return _postWithModelFallback(
       config: provider,
       timeoutSeconds: _reportTimeoutSeconds,
+      transport: _transport,
       bodyForModel: (model) => {
         'model': model,
         'messages': [
@@ -154,8 +160,11 @@ $transactionsText''';
   static Future<String> _postWithModelFallback({
     required AiProviderConfig config,
     required int timeoutSeconds,
+    required AiHttpTransport transport,
     required Map<String, dynamic> Function(String model) bodyForModel,
+    OpenAiCodexOAuthService? oauthService,
   }) async {
+    final authService = oauthService ?? OpenAiCodexOAuth.service;
     LlmQueryException? lastError;
     var models = config.modelCandidates;
     var activeConfig = config;
@@ -170,6 +179,7 @@ $transactionsText''';
             config: activeConfig,
             body: body,
             timeoutSeconds: timeoutSeconds,
+            transport: transport,
           );
         }
         if (activeConfig.shouldUseResponses) {
@@ -177,20 +187,22 @@ $transactionsText''';
             config: activeConfig,
             body: _responsesBodyFromChatBody(body, activeConfig),
             timeoutSeconds: timeoutSeconds,
+            transport: transport,
           );
         }
         return await _postChat(
           config: activeConfig,
           body: body,
           timeoutSeconds: timeoutSeconds,
+          transport: transport,
         );
       } on LlmQueryException catch (e) {
         if (!unauthorizedRetried &&
             e.statusCode == 401 &&
             activeConfig.isOpenAiCodexOAuth) {
           unauthorizedRetried = true;
-          activeConfig = await OpenAiCodexOAuth.service
-              .refreshAfterUnauthorized(activeConfig);
+          activeConfig =
+              await authService.refreshAfterUnauthorized(activeConfig);
           // The access token may be rotated independently of expires_at.
           // Retry the same model once before falling back or surfacing 401.
           index--;
@@ -200,7 +212,10 @@ $transactionsText''';
             activeConfig.isOpenAiCodexOAuth &&
             _isUnsupportedModelError(e)) {
           codexCatalogRetried = true;
-          final refreshed = await _configWithLiveCodexModel(activeConfig);
+          final refreshed = await _configWithLiveCodexModel(
+            activeConfig,
+            oauthService: authService,
+          );
           if (refreshed != null && refreshed.model != activeConfig.model) {
             activeConfig = refreshed;
             models = [refreshed.model];
@@ -227,11 +242,11 @@ $transactionsText''';
   }
 
   static Future<AiProviderConfig?> _configWithLiveCodexModel(
-    AiProviderConfig config,
-  ) async {
+      AiProviderConfig config,
+      {required OpenAiCodexOAuthService oauthService}) async {
     try {
-      final freshConfig = await OpenAiCodexOAuth.ensureFreshConfig(config);
-      final catalog = await OpenAiCodexOAuth.service.fetchModels(
+      final freshConfig = await oauthService.ensureFreshConfig(config);
+      final catalog = await oauthService.fetchModels(
         OpenAiCodexOAuthTokens(
           accessToken: freshConfig.apiKey,
           accountId: freshConfig.oauthAccountId,
@@ -256,12 +271,13 @@ $transactionsText''';
 
   static bool _shouldRetryWithCompatModel(LlmQueryException e) {
     final statusCode = e.statusCode;
-    if (statusCode == 400 || statusCode == 404) return true;
     final m = e.message.toLowerCase();
-    return m.contains('model') ||
-        m.contains('unsupported') ||
-        m.contains('invalid') ||
-        m.contains('parameter');
+    if (statusCode != 400 && statusCode != 404) return false;
+    return m.contains('unsupported model') ||
+        m.contains('model not found') ||
+        m.contains('unknown model') ||
+        m.contains('invalid model') ||
+        m.contains('model does not exist');
   }
 
   static Map<String, dynamic> _responsesBodyFromChatBody(
@@ -381,22 +397,16 @@ $transactionsText''';
     required AiProviderConfig config,
     required Map<String, dynamic> body,
     required int timeoutSeconds,
+    required AiHttpTransport transport,
   }) async {
-    await SystemNetworkProxy.refresh();
-    // Resolve PAC/system-proxy routing for this concrete upstream before the
-    // request. OAuth/model discovery already does this; chat-completions must
-    // use the same per-host route or a proxy VPN can make the first message
-    // fail even though the browser and settings test succeed.
-    await SystemNetworkProxy.refreshFor(config.chatCompletionsUri);
     late http.Response resp;
     try {
-      resp = await http
-          .post(
-            config.chatCompletionsUri,
-            headers: config.authHeaders(),
-            body: jsonEncode(body),
-          )
-          .timeout(Duration(seconds: timeoutSeconds));
+      resp = await transport.post(
+        config.chatCompletionsUri,
+        headers: config.authHeaders(),
+        body: jsonEncode(body),
+        timeout: Duration(seconds: timeoutSeconds),
+      );
     } catch (e) {
       throw LlmQueryException('网络请求失败：$e');
     }
@@ -430,9 +440,8 @@ $transactionsText''';
     required AiProviderConfig config,
     required Map<String, dynamic> body,
     required int timeoutSeconds,
+    required AiHttpTransport transport,
   }) async {
-    await SystemNetworkProxy.refresh();
-    await SystemNetworkProxy.refreshFor(config.messagesUri);
     // 从 chat-completions 格式转换为 Claude Messages 格式
     final messages = body['messages'] as List? ?? [];
     String? systemPrompt;
@@ -474,13 +483,12 @@ $transactionsText''';
 
     late http.Response resp;
     try {
-      resp = await http
-          .post(
-            config.messagesUri,
-            headers: config.authHeaders(),
-            body: jsonEncode(claudeBody),
-          )
-          .timeout(Duration(seconds: timeoutSeconds));
+      resp = await transport.post(
+        config.messagesUri,
+        headers: config.authHeaders(),
+        body: jsonEncode(claudeBody),
+        timeout: Duration(seconds: timeoutSeconds),
+      );
     } catch (e) {
       throw LlmQueryException('Claude Messages 请求失败：$e');
     }
@@ -517,9 +525,8 @@ $transactionsText''';
     required AiProviderConfig config,
     required Map<String, dynamic> body,
     required int timeoutSeconds,
+    required AiHttpTransport transport,
   }) async {
-    await SystemNetworkProxy.refresh();
-    await SystemNetworkProxy.refreshFor(config.responsesUri);
     final sessionId =
         config.isOpenAiCodexOAuth ? OpenAiCodexOAuth.generateRequestId() : null;
     // The ChatGPT/Codex subscription endpoint only accepts streamed
@@ -544,13 +551,13 @@ $transactionsText''';
     }
     late http.Response resp;
     try {
-      resp = await http
-          .post(
-            config.responsesUri,
-            headers: headers,
-            body: jsonEncode(requestBody),
-          )
-          .timeout(Duration(seconds: timeoutSeconds));
+      resp = await transport.post(
+        config.responsesUri,
+        headers: headers,
+        body: jsonEncode(requestBody),
+        timeout: Duration(seconds: timeoutSeconds),
+        forceRouteRefresh: true,
+      );
     } catch (e) {
       throw LlmQueryException('网络请求失败：$e');
     }
@@ -694,13 +701,26 @@ $transactionsText''';
     return '${text.substring(0, 180)}…';
   }
 
-  static Future<void> testConnection(AiProviderConfig config) async {
+  static Future<void> testConnection(
+    AiProviderConfig config, {
+    http.Client? client,
+  }) async {
     // 健康检查必须复用 Chats 的端点选择，否则自定义 Responses 中转会
     // 出现“设置页测试成功、喵助手实际失败”的假阳性。
-    final provider = _resolveConfig(config: config).forChatStreaming();
+    final transport =
+        client == null ? _transport : AiHttpTransport(client: client);
+    final oauthService = client == null
+        ? OpenAiCodexOAuth.service
+        : OpenAiCodexOAuthService(client: client);
+    final provider = (await oauthService.ensureFreshConfig(
+      _resolveConfig(config: config),
+    ))
+        .forChatStreaming();
     await _postWithModelFallback(
       config: provider,
       timeoutSeconds: 15,
+      transport: transport,
+      oauthService: oauthService,
       bodyForModel: (model) => {
         'model': model,
         'messages': const [
@@ -743,6 +763,8 @@ $transactionsText''';
     // OAuth service/client.  Tests and callers that inject a client must not
     // accidentally refresh through the process-global client while discovery
     // uses the injected transport.
+    final transport =
+        client == null ? _transport : AiHttpTransport(client: client);
     final oauthService = client == null
         ? OpenAiCodexOAuth.service
         : OpenAiCodexOAuthService(client: client);
@@ -797,11 +819,12 @@ $transactionsText''';
       final uri = uris[index];
       late http.Response resp;
       try {
-        await SystemNetworkProxy.refreshFor(uri);
-        final request = client == null
-            ? http.get(uri, headers: headers)
-            : client.get(uri, headers: headers);
-        resp = await request.timeout(timeout);
+        resp = await transport.get(
+          uri,
+          headers: headers,
+          timeout: timeout,
+          forceRouteRefresh: index > 0,
+        );
       } on TimeoutException {
         // Some relays leave /v1/models hanging while exposing the legacy
         // /models route. Keep trying the alternate URI before surfacing the

@@ -1,6 +1,8 @@
 // AI 查询相关导出
 export 'ai/ai_data_trimmer.dart';
 export 'ai/ai_account_json.dart';
+export 'ai/ai_account_verification.dart';
+export 'ai/ai_http_transport.dart';
 export 'ai/ai_attachment_pipeline.dart';
 export 'ai/ai_context.dart';
 export 'ai/ai_extensions.dart';

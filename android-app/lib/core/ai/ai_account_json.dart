@@ -86,10 +86,10 @@ class AiAccountImportEntry {
     if (account.isNotEmpty && id.isNotEmpty) {
       return 'account-id:$account|$id';
     }
-    if (account.isNotEmpty) return 'account:$account';
     if (id.isNotEmpty) return 'id:$id';
-    final name = displayName.trim().toLowerCase();
-    if (name.isNotEmpty) return 'name:$name';
+    // Workspace/account ids and display names are not unique identities on
+    // their own. Returning an empty key keeps both entries in the preview so
+    // the user can decide whether they are duplicates.
     return '';
   }
 
@@ -322,8 +322,12 @@ class AiAccountJsonCodec {
     // accounts are never imported into the GPT provider list.
     final cockpitData = _cockpitCodexExportedData(root);
     if (cockpitData != null) {
+      final providerMetadata = _cockpitProviderMetadata(root);
       _parseAccountList(
-        cockpitData,
+        [
+          for (final account in cockpitData)
+            _mergeCockpitProviderMetadata(account, providerMetadata),
+        ],
         source: AiAccountJsonSource.cockpit,
         accounts: accounts,
         warnings: warnings,
@@ -478,6 +482,82 @@ class AiAccountJsonCodec {
       }
     }
     return result;
+  }
+
+  /// Cockpit stores the selected API provider's wire format and, for some
+  /// exports, the key itself in `config.codex_model_providers`, while the
+  /// account record only carries `api_provider_id`. Resolve that reference
+  /// before parsing so an imported relay keeps its Responses/Chat format,
+  /// base URL, model catalogue, and credential instead of silently falling
+  /// back to the wrong endpoint.
+  static Map<String, Map<String, dynamic>> _cockpitProviderMetadata(
+    Map<String, dynamic> root,
+  ) {
+    final config = _map(root['config']);
+    final raw =
+        config?['codex_model_providers'] ?? config?['codexModelProviders'];
+    final list = _list(raw);
+    if (list == null) return const {};
+    final result = <String, Map<String, dynamic>>{};
+    for (final item in list) {
+      if (item is! Map) continue;
+      final map = Map<String, dynamic>.from(item);
+      final id = _string(map, const ['id', 'provider_id', 'providerId']);
+      if (id != null && id.isNotEmpty) result[id] = map;
+    }
+    return result;
+  }
+
+  static Map<String, dynamic> _mergeCockpitProviderMetadata(
+    Map<String, dynamic> account,
+    Map<String, Map<String, dynamic>> providers,
+  ) {
+    final providerId = _string(
+      account,
+      const ['api_provider_id', 'apiProviderId', 'provider_id', 'providerId'],
+    );
+    final provider = providerId == null ? null : providers[providerId];
+    if (provider == null) return account;
+
+    final merged = Map<String, dynamic>.from(account);
+    void fill(String accountKey, Object? value) {
+      if (!_hasScalar(merged, accountKey) && value != null) {
+        merged[accountKey] = value;
+      }
+    }
+
+    fill('api_base_url', provider['baseUrl'] ?? provider['base_url']);
+    fill('api_model_catalog',
+        provider['modelCatalog'] ?? provider['model_catalog']);
+    fill('api_wire_api', provider['wireApi'] ?? provider['wire_api']);
+    fill('api_provider_name', provider['name'] ?? provider['displayName']);
+    fill('api_supports_vision',
+        provider['supportsVision'] ?? provider['supports_vision']);
+
+    // Some Cockpit versions keep the key only in the provider's apiKeys
+    // array. Copy one matching non-empty key if the account record omitted it.
+    if (!_hasScalar(merged, 'openai_api_key')) {
+      final apiKeys = _list(provider['apiKeys'] ?? provider['api_keys']);
+      for (final rawKey in apiKeys ?? const <dynamic>[]) {
+        if (rawKey is! Map) continue;
+        final key = _string(
+          Map<String, dynamic>.from(rawKey),
+          const ['apiKey', 'api_key', 'key'],
+        );
+        if (key != null && key.isNotEmpty) {
+          merged['openai_api_key'] = key;
+          break;
+        }
+      }
+    }
+    return merged;
+  }
+
+  static bool _hasScalar(Map<String, dynamic> map, String key) {
+    final value = map[key];
+    if (value == null) return false;
+    if (value is Map || value is Iterable) return false;
+    return value.toString().trim().isNotEmpty;
   }
 
   static void _parseAccountList(
@@ -669,7 +749,12 @@ class AiAccountJsonCodec {
             rawType.contains('oauth') ||
             rawType.contains('codex') ||
             rawType.contains('chatgpt'));
-    final oauth = tokenOAuth || (markerOAuth && apiKey.isEmpty);
+    // An explicit API-key mode is authoritative, even when a Cockpit record
+    // carries stale/auxiliary OAuth fields under `tokens`.  Without this guard
+    // those fields could silently turn a relay account into the official
+    // ChatGPT Responses endpoint during import.
+    final oauth =
+        !explicitApiKey && (tokenOAuth || (markerOAuth && apiKey.isEmpty));
     if (!oauth && apiKey.isEmpty) return null;
     if (oauth &&
         accessToken.isEmpty &&
@@ -737,6 +822,8 @@ class AiAccountJsonCodec {
           'displayName',
           'name',
           'label',
+          'api_provider_name',
+          'apiProviderName',
           'provider_name',
           'providerName',
           'account_name',

@@ -8,6 +8,11 @@ class AiProviderHealth {
   final int? cooldownUntilMs;
   final int averageLatencyMs;
   final String lastError;
+
+  /// Result of the most recent explicit account verification.  This is kept
+  /// separate from request counters so a transient chat failure cannot erase
+  /// the more useful import/connection diagnosis.
+  final String verificationStatus;
   final int updatedMs;
 
   const AiProviderHealth({
@@ -20,6 +25,7 @@ class AiProviderHealth {
     this.cooldownUntilMs,
     this.averageLatencyMs = 0,
     this.lastError = '',
+    this.verificationStatus = '',
     this.updatedMs = 0,
   });
 
@@ -38,6 +44,18 @@ class AiProviderHealth {
   }
 
   String get statusLabel {
+    final verification = verificationStatus.trim();
+    if (verification.isNotEmpty) {
+      return switch (verification) {
+        'available' => '可用',
+        'needs_proxy' || 'needsProxy' => '需要代理/VPN',
+        'invalid_credential' || 'invalidCredential' => '凭据失效',
+        'model_unavailable' || 'modelUnavailable' => '模型不可用',
+        'network_error' || 'networkError' => '网络失败',
+        'configuration_error' || 'configurationError' => '配置不完整',
+        _ => verification,
+      };
+    }
     if (isCoolingDown) return '暂时冷却';
     if (hasRecentFailure) return '最近失败';
     if (successCount == 0 && failureCount == 0) return '尚未测试';
@@ -54,6 +72,7 @@ class AiProviderHealth {
         'cooldown_until_ms': cooldownUntilMs,
         'average_latency_ms': averageLatencyMs,
         'last_error': lastError,
+        'verification_status': verificationStatus,
         'updated_ms': updatedMs,
       };
 
@@ -69,6 +88,7 @@ class AiProviderHealth {
         cooldownUntilMs: (map['cooldown_until_ms'] as num?)?.toInt(),
         averageLatencyMs: (map['average_latency_ms'] as num?)?.toInt() ?? 0,
         lastError: map['last_error']?.toString() ?? '',
+        verificationStatus: map['verification_status']?.toString() ?? '',
         updatedMs: (map['updated_ms'] as num?)?.toInt() ?? 0,
       );
 
@@ -87,6 +107,7 @@ class AiProviderHealth {
       cooldownUntilMs: null,
       averageLatencyMs: nextAverage,
       lastError: '',
+      verificationStatus: 'available',
       updatedMs: now,
     );
   }
@@ -105,7 +126,37 @@ class AiProviderHealth {
       cooldownUntilMs: cooldown,
       averageLatencyMs: averageLatencyMs,
       lastError: error.length > 240 ? error.substring(0, 240) : error,
+      verificationStatus: verificationStatus,
       updatedMs: now,
+    );
+  }
+
+  /// Records an explicit model-catalogue + minimal connection verification.
+  /// Failed verification is intentionally counted as a failure, while the
+  /// structured status remains available to the settings UI.
+  AiProviderHealth recordVerification({
+    required String status,
+    required String message,
+    required int latencyMs,
+    required int now,
+  }) {
+    final normalized = status.trim();
+    if (normalized == 'available') {
+      return recordSuccess(latencyMs, now);
+    }
+    final failed = recordFailure(message, now);
+    return AiProviderHealth(
+      providerId: failed.providerId,
+      successCount: failed.successCount,
+      failureCount: failed.failureCount,
+      consecutiveFailures: failed.consecutiveFailures,
+      lastSuccessMs: failed.lastSuccessMs,
+      lastFailureMs: failed.lastFailureMs,
+      cooldownUntilMs: failed.cooldownUntilMs,
+      averageLatencyMs: failed.averageLatencyMs,
+      lastError: failed.lastError,
+      verificationStatus: normalized,
+      updatedMs: failed.updatedMs,
     );
   }
 }

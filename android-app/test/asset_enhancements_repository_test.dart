@@ -867,7 +867,7 @@ void main() {
     db = await databaseFactory.openDatabase(dbPath);
     expect(
       Sqflite.firstIntValue(await db.rawQuery('PRAGMA user_version')),
-      48,
+      49,
     );
     expect(
       await _captureV38Evidence(db, planId: planId, assetId: assetId),

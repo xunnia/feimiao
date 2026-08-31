@@ -6,6 +6,7 @@ import '../models/transaction_record.dart';
 import '../money_format.dart';
 import '../statistics/statistics_engine.dart';
 import 'llm_entry_parser.dart' show sanitizeNoteForLlm;
+import 'ai_logger.dart';
 import 'llm_query.dart';
 import 'report_document.dart';
 import 'report_execution_fence.dart';
@@ -427,7 +428,9 @@ class _ReportData {
       '${date.day.toString().padLeft(2, '0')}';
 
   static String _shortError(Object error) {
-    final text = error.toString().replaceAll(RegExp(r'\s+'), ' ').trim();
+    final text = AiLogger.sanitizeErrorForDisplay(error.toString())
+        .replaceAll(RegExp(r'\s+'), ' ')
+        .trim();
     if (text.length <= 100) return text;
     return '${text.substring(0, 100)}…';
   }

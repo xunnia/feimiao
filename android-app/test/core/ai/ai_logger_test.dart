@@ -69,7 +69,8 @@ void main() {
     });
 
     test('_sanitizeErrorMessage 应该隐藏响应体', () {
-      const input = '请求失败: {"error": {"message": "API key invalid", "code": 401}}';
+      const input =
+          '请求失败: {"error": {"message": "API key invalid", "code": 401}}';
       final result = AiLogger.sanitizeErrorMessageForTest(input);
 
       expect(result, contains('[响应体已隐藏]'));
@@ -81,6 +82,16 @@ void main() {
       final result = AiLogger.sanitizeErrorMessageForTest(input);
 
       expect(result, '网络连接超时');
+    });
+
+    test('display error sanitizer removes token-shaped values from JSON', () {
+      const input =
+          '{"access_token":"access-secret","refresh_token":"refresh-secret"}';
+      final result = AiLogger.sanitizeErrorForDisplay(input);
+
+      expect(result, isNot(contains('access-secret')));
+      expect(result, isNot(contains('refresh-secret')));
+      expect(result, contains('<redacted>'));
     });
 
     test('logQueryFailure 应该脱敏错误信息', () {
