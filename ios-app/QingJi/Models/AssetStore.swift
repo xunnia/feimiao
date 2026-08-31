@@ -1260,11 +1260,12 @@ enum AssetStore {
 
 /// 权益/应收款的生命周期和回收记录。
 enum ReceivableStore {
-    enum Error: LocalizedError {
+    enum Error: LocalizedError, Equatable {
         case invalidName
         case invalidAmount
         case exceedsRemaining
         case recoveryNotLatest
+        case accountUnavailable
 
         var errorDescription: String? {
             switch self {
@@ -1272,6 +1273,7 @@ enum ReceivableStore {
             case .invalidAmount: return "金额必须大于 0。"
             case .exceedsRemaining: return "收回金额不能超过剩余金额。"
             case .recoveryNotLatest: return "只能从最近一次收回开始撤销。"
+            case .accountUnavailable: return "到账账户不存在、已停用或币种不一致。"
             }
         }
     }
@@ -1369,11 +1371,49 @@ enum ReceivableStore {
         let normalizedAmount = MoneyNormalization.roundToCents(amount)
         guard normalizedAmount > 0 else { throw Error.invalidAmount }
         guard normalizedAmount <= asset.remainingAmount else { throw Error.exceedsRemaining }
+        if let account,
+           account.isDeleted ||
+            account.status != .active ||
+            account.currencyCode != asset.currencyCode {
+            throw Error.accountUnavailable
+        }
+        let recoveryTransaction: MoneyTransaction? = if let account {
+            let books = (try? context.fetch(FetchDescriptor<Book>())) ?? []
+            let book = books.first(where: { book in
+                guard let bookID = asset.bookID else { return false }
+                return book.stableID == bookID
+            })
+                ?? books.first(where: { $0.isDefault })
+                ?? books.first
+            let transaction = MoneyTransaction(
+                amount: normalizedAmount,
+                kind: .income,
+                date: date,
+                note: note.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    ? "权益收回：\(asset.name)"
+                    : note.trimmingCharacters(in: .whitespacesAndNewlines),
+                currencyCode: asset.currencyCode,
+                account: account,
+                book: book,
+                timePrecision: .dateOnly,
+                settledAt: date,
+                settlementQuality: .userConfirmed,
+                settlementAccountID: account.stableID,
+                settlementAccountQuality: .userConfirmed,
+                eventType: .receivableRecovery,
+                isExcluded: true
+            )
+            context.insert(transaction)
+            return transaction
+        } else {
+            nil
+        }
         let recovery = ReceivableRecovery(
             receivableID: asset.stableID,
             amount: normalizedAmount,
             recoveredAt: date,
             targetAccountID: account?.stableID,
+            transactionID: recoveryTransaction?.stableID,
             note: note.trimmingCharacters(in: .whitespacesAndNewlines)
         )
         context.insert(recovery)
@@ -1397,6 +1437,12 @@ enum ReceivableStore {
             toGranularity: .second
         ) else {
             throw Error.recoveryNotLatest
+        }
+        if let transactionID = latest.transactionID,
+           let transaction = try allTransactions(in: context).first(where: {
+               $0.stableID == transactionID
+           }) {
+            context.delete(transaction)
         }
         context.delete(latest)
         asset.remainingAmount += latest.amount
