@@ -35,7 +35,7 @@
 | 微信/支付宝导入 | bill_import.dart、bill_review_view.dart | PaymentBillImporter.swift、ImportReviewView.swift、BillRecordSaver | 已有列名定位、中文/英文金额、GBK 入口、商品优先分类、商户分组、退款订单号匹配 | 真实导出文件、重复导入、退款/不计收支/0 元行 |
 | 完整备份 | backup_package_codec.dart、SQLite/ZIP | BackupStore.swift、AndroidBackupImporter.swift、BackupView.swift | 已有 canonical JSON/ZIP、manifest/SHA-256、Android SQLite 只读转换、媒体安装、本机恢复点；恢复默认完整替换，另保留显式合并模式 | 旧 Android v48 ZIP、附件、失败回滚、真机恢复 |
 | 报告库/月报 | report_views.dart、monthly_report_view.dart | ReportsView.swift、ReportStore.swift | 已有本地月报、阅读、置顶、删除、后台择机刷新基础 | 同一统计结果、Markdown/表格、后台限制说明 |
-| 资产物品 | views/assets/physical_asset_* | AssetsView.swift、AssetStore.swift、ExtendedModels.swift、QingJiCore AssetMetrics/Allocation | 已有档案、估值、照片路径、生命周期、使用次数、持有天数/日均成本/每次成本/保值率和分摊校验基础 | 购置/估值/出售/退货/报废/丢失/赠送的详情操作、资产成本自动关联和退款分摊 UI |
+| 资产物品 | views/assets/physical_asset_* | AssetsView.swift、AssetStore.swift、AssetRefundAllocationStore.swift、ExtendedModels.swift、QingJiCore AssetMetrics/Allocation | 已有档案、估值、照片路径、生命周期、使用次数、持有天数/日均成本/每次成本/保值率、购置成本分摊和退款审计分配 | 详情操作的跨端金额对账、Android/iOS 成对截图和真机验收 |
 | 权益/应收 | receivable_*、lending_view.dart | AssetsView.swift、AssetStore.swift | 已有权益详情、收回历史、最近一次撤销、损失/归档状态；指定到账账户会生成 excluded `receivableRecovery` 流水并可撤销 | 回收流水、剩余金额、净资产、跨端操作链 |
 | 借贷往来 | lending_view.dart、borrow_form_sheet.dart | Views/Assets/LendingView.swift、LiabilityStore | 已按对象聚合借出权益和个人借入，支持时间线、记一笔借入、独立负债账户、真实转入和后续还款入口 | 同一对象聚合、借入转账、还款后本金与账户余额 |
 | 负债/还款 | liability_*、loan_wizard_sheet.dart、repayment_sheet.dart | LiabilitiesView.swift、LiabilityStore | 已有信用卡/房贷/车贷/个人借入档案、还款基础和利息拆分 | 本金/利息、账户余额、信用卡字段、还款向导 |

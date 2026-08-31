@@ -756,8 +756,16 @@ enum AndroidBackupImporter {
         let assetRefundAllocations = assetRefundRows.compactMap { row -> BackupAssetRefundAllocation? in
             guard let id = row.integer("id"),
                   let stable = assetRefundAllocationIDs[id],
-                  let linkID = row.integer("asset_transaction_link_id").flatMap({ assetLinkIDs[$0] }),
+                  let rawLinkID = row.integer("asset_transaction_link_id"),
                   let refundID = row.integer("refund_transaction_id").flatMap({ transactionIDs[$0] }) else { return nil }
+            let linkID: UUID
+            if rawLinkID == 0 {
+                linkID = AssetRefundAllocationStore.untrackedLinkID
+            } else if let mapped = assetLinkIDs[rawLinkID] {
+                linkID = mapped
+            } else {
+                return nil
+            }
             return BackupAssetRefundAllocation(
                 id: stable,
                 assetTransactionLinkID: linkID,

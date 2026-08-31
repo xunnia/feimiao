@@ -18,7 +18,7 @@ iOS 只在按钮反馈、系统菜单、键盘、转场和 Liquid Glass 材质�
 - 文件命名：`<功能>/<场景>-android.png` 与 `<功能>/<场景>-ios.png`。
 - iOS CI 产物目录：`ci-artifacts/ios-screenshots/`；Android 现有 golden 仍保留在 `android-app/outputs/`。
 - 成对场景和报告由 `ios-app/tools/screenshot_manifest.json` 与 `ios-app/tools/compare_png.py` 管理，报告会区分“缺失截图”“尺寸不一致”和“已比较”。
-- Android 端已加入真实页面的 integration_test/parity_screenshots_test.dart，由 .github/workflows/parity-screenshots.yml 在 Android 模拟器和 iOS 模拟器分别采集 39 个场景；Parity #61 已生成同一份完整报告并通过 `--require-complete`，iOS 另有内容区非空门禁，白屏截图会直接让 job 失败。
+- Android 端已加入真实页面的 integration_test/parity_screenshots_test.dart，由 .github/workflows/parity-screenshots.yml 在 Android 模拟器和 iOS 模拟器分别采集 40 个场景；Parity #61 已生成同一份完整报告并通过 `--require-complete`，iOS 另有内容区非空门禁，白屏截图会直接让 job 失败。
 - 当前工作树没有在线 Android 设备，也没有本机 Xcode；但 Parity #61 已在云端模拟器完成截图和报告。Pixel 2 与 iPhone 模拟器物理尺寸不同，报告会如实记录尺寸差异，不把原生 UI 的像素差异伪装成业务一致。
 
 ## 当前批次
@@ -38,7 +38,7 @@ iOS 只在按钮反馈、系统菜单、键盘、转场和 Liquid Glass 材质�
 | AI Chats/多服务商 | `ai_chat_panel.dart` | 已接入 iOS 原生 AI 账号、Keychain、模型目录、三类流式端点、ChatGPT/Codex PKCE OAuth、401 刷新、Chats 会话列表、图片/文件附件和基础喵助手 | Parity #61 已成对截图；真实网络仍待设备验收 |
 | 存钱目标 | `savings_goals_view.dart` | 已实现目标、进度、归档/恢复 | Parity #61 已成对截图 |
 | 定时记账 | `recurring_view.dart` | 已实现日/周/月/年规则、转账、幂等补记 | Parity #61 已成对截图 |
-| 资产/负债/净资产 | `views/assets` | 已实现 iOS 基础档案、权益详情/收回流水与撤销、生命周期、持有指标计算、还款、组件净资产与快照 | Parity #61 已成对截图；详情操作、账户余额和真机仍待重新验收 |
+| 资产/负债/净资产 | `views/assets` | 已实现 iOS 资产档案、购置成本/退款分摊审计、权益详情/收回流水与撤销、生命周期、持有指标计算、还款、组件净资产与快照 | Parity #61 已成对截图；退款分配操作链、账户余额和真机仍待重新验收 |
 | 借贷往来 | `views/assets/lending_view.dart`、`borrow_form_sheet.dart` | 已接入按对象聚合、借入独立负债账户、真实转入、收回/还款时间线 | 新增路由和操作链截图、跨端金额对账仍待验收 |
 | 报告/后台任务/提醒 | `reports`、Worker | 已有本地月报库、阅读/置顶/删除和 `BGTaskScheduler` 择机刷新；AI 定时报表保存计划并用本地通知提醒前台生成，不能承诺 iOS 后台固定联网 | Parity #61 已成对截图；后台触发仍待真机验收 |
 | Widget/快捷指令/分享 | Android 原生通道 | Widget、App Intent、Share Extension 已有基础版；分享文本/截图会进入 AI 记一笔 | Parity #61 已成对截图；扩展真机仍待验收 |

@@ -26,7 +26,7 @@ Markdown 报告。
      --output ci-artifacts/screenshot-report.json
    ```
 
-4. `.github/workflows/parity-screenshots.yml` 会在两个模拟器任务都成功后生成成对报告，并使用 `--require-complete`。Parity #61 已对 39 个场景通过这个 gate；Pixel 2 与 iPhone Air 的物理尺寸差异会标记为 `dimension_mismatch` 并保留在报告中，不会被伪装成像素一致，也不会把有效成对证据误判为缺图。
+4. `.github/workflows/parity-screenshots.yml` 会在两个模拟器任务都成功后生成成对报告，并使用 `--require-complete`。Parity #61 已对 40 个场景通过这个 gate；Pixel 2 与 iPhone Air 的物理尺寸差异会标记为 `dimension_mismatch` 并保留在报告中，不会被伪装成像素一致，也不会把有效成对证据误判为缺图。
 
 ## 判定口径
 

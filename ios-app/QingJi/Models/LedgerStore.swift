@@ -16,6 +16,10 @@ enum LedgerStore {
         case refundExceedsRemaining
         case transactionNotFound
         case immutableOffset
+        case immutableAssetLink
+        case immutableAssetSale
+        case immutableReceivableRecovery
+        case immutableReturnedRefund
 
         var errorDescription: String? {
             switch self {
@@ -26,6 +30,10 @@ enum LedgerStore {
             case .refundExceedsRemaining: return "退款金额不能超过剩余可退金额。"
             case .transactionNotFound: return "找不到原账单，请刷新后重试。"
             case .immutableOffset: return "退款或报销记录不能直接编辑，请在原账单的冲减记录中撤销后重新添加。"
+            case .immutableAssetLink: return "这笔流水已关联实物资产，请先在物品详情中解除关联。"
+            case .immutableAssetSale: return "这笔流水来自资产出售，请先在资产详情中撤销出售。"
+            case .immutableReceivableRecovery: return "这笔流水来自权益收回，请先在资产详情中撤销收回。"
+            case .immutableReturnedRefund: return "这笔退款已经用于确认物品退货，请先撤销退货。"
             }
         }
     }
@@ -246,6 +254,7 @@ enum LedgerStore {
         let normalizedAmount = MoneyNormalization.roundToCents(amount)
         guard normalizedAmount > 0 else { throw Error.invalidAmount }
         guard transaction.refundOfID == nil else { throw Error.immutableOffset }
+        try assertTransactionMutable(transaction, in: context)
         if let account, !isUsableAccount(account) {
             throw Error.invalidAccount
         }
@@ -302,6 +311,7 @@ enum LedgerStore {
         in context: ModelContext
     ) throws {
         guard transaction.refundOfID == nil else { throw Error.immutableOffset }
+        try assertTransactionMutable(transaction, in: context)
         if let category, category.kind != transaction.kind {
             throw Error.transactionNotFound
         }
@@ -368,33 +378,76 @@ enum LedgerStore {
             original.reimbursable = !fullyReimbursed
         }
         original.updatedAt = Date()
-        try context.save()
+        do {
+            if eventType == .refund || eventType == .reimbursement {
+                try AssetRefundAllocationStore.applyNewRefund(offset, in: context)
+            }
+            try context.save()
+        } catch {
+            context.rollback()
+            throw error
+        }
         return offset
     }
 
     /// 删除原账单时级联删除附着退款；删除退款子行时同步报销标记。
     static func delete(_ transaction: MoneyTransaction, in context: ModelContext) throws {
         let all = try allTransactions(in: context)
-        var attachmentPaths = Set<String>()
-        if !transaction.attachmentPath.isEmpty {
-            attachmentPaths.insert(transaction.attachmentPath)
-        }
-        if transaction.refundOfID == nil {
-            for child in all where child.refundOfID == transaction.stableID {
-                if !child.attachmentPath.isEmpty {
-                    attachmentPaths.insert(child.attachmentPath)
-                }
-                context.delete(child)
+        try assertTransactionMutable(transaction, in: context)
+        let allAssetLinks = try context.fetch(FetchDescriptor<AssetTransactionLink>())
+        if let originalID = transaction.refundOfID {
+            let returnedAssetIDs = Set(
+                try context.fetch(FetchDescriptor<PhysicalAsset>())
+                    .filter { !$0.isDeleted && $0.lifecycle == .returned }
+                    .map(\.stableID)
+            )
+            let returnsThisAsset = allAssetLinks.contains { link in
+                link.transactionID == originalID &&
+                    (link.linkTypeRaw == AssetTransactionLinkType.sourceTransaction.rawValue ||
+                     link.linkTypeRaw == AssetTransactionLinkType.purchaseTransaction.rawValue) &&
+                    returnedAssetIDs.contains(link.assetID) &&
+                    link.allocatedRefundCents > 0
             }
-        } else if transaction.eventType == .reimbursement,
-                  let originalID = transaction.refundOfID,
-                  let original = all.first(where: { $0.stableID == originalID }) {
-            original.isReimbursed = false
-            original.reimbursable = true
-            original.updatedAt = Date()
+            if returnsThisAsset { throw Error.immutableReturnedRefund }
         }
-        context.delete(transaction)
-        try context.save()
+        var attachmentPaths = Set<String>()
+        do {
+            if !transaction.attachmentPath.isEmpty {
+                attachmentPaths.insert(transaction.attachmentPath)
+            }
+            if transaction.refundOfID == nil {
+                let children = all.filter { $0.refundOfID == transaction.stableID }
+                try AssetRefundAllocationStore.reverseAllocations(
+                    for: children,
+                    allTransactions: all,
+                    in: context
+                )
+                for child in children {
+                    if !child.attachmentPath.isEmpty {
+                        attachmentPaths.insert(child.attachmentPath)
+                    }
+                    context.delete(child)
+                }
+            } else if transaction.eventType == .reimbursement,
+                      let originalID = transaction.refundOfID,
+                      let original = all.first(where: { $0.stableID == originalID }) {
+                original.isReimbursed = false
+                original.reimbursable = true
+                original.updatedAt = Date()
+            }
+            if transaction.refundOfID != nil {
+                try AssetRefundAllocationStore.reverseAllocations(
+                    for: [transaction],
+                    allTransactions: all,
+                    in: context
+                )
+            }
+            context.delete(transaction)
+            try context.save()
+        } catch {
+            context.rollback()
+            throw error
+        }
         // 数据库提交成功后再清理本地媒体，避免保存失败导致账单和照片同时丢失。
         guard let remainingTransactions = try? allTransactions(in: context) else {
             return
@@ -409,6 +462,25 @@ enum LedgerStore {
         let pathsToRemove = attachmentPaths.map(AttachmentStore.canonicalRelativePath)
         for path in pathsToRemove where !remainingPaths.contains(path) {
             AttachmentStore.remove(path)
+        }
+    }
+
+    private static func assertTransactionMutable(
+        _ transaction: MoneyTransaction,
+        in context: ModelContext
+    ) throws {
+        let directLinks = try context.fetch(FetchDescriptor<AssetTransactionLink>())
+            .filter { $0.transactionID == transaction.stableID && $0.assetObjectType == "physical" }
+        if let link = directLinks.first {
+            if link.linkTypeRaw == AssetTransactionLinkType.saleAccountMovement.rawValue {
+                throw Error.immutableAssetSale
+            }
+            throw Error.immutableAssetLink
+        }
+        if try context.fetch(FetchDescriptor<ReceivableRecovery>()).contains(where: {
+            $0.transactionID == Optional(transaction.stableID)
+        }) {
+            throw Error.immutableReceivableRecovery
         }
     }
 

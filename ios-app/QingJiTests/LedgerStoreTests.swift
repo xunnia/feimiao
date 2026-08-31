@@ -16,6 +16,14 @@ final class LedgerStoreTests: XCTestCase {
                 TxCategory.self,
                 MoneyTransaction.self,
                 AccountBalanceCheckpointRecord.self,
+                PhysicalAsset.self,
+                AssetEvent.self,
+                AssetUsageEvent.self,
+                AssetTransactionLink.self,
+                AssetRefundAllocation.self,
+                AssetValuation.self,
+                ReceivableAsset.self,
+                ReceivableRecovery.self,
             ])
             let configuration = ModelConfiguration(
                 schema: schema,

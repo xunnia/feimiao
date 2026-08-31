@@ -18,6 +18,7 @@ enum AssetStore {
         case returnRequiresPurchaseLink
         case returnNotAvailable
         case invalidTerminalStatus
+        case purchaseCostManagedByLink
 
         var errorDescription: String? {
             switch self {
@@ -34,6 +35,7 @@ enum AssetStore {
             case .returnRequiresPurchaseLink: return "多物品订单需要先完成购置成本分配，才能确认退货。"
             case .returnNotAvailable: return "这件物品当前没有可退回的购置账单。"
             case .invalidTerminalStatus: return "当前资产状态不能执行这个结束持有操作。"
+            case .purchaseCostManagedByLink: return "这件物品的购置成本由关联账单管理，请先解除购置关联。"
             }
         }
     }
@@ -196,9 +198,12 @@ enum AssetStore {
         _ link: AssetTransactionLink,
         in context: ModelContext
     ) throws {
-        guard link.linkTypeRaw != AssetTransactionLinkType.sourceTransaction.rawValue,
-              link.linkTypeRaw != AssetTransactionLinkType.purchaseTransaction.rawValue,
-              link.linkTypeRaw != AssetTransactionLinkType.saleAccountMovement.rawValue else {
+        if link.linkTypeRaw == AssetTransactionLinkType.sourceTransaction.rawValue ||
+            link.linkTypeRaw == AssetTransactionLinkType.purchaseTransaction.rawValue {
+            try AssetRefundAllocationStore.unlinkPurchaseAllocation(link, in: context)
+            return
+        }
+        guard link.linkTypeRaw != AssetTransactionLinkType.saleAccountMovement.rawValue else {
             throw Error.invalidTransaction
         }
         let assetID = link.assetID
@@ -283,6 +288,11 @@ enum AssetStore {
             value: link.amount,
             note: "从已有账单分配"
         ))
+        try AssetRefundAllocationStore.reconcileHistoricalRefunds(
+            for: transaction.stableID,
+            in: context,
+            including: link
+        )
         try context.save()
         return link
     }
@@ -516,6 +526,24 @@ enum AssetStore {
             purchaseDate: purchaseDate,
             warrantyUntil: warrantyUntil
         )
+        let purchaseLinks = try context.fetch(FetchDescriptor<AssetTransactionLink>())
+            .filter {
+                $0.assetID == asset.stableID &&
+                    ($0.linkTypeRaw == AssetTransactionLinkType.sourceTransaction.rawValue ||
+                     $0.linkTypeRaw == AssetTransactionLinkType.purchaseTransaction.rawValue)
+            }
+        if !purchaseLinks.isEmpty {
+            let linkedNet = purchaseLinks.reduce(Decimal.zero) {
+                let gross = $1.allocatedGrossCents > 0
+                    ? Decimal($1.allocatedGrossCents) / Decimal(100)
+                    : $1.amount
+                let refund = Decimal($1.allocatedRefundCents) / Decimal(100)
+                return $0 + max(gross - refund, .zero)
+            }
+            guard normalizedPurchasePrice == MoneyNormalization.roundToCents(linkedNet) else {
+                throw Error.purchaseCostManagedByLink
+            }
+        }
         let previousValue = asset.currentValue
         asset.name = name.trimmingCharacters(in: .whitespacesAndNewlines)
         asset.kind = kind
