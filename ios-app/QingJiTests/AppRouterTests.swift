@@ -10,7 +10,7 @@ final class AppRouterTests: XCTestCase {
     }
 
     func testOrdinarySettingsDestinationsStillUseSettingsRoot() {
-        for screen in ["settings/budget", "settings/accounts", "settings/backup"] {
+        for screen in ["settings/budget", "settings/accounts", "settings/backup", "settings/books", "books"] {
             XCTAssertEqual(RootTabView.initialPath(for: screen), [.settings])
         }
     }

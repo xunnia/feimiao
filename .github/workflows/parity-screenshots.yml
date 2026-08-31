@@ -270,7 +270,7 @@ jobs:
           shoot settings/assets/detail 38-assets-detail
           shoot liabilities 14-liabilities
           shoot net-worth 15-net-worth
-          shoot books 16-books
+          shoot settings/books 16-books
           shoot settings/accounts 17-accounts
           shoot settings/accounts/detail 39-account-detail
           shoot settings/categories 18-categories

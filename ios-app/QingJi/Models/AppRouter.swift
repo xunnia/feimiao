@@ -75,10 +75,6 @@ final class AppRouter {
             selectedTab = .home
             return
         }
-        if screen == "books" {
-            selectedTab = .home
-            return
-        }
         if screen == "quickadd/income" {
             selectedTab = .quickAdd
             quickAddStartsWithIncome = true

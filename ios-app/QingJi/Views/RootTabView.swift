@@ -206,7 +206,7 @@ struct RootTabView: View {
 
     private static func initialDrawerPresented() -> Bool {
         let screen = ProcessInfo.processInfo.environment["QINGJI_SCREEN"] ?? ""
-        return screen == "home/drawer" || screen == "books"
+        return screen == "home/drawer"
     }
 
     private func navigate(to destination: DrawerDestination) {
