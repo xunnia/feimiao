@@ -29,7 +29,7 @@
 | 标签 | views/settings/tags_view.dart | TagsView.swift、交易标签快照 | 已有标签管理和交易引用 | 新增/编辑/删除、历史账目不丢标签 |
 | 喵分类记忆 | views/settings/memory_view.dart | MemoryView.swift、CategoryMemoryStore.swift | 已有决定性商户学习、展示和忘记 | 平台商户不误学、自定义分类、重启保持 |
 | 预算基础 | budget_setting_view.dart、BudgetEngine | BudgetSettingView.swift、BudgetStore、BudgetEngine.swift | 已有月/周/自定义、总预算、分类预算、今日可花 | 同一预算窗口、退款/报销净额、历史月份 |
-| 预算高级 | budget_plan_v2.dart、固定承诺/专项追踪 | BudgetV2Models.swift、BudgetPlanV2.swift、编辑页 | 预算计划、分类额度、专项追踪、固定承诺模板和当前/下一周期 occurrence 物化已接入 | 生效版本编辑、固定承诺账单匹配/跳过/退款复核 |
+| 预算高级 | budget_plan_v2.dart、固定承诺/专项追踪 | BudgetV2Models.swift、BudgetPlanV2.swift、编辑页 | 预算计划、分类额度、参考收入、专项追踪、固定承诺模板和当前/下一周期 occurrence 物化已接入；支持按完整周期新增/更新 revision、保留历史有效区间、本周期 override、固定承诺状态同步和变更审计 | 生效版本编辑、历史月份解析、固定承诺账单匹配/跳过/退款复核、override 后统计 |
 | 存钱目标 | savings_goals_view.dart | SavingsGoalsView.swift、SavingsGoal | 已有目标、进度、归档/恢复和资产关联字段 | 进度、归档、备份恢复 |
 | 定时记账 | recurring_view.dart、occurrence 表 | RecurringRulesView.swift、RecurringStore.swift | 已有日/周/月/年、转账、到期幂等物化 | 重复打开不重复落账、结束日期/次数、账户失效 |
 | 微信/支付宝导入 | bill_import.dart、bill_review_view.dart | PaymentBillImporter.swift、ImportReviewView.swift、BillRecordSaver | 已有列名定位、中文/英文金额、GBK 入口、商品优先分类、商户分组、退款订单号匹配 | 真实导出文件、重复导入、退款/不计收支/0 元行 |

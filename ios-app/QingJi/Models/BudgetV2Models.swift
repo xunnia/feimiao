@@ -229,6 +229,10 @@ enum BudgetCommitmentStore {
         case transactionNotFound
         case invalidCandidate
         case invalidState
+        case invalidRevision
+        case revisionBoundary
+        case invalidOverride
+        case noRevision
 
         var errorDescription: String? {
             switch self {
@@ -237,8 +241,203 @@ enum BudgetCommitmentStore {
             case .transactionNotFound: return "匹配账单不存在。"
             case .invalidCandidate: return "这笔账不在固定承诺的账本、币种或周期内，或已匹配其他承诺。"
             case .invalidState: return "这条固定承诺当前不支持该操作。"
+            case .invalidRevision: return "预算修订金额、分类额度或固定承诺不合法。"
+            case .revisionBoundary: return "预算修订只能从完整周期边界生效。"
+            case .invalidOverride: return "本周期调整后的分类额度超过周期总额。"
+            case .noRevision: return "当前预算周期没有可用的额度修订。"
             }
         }
+    }
+
+    /// 保存一条从完整周期边界生效的修订。历史修订不会被覆盖，只有有效区间
+    /// 的终点和当前周期的固定承诺会随新版本重新计算。
+    @discardableResult
+    static func upsertRevision(
+        planID: UUID,
+        amountCents: Int,
+        categoryBudgetsCents: [String: Int] = [:],
+        monthlyIncomeCents: Int? = nil,
+        fixedTemplates: [BudgetFixedTemplateV2] = [],
+        effectiveCycleStart: Date? = nil,
+        in context: ModelContext,
+        now: Date = Date()
+    ) throws -> BudgetPlanRevisionRecord {
+        guard let plan = try context.fetch(FetchDescriptor<BudgetPlanRecord>())
+            .first(where: { $0.stableID == planID }) else {
+            throw Error.planNotFound
+        }
+        let core = plan.core
+        guard core.isPrimary, core.cadence != .oneOff else {
+            throw Error.invalidRevision
+        }
+        let requestedStart = Calendar.current.startOfDay(
+            for: effectiveCycleStart ?? core.cycle(for: now).endExclusive
+        )
+        let cycle = core.cycle(for: requestedStart)
+        guard cycle.start == requestedStart,
+              requestedStart >= Calendar.current.startOfDay(for: core.anchorStart) else {
+            throw Error.revisionBoundary
+        }
+        guard amountCents > 0,
+              categoryBudgetsCents.keys.allSatisfy({ !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }),
+              categoryBudgetsCents.values.allSatisfy({ $0 >= 0 }),
+              fixedTemplates.allSatisfy({ template in
+                  let name = template.name.trimmingCharacters(in: .whitespacesAndNewlines)
+                  let dueRange = core.cadence == .monthly ? 1...28 : 1...7
+                  return !template.id.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
+                      !name.isEmpty && template.plannedCents > 0 && dueRange.contains(template.dueValue)
+              }),
+              Set(fixedTemplates.map(\.id)).count == fixedTemplates.count,
+              categoryBudgetsCents.values.reduce(0, +) <= amountCents,
+              fixedTemplates.reduce(0, { $0 + $1.plannedCents }) <= amountCents else {
+            throw Error.invalidRevision
+        }
+
+        let revisions = try context.fetch(FetchDescriptor<BudgetPlanRevisionRecord>())
+            .filter { $0.planID == planID }
+            .sorted { $0.effectiveCycleStart < $1.effectiveCycleStart }
+        let matching = revisions.filter {
+            Calendar.current.isDate($0.effectiveCycleStart, inSameDayAs: cycle.start)
+        }
+        guard matching.count <= 1 else { throw Error.invalidRevision }
+        let previous = revisions.last { $0.effectiveCycleStart < cycle.start }
+        let next = revisions.first { $0.effectiveCycleStart > cycle.start }
+        let before = matching.first.map { revisionSnapshot($0) } ?? ""
+        let revision: BudgetPlanRevisionRecord
+
+        if let existing = matching.first {
+            revision = existing
+            revision.amountCents = amountCents
+            revision.categoryBudgetsJSON = encodeCents(categoryBudgetsCents)
+            revision.monthlyIncomeCents = monthlyIncomeCents
+            revision.fixedTemplatesJSON = encodeFixedTemplates(fixedTemplates)
+            revision.effectiveToCycleStart = next?.effectiveCycleStart
+            revision.updatedAt = now
+        } else {
+            if let previous {
+                previous.effectiveToCycleStart = cycle.start
+                previous.updatedAt = now
+            }
+            let created = BudgetPlanRevisionRecord(
+                planID: planID,
+                effectiveCycleStart: cycle.start,
+                amountCents: amountCents
+            )
+            created.effectiveToCycleStart = next?.effectiveCycleStart
+            created.categoryBudgetsJSON = encodeCents(categoryBudgetsCents)
+            created.monthlyIncomeCents = monthlyIncomeCents
+            created.fixedTemplatesJSON = encodeFixedTemplates(fixedTemplates)
+            created.createdAt = now
+            created.updatedAt = now
+            context.insert(created)
+            revision = created
+        }
+
+        if let previous, previous !== revision {
+            previous.effectiveToCycleStart = cycle.start
+            previous.updatedAt = now
+        }
+        try syncOccurrences(
+            for: plan,
+            revision: revision,
+            cycle: cycle,
+            templates: fixedTemplates,
+            in: context,
+            now: now
+        )
+        let event = BudgetChangeEventRecord(
+            planID: planID,
+            eventType: matching.isEmpty ? "revision_created" : "revision_updated",
+            beforeJSON: before,
+            afterJSON: revisionSnapshot(revision)
+        )
+        event.createdAt = now
+        context.insert(event)
+        try context.save()
+        return revision
+    }
+
+    /// 保存只作用于指定周期的临时额度，不改变 revision 历史和未来周期。
+    @discardableResult
+    static func upsertCycleOverride(
+        planID: UUID,
+        cycleStart: Date,
+        targetAmountCents: Int,
+        categoryBudgetsCents: [String: Int]? = nil,
+        inputIntent: BudgetOverrideIntent = .replaceTotal,
+        inputDeltaCents: Int? = nil,
+        in context: ModelContext,
+        now: Date = Date()
+    ) throws -> BudgetCycleOverrideRecord {
+        guard let plan = try context.fetch(FetchDescriptor<BudgetPlanRecord>())
+            .first(where: { $0.stableID == planID }) else {
+            throw Error.planNotFound
+        }
+        let core = plan.core
+        guard core.isPrimary, core.cadence != .oneOff else { throw Error.invalidOverride }
+        let requestedStart = Calendar.current.startOfDay(for: cycleStart)
+        let cycle = core.cycle(for: requestedStart)
+        guard cycle.start == requestedStart,
+              requestedStart >= Calendar.current.startOfDay(for: core.anchorStart) else {
+            throw Error.revisionBoundary
+        }
+        let revisions = try context.fetch(FetchDescriptor<BudgetPlanRevisionRecord>())
+            .filter { $0.planID == planID && $0.core.applies(to: cycle) }
+            .sorted {
+                if $0.effectiveCycleStart != $1.effectiveCycleStart {
+                    return $0.effectiveCycleStart < $1.effectiveCycleStart
+                }
+                return $0.stableID.uuidString < $1.stableID.uuidString
+            }
+        guard let baseRevision = revisions.last else { throw Error.noRevision }
+        let categories = categoryBudgetsCents ?? baseRevision.core.categoryBudgetsCents
+        guard targetAmountCents >= 0,
+              categories.keys.allSatisfy({ !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }),
+              categories.values.allSatisfy({ $0 >= 0 }),
+              categories.values.reduce(0, +) <= targetAmountCents else {
+            throw Error.invalidOverride
+        }
+
+        let overrides = try context.fetch(FetchDescriptor<BudgetCycleOverrideRecord>())
+            .filter {
+                $0.planID == planID &&
+                Calendar.current.isDate($0.cycleStart, inSameDayAs: cycle.start)
+            }
+        guard overrides.count <= 1 else { throw Error.invalidOverride }
+        let existing = overrides.first
+        let before = existing.map(overrideSnapshot) ?? ""
+        let override: BudgetCycleOverrideRecord
+        if let existing {
+            override = existing
+        } else {
+            let created = BudgetCycleOverrideRecord(
+                planID: planID,
+                cycleStart: cycle.start,
+                cycleEndInclusive: cycle.endInclusive,
+                targetAmountCents: targetAmountCents
+            )
+            context.insert(created)
+            override = created
+        }
+        override.cycleStart = cycle.start
+        override.cycleEndInclusive = cycle.endInclusive
+        override.targetAmountCents = targetAmountCents
+        override.categoryBudgetsJSON = categoryBudgetsCents.map(encodeCents)
+        override.inputIntentRaw = inputIntent.rawValue
+        override.inputDeltaCents = inputDeltaCents
+        if existing == nil { override.createdAt = now }
+        override.updatedAt = now
+
+        let event = BudgetChangeEventRecord(
+            planID: planID,
+            eventType: "cycle_override_saved",
+            beforeJSON: before,
+            afterJSON: overrideSnapshot(override)
+        )
+        event.createdAt = now
+        context.insert(event)
+        try context.save()
+        return override
     }
 
     @discardableResult
@@ -437,6 +636,121 @@ enum BudgetCommitmentStore {
         }
         if changed > 0 { try context.save() }
         return changed
+    }
+
+    private static func syncOccurrences(
+        for plan: BudgetPlanRecord,
+        revision: BudgetPlanRevisionRecord,
+        cycle: BudgetPlanCycleV2,
+        templates: [BudgetFixedTemplateV2],
+        in context: ModelContext,
+        now: Date
+    ) throws {
+        var remaining = Dictionary(uniqueKeysWithValues: templates.map { ($0.id, $0) })
+        let occurrences = try context.fetch(FetchDescriptor<BudgetCommitmentOccurrenceRecord>())
+        for occurrence in occurrences where occurrence.planID == plan.stableID &&
+            Calendar.current.isDate(occurrence.cycleStart, inSameDayAs: cycle.start) {
+            let template = remaining.removeValue(forKey: occurrence.templateID)
+            let status = occurrence.resolutionStatusRaw
+            let untouched = status == FixedCommitmentResolutionStatus.planned.rawValue &&
+                occurrence.matchedTransactionFamilyID == nil
+
+            guard let template else {
+                if untouched {
+                    context.delete(occurrence)
+                } else {
+                    occurrence.revisionID = revision.stableID
+                    occurrence.resolutionStatusRaw = FixedCommitmentResolutionStatus.requiresReview.rawValue
+                    occurrence.reviewReasonRaw = FixedCommitmentReviewReason.amountConflict.rawValue
+                    occurrence.matchedTransactionFamilyID = nil
+                    occurrence.resolvedAt = nil
+                    occurrence.updatedAt = now
+                }
+                continue
+            }
+
+            let due = dueDate(for: plan.core, cycle: cycle, template: template)
+            let amountChanged = occurrence.plannedCents != template.plannedCents ||
+                !Calendar.current.isDate(occurrence.dueDate, inSameDayAs: due)
+            occurrence.revisionID = revision.stableID
+            occurrence.cycleEndInclusive = cycle.endInclusive
+            occurrence.plannedCents = template.plannedCents
+            occurrence.dueDate = due
+            if amountChanged && !untouched {
+                occurrence.resolutionStatusRaw = FixedCommitmentResolutionStatus.requiresReview.rawValue
+                occurrence.reviewReasonRaw = FixedCommitmentReviewReason.amountConflict.rawValue
+                occurrence.matchedTransactionFamilyID = nil
+                occurrence.resolvedAt = nil
+            }
+            occurrence.updatedAt = now
+        }
+
+        for template in remaining.values where template.plannedCents > 0 {
+            let occurrence = BudgetCommitmentOccurrenceRecord(
+                planID: plan.stableID,
+                revisionID: revision.stableID,
+                templateID: template.id,
+                cycleStart: cycle.start,
+                cycleEndInclusive: cycle.endInclusive,
+                dueDate: dueDate(for: plan.core, cycle: cycle, template: template),
+                plannedCents: template.plannedCents
+            )
+            occurrence.createdAt = now
+            occurrence.updatedAt = now
+            context.insert(occurrence)
+        }
+    }
+
+    private static func encodeCents(_ values: [String: Int]) -> String {
+        guard let data = try? JSONSerialization.data(withJSONObject: values, options: [.sortedKeys]) else {
+            return "{}"
+        }
+        return String(decoding: data, as: UTF8.self)
+    }
+
+    private static func encodeFixedTemplates(_ values: [BudgetFixedTemplateV2]) -> String {
+        let encoder = JSONEncoder()
+        encoder.keyEncodingStrategy = .convertToSnakeCase
+        guard let data = try? encoder.encode(values) else { return "[]" }
+        return String(decoding: data, as: UTF8.self)
+    }
+
+    private static func revisionSnapshot(_ value: BudgetPlanRevisionRecord?) -> String {
+        guard let value else { return "" }
+        let object: [String: Any] = [
+            "revision_id": value.stableID.uuidString,
+            "effective_cycle_start": value.effectiveCycleStart.timeIntervalSince1970,
+            "effective_to_cycle_start": value.effectiveToCycleStart.map { $0.timeIntervalSince1970 } ?? NSNull(),
+            "amount_cents": value.amountCents,
+            "category_budgets": BudgetPlanRevisionRecord.decodeCents(value.categoryBudgetsJSON),
+            "monthly_income_cents": value.monthlyIncomeCents ?? NSNull(),
+            "fixed_templates": BudgetPlanRevisionRecord.decodeTemplates(value.fixedTemplatesJSON).map {
+                ["id": $0.id, "name": $0.name, "planned_cents": $0.plannedCents, "due_value": $0.dueValue]
+            }
+        ]
+        guard JSONSerialization.isValidJSONObject(object),
+              let data = try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys]) else {
+            return ""
+        }
+        return String(decoding: data, as: UTF8.self)
+    }
+
+    private static func overrideSnapshot(_ value: BudgetCycleOverrideRecord?) -> String {
+        guard let value else { return "" }
+        let object: [String: Any] = [
+            "override_id": value.stableID.uuidString,
+            "cycle_start": value.cycleStart.timeIntervalSince1970,
+            "cycle_end_inclusive": value.cycleEndInclusive.timeIntervalSince1970,
+            "target_amount_cents": value.targetAmountCents,
+            "category_budgets": value.categoryBudgetsJSON.map { BudgetPlanRevisionRecord.decodeCents($0) } ?? NSNull(),
+            "input_intent": value.inputIntentRaw,
+            "input_delta_cents": value.inputDeltaCents ?? NSNull()
+        ]
+        guard JSONSerialization.isValidJSONObject(object),
+              let data = try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys]) else {
+            return ""
+        }
+        return String(decoding: data, as: UTF8.self)
     }
 
     private static func dueDate(

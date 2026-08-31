@@ -30,6 +30,10 @@ struct BudgetSettingView: View {
     @State private var categoryBudgetKey: String?
     @State private var categoryBudgetAmountText = ""
     @State private var showBudgetPlanEditor = false
+    @State private var editingBudgetPlan: BudgetPlanRecord?
+    @State private var editingOverrideCurrent = false
+    @State private var budgetPlanToArchive: BudgetPlanRecord?
+    @State private var showArchiveBudgetPlanConfirmation = false
     @State private var showSpecialTrackingEditor = false
     @State private var matchingOccurrence: BudgetCommitmentOccurrenceRecord?
 
@@ -62,6 +66,8 @@ struct BudgetSettingView: View {
                 }
                 HStack {
                     Button {
+                        editingBudgetPlan = nil
+                        editingOverrideCurrent = false
                         showBudgetPlanEditor = true
                     } label: {
                         Label("新建预算计划", systemImage: "calendar.badge.plus")
@@ -209,13 +215,28 @@ struct BudgetSettingView: View {
                 .presentationDetents([.medium])
         }
         .sheet(isPresented: $showBudgetPlanEditor) {
-            BudgetV2PlanEditorView()
+            BudgetV2PlanEditorView(
+                plan: editingBudgetPlan,
+                overrideCurrent: editingOverrideCurrent
+            )
         }
         .sheet(isPresented: $showSpecialTrackingEditor) {
             BudgetV2SpecialEditorView()
         }
         .sheet(item: $matchingOccurrence) { occurrence in
             BudgetCommitmentMatchView(occurrence: occurrence)
+        }
+        .confirmationDialog(
+            "归档预算计划",
+            isPresented: $showArchiveBudgetPlanConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("归档", role: .destructive) {
+                if let budgetPlanToArchive { archiveBudgetPlan(budgetPlanToArchive) }
+            }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text("归档只会停止后续周期，不会删除历史预算修订和固定承诺记录。")
         }
         .onAppear {
             try? BudgetCommitmentStore.materializeCurrent(in: context, now: AppClock.now)
@@ -276,10 +297,7 @@ struct BudgetSettingView: View {
     }
 
     private func budgetPlanRow(_ plan: BudgetPlanRecord) -> some View {
-        let revision = budgetRevisionsV2
-            .filter { $0.planID == plan.stableID }
-            .sorted { $0.effectiveCycleStart > $1.effectiveCycleStart }
-            .first
+        let revision = displayRevision(for: plan)
         let amount = revision.map { Decimal($0.amountCents) / Decimal(100) } ?? 0
         let fixedCount = revision.map {
             BudgetPlanRevisionRecord.decodeTemplates($0.fixedTemplatesJSON).count
@@ -301,6 +319,64 @@ struct BudgetSettingView: View {
             Text(MoneyFormat.string(amount, currencyCode: currencyCode))
                 .font(.callout.monospacedDigit())
                 .foregroundStyle(.primary)
+            Menu {
+                if !isSpecial {
+                    Button("下周期修改") {
+                        editBudgetPlan(plan, overrideCurrent: false)
+                    }
+                    Button("调整本周期") {
+                        editBudgetPlan(plan, overrideCurrent: true)
+                    }
+                }
+                Button("归档", role: .destructive) {
+                    budgetPlanToArchive = plan
+                    showArchiveBudgetPlanConfirmation = true
+                }
+            } label: {
+                Image(systemName: "ellipsis.circle")
+                    .foregroundStyle(.secondary)
+            }
+            .accessibilityLabel("预算计划操作")
+        }
+    }
+
+    private func displayRevision(for plan: BudgetPlanRecord) -> BudgetPlanRevisionRecord? {
+        let cycle = plan.core.cycle(for: AppClock.now)
+        return budgetRevisionsV2
+            .filter { $0.planID == plan.stableID && $0.core.applies(to: cycle) }
+            .sorted {
+                if $0.effectiveCycleStart != $1.effectiveCycleStart {
+                    return $0.effectiveCycleStart < $1.effectiveCycleStart
+                }
+                return $0.stableID.uuidString < $1.stableID.uuidString
+            }
+            .last
+    }
+
+    private func editBudgetPlan(_ plan: BudgetPlanRecord, overrideCurrent: Bool) {
+        editingBudgetPlan = plan
+        editingOverrideCurrent = overrideCurrent
+        showBudgetPlanEditor = true
+    }
+
+    private func archiveBudgetPlan(_ plan: BudgetPlanRecord) {
+        guard plan.statusRaw == BudgetPlanStatusV2.active.rawValue else { return }
+        let now = Date()
+        plan.statusRaw = BudgetPlanStatusV2.archived.rawValue
+        plan.updatedAt = now
+        let event = BudgetChangeEventRecord(
+            planID: plan.stableID,
+            eventType: "plan_archived",
+            beforeJSON: "{\"status\":\"active\"}",
+            afterJSON: "{\"status\":\"archived\"}"
+        )
+        event.createdAt = now
+        context.insert(event)
+        do {
+            try context.save()
+            budgetPlanToArchive = nil
+        } catch {
+            message = error.localizedDescription
         }
     }
 

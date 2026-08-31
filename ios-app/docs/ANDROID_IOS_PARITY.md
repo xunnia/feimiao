@@ -32,7 +32,7 @@ iOS 只在按钮反馈、系统菜单、键盘、转场和 Liquid Glass 材质�
 | 退款/报销冲减 | `transaction_actions.dart` | 已实现挂原交易、原日期冲减 | Parity #61 已成对截图；操作链继续做真机验收 |
 | 待报销 | `reimburse_view.dart` | 已接入报销抵消到 0 | Parity #61 已成对截图 |
 | 周/月/年度/自定义统计 | `statistics_view.dart` | 已接入 QingJiCore 净额统计与原生 Charts | Parity #61 已成对截图 |
-| 月度预算 | `budget_setting_view.dart` | 已有总预算、周期窗口、今日可花、分类预算、预算计划、专项追踪、固定承诺 occurrence 物化及匹配/跳过/重置/退款复核基础流程 | Parity #61 已成对截图；复杂操作继续做真机验收 |
+| 月度预算 | `budget_setting_view.dart` | 已有总预算、周期窗口、今日可花、分类预算、预算计划、专项追踪、固定承诺 occurrence 物化及匹配/跳过/重置/退款复核；iOS 已接入按完整周期编辑 revision、保留历史修订、本周期 override 和固定承诺变更复核 | Parity #61 已成对截图；复杂操作、历史月份和 override 后统计继续做真机验收 |
 | 账户/分类/对账 | 设置页相关页面 | 已有基础版 | Parity #61 已成对截图 |
 | 导入复核与完整备份 | `bill_review_view.dart`、`backup_package_codec.dart` | 已有商品优先分类、商户分组、AI 兜底、退款匹配；iOS 已接入 Android v1/v2 原始 SQLite ZIP 校验、只读转换、收据/资产媒体安装、失败回滚和完整替换恢复；AI 运行记录/定时报表随 canonical v9 保存 | Parity #61 已成对截图；真实备份仍待设备验收 |
 | AI Chats/多服务商 | `ai_chat_panel.dart` | 已接入 iOS 原生 AI 账号、Keychain、模型目录、三类流式端点、ChatGPT/Codex PKCE OAuth、401 刷新、Chats 会话列表、图片/文件附件和基础喵助手 | Parity #61 已成对截图；真实网络仍待设备验收 |

@@ -28,9 +28,15 @@ struct BudgetV2PlanEditorView: View {
     @Query(sort: \Book.sortOrder) private var books: [Book]
     @Query(filter: #Predicate<TxCategory> { !$0.isArchived }, sort: \TxCategory.sortOrder)
     private var categories: [TxCategory]
+    @Query private var revisions: [BudgetPlanRevisionRecord]
+    @Query private var overrides: [BudgetCycleOverrideRecord]
+
+    let plan: BudgetPlanRecord?
+    let overrideCurrent: Bool
 
     @State private var name = ""
     @State private var amount = ""
+    @State private var income = ""
     @State private var bookID: UUID?
     @State private var cadence: BudgetPlanCadenceV2 = .monthly
     @State private var anchorStart = AppClock.now
@@ -39,6 +45,12 @@ struct BudgetV2PlanEditorView: View {
     @State private var categoryAmounts: [String: String] = [:]
     @State private var fixedTemplates: [FixedTemplateDraft] = []
     @State private var message: String?
+    @State private var didLoadExistingPlan = false
+
+    init(plan: BudgetPlanRecord? = nil, overrideCurrent: Bool = false) {
+        self.plan = plan
+        self.overrideCurrent = overrideCurrent
+    }
 
     private var expenseCategories: [TxCategory] {
         categories.filter { $0.kind == .expense && $0.parentKey == nil }
@@ -49,14 +61,20 @@ struct BudgetV2PlanEditorView: View {
             Form {
                 Section("计划") {
                     TextField("计划名称", text: $name)
+                        .disabled(plan != nil)
                     TextField("周期总额", text: $amount)
                         .keyboardType(.decimalPad)
+                    if !overrideCurrent {
+                        TextField("参考收入（可选）", text: $income)
+                            .keyboardType(.decimalPad)
+                    }
                     Picker("适用账本", selection: $bookID) {
                         Text("选择账本").tag(nil as UUID?)
                         ForEach(books) { book in
                             Text(book.name).tag(Optional(book.stableID))
                         }
                     }
+                    .disabled(plan != nil)
                 }
 
                 Section("周期") {
@@ -64,13 +82,16 @@ struct BudgetV2PlanEditorView: View {
                         Text("每月").tag(BudgetPlanCadenceV2.monthly)
                         Text("每周").tag(BudgetPlanCadenceV2.weekly)
                     }
-                    DatePicker("首次生效", selection: $anchorStart, displayedComponents: .date)
+                    .disabled(plan != nil)
+                    DatePicker(plan == nil ? "首次生效" : "计划起始", selection: $anchorStart, displayedComponents: .date)
+                        .disabled(plan != nil)
                     if cadence == .monthly {
                         Picker("每月起始日", selection: $monthStartDay) {
                             ForEach(1...28, id: \.self) { day in
                                 Text("每月 \(day) 日").tag(day)
                             }
                         }
+                        .disabled(plan != nil)
                     } else {
                         Picker("每周开始", selection: $weekStart) {
                             Text("周一").tag(2)
@@ -81,70 +102,87 @@ struct BudgetV2PlanEditorView: View {
                             Text("周六").tag(7)
                             Text("周日").tag(1)
                         }
+                        .disabled(plan != nil)
                     }
                 }
 
-                Section("分类额度") {
-                    ForEach(expenseCategories) { category in
-                        categoryBudgetRow(category)
-                    }
-                    Text("分类额度合计不能超过周期总额。")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                }
-
-                Section {
-                    if fixedTemplates.isEmpty {
-                        Text("可选：房租、订阅、保险等固定支出会在每个周期单独预留。")
+                if overrideCurrent {
+                    Section("分类额度") {
+                        Text("本周期调整只修改当前周期总额，分类额度沿用当前 revision。")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                     }
-                    ForEach(fixedTemplates) { template in
-                        let templateID = template.id
-                        let index = templateIndex(for: templateID)
-                        VStack(alignment: .leading, spacing: 8) {
-                            TextField("例如 房租 / 订阅", text: Binding(
-                                get: { fixedTemplates[index].name },
-                                set: { fixedTemplates[index].name = $0 }
-                            ))
-                            HStack(spacing: 8) {
-                                Text(cadence == .monthly ? "每月第" : "每周第")
-                                    .foregroundStyle(.secondary)
-                                TextField("1", text: Binding(
-                                    get: { fixedTemplates[index].dueValue },
-                                    set: { fixedTemplates[index].dueValue = $0 }
-                                ))
-                                .keyboardType(.numberPad)
-                                .multilineTextAlignment(.trailing)
-                                .frame(width: 48)
-                                Text(cadence == .monthly ? "日" : "天")
-                                    .foregroundStyle(.secondary)
-                                Spacer()
-                                TextField("每期金额", text: Binding(
-                                    get: { fixedTemplates[index].amount },
-                                    set: { fixedTemplates[index].amount = $0 }
-                                ))
-                                .keyboardType(.decimalPad)
-                                .multilineTextAlignment(.trailing)
-                                .frame(width: 96)
-                            }
-                            deleteTemplateButton(id: templateID)
+                } else {
+                    Section("分类额度") {
+                        ForEach(expenseCategories) { category in
+                            categoryBudgetRow(category)
                         }
+                        Text("分类额度合计不能超过周期总额。")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
                     }
-                    Button {
-                        fixedTemplates.append(FixedTemplateDraft())
-                    } label: {
-                        Label("添加固定承诺", systemImage: "plus.circle")
+                }
+
+                if overrideCurrent {
+                    Section("固定承诺") {
+                        Text("本周期调整只改变当前周期额度，不会改动固定承诺或历史修订。")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
                     }
-                } header: {
-                    Text("固定承诺")
-                } footer: {
-                    Text(cadence == .monthly
-                         ? "每月日期限制为 1–28 日，避免月底周期在不同月份漂移。"
-                         : "每周日期使用 1–7 表示周一至周日。固定承诺只预留预算，不会自动造账。")
+                } else {
+                    Section {
+                        if fixedTemplates.isEmpty {
+                            Text("可选：房租、订阅、保险等固定支出会在每个周期单独预留。")
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                        }
+                        ForEach(fixedTemplates) { template in
+                            let templateID = template.id
+                            let index = templateIndex(for: templateID)
+                            VStack(alignment: .leading, spacing: 8) {
+                                TextField("例如 房租 / 订阅", text: Binding(
+                                    get: { fixedTemplates[index].name },
+                                    set: { fixedTemplates[index].name = $0 }
+                                ))
+                                HStack(spacing: 8) {
+                                    Text(cadence == .monthly ? "每月第" : "每周第")
+                                        .foregroundStyle(.secondary)
+                                    TextField("1", text: Binding(
+                                        get: { fixedTemplates[index].dueValue },
+                                        set: { fixedTemplates[index].dueValue = $0 }
+                                    ))
+                                    .keyboardType(.numberPad)
+                                    .multilineTextAlignment(.trailing)
+                                    .frame(width: 48)
+                                    Text(cadence == .monthly ? "日" : "天")
+                                        .foregroundStyle(.secondary)
+                                    Spacer()
+                                    TextField("每期金额", text: Binding(
+                                        get: { fixedTemplates[index].amount },
+                                        set: { fixedTemplates[index].amount = $0 }
+                                    ))
+                                    .keyboardType(.decimalPad)
+                                    .multilineTextAlignment(.trailing)
+                                    .frame(width: 96)
+                                }
+                                deleteTemplateButton(id: templateID)
+                            }
+                        }
+                        Button {
+                            fixedTemplates.append(FixedTemplateDraft())
+                        } label: {
+                            Label("添加固定承诺", systemImage: "plus.circle")
+                        }
+                    } header: {
+                        Text("固定承诺")
+                    } footer: {
+                        Text(cadence == .monthly
+                             ? "每月日期限制为 1–28 日，避免月底周期在不同月份漂移。"
+                             : "每周日期使用 1–7 表示周一至周日。固定承诺只预留预算，不会自动造账。")
+                    }
                 }
             }
-            .navigationTitle("新建预算计划")
+            .navigationTitle(editorTitle)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -158,7 +196,10 @@ struct BudgetV2PlanEditorView: View {
                 }
             }
             .onAppear {
-                if bookID == nil { bookID = books.first?.stableID }
+                loadPlanIfNeeded()
+            }
+            .onChange(of: books.count) { _, _ in
+                loadPlanIfNeeded()
             }
             .alert("预算计划", isPresented: Binding(
                 get: { message != nil },
@@ -176,10 +217,38 @@ struct BudgetV2PlanEditorView: View {
         return MoneyNormalization.cents(value)
     }
 
+    private var editorTitle: String {
+        if plan == nil { return "新建预算计划" }
+        return overrideCurrent ? "调整本周期预算" : "修改下周期预算"
+    }
+
+    private var parsedIncomeCents: Int? {
+        let raw = income.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !raw.isEmpty else { return nil }
+        guard let value = Decimal(string: raw.replacingOccurrences(of: ",", with: "")), value >= 0 else { return nil }
+        return MoneyNormalization.cents(value)
+    }
+
+    private var hasInvalidIncome: Bool {
+        let raw = income.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !raw.isEmpty else { return false }
+        guard let value = Decimal(string: raw.replacingOccurrences(of: ",", with: "")) else { return true }
+        return value < 0
+    }
+
     private var categoryBudgetCents: [String: Int] {
         categoryAmounts.compactMapValues { value in
             guard let amount = Decimal(string: value.replacingOccurrences(of: ",", with: "")), amount >= 0 else { return nil }
             return MoneyNormalization.cents(amount)
+        }
+    }
+
+    private var hasInvalidCategoryAmounts: Bool {
+        categoryAmounts.values.contains { raw in
+            let value = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !value.isEmpty else { return false }
+            guard let amount = Decimal(string: value.replacingOccurrences(of: ",", with: "")) else { return true }
+            return amount < 0
         }
     }
 
@@ -238,16 +307,58 @@ struct BudgetV2PlanEditorView: View {
     }
 
     private var canSave: Bool {
-        guard let parsedCents, parsedCents > 0, bookID != nil else { return false }
-        guard let parsedFixedTemplates,
-              parsedFixedTemplates.count == fixedTemplates.count else { return false }
-        let fixedTotal = parsedFixedTemplates.reduce(0) { $0 + $1.plannedCents }
-        return categoryBudgetCents.values.reduce(0, +) + fixedTotal <= parsedCents
+        guard let parsedCents, parsedCents > 0, bookID != nil,
+              !hasInvalidCategoryAmounts, !hasInvalidIncome else {
+            return false
+        }
+        guard overrideCurrent else {
+            guard let parsedFixedTemplates,
+                  parsedFixedTemplates.count == fixedTemplates.count else { return false }
+            let fixedTotal = parsedFixedTemplates.reduce(0) { $0 + $1.plannedCents }
+            return categoryBudgetCents.values.reduce(0, +) + fixedTotal <= parsedCents
+        }
+        return categoryBudgetCents.values.reduce(0, +) <= parsedCents
     }
 
     private func save() {
-        guard let bookID, let parsedCents, parsedCents > 0 else { return }
+        guard let bookID, let parsedCents, canSave else { return }
         let now = Date()
+
+        if let existingPlan = plan {
+            do {
+                if overrideCurrent {
+                    let cycle = existingPlan.core.cycle(for: AppClock.now)
+                    try BudgetCommitmentStore.upsertCycleOverride(
+                        planID: existingPlan.stableID,
+                        cycleStart: cycle.start,
+                        targetAmountCents: parsedCents,
+                        categoryBudgetsCents: nil,
+                        in: context,
+                        now: now
+                    )
+                } else {
+                    guard let templates = parsedFixedTemplates else { return }
+                    let current = existingPlan.core.cycle(for: AppClock.now)
+                    let next = existingPlan.core.cycle(for: current.endExclusive)
+                    try BudgetCommitmentStore.upsertRevision(
+                        planID: existingPlan.stableID,
+                        amountCents: parsedCents,
+                        categoryBudgetsCents: categoryBudgetCents,
+                        monthlyIncomeCents: parsedIncomeCents,
+                        fixedTemplates: templates,
+                        effectiveCycleStart: next.start,
+                        in: context,
+                        now: now
+                    )
+                }
+                try BudgetCommitmentStore.materializeCurrent(in: context, now: AppClock.now)
+                dismiss()
+            } catch {
+                message = error.localizedDescription
+            }
+            return
+        }
+
         let plan = BudgetPlanRecord(
             bookID: bookID,
             name: name.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -260,10 +371,11 @@ struct BudgetV2PlanEditorView: View {
         plan.updatedAt = now
         let revision = BudgetPlanRevisionRecord(
             planID: plan.stableID,
-            effectiveCycleStart: Calendar.current.startOfDay(for: anchorStart),
+            effectiveCycleStart: plan.core.cycle(for: anchorStart).start,
             amountCents: parsedCents
         )
         revision.categoryBudgetsJSON = encodeCents(categoryBudgetCents)
+        revision.monthlyIncomeCents = parsedIncomeCents
         revision.fixedTemplatesJSON = encodeFixedTemplates(parsedFixedTemplates ?? [])
         revision.createdAt = now
         revision.updatedAt = now
@@ -278,11 +390,89 @@ struct BudgetV2PlanEditorView: View {
         context.insert(event)
         do {
             try context.save()
-            try? BudgetCommitmentStore.materializeCurrent(in: context, now: AppClock.now)
+            try BudgetCommitmentStore.materializeCurrent(in: context, now: AppClock.now)
             dismiss()
         } catch {
             message = error.localizedDescription
         }
+    }
+
+    private func loadPlanIfNeeded() {
+        guard !didLoadExistingPlan else { return }
+
+        guard let existingPlan = plan else {
+            guard let firstBook = books.first else { return }
+            bookID = bookID ?? firstBook.stableID
+            didLoadExistingPlan = true
+            return
+        }
+
+        didLoadExistingPlan = true
+
+        let core = existingPlan.core
+        name = core.name
+        bookID = core.bookID
+        cadence = core.cadence
+        anchorStart = core.anchorStart
+        monthStartDay = core.monthStartDay ?? 1
+        weekStart = core.weekStart ?? 2
+
+        let current = core.cycle(for: AppClock.now)
+        let target = overrideCurrent ? current : core.cycle(for: current.endExclusive)
+        let baseRevision = revisions
+            .filter { $0.planID == existingPlan.stableID && $0.core.applies(to: target) }
+            .sorted {
+                if $0.effectiveCycleStart != $1.effectiveCycleStart {
+                    return $0.effectiveCycleStart < $1.effectiveCycleStart
+                }
+                return $0.stableID.uuidString < $1.stableID.uuidString
+            }
+            .last
+        let exactRevision = revisions.first {
+            $0.planID == existingPlan.stableID &&
+            Calendar.current.isDate($0.effectiveCycleStart, inSameDayAs: target.start)
+        }
+        let selectedRevision = exactRevision ?? baseRevision
+        var selectedCategories = selectedRevision.map {
+            BudgetPlanRevisionRecord.decodeCents($0.categoryBudgetsJSON)
+        } ?? [:]
+
+        if overrideCurrent,
+           let currentOverride = overrides.first(where: {
+               $0.planID == existingPlan.stableID &&
+               Calendar.current.isDate($0.cycleStart, inSameDayAs: current.start)
+           }) {
+            amount = moneyText(cents: currentOverride.targetAmountCents)
+            if let raw = currentOverride.categoryBudgetsJSON {
+                selectedCategories = BudgetPlanRevisionRecord.decodeCents(raw)
+            }
+        } else if let selectedRevision {
+            amount = moneyText(cents: selectedRevision.amountCents)
+            if let monthlyIncomeCents = selectedRevision.monthlyIncomeCents {
+                income = moneyText(cents: monthlyIncomeCents)
+            }
+        }
+
+        categoryAmounts = selectedCategories.reduce(into: [:]) { result, item in
+            result[item.key] = moneyText(cents: item.value)
+        }
+        if !overrideCurrent, let selectedRevision {
+            fixedTemplates = BudgetPlanRevisionRecord.decodeTemplates(selectedRevision.fixedTemplatesJSON)
+                .map {
+                    FixedTemplateDraft(
+                        id: $0.id,
+                        name: $0.name,
+                        amount: moneyText(cents: $0.plannedCents),
+                        dueValue: String($0.dueValue)
+                    )
+                }
+        }
+    }
+
+    private func moneyText(cents: Int) -> String {
+        NSDecimalNumber(value: cents)
+            .dividing(by: NSDecimalNumber(value: 100))
+            .stringValue
     }
 
     private func encodeCents(_ values: [String: Int]) -> String {
