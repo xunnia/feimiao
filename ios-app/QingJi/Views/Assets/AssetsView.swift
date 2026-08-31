@@ -431,6 +431,8 @@ struct ReceivableDetailView: View {
     @Environment(\.modelContext) private var context
     @Query(sort: \ReceivableRecovery.recoveredAt, order: .reverse)
     private var allRecoveries: [ReceivableRecovery]
+    @Query(sort: \AssetEvent.occurredAt, order: .reverse)
+    private var allEvents: [AssetEvent]
     @Query(sort: \Account.sortOrder)
     private var accounts: [Account]
 
@@ -441,6 +443,10 @@ struct ReceivableDetailView: View {
 
     private var recoveries: [ReceivableRecovery] {
         allRecoveries.filter { $0.receivableID == asset.stableID }
+    }
+
+    private var events: [AssetEvent] {
+        allEvents.filter { $0.assetID == asset.stableID }
     }
 
     private var canRecover: Bool {
@@ -544,6 +550,37 @@ struct ReceivableDetailView: View {
                         undoLatestRecovery()
                     }
                     .disabled(recoveries.first == nil)
+                }
+            }
+
+            if !events.isEmpty {
+                Section("权益事件") {
+                    ForEach(events.prefix(12), id: \.stableID) { event in
+                        HStack(spacing: 10) {
+                            Image(systemName: event.kind == .receivableRecovered ? "arrow.down.left.circle" : "clock.arrow.circlepath")
+                                .foregroundStyle(event.kind == .receivableLost ? Color.orange : Color.accentColor)
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(event.kind.label)
+                                    .font(.subheadline.weight(.medium))
+                                HStack(spacing: 5) {
+                                    Text(event.occurredAt, format: .dateTime.year().month().day())
+                                    if let value = event.value {
+                                        Text("· \(MoneyFormat.string(value, currencyCode: asset.currencyCode))")
+                                    }
+                                }
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                if !event.note.isEmpty {
+                                    Text(event.note)
+                                        .font(.caption2)
+                                        .foregroundStyle(.secondary)
+                                        .lineLimit(1)
+                                }
+                            }
+                            Spacer()
+                        }
+                        .padding(.vertical, 2)
+                    }
                 }
             }
         }

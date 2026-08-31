@@ -454,6 +454,7 @@ public struct BackupReceivableAsset: Codable, Equatable, Sendable {
 public struct BackupReceivableRecovery: Codable, Equatable, Sendable {
     public var id: UUID
     public var receivableID: UUID
+    public var eventID: UUID?
     public var amount: Decimal
     public var recoveredAt: Date
     public var targetAccountID: UUID?
@@ -461,9 +462,10 @@ public struct BackupReceivableRecovery: Codable, Equatable, Sendable {
     public var note: String
     public var createdAt: Date?
 
-    public init(id: UUID, receivableID: UUID, amount: Decimal, recoveredAt: Date, targetAccountID: UUID? = nil, transactionID: UUID? = nil, note: String = "", createdAt: Date? = nil) {
+    public init(id: UUID, receivableID: UUID, amount: Decimal, recoveredAt: Date, targetAccountID: UUID? = nil, transactionID: UUID? = nil, eventID: UUID? = nil, note: String = "", createdAt: Date? = nil) {
         self.id = id
         self.receivableID = receivableID
+        self.eventID = eventID
         self.amount = amount
         self.recoveredAt = recoveredAt
         self.targetAccountID = targetAccountID

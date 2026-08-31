@@ -516,6 +516,7 @@ enum BackupStore {
                 BackupReceivableRecovery(
                     id: $0.stableID,
                     receivableID: $0.receivableID,
+                    eventID: $0.eventID,
                     amount: $0.amount,
                     recoveredAt: $0.recoveredAt,
                     targetAccountID: $0.targetAccountID,
@@ -1333,6 +1334,7 @@ enum BackupStore {
             if receivableRecoveries[item.id] == nil { context.insert(recovery) }
             recovery.stableID = item.id
             recovery.receivableID = item.receivableID
+            recovery.eventID = item.eventID
             recovery.amount = item.amount
             recovery.recoveredAt = item.recoveredAt
             recovery.targetAccountID = item.targetAccountID

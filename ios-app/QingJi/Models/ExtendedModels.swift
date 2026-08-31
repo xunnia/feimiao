@@ -306,6 +306,13 @@ enum AssetEventKind: String, CaseIterable, Hashable, Identifiable {
     case transactionUnlinked = "transaction_unlinked"
     case costLinked = "cost_linked"
     case costUnlinked = "cost_unlinked"
+    case receivableCreated = "receivable_created"
+    case receivableEdited = "receivable_edited"
+    case receivableRecovered = "receivable_recovered"
+    case receivableRecoveryUndone = "receivable_recovery_undone"
+    case receivableLost = "receivable_lost"
+    case receivableArchived = "receivable_archived"
+    case receivableUnarchived = "receivable_unarchived"
 
     var id: String { rawValue }
     var label: String {
@@ -327,6 +334,13 @@ enum AssetEventKind: String, CaseIterable, Hashable, Identifiable {
         case .transactionUnlinked: return "解除账单关联"
         case .costLinked: return "关联持有成本"
         case .costUnlinked: return "解除持有成本"
+        case .receivableCreated: return "新增权益"
+        case .receivableEdited: return "编辑权益"
+        case .receivableRecovered: return "收回权益"
+        case .receivableRecoveryUndone: return "撤销收回"
+        case .receivableLost: return "权益损失"
+        case .receivableArchived: return "归档权益"
+        case .receivableUnarchived: return "恢复权益"
         }
     }
 }
@@ -574,6 +588,7 @@ final class ReceivableAsset {
 final class ReceivableRecovery {
     var stableID: UUID = UUID()
     var receivableID: UUID = UUID()
+    var eventID: UUID? = nil
     var amount: Decimal = 0
     var recoveredAt: Date = Date()
     var targetAccountID: UUID? = nil
@@ -581,8 +596,9 @@ final class ReceivableRecovery {
     var note: String = ""
     var createdAt: Date = Date()
 
-    init(receivableID: UUID, amount: Decimal, recoveredAt: Date = Date(), targetAccountID: UUID? = nil, transactionID: UUID? = nil, note: String = "") {
+    init(receivableID: UUID, amount: Decimal, recoveredAt: Date = Date(), targetAccountID: UUID? = nil, transactionID: UUID? = nil, eventID: UUID? = nil, note: String = "") {
         self.receivableID = receivableID
+        self.eventID = eventID
         self.amount = amount
         self.recoveredAt = recoveredAt
         self.targetAccountID = targetAccountID

@@ -1323,6 +1323,13 @@ enum ReceivableStore {
         asset.note = note.trimmingCharacters(in: .whitespacesAndNewlines)
         asset.includeInNetWorth = includeInNetWorth
         context.insert(asset)
+        context.insert(AssetEvent(
+            assetID: asset.stableID,
+            kind: .receivableCreated,
+            occurredAt: asset.createdAt,
+            value: asset.originalAmount,
+            note: asset.note
+        ))
         try context.save()
         return asset
     }
@@ -1356,6 +1363,13 @@ enum ReceivableStore {
         asset.note = note.trimmingCharacters(in: .whitespacesAndNewlines)
         asset.includeInNetWorth = includeInNetWorth
         asset.updatedAt = Date()
+        context.insert(AssetEvent(
+            assetID: asset.stableID,
+            kind: .receivableEdited,
+            occurredAt: asset.updatedAt,
+            value: asset.remainingAmount,
+            note: asset.note
+        ))
         try context.save()
     }
 
@@ -1408,6 +1422,9 @@ enum ReceivableStore {
         } else {
             nil
         }
+        let previousLifecycle = asset.lifecycle.rawValue
+        let previousIncludeInNetWorth = asset.includeInNetWorth
+        let previousEndedAt = asset.endedAt
         let recovery = ReceivableRecovery(
             receivableID: asset.stableID,
             amount: normalizedAmount,
@@ -1421,6 +1438,20 @@ enum ReceivableStore {
         asset.lifecycle = asset.remainingAmount == 0 ? .recovered : .partiallyRecovered
         if asset.remainingAmount == 0 { asset.includeInNetWorth = false }
         asset.updatedAt = Date()
+        let recoveryEvent = AssetEvent(
+            assetID: asset.stableID,
+            kind: .receivableRecovered,
+            occurredAt: date,
+            value: normalizedAmount,
+            note: note.trimmingCharacters(in: .whitespacesAndNewlines),
+            metadataJSON: receivableMetadataJSON([
+                "previous_lifecycle": previousLifecycle,
+                "previous_include_in_net_worth": previousIncludeInNetWorth ? "1" : "0",
+                "previous_ended_at": previousEndedAt?.timeIntervalSince1970.description ?? ""
+            ])
+        )
+        context.insert(recoveryEvent)
+        recovery.eventID = recoveryEvent.stableID
         try context.save()
         return recovery
     }
@@ -1438,6 +1469,24 @@ enum ReceivableStore {
         ) else {
             throw Error.recoveryNotLatest
         }
+        let recoveryEvent = latest.eventID.flatMap { eventID in
+            try? context.fetch(FetchDescriptor<AssetEvent>()).first {
+                $0.stableID == eventID
+            }
+        } ?? (try? context.fetch(FetchDescriptor<AssetEvent>(
+            sortBy: [SortDescriptor(\AssetEvent.occurredAt, order: .reverse)]
+        )))?.first(where: {
+            $0.assetID == asset.stableID &&
+            $0.kind == .receivableRecovered &&
+            $0.value == latest.amount &&
+            Calendar.current.isDate($0.occurredAt, equalTo: latest.recoveredAt, toGranularity: .second)
+        })
+        let metadata = recoveryEvent.flatMap { receivableEventMetadata($0) } ?? [:]
+        let previousLifecycle = ReceivableLifecycle(
+            rawValue: metadata["previous_lifecycle"] as? String ?? "active"
+        ) ?? .active
+        let previousInclude = (metadata["previous_include_in_net_worth"] as? String) != "0"
+        let previousEndedAt = receivableDateFromMetadata(metadata["previous_ended_at"])
         if let transactionID = latest.transactionID,
            let transaction = try allTransactions(in: context).first(where: {
                $0.stableID == transactionID
@@ -1446,9 +1495,19 @@ enum ReceivableStore {
         }
         context.delete(latest)
         asset.remainingAmount += latest.amount
-        asset.lifecycle = asset.remainingAmount >= asset.originalAmount ? .active : .partiallyRecovered
-        asset.includeInNetWorth = true
+        asset.lifecycle = metadata.isEmpty
+            ? (asset.remainingAmount >= asset.originalAmount ? .active : .partiallyRecovered)
+            : previousLifecycle
+        asset.includeInNetWorth = metadata.isEmpty ? true : previousInclude
+        asset.endedAt = metadata.isEmpty ? nil : previousEndedAt
         asset.updatedAt = Date()
+        context.insert(AssetEvent(
+            assetID: asset.stableID,
+            kind: .receivableRecoveryUndone,
+            occurredAt: Date(),
+            value: latest.amount,
+            note: "撤销收回"
+        ))
         try context.save()
     }
 
@@ -1458,6 +1517,13 @@ enum ReceivableStore {
         asset.includeInNetWorth = false
         asset.endedAt = Date()
         asset.updatedAt = Date()
+        context.insert(AssetEvent(
+            assetID: asset.stableID,
+            kind: .receivableLost,
+            occurredAt: asset.updatedAt,
+            value: asset.remainingAmount,
+            note: note.trimmingCharacters(in: .whitespacesAndNewlines)
+        ))
         try context.save()
     }
 
@@ -1465,6 +1531,12 @@ enum ReceivableStore {
         asset.lifecycle = .archived
         asset.archivedAt = Date()
         asset.updatedAt = Date()
+        context.insert(AssetEvent(
+            assetID: asset.stableID,
+            kind: .receivableArchived,
+            occurredAt: asset.updatedAt,
+            value: asset.remainingAmount
+        ))
         try context.save()
     }
 
@@ -1473,7 +1545,38 @@ enum ReceivableStore {
         asset.archivedAt = nil
         asset.includeInNetWorth = asset.remainingAmount > 0
         asset.updatedAt = Date()
+        context.insert(AssetEvent(
+            assetID: asset.stableID,
+            kind: .receivableUnarchived,
+            occurredAt: asset.updatedAt,
+            value: asset.remainingAmount
+        ))
         try context.save()
+    }
+
+    private static func receivableMetadataJSON(_ values: [String: String]) -> String {
+        guard let data = try? JSONSerialization.data(withJSONObject: values, options: [.sortedKeys]) else {
+            return "{}"
+        }
+        return String(data: data, encoding: .utf8) ?? "{}"
+    }
+
+    private static func receivableEventMetadata(_ event: AssetEvent) -> [String: Any]? {
+        guard let data = event.metadataJSON.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data),
+              let values = object as? [String: Any] else {
+            return nil
+        }
+        return values
+    }
+
+    private static func receivableDateFromMetadata(_ value: Any?) -> Date? {
+        guard let text = value as? String,
+              let seconds = Double(text),
+              !seconds.isZero else {
+            return nil
+        }
+        return Date(timeIntervalSince1970: seconds)
     }
 }
 

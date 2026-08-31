@@ -14,6 +14,7 @@ final class ReceivableStoreTests: XCTestCase {
                 Book.self,
                 TxCategory.self,
                 MoneyTransaction.self,
+                AssetEvent.self,
                 ReceivableAsset.self,
                 ReceivableRecovery.self,
             ])
@@ -54,6 +55,14 @@ final class ReceivableStoreTests: XCTestCase {
         XCTAssertNotNil(recovery.transactionID)
         XCTAssertEqual(asset.remainingAmount, 65)
         XCTAssertEqual(asset.lifecycle, .partiallyRecovered)
+        let recoveredEvents = try stack.context.fetch(FetchDescriptor<AssetEvent>())
+            .filter { $0.assetID == asset.stableID }
+        XCTAssertTrue(recoveredEvents.contains { $0.kind == .receivableCreated })
+        XCTAssertTrue(recoveredEvents.contains { $0.kind == .receivableRecovered })
+        let recoveredEvent = try XCTUnwrap(
+            recoveredEvents.first { $0.kind == .receivableRecovered }
+        )
+        XCTAssertEqual(recovery.eventID, recoveredEvent.stableID)
         let transaction = try XCTUnwrap(
             try stack.context.fetch(FetchDescriptor<MoneyTransaction>()).first
         )
@@ -81,6 +90,10 @@ final class ReceivableStoreTests: XCTestCase {
             try stack.context.fetchCount(FetchDescriptor<MoneyTransaction>()),
             0
         )
+        let undoneEvents = try stack.context.fetch(FetchDescriptor<AssetEvent>())
+            .filter { $0.assetID == asset.stableID }
+        XCTAssertTrue(undoneEvents.contains { $0.kind == .receivableRecoveryUndone })
+        XCTAssertTrue(undoneEvents.contains { $0.stableID == recoveredEvent.stableID })
     }
 
     func testRecoveryRejectsUnavailableOrMismatchedAccount() throws {
