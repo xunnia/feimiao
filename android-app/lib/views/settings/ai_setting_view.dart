@@ -9,6 +9,7 @@ import 'package:provider/provider.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../../application/ai_account_import_controller.dart';
 import '../../core/ai/ai_account_json.dart';
 import '../../core/ai/ai_account_verification.dart';
 import '../../core/ai/ai_logger.dart';
@@ -848,81 +849,36 @@ class _AiAccountSettingsPageState extends State<_AiAccountSettingsPage> {
     );
     if (!mounted || selections == null || selections.isEmpty) return;
     setState(() => _busy.add('__json_import__'));
-    var imported = 0;
-    var skipped = 0;
-    var verificationSkipped = 0;
-    final verificationCounts = <AiAccountVerificationStatus, int>{};
-    final activeChoices = selections
-        .where((choice) => choice.action != _AiAccountImportAction.skip)
-        .toList(growable: false);
-    final deferBatchMetadata = activeChoices.length > 1;
-    const verifier = AiAccountVerificationService();
     try {
-      for (final choice in selections) {
-        if (choice.action == _AiAccountImportAction.skip) {
-          skipped++;
-          continue;
-        }
-        final duplicate = repo.matchingAiProvider(choice.account);
-        final saved = await repo.importAiAccount(
-          choice.account,
-          existingProviderId: choice.action == _AiAccountImportAction.update
-              ? duplicate?.id
-              : null,
-          enabledOverride: choice.enabled,
-          persistMetadata: !deferBatchMetadata,
-          notify: !deferBatchMetadata,
-        );
-        imported++;
-        if (!choice.enabled) {
-          verificationSkipped++;
-          continue;
-        }
-
-        final config = repo.aiProviderConfigForProvider(saved.id);
-        if (config == null) {
-          verificationSkipped++;
-          continue;
-        }
-        final verification = await verifier.verify(config);
-        verificationCounts.update(
-          verification.status,
-          (count) => count + 1,
-          ifAbsent: () => 1,
-        );
-        await repo.recordAiProviderVerification(
-          saved.id,
-          status: verification.status.name,
-          message: verification.message,
-          latencyMs: verification.latencyMs,
-        );
-        // A successful catalogue refresh is persisted without changing the
-        // user's selected enabled/disabled state. Batch imports defer the
-        // metadata index write until every account has been processed.
-        if (verification.models.isNotEmpty) {
-          final latest = repo.aiProviderById(saved.id) ?? saved;
-          await repo.saveAiConfiguredProvider(
-            latest.copyWith(
-              model: verification.models.first,
-              models: verification.models,
+      final result = await AiAccountImportController().import(
+        AppRepositoryAiAccountImportAdapter(repo),
+        [
+          for (final choice in selections)
+            AiAccountImportRequest(
+              account: choice.account,
+              action: choice.action,
+              existingProviderId: choice.action == AiAccountImportAction.update
+                  ? choice.duplicate?.id
+                  : null,
+              enabled: choice.enabled,
             ),
-            persistMetadata: !deferBatchMetadata,
-            notify: !deferBatchMetadata,
-          );
-        }
-      }
+        ],
+      );
       if (mounted) {
         final suffix = [
-          if (skipped > 0) '跳过 $skipped',
-          if (verificationSkipped > 0) '停用账号未验证 $verificationSkipped',
+          if (result.skipped > 0) '跳过 ${result.skipped}',
+          if (result.failed > 0)
+            '问题 ${result.failed}（${result.issues.take(2).map((issue) => issue.summary).join('；')}）',
+          if (result.verificationSkipped > 0)
+            '停用账号未验证 ${result.verificationSkipped}',
           for (final status in AiAccountVerificationStatus.values)
-            if ((verificationCounts[status] ?? 0) > 0)
-              '${status.label} ${verificationCounts[status]}',
+            if ((result.verificationCounts[status] ?? 0) > 0)
+              '${status.label} ${result.verificationCounts[status]}',
           if (parsed.warnings.isNotEmpty) parsed.warnings.join('；'),
         ].join('；');
         showAppToast(
           context,
-          '已导入 $imported 个 AI 账号${suffix.isEmpty ? '' : '（$suffix）'}',
+          '已导入 ${result.imported} 个 AI 账号${suffix.isEmpty ? '' : '（$suffix）'}',
           icon: Icons.check_circle_outline,
         );
       }
@@ -935,19 +891,6 @@ class _AiAccountSettingsPageState extends State<_AiAccountSettingsPage> {
         );
       }
     } finally {
-      if (deferBatchMetadata) {
-        try {
-          await repo.commitAiAccountImportBatch();
-        } catch (error) {
-          if (mounted) {
-            showAppToast(
-              context,
-              '账号索引保存失败：${_shortError(error)}',
-              icon: Icons.error_outline,
-            );
-          }
-        }
-      }
       if (mounted) setState(() => _busy.remove('__json_import__'));
     }
   }
@@ -1131,20 +1074,18 @@ class _ProviderDraft {
   }
 }
 
-enum _AiAccountImportAction { create, update, skip }
-
 class _AiAccountImportChoice {
   final AiAccountImportEntry account;
   final AiConfiguredProvider? duplicate;
-  _AiAccountImportAction action;
+  AiAccountImportAction action;
   bool enabled;
 
   _AiAccountImportChoice({
     required this.account,
     required this.duplicate,
   })  : action = duplicate == null
-            ? _AiAccountImportAction.create
-            : _AiAccountImportAction.update,
+            ? AiAccountImportAction.create
+            : AiAccountImportAction.update,
         enabled = account.enabled;
 }
 
@@ -1180,25 +1121,25 @@ class _AiAccountImportSheetState extends State<_AiAccountImportSheet> {
     if (choice.duplicate == null) return;
     setState(() {
       choice.action = switch (choice.action) {
-        _AiAccountImportAction.update => _AiAccountImportAction.create,
-        _AiAccountImportAction.create => _AiAccountImportAction.skip,
-        _AiAccountImportAction.skip => _AiAccountImportAction.update,
+        AiAccountImportAction.update => AiAccountImportAction.create,
+        AiAccountImportAction.create => AiAccountImportAction.skip,
+        AiAccountImportAction.skip => AiAccountImportAction.update,
       };
     });
   }
 
   String _actionLabel(_AiAccountImportChoice choice) => switch (choice.action) {
-        _AiAccountImportAction.create =>
+        AiAccountImportAction.create =>
           choice.duplicate == null ? '新建账号' : '新建副本',
-        _AiAccountImportAction.update => '更新已有',
-        _AiAccountImportAction.skip => '跳过',
+        AiAccountImportAction.update => '更新已有',
+        AiAccountImportAction.skip => '跳过',
       };
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final selectedCount = _choices
-        .where((choice) => choice.action != _AiAccountImportAction.skip)
+        .where((choice) => choice.action != AiAccountImportAction.skip)
         .length;
     return SafeArea(
       top: false,
@@ -1231,7 +1172,7 @@ class _AiAccountImportSheetState extends State<_AiAccountImportSheet> {
                     final account = choice.account;
                     final duplicate = choice.duplicate;
                     final skipped =
-                        choice.action == _AiAccountImportAction.skip;
+                        choice.action == AiAccountImportAction.skip;
                     return Container(
                       padding: const EdgeInsets.fromLTRB(14, 12, 12, 8),
                       decoration: BoxDecoration(

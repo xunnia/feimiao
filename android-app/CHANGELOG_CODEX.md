@@ -1,3 +1,10 @@
+## 2026-08-31 v1.282.0+296 AI 账号导入事务与架构收口
+
+- **导入职责收口**：新增 `AiAccountImportController` 与仓库适配边界，设置页只负责预览选择和结果展示；导入、逐账号验证、模型目录保存和批量提交由应用层统一编排。
+- **失败隔离**：单个账号导入失败或验证器异常会记录脱敏问题并继续处理其他账号；停用账号保留导入状态且跳过网络验证；模型目录和健康状态按账号保存。
+- **事务一致性**：批量导入提交失败时恢复账号目录、用途选择、健康状态及安全凭据；“新建副本”不会误覆盖已有账号，只有“更新已有”才使用原账号 ID。
+- **验证**：Controller 定向测试 3/3，Flutter 全量测试 1189/1189，Dart analyze 0 error；未修改 iOS 或指定 integration_test 文件。
+
 ## 2026-08-31 v1.281.0+295 GPT OAuth、Cockpit JSON 与架构收口
 
 - **OAuth 稳定链路**：普通按钮固定走官方 PKCE + `auth.openai.com/oauth/authorize` + localhost:1455/1457；Android 原生回调保活支持 IPv4/IPv6、Activity 重建、重复回调和 flowId 隔离。修正 `ProxySelector=DIRECT` 但系统存在固定代理时的路由错误；Token authorization-code 交换收到 `unsupported_country_region` 时，使用本机私有一次性页面让 Chrome 通过自身 VPN 完成交换，code/verifier 不进入 URL 或第三方服务。

@@ -699,6 +699,7 @@ void main() {
       () async {
     final repo = AppRepository();
     await repo.init();
+    repo.beginAiAccountImportBatch();
     final entries = [
       AiAccountJsonCodec.parse('''
         {"type":"codex","email":"batch-one@example.com","account_id":"shared","access_token":"access-one","refresh_token":"refresh-one"}
@@ -723,6 +724,51 @@ void main() {
     expect(
       reopened.aiProviders.map((provider) => provider.accountEmail),
       containsAll(<String>['batch-one@example.com', 'batch-two@example.com']),
+    );
+    await reopened.closeForTest();
+  });
+
+  test('batch account import rollback restores catalog, selections and secrets',
+      () async {
+    final repo = AppRepository();
+    await repo.init();
+    final baseline = await repo.addAiConfiguredProvider(
+      displayName: '保留账号',
+      baseUrl: 'https://baseline.example/v1',
+      apiKey: 'baseline-key',
+      model: 'baseline-model',
+    );
+    repo.beginAiAccountImportBatch();
+    final imported = AiAccountJsonCodec.parse('''
+      {"type":"codex","email":"rollback@example.com","account_id":"rollback","access_token":"rollback-access","refresh_token":"rollback-refresh"}
+    ''').accounts.single;
+    await repo.importAiAccount(
+      imported,
+      persistMetadata: false,
+      notify: false,
+    );
+    expect(
+      repo.aiProviders
+          .any((provider) => provider.accountEmail == 'rollback@example.com'),
+      isTrue,
+    );
+
+    await repo.rollbackAiAccountImportBatch();
+    expect(repo.aiProviderById(baseline.id), isNotNull);
+    expect(
+      repo.aiProviders
+          .any((provider) => provider.accountEmail == 'rollback@example.com'),
+      isFalse,
+    );
+    await repo.closeForTest();
+
+    final reopened = AppRepository();
+    await reopened.init();
+    expect(reopened.aiProviderById(baseline.id), isNotNull);
+    expect(
+      reopened.aiProviders
+          .any((provider) => provider.accountEmail == 'rollback@example.com'),
+      isFalse,
     );
     await reopened.closeForTest();
   });

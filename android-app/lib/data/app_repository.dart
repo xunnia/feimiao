@@ -2670,6 +2670,44 @@ class ReportJobEntity {
 // Repository
 // ---------------------------------------------------------------------------
 
+class _AiProviderImportSnapshot {
+  final List<AiConfiguredProvider> providers;
+  final String? recordProviderId;
+  final String? recordModel;
+  final String? chatProviderId;
+  final String? chatModel;
+  final AiProviderType providerType;
+  final AiProviderType recordProviderType;
+  final AiProviderType chatProviderType;
+  final AiProviderType reportProviderType;
+  final Map<String, AiProviderHealth> providerHealth;
+  final List<String> availableModels;
+  final String? deepSeekKey;
+  final String? customKey;
+  final String customDisplayName;
+  final String customBaseUrl;
+  final String customModel;
+
+  _AiProviderImportSnapshot({
+    required this.providers,
+    required this.recordProviderId,
+    required this.recordModel,
+    required this.chatProviderId,
+    required this.chatModel,
+    required this.providerType,
+    required this.recordProviderType,
+    required this.chatProviderType,
+    required this.reportProviderType,
+    required this.providerHealth,
+    required this.availableModels,
+    required this.deepSeekKey,
+    required this.customKey,
+    required this.customDisplayName,
+    required this.customBaseUrl,
+    required this.customModel,
+  });
+}
+
 class AppRepository extends ChangeNotifier {
   static const _dbVersion = 49;
   static const _dbName = 'qingji.db';
@@ -2835,6 +2873,7 @@ class AppRepository extends ChangeNotifier {
   /// 多服务商配置。API Key 只保存在安全存储中，列表本身仅含元数据。
   final List<AiConfiguredProvider> _aiProviders = [];
   final Map<String, Future<void>> _aiProviderWriteTails = {};
+  _AiProviderImportSnapshot? _aiProviderImportSnapshot;
   String? _recordAiProviderId;
   String? _recordAiModel;
   String? _chatCurrentProviderId;
@@ -16547,8 +16586,10 @@ class AppRepository extends ChangeNotifier {
         legacySettingKey: _providerSecretKey(id),
         configuredSettingKey: '${_providerSecretKey(id)}_configured',
         value: provider.apiKey,
-        allowLegacyFallback:
-            !(provider.authMethod == AiAuthMethod.oauth && Platform.isAndroid),
+        // API keys and OAuth tokens must never fall back to app_settings on
+        // Android. Desktop/FFI keeps the legacy path only for tests where the
+        // native keystore channel is unavailable.
+        allowLegacyFallback: !Platform.isAndroid,
       );
       await _saveOAuthRefreshToken(id, oauthRefreshToken);
       await _saveOAuthIdToken(id, oauthIdToken);
@@ -16574,9 +16615,7 @@ class AppRepository extends ChangeNotifier {
           legacySettingKey: _providerSecretKey(id),
           configuredSettingKey: '${_providerSecretKey(id)}_configured',
           value: latestAfterSecrets.apiKey,
-          allowLegacyFallback:
-              !(latestAfterSecrets.authMethod == AiAuthMethod.oauth &&
-                  Platform.isAndroid),
+          allowLegacyFallback: !Platform.isAndroid,
         );
         await _saveOAuthRefreshToken(
           id,
@@ -16744,8 +16783,116 @@ class AppRepository extends ChangeNotifier {
 
   /// Flushes provider metadata after a batch import. Individual account
   /// imports can skip this O(n^2) index rewrite and listener notification.
+  void beginAiAccountImportBatch() {
+    if (_aiProviderImportSnapshot != null) return;
+    _aiProviderImportSnapshot = _AiProviderImportSnapshot(
+      providers: List.unmodifiable(_aiProviders),
+      recordProviderId: _recordAiProviderId,
+      recordModel: _recordAiModel,
+      chatProviderId: _chatCurrentProviderId,
+      chatModel: _chatCurrentModel,
+      providerType: _aiProviderType,
+      recordProviderType: _recordAiProviderType,
+      chatProviderType: _chatAiProviderType,
+      reportProviderType: _reportAiProviderType,
+      providerHealth: Map.unmodifiable(_aiProviderHealth),
+      availableModels: List.unmodifiable(_availableModels),
+      deepSeekKey: _deepSeekApiKey,
+      customKey: _customAiApiKey,
+      customDisplayName: _customAiDisplayName,
+      customBaseUrl: _customAiBaseUrl,
+      customModel: _customAiModel,
+    );
+  }
+
   Future<void> commitAiAccountImportBatch() async {
-    await _persistAiProviderMetadata(notify: false);
+    if (_aiProviderImportSnapshot == null) {
+      await _persistAiProviderMetadata(notify: false);
+      notifyListeners();
+      return;
+    }
+    try {
+      await _persistAiProviderMetadata(notify: false);
+      _aiProviderImportSnapshot = null;
+      notifyListeners();
+    } catch (_) {
+      try {
+        await rollbackAiAccountImportBatch();
+      } catch (_) {
+        // Preserve the original metadata error; the in-memory snapshot has
+        // still been restored even when a broken database cannot be rewritten.
+      }
+      rethrow;
+    }
+  }
+
+  /// Roll back a batch import after an index/database failure.  Credentials
+  /// are restored per provider id, while newly created provider secrets are
+  /// deleted.  The operation is idempotent so UI cleanup can safely call it
+  /// from both an error branch and a route-dispose path.
+  Future<void> rollbackAiAccountImportBatch() async {
+    final snapshot = _aiProviderImportSnapshot;
+    if (snapshot == null) return;
+    final ids = <String>{
+      ...snapshot.providers.map((provider) => provider.id),
+      ..._aiProviders.map((provider) => provider.id),
+    }..removeWhere((id) => id.trim().isEmpty);
+    final oldById = {
+      for (final provider in snapshot.providers) provider.id: provider,
+    };
+
+    _aiProviders
+      ..clear()
+      ..addAll(snapshot.providers);
+    _recordAiProviderId = snapshot.recordProviderId;
+    _recordAiModel = snapshot.recordModel;
+    _chatCurrentProviderId = snapshot.chatProviderId;
+    _chatCurrentModel = snapshot.chatModel;
+    _aiProviderType = snapshot.providerType;
+    _recordAiProviderType = snapshot.recordProviderType;
+    _chatAiProviderType = snapshot.chatProviderType;
+    _reportAiProviderType = snapshot.reportProviderType;
+    _aiProviderHealth
+      ..clear()
+      ..addAll(snapshot.providerHealth);
+    _availableModels = List<String>.from(snapshot.availableModels);
+    _deepSeekApiKey = snapshot.deepSeekKey;
+    _customAiApiKey = snapshot.customKey;
+    _customAiDisplayName = snapshot.customDisplayName;
+    _customAiBaseUrl = snapshot.customBaseUrl;
+    _customAiModel = snapshot.customModel;
+
+    for (final id in ids) {
+      await _restoreAiProviderSecrets(id, oldById[id]);
+    }
+    await _saveSecret(
+      secureKey: 'deepseek_api_key',
+      legacySettingKey: 'deepseek_api_key',
+      configuredSettingKey: 'deepseek_api_key_configured',
+      value: snapshot.deepSeekKey ?? '',
+      allowLegacyFallback: !Platform.isAndroid,
+    );
+    await _saveSecret(
+      secureKey: 'custom_ai_api_key',
+      legacySettingKey: 'custom_ai_api_key',
+      configuredSettingKey: 'custom_ai_api_key_configured',
+      value: snapshot.customKey ?? '',
+      allowLegacyFallback: !Platform.isAndroid,
+    );
+
+    final db = _db;
+    if (db != null) {
+      await _persistAiProviderMetadata(notify: false);
+      await db.delete('ai_provider_health');
+      for (final health in snapshot.providerHealth.values) {
+        await db.insert(
+          'ai_provider_health',
+          health.toMap(),
+          conflictAlgorithm: ConflictAlgorithm.replace,
+        );
+      }
+    }
+    _aiProviderImportSnapshot = null;
     notifyListeners();
   }
 

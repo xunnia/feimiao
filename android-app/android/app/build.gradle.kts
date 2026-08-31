@@ -1,5 +1,6 @@
 import java.util.Properties
 import java.io.FileInputStream
+import org.gradle.api.tasks.compile.JavaCompile
 
 plugins {
     id("com.android.application")
@@ -98,6 +99,46 @@ dependencies {
 kotlin {
     compilerOptions {
         jvmTarget = org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17
+    }
+}
+
+// Flutter still wires a few legacy Kotlin-Gradle plugins into the generated
+// Java registrant.  AGP 9 can otherwise schedule the app Java compile before
+// those plugin release jars are materialized, even though the jars are on the
+// resolved classpath.  Keep the compatibility edge explicit and local to the
+// app; the generated registrant itself must remain untouched.
+tasks.configureEach {
+    if (name == "compileReleaseJavaWithJavac") {
+        dependsOn(
+            ":charset_converter:compileReleaseKotlin",
+            ":share_plus:compileReleaseKotlin",
+            ":workmanager_android:compileReleaseKotlin",
+        )
+    }
+}
+
+// With the current AGP/KGP combination those legacy library modules publish
+// their Kotlin classes in the runtime-to-jar artifact, while the compile-to-
+// jar artifact contains only R classes.  The generated registrant is Java and
+// must see the actual plugin classes during release compilation.  Keep these
+// jars compile-only here; the normal Flutter plugin dependencies still own
+// the runtime packaging.
+val legacyPluginRuntimeJars = listOf(
+    project(":charset_converter").layout.buildDirectory.file(
+        "intermediates/runtime_library_classes_jar/release/bundleLibRuntimeToJarRelease/classes.jar",
+    ),
+    project(":share_plus").layout.buildDirectory.file(
+        "intermediates/runtime_library_classes_jar/release/bundleLibRuntimeToJarRelease/classes.jar",
+    ),
+    project(":workmanager_android").layout.buildDirectory.file(
+        "intermediates/runtime_library_classes_jar/release/bundleLibRuntimeToJarRelease/classes.jar",
+    ),
+)
+tasks.withType<JavaCompile>().configureEach {
+    if (name == "compileReleaseJavaWithJavac") {
+        doFirst {
+            classpath = (classpath ?: project.files()).plus(project.files(legacyPluginRuntimeJars))
+        }
     }
 }
 
