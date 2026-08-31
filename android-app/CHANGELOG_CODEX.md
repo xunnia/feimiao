@@ -1,3 +1,11 @@
+## 2026-09-01 v1.285.0+299 自定义服务地址支持 HTTPS 与局域网 HTTP
+
+- **地址协议**：自定义服务地址继续支持任意合法 HTTPS；同时允许本机、RFC1918 私网和链路本地 HTTP（例如 `http://192.168.31.254:18080/v1`）。公网 HTTP、非 HTTP(S) 协议和带用户信息地址会被拦截。
+- **统一门禁**：设置页和共享 `AiHttpTransport` 使用同一地址策略，JSON 导入或旧配置不能绕过校验；HTTPS 请求不受额外限制。
+- **Android**：网络安全配置允许底层局域网明文连接，应用层仍只放行上述私有 HTTP 地址。
+- **验证**：地址策略/传输层定向回归 **9/9**；Flutter 全量 **1203/1203**；Dart analyze 0 error（91 条既有 warning/info）；Release identity gate 通过（16 KiB、APK V2、固定证书）。APK：`C:\src\xunni-codex\ci-artifacts\releases\feimiao-codex-v1.285.0-299.apk`，117,657,953 字节，SHA256 `6F54A827F43DE30B1BC952A181CF3B366C1C0EB4E0AEF714DA1113795FA04E9F`。
+- **实机边界**：当前无在线 Android ADB；真实手机 HTTPS、自签名证书、局域网 HTTP、VPN/代理出口与安装观感仍需目标设备复测。
+
 ## 2026-09-01 v1.284.0+298 OAuth/JSON 最终审计与交付
 
 - **JSON 安全边界**：已解码的嵌套 `data`/`payload`/`content` 仍可展开；普通 `profile`/`user` 元数据不会误吞同级 API key；`exported_data` 单对象、数组、JSONL、BOM/UTF-16、嵌套 token 与显式 `auth_mode` 规则保持兼容。

@@ -3,6 +3,7 @@ import 'dart:convert';
 
 import 'package:http/http.dart' as http;
 
+import 'ai_provider_url_policy.dart';
 import 'system_network_proxy.dart';
 
 /// Shared HTTP boundary for every AI provider request.
@@ -103,6 +104,12 @@ class AiHttpTransport {
     Uri uri, {
     required bool forceRouteRefresh,
   }) async {
+    // Keep imported/legacy provider configs behind the same address policy as
+    // the settings page. HTTPS is unrestricted; cleartext requests are only
+    // allowed to loopback/private/link-local hosts.
+    if (!AiProviderUrlPolicy.isAllowedRequestUri(uri)) {
+      throw const AiTransportSecurityException();
+    }
     // `refresh()` updates the process-wide fallback while `refreshFor()`
     // evaluates Android PAC rules for this concrete host. Both are no-ops on
     // desktop and in unit tests.
@@ -165,4 +172,12 @@ class AiHttpTransport {
   void close() {
     if (_ownsClient) _client.close();
   }
+}
+
+class AiTransportSecurityException implements Exception {
+  const AiTransportSecurityException();
+
+  @override
+  String toString() =>
+      'AI 服务地址不受支持：请使用 HTTPS，或使用本机/局域网 HTTP 地址';
 }

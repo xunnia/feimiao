@@ -51,4 +51,33 @@ void main() {
     expect(AiHttpTransport.isRetryableStatus(401), isFalse);
     expect(AiHttpTransport.isRetryableStatus(403), isFalse);
   });
+
+  test('rejects public cleartext requests at the shared transport boundary',
+      () async {
+    var calls = 0;
+    final client = MockClient((_) async {
+      calls++;
+      return http.Response('{}', 200);
+    });
+    final transport = AiHttpTransport(client: client);
+
+    expect(
+      () => transport.get(Uri.parse('http://api.example.com/v1/models')),
+      throwsA(isA<AiTransportSecurityException>()),
+    );
+    expect(calls, 0);
+  });
+
+  test('keeps private HTTP relays available to the shared transport', () async {
+    final client = MockClient((request) async {
+      expect(request.url.host, '192.168.31.254');
+      return http.Response('{}', 200);
+    });
+    final transport = AiHttpTransport(client: client);
+
+    final response = await transport.get(
+      Uri.parse('http://192.168.31.254:18080/v1/models'),
+    );
+    expect(response.statusCode, 200);
+  });
 }

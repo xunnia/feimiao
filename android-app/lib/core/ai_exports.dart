@@ -11,6 +11,7 @@ export 'ai/ai_logger.dart';
 export 'ai/ai_prompt_templates.dart';
 export 'ai/ai_provider_config.dart';
 export 'ai/ai_provider_health.dart';
+export 'ai/ai_provider_url_policy.dart';
 export 'ai/ai_request_manager.dart';
 export 'ai/ai_run.dart';
 export 'ai/ai_secure_config.dart';

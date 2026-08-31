@@ -15,6 +15,7 @@ import '../../core/ai/ai_account_verification.dart';
 import '../../core/ai/ai_logger.dart';
 import '../../core/ai/ai_provider_config.dart';
 import '../../core/ai/ai_provider_health.dart';
+import '../../core/ai/ai_provider_url_policy.dart';
 import '../../core/ai/llm_query.dart';
 import '../../core/ai/openai_codex_oauth.dart';
 import '../../data/app_repository.dart';
@@ -461,13 +462,20 @@ class _AiAccountSettingsPageState extends State<_AiAccountSettingsPage> {
     _ProviderDraft draft,
   ) {
     if (provider.type != AiProviderType.custom ||
-        draft.apiKey.text.trim().isEmpty ||
-        !_isInsecureBaseUrl(draft.baseUrl.text)) {
+        draft.apiKey.text.trim().isEmpty) {
       return true;
     }
+    final error = AiProviderUrlPolicy.validateBaseUrl(draft.baseUrl.text);
+    if (error == null) return true;
     showAppToast(
       context,
-      '为保护数据安全，自定义服务地址必须是 https',
+      switch (error) {
+        AiProviderUrlError.invalid => '请输入有效的服务地址',
+        AiProviderUrlError.unsupportedScheme =>
+          '服务地址需使用 https，本机或局域网服务可使用 http',
+        AiProviderUrlError.insecureRemote =>
+          '为保护数据安全，公网服务地址必须是 https，本机或局域网可使用 http',
+      },
       icon: Icons.error_outline,
     );
     return false;
@@ -763,13 +771,6 @@ class _AiAccountSettingsPageState extends State<_AiAccountSettingsPage> {
             : Icons.info_outline,
       );
     }
-  }
-
-  static bool _isInsecureBaseUrl(String raw) {
-    final url = raw.trim().toLowerCase();
-    if (!url.startsWith('http://')) return false;
-    final host = Uri.tryParse(url)?.host ?? '';
-    return !(host == 'localhost' || host == '127.0.0.1' || host == '::1');
   }
 
   Future<void> _importAccountsFromFile() async {
