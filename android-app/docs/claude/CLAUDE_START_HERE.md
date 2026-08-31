@@ -1,12 +1,20 @@
 # Claude 新会话启动入口（先读这里）
 
-更新时间：2026-08-31
+更新时间：2026-09-01
 适用工程：`C:\src\xunni-codex\android-app`  
 严禁触碰：`C:\src\xunni`，除非用户明确要求并确认风险。
 
 这份文件是 Claude 新会话第一入口。旧的 `TASKS_FOR_CODEX.md` 只在用户明确点名具体任务时读取执行，不是默认开工清单。
 
 项目范围、优先级、交付门禁、路线图、风险与产物保留规则统一见 `../PROJECT_MANAGEMENT.md`。本文件负责“当前实现状态”，不再承担完整项目管理职责。
+
+## 0.0.8 自定义服务地址协议收口（v1.285.0+299）
+
+- 自定义服务地址接受任意合法 HTTPS；HTTP 仅允许本机、RFC1918 私网或链路本地地址，例如 `http://192.168.31.254:18080/v1`。公网 HTTP、非 HTTP(S) 协议和带用户信息地址会被阻止。
+- 设置页与共享 `AiHttpTransport` 使用同一地址策略，JSON 导入和旧配置不能绕过；Android 网络安全配置允许底层私网明文连接，但应用层仍执行私有 HTTP allowlist。
+- 地址策略/传输层定向回归 **9/9**、Flutter 全量 **1203/1203**、Dart analyze 0 error（91 条既有 warning/info）；Release identity gate 通过。
+- APK：`C:\src\xunni-codex\ci-artifacts\releases\feimiao-codex-v1.285.0-299.apk`，SHA256 `6F54A827F43DE30B1BC952A181CF3B366C1C0EB4E0AEF714DA1113795FA04E9F`。
+- 已发布线上 `releaseId=v299-6f54a827f43d`；公网 version/manifest/5 分片哈希一致，KV 保留当前 `v299` 与上一版 `v298`（13 keys）。无在线 Android ADB，真实手机 HTTPS/局域网 HTTP、自签名证书、VPN 和安装观感仍需复测。
 
 ## 0.0.7 GPT OAuth、Cockpit JSON 与架构收口（v1.281.0+295）
 

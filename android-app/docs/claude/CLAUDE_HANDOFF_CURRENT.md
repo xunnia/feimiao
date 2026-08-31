@@ -1,10 +1,19 @@
 # 肥喵记账 Codex 当前交接文档
 
-更新时间：2026-09-01（GPT OAuth、Cockpit JSON 最终审计与交付，v1.284.0+298；本轮无在线 Android 设备）
+更新时间：2026-09-01（自定义服务地址 HTTPS/局域网 HTTP 支持，v1.285.0+299；本轮无在线 Android 设备）
 当前 Android 工程：`C:\src\xunni-codex\android-app`  
 新会话第一入口：`docs/claude/CLAUDE_START_HERE.md`
 
 > 本文只保留当前有效状态。历史流水看 `CHANGELOG_CODEX.md` 和 git 历史。
+
+## -1.0.16. 2026-09-01 自定义服务地址支持 HTTPS 与局域网 HTTP（v1.285.0+299）
+
+- 自定义服务地址继续支持任意合法 HTTPS；同时允许本机、RFC1918 私网和链路本地 HTTP（例如 `http://192.168.31.254:18080/v1`）。公网 HTTP、非 HTTP(S) 协议和带用户信息地址在设置页及请求层都会被拒绝。
+- 新增 `AiProviderUrlPolicy`，设置页和共享 `AiHttpTransport` 复用同一策略；JSON 导入、旧配置和模型目录请求不能绕过地址门禁。Android `network-security-config` 允许私网明文 socket，Dart 层仍只放行私有 HTTP。
+- 定向地址策略/传输层回归 **9/9**；Flutter 全量 **1203/1203**；Dart analyze 0 error（91 条既有 warning/info）；Release identity gate 通过（16 KiB、APK V2、固定证书）。
+- APK：`C:\src\xunni-codex\ci-artifacts\releases\feimiao-codex-v1.285.0-299.apk`，117,657,953 字节，SHA256 `6F54A827F43DE30B1BC952A181CF3B366C1C0EB4E0AEF714DA1113795FA04E9F`。
+- commit `231c75e` 已推送到 `origin/feature/ai-model-selector`；线上 `releaseId=v299-6f54a827f43d`，公网 version/manifest/5 分片拼接 SHA256 一致；KV retention 保留当前 `v299` 与上一版 `v298`（13 keys）。
+- 无在线 Android ADB；真实手机 HTTPS、自签名证书、局域网 HTTP、VPN/代理出口、Chrome OAuth 回调、安装冷启动和字体/输入法观感仍需目标设备复测；未使用 Plus 账号。
 
 ## -1.0.15. 2026-09-01 GPT OAuth、Cockpit JSON 最终审计与交付（v1.284.0+298）
 

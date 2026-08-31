@@ -5,6 +5,7 @@
 - **Android**：网络安全配置允许底层局域网明文连接，应用层仍只放行上述私有 HTTP 地址。
 - **验证**：地址策略/传输层定向回归 **9/9**；Flutter 全量 **1203/1203**；Dart analyze 0 error（91 条既有 warning/info）；Release identity gate 通过（16 KiB、APK V2、固定证书）。APK：`C:\src\xunni-codex\ci-artifacts\releases\feimiao-codex-v1.285.0-299.apk`，117,657,953 字节，SHA256 `6F54A827F43DE30B1BC952A181CF3B366C1C0EB4E0AEF714DA1113795FA04E9F`。
 - **实机边界**：当前无在线 Android ADB；真实手机 HTTPS、自签名证书、局域网 HTTP、VPN/代理出口与安装观感仍需目标设备复测。
+- **线上发布**：commit `231c75e` 已推送到 `origin/feature/ai-model-selector`；`releaseId=v299-6f54a827f43d` 已原子切换，公网 `version.json` 与 5 个 KV 分片拼接 SHA256 一致；KV retention 保留当前 `v299` 与上一版 `v298`（13 keys）。
 
 ## 2026-09-01 v1.284.0+298 OAuth/JSON 最终审计与交付
 
