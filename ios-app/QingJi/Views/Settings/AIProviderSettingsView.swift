@@ -31,6 +31,7 @@ struct AIProviderSettingsView: View {
     @State private var editingAccount: AIProviderAccount?
     @State private var testingID: UUID?
     @State private var refreshingID: UUID?
+    @State private var verifyingID: UUID?
     @State private var message: String?
     @State private var showConfigurationExporter = false
     @State private var showConfigurationImporter = false
@@ -59,9 +60,14 @@ struct AIProviderSettingsView: View {
 
             Section("当前默认") {
                 if let selected = providerStore.selectedAccount {
+                    let health = providerStore.health(for: selected.id)
                     LabeledContent("账号", value: selected.displayName)
                     LabeledContent("模型", value: selected.model)
                     LabeledContent("思考强度", value: selected.effort.label)
+                    LabeledContent("连接状态", value: health.statusLabel)
+                    if health.averageLatencyMs > 0 {
+                        LabeledContent("平均延迟", value: "\(health.averageLatencyMs) ms")
+                    }
                 } else {
                     Text("尚未选择可用账号")
                         .foregroundStyle(.secondary)
@@ -167,6 +173,7 @@ struct AIProviderSettingsView: View {
     }
 
     private func accountRow(_ account: AIProviderAccount) -> some View {
+        let health = providerStore.health(for: account.id)
         HStack(spacing: 12) {
             Button {
                 providerStore.setSelected(account)
@@ -193,6 +200,16 @@ struct AIProviderSettingsView: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
+                    HStack(spacing: 4) {
+                        Image(systemName: healthSymbol(for: health))
+                        Text(health.statusLabel)
+                        if health.averageLatencyMs > 0 {
+                            Text("· 平均 \(health.averageLatencyMs) ms")
+                        }
+                    }
+                    .font(.caption2)
+                    .foregroundStyle(healthColor(for: health))
+                    .lineLimit(1)
                 }
 
                 }
@@ -206,6 +223,11 @@ struct AIProviderSettingsView: View {
                         editingAccount = account
                     } label: {
                         Label("编辑", systemImage: "pencil")
+                    }
+                    Button {
+                        verify(account)
+                    } label: {
+                        Label("验证账号", systemImage: "checkmark.seal")
                     }
                     Button {
                         test(account)
@@ -229,7 +251,7 @@ struct AIProviderSettingsView: View {
                         Label(account.isEnabled ? "停用" : "启用", systemImage: account.isEnabled ? "pause.circle" : "play.circle")
                     }
             } label: {
-                if testingID == account.id || refreshingID == account.id {
+                if testingID == account.id || refreshingID == account.id || verifyingID == account.id {
                     ProgressView()
                 } else {
                     Image(systemName: "ellipsis.circle")
@@ -241,6 +263,29 @@ struct AIProviderSettingsView: View {
         }
     }
 
+    private func healthSymbol(for health: AIProviderHealth) -> String {
+        if health.isCoolingDown { return "exclamationmark.triangle" }
+        switch AIProviderVerificationStatus.from(rawValue: health.verificationStatus) {
+        case .some(.available): return "checkmark.circle.fill"
+        case .some(.needsProxy): return "network"
+        case .some(.invalidCredential): return "key.slash"
+        case .some(.modelUnavailable): return "cube"
+        case .some(.networkError): return "wifi.exclamationmark"
+        case .some(.configurationError): return "gearshape.2"
+        case .none: return "waveform.path.ecg"
+        }
+    }
+
+    private func healthColor(for health: AIProviderHealth) -> Color {
+        switch AIProviderVerificationStatus.from(rawValue: health.verificationStatus) {
+        case .some(.available): return .accentColor
+        case .some(.needsProxy), .some(.invalidCredential), .some(.modelUnavailable),
+             .some(.networkError), .some(.configurationError):
+            return .orange
+        case .none: return .secondary
+        }
+    }
+
     private func deleteAccounts(at offsets: IndexSet) {
         for index in offsets {
             providerStore.remove(providerStore.accounts[index])
@@ -248,7 +293,7 @@ struct AIProviderSettingsView: View {
     }
 
     private func test(_ account: AIProviderAccount) {
-        guard testingID == nil, refreshingID == nil else { return }
+        guard testingID == nil, refreshingID == nil, verifyingID == nil else { return }
         testingID = account.id
         Task { @MainActor in
             defer { testingID = nil }
@@ -262,7 +307,7 @@ struct AIProviderSettingsView: View {
     }
 
     private func refreshModels(_ account: AIProviderAccount) {
-        guard refreshingID == nil, testingID == nil else { return }
+        guard refreshingID == nil, testingID == nil, verifyingID == nil else { return }
         refreshingID = account.id
         Task { @MainActor in
             defer { refreshingID = nil }
@@ -272,6 +317,16 @@ struct AIProviderSettingsView: View {
             } catch {
                 message = error.localizedDescription
             }
+        }
+    }
+
+    private func verify(_ account: AIProviderAccount) {
+        guard verifyingID == nil, testingID == nil, refreshingID == nil else { return }
+        verifyingID = account.id
+        Task { @MainActor in
+            defer { verifyingID = nil }
+            let result = await providerStore.verify(account: account)
+            message = "\(account.displayName)：\(result.summary)"
         }
     }
 
@@ -430,11 +485,17 @@ private struct AIProviderEditorView: View {
                 }
             }
             .onAppear {
-                if let original {
+                if let original, original.authMethod == authMethod {
                     storedSecret = providerStore.secret(for: original.id)
                 }
             }
             .onChange(of: authMethod) { _, value in
+                secret = ""
+                if let original, original.authMethod == value {
+                    storedSecret = providerStore.secret(for: original.id)
+                } else {
+                    storedSecret = ""
+                }
                 guard value == .oauth else { return }
                 type = .custom
                 endpoint = .responses
@@ -452,7 +513,10 @@ private struct AIProviderEditorView: View {
     private func save() {
         let account = makeAccount()
         do {
-            try providerStore.upsert(account, secret: secret.isEmpty ? storedSecret : secret)
+            let credential = authMethod == .apiKey
+                ? (secret.isEmpty ? storedSecret : secret)
+                : ""
+            try providerStore.upsert(account, secret: credential)
             dismiss()
         } catch {
             errorMessage = error.localizedDescription
@@ -483,8 +547,14 @@ private struct AIProviderEditorView: View {
         Task { @MainActor in
             defer { isAuthorizing = false }
             do {
-                _ = try await providerStore.authorizeOAuth(for: account)
-                dismiss()
+                let result = try await providerStore.authorizeOAuth(for: account)
+                storedSecret = providerStore.secret(for: result.account.id)
+                model = result.account.model
+                if result.verification.isAvailable {
+                    dismiss()
+                } else {
+                    errorMessage = "ChatGPT 已授权，但\(result.verification.summary)"
+                }
             } catch {
                 errorMessage = error.localizedDescription
             }

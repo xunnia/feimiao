@@ -482,8 +482,25 @@ struct AIUnifiedSearchView: View {
 /// 脱敏 AI 诊断：只从本机运行记录汇总健康状态。
 @MainActor
 struct AIDiagnosticsView: View {
+    private struct AccountHealthRow: Identifiable {
+        let id: UUID
+        let name: String
+        let health: AIProviderHealth
+    }
+
+    @Environment(AIProviderStore.self) private var providerStore
     @Query(sort: \AIRequestRunRecord.updatedAt, order: .reverse)
     private var runs: [AIRequestRunRecord]
+
+    private var accountHealth: [AccountHealthRow] {
+        providerStore.accounts.map { account in
+            AccountHealthRow(
+                id: account.id,
+                name: account.displayName,
+                health: providerStore.health(for: account.id)
+            )
+        }
+    }
 
     private var providers: [(name: String, total: Int, failures: Int, lastError: String)] {
         let grouped = Dictionary(grouping: runs) { $0.providerLabel.isEmpty ? "未指定服务商" : $0.providerLabel }
@@ -500,6 +517,44 @@ struct AIDiagnosticsView: View {
 
     var body: some View {
         List {
+            Section {
+                if accountHealth.isEmpty && providers.isEmpty {
+                    Text("还没有 AI 运行记录")
+                        .foregroundStyle(.secondary)
+                } else {
+                    ForEach(accountHealth, id: \.id) { provider in
+                        HStack {
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(provider.name)
+                                    .font(.body.weight(.medium))
+                                let health = provider.health
+                                Text("状态：\(health.statusLabel) · 成功 \(health.successCount) 次 · 失败 \(health.failureCount) 次")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                if health.averageLatencyMs > 0 {
+                                    Text("平均延迟 \(health.averageLatencyMs) ms")
+                                        .font(.caption2)
+                                        .foregroundStyle(.secondary)
+                                }
+                                if !health.lastError.isEmpty {
+                                    Text(health.lastError)
+                                        .font(.caption2)
+                                        .foregroundStyle(.orange)
+                                        .lineLimit(2)
+                                }
+                            }
+                            Spacer()
+                            Image(systemName: healthSymbol(for: provider.health))
+                                .foregroundStyle(healthColor(for: provider.health))
+                        }
+                    }
+                }
+            } header: {
+                Text("账号健康")
+            } footer: {
+                Text("验证会先读取模型目录，再发送不含账本内容的最小连接请求。")
+            }
+
             Section {
                 if providers.isEmpty {
                     Text("还没有 AI 运行记录")
@@ -527,7 +582,7 @@ struct AIDiagnosticsView: View {
                     }
                 }
             } header: {
-                Text("服务商健康")
+                Text("运行记录")
             } footer: {
                 Text("诊断只显示阶段、次数和脱敏错误，不保存或展示 API Key、完整提示词、账本原文或模型思考内容。")
             }
@@ -537,5 +592,28 @@ struct AIDiagnosticsView: View {
         .liquidGlassCanvas()
         .navigationTitle("AI 诊断")
         .navigationBarTitleDisplayMode(.inline)
+    }
+
+    private func healthSymbol(for health: AIProviderHealth) -> String {
+        if health.isCoolingDown { return "exclamationmark.triangle" }
+        switch AIProviderVerificationStatus.from(rawValue: health.verificationStatus) {
+        case .some(.available): return "checkmark.circle.fill"
+        case .some(.needsProxy): return "network"
+        case .some(.invalidCredential): return "key.slash"
+        case .some(.modelUnavailable): return "cube"
+        case .some(.networkError): return "wifi.exclamationmark"
+        case .some(.configurationError): return "gearshape.2"
+        case .none: return "waveform.path.ecg"
+        }
+    }
+
+    private func healthColor(for health: AIProviderHealth) -> Color {
+        switch AIProviderVerificationStatus.from(rawValue: health.verificationStatus) {
+        case .some(.available): return .accentColor
+        case .some(.needsProxy), .some(.invalidCredential), .some(.modelUnavailable),
+             .some(.networkError), .some(.configurationError):
+            return .orange
+        case .none: return .secondary
+        }
     }
 }

@@ -335,6 +335,7 @@ private enum AIKeychain {
 @Observable
 final class AIProviderStore {
     private static let defaultsKey = "qingji.ai.providers.v1"
+    private static let healthDefaultsKey = "qingji.ai.provider-health.v1"
 
     private struct PersistedState: Codable {
         var accounts: [AIProviderAccount]
@@ -343,6 +344,7 @@ final class AIProviderStore {
 
     private let defaults: UserDefaults
     private(set) var accounts: [AIProviderAccount] = []
+    private(set) var providerHealth: [UUID: AIProviderHealth] = [:]
     var selectedAccountID: UUID?
 
     init(defaults: UserDefaults = .standard) {
@@ -352,11 +354,17 @@ final class AIProviderStore {
             accounts = state.accounts
             selectedAccountID = state.selectedAccountID
         }
+        if let data = defaults.data(forKey: Self.healthDefaultsKey),
+           let entries = try? JSONDecoder().decode([AIProviderHealth].self, from: data) {
+            providerHealth = entries.reduce(into: [:]) { result, entry in
+                result[entry.providerID] = entry
+            }
+        }
         normalizeSelection()
     }
 
     var enabledAccounts: [AIProviderAccount] {
-        accounts.filter { $0.isEnabled && $0.isConfigured && !secret(for: $0.id).isEmpty }
+        accounts.filter { $0.isEnabled && $0.isConfigured && hasCredential(for: $0) }
     }
 
     var selectedAccount: AIProviderAccount? {
@@ -375,19 +383,64 @@ final class AIProviderStore {
         AIKeychain.readRefresh(for: accountID) ?? ""
     }
 
+    func health(for accountID: UUID) -> AIProviderHealth {
+        providerHealth[accountID] ?? AIProviderHealth(providerID: accountID)
+    }
+
+    @discardableResult
+    func recordProviderSuccess(for accountID: UUID, latencyMs: Int) -> AIProviderHealth {
+        let next = health(for: accountID).recordSuccess(latencyMs: latencyMs)
+        providerHealth[accountID] = next
+        persistHealth()
+        return next
+    }
+
+    @discardableResult
+    func recordProviderFailure(for accountID: UUID, error: Error) -> AIProviderHealth {
+        let next = health(for: accountID).recordFailure(error.localizedDescription)
+        providerHealth[accountID] = next
+        persistHealth()
+        return next
+    }
+
+    @discardableResult
+    func recordProviderVerification(
+        for accountID: UUID,
+        status: AIProviderVerificationStatus,
+        message: String = "",
+        latencyMs: Int = 0
+    ) -> AIProviderHealth {
+        let next = health(for: accountID).recordVerification(
+            status: status,
+            message: message,
+            latencyMs: latencyMs
+        )
+        providerHealth[accountID] = next
+        persistHealth()
+        return next
+    }
+
+    func resetProviderHealth(for accountID: UUID) {
+        providerHealth.removeValue(forKey: accountID)
+        persistHealth()
+    }
+
     func upsert(_ account: AIProviderAccount, secret: String) throws {
         var updated = account
         updated.updatedAt = Date()
         let trimmedSecret = secret.trimmingCharacters(in: .whitespacesAndNewlines)
+        let previousAuthMethod = accounts.first(where: { $0.id == account.id })?.authMethod
         if !trimmedSecret.isEmpty {
             try AIKeychain.write(trimmedSecret, for: account.id)
-        } else if account.authMethod == .apiKey {
+        } else if account.authMethod == .apiKey || previousAuthMethod == .apiKey {
             AIKeychain.delete(for: account.id)
         }
         if account.authMethod == .apiKey {
             AIKeychain.deleteRefresh(for: account.id)
             updated.oauthAccountID = ""
             updated.oauthExpiresAt = nil
+        } else if previousAuthMethod == .apiKey {
+            AIKeychain.deleteRefresh(for: account.id)
         }
         if let index = accounts.firstIndex(where: { $0.id == account.id }) {
             accounts[index] = updated
@@ -399,11 +452,11 @@ final class AIProviderStore {
         persist()
     }
 
-    /// Starts a native iOS browser session and stores the resulting tokens in
-    /// Keychain. The returned account is the exact account metadata that was
-    /// persisted, with the selected ChatGPT workspace id attached.
+    /// Starts a native iOS browser session, stores the resulting tokens in
+    /// Keychain, and verifies the account without ledger data. A verification
+    /// failure does not discard a successful OAuth login.
     @discardableResult
-    func authorizeOAuth(for account: AIProviderAccount) async throws -> AIProviderAccount {
+    func authorizeOAuth(for account: AIProviderAccount) async throws -> AIProviderAuthorizationResult {
         let tokens = try await OpenAIOAuth.authorize()
         var updated = account
         updated.authMethod = .oauth
@@ -415,7 +468,9 @@ final class AIProviderStore {
         updated.oauthAccountID = tokens.accountID ?? updated.oauthAccountID
         updated.oauthExpiresAt = tokens.expiresAt
         try saveOAuthTokens(tokens, for: updated)
-        return updated
+        let verification = await verify(account: updated)
+        let persisted = accounts.first(where: { $0.id == updated.id }) ?? updated
+        return AIProviderAuthorizationResult(account: persisted, verification: verification)
     }
 
     /// Refreshes a ChatGPT access token once. Callers retry their original
@@ -453,10 +508,12 @@ final class AIProviderStore {
 
     func remove(_ account: AIProviderAccount) {
         accounts.removeAll { $0.id == account.id }
+        providerHealth.removeValue(forKey: account.id)
         AIKeychain.delete(for: account.id)
         AIKeychain.deleteRefresh(for: account.id)
         normalizeSelection()
         persist()
+        persistHealth()
     }
 
     func setSelected(_ account: AIProviderAccount) {
@@ -497,21 +554,21 @@ final class AIProviderStore {
     }
 
     func refreshModels(for account: AIProviderAccount) async throws -> [String] {
-        var active = account
-        var credential = secret(for: active.id)
-        let models: [String]
+        let started = Date()
         do {
-            models = try await AIProviderClient.fetchModels(account: active, secret: credential)
+            let request = try await requestWithOAuthRetry(for: account) { active, credential in
+                try await AIProviderClient.fetchModels(account: active, secret: credential)
+            }
+            replaceModels(for: account.id, with: request.value)
+            recordProviderSuccess(
+                for: account.id,
+                latencyMs: Date().milliseconds(since: started)
+            )
+            return request.value
         } catch {
-            guard active.authMethod == .oauth,
-                  case AIProviderError.http(let status, _) = error,
-                  status == 401 else { throw error }
-            active = try await refreshOAuth(for: active)
-            credential = secret(for: active.id)
-            models = try await AIProviderClient.fetchModels(account: active, secret: credential)
+            recordProviderFailure(for: account.id, error: error)
+            throw error
         }
-        replaceModels(for: account.id, with: models)
-        return models
     }
 
     func testConnection(for account: AIProviderAccount) async throws -> String {
@@ -523,6 +580,85 @@ final class AIProviderStore {
         return response.text
     }
 
+    /// Verifies an account without sending ledger data, conversation history,
+    /// attachments, or user content. The catalogue and minimal ping share the
+    /// same OAuth refresh path and the result is retained for settings and
+    /// diagnostics.
+    func verify(account: AIProviderAccount) async -> AIProviderVerificationResult {
+        let started = Date()
+
+        func finish(
+            _ status: AIProviderVerificationStatus,
+            models: [String] = [],
+            message: String = ""
+        ) -> AIProviderVerificationResult {
+            let result = AIProviderVerificationResult(
+                status: status,
+                models: models,
+                message: AIProviderHealth.sanitizedError(message),
+                latencyMs: Date().milliseconds(since: started)
+            )
+            recordProviderVerification(
+                for: account.id,
+                status: result.status,
+                message: result.message,
+                latencyMs: result.latencyMs
+            )
+            return result
+        }
+
+        guard !account.baseURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return finish(.configurationError, message: "缺少基础地址")
+        }
+        guard hasCredential(for: account) else {
+            return finish(.configurationError, message: "请先配置 API Key 或完成 OAuth 授权")
+        }
+
+        var discoveredModels: [String] = []
+        do {
+            let catalogue = try await requestWithOAuthRetry(for: account) { active, credential in
+                try await AIProviderClient.fetchModels(account: active, secret: credential)
+            }
+            discoveredModels = catalogue.value
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+            let selectedModel = discoveredModels.first ?? catalogue.account.model
+            guard !selectedModel.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                return finish(.modelUnavailable, models: discoveredModels, message: "模型目录为空")
+            }
+
+            // Keep a usable catalogue even when the subsequent probe is blocked
+            // by a proxy/VPN or a transient upstream failure.
+            if !discoveredModels.isEmpty {
+                replaceModels(for: account.id, with: discoveredModels)
+                if let current = accounts.first(where: { $0.id == account.id }),
+                   current.model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
+                   !discoveredModels.contains(current.model) {
+                    setModel(selectedModel, for: account.id)
+                }
+            }
+
+            var probeAccount = catalogue.account
+            probeAccount.model = selectedModel
+            _ = try await requestWithOAuthRetry(for: probeAccount) { active, credential in
+                try await AIProviderClient.stream(
+                    account: active,
+                    secret: credential,
+                    messages: [AIChatTurn(role: "user", content: "请只回复 OK")],
+                    onText: { _ in }
+                )
+            }
+
+            return finish(.available, models: discoveredModels)
+        } catch {
+            return finish(
+                AIProviderVerificationStatus.from(error: error),
+                models: discoveredModels,
+                message: error.localizedDescription
+            )
+        }
+    }
+
     func stream(
         account: AIProviderAccount,
         messages: [AIChatTurn],
@@ -531,6 +667,7 @@ final class AIProviderStore {
         onSources: (([AIChatSource]) -> Void)? = nil,
         structuredRecord: Bool = false
     ) async throws -> AIChatResponse {
+        let started = Date()
         var requestMessages = messages
         var localSources: [AIChatSource] = []
         if account.webSearchEnabled,
@@ -557,17 +694,22 @@ final class AIProviderStore {
             }
             return result
         }
-        var active = account
-        var credential = secret(for: active.id)
         do {
-            let response = try await AIProviderClient.stream(
-                account: active,
-                secret: credential,
-                messages: requestMessages,
-                onText: onText,
-                onReasoning: onReasoning,
-                onSources: { onSources?(mergeSources($0)) },
-                structuredRecord: structuredRecord
+            let request = try await requestWithOAuthRetry(for: account) { active, credential in
+                try await AIProviderClient.stream(
+                    account: active,
+                    secret: credential,
+                    messages: requestMessages,
+                    onText: onText,
+                    onReasoning: onReasoning,
+                    onSources: { onSources?(mergeSources($0)) },
+                    structuredRecord: structuredRecord
+                )
+            }
+            let response = request.value
+            recordProviderSuccess(
+                for: account.id,
+                latencyMs: Date().milliseconds(since: started)
             )
             return AIChatResponse(
                 text: response.text,
@@ -575,25 +717,8 @@ final class AIProviderStore {
                 sources: mergeSources(response.sources)
             )
         } catch {
-            guard active.authMethod == .oauth,
-                  case AIProviderError.http(let status, _) = error,
-                  status == 401 else { throw error }
-            active = try await refreshOAuth(for: active)
-            credential = secret(for: active.id)
-            let response = try await AIProviderClient.stream(
-                account: active,
-                secret: credential,
-                messages: requestMessages,
-                onText: onText,
-                onReasoning: onReasoning,
-                onSources: { onSources?(mergeSources($0)) },
-                structuredRecord: structuredRecord
-            )
-            return AIChatResponse(
-                text: response.text,
-                reasoningSummary: response.reasoningSummary,
-                sources: mergeSources(response.sources)
-            )
+            recordProviderFailure(for: account.id, error: error)
+            throw error
         }
     }
 
@@ -622,13 +747,66 @@ final class AIProviderStore {
         return accounts.count
     }
 
+    private func hasCredential(for account: AIProviderAccount) -> Bool {
+        if !secret(for: account.id).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return true
+        }
+        return account.authMethod == .oauth &&
+            !oauthRefreshToken(for: account.id).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private func preparedCredential(
+        for account: AIProviderAccount
+    ) async throws -> (account: AIProviderAccount, credential: String) {
+        var active = account
+        var credential = secret(for: active.id).trimmingCharacters(in: .whitespacesAndNewlines)
+        if credential.isEmpty, active.authMethod == .oauth,
+           !oauthRefreshToken(for: active.id).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            active = try await refreshOAuth(for: active)
+            credential = secret(for: active.id).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        guard !credential.isEmpty else { throw AIProviderError.missingAPIKey }
+        return (active, credential)
+    }
+
+    private func requestWithOAuthRetry<Value>(
+        for account: AIProviderAccount,
+        operation: (AIProviderAccount, String) async throws -> Value
+    ) async throws -> (value: Value, account: AIProviderAccount) {
+        var prepared = try await preparedCredential(for: account)
+        do {
+            let value = try await operation(prepared.account, prepared.credential)
+            return (value, prepared.account)
+        } catch {
+            guard prepared.account.authMethod == .oauth, isUnauthorized(error) else {
+                throw error
+            }
+            prepared.account = try await refreshOAuth(for: prepared.account)
+            prepared.credential = secret(for: prepared.account.id)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !prepared.credential.isEmpty else { throw AIProviderError.missingAPIKey }
+            let value = try await operation(prepared.account, prepared.credential)
+            return (value, prepared.account)
+        }
+    }
+
+    private func isUnauthorized(_ error: Error) -> Bool {
+        guard case AIProviderError.http(let status, _) = error else { return false }
+        return status == 401
+    }
+
     private func normalizeSelection() {
         if let selectedAccountID,
-           accounts.contains(where: { $0.id == selectedAccountID && $0.isEnabled && !secret(for: $0.id).isEmpty }) {
+           accounts.contains(where: {
+               $0.id == selectedAccountID &&
+               $0.isEnabled &&
+               $0.isConfigured &&
+               hasCredential(for: $0)
+           }) {
             return
         }
         selectedAccountID = accounts.first(where: {
-            $0.isEnabled && $0.isConfigured && !secret(for: $0.id).isEmpty
+            $0.isEnabled && $0.isConfigured && hasCredential(for: $0)
         })?.id
     }
 
@@ -636,5 +814,19 @@ final class AIProviderStore {
         let state = PersistedState(accounts: accounts, selectedAccountID: selectedAccountID)
         guard let data = try? JSONEncoder().encode(state) else { return }
         defaults.set(data, forKey: Self.defaultsKey)
+    }
+
+    private func persistHealth() {
+        let entries = providerHealth.values.sorted {
+            $0.providerID.uuidString < $1.providerID.uuidString
+        }
+        guard let data = try? JSONEncoder().encode(entries) else { return }
+        defaults.set(data, forKey: Self.healthDefaultsKey)
+    }
+}
+
+private extension Date {
+    func milliseconds(since start: Date) -> Int {
+        max(0, min(Int(timeIntervalSince(start) * 1000), 3_600_000))
     }
 }
