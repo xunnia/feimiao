@@ -174,7 +174,7 @@ struct AIProviderSettingsView: View {
 
     private func accountRow(_ account: AIProviderAccount) -> some View {
         let health = providerStore.health(for: account.id)
-        HStack(spacing: 12) {
+        return HStack(spacing: 12) {
             Button {
                 providerStore.setSelected(account)
             } label: {
