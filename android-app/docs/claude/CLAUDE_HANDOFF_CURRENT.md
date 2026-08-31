@@ -10,7 +10,7 @@
 
 - JSON 外层包装判断收紧：已解码的 `data`/`payload`/`content`/token 文档仍可展开，普通 `profile`/`user` 元数据不会覆盖同级凭据；补充同级 API key 回归。
 - Android 403 `unsupported_country_region` 浏览器换 Token 改为可注入桥接，生产实现仍走原生 MethodChannel，测试可验证 flowId/code/verifier 交接且不会处理无关 403。
-- 验证：Flutter 全量 **1197/1197**；定向 OAuth/JSON/传输/账号验证/导入/仓库/Responses **289/289**；Dart analyze 0 error（91 条既有 warning/info）；Android `:app:compileDebugKotlin` 成功；Release identity gate 通过（16 KiB、APK V2、固定证书）。APK：`C:\src\xunni-codex\android-app\build\app\outputs\flutter-apk\app-release.apk`，SHA256 `717F0D107DA45B12ED63A549A554A46D1E63F2561135668A9085114FD8BCD567`，117,658,041 字节；线上 KV 状态待发布后补录。
+- 验证：Flutter 全量 **1197/1197**；定向 OAuth/JSON/传输/账号验证/导入/仓库/Responses **289/289**；Dart analyze 0 error（91 条既有 warning/info）；Android `:app:compileDebugKotlin` 成功；Release identity gate 通过（16 KiB、APK V2、固定证书）。APK：`C:\src\xunni-codex\android-app\build\app\outputs\flutter-apk\app-release.apk`，SHA256 `717F0D107DA45B12ED63A549A554A46D1E63F2561135668A9085114FD8BCD567`，117,658,041 字节；线上 `releaseId=v298-717f0d107da4`，公网完整下载 SHA256 一致；KV retention 保留当前 `v298` 与上一版 `v297`（13 keys）。
 - 本轮无在线 Android ADB；Chrome 账号选择、手机 VPN、localhost 回调、安装冷启动和输入法/字体观感仍需目标设备复测；未使用 Plus 账号。
 
 ## -1.0.14. 2026-09-01 GPT OAuth、Cockpit JSON 与架构收口（v1.283.0+297）

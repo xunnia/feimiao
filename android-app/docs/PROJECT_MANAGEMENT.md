@@ -28,14 +28,14 @@ scope: Android Flutter 主工程
 | 当前 APK | `C:\src\xunni-codex\android-app\build\app\outputs\flutter-apk\app-release.apk` |
 | 当前 APK SHA256 | `717F0D107DA45B12ED63A549A554A46D1E63F2561135668A9085114FD8BCD567`（117,658,041 字节） |
 | 回退版本 | 线上 Cloudflare KV `v1.283.0+297`（releaseId `v297-8e02474d7bf8`，发布脚本保留为上一版本） |
-| 发布状态 | 待提交后发布 1.284.0+298；发布脚本只保留当前版本与上一版本 |
-| 工作树状态 | Android AI/OAuth/JSON/架构批次已提交 `e998ebc` 并推送；iOS、截图和指定 parity 测试改动保持隔离 |
+| 发布状态 | 已发布线上 `releaseId=v298-717f0d107da4`；公网 `version.json` 与完整 APK SHA256 一致；KV 保留当前 `v298` 与上一版 `v297`（13 keys） |
+| 工作树状态 | Android AI/OAuth/JSON/架构批次已提交 `bc4feff` 并推送；iOS、截图和指定 parity 测试改动保持隔离 |
 
 ### 1.1 当前最近三个门
 
-1. **真机验收门**：用户安装 v1.283.0+297，复核 GPT OAuth、Cockpit JSON 导入、模型获取/连接测试及手机 VPN 分流；本机无在线 ADB，未把真机流程写成已通过。
+1. **真机验收门**：用户安装 v1.284.0+298，复核 GPT OAuth、Cockpit JSON 导入、模型获取/连接测试及手机 VPN 分流；本机无在线 ADB，未把真机流程写成已通过。
 2. **源码集成门**：本轮 Android 改动已精确提交并推送；后续真机反馈按独立批次处理，不混入 iOS/parity 改动。
-3. **发布门**：本轮 Flutter、Dart、Kotlin、APK identity、线上指针、分片哈希和 KV retention 均已通过。
+3. **发布门**：本轮 Flutter、Dart、Kotlin、APK identity、公网完整下载、线上指针、分片哈希和 KV retention 均已通过。
 
 ## 2. 项目章程
 

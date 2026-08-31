@@ -4,7 +4,7 @@
 - **OAuth 浏览器兜底**：403 `unsupported_country_region` 只在 Android 且错误明确时交给本机浏览器桥接；PKCE code/verifier/flowId 通过 App 私有文件和 loopback 传递，不进入 URL 或第三方服务；测试可注入桥接验证成功与拒绝其他 403。
 - **验证**：Flutter 全量 **1197/1197**；OAuth/JSON/传输/账号验证/导入/仓库/Responses 定向 **289/289**；Dart analyze 0 error（91 条既有 warning/info）；Android `:app:compileDebugKotlin` 成功；Release identity gate 通过（16 KiB、APK V2、固定证书）。
 - **APK**：`C:\src\xunni-codex\android-app\build\app\outputs\flutter-apk\app-release.apk`，117,658,041 字节，SHA256 `717F0D107DA45B12ED63A549A554A46D1E63F2561135668A9085114FD8BCD567`。
-- **线上发布**：待提交后发布到 Cloudflare KV；发布脚本只保留当前版本与上一版本。
+- **线上发布**：commit `bc4feff` 已推送到 `origin/feature/ai-model-selector`；`releaseId=v298-717f0d107da4` 已原子切换，公网 `version.json` 与完整 APK 下载哈希一致；KV retention 保留当前 `v298` 与上一版 `v297`（13 keys）。
 - **实机边界**：当前无在线 Android ADB；Chrome 账号选择、手机 VPN 出口、localhost 回调、安装冷启动和实机字体/输入法仍需目标设备复测；未使用 Plus 账号。
 
 ## 2026-09-01 v1.283.0+297 Cockpit JSON 边界与 AI 传输收口
