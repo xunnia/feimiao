@@ -9,6 +9,27 @@ final class AppRouterTests: XCTestCase {
         )
     }
 
+    func testImportReviewDemoLaunchUsesStableRootOnlyForThatRoute() {
+        XCTAssertTrue(
+            RootTabView.shouldRenderDemoImportReviewAsRoot(environment: [
+                "QINGJI_DEMO": "1",
+                "QINGJI_SCREEN": "settings/import-review"
+            ])
+        )
+        XCTAssertFalse(
+            RootTabView.shouldRenderDemoImportReviewAsRoot(environment: [
+                "QINGJI_DEMO": "1",
+                "QINGJI_SCREEN": "settings"
+            ])
+        )
+        XCTAssertFalse(
+            RootTabView.shouldRenderDemoImportReviewAsRoot(environment: [
+                "QINGJI_DEMO": "0",
+                "QINGJI_SCREEN": "settings/import-review"
+            ])
+        )
+    }
+
     func testOrdinarySettingsDestinationsStillUseSettingsRoot() {
         for screen in ["settings/budget", "settings/accounts", "settings/backup"] {
             XCTAssertEqual(RootTabView.initialPath(for: screen), [.settings])

@@ -22,24 +22,35 @@ struct RootTabView: View {
     }
 
     var body: some View {
-        NavigationStack(path: $path) {
-            HomeView(onOpenDrawer: { drawerPresented = true })
-                .navigationDestination(for: AppRouter.Route.self) { route in
-                    switch route {
-                    case .quickAdd:
-                        QuickAddView()
-                    case .search:
-                        TransactionListView(searchMode: true)
-                    case .transactions:
-                        TransactionListView()
-                    case .statistics:
-                        MonthlyStatsView()
-                    case .settings:
-                        SettingsView()
-                    case .importReview:
-                        ImportReviewView(result: ImportReviewView.demoResult()) { _, _ in }
-                    }
+        Group {
+            if Self.shouldRenderDemoImportReviewAsRoot(environment: ProcessInfo.processInfo.environment) {
+                // The screenshot runner must not depend on an initial path
+                // being consumed by the outer NavigationStack. Keep the
+                // review surface at the root of a dedicated, path-less stack.
+                NavigationStack {
+                    importReviewDestination
                 }
+            } else {
+                NavigationStack(path: $path) {
+                    HomeView(onOpenDrawer: { drawerPresented = true })
+                        .navigationDestination(for: AppRouter.Route.self) { route in
+                            switch route {
+                            case .quickAdd:
+                                QuickAddView()
+                            case .search:
+                                TransactionListView(searchMode: true)
+                            case .transactions:
+                                TransactionListView()
+                            case .statistics:
+                                MonthlyStatsView()
+                            case .settings:
+                                SettingsView()
+                            case .importReview:
+                                importReviewDestination
+                            }
+                        }
+                    }
+            }
         }
         .liquidGlassChrome()
         .liquidGlassCanvas()
@@ -125,11 +136,31 @@ struct RootTabView: View {
         }
     }
 
+    @ViewBuilder
+    private var importReviewDestination: some View {
+        if Self.usesDemoImportReview(environment: ProcessInfo.processInfo.environment) {
+            // The screenshot runner needs a deterministic review surface, but
+            // this fixture must never be reachable from a production entry.
+            ImportReviewView(result: ImportReviewView.demoResult()) { _, _ in }
+        } else {
+            ImportExportView()
+        }
+    }
+
+    static func usesDemoImportReview(environment: [String: String]) -> Bool {
+        environment["QINGJI_DEMO"] == "1"
+    }
+
+    static func shouldRenderDemoImportReviewAsRoot(environment: [String: String]) -> Bool {
+        guard usesDemoImportReview(environment: environment) else { return false }
+        let screen = environment["QINGJI_SCREEN"]?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return screen == "import-review" || screen == "settings/import-review"
+    }
+
     private func syncPath() {
-        // A settings child normally lives under SettingsView. Import review
-        // is also a CI cold-launch target, so keep its dedicated root route
-        // while it is visible; otherwise the selectedTab observer would
-        // immediately replace it with the settings index page.
+        // 导入复核是 parity 冷启动目标，也是正常设置子路由。它显示时保留
+        // 专用根路由，避免 selectedTab 的观察者把它重置回设置首页。
         if router.settingsPushTarget == .importReview {
             router.settingsPushTarget = nil
             let next: [AppRouter.Route] = [.importReview]
@@ -155,8 +186,7 @@ struct RootTabView: View {
         initialPath(for: ProcessInfo.processInfo.environment["QINGJI_SCREEN"])
     }
 
-    /// Pure route mapping used by XCTest. Screenshot existence alone cannot
-    /// prove that a cold launch reached the requested page.
+    /// 独立纯函数供 XCTest 验证每个 CI 冷启动入口，不再只靠 PNG 存在判断。
     static func initialPath(for screen: String?) -> [AppRouter.Route] {
         guard let screen, !screen.isEmpty else { return [] }
         if screen == "settings/ai" {

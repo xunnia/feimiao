@@ -146,6 +146,11 @@ jobs:
     runs-on: macos-26
     steps:
       - uses: actions/checkout@v5
+      - name: Validate screenshot route manifest
+        run: |
+          python3 ios-app/tools/check_route_manifest.py \
+            --manifest ios-app/tools/screenshot_manifest.json \
+            --workflow .github/workflows/ios-ci.yml
       - name: Select Xcode 27 (fallback to Xcode 26)
         run: |
           XCODE_APP=$(ls -d /Applications/Xcode_27*.app 2>/dev/null | sort -V | tail -n 1)
@@ -197,6 +202,8 @@ jobs:
           echo "安装：$APP_PATH"
           xcrun simctl install "$DEVICE" "$APP_PATH"
           mkdir -p screenshots
+          runtime_log="ios-screenshot-runtime.log"
+          : > "$runtime_log"
 
           # 用「重启 + 启动参数」而不是 openurl 切页面：
           # simctl openurl 对自定义 scheme 会弹出系统「Open in App?」确认框，CI 无法点击，
@@ -207,20 +214,20 @@ jobs:
             local output="screenshots/$name.png"
             local attempt
             for attempt in 1 2 3; do
-              echo "CAPTURE_BEGIN name=$name screen=$screen attempt=$attempt"
-              xcrun simctl terminate "$DEVICE" com.qingji.app 2>/dev/null || true
+              echo "CAPTURE_BEGIN name=$name screen=$screen attempt=$attempt" | tee -a "$runtime_log"
+              xcrun simctl terminate "$DEVICE" com.qingji.app >> "$runtime_log" 2>&1 || true
               sleep 1
               if ! SIMCTL_CHILD_QINGJI_DEMO=1 \
                 SIMCTL_CHILD_QINGJI_DEMO_NOW="2026-08-27T12:00:00+08:00" \
                 SIMCTL_CHILD_QINGJI_SCREEN="$screen" \
-                xcrun simctl launch "$DEVICE" com.qingji.app; then
+                xcrun simctl launch "$DEVICE" com.qingji.app >> "$runtime_log" 2>&1; then
                 echo "::warning::CAPTURE_LAUNCH_FAILED name=$name screen=$screen attempt=$attempt"
                 continue
               fi
               # 年度图表、预算承诺物化和对账表单首次冷启动会触发较重的
               # SwiftData 查询；给它们足够时间完成首帧，避免把加载中的空根视图当截图。
               sleep 14
-              if ! xcrun simctl io "$DEVICE" screenshot "$output" || ! test -s "$output"; then
+              if ! xcrun simctl io "$DEVICE" screenshot "$output" >> "$runtime_log" 2>&1 || ! test -s "$output"; then
                 echo "::warning::CAPTURE_SCREENSHOT_FAILED name=$name screen=$screen attempt=$attempt"
                 continue
               fi
@@ -232,7 +239,7 @@ jobs:
             done
             echo "::error::CAPTURE_FAILED_AFTER_RETRIES name=$name screen=$screen"
             xcrun simctl spawn "$DEVICE" log show --last 30s --style compact \
-              --predicate 'process == "QingJi"' || true
+              --predicate 'process == "QingJi"' >> "$runtime_log" 2>&1 || true
             return 1
           }
 
@@ -240,21 +247,21 @@ jobs:
           shoot "quickadd"     "02-quickadd"
           shoot "quickadd/income" "37-quickadd-income"
           shoot "transactions" "03-transactions"
-          shoot "stats-week"   "04-stats-week"
-          shoot "stats-month"  "05-stats-month"
-          shoot "stats-year"   "06-stats-year"
-          shoot "stats-custom" "07-stats-custom"
-          shoot "budget"       "08-budget"
-          shoot "reconcile"    "09-reconcile"
-          shoot "reimburse"    "10-reimburse"
+          shoot "stats/week"   "04-stats-week"
+          shoot "stats/month"  "05-stats-month"
+          shoot "stats/year"   "06-stats-year"
+          shoot "stats/custom" "07-stats-custom"
+          shoot "settings/budget"    "08-budget"
+          shoot "settings/reconcile" "09-reconcile"
+          shoot "settings/reimburse" "10-reimburse"
           shoot "settings/reimburse/settlement" "40-reimburse-settlement"
-          shoot "savings"      "11-savings"
-          shoot "recurring"    "12-recurring"
-          shoot "assets"       "13-assets"
+          shoot "settings/savings"   "11-savings"
+          shoot "settings/recurring" "12-recurring"
+          shoot "settings/assets"    "13-assets"
           shoot "settings/assets/detail" "38-assets-detail"
-          shoot "liabilities"  "14-liabilities"
-          shoot "net-worth"    "15-net-worth"
-          shoot "books"        "16-books"
+          shoot "settings/liabilities" "14-liabilities"
+          shoot "settings/net-worth"   "15-net-worth"
+          shoot "settings/books" "16-books"
           shoot "settings/accounts" "17-accounts"
           shoot "settings/accounts/detail" "39-account-detail"
           shoot "settings/categories" "18-categories"
@@ -277,9 +284,14 @@ jobs:
           shoot "settings/display" "35-display"
 
           python3 ios-app/tools/check_screenshot_nonempty.py screenshots/*.png
-          python3 ios-app/tools/check_screenshot_distinct.py screenshots/*.png
+          if ! python3 ios-app/tools/check_screenshot_distinct.py screenshots/*.png; then
+            echo "::error::截图存在近重复，采集失败时附加导出 QingJi 系统日志"
+            xcrun simctl spawn "$DEVICE" log show --last 5m --style compact \
+              --predicate 'process == "QingJi"' >> "$runtime_log" 2>&1 || true
+            exit 1
+          fi
 
-          # 校验：35 张图若全部相同说明导航又失败了，直接让 CI 报错
+          # 校验：若所有 39 张图都相同，说明导航又失败了，直接让 CI 报错
           UNIQUE=$(md5 -q screenshots/*.png | sort -u | wc -l | tr -d ' ')
           echo "不同截图数量：$UNIQUE / 39"
           if [ "$UNIQUE" -le 1 ]; then
@@ -296,7 +308,9 @@ jobs:
         if: always()
         with:
           name: simulator-screenshot-diagnostics
-          path: xcodebuild-screenshots.log
+          path: |
+            xcodebuild-screenshots.log
+            ios-screenshot-runtime.log
           if-no-files-found: warn
 
   unsigned-ipa:
