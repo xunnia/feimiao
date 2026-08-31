@@ -255,21 +255,21 @@ jobs:
           shoot quickadd 02-quickadd
           shoot quickadd/income 37-quickadd-income
           shoot transactions 03-transactions
-          shoot stats-week 04-stats-week
-          shoot stats-month 05-stats-month
-          shoot stats-year 06-stats-year
-          shoot stats-custom 07-stats-custom
-          shoot budget 08-budget
-          shoot reconcile 09-reconcile
-          shoot reimburse 10-reimburse
+          shoot stats/week 04-stats-week
+          shoot stats/month 05-stats-month
+          shoot stats/year 06-stats-year
+          shoot stats/custom 07-stats-custom
+          shoot settings/budget 08-budget
+          shoot settings/reconcile 09-reconcile
+          shoot settings/reimburse 10-reimburse
           shoot settings/reimburse/settlement 40-reimburse-settlement
           shoot lending 41-lending
-          shoot savings 11-savings
-          shoot recurring 12-recurring
-          shoot assets 13-assets
+          shoot settings/savings 11-savings
+          shoot settings/recurring 12-recurring
+          shoot settings/assets 13-assets
           shoot settings/assets/detail 38-assets-detail
-          shoot liabilities 14-liabilities
-          shoot net-worth 15-net-worth
+          shoot settings/liabilities 14-liabilities
+          shoot settings/net-worth 15-net-worth
           shoot settings/books 16-books
           shoot settings/accounts 17-accounts
           shoot settings/accounts/detail 39-account-detail
