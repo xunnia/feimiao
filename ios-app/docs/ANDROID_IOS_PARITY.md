@@ -38,7 +38,7 @@ iOS 只在按钮反馈、系统菜单、键盘、转场和 Liquid Glass 材质�
 | AI Chats/多服务商 | `ai_chat_panel.dart` | 已接入 iOS 原生 AI 账号、Keychain、模型目录、三类流式端点、ChatGPT/Codex PKCE OAuth、401 刷新、Chats 会话列表、图片/文件附件和基础喵助手 | Parity #61 已成对截图；真实网络仍待设备验收 |
 | 存钱目标 | `savings_goals_view.dart` | 已实现目标、进度、归档/恢复 | Parity #61 已成对截图 |
 | 定时记账 | `recurring_view.dart` | 已实现日/周/月/年规则、转账、幂等补记 | Parity #61 已成对截图 |
-| 资产/负债/净资产 | `views/assets` | 已实现 iOS 基础档案、生命周期、持有指标计算、还款、组件净资产与快照 | Parity #61 已成对截图；详情操作继续做真机验收 |
+| 资产/负债/净资产 | `views/assets` | 已实现 iOS 基础档案、权益详情/收回流水与撤销、生命周期、持有指标计算、还款、组件净资产与快照 | Parity #61 已成对截图；详情操作、账户余额和真机仍待重新验收 |
 | 报告/后台任务/提醒 | `reports`、Worker | 已有本地月报库、阅读/置顶/删除和 `BGTaskScheduler` 择机刷新；AI 定时报表保存计划并用本地通知提醒前台生成，不能承诺 iOS 后台固定联网 | Parity #61 已成对截图；后台触发仍待真机验收 |
 | Widget/快捷指令/分享 | Android 原生通道 | Widget、App Intent、Share Extension 已有基础版；分享文本/截图会进入 AI 记一笔 | Parity #61 已成对截图；扩展真机仍待验收 |
 | 通知自动记账 | `PaymentNotificationListener` | iOS 无等价系统权限 | 用分享/OCR/快捷指令替代 |
