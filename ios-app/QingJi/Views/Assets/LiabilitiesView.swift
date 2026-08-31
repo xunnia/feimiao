@@ -15,6 +15,7 @@ struct LiabilitiesView: View {
     private var categories: [TxCategory]
 
     @State private var showEditor = false
+    @State private var showLoanWizard = false
     @State private var editingProfile: LiabilityProfile?
     @State private var repaymentProfile: LiabilityProfile?
     @State private var errorMessage: String?
@@ -51,7 +52,18 @@ struct LiabilitiesView: View {
         .navigationTitle("负债管理")
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
-                Button { showEditor = true } label: {
+                Menu {
+                    Button {
+                        showEditor = true
+                    } label: {
+                        Label("新建负债", systemImage: "minus.circle")
+                    }
+                    Button {
+                        showLoanWizard = true
+                    } label: {
+                        Label("房贷/分期向导", systemImage: "house")
+                    }
+                } label: {
                     Image(systemName: "plus")
                 }
                 .liquidGlassCircleControl()
@@ -60,6 +72,10 @@ struct LiabilitiesView: View {
         }
         .sheet(isPresented: $showEditor) {
             LiabilityEditor(profile: nil)
+                .presentationDetents([.large])
+        }
+        .sheet(isPresented: $showLoanWizard) {
+            LoanWizardSheet()
                 .presentationDetents([.large])
         }
         .sheet(item: $editingProfile) { profile in

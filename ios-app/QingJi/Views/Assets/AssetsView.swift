@@ -38,6 +38,7 @@ struct AssetsView: View {
     @State private var showNewAsset = false
     @State private var showNewReceivable = false
     @State private var showBorrowSheet = false
+    @State private var showLoanWizard = false
     @State private var detailAsset: PhysicalAsset?
     @State private var detailReceivable: ReceivableAsset?
     @State private var recoveryAsset: ReceivableAsset?
@@ -121,6 +122,11 @@ struct AssetsView: View {
                     } label: {
                         Label("记一笔借入", systemImage: "arrow.down.left")
                     }
+                    Button {
+                        showLoanWizard = true
+                    } label: {
+                        Label("房贷/分期向导", systemImage: "house")
+                    }
                 } label: {
                     Image(systemName: "plus")
                 }
@@ -143,6 +149,10 @@ struct AssetsView: View {
         .sheet(isPresented: $showBorrowSheet) {
             BorrowEntrySheet()
                 .presentationDetents([.medium, .large])
+        }
+        .sheet(isPresented: $showLoanWizard) {
+            LoanWizardSheet()
+                .presentationDetents([.large])
         }
         .sheet(item: $detailReceivable) { asset in
             ReceivableDetailView(asset: asset)

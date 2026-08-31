@@ -1782,6 +1782,131 @@ enum LiabilityStore {
         }
     }
 
+    /// Android 房贷/分期向导的同款三件套：贷款账户、负债档案和每月
+    /// 从扣款账户转入贷款账户的周期规则一次保存，避免只创建半套数据。
+    @discardableResult
+    static func createLoanWizardSetup(
+        in context: ModelContext,
+        kind: LiabilityKind,
+        name: String,
+        totalAmount: Decimal,
+        remainingPrincipal: Decimal,
+        annualRate: Decimal? = nil,
+        monthlyPayment: Decimal,
+        repaymentDay: Int,
+        fromAccount: Account,
+        book: Book? = nil,
+        now: Date = Date()
+    ) throws -> (account: Account, profile: LiabilityProfile, rule: RecurringRule) {
+        let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedName.isEmpty else { throw Error.invalidCounterparty }
+        let normalizedTotal = MoneyNormalization.roundToCents(totalAmount)
+        let normalizedPrincipal = MoneyNormalization.roundToCents(remainingPrincipal)
+        let normalizedPayment = MoneyNormalization.roundToCents(monthlyPayment)
+        guard normalizedTotal > 0,
+              normalizedPrincipal > 0,
+              normalizedPrincipal <= normalizedTotal,
+              normalizedPayment > 0 else {
+            throw Error.invalidPrincipal
+        }
+        if let annualRate, annualRate < 0 {
+            throw Error.invalidPrincipal
+        }
+        guard (1...31).contains(repaymentDay) else {
+            throw Error.invalidPrincipal
+        }
+        guard fromAccount.status == .active,
+              !fromAccount.isDeleted,
+              fromAccount.currencyCode == "CNY" else {
+            throw Error.accountMissing
+        }
+
+        let calendar = Calendar.current
+        func clampedDate(year: Int, month: Int) -> Date {
+            let lastDay = calendar.range(of: .day, in: .month, for: calendar.date(
+                from: DateComponents(year: year, month: month, day: 1)
+            ) ?? now)?.count ?? 28
+            return calendar.date(from: DateComponents(
+                year: year,
+                month: month,
+                day: min(repaymentDay, lastDay),
+                hour: 12
+            )) ?? now
+        }
+        let today = calendar.startOfDay(for: now)
+        let nowComponents = calendar.dateComponents([.year, .month], from: now)
+        let thisMonthDue = clampedDate(
+            year: nowComponents.year ?? 2000,
+            month: nowComponents.month ?? 1
+        )
+        let firstDue: Date
+        if !calendar.startOfDay(for: thisMonthDue).isBefore(today) {
+            firstDue = thisMonthDue
+        } else {
+            let next = calendar.date(byAdding: .month, value: 1, to: thisMonthDue) ?? now
+            let nextComponents = calendar.dateComponents([.year, .month], from: next)
+            firstDue = clampedDate(
+                year: nextComponents.year ?? 2000,
+                month: nextComponents.month ?? 1
+            )
+        }
+
+        let existingAccounts = try context.fetch(FetchDescriptor<Account>())
+        let usedNames = Set(existingAccounts.filter { !$0.isDeleted }.map(\.name))
+        var accountName = trimmedName
+        var suffix = 2
+        while usedNames.contains(accountName) {
+            accountName = "\(trimmedName)·\(suffix)"
+            suffix += 1
+        }
+        let loanAccount = Account(
+            name: accountName,
+            kind: .loan,
+            currencyCode: "CNY",
+            sortOrder: (existingAccounts.map(\.sortOrder).max() ?? -1) + 1
+        )
+        loanAccount.initialBalance = -normalizedPrincipal
+        loanAccount.openingBalanceEffectiveAt = now
+        loanAccount.openingBalanceQuality = .exact
+        loanAccount.balanceMode = .ledger
+
+        let profile = LiabilityProfile(
+            accountID: loanAccount.stableID,
+            kind: kind,
+            originalPrincipal: normalizedTotal,
+            currentPrincipal: normalizedPrincipal,
+            currencyCode: "CNY"
+        )
+        profile.annualRate = annualRate.map(MoneyNormalization.roundToCents)
+        profile.paymentDay = repaymentDay
+        profile.repaymentAccountID = fromAccount.stableID
+        profile.note = ""
+
+        let rule = RecurringRule(
+            amount: normalizedPayment,
+            kind: .transfer,
+            bookID: book?.stableID,
+            accountID: fromAccount.stableID,
+            toAccountID: loanAccount.stableID,
+            note: "\(trimmedName)还款",
+            period: .monthly,
+            startDate: firstDue,
+            firstDueDate: firstDue
+        )
+
+        context.insert(loanAccount)
+        context.insert(profile)
+        context.insert(rule)
+        do {
+            try context.save()
+            _ = try RecurringStore.materializeDue(in: context, now: now)
+            return (loanAccount, profile, rule)
+        } catch {
+            context.rollback()
+            throw error
+        }
+    }
+
     /// 本金部分建成还款账户 -> 负债账户的转账；若金额超过本金，超出部分作为利息支出。
     static func repay(
         _ profile: LiabilityProfile,
