@@ -14,6 +14,7 @@
 - 导入回归覆盖停用账号跳过验证、单账号元数据失败不留孤儿凭据、批量回滚恢复用途选择/健康状态/安全凭据。
 - 验证：Flutter 全量 **1194/1194**；OAuth/JSON/传输 **48/48**；导入 Controller/仓库 **32/32**；Dart analyze 0 error（91 条既有 warning/info）；Android `:app:compileDebugKotlin` 成功；Release identity gate 通过（16 KiB、APK V2、固定证书）。
 - APK：`C:\src\xunni-codex\android-app\build\app\outputs\flutter-apk\app-release.apk`，117,658,041 字节，SHA256 `8e02474d7bf81e60bc6201b0ffff60024d5fd16cef95057b78ea30944c8a9cd9`。
+- Git：commit `e998ebc` 已推送到 `origin/feature/ai-model-selector`。线上 `releaseId=v297-8e02474d7bf8`，公网 `version.json`、manifest、5 个分片拼接哈希均与本地 APK 一致；KV retention 已验证保留 `v297` 与上一版 `v296`，共 13 个 key。
 - 本轮无在线 Android ADB；Chrome Ephemeral/账号选择、手机 VPN 出口、localhost 回调、安装冷启动及输入法/字体观感仍需目标手机复测；未使用 Plus 账号。
 
 ## -1.0.13. 2026-08-31 GPT OAuth、Cockpit JSON 与架构收口（v1.281.0+295）

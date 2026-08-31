@@ -6,6 +6,7 @@
 - **事务回归加强**：补充禁用账号跳过验证、单账号元数据失败无孤儿凭据、批量回滚恢复选择/健康状态/安全凭据等测试。
 - **验证**：Flutter 全量 **1194/1194**；OAuth/JSON/传输定向 **48/48**；导入 Controller/仓库定向 **32/32**；Dart analyze 0 error（91 条既有 warning/info）；Android `:app:compileDebugKotlin` 成功；Release identity gate 通过（16 KiB、APK V2、固定证书）。
 - **APK**：`C:\src\xunni-codex\android-app\build\app\outputs\flutter-apk\app-release.apk`，117,658,041 字节，SHA256 `8e02474d7bf81e60bc6201b0ffff60024d5fd16cef95057b78ea30944c8a9cd9`。
+- **线上发布**：commit `e998ebc` 已推送到 `origin/feature/ai-model-selector`；`releaseId=v297-8e02474d7bf8` 已原子切换，公网 `version.json`、manifest 与 5 个分片拼接哈希一致，KV retention 保留当前 `v297` 与上一版 `v296`（13 keys）。
 - **边界**：当前无在线 Android ADB；手机 Chrome 账号选择、VPN 出口、localhost 回调、安装冷启动和实机字体/输入法观感仍需目标设备复测；未使用 Plus 账号。
 
 ## 2026-08-31 v1.282.0+296 AI 账号导入事务与架构收口
