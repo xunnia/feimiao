@@ -36,6 +36,26 @@ enum AIChatAttachmentStore {
     static let maxImageBytes = 20 * 1024 * 1024
     static let maxFileBytes = 50 * 1024 * 1024
 
+    static func hasCapacity(
+        for mimeType: String,
+        existing: [AIChatAttachment]
+    ) -> Bool {
+        let isImage = mimeType.lowercased().hasPrefix("image/")
+        let count = existing.reduce(into: 0) { count, attachment in
+            if attachment.isImage == isImage { count += 1 }
+        }
+        return count < (isImage ? maxImages : maxFiles)
+    }
+
+    static func canDiscardDraftAttachments(
+        pendingConsent: Bool,
+        photoPickerPresented: Bool,
+        fileImporterPresented: Bool,
+        preservingForSend: Bool
+    ) -> Bool {
+        !pendingConsent && !photoPickerPresented && !fileImporterPresented && !preservingForSend
+    }
+
     static func persist(data: Data, name: String, mimeType: String) throws -> AIChatAttachment {
         let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
         let safeName = trimmedName.isEmpty ? "附件" : trimmedName
