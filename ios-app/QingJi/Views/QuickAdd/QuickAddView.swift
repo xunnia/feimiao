@@ -21,6 +21,9 @@ struct QuickAddView: View {
     private var books: [Book]
     @Query(sort: \Tag.sortOrder)
     private var tags: [Tag]
+    @Query private var budgetPlansV2: [BudgetPlanRecord]
+    @Query private var budgetRevisionsV2: [BudgetPlanRevisionRecord]
+    @Query private var budgetOverridesV2: [BudgetCycleOverrideRecord]
 
     @State private var kind: TransactionKind = .expense
     @State private var expression = AmountExpression()
@@ -552,6 +555,25 @@ struct QuickAddView: View {
 
     /// 设置过预算时计算「今日可花」。
     private func loadBudgetStatus() {
+        let all = (try? context.fetch(FetchDescriptor<MoneyTransaction>())) ?? []
+        if let bookID = effectiveBook?.stableID {
+            let scopedRecords = all
+                .filter { $0.book?.stableID == bookID }
+                .map(\.record)
+            if let v2Status = BudgetStore.currentStatusV2(
+                plans: budgetPlansV2.map(\.core),
+                revisions: budgetRevisionsV2.map(\.core),
+                overrides: budgetOverridesV2.map(\.core),
+                bookID: bookID,
+                records: scopedRecords,
+                referenceDate: AppClock.now,
+                knowledgeCutoff: AppClock.now
+            ) {
+                budgetStatus = v2Status
+                return
+            }
+        }
+
         let budgets = (try? context.fetch(FetchDescriptor<Budget>())) ?? []
         guard let budget = BudgetStore.effectiveTotalBudget(
             from: budgets,
@@ -561,8 +583,7 @@ struct QuickAddView: View {
             budgetStatus = nil
             return
         }
-        let all = (try? context.fetch(FetchDescriptor<MoneyTransaction>())) ?? []
-        let scoped = LedgerScope.filter(all, selectedBookID: router.selectedBookID)
+        let scoped = LedgerScope.filter(all, selectedBookID: effectiveBook?.stableID)
         budgetStatus = BudgetStore.status(
             for: budget,
             transactions: scoped,

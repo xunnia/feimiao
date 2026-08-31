@@ -40,12 +40,29 @@ enum WidgetSnapshotWriter {
             privacy ? "••••" : MoneyFormat.string(value, currencyCode: currency)
         }
 
+        let budgetPlansV2 = (try? context.fetch(FetchDescriptor<BudgetPlanRecord>())) ?? []
+        let budgetRevisionsV2 = (try? context.fetch(FetchDescriptor<BudgetPlanRevisionRecord>())) ?? []
+        let budgetOverridesV2 = (try? context.fetch(FetchDescriptor<BudgetCycleOverrideRecord>())) ?? []
+        let v2Status: BudgetStatus? = {
+            guard let bookID = selectedBook?.stableID else { return nil }
+            BudgetStore.currentStatusV2(
+                plans: budgetPlansV2.map(\.core),
+                revisions: budgetRevisionsV2.map(\.core),
+                overrides: budgetOverridesV2.map(\.core),
+                bookID: bookID,
+                records: records,
+                referenceDate: now,
+                knowledgeCutoff: now,
+                calendar: calendar
+            )
+        }()
         let budgets = (try? context.fetch(FetchDescriptor<Budget>())) ?? []
-        let budget = budgets.first(where: {
-            $0.isActive && $0.categoryKey == nil &&
-            ($0.bookID == selectedBook?.stableID || $0.bookID == nil)
-        })
-        let budgetStatus = budget.map {
+        let legacyBudget = BudgetStore.effectiveTotalBudget(
+            from: budgets,
+            selectedBookID: selectedBook?.stableID,
+            fallbackBookID: selectedBook?.stableID
+        )
+        let budgetStatus = v2Status ?? legacyBudget.map {
             BudgetStore.status(
                 for: $0,
                 transactions: scoped,
@@ -53,19 +70,21 @@ enum WidgetSnapshotWriter {
                 calendar: calendar
             )
         }
+        let budgetAmount = v2Status?.monthlyBudget ?? legacyBudget?.amount
+        let hasBudget = budgetAmount.map { $0 > 0 } ?? false
         let budgetRemaining = budgetStatus?.remaining ?? 0
         let budgetProgress: Int = {
-            guard let budget, budget.amount > 0 else { return 0 }
+            guard let budgetAmount, budgetAmount > 0 else { return 0 }
             let ratio = NSDecimalNumber(decimal: budgetStatus?.spentThisMonth ?? summary.totalExpense).doubleValue /
-                max(NSDecimalNumber(decimal: budget.amount).doubleValue, 0.01)
+                max(NSDecimalNumber(decimal: budgetAmount).doubleValue, 0.01)
             return Int((min(max(ratio, 0), 1) * 100).rounded())
         }()
-        let budgetText = budget == nil
+        let budgetText = !hasBudget
             ? money(summary.totalExpense)
             : (budgetRemaining >= 0 ? money(budgetRemaining) : "超 \(money(-budgetRemaining))")
-        let budgetHint = budget == nil
+        let budgetHint = !hasBudget
             ? "未设置预算 · 已展示本月支出"
-            : "已用 \(money(budgetStatus?.spentThisMonth ?? summary.totalExpense)) / \(money(budget?.amount ?? 0))"
+            : "已用 \(money(budgetStatus?.spentThisMonth ?? summary.totalExpense)) / \(money(budgetAmount ?? 0))"
 
         let categoryTotals = summary.expenseByCategory.prefix(3).map { item in
             let ratio = summary.totalExpense > 0
@@ -94,7 +113,7 @@ enum WidgetSnapshotWriter {
             monthExpenseText: money(summary.totalExpense),
             monthIncomeText: money(summary.totalIncome),
             balanceText: money(summary.balance),
-            budgetTitle: budget == nil ? "本月支出" : "预算剩余",
+            budgetTitle: hasBudget ? "预算剩余" : "本月支出",
             budgetText: budgetText,
             budgetHint: budgetHint,
             budgetProgress: budgetProgress,

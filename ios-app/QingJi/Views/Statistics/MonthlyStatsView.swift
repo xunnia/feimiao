@@ -16,6 +16,9 @@ struct MonthlyStatsView: View {
     @Query private var budgets: [Budget]
     @Query(sort: \Book.sortOrder)
     private var books: [Book]
+    @Query private var budgetPlansV2: [BudgetPlanRecord]
+    @Query private var budgetRevisionsV2: [BudgetPlanRevisionRecord]
+    @Query private var budgetOverridesV2: [BudgetCycleOverrideRecord]
 
     @State private var displayedMonth = AppClock.now
     @State private var weekStart = Calendar.current.startOfDay(for: AppClock.now)
@@ -197,11 +200,39 @@ struct MonthlyStatsView: View {
             year: components.year ?? 2026,
             month: components.month ?? 1
         )
-        let budget = BudgetStore.effectiveTotalBudget(
+        let legacyBudget = BudgetStore.effectiveTotalBudget(
             from: budgets,
             selectedBookID: router.selectedBookID,
             fallbackBookID: books.first(where: \.isDefault)?.stableID
         )
+        let monthStart = Calendar.current.date(from: components) ?? displayedMonth
+        let monthEnd = Calendar.current.date(byAdding: .month, value: 1, to: monthStart) ?? monthStart
+        let v2BookID = router.selectedBookID ?? books.first(where: \.isDefault)?.stableID
+        let v2Records = v2BookID.map { selectedBookID in
+            snapshot.records.filter { $0.bookID == selectedBookID }
+        } ?? []
+        let v2Status = v2BookID.flatMap { selectedBookID in
+            BudgetStore.statusV2(
+                plans: budgetPlansV2.map(\.core),
+                revisions: budgetRevisionsV2.map(\.core),
+                overrides: budgetOverridesV2.map(\.core),
+                bookID: selectedBookID,
+                records: v2Records,
+                windowStart: monthStart,
+                windowEndExclusive: monthEnd,
+                referenceDate: displayedMonth,
+                knowledgeCutoff: AppClock.now
+            )
+        }
+        let legacyStatus = legacyBudget.map { budget in
+            statisticsCache.status(
+                for: budget,
+                records: snapshot.records,
+                revision: snapshot.revision,
+                referenceDate: displayedMonth
+            )
+        }
+        let budgetStatus = v2Status ?? legacyStatus
         return VStack(spacing: 20) {
             monthHeader
             totalsCards(
@@ -210,11 +241,10 @@ struct MonthlyStatsView: View {
                 balance: summary.balance,
                 currencyCode: snapshot.scopedCurrencyCode
             )
-            if let budget {
+            if let budgetStatus {
                 budgetProgress(
-                    budget,
-                    records: snapshot.records,
-                    revision: snapshot.revision,
+                    budget: budgetStatus.monthlyBudget,
+                    status: budgetStatus,
                     currencyCode: snapshot.scopedCurrencyCode
                 )
             }
@@ -403,24 +433,17 @@ struct MonthlyStatsView: View {
 
     /// 月度预算执行条 + 今日可花。
     private func budgetProgress(
-        _ budget: Budget,
-        records: [TransactionRecord],
-        revision: IOSLedgerDataRevision,
+        budget: Decimal,
+        status: BudgetStatus,
         currencyCode: String
     ) -> some View {
-        let status = statisticsCache.status(
-            for: budget,
-            records: records,
-            revision: revision,
-            referenceDate: displayedMonth
-        )
-        let ratio = min(MoneyFormat.double(status.spentThisMonth) / max(MoneyFormat.double(budget.amount), 0.01), 1)
+        let ratio = min(MoneyFormat.double(status.spentThisMonth) / max(MoneyFormat.double(budget), 0.01), 1)
         return VStack(alignment: .leading, spacing: 8) {
             HStack {
                 Text("本月预算")
                     .font(.headline)
                 Spacer()
-                Text("\(MoneyFormat.string(status.spentThisMonth, currencyCode: currencyCode)) / \(MoneyFormat.string(budget.amount, currencyCode: currencyCode))")
+                Text("\(MoneyFormat.string(status.spentThisMonth, currencyCode: currencyCode)) / \(MoneyFormat.string(budget, currencyCode: currencyCode))")
                     .font(.subheadline.monospacedDigit())
                     .foregroundStyle(status.isOverBudget ? Color.warning : Color.secondary)
                     .lineLimit(1)

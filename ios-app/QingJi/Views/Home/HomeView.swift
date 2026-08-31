@@ -27,6 +27,9 @@ struct HomeView: View {
     @Query(sort: \Book.sortOrder)
     private var books: [Book]
     @Query private var budgets: [Budget]
+    @Query private var budgetPlansV2: [BudgetPlanRecord]
+    @Query private var budgetRevisionsV2: [BudgetPlanRevisionRecord]
+    @Query private var budgetOverridesV2: [BudgetCycleOverrideRecord]
     @State private var transactionFilter: HomeTransactionFilter = .all
     @State private var displayedMonth = AppClock.now
     @State private var monthPickerDate = AppClock.now
@@ -60,12 +63,36 @@ struct HomeView: View {
             year: components.year ?? 2000,
             month: components.month ?? 1
         )
-        let totalBudget = BudgetStore.effectiveTotalBudget(
+        let legacyBudget = BudgetStore.effectiveTotalBudget(
             from: budgets,
             selectedBookID: router.selectedBookID,
             fallbackBookID: books.first(where: \.isDefault)?.stableID
         )
-        let budgetStatus = totalBudget.map { budget in
+        let monthStart = startOfMonth(displayedMonth)
+        let monthEnd = Calendar.current.date(byAdding: .month, value: 1, to: monthStart) ?? monthStart
+        let v2BookID = router.selectedBookID ?? books.first(where: \.isDefault)?.stableID
+        let v2Records = v2BookID.map { selectedBookID in
+            snapshot.includedRecords.filter { $0.bookID == selectedBookID }
+        } ?? []
+        let v2BudgetStatus = v2BookID.flatMap { selectedBookID in
+            BudgetStore.statusV2(
+                plans: budgetPlansV2.map(\.core),
+                revisions: budgetRevisionsV2.map(\.core),
+                overrides: budgetOverridesV2.map(\.core),
+                bookID: selectedBookID,
+                records: v2Records,
+                windowStart: monthStart,
+                windowEndExclusive: monthEnd,
+                referenceDate: Calendar.current.isDate(
+                    displayedMonth,
+                    equalTo: now,
+                    toGranularity: .month
+                ) ? now : displayedMonth,
+                knowledgeCutoff: now
+            )
+        }
+        let totalBudgetAmount = v2BudgetStatus?.monthlyBudget ?? legacyBudget?.amount
+        let budgetStatus = v2BudgetStatus ?? legacyBudget.map { budget in
             statisticsCache.status(
                 for: budget,
                 records: snapshot.includedRecords,
@@ -92,7 +119,7 @@ struct HomeView: View {
                 LazyVStack(alignment: .leading, spacing: 18) {
                     summaryCard(
                         summary: summary,
-                        totalBudget: totalBudget,
+                        budgetAmount: totalBudgetAmount,
                         status: budgetStatus,
                         currencyCode: snapshot.includedCurrencyCode,
                         now: now
@@ -197,7 +224,7 @@ struct HomeView: View {
 
     private func summaryCard(
         summary: MonthlySummary,
-        totalBudget: Budget?,
+        budgetAmount: Decimal?,
         status: BudgetStatus?,
         currencyCode: String,
         now: Date
@@ -238,11 +265,11 @@ struct HomeView: View {
                 Spacer()
             }
 
-            if let totalBudget, let status {
+            if let budgetAmount, let status {
                 BudgetSummaryBody(
                     summary: summary,
                     status: status,
-                    budget: totalBudget.amount,
+                    budget: budgetAmount,
                     isCurrentMonth: Calendar.current.isDate(displayedMonth, equalTo: now, toGranularity: .month),
                     currencyCode: currencyCode
                 )
