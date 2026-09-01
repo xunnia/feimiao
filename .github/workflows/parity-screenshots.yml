@@ -16,8 +16,11 @@ permissions:
   contents: write
 
 concurrency:
-  group: parity-screenshots-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  # Share the writer queue with iOS CI: both workflows push generated files
+  # to the same branch and must never rebase/push concurrently. Queue rather
+  # than cancel so one source push still produces both kinds of evidence.
+  group: branch-artifact-writer-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   android-screenshots:
@@ -326,6 +329,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.ref_name }}
+          fetch-depth: 0
       - name: Install comparison tooling
         run: python3 -m pip install --disable-pip-version-check --user Pillow
       - uses: actions/download-artifact@v4
@@ -377,5 +383,18 @@ jobs:
           # commit; the report remains staged.
           git restore -- ci-artifacts/ios-screenshots
           git commit -m "ci: 更新双端截图报告 [skip ci]"
-          git pull --rebase origin "${GITHUB_REF_NAME}"
-          git push origin HEAD:"${GITHUB_REF_NAME}"
+          branch="${GITHUB_REF_NAME}"
+          for attempt in 1 2 3; do
+            echo "回写双端报告（第 ${attempt}/3 次）"
+            if git fetch origin "${branch}" && \
+              git rebase "origin/${branch}" && \
+              git push origin HEAD:"${branch}"; then
+              exit 0
+            fi
+            git rebase --abort || true
+            if [ "${attempt}" -lt 3 ]; then
+              sleep $((attempt * 5))
+            fi
+          done
+          echo "::error::双端截图报告回写在 3 次尝试后仍失败"
+          exit 1

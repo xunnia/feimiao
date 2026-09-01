@@ -11,6 +11,13 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  # iOS CI and the parity workflow both write generated artifacts back to the
+  # same branch. Keep them in one queue so their commits cannot race. Do not
+  # cancel the other workflow when both are triggered by one source commit.
+  group: branch-artifact-writer-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   core-tests:
     name: 核心逻辑单元测试
@@ -431,5 +438,18 @@ jobs:
             exit 0
           fi
           git commit -m "ci: 更新 iOS 截图与 IPA [skip ci]"
-          git pull --rebase origin "${GITHUB_REF_NAME}"
-          git push origin HEAD:"${GITHUB_REF_NAME}"
+          branch="${GITHUB_REF_NAME}"
+          for attempt in 1 2 3; do
+            echo "回写 iOS 产物（第 ${attempt}/3 次）"
+            if git fetch origin "${branch}" && \
+              git rebase "origin/${branch}" && \
+              git push origin HEAD:"${branch}"; then
+              exit 0
+            fi
+            git rebase --abort || true
+            if [ "${attempt}" -lt 3 ]; then
+              sleep $((attempt * 5))
+            fi
+          done
+          echo "::error::iOS 产物回写在 3 次尝试后仍失败"
+          exit 1
