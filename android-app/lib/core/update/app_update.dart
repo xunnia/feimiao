@@ -60,11 +60,110 @@ class AppUpdateInfo {
       : '${(sizeBytes / 1024 / 1024).toStringAsFixed(1)} MB';
 }
 
+/// A historical build that was repackaged with a monotonically increasing
+/// Android install versionCode.  Android's ordinary package installer will
+/// only replace an installed package when the signing certificate matches and
+/// the package versionCode is not lower.  [sourceVersionCode] is the version
+/// users recognise; [installVersionCode] is the immutable install sequence
+/// used by the OS.
+class AppRollbackInfo {
+  final String versionName;
+  final int sourceVersionCode;
+  final int installVersionCode;
+  final String url;
+  final String notes;
+  final int sizeBytes;
+  final String sha256;
+  final String releaseId;
+  final int? databaseVersion;
+
+  const AppRollbackInfo({
+    required this.versionName,
+    required this.sourceVersionCode,
+    required this.installVersionCode,
+    required this.url,
+    required this.notes,
+    required this.sizeBytes,
+    required this.sha256,
+    required this.releaseId,
+    this.databaseVersion,
+  });
+
+  static AppRollbackInfo? fromJson(Map<String, dynamic> json) {
+    final sourceCode = _readPositiveInt(
+      json['sourceVersionCode'] ??
+          json['source_version_code'] ??
+          json['versionCode'],
+    );
+    final installCode = _readPositiveInt(
+      json['installVersionCode'] ?? json['install_version_code'],
+    );
+    final nameRaw = json['versionName'] ?? json['version_name'];
+    final name = nameRaw is String ? nameRaw : null;
+    final rawUrl = json['url'];
+    if (sourceCode == null ||
+        installCode == null ||
+        name == null ||
+        name.trim().isEmpty ||
+        rawUrl is! String ||
+        !isSecureUpdateUrl(rawUrl)) {
+      return null;
+    }
+    final releaseId =
+        (json['releaseId'] ?? json['release_id'] ?? '').toString().trim();
+    if (!RegExp(r'^v\d+-[0-9a-f]{12}$').hasMatch(releaseId)) return null;
+    final db = _readPositiveInt(
+      json['databaseVersion'] ?? json['database_version'],
+    );
+    return AppRollbackInfo(
+      versionName: name.trim(),
+      sourceVersionCode: sourceCode,
+      installVersionCode: installCode,
+      url: rawUrl.trim(),
+      notes: json['notes'] is String ? json['notes'] as String : '',
+      sizeBytes: (json['sizeBytes'] as num?)?.toInt() ?? 0,
+      sha256: AppUpdateInfo.sanitizeSha256(json['sha256'] as String?),
+      releaseId: releaseId,
+      databaseVersion: db,
+    );
+  }
+
+  /// Convert the catalog entry to the same download/install pipeline used by
+  /// normal updates.  The install sequence, rather than the historical source
+  /// code, is intentionally passed to DownloadManager and the installer.
+  AppUpdateInfo get installInfo => AppUpdateInfo(
+        versionName: versionName,
+        versionCode: installVersionCode,
+        url: url,
+        notes: notes,
+        sizeBytes: sizeBytes,
+        sha256: sha256,
+        releaseId: releaseId,
+      );
+
+  String get sizeText => installInfo.sizeText;
+}
+
+int? _readPositiveInt(Object? raw) {
+  final value = raw is num ? raw.toInt() : int.tryParse(raw?.toString() ?? '');
+  return value != null && value > 0 ? value : null;
+}
+
+bool isSecureUpdateUrl(String raw) {
+  final uri = Uri.tryParse(raw.trim());
+  return uri != null &&
+      uri.scheme.toLowerCase() == 'https' &&
+      uri.host.isNotEmpty &&
+      uri.userInfo.isEmpty;
+}
+
 class AppUpdate {
   AppUpdate._();
 
   static const versionJsonUrl =
       'https://updates.xunni9481.dpdns.org/version.json';
+  static const rollbackJsonUrl =
+      'https://updates.xunni9481.dpdns.org/rollback.json';
   static const _channel = MethodChannel('feimiao/update');
   static const _headerTimeout = Duration(seconds: 30);
   static const _idleTimeout = Duration(seconds: 60);
@@ -81,9 +180,63 @@ class AppUpdate {
         jsonDecode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>,
       );
       if (info == null) return null;
-      return info.versionCode > AppVersion.buildNumber ? info : null;
+      return info.versionCode > await installedVersionCode() ? info : null;
     } catch (_) {
       return null;
+    }
+  }
+
+  /// The compile-time Flutter build number is not sufficient after installing
+  /// a rollback-compatible APK: its Dart code intentionally keeps the old
+  /// source version while Android sees a newer install sequence.  Ask the
+  /// package manager for the value that will actually gate the next install.
+  /// Non-Android tests and old builds fall back to the compile-time value.
+  static Future<int> installedVersionCode() async {
+    try {
+      final value = await _channel.invokeMethod<num>('installedVersionCode');
+      final code = value?.toInt() ?? 0;
+      if (code > 0) return code;
+    } catch (_) {}
+    return AppVersion.buildNumber;
+  }
+
+  /// Fetch the immutable historical-build catalog.  APK bytes are not
+  /// embedded in the catalog: each entry may point to the worker's immutable
+  /// release endpoint or to an external HTTPS archive (for example a GitHub
+  /// Release/R2 object), so KV retention can keep only the active pair.
+  static Future<List<AppRollbackInfo>> fetchRollbackCatalog() async {
+    try {
+      final resp = await http
+          .get(Uri.parse(rollbackJsonUrl))
+          .timeout(const Duration(seconds: 10));
+      if (resp.statusCode != 200) return const [];
+      final decoded = jsonDecode(utf8.decode(resp.bodyBytes));
+      final rawEntries = decoded is List
+          ? decoded
+          : decoded is Map<String, dynamic>
+              ? (decoded['versions'] ??
+                  decoded['rollbacks'] ??
+                  decoded['items'])
+              : null;
+      if (rawEntries is! List) return const [];
+      final entries = <AppRollbackInfo>[];
+      final seen = <String>{};
+      for (final raw in rawEntries) {
+        if (raw is! Map) continue;
+        final entry = AppRollbackInfo.fromJson(
+          Map<String, dynamic>.from(raw),
+        );
+        if (entry == null || !seen.add(entry.releaseId)) continue;
+        entries.add(entry);
+      }
+      entries.sort(
+        (a, b) => b.sourceVersionCode.compareTo(a.sourceVersionCode) == 0
+            ? b.installVersionCode.compareTo(a.installVersionCode)
+            : b.sourceVersionCode.compareTo(a.sourceVersionCode),
+      );
+      return entries;
+    } catch (_) {
+      return const [];
     }
   }
 
@@ -172,7 +325,8 @@ class AppUpdate {
   /// 已经安装到本机的旧版本下载不再有价值，启动检查时顺手清理。
   static Future<void> cleanupObsoletePendingDownload() async {
     final pending = await pendingDownload();
-    if (pending != null && pending.versionCode <= AppVersion.buildNumber) {
+    if (pending != null &&
+        pending.versionCode <= await installedVersionCode()) {
       await discardPendingDownload(pending);
     }
   }

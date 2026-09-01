@@ -117,27 +117,27 @@ tasks.configureEach {
     }
 }
 
-// With the current AGP/KGP combination those legacy library modules publish
-// their Kotlin classes in the runtime-to-jar artifact, while the compile-to-
-// jar artifact contains only R classes.  The generated registrant is Java and
-// must see the actual plugin classes during release compilation.  Keep these
-// jars compile-only here; the normal Flutter plugin dependencies still own
-// the runtime packaging.
-val legacyPluginRuntimeJars = listOf(
-    project(":charset_converter").layout.buildDirectory.file(
-        "intermediates/runtime_library_classes_jar/release/bundleLibRuntimeToJarRelease/classes.jar",
+// With the current AGP/KGP combination those legacy library modules can emit
+// only R classes in their compile/runtime jars even though Kotlin has written
+// the real plugin classes to tmp/kotlin-classes/release.  The generated
+// registrant is Java and must see those classes during release compilation.
+// Keep the directories compile-only here; normal Flutter plugin dependencies
+// still own runtime packaging.
+val legacyPluginRuntimeClasses = listOf(
+    project(":charset_converter").layout.buildDirectory.dir(
+        "tmp/kotlin-classes/release",
     ),
-    project(":share_plus").layout.buildDirectory.file(
-        "intermediates/runtime_library_classes_jar/release/bundleLibRuntimeToJarRelease/classes.jar",
+    project(":share_plus").layout.buildDirectory.dir(
+        "tmp/kotlin-classes/release",
     ),
-    project(":workmanager_android").layout.buildDirectory.file(
-        "intermediates/runtime_library_classes_jar/release/bundleLibRuntimeToJarRelease/classes.jar",
+    project(":workmanager_android").layout.buildDirectory.dir(
+        "tmp/kotlin-classes/release",
     ),
 )
 tasks.withType<JavaCompile>().configureEach {
     if (name == "compileReleaseJavaWithJavac") {
         doFirst {
-            classpath = (classpath ?: project.files()).plus(project.files(legacyPluginRuntimeJars))
+            classpath = (classpath ?: project.files()).plus(project.files(legacyPluginRuntimeClasses))
         }
     }
 }

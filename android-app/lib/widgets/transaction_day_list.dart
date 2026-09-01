@@ -2,6 +2,7 @@ import 'package:decimal/decimal.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../core/app_clock.dart';
 import '../core/models/cat_svg_icon.dart';
 import '../core/models/category_seed.dart';
 import '../core/models/transaction_card_display.dart';
@@ -78,7 +79,7 @@ class TxDaySectionHeader extends StatelessWidget {
   const TxDaySectionHeader({super.key, required this.section});
 
   String _dateLabel() {
-    final now = DateTime.now();
+    final now = AppClock.now;
     final today = DateTime(now.year, now.month, now.day);
     final yesterday = today.subtract(const Duration(days: 1));
     final full =
@@ -256,7 +257,8 @@ class TxRow extends StatelessWidget {
     if (_isRefund) {
       return '+${MoneyFormat.string(transaction.amount.abs(), currencyCode: transaction.currencyCode)}';
     }
-    final text = MoneyFormat.string(transaction.amount, currencyCode: transaction.currencyCode);
+    final text = MoneyFormat.string(transaction.amount,
+        currencyCode: transaction.currencyCode);
     switch (transaction.txKind) {
       case TransactionKind.expense:
         return '-$text';
@@ -357,7 +359,8 @@ class TxRow extends StatelessWidget {
           const SizedBox(width: AppSpacing.md),
           if (hasRefund) ...[
             Text(
-              MoneyFormat.string(transaction.amount, currencyCode: transaction.currencyCode),
+              MoneyFormat.string(transaction.amount,
+                  currencyCode: transaction.currencyCode),
               style: Theme.of(context).textTheme.labelSmall?.copyWith(
                     color: AppTextColor.hint(scheme),
                     decoration: TextDecoration.lineThrough,
@@ -367,7 +370,8 @@ class TxRow extends StatelessWidget {
             const SizedBox(width: 6),
             Text(
               net <= Decimal.zero
-                  ? MoneyFormat.string(net, currencyCode: transaction.currencyCode)
+                  ? MoneyFormat.string(net,
+                      currencyCode: transaction.currencyCode)
                   : '-${MoneyFormat.string(net, currencyCode: transaction.currencyCode)}',
               style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                 color: scheme.onSurface,

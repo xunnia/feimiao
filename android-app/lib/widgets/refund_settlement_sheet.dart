@@ -2,6 +2,7 @@ import 'package:decimal/decimal.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../core/app_clock.dart';
 import '../core/account/account_movement_projection.dart';
 import '../core/money_format.dart';
 import '../data/app_repository.dart';
@@ -53,7 +54,7 @@ Future<RefundSettlementResult?> showRefundSettlementSheet(
       amountEditable: amountEditable,
       title: title,
       confirmLabel: confirmLabel,
-      initialSettledAt: DateTime.now(),
+      initialSettledAt: AppClock.now,
       existingRefunds: existingRefunds,
       onDeleteRefund: onDeleteRefund,
       onConfirmSettlement: onConfirmSettlement,
@@ -304,8 +305,8 @@ class _RefundSettlementSheetState extends State<RefundSettlementSheet> {
                                   for (final account in accounts)
                                     IosMenuItem(
                                       label: account.name,
-                                      icon: Icons
-                                          .account_balance_wallet_outlined,
+                                      icon:
+                                          Icons.account_balance_wallet_outlined,
                                       selected: account.id == _accountId,
                                       onTap: () => setState(
                                         () => _accountId = account.id,
@@ -429,7 +430,7 @@ class _RefundSettlementSheetState extends State<RefundSettlementSheet> {
   }
 
   Future<void> _pickDate() async {
-    final now = DateTime.now();
+    final now = AppClock.now;
     final selected = await showAppDatePicker(
       context,
       initial: _settledAt ?? now,

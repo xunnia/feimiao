@@ -1,13 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  GPT/Codex OAuth registers an HTTP loopback redirect. User-configured AI
-  relays may also be local/private HTTP services; the Dart URL policy and
-  AiHttpTransport keep public cleartext hosts blocked. HTTPS remains the
-  preferred/default protocol.
+  GPT/Codex OAuth registers an HTTP loopback redirect. Keep cleartext denied
+  everywhere else. HTTPS remains the preferred/default protocol and is not
+  affected by this allowlist.
 -->
 <network-security-config>
-    <!-- Android has no CIDR syntax for private IP ranges. The application
-         layer allowlist above is the security boundary for cleartext AI
-         requests, so the socket policy must allow the permitted LAN hosts. -->
-    <base-config cleartextTrafficPermitted="true" />
+    <base-config cleartextTrafficPermitted="false" />
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">localhost</domain>
+    </domain-config>
 </network-security-config>

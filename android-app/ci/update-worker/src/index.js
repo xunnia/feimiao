@@ -3,6 +3,12 @@
 // GET /version.json
 //   Returns the active version metadata.
 //
+// GET /rollback.json
+//   Returns the signed historical-build catalog.  Catalog entries carry an
+//   immutable HTTPS URL and an installVersionCode; the bytes may live in this
+//   worker's release chunks or in a separate archive (R2/GitHub Releases), so
+//   normal KV retention does not have to keep every historical APK.
+//
 // GET /feimiao-latest.apk?release=<releaseId>
 //   Streams apk:<releaseId>:0..N-1. The publish script writes all chunks and
 //   apk:<releaseId>:manifest first, then switches version.json last, so users
@@ -35,6 +41,19 @@ export default {
       return new Response(body, {
         headers: {
           "content-type": "application/json; charset=utf-8",
+          "cache-control": "no-cache",
+        },
+      });
+    }
+
+    if (url.pathname === "/rollback.json") {
+      const body = await env.UPDATES.get("rollback.json");
+      if (body === null) return new Response("not found", { status: 404 });
+      return new Response(body, {
+        headers: {
+          "content-type": "application/json; charset=utf-8",
+          // The catalog is changed atomically with a publish operation, so a
+          // short cache avoids stale lists without pinning an old release.
           "cache-control": "no-cache",
         },
       });

@@ -2,6 +2,7 @@ import 'package:decimal/decimal.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../../core/app_clock.dart';
 import '../../core/amount_expression.dart';
 import '../../core/models/transaction_kind.dart';
 import '../../core/transaction_time.dart';
@@ -635,7 +636,7 @@ class _DetailBar extends StatelessWidget {
                 context,
                 initial: date,
                 first: DateTime(2000),
-                last: DateTime.now(),
+                last: AppClock.now,
                 title: '选择日期',
               );
               if (picked != null) onDateChanged(picked);
@@ -671,7 +672,7 @@ class _DetailBar extends StatelessWidget {
   }
 
   String _dateLabel() {
-    final now = DateTime.now();
+    final now = AppClock.now;
     final today = DateTime(now.year, now.month, now.day);
     final d = DateTime(date.year, date.month, date.day);
     if (d == today) return '今天';

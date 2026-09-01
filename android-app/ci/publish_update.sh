@@ -70,6 +70,50 @@ echo "checking online version: $VERSION_URL"
 curl --fail --silent --show-error --location --max-time 30 \
   "$VERSION_URL" -o "$TMP/online-version.json"
 
+# A rollback-compatible APK deliberately uses an installVersionCode above the
+# active release.  Never reuse that reserved sequence for a later normal
+# release: after a user installs the rollback package, the next update must
+# still have a strictly higher Android versionCode.
+ROLLBACK_URL="${FEIMIAO_ROLLBACK_URL:-https://updates.xunni9481.dpdns.org/rollback.json}"
+ROLLBACK_STATUS="$(curl --silent --show-error --location --max-time 30 \
+  -o "$TMP/rollback-catalog.json" -w '%{http_code}' "$ROLLBACK_URL" || true)"
+case "$ROLLBACK_STATUS" in
+  200)
+    CANDIDATE_CODE="$VCODE" CURRENT_VERSION_FILE="$TMP/online-version.json" \
+      ROLLBACK_CATALOG_FILE="$TMP/rollback-catalog.json" node - <<'NODE'
+const fs = require('node:fs');
+const candidateCode = Number(process.env.CANDIDATE_CODE);
+const current = JSON.parse(fs.readFileSync(process.env.CURRENT_VERSION_FILE, 'utf8'));
+const currentCode = Number(current?.versionCode);
+const catalog = JSON.parse(fs.readFileSync(process.env.ROLLBACK_CATALOG_FILE, 'utf8'));
+const entries = Array.isArray(catalog)
+  ? catalog
+  : (catalog.versions ?? catalog.rollbacks ?? catalog.items ?? null);
+if (!Array.isArray(entries)) throw new Error('rollback catalog entries must be an array');
+const installCodes = entries.map((entry, index) => {
+  const code = Number(entry?.installVersionCode ?? entry?.install_version_code);
+  if (!Number.isSafeInteger(code) || code <= 0) {
+    throw new Error(`rollback catalog entry ${index} has invalid installVersionCode`);
+  }
+  return code;
+});
+const maxReserved = Math.max(0, ...installCodes);
+if (candidateCode > currentCode && maxReserved >= candidateCode) {
+  throw new Error(
+    `versionCode ${candidateCode} is reserved by rollback install sequence ${maxReserved}; ` +
+      'advance the normal release code beyond the reserved sequence',
+  );
+}
+NODE
+    ;;
+  404)
+    echo "no rollback catalog published yet"
+    ;;
+  *)
+    fail "could not read rollback catalog (HTTP $ROLLBACK_STATUS)"
+    ;;
+esac
+
 NSID="34c07e0793ea4fb8a526dd28eb1aa1b0"
 WRANGLER=(npx --yes --registry=https://registry.npmmirror.com wrangler)
 kv_put() {
@@ -115,10 +159,36 @@ retain_recent_releases() {
 
   NO_COLOR=1 "${WRANGLER[@]}" kv key list \
     --namespace-id="$NSID" --remote > "$TMP/retention-keys.json"
+  # rollback.json is an explicit retention contract.  Only preserve entries
+  # whose APK chunks are actually in this namespace; external HTTPS archives
+  # need no KV retention.  A malformed catalog fails closed before deletion.
+  printf '[]\n' > "$TMP/rollback-release-ids.json"
+  if NO_COLOR=1 "${WRANGLER[@]}" kv key get \
+    --namespace-id="$NSID" --remote rollback.json > "$TMP/rollback.json" 2>/dev/null; then
+    ROLLBACK_CATALOG_FILE="$TMP/rollback.json" RETENTION_KEYS_FILE="$TMP/retention-keys.json" \
+      node - <<'NODE' > "$TMP/rollback-release-ids.json"
+const fs = require('node:fs');
+const catalog = JSON.parse(fs.readFileSync(process.env.ROLLBACK_CATALOG_FILE, 'utf8'));
+const entries = Array.isArray(catalog)
+  ? catalog
+  : (catalog.versions ?? catalog.rollbacks ?? catalog.items ?? []);
+if (!Array.isArray(entries)) throw new Error('rollback.json entries must be an array');
+const keysRaw = JSON.parse(fs.readFileSync(process.env.RETENTION_KEYS_FILE, 'utf8'));
+const keys = new Set((Array.isArray(keysRaw) ? keysRaw : keysRaw.keys ?? [])
+  .map((entry) => typeof entry === 'string' ? entry : entry?.name)
+  .filter(Boolean));
+const ids = [...new Set(entries
+  .map((entry) => String(entry?.releaseId ?? entry?.release_id ?? '').trim())
+  .filter((id) => /^v\d+-[0-9a-f]{12}$/.test(id))
+  .filter((id) => keys.has(`apk:${id}:manifest`)))];
+process.stdout.write(JSON.stringify(ids));
+NODE
+  fi
   node "$SCRIPT_DIR/retention_policy.mjs" \
     --keys "$TMP/retention-keys.json" \
     --current-release "$RELEASE_ID" \
-    --keep 2 > "$TMP/retention-plan.json"
+    --keep 2 \
+    --preserve-release-ids "$TMP/rollback-release-ids.json" > "$TMP/retention-plan.json"
 
   RETENTION_PLAN_FILE="$TMP/retention-plan.json" node - <<'NODE'
 const fs = require('node:fs');
@@ -142,6 +212,7 @@ NODE
     --keys "$TMP/retention-keys-final.json" \
     --current-release "$RELEASE_ID" \
     --keep 2 \
+    --preserve-release-ids "$TMP/rollback-release-ids.json" \
     --assert-clean > "$TMP/retention-final.json"
   RETENTION_FINAL_FILE="$TMP/retention-final.json" node - <<'NODE'
 const fs = require('node:fs');

@@ -62,6 +62,15 @@ void main() {
       expect(contents, isNot(contains('@android:color/white')), reason: path);
     }
 
+    final networkPolicy = File(
+      'android/app/src/main/res/xml/oauth_network_security_config.xml',
+    ).readAsStringSync();
+    expect(networkPolicy, contains('cleartextTrafficPermitted="false"'));
+    expect(
+        networkPolicy, contains('<domain includeSubdomains="false">localhost'));
+    expect(networkPolicy,
+        isNot(contains('<base-config cleartextTrafficPermitted="true"')));
+
     for (final path in [
       'android/app/src/main/res/values-v31/styles.xml',
       'android/app/src/main/res/values-night-v31/styles.xml',

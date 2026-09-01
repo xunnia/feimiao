@@ -14,6 +14,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:provider/provider.dart';
 import 'package:share_plus/share_plus.dart';
 
+import '../../core/app_clock.dart';
 import '../../core/account/account_movement_projection.dart';
 import '../../core/export/export_range.dart';
 import '../../core/import/bill_import.dart';
@@ -77,7 +78,7 @@ class _ImportExportViewState extends State<ImportExportView> {
   }
 
   Future<ExportRange?> _pickExportRange() async {
-    final now = DateTime.now();
+    final now = AppClock.now;
     final currentMonth = ExportRange.dayStart(DateTime(now.year, now.month, 1));
     final options = ExportRange.presets(now);
 
@@ -161,7 +162,7 @@ class _ImportExportViewState extends State<ImportExportView> {
       final bookName = repo.currentBook?.name ?? '账本';
       // 文件名里的账本名要过滤非法字符（分享文案仍用原名）。
       final safeBookName = _sanitizeFileName(bookName);
-      final stamp = DateFormat('yyyyMMdd_HHmm').format(DateTime.now());
+      final stamp = DateFormat('yyyyMMdd_HHmm').format(AppClock.now);
       final file = File(
         '${dir.path}/肥喵记账_${safeBookName}_${range.fileSuffix}_$stamp.csv',
       );

@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart' show ImageSource;
 import 'package:provider/provider.dart';
 
+import '../../core/app_clock.dart';
 import '../../core/amount_expression.dart';
 import '../../core/haptics.dart';
 import '../../core/models/transaction_kind.dart';
@@ -182,7 +183,7 @@ class _ManualAddSheetState extends State<ManualAddSheet> {
   int? _selectedAccountId;
   int? _toAccountId; // 转账的「入款账户」
   int? _bookId; // 记到哪个账本（默认当前账本）
-  DateTime _date = DateTime.now();
+  DateTime _date = AppClock.now;
   final TextEditingController _noteController = TextEditingController();
   List<int> _tagIds = [];
   bool _reimbursable = false;
@@ -308,7 +309,7 @@ class _ManualAddSheetState extends State<ManualAddSheet> {
     // actual save. Editing preserves the original timestamp unless the user
     // explicitly changes fields; changing the day keeps that original clock.
     final transactionDate =
-        _isEdit ? _date : calendarDayWithClock(_date, DateTime.now());
+        _isEdit ? _date : calendarDayWithClock(_date, AppClock.now);
 
     // 转账：要两个不同账户；不占分类，也不进统计（引擎本来就跳过转账）。
     if (_kind == TransactionKind.transfer) {
@@ -471,31 +472,32 @@ class _ManualAddSheetState extends State<ManualAddSheet> {
     await showBlurSheet<void>(
       context,
       radius: 28,
-      child: Builder(builder: (ctx) => SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.only(bottom: 8),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              SheetHeader(
-                title: '选标签',
-                onClose: () => Navigator.pop(ctx),
-              ),
-              StatefulBuilder(
-                builder: (ctx2, setLocal) => TagSelector(
-                  selectedIds: _tagIds,
-                  onChanged: (v) {
-                    setLocal(() {});
-                    setState(() => _tagIds = v);
-                  },
+      child: Builder(
+          builder: (ctx) => SafeArea(
+                child: Padding(
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      SheetHeader(
+                        title: '选标签',
+                        onClose: () => Navigator.pop(ctx),
+                      ),
+                      StatefulBuilder(
+                        builder: (ctx2, setLocal) => TagSelector(
+                          selectedIds: _tagIds,
+                          onChanged: (v) {
+                            setLocal(() {});
+                            setState(() => _tagIds = v);
+                          },
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                    ],
+                  ),
                 ),
-              ),
-              const SizedBox(height: 8),
-            ],
-          ),
-        ),
-      )),
+              )),
     );
   }
 
@@ -820,7 +822,7 @@ class _ChipsRow extends StatelessWidget {
   });
 
   String _dateLabel() {
-    final now = DateTime.now();
+    final now = AppClock.now;
     final today = DateTime(now.year, now.month, now.day);
     final d = DateTime(date.year, date.month, date.day);
     if (d == today) return '今天';
@@ -852,7 +854,7 @@ class _ChipsRow extends StatelessWidget {
                 context,
                 initial: date,
                 first: DateTime(2000),
-                last: DateTime.now(),
+                last: AppClock.now,
                 title: '选择日期',
               );
               if (picked != null) onDateChanged(picked);

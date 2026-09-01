@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 
+import '../../core/app_clock.dart';
 import '../../widgets/ios_dialogs.dart';
 import '../../widgets/app_buttons.dart';
 import 'package:provider/provider.dart';
@@ -50,7 +51,7 @@ class _BackupViewState extends State<BackupView> {
     final repo = context.read<AppRepository>();
     try {
       final file = await repo.exportBackupPackage();
-      final now = DateTime.now();
+      final now = AppClock.now;
       final stamp =
           '${now.year}${now.month.toString().padLeft(2, '0')}${now.day.toString().padLeft(2, '0')}';
       await Share.shareXFiles(

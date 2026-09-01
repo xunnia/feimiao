@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
 import 'package:provider/provider.dart';
+import 'package:qingji/core/app_clock.dart';
 import 'package:qingji/core/models/recurring_rule.dart';
 import 'package:qingji/core/models/transaction_kind.dart';
 import 'package:qingji/core/import/bill_import.dart';
@@ -65,9 +66,7 @@ void main() {
               transaction.date.month == 8,
         )
         .fold<Decimal>(
-          Decimal.zero,
-          (sum, transaction) => sum + transaction.amount,
-        );
+            Decimal.zero, (sum, transaction) => sum + transaction.amount);
     final augustExpense = repo
         .visibleTransactionsForBookView(repo.currentBookId)
         .where(
@@ -114,7 +113,12 @@ void main() {
       const BudgetSettingView(),
       binding,
     );
-    await _captureAssetTab(tester, 'reconcile-android', '资金', binding);
+    await _captureAssetTab(
+      tester,
+      'reconcile-android',
+      '资金',
+      binding,
+    );
     await _capturePage(
       tester,
       'reimburse-android',
@@ -134,9 +138,24 @@ void main() {
       const RecurringView(),
       binding,
     );
-    await _captureAssetTab(tester, 'assets-android', '物品', binding);
-    await _captureAssetTab(tester, 'liabilities-android', '资金', binding);
-    await _captureAssetTab(tester, 'net-worth-android', '总览', binding);
+    await _captureAssetTab(
+      tester,
+      'assets-android',
+      '物品',
+      binding,
+    );
+    await _captureAssetTab(
+      tester,
+      'liabilities-android',
+      '资金',
+      binding,
+    );
+    await _captureAssetTab(
+      tester,
+      'net-worth-android',
+      '总览',
+      binding,
+    );
     // Accounts, reconciliation, liabilities and net worth are intentionally
     // represented by the Android asset hub's corresponding tabs.
     await _captureAssetTab(tester, 'accounts-android', '资金', binding);
@@ -146,7 +165,12 @@ void main() {
       const CategoriesView(),
       binding,
     );
-    await _capturePage(tester, 'tags-android', const TagsView(), binding);
+    await _capturePage(
+      tester,
+      'tags-android',
+      const TagsView(),
+      binding,
+    );
     await _capturePage(
       tester,
       'settings-android',
@@ -165,7 +189,12 @@ void main() {
       const AiSettingView(),
       binding,
     );
-    await _capturePage(tester, 'memory-android', const MemoryView(), binding);
+    await _capturePage(
+      tester,
+      'memory-android',
+      const MemoryView(),
+      binding,
+    );
     await _capturePage(
       tester,
       'ai-tasks-android',
@@ -208,7 +237,12 @@ void main() {
       const LocalModelCompanionView(),
       binding,
     );
-    await _capturePage(tester, 'backup-android', const BackupView(), binding);
+    await _capturePage(
+      tester,
+      'backup-android',
+      const BackupView(),
+      binding,
+    );
     await _capturePage(
       tester,
       'theme-android',
@@ -226,9 +260,8 @@ void main() {
       ),
       binding,
     );
-    final detailAccount = repo.transactionAccounts.firstWhere(
-      (account) => account.type == AccountType.cash,
-    );
+    final detailAccount = repo.transactionAccounts
+        .firstWhere((account) => account.type == AccountType.cash);
     await _capturePage(
       tester,
       'account-detail-android',
@@ -238,7 +271,11 @@ void main() {
     await _capturePage(
       tester,
       'import-review-android',
-      BillReviewView(rows: _demoImportRows(), source: '支付宝', skipped: 2),
+      BillReviewView(
+        rows: _demoImportRows(),
+        source: '支付宝',
+        skipped: 2,
+      ),
       binding,
     );
     await _captureReports(tester, binding);
@@ -252,7 +289,9 @@ Future<void> _captureDisplaySettings(
   final navigator = ShareIntake.navigatorKey.currentState;
   expect(navigator, isNotNull);
   unawaited(
-    navigator!.push<void>(_parityPageRoute<void>(const _DisplayCaptureShell())),
+    navigator!.push<void>(
+      _parityPageRoute<void>(const _DisplayCaptureShell()),
+    ),
   );
   await _pumpFor(tester, const Duration(milliseconds: 600));
   await _takeScreenshot(tester, binding, 'display-android');
@@ -273,10 +312,15 @@ PageRoute<T> _parityPageRoute<T>(Widget page, {bool opaque = true}) =>
       // composite against the emulator's black surface.
       opaque: opaque,
       pageBuilder: (context, _, __) {
-        final child = Material(color: Colors.transparent, child: page);
+        final child = Material(
+          color: Colors.transparent,
+          child: page,
+        );
         if (!opaque) return child;
         return DecoratedBox(
-          decoration: AppColors.pageBackground(Theme.of(context).brightness),
+          decoration: AppColors.pageBackground(
+            Theme.of(context).brightness,
+          ),
           child: child,
         );
       },
@@ -319,7 +363,7 @@ class _DisplayCaptureShellState extends State<_DisplayCaptureShell> {
 }
 
 List<ImportedBillRow> _demoImportRows() {
-  final now = DateTime(2026, 8, 27, 12);
+  final now = AppClock.now;
   DateTime daysAgo(int value) {
     final date = now.subtract(Duration(days: value));
     return DateTime(date.year, date.month, date.day, 12);
@@ -407,7 +451,9 @@ Future<void> _captureReports(
   final navigator = ShareIntake.navigatorKey.currentState;
   expect(navigator, isNotNull);
   unawaited(
-    navigator!.push<void>(_parityPageRoute<void>(const _ReportCaptureShell())),
+    navigator!.push<void>(
+      _parityPageRoute<void>(const _ReportCaptureShell()),
+    ),
   );
   await _pumpFor(tester, const Duration(milliseconds: 900));
   expect(find.text('报告'), findsAtLeastNWidgets(1));
@@ -448,7 +494,9 @@ Future<void> _captureAssetTab(
   final navigator = ShareIntake.navigatorKey.currentState;
   expect(navigator, isNotNull);
   unawaited(
-    navigator!.push<void>(_parityPageRoute<void>(const AccountsView())),
+    navigator!.push<void>(
+      _parityPageRoute<void>(const AccountsView()),
+    ),
   );
   await _pumpFor(tester, const Duration(milliseconds: 700));
   final option = find.text(tab);
@@ -487,8 +535,8 @@ Future<void> _captureQuickAddIncome(
 }
 
 /// Opens the production bottom-sheet entry point used by the home input bar.
-/// Keeping this as a tiny route shell makes the capture deterministic while
-/// preserving the actual ManualAddSheet transition and barrier.
+/// Keeping this as a tiny opaque route shell makes the capture deterministic
+/// while preserving the actual ManualAddSheet transition and barrier.
 class _ManualAddCapturePage extends StatefulWidget {
   const _ManualAddCapturePage();
 
@@ -502,7 +550,12 @@ class _ManualAddCapturePageState extends State<_ManualAddCapturePage> {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
-      unawaited(showManualAddSheet(context, onSwitchToAi: () {}));
+      unawaited(
+        showManualAddSheet(
+          context,
+          onSwitchToAi: () {},
+        ),
+      );
     });
   }
 
@@ -539,7 +592,9 @@ Future<void> _captureStatistics(
   final navigator = ShareIntake.navigatorKey.currentState;
   expect(navigator, isNotNull);
   unawaited(
-    navigator!.push<void>(_parityPageRoute<void>(const StatisticsView())),
+    navigator!.push<void>(
+      _parityPageRoute<void>(const StatisticsView()),
+    ),
   );
   await _pumpFor(tester, const Duration(milliseconds: 700));
   final option = find.text(range);
@@ -603,12 +658,10 @@ Future<void> _ensureFixture(AppRepository repo) async {
   }
   expect(accounts.any((account) => account.type == AccountType.cash), isTrue);
   expect(accounts.any((account) => account.type == AccountType.debit), isTrue);
-  final cash = accounts.firstWhere(
-    (account) => account.type == AccountType.cash,
-  );
-  final bank = accounts.firstWhere(
-    (account) => account.type == AccountType.debit,
-  );
+  final cash =
+      accounts.firstWhere((account) => account.type == AccountType.cash);
+  final bank =
+      accounts.firstWhere((account) => account.type == AccountType.debit);
   final bookID = repo.currentBookId;
 
   int? category(String key) {
@@ -618,7 +671,7 @@ Future<void> _ensureFixture(AppRepository repo) async {
     return null;
   }
 
-  final now = DateTime(2026, 8, 27, 12);
+  final now = AppClock.now;
   DateTime daysAgo(int amount) {
     final day = now.subtract(Duration(days: amount));
     return DateTime(day.year, day.month, day.day, 12);
@@ -659,129 +712,126 @@ Future<void> _ensureFixture(AppRepository repo) async {
 
   // Keep the visible core fixture aligned with DemoDataSeeder.swift. The
   // source IDs make retries idempotent without putting a test marker in notes.
-  final thisMonth =
-      <
-        ({
-          String amount,
-          TransactionKind kind,
-          String category,
-          String note,
-          AccountEntity account,
-        })
-      >[
-        (
-          amount: '38',
-          kind: TransactionKind.expense,
-          category: 'dining',
-          note: '午餐 麦当劳',
-          account: cash,
-        ),
-        (
-          amount: '23',
-          kind: TransactionKind.expense,
-          category: 'transport',
-          note: '滴滴打车',
-          account: cash,
-        ),
-        (
-          amount: '156',
-          kind: TransactionKind.expense,
-          category: 'groceries',
-          note: '盒马超市',
-          account: cash,
-        ),
-        (
-          amount: '88',
-          kind: TransactionKind.expense,
-          category: 'entertainment',
-          note: '网易云音乐年费',
-          account: cash,
-        ),
-        (
-          amount: '45',
-          kind: TransactionKind.expense,
-          category: 'dining',
-          note: '晚餐 外卖',
-          account: cash,
-        ),
-        (
-          amount: '198',
-          kind: TransactionKind.expense,
-          category: 'shopping',
-          note: '优衣库 T 恤',
-          account: bank,
-        ),
-        (
-          amount: '12',
-          kind: TransactionKind.expense,
-          category: 'transport',
-          note: '公交充值',
-          account: cash,
-        ),
-        (
-          amount: '68',
-          kind: TransactionKind.expense,
-          category: 'dining',
-          note: '朋友聚餐 AA',
-          account: cash,
-        ),
-        (
-          amount: '30',
-          kind: TransactionKind.expense,
-          category: 'utilities',
-          note: '话费充值',
-          account: cash,
-        ),
-        (
-          amount: '280',
-          kind: TransactionKind.expense,
-          category: 'shopping',
-          note: '京东 数据线+充电头',
-          account: bank,
-        ),
-        (
-          amount: '9.9',
-          kind: TransactionKind.expense,
-          category: 'subscription',
-          note: '微信读书月卡',
-          account: cash,
-        ),
-        (
-          amount: '15',
-          kind: TransactionKind.expense,
-          category: 'dining',
-          note: '咖啡 瑞幸',
-          account: cash,
-        ),
-        (
-          amount: '52',
-          kind: TransactionKind.expense,
-          category: 'groceries',
-          note: '菜市场买菜',
-          account: cash,
-        ),
-        (
-          amount: '18',
-          kind: TransactionKind.expense,
-          category: 'transport',
-          note: '共享单车月卡',
-          account: cash,
-        ),
-        (
-          amount: '120',
-          kind: TransactionKind.income,
-          category: 'salary',
-          note: '兼职收入',
-          account: bank,
-        ),
-        (
-          amount: '500',
-          kind: TransactionKind.income,
-          category: 'redPacket',
-          note: '朋友红包',
-          account: cash,
-        ),
-      ];
+  final thisMonth = <({
+    String amount,
+    TransactionKind kind,
+    String category,
+    String note,
+    AccountEntity account
+  })>[
+    (
+      amount: '38',
+      kind: TransactionKind.expense,
+      category: 'dining',
+      note: '午餐 麦当劳',
+      account: cash
+    ),
+    (
+      amount: '23',
+      kind: TransactionKind.expense,
+      category: 'transport',
+      note: '滴滴打车',
+      account: cash
+    ),
+    (
+      amount: '156',
+      kind: TransactionKind.expense,
+      category: 'groceries',
+      note: '盒马超市',
+      account: cash
+    ),
+    (
+      amount: '88',
+      kind: TransactionKind.expense,
+      category: 'entertainment',
+      note: '网易云音乐年费',
+      account: cash
+    ),
+    (
+      amount: '45',
+      kind: TransactionKind.expense,
+      category: 'dining',
+      note: '晚餐 外卖',
+      account: cash
+    ),
+    (
+      amount: '198',
+      kind: TransactionKind.expense,
+      category: 'shopping',
+      note: '优衣库 T 恤',
+      account: bank
+    ),
+    (
+      amount: '12',
+      kind: TransactionKind.expense,
+      category: 'transport',
+      note: '公交充值',
+      account: cash
+    ),
+    (
+      amount: '68',
+      kind: TransactionKind.expense,
+      category: 'dining',
+      note: '朋友聚餐 AA',
+      account: cash
+    ),
+    (
+      amount: '30',
+      kind: TransactionKind.expense,
+      category: 'utilities',
+      note: '话费充值',
+      account: cash
+    ),
+    (
+      amount: '280',
+      kind: TransactionKind.expense,
+      category: 'shopping',
+      note: '京东 数据线+充电头',
+      account: bank
+    ),
+    (
+      amount: '9.9',
+      kind: TransactionKind.expense,
+      category: 'subscription',
+      note: '微信读书月卡',
+      account: cash
+    ),
+    (
+      amount: '15',
+      kind: TransactionKind.expense,
+      category: 'dining',
+      note: '咖啡 瑞幸',
+      account: cash
+    ),
+    (
+      amount: '52',
+      kind: TransactionKind.expense,
+      category: 'groceries',
+      note: '菜市场买菜',
+      account: cash
+    ),
+    (
+      amount: '18',
+      kind: TransactionKind.expense,
+      category: 'transport',
+      note: '共享单车月卡',
+      account: cash
+    ),
+    (
+      amount: '120',
+      kind: TransactionKind.income,
+      category: 'salary',
+      note: '兼职收入',
+      account: bank
+    ),
+    (
+      amount: '500',
+      kind: TransactionKind.income,
+      category: 'redPacket',
+      note: '朋友红包',
+      account: cash
+    ),
+  ];
   for (var index = 0; index < thisMonth.length; index++) {
     final row = thisMonth[index];
     await add(
@@ -796,66 +846,63 @@ Future<void> _ensureFixture(AppRepository repo) async {
     );
   }
 
-  final lastMonth =
-      <
-        ({
-          String amount,
-          TransactionKind kind,
-          String category,
-          String note,
-          AccountEntity account,
-        })
-      >[
-        (
-          amount: '42',
-          kind: TransactionKind.expense,
-          category: 'dining',
-          note: '午餐',
-          account: cash,
-        ),
-        (
-          amount: '320',
-          kind: TransactionKind.expense,
-          category: 'housing',
-          note: '房租（水电）',
-          account: bank,
-        ),
-        (
-          amount: '76',
-          kind: TransactionKind.expense,
-          category: 'groceries',
-          note: '超市采购',
-          account: cash,
-        ),
-        (
-          amount: '25',
-          kind: TransactionKind.expense,
-          category: 'transport',
-          note: '出租车',
-          account: cash,
-        ),
-        (
-          amount: '8800',
-          kind: TransactionKind.income,
-          category: 'salary',
-          note: '7 月工资',
-          account: bank,
-        ),
-        (
-          amount: '560',
-          kind: TransactionKind.expense,
-          category: 'shopping',
-          note: '网购衣物',
-          account: bank,
-        ),
-        (
-          amount: '35',
-          kind: TransactionKind.expense,
-          category: 'medical',
-          note: '药店',
-          account: cash,
-        ),
-      ];
+  final lastMonth = <({
+    String amount,
+    TransactionKind kind,
+    String category,
+    String note,
+    AccountEntity account
+  })>[
+    (
+      amount: '42',
+      kind: TransactionKind.expense,
+      category: 'dining',
+      note: '午餐',
+      account: cash
+    ),
+    (
+      amount: '320',
+      kind: TransactionKind.expense,
+      category: 'housing',
+      note: '房租（水电）',
+      account: bank
+    ),
+    (
+      amount: '76',
+      kind: TransactionKind.expense,
+      category: 'groceries',
+      note: '超市采购',
+      account: cash
+    ),
+    (
+      amount: '25',
+      kind: TransactionKind.expense,
+      category: 'transport',
+      note: '出租车',
+      account: cash
+    ),
+    (
+      amount: '8800',
+      kind: TransactionKind.income,
+      category: 'salary',
+      note: '7 月工资',
+      account: bank
+    ),
+    (
+      amount: '560',
+      kind: TransactionKind.expense,
+      category: 'shopping',
+      note: '网购衣物',
+      account: bank
+    ),
+    (
+      amount: '35',
+      kind: TransactionKind.expense,
+      category: 'medical',
+      note: '药店',
+      account: cash
+    ),
+  ];
   for (var index = 0; index < lastMonth.length; index++) {
     final row = lastMonth[index];
     await add(
@@ -871,37 +918,37 @@ Future<void> _ensureFixture(AppRepository repo) async {
 
   final twoMonthsAgo =
       <({String amount, TransactionKind kind, String category, String note})>[
-        (
-          amount: '8800',
-          kind: TransactionKind.income,
-          category: 'salary',
-          note: '6 月工资',
-        ),
-        (
-          amount: '380',
-          kind: TransactionKind.expense,
-          category: 'travel',
-          note: '周末游',
-        ),
-        (
-          amount: '95',
-          kind: TransactionKind.expense,
-          category: 'dining',
-          note: '朋友生日聚餐',
-        ),
-        (
-          amount: '290',
-          kind: TransactionKind.expense,
-          category: 'education',
-          note: '极客时间年卡',
-        ),
-        (
-          amount: '18',
-          kind: TransactionKind.expense,
-          category: 'transport',
-          note: '高铁票',
-        ),
-      ];
+    (
+      amount: '8800',
+      kind: TransactionKind.income,
+      category: 'salary',
+      note: '6 月工资'
+    ),
+    (
+      amount: '380',
+      kind: TransactionKind.expense,
+      category: 'travel',
+      note: '周末游'
+    ),
+    (
+      amount: '95',
+      kind: TransactionKind.expense,
+      category: 'dining',
+      note: '朋友生日聚餐'
+    ),
+    (
+      amount: '290',
+      kind: TransactionKind.expense,
+      category: 'education',
+      note: '极客时间年卡'
+    ),
+    (
+      amount: '18',
+      kind: TransactionKind.expense,
+      category: 'transport',
+      note: '高铁票'
+    ),
+  ];
   for (var index = 0; index < twoMonthsAgo.length; index++) {
     final row = twoMonthsAgo[index];
     await add(
@@ -1006,8 +1053,7 @@ Future<void> _ensureReport(AppRepository repo) async {
     type: 'monthly',
     title: '2026年8月账单报告',
     summary: '支出 ¥1,017.90 · 收入 ¥620.00',
-    markdown:
-        '# 2026年8月账单报告\n\n'
+    markdown: '# 2026年8月账单报告\n\n'
         '- 支出：¥1,017.90\n'
         '- 收入：¥620.00\n'
         '- 结余：¥-397.90\n\n'

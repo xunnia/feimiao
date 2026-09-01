@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.Intent
 import android.net.ConnectivityManager
 import android.net.Uri
+import android.os.Build
 import android.provider.Settings
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
@@ -250,6 +251,7 @@ class MainActivity : FlutterActivity() {
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "feimiao/update")
             .setMethodCallHandler { call, result ->
                 when (call.method) {
+                    "installedVersionCode" -> result.success(installedVersionCode())
                     "installApk" -> {
                         val path = call.argument<String>("path")
                         if (path.isNullOrBlank()) result.success(false)
@@ -776,6 +778,26 @@ class MainActivity : FlutterActivity() {
             .remove("version_code")
             .remove("file_path")
             .apply()
+    }
+
+    /**
+     * Return the package manager's install sequence, not Flutter's embedded
+     * build number. Rollback-compatible APKs deliberately contain historical
+     * Dart code but are repackaged with a newer Android versionCode so the
+     * ordinary package installer can replace the currently installed build.
+     */
+    private fun installedVersionCode(): Long {
+        return try {
+            val info = packageManager.getPackageInfo(packageName, 0)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                info.longVersionCode
+            } else {
+                @Suppress("DEPRECATION")
+                info.versionCode.toLong()
+            }
+        } catch (_: Exception) {
+            0L
+        }
     }
 
     /// 检查更新：用 FileProvider 把缓存里的 APK 交给系统安装器。

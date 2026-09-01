@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/cupertino.dart' show CupertinoIcons;
 import 'package:provider/provider.dart';
 
+import '../../core/app_clock.dart';
 import '../../core/budget/budget_engine.dart';
 import '../../core/haptics.dart';
 import '../../core/models/transaction_record.dart';
@@ -46,19 +47,19 @@ class _HomeViewState extends State<HomeView> {
   @override
   void initState() {
     super.initState();
-    final now = DateTime.now();
+    final now = AppClock.now;
     _year = now.year;
     _month = now.month;
   }
 
   bool get _isCurrentMonth {
-    final now = DateTime.now();
+    final now = AppClock.now;
     return _year == now.year && _month == now.month;
   }
 
   void _stepMonth(int delta) {
     final m = DateTime(_year, _month + delta, 1);
-    final now = DateTime.now();
+    final now = AppClock.now;
     // 不翻到未来（没有未来数据）。
     if (m.year > now.year || (m.year == now.year && m.month > now.month)) {
       return;
@@ -71,7 +72,7 @@ class _HomeViewState extends State<HomeView> {
   }
 
   void _jumpToCurrent() {
-    final now = DateTime.now();
+    final now = AppClock.now;
     setState(() {
       _year = now.year;
       _month = now.month;
@@ -93,7 +94,7 @@ class _HomeViewState extends State<HomeView> {
       ),
       builder: (_) => _HomeMonthPickerSheet(
         initial: DateTime(_year, _month),
-        last: DateTime.now(),
+        last: AppClock.now,
         records: repo.allRecordsRef,
       ),
     );

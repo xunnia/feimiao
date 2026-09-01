@@ -2,9 +2,9 @@ import 'dart:math' as math;
 
 import 'package:decimal/decimal.dart';
 import 'package:flutter/cupertino.dart' show CupertinoIcons;
-import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:flutter/material.dart';
 
+import '../core/app_clock.dart';
 import '../core/models/cat_svg_icon.dart';
 import '../core/models/category_seed.dart';
 import '../core/models/transaction_kind.dart';
@@ -63,7 +63,7 @@ class MonthlyPaceCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final lastDay = DateTime(year, month + 1, 0).day;
-    final today = DateTime.now();
+    final today = AppClock.now;
     final cutoffDay = isCurrentMonth ? math.min(today.day, lastDay) : lastDay;
     final samples = computeMonthlyPaceSamples(
       records: records,
@@ -253,7 +253,7 @@ List<MonthlyPaceSample> computeMonthlyPaceSamples({
   DateTime? now,
 }) {
   final currentMonth = DateTime(year, month);
-  final today = now ?? DateTime.now();
+  final today = now ?? AppClock.now;
   final lastDay = DateTime(year, month + 1, 0).day;
   final cutoffDay = isCurrentMonth ? math.min(today.day, lastDay) : lastDay;
   final months = <DateTime>[

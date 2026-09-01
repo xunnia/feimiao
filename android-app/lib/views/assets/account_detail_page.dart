@@ -6,6 +6,7 @@ import 'package:decimal/decimal.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../../core/app_clock.dart';
 import '../../core/assets/credit_card_terms.dart';
 import '../../core/money_format.dart';
 import '../../core/statistics/metric_contract.dart';
@@ -65,7 +66,7 @@ class _AccountDetailPageState extends State<AccountDetailPage> {
         : CreditCardTerms.compute(
             statementDay: liabilityProfile.statementDay,
             repaymentDay: liabilityProfile.repaymentDay,
-            now: DateTime.now(),
+            now: AppClock.now,
           );
     final qualityText = movement.unknownSettlementAccountCount > 0
         ? '${movement.unknownSettlementAccountCount} 笔到账账户待确认，当前余额只能部分核对'
@@ -400,7 +401,7 @@ class _AccountBalanceCalibrationSheetState
     final calculated = repo.accountBalanceOf(widget.account);
     final target = _target;
     final difference = target == null ? null : target - calculated;
-    final now = DateTime.now();
+    final now = AppClock.now;
     return Column(
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.stretch,

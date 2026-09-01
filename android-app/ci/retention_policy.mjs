@@ -10,6 +10,7 @@ const LEGACY_KEYS = new Set([
   'apk:3',
   'apk:4',
   'apk:manifest',
+  'rollback.json',
 ]);
 
 const VERSIONED_KEY = /^apk:(v(\d+)-([0-9a-f]{12})):(manifest|\d+)$/;
@@ -25,13 +26,16 @@ const VERSIONED_KEY = /^apk:(v(\d+)-([0-9a-f]{12})):(manifest|\d+)$/;
 export function planRetention(
   keyNames,
   currentReleaseId,
-  { keepReleases = 2 } = {},
+  { keepReleases = 2, preserveReleaseIds = [] } = {},
 ) {
   if (!Array.isArray(keyNames)) {
     throw new Error('KV key list must be an array');
   }
   if (!Number.isSafeInteger(keepReleases) || keepReleases < 1) {
     throw new Error('keepReleases must be a positive integer');
+  }
+  if (!Array.isArray(preserveReleaseIds)) {
+    throw new Error('preserveReleaseIds must be an array');
   }
   if (!/^v\d+-[0-9a-f]{12}$/.test(currentReleaseId)) {
     throw new Error(`invalid current releaseId: ${String(currentReleaseId)}`);
@@ -72,13 +76,28 @@ export function planRetention(
     throw new Error(`current release manifest is missing: ${currentReleaseId}`);
   }
 
+  const preserved = [...new Set(preserveReleaseIds.map((value) => String(value)))];
+  for (const releaseId of preserved) {
+    if (!VERSIONED_KEY.test(`apk:${releaseId}:manifest`)) {
+      throw new Error(`invalid preserved releaseId: ${releaseId}`);
+    }
+    if (releaseId === currentReleaseId) continue;
+    const release = releases.get(releaseId);
+    if (!release || !release.hasManifest) {
+      throw new Error(`preserved release is missing from KV: ${releaseId}`);
+    }
+  }
+
   const ordered = [...releases.values()].sort(
     (left, right) =>
       right.versionCode - left.versionCode ||
       right.releaseId.localeCompare(left.releaseId),
   );
+  const preservedSet = new Set(preserved);
   const newerReleases = ordered.filter(
-    (release) => release.versionCode > current.versionCode,
+    (release) =>
+      release.versionCode > current.versionCode &&
+      !preservedSet.has(release.releaseId),
   );
   if (newerReleases.length > 0) {
     throw new Error(
@@ -92,13 +111,27 @@ export function planRetention(
       release.versionCode <= current.versionCode &&
       release.hasManifest,
   );
+  // Entries in rollback.json are an explicit retention contract.  They may
+  // point at immutable worker chunks; never delete those chunks just because
+  // the normal hot path keeps only the current and previous release.  Entries
+  // hosted outside this KV namespace simply do not appear in this list.
+  const preservedOthers = preserved.filter(
+    (releaseId) => releaseId !== currentReleaseId,
+  );
+  // The explicit rollback package occupies the previous-release slot.  This
+  // keeps the KV namespace at current + previous (two complete packages)
+  // instead of current + raw previous + compatibility previous (three).
+  const previousSlots = Math.max(0, keepReleases - 1 - preservedOthers.length);
   const keepReleaseIds = [
     currentReleaseId,
-    ...previousCandidates.map((release) => release.releaseId),
-  ].slice(0, keepReleases);
+    ...preservedOthers,
+    ...previousCandidates
+      .map((release) => release.releaseId)
+      .slice(0, previousSlots),
+  ].filter((releaseId, index, list) => list.indexOf(releaseId) === index);
   const keepSet = new Set(keepReleaseIds);
   const keepKeys = names.filter((name) => {
-    if (name === 'version.json') return true;
+    if (name === 'version.json' || name === 'rollback.json') return true;
     const match = VERSIONED_KEY.exec(name);
     return match !== null && keepSet.has(match[1]);
   });
@@ -106,6 +139,7 @@ export function planRetention(
 
   return {
     currentReleaseId,
+    preserveReleaseIds: preserved,
     keepReleaseIds,
     keepKeys,
     deleteKeys,
@@ -125,7 +159,7 @@ function parseArgs(argv) {
     if (!key?.startsWith('--') || value === undefined || args.has(key)) {
       throw new Error(
         'usage: retention_policy.mjs --keys <json> --current-release <id> ' +
-          '[--keep <count>] [--assert-clean]',
+          '[--keep <count>] [--preserve-release-ids <json>] [--assert-clean]',
       );
     }
     args.set(key, value);
@@ -145,8 +179,17 @@ async function main() {
   const keyNames = Array.isArray(raw)
     ? raw.map((entry) => (entry && typeof entry === 'object' ? entry.name : entry))
     : raw?.keys;
+  let preserveReleaseIds = [];
+  const preservePath = args.get('--preserve-release-ids');
+  if (preservePath) {
+    const parsed = JSON.parse(await readFile(preservePath, 'utf8'));
+    preserveReleaseIds = Array.isArray(parsed)
+      ? parsed
+      : parsed?.releaseIds ?? [];
+  }
   const plan = planRetention(keyNames, currentReleaseId, {
     keepReleases: Number(args.get('--keep') ?? 2),
+    preserveReleaseIds,
   });
   if (args.has('--assert-clean') && plan.deleteKeys.length > 0) {
     throw new Error(`retention is not clean: ${plan.deleteKeys.join(', ')}`);

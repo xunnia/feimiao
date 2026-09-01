@@ -83,3 +83,53 @@ test('a single current release is already clean', () => {
   const plan = planRetention(keys, `v284-${'a'.repeat(12)}`);
   assert.deepEqual(plan.deleteKeys, []);
 });
+
+test('keeps worker-hosted releases explicitly referenced by rollback catalog', () => {
+  const current = `v284-${'a'.repeat(12)}`;
+  const rollback = `v280-${'d'.repeat(12)}`;
+  const keys = [
+    'version.json',
+    'rollback.json',
+    ...release(284, 'a'.repeat(12)),
+    ...release(283, 'b'.repeat(12)),
+    ...release(280, 'd'.repeat(12)),
+    ...release(279, 'e'.repeat(12)),
+  ];
+  const plan = planRetention(keys, current, {
+    keepReleases: 2,
+    preserveReleaseIds: [rollback],
+  });
+
+  assert.deepEqual(plan.keepReleaseIds, [current, rollback]);
+  assert.equal(plan.keepKeys.includes('rollback.json'), true);
+  assert.equal(plan.deleteKeys.includes(`apk:v279-${'e'.repeat(12)}:0`), true);
+  assert.equal(plan.deleteKeys.includes(`apk:v283-${'b'.repeat(12)}:0`), true);
+});
+
+test('fails closed when rollback catalog references a missing worker release', () => {
+  const current = `v284-${'a'.repeat(12)}`;
+  assert.throws(
+    () =>
+      planRetention(['version.json', ...release(284, 'a'.repeat(12))], current, {
+        preserveReleaseIds: [`v280-${'d'.repeat(12)}`],
+      }),
+    /preserved release is missing/,
+  );
+});
+
+test('allows a deliberately reserved higher install sequence from rollback catalog', () => {
+  const current = `v304-${'a'.repeat(12)}`;
+  const reserved = `v305-${'d'.repeat(12)}`;
+  const keys = [
+    'version.json',
+    'rollback.json',
+    ...release(304, 'a'.repeat(12)),
+    ...release(305, 'd'.repeat(12)),
+  ];
+  const plan = planRetention(keys, current, {
+    keepReleases: 2,
+    preserveReleaseIds: [reserved],
+  });
+  assert.deepEqual(plan.keepReleaseIds, [current, reserved]);
+  assert.deepEqual(plan.deleteKeys, []);
+});

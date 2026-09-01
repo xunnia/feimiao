@@ -112,6 +112,9 @@ class SystemNetworkProxy {
       // Keep the last known route when the platform channel is unavailable.
     } on TimeoutException {
       // Full-device TUN VPNs still route direct sockets automatically.
+    } on Object {
+      // A malformed platform result must not escape into the startup future.
+      // Keep the last known route and let the request proceed directly.
     }
   }
 
@@ -163,6 +166,9 @@ class SystemNetworkProxy {
     } on TimeoutException {
       // Do not delay a request when a platform implementation is slow or
       // unavailable; a system TUN VPN still applies to direct sockets.
+    } on Object {
+      // Older ROMs and vendor VPNs occasionally return a non-standard value.
+      // Treat it as an unavailable proxy instead of crashing the caller.
     }
   }
 

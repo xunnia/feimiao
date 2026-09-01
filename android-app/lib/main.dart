@@ -53,22 +53,24 @@ const bool _parityCapture = bool.fromEnvironment('QINGJI_PARITY_CAPTURE');
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  // Install before any AI client is constructed so OAuth, model discovery,
-  // and Responses requests can follow Android's system proxy when present.
-  await SystemNetworkProxy.install();
-  SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
-    statusBarColor: Colors.transparent,
-    statusBarIconBrightness: Brightness.dark,
-    statusBarBrightness: Brightness.light,
-    systemNavigationBarColor: Colors.transparent,
-    systemNavigationBarIconBrightness: Brightness.dark,
-  ));
+  _setStartupSystemUi();
+
+  // Keep the proven v1.279 startup order: finish the proxy lookup and the
+  // repository's small home snapshot before mounting the full widget tree.
+  // Building RootShell against a half-hydrated repository caused the 301
+  // release to terminate immediately on the target phone even though widget
+  // tests passed. Proxy failures remain non-fatal and bounded.
+  try {
+    await SystemNetworkProxy.install().timeout(const Duration(seconds: 3));
+  } catch (error, stackTrace) {
+    debugPrint('startup system proxy unavailable: $error');
+    debugPrint('$stackTrace');
+  }
 
   final repo = AppRepository();
 
-  // 启动页只等待“主页核心快照”：账本、账户、分类、预算和当月账单。
-  // 这几项完成后立刻 runApp，用户第一眼就能看到真实本月数据；资产、报告、
-  // 全历史和维护任务由首帧后的第二阶段继续处理。
+  // Start the fast repository snapshot and wait on its failure-safe ready
+  // barrier before building pages that read accounts/books/transactions.
   final repositoryCoreInit = _initializeRepository(repo, fastStartup: true);
   // Do not read or write the persisted theme during parity startup. The
   // capture flag forces the light ThemeMode below, while the static AppColors
@@ -82,7 +84,8 @@ Future<void> main() async {
     repositoryReadyCheck: () => repo.isFullyReady,
   );
   await repo.ready;
-  final repositoryFullyReady = _scheduleDeferredConvergence(repo);
+  final repositoryFullyReady =
+      repo.isReady ? _scheduleDeferredConvergence(repo) : repo.fullyReady;
 
   runApp(
     MultiProvider(
@@ -91,19 +94,38 @@ Future<void> main() async {
         ChangeNotifierProvider<AppThemeController>.value(
             value: AppThemeController.instance),
       ],
-      child: const QingJiApp(),
+      // Successful launches use the same eager RootShell contract as v1.279.
+      // A real database failure still gets the recovery gate instead of an
+      // empty home tree.
+      child: QingJiApp(deferHomeUntilRepositoryReady: !repo.isReady),
     ),
   );
-  _openAiOAuthWatcher.start(repo);
+  if (repo.isReady) {
+    _openAiOAuthWatcher.start(repo);
+    schedulePostFrameServices(repo, repositoryReady: repositoryFullyReady);
+    _schedulePostFrameStartupServices(repo, repositoryFullyReady);
+  }
 
-  // WorkManager / 通知通道初始化可能触发磁盘和 Binder I/O，不属于主页
-  // 首帧的必要条件。等主页已经画出后再恢复后台报告，避免冷启动露出白屏。
-  schedulePostFrameServices(repo, repositoryReady: repositoryFullyReady);
-  _schedulePostFrameStartupServices(repo, repositoryFullyReady);
-
-  // Core init is awaited through repo.ready above. Keep a reference alive so
-  // an unexpected error is still logged by the existing boundary.
+  // The ready barrier above completes on both success and failure. Await the
+  // guarded init task as well so no startup Future is abandoned.
   await repositoryCoreInit;
+}
+
+void _setStartupSystemUi() {
+  try {
+    // This Flutter API is intentionally synchronous and reports asynchronous
+    // platform failures through FlutterError itself.  Keep the call behind a
+    // synchronous guard so a broken vendor channel cannot abort main().
+    SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
+      statusBarColor: Colors.transparent,
+      statusBarIconBrightness: Brightness.dark,
+      statusBarBrightness: Brightness.light,
+      systemNavigationBarColor: Colors.transparent,
+      systemNavigationBarIconBrightness: Brightness.dark,
+    ));
+  } catch (error) {
+    debugPrint('startup system UI unavailable: $error');
+  }
 }
 
 /// 首帧之后继续加载全库、资产和维护数据。这个 barrier 不参与首帧，
@@ -147,11 +169,19 @@ Future<void> _startPostFrameStartupServices(
   AppRepository repo,
   Future<void> repositoryReady,
 ) async {
-  await repositoryReady;
-  if (!repo.isFullyReady) return;
-  WidgetSnapshotService.instance.attach(repo);
-  _autoRecordWatcher.start();
-  _repaymentReminderWatcher.start(repo);
+  try {
+    await repositoryReady;
+    if (!repo.isFullyReady) return;
+    // These services are optional.  A broken widget/notification platform
+    // channel must not turn the post-frame Future into an uncaught exception
+    // that takes down an otherwise healthy launch.
+    WidgetSnapshotService.instance.attach(repo);
+    _autoRecordWatcher.start();
+    _repaymentReminderWatcher.start(repo);
+  } catch (error, stackTrace) {
+    debugPrint('initialize deferred startup watchers failed: $error');
+    debugPrint('$stackTrace');
+  }
 }
 
 /// 把不影响首页展示的原生服务延后到 Flutter 第一帧之后。
@@ -390,12 +420,25 @@ class _OpenAiOAuthWatcher with WidgetsBindingObserver {
 final _openAiOAuthWatcher = _OpenAiOAuthWatcher();
 
 class QingJiApp extends StatelessWidget {
-  const QingJiApp({super.key});
+  /// Tests and embedded callers can keep the historical eager home tree. The
+  /// production entrypoint opts into [_RepositoryStartupGate] so no page can
+  /// read a partially opened database during a cold start.
+  final bool deferHomeUntilRepositoryReady;
+
+  const QingJiApp({
+    super.key,
+    this.deferHomeUntilRepositoryReady = false,
+  });
 
   @override
   Widget build(BuildContext context) {
     // 主题一变（色卡/滑杆/极简）整棵树重建；暮夜色卡强制深色。
     final appTheme = context.watch<AppThemeController>();
+    // Keep the historical standalone/embedded `QingJiApp()` contract: callers
+    // that do not opt into the production startup gate do not need to provide
+    // an AppRepository just to build the widget tree.
+    final repository =
+        deferHomeUntilRepositoryReady ? context.watch<AppRepository>() : null;
     return MaterialApp(
       title: '肥喵记账',
       debugShowCheckedModeBanner: false,
@@ -414,7 +457,139 @@ class QingJiApp extends StatelessWidget {
         Locale('zh', 'CN'),
         Locale('en', 'US'),
       ],
-      home: const RootShell(),
+      home: deferHomeUntilRepositoryReady
+          ? _RepositoryStartupGate(repository: repository!)
+          : const RootShell(),
+    );
+  }
+}
+
+/// Prevents the full page tree from being built while SQLite/plugin hydration
+/// is in flight. This is intentionally a small, dependency-free widget: it
+/// must remain drawable even when a migration or platform channel is broken.
+class _RepositoryStartupGate extends StatefulWidget {
+  final AppRepository repository;
+
+  const _RepositoryStartupGate({required this.repository});
+
+  @override
+  State<_RepositoryStartupGate> createState() => _RepositoryStartupGateState();
+}
+
+class _RepositoryStartupGateState extends State<_RepositoryStartupGate> {
+  Future<void>? _waiting;
+
+  @override
+  void initState() {
+    super.initState();
+    _waitForRepository();
+  }
+
+  @override
+  void didUpdateWidget(covariant _RepositoryStartupGate oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!identical(oldWidget.repository, widget.repository)) {
+      _waitForRepository();
+    }
+  }
+
+  void _waitForRepository() {
+    final waiting = widget.repository.ready;
+    _waiting = waiting;
+    unawaited(waiting.then((_) {
+      if (mounted && identical(_waiting, waiting)) setState(() {});
+    }));
+  }
+
+  Future<void> _retry() async {
+    final waiting = widget.repository.init(fastStartup: true);
+    setState(() => _waiting = waiting);
+    try {
+      await waiting;
+    } catch (error, stackTrace) {
+      // The gate is the last-resort recovery UI. Keep a failed retry inside
+      // the gate instead of returning an unhandled Future from the button.
+      debugPrint('retry app repository initialization failed: $error');
+      debugPrint('$stackTrace');
+    } finally {
+      if (mounted) setState(() {});
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final repository = widget.repository;
+    if (repository.isReady) return const RootShell();
+    if (repository.initializationError != null) {
+      return _StartupFailureShell(onRetry: _retry);
+    }
+    return const _StartupPlaceholder();
+  }
+}
+
+class _StartupPlaceholder extends StatelessWidget {
+  const _StartupPlaceholder();
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Scaffold(
+      backgroundColor: AppColors.appBg(scheme),
+      body: Center(
+        child: CircularProgressIndicator(
+          strokeWidth: 2,
+          color: scheme.primary.withValues(alpha: 0.65),
+        ),
+      ),
+    );
+  }
+}
+
+class _StartupFailureShell extends StatelessWidget {
+  final VoidCallback onRetry;
+
+  const _StartupFailureShell({required this.onRetry});
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Scaffold(
+      backgroundColor: AppColors.appBg(scheme),
+      body: Center(
+        child: Padding(
+          padding: const EdgeInsets.all(28),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.cloud_off_outlined,
+                  size: 30, color: scheme.onSurfaceVariant),
+              const SizedBox(height: 12),
+              Text(
+                '数据初始化未完成',
+                style: TextStyle(
+                  color: scheme.onSurface,
+                  fontSize: 16,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+              const SizedBox(height: 6),
+              Text(
+                '请重试，账本数据不会被删除。',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  color: scheme.onSurfaceVariant,
+                  fontSize: 13,
+                ),
+              ),
+              const SizedBox(height: 18),
+              FilledButton.tonal(
+                onPressed: onRetry,
+                child: const Text('重试'),
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }
@@ -463,7 +638,14 @@ class RootShellState extends State<RootShell>
     super.initState();
     // 启动后静默检查更新（延迟几秒别抢首屏；失败/没更新都不打扰）。
     Future.delayed(const Duration(seconds: 4), () {
-      if (mounted) checkAppUpdate(context, silent: true);
+      if (!mounted) return;
+      unawaited(
+          checkAppUpdate(context, silent: true).catchError((error, stack) {
+        // A vendor DownloadManager/update channel failure is not a reason to
+        // terminate the already-rendered home screen.
+        debugPrint('silent update check failed: $error');
+        debugPrint('$stack');
+      }));
     });
   }
 
