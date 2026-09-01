@@ -6,8 +6,8 @@
 
 ## 基线与验收原则
 
-- Android 历史成对截图基线：1.270.0+284、b0829-284、DB v48；当前工作版本为 1.281.0+295，需重锁基线。
-- Android 自动证据：Flutter analyze 0 error、全量测试 1134/1134；Parity #61 已按 1.270.0+284 重新采集 39 张 Android/iOS 成对截图，并通过完整性对比；真实 OAuth、provider 网络、IME 和真机仍是用户设备验收项。
+- Android parity 基线：1.285.0+299、b0901-299、DB v49；以 manifest 锁定的同一分支提交和 fixture 为准。
+- 历史 Android 自动证据：Flutter analyze 0 error、全量测试 1134/1134；旧 Parity #61 曾按 1.270.0+284 采集 39 张 Android/iOS 成对截图并通过完整性对比；当前证据以本轮 1.285.0+299 基线 CI 报告为准，真实 OAuth、provider 网络、IME 和真机仍是用户设备验收项。
 - iOS 工程：原生 SwiftUI + SwiftData + QingJiCore；部署目标 iOS 26.0，可运行于 iOS 27 beta。
 - iOS 当前状态：原生 SwiftUI/SwiftData 工程已建立，核心逻辑、App XCTest、模拟器构建和截图由 macOS CI 验证；Windows 仍没有 Swift/Xcode，iPhone Air 真机和真实账号网络行为仍待设备验收。
 - “一致”指同一输入得到相同的金额、类型、分类、日期、账本、账户、净额、预算和统计结果，且页面结构、主入口和导航层级一一对应；按钮触感、转场、材质、系统控件和动效可以用平台原生实现，但不能删掉或替换 Android 的功能入口。旧 39 个场景只保留作历史参考，P0 重采前不计入当前验收。

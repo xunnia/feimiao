@@ -24,11 +24,6 @@ struct ImportExportView: View {
                 } label: {
                     Label("导入微信 / 支付宝账单", systemImage: "square.and.arrow.down")
                 }
-                NavigationLink {
-                    ImportReviewView(result: ImportReviewView.demoResult()) { _, _ in }
-                } label: {
-                    Label("查看导入复核示例", systemImage: "checklist")
-                }
             } header: {
                 Text("导入")
             } footer: {
@@ -76,6 +71,7 @@ struct ImportExportView: View {
             if let pendingImport {
                 ImportReviewView(result: pendingImport) { count, skipped in
                     importMessage = "成功导入 \(count) 笔，跳过 \(skipped) 行中性或无效交易。"
+                    showImportReview = false
                     self.pendingImport = nil
                 }
             }

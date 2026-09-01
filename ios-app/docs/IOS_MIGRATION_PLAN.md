@@ -28,7 +28,7 @@
 以交接文档锁定的当前版本为准：
 
 - Flutter / Dart，Provider，SQLite / sqflite；
-- 应用版本 `1.270.0+284`，build tag `b0829-284`，数据库 v48；
+- 应用版本 `1.285.0+299`，build tag `b0901-299`，数据库 v49；
 - Android 当前批次已收口，本次 iOS 迁移只读取 Android 结构，不改 Android 实现；
 - 最新本地验收记录 Flutter 全量测试 1134/1134、analyze 0 error；真实 OAuth、provider 网络和真机行为仍不替代为“已验证”。
 
