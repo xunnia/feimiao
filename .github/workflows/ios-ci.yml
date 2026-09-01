@@ -153,6 +153,11 @@ jobs:
     runs-on: macos-26
     steps:
       - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - name: Validate P0 same-product contract
+        run: |
+          python3 ios-app/tools/check_p0_product_contract.py
       - name: Validate screenshot route manifest
         run: |
           python3 ios-app/tools/check_route_manifest.py \
@@ -290,6 +295,19 @@ jobs:
           shoot "settings/theme" "34-theme"
           shoot "settings/display" "35-display"
 
+          python3 ios-app/tools/write_parity_metadata.py \
+            --root . \
+            --contract ios-app/tools/p0_product_contract.json \
+            --platform ios \
+            --device "$DEVICE" \
+            --os "iOS Simulator ($DEVICE)" \
+            --screenshot-dir screenshots \
+            --output screenshots/capture-metadata.json
+          python3 ios-app/tools/check_capture_metadata.py \
+            --root . \
+            --metadata screenshots/capture-metadata.json \
+            --platform ios
+
           python3 ios-app/tools/check_screenshot_nonempty.py screenshots/*.png
           if ! python3 ios-app/tools/check_screenshot_distinct.py screenshots/*.png; then
             echo "::error::截图存在近重复，采集失败时附加导出 QingJi 系统日志"
@@ -309,7 +327,7 @@ jobs:
         if: always()
         with:
           name: simulator-screenshots
-          path: screenshots/*.png
+          path: screenshots/
           if-no-files-found: warn
       - uses: actions/upload-artifact@v4
         if: always()

@@ -48,6 +48,7 @@
 ## 3. 机器合同和功能范围
 
 机器合同：`ios-app/tools/p0_product_contract.json`。
+截图 provenance 工具：`ios-app/tools/write_parity_metadata.py` + `ios-app/tools/check_capture_metadata.py`。
 
 规范场景共 41 个，且每个场景有唯一 ID、唯一 iOS 目标入口、唯一主责阶段、两端源码锚点、必需页面锚点、必需业务字段和证据状态：
 
@@ -151,6 +152,7 @@
 - iOS 当前项目配置为 QingJi、`com.qingji.app`、iOS 26.0、本地 SwiftData + App Group。
 - 旧 39 路由与两个 CI workflow 的 `shoot` 调用数量一致；旧 39 张 iOS PNG 均为 `1260×2736` 且未判为空白；
 - 旧图最近似的一对是“存钱目标/定时记账”，`meanDelta=2.101`，高于旧门禁阈值 `1.0`。这只排除了近乎相同的占位图，不证明页面同款。
+- metadata 工具已用旧图抽样验证：每张图有独立 sidecar，旧的 books/accounts 槽位会明确标成 `legacy_ambiguous`；完整 41 场景采集才允许 `--require-complete`。
 
 ### 未验证
 

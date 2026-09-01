@@ -272,7 +272,7 @@ QingJi/
 - 基线决策与当前证据：`ios-app/docs/p0/P0_BASELINE_DECISIONS.md`；
 - 41 场景、12 旅程和系统能力机器合同：`ios-app/tools/p0_product_contract.json`；
 - 固定输入：`ios-app/tools/fixtures/p0-demo-ledger-2026-08-v1.json`；
-- 自动门禁：`ios-app/tools/check_p0_product_contract.py`。
+- 自动门禁：`ios-app/tools/check_p0_product_contract.py`；截图 provenance：`ios-app/tools/write_parity_metadata.py`、`ios-app/tools/check_capture_metadata.py`。
 
 当前状态必须保持 `P0_PARTIAL`，直到报告中的 6 个开放门全部关闭；合同结构通过不等于 P0 完成。
 

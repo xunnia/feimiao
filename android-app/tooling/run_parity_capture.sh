@@ -28,10 +28,17 @@ status=${PIPESTATUS[0]}
 if [ "$status" -eq 0 ]; then
   if ! python3 ../ios-app/tools/write_parity_metadata.py \
       --root .. \
-      --manifest ios-app/tools/screenshot_manifest.json \
+      --contract ios-app/tools/p0_product_contract.json \
       --platform android \
       --device emulator-5554 \
+      --os "Android emulator emulator-5554" \
+      --screenshot-dir android-app/outputs/parity \
       --output android-app/outputs/parity/capture-metadata.json; then
+    status=1
+  elif ! python3 ../ios-app/tools/check_capture_metadata.py \
+      --root .. \
+      --metadata android-app/outputs/parity/capture-metadata.json \
+      --platform android; then
     status=1
   fi
 fi
