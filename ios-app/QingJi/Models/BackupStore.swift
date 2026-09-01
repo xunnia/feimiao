@@ -844,7 +844,8 @@ enum BackupStore {
         _ data: Data,
         into context: ModelContext,
         mode: BackupImportMode = .replace,
-        save: Bool = true
+        save: Bool = true,
+        saveContext: (ModelContext) throws -> Void = { try $0.save() }
     ) throws -> BackupImportSummary {
         if isZip(data) {
             return try importArchive(data, mode: mode, into: context)
@@ -858,6 +859,18 @@ enum BackupStore {
         }
         guard package.schemaVersion <= FeimiaoBackupPackage.currentSchemaVersion else {
             throw BackupStoreError.unsupportedVersion(package.schemaVersion)
+        }
+
+        // A ZIP import passes save: false because its outer transaction also
+        // installs attachments before committing the model graph.
+        var rollbackOnFailure = save
+        defer {
+            if rollbackOnFailure {
+                // Import replaces or merges a complete object graph. If any
+                // decode, relationship, or persistence step fails, leave the
+                // caller's context at its pre-import state.
+                context.rollback()
+            }
         }
 
         if mode == .replace {
@@ -1766,8 +1779,9 @@ enum BackupStore {
         }
 
         if save {
-            try context.save()
+            try saveContext(context)
         }
+        rollbackOnFailure = false
         return BackupImportSummary(
             books: package.books.count,
             accounts: package.accounts.count,
@@ -2013,15 +2027,18 @@ enum BackupStore {
             stagedAttachments.append((relativePath, stagedURL))
         }
 
-        var previousAttachments: [(relativePath: String, data: Data?)] = []
+        var previousAttachments: [(relativePath: String, data: Data?, existed: Bool)] = []
         do {
             // Keep model changes pending until every checked attachment is
             // installed. A failure therefore leaves both stores unchanged.
             let summary = try importData(databaseData, into: context, mode: mode, save: false)
             for attachment in stagedAttachments {
-                let previous = AttachmentStore.url(for: attachment.relativePath)
-                    .flatMap { try? Data(contentsOf: $0) }
-                previousAttachments.append((attachment.relativePath, previous))
+                let previousURL = AttachmentStore.url(for: attachment.relativePath)
+                let previousExists = previousURL.map {
+                    FileManager.default.fileExists(atPath: $0.path)
+                } ?? false
+                let previous = previousURL.flatMap { try? Data(contentsOf: $0) }
+                previousAttachments.append((attachment.relativePath, previous, previousExists))
                 try AttachmentStore.installImportedFile(
                     at: attachment.url,
                     relativePath: attachment.relativePath
@@ -2040,7 +2057,10 @@ enum BackupStore {
             for previous in previousAttachments {
                 if let data = previous.data {
                     try? AttachmentStore.writeImported(data: data, relativePath: previous.relativePath)
-                } else {
+                } else if !previous.existed {
+                    // Remove only files created by this failed import. If an
+                    // existing path was not a readable regular file, leave it
+                    // untouched rather than treating it as absent.
                     AttachmentStore.remove(previous.relativePath)
                 }
             }

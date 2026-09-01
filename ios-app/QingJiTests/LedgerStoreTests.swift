@@ -174,6 +174,35 @@ final class LedgerStoreTests: XCTestCase {
         XCTAssertEqual(status.remainingAmount, 0)
     }
 
+    func testReimbursementUsesRoundedAmountWhenCheckingFullOffset() throws {
+        let stack = try Stack()
+        let (book, cash, _, dining) = try seed(stack)
+        let original = try LedgerStore.createTransaction(
+            in: stack.context,
+            amount: 60,
+            kind: .expense,
+            date: Date(timeIntervalSince1970: 1_700_000_000),
+            note: "四舍五入边界",
+            category: dining,
+            account: cash,
+            book: book,
+            reimbursable: true
+        )
+
+        _ = try LedgerStore.createOffset(
+            for: original,
+            amount: Decimal(string: "59.999")!,
+            note: "报销到账",
+            eventType: .reimbursement,
+            settlementAccount: cash,
+            in: stack.context
+        )
+
+        XCTAssertFalse(original.reimbursable)
+        XCTAssertTrue(original.isReimbursed)
+        XCTAssertEqual(try LedgerStore.refundStatus(for: original, in: stack.context).remainingAmount, 0)
+    }
+
     func testDeletingOriginalCascadesAttachedOffsets() throws {
         let stack = try Stack()
         let (book, cash, _, dining) = try seed(stack)

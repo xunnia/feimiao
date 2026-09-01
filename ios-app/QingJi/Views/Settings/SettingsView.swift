@@ -350,7 +350,8 @@ enum BillRecordSaver {
     static func save(
         _ result: ImportedBillResult,
         account selectedAccount: Account? = nil,
-        context: ModelContext
+        context: ModelContext,
+        saveContext: (ModelContext) throws -> Void = { try $0.save() }
     ) throws -> Int {
         let categories = (try? context.fetch(FetchDescriptor<TxCategory>())) ?? []
         let accounts = ((try? context.fetch(FetchDescriptor<Account>())) ?? [])
@@ -397,6 +398,7 @@ enum BillRecordSaver {
         var committed = 0
         var allRecords = existingTransactions.map(\.record)
         var existingFingerprints = Set(existingTransactions.map { fingerprint($0) })
+        var insertedTransactions: [MoneyTransaction] = []
 
         func isDuplicate(_ record: TransactionRecord) -> Bool {
             existingFingerprints.contains(fingerprint(record))
@@ -444,6 +446,7 @@ enum BillRecordSaver {
                 tagNames: record.tags.joined(separator: ",")
             )
             context.insert(transaction)
+            insertedTransactions.append(transaction)
             if transaction.kind == .expense && !record.orderNo.isEmpty {
                 importedByOrder[record.orderNo] = transaction
             }
@@ -537,6 +540,7 @@ enum BillRecordSaver {
                         tagNames: fallback.tags.joined(separator: ",")
                     )
                     context.insert(transaction)
+                    insertedTransactions.append(transaction)
                     allRecords.append(transaction.record)
                     existingFingerprints.insert(fingerprint(transaction.record))
                     committed += 1
@@ -576,10 +580,19 @@ enum BillRecordSaver {
                 refundOfID: original.stableID
             )
             context.insert(refund)
+            insertedTransactions.append(refund)
             allRecords.append(refund.record)
             committed += 1
         }
-        try context.save()
+        do {
+            try saveContext(context)
+        } catch {
+            // The importer only inserts new transactions. Remove exactly this
+            // batch so a failed persistent save cannot leave a half-imported
+            // set of rows in the context or on the next save.
+            insertedTransactions.forEach(context.delete)
+            throw error
+        }
         return committed
     }
 

@@ -348,7 +348,7 @@ enum LedgerStore {
         if eventType == .reimbursement {
             // 安卓端只有“净额已补满”才清掉待报销；保留这个条件，避免
             // 编辑页做部分报销后账单从待处理列表里凭空消失。
-            let fullyReimbursed = amount >= status.remainingAmount
+            let fullyReimbursed = normalizedAmount >= status.remainingAmount
             original.isReimbursed = fullyReimbursed
             original.reimbursable = !fullyReimbursed
         }
