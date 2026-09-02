@@ -16,8 +16,8 @@
   ],
   "accounts": [
     {"key": "account-cash", "name": "现金", "kind": "cash", "initialBalance": "0.00", "sortOrder": 0},
-    {"key": "account-bank", "name": "Parity银行卡", "kind": "bankCard", "initialBalance": "12000.00", "sortOrder": 1},
-    {"key": "account-credit", "name": "Parity信用卡", "kind": "creditCard", "initialBalance": "-1800.00", "sortOrder": 2}
+    {"key": "account-bank", "name": "Parity银行卡", "kind": "debit", "initialBalance": "12000.00", "sortOrder": 1},
+    {"key": "account-credit", "name": "Parity信用卡", "kind": "credit", "initialBalance": "-1800.00", "sortOrder": 2}
   ],
   "transactions": [
     {"key": "tx-aug-00", "kind": "expense", "amount": "38.00", "category": "dining", "account": "account-cash", "book": "book-total", "note": "午餐 麦当劳", "date": "2026-08-27T12:00:00+08:00"},
@@ -36,7 +36,7 @@
     {"key": "tx-aug-13", "kind": "expense", "amount": "18.00", "category": "transport", "account": "account-cash", "book": "book-total", "note": "共享单车月卡", "date": "2026-08-01T12:00:00+08:00"},
     {"key": "tx-aug-14", "kind": "income", "amount": "120.00", "category": "salary", "account": "account-bank", "book": "book-total", "note": "兼职收入", "date": "2026-08-27T12:00:00+08:00"},
     {"key": "tx-aug-15", "kind": "income", "amount": "500.00", "category": "redPacket", "account": "account-cash", "book": "book-total", "note": "朋友红包", "date": "2026-08-25T12:00:00+08:00"},
-    {"key": "tx-refund-lunch", "kind": "expense", "amount": "-15.00", "category": "dining", "account": "account-cash", "book": "book-total", "note": "部分退款", "date": "2026-08-27T12:00:00+08:00", "settledAt": "2026-08-27T12:00:00+08:00", "settlementAccount": "account-cash", "eventType": "refund", "refundOf": "tx-aug-00"},
+    {"key": "tx-refund-lunch", "kind": "expense", "amount": "-15.00", "category": "dining", "account": "account-cash", "book": "book-total", "note": "退款", "date": "2026-08-27T12:00:00+08:00", "settledAt": "2026-08-27T12:00:00+08:00", "settlementAccount": "account-cash", "eventType": "refund", "refundOf": "tx-aug-00"},
     {"key": "tx-transfer", "kind": "transfer", "amount": "120.00", "account": "account-cash", "toAccount": "account-bank", "book": "book-total", "note": "账户转入", "date": "2026-08-17T12:00:00+08:00"},
     {"key": "tx-jul-00", "kind": "expense", "amount": "42.00", "category": "dining", "account": "account-cash", "book": "book-total", "note": "午餐", "date": "2026-07-03T12:00:00+08:00"},
     {"key": "tx-jul-01", "kind": "expense", "amount": "320.00", "category": "housing", "account": "account-bank", "book": "book-total", "note": "房租（水电）", "date": "2026-07-04T12:00:00+08:00"},
@@ -57,7 +57,7 @@
     {"key": "budget-aug-shopping", "book": "book-total", "category": "shopping", "periodStart": "2026-08-01T00:00:00+08:00", "cycle": "monthly", "amount": "800.00"}
   ],
   "savingsGoals": [
-    {"key": "saving-tokyo", "name": "东京旅行", "emoji": "✈️", "target": "12000.00", "saved": "6800.00", "note": "今年秋天出发"}
+    {"key": "saving-tokyo", "name": "东京旅行", "emoji": "✈️", "target": "12000.00", "saved": "6800.00"}
   ],
   "recurringRules": [
     {"key": "recurring-rent", "kind": "expense", "amount": "3200.00", "category": "housing", "account": "account-bank", "book": "book-total", "note": "房租", "period": "monthly", "startDate": "2026-09-30T12:00:00+08:00"}

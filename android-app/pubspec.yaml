@@ -68,6 +68,8 @@ flutter:
     - assets/cat_icons_line/
     - assets/book_covers/
     - assets/brand/
+    # The canonical P0 fixture is staged here by the parity capture script.
+    - assets/parity/
   fonts:
     - family: Nunito
       fonts:

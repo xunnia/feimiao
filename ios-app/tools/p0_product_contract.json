@@ -31,6 +31,126 @@
       "windowsBuildStatus": "UNVERIFIED_PLATFORM_LIMIT"
     }
   },
+  "dataUpgrade": {
+    "id": "p0-ios-qingji-upgrade-2026-09-v1",
+    "status": "SPEC_LOCKED_MACOS_EVIDENCE_PENDING",
+    "source": {
+      "product": "QingJi",
+      "store": "SwiftData",
+      "sourceRevision": "08f7a5e28ffcc65f50dd2661802111d0ef92446c",
+      "container": "AppModelContainer.shared",
+      "schemaKind": "inferred-model-graph-at-source-revision",
+      "location": "existing-user-store-on-macos"
+    },
+    "target": {
+      "product": "QingJi",
+      "store": "SwiftData",
+      "policy": "in-place",
+      "container": "AppModelContainer.shared",
+      "schemaPolicy": "introduce-an-explicit-VersionedSchema-before-the-next-model-change",
+      "modelTypes": [
+        "Account",
+        "Book",
+        "TxCategory",
+        "Tag",
+        "MoneyTransaction",
+        "Budget",
+        "SavingsGoal",
+        "RecurringRule",
+        "RecurringOccurrence",
+        "PhysicalAsset",
+        "AssetEvent",
+        "AssetUsageEvent",
+        "AssetTransactionLink",
+        "AssetRefundAllocation",
+        "AssetValuation",
+        "ReceivableAsset",
+        "ReceivableRecovery",
+        "LiabilityProfile",
+        "NetWorthSnapshot",
+        "AIChatSession",
+        "AIChatMessage",
+        "AIMemoryRecord",
+        "AIRequestRunRecord",
+        "AIRequestEventRecord",
+        "AIReportScheduleRecord",
+        "BudgetPlanRecord",
+        "BudgetPlanRevisionRecord",
+        "BudgetCycleOverrideRecord",
+        "BudgetCommitmentOccurrenceRecord",
+        "BudgetChangeEventRecord",
+        "ReportRecord",
+        "AccountBalanceCheckpointRecord",
+        "NetWorthVerifiedCheckpointRecord"
+      ]
+    },
+    "fixture": {
+      "file": "ios-app/tools/migration-fixtures/p0-ios-qingji-upgrade-2026-09-v1.json",
+      "inputHash": "AE08B995CCCD952CBB1CF965F09B7EC31703734FE660076A0D656AC036D685C6"
+    },
+    "preserveFields": [
+      "stableID",
+      "name",
+      "amount",
+      "date",
+      "category",
+      "account",
+      "book",
+      "settledAt",
+      "settlementAccountID",
+      "eventType",
+      "refundOfID",
+      "attachmentPath",
+      "orderNo",
+      "reimbursable",
+      "isReimbursed",
+      "isExcluded"
+    ],
+    "androidBackup": {
+      "requiredDatabaseVersion": 49,
+      "requiredSamples": ["current-v49", "v40", "v48"],
+      "restoreTarget": "QingJi SwiftData",
+      "status": "MACOS_EVIDENCE_PENDING"
+    },
+    "expected": {
+      "sameStoreURL": true,
+      "existingRecordsPreserved": true,
+      "stableIDsPreserved": true,
+      "attachmentBytesPreserved": true,
+      "failedUpgradeLeavesModelsUnchanged": true,
+      "failedUpgradeLeavesAttachmentsUnchanged": true,
+      "androidV49RestoreIsReadable": true
+    },
+    "requiredChecks": [
+      "open-existing-qingji-store-without-replacing-store-url",
+      "upgrade-on-macos-and-preserve-sentinel-records",
+      "restore-current-android-v49-backup-into-qingji",
+      "verify-attachment-paths-and-bytes-before-and-after-upgrade",
+      "inject-failure-and-prove-model-and-file-rollback"
+    ]
+  },
+  "distribution": {
+    "mode": "development-sideload",
+    "status": "DECISION_LOCKED",
+    "deviceInstall": "signed-ipa-required",
+    "simulatorArtifact": "unsigned-simulator-build-for-evidence-only",
+    "signing": {
+      "platform": "macOS",
+      "teamType": "Personal Team or Apple Developer Program",
+      "teamId": null,
+      "certificate": null,
+      "provisioningProfile": null,
+      "credentialsStatus": "PENDING_MACOS_USER_INPUT"
+    },
+    "excludedChannels": ["TestFlight", "App Store"],
+    "requiredAtP6": [
+      "signed-ipa-installs-on-target-iphone",
+      "upgrade-preserves-existing-qingji-data",
+      "device-smoke-journey-passes",
+      "rollback-artifact-is-installable"
+    ],
+    "changePolicy": "changing-the-channel-requires-an-explicit-user-decision-and-a-contract-update"
+  },
   "fixture": {
     "id": "p0-demo-ledger-2026-08-v1",
     "file": "ios-app/tools/fixtures/p0-demo-ledger-2026-08-v1.json",
@@ -45,7 +165,7 @@
       "monthlyBalance": "-397.90",
       "budget": "3000.00"
     },
-    "inputHash": "AC6BA74FE1C9C43C29CF9915FB9632E5496338E838394DEF72FBD7DDFA7D498C",
+    "inputHash": "E45AB0CEFF322CCAE8A54474AB523F954724A749D0561F698ED81F23850996A6",
     "status": "CANONICAL_SPEC_FROZEN_LOADERS_PENDING"
   },
   "globalAllowedPlatformDifferences": [

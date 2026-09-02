@@ -25,7 +25,7 @@ concurrency:
 jobs:
   android-screenshots:
     name: Android 模拟器截图
-    timeout-minutes: 30
+    timeout-minutes: 90
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -204,9 +204,10 @@ jobs:
         run: |
           DEVICE=$(xcrun simctl list devices available | grep -E "iPhone Air \(" | head -n 1 | sed -E 's/^[[:space:]]*//; s/ \(.*$//')
           if [ -z "$DEVICE" ]; then
-            DEVICE=$(xcrun simctl list devices available | grep "iPhone" | head -n 1 | sed -E 's/^[[:space:]]*//; s/ \(.*$//')
+            echo "::error::P0 截图证据要求 iPhone Air（固定 1260x2736），runner 上未找到"
+            xcrun simctl list devices
+            exit 1
           fi
-          test -n "$DEVICE"
           echo "DEVICE=$DEVICE" >> "$GITHUB_ENV"
           set +e
           xcodebuild build \
@@ -230,6 +231,7 @@ jobs:
           xcrun simctl install "$DEVICE" "$APP_PATH"
           mkdir -p ci-artifacts/ios-screenshots
           runtime_log="ios-screenshot-runtime.log"
+          fixture_hash="$(shasum -a 256 ios-app/tools/fixtures/p0-demo-ledger-2026-08-v1.json | awk '{print toupper($1)}')"
           : > "$runtime_log"
           shoot() {
             local screen="$1" name="$2"
@@ -241,6 +243,8 @@ jobs:
               sleep 1
               if ! SIMCTL_CHILD_QINGJI_DEMO=1 \
                 SIMCTL_CHILD_QINGJI_DEMO_NOW="2026-08-27T12:00:00+08:00" \
+                SIMCTL_CHILD_QINGJI_P0_FIXTURE_HASH="$fixture_hash" \
+                SIMCTL_CHILD_TZ="Asia/Shanghai" \
                 SIMCTL_CHILD_QINGJI_SCREEN="$screen" \
                 xcrun simctl launch "$DEVICE" com.qingji.app >> "$runtime_log" 2>&1; then
                 echo "::warning::CAPTURE_LAUNCH_FAILED name=$name screen=$screen attempt=$attempt"
@@ -264,45 +268,54 @@ jobs:
               --predicate 'process == "QingJi"' >> "$runtime_log" 2>&1 || true
             return 1
           }
-          shoot home 01-home
-          shoot quickadd 02-quickadd
-          shoot quickadd/income 37-quickadd-income
-          shoot transactions 03-transactions
-          shoot stats/week 04-stats-week
-          shoot stats/month 05-stats-month
-          shoot stats/year 06-stats-year
-          shoot stats/custom 07-stats-custom
-          shoot settings/budget 08-budget
-          shoot settings/reconcile 09-reconcile
-          shoot settings/reimburse 10-reimburse
-          shoot settings/reimburse/settlement 40-reimburse-settlement
-          shoot settings/savings 11-savings
-          shoot settings/recurring 12-recurring
-          shoot settings/assets 13-assets
-          shoot settings/assets/detail 38-assets-detail
-          shoot settings/liabilities 14-liabilities
-          shoot settings/net-worth 15-net-worth
-          shoot settings/books 16-books
-          shoot settings/accounts 17-accounts
-          shoot settings/accounts/detail 39-account-detail
-          shoot settings/categories 18-categories
-          shoot settings/tags 19-tags
-          shoot settings 20-settings
-          shoot ai 21-ai
-          shoot settings/ai 22-ai-settings
-          shoot settings/import-review 23-import-review
-          shoot settings/reports 24-reports
-          shoot settings/memory 25-memory
-          shoot settings/ai-tasks 26-ai-tasks
-          shoot settings/ai-diagnostics 27-ai-diagnostics
-          shoot settings/ai-search 28-ai-search
-          shoot settings/ai-memory 29-ai-memory
-          shoot settings/ai-extensions 30-ai-extensions
-          shoot settings/ai-schedules 31-ai-schedules
-          shoot settings/ai-local 32-ai-local
-          shoot settings/backup 33-backup
-          shoot settings/theme 34-theme
-          shoot settings/display 35-display
+          shoot home/drawer 01-drawer-books
+          shoot home 02-home-overview
+          shoot quickadd 03-quick-add-expense
+          shoot quickadd/income 04-quick-add-income
+          shoot search 05-transactions-search
+          shoot settings/reimburse 06-reimburse
+          shoot settings/reimburse/settlement 07-reimburse-settlement
+          shoot settings/books 08-books-management
+          shoot settings/accounts 09-accounts-management
+          shoot settings/categories 10-categories
+          shoot settings/tags 11-tags
+          shoot settings/memory 12-category-memory
+          shoot stats/week 13-stats-week
+          shoot stats/month 14-stats-month
+          shoot stats/year 15-stats-year
+          shoot stats/custom 16-stats-custom
+          shoot settings/budget 17-budget
+          shoot settings/savings 18-savings
+          shoot settings/recurring 19-recurring
+          shoot settings/import-review 20-import-review
+          shoot settings/reports 21-reports-library
+          shoot settings/backup 22-backup
+          shoot settings 23-settings
+          shoot settings/theme 24-theme
+          shoot settings/display 25-display
+          shoot settings/assets 26-assets-hub
+          shoot settings/reconcile 27-reconcile
+          shoot settings/liabilities 28-liabilities
+          shoot settings/net-worth 29-net-worth
+          shoot settings/assets/detail 30-physical-asset-detail
+          shoot settings/accounts/detail 31-account-detail
+          shoot ai 32-ai-entry
+          shoot settings/ai 33-ai-settings
+          shoot settings/ai-tasks 34-ai-tasks
+          shoot settings/ai-diagnostics 35-ai-diagnostics
+          shoot settings/ai-search 36-ai-search
+          shoot settings/ai-memory 37-ai-memory
+          shoot settings/ai-extensions 38-ai-extensions
+          shoot settings/ai-schedules 39-ai-schedules
+          shoot settings/ai-local 40-ai-local
+
+          APP_DATA=$(xcrun simctl get_app_container "$DEVICE" com.qingji.app data)
+          test -f "$APP_DATA/Documents/p0-business-ios.json"
+          cp "$APP_DATA/Documents/p0-business-ios.json" ci-artifacts/ios-screenshots/p0-business-ios.json
+          python3 ios-app/tools/check_p0_business_json.py \
+            --input ci-artifacts/ios-screenshots/p0-business-ios.json \
+            --contract ios-app/tools/p0_product_contract.json \
+            --platform ios
 
           python3 ios-app/tools/write_parity_metadata.py \
             --root . \
@@ -315,7 +328,8 @@ jobs:
           python3 ios-app/tools/check_capture_metadata.py \
             --root . \
             --metadata ci-artifacts/ios-screenshots/capture-metadata.json \
-            --platform ios
+            --platform ios \
+            --require-complete
 
           python3 ios-app/tools/check_screenshot_nonempty.py \
             ci-artifacts/ios-screenshots/*.png
@@ -367,6 +381,13 @@ jobs:
             --root . \
             --output ci-artifacts/screenshot-report.json \
             --require-complete
+      - name: Compare P0 business fields
+        run: |
+          python3 ios-app/tools/compare_p0_business_json.py \
+            --android android-app/outputs/parity/p0-business-android.json \
+            --ios ci-artifacts/ios-screenshots/p0-business-ios.json \
+            --contract ios-app/tools/p0_product_contract.json \
+            --output ci-artifacts/p0-business-diff.json
       - name: Build visual Android/iOS comparison sheets
         run: |
           python3 ios-app/tools/make_ios_ui_comparisons.py \
@@ -379,6 +400,8 @@ jobs:
           path: |
             ci-artifacts/screenshot-report.json
             ci-artifacts/screenshot-report.md
+            ci-artifacts/p0-business-diff.json
+            ci-artifacts/p0-business-diff.md
       - uses: actions/upload-artifact@v4
         with:
           name: parity-visual-comparisons
@@ -390,6 +413,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add -f ci-artifacts/screenshot-report.json ci-artifacts/screenshot-report.md
+          git add -f ci-artifacts/p0-business-diff.json ci-artifacts/p0-business-diff.md
           git add -f ci-artifacts/parity-comparisons
           if git diff --cached --quiet; then
             echo "双端截图报告无变化，跳过提交"

@@ -123,6 +123,10 @@ def validate_fixture_semantics(path: Path, contract_fixture: dict[str, Any]) -> 
     require(isinstance(transactions, list) and transactions, "fixture transactions must be non-empty")
     book_keys = {item.get("key") for item in books if isinstance(item, dict)}
     account_keys = {item.get("key") for item in accounts if isinstance(item, dict)}
+    canonical_account_kinds = {"cash", "debit", "credit", "savings", "investment", "loan", "other"}
+    for account in accounts:
+        require(account.get("kind") in canonical_account_kinds,
+                f"{account.get('key')}: account kind is not an Android canonical storage key")
     transaction_keys = [item.get("key") for item in transactions if isinstance(item, dict)]
     require(len(transaction_keys) == len(transactions), "every fixture transaction needs a key")
     require(len(set(transaction_keys)) == len(transaction_keys), "fixture transaction keys must be unique")
@@ -242,6 +246,181 @@ def validate_baseline(
     return warnings
 
 
+def validate_data_upgrade(payload: dict[str, Any], repo: Path) -> None:
+    upgrade = payload.get("dataUpgrade")
+    require(isinstance(upgrade, dict), "dataUpgrade must be an object")
+    require(upgrade.get("id") == "p0-ios-qingji-upgrade-2026-09-v1",
+            "dataUpgrade id is not locked")
+    require(upgrade.get("status") in {
+        "SPEC_LOCKED_MACOS_EVIDENCE_PENDING",
+        "VERIFIED_ON_MACOS",
+    }, "invalid dataUpgrade status")
+
+    source = upgrade.get("source")
+    require(isinstance(source, dict), "dataUpgrade.source must be an object")
+    require(source.get("product") == "QingJi", "dataUpgrade source product must be QingJi")
+    require(source.get("store") == "SwiftData", "dataUpgrade source store must be SwiftData")
+    require(source.get("container") == "AppModelContainer.shared",
+            "dataUpgrade source container drifted")
+    source_revision = source.get("sourceRevision")
+    require(isinstance(source_revision, str) and re.fullmatch(r"[0-9a-f]{40}", source_revision),
+            "dataUpgrade sourceRevision must be a full lowercase SHA")
+    require(git_object_exists(repo, source_revision),
+            f"dataUpgrade source revision is unavailable: {source_revision}")
+
+    target = upgrade.get("target")
+    require(isinstance(target, dict), "dataUpgrade.target must be an object")
+    require(target.get("product") == "QingJi", "dataUpgrade target product must be QingJi")
+    require(target.get("store") == "SwiftData", "dataUpgrade target store must be SwiftData")
+    require(target.get("policy") == "in-place", "dataUpgrade policy must be in-place")
+    require(target.get("container") == "AppModelContainer.shared",
+            "dataUpgrade target container drifted")
+    model_types = target.get("modelTypes")
+    require(isinstance(model_types, list) and model_types,
+            "dataUpgrade target modelTypes must be non-empty")
+    require(len(model_types) == len(set(model_types)) and
+            all(isinstance(value, str) and value for value in model_types),
+            "dataUpgrade target modelTypes must be unique strings")
+    model_source = text(repo / "ios-app/QingJi/Models/AppModelContainer.swift")
+    actual_model_types = re.findall(
+        r"^\s+([A-Za-z][A-Za-z0-9]+)\.self,",
+        model_source,
+        re.MULTILINE,
+    )
+    require(model_types == actual_model_types,
+            "dataUpgrade target modelTypes differ from AppModelContainer")
+
+    fixture = upgrade.get("fixture")
+    require(isinstance(fixture, dict), "dataUpgrade.fixture must be an object")
+    fixture_path = (repo / str(fixture.get("file", ""))).resolve()
+    repo_path = repo.resolve()
+    require(repo_path == fixture_path or repo_path in fixture_path.parents,
+            "dataUpgrade fixture path escapes the repository")
+    require(fixture_path.is_file(), f"dataUpgrade fixture is missing: {fixture_path}")
+    fixture_hash = fixture.get("inputHash")
+    require(isinstance(fixture_hash, str) and re.fullmatch(r"[0-9A-F]{64}", fixture_hash),
+            "dataUpgrade fixture inputHash must be an uppercase SHA-256")
+    require(sha256(fixture_path) == fixture_hash,
+            "dataUpgrade fixture SHA-256 differs from the contract")
+    upgrade_fixture = load_json(fixture_path)
+    require(upgrade_fixture.get("schemaVersion") == 1,
+            "dataUpgrade fixture schemaVersion must be 1")
+    require(upgrade_fixture.get("fixtureId") == upgrade["id"],
+            "dataUpgrade fixture id differs from contract")
+    require(upgrade_fixture.get("source") == source,
+            "dataUpgrade fixture source differs from contract")
+    require(upgrade_fixture.get("target") == target,
+            "dataUpgrade fixture target differs from contract")
+
+    attachment = upgrade_fixture.get("attachment")
+    require(isinstance(attachment, dict), "dataUpgrade attachment must be an object")
+    relative_path = attachment.get("relativePath")
+    require(isinstance(relative_path, str) and relative_path and
+            not Path(relative_path).is_absolute() and
+            all(part not in {"", ".", ".."} for part in relative_path.split("/")) and
+            "\\" not in relative_path,
+            "dataUpgrade attachment path is unsafe")
+    content = attachment.get("contentUtf8")
+    require(isinstance(content, str), "dataUpgrade attachment contentUtf8 is missing")
+    content_bytes = content.encode("utf-8")
+    require(attachment.get("byteLength") == len(content_bytes),
+            "dataUpgrade attachment byteLength differs")
+    require(attachment.get("sha256") == hashlib.sha256(content_bytes).hexdigest().upper(),
+            "dataUpgrade attachment SHA-256 differs")
+    sentinel_rows = upgrade_fixture.get("sentinels")
+    require(isinstance(sentinel_rows, list) and sentinel_rows,
+            "dataUpgrade sentinels must be non-empty")
+    sentinel_ids = [row.get("stableID") for row in sentinel_rows if isinstance(row, dict)]
+    require(len(sentinel_ids) == len(sentinel_rows) and
+            len(set(sentinel_ids)) == len(sentinel_ids),
+            "dataUpgrade sentinel stableIDs must be unique")
+
+    preserve_fields = upgrade.get("preserveFields")
+    require(isinstance(preserve_fields, list) and preserve_fields and
+            all(isinstance(value, str) and value for value in preserve_fields),
+            "dataUpgrade preserveFields must be non-empty")
+    require(upgrade_fixture.get("preserveFields") == preserve_fields,
+            "dataUpgrade preserveFields differ from fixture")
+
+    android_backup = upgrade.get("androidBackup")
+    require(isinstance(android_backup, dict), "dataUpgrade.androidBackup must be an object")
+    require(android_backup.get("requiredDatabaseVersion") ==
+            payload["baseline"]["android"]["databaseVersion"],
+            "dataUpgrade Android DB version differs from baseline")
+    samples = android_backup.get("requiredSamples")
+    require(samples == ["current-v49", "v40", "v48"],
+            "dataUpgrade Android backup sample set is not locked")
+    require(android_backup.get("restoreTarget") == "QingJi SwiftData",
+            "dataUpgrade Android restore target drifted")
+    require(android_backup.get("status") in {"MACOS_EVIDENCE_PENDING", "VERIFIED_ON_MACOS"},
+            "invalid dataUpgrade Android backup status")
+    require(upgrade_fixture.get("androidBackup") == android_backup,
+            "dataUpgrade Android backup contract differs from fixture")
+
+    expected = upgrade.get("expected")
+    require(isinstance(expected, dict) and expected and
+            all(value is True for value in expected.values()),
+            "dataUpgrade expected assertions must all be true")
+    require(upgrade_fixture.get("expected") == expected,
+            "dataUpgrade expected assertions differ from fixture")
+    checks = upgrade.get("requiredChecks")
+    require(isinstance(checks, list) and checks and
+            all(isinstance(value, str) and value for value in checks),
+            "dataUpgrade requiredChecks must be non-empty")
+    require(upgrade_fixture.get("requiredChecks") == checks,
+            "dataUpgrade requiredChecks differ from fixture")
+
+    if payload["status"] == "P0_COMPLETE":
+        require(upgrade["status"] == "VERIFIED_ON_MACOS",
+                "P0_COMPLETE requires macOS data upgrade evidence")
+        require(android_backup["status"] == "VERIFIED_ON_MACOS",
+                "P0_COMPLETE requires macOS Android backup evidence")
+
+
+def validate_distribution(payload: dict[str, Any]) -> None:
+    distribution = payload.get("distribution")
+    require(isinstance(distribution, dict), "distribution must be an object")
+    require(distribution.get("mode") == "development-sideload",
+            "P0 distribution mode must be development-sideload")
+    require(distribution.get("status") in {"DECISION_LOCKED", "VERIFIED_ON_MACOS"},
+            "invalid distribution status")
+    require(distribution.get("deviceInstall") == "signed-ipa-required",
+            "device install must require a signed IPA")
+    require(distribution.get("simulatorArtifact") ==
+            "unsigned-simulator-build-for-evidence-only",
+            "simulator artifact policy drifted")
+    signing = distribution.get("signing")
+    require(isinstance(signing, dict), "distribution.signing must be an object")
+    require(signing.get("platform") == "macOS", "distribution signing platform must be macOS")
+    require(signing.get("teamType") == "Personal Team or Apple Developer Program",
+            "distribution signing team policy drifted")
+    require(signing.get("credentialsStatus") in {
+        "PENDING_MACOS_USER_INPUT",
+        "AVAILABLE_ON_MACOS",
+    }, "invalid distribution credentials status")
+    excluded = distribution.get("excludedChannels")
+    require(excluded == ["TestFlight", "App Store"],
+            "P0 distribution excluded channels are not locked")
+    required_at_p6 = distribution.get("requiredAtP6")
+    require(isinstance(required_at_p6, list) and required_at_p6 and
+            all(isinstance(value, str) and value for value in required_at_p6),
+            "distribution requiredAtP6 must be non-empty")
+    require(distribution.get("changePolicy") ==
+            "changing-the-channel-requires-an-explicit-user-decision-and-a-contract-update",
+            "distribution change policy drifted")
+    if distribution["status"] == "DECISION_LOCKED":
+        require(signing["credentialsStatus"] == "PENDING_MACOS_USER_INPUT",
+                "locked distribution must record pending macOS credentials")
+        require(signing.get("teamId") is None and signing.get("certificate") is None and
+                signing.get("provisioningProfile") is None,
+                "pending distribution credentials must not contain stale values")
+    if payload["status"] == "P0_COMPLETE":
+        require(distribution["status"] == "VERIFIED_ON_MACOS",
+                "P0_COMPLETE requires macOS distribution evidence")
+        require(signing["credentialsStatus"] == "AVAILABLE_ON_MACOS",
+                "P0_COMPLETE requires available macOS signing credentials")
+
+
 def validate_scenes(payload: dict[str, Any], repo: Path) -> Counter[str]:
     scenes = payload.get("scenes")
     require(isinstance(scenes, list), "scenes must be an array")
@@ -297,6 +476,51 @@ def validate_scenes(payload: dict[str, Any], repo: Path) -> Counter[str]:
     require(dict(phase_counts) == expected_phase_counts,
             f"phase counts differ: actual={dict(phase_counts)} expected={expected_phase_counts}")
     return phase_counts
+
+
+def validate_screenshot_manifest(payload: dict[str, Any], repo: Path) -> None:
+    manifest_path = repo / "ios-app/tools/screenshot_manifest.json"
+    manifest = load_json(manifest_path)
+    require(manifest.get("schemaVersion") == 1, "screenshot manifest schemaVersion must be 1")
+    baseline = manifest.get("baseline")
+    require(isinstance(baseline, dict), "screenshot manifest baseline is missing")
+    android = payload["baseline"]["android"]
+    require(baseline.get("androidVersion") == android["version"], "screenshot manifest Android version drifted")
+    require(baseline.get("androidWatermark") == android["watermark"], "screenshot manifest Android watermark drifted")
+    require(baseline.get("androidDatabaseVersion") == android["databaseVersion"], "screenshot manifest Android DB version drifted")
+    require(baseline.get("iosDeploymentTarget") == payload["baseline"]["ios"]["deploymentTarget"],
+            "screenshot manifest iOS deployment target drifted")
+
+    scenes = {scene["id"]: scene for scene in payload["scenes"]}
+    pairs = manifest.get("pairs")
+    require(isinstance(pairs, list), "screenshot manifest pairs must be an array")
+    pair_ids = []
+    ios_routes = []
+    for index, pair in enumerate(pairs, start=1):
+        require(isinstance(pair, dict), f"screenshot manifest pair {index} must be an object")
+        pair_id = pair.get("id")
+        require(isinstance(pair_id, str) and pair_id, f"screenshot manifest pair {index} has invalid id")
+        require(pair_id in scenes, f"screenshot manifest pair {pair_id} is not a canonical scene")
+        pair_ids.append(pair_id)
+        require(isinstance(pair.get("android"), str) and pair["android"],
+                f"screenshot manifest pair {pair_id} has no Android path")
+        ios_route = pair.get("iosRoute")
+        ios_path = pair.get("ios")
+        if ios_route is None:
+            require(ios_path is None and pair.get("iosStatus") == "missing",
+                    f"screenshot manifest pair {pair_id} has an invalid missing iOS target")
+            require(scenes[pair_id].get("iosCurrentEntry") is None,
+                    f"screenshot manifest pair {pair_id} hides an existing iOS target")
+        else:
+            require(isinstance(ios_route, str) and ios_route,
+                    f"screenshot manifest pair {pair_id} has an invalid iOS route")
+            require(isinstance(ios_path, str) and ios_path,
+                    f"screenshot manifest pair {pair_id} has no iOS path")
+            ios_routes.append(ios_route)
+
+    require(len(pair_ids) == len(set(pair_ids)), "screenshot manifest ids must be unique")
+    require(set(pair_ids) == set(scenes), "screenshot manifest must cover all 41 canonical scenes")
+    require(len(ios_routes) == len(set(ios_routes)), "screenshot manifest iOS routes must be unique")
 
 
 def validate_supporting_contracts(payload: dict[str, Any]) -> None:
@@ -366,7 +590,10 @@ def check(contract: Path, require_apk: bool, apk_path: Path | None) -> int:
         repo = contract.resolve().parents[2]
         validate_policy(payload)
         warnings = validate_baseline(payload, repo, require_apk, apk_path)
+        validate_data_upgrade(payload, repo)
+        validate_distribution(payload)
         phase_counts = validate_scenes(payload, repo)
+        validate_screenshot_manifest(payload, repo)
         validate_supporting_contracts(payload)
     except (ContractError, OSError) as error:
         print(f"P0 contract invalid: {error}", file=sys.stderr)

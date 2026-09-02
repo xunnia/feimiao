@@ -1,0 +1,121 @@
+{
+  "schemaVersion": 1,
+  "fixtureId": "p0-ios-qingji-upgrade-2026-09-v1",
+  "source": {
+    "product": "QingJi",
+    "store": "SwiftData",
+    "sourceRevision": "08f7a5e28ffcc65f50dd2661802111d0ef92446c",
+    "container": "AppModelContainer.shared",
+    "schemaKind": "inferred-model-graph-at-source-revision",
+    "location": "existing-user-store-on-macos"
+  },
+  "target": {
+    "product": "QingJi",
+    "store": "SwiftData",
+    "policy": "in-place",
+    "container": "AppModelContainer.shared",
+    "schemaPolicy": "introduce-an-explicit-VersionedSchema-before-the-next-model-change",
+    "modelTypes": [
+      "Account",
+      "Book",
+      "TxCategory",
+      "Tag",
+      "MoneyTransaction",
+      "Budget",
+      "SavingsGoal",
+      "RecurringRule",
+      "RecurringOccurrence",
+      "PhysicalAsset",
+      "AssetEvent",
+      "AssetUsageEvent",
+      "AssetTransactionLink",
+      "AssetRefundAllocation",
+      "AssetValuation",
+      "ReceivableAsset",
+      "ReceivableRecovery",
+      "LiabilityProfile",
+      "NetWorthSnapshot",
+      "AIChatSession",
+      "AIChatMessage",
+      "AIMemoryRecord",
+      "AIRequestRunRecord",
+      "AIRequestEventRecord",
+      "AIReportScheduleRecord",
+      "BudgetPlanRecord",
+      "BudgetPlanRevisionRecord",
+      "BudgetCycleOverrideRecord",
+      "BudgetCommitmentOccurrenceRecord",
+      "BudgetChangeEventRecord",
+      "ReportRecord",
+      "AccountBalanceCheckpointRecord",
+      "NetWorthVerifiedCheckpointRecord"
+    ]
+  },
+  "sentinels": [
+    {
+      "entity": "Book",
+      "stableID": "11111111-1111-1111-1111-111111111111",
+      "name": "历史账本",
+      "includeInTotal": true
+    },
+    {
+      "entity": "Account",
+      "stableID": "22222222-2222-2222-2222-222222222222",
+      "name": "历史账户",
+      "initialBalance": "1200.00"
+    },
+    {
+      "entity": "MoneyTransaction",
+      "stableID": "33333333-3333-3333-3333-333333333333",
+      "note": "迁移附件账单",
+      "amount": "18.50",
+      "attachmentPath": "receipts/p0-upgrade-attachment.txt"
+    }
+  ],
+  "attachment": {
+    "relativePath": "receipts/p0-upgrade-attachment.txt",
+    "contentUtf8": "p0-upgrade-attachment-v1",
+    "byteLength": 24,
+    "sha256": "DA72B7B686336E66E1FB42A974733C45DE5EF042C23F31F87390DF1A78CFDB8E"
+  },
+  "preserveFields": [
+    "stableID",
+    "name",
+    "amount",
+    "date",
+    "category",
+    "account",
+    "book",
+    "settledAt",
+    "settlementAccountID",
+    "eventType",
+    "refundOfID",
+    "attachmentPath",
+    "orderNo",
+    "reimbursable",
+    "isReimbursed",
+    "isExcluded"
+  ],
+  "androidBackup": {
+    "requiredDatabaseVersion": 49,
+    "requiredSamples": ["current-v49", "v40", "v48"],
+    "restoreTarget": "QingJi SwiftData",
+    "status": "MACOS_EVIDENCE_PENDING"
+  },
+  "expected": {
+    "sameStoreURL": true,
+    "existingRecordsPreserved": true,
+    "stableIDsPreserved": true,
+    "attachmentBytesPreserved": true,
+    "failedUpgradeLeavesModelsUnchanged": true,
+    "failedUpgradeLeavesAttachmentsUnchanged": true,
+    "androidV49RestoreIsReadable": true
+  },
+  "requiredChecks": [
+    "open-existing-qingji-store-without-replacing-store-url",
+    "upgrade-on-macos-and-preserve-sentinel-records",
+    "restore-current-android-v49-backup-into-qingji",
+    "verify-attachment-paths-and-bytes-before-and-after-upgrade",
+    "inject-failure-and-prove-model-and-file-rollback"
+  ]
+}

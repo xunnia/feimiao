@@ -21,6 +21,7 @@ import '../core/account/account_movement_projection.dart';
 import '../core/account/liability_balance_mode.dart';
 import '../core/account/net_worth_snapshot.dart';
 import '../core/account/net_worth_verified_checkpoint.dart';
+import '../core/app_clock.dart';
 import '../core/ai/ai_provider_config.dart';
 import '../core/ai/ai_account_json.dart';
 import '../core/ai/ai_logger.dart';
@@ -2749,7 +2750,7 @@ class AppRepository extends ChangeNotifier {
 
   /// 新行的同步字段：uuid + 变更时间戳。
   static Map<String, Object?> _syncStampNew() {
-    final now = DateTime.now().millisecondsSinceEpoch;
+    final now = AppClock.now.millisecondsSinceEpoch;
     return {'uuid': _newUuid(), 'created_ms': now, 'updated_ms': now};
   }
 
@@ -3525,13 +3526,13 @@ class AppRepository extends ChangeNotifier {
     DateTime? asOf,
     DateTime? knowledgeCutoff,
   }) {
-    final queryAsOf = asOf ?? DateTime.now();
+    final queryAsOf = asOf ?? AppClock.now;
     return budgetWindow(BudgetWindowQuery(
       viewKind: BudgetViewKind.calendarMonth,
       bookId: bookId ?? _currentBookId,
       referenceDate: month,
       asOf: queryAsOf,
-      knowledgeCutoff: knowledgeCutoff ?? DateTime.now(),
+      knowledgeCutoff: knowledgeCutoff ?? AppClock.now,
     ));
   }
 
@@ -3540,13 +3541,13 @@ class AppRepository extends ChangeNotifier {
     DateTime? now,
     DateTime? knowledgeCutoff,
   }) {
-    final queryNow = now ?? DateTime.now();
+    final queryNow = now ?? AppClock.now;
     return budgetWindow(BudgetWindowQuery(
       viewKind: BudgetViewKind.cycle,
       bookId: bookId ?? _currentBookId,
       referenceDate: queryNow,
       asOf: queryNow,
-      knowledgeCutoff: knowledgeCutoff ?? DateTime.now(),
+      knowledgeCutoff: knowledgeCutoff ?? AppClock.now,
     ));
   }
 
@@ -3556,13 +3557,13 @@ class AppRepository extends ChangeNotifier {
 
   /// 现在生效的月预算总额（老调用方无感兼容）。
   Decimal? get monthlyBudget {
-    final n = DateTime.now();
+    final n = AppClock.now;
     return budgetTotalFor(n.year, n.month);
   }
 
   /// 现在生效的分类预算明细（key -> 月预算）。
   Map<String, Decimal> get categoryBudgets {
-    final result = budgetForCalendarMonth(DateTime.now());
+    final result = budgetForCalendarMonth(AppClock.now);
     return Map.unmodifiable({
       for (final category in result.categoryResults)
         if (category.plannedCents > 0)
@@ -7905,7 +7906,7 @@ class AppRepository extends ChangeNotifier {
 
   Future<void> _materializeBudgetV2Occurrences() async {
     if (_budgetPlansV2.isEmpty) return;
-    final now = DateTime.now();
+    final now = AppClock.now;
     final nowMs = now.millisecondsSinceEpoch;
     await _db!.transaction((txn) async {
       for (final plan in _budgetPlansV2) {
@@ -9056,15 +9057,16 @@ class AppRepository extends ChangeNotifier {
     DateTime? periodEnd,
     int? bookId,
   }) async {
+    final now = AppClock.now;
     final id = await _db!.insert('reports', {
       'book_id': bookId ?? _currentBookId,
       'type': type,
       'title': title,
       'summary': summary,
       'markdown': markdown,
-      'period_start_ms': (periodStart ?? DateTime.now()).millisecondsSinceEpoch,
-      'period_end_ms': (periodEnd ?? DateTime.now()).millisecondsSinceEpoch,
-      'created_ms': DateTime.now().millisecondsSinceEpoch,
+      'period_start_ms': (periodStart ?? now).millisecondsSinceEpoch,
+      'period_end_ms': (periodEnd ?? now).millisecondsSinceEpoch,
+      'created_ms': now.millisecondsSinceEpoch,
       'pinned_ms': 0,
     });
     await _loadReports();
@@ -10857,7 +10859,7 @@ class AppRepository extends ChangeNotifier {
         'end_date_ms': endDate?.millisecondsSinceEpoch,
         'total_count': normalizedTotalCount,
         'generated_count': 0,
-        'created_ms': DateTime.now().millisecondsSinceEpoch,
+        'created_ms': AppClock.now.millisecondsSinceEpoch,
       });
     });
     await _loadRecurringRules();
@@ -10947,7 +10949,7 @@ class AppRepository extends ChangeNotifier {
   /// 到期生成:启用规则中凡 nextDue<=今天 就补记一笔并推进 nextDue。
   /// guard 上限防止极端情况(长期没打开 App)跑飞。
   Future<void> _materializeRecurring() async {
-    final now = DateTime.now();
+    final now = AppClock.now;
     final cutoff = DateTime(now.year, now.month, now.day, 23, 59, 59)
         .millisecondsSinceEpoch;
     var changed = false;
@@ -11036,7 +11038,7 @@ class AppRepository extends ChangeNotifier {
               'rule_id': rule.id,
               'due_ms': dueMs,
               'transaction_id': transactionId,
-              'created_ms': DateTime.now().millisecondsSinceEpoch,
+              'created_ms': AppClock.now.millisecondsSinceEpoch,
             });
           }
           due = rule.recurPeriod.advance(
@@ -11091,7 +11093,7 @@ class AppRepository extends ChangeNotifier {
   /// Fast-start query for the only ledger window visible on the first home
   /// frame. The full query still runs in [finishDeferredInitialization].
   Future<void> _loadTransactionsForStartupMonth() async {
-    final now = DateTime.now();
+    final now = AppClock.now;
     final start = DateTime(now.year, now.month);
     final end = DateTime(now.year, now.month + 1);
     final bookIds = _bookIdsForCurrentView();
@@ -11332,7 +11334,7 @@ class AppRepository extends ChangeNotifier {
 
   /// memo 只在 (revision, 当天) 都没变时有效；否则整体清空重建。
   void _ensureBalanceCacheFresh() {
-    final today = _dayStampOf(DateTime.now());
+    final today = _dayStampOf(AppClock.now);
     if (_balanceCacheRevision == _revision && _balanceCacheDayStamp == today) {
       return;
     }
@@ -12412,7 +12414,7 @@ class AppRepository extends ChangeNotifier {
             await txn.insert('auto_record_occurrences', {
               'source_id': sourceId,
               'transaction_id': null,
-              'created_ms': DateTime.now().millisecondsSinceEpoch,
+              'created_ms': AppClock.now.millisecondsSinceEpoch,
             });
             final transactionId = await txn.insert('transactions', values);
             await txn.update(
@@ -12992,10 +12994,11 @@ class AppRepository extends ChangeNotifier {
     final cached = _accountBalanceCache[account.id];
     if (cached != null) return cached;
     _balanceRecomputeCount++;
+    final now = AppClock.now;
     final result = _accountBalanceResultAt(
       account,
-      asOf: DateTime.now(),
-      knowledgeCutoff: DateTime.now(),
+      asOf: now,
+      knowledgeCutoff: now,
       historical: false,
     );
     _accountBalanceCache[account.id] = result;
@@ -13270,7 +13273,7 @@ class AppRepository extends ChangeNotifier {
       _accountBalanceResultAt(
         account,
         asOf: asOf,
-        knowledgeCutoff: knowledgeCutoff ?? DateTime.now(),
+        knowledgeCutoff: knowledgeCutoff ?? AppClock.now,
         historical: true,
       );
 
@@ -13295,7 +13298,7 @@ class AppRepository extends ChangeNotifier {
     AccountEntity account, {
     required int days,
   }) {
-    final now = DateTime.now();
+    final now = AppClock.now;
     final current = accountBalanceResultOf(account).value!;
     final trustedFrom = current.trustedFrom;
     if (trustedFrom == null) return null;
@@ -13457,7 +13460,7 @@ class AppRepository extends ChangeNotifier {
   }
 
   MetricResult<NetWorthBreakdown> _computeCurrentNetWorthResult() {
-    final now = DateTime.now();
+    final now = AppClock.now;
     final bookIds = _books.map((book) => book.id).toList();
     if (bookIds.isEmpty) bookIds.add(_defaultBookId == 0 ? 1 : _defaultBookId);
     final query = MetricQuery(
@@ -13797,7 +13800,7 @@ class AppRepository extends ChangeNotifier {
       '${date.day.toString().padLeft(2, '0')}';
 
   Future<void> recordNetWorthSnapshot({DateTime? date}) async {
-    final now = DateTime.now();
+    final now = AppClock.now;
     final requested = date ?? now;
     if (_snapshotDateKey(requested) != _snapshotDateKey(now)) {
       throw StateError('当前解析器只能生成今天的计算快照，不能把当前值写成历史日期');
@@ -13814,7 +13817,7 @@ class AppRepository extends ChangeNotifier {
   }) async {
     if (_db == null) return;
     final mergedCauses = Set<NetWorthSnapshotCause>.from(causes);
-    final now = DateTime.now();
+    final now = AppClock.now;
     final result = currentNetWorthResult();
     final b = result.value!;
     final missingValuationCount = _allPhysicalAssets
@@ -16324,7 +16327,7 @@ class AppRepository extends ChangeNotifier {
           categoryBudgets.isEmpty ? '' : p.categoryBudgetsJson(),
       'monthly_income': monthlyIncome?.toString() ?? '',
       'fixed_expenses': fixedExpenses.isEmpty ? '' : p.fixedExpensesJson(),
-      'created_ms': DateTime.now().millisecondsSinceEpoch,
+      'created_ms': AppClock.now.millisecondsSinceEpoch,
     });
     await _loadBudgetPeriods();
     notifyListeners();
@@ -17716,7 +17719,7 @@ class AppRepository extends ChangeNotifier {
       'cover': cover,
       'remark': remark,
       'sort_order': _books.length,
-      'created_ms': DateTime.now().millisecondsSinceEpoch,
+      'created_ms': AppClock.now.millisecondsSinceEpoch,
       'starred': 0,
       'include_in_total': includeInTotal ? 1 : 0,
     });
@@ -24033,7 +24036,7 @@ class AppRepository extends ChangeNotifier {
     if (normalizedCurrency != 'CNY') {
       throw UnsupportedError('当前版本仅支持新增人民币账户。');
     }
-    final now = DateTime.now().millisecondsSinceEpoch;
+    final now = AppClock.now.millisecondsSinceEpoch;
     final id = await _db!.insert('accounts', {
       'uuid': _newUuid(),
       'name': name,
@@ -24589,7 +24592,7 @@ class AppRepository extends ChangeNotifier {
     String emoji = '🐷',
     Decimal? initialSaved,
   }) async {
-    final nowMs = DateTime.now().millisecondsSinceEpoch;
+    final nowMs = AppClock.now.millisecondsSinceEpoch;
     final id = await _db!.insert('savings_goals', {
       'uuid': _newUuid(),
       'name': name,

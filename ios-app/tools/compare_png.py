@@ -195,7 +195,23 @@ def main() -> int:
     for pair in pairs:
         pair_id = pair["id"]
         android = resolve(pair["android"], args.root)
-        ios = resolve(pair["ios"], args.root)
+        ios_value = pair.get("ios")
+        if ios_value is None:
+            report = {
+                "id": pair_id,
+                "status": "missing_ios_target"
+                if pair.get("iosStatus") == "missing"
+                else "missing_ios",
+                "android": str(android),
+            }
+            if report["status"] == "missing_ios":
+                failures.append(pair_id)
+            report["feature"] = pair.get("feature", pair_id)
+            report["route"] = pair.get("iosRoute", "")
+            report["notes"] = pair.get("notes", "")
+            reports.append(report)
+            continue
+        ios = resolve(ios_value, args.root)
         if not android.exists() and not ios.exists():
             report = {"id": pair_id, "status": "missing_both"}
         elif not android.exists():

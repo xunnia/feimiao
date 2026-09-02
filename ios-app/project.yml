@@ -24,6 +24,9 @@ targets:
       - path: QingJi/Resources/CategoryIcons
         type: folder
         buildPhase: resources
+      - path: tools/fixtures
+        type: folder
+        buildPhase: resources
     dependencies:
       - package: QingJiCore
       - target: QingJiWidget

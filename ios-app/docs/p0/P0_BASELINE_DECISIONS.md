@@ -82,7 +82,7 @@
 
 规范输入文件：`ios-app/tools/fixtures/p0-demo-ledger-2026-08-v1.json`。
 
-- SHA-256：`AC6BA74FE1C9C43C29CF9915FB9632E5496338E838394DEF72FBD7DDFA7D498C`；
+- SHA-256：`E45AB0CEFF322CCAE8A54474AB523F954724A749D0561F698ED81F23850996A6`；
 - now：`2026-08-27T12:00:00+08:00`；
 - locale：`zh-Hans`；timezone：`Asia/Shanghai`；currency：`CNY`；book：`总账本`；
 - 30 条交易输入，包含附着退款和转账；
@@ -92,7 +92,26 @@
 
 自动检查器会重算上述金额、检查引用、退款归属、41 场景、12 旅程、版本、水印、DB、Bundle ID、deployment target、源码锚点、fixture hash 和 APK hash。
 
-当前两端 seeder 的可见数据与该 fixture 基本一致，但尚未真正从这一份规范文件加载，也未导出同构业务 JSON，所以 P0 仍不能关闭。
+当前两端 seeder 已接入这一份规范文件：Android 采集驱动从 Flutter asset 解码，QingJi 从 Bundle 解码；两端都各自写入演示容器并导出平台中立的业务 JSON。代码接线已完成，但 Android 模拟器/iOS Simulator 的真实运行、导出和逐字段差异报告仍待 macOS/CI 证据，所以 P0 仍不能关闭。
+
+### 4.1 数据升级合同
+
+机器合同中的 `dataUpgrade` 锁定了 `ios-app/tools/migration-fixtures/p0-ios-qingji-upgrade-2026-09-v1.json`（SHA-256 `AE08B995CCCD952CBB1CF965F09B7EC31703734FE660076A0D656AC036D685C6`）。本合同只允许 `QingJi` 的 SwiftData 原地升级，继续使用 `AppModelContainer.shared`；不得换成 `FeiMiaoKit`/GRDB、换 store URL、清库或要求用户重新开始。
+
+- 源模型锚点：`08f7a5e28ffcc65f50dd2661802111d0ef92446c` 的 QingJi inferred model graph；
+- 目标模型：当前 `AppModelContainer.swift` 登记的完整 QingJi 模型集合；下一次模型变化前必须引入显式 `VersionedSchema`/迁移计划；
+- 必须保留：稳定 ID、账本/账户/流水字段、退款关联、结算字段、排除/报销状态和附件相对路径；
+- 必须验证：当前 Android DB v49、v40、v48 备份样本可恢复到 QingJi，附件路径和字节在升级前后不变，注入失败时模型和附件均回滚；
+- 当前状态：`SPEC_LOCKED_MACOS_EVIDENCE_PENDING`，不是已完成迁移。
+
+### 4.2 分发决策
+
+本轮 P0–P5 锁定分发模式为 `development-sideload`：最终设备验收必须使用 macOS 签名的 IPA 安装到目标 iPhone。Simulator 的 unsigned build 只用于截图和自动化证据，不能当作真机安装包。
+
+- 签名平台：macOS；团队条件：Personal Team 或 Apple Developer Program；
+- 当前凭据状态：`PENDING_MACOS_USER_INPUT`，团队 ID、证书和 provisioning profile 不能在 Windows 猜测或伪造；
+- TestFlight/App Store 明确不在本轮范围；切换渠道必须得到用户明确决定并更新机器合同；
+- P6 必须补齐签名安装、升级保留数据、真机冒烟和可回退安装包四项证据。
 
 ## 5. `0600683` 导入/备份修复审计
 
@@ -148,8 +167,17 @@
 - 41 个场景合同无重复，源码锚点存在，阶段计数正确；
 - 12 条黄金旅程和 6 类系统能力已登记；
 - fixture 文件可解析、SHA-256 固定、核心金额可重算；
+- Android 采集驱动会把 canonical fixture 暂存到 Flutter asset tree，
+  `parity_screenshots_test.dart` 从该 asset 解码；QingJi 通过
+  `P0ParityFixtureLoader` 从同一 JSON 资源解码、由 `P0ParityDemoSeeder`
+  写入演示容器，并由 `P0ParityBusinessExporter` 输出字段 JSON；这是代码
+  接线证据，不等于两端已经在设备上运行成功；
+- `run_parity_capture.sh` 的 Android 业务 JSON 校验路径已按其
+  `android-app` 工作目录修正；`compare_p0_business_json.py` 默认记录差异，
+  只有 `--require-match` 才把业务差异作为失败；
 - `0600683` 和 `FeiMiao` 供体已完成采用/重写/拒绝审计；
 - iOS 当前项目配置为 QingJi、`com.qingji.app`、iOS 26.0、本地 SwiftData + App Group。
+- 数据升级和分发合同已进入机器合同并通过结构校验；运行证据仍按下方未验证项处理。
 - 旧 39 路由与两个 CI workflow 的 `shoot` 调用数量一致；旧 39 张 iOS PNG 均为 `1260×2736` 且未判为空白；
 - 旧图最近似的一对是“存钱目标/定时记账”，`meanDelta=2.101`，高于旧门禁阈值 `1.0`。这只排除了近乎相同的占位图，不证明页面同款。
 - metadata 工具已用旧图抽样验证：每张图有独立 sidecar，旧的 books/accounts 槽位会明确标成 `legacy_ambiguous`；完整 41 场景采集才允许 `--require-complete`。
@@ -158,9 +186,11 @@
 
 - 41 张 Android 规范截图的重新采集和 metadata sidecar；
 - 现有 iOS 页面在 macOS Simulator 上的改前截图与 metadata；
-- 两端从同一 fixture 文件加载并导出同构业务 JSON；
+- Android 模拟器和 iOS Simulator 实际从同一 fixture 文件加载、导出业务 JSON，
+  并完成一次真实逐字段差异报告；当前 Windows 没有 Android ADB，且不能运行
+  Swift/Xcode，因此代码接线尚未升级为运行证据；
 - 页面逐项视觉、信息架构和字段结果的同款程度；
-- 旧 iOS 数据原地升级、Android v49 完整备份恢复和附件恢复；
+- 旧 iOS 数据原地升级、Android v49/v40/v48 完整备份恢复和附件恢复；
 - OAuth、真实 AI 网络、Widget、Share Extension、App Intents、权限、通知和后台任务；
 - 真机安装、签名、升级、回退、Dynamic Type、VoiceOver、深色模式和 Reduce Motion。
 
@@ -174,10 +204,10 @@
 
 ## 8. P0 剩余关闭门
 
-1. 让 Android 和 iOS 都从固定 fixture 规范加载，输出同构字段 JSON 并生成差异报告；
+1. 在 Android 模拟器和 macOS iOS Simulator 运行固定 fixture，输出同构字段 JSON 并生成差异报告；
 2. 重采 41 个 Android 场景，每张带 revision、版本、fixture hash、route、设备、OS、locale、timezone；
 3. 在 macOS 捕获所有已存在 iOS 页；缺失目标页写 `missing`，不得拿近似页补数；
-4. 锁定本轮最终分发模式和签名条件；
+4. 在已锁定开发侧载模式的前提下，由 macOS 提供并验证实际签名条件；
 5. 用旧 QingJi store 与 Android v49 备份样本验证升级、恢复、附件和失败回滚；
 6. 上述证据全部通过后才能把机器合同从 `P0_PARTIAL` 改为 `P0_COMPLETE`，再进入 P1。
 

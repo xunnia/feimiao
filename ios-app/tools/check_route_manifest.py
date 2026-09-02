@@ -31,9 +31,15 @@ def manifest_routes(path: Path) -> list[str]:
         route = pair.get("iosRoute")
         if not isinstance(pair_id, str) or not pair_id:
             raise ValueError(f"pair {index} has no non-empty id")
+        ids.append(pair_id)
+        if route is None:
+            if pair.get("ios") is not None or pair.get("iosStatus") != "missing":
+                raise ValueError(f"pair {pair_id} has an invalid declared missing iOS target")
+            continue
         if not isinstance(route, str) or not route:
             raise ValueError(f"pair {pair_id} has no non-empty iosRoute")
-        ids.append(pair_id)
+        if not isinstance(pair.get("ios"), str) or not pair["ios"]:
+            raise ValueError(f"pair {pair_id} has an iOS route but no iOS screenshot path")
         routes.append(route)
 
     duplicate_ids = sorted({value for value in ids if ids.count(value) > 1})

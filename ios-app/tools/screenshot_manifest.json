@@ -1,324 +1,343 @@
 {
   "schemaVersion": 1,
   "baseline": {
-    "androidVersion": "1.285.0+299",
-    "androidWatermark": "b0901-299",
+    "androidVersion": "1.289.0+304",
+    "androidWatermark": "b0901-304",
     "androidDatabaseVersion": 49,
     "iosDeploymentTarget": "26.0",
-    "fixture": "QINGJI_DEMO=1; QINGJI_DEMO_NOW=2026-08-27T12:00:00+08:00"
+    "fixtureId": "p0-demo-ledger-2026-08-v1",
+    "fixtureInputHash": "E45AB0CEFF322CCAE8A54474AB523F954724A749D0561F698ED81F23850996A6",
+    "fixture": "QINGJI_DEMO=1; QINGJI_DEMO_NOW=2026-08-27T12:00:00+08:00; TZ=Asia/Shanghai"
   },
   "pairs": [
+    {
+      "id": "drawer-books",
+      "feature": "抽屉账本",
+      "android": "android-app/outputs/parity/drawer-books-android.png",
+      "ios": "ci-artifacts/ios-screenshots/01-drawer-books.png",
+      "iosRoute": "home/drawer",
+      "notes": "抽屉展开，包含品牌、当前账本、新建入口和个人入口。"
+    },
     {
       "id": "home-overview",
       "feature": "首页月度总览",
       "android": "android-app/outputs/parity/home-overview-android.png",
-      "ios": "ci-artifacts/ios-screenshots/01-home.png",
+      "ios": "ci-artifacts/ios-screenshots/02-home-overview.png",
       "iosRoute": "home",
-      "notes": "金额、账本筛选和最近账目要一致；导航和材质允许原生差异。"
+      "notes": "金额、账本筛选、月份、交易筛选、账单列表和记一笔入口。"
     },
     {
-      "id": "quick-add",
-      "feature": "手动记账",
-      "android": "android-app/outputs/parity/quick-add-android.png",
-      "ios": "ci-artifacts/ios-screenshots/02-quickadd.png",
+      "id": "quick-add-expense",
+      "feature": "手动记账：支出",
+      "android": "android-app/outputs/parity/quick-add-expense-android.png",
+      "ios": "ci-artifacts/ios-screenshots/03-quick-add-expense.png",
       "iosRoute": "quickadd",
-      "notes": "支出/收入/转账需另做交互回归；此对为默认支出首屏。"
-    },
-    {
-      "id": "transactions",
-      "feature": "交易明细与搜索",
-      "android": "android-app/outputs/parity/transactions-android.png",
-      "ios": "ci-artifacts/ios-screenshots/03-transactions.png",
-      "iosRoute": "transactions",
-      "notes": "退款子行不重复显示，列表净额和按天合计一致。"
-    },
-    {
-      "id": "stats-week",
-      "feature": "周统计",
-      "android": "android-app/outputs/parity/stats-week-android.png",
-      "ios": "ci-artifacts/ios-screenshots/04-stats-week.png",
-      "iosRoute": "stats/week",
-      "notes": "按周一至周日、含空白天。"
-    },
-    {
-      "id": "stats-month",
-      "feature": "月统计",
-      "android": "android-app/outputs/parity/stats-month-android.png",
-      "ios": "ci-artifacts/ios-screenshots/05-stats-month.png",
-      "iosRoute": "stats/month",
-      "notes": "月度总额、分类构成和每日趋势一致。"
-    },
-    {
-      "id": "stats-year",
-      "feature": "年统计",
-      "android": "android-app/outputs/parity/stats-year-android.png",
-      "ios": "ci-artifacts/ios-screenshots/06-stats-year.png",
-      "iosRoute": "stats/year",
-      "notes": "全年总额、每月趋势和分类排行一致。"
-    },
-    {
-      "id": "stats-custom",
-      "feature": "自定义统计区间",
-      "android": "android-app/outputs/parity/stats-custom-android.png",
-      "ios": "ci-artifacts/ios-screenshots/07-stats-custom.png",
-      "iosRoute": "stats/custom",
-      "notes": "起止日包含整天，并记住上次区间。"
-    },
-    {
-      "id": "budget",
-      "feature": "预算与今日可花",
-      "android": "android-app/outputs/parity/budget-android.png",
-      "ios": "ci-artifacts/ios-screenshots/08-budget.png",
-      "iosRoute": "settings/budget",
-      "notes": "总预算、周期窗口、今日可花、分类预算、固定承诺模板和当前/下一周期 occurrence；匹配/跳过/退款复核由操作回归补充。"
-    },
-    {
-      "id": "reconcile",
-      "feature": "账户对账",
-      "android": "android-app/outputs/parity/reconcile-android.png",
-      "ios": "ci-artifacts/ios-screenshots/09-reconcile.png",
-      "iosRoute": "settings/reconcile",
-      "notes": "余额校准和质量状态需一致。"
-    },
-    {
-      "id": "reimburse",
-      "feature": "待报销",
-      "android": "android-app/outputs/parity/reimburse-android.png",
-      "ios": "ci-artifacts/ios-screenshots/10-reimburse.png",
-      "iosRoute": "settings/reimburse",
-      "notes": "报销到账创建附着冲减，原账单净额归零。"
-    },
-    {
-      "id": "savings",
-      "feature": "存钱目标",
-      "android": "android-app/outputs/parity/savings-android.png",
-      "ios": "ci-artifacts/ios-screenshots/11-savings.png",
-      "iosRoute": "settings/savings",
-      "notes": "目标进度和归档状态一致。"
-    },
-    {
-      "id": "recurring",
-      "feature": "定时记账",
-      "android": "android-app/outputs/parity/recurring-android.png",
-      "ios": "ci-artifacts/ios-screenshots/12-recurring.png",
-      "iosRoute": "settings/recurring",
-      "notes": "规则展示一致；后台调度能力按平台差异单独验收。"
-    },
-    {
-      "id": "assets",
-      "feature": "资产管理",
-      "android": "android-app/outputs/parity/assets-android.png",
-      "ios": "ci-artifacts/ios-screenshots/13-assets.png",
-      "iosRoute": "settings/assets",
-      "notes": "资产档案和生命周期入口一致。"
-    },
-    {
-      "id": "liabilities",
-      "feature": "负债管理",
-      "android": "android-app/outputs/parity/liabilities-android.png",
-      "ios": "ci-artifacts/ios-screenshots/14-liabilities.png",
-      "iosRoute": "settings/liabilities",
-      "notes": "负债档案、还款入口和余额口径一致。"
-    },
-    {
-      "id": "net-worth",
-      "feature": "净资产",
-      "android": "android-app/outputs/parity/net-worth-android.png",
-      "ios": "ci-artifacts/ios-screenshots/15-net-worth.png",
-      "iosRoute": "settings/net-worth",
-      "notes": "资产、应收、负债和质量状态一致。"
-    },
-    {
-      "id": "books",
-      "feature": "账本管理",
-      "android": "android-app/outputs/parity/books-android.png",
-      "ios": "ci-artifacts/ios-screenshots/16-books.png",
-      "iosRoute": "settings/books",
-      "notes": "总账本不可删除；封面是原生符号占位，正式封面资产待补。"
-    },
-    {
-      "id": "accounts",
-      "feature": "账户管理",
-      "android": "android-app/outputs/parity/accounts-android.png",
-      "ios": "ci-artifacts/ios-screenshots/17-accounts.png",
-      "iosRoute": "settings/accounts",
-      "notes": "账户类型、余额入口和对账入口一致；iOS 使用原生列表与 sheet。"
-    },
-    {
-      "id": "categories",
-      "feature": "分类管理",
-      "android": "android-app/outputs/parity/categories-android.png",
-      "ios": "ci-artifacts/ios-screenshots/18-categories.png",
-      "iosRoute": "settings/categories",
-      "notes": "稳定分类 key、层级、自定义和隐藏入口一致。"
-    },
-    {
-      "id": "tags",
-      "feature": "标签管理",
-      "android": "android-app/outputs/parity/tags-android.png",
-      "ios": "ci-artifacts/ios-screenshots/19-tags.png",
-      "iosRoute": "settings/tags",
-      "notes": "标签列表、排序和新建入口一致。"
-    },
-    {
-      "id": "settings",
-      "feature": "设置与数据管理",
-      "android": "android-app/outputs/parity/settings-android.png",
-      "ios": "ci-artifacts/ios-screenshots/20-settings.png",
-      "iosRoute": "settings",
-      "notes": "入口覆盖一致；iOS CSV 复核、canonical ZIP 和 Android v1/v2 原始 SQLite ZIP 转换已接入，待真实备份验收。"
-    },
-    {
-      "id": "ai",
-      "feature": "AI 记账入口",
-      "android": "android-app/outputs/parity/ai-android.png",
-      "ios": "ci-artifacts/ios-screenshots/21-ai.png",
-      "iosRoute": "ai",
-      "notes": "Android 与 iOS 均进入 Chats 列表；点记一记后进入正文。"
-    },
-    {
-      "id": "ai-settings",
-      "feature": "AI 服务商与模型设置",
-      "android": "android-app/outputs/parity/ai-settings-android.png",
-      "ios": "ci-artifacts/ios-screenshots/22-ai-settings.png",
-      "iosRoute": "settings/ai",
-      "notes": "服务商账号、模型、端点、Effort 和 Keychain/API Key 状态；OAuth 按平台能力单独标注。"
-    },
-    {
-      "id": "import-review",
-      "feature": "账单导入复核与商户批量分类",
-      "android": "android-app/outputs/parity/import-review-android.png",
-      "ios": "ci-artifacts/ios-screenshots/23-import-review.png",
-      "iosRoute": "settings/import-review",
-      "notes": "商品优先分类、商户分组、账户选择和退款订单匹配入口；原生控件允许视觉差异。"
-    },
-    {
-      "id": "reports",
-      "feature": "报告库与月报阅读",
-      "android": "android-app/outputs/parity/reports-android.png",
-      "ios": "ci-artifacts/ios-screenshots/24-reports.png",
-      "iosRoute": "settings/reports",
-      "notes": "报告正文和统计口径一致；Android 使用玻璃半屏报告库，iOS 使用原生 NavigationStack。"
-    },
-    {
-      "id": "memory",
-      "feature": "喵学到的分类",
-      "android": "android-app/outputs/parity/memory-android.png",
-      "ios": "ci-artifacts/ios-screenshots/25-memory.png",
-      "iosRoute": "settings/memory",
-      "notes": "分类学习映射的展示与删除；历史账单不受影响。"
-    },
-    {
-      "id": "ai-tasks",
-      "feature": "AI 任务中心",
-      "android": "android-app/outputs/parity/ai-tasks-android.png",
-      "ios": "ci-artifacts/ios-screenshots/26-ai-tasks.png",
-      "iosRoute": "settings/ai-tasks",
-      "notes": "阶段、状态和配置摘要一致；不展示密钥、完整提示词或原始思考。"
-    },
-    {
-      "id": "ai-diagnostics",
-      "feature": "AI 诊断",
-      "android": "android-app/outputs/parity/ai-diagnostics-android.png",
-      "ios": "ci-artifacts/ios-screenshots/27-ai-diagnostics.png",
-      "iosRoute": "settings/ai-diagnostics",
-      "notes": "服务商运行次数、失败状态和脱敏错误摘要。"
-    },
-    {
-      "id": "ai-search",
-      "feature": "AI 统一搜索",
-      "android": "android-app/outputs/parity/ai-search-android.png",
-      "ios": "ci-artifacts/ios-screenshots/28-ai-search.png",
-      "iosRoute": "settings/ai-search",
-      "notes": "账单、对话和 AI 任务的只读统一搜索。"
-    },
-    {
-      "id": "ai-memory",
-      "feature": "AI 可控记忆",
-      "android": "android-app/outputs/parity/ai-memory-android.png",
-      "ios": "ci-artifacts/ios-screenshots/29-ai-memory.png",
-      "iosRoute": "settings/ai-memory",
-      "notes": "仅明确授权记忆进入上下文；删除不改历史。"
-    },
-    {
-      "id": "ai-extensions",
-      "feature": "AI 技能与连接",
-      "android": "android-app/outputs/parity/ai-extensions-android.png",
-      "ios": "ci-artifacts/ios-screenshots/30-ai-extensions.png",
-      "iosRoute": "settings/ai-extensions",
-      "notes": "白名单技能和连接器开关；联网搜索按开关生效。"
-    },
-    {
-      "id": "ai-schedules",
-      "feature": "AI 定时报表",
-      "android": "android-app/outputs/parity/ai-schedules-android.png",
-      "ios": "ci-artifacts/ios-screenshots/31-ai-schedules.png",
-      "iosRoute": "settings/ai-schedules",
-      "notes": "计划数据一致；iOS 后台生成改为系统提醒后打开 App。"
-    },
-    {
-      "id": "ai-local",
-      "feature": "本地模型伴侣",
-      "android": "android-app/outputs/parity/ai-local-android.png",
-      "ios": "ci-artifacts/ios-screenshots/32-ai-local.png",
-      "iosRoute": "settings/ai-local",
-      "notes": "本机回环地址和健康检查；不允许远程明文 HTTP。"
-    },
-    {
-      "id": "backup",
-      "feature": "备份与恢复",
-      "android": "android-app/outputs/parity/backup-android.png",
-      "ios": "ci-artifacts/ios-screenshots/33-backup.png",
-      "iosRoute": "settings/backup",
-      "notes": "完整备份、附件和最近恢复点；恢复语义单独检查。"
-    },
-    {
-      "id": "theme",
-      "feature": "主题外观",
-      "android": "android-app/outputs/parity/theme-android.png",
-      "ios": "ci-artifacts/ios-screenshots/34-theme.png",
-      "iosRoute": "settings/theme",
-      "notes": "外观选择和系统 Liquid Glass；语义色保持一致。"
-    },
-    {
-      "id": "display",
-      "feature": "账单与聊天显示",
-      "android": "android-app/outputs/parity/display-android.png",
-      "ios": "ci-artifacts/ios-screenshots/35-display.png",
-      "iosRoute": "settings/display",
-      "notes": "内容优先/分类优先和用户气泡背景策略。"
+      "notes": "默认支出操作态；日期、账本、账户、标签、待报销和不计入收支入口必须可见。"
     },
     {
       "id": "quick-add-income",
-      "feature": "收入记账操作态",
-      "android": "android-app/outputs/parity/quickadd-income-android.png",
-      "ios": "ci-artifacts/ios-screenshots/37-quickadd-income.png",
+      "feature": "手动记账：收入",
+      "android": "android-app/outputs/parity/quick-add-income-android.png",
+      "ios": "ci-artifacts/ios-screenshots/04-quick-add-income.png",
       "iosRoute": "quickadd/income",
-      "notes": "同一记一笔页面切换到收入类型；键盘、分类和账户入口保留平台原生表现。"
+      "notes": "同一记账页面切换到收入类型。"
     },
     {
-      "id": "asset-detail",
-      "feature": "物品资产详情操作态",
-      "android": "android-app/outputs/parity/asset-detail-android.png",
-      "ios": "ci-artifacts/ios-screenshots/38-assets-detail.png",
-      "iosRoute": "settings/assets/detail",
-      "notes": "同一演示物品的估值、持有指标、账单关联和出售/退货入口；操作按钮允许原生布局差异。"
+      "id": "transactions-search",
+      "feature": "交易搜索与筛选",
+      "android": "android-app/outputs/parity/transactions-search-android.png",
+      "ios": "ci-artifacts/ios-screenshots/05-transactions-search.png",
+      "iosRoute": "search",
+      "notes": "固定查询词为“麦当劳”，保留搜索框、统计、按天分组和退款徽章。"
     },
     {
-      "id": "account-detail",
-      "feature": "账户详情操作态",
-      "android": "android-app/outputs/parity/account-detail-android.png",
-      "ios": "ci-artifacts/ios-screenshots/39-account-detail.png",
-      "iosRoute": "settings/accounts/detail",
-      "notes": "同一现金账户的余额、趋势、校准入口和流水活动；iOS 使用原生 sheet 展示详情。"
+      "id": "reimburse",
+      "feature": "待报销列表",
+      "android": "android-app/outputs/parity/reimburse-android.png",
+      "ios": "ci-artifacts/ios-screenshots/06-reimburse.png",
+      "iosRoute": "settings/reimburse",
+      "notes": "待报销金额按原账单净额展示。"
     },
     {
       "id": "reimburse-settlement",
       "feature": "报销到账操作态",
       "android": "android-app/outputs/parity/reimburse-settlement-android.png",
-      "ios": "ci-artifacts/ios-screenshots/40-reimburse-settlement.png",
+      "ios": "ci-artifacts/ios-screenshots/07-reimburse-settlement.png",
       "iosRoute": "settings/reimburse/settlement",
-      "notes": "同一待报销账单的到账账户、到账日期和抵消金额确认界面；确认按钮保留平台原生交互。"
+      "notes": "到账账户、到账日期和确认动作。"
+    },
+    {
+      "id": "books-management",
+      "feature": "账本管理操作态",
+      "android": "android-app/outputs/parity/books-management-android.png",
+      "ios": "ci-artifacts/ios-screenshots/08-books-management.png",
+      "iosRoute": "settings/books",
+      "notes": "从抽屉新建账本的表单操作态，区别于抽屉账本列表。"
+    },
+    {
+      "id": "accounts-management",
+      "feature": "账户管理操作态",
+      "android": "android-app/outputs/parity/accounts-management-android.png",
+      "ios": "ci-artifacts/ios-screenshots/09-accounts-management.png",
+      "iosRoute": "settings/accounts",
+      "notes": "资金页添加账户表单，区别于资产 hub 的资金列表。"
+    },
+    {
+      "id": "categories",
+      "feature": "分类管理",
+      "android": "android-app/outputs/parity/categories-android.png",
+      "ios": "ci-artifacts/ios-screenshots/10-categories.png",
+      "iosRoute": "settings/categories",
+      "notes": "支出一级和二级分类树。"
+    },
+    {
+      "id": "tags",
+      "feature": "标签管理",
+      "android": "android-app/outputs/parity/tags-android.png",
+      "ios": "ci-artifacts/ios-screenshots/11-tags.png",
+      "iosRoute": "settings/tags",
+      "notes": "标签列表和新增入口。"
+    },
+    {
+      "id": "category-memory",
+      "feature": "喵学到的分类",
+      "android": "android-app/outputs/parity/category-memory-android.png",
+      "ios": "ci-artifacts/ios-screenshots/12-category-memory.png",
+      "iosRoute": "settings/memory",
+      "notes": "商户分类记忆列表、搜索和删除。"
+    },
+    {
+      "id": "stats-week",
+      "feature": "周统计",
+      "android": "android-app/outputs/parity/stats-week-android.png",
+      "ios": "ci-artifacts/ios-screenshots/13-stats-week.png",
+      "iosRoute": "stats/week",
+      "notes": "固定周一至周日。"
+    },
+    {
+      "id": "stats-month",
+      "feature": "月统计",
+      "android": "android-app/outputs/parity/stats-month-android.png",
+      "ios": "ci-artifacts/ios-screenshots/14-stats-month.png",
+      "iosRoute": "stats/month",
+      "notes": "2026 年 8 月总额、分类和每日趋势。"
+    },
+    {
+      "id": "stats-year",
+      "feature": "年统计",
+      "android": "android-app/outputs/parity/stats-year-android.png",
+      "ios": "ci-artifacts/ios-screenshots/15-stats-year.png",
+      "iosRoute": "stats/year",
+      "notes": "2026 年月度趋势。"
+    },
+    {
+      "id": "stats-custom",
+      "feature": "自定义区间统计",
+      "android": "android-app/outputs/parity/stats-custom-android.png",
+      "ios": "ci-artifacts/ios-screenshots/16-stats-custom.png",
+      "iosRoute": "stats/custom",
+      "notes": "固定起止日期，包含完整结束日。"
+    },
+    {
+      "id": "budget",
+      "feature": "预算与今日可花",
+      "android": "android-app/outputs/parity/budget-android.png",
+      "ios": "ci-artifacts/ios-screenshots/17-budget.png",
+      "iosRoute": "settings/budget",
+      "notes": "周期、总预算、分类预算、固定承诺和当前/下一周期状态。"
+    },
+    {
+      "id": "savings",
+      "feature": "存钱目标",
+      "android": "android-app/outputs/parity/savings-android.png",
+      "ios": "ci-artifacts/ios-screenshots/18-savings.png",
+      "iosRoute": "settings/savings",
+      "notes": "进行中目标、进度和归档入口。"
+    },
+    {
+      "id": "recurring",
+      "feature": "定时记账",
+      "android": "android-app/outputs/parity/recurring-android.png",
+      "ios": "ci-artifacts/ios-screenshots/19-recurring.png",
+      "iosRoute": "settings/recurring",
+      "notes": "启用规则和下次执行日期。"
+    },
+    {
+      "id": "import-review",
+      "feature": "账单导入复核",
+      "android": "android-app/outputs/parity/import-review-android.png",
+      "ios": "ci-artifacts/ios-screenshots/20-import-review.png",
+      "iosRoute": "settings/import-review",
+      "notes": "自动分类、商户分组、退款匹配和确认导入。"
+    },
+    {
+      "id": "reports-library",
+      "feature": "报告库与月报阅读",
+      "android": "android-app/outputs/parity/reports-library-android.png",
+      "ios": "ci-artifacts/ios-screenshots/21-reports-library.png",
+      "iosRoute": "settings/reports",
+      "notes": "已有月报和报告正文入口。"
+    },
+    {
+      "id": "backup",
+      "feature": "备份与恢复",
+      "android": "android-app/outputs/parity/backup-android.png",
+      "ios": "ci-artifacts/ios-screenshots/22-backup.png",
+      "iosRoute": "settings/backup",
+      "notes": "完整备份、恢复、Android 导入和校验状态。"
+    },
+    {
+      "id": "settings",
+      "feature": "设置根页",
+      "android": "android-app/outputs/parity/settings-android.png",
+      "ios": "ci-artifacts/ios-screenshots/23-settings.png",
+      "iosRoute": "settings",
+      "notes": "设置首页完整入口范围。"
+    },
+    {
+      "id": "theme",
+      "feature": "主题外观",
+      "android": "android-app/outputs/parity/theme-android.png",
+      "ios": "ci-artifacts/ios-screenshots/24-theme.png",
+      "iosRoute": "settings/theme",
+      "notes": "系统、浅色、深色和主题预览。"
+    },
+    {
+      "id": "display",
+      "feature": "账单与聊天显示",
+      "android": "android-app/outputs/parity/display-android.png",
+      "ios": "ci-artifacts/ios-screenshots/25-display.png",
+      "iosRoute": "settings/display",
+      "notes": "账单字段层级、商户/分类显示和聊天气泡选项。"
+    },
+    {
+      "id": "assets-hub",
+      "feature": "资产管理总览",
+      "android": "android-app/outputs/parity/assets-hub-android.png",
+      "ios": "ci-artifacts/ios-screenshots/26-assets-hub.png",
+      "iosRoute": "settings/assets",
+      "notes": "资产 hub 的总览标签页。"
+    },
+    {
+      "id": "assets-funds",
+      "feature": "资产管理资金页",
+      "android": "android-app/outputs/parity/assets-funds-android.png",
+      "ios": null,
+      "iosRoute": null,
+      "iosStatus": "missing",
+      "notes": "QingJi 当前没有与 Android 资金标签页同层级的独立目标页；由 P4 主责补齐，禁止用账户设置页代替。"
+    },
+    {
+      "id": "reconcile",
+      "feature": "账户详情校准",
+      "android": "android-app/outputs/parity/reconcile-android.png",
+      "ios": "ci-artifacts/ios-screenshots/27-reconcile.png",
+      "iosRoute": "settings/reconcile",
+      "notes": "账户详情内的余额校准弹层。"
+    },
+    {
+      "id": "liabilities",
+      "feature": "负债、借款与还款",
+      "android": "android-app/outputs/parity/liabilities-android.png",
+      "ios": "ci-artifacts/ios-screenshots/28-liabilities.png",
+      "iosRoute": "settings/liabilities",
+      "notes": "Android 固定信用卡负债账户详情；独立负债区域的完整操作链由 P4 继续验收。"
+    },
+    {
+      "id": "net-worth",
+      "feature": "净资产总览与趋势",
+      "android": "android-app/outputs/parity/net-worth-android.png",
+      "ios": "ci-artifacts/ios-screenshots/29-net-worth.png",
+      "iosRoute": "settings/net-worth",
+      "notes": "资产、负债、净资产和质量状态。"
+    },
+    {
+      "id": "physical-asset-detail",
+      "feature": "物品资产详情",
+      "android": "android-app/outputs/parity/asset-detail-android.png",
+      "ios": "ci-artifacts/ios-screenshots/30-physical-asset-detail.png",
+      "iosRoute": "settings/assets/detail",
+      "notes": "固定 iPhone Air 物品资产的估值、历史和生命周期入口。"
+    },
+    {
+      "id": "account-detail",
+      "feature": "账户详情与活动",
+      "android": "android-app/outputs/parity/account-detail-android.png",
+      "ios": "ci-artifacts/ios-screenshots/31-account-detail.png",
+      "iosRoute": "settings/accounts/detail",
+      "notes": "固定现金账户的余额、趋势、活动和校准入口。"
+    },
+    {
+      "id": "ai-entry",
+      "feature": "喵助手与 AI 记账入口",
+      "android": "android-app/outputs/parity/ai-entry-android.png",
+      "ios": "ci-artifacts/ios-screenshots/32-ai-entry.png",
+      "iosRoute": "ai",
+      "notes": "Chats 历史、记账卡、输入框、模型和 Effort 入口。"
+    },
+    {
+      "id": "ai-settings",
+      "feature": "AI 服务商与模型",
+      "android": "android-app/outputs/parity/ai-settings-android.png",
+      "ios": "ci-artifacts/ios-screenshots/33-ai-settings.png",
+      "iosRoute": "settings/ai",
+      "notes": "账号、认证方式、端点、模型、Effort 和健康状态。"
+    },
+    {
+      "id": "ai-tasks",
+      "feature": "AI 任务中心",
+      "android": "android-app/outputs/parity/ai-tasks-android.png",
+      "ios": "ci-artifacts/ios-screenshots/34-ai-tasks.png",
+      "iosRoute": "settings/ai-tasks",
+      "notes": "任务阶段、状态、进度和重试入口。"
+    },
+    {
+      "id": "ai-diagnostics",
+      "feature": "AI 诊断",
+      "android": "android-app/outputs/parity/ai-diagnostics-android.png",
+      "ios": "ci-artifacts/ios-screenshots/35-ai-diagnostics.png",
+      "iosRoute": "settings/ai-diagnostics",
+      "notes": "凭据、模型目录、ping 和脱敏错误状态。"
+    },
+    {
+      "id": "ai-search",
+      "feature": "AI 统一搜索",
+      "android": "android-app/outputs/parity/ai-search-android.png",
+      "ios": "ci-artifacts/ios-screenshots/36-ai-search.png",
+      "iosRoute": "settings/ai-search",
+      "notes": "账单、对话和报告只读搜索。"
+    },
+    {
+      "id": "ai-memory",
+      "feature": "AI 可控记忆",
+      "android": "android-app/outputs/parity/ai-memory-android.png",
+      "ios": "ci-artifacts/ios-screenshots/37-ai-memory.png",
+      "iosRoute": "settings/ai-memory",
+      "notes": "授权、编辑和删除记忆。"
+    },
+    {
+      "id": "ai-extensions",
+      "feature": "AI 技能与连接",
+      "android": "android-app/outputs/parity/ai-extensions-android.png",
+      "ios": "ci-artifacts/ios-screenshots/38-ai-extensions.png",
+      "iosRoute": "settings/ai-extensions",
+      "notes": "技能/连接器白名单和隐私范围。"
+    },
+    {
+      "id": "ai-schedules",
+      "feature": "AI 定时报表",
+      "android": "android-app/outputs/parity/ai-schedules-android.png",
+      "ios": "ci-artifacts/ios-screenshots/39-ai-schedules.png",
+      "iosRoute": "settings/ai-schedules",
+      "notes": "报告类型、账本、周期和下次执行。"
+    },
+    {
+      "id": "ai-local",
+      "feature": "本地模型伴侣",
+      "android": "android-app/outputs/parity/ai-local-android.png",
+      "ios": "ci-artifacts/ios-screenshots/40-ai-local.png",
+      "iosRoute": "settings/ai-local",
+      "notes": "本机地址、模型和健康检查。"
     }
   ]
 }

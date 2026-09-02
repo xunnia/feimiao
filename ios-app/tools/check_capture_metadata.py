@@ -48,6 +48,66 @@ def safe_rooted_path(root: Path, relative: str) -> Path:
     return resolved
 
 
+def expected_route_ids(root: Path, platform_name: str) -> set[str]:
+    contract_path = safe_rooted_path(root, "ios-app/tools/p0_product_contract.json")
+    contract = load(contract_path)
+    scenes = contract.get("scenes")
+    if not isinstance(scenes, list):
+        raise MetadataError("P0 contract scenes are missing")
+    scene_ids = {
+        scene.get("id")
+        for scene in scenes
+        if isinstance(scene, dict) and isinstance(scene.get("id"), str)
+    }
+    scene_by_id = {
+        scene["id"]: scene
+        for scene in scenes
+        if isinstance(scene, dict) and isinstance(scene.get("id"), str)
+    }
+    if len(scene_ids) != 41:
+        raise MetadataError("P0 contract must contain 41 canonical scenes")
+    if platform_name == "android":
+        return scene_ids
+
+    # An iOS gap is valid only when the manifest explicitly declares it and
+    # the scene has no existing iOS entry. Every other canonical scene must
+    # have a concrete route and screenshot path.
+    manifest_path = safe_rooted_path(root, "ios-app/tools/screenshot_manifest.json")
+    manifest = load(manifest_path)
+    pairs = manifest.get("pairs")
+    if not isinstance(pairs, list):
+        raise MetadataError("screenshot manifest pairs are missing")
+    routes: set[str] = set()
+    missing_ids: set[str] = set()
+    pair_ids: set[str] = set()
+    for pair in pairs:
+        if not isinstance(pair, dict) or not isinstance(pair.get("id"), str):
+            raise MetadataError("screenshot manifest contains an invalid pair")
+        pair_id = pair["id"]
+        if pair_id in pair_ids:
+            raise MetadataError(f"screenshot manifest contains duplicate pair {pair_id}")
+        pair_ids.add(pair_id)
+        if pair_id not in scene_ids:
+            raise MetadataError(f"screenshot manifest contains unknown scene {pair_id}")
+        ios_path = pair.get("ios")
+        ios_route = pair.get("iosRoute")
+        if ios_path is None:
+            if pair.get("iosStatus") != "missing" or ios_route is not None:
+                raise MetadataError(f"{pair_id}: invalid declared iOS gap")
+            if scene_by_id[pair_id].get("iosCurrentEntry") is not None:
+                raise MetadataError(f"{pair_id}: manifest hides an existing iOS entry")
+            missing_ids.add(pair_id)
+            continue
+        if not isinstance(ios_path, str) or not ios_path:
+            raise MetadataError(f"{pair_id}: iOS screenshot path is missing")
+        if not isinstance(ios_route, str) or not ios_route:
+            raise MetadataError(f"{pair_id}: iOS route is missing")
+        routes.add(pair_id)
+    if pair_ids != scene_ids or routes != scene_ids - missing_ids:
+        raise MetadataError("iOS manifest does not cover the canonical scenes consistently")
+    return routes
+
+
 def check(root: Path, metadata_path: Path, platform_name: str, require_complete: bool) -> int:
     try:
         aggregate = load(metadata_path)
@@ -116,16 +176,7 @@ def check(root: Path, metadata_path: Path, platform_name: str, require_complete:
                 raise MetadataError(f"{image_path}: unknown captureStatus {status}")
 
         if require_complete:
-            contract_path = safe_rooted_path(root, "ios-app/tools/p0_product_contract.json")
-            contract = load(contract_path)
-            scenes = contract.get("scenes")
-            expected_routes = {
-                scene.get("id")
-                for scene in scenes
-                if isinstance(scene, dict) and isinstance(scene.get("id"), str)
-            }
-            if len(expected_routes) != 41:
-                raise MetadataError("P0 contract must contain 41 canonical scenes")
+            expected_routes = expected_route_ids(root, platform_name)
             if set(route_ids) != expected_routes or len(route_ids) != len(expected_routes):
                 missing = sorted(expected_routes - set(route_ids))
                 extra = sorted(set(route_ids) - expected_routes)
