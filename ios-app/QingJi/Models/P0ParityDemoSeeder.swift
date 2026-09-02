@@ -268,20 +268,25 @@ enum P0ParityDemoSeeder {
             }
             let eventType = row.eventType.flatMap(TransactionEventType.init(rawValue:))
                 ?? .defaultFor(kind)
+            let amount = try P0ParityFixtureLoader.amount(row.amount)
+            let category = row.category.flatMap { categories[$0] }
+            let toAccount = row.toAccount.flatMap { accounts[$0] }
+            let currencyCode = row.currency ?? fixture.currency
+            let settledAt = try row.settledAt.map(P0ParityFixtureLoader.date) ?? transactionDate
             let transaction = MoneyTransaction(
-                amount: try P0ParityFixtureLoader.amount(row.amount),
+                amount: amount,
                 kind: kind,
                 date: transactionDate,
                 note: row.note,
                 merchantName: row.merchant ?? "",
                 productName: row.product ?? "",
-                currencyCode: row.currency ?? fixture.currency,
-                category: row.category.flatMap { categories[$0] },
+                currencyCode: currencyCode,
+                category: category,
                 account: account,
-                toAccount: row.toAccount.flatMap { accounts[$0] },
+                toAccount: toAccount,
                 book: book,
                 timePrecision: .entryClock,
-                settledAt: try row.settledAt.map(P0ParityFixtureLoader.date) ?? transactionDate,
+                settledAt: settledAt,
                 settlementQuality: .userConfirmed,
                 settlementAccountID: settlementAccount.stableID,
                 settlementAccountQuality: .userConfirmed,
