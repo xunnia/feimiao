@@ -178,6 +178,15 @@
 - `0600683` 和 `FeiMiao` 供体已完成采用/重写/拒绝审计；
 - iOS 当前项目配置为 QingJi、`com.qingji.app`、iOS 26.0、本地 SwiftData + App Group。
 - 数据升级和分发合同已进入机器合同并通过结构校验；运行证据仍按下方未验证项处理。
+- 2026-09-03 在独立 P0 worktree 重跑了 Android 生产构建：Gradle
+  `:app:assembleRelease` 成功，`versionName=1.289.0`、`versionCode=304`，
+  本地产物 SHA-256 为
+  `7ED7F15C4265A9CF44C7AF4244E23E14CC6D0B48794D7217B9202E40480A8710`；
+  这只是编译证据，不替代设备运行和截图证据。
+- 2026-09-03 Android 确定性时钟与仓库定向测试 `144/144` 通过（`app_clock_test.dart`
+  2 项、`app_repository_test.dart` 142 项），包含迁移、备份恢复、退款归属、预算和资产回归。
+- 2026-09-03 P0 合同校验仍为 `P0_PARTIAL`，两条 CI 路由均为 40/40；Android
+  ADB 设备列表为空，未生成新的 41 张 Android PNG 或业务 JSON。
 - 旧 39 路由与两个 CI workflow 的 `shoot` 调用数量一致；旧 39 张 iOS PNG 均为 `1260×2736` 且未判为空白；
 - 旧图最近似的一对是“存钱目标/定时记账”，`meanDelta=2.101`，高于旧门禁阈值 `1.0`。这只排除了近乎相同的占位图，不证明页面同款。
 - metadata 工具已用旧图抽样验证：每张图有独立 sidecar，旧的 books/accounts 槽位会明确标成 `legacy_ambiguous`；完整 41 场景采集才允许 `--require-complete`。
