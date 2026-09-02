@@ -16,6 +16,8 @@ log_path="${GITHUB_WORKSPACE:-$repo_root}/android-parity-drive.log"
 cd "$android_root"
 
 device_id="${ANDROID_SERIAL:-${ANDROID_DEVICE_ID:-}}"
+app_id="com.qingji.qingji.codex"
+scene_timeout_seconds="${PARITY_SCENE_TIMEOUT_SECONDS:-900}"
 if [ -z "$device_id" ]; then
   mapfile -t online_devices < <(adb devices | awk '$2 == "device" { print $1 }')
   if [ "${#online_devices[@]}" -ne 1 ]; then
@@ -30,13 +32,25 @@ if ! adb -s "$device_id" get-state >/dev/null 2>&1; then
   adb devices >&2
   exit 2
 fi
+if ! [[ "$scene_timeout_seconds" =~ ^[0-9]+$ ]] || [ "$scene_timeout_seconds" -le 0 ]; then
+  echo "PARITY_SCENE_TIMEOUT_SECONDS must be a positive integer; got: $scene_timeout_seconds" >&2
+  exit 2
+fi
+timeout_bin="$(command -v timeout || true)"
+if [ -z "$timeout_bin" ]; then
+  echo "GNU timeout is required to bound each parity scene" >&2
+  exit 2
+fi
 
 {
   echo "PARITY_DRIVER_BEGIN"
   echo "PWD=$PWD"
   echo "ANDROID_DEVICE_ID=$device_id"
+  echo "ANDROID_APP_ID=$app_id"
+  echo "PARITY_SCENE_TIMEOUT_SECONDS=$scene_timeout_seconds"
   echo "FLUTTER_BIN=$(command -v flutter || true)"
   echo "ADB_BIN=$(command -v adb || true)"
+  echo "TIMEOUT_BIN=$timeout_bin"
   flutter --version
   adb -s "$device_id" get-state
   # The canonical fixture lives under ios-app so there is only one source of
@@ -96,7 +110,13 @@ fi
   )
   for scene in "${scenes[@]}"; do
     echo "PARITY_SCENE_BEGIN scene=$scene"
-    flutter drive \
+    # Each scene is an independent launch. The Flutter driver teardown can
+    # leave the package installed or its process alive when adb uninstall is
+    # rejected by the emulator; clear both explicitly before the next driver.
+    adb -s "$device_id" shell am force-stop "$app_id" >/dev/null 2>&1 || true
+    adb -s "$device_id" shell pm clear "$app_id" >/dev/null 2>&1 || true
+    echo "PARITY_SCENE_RESET scene=$scene"
+    "$timeout_bin" --foreground --kill-after=30s "${scene_timeout_seconds}s" flutter drive \
       --driver=test_driver/integration_test.dart \
       --target=integration_test/parity_screenshots_test.dart \
       --device-id "$device_id" \
@@ -107,6 +127,11 @@ fi
       --dart-define=QINGJI_P0_FIXTURE_HASH="$fixture_hash"
     scene_status=$?
     echo "PARITY_SCENE_END scene=$scene status=$scene_status"
+    if [ "$scene_status" -eq 124 ] || [ "$scene_status" -eq 137 ]; then
+      echo "::error::Parity scene timed out or was killed: $scene"
+      adb -s "$device_id" shell dumpsys activity activities 2>&1 | tail -n 120 || true
+      adb -s "$device_id" logcat -d -t 300 2>&1 | tail -n 300 || true
+    fi
     if [ "$scene_status" -ne 0 ]; then
       exit "$scene_status"
     fi
