@@ -227,6 +227,10 @@ jobs:
           APP_PATH=$(find build/Build/Products -name "QingJi.app" -not -path "*PlugIns*" | head -n 1)
           test -d "$APP_PATH"
           xcrun simctl install "$DEVICE" "$APP_PATH"
+          # The checkout may contain the historical 39-image iOS baseline.
+          # Parity metadata must describe only this capture, never a mixture
+          # of tracked legacy images and the current 40-route set.
+          rm -rf ci-artifacts/ios-screenshots
           mkdir -p ci-artifacts/ios-screenshots
           runtime_log="ios-screenshot-runtime.log"
           fixture_hash="$(shasum -a 256 ios-app/tools/fixtures/p0-demo-ledger-2026-08-v1.json | awk '{print toupper($1)}')"
@@ -367,6 +371,8 @@ jobs:
         with:
           ref: ${{ github.ref_name }}
           fetch-depth: 0
+      - name: Clean stale screenshot inputs
+        run: rm -rf ci-artifacts/ios-screenshots
       - name: Install comparison tooling
         run: python3 -m pip install --disable-pip-version-check --user Pillow
       - uses: actions/download-artifact@v4

@@ -104,6 +104,10 @@ fi
       adb -s "$device_id" logcat -d -t 300 2>&1 | tail -n 300 || true
     fi
     if [ "$group_status" -ne 0 ]; then
+      echo "::error title=Android parity group failed::group=$group status=$group_status"
+      echo "PARITY_FAILURE group=$group status=$group_status"
+      adb -s "$device_id" get-state 2>&1 || true
+      adb devices -l 2>&1 || true
       exit "$group_status"
     fi
     if ! adb -s "$device_id" get-state >/dev/null 2>&1; then
