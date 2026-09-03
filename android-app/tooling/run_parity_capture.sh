@@ -65,75 +65,51 @@ fi
   # simulator. The logical capture date itself is injected at compile time.
   adb -s "$device_id" shell settings put global auto_time_zone 0 || true
   adb -s "$device_id" shell settings put global time_zone Asia/Shanghai || true
-  scenes=(
-    drawer-books
-    home-overview
-    quick-add-expense
-    quick-add-income
-    transactions-search
-    reimburse
-    reimburse-settlement
-    books-management
-    accounts-management
-    categories
-    tags
-    category-memory
-    stats-week
-    stats-month
-    stats-year
-    stats-custom
-    budget
-    savings
-    recurring
-    import-review
-    reports-library
-    backup
-    settings
-    theme
-    display
-    assets-hub
-    assets-funds
-    reconcile
-    liabilities
-    net-worth
-    physical-asset-detail
-    account-detail
-    ai-entry
-    ai-settings
-    ai-tasks
-    ai-diagnostics
-    ai-search
-    ai-memory
-    ai-extensions
-    ai-schedules
-    ai-local
+  # The integration test already groups all 41 canonical scenes into five
+  # complete batches. Keeping one driver session per batch avoids repeatedly
+  # installing and tearing down the Flutter VM, which makes long emulator
+  # runs prone to adb/device-offline failures while preserving clean data
+  # between batches.
+  groups=(
+    core
+    planning
+    management
+    ai
+    system
   )
-  for scene in "${scenes[@]}"; do
-    echo "PARITY_SCENE_BEGIN scene=$scene"
-    # Each scene is an independent launch. The Flutter driver teardown can
-    # leave the package installed or its process alive when adb uninstall is
-    # rejected by the emulator; clear both explicitly before the next driver.
+  # Remove a package left by a previous local/emulator run before the first
+  # Flutter install. pm clear cannot repair a signing mismatch.
+  adb -s "$device_id" uninstall "$app_id" >/dev/null 2>&1 || true
+  for group in "${groups[@]}"; do
+    echo "PARITY_GROUP_BEGIN group=$group"
+    # Each batch gets a fresh application database, while the driver keeps all
+    # screenshots in the same host output directory.
     adb -s "$device_id" shell am force-stop "$app_id" >/dev/null 2>&1 || true
     adb -s "$device_id" shell pm clear "$app_id" >/dev/null 2>&1 || true
-    echo "PARITY_SCENE_RESET scene=$scene"
+    echo "PARITY_GROUP_RESET group=$group"
     "$timeout_bin" --foreground --kill-after=30s "${scene_timeout_seconds}s" flutter drive \
       --driver=test_driver/integration_test.dart \
       --target=integration_test/parity_screenshots_test.dart \
       --device-id "$device_id" \
       --no-pub \
       --dart-define=QINGJI_PARITY_CAPTURE=true \
-      --dart-define=QINGJI_PARITY_SCENE="$scene" \
+      --dart-define=QINGJI_PARITY_GROUP="$group" \
       --dart-define=QINGJI_DEMO_NOW=2026-08-27T12:00:00+08:00 \
       --dart-define=QINGJI_P0_FIXTURE_HASH="$fixture_hash"
-    scene_status=$?
-    echo "PARITY_SCENE_END scene=$scene status=$scene_status"
-    if [ "$scene_status" -eq 124 ] || [ "$scene_status" -eq 137 ]; then
-      echo "::error::Parity scene timed out or was killed: $scene"
+    group_status=$?
+    echo "PARITY_GROUP_END group=$group status=$group_status"
+    if [ "$group_status" -eq 124 ] || [ "$group_status" -eq 137 ]; then
+      echo "::error::Parity group timed out or was killed: $group"
       adb -s "$device_id" shell dumpsys activity activities 2>&1 | tail -n 120 || true
       adb -s "$device_id" logcat -d -t 300 2>&1 | tail -n 300 || true
     fi
-    if [ "$scene_status" -ne 0 ]; then
-      exit "$scene_status"
+    if [ "$group_status" -ne 0 ]; then
+      exit "$group_status"
+    fi
+    if ! adb -s "$device_id" get-state >/dev/null 2>&1; then
+      echo "::error::Android emulator went offline after parity group: $group"
+      adb devices >&2 || true
+      exit 2
     fi
   done
 } 2>&1 | tee "$log_path"

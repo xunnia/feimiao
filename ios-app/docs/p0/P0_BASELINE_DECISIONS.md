@@ -187,6 +187,16 @@
   2 项、`app_repository_test.dart` 142 项），包含迁移、备份恢复、退款归属、预算和资产回归。
 - 2026-09-03 P0 合同校验仍为 `P0_PARTIAL`，两条 CI 路由均为 40/40；Android
   ADB 设备列表为空，未生成新的 41 张 Android PNG 或业务 JSON。
+- 2026-09-03 CI 失败复盘：`aebce81` 的 Android CI 为 1209 个测试通过、1 个失败，
+  而同一 P0 worktree 本地全量测试为 `1210/1210`、analyze 为 0 error；Android
+  parity 的业务场景已运行到 `reimburse` 并通过，随后在 integration driver 清理阶段
+  因模拟器 `device offline` 失败；iOS parity 则失败在 Simulator 编译阶段。以上三类
+  证据分别属于测试/环境、模拟器生命周期和 Swift 编译门，不能合并成一个“GitHub
+  随机错误”。
+- 针对可控的不确定性，Android CI/parity 已固定 Flutter `3.44.2`、Java setup action
+  `v5` 和 `Asia/Shanghai` 时区；Android parity 已从 41 次独立 driver 启动改为 5 个
+  完整分组会话，并在首次安装前卸载旧包；Android CI 失败时会上传 expanded 测试日志。
+  这些改动尚未经过远端重跑，不计为 P0 运行证据。
 - 旧 39 路由与两个 CI workflow 的 `shoot` 调用数量一致；旧 39 张 iOS PNG 均为 `1260×2736` 且未判为空白；
 - 旧图最近似的一对是“存钱目标/定时记账”，`meanDelta=2.101`，高于旧门禁阈值 `1.0`。这只排除了近乎相同的占位图，不证明页面同款。
 - metadata 工具已用旧图抽样验证：每张图有独立 sidecar，旧的 books/accounts 槽位会明确标成 `legacy_ambiguous`；完整 41 场景采集才允许 `--require-complete`。
