@@ -74,7 +74,9 @@ enum P0ParityBusinessExporter {
         calendar.timeZone = TimeZone(identifier: fixture.timezone) ?? .current
         let month = calendar.dateComponents([.year, .month], from: logicalNow)
 
-        let transactionRows = zip(fixture.transactions, transactions).map { row, transaction in
+        let transactionRows: [[String: Any]] = zip(fixture.transactions, transactions).map {
+            row,
+            transaction in
             transactionPayload(
                 row: row,
                 transaction: transaction,
@@ -91,119 +93,139 @@ enum P0ParityBusinessExporter {
             calendar: calendar
         )
 
-        return [
+        let bookRows: [[String: Any]] = try fixture.books.map { row in
+            guard let book = books[row.key] else {
+                throw P0ParityFixtureError.invalidReference("export book \(row.key)")
+            }
+            return [
+                "key": row.key,
+                "name": book.name,
+                "includeInTotal": book.includeInTotal,
+                "isDefault": book.isDefault,
+                "sortOrder": book.sortOrder,
+            ]
+        }
+        let accountRows: [[String: Any]] = try fixture.accounts.map { row in
+            guard let account = accounts[row.key] else {
+                throw P0ParityFixtureError.invalidReference("export account \(row.key)")
+            }
+            let balance = LedgerStore.accountBalance(
+                for: account,
+                transactions: transactions,
+                checkpoints: []
+            )
+            return [
+                "key": row.key,
+                "name": account.name,
+                "kind": canonicalAccountKind(account.kind),
+                "initialBalance": decimal(account.initialBalance),
+                "balance": decimal(balance),
+                "sortOrder": account.sortOrder,
+            ]
+        }
+        let budgetRows: [[String: Any]] = try zip(fixture.budgets, budgets).map {
+            row,
+            budget in
+            let actualBook = budget.bookID.flatMap { bookKeyByID[$0] }
+            guard actualBook == row.book,
+                  budget.categoryKey == row.category else {
+                throw P0ParityFixtureError.invalidReference("export budget references \(row.key)")
+            }
+            return [
+                "key": row.key,
+                "book": optional(actualBook),
+                "category": optional(budget.categoryKey),
+                "periodStart": optional(budget.periodStart.map(iso)),
+                "cycle": budget.cycleRaw,
+                "amount": decimal(budget.amount),
+            ]
+        }
+        let savingsGoalRows: [[String: Any]] = zip(fixture.savingsGoals, savingsGoals).map {
+            row,
+            goal in
+            [
+                "key": row.key,
+                "name": goal.name,
+                "emoji": goal.emoji,
+                "target": decimal(goal.targetAmount),
+                "saved": decimal(goal.savedAmount),
+            ]
+        }
+        let recurringRuleRows: [[String: Any]] = zip(fixture.recurringRules, recurringRules).map {
+            row,
+            rule in
+            [
+                "key": row.key,
+                "kind": rule.kindRaw,
+                "amount": decimal(rule.amount),
+                "category": optional(rule.categoryKey),
+                "account": optional(rule.accountID.flatMap { accountKeyByID[$0] }),
+                "toAccount": optional(rule.toAccountID.flatMap { accountKeyByID[$0] }),
+                "book": optional(rule.bookID.flatMap { bookKeyByID[$0] }),
+                "note": rule.note,
+                "period": rule.periodRaw,
+                "startDate": iso(rule.startDate),
+                "endDate": optional(rule.endDate.map(iso)),
+                "totalCount": optional(rule.totalCount),
+            ]
+        }
+        let reportRows: [[String: Any]] = try zip(fixture.reports, reports).map {
+            row,
+            report in
+            let actualBook = report.bookID.flatMap { bookKeyByID[$0] }
+            guard actualBook == row.book else {
+                throw P0ParityFixtureError.invalidReference("export report book \(row.key)")
+            }
+            return [
+                "key": row.key,
+                "type": report.type,
+                "book": optional(actualBook),
+                "title": report.title,
+                "summary": report.summary,
+                "periodStart": iso(report.periodStart),
+                "periodEnd": iso(report.periodEnd),
+            ]
+        }
+        let physicalAssetRows: [[String: Any]] = physicalAssets.map { asset in
+            [
+                "name": asset.name,
+                "kind": asset.kindRaw,
+                "purchasePrice": decimal(asset.purchasePrice),
+                "currentValue": decimal(asset.currentValue),
+                "purchaseDate": optional(asset.purchaseDate.map(iso)),
+                "warrantyUntil": optional(asset.warrantyUntil.map(iso)),
+                "includeInNetWorth": asset.includeInNetWorth,
+            ]
+        }
+
+        let fixturePayload: [String: Any] = [
+            "fixtureId": fixture.fixtureId,
+            "inputHash": inputHash,
+            "logicalNow": fixture.clock,
+            "locale": fixture.locale,
+            "timezone": fixture.timezone,
+            "currency": fixture.currency,
+        ]
+        let logicalMonthPayload: [String: Any] = [
+            "year": month.year ?? 0,
+            "month": month.month ?? 0,
+        ]
+        let payload: [String: Any] = [
             "schemaVersion": 1,
             "platform": "ios",
-            "fixture": [
-                "fixtureId": fixture.fixtureId,
-                "inputHash": inputHash,
-                "logicalNow": fixture.clock,
-                "locale": fixture.locale,
-                "timezone": fixture.timezone,
-                "currency": fixture.currency,
-            ],
-            "books": try fixture.books.map { row in
-                guard let book = books[row.key] else {
-                    throw P0ParityFixtureError.invalidReference("export book \(row.key)")
-                }
-                return [
-                    "key": row.key,
-                    "name": book.name,
-                    "includeInTotal": book.includeInTotal,
-                    "isDefault": book.isDefault,
-                    "sortOrder": book.sortOrder,
-                ]
-            },
-            "accounts": try fixture.accounts.map { row in
-                guard let account = accounts[row.key] else {
-                    throw P0ParityFixtureError.invalidReference("export account \(row.key)")
-                }
-                return [
-                    "key": row.key,
-                    "name": account.name,
-                    "kind": canonicalAccountKind(account.kind),
-                    "initialBalance": decimal(account.initialBalance),
-                    "balance": decimal(LedgerStore.accountBalance(
-                        for: account,
-                        transactions: transactions,
-                        checkpoints: []
-                    )),
-                    "sortOrder": account.sortOrder,
-                ]
-            },
+            "fixture": fixturePayload,
+            "books": bookRows,
+            "accounts": accountRows,
             "transactions": transactionRows,
-            "budgets": try zip(fixture.budgets, budgets).map { row, budget in
-                let actualBook = budget.bookID.flatMap { bookKeyByID[$0] }
-                guard actualBook == row.book,
-                      budget.categoryKey == row.category else {
-                    throw P0ParityFixtureError.invalidReference("export budget references \(row.key)")
-                }
-                return [
-                    "key": row.key,
-                    "book": optional(actualBook),
-                    "category": optional(budget.categoryKey),
-                    "periodStart": optional(budget.periodStart.map(iso)),
-                    "cycle": budget.cycleRaw,
-                    "amount": decimal(budget.amount),
-                ]
-            },
-            "savingsGoals": zip(fixture.savingsGoals, savingsGoals).map { row, goal in
-                [
-                    "key": row.key,
-                    "name": goal.name,
-                    "emoji": goal.emoji,
-                    "target": decimal(goal.targetAmount),
-                    "saved": decimal(goal.savedAmount),
-                ]
-            },
-            "recurringRules": zip(fixture.recurringRules, recurringRules).map { row, rule in
-                [
-                    "key": row.key,
-                    "kind": rule.kindRaw,
-                    "amount": decimal(rule.amount),
-                    "category": optional(rule.categoryKey),
-                    "account": optional(rule.accountID.flatMap { accountKeyByID[$0] }),
-                    "toAccount": optional(rule.toAccountID.flatMap { accountKeyByID[$0] }),
-                    "book": optional(rule.bookID.flatMap { bookKeyByID[$0] }),
-                    "note": rule.note,
-                    "period": rule.periodRaw,
-                    "startDate": iso(rule.startDate),
-                    "endDate": optional(rule.endDate.map(iso)),
-                    "totalCount": optional(rule.totalCount),
-                ]
-            },
-            "reports": try zip(fixture.reports, reports).map { row, report in
-                let actualBook = report.bookID.flatMap { bookKeyByID[$0] }
-                guard actualBook == row.book else {
-                    throw P0ParityFixtureError.invalidReference("export report book \(row.key)")
-                }
-                return [
-                    "key": row.key,
-                    "type": report.type,
-                    "book": optional(actualBook),
-                    "title": report.title,
-                    "summary": report.summary,
-                    "periodStart": iso(report.periodStart),
-                    "periodEnd": iso(report.periodEnd),
-                ]
-            },
-            "physicalAssets": physicalAssets.map {
-                [
-                    "name": $0.name,
-                    "kind": $0.kindRaw,
-                    "purchasePrice": decimal($0.purchasePrice),
-                    "currentValue": decimal($0.currentValue),
-                    "purchaseDate": optional($0.purchaseDate.map(iso)),
-                    "warrantyUntil": optional($0.warrantyUntil.map(iso)),
-                    "includeInNetWorth": $0.includeInNetWorth,
-                ]
-            },
+            "budgets": budgetRows,
+            "savingsGoals": savingsGoalRows,
+            "recurringRules": recurringRuleRows,
+            "reports": reportRows,
+            "physicalAssets": physicalAssetRows,
             "summary": summary,
-            "logicalMonth": [
-                "year": month.year ?? 0,
-                "month": month.month ?? 0,
-            ],
+            "logicalMonth": logicalMonthPayload,
         ]
+        return payload
     }
 
     private static func transactionPayload(
