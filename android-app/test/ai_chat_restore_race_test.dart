@@ -1,14 +1,27 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_svg/flutter_svg.dart';
+import 'package:path/path.dart' as p;
 import 'package:provider/provider.dart';
 import 'package:qingji/core/budget/budget_window_resolver.dart';
 import 'package:qingji/core/media/chat_attachment.dart';
 import 'package:qingji/core/ai/ai_provider_config.dart';
 import 'package:qingji/data/app_repository.dart';
 import 'package:qingji/views/home/ai_chat_panel.dart';
+
+String _bookCoverPath(String fileName) {
+  final candidates = [
+    p.join(Directory.current.path, 'assets', 'book_covers', fileName),
+    p.join(Directory.current.path, 'android-app', 'assets', 'book_covers', fileName),
+  ];
+  for (final candidate in candidates) {
+    if (File(candidate).existsSync()) return candidate;
+  }
+  throw StateError('Book cover fixture not found: $fileName');
+}
 
 class _ChatRaceRepository extends AppRepository {
   static const _book = BookEntity(id: 1, name: '总账本');
@@ -342,24 +355,21 @@ void main() {
         'attachments_json': ChatAttachment.encodeList([
           ChatAttachment(
             kind: ChatAttachmentKind.image,
-            path:
-                r'C:\src\xunni-codex\android-app\assets\book_covers\dining.png',
+            path: _bookCoverPath('dining.png'),
             name: '图片1.png',
             mimeType: 'image/png',
             sizeBytes: 100,
           ),
           ChatAttachment(
             kind: ChatAttachmentKind.image,
-            path:
-                r'C:\src\xunni-codex\android-app\assets\book_covers\shopping.png',
+            path: _bookCoverPath('shopping.png'),
             name: '图片2.png',
             mimeType: 'image/png',
             sizeBytes: 100,
           ),
           ChatAttachment(
             kind: ChatAttachmentKind.image,
-            path:
-                r'C:\src\xunni-codex\android-app\assets\book_covers\travel.png',
+            path: _bookCoverPath('travel.png'),
             name: '图片3.png',
             mimeType: 'image/png',
             sizeBytes: 100,

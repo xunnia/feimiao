@@ -35,6 +35,17 @@ const _visualModels = [
   'claude-sonnet-5 1M',
 ];
 
+String _bookCoverPath(String fileName) {
+  final candidates = [
+    p.join(Directory.current.path, 'assets', 'book_covers', fileName),
+    p.join(Directory.current.path, 'android-app', 'assets', 'book_covers', fileName),
+  ];
+  for (final candidate in candidates) {
+    if (File(candidate).existsSync()) return candidate;
+  }
+  throw StateError('Book cover fixture not found: $fileName');
+}
+
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
@@ -538,15 +549,15 @@ void main() {
 
   testWidgets('三张已发送图片真实显示在同一气泡的一行内', (tester) async {
     const paths = [
-      r'C:\src\xunni-codex\android-app\assets\book_covers\dining.png',
-      r'C:\src\xunni-codex\android-app\assets\book_covers\shopping.png',
-      r'C:\src\xunni-codex\android-app\assets\book_covers\travel.png',
+      'dining.png',
+      'shopping.png',
+      'travel.png',
     ];
     final attachments = [
       for (var i = 0; i < 3; i++)
         ChatAttachment(
           kind: ChatAttachmentKind.image,
-          path: paths[i],
+          path: _bookCoverPath(paths[i]),
           name: '图片${i + 1}.png',
           mimeType: 'image/png',
           sizeBytes: 100,
@@ -601,16 +612,16 @@ void main() {
 
   testWidgets('选中图片先进入扩大的输入框且首屏只完整展示三张', (tester) async {
     const paths = [
-      r'C:\src\xunni-codex\android-app\assets\book_covers\dining.png',
-      r'C:\src\xunni-codex\android-app\assets\book_covers\shopping.png',
-      r'C:\src\xunni-codex\android-app\assets\book_covers\travel.png',
-      r'C:\src\xunni-codex\android-app\assets\book_covers\pet.png',
+      'dining.png',
+      'shopping.png',
+      'travel.png',
+      'pet.png',
     ];
     final attachments = [
       for (var i = 0; i < 4; i++)
         ChatAttachment(
           kind: ChatAttachmentKind.image,
-          path: paths[i],
+          path: _bookCoverPath(paths[i]),
           name: '待发送图片${i + 1}.png',
           mimeType: 'image/png',
           sizeBytes: 100,
