@@ -197,6 +197,10 @@
   `v5` 和 `Asia/Shanghai` 时区；Android parity 已从 41 次独立 driver 启动改为 5 个
   完整分组会话，并在首次安装前卸载旧包；Android CI 失败时会上传 expanded 测试日志。
   这些改动尚未经过远端重跑，不计为 P0 运行证据。
+- `55f3a18` 的 iOS parity 仍在同一个 Simulator 编译步骤失败，因此导出 payload
+  拆分尚未证明为根因；当前 parity workflow 已补充逐行 Xcode error annotation，
+  下一轮应以具体 Swift 文件/行号为准。另将 workflow 级产物锁下沉到两个实际回写
+  job，避免长时间编译占住共享队列并取消后续 run。
 - 旧 39 路由与两个 CI workflow 的 `shoot` 调用数量一致；旧 39 张 iOS PNG 均为 `1260×2736` 且未判为空白；
 - 旧图最近似的一对是“存钱目标/定时记账”，`meanDelta=2.101`，高于旧门禁阈值 `1.0`。这只排除了近乎相同的占位图，不证明页面同款。
 - metadata 工具已用旧图抽样验证：每张图有独立 sidecar，旧的 books/accounts 槽位会明确标成 `legacy_ambiguous`；完整 41 场景采集才允许 `--require-complete`。

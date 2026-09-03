@@ -15,13 +15,6 @@ on:
 permissions:
   contents: write
 
-concurrency:
-  # Share the writer queue with iOS CI: both workflows push generated files
-  # to the same branch and must never rebase/push concurrently. Queue rather
-  # than cancel so one source push still produces both kinds of evidence.
-  group: branch-artifact-writer-${{ github.ref }}
-  cancel-in-progress: false
-
 jobs:
   android-screenshots:
     name: Android 模拟器截图
@@ -223,6 +216,9 @@ jobs:
           set -e
           if [ "$build_status" -ne 0 ]; then
             grep -n -E 'error:|fatal error|BUILD FAILED' xcodebuild-parity.log | tail -200 || true
+            grep -n -E 'error:|fatal error|BUILD FAILED' xcodebuild-parity.log | tail -200 | while IFS= read -r line; do
+              echo "::error title=Xcode compiler::$line"
+            done
           fi
           test "$build_status" -eq 0
       - name: Capture screens
@@ -361,6 +357,11 @@ jobs:
     name: 生成双端对比报告
     needs: [android-screenshots, ios-screenshots]
     runs-on: ubuntu-latest
+    concurrency:
+      # Keep only the report commit in the shared writer queue. Screenshot
+      # capture and iOS builds should be free to run alongside iOS CI.
+      group: branch-artifact-writer-${{ github.ref }}
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@v5
         with:

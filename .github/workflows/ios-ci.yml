@@ -11,13 +11,6 @@ on:
 permissions:
   contents: write
 
-concurrency:
-  # iOS CI and the parity workflow both write generated artifacts back to the
-  # same branch. Keep them in one queue so their commits cannot race. Do not
-  # cancel the other workflow when both are triggered by one source commit.
-  group: branch-artifact-writer-${{ github.ref }}
-  cancel-in-progress: false
-
 jobs:
   core-tests:
     name: 核心逻辑单元测试
@@ -434,6 +427,11 @@ jobs:
     if: github.event_name == 'push'
     needs: [simulator-screenshots, app-tests, unsigned-ipa]
     runs-on: ubuntu-latest
+    concurrency:
+      # Only the short artifact commit needs serialization. The macOS build,
+      # tests, and screenshots above must not occupy this queue for an hour.
+      group: branch-artifact-writer-${{ github.ref }}
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@v5
         with:
