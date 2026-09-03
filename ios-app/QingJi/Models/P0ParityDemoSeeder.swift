@@ -293,8 +293,8 @@ enum P0ParityDemoSeeder {
                 eventType: eventType,
                 orderNo: row.orderNo ?? "",
                 reimbursable: row.reimbursable ?? false,
-                isExcluded: row.excluded ?? false,
-                isReimbursed: row.isReimbursed ?? false
+                isReimbursed: row.isReimbursed ?? false,
+                isExcluded: row.excluded ?? false
             )
             context.insert(transaction)
             byKey[row.key] = transaction
