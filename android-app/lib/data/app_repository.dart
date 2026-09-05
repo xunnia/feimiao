@@ -7332,6 +7332,7 @@ class AppRepository extends ChangeNotifier {
         0;
     if (accountCount > 0) return;
 
+    final now = AppClock.now.millisecondsSinceEpoch;
     await db.insert('accounts', {
       'uuid': _newUuid(),
       'name': '现金',
@@ -7339,9 +7340,9 @@ class AppRepository extends ChangeNotifier {
       'type': AccountType.cash.storageKey,
       'opening_balance': '0',
       'include_in_net_worth': 1,
-      'created_ms': DateTime.now().millisecondsSinceEpoch,
-      'updated_ms': DateTime.now().millisecondsSinceEpoch,
-      'opening_balance_effective_ms': DateTime.now().millisecondsSinceEpoch,
+      'created_ms': now,
+      'updated_ms': now,
+      'opening_balance_effective_ms': now,
       'opening_balance_quality': AccountOpeningBalanceQuality.exact.storageKey,
       'status': AccountStatus.active.storageKey,
     });

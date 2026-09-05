@@ -1,0 +1,93 @@
+{
+  "schemaVersion": 1,
+  "fixtureId": "p0-demo-ledger-2026-08-v1",
+  "clock": "2026-08-27T12:00:00+08:00",
+  "locale": "zh-Hans",
+  "timezone": "Asia/Shanghai",
+  "currency": "CNY",
+  "books": [
+    {
+      "key": "book-total",
+      "name": "总账本",
+      "includeInTotal": true,
+      "isDefault": true,
+      "sortOrder": 0
+    }
+  ],
+  "accounts": [
+    {"key": "account-cash", "name": "现金", "kind": "cash", "initialBalance": "0.00", "sortOrder": 0},
+    {"key": "account-bank", "name": "Parity银行卡", "kind": "debit", "initialBalance": "12000.00", "sortOrder": 1},
+    {"key": "account-credit", "name": "Parity信用卡", "kind": "credit", "initialBalance": "-1800.00", "sortOrder": 2}
+  ],
+  "transactions": [
+    {"key": "tx-aug-00", "kind": "expense", "amount": "38.00", "category": "dining", "account": "account-cash", "book": "book-total", "note": "午餐 麦当劳", "date": "2026-08-27T12:00:00+08:00"},
+    {"key": "tx-aug-01", "kind": "expense", "amount": "23.00", "category": "transport", "account": "account-cash", "book": "book-total", "note": "滴滴打车", "date": "2026-08-25T12:00:00+08:00"},
+    {"key": "tx-aug-02", "kind": "expense", "amount": "156.00", "category": "groceries", "account": "account-cash", "book": "book-total", "note": "盒马超市", "date": "2026-08-23T12:00:00+08:00"},
+    {"key": "tx-aug-03", "kind": "expense", "amount": "88.00", "category": "entertainment", "account": "account-cash", "book": "book-total", "note": "网易云音乐年费", "date": "2026-08-21T12:00:00+08:00"},
+    {"key": "tx-aug-04", "kind": "expense", "amount": "45.00", "category": "dining", "account": "account-cash", "book": "book-total", "note": "晚餐 外卖", "date": "2026-08-19T12:00:00+08:00"},
+    {"key": "tx-aug-05", "kind": "expense", "amount": "198.00", "category": "shopping", "account": "account-bank", "book": "book-total", "note": "优衣库 T 恤", "date": "2026-08-17T12:00:00+08:00"},
+    {"key": "tx-aug-06", "kind": "expense", "amount": "12.00", "category": "transport", "account": "account-cash", "book": "book-total", "note": "公交充值", "date": "2026-08-15T12:00:00+08:00"},
+    {"key": "tx-aug-07", "kind": "expense", "amount": "68.00", "category": "dining", "account": "account-cash", "book": "book-total", "note": "朋友聚餐 AA", "date": "2026-08-13T12:00:00+08:00", "reimbursable": true},
+    {"key": "tx-aug-08", "kind": "expense", "amount": "30.00", "category": "utilities", "account": "account-cash", "book": "book-total", "note": "话费充值", "date": "2026-08-11T12:00:00+08:00"},
+    {"key": "tx-aug-09", "kind": "expense", "amount": "280.00", "category": "shopping", "account": "account-bank", "book": "book-total", "note": "京东 数据线+充电头", "date": "2026-08-09T12:00:00+08:00"},
+    {"key": "tx-aug-10", "kind": "expense", "amount": "9.90", "category": "subscription", "account": "account-cash", "book": "book-total", "note": "微信读书月卡", "date": "2026-08-07T12:00:00+08:00"},
+    {"key": "tx-aug-11", "kind": "expense", "amount": "15.00", "category": "dining", "account": "account-cash", "book": "book-total", "note": "咖啡 瑞幸", "date": "2026-08-05T12:00:00+08:00"},
+    {"key": "tx-aug-12", "kind": "expense", "amount": "52.00", "category": "groceries", "account": "account-cash", "book": "book-total", "note": "菜市场买菜", "date": "2026-08-03T12:00:00+08:00"},
+    {"key": "tx-aug-13", "kind": "expense", "amount": "18.00", "category": "transport", "account": "account-cash", "book": "book-total", "note": "共享单车月卡", "date": "2026-08-01T12:00:00+08:00"},
+    {"key": "tx-aug-14", "kind": "income", "amount": "120.00", "category": "salary", "account": "account-bank", "book": "book-total", "note": "兼职收入", "date": "2026-08-27T12:00:00+08:00"},
+    {"key": "tx-aug-15", "kind": "income", "amount": "500.00", "category": "redPacket", "account": "account-cash", "book": "book-total", "note": "朋友红包", "date": "2026-08-25T12:00:00+08:00"},
+    {"key": "tx-refund-lunch", "kind": "expense", "amount": "-15.00", "category": "dining", "account": "account-cash", "book": "book-total", "note": "退款", "date": "2026-08-27T12:00:00+08:00", "settledAt": "2026-08-27T12:00:00+08:00", "settlementAccount": "account-cash", "eventType": "refund", "refundOf": "tx-aug-00"},
+    {"key": "tx-transfer", "kind": "transfer", "amount": "120.00", "account": "account-cash", "toAccount": "account-bank", "book": "book-total", "note": "账户转入", "date": "2026-08-17T12:00:00+08:00"},
+    {"key": "tx-jul-00", "kind": "expense", "amount": "42.00", "category": "dining", "account": "account-cash", "book": "book-total", "note": "午餐", "date": "2026-07-03T12:00:00+08:00"},
+    {"key": "tx-jul-01", "kind": "expense", "amount": "320.00", "category": "housing", "account": "account-bank", "book": "book-total", "note": "房租（水电）", "date": "2026-07-04T12:00:00+08:00"},
+    {"key": "tx-jul-02", "kind": "expense", "amount": "76.00", "category": "groceries", "account": "account-cash", "book": "book-total", "note": "超市采购", "date": "2026-07-05T12:00:00+08:00"},
+    {"key": "tx-jul-03", "kind": "expense", "amount": "25.00", "category": "transport", "account": "account-cash", "book": "book-total", "note": "出租车", "date": "2026-07-06T12:00:00+08:00"},
+    {"key": "tx-jul-04", "kind": "income", "amount": "8800.00", "category": "salary", "account": "account-bank", "book": "book-total", "note": "7 月工资", "date": "2026-07-07T12:00:00+08:00"},
+    {"key": "tx-jul-05", "kind": "expense", "amount": "560.00", "category": "shopping", "account": "account-bank", "book": "book-total", "note": "网购衣物", "date": "2026-07-08T12:00:00+08:00"},
+    {"key": "tx-jul-06", "kind": "expense", "amount": "35.00", "category": "medical", "account": "account-cash", "book": "book-total", "note": "药店", "date": "2026-07-09T12:00:00+08:00"},
+    {"key": "tx-jun-00", "kind": "income", "amount": "8800.00", "category": "salary", "account": "account-bank", "book": "book-total", "note": "6 月工资", "date": "2026-06-05T12:00:00+08:00"},
+    {"key": "tx-jun-01", "kind": "expense", "amount": "380.00", "category": "travel", "account": "account-bank", "book": "book-total", "note": "周末游", "date": "2026-06-06T12:00:00+08:00"},
+    {"key": "tx-jun-02", "kind": "expense", "amount": "95.00", "category": "dining", "account": "account-bank", "book": "book-total", "note": "朋友生日聚餐", "date": "2026-06-07T12:00:00+08:00"},
+    {"key": "tx-jun-03", "kind": "expense", "amount": "290.00", "category": "education", "account": "account-bank", "book": "book-total", "note": "极客时间年卡", "date": "2026-06-08T12:00:00+08:00"},
+    {"key": "tx-jun-04", "kind": "expense", "amount": "18.00", "category": "transport", "account": "account-bank", "book": "book-total", "note": "高铁票", "date": "2026-06-09T12:00:00+08:00"}
+  ],
+  "budgets": [
+    {"key": "budget-aug-total", "book": "book-total", "periodStart": "2026-08-01T00:00:00+08:00", "cycle": "monthly", "amount": "3000.00"},
+    {"key": "budget-aug-dining", "book": "book-total", "category": "dining", "periodStart": "2026-08-01T00:00:00+08:00", "cycle": "monthly", "amount": "600.00"},
+    {"key": "budget-aug-shopping", "book": "book-total", "category": "shopping", "periodStart": "2026-08-01T00:00:00+08:00", "cycle": "monthly", "amount": "800.00"}
+  ],
+  "savingsGoals": [
+    {"key": "saving-tokyo", "name": "东京旅行", "emoji": "✈️", "target": "12000.00", "saved": "6800.00"}
+  ],
+  "recurringRules": [
+    {"key": "recurring-rent", "kind": "expense", "amount": "3200.00", "category": "housing", "account": "account-bank", "book": "book-total", "note": "房租", "period": "monthly", "startDate": "2026-09-30T12:00:00+08:00"}
+  ],
+  "reports": [
+    {"key": "report-2026-08", "type": "monthly", "book": "book-total", "title": "2026年8月账单报告", "summary": "支出 ¥1,017.90 · 收入 ¥620.00", "periodStart": "2026-08-01T00:00:00+08:00", "periodEnd": "2026-08-31T23:59:59+08:00"}
+  ],
+  "optionalSceneData": {
+    "physicalAssetDetail": {
+      "key": "asset-phone",
+      "name": "iPhone Air",
+      "kind": "digital",
+      "purchasePrice": "6999.00",
+      "currentValue": "5800.00",
+      "purchaseDate": "2026-05-27T12:00:00+08:00",
+      "brand": "Apple",
+      "model": "iPhone Air",
+      "location": "随身",
+      "warrantyUntil": "2027-08-27T12:00:00+08:00",
+      "includeInNetWorth": true
+    }
+  },
+  "expected": {
+    "augustIncome": "620.00",
+    "augustGrossExpense": "1032.90",
+    "augustRefund": "15.00",
+    "augustNetExpense": "1017.90",
+    "augustBalance": "-397.90",
+    "augustTransactionRowsIncludingOffsetAndTransfer": 18,
+    "augustVisibleOrdinaryRows": 16,
+    "budget": "3000.00"
+  }
+}

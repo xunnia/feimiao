@@ -64,6 +64,10 @@ void main() {
 
   testWidgets('capture Android parity screens', (tester) async {
     _surfaceConverted = false;
+    expect(tester.view.physicalSize, const Size(1080, 1920),
+        reason: 'P0 Android captures require the canonical device size');
+    expect(AppClock.now.timeZoneOffset, const Duration(hours: 8),
+        reason: 'P0 calendar calculations require device timezone Asia/Shanghai');
     await app.main();
     await _pumpFor(tester, const Duration(seconds: 2));
 
@@ -1107,6 +1111,24 @@ Future<_P0FixtureBundle> _ensureFixture(AppRepository repo) async {
 
   await ensureAccount('account-bank');
   await ensureAccount('account-credit');
+  // addAccount uses the production default sort order (0). Apply the explicit
+  // fixture input to storage, then reload it; the exporter must continue to
+  // report the real database value, not copy the expected sortOrder to output.
+  for (final definition in accountRows) {
+    final account = accounts.firstWhere((a) => a.name == definition['name']);
+    await repo.debugDb.update(
+      'accounts',
+      {'sort_order': definition['sortOrder'] as int},
+      where: 'id = ?',
+      whereArgs: [account.id],
+    );
+  }
+  await repo.reloadForTest();
+  accounts = repo.transactionAccounts.toList(growable: false);
+  for (final definition in accountRows) {
+    expect(accounts.firstWhere((a) => a.name == definition['name']).sortOrder,
+        definition['sortOrder']);
+  }
   expect(accounts.any((account) => account.type == AccountType.cash), isTrue);
   expect(accounts.any((account) => account.name == 'Parity银行卡'), isTrue);
 

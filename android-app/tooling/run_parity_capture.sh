@@ -41,6 +41,20 @@ if [ -z "$timeout_bin" ]; then
   echo "GNU timeout is required to bound each parity scene" >&2
   exit 2
 fi
+python_bin="${PYTHON_BIN:-}"
+if [ -z "$python_bin" ]; then
+  python_bin="$(command -v python3 || true)"
+fi
+if [ -z "$python_bin" ]; then
+  python_bin="$(command -v python || true)"
+fi
+if [ -z "$python_bin" ]; then
+  python_bin="$(command -v py || true)"
+fi
+if [ -z "$python_bin" ]; then
+  echo "Python 3 is required for parity artifact validation" >&2
+  exit 2
+fi
 
 {
   echo "PARITY_DRIVER_BEGIN"
@@ -51,6 +65,7 @@ fi
   echo "FLUTTER_BIN=$(command -v flutter || true)"
   echo "ADB_BIN=$(command -v adb || true)"
   echo "TIMEOUT_BIN=$timeout_bin"
+  echo "PYTHON_BIN=$python_bin"
   flutter --version
   adb -s "$device_id" get-state
   # The canonical fixture lives under ios-app so there is only one source of
@@ -61,15 +76,17 @@ fi
     assets/parity/p0-demo-ledger-2026-08-v1.json
   fixture_hash="$(sha256sum "$fixture_path" | awk '{print toupper($1)}')"
   echo "P0_FIXTURE_HASH=$fixture_hash"
+  # A parity artifact must contain only files produced by this invocation.
+  # A previous partial run must never make a later run look complete.
+  rm -rf "$parity_output"
+  mkdir -p "$parity_output"
   # Keep Calendar/DateTime local-day calculations aligned with the iOS
   # simulator. The logical capture date itself is injected at compile time.
   adb -s "$device_id" shell settings put global auto_time_zone 0 || true
   adb -s "$device_id" shell settings put global time_zone Asia/Shanghai || true
-  # The integration test already groups all 41 canonical scenes into five
-  # complete batches. Keeping one driver session per batch avoids repeatedly
-  # installing and tearing down the Flutter VM, which makes long emulator
-  # runs prone to adb/device-offline failures while preserving clean data
-  # between batches.
+  # Keep each complete group in its own Flutter/VM-service session. This bounds
+  # the amount of PNG data held in integration_test reportData while keeping
+  # every group small enough to finish and return its response reliably.
   groups=(
     core
     planning
@@ -104,8 +121,13 @@ fi
       adb -s "$device_id" logcat -d -t 300 2>&1 | tail -n 300 || true
     fi
     if [ "$group_status" -ne 0 ]; then
+      last_capture="$(grep -E 'PARITY_CAPTURE_(BEGIN|DONE)|PARITY_PAGE_(BEGIN|READY)' "$log_path" 2>/dev/null | tail -n 1 || true)"
       echo "::error title=Android parity group failed::group=$group status=$group_status"
       echo "PARITY_FAILURE group=$group status=$group_status"
+      if [ -n "$last_capture" ]; then
+        echo "::error title=Android parity last capture::$last_capture"
+        echo "PARITY_FAILURE_LAST_CAPTURE $last_capture"
+      fi
       adb -s "$device_id" get-state 2>&1 || true
       adb devices -l 2>&1 || true
       exit "$group_status"
@@ -120,12 +142,12 @@ fi
 
 status=${PIPESTATUS[0]}
 if [ "$status" -eq 0 ]; then
-  if ! python3 "$repo_root/ios-app/tools/check_p0_business_json.py" \
+  if ! "$python_bin" "$repo_root/ios-app/tools/check_p0_business_json.py" \
       --input outputs/parity/p0-business-android.json \
       --contract "$contract_path" \
       --platform android; then
     status=1
-  elif ! python3 "$repo_root/ios-app/tools/write_parity_metadata.py" \
+  elif ! "$python_bin" "$repo_root/ios-app/tools/write_parity_metadata.py" \
       --root "$repo_root" \
       --contract "$contract_path" \
       --platform android \
@@ -134,7 +156,7 @@ if [ "$status" -eq 0 ]; then
       --screenshot-dir "$parity_output" \
       --output "$parity_output/capture-metadata.json"; then
     status=1
-  elif ! python3 "$repo_root/ios-app/tools/check_capture_metadata.py" \
+  elif ! "$python_bin" "$repo_root/ios-app/tools/check_capture_metadata.py" \
       --root "$repo_root" \
       --metadata "$parity_output/capture-metadata.json" \
       --platform android \
