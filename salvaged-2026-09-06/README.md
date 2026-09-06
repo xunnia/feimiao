@@ -3,6 +3,14 @@
 > 目录结构：
 > - `ios-app/` —— 来自 `.tmp/ios-development/`，24 个**从未进入任何 git 分支**的文件（见下文）
 > - `from-old-branches/` —— 来自即将删除的老线分支，5 个主线没有的文件（见文末）
+> - `from-worktree-elegant-panini/` —— 安卓 AI 多账号／多模型／任务分配功能，11 个文件、约 85 KB，**从未提交**
+> - `from-worktree-ios-batch15/` —— FeiMiao 那套 iOS 实现的收尾改动，6 个文件 + 1 份参考文档，**从未提交**
+>
+> ⚠️ **另有一条完整的提交历史被救回，不在本目录，而在分支 `rescue/ios-p1-2026-08-31`。**
+> 它有 14 个主线没有的提交（iOS 预算 V2、资产退款分摊、借贷往来、房贷分期向导、
+> 权益详情、备份恢复加固……），原本只被 `.tmp/ios-development` 这个 worktree 的
+> detached HEAD 吊着，任何分支都不指向它。删掉那个 worktree 后 git 会把它当垃圾回收。
+> 本目录 `ios-app/` 下那 24 个文件只是它的工作区快照，**真正完整的东西在那条分支上**。
 
 
 这 24 个文件在清理 `.tmp/` 之前只存在于 `.tmp/ios-development/` 一份纯文件拷贝里，
