@@ -211,7 +211,7 @@ jobs:
           rm -rf "$screenshot_dir"
           mkdir -p "$screenshot_dir"
           runtime_log="ios-screenshot-runtime.log"
-          fixture_hash="$(shasum -a 256 ios-app/tools/fixtures/p0-demo-ledger-2026-08-v1.json | awk '{print toupper($1)}')"
+          fixture_hash="$(python3 ios-app/tools/canonical_fixture_hash.py ios-app/tools/fixtures/p0-demo-ledger-2026-08-v1.json)"
           : > "$runtime_log"
 
           # 用「重启 + 启动参数」而不是 openurl 切页面：

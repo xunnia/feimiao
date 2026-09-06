@@ -9,13 +9,13 @@
     "rule": "iOS 是安卓版肥喵记账的原生移植，不是独立设计或相似功能集合。"
   },
   "baseline": {
-    "cleanSourceAnchor": "72f14808b0fe32a6276558af16b775fa987f1c2f",
+    "cleanSourceAnchor": "b40316f336fb0aefabf67817460775b665fdaa1d",
     "integrationBranch": "codex/ios-same-app",
     "android": {
       "version": "1.289.0+304",
       "watermark": "b0901-304",
       "databaseVersion": 49,
-      "sourceCommit": "08f7a5e28ffcc65f50dd2661802111d0ef92446c",
+      "sourceCommit": "b40316f336fb0aefabf67817460775b665fdaa1d",
       "apk": "ci-artifacts/releases/feimiao-codex-v1.289.0-304.apk",
       "apkBytes": 117822013,
       "apkSha256": "EAB0DE7BD68D799786044BCA6DE2AED408179515F9FB987587B9A0529FEFDF3E",
@@ -37,7 +37,7 @@
     "source": {
       "product": "QingJi",
       "store": "SwiftData",
-      "sourceRevision": "08f7a5e28ffcc65f50dd2661802111d0ef92446c",
+      "sourceRevision": "b40316f336fb0aefabf67817460775b665fdaa1d",
       "container": "AppModelContainer.shared",
       "schemaKind": "inferred-model-graph-at-source-revision",
       "location": "existing-user-store-on-macos"
@@ -86,7 +86,7 @@
     },
     "fixture": {
       "file": "ios-app/tools/migration-fixtures/p0-ios-qingji-upgrade-2026-09-v1.json",
-      "inputHash": "AE08B995CCCD952CBB1CF965F09B7EC31703734FE660076A0D656AC036D685C6"
+      "inputHash": "5EA4DED99EEE99AC607C53D341F22F4CB09F91CAEE727B8E9EF45866A8EC7ED3"
     },
     "preserveFields": [
       "stableID",
