@@ -2,6 +2,7 @@ import 'package:decimal/decimal.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../../core/app_clock.dart';
 import '../../core/haptics.dart';
 import '../../core/money_format.dart';
 import '../../widgets/app_buttons.dart';
@@ -214,7 +215,7 @@ class _RecurringEditSheetState extends State<_RecurringEditSheet> {
     _toAccountId = r?.toAccountId;
     _bookId = r?.bookId;
     _period = r?.recurPeriod ?? RecurPeriod.monthly;
-    _startDate = _dateOnly(r?.startDate ?? DateTime.now());
+    _startDate = _dateOnly(r?.startDate ?? AppClock.now);
     _endDate = r?.endDate == null ? null : _dateOnly(r!.endDate!);
     _countCtrl = TextEditingController(text: r?.totalCount?.toString() ?? '');
     _endMode = r?.totalCount != null
@@ -370,8 +371,7 @@ class _RecurringEditSheetState extends State<_RecurringEditSheet> {
                                 for (final a in accounts)
                                   IosMenuItem(
                                     label: a.name,
-                                    icon:
-                                        Icons.account_balance_wallet_outlined,
+                                    icon: Icons.account_balance_wallet_outlined,
                                     selected: a.id == _accountId,
                                     onTap: () =>
                                         setState(() => _accountId = a.id),
@@ -392,8 +392,8 @@ class _RecurringEditSheetState extends State<_RecurringEditSheet> {
                                   if (a.id != _accountId)
                                     IosMenuItem(
                                       label: a.name,
-                                      icon: Icons
-                                          .account_balance_wallet_outlined,
+                                      icon:
+                                          Icons.account_balance_wallet_outlined,
                                       selected: a.id == _toAccountId,
                                       onTap: () =>
                                           setState(() => _toAccountId = a.id),
@@ -405,59 +405,59 @@ class _RecurringEditSheetState extends State<_RecurringEditSheet> {
                       ],
                     )
                   else
-                  Row(
-                    children: [
-                      Expanded(
-                        child: AppLabeledField(
-                          label: '分类',
-                          child: AppPickerField(
-                            text: selCat?.nameZh,
-                            hint: '选择分类',
-                            leading: selCat == null
-                                ? null
-                                : CatIcon(
-                                    categoryKey: selCat.key,
-                                    emoji: CategorySeed.emojiOf(selCat.key),
-                                    size: 20,
+                    Row(
+                      children: [
+                        Expanded(
+                          child: AppLabeledField(
+                            label: '分类',
+                            child: AppPickerField(
+                              text: selCat?.nameZh,
+                              hint: '选择分类',
+                              leading: selCat == null
+                                  ? null
+                                  : CatIcon(
+                                      categoryKey: selCat.key,
+                                      emoji: CategorySeed.emojiOf(selCat.key),
+                                      size: 20,
+                                    ),
+                              onTap: (menuCtx) async {
+                                final picked = await showCategoryPickerSheet(
+                                  context,
+                                  kind: _kind,
+                                  selectedId: _categoryId,
+                                  title: _kind == TransactionKind.income
+                                      ? '选择收入分类'
+                                      : '选择支出分类',
+                                );
+                                if (picked != null && mounted) {
+                                  setState(() => _categoryId = picked.id);
+                                }
+                              },
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: AppLabeledField(
+                            label: '账户',
+                            child: AppPickerField(
+                              text: selAcc?.name,
+                              hint: '选择账户',
+                              onTap: (menuCtx) => showPickerMenu(menuCtx, [
+                                for (final a in accounts)
+                                  IosMenuItem(
+                                    label: a.name,
+                                    icon: Icons.account_balance_wallet_outlined,
+                                    selected: a.id == _accountId,
+                                    onTap: () =>
+                                        setState(() => _accountId = a.id),
                                   ),
-                            onTap: (menuCtx) async {
-                              final picked = await showCategoryPickerSheet(
-                                context,
-                                kind: _kind,
-                                selectedId: _categoryId,
-                                title: _kind == TransactionKind.income
-                                    ? '选择收入分类'
-                                    : '选择支出分类',
-                              );
-                              if (picked != null && mounted) {
-                                setState(() => _categoryId = picked.id);
-                              }
-                            },
+                              ]),
+                            ),
                           ),
                         ),
-                      ),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: AppLabeledField(
-                          label: '账户',
-                          child: AppPickerField(
-                            text: selAcc?.name,
-                            hint: '选择账户',
-                            onTap: (menuCtx) => showPickerMenu(menuCtx, [
-                              for (final a in accounts)
-                                IosMenuItem(
-                                  label: a.name,
-                                  icon: Icons.account_balance_wallet_outlined,
-                                  selected: a.id == _accountId,
-                                  onTap: () =>
-                                      setState(() => _accountId = a.id),
-                                ),
-                            ]),
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
+                      ],
+                    ),
                   const SizedBox(height: 14),
                   AppLabeledField(
                     label: '账本',

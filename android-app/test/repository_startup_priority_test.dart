@@ -68,9 +68,11 @@ void main() {
     expect(repo.visibleTransactions.map((t) => t.note), contains('启动优先级测试'));
     expect(repo.visibleTransactions.map((t) => t.note), contains('退款'));
     expect(repo.currentBookId, greaterThan(0));
-    // The first interactive frame must already have the persisted AI
-    // selection; otherwise the first message falls through to the offline
-    // error and only the second message works after deferred hydration.
+    // AI/security storage has its own barrier so it cannot delay the first
+    // complete home frame. Wait for that explicit barrier before asserting the
+    // persisted selection, which is also what the send path does.
+    await repo.aiReady;
+    expect(repo.isAiReady, isTrue);
     final startupAi = repo.aiProviderConfigFor(AiTaskType.chatQuery);
     expect(startupAi.hasKey, isTrue);
     expect(startupAi.model, 'startup-model');
@@ -98,5 +100,44 @@ void main() {
       isNotEmpty,
     );
     await repo.closeForTest();
+  });
+
+  test('SQLite header parser reads user_version without opening the database',
+      () {
+    final header = List<int>.filled(100, 0);
+    header.setRange(
+      0,
+      16,
+      const [
+        83,
+        81,
+        76,
+        105,
+        116,
+        101,
+        32,
+        102,
+        111,
+        114,
+        109,
+        97,
+        116,
+        32,
+        51,
+        0,
+      ],
+    );
+    // SQLite stores the 32-bit user_version field in big-endian order.
+    header.setRange(60, 64, const [0, 0, 0, 49]);
+
+    expect(AppRepository.sqliteUserVersionFromHeader(header), 49);
+    expect(
+      AppRepository.sqliteUserVersionFromHeader(header.sublist(0, 63)),
+      isNull,
+    );
+
+    final wrongMagic = List<int>.from(header)..[0] = 0;
+    expect(AppRepository.sqliteUserVersionFromHeader(wrongMagic), isNull);
+    expect(AppRepository.sqliteUserVersionFromHeader(const []), isNull);
   });
 }

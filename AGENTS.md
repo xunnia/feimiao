@@ -1,9 +1,52 @@
 # AGENTS.md
 
 > 交接文档。新会话/新环境（含 cowork / Codex）接手时先读这份，**别把已锁定的决策又问一遍或推翻**。
-> 「§-1 最新交接」是 2026-07-02 的增量，**最优先看**；再往下依次是 2026-06-28 的 §0 和 2026-06-18 版底稿（仍有效，新章节覆盖旧的）。
+> 「§-1 最新交接」持续追加最新状态，**最优先看**；再往下依次是历史底稿（仍有效，新章节覆盖旧的）。
 
 ---
+
+## §-1.2 最新验收状态（2026-08-31，v1.281.0+295）
+
+- **本轮 GPT OAuth/JSON/架构收口**：普通 OAuth 固定官方 PKCE + localhost 回调；Android 固定代理/PAC 路由修正，`unsupported_country_region` 自动走 Chrome 本地换 Token 兜底，flowId/回调/Token 文件逐项隔离；登录和恢复路径先保存凭据，再拉模型并执行不带账本内容的最小 `ping`，健康状态按阶段持久化。
+- **Cockpit JSON**：完整备份/standalone/auth.json/Sub2API、嵌套 token、refresh-only、PAT、JSONL、BOM/UTF-16 均支持；显式 `auth_mode=apikey` 优先，workspace/account_id 单独不去重；provider 地址、wire format、模型目录和 key 合并，导入后逐账号验证。
+- **架构与安全**：OAuth、模型、Responses、主页记账、Chats、联网搜索共用 `AiHttpTransport`；错误与 AI run 脱敏；迁移列改为缺列才添加，真实 SQLite 错误不再静默吞掉；DB v49。
+- **本轮验证**：Flutter 全量 **1182/1182**；定向 OAuth/JSON/代理/健康/仓库回归通过；Dart analyze 0 error（91 条既有 warning/info）；Android Kotlin 编译与 Release gate 通过；2026-08-31 Cockpit 完整备份解析 9 个 Codex 账号（6 OAuth、3 API Key），0 警告。
+- **本轮 APK**：`C:\src\xunni-codex\ci-artifacts\releases\feimiao-codex-v1.281.0-295.apk`，SHA256 `A3960191D17E8CB2E2EA4B4D0310C9A8579B39127F8A317E86E73E1BAC9C07BA`；无在线 Android ADB，真机 Chrome/VPN/回调/安装观感仍待复测。
+
+- **本轮 GPT OAuth/JSON 最终链路修复（2026-08-30）**：官方 ChatGPT/Codex Responses 端点要求 `stream=true`；普通问答、主页记账、报告和连接测试的缓冲传输层统一强制流式标志。聊天请求补齐按目标地址的 Android 系统代理/PAC 解析；设备授权码、PKCE/state、Token 刷新、模型目录重试和首包重试继续保留。Cockpit/CPA 导入继续支持完整备份、PAT whoami、共享 workspace 多账号和 API Key 目录过滤。
+- **本轮验证**：OAuth/Responses/JSON/仓库定向 **113/113**；Flutter 全量 **1171/1171**；Dart analyze 无 error（86 条既有 warning/info）；Android `:app:compileDebugKotlin` 成功。本机真实 Cockpit 完整备份解析 10 个 Codex 账号（5 OAuth、5 API Key）且无警告；指定测试账号模型目录、Responses、肥喵 `LlmQuery` 和 `LlmQueryV2` 均真实返回 `OK`。
+- **本轮 APK**：`C:\src\xunni-codex\ci-artifacts\releases\feimiao-codex-v1.277.0-291.apk`，SHA256 `43DAC969193535B39EBC08EE133546C0C63F3E78C64720829389CF635A754F28`；包名/版本 `com.qingji.qingji.codex / 1.277.0 / 291`，16 KiB 对齐、APK V2 和固定证书 gate 通过。
+- **真实账号边界**：仅使用用户授权的测试账号验证；未使用 Plus 账号。当前无在线 Android ADB，真机 VPN、Chrome Custom Tab、设备码轮询、输入法和字体观感仍需安装 APK 后在目标手机复测。
+
+- **上一轮 OAuth/JSON 修复（2026-08-30）**：Cockpit 完整备份现在解析 `accounts.platforms.codex.exported_data` 和单独 `exported_data` 传输段，只导入 Codex 凭据；`at-...` 个人访问令牌按官方 `whoami` 流程补齐工作区 ID，并由模型目录/正文请求复用；模型目录、PAT 身份查询和 401 刷新共用 OAuth service/client；明确 `auth_mode=apikey` 时不会被 `type: codex` 误判为 OAuth。
+- **上一轮月份/UI 验证**：月份选择与全局 UI 定向回归 **3/3**；Flutter 全量测试 **1164/1164**；历史 APK 的 analyze 无 error。
+- **上一轮月份选择弹窗 UI 回退**：按用户提供的图二恢复轻量底部弹层；移除弹层内关闭圆圈和背景高斯模糊，标题左对齐、统计起始日右对齐，年份箭头恢复无圆形底；月份网格与数据逻辑保持不变。
+- **上一轮 UI 证据**：`android-app/outputs/ui_comparisons/2026-08-30/month_picker_before.png`、`month_picker_after.png`、`month_picker_before_after.png`，原图未覆盖且对比图带编号标注。
+- **上一版回退 APK**：`C:\src\xunni-codex\ci-artifacts\releases\feimiao-codex-v1.275.0-289.apk`，117,445,045 字节，SHA256 `196FED571B03372A4F89211034759E89061A8AF00B72163DD1542D27C4C4B56B`；包名/版本 `com.qingji.qingji.codex / 1.275.0 / 289`，16 KiB 对齐、APK V2 和固定证书 gate 通过。
+- **网络边界**：完整 TUN/VPN 会由 Android 系统自动路由 App TCP；代理型 VPN 只有在系统公开 HTTP 代理或把肥喵纳入分流时才会生效。当前代码会动态读取系统 HTTP 代理；本机无手机/ADB，不能把手机 VPN 出口写成已验证。
+
+- **性能专项（2026-08-28）**：`recordsForBookView`/`visibleTransactionsForBookView` 增加按 `dataRevision` 的只读缓存；喵助手建议改用稳定引用和版本判断；AI 账本上下文、报告上下文复用仓库已有日期序，不再每次对全量流水排序。10k 流水重复账本记录构建约 3.8–5.0s/30 次降至约 0.10–0.16s/30 次；重复排序约 41–45s/30 次降至过滤保序约 9–12ms/10 次。Flutter 全量测试 **1134/1134**、analyze exit 0。
+- **GPT OAuth 稳定性专项（2026-08-29）**：按 Cockpit 当前流程补齐 hosted 登录封装、官方客户端身份参数、Ephemeral/无痕优先和原生回调保活；新增 `prompt=select_account`，普通浏览器回退时也进入账号选择页，不再静默复用个人空间。真实测试账号已完成 OAuth 回调、Token 交换、官方 Codex 模型目录和 Responses 请求闭环（HTTP 200；模型目录 6 个模型）；Gemini 官方 API OAuth 可行性与边界见 `android-app/docs/oauth-gemini-research-2026-08-28.md`。
+- **上一线上 APK（保留回退）**：`C:\src\xunni-codex\ci-artifacts\releases\feimiao-codex-v1.270.0-284.apk`，117,330,357 字节，SHA256 `65BE62B73C2BEFBFD4732800251EEA11C911B6245E60E11D00CD1CD5923D30E2`；release identity gate 已确认 `versionCode=284`、16 KiB 对齐、APK V2 和固定证书。线上 releaseId=`v284-65be62b73c2b`，公网完整下载哈希一致。
+- **本轮线上状态**：v1.276.0+290 已完成本地构建和门禁，尚未发布到线上；v1.275.0+289 保留作回退。
+- **线上版本保留策略**：`android-app/ci/publish_update.sh` 发布并切换 `version.json` 后，自动按 versionCode 只保留当前版本和上一完整版本；旧分片及旧脚本遗留键会在安全校验后删除，发现未知键或线上指针变化则停止清理。
+- **UI 对比图交付规则（2026-08-28）**：凡是调整过 UI，交付必须同时提供改动前截图、改动后截图、左右并排对比图，以及在图中编号标注具体改动位置/内容；多页面批次另附总览联系图。原图不得覆盖，统一产物目录为 `android-app/outputs/ui_comparisons/<日期>/`；本轮脚本包括 `android-app/tooling/make_month_picker_comparison.py` 和既有 `make_nine_ui_comparisons.py`。
+- 当前分支 `feature/ai-model-selector`，版本 `1.276.0+290`，水印 `b0830-290`，DB v48；三阶段 AI 能力、8-27 图文需求、本批全局 UI 收口及月份选择弹窗回退已完成本地验收。喵助手/主页输入框、Chats、AI 多服务商/模型/Effort、上下文/记忆、结构化账单提案与撤销、OAuth/账号 JSON、Claude 加号图片流程均保留。
+- 本批十项 AI 体验需求已收口：思考状态/处理摘要/来源、长按消息操作、回复排版与表格横滑、模型/Effort 选择、首条消息就绪、Claude 加号与图片流程、服务商卡片边界均已实现并通过定向回归。
+- 本轮已修复 OAuth 401 共享强刷与模型目录重试、Chrome 回调成功页连接窗口、主页 GPT 记账的官方 Responses JSON Schema、AI 账号透明输入框，以及喵助手历史底部大空白和上拉回弹（88dp 上限）。深度复核又补齐 Cockpit refresh-only OAuth 首次强刷、所有 API Key 门禁统一凭据判断、回答正文裸来源链接移入来源入口、CJK/Nunito 富文本缺字方块，以及报告真正开始调用模型前的持久化思考起点。
+- 本轮新增启动 ready barrier 与发送前等待，修复刚打开应用第一条消息误判未连接 AI；短回复底部锚定收紧留白，Markdown 表格结构化渲染并补齐回复分享/更多操作栏。
+- 新增 flow generation/ownership：旧流程的延迟 Token/finally/stop/callback 不能清理或消费新流程；Android ready marker、callback 文件和服务停止均按 flowId 校验，避免再次出现 `ERR_CONNECTION_REFUSED`。
+- 整条前台 AI 流程及解析/附件请求增加 120 秒超时，避免永不结束的传输永久停留在思考态；报告交给 WorkManager 后保留 flow ownership，发送 Future 返回不会终止思考 ticker/报告轮询，任务完成、失败或 120 秒 UI 交接后才释放；发送三图按参考图采用聊天内容区满宽的方形三等分卡片，保留两侧边距和卡片间细间距。
+- 草稿附件累计添加现在按每条消息统一限制 3 张图片/10 个文件，相册重复选择及文件选择器中的图片都会计入上限；报告任务新增 `model_started_ms`（DB v48），首次模型处理时间以 compare-and-set 持久化，恢复 Chats 不会重置思考计时。
+- 全局 UI 收口新增公共按钮/菜单/弹层/设置行/勾选件契约，独立操作热区至少 48dp、顶栏视觉尺寸不变；AI 账号长值在 320dp/200% 字体下不溢出，危险操作统一警示橙，设置页私有重复组件已移除。全量 Flutter 测试 **1124/1124** 通过；全局 UI、AI 请求/重试/Responses、AI/UI/会话/图片/思考/来源/模型/菜单定向回归及 Claude/Chats 视觉回归均通过；静态分析无 error（64 条既有 warning/info）。
+- 普通问答提示词已移除强制 Markdown 排版、短回复和字数限制，性格改为“口语化、亲切”；金额准确、分类范围和数据不足如实回答等业务约束保留。报告文档仍使用独立结构模板。
+- OAuth 已是 PKCE + state 校验 + IPv6/IPv4 localhost 回调（1455/1457）+ Token 交换/刷新 + GPT 模型目录；Android 优先使用 Chrome Ephemeral Custom Tab，旧版 Chrome 回退无痕标签以隔离浏览器 Cookie，避免直接进入当前个人空间；恢复后自动接管待完成流程，Token 瞬时失败保留短暂回调窗口，返回 Cockpit 风格紫色成功页；浏览器连接失败时仍保留粘贴回调地址兜底。
+- 截图字体修复：Windows 离屏截图按实机注册应用 Nunito、Noto Sans SC CJK fallback、`MaterialIcons` 和 `packages/cupertino_icons/CupertinoIcons`；富文本显式固定 Nunito，输入框、模型/Effort、聊天正文、问候语和所有操作图标不再显示中文/图标方框。Claude 加号菜单改用统一模糊底部弹层，截图在 Navigator 外层按整屏验收；照片入口与操作行按参考图收窄比例。新增 `android-app/outputs/global_ui/` 全局设置/控件画廊截图；全局、AI 账号、输入框、Claude 加号和 Chats 截图回归通过。
+- 设置页模型列表字号遗漏已补齐：模型列表和手动模型输入统一为 `15px`、`w300`，并有 Widget 回归断言；输入框底部模型名称/Effort 原有标准保持不变。
+- 旧 v1.264.0+278、v1.263.0+277、v1.262.0+276、v1.261.0+275、v1.260.0+274、v1.260.0+273 和 v1.259.0+272 包保留作回退；它们的历史 release identity gate 均已记录。
+- 本机 ADB 仍无在线设备，因此未执行新包安装/冷启动；当前包已通过浏览器真实 OAuth/模型/Responses 验收，Android 真机的 Ephemeral Custom Tab、IME 和中文字体观感仍需安装后确认。iOS 与 `android-app/integration_test/parity_screenshots_test.dart`、`android-app/test_driver/integration_test.dart` 本轮未修改。
+- **上一轮出包修复（已包含在 v1.242.0+255）**：输入框全屏分支移除多余 `Spacer`，模型名称不再被压缩到约 4px，声明的 19px 可正常绘制；底部 `High` 调为 16px。
+- v1.270.0+284 已发布线上；真实 Android 真机的 Ephemeral Custom Tab、IME 和中文字体观感仍需安装后确认。后续线上发布默认只保留当前版本与上一版本。
 
 ## §-1 最新交接（2026-07-02 起：按用户优化文档做六批 UI/功能升级）
 

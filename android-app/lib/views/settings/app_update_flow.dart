@@ -1,12 +1,15 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:flutter/cupertino.dart' show CupertinoIcons;
 import 'package:flutter/material.dart';
 
 import '../../core/update/app_update.dart';
 import '../../theme/app_colors.dart';
 import '../../widgets/app_toast.dart';
 import '../../widgets/ios_dialogs.dart';
+import '../../widgets/settings_ui.dart';
+import '../common/app_sheet.dart';
 
 /// 检查更新流程（设置页手动触发 / 启动静默检查共用）。
 /// [silent] = 启动静默模式：没更新或网络失败都不打扰用户。
@@ -77,6 +80,153 @@ Future<void> checkAppUpdate(BuildContext context, {bool silent = false}) async {
     return;
   }
   await _watchDownload(context, info, id);
+}
+
+/// Open the historical-build picker.  A rollback entry is only actionable
+/// when its install sequence is newer than the package currently installed;
+/// this keeps the system installer from receiving an APK it must reject as a
+/// downgrade.  Historical source versions are displayed separately from that
+/// install sequence so the UI remains understandable.
+Future<void> showRollbackCatalog(BuildContext context) async {
+  final installedCode = await AppUpdate.installedVersionCode();
+  final entries = await AppUpdate.fetchRollbackCatalog();
+  if (!context.mounted) return;
+  final selected = await showBlurSheet<AppRollbackInfo>(
+    context,
+    child: _RollbackSheet(
+      installedVersionCode: installedCode,
+      entries: entries,
+    ),
+  );
+  if (selected == null || !context.mounted) return;
+  await _downloadAndInstallRollback(context, selected);
+}
+
+class _RollbackSheet extends StatelessWidget {
+  final int installedVersionCode;
+  final List<AppRollbackInfo> entries;
+
+  const _RollbackSheet({
+    required this.installedVersionCode,
+    required this.entries,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final sorted = [...entries]
+      ..sort((a, b) => b.sourceVersionCode.compareTo(a.sourceVersionCode));
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          SheetHeader(
+            title: '历史版本',
+            subtitle: '选择经过签名校验的版本；安装前建议先备份账本',
+            onClose: () => Navigator.of(context).pop(),
+          ),
+          if (sorted.isEmpty)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(24, 28, 24, 34),
+              child: Text(
+                '暂时没有可用的历史版本',
+                style: TextStyle(
+                  fontSize: 14,
+                  color: scheme.onSurfaceVariant,
+                ),
+              ),
+            )
+          else
+            ConstrainedBox(
+              constraints: BoxConstraints(
+                maxHeight: MediaQuery.sizeOf(context).height * 0.72,
+              ),
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.symmetric(vertical: 4),
+                child: SettingsGroup(
+                  margin: const EdgeInsets.fromLTRB(16, 4, 16, 12),
+                  children: [
+                    for (final entry in sorted)
+                      _RollbackRow(
+                        entry: entry,
+                        installedVersionCode: installedVersionCode,
+                        onTap: entry.installVersionCode > installedVersionCode
+                            ? () => Navigator.of(context).pop(entry)
+                            : null,
+                      ),
+                  ],
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+class _RollbackRow extends StatelessWidget {
+  final AppRollbackInfo entry;
+  final int installedVersionCode;
+  final VoidCallback? onTap;
+
+  const _RollbackRow({
+    required this.entry,
+    required this.installedVersionCode,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final available = onTap != null;
+    final suffix = available
+        ? '可安装'
+        : entry.installVersionCode == installedVersionCode
+            ? '当前版本'
+            : '需重新生成兼容包';
+    return SettingsRow(
+      leading: const Icon(CupertinoIcons.arrow_counterclockwise),
+      title: 'v${entry.versionName}',
+      titleColor:
+          available ? null : scheme.onSurfaceVariant.withValues(alpha: 0.58),
+      subtitle:
+          '$suffix · 安装序号 ${entry.installVersionCode} · 原版本 ${entry.sourceVersionCode}',
+      trailing: Icon(
+        CupertinoIcons.chevron_forward,
+        size: 18,
+        color:
+            scheme.onSurfaceVariant.withValues(alpha: available ? 0.82 : 0.36),
+      ),
+      onTap: onTap,
+    );
+  }
+}
+
+Future<void> _downloadAndInstallRollback(
+  BuildContext context,
+  AppRollbackInfo entry,
+) async {
+  final installedCode = await AppUpdate.installedVersionCode();
+  if (!context.mounted) return;
+  if (entry.installVersionCode <= installedCode) {
+    showAppToast(
+      context,
+      '这个回退包的安装序号不高于当前版本，系统不会允许覆盖',
+      icon: Icons.info_outline,
+    );
+    return;
+  }
+  final confirmed = await showConfirmDialog(
+    context,
+    title: '安装历史版本？',
+    message: '将安装 v${entry.versionName}。账本数据会保留，但旧代码必须兼容当前数据库；建议先导出备份。',
+    confirmText: '下载并安装',
+    cancelText: '取消',
+  );
+  if (!confirmed || !context.mounted) return;
+  final info = entry.installInfo;
+  await _foregroundDownloadAndInstall(context, info);
 }
 
 /// 轮询系统下载进度并镜像到弹窗；「后台下载」只关弹窗不停下载。

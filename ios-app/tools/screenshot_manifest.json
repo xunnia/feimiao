@@ -1,12 +1,43 @@
 {
-  "schemaVersion": 1,
-  "baseline": {
-    "androidVersion": "1.275.0+289",
-    "androidWatermark": "b0830-289",
-    "androidDatabaseVersion": 48,
-    "iosDeploymentTarget": "26.0",
-    "fixture": "QINGJI_DEMO=1; QINGJI_DEMO_NOW=2026-08-27T12:00:00+08:00"
+  "schemaVersion": 2,
+  "product": {
+    "name": "肥喵记账",
+    "sameProduct": true,
+    "sourceOfTruth": "android",
+    "iosRole": "native-implementation"
   },
+  "baseline": {
+    "id": "p0-2026-09-02",
+    "fixtureId": "p0-demo-ledger-2026-08-v1",
+    "fixtureHash": "sha256:b061ac4951eb7960e56c57e09e27d6ac2858e21d3560a9de07688841d746f722",
+    "androidVersion": "1.289.0+304",
+    "androidWatermark": "b0901-304",
+    "androidDatabaseVersion": 49,
+    "iosVersion": "1.286.0+300",
+    "iosDeploymentTarget": "26.0",
+    "fixture": "QINGJI_DEMO=1; QINGJI_DEMO_NOW=2026-08-27T12:00:00+08:00",
+    "locale": "zh-Hans",
+    "timezone": "Asia/Shanghai",
+    "currency": "CNY",
+    "book": "总账本",
+    "expected": {
+      "period": "2026-08",
+      "income": "620.00",
+      "expense": "1017.90",
+      "balance": "-397.90",
+      "budget": "3000.00"
+    }
+  },
+  "sharedSurfaces": [
+    {
+      "ids": ["accounts", "liabilities", "reconcile"],
+      "platforms": ["android"],
+      "canonical": "accounts",
+      "unproven": ["liabilities", "reconcile"],
+      "reason": "三个场景在 Android 侧都落到「资产管理 › 资金」这一个页面，截图必然字节相同。accounts 是正当映射：accounts_view.dart 渲染的就是资产管理页，账户列表即资金 tab，Android 没有单独的账户管理列表页。liabilities 与 reconcile 则是拿资金 tab 顶替——负债走资产模块的 loan_wizard_sheet / repayment_sheet / liability_migration_sheet，对账在 account_detail_page 与 accounts_view 内，两者都没有可成对的独立页面。",
+      "resolution": "已拍板信息架构以 Android 为母版，iOS 的 LiabilitiesView / ReconcileView 要收回详情页与弹层。收敛完成后把 liabilities / reconcile 移出本组并重新定义它们的成对页面；accounts 长期留在本组。"
+    }
+  ],
   "pairs": [
     {
       "id": "home-overview",

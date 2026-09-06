@@ -2,6 +2,8 @@ import 'dart:io';
 
 import 'package:integration_test/integration_test_driver_extended.dart';
 
+import '../tooling/opaque_parity_screenshot.dart';
+
 Future<void> main() async {
   await integrationDriver(
     onScreenshot: (
@@ -12,7 +14,8 @@ Future<void> main() async {
       final directory = Directory('outputs/parity');
       await directory.create(recursive: true);
       final image = File('${directory.path}/$screenshotName.png');
-      await image.writeAsBytes(screenshotBytes, flush: true);
+      final opaqueBytes = makeOpaqueParityScreenshot(screenshotBytes);
+      await image.writeAsBytes(opaqueBytes, flush: true);
       return true;
     },
     writeResponseOnFailure: true,

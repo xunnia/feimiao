@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/cupertino.dart' show CupertinoIcons;
 import 'package:provider/provider.dart';
 
+import '../../core/app_clock.dart';
 import '../../core/budget/budget_window_resolver.dart';
 import '../../core/models/transaction_kind.dart';
 import '../../core/ledger/ledger_policy.dart';
@@ -30,13 +31,13 @@ class _MonthlyReportViewState extends State<MonthlyReportView> {
   @override
   void initState() {
     super.initState();
-    final now = DateTime.now();
+    final now = AppClock.now;
     _year = now.year;
     _month = now.month;
   }
 
   bool get _isCurrentMonth {
-    final now = DateTime.now();
+    final now = AppClock.now;
     return _year == now.year && _month == now.month;
   }
 
@@ -44,7 +45,7 @@ class _MonthlyReportViewState extends State<MonthlyReportView> {
     final picked = await showAppMonthPicker(
       context,
       initial: DateTime(_year, _month),
-      last: DateTime.now(),
+      last: AppClock.now,
     );
     if (picked != null && mounted) {
       setState(() {
@@ -235,7 +236,7 @@ class _MonthlyReportViewState extends State<MonthlyReportView> {
 
     // 日均
     final days = _isCurrentMonth
-        ? DateTime.now().day
+        ? AppClock.now.day
         : StatisticsEngine.daysInMonth(year: _year, month: _month);
     if (days > 0 && cur.totalExpense > Decimal.zero) {
       final avg = cur.totalExpense.toDouble() / days;

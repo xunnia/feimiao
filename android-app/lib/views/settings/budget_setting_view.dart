@@ -2,6 +2,7 @@ import 'package:decimal/decimal.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../../core/app_clock.dart';
 import '../../core/budget/budget_period.dart';
 import '../../core/budget/budget_plan_v2.dart';
 import '../../core/budget/budget_special_tracking.dart';
@@ -47,7 +48,7 @@ class BudgetSettingView extends StatefulWidget {
 
 class _BudgetSettingViewState extends State<BudgetSettingView> {
   BudgetViewKind _browseKind = BudgetViewKind.cycle;
-  DateTime _referenceDay = DateUtils.dateOnly(DateTime.now());
+  DateTime _referenceDay = DateUtils.dateOnly(AppClock.now);
   DateTimeRange? _browseCustomRange;
   int? _browseBookId;
   bool _scopeInitialized = false;
@@ -131,7 +132,7 @@ class _BudgetSettingViewState extends State<BudgetSettingView> {
           context,
           initial: _referenceDay,
           first: DateTime(2000),
-          last: DateTime(DateTime.now().year + 2, 12, 31),
+          last: DateTime(AppClock.now.year + 2, 12, 31),
           title: '选择所在周期',
         );
         if (picked != null && mounted) {
@@ -142,7 +143,7 @@ class _BudgetSettingViewState extends State<BudgetSettingView> {
         final picked = await showAppMonthPicker(
           context,
           initial: _referenceDay,
-          last: DateTime(DateTime.now().year + 2, 12),
+          last: DateTime(AppClock.now.year + 2, 12),
         );
         if (picked != null && mounted) {
           setState(() => _referenceDay = DateTime(picked.year, picked.month));
@@ -152,7 +153,7 @@ class _BudgetSettingViewState extends State<BudgetSettingView> {
         final picked = await showAppWeekPicker(
           context,
           initialWeekStart: _weekStart(_referenceDay),
-          last: DateTime(DateTime.now().year + 2, 12, 31),
+          last: DateTime(AppClock.now.year + 2, 12, 31),
         );
         if (picked != null && mounted) {
           setState(() => _referenceDay = DateUtils.dateOnly(picked));
@@ -163,7 +164,7 @@ class _BudgetSettingViewState extends State<BudgetSettingView> {
           context,
           initial: _browseCustomRange,
           first: DateTime(2000),
-          last: DateTime(DateTime.now().year + 2, 12, 31),
+          last: DateTime(AppClock.now.year + 2, 12, 31),
         );
         if (picked != null && mounted) {
           setState(() {
@@ -385,7 +386,7 @@ class _BudgetSettingViewState extends State<BudgetSettingView> {
     final repo = context.watch<AppRepository>();
     final selectedBook =
         repo.books.where((book) => book.id == _browseBookId).firstOrNull;
-    final now = DateTime.now();
+    final now = AppClock.now;
     final result = _resolveBudgetWindow(repo, now);
     final specialWindow = _specialBrowseWindow(result);
     final specialPlans = repo.budgetSpecialPlansV2
@@ -1166,7 +1167,7 @@ class _BudgetV2PlanListCard extends StatelessWidget {
               final book = repo.books
                   .where((candidate) => candidate.id == plan.bookId)
                   .firstOrNull;
-              final currentCycle = plan.cycleFor(DateTime.now());
+              final currentCycle = plan.cycleFor(AppClock.now);
               final occurrences = repo.budgetFixedOccurrencesV2For(
                 plan.id,
                 cycleStart: currentCycle.start,
@@ -1436,7 +1437,7 @@ class _BudgetPlanV2SheetState extends State<_BudgetPlanV2Sheet> {
     _monthStartController.text = (plan.monthStartDay ?? 1).toString();
     _weekStart = plan.weekStart ?? DateTime.monday;
     final revisions = repo.budgetPlanRevisionsV2For(plan.id);
-    final cycle = plan.cycleFor(DateTime.now());
+    final cycle = plan.cycleFor(AppClock.now);
     final revision = widget.overrideCurrent
         ? revisions.where((item) => item.appliesTo(cycle)).lastOrNull
         : revisions.lastOrNull;
@@ -1577,7 +1578,7 @@ class _BudgetPlanV2SheetState extends State<_BudgetPlanV2Sheet> {
           startNextCycle: _startNextCycle,
         );
       } else if (widget.overrideCurrent) {
-        final cycle = widget.plan!.cycleFor(DateTime.now());
+        final cycle = widget.plan!.cycleFor(AppClock.now);
         await repo.upsertBudgetCycleOverrideV2(
           planId: widget.plan!.id,
           cycleStart: cycle.start,
@@ -1629,9 +1630,9 @@ class _BudgetPlanV2SheetState extends State<_BudgetPlanV2Sheet> {
         : repo.budgetWindow(BudgetWindowQuery(
             viewKind: BudgetViewKind.cycle,
             bookId: widget.plan!.bookId,
-            referenceDate: DateTime.now(),
-            asOf: DateTime.now(),
-            knowledgeCutoff: DateTime.now(),
+            referenceDate: AppClock.now,
+            asOf: AppClock.now,
+            knowledgeCutoff: AppClock.now,
           ));
     return ConstrainedBox(
       constraints: BoxConstraints(
@@ -1792,7 +1793,7 @@ class _BudgetPlanV2SheetState extends State<_BudgetPlanV2Sheet> {
                         label: '添加',
                         onPressed: () => setState(() => _fixedDrafts.add(
                               _FixedTemplateDraft(
-                                id: 'fixed-${DateTime.now().microsecondsSinceEpoch}',
+                                id: 'fixed-${AppClock.now.microsecondsSinceEpoch}',
                               ),
                             )),
                       ),
@@ -1940,7 +1941,7 @@ class _BudgetFixedOccurrencesSheet extends StatelessWidget {
   Widget build(BuildContext context) {
     final repo = context.watch<AppRepository>();
     final scheme = Theme.of(context).colorScheme;
-    final currentCycle = plan.cycleFor(DateTime.now());
+    final currentCycle = plan.cycleFor(AppClock.now);
     var occurrences = repo.budgetFixedOccurrencesV2For(
       plan.id,
       cycleStart: currentCycle.start,
@@ -2168,14 +2169,14 @@ class _BudgetSheetState extends State<_BudgetSheet> {
     final total = income != null && income > Decimal.zero
         ? BudgetSuggestion.suggestFromIncome(income)
         : BudgetSuggestion.averageMonthlySpend(repo.allRecordsRef,
-            now: DateTime.now());
+            now: AppClock.now);
     if (total == null) {
       setState(() => _formError = '最近还没什么支出记录，填一下月收入喵就能按 80% 帮你算');
       return;
     }
     final weights = BudgetSuggestion.historicalWeights(
       repo.allRecordsRef,
-      now: DateTime.now(),
+      now: AppClock.now,
       topKeyOfName: _topKeyOf,
     );
     final alloc = BudgetSuggestion.split(total: total, weights: weights);
@@ -2230,7 +2231,7 @@ class _BudgetSheetState extends State<_BudgetSheet> {
       if (!ok || !mounted) return;
     }
 
-    final now = DateTime.now();
+    final now = AppClock.now;
     // 首条循环预算从 2000 年起覆盖全部历史月份（老账单也有预算可看）；
     // 之后再新建的才从本月生效，历史月仍显示当时那条。
     final hasRecurring =
@@ -2274,7 +2275,7 @@ class _BudgetSheetState extends State<_BudgetSheet> {
   }
 
   Future<void> _pickCustomRange() async {
-    final now = DateTime.now();
+    final now = AppClock.now;
     final picked = await showAppDateRangePicker(
       context,
       initial: _customRange,

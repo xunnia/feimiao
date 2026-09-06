@@ -5,6 +5,7 @@ import 'package:decimal/decimal.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../../core/app_clock.dart';
 import '../../core/models/transaction_kind.dart';
 import '../../core/ledger/ledger_policy.dart';
 import '../../core/money_format.dart';
@@ -561,7 +562,7 @@ class _SearchViewState extends State<SearchView> {
       await Future<void>.delayed(const Duration(milliseconds: 180));
       if (!mounted) return;
     }
-    final today = DateTime.now();
+    final today = AppClock.now;
     final r = await showAppDateRangePicker(
       context,
       initial: _range,

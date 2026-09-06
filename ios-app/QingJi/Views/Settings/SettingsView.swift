@@ -172,7 +172,9 @@ struct SettingsView: View {
         case .liabilities: LiabilitiesView()
         case .netWorth:  NetWorthView()
         case .importReview:
-            ImportReviewView(result: ImportReviewView.demoResult()) { _, _ in }
+            // A review is only valid when it came from a real selected file.
+            // The deterministic fixture is reserved for the CI demo launch.
+            ImportExportView()
         case .importExport: ImportExportView()
         case .reports:   ReportsView()
         case .backup:    BackupView()

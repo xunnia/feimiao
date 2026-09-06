@@ -154,6 +154,27 @@ jobs:
         run: |
           python3 ios-app/tools/check_android_parity_screenshots.py \
             android-app/outputs/parity/*.png
+      # The surface check above only rejects black/transparent frames. Without a
+      # duplicate check the Android side accepted one capture filed under three
+      # scenario names (accounts/liabilities/reconcile were byte-identical), so
+      # run the same guard the iOS side already uses. Scenarios that genuinely
+      # share one Android page are declared in the manifest's sharedSurfaces.
+      - name: Verify Android parity screenshots are distinct
+        if: success()
+        run: |
+          python3 ios-app/tools/check_screenshot_distinct.py \
+            android-app/outputs/parity/*.png \
+            --manifest ios-app/tools/screenshot_manifest.json \
+            --platform android
+      - name: Record Android capture provenance
+        if: success()
+        run: |
+          python3 ios-app/tools/write_parity_metadata.py \
+            --root . \
+            --manifest ios-app/tools/screenshot_manifest.json \
+            --platform android \
+            --device "pixel_2 / API 35 / x86_64" \
+            --output android-app/outputs/parity/capture-metadata.json
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -236,6 +257,7 @@ jobs:
               sleep 1
               if ! SIMCTL_CHILD_QINGJI_DEMO=1 \
                 SIMCTL_CHILD_QINGJI_DEMO_NOW="2026-08-27T12:00:00+08:00" \
+                SIMCTL_CHILD_TZ="Asia/Shanghai" \
                 SIMCTL_CHILD_QINGJI_SCREEN="$screen" \
                 xcrun simctl launch "$DEVICE" com.qingji.app >> "$runtime_log" 2>&1; then
                 echo "::warning::CAPTURE_LAUNCH_FAILED name=$name screen=$screen attempt=$attempt"
@@ -301,18 +323,31 @@ jobs:
 
           python3 ios-app/tools/check_screenshot_nonempty.py \
             ci-artifacts/ios-screenshots/*.png
+          # 0.916 was the measured distance between the home screen and the
+          # import-review capture that silently fell back to home, i.e. the
+          # default 1.0 only just caught it. The closest legitimate pair in the
+          # same set is 2.035, so 1.5 sits clear of both.
           if ! python3 ios-app/tools/check_screenshot_distinct.py \
-            ci-artifacts/ios-screenshots/*.png; then
+            ci-artifacts/ios-screenshots/*.png \
+            --min-mean-delta 1.5 \
+            --manifest ios-app/tools/screenshot_manifest.json \
+            --platform ios; then
             echo "::error::截图存在近重复，采集失败时附加导出 QingJi 系统日志"
             xcrun simctl spawn "$DEVICE" log show --last 5m --style compact \
               --predicate 'process == "QingJi"' >> "$runtime_log" 2>&1 || true
             exit 1
           fi
+          python3 ios-app/tools/write_parity_metadata.py \
+            --root . \
+            --manifest ios-app/tools/screenshot_manifest.json \
+            --platform ios \
+            --device "$DEVICE" \
+            --output ci-artifacts/ios-screenshots/capture-metadata.json
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: ios-parity-screenshots
-          path: ci-artifacts/ios-screenshots/*.png
+          path: ci-artifacts/ios-screenshots/
           if-no-files-found: warn
       - uses: actions/upload-artifact@v4
         if: always()
@@ -342,6 +377,17 @@ jobs:
         with:
           name: ios-parity-screenshots
           path: ci-artifacts/ios-screenshots
+      # Must run before any comparison: PNGs whose origin cannot be established
+      # are not weak evidence, they are not evidence. This is what stops a
+      # "39/39 compared" summary from being produced over unprovenanced files.
+      - name: Verify capture provenance
+        run: |
+          python3 ios-app/tools/check_capture_provenance.py \
+            --root . \
+            --manifest ios-app/tools/screenshot_manifest.json \
+            --android-metadata android-app/outputs/parity/capture-metadata.json \
+            --ios-metadata ci-artifacts/ios-screenshots/capture-metadata.json \
+            --expect-revision "${{ github.sha }}"
       - name: Compare screenshots
         run: |
           python3 ios-app/tools/compare_png.py \
@@ -355,12 +401,26 @@ jobs:
             --root . \
             --manifest ios-app/tools/screenshot_manifest.json \
             --output-dir ci-artifacts/parity-comparisons
+      - name: Build P0 baseline report
+        run: |
+          python3 ios-app/tools/check_p0_baseline.py \
+            --root . \
+            --manifest ios-app/tools/screenshot_manifest.json \
+            --contract ios-app/tools/p0_baseline.json \
+            --android-dir android-app/outputs/parity \
+            --ios-dir ci-artifacts/ios-screenshots \
+            --output-dir ci-artifacts/p0-baseline
       - uses: actions/upload-artifact@v4
         with:
           name: parity-screenshot-report
           path: |
             ci-artifacts/screenshot-report.json
             ci-artifacts/screenshot-report.md
+      - uses: actions/upload-artifact@v4
+        with:
+          name: p0-baseline-report
+          path: ci-artifacts/p0-baseline/
+          if-no-files-found: error
       - uses: actions/upload-artifact@v4
         with:
           name: parity-visual-comparisons

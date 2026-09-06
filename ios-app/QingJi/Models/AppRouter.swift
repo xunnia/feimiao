@@ -14,9 +14,8 @@ final class AppRouter {
         case transactions
         case statistics
         case settings
-        /// Import review is a cold-launch destination in the parity matrix.
-        /// Keep it at the root stack so SwiftUI does not have to race a
-        /// nested settings `navigationDestination` on the first frame.
+        /// 导入复核既是业务页，也是 parity 冷启动目标。放在根路由，
+        /// 避免首帧与 SettingsView 的嵌套 navigationDestination 竞争。
         case importReview
     }
 

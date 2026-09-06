@@ -2,6 +2,7 @@ import 'package:decimal/decimal.dart';
 import 'package:flutter/cupertino.dart' show CupertinoIcons;
 import 'package:flutter/material.dart';
 
+import '../core/app_clock.dart';
 import '../core/budget/budget_engine.dart';
 import '../core/money_format.dart';
 import '../core/statistics/statistics_engine.dart';
@@ -520,7 +521,7 @@ class _BudgetBody extends StatelessWidget {
         : percentDecimal.round().toBigInt();
     final pct = '$pctValue%';
 
-    final now = DateTime.now();
+    final now = AppClock.now;
     final daysInMonth = DateTime(now.year, now.month + 1, 0).day;
     final remainingDays = daysInMonth - now.day + 1;
 

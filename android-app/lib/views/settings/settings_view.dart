@@ -42,6 +42,7 @@ Future<void> showSettingsSheet(BuildContext context) async {
     ),
   );
 }
+
 /// 设置页内容：iOS 风分组——灰底白卡 + 发丝分隔。作为弹窗内容渲染。
 class SettingsView extends StatelessWidget {
   const SettingsView({super.key});
@@ -93,8 +94,8 @@ class SettingsView extends StatelessWidget {
                     SettingsRow(
                       leading: const Icon(CupertinoIcons.sparkles),
                       title: 'AI 记账设置',
-                      trailing: const Icon(CupertinoIcons.chevron_forward,
-                          size: 18),
+                      trailing:
+                          const Icon(CupertinoIcons.chevron_forward, size: 18),
                       onTap: () => Navigator.push(
                         context,
                         AppPageRoute<void>(
@@ -104,8 +105,8 @@ class SettingsView extends StatelessWidget {
                     SettingsRow(
                       leading: const Icon(CupertinoIcons.cloud_upload),
                       title: '备份与恢复',
-                      trailing: const Icon(CupertinoIcons.chevron_forward,
-                          size: 18),
+                      trailing:
+                          const Icon(CupertinoIcons.chevron_forward, size: 18),
                       onTap: () => Navigator.push(
                         context,
                         AppPageRoute<void>(builder: (_) => const BackupView()),
@@ -141,8 +142,8 @@ class SettingsView extends StatelessWidget {
                     SettingsRow(
                       leading: const Icon(CupertinoIcons.paintbrush),
                       title: '主题外观',
-                      trailing: const Icon(CupertinoIcons.chevron_forward,
-                          size: 18),
+                      trailing:
+                          const Icon(CupertinoIcons.chevron_forward, size: 18),
                       onTap: () => Navigator.push(
                         context,
                         AppPageRoute<void>(
@@ -221,10 +222,21 @@ class SettingsView extends StatelessWidget {
                       },
                     ),
                     SettingsRow(
+                      leading:
+                          const Icon(CupertinoIcons.arrow_counterclockwise),
+                      title: '历史版本',
+                      subtitle: '安装经过校验的回退包，账本数据保留',
+                      trailing: const Icon(
+                        CupertinoIcons.chevron_forward,
+                        size: 18,
+                      ),
+                      onTap: () => showRollbackCatalog(context),
+                    ),
+                    SettingsRow(
                       leading: const Icon(CupertinoIcons.info_circle),
                       title: '关于',
-                      trailing: const Icon(CupertinoIcons.chevron_forward,
-                          size: 18),
+                      trailing:
+                          const Icon(CupertinoIcons.chevron_forward, size: 18),
                       onTap: () => _showAboutSheet(context),
                     ),
                   ]),
@@ -249,6 +261,7 @@ class SettingsView extends StatelessWidget {
     );
   }
 }
+
 class _ProfileHeaderCard extends StatelessWidget {
   final String nickname;
   final String avatarPath;
@@ -328,6 +341,7 @@ class _ProfileHeaderCard extends StatelessWidget {
     );
   }
 }
+
 class _ProfileAvatar extends StatelessWidget {
   final String nickname;
   final String avatarPath;
@@ -399,6 +413,7 @@ class _ProfileAvatar extends StatelessWidget {
     );
   }
 }
+
 Future<void> showEditProfileSheet(BuildContext context) async {
   await showBlurSheet<void>(
     context,
@@ -646,6 +661,7 @@ Future<void> showMoneyDisplaySheet(BuildContext context) async {
     child: const _MoneyDisplaySheet(),
   );
 }
+
 Future<void> _showAboutSheet(BuildContext context) async {
   await showBlurSheet<void>(
     context,
@@ -667,41 +683,41 @@ Future<void> _showAboutSheet(BuildContext context) async {
                 Padding(
                   padding: const EdgeInsets.fromLTRB(18, 10, 18, 22),
                   child: SettingsGroup(children: [
-                  SettingsRow(
-                    leading: const Icon(Icons.article_outlined),
-                    title: '使用条款',
-                    trailing: const Icon(CupertinoIcons.chevron_forward,
-                        size: 18),
-                    onTap: () => _showTextSheet(
-                      ctx,
+                    SettingsRow(
+                      leading: const Icon(Icons.article_outlined),
                       title: '使用条款',
-                      body:
-                          '肥喵记账用于个人记账、账单整理和消费分析。你需要自行确认录入、导入和 AI 识别结果是否准确。\n\nAI 记账和 AI 分析可能产生错误，涉及金额、分类、退款和统计结论时，请以你的真实账单和银行、支付平台记录为准。\n\n你应妥善保管自己的设备、备份文件和 API Key。因误删、误导入、第三方服务异常或设备故障造成的数据损失，建议优先通过备份恢复。',
+                      trailing:
+                          const Icon(CupertinoIcons.chevron_forward, size: 18),
+                      onTap: () => _showTextSheet(
+                        ctx,
+                        title: '使用条款',
+                        body:
+                            '肥喵记账用于个人记账、账单整理和消费分析。你需要自行确认录入、导入和 AI 识别结果是否准确。\n\nAI 记账和 AI 分析可能产生错误，涉及金额、分类、退款和统计结论时，请以你的真实账单和银行、支付平台记录为准。\n\n你应妥善保管自己的设备、备份文件和 API Key。因误删、误导入、第三方服务异常或设备故障造成的数据损失，建议优先通过备份恢复。',
+                      ),
                     ),
-                  ),
-                  SettingsRow(
-                    leading: const Icon(Icons.lock_outline),
-                    title: '隐私政策',
-                    trailing: const Icon(CupertinoIcons.chevron_forward,
-                        size: 18),
-                    onTap: () => _showTextSheet(
-                      ctx,
+                    SettingsRow(
+                      leading: const Icon(Icons.lock_outline),
                       title: '隐私政策',
-                      body:
-                          '肥喵记账默认将账本数据保存在本机。完整备份会包含账本数据库和收据图片，但不会包含 AI API Key。\n\n当你使用 AI 解析或 AI 分析时，相关文本、账单摘要或你输入的问题可能会发送给你配置的 AI 服务提供方，用于生成结果。请避免提交身份证号、银行卡号、验证码等敏感信息。\n\n导入、导出和分享备份文件由你主动触发。请只把备份文件保存到你信任的位置。',
+                      trailing:
+                          const Icon(CupertinoIcons.chevron_forward, size: 18),
+                      onTap: () => _showTextSheet(
+                        ctx,
+                        title: '隐私政策',
+                        body:
+                            '肥喵记账默认将账本数据保存在本机。完整备份会包含账本数据库和收据图片，但不会包含 AI API Key。\n\n当你使用 AI 解析或 AI 分析时，相关文本、账单摘要或你输入的问题可能会发送给你配置的 AI 服务提供方，用于生成结果。请避免提交身份证号、银行卡号、验证码等敏感信息。\n\n导入、导出和分享备份文件由你主动触发。请只把备份文件保存到你信任的位置。',
+                      ),
                     ),
-                  ),
-                  SettingsRow(
-                    leading: const Icon(Icons.info_outline),
-                    title: AppVersion.name,
-                    trailing: Text(
-                      AppVersion.fullDisplay,
-                      style: Theme.of(ctx).textTheme.bodyMedium?.copyWith(
-                            color: scheme.onSurfaceVariant,
-                            fontFamily: 'Nunito',
-                          ),
+                    SettingsRow(
+                      leading: const Icon(Icons.info_outline),
+                      title: AppVersion.name,
+                      trailing: Text(
+                        AppVersion.fullDisplay,
+                        style: Theme.of(ctx).textTheme.bodyMedium?.copyWith(
+                              color: scheme.onSurfaceVariant,
+                              fontFamily: 'Nunito',
+                            ),
+                      ),
                     ),
-                  ),
                   ]),
                 ),
               ],
@@ -712,6 +728,7 @@ Future<void> _showAboutSheet(BuildContext context) async {
     ),
   );
 }
+
 Future<void> _showTextSheet(
   BuildContext context, {
   required String title,

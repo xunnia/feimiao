@@ -1,5 +1,12 @@
 #!/usr/bin/env python3
-"""Reject Android parity captures with a missing or black page surface."""
+"""Reject Android parity captures with a missing/black page surface.
+
+The parity driver intentionally forces the light app theme. A transparent
+capture route can therefore produce a valid PNG with the expected dimensions
+but a black outer surface, hiding dark text and making the Android/iOS review
+misleading. This guard checks both the full emulator frame and background
+pixels outside the page content.
+"""
 
 from __future__ import annotations
 
@@ -25,11 +32,10 @@ def inspect(path: Path) -> tuple[int, int, float, float]:
             f"expected {EXPECTED_SIZE[0]}x{EXPECTED_SIZE[1]}, got {width}x{height}"
         )
 
+    # The outer 1% is page background in every parity route. Sample both sides
+    # at multiple heights so a black route surface cannot hide behind a card.
     xs = (max(0, round(width * 0.01)), min(width - 1, round(width * 0.99)))
-    ys = (
-        round(height * ratio)
-        for ratio in (0.02, 0.08, 0.18, 0.35, 0.55, 0.75, 0.92, 0.98)
-    )
+    ys = (round(height * ratio) for ratio in (0.02, 0.08, 0.18, 0.35, 0.55, 0.75, 0.92, 0.98))
     background = [_rgba_at(pixels, width, x, y) for x in xs for y in ys]
     dark_background_ratio = sum(
         1
@@ -37,6 +43,8 @@ def inspect(path: Path) -> tuple[int, int, float, float]:
         if alpha < 16 or max(red, green, blue) < 32
     ) / max(len(background), 1)
 
+    # Use a sparse full-frame sample as a second signal. Text and icons may be
+    # dark, but a light parity page must not be dominated by near-black pixels.
     stride = 8
     sampled = 0
     near_black = 0
@@ -44,6 +52,9 @@ def inspect(path: Path) -> tuple[int, int, float, float]:
         for x in range(0, width, stride):
             red, green, blue, alpha = _rgba_at(pixels, width, x, y)
             sampled += 1
+            # Transparent pixels render as black in the comparison-sheet
+            # tooling, so they count as a missing surface just like opaque
+            # near-black pixels.
             if alpha < 16 or max(red, green, blue) < 16:
                 near_black += 1
     near_black_ratio = near_black / max(sampled, 1)

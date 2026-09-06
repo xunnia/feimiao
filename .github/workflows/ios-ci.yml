@@ -291,7 +291,10 @@ jobs:
           shoot "settings/display" "35-display"
 
           python3 ios-app/tools/check_screenshot_nonempty.py screenshots/*.png
-          if ! python3 ios-app/tools/check_screenshot_distinct.py screenshots/*.png; then
+          # 与 parity-screenshots.yml 保持同一阈值：默认 1.0 距离
+          # "导入复核回落到首页" 这类真实事故只有 0.084 的余量。
+          if ! python3 ios-app/tools/check_screenshot_distinct.py screenshots/*.png \
+            --min-mean-delta 1.5; then
             echo "::error::截图存在近重复，采集失败时附加导出 QingJi 系统日志"
             xcrun simctl spawn "$DEVICE" log show --last 5m --style compact \
               --predicate 'process == "QingJi"' >> "$runtime_log" 2>&1 || true

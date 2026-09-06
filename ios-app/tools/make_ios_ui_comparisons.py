@@ -88,7 +88,13 @@ def font(size: int, bold: bool = False) -> ImageFont.ImageFont:
 
 
 def flatten_alpha(image: Image.Image) -> Image.Image:
-    """Composite transparent captures onto the app's warm page gradient."""
+    """Composite transparent captures onto the app's warm page gradient.
+
+    PixelCopy can preserve alpha when a Flutter route is transparent. Pillow's
+    direct RGBA-to-RGB conversion turns those pixels black, which makes a
+    healthy light page look truncated in the review sheet. The raw PNG stays
+    untouched; this only affects the derived visual artifact.
+    """
     rgba = image.convert("RGBA")
     alpha = rgba.getchannel("A")
     if alpha.getextrema() == (255, 255):
@@ -97,8 +103,8 @@ def flatten_alpha(image: Image.Image) -> Image.Image:
     width, height = rgba.size
     background = Image.new("RGB", (width, height))
     draw = ImageDraw.Draw(background)
-    top = (250, 224, 176)
-    bottom = (255, 253, 247)
+    top = (250, 224, 176)  # AppColors.warmBackgroundTop
+    bottom = (255, 253, 247)  # AppColors.warmBackgroundBottom
     denominator = max(height - 1, 1)
     for y in range(height):
         progress = y / denominator

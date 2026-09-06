@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/cupertino.dart' show CupertinoIcons;
 import 'package:provider/provider.dart';
 
+import '../../core/app_clock.dart';
 import '../../core/ai/bill_categorizer.dart';
 import '../../core/budget/budget_window_resolver.dart';
 import '../../core/models/cat_svg_icon.dart';
@@ -98,10 +99,10 @@ enum _StatRange { week, month, year, custom }
 class _StatisticsViewState extends State<StatisticsView> {
   _StatRange _range = _StatRange.month;
   DateTime _displayedMonth = DateTime(
-    DateTime.now().year,
-    DateTime.now().month,
+    AppClock.now.year,
+    AppClock.now.month,
   );
-  late DateTime _weekStart = _mondayOf(DateTime.now());
+  late DateTime _weekStart = _mondayOf(AppClock.now);
   DateTimeRange? _customRange;
 
   @override
@@ -122,7 +123,7 @@ class _StatisticsViewState extends State<StatisticsView> {
   // 月/周/年 改用滚轮选择（点期间文案的 ⌄ 打开，替代左右翻箭头）。
   Future<void> _pickMonth() async {
     final picked = await showAppMonthPicker(context,
-        initial: _displayedMonth, last: DateTime.now());
+        initial: _displayedMonth, last: AppClock.now);
     if (picked != null && mounted) {
       setState(() => _displayedMonth = DateTime(picked.year, picked.month));
     }
@@ -130,7 +131,7 @@ class _StatisticsViewState extends State<StatisticsView> {
 
   Future<void> _pickWeek() async {
     final picked = await showAppWeekPicker(context,
-        initialWeekStart: _weekStart, last: DateTime.now());
+        initialWeekStart: _weekStart, last: AppClock.now);
     if (picked != null && mounted) {
       setState(() => _weekStart = _mondayOf(picked));
     }
@@ -138,14 +139,14 @@ class _StatisticsViewState extends State<StatisticsView> {
 
   Future<void> _pickYear() async {
     final picked = await showAppYearPicker(context,
-        initial: _displayedMonth.year, lastYear: DateTime.now().year);
+        initial: _displayedMonth.year, lastYear: AppClock.now.year);
     if (picked != null && mounted) {
       setState(() => _displayedMonth = DateTime(picked, _displayedMonth.month));
     }
   }
 
   bool get _isCurrentMonth {
-    final now = DateTime.now();
+    final now = AppClock.now;
     return _displayedMonth.year == now.year &&
         _displayedMonth.month == now.month;
   }
@@ -155,7 +156,7 @@ class _StatisticsViewState extends State<StatisticsView> {
   /// 进入「自定义」时若还没区间，默认给「本月 1 号 → 今天」，界面上就有两个
   /// 可点的起止日期字段（对齐咔皮），不再是一片空白要先弹窗。
   DateTimeRange get _effectiveRange {
-    final now = DateTime.now();
+    final now = AppClock.now;
     return _customRange ??
         DateTimeRange(start: DateTime(now.year, now.month, 1), end: now);
   }
@@ -172,7 +173,7 @@ class _StatisticsViewState extends State<StatisticsView> {
       context,
       initial: cur.start,
       first: DateTime(2000),
-      last: DateTime.now(),
+      last: AppClock.now,
       title: '开始时间',
     );
     if (picked == null || !mounted) return;
@@ -188,7 +189,7 @@ class _StatisticsViewState extends State<StatisticsView> {
       context,
       initial: cur.end,
       first: cur.start,
-      last: DateTime.now(),
+      last: AppClock.now,
       title: '结束时间',
     );
     if (picked == null || !mounted) return;
@@ -369,7 +370,7 @@ class _WeekContent extends StatelessWidget {
         '${weekStart.month}月${weekStart.day}日 – ${weekEnd.month}月${weekEnd.day}日';
 
     // 徽章基准=上周同期：本周比到上周同一星期几，历史周全周对全周。
-    final now = DateTime.now();
+    final now = AppClock.now;
     final today = DateTime(now.year, now.month, now.day);
     final isCurrentWeek = !today.isBefore(weekStart) && !today.isAfter(weekEnd);
     final prevStart = weekStart.subtract(const Duration(days: 7));
@@ -523,7 +524,7 @@ class _MonthlyContent extends StatelessWidget {
 
     // 徽章基准=上月「同期」：当月比到上月同一天（比全月才诚实——
     // 月初拿 9 天比上月 31 天永远显示大降），历史月才全月对全月。
-    final now = DateTime.now();
+    final now = AppClock.now;
     final prevMonthDays =
         DateTime(displayedMonth.year, displayedMonth.month, 0).day;
     final prevSameEnd = DateTime(
@@ -692,7 +693,7 @@ class _MonthlyContent extends StatelessWidget {
               MoneyFormat.toDouble(d.income).clamp(0.0, double.infinity),
           ],
           compareLabel: '上月同期',
-          markIndex: isCurrentMonth ? DateTime.now().day - 1 : null,
+          markIndex: isCurrentMonth ? AppClock.now.day - 1 : null,
         );
       case 'ranking':
         if (!hasExpense) return null;
@@ -1300,11 +1301,10 @@ class _YearlyContent extends StatelessWidget {
       if (r.date.year != year - 1) continue;
       prevIncome[r.date.month - 1] += MoneyFormat.toDouble(r.amount);
     }
-    final markMonth =
-        year == DateTime.now().year ? DateTime.now().month - 1 : null;
+    final markMonth = year == AppClock.now.year ? AppClock.now.month - 1 : null;
 
     // 徽章基准=去年同期：今年比到去年同月同日，历史年全年对全年。
-    final nowDate = DateTime.now();
+    final nowDate = AppClock.now;
     final isCurrentYear = year == nowDate.year;
     final prevSame = StatisticsEngine.rangeSummary(
       records,
@@ -2321,7 +2321,7 @@ class _BudgetRingCard extends StatelessWidget {
     final pctText = '${(displayRatio * 100).toInt()}%';
     final lastDay =
         DateTime(displayedMonth.year, displayedMonth.month + 1, 0).day;
-    final daysLeft = isCurrentMonth ? lastDay - DateTime.now().day : 0;
+    final daysLeft = isCurrentMonth ? lastDay - AppClock.now.day : 0;
 
     return _SectionCard(
       title: '',
@@ -3438,8 +3438,7 @@ class _StackedBars12State extends State<_StackedBars12> {
   void _compute() {
     final months = <DateTime>[];
     for (var i = 11; i >= 0; i--) {
-      months.add(
-          DateTime(widget.endMonth.year, widget.endMonth.month - i, 1));
+      months.add(DateTime(widget.endMonth.year, widget.endMonth.month - i, 1));
     }
     final exp = <double>[];
     final inc = <double>[];
@@ -3523,7 +3522,9 @@ class _StackedBars12State extends State<_StackedBars12> {
                         rodStackItems: [
                           // 花掉的部分（不超过收入的那截）
                           BarChartRodStackItem(
-                              0, _exp[i] < _inc[i] ? _exp[i] : _inc[i], spentColor),
+                              0,
+                              _exp[i] < _inc[i] ? _exp[i] : _inc[i],
+                              spentColor),
                           // 结余（收入 > 支出）
                           if (_inc[i] > _exp[i])
                             BarChartRodStackItem(_exp[i], _inc[i], savedColor),

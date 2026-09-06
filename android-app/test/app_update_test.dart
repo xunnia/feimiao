@@ -44,6 +44,59 @@ void main() {
     });
   });
 
+  group('AppRollbackInfo', () {
+    test('保留历史显示版本，同时要求独立的递增安装序号', () {
+      final entry = AppRollbackInfo.fromJson({
+        'versionName': '1.279.0',
+        'sourceVersionCode': 293,
+        'installVersionCode': 304,
+        'url': 'https://archive.example.test/feimiao-1.279.0.apk',
+        'releaseId': 'v304-${'a' * 12}',
+        'sha256': 'B' * 64,
+        'databaseVersion': 49,
+      });
+      expect(entry, isNotNull);
+      expect(entry!.sourceVersionCode, 293);
+      expect(entry.installVersionCode, 304);
+      expect(entry.installInfo.versionCode, 304);
+      expect(entry.sha256, 'b' * 64);
+      expect(entry.databaseVersion, 49);
+    });
+
+    test('拒绝 HTTP、缺安装序号和空 releaseId', () {
+      final base = <String, dynamic>{
+        'versionName': '1.279.0',
+        'sourceVersionCode': 293,
+        'url': 'https://archive.example.test/old.apk',
+        'releaseId': 'v304-${'a' * 12}',
+      };
+      expect(
+        AppRollbackInfo.fromJson({...base, 'installVersionCode': 304}),
+        isNotNull,
+      );
+      expect(
+        AppRollbackInfo.fromJson({
+          ...base,
+          'installVersionCode': 304,
+          'url': 'http://archive.example.test/old.apk',
+        }),
+        isNull,
+      );
+      expect(AppRollbackInfo.fromJson(base), isNull);
+      expect(
+        AppRollbackInfo.fromJson(
+            {...base, 'installVersionCode': 304, 'releaseId': ''}),
+        isNull,
+      );
+    });
+  });
+
+  test('更新地址只接受 HTTPS', () {
+    expect(isSecureUpdateUrl('https://updates.example.test/app.apk'), isTrue);
+    expect(isSecureUpdateUrl('HTTP://updates.example.test/app.apk'), isFalse);
+    expect(isSecureUpdateUrl('https:///missing-host.apk'), isFalse);
+  });
+
   test('前台兜底下载会用 Range 接续 part 文件并校验完整包', () async {
     final payload = List<int>.generate(4096, (index) => index % 251);
     final expectedHash = sha256.convert(payload).toString();

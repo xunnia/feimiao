@@ -8,7 +8,60 @@
 /apk-archive/
 /ci-artifacts/releases/
 /android-app/ci-artifacts/
+**/.wrangler/
+/.playwright-cli/
 
 # Generated visual/browser evidence is local unless explicitly curated.
 /android-app/outputs/
 /.playwright-cli/
+
+# Scratch space for one-off verification runs. This grew to 20 GB of whole-repo
+# copies, emulator images and unpacked APKs because nothing was ignoring it.
+# Anything worth keeping belongs in a commit, not in here.
+/.tmp/
+
+# Toolchain state that CI recreates and a clone must never carry: SDKs,
+# emulator images, Gradle/Flutter/Dart caches, build output.
+/.android-avd/
+/.android-sdk/
+/.android-sdk-home/
+/.dart-appdata/
+/.flutter-appdata/
+/.flutter-isolated/
+/.flutter-parity-appdata/
+/.flutter-parity-localappdata/
+/.gradle-build-home-v304-diagnose/
+/.gradle-build-home-v305/
+/.gradle-cc-test-v305/
+/.gradle-no-init-v305/
+/.tmp-genymotion-home/
+/flutter-gradle-plugin/
+/gradle-sanity/
+/gradle-sanity-external/
+/gradle-sanity-include/
+/gradle-sanity-sub/
+/android-app/.flutter_tool_state
+/android-app/.gradle-build-home-v305/
+/android-app/android/build/
+/android-app/android/app/src/release/
+/android-app/test/failures/
+/ios-app/outputs/
+**/__pycache__/
+
+# ADB private key. A device-authorisation secret does not belong in a repo.
+/adbkey
+/adbkey.pub
+
+# CI scratch: downloaded SDKs, emulator logs, unpacked pub packages and
+# per-run screenshot dumps. Curated evidence is committed explicitly instead.
+/ci-artifacts/android-sdk/
+/ci-artifacts/android_home*/
+/ci-artifacts/avd_smoke_clean/
+/ci-artifacts/diagnostics/
+/ci-artifacts/installers/
+/ci-artifacts/platform-tools*/
+/ci-artifacts/workmanager*/
+/ci-artifacts/parity-run*/
+/ci-artifacts/*.log.err
+/ci-artifacts/*.tar.gz
+/ci-artifacts/*.zip

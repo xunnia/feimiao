@@ -2,6 +2,7 @@ import 'package:decimal/decimal.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../../core/app_clock.dart';
 import '../../core/amount_expression.dart';
 import '../../core/budget/budget_engine.dart';
 import '../../core/models/transaction_kind.dart';
@@ -34,7 +35,7 @@ class _QuickAddViewState extends State<QuickAddView> {
   final AmountExpression _expression = AmountExpression();
   int? _selectedCategoryId;
   int? _selectedAccountId;
-  DateTime _date = DateTime.now();
+  DateTime _date = AppClock.now;
   final TextEditingController _noteController = TextEditingController();
   bool _saving = false;
 
@@ -88,7 +89,7 @@ class _QuickAddViewState extends State<QuickAddView> {
 
     setState(() => _saving = true);
     try {
-      final transactionDate = calendarDayWithClock(_date, DateTime.now());
+      final transactionDate = calendarDayWithClock(_date, AppClock.now);
       await repo.addTransaction(
         kind: _kind,
         amount: amount,
@@ -376,7 +377,7 @@ class _DateButton extends StatelessWidget {
   const _DateButton({required this.date, required this.onChanged});
 
   String _label() {
-    final now = DateTime.now();
+    final now = AppClock.now;
     final today = DateTime(now.year, now.month, now.day);
     final d = DateTime(date.year, date.month, date.day);
     if (d == today) return '今天';
@@ -393,7 +394,7 @@ class _DateButton extends StatelessWidget {
           context,
           initial: date,
           first: DateTime(2000),
-          last: DateTime.now(),
+          last: AppClock.now,
           title: '选择日期',
         );
         if (picked != null) onChanged(picked);

@@ -4,10 +4,14 @@ import android.content.Context
 import android.content.Intent
 import android.net.ConnectivityManager
 import android.net.Uri
+import android.os.Build
+import android.os.Bundle
+import android.os.SystemClock
 import android.provider.Settings
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.util.Base64
+import android.util.Log
 import androidx.browser.customtabs.CustomTabsClient
 import androidx.browser.customtabs.CustomTabsIntent
 import io.flutter.embedding.android.FlutterActivity
@@ -34,6 +38,13 @@ class MainActivity : FlutterActivity() {
     private var channel: MethodChannel? = null
     private var pending: Map<String, String?>? = null
     private var pendingOpen: Map<String, String?>? = null
+    private var startupStartedAtMs: Long = 0L
+    private var homeReadyReported = false
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        startupStartedAtMs = SystemClock.elapsedRealtime()
+        super.onCreate(savedInstanceState)
+    }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -51,6 +62,27 @@ class MainActivity : FlutterActivity() {
                 else -> result.notImplemented()
             }
         }
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "feimiao/startup")
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "homeReady" -> {
+                        val elapsed = if (startupStartedAtMs == 0L) {
+                            0L
+                        } else {
+                            SystemClock.elapsedRealtime() - startupStartedAtMs
+                        }
+                        if (!homeReadyReported) {
+                            homeReadyReported = true
+                            Log.i("FeimiaoStartup", "home_ready elapsed_ms=$elapsed")
+                            // This is intentionally after the Flutter frame
+                            // that contains the complete home snapshot.
+                            reportFullyDrawn()
+                        }
+                        result.success(elapsed)
+                    }
+                    else -> result.notImplemented()
+                }
+            }
         // 自动记账通道：取通知队列 / 查授权状态 / 跳系统设置。
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "feimiao/autorecord")
             .setMethodCallHandler { call, result ->
@@ -250,6 +282,7 @@ class MainActivity : FlutterActivity() {
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "feimiao/update")
             .setMethodCallHandler { call, result ->
                 when (call.method) {
+                    "installedVersionCode" -> result.success(installedVersionCode())
                     "installApk" -> {
                         val path = call.argument<String>("path")
                         if (path.isNullOrBlank()) result.success(false)
@@ -776,6 +809,26 @@ class MainActivity : FlutterActivity() {
             .remove("version_code")
             .remove("file_path")
             .apply()
+    }
+
+    /**
+     * Return the package manager's install sequence, not Flutter's embedded
+     * build number. Rollback-compatible APKs deliberately contain historical
+     * Dart code but are repackaged with a newer Android versionCode so the
+     * ordinary package installer can replace the currently installed build.
+     */
+    private fun installedVersionCode(): Long {
+        return try {
+            val info = packageManager.getPackageInfo(packageName, 0)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                info.longVersionCode
+            } else {
+                @Suppress("DEPRECATION")
+                info.versionCode.toLong()
+            }
+        } catch (_: Exception) {
+            0L
+        }
     }
 
     /// 检查更新：用 FileProvider 把缓存里的 APK 交给系统安装器。

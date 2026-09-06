@@ -2711,6 +2711,26 @@ class _AiProviderImportSnapshot {
 class AppRepository extends ChangeNotifier {
   static const _dbVersion = 49;
   static const _dbName = 'qingji.db';
+  static const bool _startupTrace = bool.fromEnvironment(
+    'QINGJI_STARTUP_TRACE',
+    defaultValue: false,
+  );
+  // The compatibility pass repairs databases created by older builds that
+  // reported user_version 39 before all B3/A4 columns and indexes existed.
+  // Once it has completed for the current schema, avoid repeating dozens of
+  // idempotent DDL/data checks on every cold start. Bump the value when a new
+  // runtime repair is introduced.
+  static const _runtimeSchemaMarkerKey = 'runtime_schema_compat_v49';
+  // Provider metadata only needs normalization after an upgrade or a legacy
+  // import. Keeping a durable marker avoids rewriting the same 20 settings on
+  // every cold start.
+  static const _aiMetadataMarkerKey = 'ai_provider_metadata_normalized_v1';
+  // Keep the defensive anomaly scan available for diagnostics without making
+  // every production cold start pay for PRAGMA, EXISTS and index probes.
+  static bool get _verifyRuntimeSchemaOnStartup => const bool.fromEnvironment(
+        'QINGJI_VERIFY_RUNTIME_SCHEMA',
+        defaultValue: false,
+      );
 
   AppRepository({ReportExecutionFence? reportExecutionFence})
       : _reportExecutionFence =
@@ -2783,19 +2803,25 @@ class AppRepository extends ChangeNotifier {
   // start can paint first without allowing a tap to race the loader.
   Future<void>? _initFuture;
   Future<void>? _deferredInitFuture;
+  Future<void>? _aiInitFuture;
   Completer<void> _readyCompleter = Completer<void>();
   Completer<void> _fullyReadyCompleter = Completer<void>();
+  Completer<void> _aiReadyCompleter = Completer<void>();
   bool _isReady = false;
   bool _isFullyReady = false;
+  bool _isAiReady = false;
   bool _deferredInitPending = false;
   String? _deferredAutoBackupPath;
   bool _deferredRefundNormalization = false;
   Object? _initializationError;
   StackTrace? _initializationErrorStack;
+  Object? _aiInitializationError;
 
   bool get isInitialized => _db != null;
 
-  /// True only after the complete in-memory repository snapshot is usable.
+  /// True after the home snapshot (book, filters, budget and current-month
+  /// ledger) is usable. AI/security storage has its own barrier below so it
+  /// cannot hold the first complete home frame hostage.
   bool get isReady => _isReady;
 
   /// True while the first database snapshot is being assembled. A freshly
@@ -2807,6 +2833,11 @@ class AppRepository extends ChangeNotifier {
   /// The home page only needs [isReady]; heavier pages can opt into this.
   bool get isFullyReady => _isFullyReady;
 
+  /// True after persisted AI provider metadata and credentials have been
+  /// loaded. A fast startup may expose [isReady] first; send paths must await
+  /// this barrier before resolving a provider.
+  bool get isAiReady => _isAiReady;
+
   bool get isHydrating => _deferredInitPending && !_isFullyReady;
 
   /// Completes after startup convergence, even if initialization failed.
@@ -2816,7 +2847,22 @@ class AppRepository extends ChangeNotifier {
 
   Future<void> get fullyReady => _fullyReadyCompleter.future;
 
+  Future<void> get aiReady {
+    // Lightweight repository doubles used by widget tests (and embedders
+    // that provide their own storage) intentionally skip [init]. They still
+    // expose the AppRepository API, but there is no asynchronous AI snapshot
+    // to wait for in that mode. Keep the barrier fail-open only when no init
+    // attempt has ever started; a real startup attempt always uses the
+    // completer so the first request cannot resolve a default provider early.
+    if (_initFuture == null && _db == null && _aiInitFuture == null) {
+      return Future<void>.value();
+    }
+    return _aiReadyCompleter.future;
+  }
+
   Object? get initializationError => _initializationError;
+
+  Object? get aiInitializationError => _aiInitializationError;
 
   @visibleForTesting
   StackTrace? get initializationErrorStack => _initializationErrorStack;
@@ -2918,6 +2964,7 @@ class AppRepository extends ChangeNotifier {
   int _lastAssetViewTabIndex = 2;
   String _profileNickname = '';
   String _profileAvatarPath = '';
+
 
   /// 用户纠正记忆：(备注短语, 收支, 分类key)。AI 记账时按此覆盖模型的猜测。
   final List<({String phrase, TransactionKind kind, String key})> _catMemory =
@@ -3922,40 +3969,64 @@ class AppRepository extends ChangeNotifier {
     if (_fullyReadyCompleter.isCompleted && !_isFullyReady) {
       _fullyReadyCompleter = Completer<void>();
     }
+    if (_aiReadyCompleter.isCompleted && !_isAiReady) {
+      _aiReadyCompleter = Completer<void>();
+    }
     final future = _initInternal(fastStartup: fastStartup);
     _initFuture = future;
     return future;
   }
 
   Future<void> _initInternal({required bool fastStartup}) async {
+    final startupWatch = Stopwatch()..start();
+    void trace(String phase) {
+      if (_startupTrace) {
+        debugPrint(
+          'startup_phase phase=$phase elapsed_ms=${startupWatch.elapsedMilliseconds}',
+        );
+      }
+    }
+
     try {
       final dbPath = p.join(await getDatabasesPath(), _dbName);
       final databaseAlreadyExisted = await File(dbPath).exists();
+      trace('path');
       await _backupBeforeMigration(dbPath);
-      await _backupBeforeB3A4V39Compat(dbPath);
+      trace('backup');
       _db = await openDatabase(
         dbPath,
         version: _dbVersion,
         onCreate: _onCreate,
         onUpgrade: _onUpgrade,
       );
-      await _runB3A4V39Compat(_db!);
-      await _ensureTransactionIndexes(_db!);
-      await _ensureAiRunTables(_db!);
-      await _ensureAiExtensionTables(_db!);
+      trace('open');
+      // A pre-upgrade database is already covered by _backupBeforeMigration.
+      // The runtime compatibility pass itself is guarded by a durable marker,
+      // so normal launches do not reopen every table and re-check every index.
+      await _ensureRuntimeSchema(_db!);
+      trace('schema');
+      trace('seed_start');
       await _seedIfNeeded();
+      trace('seed_done');
+      trace('default_book_start');
       await _ensureDefaultBook();
+      trace('default_book_done');
       // v13 预算搬迁失败的幂等自愈（只在首次检查时真正查表，之后有标记直接跳过）。
+      trace('budget_self_heal_start');
       await _selfHealLegacyBudgetMigration();
+      trace('budget_self_heal_done');
+      trace('maintenance');
       if (fastStartup) {
         // The home only needs the current book, accounts, categories, budget
         // definition and this month's transactions. Keep the expensive asset,
         // report, backup and full-history maintenance out of the splash window.
         await _loadStartupSnapshot();
+        trace('home_snapshot');
         _deferredAutoBackupPath = databaseAlreadyExisted ? dbPath : null;
         _deferredRefundNormalization = true;
         _deferredInitPending = true;
         _markReady();
+        trace('home_ready');
         return;
       }
 
@@ -3963,15 +4034,19 @@ class AppRepository extends ChangeNotifier {
       await _normalizeStandaloneRefunds();
       await _convergeOpenedDatabase(notify: false);
       _markReady();
+      _markAiReady();
       _markFullyReady();
+      trace('full_ready');
       notifyListeners();
     } catch (error, stackTrace) {
       _isReady = false;
       _isFullyReady = false;
+      _isAiReady = false;
       _initializationError = error;
       _initializationErrorStack = stackTrace;
       if (!_readyCompleter.isCompleted) _readyCompleter.complete();
       if (!_fullyReadyCompleter.isCompleted) _fullyReadyCompleter.complete();
+      _markAiReady(error);
       notifyListeners();
       _initFuture = null;
       rethrow;
@@ -3983,6 +4058,16 @@ class AppRepository extends ChangeNotifier {
     _initializationError = null;
     _initializationErrorStack = null;
     if (!_readyCompleter.isCompleted) _readyCompleter.complete();
+  }
+
+  void _markAiReady([Object? error]) {
+    _isAiReady = true;
+    _aiInitializationError = error;
+    if (!_aiReadyCompleter.isCompleted) _aiReadyCompleter.complete();
+    // Provider/settings widgets may already be mounted while deferred startup
+    // is still running. Publish the completed credential snapshot without
+    // making the home gate wait for it.
+    notifyListeners();
   }
 
   void _markFullyReady() {
@@ -4009,6 +4094,11 @@ class AppRepository extends ChangeNotifier {
         _markFullyReady();
         return;
       }
+      // The AI snapshot starts alongside the home snapshot. Wait for it before
+      // the full convergence pass so its metadata writes cannot race the
+      // second _loadAll() and overwrite a newer selection.
+      final aiInit = _aiInitFuture;
+      if (aiInit != null) await aiInit;
       final backupPath = _deferredAutoBackupPath;
       _deferredAutoBackupPath = null;
       if (backupPath != null) await _autoPeriodicBackup(backupPath);
@@ -4028,31 +4118,249 @@ class AppRepository extends ChangeNotifier {
   }
 
   Future<void> _loadStartupSnapshot() async {
-    await _loadBooks();
-    await _loadCurrentBook();
+    // These two reads are independent.  Fetch them in the same SQLite turn so
+    // the month query below can start as soon as the selected book is known.
+    await _loadBooksAndCurrentBook();
+    // AI credentials and chat metadata are independent from the home ledger.
+    // Start them now, but keep them behind a separate barrier so secure-storage
+    // latency cannot delay the first complete home frame.
+    _startAiStartupInitialization();
     await Future.wait([
       _loadAccounts(),
       _loadCategories(),
       _loadBudgetPeriods(),
       _loadBudgetV2(),
-      // AI settings are needed before the first frame is interactive.  The
-      // fast-start path used to defer this load to the full convergence pass,
-      // so a user who sent the first Chats message immediately after launch
-      // could see the no-provider fallback; the second message worked after
-      // the deferred loader had finished.  Keep credentials/provider/model
-      // selection on the same ready barrier as the home ledger snapshot.
-      _loadApiKey(),
-      _loadAiPrivacyAccepted(),
       _loadRecordMode(),
       _loadMoneyDisplaySettings(),
       _loadTransactionDisplayPreferences(),
-      _loadChatSessions(),
-      _loadAiProviderHealth(),
-      _loadAiMemories(),
-      _loadAiReportSchedules(),
-      _loadAiExtensionSettings(),
+      // This query only depends on the selected book and can be queued with
+      // the settings reads. It used to wait for all of them, adding a full
+      // serialized SQLite round-trip before the home summary had any rows.
+      _loadTransactionsForStartupMonth(),
     ]);
-    await _loadTransactionsForStartupMonth();
+  }
+
+  void _startAiStartupInitialization() {
+    if (_aiInitFuture != null) return;
+    _aiInitFuture = _runAiStartupInitialization();
+  }
+
+  Future<void> _runAiStartupInitialization() async {
+    try {
+      // Health is loaded before provider selection so a cooling account cannot
+      // unexpectedly win the first request. The remaining AI state is safe to
+      // load concurrently once that small map is available.
+      await _loadAiProviderHealth();
+      await Future.wait([
+        _loadApiKey(),
+        _loadAiPrivacyAccepted(),
+        _loadChatRetention(),
+        _loadChatSessions(),
+        _loadAiMemories(),
+        _loadAiReportSchedules(),
+        _loadAiExtensionSettings(),
+      ]);
+    } catch (error, stackTrace) {
+      _aiInitializationError = error;
+      if (_startupTrace) {
+        debugPrint('startup_phase phase=ai_error error=$error');
+        debugPrint('$stackTrace');
+      }
+    } finally {
+      _markAiReady(_aiInitializationError);
+    }
+  }
+
+  Future<void> _ensureRuntimeSchema(Database db) async {
+    var isCurrent = false;
+    try {
+      final rows = await db.query(
+        'app_settings',
+        columns: const ['value'],
+        where: 'key = ?',
+        whereArgs: const [_runtimeSchemaMarkerKey],
+        limit: 1,
+      );
+      isCurrent = rows.isNotEmpty && rows.first['value'] == '1';
+    } catch (_) {
+      // Let the compatibility pass surface a real schema problem below.
+    }
+    // The marker is written only after the compatibility transaction and all
+    // required indexes/tables have succeeded.  Trust it on normal launches;
+    // the expensive anomaly probe remains available behind an explicit build
+    // flag for diagnostics and restored-database investigations.
+    if (isCurrent) {
+      if (!_verifyRuntimeSchemaOnStartup) {
+        // The marker skips the broad legacy-schema probe, but the asset usage
+        // reversal relation can still be corrupted by an imported/restored
+        // database without changing the schema version. Keep this focused
+        // cleanup on the fast path so a cross-asset or duplicate reversal
+        // cannot survive a normal restart.
+        await _ensureAssetUsageReversalIndex(db);
+        return;
+      }
+      if (!await _needsB3A4V39Compat(db)) return;
+    }
+
+    await _runB3A4V39Compat(db);
+    await _ensureTransactionIndexes(db);
+    await _ensureAiRunTables(db);
+    await _ensureAiExtensionTables(db);
+    await db.insert(
+      'app_settings',
+      {'key': _runtimeSchemaMarkerKey, 'value': '1'},
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+  }
+
+  static Future<bool> _needsB3A4V39Compat(DatabaseExecutor db) async {
+    try {
+      final userVersion =
+          Sqflite.firstIntValue(await db.rawQuery('PRAGMA user_version')) ?? 0;
+      if (userVersion > 0 && userVersion <= 39) return true;
+
+      final requiredColumns = <String, Set<String>>{
+        'budget_plans': {'expense_scope_json'},
+        'physical_assets': {'usage_tracking_enabled', 'savings_goal_id'},
+        'savings_goals': {'uuid', 'updated_ms'},
+        'asset_usage_events': {
+          'id',
+          'uuid',
+          'asset_id',
+          'count_delta',
+          'reversal_of',
+          'occurred_ms',
+          'note',
+          'created_ms',
+          'updated_ms',
+        },
+      };
+      for (final entry in requiredColumns.entries) {
+        final columns = await _columnNamesFor(db, entry.key);
+        if (!columns.containsAll(entry.value)) return true;
+      }
+
+      final usageInfo = await db.rawQuery(
+        'PRAGMA table_info(asset_usage_events)',
+      );
+      if (!usageInfo.any(
+        (row) => row['name'] == 'id' && (row['pk'] as int? ?? 0) == 1,
+      )) {
+        return true;
+      }
+
+      final incompleteGoal = Sqflite.firstIntValue(await db.rawQuery('''
+            SELECT EXISTS(
+              SELECT 1 FROM savings_goals
+              WHERE trim(uuid) = '' OR updated_ms = 0
+            )
+          ''')) ?? 0;
+      if (incompleteGoal != 0) return true;
+      final duplicateGoalUuid = Sqflite.firstIntValue(await db.rawQuery('''
+            SELECT EXISTS(
+              SELECT uuid FROM savings_goals
+              WHERE trim(uuid) <> ''
+              GROUP BY uuid HAVING COUNT(*) > 1
+            )
+          ''')) ?? 0;
+      if (duplicateGoalUuid != 0) return true;
+
+      final incompleteUsage = Sqflite.firstIntValue(await db.rawQuery('''
+            SELECT EXISTS(
+              SELECT 1 FROM asset_usage_events
+              WHERE trim(uuid) = '' OR updated_ms = 0
+            )
+          ''')) ?? 0;
+      if (incompleteUsage != 0) return true;
+      final duplicateUsageUuid = Sqflite.firstIntValue(await db.rawQuery('''
+            SELECT EXISTS(
+              SELECT uuid FROM asset_usage_events
+              WHERE trim(uuid) <> ''
+              GROUP BY uuid HAVING COUNT(*) > 1
+            )
+          ''')) ?? 0;
+      if (duplicateUsageUuid != 0) return true;
+
+      final invalidReversal = Sqflite.firstIntValue(await db.rawQuery('''
+            SELECT EXISTS(
+              SELECT 1
+              FROM asset_usage_events reversal
+              WHERE reversal.reversal_of IS NOT NULL
+                AND (
+                  reversal.count_delta <> 0
+                  OR NOT EXISTS (
+                    SELECT 1
+                    FROM asset_usage_events target
+                    WHERE target.id = reversal.reversal_of
+                      AND target.asset_id = reversal.asset_id
+                      AND target.id <> reversal.id
+                      AND (
+                        target.occurred_ms < reversal.occurred_ms
+                        OR (
+                          target.occurred_ms = reversal.occurred_ms
+                          AND target.id < reversal.id
+                        )
+                      )
+                  )
+                  OR EXISTS (
+                    SELECT 1
+                    FROM asset_usage_events earlier
+                    WHERE earlier.reversal_of = reversal.reversal_of
+                      AND (
+                        earlier.occurred_ms < reversal.occurred_ms
+                        OR (
+                          earlier.occurred_ms = reversal.occurred_ms
+                          AND earlier.id < reversal.id
+                        )
+                      )
+                  )
+                )
+            )
+          ''')) ?? 0;
+      if (invalidReversal != 0) return true;
+
+      return !await _indexMatches(
+            db,
+            table: 'savings_goals',
+            name: 'idx_savings_goals_uuid',
+            columns: const ['uuid'],
+            unique: true,
+          ) ||
+          !await _indexMatches(
+            db,
+            table: 'asset_usage_events',
+            name: 'idx_asset_usage_events_uuid',
+            columns: const ['uuid'],
+            unique: true,
+          ) ||
+          !await _indexMatches(
+            db,
+            table: 'asset_usage_events',
+            name: 'idx_asset_usage_events_asset',
+            columns: const ['asset_id', 'occurred_ms', 'id'],
+            unique: false,
+          ) ||
+          !await _indexMatches(
+            db,
+            table: 'asset_usage_events',
+            name: 'idx_asset_usage_events_reversal',
+            columns: const ['reversal_of'],
+            unique: true,
+            partial: true,
+            wherePredicate: 'reversal_of IS NOT NULL',
+          ) ||
+          !await _indexMatches(
+            db,
+            table: 'physical_assets',
+            name: 'idx_physical_assets_savings_goal',
+            columns: const ['savings_goal_id'],
+            unique: false,
+          );
+    } catch (_) {
+      // An unknown/partially opened schema must take the transactional repair
+      // path rather than being treated as healthy.
+      return true;
+    }
   }
 
   Future<void> _convergeOpenedDatabase({bool notify = true}) async {
@@ -4229,17 +4537,22 @@ class AppRepository extends ChangeNotifier {
     try {
       final f = File(dbPath);
       if (!await f.exists()) return;
-      final probe = await openReadOnlyDatabase(dbPath);
-      final int old;
-      try {
-        // 库文件损坏时这句会抛错；必须 finally 关掉 probe，
-        // 否则泄漏的句柄会挡住之后「备份恢复」对库文件的改名/替换。
-        final rows = await probe.rawQuery('PRAGMA user_version');
-        old = (rows.first.values.first as int?) ?? 0;
-      } finally {
-        await probe.close();
-      }
+      // SQLite stores user_version in the 100-byte database header. Reading
+      // just that header avoids opening a second sqflite connection on every
+      // normal launch; malformed/non-SQLite files still use the old probe so
+      // corruption is never silently treated as a current database.
+      final old = await _readSqliteUserVersion(dbPath) ??
+          await _probeSqliteUserVersion(dbPath);
       if (old <= 0 || old >= _dbVersion) return;
+      // Early v39 builds advanced user_version before the B3/A4 compatibility
+      // repair had landed. Preserve a separately named copy before opening
+      // the database; this branch is never reached by current databases.
+      if (old == 39) {
+        final compatBackup = File('$dbPath.pre-v39-compat.bak');
+        if (!await compatBackup.exists()) {
+          await _createConsistentDatabaseCopy(dbPath, compatBackup.path);
+        }
+      }
       await _createConsistentDatabaseCopy(
         dbPath,
         '$dbPath.pre-v$old.bak',
@@ -4250,40 +4563,62 @@ class AppRepository extends ChangeNotifier {
     }
   }
 
-  /// Some development builds already used user_version 39 before every B3/A4
-  /// column and index had landed. Preserve that exact database before applying
-  /// the idempotent same-version compatibility repair.
-  Future<void> _backupBeforeB3A4V39Compat(String dbPath) async {
-    Database? probe;
+  static Future<int?> _readSqliteUserVersion(String dbPath) async {
+    RandomAccessFile? file;
     try {
-      final source = File(dbPath);
-      if (!await source.exists()) return;
-      probe = await openReadOnlyDatabase(dbPath);
-      final version = Sqflite.firstIntValue(
-            await probe.rawQuery('PRAGMA user_version'),
-          ) ??
-          0;
-      if (version != 39 || !await _needsB3A4V39Compat(probe)) return;
-      await probe.close();
-      probe = null;
-      final destination = File('$dbPath.pre-v39-compat.bak');
-      if (await destination.exists()) return;
-      final pending = File('${destination.path}.pending');
-      if (await pending.exists()) await pending.delete();
-      await _createConsistentDatabaseCopy(
-        dbPath,
-        pending.path,
-      );
-      if (await destination.exists()) {
-        await pending.delete();
-      } else {
-        await pending.rename(destination.path);
-      }
+      file = await File(dbPath).open(mode: FileMode.read);
+      final header = await file.read(100);
+      return sqliteUserVersionFromHeader(header);
     } catch (_) {
-      // Like normal migration backups, failure here must not strand startup.
+      return null;
     } finally {
-      await probe?.close();
+      await file?.close();
     }
+  }
+
+  static Future<int> _probeSqliteUserVersion(String dbPath) async {
+    final probe = await openReadOnlyDatabase(dbPath);
+    try {
+      // 库文件损坏时这句会抛错；必须 finally 关掉 probe，
+      // 否则泄漏的句柄会挡住之后「备份恢复」对库文件的改名/替换。
+      final rows = await probe.rawQuery('PRAGMA user_version');
+      return (rows.first.values.first as int?) ?? 0;
+    } finally {
+      await probe.close();
+    }
+  }
+
+  /// Decodes the big-endian SQLite user_version field without touching SQLite.
+  /// Exposed to tests so the fast path cannot silently regress to a platform
+  /// channel probe.
+  @visibleForTesting
+  static int? sqliteUserVersionFromHeader(List<int> header) {
+    const magic = <int>[
+      83,
+      81,
+      76,
+      105,
+      116,
+      101,
+      32,
+      102,
+      111,
+      114,
+      109,
+      97,
+      116,
+      32,
+      51,
+      0
+    ];
+    if (header.length < 64 ||
+        !listEquals(header.sublist(0, magic.length), magic)) {
+      return null;
+    }
+    return (header[60] << 24) |
+        (header[61] << 16) |
+        (header[62] << 8) |
+        header[63];
   }
 
   Future<void> _pruneLocalBackups(Directory dir, {int keep = 3}) async {
@@ -4648,6 +4983,13 @@ class AppRepository extends ChangeNotifier {
     await _ensureReportJobs(db);
     await _ensureAiRunTables(db);
     await _ensureAiExtensionTables(db);
+    // The freshly-created schema already includes every runtime compatibility
+    // table/index, so the first normal open can skip the legacy repair pass.
+    await db.insert(
+      'app_settings',
+      {'key': _runtimeSchemaMarkerKey, 'value': '1'},
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
   }
 
   Future<void> _onUpgrade(Database db, int oldVersion, int newVersion) async {
@@ -5117,12 +5459,26 @@ class AppRepository extends ChangeNotifier {
       // 账号级模型目录 + 最小连接探测，不改变既有成功/失败计数。
       await _ensureAiRunTables(db);
     }
+    // Some development builds already reported user_version 39 even though
+    // the B3/A4 compatibility columns had not landed. Normal versioned
+    // upgrades therefore need the same repair once, before the runtime marker
+    // is written below.
+    if (oldVersion >= 39) {
+      await _ensureB3A4V39Compat(db);
+    }
     await _ensureTransactionIndexes(db);
+    await _ensureAiRunTables(db);
+    await _ensureAiExtensionTables(db);
+    await db.insert(
+      'app_settings',
+      {'key': _runtimeSchemaMarkerKey, 'value': '1'},
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
   }
 
   /// Optional AI companion data is kept in separate, append-friendly tables.
-  /// They are also ensured on every open so installs upgraded before this
-  /// feature do not need a destructive migration/version bump.
+  /// Creation and versioned upgrades ensure them; the runtime marker handles
+  /// older installs that predate those migrations without repeating the DDL.
   static Future<void> _ensureAiExtensionTables(DatabaseExecutor db) async {
     await db.execute('''
       CREATE TABLE IF NOT EXISTS ai_memories (
@@ -5345,134 +5701,6 @@ class AppRepository extends ChangeNotifier {
     }
     await db.execute('DROP INDEX IF EXISTS $name');
     await db.execute(createSql);
-  }
-
-  static Future<bool> _needsB3A4V39Compat(DatabaseExecutor db) async {
-    final planColumns = await _columnNamesFor(db, 'budget_plans');
-    final assetColumns = await _columnNamesFor(db, 'physical_assets');
-    final goalColumns = await _columnNamesFor(db, 'savings_goals');
-    final usageColumns = await _columnNamesFor(db, 'asset_usage_events');
-    if (!planColumns.contains('expense_scope_json') ||
-        !assetColumns.containsAll(
-          const {'usage_tracking_enabled', 'savings_goal_id'},
-        ) ||
-        !goalColumns.containsAll(const {'uuid', 'updated_ms'}) ||
-        !usageColumns.containsAll(
-          const {
-            'id',
-            'uuid',
-            'asset_id',
-            'count_delta',
-            'reversal_of',
-            'occurred_ms',
-            'note',
-            'created_ms',
-            'updated_ms',
-          },
-        )) {
-      return true;
-    }
-    final incompleteGoalCount = Sqflite.firstIntValue(await db.rawQuery('''
-          SELECT COUNT(*)
-          FROM savings_goals
-          WHERE trim(uuid) = '' OR updated_ms = 0
-        ''')) ?? 0;
-    final duplicateGoalUuidCount = Sqflite.firstIntValue(await db.rawQuery('''
-          SELECT COUNT(*)
-          FROM (
-            SELECT uuid
-            FROM savings_goals
-            WHERE trim(uuid) <> ''
-            GROUP BY uuid
-            HAVING COUNT(*) > 1
-          )
-        ''')) ?? 0;
-    if (incompleteGoalCount > 0 || duplicateGoalUuidCount > 0) return true;
-    final usageInfo = await db.rawQuery(
-      'PRAGMA table_info(asset_usage_events)',
-    );
-    if (!usageInfo.any(
-      (row) => row['name'] == 'id' && (row['pk'] as int? ?? 0) == 1,
-    )) {
-      return true;
-    }
-    final incompleteUsageCount = Sqflite.firstIntValue(await db.rawQuery('''
-          SELECT COUNT(*)
-          FROM asset_usage_events
-          WHERE trim(uuid) = '' OR updated_ms = 0
-        ''')) ?? 0;
-    final duplicateUsageUuidCount = Sqflite.firstIntValue(await db.rawQuery('''
-          SELECT COUNT(*)
-          FROM (
-            SELECT uuid
-            FROM asset_usage_events
-            WHERE trim(uuid) <> ''
-            GROUP BY uuid
-            HAVING COUNT(*) > 1
-          )
-        ''')) ?? 0;
-    if (incompleteUsageCount > 0 || duplicateUsageUuidCount > 0) return true;
-    final invalidUsageReversalCount =
-        Sqflite.firstIntValue(await db.rawQuery('''
-          SELECT COUNT(*)
-          FROM asset_usage_events reversal
-          WHERE reversal.reversal_of IS NOT NULL
-            AND (
-              reversal.count_delta <> 0
-              OR NOT EXISTS (
-                SELECT 1
-                FROM asset_usage_events target
-                WHERE target.id = reversal.reversal_of
-                  AND target.asset_id = reversal.asset_id
-                  AND target.id <> reversal.id
-                  AND (
-                    target.occurred_ms < reversal.occurred_ms
-                    OR (
-                      target.occurred_ms = reversal.occurred_ms
-                      AND target.id < reversal.id
-                    )
-                  )
-              )
-            )
-        ''')) ?? 0;
-    if (invalidUsageReversalCount > 0) return true;
-    return !await _indexMatches(
-          db,
-          table: 'savings_goals',
-          name: 'idx_savings_goals_uuid',
-          columns: const ['uuid'],
-          unique: true,
-        ) ||
-        !await _indexMatches(
-          db,
-          table: 'asset_usage_events',
-          name: 'idx_asset_usage_events_uuid',
-          columns: const ['uuid'],
-          unique: true,
-        ) ||
-        !await _indexMatches(
-          db,
-          table: 'asset_usage_events',
-          name: 'idx_asset_usage_events_asset',
-          columns: const ['asset_id', 'occurred_ms', 'id'],
-          unique: false,
-        ) ||
-        !await _indexMatches(
-          db,
-          table: 'asset_usage_events',
-          name: 'idx_asset_usage_events_reversal',
-          columns: const ['reversal_of'],
-          unique: true,
-          partial: true,
-          wherePredicate: 'reversal_of IS NOT NULL',
-        ) ||
-        !await _indexMatches(
-          db,
-          table: 'physical_assets',
-          name: 'idx_physical_assets_savings_goal',
-          columns: const ['savings_goal_id'],
-          unique: false,
-        );
   }
 
   static Future<void> _removeInvalidAssetUsageReversals(
@@ -7293,8 +7521,14 @@ class AppRepository extends ChangeNotifier {
   }
 
   Future<void> _applyCategoryTree(DatabaseExecutor db) async {
+    // Category seeding used to perform one platform-channel round trip per
+    // insert, parent lookup, and update.  That is especially expensive on a
+    // cold Android launch, where the seed is the only account bootstrap path.
+    // Keep the same idempotent insert/update semantics, but collapse the work
+    // into two batches and one lookup for the complete key -> id map.
+    final insertBatch = db.batch();
     for (final s in CategorySeed.all) {
-      await db.insert(
+      insertBatch.insert(
         'categories',
         {
           'key': s.key,
@@ -7305,23 +7539,28 @@ class AppRepository extends ChangeNotifier {
         conflictAlgorithm: ConflictAlgorithm.ignore,
       );
     }
+    await insertBatch.commit(noResult: true);
+
+    final idRows = await db.query('categories', columns: const ['id', 'key']);
+    final idsByKey = <String, int>{
+      for (final row in idRows)
+        if (row['key'] is String && row['id'] is int)
+          row['key'] as String: row['id'] as int,
+    };
+    final updateBatch = db.batch();
     for (final s in CategorySeed.all) {
-      int? parentId;
-      if (s.parentKey != null) {
-        parentId = Sqflite.firstIntValue(await db.rawQuery(
-            'SELECT id FROM categories WHERE key = ? LIMIT 1', [s.parentKey]));
-      }
-      await db.update(
+      updateBatch.update(
         'categories',
         {
           'name_zh': s.nameZh,
           'name_en': s.nameEn,
-          'parent_id': parentId,
+          'parent_id': s.parentKey == null ? null : idsByKey[s.parentKey],
         },
         where: 'key = ?',
         whereArgs: [s.key],
       );
     }
+    await updateBatch.commit(noResult: true);
   }
 
   Future<void> _seedIfNeeded() async {
@@ -7523,6 +7762,10 @@ class AppRepository extends ChangeNotifier {
 
   Future<void> _loadBooks() async {
     final rows = await _db!.query('books', orderBy: 'sort_order ASC, id ASC');
+    _applyLoadedBooks(rows);
+  }
+
+  void _applyLoadedBooks(List<Map<String, Object?>> rows) {
     final loaded = rows.map(BookEntity.fromMap).toList();
     // 总账本 = 最早建的那本（id 最小），不可删、永远排第一。
     _defaultBookId = loaded.isEmpty
@@ -7541,6 +7784,20 @@ class AppRepository extends ChangeNotifier {
     _booksViewCache = null;
     _invalidateBookViewCaches();
     _invalidateBalanceDerived();
+  }
+
+  Future<void> _loadBooksAndCurrentBook() async {
+    final results = await Future.wait<List<Map<String, Object?>>>([
+      _db!.query('books', orderBy: 'sort_order ASC, id ASC'),
+      _db!.query(
+        'app_settings',
+        where: 'key = ?',
+        whereArgs: const ['current_book_id'],
+        limit: 1,
+      ),
+    ]);
+    _applyLoadedBooks(results[0]);
+    _applyCurrentBookRows(results[1]);
   }
 
   Future<void> _ensureDefaultBook() async {
@@ -7565,6 +7822,10 @@ class AppRepository extends ChangeNotifier {
       whereArgs: ['current_book_id'],
       limit: 1,
     );
+    _applyCurrentBookRows(rows);
+  }
+
+  void _applyCurrentBookRows(List<Map<String, Object?>> rows) {
     final saved = rows.isEmpty
         ? null
         : int.tryParse((rows.first['value'] as String?) ?? '');
@@ -7974,6 +8235,7 @@ class AppRepository extends ChangeNotifier {
       'ai_chat_tool_access',
       'ai_report_reasoning_effort',
       'ai_task_config_version',
+      _aiMetadataMarkerKey,
     ];
     final rows = await _db!.query(
       'app_settings',
@@ -8003,18 +8265,22 @@ class AppRepository extends ChangeNotifier {
         ? []
         : rawModels.split(',').where((s) => s.isNotEmpty).toList();
 
-    _deepSeekApiKey = await _loadSecretWithLegacyFallback(
-      secureKey: 'deepseek_api_key',
-      legacySettingKey: 'deepseek_api_key',
-      configuredSettingKey: 'deepseek_api_key_configured',
-      legacyValue: settings['deepseek_api_key'],
-    );
-    _customAiApiKey = await _loadSecretWithLegacyFallback(
-      secureKey: 'custom_ai_api_key',
-      legacySettingKey: 'custom_ai_api_key',
-      configuredSettingKey: 'custom_ai_api_key_configured',
-      legacyValue: settings['custom_ai_api_key'],
-    );
+    final legacySecrets = await Future.wait<String?>([
+      _loadSecretWithLegacyFallback(
+        secureKey: 'deepseek_api_key',
+        legacySettingKey: 'deepseek_api_key',
+        configuredSettingKey: 'deepseek_api_key_configured',
+        legacyValue: settings['deepseek_api_key'],
+      ),
+      _loadSecretWithLegacyFallback(
+        secureKey: 'custom_ai_api_key',
+        legacySettingKey: 'custom_ai_api_key',
+        configuredSettingKey: 'custom_ai_api_key_configured',
+        legacyValue: settings['custom_ai_api_key'],
+      ),
+    ]);
+    _deepSeekApiKey = legacySecrets[0];
+    _customAiApiKey = legacySecrets[1];
 
     final hasCustomKey = _customAiApiKey?.trim().isNotEmpty ?? false;
     final reportFallback =
@@ -8065,6 +8331,14 @@ class AppRepository extends ChangeNotifier {
       fallback: AiReasoningEffort.xhigh,
     );
     await _loadConfiguredAiProviders(settings);
+    if (settings[_aiMetadataMarkerKey] != '1') {
+      await _persistAiProviderMetadata(notify: false);
+      await _db!.insert(
+        'app_settings',
+        {'key': _aiMetadataMarkerKey, 'value': '1'},
+        conflictAlgorithm: ConflictAlgorithm.replace,
+      );
+    }
     final storedChatSearch = settings['ai_chat_web_search_enabled'];
     _chatWebSearchEnabled =
         storedChatSearch == null ? true : storedChatSearch == '1';
@@ -8142,26 +8416,33 @@ class AppRepository extends ChangeNotifier {
       try {
         final decoded = jsonDecode(raw);
         if (decoded is List) {
+          final seenIds = <String>{};
+          final metadataEntries = <Map<String, dynamic>>[];
           for (final entry in decoded.whereType<Map>()) {
             final metadata = Map<String, dynamic>.from(entry);
             final id = (metadata['id'] as String? ?? '').trim();
-            if (id.isEmpty || decodedProviders.any((item) => item.id == id)) {
-              continue;
-            }
-            final key = await _loadConfiguredProviderSecret(id);
-            final oauthRefreshToken =
-                await _loadConfiguredProviderOAuthRefreshToken(id);
-            final oauthIdToken = await _loadConfiguredProviderOAuthIdToken(id);
-            final legacyKey = id == 'legacy-custom' ? _customAiApiKey : null;
-            decodedProviders.add(
-              AiConfiguredProvider.fromJson(
-                metadata,
-                apiKey: key ?? legacyKey ?? '',
-                oauthIdToken: oauthIdToken ?? '',
-                oauthRefreshToken: oauthRefreshToken ?? '',
-              ).copyWith(builtIn: id == 'deepseek'),
-            );
+            if (id.isNotEmpty && seenIds.add(id)) metadataEntries.add(metadata);
           }
+          final loaded = await Future.wait(
+            metadataEntries.map((metadata) async {
+              final id = (metadata['id'] as String).trim();
+              // These three reads are independent. Parallelizing them removes
+              // one method-channel round trip per credential from cold start.
+              final secrets = await Future.wait<String?>([
+                _loadConfiguredProviderSecret(id),
+                _loadConfiguredProviderOAuthRefreshToken(id),
+                _loadConfiguredProviderOAuthIdToken(id),
+              ]);
+              final legacyKey = id == 'legacy-custom' ? _customAiApiKey : null;
+              return AiConfiguredProvider.fromJson(
+                metadata,
+                apiKey: secrets[0] ?? legacyKey ?? '',
+                oauthIdToken: secrets[2] ?? '',
+                oauthRefreshToken: secrets[1] ?? '',
+              ).copyWith(builtIn: id == 'deepseek');
+            }),
+          );
+          decodedProviders.addAll(loaded);
         }
       } catch (_) {
         // Malformed metadata fails closed into the legacy migration below.
@@ -8288,10 +8569,6 @@ class AppRepository extends ChangeNotifier {
             (chatProvider?.models.contains(requestedModel) ?? false)
         ? requestedModel
         : chatProvider?.model;
-
-    // Persist the normalized representation once. This keeps migrations
-    // idempotent while retaining all legacy settings for downgrade safety.
-    await _persistAiProviderMetadata(notify: false);
   }
 
   Future<String?> _loadConfiguredProviderSecret(String id) async {

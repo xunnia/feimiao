@@ -1,0 +1,110 @@
+{
+  "schemaVersion": 1,
+  "manifest": "ios-app/tools/screenshot_manifest.json",
+  "product": {
+    "name": "肥喵记账",
+    "androidIsProductMaster": true,
+    "iosIsNativeImplementation": true,
+    "routePolicy": "The Android production entry and information architecture are canonical; iOS may only adapt controls, transitions, safe areas, keyboard and system capabilities."
+  },
+  "baseline": {
+    "id": "p0-2026-09-02",
+    "fixtureId": "p0-demo-ledger-2026-08-v1",
+    "fixtureHash": "sha256:b061ac4951eb7960e56c57e09e27d6ac2858e21d3560a9de07688841d746f722",
+    "fixture": {
+      "demo": true,
+      "now": "2026-08-27T12:00:00+08:00",
+      "locale": "zh-Hans",
+      "timezone": "Asia/Shanghai",
+      "currency": "CNY",
+      "book": "总账本",
+      "expected": {
+        "period": "2026-08",
+        "income": "620.00",
+        "expense": "1017.90",
+        "balance": "-397.90",
+        "budget": "3000.00"
+      }
+    },
+    "goldenScenarios": [
+      "home-overview",
+      "quick-add",
+      "quick-add-income",
+      "transactions",
+      "stats-month",
+      "budget",
+      "reimburse",
+      "reimburse-settlement"
+    ]
+  },
+  "routeReview": [
+    {
+      "id": "books",
+      "androidCurrentCapture": "home drawer / 我的账本",
+      "iosDeclaredRoute": "settings/books",
+      "status": "decision-required",
+      "action": "Confirm whether Android's canonical product surface is the drawer entry or the dedicated book-management list; do not compare different surfaces under one id."
+    },
+    {
+      "id": "accounts",
+      "androidCurrentCapture": "资产管理 > 资金",
+      "iosDeclaredRoute": "settings/accounts",
+      "status": "decision-required",
+      "action": "Confirm whether the Android production entry is the asset hub funds tab or a dedicated account-management page; then make the iOS route represent the same surface."
+    },
+    {
+      "id": "reconcile",
+      "androidCurrentCapture": "资产管理 > 资金",
+      "iosDeclaredRoute": "settings/reconcile",
+      "status": "decision-required",
+      "action": "Confirm the Android user path to reconciliation. The current capture is not evidence for the iOS reconciliation page."
+    },
+    {
+      "id": "liabilities",
+      "androidCurrentCapture": "资产管理 > 资金",
+      "iosDeclaredRoute": "settings/liabilities",
+      "status": "decision-required",
+      "action": "Confirm whether Android exposes a dedicated liability surface or a funds-tab section before changing either app."
+    },
+    {
+      "id": "net-worth",
+      "androidCurrentCapture": "资产管理 > 总览",
+      "iosDeclaredRoute": "settings/net-worth",
+      "status": "decision-required",
+      "action": "Use the Android asset-hub overview as the canonical information hierarchy unless the actual Android entry is proven otherwise."
+    },
+    {
+      "id": "import-review",
+      "androidCurrentCapture": "导入复核 production page",
+      "iosDeclaredRoute": "settings/import-review",
+      "status": "expected",
+      "action": "The iOS demo launch must render the review page itself; a home screenshot is invalid evidence."
+    }
+  ],
+  "evidencePolicy": {
+    "requiredMetadata": [
+      "source revision",
+      "app version and build",
+      "database/schema version",
+      "fixture id and hash",
+      "logical now",
+      "locale",
+      "timezone",
+      "device and OS"
+    ],
+    "requiredPerScenario": [
+      "actual production entry or explicitly labelled direct-widget capture",
+      "page identity",
+      "same fixture fields",
+      "normal or empty state",
+      "original PNG",
+      "paired comparison PNG"
+    ],
+    "forbiddenSubstitutions": [
+      "asset hub used as an unlabelled account/reconcile/liability page",
+      "home used as import review",
+      "drawer used as book-management list",
+      "different database snapshots compared as visual differences"
+    ]
+  }
+}
