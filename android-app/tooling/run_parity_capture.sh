@@ -18,6 +18,7 @@ cd "$android_root"
 device_id="${ANDROID_SERIAL:-${ANDROID_DEVICE_ID:-}}"
 app_id="com.qingji.qingji.codex"
 scene_timeout_seconds="${PARITY_SCENE_TIMEOUT_SECONDS:-600}"
+scene_retry_limit="${PARITY_SCENE_RETRIES:-1}"
 if [ -z "$device_id" ]; then
   mapfile -t online_devices < <(adb devices | awk '$2 == "device" { print $1 }')
   if [ "${#online_devices[@]}" -ne 1 ]; then
@@ -34,6 +35,10 @@ if ! adb -s "$device_id" get-state >/dev/null 2>&1; then
 fi
 if ! [[ "$scene_timeout_seconds" =~ ^[0-9]+$ ]] || [ "$scene_timeout_seconds" -le 0 ]; then
   echo "PARITY_SCENE_TIMEOUT_SECONDS must be a positive integer; got: $scene_timeout_seconds" >&2
+  exit 2
+fi
+if ! [[ "$scene_retry_limit" =~ ^[0-9]+$ ]]; then
+  echo "PARITY_SCENE_RETRIES must be a non-negative integer; got: $scene_retry_limit" >&2
   exit 2
 fi
 timeout_bin="$(command -v timeout || true)"
@@ -62,6 +67,7 @@ fi
   echo "ANDROID_DEVICE_ID=$device_id"
   echo "ANDROID_APP_ID=$app_id"
   echo "PARITY_SCENE_TIMEOUT_SECONDS=$scene_timeout_seconds"
+  echo "PARITY_SCENE_RETRIES=$scene_retry_limit"
   echo "FLUTTER_BIN=$(command -v flutter || true)"
   echo "ADB_BIN=$(command -v adb || true)"
   echo "TIMEOUT_BIN=$timeout_bin"
@@ -144,7 +150,34 @@ fi
   # Remove a package left by a previous local/emulator run before the first
   # Flutter install. pm clear cannot repair a signing mismatch.
   adb -s "$device_id" uninstall "$app_id" >/dev/null 2>&1 || true
-  for scene in "${scenes[@]}"; do
+  # A long sequence of independent flutter drive processes can leave the
+  # emulator transport in the `offline` state even after the Dart test and
+  # screenshot have completed. Recover the ADB server before giving up, then
+  # rerun only the affected scene. This keeps a transient emulator transport
+  # failure from invalidating an otherwise valid screenshot batch.
+  recover_device() {
+    local attempt
+    for attempt in 1 2 3; do
+      if adb -s "$device_id" get-state >/dev/null 2>&1; then
+        echo "PARITY_DEVICE_READY attempt=$attempt"
+        return 0
+      fi
+      echo "PARITY_DEVICE_RECOVER attempt=$attempt"
+      adb reconnect offline >/dev/null 2>&1 || true
+      sleep 2
+      if adb -s "$device_id" get-state >/dev/null 2>&1; then
+        echo "PARITY_DEVICE_READY attempt=$attempt method=reconnect"
+        return 0
+      fi
+      adb kill-server >/dev/null 2>&1 || true
+      adb start-server >/dev/null 2>&1 || true
+      sleep 3
+    done
+    return 1
+  }
+
+  run_scene() {
+    local scene="$1"
     echo "PARITY_SCENE_BEGIN scene=$scene"
     # Each scene gets a fresh application database. The package is deliberately
     # left installed so flutter drive can reuse the build, but stale process and
@@ -161,14 +194,52 @@ fi
       --dart-define=QINGJI_PARITY_SCENE="$scene" \
       --dart-define=QINGJI_DEMO_NOW=2026-08-27T12:00:00+08:00 \
       --dart-define=QINGJI_P0_FIXTURE_HASH="$fixture_hash"
-    scene_status=$?
-    echo "PARITY_SCENE_END scene=$scene status=$scene_status"
-    if [ "$scene_status" -eq 124 ] || [ "$scene_status" -eq 137 ]; then
-      echo "::error::Parity scene timed out or was killed: $scene"
-      adb -s "$device_id" shell dumpsys activity activities 2>&1 | tail -n 120 || true
-      adb -s "$device_id" logcat -d -t 300 2>&1 | tail -n 300 || true
-    fi
-    if [ "$scene_status" -ne 0 ]; then
+    local status=$?
+    echo "PARITY_SCENE_END scene=$scene status=$status"
+    return "$status"
+  }
+
+  for scene in "${scenes[@]}"; do
+    attempt=0
+    while true; do
+      if ! recover_device; then
+        echo "::error::Android emulator is not online before parity scene: $scene"
+        adb devices -l 2>&1 || true
+        exit 2
+      fi
+      run_scene "$scene"
+      scene_status=$?
+      if [ "$scene_status" -eq 0 ]; then
+        # Give the emulator a short idle window to flush PixelCopy/ADB work
+        # before the next Flutter process starts.
+        sleep 2
+        break
+      fi
+
+      if [ "$scene_status" -eq 124 ] || [ "$scene_status" -eq 137 ]; then
+        echo "::error::Parity scene timed out or was killed: $scene"
+        adb -s "$device_id" shell dumpsys activity activities 2>&1 | tail -n 120 || true
+        adb -s "$device_id" logcat -d -t 300 2>&1 | tail -n 300 || true
+      fi
+
+      # Retry only transport/process-loss failures. Assertion and application
+      # failures remain fail-fast so a real regression is never hidden.
+      transient_failure=0
+      if ! adb -s "$device_id" get-state >/dev/null 2>&1; then
+        transient_failure=1
+      elif tail -n 160 "$log_path" 2>/dev/null | grep -Eq \
+          'Service has disappeared|device offline|bad color buffer handle'; then
+        transient_failure=1
+      fi
+      if [ "$transient_failure" -eq 1 ] && [ "$attempt" -lt "$scene_retry_limit" ]; then
+        attempt=$((attempt + 1))
+        echo "::warning title=Android parity transient transport failure::retrying scene=$scene attempt=$attempt/$scene_retry_limit"
+        if recover_device; then
+          sleep 2
+          continue
+        fi
+      fi
+
       last_capture="$(grep -E 'PARITY_CAPTURE_(BEGIN|DONE)|PARITY_PAGE_(BEGIN|READY)|PARITY_SCENE_(BEGIN|END)' "$log_path" 2>/dev/null | tail -n 1 || true)"
       echo "::error title=Android parity scene failed::scene=$scene status=$scene_status"
       echo "PARITY_FAILURE scene=$scene status=$scene_status"
@@ -179,8 +250,8 @@ fi
       adb -s "$device_id" get-state 2>&1 || true
       adb devices -l 2>&1 || true
       exit "$scene_status"
-    fi
-    if ! adb -s "$device_id" get-state >/dev/null 2>&1; then
+    done
+    if ! recover_device; then
       echo "::error::Android emulator went offline after parity scene: $scene"
       adb devices >&2 || true
       exit 2
