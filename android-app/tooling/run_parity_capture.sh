@@ -17,6 +17,12 @@ cd "$android_root"
 
 device_id="${ANDROID_SERIAL:-${ANDROID_DEVICE_ID:-}}"
 app_id="com.qingji.qingji.codex"
+# Flutter's Android tooling has historically derived the package to clean up
+# from the Gradle namespace (`com.qingji.qingji`) instead of the final
+# applicationId. Keep both identities in the scene lifecycle so an older
+# install cannot keep a process/VM service alive between captures.
+legacy_app_id="com.qingji.qingji"
+app_ids=("$app_id" "$legacy_app_id")
 scene_timeout_seconds="${PARITY_SCENE_TIMEOUT_SECONDS:-600}"
 scene_retry_limit="${PARITY_SCENE_RETRIES:-1}"
 if [ -z "$device_id" ]; then
@@ -147,9 +153,28 @@ fi
     ai-schedules
     ai-local
   )
-  # Remove a package left by a previous local/emulator run before the first
-  # Flutter install. pm clear cannot repair a signing mismatch.
-  adb -s "$device_id" uninstall "$app_id" >/dev/null 2>&1 || true
+  cleanup_scene_state() {
+    local package
+    # Stop both the current applicationId and the historical namespace-derived
+    # id. `flutter drive` may have attempted to clean the latter even though it
+    # installs the former, leaving an old process alive on a reused emulator.
+    for package in "${app_ids[@]}"; do
+      adb -s "$device_id" shell am force-stop "$package" >/dev/null 2>&1 || true
+      adb -s "$device_id" shell am kill "$package" >/dev/null 2>&1 || true
+    done
+    # A stale Flutter VM-service forward makes the next driver connect to a
+    # dead isolate. The parity job owns the only device, so remove all forwards
+    # between independent scenes.
+    adb -s "$device_id" forward --remove-all >/dev/null 2>&1 || true
+  }
+
+  # Remove packages left by a previous local/emulator run before the first
+  # Flutter install. pm clear cannot repair a signing mismatch, while
+  # uninstalling both ids also prevents the namespace-derived stale process.
+  cleanup_scene_state
+  for package in "${app_ids[@]}"; do
+    adb -s "$device_id" uninstall "$package" >/dev/null 2>&1 || true
+  done
   # A long sequence of independent flutter drive processes can leave the
   # emulator transport in the `offline` state even after the Dart test and
   # screenshot have completed. Recover the ADB server before giving up, then
@@ -182,7 +207,7 @@ fi
     # Each scene gets a fresh application database. The package is deliberately
     # left installed so flutter drive can reuse the build, but stale process and
     # data state are cleared before the next invocation.
-    adb -s "$device_id" shell am force-stop "$app_id" >/dev/null 2>&1 || true
+    cleanup_scene_state
     adb -s "$device_id" shell pm clear "$app_id" >/dev/null 2>&1 || true
     echo "PARITY_SCENE_RESET scene=$scene"
     "$timeout_bin" --foreground --kill-after=30s "${scene_timeout_seconds}s" flutter drive \
@@ -195,6 +220,10 @@ fi
       --dart-define=QINGJI_DEMO_NOW=2026-08-27T12:00:00+08:00 \
       --dart-define=QINGJI_P0_FIXTURE_HASH="$fixture_hash"
     local status=$?
+    # Always tear down the app and VM forward, including timeout/driver-error
+    # paths. This is what makes a retry or the next scene independent.
+    cleanup_scene_state
+    echo "PARITY_SCENE_CLEANUP scene=$scene"
     echo "PARITY_SCENE_END scene=$scene status=$status"
     return "$status"
   }
