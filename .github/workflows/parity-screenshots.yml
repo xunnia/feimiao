@@ -233,7 +233,7 @@ jobs:
           rm -rf ci-artifacts/ios-screenshots
           mkdir -p ci-artifacts/ios-screenshots
           runtime_log="ios-screenshot-runtime.log"
-          fixture_hash="$(shasum -a 256 ios-app/tools/fixtures/p0-demo-ledger-2026-08-v1.json | awk '{print toupper($1)}')"
+          fixture_hash="$(python3 ios-app/tools/canonical_fixture_hash.py ios-app/tools/fixtures/p0-demo-ledger-2026-08-v1.json)"
           : > "$runtime_log"
           shoot() {
             local screen="$1" name="$2"

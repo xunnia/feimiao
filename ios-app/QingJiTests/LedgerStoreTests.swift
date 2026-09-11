@@ -16,6 +16,14 @@ final class LedgerStoreTests: XCTestCase {
                 TxCategory.self,
                 MoneyTransaction.self,
                 AccountBalanceCheckpointRecord.self,
+                PhysicalAsset.self,
+                AssetEvent.self,
+                AssetUsageEvent.self,
+                AssetTransactionLink.self,
+                AssetRefundAllocation.self,
+                AssetValuation.self,
+                ReceivableAsset.self,
+                ReceivableRecovery.self,
             ])
             let configuration = ModelConfiguration(
                 schema: schema,
@@ -84,6 +92,58 @@ final class LedgerStoreTests: XCTestCase {
             0
         )
         _ = bank
+    }
+
+    func testNewTransactionRejectsArchivedAccount() throws {
+        let stack = try Stack()
+        let (book, cash, _, dining) = try seed(stack)
+        cash.status = .archived
+        try stack.context.save()
+
+        XCTAssertThrowsError(
+            try LedgerStore.createTransaction(
+                in: stack.context,
+                amount: 28,
+                kind: .expense,
+                date: Date(),
+                note: "归档账户不应写入",
+                category: dining,
+                account: cash,
+                book: book
+            )
+        ) { error in
+            XCTAssertEqual(error as? LedgerStore.Error, .invalidAccount)
+        }
+        XCTAssertEqual(
+            try stack.context.fetchCount(FetchDescriptor<MoneyTransaction>()),
+            0
+        )
+    }
+
+    func testTransferRejectsDeletedTargetAccount() throws {
+        let stack = try Stack()
+        let (book, cash, bank, _) = try seed(stack)
+        bank.isDeleted = true
+        try stack.context.save()
+
+        XCTAssertThrowsError(
+            try LedgerStore.createTransaction(
+                in: stack.context,
+                amount: 50,
+                kind: .transfer,
+                date: Date(),
+                note: "删除账户不应转账",
+                account: cash,
+                toAccount: bank,
+                book: book
+            )
+        ) { error in
+            XCTAssertEqual(error as? LedgerStore.Error, .invalidTransfer)
+        }
+        XCTAssertEqual(
+            try stack.context.fetchCount(FetchDescriptor<MoneyTransaction>()),
+            0
+        )
     }
 
     func testRefundKeepsOriginalDateButUsesSettlementDateAndCapsRemaining() throws {

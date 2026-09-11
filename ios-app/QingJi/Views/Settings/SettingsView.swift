@@ -171,6 +171,7 @@ struct SettingsView: View {
         case .assetDetail: AssetsView(opensFirstDetail: true, startsOnPhysical: true)
         case .liabilities: LiabilitiesView()
         case .netWorth:  NetWorthView()
+        case .lending:   LendingView()
         case .importReview:
             // A review is only valid when it came from a real selected file.
             // The deterministic fixture is reserved for the CI demo launch.

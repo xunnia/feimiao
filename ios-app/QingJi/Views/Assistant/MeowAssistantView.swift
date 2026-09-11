@@ -36,7 +36,10 @@ struct MeowAssistantView: View {
     @State private var didLoad = false
     @State private var requestTask: Task<Void, Never>?
     @State private var photoItems: [PhotosPickerItem] = []
+    @State private var showPhotoPicker = false
     @State private var attachments: [AIChatAttachment] = []
+    @State private var attachmentImportTask: Task<Void, Never>?
+    @State private var attachmentImportGeneration = 0
     @State private var showFileImporter = false
     @State private var reasoningByTurn: [UUID: String] = [:]
     @State private var sourcesByTurn: [UUID: [AIChatSource]] = [:]
@@ -46,6 +49,7 @@ struct MeowAssistantView: View {
     @State private var confirmationMessage: String?
     @State private var pendingUndoTurnID: UUID?
     @State private var pendingConsentAccount: AIProviderAccount?
+    @State private var preserveDraftAttachments = false
 
     init(sessionID: UUID? = nil, title: String? = nil) {
         requestedSessionID = sessionID
@@ -147,12 +151,22 @@ struct MeowAssistantView: View {
                     includesAttachment: !attachments.isEmpty
                 ) {
                     AIPrivacyConsentStore.accept(for: account.id)
+                    // The sheet is dismissed immediately after this callback. Keep the
+                    // draft files alive in case SwiftUI reports a transient disappear
+                    // before the queued send consumes them.
+                    preserveDraftAttachments = true
                     pendingConsentAccount = nil
-                    DispatchQueue.main.async { send() }
+                    DispatchQueue.main.async {
+                        send()
+                        preserveDraftAttachments = false
+                    }
                 }
             }
             .onDisappear {
+                guard canDiscardDraftAttachments else { return }
                 requestTask?.cancel()
+                attachmentImportTask?.cancel()
+                discardDraftAttachments()
             }
             .liquidGlassChrome()
         }
@@ -323,11 +337,9 @@ struct MeowAssistantView: View {
             GlassEffectContainer(spacing: 10) {
                 HStack(alignment: .bottom, spacing: 10) {
                 Menu {
-                    PhotosPicker(
-                        selection: $photoItems,
-                        maxSelectionCount: AIChatAttachmentStore.maxImages,
-                        matching: .images
-                    ) {
+                    Button {
+                        showPhotoPicker = true
+                    } label: {
                         Label("选择照片", systemImage: "photo.on.rectangle")
                     }
                     Button {
@@ -379,6 +391,12 @@ struct MeowAssistantView: View {
             importPhotos(items)
             photoItems = []
         }
+        .photosPicker(
+            isPresented: $showPhotoPicker,
+            selection: $photoItems,
+            maxSelectionCount: AIChatAttachmentStore.maxImages,
+            matching: .images
+        )
     }
 
     private var attachmentStrip: some View {
@@ -392,6 +410,7 @@ struct MeowAssistantView: View {
                             .lineLimit(1)
                             .font(.caption)
                         Button {
+                            AttachmentStore.remove(attachment.metadata.relativePath)
                             attachments.removeAll { $0.id == attachment.id }
                         } label: {
                             Image(systemName: "xmark.circle.fill")
@@ -494,6 +513,7 @@ struct MeowAssistantView: View {
         updateSessionTitleIfNeeded(prompt, sessionID: id)
         draft = ""
         attachments = []
+        preserveDraftAttachments = false
 
         let assistantID = UUID()
         turns.append(AIChatTurn(id: assistantID, role: "assistant", content: ""))
@@ -906,58 +926,103 @@ struct MeowAssistantView: View {
         value.range(of: "报销|出差|差旅|垫付|公司报|帮公司|公司的|因公|客户招待|招待费", options: .regularExpression) != nil
     }
 
+    private var canDiscardDraftAttachments: Bool {
+        AIChatAttachmentStore.canDiscardDraftAttachments(
+            pendingConsent: pendingConsentAccount != nil,
+            photoPickerPresented: showPhotoPicker,
+            fileImporterPresented: showFileImporter,
+            preservingForSend: preserveDraftAttachments
+        )
+    }
+
+    private func discardDraftAttachments() {
+        for attachment in attachments {
+            AttachmentStore.remove(attachment.metadata.relativePath)
+        }
+        attachments = []
+    }
+
     private func importPhotos(_ items: [PhotosPickerItem]) {
-        Task { @MainActor in
-            var added: [AIChatAttachment] = []
-            for item in items.prefix(AIChatAttachmentStore.maxImages) {
+        attachmentImportTask?.cancel()
+        attachmentImportGeneration += 1
+        let generation = attachmentImportGeneration
+        attachmentImportTask = Task { @MainActor in
+            defer {
+                if attachmentImportGeneration == generation {
+                    attachmentImportTask = nil
+                }
+            }
+            for item in items {
+                guard !Task.isCancelled else { break }
                 guard let raw = try? await item.loadTransferable(type: Data.self),
                       let image = UIImage(data: raw),
                       let data = image.jpegData(compressionQuality: 0.88) else { continue }
+                guard !Task.isCancelled else { break }
                 if data.count > AIChatAttachmentStore.maxImageBytes {
                     attachmentMessage = "图片不能超过 20 MB。"
                     continue
                 }
-                if attachments.filter(\.isImage).count + added.count >= AIChatAttachmentStore.maxImages {
+                guard AIChatAttachmentStore.hasCapacity(for: "image/jpeg", existing: attachments) else {
                     attachmentMessage = "一次最多发送 3 张图片。"
                     break
                 }
                 if let attachment = try? AIChatAttachmentStore.persist(
                     data: data,
-                    name: "支付截图-\(added.count + 1).jpg",
+                    name: "支付截图-\(attachments.filter(\.isImage).count + 1).jpg",
                     mimeType: "image/jpeg"
                 ) {
-                    added.append(attachment)
+                    if Task.isCancelled {
+                        AttachmentStore.remove(attachment.metadata.relativePath)
+                        break
+                    }
+                    attachments.append(attachment)
                 }
             }
-            attachments.append(contentsOf: added)
         }
     }
 
     private func importFiles(_ result: Result<[URL], Error>) {
         do {
             let urls = try result.get()
-            var added: [AIChatAttachment] = []
-            for url in urls.prefix(AIChatAttachmentStore.maxFiles) {
-                let scoped = url.startAccessingSecurityScopedResource()
-                defer { if scoped { url.stopAccessingSecurityScopedResource() } }
-                let data = try Data(contentsOf: url, options: [.mappedIfSafe])
-                guard !data.isEmpty else { continue }
-                if data.count > AIChatAttachmentStore.maxFileBytes {
-                    attachmentMessage = "文件不能超过 50 MB：\(url.lastPathComponent)"
-                    continue
-                }
+            for url in urls {
                 let mime = UTType(filenameExtension: url.pathExtension)?.preferredMIMEType
                     ?? "application/octet-stream"
+                guard AIChatAttachmentStore.hasCapacity(
+                    for: mime,
+                    existing: attachments
+                ) else {
+                    attachmentMessage = mime.lowercased().hasPrefix("image/")
+                        ? "一次最多发送 3 张图片。"
+                        : "一次最多发送 10 个文件。"
+                    continue
+                }
+                let scoped = url.startAccessingSecurityScopedResource()
+                defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+                let data: Data
+                do {
+                    data = try Data(contentsOf: url, options: [.mappedIfSafe])
+                } catch {
+                    attachmentMessage = "无法读取附件：\(error.localizedDescription)"
+                    continue
+                }
+                guard !data.isEmpty else { continue }
+                let maxBytes = mime.lowercased().hasPrefix("image/")
+                    ? AIChatAttachmentStore.maxImageBytes
+                    : AIChatAttachmentStore.maxFileBytes
+                if data.count > maxBytes {
+                    attachmentMessage = mime.lowercased().hasPrefix("image/")
+                        ? "图片不能超过 20 MB：\(url.lastPathComponent)"
+                        : "文件不能超过 50 MB：\(url.lastPathComponent)"
+                    continue
+                }
                 if let attachment = try? AIChatAttachmentStore.persist(
                     data: data,
                     name: url.lastPathComponent,
                     mimeType: mime
                 ) {
-                    added.append(attachment)
+                    attachments.append(attachment)
                 }
             }
-            let existingFiles = attachments.filter { !$0.isImage }.count
-            attachments.append(contentsOf: added.prefix(max(0, AIChatAttachmentStore.maxFiles - existingFiles)))
         } catch {
             attachmentMessage = "无法读取附件：\(error.localizedDescription)"
         }

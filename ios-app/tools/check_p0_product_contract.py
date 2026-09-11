@@ -19,6 +19,8 @@ from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
 
+from canonical_fixture_hash import canonical_sha256
+
 
 EXPECTED_SCENE_COUNT = 41
 EXPECTED_JOURNEY_COUNT = 12
@@ -232,7 +234,10 @@ def validate_baseline(
     fixture_hash = fixture.get("inputHash")
     require(isinstance(fixture_hash, str) and re.fullmatch(r"[0-9A-F]{64}", fixture_hash) is not None,
             "fixture.inputHash must be an uppercase SHA-256")
-    require(sha256(fixture_path) == fixture_hash, "canonical fixture SHA-256 differs from the contract")
+    require(
+        canonical_sha256(fixture_path) == fixture_hash,
+        "canonical fixture SHA-256 differs from the contract",
+    )
     validate_fixture_semantics(fixture_path, fixture)
 
     apk_path = apk_override.resolve() if apk_override is not None else repo / str(android.get("apk", ""))
@@ -300,7 +305,7 @@ def validate_data_upgrade(payload: dict[str, Any], repo: Path) -> None:
     fixture_hash = fixture.get("inputHash")
     require(isinstance(fixture_hash, str) and re.fullmatch(r"[0-9A-F]{64}", fixture_hash),
             "dataUpgrade fixture inputHash must be an uppercase SHA-256")
-    require(sha256(fixture_path) == fixture_hash,
+    require(canonical_sha256(fixture_path) == fixture_hash,
             "dataUpgrade fixture SHA-256 differs from the contract")
     upgrade_fixture = load_json(fixture_path)
     require(upgrade_fixture.get("schemaVersion") == 1,

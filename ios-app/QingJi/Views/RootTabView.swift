@@ -157,7 +157,6 @@ struct RootTabView: View {
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         return screen == "import-review" || screen == "settings/import-review"
     }
-
     private func syncPath() {
         // 导入复核是 parity 冷启动目标，也是正常设置子路由。它显示时保留
         // 专用根路由，避免 selectedTab 的观察者把它重置回设置首页。
@@ -208,7 +207,7 @@ struct RootTabView: View {
         case "budget", "reconcile", "reimburse", "books", "accounts", "categories", "tags",
              "memory", "ai-memory", "ai-tasks", "ai-extensions", "ai-schedules", "ai-search",
              "ai-diagnostics", "ai-local", "savings", "recurring", "assets", "assets/detail",
-             "assets-detail", "liabilities", "net-worth", "import", "import-export",
+             "assets-detail", "liabilities", "net-worth", "lending", "import", "import-export",
              "accounts/detail", "accounts-detail",
              "reimburse/settlement",
              "reports", "settings", "backup", "display", "theme", "money-display", "auto-record",
@@ -221,7 +220,7 @@ struct RootTabView: View {
 
     private static func initialDrawerPresented() -> Bool {
         let screen = ProcessInfo.processInfo.environment["QINGJI_SCREEN"] ?? ""
-        return screen == "home/drawer" || screen == "books"
+        return screen == "home/drawer"
     }
 
     private func navigate(to destination: DrawerDestination) {
@@ -325,18 +324,20 @@ private struct AppDrawerView: View {
                             .padding(.horizontal, 16)
                             .padding(.bottom, 4)
 
-                        drawerRow(
-                            icon: "book.closed",
+                        drawerBookRow(
                             title: "总账本",
+                            cover: "daily",
+                            remark: "汇总计入总账的账本",
                             selected: router.selectedBookID == nil
                         ) {
                             router.selectedBookID = nil
                             onClose()
                         }
                         ForEach(books) { book in
-                            drawerRow(
-                                icon: "book.closed",
+                            drawerBookRow(
                                 title: book.name,
+                                cover: book.cover.isEmpty ? "daily" : book.cover,
+                                remark: book.remark,
                                 selected: router.selectedBookID == book.stableID
                             ) {
                                 router.selectedBookID = book.stableID
@@ -396,6 +397,43 @@ private struct AppDrawerView: View {
         // Drawer rows are already inside one glass drawer surface. Adding a
         // glass button style to every row creates nested pills and hides the
         // selection treatment behind a second white layer.
+        .buttonStyle(.plain)
+        .contentShape(Rectangle())
+    }
+
+    private func drawerBookRow(
+        title: String,
+        cover: String,
+        remark: String,
+        selected: Bool = false,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            HStack(spacing: 12) {
+                BookCoverView(cover: cover, size: 38)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title)
+                        .font(.body)
+                        .foregroundStyle(selected ? Color.accentColor : .primary)
+                        .lineLimit(1)
+                    if !remark.isEmpty {
+                        Text(remark)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+                }
+                Spacer(minLength: 8)
+                if selected {
+                    Image(systemName: "checkmark")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(Color.accentColor)
+                }
+            }
+            .padding(.horizontal, 16)
+            .frame(minHeight: 54)
+            .background(selected ? Color.accentColor.opacity(0.12) : .clear, in: .rect(cornerRadius: 12))
+        }
         .buttonStyle(.plain)
         .contentShape(Rectangle())
     }

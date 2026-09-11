@@ -26,7 +26,7 @@ Markdown 报告。
      --output ci-artifacts/screenshot-report.json
    ```
 
-4. `.github/workflows/parity-screenshots.yml` 会在两个模拟器任务都成功后生成成对报告，并使用 `--require-complete`。Parity #61 已对 39 个场景通过这个 gate；Pixel 2 与 iPhone Air 的物理尺寸差异会标记为 `dimension_mismatch` 并保留在报告中，不会被伪装成像素一致，也不会把有效成对证据误判为缺图。
+4. `.github/workflows/parity-screenshots.yml` 会在两个模拟器任务都成功后生成成对报告，并使用 `--require-complete`。Parity #61 已对 40 个场景通过这个 gate；Pixel 2 与 iPhone Air 的物理尺寸差异会标记为 `dimension_mismatch` 并保留在报告中，不会被伪装成像素一致，也不会把有效成对证据误判为缺图。
 
 ## 判定口径
 
@@ -59,5 +59,6 @@ Liquid Glass、SF Symbols、原生转场和触觉反馈，因此与 Flutter/Mate
 | 收入记账与物品资产详情操作态 | `quickadd/income` / `settings/assets/detail` | Parity #61 已采集 | Parity #61 已采集 | 已完成成对对比 |
 | 账户详情操作态 | `settings/accounts/detail` | Parity #61 已采集 | Parity #61 已采集 | 已完成成对对比 |
 | 报销到账操作态 | `settings/reimburse/settlement` | Parity #61 已采集 | Parity #61 已采集 | 已完成成对对比 |
+| 借贷往来按对象聚合 | `lending` | 待本轮重采 | 待本轮重采 | 待重新验收 |
 
 这份表只记录证据状态，不把“代码已写”冒充“真机已验收”。

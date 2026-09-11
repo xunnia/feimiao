@@ -371,6 +371,12 @@ enum AndroidBackupImporter {
         for row in assetRows {
             if let id = row.integer("id") { assetIDs[id] = stableID(row.string("uuid"), table: "physical_assets", id: id) }
         }
+        var assetEventIDs: [Int64: UUID] = [:]
+        for row in assetEventRows {
+            if let id = row.integer("id") {
+                assetEventIDs[id] = stableID(row.string("uuid"), table: "asset_events", id: id)
+            }
+        }
         var assetUsageIDs: [Int64: UUID] = [:]
         for row in assetUsageRows {
             if let id = row.integer("id") { assetUsageIDs[id] = stableID(row.string("uuid"), table: "asset_usage_events", id: id) }
@@ -750,8 +756,16 @@ enum AndroidBackupImporter {
         let assetRefundAllocations = assetRefundRows.compactMap { row -> BackupAssetRefundAllocation? in
             guard let id = row.integer("id"),
                   let stable = assetRefundAllocationIDs[id],
-                  let linkID = row.integer("asset_transaction_link_id").flatMap({ assetLinkIDs[$0] }),
+                  let rawLinkID = row.integer("asset_transaction_link_id"),
                   let refundID = row.integer("refund_transaction_id").flatMap({ transactionIDs[$0] }) else { return nil }
+            let linkID: UUID
+            if rawLinkID == 0 {
+                linkID = AssetRefundAllocationStore.untrackedLinkID
+            } else if let mapped = assetLinkIDs[rawLinkID] {
+                linkID = mapped
+            } else {
+                return nil
+            }
             return BackupAssetRefundAllocation(
                 id: stable,
                 assetTransactionLinkID: linkID,
@@ -809,6 +823,7 @@ enum AndroidBackupImporter {
             return BackupReceivableRecovery(
                 id: stableID(row.string("uuid"), table: "receivable_recoveries", id: id),
                 receivableID: stableReceivableID,
+                eventID: row.integer("event_id").flatMap { assetEventIDs[$0] },
                 amount: row.decimal("amount"),
                 recoveredAt: date(row.integer("recovered_ms")) ?? exportedAt,
                 targetAccountID: row.integer("target_account_id").flatMap { accountIDs[$0] },
@@ -1457,6 +1472,9 @@ enum AndroidBackupImporter {
         case "asset_archived", "asset_unarchived": return raw == "asset_archived" ? "archived" : "restored"
         case "asset_usage_tracking_enabled", "asset_usage_tracking_disabled": return "usageAdded"
         case "depreciation_configured", "auto_depreciation_applied": return "depreciation"
+        case "receivable_created", "receivable_edited", "receivable_recovered",
+             "receivable_recovery_undone", "receivable_lost", "receivable_archived",
+             "receivable_unarchived": return raw
         default: return "created"
         }
     }

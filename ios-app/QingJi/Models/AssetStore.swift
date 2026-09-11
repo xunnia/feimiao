@@ -18,6 +18,7 @@ enum AssetStore {
         case returnRequiresPurchaseLink
         case returnNotAvailable
         case invalidTerminalStatus
+        case purchaseCostManagedByLink
 
         var errorDescription: String? {
             switch self {
@@ -34,6 +35,7 @@ enum AssetStore {
             case .returnRequiresPurchaseLink: return "多物品订单需要先完成购置成本分配，才能确认退货。"
             case .returnNotAvailable: return "这件物品当前没有可退回的购置账单。"
             case .invalidTerminalStatus: return "当前资产状态不能执行这个结束持有操作。"
+            case .purchaseCostManagedByLink: return "这件物品的购置成本由关联账单管理，请先解除购置关联。"
             }
         }
     }
@@ -196,9 +198,12 @@ enum AssetStore {
         _ link: AssetTransactionLink,
         in context: ModelContext
     ) throws {
-        guard link.linkTypeRaw != AssetTransactionLinkType.sourceTransaction.rawValue,
-              link.linkTypeRaw != AssetTransactionLinkType.purchaseTransaction.rawValue,
-              link.linkTypeRaw != AssetTransactionLinkType.saleAccountMovement.rawValue else {
+        if link.linkTypeRaw == AssetTransactionLinkType.sourceTransaction.rawValue ||
+            link.linkTypeRaw == AssetTransactionLinkType.purchaseTransaction.rawValue {
+            try AssetRefundAllocationStore.unlinkPurchaseAllocation(link, in: context)
+            return
+        }
+        guard link.linkTypeRaw != AssetTransactionLinkType.saleAccountMovement.rawValue else {
             throw Error.invalidTransaction
         }
         let assetID = link.assetID
@@ -283,6 +288,11 @@ enum AssetStore {
             value: link.amount,
             note: "从已有账单分配"
         ))
+        try AssetRefundAllocationStore.reconcileHistoricalRefunds(
+            for: transaction.stableID,
+            in: context,
+            including: link
+        )
         try context.save()
         return link
     }
@@ -516,6 +526,24 @@ enum AssetStore {
             purchaseDate: purchaseDate,
             warrantyUntil: warrantyUntil
         )
+        let purchaseLinks = try context.fetch(FetchDescriptor<AssetTransactionLink>())
+            .filter {
+                $0.assetID == asset.stableID &&
+                    ($0.linkTypeRaw == AssetTransactionLinkType.sourceTransaction.rawValue ||
+                     $0.linkTypeRaw == AssetTransactionLinkType.purchaseTransaction.rawValue)
+            }
+        if !purchaseLinks.isEmpty {
+            let linkedNet = purchaseLinks.reduce(Decimal.zero) {
+                let gross = $1.allocatedGrossCents > 0
+                    ? Decimal($1.allocatedGrossCents) / Decimal(100)
+                    : $1.amount
+                let refund = Decimal($1.allocatedRefundCents) / Decimal(100)
+                return $0 + max(gross - refund, .zero)
+            }
+            guard normalizedPurchasePrice == MoneyNormalization.roundToCents(linkedNet) else {
+                throw Error.purchaseCostManagedByLink
+            }
+        }
         let previousValue = asset.currentValue
         asset.name = name.trimmingCharacters(in: .whitespacesAndNewlines)
         asset.kind = kind
@@ -1260,11 +1288,12 @@ enum AssetStore {
 
 /// 权益/应收款的生命周期和回收记录。
 enum ReceivableStore {
-    enum Error: LocalizedError {
+    enum Error: LocalizedError, Equatable {
         case invalidName
         case invalidAmount
         case exceedsRemaining
         case recoveryNotLatest
+        case accountUnavailable
 
         var errorDescription: String? {
             switch self {
@@ -1272,6 +1301,7 @@ enum ReceivableStore {
             case .invalidAmount: return "金额必须大于 0。"
             case .exceedsRemaining: return "收回金额不能超过剩余金额。"
             case .recoveryNotLatest: return "只能从最近一次收回开始撤销。"
+            case .accountUnavailable: return "到账账户不存在、已停用或币种不一致。"
             }
         }
     }
@@ -1321,6 +1351,13 @@ enum ReceivableStore {
         asset.note = note.trimmingCharacters(in: .whitespacesAndNewlines)
         asset.includeInNetWorth = includeInNetWorth
         context.insert(asset)
+        context.insert(AssetEvent(
+            assetID: asset.stableID,
+            kind: .receivableCreated,
+            occurredAt: asset.createdAt,
+            value: asset.originalAmount,
+            note: asset.note
+        ))
         try context.save()
         return asset
     }
@@ -1354,6 +1391,13 @@ enum ReceivableStore {
         asset.note = note.trimmingCharacters(in: .whitespacesAndNewlines)
         asset.includeInNetWorth = includeInNetWorth
         asset.updatedAt = Date()
+        context.insert(AssetEvent(
+            assetID: asset.stableID,
+            kind: .receivableEdited,
+            occurredAt: asset.updatedAt,
+            value: asset.remainingAmount,
+            note: asset.note
+        ))
         try context.save()
     }
 
@@ -1369,11 +1413,52 @@ enum ReceivableStore {
         let normalizedAmount = MoneyNormalization.roundToCents(amount)
         guard normalizedAmount > 0 else { throw Error.invalidAmount }
         guard normalizedAmount <= asset.remainingAmount else { throw Error.exceedsRemaining }
+        if let account,
+           account.isDeleted ||
+            account.status != .active ||
+            account.currencyCode != asset.currencyCode {
+            throw Error.accountUnavailable
+        }
+        let recoveryTransaction: MoneyTransaction? = if let account {
+            let books = (try? context.fetch(FetchDescriptor<Book>())) ?? []
+            let book = books.first(where: { book in
+                guard let bookID = asset.bookID else { return false }
+                return book.stableID == bookID
+            })
+                ?? books.first(where: { $0.isDefault })
+                ?? books.first
+            let transaction = MoneyTransaction(
+                amount: normalizedAmount,
+                kind: .income,
+                date: date,
+                note: note.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    ? "权益收回：\(asset.name)"
+                    : note.trimmingCharacters(in: .whitespacesAndNewlines),
+                currencyCode: asset.currencyCode,
+                account: account,
+                book: book,
+                timePrecision: .dateOnly,
+                settledAt: date,
+                settlementQuality: .userConfirmed,
+                settlementAccountID: account.stableID,
+                settlementAccountQuality: .userConfirmed,
+                eventType: .receivableRecovery,
+                isExcluded: true
+            )
+            context.insert(transaction)
+            return transaction
+        } else {
+            nil
+        }
+        let previousLifecycle = asset.lifecycle.rawValue
+        let previousIncludeInNetWorth = asset.includeInNetWorth
+        let previousEndedAt = asset.endedAt
         let recovery = ReceivableRecovery(
             receivableID: asset.stableID,
             amount: normalizedAmount,
             recoveredAt: date,
             targetAccountID: account?.stableID,
+            transactionID: recoveryTransaction?.stableID,
             note: note.trimmingCharacters(in: .whitespacesAndNewlines)
         )
         context.insert(recovery)
@@ -1381,6 +1466,20 @@ enum ReceivableStore {
         asset.lifecycle = asset.remainingAmount == 0 ? .recovered : .partiallyRecovered
         if asset.remainingAmount == 0 { asset.includeInNetWorth = false }
         asset.updatedAt = Date()
+        let recoveryEvent = AssetEvent(
+            assetID: asset.stableID,
+            kind: .receivableRecovered,
+            occurredAt: date,
+            value: normalizedAmount,
+            note: note.trimmingCharacters(in: .whitespacesAndNewlines),
+            metadataJSON: receivableMetadataJSON([
+                "previous_lifecycle": previousLifecycle,
+                "previous_include_in_net_worth": previousIncludeInNetWorth ? "1" : "0",
+                "previous_ended_at": previousEndedAt?.timeIntervalSince1970.description ?? ""
+            ])
+        )
+        context.insert(recoveryEvent)
+        recovery.eventID = recoveryEvent.stableID
         try context.save()
         return recovery
     }
@@ -1398,11 +1497,45 @@ enum ReceivableStore {
         ) else {
             throw Error.recoveryNotLatest
         }
+        let recoveryEvent = latest.eventID.flatMap { eventID in
+            try? context.fetch(FetchDescriptor<AssetEvent>()).first {
+                $0.stableID == eventID
+            }
+        } ?? (try? context.fetch(FetchDescriptor<AssetEvent>(
+            sortBy: [SortDescriptor(\AssetEvent.occurredAt, order: .reverse)]
+        )))?.first(where: {
+            $0.assetID == asset.stableID &&
+            $0.kind == .receivableRecovered &&
+            $0.value == latest.amount &&
+            Calendar.current.isDate($0.occurredAt, equalTo: latest.recoveredAt, toGranularity: .second)
+        })
+        let metadata = recoveryEvent.flatMap { receivableEventMetadata($0) } ?? [:]
+        let previousLifecycle = ReceivableLifecycle(
+            rawValue: metadata["previous_lifecycle"] as? String ?? "active"
+        ) ?? .active
+        let previousInclude = (metadata["previous_include_in_net_worth"] as? String) != "0"
+        let previousEndedAt = receivableDateFromMetadata(metadata["previous_ended_at"])
+        if let transactionID = latest.transactionID,
+           let transaction = try allTransactions(in: context).first(where: {
+               $0.stableID == transactionID
+           }) {
+            context.delete(transaction)
+        }
         context.delete(latest)
         asset.remainingAmount += latest.amount
-        asset.lifecycle = asset.remainingAmount >= asset.originalAmount ? .active : .partiallyRecovered
-        asset.includeInNetWorth = true
+        asset.lifecycle = metadata.isEmpty
+            ? (asset.remainingAmount >= asset.originalAmount ? .active : .partiallyRecovered)
+            : previousLifecycle
+        asset.includeInNetWorth = metadata.isEmpty ? true : previousInclude
+        asset.endedAt = metadata.isEmpty ? nil : previousEndedAt
         asset.updatedAt = Date()
+        context.insert(AssetEvent(
+            assetID: asset.stableID,
+            kind: .receivableRecoveryUndone,
+            occurredAt: Date(),
+            value: latest.amount,
+            note: "撤销收回"
+        ))
         try context.save()
     }
 
@@ -1412,6 +1545,13 @@ enum ReceivableStore {
         asset.includeInNetWorth = false
         asset.endedAt = Date()
         asset.updatedAt = Date()
+        context.insert(AssetEvent(
+            assetID: asset.stableID,
+            kind: .receivableLost,
+            occurredAt: asset.updatedAt,
+            value: asset.remainingAmount,
+            note: note.trimmingCharacters(in: .whitespacesAndNewlines)
+        ))
         try context.save()
     }
 
@@ -1419,6 +1559,12 @@ enum ReceivableStore {
         asset.lifecycle = .archived
         asset.archivedAt = Date()
         asset.updatedAt = Date()
+        context.insert(AssetEvent(
+            assetID: asset.stableID,
+            kind: .receivableArchived,
+            occurredAt: asset.updatedAt,
+            value: asset.remainingAmount
+        ))
         try context.save()
     }
 
@@ -1427,17 +1573,49 @@ enum ReceivableStore {
         asset.archivedAt = nil
         asset.includeInNetWorth = asset.remainingAmount > 0
         asset.updatedAt = Date()
+        context.insert(AssetEvent(
+            assetID: asset.stableID,
+            kind: .receivableUnarchived,
+            occurredAt: asset.updatedAt,
+            value: asset.remainingAmount
+        ))
         try context.save()
+    }
+
+    private static func receivableMetadataJSON(_ values: [String: String]) -> String {
+        guard let data = try? JSONSerialization.data(withJSONObject: values, options: [.sortedKeys]) else {
+            return "{}"
+        }
+        return String(data: data, encoding: .utf8) ?? "{}"
+    }
+
+    private static func receivableEventMetadata(_ event: AssetEvent) -> [String: Any]? {
+        guard let data = event.metadataJSON.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data),
+              let values = object as? [String: Any] else {
+            return nil
+        }
+        return values
+    }
+
+    private static func receivableDateFromMetadata(_ value: Any?) -> Date? {
+        guard let text = value as? String,
+              let seconds = Double(text),
+              !seconds.isZero else {
+            return nil
+        }
+        return Date(timeIntervalSince1970: seconds)
     }
 }
 
 /// 负债档案的写入边界；还款会产生转账和必要的利息支出，保持净资产不凭空变化。
 enum LiabilityStore {
-    enum Error: LocalizedError {
+    enum Error: LocalizedError, Equatable {
         case invalidPrincipal
         case invalidRepayment
         case accountMissing
         case sameAccount
+        case invalidCounterparty
 
         var errorDescription: String? {
             switch self {
@@ -1445,6 +1623,7 @@ enum LiabilityStore {
             case .invalidRepayment: return "还款金额必须大于 0，且不能超过当前本金。"
             case .accountMissing: return "还款账户不存在或已停用。"
             case .sameAccount: return "还款账户不能是负债账户本身。"
+            case .invalidCounterparty: return "借入对象不能为空。"
             }
         }
     }
@@ -1539,6 +1718,221 @@ enum LiabilityStore {
         profile.lifecycle = status
         profile.updatedAt = Date()
         try context.save()
+    }
+
+    /// Android「记一笔借入」的同款语义：每笔借入建立独立的贷款账户和
+    /// personalBorrow 档案；若指定收款账户，再建立一笔真实转账，避免把
+    /// 借入金额伪装成普通收入。
+    @discardableResult
+    static func createPersonalBorrow(
+        in context: ModelContext,
+        counterparty: String,
+        amount: Decimal,
+        toAccount: Account? = nil,
+        dueDate: Date? = nil,
+        book: Book? = nil,
+        date: Date = Date(),
+        note: String = ""
+    ) throws -> LiabilityProfile {
+        let person = counterparty.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !person.isEmpty else { throw Error.invalidCounterparty }
+        let normalizedAmount = MoneyNormalization.roundToCents(amount)
+        guard normalizedAmount > 0 else { throw Error.invalidPrincipal }
+        if let toAccount,
+           toAccount.isDeleted || toAccount.status != .active ||
+            toAccount.currencyCode != "CNY" {
+            throw Error.accountMissing
+        }
+
+        let existingAccounts = try context.fetch(FetchDescriptor<Account>())
+        let usedNames = Set(existingAccounts.filter { !$0.isDeleted }.map(\.name))
+        let baseName = "借入·\(person)"
+        var accountName = baseName
+        var suffix = 2
+        while usedNames.contains(accountName) {
+            accountName = "\(baseName)·\(suffix)"
+            suffix += 1
+        }
+        let nextSortOrder = (existingAccounts.map(\.sortOrder).max() ?? -1) + 1
+        let loanAccount = Account(
+            name: accountName,
+            kind: .loan,
+            currencyCode: "CNY",
+            sortOrder: nextSortOrder
+        )
+        loanAccount.initialBalance = toAccount == nil ? -normalizedAmount : .zero
+        loanAccount.openingBalanceEffectiveAt = toAccount == nil ? date : nil
+        loanAccount.openingBalanceQuality = .exact
+        loanAccount.balanceMode = .ledger
+
+        let profile = LiabilityProfile(
+            accountID: loanAccount.stableID,
+            kind: .personalBorrow,
+            originalPrincipal: normalizedAmount,
+            currentPrincipal: normalizedAmount,
+            currencyCode: "CNY"
+        )
+        profile.counterparty = person
+        profile.startDate = date
+        profile.dueDate = dueDate
+        profile.repaymentAccountID = toAccount?.stableID
+        profile.note = note.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        context.insert(loanAccount)
+        if let toAccount {
+            let transfer = MoneyTransaction(
+                amount: normalizedAmount,
+                kind: .transfer,
+                date: date,
+                note: note.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    ? "借入：\(person)"
+                    : note.trimmingCharacters(in: .whitespacesAndNewlines),
+                currencyCode: "CNY",
+                account: loanAccount,
+                toAccount: toAccount,
+                book: book,
+                timePrecision: .dateOnly,
+                settledAt: date,
+                settlementQuality: .userConfirmed,
+                settlementAccountID: loanAccount.stableID,
+                settlementAccountQuality: .userConfirmed,
+                eventType: .transfer
+            )
+            context.insert(transfer)
+        }
+        context.insert(profile)
+        do {
+            try context.save()
+            return profile
+        } catch {
+            context.rollback()
+            throw error
+        }
+    }
+
+    /// Android 房贷/分期向导的同款三件套：贷款账户、负债档案和每月
+    /// 从扣款账户转入贷款账户的周期规则一次保存，避免只创建半套数据。
+    @discardableResult
+    static func createLoanWizardSetup(
+        in context: ModelContext,
+        kind: LiabilityKind,
+        name: String,
+        totalAmount: Decimal,
+        remainingPrincipal: Decimal,
+        annualRate: Decimal? = nil,
+        monthlyPayment: Decimal,
+        repaymentDay: Int,
+        fromAccount: Account,
+        book: Book? = nil,
+        now: Date = Date()
+    ) throws -> (account: Account, profile: LiabilityProfile, rule: RecurringRule) {
+        let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedName.isEmpty else { throw Error.invalidCounterparty }
+        let normalizedTotal = MoneyNormalization.roundToCents(totalAmount)
+        let normalizedPrincipal = MoneyNormalization.roundToCents(remainingPrincipal)
+        let normalizedPayment = MoneyNormalization.roundToCents(monthlyPayment)
+        guard normalizedTotal > 0,
+              normalizedPrincipal > 0,
+              normalizedPrincipal <= normalizedTotal,
+              normalizedPayment > 0 else {
+            throw Error.invalidPrincipal
+        }
+        if let annualRate, annualRate < 0 {
+            throw Error.invalidPrincipal
+        }
+        guard (1...31).contains(repaymentDay) else {
+            throw Error.invalidPrincipal
+        }
+        guard fromAccount.status == .active,
+              !fromAccount.isDeleted,
+              fromAccount.currencyCode == "CNY" else {
+            throw Error.accountMissing
+        }
+
+        let calendar = Calendar.current
+        func clampedDate(year: Int, month: Int) -> Date {
+            let lastDay = calendar.range(of: .day, in: .month, for: calendar.date(
+                from: DateComponents(year: year, month: month, day: 1)
+            ) ?? now)?.count ?? 28
+            return calendar.date(from: DateComponents(
+                year: year,
+                month: month,
+                day: min(repaymentDay, lastDay),
+                hour: 12
+            )) ?? now
+        }
+        let today = calendar.startOfDay(for: now)
+        let nowComponents = calendar.dateComponents([.year, .month], from: now)
+        let thisMonthDue = clampedDate(
+            year: nowComponents.year ?? 2000,
+            month: nowComponents.month ?? 1
+        )
+        let firstDue: Date
+        if !calendar.startOfDay(for: thisMonthDue).isBefore(today) {
+            firstDue = thisMonthDue
+        } else {
+            let next = calendar.date(byAdding: .month, value: 1, to: thisMonthDue) ?? now
+            let nextComponents = calendar.dateComponents([.year, .month], from: next)
+            firstDue = clampedDate(
+                year: nextComponents.year ?? 2000,
+                month: nextComponents.month ?? 1
+            )
+        }
+
+        let existingAccounts = try context.fetch(FetchDescriptor<Account>())
+        let usedNames = Set(existingAccounts.filter { !$0.isDeleted }.map(\.name))
+        var accountName = trimmedName
+        var suffix = 2
+        while usedNames.contains(accountName) {
+            accountName = "\(trimmedName)·\(suffix)"
+            suffix += 1
+        }
+        let loanAccount = Account(
+            name: accountName,
+            kind: .loan,
+            currencyCode: "CNY",
+            sortOrder: (existingAccounts.map(\.sortOrder).max() ?? -1) + 1
+        )
+        loanAccount.initialBalance = -normalizedPrincipal
+        loanAccount.openingBalanceEffectiveAt = now
+        loanAccount.openingBalanceQuality = .exact
+        loanAccount.balanceMode = .ledger
+
+        let profile = LiabilityProfile(
+            accountID: loanAccount.stableID,
+            kind: kind,
+            originalPrincipal: normalizedTotal,
+            currentPrincipal: normalizedPrincipal,
+            currencyCode: "CNY"
+        )
+        profile.annualRate = annualRate.map(MoneyNormalization.roundToCents)
+        profile.paymentDay = repaymentDay
+        profile.repaymentAccountID = fromAccount.stableID
+        profile.note = ""
+
+        let rule = RecurringRule(
+            amount: normalizedPayment,
+            kind: .transfer,
+            bookID: book?.stableID,
+            accountID: fromAccount.stableID,
+            toAccountID: loanAccount.stableID,
+            note: "\(trimmedName)还款",
+            period: .monthly,
+            startDate: firstDue,
+            firstDueDate: firstDue
+        )
+
+        context.insert(loanAccount)
+        context.insert(profile)
+        context.insert(rule)
+        do {
+            try context.save()
+            _ = try RecurringStore.materializeDue(in: context, now: now)
+            return (loanAccount, profile, rule)
+        } catch {
+            context.rollback()
+            throw error
+        }
     }
 
     /// 本金部分建成还款账户 -> 负债账户的转账；若金额超过本金，超出部分作为利息支出。

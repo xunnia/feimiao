@@ -4,7 +4,7 @@
   "source": {
     "product": "QingJi",
     "store": "SwiftData",
-    "sourceRevision": "08f7a5e28ffcc65f50dd2661802111d0ef92446c",
+    "sourceRevision": "b40316f336fb0aefabf67817460775b665fdaa1d",
     "container": "AppModelContainer.shared",
     "schemaKind": "inferred-model-graph-at-source-revision",
     "location": "existing-user-store-on-macos"

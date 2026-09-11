@@ -17,6 +17,7 @@ struct BudgetSettingView: View {
     private var budgetPlansV2: [BudgetPlanRecord]
     @Query(sort: \BudgetPlanRevisionRecord.effectiveCycleStart, order: .reverse)
     private var budgetRevisionsV2: [BudgetPlanRevisionRecord]
+    @Query private var budgetOverridesV2: [BudgetCycleOverrideRecord]
     @Query(sort: \BudgetCommitmentOccurrenceRecord.dueDate)
     private var fixedOccurrencesV2: [BudgetCommitmentOccurrenceRecord]
 
@@ -30,6 +31,10 @@ struct BudgetSettingView: View {
     @State private var categoryBudgetKey: String?
     @State private var categoryBudgetAmountText = ""
     @State private var showBudgetPlanEditor = false
+    @State private var editingBudgetPlan: BudgetPlanRecord?
+    @State private var editingOverrideCurrent = false
+    @State private var budgetPlanToArchive: BudgetPlanRecord?
+    @State private var showArchiveBudgetPlanConfirmation = false
     @State private var showSpecialTrackingEditor = false
     @State private var matchingOccurrence: BudgetCommitmentOccurrenceRecord?
 
@@ -54,6 +59,14 @@ struct BudgetSettingView: View {
         LedgerScope.filter(transactions, selectedBookID: router.selectedBookID)
     }
 
+    private var effectiveBookID: UUID? {
+        router.selectedBookID ?? books.first(where: \.isDefault)?.stableID
+    }
+
+    private var hasActivePrimaryBudgetPlanV2: Bool {
+        activeBudgetPlansV2.contains { $0.roleRaw == "primary" }
+    }
+
     var body: some View {
         Form {
             Section {
@@ -62,6 +75,8 @@ struct BudgetSettingView: View {
                 }
                 HStack {
                     Button {
+                        editingBudgetPlan = nil
+                        editingOverrideCurrent = false
                         showBudgetPlanEditor = true
                     } label: {
                         Label("新建预算计划", systemImage: "calendar.badge.plus")
@@ -131,44 +146,54 @@ struct BudgetSettingView: View {
                 }
             }
 
-            Section {
-                TextField("预算金额", text: $amountText)
-                    .keyboardType(.decimalPad)
-            }
+            if !hasActivePrimaryBudgetPlanV2 {
+                Section {
+                    TextField("预算金额", text: $amountText)
+                        .keyboardType(.decimalPad)
+                }
 
-            Section("预算周期") {
-                Picker("周期", selection: $cycle) {
-                    Text("每月").tag(BudgetCycle.monthly)
-                    Text("每周").tag(BudgetCycle.weekly)
-                    Text("自定义").tag(BudgetCycle.custom)
-                }
-                if cycle == .weekly {
-                    DatePicker("周期参考日", selection: $startDate, displayedComponents: .date)
-                } else if cycle == .custom {
-                    DatePicker("开始日期", selection: $startDate, displayedComponents: .date)
-                    DatePicker("结束日期", selection: $endDate, displayedComponents: .date)
-                }
-                Picker("适用账本", selection: $budgetBookID) {
-                    Text("总账本").tag(Optional<UUID>.none)
-                    ForEach(books) { book in
-                        Text(book.name).tag(Optional(book.stableID))
+                Section("预算周期") {
+                    Picker("周期", selection: $cycle) {
+                        Text("每月").tag(BudgetCycle.monthly)
+                        Text("每周").tag(BudgetCycle.weekly)
+                        Text("自定义").tag(BudgetCycle.custom)
+                    }
+                    if cycle == .weekly {
+                        DatePicker("周期参考日", selection: $startDate, displayedComponents: .date)
+                    } else if cycle == .custom {
+                        DatePicker("开始日期", selection: $startDate, displayedComponents: .date)
+                        DatePicker("结束日期", selection: $endDate, displayedComponents: .date)
+                    }
+                    Picker("适用账本", selection: $budgetBookID) {
+                        Text("总账本").tag(Optional<UUID>.none)
+                        ForEach(books) { book in
+                            Text(book.name).tag(Optional(book.stableID))
+                        }
                     }
                 }
-            }
 
-            Section {
-                Button("保存预算") {
-                    save()
+                Section {
+                    Button("保存预算") {
+                        save()
+                    }
+                    .disabled(parsedAmount == nil || parsedAmount! < 0 ||
+                              (cycle == .custom && endDate < startDate))
+                    .liquidGlassPrimaryPillControl(horizontalPadding: 16, minHeight: 48)
+                    .frame(maxWidth: .infinity)
+                } footer: {
+                    Text("设为 0 可停用计划；退款和报销会按原账单净额参与执行。")
                 }
-                .disabled(parsedAmount == nil || parsedAmount! < 0 ||
-                          (cycle == .custom && endDate < startDate))
-                .liquidGlassPrimaryPillControl(horizontalPadding: 16, minHeight: 48)
-                .frame(maxWidth: .infinity)
-            } footer: {
-                Text("设为 0 可停用计划；退款和报销会按原账单净额参与执行。")
             }
 
-            if let budget = totalBudget, budget.amount > 0 {
+            if let status = currentV2BudgetStatus, status.monthlyBudget > 0 {
+                Section {
+                    v2MonthProgress(status)
+                        .listRowInsets(EdgeInsets())
+                        .listRowBackground(Color.clear)
+                }
+            } else if !hasActivePrimaryBudgetPlanV2,
+                      let budget = totalBudget,
+                      budget.amount > 0 {
                 Section {
                     monthProgress(budget)
                         .listRowInsets(EdgeInsets())
@@ -176,21 +201,23 @@ struct BudgetSettingView: View {
                 }
             }
 
-            Section {
-                ForEach(categoryBudgets) { budget in
-                    categoryBudgetRow(budget)
+            if !hasActivePrimaryBudgetPlanV2 {
+                Section {
+                    ForEach(categoryBudgets) { budget in
+                        categoryBudgetRow(budget)
+                    }
+                    Button {
+                        categoryBudgetKey = nil
+                        categoryBudgetAmountText = ""
+                        showCategoryBudgetSheet = true
+                    } label: {
+                        Label("添加分类预算", systemImage: "plus.circle")
+                    }
+                } header: {
+                    Text("分类预算")
+                } footer: {
+                    Text("分类预算只用于拆分查看，不会和总预算重复相加。")
                 }
-                Button {
-                    categoryBudgetKey = nil
-                    categoryBudgetAmountText = ""
-                    showCategoryBudgetSheet = true
-                } label: {
-                    Label("添加分类预算", systemImage: "plus.circle")
-                }
-            } header: {
-                Text("分类预算")
-            } footer: {
-                Text("分类预算只用于拆分查看，不会和总预算重复相加。")
             }
         }
         .scrollContentBackground(.hidden)
@@ -209,7 +236,10 @@ struct BudgetSettingView: View {
                 .presentationDetents([.medium])
         }
         .sheet(isPresented: $showBudgetPlanEditor) {
-            BudgetV2PlanEditorView()
+            BudgetV2PlanEditorView(
+                plan: editingBudgetPlan,
+                overrideCurrent: editingOverrideCurrent
+            )
         }
         .sheet(isPresented: $showSpecialTrackingEditor) {
             BudgetV2SpecialEditorView()
@@ -217,13 +247,25 @@ struct BudgetSettingView: View {
         .sheet(item: $matchingOccurrence) { occurrence in
             BudgetCommitmentMatchView(occurrence: occurrence)
         }
+        .confirmationDialog(
+            "归档预算计划",
+            isPresented: $showArchiveBudgetPlanConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("归档", role: .destructive) {
+                if let budgetPlanToArchive { archiveBudgetPlan(budgetPlanToArchive) }
+            }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text("归档只会停止后续周期，不会删除历史预算修订和固定承诺记录。")
+        }
         .onAppear {
             try? BudgetCommitmentStore.materializeCurrent(in: context, now: AppClock.now)
             try? BudgetCommitmentStore.refreshRefundReviews(in: context)
-            if let budget = totalBudget, budget.amount > 0 {
+            if !hasActivePrimaryBudgetPlanV2, let budget = totalBudget, budget.amount > 0 {
                 amountText = "\(budget.amount)"
             }
-            if let budget = totalBudget {
+            if !hasActivePrimaryBudgetPlanV2, let budget = totalBudget {
                 cycle = budget.cycle
                 startDate = budget.periodStart ?? AppClock.now
                 endDate = budget.periodEnd ?? startDate
@@ -243,7 +285,10 @@ struct BudgetSettingView: View {
     }
 
     private var activeBudgetPlansV2: [BudgetPlanRecord] {
-        budgetPlansV2.filter { $0.statusRaw == BudgetPlanStatusV2.active.rawValue }
+        budgetPlansV2.filter {
+            $0.statusRaw == BudgetPlanStatusV2.active.rawValue &&
+            (effectiveBookID == nil || $0.bookID == effectiveBookID)
+        }
     }
 
     private var currentFixedOccurrences: [BudgetCommitmentOccurrenceRecord] {
@@ -276,10 +321,7 @@ struct BudgetSettingView: View {
     }
 
     private func budgetPlanRow(_ plan: BudgetPlanRecord) -> some View {
-        let revision = budgetRevisionsV2
-            .filter { $0.planID == plan.stableID }
-            .sorted { $0.effectiveCycleStart > $1.effectiveCycleStart }
-            .first
+        let revision = displayRevision(for: plan)
         let amount = revision.map { Decimal($0.amountCents) / Decimal(100) } ?? 0
         let fixedCount = revision.map {
             BudgetPlanRevisionRecord.decodeTemplates($0.fixedTemplatesJSON).count
@@ -301,6 +343,82 @@ struct BudgetSettingView: View {
             Text(MoneyFormat.string(amount, currencyCode: currencyCode))
                 .font(.callout.monospacedDigit())
                 .foregroundStyle(.primary)
+            Menu {
+                if !isSpecial {
+                    Button("下周期修改") {
+                        editBudgetPlan(plan, overrideCurrent: false)
+                    }
+                    Button("调整本周期") {
+                        editBudgetPlan(plan, overrideCurrent: true)
+                    }
+                }
+                Button("归档", role: .destructive) {
+                    budgetPlanToArchive = plan
+                    showArchiveBudgetPlanConfirmation = true
+                }
+            } label: {
+                Image(systemName: "ellipsis.circle")
+                    .foregroundStyle(.secondary)
+            }
+            .accessibilityLabel("预算计划操作")
+        }
+    }
+
+    private var currentV2BudgetStatus: BudgetStatus? {
+        guard let bookID = effectiveBookID else {
+            return nil
+        }
+        let records = scopedTransactions
+            .map(\.record)
+            .filter { $0.bookID == bookID }
+        return BudgetStore.currentStatusV2(
+            plans: budgetPlansV2.map(\.core),
+            revisions: budgetRevisionsV2.map(\.core),
+            overrides: budgetOverridesV2.map(\.core),
+            bookID: bookID,
+            records: records,
+            referenceDate: AppClock.now,
+            knowledgeCutoff: AppClock.now
+        )
+    }
+
+    private func displayRevision(for plan: BudgetPlanRecord) -> BudgetPlanRevisionRecord? {
+        let cycle = plan.core.cycle(for: AppClock.now)
+        return budgetRevisionsV2
+            .filter { $0.planID == plan.stableID && $0.core.applies(to: cycle) }
+            .sorted {
+                if $0.effectiveCycleStart != $1.effectiveCycleStart {
+                    return $0.effectiveCycleStart < $1.effectiveCycleStart
+                }
+                return $0.stableID.uuidString < $1.stableID.uuidString
+            }
+            .last
+    }
+
+    private func editBudgetPlan(_ plan: BudgetPlanRecord, overrideCurrent: Bool) {
+        editingBudgetPlan = plan
+        editingOverrideCurrent = overrideCurrent
+        showBudgetPlanEditor = true
+    }
+
+    private func archiveBudgetPlan(_ plan: BudgetPlanRecord) {
+        guard plan.statusRaw == BudgetPlanStatusV2.active.rawValue else { return }
+        let now = Date()
+        plan.statusRaw = BudgetPlanStatusV2.archived.rawValue
+        plan.updatedAt = now
+        let event = BudgetChangeEventRecord(
+            planID: plan.stableID,
+            eventType: "plan_archived",
+            beforeJSON: "{\"status\":\"active\"}",
+            afterJSON: "{\"status\":\"archived\"}"
+        )
+        event.createdAt = now
+        context.insert(event)
+        do {
+            try context.save()
+            budgetPlanToArchive = nil
+        } catch {
+            message = error.localizedDescription
         }
     }
 
@@ -445,13 +563,21 @@ struct BudgetSettingView: View {
             transactions: scopedTransactions,
             referenceDate: AppClock.now
         )
-        let ratio = min(max(MoneyFormat.double(status.spentThisMonth) / max(MoneyFormat.double(budget.amount), 0.01), 0), 1)
+        return budgetProgressCard(amount: budget.amount, status: status)
+    }
+
+    private func v2MonthProgress(_ status: BudgetStatus) -> some View {
+        budgetProgressCard(amount: status.monthlyBudget, status: status)
+    }
+
+    private func budgetProgressCard(amount: Decimal, status: BudgetStatus) -> some View {
+        let ratio = min(max(MoneyFormat.double(status.spentThisMonth) / max(MoneyFormat.double(amount), 0.01), 0), 1)
         return VStack(alignment: .leading, spacing: 8) {
             HStack {
                 Text("当前周期进度")
                     .font(.headline)
                 Spacer()
-                Text("已花 \(MoneyFormat.string(status.spentThisMonth, currencyCode: currencyCode)) / \(MoneyFormat.string(budget.amount, currencyCode: currencyCode))")
+                Text("已花 \(MoneyFormat.string(status.spentThisMonth, currencyCode: currencyCode)) / \(MoneyFormat.string(amount, currencyCode: currencyCode))")
                     .font(.caption.monospacedDigit())
                     .foregroundStyle(status.isOverBudget ? Color.warning : Color.secondary)
                     .lineLimit(1)

@@ -136,11 +136,10 @@ struct BackupView: View {
     private func importArchive(_ result: Result<URL, Error>) {
         do {
             let url = try result.get()
-            guard url.startAccessingSecurityScopedResource() else {
-                message = "无法读取所选备份文件"
-                return
+            let isSecurityScoped = url.startAccessingSecurityScopedResource()
+            defer {
+                if isSecurityScoped { url.stopAccessingSecurityScopedResource() }
             }
-            defer { url.stopAccessingSecurityScopedResource() }
             _ = try BackupStore.createLocalBackup(context: context)
             let summary = try BackupStore.importData(try Data(contentsOf: url), into: context)
             refreshDerivedState()

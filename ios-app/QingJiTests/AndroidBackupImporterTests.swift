@@ -56,6 +56,27 @@ final class AndroidBackupImporterTests: XCTestCase {
             );
             INSERT INTO transactions VALUES (1, '11111111111111111111111111111111', 1, 'expense', '100', 'CNY', 1, 1, NULL, '午餐', 1725000000000, 'exact', '1', 0, '', NULL, 0, 1725000000000, NULL, 1725000000000, NULL, 'unknown', NULL, 'unknown', 'expense', 'ORDER-1');
             INSERT INTO transactions VALUES (2, '22222222222222222222222222222222', 1, 'expense', '-40', 'CNY', 1, 1, NULL, '退款', 1725000000000, 'exact', '1', 0, '', NULL, 0, 1725000000000, 1, 1725000000000, NULL, 'unknown', NULL, 'unknown', 'refund', 'ORDER-1');
+            CREATE TABLE physical_assets (
+              id INTEGER PRIMARY KEY, uuid TEXT, book_id INTEGER, name TEXT,
+              asset_type TEXT, purchase_price TEXT, current_value TEXT,
+              currency_code TEXT, include_in_net_worth INTEGER, is_deleted INTEGER
+            );
+            INSERT INTO physical_assets VALUES (1, '55555555555555555555555555555555', 1, '测试物品', 'other', '70', '60', 'CNY', 1, 0);
+            CREATE TABLE asset_transaction_links (
+              id INTEGER PRIMARY KEY, uuid TEXT, asset_id INTEGER,
+              asset_object_type TEXT, transaction_id INTEGER, link_type TEXT,
+              amount TEXT, allocated_gross_cents INTEGER,
+              allocated_refund_cents INTEGER, cost_quality TEXT, note TEXT,
+              created_ms INTEGER, updated_ms INTEGER
+            );
+            INSERT INTO asset_transaction_links VALUES (1, '66666666666666666666666666666666', 1, 'physical', 1, 'source_transaction', '70', 7000, 3000, 'exact', '', 1725000000000, 1725000000000);
+            CREATE TABLE asset_refund_allocations (
+              id INTEGER PRIMARY KEY, uuid TEXT, asset_transaction_link_id INTEGER,
+              refund_transaction_id INTEGER, allocated_refund_cents INTEGER,
+              status TEXT, created_ms INTEGER, updated_ms INTEGER
+            );
+            INSERT INTO asset_refund_allocations VALUES (1, '77777777777777777777777777777777', 1, 2, 3000, 'active', 1725000000000, 1725000000000);
+            INSERT INTO asset_refund_allocations VALUES (2, '88888888888888888888888888888888', 0, 2, 1000, 'active', 1725000000000, 1725000000000);
             CREATE TABLE ai_runs (
               id TEXT PRIMARY KEY, idempotency_key TEXT, session_id TEXT,
               mode TEXT, provider_id TEXT, provider_label TEXT, model TEXT,
@@ -97,6 +118,13 @@ final class AndroidBackupImporterTests: XCTestCase {
         XCTAssertEqual(package.transactions[0].id, UUID(uuidString: "11111111-1111-1111-1111-111111111111"))
         XCTAssertEqual(package.transactions[1].refundOfID, package.transactions[0].id)
         XCTAssertEqual(package.transactions[0].tags, ["工作"])
+        XCTAssertEqual(package.physicalAssets.count, 1)
+        XCTAssertEqual(package.assetTransactionLinks.first?.allocatedRefundCents, 3_000)
+        XCTAssertEqual(package.assetRefundAllocations.count, 2)
+        XCTAssertTrue(package.assetRefundAllocations.contains {
+            $0.assetTransactionLinkID == AssetRefundAllocationStore.untrackedLinkID &&
+                $0.allocatedRefundCents == 1_000
+        })
         XCTAssertEqual(package.aiRequestRuns.count, 1)
         XCTAssertEqual(package.aiRequestRuns.first?.statusRaw, "awaiting_confirmation")
         XCTAssertEqual(package.aiRequestEvents.count, 1)

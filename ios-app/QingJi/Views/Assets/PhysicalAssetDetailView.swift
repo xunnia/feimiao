@@ -20,6 +20,8 @@ struct PhysicalAssetDetailView: View {
     private var events: [AssetEvent]
     @Query
     private var valuations: [AssetValuation]
+    @Query
+    private var refundAllocations: [AssetRefundAllocation]
 
     let asset: PhysicalAsset
 
@@ -35,6 +37,7 @@ struct PhysicalAssetDetailView: View {
         case cost
         case evidence
         case depreciation
+        case refundAllocation
 
         var id: String { rawValue }
     }
@@ -119,6 +122,9 @@ struct PhysicalAssetDetailView: View {
                 case .depreciation:
                     AssetDepreciationSheet(asset: asset)
                         .presentationDetents([.medium, .large])
+                case .refundAllocation:
+                    AssetRefundAllocationSheet(asset: asset)
+                        .presentationDetents([.medium, .large])
                 }
             }
             .confirmationDialog(
@@ -199,16 +205,21 @@ struct PhysicalAssetDetailView: View {
             detailAction("更新估值", systemImage: "chart.line.uptrend.xyaxis", enabled: isOwned) {
                 activeSheet = .value
             }
+            if !pendingRefundAllocations.isEmpty {
+                detailAction("分配退款", systemImage: "arrow.triangle.branch", enabled: true) {
+                    activeSheet = .refundAllocation
+                }
+            }
             if isOwned {
                 detailAction("关联支出", systemImage: "link", enabled: true) {
                     activeSheet = .cost
                 }
-                if asset.usageTrackingEnabled {
-                    detailAction("记录使用", systemImage: "hand.tap", enabled: true) {
-                        perform { try AssetStore.addUsage(asset, in: context) }
-                    }
+            if asset.usageTrackingEnabled {
+                detailAction("记录使用", systemImage: "hand.tap", enabled: true) {
+                    perform { try AssetStore.addUsage(asset, in: context) }
                 }
-                detailAction("出售物品", systemImage: "tag", enabled: true) {
+            }
+            detailAction("出售物品", systemImage: "tag", enabled: true) {
                     activeSheet = .sale
                 }
                 detailAction("确认退货", systemImage: "arrow.uturn.backward", enabled: true) {
@@ -228,6 +239,14 @@ struct PhysicalAssetDetailView: View {
                 }
             }
         }
+    }
+
+    private var pendingRefundAllocations: [PendingPhysicalAssetRefundAllocation] {
+        _ = refundAllocations.count
+        return (try? AssetRefundAllocationStore.pendingRefundAllocations(
+            for: asset,
+            in: context
+        )) ?? []
     }
 
     private func detailAction(
@@ -311,16 +330,18 @@ struct PhysicalAssetDetailView: View {
                         Spacer()
                         Text(MoneyFormat.string(link.amount, currencyCode: asset.currencyCode))
                             .font(.subheadline.monospacedDigit().weight(.semibold))
-                        if linkType != .sourceTransaction &&
-                            linkType != .purchaseTransaction &&
-                            linkType != .saleAccountMovement {
+                        if linkType != .saleAccountMovement {
                             Button {
                                 perform { try AssetStore.unlinkCost(link, in: context) }
                             } label: {
                                 Image(systemName: "link.badge.minus")
                             }
                             .buttonStyle(.borderless)
-                            .accessibilityLabel("解除关联")
+                            .accessibilityLabel(
+                                linkType == .sourceTransaction || linkType == .purchaseTransaction
+                                    ? "解除购置关联"
+                                    : "解除关联"
+                            )
                         }
                     }
                 }

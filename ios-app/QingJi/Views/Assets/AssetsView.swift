@@ -37,8 +37,10 @@ struct AssetsView: View {
     @State private var selectedTab: AssetTab = .funds
     @State private var showNewAsset = false
     @State private var showNewReceivable = false
+    @State private var showBorrowSheet = false
+    @State private var showLoanWizard = false
     @State private var detailAsset: PhysicalAsset?
-    @State private var editingReceivable: ReceivableAsset?
+    @State private var detailReceivable: ReceivableAsset?
     @State private var recoveryAsset: ReceivableAsset?
     @State private var terminalAsset: PhysicalAsset?
     @State private var errorMessage: String?
@@ -115,6 +117,16 @@ struct AssetsView: View {
                     } label: {
                         Label("新增权益", systemImage: "arrow.down.left.circle")
                     }
+                    Button {
+                        showBorrowSheet = true
+                    } label: {
+                        Label("记一笔借入", systemImage: "arrow.down.left")
+                    }
+                    Button {
+                        showLoanWizard = true
+                    } label: {
+                        Label("房贷/分期向导", systemImage: "house")
+                    }
                 } label: {
                     Image(systemName: "plus")
                 }
@@ -134,8 +146,16 @@ struct AssetsView: View {
             ReceivableEditor(asset: nil)
                 .presentationDetents([.large])
         }
-        .sheet(item: $editingReceivable) { asset in
-            ReceivableEditor(asset: asset)
+        .sheet(isPresented: $showBorrowSheet) {
+            BorrowEntrySheet()
+                .presentationDetents([.medium, .large])
+        }
+        .sheet(isPresented: $showLoanWizard) {
+            LoanWizardSheet()
+                .presentationDetents([.large])
+        }
+        .sheet(item: $detailReceivable) { asset in
+            ReceivableDetailView(asset: asset)
                 .presentationDetents([.large])
         }
         .sheet(item: $recoveryAsset) { asset in
@@ -249,6 +269,33 @@ struct AssetsView: View {
                 }
                 .buttonStyle(.plain)
             }
+            if hasLendingRecords {
+                NavigationLink {
+                    LendingView()
+                } label: {
+                    HStack(spacing: 10) {
+                        Image(systemName: "person.2")
+                            .frame(width: 28)
+                            .foregroundStyle(Color.accentColor)
+                        Text("借贷往来")
+                        Spacer()
+                        Image(systemName: "chevron.right")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(12)
+                    .glassEffect(.regular, in: .rect(cornerRadius: 14))
+                }
+                .buttonStyle(.plain)
+            }
+        }
+    }
+
+    private var hasLendingRecords: Bool {
+        receivables.contains {
+            !$0.isDeleted && $0.kind == .loanOut
+        } || liabilities.contains {
+            $0.kind == .personalBorrow && $0.lifecycle != .archived
         }
     }
 
@@ -358,7 +405,7 @@ struct AssetsView: View {
     private func receivableRow(_ asset: ReceivableAsset) -> some View {
         HStack(spacing: 12) {
             Button {
-                editingReceivable = asset
+                detailReceivable = asset
             } label: {
                 HStack(spacing: 12) {
                     Image(systemName: "arrow.down.left.circle.fill")
@@ -421,6 +468,256 @@ struct AssetsView: View {
         do {
             try AssetStore.setLifecycle(asset, lifecycle: lifecycle, in: context)
             terminalAsset = nil
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+}
+
+struct ReceivableDetailView: View {
+    @Environment(\.modelContext) private var context
+    @Query(sort: \ReceivableRecovery.recoveredAt, order: .reverse)
+    private var allRecoveries: [ReceivableRecovery]
+    @Query(sort: \AssetEvent.occurredAt, order: .reverse)
+    private var allEvents: [AssetEvent]
+    @Query(sort: \Account.sortOrder)
+    private var accounts: [Account]
+
+    let asset: ReceivableAsset
+    @State private var showEditor = false
+    @State private var showRecovery = false
+    @State private var errorMessage: String?
+
+    private var recoveries: [ReceivableRecovery] {
+        allRecoveries.filter { $0.receivableID == asset.stableID }
+    }
+
+    private var events: [AssetEvent] {
+        allEvents.filter { $0.assetID == asset.stableID }
+    }
+
+    private var canRecover: Bool {
+        asset.remainingAmount > 0 &&
+            asset.lifecycle != .lost &&
+            asset.lifecycle != .archived
+    }
+
+    var body: some View {
+        List {
+            Section {
+                VStack(alignment: .leading, spacing: 12) {
+                    HStack(alignment: .firstTextBaseline) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("剩余可收回")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            Text(MoneyFormat.string(asset.remainingAmount, currencyCode: asset.currencyCode))
+                                .font(.system(size: 30, weight: .semibold, design: .rounded))
+                                .monospacedDigit()
+                        }
+                        Spacer()
+                        Text(asset.lifecycle.label)
+                            .font(.caption.weight(.medium))
+                            .foregroundStyle(statusColor)
+                            .padding(.horizontal, 9)
+                            .padding(.vertical, 5)
+                            .background(statusColor.opacity(0.12), in: .capsule)
+                    }
+                    HStack(spacing: 18) {
+                        detailMetric("原始金额", MoneyFormat.string(asset.originalAmount, currencyCode: asset.currencyCode))
+                        detailMetric("已收回", MoneyFormat.string(asset.originalAmount - asset.remainingAmount, currencyCode: asset.currencyCode))
+                    }
+                }
+                .padding(.vertical, 5)
+            }
+
+            Section("权益信息") {
+                LabeledContent("类型", value: asset.kind.label)
+                if !asset.counterparty.isEmpty {
+                    LabeledContent("对方", value: asset.counterparty)
+                }
+                if let dueDate = asset.dueDate {
+                    LabeledContent("到期日期", value: dueDate.formatted(date: .abbreviated, time: .omitted))
+                    if canRecover && dueDate < Calendar.current.startOfDay(for: AppClock.now) {
+                        Label("已超过预计收回日期", systemImage: "exclamationmark.triangle")
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                    }
+                }
+                LabeledContent("净资产", value: asset.includeInNetWorth ? "计入" : "不计入")
+                if !asset.note.isEmpty {
+                    Text(asset.note)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            Section {
+                Button {
+                    showRecovery = true
+                } label: {
+                    Label("收回权益", systemImage: "arrow.down.left.circle")
+                }
+                .disabled(!canRecover)
+
+                Button {
+                    showEditor = true
+                } label: {
+                    Label("编辑权益", systemImage: "pencil")
+                }
+            }
+
+            if !recoveries.isEmpty {
+                Section("收回记录") {
+                    ForEach(recoveries) { recovery in
+                        HStack(spacing: 10) {
+                            Image(systemName: "arrow.down.left.circle.fill")
+                                .foregroundStyle(Color.accentColor)
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(MoneyFormat.string(recovery.amount, currencyCode: asset.currencyCode))
+                                    .font(.body.monospacedDigit().weight(.medium))
+                                HStack(spacing: 5) {
+                                    Text(recovery.recoveredAt, format: .dateTime.year().month().day())
+                                    if let accountName = accountName(for: recovery), !accountName.isEmpty {
+                                        Text("· \(accountName)")
+                                    }
+                                    if !recovery.note.isEmpty {
+                                        Text("· \(recovery.note)")
+                                            .lineLimit(1)
+                                    }
+                                }
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                        }
+                        .padding(.vertical, 3)
+                    }
+                    Button("撤销最近一次收回", role: .destructive) {
+                        undoLatestRecovery()
+                    }
+                    .disabled(recoveries.first == nil)
+                }
+            }
+
+            if !events.isEmpty {
+                Section("权益事件") {
+                    ForEach(events.prefix(12), id: \.stableID) { event in
+                        HStack(spacing: 10) {
+                            Image(systemName: event.kind == .receivableRecovered ? "arrow.down.left.circle" : "clock.arrow.circlepath")
+                                .foregroundStyle(event.kind == .receivableLost ? Color.orange : Color.accentColor)
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(event.kind.label)
+                                    .font(.subheadline.weight(.medium))
+                                HStack(spacing: 5) {
+                                    Text(event.occurredAt, format: .dateTime.year().month().day())
+                                    if let value = event.value {
+                                        Text("· \(MoneyFormat.string(value, currencyCode: asset.currencyCode))")
+                                    }
+                                }
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                if !event.note.isEmpty {
+                                    Text(event.note)
+                                        .font(.caption2)
+                                        .foregroundStyle(.secondary)
+                                        .lineLimit(1)
+                                }
+                            }
+                            Spacer()
+                        }
+                        .padding(.vertical, 2)
+                    }
+                }
+            }
+        }
+        .listStyle(.insetGrouped)
+        .scrollContentBackground(.hidden)
+        .liquidGlassCanvas()
+        .navigationTitle(asset.name)
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Menu {
+                    if asset.lifecycle == .archived {
+                        Button("恢复权益") { setLifecycle(.active) }
+                    } else {
+                        Button("归档权益") { setLifecycle(.archived) }
+                    }
+                    if asset.lifecycle != .lost && asset.remainingAmount > 0 {
+                        Button("标记损失", role: .destructive) { markLost() }
+                    }
+                } label: {
+                    Image(systemName: "ellipsis")
+                }
+                .liquidGlassCircleControl()
+                .accessibilityLabel("更多权益操作")
+            }
+        }
+        .sheet(isPresented: $showEditor) {
+            ReceivableEditor(asset: asset)
+                .presentationDetents([.large])
+        }
+        .sheet(isPresented: $showRecovery) {
+            ReceivableRecoverySheet(asset: asset)
+                .presentationDetents([.medium])
+        }
+        .alert("操作失败", isPresented: Binding(
+            get: { errorMessage != nil },
+            set: { if !$0 { errorMessage = nil } }
+        )) {
+            Button("好") { errorMessage = nil }
+        } message: {
+            Text(errorMessage ?? "")
+        }
+    }
+
+    private var statusColor: Color {
+        switch asset.lifecycle {
+        case .active, .partiallyRecovered: return .accentColor
+        case .recovered: return .secondary
+        case .lost, .archived: return .orange
+        }
+    }
+
+    private func detailMetric(_ title: String, _ value: String) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(title)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Text(value)
+                .font(.caption.monospacedDigit().weight(.medium))
+        }
+    }
+
+    private func accountName(for recovery: ReceivableRecovery) -> String? {
+        guard let id = recovery.targetAccountID else { return nil }
+        return accounts.first(where: { $0.stableID == id })?.name
+    }
+
+    private func undoLatestRecovery() {
+        do {
+            try ReceivableStore.undoLatestRecovery(asset, in: context)
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private func setLifecycle(_ lifecycle: ReceivableLifecycle) {
+        do {
+            if lifecycle == .archived {
+                try ReceivableStore.archive(asset, in: context)
+            } else {
+                try ReceivableStore.restore(asset, in: context)
+            }
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private func markLost() {
+        do {
+            try ReceivableStore.setLost(asset, in: context)
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -935,7 +1232,7 @@ private struct ReceivableEditor: View {
     }
 }
 
-private struct ReceivableRecoverySheet: View {
+struct ReceivableRecoverySheet: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var context
     @Query(sort: \Account.sortOrder)
