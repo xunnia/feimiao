@@ -416,36 +416,4 @@ jobs:
           name: parity-visual-comparisons
           path: ci-artifacts/parity-comparisons/*.png
           if-no-files-found: error
-      - name: Commit parity report back to branch
-        if: github.event_name == 'push'
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add -f ci-artifacts/screenshot-report.json ci-artifacts/screenshot-report.md
-          git add -f ci-artifacts/p0-business-diff.json ci-artifacts/p0-business-diff.md
-          git add -f ci-artifacts/parity-comparisons
-          if git diff --cached --quiet; then
-            echo "双端截图报告无变化，跳过提交"
-            exit 0
-          fi
-          # Screenshot downloads overwrite the tracked iOS baseline in this
-          # fresh CI checkout. Restore only those generated inputs before
-          # rebasing the small report commit onto a concurrent iOS artifact
-          # commit; the report remains staged.
-          git restore -- ci-artifacts/ios-screenshots
-          git commit -m "ci: 更新双端截图报告 [skip ci]"
-          branch="${GITHUB_REF_NAME}"
-          for attempt in 1 2 3; do
-            echo "回写双端报告（第 ${attempt}/3 次）"
-            if git fetch origin "${branch}" && \
-              git rebase "origin/${branch}" && \
-              git push origin HEAD:"${branch}"; then
-              exit 0
-            fi
-            git rebase --abort || true
-            if [ "${attempt}" -lt 3 ]; then
-              sleep $((attempt * 5))
-            fi
-          done
-          echo "::error::双端截图报告回写在 3 次尝试后仍失败"
-          exit 1
+      # Reports and comparison images are delivered as Actions artifacts above.

@@ -1,5 +1,11 @@
 *.log
 
+# Generated delivery artifacts stay outside the source tree.
+/ci-artifacts/
+/.tmp/
+/salvaged-*/
+*.ipa
+
 # Local build and release artifacts. Release binaries belong in local/remote
 # artifact storage, never in source-control history.
 *.apk

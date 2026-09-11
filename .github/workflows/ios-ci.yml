@@ -460,30 +460,9 @@ jobs:
       - name: Extract iOS performance benchmark
         run: |
           grep 'IOS_PERF_COMPARISON' ci-artifacts/ios-performance/xcodebuild-tests.log | tail -n 1 > ci-artifacts/ios-performance-benchmark.txt || true
-      - name: Commit artifacts back to branch
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add ci-artifacts/ios-screenshots
-          git add -f ci-artifacts/releases/QingJi-unsigned.ipa ci-artifacts/releases/QingJi-noext.ipa
-          git add -f ci-artifacts/ios-performance-benchmark.txt
-          if git diff --cached --quiet; then
-            echo "iOS 产物无变化，跳过提交"
-            exit 0
-          fi
-          git commit -m "ci: 更新 iOS 截图与 IPA [skip ci]"
-          branch="${GITHUB_REF_NAME}"
-          for attempt in 1 2 3; do
-            echo "回写 iOS 产物（第 ${attempt}/3 次）"
-            if git fetch origin "${branch}" && \
-              git rebase "origin/${branch}" && \
-              git push origin HEAD:"${branch}"; then
-              exit 0
-            fi
-            git rebase --abort || true
-            if [ "${attempt}" -lt 3 ]; then
-              sleep $((attempt * 5))
-            fi
-          done
-          echo "::error::iOS 产物回写在 3 次尝试后仍失败"
-          exit 1
+      - name: Upload collected iOS delivery artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-delivery
+          path: ci-artifacts/
+          retention-days: 30
