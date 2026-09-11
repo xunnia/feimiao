@@ -2510,6 +2510,25 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
       await repo.ready;
       if (!mounted) return;
     }
+    // Direct Chats entry can be opened before the post-frame convergence has
+    // hydrated provider health, memories, tools and session metadata.  Wait
+    // for that same barrier as the home launcher so the first request resolves
+    // the persisted provider instead of falling back to defaults.
+    if (!repo.isAiReady) {
+      await repo.aiReady;
+      if (!mounted) return;
+    }
+    // Queries that use account history still need the full ledger snapshot;
+    // this remains a request-time wait and no longer blocks the first home
+    // frame or the ability to open the input panel.
+    if (repo.isHydrating) {
+      await repo.fullyReady;
+      if (!mounted) return;
+      if (!repo.isFullyReady) {
+        _snack('账本加载未完成，请先重试加载');
+        return;
+      }
+    }
     if (widget.recordOnly &&
         !repo.aiSkillAllowsTool('ledger_assistant', 'create_transactions')) {
       _snack('记账助手已关闭，请先在 AI 设置中重新开启');
@@ -3337,6 +3356,17 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
     if (repo.isInitializing) {
       await repo.ready;
       if (!mounted || !_ownsFlow(flowId)) return;
+    }
+    if (!repo.isAiReady) {
+      await repo.aiReady;
+      if (!mounted || !_ownsFlow(flowId)) return;
+    }
+    if (repo.isHydrating) {
+      await repo.fullyReady;
+      if (!mounted || !_ownsFlow(flowId)) return;
+      if (!repo.isFullyReady) {
+        throw StateError('账本加载未完成，请先重试加载');
+      }
     }
     // Claude's Tool access control applies to the whole Chats session, not
     // to a provider. With tools off, a query/report must stay a plain chat

@@ -28,6 +28,7 @@ class DecodedBackupPackage {
   final int databaseVersion;
   final DateTime? createdAt;
   final Map<String, Uint8List> files;
+  final Map<String, String> diskFiles;
   final Map<String, dynamic> manifest;
 
   const DecodedBackupPackage({
@@ -35,6 +36,7 @@ class DecodedBackupPackage {
     required this.databaseVersion,
     required this.createdAt,
     required this.files,
+    this.diskFiles = const {},
     required this.manifest,
   });
 }
@@ -152,9 +154,51 @@ class BackupPackageCodec {
   }
 
   static DecodedBackupPackage decode(Uint8List bytes) {
+    return _decode(InputStream(bytes));
+  }
+
+  /// Read the ZIP from disk and retain only one decoded payload at a time.
+  /// The caller owns the private staging directory and removes it on failure.
+  static DecodedBackupPackage decodeToDirectory(String source, String output) {
+    final input = InputFileStream(source);
+    try {
+      return _decode(input, output: Directory(output));
+    } finally {
+      input.closeSync();
+    }
+  }
+
+  static DecodedBackupPackage decodeFileRequest(List<String> paths) =>
+      decodeToDirectory(paths[0], paths[1]);
+
+  static DecodedBackupPackage _decode(InputStreamBase input,
+      {Directory? output}) {
     late final Archive archive;
     try {
-      archive = ZipDecoder().decodeBytes(bytes, verify: true);
+      // Inspect sizes/paths before decoding any payload (including symlinks).
+      final directory = ZipDirectory.read(input);
+      if (directory.fileHeaders.length > 10000) {
+        throw const BackupPackageException('Backup contains too many files.');
+      }
+      var total = 0;
+      for (final header in directory.fileHeaders) {
+        final size = header.uncompressedSize ?? 0;
+        final mode = (header.externalFileAttributes ?? 0) >> 16;
+        if ((mode & 0xF000) == 0xA000 ||
+            (header.filename != manifestPath &&
+                !isSafePayloadPath(header.filename))) {
+          throw const BackupPackageException('Backup contains an unsafe path.');
+        }
+        total += size;
+        if (size > 128 * 1024 * 1024 ||
+            total > 2 * 1024 * 1024 * 1024 ||
+            (header.filename == manifestPath && size > 4 * 1024 * 1024)) {
+          throw const BackupPackageException(
+              'Backup exceeds safe extraction limits.');
+        }
+      }
+      input.reset();
+      archive = ZipDecoder().decodeBuffer(input, verify: false);
     } catch (_) {
       throw const BackupPackageException('Backup package is not a valid ZIP.');
     }
@@ -215,17 +259,31 @@ class BackupPackageCodec {
     }
 
     final files = <String, Uint8List>{};
+    final diskFiles = <String, String>{};
     for (final entry in checksums.entries) {
       final file = byName[entry.key];
       if (file == null) {
         throw const BackupPackageException('A backup file is missing.');
       }
       final content = _bytesOf(file);
+      if (content.length != file.size || getCrc32(content) != file.crc32) {
+        throw const BackupPackageException(
+            'Backup payload verification failed.');
+      }
       if (sha256.convert(content).toString() != entry.value) {
         throw const BackupPackageException(
             'Backup checksum verification failed.');
       }
-      files[entry.key] = content;
+      if (output == null) {
+        files[entry.key] = content;
+      } else {
+        final destination =
+            File(path.joinAll([output.path, ...path.posix.split(entry.key)]));
+        destination.parent.createSync(recursive: true);
+        destination.writeAsBytesSync(content, flush: true);
+        diskFiles[entry.key] = destination.path;
+        file.closeSync();
+      }
     }
     final rawDatabaseVersion = manifest['databaseVersion'];
     if (rawDatabaseVersion != null && rawDatabaseVersion is! int) {
@@ -238,6 +296,7 @@ class BackupPackageCodec {
       databaseVersion: rawDatabaseVersion as int? ?? 0,
       createdAt: DateTime.tryParse(manifest['createdAt']?.toString() ?? ''),
       files: Map.unmodifiable(files),
+      diskFiles: Map.unmodifiable(diskFiles),
       manifest: Map.unmodifiable(manifest),
     );
   }

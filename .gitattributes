@@ -1,0 +1,12 @@
+# Keep cross-platform contract inputs and source files byte-stable.  In
+# particular, the P0 fixture hash is defined over LF-delimited UTF-8 JSON;
+# otherwise a Windows checkout can silently turn it into CRLF and make the
+# iOS/Android parity gates disagree about the same fixture.
+*.json text eol=lf
+*.yaml text eol=lf
+*.yml text eol=lf
+*.py text eol=lf
+*.sh text eol=lf
+*.dart text eol=lf
+*.swift text eol=lf
+*.md text eol=lf

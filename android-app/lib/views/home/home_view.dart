@@ -19,6 +19,7 @@ import '../../widgets/transaction_day_list.dart';
 import '../statistics/statistics_view.dart';
 import '../settings/budget_setting_view.dart';
 import '../../widgets/app_page_route.dart';
+import '../../widgets/repository_data_gate.dart';
 
 enum _TxFilter { all, expense, income }
 
@@ -81,6 +82,14 @@ class _HomeViewState extends State<HomeView> {
 
   Future<void> _pickMonth() async {
     final repo = context.read<AppRepository>();
+    if (repo.isHydrating) {
+      try {
+        await repo.finishDeferredInitialization();
+      } catch (_) {
+        return;
+      }
+      if (!mounted || !repo.isFullyReady) return;
+    }
     // The home month selector intentionally follows the original lightweight
     // sheet (the reference design): dim the page without the heavyweight
     // blurred overlay used by form sheets.
@@ -110,6 +119,9 @@ class _HomeViewState extends State<HomeView> {
   Widget build(BuildContext context) {
     final repo = context.watch<AppRepository>();
     final isCurrent = _isCurrentMonth;
+    if (!isCurrent && repo.isHydrating) {
+      return RepositoryDataGate(builder: (_) => const SizedBox.shrink());
+    }
     final monthDate = DateTime(_year, _month);
 
     final summary = StatisticsEngine.monthlySummary(
@@ -129,9 +141,14 @@ class _HomeViewState extends State<HomeView> {
         : BudgetEngine.fromWindowResult(budgetWindow);
 
     // 所选月的交易 + 收支筛选（退款行不单独显示，挂在原账单里）。
-    final monthTx = repo.visibleTransactions
-        .where((t) => t.date.year == _year && t.date.month == _month)
-        .toList();
+    // The repository keeps this view as a stable, immutable reference.  Using
+    // it here avoids copying the entire visible ledger on every home rebuild;
+    // only the selected month's list is materialized for grouping.
+    final monthTx = [
+      for (final transaction in repo.visibleTransactionsRef)
+        if (transaction.date.year == _year && transaction.date.month == _month)
+          transaction,
+    ];
     final filtered = monthTx.where((t) {
       switch (_filter) {
         case _TxFilter.all:

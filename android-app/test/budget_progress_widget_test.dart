@@ -38,6 +38,9 @@ class _HomeSpacingRepository extends AppRepository {
   List<TransactionRecord> get allRecords => [transaction.toRecord()];
 
   @override
+  List<TransactionEntity> get visibleTransactionsRef => [transaction];
+
+  @override
   BudgetWindowResult budgetForCalendarMonth(
     DateTime month, {
     int? bookId,

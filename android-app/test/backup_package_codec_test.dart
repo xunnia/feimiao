@@ -12,6 +12,24 @@ Uint8List _zip(Archive archive) =>
     Uint8List.fromList(ZipEncoder().encode(archive)!);
 
 void main() {
+  test('disk restore validates payloads without retaining their byte arrays',
+      () async {
+    final tmp = await Directory.systemTemp.createTemp('feimiao_disk_restore_');
+    addTearDown(() => tmp.delete(recursive: true));
+    final bytes = BackupPackageCodec.encode(files: {
+      'database/qingji.db': Uint8List.fromList([1, 2]),
+      'receipts/test.jpg': Uint8List.fromList([3, 4, 5]),
+    }, databaseVersion: 49, createdAt: DateTime.utc(2026));
+    final source = File(p.join(tmp.path, 'backup.zip'));
+    await source.writeAsBytes(bytes);
+    final result = BackupPackageCodec.decodeToDirectory(
+        source.path, p.join(tmp.path, 'out'));
+    expect(result.files, isEmpty);
+    expect(result.diskFiles.length, 2);
+    expect(await File(result.diskFiles['receipts/test.jpg']!).readAsBytes(),
+        [3, 4, 5]);
+  });
+
   test('v2 round trip includes database, receipts and managed asset media', () {
     final encoded = BackupPackageCodec.encode(
       files: {
@@ -34,8 +52,7 @@ void main() {
   test('encodeToFile 流式打包与 encode 同格式，decode 原样读回', () async {
     final tmp = await Directory.systemTemp.createTemp('feimiao_codec_test');
     addTearDown(() => tmp.delete(recursive: true));
-    final db = File(p.join(tmp.path, 'qingji.db'))
-      ..writeAsBytesSync([1, 2, 3]);
+    final db = File(p.join(tmp.path, 'qingji.db'))..writeAsBytesSync([1, 2, 3]);
     final receipt = File(p.join(tmp.path, 'receipt.jpg'))
       ..writeAsBytesSync(List<int>.generate(300, (i) => i % 256));
     final out = p.join(tmp.path, 'backup.zip');

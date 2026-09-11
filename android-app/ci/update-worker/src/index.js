@@ -35,6 +35,17 @@ export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
 
+    // Old Android builds keep this hostname. Preserve path/query and Range
+    // semantics with a temporary redirect to the VPS; do not copy APK bytes
+    // through Workers or cache the mutable version pointer.
+    if (["/version.json", "/rollback.json", "/feimiao-latest.apk"].includes(url.pathname)) {
+      const target = new URL(url.pathname + url.search, "https://updates.xunni.dpdns.org");
+      return new Response(null, {
+        status: 307,
+        headers: { location: target.href, "cache-control": "no-store" },
+      });
+    }
+
     if (url.pathname === "/version.json") {
       const body = await env.UPDATES.get("version.json");
       if (body === null) return new Response("not found", { status: 404 });

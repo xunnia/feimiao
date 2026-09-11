@@ -6,6 +6,29 @@ import 'package:path/path.dart' as p;
 import 'package:qingji/core/update/app_update.dart';
 
 void main() {
+  test('APK verification rejects missing hashes and accepts matching content',
+      () async {
+    final temp = await Directory.systemTemp.createTemp('feimiao_hash_gate_');
+    addTearDown(() => temp.delete(recursive: true));
+    final apk = File(p.join(temp.path, 'test.apk'));
+    final bytes = [1, 2, 3, 4];
+    await apk.writeAsBytes(bytes);
+    expect(await AppUpdate.verifyFileSha256(apk.path, ''), isFalse);
+    expect(await AppUpdate.verifyFileSha256(apk.path, 'invalid'), isFalse);
+    expect(await AppUpdate.verifyFileSha256(apk.path, '0' * 64), isFalse);
+    expect(
+        await AppUpdate.verifyFileSha256(
+            apk.path, sha256.convert(bytes).toString().toUpperCase()),
+        isTrue);
+  });
+
+  test('new clients use VPS metadata endpoints', () {
+    expect(AppUpdate.versionJsonUrl,
+        'https://updates.xunni.dpdns.org/version.json');
+    expect(AppUpdate.rollbackJsonUrl,
+        'https://updates.xunni.dpdns.org/rollback.json');
+  });
+
   group('AppUpdateInfo.sanitizeSha256', () {
     const clean =
         '27664317590107ff6bbf538f6189612d951b5b899be264d1539d238a0cef6d0f';

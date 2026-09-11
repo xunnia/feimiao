@@ -6,11 +6,46 @@ import 'package:http/http.dart' as http;
 import 'ai_exception.dart';
 import 'ai_logger.dart';
 
+class _RequestResources {
+  final List<void Function()> _closers = [];
+  bool closed = false;
+
+  void register(void Function() close) {
+    if (closed) {
+      close();
+      throw StateError('AI request has ended');
+    }
+    _closers.add(close);
+  }
+
+  void close() {
+    if (closed) return;
+    closed = true;
+    for (final close in _closers) {
+      try {
+        close();
+      } catch (_) {
+        // A failed cleanup must not prevent closing the other sockets.
+      }
+    }
+    _closers.clear();
+  }
+}
+
 /// AI 查询请求管理器:处理并发控制、取消、重试。
 class AiRequestManager {
   AiRequestManager._();
 
   static final _activeRequests = <String, _RequestController>{};
+  static final Object _resourceScopeKey = Object();
+
+  /// Network resources belong to one managed request, never to a global task.
+  static bool get hasResourceScope => Zone.current[_resourceScopeKey] != null;
+
+  static void registerResource(void Function() close) {
+    final scope = Zone.current[_resourceScopeKey] as _RequestResources?;
+    scope?.register(close);
+  }
 
   /// 执行请求，自动处理并发控制和取消
   static Future<T> execute<T>({
@@ -43,7 +78,15 @@ class AiRequestManager {
     ));
     _activeRequests[taskId] = controller;
 
-    final requestFuture = Future<T>.sync(request);
+    final resources = _RequestResources();
+    unawaited(controller.completer.future.then<void>(
+      (_) => resources.close(),
+      onError: (_, __) => resources.close(),
+    ));
+    final requestFuture = runZoned(
+      () => Future<T>.sync(request),
+      zoneValues: {_resourceScopeKey: resources},
+    );
     // A cancelled request may still finish at the transport layer because the
     // callback does not expose an abort handle. Keep observing that losing
     // future so a later socket error never becomes an unhandled exception.
@@ -67,6 +110,7 @@ class AiRequestManager {
       }
       rethrow;
     } finally {
+      resources.close();
       // A request with the same taskId may already have replaced this one.
       // Only the current owner may clear the slot; otherwise an old finally
       // makes the new request impossible to cancel or replace.
@@ -107,6 +151,10 @@ class AiRequestManager {
     var delay = initialDelay;
 
     while (true) {
+      final scope = Zone.current[_resourceScopeKey] as _RequestResources?;
+      if (scope?.closed ?? false) {
+        throw StateError('AI request has ended');
+      }
       try {
         return await request();
       } catch (e) {

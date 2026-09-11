@@ -2,6 +2,7 @@ import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 
 import '../theme/app_colors.dart';
+import 'repository_data_gate.dart';
 
 /// 全 App 统一页面路由：Cupertino 转场（右滑返回）+ 自带不透明暖渐变底。
 ///
@@ -17,9 +18,8 @@ class AppPageRoute<T> extends CupertinoPageRoute<T> {
     super.fullscreenDialog,
   }) : super(
           builder: (context) => DecoratedBox(
-            decoration:
-                AppColors.pageBackground(Theme.of(context).brightness),
-            child: builder(context),
+            decoration: AppColors.pageBackground(Theme.of(context).brightness),
+            child: RepositoryDataGate(builder: builder),
           ),
         );
 }

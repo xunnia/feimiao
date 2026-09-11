@@ -45,8 +45,11 @@ class _RecordInputBarState extends State<RecordInputBar> {
   Future<void> _setMode(bool ai) async {
     final repo = context.read<AppRepository>();
     if (repo.isInitializing) await repo.ready;
-    if (repo.isHydrating) await repo.fullyReady;
-    if (!mounted || (!repo.isFullyReady && repo.initializationError != null)) {
+    // Manual entry only needs the home ledger snapshot. AI mode waits for its
+    // own credential barrier, so opening the input cannot be held up by full
+    // history/assets hydration while still preventing a first-send fallback.
+    if (ai && !repo.isAiReady) await repo.aiReady;
+    if (!mounted || repo.initializationError != null) {
       return;
     }
     if (_isAiMode != ai) {
@@ -62,8 +65,8 @@ class _RecordInputBarState extends State<RecordInputBar> {
     if (_sheetOpen) return;
     final repo = context.read<AppRepository>();
     if (repo.isInitializing) await repo.ready;
-    if (repo.isHydrating) await repo.fullyReady;
-    if (!mounted || (!repo.isFullyReady && repo.initializationError != null)) {
+    if (ai && !repo.isAiReady) await repo.aiReady;
+    if (!mounted || repo.initializationError != null) {
       return;
     }
     await _setMode(ai);
@@ -113,6 +116,11 @@ class _RecordInputBarState extends State<RecordInputBar> {
         padding: const EdgeInsets.fromLTRB(12, 6, 12, 10),
         child: AppGlassInputShell(
           key: const ValueKey('home-record-input-shell'),
+          // Keep the home launcher on the established transparent-input
+          // contract.  Startup no longer waits on this widget, so the visual
+          // blur must not be traded away for a marginal first-raster saving.
+          blur: 6,
+          blurEnabled: true,
           padding: AppGlassInputShell.standardPadding,
           child: Column(
             mainAxisSize: MainAxisSize.min,

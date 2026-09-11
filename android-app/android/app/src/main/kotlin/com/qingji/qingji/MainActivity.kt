@@ -5,10 +5,13 @@ import android.content.Intent
 import android.net.ConnectivityManager
 import android.net.Uri
 import android.os.Build
+import android.os.Bundle
+import android.os.SystemClock
 import android.provider.Settings
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.util.Base64
+import android.util.Log
 import androidx.browser.customtabs.CustomTabsClient
 import androidx.browser.customtabs.CustomTabsIntent
 import io.flutter.embedding.android.FlutterActivity
@@ -35,6 +38,13 @@ class MainActivity : FlutterActivity() {
     private var channel: MethodChannel? = null
     private var pending: Map<String, String?>? = null
     private var pendingOpen: Map<String, String?>? = null
+    private var startupStartedAtMs: Long = 0L
+    private var homeReadyReported = false
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        startupStartedAtMs = SystemClock.elapsedRealtime()
+        super.onCreate(savedInstanceState)
+    }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -52,6 +62,27 @@ class MainActivity : FlutterActivity() {
                 else -> result.notImplemented()
             }
         }
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "feimiao/startup")
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "homeReady" -> {
+                        val elapsed = if (startupStartedAtMs == 0L) {
+                            0L
+                        } else {
+                            SystemClock.elapsedRealtime() - startupStartedAtMs
+                        }
+                        if (!homeReadyReported) {
+                            homeReadyReported = true
+                            Log.i("FeimiaoStartup", "home_ready elapsed_ms=$elapsed")
+                            // This is intentionally after the Flutter frame
+                            // that contains the complete home snapshot.
+                            reportFullyDrawn()
+                        }
+                        result.success(elapsed)
+                    }
+                    else -> result.notImplemented()
+                }
+            }
         // 自动记账通道：取通知队列 / 查授权状态 / 跳系统设置。
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "feimiao/autorecord")
             .setMethodCallHandler { call, result ->

@@ -8,6 +8,27 @@ import 'package:qingji/main.dart' as app;
 import 'package:qingji/theme/app_theme_controller.dart';
 
 void main() {
+  test('retry rejoins service startup after either core or deferred failure',
+      () async {
+    final repo = _RetryRepository();
+    var resumed = 0;
+    Future<void> resume(AppRepository _) async {
+      resumed++;
+    }
+
+    await app.retryAppStartup(repo, resumeServices: resume);
+    expect(repo.coreCalls, 1);
+    expect(resumed, 1);
+    await app.retryAppStartup(repo, resumeServices: resume);
+    expect(repo.deferredCalls, 1);
+    expect(repo.coreCalls, 1);
+    expect(resumed, 2);
+    repo.fail = true;
+    await expectLater(
+        app.retryAppStartup(repo, resumeServices: resume), throwsStateError);
+    expect(resumed, 2);
+    repo.dispose();
+  });
   testWidgets('后台报告服务只在 Flutter 第一帧之后启动', (tester) async {
     final calls = <String>[];
     final repo = AppRepository();
@@ -122,4 +143,24 @@ void main() {
     await tester.pumpWidget(const SizedBox());
     await tester.pump(const Duration(seconds: 4));
   });
+}
+
+class _RetryRepository extends AppRepository {
+  bool loaded = false;
+  bool fail = false;
+  int coreCalls = 0;
+  int deferredCalls = 0;
+  @override
+  bool get isReady => loaded;
+  @override
+  Future<void> init({bool fastStartup = false}) async {
+    coreCalls++;
+    loaded = true;
+  }
+
+  @override
+  Future<void> finishDeferredInitialization() async {
+    deferredCalls++;
+    if (fail) throw StateError('fixture');
+  }
 }

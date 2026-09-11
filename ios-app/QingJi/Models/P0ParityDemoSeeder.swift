@@ -56,7 +56,11 @@ enum P0ParityFixtureLoader {
         guard let url = urls.compactMap({ $0 }).first else {
             throw P0ParityFixtureError.resourceMissing
         }
-        let data = try Data(contentsOf: url)
+        let rawData = try Data(contentsOf: url)
+        // The contract hashes canonical UTF-8 JSON with LF line endings.  A
+        // Windows-authored checkout can bundle CRLF, so normalize before both
+        // hashing and decoding rather than accepting a false parity failure.
+        let data = canonicalFixtureData(rawData)
         let actualHash = SHA256.hash(data: data)
             .map { String(format: "%02X", $0) }
             .joined()
@@ -75,6 +79,14 @@ enum P0ParityFixtureLoader {
             throw P0ParityFixtureError.fixtureHashMismatch(expected: expectedHash, actual: actualHash)
         }
         return (try P0ParityFixture.decode(data), actualHash)
+    }
+
+    private static func canonicalFixtureData(_ data: Data) -> Data {
+        guard let text = String(data: data, encoding: .utf8) else { return data }
+        let canonical = text
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .replacingOccurrences(of: "\r", with: "\n")
+        return canonical.data(using: .utf8) ?? data
     }
 
     static func date(_ raw: String) throws -> Date {

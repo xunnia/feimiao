@@ -17,7 +17,14 @@ cd "$android_root"
 
 device_id="${ANDROID_SERIAL:-${ANDROID_DEVICE_ID:-}}"
 app_id="com.qingji.qingji.codex"
-scene_timeout_seconds="${PARITY_SCENE_TIMEOUT_SECONDS:-900}"
+# Flutter's Android tooling has historically derived the package to clean up
+# from the Gradle namespace (`com.qingji.qingji`) instead of the final
+# applicationId. Keep both identities in the scene lifecycle so an older
+# install cannot keep a process/VM service alive between captures.
+legacy_app_id="com.qingji.qingji"
+app_ids=("$app_id" "$legacy_app_id")
+scene_timeout_seconds="${PARITY_SCENE_TIMEOUT_SECONDS:-600}"
+scene_retry_limit="${PARITY_SCENE_RETRIES:-1}"
 if [ -z "$device_id" ]; then
   mapfile -t online_devices < <(adb devices | awk '$2 == "device" { print $1 }')
   if [ "${#online_devices[@]}" -ne 1 ]; then
@@ -34,6 +41,10 @@ if ! adb -s "$device_id" get-state >/dev/null 2>&1; then
 fi
 if ! [[ "$scene_timeout_seconds" =~ ^[0-9]+$ ]] || [ "$scene_timeout_seconds" -le 0 ]; then
   echo "PARITY_SCENE_TIMEOUT_SECONDS must be a positive integer; got: $scene_timeout_seconds" >&2
+  exit 2
+fi
+if ! [[ "$scene_retry_limit" =~ ^[0-9]+$ ]]; then
+  echo "PARITY_SCENE_RETRIES must be a non-negative integer; got: $scene_retry_limit" >&2
   exit 2
 fi
 timeout_bin="$(command -v timeout || true)"
@@ -62,6 +73,7 @@ fi
   echo "ANDROID_DEVICE_ID=$device_id"
   echo "ANDROID_APP_ID=$app_id"
   echo "PARITY_SCENE_TIMEOUT_SECONDS=$scene_timeout_seconds"
+  echo "PARITY_SCENE_RETRIES=$scene_retry_limit"
   echo "FLUTTER_BIN=$(command -v flutter || true)"
   echo "ADB_BIN=$(command -v adb || true)"
   echo "TIMEOUT_BIN=$timeout_bin"
@@ -72,9 +84,19 @@ fi
   # truth. Stage the same file into Flutter's package asset tree for the
   # integration test; it is generated in CI and never becomes production data.
   mkdir -p assets/parity
-  cp "$fixture_path" \
-    assets/parity/p0-demo-ledger-2026-08-v1.json
-  fixture_hash="$(sha256sum "$fixture_path" | awk '{print toupper($1)}')"
+  # Normalize the fixture at the staging boundary as well as in the Python
+  # contract checker. This keeps the Dart asset hash deterministic even when a
+  # local checkout was created with core.autocrlf=true.
+  fixture_asset="assets/parity/p0-demo-ledger-2026-08-v1.json"
+  if ! fixture_hash="$("$python_bin" "$repo_root/ios-app/tools/canonical_fixture_hash.py" \
+    "$fixture_path" --copy-to "$fixture_asset")"; then
+    echo "Unable to canonicalize the P0 fixture" >&2
+    exit 2
+  fi
+  if ! [[ "$fixture_hash" =~ ^[0-9A-F]{64}$ ]]; then
+    echo "Canonical fixture helper returned an invalid SHA-256: $fixture_hash" >&2
+    exit 2
+  fi
   echo "P0_FIXTURE_HASH=$fixture_hash"
   # A parity artifact must contain only files produced by this invocation.
   # A previous partial run must never make a later run look complete.
@@ -84,56 +106,182 @@ fi
   # simulator. The logical capture date itself is injected at compile time.
   adb -s "$device_id" shell settings put global auto_time_zone 0 || true
   adb -s "$device_id" shell settings put global time_zone Asia/Shanghai || true
-  # Keep each complete group in its own Flutter/VM-service session. This bounds
-  # the amount of PNG data held in integration_test reportData while keeping
-  # every group small enough to finish and return its response reliably.
-  groups=(
-    core
-    planning
-    management
-    ai
-    system
+  # Keep every scene in its own Flutter/VM-service session. A page that leaves
+  # a route, animation, or platform channel pending must not hold the other
+  # captures hostage; the driver response still writes the same business JSON
+  # on every invocation and the final metadata check covers all 41 images.
+  scenes=(
+    drawer-books
+    home-overview
+    quick-add-expense
+    quick-add-income
+    transactions-search
+    reimburse
+    reimburse-settlement
+    books-management
+    accounts-management
+    categories
+    tags
+    category-memory
+    stats-week
+    stats-month
+    stats-year
+    stats-custom
+    budget
+    savings
+    recurring
+    import-review
+    reports-library
+    backup
+    settings
+    theme
+    display
+    assets-hub
+    assets-funds
+    reconcile
+    liabilities
+    net-worth
+    physical-asset-detail
+    account-detail
+    ai-entry
+    ai-settings
+    ai-tasks
+    ai-diagnostics
+    ai-search
+    ai-memory
+    ai-extensions
+    ai-schedules
+    ai-local
   )
-  # Remove a package left by a previous local/emulator run before the first
-  # Flutter install. pm clear cannot repair a signing mismatch.
-  adb -s "$device_id" uninstall "$app_id" >/dev/null 2>&1 || true
-  for group in "${groups[@]}"; do
-    echo "PARITY_GROUP_BEGIN group=$group"
-    # Each batch gets a fresh application database, while the driver keeps all
-    # screenshots in the same host output directory.
-    adb -s "$device_id" shell am force-stop "$app_id" >/dev/null 2>&1 || true
+  cleanup_scene_state() {
+    local package
+    # Stop both the current applicationId and the historical namespace-derived
+    # id. `flutter drive` may have attempted to clean the latter even though it
+    # installs the former, leaving an old process alive on a reused emulator.
+    for package in "${app_ids[@]}"; do
+      adb -s "$device_id" shell am force-stop "$package" >/dev/null 2>&1 || true
+      adb -s "$device_id" shell am kill "$package" >/dev/null 2>&1 || true
+    done
+    # A stale Flutter VM-service forward makes the next driver connect to a
+    # dead isolate. The parity job owns the only device, so remove all forwards
+    # between independent scenes.
+    adb -s "$device_id" forward --remove-all >/dev/null 2>&1 || true
+  }
+
+  # Remove packages left by a previous local/emulator run before the first
+  # Flutter install. pm clear cannot repair a signing mismatch, while
+  # uninstalling both ids also prevents the namespace-derived stale process.
+  cleanup_scene_state
+  for package in "${app_ids[@]}"; do
+    adb -s "$device_id" uninstall "$package" >/dev/null 2>&1 || true
+  done
+  # A long sequence of independent flutter drive processes can leave the
+  # emulator transport in the `offline` state even after the Dart test and
+  # screenshot have completed. Recover the ADB server before giving up, then
+  # rerun only the affected scene. This keeps a transient emulator transport
+  # failure from invalidating an otherwise valid screenshot batch.
+  recover_device() {
+    local attempt
+    for attempt in 1 2 3; do
+      if adb -s "$device_id" get-state >/dev/null 2>&1; then
+        echo "PARITY_DEVICE_READY attempt=$attempt"
+        return 0
+      fi
+      echo "PARITY_DEVICE_RECOVER attempt=$attempt"
+      adb reconnect offline >/dev/null 2>&1 || true
+      sleep 2
+      if adb -s "$device_id" get-state >/dev/null 2>&1; then
+        echo "PARITY_DEVICE_READY attempt=$attempt method=reconnect"
+        return 0
+      fi
+      adb kill-server >/dev/null 2>&1 || true
+      adb start-server >/dev/null 2>&1 || true
+      sleep 3
+    done
+    return 1
+  }
+
+  run_scene() {
+    local scene="$1"
+    echo "PARITY_SCENE_BEGIN scene=$scene"
+    # Each scene gets a fresh application database. The package is deliberately
+    # left installed so flutter drive can reuse the build, but stale process and
+    # data state are cleared before the next invocation.
+    cleanup_scene_state
     adb -s "$device_id" shell pm clear "$app_id" >/dev/null 2>&1 || true
-    echo "PARITY_GROUP_RESET group=$group"
+    echo "PARITY_SCENE_RESET scene=$scene"
     "$timeout_bin" --foreground --kill-after=30s "${scene_timeout_seconds}s" flutter drive \
       --driver=test_driver/integration_test.dart \
       --target=integration_test/parity_screenshots_test.dart \
       --device-id "$device_id" \
       --no-pub \
       --dart-define=QINGJI_PARITY_CAPTURE=true \
-      --dart-define=QINGJI_PARITY_GROUP="$group" \
+      --dart-define=QINGJI_PARITY_SCENE="$scene" \
       --dart-define=QINGJI_DEMO_NOW=2026-08-27T12:00:00+08:00 \
       --dart-define=QINGJI_P0_FIXTURE_HASH="$fixture_hash"
-    group_status=$?
-    echo "PARITY_GROUP_END group=$group status=$group_status"
-    if [ "$group_status" -eq 124 ] || [ "$group_status" -eq 137 ]; then
-      echo "::error::Parity group timed out or was killed: $group"
-      adb -s "$device_id" shell dumpsys activity activities 2>&1 | tail -n 120 || true
-      adb -s "$device_id" logcat -d -t 300 2>&1 | tail -n 300 || true
-    fi
-    if [ "$group_status" -ne 0 ]; then
-      last_capture="$(grep -E 'PARITY_CAPTURE_(BEGIN|DONE)|PARITY_PAGE_(BEGIN|READY)' "$log_path" 2>/dev/null | tail -n 1 || true)"
-      echo "::error title=Android parity group failed::group=$group status=$group_status"
-      echo "PARITY_FAILURE group=$group status=$group_status"
+    local status=$?
+    # Always tear down the app and VM forward, including timeout/driver-error
+    # paths. This is what makes a retry or the next scene independent.
+    cleanup_scene_state
+    echo "PARITY_SCENE_CLEANUP scene=$scene"
+    echo "PARITY_SCENE_END scene=$scene status=$status"
+    return "$status"
+  }
+
+  for scene in "${scenes[@]}"; do
+    attempt=0
+    while true; do
+      if ! recover_device; then
+        echo "::error::Android emulator is not online before parity scene: $scene"
+        adb devices -l 2>&1 || true
+        exit 2
+      fi
+      run_scene "$scene"
+      scene_status=$?
+      if [ "$scene_status" -eq 0 ]; then
+        # Give the emulator a short idle window to flush PixelCopy/ADB work
+        # before the next Flutter process starts.
+        sleep 2
+        break
+      fi
+
+      if [ "$scene_status" -eq 124 ] || [ "$scene_status" -eq 137 ]; then
+        echo "::error::Parity scene timed out or was killed: $scene"
+        adb -s "$device_id" shell dumpsys activity activities 2>&1 | tail -n 120 || true
+        adb -s "$device_id" logcat -d -t 300 2>&1 | tail -n 300 || true
+      fi
+
+      # Retry only transport/process-loss failures. Assertion and application
+      # failures remain fail-fast so a real regression is never hidden.
+      transient_failure=0
+      if ! adb -s "$device_id" get-state >/dev/null 2>&1; then
+        transient_failure=1
+      elif tail -n 160 "$log_path" 2>/dev/null | grep -Eq \
+          'Service has disappeared|device offline|bad color buffer handle'; then
+        transient_failure=1
+      fi
+      if [ "$transient_failure" -eq 1 ] && [ "$attempt" -lt "$scene_retry_limit" ]; then
+        attempt=$((attempt + 1))
+        echo "::warning title=Android parity transient transport failure::retrying scene=$scene attempt=$attempt/$scene_retry_limit"
+        if recover_device; then
+          sleep 2
+          continue
+        fi
+      fi
+
+      last_capture="$(grep -E 'PARITY_CAPTURE_(BEGIN|DONE)|PARITY_PAGE_(BEGIN|READY)|PARITY_SCENE_(BEGIN|END)' "$log_path" 2>/dev/null | tail -n 1 || true)"
+      echo "::error title=Android parity scene failed::scene=$scene status=$scene_status"
+      echo "PARITY_FAILURE scene=$scene status=$scene_status"
       if [ -n "$last_capture" ]; then
         echo "::error title=Android parity last capture::$last_capture"
         echo "PARITY_FAILURE_LAST_CAPTURE $last_capture"
       fi
       adb -s "$device_id" get-state 2>&1 || true
       adb devices -l 2>&1 || true
-      exit "$group_status"
-    fi
-    if ! adb -s "$device_id" get-state >/dev/null 2>&1; then
-      echo "::error::Android emulator went offline after parity group: $group"
+      exit "$scene_status"
+    done
+    if ! recover_device; then
+      echo "::error::Android emulator went offline after parity scene: $scene"
       adb devices >&2 || true
       exit 2
     fi

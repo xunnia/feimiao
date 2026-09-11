@@ -29,6 +29,9 @@ class ShareIntake {
   static final List<void Function(BuildContext)> _pendingActions = [];
   static bool _flushing = false;
 
+  @visibleForTesting
+  static int get pendingActionCount => _pendingActions.length;
+
   static void init({
     Future<void>? repositoryReady,
     bool Function()? repositoryReadyCheck,
@@ -94,6 +97,13 @@ class ShareIntake {
     unawaited(_flushPendingAsync());
   }
 
+  /// Called only after the current repository generation has fully recovered.
+  /// Do not consume the native initial intent again or reinstall its handler.
+  static void resumePendingAfterRecovery() {
+    _repositoryReady = Future<void>.value();
+    _flushPending();
+  }
+
   static Future<void> _flushPendingAsync() async {
     // 已经注册了帧回调重试时，finally 里不能再同步重入 _flushPending：
     // ctx 未就绪前那会变成「注册回调→finally 重入→再注册回调」的死循环。
@@ -104,7 +114,9 @@ class ShareIntake {
       if (_repositoryReadyCheck != null && !_repositoryReadyCheck!()) {
         // Initialization failed. Do not replay a share into a repository that
         // cannot save it; the native pending intent has already been consumed.
-        _pendingActions.clear();
+        // Retain the consumed share until a successful startup retry wakes us.
+        // Suppress the finally retry so a completed failed barrier cannot spin.
+        retryScheduled = true;
         return;
       }
       while (_pendingActions.isNotEmpty) {

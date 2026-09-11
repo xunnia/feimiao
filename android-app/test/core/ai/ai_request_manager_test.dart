@@ -5,6 +5,35 @@ import 'package:qingji/core/ai/ai_exception.dart';
 import 'package:qingji/core/ai/ai_request_manager.dart';
 
 void main() {
+  test('cancellation closes only resources owned by the cancelled request',
+      () async {
+    var firstClosed = false;
+    var secondClosed = false;
+    final firstWork = Completer<String>();
+    final secondWork = Completer<String>();
+    final first = AiRequestManager.execute<String>(
+        taskId: 'resource-first',
+        request: () {
+          AiRequestManager.registerResource(() => firstClosed = true);
+          return firstWork.future;
+        });
+    final second = AiRequestManager.execute<String>(
+        taskId: 'resource-second',
+        request: () {
+          AiRequestManager.registerResource(() => secondClosed = true);
+          return secondWork.future;
+        });
+    final cancelled = expectLater(first, throwsA(anything));
+    AiRequestManager.cancel('resource-first');
+    await cancelled;
+    expect(firstClosed, isTrue);
+    expect(secondClosed, isFalse);
+    firstWork.complete('late response');
+    secondWork.complete('OK');
+    expect(await second, 'OK');
+    expect(secondClosed, isTrue);
+  });
+
   group('AiRequestManager 并发控制测试', () {
     setUp(() {
       AiRequestManager.cancelAll();
@@ -155,19 +184,24 @@ void main() {
     });
 
     test('wrapException 应该根据状态码转换', () {
-      final e401 = AiRequestManager.wrapException('Unauthorized', statusCode: 401);
+      final e401 =
+          AiRequestManager.wrapException('Unauthorized', statusCode: 401);
       expect(e401, isA<AiAuthException>());
 
-      final e429 = AiRequestManager.wrapException('Too Many Requests', statusCode: 429);
+      final e429 =
+          AiRequestManager.wrapException('Too Many Requests', statusCode: 429);
       expect(e429, isA<AiRateLimitException>());
 
-      final e400 = AiRequestManager.wrapException('token limit exceeded', statusCode: 400);
+      final e400 = AiRequestManager.wrapException('token limit exceeded',
+          statusCode: 400);
       expect(e400, isA<AiTokenLimitException>());
 
-      final e404 = AiRequestManager.wrapException('Model not found', statusCode: 404);
+      final e404 =
+          AiRequestManager.wrapException('Model not found', statusCode: 404);
       expect(e404, isA<AiModelNotSupportedException>());
 
-      final e500 = AiRequestManager.wrapException('Server Error', statusCode: 500);
+      final e500 =
+          AiRequestManager.wrapException('Server Error', statusCode: 500);
       expect(e500, isA<AiServerException>());
     });
 

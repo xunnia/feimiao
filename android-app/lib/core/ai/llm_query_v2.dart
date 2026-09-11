@@ -29,8 +29,14 @@ class LlmQueryV2 {
   // create a short-lived transport below to avoid reusing a poisoned socket.
   static AiHttpTransport? _sharedTransport;
 
-  static AiHttpTransport get _transport =>
-      _sharedTransport ??= AiHttpTransport();
+  static AiHttpTransport get _transport {
+    if (AiRequestManager.hasResourceScope) {
+      final transport = AiHttpTransport();
+      AiRequestManager.registerResource(transport.close);
+      return transport;
+    }
+    return _sharedTransport ??= AiHttpTransport();
+  }
 
   static const _defaultTimeoutSeconds = 30;
   static const _reportTimeoutSeconds = 90;

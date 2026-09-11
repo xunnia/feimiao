@@ -160,10 +160,9 @@ bool isSecureUpdateUrl(String raw) {
 class AppUpdate {
   AppUpdate._();
 
-  static const versionJsonUrl =
-      'https://updates.xunni9481.dpdns.org/version.json';
+  static const versionJsonUrl = 'https://updates.xunni.dpdns.org/version.json';
   static const rollbackJsonUrl =
-      'https://updates.xunni9481.dpdns.org/rollback.json';
+      'https://updates.xunni.dpdns.org/rollback.json';
   static const _channel = MethodChannel('feimiao/update');
   static const _headerTimeout = Duration(seconds: 30);
   static const _idleTimeout = Duration(seconds: 60);
@@ -331,9 +330,10 @@ class AppUpdate {
     }
   }
 
-  /// 流式校验文件 SHA256。expected 为空（元数据没给）时直接放行。
+  /// 流式校验文件 SHA256；缺失或非法校验值不能当作验证成功。
   static Future<bool> verifyFileSha256(String path, String expected) async {
-    if (expected.isEmpty) return true;
+    expected = AppUpdateInfo.sanitizeSha256(expected);
+    if (expected.isEmpty) return false;
     try {
       final f = File(path);
       if (!await f.exists()) return false;
@@ -445,6 +445,9 @@ class AppUpdate {
       if (expected.isEmpty) {
         expected =
             AppUpdateInfo.sanitizeSha256(resp.headers['x-feimiao-sha256']);
+      }
+      if (expected.isEmpty) {
+        throw Exception('安装包缺少有效的 SHA256 校验信息，请稍后重试');
       }
       if (expected.isNotEmpty) {
         final actual = digestSink.value?.toString().toLowerCase() ?? '';

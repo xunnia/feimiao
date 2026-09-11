@@ -9,8 +9,8 @@
 
 | 项目 | 已锁定值 | 证据 |
 |---|---|---|
-| 干净远端锚点 | `72f14808b0fe32a6276558af16b775fa987f1c2f` | 已 fetch 并解析 |
-| Android 母版快照 | `08f7a5e28ffcc65f50dd2661802111d0ef92446c` | 独立提交，48 个源码/测试/发布文件 |
+| 干净远端锚点 | `b40316f336fb0aefabf67817460775b665fdaa1d` | 新仓库 `origin/main` 可达并已 fetch |
+| Android 母版快照 | `b40316f336fb0aefabf67817460775b665fdaa1d` | 新仓库中对应 1.289.0+304 的基线提交 |
 | Android 版本 | `1.289.0+304` | `android-app/pubspec.yaml` |
 | Android 水印 | `b0901-304` | `android-app/lib/build_info.dart` |
 | Android DB | `49` | `android-app/lib/data/app_repository.dart` |
@@ -96,9 +96,9 @@
 
 ### 4.1 数据升级合同
 
-机器合同中的 `dataUpgrade` 锁定了 `ios-app/tools/migration-fixtures/p0-ios-qingji-upgrade-2026-09-v1.json`（SHA-256 `AE08B995CCCD952CBB1CF965F09B7EC31703734FE660076A0D656AC036D685C6`）。本合同只允许 `QingJi` 的 SwiftData 原地升级，继续使用 `AppModelContainer.shared`；不得换成 `FeiMiaoKit`/GRDB、换 store URL、清库或要求用户重新开始。
+机器合同中的 `dataUpgrade` 锁定了 `ios-app/tools/migration-fixtures/p0-ios-qingji-upgrade-2026-09-v1.json`（SHA-256 `5EA4DED99EEE99AC607C53D341F22F4CB09F91CAEE727B8E9EF45866A8EC7ED3`）。本合同只允许 `QingJi` 的 SwiftData 原地升级，继续使用 `AppModelContainer.shared`；不得换成 `FeiMiaoKit`/GRDB、换 store URL、清库或要求用户重新开始。
 
-- 源模型锚点：`08f7a5e28ffcc65f50dd2661802111d0ef92446c` 的 QingJi inferred model graph；
+- 源模型锚点：新仓库可达的 `b40316f336fb0aefabf67817460775b665fdaa1d` QingJi inferred model graph；
 - 目标模型：当前 `AppModelContainer.swift` 登记的完整 QingJi 模型集合；下一次模型变化前必须引入显式 `VersionedSchema`/迁移计划；
 - 必须保留：稳定 ID、账本/账户/流水字段、退款关联、结算字段、排除/报销状态和附件相对路径；
 - 必须验证：当前 Android DB v49、v40、v48 备份样本可恢复到 QingJi，附件路径和字节在升级前后不变，注入失败时模型和附件均回滚；

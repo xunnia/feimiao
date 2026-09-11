@@ -50,27 +50,23 @@ import 'views/transactions/transaction_list_view.dart';
 import 'widgets/app_page_route.dart';
 
 const bool _parityCapture = bool.fromEnvironment('QINGJI_PARITY_CAPTURE');
+const MethodChannel _startupChannel = MethodChannel('feimiao/startup');
+bool _homeReadyReported = false;
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   _setStartupSystemUi();
 
-  // Keep the proven v1.279 startup order: finish the proxy lookup and the
-  // repository's small home snapshot before mounting the full widget tree.
-  // Building RootShell against a half-hydrated repository caused the 301
-  // release to terminate immediately on the target phone even though widget
-  // tests passed. Proxy failures remain non-fatal and bounded.
-  try {
-    await SystemNetworkProxy.install().timeout(const Duration(seconds: 3));
-  } catch (error, stackTrace) {
-    debugPrint('startup system proxy unavailable: $error');
-    debugPrint('$stackTrace');
-  }
-
   final repo = AppRepository();
 
-  // Start the fast repository snapshot and wait on its failure-safe ready
-  // barrier before building pages that read accounts/books/transactions.
+  // Proxy discovery is only needed by AI/OAuth requests. Start it beside the
+  // database snapshot so a slow vendor proxy channel can never extend the
+  // time before Flutter owns the first frame.
+  final startupProxy = _installStartupProxy();
+
+  // Start the home snapshot immediately. The startup gate below keeps the
+  // real page tree from reading a half-hydrated repository, while allowing the
+  // engine and the safe shell to draw during SQLite/plugin work.
   final repositoryCoreInit = _initializeRepository(repo, fastStartup: true);
   // Do not read or write the persisted theme during parity startup. The
   // capture flag forces the light ThemeMode below, while the static AppColors
@@ -83,9 +79,6 @@ Future<void> main() async {
     repositoryReady: repo.fullyReady,
     repositoryReadyCheck: () => repo.isFullyReady,
   );
-  await repo.ready;
-  final repositoryFullyReady =
-      repo.isReady ? _scheduleDeferredConvergence(repo) : repo.fullyReady;
 
   runApp(
     MultiProvider(
@@ -94,22 +87,110 @@ Future<void> main() async {
         ChangeNotifierProvider<AppThemeController>.value(
             value: AppThemeController.instance),
       ],
-      // Successful launches use the same eager RootShell contract as v1.279.
-      // A real database failure still gets the recovery gate instead of an
-      // empty home tree.
-      child: QingJiApp(deferHomeUntilRepositoryReady: !repo.isReady),
+      // The gate is deliberately enabled for production startup. It is a
+      // dependency-free shell until the complete home snapshot is available,
+      // so moving runApp earlier cannot reintroduce the old cold-start crash.
+      child: const QingJiApp(deferHomeUntilRepositoryReady: true),
     ),
   );
+
+  // Keep all asynchronous startup ownership behind one boundary. The
+  // repository task is failure-safe, and proxy failures are non-fatal, so a
+  // rejected optional service cannot terminate the entrypoint.
+  unawaited(_finishStartup(
+    repo,
+    startupProxy: startupProxy,
+    repositoryCoreInit: repositoryCoreInit,
+  ));
+}
+
+final _startupServicesWired = Expando<bool>();
+
+@visibleForTesting
+Future<void> retryAppStartup(AppRepository repo,
+    {Future<void> Function(AppRepository)? resumeServices}) async {
   if (repo.isReady) {
-    _openAiOAuthWatcher.start(repo);
-    schedulePostFrameServices(repo, repositoryReady: repositoryFullyReady);
-    _schedulePostFrameStartupServices(repo, repositoryFullyReady);
+    await repo.finishDeferredInitialization();
+  } else {
+    await repo.init(fastStartup: true);
+  }
+  if (resumeServices != null) {
+    await resumeServices(repo);
+  } else {
+    await _finishStartup(repo,
+        startupProxy: _installStartupProxy(),
+        repositoryCoreInit: Future<void>.value());
+  }
+}
+
+void _wireStartupServices(AppRepository repo) {
+  if (_startupServicesWired[repo] == true) return;
+  _startupServicesWired[repo] = true;
+  void onReady() {
+    if (!repo.isFullyReady) return;
+    repo.removeListener(onReady);
+    ShareIntake.resumePendingAfterRecovery();
+    schedulePostFrameServices(repo, repositoryReady: repo.fullyReady);
+    _schedulePostFrameStartupServices(repo, repo.fullyReady);
   }
 
-  // The ready barrier above completes on both success and failure. Await the
-  // guarded init task as well so no startup Future is abandoned.
-  await repositoryCoreInit;
+  repo.addListener(onReady);
+  onReady();
 }
+
+Future<void> _finishStartup(
+  AppRepository repo, {
+  required Future<void> startupProxy,
+  required Future<void> repositoryCoreInit,
+}) async {
+  try {
+    // Proxy discovery is only needed by network requests.  It must never sit
+    // in front of the repository barrier: a slow platform channel should not
+    // delay the first complete home snapshot or the start of deferred
+    // convergence.  Keep observing the already-started future so failures are
+    // still handled without creating an unhandled async error.
+    final proxyResult = startupProxy.catchError((error, stackTrace) {
+      debugPrint('deferred startup proxy unavailable: $error');
+      debugPrint('$stackTrace');
+    });
+    await repositoryCoreInit;
+    if (!repo.isReady) return;
+    _wireStartupServices(repo);
+    _scheduleDeferredConvergence(repo);
+    _openAiOAuthWatcher.start(repo);
+    // Keep this boundary alive until the optional proxy discovery has settled,
+    // but never make any UI or repository work wait for it.
+    await proxyResult;
+  } catch (error, stackTrace) {
+    debugPrint('deferred app startup failed: $error');
+    debugPrint('$stackTrace');
+  }
+}
+
+Future<void> _installStartupProxy() async {
+  try {
+    await SystemNetworkProxy.install().timeout(const Duration(seconds: 2));
+  } catch (error, stackTrace) {
+    // Direct sockets still work for full-device TUN VPNs and ordinary network
+    // connections. Keep this diagnostic bounded and credential-free.
+    debugPrint('startup system proxy unavailable: $error');
+    debugPrint('$stackTrace');
+  }
+}
+
+Future<void> _reportHomeReady() async {
+  if (_homeReadyReported) return;
+  _homeReadyReported = true;
+  try {
+    await _startupChannel.invokeMethod<Object?>('homeReady');
+  } on MissingPluginException {
+    // Desktop and widget tests do not provide the Android startup bridge.
+  } catch (error) {
+    // Measuring startup must never affect a successful home render.
+    debugPrint('startup home-ready marker unavailable: $error');
+  }
+}
+
 
 void _setStartupSystemUi() {
   try {
@@ -478,6 +559,8 @@ class _RepositoryStartupGate extends StatefulWidget {
 
 class _RepositoryStartupGateState extends State<_RepositoryStartupGate> {
   Future<void>? _waiting;
+  bool _homeReadyScheduled = false;
+  bool _retrying = false;
 
   @override
   void initState() {
@@ -502,7 +585,10 @@ class _RepositoryStartupGateState extends State<_RepositoryStartupGate> {
   }
 
   Future<void> _retry() async {
-    final waiting = widget.repository.init(fastStartup: true);
+    if (_retrying) return;
+    _retrying = true;
+    final repo = widget.repository;
+    final waiting = retryAppStartup(repo);
     setState(() => _waiting = waiting);
     try {
       await waiting;
@@ -512,6 +598,7 @@ class _RepositoryStartupGateState extends State<_RepositoryStartupGate> {
       debugPrint('retry app repository initialization failed: $error');
       debugPrint('$stackTrace');
     } finally {
+      _retrying = false;
       if (mounted) setState(() {});
     }
   }
@@ -519,9 +606,17 @@ class _RepositoryStartupGateState extends State<_RepositoryStartupGate> {
   @override
   Widget build(BuildContext context) {
     final repository = widget.repository;
-    if (repository.isReady) return const RootShell();
     if (repository.initializationError != null) {
       return _StartupFailureShell(onRetry: _retry);
+    }
+    if (repository.isReady) {
+      if (!_homeReadyScheduled) {
+        _homeReadyScheduled = true;
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) unawaited(_reportHomeReady());
+        });
+      }
+      return const RootShell();
     }
     return const _StartupPlaceholder();
   }
@@ -689,6 +784,10 @@ class RootShellState extends State<RootShell>
         // 时间维度上做，所以既顺滑又不会在松手瞬间跳一下。
         final t = _drawerCtl.value;
         final open = _drawerCtl.value > 0.5;
+        // Keep the pointer listener and main-page element in the same tree
+        // even at t == 0. A separate closed fast path dropped the listener,
+        // so the very first swipe could never open the drawer. The drawer
+        // itself remains lazy and clipping/shadows are disabled when closed.
         return PopScope(
           // 抽屉开着时系统返回键先关抽屉，不退出页面。
           canPop: !open,
@@ -786,6 +885,7 @@ class RootShellState extends State<RootShell>
                             : null,
                       ),
                       child: ClipRRect(
+                        clipBehavior: t > 0 ? Clip.antiAlias : Clip.none,
                         borderRadius: BorderRadius.circular(26 * t),
                         child: Stack(
                           children: [
@@ -897,7 +997,10 @@ class _MainScaffoldState extends State<_MainScaffold> {
         backgroundColor: Colors.transparent,
         surfaceTintColor: Colors.transparent,
         flexibleSpace: const _TopFrostedFade(
-          blur: 12,
+          // The page background is already a static gradient.  The fade and
+          // tint keep the same visual separation without a costly full-width
+          // BackdropFilter during the first high-resolution raster.
+          blur: 0,
           topAlpha: 0.70,
           midAlpha: 0.24,
           bottomAlpha: 0.0,
@@ -1001,25 +1104,31 @@ class _TopFrostedFade extends StatelessWidget {
           colors: [Colors.white, Colors.white, Colors.transparent],
           stops: [0.0, 0.46, 1.0],
         ).createShader(bounds),
-        child: BackdropFilter(
-          filter: ImageFilter.blur(sigmaX: blur, sigmaY: blur),
-          child: DecoratedBox(
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                begin: Alignment.topCenter,
-                end: Alignment.bottomCenter,
-                colors: [
-                  bg.withValues(alpha: topAlpha),
-                  bg.withValues(alpha: midAlpha),
-                  bg.withValues(alpha: bottomAlpha),
-                ],
-                stops: const [0.0, 0.58, 1.0],
-              ),
-            ),
-            child: const SizedBox.expand(),
-          ),
+        child: _buildTint(bg),
+      ),
+    );
+  }
+
+  Widget _buildTint(Color bg) {
+    final tint = DecoratedBox(
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: [
+            bg.withValues(alpha: topAlpha),
+            bg.withValues(alpha: midAlpha),
+            bg.withValues(alpha: bottomAlpha),
+          ],
+          stops: const [0.0, 0.58, 1.0],
         ),
       ),
+      child: const SizedBox.expand(),
+    );
+    if (blur <= 0) return tint;
+    return BackdropFilter(
+      filter: ImageFilter.blur(sigmaX: blur, sigmaY: blur),
+      child: tint,
     );
   }
 }
