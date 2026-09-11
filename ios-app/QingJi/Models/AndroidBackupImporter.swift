@@ -823,11 +823,11 @@ enum AndroidBackupImporter {
             return BackupReceivableRecovery(
                 id: stableID(row.string("uuid"), table: "receivable_recoveries", id: id),
                 receivableID: stableReceivableID,
-                eventID: row.integer("event_id").flatMap { assetEventIDs[$0] },
                 amount: row.decimal("amount"),
                 recoveredAt: date(row.integer("recovered_ms")) ?? exportedAt,
                 targetAccountID: row.integer("target_account_id").flatMap { accountIDs[$0] },
                 transactionID: row.integer("transaction_id").flatMap { transactionIDs[$0] },
+                eventID: row.integer("event_id").flatMap { assetEventIDs[$0] },
                 note: row.string("note"),
                 createdAt: date(row.integer("created_ms"))
             )

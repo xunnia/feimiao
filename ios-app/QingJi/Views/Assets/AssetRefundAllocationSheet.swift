@@ -193,7 +193,7 @@ private struct AssetRefundAllocationCard: View {
             HStack {
                 Text(summary)
                     .font(.caption)
-                    .foregroundStyle(totalCents == item.refundCents ? .secondary : .orange)
+                    .foregroundStyle(totalCents == item.refundCents ? Color.secondary : Color.orange)
                 Spacer()
                 Button(isSaving ? "提交中" : "确认分配") { save() }
                     .disabled(!canSave)

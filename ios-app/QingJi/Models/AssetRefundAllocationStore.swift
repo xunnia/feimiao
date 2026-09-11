@@ -154,7 +154,7 @@ enum AssetRefundAllocationStore {
             )
             let targets = orderLinks.map { link in
                 let name = assetNames[link.assetID]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-                PhysicalAssetRefundAllocationTarget(
+                return PhysicalAssetRefundAllocationTarget(
                     assetID: link.assetID,
                     assetName: name.isEmpty ? "物品" : name,
                     grossCents: purchaseGrossCents(link),

@@ -516,11 +516,11 @@ enum BackupStore {
                 BackupReceivableRecovery(
                     id: $0.stableID,
                     receivableID: $0.receivableID,
-                    eventID: $0.eventID,
                     amount: $0.amount,
                     recoveredAt: $0.recoveredAt,
                     targetAccountID: $0.targetAccountID,
                     transactionID: $0.transactionID,
+                    eventID: $0.eventID,
                     note: $0.note,
                     createdAt: $0.createdAt
                 )

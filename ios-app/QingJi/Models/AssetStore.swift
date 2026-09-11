@@ -1419,7 +1419,8 @@ enum ReceivableStore {
             account.currencyCode != asset.currencyCode {
             throw Error.accountUnavailable
         }
-        let recoveryTransaction: MoneyTransaction? = if let account {
+        let recoveryTransaction: MoneyTransaction?
+        if let account {
             let books = (try? context.fetch(FetchDescriptor<Book>())) ?? []
             let book = books.first(where: { book in
                 guard let bookID = asset.bookID else { return false }
@@ -1446,9 +1447,9 @@ enum ReceivableStore {
                 isExcluded: true
             )
             context.insert(transaction)
-            return transaction
+            recoveryTransaction = transaction
         } else {
-            nil
+            recoveryTransaction = nil
         }
         let previousLifecycle = asset.lifecycle.rawValue
         let previousIncludeInNetWorth = asset.includeInNetWorth
@@ -1516,7 +1517,7 @@ enum ReceivableStore {
         let previousInclude = (metadata["previous_include_in_net_worth"] as? String) != "0"
         let previousEndedAt = receivableDateFromMetadata(metadata["previous_ended_at"])
         if let transactionID = latest.transactionID,
-           let transaction = try allTransactions(in: context).first(where: {
+           let transaction = try LedgerStore.allTransactions(in: context).first(where: {
                $0.stableID == transactionID
            }) {
             context.delete(transaction)
@@ -1868,7 +1869,7 @@ enum LiabilityStore {
             month: nowComponents.month ?? 1
         )
         let firstDue: Date
-        if !calendar.startOfDay(for: thisMonthDue).isBefore(today) {
+        if calendar.startOfDay(for: thisMonthDue) >= today {
             firstDue = thisMonthDue
         } else {
             let next = calendar.date(byAdding: .month, value: 1, to: thisMonthDue) ?? now
