@@ -84,7 +84,7 @@ struct LoanWizardSheet: View {
         let today = calendar.startOfDay(for: now)
         let components = calendar.dateComponents([.year, .month], from: now)
         let thisMonth = due(year: components.year ?? 2000, month: components.month ?? 1)
-        if !calendar.startOfDay(for: thisMonth).isBefore(today) { return thisMonth }
+        if calendar.startOfDay(for: thisMonth) >= today { return thisMonth }
         let next = calendar.date(byAdding: .month, value: 1, to: thisMonth) ?? now
         let nextComponents = calendar.dateComponents([.year, .month], from: next)
         return due(year: nextComponents.year ?? 2000, month: nextComponents.month ?? 1)

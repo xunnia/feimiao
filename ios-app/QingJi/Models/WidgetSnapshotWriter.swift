@@ -45,7 +45,7 @@ enum WidgetSnapshotWriter {
         let budgetOverridesV2 = (try? context.fetch(FetchDescriptor<BudgetCycleOverrideRecord>())) ?? []
         let v2Status: BudgetStatus? = {
             guard let bookID = selectedBook?.stableID else { return nil }
-            BudgetStore.currentStatusV2(
+            return BudgetStore.currentStatusV2(
                 plans: budgetPlansV2.map(\.core),
                 revisions: budgetRevisionsV2.map(\.core),
                 overrides: budgetOverridesV2.map(\.core),
