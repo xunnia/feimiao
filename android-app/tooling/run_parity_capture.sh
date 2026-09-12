@@ -226,6 +226,7 @@ fi
     adb -s "$device_id" shell pm clear "$app_id" >/dev/null 2>&1 || true
     echo "PARITY_SCENE_RESET scene=$scene"
     "$timeout_bin" --foreground --kill-after=30s "${scene_timeout_seconds}s" flutter drive \
+      --no-dds \
       --driver=test_driver/integration_test.dart \
       --target=integration_test/parity_screenshots_test.dart \
       --device-id "$device_id" \
@@ -235,6 +236,14 @@ fi
       --dart-define=QINGJI_DEMO_NOW=2026-08-27T12:00:00+08:00 \
       --dart-define=QINGJI_P0_FIXTURE_HASH="$fixture_hash"
     local status=$?
+    if [ "$status" -ne 0 ]; then
+      # Capture live transport state BEFORE cleanup removes the VM forwards.
+      # Direct VM service avoids an extra DDS websocket hop in headless CI.
+      echo "PARITY_TRANSPORT_DIAGNOSTICS scene=$scene status=$status"
+      "$timeout_bin" 10s adb -s "$device_id" forward --list 2>&1 || true
+      "$timeout_bin" 10s adb -s "$device_id" shell pidof "$app_id" 2>&1 || true
+      "$timeout_bin" 15s adb -s "$device_id" logcat -d -t 300 2>&1 || true
+    fi
     # Always tear down the app and VM forward, including timeout/driver-error
     # paths. This is what makes a retry or the next scene independent.
     cleanup_scene_state
