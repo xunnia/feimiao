@@ -5,6 +5,27 @@ import sys
 from pathlib import Path
 from merge_android_capture_shards import collect
 from run_bounded import run
+from parity_transport_failure import is_retryable
+
+
+class TransportFailureTests(unittest.TestCase):
+    def test_offline_before_long_diagnostic_tail(self):
+        self.assertTrue(is_retryable("adb: device offline\n" + "diagnostic\n" * 300))
+
+    def test_service_loss(self):
+        self.assertTrue(is_retryable("ext.flutter.driver: (112) Service has disappeared"))
+
+    def test_assertion_wins_over_transport_error(self):
+        self.assertFalse(is_retryable("TestFailure: Expected: one widget\nadb: device offline"))
+
+    def test_unrelated_uninstall_failure_is_not_retryable(self):
+        self.assertFalse(is_retryable("Failure [DELETE_FAILED_INTERNAL_ERROR]"))
+
+    def test_unclassified_failure_is_not_retryable(self):
+        self.assertFalse(is_retryable("Compilation failed"))
+
+    def test_previous_attempt_is_not_considered(self):
+        self.assertFalse(is_retryable("current scene failed without transport error"))
 
 
 class BoundedCommandTests(unittest.TestCase):

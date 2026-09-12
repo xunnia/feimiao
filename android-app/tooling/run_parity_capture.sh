@@ -219,6 +219,7 @@ fi
 
   run_scene() {
     local scene="$1"
+    attempt_log="$parity_output/drive-$scene-attempt-$attempt.log"
     echo "PARITY_SCENE_BEGIN scene=$scene"
     # Each scene gets a fresh application database. The package is deliberately
     # left installed so flutter drive can reuse the build, but stale process and
@@ -235,8 +236,8 @@ fi
       --dart-define=QINGJI_PARITY_CAPTURE=true \
       --dart-define=QINGJI_PARITY_SCENE="$scene" \
       --dart-define=QINGJI_DEMO_NOW=2026-08-27T12:00:00+08:00 \
-      --dart-define=QINGJI_P0_FIXTURE_HASH="$fixture_hash"
-    local status=$?
+      --dart-define=QINGJI_P0_FIXTURE_HASH="$fixture_hash" 2>&1 | tee "$attempt_log"
+    local status=${PIPESTATUS[0]}
     if [ "$status" -ne 0 ]; then
       # Capture live transport state BEFORE cleanup removes the VM forwards.
       # Direct VM service avoids an extra DDS websocket hop in headless CI.
@@ -279,10 +280,9 @@ fi
       # Retry only transport/process-loss failures. Assertion and application
       # failures remain fail-fast so a real regression is never hidden.
       transient_failure=0
-      if ! adb -s "$device_id" get-state >/dev/null 2>&1; then
-        transient_failure=1
-      elif tail -n 160 "$log_path" 2>/dev/null | grep -Eq \
-          'Service has disappeared|device offline|bad color buffer handle'; then
+      # Diagnose the drive output, not the global tail polluted by logcat or
+      # a previous scene. ADB may already be online again after cleanup.
+      if "$python_bin" "$repo_root/ios-app/tools/parity_transport_failure.py" "$attempt_log"; then
         transient_failure=1
       fi
       if [ "$transient_failure" -eq 1 ] && [ "$attempt" -lt "$scene_retry_limit" ]; then
