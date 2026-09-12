@@ -25,6 +25,13 @@ legacy_app_id="com.qingji.qingji"
 app_ids=("$app_id" "$legacy_app_id")
 scene_timeout_seconds="${PARITY_SCENE_TIMEOUT_SECONDS:-600}"
 scene_retry_limit="${PARITY_SCENE_RETRIES:-1}"
+shard_index="${PARITY_SHARD_INDEX:-0}"
+shard_count="${PARITY_SHARD_COUNT:-1}"
+if ! [[ "$shard_index" =~ ^[0-9]+$ && "$shard_count" =~ ^[1-9][0-9]*$ ]] ||
+   [ "$shard_index" -ge "$shard_count" ] || [ "$shard_count" -gt 41 ]; then
+  echo "Invalid parity shard: $shard_index/$shard_count" >&2
+  exit 2
+fi
 if [ -z "$device_id" ]; then
   mapfile -t online_devices < <(adb devices | awk '$2 == "device" { print $1 }')
   if [ "${#online_devices[@]}" -ne 1 ]; then
@@ -153,6 +160,14 @@ fi
     ai-schedules
     ai-local
   )
+  selected_scenes=()
+  for index in "${!scenes[@]}"; do
+    if [ "$((index % shard_count))" -eq "$shard_index" ]; then
+      selected_scenes+=("${scenes[$index]}")
+    fi
+  done
+  scenes=("${selected_scenes[@]}")
+  echo "PARITY_SHARD index=$shard_index count=$shard_count scenes=${scenes[*]}"
   cleanup_scene_state() {
     local package
     # Stop both the current applicationId and the historical namespace-derived
@@ -289,6 +304,10 @@ fi
 } 2>&1 | tee "$log_path"
 
 status=${PIPESTATUS[0]}
+completeness_args=()
+if [ "$shard_count" -eq 1 ]; then
+  completeness_args+=(--require-complete)
+fi
 if [ "$status" -eq 0 ]; then
   if ! "$python_bin" "$repo_root/ios-app/tools/check_p0_business_json.py" \
       --input outputs/parity/p0-business-android.json \
@@ -308,9 +327,15 @@ if [ "$status" -eq 0 ]; then
       --root "$repo_root" \
       --metadata "$parity_output/capture-metadata.json" \
       --platform android \
-      --require-complete; then
+      "${completeness_args[@]}"; then
     status=1
   fi
+fi
+
+if [ "$status" -eq 0 ]; then
+  # This receipt is written only after the entire shard and its business and
+  # provenance checks succeed. The aggregate job rejects absent shards.
+  printf '{"index":%s,"count":%s}\n' "$shard_index" "$shard_count" > "$parity_output/shard.json"
 fi
 echo "PARITY_DRIVER_END status=$status" | tee -a "$log_path"
 exit "$status"
