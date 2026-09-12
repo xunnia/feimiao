@@ -16,7 +16,7 @@ struct ReconcileView: View {
     @State private var errorMessage: String?
 
     private var usableAccounts: [Account] {
-        accounts.filter { !$0.isDeleted && $0.status == .active }
+        accounts.filter { !$0.isSoftDeleted && $0.status == .active }
     }
 
     var body: some View {

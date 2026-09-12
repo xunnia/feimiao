@@ -15,7 +15,7 @@ final class Account {
     var initialBalance: Decimal = 0
     var institution: String = ""
     var includeInNetWorth: Bool = true
-    var isDeleted: Bool = false
+    @Attribute(originalName: "isDeleted") var isSoftDeleted: Bool = false
     var statusRaw: String = AccountStatus.active.rawValue
     var archivedAt: Date? = nil
     var lastVerifiedAt: Date? = nil

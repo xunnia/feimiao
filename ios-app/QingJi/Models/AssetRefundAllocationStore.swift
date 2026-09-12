@@ -97,7 +97,7 @@ enum AssetRefundAllocationStore {
         for asset: PhysicalAsset,
         in context: ModelContext
     ) throws -> [PendingPhysicalAssetRefundAllocation] {
-        guard !asset.isDeleted else { return [] }
+        guard !asset.isSoftDeleted else { return [] }
         let transactions = try context.fetch(FetchDescriptor<MoneyTransaction>())
         let links = try context.fetch(FetchDescriptor<AssetTransactionLink>())
         let allocations = try context.fetch(FetchDescriptor<AssetRefundAllocation>())
@@ -517,7 +517,7 @@ enum AssetRefundAllocationStore {
     ) throws {
         guard isPurchaseLink(link) else { throw Error.invalidPurchaseLink }
         let assets = try context.fetch(FetchDescriptor<PhysicalAsset>())
-        guard let asset = assets.first(where: { $0.stableID == link.assetID }), !asset.isDeleted else {
+        guard let asset = assets.first(where: { $0.stableID == link.assetID }), !asset.isSoftDeleted else {
             throw Error.unknownAsset
         }
         guard asset.lifecycle == .owned || asset.lifecycle == .idle else {

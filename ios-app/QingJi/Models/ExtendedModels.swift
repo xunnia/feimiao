@@ -248,7 +248,7 @@ final class PhysicalAsset {
     var depreciationPaused: Bool = false
     var note: String = ""
     var includeInNetWorth: Bool = true
-    var isDeleted: Bool = false
+    @Attribute(originalName: "isDeleted") var isSoftDeleted: Bool = false
     var endedAt: Date? = nil
     var archivedAt: Date? = nil
     var createdAt: Date = Date()
@@ -557,7 +557,7 @@ final class ReceivableAsset {
     var dueDate: Date? = nil
     var includeInNetWorth: Bool = true
     var note: String = ""
-    var isDeleted: Bool = false
+    @Attribute(originalName: "isDeleted") var isSoftDeleted: Bool = false
     var endedAt: Date? = nil
     var archivedAt: Date? = nil
     var createdAt: Date = Date()

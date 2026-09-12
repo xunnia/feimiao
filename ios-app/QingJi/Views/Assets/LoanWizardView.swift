@@ -28,7 +28,7 @@ struct LoanWizardSheet: View {
 
     private var usableAccounts: [Account] {
         accounts.filter {
-            !$0.isDeleted && $0.status == .active && $0.currencyCode == "CNY"
+            !$0.isSoftDeleted && $0.status == .active && $0.currencyCode == "CNY"
         }
     }
 

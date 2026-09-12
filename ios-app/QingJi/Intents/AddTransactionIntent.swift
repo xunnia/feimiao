@@ -38,7 +38,7 @@ struct AddTransactionIntent: AppIntent {
         let fallbackKey = kind == .income ? "otherIncome" : CategorySeed.fallbackExpenseKey
         let category = matched ?? categories.first { $0.key == fallbackKey }
         let account = (try? context.fetch(FetchDescriptor<Account>(sortBy: [SortDescriptor(\.sortOrder)])))?
-            .first(where: { !$0.isDeleted && $0.status == .active })
+            .first(where: { !$0.isSoftDeleted && $0.status == .active })
 
         let transaction = try LedgerStore.createTransaction(
             in: context,

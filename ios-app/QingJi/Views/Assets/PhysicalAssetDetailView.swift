@@ -566,7 +566,7 @@ private struct AssetSaleSheet: View {
                         .keyboardType(.decimalPad)
                     Picker("收款账户", selection: $accountID) {
                         Text("不记入账户").tag(Optional<UUID>.none)
-                        ForEach(accounts.filter { !$0.isDeleted && $0.status == .active && $0.currencyCode == asset.currencyCode }) { account in
+                        ForEach(accounts.filter { !$0.isSoftDeleted && $0.status == .active && $0.currencyCode == asset.currencyCode }) { account in
                             Text(account.name).tag(Optional(account.stableID))
                         }
                     }

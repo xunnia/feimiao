@@ -789,7 +789,7 @@ struct MeowAssistantView: View {
     private func saveRecord(turnID: UUID) {
         guard var card = recordCards[turnID], !card.saved else { return }
         guard let account = accounts.first(where: {
-            !$0.isDeleted && $0.status == .active
+            !$0.isSoftDeleted && $0.status == .active
         }) else {
             errorMessage = "请先添加一个可用账户。"
             return

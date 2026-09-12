@@ -300,7 +300,7 @@ enum LedgerStore {
     }
 
     private static func isUsableAccount(_ account: Account) -> Bool {
-        !account.isDeleted && account.status == .active && !account.currencyCode.isEmpty
+        !account.isSoftDeleted && account.status == .active && !account.currencyCode.isEmpty
     }
 
     /// 轻量修改分类，供 AI 记账卡和明细页复用；不改变金额、日期、账户或
@@ -337,7 +337,7 @@ enum LedgerStore {
         let normalizedAmount = MoneyNormalization.roundToCents(amount)
         guard normalizedAmount > 0 else { throw Error.invalidAmount }
         if let settlementAccount,
-           (settlementAccount.isDeleted || settlementAccount.status != .active ||
+           (settlementAccount.isSoftDeleted || settlementAccount.status != .active ||
             settlementAccount.currencyCode != original.currencyCode) {
             throw Error.invalidSettlementAccount
         }
@@ -398,7 +398,7 @@ enum LedgerStore {
         if let originalID = transaction.refundOfID {
             let returnedAssetIDs = Set(
                 try context.fetch(FetchDescriptor<PhysicalAsset>())
-                    .filter { !$0.isDeleted && $0.lifecycle == .returned }
+                    .filter { !$0.isSoftDeleted && $0.lifecycle == .returned }
                     .map(\.stableID)
             )
             let returnsThisAsset = allAssetLinks.contains { link in

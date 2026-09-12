@@ -34,7 +34,7 @@ private struct OffsetSheet: View {
     }
 
     private var selectableAccounts: [Account] {
-        accounts.filter { !$0.isDeleted && $0.status == .active }
+        accounts.filter { !$0.isSoftDeleted && $0.status == .active }
     }
 
     private var amount: Decimal? {
@@ -175,7 +175,7 @@ struct EditTransactionSheet: View {
 
     private var selectableAccounts: [Account] {
         accounts.filter {
-            (!$0.isDeleted && $0.status == .active) ||
+            (!$0.isSoftDeleted && $0.status == .active) ||
             $0.stableID == transaction.account?.stableID ||
             $0.stableID == transaction.toAccount?.stableID
         }

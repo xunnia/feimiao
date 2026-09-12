@@ -55,7 +55,7 @@ struct AIQuickEntryView: View {
     }
 
     private var usableAccounts: [Account] {
-        accounts.filter { !$0.isDeleted && $0.status == .active }
+        accounts.filter { !$0.isSoftDeleted && $0.status == .active }
     }
 
     private var usableBooks: [Book] { books.sorted { $0.sortOrder < $1.sortOrder } }

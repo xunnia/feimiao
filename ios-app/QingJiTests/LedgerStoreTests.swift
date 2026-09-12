@@ -9,7 +9,7 @@ final class LedgerStoreTests: XCTestCase {
         let container: ModelContainer
         let context: ModelContext
 
-        init() throws {
+        init(storeURL: URL? = nil) throws {
             let schema = Schema([
                 Account.self,
                 Book.self,
@@ -25,10 +25,12 @@ final class LedgerStoreTests: XCTestCase {
                 ReceivableAsset.self,
                 ReceivableRecovery.self,
             ])
-            let configuration = ModelConfiguration(
-                schema: schema,
-                isStoredInMemoryOnly: true
-            )
+            let configuration: ModelConfiguration
+            if let storeURL {
+                configuration = ModelConfiguration(schema: schema, url: storeURL, cloudKitDatabase: .none)
+            } else {
+                configuration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
+            }
             let modelContainer = try ModelContainer(
                 for: schema,
                 configurations: [configuration]
@@ -120,13 +122,41 @@ final class LedgerStoreTests: XCTestCase {
         )
     }
 
+    func testSoftDeletedAccountSurvivesStoreReopen() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("ledger.store")
+        do {
+            let stack = try Stack(storeURL: url)
+            let (_, _, bank, _) = try seed(stack)
+            bank.isSoftDeleted = true
+            try stack.context.save()
+        }
+        let reopened = try Stack(storeURL: url)
+        let accounts = try reopened.context.fetch(FetchDescriptor<Account>())
+        let bank = try XCTUnwrap(accounts.first { $0.kind == .bankCard })
+        let cash = try XCTUnwrap(accounts.first { $0.kind == .cash })
+        XCTAssertTrue(bank.isSoftDeleted)
+        XCTAssertFalse(cash.isSoftDeleted)
+        let book = try XCTUnwrap(reopened.context.fetch(FetchDescriptor<Book>()).first)
+        XCTAssertThrowsError(try LedgerStore.createTransaction(
+            in: reopened.context, amount: 50, kind: .transfer,
+            date: Date(), note: "Deleted target after reopen",
+            account: cash, toAccount: bank, book: book
+        )) { error in
+            XCTAssertEqual(error as? LedgerStore.Error, .invalidTransfer)
+        }
+        XCTAssertEqual(try reopened.context.fetchCount(FetchDescriptor<MoneyTransaction>()), 0)
+    }
+
     func testTransferRejectsDeletedTargetAccount() throws {
         let stack = try Stack()
         let (book, cash, bank, _) = try seed(stack)
-        bank.isDeleted = true
-        XCTAssertTrue(bank.isDeleted, "Soft-delete must take effect before saving")
+        bank.isSoftDeleted = true
+        XCTAssertTrue(bank.isSoftDeleted, "Soft-delete must take effect before saving")
         try stack.context.save()
-        XCTAssertTrue(bank.isDeleted, "Soft-delete must survive SwiftData save")
+        XCTAssertTrue(bank.isSoftDeleted, "Soft-delete must survive SwiftData save")
 
         XCTAssertThrowsError(
             try LedgerStore.createTransaction(

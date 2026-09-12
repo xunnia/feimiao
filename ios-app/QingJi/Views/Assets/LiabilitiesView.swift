@@ -263,7 +263,7 @@ private struct LiabilityEditor: View {
                         .keyboardType(.decimalPad)
                     Picker("绑定负债账户", selection: $accountID) {
                         Text("请选择账户").tag(Optional<UUID>.none)
-                        ForEach(accounts.filter { !$0.isDeleted }) { account in
+                        ForEach(accounts.filter { !$0.isSoftDeleted }) { account in
                             Text(account.name).tag(Optional(account.stableID))
                         }
                     }
@@ -412,7 +412,7 @@ struct LiabilityRepaymentSheet: View {
                     Picker("付款账户", selection: $fromAccountID) {
                         Text("请选择账户").tag(Optional<UUID>.none)
                         ForEach(accounts.filter {
-                            !$0.isDeleted &&
+                            !$0.isSoftDeleted &&
                             $0.status == .active &&
                             $0.stableID != liabilityAccountID
                         }) { account in
@@ -450,7 +450,7 @@ struct LiabilityRepaymentSheet: View {
             .onAppear {
                 if fromAccountID == nil {
                     fromAccountID = accounts.first {
-                        !$0.isDeleted &&
+                        !$0.isSoftDeleted &&
                         $0.status == .active &&
                         $0.stableID != liabilityAccountID &&
                         $0.currencyCode == profile.currencyCode

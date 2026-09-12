@@ -258,7 +258,7 @@ enum BackupStore {
                     sortOrder: $0.sortOrder,
                     institution: $0.institution,
                     includeInNetWorth: $0.includeInNetWorth,
-                    isDeleted: $0.isDeleted,
+                    isDeleted: $0.isSoftDeleted,
                     status: $0.status,
                     archivedAt: $0.archivedAt,
                     lastVerifiedAt: $0.lastVerifiedAt,
@@ -419,7 +419,7 @@ enum BackupStore {
                     depreciationPaused: $0.depreciationPaused,
                     note: $0.note,
                     includeInNetWorth: $0.includeInNetWorth,
-                    isDeleted: $0.isDeleted,
+                    isDeleted: $0.isSoftDeleted,
                     endedAt: $0.endedAt,
                     archivedAt: $0.archivedAt,
                     createdAt: $0.createdAt,
@@ -505,7 +505,7 @@ enum BackupStore {
                     dueDate: $0.dueDate,
                     includeInNetWorth: $0.includeInNetWorth,
                     note: $0.note,
-                    isDeleted: $0.isDeleted,
+                    isDeleted: $0.isSoftDeleted,
                     endedAt: $0.endedAt,
                     archivedAt: $0.archivedAt,
                     createdAt: $0.createdAt,
@@ -942,7 +942,7 @@ enum BackupStore {
             if let includeInNetWorth = item.includeInNetWorth {
                 account.includeInNetWorth = includeInNetWorth
             }
-            if let isDeleted = item.isDeleted { account.isDeleted = isDeleted }
+            if let isDeleted = item.isDeleted { account.isSoftDeleted = isDeleted }
             if let status = item.status { account.status = status }
             if let archivedAt = item.archivedAt { account.archivedAt = archivedAt }
             if let lastVerifiedAt = item.lastVerifiedAt { account.lastVerifiedAt = lastVerifiedAt }
@@ -1173,7 +1173,7 @@ enum BackupStore {
             asset.depreciationPaused = item.depreciationPaused
             asset.note = item.note
             asset.includeInNetWorth = item.includeInNetWorth
-            asset.isDeleted = item.isDeleted
+            asset.isSoftDeleted = item.isDeleted
             asset.endedAt = item.endedAt
             asset.archivedAt = item.archivedAt
             if let createdAt = item.createdAt { asset.createdAt = createdAt }
@@ -1316,7 +1316,7 @@ enum BackupStore {
             receivable.dueDate = item.dueDate
             receivable.includeInNetWorth = item.includeInNetWorth
             receivable.note = item.note
-            receivable.isDeleted = item.isDeleted
+            receivable.isSoftDeleted = item.isDeleted
             receivable.endedAt = item.endedAt
             receivable.archivedAt = item.archivedAt
             if let createdAt = item.createdAt { receivable.createdAt = createdAt }

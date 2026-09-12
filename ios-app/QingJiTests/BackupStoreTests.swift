@@ -54,6 +54,26 @@ final class BackupStoreTests: XCTestCase {
         }
     }
 
+    func testSoftDeletedAccountBackupKeepsLegacyJSONKey() throws {
+        let source = try Stack()
+        let account = Account(name: "Deleted account", kind: .cash)
+        account.isSoftDeleted = true
+        source.context.insert(account)
+        try source.context.save()
+        XCTAssertTrue(account.isSoftDeleted)
+        let data = try BackupStore.export(context: source.context)
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let accounts = try XCTUnwrap(json["accounts"] as? [[String: Any]])
+        let record = try XCTUnwrap(accounts.first)
+        XCTAssertEqual(record["isDeleted"] as? Bool, true)
+        XCTAssertNil(record["isSoftDeleted"])
+        let restored = try Stack()
+        _ = try BackupStore.importData(data, into: restored.context)
+        let result = try XCTUnwrap(restored.context.fetch(FetchDescriptor<Account>()).first)
+        XCTAssertEqual(result.stableID, account.stableID)
+        XCTAssertTrue(result.isSoftDeleted)
+    }
+
     func testRestoreReplacesCurrentModelsInsteadOfMergingThem() throws {
         let stack = try Stack()
         let oldBook = Book(name: "旧账本")

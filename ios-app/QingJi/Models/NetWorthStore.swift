@@ -29,7 +29,7 @@ enum NetWorthStore {
         var accountBalances: [UUID: Decimal] = [:]
         var unsupported = Set<String>()
 
-        for account in accounts where !account.isDeleted && account.status == .active {
+        for account in accounts where !account.isSoftDeleted && account.status == .active {
             let currency = account.currencyCode.uppercased()
             guard account.includeInNetWorth else { continue }
             guard currency == "CNY" else {
@@ -53,7 +53,7 @@ enum NetWorthStore {
 
         var totalLiabilities = Decimal.zero
         // 负余额本身就是负债；档案本金只在 legacyHybrid 下追加，避免重复计算。
-        for account in accounts where !account.isDeleted && account.status == .active {
+        for account in accounts where !account.isSoftDeleted && account.status == .active {
             guard account.includeInNetWorth, account.currencyCode.uppercased() == "CNY" else { continue }
             let balance = accountBalances[account.stableID] ?? 0
             if balance < 0 { totalLiabilities -= balance }
@@ -61,7 +61,7 @@ enum NetWorthStore {
         for profile in liabilities where profile.lifecycle == .active && profile.currentPrincipal > 0 {
             guard let accountID = profile.accountID,
                   let account = accounts.first(where: { $0.stableID == accountID }),
-                  !account.isDeleted,
+                  !account.isSoftDeleted,
                   account.includeInNetWorth,
                   account.currencyCode.uppercased() == "CNY" else { continue }
             if account.balanceMode != .ledger {
@@ -71,7 +71,7 @@ enum NetWorthStore {
         }
 
         let physical = physicalAssets.reduce(into: Decimal.zero) { total, asset in
-            guard !asset.isDeleted,
+            guard !asset.isSoftDeleted,
                   asset.includeInNetWorth,
                   (asset.lifecycle == .owned || asset.lifecycle == .idle) else { return }
             if asset.currencyCode.uppercased() == "CNY" {
@@ -81,7 +81,7 @@ enum NetWorthStore {
             }
         }
         let receivable = receivables.reduce(into: Decimal.zero) { total, asset in
-            guard !asset.isDeleted,
+            guard !asset.isSoftDeleted,
                   asset.includeInNetWorth,
                   (asset.lifecycle == .active || asset.lifecycle == .partiallyRecovered) else { return }
             if asset.currencyCode.uppercased() == "CNY" {

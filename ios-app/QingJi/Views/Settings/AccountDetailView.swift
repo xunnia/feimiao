@@ -461,7 +461,7 @@ struct AccountDetailView: View {
 
     private func toggleArchive() {
         currentAccount.status = currentAccount.status == .active ? .archived : .active
-        currentAccount.isDeleted = false
+        currentAccount.isSoftDeleted = false
         currentAccount.archivedAt = currentAccount.status == .archived ? AppClock.now : nil
         currentAccount.updatedAt = AppClock.now
         do {

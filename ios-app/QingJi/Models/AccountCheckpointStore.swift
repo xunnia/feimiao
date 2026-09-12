@@ -69,7 +69,7 @@ enum AccountCheckpointStore {
         effectiveAt: Date = Date(),
         in context: ModelContext
     ) throws -> AccountBalanceCheckpointRecord {
-        guard !account.isDeleted,
+        guard !account.isSoftDeleted,
               account.status == .active,
               !account.currencyCode.isEmpty else {
             throw Error.accountUnavailable

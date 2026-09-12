@@ -25,11 +25,11 @@ struct AccountsView: View {
     @State private var didOpenLaunchDetail = false
 
     private var activeAccounts: [Account] {
-        accounts.filter { !$0.isDeleted && $0.status == .active }
+        accounts.filter { !$0.isSoftDeleted && $0.status == .active }
     }
 
     private var archivedAccounts: [Account] {
-        accounts.filter { $0.isDeleted || $0.status != .active }
+        accounts.filter { $0.isSoftDeleted || $0.status != .active }
     }
 
     init(opensFirstDetail: Bool = false) {
@@ -213,7 +213,7 @@ struct AccountsView: View {
 
     private func archive(_ account: Account) {
         account.status = .archived
-        account.isDeleted = false
+        account.isSoftDeleted = false
         account.archivedAt = Date()
         account.updatedAt = Date()
         saveContext()
@@ -221,7 +221,7 @@ struct AccountsView: View {
 
     private func restore(_ account: Account) {
         account.status = .active
-        account.isDeleted = false
+        account.isSoftDeleted = false
         account.archivedAt = nil
         account.updatedAt = Date()
         saveContext()

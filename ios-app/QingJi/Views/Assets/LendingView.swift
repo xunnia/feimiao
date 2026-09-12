@@ -28,7 +28,7 @@ struct LendingView: View {
             grouped[name] = party
         }
 
-        for asset in receivables where !asset.isDeleted && asset.kind == .loanOut {
+        for asset in receivables where !asset.isSoftDeleted && asset.kind == .loanOut {
             let name = lendingPartyName(
                 counterparty: asset.counterparty,
                 fallback: asset.name
@@ -109,7 +109,7 @@ struct LendingView: View {
                 resolved.events.sort { $0.date > $1.date }
                 resolved.lentRemaining = receivables
                     .filter {
-                        !$0.isDeleted && $0.kind == .loanOut &&
+                        !$0.isSoftDeleted && $0.kind == .loanOut &&
                         lendingPartyName(counterparty: $0.counterparty, fallback: $0.name) == party.name &&
                         ($0.lifecycle == .active || $0.lifecycle == .partiallyRecovered)
                     }
@@ -344,7 +344,7 @@ struct BorrowEntrySheet: View {
 
     private var targetAccounts: [Account] {
         accounts.filter {
-            !$0.isDeleted && $0.status == .active && $0.currencyCode == "CNY"
+            !$0.isSoftDeleted && $0.status == .active && $0.currencyCode == "CNY"
         }
     }
 

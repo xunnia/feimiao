@@ -71,7 +71,7 @@ struct QuickAddView: View {
     }
 
     private var usableAccounts: [Account] {
-        accounts.filter { !$0.isDeleted && $0.status == .active }
+        accounts.filter { !$0.isSoftDeleted && $0.status == .active }
     }
 
     /// 首次启动种子数据异步写入，account 选择要随查询结果就绪而兜底。

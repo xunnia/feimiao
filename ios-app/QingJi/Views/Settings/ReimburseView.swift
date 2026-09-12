@@ -32,7 +32,7 @@ struct ReimburseView: View {
     }
 
     private var usableAccounts: [Account] {
-        accounts.filter { !$0.isDeleted && $0.status == .active }
+        accounts.filter { !$0.isSoftDeleted && $0.status == .active }
     }
 
     init(opensFirstSettlement: Bool = false) {
@@ -160,7 +160,7 @@ private struct ReimburseSettlementSheet: View {
     @State private var errorMessage: String?
 
     private var settlementAccount: Account? {
-        accounts.first { $0.stableID == settlementAccountID && !$0.isDeleted && $0.status == .active }
+        accounts.first { $0.stableID == settlementAccountID && !$0.isSoftDeleted && $0.status == .active }
     }
 
     private var remaining: Decimal {
@@ -178,7 +178,7 @@ private struct ReimburseSettlementSheet: View {
                 Section("到账信息") {
                     Picker("收款账户", selection: $settlementAccountID) {
                         Text("未指定").tag(Optional<UUID>.none)
-                        ForEach(accounts.filter { !$0.isDeleted && $0.status == .active }) { account in
+                        ForEach(accounts.filter { !$0.isSoftDeleted && $0.status == .active }) { account in
                             Text(account.name).tag(Optional(account.stableID))
                         }
                     }

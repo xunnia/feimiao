@@ -356,7 +356,7 @@ enum BillRecordSaver {
     ) throws -> Int {
         let categories = (try? context.fetch(FetchDescriptor<TxCategory>())) ?? []
         let accounts = ((try? context.fetch(FetchDescriptor<Account>())) ?? [])
-            .filter { !$0.isDeleted && $0.status == .active }
+            .filter { !$0.isSoftDeleted && $0.status == .active }
         let books = (try? context.fetch(FetchDescriptor<Book>(sortBy: [SortDescriptor(\.sortOrder)]))) ?? []
         let existingTransactions = (try? context.fetch(FetchDescriptor<MoneyTransaction>())) ?? []
 

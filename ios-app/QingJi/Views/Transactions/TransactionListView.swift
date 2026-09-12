@@ -482,7 +482,7 @@ private struct TransactionFilterSheet: View {
         maximumAmountText: String,
         onApply: @escaping (TransactionFilterValues) -> Void
     ) {
-        self.availableAccounts = accounts.filter { !$0.isDeleted && $0.status == .active }
+        self.availableAccounts = accounts.filter { !$0.isSoftDeleted && $0.status == .active }
         self.availableTags = tags
         self.onApply = onApply
         _kind = State(initialValue: kind)

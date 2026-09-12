@@ -59,11 +59,11 @@ struct AssetsView: View {
     }
 
     private var visibleAssets: [PhysicalAsset] {
-        physicalAssets.filter { !$0.isDeleted && $0.lifecycle != .archived }
+        physicalAssets.filter { !$0.isSoftDeleted && $0.lifecycle != .archived }
     }
 
     private var visibleReceivables: [ReceivableAsset] {
-        receivables.filter { !$0.isDeleted && $0.lifecycle != .archived }
+        receivables.filter { !$0.isSoftDeleted && $0.lifecycle != .archived }
     }
 
     init(opensFirstDetail: Bool = false, startsOnPhysical: Bool = false) {
@@ -239,7 +239,7 @@ struct AssetsView: View {
     private var fundsContent: some View {
         VStack(alignment: .leading, spacing: 8) {
             sectionTitle("账户余额", systemImage: "wallet.pass")
-            ForEach(accounts.filter { !$0.isDeleted && $0.status == .active }) { account in
+            ForEach(accounts.filter { !$0.isSoftDeleted && $0.status == .active }) { account in
                 let balance = LedgerStore.accountBalance(
                     for: account,
                     transactions: transactions,
@@ -293,7 +293,7 @@ struct AssetsView: View {
 
     private var hasLendingRecords: Bool {
         receivables.contains {
-            !$0.isDeleted && $0.kind == .loanOut
+            !$0.isSoftDeleted && $0.kind == .loanOut
         } || liabilities.contains {
             $0.kind == .personalBorrow && $0.lifecycle != .archived
         }
@@ -884,7 +884,7 @@ struct PhysicalAssetEditor: View {
                             Picker("付款账户", selection: $paymentAccountID) {
                                 Text("选择账户").tag(Optional<UUID>.none)
                                 ForEach(accounts.filter {
-                                    !$0.isDeleted &&
+                                    !$0.isSoftDeleted &&
                                     $0.status == .active &&
                                     $0.currencyCode == "CNY"
                                 }) { account in
@@ -1264,7 +1264,7 @@ struct ReceivableRecoverySheet: View {
                         .keyboardType(.decimalPad)
                     Picker("到账账户（可选）", selection: $accountID) {
                         Text("暂不指定").tag(Optional<UUID>.none)
-                        ForEach(accounts.filter { !$0.isDeleted && $0.status == .active }) { account in
+                        ForEach(accounts.filter { !$0.isSoftDeleted && $0.status == .active }) { account in
                             Text(account.name).tag(Optional(account.stableID))
                         }
                     }

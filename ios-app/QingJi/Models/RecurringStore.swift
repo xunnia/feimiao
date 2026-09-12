@@ -277,7 +277,7 @@ enum RecurringStore {
     }
 
     private static func isAvailable(_ account: Account) -> Bool {
-        !account.isDeleted && account.status == .active && !account.currencyCode.isEmpty
+        !account.isSoftDeleted && account.status == .active && !account.currencyCode.isEmpty
     }
 
     private static func endOfDay(_ date: Date, calendar: Calendar = .current) -> Date {

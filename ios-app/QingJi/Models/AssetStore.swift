@@ -43,7 +43,7 @@ enum AssetStore {
     static func visibleAssets(in context: ModelContext) throws -> [PhysicalAsset] {
         try context.fetch(FetchDescriptor<PhysicalAsset>(sortBy: [
             SortDescriptor(\PhysicalAsset.updatedAt, order: .reverse)
-        ])).filter { !$0.isDeleted && $0.lifecycle != .archived }
+        ])).filter { !$0.isSoftDeleted && $0.lifecycle != .archived }
     }
 
     static func events(for asset: PhysicalAsset, in context: ModelContext) throws -> [AssetEvent] {
@@ -130,7 +130,7 @@ enum AssetStore {
         in context: ModelContext,
         query: String = ""
     ) throws -> [MoneyTransaction] {
-        guard !asset.isDeleted,
+        guard !asset.isSoftDeleted,
               asset.lifecycle == .owned || asset.lifecycle == .idle,
               let bookID = asset.bookID else { return [] }
         let normalized = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
@@ -391,7 +391,7 @@ enum AssetStore {
     ) throws -> PhysicalAsset {
         let normalizedPrice = MoneyNormalization.roundToCents(purchasePrice)
         guard normalizedPrice > 0,
-              !account.isDeleted,
+              !account.isSoftDeleted,
               account.status == .active,
               account.currencyCode == "CNY" else {
             throw Error.invalidTransaction
@@ -820,7 +820,7 @@ enum AssetStore {
     ) throws -> Int {
         let assets = try context.fetch(FetchDescriptor<PhysicalAsset>())
             .filter {
-                !$0.isDeleted &&
+                !$0.isSoftDeleted &&
                 ($0.lifecycle == .owned || $0.lifecycle == .idle) &&
                 $0.depreciationMethod == "linear" &&
                 !$0.depreciationPaused &&
@@ -899,7 +899,7 @@ enum AssetStore {
             throw Error.saleAccountMissing
         }
         if let account,
-           account.isDeleted || account.status != .active ||
+           account.isSoftDeleted || account.status != .active ||
            account.currencyCode != asset.currencyCode {
             throw Error.saleAccountMissing
         }
@@ -1314,7 +1314,7 @@ enum ReceivableStore {
     static func visible(in context: ModelContext) throws -> [ReceivableAsset] {
         try context.fetch(FetchDescriptor<ReceivableAsset>(sortBy: [
             SortDescriptor(\ReceivableAsset.updatedAt, order: .reverse)
-        ])).filter { !$0.isDeleted && $0.lifecycle != .archived }
+        ])).filter { !$0.isSoftDeleted && $0.lifecycle != .archived }
     }
 
     static func recoveries(
@@ -1419,7 +1419,7 @@ enum ReceivableStore {
         guard normalizedAmount > 0 else { throw Error.invalidAmount }
         guard normalizedAmount <= asset.remainingAmount else { throw Error.exceedsRemaining }
         if let account,
-           account.isDeleted ||
+           account.isSoftDeleted ||
             account.status != .active ||
             account.currencyCode != asset.currencyCode {
             throw Error.accountUnavailable
@@ -1745,13 +1745,13 @@ enum LiabilityStore {
         let normalizedAmount = MoneyNormalization.roundToCents(amount)
         guard normalizedAmount > 0 else { throw Error.invalidPrincipal }
         if let toAccount,
-           toAccount.isDeleted || toAccount.status != .active ||
+           toAccount.isSoftDeleted || toAccount.status != .active ||
             toAccount.currencyCode != "CNY" {
             throw Error.accountMissing
         }
 
         let existingAccounts = try context.fetch(FetchDescriptor<Account>())
-        let usedNames = Set(existingAccounts.filter { !$0.isDeleted }.map(\.name))
+        let usedNames = Set(existingAccounts.filter { !$0.isSoftDeleted }.map(\.name))
         let baseName = "借入·\(person)"
         var accountName = baseName
         var suffix = 2
@@ -1850,7 +1850,7 @@ enum LiabilityStore {
             throw Error.invalidPrincipal
         }
         guard fromAccount.status == .active,
-              !fromAccount.isDeleted,
+              !fromAccount.isSoftDeleted,
               fromAccount.currencyCode == "CNY" else {
             throw Error.accountMissing
         }
@@ -1886,7 +1886,7 @@ enum LiabilityStore {
         }
 
         let existingAccounts = try context.fetch(FetchDescriptor<Account>())
-        let usedNames = Set(existingAccounts.filter { !$0.isDeleted }.map(\.name))
+        let usedNames = Set(existingAccounts.filter { !$0.isSoftDeleted }.map(\.name))
         var accountName = trimmedName
         var suffix = 2
         while usedNames.contains(accountName) {
@@ -1954,12 +1954,12 @@ enum LiabilityStore {
     ) throws -> (principal: Decimal, interest: Decimal) {
         let normalizedAmount = MoneyNormalization.roundToCents(amount)
         guard normalizedAmount > 0 else { throw Error.invalidRepayment }
-        guard fromAccount.status == .active && !fromAccount.isDeleted else { throw Error.accountMissing }
+        guard fromAccount.status == .active && !fromAccount.isSoftDeleted else { throw Error.accountMissing }
         let accounts = try context.fetch(FetchDescriptor<Account>())
         guard let liabilityAccountID = profile.accountID,
               let liabilityAccount = accounts.first(where: {
                   $0.stableID == liabilityAccountID &&
-                  !$0.isDeleted &&
+                  !$0.isSoftDeleted &&
                   $0.status == .active &&
                   $0.currencyCode == fromAccount.currencyCode
               }) else {
