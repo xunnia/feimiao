@@ -250,10 +250,15 @@ enum AssetStore {
                     refundCents: $0.allocatedRefundCents
                 )
             }
+        // A single asset covering the entire order owns its historical refunds.
+        // Validate the reconciled net cost, not an interim gross-only line that
+        // would reject the link before reconcileHistoricalRefunds can run.
+        let effectiveRefundCents = otherLines.isEmpty && grossCents == orderGross
+            && refundCents == 0 ? validRefund : refundCents
         let lines = otherLines + [AssetAllocationLine(
             assetID: asset.stableID,
             grossCents: grossCents,
-            refundCents: refundCents
+            refundCents: effectiveRefundCents
         )]
         do {
             _ = try AssetAllocationPolicy.validate(
@@ -271,16 +276,16 @@ enum AssetStore {
             assetID: asset.stableID,
             transactionID: transaction.stableID,
             linkTypeRaw: AssetTransactionLinkType.sourceTransaction.rawValue,
-            amount: Decimal(grossCents - refundCents) / Decimal(100)
+            amount: Decimal(grossCents - effectiveRefundCents) / Decimal(100)
         )
         link.allocatedGrossCents = grossCents
-        link.allocatedRefundCents = refundCents
+        link.allocatedRefundCents = effectiveRefundCents
         link.costQualityRaw = AssetAllocationCostQuality.partial.rawValue
         link.note = "从已有账单分配"
         context.insert(link)
         asset.acquisitionCostSourceRaw = AssetAcquisitionCostSource.transactionAllocations.rawValue
         asset.purchasePrice = MoneyNormalization.roundToCents(
-            Decimal(grossCents - refundCents) / Decimal(100)
+            Decimal(grossCents - effectiveRefundCents) / Decimal(100)
         )
         context.insert(AssetEvent(
             assetID: asset.stableID,

@@ -124,7 +124,9 @@ final class LedgerStoreTests: XCTestCase {
         let stack = try Stack()
         let (book, cash, bank, _) = try seed(stack)
         bank.isDeleted = true
+        XCTAssertTrue(bank.isDeleted, "Soft-delete must take effect before saving")
         try stack.context.save()
+        XCTAssertTrue(bank.isDeleted, "Soft-delete must survive SwiftData save")
 
         XCTAssertThrowsError(
             try LedgerStore.createTransaction(
