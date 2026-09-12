@@ -10,17 +10,18 @@
   },
   "baseline": {
     "cleanSourceAnchor": "b40316f336fb0aefabf67817460775b665fdaa1d",
-    "integrationBranch": "codex/ios-same-app",
+    "integrationBranch": "main",
     "android": {
-      "version": "1.289.0+304",
-      "watermark": "b0901-304",
+      "version": "1.293.0+308",
+      "watermark": "b0912-308",
       "databaseVersion": 49,
-      "sourceCommit": "b40316f336fb0aefabf67817460775b665fdaa1d",
-      "apk": "ci-artifacts/releases/feimiao-codex-v1.289.0-304.apk",
-      "apkBytes": 117822013,
-      "apkSha256": "EAB0DE7BD68D799786044BCA6DE2AED408179515F9FB987587B9A0529FEFDF3E",
-      "staticAnalysis": "0 errors; 90 warning/info diagnostics",
-      "tests": "1210/1210 passed on Windows Flutter 3.44.2 / Dart 3.12.2"
+      "sourceCommit": "b46043dc7f18f2eac38d05c6ce9a9230619f4a12",
+      "apk": "ci-artifacts/releases/feimiao-codex-v1.293.0-308.apk",
+      "apkBytes": 117936705,
+      "apkSha256": "73DF20B0BA3C1A3AF1CFE5F0F9EF7CC0F0A38C5DF155239493A54CF3DCDC213E",
+      "apkSourceNote": "Existing released 308 APK; integrated source retains newer mainline AppClock/parity contracts and has not been repackaged. Screenshot runs build the checked-out source.",
+      "staticAnalysis": "0 errors; 88 warning/info diagnostics",
+      "tests": "1222/1222 passed locally on Windows; Linux CI SQLite test teardown correction pending verification"
     },
     "ios": {
       "version": "1.286.0+300",

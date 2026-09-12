@@ -776,7 +776,9 @@ void main() {
     expect(find.textContaining('权益即将到期或已逾期'), findsOneWidget);
     expect(tester.takeException(), isNull);
 
-    await tester.tap(find.text('资金'));
+    // Tab changes persist a preference through SQLite's real isolate. Dispatch
+    // outside fake_async so its lock watchdog is not stranded at test teardown.
+    await tester.runAsync(() => tester.tap(find.text('资金')));
     await pumpViewAnimations(tester);
     expect(
       find.byKey(Key('receivable-due-$receivableId')),
@@ -785,7 +787,7 @@ void main() {
     expect(find.text('已逾期 2 天'), findsOneWidget);
     expect(tester.takeException(), isNull);
 
-    await tester.tap(find.text('物品'));
+    await tester.runAsync(() => tester.tap(find.text('物品')));
     await pumpViewAnimations(tester);
     expect(
       find.byKey(Key('physical-asset-secondary-$assetId')),
