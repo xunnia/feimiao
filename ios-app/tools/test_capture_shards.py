@@ -23,6 +23,7 @@ class CaptureShardsTests(unittest.TestCase):
         for index in range(2):
             directory = self.root / f"android-parity-shard-{index}"
             directory.mkdir()
+            (directory / "shard-images.txt").write_text(f"{index}.png\n", encoding="utf-8")
             entry = {"imagePath": f"android-app/outputs/parity/{index}.png",
                      "sidecarPath": f"android-app/outputs/parity/{index}.metadata.json",
                      "captureStatus": "captured"}
@@ -72,6 +73,25 @@ class CaptureShardsTests(unittest.TestCase):
         metadata = json.loads(path.read_text())
         metadata["screenshots"] = []
         self.write(1, "capture-metadata.json", metadata)
+        with self.assertRaises(ValueError):
+            collect(self.root, 2, "abc")
+
+    def test_navigation_prerequisite_uses_assigned_owner(self):
+        first = self.root / "android-parity-shard-0"
+        second = self.root / "android-parity-shard-1"
+        metadata = json.loads((second / "capture-metadata.json").read_text())
+        extra = json.loads((first / "0.metadata.json").read_text())
+        metadata["screenshots"].append(extra)
+        self.write(1, "capture-metadata.json", metadata)
+        self.write(1, "0.metadata.json", extra)
+        (second / "0.png").write_bytes(b"different prerequisite view")
+        result, _, files = collect(self.root, 2, "abc")
+        self.assertEqual(result["counts"]["total"], 2)
+        self.assertIn(first / "0.png", files)
+        self.assertNotIn(second / "0.png", files)
+
+    def test_missing_assigned_image_rejected(self):
+        (self.root / "android-parity-shard-1/shard-images.txt").write_text("absent.png\n")
         with self.assertRaises(ValueError):
             collect(self.root, 2, "abc")
 

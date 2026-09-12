@@ -167,6 +167,7 @@ fi
     fi
   done
   scenes=("${selected_scenes[@]}")
+  printf '%s-android.png\n' "${scenes[@]}" > "$parity_output/shard-images.txt"
   echo "PARITY_SHARD index=$shard_index count=$shard_count scenes=${scenes[*]}"
   cleanup_scene_state() {
     local package

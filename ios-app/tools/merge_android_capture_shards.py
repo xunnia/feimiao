@@ -36,7 +36,13 @@ def collect(shards, count, revision):
             raise ValueError("Shard business data mismatch")
         if not metadata["screenshots"]:
             raise ValueError("Empty shard")
+        owned_list = (directory / "shard-images.txt").read_text(encoding="utf-8").splitlines()
+        owned = set(owned_list)
+        if not owned or len(owned) != len(owned_list) or any(Path(name).name != name for name in owned):
+            raise ValueError("Invalid shard image ownership")
+        captured = set()
         for entry in metadata["screenshots"]:
+            entry_sources = []
             for key, suffix in (("imagePath", ".png"), ("sidecarPath", ".metadata.json")):
                 relative = Path(entry[key])
                 if relative.parent.as_posix() != "android-app/outputs/parity" or not relative.name.endswith(suffix):
@@ -44,11 +50,21 @@ def collect(shards, count, revision):
                 source = directory / relative.name
                 if source.is_symlink() or not source.is_file():
                     raise ValueError("Missing/unsafe artifact")
-                sources.append(source)
+                entry_sources.append(source)
+            # Navigation helpers can also capture prerequisite pages. Only the
+            # assigned scene's batch owns its final image; never choose a copy
+            # based on artifact download order or overwrite another capture.
+            name = Path(entry["imagePath"]).name
+            if name not in owned:
+                continue
+            captured.add(name)
+            sources.extend(entry_sources)
             if entry["imagePath"] in images:
                 raise ValueError("Duplicate image across shards")
             images.add(entry["imagePath"])
             entries.append(entry)
+        if captured != owned:
+            raise ValueError("Shard did not capture all assigned images")
     merged = copy.deepcopy(baseline)
     merged["screenshots"] = entries
     merged["counts"] = {
