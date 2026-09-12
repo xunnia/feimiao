@@ -1,4 +1,6 @@
 *.log
+__pycache__/
+*.py[cod]
 
 # Generated delivery artifacts stay outside the source tree.
 /ci-artifacts/

@@ -31,6 +31,23 @@
 
 ## 功能差异的处理依据
 
+## 2026-09-12 续验进度
+
+- Android 整合已推送：`b46043d`；本地全量 1222/1222，但 Linux CI 暴露资产页 SQLite 异步交互的 fake_async 定时器残留。`2bcc135` 将相关点击放到真实异步区域，不删除断言；资产页 16/16 通过，Linux 全量重跑中。
+- 截图契约已与 308 源码版本、水印对齐；41 场景/12 旅程契约及 40 路由检查通过。契约状态仍是 `P0_PARTIAL`，6 项开放门禁未宣称完成。
+- iOS P1 候选 `94b93ea` 已通过 App 编译、核心测试和未签名 IPA 构建；App XCTest、截图仍待最终结果，未合入 main。
+- 上轮 Android 截图在 reconcile 场景遇到模拟器 offline/VM service 丢失；尚未取得完整截图通过证据。
+- 远端 `codex/ios-same-app` 已确认是 main 祖先，并核对 bundle 内原引用后删除；其余未验收分支保留。
+- 本轮未重新发布 VPS，也未宣称已发布 APK 与整合源码完全一致。
+
+## 本地工作目录
+
+- 原始 `C:\src\xunni-codex` 的在途改动保留，不能为追求干净而 reset/clean。
+- 本轮集成工作树：`.tmp/repository-cleanup`；iOS 候选工作树：`.tmp/ios-p1-integration`。在验证与移交完成前不要删除这些临时目录。
+- 恢复资料：`.tmp/repo-cleanup-20260912/all-refs.bundle`、`worktree.patch` 和 `working-files/`，仅存本地。
+
+## 保留与不采用的差异
+
 - Android 三方基线使用原在途改动前的版本，保留 main 中已存在的 AppClock、现金账户单一时间戳和指定 integration_test；不是把本地目录整体覆盖主线。
 - iOS P1 按共同祖先提取增量，保留主线独立 P0 fixture、路由冷启动修复、备份 ZIP 回滚和新增测试。旧硬编码演示数据、旧截图清单不覆盖主线；两侧备份测试均保留。
 - 旧 WIP 的导入复核真实文件流程已包含于 iOS P1 候选；QuickAdd 高度放宽改动不覆盖主线明确的两行分类约定。
