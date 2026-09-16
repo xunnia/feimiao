@@ -6,6 +6,25 @@ from pathlib import Path
 from merge_android_capture_shards import collect
 from run_bounded import run
 from parity_transport_failure import is_retryable
+from parity_owned_images import owned_images
+
+
+class OwnershipTests(unittest.TestCase):
+    def test_real_manifest_alias_and_all_five_shards(self):
+        manifest = json.loads(Path(__file__).with_name("screenshot_manifest.json").read_text(encoding="utf-8"))
+        self.assertEqual(owned_images(manifest, ["physical-asset-detail"]), ["asset-detail-android.png"])
+        scenes = [p["id"] for p in manifest["pairs"]]
+        images = [name for i in range(5) for name in owned_images(manifest, scenes[i::5])]
+        self.assertEqual(len(images), 41)
+        self.assertEqual(len(set(images)), 41)
+
+    def test_unknown_scene_rejected(self):
+        with self.assertRaises(KeyError):
+            owned_images({"pairs": []}, ["unknown"])
+
+    def test_duplicate_scene_rejected(self):
+        with self.assertRaises(ValueError):
+            owned_images({"pairs": []}, ["same", "same"])
 
 
 class TransportFailureTests(unittest.TestCase):

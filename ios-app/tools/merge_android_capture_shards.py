@@ -64,7 +64,7 @@ def collect(shards, count, revision):
             images.add(entry["imagePath"])
             entries.append(entry)
         if captured != owned:
-            raise ValueError("Shard did not capture all assigned images")
+            raise ValueError(f"Shard {index} did not capture all assigned images: {sorted(owned - captured)}")
     merged = copy.deepcopy(baseline)
     merged["screenshots"] = entries
     merged["counts"] = {

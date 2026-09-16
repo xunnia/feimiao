@@ -167,7 +167,12 @@ fi
     fi
   done
   scenes=("${selected_scenes[@]}")
-  printf '%s-android.png\n' "${scenes[@]}" > "$parity_output/shard-images.txt"
+  if ! "$python_bin" "$repo_root/ios-app/tools/parity_owned_images.py" \
+      "$repo_root/ios-app/tools/screenshot_manifest.json" "${scenes[@]}" \
+      > "$parity_output/shard-images.txt"; then
+    echo "Unable to resolve assigned screenshot paths" >&2
+    exit 2
+  fi
   echo "PARITY_SHARD index=$shard_index count=$shard_count scenes=${scenes[*]}"
   cleanup_scene_state() {
     local package
