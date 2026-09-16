@@ -713,6 +713,8 @@ Future<void> _captureDrawerOnly(
 ) async {
   final button = find.byType(AppDrawerButton);
   expect(button, findsAtLeastNWidgets(1));
+  expect(button.first.hitTestable(), findsOneWidget,
+      reason: 'Drawer capture must not be obscured by a modal route');
   await tester.tap(button.first);
   await _pumpFor(tester, const Duration(milliseconds: 700));
   expect(find.text('我的账本'), findsOneWidget);

@@ -25,6 +25,13 @@ legacy_app_id="com.qingji.qingji"
 app_ids=("$app_id" "$legacy_app_id")
 scene_timeout_seconds="${PARITY_SCENE_TIMEOUT_SECONDS:-600}"
 scene_retry_limit="${PARITY_SCENE_RETRIES:-1}"
+shard_index="${PARITY_SHARD_INDEX:-0}"
+shard_count="${PARITY_SHARD_COUNT:-1}"
+if ! [[ "$shard_index" =~ ^[0-9]+$ && "$shard_count" =~ ^[1-9][0-9]*$ ]] ||
+   [ "$shard_index" -ge "$shard_count" ] || [ "$shard_count" -gt 41 ]; then
+  echo "Invalid parity shard: $shard_index/$shard_count" >&2
+  exit 2
+fi
 if [ -z "$device_id" ]; then
   mapfile -t online_devices < <(adb devices | awk '$2 == "device" { print $1 }')
   if [ "${#online_devices[@]}" -ne 1 ]; then
@@ -153,6 +160,20 @@ fi
     ai-schedules
     ai-local
   )
+  selected_scenes=()
+  for index in "${!scenes[@]}"; do
+    if [ "$((index % shard_count))" -eq "$shard_index" ]; then
+      selected_scenes+=("${scenes[$index]}")
+    fi
+  done
+  scenes=("${selected_scenes[@]}")
+  if ! "$python_bin" "$repo_root/ios-app/tools/parity_owned_images.py" \
+      "$repo_root/ios-app/tools/screenshot_manifest.json" "${scenes[@]}" \
+      > "$parity_output/shard-images.txt"; then
+    echo "Unable to resolve assigned screenshot paths" >&2
+    exit 2
+  fi
+  echo "PARITY_SHARD index=$shard_index count=$shard_count scenes=${scenes[*]}"
   cleanup_scene_state() {
     local package
     # Stop both the current applicationId and the historical namespace-derived
@@ -203,6 +224,7 @@ fi
 
   run_scene() {
     local scene="$1"
+    attempt_log="$parity_output/drive-$scene-attempt-$attempt.log"
     echo "PARITY_SCENE_BEGIN scene=$scene"
     # Each scene gets a fresh application database. The package is deliberately
     # left installed so flutter drive can reuse the build, but stale process and
@@ -211,6 +233,7 @@ fi
     adb -s "$device_id" shell pm clear "$app_id" >/dev/null 2>&1 || true
     echo "PARITY_SCENE_RESET scene=$scene"
     "$timeout_bin" --foreground --kill-after=30s "${scene_timeout_seconds}s" flutter drive \
+      --no-dds \
       --driver=test_driver/integration_test.dart \
       --target=integration_test/parity_screenshots_test.dart \
       --device-id "$device_id" \
@@ -218,8 +241,16 @@ fi
       --dart-define=QINGJI_PARITY_CAPTURE=true \
       --dart-define=QINGJI_PARITY_SCENE="$scene" \
       --dart-define=QINGJI_DEMO_NOW=2026-08-27T12:00:00+08:00 \
-      --dart-define=QINGJI_P0_FIXTURE_HASH="$fixture_hash"
-    local status=$?
+      --dart-define=QINGJI_P0_FIXTURE_HASH="$fixture_hash" 2>&1 | tee "$attempt_log"
+    local status=${PIPESTATUS[0]}
+    if [ "$status" -ne 0 ]; then
+      # Capture live transport state BEFORE cleanup removes the VM forwards.
+      # Direct VM service avoids an extra DDS websocket hop in headless CI.
+      echo "PARITY_TRANSPORT_DIAGNOSTICS scene=$scene status=$status"
+      "$timeout_bin" 10s adb -s "$device_id" forward --list 2>&1 || true
+      "$timeout_bin" 10s adb -s "$device_id" shell pidof "$app_id" 2>&1 || true
+      "$timeout_bin" 15s adb -s "$device_id" logcat -d -t 300 2>&1 || true
+    fi
     # Always tear down the app and VM forward, including timeout/driver-error
     # paths. This is what makes a retry or the next scene independent.
     cleanup_scene_state
@@ -254,10 +285,9 @@ fi
       # Retry only transport/process-loss failures. Assertion and application
       # failures remain fail-fast so a real regression is never hidden.
       transient_failure=0
-      if ! adb -s "$device_id" get-state >/dev/null 2>&1; then
-        transient_failure=1
-      elif tail -n 160 "$log_path" 2>/dev/null | grep -Eq \
-          'Service has disappeared|device offline|bad color buffer handle'; then
+      # Diagnose the drive output, not the global tail polluted by logcat or
+      # a previous scene. ADB may already be online again after cleanup.
+      if "$python_bin" "$repo_root/ios-app/tools/parity_transport_failure.py" "$attempt_log"; then
         transient_failure=1
       fi
       if [ "$transient_failure" -eq 1 ] && [ "$attempt" -lt "$scene_retry_limit" ]; then
@@ -289,6 +319,10 @@ fi
 } 2>&1 | tee "$log_path"
 
 status=${PIPESTATUS[0]}
+completeness_args=()
+if [ "$shard_count" -eq 1 ]; then
+  completeness_args+=(--require-complete)
+fi
 if [ "$status" -eq 0 ]; then
   if ! "$python_bin" "$repo_root/ios-app/tools/check_p0_business_json.py" \
       --input outputs/parity/p0-business-android.json \
@@ -308,9 +342,15 @@ if [ "$status" -eq 0 ]; then
       --root "$repo_root" \
       --metadata "$parity_output/capture-metadata.json" \
       --platform android \
-      --require-complete; then
+      "${completeness_args[@]}"; then
     status=1
   fi
+fi
+
+if [ "$status" -eq 0 ]; then
+  # This receipt is written only after the entire shard and its business and
+  # provenance checks succeed. The aggregate job rejects absent shards.
+  printf '{"index":%s,"count":%s}\n' "$shard_index" "$shard_count" > "$parity_output/shard.json"
 fi
 echo "PARITY_DRIVER_END status=$status" | tee -a "$log_path"
 exit "$status"

@@ -13,19 +13,32 @@ on:
       - ".github/workflows/parity-screenshots.yml"
 
 permissions:
-  contents: write
+  contents: read
+
+concurrency:
+  group: parity-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   android-screenshots:
-    name: Android 模拟器截图
+    name: Android 截图批次 ${{ matrix.shard }}
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        shard: [0, 1, 2, 3, 4]
     timeout-minutes: 90
     runs-on: ubuntu-latest
     env:
       TZ: Asia/Shanghai
+      PARITY_SHARD_INDEX: ${{ matrix.shard }}
+      PARITY_SHARD_COUNT: 5
     steps:
       - uses: actions/checkout@v5
       - name: Verify Android and iOS category icon assets
         run: python3 ios-app/tools/check_category_icon_parity.py
+      - name: Verify capture orchestration
+        run: python3 -m unittest discover -s ios-app/tools -p test_capture_shards.py -v
       - uses: actions/setup-java@v5
         with:
           distribution: temurin
@@ -107,7 +120,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: android-gradle-route-log
+          name: android-gradle-route-log-${{ matrix.shard }}
           path: android-gradle-route.log
           if-no-files-found: warn
       - name: Enable KVM group permissions
@@ -122,7 +135,7 @@ jobs:
           target: google_apis
           arch: x86_64
           profile: pixel_2
-          force-avd-creation: false
+          force-avd-creation: true
           emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -no-audio -no-boot-anim -camera-back none
           emulator-boot-timeout: 1200
           # KVM 权限已在上一步开启；保留硬件加速，否则 1080x1920 的
@@ -152,11 +165,32 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: android-parity-drive-log
+          name: android-parity-drive-log-${{ matrix.shard }}
           path: android-parity-drive.log
           if-no-files-found: warn
       - uses: actions/upload-artifact@v4
         if: always()
+        with:
+          name: android-parity-shard-${{ matrix.shard }}
+          path: android-app/outputs/parity/
+          if-no-files-found: error
+
+  android-aggregate:
+    name: 验收全部 Android 截图
+    needs: android-screenshots
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: android-parity-shard-*
+          path: ci-artifacts/android-shards
+      - name: Merge verified shards and require all scenes
+        run: |
+          python3 ios-app/tools/merge_android_capture_shards.py --root . --shards ci-artifacts/android-shards --count 5
+          python3 ios-app/tools/check_p0_business_json.py --input android-app/outputs/parity/p0-business-android.json --contract ios-app/tools/p0_product_contract.json --platform android
+          python3 ios-app/tools/check_capture_metadata.py --root . --metadata android-app/outputs/parity/capture-metadata.json --platform android --require-complete
+      - uses: actions/upload-artifact@v4
         with:
           name: android-parity-screenshots
           path: android-app/outputs/parity/
@@ -241,21 +275,21 @@ jobs:
             local attempt
             for attempt in 1 2 3; do
               echo "CAPTURE_BEGIN name=$name screen=$screen attempt=$attempt" | tee -a "$runtime_log"
-              xcrun simctl terminate "$DEVICE" com.qingji.app >> "$runtime_log" 2>&1 || true
+              python3 ios-app/tools/run_bounded.py --timeout 45 -- xcrun simctl terminate "$DEVICE" com.qingji.app >> "$runtime_log" 2>&1 || true
               sleep 1
               if ! SIMCTL_CHILD_QINGJI_DEMO=1 \
                 SIMCTL_CHILD_QINGJI_DEMO_NOW="2026-08-27T12:00:00+08:00" \
                 SIMCTL_CHILD_QINGJI_P0_FIXTURE_HASH="$fixture_hash" \
                 SIMCTL_CHILD_TZ="Asia/Shanghai" \
                 SIMCTL_CHILD_QINGJI_SCREEN="$screen" \
-                xcrun simctl launch "$DEVICE" com.qingji.app >> "$runtime_log" 2>&1; then
+                python3 ios-app/tools/run_bounded.py --timeout 45 -- xcrun simctl launch "$DEVICE" com.qingji.app >> "$runtime_log" 2>&1; then
                 echo "::warning::CAPTURE_LAUNCH_FAILED name=$name screen=$screen attempt=$attempt"
                 continue
               fi
               # Some SwiftData destinations perform their first query during
               # cold launch. Give the route time to render before capture.
               sleep 14
-              if ! xcrun simctl io "$DEVICE" screenshot "$output" >> "$runtime_log" 2>&1 || ! test -s "$output"; then
+              if ! python3 ios-app/tools/run_bounded.py --timeout 45 -- xcrun simctl io "$DEVICE" screenshot "$output" >> "$runtime_log" 2>&1 || ! test -s "$output"; then
                 echo "::warning::CAPTURE_SCREENSHOT_FAILED name=$name screen=$screen attempt=$attempt"
                 continue
               fi
@@ -359,7 +393,7 @@ jobs:
 
   compare:
     name: 生成双端对比报告
-    needs: [android-screenshots, ios-screenshots]
+    needs: [android-aggregate, ios-screenshots]
     runs-on: ubuntu-latest
     concurrency:
       # Keep only the report commit in the shared writer queue. Screenshot
@@ -369,7 +403,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with:
-          ref: ${{ github.ref_name }}
+          ref: ${{ github.sha }}
           fetch-depth: 0
       - name: Clean stale screenshot inputs
         run: rm -rf ci-artifacts/ios-screenshots
