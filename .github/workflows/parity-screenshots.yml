@@ -2,6 +2,11 @@ name: Android iOS parity screenshots
 
 on:
   workflow_dispatch:
+    inputs:
+      smoke:
+        description: "Capture drawer only; not a complete parity acceptance"
+        type: boolean
+        default: false
   push:
     branches:
       - "feature/**"
@@ -26,13 +31,14 @@ jobs:
       fail-fast: false
       max-parallel: 2
       matrix:
-        shard: [0, 1, 2, 3, 4]
+        shard: ${{ fromJSON(inputs.smoke && '[0]' || '[0,1,2,3,4]') }}
     timeout-minutes: 90
     runs-on: ubuntu-latest
     env:
       TZ: Asia/Shanghai
       PARITY_SHARD_INDEX: ${{ matrix.shard }}
       PARITY_SHARD_COUNT: 5
+      PARITY_SMOKE: ${{ inputs.smoke && '1' || '0' }}
     steps:
       - uses: actions/checkout@v5
       - name: Verify Android and iOS category icon assets
@@ -176,6 +182,7 @@ jobs:
           if-no-files-found: error
 
   android-aggregate:
+    if: ${{ !inputs.smoke }}
     name: 验收全部 Android 截图
     needs: android-screenshots
     runs-on: ubuntu-latest
@@ -197,6 +204,7 @@ jobs:
           if-no-files-found: error
 
   ios-screenshots:
+    if: ${{ !inputs.smoke }}
     name: iOS 模拟器截图
     timeout-minutes: 45
     # 使用 GitHub 官方公开的 macOS 26 runner；如果镜像装有 Xcode 27
