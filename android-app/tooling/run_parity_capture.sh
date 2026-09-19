@@ -27,6 +27,11 @@ scene_timeout_seconds="${PARITY_SCENE_TIMEOUT_SECONDS:-600}"
 scene_retry_limit="${PARITY_SCENE_RETRIES:-1}"
 shard_index="${PARITY_SHARD_INDEX:-0}"
 shard_count="${PARITY_SHARD_COUNT:-1}"
+smoke="${PARITY_SMOKE:-0}"
+if [[ "$smoke" != 0 && "$smoke" != 1 ]]; then
+  echo "PARITY_SMOKE must be 0 or 1" >&2
+  exit 2
+fi
 if ! [[ "$shard_index" =~ ^[0-9]+$ && "$shard_count" =~ ^[1-9][0-9]*$ ]] ||
    [ "$shard_index" -ge "$shard_count" ] || [ "$shard_count" -gt 41 ]; then
   echo "Invalid parity shard: $shard_index/$shard_count" >&2
@@ -167,6 +172,9 @@ fi
     fi
   done
   scenes=("${selected_scenes[@]}")
+  if [ "$smoke" -eq 1 ]; then
+    scenes=(drawer-books)
+  fi
   if ! "$python_bin" "$repo_root/ios-app/tools/parity_owned_images.py" \
       "$repo_root/ios-app/tools/screenshot_manifest.json" "${scenes[@]}" \
       > "$parity_output/shard-images.txt"; then
@@ -234,7 +242,6 @@ fi
     echo "PARITY_SCENE_RESET scene=$scene"
     "$timeout_bin" --foreground --kill-after=30s "${scene_timeout_seconds}s" flutter drive \
       --no-dds \
-      --enable-software-rendering \
       --driver=test_driver/integration_test.dart \
       --target=integration_test/parity_screenshots_test.dart \
       --device-id "$device_id" \
@@ -321,7 +328,7 @@ fi
 
 status=${PIPESTATUS[0]}
 completeness_args=()
-if [ "$shard_count" -eq 1 ]; then
+if [ "$shard_count" -eq 1 ] && [ "$smoke" -eq 0 ]; then
   completeness_args+=(--require-complete)
 fi
 if [ "$status" -eq 0 ]; then
@@ -348,7 +355,7 @@ if [ "$status" -eq 0 ]; then
   fi
 fi
 
-if [ "$status" -eq 0 ]; then
+if [ "$status" -eq 0 ] && [ "$smoke" -eq 0 ]; then
   # This receipt is written only after the entire shard and its business and
   # provenance checks succeed. The aggregate job rejects absent shards.
   printf '{"index":%s,"count":%s}\n' "$shard_index" "$shard_count" > "$parity_output/shard.json"
