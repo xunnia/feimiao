@@ -433,6 +433,7 @@ jobs:
             --output ci-artifacts/p0-business-diff.json
       - name: Build visual Android/iOS comparison sheets
         run: |
+          python3 -m unittest discover -s ios-app/tools -p test_ui_comparison_missing.py -v
           python3 ios-app/tools/make_ios_ui_comparisons.py \
             --root . \
             --manifest ios-app/tools/screenshot_manifest.json \
@@ -448,6 +449,8 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: parity-visual-comparisons
-          path: ci-artifacts/parity-comparisons/*.png
+          path: |
+            ci-artifacts/parity-comparisons/*.png
+            ci-artifacts/parity-comparisons/comparison-index.json
           if-no-files-found: error
       # Reports and comparison images are delivered as Actions artifacts above.

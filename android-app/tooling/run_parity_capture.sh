@@ -234,6 +234,7 @@ fi
     echo "PARITY_SCENE_RESET scene=$scene"
     "$timeout_bin" --foreground --kill-after=30s "${scene_timeout_seconds}s" flutter drive \
       --no-dds \
+      --enable-software-rendering \
       --driver=test_driver/integration_test.dart \
       --target=integration_test/parity_screenshots_test.dart \
       --device-id "$device_id" \
