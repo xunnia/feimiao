@@ -232,6 +232,7 @@ fi
 
   run_scene() {
     local scene="$1"
+    export ANDROID_SERIAL="$device_id"
     attempt_log="$parity_output/drive-$scene-attempt-$attempt.log"
     echo "PARITY_SCENE_BEGIN scene=$scene"
     # Each scene gets a fresh application database. The package is deliberately

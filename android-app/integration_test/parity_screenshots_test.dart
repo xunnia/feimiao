@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:crypto/crypto.dart';
 import 'package:decimal/decimal.dart';
@@ -8,6 +9,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
 import 'package:provider/provider.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:qingji/core/account/account_movement_projection.dart';
 import 'package:qingji/core/app_clock.dart';
 import 'package:qingji/core/models/recurring_rule.dart';
@@ -67,7 +69,8 @@ void main() {
     expect(tester.view.physicalSize, const Size(1080, 1920),
         reason: 'P0 Android captures require the canonical device size');
     expect(AppClock.now.timeZoneOffset, const Duration(hours: 8),
-        reason: 'P0 calendar calculations require device timezone Asia/Shanghai');
+        reason:
+            'P0 calendar calculations require device timezone Asia/Shanghai');
     await app.main();
     await _pumpFor(tester, const Duration(seconds: 2));
 
@@ -984,7 +987,20 @@ Future<void> _takeScreenshot(
     _surfaceConverted = true;
   }
   await tester.pump();
-  await binding.takeScreenshot(name);
+  final bytes = await binding.takeScreenshot(name);
+  final cache = await getTemporaryDirectory();
+  final directory = Directory('${cache.path}/parity');
+  await directory.create(recursive: true);
+  await File('${directory.path}/$name.png').writeAsBytes(bytes, flush: true);
+  binding.reportData!.remove('screenshots');
+  final files = binding.reportData!
+      .putIfAbsent('screenshotFiles', () => <dynamic>[]) as List;
+  files.add({
+    'name': name,
+    'path': '${directory.path}/$name.png',
+    'sha256': sha256.convert(bytes).toString(),
+    'length': bytes.length,
+  });
   debugPrint('PARITY_CAPTURE_DONE name=$name');
 }
 
