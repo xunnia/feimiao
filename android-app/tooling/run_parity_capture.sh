@@ -173,7 +173,7 @@ fi
   done
   scenes=("${selected_scenes[@]}")
   if [ "$smoke" -eq 1 ]; then
-    scenes=(drawer-books)
+    scenes=("${PARITY_SMOKE_SCENE:-drawer-books}")
   fi
   if ! "$python_bin" "$repo_root/ios-app/tools/parity_owned_images.py" \
       "$repo_root/ios-app/tools/screenshot_manifest.json" "${scenes[@]}" \

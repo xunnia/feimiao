@@ -4,9 +4,13 @@ on:
   workflow_dispatch:
     inputs:
       smoke:
-        description: "Capture drawer only; not a complete parity acceptance"
+        description: "Capture one scene only; not a complete parity acceptance"
         type: boolean
         default: false
+      smoke_scene:
+        description: "Canonical scene ID for smoke mode"
+        type: string
+        default: drawer-books
   push:
     branches:
       - "feature/**"
@@ -39,6 +43,7 @@ jobs:
       PARITY_SHARD_INDEX: ${{ matrix.shard }}
       PARITY_SHARD_COUNT: 5
       PARITY_SMOKE: ${{ inputs.smoke && '1' || '0' }}
+      PARITY_SMOKE_SCENE: ${{ inputs.smoke_scene || 'drawer-books' }}
     steps:
       - uses: actions/checkout@v5
       - name: Verify Android and iOS category icon assets

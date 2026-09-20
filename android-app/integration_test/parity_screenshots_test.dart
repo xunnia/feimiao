@@ -124,6 +124,12 @@ void main() {
     }
     binding.reportData ??= <String, dynamic>{};
     binding.reportData!['p0BusinessJson'] = businessJson;
+    // Stop page animations before integration_test restores the Android surface
+    // in its teardown. The captured images and business payload remain intact.
+    debugPrint('PARITY_TEARDOWN_BEGIN');
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pump();
+    debugPrint('PARITY_TEARDOWN_READY');
   });
 }
 

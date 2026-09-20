@@ -22,6 +22,10 @@ class OwnershipTests(unittest.TestCase):
         with self.assertRaises(KeyError):
             owned_images({"pairs": []}, ["unknown"])
 
+    def test_ai_tasks_smoke_maps_to_its_own_image(self):
+        manifest = json.loads(Path(__file__).with_name("screenshot_manifest.json").read_text(encoding="utf-8"))
+        self.assertEqual(owned_images(manifest, ["ai-tasks"]), ["ai-tasks-android.png"])
+
     def test_duplicate_scene_rejected(self):
         with self.assertRaises(ValueError):
             owned_images({"pairs": []}, ["same", "same"])
