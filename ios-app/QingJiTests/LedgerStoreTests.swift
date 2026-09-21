@@ -73,6 +73,17 @@ final class LedgerStoreTests: XCTestCase {
         XCTAssertEqual(summary.expenseByCategory.first?.count, 2)
     }
 
+    func testStatisticsBalanceSparklineUsesCumulativeNetAmounts() {
+        let date = Date(timeIntervalSince1970: 0)
+        let days = [
+            PeriodDailyTotal(date: date, expense: 20, income: 100),
+            PeriodDailyTotal(date: date.addingTimeInterval(86400), expense: 30, income: 0),
+            PeriodDailyTotal(date: date.addingTimeInterval(172800), expense: -5, income: 0),
+        ]
+        XCTAssertEqual(MonthlyStatsView.runningBalances(days), [80, 50, 55])
+        XCTAssertEqual(MonthlyStatsView.runningBalances([]), [])
+    }
+
     func testBatchValidationDoesNotLeavePartialTransactions() throws {
         let stack = try Stack()
         let (book, cash, bank, dining) = try seed(stack)
