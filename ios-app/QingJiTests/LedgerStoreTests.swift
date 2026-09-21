@@ -49,6 +49,30 @@ final class LedgerStoreTests: XCTestCase {
         return (book, cash, bank, dining)
     }
 
+    func testBuiltInChildRollupUsesSameNameAsStoredParent() throws {
+        let stack = try Stack()
+        let (book, cash, _, dining) = try seed(stack)
+        let groceries = TxCategory(key: "groceries", name: "生鲜食品",
+                                   symbol: "carrot", kind: .expense, parentKey: "dining")
+        stack.context.insert(groceries)
+        let date = Date(timeIntervalSince1970: 1_787_788_800)
+        let parent = MoneyTransaction(amount: 10, kind: .expense, date: date,
+                                      category: dining, account: cash, book: book)
+        let child = MoneyTransaction(amount: 20, kind: .expense, date: date,
+                                     category: groceries, account: cash, book: book)
+        stack.context.insert(parent)
+        stack.context.insert(child)
+        try stack.context.save()
+        XCTAssertEqual(child.record.topCategoryKey, "dining")
+        XCTAssertEqual(child.record.topCategoryName, parent.record.topCategoryName)
+        let summary = StatisticsEngine.periodSummary(of: [parent.record, child.record],
+                                                      start: date, end: date)
+        XCTAssertEqual(summary.expenseByCategory.count, 1)
+        XCTAssertEqual(summary.expenseByCategory.first?.name, "食品餐饮")
+        XCTAssertEqual(summary.expenseByCategory.first?.total, Decimal(30))
+        XCTAssertEqual(summary.expenseByCategory.first?.count, 2)
+    }
+
     func testBatchValidationDoesNotLeavePartialTransactions() throws {
         let stack = try Stack()
         let (book, cash, bank, dining) = try seed(stack)
