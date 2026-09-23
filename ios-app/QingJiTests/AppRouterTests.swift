@@ -9,11 +9,15 @@ final class AppRouterTests: XCTestCase {
         }
         XCTAssertEqual(RootTabView.initialPath(for: "stats/custom/category-detail"), [.statistics])
         XCTAssertEqual(RootTabView.initialPath(for: "stats/month/ring"), [.statistics])
+        XCTAssertEqual(RootTabView.initialPath(for: "stats/month/trend"), [.statistics])
         XCTAssertTrue(MonthlyStatsView.demoMonthRing(environment: [
             "QINGJI_DEMO": "1", "QINGJI_SCREEN": "stats/month/ring"
         ]))
         XCTAssertFalse(MonthlyStatsView.demoMonthRing(environment: [
             "QINGJI_DEMO": "0", "QINGJI_SCREEN": "stats/month/ring"
+        ]))
+        XCTAssertTrue(MonthlyStatsView.demoMonthTrend(environment: [
+            "QINGJI_DEMO": "1", "QINGJI_SCREEN": "stats/month/trend"
         ]))
         let demo = MonthlyStatsView.demoCategoryDrillDown(environment: [
             "QINGJI_DEMO": "1", "QINGJI_SCREEN": "stats/custom/category-detail"

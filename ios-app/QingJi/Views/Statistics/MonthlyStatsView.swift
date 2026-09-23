@@ -26,6 +26,7 @@ struct MonthlyStatsView: View {
     @State private var projectionCache = IOSLedgerProjectionCache()
     @State private var statisticsCache = IOSStatisticsProjectionCache()
     @State private var selectedCategory: CategoryDrillDown?
+    @State private var trendShowsIncome = false
 
     private struct CategoryDrillDown: Identifiable, Hashable {
         var id: String { "\(title):\(names.sorted().joined(separator: ",")):\(start.timeIntervalSince1970):\(end.timeIntervalSince1970)" }
@@ -46,6 +47,10 @@ struct MonthlyStatsView: View {
 
     static func demoMonthRing(environment: [String: String]) -> Bool {
         environment["QINGJI_DEMO"] == "1" && environment["QINGJI_SCREEN"] == "stats/month/ring"
+    }
+
+    static func demoMonthTrend(environment: [String: String]) -> Bool {
+        environment["QINGJI_DEMO"] == "1" && environment["QINGJI_SCREEN"] == "stats/month/trend"
     }
 
     var body: some View {
@@ -80,9 +85,11 @@ struct MonthlyStatsView: View {
                 .padding()
             }
             .task(id: transactions.count) {
-                if Self.demoMonthRing(environment: ProcessInfo.processInfo.environment) {
+                let environment = ProcessInfo.processInfo.environment
+                if Self.demoMonthRing(environment: environment) || Self.demoMonthTrend(environment: environment) {
                     try? await Task.sleep(for: .seconds(2))
-                    scroll.scrollTo("stats-month-ring", anchor: .top)
+                    scroll.scrollTo(Self.demoMonthTrend(environment: environment)
+                                    ? "stats-month-trend" : "stats-month-ring", anchor: .top)
                 }
             }
         }
@@ -281,6 +288,13 @@ struct MonthlyStatsView: View {
             year: components.year ?? 2026,
             month: components.month ?? 1
         )
+        let previousComponents = calendar.dateComponents([.year, .month], from: previousStart)
+        let previousMonth = statisticsCache.monthly(
+            of: snapshot.records,
+            revision: snapshot.revision,
+            year: previousComponents.year ?? 2026,
+            month: previousComponents.month ?? 1
+        )
         let period = statisticsCache.period(
             of: snapshot.records, revision: snapshot.revision,
             start: monthStart, end: monthEnd
@@ -306,7 +320,8 @@ struct MonthlyStatsView: View {
                     currencyCode: snapshot.scopedCurrencyCode
                 )
             }
-            monthlyContent(summary: summary, currencyCode: snapshot.scopedCurrencyCode,
+            monthlyContent(summary: summary, previousMonth: previousMonth,
+                           currencyCode: snapshot.scopedCurrencyCode,
                            start: monthStart, end: monthEnd)
         }
     }
@@ -485,7 +500,8 @@ struct MonthlyStatsView: View {
         }
     }
 
-    private func monthlyContent(summary: MonthlySummary, currencyCode: String,
+    private func monthlyContent(summary: MonthlySummary, previousMonth: MonthlySummary,
+                                currencyCode: String,
                                 start: Date, end: Date) -> some View {
         Group {
             if summary.expenseByCategory.isEmpty {
@@ -495,7 +511,8 @@ struct MonthlyStatsView: View {
                                    currencyCode: currencyCode, totalLabel: "本月支出",
                                    start: start, end: end)
                     .id("stats-month-ring")
-                monthlyDailyBarChart(summary)
+                monthlyTrendChart(summary, previousMonth: previousMonth)
+                    .id("stats-month-trend")
                 categoryRanking(summary.expenseByCategory, currencyCode: currencyCode,
                                 start: start, end: end)
                     .padding(14)
@@ -642,20 +659,55 @@ struct MonthlyStatsView: View {
         }
     }
 
-    private func monthlyDailyBarChart(_ summary: MonthlySummary) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("每日支出")
-                .font(.headline)
-            Chart(summary.dailyTotals, id: \.day) { item in
-                BarMark(
-                    x: .value("日", item.day),
-                    y: .value("支出", MoneyFormat.double(item.expense))
-                )
-                .foregroundStyle(Color.accentColor.gradient)
+    private func monthlyTrendChart(_ summary: MonthlySummary,
+                                   previousMonth: MonthlySummary) -> some View {
+        let color = trendShowsIncome ? statisticsIncome : statisticsAccent
+        return VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("每日趋势").font(.headline)
+                Spacer()
+                Picker("收支类型", selection: $trendShowsIncome) {
+                    Text("支出").tag(false)
+                    Text("收入").tag(true)
+                }
+                .pickerStyle(.segmented)
+                .frame(width: 112)
             }
-            .frame(height: 160)
+            HStack(spacing: 12) {
+                Label("本月\(trendShowsIncome ? "收入" : "支出")", systemImage: "circle.fill")
+                    .foregroundStyle(color)
+                Text("- - 上月同期").foregroundStyle(color.opacity(0.5))
+            }
+            .font(.caption2)
+            Chart {
+                ForEach(previousMonth.dailyTotals, id: \.day) { item in
+                    LineMark(
+                        x: .value("日", item.day),
+                        y: .value("上月", max(0, MoneyFormat.double(trendShowsIncome ? item.income : item.expense)))
+                    )
+                    .foregroundStyle(color.opacity(0.45))
+                    .lineStyle(StrokeStyle(lineWidth: 1.5, dash: [4, 3]))
+                    .interpolationMethod(.monotone)
+                }
+                ForEach(summary.dailyTotals, id: \.day) { item in
+                    LineMark(
+                        x: .value("日", item.day),
+                        y: .value("本月", max(0, MoneyFormat.double(trendShowsIncome ? item.income : item.expense)))
+                    )
+                    .foregroundStyle(color)
+                    .interpolationMethod(.monotone)
+                }
+            }
+            .chartLegend(.hidden)
+            .chartXAxis {
+                AxisMarks(values: [5, 10, 15, 20, 25]) { AxisValueLabel() }
+            }
+            .chartYAxis { AxisMarks(position: .leading, values: .automatic(desiredCount: 3)) }
+            .frame(height: 180)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(14)
+        .liquidGlassSurface(cornerRadius: 18)
     }
 
     private func periodDailyBarChart(_ dailyTotals: [PeriodDailyTotal]) -> some View {

@@ -347,6 +347,9 @@ jobs:
           ring_route="stats/month/ring"
           ring_name="14a-stats-month-ring"
           capture_interaction "$ring_route" "$ring_name"
+          trend_route="stats/month/trend"
+          trend_name="14b-stats-month-trend"
+          capture_interaction "$trend_route" "$trend_name"
           capture_interaction "$interaction_route" "$interaction_name"
           python3 ios-app/tools/check_screenshot_nonempty.py "$interaction_dir"/*.png
 
