@@ -84,6 +84,22 @@ final class LedgerStoreTests: XCTestCase {
         XCTAssertEqual(MonthlyStatsView.runningBalances([]), [])
     }
 
+    func testCustomRingCondensesPositiveCategoriesWithoutLosingTotals() {
+        let categories = (1...7).map { index in
+            CategoryTotal(name: index == 7 ? "其他" : "分类\(index)",
+                          total: Decimal(8 - index), share: Double(8 - index) / 28,
+                          count: index)
+        } + [CategoryTotal(name: "退款", total: -2, share: -2.0 / 28, count: 1)]
+        let items = MonthlyStatsView.condensedRingCategories(categories)
+        XCTAssertEqual(items.count, 6)
+        XCTAssertEqual(items.last?.name, "更多")
+        XCTAssertEqual(items.last?.total, 3)
+        XCTAssertEqual(items.last?.count, 13)
+        XCTAssertEqual(items.reduce(Decimal.zero) { $0 + $1.total }, 28)
+        XCTAssertEqual(MonthlyStatsView.condensedRingCategories(Array(categories.prefix(6))).count, 6)
+        XCTAssertEqual(MonthlyStatsView.condensedRingCategories([]), [])
+    }
+
     func testBatchValidationDoesNotLeavePartialTransactions() throws {
         let stack = try Stack()
         let (book, cash, bank, dining) = try seed(stack)

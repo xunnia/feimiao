@@ -245,7 +245,8 @@ struct MonthlyStatsView: View {
             if summary.expenseByCategory.isEmpty {
                 emptyState(title: "这个区间还没有支出", systemImage: "chart.pie", message: "记几笔之后这里会出现分析图表")
             } else {
-                categoryPieChart(summary.expenseByCategory)
+                customCategoryRing(summary.expenseByCategory, total: summary.totalExpense,
+                                   currencyCode: snapshot.scopedCurrencyCode)
                 categoryRanking(summary.expenseByCategory, currencyCode: snapshot.scopedCurrencyCode)
             }
         }
@@ -414,6 +415,91 @@ struct MonthlyStatsView: View {
             .frame(height: 220)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private static let ringColors: [Color] = [
+        Color(red: 125 / 255, green: 139 / 255, blue: 155 / 255),
+        Color(red: 242 / 255, green: 178 / 255, blue: 60 / 255),
+        Color(red: 244 / 255, green: 169 / 255, blue: 184 / 255),
+        Color(red: 255 / 255, green: 159 / 255, blue: 104 / 255),
+        Color(red: 143 / 255, green: 191 / 255, blue: 159 / 255),
+        Color(red: 155 / 255, green: 183 / 255, blue: 212 / 255),
+    ]
+
+    static func condensedRingCategories(_ categories: [CategoryTotal]) -> [CategoryTotal] {
+        let positive = categories.filter { $0.total > 0 }
+        guard positive.count > 6 else { return positive }
+        let rest = positive.dropFirst(5)
+        return Array(positive.prefix(5)) + [CategoryTotal(
+            name: "更多",
+            total: rest.reduce(Decimal.zero) { $0 + $1.total },
+            share: rest.reduce(0) { $0 + $1.share },
+            count: rest.reduce(0) { $0 + $1.count }
+        )]
+    }
+
+    private func customCategoryRing(_ categories: [CategoryTotal], total: Decimal,
+                                    currencyCode: String) -> some View {
+        let items = Self.condensedRingCategories(categories)
+        return VStack(alignment: .leading, spacing: 12) {
+            Text("支出构成").font(.headline)
+            GeometryReader { geometry in
+                let chartWidth = min(144, geometry.size.width * 0.48)
+                HStack(spacing: 10) {
+                    ringChart(items, total: total, currencyCode: currencyCode, width: chartWidth)
+                    ringLegend(items, currencyCode: currencyCode)
+                        .frame(maxWidth: .infinity)
+                }
+            }
+            .frame(height: 156)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(14)
+        .liquidGlassSurface(cornerRadius: 18)
+    }
+
+    private func ringChart(_ items: [CategoryTotal], total: Decimal,
+                           currencyCode: String, width: CGFloat) -> some View {
+        ZStack {
+            if !items.isEmpty {
+                Chart(Array(items.enumerated()), id: \.offset) { index, item in
+                    SectorMark(angle: .value("金额", MoneyFormat.double(item.total)),
+                               innerRadius: .ratio(0.70), angularInset: 2)
+                        .foregroundStyle(Self.ringColors[index % Self.ringColors.count])
+                }
+                .chartLegend(.hidden)
+            }
+            VStack(spacing: 2) {
+                Text("期间支出").font(.caption2).foregroundStyle(.secondary)
+                Text(MoneyFormat.string(total, currencyCode: currencyCode))
+                    .font(.caption.weight(.semibold).monospacedDigit())
+                    .lineLimit(1).minimumScaleFactor(0.55)
+            }
+            .padding(.horizontal, 18)
+            .accessibilityHidden(true)
+        }
+        .frame(width: width, height: 156)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("支出构成，期间支出 \(MoneyFormat.string(total, currencyCode: currencyCode))")
+    }
+
+    private func ringLegend(_ items: [CategoryTotal], currencyCode: String) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            ForEach(Array(items.enumerated()), id: \.offset) { index, item in
+                HStack(spacing: 3) {
+                    Circle().fill(Self.ringColors[index % Self.ringColors.count])
+                        .frame(width: 9, height: 9)
+                    Text(item.name).lineLimit(1).minimumScaleFactor(0.6)
+                    Spacer(minLength: 0)
+                    Text(item.share.formatted(.percent.precision(.fractionLength(0))))
+                        .foregroundStyle(.secondary)
+                    Text(MoneyFormat.string(item.total, currencyCode: currencyCode))
+                        .lineLimit(1).minimumScaleFactor(0.5)
+                }
+                .font(.system(size: 10))
+                .accessibilityElement(children: .combine)
+            }
+        }
     }
 
     private func monthlyDailyBarChart(_ summary: MonthlySummary) -> some View {
