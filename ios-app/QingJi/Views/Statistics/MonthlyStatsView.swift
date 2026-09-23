@@ -121,15 +121,10 @@ struct MonthlyStatsView: View {
             }
             .liquidGlassCircleControl(size: 44)
             Spacer()
-            VStack(spacing: 2) {
-                Text("本周")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                Text(weekStart, format: .dateTime.month().day())
-                Text(weekEnd, format: .dateTime.month().day())
-                    .foregroundStyle(.secondary)
-            }
-            .font(.headline)
+            Text("\(weekStart.formatted(.dateTime.month().day())) – \(weekEnd.formatted(.dateTime.month().day()))")
+                .font(.headline)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
             Spacer()
             Button {
                 shiftWeek(by: 7)
@@ -204,15 +199,45 @@ struct MonthlyStatsView: View {
     }
 
     private func weekContent(snapshot: IOSLedgerSnapshot) -> some View {
+        let calendar = Calendar.current
+        let today = calendar.startOfDay(for: AppClock.now)
+        let isCurrentWeek = today >= weekStart && today <= weekEnd
+        let previousStart = calendar.date(byAdding: .day, value: -7, to: weekStart) ?? weekStart
+        let elapsedDays = calendar.dateComponents([.day], from: weekStart, to: today).day ?? 0
+        let previousEnd = calendar.date(byAdding: .day,
+                                        value: isCurrentWeek ? min(max(elapsedDays, 0), 6) : 6,
+                                        to: previousStart) ?? previousStart
         let summary = statisticsCache.period(
             of: snapshot.records,
             revision: snapshot.revision,
             start: weekStart,
-            end: Calendar.current.date(byAdding: .day, value: 6, to: weekStart) ?? weekStart
+            end: weekEnd
+        )
+        let previous = statisticsCache.period(
+            of: snapshot.records,
+            revision: snapshot.revision,
+            start: previousStart,
+            end: previousEnd
         )
         return VStack(spacing: 20) {
             weekHeader
-            periodContent(summary, currencyCode: snapshot.scopedCurrencyCode)
+            periodTotals(summary, currencyCode: snapshot.scopedCurrencyCode,
+                         label: isCurrentWeek ? "本周" : "该周", previous: previous)
+            if summary.totalExpense == 0 && summary.totalIncome == 0 {
+                emptyState(title: "这一周没有记录", systemImage: "chart.bar",
+                           message: "换一周看看吧")
+            } else if !summary.expenseByCategory.isEmpty {
+                periodCategoryRing(summary.expenseByCategory, total: summary.totalExpense,
+                                   currencyCode: snapshot.scopedCurrencyCode,
+                                   totalLabel: "本周支出", start: weekStart, end: weekEnd)
+                periodDailyBarChart(summary.dailyTotals)
+                    .padding(14)
+                    .liquidGlassSurface(cornerRadius: 18)
+                categoryRanking(summary.expenseByCategory, currencyCode: snapshot.scopedCurrencyCode,
+                                start: weekStart, end: weekEnd)
+                    .padding(14)
+                    .liquidGlassSurface(cornerRadius: 18)
+            }
         }
     }
 
@@ -270,12 +295,13 @@ struct MonthlyStatsView: View {
         )
         return VStack(spacing: 20) {
             customHeader
-            customTotals(summary, currencyCode: snapshot.scopedCurrencyCode)
+            periodTotals(summary, currencyCode: snapshot.scopedCurrencyCode, label: "区间")
             if summary.expenseByCategory.isEmpty {
                 emptyState(title: "这个区间还没有支出", systemImage: "chart.pie", message: "记几笔之后这里会出现分析图表")
             } else {
-                customCategoryRing(summary.expenseByCategory, total: summary.totalExpense,
-                                   currencyCode: snapshot.scopedCurrencyCode)
+                periodCategoryRing(summary.expenseByCategory, total: summary.totalExpense,
+                                   currencyCode: snapshot.scopedCurrencyCode,
+                                   totalLabel: "期间支出", start: customStartDate, end: customEndDate)
                 categoryRanking(summary.expenseByCategory, currencyCode: snapshot.scopedCurrencyCode,
                                 start: customStartDate, end: customEndDate)
             }
@@ -285,12 +311,20 @@ struct MonthlyStatsView: View {
     private let statisticsAccent = Color(red: 0.49, green: 0.55, blue: 0.62)
     private let statisticsIncome = Color(red: 0.73, green: 0.56, blue: 0.32)
 
-    private func customTotals(_ summary: PeriodSummary, currencyCode: String) -> some View {
+    private func periodTotals(_ summary: PeriodSummary, currencyCode: String,
+                              label: String, previous: PeriodSummary? = nil) -> some View {
         VStack(spacing: 8) {
             VStack(alignment: .leading, spacing: 4) {
-                Text("总支出 · 区间")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                HStack {
+                    Text("总支出 · \(label)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    if let previous {
+                        changeBadge(current: summary.totalExpense, previous: previous.totalExpense,
+                                    goodWhenUp: false)
+                    }
+                }
                 Text(MoneyFormat.string(summary.totalExpense, currencyCode: currencyCode))
                     .font(.system(size: 34, weight: .bold).monospacedDigit())
                     .lineLimit(1)
@@ -321,9 +355,11 @@ struct MonthlyStatsView: View {
             ViewThatFits(in: .horizontal) {
                 HStack(spacing: 8) {
                     customMiniTotal("收入", amount: summary.totalIncome, currencyCode: currencyCode,
-                                    values: summary.dailyTotals.map { MoneyFormat.double($0.income) }, color: statisticsIncome)
+                                    values: summary.dailyTotals.map { MoneyFormat.double($0.income) },
+                                    color: statisticsIncome, previous: previous?.totalIncome)
                     customMiniTotal("结余", amount: summary.balance, currencyCode: currencyCode,
-                                    values: Self.runningBalances(summary.dailyTotals), color: statisticsAccent)
+                                    values: Self.runningBalances(summary.dailyTotals),
+                                    color: statisticsAccent, previous: previous?.balance)
                 }
                 VStack(spacing: 8) {
                     totalCard(title: "收入", amount: summary.totalIncome, color: .primary, currencyCode: currencyCode)
@@ -342,13 +378,17 @@ struct MonthlyStatsView: View {
     }
 
     private func customMiniTotal(_ title: LocalizedStringKey, amount: Decimal,
-                                 currencyCode: String, values: [Double], color: Color) -> some View {
+                                 currencyCode: String, values: [Double], color: Color,
+                                 previous: Decimal? = nil) -> some View {
         VStack(alignment: .leading, spacing: 5) {
             Text(title).font(.caption).foregroundStyle(.secondary)
             Text(MoneyFormat.string(amount, currencyCode: currencyCode))
                 .font(.title3.weight(.semibold).monospacedDigit())
                 .foregroundStyle(.primary)
                 .lineLimit(1).minimumScaleFactor(0.6)
+            if let previous {
+                changeBadge(current: amount, previous: previous, goodWhenUp: true)
+            }
             Chart(Array(values.enumerated()), id: \.offset) { index, value in
                 LineMark(x: .value("日序", index), y: .value("金额", value))
                     .foregroundStyle(color)
@@ -363,6 +403,23 @@ struct MonthlyStatsView: View {
         .liquidGlassSurface(cornerRadius: 18)
     }
 
+    static func percentChange(current: Decimal, previous: Decimal) -> Int? {
+        let base = NSDecimalNumber(decimal: previous).doubleValue
+        guard base != 0 else { return nil }
+        let value = (NSDecimalNumber(decimal: current).doubleValue - base) / abs(base) * 100
+        guard value.isFinite, abs(value) < Double(Int.max) else { return nil }
+        return Int(value.rounded())
+    }
+
+    @ViewBuilder
+    private func changeBadge(current: Decimal, previous: Decimal, goodWhenUp: Bool) -> some View {
+        if let percent = Self.percentChange(current: current, previous: previous), percent != 0 {
+            Text("\(percent > 0 ? "↑" : "↓") \(abs(percent))%")
+                .font(.caption.weight(.medium).monospacedDigit())
+                .foregroundStyle((percent > 0) == goodWhenUp ? Color.green : Color.warning)
+        }
+    }
+
     private func monthlyContent(summary: MonthlySummary, currencyCode: String) -> some View {
         Group {
             if summary.expenseByCategory.isEmpty {
@@ -370,24 +427,6 @@ struct MonthlyStatsView: View {
             } else {
                 categoryPieChart(summary.expenseByCategory)
                 monthlyDailyBarChart(summary)
-                categoryRanking(summary.expenseByCategory, currencyCode: currencyCode)
-            }
-        }
-    }
-
-    private func periodContent(_ summary: PeriodSummary, currencyCode: String) -> some View {
-        VStack(spacing: 20) {
-            totalsCards(
-                expense: summary.totalExpense,
-                income: summary.totalIncome,
-                balance: summary.balance,
-                currencyCode: currencyCode
-            )
-            if summary.expenseByCategory.isEmpty {
-                emptyState(title: "这个区间还没有支出", systemImage: "chart.pie", message: "记几笔之后这里会出现分析图表")
-            } else {
-                categoryPieChart(summary.expenseByCategory)
-                periodDailyBarChart(summary.dailyTotals)
                 categoryRanking(summary.expenseByCategory, currencyCode: currencyCode)
             }
         }
@@ -468,16 +507,19 @@ struct MonthlyStatsView: View {
         )]
     }
 
-    private func customCategoryRing(_ categories: [CategoryTotal], total: Decimal,
-                                    currencyCode: String) -> some View {
+    private func periodCategoryRing(_ categories: [CategoryTotal], total: Decimal,
+                                    currencyCode: String, totalLabel: String,
+                                    start: Date, end: Date) -> some View {
         let items = Self.condensedRingCategories(categories)
         return VStack(alignment: .leading, spacing: 12) {
             Text("支出构成").font(.headline)
             GeometryReader { geometry in
                 let chartWidth = min(144, geometry.size.width * 0.48)
                 HStack(spacing: 10) {
-                    ringChart(items, total: total, currencyCode: currencyCode, width: chartWidth)
-                    ringLegend(items, allCategories: categories, currencyCode: currencyCode)
+                    ringChart(items, total: total, currencyCode: currencyCode,
+                              totalLabel: totalLabel, width: chartWidth)
+                    ringLegend(items, allCategories: categories, currencyCode: currencyCode,
+                               start: start, end: end)
                         .frame(maxWidth: .infinity)
                 }
             }
@@ -489,7 +531,8 @@ struct MonthlyStatsView: View {
     }
 
     private func ringChart(_ items: [CategoryTotal], total: Decimal,
-                           currencyCode: String, width: CGFloat) -> some View {
+                           currencyCode: String, totalLabel: String,
+                           width: CGFloat) -> some View {
         ZStack {
             if !items.isEmpty {
                 Chart(Array(items.enumerated()), id: \.offset) { index, item in
@@ -500,7 +543,7 @@ struct MonthlyStatsView: View {
                 .chartLegend(.hidden)
             }
             VStack(spacing: 2) {
-                Text("期间支出").font(.caption2).foregroundStyle(.secondary)
+                Text(totalLabel).font(.caption2).foregroundStyle(.secondary)
                 Text(MoneyFormat.string(total, currencyCode: currencyCode))
                     .font(.caption.weight(.semibold).monospacedDigit())
                     .lineLimit(1).minimumScaleFactor(0.55)
@@ -510,11 +553,11 @@ struct MonthlyStatsView: View {
         }
         .frame(width: width, height: 156)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("支出构成，期间支出 \(MoneyFormat.string(total, currencyCode: currencyCode))")
+        .accessibilityLabel("支出构成，\(totalLabel) \(MoneyFormat.string(total, currencyCode: currencyCode))")
     }
 
     private func ringLegend(_ items: [CategoryTotal], allCategories: [CategoryTotal],
-                            currencyCode: String) -> some View {
+                            currencyCode: String, start: Date, end: Date) -> some View {
         let moreNames = Set(allCategories.filter { $0.total > 0 }.dropFirst(5).map(\.name))
         return VStack(alignment: .leading, spacing: 6) {
             ForEach(Array(items.enumerated()), id: \.offset) { index, item in
@@ -522,7 +565,7 @@ struct MonthlyStatsView: View {
                     let isMore = allCategories.filter { $0.total > 0 }.count > 6 && index == items.count - 1
                     let names: Set<String> = isMore ? moreNames : [item.name]
                     selectedCategory = CategoryDrillDown(title: item.name, names: names,
-                                                         start: customStartDate, end: customEndDate)
+                                                         start: start, end: end)
                 } label: {
                     HStack(spacing: 3) {
                         Circle().fill(Self.ringColors[index % Self.ringColors.count])
@@ -570,7 +613,7 @@ struct MonthlyStatsView: View {
                     x: .value("日", item.date, unit: .day),
                     y: .value("支出", MoneyFormat.double(item.expense))
                 )
-                .foregroundStyle(Color.accentColor.gradient)
+                .foregroundStyle(statisticsAccent.gradient)
             }
             .chartXAxis {
                 AxisMarks(values: .stride(by: .day))

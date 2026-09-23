@@ -84,6 +84,12 @@ final class LedgerStoreTests: XCTestCase {
         XCTAssertEqual(MonthlyStatsView.runningBalances([]), [])
     }
 
+    func testStatisticsComparisonBadgeUsesSameWeekPercentageDirection() {
+        XCTAssertEqual(MonthlyStatsView.percentChange(current: 46, previous: 243), -81)
+        XCTAssertEqual(MonthlyStatsView.percentChange(current: 574, previous: -243), 336)
+        XCTAssertNil(MonthlyStatsView.percentChange(current: 46, previous: 0))
+    }
+
     func testCustomRingCondensesPositiveCategoriesWithoutLosingTotals() {
         var categories: [CategoryTotal] = []
         for index in 1...7 {
