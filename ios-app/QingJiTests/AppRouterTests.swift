@@ -10,6 +10,7 @@ final class AppRouterTests: XCTestCase {
         XCTAssertEqual(RootTabView.initialPath(for: "stats/custom/category-detail"), [.statistics])
         XCTAssertEqual(RootTabView.initialPath(for: "stats/month/ring"), [.statistics])
         XCTAssertEqual(RootTabView.initialPath(for: "stats/month/trend"), [.statistics])
+        XCTAssertEqual(RootTabView.initialPath(for: "stats/month/trend/income"), [.statistics])
         XCTAssertTrue(MonthlyStatsView.demoMonthRing(environment: [
             "QINGJI_DEMO": "1", "QINGJI_SCREEN": "stats/month/ring"
         ]))
@@ -18,6 +19,9 @@ final class AppRouterTests: XCTestCase {
         ]))
         XCTAssertTrue(MonthlyStatsView.demoMonthTrend(environment: [
             "QINGJI_DEMO": "1", "QINGJI_SCREEN": "stats/month/trend"
+        ]))
+        XCTAssertTrue(MonthlyStatsView.demoMonthTrendIncome(environment: [
+            "QINGJI_DEMO": "1", "QINGJI_SCREEN": "stats/month/trend/income"
         ]))
         let demo = MonthlyStatsView.demoCategoryDrillDown(environment: [
             "QINGJI_DEMO": "1", "QINGJI_SCREEN": "stats/custom/category-detail"

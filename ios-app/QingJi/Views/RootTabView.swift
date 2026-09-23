@@ -203,7 +203,7 @@ struct RootTabView: View {
         case "search": return [.search]
         case "transactions": return [.transactions]
         case "import-review": return [.importReview]
-        case "stats-month", "stats-week", "stats/year", "stats/week", "stats-year", "stats-custom", "stats/custom", "stats/month", "stats/month/ring", "stats/month/trend", "stats/custom/category-detail":
+        case "stats-month", "stats-week", "stats/year", "stats/week", "stats-year", "stats-custom", "stats/custom", "stats/month", "stats/month/ring", "stats/month/trend", "stats/month/trend/income", "stats/custom/category-detail":
             return [.statistics]
         case "budget", "reconcile", "reimburse", "books", "accounts", "categories", "tags",
              "memory", "ai-memory", "ai-tasks", "ai-extensions", "ai-schedules", "ai-search",

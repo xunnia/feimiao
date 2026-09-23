@@ -50,7 +50,13 @@ struct MonthlyStatsView: View {
     }
 
     static func demoMonthTrend(environment: [String: String]) -> Bool {
-        environment["QINGJI_DEMO"] == "1" && environment["QINGJI_SCREEN"] == "stats/month/trend"
+        environment["QINGJI_DEMO"] == "1" &&
+            ["stats/month/trend", "stats/month/trend/income"].contains(environment["QINGJI_SCREEN"])
+    }
+
+    static func demoMonthTrendIncome(environment: [String: String]) -> Bool {
+        environment["QINGJI_DEMO"] == "1" &&
+            environment["QINGJI_SCREEN"] == "stats/month/trend/income"
     }
 
     var body: some View {
@@ -87,6 +93,9 @@ struct MonthlyStatsView: View {
             .task(id: transactions.count) {
                 let environment = ProcessInfo.processInfo.environment
                 if Self.demoMonthRing(environment: environment) || Self.demoMonthTrend(environment: environment) {
+                    if Self.demoMonthTrendIncome(environment: environment) {
+                        trendShowsIncome = true
+                    }
                     try? await Task.sleep(for: .seconds(2))
                     scroll.scrollTo(Self.demoMonthTrend(environment: environment)
                                     ? "stats-month-trend" : "stats-month-ring", anchor: .top)
@@ -683,7 +692,8 @@ struct MonthlyStatsView: View {
                 ForEach(previousMonth.dailyTotals, id: \.day) { item in
                     LineMark(
                         x: .value("日", item.day),
-                        y: .value("上月", max(0, MoneyFormat.double(trendShowsIncome ? item.income : item.expense)))
+                        y: .value("金额", max(0, MoneyFormat.double(trendShowsIncome ? item.income : item.expense))),
+                        series: .value("周期", "上月")
                     )
                     .foregroundStyle(color.opacity(0.45))
                     .lineStyle(StrokeStyle(lineWidth: 1.5, dash: [4, 3]))
@@ -692,7 +702,8 @@ struct MonthlyStatsView: View {
                 ForEach(summary.dailyTotals, id: \.day) { item in
                     LineMark(
                         x: .value("日", item.day),
-                        y: .value("本月", max(0, MoneyFormat.double(trendShowsIncome ? item.income : item.expense)))
+                        y: .value("金额", max(0, MoneyFormat.double(trendShowsIncome ? item.income : item.expense))),
+                        series: .value("周期", "本月")
                     )
                     .foregroundStyle(color)
                     .interpolationMethod(.monotone)
