@@ -102,7 +102,7 @@ public struct YearlySummary: Equatable, Sendable {
 
 /// 纯函数统计引擎。转账不计入收支。
 public enum StatisticsEngine {
-    private static func expenseCategoryName(for record: TransactionRecord) -> String {
+    public static func expenseCategoryName(for record: TransactionRecord) -> String {
         let raw = record.topCategoryName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             ? record.categoryName
             : record.topCategoryName
@@ -111,6 +111,25 @@ public enum StatisticsEngine {
             return "其他"
         }
         return name
+    }
+
+    /// Returns original expense families for a category drill-down using the same
+    /// dates, exclusions, refund folding and category labels as periodSummary.
+    public static func expenseRecords(
+        in records: [TransactionRecord],
+        categoryNames: Set<String>,
+        start: Date,
+        end: Date,
+        calendar: Calendar = .current
+    ) -> [TransactionRecord] {
+        let startDay = calendar.startOfDay(for: min(start, end))
+        let endDay = calendar.startOfDay(for: max(start, end))
+        let endExclusive = calendar.date(byAdding: .day, value: 1, to: endDay) ?? endDay
+        return LedgerPolicy.userRecords(from: records).filter { record in
+            record.kind == .expense &&
+                record.date >= startDay && record.date < endExclusive &&
+                categoryNames.contains(expenseCategoryName(for: record))
+        }
     }
 
     /// 统计闭区间 `[startDay, endDay]`，结束日期按当地日历包含整天。

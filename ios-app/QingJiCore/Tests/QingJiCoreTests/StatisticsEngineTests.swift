@@ -68,6 +68,32 @@ final class StatisticsEngineTests: XCTestCase {
         XCTAssertEqual(summary.expenseByCategory.first?.count, 1)
     }
 
+    func testCategoryDrillDownMatchesPeriodTotalsAcrossDatesAndRefunds() {
+        let foodID = UUID()
+        let records = [
+            TransactionRecord(id: foodID, kind: .expense, amount: 100,
+                              categoryName: "生鲜食品", topCategoryName: "食品餐饮", date: date(2026, 6, 30)),
+            TransactionRecord(kind: .expense, amount: -25, categoryName: "生鲜食品",
+                              topCategoryName: "食品餐饮", date: date(2026, 7, 2), refundOfID: foodID),
+            TransactionRecord(kind: .expense, amount: 20, categoryName: "食品餐饮", date: date(2026, 7, 1)),
+            TransactionRecord(kind: .expense, amount: 9, categoryName: "未分类", date: date(2026, 7, 1)),
+            TransactionRecord(kind: .expense, amount: 5, categoryName: "食品餐饮",
+                              date: date(2026, 7, 1), isExcluded: true),
+            TransactionRecord(kind: .income, amount: 500, categoryName: "食品餐饮", date: date(2026, 7, 1)),
+            TransactionRecord(kind: .expense, amount: 40, categoryName: "食品餐饮", date: date(2026, 7, 2)),
+        ]
+        let start = date(2026, 6, 30)
+        let end = date(2026, 7, 1)
+        let summary = StatisticsEngine.periodSummary(of: records, start: start, end: end, calendar: calendar)
+        let selected = StatisticsEngine.expenseRecords(in: records, categoryNames: ["食品餐饮"],
+                                                       start: start, end: end, calendar: calendar)
+        XCTAssertEqual(selected.count, 2)
+        XCTAssertEqual(selected.reduce(Decimal.zero) { $0 + $1.amount }, 95)
+        XCTAssertEqual(summary.expenseByCategory.first(where: { $0.name == "食品餐饮" })?.total, 95)
+        XCTAssertEqual(StatisticsEngine.expenseRecords(in: records, categoryNames: ["其他"],
+                                                       start: start, end: end, calendar: calendar).first?.amount, 9)
+    }
+
     func testPeriodSummaryIncludesBothEndpointsAndPreservesEmptyDays() {
         let records = [
             TransactionRecord(kind: .expense, amount: 30, categoryName: "餐饮", date: date(2026, 6, 29)),

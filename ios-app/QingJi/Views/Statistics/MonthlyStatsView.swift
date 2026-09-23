@@ -25,6 +25,15 @@ struct MonthlyStatsView: View {
     @AppStorage("qingji.stats.custom.end") private var savedCustomEnd: Double = 0
     @State private var projectionCache = IOSLedgerProjectionCache()
     @State private var statisticsCache = IOSStatisticsProjectionCache()
+    @State private var selectedCategory: CategoryDrillDown?
+
+    private struct CategoryDrillDown: Identifiable {
+        var id: String { "\(title):\(start.timeIntervalSince1970):\(end.timeIntervalSince1970)" }
+        let title: String
+        let names: Set<String>
+        let start: Date
+        let end: Date
+    }
 
     var body: some View {
         @Bindable var router = router
@@ -59,6 +68,10 @@ struct MonthlyStatsView: View {
             .liquidGlassCanvas()
             .navigationTitle("统计")
             .onAppear(perform: restoreDateSelections)
+            .navigationDestination(item: $selectedCategory) { selection in
+                CategoryTransactionsView(title: selection.title, categoryNames: selection.names,
+                                         start: selection.start, end: selection.end)
+            }
     }
 
     private var monthHeader: some View {
@@ -247,7 +260,8 @@ struct MonthlyStatsView: View {
             } else {
                 customCategoryRing(summary.expenseByCategory, total: summary.totalExpense,
                                    currencyCode: snapshot.scopedCurrencyCode)
-                categoryRanking(summary.expenseByCategory, currencyCode: snapshot.scopedCurrencyCode)
+                categoryRanking(summary.expenseByCategory, currencyCode: snapshot.scopedCurrencyCode,
+                                start: customStartDate, end: customEndDate)
             }
         }
     }
@@ -447,7 +461,7 @@ struct MonthlyStatsView: View {
                 let chartWidth = min(144, geometry.size.width * 0.48)
                 HStack(spacing: 10) {
                     ringChart(items, total: total, currencyCode: currencyCode, width: chartWidth)
-                    ringLegend(items, currencyCode: currencyCode)
+                    ringLegend(items, allCategories: categories, currencyCode: currencyCode)
                         .frame(maxWidth: .infinity)
                 }
             }
@@ -483,21 +497,34 @@ struct MonthlyStatsView: View {
         .accessibilityLabel("支出构成，期间支出 \(MoneyFormat.string(total, currencyCode: currencyCode))")
     }
 
-    private func ringLegend(_ items: [CategoryTotal], currencyCode: String) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
+    private func ringLegend(_ items: [CategoryTotal], allCategories: [CategoryTotal],
+                            currencyCode: String) -> some View {
+        let moreNames = Set(allCategories.filter { $0.total > 0 }.dropFirst(5).map(\.name))
+        return VStack(alignment: .leading, spacing: 6) {
             ForEach(Array(items.enumerated()), id: \.offset) { index, item in
-                HStack(spacing: 3) {
-                    Circle().fill(Self.ringColors[index % Self.ringColors.count])
-                        .frame(width: 9, height: 9)
-                    Text(item.name).lineLimit(1).minimumScaleFactor(0.6)
-                    Spacer(minLength: 0)
-                    Text(item.share.formatted(.percent.precision(.fractionLength(0))))
-                        .foregroundStyle(.secondary)
-                    Text(MoneyFormat.string(item.total, currencyCode: currencyCode))
-                        .lineLimit(1).minimumScaleFactor(0.5)
+                Button {
+                    let isMore = allCategories.filter { $0.total > 0 }.count > 6 && index == items.count - 1
+                    let names: Set<String> = isMore ? moreNames : [item.name]
+                    selectedCategory = CategoryDrillDown(title: item.name, names: names,
+                                                         start: customStartDate, end: customEndDate)
+                } label: {
+                    HStack(spacing: 3) {
+                        Circle().fill(Self.ringColors[index % Self.ringColors.count])
+                            .frame(width: 9, height: 9)
+                        Text(item.name).lineLimit(1).minimumScaleFactor(0.6)
+                        Spacer(minLength: 0)
+                        Text(item.share.formatted(.percent.precision(.fractionLength(0))))
+                            .foregroundStyle(.secondary)
+                        Text(MoneyFormat.string(item.total, currencyCode: currencyCode))
+                            .lineLimit(1).minimumScaleFactor(0.5)
+                        Image(systemName: "chevron.right").font(.system(size: 9))
+                            .foregroundStyle(.secondary)
+                    }
+                    .font(.system(size: 10))
+                    .contentShape(Rectangle())
                 }
-                .font(.system(size: 10))
-                .accessibilityElement(children: .combine)
+                .buttonStyle(.plain)
+                .accessibilityLabel("查看\(item.name)支出明细")
             }
         }
     }
@@ -537,39 +564,53 @@ struct MonthlyStatsView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private func categoryRanking(_ categories: [CategoryTotal], currencyCode: String) -> some View {
+    private func categoryRanking(_ categories: [CategoryTotal], currencyCode: String,
+                                 start: Date? = nil, end: Date? = nil) -> some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("分类排行")
                 .font(.headline)
-            ForEach(categories, id: \.name) { item in
+            ForEach(categories.prefix(5), id: \.name) { item in
                 let seed = CategorySeed.all.first { $0.nameZh == item.name }
-                VStack(spacing: 4) {
-                    HStack {
-                        CategoryIcon(
-                            categoryKey: seed?.key ?? "",
-                            emoji: seed?.emoji ?? "🏷️",
-                            size: 28
-                        )
-                        .accessibilityHidden(true)
-                        Text(item.name)
-                            .font(.subheadline)
-                        Text("\(item.count) 笔")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        Spacer()
-                        Text(MoneyFormat.string(item.total, currencyCode: currencyCode))
-                            .font(.subheadline.monospacedDigit())
-                        Text(item.share.formatted(.percent.precision(.fractionLength(0))))
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .frame(width: 44, alignment: .trailing)
+                Group {
+                    if let start, let end {
+                        Button {
+                            selectedCategory = CategoryDrillDown(title: item.name, names: [item.name],
+                                                                 start: start, end: end)
+                        } label: {
+                            rankingRow(item, seed: seed, currencyCode: currencyCode, showsChevron: true)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("查看\(item.name)支出明细")
+                    } else {
+                        rankingRow(item, seed: seed, currencyCode: currencyCode, showsChevron: false)
                     }
-                    ProgressView(value: item.share)
-                        .tint(.accentColor)
                 }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func rankingRow(_ item: CategoryTotal, seed: CategorySeed?,
+                            currencyCode: String, showsChevron: Bool) -> some View {
+        VStack(spacing: 4) {
+            HStack {
+                CategoryIcon(categoryKey: seed?.key ?? "", emoji: seed?.emoji ?? "🏷️", size: 28)
+                    .accessibilityHidden(true)
+                Text(item.name).font(.subheadline).lineLimit(1)
+                Text("\(item.count) 笔").font(.caption).foregroundStyle(.secondary)
+                Spacer()
+                Text(MoneyFormat.string(item.total, currencyCode: currencyCode))
+                    .font(.subheadline.monospacedDigit())
+                Text(item.share.formatted(.percent.precision(.fractionLength(0))))
+                    .font(.caption).foregroundStyle(.secondary)
+                    .frame(width: 44, alignment: .trailing)
+                if showsChevron {
+                    Image(systemName: "chevron.right").font(.caption2).foregroundStyle(.secondary)
+                }
+            }
+            ProgressView(value: min(max(item.share, 0), 1))
+                .tint(.secondary)
+        }
     }
 
     /// 月度预算执行条 + 今日可花。
