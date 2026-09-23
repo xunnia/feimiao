@@ -346,6 +346,16 @@ jobs:
           capture_interaction() { shoot "$@"; }
           capture_interaction "$interaction_route" "$interaction_name"
           python3 ios-app/tools/check_screenshot_nonempty.py "$interaction_dir"/*.png
+
+          # Capture the installed launcher icon on SpringBoard as separate
+          # brand evidence. This is not one of the canonical app routes.
+          python3 ios-app/tools/run_bounded.py --timeout 45 -- \
+            xcrun simctl terminate "$DEVICE" com.qingji.app >> "$runtime_log" 2>&1
+          sleep 4
+          icon_screen="$interaction_dir/00-springboard-app-icon.png"
+          python3 ios-app/tools/run_bounded.py --timeout 45 -- \
+            xcrun simctl io "$DEVICE" screenshot "$icon_screen" >> "$runtime_log" 2>&1
+          python3 ios-app/tools/check_screenshot_nonempty.py "$icon_screen"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
