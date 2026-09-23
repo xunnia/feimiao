@@ -242,12 +242,27 @@ struct MonthlyStatsView: View {
     }
 
     private func monthContent(snapshot: IOSLedgerSnapshot) -> some View {
-        let components = Calendar.current.dateComponents([.year, .month], from: displayedMonth)
+        let calendar = Calendar.current
+        let components = calendar.dateComponents([.year, .month], from: displayedMonth)
+        let monthStart = calendar.date(from: components) ?? calendar.startOfDay(for: displayedMonth)
+        let nextMonth = calendar.date(byAdding: .month, value: 1, to: monthStart) ?? monthStart
+        let monthEnd = calendar.date(byAdding: .day, value: -1, to: nextMonth) ?? monthStart
+        let previousStart = calendar.date(byAdding: .month, value: -1, to: monthStart) ?? monthStart
+        let previousEnd = Self.previousMonthComparisonEnd(for: displayedMonth, now: AppClock.now,
+                                                          calendar: calendar)
         let summary = statisticsCache.monthly(
             of: snapshot.records,
             revision: snapshot.revision,
             year: components.year ?? 2026,
             month: components.month ?? 1
+        )
+        let period = statisticsCache.period(
+            of: snapshot.records, revision: snapshot.revision,
+            start: monthStart, end: monthEnd
+        )
+        let previous = statisticsCache.period(
+            of: snapshot.records, revision: snapshot.revision,
+            start: previousStart, end: previousEnd
         )
         let budget = BudgetStore.effectiveTotalBudget(
             from: budgets,
@@ -256,12 +271,8 @@ struct MonthlyStatsView: View {
         )
         return VStack(spacing: 20) {
             monthHeader
-            totalsCards(
-                expense: summary.totalExpense,
-                income: summary.totalIncome,
-                balance: summary.balance,
-                currencyCode: snapshot.scopedCurrencyCode
-            )
+            periodTotals(period, currencyCode: snapshot.scopedCurrencyCode,
+                         label: "\(components.month ?? 1)月", previous: previous)
             if let budget {
                 budgetProgress(
                     budget,
@@ -272,6 +283,18 @@ struct MonthlyStatsView: View {
             }
             monthlyContent(summary: summary, currencyCode: snapshot.scopedCurrencyCode)
         }
+    }
+
+    static func previousMonthComparisonEnd(for displayedMonth: Date, now: Date,
+                                           calendar: Calendar = .current) -> Date {
+        let monthStart = calendar.date(from: calendar.dateComponents([.year, .month], from: displayedMonth))
+            ?? calendar.startOfDay(for: displayedMonth)
+        let previousStart = calendar.date(byAdding: .month, value: -1, to: monthStart) ?? monthStart
+        let previousDays = calendar.range(of: .day, in: .month, for: previousStart)?.count ?? 28
+        let isCurrentMonth = calendar.isDate(displayedMonth, equalTo: now, toGranularity: .month)
+        let cutoff = isCurrentMonth ? min(calendar.component(.day, from: now), previousDays) : previousDays
+        return calendar.date(byAdding: .day, value: max(cutoff, 1) - 1, to: previousStart)
+            ?? previousStart
     }
 
     private func yearContent(snapshot: IOSLedgerSnapshot) -> some View {
@@ -345,7 +368,7 @@ struct MonthlyStatsView: View {
                     .chartYAxis { AxisMarks(position: .trailing, values: .automatic(desiredCount: 3)) }
                     .frame(height: 128)
                     .padding(.top, 10)
-                    .accessibilityLabel("区间每日支出趋势")
+                    .accessibilityLabel("每日支出趋势")
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -386,37 +409,53 @@ struct MonthlyStatsView: View {
                 .font(.title3.weight(.semibold).monospacedDigit())
                 .foregroundStyle(.primary)
                 .lineLimit(1).minimumScaleFactor(0.6)
-            if let previous {
-                changeBadge(current: amount, previous: previous, goodWhenUp: true)
+            HStack(alignment: .bottom) {
+                if let previous {
+                    changeBadge(current: amount, previous: previous, goodWhenUp: true)
+                }
+                Spacer(minLength: 4)
+                if values.contains(where: { $0 != 0 }) {
+                    Chart(Array(values.enumerated()), id: \.offset) { index, value in
+                        LineMark(x: .value("日序", index), y: .value("金额", value))
+                            .foregroundStyle(color)
+                            .interpolationMethod(.monotone)
+                    }
+                    .chartXAxis(.hidden).chartYAxis(.hidden).chartLegend(.hidden)
+                    .frame(width: 64, height: 26)
+                    .accessibilityHidden(true)
+                }
             }
-            Chart(Array(values.enumerated()), id: \.offset) { index, value in
-                LineMark(x: .value("日序", index), y: .value("金额", value))
-                    .foregroundStyle(color)
-                    .interpolationMethod(.monotone)
-            }
-            .chartXAxis(.hidden).chartYAxis(.hidden).chartLegend(.hidden)
             .frame(height: 30)
-            .accessibilityHidden(true)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(12)
         .liquidGlassSurface(cornerRadius: 18)
     }
 
-    static func percentChange(current: Decimal, previous: Decimal) -> Int? {
+    static func percentChange(current: Decimal, previous: Decimal) -> Double? {
         let base = NSDecimalNumber(decimal: previous).doubleValue
         guard base != 0 else { return nil }
         let value = (NSDecimalNumber(decimal: current).doubleValue - base) / abs(base) * 100
-        guard value.isFinite, abs(value) < Double(Int.max) else { return nil }
-        return Int(value.rounded())
+        guard value.isFinite, abs(value) >= 0.05 else { return nil }
+        return value
+    }
+
+    static func percentChangeLabel(current: Decimal, previous: Decimal) -> String? {
+        guard let percent = percentChange(current: current, previous: previous) else { return nil }
+        let magnitude = abs(percent)
+        let formatted = String(format: magnitude >= 10 ? "%.0f" : "%.1f", magnitude)
+        return "\(percent > 0 ? "↑" : "↓") \(formatted)%"
     }
 
     @ViewBuilder
     private func changeBadge(current: Decimal, previous: Decimal, goodWhenUp: Bool) -> some View {
-        if let percent = Self.percentChange(current: current, previous: previous), percent != 0 {
-            Text("\(percent > 0 ? "↑" : "↓") \(abs(percent))%")
+        if let percent = Self.percentChange(current: current, previous: previous),
+           let label = Self.percentChangeLabel(current: current, previous: previous) {
+            Text(label)
                 .font(.caption.weight(.medium).monospacedDigit())
-                .foregroundStyle((percent > 0) == goodWhenUp ? Color.green : Color.warning)
+                .foregroundStyle((percent > 0) == goodWhenUp
+                                 ? Color(red: 52 / 255, green: 168 / 255, blue: 83 / 255)
+                                 : Color(red: 229 / 255, green: 72 / 255, blue: 77 / 255))
         }
     }
 

@@ -85,9 +85,29 @@ final class LedgerStoreTests: XCTestCase {
     }
 
     func testStatisticsComparisonBadgeUsesSameWeekPercentageDirection() {
-        XCTAssertEqual(MonthlyStatsView.percentChange(current: 46, previous: 243), -81)
-        XCTAssertEqual(MonthlyStatsView.percentChange(current: 574, previous: -243), 336)
-        XCTAssertNil(MonthlyStatsView.percentChange(current: 46, previous: 0))
+        XCTAssertEqual(MonthlyStatsView.percentChangeLabel(current: 46, previous: 243), "↓ 81%")
+        XCTAssertEqual(MonthlyStatsView.percentChangeLabel(current: 574, previous: -243), "↑ 336%")
+        XCTAssertEqual(MonthlyStatsView.percentChangeLabel(
+            current: Decimal(string: "1017.90")!, previous: 1058), "↓ 3.8%")
+        XCTAssertNil(MonthlyStatsView.percentChangeLabel(current: 46, previous: 0))
+    }
+
+    func testCurrentMonthComparisonStopsAtSamePreviousMonthDay() {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "Asia/Shanghai")!
+        let march = calendar.date(from: DateComponents(year: 2026, month: 3, day: 31))!
+        let currentEnd = MonthlyStatsView.previousMonthComparisonEnd(for: march, now: march,
+                                                                      calendar: calendar)
+        XCTAssertEqual(calendar.component(.year, from: currentEnd), 2026)
+        XCTAssertEqual(calendar.component(.month, from: currentEnd), 2)
+        XCTAssertEqual(calendar.component(.day, from: currentEnd), 28)
+        let historicalEnd = MonthlyStatsView.previousMonthComparisonEnd(
+            for: calendar.date(from: DateComponents(year: 2026, month: 8, day: 1))!, now: march,
+            calendar: calendar
+        )
+        XCTAssertEqual(calendar.component(.year, from: historicalEnd), 2026)
+        XCTAssertEqual(calendar.component(.month, from: historicalEnd), 7)
+        XCTAssertEqual(calendar.component(.day, from: historicalEnd), 31)
     }
 
     func testCustomRingCondensesPositiveCategoriesWithoutLosingTotals() {

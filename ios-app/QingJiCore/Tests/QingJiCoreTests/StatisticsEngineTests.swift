@@ -135,6 +135,29 @@ final class StatisticsEngineTests: XCTestCase {
         XCTAssertEqual(summary.dailyTotals.count, 2)
     }
 
+    func testFullMonthPeriodMatchesMonthlySummaryIncludingLateRefund() {
+        let originalID = UUID()
+        let records = [
+            TransactionRecord(id: originalID, kind: .expense, amount: 80,
+                              categoryName: "食品餐饮", date: date(2028, 2, 29)),
+            TransactionRecord(kind: .expense, amount: -20,
+                              categoryName: "食品餐饮", date: date(2028, 3, 1), refundOfID: originalID),
+            TransactionRecord(kind: .income, amount: 100,
+                              categoryName: "工资", date: date(2028, 2, 1)),
+            TransactionRecord(kind: .expense, amount: 500,
+                              categoryName: "其他", date: date(2028, 2, 2), isExcluded: true),
+        ]
+        let monthly = StatisticsEngine.monthlySummary(of: records, year: 2028, month: 2,
+                                                       calendar: calendar)
+        let period = StatisticsEngine.periodSummary(of: records, start: date(2028, 2, 1),
+                                                     end: date(2028, 2, 29), calendar: calendar)
+        XCTAssertEqual(monthly.totalExpense, 60)
+        XCTAssertEqual(monthly.totalExpense, period.totalExpense)
+        XCTAssertEqual(monthly.totalIncome, period.totalIncome)
+        XCTAssertEqual(monthly.expenseByCategory, period.expenseByCategory)
+        XCTAssertEqual(monthly.dailyTotals.count, period.dailyTotals.count)
+    }
+
     func testCategoryTotalsPreferStableTopLevelCategoryName() {
         let summary = StatisticsEngine.monthlySummary(
             of: [
