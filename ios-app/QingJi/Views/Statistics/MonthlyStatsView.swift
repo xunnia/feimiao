@@ -27,7 +27,7 @@ struct MonthlyStatsView: View {
     @State private var statisticsCache = IOSStatisticsProjectionCache()
     @State private var selectedCategory: CategoryDrillDown?
 
-    private struct CategoryDrillDown: Identifiable {
+    private struct CategoryDrillDown: Identifiable, Hashable {
         var id: String { "\(title):\(start.timeIntervalSince1970):\(end.timeIntervalSince1970)" }
         let title: String
         let names: Set<String>
