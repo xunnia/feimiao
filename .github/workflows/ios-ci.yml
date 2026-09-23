@@ -344,6 +344,9 @@ jobs:
           # Invoke the existing capture function as an interaction, separate
           # from the manifest-listed canonical shoot calls above.
           capture_interaction() { shoot "$@"; }
+          ring_route="stats/month/ring"
+          ring_name="14a-stats-month-ring"
+          capture_interaction "$ring_route" "$ring_name"
           capture_interaction "$interaction_route" "$interaction_name"
           python3 ios-app/tools/check_screenshot_nonempty.py "$interaction_dir"/*.png
 

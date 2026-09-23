@@ -44,6 +44,10 @@ struct MonthlyStatsView: View {
         return ("食品餐饮", start, calendar.startOfDay(for: now))
     }
 
+    static func demoMonthRing(environment: [String: String]) -> Bool {
+        environment["QINGJI_DEMO"] == "1" && environment["QINGJI_SCREEN"] == "stats/month/ring"
+    }
+
     var body: some View {
         @Bindable var router = router
         let snapshot = projectionCache.snapshot(
@@ -51,7 +55,8 @@ struct MonthlyStatsView: View {
             selectedBookID: router.selectedBookID
         )
 
-        ScrollView {
+        ScrollViewReader { scroll in
+            ScrollView {
                 VStack(spacing: 20) {
                     Picker("范围", selection: $router.statsScope) {
                         Text("周").tag(Scope.week)
@@ -74,20 +79,27 @@ struct MonthlyStatsView: View {
                 }
                 .padding()
             }
-            .liquidGlassCanvas()
-            .navigationTitle("统计")
-            .onAppear(perform: restoreDateSelections)
-            .task {
-                if let demo = Self.demoCategoryDrillDown(environment: ProcessInfo.processInfo.environment,
-                                                         now: AppClock.now) {
-                    selectedCategory = CategoryDrillDown(title: demo.name, names: [demo.name],
-                                                         start: demo.start, end: demo.end)
+            .task(id: transactions.count) {
+                if Self.demoMonthRing(environment: ProcessInfo.processInfo.environment) {
+                    try? await Task.sleep(for: .seconds(2))
+                    scroll.scrollTo("stats-month-ring", anchor: .top)
                 }
             }
-            .navigationDestination(item: $selectedCategory) { selection in
-                CategoryTransactionsView(title: selection.title, categoryNames: selection.names,
-                                         start: selection.start, end: selection.end)
+        }
+        .liquidGlassCanvas()
+        .navigationTitle("统计")
+        .onAppear(perform: restoreDateSelections)
+        .task {
+            if let demo = Self.demoCategoryDrillDown(environment: ProcessInfo.processInfo.environment,
+                                                     now: AppClock.now) {
+                selectedCategory = CategoryDrillDown(title: demo.name, names: [demo.name],
+                                                     start: demo.start, end: demo.end)
             }
+        }
+        .navigationDestination(item: $selectedCategory) { selection in
+            CategoryTransactionsView(title: selection.title, categoryNames: selection.names,
+                                     start: selection.start, end: selection.end)
+        }
     }
 
     private var monthHeader: some View {
@@ -294,7 +306,8 @@ struct MonthlyStatsView: View {
                     currencyCode: snapshot.scopedCurrencyCode
                 )
             }
-            monthlyContent(summary: summary, currencyCode: snapshot.scopedCurrencyCode)
+            monthlyContent(summary: summary, currencyCode: snapshot.scopedCurrencyCode,
+                           start: monthStart, end: monthEnd)
         }
     }
 
@@ -472,14 +485,21 @@ struct MonthlyStatsView: View {
         }
     }
 
-    private func monthlyContent(summary: MonthlySummary, currencyCode: String) -> some View {
+    private func monthlyContent(summary: MonthlySummary, currencyCode: String,
+                                start: Date, end: Date) -> some View {
         Group {
             if summary.expenseByCategory.isEmpty {
                 emptyState(title: "本月还没有支出", systemImage: "chart.pie", message: "记几笔之后这里会出现分析图表")
             } else {
-                categoryPieChart(summary.expenseByCategory)
+                periodCategoryRing(summary.expenseByCategory, total: summary.totalExpense,
+                                   currencyCode: currencyCode, totalLabel: "本月支出",
+                                   start: start, end: end)
+                    .id("stats-month-ring")
                 monthlyDailyBarChart(summary)
-                categoryRanking(summary.expenseByCategory, currencyCode: currencyCode)
+                categoryRanking(summary.expenseByCategory, currencyCode: currencyCode,
+                                start: start, end: end)
+                    .padding(14)
+                    .liquidGlassSurface(cornerRadius: 18)
             }
         }
     }
@@ -518,24 +538,6 @@ struct MonthlyStatsView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(12)
         .glassEffect(.regular, in: .rect(cornerRadius: 16))
-    }
-
-    private func categoryPieChart(_ categories: [CategoryTotal]) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("支出构成")
-                .font(.headline)
-            Chart(categories.prefix(8), id: \.name) { item in
-                SectorMark(
-                    angle: .value("金额", MoneyFormat.double(item.total)),
-                    innerRadius: .ratio(0.6),
-                    angularInset: 1.5
-                )
-                .foregroundStyle(by: .value("分类", item.name))
-                .cornerRadius(4)
-            }
-            .frame(height: 220)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private static let ringColors: [Color] = [
