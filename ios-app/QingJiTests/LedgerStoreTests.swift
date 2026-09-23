@@ -85,11 +85,14 @@ final class LedgerStoreTests: XCTestCase {
     }
 
     func testCustomRingCondensesPositiveCategoriesWithoutLosingTotals() {
-        let categories = (1...7).map { index in
-            CategoryTotal(name: index == 7 ? "其他" : "分类\(index)",
-                          total: Decimal(8 - index), share: Double(8 - index) / 28,
-                          count: index)
-        } + [CategoryTotal(name: "退款", total: -2, share: -2.0 / 28, count: 1)]
+        var categories: [CategoryTotal] = []
+        for index in 1...7 {
+            let amount = 8 - index
+            categories.append(CategoryTotal(name: index == 7 ? "其他" : "分类\(index)",
+                                            total: Decimal(amount), share: Double(amount) / 28.0,
+                                            count: index))
+        }
+        categories.append(CategoryTotal(name: "退款", total: -2, share: -2.0 / 28, count: 1))
         let items = MonthlyStatsView.condensedRingCategories(categories)
         XCTAssertEqual(items.count, 6)
         XCTAssertEqual(items.last?.name, "更多")
