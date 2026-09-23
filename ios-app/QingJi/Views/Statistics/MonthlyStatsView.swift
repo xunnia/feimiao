@@ -121,7 +121,7 @@ struct MonthlyStatsView: View {
             }
             .liquidGlassCircleControl(size: 44)
             Spacer()
-            Text("\(weekStart.formatted(.dateTime.month().day())) – \(weekEnd.formatted(.dateTime.month().day()))")
+            Text(Self.weekRangeLabel(start: weekStart, end: weekEnd))
                 .font(.headline)
                 .lineLimit(1)
                 .minimumScaleFactor(0.8)
@@ -196,6 +196,19 @@ struct MonthlyStatsView: View {
 
     private var weekEnd: Date {
         Calendar.current.date(byAdding: .day, value: 6, to: weekStart) ?? weekStart
+    }
+
+    static func weekRangeLabel(start: Date, end: Date, calendar: Calendar = .current) -> String {
+        func monthDay(_ date: Date) -> String {
+            let parts = calendar.dateComponents([.month, .day], from: date)
+            return "\(parts.month ?? 1)月\(parts.day ?? 1)日"
+        }
+        return "\(monthDay(start)) – \(monthDay(end))"
+    }
+
+    static func trendAxisDates(_ days: [PeriodDailyTotal]) -> [Date] {
+        let step = max(2, Int(ceil(Double(days.count - 1) / 4)))
+        return stride(from: step, to: days.count - 1, by: step).map { days[$0].date }
     }
 
     private func weekContent(snapshot: IOSLedgerSnapshot) -> some View {
@@ -361,7 +374,7 @@ struct MonthlyStatsView: View {
                     }
                     .chartLegend(.hidden)
                     .chartXAxis {
-                        AxisMarks(values: .automatic(desiredCount: 5)) {
+                        AxisMarks(values: Self.trendAxisDates(summary.dailyTotals)) {
                             AxisValueLabel(format: .dateTime.month(.defaultDigits).day())
                         }
                     }

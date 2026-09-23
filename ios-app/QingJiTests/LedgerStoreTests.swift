@@ -92,6 +92,27 @@ final class LedgerStoreTests: XCTestCase {
         XCTAssertNil(MonthlyStatsView.percentChangeLabel(current: 46, previous: 0))
     }
 
+    func testStatisticsWeekLabelAndTrendTicksDoNotDependOnSimulatorLanguage() {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.locale = Locale(identifier: "en_US")
+        calendar.timeZone = TimeZone(identifier: "Asia/Shanghai")!
+        let start = calendar.date(from: DateComponents(year: 2026, month: 8, day: 24))!
+        let days = (0..<7).map { offset in
+            PeriodDailyTotal(date: calendar.date(byAdding: .day, value: offset, to: start)!,
+                             expense: 0, income: 0)
+        }
+        XCTAssertEqual(MonthlyStatsView.weekRangeLabel(start: start, end: days[6].date,
+                                                        calendar: calendar), "8月24日 – 8月30日")
+        XCTAssertEqual(MonthlyStatsView.trendAxisDates(days), [days[2].date, days[4].date])
+        let monthStart = calendar.date(from: DateComponents(year: 2026, month: 8, day: 1))!
+        let month = (0..<31).map { offset in
+            PeriodDailyTotal(date: calendar.date(byAdding: .day, value: offset, to: monthStart)!,
+                             expense: 0, income: 0)
+        }
+        XCTAssertEqual(MonthlyStatsView.trendAxisDates(month),
+                       [month[8].date, month[16].date, month[24].date])
+    }
+
     func testCurrentMonthComparisonStopsAtSamePreviousMonthDay() {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(identifier: "Asia/Shanghai")!
