@@ -103,7 +103,8 @@ final class AppRouter {
         case "stats-week", "stats/week":  selectedTab = .statistics; statsScope = .week
         case "stats-month", "stats/month":  selectedTab = .statistics; statsScope = .month
         case "stats-year", "stats/year":   selectedTab = .statistics; statsScope = .year
-        case "stats-custom", "stats/custom": selectedTab = .statistics; statsScope = .custom
+        case "stats-custom", "stats/custom", "stats/custom/category-detail":
+            selectedTab = .statistics; statsScope = .custom
         case "quickadd":    selectedTab = .quickAdd
         case "budget":       selectedTab = .settings;   settingsPushTarget = .budget
         case "reconcile":    selectedTab = .settings;   settingsPushTarget = .reconcile

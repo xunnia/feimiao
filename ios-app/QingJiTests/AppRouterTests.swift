@@ -7,6 +7,14 @@ final class AppRouterTests: XCTestCase {
             XCTAssertEqual(RootTabView.initialPath(for: "stats/\(scope)"), [.statistics])
             XCTAssertEqual(RootTabView.initialPath(for: "stats-\(scope)"), [.statistics])
         }
+        XCTAssertEqual(RootTabView.initialPath(for: "stats/custom/category-detail"), [.statistics])
+        let demo = MonthlyStatsView.demoCategoryDrillDown(environment: [
+            "QINGJI_DEMO": "1", "QINGJI_SCREEN": "stats/custom/category-detail"
+        ], now: Date(timeIntervalSince1970: 1_780_000_000))
+        XCTAssertEqual(demo?.name, "食品餐饮")
+        XCTAssertNil(MonthlyStatsView.demoCategoryDrillDown(environment: [
+            "QINGJI_DEMO": "0", "QINGJI_SCREEN": "stats/custom/category-detail"
+        ], now: Date()))
     }
 
     func testImportReviewColdLaunchUsesDedicatedRootRoute() {

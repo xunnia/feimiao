@@ -28,11 +28,20 @@ struct MonthlyStatsView: View {
     @State private var selectedCategory: CategoryDrillDown?
 
     private struct CategoryDrillDown: Identifiable, Hashable {
-        var id: String { "\(title):\(start.timeIntervalSince1970):\(end.timeIntervalSince1970)" }
+        var id: String { "\(title):\(names.sorted().joined(separator: ",")):\(start.timeIntervalSince1970):\(end.timeIntervalSince1970)" }
         let title: String
         let names: Set<String>
         let start: Date
         let end: Date
+    }
+
+    static func demoCategoryDrillDown(environment: [String: String], now: Date) -> (name: String, start: Date, end: Date)? {
+        guard environment["QINGJI_DEMO"] == "1",
+              environment["QINGJI_SCREEN"] == "stats/custom/category-detail" else { return nil }
+        let calendar = Calendar.current
+        let start = calendar.date(from: calendar.dateComponents([.year, .month], from: now))
+            ?? calendar.startOfDay(for: now)
+        return ("食品餐饮", start, calendar.startOfDay(for: now))
     }
 
     var body: some View {
@@ -68,6 +77,13 @@ struct MonthlyStatsView: View {
             .liquidGlassCanvas()
             .navigationTitle("统计")
             .onAppear(perform: restoreDateSelections)
+            .task {
+                if let demo = Self.demoCategoryDrillDown(environment: ProcessInfo.processInfo.environment,
+                                                         now: AppClock.now) {
+                    selectedCategory = CategoryDrillDown(title: demo.name, names: [demo.name],
+                                                         start: demo.start, end: demo.end)
+                }
+            }
             .navigationDestination(item: $selectedCategory) { selection in
                 CategoryTransactionsView(title: selection.title, categoryNames: selection.names,
                                          start: selection.start, end: selection.end)

@@ -332,11 +332,31 @@ jobs:
             echo "::error::截图全部相同，深链/启动参数导航未生效"
             exit 1
           fi
+
+          # The category drill-down is iOS-only interaction evidence, not a
+          # canonical Android/iOS scene. Keep it outside parity metadata and
+          # the 40-image distinct/route checks above.
+          interaction_dir="ci-artifacts/ios-interaction-screenshots"
+          mkdir -p "$interaction_dir"
+          screenshot_dir="$interaction_dir"
+          interaction_route="stats/custom/category-detail"
+          interaction_name="16a-stats-custom-category-detail"
+          # Invoke the existing capture function as an interaction, separate
+          # from the manifest-listed canonical shoot calls above.
+          capture_interaction() { shoot "$@"; }
+          capture_interaction "$interaction_route" "$interaction_name"
+          python3 ios-app/tools/check_screenshot_nonempty.py "$interaction_dir"/*.png
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: simulator-screenshots
           path: ci-artifacts/ios-screenshots/
+          if-no-files-found: warn
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ios-interaction-screenshots
+          path: ci-artifacts/ios-interaction-screenshots/
           if-no-files-found: warn
       - uses: actions/upload-artifact@v4
         if: always()
