@@ -353,6 +353,12 @@ jobs:
           income_trend_route="stats/month/trend/income"
           income_trend_name="14c-stats-month-income-trend"
           capture_interaction "$income_trend_route" "$income_trend_name"
+          top5_route="stats/month/top5"
+          top5_name="14d-stats-month-top5"
+          capture_interaction "$top5_route" "$top5_name"
+          sources_route="stats/month/sources"
+          sources_name="14e-stats-month-sources"
+          capture_interaction "$sources_route" "$sources_name"
           capture_interaction "$interaction_route" "$interaction_name"
           python3 ios-app/tools/check_screenshot_nonempty.py "$interaction_dir"/*.png
 

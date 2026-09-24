@@ -59,6 +59,15 @@ struct MonthlyStatsView: View {
             environment["QINGJI_SCREEN"] == "stats/month/trend/income"
     }
 
+    static func demoMonthBottom(environment: [String: String]) -> String? {
+        guard environment["QINGJI_DEMO"] == "1" else { return nil }
+        switch environment["QINGJI_SCREEN"] {
+        case "stats/month/top5": return "stats-month-top5"
+        case "stats/month/sources": return "stats-month-sources"
+        default: return nil
+        }
+    }
+
     var body: some View {
         @Bindable var router = router
         let snapshot = projectionCache.snapshot(
@@ -92,13 +101,15 @@ struct MonthlyStatsView: View {
             }
             .task(id: transactions.count) {
                 let environment = ProcessInfo.processInfo.environment
-                if Self.demoMonthRing(environment: environment) || Self.demoMonthTrend(environment: environment) {
+                if Self.demoMonthRing(environment: environment) || Self.demoMonthTrend(environment: environment) ||
+                    Self.demoMonthBottom(environment: environment) != nil {
                     if Self.demoMonthTrendIncome(environment: environment) {
                         trendShowsIncome = true
                     }
                     try? await Task.sleep(for: .seconds(2))
-                    scroll.scrollTo(Self.demoMonthTrend(environment: environment)
-                                    ? "stats-month-trend" : "stats-month-ring", anchor: .top)
+                    let destination = Self.demoMonthBottom(environment: environment)
+                        ?? (Self.demoMonthTrend(environment: environment) ? "stats-month-trend" : "stats-month-ring")
+                    scroll.scrollTo(destination, anchor: .top)
                 }
             }
         }
@@ -330,6 +341,7 @@ struct MonthlyStatsView: View {
                 )
             }
             monthlyContent(summary: summary, previousMonth: previousMonth,
+                           records: snapshot.records, revision: snapshot.revision,
                            currencyCode: snapshot.scopedCurrencyCode,
                            start: monthStart, end: monthEnd)
         }
@@ -510,9 +522,14 @@ struct MonthlyStatsView: View {
     }
 
     private func monthlyContent(summary: MonthlySummary, previousMonth: MonthlySummary,
+                                records: [TransactionRecord], revision: IOSLedgerDataRevision,
                                 currencyCode: String,
                                 start: Date, end: Date) -> some View {
-        Group {
+        let topExpenses = statisticsCache.monthlyTopExpenses(
+            of: records, revision: revision, year: summary.year, month: summary.month)
+        let sources = statisticsCache.monthlySpendSources(
+            of: records, revision: revision, year: summary.year, month: summary.month)
+        return Group {
             if summary.expenseByCategory.isEmpty {
                 emptyState(title: "本月还没有支出", systemImage: "chart.pie", message: "记几笔之后这里会出现分析图表")
             } else {
@@ -526,8 +543,76 @@ struct MonthlyStatsView: View {
                                 start: start, end: end)
                     .padding(14)
                     .liquidGlassSurface(cornerRadius: 18)
+                if !topExpenses.isEmpty {
+                    monthlyTopExpenses(topExpenses, currencyCode: currencyCode)
+                        .id("stats-month-top5")
+                }
+                if !sources.isEmpty {
+                    monthlySpendSources(sources, currencyCode: currencyCode)
+                        .id("stats-month-sources")
+                }
             }
         }
+    }
+
+    private func monthlyTopExpenses(_ items: [TransactionRecord], currencyCode: String) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("单笔支出排行").font(.headline)
+            ForEach(Array(items.enumerated()), id: \.element.id) { index, record in
+                HStack(spacing: 8) {
+                    Text("\(index + 1)")
+                        .font(.subheadline.weight(.semibold).monospacedDigit())
+                        .foregroundStyle(index < 3 ? Color(red: 0.73, green: 0.56, blue: 0.32) : Color.secondary)
+                        .frame(width: 20, alignment: .leading)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(record.note.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                             ? record.categoryName : record.note.trimmingCharacters(in: .whitespacesAndNewlines))
+                            .lineLimit(1)
+                        let date = Calendar.current.dateComponents([.month, .day], from: record.date)
+                        Text("\(record.categoryName) · \(date.month ?? 1)月\(date.day ?? 1)日")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                    Spacer(minLength: 4)
+                    Text("-\(MoneyFormat.string(record.amount, currencyCode: currencyCode))")
+                        .font(.subheadline.weight(.semibold).monospacedDigit())
+                        .lineLimit(1).minimumScaleFactor(0.7)
+                }
+                .font(.subheadline)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(14)
+        .liquidGlassSurface(cornerRadius: 18)
+    }
+
+    private func monthlySpendSources(_ items: [SpendSourceTotal], currencyCode: String) -> some View {
+        let largest = max(MoneyFormat.double(items.first?.total ?? 0), 1)
+        return VStack(alignment: .leading, spacing: 12) {
+            Text("消费来源").font(.headline)
+            ForEach(Array(items.enumerated()), id: \.element.name) { index, item in
+                HStack(spacing: 8) {
+                    Text(item.name).font(.caption).lineLimit(1)
+                        .frame(width: 88, alignment: .leading)
+                    GeometryReader { geometry in
+                        ZStack(alignment: .leading) {
+                            RoundedRectangle(cornerRadius: 4)
+                                .fill(Color.secondary.opacity(0.15))
+                            RoundedRectangle(cornerRadius: 4)
+                                .fill(Self.ringColors[index % Self.ringColors.count])
+                                .frame(width: geometry.size.width *
+                                       min(max(MoneyFormat.double(item.total) / largest, 0.04), 1))
+                        }
+                    }
+                    .frame(height: 12)
+                    Text(MoneyFormat.string(item.total, currencyCode: currencyCode))
+                        .font(.caption.weight(.medium).monospacedDigit())
+                        .lineLimit(1).minimumScaleFactor(0.7)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(14)
+        .liquidGlassSurface(cornerRadius: 18)
     }
 
     private func totalsCards(

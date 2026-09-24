@@ -11,6 +11,14 @@ final class AppRouterTests: XCTestCase {
         XCTAssertEqual(RootTabView.initialPath(for: "stats/month/ring"), [.statistics])
         XCTAssertEqual(RootTabView.initialPath(for: "stats/month/trend"), [.statistics])
         XCTAssertEqual(RootTabView.initialPath(for: "stats/month/trend/income"), [.statistics])
+        XCTAssertEqual(RootTabView.initialPath(for: "stats/month/top5"), [.statistics])
+        XCTAssertEqual(RootTabView.initialPath(for: "stats/month/sources"), [.statistics])
+        XCTAssertEqual(MonthlyStatsView.demoMonthBottom(environment: [
+            "QINGJI_DEMO": "1", "QINGJI_SCREEN": "stats/month/top5"
+        ]), "stats-month-top5")
+        XCTAssertEqual(MonthlyStatsView.demoMonthBottom(environment: [
+            "QINGJI_DEMO": "1", "QINGJI_SCREEN": "stats/month/sources"
+        ]), "stats-month-sources")
         XCTAssertTrue(MonthlyStatsView.demoMonthRing(environment: [
             "QINGJI_DEMO": "1", "QINGJI_SCREEN": "stats/month/ring"
         ]))

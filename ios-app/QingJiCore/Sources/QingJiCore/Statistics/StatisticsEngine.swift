@@ -16,6 +16,16 @@ public struct CategoryTotal: Equatable, Sendable {
     }
 }
 
+public struct SpendSourceTotal: Equatable, Sendable {
+    public let name: String
+    public let total: Decimal
+
+    public init(name: String, total: Decimal) {
+        self.name = name
+        self.total = total
+    }
+}
+
 /// 单日收支合计。
 public struct DailyTotal: Equatable, Sendable {
     public let day: Int
@@ -102,6 +112,41 @@ public struct YearlySummary: Equatable, Sendable {
 
 /// 纯函数统计引擎。转账不计入收支。
 public enum StatisticsEngine {
+    private static func monthlyExpenseRecords(
+        in records: [TransactionRecord], year: Int, month: Int,
+        calendar: Calendar
+    ) -> [TransactionRecord] {
+        LedgerPolicy.userRecords(from: records).filter { record in
+            guard record.kind == .expense else { return false }
+            let parts = calendar.dateComponents([.year, .month], from: record.date)
+            return parts.year == year && parts.month == month
+        }
+    }
+
+    public static func monthlyTopExpenses(
+        in records: [TransactionRecord], year: Int, month: Int,
+        calendar: Calendar = .current
+    ) -> [TransactionRecord] {
+        Array(monthlyExpenseRecords(in: records, year: year, month: month, calendar: calendar)
+            .sorted { $0.amount > $1.amount }.prefix(5))
+    }
+
+    public static func monthlySpendSources(
+        in records: [TransactionRecord], year: Int, month: Int,
+        calendar: Calendar = .current
+    ) -> [SpendSourceTotal] {
+        var totals: [String: Decimal] = [:]
+        for record in monthlyExpenseRecords(in: records, year: year, month: month, calendar: calendar) {
+            let source = BillCategorizer.normalizeMerchant(record.note)
+            totals[source.isEmpty ? "未标注" : source, default: 0] += record.amount
+        }
+        return Array(totals.map { SpendSourceTotal(name: $0.key, total: $0.value) }
+            .filter { $0.total > 0 }
+            .sorted { lhs, rhs in
+                lhs.total == rhs.total ? lhs.name < rhs.name : lhs.total > rhs.total
+            }.prefix(6))
+    }
+
     public static func expenseCategoryName(for record: TransactionRecord) -> String {
         let raw = record.topCategoryName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             ? record.categoryName

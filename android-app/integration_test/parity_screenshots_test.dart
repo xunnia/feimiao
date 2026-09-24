@@ -166,6 +166,8 @@ Future<void> _captureParityScene(
     await _captureStatistics(tester, binding, '月', 'stats-month-android');
   } else if (scene == 'stats-month-trend') {
     await _captureMonthlyTrend(tester, binding);
+  } else if (scene == 'stats-month-bottom') {
+    await _captureMonthlyBottom(tester, binding);
   } else if (scene == 'stats-year') {
     await _captureStatistics(tester, binding, '年', 'stats-year-android');
   } else if (scene == 'stats-custom') {
@@ -1001,6 +1003,34 @@ Future<void> _captureMonthlyTrend(
   await _pumpFor(tester, const Duration(milliseconds: 300));
   expect(find.text('本月收入'), findsOneWidget);
   await _takeScreenshot(tester, binding, 'stats-month-income-trend-android');
+}
+
+Future<void> _captureMonthlyBottom(
+  WidgetTester tester,
+  IntegrationTestWidgetsFlutterBinding binding,
+) async {
+  final navigator = ShareIntake.navigatorKey.currentState;
+  expect(navigator, isNotNull);
+  unawaited(navigator!.push<void>(_parityPageRoute<void>(const StatisticsView())));
+  await _pumpFor(tester, const Duration(milliseconds: 700));
+  await tester.tap(find.text('月').first);
+  await _pumpFor(tester, const Duration(milliseconds: 500));
+
+  final list = find.byType(ReorderableListView).last;
+  for (final (titleText, imageName) in [
+    ('单笔支出排行', 'stats-month-top5-android'),
+    ('消费来源', 'stats-month-sources-android'),
+  ]) {
+    final title = find.text(titleText);
+    for (var attempt = 0; attempt < 8 && title.evaluate().isEmpty; attempt++) {
+      await tester.drag(list, const Offset(0, -420));
+      await _pumpFor(tester, const Duration(milliseconds: 250));
+    }
+    expect(title, findsOneWidget);
+    await Scrollable.ensureVisible(title.evaluate().single, alignment: 0.2);
+    await _pumpFor(tester, const Duration(milliseconds: 500));
+    await _takeScreenshot(tester, binding, imageName);
+  }
 }
 
 Future<void> _takeScreenshot(

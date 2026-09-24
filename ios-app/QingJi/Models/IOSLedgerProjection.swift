@@ -180,6 +180,8 @@ final class IOSLedgerProjectionCache {
 final class IOSStatisticsProjectionCache {
     private var activeRevision: IOSLedgerDataRevision?
     private var monthly: [MonthlyKey: MonthlySummary] = [:]
+    private var topExpenses: [MonthlyKey: [TransactionRecord]] = [:]
+    private var spendSources: [MonthlyKey: [SpendSourceTotal]] = [:]
     private var yearly: [Int: YearlySummary] = [:]
     private var periods: [PeriodKey: PeriodSummary] = [:]
     private var budgets: [BudgetKey: BudgetStatus] = [:]
@@ -192,6 +194,8 @@ final class IOSStatisticsProjectionCache {
         guard activeRevision != revision else { return }
         activeRevision = revision
         monthly.removeAll(keepingCapacity: true)
+        topExpenses.removeAll(keepingCapacity: true)
+        spendSources.removeAll(keepingCapacity: true)
         yearly.removeAll(keepingCapacity: true)
         periods.removeAll(keepingCapacity: true)
         budgets.removeAll(keepingCapacity: true)
@@ -224,6 +228,34 @@ final class IOSStatisticsProjectionCache {
         calculationCount += 1
         let value = StatisticsEngine.yearlySummary(of: records, year: year, calendar: calendar)
         yearly[year] = value
+        return value
+    }
+
+    func monthlyTopExpenses(
+        of records: [TransactionRecord], revision: IOSLedgerDataRevision,
+        year: Int, month: Int, calendar: Calendar = .current
+    ) -> [TransactionRecord] {
+        prepare(for: revision)
+        let key = MonthlyKey(year: year, month: month)
+        if let cached = topExpenses[key] { return cached }
+        calculationCount += 1
+        let value = StatisticsEngine.monthlyTopExpenses(in: records, year: year, month: month,
+                                                        calendar: calendar)
+        topExpenses[key] = value
+        return value
+    }
+
+    func monthlySpendSources(
+        of records: [TransactionRecord], revision: IOSLedgerDataRevision,
+        year: Int, month: Int, calendar: Calendar = .current
+    ) -> [SpendSourceTotal] {
+        prepare(for: revision)
+        let key = MonthlyKey(year: year, month: month)
+        if let cached = spendSources[key] { return cached }
+        calculationCount += 1
+        let value = StatisticsEngine.monthlySpendSources(in: records, year: year, month: month,
+                                                         calendar: calendar)
+        spendSources[key] = value
         return value
     }
 

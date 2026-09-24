@@ -178,4 +178,30 @@ final class StatisticsEngineTests: XCTestCase {
 
         XCTAssertEqual(summary.expenseByCategory.first?.name, "购物消费")
     }
+
+    func testMonthlyTopExpensesAndSourcesUseRefundNetAmountAndNormalizedNotes() {
+        let originalID = UUID()
+        let records = [
+            TransactionRecord(id: originalID, kind: .expense, amount: 38,
+                              categoryName: "食品餐饮", note: "午餐 麦当劳", date: date(2026, 8, 27)),
+            TransactionRecord(kind: .expense, amount: -15, categoryName: "食品餐饮",
+                              note: "退款", date: date(2026, 8, 27), refundOfID: originalID),
+            TransactionRecord(kind: .expense, amount: 280, categoryName: "购物消费",
+                              note: "京东-订单编号349126", date: date(2026, 8, 9)),
+            TransactionRecord(kind: .expense, amount: 20, categoryName: "购物消费",
+                              note: "京东", date: date(2026, 8, 10)),
+            TransactionRecord(kind: .expense, amount: 999, categoryName: "其他",
+                              note: "不计入", date: date(2026, 8, 11), isExcluded: true),
+            TransactionRecord(kind: .income, amount: 500, categoryName: "工资",
+                              note: "收入", date: date(2026, 8, 27)),
+            TransactionRecord(kind: .expense, amount: 320, categoryName: "居家住房",
+                              note: "房租", date: date(2026, 7, 4)),
+        ]
+        let top = StatisticsEngine.monthlyTopExpenses(in: records, year: 2026, month: 8, calendar: calendar)
+        XCTAssertEqual(top.map(\.amount), [280, 23, 20])
+        let sources = StatisticsEngine.monthlySpendSources(in: records, year: 2026, month: 8,
+                                                            calendar: calendar)
+        XCTAssertEqual(sources, [SpendSourceTotal(name: "京东", total: 300),
+                                 SpendSourceTotal(name: "午餐 麦当劳", total: 23)])
+    }
 }
