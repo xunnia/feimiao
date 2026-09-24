@@ -724,8 +724,11 @@ struct MonthlyStatsView: View {
                 }
             }
             .chartLegend(.hidden)
+            .chartXScale(domain: 0...(summary.dailyTotals.count + 1))
             .chartXAxis {
-                AxisMarks(values: [1, 5, 10, 15, 20, 25, 30]) { AxisValueLabel() }
+                AxisMarks(values: [1, 5, 10, 15, 20, 25, 30].filter {
+                    $0 <= summary.dailyTotals.count
+                }) { AxisValueLabel() }
             }
             .chartYScale(domain: 0.0...scale.upper)
             .chartYAxis {
