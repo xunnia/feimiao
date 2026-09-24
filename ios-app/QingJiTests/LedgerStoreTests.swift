@@ -92,6 +92,23 @@ final class LedgerStoreTests: XCTestCase {
         XCTAssertNil(MonthlyStatsView.percentChangeLabel(current: 46, previous: 0))
     }
 
+    func testMonthlyTrendUsesAndroidAxisStepsForExpenseAndIncome() {
+        let date = DailyTotal(day: 7, expense: 560, income: 8_800)
+        let expense = MonthlyStatsView.monthlyTrendScale(
+            current: [DailyTotal(day: 9, expense: 280, income: 500)],
+            previous: [date], showsIncome: false)
+        XCTAssertEqual(expense.step, 200)
+        XCTAssertEqual(expense.upper, 600)
+        let income = MonthlyStatsView.monthlyTrendScale(
+            current: [DailyTotal(day: 25, expense: 0, income: 500)],
+            previous: [date], showsIncome: true)
+        XCTAssertEqual(income.step, 5_000)
+        XCTAssertEqual(income.upper, 10_000)
+        XCTAssertEqual(MonthlyStatsView.monthlyTrendAxisLabel(10_000), "¥1.0万")
+        XCTAssertEqual(MonthlyStatsView.monthlyTrendScale(
+            current: [], previous: [], showsIncome: false).upper, 1)
+    }
+
     func testStatisticsWeekLabelAndTrendTicksDoNotDependOnSimulatorLanguage() {
         var calendar = Calendar(identifier: .gregorian)
         calendar.locale = Locale(identifier: "en_US")

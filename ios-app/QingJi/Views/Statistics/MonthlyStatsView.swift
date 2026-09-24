@@ -670,7 +670,16 @@ struct MonthlyStatsView: View {
 
     private func monthlyTrendChart(_ summary: MonthlySummary,
                                    previousMonth: MonthlySummary) -> some View {
-        let color = trendShowsIncome ? statisticsIncome : statisticsAccent
+        let color = trendShowsIncome
+            ? Color(red: 242 / 255, green: 178 / 255, blue: 60 / 255)
+            : Color.primary
+        let scale = Self.monthlyTrendScale(current: summary.dailyTotals,
+                                           previous: previousMonth.dailyTotals,
+                                           showsIncome: trendShowsIncome)
+        let calendar = Calendar.current
+        let now = AppClock.now
+        let isCurrentMonth = summary.year == calendar.component(.year, from: now) &&
+            summary.month == calendar.component(.month, from: now)
         return VStack(alignment: .leading, spacing: 8) {
             HStack {
                 Text("每日趋势").font(.headline)
@@ -689,6 +698,11 @@ struct MonthlyStatsView: View {
             }
             .font(.caption2)
             Chart {
+                if isCurrentMonth {
+                    RuleMark(x: .value("今天", calendar.component(.day, from: now)))
+                        .foregroundStyle(Color.secondary.opacity(0.35))
+                        .lineStyle(StrokeStyle(lineWidth: 1, dash: [3, 3]))
+                }
                 ForEach(previousMonth.dailyTotals, id: \.day) { item in
                     LineMark(
                         x: .value("日", item.day),
@@ -711,14 +725,44 @@ struct MonthlyStatsView: View {
             }
             .chartLegend(.hidden)
             .chartXAxis {
-                AxisMarks(values: [5, 10, 15, 20, 25]) { AxisValueLabel() }
+                AxisMarks(values: [1, 5, 10, 15, 20, 25, 30]) { AxisValueLabel() }
             }
-            .chartYAxis { AxisMarks(position: .leading, values: .automatic(desiredCount: 3)) }
+            .chartYScale(domain: 0.0...scale.upper)
+            .chartYAxis {
+                AxisMarks(position: .leading,
+                          values: Array(stride(from: scale.step, through: scale.upper, by: scale.step))) { axis in
+                    AxisGridLine(stroke: StrokeStyle(lineWidth: 0.8, dash: [4, 4]))
+                    AxisValueLabel {
+                        if let amount = axis.as(Double.self) {
+                            Text(Self.monthlyTrendAxisLabel(amount))
+                        }
+                    }
+                }
+            }
             .frame(height: 180)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(14)
         .liquidGlassSurface(cornerRadius: 18)
+    }
+
+    static func monthlyTrendScale(current: [DailyTotal], previous: [DailyTotal],
+                                  showsIncome: Bool) -> (step: Double, upper: Double) {
+        let values = (current + previous).map {
+            max(0, MoneyFormat.double(showsIncome ? $0.income : $0.expense))
+        }
+        let maximum = values.max() ?? 0
+        if maximum <= 0 { return (1, 1) }
+        let rough = maximum / 3
+        let magnitude = pow(10, floor(log10(rough)))
+        let normalized = rough / magnitude
+        let step = (normalized <= 1 ? 1.0 : normalized <= 2 ? 2.0 : normalized <= 5 ? 5.0 : 10.0) * magnitude
+        return (step, (floor(maximum / step) + 1) * step)
+    }
+
+    static func monthlyTrendAxisLabel(_ value: Double) -> String {
+        if value >= 10_000 { return String(format: "¥%.1f万", value / 10_000) }
+        return "¥\(Int(value).formatted(.number.grouping(.automatic)))"
     }
 
     private func periodDailyBarChart(_ dailyTotals: [PeriodDailyTotal]) -> some View {
