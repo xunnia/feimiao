@@ -27,6 +27,15 @@ struct MonthlyStatsView: View {
     @State private var statisticsCache = IOSStatisticsProjectionCache()
     @State private var selectedCategory: CategoryDrillDown?
     @State private var trendShowsIncome = false
+    @State private var monthPickerDate = AppClock.now
+    @State private var showMonthPicker = false
+    @State private var showBookPicker = false
+
+    private var selectedBookName: String {
+        guard let id = router.selectedBookID,
+              let book = books.first(where: { $0.stableID == id }) else { return "总账本" }
+        return book.name
+    }
 
     private struct CategoryDrillDown: Identifiable, Hashable {
         var id: String { "\(title):\(names.sorted().joined(separator: ",")):\(start.timeIntervalSince1970):\(end.timeIntervalSince1970)" }
@@ -66,6 +75,18 @@ struct MonthlyStatsView: View {
         case "stats/month/sources": return "stats-month-sources"
         default: return nil
         }
+    }
+
+    static func demoMonthPicker(environment: [String: String]) -> Bool {
+        environment["QINGJI_DEMO"] == "1" && environment["QINGJI_SCREEN"] == "stats/month/picker"
+    }
+
+    static func demoBookPicker(environment: [String: String]) -> Bool {
+        environment["QINGJI_DEMO"] == "1" && environment["QINGJI_SCREEN"] == "stats/month/books"
+    }
+
+    static func demoSelectedBook(environment: [String: String]) -> Bool {
+        environment["QINGJI_DEMO"] == "1" && environment["QINGJI_SCREEN"] == "stats/month/book-selected"
     }
 
     var body: some View {
@@ -115,8 +136,55 @@ struct MonthlyStatsView: View {
         }
         .liquidGlassCanvas()
         .navigationTitle("统计")
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                if books.count > 1 {
+                    Button { showBookPicker = true } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: "book.closed")
+                            Text(selectedBookName).lineLimit(1)
+                            Image(systemName: "chevron.down").font(.caption2)
+                        }
+                        .font(.caption)
+                        .foregroundStyle(.primary)
+                    }
+                    .liquidGlassPillControl(horizontalPadding: 10, minWidth: 80)
+                    .accessibilityLabel("当前账本：\(selectedBookName)")
+                }
+            }
+        }
+        .confirmationDialog("选择账本", isPresented: $showBookPicker, titleVisibility: .visible) {
+            Button("总账本") { router.selectedBookID = nil }
+            ForEach(books.filter { !$0.isDefault }) { book in
+                Button(book.name) { router.selectedBookID = book.stableID }
+            }
+        }
+        .sheet(isPresented: $showMonthPicker) {
+            MonthPickerSheet(selection: $monthPickerDate, maximumDate: AppClock.now) {
+                displayedMonth = monthPickerDate
+                showMonthPicker = false
+            }
+            .presentationDetents([.medium])
+        }
         .onAppear(perform: restoreDateSelections)
+        .task(id: books.count) {
+            if books.count > 1 {
+                let environment = ProcessInfo.processInfo.environment
+                if Self.demoBookPicker(environment: environment) {
+                    try? await Task.sleep(for: .seconds(2))
+                    showBookPicker = true
+                } else if Self.demoSelectedBook(environment: environment),
+                          let book = books.first(where: { $0.name == "差旅账本" }) {
+                    router.selectedBookID = book.stableID
+                }
+            }
+        }
         .task {
+            if Self.demoMonthPicker(environment: ProcessInfo.processInfo.environment) {
+                try? await Task.sleep(for: .seconds(2))
+                monthPickerDate = displayedMonth
+                showMonthPicker = true
+            }
             if let demo = Self.demoCategoryDrillDown(environment: ProcessInfo.processInfo.environment,
                                                      now: AppClock.now) {
                 selectedCategory = CategoryDrillDown(title: demo.name, names: [demo.name],
@@ -130,25 +198,21 @@ struct MonthlyStatsView: View {
     }
 
     private var monthHeader: some View {
-        HStack {
-            Button {
-                shiftMonth(by: -1)
-            } label: {
-                Image(systemName: "chevron.left")
+        let parts = Calendar.current.dateComponents([.year, .month], from: displayedMonth)
+        return Button {
+            monthPickerDate = displayedMonth
+            showMonthPicker = true
+        } label: {
+            HStack(spacing: 6) {
+                Text("\(parts.year ?? 2026)年\(parts.month ?? 1)月")
+                Image(systemName: "chevron.down").font(.caption)
             }
-            .liquidGlassCircleControl(size: 44)
-            Spacer()
-            Text(displayedMonth, format: .dateTime.year().month())
-                .font(.headline)
-            Spacer()
-            Button {
-                shiftMonth(by: 1)
-            } label: {
-                Image(systemName: "chevron.right")
-            }
-            .liquidGlassCircleControl(size: 44)
-            .disabled(Calendar.current.isDate(displayedMonth, equalTo: AppClock.now, toGranularity: .month))
+            .font(.headline)
+            .foregroundStyle(.primary)
+            .frame(maxWidth: .infinity, minHeight: 44)
         }
+        .buttonStyle(.plain)
+        .accessibilityLabel("选择统计月份")
     }
 
     private var weekHeader: some View {
@@ -995,12 +1059,6 @@ struct MonthlyStatsView: View {
     private func emptyState(title: LocalizedStringKey, systemImage: String, message: LocalizedStringKey) -> some View {
         ContentUnavailableView(title, systemImage: systemImage, description: Text(message))
             .padding(.top, 40)
-    }
-
-    private func shiftMonth(by value: Int) {
-        if let newDate = Calendar.current.date(byAdding: .month, value: value, to: displayedMonth) {
-            displayedMonth = newDate
-        }
     }
 
     private func shiftWeek(by value: Int) {

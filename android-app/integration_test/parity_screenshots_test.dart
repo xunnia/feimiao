@@ -5,6 +5,7 @@ import 'dart:io';
 import 'package:crypto/crypto.dart';
 import 'package:decimal/decimal.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/cupertino.dart' show CupertinoIcons;
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
@@ -168,6 +169,8 @@ Future<void> _captureParityScene(
     await _captureMonthlyTrend(tester, binding);
   } else if (scene == 'stats-month-bottom') {
     await _captureMonthlyBottom(tester, binding);
+  } else if (scene == 'stats-month-controls') {
+    await _captureMonthlyControls(tester, binding, repo);
   } else if (scene == 'stats-year') {
     await _captureStatistics(tester, binding, '年', 'stats-year-android');
   } else if (scene == 'stats-custom') {
@@ -1031,6 +1034,36 @@ Future<void> _captureMonthlyBottom(
     await _pumpFor(tester, const Duration(milliseconds: 500));
     await _takeScreenshot(tester, binding, imageName);
   }
+}
+
+Future<void> _captureMonthlyControls(
+  WidgetTester tester,
+  IntegrationTestWidgetsFlutterBinding binding,
+  AppRepository repo,
+) async {
+  final secondBookID = await repo.addBook(name: '差旅账本');
+  final navigator = ShareIntake.navigatorKey.currentState;
+  expect(navigator, isNotNull);
+  unawaited(navigator!.push<void>(_parityPageRoute<void>(const StatisticsView())));
+  await _pumpFor(tester, const Duration(milliseconds: 700));
+  await tester.tap(find.text('月').first);
+  await _pumpFor(tester, const Duration(milliseconds: 400));
+  await tester.tap(find.text('2026年8月').last);
+  await _pumpFor(tester, const Duration(milliseconds: 500));
+  expect(find.text('选择月份'), findsOneWidget);
+  await _takeScreenshot(tester, binding, 'stats-month-picker-android');
+
+  await tester.tap(find.byIcon(CupertinoIcons.xmark).last);
+  await _pumpFor(tester, const Duration(milliseconds: 400));
+  await tester.tap(find.text('总账本').last);
+  await _pumpFor(tester, const Duration(milliseconds: 400));
+  expect(find.textContaining('差旅账本'), findsAtLeastNWidgets(1));
+  await _takeScreenshot(tester, binding, 'stats-month-books-android');
+
+  await tester.tap(find.textContaining('差旅账本').last);
+  await _pumpFor(tester, const Duration(milliseconds: 600));
+  expect(repo.currentBookId, secondBookID);
+  await _takeScreenshot(tester, binding, 'stats-month-book-selected-android');
 }
 
 Future<void> _takeScreenshot(

@@ -359,6 +359,15 @@ jobs:
           sources_route="stats/month/sources"
           sources_name="14e-stats-month-sources"
           capture_interaction "$sources_route" "$sources_name"
+          month_picker_route="stats/month/picker"
+          month_picker_name="14f-stats-month-picker"
+          capture_interaction "$month_picker_route" "$month_picker_name"
+          book_picker_route="stats/month/books"
+          book_picker_name="14g-stats-month-books"
+          capture_interaction "$book_picker_route" "$book_picker_name"
+          book_selected_route="stats/month/book-selected"
+          book_selected_name="14h-stats-month-book-selected"
+          capture_interaction "$book_selected_route" "$book_selected_name"
           capture_interaction "$interaction_route" "$interaction_name"
           python3 ios-app/tools/check_screenshot_nonempty.py "$interaction_dir"/*.png
 

@@ -563,34 +563,6 @@ private struct TodayAllowanceRing: View {
     }
 }
 
-private struct MonthPickerSheet: View {
-    @Binding var selection: Date
-    let maximumDate: Date
-    let onConfirm: () -> Void
-
-    var body: some View {
-        NavigationStack {
-            DatePicker(
-                "月份",
-                selection: $selection,
-                in: ...maximumDate,
-                displayedComponents: .date
-            )
-            .datePickerStyle(.wheel)
-            .labelsHidden()
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .navigationTitle("选择月份")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("完成", action: onConfirm)
-                        .liquidGlassPillControl(horizontalPadding: 12, minHeight: 40)
-                }
-            }
-        }
-    }
-}
-
 /// 安卓主页底部「记一记」输入框的 iOS 原生实现。
 ///
 /// 入口、模式切换和发送分流与 Android RecordInputBar 对齐；按钮使用

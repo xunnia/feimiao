@@ -13,6 +13,21 @@ final class AppRouterTests: XCTestCase {
         XCTAssertEqual(RootTabView.initialPath(for: "stats/month/trend/income"), [.statistics])
         XCTAssertEqual(RootTabView.initialPath(for: "stats/month/top5"), [.statistics])
         XCTAssertEqual(RootTabView.initialPath(for: "stats/month/sources"), [.statistics])
+        XCTAssertEqual(RootTabView.initialPath(for: "stats/month/picker"), [.statistics])
+        XCTAssertEqual(RootTabView.initialPath(for: "stats/month/books"), [.statistics])
+        XCTAssertEqual(RootTabView.initialPath(for: "stats/month/book-selected"), [.statistics])
+        XCTAssertTrue(MonthlyStatsView.demoMonthPicker(environment: [
+            "QINGJI_DEMO": "1", "QINGJI_SCREEN": "stats/month/picker"
+        ]))
+        XCTAssertTrue(MonthlyStatsView.demoBookPicker(environment: [
+            "QINGJI_DEMO": "1", "QINGJI_SCREEN": "stats/month/books"
+        ]))
+        XCTAssertFalse(MonthlyStatsView.demoBookPicker(environment: [
+            "QINGJI_DEMO": "0", "QINGJI_SCREEN": "stats/month/books"
+        ]))
+        XCTAssertTrue(MonthlyStatsView.demoSelectedBook(environment: [
+            "QINGJI_DEMO": "1", "QINGJI_SCREEN": "stats/month/book-selected"
+        ]))
         XCTAssertEqual(MonthlyStatsView.demoMonthBottom(environment: [
             "QINGJI_DEMO": "1", "QINGJI_SCREEN": "stats/month/top5"
         ]), "stats-month-top5")
@@ -38,6 +53,20 @@ final class AppRouterTests: XCTestCase {
         XCTAssertNil(MonthlyStatsView.demoCategoryDrillDown(environment: [
             "QINGJI_DEMO": "0", "QINGJI_SCREEN": "stats/custom/category-detail"
         ], now: Date()))
+    }
+
+    func testMonthPickerUsesYearAndMonthWithoutFutureDates() {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "Asia/Shanghai")!
+        let maximum = calendar.date(from: DateComponents(year: 2026, month: 8, day: 27))!
+        let future = MonthPickerSheet.selectedMonth(year: 2027, month: 12,
+                                                     maximumDate: maximum, calendar: calendar)
+        XCTAssertEqual(calendar.component(.year, from: future), 2026)
+        XCTAssertEqual(calendar.component(.month, from: future), 8)
+        XCTAssertEqual(calendar.component(.day, from: future), 1)
+        let historical = MonthPickerSheet.selectedMonth(year: 2025, month: 12,
+                                                         maximumDate: maximum, calendar: calendar)
+        XCTAssertEqual(calendar.component(.month, from: historical), 12)
     }
 
     func testImportReviewColdLaunchUsesDedicatedRootRoute() {

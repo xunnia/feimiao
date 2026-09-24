@@ -102,7 +102,8 @@ final class AppRouter {
         case "transactions": selectedTab = .transactions
         case "stats-week", "stats/week":  selectedTab = .statistics; statsScope = .week
         case "stats-month", "stats/month", "stats/month/ring", "stats/month/trend", "stats/month/trend/income",
-             "stats/month/top5", "stats/month/sources":
+             "stats/month/top5", "stats/month/sources", "stats/month/picker", "stats/month/books",
+             "stats/month/book-selected":
             selectedTab = .statistics; statsScope = .month
         case "stats-year", "stats/year":   selectedTab = .statistics; statsScope = .year
         case "stats-custom", "stats/custom", "stats/custom/category-detail":
