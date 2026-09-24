@@ -150,7 +150,8 @@ struct MonthlyStatsView: View {
                     }
                     .liquidGlassPillControl(horizontalPadding: 10, minWidth: 80)
                     .accessibilityLabel("当前账本：\(selectedBookName)")
-                    .popover(isPresented: $showBookPicker, arrowEdge: .top) {
+                    .popover(isPresented: $showBookPicker,
+                             attachmentAnchor: .point(.topTrailing), arrowEdge: .top) {
                         bookMenu
                     }
                 }
@@ -225,7 +226,7 @@ struct MonthlyStatsView: View {
             }
         }
         .padding(8)
-        .frame(width: 216)
+        .frame(width: 180)
         .presentationCompactAdaptation(.popover)
     }
 
@@ -631,7 +632,8 @@ struct MonthlyStatsView: View {
             of: records, revision: revision, year: summary.year, month: summary.month)
         return Group {
             if summary.expenseByCategory.isEmpty {
-                emptyState(title: "本月还没有支出", message: "记几笔之后这里会出现分析图表")
+                emptyState(title: summary.totalIncome == 0 ? "本月还没有记录" : "本月还没有支出",
+                           message: "记几笔之后这里会出现分析图表")
             } else {
                 periodCategoryRing(summary.expenseByCategory, total: summary.totalExpense,
                                    currencyCode: currencyCode, totalLabel: "本月支出",
