@@ -127,8 +127,9 @@ public enum StatisticsEngine {
         in records: [TransactionRecord], year: Int, month: Int,
         calendar: Calendar = .current
     ) -> [TransactionRecord] {
-        Array(monthlyExpenseRecords(in: records, year: year, month: month, calendar: calendar)
-            .sorted { $0.amount > $1.amount }.prefix(5))
+        let expenses = monthlyExpenseRecords(in: records, year: year, month: month, calendar: calendar)
+        let ranked = expenses.sorted { $0.amount > $1.amount }
+        return Array(ranked.prefix(5))
     }
 
     public static func monthlySpendSources(
@@ -140,11 +141,15 @@ public enum StatisticsEngine {
             let source = BillCategorizer.normalizeMerchant(record.note)
             totals[source.isEmpty ? "未标注" : source, default: 0] += record.amount
         }
-        return Array(totals.map { SpendSourceTotal(name: $0.key, total: $0.value) }
-            .filter { $0.total > 0 }
-            .sorted { lhs, rhs in
-                lhs.total == rhs.total ? lhs.name < rhs.name : lhs.total > rhs.total
-            }.prefix(6))
+        let positive: [SpendSourceTotal] = totals.compactMap { entry in
+            guard entry.value > 0 else { return nil }
+            return SpendSourceTotal(name: entry.key, total: entry.value)
+        }
+        let ranked = positive.sorted { lhs, rhs in
+            if lhs.total != rhs.total { return lhs.total > rhs.total }
+            return lhs.name < rhs.name
+        }
+        return Array(ranked.prefix(6))
     }
 
     public static func expenseCategoryName(for record: TransactionRecord) -> String {
