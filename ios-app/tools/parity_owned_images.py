@@ -4,11 +4,20 @@ import sys
 from pathlib import Path
 
 
+SUPPLEMENTAL_IMAGES = {
+    "stats-month-trend": "stats-month-trend-android.png",
+}
+
+
 def owned_images(manifest, scenes):
     pairs = manifest["pairs"]
     mapping = {pair["id"]: pair["android"] for pair in pairs}
     if len(mapping) != len(pairs) or len(set(scenes)) != len(scenes):
         raise ValueError("Duplicate scene identity")
+    if set(mapping) & set(SUPPLEMENTAL_IMAGES):
+        raise ValueError("Supplemental scene duplicates a canonical scene")
+    mapping.update({scene: f"android-app/outputs/parity/{image}"
+                    for scene, image in SUPPLEMENTAL_IMAGES.items()})
     result = []
     for scene in scenes:
         path = Path(mapping[scene])

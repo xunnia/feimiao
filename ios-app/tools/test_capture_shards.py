@@ -26,6 +26,11 @@ class OwnershipTests(unittest.TestCase):
         manifest = json.loads(Path(__file__).with_name("screenshot_manifest.json").read_text(encoding="utf-8"))
         self.assertEqual(owned_images(manifest, ["ai-tasks"]), ["ai-tasks-android.png"])
 
+    def test_supplemental_monthly_trend_has_its_own_image(self):
+        manifest = json.loads(Path(__file__).with_name("screenshot_manifest.json").read_text(encoding="utf-8"))
+        self.assertEqual(owned_images(manifest, ["stats-month-trend"]),
+                         ["stats-month-trend-android.png"])
+
     def test_duplicate_scene_rejected(self):
         with self.assertRaises(ValueError):
             owned_images({"pairs": []}, ["same", "same"])
