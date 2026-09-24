@@ -991,12 +991,13 @@ Future<void> _captureMonthlyTrend(
     await _pumpFor(tester, const Duration(milliseconds: 250));
   }
   expect(title, findsOneWidget);
-  await tester.ensureVisible(title);
-  await tester.drag(list, const Offset(0, -120));
+  await Scrollable.ensureVisible(title.evaluate().single, alignment: 0.25);
   await _pumpFor(tester, const Duration(milliseconds: 500));
   expect(find.text('本月支出'), findsAtLeastNWidgets(1));
   await _takeScreenshot(tester, binding, 'stats-month-trend-android');
-  await tester.tap(find.text('收入').last);
+  final incomeControl = find.text('收入').last;
+  expect(incomeControl, findsOneWidget);
+  await tester.tap(incomeControl);
   await _pumpFor(tester, const Duration(milliseconds: 300));
   expect(find.text('本月收入'), findsOneWidget);
   await _takeScreenshot(tester, binding, 'stats-month-income-trend-android');
