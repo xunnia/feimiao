@@ -150,13 +150,10 @@ struct MonthlyStatsView: View {
                     }
                     .liquidGlassPillControl(horizontalPadding: 10, minWidth: 80)
                     .accessibilityLabel("当前账本：\(selectedBookName)")
+                    .popover(isPresented: $showBookPicker, arrowEdge: .top) {
+                        bookMenu
+                    }
                 }
-            }
-        }
-        .confirmationDialog("选择账本", isPresented: $showBookPicker, titleVisibility: .visible) {
-            Button("总账本") { router.selectedBookID = nil }
-            ForEach(books.filter { !$0.isDefault }) { book in
-                Button(book.name) { router.selectedBookID = book.stableID }
             }
         }
         .sheet(isPresented: $showMonthPicker) {
@@ -204,7 +201,7 @@ struct MonthlyStatsView: View {
             showMonthPicker = true
         } label: {
             HStack(spacing: 6) {
-                Text("\(parts.year ?? 2026)年\(parts.month ?? 1)月")
+                Text(verbatim: "\(parts.year ?? 2026)年\(parts.month ?? 1)月")
                 Image(systemName: "chevron.down").font(.caption)
             }
             .font(.headline)
@@ -213,6 +210,45 @@ struct MonthlyStatsView: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel("选择统计月份")
+    }
+
+    private var bookMenu: some View {
+        VStack(spacing: 0) {
+            bookMenuRow(name: "总账本", selected: router.selectedBookID == nil) {
+                router.selectedBookID = nil
+            }
+            ForEach(books.filter { !$0.isDefault }) { book in
+                Divider()
+                bookMenuRow(name: book.name, selected: router.selectedBookID == book.stableID) {
+                    router.selectedBookID = book.stableID
+                }
+            }
+        }
+        .padding(8)
+        .frame(width: 216)
+        .presentationCompactAdaptation(.popover)
+    }
+
+    private func bookMenuRow(name: String, selected: Bool,
+                             action: @escaping () -> Void) -> some View {
+        Button {
+            action()
+            showBookPicker = false
+        } label: {
+            HStack(spacing: 10) {
+                Image(systemName: selected ? "checkmark.circle.fill" : "circle")
+                    .foregroundStyle(selected ? Color.primary : Color.secondary)
+                    .frame(width: 22)
+                Text("📒")
+                Text(name).lineLimit(1)
+                Spacer(minLength: 0)
+            }
+            .font(.subheadline)
+            .foregroundStyle(.primary)
+            .frame(minHeight: 44)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 
     private var weekHeader: some View {
@@ -340,7 +376,7 @@ struct MonthlyStatsView: View {
             periodTotals(summary, currencyCode: snapshot.scopedCurrencyCode,
                          label: isCurrentWeek ? "本周" : "该周", previous: previous)
             if summary.totalExpense == 0 && summary.totalIncome == 0 {
-                emptyState(title: "这一周没有记录", systemImage: "chart.bar",
+                emptyState(title: "这一周没有记录",
                            message: "换一周看看吧")
             } else if !summary.expenseByCategory.isEmpty {
                 periodCategoryRing(summary.expenseByCategory, total: summary.totalExpense,
@@ -446,7 +482,7 @@ struct MonthlyStatsView: View {
             customHeader
             periodTotals(summary, currencyCode: snapshot.scopedCurrencyCode, label: "区间")
             if summary.expenseByCategory.isEmpty {
-                emptyState(title: "这个区间还没有支出", systemImage: "chart.pie", message: "记几笔之后这里会出现分析图表")
+                emptyState(title: "这个区间还没有支出", message: "记几笔之后这里会出现分析图表")
             } else {
                 periodCategoryRing(summary.expenseByCategory, total: summary.totalExpense,
                                    currencyCode: snapshot.scopedCurrencyCode,
@@ -595,7 +631,7 @@ struct MonthlyStatsView: View {
             of: records, revision: revision, year: summary.year, month: summary.month)
         return Group {
             if summary.expenseByCategory.isEmpty {
-                emptyState(title: "本月还没有支出", systemImage: "chart.pie", message: "记几笔之后这里会出现分析图表")
+                emptyState(title: "本月还没有支出", message: "记几笔之后这里会出现分析图表")
             } else {
                 periodCategoryRing(summary.expenseByCategory, total: summary.totalExpense,
                                    currencyCode: currencyCode, totalLabel: "本月支出",
@@ -1033,7 +1069,7 @@ struct MonthlyStatsView: View {
                 currencyCode: currencyCode
             )
             if summary.totalExpense == 0 && summary.totalIncome == 0 {
-                emptyState(title: "今年还没有账目", systemImage: "chart.bar", message: "记几笔之后这里会出现年度报告")
+                emptyState(title: "今年还没有账目", message: "记几笔之后这里会出现年度报告")
             } else {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("每月支出")
@@ -1056,9 +1092,18 @@ struct MonthlyStatsView: View {
         }
     }
 
-    private func emptyState(title: LocalizedStringKey, systemImage: String, message: LocalizedStringKey) -> some View {
-        ContentUnavailableView(title, systemImage: systemImage, description: Text(message))
-            .padding(.top, 40)
+    private func emptyState(title: LocalizedStringKey, message: LocalizedStringKey) -> some View {
+        VStack(spacing: 12) {
+            Image("MascotEmpty")
+                .resizable()
+                .scaledToFit()
+                .frame(width: 80, height: 80)
+                .accessibilityHidden(true)
+            Text(title).font(.headline).foregroundStyle(.secondary)
+            Text(message).font(.subheadline).foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 40)
     }
 
     private func shiftWeek(by value: Int) {

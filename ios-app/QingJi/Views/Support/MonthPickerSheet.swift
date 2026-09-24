@@ -38,12 +38,12 @@ struct MonthPickerSheet: View {
             HStack(spacing: 0) {
                 Picker("年份", selection: $year) {
                     ForEach(2015...max(maximumYear, 2015), id: \.self) { value in
-                        Text("\(value)年").tag(value)
+                        Text(verbatim: "\(value)年").tag(value)
                     }
                 }
                 Picker("月份", selection: $month) {
                     ForEach(1...12, id: \.self) { value in
-                        Text("\(value)月").tag(value)
+                        Text(verbatim: "\(value)月").tag(value)
                     }
                 }
             }
@@ -53,7 +53,11 @@ struct MonthPickerSheet: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("取消") { dismiss() }
+                    Button { dismiss() } label: {
+                        Image(systemName: "xmark")
+                    }
+                    .liquidGlassCircleControl(size: 40)
+                    .accessibilityLabel("取消")
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("确认") {
