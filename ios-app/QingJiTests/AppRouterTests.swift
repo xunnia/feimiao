@@ -29,6 +29,16 @@ final class AppRouterTests: XCTestCase {
         XCTAssertTrue(MonthlyStatsView.demoCardLibrary(environment: [
             "QINGJI_DEMO": "1", "QINGJI_SCREEN": "stats/month/cards"
         ]))
+        XCTAssertTrue(MonthlyStatsView.demoCardLibrary(environment: [
+            "QINGJI_DEMO": "1", "QINGJI_SCREEN": "stats/month/cards/optional"
+        ]))
+        for key in ["insights", "heatmap", "radar", "stacked"] {
+            let route = "stats/month/\(key)"
+            XCTAssertEqual(RootTabView.initialPath(for: route), [.statistics])
+            XCTAssertEqual(MonthlyStatsView.demoOptionalCard(environment: [
+                "QINGJI_DEMO": "1", "QINGJI_SCREEN": route
+            ]), key)
+        }
         XCTAssertTrue(MonthlyStatsView.demoMonthPicker(environment: [
             "QINGJI_DEMO": "1", "QINGJI_SCREEN": "stats/month/picker"
         ]))

@@ -383,6 +383,10 @@ jobs:
           card_library_route="stats/month/cards"
           card_library_name="14m-stats-month-cards"
           capture_interaction "$card_library_route" "$card_library_name"
+          capture_interaction "stats/month/cards/optional" "14m2-stats-month-optional-cards"
+          for optional_key in insights heatmap radar stacked; do
+            capture_interaction "stats/month/$optional_key" "14-optional-stats-month-$optional_key"
+          done
           capture_interaction "$interaction_route" "$interaction_name"
           python3 ios-app/tools/check_screenshot_nonempty.py "$interaction_dir"/*.png
 

@@ -34,6 +34,9 @@ struct MonthlyStatsView: View {
     @State private var showCardLibrary = false
 
     private var visibleCardKeys: [String] {
+        if let optional = Self.demoOptionalCard(environment: ProcessInfo.processInfo.environment) {
+            return [optional]
+        }
         StatisticsCardLayout.visibleKeys(from: cardOrderRaw)
     }
 
@@ -106,7 +109,19 @@ struct MonthlyStatsView: View {
     }
 
     static func demoCardLibrary(environment: [String: String]) -> Bool {
-        environment["QINGJI_DEMO"] == "1" && environment["QINGJI_SCREEN"] == "stats/month/cards"
+        environment["QINGJI_DEMO"] == "1" &&
+            ["stats/month/cards", "stats/month/cards/optional"].contains(environment["QINGJI_SCREEN"])
+    }
+
+    static func demoOptionalCard(environment: [String: String]) -> String? {
+        guard environment["QINGJI_DEMO"] == "1" else { return nil }
+        switch environment["QINGJI_SCREEN"] {
+        case "stats/month/insights": return "insights"
+        case "stats/month/heatmap": return "heatmap"
+        case "stats/month/radar": return "radar"
+        case "stats/month/stacked": return "stacked"
+        default: return nil
+        }
     }
 
     var body: some View {
@@ -144,12 +159,14 @@ struct MonthlyStatsView: View {
                 let environment = ProcessInfo.processInfo.environment
                 if Self.demoMonthRing(environment: environment) || Self.demoMonthTrend(environment: environment) ||
                     Self.demoMonthBottom(environment: environment) != nil ||
-                    Self.demoMonthPriorityCard(environment: environment) != nil {
+                    Self.demoMonthPriorityCard(environment: environment) != nil ||
+                    Self.demoOptionalCard(environment: environment) != nil {
                     if Self.demoMonthTrendIncome(environment: environment) {
                         trendShowsIncome = true
                     }
                     try? await Task.sleep(for: .seconds(2))
-                    let destination = Self.demoMonthPriorityCard(environment: environment)
+                    let destination = Self.demoOptionalCard(environment: environment).map { "stats-month-\($0)" }
+                        ?? Self.demoMonthPriorityCard(environment: environment)
                         ?? Self.demoMonthBottom(environment: environment)
                         ?? (Self.demoMonthTrend(environment: environment) ? "stats-month-trend" : "stats-month-ring")
                     scroll.scrollTo(destination, anchor: .top)
@@ -553,8 +570,43 @@ struct MonthlyStatsView: View {
                 monthlySpendSources(sources, currencyCode: currencyCode)
                     .id("stats-month-sources")
             }
+        case "insights":
+            let projection = SpendingInsights.project(
+                records: snapshot.records, current: summary, previous: previousMonth,
+                now: now, monthlyBudget: budget?.amount
+            )
+            if !projection.isEmpty {
+                SpendingInsightsCard(projection: projection, currencyCode: currencyCode)
+                    .id("stats-month-insights")
+            }
+        case "heatmap":
+            if !summary.expenseByCategory.isEmpty {
+                MonthlyHeatmapCard(summary: summary, currencyCode: currencyCode)
+                    .id("stats-month-heatmap")
+            }
+        case "radar":
+            if !summary.expenseByCategory.isEmpty {
+                MonthlyCompareBarsCard(current: summary, previous: previousMonth,
+                                       currencyCode: currencyCode)
+                    .id("stats-month-radar")
+            }
+        case "stacked":
+            TwelveMonthStackCard(summaries: twelveMonthSummaries(snapshot: snapshot, endMonth: start),
+                                 currencyCode: currencyCode)
+                .id("stats-month-stacked")
         default:
             EmptyView()
+        }
+    }
+
+    private func twelveMonthSummaries(snapshot: IOSLedgerSnapshot, endMonth: Date) -> [MonthlySummary] {
+        let calendar = Calendar.current
+        return (0..<12).compactMap { offset -> MonthlySummary? in
+            guard let date = calendar.date(byAdding: .month, value: offset - 11, to: endMonth) else { return nil }
+            let parts = calendar.dateComponents([.year, .month], from: date)
+            guard let year = parts.year, let month = parts.month else { return nil }
+            return statisticsCache.monthly(of: snapshot.records, revision: snapshot.revision,
+                                           year: year, month: month)
         }
     }
 

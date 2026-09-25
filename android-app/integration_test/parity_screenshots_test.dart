@@ -173,6 +173,8 @@ Future<void> _captureParityScene(
     await _captureMonthlyControls(tester, binding, repo);
   } else if (scene == 'stats-month-priority') {
     await _captureMonthlyPriority(tester, binding);
+  } else if (scene == 'stats-month-extras') {
+    await _captureMonthlyExtras(tester, binding, repo);
   } else if (scene == 'stats-year') {
     await _captureStatistics(tester, binding, '年', 'stats-year-android');
   } else if (scene == 'stats-custom') {
@@ -1115,6 +1117,45 @@ Future<void> _captureMonthlyPriority(
   expect(find.text('全部支出活动'), findsAtLeastNWidgets(1));
   expect(find.textContaining('1,017.90'), findsAtLeastNWidgets(1));
   await _takeScreenshot(tester, binding, 'stats-month-pace-detail-android');
+}
+
+Future<void> _captureMonthlyExtras(
+  WidgetTester tester,
+  IntegrationTestWidgetsFlutterBinding binding,
+  AppRepository repo,
+) async {
+  final navigator = ShareIntake.navigatorKey.currentState;
+  expect(navigator, isNotNull);
+  unawaited(navigator!.push<void>(_parityPageRoute<void>(const StatisticsView())));
+  await _pumpFor(tester, const Duration(milliseconds: 700));
+  await tester.tap(find.text('月').first);
+  await _pumpFor(tester, const Duration(milliseconds: 500));
+  await tester.tap(find.byIcon(CupertinoIcons.plus).first);
+  await _pumpFor(tester, const Duration(milliseconds: 400));
+  expect(find.text('自定义图表'), findsAtLeastNWidgets(1));
+  await _takeScreenshot(tester, binding, 'stats-month-optional-cards-android');
+  await tester.tap(find.byIcon(CupertinoIcons.xmark).last);
+  await _pumpFor(tester, const Duration(milliseconds: 400));
+  await repo.setStatCardOrder(['insights', 'heatmap', 'radar', 'stacked']);
+  await _pumpFor(tester, const Duration(milliseconds: 500));
+
+  final list = find.byType(ReorderableListView).last;
+  for (final (label, name) in [
+    ('喵的洞察', 'stats-month-insights-android'),
+    ('消费热力图', 'stats-month-heatmap-android'),
+    ('本月 vs 上月', 'stats-month-radar-android'),
+    ('近 12 月收支', 'stats-month-stacked-android'),
+  ]) {
+    final target = find.text(label);
+    for (var attempt = 0; attempt < 12 && target.evaluate().isEmpty; attempt++) {
+      await tester.drag(list, const Offset(0, -420));
+      await _pumpFor(tester, const Duration(milliseconds: 250));
+    }
+    expect(target, findsAtLeastNWidgets(1));
+    await Scrollable.ensureVisible(target.evaluate().last, alignment: 0.2);
+    await _pumpFor(tester, const Duration(milliseconds: 500));
+    await _takeScreenshot(tester, binding, name);
+  }
 }
 
 Future<void> _takeScreenshot(

@@ -6,32 +6,41 @@ struct StatisticsCardLibrarySheet: View {
 
     private var visibleKeys: [String] { StatisticsCardLayout.visibleKeys(from: cardOrderRaw) }
     private var hiddenKeys: [String] {
-        StatisticsCardLayout.defaultOrder.filter { !visibleKeys.contains($0) }
+        StatisticsCardLayout.registeredOrder.filter { !visibleKeys.contains($0) }
     }
 
     var body: some View {
         NavigationStack {
-            List {
-                Section {
-                    ForEach(visibleKeys, id: \.self) { key in
-                        row(for: key, selected: true)
-                    }
-                    .onMove { source, destination in
-                        guard let index = source.first else { return }
-                        cardOrderRaw = StatisticsCardLayout.moved(
-                            in: cardOrderRaw, from: index, to: destination
-                        )
-                    }
-                }
-                if !hiddenKeys.isEmpty {
+            ScrollViewReader { scroll in
+                List {
                     Section {
-                        ForEach(hiddenKeys, id: \.self) { key in
-                            row(for: key, selected: false)
+                        ForEach(visibleKeys, id: \.self) { key in
+                            row(for: key, selected: true).id(key)
+                        }
+                        .onMove { source, destination in
+                            guard let index = source.first else { return }
+                            cardOrderRaw = StatisticsCardLayout.moved(
+                                in: cardOrderRaw, from: index, to: destination
+                            )
+                        }
+                    }
+                    if !hiddenKeys.isEmpty {
+                        Section {
+                            ForEach(hiddenKeys, id: \.self) { key in
+                                row(for: key, selected: false).id(key)
+                            }
                         }
                     }
                 }
+                .environment(\.editMode, .constant(.active))
+                .task {
+                    if ProcessInfo.processInfo.environment["QINGJI_DEMO"] == "1",
+                       ProcessInfo.processInfo.environment["QINGJI_SCREEN"] == "stats/month/cards/optional" {
+                        try? await Task.sleep(for: .milliseconds(500))
+                        scroll.scrollTo("stacked", anchor: .bottom)
+                    }
+                }
             }
-            .environment(\.editMode, .constant(.active))
             .navigationTitle("自定义图表")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

@@ -3,6 +3,7 @@ import Foundation
 enum StatisticsCardLayout {
     static let unconfigured = "__default__"
     static let defaultOrder = ["battery", "budget_ring", "ring", "daily", "ranking", "top5", "sources"]
+    static let registeredOrder = defaultOrder + ["insights", "heatmap", "radar", "stacked"]
     static let titles = [
         "battery": "截至今日进度",
         "budget_ring": "预算使用",
@@ -11,8 +12,12 @@ enum StatisticsCardLayout {
         "ranking": "分类排行",
         "top5": "单笔支出排行",
         "sources": "消费来源",
+        "insights": "喵的洞察",
+        "heatmap": "消费热力图",
+        "radar": "本月 vs 上月",
+        "stacked": "近 12 月收支",
     ]
-    static let monthOnly: Set<String> = ["battery", "budget_ring", "sources"]
+    static let monthOnly: Set<String> = ["battery", "budget_ring", "sources", "insights", "heatmap", "radar", "stacked"]
 
     static func visibleKeys(from raw: String) -> [String] {
         guard raw != unconfigured else { return defaultOrder }

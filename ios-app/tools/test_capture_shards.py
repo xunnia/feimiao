@@ -40,6 +40,10 @@ class OwnershipTests(unittest.TestCase):
                           "stats-month-budget-ring-android.png",
                           "stats-month-pace-detail-android.png",
                           "stats-month-cards-android.png"])
+        self.assertEqual(owned_images(manifest, ["stats-month-extras"]),
+                         ["stats-month-optional-cards-android.png",
+                          "stats-month-insights-android.png", "stats-month-heatmap-android.png",
+                          "stats-month-radar-android.png", "stats-month-stacked-android.png"])
 
     def test_duplicate_scene_rejected(self):
         with self.assertRaises(ValueError):

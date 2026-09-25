@@ -12,6 +12,9 @@ final class StatisticsCardLayoutTests: XCTestCase {
         XCTAssertEqual(StatisticsCardLayout.visibleKeys(from: "ring,unknown,ring,daily"), ["ring", "daily"])
         XCTAssertEqual(StatisticsCardLayout.toggled("ring", on: false, in: "ring,daily"), "daily")
         XCTAssertEqual(StatisticsCardLayout.toggled("ring", on: true, in: "daily"), "daily,ring")
+        let enabled = StatisticsCardLayout.toggled("heatmap", on: true,
+                                                   in: StatisticsCardLayout.unconfigured)
+        XCTAssertEqual(StatisticsCardLayout.visibleKeys(from: enabled).last, "heatmap")
     }
 
     func testReorderPreservesConfiguredVisibility() {
@@ -19,5 +22,8 @@ final class StatisticsCardLayoutTests: XCTestCase {
                        "daily,top5,ring")
         XCTAssertEqual(StatisticsCardLayout.applicable(["battery", "ring", "daily", "sources"],
                                                        month: false), ["ring", "daily"])
+        XCTAssertEqual(StatisticsCardLayout.registeredOrder.count, 11)
+        XCTAssertEqual(StatisticsCardLayout.applicable(StatisticsCardLayout.registeredOrder,
+                                                      month: false), ["ring", "daily", "ranking", "top5"])
     }
 }
