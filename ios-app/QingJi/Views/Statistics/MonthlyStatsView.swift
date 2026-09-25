@@ -23,6 +23,7 @@ struct MonthlyStatsView: View {
     @State private var customEndDate = Calendar.current.startOfDay(for: AppClock.now)
     @AppStorage("qingji.stats.custom.start") private var savedCustomStart: Double = 0
     @AppStorage("qingji.stats.custom.end") private var savedCustomEnd: Double = 0
+    @AppStorage("qingji.stats.cardOrder") private var cardOrderRaw = StatisticsCardLayout.unconfigured
     @State private var projectionCache = IOSLedgerProjectionCache()
     @State private var statisticsCache = IOSStatisticsProjectionCache()
     @State private var selectedCategory: CategoryDrillDown?
@@ -30,6 +31,11 @@ struct MonthlyStatsView: View {
     @State private var monthPickerDate = AppClock.now
     @State private var showMonthPicker = false
     @State private var showBookPicker = false
+    @State private var showCardLibrary = false
+
+    private var visibleCardKeys: [String] {
+        StatisticsCardLayout.visibleKeys(from: cardOrderRaw)
+    }
 
     private var selectedBookName: String {
         guard let id = router.selectedBookID,
@@ -99,6 +105,10 @@ struct MonthlyStatsView: View {
         }
     }
 
+    static func demoCardLibrary(environment: [String: String]) -> Bool {
+        environment["QINGJI_DEMO"] == "1" && environment["QINGJI_SCREEN"] == "stats/month/cards"
+    }
+
     var body: some View {
         @Bindable var router = router
         let snapshot = projectionCache.snapshot(
@@ -163,6 +173,11 @@ struct MonthlyStatsView: View {
         .navigationTitle("统计")
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
+                Button { showCardLibrary = true } label: { Image(systemName: "plus") }
+                    .liquidGlassCircleControl(size: 44)
+                    .accessibilityLabel("自定义图表")
+            }
+            ToolbarItem(placement: .topBarTrailing) {
                 if books.count > 1 {
                     Button { showBookPicker = true } label: {
                         HStack(spacing: 4) {
@@ -189,6 +204,9 @@ struct MonthlyStatsView: View {
             }
             .presentationDetents([.medium])
         }
+        .sheet(isPresented: $showCardLibrary) {
+            StatisticsCardLibrarySheet(cardOrderRaw: $cardOrderRaw)
+        }
         .onAppear(perform: restoreDateSelections)
         .task(id: books.count) {
             if books.count > 1 {
@@ -203,6 +221,10 @@ struct MonthlyStatsView: View {
             }
         }
         .task {
+            if Self.demoCardLibrary(environment: ProcessInfo.processInfo.environment) {
+                try? await Task.sleep(for: .seconds(2))
+                showCardLibrary = true
+            }
             if Self.demoMonthPicker(environment: ProcessInfo.processInfo.environment) {
                 try? await Task.sleep(for: .seconds(2))
                 monthPickerDate = displayedMonth
@@ -397,6 +419,9 @@ struct MonthlyStatsView: View {
             start: previousStart,
             end: previousEnd
         )
+        let topExpenses = statisticsCache.periodTopExpenses(
+            of: snapshot.records, revision: snapshot.revision, start: weekStart, end: weekEnd
+        )
         return VStack(spacing: 20) {
             weekHeader
             periodTotals(summary, currencyCode: snapshot.scopedCurrencyCode,
@@ -404,17 +429,12 @@ struct MonthlyStatsView: View {
             if summary.totalExpense == 0 && summary.totalIncome == 0 {
                 emptyState(title: "这一周没有记录",
                            message: "换一周看看吧")
-            } else if !summary.expenseByCategory.isEmpty {
-                periodCategoryRing(summary.expenseByCategory, total: summary.totalExpense,
-                                   currencyCode: snapshot.scopedCurrencyCode,
-                                   totalLabel: "本周支出", start: weekStart, end: weekEnd)
-                periodDailyBarChart(summary.dailyTotals)
-                    .padding(14)
-                    .liquidGlassSurface(cornerRadius: 18)
-                categoryRanking(summary.expenseByCategory, currencyCode: snapshot.scopedCurrencyCode,
-                                start: weekStart, end: weekEnd)
-                    .padding(14)
-                    .liquidGlassSurface(cornerRadius: 18)
+            } else {
+                ForEach(StatisticsCardLayout.applicable(visibleCardKeys, month: false), id: \.self) { key in
+                    periodCard(key, summary: summary, topExpenses: topExpenses,
+                               currencyCode: snapshot.scopedCurrencyCode,
+                               start: weekStart, end: weekEnd, label: "本周支出")
+                }
             }
         }
     }
@@ -460,31 +480,81 @@ struct MonthlyStatsView: View {
             of: snapshot.records, revision: snapshot.revision,
             year: summary.year, month: summary.month, now: now
         )
+        let topExpenses = statisticsCache.monthlyTopExpenses(
+            of: snapshot.records, revision: snapshot.revision, year: summary.year, month: summary.month
+        )
+        let sources = statisticsCache.monthlySpendSources(
+            of: snapshot.records, revision: snapshot.revision, year: summary.year, month: summary.month
+        )
         return VStack(spacing: 20) {
             monthHeader
             periodTotals(period, currencyCode: snapshot.scopedCurrencyCode,
                          label: "\(components.month ?? 1)月", previous: previous)
             if hasMonthData {
-                MonthlyPaceCard(projection: pace, categories: summary.expenseByCategory,
-                                currencyCode: snapshot.scopedCurrencyCode) {
-                    openAllExpenseActivity(summary: summary, cutoffDay: pace.cutoffDay)
+                ForEach(visibleCardKeys, id: \.self) { key in
+                    monthCard(key, summary: summary, previousMonth: previousMonth,
+                              pace: pace, budget: budget, topExpenses: topExpenses,
+                              sources: sources, snapshot: snapshot,
+                              start: monthStart, end: monthEnd, now: now)
                 }
-                    .id("stats-month-pace")
-                if let budget, budget.amount > 0 {
-                    let status = statisticsCache.status(
-                        for: budget, records: snapshot.records, revision: snapshot.revision,
-                        referenceDate: displayedMonth
-                    )
-                    BudgetUsageRingCard(budget: budget.amount, status: status,
-                                        displayedMonth: displayedMonth, now: now,
-                                        currencyCode: snapshot.scopedCurrencyCode)
-                        .id("stats-month-budget-ring")
-                }
+            } else {
+                emptyState(title: "本月还没有记录", message: "记几笔之后这里会出现分析图表")
             }
-            monthlyContent(summary: summary, previousMonth: previousMonth,
-                           records: snapshot.records, revision: snapshot.revision,
-                           currencyCode: snapshot.scopedCurrencyCode,
-                           start: monthStart, end: monthEnd)
+        }
+    }
+
+    @ViewBuilder
+    private func monthCard(_ key: String, summary: MonthlySummary, previousMonth: MonthlySummary,
+                           pace: MonthlyPaceProjection, budget: Budget?,
+                           topExpenses: [TransactionRecord], sources: [SpendSourceTotal],
+                           snapshot: IOSLedgerSnapshot, start: Date, end: Date, now: Date) -> some View {
+        let currencyCode = snapshot.scopedCurrencyCode
+        switch key {
+        case "battery":
+            MonthlyPaceCard(projection: pace, categories: summary.expenseByCategory,
+                            currencyCode: currencyCode) {
+                openAllExpenseActivity(summary: summary, cutoffDay: pace.cutoffDay)
+            }
+            .id("stats-month-pace")
+        case "budget_ring":
+            if let budget, budget.amount > 0 {
+                let status = statisticsCache.status(
+                    for: budget, records: snapshot.records, revision: snapshot.revision,
+                    referenceDate: displayedMonth
+                )
+                BudgetUsageRingCard(budget: budget.amount, status: status,
+                                    displayedMonth: displayedMonth, now: now, currencyCode: currencyCode)
+                    .id("stats-month-budget-ring")
+            }
+        case "ring":
+            if !summary.expenseByCategory.isEmpty {
+                periodCategoryRing(summary.expenseByCategory, total: summary.totalExpense,
+                                   currencyCode: currencyCode, totalLabel: "本月支出", start: start, end: end)
+                    .id("stats-month-ring")
+            }
+        case "daily":
+            if !summary.expenseByCategory.isEmpty {
+                monthlyTrendChart(summary, previousMonth: previousMonth)
+                    .id("stats-month-trend")
+            }
+        case "ranking":
+            if !summary.expenseByCategory.isEmpty {
+                categoryRanking(summary.expenseByCategory, currencyCode: currencyCode, start: start, end: end)
+                    .padding(14)
+                    .liquidGlassSurface(cornerRadius: 18)
+            }
+        case "top5":
+            if !topExpenses.isEmpty {
+                monthlyTopExpenses(topExpenses, currencyCode: currencyCode)
+                    .id("stats-month-top5")
+            }
+        case "sources":
+            if !sources.isEmpty {
+                monthlySpendSources(sources, currencyCode: currencyCode)
+                    .id("stats-month-sources")
+            }
+        default:
+            EmptyView()
         }
     }
 
@@ -501,14 +571,23 @@ struct MonthlyStatsView: View {
     }
 
     private func yearContent(snapshot: IOSLedgerSnapshot) -> some View {
+        let calendar = Calendar.current
+        let year = calendar.component(.year, from: displayedMonth)
         let summary = statisticsCache.yearly(
             of: snapshot.records,
             revision: snapshot.revision,
-            year: Calendar.current.component(.year, from: displayedMonth)
+            year: year
+        )
+        let start = calendar.date(from: DateComponents(year: year, month: 1, day: 1)) ?? displayedMonth
+        let nextYear = calendar.date(byAdding: .year, value: 1, to: start) ?? start
+        let end = calendar.date(byAdding: .day, value: -1, to: nextYear) ?? start
+        let topExpenses = statisticsCache.periodTopExpenses(
+            of: snapshot.records, revision: snapshot.revision, start: start, end: end
         )
         return VStack(spacing: 20) {
             yearHeader
-            yearlyContent(summary: summary, currencyCode: snapshot.scopedCurrencyCode)
+            yearlyContent(summary: summary, topExpenses: topExpenses,
+                          currencyCode: snapshot.scopedCurrencyCode, start: start, end: end)
         }
     }
 
@@ -519,18 +598,53 @@ struct MonthlyStatsView: View {
             start: customStartDate,
             end: customEndDate
         )
+        let topExpenses = statisticsCache.periodTopExpenses(
+            of: snapshot.records, revision: snapshot.revision,
+            start: customStartDate, end: customEndDate
+        )
         return VStack(spacing: 20) {
             customHeader
             periodTotals(summary, currencyCode: snapshot.scopedCurrencyCode, label: "区间")
-            if summary.expenseByCategory.isEmpty {
+            if summary.totalExpense == 0 && summary.totalIncome == 0 {
                 emptyState(title: "这个区间还没有支出", message: "记几笔之后这里会出现分析图表")
             } else {
-                periodCategoryRing(summary.expenseByCategory, total: summary.totalExpense,
-                                   currencyCode: snapshot.scopedCurrencyCode,
-                                   totalLabel: "期间支出", start: customStartDate, end: customEndDate)
-                categoryRanking(summary.expenseByCategory, currencyCode: snapshot.scopedCurrencyCode,
-                                start: customStartDate, end: customEndDate)
+                ForEach(StatisticsCardLayout.applicable(visibleCardKeys, month: false), id: \.self) { key in
+                    periodCard(key, summary: summary, topExpenses: topExpenses,
+                               currencyCode: snapshot.scopedCurrencyCode,
+                               start: customStartDate, end: customEndDate, label: "期间支出")
+                }
             }
+        }
+    }
+
+    @ViewBuilder
+    private func periodCard(_ key: String, summary: PeriodSummary,
+                            topExpenses: [TransactionRecord], currencyCode: String,
+                            start: Date, end: Date, label: String) -> some View {
+        switch key {
+        case "ring":
+            if !summary.expenseByCategory.isEmpty {
+                periodCategoryRing(summary.expenseByCategory, total: summary.totalExpense,
+                                   currencyCode: currencyCode, totalLabel: label, start: start, end: end)
+            }
+        case "daily":
+            if !summary.expenseByCategory.isEmpty {
+                periodDailyBarChart(summary.dailyTotals)
+                    .padding(14)
+                    .liquidGlassSurface(cornerRadius: 18)
+            }
+        case "ranking":
+            if !summary.expenseByCategory.isEmpty {
+                categoryRanking(summary.expenseByCategory, currencyCode: currencyCode, start: start, end: end)
+                    .padding(14)
+                    .liquidGlassSurface(cornerRadius: 18)
+            }
+        case "top5":
+            if !topExpenses.isEmpty {
+                monthlyTopExpenses(topExpenses, currencyCode: currencyCode)
+            }
+        default:
+            EmptyView()
         }
     }
 
@@ -670,42 +784,6 @@ struct MonthlyStatsView: View {
                 .foregroundStyle((percent > 0) == goodWhenUp
                                  ? Color(red: 52 / 255, green: 168 / 255, blue: 83 / 255)
                                  : Color(red: 229 / 255, green: 72 / 255, blue: 77 / 255))
-        }
-    }
-
-    private func monthlyContent(summary: MonthlySummary, previousMonth: MonthlySummary,
-                                records: [TransactionRecord], revision: IOSLedgerDataRevision,
-                                currencyCode: String,
-                                start: Date, end: Date) -> some View {
-        let topExpenses = statisticsCache.monthlyTopExpenses(
-            of: records, revision: revision, year: summary.year, month: summary.month)
-        let sources = statisticsCache.monthlySpendSources(
-            of: records, revision: revision, year: summary.year, month: summary.month)
-        return Group {
-            if summary.expenseByCategory.isEmpty {
-                if summary.totalIncome == 0 {
-                    emptyState(title: "本月还没有记录", message: "记几笔之后这里会出现分析图表")
-                }
-            } else {
-                periodCategoryRing(summary.expenseByCategory, total: summary.totalExpense,
-                                   currencyCode: currencyCode, totalLabel: "本月支出",
-                                   start: start, end: end)
-                    .id("stats-month-ring")
-                monthlyTrendChart(summary, previousMonth: previousMonth)
-                    .id("stats-month-trend")
-                categoryRanking(summary.expenseByCategory, currencyCode: currencyCode,
-                                start: start, end: end)
-                    .padding(14)
-                    .liquidGlassSurface(cornerRadius: 18)
-                if !topExpenses.isEmpty {
-                    monthlyTopExpenses(topExpenses, currencyCode: currencyCode)
-                        .id("stats-month-top5")
-                }
-                if !sources.isEmpty {
-                    monthlySpendSources(sources, currencyCode: currencyCode)
-                        .id("stats-month-sources")
-                }
-            }
         }
     }
 
@@ -1075,7 +1153,8 @@ struct MonthlyStatsView: View {
         }
     }
 
-    private func yearlyContent(summary: YearlySummary, currencyCode: String) -> some View {
+    private func yearlyContent(summary: YearlySummary, topExpenses: [TransactionRecord],
+                               currencyCode: String, start: Date, end: Date) -> some View {
         VStack(spacing: 20) {
             totalsCards(
                 expense: summary.totalExpense,
@@ -1086,24 +1165,49 @@ struct MonthlyStatsView: View {
             if summary.totalExpense == 0 && summary.totalIncome == 0 {
                 emptyState(title: "今年还没有账目", message: "记几笔之后这里会出现年度报告")
             } else {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("每月支出")
-                        .font(.headline)
-                    Chart(Array(summary.monthlyExpenses.enumerated()), id: \.offset) { index, amount in
-                        BarMark(
-                            x: .value("月", index + 1),
-                            y: .value("支出", MoneyFormat.double(amount))
-                        )
-                        .foregroundStyle(Color.accentColor.gradient)
-                    }
-                    .chartXAxis {
-                        AxisMarks(values: Array(1...12))
-                    }
-                    .frame(height: 160)
+                ForEach(StatisticsCardLayout.applicable(visibleCardKeys, month: false), id: \.self) { key in
+                    yearlyCard(key, summary: summary, topExpenses: topExpenses,
+                               currencyCode: currencyCode, start: start, end: end)
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                categoryRanking(summary.expenseByCategory, currencyCode: currencyCode)
             }
+        }
+    }
+
+    @ViewBuilder
+    private func yearlyCard(_ key: String, summary: YearlySummary,
+                            topExpenses: [TransactionRecord], currencyCode: String,
+                            start: Date, end: Date) -> some View {
+        switch key {
+        case "ring":
+            if !summary.expenseByCategory.isEmpty {
+                periodCategoryRing(summary.expenseByCategory, total: summary.totalExpense,
+                                   currencyCode: currencyCode, totalLabel: "全年支出", start: start, end: end)
+            }
+        case "daily":
+            VStack(alignment: .leading, spacing: 8) {
+                Text("每月支出").font(.headline)
+                Chart(Array(summary.monthlyExpenses.enumerated()), id: \.offset) { index, amount in
+                    BarMark(x: .value("月", index + 1), y: .value("支出", MoneyFormat.double(amount)))
+                        .foregroundStyle(Color.accentColor.gradient)
+                }
+                .chartXAxis { AxisMarks(values: Array(1...12)) }
+                .frame(height: 160)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(14)
+            .liquidGlassSurface(cornerRadius: 18)
+        case "ranking":
+            if !summary.expenseByCategory.isEmpty {
+                categoryRanking(summary.expenseByCategory, currencyCode: currencyCode, start: start, end: end)
+                    .padding(14)
+                    .liquidGlassSurface(cornerRadius: 18)
+            }
+        case "top5":
+            if !topExpenses.isEmpty {
+                monthlyTopExpenses(topExpenses, currencyCode: currencyCode)
+            }
+        default:
+            EmptyView()
         }
     }
 

@@ -107,6 +107,26 @@ final class IOSLedgerProjectionTests: XCTestCase {
         XCTAssertEqual(statistics.calculationCount, 3)
     }
 
+    func testPeriodTopExpensesCacheFollowsLedgerRevision() {
+        let transactions = makeTransactions(count: 24)
+        let ledger = IOSLedgerProjectionCache()
+        let statistics = IOSStatisticsProjectionCache()
+        let snapshot = ledger.snapshot(for: transactions, selectedBookID: nil)
+        let start = transactions[0].date
+        let end = transactions[23].date
+        for _ in 0..<3 {
+            _ = statistics.periodTopExpenses(of: snapshot.records, revision: snapshot.revision,
+                                             start: start, end: end)
+        }
+        XCTAssertEqual(statistics.calculationCount, 1)
+        transactions[1].amount = 500
+        let updated = ledger.snapshot(for: transactions, selectedBookID: nil)
+        let ranked = statistics.periodTopExpenses(of: updated.records, revision: updated.revision,
+                                                   start: start, end: end)
+        XCTAssertEqual(statistics.calculationCount, 2)
+        XCTAssertEqual(ranked.first?.amount, 500)
+    }
+
     func testMeasuredNaiveVersusCachedLedgerWork() {
         let transactions = makeTransactions(count: 10_000)
         let calendar = Calendar(identifier: .gregorian)

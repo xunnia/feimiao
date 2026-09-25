@@ -38,7 +38,8 @@ class OwnershipTests(unittest.TestCase):
                          ["stats-month-pace-android.png",
                           "stats-month-pace-activity-android.png",
                           "stats-month-budget-ring-android.png",
-                          "stats-month-pace-detail-android.png"])
+                          "stats-month-pace-detail-android.png",
+                          "stats-month-cards-android.png"])
 
     def test_duplicate_scene_rejected(self):
         with self.assertRaises(ValueError):

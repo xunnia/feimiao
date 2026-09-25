@@ -16,7 +16,7 @@ final class AppRouterTests: XCTestCase {
         XCTAssertEqual(RootTabView.initialPath(for: "stats/month/picker"), [.statistics])
         XCTAssertEqual(RootTabView.initialPath(for: "stats/month/books"), [.statistics])
         XCTAssertEqual(RootTabView.initialPath(for: "stats/month/book-selected"), [.statistics])
-        for route in ["stats/month/pace", "stats/month/pace/activity", "stats/month/pace/detail",
+        for route in ["stats/month/pace", "stats/month/pace/activity", "stats/month/pace/detail", "stats/month/cards",
                       "stats/month/budget-ring"] {
             XCTAssertEqual(RootTabView.initialPath(for: route), [.statistics])
         }
@@ -26,6 +26,9 @@ final class AppRouterTests: XCTestCase {
         XCTAssertEqual(MonthlyStatsView.demoMonthPriorityCard(environment: [
             "QINGJI_DEMO": "1", "QINGJI_SCREEN": "stats/month/pace/detail"
         ]), "stats-month-pace-activity")
+        XCTAssertTrue(MonthlyStatsView.demoCardLibrary(environment: [
+            "QINGJI_DEMO": "1", "QINGJI_SCREEN": "stats/month/cards"
+        ]))
         XCTAssertTrue(MonthlyStatsView.demoMonthPicker(environment: [
             "QINGJI_DEMO": "1", "QINGJI_SCREEN": "stats/month/picker"
         ]))

@@ -1096,6 +1096,13 @@ Future<void> _captureMonthlyPriority(
     await _takeScreenshot(tester, binding, name);
   }
 
+  await tester.tap(find.byIcon(CupertinoIcons.plus).first);
+  await _pumpFor(tester, const Duration(milliseconds: 400));
+  expect(find.text('自定义图表'), findsAtLeastNWidgets(1));
+  await _takeScreenshot(tester, binding, 'stats-month-cards-android');
+  await tester.tap(find.byIcon(CupertinoIcons.xmark).last);
+  await _pumpFor(tester, const Duration(milliseconds: 400));
+
   final activity = find.text('查看所有支出活动');
   for (var attempt = 0; attempt < 8 && activity.evaluate().isEmpty; attempt++) {
     await tester.drag(list, const Offset(0, 420));

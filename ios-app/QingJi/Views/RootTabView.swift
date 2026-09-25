@@ -203,7 +203,7 @@ struct RootTabView: View {
         case "search": return [.search]
         case "transactions": return [.transactions]
         case "import-review": return [.importReview]
-        case "stats-month", "stats-week", "stats/year", "stats/week", "stats-year", "stats-custom", "stats/custom", "stats/month", "stats/month/ring", "stats/month/trend", "stats/month/trend/income", "stats/month/top5", "stats/month/sources", "stats/month/picker", "stats/month/books", "stats/month/book-selected", "stats/month/pace", "stats/month/pace/activity", "stats/month/pace/detail", "stats/month/budget-ring", "stats/custom/category-detail":
+        case "stats-month", "stats-week", "stats/year", "stats/week", "stats-year", "stats-custom", "stats/custom", "stats/month", "stats/month/ring", "stats/month/trend", "stats/month/trend/income", "stats/month/top5", "stats/month/sources", "stats/month/picker", "stats/month/books", "stats/month/book-selected", "stats/month/pace", "stats/month/pace/activity", "stats/month/pace/detail", "stats/month/budget-ring", "stats/month/cards", "stats/custom/category-detail":
             return [.statistics]
         case "budget", "reconcile", "reimburse", "books", "accounts", "categories", "tags",
              "memory", "ai-memory", "ai-tasks", "ai-extensions", "ai-schedules", "ai-search",

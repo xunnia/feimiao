@@ -24,7 +24,8 @@ struct BudgetUsageRingCard: View {
             ? max(daysInMonth - calendar.component(.day, from: now), 0) : 0
         return HStack(spacing: 18) {
             ZStack {
-                Circle().stroke(Color.secondary.opacity(0.15), lineWidth: 9)
+                Circle().stroke(color.opacity(0.28), lineWidth: 10.5)
+                Circle().stroke(color.opacity(0.16), lineWidth: 9)
                 Circle()
                     .trim(from: 0, to: min(max(Double(percent) / 100, 0), 1))
                     .stroke(color, style: StrokeStyle(lineWidth: 9, lineCap: .round))

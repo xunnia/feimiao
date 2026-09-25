@@ -132,6 +132,19 @@ public enum StatisticsEngine {
         return Array(ranked.prefix(5))
     }
 
+    public static func periodTopExpenses(
+        in records: [TransactionRecord], start: Date, end: Date,
+        calendar: Calendar = .current
+    ) -> [TransactionRecord] {
+        let startDay = calendar.startOfDay(for: min(start, end))
+        let endDay = calendar.startOfDay(for: max(start, end))
+        let endExclusive = calendar.date(byAdding: .day, value: 1, to: endDay) ?? endDay
+        let expenses = LedgerPolicy.userRecords(from: records).filter {
+            $0.kind == .expense && $0.date >= startDay && $0.date < endExclusive
+        }
+        return Array(expenses.sorted { $0.amount > $1.amount }.prefix(5))
+    }
+
     public static func monthlySpendSources(
         in records: [TransactionRecord], year: Int, month: Int,
         calendar: Calendar = .current

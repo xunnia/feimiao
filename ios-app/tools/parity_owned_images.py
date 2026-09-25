@@ -13,6 +13,7 @@ SUPPLEMENTAL_IMAGES = {
         "stats-month-pace-activity-android.png",
         "stats-month-budget-ring-android.png",
         "stats-month-pace-detail-android.png",
+        "stats-month-cards-android.png",
     ),
 }
 

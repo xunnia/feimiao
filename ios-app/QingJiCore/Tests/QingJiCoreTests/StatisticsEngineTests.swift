@@ -94,6 +94,19 @@ final class StatisticsEngineTests: XCTestCase {
                                                        start: start, end: end, calendar: calendar).first?.amount, 9)
     }
 
+    func testPeriodTopExpensesUsesNetFamiliesAcrossBoundary() {
+        let original = UUID()
+        let records = [
+            TransactionRecord(id: original, kind: .expense, amount: 100, date: date(2026, 6, 30)),
+            TransactionRecord(kind: .expense, amount: -35, date: date(2026, 7, 2), refundOfID: original),
+            TransactionRecord(kind: .expense, amount: 80, date: date(2026, 7, 1)),
+            TransactionRecord(kind: .expense, amount: 500, date: date(2026, 6, 30), isExcluded: true),
+        ]
+        let ranked = StatisticsEngine.periodTopExpenses(in: records, start: date(2026, 6, 30),
+                                                        end: date(2026, 7, 1), calendar: calendar)
+        XCTAssertEqual(ranked.map(\.amount), [80, 65])
+    }
+
     func testPeriodSummaryIncludesBothEndpointsAndPreservesEmptyDays() {
         let records = [
             TransactionRecord(kind: .expense, amount: 30, categoryName: "餐饮", date: date(2026, 6, 29)),

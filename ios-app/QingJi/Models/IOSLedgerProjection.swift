@@ -182,6 +182,7 @@ final class IOSStatisticsProjectionCache {
     private var monthly: [MonthlyKey: MonthlySummary] = [:]
     private var paces: [PaceKey: MonthlyPaceProjection] = [:]
     private var topExpenses: [MonthlyKey: [TransactionRecord]] = [:]
+    private var periodTopExpenses: [PeriodKey: [TransactionRecord]] = [:]
     private var spendSources: [MonthlyKey: [SpendSourceTotal]] = [:]
     private var yearly: [Int: YearlySummary] = [:]
     private var periods: [PeriodKey: PeriodSummary] = [:]
@@ -197,6 +198,7 @@ final class IOSStatisticsProjectionCache {
         monthly.removeAll(keepingCapacity: true)
         paces.removeAll(keepingCapacity: true)
         topExpenses.removeAll(keepingCapacity: true)
+        periodTopExpenses.removeAll(keepingCapacity: true)
         spendSources.removeAll(keepingCapacity: true)
         yearly.removeAll(keepingCapacity: true)
         periods.removeAll(keepingCapacity: true)
@@ -244,6 +246,19 @@ final class IOSStatisticsProjectionCache {
         let value = StatisticsEngine.monthlyTopExpenses(in: records, year: year, month: month,
                                                         calendar: calendar)
         topExpenses[key] = value
+        return value
+    }
+
+    func periodTopExpenses(
+        of records: [TransactionRecord], revision: IOSLedgerDataRevision,
+        start: Date, end: Date, calendar: Calendar = .current
+    ) -> [TransactionRecord] {
+        prepare(for: revision)
+        let key = PeriodKey(start: start, end: end)
+        if let cached = periodTopExpenses[key] { return cached }
+        calculationCount += 1
+        let value = StatisticsEngine.periodTopExpenses(in: records, start: start, end: end, calendar: calendar)
+        periodTopExpenses[key] = value
         return value
     }
 

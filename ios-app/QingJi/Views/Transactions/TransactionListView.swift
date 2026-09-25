@@ -693,7 +693,7 @@ struct TransactionRow: View {
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
                     Text(card.title)
-                        .font(.body)
+                        .font(.subheadline)
                         .lineLimit(1)
                         .minimumScaleFactor(0.86)
                         .layoutPriority(1)
@@ -731,7 +731,7 @@ struct TransactionRow: View {
                         .lineLimit(1)
                 }
             }
-            Spacer()
+            .frame(maxWidth: .infinity, alignment: .leading)
             VStack(alignment: .trailing, spacing: 2) {
                 if refundAmount > 0, transaction.amount > 0 {
                     HStack(alignment: .firstTextBaseline, spacing: 6) {

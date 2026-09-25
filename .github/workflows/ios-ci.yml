@@ -380,6 +380,9 @@ jobs:
           pace_detail_route="stats/month/pace/detail"
           pace_detail_name="14l-stats-month-pace-detail"
           capture_interaction "$pace_detail_route" "$pace_detail_name"
+          card_library_route="stats/month/cards"
+          card_library_name="14m-stats-month-cards"
+          capture_interaction "$card_library_route" "$card_library_name"
           capture_interaction "$interaction_route" "$interaction_name"
           python3 ios-app/tools/check_screenshot_nonempty.py "$interaction_dir"/*.png
 
