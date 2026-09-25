@@ -291,12 +291,12 @@ fi
         adb -s "$device_id" logcat -d -t 300 2>&1 | tail -n 300 || true
       fi
 
-      # Retry only transport/process-loss failures. Assertion and application
-      # failures remain fail-fast so a real regression is never hidden.
+      # Retry transport loss or a bounded scene timeout once. Assertion and
+      # application failures remain fail-fast so a real regression is visible.
       transient_failure=0
       # Diagnose the drive output, not the global tail polluted by logcat or
       # a previous scene. ADB may already be online again after cleanup.
-      if "$python_bin" "$repo_root/ios-app/tools/parity_transport_failure.py" "$attempt_log"; then
+      if "$python_bin" "$repo_root/ios-app/tools/parity_transport_failure.py" "$attempt_log" "$scene_status"; then
         transient_failure=1
       fi
       if [ "$transient_failure" -eq 1 ] && [ "$attempt" -lt "$scene_retry_limit" ]; then

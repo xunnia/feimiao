@@ -37,7 +37,7 @@ struct MonthlyStatsView: View {
         if let optional = Self.demoOptionalCard(environment: ProcessInfo.processInfo.environment) {
             return [optional]
         }
-        StatisticsCardLayout.visibleKeys(from: cardOrderRaw)
+        return StatisticsCardLayout.visibleKeys(from: cardOrderRaw)
     }
 
     private var selectedBookName: String {

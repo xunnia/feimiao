@@ -57,6 +57,12 @@ class TransportFailureTests(unittest.TestCase):
     def test_service_loss(self):
         self.assertTrue(is_retryable("ext.flutter.driver: (112) Service has disappeared"))
 
+    def test_bounded_timeout_is_retryable(self):
+        self.assertTrue(is_retryable("Waiting for application to start", 124))
+
+    def test_test_failure_is_not_retried_after_timeout(self):
+        self.assertFalse(is_retryable("TestFailure: Expected: one widget", 124))
+
     def test_assertion_wins_over_transport_error(self):
         self.assertFalse(is_retryable("TestFailure: Expected: one widget\nadb: device offline"))
 
