@@ -1102,7 +1102,7 @@ Future<void> _captureMonthlyPriority(
     await _pumpFor(tester, const Duration(milliseconds: 250));
   }
   expect(activity, findsAtLeastNWidgets(1));
-  await Scrollable.ensureVisible(activity.last, alignment: 0.5);
+  await Scrollable.ensureVisible(activity.evaluate().last, alignment: 0.5);
   await tester.tap(activity.last);
   await _pumpFor(tester, const Duration(milliseconds: 600));
   expect(find.text('全部支出活动'), findsAtLeastNWidgets(1));
