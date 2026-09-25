@@ -180,6 +180,7 @@ final class IOSLedgerProjectionCache {
 final class IOSStatisticsProjectionCache {
     private var activeRevision: IOSLedgerDataRevision?
     private var monthly: [MonthlyKey: MonthlySummary] = [:]
+    private var paces: [PaceKey: MonthlyPaceProjection] = [:]
     private var topExpenses: [MonthlyKey: [TransactionRecord]] = [:]
     private var spendSources: [MonthlyKey: [SpendSourceTotal]] = [:]
     private var yearly: [Int: YearlySummary] = [:]
@@ -194,6 +195,7 @@ final class IOSStatisticsProjectionCache {
         guard activeRevision != revision else { return }
         activeRevision = revision
         monthly.removeAll(keepingCapacity: true)
+        paces.removeAll(keepingCapacity: true)
         topExpenses.removeAll(keepingCapacity: true)
         spendSources.removeAll(keepingCapacity: true)
         yearly.removeAll(keepingCapacity: true)
@@ -242,6 +244,20 @@ final class IOSStatisticsProjectionCache {
         let value = StatisticsEngine.monthlyTopExpenses(in: records, year: year, month: month,
                                                         calendar: calendar)
         topExpenses[key] = value
+        return value
+    }
+
+    func monthlyPace(
+        of records: [TransactionRecord], revision: IOSLedgerDataRevision,
+        year: Int, month: Int, now: Date, calendar: Calendar = .current
+    ) -> MonthlyPaceProjection {
+        prepare(for: revision)
+        let key = PaceKey(year: year, month: month, day: calendar.startOfDay(for: now))
+        if let cached = paces[key] { return cached }
+        calculationCount += 1
+        let value = MonthlyPaceEngine.project(records: records, year: year, month: month,
+                                              now: now, calendar: calendar)
+        paces[key] = value
         return value
     }
 
@@ -299,6 +315,12 @@ final class IOSStatisticsProjectionCache {
     private struct MonthlyKey: Hashable {
         let year: Int
         let month: Int
+    }
+
+    private struct PaceKey: Hashable {
+        let year: Int
+        let month: Int
+        let day: Date
     }
 
     private struct PeriodKey: Hashable {

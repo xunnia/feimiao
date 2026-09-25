@@ -89,6 +89,16 @@ struct MonthlyStatsView: View {
         environment["QINGJI_DEMO"] == "1" && environment["QINGJI_SCREEN"] == "stats/month/book-selected"
     }
 
+    static func demoMonthPriorityCard(environment: [String: String]) -> String? {
+        guard environment["QINGJI_DEMO"] == "1" else { return nil }
+        switch environment["QINGJI_SCREEN"] {
+        case "stats/month/pace": return "stats-month-pace"
+        case "stats/month/pace/activity", "stats/month/pace/detail": return "stats-month-pace-activity"
+        case "stats/month/budget-ring": return "stats-month-budget-ring"
+        default: return nil
+        }
+    }
+
     var body: some View {
         @Bindable var router = router
         let snapshot = projectionCache.snapshot(
@@ -123,14 +133,29 @@ struct MonthlyStatsView: View {
             .task(id: transactions.count) {
                 let environment = ProcessInfo.processInfo.environment
                 if Self.demoMonthRing(environment: environment) || Self.demoMonthTrend(environment: environment) ||
-                    Self.demoMonthBottom(environment: environment) != nil {
+                    Self.demoMonthBottom(environment: environment) != nil ||
+                    Self.demoMonthPriorityCard(environment: environment) != nil {
                     if Self.demoMonthTrendIncome(environment: environment) {
                         trendShowsIncome = true
                     }
                     try? await Task.sleep(for: .seconds(2))
-                    let destination = Self.demoMonthBottom(environment: environment)
+                    let destination = Self.demoMonthPriorityCard(environment: environment)
+                        ?? Self.demoMonthBottom(environment: environment)
                         ?? (Self.demoMonthTrend(environment: environment) ? "stats-month-trend" : "stats-month-ring")
                     scroll.scrollTo(destination, anchor: .top)
+                    if environment["QINGJI_SCREEN"] == "stats/month/pace/detail" {
+                        try? await Task.sleep(for: .milliseconds(500))
+                        let parts = Calendar.current.dateComponents([.year, .month], from: displayedMonth)
+                        let summary = statisticsCache.monthly(
+                            of: snapshot.records, revision: snapshot.revision,
+                            year: parts.year ?? 2026, month: parts.month ?? 8
+                        )
+                        let pace = statisticsCache.monthlyPace(
+                            of: snapshot.records, revision: snapshot.revision,
+                            year: summary.year, month: summary.month, now: AppClock.now
+                        )
+                        openAllExpenseActivity(summary: summary, cutoffDay: pace.cutoffDay)
+                    }
                 }
             }
         }
@@ -396,6 +421,7 @@ struct MonthlyStatsView: View {
 
     private func monthContent(snapshot: IOSLedgerSnapshot) -> some View {
         let calendar = Calendar.current
+        let now = AppClock.now
         let components = calendar.dateComponents([.year, .month], from: displayedMonth)
         let monthStart = calendar.date(from: components) ?? calendar.startOfDay(for: displayedMonth)
         let nextMonth = calendar.date(byAdding: .month, value: 1, to: monthStart) ?? monthStart
@@ -429,17 +455,31 @@ struct MonthlyStatsView: View {
             selectedBookID: router.selectedBookID,
             fallbackBookID: books.first(where: \.isDefault)?.stableID
         )
+        let hasMonthData = !summary.expenseByCategory.isEmpty || summary.totalIncome != 0
+        let pace = statisticsCache.monthlyPace(
+            of: snapshot.records, revision: snapshot.revision,
+            year: summary.year, month: summary.month, now: now
+        )
         return VStack(spacing: 20) {
             monthHeader
             periodTotals(period, currencyCode: snapshot.scopedCurrencyCode,
                          label: "\(components.month ?? 1)月", previous: previous)
-            if let budget {
-                budgetProgress(
-                    budget,
-                    records: snapshot.records,
-                    revision: snapshot.revision,
-                    currencyCode: snapshot.scopedCurrencyCode
-                )
+            if hasMonthData {
+                MonthlyPaceCard(projection: pace, categories: summary.expenseByCategory,
+                                currencyCode: snapshot.scopedCurrencyCode) {
+                    openAllExpenseActivity(summary: summary, cutoffDay: pace.cutoffDay)
+                }
+                    .id("stats-month-pace")
+                if let budget, budget.amount > 0 {
+                    let status = statisticsCache.status(
+                        for: budget, records: snapshot.records, revision: snapshot.revision,
+                        referenceDate: displayedMonth
+                    )
+                    BudgetUsageRingCard(budget: budget.amount, status: status,
+                                        displayedMonth: displayedMonth, now: now,
+                                        currencyCode: snapshot.scopedCurrencyCode)
+                        .id("stats-month-budget-ring")
+                }
             }
             monthlyContent(summary: summary, previousMonth: previousMonth,
                            records: snapshot.records, revision: snapshot.revision,
@@ -492,6 +532,17 @@ struct MonthlyStatsView: View {
                                 start: customStartDate, end: customEndDate)
             }
         }
+    }
+
+    private func openAllExpenseActivity(summary: MonthlySummary, cutoffDay: Int) {
+        let calendar = Calendar.current
+        let monthStart = calendar.date(from: DateComponents(year: summary.year, month: summary.month, day: 1))
+            ?? calendar.startOfDay(for: displayedMonth)
+        let cutoffEnd = calendar.date(byAdding: .day, value: cutoffDay - 1, to: monthStart) ?? monthStart
+        let names = Set(summary.expenseByCategory.filter { $0.total > 0 }.map(\.name))
+        guard !names.isEmpty else { return }
+        selectedCategory = CategoryDrillDown(title: "全部支出活动", names: names,
+                                             start: monthStart, end: cutoffEnd)
     }
 
     private let statisticsAccent = Color(red: 0.49, green: 0.55, blue: 0.62)
@@ -632,8 +683,9 @@ struct MonthlyStatsView: View {
             of: records, revision: revision, year: summary.year, month: summary.month)
         return Group {
             if summary.expenseByCategory.isEmpty {
-                emptyState(title: summary.totalIncome == 0 ? "本月还没有记录" : "本月还没有支出",
-                           message: "记几笔之后这里会出现分析图表")
+                if summary.totalIncome == 0 {
+                    emptyState(title: "本月还没有记录", message: "记几笔之后这里会出现分析图表")
+                }
             } else {
                 periodCategoryRing(summary.expenseByCategory, total: summary.totalExpense,
                                    currencyCode: currencyCode, totalLabel: "本月支出",
@@ -1021,45 +1073,6 @@ struct MonthlyStatsView: View {
             ProgressView(value: min(max(item.share, 0), 1))
                 .tint(.secondary)
         }
-    }
-
-    /// 月度预算执行条 + 今日可花。
-    private func budgetProgress(
-        _ budget: Budget,
-        records: [TransactionRecord],
-        revision: IOSLedgerDataRevision,
-        currencyCode: String
-    ) -> some View {
-        let status = statisticsCache.status(
-            for: budget,
-            records: records,
-            revision: revision,
-            referenceDate: displayedMonth
-        )
-        let ratio = min(MoneyFormat.double(status.spentThisMonth) / max(MoneyFormat.double(budget.amount), 0.01), 1)
-        return VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Text("本月预算")
-                    .font(.headline)
-                Spacer()
-                Text("\(MoneyFormat.string(status.spentThisMonth, currencyCode: currencyCode)) / \(MoneyFormat.string(budget.amount, currencyCode: currencyCode))")
-                    .font(.subheadline.monospacedDigit())
-                    .foregroundStyle(status.isOverBudget ? Color.warning : Color.secondary)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.7)
-            }
-            ProgressView(value: ratio)
-                .tint(status.isOverBudget ? Color.warning : .accentColor)
-            if Calendar.current.isDate(displayedMonth, equalTo: AppClock.now, toGranularity: .month) {
-                Text(status.todayAllowance >= 0
-                     ? "今日还可以花 \(MoneyFormat.string(status.todayAllowance, currencyCode: currencyCode))"
-                     : "今日已超出节奏 \(MoneyFormat.string(-status.todayAllowance, currencyCode: currencyCode))，缓一缓")
-                    .font(.footnote)
-                    .foregroundStyle(status.todayAllowance >= 0 ? Color.secondary : Color.warning)
-            }
-        }
-        .padding(12)
-        .glassEffect(.regular, in: .rect(cornerRadius: 16))
     }
 
     private func yearlyContent(summary: YearlySummary, currencyCode: String) -> some View {

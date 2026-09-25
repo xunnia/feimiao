@@ -109,6 +109,13 @@ final class LedgerStoreTests: XCTestCase {
             current: [], previous: [], showsIncome: false).upper, 1)
     }
 
+    func testBudgetRingPercentUsesSameValueForTextAndArc() {
+        XCTAssertEqual(BudgetUsageRingCard.displayPercent(
+            spent: Decimal(string: "1017.90")!, budget: 3_000), 34)
+        XCTAssertEqual(BudgetUsageRingCard.displayPercent(spent: 3_270, budget: 3_000), 109)
+        XCTAssertEqual(BudgetUsageRingCard.displayPercent(spent: 0, budget: 0), 0)
+    }
+
     func testStatisticsWeekLabelAndTrendTicksDoNotDependOnSimulatorLanguage() {
         var calendar = Calendar(identifier: .gregorian)
         calendar.locale = Locale(identifier: "en_US")

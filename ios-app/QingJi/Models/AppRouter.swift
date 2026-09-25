@@ -105,6 +105,8 @@ final class AppRouter {
              "stats/month/top5", "stats/month/sources", "stats/month/picker", "stats/month/books",
              "stats/month/book-selected":
             selectedTab = .statistics; statsScope = .month
+        case "stats/month/pace", "stats/month/pace/activity", "stats/month/pace/detail", "stats/month/budget-ring":
+            selectedTab = .statistics; statsScope = .month
         case "stats-year", "stats/year":   selectedTab = .statistics; statsScope = .year
         case "stats-custom", "stats/custom", "stats/custom/category-detail":
             selectedTab = .statistics; statsScope = .custom

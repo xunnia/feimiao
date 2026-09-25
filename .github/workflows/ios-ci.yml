@@ -368,6 +368,18 @@ jobs:
           book_selected_route="stats/month/book-selected"
           book_selected_name="14h-stats-month-book-selected"
           capture_interaction "$book_selected_route" "$book_selected_name"
+          pace_route="stats/month/pace"
+          pace_name="14i-stats-month-pace"
+          capture_interaction "$pace_route" "$pace_name"
+          pace_activity_route="stats/month/pace/activity"
+          pace_activity_name="14j-stats-month-pace-activity"
+          capture_interaction "$pace_activity_route" "$pace_activity_name"
+          budget_ring_route="stats/month/budget-ring"
+          budget_ring_name="14k-stats-month-budget-ring"
+          capture_interaction "$budget_ring_route" "$budget_ring_name"
+          pace_detail_route="stats/month/pace/detail"
+          pace_detail_name="14l-stats-month-pace-detail"
+          capture_interaction "$pace_detail_route" "$pace_detail_name"
           capture_interaction "$interaction_route" "$interaction_name"
           python3 ios-app/tools/check_screenshot_nonempty.py "$interaction_dir"/*.png
 

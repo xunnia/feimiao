@@ -34,6 +34,11 @@ class OwnershipTests(unittest.TestCase):
                          ["stats-month-top5-android.png"])
         self.assertEqual(owned_images(manifest, ["stats-month-controls"]),
                          ["stats-month-picker-android.png"])
+        self.assertEqual(owned_images(manifest, ["stats-month-priority"]),
+                         ["stats-month-pace-android.png",
+                          "stats-month-pace-activity-android.png",
+                          "stats-month-budget-ring-android.png",
+                          "stats-month-pace-detail-android.png"])
 
     def test_duplicate_scene_rejected(self):
         with self.assertRaises(ValueError):
@@ -142,6 +147,23 @@ class CaptureShardsTests(unittest.TestCase):
         self.assertEqual(result["counts"]["total"], 2)
         self.assertIn(first / "0.png", files)
         self.assertNotIn(second / "0.png", files)
+
+    def test_supplemental_image_is_preserved_outside_canonical_metadata(self):
+        first = self.root / "android-parity-shard-0"
+        name = "stats-month-pace-android.png"
+        entry = {"imagePath": f"android-app/outputs/parity/{name}",
+                 "sidecarPath": f"android-app/outputs/parity/stats-month-pace-android.metadata.json",
+                 "captureStatus": "unmapped"}
+        metadata = json.loads((first / "capture-metadata.json").read_text())
+        metadata["screenshots"].append(entry)
+        self.write(0, "capture-metadata.json", metadata)
+        (first / "shard-images.txt").write_text(f"0.png\n{name}\n", encoding="utf-8")
+        (first / name).write_bytes(b"supplemental png")
+        self.write(0, "stats-month-pace-android.metadata.json", entry)
+        result, _, files = collect(self.root, 2, "abc")
+        self.assertEqual(result["counts"]["total"], 2)
+        self.assertIn(first / name, files)
+        self.assertIn(first / "stats-month-pace-android.metadata.json", files)
 
     def test_missing_assigned_image_rejected(self):
         (self.root / "android-parity-shard-1/shard-images.txt").write_text("absent.png\n")

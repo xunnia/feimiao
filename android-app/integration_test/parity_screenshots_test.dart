@@ -171,6 +171,8 @@ Future<void> _captureParityScene(
     await _captureMonthlyBottom(tester, binding);
   } else if (scene == 'stats-month-controls') {
     await _captureMonthlyControls(tester, binding, repo);
+  } else if (scene == 'stats-month-priority') {
+    await _captureMonthlyPriority(tester, binding);
   } else if (scene == 'stats-year') {
     await _captureStatistics(tester, binding, '年', 'stats-year-android');
   } else if (scene == 'stats-custom') {
@@ -1064,6 +1066,48 @@ Future<void> _captureMonthlyControls(
   await _pumpFor(tester, const Duration(milliseconds: 600));
   expect(repo.currentBookId, secondBookID);
   await _takeScreenshot(tester, binding, 'stats-month-book-selected-android');
+}
+
+Future<void> _captureMonthlyPriority(
+  WidgetTester tester,
+  IntegrationTestWidgetsFlutterBinding binding,
+) async {
+  final navigator = ShareIntake.navigatorKey.currentState;
+  expect(navigator, isNotNull);
+  unawaited(navigator!.push<void>(_parityPageRoute<void>(const StatisticsView())));
+  await _pumpFor(tester, const Duration(milliseconds: 700));
+  await tester.tap(find.text('月').first);
+  await _pumpFor(tester, const Duration(milliseconds: 500));
+
+  final list = find.byType(ReorderableListView).last;
+  for (final (label, name) in [
+    ('截至 8月27日', 'stats-month-pace-android'),
+    ('查看所有支出活动', 'stats-month-pace-activity-android'),
+    ('预算使用', 'stats-month-budget-ring-android'),
+  ]) {
+    final target = find.textContaining(label);
+    for (var attempt = 0; attempt < 8 && target.evaluate().isEmpty; attempt++) {
+      await tester.drag(list, const Offset(0, -420));
+      await _pumpFor(tester, const Duration(milliseconds: 250));
+    }
+    expect(target, findsAtLeastNWidgets(1));
+    await Scrollable.ensureVisible(target.evaluate().last, alignment: 0.2);
+    await _pumpFor(tester, const Duration(milliseconds: 500));
+    await _takeScreenshot(tester, binding, name);
+  }
+
+  final activity = find.text('查看所有支出活动');
+  for (var attempt = 0; attempt < 8 && activity.evaluate().isEmpty; attempt++) {
+    await tester.drag(list, const Offset(0, 420));
+    await _pumpFor(tester, const Duration(milliseconds: 250));
+  }
+  expect(activity, findsAtLeastNWidgets(1));
+  await Scrollable.ensureVisible(activity.last, alignment: 0.5);
+  await tester.tap(activity.last);
+  await _pumpFor(tester, const Duration(milliseconds: 600));
+  expect(find.text('全部支出活动'), findsAtLeastNWidgets(1));
+  expect(find.textContaining('1,017.90'), findsAtLeastNWidgets(1));
+  await _takeScreenshot(tester, binding, 'stats-month-pace-detail-android');
 }
 
 Future<void> _takeScreenshot(

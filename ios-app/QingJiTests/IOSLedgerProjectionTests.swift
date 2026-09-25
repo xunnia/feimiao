@@ -80,6 +80,33 @@ final class IOSLedgerProjectionTests: XCTestCase {
         XCTAssertEqual(statisticsCache.calculationCount, 4)
     }
 
+    func testMonthlyPaceCacheChangesOnNewDayOrLedgerRevision() {
+        let transactions = makeTransactions(count: 24)
+        let ledger = IOSLedgerProjectionCache()
+        let statistics = IOSStatisticsProjectionCache()
+        let snapshot = ledger.snapshot(for: transactions, selectedBookID: nil)
+        let calendar = Calendar(identifier: .gregorian)
+        let now = transactions[0].date
+        let parts = calendar.dateComponents([.year, .month], from: now)
+        for _ in 0..<3 {
+            _ = statistics.monthlyPace(of: snapshot.records, revision: snapshot.revision,
+                                       year: parts.year!, month: parts.month!, now: now,
+                                       calendar: calendar)
+        }
+        XCTAssertEqual(statistics.calculationCount, 1)
+        let tomorrow = calendar.date(byAdding: .day, value: 1, to: now)!
+        _ = statistics.monthlyPace(of: snapshot.records, revision: snapshot.revision,
+                                   year: parts.year!, month: parts.month!, now: tomorrow,
+                                   calendar: calendar)
+        XCTAssertEqual(statistics.calculationCount, 2)
+        transactions[0].note = "已修改"
+        let changed = ledger.snapshot(for: transactions, selectedBookID: nil)
+        _ = statistics.monthlyPace(of: changed.records, revision: changed.revision,
+                                   year: parts.year!, month: parts.month!, now: tomorrow,
+                                   calendar: calendar)
+        XCTAssertEqual(statistics.calculationCount, 3)
+    }
+
     func testMeasuredNaiveVersusCachedLedgerWork() {
         let transactions = makeTransactions(count: 10_000)
         let calendar = Calendar(identifier: .gregorian)

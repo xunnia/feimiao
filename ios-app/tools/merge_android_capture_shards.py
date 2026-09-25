@@ -6,6 +6,7 @@ import json
 import shutil
 import subprocess
 from pathlib import Path
+from parity_owned_images import SUPPLEMENTAL_IMAGES
 
 
 def load(path):
@@ -18,6 +19,11 @@ def collect(shards, count, revision):
         raise ValueError("Missing or extra capture shards")
     seen, images, entries, sources = set(), set(), [], []
     baseline = business = None
+    supplemental_names = {
+        image
+        for value in SUPPLEMENTAL_IMAGES.values()
+        for image in (value if isinstance(value, tuple) else (value,))
+    }
     for directory in directories:
         receipt = load(directory / "shard.json")
         index = receipt["index"]
@@ -62,7 +68,11 @@ def collect(shards, count, revision):
             if entry["imagePath"] in images:
                 raise ValueError("Duplicate image across shards")
             images.add(entry["imagePath"])
-            entries.append(entry)
+            if name in supplemental_names:
+                if entry["captureStatus"] != "unmapped":
+                    raise ValueError("Supplemental image unexpectedly claimed a canonical route")
+            else:
+                entries.append(entry)
         if captured != owned:
             raise ValueError(f"Shard {index} did not capture all assigned images: {sorted(owned - captured)}")
     merged = copy.deepcopy(baseline)

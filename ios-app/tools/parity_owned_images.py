@@ -8,6 +8,12 @@ SUPPLEMENTAL_IMAGES = {
     "stats-month-trend": "stats-month-trend-android.png",
     "stats-month-bottom": "stats-month-top5-android.png",
     "stats-month-controls": "stats-month-picker-android.png",
+    "stats-month-priority": (
+        "stats-month-pace-android.png",
+        "stats-month-pace-activity-android.png",
+        "stats-month-budget-ring-android.png",
+        "stats-month-pace-detail-android.png",
+    ),
 }
 
 
@@ -18,14 +24,17 @@ def owned_images(manifest, scenes):
         raise ValueError("Duplicate scene identity")
     if set(mapping) & set(SUPPLEMENTAL_IMAGES):
         raise ValueError("Supplemental scene duplicates a canonical scene")
-    mapping.update({scene: f"android-app/outputs/parity/{image}"
-                    for scene, image in SUPPLEMENTAL_IMAGES.items()})
+    mapping.update({scene: [f"android-app/outputs/parity/{image}" for image in
+                           (images if isinstance(images, tuple) else (images,))]
+                    for scene, images in SUPPLEMENTAL_IMAGES.items()})
     result = []
     for scene in scenes:
-        path = Path(mapping[scene])
-        if path.parent.as_posix() != "android-app/outputs/parity" or path.suffix != ".png":
-            raise ValueError("Unexpected Android screenshot path")
-        result.append(path.name)
+        paths = mapping[scene] if isinstance(mapping[scene], list) else [mapping[scene]]
+        for item in paths:
+            path = Path(item)
+            if path.parent.as_posix() != "android-app/outputs/parity" or path.suffix != ".png":
+                raise ValueError("Unexpected Android screenshot path")
+            result.append(path.name)
     if len(set(result)) != len(result):
         raise ValueError("Duplicate image ownership")
     return result
