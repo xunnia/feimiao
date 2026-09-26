@@ -93,6 +93,7 @@ struct MonthlyHeatmapCard: View {
 
     private let columns = Array(repeating: GridItem(.flexible(), spacing: 4), count: 7)
     private let weekdays = ["一", "二", "三", "四", "五", "六", "日"]
+    private let heatmapTint = Color(red: 125.0 / 255, green: 139.0 / 255, blue: 155.0 / 255)
 
     var body: some View {
         let calendar = Calendar.current
@@ -101,31 +102,40 @@ struct MonthlyHeatmapCard: View {
         let maximum = max(summary.dailyTotals.map { MoneyFormat.double($0.expense) }.max() ?? 0, 0)
         return VStack(alignment: .leading, spacing: 10) {
             Text("消费热力图").font(.headline)
+            HStack(spacing: 4) {
+                ForEach(weekdays, id: \.self) { weekday in
+                    Text(weekday).font(.caption2).foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity)
+                }
+            }
             LazyVGrid(columns: columns, spacing: 4) {
-                ForEach(weekdays, id: \.self) { Text($0).font(.caption2).foregroundStyle(.secondary) }
-                ForEach(0..<leading, id: \.self) { _ in Color.clear.aspectRatio(1, contentMode: .fit) }
-                ForEach(summary.dailyTotals, id: \.day) { day in
-                    let value = MoneyFormat.double(day.expense)
-                    let intensity = maximum > 0 ? min(max(value / maximum, 0), 1) : 0
-                    Button { selectedDay = day } label: {
-                        Text("\(day.day)")
-                            .font(.caption2)
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
-                            .aspectRatio(1, contentMode: .fit)
-                            .background(value <= 0 ? Color.secondary.opacity(0.12)
-                                        : Color.accentColor.opacity(0.18 + 0.72 * intensity),
-                                        in: .rect(cornerRadius: 5))
-                            .foregroundStyle(intensity > 0.55 ? Color.white : Color.primary)
+                ForEach(0..<(leading + summary.dailyTotals.count), id: \.self) { index in
+                    if index < leading {
+                        Color.clear.aspectRatio(1, contentMode: .fit)
+                    } else {
+                        let day = summary.dailyTotals[index - leading]
+                        let value = MoneyFormat.double(day.expense)
+                        let intensity = maximum > 0 ? min(max(value / maximum, 0), 1) : 0
+                        Button { selectedDay = day } label: {
+                            Text("\(day.day)")
+                                .font(.caption2)
+                                .frame(maxWidth: .infinity)
+                                .aspectRatio(1, contentMode: .fit)
+                                .background(value <= 0 ? Color.secondary.opacity(0.12)
+                                            : heatmapTint.opacity(0.18 + 0.72 * intensity),
+                                            in: .rect(cornerRadius: 5))
+                                .foregroundStyle(intensity > 0.55 ? Color.white : Color.primary)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("\(summary.month)月\(day.day)日，支出 \(MoneyFormat.string(day.expense, currencyCode: currencyCode))")
                     }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("\(summary.month)月\(day.day)日，支出 \(MoneyFormat.string(day.expense, currencyCode: currencyCode))")
                 }
             }
             HStack(spacing: 4) {
                 Spacer()
                 Text("少")
                 ForEach([0.2, 0.45, 0.7, 0.9], id: \.self) { opacity in
-                    RoundedRectangle(cornerRadius: 3).fill(Color.accentColor.opacity(opacity))
+                    RoundedRectangle(cornerRadius: 3).fill(heatmapTint.opacity(opacity))
                         .frame(width: 10, height: 10)
                 }
                 Text(maximum > 0 ? "多 · 单日最高 \(MoneyFormat.string(Decimal(maximum), currencyCode: currencyCode))" : "多")

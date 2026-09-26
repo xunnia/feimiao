@@ -10,7 +10,8 @@ def is_retryable(log: str, status: int | None = None) -> bool:
                  r"Some tests failed|AssertionError|Expected:", log):
         return False
     return status == 124 or bool(re.search(
-        r"Service has disappeared|device offline|bad color buffer handle", log))
+        r"Service has disappeared|Service connection disposed|"
+        r"device offline|bad color buffer handle", log))
 
 
 if __name__ == "__main__":

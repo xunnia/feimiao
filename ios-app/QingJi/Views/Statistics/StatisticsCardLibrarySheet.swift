@@ -50,7 +50,7 @@ struct StatisticsCardLibrarySheet: View {
                 }
             }
         }
-        .presentationDetents([.medium, .large])
+        .presentationDetents([.fraction(0.72), .large])
         .presentationDragIndicator(.hidden)
     }
 

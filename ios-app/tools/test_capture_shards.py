@@ -57,6 +57,9 @@ class TransportFailureTests(unittest.TestCase):
     def test_service_loss(self):
         self.assertTrue(is_retryable("ext.flutter.driver: (112) Service has disappeared"))
 
+    def test_vm_service_connection_disposed(self):
+        self.assertTrue(is_retryable("getIsolate: (-32000) Service connection disposed"))
+
     def test_bounded_timeout_is_retryable(self):
         self.assertTrue(is_retryable("Waiting for application to start", 124))
 

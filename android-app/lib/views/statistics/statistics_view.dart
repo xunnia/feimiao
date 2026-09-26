@@ -1610,7 +1610,11 @@ class _InsightsCard extends StatelessWidget {
         SpendingInsights.summaryLines(records, year: year, month: month);
     final profile = SpendingInsights.profile(records, year: year, month: month);
     final forecast = isCurrentMonth
-        ? SpendingInsights.forecast(records, monthlyBudget: monthlyBudget)
+        ? SpendingInsights.forecast(
+            records,
+            monthlyBudget: monthlyBudget,
+            now: AppClock.now,
+          )
         : null;
 
     if (lines.isEmpty && profile == null && forecast == null) {

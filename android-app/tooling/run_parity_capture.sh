@@ -211,15 +211,24 @@ fi
   # failure from invalidating an otherwise valid screenshot batch.
   recover_device() {
     local attempt
+    local force_reset="${1:-0}"
+    if [ "$force_reset" -eq 1 ]; then
+      echo "PARITY_DEVICE_RESET_SERVER"
+      "$timeout_bin" 15s adb kill-server >/dev/null 2>&1 || true
+      "$timeout_bin" 15s adb start-server >/dev/null 2>&1 || true
+      sleep 3
+    fi
     for attempt in 1 2 3; do
-      if adb -s "$device_id" get-state >/dev/null 2>&1; then
+      if "$timeout_bin" 10s adb -s "$device_id" get-state >/dev/null 2>&1 &&
+         [ "$("$timeout_bin" 10s adb -s "$device_id" shell getprop sys.boot_completed 2>/dev/null | tr -d '\r\n')" = 1 ]; then
         echo "PARITY_DEVICE_READY attempt=$attempt"
         return 0
       fi
       echo "PARITY_DEVICE_RECOVER attempt=$attempt"
       adb reconnect offline >/dev/null 2>&1 || true
       sleep 2
-      if adb -s "$device_id" get-state >/dev/null 2>&1; then
+      if "$timeout_bin" 10s adb -s "$device_id" get-state >/dev/null 2>&1 &&
+         [ "$("$timeout_bin" 10s adb -s "$device_id" shell getprop sys.boot_completed 2>/dev/null | tr -d '\r\n')" = 1 ]; then
         echo "PARITY_DEVICE_READY attempt=$attempt method=reconnect"
         return 0
       fi
@@ -302,7 +311,7 @@ fi
       if [ "$transient_failure" -eq 1 ] && [ "$attempt" -lt "$scene_retry_limit" ]; then
         attempt=$((attempt + 1))
         echo "::warning title=Android parity transient transport failure::retrying scene=$scene attempt=$attempt/$scene_retry_limit"
-        if recover_device; then
+        if recover_device 1; then
           sleep 2
           continue
         fi
