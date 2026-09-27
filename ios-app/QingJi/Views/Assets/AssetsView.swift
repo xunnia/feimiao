@@ -5,6 +5,14 @@ import QingJiCore
 
 /// 资产中心的总览、资金和物品使用同一份账本数据。
 struct AssetsView: View {
+    private enum AddAction: String {
+        case account
+        case receivable
+        case newPurchase
+        case fromTransaction
+        case manualAsset
+    }
+
     private enum AssetTab: String, CaseIterable, Hashable, Identifiable {
         case overview
         case funds
@@ -35,8 +43,11 @@ struct AssetsView: View {
     private var checkpoints: [AccountBalanceCheckpointRecord]
 
     @State private var selectedTab: AssetTab = .overview
+    @State private var showAddEntry = false
+    @State private var pendingAddAction: AddAction?
     @State private var showNewAccount = false
     @State private var showNewAsset = false
+    @State private var newAssetSource: PhysicalAssetSourceType = .historicalExisting
     @State private var showNewReceivable = false
     @State private var detailAsset: PhysicalAsset?
     @State private var editingReceivable: ReceivableAsset?
@@ -47,7 +58,9 @@ struct AssetsView: View {
     @State private var zeroAccountsExpanded = false
     @State private var editingAccount: Account?
     let opensFirstDetail: Bool
+    let startsOnAdd: Bool
     @State private var didOpenLaunchDetail = false
+    @State private var didOpenLaunchAdd = false
 
     private var currentBreakdown: NetWorthStore.Breakdown {
         NetWorthStore.breakdown(
@@ -72,8 +85,14 @@ struct AssetsView: View {
         receivables.filter { !$0.isDeleted && $0.lifecycle == .archived }
     }
 
-    init(opensFirstDetail: Bool = false, startsOnPhysical: Bool = false, startsOnFunds: Bool = false) {
+    init(
+        opensFirstDetail: Bool = false,
+        startsOnPhysical: Bool = false,
+        startsOnFunds: Bool = false,
+        startsOnAdd: Bool = false
+    ) {
         self.opensFirstDetail = opensFirstDetail
+        self.startsOnAdd = startsOnAdd
         _selectedTab = State(
             initialValue: startsOnPhysical || opensFirstDetail ? .items : (startsOnFunds ? .funds : .overview)
         )
@@ -103,6 +122,10 @@ struct AssetsView: View {
         }
         .liquidGlassCanvas()
         .onAppear {
+            if startsOnAdd && !didOpenLaunchAdd {
+                didOpenLaunchAdd = true
+                showAddEntry = true
+            }
             guard opensFirstDetail, !didOpenLaunchDetail,
                   let first = visibleAssets.first else { return }
             didOpenLaunchDetail = true
@@ -111,28 +134,19 @@ struct AssetsView: View {
         .navigationTitle("资产管理")
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
-                Menu {
-                    Button {
-                        showNewAccount = true
-                    } label: {
-                        Label("添加账户", systemImage: "wallet.pass")
-                    }
-                    Button {
-                        showNewAsset = true
-                    } label: {
-                        Label("新增物品资产", systemImage: "shippingbox")
-                    }
-                    Button {
-                        showNewReceivable = true
-                    } label: {
-                        Label("新增权益", systemImage: "arrow.down.left.circle")
-                    }
+                Button {
+                    showAddEntry = true
                 } label: {
                     Image(systemName: "plus")
+                        .foregroundStyle(.primary)
                 }
                 .liquidGlassCircleControl()
                 .accessibilityLabel("新增资产")
             }
+        }
+        .sheet(isPresented: $showAddEntry, onDismiss: openPendingAddAction) {
+            addEntrySheet
+                .presentationDetents([.medium, .large])
         }
         .sheet(isPresented: $showNewAccount) {
             AccountEditorSheet(
@@ -146,7 +160,7 @@ struct AssetsView: View {
                 .presentationDetents([.medium, .large])
         }
         .sheet(isPresented: $showNewAsset) {
-            PhysicalAssetEditor(asset: nil)
+            PhysicalAssetEditor(asset: nil, initialSourceType: newAssetSource)
                 .presentationDetents([.large])
         }
         .sheet(item: $detailAsset) { asset in
@@ -189,6 +203,112 @@ struct AssetsView: View {
             Button("好") { errorMessage = nil }
         } message: {
             Text(errorMessage ?? "")
+        }
+    }
+
+    private var addEntrySheet: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    addEntryGroup("资金") {
+                        addEntryRow("添加账户", subtitle: "现金、银行卡、信用卡、存款、贷款", symbol: "wallet.pass", action: .account)
+                        Divider().padding(.leading, 58)
+                        addEntryRow("添加权益", subtitle: "押金、借出款、应收款、预付余额", symbol: "arrow.down.left.circle", action: .receivable)
+                    }
+                    addEntryGroup("物品") {
+                        addEntryRow("新购买记账", subtitle: "选择付款账户，同时记录物品和支出", symbol: "bag", action: .newPurchase)
+                        Divider().padding(.leading, 58)
+                        addEntryRow("从已有账单加入", subtitle: "继承购买日期和账本，不重复记支出", symbol: "receipt", action: .fromTransaction)
+                        Divider().padding(.leading, 58)
+                        addEntryRow("手工补录物品", subtitle: "旧物、赠品或没有购买账单的物品", symbol: "square.and.pencil", action: .manualAsset)
+                    }
+                }
+                .padding(16)
+            }
+            .liquidGlassCanvas()
+            .navigationTitle("添加")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button {
+                        showAddEntry = false
+                    } label: {
+                        Image(systemName: "xmark")
+                            .foregroundStyle(.primary)
+                    }
+                    .liquidGlassCircleControl(size: 40)
+                    .accessibilityLabel("关闭")
+                }
+            }
+        }
+    }
+
+    private func addEntryGroup<Content: View>(
+        _ title: String,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(title)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 4)
+            VStack(spacing: 0, content: content)
+                .glassEffect(.regular, in: .rect(cornerRadius: 16))
+        }
+    }
+
+    private func addEntryRow(
+        _ title: String,
+        subtitle: String,
+        symbol: String,
+        action: AddAction
+    ) -> some View {
+        Button {
+            pendingAddAction = action
+            showAddEntry = false
+        } label: {
+            HStack(spacing: 12) {
+                Image(systemName: symbol)
+                    .font(.body)
+                    .frame(width: 32, height: 32)
+                    .foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(title)
+                        .font(.body)
+                        .foregroundStyle(.primary)
+                    Text(subtitle)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 4)
+                Image(systemName: "chevron.right")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 14)
+            .frame(minHeight: 64)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("assets-add-\(action.rawValue)")
+    }
+
+    private func openPendingAddAction() {
+        guard let action = pendingAddAction else { return }
+        pendingAddAction = nil
+        switch action {
+        case .account:
+            showNewAccount = true
+        case .receivable:
+            showNewReceivable = true
+        case .newPurchase, .fromTransaction, .manualAsset:
+            switch action {
+            case .newPurchase: newAssetSource = .newPurchaseWithAccount
+            case .fromTransaction: newAssetSource = .fromTransaction
+            default: newAssetSource = .historicalExisting
+            }
+            showNewAsset = true
         }
     }
 
@@ -641,18 +761,18 @@ struct PhysicalAssetEditor: View {
     @State private var note: String
     @State private var errorMessage: String?
 
-    init(asset: PhysicalAsset?) {
-        let initialSourceType = asset?.sourceType ?? .historicalExisting
+    init(asset: PhysicalAsset?, initialSourceType: PhysicalAssetSourceType = .historicalExisting) {
+        let resolvedSourceType = asset?.sourceType ?? initialSourceType
         self.asset = asset
         _name = State(initialValue: asset?.name ?? "")
         _kind = State(initialValue: asset?.kind ?? .other)
-        _sourceType = State(initialValue: initialSourceType)
+        _sourceType = State(initialValue: resolvedSourceType)
         _purchasePriceText = State(initialValue: asset.map { "\($0.purchasePrice)" } ?? "")
         _currentValueText = State(initialValue: asset.map { "\($0.currentValue)" } ?? "")
         _bookID = State(initialValue: asset?.bookID)
         _purchaseDateEnabled = State(
             initialValue: asset?.purchaseDate != nil ||
-                (asset == nil && initialSourceType == .newPurchaseWithAccount)
+                (asset == nil && resolvedSourceType == .newPurchaseWithAccount)
         )
         _purchaseDate = State(initialValue: asset?.purchaseDate ?? Date())
         _paymentAccountID = State(initialValue: nil)

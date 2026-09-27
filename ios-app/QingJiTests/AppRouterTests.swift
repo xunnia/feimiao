@@ -6,6 +6,7 @@ final class AppRouterTests: XCTestCase {
         XCTAssertEqual(RootTabView.initialPath(for: "settings/assets"), [.settings])
         XCTAssertEqual(RootTabView.initialPath(for: "settings/assets/funds"), [.settings])
         XCTAssertEqual(RootTabView.initialPath(for: "assets/funds"), [.settings])
+        XCTAssertEqual(RootTabView.initialPath(for: "settings/assets/add"), [.settings])
 
         let router = AppRouter()
         router.handle(url: URL(string: "qingji://settings/assets/funds")!)
@@ -13,6 +14,8 @@ final class AppRouterTests: XCTestCase {
         XCTAssertEqual(router.settingsPushTarget, .assetFunds)
         router.handle(url: URL(string: "qingji://settings/assets")!)
         XCTAssertEqual(router.settingsPushTarget, .assets)
+        router.handle(url: URL(string: "qingji://settings/assets/add")!)
+        XCTAssertEqual(router.settingsPushTarget, .assetAdd)
     }
 
     func testEveryStatisticsColdLaunchAliasUsesStatisticsRoot() {

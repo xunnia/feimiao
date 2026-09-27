@@ -169,6 +169,7 @@ struct SettingsView: View {
         case .recurring: RecurringRulesView()
         case .assets:    AssetsView()
         case .assetFunds: AssetsView(startsOnFunds: true)
+        case .assetAdd: AssetsView(startsOnAdd: true)
         case .assetDetail: AssetsView(opensFirstDetail: true, startsOnPhysical: true)
         case .liabilities: LiabilitiesView()
         case .netWorth:  NetWorthView()

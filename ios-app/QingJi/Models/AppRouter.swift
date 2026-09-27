@@ -37,7 +37,7 @@ final class AppRouter {
 
     /// 设置页接到深链后要 push 的子页面。
     enum SettingsDestination: Hashable {
-        case books, accounts, accountDetail, categories, tags, memory, aiMemory, aiTasks, aiExtensions, aiSchedules, aiSearch, aiDiagnostics, aiLocal, budget, reconcile, reimburse, reimburseSettlement, savings, recurring, assets, assetFunds, assetDetail, liabilities, netWorth, importReview, importExport, reports, backup, display, theme, moneyDisplay, autoRecord, ai
+        case books, accounts, accountDetail, categories, tags, memory, aiMemory, aiTasks, aiExtensions, aiSchedules, aiSearch, aiDiagnostics, aiLocal, budget, reconcile, reimburse, reimburseSettlement, savings, recurring, assets, assetFunds, assetAdd, assetDetail, liabilities, netWorth, importReview, importExport, reports, backup, display, theme, moneyDisplay, autoRecord, ai
     }
     var settingsPushTarget: SettingsDestination? = nil
 
@@ -137,6 +137,7 @@ final class AppRouter {
             selectedTab = .settings
             settingsPushTarget = .assetDetail
         case "assets/funds": selectedTab = .settings; settingsPushTarget = .assetFunds
+        case "assets/add": selectedTab = .settings; settingsPushTarget = .assetAdd
         case "assets":       selectedTab = .settings;   settingsPushTarget = .assets
         case "accounts-detail", "accounts/detail":
             selectedTab = .settings
