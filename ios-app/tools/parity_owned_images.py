@@ -6,6 +6,7 @@ from pathlib import Path
 
 SUPPLEMENTAL_IMAGES = {
     "assets-add": "assets-add-android.png",
+    "assets-purchase": "assets-purchase-android.png",
     "stats-month-trend": "stats-month-trend-android.png",
     "stats-month-bottom": "stats-month-top5-android.png",
     "stats-month-controls": "stats-month-picker-android.png",

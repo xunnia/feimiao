@@ -324,6 +324,12 @@ final class AssetStoreTests: XCTestCase {
             allocatedGrossCents: 7_000,
             currentValue: 65
         )
+        let remaining = AssetStore.purchaseCandidates(
+            transactions: [original],
+            links: try stack.context.fetch(FetchDescriptor<AssetTransactionLink>())
+        )
+        XCTAssertEqual(remaining.count, 1)
+        XCTAssertEqual(remaining.first?.remainingGrossCents, 5_000)
         let second = try AssetStore.createFromTransaction(
             in: stack.context,
             transaction: original,
@@ -339,6 +345,89 @@ final class AssetStoreTests: XCTestCase {
         let links = try stack.context.fetch(FetchDescriptor<AssetTransactionLink>())
         XCTAssertEqual(links.count, 2)
         XCTAssertEqual(links.map(\.allocatedGrossCents).reduce(0, +), 12_000)
+        XCTAssertTrue(AssetStore.purchaseCandidates(transactions: [original], links: links).isEmpty)
+    }
+
+    func testPurchaseCandidateTracksUnallocatedRefund() throws {
+        let stack = try Stack()
+        let book = Book(name: "测试账本", isDefault: true)
+        let cash = Account(name: "现金", kind: .cash)
+        stack.context.insert(book)
+        stack.context.insert(cash)
+        try stack.context.save()
+        let original = try LedgerStore.createTransaction(
+            in: stack.context,
+            amount: 120,
+            kind: .expense,
+            date: Date(timeIntervalSince1970: 1_705_000_000),
+            note: "两件商品",
+            account: cash,
+            book: book
+        )
+        let refund = MoneyTransaction(
+            amount: -20,
+            kind: .expense,
+            date: original.date.addingTimeInterval(86_400),
+            account: cash,
+            book: book,
+            refundOfID: original.stableID
+        )
+        stack.context.insert(refund)
+        try stack.context.save()
+        _ = try AssetStore.createFromTransaction(
+            in: stack.context,
+            transaction: original,
+            name: "商品 A",
+            kind: .other,
+            allocatedGrossCents: 7_000,
+            allocatedRefundCents: 1_000
+        )
+        let candidates = AssetStore.purchaseCandidates(
+            transactions: [refund, original],
+            links: try stack.context.fetch(FetchDescriptor<AssetTransactionLink>())
+        )
+        XCTAssertEqual(candidates.count, 1)
+        XCTAssertEqual(candidates.first?.transaction.stableID, original.stableID)
+        XCTAssertEqual(candidates.first?.remainingGrossCents, 5_000)
+        XCTAssertEqual(candidates.first?.remainingRefundCents, 1_000)
+    }
+
+    func testPurchaseCandidatesIgnoreExcludedBillsAndNonPurchaseLinks() throws {
+        let stack = try Stack()
+        let book = Book(name: "测试账本", isDefault: true)
+        let cash = Account(name: "现金", kind: .cash)
+        stack.context.insert(book)
+        stack.context.insert(cash)
+        try stack.context.save()
+        let original = try LedgerStore.createTransaction(
+            in: stack.context,
+            amount: 100,
+            kind: .expense,
+            date: Date(timeIntervalSince1970: 1_705_000_000),
+            note: "购买",
+            account: cash,
+            book: book
+        )
+        let unrelatedCost = AssetTransactionLink(
+            assetID: UUID(),
+            transactionID: original.stableID,
+            linkTypeRaw: AssetTransactionLinkType.maintenance.rawValue
+        )
+        unrelatedCost.allocatedGrossCents = 8_000
+        stack.context.insert(unrelatedCost)
+        try stack.context.save()
+
+        let candidates = AssetStore.purchaseCandidates(
+            transactions: [original],
+            links: [unrelatedCost]
+        )
+        XCTAssertEqual(candidates.first?.remainingGrossCents, 10_000)
+
+        original.isExcluded = true
+        XCTAssertTrue(AssetStore.purchaseCandidates(
+            transactions: [original],
+            links: [unrelatedCost]
+        ).isEmpty)
     }
 
     func testInvalidPurchaseAllocationDoesNotCreateOrphanAsset() throws {

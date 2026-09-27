@@ -37,7 +37,7 @@ final class AppRouter {
 
     /// 设置页接到深链后要 push 的子页面。
     enum SettingsDestination: Hashable {
-        case books, accounts, accountDetail, categories, tags, memory, aiMemory, aiTasks, aiExtensions, aiSchedules, aiSearch, aiDiagnostics, aiLocal, budget, reconcile, reimburse, reimburseSettlement, savings, recurring, assets, assetFunds, assetAdd, assetDetail, liabilities, netWorth, importReview, importExport, reports, backup, display, theme, moneyDisplay, autoRecord, ai
+        case books, accounts, accountDetail, categories, tags, memory, aiMemory, aiTasks, aiExtensions, aiSchedules, aiSearch, aiDiagnostics, aiLocal, budget, reconcile, reimburse, reimburseSettlement, savings, recurring, assets, assetFunds, assetAdd, assetPurchase, assetDetail, liabilities, netWorth, importReview, importExport, reports, backup, display, theme, moneyDisplay, autoRecord, ai
     }
     var settingsPushTarget: SettingsDestination? = nil
 
@@ -138,6 +138,7 @@ final class AppRouter {
             settingsPushTarget = .assetDetail
         case "assets/funds": selectedTab = .settings; settingsPushTarget = .assetFunds
         case "assets/add": selectedTab = .settings; settingsPushTarget = .assetAdd
+        case "assets/purchase": selectedTab = .settings; settingsPushTarget = .assetPurchase
         case "assets":       selectedTab = .settings;   settingsPushTarget = .assets
         case "accounts-detail", "accounts/detail":
             selectedTab = .settings
@@ -227,6 +228,8 @@ final class AppRouter {
                 switch path.dropFirst().first {
                 case "detail": settingsPushTarget = .assetDetail
                 case "funds": settingsPushTarget = .assetFunds
+                case "add": settingsPushTarget = .assetAdd
+                case "purchase": settingsPushTarget = .assetPurchase
                 default: settingsPushTarget = .assets
                 }
             case "liabilities": settingsPushTarget = .liabilities

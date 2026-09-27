@@ -253,6 +253,7 @@ Future<void> _captureParityScene(
   } else if (scene == 'assets-hub' ||
       scene == 'assets-funds' ||
       scene == 'assets-add' ||
+      scene == 'assets-purchase' ||
       scene == 'accounts-management' ||
       scene == 'liabilities' ||
       scene == 'net-worth') {
@@ -875,7 +876,7 @@ Future<void> _captureAssetScene(
     return;
   }
 
-  if (scene == 'assets-add') {
+  if (scene == 'assets-add' || scene == 'assets-purchase') {
     final add = find.descendant(
       of: find.byType(AppBar),
       matching: find.byIcon(Icons.add),
@@ -888,6 +889,14 @@ Future<void> _captureAssetScene(
     expect(find.text('新购买记账'), findsOneWidget);
     expect(find.text('从最近账单加入'), findsOneWidget);
     expect(find.text('手工补录物品'), findsOneWidget);
+    if (scene == 'assets-purchase') {
+      await tester.tap(find.text('从最近账单加入').last);
+      await _pumpFor(tester, const Duration(milliseconds: 600));
+      expect(find.byKey(const Key('asset-purchase-search')), findsOneWidget);
+      expect(find.textContaining('可分配'), findsAtLeastNWidgets(1));
+      await _takeScreenshot(tester, binding, 'assets-purchase-android');
+      return;
+    }
     await _takeScreenshot(tester, binding, 'assets-add-android');
     return;
   }

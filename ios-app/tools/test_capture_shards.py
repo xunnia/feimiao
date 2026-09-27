@@ -31,6 +31,16 @@ class OwnershipTests(unittest.TestCase):
         self.assertNotIn("assets-add", {pair["id"] for pair in manifest["pairs"]})
         self.assertEqual(owned_images(manifest, ["assets-add"]), ["assets-add-android.png"])
 
+    def test_asset_purchase_is_supplemental_not_a_canonical_scene(self):
+        manifest = json.loads(Path(__file__).with_name("screenshot_manifest.json").read_text(encoding="utf-8"))
+        self.assertNotIn("assets-purchase", {pair["id"] for pair in manifest["pairs"]})
+        self.assertEqual(owned_images(manifest, ["assets-purchase"]), ["assets-purchase-android.png"])
+        root = Path(__file__).resolve().parents[2]
+        workflow = (root / ".github/workflows/ios-ci.yml").read_text(encoding="utf-8")
+        runner = (root / "android-app/tooling/run_parity_capture.sh").read_text(encoding="utf-8")
+        self.assertIn('capture_interaction "settings/assets/purchase" "26d-assets-purchase"', workflow)
+        self.assertIn("    assets-purchase\n", runner)
+
     def test_supplemental_monthly_trend_has_its_own_image(self):
         manifest = json.loads(Path(__file__).with_name("screenshot_manifest.json").read_text(encoding="utf-8"))
         self.assertEqual(owned_images(manifest, ["stats-month-trend"]),

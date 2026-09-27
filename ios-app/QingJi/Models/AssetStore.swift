@@ -211,6 +211,52 @@ enum AssetStore {
         try context.save()
     }
 
+    struct PurchaseCandidate {
+        let transaction: MoneyTransaction
+        let remainingGrossCents: Int
+        let remainingRefundCents: Int
+    }
+
+    static func purchaseCandidates(
+        transactions: [MoneyTransaction],
+        links: [AssetTransactionLink]
+    ) -> [PurchaseCandidate] {
+        let refundTotals = LedgerPolicy.refundTotals(from: transactions.map(\.record))
+        var allocations: [UUID: (gross: Int, refund: Int)] = [:]
+        for link in links where link.assetObjectType == "physical" &&
+            (link.linkTypeRaw == AssetTransactionLinkType.sourceTransaction.rawValue ||
+             link.linkTypeRaw == AssetTransactionLinkType.purchaseTransaction.rawValue) {
+            let previous = allocations[link.transactionID] ?? (gross: 0, refund: 0)
+            allocations[link.transactionID] = (
+                gross: previous.gross + link.allocatedGrossCents,
+                refund: previous.refund + link.allocatedRefundCents
+            )
+        }
+        return transactions.compactMap { transaction in
+            guard transaction.kind == .expense,
+                  transaction.amount > 0,
+                  transaction.refundOfID == nil,
+                  !transaction.isExcluded,
+                  transaction.currencyCode == "CNY" else { return nil }
+            let orderGross = MoneyNormalization.cents(transaction.amount)
+            let validRefund = MoneyNormalization.cents(-(refundTotals[transaction.stableID] ?? .zero))
+            guard validRefund <= orderGross else { return nil }
+            let used = allocations[transaction.stableID] ?? (gross: 0, refund: 0)
+            let remainingGross = orderGross - used.gross
+            guard remainingGross > 0 else { return nil }
+            return PurchaseCandidate(
+                transaction: transaction,
+                remainingGrossCents: remainingGross,
+                remainingRefundCents: max(0, validRefund - used.refund)
+            )
+        }
+        .sorted {
+            $0.transaction.date == $1.transaction.date
+                ? $0.transaction.stableID.uuidString > $1.transaction.stableID.uuidString
+                : $0.transaction.date > $1.transaction.date
+        }
+    }
+
     /// 给多件物品订单建立购置成本分配，遵守“毛额、退款、净额均不能超订单”规则。
     @discardableResult
     static func linkPurchaseAllocation(

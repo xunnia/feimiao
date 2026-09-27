@@ -165,6 +165,7 @@ fi
     ai-schedules
     ai-local
     assets-add
+    assets-purchase
   )
   selected_scenes=()
   for index in "${!scenes[@]}"; do

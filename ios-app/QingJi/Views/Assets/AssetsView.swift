@@ -59,8 +59,10 @@ struct AssetsView: View {
     @State private var editingAccount: Account?
     let opensFirstDetail: Bool
     let startsOnAdd: Bool
+    let startsOnPurchase: Bool
     @State private var didOpenLaunchDetail = false
     @State private var didOpenLaunchAdd = false
+    @State private var didOpenLaunchPurchase = false
 
     private var currentBreakdown: NetWorthStore.Breakdown {
         NetWorthStore.breakdown(
@@ -89,12 +91,15 @@ struct AssetsView: View {
         opensFirstDetail: Bool = false,
         startsOnPhysical: Bool = false,
         startsOnFunds: Bool = false,
-        startsOnAdd: Bool = false
+        startsOnAdd: Bool = false,
+        startsOnPurchase: Bool = false
     ) {
         self.opensFirstDetail = opensFirstDetail
         self.startsOnAdd = startsOnAdd
+        self.startsOnPurchase = startsOnPurchase
         _selectedTab = State(
-            initialValue: startsOnPhysical || opensFirstDetail ? .items : (startsOnFunds ? .funds : .overview)
+            initialValue: startsOnPhysical || opensFirstDetail || startsOnPurchase
+                ? .items : (startsOnFunds ? .funds : .overview)
         )
     }
 
@@ -125,6 +130,11 @@ struct AssetsView: View {
             if startsOnAdd && !didOpenLaunchAdd {
                 didOpenLaunchAdd = true
                 showAddEntry = true
+            }
+            if startsOnPurchase && !didOpenLaunchPurchase {
+                didOpenLaunchPurchase = true
+                newAssetSource = .fromTransaction
+                showNewAsset = true
             }
             guard opensFirstDetail, !didOpenLaunchDetail,
                   let first = visibleAssets.first else { return }
@@ -737,6 +747,8 @@ struct PhysicalAssetEditor: View {
     private var categories: [TxCategory]
     @Query(sort: \MoneyTransaction.date, order: .reverse)
     private var sourceTransactions: [MoneyTransaction]
+    @Query
+    private var purchaseLinks: [AssetTransactionLink]
 
     let asset: PhysicalAsset?
     @State private var name: String
@@ -748,6 +760,7 @@ struct PhysicalAssetEditor: View {
     @State private var paymentAccountID: UUID?
     @State private var purchaseCategoryKey: String?
     @State private var sourceTransactionID: UUID?
+    @State private var purchaseSearch = ""
     @State private var allocationGrossText: String
     @State private var allocationRefundText: String
     @State private var purchaseDateEnabled: Bool
@@ -805,18 +818,28 @@ struct PhysicalAssetEditor: View {
         asset == nil && sourceType == .fromTransaction
     }
 
-    private var eligibleSourceTransactions: [MoneyTransaction] {
-        sourceTransactions.filter {
-            $0.kind == .expense &&
-            $0.amount > 0 &&
-            $0.refundOfID == nil &&
-            !$0.isExcluded &&
-            $0.currencyCode == "CNY"
-        }
+    private var purchaseCandidates: [AssetStore.PurchaseCandidate] {
+        AssetStore.purchaseCandidates(transactions: sourceTransactions, links: purchaseLinks)
+    }
+
+    private var selectedPurchaseCandidate: AssetStore.PurchaseCandidate? {
+        purchaseCandidates.first { $0.transaction.stableID == sourceTransactionID }
     }
 
     private var sourceTransaction: MoneyTransaction? {
-        eligibleSourceTransactions.first { $0.stableID == sourceTransactionID }
+        selectedPurchaseCandidate?.transaction
+    }
+
+    private var matchingPurchaseCandidates: [AssetStore.PurchaseCandidate] {
+        let query = purchaseSearch.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !query.isEmpty else { return purchaseCandidates }
+        return purchaseCandidates.filter { candidate in
+            let transaction = candidate.transaction
+            return transaction.note.lowercased().contains(query) ||
+                transaction.merchantName.lowercased().contains(query) ||
+                transaction.category?.name.lowercased().contains(query) == true ||
+                transaction.amount.description.contains(query)
+        }
     }
 
     private var allocationGross: Decimal? {
@@ -840,121 +863,151 @@ struct PhysicalAssetEditor: View {
                   purchaseDateEnabled else { return false }
         }
         if isTransactionSource {
-            guard let sourceTransaction,
+            guard let candidate = selectedPurchaseCandidate,
                   let allocationGross,
                   let allocationRefund,
-                  allocationGross > 0,
-                  allocationRefund >= 0,
-                  allocationRefund <= allocationGross,
-                  allocationGross <= sourceTransaction.amount else { return false }
+                  MoneyNormalization.cents(allocationGross) > 0,
+                  MoneyNormalization.cents(allocationGross) <= candidate.remainingGrossCents,
+                  MoneyNormalization.cents(allocationRefund) >= 0,
+                  MoneyNormalization.cents(allocationRefund) <= candidate.remainingRefundCents,
+                  allocationRefund <= allocationGross else { return false }
+            if warrantyEnabled,
+               Calendar.current.startOfDay(for: warrantyUntil) <
+                Calendar.current.startOfDay(for: candidate.transaction.date) {
+                return false
+            }
         }
         return true
     }
 
     var body: some View {
         NavigationStack {
-            Form {
-                Section {
-                    TextField("物品名称", text: $name)
-                    Picker("类型", selection: $kind) {
-                        ForEach(PhysicalAssetKind.allCases) { kind in
-                            Text(kind.label).tag(kind)
-                        }
-                    }
-                    if asset == nil {
-                        Picker("物品来源", selection: $sourceType) {
-                            ForEach(PhysicalAssetSourceType.allCases) { source in
-                                Text(source.label).tag(source)
-                            }
-                        }
-                        if isNewPurchase {
-                            Picker("付款账户", selection: $paymentAccountID) {
-                                Text("选择账户").tag(Optional<UUID>.none)
-                                ForEach(accounts.filter {
-                                    !$0.isDeleted &&
-                                    $0.status == .active &&
-                                    $0.currencyCode == "CNY"
-                                }) { account in
-                                    Text(account.name).tag(Optional(account.stableID))
+            Group {
+                if isTransactionSource && sourceTransactionID == nil {
+                    purchaseCandidateList
+                } else {
+                    Form {
+                        Section {
+                            TextField("物品名称", text: $name)
+                            Picker("类型", selection: $kind) {
+                                ForEach(PhysicalAssetKind.allCases) { kind in
+                                    Text(kind.label).tag(kind)
                                 }
                             }
-                            Picker("支出分类", selection: $purchaseCategoryKey) {
-                                Text("不指定").tag(Optional<String>.none)
-                                ForEach(categories.filter {
-                                    $0.kind == .expense && !$0.isArchived
-                                }) { category in
-                                    Label {
-                                        Text(category.name)
-                                    } icon: {
-                                        CategoryIcon(
-                                            categoryKey: category.key,
-                                            emoji: category.emoji,
-                                            size: 24
+                            if asset == nil {
+                                if isNewPurchase || isTransactionSource {
+                                    LabeledContent("物品来源", value: sourceType.label)
+                                } else {
+                                    Picker("物品来源", selection: $sourceType) {
+                                        ForEach(PhysicalAssetSourceType.allCases) { source in
+                                            Text(source.label).tag(source)
+                                        }
+                                    }
+                                }
+                                if isNewPurchase {
+                                    Picker("付款账户", selection: $paymentAccountID) {
+                                        Text("选择账户").tag(Optional<UUID>.none)
+                                        ForEach(accounts.filter {
+                                            !$0.isDeleted &&
+                                            $0.status == .active &&
+                                            $0.currencyCode == "CNY"
+                                        }) { account in
+                                            Text(account.name).tag(Optional(account.stableID))
+                                        }
+                                    }
+                                    Picker("支出分类", selection: $purchaseCategoryKey) {
+                                        Text("不指定").tag(Optional<String>.none)
+                                        ForEach(categories.filter {
+                                            $0.kind == .expense && !$0.isArchived
+                                        }) { category in
+                                            Label {
+                                                Text(category.name)
+                                            } icon: {
+                                                CategoryIcon(
+                                                    categoryKey: category.key,
+                                                    emoji: category.emoji,
+                                                    size: 24
+                                                )
+                                            }
+                                            .tag(Optional(category.key))
+                                        }
+                                    }
+                                }
+                                if isTransactionSource {
+                                    HStack {
+                                        Text(sourceTransaction.map { $0.note.isEmpty ? "原购买账单" : $0.note } ?? "原购买账单")
+                                        Spacer()
+                                        Button("重选") { sourceTransactionID = nil }
+                                    }
+                                    if let candidate = selectedPurchaseCandidate {
+                                        Text("可分配 \(MoneyFormat.string(Decimal(candidate.remainingGrossCents) / 100, currencyCode: "CNY")) · 待分配退款 \(MoneyFormat.string(Decimal(candidate.remainingRefundCents) / 100, currencyCode: "CNY"))")
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                    TextField("本物品分配毛额", text: $allocationGrossText)
+                                        .keyboardType(.decimalPad)
+                                    TextField("其中已退款", text: $allocationRefundText)
+                                        .keyboardType(.decimalPad)
+                                    if let allocationGross, let allocationRefund,
+                                       allocationGross >= allocationRefund {
+                                        LabeledContent(
+                                            "净购置成本",
+                                            value: MoneyFormat.string(
+                                                allocationGross - allocationRefund,
+                                                currencyCode: "CNY"
+                                            )
                                         )
                                     }
-                                        .tag(Optional(category.key))
+                                }
+                            }
+                            if isTransactionSource {
+                                Text("购置成本由原账单分配金额计算，不能单独修改。")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            } else {
+                                TextField("购置成本", text: $purchasePriceText)
+                                    .keyboardType(.decimalPad)
+                            }
+                            TextField("当前估值", text: $currentValueText)
+                                .keyboardType(.decimalPad)
+                            if isTransactionSource {
+                                LabeledContent("账本", value: sourceTransaction?.book?.name ?? "选择账单后继承")
+                            } else {
+                                Picker("账本", selection: $bookID) {
+                                    Text("总账本").tag(Optional<UUID>.none)
+                                    ForEach(books) { book in
+                                        Text(book.name).tag(Optional(book.stableID))
+                                    }
                                 }
                             }
                         }
-                        if isTransactionSource {
-                            Picker("购买账单", selection: $sourceTransactionID) {
-                                Text("选择账单").tag(Optional<UUID>.none)
-                                ForEach(eligibleSourceTransactions) { transaction in
-                                    Text("\(transaction.note.isEmpty ? "未命名支出" : transaction.note) · \(MoneyFormat.string(transaction.amount, currencyCode: transaction.currencyCode))")
-                                        .tag(Optional(transaction.stableID))
-                                }
-                            }
-                            TextField("本物品分配毛额", text: $allocationGrossText)
-                                .keyboardType(.decimalPad)
-                            TextField("其中已退款", text: $allocationRefundText)
-                                .keyboardType(.decimalPad)
-                            if let allocationGross, let allocationRefund,
-                               allocationGross >= allocationRefund {
+                        Section("资料") {
+                            TextField("品牌（可选）", text: $brand)
+                            TextField("型号（可选）", text: $model)
+                            TextField("存放位置（可选）", text: $location)
+                            if isTransactionSource {
                                 LabeledContent(
-                                    "净购置成本",
-                                    value: MoneyFormat.string(
-                                        allocationGross - allocationRefund,
-                                        currencyCode: "CNY"
-                                    )
+                                    "购买日期",
+                                    value: sourceTransaction?.date.formatted(date: .abbreviated, time: .omitted) ?? "选择账单后继承"
                                 )
+                            } else {
+                                Toggle("记录购买日期", isOn: $purchaseDateEnabled)
+                                    .disabled(isNewPurchase)
+                            }
+                            if purchaseDateEnabled && !isTransactionSource {
+                                DatePicker("购买日期", selection: $purchaseDate, displayedComponents: .date)
+                            }
+                            Toggle("记录保修到期日", isOn: $warrantyEnabled)
+                            if warrantyEnabled {
+                                DatePicker("保修到期", selection: $warrantyUntil, displayedComponents: .date)
                             }
                         }
-                    }
-                    if isTransactionSource {
-                        Text("购置成本由原账单分配金额计算，不能单独修改。")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    } else {
-                        TextField("购置成本", text: $purchasePriceText)
-                            .keyboardType(.decimalPad)
-                    }
-                    TextField("当前估值", text: $currentValueText)
-                        .keyboardType(.decimalPad)
-                    Picker("账本", selection: $bookID) {
-                        Text("总账本").tag(Optional<UUID>.none)
-                        ForEach(books) { book in
-                            Text(book.name).tag(Optional(book.stableID))
+                        Section {
+                            Toggle("计入净资产", isOn: $includeInNetWorth)
+                            TextField("备注（可选）", text: $note, axis: .vertical)
+                                .lineLimit(2...4)
                         }
                     }
-                }
-                Section("资料") {
-                    TextField("品牌（可选）", text: $brand)
-                    TextField("型号（可选）", text: $model)
-                    TextField("存放位置（可选）", text: $location)
-                    Toggle("记录购买日期", isOn: $purchaseDateEnabled)
-                        .disabled(isNewPurchase)
-                    if purchaseDateEnabled {
-                        DatePicker("购买日期", selection: $purchaseDate, displayedComponents: .date)
-                    }
-                    Toggle("记录保修到期日", isOn: $warrantyEnabled)
-                    if warrantyEnabled {
-                        DatePicker("保修到期", selection: $warrantyUntil, displayedComponents: .date)
-                    }
-                }
-                Section {
-                    Toggle("计入净资产", isOn: $includeInNetWorth)
-                    TextField("备注（可选）", text: $note, axis: .vertical)
-                    .lineLimit(2...4)
                 }
             }
             .onChange(of: sourceType) { _, next in
@@ -964,18 +1017,23 @@ struct PhysicalAssetEditor: View {
             }
             .onChange(of: sourceTransactionID) { _, id in
                 guard let id,
-                      let transaction = eligibleSourceTransactions.first(where: {
-                          $0.stableID == id
+                      let candidate = purchaseCandidates.first(where: {
+                          $0.transaction.stableID == id
                       }) else { return }
+                let transaction = candidate.transaction
+                let defaultRefund = min(candidate.remainingRefundCents, candidate.remainingGrossCents)
                 purchaseDateEnabled = true
                 purchaseDate = transaction.date
-                if allocationGrossText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    allocationGrossText = transaction.amount.description
-                }
+                bookID = transaction.book?.stableID
+                allocationGrossText = (Decimal(candidate.remainingGrossCents) / 100).description
+                allocationRefundText = (Decimal(defaultRefund) / 100).description
+                currentValueText = (Decimal(candidate.remainingGrossCents - defaultRefund) / 100).description
             }
             .navigationTitle(
                 asset == nil
-                    ? (isNewPurchase ? "记录新购买" : "新增物品")
+                    ? (isNewPurchase ? "记录新购买" : isTransactionSource
+                        ? (sourceTransactionID == nil ? "从账单加入物品" : "填写物品信息")
+                        : "新增物品")
                     : "编辑物品"
             )
             .navigationBarTitleDisplayMode(.inline)
@@ -984,10 +1042,12 @@ struct PhysicalAssetEditor: View {
                     Button("取消") { dismiss() }
                         .liquidGlassPillControl(horizontalPadding: 12, minHeight: 40)
                 }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button(asset == nil ? "创建" : "保存") { save() }
-                        .disabled(!canSave)
-                        .liquidGlassPillControl(horizontalPadding: 12, minHeight: 40)
+                if !isTransactionSource || sourceTransactionID != nil {
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button(asset == nil ? "创建" : "保存") { save() }
+                            .disabled(!canSave)
+                            .liquidGlassPillControl(horizontalPadding: 12, minHeight: 40)
+                    }
                 }
             }
             .alert("无法保存", isPresented: Binding(
@@ -999,6 +1059,59 @@ struct PhysicalAssetEditor: View {
                 Text(errorMessage ?? "")
             }
         }
+    }
+
+    private var purchaseCandidateList: some View {
+        List {
+            Section {
+                TextField("搜索商户、分类或金额", text: $purchaseSearch)
+                    .textInputAutocapitalization(.never)
+                Text("选择原购买账单，不会再记一笔支出。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            if matchingPurchaseCandidates.isEmpty {
+                ContentUnavailableView(
+                    "没有可分配的支出账单",
+                    systemImage: "receipt",
+                    description: Text("记一笔支出后，再回来把它加入物品")
+                )
+                .listRowBackground(Color.clear)
+            } else {
+                Section {
+                    ForEach(matchingPurchaseCandidates, id: \.transaction.stableID) { candidate in
+                        Button {
+                            sourceTransactionID = candidate.transaction.stableID
+                        } label: {
+                            VStack(alignment: .leading, spacing: 5) {
+                                HStack {
+                                    Text(candidate.transaction.note.isEmpty
+                                         ? (candidate.transaction.category?.name ?? "支出账单")
+                                         : candidate.transaction.note)
+                                        .font(.body.weight(.medium))
+                                    Spacer()
+                                    Text(MoneyFormat.string(candidate.transaction.amount, currencyCode: "CNY"))
+                                        .monospacedDigit()
+                                }
+                                Text("\(candidate.transaction.date.formatted(date: .abbreviated, time: .omitted)) · \(candidate.transaction.book?.name ?? "总账本")")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                Text("可分配 \(MoneyFormat.string(Decimal(candidate.remainingGrossCents) / 100, currencyCode: "CNY"))" +
+                                     (candidate.remainingRefundCents > 0
+                                        ? " · 待分配退款 \(MoneyFormat.string(Decimal(candidate.remainingRefundCents) / 100, currencyCode: "CNY"))"
+                                        : ""))
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityIdentifier("assets-purchase-\(candidate.transaction.stableID)")
+                    }
+                }
+            }
+        }
+        .scrollContentBackground(.hidden)
+        .liquidGlassCanvas()
     }
 
     private func save() {
