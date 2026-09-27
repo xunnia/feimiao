@@ -256,6 +256,48 @@ final class AssetStoreTests: XCTestCase {
         )
     }
 
+    func testInvalidNewPurchaseLeavesNoAssetOrExpense() throws {
+        let stack = try Stack()
+        let cash = Account(name: "停用账户", kind: .cash)
+        cash.status = .archived
+        let incomeCategory = TxCategory(
+            key: "salary",
+            name: "工资",
+            symbol: "banknote",
+            kind: .income
+        )
+        stack.context.insert(cash)
+        stack.context.insert(incomeCategory)
+        try stack.context.save()
+        let purchaseDate = Date(timeIntervalSince1970: 1_705_000_000)
+
+        XCTAssertThrowsError(try AssetStore.createPurchased(
+            in: stack.context,
+            name: "不应创建的物品",
+            kind: .other,
+            purchasePrice: 100,
+            currentValue: 90,
+            account: cash,
+            purchaseDate: purchaseDate
+        ))
+        cash.status = .active
+        XCTAssertThrowsError(try AssetStore.createPurchased(
+            in: stack.context,
+            name: "分类不符的物品",
+            kind: .other,
+            purchasePrice: 100,
+            currentValue: 90,
+            account: cash,
+            category: incomeCategory,
+            purchaseDate: purchaseDate
+        ))
+
+        XCTAssertEqual(try stack.context.fetchCount(FetchDescriptor<PhysicalAsset>()), 0)
+        XCTAssertEqual(try stack.context.fetchCount(FetchDescriptor<MoneyTransaction>()), 0)
+        XCTAssertEqual(try stack.context.fetchCount(FetchDescriptor<AssetTransactionLink>()), 0)
+        XCTAssertEqual(try stack.context.fetchCount(FetchDescriptor<AssetEvent>()), 0)
+    }
+
     func testExistingPurchaseCanBeSplitAcrossMultipleAssets() throws {
         let stack = try Stack()
         let book = Book(name: "测试账本", isDefault: true)

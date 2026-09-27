@@ -402,51 +402,56 @@ enum AssetStore {
         guard category == nil || category?.kind == .expense else {
             throw Error.invalidTransaction
         }
-        let asset = try create(
-            in: context,
-            name: name,
-            kind: kind,
-            purchasePrice: normalizedPrice,
-            currentValue: currentValue,
-            currencyCode: account.currencyCode,
-            book: book,
-            purchaseDate: purchaseDate,
-            brand: brand,
-            model: model,
-            location: location,
-            warrantyUntil: warrantyUntil,
-            note: note,
-            includeInNetWorth: includeInNetWorth,
-            sourceType: .newPurchaseWithAccount
-        )
-        let transaction = MoneyTransaction(
-            amount: normalizedPrice,
-            kind: .expense,
-            date: purchaseDate,
-            note: note.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                ? "购买：\(name)"
-                : note,
-            merchantName: name,
-            currencyCode: account.currencyCode,
-            category: category,
-            account: account,
-            book: book,
-            timePrecision: .dateOnly,
-            settledAt: purchaseDate,
-            settlementQuality: .userConfirmed,
-            settlementAccountID: account.stableID,
-            settlementAccountQuality: .userConfirmed,
-            eventType: .assetPurchase
-        )
-        context.insert(transaction)
-        try context.save()
-        _ = try linkPurchaseAllocation(
-            asset,
-            transaction: transaction,
-            grossCents: MoneyNormalization.cents(normalizedPrice),
-            in: context
-        )
-        return asset
+        var createdAsset: PhysicalAsset?
+        try context.transaction {
+            let asset = try create(
+                in: context,
+                name: name,
+                kind: kind,
+                purchasePrice: normalizedPrice,
+                currentValue: currentValue,
+                currencyCode: account.currencyCode,
+                book: book,
+                purchaseDate: purchaseDate,
+                brand: brand,
+                model: model,
+                location: location,
+                warrantyUntil: warrantyUntil,
+                note: note,
+                includeInNetWorth: includeInNetWorth,
+                sourceType: .newPurchaseWithAccount,
+                saveImmediately: false
+            )
+            let transaction = MoneyTransaction(
+                amount: normalizedPrice,
+                kind: .expense,
+                date: purchaseDate,
+                note: note.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    ? "购买：\(name)"
+                    : note,
+                merchantName: name,
+                currencyCode: account.currencyCode,
+                category: category,
+                account: account,
+                book: book,
+                timePrecision: .dateOnly,
+                settledAt: purchaseDate,
+                settlementQuality: .userConfirmed,
+                settlementAccountID: account.stableID,
+                settlementAccountQuality: .userConfirmed,
+                eventType: .assetPurchase
+            )
+            context.insert(transaction)
+            _ = try linkPurchaseAllocation(
+                asset,
+                transaction: transaction,
+                grossCents: MoneyNormalization.cents(normalizedPrice),
+                in: context,
+                saveImmediately: false
+            )
+            createdAsset = asset
+        }
+        return createdAsset!
     }
 
     /// 从既有支出账单加入物品；多物品订单必须显式给出本物品的毛额和退款分摊。
