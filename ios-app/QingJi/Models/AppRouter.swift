@@ -37,7 +37,7 @@ final class AppRouter {
 
     /// 设置页接到深链后要 push 的子页面。
     enum SettingsDestination: Hashable {
-        case books, accounts, accountDetail, categories, tags, memory, aiMemory, aiTasks, aiExtensions, aiSchedules, aiSearch, aiDiagnostics, aiLocal, budget, reconcile, reimburse, reimburseSettlement, savings, recurring, assets, assetDetail, liabilities, netWorth, importReview, importExport, reports, backup, display, theme, moneyDisplay, autoRecord, ai
+        case books, accounts, accountDetail, categories, tags, memory, aiMemory, aiTasks, aiExtensions, aiSchedules, aiSearch, aiDiagnostics, aiLocal, budget, reconcile, reimburse, reimburseSettlement, savings, recurring, assets, assetFunds, assetDetail, liabilities, netWorth, importReview, importExport, reports, backup, display, theme, moneyDisplay, autoRecord, ai
     }
     var settingsPushTarget: SettingsDestination? = nil
 
@@ -136,6 +136,7 @@ final class AppRouter {
         case "assets-detail", "assets/detail":
             selectedTab = .settings
             settingsPushTarget = .assetDetail
+        case "assets/funds": selectedTab = .settings; settingsPushTarget = .assetFunds
         case "assets":       selectedTab = .settings;   settingsPushTarget = .assets
         case "accounts-detail", "accounts/detail":
             selectedTab = .settings
@@ -222,9 +223,11 @@ final class AppRouter {
             case "savings":   settingsPushTarget = .savings
             case "recurring": settingsPushTarget = .recurring
             case "assets":
-                settingsPushTarget = path.dropFirst().first == "detail"
-                    ? .assetDetail
-                    : .assets
+                switch path.dropFirst().first {
+                case "detail": settingsPushTarget = .assetDetail
+                case "funds": settingsPushTarget = .assetFunds
+                default: settingsPushTarget = .assets
+                }
             case "liabilities": settingsPushTarget = .liabilities
             case "net-worth": settingsPushTarget = .netWorth
             case "import-review": settingsPushTarget = .importReview

@@ -343,6 +343,7 @@ jobs:
           shoot settings/theme 24-theme
           shoot settings/display 25-display
           shoot settings/assets 26-assets-hub
+          shoot settings/assets/funds 26b-assets-funds
           shoot settings/reconcile 27-reconcile
           shoot settings/liabilities 28-liabilities
           shoot settings/net-worth 29-net-worth

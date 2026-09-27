@@ -280,6 +280,7 @@ jobs:
           shoot settings/theme 24-theme
           shoot settings/display 25-display
           shoot settings/assets 26-assets-hub
+          shoot settings/assets/funds 26b-assets-funds
           shoot settings/reconcile 27-reconcile
           shoot settings/liabilities 28-liabilities
           shoot settings/net-worth 29-net-worth
@@ -325,9 +326,9 @@ jobs:
             exit 1
           fi
 
-          # 校验：若所有 40 张图都相同，说明导航又失败了，直接让 CI 报错
+          # 校验：若所有 41 张图都相同，说明导航又失败了，直接让 CI 报错
           UNIQUE=$(md5 -q "$screenshot_dir"/*.png | sort -u | wc -l | tr -d ' ')
-          echo "不同截图数量：$UNIQUE / 40"
+          echo "不同截图数量：$UNIQUE / 41"
           if [ "$UNIQUE" -le 1 ]; then
             echo "::error::截图全部相同，深链/启动参数导航未生效"
             exit 1
@@ -335,7 +336,7 @@ jobs:
 
           # The category drill-down is iOS-only interaction evidence, not a
           # canonical Android/iOS scene. Keep it outside parity metadata and
-          # the 40-image distinct/route checks above.
+          # the 41-image distinct/route checks above.
           interaction_dir="ci-artifacts/ios-interaction-screenshots"
           mkdir -p "$interaction_dir"
           screenshot_dir="$interaction_dir"

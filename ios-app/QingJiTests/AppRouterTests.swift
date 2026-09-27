@@ -2,6 +2,19 @@ import XCTest
 @testable import QingJi
 
 final class AppRouterTests: XCTestCase {
+    func testAssetsHubAndFundsUseTheSameNavigationStack() {
+        XCTAssertEqual(RootTabView.initialPath(for: "settings/assets"), [.settings])
+        XCTAssertEqual(RootTabView.initialPath(for: "settings/assets/funds"), [.settings])
+        XCTAssertEqual(RootTabView.initialPath(for: "assets/funds"), [.settings])
+
+        let router = AppRouter()
+        router.handle(url: URL(string: "qingji://settings/assets/funds")!)
+        XCTAssertEqual(router.selectedTab, .settings)
+        XCTAssertEqual(router.settingsPushTarget, .assetFunds)
+        router.handle(url: URL(string: "qingji://settings/assets")!)
+        XCTAssertEqual(router.settingsPushTarget, .assets)
+    }
+
     func testEveryStatisticsColdLaunchAliasUsesStatisticsRoot() {
         for scope in ["week", "month", "year", "custom"] {
             XCTAssertEqual(RootTabView.initialPath(for: "stats/\(scope)"), [.statistics])

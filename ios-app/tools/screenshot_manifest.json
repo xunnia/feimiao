@@ -222,10 +222,9 @@
       "id": "assets-funds",
       "feature": "资产管理资金页",
       "android": "android-app/outputs/parity/assets-funds-android.png",
-      "ios": null,
-      "iosRoute": null,
-      "iosStatus": "missing",
-      "notes": "QingJi 当前没有与 Android 资金标签页同层级的独立目标页；由 P4 主责补齐，禁止用账户设置页代替。"
+      "ios": "ci-artifacts/ios-screenshots/26b-assets-funds.png",
+      "iosRoute": "settings/assets/funds",
+      "notes": "与 Android 同层级的资产管理资金标签页；账户按类型分组，独立于账户设置页。"
     },
     {
       "id": "reconcile",
