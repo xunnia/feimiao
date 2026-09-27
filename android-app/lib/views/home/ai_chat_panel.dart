@@ -2685,7 +2685,11 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
               repo,
               recordRun!.id,
               AiRunEventType.stageChanged,
-              payload: {'stage': 'parsed', 'entries': res.entries.length},
+              payload: {
+                'stage': 'parsed',
+                'entries': res.entries.length,
+                ...res.metrics,
+              },
             );
           }
           // 主页始终把模型结果当作记账结果；即使模型误写 intent，也不
@@ -2953,6 +2957,7 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
     int? flowId,
     String? runId,
   }) async {
+    final applyClock = Stopwatch()..start();
     final repo = repository ?? context.read<AppRepository>();
     _setThinkingKind(_ThinkingKind.recordMatch, flowId: flowId);
     final cats = results.map((e) => _matchCat(repo, e)).toList();
@@ -3053,6 +3058,12 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
       await _save(autoMsg!, repository: repo);
       if (mounted) _snack('喵直接记好了，不对就点卡片上的撤销');
     }
+    _recordRunEvent(repo, runId, AiRunEventType.stageChanged, payload: {
+      'stage': 'record_applied',
+      'local_apply_ms': applyClock.elapsedMilliseconds,
+      'auto_save_attempted': autoMsg != null,
+      'requires_confirmation': !highConfidence,
+    });
     if (mounted) _scrollToLatestUserMessage();
   }
 

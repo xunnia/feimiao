@@ -3858,16 +3858,10 @@ class AppRepository extends ChangeNotifier {
 
   AiProviderConfig aiProviderConfigFor(AiTaskType task) {
     if (task == AiTaskType.recordParse) {
-      final selected = _selectedOrUsableProvider(_recordAiProviderId);
-      if (selected != null) {
-        return _providerConfig(
-          selected,
-          modelOverride: _validModelForProvider(selected, _recordAiModel)
-              ? _recordAiModel!.trim()
-              : selected.model,
-          effortOverride: _recordAiReasoningEffort,
-        );
-      }
+      // The pinned record composer owns the selection. Legacy task-routing
+      // settings remain readable for backup compatibility, never for sending.
+      return aiProviderConfigForChatSession(ChatSession.recordId)
+          .copyWith(webSearchEnabled: false);
     }
     if (task == AiTaskType.chatQuery || task == AiTaskType.report) {
       final selected = _selectedOrUsableProvider(_chatCurrentProviderId) ??

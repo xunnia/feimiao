@@ -29,7 +29,6 @@ import '../../widgets/ios_form.dart';
 import '../../widgets/ios_menu.dart';
 import '../../widgets/settings_ui.dart';
 import '../common/app_sheet.dart';
-import '../home/ai_chat_panel.dart';
 import 'ai_companion_views.dart';
 
 /// Keep Android's OAuth browser leg on Chrome. It first attempts an isolated
@@ -71,18 +70,6 @@ class AiSettingView extends StatelessWidget {
                   onTap: () => _push(
                     context,
                     const _AiAccountSettingsPage(),
-                  ),
-                ),
-                SettingsRow(
-                  title: '用途分配',
-                  trailing: _ValueChevron(
-                    value: repo.aiResolvedProviderLabelFor(
-                      AiTaskType.recordParse,
-                    ),
-                  ),
-                  onTap: () => _push(
-                    context,
-                    const _AiUsageRoutingPage(),
                   ),
                 ),
                 SettingsRow(
@@ -134,7 +121,7 @@ class AiSettingView extends StatelessWidget {
             const Padding(
               padding: EdgeInsets.fromLTRB(24, 8, 24, 0),
               child: _CaptionText(
-                '普通记账可单独选择服务商；喵助手和报告跟随当前对话模型。',
+              '记一记使用输入框中选择的模型和思考强度；其他聊天保留各自的选择。',
               ),
             ),
           ],
@@ -1873,282 +1860,6 @@ class _ProviderModelListBoxState extends State<_ProviderModelListBox> {
   }
 }
 
-class _AiUsageRoutingPage extends StatefulWidget {
-  const _AiUsageRoutingPage();
-
-  @override
-  State<_AiUsageRoutingPage> createState() => _AiUsageRoutingPageState();
-}
-
-class _AiUsageRoutingPageState extends State<_AiUsageRoutingPage> {
-  String? _selectedProviderId;
-  String? _selectedModel;
-  AiReasoningEffort _selectedEffort = AiReasoningEffort.none;
-  bool _saving = false;
-
-  static const _efforts = [
-    AiReasoningEffort.low,
-    AiReasoningEffort.medium,
-    AiReasoningEffort.high,
-    AiReasoningEffort.xhigh,
-    AiReasoningEffort.max,
-    AiReasoningEffort.ultra,
-  ];
-
-  @override
-  void initState() {
-    super.initState();
-    final repo = context.read<AppRepository>();
-    final current = repo.aiProviderById(repo.recordAiProviderId);
-    _selectedProviderId = current?.isUsable == true
-        ? current?.id
-        : repo.aiProviders
-            .where((provider) => provider.isUsable)
-            .firstOrNull
-            ?.id;
-    final models = repo.aiModelsForProvider(_selectedProviderId);
-    _selectedModel = models.contains(repo.recordAiModel)
-        ? repo.recordAiModel
-        : models.firstOrNull;
-    _selectedEffort = _chatCompatibleEffort(
-      repo.aiReasoningEffortFor(AiTaskType.recordParse),
-    );
-  }
-
-  AiReasoningEffort _chatCompatibleEffort(AiReasoningEffort effort) =>
-      effort == AiReasoningEffort.none || effort == AiReasoningEffort.minimal
-          ? AiReasoningEffort.low
-          : effort;
-
-  Future<void> _save() async {
-    final id = _selectedProviderId;
-    final model = _selectedModel;
-    if (_saving || id == null || id.isEmpty || model == null || model.isEmpty) {
-      return;
-    }
-    setState(() => _saving = true);
-    try {
-      await context.read<AppRepository>().saveRecordAiSelection(
-            providerId: id,
-            model: model,
-            reasoningEffort: _selectedEffort,
-          );
-      if (mounted) showAppToast(context, '普通记账设置已保存');
-    } catch (error) {
-      if (mounted) {
-        showAppToast(
-          context,
-          '保存失败：${_shortError(error)}',
-          icon: Icons.error_outline,
-        );
-      }
-    } finally {
-      if (mounted) setState(() => _saving = false);
-    }
-  }
-
-  String _effortLabel(AiReasoningEffort effort) =>
-      _chatCompatibleEffort(effort) == AiReasoningEffort.ultra
-          ? 'Ultracode'
-          : _chatCompatibleEffort(effort).label;
-
-  Widget _menuRow({
-    required String title,
-    String? subtitle,
-    required String value,
-    required List<IosMenuItem> items,
-    bool enabled = true,
-    double? menuWidth,
-    ValueChanged<BuildContext>? customOnTap,
-  }) {
-    late BuildContext anchorContext;
-    return SettingsRow(
-      title: title,
-      subtitle: subtitle,
-      trailing: Builder(
-        builder: (context) {
-          anchorContext = context;
-          return _ValueChevron(value: value);
-        },
-      ),
-      onTap: !enabled
-          ? null
-          : customOnTap == null
-              ? () => showIosMenu(
-                    anchorContext,
-                    items,
-                    width: menuWidth,
-                  )
-              : () => customOnTap(anchorContext),
-    );
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final repo = context.watch<AppRepository>();
-    final providers = repo.aiProviders;
-    final selectedProviderId = providers.any((provider) =>
-            provider.id == _selectedProviderId && provider.isUsable)
-        ? _selectedProviderId
-        : providers.where((provider) => provider.isUsable).firstOrNull?.id;
-    final selectedProvider = providers
-        .where((provider) => provider.id == selectedProviderId)
-        .firstOrNull;
-    final models = repo.aiModelsForProvider(selectedProviderId);
-    final selectedModel = models.contains(_selectedModel)
-        ? _selectedModel
-        : selectedProviderId == repo.recordAiProviderId &&
-                models.contains(repo.recordAiModel)
-            ? repo.recordAiModel
-            : models.firstOrNull;
-    final modelOptions = [
-      for (final model in models)
-        AiModelOption(
-          providerId: selectedProviderId ?? '',
-          providerLabel: selectedProvider?.label ?? '',
-          model: model,
-        ),
-    ];
-    if (selectedProviderId != _selectedProviderId ||
-        selectedModel != _selectedModel) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (!mounted) return;
-        setState(() {
-          _selectedProviderId = selectedProviderId;
-          _selectedModel = selectedModel;
-        });
-      });
-    }
-
-    return Scaffold(
-      appBar: AppBar(
-        leading: const AppBackButton(),
-        title: const Text('用途分配'),
-        centerTitle: true,
-        actions: [
-          Padding(
-            padding: const EdgeInsets.only(right: 12),
-            child: AppPillButton(
-              label: _saving ? '保存中…' : '保存',
-              onPressed:
-                  _saving || selectedProviderId == null || selectedModel == null
-                      ? null
-                      : _save,
-            ),
-          ),
-        ],
-      ),
-      body: SafeArea(
-        child: ListView(
-          physics: const BouncingScrollPhysics(),
-          padding: const EdgeInsets.only(top: 8, bottom: 32),
-          children: [
-            const Padding(
-              padding: EdgeInsets.fromLTRB(16, 8, 16, 8),
-              child: _InfoBox(
-                text: '这里可分别设置普通记账使用的服务商、模型和思考强度；喵助手和报告跟随当前对话模型。',
-              ),
-            ),
-            const SettingsSectionLabel('普通记账'),
-            SettingsGroup(
-              children: [
-                _menuRow(
-                  title: '服务商',
-                  value: selectedProvider?.label ?? '暂无可用服务商',
-                  enabled: selectedProvider != null,
-                  items: [
-                    for (final provider
-                        in providers.where((provider) => provider.isUsable))
-                      IosMenuItem(
-                        label: provider.label,
-                        icon: provider.type == AiProviderType.deepseek
-                            ? CupertinoIcons.sparkles
-                            : CupertinoIcons.cloud,
-                        selected: provider.id == selectedProviderId,
-                        onTap: () {
-                          final providerModels =
-                              repo.aiModelsForProvider(provider.id);
-                          final savedModel = provider.id ==
-                                      repo.recordAiProviderId &&
-                                  providerModels.contains(repo.recordAiModel)
-                              ? repo.recordAiModel
-                              : null;
-                          setState(() {
-                            _selectedProviderId = provider.id;
-                            _selectedModel =
-                                savedModel ?? providerModels.firstOrNull;
-                          });
-                        },
-                      ),
-                  ],
-                ),
-                _menuRow(
-                  title: '模型',
-                  subtitle:
-                      selectedProvider == null ? '请先在 AI 账号设置中完成服务商配置' : null,
-                  value: selectedModel ?? '暂无可用模型',
-                  enabled: selectedModel != null,
-                  menuWidth: 280,
-                  items: [
-                    for (final model in models)
-                      IosMenuItem(
-                        label: model,
-                        icon: CupertinoIcons.cube_box,
-                        selected: model == selectedModel,
-                        onTap: () => setState(() => _selectedModel = model),
-                      ),
-                  ],
-                  customOnTap: selectedModel == null
-                      ? null
-                      : (anchor) => showAiModelPickerPopup(
-                            context: context,
-                            anchor: anchor,
-                            options: modelOptions,
-                            currentKey:
-                                '${selectedProviderId ?? ''}\u0000$selectedModel',
-                            onSelected: (option) => setState(
-                              () => _selectedModel = option.model,
-                            ),
-                          ),
-                ),
-                _menuRow(
-                  title: '思考强度',
-                  subtitle: '档位越高，解析可能更慢并消耗更多 Token',
-                  value: _effortLabel(_selectedEffort),
-                  menuWidth: 220,
-                  items: [
-                    for (final effort in _efforts)
-                      IosMenuItem(
-                        label: _effortLabel(effort),
-                        icon: effort == AiReasoningEffort.none
-                            ? CupertinoIcons.speedometer
-                            : CupertinoIcons.sparkles,
-                        selected: effort == _selectedEffort,
-                        onTap: () => setState(() => _selectedEffort = effort),
-                      ),
-                  ],
-                  customOnTap: (anchor) => showAiEffortPickerPopup(
-                    context: context,
-                    anchor: anchor,
-                    currentEffort: _chatCompatibleEffort(_selectedEffort),
-                    onChanged: (effort) => setState(
-                      () => _selectedEffort = effort,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-            if (providers.where((provider) => provider.isUsable).isEmpty)
-              const Padding(
-                padding: EdgeInsets.fromLTRB(24, 8, 24, 0),
-                child: _CaptionText('请先在 AI 账号设置中添加并完成服务商配置。'),
-              ),
-          ],
-        ),
-      ),
-    );
-  }
-}
 
 class _AiPrivacyDataPage extends StatelessWidget {
   const _AiPrivacyDataPage();
@@ -2193,7 +1904,7 @@ class _AiPrivacyDataPage extends StatelessWidget {
               children: [
                 SettingsRow(
                   title: 'AI 隐私确认',
-                  subtitle: '切换服务或用途分配后，会要求用户重新确认',
+                  subtitle: '切换服务后，会要求用户重新确认',
                   trailing: _PlainValue(
                     repo.aiPrivacyAccepted ? '已确认' : '待确认',
                   ),
@@ -2226,25 +1937,6 @@ class _AiPrivacyDataPage extends StatelessWidget {
   }
 }
 
-class _InfoBox extends StatelessWidget {
-  final String text;
-
-  const _InfoBox({required this.text});
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: AppColors.card(scheme),
-        borderRadius: BorderRadius.circular(16),
-      ),
-      child: _MutedText(text),
-    );
-  }
-}
 
 class _ValueChevron extends StatelessWidget {
   final String value;

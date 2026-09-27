@@ -97,9 +97,11 @@ class LlmEntryParser {
     List<String> imagePaths = const [],
     List<ChatAttachment> attachments = const [],
   }) async {
+    final clock = Stopwatch()..start();
     final provider = await OpenAiCodexOAuth.ensureFreshConfig(
       _resolveConfig(apiKey: apiKey, config: config),
     );
+    final credentialReadyMs = clock.elapsedMilliseconds;
     final today = now ?? DateTime.now();
     String fmt(DateTime d) =>
         '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
@@ -152,12 +154,21 @@ ${hints.map((h) => '${h.phrase}→${h.categoryKey}').join('、')}''';
 输入：这个月吃饭花了多少
 输出：{"intent":"query","entries":[]}''';
 
-    const forcedRecordExtra = '''
-
-【本次来自首页记账入口】
-- 用户此处是在记录收支，不提供闲聊或查账能力；intent 必须输出 "record"。
-- 像“失业金到账 2250”“补贴入账 500”“13号收款 300”都是收入记录；提取金额、收入分类和日期。
-- 如果金额或信息不完整，仍输出 intent="record"，entries 可为空；不要改成 query 或 chat。''';
+    final recordPrompt = '''你是专业记账助手。提取本次文字或附件中的收支，只输出JSON，不解释，不用Markdown。
+今天=$todayStr（$weekdayStr），昨天=$yesterdayStr。
+分类只能从以下列表选择，优先最具体的子类；无法确定时从列表选择其他支出/其他收入。
+支出：$expenseList
+收入：$incomeList$habitBlock
+输出：{"intent":"record","entries":[{"amount":数字,"kind":"expense或income","categoryKey":"分类key","date":"YYYY-MM-DD或YYYY-MM-DDTHH:mm:ss","note":"简短备注","confidence":0到1}]}
+规则：
+1. intent固定为record；缺金额、信息不足或没有可记账内容时entries=[]，不猜金额，不回答闲聊或查账问题。
+2. 多笔逐条提取，不漏单；金额单位为元，去掉货币符号。中文数字转换：三十=30，一百二=120，八千=8000。
+3. 工资、奖金、补贴、失业金到账、收款、红包、退款、报销、利息、分红按收入提取；消费按支出提取。
+4. 相对日期换算为具体日期；没日期用今天。只有明确时分才输出完整时间，否则只输出日期，不猜时间。
+5. AA/均摊有明确人数N时只记本人承担的总额/N；无人数不猜，不自行除。
+6. confidence表示金额、分类、收支的整体把握；明确时至少0.9，靠猜时低于0.5。
+7. 附件取真实交易金额，不将余额、订单号、优惠券、划线原价或数量当支出；金额与对应订单匹配。
+示例：昨天打车28，中午吃饭20 → 两笔支出，金额28和20，日期均为$yesterdayStr，各选对应子类。''';
 
     // 截图模式:OCR 文本含界面噪声,加一段专门的提取规则。
     const screenshotExtra = '''
@@ -175,9 +186,8 @@ ${hints.map((h) => '${h.phrase}→${h.categoryKey}').join('、')}''';
   例：「舒肤佳沐浴露…¥32.04…维达抽纸…¥15.9」必须记成 舒肤佳=32.04、维达=15.9，**不要**错位成维达=32.04。
 - 能识别交易时间（如 2026-06-20 12:30）就输出完整日期和时分；只有日期时只输出日期；识别不到用今天。
 - 普通单笔支付页就只记一笔。''';
-    final sys =
-        (fromScreenshot ? systemPrompt + screenshotExtra : systemPrompt) +
-            (forceRecord ? forcedRecordExtra : '');
+    final basePrompt = forceRecord ? recordPrompt : systemPrompt;
+    final sys = fromScreenshot ? basePrompt + screenshotExtra : basePrompt;
     final userContent =
         fromScreenshot ? '下面是支付/账单截图的 OCR 文字，请从中提取交易：\n\n$text' : text;
     final allImagePaths = <String>[
@@ -205,6 +215,7 @@ ${hints.map((h) => '${h.phrase}→${h.categoryKey}').join('、')}''';
 
     // 兼容模型回退（对齐 llm_query 的 _postWithModelFallback）：
     // 首选模型 400/404 或报模型不存在时，换下一个候选模型重试。
+    final requestStartedMs = clock.elapsedMilliseconds;
     final content = await _postChatContentWithFallback(
       provider: provider,
       bodyForModel: (model) => {
@@ -219,6 +230,7 @@ ${hints.map((h) => '${h.phrase}→${h.categoryKey}').join('、')}''';
         'stream': false,
       },
     );
+    final responseReadyMs = clock.elapsedMilliseconds;
 
     // 解析 content 里的 entries 数组
     late Map<String, dynamic> parsed;
@@ -253,7 +265,30 @@ ${hints.map((h) => '${h.phrase}→${h.categoryKey}').join('、')}''';
     }
 
     // 不再因 entries 为空而抛错：query 本就无账目；record 为空交给上层礼貌追问。
-    return LlmParseResult(intent: intent, entries: result);
+    final metrics = <String, int>{
+      'credential_ms': credentialReadyMs,
+      'prepare_ms': requestStartedMs - credentialReadyMs,
+      'request_ms': responseReadyMs - requestStartedMs,
+      'parse_ms': clock.elapsedMilliseconds - responseReadyMs,
+      'parser_total_ms': clock.elapsedMilliseconds,
+      'prompt_chars': sys.runes.length,
+      'user_chars': userContent.runes.length,
+      'attachment_count': attachmentParts.length,
+      'category_count': expenseCats.length + incomeCats.length,
+      'hint_count': hints.length,
+    };
+    AiLogger.logQuerySuccess(
+      taskType: 'record_parse',
+      provider: provider.type.storageKey,
+      model: provider.model,
+      durationMs: metrics['parser_total_ms']!,
+      extra: metrics,
+    );
+    return LlmParseResult(
+      intent: intent,
+      entries: result,
+      metrics: Map.unmodifiable(metrics),
+    );
   }
 
   /// 批量给商户归类（导入复核页的「一次 AI 兜底」）：把去重后的商户名
@@ -447,7 +482,8 @@ $catList
     required AiProviderConfig provider,
     required Map<String, dynamic> body,
   }) async {
-    late http.Response response;
+    late int statusCode;
+    late String bodyText;
 
     // Claude 格式转换
     var requestBody = body;
@@ -483,31 +519,53 @@ $catList
       );
     }
     try {
-      response = await _transport.post(
-        uri,
-        headers: headers,
-        body: jsonEncode(requestBody),
-        timeout: const Duration(seconds: _timeoutSeconds),
-        forceRouteRefresh: true,
-      );
+      if (provider.shouldUseResponses && requestBody['stream'] == true) {
+        final request = http.Request('POST', uri)
+          ..headers.addAll(headers)
+          ..body = jsonEncode(requestBody);
+        final response = await _transport.send(
+          request,
+          timeout: const Duration(seconds: _timeoutSeconds),
+          forceRouteRefresh: true,
+        );
+        statusCode = response.statusCode;
+        try {
+          bodyText = await response.stream
+              .transform(utf8.decoder)
+              .join()
+              .timeout(const Duration(seconds: 120));
+        } catch (_) {
+          throw const LlmParseException('Responses 流式响应中断或超时');
+        }
+      } else {
+        final response = await _transport.post(
+          uri,
+          headers: headers,
+          body: jsonEncode(requestBody),
+          timeout: const Duration(seconds: _timeoutSeconds),
+          forceRouteRefresh: true,
+        );
+        statusCode = response.statusCode;
+        // Some providers omit charset; decode Chinese notes as UTF-8.
+        bodyText = utf8.decode(response.bodyBytes, allowMalformed: true);
+      }
+    } on LlmParseException {
+      rethrow;
     } catch (e) {
       throw LlmParseException('网络请求失败：$e');
     }
 
-    // 用 bodyBytes 显式按 UTF-8 解码：响应头不带 charset 时 .body 按
-    // latin1 解，中文备注会以乱码入库。
-    final bodyText = utf8.decode(response.bodyBytes, allowMalformed: true);
-    if (response.statusCode != 200) {
+    if (statusCode != 200) {
       final safeBody = AiLogger.sanitizeErrorForDisplay(bodyText);
       throw LlmParseException(
-        '${provider.providerLabel} 返回错误 ${response.statusCode}：$safeBody',
-        statusCode: response.statusCode,
+        '${provider.providerLabel} 返回错误 $statusCode：$safeBody',
+        statusCode: statusCode,
       );
     }
 
     if (provider.shouldUseResponses) {
       try {
-        final text = provider.isOpenAiCodexOAuth
+        final text = requestBody['stream'] == true
             ? _extractResponsesSseText(bodyText)
             : _extractResponsesText(jsonDecode(bodyText));
         if (text.trim().isEmpty) {
@@ -587,7 +645,7 @@ $catList
           : instructionText,
       'input': input,
       'store': false,
-      'stream': config.isOpenAiCodexOAuth,
+      'stream': config.isOpenAiCodexOAuth || config.isGptModel,
     };
     final effort = config.reasoningEffort.codexResponsesApiValue;
     if (effort != null) body['reasoning'] = {'effort': effort};
@@ -611,23 +669,30 @@ $catList
   static String _extractResponsesSseText(String body) {
     final buffer = StringBuffer();
     String? completed;
+    var finished = false;
     for (final line in const LineSplitter().convert(body)) {
       if (!line.startsWith('data:')) continue;
       final data = line.substring(5).trimLeft();
-      if (data == '[DONE]') break;
+      if (data == '[DONE]') {
+        finished = true;
+        break;
+      }
       try {
         final decoded = jsonDecode(data);
         if (decoded is Map) {
           final event = Map<String, dynamic>.from(decoded);
           final type = event['type']?.toString().toLowerCase() ?? '';
-          if (type == 'response.failed') {
-            throw LlmParseException(
-                'Responses 生成失败：${event['response'] ?? ''}');
+          if (type == 'response.failed' || type == 'error') {
+            throw const LlmParseException('Responses 生成失败');
+          }
+          if (type == 'response.incomplete') {
+            throw const LlmParseException('Responses 输出未完成');
           }
           if (type == 'response.output_text.done') {
             final text = event['text'];
             if (text is String && text.trim().isNotEmpty) completed = text;
           } else if (type == 'response.completed') {
+            finished = true;
             final response = event['response'];
             if (response is Map) {
               final text = _extractResponsesText(
@@ -645,8 +710,10 @@ $catList
         // Ignore vendor-specific SSE comments/events that are not JSON.
       }
     }
+    if (!finished) throw const LlmParseException('Responses 流式响应意外中断');
     final result = buffer.toString().trim();
-    return result.isNotEmpty ? result : (completed ?? '');
+    final finalText = completed?.trim() ?? '';
+    return finalText.length >= result.length ? finalText : result;
   }
 
   static String _extractResponsesText(Object? decoded) {
@@ -801,7 +868,14 @@ enum LlmIntent { record, query, chat }
 class LlmParseResult {
   final LlmIntent intent;
   final List<ParsedEntry> entries;
-  const LlmParseResult({required this.intent, required this.entries});
+
+  /// Durations and counts only; no raw prompts, credentials or ledger data.
+  final Map<String, int> metrics;
+  const LlmParseResult({
+    required this.intent,
+    required this.entries,
+    this.metrics = const {},
+  });
 }
 
 /// LLM 解析过程中的异常，携带可读中文消息（HTTP 错误时带状态码，

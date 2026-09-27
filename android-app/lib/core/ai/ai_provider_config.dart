@@ -350,8 +350,15 @@ class AiProviderConfig {
     ].join('|');
   }
 
+  bool get isGptModel => RegExp(
+        r'(^|[/ :])(?:gpt|chatgpt)(?:[-_.0-9]|$)',
+        caseSensitive: false,
+      ).hasMatch(model.trim());
+
   bool get shouldUseResponses {
-    if (isOpenAiCodexOAuth) return true;
+    // GPT always uses Responses, including accounts saved with the old
+    // Chat Completions setting. Other model families retain their routing.
+    if (isOpenAiCodexOAuth || isGptModel) return true;
     if (endpointType == AiEndpointType.responses) return true;
     if (endpointType == AiEndpointType.chatCompletions) return false;
     return !isDeepSeek && isOpenAiOfficial;
@@ -359,6 +366,7 @@ class AiProviderConfig {
 
   /// 是否使用 Claude 原生 /v1/messages 格式（thinking 参数）
   bool get shouldUseClaudeMessages {
+    if (isOpenAiCodexOAuth || isGptModel) return false;
     if (endpointType == AiEndpointType.anthropicMessages) return true;
     if (endpointType == AiEndpointType.chatCompletions) return false;
     if (endpointType == AiEndpointType.responses) return false;

@@ -229,55 +229,13 @@ void main() {
     expect(find.text('未配置凭据'), findsOneWidget);
   });
 
-  testWidgets('用途分配分别选择服务商、模型和思考强度', (tester) async {
+  testWidgets('AI settings no longer exposes separate task routing', (tester) async {
     final repository = _SettingsRepository([oauthProvider, emptyProvider]);
-    await tester.binding.setSurfaceSize(const Size(390, 844));
-    addTearDown(() => tester.binding.setSurfaceSize(null));
-    await tester.pumpWidget(
-      ChangeNotifierProvider<AppRepository>.value(
-        value: repository,
-        child: MaterialApp(
-          theme: AppTheme.light(),
-          home: const AiSettingView(),
-        ),
-      ),
-    );
-    await tester.pump();
-    await tester.tap(find.text('用途分配'));
-    await tester.pumpAndSettle();
-
-    expect(find.text('服务商'), findsOneWidget);
-    expect(find.text('模型'), findsOneWidget);
-    expect(find.text('思考强度'), findsOneWidget);
-    expect(find.text('Claude Gateway'), findsOneWidget);
-    expect(find.text('claude-sonnet-5'), findsOneWidget);
-    expect(find.text('Low'), findsOneWidget);
-
-    await tester.tap(find.text('思考强度'));
-    await tester.pumpAndSettle();
-    expect(find.byKey(const ValueKey('ai-chat-effort-popup')), findsOneWidget);
-    expect(find.text('Faster'), findsOneWidget);
-    expect(find.text('Smarter'), findsOneWidget);
-    // The shared Claude slider has six stops; High is the third stop.
-    // The slider has six stops; map the tap to the third stop (High) while
-    // deriving the absolute position from the rendered widget so this remains
-    // stable across font metrics and route placement.
-    final effortSlider = tester.getRect(
-      find.byKey(const ValueKey('ai-chat-effort-slider')),
-    );
-    await tester.tapAt(
-      Offset(
-        effortSlider.left + 9 + (effortSlider.width - 18) * 2 / 5,
-        effortSlider.center.dy,
-      ),
-    );
-    await tester.tapAt(const Offset(2, 2));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('保存'));
-    await tester.pumpAndSettle();
-
-    expect(repository.selectedRecordProviderId, oauthProvider.id);
-    expect(repository.selectedRecordModel, oauthProvider.model);
-    expect(repository.selectedRecordEffort, AiReasoningEffort.high);
+    await tester.pumpWidget(ChangeNotifierProvider<AppRepository>.value(
+      value: repository,
+      child: MaterialApp(theme: AppTheme.light(), home: const AiSettingView()),
+    ));
+    expect(find.text('用途分配'), findsNothing);
+    expect(find.text('AI 账号设置'), findsOneWidget);
   });
 }

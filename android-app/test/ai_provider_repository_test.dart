@@ -27,6 +27,41 @@ void main() {
     } catch (_) {}
   });
 
+  test('record requests follow composer selection despite legacy task routing', () async {
+    final repo = AppRepository();
+    await repo.init();
+    final first = await repo.addAiConfiguredProvider(
+      displayName: 'Old route', baseUrl: 'https://old.example/v1',
+      apiKey: 'old-key', model: 'old-model',
+    );
+    final second = await repo.addAiConfiguredProvider(
+      displayName: 'Composer', baseUrl: 'https://new.example/v1',
+      apiKey: 'new-key', model: 'gpt-5', models: const ['gpt-5', 'gpt-5.6-luna'],
+    );
+    await repo.saveRecordAiSelection(providerId: first.id,
+      model: 'old-model', reasoningEffort: AiReasoningEffort.low);
+    await repo.saveChatModelSelection(providerId: second.id,
+      model: 'gpt-5.6-luna', reasoningEffort: AiReasoningEffort.high);
+    final record = repo.aiProviderConfigFor(AiTaskType.recordParse);
+    expect(record.providerId, second.id);
+    expect(record.model, 'gpt-5.6-luna');
+    expect(record.reasoningEffort, AiReasoningEffort.high);
+    expect(record.webSearchEnabled, isFalse);
+    expect(repo.aiProviderConfig.model, record.model);
+    final chat = await repo.createChatSession(title: 'Other chat');
+    await repo.saveChatSessionSelection(sessionId: chat.id,
+      providerId: first.id, model: 'old-model', effort: AiReasoningEffort.medium);
+    expect(repo.aiProviderConfigFor(AiTaskType.recordParse).model, record.model);
+    await repo.closeForTest();
+    final reopened = AppRepository();
+    await reopened.init();
+    expect(reopened.aiProviderConfigFor(AiTaskType.recordParse).model, record.model);
+    expect(reopened.aiProviderConfigFor(AiTaskType.recordParse).reasoningEffort,
+      AiReasoningEffort.high);
+    expect(reopened.aiProviderConfigForChatSession(chat.id).model, 'old-model');
+    await reopened.closeForTest();
+  });
+
   test('provider model selection survives restart and deletion falls back',
       () async {
     final repo = AppRepository();
@@ -879,11 +914,11 @@ void main() {
     expect(repo.recordAiModel, 'record-smart');
     expect(
       repo.aiProviderConfigFor(AiTaskType.recordParse).model,
-      'record-smart',
+      repo.aiProviderConfigFor(AiTaskType.chatQuery).model,
     );
     expect(
       repo.aiProviderConfigFor(AiTaskType.recordParse).reasoningEffort,
-      AiReasoningEffort.xhigh,
+      repo.aiProviderConfigFor(AiTaskType.chatQuery).reasoningEffort,
     );
 
     final db = await databaseFactory.openDatabase(
@@ -915,7 +950,7 @@ void main() {
     expect(reopened.recordAiModel, 'record-smart');
     expect(
       reopened.aiProviderConfigFor(AiTaskType.recordParse).model,
-      'record-smart',
+      reopened.aiProviderConfigFor(AiTaskType.chatQuery).model,
     );
     expect(
       reopened.aiReasoningEffortFor(AiTaskType.recordParse),
@@ -955,7 +990,7 @@ void main() {
     expect(reopened.recordAiModel, 'legacy-primary');
     expect(
       reopened.aiProviderConfigFor(AiTaskType.recordParse).model,
-      'legacy-primary',
+      reopened.aiProviderConfigFor(AiTaskType.chatQuery).model,
     );
     await reopened.closeForTest();
   });
