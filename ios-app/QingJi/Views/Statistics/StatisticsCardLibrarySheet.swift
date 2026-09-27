@@ -11,36 +11,27 @@ struct StatisticsCardLibrarySheet: View {
 
     var body: some View {
         NavigationStack {
-            ScrollViewReader { scroll in
-                List {
-                    Section {
-                        ForEach(visibleKeys, id: \.self) { key in
-                            row(for: key, selected: true).id(key)
-                        }
-                        .onMove { source, destination in
-                            guard let index = source.first else { return }
-                            cardOrderRaw = StatisticsCardLayout.moved(
-                                in: cardOrderRaw, from: index, to: destination
-                            )
-                        }
+            List {
+                Section {
+                    ForEach(visibleKeys, id: \.self) { key in
+                        row(for: key, selected: true)
                     }
-                    if !hiddenKeys.isEmpty {
-                        Section {
-                            ForEach(hiddenKeys, id: \.self) { key in
-                                row(for: key, selected: false).id(key)
-                            }
-                        }
+                    .onMove { source, destination in
+                        guard let index = source.first else { return }
+                        cardOrderRaw = StatisticsCardLayout.moved(
+                            in: cardOrderRaw, from: index, to: destination
+                        )
                     }
                 }
-                .environment(\.editMode, .constant(.active))
-                .task {
-                    if ProcessInfo.processInfo.environment["QINGJI_DEMO"] == "1",
-                       ProcessInfo.processInfo.environment["QINGJI_SCREEN"] == "stats/month/cards/optional" {
-                        try? await Task.sleep(for: .milliseconds(500))
-                        scroll.scrollTo("stacked", anchor: .bottom)
+                if !hiddenKeys.isEmpty {
+                    Section {
+                        ForEach(hiddenKeys, id: \.self) { key in
+                            row(for: key, selected: false)
+                        }
                     }
                 }
             }
+            .environment(\.editMode, .constant(.active))
             .navigationTitle("自定义图表")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -50,7 +41,7 @@ struct StatisticsCardLibrarySheet: View {
                 }
             }
         }
-        .presentationDetents([.fraction(0.72), .large])
+        .presentationDetents([.large])
         .presentationDragIndicator(.hidden)
     }
 

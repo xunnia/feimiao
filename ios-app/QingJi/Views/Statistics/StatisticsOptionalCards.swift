@@ -100,6 +100,8 @@ struct MonthlyHeatmapCard: View {
         let start = calendar.date(from: DateComponents(year: summary.year, month: summary.month, day: 1)) ?? AppClock.now
         let leading = (calendar.component(.weekday, from: start) + 5) % 7
         let maximum = max(summary.dailyTotals.map { MoneyFormat.double($0.expense) }.max() ?? 0, 0)
+        let cellCount = leading + summary.dailyTotals.count
+        let rowCount = max((cellCount + 6) / 7, 1)
         return VStack(alignment: .leading, spacing: 10) {
             Text("消费热力图").font(.headline)
             HStack(spacing: 4) {
@@ -108,29 +110,33 @@ struct MonthlyHeatmapCard: View {
                         .frame(maxWidth: .infinity)
                 }
             }
-            LazyVGrid(columns: columns, spacing: 4) {
-                ForEach(0..<(leading + summary.dailyTotals.count), id: \.self) { index in
-                    if index < leading {
-                        Color.clear.aspectRatio(1, contentMode: .fit)
-                    } else {
-                        let day = summary.dailyTotals[index - leading]
-                        let value = MoneyFormat.double(day.expense)
-                        let intensity = maximum > 0 ? min(max(value / maximum, 0), 1) : 0
-                        Button { selectedDay = day } label: {
-                            Text("\(day.day)")
-                                .font(.caption2)
-                                .frame(maxWidth: .infinity)
-                                .aspectRatio(1, contentMode: .fit)
-                                .background(value <= 0 ? Color.secondary.opacity(0.12)
-                                            : heatmapTint.opacity(0.18 + 0.72 * intensity),
-                                            in: .rect(cornerRadius: 5))
-                                .foregroundStyle(intensity > 0.55 ? Color.white : Color.primary)
+            GeometryReader { geometry in
+                let cellSide = max((geometry.size.width - 24) / 7, 0)
+                LazyVGrid(columns: columns, spacing: 4) {
+                    ForEach(0..<cellCount, id: \.self) { index in
+                        if index < leading {
+                            Color.clear.frame(height: cellSide)
+                        } else {
+                            let day = summary.dailyTotals[index - leading]
+                            let value = MoneyFormat.double(day.expense)
+                            let intensity = maximum > 0 ? min(max(value / maximum, 0), 1) : 0
+                            Button { selectedDay = day } label: {
+                                Text("\(day.day)")
+                                    .font(.caption2)
+                                    .frame(maxWidth: .infinity)
+                                    .frame(height: cellSide)
+                                    .background(value <= 0 ? Color.secondary.opacity(0.12)
+                                                : heatmapTint.opacity(0.18 + 0.72 * intensity),
+                                                in: .rect(cornerRadius: 5))
+                                    .foregroundStyle(intensity > 0.55 ? Color.white : Color.primary)
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("\(summary.month)月\(day.day)日，支出 \(MoneyFormat.string(day.expense, currencyCode: currencyCode))")
                         }
-                        .buttonStyle(.plain)
-                        .accessibilityLabel("\(summary.month)月\(day.day)日，支出 \(MoneyFormat.string(day.expense, currencyCode: currencyCode))")
                     }
                 }
             }
+            .aspectRatio(CGFloat(7) / CGFloat(rowCount), contentMode: .fit)
             HStack(spacing: 4) {
                 Spacer()
                 Text("少")
