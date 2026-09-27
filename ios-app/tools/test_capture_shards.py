@@ -26,6 +26,11 @@ class OwnershipTests(unittest.TestCase):
         manifest = json.loads(Path(__file__).with_name("screenshot_manifest.json").read_text(encoding="utf-8"))
         self.assertEqual(owned_images(manifest, ["ai-tasks"]), ["ai-tasks-android.png"])
 
+    def test_asset_add_is_supplemental_not_a_canonical_scene(self):
+        manifest = json.loads(Path(__file__).with_name("screenshot_manifest.json").read_text(encoding="utf-8"))
+        self.assertNotIn("assets-add", {pair["id"] for pair in manifest["pairs"]})
+        self.assertEqual(owned_images(manifest, ["assets-add"]), ["assets-add-android.png"])
+
     def test_supplemental_monthly_trend_has_its_own_image(self):
         manifest = json.loads(Path(__file__).with_name("screenshot_manifest.json").read_text(encoding="utf-8"))
         self.assertEqual(owned_images(manifest, ["stats-month-trend"]),

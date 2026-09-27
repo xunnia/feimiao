@@ -252,6 +252,7 @@ Future<void> _captureParityScene(
     await _captureDisplaySettings(tester, binding);
   } else if (scene == 'assets-hub' ||
       scene == 'assets-funds' ||
+      scene == 'assets-add' ||
       scene == 'accounts-management' ||
       scene == 'liabilities' ||
       scene == 'net-worth') {
@@ -871,6 +872,23 @@ Future<void> _captureAssetScene(
   await selectTab('资金');
   if (scene == 'assets-funds') {
     await _takeScreenshot(tester, binding, 'assets-funds-android');
+    return;
+  }
+
+  if (scene == 'assets-add') {
+    final add = find.descendant(
+      of: find.byType(AppBar),
+      matching: find.byIcon(Icons.add),
+    );
+    expect(add, findsAtLeastNWidgets(1));
+    await tester.tap(add.last);
+    await _pumpFor(tester, const Duration(milliseconds: 500));
+    expect(find.text('添加账户'), findsOneWidget);
+    expect(find.text('添加权益'), findsOneWidget);
+    expect(find.text('新购买记账'), findsOneWidget);
+    expect(find.text('从最近账单加入'), findsOneWidget);
+    expect(find.text('手工补录物品'), findsOneWidget);
+    await _takeScreenshot(tester, binding, 'assets-add-android');
     return;
   }
 
