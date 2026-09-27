@@ -3,11 +3,13 @@
 「3 秒记一笔、漏了能补平、超支提前说」的本地优先 iOS 记账 App。
 
 Android 与 iOS 共享产品口径，但 iOS 使用原生 SwiftUI、WidgetKit、Vision、Speech 和 Liquid Glass 控件。
-对齐验收记录见 [docs/ANDROID_IOS_PARITY.md](docs/ANDROID_IOS_PARITY.md)。
+现状、执行规则、验收方式和上架路线见仓库根目录 [`docs/09-iOS.md`](../docs/09-iOS.md)。
+
+> ⚠️ 主工作区里的这份 `ios-app/` 是 2026-09-06 的旧快照，最新的 iOS 代码在其他分支和 worktree 上，见 `09-iOS.md` §2.3。
 
 面向 **iOS 26+**，可安装到你的 iOS 27 beta。界面采用 **Liquid Glass（液态玻璃）** 设计语言：主页保留 Android 同款单页结构、顶部抽屉和底部「记一记」输入框，快记键盘、分类网格、统计卡片使用 `glassEffect` 交互玻璃；二级页面沿用 Android 的 push 信息架构，再用 iOS 原生导航、系统转场和触觉反馈增强。云端 CI 使用 GitHub 官方 `macos-26` runner；若镜像提供 Xcode 27 就优先选择，否则用镜像内 Xcode 26.x/iOS 26 SDK 编译，运行目标仍覆盖 iOS 27。
 
-产品定位与市场调研见 [docs/product-analysis.md](../docs/product-analysis.md)。
+产品定位与市场调研见 [`docs/参考资料/市场与竞品分析-2026-06.md`](../docs/参考资料/市场与竞品分析-2026-06.md)。
 
 ## 项目结构
 
@@ -58,4 +60,4 @@ swift test
 
 ## 迁移路线
 
-完整的 Android 功能盘点、iOS 平台差异、分阶段施工和 7 天签名交付说明见 [`docs/IOS_MIGRATION_PLAN.md`](docs/IOS_MIGRATION_PLAN.md)。逐项对账和 Android/iOS 成对截图规则见 [`docs/ANDROID_IOS_PARITY.md`](docs/ANDROID_IOS_PARITY.md)。
+平台差异、分阶段施工、截图对齐验收和真机签名说明，统一见 [`docs/09-iOS.md`](../docs/09-iOS.md)。
