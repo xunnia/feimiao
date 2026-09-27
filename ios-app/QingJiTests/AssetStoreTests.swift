@@ -299,6 +299,56 @@ final class AssetStoreTests: XCTestCase {
         XCTAssertEqual(links.map(\.allocatedGrossCents).reduce(0, +), 12_000)
     }
 
+    func testInvalidPurchaseAllocationDoesNotCreateOrphanAsset() throws {
+        let stack = try Stack()
+        let book = Book(name: "测试账本", isDefault: true)
+        let cash = Account(name: "现金", kind: .cash)
+        stack.context.insert(book)
+        stack.context.insert(cash)
+        try stack.context.save()
+        let original = try LedgerStore.createTransaction(
+            in: stack.context,
+            amount: 120,
+            kind: .expense,
+            date: Date(timeIntervalSince1970: 1_705_000_000),
+            note: "两件商品",
+            account: cash,
+            book: book
+        )
+        _ = try AssetStore.createFromTransaction(
+            in: stack.context,
+            transaction: original,
+            name: "商品 A",
+            kind: .other,
+            allocatedGrossCents: 7_000
+        )
+        let assetCount = try stack.context.fetchCount(FetchDescriptor<PhysicalAsset>())
+        let eventCount = try stack.context.fetchCount(FetchDescriptor<AssetEvent>())
+        let valuationCount = try stack.context.fetchCount(FetchDescriptor<AssetValuation>())
+        let linkCount = try stack.context.fetchCount(FetchDescriptor<AssetTransactionLink>())
+
+        XCTAssertThrowsError(try AssetStore.createFromTransaction(
+            in: stack.context,
+            transaction: original,
+            name: "超额商品",
+            kind: .other,
+            allocatedGrossCents: 6_000
+        ))
+        XCTAssertThrowsError(try AssetStore.createFromTransaction(
+            in: stack.context,
+            transaction: original,
+            name: "无退款商品",
+            kind: .other,
+            allocatedGrossCents: 1_000,
+            allocatedRefundCents: 100
+        ))
+
+        XCTAssertEqual(try stack.context.fetchCount(FetchDescriptor<PhysicalAsset>()), assetCount)
+        XCTAssertEqual(try stack.context.fetchCount(FetchDescriptor<AssetEvent>()), eventCount)
+        XCTAssertEqual(try stack.context.fetchCount(FetchDescriptor<AssetValuation>()), valuationCount)
+        XCTAssertEqual(try stack.context.fetchCount(FetchDescriptor<AssetTransactionLink>()), linkCount)
+    }
+
     func testLinearDepreciationReachesMonthlyValueWithoutCashflow() throws {
         let stack = try Stack()
         let asset = PhysicalAsset(

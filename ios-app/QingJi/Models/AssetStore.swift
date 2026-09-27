@@ -218,7 +218,8 @@ enum AssetStore {
         transaction: MoneyTransaction,
         grossCents: Int,
         refundCents: Int = 0,
-        in context: ModelContext
+        in context: ModelContext,
+        saveImmediately: Bool = true
     ) throws -> AssetTransactionLink {
         guard transaction.kind == .expense,
               transaction.amount > 0,
@@ -228,40 +229,13 @@ enum AssetStore {
               transaction.currencyCode == asset.currencyCode else {
             throw Error.invalidTransaction
         }
-        let allTransactions = try context.fetch(FetchDescriptor<MoneyTransaction>())
-        let refundStatus = LedgerPolicy.refundStatus(for: transaction.record, in: allTransactions.map(\.record))
-        let orderGross = MoneyNormalization.cents(transaction.amount)
-        let validRefund = MoneyNormalization.cents(refundStatus.refundedAmount)
-        let otherLines = try context.fetch(FetchDescriptor<AssetTransactionLink>())
-            .filter {
-                $0.transactionID == transaction.stableID &&
-                ($0.linkTypeRaw == AssetTransactionLinkType.sourceTransaction.rawValue ||
-                 $0.linkTypeRaw == AssetTransactionLinkType.purchaseTransaction.rawValue)
-            }
-            .map {
-                AssetAllocationLine(
-                    assetID: $0.assetID,
-                    grossCents: $0.allocatedGrossCents,
-                    refundCents: $0.allocatedRefundCents
-                )
-            }
-        let lines = otherLines + [AssetAllocationLine(
-            assetID: asset.stableID,
+        try validatePurchaseAllocation(
+            transaction: transaction,
             grossCents: grossCents,
-            refundCents: refundCents
-        )]
-        do {
-            _ = try AssetAllocationPolicy.validate(
-                orderGrossCents: orderGross,
-                validOrderRefundCents: validRefund,
-                lines: lines
-            )
-        } catch {
-            throw Error.allocationInvalid
-        }
-        guard !otherLines.contains(where: { $0.assetID == asset.stableID }) else {
-            throw Error.duplicateTransaction
-        }
+            refundCents: refundCents,
+            assetID: asset.stableID,
+            in: context
+        )
         let link = AssetTransactionLink(
             assetID: asset.stableID,
             transactionID: transaction.stableID,
@@ -283,8 +257,51 @@ enum AssetStore {
             value: link.amount,
             note: "从已有账单分配"
         ))
-        try context.save()
+        if saveImmediately { try context.save() }
         return link
+    }
+
+    private static func validatePurchaseAllocation(
+        transaction: MoneyTransaction,
+        grossCents: Int,
+        refundCents: Int,
+        assetID: UUID,
+        in context: ModelContext
+    ) throws {
+        let allTransactions = try context.fetch(FetchDescriptor<MoneyTransaction>())
+        let refundStatus = LedgerPolicy.refundStatus(for: transaction.record, in: allTransactions.map(\.record))
+        let orderGross = MoneyNormalization.cents(transaction.amount)
+        let validRefund = MoneyNormalization.cents(refundStatus.refundedAmount)
+        let otherLines = try context.fetch(FetchDescriptor<AssetTransactionLink>())
+            .filter {
+                $0.transactionID == transaction.stableID &&
+                ($0.linkTypeRaw == AssetTransactionLinkType.sourceTransaction.rawValue ||
+                 $0.linkTypeRaw == AssetTransactionLinkType.purchaseTransaction.rawValue)
+            }
+            .map {
+                AssetAllocationLine(
+                    assetID: $0.assetID,
+                    grossCents: $0.allocatedGrossCents,
+                    refundCents: $0.allocatedRefundCents
+                )
+            }
+        guard !otherLines.contains(where: { $0.assetID == assetID }) else {
+            throw Error.duplicateTransaction
+        }
+        let lines = otherLines + [AssetAllocationLine(
+            assetID: assetID,
+            grossCents: grossCents,
+            refundCents: refundCents
+        )]
+        do {
+            _ = try AssetAllocationPolicy.validate(
+                orderGrossCents: orderGross,
+                validOrderRefundCents: validRefund,
+                lines: lines
+            )
+        } catch {
+            throw Error.allocationInvalid
+        }
     }
 
     @discardableResult
@@ -303,7 +320,8 @@ enum AssetStore {
         warrantyUntil: Date? = nil,
         note: String = "",
         includeInNetWorth: Bool = true,
-        sourceType: PhysicalAssetSourceType = .historicalExisting
+        sourceType: PhysicalAssetSourceType = .historicalExisting,
+        saveImmediately: Bool = true
     ) throws -> PhysicalAsset {
         let normalizedPurchasePrice = MoneyNormalization.roundToCents(purchasePrice)
         let normalizedCurrentValue = MoneyNormalization.roundToCents(currentValue)
@@ -351,7 +369,7 @@ enum AssetStore {
             valuedAt: purchaseDate ?? now,
             note: "初始当前价值"
         ))
-        try context.save()
+        if saveImmediately { try context.save() }
         return asset
     }
 
@@ -460,32 +478,45 @@ enum AssetStore {
               allocatedRefundCents <= allocatedGrossCents else {
             throw Error.allocationInvalid
         }
-        let net = Decimal(allocatedGrossCents - allocatedRefundCents) / Decimal(100)
-        let asset = try create(
-            in: context,
-            name: name,
-            kind: kind,
-            purchasePrice: net,
-            currentValue: currentValue ?? net,
-            currencyCode: transaction.currencyCode,
-            book: transaction.book,
-            purchaseDate: transaction.date,
-            brand: brand,
-            model: model,
-            location: location,
-            warrantyUntil: warrantyUntil,
-            note: note,
-            includeInNetWorth: includeInNetWorth,
-            sourceType: .fromTransaction
-        )
-        _ = try linkPurchaseAllocation(
-            asset,
+        try validatePurchaseAllocation(
             transaction: transaction,
             grossCents: allocatedGrossCents,
             refundCents: allocatedRefundCents,
+            assetID: UUID(),
             in: context
         )
-        return asset
+        let net = Decimal(allocatedGrossCents - allocatedRefundCents) / Decimal(100)
+        var createdAsset: PhysicalAsset?
+        try context.transaction {
+            let asset = try create(
+                in: context,
+                name: name,
+                kind: kind,
+                purchasePrice: net,
+                currentValue: currentValue ?? net,
+                currencyCode: transaction.currencyCode,
+                book: transaction.book,
+                purchaseDate: transaction.date,
+                brand: brand,
+                model: model,
+                location: location,
+                warrantyUntil: warrantyUntil,
+                note: note,
+                includeInNetWorth: includeInNetWorth,
+                sourceType: .fromTransaction,
+                saveImmediately: false
+            )
+            _ = try linkPurchaseAllocation(
+                asset,
+                transaction: transaction,
+                grossCents: allocatedGrossCents,
+                refundCents: allocatedRefundCents,
+                in: context,
+                saveImmediately: false
+            )
+            createdAsset = asset
+        }
+        return createdAsset!
     }
 
     static func update(
