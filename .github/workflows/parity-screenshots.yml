@@ -290,7 +290,7 @@ jobs:
                 SIMCTL_CHILD_QINGJI_P0_FIXTURE_HASH="$fixture_hash" \
                 SIMCTL_CHILD_TZ="Asia/Shanghai" \
                 SIMCTL_CHILD_QINGJI_SCREEN="$screen" \
-                python3 ios-app/tools/run_bounded.py --timeout 45 -- xcrun simctl launch "$DEVICE" com.qingji.app >> "$runtime_log" 2>&1; then
+                python3 ios-app/tools/run_bounded.py --timeout 45 -- xcrun simctl launch --terminate-running-process "$DEVICE" com.qingji.app >> "$runtime_log" 2>&1; then
                 echo "::warning::CAPTURE_LAUNCH_FAILED name=$name screen=$screen attempt=$attempt"
                 continue
               fi

@@ -2,6 +2,13 @@ import XCTest
 @testable import QingJi
 
 final class AppRouterTests: XCTestCase {
+    func testEveryStatisticsColdLaunchAliasUsesStatisticsRoot() {
+        for scope in ["week", "month", "year", "custom"] {
+            XCTAssertEqual(RootTabView.initialPath(for: "stats/\(scope)"), [.statistics])
+            XCTAssertEqual(RootTabView.initialPath(for: "stats-\(scope)"), [.statistics])
+        }
+    }
+
     func testImportReviewColdLaunchUsesDedicatedRootRoute() {
         XCTAssertEqual(
             RootTabView.initialPath(for: "settings/import-review"),
