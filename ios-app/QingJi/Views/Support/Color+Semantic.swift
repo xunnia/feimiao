@@ -14,6 +14,6 @@ extension Color {
     static let warning = Color(red: 0.90, green: 0.49, blue: 0.13)
     /// 预算健康绿（预算条/圆环起点，与 Android budgetHealthy 7FB069 同值）
     static let budgetHealthy = Color(red: 0x7F / 255, green: 0xB0 / 255, blue: 0x69 / 255)
-    /// 超出 100% 预算的部分 —— 比 warning 更深的橙（与 Android overspendDeep D9602E 同值）
-    static let overspendDeep = Color(red: 0xD9 / 255, green: 0x60 / 255, blue: 0x2E / 255)
+    /// 超支时预算内那 100% 的浅橙：和 warning 同色相，只降低强度（与 Android overspendWithin 对齐）
+    static let overspendWithin = Color.warning.opacity(0.34)
 }

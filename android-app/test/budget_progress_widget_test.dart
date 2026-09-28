@@ -282,13 +282,20 @@ void main() {
     );
 
     expect(find.byKey(const ValueKey('budget-progress-track')), findsNothing);
-    final overflow = tester.widget<DecoratedBox>(
+    final overflow = tester.widget<ColoredBox>(
       find.byKey(const ValueKey('budget-progress-overflow')),
     );
-    expect(
-      (overflow.decoration as BoxDecoration).color,
-      AppColors.overspendDeep,
+    expect(overflow.color, AppColors.warning);
+    // 预算内那段是同一个橙的浅色，不再是绿→金渐变。
+    final within = tester.widget<ColoredBox>(
+      find.byKey(const ValueKey('budget-progress-fill-clip')),
     );
+    final withinColor = within.color;
+    expect(
+      (withinColor.r, withinColor.g, withinColor.b),
+      (AppColors.warning.r, AppColors.warning.g, AppColors.warning.b),
+    );
+    expect(withinColor.a, lessThan(1));
     expect(
       tester
           .getSize(find.byKey(const ValueKey('budget-progress-fill-clip')))
@@ -350,7 +357,7 @@ void main() {
       find.byKey(const ValueKey('home-budget-percent')),
     );
     expect(pct.data, '141%');
-    expect(pct.style?.color, AppColors.overspendDeep);
+    expect(pct.style?.color, AppColors.warning);
 
     // 横条：预算线在 3200/4512 ≈ 70.9% 处。
     final barWidth = tester.getSize(find.byType(BudgetProgressBar)).width;
@@ -370,7 +377,68 @@ void main() {
     );
     final painter = ring.painter! as BudgetOverflowRingPainter;
     expect(painter.withinFraction, closeTo(991.05 / 2208.95, 0.0001));
-    expect(painter.overflowColor, AppColors.overspendDeep);
+    expect(painter.overflowColor, AppColors.warning);
+  });
+
+  testWidgets(
+      'over budget with nothing spent today: empty ring, grey zero income, '
+      'ring sits on the percent row', (tester) async {
+    // 真机截图场景：预算 4000，本月已花 4419.02，今天还没花。
+    final summary = MonthlySummary(
+      year: 2026,
+      month: 9,
+      totalExpense: Decimal.parse('4419.02'),
+      totalIncome: Decimal.zero,
+      expenseByCategory: const [],
+      dailyTotals: const [],
+    );
+    final status = BudgetStatus(
+      monthlyBudget: Decimal.fromInt(4000),
+      spentThisMonth: Decimal.parse('4419.02'),
+      spentToday: Decimal.zero,
+      remaining: Decimal.parse('-419.02'),
+      todayAllowance: Decimal.parse('-209.51'),
+      isOverBudget: true,
+    );
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: AppTheme.light(),
+        home: Scaffold(
+          body: HomeSummaryCard(
+            monthDate: DateTime(2026, 9),
+            isCurrentMonth: true,
+            summary: summary,
+            budgetStatus: status,
+            budget: Decimal.fromInt(4000),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    // 今天没花钱：不画满圈超支，只留浅橙底圈。
+    expect(
+      find.byKey(const ValueKey('budget-progress-ring-overflow')),
+      findsNothing,
+    );
+    final fill = tester.widget<CircularProgressIndicator>(
+      find.byKey(const ValueKey('budget-progress-ring-fill')),
+    );
+    expect(fill.value, 0);
+    expect(fill.color, AppColors.warning);
+
+    // 圆环底边与百分比标签那一行对齐。
+    final ringRect =
+        tester.getRect(find.byKey(const ValueKey('home-today-ring')));
+    final chipRect = tester
+        .getRect(find.byKey(const ValueKey('home-budget-percent-chip')));
+    expect(ringRect.bottom, closeTo(chipRect.bottom, 2));
+  });
+
+  test('home income is green only when there is income', () {
+    final scheme = AppTheme.light().colorScheme;
+    expect(homeIncomeColor(scheme, Decimal.zero), scheme.onSurfaceVariant);
+    expect(homeIncomeColor(scheme, Decimal.one), AppColors.income(scheme));
   });
 
   testWidgets('recurring transaction row shows 周期 before the category',

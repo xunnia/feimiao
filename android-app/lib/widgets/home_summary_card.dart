@@ -316,7 +316,7 @@ class _IncomeExpenseRow extends StatelessWidget {
           child: _SummaryMetric(
             label: '收入',
             amount: summary.totalIncome,
-            color: AppColors.income(scheme),
+            color: homeIncomeColor(scheme, summary.totalIncome),
             alignment: CrossAxisAlignment.start,
             maskAmounts: maskAmounts,
           ),
@@ -382,7 +382,7 @@ class _KapiIncomeExpenseOverview extends StatelessWidget {
               child: _KapiMoneyColumn(
                 label: '收入',
                 amount: summary.totalIncome,
-                color: AppColors.income(scheme),
+                color: homeIncomeColor(scheme, summary.totalIncome),
                 maskAmounts: maskAmounts,
               ),
             ),
@@ -595,7 +595,7 @@ class _BudgetBody extends StatelessWidget {
                 key: const ValueKey('home-budget-percent'),
                 pct,
                 style: theme.textTheme.labelSmall?.copyWith(
-                  color: over ? AppColors.overspendDeep : scheme.primary,
+                  color: over ? AppColors.warning : scheme.primary,
                   fontWeight: FontWeight.w500,
                   fontFamily: 'Nunito',
                 ),
@@ -649,20 +649,26 @@ class _BudgetBody extends StatelessWidget {
     if (isCurrentMonth && s.hasDailyGuidance) {
       final today = s.todayAllowance;
       final todayNeg = today < Decimal.zero;
-      if (todayNeg) {
+      if (todayNeg && s.spentToday > Decimal.zero) {
         // 今日已超：可用额封底为 ¥0（负的「可用」没有意义）。
         // 圆环整圈 = 今天已花；今天的日额度（spentToday + todayAllowance）
-        // 以内画健康绿，100% 分界线之后是超出部分。日额度 ≤ 0（今天开始前
+        // 以内浅橙，100% 分界线之后实橙是超出部分。日额度 ≤ 0（今天开始前
         // 就已超）时整圈都是超出。
         final dayBase = s.spentToday + today;
         ringOverflow = true;
-        ringVal = dayBase > Decimal.zero && s.spentToday > Decimal.zero
+        ringVal = dayBase > Decimal.zero
             ? (dayBase / s.spentToday)
                 .toDecimal(scaleOnInfinitePrecision: 4)
                 .toDouble()
                 .clamp(0.0, 1.0)
             : 0.0;
-        ringColor = AppColors.budgetHealthy(scheme);
+        ringColor = AppColors.warning;
+      } else if (todayNeg) {
+        // 月初就超了、今天还没花：没有「今天超出」可画，只留浅橙底圈，
+        // 不能画成满圈超支。
+        ringOverflow = false;
+        ringVal = 0.0;
+        ringColor = AppColors.warning;
       } else {
         final dayEnv = s.spentToday + today;
         ringOverflow = false;
@@ -682,7 +688,7 @@ class _BudgetBody extends StatelessWidget {
       // 历史月/无日度引导且已超支：和横条同一套 100% 分界。
       ringOverflow = true;
       ringVal = overflowStart;
-      ringColor = AppColors.budgetHealthy(scheme);
+      ringColor = AppColors.warning;
       ringLabel = '已用';
       ringText = pct;
     } else {
@@ -693,20 +699,20 @@ class _BudgetBody extends StatelessWidget {
       ringText = pct;
     }
 
+    // 圆环底边和左列最后一行（百分比标签那行）对齐：猫从卡片右上角探出，
+    // 居中时圆环顶边会贴住猫脚、下方反而空一截。
     return Row(
-      crossAxisAlignment: CrossAxisAlignment.center,
+      crossAxisAlignment: CrossAxisAlignment.end,
       children: [
         Expanded(child: leftColumn),
         const SizedBox(width: 14),
-        Transform.translate(
-          offset: const Offset(0, 8),
-          child: _TodayRing(
-            value: ringVal,
-            label: ringLabel,
-            amountText: ringText,
-            color: ringColor,
-            overflow: ringOverflow,
-          ),
+        _TodayRing(
+          key: const ValueKey('home-today-ring'),
+          value: ringVal,
+          label: ringLabel,
+          amountText: ringText,
+          color: ringColor,
+          overflow: ringOverflow,
         ),
       ],
     );
@@ -733,6 +739,7 @@ class _TodayRing extends StatelessWidget {
   final bool overflow;
 
   const _TodayRing({
+    super.key,
     required this.value,
     required this.label,
     required this.amountText,
@@ -838,6 +845,11 @@ class _SummaryMetric extends StatelessWidget {
     );
   }
 }
+
+/// 收入有数时才用收入绿；¥0 没必要用颜色强调，用次要灰。
+@visibleForTesting
+Color homeIncomeColor(ColorScheme scheme, Decimal income) =>
+    income > Decimal.zero ? AppColors.income(scheme) : scheme.onSurfaceVariant;
 
 class _AmountText extends StatelessWidget {
   final Decimal value;

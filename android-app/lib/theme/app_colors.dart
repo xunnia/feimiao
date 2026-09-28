@@ -62,10 +62,6 @@ class AppColors {
   static const Color budgetCautionLightMode = kCatGold;
   static const Color budgetCautionDarkMode = Color(0xFFF7CC6E);
 
-  /// 超出 100% 预算那一段的颜色：比 [warning] 更深，和渐变末端的橙区分开，
-  /// 也用作超支百分比标签的文字色（浅底小字需要更高对比度）。
-  static const Color overspendDeep = Color(0xFFD9602E);
-
   /// 支出/普通金额 —— 跟随系统文字色（onSurface），
   /// 不在此处硬编码，直接用 Theme.of(context).colorScheme.onSurface。
 

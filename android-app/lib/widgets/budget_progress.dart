@@ -36,6 +36,13 @@ class BudgetProgressPalette {
         stops: const [0.0, _warningStop, 1.0],
       );
 
+  /// 超支时只用一个橙色系：超出部分是实橙 [AppColors.warning]，
+  /// 预算内的 100% 用同一个橙的浅色，不再叠加绿→金渐变。
+  static const Color overspend = AppColors.warning;
+
+  static Color overspendWithin(ColorScheme scheme) => AppColors.warning
+      .withValues(alpha: scheme.brightness == Brightness.dark ? 0.42 : 0.34);
+
   /// 100% 分界线颜色：接近卡片底色的细线，在任意填充色上都能看清。
   static Color boundaryColor(ColorScheme scheme) => scheme.surface.withValues(
         alpha: scheme.brightness == Brightness.dark ? 0.85 : 0.95,
@@ -65,8 +72,8 @@ class BudgetProgressBar extends StatelessWidget {
 
   /// 超支时 100% 预算线在整条中的位置（= 预算 / 已花，0~1 之间）。
   ///
-  /// 传入后整条按「已花」铺满：左段仍是原渐变（代表预算内的 100%），
-  /// 分界线右侧用 [AppColors.overspendDeep] 单独着色，表示超出的部分。
+  /// 传入后整条按「已花」铺满：左段浅橙代表预算内的 100%，
+  /// 分界线右侧实橙表示超出的部分（见 [BudgetProgressPalette.overspend]）。
   /// 为 null 时保持原来的单段进度。
   final double? overflowStart;
 
@@ -155,7 +162,6 @@ class BudgetProgressBar extends StatelessWidget {
 
   Widget _buildOverflow(BuildContext context, double boundary) {
     final scheme = Theme.of(context).colorScheme;
-    const overColor = AppColors.overspendDeep;
     return ClipRRect(
       borderRadius: BorderRadius.circular(AppRadius.pill),
       child: SizedBox(
@@ -166,33 +172,26 @@ class BudgetProgressBar extends StatelessWidget {
             final splitX = width * boundary;
             return Stack(
               children: [
-                // 超出部分：整条先铺满超支色，左段再被预算内渐变盖住。
-                Positioned.fill(
-                  child: DecoratedBox(
-                    key: const ValueKey('budget-progress-overflow'),
-                    decoration: BoxDecoration(
-                      color: overColor,
-                      border: Border.all(
-                        color: BudgetProgressPalette.trackOutlineColor(
-                          scheme,
-                          overColor,
-                        ),
-                        width: 0.75,
-                      ),
-                    ),
-                  ),
-                ),
-                // 预算内的 100%：原绿→金→橙渐变完整压缩在分界线左侧。
+                // 预算内的 100%：同色系浅橙，占分界线左侧。
                 Positioned(
                   left: 0,
                   top: 0,
                   bottom: 0,
                   width: splitX,
-                  child: DecoratedBox(
+                  child: ColoredBox(
                     key: const ValueKey('budget-progress-fill-clip'),
-                    decoration: BoxDecoration(
-                      gradient: BudgetProgressPalette.gradient(scheme),
-                    ),
+                    color: BudgetProgressPalette.overspendWithin(scheme),
+                  ),
+                ),
+                // 超出部分：实橙，占分界线右侧。
+                Positioned(
+                  left: splitX,
+                  top: 0,
+                  bottom: 0,
+                  right: 0,
+                  child: const ColoredBox(
+                    key: ValueKey('budget-progress-overflow'),
+                    color: BudgetProgressPalette.overspend,
                   ),
                 ),
                 // 100% 分界线。
@@ -221,8 +220,8 @@ class BudgetProgressRing extends StatelessWidget {
   final double strokeWidth;
   final Color activeColor;
 
-  /// 超支模式：整圈铺满 [AppColors.overspendDeep]，从 12 点顺时针到
-  /// [value] 的一段用 [activeColor]（预算内的部分），[value] 处画分界线。
+  /// 超支模式：和横条同一套颜色。从 12 点顺时针到 [value] 是预算内的浅橙，
+  /// 之后是实橙超出部分，[value] 处画分界线。此模式下忽略 [activeColor]。
   final bool overflow;
 
   const BudgetProgressRing({
@@ -277,8 +276,8 @@ class BudgetProgressRing extends StatelessWidget {
         key: const ValueKey('budget-progress-ring-overflow'),
         painter: BudgetOverflowRingPainter(
           withinFraction: value.clamp(0.0, 1.0),
-          withinColor: activeColor,
-          overflowColor: AppColors.overspendDeep,
+          withinColor: BudgetProgressPalette.overspendWithin(scheme),
+          overflowColor: BudgetProgressPalette.overspend,
           boundaryColor: BudgetProgressPalette.boundaryColor(scheme),
           strokeWidth: strokeWidth,
         ),
@@ -288,7 +287,9 @@ class BudgetProgressRing extends StatelessWidget {
   }
 }
 
-/// 超支圆环：整圈超支色 + 12 点起顺时针的预算内弧 + 100% 分界线。
+/// 超支圆环：12 点起顺时针的预算内弧 + 其余的超出弧 + 100% 分界线。
+///
+/// 两段分开画、互不重叠，所以预算内那段可以用半透明浅色而不会被底色染深。
 class BudgetOverflowRingPainter extends CustomPainter {
   /// 预算内部分占整圈的比例；0 表示今天开始前就已经没有额度，整圈超支色、不画分界线。
   final double withinFraction;
@@ -312,27 +313,29 @@ class BudgetOverflowRingPainter extends CustomPainter {
     final rect = Rect.fromCircle(center: center, radius: radius);
     const start = -math.pi / 2;
 
-    canvas.drawCircle(
-      center,
-      radius,
-      Paint()
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = strokeWidth
-        ..color = overflowColor,
-    );
-    if (withinFraction <= 0) return;
+    Paint stroke(Color color) => Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = strokeWidth
+      ..strokeCap = StrokeCap.butt
+      ..color = color;
+
+    if (withinFraction <= 0 || withinFraction >= 1) {
+      canvas.drawCircle(
+        center,
+        radius,
+        stroke(withinFraction <= 0 ? overflowColor : withinColor),
+      );
+      return;
+    }
 
     final sweep = 2 * math.pi * withinFraction;
+    canvas.drawArc(rect, start, sweep, false, stroke(withinColor));
     canvas.drawArc(
       rect,
-      start,
-      sweep,
+      start + sweep,
+      2 * math.pi - sweep,
       false,
-      Paint()
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = strokeWidth
-        ..strokeCap = StrokeCap.butt
-        ..color = withinColor,
+      stroke(overflowColor),
     );
 
     // 分界线：沿半径方向的一道细线，略出头于环宽。

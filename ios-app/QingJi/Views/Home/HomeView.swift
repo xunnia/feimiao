@@ -374,7 +374,9 @@ private struct BudgetSummaryBody: View {
     }
 
     var body: some View {
-        HStack(alignment: .center, spacing: 12) {
+        // 圆环底边和左列最后一行（百分比标签那行）对齐：猫从卡片右上角探出，
+        // 居中时圆环顶边会贴住猫脚、下方反而空一截。与 Android 对齐。
+        HStack(alignment: .bottom, spacing: 12) {
             VStack(alignment: .leading, spacing: 10) {
                 HStack(spacing: 7) {
                     Capsule()
@@ -396,7 +398,7 @@ private struct BudgetSummaryBody: View {
                     .contentTransition(.numericText())
 
                 HStack(spacing: 0) {
-                    metric(title: "收入", amount: summary.totalIncome, color: .income)
+                    metric(title: "收入", amount: summary.totalIncome, color: incomeColor(summary.totalIncome))
                     Divider().frame(height: 32).padding(.horizontal, 14)
                     metric(title: "支出", amount: summary.totalExpense, color: .primary)
                 }
@@ -405,7 +407,7 @@ private struct BudgetSummaryBody: View {
                 HStack {
                     Text(percentText)
                         .font(.caption.weight(.medium))
-                        .foregroundStyle(status.isOverBudget ? Color.overspendDeep : Color.accentColor)
+                        .foregroundStyle(status.isOverBudget ? Color.warning : Color.accentColor)
                         .padding(.horizontal, 6)
                         .padding(.vertical, 2)
                         .background(
@@ -424,7 +426,6 @@ private struct BudgetSummaryBody: View {
                 currencyCode: currencyCode,
                 isCurrentMonth: isCurrentMonth
             )
-            .offset(y: 8)
         }
     }
 
@@ -438,6 +439,11 @@ private struct BudgetSummaryBody: View {
                 .minimumScaleFactor(0.65)
         }
     }
+}
+
+/// 收入有数时才用收入绿；¥0 没必要用颜色强调，用次要灰（与 Android homeIncomeColor 对齐）。
+private func incomeColor(_ income: Decimal) -> Color {
+    income > 0 ? Color.income : Color.secondary
 }
 
 /// 超支分界线的共用计算，横条和圆环口径一致（与 Android home_summary_card 对齐）。
@@ -454,7 +460,7 @@ enum BudgetOverflow {
 
 private struct BudgetGradientProgressBar: View {
     let value: Double
-    /// 非 nil 时进入超支模式：整条 = 已花，分界线左侧是预算内渐变，右侧超出部分用 overspendDeep。
+    /// 非 nil 时进入超支模式：整条 = 已花，分界线左侧浅橙是预算内的 100%，右侧实橙是超出部分。
     var overflowStart: Double? = nil
 
     private static let gradient = LinearGradient(
@@ -480,11 +486,14 @@ private struct BudgetGradientProgressBar: View {
             if let start = overflowStart, start < 1 {
                 let split = width * min(max(start, 0), 1)
                 ZStack(alignment: .leading) {
-                    Rectangle()
-                        .fill(Color.overspendDeep)
-                    Rectangle()
-                        .fill(Self.gradient)
-                        .frame(width: split)
+                    // 两段不重叠：左段浅橙（预算内 100%），右段实橙（超出）。
+                    HStack(spacing: 0) {
+                        Rectangle()
+                            .fill(Color.overspendWithin)
+                            .frame(width: split)
+                        Rectangle()
+                            .fill(Color.warning)
+                    }
                     // 100% 分界线
                     Rectangle()
                         .fill(BudgetOverflow.boundaryColor)
@@ -520,7 +529,7 @@ private struct NoBudgetSummaryBody: View {
             HStack(spacing: 0) {
                 metric(title: "支出", amount: summary.totalExpense, color: .primary)
                 Divider().frame(height: 42).padding(.horizontal, 18)
-                metric(title: "收入", amount: summary.totalIncome, color: .income)
+                metric(title: "收入", amount: summary.totalIncome, color: incomeColor(summary.totalIncome))
             }
             HStack {
                 Text("结余 \(MoneyFormat.string(summary.balance, currencyCode: currencyCode))")
@@ -572,14 +581,15 @@ private struct TodayAllowanceRing: View {
 
     /// 超支模式下预算内部分占整圈的比例；nil 表示正常圆环。
     ///
-    /// 当月：整圈 = 今天已花，今天的日额度（spentToday + todayAllowance）以内是健康绿，
-    /// 之后是超出部分；日额度 ≤ 0（今天开始前就已超）时整圈都是超出。
+    /// 当月：整圈 = 今天已花，今天的日额度（spentToday + todayAllowance）以内是浅橙，
+    /// 之后实橙是超出部分；日额度 ≤ 0（今天开始前就已超）时整圈都是超出。
+    /// 月初就超了但今天还没花：没有「今天超出」可画，返回 nil 走普通圆环（只留浅橙底圈）。
     /// 历史月：和横条同一套 预算/已花 分界。与 Android home_summary_card 对齐。
     private var overflowWithin: Double? {
         if isCurrentMonth {
-            guard todayOver else { return nil }
+            guard todayOver, status.spentToday > 0 else { return nil }
             let dayBase = status.spentToday + status.todayAllowance
-            guard dayBase > 0, status.spentToday > 0 else { return 0 }
+            guard dayBase > 0 else { return 0 }
             return min(max(MoneyFormat.double(dayBase) / MoneyFormat.double(status.spentToday), 0), 1)
         }
         return BudgetOverflow.boundary(
@@ -597,6 +607,7 @@ private struct TodayAllowanceRing: View {
 
     private var value: Double {
         guard isCurrentMonth else { return min(max(usedRatio, 0), 1) }
+        if todayOver { return 0 }
         let envelope = status.spentToday + status.todayAllowance
         return envelope > 0
             ? min(max(MoneyFormat.double(status.todayAllowance) / MoneyFormat.double(envelope), 0), 1)
@@ -604,7 +615,7 @@ private struct TodayAllowanceRing: View {
     }
 
     private var ringColor: Color {
-        !isCurrentMonth && status.isOverBudget ? Color.warning : Color.budgetHealthy
+        todayOver || (!isCurrentMonth && status.isOverBudget) ? Color.warning : Color.budgetHealthy
     }
 
     private var amountText: String {
@@ -642,16 +653,18 @@ private struct TodayAllowanceRing: View {
         .frame(width: 80, height: 80)
     }
 
-    /// 整圈超支色 + 12 点起顺时针的预算内弧 + 100% 分界线。
+    /// 12 点起顺时针的预算内浅橙弧 + 其余实橙超出弧 + 100% 分界线（两段不重叠）。
     @ViewBuilder
     private func overflowRing(within: Double) -> some View {
         Circle()
-            .stroke(Color.overspendDeep, lineWidth: Self.lineWidth)
+            .trim(from: within, to: 1)
+            .stroke(Color.warning, style: StrokeStyle(lineWidth: Self.lineWidth, lineCap: .butt))
+            .rotationEffect(.degrees(-90))
         if within > 0 {
             Circle()
                 .trim(from: 0, to: within)
                 .stroke(
-                    Color.budgetHealthy,
+                    Color.overspendWithin,
                     style: StrokeStyle(lineWidth: Self.lineWidth, lineCap: .butt)
                 )
                 .rotationEffect(.degrees(-90))
