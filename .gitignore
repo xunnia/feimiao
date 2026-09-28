@@ -20,3 +20,31 @@ __pycache__/
 # Generated visual/browser evidence is local unless explicitly curated.
 /android-app/outputs/
 /.playwright-cli/
+
+# 本机密钥与签名相关（绝不入库）
+/adbkey
+/adbkey.pub
+/android-app/android/app/src/release/
+
+# 本机 SDK、模拟器、工具缓存
+/.android-avd/
+/.android-sdk/
+/.android-sdk-home/
+/.dart-appdata/
+/.flutter-appdata/
+/.flutter-isolated/
+/.flutter-parity-appdata/
+/.flutter-parity-localappdata/
+/.gradle-*/
+/.tmp-genymotion-*/
+**/.wrangler/
+**/__pycache__/
+/flutter-gradle-plugin/
+/gradle-sanity*/
+
+# 构建与测试的本地产物
+/android-app/.flutter_tool_state
+/android-app/.gradle-*/
+/android-app/android/build/
+/android-app/test/failures/
+/ios-app/outputs/

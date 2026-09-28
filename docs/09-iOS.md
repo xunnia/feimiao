@@ -48,7 +48,7 @@
 | 位置 | 分支/状态 | 里面有什么 | 合入主线了吗 |
 |---|---|---|---|
 | `main`（远端默认分支） | 最新 iOS 提交 `96edaec`（09-03） | 09-03 的 P0 取证门禁；41 场景清单；`p0/P0_BASELINE_DECISIONS.md` | —（就是主线本身） |
-| 主工作区 `C:\src\xunni-codex` | 仍停在旧分支 `migrated/wip-2026-09-06-startup-optimization`（Android 内容已全部进入 main） | 这里的 `ios-app/` 是 **09-06 的旧 WIP 快照**，比 main 旧（37 个文件不同）。空目录 `ios-app/Views/Settings` 是残留 | ❌ 不要从这里开发 iOS；从 main 开新 worktree |
+| 主工作区 `C:\src\xunni-codex` | 已切到 `main`（2026-09-27） | `ios-app/` 就是 main 的版本 | —（开发 iOS 仍建议从 main 开独立 worktree） |
 | worktree `.tmp/repository-cleanup` | **`codex/screenshot-stability`**（`60963fa`，09-27，已推送） | **最新的 UI 工作线**：统计卡片对齐、月热力图、资产资金分组等；和 main 差 46 个文件 | ❌ 未合入。另有 **未提交**：09-23 修订版 Luna 方案 + 执行合同、`IOS_REBUILD_PLAN_REVIEW_2026-09-23.md`、`p0/P0_CAPTURE_ACCEPTANCE_2026-09-20.md` |
 | worktree `.tmp/ios-p1-integration` | **`codex/ios-p1-integration`**（`2cb4b97`，09-19） | 把抢救回来的 P1 功能（借贷 `LendingView`、房贷向导 `LoanWizardView`、资产退款分摊 `AssetRefundAllocationStore`、预算 V2 等）接入；软删除修复 `820e6d3`；和 main 差 93 个文件 | ❌ 未合入，只是**候选**。本地比远端多 **4 个未推送提交**；另有未提交：两个工作流、`RootTabView.swift`、`AppRouterTests.swift`、`p0/SOFT_DELETE_REPAIR_2026-09-12.md` |
 | worktree `.tmp/fix-parity` | `codex/fix-parity-gates`（`c118ce4`，09-08，已推送） | 截图门禁的小修（7 个 iOS 文件） | ❌ 未合入；和上面两条线都不是祖先关系，是否已被吸收**待核实** |
