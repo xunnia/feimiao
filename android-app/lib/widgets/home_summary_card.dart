@@ -608,6 +608,14 @@ class _BudgetBody extends StatelessWidget {
                 child: Text.rich(
                   TextSpan(
                     children: [
+                      // 标明这个数是预算总额，第一次看的人不用猜。
+                      TextSpan(
+                        text: '预算 ',
+                        style: theme.textTheme.labelSmall?.copyWith(
+                          color: AppTextColor.hint(scheme),
+                          fontWeight: FontWeight.w300,
+                        ),
+                      ),
                       TextSpan(
                         text: _moneyText(budget, maskAmounts),
                         style: theme.textTheme.labelSmall?.copyWith(
@@ -649,6 +657,9 @@ class _BudgetBody extends StatelessWidget {
     if (isCurrentMonth && s.hasDailyGuidance) {
       final today = s.todayAllowance;
       final todayNeg = today < Decimal.zero;
+      // 月预算已经超了：往后每天的「可用」都封底 ¥0，一直显示 ¥0 没有信息量，
+      // 改为显示「今日已花」，圆环画法不变（整圈 = 今天已花）。
+      final monthOver = over && todayNeg;
       if (todayNeg && s.spentToday > Decimal.zero) {
         // 今日已超：可用额封底为 ¥0（负的「可用」没有意义）。
         // 圆环整圈 = 今天已花；今天的日额度（spentToday + todayAllowance）
@@ -680,23 +691,36 @@ class _BudgetBody extends StatelessWidget {
             : 1.0;
         ringColor = AppColors.budgetHealthy(scheme);
       }
-      ringLabel = '今日可用';
+      ringLabel = monthOver ? '今日已花' : '今日可用';
       ringText = maskAmounts
           ? _maskedMoneyText
-          : MoneyFormat.string(todayNeg ? Decimal.zero : today);
-    } else if (overflowStart != null) {
-      // 历史月/无日度引导且已超支：和横条同一套 100% 分界。
-      ringOverflow = true;
-      ringVal = overflowStart;
-      ringColor = AppColors.warning;
-      ringLabel = '已用';
-      ringText = pct;
+          : MoneyFormat.string(
+              monthOver ? s.spentToday : (todayNeg ? Decimal.zero : today),
+            );
     } else {
-      ringOverflow = false;
-      ringVal = ratio;
-      ringColor = over ? AppColors.warning : AppColors.budgetHealthy(scheme);
-      ringLabel = '已用';
-      ringText = pct;
+      // 历史月/无日度引导：圆环仍按已用比例画（超支时和横条同一套 100% 分界），
+      // 中间文字改成日均支出，不再重复左边百分比标签的数。
+      if (overflowStart != null) {
+        ringOverflow = true;
+        ringVal = overflowStart;
+        ringColor = AppColors.warning;
+      } else {
+        ringOverflow = false;
+        ringVal = ratio;
+        ringColor = over ? AppColors.warning : AppColors.budgetHealthy(scheme);
+      }
+      ringLabel = '日均支出';
+      ringText = maskAmounts
+          ? _maskedMoneyText
+          : MoneyFormat.string(
+              homeDailyAverageExpense(
+                summary.totalExpense,
+                year: summary.year,
+                month: summary.month,
+                isCurrentMonth: isCurrentMonth,
+                today: now,
+              ),
+            );
     }
 
     // 圆环底边和左列最后一行（百分比标签那行）对齐：猫从卡片右上角探出，
@@ -778,14 +802,21 @@ class _TodayRing extends StatelessWidget {
                 ),
               ),
               const SizedBox(height: 1),
-              Text(
-                amountText,
-                maxLines: 1,
-                style: theme.textTheme.titleSmall?.copyWith(
-                  fontWeight: FontWeight.w500,
-                  fontFamily: 'Nunito',
-                  color: scheme.onSurface,
-                  fontFeatures: const [FontFeature.tabularFigures()],
+              // 「今日已花」「日均支出」可能是五位数，超出环内宽度时整体缩小，不截断。
+              ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 62),
+                child: FittedBox(
+                  fit: BoxFit.scaleDown,
+                  child: Text(
+                    amountText,
+                    maxLines: 1,
+                    style: theme.textTheme.titleSmall?.copyWith(
+                      fontWeight: FontWeight.w500,
+                      fontFamily: 'Nunito',
+                      color: scheme.onSurface,
+                      fontFeatures: const [FontFeature.tabularFigures()],
+                    ),
+                  ),
                 ),
               ),
             ],
@@ -850,6 +881,23 @@ class _SummaryMetric extends StatelessWidget {
 @visibleForTesting
 Color homeIncomeColor(ColorScheme scheme, Decimal income) =>
     income > Decimal.zero ? AppColors.income(scheme) : scheme.onSurfaceVariant;
+
+/// 主页圆环的「日均支出」（口径 D-STAT-013）：本月除以今天的日序，
+/// 历史月除以该月完整天数。结果保留两位小数（四舍五入）。
+@visibleForTesting
+Decimal homeDailyAverageExpense(
+  Decimal expense, {
+  required int year,
+  required int month,
+  required bool isCurrentMonth,
+  required DateTime today,
+}) {
+  final days = isCurrentMonth ? today.day : DateTime(year, month + 1, 0).day;
+  if (days <= 0 || expense <= Decimal.zero) return Decimal.zero;
+  // 先按「分」四舍五入成整数，再除以 100（有限小数），不经过 double。
+  final cents = (expense * Decimal.fromInt(100) / Decimal.fromInt(days)).round();
+  return (Decimal.fromBigInt(cents) / Decimal.fromInt(100)).toDecimal();
+}
 
 class _AmountText extends StatelessWidget {
   final Decimal value;

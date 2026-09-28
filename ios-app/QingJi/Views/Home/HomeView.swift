@@ -357,8 +357,9 @@ private struct BudgetSummaryBody: View {
         return max(1, count - day + 1)
     }
 
+    /// 标明这个数是预算总额，第一次看的人不用猜（与 Android 对齐）。
     private var footerText: String {
-        let amount = MoneyFormat.string(budget, currencyCode: currencyCode)
+        let amount = "预算 \(MoneyFormat.string(budget, currencyCode: currencyCode))"
         return isCurrentMonth ? "\(amount) · 剩 \(remainingDays) 天" : amount
     }
 
@@ -424,7 +425,14 @@ private struct BudgetSummaryBody: View {
             TodayAllowanceRing(
                 status: status,
                 currencyCode: currencyCode,
-                isCurrentMonth: isCurrentMonth
+                isCurrentMonth: isCurrentMonth,
+                dailyAverage: HomeDailyAverage.expense(
+                    summary.totalExpense,
+                    year: summary.year,
+                    month: summary.month,
+                    isCurrentMonth: isCurrentMonth,
+                    today: AppClock.now
+                )
             )
         }
     }
@@ -569,15 +577,46 @@ private struct TrailingIconLabelStyle: LabelStyle {
     }
 }
 
+/// 主页圆环的「日均支出」（口径 D-STAT-013）：本月除以今天的日序，历史月除以该月完整天数。
+/// 保留两位小数四舍五入（与 Android homeDailyAverageExpense 对齐）。
+enum HomeDailyAverage {
+    static func expense(
+        _ expense: Decimal,
+        year: Int,
+        month: Int,
+        isCurrentMonth: Bool,
+        today: Date,
+        calendar: Calendar = .current
+    ) -> Decimal {
+        let days: Int
+        if isCurrentMonth {
+            days = calendar.component(.day, from: today)
+        } else {
+            let start = calendar.date(from: DateComponents(year: year, month: month, day: 1))
+            days = start.flatMap { calendar.range(of: .day, in: .month, for: $0)?.count } ?? 0
+        }
+        guard days > 0, expense > 0 else { return 0 }
+        var raw = expense / Decimal(days)
+        var rounded = Decimal()
+        NSDecimalRound(&rounded, &raw, 2, .plain)
+        return rounded
+    }
+}
+
 private struct TodayAllowanceRing: View {
     let status: BudgetStatus
     let currencyCode: String
     let isCurrentMonth: Bool
+    /// 历史月圆环中间显示的日均支出。
+    let dailyAverage: Decimal
 
     private static let lineWidth: CGFloat = 7
 
     /// 今日已超：负的「可用」没有意义，封底为 0。
     private var todayOver: Bool { isCurrentMonth && status.todayAllowance < 0 }
+
+    /// 月预算已经超了：往后每天的「可用」都封底 ¥0，没有信息量，改显示「今日已花」。
+    private var monthOver: Bool { todayOver && status.isOverBudget }
 
     /// 超支模式下预算内部分占整圈的比例；nil 表示正常圆环。
     ///
@@ -618,11 +657,20 @@ private struct TodayAllowanceRing: View {
         todayOver || (!isCurrentMonth && status.isOverBudget) ? Color.warning : Color.budgetHealthy
     }
 
+    private var label: String {
+        guard isCurrentMonth else { return "日均支出" }
+        return monthOver ? "今日已花" : "今日可用"
+    }
+
+    /// 历史月不再写「已用 %」，那个数左边百分比标签已经有了。
     private var amountText: String {
-        if isCurrentMonth {
-            return MoneyFormat.string(todayOver ? 0 : status.todayAllowance, currencyCode: currencyCode)
+        guard isCurrentMonth else {
+            return MoneyFormat.string(dailyAverage, currencyCode: currencyCode)
         }
-        return "\(max(0, Int((usedRatio * 100).rounded())))%"
+        if monthOver {
+            return MoneyFormat.string(status.spentToday, currencyCode: currencyCode)
+        }
+        return MoneyFormat.string(todayOver ? 0 : status.todayAllowance, currencyCode: currencyCode)
     }
 
     var body: some View {
@@ -641,7 +689,7 @@ private struct TodayAllowanceRing: View {
                     .rotationEffect(.degrees(-90))
             }
             VStack(spacing: 2) {
-                Text(isCurrentMonth ? "今日可用" : "已用")
+                Text(label)
                     .font(.caption2)
                     .foregroundStyle(.secondary)
                 Text(amountText)
@@ -649,6 +697,7 @@ private struct TodayAllowanceRing: View {
                     .lineLimit(1)
                     .minimumScaleFactor(0.6)
             }
+            .frame(maxWidth: 62)
         }
         .frame(width: 80, height: 80)
     }

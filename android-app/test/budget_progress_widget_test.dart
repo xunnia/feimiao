@@ -369,9 +369,13 @@ void main() {
       closeTo(3200 / 4512, 0.001),
     );
 
-    // 圆环：今日可用封底 ¥0，日额度 991.05 / 今日已花 2208.95 ≈ 44.9%。
-    expect(find.text('今日可用'), findsOneWidget);
-    expect(find.text('¥0.00'), findsOneWidget);
+    // 右下角标明是预算总额。
+    expect(find.textContaining('预算 ¥3,200.00'), findsOneWidget);
+
+    // 圆环：月预算已超，改显示「今日已花」；日额度 991.05 / 今日已花 2208.95 ≈ 44.9%。
+    expect(find.text('今日可用'), findsNothing);
+    expect(find.text('今日已花'), findsOneWidget);
+    expect(find.text('¥2,208.95'), findsOneWidget);
     final ring = tester.widget<CustomPaint>(
       find.byKey(const ValueKey('budget-progress-ring-overflow')),
     );
@@ -416,7 +420,9 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    // 今天没花钱：不画满圈超支，只留浅橙底圈。
+    // 今天没花钱：显示「今日已花 ¥0.00」，不画满圈超支，只留浅橙底圈。
+    expect(find.text('今日已花'), findsOneWidget);
+    expect(find.text('¥0.00'), findsNWidgets(2)); // 收入 ¥0.00 + 今日已花 ¥0.00
     expect(
       find.byKey(const ValueKey('budget-progress-ring-overflow')),
       findsNothing,
@@ -439,6 +445,106 @@ void main() {
     final scheme = AppTheme.light().colorScheme;
     expect(homeIncomeColor(scheme, Decimal.zero), scheme.onSurfaceVariant);
     expect(homeIncomeColor(scheme, Decimal.one), AppColors.income(scheme));
+  });
+
+  test('home daily average: today ordinal this month, full month for history',
+      () {
+    final today = DateTime(2026, 9, 29, 14);
+    // 本月：4419.02 / 29 = 152.3800… → 152.38
+    expect(
+      homeDailyAverageExpense(
+        Decimal.parse('4419.02'),
+        year: 2026,
+        month: 9,
+        isCurrentMonth: true,
+        today: today,
+      ),
+      Decimal.parse('152.38'),
+    );
+    // 历史月（8 月 31 天）：1000 / 31 = 32.2580… → 32.26（四舍五入）
+    expect(
+      homeDailyAverageExpense(
+        Decimal.fromInt(1000),
+        year: 2026,
+        month: 8,
+        isCurrentMonth: false,
+        today: today,
+      ),
+      Decimal.parse('32.26'),
+    );
+    // 2 月按实际天数（2028 闰年 29 天）
+    expect(
+      homeDailyAverageExpense(
+        Decimal.fromInt(290),
+        year: 2028,
+        month: 2,
+        isCurrentMonth: false,
+        today: today,
+      ),
+      Decimal.fromInt(10),
+    );
+    expect(
+      homeDailyAverageExpense(
+        Decimal.zero,
+        year: 2026,
+        month: 8,
+        isCurrentMonth: false,
+        today: today,
+      ),
+      Decimal.zero,
+    );
+  });
+
+  testWidgets(
+      'historical month ring shows daily average instead of repeating percent',
+      (tester) async {
+    final summary = MonthlySummary(
+      year: 2026,
+      month: 8,
+      totalExpense: Decimal.fromInt(4400),
+      totalIncome: Decimal.zero,
+      expenseByCategory: const [],
+      dailyTotals: const [],
+    );
+    final status = BudgetStatus(
+      monthlyBudget: Decimal.fromInt(4000),
+      spentThisMonth: Decimal.fromInt(4400),
+      spentToday: Decimal.zero,
+      remaining: Decimal.fromInt(-400),
+      todayAllowance: Decimal.zero,
+      isOverBudget: true,
+      hasDailyGuidance: false,
+    );
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: AppTheme.light(),
+        home: Scaffold(
+          body: HomeSummaryCard(
+            monthDate: DateTime(2026, 8),
+            isCurrentMonth: false,
+            summary: summary,
+            budgetStatus: status,
+            budget: Decimal.fromInt(4000),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    // 110% 只在左边标签出现一次；圆环写日均 4400/31 = 141.94。
+    expect(find.text('110%'), findsOneWidget);
+    expect(find.text('已用'), findsNothing);
+    expect(find.text('日均支出'), findsOneWidget);
+    expect(find.text('¥141.94'), findsOneWidget);
+    // 历史月没有「剩 N 天」，但仍标明是预算。
+    expect(find.textContaining('剩'), findsNothing);
+    expect(find.textContaining('预算 ¥4,000.00'), findsOneWidget);
+    // 圆环仍按已用比例画超支分界：4000/4400。
+    final ring = tester.widget<CustomPaint>(
+      find.byKey(const ValueKey('budget-progress-ring-overflow')),
+    );
+    final painter = ring.painter! as BudgetOverflowRingPainter;
+    expect(painter.withinFraction, closeTo(4000 / 4400, 0.0001));
   });
 
   testWidgets('recurring transaction row shows 周期 before the category',
