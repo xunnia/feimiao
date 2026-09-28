@@ -732,6 +732,8 @@ class RootShellState extends State<RootShell>
   void initState() {
     super.initState();
     // 启动后静默检查更新（延迟几秒别抢首屏；失败/没更新都不打扰）。
+    // Capture fixtures must not open a live update dialog above the target page.
+    if (_parityCapture) return;
     Future.delayed(const Duration(seconds: 4), () {
       if (!mounted) return;
       unawaited(

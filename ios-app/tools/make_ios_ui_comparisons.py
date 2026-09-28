@@ -205,9 +205,22 @@ def main() -> int:
 
     parity_images: list[Image.Image] = []
     parity_paths: list[Path] = []
+    missing_targets: list[dict] = []
     if not args.skip_parity:
         for pair in pairs:
             android_path = args.root / pair["android"]
+            if not android_path.is_file():
+                raise SystemExit("missing parity screenshot: " + str(android_path))
+            if pair.get("ios") is None:
+                if pair.get("iosStatus") != "missing":
+                    raise SystemExit("undeclared missing iOS target: " + pair["id"])
+                missing_targets.append({
+                    "id": pair["id"],
+                    "status": "missing_ios_target",
+                    "android": pair["android"],
+                    "notes": pair.get("notes", ""),
+                })
+                continue
             ios_path = args.root / pair["ios"]
             if not android_path.exists() or not ios_path.exists():
                 missing = [str(path) for path in (android_path, ios_path) if not path.exists()]
@@ -241,6 +254,9 @@ def main() -> int:
         contact_sheet(ui_images, columns=1).save(args.output_dir / "00-ios-liquid-glass-before-after.png", format="PNG", optimize=True)
 
     report = {
+        "declaredCount": len(pairs),
+        "missingTargets": missing_targets,
+        "productComplete": False,
         "pairCount": len(parity_paths),
         "parityArtifacts": [str(path) for path in parity_paths],
         "uiArtifacts": [str(path) for path in ui_paths],

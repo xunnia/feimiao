@@ -591,11 +591,11 @@
       "androidState": "资金标签页，显示账户和负债分组",
       "androidSource": ["android-app/lib/views/settings/accounts_view.dart", "android-app/lib/views/assets/funds_tab_cards.dart"],
       "iosTargetEntry": "drawer/assets/funds",
-      "iosCurrentEntry": null,
+      "iosCurrentEntry": "settings/assets/funds",
       "iosSource": ["ios-app/QingJi/Views/Assets/AssetsView.swift", "ios-app/QingJi/Views/Settings/AccountsView.swift"],
       "requiredAnchors": ["funds-tab", "account-groups", "balances", "add-account", "account-row"],
       "requiredFields": ["cash", "deposit", "credit", "loan", "total-funds"],
-      "evidence": {"android": "MISSING_DISTINCT_CAPTURE", "ios": "MISSING_TARGET_PAGE"}
+      "evidence": {"android": "RECAPTURE_REQUIRED", "ios": "RECAPTURE_REQUIRED"}
     },
     {
       "id": "reconcile",

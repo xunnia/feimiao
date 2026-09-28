@@ -281,10 +281,11 @@ final class MoneyTransaction {
 
     /// 转换为平台无关的 DTO，供统计引擎与导出使用。
     var record: TransactionRecord {
-        let languageCode = Locale.current.language.languageCode?.identifier ?? "zh"
         let topCategoryName: String = {
             guard let parentKey = category?.parentKey else { return category?.name ?? "" }
-            return CategorySeed.byKey(parentKey)?.localizedName(languageCode: languageCode)
+            // Stored seed names are Chinese. Localizing only child rollups splits
+            // the same category into two statistical buckets on English devices.
+            return CategorySeed.byKey(parentKey)?.nameZh
                 ?? category?.name
                 ?? ""
         }()

@@ -1,13 +1,16 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:crypto/crypto.dart';
 import 'package:decimal/decimal.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/cupertino.dart' show CupertinoIcons;
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
 import 'package:provider/provider.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:qingji/core/account/account_movement_projection.dart';
 import 'package:qingji/core/app_clock.dart';
 import 'package:qingji/core/models/recurring_rule.dart';
@@ -67,7 +70,8 @@ void main() {
     expect(tester.view.physicalSize, const Size(1080, 1920),
         reason: 'P0 Android captures require the canonical device size');
     expect(AppClock.now.timeZoneOffset, const Duration(hours: 8),
-        reason: 'P0 calendar calculations require device timezone Asia/Shanghai');
+        reason:
+            'P0 calendar calculations require device timezone Asia/Shanghai');
     await app.main();
     await _pumpFor(tester, const Duration(seconds: 2));
 
@@ -124,6 +128,12 @@ void main() {
     }
     binding.reportData ??= <String, dynamic>{};
     binding.reportData!['p0BusinessJson'] = businessJson;
+    // Stop page animations before integration_test restores the Android surface
+    // in its teardown. The captured images and business payload remain intact.
+    debugPrint('PARITY_TEARDOWN_BEGIN');
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pump();
+    debugPrint('PARITY_TEARDOWN_READY');
   });
 }
 
@@ -155,6 +165,16 @@ Future<void> _captureParityScene(
     await _captureStatistics(tester, binding, '周', 'stats-week-android');
   } else if (scene == 'stats-month') {
     await _captureStatistics(tester, binding, '月', 'stats-month-android');
+  } else if (scene == 'stats-month-trend') {
+    await _captureMonthlyTrend(tester, binding);
+  } else if (scene == 'stats-month-bottom') {
+    await _captureMonthlyBottom(tester, binding);
+  } else if (scene == 'stats-month-controls') {
+    await _captureMonthlyControls(tester, binding, repo);
+  } else if (scene == 'stats-month-priority') {
+    await _captureMonthlyPriority(tester, binding);
+  } else if (scene == 'stats-month-extras') {
+    await _captureMonthlyExtras(tester, binding, repo);
   } else if (scene == 'stats-year') {
     await _captureStatistics(tester, binding, '年', 'stats-year-android');
   } else if (scene == 'stats-custom') {
@@ -232,6 +252,9 @@ Future<void> _captureParityScene(
     await _captureDisplaySettings(tester, binding);
   } else if (scene == 'assets-hub' ||
       scene == 'assets-funds' ||
+      scene == 'assets-add' ||
+      scene == 'assets-purchase' ||
+      scene == 'assets-purchase-form' ||
       scene == 'accounts-management' ||
       scene == 'liabilities' ||
       scene == 'net-worth') {
@@ -713,6 +736,8 @@ Future<void> _captureDrawerOnly(
 ) async {
   final button = find.byType(AppDrawerButton);
   expect(button, findsAtLeastNWidgets(1));
+  expect(button.first.hitTestable(), findsOneWidget,
+      reason: 'Drawer capture must not be obscured by a modal route');
   await tester.tap(button.first);
   await _pumpFor(tester, const Duration(milliseconds: 700));
   expect(find.text('我的账本'), findsOneWidget);
@@ -852,6 +877,44 @@ Future<void> _captureAssetScene(
     return;
   }
 
+  if (scene == 'assets-add' ||
+      scene == 'assets-purchase' ||
+      scene == 'assets-purchase-form') {
+    final add = find.descendant(
+      of: find.byType(AppBar),
+      matching: find.byIcon(Icons.add),
+    );
+    expect(add, findsAtLeastNWidgets(1));
+    await tester.tap(add.last);
+    await _pumpFor(tester, const Duration(milliseconds: 500));
+    expect(find.text('添加账户'), findsOneWidget);
+    expect(find.text('添加权益'), findsOneWidget);
+    expect(find.text('新购买记账'), findsOneWidget);
+    expect(find.text('从最近账单加入'), findsOneWidget);
+    expect(find.text('手工补录物品'), findsOneWidget);
+    if (scene == 'assets-purchase' || scene == 'assets-purchase-form') {
+      await tester.tap(find.text('从最近账单加入').last);
+      await _pumpFor(tester, const Duration(milliseconds: 600));
+      expect(find.byKey(const Key('asset-purchase-search')), findsOneWidget);
+      expect(find.textContaining('可分配'), findsAtLeastNWidgets(1));
+      if (scene == 'assets-purchase-form') {
+        final purchase = find.text('午餐 麦当劳').last;
+        await tester.ensureVisible(purchase);
+        await tester.tap(purchase.hitTestable());
+        await _pumpFor(tester, const Duration(milliseconds: 600));
+        expect(find.byKey(const Key('asset-purchase-name')), findsOneWidget);
+        FocusManager.instance.primaryFocus?.unfocus();
+        await _pumpFor(tester, const Duration(milliseconds: 400));
+        await _takeScreenshot(tester, binding, 'assets-purchase-form-android');
+        return;
+      }
+      await _takeScreenshot(tester, binding, 'assets-purchase-android');
+      return;
+    }
+    await _takeScreenshot(tester, binding, 'assets-add-android');
+    return;
+  }
+
   if (scene == 'accounts-management') {
     final add = find.descendant(
       of: find.byType(AppBar),
@@ -960,6 +1023,182 @@ Future<void> _captureStatistics(
   await _takeScreenshot(tester, binding, name);
 }
 
+Future<void> _captureMonthlyTrend(
+  WidgetTester tester,
+  IntegrationTestWidgetsFlutterBinding binding,
+) async {
+  final navigator = ShareIntake.navigatorKey.currentState;
+  expect(navigator, isNotNull);
+  unawaited(navigator!.push<void>(_parityPageRoute<void>(const StatisticsView())));
+  await _pumpFor(tester, const Duration(milliseconds: 700));
+  await tester.tap(find.text('月').first);
+  await _pumpFor(tester, const Duration(milliseconds: 500));
+
+  final list = find.byType(ReorderableListView).last;
+  final title = find.text('每日趋势');
+  for (var attempt = 0; attempt < 6 && title.evaluate().isEmpty; attempt++) {
+    await tester.drag(list, const Offset(0, -420));
+    await _pumpFor(tester, const Duration(milliseconds: 250));
+  }
+  expect(title, findsOneWidget);
+  await Scrollable.ensureVisible(title.evaluate().single, alignment: 0.25);
+  await _pumpFor(tester, const Duration(milliseconds: 500));
+  expect(find.text('本月支出'), findsAtLeastNWidgets(1));
+  await _takeScreenshot(tester, binding, 'stats-month-trend-android');
+  final incomeControl = find.text('收入').last;
+  expect(incomeControl, findsOneWidget);
+  await tester.tap(incomeControl);
+  await _pumpFor(tester, const Duration(milliseconds: 300));
+  expect(find.text('本月收入'), findsOneWidget);
+  await _takeScreenshot(tester, binding, 'stats-month-income-trend-android');
+}
+
+Future<void> _captureMonthlyBottom(
+  WidgetTester tester,
+  IntegrationTestWidgetsFlutterBinding binding,
+) async {
+  final navigator = ShareIntake.navigatorKey.currentState;
+  expect(navigator, isNotNull);
+  unawaited(navigator!.push<void>(_parityPageRoute<void>(const StatisticsView())));
+  await _pumpFor(tester, const Duration(milliseconds: 700));
+  await tester.tap(find.text('月').first);
+  await _pumpFor(tester, const Duration(milliseconds: 500));
+
+  final list = find.byType(ReorderableListView).last;
+  for (final (titleText, imageName) in [
+    ('单笔支出排行', 'stats-month-top5-android'),
+    ('消费来源', 'stats-month-sources-android'),
+  ]) {
+    final title = find.text(titleText);
+    for (var attempt = 0; attempt < 8 && title.evaluate().isEmpty; attempt++) {
+      await tester.drag(list, const Offset(0, -420));
+      await _pumpFor(tester, const Duration(milliseconds: 250));
+    }
+    expect(title, findsOneWidget);
+    await Scrollable.ensureVisible(title.evaluate().single, alignment: 0.2);
+    await _pumpFor(tester, const Duration(milliseconds: 500));
+    await _takeScreenshot(tester, binding, imageName);
+  }
+}
+
+Future<void> _captureMonthlyControls(
+  WidgetTester tester,
+  IntegrationTestWidgetsFlutterBinding binding,
+  AppRepository repo,
+) async {
+  final secondBookID = await repo.addBook(name: '差旅账本');
+  final navigator = ShareIntake.navigatorKey.currentState;
+  expect(navigator, isNotNull);
+  unawaited(navigator!.push<void>(_parityPageRoute<void>(const StatisticsView())));
+  await _pumpFor(tester, const Duration(milliseconds: 700));
+  await tester.tap(find.text('月').first);
+  await _pumpFor(tester, const Duration(milliseconds: 400));
+  await tester.tap(find.text('2026年8月').last);
+  await _pumpFor(tester, const Duration(milliseconds: 500));
+  expect(find.text('选择月份'), findsOneWidget);
+  await _takeScreenshot(tester, binding, 'stats-month-picker-android');
+
+  await tester.tap(find.byIcon(CupertinoIcons.xmark).last);
+  await _pumpFor(tester, const Duration(milliseconds: 400));
+  await tester.tap(find.text('总账本').last);
+  await _pumpFor(tester, const Duration(milliseconds: 400));
+  expect(find.textContaining('差旅账本'), findsAtLeastNWidgets(1));
+  await _takeScreenshot(tester, binding, 'stats-month-books-android');
+
+  await tester.tap(find.textContaining('差旅账本').last);
+  await _pumpFor(tester, const Duration(milliseconds: 600));
+  expect(repo.currentBookId, secondBookID);
+  await _takeScreenshot(tester, binding, 'stats-month-book-selected-android');
+}
+
+Future<void> _captureMonthlyPriority(
+  WidgetTester tester,
+  IntegrationTestWidgetsFlutterBinding binding,
+) async {
+  final navigator = ShareIntake.navigatorKey.currentState;
+  expect(navigator, isNotNull);
+  unawaited(navigator!.push<void>(_parityPageRoute<void>(const StatisticsView())));
+  await _pumpFor(tester, const Duration(milliseconds: 700));
+  await tester.tap(find.text('月').first);
+  await _pumpFor(tester, const Duration(milliseconds: 500));
+
+  final list = find.byType(ReorderableListView).last;
+  for (final (label, name) in [
+    ('截至 8月27日', 'stats-month-pace-android'),
+    ('查看所有支出活动', 'stats-month-pace-activity-android'),
+    ('预算使用', 'stats-month-budget-ring-android'),
+  ]) {
+    final target = find.textContaining(label);
+    for (var attempt = 0; attempt < 8 && target.evaluate().isEmpty; attempt++) {
+      await tester.drag(list, const Offset(0, -420));
+      await _pumpFor(tester, const Duration(milliseconds: 250));
+    }
+    expect(target, findsAtLeastNWidgets(1));
+    await Scrollable.ensureVisible(target.evaluate().last, alignment: 0.2);
+    await _pumpFor(tester, const Duration(milliseconds: 500));
+    await _takeScreenshot(tester, binding, name);
+  }
+
+  await tester.tap(find.byIcon(CupertinoIcons.plus).first);
+  await _pumpFor(tester, const Duration(milliseconds: 400));
+  expect(find.text('自定义图表'), findsAtLeastNWidgets(1));
+  await _takeScreenshot(tester, binding, 'stats-month-cards-android');
+  await tester.tap(find.byIcon(CupertinoIcons.xmark).last);
+  await _pumpFor(tester, const Duration(milliseconds: 400));
+
+  final activity = find.text('查看所有支出活动');
+  for (var attempt = 0; attempt < 8 && activity.evaluate().isEmpty; attempt++) {
+    await tester.drag(list, const Offset(0, 420));
+    await _pumpFor(tester, const Duration(milliseconds: 250));
+  }
+  expect(activity, findsAtLeastNWidgets(1));
+  await Scrollable.ensureVisible(activity.evaluate().last, alignment: 0.5);
+  await tester.tap(activity.last);
+  await _pumpFor(tester, const Duration(milliseconds: 600));
+  expect(find.text('全部支出活动'), findsAtLeastNWidgets(1));
+  expect(find.textContaining('1,017.90'), findsAtLeastNWidgets(1));
+  await _takeScreenshot(tester, binding, 'stats-month-pace-detail-android');
+}
+
+Future<void> _captureMonthlyExtras(
+  WidgetTester tester,
+  IntegrationTestWidgetsFlutterBinding binding,
+  AppRepository repo,
+) async {
+  final navigator = ShareIntake.navigatorKey.currentState;
+  expect(navigator, isNotNull);
+  unawaited(navigator!.push<void>(_parityPageRoute<void>(const StatisticsView())));
+  await _pumpFor(tester, const Duration(milliseconds: 700));
+  await tester.tap(find.text('月').first);
+  await _pumpFor(tester, const Duration(milliseconds: 500));
+  await tester.tap(find.byIcon(CupertinoIcons.plus).first);
+  await _pumpFor(tester, const Duration(milliseconds: 400));
+  expect(find.text('自定义图表'), findsAtLeastNWidgets(1));
+  await _takeScreenshot(tester, binding, 'stats-month-optional-cards-android');
+  await tester.tap(find.byIcon(CupertinoIcons.xmark).last);
+  await _pumpFor(tester, const Duration(milliseconds: 400));
+  await repo.setStatCardOrder(['insights', 'heatmap', 'radar', 'stacked']);
+  await _pumpFor(tester, const Duration(milliseconds: 500));
+
+  final list = find.byType(ReorderableListView).last;
+  for (final (label, name) in [
+    ('喵的洞察', 'stats-month-insights-android'),
+    ('消费热力图', 'stats-month-heatmap-android'),
+    ('本月 vs 上月', 'stats-month-radar-android'),
+    ('近 12 月收支', 'stats-month-stacked-android'),
+  ]) {
+    final target = find.text(label);
+    for (var attempt = 0; attempt < 12 && target.evaluate().isEmpty; attempt++) {
+      await tester.drag(list, const Offset(0, -420));
+      await _pumpFor(tester, const Duration(milliseconds: 250));
+    }
+    expect(target, findsAtLeastNWidgets(1));
+    await Scrollable.ensureVisible(target.evaluate().last, alignment: 0.2);
+    await _pumpFor(tester, const Duration(milliseconds: 500));
+    await _takeScreenshot(tester, binding, name);
+  }
+}
+
 Future<void> _takeScreenshot(
   WidgetTester tester,
   IntegrationTestWidgetsFlutterBinding binding,
@@ -976,7 +1215,20 @@ Future<void> _takeScreenshot(
     _surfaceConverted = true;
   }
   await tester.pump();
-  await binding.takeScreenshot(name);
+  final bytes = await binding.takeScreenshot(name);
+  final cache = await getTemporaryDirectory();
+  final directory = Directory('${cache.path}/parity');
+  await directory.create(recursive: true);
+  await File('${directory.path}/$name.png').writeAsBytes(bytes, flush: true);
+  binding.reportData!.remove('screenshots');
+  final files = binding.reportData!
+      .putIfAbsent('screenshotFiles', () => <dynamic>[]) as List;
+  files.add({
+    'name': name,
+    'path': '${directory.path}/$name.png',
+    'sha256': sha256.convert(bytes).toString(),
+    'length': bytes.length,
+  });
   debugPrint('PARITY_CAPTURE_DONE name=$name');
 }
 

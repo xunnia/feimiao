@@ -211,6 +211,52 @@ enum AssetStore {
         try context.save()
     }
 
+    struct PurchaseCandidate {
+        let transaction: MoneyTransaction
+        let remainingGrossCents: Int
+        let remainingRefundCents: Int
+    }
+
+    static func purchaseCandidates(
+        transactions: [MoneyTransaction],
+        links: [AssetTransactionLink]
+    ) -> [PurchaseCandidate] {
+        let refundTotals = LedgerPolicy.refundTotals(from: transactions.map(\.record))
+        var allocations: [UUID: (gross: Int, refund: Int)] = [:]
+        for link in links where link.assetObjectType == "physical" &&
+            (link.linkTypeRaw == AssetTransactionLinkType.sourceTransaction.rawValue ||
+             link.linkTypeRaw == AssetTransactionLinkType.purchaseTransaction.rawValue) {
+            let previous = allocations[link.transactionID] ?? (gross: 0, refund: 0)
+            allocations[link.transactionID] = (
+                gross: previous.gross + link.allocatedGrossCents,
+                refund: previous.refund + link.allocatedRefundCents
+            )
+        }
+        return transactions.compactMap { transaction in
+            guard transaction.kind == .expense,
+                  transaction.amount > 0,
+                  transaction.refundOfID == nil,
+                  !transaction.isExcluded,
+                  transaction.currencyCode == "CNY" else { return nil }
+            let orderGross = MoneyNormalization.cents(transaction.amount)
+            let validRefund = MoneyNormalization.cents(-(refundTotals[transaction.stableID] ?? .zero))
+            guard validRefund <= orderGross else { return nil }
+            let used = allocations[transaction.stableID] ?? (gross: 0, refund: 0)
+            let remainingGross = orderGross - used.gross
+            guard remainingGross > 0 else { return nil }
+            return PurchaseCandidate(
+                transaction: transaction,
+                remainingGrossCents: remainingGross,
+                remainingRefundCents: max(0, validRefund - used.refund)
+            )
+        }
+        .sorted {
+            $0.transaction.date == $1.transaction.date
+                ? $0.transaction.stableID.uuidString > $1.transaction.stableID.uuidString
+                : $0.transaction.date > $1.transaction.date
+        }
+    }
+
     /// 给多件物品订单建立购置成本分配，遵守“毛额、退款、净额均不能超订单”规则。
     @discardableResult
     static func linkPurchaseAllocation(
@@ -218,7 +264,8 @@ enum AssetStore {
         transaction: MoneyTransaction,
         grossCents: Int,
         refundCents: Int = 0,
-        in context: ModelContext
+        in context: ModelContext,
+        saveImmediately: Bool = true
     ) throws -> AssetTransactionLink {
         guard transaction.kind == .expense,
               transaction.amount > 0,
@@ -228,40 +275,13 @@ enum AssetStore {
               transaction.currencyCode == asset.currencyCode else {
             throw Error.invalidTransaction
         }
-        let allTransactions = try context.fetch(FetchDescriptor<MoneyTransaction>())
-        let refundStatus = LedgerPolicy.refundStatus(for: transaction.record, in: allTransactions.map(\.record))
-        let orderGross = MoneyNormalization.cents(transaction.amount)
-        let validRefund = MoneyNormalization.cents(refundStatus.refundedAmount)
-        let otherLines = try context.fetch(FetchDescriptor<AssetTransactionLink>())
-            .filter {
-                $0.transactionID == transaction.stableID &&
-                ($0.linkTypeRaw == AssetTransactionLinkType.sourceTransaction.rawValue ||
-                 $0.linkTypeRaw == AssetTransactionLinkType.purchaseTransaction.rawValue)
-            }
-            .map {
-                AssetAllocationLine(
-                    assetID: $0.assetID,
-                    grossCents: $0.allocatedGrossCents,
-                    refundCents: $0.allocatedRefundCents
-                )
-            }
-        let lines = otherLines + [AssetAllocationLine(
-            assetID: asset.stableID,
+        try validatePurchaseAllocation(
+            transaction: transaction,
             grossCents: grossCents,
-            refundCents: refundCents
-        )]
-        do {
-            _ = try AssetAllocationPolicy.validate(
-                orderGrossCents: orderGross,
-                validOrderRefundCents: validRefund,
-                lines: lines
-            )
-        } catch {
-            throw Error.allocationInvalid
-        }
-        guard !otherLines.contains(where: { $0.assetID == asset.stableID }) else {
-            throw Error.duplicateTransaction
-        }
+            refundCents: refundCents,
+            assetID: asset.stableID,
+            in: context
+        )
         let link = AssetTransactionLink(
             assetID: asset.stableID,
             transactionID: transaction.stableID,
@@ -283,8 +303,51 @@ enum AssetStore {
             value: link.amount,
             note: "从已有账单分配"
         ))
-        try context.save()
+        if saveImmediately { try context.save() }
         return link
+    }
+
+    private static func validatePurchaseAllocation(
+        transaction: MoneyTransaction,
+        grossCents: Int,
+        refundCents: Int,
+        assetID: UUID,
+        in context: ModelContext
+    ) throws {
+        let allTransactions = try context.fetch(FetchDescriptor<MoneyTransaction>())
+        let refundStatus = LedgerPolicy.refundStatus(for: transaction.record, in: allTransactions.map(\.record))
+        let orderGross = MoneyNormalization.cents(transaction.amount)
+        let validRefund = MoneyNormalization.cents(refundStatus.refundedAmount)
+        let otherLines = try context.fetch(FetchDescriptor<AssetTransactionLink>())
+            .filter {
+                $0.transactionID == transaction.stableID &&
+                ($0.linkTypeRaw == AssetTransactionLinkType.sourceTransaction.rawValue ||
+                 $0.linkTypeRaw == AssetTransactionLinkType.purchaseTransaction.rawValue)
+            }
+            .map {
+                AssetAllocationLine(
+                    assetID: $0.assetID,
+                    grossCents: $0.allocatedGrossCents,
+                    refundCents: $0.allocatedRefundCents
+                )
+            }
+        guard !otherLines.contains(where: { $0.assetID == assetID }) else {
+            throw Error.duplicateTransaction
+        }
+        let lines = otherLines + [AssetAllocationLine(
+            assetID: assetID,
+            grossCents: grossCents,
+            refundCents: refundCents
+        )]
+        do {
+            _ = try AssetAllocationPolicy.validate(
+                orderGrossCents: orderGross,
+                validOrderRefundCents: validRefund,
+                lines: lines
+            )
+        } catch {
+            throw Error.allocationInvalid
+        }
     }
 
     @discardableResult
@@ -303,8 +366,11 @@ enum AssetStore {
         warrantyUntil: Date? = nil,
         note: String = "",
         includeInNetWorth: Bool = true,
-        sourceType: PhysicalAssetSourceType = .historicalExisting
+        sourceType: PhysicalAssetSourceType = .historicalExisting,
+        usageLifecycle: PhysicalAssetLifecycle = .owned,
+        saveImmediately: Bool = true
     ) throws -> PhysicalAsset {
+        try validateUsageLifecycle(usageLifecycle)
         let normalizedPurchasePrice = MoneyNormalization.roundToCents(purchasePrice)
         let normalizedCurrentValue = MoneyNormalization.roundToCents(currentValue)
         try validate(
@@ -325,6 +391,8 @@ enum AssetStore {
         )
         asset.purchaseDate = purchaseDate
         asset.sourceType = sourceType
+        asset.lifecycle = usageLifecycle
+        asset.usageStatusRaw = usageLifecycle == .idle ? "idle" : "active"
         asset.acquisitionCostSourceRaw = normalizedPurchasePrice > 0
             ? AssetAcquisitionCostSource.manual.rawValue
             : AssetAcquisitionCostSource.manualUnknown.rawValue
@@ -351,7 +419,7 @@ enum AssetStore {
             valuedAt: purchaseDate ?? now,
             note: "初始当前价值"
         ))
-        try context.save()
+        if saveImmediately { try context.save() }
         return asset
     }
 
@@ -372,8 +440,10 @@ enum AssetStore {
         location: String = "",
         warrantyUntil: Date? = nil,
         note: String = "",
-        includeInNetWorth: Bool = true
+        includeInNetWorth: Bool = true,
+        usageLifecycle: PhysicalAssetLifecycle = .owned
     ) throws -> PhysicalAsset {
+        try validateUsageLifecycle(usageLifecycle)
         let normalizedPrice = MoneyNormalization.roundToCents(purchasePrice)
         guard normalizedPrice > 0,
               !account.isDeleted,
@@ -384,51 +454,57 @@ enum AssetStore {
         guard category == nil || category?.kind == .expense else {
             throw Error.invalidTransaction
         }
-        let asset = try create(
-            in: context,
-            name: name,
-            kind: kind,
-            purchasePrice: normalizedPrice,
-            currentValue: currentValue,
-            currencyCode: account.currencyCode,
-            book: book,
-            purchaseDate: purchaseDate,
-            brand: brand,
-            model: model,
-            location: location,
-            warrantyUntil: warrantyUntil,
-            note: note,
-            includeInNetWorth: includeInNetWorth,
-            sourceType: .newPurchaseWithAccount
-        )
-        let transaction = MoneyTransaction(
-            amount: normalizedPrice,
-            kind: .expense,
-            date: purchaseDate,
-            note: note.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                ? "购买：\(name)"
-                : note,
-            merchantName: name,
-            currencyCode: account.currencyCode,
-            category: category,
-            account: account,
-            book: book,
-            timePrecision: .dateOnly,
-            settledAt: purchaseDate,
-            settlementQuality: .userConfirmed,
-            settlementAccountID: account.stableID,
-            settlementAccountQuality: .userConfirmed,
-            eventType: .assetPurchase
-        )
-        context.insert(transaction)
-        try context.save()
-        _ = try linkPurchaseAllocation(
-            asset,
-            transaction: transaction,
-            grossCents: MoneyNormalization.cents(normalizedPrice),
-            in: context
-        )
-        return asset
+        var createdAsset: PhysicalAsset?
+        try context.transaction {
+            let asset = try create(
+                in: context,
+                name: name,
+                kind: kind,
+                purchasePrice: normalizedPrice,
+                currentValue: currentValue,
+                currencyCode: account.currencyCode,
+                book: book,
+                purchaseDate: purchaseDate,
+                brand: brand,
+                model: model,
+                location: location,
+                warrantyUntil: warrantyUntil,
+                note: note,
+                includeInNetWorth: includeInNetWorth,
+                sourceType: .newPurchaseWithAccount,
+                usageLifecycle: usageLifecycle,
+                saveImmediately: false
+            )
+            let transaction = MoneyTransaction(
+                amount: normalizedPrice,
+                kind: .expense,
+                date: purchaseDate,
+                note: note.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    ? "购买：\(name)"
+                    : note,
+                merchantName: name,
+                currencyCode: account.currencyCode,
+                category: category,
+                account: account,
+                book: book,
+                timePrecision: .dateOnly,
+                settledAt: purchaseDate,
+                settlementQuality: .userConfirmed,
+                settlementAccountID: account.stableID,
+                settlementAccountQuality: .userConfirmed,
+                eventType: .assetPurchase
+            )
+            context.insert(transaction)
+            _ = try linkPurchaseAllocation(
+                asset,
+                transaction: transaction,
+                grossCents: MoneyNormalization.cents(normalizedPrice),
+                in: context,
+                saveImmediately: false
+            )
+            createdAsset = asset
+        }
+        return createdAsset!
     }
 
     /// 从既有支出账单加入物品；多物品订单必须显式给出本物品的毛额和退款分摊。
@@ -446,8 +522,10 @@ enum AssetStore {
         location: String = "",
         warrantyUntil: Date? = nil,
         note: String = "",
-        includeInNetWorth: Bool = true
+        includeInNetWorth: Bool = true,
+        usageLifecycle: PhysicalAssetLifecycle = .owned
     ) throws -> PhysicalAsset {
+        try validateUsageLifecycle(usageLifecycle)
         guard transaction.kind == .expense,
               transaction.amount > 0,
               transaction.refundOfID == nil,
@@ -460,32 +538,46 @@ enum AssetStore {
               allocatedRefundCents <= allocatedGrossCents else {
             throw Error.allocationInvalid
         }
-        let net = Decimal(allocatedGrossCents - allocatedRefundCents) / Decimal(100)
-        let asset = try create(
-            in: context,
-            name: name,
-            kind: kind,
-            purchasePrice: net,
-            currentValue: currentValue ?? net,
-            currencyCode: transaction.currencyCode,
-            book: transaction.book,
-            purchaseDate: transaction.date,
-            brand: brand,
-            model: model,
-            location: location,
-            warrantyUntil: warrantyUntil,
-            note: note,
-            includeInNetWorth: includeInNetWorth,
-            sourceType: .fromTransaction
-        )
-        _ = try linkPurchaseAllocation(
-            asset,
+        try validatePurchaseAllocation(
             transaction: transaction,
             grossCents: allocatedGrossCents,
             refundCents: allocatedRefundCents,
+            assetID: UUID(),
             in: context
         )
-        return asset
+        let net = Decimal(allocatedGrossCents - allocatedRefundCents) / Decimal(100)
+        var createdAsset: PhysicalAsset?
+        try context.transaction {
+            let asset = try create(
+                in: context,
+                name: name,
+                kind: kind,
+                purchasePrice: net,
+                currentValue: currentValue ?? net,
+                currencyCode: transaction.currencyCode,
+                book: transaction.book,
+                purchaseDate: transaction.date,
+                brand: brand,
+                model: model,
+                location: location,
+                warrantyUntil: warrantyUntil,
+                note: note,
+                includeInNetWorth: includeInNetWorth,
+                sourceType: .fromTransaction,
+                usageLifecycle: usageLifecycle,
+                saveImmediately: false
+            )
+            _ = try linkPurchaseAllocation(
+                asset,
+                transaction: transaction,
+                grossCents: allocatedGrossCents,
+                refundCents: allocatedRefundCents,
+                in: context,
+                saveImmediately: false
+            )
+            createdAsset = asset
+        }
+        return createdAsset!
     }
 
     static func update(
@@ -502,11 +594,13 @@ enum AssetStore {
         model: String,
         location: String,
         note: String,
-        includeInNetWorth: Bool
+        includeInNetWorth: Bool,
+        usageLifecycle: PhysicalAssetLifecycle? = nil
     ) throws {
         guard asset.lifecycle == .owned || asset.lifecycle == .idle else {
             throw Error.endedAsset
         }
+        if let usageLifecycle { try validateUsageLifecycle(usageLifecycle) }
         let normalizedPurchasePrice = MoneyNormalization.roundToCents(purchasePrice)
         let normalizedCurrentValue = MoneyNormalization.roundToCents(currentValue)
         try validate(
@@ -532,6 +626,10 @@ enum AssetStore {
         asset.location = location.trimmingCharacters(in: .whitespacesAndNewlines)
         asset.note = note.trimmingCharacters(in: .whitespacesAndNewlines)
         asset.includeInNetWorth = includeInNetWorth
+        if let usageLifecycle {
+            asset.lifecycle = usageLifecycle
+            asset.usageStatusRaw = usageLifecycle == .idle ? "idle" : "active"
+        }
         asset.updatedAt = Date()
         context.insert(AssetEvent(
             assetID: asset.stableID,
@@ -548,6 +646,10 @@ enum AssetStore {
             ))
         }
         try context.save()
+    }
+
+    private static func validateUsageLifecycle(_ lifecycle: PhysicalAssetLifecycle) throws {
+        guard lifecycle == .owned || lifecycle == .idle else { throw Error.endedAsset }
     }
 
     static func setLifecycle(

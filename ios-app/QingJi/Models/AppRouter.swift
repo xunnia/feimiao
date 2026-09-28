@@ -37,7 +37,7 @@ final class AppRouter {
 
     /// 设置页接到深链后要 push 的子页面。
     enum SettingsDestination: Hashable {
-        case books, accounts, accountDetail, categories, tags, memory, aiMemory, aiTasks, aiExtensions, aiSchedules, aiSearch, aiDiagnostics, aiLocal, budget, reconcile, reimburse, reimburseSettlement, savings, recurring, assets, assetDetail, liabilities, netWorth, importReview, importExport, reports, backup, display, theme, moneyDisplay, autoRecord, ai
+        case books, accounts, accountDetail, categories, tags, memory, aiMemory, aiTasks, aiExtensions, aiSchedules, aiSearch, aiDiagnostics, aiLocal, budget, reconcile, reimburse, reimburseSettlement, savings, recurring, assets, assetFunds, assetAdd, assetPurchase, assetPurchaseForm, assetDetail, liabilities, netWorth, importReview, importExport, reports, backup, display, theme, moneyDisplay, autoRecord, ai
     }
     var settingsPushTarget: SettingsDestination? = nil
 
@@ -101,9 +101,17 @@ final class AppRouter {
         case "search":      selectedTab = .search
         case "transactions": selectedTab = .transactions
         case "stats-week", "stats/week":  selectedTab = .statistics; statsScope = .week
-        case "stats-month", "stats/month":  selectedTab = .statistics; statsScope = .month
+        case "stats-month", "stats/month", "stats/month/ring", "stats/month/trend", "stats/month/trend/income",
+             "stats/month/top5", "stats/month/sources", "stats/month/picker", "stats/month/books",
+             "stats/month/book-selected":
+            selectedTab = .statistics; statsScope = .month
+        case "stats/month/pace", "stats/month/pace/activity", "stats/month/pace/detail",
+             "stats/month/budget-ring", "stats/month/cards", "stats/month/cards/optional", "stats/month/insights",
+             "stats/month/heatmap", "stats/month/radar", "stats/month/stacked":
+            selectedTab = .statistics; statsScope = .month
         case "stats-year", "stats/year":   selectedTab = .statistics; statsScope = .year
-        case "stats-custom", "stats/custom": selectedTab = .statistics; statsScope = .custom
+        case "stats-custom", "stats/custom", "stats/custom/category-detail":
+            selectedTab = .statistics; statsScope = .custom
         case "quickadd":    selectedTab = .quickAdd
         case "budget":       selectedTab = .settings;   settingsPushTarget = .budget
         case "reconcile":    selectedTab = .settings;   settingsPushTarget = .reconcile
@@ -128,6 +136,10 @@ final class AppRouter {
         case "assets-detail", "assets/detail":
             selectedTab = .settings
             settingsPushTarget = .assetDetail
+        case "assets/funds": selectedTab = .settings; settingsPushTarget = .assetFunds
+        case "assets/add": selectedTab = .settings; settingsPushTarget = .assetAdd
+        case "assets/purchase": selectedTab = .settings; settingsPushTarget = .assetPurchase
+        case "assets/purchase/form": selectedTab = .settings; settingsPushTarget = .assetPurchaseForm
         case "assets":       selectedTab = .settings;   settingsPushTarget = .assets
         case "accounts-detail", "accounts/detail":
             selectedTab = .settings
@@ -214,9 +226,15 @@ final class AppRouter {
             case "savings":   settingsPushTarget = .savings
             case "recurring": settingsPushTarget = .recurring
             case "assets":
-                settingsPushTarget = path.dropFirst().first == "detail"
-                    ? .assetDetail
-                    : .assets
+                switch path.dropFirst().first {
+                case "detail": settingsPushTarget = .assetDetail
+                case "funds": settingsPushTarget = .assetFunds
+                case "add": settingsPushTarget = .assetAdd
+                case "purchase":
+                    settingsPushTarget = path.dropFirst(2).first == "form"
+                        ? .assetPurchaseForm : .assetPurchase
+                default: settingsPushTarget = .assets
+                }
             case "liabilities": settingsPushTarget = .liabilities
             case "net-worth": settingsPushTarget = .netWorth
             case "import-review": settingsPushTarget = .importReview

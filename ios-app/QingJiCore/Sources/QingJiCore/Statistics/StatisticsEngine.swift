@@ -16,6 +16,16 @@ public struct CategoryTotal: Equatable, Sendable {
     }
 }
 
+public struct SpendSourceTotal: Equatable, Sendable {
+    public let name: String
+    public let total: Decimal
+
+    public init(name: String, total: Decimal) {
+        self.name = name
+        self.total = total
+    }
+}
+
 /// 单日收支合计。
 public struct DailyTotal: Equatable, Sendable {
     public let day: Int
@@ -102,7 +112,60 @@ public struct YearlySummary: Equatable, Sendable {
 
 /// 纯函数统计引擎。转账不计入收支。
 public enum StatisticsEngine {
-    private static func expenseCategoryName(for record: TransactionRecord) -> String {
+    private static func monthlyExpenseRecords(
+        in records: [TransactionRecord], year: Int, month: Int,
+        calendar: Calendar
+    ) -> [TransactionRecord] {
+        LedgerPolicy.userRecords(from: records).filter { record in
+            guard record.kind == .expense else { return false }
+            let parts = calendar.dateComponents([.year, .month], from: record.date)
+            return parts.year == year && parts.month == month
+        }
+    }
+
+    public static func monthlyTopExpenses(
+        in records: [TransactionRecord], year: Int, month: Int,
+        calendar: Calendar = .current
+    ) -> [TransactionRecord] {
+        let expenses = monthlyExpenseRecords(in: records, year: year, month: month, calendar: calendar)
+        let ranked = expenses.sorted { $0.amount > $1.amount }
+        return Array(ranked.prefix(5))
+    }
+
+    public static func periodTopExpenses(
+        in records: [TransactionRecord], start: Date, end: Date,
+        calendar: Calendar = .current
+    ) -> [TransactionRecord] {
+        let startDay = calendar.startOfDay(for: min(start, end))
+        let endDay = calendar.startOfDay(for: max(start, end))
+        let endExclusive = calendar.date(byAdding: .day, value: 1, to: endDay) ?? endDay
+        let expenses = LedgerPolicy.userRecords(from: records).filter {
+            $0.kind == .expense && $0.date >= startDay && $0.date < endExclusive
+        }
+        return Array(expenses.sorted { $0.amount > $1.amount }.prefix(5))
+    }
+
+    public static func monthlySpendSources(
+        in records: [TransactionRecord], year: Int, month: Int,
+        calendar: Calendar = .current
+    ) -> [SpendSourceTotal] {
+        var totals: [String: Decimal] = [:]
+        for record in monthlyExpenseRecords(in: records, year: year, month: month, calendar: calendar) {
+            let source = BillCategorizer.normalizeMerchant(record.note)
+            totals[source.isEmpty ? "未标注" : source, default: 0] += record.amount
+        }
+        let positive: [SpendSourceTotal] = totals.compactMap { entry in
+            guard entry.value > 0 else { return nil }
+            return SpendSourceTotal(name: entry.key, total: entry.value)
+        }
+        let ranked = positive.sorted { lhs, rhs in
+            if lhs.total != rhs.total { return lhs.total > rhs.total }
+            return lhs.name < rhs.name
+        }
+        return Array(ranked.prefix(6))
+    }
+
+    public static func expenseCategoryName(for record: TransactionRecord) -> String {
         let raw = record.topCategoryName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             ? record.categoryName
             : record.topCategoryName
@@ -111,6 +174,25 @@ public enum StatisticsEngine {
             return "其他"
         }
         return name
+    }
+
+    /// Returns original expense families for a category drill-down using the same
+    /// dates, exclusions, refund folding and category labels as periodSummary.
+    public static func expenseRecords(
+        in records: [TransactionRecord],
+        categoryNames: Set<String>,
+        start: Date,
+        end: Date,
+        calendar: Calendar = .current
+    ) -> [TransactionRecord] {
+        let startDay = calendar.startOfDay(for: min(start, end))
+        let endDay = calendar.startOfDay(for: max(start, end))
+        let endExclusive = calendar.date(byAdding: .day, value: 1, to: endDay) ?? endDay
+        return LedgerPolicy.userRecords(from: records).filter { record in
+            record.kind == .expense &&
+                record.date >= startDay && record.date < endExclusive &&
+                categoryNames.contains(expenseCategoryName(for: record))
+        }
     }
 
     /// 统计闭区间 `[startDay, endDay]`，结束日期按当地日历包含整天。

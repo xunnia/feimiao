@@ -53,6 +53,80 @@ final class IOSLedgerProjectionTests: XCTestCase {
         XCTAssertEqual(statisticsCache.calculationCount, 1)
     }
 
+    func testMonthlyRankingsReuseProjectionUntilLedgerChanges() {
+        let transactions = makeTransactions(count: 256)
+        let ledgerCache = IOSLedgerProjectionCache()
+        let statisticsCache = IOSStatisticsProjectionCache()
+        let calendar = Calendar(identifier: .gregorian)
+        let parts = calendar.dateComponents([.year, .month], from: transactions[0].date)
+        let year = parts.year ?? 2023
+        let month = parts.month ?? 1
+
+        for _ in 0..<3 {
+            let snapshot = ledgerCache.snapshot(for: transactions, selectedBookID: nil)
+            _ = statisticsCache.monthlyTopExpenses(of: snapshot.records, revision: snapshot.revision,
+                                                   year: year, month: month, calendar: calendar)
+            _ = statisticsCache.monthlySpendSources(of: snapshot.records, revision: snapshot.revision,
+                                                    year: year, month: month, calendar: calendar)
+        }
+        XCTAssertEqual(statisticsCache.calculationCount, 2)
+
+        transactions[0].note = "已修改的商户"
+        let updated = ledgerCache.snapshot(for: transactions, selectedBookID: nil)
+        _ = statisticsCache.monthlyTopExpenses(of: updated.records, revision: updated.revision,
+                                               year: year, month: month, calendar: calendar)
+        _ = statisticsCache.monthlySpendSources(of: updated.records, revision: updated.revision,
+                                                year: year, month: month, calendar: calendar)
+        XCTAssertEqual(statisticsCache.calculationCount, 4)
+    }
+
+    func testMonthlyPaceCacheChangesOnNewDayOrLedgerRevision() {
+        let transactions = makeTransactions(count: 24)
+        let ledger = IOSLedgerProjectionCache()
+        let statistics = IOSStatisticsProjectionCache()
+        let snapshot = ledger.snapshot(for: transactions, selectedBookID: nil)
+        let calendar = Calendar(identifier: .gregorian)
+        let now = transactions[0].date
+        let parts = calendar.dateComponents([.year, .month], from: now)
+        for _ in 0..<3 {
+            _ = statistics.monthlyPace(of: snapshot.records, revision: snapshot.revision,
+                                       year: parts.year!, month: parts.month!, now: now,
+                                       calendar: calendar)
+        }
+        XCTAssertEqual(statistics.calculationCount, 1)
+        let tomorrow = calendar.date(byAdding: .day, value: 1, to: now)!
+        _ = statistics.monthlyPace(of: snapshot.records, revision: snapshot.revision,
+                                   year: parts.year!, month: parts.month!, now: tomorrow,
+                                   calendar: calendar)
+        XCTAssertEqual(statistics.calculationCount, 2)
+        transactions[0].note = "已修改"
+        let changed = ledger.snapshot(for: transactions, selectedBookID: nil)
+        _ = statistics.monthlyPace(of: changed.records, revision: changed.revision,
+                                   year: parts.year!, month: parts.month!, now: tomorrow,
+                                   calendar: calendar)
+        XCTAssertEqual(statistics.calculationCount, 3)
+    }
+
+    func testPeriodTopExpensesCacheFollowsLedgerRevision() {
+        let transactions = makeTransactions(count: 24)
+        let ledger = IOSLedgerProjectionCache()
+        let statistics = IOSStatisticsProjectionCache()
+        let snapshot = ledger.snapshot(for: transactions, selectedBookID: nil)
+        let start = transactions[0].date
+        let end = transactions[23].date
+        for _ in 0..<3 {
+            _ = statistics.periodTopExpenses(of: snapshot.records, revision: snapshot.revision,
+                                             start: start, end: end)
+        }
+        XCTAssertEqual(statistics.calculationCount, 1)
+        transactions[1].amount = 500
+        let updated = ledger.snapshot(for: transactions, selectedBookID: nil)
+        let ranked = statistics.periodTopExpenses(of: updated.records, revision: updated.revision,
+                                                   start: start, end: end)
+        XCTAssertEqual(statistics.calculationCount, 2)
+        XCTAssertEqual(ranked.first?.amount, 500)
+    }
+
     func testMeasuredNaiveVersusCachedLedgerWork() {
         let transactions = makeTransactions(count: 10_000)
         let calendar = Calendar(identifier: .gregorian)

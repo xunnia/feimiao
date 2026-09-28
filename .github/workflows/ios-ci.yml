@@ -224,21 +224,21 @@ jobs:
             local attempt
             for attempt in 1 2 3; do
               echo "CAPTURE_BEGIN name=$name screen=$screen attempt=$attempt" | tee -a "$runtime_log"
-              xcrun simctl terminate "$DEVICE" com.qingji.app >> "$runtime_log" 2>&1 || true
+              python3 ios-app/tools/run_bounded.py --timeout 45 -- xcrun simctl terminate "$DEVICE" com.qingji.app >> "$runtime_log" 2>&1 || true
               sleep 1
               if ! SIMCTL_CHILD_QINGJI_DEMO=1 \
                 SIMCTL_CHILD_QINGJI_DEMO_NOW="2026-08-27T12:00:00+08:00" \
                 SIMCTL_CHILD_QINGJI_P0_FIXTURE_HASH="$fixture_hash" \
                 SIMCTL_CHILD_TZ="Asia/Shanghai" \
                 SIMCTL_CHILD_QINGJI_SCREEN="$screen" \
-                xcrun simctl launch "$DEVICE" com.qingji.app >> "$runtime_log" 2>&1; then
+                python3 ios-app/tools/run_bounded.py --timeout 45 -- xcrun simctl launch --terminate-running-process "$DEVICE" com.qingji.app >> "$runtime_log" 2>&1; then
                 echo "::warning::CAPTURE_LAUNCH_FAILED name=$name screen=$screen attempt=$attempt"
                 continue
               fi
               # 年度图表、预算承诺物化和对账表单首次冷启动会触发较重的
               # SwiftData 查询；给它们足够时间完成首帧，避免把加载中的空根视图当截图。
               sleep 14
-              if ! xcrun simctl io "$DEVICE" screenshot "$output" >> "$runtime_log" 2>&1 || ! test -s "$output"; then
+              if ! python3 ios-app/tools/run_bounded.py --timeout 45 -- xcrun simctl io "$DEVICE" screenshot "$output" >> "$runtime_log" 2>&1 || ! test -s "$output"; then
                 echo "::warning::CAPTURE_SCREENSHOT_FAILED name=$name screen=$screen attempt=$attempt"
                 continue
               fi
@@ -280,6 +280,7 @@ jobs:
           shoot settings/theme 24-theme
           shoot settings/display 25-display
           shoot settings/assets 26-assets-hub
+          shoot settings/assets/funds 26b-assets-funds
           shoot settings/reconcile 27-reconcile
           shoot settings/liabilities 28-liabilities
           shoot settings/net-worth 29-net-worth
@@ -325,18 +326,96 @@ jobs:
             exit 1
           fi
 
-          # 校验：若所有 40 张图都相同，说明导航又失败了，直接让 CI 报错
+          # 校验：若所有 41 张图都相同，说明导航又失败了，直接让 CI 报错
           UNIQUE=$(md5 -q "$screenshot_dir"/*.png | sort -u | wc -l | tr -d ' ')
-          echo "不同截图数量：$UNIQUE / 40"
+          echo "不同截图数量：$UNIQUE / 41"
           if [ "$UNIQUE" -le 1 ]; then
             echo "::error::截图全部相同，深链/启动参数导航未生效"
             exit 1
           fi
+
+          # The category drill-down is iOS-only interaction evidence, not a
+          # canonical Android/iOS scene. Keep it outside parity metadata and
+          # the 41-image distinct/route checks above.
+          interaction_dir="ci-artifacts/ios-interaction-screenshots"
+          mkdir -p "$interaction_dir"
+          screenshot_dir="$interaction_dir"
+          interaction_route="stats/custom/category-detail"
+          interaction_name="16a-stats-custom-category-detail"
+          # Invoke the existing capture function as an interaction, separate
+          # from the manifest-listed canonical shoot calls above.
+          capture_interaction() { shoot "$@"; }
+          asset_add_route="settings/assets/add"
+          asset_add_name="26c-assets-add"
+          capture_interaction "$asset_add_route" "$asset_add_name"
+          capture_interaction "settings/assets/purchase" "26d-assets-purchase"
+          capture_interaction "settings/assets/purchase/form" "26e-assets-purchase-form"
+          ring_route="stats/month/ring"
+          ring_name="14a-stats-month-ring"
+          capture_interaction "$ring_route" "$ring_name"
+          trend_route="stats/month/trend"
+          trend_name="14b-stats-month-trend"
+          capture_interaction "$trend_route" "$trend_name"
+          income_trend_route="stats/month/trend/income"
+          income_trend_name="14c-stats-month-income-trend"
+          capture_interaction "$income_trend_route" "$income_trend_name"
+          top5_route="stats/month/top5"
+          top5_name="14d-stats-month-top5"
+          capture_interaction "$top5_route" "$top5_name"
+          sources_route="stats/month/sources"
+          sources_name="14e-stats-month-sources"
+          capture_interaction "$sources_route" "$sources_name"
+          month_picker_route="stats/month/picker"
+          month_picker_name="14f-stats-month-picker"
+          capture_interaction "$month_picker_route" "$month_picker_name"
+          book_picker_route="stats/month/books"
+          book_picker_name="14g-stats-month-books"
+          capture_interaction "$book_picker_route" "$book_picker_name"
+          book_selected_route="stats/month/book-selected"
+          book_selected_name="14h-stats-month-book-selected"
+          capture_interaction "$book_selected_route" "$book_selected_name"
+          pace_route="stats/month/pace"
+          pace_name="14i-stats-month-pace"
+          capture_interaction "$pace_route" "$pace_name"
+          pace_activity_route="stats/month/pace/activity"
+          pace_activity_name="14j-stats-month-pace-activity"
+          capture_interaction "$pace_activity_route" "$pace_activity_name"
+          budget_ring_route="stats/month/budget-ring"
+          budget_ring_name="14k-stats-month-budget-ring"
+          capture_interaction "$budget_ring_route" "$budget_ring_name"
+          pace_detail_route="stats/month/pace/detail"
+          pace_detail_name="14l-stats-month-pace-detail"
+          capture_interaction "$pace_detail_route" "$pace_detail_name"
+          card_library_route="stats/month/cards"
+          card_library_name="14m-stats-month-cards"
+          capture_interaction "$card_library_route" "$card_library_name"
+          capture_interaction "stats/month/cards/optional" "14m2-stats-month-optional-cards"
+          for optional_key in insights heatmap radar stacked; do
+            capture_interaction "stats/month/$optional_key" "14-optional-stats-month-$optional_key"
+          done
+          capture_interaction "$interaction_route" "$interaction_name"
+          python3 ios-app/tools/check_screenshot_nonempty.py "$interaction_dir"/*.png
+
+          # Capture the installed launcher icon on SpringBoard as separate
+          # brand evidence. This is not one of the canonical app routes.
+          python3 ios-app/tools/run_bounded.py --timeout 45 -- \
+            xcrun simctl terminate "$DEVICE" com.qingji.app >> "$runtime_log" 2>&1
+          sleep 4
+          icon_screen="$interaction_dir/00-springboard-app-icon.png"
+          python3 ios-app/tools/run_bounded.py --timeout 45 -- \
+            xcrun simctl io "$DEVICE" screenshot "$icon_screen" >> "$runtime_log" 2>&1
+          python3 ios-app/tools/check_screenshot_nonempty.py "$icon_screen"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: simulator-screenshots
           path: ci-artifacts/ios-screenshots/
+          if-no-files-found: warn
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ios-interaction-screenshots
+          path: ci-artifacts/ios-interaction-screenshots/
           if-no-files-found: warn
       - uses: actions/upload-artifact@v4
         if: always()

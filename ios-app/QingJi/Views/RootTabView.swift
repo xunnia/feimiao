@@ -203,11 +203,12 @@ struct RootTabView: View {
         case "search": return [.search]
         case "transactions": return [.transactions]
         case "import-review": return [.importReview]
-        case "stats-month", "stats-week", "stats/year", "stats/week", "stats-year", "stats-custom", "stats/month":
+        case "stats-month", "stats-week", "stats/year", "stats/week", "stats-year", "stats-custom", "stats/custom", "stats/month", "stats/month/ring", "stats/month/trend", "stats/month/trend/income", "stats/month/top5", "stats/month/sources", "stats/month/picker", "stats/month/books", "stats/month/book-selected", "stats/month/pace", "stats/month/pace/activity", "stats/month/pace/detail", "stats/month/budget-ring", "stats/month/cards", "stats/month/cards/optional", "stats/month/insights", "stats/month/heatmap", "stats/month/radar", "stats/month/stacked", "stats/custom/category-detail":
             return [.statistics]
         case "budget", "reconcile", "reimburse", "books", "accounts", "categories", "tags",
              "memory", "ai-memory", "ai-tasks", "ai-extensions", "ai-schedules", "ai-search",
-             "ai-diagnostics", "ai-local", "savings", "recurring", "assets", "assets/detail",
+             "ai-diagnostics", "ai-local", "savings", "recurring", "assets", "assets/funds", "assets/add", "assets/detail",
+             "assets/purchase", "assets/purchase/form",
              "assets-detail", "liabilities", "net-worth", "import", "import-export",
              "accounts/detail", "accounts-detail",
              "reimburse/settlement",

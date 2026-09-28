@@ -154,6 +154,10 @@ enum P0ParityDemoSeeder {
             )
         }
 
+        if ["stats/month/books", "stats/month/book-selected"].contains(launchScreen) {
+            context.insert(Book(name: "差旅账本", sortOrder: 1, includeInTotal: true))
+        }
+
         try context.save()
         try P0ParityBusinessExporter.write(
             fixture: fixture,

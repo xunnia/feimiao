@@ -37,8 +37,8 @@
 |---|---|---|
 | 壳层/抽屉/品牌组件 (P1) | 有抽屉、暖色背景、玻璃按钮 | 更像覆盖式 iOS 面板；系统蓝/纯白卡/SF Symbol 混用，要统一 token 和组件 |
 | 首页/记账/明细/退款报销/账本账户分类标签 (P2) | 基本都有；退款挂在原单上、按原单日期归属 | 同 fixture 逐字段对账、真实操作链、重启读回 |
-| 统计/预算/存钱/定时/导入/备份/报告/设置/主题 (P3) | 大部分有；`codex/screenshot-stability` 上正在对齐统计卡片 | 预算管理页骨架不对；六套主题、显示设置不全；旧库升级和 Android 备份恢复还没实测 |
-| 资产/负债/对账/净资产 (P4) | 基础档案、还款、快照都有 | **资产-资金 tab 缺失**（parity 报 missing）；借贷往来/房贷向导/退款分摊只在候选分支上 |
+| 统计/预算/存钱/定时/导入/备份/报告/设置/主题 (P3) | 大部分有；09-25~26 补了可选月度统计卡片、月热力图（已进 main） | 统计卡片顺序、图表形式、语义色和分类标签仍与 Android 有差异；预算管理页骨架不对；六套主题、显示设置不全；旧库升级和 Android 备份恢复还没实测 |
+| 资产/负债/对账/净资产 (P4) | 基础档案、还款、快照都有；09-27~28 补了资产-资金分组页、添加入口、新购物品与支出原子写入、账单分配、估值默认值（已进 main） | 需要新一轮截图验证资金页；借贷往来/房贷向导/退款分摊只在 `codex/ios-p1-integration` 候选分支上 |
 | AI/OAuth/系统能力 (P5) | Keychain、多服务商、Chats、PKCE OAuth、Widget、Share、Intent、OCR、Speech 都有基础版 | AI 设置 10 个入口层级不全；真实网络/OAuth/扩展**都没在真机跑过** |
 | 交付 (P6) | CI 能出**未签名** IPA（完整版 + 无扩展兜底版） | 没签名、没装过真机、**没有 `PrivacyInfo.xcprivacy`**（发布阻断项） |
 
@@ -49,8 +49,8 @@
 |---|---|---|---|
 | `main`（远端默认分支） | 最新 iOS 提交 `96edaec`（09-03） | 09-03 的 P0 取证门禁；41 场景清单；`p0/P0_BASELINE_DECISIONS.md` | —（就是主线本身） |
 | 主工作区 `C:\src\xunni-codex` | 已切到 `main`（2026-09-27） | `ios-app/` 就是 main 的版本 | —（开发 iOS 仍建议从 main 开独立 worktree） |
-| worktree `.tmp/repository-cleanup` | **`codex/screenshot-stability`**（`60963fa`，09-27，已推送） | **最新的 UI 工作线**：统计卡片对齐、月热力图、资产资金分组等；和 main 差 46 个文件 | ❌ 未合入。另有 **未提交**：09-23 修订版 Luna 方案 + 执行合同、`IOS_REBUILD_PLAN_REVIEW_2026-09-23.md`、`p0/P0_CAPTURE_ACCEPTANCE_2026-09-20.md` |
-| worktree `.tmp/ios-p1-integration` | **`codex/ios-p1-integration`**（`2cb4b97`，09-19） | 把抢救回来的 P1 功能（借贷 `LendingView`、房贷向导 `LoanWizardView`、资产退款分摊 `AssetRefundAllocationStore`、预算 V2 等）接入；软删除修复 `820e6d3`；和 main 差 93 个文件 | ❌ 未合入，只是**候选**。本地比远端多 **4 个未推送提交**；另有未提交：两个工作流、`RootTabView.swift`、`AppRouterTests.swift`、`p0/SOFT_DELETE_REPAIR_2026-09-12.md` |
+| 分支 `codex/screenshot-stability` | `df55463`（09-28，已推送） | UI 工作线：统计卡片、月热力图、资产资金分组页、物品添加与账单分配、截图链路加固 | ✅ 09-28 已合入 main；09-23 方案修订与截图验收记录的要点已并入本文 |
+| worktree `.tmp/ios-p1-integration` | **`codex/ios-p1-integration`**（`2cb4b97`，09-19） | 把抢救回来的 P1 功能（借贷 `LendingView`、房贷向导 `LoanWizardView`、资产退款分摊 `AssetRefundAllocationStore`、预算 V2 等）接入；软删除修复 `820e6d3`；和 main 差 93 个文件 | ❌ 未合入，只是**候选**。09-28 已全部提交并推送（含 `stats/custom` 路由别名修复和软删除修复记录） |
 | worktree `.tmp/fix-parity` | `codex/fix-parity-gates`（`c118ce4`，09-08，已推送） | 截图门禁的小修（7 个 iOS 文件） | ❌ 未合入；和上面两条线都不是祖先关系，是否已被吸收**待核实** |
 | 分支 `codex/ios-same-app` | 09-05 | 09-02 方案指定的 P0 集成分支 | ✅ 内容已等同于 main 的 iOS 部分（无差异） |
 | 分支 `rescue/ios-p1-2026-08-31` | 08-31 | 14 个 P1 提交（预算 V2、资产退款分摊、借贷、房贷向导、权益详情、备份加固…） | ❌ 未合入；已被 `ios-p1-integration` 吸收了多少**待核实**。⚠️ 本地和远端同名分支**已分叉**（本地 `2673c4c` / 远端 `ac364e8`），哪个才是真的**待核实** |
@@ -101,6 +101,7 @@
 - **P0** 拆成三部分：**P0-DEV**（开发准入：基线、入口、fixture、改前截图、回退点）、**P0-DATA**（升级/恢复样本和回滚合同）、**P0-DEVICE**（装机可行性）。它们阻止的只是各自影响的结论，不会把整个项目锁死。
 - **P1** 壳层/品牌/组件 → **P2** 核心记账 → **P3** 统计预算导入备份设置 → **P4** 资产 → **P5** AI/系统能力 → **P6** 集成交付。
 - 立即执行队列：**N0** 收尾周/月统计 → **N1** 锁定母版身份 → **N2** 证据与机器合同同步（N2-D 数据安全、N2-I 真机试装**并行**）→ N3–N8 对应 P1–P6。
+- **09-23 方案复盘的结论**：方向正确，不推倒已有代码，也不降低同款目标。改的是执行规则，共 15 条：拆开 P0 的循环等待；当前状态和历史分开写；母版按批冻结；「有图」不等于「功能完成」；冷启动截图和真实点击分开验收；旅程 ID 统一用机器合同里的 12 个；「Mac 编译」和「用户装机」分开；完整包和无扩展包都要检查数据身份；禁的是换掉信息架构，不是禁用 List/Form；统计默认卡片顺序照 Android 源码；不报完成百分比；不建自动轮询。机器合同（`p0_product_contract.json`）里的 6 个开放门还没按新的 P0-DEV/DATA/DEVICE 改写，这是 N2 的工作。
 
 ---
 
@@ -117,7 +118,13 @@
 - **`.github/workflows/ios-ci.yml`**：推送 `claude/** codex/** feature/** main` 且改动了 `ios-app/**` 时触发，也可以手动触发。在 `macos-26` 上跑（优先用 Xcode 27，没有就用 26.x）：QingJiCore `swift test` → 模拟器编译 → App XCTest → 模拟器截图 → 未签名 IPA（`QingJi-unsigned.ipa` 完整版 + `QingJi-noext.ipa` 去掉扩展和 entitlements 的兜底版）→ 上传为 Actions Artifacts。09-12 起不再自动提交回分支；Artifacts 会过期，长期证据要另行归档。
 - **`.github/workflows/parity-screenshots.yml`**：Android 模拟器（分片）+ iOS 模拟器各自采集 → 核对来源 → `ios-app/tools/compare_png.py --require-complete` → 生成可视化对比图和 P0 基线报告 → 上传为 Artifacts（不回写分支）。两个工作流共用同一个并发组，不会互相抢着写。
 - 相关工具：`ios-app/tools/screenshot_manifest.json`、`check_route_manifest.py`、`check_p0_product_contract.py`、`write_parity_metadata.py`、`check_capture_metadata.py`。
-- 最近一次完整的双端采集：run `35508046549`（`76e093f`，在 screenshot-stability 线上）：41 个场景里 40 对有图，全部是 `dimension_mismatch`，`assets-funds` 缺失；业务 diff 只有 `platform` 一项。**这次运行没有验证 P1 候选分支。**
+- 最近一次完整的双端采集：run `35508046549`（`76e093f`，在 screenshot-stability 线上）：41 个场景里 40 对有图，全部是 `dimension_mismatch`，`assets-funds` 缺失；业务 diff 只有 `platform` 一项。**这次运行没有验证 P1 候选分支。** 那次的原始 PNG 还没归档到本机，Actions 保留期过后会丢。
+- **截图链路的防假成功机制**（09-12 起）：
+  - Android 41 个场景拆成 5 批、各用新 AVD，每批最多 9 个、同时最多 2 批。每批成功后才写完成凭据；汇总时缺批次、图片重复、跨提交、fixture/版本/业务数据不一致都会拒绝。
+  - simctl 启停和截图加 45 秒超时，超时按失败处理，不把空白截图当成功。启动前先结束旧进程（`--terminate-running-process`）。
+  - 对比任务 checkout 固定触发 SHA，不用新源码解释旧截图。
+  - 截图模式下 Android 不弹更新对话框（`main.dart` 的 `_parityCapture`）。
+  - 收到「页面就绪」日志不等于截图成功；连续两次完整通过之前，不宣称截图稳定。
 
 ### 4.3 真机验收
 用户的环境：Windows、没有自己的 Mac、没有付费开发者账号、iPhone Air、iOS 27 预览版（具体 build 号**待核实**，测试前记录下来）。
@@ -144,10 +151,10 @@
 ## 6. 待办与风险
 
 **近期待办（按顺序）**
-1. 把各 worktree 里**未提交/未推送**的东西先保全：`ios-p1-integration` 的 4 个未推送提交 + 未提交改动，`repository-cleanup` 的 09-23 方案文档（得到用户同意后再提交）。
+1. ~~保全各 worktree 的未提交/未推送内容~~：09-28 已完成，`ios-p1-integration` 的改动已提交并推送（`092cfa1`、`c3ba50c`），`screenshot-stability` 的文档已提交（`df55463`）。
 2. N0：收尾周/月统计（最终 CI 结果、原图、核对数字、真实点击下钻）。
 3. N1：锁定 Android 母版（线上 APK 哈希 ↔ 干净源码 ↔ DB 版本），整理 308→当前版本的增量队列。
-4. 决定集成顺序：screenshot-stability（UI 线）和 ios-p1-integration（功能候选）怎么合流进 main，谁先谁后（**待决定**）。两条线都不包含对方，直接 merge 可能冲突或造成回退。
+4. 把 `codex/ios-p1-integration`（功能候选：借贷、房贷向导、资产退款分摊、预算 V2 等）逐项移植进 main。UI 线已先合入；候选分支不整支 merge，防止冲掉 main 已有的改动。
 5. 处理 `BudgetSpecialTracking.swift` 这类只存在于 salvaged 目录的孤本；核实 rescue 分支本地/远端分叉的问题。
 6. N2：同步机器合同（`p0_product_contract.json` 的 6 个开放门禁）、检查器、README/BASELINE 里过期的 304/308 数值；把原始截图归档到 `.tmp` 以外的地方（Actions 的产物会过期）。
 7. 并行：旧库升级 + Android v40/v48/当前版本备份的恢复实测；第一次真机试装。

@@ -49,6 +49,131 @@ final class LedgerStoreTests: XCTestCase {
         return (book, cash, bank, dining)
     }
 
+    func testBuiltInChildRollupUsesSameNameAsStoredParent() throws {
+        let stack = try Stack()
+        let (book, cash, _, dining) = try seed(stack)
+        let groceries = TxCategory(key: "groceries", name: "生鲜食品",
+                                   symbol: "carrot", kind: .expense, parentKey: "dining")
+        stack.context.insert(groceries)
+        let date = Date(timeIntervalSince1970: 1_787_788_800)
+        let parent = MoneyTransaction(amount: 10, kind: .expense, date: date,
+                                      category: dining, account: cash, book: book)
+        let child = MoneyTransaction(amount: 20, kind: .expense, date: date,
+                                     category: groceries, account: cash, book: book)
+        stack.context.insert(parent)
+        stack.context.insert(child)
+        try stack.context.save()
+        XCTAssertEqual(child.record.topCategoryKey, "dining")
+        XCTAssertEqual(child.record.topCategoryName, parent.record.topCategoryName)
+        let summary = StatisticsEngine.periodSummary(of: [parent.record, child.record],
+                                                      start: date, end: date)
+        XCTAssertEqual(summary.expenseByCategory.count, 1)
+        XCTAssertEqual(summary.expenseByCategory.first?.name, "食品餐饮")
+        XCTAssertEqual(summary.expenseByCategory.first?.total, Decimal(30))
+        XCTAssertEqual(summary.expenseByCategory.first?.count, 2)
+    }
+
+    func testStatisticsBalanceSparklineUsesCumulativeNetAmounts() {
+        let date = Date(timeIntervalSince1970: 0)
+        let days = [
+            PeriodDailyTotal(date: date, expense: 20, income: 100),
+            PeriodDailyTotal(date: date.addingTimeInterval(86400), expense: 30, income: 0),
+            PeriodDailyTotal(date: date.addingTimeInterval(172800), expense: -5, income: 0),
+        ]
+        XCTAssertEqual(MonthlyStatsView.runningBalances(days), [80, 50, 55])
+        XCTAssertEqual(MonthlyStatsView.runningBalances([]), [])
+    }
+
+    func testStatisticsComparisonBadgeUsesSameWeekPercentageDirection() {
+        XCTAssertEqual(MonthlyStatsView.percentChangeLabel(current: 46, previous: 243), "↓ 81%")
+        XCTAssertEqual(MonthlyStatsView.percentChangeLabel(current: 574, previous: -243), "↑ 336%")
+        XCTAssertEqual(MonthlyStatsView.percentChangeLabel(
+            current: Decimal(string: "1017.90")!, previous: 1058), "↓ 3.8%")
+        XCTAssertNil(MonthlyStatsView.percentChangeLabel(current: 46, previous: 0))
+    }
+
+    func testMonthlyTrendUsesAndroidAxisStepsForExpenseAndIncome() {
+        let date = DailyTotal(day: 7, expense: 560, income: 8_800)
+        let expense = MonthlyStatsView.monthlyTrendScale(
+            current: [DailyTotal(day: 9, expense: 280, income: 500)],
+            previous: [date], showsIncome: false)
+        XCTAssertEqual(expense.step, 200)
+        XCTAssertEqual(expense.upper, 600)
+        let income = MonthlyStatsView.monthlyTrendScale(
+            current: [DailyTotal(day: 25, expense: 0, income: 500)],
+            previous: [date], showsIncome: true)
+        XCTAssertEqual(income.step, 5_000)
+        XCTAssertEqual(income.upper, 10_000)
+        XCTAssertEqual(MonthlyStatsView.monthlyTrendAxisLabel(10_000), "¥1.0万")
+        XCTAssertEqual(MonthlyStatsView.monthlyTrendScale(
+            current: [], previous: [], showsIncome: false).upper, 1)
+    }
+
+    func testBudgetRingPercentUsesSameValueForTextAndArc() {
+        XCTAssertEqual(BudgetUsageRingCard.displayPercent(
+            spent: Decimal(string: "1017.90")!, budget: 3_000), 34)
+        XCTAssertEqual(BudgetUsageRingCard.displayPercent(spent: 3_270, budget: 3_000), 109)
+        XCTAssertEqual(BudgetUsageRingCard.displayPercent(spent: 0, budget: 0), 0)
+    }
+
+    func testStatisticsWeekLabelAndTrendTicksDoNotDependOnSimulatorLanguage() {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.locale = Locale(identifier: "en_US")
+        calendar.timeZone = TimeZone(identifier: "Asia/Shanghai")!
+        let start = calendar.date(from: DateComponents(year: 2026, month: 8, day: 24))!
+        let days = (0..<7).map { offset in
+            PeriodDailyTotal(date: calendar.date(byAdding: .day, value: offset, to: start)!,
+                             expense: 0, income: 0)
+        }
+        XCTAssertEqual(MonthlyStatsView.weekRangeLabel(start: start, end: days[6].date,
+                                                        calendar: calendar), "8月24日 – 8月30日")
+        XCTAssertEqual(MonthlyStatsView.trendAxisDates(days), [days[2].date, days[4].date])
+        let monthStart = calendar.date(from: DateComponents(year: 2026, month: 8, day: 1))!
+        let month = (0..<31).map { offset in
+            PeriodDailyTotal(date: calendar.date(byAdding: .day, value: offset, to: monthStart)!,
+                             expense: 0, income: 0)
+        }
+        XCTAssertEqual(MonthlyStatsView.trendAxisDates(month),
+                       [month[8].date, month[16].date, month[24].date])
+    }
+
+    func testCurrentMonthComparisonStopsAtSamePreviousMonthDay() {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "Asia/Shanghai")!
+        let march = calendar.date(from: DateComponents(year: 2026, month: 3, day: 31))!
+        let currentEnd = MonthlyStatsView.previousMonthComparisonEnd(for: march, now: march,
+                                                                      calendar: calendar)
+        XCTAssertEqual(calendar.component(.year, from: currentEnd), 2026)
+        XCTAssertEqual(calendar.component(.month, from: currentEnd), 2)
+        XCTAssertEqual(calendar.component(.day, from: currentEnd), 28)
+        let historicalEnd = MonthlyStatsView.previousMonthComparisonEnd(
+            for: calendar.date(from: DateComponents(year: 2026, month: 8, day: 1))!, now: march,
+            calendar: calendar
+        )
+        XCTAssertEqual(calendar.component(.year, from: historicalEnd), 2026)
+        XCTAssertEqual(calendar.component(.month, from: historicalEnd), 7)
+        XCTAssertEqual(calendar.component(.day, from: historicalEnd), 31)
+    }
+
+    func testCustomRingCondensesPositiveCategoriesWithoutLosingTotals() {
+        var categories: [CategoryTotal] = []
+        for index in 1...7 {
+            let amount = 8 - index
+            categories.append(CategoryTotal(name: index == 7 ? "其他" : "分类\(index)",
+                                            total: Decimal(amount), share: Double(amount) / 28.0,
+                                            count: index))
+        }
+        categories.append(CategoryTotal(name: "退款", total: -2, share: -2.0 / 28, count: 1))
+        let items = MonthlyStatsView.condensedRingCategories(categories)
+        XCTAssertEqual(items.count, 6)
+        XCTAssertEqual(items.last?.name, "更多")
+        XCTAssertEqual(items.last?.total, 3)
+        XCTAssertEqual(items.last?.count, 13)
+        XCTAssertEqual(items.reduce(Decimal.zero) { $0 + $1.total }, 28)
+        XCTAssertEqual(MonthlyStatsView.condensedRingCategories(Array(categories.prefix(6))).count, 6)
+        XCTAssertEqual(MonthlyStatsView.condensedRingCategories([]), [])
+    }
+
     func testBatchValidationDoesNotLeavePartialTransactions() throws {
         let stack = try Stack()
         let (book, cash, bank, dining) = try seed(stack)
