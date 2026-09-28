@@ -29,6 +29,122 @@ final class AssetStoreTests: XCTestCase {
         }
     }
 
+    func testPurchaseDateUsesLocalCalendarDayAndFixedNumericFormat() throws {
+        let zone = try XCTUnwrap(TimeZone(identifier: "Asia/Shanghai"))
+        let instant = try XCTUnwrap(ISO8601DateFormatter().date(from: "2026-08-26T16:30:00Z"))
+        XCTAssertEqual(PhysicalAssetEditor.purchaseDateText(instant, timeZone: zone), "2026-08-27")
+        XCTAssertEqual(PhysicalAssetEditor.purchaseDateText(instant, timeZone: TimeZone(secondsFromGMT: 0)!), "2026-08-26")
+    }
+
+    func testManualIdleAssetKeepsNetWorthChoiceAfterReload() throws {
+        let stack = try Stack()
+        let asset = try AssetStore.create(
+            in: stack.context, name: "闲置键盘", kind: .tools,
+            purchasePrice: 100, currentValue: 80,
+            includeInNetWorth: false, usageLifecycle: .idle
+        )
+        let reloaded = try XCTUnwrap(ModelContext(stack.container).fetch(FetchDescriptor<PhysicalAsset>()).first)
+        XCTAssertEqual(reloaded.stableID, asset.stableID)
+        XCTAssertEqual(reloaded.lifecycle, .idle)
+        XCTAssertEqual(reloaded.usageStatusRaw, "idle")
+        XCTAssertEqual(reloaded.economicStatusRaw, "owned")
+        XCTAssertFalse(reloaded.includeInNetWorth)
+        XCTAssertEqual(try stack.context.fetchCount(FetchDescriptor<AssetEvent>()), 1)
+    }
+
+    func testExistingBillCanCreateIdleAssetWithoutSecondExpense() throws {
+        let stack = try Stack()
+        let original = MoneyTransaction(amount: 38, kind: .expense, note: "购买物品")
+        stack.context.insert(original)
+        try stack.context.save()
+        let asset = try AssetStore.createFromTransaction(
+            in: stack.context, transaction: original, name: "闲置物品", kind: .other,
+            allocatedGrossCents: 3_800, includeInNetWorth: false, usageLifecycle: .idle
+        )
+        XCTAssertEqual(asset.lifecycle, .idle)
+        XCTAssertEqual(asset.usageStatusRaw, "idle")
+        XCTAssertFalse(asset.includeInNetWorth)
+        XCTAssertEqual(try stack.context.fetchCount(FetchDescriptor<MoneyTransaction>()), 1)
+        XCTAssertEqual(try stack.context.fetchCount(FetchDescriptor<AssetTransactionLink>()), 1)
+    }
+
+    func testNewPurchaseCanCreateIdleAssetWithoutEnablingNetWorth() throws {
+        let stack = try Stack()
+        let account = Account(name: "现金", kind: .cash)
+        stack.context.insert(account)
+        try stack.context.save()
+        let asset = try AssetStore.createPurchased(
+            in: stack.context, name: "备用键盘", kind: .tools,
+            purchasePrice: 100, currentValue: 90, account: account,
+            purchaseDate: Date(), includeInNetWorth: false, usageLifecycle: .idle
+        )
+        XCTAssertEqual(asset.lifecycle, .idle)
+        XCTAssertEqual(asset.usageStatusRaw, "idle")
+        XCTAssertFalse(asset.includeInNetWorth)
+        XCTAssertEqual(try stack.context.fetchCount(FetchDescriptor<MoneyTransaction>()), 1)
+        XCTAssertEqual(try stack.context.fetchCount(FetchDescriptor<AssetTransactionLink>()), 1)
+    }
+
+    func testEditingUsagePreservesNetWorthAndLegacyCallsPreserveState() throws {
+        let stack = try Stack()
+        let asset = try AssetStore.create(
+            in: stack.context, name: "键盘", kind: .tools,
+            purchasePrice: 100, currentValue: 80,
+            includeInNetWorth: false, usageLifecycle: .idle
+        )
+        func edit(_ usage: PhysicalAssetLifecycle? = nil) throws {
+            try AssetStore.update(
+                asset, in: stack.context, name: "键盘", kind: .tools,
+                purchasePrice: 100, currentValue: 80, purchaseDate: nil,
+                warrantyUntil: nil, brand: "", model: "", location: "", note: "",
+                includeInNetWorth: false, usageLifecycle: usage
+            )
+        }
+        try edit()
+        XCTAssertEqual(asset.lifecycle, .idle)
+        XCTAssertEqual(asset.usageStatusRaw, "idle")
+        try edit(.owned)
+        XCTAssertEqual(asset.lifecycle, .owned)
+        XCTAssertEqual(asset.usageStatusRaw, "active")
+        XCTAssertFalse(asset.includeInNetWorth)
+        try edit(.idle)
+        XCTAssertEqual(asset.lifecycle, .idle)
+        XCTAssertFalse(asset.includeInNetWorth)
+        let eventCount = try stack.context.fetchCount(FetchDescriptor<AssetEvent>())
+        XCTAssertThrowsError(try edit(.sold))
+        XCTAssertEqual(asset.lifecycle, .idle)
+        XCTAssertEqual(try stack.context.fetchCount(FetchDescriptor<AssetEvent>()), eventCount)
+    }
+
+    func testAllCreationPathsRejectTerminalUsageWithoutPartialWrites() throws {
+        for usage in PhysicalAssetLifecycle.allCases where usage != .owned && usage != .idle {
+            let stack = try Stack()
+            let account = Account(name: "现金", kind: .cash)
+            let original = MoneyTransaction(amount: 38, kind: .expense, note: "购买物品")
+            stack.context.insert(account)
+            stack.context.insert(original)
+            try stack.context.save()
+            XCTAssertThrowsError(try AssetStore.create(
+                in: stack.context, name: "物品", kind: .other,
+                purchasePrice: 38, currentValue: 38, usageLifecycle: usage
+            ))
+            XCTAssertThrowsError(try AssetStore.createPurchased(
+                in: stack.context, name: "物品", kind: .other,
+                purchasePrice: 38, currentValue: 38, account: account,
+                purchaseDate: Date(), usageLifecycle: usage
+            ))
+            XCTAssertThrowsError(try AssetStore.createFromTransaction(
+                in: stack.context, transaction: original, name: "物品", kind: .other,
+                allocatedGrossCents: 3_800, usageLifecycle: usage
+            ))
+            XCTAssertEqual(try stack.context.fetchCount(FetchDescriptor<PhysicalAsset>()), 0)
+            XCTAssertEqual(try stack.context.fetchCount(FetchDescriptor<AssetEvent>()), 0)
+            XCTAssertEqual(try stack.context.fetchCount(FetchDescriptor<AssetValuation>()), 0)
+            XCTAssertEqual(try stack.context.fetchCount(FetchDescriptor<AssetTransactionLink>()), 0)
+            XCTAssertEqual(try stack.context.fetchCount(FetchDescriptor<MoneyTransaction>()), 1)
+        }
+    }
+
     func testMetricsUsePurchaseCostAndShowDailyHoldingCost() throws {
         let schema = Schema([
             PhysicalAsset.self,

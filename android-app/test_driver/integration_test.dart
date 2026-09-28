@@ -28,24 +28,31 @@ Future<void> _writeParityResponse(Map<String, dynamic>? data) async {
     validateCapturePath(receipt);
     final name = receipt['name'];
     final path = receipt['path'] as String;
-    final result = await Process.run(
-            'adb',
-            [
-              '-s',
-              serial,
-              'exec-out',
-              'run-as',
-              'com.qingji.qingji.codex',
-              'cat',
-              path,
-            ],
-            stdoutEncoding: null)
-        .timeout(const Duration(seconds: 30));
-    if (result.exitCode != 0) {
-      throw StateError('ADB capture read failed: ${result.stderr}');
-    }
-    final bytes = result.stdout as List<int>;
-    validateCaptureReceipt(receipt, bytes);
+    final bytes = await readValidatedCaptureReceipt(receipt, (attempt) async {
+      // The final read uses text transport, but must match the same byte receipt.
+      final useBase64 = attempt == 3;
+      final arguments = [
+        '-s',
+        serial,
+        'exec-out',
+        'run-as',
+        'com.qingji.qingji.codex',
+        useBase64 ? 'base64' : 'cat',
+        path,
+      ];
+      final result = await Process.run('adb', arguments, stdoutEncoding: null)
+          .timeout(const Duration(seconds: 30));
+      if (result.exitCode != 0) {
+        throw ProcessException('adb', arguments,
+            'ADB capture read failed: ${result.stderr}', result.exitCode);
+      }
+      final raw = result.stdout as List<int>;
+      return useBase64
+          ? base64.decode(utf8.decode(raw).replaceAll(RegExp(r'\s'), ''))
+          : raw;
+    }, onRetry: (attempt, error) {
+      stderr.writeln('PARITY_CAPTURE_READ_RETRY attempt=$attempt $error');
+    });
     await File('${directory.path}/$name.png').writeAsBytes(
       makeOpaqueParityScreenshot(bytes),
       flush: true,

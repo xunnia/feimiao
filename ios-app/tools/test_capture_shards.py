@@ -97,6 +97,12 @@ class TransportFailureTests(unittest.TestCase):
     def test_assertion_wins_over_transport_error(self):
         self.assertFalse(is_retryable("TestFailure: Expected: one widget\nadb: device offline"))
 
+    def test_capture_integrity_failure_wins_over_cleanup_offline(self):
+        self.assertFalse(is_retryable("Bad state: Capture receipt hash/length mismatch\nadb: device offline"))
+
+    def test_invalid_capture_path_is_not_transport_loss(self):
+        self.assertFalse(is_retryable("Invalid capture receipt path\nadb: device offline", 124))
+
     def test_unrelated_uninstall_failure_is_not_retryable(self):
         self.assertFalse(is_retryable("Failure [DELETE_FAILED_INTERNAL_ERROR]"))
 

@@ -7,7 +7,8 @@ from pathlib import Path
 
 def is_retryable(log: str, status: int | None = None) -> bool:
     if re.search(r"TestFailure|EXCEPTION CAUGHT BY FLUTTER TEST FRAMEWORK|"
-                 r"Some tests failed|AssertionError|Expected:", log):
+                 r"Some tests failed|AssertionError|Expected:|"
+                 r"Capture receipt hash/length mismatch|Invalid capture receipt path", log):
         return False
     return status == 124 or bool(re.search(
         r"Service has disappeared|Service connection disposed|"

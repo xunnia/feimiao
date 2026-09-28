@@ -367,8 +367,10 @@ enum AssetStore {
         note: String = "",
         includeInNetWorth: Bool = true,
         sourceType: PhysicalAssetSourceType = .historicalExisting,
+        usageLifecycle: PhysicalAssetLifecycle = .owned,
         saveImmediately: Bool = true
     ) throws -> PhysicalAsset {
+        try validateUsageLifecycle(usageLifecycle)
         let normalizedPurchasePrice = MoneyNormalization.roundToCents(purchasePrice)
         let normalizedCurrentValue = MoneyNormalization.roundToCents(currentValue)
         try validate(
@@ -389,6 +391,8 @@ enum AssetStore {
         )
         asset.purchaseDate = purchaseDate
         asset.sourceType = sourceType
+        asset.lifecycle = usageLifecycle
+        asset.usageStatusRaw = usageLifecycle == .idle ? "idle" : "active"
         asset.acquisitionCostSourceRaw = normalizedPurchasePrice > 0
             ? AssetAcquisitionCostSource.manual.rawValue
             : AssetAcquisitionCostSource.manualUnknown.rawValue
@@ -436,8 +440,10 @@ enum AssetStore {
         location: String = "",
         warrantyUntil: Date? = nil,
         note: String = "",
-        includeInNetWorth: Bool = true
+        includeInNetWorth: Bool = true,
+        usageLifecycle: PhysicalAssetLifecycle = .owned
     ) throws -> PhysicalAsset {
+        try validateUsageLifecycle(usageLifecycle)
         let normalizedPrice = MoneyNormalization.roundToCents(purchasePrice)
         guard normalizedPrice > 0,
               !account.isDeleted,
@@ -466,6 +472,7 @@ enum AssetStore {
                 note: note,
                 includeInNetWorth: includeInNetWorth,
                 sourceType: .newPurchaseWithAccount,
+                usageLifecycle: usageLifecycle,
                 saveImmediately: false
             )
             let transaction = MoneyTransaction(
@@ -515,8 +522,10 @@ enum AssetStore {
         location: String = "",
         warrantyUntil: Date? = nil,
         note: String = "",
-        includeInNetWorth: Bool = true
+        includeInNetWorth: Bool = true,
+        usageLifecycle: PhysicalAssetLifecycle = .owned
     ) throws -> PhysicalAsset {
+        try validateUsageLifecycle(usageLifecycle)
         guard transaction.kind == .expense,
               transaction.amount > 0,
               transaction.refundOfID == nil,
@@ -555,6 +564,7 @@ enum AssetStore {
                 note: note,
                 includeInNetWorth: includeInNetWorth,
                 sourceType: .fromTransaction,
+                usageLifecycle: usageLifecycle,
                 saveImmediately: false
             )
             _ = try linkPurchaseAllocation(
@@ -584,11 +594,13 @@ enum AssetStore {
         model: String,
         location: String,
         note: String,
-        includeInNetWorth: Bool
+        includeInNetWorth: Bool,
+        usageLifecycle: PhysicalAssetLifecycle? = nil
     ) throws {
         guard asset.lifecycle == .owned || asset.lifecycle == .idle else {
             throw Error.endedAsset
         }
+        if let usageLifecycle { try validateUsageLifecycle(usageLifecycle) }
         let normalizedPurchasePrice = MoneyNormalization.roundToCents(purchasePrice)
         let normalizedCurrentValue = MoneyNormalization.roundToCents(currentValue)
         try validate(
@@ -614,6 +626,10 @@ enum AssetStore {
         asset.location = location.trimmingCharacters(in: .whitespacesAndNewlines)
         asset.note = note.trimmingCharacters(in: .whitespacesAndNewlines)
         asset.includeInNetWorth = includeInNetWorth
+        if let usageLifecycle {
+            asset.lifecycle = usageLifecycle
+            asset.usageStatusRaw = usageLifecycle == .idle ? "idle" : "active"
+        }
         asset.updatedAt = Date()
         context.insert(AssetEvent(
             assetID: asset.stableID,
@@ -630,6 +646,10 @@ enum AssetStore {
             ))
         }
         try context.save()
+    }
+
+    private static func validateUsageLifecycle(_ lifecycle: PhysicalAssetLifecycle) throws {
+        guard lifecycle == .owned || lifecycle == .idle else { throw Error.endedAsset }
     }
 
     static func setLifecycle(
