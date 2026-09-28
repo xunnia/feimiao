@@ -254,6 +254,7 @@ Future<void> _captureParityScene(
       scene == 'assets-funds' ||
       scene == 'assets-add' ||
       scene == 'assets-purchase' ||
+      scene == 'assets-purchase-form' ||
       scene == 'accounts-management' ||
       scene == 'liabilities' ||
       scene == 'net-worth') {
@@ -876,7 +877,9 @@ Future<void> _captureAssetScene(
     return;
   }
 
-  if (scene == 'assets-add' || scene == 'assets-purchase') {
+  if (scene == 'assets-add' ||
+      scene == 'assets-purchase' ||
+      scene == 'assets-purchase-form') {
     final add = find.descendant(
       of: find.byType(AppBar),
       matching: find.byIcon(Icons.add),
@@ -889,11 +892,22 @@ Future<void> _captureAssetScene(
     expect(find.text('新购买记账'), findsOneWidget);
     expect(find.text('从最近账单加入'), findsOneWidget);
     expect(find.text('手工补录物品'), findsOneWidget);
-    if (scene == 'assets-purchase') {
+    if (scene == 'assets-purchase' || scene == 'assets-purchase-form') {
       await tester.tap(find.text('从最近账单加入').last);
       await _pumpFor(tester, const Duration(milliseconds: 600));
       expect(find.byKey(const Key('asset-purchase-search')), findsOneWidget);
       expect(find.textContaining('可分配'), findsAtLeastNWidgets(1));
+      if (scene == 'assets-purchase-form') {
+        final purchase = find.text('午餐 麦当劳').last;
+        await tester.ensureVisible(purchase);
+        await tester.tap(purchase.hitTestable());
+        await _pumpFor(tester, const Duration(milliseconds: 600));
+        expect(find.byKey(const Key('asset-purchase-name')), findsOneWidget);
+        FocusManager.instance.primaryFocus?.unfocus();
+        await _pumpFor(tester, const Duration(milliseconds: 400));
+        await _takeScreenshot(tester, binding, 'assets-purchase-form-android');
+        return;
+      }
       await _takeScreenshot(tester, binding, 'assets-purchase-android');
       return;
     }

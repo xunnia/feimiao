@@ -166,6 +166,7 @@ fi
     ai-local
     assets-add
     assets-purchase
+    assets-purchase-form
   )
   selected_scenes=()
   for index in "${!scenes[@]}"; do

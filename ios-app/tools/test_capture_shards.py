@@ -41,6 +41,19 @@ class OwnershipTests(unittest.TestCase):
         self.assertIn('capture_interaction "settings/assets/purchase" "26d-assets-purchase"', workflow)
         self.assertIn("    assets-purchase\n", runner)
 
+    def test_asset_purchase_form_is_supplemental_and_has_a_cold_launch_route(self):
+        manifest = json.loads(Path(__file__).with_name("screenshot_manifest.json").read_text(encoding="utf-8"))
+        self.assertNotIn("assets-purchase-form", {pair["id"] for pair in manifest["pairs"]})
+        self.assertEqual(owned_images(manifest, ["assets-purchase-form"]),
+                         ["assets-purchase-form-android.png"])
+        root = Path(__file__).resolve().parents[2]
+        workflow = (root / ".github/workflows/ios-ci.yml").read_text(encoding="utf-8")
+        runner = (root / "android-app/tooling/run_parity_capture.sh").read_text(encoding="utf-8")
+        router = (root / "ios-app/QingJi/Views/RootTabView.swift").read_text(encoding="utf-8")
+        self.assertIn('capture_interaction "settings/assets/purchase/form" "26e-assets-purchase-form"', workflow)
+        self.assertIn("    assets-purchase-form\n", runner)
+        self.assertIn('"assets/purchase", "assets/purchase/form"', router)
+
     def test_supplemental_monthly_trend_has_its_own_image(self):
         manifest = json.loads(Path(__file__).with_name("screenshot_manifest.json").read_text(encoding="utf-8"))
         self.assertEqual(owned_images(manifest, ["stats-month-trend"]),

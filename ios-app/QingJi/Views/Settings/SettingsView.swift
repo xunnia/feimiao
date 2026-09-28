@@ -171,6 +171,7 @@ struct SettingsView: View {
         case .assetFunds: AssetsView(startsOnFunds: true)
         case .assetAdd: AssetsView(startsOnAdd: true)
         case .assetPurchase: AssetsView(startsOnPurchase: true)
+        case .assetPurchaseForm: AssetsView(startsOnPurchase: true, preselectFirstPurchase: true)
         case .assetDetail: AssetsView(opensFirstDetail: true, startsOnPhysical: true)
         case .liabilities: LiabilitiesView()
         case .netWorth:  NetWorthView()

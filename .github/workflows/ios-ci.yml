@@ -349,6 +349,7 @@ jobs:
           asset_add_name="26c-assets-add"
           capture_interaction "$asset_add_route" "$asset_add_name"
           capture_interaction "settings/assets/purchase" "26d-assets-purchase"
+          capture_interaction "settings/assets/purchase/form" "26e-assets-purchase-form"
           ring_route="stats/month/ring"
           ring_name="14a-stats-month-ring"
           capture_interaction "$ring_route" "$ring_name"

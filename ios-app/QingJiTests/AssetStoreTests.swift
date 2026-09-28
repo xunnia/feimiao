@@ -392,6 +392,25 @@ final class AssetStoreTests: XCTestCase {
         XCTAssertEqual(candidates.first?.remainingRefundCents, 1_000)
     }
 
+    func testPurchaseFormSuggestedValueUsesNetCents() {
+        XCTAssertEqual(
+            PhysicalAssetEditor.suggestedPurchaseValue(grossText: " 1,200.50 ", refundText: "200.25"),
+            Decimal(string: "1000.25")
+        )
+        XCTAssertEqual(
+            PhysicalAssetEditor.suggestedPurchaseValue(grossText: "10", refundText: "20"),
+            .zero
+        )
+        XCTAssertEqual(
+            PhysicalAssetEditor.suggestedPurchaseValue(grossText: "", refundText: ""),
+            .zero
+        )
+        XCTAssertEqual(
+            PhysicalAssetEditor.suggestedPurchaseValue(grossText: "12.345", refundText: "2.115"),
+            Decimal(string: "10.23")
+        )
+    }
+
     func testPurchaseCandidatesIgnoreExcludedBillsAndNonPurchaseLinks() throws {
         let stack = try Stack()
         let book = Book(name: "测试账本", isDefault: true)

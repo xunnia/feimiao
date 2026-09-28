@@ -60,6 +60,7 @@ struct AssetsView: View {
     let opensFirstDetail: Bool
     let startsOnAdd: Bool
     let startsOnPurchase: Bool
+    let preselectFirstPurchase: Bool
     @State private var didOpenLaunchDetail = false
     @State private var didOpenLaunchAdd = false
     @State private var didOpenLaunchPurchase = false
@@ -92,11 +93,13 @@ struct AssetsView: View {
         startsOnPhysical: Bool = false,
         startsOnFunds: Bool = false,
         startsOnAdd: Bool = false,
-        startsOnPurchase: Bool = false
+        startsOnPurchase: Bool = false,
+        preselectFirstPurchase: Bool = false
     ) {
         self.opensFirstDetail = opensFirstDetail
         self.startsOnAdd = startsOnAdd
         self.startsOnPurchase = startsOnPurchase
+        self.preselectFirstPurchase = preselectFirstPurchase
         _selectedTab = State(
             initialValue: startsOnPhysical || opensFirstDetail || startsOnPurchase
                 ? .items : (startsOnFunds ? .funds : .overview)
@@ -170,7 +173,11 @@ struct AssetsView: View {
                 .presentationDetents([.medium, .large])
         }
         .sheet(isPresented: $showNewAsset) {
-            PhysicalAssetEditor(asset: nil, initialSourceType: newAssetSource)
+            PhysicalAssetEditor(
+                asset: nil,
+                initialSourceType: newAssetSource,
+                preselectFirstPurchase: preselectFirstPurchase
+            )
                 .presentationDetents([.large])
         }
         .sheet(item: $detailAsset) { asset in
@@ -751,11 +758,14 @@ struct PhysicalAssetEditor: View {
     private var purchaseLinks: [AssetTransactionLink]
 
     let asset: PhysicalAsset?
+    let preselectFirstPurchase: Bool
+    @State private var didPreselectPurchase = false
     @State private var name: String
     @State private var kind: PhysicalAssetKind
     @State private var sourceType: PhysicalAssetSourceType
     @State private var purchasePriceText: String
     @State private var currentValueText: String
+    @State private var purchaseValueEdited = false
     @State private var bookID: UUID?
     @State private var paymentAccountID: UUID?
     @State private var purchaseCategoryKey: String?
@@ -774,9 +784,14 @@ struct PhysicalAssetEditor: View {
     @State private var note: String
     @State private var errorMessage: String?
 
-    init(asset: PhysicalAsset?, initialSourceType: PhysicalAssetSourceType = .historicalExisting) {
+    init(
+        asset: PhysicalAsset?,
+        initialSourceType: PhysicalAssetSourceType = .historicalExisting,
+        preselectFirstPurchase: Bool = false
+    ) {
         let resolvedSourceType = asset?.sourceType ?? initialSourceType
         self.asset = asset
+        self.preselectFirstPurchase = preselectFirstPurchase
         _name = State(initialValue: asset?.name ?? "")
         _kind = State(initialValue: asset?.kind ?? .other)
         _sourceType = State(initialValue: resolvedSourceType)
@@ -798,7 +813,7 @@ struct PhysicalAssetEditor: View {
         _location = State(initialValue: asset?.location ?? "")
         _warrantyEnabled = State(initialValue: asset?.warrantyUntil != nil)
         _warrantyUntil = State(initialValue: asset?.warrantyUntil ?? Date())
-        _includeInNetWorth = State(initialValue: asset?.includeInNetWorth ?? true)
+        _includeInNetWorth = State(initialValue: asset?.includeInNetWorth ?? false)
         _note = State(initialValue: asset?.note ?? "")
     }
 
@@ -968,7 +983,13 @@ struct PhysicalAssetEditor: View {
                                 TextField("购置成本", text: $purchasePriceText)
                                     .keyboardType(.decimalPad)
                             }
-                            TextField("当前估值", text: $currentValueText)
+                            TextField("当前估值", text: Binding(
+                                get: { currentValueText },
+                                set: {
+                                    currentValueText = $0
+                                    if isTransactionSource { purchaseValueEdited = true }
+                                }
+                            ))
                                 .keyboardType(.decimalPad)
                             if isTransactionSource {
                                 LabeledContent("账本", value: sourceTransaction?.book?.name ?? "选择账单后继承")
@@ -1010,6 +1031,11 @@ struct PhysicalAssetEditor: View {
                     }
                 }
             }
+            .onAppear {
+                guard preselectFirstPurchase, isTransactionSource, !didPreselectPurchase else { return }
+                didPreselectPurchase = true
+                sourceTransactionID = purchaseCandidates.first?.transaction.stableID
+            }
             .onChange(of: sourceType) { _, next in
                 if next == .newPurchaseWithAccount || next == .fromTransaction {
                     purchaseDateEnabled = true
@@ -1028,6 +1054,12 @@ struct PhysicalAssetEditor: View {
                 allocationGrossText = (Decimal(candidate.remainingGrossCents) / 100).description
                 allocationRefundText = (Decimal(defaultRefund) / 100).description
                 currentValueText = (Decimal(candidate.remainingGrossCents - defaultRefund) / 100).description
+            }
+            .onChange(of: allocationGrossText) { _, _ in
+                refreshPurchaseValue()
+            }
+            .onChange(of: allocationRefundText) { _, _ in
+                refreshPurchaseValue()
             }
             .navigationTitle(
                 asset == nil
@@ -1059,6 +1091,25 @@ struct PhysicalAssetEditor: View {
                 Text(errorMessage ?? "")
             }
         }
+    }
+
+    static func suggestedPurchaseValue(grossText: String, refundText: String) -> Decimal {
+        func cents(_ text: String) -> Int {
+            let clean = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                .replacingOccurrences(of: ",", with: "")
+            return MoneyNormalization.cents(Decimal(string: clean) ?? .zero)
+        }
+        let gross = max(0, cents(grossText))
+        let refund = max(0, cents(refundText))
+        return Decimal(max(0, gross - refund)) / 100
+    }
+
+    private func refreshPurchaseValue() {
+        guard isTransactionSource, !purchaseValueEdited else { return }
+        currentValueText = Self.suggestedPurchaseValue(
+            grossText: allocationGrossText,
+            refundText: allocationRefundText
+        ).description
     }
 
     private var purchaseCandidateList: some View {
