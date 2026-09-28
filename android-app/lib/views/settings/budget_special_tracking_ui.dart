@@ -480,7 +480,7 @@ class BudgetSpecialTrackingCard extends StatelessWidget {
     final accent = isOverBudget
         ? AppColors.warning
         : isNearLimit
-            ? AppColors.income(scheme)
+            ? AppColors.budgetCaution(scheme)
             : AppColors.budgetHealthy(scheme);
     final status = _statusLabel(
       lifecycleStatus,

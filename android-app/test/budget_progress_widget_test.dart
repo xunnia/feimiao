@@ -6,6 +6,7 @@ import 'package:qingji/core/budget/budget_engine.dart';
 import 'package:qingji/core/budget/budget_window_resolver.dart';
 import 'package:qingji/core/models/transaction_record.dart';
 import 'package:qingji/core/statistics/statistics_engine.dart';
+import 'package:qingji/core/transaction_time.dart';
 import 'package:qingji/data/app_repository.dart';
 import 'package:qingji/theme/app_colors.dart';
 import 'package:qingji/views/home/home_view.dart';
@@ -255,6 +256,152 @@ void main() {
     final overLabel = tester.widget<Text>(find.text('月预算已超'));
     expect(overLabel.style?.fontVariations, hasLength(1));
     expect(overLabel.style?.fontVariations?.single.value, 350);
+  });
+
+  test('income is green and budget caution stays gold', () {
+    final light = AppTheme.light().colorScheme;
+    final dark = AppTheme.dark().colorScheme;
+    expect(AppColors.income(light), AppColors.incomeLightMode);
+    expect(AppColors.income(dark), AppColors.incomeDarkMode);
+    expect(AppColors.budgetCaution(light), kCatGold);
+    // 渐变中段仍是金色，收入改绿不影响预算条观感。
+    expect(BudgetProgressPalette.gradient(light).colors[1], kCatGold);
+  });
+
+  testWidgets('overflow bar splits at the 100% budget line', (tester) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: AppTheme.light(),
+        home: const Scaffold(
+          body: SizedBox(
+            width: 200,
+            child: BudgetProgressBar(value: 1, overflowStart: 0.7),
+          ),
+        ),
+      ),
+    );
+
+    expect(find.byKey(const ValueKey('budget-progress-track')), findsNothing);
+    final overflow = tester.widget<DecoratedBox>(
+      find.byKey(const ValueKey('budget-progress-overflow')),
+    );
+    expect(
+      (overflow.decoration as BoxDecoration).color,
+      AppColors.overspendDeep,
+    );
+    expect(
+      tester
+          .getSize(find.byKey(const ValueKey('budget-progress-fill-clip')))
+          .width,
+      closeTo(140, 0.01),
+    );
+    final boundary =
+        tester.getRect(find.byKey(const ValueKey('budget-progress-boundary')));
+    expect(boundary.center.dx - tester.getTopLeft(find.byType(BudgetProgressBar)).dx,
+        closeTo(140, 0.01));
+  });
+
+  testWidgets('overspent home card: no minus, warning chip, today ¥0 ring',
+      (tester) async {
+    final summary = MonthlySummary(
+      year: 2026,
+      month: 9,
+      totalExpense: Decimal.fromInt(4512),
+      totalIncome: Decimal.fromInt(500),
+      expenseByCategory: const [],
+      dailyTotals: const [],
+    );
+    final status = BudgetStatus(
+      monthlyBudget: Decimal.fromInt(3200),
+      spentThisMonth: Decimal.fromInt(4512),
+      spentToday: Decimal.parse('2208.95'),
+      remaining: Decimal.fromInt(-1312),
+      todayAllowance: Decimal.parse('-1217.90'),
+      isOverBudget: true,
+    );
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: AppTheme.light(),
+        home: Scaffold(
+          body: HomeSummaryCard(
+            monthDate: DateTime(2026, 9),
+            isCurrentMonth: true,
+            summary: summary,
+            budgetStatus: status,
+            budget: Decimal.fromInt(3200),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('月预算已超'), findsOneWidget);
+    expect(find.textContaining('-¥'), findsNothing);
+    expect(find.text('¥1,312.00'), findsOneWidget);
+
+    final chip = tester.widget<Container>(
+      find.byKey(const ValueKey('home-budget-percent-chip')),
+    );
+    expect(
+      (chip.decoration as BoxDecoration).color,
+      AppColors.warning.withValues(alpha: 0.16),
+    );
+    final pct = tester.widget<Text>(
+      find.byKey(const ValueKey('home-budget-percent')),
+    );
+    expect(pct.data, '141%');
+    expect(pct.style?.color, AppColors.overspendDeep);
+
+    // 横条：预算线在 3200/4512 ≈ 70.9% 处。
+    final barWidth = tester.getSize(find.byType(BudgetProgressBar)).width;
+    expect(
+      tester
+              .getSize(find.byKey(const ValueKey('budget-progress-fill-clip')))
+              .width /
+          barWidth,
+      closeTo(3200 / 4512, 0.001),
+    );
+
+    // 圆环：今日可用封底 ¥0，日额度 991.05 / 今日已花 2208.95 ≈ 44.9%。
+    expect(find.text('今日可用'), findsOneWidget);
+    expect(find.text('¥0.00'), findsOneWidget);
+    final ring = tester.widget<CustomPaint>(
+      find.byKey(const ValueKey('budget-progress-ring-overflow')),
+    );
+    final painter = ring.painter! as BudgetOverflowRingPainter;
+    expect(painter.withinFraction, closeTo(991.05 / 2208.95, 0.0001));
+    expect(painter.overflowColor, AppColors.overspendDeep);
+  });
+
+  testWidgets('recurring transaction row shows 周期 before the category',
+      (tester) async {
+    final repository = AppRepository();
+    addTearDown(repository.dispose);
+    final date = DateTime(2026, 9, 1);
+    final tx = TransactionEntity(
+      id: 7,
+      bookId: 1,
+      kind: 'expense',
+      amountStr: '3000',
+      categoryKey: 'housing',
+      categoryNameZh: '居家住房',
+      note: '房租',
+      dateMs: date.millisecondsSinceEpoch,
+      createdMs: date.millisecondsSinceEpoch,
+      timePrecision: TransactionTimePrecision.dateOnly,
+      recurringRuleId: 3,
+    );
+    await tester.pumpWidget(
+      ChangeNotifierProvider<AppRepository>.value(
+        value: repository,
+        child: MaterialApp(
+          theme: AppTheme.light(),
+          home: Scaffold(body: TxRow(transaction: tx)),
+        ),
+      ),
+    );
+
+    expect(find.text('周期 · 居家住房'), findsOneWidget);
   });
 
   testWidgets('home filter has the same gap above and below', (tester) async {

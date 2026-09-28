@@ -248,7 +248,7 @@ class TxRow extends StatelessWidget {
     return seed?.emoji ?? '🏷️';
   }
 
-  // 老的独立退款冲账行（负支出）：显示成「+¥x」铜金色。
+  // 老的独立退款冲账行（负支出）：显示成「+¥x」收入绿。
   bool get _isRefund =>
       transaction.txKind == TransactionKind.expense &&
       transaction.amount < Decimal.zero;
@@ -301,6 +301,9 @@ class TxRow extends StatelessWidget {
       toAccountName: transaction.toAccountName,
     );
     final detailText = joinTransactionCardDetails([
+      // 周期账按日生成（dateOnly），没有钟点可显示；标「周期」补齐
+      // 「时间 · 分类」的两段格式，也让用户一眼看出是自动记的。
+      if (transaction.recurringRuleId != null) '周期',
       transactionCardTimeLabel(
         transaction.date,
         dateGrouped: dateGrouped,
@@ -404,19 +407,19 @@ class _TxRefundBadge extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final gold = AppColors.income(Theme.of(context).colorScheme);
+    final color = AppColors.income(Theme.of(context).colorScheme);
     return Container(
       margin: const EdgeInsets.only(left: 6),
       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
       decoration: BoxDecoration(
-        color: gold.withValues(alpha: 0.16),
+        color: color.withValues(alpha: 0.16),
         borderRadius: BorderRadius.circular(4),
       ),
       child: Text('已退 ${MoneyFormat.string(refunded)}',
           style: TextStyle(
               fontSize: 10,
               height: 1.2,
-              color: gold,
+              color: color,
               fontWeight: FontWeight.w500)),
     );
   }

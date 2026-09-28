@@ -715,7 +715,7 @@ class _StatusCard extends StatelessWidget {
               width: double.infinity,
               padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
               decoration: BoxDecoration(
-                color: AppColors.income(scheme).withValues(alpha: 0.10),
+                color: AppColors.budgetCaution(scheme).withValues(alpha: 0.10),
                 borderRadius: BorderRadius.circular(8),
               ),
               child: Text(qualityText, style: AppType.caption(scheme)),
@@ -895,7 +895,7 @@ class _StatusCard extends StatelessWidget {
               width: double.infinity,
               padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
               decoration: BoxDecoration(
-                color: AppColors.income(scheme).withValues(alpha: 0.10),
+                color: AppColors.budgetCaution(scheme).withValues(alpha: 0.10),
                 borderRadius: BorderRadius.circular(8),
               ),
               child: Text(qualityText, style: AppType.caption(scheme)),
@@ -980,7 +980,7 @@ class _CategoryProgressRow extends StatelessWidget {
     final barColor = r > 1.0
         ? AppColors.warning
         : (r >= 0.8
-            ? AppColors.income(scheme)
+            ? AppColors.budgetCaution(scheme)
             : AppColors.budgetHealthy(scheme));
 
     return Padding(

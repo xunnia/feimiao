@@ -1290,7 +1290,7 @@ class _DrawerPanelState extends State<_DrawerPanel> {
             if (b.starred) ...[
               const SizedBox(width: 4),
               Icon(Icons.star_rounded,
-                  size: 14, color: AppColors.income(scheme)),
+                  size: 14, color: AppColors.budgetCaution(scheme)),
             ],
           ],
         ),

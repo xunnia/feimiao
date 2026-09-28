@@ -47,11 +47,24 @@ const Color kWarningOrange = kOverspendOrange;
 class AppColors {
   AppColors._();
 
-  /// 收入/正向金额 —— 铜金（浅色模式）。
-  static const Color incomeLightMode = kCatGold;
+  /// 收入/正向金额 —— 绿（浅色模式）。
+  ///
+  /// 原先用铜金，和超支橙同属暖色，「+¥120」与「-¥1,217」在主页并排时
+  /// 分不清正负。比预算健康绿（7FB069）压暗一档，保证奶白卡片上的文字对比度。
+  static const Color incomeLightMode = Color(0xFF5B9A4B);
 
-  /// 收入/正向金额 —— 略亮金（深色模式更易读）。
-  static const Color incomeDarkMode = Color(0xFFF7CC6E);
+  /// 收入/正向金额 —— 略亮绿（深色模式更易读）。
+  static const Color incomeDarkMode = Color(0xFF93C77F);
+
+  /// 预算进度的临界中段色（健康绿 → 临界金 → 超支橙）。
+  ///
+  /// 以前直接借用收入色；收入改绿后单独保留原铜金，预算渐变观感不变。
+  static const Color budgetCautionLightMode = kCatGold;
+  static const Color budgetCautionDarkMode = Color(0xFFF7CC6E);
+
+  /// 超出 100% 预算那一段的颜色：比 [warning] 更深，和渐变末端的橙区分开，
+  /// 也用作超支百分比标签的文字色（浅底小字需要更高对比度）。
+  static const Color overspendDeep = Color(0xFFD9602E);
 
   /// 支出/普通金额 —— 跟随系统文字色（onSurface），
   /// 不在此处硬编码，直接用 Theme.of(context).colorScheme.onSurface。
@@ -74,6 +87,11 @@ class AppColors {
       scheme.brightness == Brightness.dark
           ? budgetHealthyDarkMode
           : budgetHealthyLightMode;
+
+  static Color budgetCaution(ColorScheme scheme) =>
+      scheme.brightness == Brightness.dark
+          ? budgetCautionDarkMode
+          : budgetCautionLightMode;
 
   /// 支出颜色直接返回 onSurface（中性文本色）。
   static Color expense(ColorScheme scheme) => scheme.onSurface;

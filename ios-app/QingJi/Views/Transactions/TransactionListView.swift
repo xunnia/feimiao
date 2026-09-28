@@ -675,7 +675,10 @@ struct TransactionRow: View {
             accountName: transaction.account?.name ?? "",
             toAccountName: transaction.toAccount?.name ?? ""
         )
+        // 周期账按日生成（dateOnly），没有钟点可显示；标「周期」补齐
+        // 「时间 · 分类」的两段格式，与 Android TxRow 对齐。
         let detail = joinTransactionCardDetails([
+            transaction.recurringRuleID != nil ? "周期" : "",
             transactionCardTimeLabel(
                 transaction.date,
                 dateGrouped: true,
@@ -700,10 +703,10 @@ struct TransactionRow: View {
                     if refundAmount > 0 {
                         Text("已退 \(MoneyFormat.string(refundAmount, currencyCode: transaction.currencyCode))")
                             .font(.caption2.weight(.medium))
-                            .foregroundStyle(Color.orange)
+                            .foregroundStyle(Color.income)
                             .padding(.horizontal, 6)
                             .padding(.vertical, 2)
-                            .background(Color.orange.opacity(0.12), in: .rect(cornerRadius: 5))
+                            .background(Color.income.opacity(0.16), in: .rect(cornerRadius: 5))
                             .lineLimit(1)
                             .fixedSize(horizontal: true, vertical: false)
                     }

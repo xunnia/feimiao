@@ -362,10 +362,15 @@ private struct BudgetSummaryBody: View {
         return isCurrentMonth ? "\(amount) · 剩 \(remainingDays) 天" : amount
     }
 
+    /// 「月预算已超」已经表达了方向，金额不再带负号，避免双重否定。
     private var remainingText: String {
         let absolute = status.remaining < 0 ? -status.remaining : status.remaining
-        let amount = MoneyFormat.string(absolute, currencyCode: currencyCode)
-        return status.isOverBudget ? "-\(amount)" : amount
+        return MoneyFormat.string(absolute, currencyCode: currencyCode)
+    }
+
+    /// 超支时条形按「已花」铺满，100% 预算线落在 预算/已花 处；未超支为 nil。
+    private var overflowStart: Double? {
+        BudgetOverflow.boundary(budget: budget, spent: status.spentThisMonth, isOver: status.isOverBudget)
     }
 
     var body: some View {
@@ -396,14 +401,17 @@ private struct BudgetSummaryBody: View {
                     metric(title: "支出", amount: summary.totalExpense, color: .primary)
                 }
 
-                BudgetGradientProgressBar(value: ratio)
+                BudgetGradientProgressBar(value: ratio, overflowStart: overflowStart)
                 HStack {
                     Text(percentText)
                         .font(.caption.weight(.medium))
-                        .foregroundStyle(Color.accentColor)
+                        .foregroundStyle(status.isOverBudget ? Color.overspendDeep : Color.accentColor)
                         .padding(.horizontal, 6)
                         .padding(.vertical, 2)
-                        .background(Color.accentColor.opacity(0.10), in: .rect(cornerRadius: 6))
+                        .background(
+                            status.isOverBudget ? Color.warning.opacity(0.16) : Color.accentColor.opacity(0.10),
+                            in: .rect(cornerRadius: 6)
+                        )
                     Spacer()
                     Text(footerText)
                         .font(.caption)
@@ -432,33 +440,73 @@ private struct BudgetSummaryBody: View {
     }
 }
 
+/// 超支分界线的共用计算，横条和圆环口径一致（与 Android home_summary_card 对齐）。
+enum BudgetOverflow {
+    /// 100% 预算线在「已花」整条中的位置（预算 / 已花，0~1）；未超支返回 nil。
+    static func boundary(budget: Decimal, spent: Decimal, isOver: Bool) -> Double? {
+        guard isOver, budget > 0, spent > budget else { return nil }
+        return min(max(MoneyFormat.double(budget) / MoneyFormat.double(spent), 0), 1)
+    }
+
+    /// 分界线颜色：接近卡片底色的细线，在任意填充色上都能看清。
+    static let boundaryColor = Color(uiColor: .systemBackground).opacity(0.92)
+}
+
 private struct BudgetGradientProgressBar: View {
     let value: Double
+    /// 非 nil 时进入超支模式：整条 = 已花，分界线左侧是预算内渐变，右侧超出部分用 overspendDeep。
+    var overflowStart: Double? = nil
+
+    private static let gradient = LinearGradient(
+        colors: [
+            Color.budgetHealthy,
+            Color(red: 0.90, green: 0.69, blue: 0.20),
+            Color.warning,
+        ],
+        startPoint: .leading,
+        endPoint: .trailing
+    )
+
+    private var accessibilityPercent: String {
+        if let start = overflowStart, start > 0, start < 1 {
+            return "\(Int((100 / start).rounded()))%"
+        }
+        return "\(Int(min(max(value, 0), 1) * 100))%"
+    }
 
     var body: some View {
         GeometryReader { proxy in
-            let clamped = min(max(value, 0), 1)
-            ZStack(alignment: .leading) {
-                Capsule()
-                    .fill(Color.secondary.opacity(0.14))
-                Capsule()
-                    .fill(
-                        LinearGradient(
-                            colors: [
-                                Color(red: 0.48, green: 0.68, blue: 0.38),
-                                Color(red: 0.90, green: 0.69, blue: 0.20),
-                                Color.warning,
-                            ],
-                            startPoint: .leading,
-                            endPoint: .trailing
-                        )
-                    )
-                    .frame(width: proxy.size.width * clamped)
+            let width = proxy.size.width
+            if let start = overflowStart, start < 1 {
+                let split = width * min(max(start, 0), 1)
+                ZStack(alignment: .leading) {
+                    Rectangle()
+                        .fill(Color.overspendDeep)
+                    Rectangle()
+                        .fill(Self.gradient)
+                        .frame(width: split)
+                    // 100% 分界线
+                    Rectangle()
+                        .fill(BudgetOverflow.boundaryColor)
+                        .frame(width: 2)
+                        .offset(x: min(max(split - 1, 0), max(0, width - 2)))
+                }
+                .clipShape(Capsule())
+            } else {
+                let clamped = min(max(value, 0), 1)
+                ZStack(alignment: .leading) {
+                    Capsule()
+                        .fill(Color.secondary.opacity(0.14))
+                    Capsule()
+                        .fill(Self.gradient)
+                        .frame(width: width * clamped)
+                }
             }
         }
         .frame(height: 7)
+        .accessibilityElement(children: .ignore)
         .accessibilityLabel("预算进度")
-        .accessibilityValue("\(Int(min(max(value, 0), 1) * 100))%")
+        .accessibilityValue(accessibilityPercent)
     }
 }
 
@@ -517,13 +565,38 @@ private struct TodayAllowanceRing: View {
     let currencyCode: String
     let isCurrentMonth: Bool
 
-    private var value: Double {
-        guard isCurrentMonth else {
-            return status.monthlyBudget > 0
-                ? min(max(MoneyFormat.double(status.spentThisMonth) / MoneyFormat.double(status.monthlyBudget), 0), 1)
-                : 0
+    private static let lineWidth: CGFloat = 7
+
+    /// 今日已超：负的「可用」没有意义，封底为 0。
+    private var todayOver: Bool { isCurrentMonth && status.todayAllowance < 0 }
+
+    /// 超支模式下预算内部分占整圈的比例；nil 表示正常圆环。
+    ///
+    /// 当月：整圈 = 今天已花，今天的日额度（spentToday + todayAllowance）以内是健康绿，
+    /// 之后是超出部分；日额度 ≤ 0（今天开始前就已超）时整圈都是超出。
+    /// 历史月：和横条同一套 预算/已花 分界。与 Android home_summary_card 对齐。
+    private var overflowWithin: Double? {
+        if isCurrentMonth {
+            guard todayOver else { return nil }
+            let dayBase = status.spentToday + status.todayAllowance
+            guard dayBase > 0, status.spentToday > 0 else { return 0 }
+            return min(max(MoneyFormat.double(dayBase) / MoneyFormat.double(status.spentToday), 0), 1)
         }
-        if status.todayAllowance < 0 { return 0 }
+        return BudgetOverflow.boundary(
+            budget: status.monthlyBudget,
+            spent: status.spentThisMonth,
+            isOver: status.isOverBudget
+        )
+    }
+
+    private var usedRatio: Double {
+        status.monthlyBudget > 0
+            ? MoneyFormat.double(status.spentThisMonth) / MoneyFormat.double(status.monthlyBudget)
+            : 0
+    }
+
+    private var value: Double {
+        guard isCurrentMonth else { return min(max(usedRatio, 0), 1) }
         let envelope = status.spentToday + status.todayAllowance
         return envelope > 0
             ? min(max(MoneyFormat.double(status.todayAllowance) / MoneyFormat.double(envelope), 0), 1)
@@ -531,35 +604,68 @@ private struct TodayAllowanceRing: View {
     }
 
     private var ringColor: Color {
-        status.todayAllowance < 0
-            ? Color.warning
-            : Color(red: 0.48, green: 0.68, blue: 0.38)
+        !isCurrentMonth && status.isOverBudget ? Color.warning : Color.budgetHealthy
+    }
+
+    private var amountText: String {
+        if isCurrentMonth {
+            return MoneyFormat.string(todayOver ? 0 : status.todayAllowance, currencyCode: currencyCode)
+        }
+        return "\(max(0, Int((usedRatio * 100).rounded())))%"
     }
 
     var body: some View {
         ZStack {
-            Circle()
-                .stroke(ringColor.opacity(0.18), lineWidth: 7)
-            Circle()
-                .trim(from: 0, to: value)
-                .stroke(
-                    ringColor,
-                    style: StrokeStyle(lineWidth: 7, lineCap: .round)
-                )
-                .rotationEffect(.degrees(-90))
+            if let within = overflowWithin {
+                overflowRing(within: within)
+            } else {
+                Circle()
+                    .stroke(ringColor.opacity(0.18), lineWidth: Self.lineWidth)
+                Circle()
+                    .trim(from: 0, to: value)
+                    .stroke(
+                        ringColor,
+                        style: StrokeStyle(lineWidth: Self.lineWidth, lineCap: .round)
+                    )
+                    .rotationEffect(.degrees(-90))
+            }
             VStack(spacing: 2) {
                 Text(isCurrentMonth ? "今日可用" : "已用")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
-                Text(isCurrentMonth
-                     ? MoneyFormat.string(status.todayAllowance, currencyCode: currencyCode)
-                     : "\(Int((value * 100).rounded()))%")
+                Text(amountText)
                     .font(.caption.weight(.medium).monospacedDigit())
                     .lineLimit(1)
                     .minimumScaleFactor(0.6)
             }
         }
         .frame(width: 80, height: 80)
+    }
+
+    /// 整圈超支色 + 12 点起顺时针的预算内弧 + 100% 分界线。
+    @ViewBuilder
+    private func overflowRing(within: Double) -> some View {
+        Circle()
+            .stroke(Color.overspendDeep, lineWidth: Self.lineWidth)
+        if within > 0 {
+            Circle()
+                .trim(from: 0, to: within)
+                .stroke(
+                    Color.budgetHealthy,
+                    style: StrokeStyle(lineWidth: Self.lineWidth, lineCap: .butt)
+                )
+                .rotationEffect(.degrees(-90))
+            // 分界线：先放在 12 点的环上，再绕圆心顺时针转到分界角度。
+            GeometryReader { proxy in
+                let side = min(proxy.size.width, proxy.size.height)
+                Rectangle()
+                    .fill(BudgetOverflow.boundaryColor)
+                    .frame(width: 2, height: Self.lineWidth + 2)
+                    // Circle.stroke 以内切圆路径为中心线（半径 = side/2），分界线也居中在这条线上。
+                    .position(x: proxy.size.width / 2, y: (proxy.size.height - side) / 2)
+                    .rotationEffect(.degrees(360 * within))
+            }
+        }
     }
 }
 

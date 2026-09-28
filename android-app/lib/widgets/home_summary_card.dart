@@ -520,6 +520,13 @@ class _BudgetBody extends StatelessWidget {
         ? BigInt.zero
         : percentDecimal.round().toBigInt();
     final pct = '$pctValue%';
+    // 超支时条形按「已花」铺满，100% 预算线落在 预算/已花 处。
+    final double? overflowStart = over && s.spentThisMonth > budget
+        ? (budget / s.spentThisMonth)
+            .toDecimal(scaleOnInfinitePrecision: 4)
+            .toDouble()
+            .clamp(0.0, 1.0)
+        : null;
 
     final now = AppClock.now;
     final daysInMonth = DateTime(now.year, now.month + 1, 0).day;
@@ -556,9 +563,9 @@ class _BudgetBody extends StatelessWidget {
           ],
         ),
         const SizedBox(height: 2),
+        // 「月预算已超」已经表达了方向，金额不再带负号，避免双重否定。
         _AmountText(
           value: remaining.abs(),
-          prefix: over ? '-' : '',
           style: theme.textTheme.headlineSmall?.copyWith(
             fontWeight: FontWeight.w500,
             fontFamily: 'Nunito',
@@ -571,21 +578,24 @@ class _BudgetBody extends StatelessWidget {
         const SizedBox(height: AppSpacing.md),
         _IncomeExpenseRow(summary: summary, maskAmounts: maskAmounts),
         const SizedBox(height: AppSpacing.md),
-        _BudgetBar(ratio: ratio),
+        _BudgetBar(ratio: ratio, overflowStart: overflowStart),
         const SizedBox(height: 6),
         Row(
           children: [
             Container(
+              key: const ValueKey('home-budget-percent-chip'),
               padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
               decoration: BoxDecoration(
-                color: scheme.primary.withValues(alpha: 0.1),
+                color: over
+                    ? AppColors.warning.withValues(alpha: 0.16)
+                    : scheme.primary.withValues(alpha: 0.1),
                 borderRadius: BorderRadius.circular(6),
               ),
               child: Text(
                 key: const ValueKey('home-budget-percent'),
                 pct,
                 style: theme.textTheme.labelSmall?.copyWith(
-                  color: scheme.primary,
+                  color: over ? AppColors.overspendDeep : scheme.primary,
                   fontWeight: FontWeight.w500,
                   fontFamily: 'Nunito',
                 ),
@@ -632,30 +642,51 @@ class _BudgetBody extends StatelessWidget {
     final String ringText;
     final double ringVal;
     final Color ringColor;
+    final bool ringOverflow;
     // 只有一次性区间预算（无循环周期）时窗口结果没有日度引导，
     // spentToday/todayAllowance 只是 0 占位——此时画「今日可用 ¥0.00」
     // 满环是误导，退回和历史月一样的「已用 %」圆环。
     if (isCurrentMonth && s.hasDailyGuidance) {
       final today = s.todayAllowance;
       final todayNeg = today < Decimal.zero;
-      final dayEnv = s.spentToday + (todayNeg ? Decimal.zero : today);
-      ringVal = todayNeg
-          ? 0.0
-          : (dayEnv > Decimal.zero
-              ? (today / dayEnv)
-                  .toDecimal(scaleOnInfinitePrecision: 4)
-                  .toDouble()
-                  .clamp(0.0, 1.0)
-              : 1.0);
-      ringColor =
-          todayNeg ? AppColors.warning : AppColors.budgetHealthy(scheme);
+      if (todayNeg) {
+        // 今日已超：可用额封底为 ¥0（负的「可用」没有意义）。
+        // 圆环整圈 = 今天已花；今天的日额度（spentToday + todayAllowance）
+        // 以内画健康绿，100% 分界线之后是超出部分。日额度 ≤ 0（今天开始前
+        // 就已超）时整圈都是超出。
+        final dayBase = s.spentToday + today;
+        ringOverflow = true;
+        ringVal = dayBase > Decimal.zero && s.spentToday > Decimal.zero
+            ? (dayBase / s.spentToday)
+                .toDecimal(scaleOnInfinitePrecision: 4)
+                .toDouble()
+                .clamp(0.0, 1.0)
+            : 0.0;
+        ringColor = AppColors.budgetHealthy(scheme);
+      } else {
+        final dayEnv = s.spentToday + today;
+        ringOverflow = false;
+        ringVal = dayEnv > Decimal.zero
+            ? (today / dayEnv)
+                .toDecimal(scaleOnInfinitePrecision: 4)
+                .toDouble()
+                .clamp(0.0, 1.0)
+            : 1.0;
+        ringColor = AppColors.budgetHealthy(scheme);
+      }
       ringLabel = '今日可用';
       ringText = maskAmounts
           ? _maskedMoneyText
-          : (todayNeg
-              ? '-${MoneyFormat.string(today.abs())}'
-              : MoneyFormat.string(today));
+          : MoneyFormat.string(todayNeg ? Decimal.zero : today);
+    } else if (overflowStart != null) {
+      // 历史月/无日度引导且已超支：和横条同一套 100% 分界。
+      ringOverflow = true;
+      ringVal = overflowStart;
+      ringColor = AppColors.budgetHealthy(scheme);
+      ringLabel = '已用';
+      ringText = pct;
     } else {
+      ringOverflow = false;
       ringVal = ratio;
       ringColor = over ? AppColors.warning : AppColors.budgetHealthy(scheme);
       ringLabel = '已用';
@@ -674,6 +705,7 @@ class _BudgetBody extends StatelessWidget {
             label: ringLabel,
             amountText: ringText,
             color: ringColor,
+            overflow: ringOverflow,
           ),
         ),
       ],
@@ -683,12 +715,13 @@ class _BudgetBody extends StatelessWidget {
 
 class _BudgetBar extends StatelessWidget {
   final double ratio;
+  final double? overflowStart;
 
-  const _BudgetBar({required this.ratio});
+  const _BudgetBar({required this.ratio, this.overflowStart});
 
   @override
   Widget build(BuildContext context) {
-    return BudgetProgressBar(value: ratio);
+    return BudgetProgressBar(value: ratio, overflowStart: overflowStart);
   }
 }
 
@@ -697,12 +730,14 @@ class _TodayRing extends StatelessWidget {
   final String label;
   final String amountText;
   final Color color;
+  final bool overflow;
 
   const _TodayRing({
     required this.value,
     required this.label,
     required this.amountText,
     required this.color,
+    this.overflow = false,
   });
 
   @override
@@ -722,6 +757,7 @@ class _TodayRing extends StatelessWidget {
               value: value,
               strokeWidth: 7,
               activeColor: color,
+              overflow: overflow,
             ),
           ),
           Column(
@@ -805,7 +841,6 @@ class _SummaryMetric extends StatelessWidget {
 
 class _AmountText extends StatelessWidget {
   final Decimal value;
-  final String prefix;
   final TextStyle? style;
   final bool maskAmounts;
   final bool animated;
@@ -814,7 +849,6 @@ class _AmountText extends StatelessWidget {
     required this.value,
     required this.style,
     required this.maskAmounts,
-    this.prefix = '',
     this.animated = true,
   });
 
@@ -829,10 +863,10 @@ class _AmountText extends StatelessWidget {
       );
     }
     if (animated) {
-      return AnimatedMoney(value: value, prefix: prefix, style: style);
+      return AnimatedMoney(value: value, style: style);
     }
     return Text(
-      '$prefix${MoneyFormat.string(value)}',
+      MoneyFormat.string(value),
       style: style,
       maxLines: 1,
       overflow: TextOverflow.ellipsis,
