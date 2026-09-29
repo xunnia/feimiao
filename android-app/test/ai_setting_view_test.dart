@@ -123,12 +123,10 @@ void main() {
         value: repository,
         child: MaterialApp(
           theme: AppTheme.light(),
-          home: const AiSettingView(),
+          home: const AiAccountSettingsPage(),
         ),
       ),
     );
-    await tester.pump();
-    await tester.tap(find.text('AI 账号设置'));
     await tester.pumpAndSettle();
   }
 
@@ -136,7 +134,7 @@ void main() {
     final repository = _SettingsRepository([oauthProvider, emptyProvider]);
     await pumpSettings(tester, repository);
 
-    expect(find.text('AI 账号设置'), findsOneWidget);
+    expect(find.text('AI 账号'), findsOneWidget);
     expect(find.byType(AppSwitch), findsNWidgets(2));
     expect(find.text('Claude Gateway'), findsOneWidget);
     expect(find.text('未配置凭据'), findsOneWidget);
@@ -229,13 +227,16 @@ void main() {
     expect(find.text('未配置凭据'), findsOneWidget);
   });
 
-  testWidgets('AI settings no longer exposes separate task routing', (tester) async {
+  testWidgets('AI 账号页底部有隐私与数据，没有单独的用途分配', (tester) async {
     final repository = _SettingsRepository([oauthProvider, emptyProvider]);
-    await tester.pumpWidget(ChangeNotifierProvider<AppRepository>.value(
-      value: repository,
-      child: MaterialApp(theme: AppTheme.light(), home: const AiSettingView()),
-    ));
+    await pumpSettings(tester, repository);
     expect(find.text('用途分配'), findsNothing);
-    expect(find.text('AI 账号设置'), findsOneWidget);
+
+    final privacy = find.byKey(const ValueKey('ai-privacy-row'));
+    await tester.scrollUntilVisible(privacy, 200,
+        scrollable: find.byType(Scrollable).first);
+    await tester.tap(privacy);
+    await tester.pumpAndSettle();
+    expect(find.text('AI 隐私确认'), findsOneWidget);
   });
 }

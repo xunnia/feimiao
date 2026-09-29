@@ -39,9 +39,6 @@ void reportWorkerCallbackDispatcher() {
       // 隐私闸门：用户没同意当前任务实际接收方时，后台绝不把账本上下文发出去。
       // 任务保持排队（不标失败、不弹 UI），等用户在前台确认后由面板续跑。
       final config = repo.aiProviderConfigForReportJob(job);
-      if (!repo.aiSkillAllowsTool('report_writer', 'read_ledger')) {
-        return true;
-      }
       if (config == null) return true;
       if (!repo.aiPrivacyAcceptedFor(config)) return true;
       final report = await ReportGenerationService.generate(
@@ -212,10 +209,6 @@ class ReportTaskScheduler {
   /// job is created, so opening the app twice cannot duplicate a report.
   static Future<void> scheduleDueAiReports(AppRepository repo) async {
     if (!isSupported) return;
-    // Keep a due schedule due while the user has intentionally disabled the
-    // report skill.  Once re-enabled, the next startup can materialize it
-    // without losing the scheduled occurrence.
-    if (!repo.aiSkillAllowsTool('report_writer', 'read_ledger')) return;
     final due = await repo.dueAiReportSchedules();
     final now = DateTime.now();
     for (final schedule in due) {

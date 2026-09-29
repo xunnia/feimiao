@@ -50,9 +50,10 @@ class _Server {
   bool deviceLimit = false;
   bool ticketExpired = false;
   String quotaDisplay = 'bar';
+  bool internal = false;
 
   Map<String, Object?> get entitlements => {
-        'tier': {'key': 'standard', 'name': '普通会员', 'is_internal': false},
+        'tier': {'key': 'standard', 'name': '普通会员', 'is_internal': internal},
         'membership': {
           'status': 'active',
           'ends_at': '2026-12-31T00:00:00Z',
@@ -419,5 +420,99 @@ void main() {
     expect(find.byType(AccountPage), findsNothing);
     expect(find.byKey(const ValueKey('account-login-row')), findsOneWidget);
     expect(find.byType(AppBackButton), findsNothing);
+  });
+
+  group('设置首页「AI」分组', () {
+    test('账号功能关着或没挂账号时全部显示', () {
+      final off = settingsAiRowsFor(_account(_Server(), enabled: false));
+      expect(off.showAiAccount, isTrue);
+      expect(off.showTaskDiagnostics, isTrue);
+      final none = settingsAiRowsFor(null);
+      expect(none.showAiAccount, isTrue);
+      expect(none.showTaskDiagnostics, isTrue);
+    });
+
+    test('没登录：有 AI 账号，没有任务与诊断', () async {
+      final account = _account(_Server());
+      await account.init();
+      final rows = settingsAiRowsFor(account);
+      expect(rows.showAiAccount, isTrue);
+      expect(rows.showTaskDiagnostics, isFalse);
+    });
+
+    test('普通会员登录后两行都不显示，内部账号都显示', () async {
+      final standard = _account(_Server());
+      await _signIn(standard);
+      final s = settingsAiRowsFor(standard);
+      expect(s.showAiAccount, isFalse);
+      expect(s.showTaskDiagnostics, isFalse);
+
+      final internal = _account(_Server()..internal = true);
+      await _signIn(internal);
+      final i = settingsAiRowsFor(internal);
+      expect(i.showAiAccount, isTrue);
+      expect(i.showTaskDiagnostics, isTrue);
+    });
+
+    testWidgets('默认构建：AI 分组四行，记忆页两个分段都能切', (tester) async {
+      await tallViewport(tester);
+      await tester.pumpWidget(
+        ChangeNotifierProvider<AppRepository>.value(
+          value: AppRepository(),
+          child: MaterialApp(
+            theme: AppTheme.light(),
+            home: const Scaffold(body: SettingsView()),
+          ),
+        ),
+      );
+      await tester.pump();
+
+      expect(find.text('AI'), findsOneWidget);
+      for (final key in const [
+        'settings-ai-account',
+        'settings-ai-memory',
+        'settings-ai-schedules',
+        'settings-ai-tasks',
+      ]) {
+        expect(find.byKey(ValueKey(key)), findsOneWidget, reason: key);
+      }
+      expect(find.text('AI 记账设置'), findsNothing);
+      for (final gone in const ['统一搜索', '技能与连接', '本地模型伴侣']) {
+        expect(find.text(gone), findsNothing, reason: gone);
+      }
+
+      await tester.tap(find.byKey(const ValueKey('settings-ai-memory')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('memory-hub-tabs')), findsOneWidget);
+      expect(find.text('没有已授权记忆'), findsOneWidget);
+      await tester.tap(find.text('喵学到的分类'));
+      await tester.pumpAndSettle();
+      expect(find.text('还没学到东西'), findsOneWidget);
+    });
+
+    testWidgets('普通会员登录后设置页不出现 AI 账号和任务与诊断', (tester) async {
+      await tallViewport(tester);
+      final account = _account(_Server());
+      await _signIn(account);
+      await tester.pumpWidget(
+        MultiProvider(
+          providers: [
+            ChangeNotifierProvider<AppRepository>.value(value: AppRepository()),
+            ChangeNotifierProvider<CloudAccount>.value(value: account),
+          ],
+          child: MaterialApp(
+            theme: AppTheme.light(),
+            home: const Scaffold(body: SettingsView()),
+          ),
+        ),
+      );
+      await _settle(tester);
+
+      expect(find.byKey(const ValueKey('settings-ai-account')), findsNothing);
+      expect(find.byKey(const ValueKey('settings-ai-tasks')), findsNothing);
+      expect(find.byKey(const ValueKey('settings-ai-memory')), findsOneWidget);
+      expect(
+          find.byKey(const ValueKey('settings-ai-schedules')), findsOneWidget);
+    });
   });
 }

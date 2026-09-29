@@ -27,6 +27,8 @@ import '../../widgets/ios_form.dart';
 import '../../widgets/ios_menu.dart';
 import '../../widgets/settings_ui.dart';
 import '../../widgets/sliding_segment.dart';
+import 'ai_companion_views.dart';
+import 'ai_merged_pages.dart';
 import 'ai_setting_view.dart';
 import 'app_update_flow.dart';
 import 'backup_view.dart';
@@ -47,6 +49,22 @@ Future<void> showSettingsSheet(BuildContext context) async {
   );
 }
 
+/// 设置首页「AI」分组里哪些行要显示（01 §4）：
+/// - 「AI 账号」（自己填的服务商和密钥）只给没登录和内部账号；
+/// - 「任务与诊断」只给内部账号。
+/// 账号功能没打开（默认构建）时没有账号可判断，全部显示，和改版前一样能用。
+({bool showAiAccount, bool showTaskDiagnostics}) settingsAiRowsFor(
+    CloudAccount? account) {
+  if (account == null || !account.enabled) {
+    return (showAiAccount: true, showTaskDiagnostics: true);
+  }
+  final internal = account.signedIn && account.entitlements?.isInternal == true;
+  return (
+    showAiAccount: !account.signedIn || internal,
+    showTaskDiagnostics: internal,
+  );
+}
+
 /// 设置页内容：iOS 风分组——灰底白卡 + 发丝分隔。作为弹窗内容渲染。
 class SettingsView extends StatelessWidget {
   const SettingsView({super.key});
@@ -55,6 +73,8 @@ class SettingsView extends StatelessWidget {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final repo = context.watch<AppRepository>();
+    // 没挂账号 provider（测试、截图）时按可空读，和账号功能关着一样。
+    final aiRows = settingsAiRowsFor(context.watch<CloudAccount?>());
 
     Future<void> setRepaymentReminder(bool enabled) async {
       await repo.setRepaymentReminderEnabled(enabled);
@@ -93,21 +113,64 @@ class SettingsView extends StatelessWidget {
                   ),
                   // 账号区：账号功能没打开时是空的，设置页和原来一样。
                   const AccountSettingsSection(),
-                  const SettingsSectionLabel('管理'),
-                  // 抽屉功能列表里已有的入口（预算/资产/分类等）这里不重复——
-                  // 设置页只放抽屉没有的：AI 设置、备份恢复、显示、小组件、关于。
+                  // 「AI」分组替代原来的「AI 记账设置」子页（01 §4），和 iOS 一致。
+                  const SettingsSectionLabel('AI'),
                   SettingsGroup(children: [
+                    if (aiRows.showAiAccount)
+                      SettingsRow(
+                        key: const ValueKey('settings-ai-account'),
+                        leading: const Icon(CupertinoIcons.sparkles),
+                        title: 'AI 账号',
+                        trailing: const Icon(CupertinoIcons.chevron_forward,
+                            size: 18),
+                        onTap: () => Navigator.push(
+                          context,
+                          AppPageRoute<void>(
+                              builder: (_) => const AiAccountSettingsPage()),
+                        ),
+                      ),
                     SettingsRow(
-                      leading: const Icon(CupertinoIcons.sparkles),
-                      title: 'AI 记账设置',
+                      key: const ValueKey('settings-ai-memory'),
+                      leading: const Icon(CupertinoIcons.lightbulb),
+                      title: '记忆',
                       trailing:
                           const Icon(CupertinoIcons.chevron_forward, size: 18),
                       onTap: () => Navigator.push(
                         context,
                         AppPageRoute<void>(
-                            builder: (_) => const AiSettingView()),
+                            builder: (_) => const MemoryHubView()),
                       ),
                     ),
+                    SettingsRow(
+                      key: const ValueKey('settings-ai-schedules'),
+                      leading: const Icon(CupertinoIcons.calendar),
+                      title: '定时报表',
+                      trailing:
+                          const Icon(CupertinoIcons.chevron_forward, size: 18),
+                      onTap: () => Navigator.push(
+                        context,
+                        AppPageRoute<void>(
+                            builder: (_) => const AiReportScheduleView()),
+                      ),
+                    ),
+                    if (aiRows.showTaskDiagnostics)
+                      SettingsRow(
+                        key: const ValueKey('settings-ai-tasks'),
+                        leading: const Icon(CupertinoIcons.waveform_path_ecg),
+                        title: '任务与诊断',
+                        trailing: const Icon(CupertinoIcons.chevron_forward,
+                            size: 18),
+                        onTap: () => Navigator.push(
+                          context,
+                          AppPageRoute<void>(
+                              builder: (_) => const AiTaskDiagnosticsView()),
+                        ),
+                      ),
+                  ]),
+                  const SettingsSectionLabel('管理'),
+                  // 抽屉功能列表里已有的入口（预算/资产/分类等）这里不重复——
+                  // 设置页只放抽屉没有的：AI、备份恢复、显示、小组件、关于。
+                  SettingsGroup(children: [
                     SettingsRow(
                       leading: const Icon(CupertinoIcons.cloud_upload),
                       title: '备份与恢复',
@@ -294,7 +357,7 @@ class _ProfileHeaderCard extends StatelessWidget {
               Stack(
                 clipBehavior: Clip.none,
                 children: [
-                  _ProfileAvatar(
+                  ProfileAvatar(
                     nickname: nickname,
                     avatarPath: avatarPath,
                     size: 78,
@@ -348,13 +411,14 @@ class _ProfileHeaderCard extends StatelessWidget {
   }
 }
 
-class _ProfileAvatar extends StatelessWidget {
+class ProfileAvatar extends StatelessWidget {
   final String nickname;
   final String avatarPath;
   final double size;
   final Uint8List? previewBytes;
 
-  const _ProfileAvatar({
+  const ProfileAvatar({
+    super.key,
     required this.nickname,
     required this.avatarPath,
     required this.size,
@@ -594,7 +658,7 @@ class _EditProfileSheetState extends State<_EditProfileSheet> {
                       child: Stack(
                         clipBehavior: Clip.none,
                         children: [
-                          _ProfileAvatar(
+                          ProfileAvatar(
                             nickname: _nicknameCtrl.text,
                             avatarPath: repo.profileAvatarPath,
                             previewBytes: _avatarBytes,

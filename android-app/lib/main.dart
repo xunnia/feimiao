@@ -1168,6 +1168,58 @@ const List<_DrawerFn> _kDrawerFns = [
   _DrawerFn('autorecord', AppLineIcons.bell, '自动记账'),
 ];
 
+/// 抽屉左下角「头像 + 昵称」，点了进设置。没设昵称时显示「设置」（和 iOS 一样）。
+class _DrawerProfileEntry extends StatelessWidget {
+  const _DrawerProfileEntry({
+    required this.nickname,
+    required this.avatarPath,
+    required this.onTap,
+  });
+
+  final String nickname;
+  final String avatarPath;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final name = nickname.trim();
+    final label = name.isEmpty ? '设置' : name;
+    return Semantics(
+      button: true,
+      label: '设置',
+      value: name.isEmpty ? null : name,
+      excludeSemantics: true,
+      child: InkWell(
+        key: const ValueKey('drawer-profile-entry'),
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(22),
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(minHeight: 44),
+          child: Row(
+            children: [
+              ProfileAvatar(nickname: nickname, avatarPath: avatarPath, size: 36),
+              const SizedBox(width: 10),
+              Flexible(
+                child: Text(
+                  label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.w500,
+                    color: scheme.onSurface,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _DrawerPanel extends StatefulWidget {
   /// 关抽屉（收回主页面卡片）。
   final VoidCallback onClose;
@@ -1564,11 +1616,23 @@ class _DrawerPanelState extends State<_DrawerPanel> {
               ),
             ),
 
-            // ── 底部：高频新建账本在左，设置齿轮在右（全局唯一设置入口）。──
+            // ── 底部：左边「头像 + 昵称」进设置（全局唯一设置入口，替代原来的
+            // 齿轮），右边高频的「新建账本」。和 iOS 抽屉底栏一致（01 §4）。──
             Padding(
-              padding: const EdgeInsets.fromLTRB(16, 8, 18, 16),
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
               child: Row(
                 children: [
+                  Expanded(
+                    child: _DrawerProfileEntry(
+                      nickname: repo.profileNickname,
+                      avatarPath: repo.profileAvatarPath,
+                      onTap: () {
+                        widget.onClose();
+                        showSettingsSheet(context);
+                      },
+                    ),
+                  ),
+                  const SizedBox(width: 8),
                   ElevatedButton.icon(
                     icon: AppLineIcon(
                       AppLineIcons.squarePen,
@@ -1586,21 +1650,6 @@ class _DrawerPanelState extends State<_DrawerPanel> {
                           horizontal: 22, vertical: 12),
                       side: BorderSide(color: AppColors.hairline(scheme)),
                     ),
-                  ),
-                  const Spacer(),
-                  // 设置钮：走全局标准件 AppCircleButton（主页顶栏/返回键/
-                  // 设置✕同款），别再手搓白圆+阴影（用户点名两次了）。
-                  AppCircleButton.custom(
-                    iconWidget: AppLineIcon(
-                      AppLineIcons.settings,
-                      size: 24,
-                      color: scheme.onSurface,
-                    ),
-                    size: 44,
-                    onPressed: () {
-                      widget.onClose();
-                      showSettingsSheet(context);
-                    },
                   ),
                 ],
               ),

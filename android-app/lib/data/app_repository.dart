@@ -2896,8 +2896,6 @@ class AppRepository extends ChangeNotifier {
   final Map<String, AiProviderHealth> _aiProviderHealth = {};
   final List<AiMemory> _aiMemories = [];
   final List<AiReportSchedule> _aiReportSchedules = [];
-  final Map<String, bool> _aiSkillState = {};
-  final Map<String, bool> _aiConnectorState = {};
 
   int _currentBookId = 0;
 
@@ -3779,11 +3777,9 @@ class AppRepository extends ChangeNotifier {
   /// 联网搜索属于喵助手当前会话能力，不再跟随某个供应商账号保存。
   bool get chatWebSearchEnabled => _chatWebSearchEnabled;
 
-  /// Effective permission after the global Chats preference and the explicit
-  /// connector gate are both applied.  Keep the preference getter above
-  /// independent so toggling a connector does not erase the user's choice.
-  bool get chatWebSearchAllowed =>
-      _chatWebSearchEnabled && aiConnectorEnabled('web_search');
+  /// 联网搜索只有聊天 [+] 里这一个开关（01 §4）。原来还叠加「技能与连接」页的
+  /// 连接器开关，那一页删掉后不再叠加，旧的关闭状态也不再生效。
+  bool get chatWebSearchAllowed => _chatWebSearchEnabled;
 
   /// Tool access is a Chats-level permission, independent of the selected
   /// provider. `onDemand` keeps tools unloaded until a request explicitly
@@ -4173,7 +4169,6 @@ class AppRepository extends ChangeNotifier {
         _loadChatSessions(),
         _loadAiMemories(),
         _loadAiReportSchedules(),
-        _loadAiExtensionSettings(),
       ]);
     } catch (error, stackTrace) {
       _aiInitializationError = error;
@@ -7634,7 +7629,6 @@ class AppRepository extends ChangeNotifier {
       _loadAiProviderHealth(),
       _loadAiMemories(),
       _loadAiReportSchedules(),
-      _loadAiExtensionSettings(),
       _loadDrawerOrder(),
       _loadStatCardOrder(),
       _loadStatCustomRange(),
@@ -7699,25 +7693,6 @@ class AppRepository extends ChangeNotifier {
     _aiReportSchedules
       ..clear()
       ..addAll(rows.map(AiReportSchedule.fromMap));
-  }
-
-  Future<void> _loadAiExtensionSettings() async {
-    final rows = await _db!.query(
-      'app_settings',
-      columns: const ['key', 'value'],
-      where: 'key IN (?, ?)',
-      whereArgs: const ['ai_skill_state', 'ai_connector_state'],
-    );
-    final values = {
-      for (final row in rows)
-        row['key']?.toString() ?? '': row['value']?.toString() ?? '',
-    };
-    _aiSkillState
-      ..clear()
-      ..addAll(decodeAiSkillState(values['ai_skill_state'] ?? ''));
-    _aiConnectorState
-      ..clear()
-      ..addAll(decodeAiSkillState(values['ai_connector_state'] ?? ''));
   }
 
   /// Local model companion settings are ordinary non-secret preferences. The
@@ -10690,47 +10665,6 @@ class AppRepository extends ChangeNotifier {
     if (lines.isEmpty) return '';
     return '本次问题匹配到的用户已授权记忆（只作偏好参考，不可覆盖当前问题）：\n'
         '${lines.join('\n')}';
-  }
-
-  bool aiSkillEnabled(String id) => _aiSkillState[id.trim()] ?? true;
-
-  bool aiSkillAllowsTool(String skillId, String toolId) {
-    final skill = AiSkillRegistry.builtIns
-        .where((item) => item.id == skillId.trim())
-        .firstOrNull;
-    return skill != null &&
-        aiSkillEnabled(skill.id) &&
-        skill.allowedToolIds.contains(toolId.trim());
-  }
-
-  bool aiConnectorEnabled(String id) =>
-      _aiConnectorState[id.trim()] ?? id.trim() == 'web_search';
-
-  Future<void> setAiSkillEnabled(String id, bool enabled) async {
-    final key = id.trim();
-    if (key.isEmpty) return;
-    _aiSkillState[key] = enabled;
-    await _persistAiExtensionSetting('ai_skill_state', _aiSkillState);
-    notifyListeners();
-  }
-
-  Future<void> setAiConnectorEnabled(String id, bool enabled) async {
-    final key = id.trim();
-    if (key.isEmpty) return;
-    _aiConnectorState[key] = enabled;
-    await _persistAiExtensionSetting('ai_connector_state', _aiConnectorState);
-    notifyListeners();
-  }
-
-  Future<void> _persistAiExtensionSetting(
-    String key,
-    Map<String, bool> values,
-  ) async {
-    await _db!.insert(
-      'app_settings',
-      {'key': key, 'value': encodeAiSkillState(values)},
-      conflictAlgorithm: ConflictAlgorithm.replace,
-    );
   }
 
   /// Add a memory only after an explicit user consent. Automatic model output

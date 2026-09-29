@@ -64,8 +64,8 @@ def expected_route_ids(root: Path, platform_name: str) -> set[str]:
         for scene in scenes
         if isinstance(scene, dict) and isinstance(scene.get("id"), str)
     }
-    if len(scene_ids) != 41:
-        raise MetadataError("P0 contract must contain 41 canonical scenes")
+    if len(scene_ids) != 38:
+        raise MetadataError("P0 contract must contain 38 canonical scenes")
     if platform_name == "android":
         return scene_ids
 

@@ -15,8 +15,8 @@ class OwnershipTests(unittest.TestCase):
         self.assertEqual(owned_images(manifest, ["physical-asset-detail"]), ["asset-detail-android.png"])
         scenes = [p["id"] for p in manifest["pairs"]]
         images = [name for i in range(5) for name in owned_images(manifest, scenes[i::5])]
-        self.assertEqual(len(images), 41)
-        self.assertEqual(len(set(images)), 41)
+        self.assertEqual(len(images), 38)
+        self.assertEqual(len(set(images)), 38)
 
     def test_unknown_scene_rejected(self):
         with self.assertRaises(KeyError):

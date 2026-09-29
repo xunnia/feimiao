@@ -7,9 +7,17 @@ import 'package:qingji/main.dart' as app;
 import 'package:qingji/theme/app_theme_controller.dart';
 import 'package:qingji/theme/app_tokens.dart';
 import 'package:qingji/widgets/app_buttons.dart';
+import 'package:qingji/widgets/app_line_icon.dart';
 import 'package:qingji/widgets/book_switch_chip.dart';
 
 class _DrawerRepo extends AppRepository {
+  _DrawerRepo({this.nickname = ''});
+
+  final String nickname;
+
+  @override
+  String get profileNickname => nickname;
+
   static const _books = [
     BookEntity(id: 1, name: '总账本', icon: '📒'),
     BookEntity(id: 2, name: '旅行', icon: '✈️', starred: true),
@@ -41,14 +49,15 @@ class _DrawerRepo extends AppRepository {
       );
 }
 
-Future<void> _pumpOpenDrawer(WidgetTester tester) async {
+Future<void> _pumpOpenDrawer(WidgetTester tester, {String nickname = ''}) async {
   tester.view.physicalSize = const Size(1080, 2340);
   tester.view.devicePixelRatio = 3;
   addTearDown(tester.view.reset);
   await tester.pumpWidget(
     MultiProvider(
       providers: [
-        ChangeNotifierProvider<AppRepository>.value(value: _DrawerRepo()),
+        ChangeNotifierProvider<AppRepository>.value(
+            value: _DrawerRepo(nickname: nickname)),
         ChangeNotifierProvider<AppThemeController>.value(
           value: AppThemeController.instance,
         ),
@@ -83,6 +92,43 @@ void main() {
     expect(size.width, greaterThanOrEqualTo(AppHitTarget.min));
     expect(size.height, greaterThanOrEqualTo(AppHitTarget.min));
 
+    await _disposeShell(tester);
+  });
+
+  testWidgets('抽屉左下角是「头像 + 昵称」进设置，新建账本在右边', (tester) async {
+    await _pumpOpenDrawer(tester, nickname: '肥喵主人');
+
+    final entry = find.byKey(const ValueKey('drawer-profile-entry'));
+    expect(entry, findsOneWidget);
+    expect(
+      find.descendant(of: entry, matching: find.text('肥喵主人')),
+      findsOneWidget,
+    );
+    final newBook = find.text('新建账本');
+    expect(newBook, findsOneWidget);
+    expect(tester.getCenter(entry).dx, lessThan(tester.getCenter(newBook).dx));
+    // 原来的齿轮按钮去掉了，设置只从头像昵称进。
+    expect(
+      find.byWidgetPredicate(
+          (w) => w is AppLineIcon && w.data == AppLineIcons.settings),
+      findsNothing,
+    );
+
+    await tester.tap(entry);
+    await tester.pumpAndSettle(const Duration(milliseconds: 50));
+    expect(find.text('记忆'), findsOneWidget);
+    expect(find.text('定时报表'), findsOneWidget);
+
+    await _disposeShell(tester);
+  });
+
+  testWidgets('没设昵称时抽屉左下角显示「设置」', (tester) async {
+    await _pumpOpenDrawer(tester);
+    final entry = find.byKey(const ValueKey('drawer-profile-entry'));
+    expect(
+      find.descendant(of: entry, matching: find.text('设置')),
+      findsOneWidget,
+    );
     await _disposeShell(tester);
   });
 

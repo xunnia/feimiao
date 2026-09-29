@@ -422,10 +422,6 @@ class _BillReviewViewState extends State<BillReviewView> {
   Future<void> _aiClassify(AppRepository repo) async {
     final aiConfig = repo.aiProviderConfigFor(AiTaskType.recordParse);
     if (!aiConfig.hasCredential) return;
-    if (!repo.aiSkillAllowsTool('bill_import', 'create_transactions')) {
-      if (mounted) showAppToast(context, '账单导入助手已关闭，请先在 AI 设置中重新开启');
-      return;
-    }
     final pending = _pending;
     if (pending.isEmpty) return;
     final consented = await ensureAiPrivacyConsent(

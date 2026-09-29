@@ -323,7 +323,7 @@ jobs:
             exit 1
           fi
 
-          # 校验：若所有 38 张图都相同（41 个场景里 3 个 iOS 已删页不截图），说明导航又失败了，直接让 CI 报错
+          # 校验：若所有 38 张图都相同，说明导航又失败了，直接让 CI 报错
           UNIQUE=$(md5 -q "$screenshot_dir"/*.png | sort -u | wc -l | tr -d ' ')
           echo "不同截图数量：$UNIQUE / 38"
           if [ "$UNIQUE" -le 1 ]; then

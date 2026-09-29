@@ -42,13 +42,22 @@ void main() {
     await tester.pump();
     expect(find.byType(SettingsGroup), findsWidgets);
     expect(find.byType(SettingsRow), findsWidgets);
-    expect(find.byType(AppSwitch), findsNWidgets(2));
     expect(find.byType(AppCircleButton), findsOneWidget);
     if (Platform.environment['UPDATE_GLOBAL_UI_SCREENSHOTS'] == '1') {
       await expectLater(
         find.byKey(const ValueKey('global-ui-settings-capture')),
         matchesGoldenFile('../outputs/global_ui/settings.png'),
       );
+    }
+    // 设置页只有两个开关：还款提醒、小组件隐藏金额，每行一个。加了「AI」分组后
+    // 它们在首屏下面，ListView 只构建看得见的行，所以逐行滚过去再数。
+    for (final title in const ['还款提醒', '隐藏金额']) {
+      final row = find.widgetWithText(SettingsRow, title);
+      await tester.scrollUntilVisible(row, 200,
+          scrollable: find.byType(Scrollable).first);
+      expect(find.descendant(of: row, matching: find.byType(AppSwitch)),
+          findsOneWidget,
+          reason: title);
     }
   });
 
