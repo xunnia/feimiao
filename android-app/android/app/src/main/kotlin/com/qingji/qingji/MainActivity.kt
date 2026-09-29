@@ -277,6 +277,27 @@ class MainActivity : FlutterActivity() {
                 }
             }
 
+        // 登录时上报的本机型号和系统版本，只用于账号的「登录设备」列表里认出是哪台。
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "feimiao/device")
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "info" -> {
+                        val brand = Build.MANUFACTURER.orEmpty().trim()
+                        val model = Build.MODEL.orEmpty().trim()
+                        val name = if (brand.isNotEmpty() &&
+                            !model.startsWith(brand, ignoreCase = true)
+                        ) "$brand $model" else model
+                        result.success(
+                            mapOf(
+                                "model" to name,
+                                "os_version" to "Android ${Build.VERSION.RELEASE.orEmpty()}",
+                            )
+                        )
+                    }
+                    else -> result.notImplemented()
+                }
+            }
+
         // 检查更新通道：下载走系统 DownloadManager（切后台/锁屏/杀进程都继续，
         // 系统通知栏自带进度），下载完 Flutter 侧校验 SHA256 再交系统安装器。
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "feimiao/update")

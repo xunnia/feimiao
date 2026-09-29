@@ -7,6 +7,7 @@ import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:provider/provider.dart';
 
 import 'core/auto_record.dart';
+import 'core/cloud/cloud_account.dart';
 import 'core/ai/report_task_scheduler.dart';
 import 'core/ai/ai_provider_config.dart';
 import 'core/ai/ai_logger.dart';
@@ -79,12 +80,18 @@ Future<void> main() async {
     repositoryReadyCheck: () => repo.isFullyReady,
   );
 
+  // 肥喵账号（后端）。FM_ACCOUNT 编译开关关闭时 init 直接返回，
+  // 不读存储、不联网，和没有账号体系时完全一样。
+  final account = CloudAccount();
+  unawaited(account.init());
+
   runApp(
     MultiProvider(
       providers: [
         ChangeNotifierProvider<AppRepository>.value(value: repo),
         ChangeNotifierProvider<AppThemeController>.value(
             value: AppThemeController.instance),
+        ChangeNotifierProvider<CloudAccount>.value(value: account),
       ],
       // The gate is deliberately enabled for production startup. It is a
       // dependency-free shell until the complete home snapshot is available,

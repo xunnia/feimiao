@@ -18,6 +18,7 @@ import '../../theme/app_tokens.dart';
 import '../../widgets/app_buttons.dart';
 import 'theme_settings_view.dart';
 import '../../widgets/app_toast.dart';
+import '../account/account_section.dart';
 import '../common/app_sheet.dart';
 import '../../widgets/ios_form.dart';
 import '../../widgets/ios_menu.dart';
@@ -87,6 +88,8 @@ class SettingsView extends StatelessWidget {
                     avatarPath: repo.profileAvatarPath,
                     onTap: () => showEditProfileSheet(context),
                   ),
+                  // 账号区：账号功能没打开时是空的，设置页和原来一样。
+                  const AccountSettingsSection(),
                   const SettingsSectionLabel('管理'),
                   // 抽屉功能列表里已有的入口（预算/资产/分类等）这里不重复——
                   // 设置页只放抽屉没有的：AI 设置、备份恢复、显示、小组件、关于。
