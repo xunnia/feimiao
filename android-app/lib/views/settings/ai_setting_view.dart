@@ -22,7 +22,6 @@ import '../../data/app_repository.dart';
 import '../../theme/app_colors.dart';
 import '../../theme/app_tokens.dart';
 import '../../widgets/app_buttons.dart';
-import '../../widgets/app_page_route.dart';
 import '../../widgets/app_toast.dart';
 import '../../widgets/ios_dialogs.dart';
 import '../../widgets/ios_form.dart';
@@ -40,7 +39,7 @@ LaunchMode openAiOAuthLaunchMode({bool? isAndroid}) =>
         ? LaunchMode.externalApplication
         : LaunchMode.inAppBrowserView;
 
-/// AI 账号：自己填的服务商、密钥和 OAuth，底部是「隐私与数据」。
+/// AI 账号：自己填的服务商、密钥和 OAuth。「隐私与数据」是设置首页单独一行。
 /// 从设置首页「AI」分组进入（原来的「AI 记账设置」入口页已取消，01 §4）。
 class AiAccountSettingsPage extends StatefulWidget {
   const AiAccountSettingsPage({super.key});
@@ -915,18 +914,6 @@ class _AiAccountSettingsPageState extends State<AiAccountSettingsPage> {
                     provider.builtIn ? null : () => _deleteProvider(provider),
                 onChanged: () => setState(() {}),
               ),
-            // 和 iOS 一样放在 AI 账号页底部（原来是入口页的一行）。
-            const SettingsSectionLabel('隐私与数据'),
-            SettingsGroup(
-              children: [
-                SettingsRow(
-                  key: const ValueKey('ai-privacy-row'),
-                  title: '隐私与数据',
-                  trailing: const _ValueChevron(value: '本机安全存储'),
-                  onTap: () => _push(context, const _AiPrivacyDataPage()),
-                ),
-              ],
-            ),
           ],
         ),
       ),
@@ -1778,8 +1765,9 @@ class _ProviderModelListBoxState extends State<_ProviderModelListBox> {
 }
 
 
-class _AiPrivacyDataPage extends StatelessWidget {
-  const _AiPrivacyDataPage();
+/// 隐私与数据：所有人都能进（01 §4），从设置首页「AI」分组打开。
+class AiPrivacyDataPage extends StatelessWidget {
+  const AiPrivacyDataPage({super.key});
 
   @override
   Widget build(BuildContext context) {
@@ -1855,40 +1843,6 @@ class _AiPrivacyDataPage extends StatelessWidget {
 }
 
 
-class _ValueChevron extends StatelessWidget {
-  final String value;
-
-  const _ValueChevron({required this.value});
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return ConstrainedBox(
-      constraints: const BoxConstraints(maxWidth: 150),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Flexible(
-            child: Text(
-              value,
-              overflow: TextOverflow.ellipsis,
-              maxLines: 1,
-              textAlign: TextAlign.right,
-              style: AppType.trailingValue(scheme),
-            ),
-          ),
-          const SizedBox(width: 6),
-          Icon(
-            CupertinoIcons.chevron_forward,
-            size: 17,
-            color: scheme.outline,
-          ),
-        ],
-      ),
-    );
-  }
-}
-
 class _PlainValue extends StatelessWidget {
   final String text;
 
@@ -1944,12 +1898,6 @@ String _shortError(Object e) {
       .trim();
   if (normalized.length <= 120) return normalized;
   return '${normalized.substring(0, 117)}…';
-}
-
-void _push(BuildContext context, Widget page) {
-  Navigator.of(context).push(
-    AppPageRoute<void>(builder: (_) => page),
-  );
 }
 
 // ---------------------------------------------------------------------------

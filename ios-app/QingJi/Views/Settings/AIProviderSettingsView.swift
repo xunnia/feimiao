@@ -23,7 +23,51 @@ private struct AIProviderDocument: FileDocument {
     }
 }
 
+/// 隐私与数据：所有人都能进（01 §4），从设置首页「AI」分组打开，
+/// 不跟「AI 账号」一起按服务端开关隐藏。和安卓 AiPrivacyDataPage 对应。
+struct AIPrivacySettingsView: View {
+    @State private var message: String?
+
+    var body: some View {
+        List {
+            Section {
+                LabeledContent("API Key", value: "钥匙串")
+                LabeledContent("服务名称和模型", value: "本机设置")
+                LabeledContent("对话与报告", value: "本机数据")
+            } header: {
+                Text("本机存储")
+            } footer: {
+                Text("API Key 和 OAuth 令牌只保存在本机钥匙串，不会写入账本备份。服务名称和模型可以在「AI 账号」里导出成 JSON（不含密钥）。")
+            }
+
+            Section {
+                Button("重置所有服务商授权", role: .destructive) {
+                    AIPrivacyConsentStore.reset()
+                    message = "已重置。下次向服务商发送问题时会重新确认。"
+                }
+            } header: {
+                Text("授权状态")
+            } footer: {
+                Text("授权按服务商保存；同一服务商切换模型不会重复确认，切换服务商会重新确认。使用第三方中转站时，数据会发送到所填服务地址，请同时确认该服务的隐私规则。")
+            }
+        }
+        .listStyle(.insetGrouped)
+        .scrollContentBackground(.hidden)
+        .liquidGlassCanvas()
+        .navigationTitle("隐私与数据")
+        .alert("隐私与数据", isPresented: Binding(
+            get: { message != nil },
+            set: { if !$0 { message = nil } }
+        )) {
+            Button("好") { message = nil }
+        } message: {
+            Text(message ?? "")
+        }
+    }
+}
+
 /// AI 账号管理。非敏感配置进 UserDefaults，密钥由 AIProviderStore 写入 Keychain。
+/// 「隐私与数据」是设置首页单独一行（AIPrivacySettingsView）。
 struct AIProviderSettingsView: View {
     @Environment(AIProviderStore.self) private var providerStore
 
@@ -91,16 +135,6 @@ struct AIProviderSettingsView: View {
                 Text("JSON 只包含服务商、模型和显示设置，不包含 API Key；导入新账号后需在本机重新填写密钥。")
             }
 
-            Section {
-                Button("重置所有服务商授权", role: .destructive) {
-                    AIPrivacyConsentStore.reset()
-                    message = "已重置。下次向服务商发送问题时会重新确认。"
-                }
-            } header: {
-                Text("隐私与数据")
-            } footer: {
-                Text("授权按服务商保存；同一服务商切换模型不会重复确认，切换服务商会重新确认。")
-            }
         }
         .listStyle(.insetGrouped)
         .scrollContentBackground(.hidden)

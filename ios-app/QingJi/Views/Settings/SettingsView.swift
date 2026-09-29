@@ -76,6 +76,12 @@ struct SettingsView: View {
                     } label: {
                         Label("任务与诊断", systemImage: "waveform.path.ecg")
                     }
+                    // 所有人都能看到（01 §4），和安卓一致。
+                    NavigationLink {
+                        AIPrivacySettingsView()
+                    } label: {
+                        Label("隐私与数据", systemImage: "lock.shield")
+                    }
                 } header: {
                     Text("AI")
                 }

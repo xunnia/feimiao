@@ -49,19 +49,21 @@ Future<void> showSettingsSheet(BuildContext context) async {
   );
 }
 
-/// 设置首页「AI」分组里哪些行要显示（01 §4）：
-/// - 「AI 账号」（自己填的服务商和密钥）只给没登录和内部账号；
-/// - 「任务与诊断」只给内部账号。
-/// 账号功能没打开（默认构建）时没有账号可判断，全部显示，和改版前一样能用。
+/// 设置首页「AI」分组里哪些行要显示（01 §4，后端 docs/04 阶段 C）：
+/// - 没登录、账号功能没打开（默认构建）：全部显示，和改版前一样；
+/// - 登录后按服务端开关：「AI 账号」看 `adv.byok`，「任务与诊断」看
+///   `adv.diagnostics`。开关没下发（权益还没拿到）按关处理。
+/// 「记忆」「定时报表」「隐私与数据」所有人都显示，不在这里判断。
 ({bool showAiAccount, bool showTaskDiagnostics}) settingsAiRowsFor(
     CloudAccount? account) {
-  if (account == null || !account.enabled) {
+  if (account == null || !account.enabled || !account.signedIn) {
     return (showAiAccount: true, showTaskDiagnostics: true);
   }
-  final internal = account.signedIn && account.entitlements?.isInternal == true;
+  final features = account.entitlements?.features ?? const {};
+  bool on(String key) => features[key]?.enabled == true;
   return (
-    showAiAccount: !account.signedIn || internal,
-    showTaskDiagnostics: internal,
+    showAiAccount: on('adv.byok'),
+    showTaskDiagnostics: on('adv.diagnostics'),
   );
 }
 
@@ -166,6 +168,19 @@ class SettingsView extends StatelessWidget {
                               builder: (_) => const AiTaskDiagnosticsView()),
                         ),
                       ),
+                    // 所有人都能看到（01 §4），不跟「AI 账号」一起隐藏。
+                    SettingsRow(
+                      key: const ValueKey('settings-ai-privacy'),
+                      leading: const Icon(CupertinoIcons.lock_shield),
+                      title: '隐私与数据',
+                      trailing:
+                          const Icon(CupertinoIcons.chevron_forward, size: 18),
+                      onTap: () => Navigator.push(
+                        context,
+                        AppPageRoute<void>(
+                            builder: (_) => const AiPrivacyDataPage()),
+                      ),
+                    ),
                   ]),
                   const SettingsSectionLabel('管理'),
                   // 抽屉功能列表里已有的入口（预算/资产/分类等）这里不重复——

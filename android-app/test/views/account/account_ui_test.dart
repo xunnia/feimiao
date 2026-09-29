@@ -14,6 +14,7 @@ import 'package:qingji/theme/app_colors.dart';
 import 'package:qingji/views/account/account_page.dart';
 import 'package:qingji/views/account/account_section.dart';
 import 'package:qingji/views/account/login_sheet.dart';
+import 'package:qingji/views/settings/ai_setting_view.dart';
 import 'package:qingji/views/settings/settings_view.dart';
 import 'package:qingji/widgets/app_buttons.dart';
 
@@ -52,8 +53,15 @@ class _Server {
   String quotaDisplay = 'bar';
   bool internal = false;
 
+  /// 服务端下发的功能开关，比如 `{'adv.byok': true}`。
+  Map<String, bool> features = {};
+
   Map<String, Object?> get entitlements => {
-        'tier': {'key': 'standard', 'name': '普通会员', 'is_internal': internal},
+        'tier': {
+          'key': internal ? 'internal' : 'standard',
+          'name': internal ? '内部' : '普通会员',
+          'is_internal': internal,
+        },
         'membership': {
           'status': 'active',
           'ends_at': '2026-12-31T00:00:00Z',
@@ -64,7 +72,10 @@ class _Server {
           'weekly': {'used_pct': 42, 'resets_at': '2026-10-05T00:00:00Z'},
           'warn_pct': [80, 100],
         },
-        'features': {},
+        'features': {
+          for (final entry in features.entries)
+            entry.key: {'enabled': entry.value},
+        },
         'limits': {'max_images': 4, 'max_image_bytes': 1572864},
         'redeem': {'in_app': true},
         'paywall': {'tiers': []},
@@ -432,26 +443,43 @@ void main() {
       expect(none.showTaskDiagnostics, isTrue);
     });
 
-    test('没登录：有 AI 账号，没有任务与诊断', () async {
+    test('没登录：和改版前一样全部显示', () async {
       final account = _account(_Server());
       await account.init();
       final rows = settingsAiRowsFor(account);
       expect(rows.showAiAccount, isTrue);
-      expect(rows.showTaskDiagnostics, isFalse);
+      expect(rows.showTaskDiagnostics, isTrue);
     });
 
-    test('普通会员登录后两行都不显示，内部账号都显示', () async {
+    test('登录后按服务端开关，没下发的按关', () async {
       final standard = _account(_Server());
       await _signIn(standard);
       final s = settingsAiRowsFor(standard);
       expect(s.showAiAccount, isFalse);
       expect(s.showTaskDiagnostics, isFalse);
 
-      final internal = _account(_Server()..internal = true);
-      await _signIn(internal);
-      final i = settingsAiRowsFor(internal);
-      expect(i.showAiAccount, isTrue);
-      expect(i.showTaskDiagnostics, isTrue);
+      final byokOnly = _account(_Server()..features = {'adv.byok': true});
+      await _signIn(byokOnly);
+      final b = settingsAiRowsFor(byokOnly);
+      expect(b.showAiAccount, isTrue);
+      expect(b.showTaskDiagnostics, isFalse);
+
+      final all = _account(_Server()
+        ..features = {'adv.byok': true, 'adv.diagnostics': true});
+      await _signIn(all);
+      final a = settingsAiRowsFor(all);
+      expect(a.showAiAccount, isTrue);
+      expect(a.showTaskDiagnostics, isTrue);
+    });
+
+    test('只看开关不看档位：内部档但开关关着也不显示', () async {
+      final account = _account(_Server()
+        ..internal = true
+        ..features = {'adv.byok': false});
+      await _signIn(account);
+      final rows = settingsAiRowsFor(account);
+      expect(rows.showAiAccount, isFalse);
+      expect(rows.showTaskDiagnostics, isFalse);
     });
 
     testWidgets('默认构建：AI 分组四行，记忆页两个分段都能切', (tester) async {
@@ -473,6 +501,7 @@ void main() {
         'settings-ai-memory',
         'settings-ai-schedules',
         'settings-ai-tasks',
+        'settings-ai-privacy',
       ]) {
         expect(find.byKey(ValueKey(key)), findsOneWidget, reason: key);
       }
@@ -488,6 +517,25 @@ void main() {
       await tester.tap(find.text('喵学到的分类'));
       await tester.pumpAndSettle();
       expect(find.text('还没学到东西'), findsOneWidget);
+    });
+
+    testWidgets('隐私与数据从设置首页直接进', (tester) async {
+      await tallViewport(tester);
+      await tester.pumpWidget(
+        ChangeNotifierProvider<AppRepository>.value(
+          value: AppRepository(),
+          child: MaterialApp(
+            theme: AppTheme.light(),
+            home: const Scaffold(body: SettingsView()),
+          ),
+        ),
+      );
+      await tester.pump();
+
+      await tester.tap(find.byKey(const ValueKey('settings-ai-privacy')));
+      await tester.pumpAndSettle();
+      expect(find.byType(AiPrivacyDataPage), findsOneWidget);
+      expect(find.text('AI 隐私确认'), findsOneWidget);
     });
 
     testWidgets('普通会员登录后设置页不出现 AI 账号和任务与诊断', (tester) async {
@@ -513,6 +561,7 @@ void main() {
       expect(find.byKey(const ValueKey('settings-ai-memory')), findsOneWidget);
       expect(
           find.byKey(const ValueKey('settings-ai-schedules')), findsOneWidget);
+      expect(find.byKey(const ValueKey('settings-ai-privacy')), findsOneWidget);
     });
   });
 }

@@ -227,16 +227,13 @@ void main() {
     expect(find.text('未配置凭据'), findsOneWidget);
   });
 
-  testWidgets('AI 账号页底部有隐私与数据，没有单独的用途分配', (tester) async {
+  testWidgets('AI 账号页没有用途分配，隐私与数据挪到设置首页', (tester) async {
     final repository = _SettingsRepository([oauthProvider, emptyProvider]);
     await pumpSettings(tester, repository);
     expect(find.text('用途分配'), findsNothing);
-
-    final privacy = find.byKey(const ValueKey('ai-privacy-row'));
-    await tester.scrollUntilVisible(privacy, 200,
-        scrollable: find.byType(Scrollable).first);
-    await tester.tap(privacy);
+    // 隐私与数据要给所有人看，不能跟着 AI 账号一起隐藏（01 §4）。
+    await tester.drag(find.byType(Scrollable).first, const Offset(0, -20000));
     await tester.pumpAndSettle();
-    expect(find.text('AI 隐私确认'), findsOneWidget);
+    expect(find.text('隐私与数据', skipOffstage: false), findsNothing);
   });
 }
