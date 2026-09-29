@@ -15,8 +15,8 @@ class OwnershipTests(unittest.TestCase):
         self.assertEqual(owned_images(manifest, ["physical-asset-detail"]), ["asset-detail-android.png"])
         scenes = [p["id"] for p in manifest["pairs"]]
         images = [name for i in range(5) for name in owned_images(manifest, scenes[i::5])]
-        self.assertEqual(len(images), 41)
-        self.assertEqual(len(set(images)), 41)
+        self.assertEqual(len(images), 38)
+        self.assertEqual(len(set(images)), 38)
 
     def test_unknown_scene_rejected(self):
         with self.assertRaises(KeyError):
@@ -102,6 +102,28 @@ class TransportFailureTests(unittest.TestCase):
 
     def test_invalid_capture_path_is_not_transport_loss(self):
         self.assertFalse(is_retryable("Invalid capture receipt path\nadb: device offline", 124))
+
+    def test_device_lost_during_capture_read_is_retryable(self):
+        # 09-29 stats-week: the page was drawn, then the emulator dropped while
+        # the PNG was being pulled (0 bytes, then "device not found").
+        log = (
+            "PARITY_CAPTURE_DONE name=stats-week-android\n"
+            "PARITY_CAPTURE_READ_RETRY attempt=1 Bad state: Capture receipt "
+            "hash/length mismatch: name=stats-week-android expectedLength=157444 "
+            "actualLength=0 expectedHash=aa actualHash=e3b0\n"
+            "PARITY_CAPTURE_READ_RETRY attempt=2 ProcessException: ADB capture "
+            "read failed: error: device 'emulator-5554' not found\n"
+        )
+        self.assertTrue(is_retryable(log, 1))
+
+    def test_zero_byte_read_alone_is_not_retryable(self):
+        self.assertFalse(is_retryable(
+            "Capture receipt hash/length mismatch: expectedLength=10 actualLength=0", 1))
+
+    def test_real_byte_mismatch_still_fails_after_device_loss(self):
+        self.assertFalse(is_retryable(
+            "Capture receipt hash/length mismatch: expectedLength=10 actualLength=7\n"
+            "ADB capture read failed: error: device 'emulator-5554' not found", 1))
 
     def test_unrelated_uninstall_failure_is_not_retryable(self):
         self.assertFalse(is_retryable("Failure [DELETE_FAILED_INTERNAL_ERROR]"))

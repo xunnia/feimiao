@@ -14,8 +14,9 @@ import '../../widgets/mascot.dart';
 
 /// 喵学到的分类记忆管理：AI 记账时「备注短语 → 分类」的纠正记录。
 /// 让用户能看到喵学了什么、把学错的删掉——AI 记账的信任感来源。
-class MemoryView extends StatelessWidget {
-  const MemoryView({super.key});
+/// 现在是「记忆」页（`ai_merged_pages.dart`）的一个分段。
+class CategoryMemoryBody extends StatelessWidget {
+  const CategoryMemoryBody({super.key});
 
   @override
   Widget build(BuildContext context) {
@@ -23,12 +24,7 @@ class MemoryView extends StatelessWidget {
     final scheme = Theme.of(context).colorScheme;
     final memories = repo.categoryMemories;
 
-    return Scaffold(
-      appBar: AppBar(
-          leading: const AppBackButton(),
-          title: const Text('喵学到的分类'),
-          centerTitle: true),
-      body: memories.isEmpty
+    return memories.isEmpty
           ? const AppEmptyState(
               mood: MascotMood.thinking,
               title: '还没学到东西',
@@ -71,8 +67,7 @@ class MemoryView extends StatelessWidget {
                   ),
                 ),
               ],
-            ),
-    );
+            );
   }
 }
 

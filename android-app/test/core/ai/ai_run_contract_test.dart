@@ -1,5 +1,4 @@
 import 'dart:io';
-import 'dart:convert';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:qingji/core/ai/ai_attachment_pipeline.dart';
@@ -10,7 +9,6 @@ import 'package:qingji/core/ai/ai_provider_config.dart';
 import 'package:qingji/core/ai/ai_run.dart';
 import 'package:qingji/core/ai/ai_tool_registry.dart';
 import 'package:qingji/core/ai/chat_session.dart';
-import 'package:qingji/core/ai/local_model_companion.dart';
 import 'package:qingji/core/media/chat_attachment.dart';
 
 void main() {
@@ -154,17 +152,14 @@ void main() {
   });
 
   test('connector and memory definitions use explicit allowlists', () {
-    final connector = AiConnectorRegistry.byId('local_companion');
-    expect(connector, isNotNull);
-    expect(connector!.accepts(Uri.parse('http://127.0.0.1:8787')), isTrue);
-    expect(connector.accepts(Uri.parse('http://localhost:8787')), isTrue);
-    expect(connector.accepts(Uri.parse('http://localhost:8787@evil.example')),
-        isFalse);
-    expect(connector.accepts(Uri.parse('https://localhost:8787')), isFalse);
-    expect(connector.accepts(Uri.parse('https://example.com')), isFalse);
+    // 本地模型伴侣已删（01 §4），不再有明文 http 的例外。
+    expect(AiConnectorRegistry.byId('local_companion'), isNull);
     final webSearch = AiConnectorRegistry.byId('web_search');
     expect(webSearch?.accepts(Uri.parse('https://api.duckduckgo.com')), isTrue);
     expect(webSearch?.accepts(Uri.parse('http://api.duckduckgo.com')), isFalse);
+    expect(
+        webSearch?.accepts(Uri.parse('https://x@api.duckduckgo.com')), isFalse);
+    expect(webSearch?.accepts(Uri.parse('https://example.com')), isFalse);
     expect(AiSkillRegistry.builtIns, isNotEmpty);
     expect(
       decodeAiSkillState('{"ledger_assistant":false}')['ledger_assistant'],
@@ -181,52 +176,5 @@ void main() {
     expect(config.privacyReceiverKey,
         isNot(contains('must-not-be-in-consent-key')));
     expect(config.privacyReceiverKey, contains('provider-a'));
-  });
-
-  test('local companion is health-checkable, bounded and loopback-only',
-      () async {
-    final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
-    addTearDown(() => server.close(force: true));
-    final requests = <String>[];
-    server.listen((request) async {
-      requests.add(request.uri.path);
-      if (request.uri.path == '/health') {
-        request.response.statusCode = HttpStatus.noContent;
-      } else {
-        final body = await utf8.decoder.bind(request).join();
-        expect(body, contains('qwen-local'));
-        request.response.headers.contentType = ContentType.json;
-        request.response.write(jsonEncode({
-          'choices': [
-            {
-              'message': {'content': '本地结果'},
-            },
-          ],
-        }));
-      }
-      await request.response.close();
-    });
-
-    final client = LocalModelCompanionClient(
-      LocalModelCompanionConfig(
-        endpoint: Uri.parse(
-          'http://${server.address.address}:${server.port}',
-        ),
-        model: 'qwen-local',
-        enabled: true,
-      ),
-    );
-    expect(await client.checkHealth(), isTrue);
-    expect(await client.complete('你好'), '本地结果');
-    expect(requests, containsAll(['/health', '/v1/chat/completions']));
-
-    final remote = LocalModelCompanionClient(
-      LocalModelCompanionConfig(
-        endpoint: Uri.parse('http://192.0.2.1:8787'),
-        enabled: true,
-      ),
-    );
-    expect(await remote.checkHealth(), isFalse);
-    expect(() => remote.complete('拒绝远程'), throwsStateError);
   });
 }

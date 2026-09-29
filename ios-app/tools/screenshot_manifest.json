@@ -299,15 +299,6 @@
       "notes": "凭据、模型目录、ping 和脱敏错误状态。"
     },
     {
-      "id": "ai-search",
-      "feature": "AI 统一搜索",
-      "android": "android-app/outputs/parity/ai-search-android.png",
-      "ios": null,
-      "iosRoute": null,
-      "iosStatus": "missing",
-      "notes": "账单、对话和报告只读搜索。iOS 已按 01 §4 删除此页（安卓随后删）；iOS 不再截图。"
-    },
-    {
       "id": "ai-memory",
       "feature": "AI 可控记忆",
       "android": "android-app/outputs/parity/ai-memory-android.png",
@@ -316,30 +307,12 @@
       "notes": "授权、编辑和删除记忆。"
     },
     {
-      "id": "ai-extensions",
-      "feature": "AI 技能与连接",
-      "android": "android-app/outputs/parity/ai-extensions-android.png",
-      "ios": null,
-      "iosRoute": null,
-      "iosStatus": "missing",
-      "notes": "技能/连接器白名单和隐私范围。iOS 已按 01 §4 删除此页（安卓随后删）；iOS 不再截图。"
-    },
-    {
       "id": "ai-schedules",
       "feature": "AI 定时报表",
       "android": "android-app/outputs/parity/ai-schedules-android.png",
       "ios": "ci-artifacts/ios-screenshots/39-ai-schedules.png",
       "iosRoute": "settings/ai-schedules",
       "notes": "报告类型、账本、周期和下次执行。"
-    },
-    {
-      "id": "ai-local",
-      "feature": "本地模型伴侣",
-      "android": "android-app/outputs/parity/ai-local-android.png",
-      "ios": null,
-      "iosRoute": null,
-      "iosStatus": "missing",
-      "notes": "本机地址、模型和健康检查。iOS 已按 01 §4 删除此页（安卓随后删）；iOS 不再截图。"
     }
   ]
 }

@@ -22,14 +22,12 @@ import '../../data/app_repository.dart';
 import '../../theme/app_colors.dart';
 import '../../theme/app_tokens.dart';
 import '../../widgets/app_buttons.dart';
-import '../../widgets/app_page_route.dart';
 import '../../widgets/app_toast.dart';
 import '../../widgets/ios_dialogs.dart';
 import '../../widgets/ios_form.dart';
 import '../../widgets/ios_menu.dart';
 import '../../widgets/settings_ui.dart';
 import '../common/app_sheet.dart';
-import 'ai_companion_views.dart';
 
 /// Keep Android's OAuth browser leg on Chrome. It first attempts an isolated
 /// Custom Tab, then a Chrome Incognito tab, then a normal Chrome tab; only when
@@ -41,110 +39,16 @@ LaunchMode openAiOAuthLaunchMode({bool? isAndroid}) =>
         ? LaunchMode.externalApplication
         : LaunchMode.inAppBrowserView;
 
-/// AI 设置：入口页负责分组，具体配置拆到子页面。
-class AiSettingView extends StatelessWidget {
-  const AiSettingView({super.key});
+/// AI 账号：自己填的服务商、密钥和 OAuth。「隐私与数据」是设置首页单独一行。
+/// 从设置首页「AI」分组进入（原来的「AI 记账设置」入口页已取消，01 §4）。
+class AiAccountSettingsPage extends StatefulWidget {
+  const AiAccountSettingsPage({super.key});
 
   @override
-  Widget build(BuildContext context) {
-    final repo = context.watch<AppRepository>();
-
-    return Scaffold(
-      appBar: AppBar(
-        leading: const AppBackButton(),
-        title: const Text('AI 设置'),
-        centerTitle: true,
-      ),
-      body: SafeArea(
-        child: ListView(
-          physics: const BouncingScrollPhysics(),
-          padding: const EdgeInsets.only(top: 8, bottom: 32),
-          children: [
-            SettingsGroup(
-              children: [
-                SettingsRow(
-                  title: 'AI 账号设置',
-                  trailing: _ValueChevron(
-                    value: _accountSummary(repo),
-                  ),
-                  onTap: () => _push(
-                    context,
-                    const _AiAccountSettingsPage(),
-                  ),
-                ),
-                SettingsRow(
-                  title: '隐私与数据',
-                  trailing: const _ValueChevron(value: '本机安全存储'),
-                  onTap: () => _push(
-                    context,
-                    const _AiPrivacyDataPage(),
-                  ),
-                ),
-                SettingsRow(
-                  title: 'AI 任务中心',
-                  subtitle: '查看进行中、失败和已完成的 AI 运行',
-                  onTap: () => _push(context, const AiTaskCenterView()),
-                ),
-                SettingsRow(
-                  title: 'AI 诊断',
-                  subtitle: '服务商健康、耗时和脱敏错误摘要',
-                  onTap: () => _push(context, const AiDiagnosticsView()),
-                ),
-                SettingsRow(
-                  title: '统一搜索',
-                  subtitle: '搜索账单、对话和 AI 任务',
-                  onTap: () => _push(context, const AiUnifiedSearchView()),
-                ),
-                SettingsRow(
-                  title: '可控记忆',
-                  subtitle: '只保留你明确授权的偏好',
-                  onTap: () => _push(context, const AiMemoryControlView()),
-                ),
-                SettingsRow(
-                  title: '技能与连接',
-                  subtitle: '管理内置技能和受控连接器',
-                  onTap: () =>
-                      _push(context, const AiSkillsAndConnectorsView()),
-                ),
-                SettingsRow(
-                  title: '定时报表',
-                  subtitle: '按周或按月生成账本报告',
-                  onTap: () => _push(context, const AiReportScheduleView()),
-                ),
-                SettingsRow(
-                  title: '本地模型伴侣',
-                  subtitle: '连接电脑上的本地模型服务',
-                  onTap: () => _push(context, const LocalModelCompanionView()),
-                ),
-              ],
-            ),
-            const Padding(
-              padding: EdgeInsets.fromLTRB(24, 8, 24, 0),
-              child: _CaptionText(
-              '记一记使用输入框中选择的模型和思考强度；其他聊天保留各自的选择。',
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  static String _accountSummary(AppRepository repo) {
-    final providers = repo.aiProviders;
-    final configured = providers.where((provider) => provider.isUsable).length;
-    return '$configured/${providers.length} 个服务商';
-  }
+  State<AiAccountSettingsPage> createState() => _AiAccountSettingsPageState();
 }
 
-class _AiAccountSettingsPage extends StatefulWidget {
-  const _AiAccountSettingsPage();
-
-  @override
-  State<_AiAccountSettingsPage> createState() => _AiAccountSettingsPageState();
-}
-
-class _AiAccountSettingsPageState extends State<_AiAccountSettingsPage> {
+class _AiAccountSettingsPageState extends State<AiAccountSettingsPage> {
   final Map<String, _ProviderDraft> _drafts = {};
   final Set<String> _expanded = {};
   final Set<String> _busy = {};
@@ -928,7 +832,7 @@ class _AiAccountSettingsPageState extends State<_AiAccountSettingsPage> {
     return Scaffold(
       appBar: AppBar(
         leading: const AppBackButton(),
-        title: const Text('AI 账号设置'),
+        title: const Text('AI 账号'),
         centerTitle: true,
         actions: [
           Padding(
@@ -1861,8 +1765,9 @@ class _ProviderModelListBoxState extends State<_ProviderModelListBox> {
 }
 
 
-class _AiPrivacyDataPage extends StatelessWidget {
-  const _AiPrivacyDataPage();
+/// 隐私与数据：所有人都能进（01 §4），从设置首页「AI」分组打开。
+class AiPrivacyDataPage extends StatelessWidget {
+  const AiPrivacyDataPage({super.key});
 
   @override
   Widget build(BuildContext context) {
@@ -1938,40 +1843,6 @@ class _AiPrivacyDataPage extends StatelessWidget {
 }
 
 
-class _ValueChevron extends StatelessWidget {
-  final String value;
-
-  const _ValueChevron({required this.value});
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return ConstrainedBox(
-      constraints: const BoxConstraints(maxWidth: 150),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Flexible(
-            child: Text(
-              value,
-              overflow: TextOverflow.ellipsis,
-              maxLines: 1,
-              textAlign: TextAlign.right,
-              style: AppType.trailingValue(scheme),
-            ),
-          ),
-          const SizedBox(width: 6),
-          Icon(
-            CupertinoIcons.chevron_forward,
-            size: 17,
-            color: scheme.outline,
-          ),
-        ],
-      ),
-    );
-  }
-}
-
 class _PlainValue extends StatelessWidget {
   final String text;
 
@@ -2027,12 +1898,6 @@ String _shortError(Object e) {
       .trim();
   if (normalized.length <= 120) return normalized;
   return '${normalized.substring(0, 117)}…';
-}
-
-void _push(BuildContext context, Widget page) {
-  Navigator.of(context).push(
-    AppPageRoute<void>(builder: (_) => page),
-  );
 }
 
 // ---------------------------------------------------------------------------

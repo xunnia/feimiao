@@ -16,6 +16,5 @@ export 'ai/ai_request_manager.dart';
 export 'ai/ai_run.dart';
 export 'ai/ai_secure_config.dart';
 export 'ai/ai_tool_registry.dart';
-export 'ai/local_model_companion.dart';
 export 'ai/llm_query.dart';
 export 'ai/llm_query_v2.dart';

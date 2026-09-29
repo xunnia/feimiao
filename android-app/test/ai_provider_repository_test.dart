@@ -163,15 +163,12 @@ void main() {
       isTrue,
     );
 
-    // The Chats preference remains on, but an explicitly disabled connector
-    // must prevent the request layer from attaching search tools or the local
-    // search adapter.
-    await repo.setAiConnectorEnabled('web_search', false);
-    expect(repo.chatWebSearchEnabled, isTrue);
+    // 联网搜索只有聊天 [+] 这一个开关（「技能与连接」页已删，不再叠加连接器开关）。
+    await repo.setChatWebSearchEnabled(false);
     expect(repo.chatWebSearchAllowed, isFalse);
     expect(repo.aiProviderConfigFor(AiTaskType.chatQuery).webSearchEnabled,
         isFalse);
-    await repo.setAiConnectorEnabled('web_search', true);
+    await repo.setChatWebSearchEnabled(true);
     expect(repo.chatWebSearchAllowed, isTrue);
 
     await repo.setChatToolAccess(AiChatToolAccess.onDemand);
@@ -194,33 +191,28 @@ void main() {
     await reopened.closeForTest();
   });
 
-  test('skill switches are persisted and expose only their declared tools',
+  test('an old disabled web-search connector no longer blocks web search',
       () async {
+    // 「技能与连接」页删除前，用户可能在那里关过联网连接器；删页后没有地方能再打开，
+    // 所以这个旧状态必须不再生效。
+    final seed = AppRepository();
+    await seed.init();
+    await seed.closeForTest();
+    final db = await openDatabase(p.join(temp.path, 'qingji.db'));
+    await db.insert('app_settings',
+        {'key': 'ai_connector_state', 'value': '{"web_search":false}'},
+        conflictAlgorithm: ConflictAlgorithm.replace);
+    await db.insert('app_settings',
+        {'key': 'ai_skill_state', 'value': '{"ledger_assistant":false}'},
+        conflictAlgorithm: ConflictAlgorithm.replace);
+    await db.close();
+
     final repo = AppRepository();
     await repo.init();
-    expect(
-      repo.aiSkillAllowsTool('ledger_assistant', 'create_transactions'),
-      isTrue,
-    );
-    expect(
-      repo.aiSkillAllowsTool('ledger_assistant', 'read_statistics'),
-      isFalse,
-    );
-    await repo.setAiSkillEnabled('ledger_assistant', false);
-    expect(
-      repo.aiSkillAllowsTool('ledger_assistant', 'create_transactions'),
-      isFalse,
-    );
+    expect(repo.chatWebSearchAllowed, isTrue);
+    expect(repo.aiProviderConfigFor(AiTaskType.chatQuery).webSearchEnabled,
+        isTrue);
     await repo.closeForTest();
-
-    final reopened = AppRepository();
-    await reopened.init();
-    expect(reopened.aiSkillEnabled('ledger_assistant'), isFalse);
-    expect(
-      reopened.aiSkillAllowsTool('ledger_assistant', 'create_transactions'),
-      isFalse,
-    );
-    await reopened.closeForTest();
   });
 
   test('configured current model remains selectable when catalog is empty',

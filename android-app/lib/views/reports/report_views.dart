@@ -273,12 +273,7 @@ class _ReportLibrarySheetState extends State<_ReportLibrarySheet> {
     final repo = context.read<AppRepository>();
     final aiConfig = repo.aiProviderConfigFor(AiTaskType.chatQuery);
     if (!aiConfig.hasCredential) {
-      showAppToast(context, '先去「我的 → AI 记账设置」配置 API Key 或 OAuth');
-      _regeneratingReportIds.remove(report.id);
-      return;
-    }
-    if (!repo.aiSkillAllowsTool('report_writer', 'read_ledger')) {
-      showAppToast(context, '报告生成助手已关闭，请先在 AI 设置中重新开启');
+      showAppToast(context, '先去「设置 → AI 账号」配置 API Key 或 OAuth');
       _regeneratingReportIds.remove(report.id);
       return;
     }

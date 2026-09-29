@@ -22,7 +22,8 @@ from typing import Any
 from canonical_fixture_hash import canonical_sha256
 
 
-EXPECTED_SCENE_COUNT = 41
+EXPECTED_SCENE_COUNT = 38
+EXPECTED_LEGACY_SLOTS = 36
 EXPECTED_JOURNEY_COUNT = 12
 REQUIRED_SPLIT_IDS = {
     "drawer-books",
@@ -524,7 +525,7 @@ def validate_screenshot_manifest(payload: dict[str, Any], repo: Path) -> None:
             ios_routes.append(ios_route)
 
     require(len(pair_ids) == len(set(pair_ids)), "screenshot manifest ids must be unique")
-    require(set(pair_ids) == set(scenes), "screenshot manifest must cover all 41 canonical scenes")
+    require(set(pair_ids) == set(scenes), f"screenshot manifest must cover all {EXPECTED_SCENE_COUNT} canonical scenes")
     require(len(ios_routes) == len(set(ios_routes)), "screenshot manifest iOS routes must be unique")
 
 
@@ -532,10 +533,11 @@ def validate_supporting_contracts(payload: dict[str, Any]) -> None:
     scenes = payload["scenes"]
     scene_ids = {scene["id"] for scene in scenes}
     mappings = payload.get("legacyScreenshotMapping")
-    require(isinstance(mappings, list) and len(mappings) == 39,
-            "legacyScreenshotMapping must contain the 39 old screenshot slots")
+    # 原有 39 个旧截图位；2026-09-29 两端删掉统一搜索、技能与连接、本地模型伴侣后剩 36 个。
+    require(isinstance(mappings, list) and len(mappings) == EXPECTED_LEGACY_SLOTS,
+            f"legacyScreenshotMapping must contain the {EXPECTED_LEGACY_SLOTS} old screenshot slots")
     legacy_ids = [item.get("legacyId") for item in mappings if isinstance(item, dict)]
-    require(len(legacy_ids) == 39 and len(set(legacy_ids)) == 39,
+    require(len(legacy_ids) == EXPECTED_LEGACY_SLOTS and len(set(legacy_ids)) == EXPECTED_LEGACY_SLOTS,
             "legacy screenshot ids must be unique")
     mapped_scene_ids: set[str] = set()
     for mapping in mappings:
@@ -546,7 +548,7 @@ def validate_supporting_contracts(payload: dict[str, Any]) -> None:
                 f"{mapping.get('legacyId')}: maps to an unknown canonical scene")
         mapped_scene_ids.update(canonical_ids)
     require(mapped_scene_ids == scene_ids,
-            "legacy screenshot mapping must cover all 41 canonical scenes")
+            f"legacy screenshot mapping must cover all {EXPECTED_SCENE_COUNT} canonical scenes")
 
     journeys = payload.get("interactionContracts")
     require(isinstance(journeys, list) and len(journeys) == EXPECTED_JOURNEY_COUNT,

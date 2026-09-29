@@ -24,7 +24,7 @@ app_id="com.qingji.qingji.codex"
 legacy_app_id="com.qingji.qingji"
 app_ids=("$app_id" "$legacy_app_id")
 scene_timeout_seconds="${PARITY_SCENE_TIMEOUT_SECONDS:-600}"
-scene_retry_limit="${PARITY_SCENE_RETRIES:-1}"
+scene_retry_limit="${PARITY_SCENE_RETRIES:-2}"
 shard_index="${PARITY_SHARD_INDEX:-0}"
 shard_count="${PARITY_SHARD_COUNT:-1}"
 smoke="${PARITY_SMOKE:-0}"
@@ -33,7 +33,7 @@ if [[ "$smoke" != 0 && "$smoke" != 1 ]]; then
   exit 2
 fi
 if ! [[ "$shard_index" =~ ^[0-9]+$ && "$shard_count" =~ ^[1-9][0-9]*$ ]] ||
-   [ "$shard_index" -ge "$shard_count" ] || [ "$shard_count" -gt 41 ]; then
+   [ "$shard_index" -ge "$shard_count" ] || [ "$shard_count" -gt 38 ]; then
   echo "Invalid parity shard: $shard_index/$shard_count" >&2
   exit 2
 fi
@@ -121,7 +121,7 @@ fi
   # Keep every scene in its own Flutter/VM-service session. A page that leaves
   # a route, animation, or platform channel pending must not hold the other
   # captures hostage; the driver response still writes the same business JSON
-  # on every invocation and the final metadata check covers all 41 images.
+  # on every invocation and the final metadata check covers all 38 images.
   scenes=(
     drawer-books
     home-overview
@@ -159,11 +159,8 @@ fi
     ai-settings
     ai-tasks
     ai-diagnostics
-    ai-search
     ai-memory
-    ai-extensions
     ai-schedules
-    ai-local
     assets-add
     assets-purchase
     assets-purchase-form

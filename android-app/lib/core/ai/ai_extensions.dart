@@ -216,12 +216,6 @@ class AiConnectorDefinition {
   bool accepts(Uri uri) {
     if (uri.userInfo.isNotEmpty) return false;
     final host = uri.host.toLowerCase();
-    if (id == 'local_companion') {
-      // A local companion is deliberately the only cleartext exception. The
-      // host remains loopback-only; remote HTTP endpoints never pass this
-      // gate and are rejected again by LocalModelCompanionClient.
-      return uri.scheme == 'http' && hostAllowlist.contains(host);
-    }
     return uri.scheme == 'https' && hostAllowlist.contains(host);
   }
 }
@@ -240,12 +234,6 @@ class AiConnectorRegistry {
         'api.anthropic.com',
         'api.duckduckgo.com',
       ],
-    ),
-    AiConnectorDefinition(
-      id: 'local_companion',
-      label: '本地模型伴侣',
-      description: '只允许连接本机回环地址的可选 companion service。',
-      hostAllowlist: ['127.0.0.1', 'localhost', '::1'],
     ),
   ];
 

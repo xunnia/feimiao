@@ -34,7 +34,7 @@ import 'package:qingji/views/settings/backup_view.dart';
 import 'package:qingji/views/settings/bill_review_view.dart';
 import 'package:qingji/views/settings/budget_setting_view.dart';
 import 'package:qingji/views/settings/categories_view.dart';
-import 'package:qingji/views/settings/memory_view.dart';
+import 'package:qingji/views/settings/ai_merged_pages.dart';
 import 'package:qingji/views/settings/recurring_view.dart';
 import 'package:qingji/views/settings/settings_view.dart';
 import 'package:qingji/views/settings/tags_view.dart';
@@ -200,7 +200,10 @@ Future<void> _captureParityScene(
     await _capturePage(tester, 'tags-android', const TagsView(), binding);
   } else if (scene == 'category-memory') {
     await _capturePage(
-        tester, 'category-memory-android', const MemoryView(), binding);
+        tester,
+        'category-memory-android',
+        const MemoryHubView(initialTab: MemoryHubTab.categories),
+        binding);
   } else if (scene == 'settings') {
     await _capturePage(
         tester, 'settings-android', const SettingsView(), binding);
@@ -209,38 +212,25 @@ Future<void> _captureParityScene(
         tester, 'ai-entry-android', const MeowAssistantView(), binding);
   } else if (scene == 'ai-settings') {
     await _capturePage(
-        tester, 'ai-settings-android', const AiSettingView(), binding);
+        tester, 'ai-settings-android', const AiAccountSettingsPage(), binding);
   } else if (scene == 'ai-tasks') {
     await _capturePage(
-        tester, 'ai-tasks-android', const AiTaskCenterView(), binding);
+        tester, 'ai-tasks-android', const AiTaskDiagnosticsView(), binding);
   } else if (scene == 'ai-diagnostics') {
     await _capturePage(
-        tester, 'ai-diagnostics-android', const AiDiagnosticsView(), binding);
-  } else if (scene == 'ai-search') {
-    await _capturePage(
-        tester, 'ai-search-android', const AiUnifiedSearchView(), binding);
+        tester,
+        'ai-diagnostics-android',
+        const AiTaskDiagnosticsView(
+            initialTab: AiTaskDiagnosticsTab.diagnostics),
+        binding);
   } else if (scene == 'ai-memory') {
     await _capturePage(
-        tester, 'ai-memory-android', const AiMemoryControlView(), binding);
-  } else if (scene == 'ai-extensions') {
-    await _capturePage(
-      tester,
-      'ai-extensions-android',
-      const AiSkillsAndConnectorsView(),
-      binding,
-    );
+        tester, 'ai-memory-android', const MemoryHubView(), binding);
   } else if (scene == 'ai-schedules') {
     await _capturePage(
       tester,
       'ai-schedules-android',
       const AiReportScheduleView(),
-      binding,
-    );
-  } else if (scene == 'ai-local') {
-    await _capturePage(
-      tester,
-      'ai-local-android',
-      const LocalModelCompanionView(),
       binding,
     );
   } else if (scene == 'backup') {
@@ -412,55 +402,37 @@ Future<void> _captureAiGroup(
   await _capturePage(
     tester,
     'ai-settings-android',
-    const AiSettingView(),
+    const AiAccountSettingsPage(),
     binding,
   );
   await _capturePage(
     tester,
     'category-memory-android',
-    const MemoryView(),
+    const MemoryHubView(initialTab: MemoryHubTab.categories),
     binding,
   );
   await _capturePage(
     tester,
     'ai-tasks-android',
-    const AiTaskCenterView(),
+    const AiTaskDiagnosticsView(),
     binding,
   );
   await _capturePage(
     tester,
     'ai-diagnostics-android',
-    const AiDiagnosticsView(),
-    binding,
-  );
-  await _capturePage(
-    tester,
-    'ai-search-android',
-    const AiUnifiedSearchView(),
+    const AiTaskDiagnosticsView(initialTab: AiTaskDiagnosticsTab.diagnostics),
     binding,
   );
   await _capturePage(
     tester,
     'ai-memory-android',
-    const AiMemoryControlView(),
-    binding,
-  );
-  await _capturePage(
-    tester,
-    'ai-extensions-android',
-    const AiSkillsAndConnectorsView(),
+    const MemoryHubView(),
     binding,
   );
   await _capturePage(
     tester,
     'ai-schedules-android',
     const AiReportScheduleView(),
-    binding,
-  );
-  await _capturePage(
-    tester,
-    'ai-local-android',
-    const LocalModelCompanionView(),
     binding,
   );
 }

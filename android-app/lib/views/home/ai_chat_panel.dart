@@ -2529,11 +2529,6 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
         return;
       }
     }
-    if (widget.recordOnly &&
-        !repo.aiSkillAllowsTool('ledger_assistant', 'create_transactions')) {
-      _snack('记账助手已关闭，请先在 AI 设置中重新开启');
-      return;
-    }
     final attachmentBatch =
         await AiAttachmentPipeline.validate(requestedAttachments);
     if (!attachmentBatch.isValid) {
@@ -3540,32 +3535,6 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
     final reportBookId = resumeJob != null
         ? resumeJob.bookId
         : (reportType == null ? null : repo.currentBook?.id);
-    if (reportType != null && !repo.aiSkillEnabled('report_writer')) {
-      const prompt = '报告生成助手已关闭，请先在 AI 设置中重新开启。';
-      _completeThinking(flowId: flowId);
-      if (mounted && _ownsFlow(flowId)) {
-        setState(() {
-          _msgs.add(_InfoMsg(prompt));
-          _busy = false;
-        });
-        _scrollToLatestUserMessage();
-      }
-      return;
-    }
-    if (!chatOnly &&
-        reportType == null &&
-        !repo.aiSkillAllowsTool('ledger_analyst', 'read_ledger')) {
-      const prompt = '账本分析助手已关闭，请先在 AI 设置中重新开启。';
-      _completeThinking(flowId: flowId);
-      if (mounted && _ownsFlow(flowId)) {
-        setState(() {
-          _msgs.add(_InfoMsg(prompt));
-          _busy = false;
-        });
-        _scrollToLatestUserMessage();
-      }
-      return;
-    }
     // 报告也跟随喵助手当前选中的服务商和模型；普通记账解析仍使用独立配置。
     // 隐私闸门下沉到每个真正上传数据的入口：查账/报告都要先同意，不能只靠
     // _send 的记账分支拦。未同意就不发起请求；resume 的任务保持 pending
@@ -3689,7 +3658,7 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
     final priorTurns = _recentTurns(excludeNewestUser: true);
     String answer;
     if (!aiConfig.hasCredential) {
-      answer = '查账要先配 AI key 哦～去「我的 → AI 记账设置」填一下，喵就能帮你分析啦';
+      answer = '查账要先配 AI key 哦～去「设置 → AI 账号」填一下，喵就能帮你分析啦';
     } else {
       try {
         late final String transactionsText;
@@ -4822,7 +4791,7 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
       return '当前模型或上游格式没有接受这次附件，请换用支持图片的模型，或检查服务商的上游格式。';
     }
     if (code == 401 || code == 403) {
-      return '喵没连上 AI：API Key 可能无效或没有权限，去「我的 → AI 记账设置」检查一下。';
+      return '喵没连上 AI：API Key 可能无效或没有权限，去「设置 → AI 账号」检查一下。';
     }
     if (code == 402 || code == 429) {
       return '喵没连上 AI：DeepSeek 余额、额度或频率限制可能不够了，稍后再试或检查控制台。';
@@ -6070,7 +6039,7 @@ ${line('上月同期', lastStart, lastSameDayEnd, lastSameDay)}
     final repo = context.read<AppRepository>();
     final aiConfig = _chatConfig(repo);
     if (!aiConfig.hasCredential) {
-      showAppToast(context, '先去「我的 → AI 记账设置」填写 API Key');
+      showAppToast(context, '先去「设置 → AI 账号」填写 API Key');
       return;
     }
     final report = m.report;

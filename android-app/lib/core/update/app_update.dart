@@ -10,7 +10,7 @@ import 'package:path_provider/path_provider.dart';
 
 import '../app_version.dart';
 
-/// App 内检查更新：version.json 和 APK 托管在用户自己的 Cloudflare Worker/KV。
+/// App 内检查更新：version.json 和 APK 放在自己的 VPS 上（发布见 docs/05）。
 /// versionCode 比本机大才算有更新。
 class AppUpdateInfo {
   final String versionName;

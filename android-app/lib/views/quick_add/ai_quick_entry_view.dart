@@ -140,20 +140,6 @@ class _AiQuickEntryViewState extends State<AiQuickEntryView> {
       String fallbackHint = '';
 
       if (aiConfig.hasCredential) {
-        final skillEnabled = repo.aiSkillAllowsTool(
-          'ledger_assistant',
-          'create_transactions',
-        );
-        if (!skillEnabled) {
-          if (mounted) {
-            setState(() {
-              _loading = false;
-              _usedFallback = true;
-              _fallbackHint = '记账助手已关闭，已取消联网解析';
-            });
-          }
-          return;
-        }
         final consented = await ensureAiPrivacyConsent(
           context,
           config: aiConfig,
@@ -371,7 +357,7 @@ class _AiQuickEntryViewState extends State<AiQuickEntryView> {
               label: '配置',
               onPressed: () => Navigator.push(
                 context,
-                AppPageRoute<void>(builder: (_) => const AiSettingView()),
+                AppPageRoute<void>(builder: (_) => const AiAccountSettingsPage()),
               ),
             ),
         ],
