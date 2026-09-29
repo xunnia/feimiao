@@ -7695,62 +7695,6 @@ class AppRepository extends ChangeNotifier {
       ..addAll(rows.map(AiReportSchedule.fromMap));
   }
 
-  /// Local model companion settings are ordinary non-secret preferences. The
-  /// companion client still validates the endpoint as loopback before making
-  /// any request; persistence must not silently turn this into a remote proxy.
-  Future<({String endpoint, String model, bool enabled})>
-      loadAiLocalModelCompanionSettings() async {
-    const defaultEndpoint = 'http://127.0.0.1:8787';
-    final db = _db;
-    if (db == null) {
-      return (
-        endpoint: defaultEndpoint,
-        model: '',
-        enabled: false,
-      );
-    }
-    final rows = await db.query(
-      'app_settings',
-      columns: const ['key', 'value'],
-      where: 'key IN (?, ?, ?)',
-      whereArgs: const [
-        'ai_local_companion_endpoint',
-        'ai_local_companion_model',
-        'ai_local_companion_enabled',
-      ],
-    );
-    final values = {
-      for (final row in rows)
-        row['key']?.toString() ?? '': row['value']?.toString() ?? '',
-    };
-    final endpoint = values['ai_local_companion_endpoint']?.trim() ?? '';
-    return (
-      endpoint: endpoint.isEmpty ? defaultEndpoint : endpoint,
-      model: values['ai_local_companion_model']?.trim() ?? '',
-      enabled: values['ai_local_companion_enabled'] == '1',
-    );
-  }
-
-  Future<void> saveAiLocalModelCompanionSettings({
-    required String endpoint,
-    required String model,
-    required bool enabled,
-  }) async {
-    final db = _db;
-    if (db == null) return;
-    final batch = db.batch();
-    void setting(String key, String value) => batch.insert(
-          'app_settings',
-          {'key': key, 'value': value},
-          conflictAlgorithm: ConflictAlgorithm.replace,
-        );
-    setting('ai_local_companion_endpoint', endpoint.trim());
-    setting('ai_local_companion_model', model.trim());
-    setting('ai_local_companion_enabled', enabled ? '1' : '0');
-    await batch.commit(noResult: true);
-    notifyListeners();
-  }
-
   Future<void> _loadBooks() async {
     final rows = await _db!.query('books', orderBy: 'sort_order ASC, id ASC');
     _applyLoadedBooks(rows);

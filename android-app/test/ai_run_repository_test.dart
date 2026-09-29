@@ -326,14 +326,5 @@ void main() {
       isTrue,
     );
 
-    await repo.saveAiLocalModelCompanionSettings(
-      endpoint: 'http://127.0.0.1:8787',
-      model: 'qwen-local',
-      enabled: true,
-    );
-    final companion = await repo.loadAiLocalModelCompanionSettings();
-    expect(companion.endpoint, 'http://127.0.0.1:8787');
-    expect(companion.model, 'qwen-local');
-    expect(companion.enabled, isTrue);
   });
 }
