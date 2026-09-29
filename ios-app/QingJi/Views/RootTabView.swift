@@ -1,5 +1,6 @@
 import SwiftUI
 import SwiftData
+import UIKit
 
 enum AppTab: Hashable {
     case home, quickAdd, search, transactions, statistics, settings
@@ -8,7 +9,12 @@ enum AppTab: Hashable {
 struct RootTabView: View {
     @Environment(AppRouter.self) private var router
     @State private var path: [AppRouter.Route] = []
-    @State private var drawerPresented = false
+    /// 抽屉打开程度：0 = 关，1 = 开。拖动时跟手连续变化（对齐安卓推开式抽屉）。
+    @State private var drawerProgress: CGFloat = 0
+    /// 一次拖动开始时的 drawerProgress。
+    @State private var dragStartProgress: CGFloat = 0
+    /// 一次拖动的方向判定：先看头一段位移，明显横向才接管，竖着滑交给主页滚动。
+    @State private var dragMode: DrawerDragMode = .undecided
     @State private var didFinishInitialSync = false
     @State private var demoQuickAddPresented = false
 
@@ -18,7 +24,7 @@ struct RootTabView: View {
         // publish its initial [] value first, which previously reset the
         // router to home and left the requested page blank.
         _path = State(initialValue: Self.initialPath())
-        _drawerPresented = State(initialValue: Self.initialDrawerPresented())
+        _drawerProgress = State(initialValue: Self.initialDrawerPresented() ? 1 : 0)
     }
 
     var body: some View {
@@ -31,25 +37,7 @@ struct RootTabView: View {
                     importReviewDestination
                 }
             } else {
-                NavigationStack(path: $path) {
-                    HomeView(onOpenDrawer: { drawerPresented = true })
-                        .navigationDestination(for: AppRouter.Route.self) { route in
-                            switch route {
-                            case .quickAdd:
-                                QuickAddView()
-                            case .search:
-                                TransactionListView(searchMode: true)
-                            case .transactions:
-                                TransactionListView()
-                            case .statistics:
-                                MonthlyStatsView()
-                            case .settings:
-                                SettingsView()
-                            case .importReview:
-                                importReviewDestination
-                            }
-                        }
-                    }
+                drawerShell
             }
         }
         .liquidGlassChrome()
@@ -93,35 +81,6 @@ struct RootTabView: View {
             router.handle(url: url)
             DispatchQueue.main.async { syncPath() }
         }
-        .overlay {
-            if drawerPresented {
-                GeometryReader { proxy in
-                    ZStack(alignment: .leading) {
-                        Color.black.opacity(0.16)
-                            .ignoresSafeArea()
-                            .contentShape(Rectangle())
-                            .onTapGesture { drawerPresented = false }
-
-                        AppDrawerView(
-                            onClose: { drawerPresented = false },
-                            onNavigate: { destination in
-                                drawerPresented = false
-                                navigate(to: destination)
-                            }
-                        )
-                        .frame(width: min(proxy.size.width * 0.78, 320))
-                        .frame(maxHeight: .infinity)
-                         .liquidGlassSurface(cornerRadius: 26)
-                        .clipShape(.rect(bottomTrailingRadius: 26, topTrailingRadius: 26))
-                        .shadow(color: .black.opacity(0.18), radius: 24, x: 8, y: 0)
-                        .transition(.move(edge: .leading))
-                    }
-                }
-                .transition(.opacity)
-                .zIndex(10)
-            }
-        }
-        .animation(.snappy(duration: 0.24), value: drawerPresented)
         .fullScreenCover(isPresented: Binding(
             get: { router.showAssistant },
             set: { router.showAssistant = $0 }
@@ -133,6 +92,136 @@ struct RootTabView: View {
                 .presentationDetents([.fraction(0.84), .large])
                 .presentationDragIndicator(.hidden)
                 .presentationCornerRadius(28)
+        }
+    }
+
+    // MARK: - 推开式抽屉（对齐安卓 main.dart：抽屉在下，主页整张卡片右移）
+
+    private var drawerOpen: Bool { drawerProgress > 0.5 }
+
+    private var drawerShell: some View {
+        GeometryReader { proxy in
+            let drawerWidth = min(max(proxy.size.width * 0.75, 240), 320)
+            let p = drawerProgress
+            let card = DrawerCardShape(radius: 26 * p, insets: proxy.safeAreaInsets)
+
+            ZStack(alignment: .leading) {
+                AppDrawerView(
+                    isOpen: drawerOpen,
+                    onClose: { setDrawer(open: false) },
+                    onNavigate: { destination in
+                        setDrawer(open: false)
+                        navigate(to: destination)
+                    }
+                )
+                .frame(width: drawerWidth)
+                .frame(maxHeight: .infinity)
+                .accessibilityHidden(p < 0.01)
+
+                mainStack
+                    .accessibilityHidden(drawerOpen)
+                    // 抽屉打开时主页盖一层淡底色，点一下或往左拖都能关。
+                    .overlay {
+                        Color(uiColor: .systemBackground)
+                            .opacity(0.22 * p)
+                            .ignoresSafeArea()
+                            .contentShape(Rectangle())
+                            .allowsHitTesting(p > 0.01)
+                            .onTapGesture { setDrawer(open: false) }
+                            .accessibilityElement()
+                            .accessibilityLabel("关闭菜单")
+                            .accessibilityAddTraits(.isButton)
+                            .accessibilityHidden(!drawerOpen)
+                    }
+                    .clipShape(card)
+                    .overlay {
+                        card.stroke(Color.primary.opacity(0.08 * p), lineWidth: 1)
+                            .allowsHitTesting(false)
+                    }
+                    .background {
+                        card.fill(Color(uiColor: .systemBackground))
+                            .shadow(color: .black.opacity(0.14 * p), radius: 24, x: -4, y: 0)
+                            .opacity(p > 0.001 ? 1 : 0)
+                    }
+                    .offset(x: drawerWidth * p)
+            }
+            .simultaneousGesture(
+                drawerDrag(width: drawerWidth),
+                // 只在主页根层可用；进了子页面交给系统的侧滑返回。
+                including: path.isEmpty ? .all : .subviews
+            )
+            .accessibilityAction(.escape) {
+                if drawerOpen { setDrawer(open: false) }
+            }
+        }
+    }
+
+    private var mainStack: some View {
+        NavigationStack(path: $path) {
+            HomeView(onOpenDrawer: { setDrawer(open: true) })
+                .navigationDestination(for: AppRouter.Route.self) { route in
+                    switch route {
+                    case .quickAdd:
+                        QuickAddView()
+                    case .search:
+                        TransactionListView(searchMode: true)
+                    case .transactions:
+                        TransactionListView()
+                    case .statistics:
+                        MonthlyStatsView()
+                    case .settings:
+                        SettingsView()
+                    case .importReview:
+                        importReviewDestination
+                    }
+                }
+        }
+        .liquidGlassCanvas()
+    }
+
+    /// 横向位移 > 24 且 |dx| > |dy|·1.6 才算拖抽屉（同安卓阈值）；
+    /// 关着只认向右拉开，开着只认向左推回。
+    private func drawerDrag(width: CGFloat) -> some Gesture {
+        DragGesture(minimumDistance: 10, coordinateSpace: .global)
+            .onChanged { value in
+                let dx = value.translation.width
+                let dy = value.translation.height
+                if dragMode == .undecided {
+                    if abs(dy) > abs(dx) * 1.6 && abs(dy) > 10 {
+                        dragMode = .ignored
+                    } else if abs(dx) > 24 && abs(dx) > abs(dy) * 1.6 {
+                        let wantsOpen = dx > 0
+                        dragMode = wantsOpen != drawerOpen ? .horizontal : .ignored
+                        dragStartProgress = drawerProgress
+                    }
+                }
+                guard dragMode == .horizontal else { return }
+                drawerProgress = min(max(dragStartProgress + dx / width, 0), 1)
+            }
+            .onEnded { value in
+                defer { dragMode = .undecided }
+                guard dragMode == .horizontal else { return }
+                // 预测位移比当前位移多出来的部分约等于甩动速度。
+                let fling = value.predictedEndTranslation.width - value.translation.width
+                if fling > 120 {
+                    setDrawer(open: true)
+                } else if fling < -120 {
+                    setDrawer(open: false)
+                } else {
+                    setDrawer(open: drawerProgress > 0.5)
+                }
+            }
+    }
+
+    /// 240ms easeOutCubic，与安卓抽屉动画一致。
+    private func setDrawer(open: Bool) {
+        if open {
+            UIApplication.shared.sendAction(
+                #selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil
+            )
+        }
+        withAnimation(.timingCurve(0.215, 0.61, 0.355, 1, duration: 0.24)) {
+            drawerProgress = open ? 1 : 0
         }
     }
 
@@ -206,8 +295,8 @@ struct RootTabView: View {
         case "stats-month", "stats-week", "stats/year", "stats/week", "stats-year", "stats-custom", "stats/custom", "stats/month", "stats/month/ring", "stats/month/trend", "stats/month/trend/income", "stats/month/top5", "stats/month/sources", "stats/month/picker", "stats/month/books", "stats/month/book-selected", "stats/month/pace", "stats/month/pace/activity", "stats/month/pace/detail", "stats/month/budget-ring", "stats/month/cards", "stats/month/cards/optional", "stats/month/insights", "stats/month/heatmap", "stats/month/radar", "stats/month/stacked", "stats/custom/category-detail":
             return [.statistics]
         case "budget", "reconcile", "reimburse", "books", "accounts", "categories", "tags",
-             "memory", "ai-memory", "ai-tasks", "ai-extensions", "ai-schedules", "ai-search",
-             "ai-diagnostics", "ai-local", "savings", "recurring", "assets", "assets/funds", "assets/add", "assets/detail",
+             "memory", "ai-memory", "ai-tasks", "ai-schedules",
+             "ai-diagnostics", "savings", "recurring", "assets", "assets/funds", "assets/add", "assets/detail",
              "assets/purchase", "assets/purchase/form",
              "assets-detail", "liabilities", "net-worth", "import", "import-export",
              "accounts/detail", "accounts-detail",
@@ -259,6 +348,10 @@ struct RootTabView: View {
     }
 }
 
+enum DrawerDragMode {
+    case undecided, horizontal, ignored
+}
+
 enum DrawerDestination {
     case home
     case quickAdd
@@ -269,136 +362,25 @@ enum DrawerDestination {
     case settingsDestination(AppRouter.SettingsDestination)
 }
 
-/// 与 Android RootShell 的左侧抽屉对应。它只负责导航和账本筛选，页面本身
-/// 仍由根 NavigationStack push，避免 iOS 另造一套底部 Tab 信息架构。
-private struct AppDrawerView: View {
-    @Environment(AppRouter.self) private var router
-    @Query(sort: \Book.sortOrder)
-    private var books: [Book]
+/// 主页卡片的裁切形状。卡片内容（背景、顶栏）会延伸到安全区外，所以形状按安全区
+/// 向外扩一圈，关着时（半径 0）等于不裁；打开后圆角随进度出现。
+struct DrawerCardShape: Shape {
+    var radius: CGFloat
+    var insets: EdgeInsets
 
-    let onClose: () -> Void
-    let onNavigate: (DrawerDestination) -> Void
-
-    private let entries: [(String, String, DrawerDestination)] = [
-        ("chart.pie", "统计数据", .statistics),
-        ("shippingbox", "资产管理", .settingsDestination(.assets)),
-        ("gauge.with.needle", "预算管理", .settingsDestination(.budget)),
-        ("target", "存钱目标", .settingsDestination(.savings)),
-        ("cat.fill", "喵助手", .assistant),
-        ("square.grid.2x2", "分类管理", .settingsDestination(.categories)),
-        ("tag", "标签管理", .settingsDestination(.tags)),
-        ("square.and.arrow.down", "导入导出", .settingsDestination(.importExport)),
-        ("arrow.uturn.backward.circle", "待报销", .settingsDestination(.reimburse)),
-        ("clock.badge", "定时记账", .settingsDestination(.recurring)),
-        ("bell", "自动记账", .settingsDestination(.autoRecord))
-    ]
-
-    var body: some View {
-            VStack(alignment: .leading, spacing: 0) {
-                HStack {
-                    Text("肥喵记账")
-                        .font(.title2.weight(.semibold))
-                    Spacer()
-                    Button(action: onClose) {
-                        Image(systemName: "xmark")
-                    }
-                    .liquidGlassCircleControl(size: 44)
-                    .accessibilityLabel("关闭菜单")
-                }
-                .padding(.horizontal, 16)
-                .padding(.top, 14)
-                .padding(.bottom, 12)
-
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 4) {
-                        ForEach(Array(entries.enumerated()), id: \.offset) { _, entry in
-                            drawerRow(icon: entry.0, title: entry.1) {
-                                onNavigate(entry.2)
-                            }
-                        }
-
-                        Divider()
-                            .padding(.vertical, 10)
-
-                        Text("我的账本")
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(.secondary)
-                            .padding(.horizontal, 16)
-                            .padding(.bottom, 4)
-
-                        drawerRow(
-                            icon: "book.closed",
-                            title: "总账本",
-                            selected: router.selectedBookID == nil
-                        ) {
-                            router.selectedBookID = nil
-                            onClose()
-                        }
-                        ForEach(books) { book in
-                            drawerRow(
-                                icon: "book.closed",
-                                title: book.name,
-                                selected: router.selectedBookID == book.stableID
-                            ) {
-                                router.selectedBookID = book.stableID
-                                onClose()
-                            }
-                        }
-
-                        Divider()
-                            .padding(.vertical, 10)
-                        drawerRow(icon: "book.badge.plus", title: "账本管理") {
-                            onNavigate(.settingsDestination(.books))
-                        }
-                        drawerRow(icon: "creditcard", title: "账户管理") {
-                            onNavigate(.settingsDestination(.accounts))
-                        }
-                    }
-                    .padding(.vertical, 8)
-                }
-
-                Divider()
-                HStack(spacing: 10) {
-                    drawerRow(icon: "gearshape", title: "设置") {
-                        onNavigate(.settings)
-                    }
-                    .frame(maxWidth: .infinity)
-                    drawerRow(icon: "archivebox", title: "备份") {
-                        onNavigate(.settingsDestination(.backup))
-                    }
-                    .frame(maxWidth: .infinity)
-                }
-                .padding(12)
-            }
-            .safeAreaPadding()
+    var animatableData: CGFloat {
+        get { radius }
+        set { radius = newValue }
     }
 
-    private func drawerRow(
-        icon: String,
-        title: String,
-        selected: Bool = false,
-        action: @escaping () -> Void
-    ) -> some View {
-        Button(action: action) {
-            HStack(spacing: 12) {
-                Image(systemName: icon)
-                    .frame(width: 24)
-                    .foregroundStyle(selected ? Color.accentColor : .secondary)
-                Text(title)
-                    .font(.body)
-                    .foregroundStyle(selected ? Color.accentColor : .primary)
-                Spacer()
-                if selected { Image(systemName: "checkmark").font(.caption.weight(.semibold)) }
-            }
-            .padding(.horizontal, 16)
-            .frame(minHeight: 48)
-            .background(selected ? Color.accentColor.opacity(0.12) : .clear, in: .rect(cornerRadius: 12))
-        }
-        // Drawer rows are already inside one glass drawer surface. Adding a
-        // glass button style to every row creates nested pills and hides the
-        // selection treatment behind a second white layer.
-        .buttonStyle(.plain)
-        .contentShape(Rectangle())
+    func path(in rect: CGRect) -> Path {
+        let expanded = CGRect(
+            x: rect.minX - insets.leading,
+            y: rect.minY - insets.top,
+            width: rect.width + insets.leading + insets.trailing,
+            height: rect.height + insets.top + insets.bottom
+        )
+        return Path(roundedRect: expanded, cornerRadius: radius, style: .continuous)
     }
 }
 

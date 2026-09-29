@@ -54,8 +54,6 @@ struct MemoryView: View {
                 .liquidGlassCanvas()
             }
         }
-        .navigationTitle("喵学到的分类")
-        .navigationBarTitleDisplayMode(.inline)
         .onAppear { items = CategoryMemoryStore.all() }
     }
 }

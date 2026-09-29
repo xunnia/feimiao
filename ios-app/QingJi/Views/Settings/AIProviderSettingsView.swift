@@ -101,34 +101,11 @@ struct AIProviderSettingsView: View {
             } footer: {
                 Text("授权按服务商保存；同一服务商切换模型不会重复确认，切换服务商会重新确认。")
             }
-
-            Section("扩展能力") {
-                NavigationLink {
-                    AITaskCenterView()
-                } label: {
-                    Label("AI 任务中心", systemImage: "waveform")
-                }
-                NavigationLink {
-                    AIExtensionSettingsView()
-                } label: {
-                    Label("技能与连接", systemImage: "link")
-                }
-                NavigationLink {
-                    AIReportScheduleView()
-                } label: {
-                    Label("定时报表", systemImage: "calendar.badge.clock")
-                }
-                NavigationLink {
-                    LocalModelCompanionView()
-                } label: {
-                    Label("本地模型伴侣", systemImage: "desktopcomputer")
-                }
-            }
         }
         .listStyle(.insetGrouped)
         .scrollContentBackground(.hidden)
         .liquidGlassCanvas()
-        .navigationTitle("AI 与喵助手")
+        .navigationTitle("AI 账号")
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Button {
@@ -368,6 +345,7 @@ private struct AIProviderEditorView: View {
     @State private var endpoint: AIEndpointKind
     @State private var authMethod: AIAuthMethod
     @State private var effort: AIReasoningEffort
+    /// 联网搜索改由聊天 [+] 面板统一控制；这里只把旧值原样带回，不再展示开关。
     @State private var webSearchEnabled: Bool
     @State private var secret = ""
     @State private var storedSecret = ""
@@ -423,7 +401,6 @@ private struct AIProviderEditorView: View {
                             Text(item.label).tag(item)
                         }
                     }
-                    Toggle("允许联网搜索", isOn: $webSearchEnabled)
                 }
 
                 Section("凭据") {

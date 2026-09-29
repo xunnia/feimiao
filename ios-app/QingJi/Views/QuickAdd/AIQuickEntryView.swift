@@ -17,6 +17,8 @@ struct AIQuickEntryView: View {
 
     private let initialText: String?
     private let sharedImageFileName: String?
+    /// 主页 [+]「添加到聊天」选好的附件：第一张图走本机识别出草稿，全部附件一起交给云端。
+    private let initialAttachments: [AIChatAttachment]
 
     @Query(filter: #Predicate<TxCategory> { !$0.isArchived }, sort: \TxCategory.sortOrder)
     private var categories: [TxCategory]
@@ -48,9 +50,14 @@ struct AIQuickEntryView: View {
     @State private var pendingCloudAttachments: [AIChatAttachment] = []
     @State private var cloudRunID: UUID?
 
-    init(initialText: String? = nil, sharedImageFileName: String? = nil) {
+    init(
+        initialText: String? = nil,
+        sharedImageFileName: String? = nil,
+        initialAttachments: [AIChatAttachment] = []
+    ) {
         self.initialText = initialText
         self.sharedImageFileName = sharedImageFileName
+        self.initialAttachments = initialAttachments
         _text = State(initialValue: initialText ?? "")
     }
 
@@ -181,6 +188,9 @@ struct AIQuickEntryView: View {
                 if let sharedImageFileName,
                    let data = ShareIntake.imageData(for: sharedImageFileName) {
                     recognizeImageData(data)
+                }
+                if !initialAttachments.isEmpty {
+                    startWithAttachments(initialAttachments)
                 }
             }
         }
@@ -735,7 +745,19 @@ struct AIQuickEntryView: View {
         }
     }
 
-    private func recognizeImageData(_ data: Data) {
+    /// 带附件进来：有图就拿第一张做本机识别（草稿先出来），所有附件一起送云端；
+    /// 只有文件时直接送云端。
+    private func startWithAttachments(_ attachments: [AIChatAttachment]) {
+        if let firstImage = attachments.first(where: \.isImage), let data = firstImage.data() {
+            recognizeImageData(data, attachments: attachments)
+        } else {
+            parseGeneration += 1
+            let typed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            refineWithCloud(typed.isEmpty ? "请识别附件里的账单并记账" : typed, attachments: attachments)
+        }
+    }
+
+    private func recognizeImageData(_ data: Data, attachments provided: [AIChatAttachment]? = nil) {
         guard let image = UIImage(data: data), let cgImage = image.cgImage else { return }
         isRecognizingImage = true
         Task { @MainActor in
@@ -746,7 +768,14 @@ struct AIQuickEntryView: View {
             let ocrText = observations
                 .compactMap { $0.topCandidates(1).first?.string }
                 .joined(separator: "\n")
-            guard !ocrText.isEmpty else { return }
+            guard !ocrText.isEmpty else {
+                // 本机没认出字（比如是文件截图或小票很糊），附件仍交给云端试一次。
+                if let provided {
+                    parseGeneration += 1
+                    refineWithCloud("请识别附件里的账单并记账", attachments: provided)
+                }
+                return
+            }
 
             var entry = NaturalLanguageEntryParser.parse(ocrText, at: AppClock.now)
             entry.amount = PaymentScreenshotParser.extractAmount(fromOCRText: ocrText) ?? entry.amount
@@ -756,6 +785,12 @@ struct AIQuickEntryView: View {
             entries = [entry]
             matchedCategoryKeys = [resolveCategoryKey(for: entry)]
 
+            if let provided {
+                // 附件已经由「添加到聊天」存好，不再重复保存。
+                imageAttachment = provided.first(where: \.isImage)
+                refineWithCloud(ocrText, attachments: provided)
+                return
+            }
             let uploadData = image.jpegData(compressionQuality: 0.88) ?? data
             imageAttachment = try? AIChatAttachmentStore.persist(
                 data: uploadData,

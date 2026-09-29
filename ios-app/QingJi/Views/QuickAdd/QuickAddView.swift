@@ -730,7 +730,8 @@ private struct ManualDatePickerSheet: View {
     }
 }
 
-private struct CameraImagePicker: UIViewControllerRepresentable {
+/// 系统相机。手动记账的收据拍照和「添加到聊天」面板的相机格共用。
+struct CameraImagePicker: UIViewControllerRepresentable {
     let onImage: (UIImage) -> Void
 
     func makeCoordinator() -> Coordinator {

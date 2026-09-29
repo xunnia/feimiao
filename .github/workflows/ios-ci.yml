@@ -290,11 +290,8 @@ jobs:
           shoot settings/ai 33-ai-settings
           shoot settings/ai-tasks 34-ai-tasks
           shoot settings/ai-diagnostics 35-ai-diagnostics
-          shoot settings/ai-search 36-ai-search
           shoot settings/ai-memory 37-ai-memory
-          shoot settings/ai-extensions 38-ai-extensions
           shoot settings/ai-schedules 39-ai-schedules
-          shoot settings/ai-local 40-ai-local
 
           APP_DATA=$(xcrun simctl get_app_container "$DEVICE" com.qingji.app data)
           test -f "$APP_DATA/Documents/p0-business-ios.json"
@@ -326,9 +323,9 @@ jobs:
             exit 1
           fi
 
-          # 校验：若所有 41 张图都相同，说明导航又失败了，直接让 CI 报错
+          # 校验：若所有 38 张图都相同（41 个场景里 3 个 iOS 已删页不截图），说明导航又失败了，直接让 CI 报错
           UNIQUE=$(md5 -q "$screenshot_dir"/*.png | sort -u | wc -l | tr -d ' ')
-          echo "不同截图数量：$UNIQUE / 41"
+          echo "不同截图数量：$UNIQUE / 38"
           if [ "$UNIQUE" -le 1 ]; then
             echo "::error::截图全部相同，深链/启动参数导航未生效"
             exit 1
@@ -336,7 +333,7 @@ jobs:
 
           # The category drill-down is iOS-only interaction evidence, not a
           # canonical Android/iOS scene. Keep it outside parity metadata and
-          # the 41-image distinct/route checks above.
+          # the 38-image distinct/route checks above.
           interaction_dir="ci-artifacts/ios-interaction-screenshots"
           mkdir -p "$interaction_dir"
           screenshot_dir="$interaction_dir"

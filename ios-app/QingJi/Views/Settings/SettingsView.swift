@@ -59,8 +59,28 @@ struct SettingsView: View {
                     NavigationLink {
                         AIProviderSettingsView()
                     } label: {
-                        Label("AI 记账设置", systemImage: "sparkles")
+                        Label("AI 账号", systemImage: "sparkles")
                     }
+                    NavigationLink {
+                        MemoryHubView()
+                    } label: {
+                        Label("记忆", systemImage: "brain")
+                    }
+                    NavigationLink {
+                        AIReportScheduleView()
+                    } label: {
+                        Label("定时报表", systemImage: "calendar.badge.clock")
+                    }
+                    NavigationLink {
+                        AITaskDiagnosticsView()
+                    } label: {
+                        Label("任务与诊断", systemImage: "waveform.path.ecg")
+                    }
+                } header: {
+                    Text("AI")
+                }
+
+                Section {
                     NavigationLink {
                         BackupView()
                     } label: {
@@ -69,7 +89,7 @@ struct SettingsView: View {
                 } header: {
                     Text("管理")
                 } footer: {
-                    Text("AI、备份和恢复是设置页的系统级选项；预算、资产和导入等业务入口位于主页抽屉。")
+                    Text("预算、资产和导入等业务入口位于主页抽屉。")
                 }
 
                 Section("显示") {
@@ -113,10 +133,17 @@ struct SettingsView: View {
                 }
 
                 Section("关于") {
+                    NavigationLink {
+                        LegalTextView(title: "使用条款", paragraphs: LegalText.terms)
+                    } label: {
+                        Label("使用条款", systemImage: "doc.text")
+                    }
+                    NavigationLink {
+                        LegalTextView(title: "隐私政策", paragraphs: LegalText.privacy)
+                    } label: {
+                        Label("隐私政策", systemImage: "lock")
+                    }
                     LabeledContent("版本", value: appVersion)
-                    Text("本地优先存储，开启 iCloud 后自动多端同步；无广告、无账号。")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
                 }
             }
             .scrollContentBackground(.hidden)
@@ -153,14 +180,11 @@ struct SettingsView: View {
         case .accountDetail: AccountsView(opensFirstDetail: true)
         case .categories: CategoriesView()
         case .tags:      TagsView()
-        case .memory:    MemoryView()
-        case .aiMemory:  AIMemoryView()
-        case .aiTasks:   AITaskCenterView()
-        case .aiExtensions: AIExtensionSettingsView()
+        case .memory:    MemoryHubView(initialTab: .categories)
+        case .aiMemory:  MemoryHubView(initialTab: .aiMemory)
+        case .aiTasks:   AITaskDiagnosticsView(initialTab: .tasks)
         case .aiSchedules: AIReportScheduleView()
-        case .aiSearch:  AIUnifiedSearchView()
-        case .aiDiagnostics: AIDiagnosticsView()
-        case .aiLocal: LocalModelCompanionView()
+        case .aiDiagnostics: AITaskDiagnosticsView(initialTab: .diagnostics)
         case .budget:    BudgetSettingView()
         case .reconcile: ReconcileView()
         case .reimburse: ReimburseView()
@@ -210,7 +234,8 @@ struct SettingsView: View {
 
 }
 
-private struct ProfileAvatar: View {
+/// 头像：设置页顶部和抽屉左下角共用。
+struct ProfileAvatar: View {
     let nickname: String
     let relativePath: String
     let size: CGFloat
@@ -223,11 +248,11 @@ private struct ProfileAvatar: View {
                     .scaledToFill()
             } else if let initial = nickname.trimmingCharacters(in: .whitespacesAndNewlines).first {
                 Text(String(initial))
-                    .font(.title2.weight(.semibold))
+                    .font(.system(size: size * 0.4, weight: .semibold))
                     .foregroundStyle(Color.accentColor)
             } else {
                 Image(systemName: "person.fill")
-                    .font(.title2)
+                    .font(.system(size: size * 0.4))
                     .foregroundStyle(Color.accentColor)
             }
         }

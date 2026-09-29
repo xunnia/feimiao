@@ -640,9 +640,13 @@ final class AIProviderStore {
 
             var probeAccount = catalogue.account
             probeAccount.model = selectedModel
+            probeAccount.webSearchEnabled = false
             _ = try await requestWithOAuthRetry(for: probeAccount) { active, credential in
-                try await AIProviderClient.stream(
-                    account: active,
+                // OAuth 刷新后拿回的是存储里的账号，这里再关一次联网，探活不搜索。
+                var quiet = active
+                quiet.webSearchEnabled = false
+                return try await AIProviderClient.stream(
+                    account: quiet,
                     secret: credential,
                     messages: [AIChatTurn(role: "user", content: "请只回复 OK")],
                     onText: { _ in }
@@ -665,13 +669,16 @@ final class AIProviderStore {
         onText: @escaping (String) -> Void,
         onReasoning: ((String) -> Void)? = nil,
         onSources: (([AIChatSource]) -> Void)? = nil,
-        structuredRecord: Bool = false
+        structuredRecord: Bool = false,
+        webSearch: Bool = false
     ) async throws -> AIChatResponse {
         let started = Date()
         var requestMessages = messages
         var localSources: [AIChatSource] = []
-        if account.webSearchEnabled,
-           AIExtensionSettings.isConnectorEnabled("web_search"),
+        // 联网搜索只认聊天 [+] 面板里的那一个开关（调用方传 webSearch），
+        // 账号上旧的「允许联网搜索」不再生效；结构化记账永远不联网。
+        let searchAllowed = webSearch && !structuredRecord
+        if searchAllowed,
            !account.usesResponses,
            let query = messages.last(where: { $0.role == "user" })?.content,
            AIWebSearch.shouldSearch(query),
@@ -696,8 +703,10 @@ final class AIProviderStore {
         }
         do {
             let request = try await requestWithOAuthRetry(for: account) { active, credential in
-                try await AIProviderClient.stream(
-                    account: active,
+                var effective = active
+                effective.webSearchEnabled = searchAllowed
+                return try await AIProviderClient.stream(
+                    account: effective,
                     secret: credential,
                     messages: requestMessages,
                     onText: onText,

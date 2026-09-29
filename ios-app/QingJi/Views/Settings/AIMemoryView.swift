@@ -54,8 +54,6 @@ struct AIMemoryView: View {
         .listStyle(.insetGrouped)
         .scrollContentBackground(.hidden)
         .liquidGlassCanvas()
-        .navigationTitle("可控记忆")
-        .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Button { showEditor = true } label: {

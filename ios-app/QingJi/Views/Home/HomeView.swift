@@ -141,16 +141,14 @@ struct HomeView: View {
             }
             ToolbarItem(placement: .topBarTrailing) {
                 Menu {
-                    Button {
-                        router.selectedBookID = nil
-                    } label: {
-                        Label("总账本", systemImage: router.selectedBookID == nil ? "checkmark" : "book.closed")
-                    }
-                    ForEach(books) { book in
+                    // 与抽屉「我的账本」同一顺序；总账本就是默认账本（selectedBookID == nil），
+                    // 不再单独多列一行。
+                    ForEach(DrawerLayout.orderedBooks(books)) { book in
+                        let selected = router.selectedBookID.map { $0 == book.stableID } ?? book.isDefault
                         Button {
-                            router.selectedBookID = book.stableID
+                            router.selectedBookID = book.isDefault ? nil : book.stableID
                         } label: {
-                            Label(book.name, systemImage: router.selectedBookID == book.stableID ? "checkmark" : "book.closed")
+                            Label(book.name, systemImage: selected ? "checkmark" : "book.closed")
                         }
                     }
                 } label: {
@@ -739,7 +737,18 @@ private struct HomeRecordInputBar: View {
     @AppStorage("qingji.recordAiMode") private var isAIMode = false
     @State private var showManualEntry = false
     @State private var showAIEntry = false
+    @State private var showAddSheet = false
+    /// [+] 面板选好的附件；面板收起后再带着它打开 AI 记账。
+    @State private var pickedAttachments: [AIChatAttachment] = []
+    @State private var attachmentEntry: AttachmentEntry?
+    @State private var attachmentMessage: String?
     @Namespace private var glassNamespace
+
+    /// 带附件打开 AI 记账的一次请求（手动记账看不了图，带附件一律进 AI）。
+    private struct AttachmentEntry: Identifiable {
+        let id = UUID()
+        let attachments: [AIChatAttachment]
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -754,14 +763,17 @@ private struct HomeRecordInputBar: View {
 
             GlassEffectContainer(spacing: 10) {
                 HStack(spacing: 8) {
-                    Button(action: openSelectedEntry) {
+                    // 和喵助手同一张「添加到聊天」面板（对齐安卓 record_input_bar）。
+                    Button {
+                        showAddSheet = true
+                    } label: {
                         Image(systemName: "plus")
                             .font(.headline.weight(.semibold))
                             .foregroundStyle(.primary)
                     }
                     .liquidGlassCircleControl()
                     .glassEffectID("entry-add", in: glassNamespace)
-                    .accessibilityLabel("添加一笔")
+                    .accessibilityLabel("添加到聊天")
 
                     Button {
                         withAnimation(.snappy(duration: 0.32)) {
@@ -812,6 +824,32 @@ private struct HomeRecordInputBar: View {
         .sheet(isPresented: $showAIEntry) {
             AIQuickEntryView()
                 .presentationDetents([.large])
+        }
+        .sheet(isPresented: $showAddSheet, onDismiss: {
+            guard !pickedAttachments.isEmpty else { return }
+            attachmentEntry = AttachmentEntry(attachments: pickedAttachments)
+            pickedAttachments = []
+        }) {
+            ChatAddSheet(existing: []) { added, message in
+                pickedAttachments = added
+                if let message {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                        attachmentMessage = message
+                    }
+                }
+            }
+        }
+        .sheet(item: $attachmentEntry) { entry in
+            AIQuickEntryView(initialAttachments: entry.attachments)
+                .presentationDetents([.large])
+        }
+        .alert("添加附件", isPresented: Binding(
+            get: { attachmentMessage != nil },
+            set: { if !$0 { attachmentMessage = nil } }
+        )) {
+            Button("好") { attachmentMessage = nil }
+        } message: {
+            Text(attachmentMessage ?? "")
         }
     }
 
