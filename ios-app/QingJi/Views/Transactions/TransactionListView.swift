@@ -39,8 +39,13 @@ struct TransactionListView: View {
         let calendar = Calendar.current
         let start = fromDate.map { calendar.startOfDay(for: $0) }
         let endExclusive = toDate.flatMap { calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: $0)) }
-        let minimumAmount = parsedAmount(minimumAmountText)
-        let maximumAmount = parsedAmount(maximumAmountText)
+        // 最低填得比最高大时自动对调，免得一条都筛不出来（与安卓一致）。
+        var minimumAmount = parsedAmount(minimumAmountText)
+        var maximumAmount = parsedAmount(maximumAmountText)
+        if let lo = minimumAmount, let hi = maximumAmount, lo > hi {
+            minimumAmount = hi
+            maximumAmount = lo
+        }
         let query = normalizedSearchText(searchText)
         let selectedTagName = tagFilterID.flatMap { tagID in
             tags.first(where: { $0.stableID == tagID })?.name
@@ -63,7 +68,8 @@ struct TransactionListView: View {
                 of: snapshot.record(for: transaction),
                 refundTotals: refundTotals
             )
-            let displayedAmount = absolute(netAmount)
+            // 全额退款（净额 0）仍按原价参与金额区间，与安卓一致（用户已定：保留）。
+            let displayedAmount = netAmount == 0 ? absolute(transaction.amount) : absolute(netAmount)
             if let minimumAmount, displayedAmount < minimumAmount { continue }
             if let maximumAmount, displayedAmount > maximumAmount { continue }
 
@@ -98,6 +104,10 @@ struct TransactionListView: View {
             case .income where netAmount > 0:
                 summary.income += netAmount
                 summary.incomeCount += 1
+            case .transfer:
+                // 转账不进收支，单独数笔数和转出金额。
+                summary.transfer += absolute(transaction.amount)
+                summary.transferCount += 1
             default:
                 break
             }
@@ -279,19 +289,31 @@ struct TransactionListView: View {
 
     private func summaryCard(_ summary: TransactionListSummary) -> some View {
         HStack(spacing: 0) {
-            summaryColumn(
-                title: "支出",
-                amount: summary.expense,
-                count: summary.expenseCount,
-                color: .primary
-            )
-            Divider()
-            summaryColumn(
-                title: "收入",
-                amount: summary.income,
-                count: summary.incomeCount,
-                color: .income
-            )
+            // 只筛转账时收支必为 0，只显示转账栏。
+            if kindFilter != .transfer {
+                summaryColumn(
+                    title: "支出",
+                    amount: summary.expense,
+                    count: summary.expenseCount,
+                    color: .primary
+                )
+                Divider()
+                summaryColumn(
+                    title: "收入",
+                    amount: summary.income,
+                    count: summary.incomeCount,
+                    color: .income
+                )
+            }
+            if summary.transferCount > 0 || kindFilter == .transfer {
+                if kindFilter != .transfer { Divider() }
+                summaryColumn(
+                    title: "转账",
+                    amount: summary.transfer,
+                    count: summary.transferCount,
+                    color: .secondary
+                )
+            }
         }
         .padding(.vertical, 6)
         .accessibilityElement(children: .combine)
@@ -390,6 +412,8 @@ private struct TransactionListSummary {
     var expenseCount = 0
     var income: Decimal = 0
     var incomeCount = 0
+    var transfer: Decimal = 0
+    var transferCount = 0
 }
 
 private struct TransactionDaySection {

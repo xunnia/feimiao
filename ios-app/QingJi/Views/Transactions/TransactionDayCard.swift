@@ -95,11 +95,14 @@ struct TransactionDayCard: View {
         let normalized = calendar.startOfDay(for: day)
         let today = calendar.startOfDay(for: AppClock.now)
         let yesterday = calendar.date(byAdding: .day, value: -1, to: today) ?? today
-        let components = calendar.dateComponents([.month, .day, .weekday], from: normalized)
+        let components = calendar.dateComponents([.year, .month, .day, .weekday], from: normalized)
         let month = components.month ?? 1
         let dayOfMonth = components.day ?? 1
         let weekday = Self.weekdays[(components.weekday ?? 2) - 1]
-        let full = "\(month)月\(dayOfMonth)日 周\(weekday)"
+        // 不是今年的日子带年份（搜索结果可能横跨好几年）。
+        let year = components.year == calendar.component(.year, from: today)
+            ? "" : "\(components.year ?? 0)年"
+        let full = "\(year)\(month)月\(dayOfMonth)日 周\(weekday)"
         if normalized == today { return "今天 · \(full)" }
         if normalized == yesterday { return "昨天 · \(full)" }
         return full

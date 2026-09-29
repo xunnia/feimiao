@@ -353,11 +353,8 @@ jobs:
           shoot settings/ai 33-ai-settings
           shoot settings/ai-tasks 34-ai-tasks
           shoot settings/ai-diagnostics 35-ai-diagnostics
-          shoot settings/ai-search 36-ai-search
           shoot settings/ai-memory 37-ai-memory
-          shoot settings/ai-extensions 38-ai-extensions
           shoot settings/ai-schedules 39-ai-schedules
-          shoot settings/ai-local 40-ai-local
 
           APP_DATA=$(xcrun simctl get_app_container "$DEVICE" com.qingji.app data)
           test -f "$APP_DATA/Documents/p0-business-ios.json"

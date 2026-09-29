@@ -60,8 +60,6 @@ struct AITaskCenterView: View {
         .listStyle(.insetGrouped)
         .scrollContentBackground(.hidden)
         .liquidGlassCanvas()
-        .navigationTitle("AI 任务中心")
-        .navigationBarTitleDisplayMode(.inline)
     }
 
     private func subtitle(for run: AIRequestRunRecord) -> String {
@@ -161,72 +159,6 @@ struct AITaskDetailView: View {
         .liquidGlassCanvas()
         .navigationTitle("AI 任务详情")
         .navigationBarTitleDisplayMode(.inline)
-    }
-}
-
-/// 技能和连接器都是白名单能力；关闭后请求层不会调用对应的外部能力。
-@MainActor
-struct AIExtensionSettingsView: View {
-    @State private var refreshToken = UUID()
-
-    var body: some View {
-        List {
-            Section("内置技能") {
-                ForEach(AIExtensionCatalog.skills) { skill in
-                    Toggle(isOn: binding(forSkill: skill.id)) {
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text(skill.title)
-                            Text(skill.subtitle)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                    .id("\(skill.id)-\(refreshToken)")
-                }
-            }
-            Section {
-                ForEach(AIExtensionCatalog.connectors) { connector in
-                    Toggle(isOn: binding(forConnector: connector.id)) {
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text(connector.title)
-                            Text(connector.subtitle)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                    .id("\(connector.id)-\(refreshToken)")
-                }
-            } header: {
-                Text("受控连接器")
-            } footer: {
-                Text("联网搜索只访问公开网页；本地模型伴侣只允许本机回环地址，不会执行远程脚本或命令。")
-            }
-        }
-        .listStyle(.insetGrouped)
-        .scrollContentBackground(.hidden)
-        .liquidGlassCanvas()
-        .navigationTitle("技能与连接")
-        .navigationBarTitleDisplayMode(.inline)
-    }
-
-    private func binding(forSkill id: String) -> Binding<Bool> {
-        Binding(
-            get: { AIExtensionSettings.isSkillEnabled(id) },
-            set: {
-                AIExtensionSettings.setSkillEnabled($0, id: id)
-                refreshToken = UUID()
-            }
-        )
-    }
-
-    private func binding(forConnector id: String) -> Binding<Bool> {
-        Binding(
-            get: { AIExtensionSettings.isConnectorEnabled(id) },
-            set: {
-                AIExtensionSettings.setConnectorEnabled($0, id: id)
-                refreshToken = UUID()
-            }
-        )
     }
 }
 
@@ -346,139 +278,6 @@ struct AIReportScheduleView: View {
     }
 }
 
-/// 安卓“统一搜索”的 iOS 对应页：账单、对话和 AI 任务统一只读检索。
-@MainActor
-struct AIUnifiedSearchView: View {
-    @Environment(AppRouter.self) private var router
-    @Query(sort: \MoneyTransaction.date, order: .reverse)
-    private var transactions: [MoneyTransaction]
-    @Query(sort: \AIChatMessage.createdAt, order: .reverse)
-    private var messages: [AIChatMessage]
-    @Query(sort: \AIRequestRunRecord.updatedAt, order: .reverse)
-    private var runs: [AIRequestRunRecord]
-    @State private var query = ""
-
-    private var normalizedQuery: String {
-        query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-    }
-
-    private var matchingTransactions: [MoneyTransaction] {
-        guard !normalizedQuery.isEmpty else { return [] }
-        return transactions.filter { transaction in
-            [
-                transaction.note,
-                transaction.merchantName,
-                transaction.productName,
-                transaction.category?.name ?? "",
-                transaction.account?.name ?? "",
-                transaction.amount.description,
-            ].contains { $0.lowercased().contains(normalizedQuery) }
-        }.prefix(20).map { $0 }
-    }
-
-    private var matchingMessages: [AIChatMessage] {
-        guard !normalizedQuery.isEmpty else { return [] }
-        return messages.filter {
-            $0.content.lowercased().contains(normalizedQuery)
-        }.prefix(20).map { $0 }
-    }
-
-    private var matchingRuns: [AIRequestRunRecord] {
-        guard !normalizedQuery.isEmpty else { return [] }
-        return runs.filter {
-            [
-                $0.mode.label,
-                $0.status.label,
-                $0.providerLabel,
-                $0.model,
-                $0.resultSummary,
-                $0.errorMessage,
-            ].contains { $0.lowercased().contains(normalizedQuery) }
-        }.prefix(20).map { $0 }
-    }
-
-    var body: some View {
-        List {
-            if normalizedQuery.isEmpty {
-                ContentUnavailableView(
-                    "搜索账单、对话或 AI 任务",
-                    systemImage: "magnifyingglass",
-                    description: Text("输入关键词开始搜索")
-                )
-                .listRowBackground(Color.clear)
-            } else if matchingTransactions.isEmpty && matchingMessages.isEmpty && matchingRuns.isEmpty {
-                ContentUnavailableView(
-                    "没有匹配结果",
-                    systemImage: "questionmark",
-                    description: Text("换一个关键词试试")
-                )
-                .listRowBackground(Color.clear)
-            } else {
-                if !matchingTransactions.isEmpty {
-                    Section("账单") {
-                        ForEach(matchingTransactions) { transaction in
-                            Button {
-                                router.selectedTab = .transactions
-                            } label: {
-                                HStack {
-                                    Image(systemName: "yensign.circle")
-                                        .foregroundStyle(Color.accentColor)
-                                    VStack(alignment: .leading, spacing: 3) {
-                                        Text(transaction.note.isEmpty ? "未命名交易" : transaction.note)
-                                            .foregroundStyle(.primary)
-                                        Text(transaction.date, format: .dateTime.year().month().day())
-                                            .font(.caption)
-                                            .foregroundStyle(.secondary)
-                                    }
-                                    Spacer()
-                                    Text(MoneyFormat.string(transaction.amount, currencyCode: transaction.currencyCode))
-                                        .font(.caption.monospacedDigit())
-                                        .foregroundStyle(.secondary)
-                                }
-                            }
-                        }
-                    }
-                }
-                if !matchingMessages.isEmpty {
-                    Section("对话") {
-                        ForEach(matchingMessages) { message in
-                            VStack(alignment: .leading, spacing: 3) {
-                                Text(message.role == "user" ? "用户消息" : "喵助手")
-                                    .font(.caption.weight(.medium))
-                                Text(message.content)
-                                    .font(.subheadline)
-                                    .lineLimit(2)
-                            }
-                        }
-                    }
-                }
-                if !matchingRuns.isEmpty {
-                    Section("AI 任务") {
-                        ForEach(matchingRuns) { run in
-                            NavigationLink {
-                                AITaskDetailView(run: run)
-                            } label: {
-                                VStack(alignment: .leading, spacing: 3) {
-                                    Text(run.mode.label)
-                                    Text("\(run.status.label) · \(run.providerLabel) · \(run.model)")
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        .listStyle(.insetGrouped)
-        .scrollContentBackground(.hidden)
-        .liquidGlassCanvas()
-        .navigationTitle("统一搜索")
-        .navigationBarTitleDisplayMode(.inline)
-        .searchable(text: $query, prompt: "搜索账单、对话或 AI 任务")
-    }
-}
-
 /// 脱敏 AI 诊断：只从本机运行记录汇总健康状态。
 @MainActor
 struct AIDiagnosticsView: View {
@@ -590,8 +389,6 @@ struct AIDiagnosticsView: View {
         .listStyle(.insetGrouped)
         .scrollContentBackground(.hidden)
         .liquidGlassCanvas()
-        .navigationTitle("AI 诊断")
-        .navigationBarTitleDisplayMode(.inline)
     }
 
     private func healthSymbol(for health: AIProviderHealth) -> String {

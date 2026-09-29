@@ -37,7 +37,7 @@ final class AppRouter {
 
     /// 设置页接到深链后要 push 的子页面。
     enum SettingsDestination: Hashable {
-        case books, accounts, accountDetail, categories, tags, memory, aiMemory, aiTasks, aiExtensions, aiSchedules, aiSearch, aiDiagnostics, aiLocal, budget, reconcile, reimburse, reimburseSettlement, savings, recurring, assets, assetFunds, assetAdd, assetPurchase, assetPurchaseForm, assetDetail, liabilities, netWorth, importReview, importExport, reports, backup, display, theme, moneyDisplay, autoRecord, ai
+        case books, accounts, accountDetail, categories, tags, memory, aiMemory, aiTasks, aiSchedules, aiDiagnostics, budget, reconcile, reimburse, reimburseSettlement, savings, recurring, assets, assetFunds, assetAdd, assetPurchase, assetPurchaseForm, assetDetail, liabilities, netWorth, importReview, importExport, reports, backup, display, theme, moneyDisplay, autoRecord, ai
     }
     var settingsPushTarget: SettingsDestination? = nil
 
@@ -126,11 +126,8 @@ final class AppRouter {
         case "memory":       selectedTab = .settings;   settingsPushTarget = .memory
         case "ai-memory":    selectedTab = .settings;   settingsPushTarget = .aiMemory
         case "ai-tasks":     selectedTab = .settings;   settingsPushTarget = .aiTasks
-        case "ai-extensions": selectedTab = .settings; settingsPushTarget = .aiExtensions
         case "ai-schedules": selectedTab = .settings; settingsPushTarget = .aiSchedules
-        case "ai-search":     selectedTab = .settings; settingsPushTarget = .aiSearch
         case "ai-diagnostics": selectedTab = .settings; settingsPushTarget = .aiDiagnostics
-        case "ai-local":       selectedTab = .settings; settingsPushTarget = .aiLocal
         case "savings":      selectedTab = .settings;   settingsPushTarget = .savings
         case "recurring":    selectedTab = .settings;   settingsPushTarget = .recurring
         case "assets-detail", "assets/detail":
@@ -218,11 +215,8 @@ final class AppRouter {
             case "memory":    settingsPushTarget = .memory
             case "ai-memory": settingsPushTarget = .aiMemory
             case "ai-tasks": settingsPushTarget = .aiTasks
-            case "ai-extensions": settingsPushTarget = .aiExtensions
             case "ai-schedules": settingsPushTarget = .aiSchedules
-            case "ai-search": settingsPushTarget = .aiSearch
             case "ai-diagnostics": settingsPushTarget = .aiDiagnostics
-            case "ai-local": settingsPushTarget = .aiLocal
             case "savings":   settingsPushTarget = .savings
             case "recurring": settingsPushTarget = .recurring
             case "assets":

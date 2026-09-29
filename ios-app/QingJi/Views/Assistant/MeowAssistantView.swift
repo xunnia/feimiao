@@ -35,9 +35,8 @@ struct MeowAssistantView: View {
     @State private var sessionID: UUID?
     @State private var didLoad = false
     @State private var requestTask: Task<Void, Never>?
-    @State private var photoItems: [PhotosPickerItem] = []
     @State private var attachments: [AIChatAttachment] = []
-    @State private var showFileImporter = false
+    @State private var showAddSheet = false
     @State private var reasoningByTurn: [UUID: String] = [:]
     @State private var sourcesByTurn: [UUID: [AIChatSource]] = [:]
     @State private var recordCards: [UUID: AIRecordCardState] = [:]
@@ -134,12 +133,16 @@ struct MeowAssistantView: View {
             } message: {
                 Text(confirmationMessage ?? "")
             }
-            .fileImporter(
-                isPresented: $showFileImporter,
-                allowedContentTypes: [.item],
-                allowsMultipleSelection: true
-            ) { result in
-                importFiles(result)
+            .sheet(isPresented: $showAddSheet) {
+                ChatAddSheet(existing: attachments) { added, message in
+                    attachments.append(contentsOf: added)
+                    if let message {
+                        // 等面板收起再弹提示，避免和关面板的动画抢。
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                            attachmentMessage = message
+                        }
+                    }
+                }
             }
             .sheet(item: $pendingConsentAccount) { account in
                 AIPrivacyConsentSheet(
@@ -322,25 +325,14 @@ struct MeowAssistantView: View {
             }
             GlassEffectContainer(spacing: 10) {
                 HStack(alignment: .bottom, spacing: 10) {
-                Menu {
-                    PhotosPicker(
-                        selection: $photoItems,
-                        maxSelectionCount: AIChatAttachmentStore.maxImages,
-                        matching: .images
-                    ) {
-                        Label("选择照片", systemImage: "photo.on.rectangle")
-                    }
-                    Button {
-                        showFileImporter = true
-                    } label: {
-                        Label("选择文件", systemImage: "doc")
-                    }
+                Button {
+                    showAddSheet = true
                 } label: {
                     Image(systemName: "plus")
                         .font(.headline.weight(.semibold))
                 }
                 .liquidGlassCircleControl(size: 44)
-                .accessibilityLabel("添加附件")
+                .accessibilityLabel("添加到聊天")
 
                 TextField("问问你的账本", text: $draft, axis: .vertical)
                     .lineLimit(1...5)
@@ -374,11 +366,6 @@ struct MeowAssistantView: View {
             in: .rect(cornerRadius: 26)
         )
         .padding(.horizontal, 12)
-        .onChange(of: photoItems) { _, items in
-            guard !items.isEmpty else { return }
-            importPhotos(items)
-            photoItems = []
-        }
     }
 
     private var attachmentStrip: some View {
@@ -575,7 +562,8 @@ struct MeowAssistantView: View {
                             in: context
                         )
                     },
-                    structuredRecord: recordSession
+                    structuredRecord: recordSession,
+                    webSearch: ChatWebSearchPreference.isEnabled
                 )
                 var recordCard: AIRecordCardState?
                 if recordSession,
@@ -904,63 +892,6 @@ struct MeowAssistantView: View {
 
     private func looksReimbursable(_ value: String) -> Bool {
         value.range(of: "报销|出差|差旅|垫付|公司报|帮公司|公司的|因公|客户招待|招待费", options: .regularExpression) != nil
-    }
-
-    private func importPhotos(_ items: [PhotosPickerItem]) {
-        Task { @MainActor in
-            var added: [AIChatAttachment] = []
-            for item in items.prefix(AIChatAttachmentStore.maxImages) {
-                guard let raw = try? await item.loadTransferable(type: Data.self),
-                      let image = UIImage(data: raw),
-                      let data = image.jpegData(compressionQuality: 0.88) else { continue }
-                if data.count > AIChatAttachmentStore.maxImageBytes {
-                    attachmentMessage = "图片不能超过 20 MB。"
-                    continue
-                }
-                if attachments.filter(\.isImage).count + added.count >= AIChatAttachmentStore.maxImages {
-                    attachmentMessage = "一次最多发送 3 张图片。"
-                    break
-                }
-                if let attachment = try? AIChatAttachmentStore.persist(
-                    data: data,
-                    name: "支付截图-\(added.count + 1).jpg",
-                    mimeType: "image/jpeg"
-                ) {
-                    added.append(attachment)
-                }
-            }
-            attachments.append(contentsOf: added)
-        }
-    }
-
-    private func importFiles(_ result: Result<[URL], Error>) {
-        do {
-            let urls = try result.get()
-            var added: [AIChatAttachment] = []
-            for url in urls.prefix(AIChatAttachmentStore.maxFiles) {
-                let scoped = url.startAccessingSecurityScopedResource()
-                defer { if scoped { url.stopAccessingSecurityScopedResource() } }
-                let data = try Data(contentsOf: url, options: [.mappedIfSafe])
-                guard !data.isEmpty else { continue }
-                if data.count > AIChatAttachmentStore.maxFileBytes {
-                    attachmentMessage = "文件不能超过 50 MB：\(url.lastPathComponent)"
-                    continue
-                }
-                let mime = UTType(filenameExtension: url.pathExtension)?.preferredMIMEType
-                    ?? "application/octet-stream"
-                if let attachment = try? AIChatAttachmentStore.persist(
-                    data: data,
-                    name: url.lastPathComponent,
-                    mimeType: mime
-                ) {
-                    added.append(attachment)
-                }
-            }
-            let existingFiles = attachments.filter { !$0.isImage }.count
-            attachments.append(contentsOf: added.prefix(max(0, AIChatAttachmentStore.maxFiles - existingFiles)))
-        } catch {
-            attachmentMessage = "无法读取附件：\(error.localizedDescription)"
-        }
     }
 
     private func systemPrompt(for query: String) -> String {

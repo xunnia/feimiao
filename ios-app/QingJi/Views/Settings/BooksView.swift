@@ -77,24 +77,7 @@ struct BooksView: View {
             BookEditorSheet(book: book, nextSortOrder: book.sortOrder)
                 .presentationDetents([.medium, .large])
         }
-        .confirmationDialog(
-            "删除账本？",
-            isPresented: Binding(
-                get: { bookToDelete != nil },
-                set: { if !$0 { bookToDelete = nil } }
-            ),
-            titleVisibility: .visible
-        ) {
-            Button("删除并移到账本总账", role: .destructive) {
-                if let book = bookToDelete {
-                    delete(book)
-                }
-                bookToDelete = nil
-            }
-            Button("取消", role: .cancel) { bookToDelete = nil }
-        } message: {
-            Text("该账本中的历史账单会保留，并转回总账本。")
-        }
+        .bookDeleteFlow($bookToDelete)
         .alert("操作失败", isPresented: Binding(
             get: { errorMessage != nil },
             set: { if !$0 { errorMessage = nil } }
@@ -107,7 +90,7 @@ struct BooksView: View {
 
     private func bookRow(_ book: Book) -> some View {
         HStack(spacing: 12) {
-            BookCoverView(cover: book.cover, size: 48)
+            BookCoverView(cover: book.cover, height: 48)
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 6) {
                     Text(book.name)
@@ -163,22 +146,6 @@ struct BooksView: View {
         saveContext()
     }
 
-    private func delete(_ book: Book) {
-        guard !book.isDefault,
-              let fallback = books.first(where: { $0.isDefault })
-                ?? books.first(where: { $0.persistentModelID != book.persistentModelID }) else {
-            errorMessage = "至少需要保留一个总账本。"
-            return
-        }
-        let transactions = (try? context.fetch(FetchDescriptor<MoneyTransaction>())) ?? []
-        for transaction in transactions where transaction.book?.persistentModelID == book.persistentModelID {
-            transaction.book = fallback
-            transaction.updatedAt = Date()
-        }
-        context.delete(book)
-        saveContext()
-    }
-
     private func saveContext() {
         do {
             try context.save()
@@ -189,68 +156,8 @@ struct BooksView: View {
     }
 }
 
-private enum BookCoverCatalog {
-    static let choices = ["daily", "food", "shopping", "travel", "pet", "family", "business", "couple"]
-
-    static func name(_ cover: String) -> String {
-        switch cover {
-        case "daily": return "日常"
-        case "food": return "餐饮"
-        case "shopping": return "网购"
-        case "travel": return "旅行"
-        case "pet": return "宠物"
-        case "family": return "家庭"
-        case "business": return "生意"
-        case "couple": return "情侣"
-        default: return "默认"
-        }
-    }
-
-    static func symbol(_ cover: String) -> String {
-        switch cover {
-        case "daily": return "sun.max.fill"
-        case "food": return "fork.knife"
-        case "shopping": return "bag.fill"
-        case "travel": return "airplane"
-        case "pet": return "pawprint.fill"
-        case "family": return "house.fill"
-        case "business": return "briefcase.fill"
-        case "couple": return "heart.fill"
-        default: return "book.closed.fill"
-        }
-    }
-
-    static func color(_ cover: String) -> Color {
-        switch cover {
-        case "daily": return Color(red: 0.36, green: 0.55, blue: 0.67)
-        case "food": return Color(red: 0.78, green: 0.49, blue: 0.35)
-        case "shopping": return Color(red: 0.46, green: 0.46, blue: 0.65)
-        case "travel": return Color(red: 0.35, green: 0.60, blue: 0.58)
-        case "pet": return Color(red: 0.68, green: 0.55, blue: 0.42)
-        case "family": return Color(red: 0.55, green: 0.48, blue: 0.63)
-        case "business": return Color(red: 0.30, green: 0.39, blue: 0.50)
-        case "couple": return Color(red: 0.75, green: 0.42, blue: 0.48)
-        default: return Color.accentColor
-        }
-    }
-}
-
-private struct BookCoverView: View {
-    let cover: String
-    let size: CGFloat
-
-    var body: some View {
-        Image(systemName: BookCoverCatalog.symbol(cover))
-            .font(.system(size: size * 0.38, weight: .semibold))
-            .foregroundStyle(.white)
-            .frame(width: size * 0.78, height: size)
-            .background(BookCoverCatalog.color(cover), in: .rect(cornerRadius: size * 0.14))
-            .shadow(color: .black.opacity(0.12), radius: 3, y: 2)
-            .accessibilityLabel(BookCoverCatalog.name(cover))
-    }
-}
-
-private struct BookEditorSheet: View {
+/// 新建/编辑账本。抽屉底部「新建账本」、账本 ⋯ 菜单「编辑」和账本管理页共用。
+struct BookEditorSheet: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var context
 
@@ -268,7 +175,7 @@ private struct BookEditorSheet: View {
         self.nextSortOrder = nextSortOrder
         _name = State(initialValue: book?.name ?? "")
         _remark = State(initialValue: book?.remark ?? "")
-        _cover = State(initialValue: book?.cover ?? "daily")
+        _cover = State(initialValue: BookCoverCatalog.key(for: book?.cover ?? ""))
         _isStarred = State(initialValue: book?.isStarred ?? false)
         _includeInTotal = State(initialValue: book?.includeInTotal ?? true)
     }
@@ -297,7 +204,7 @@ private struct BookEditorSheet: View {
                                     cover = choice
                                 } label: {
                                     VStack(spacing: 5) {
-                                        BookCoverView(cover: choice, size: 64)
+                                        BookCoverView(cover: choice, height: 64)
                                             .overlay(alignment: .topTrailing) {
                                                 if cover == choice {
                                                     Image(systemName: "checkmark.circle.fill")
@@ -348,14 +255,14 @@ private struct BookEditorSheet: View {
         if let book {
             book.name = cleanName
             book.remark = remark.trimmingCharacters(in: .whitespacesAndNewlines)
-            book.cover = cover
+            book.cover = BookCoverCatalog.storedValue(for: cover)
             book.isStarred = isStarred
             if !book.isDefault { book.includeInTotal = includeInTotal }
             book.updatedAt = Date()
         } else {
             context.insert(Book(
                 name: cleanName,
-                cover: cover,
+                cover: BookCoverCatalog.storedValue(for: cover),
                 remark: remark.trimmingCharacters(in: .whitespacesAndNewlines),
                 sortOrder: nextSortOrder,
                 isStarred: isStarred,
