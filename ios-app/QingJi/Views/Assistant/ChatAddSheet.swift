@@ -263,7 +263,6 @@ struct ChatAddSheet: View {
             .photosPickerStyle(.inline)
             .photosPickerDisabledCapabilities([.search, .collectionNavigation, .stagingArea, .selectionActions])
             .photosPickerAccessoryVisibility(.hidden, edges: .all)
-            .photosPickerAxes(.horizontal)
             .frame(height: 94)
             .clipShape(.rect(cornerRadius: 18))
             .disabled(remainingImages == 0)
