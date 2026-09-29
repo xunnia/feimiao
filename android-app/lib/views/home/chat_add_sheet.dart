@@ -14,11 +14,10 @@ import '../../widgets/pressable_scale.dart';
 import '../../widgets/settings_ui.dart';
 import '../common/app_sheet.dart';
 
-/// The attachment/tools sheet used by the full-screen Chats experience.
+/// 「添加到聊天」面板：相机 / 照片 / 添加文件 / 工具权限 / 联网搜索。
 ///
-/// This deliberately has its own surface instead of reusing
-/// [showRecordExtrasSheet]. The home record launcher still owns the old
-/// screenshot/import/export actions; Chats only exposes chat actions here.
+/// 喵助手输入框的 [+] 和主页「记一记」的 [+] 共用这一张，保证同类同设计。
+/// 主页选完附件后会打开 AI 记账并把附件放进输入框。
 Future<void> showChatAddSheet(
   BuildContext context, {
   required Future<void> Function(List<ChatAttachment> attachments)

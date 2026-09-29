@@ -1,13 +1,16 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../../core/haptics.dart';
+import '../../core/media/chat_attachment.dart';
 import '../../data/app_repository.dart';
 import '../../widgets/glass.dart';
 import '../../widgets/glass_input.dart';
 import '../../widgets/pressable_scale.dart';
+import 'chat_add_sheet.dart';
 import 'record_entry_sheet.dart';
-import 'record_extras_sheet.dart';
 
 /// 底部启动器卡片（对标 Claude 输入框）。
 ///
@@ -61,7 +64,10 @@ class _RecordInputBarState extends State<RecordInputBar> {
 
   // ── 打开手动大卡片 ─────────────────────────────────────────────────────────
 
-  Future<void> _openEntry(bool ai) async {
+  Future<void> _openEntry(
+    bool ai, {
+    List<ChatAttachment> attachments = const [],
+  }) async {
     if (_sheetOpen) return;
     final repo = context.read<AppRepository>();
     if (repo.isInitializing) await repo.ready;
@@ -76,6 +82,7 @@ class _RecordInputBarState extends State<RecordInputBar> {
       await showRecordEntrySheet(
         context,
         initialMode: ai ? RecordEntryMode.ai : RecordEntryMode.manual,
+        initialAttachments: attachments,
         onModeChanged: (nextAi) {
           if (!mounted || _isAiMode == nextAi) return;
           setState(() => _isAiMode = nextAi);
@@ -92,7 +99,31 @@ class _RecordInputBarState extends State<RecordInputBar> {
     }
   }
 
-  // ── 打开 AI 聚焦输入 ──────────────────────────────────────────────────────
+  // ── [+]：和喵助手同一张「添加到聊天」面板 ────────────────────────────────
+  //
+  // 相机 / 最近照片 / 全部照片 / 添加文件 / 工具权限 / 联网搜索。
+  // 选好附件后直接打开 AI 记账并把附件放进输入框；手动记账看不了图，
+  // 所以带附件时一律进 AI 模式。旧的「更多功能」（截图识别 / 导入导出）
+  // 已下线：导入导出在抽屉里，「分享到肥喵」的图片仍走本机 OCR。
+
+  Future<void> _openAddSheet() async {
+    if (_sheetOpen) return;
+    final repo = context.read<AppRepository>();
+    if (repo.isInitializing) await repo.ready;
+    if (!mounted || repo.initializationError != null) return;
+    await showChatAddSheet(
+      context,
+      webSearchEnabled: repo.chatWebSearchAllowed,
+      onWebSearchChanged: repo.setChatWebSearchEnabled,
+      toolAccess: repo.chatToolAccess,
+      onToolAccessChanged: repo.setChatToolAccess,
+      onAttachmentsPicked: (attachments) async {
+        // 面板已关；不 await，免得面板那边一直挂到记账页关闭。
+        if (!mounted || attachments.isEmpty) return;
+        unawaited(_openEntry(true, attachments: attachments));
+      },
+    );
+  }
 
   // ── 发送 / 点击输入区 ─────────────────────────────────────────────────────
 
@@ -144,8 +175,9 @@ class _RecordInputBarState extends State<RecordInputBar> {
               Row(
                 children: [
                   _ToolCircleButton(
+                    key: const ValueKey('home-record-plus-button'),
                     icon: Icons.add,
-                    onTap: () => showRecordExtrasSheet(context),
+                    onTap: _openAddSheet,
                   ),
                   const SizedBox(width: 6),
                   _ModePill(

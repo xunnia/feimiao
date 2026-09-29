@@ -69,16 +69,34 @@ class AmountExpression {
     _parts[_parts.length - 1] = current;
   }
 
-  /// 按下 "+"：结束当前数字，开始输入下一段（加）。当前段无法解析为数字时忽略。
+  /// 按下 "+"：结束当前数字，开始输入下一段（加）。
+  /// 刚按过运算符（当前段为空）时改成 "+"；首段为空时忽略。
   void beginAddition() => _appendTerm(1);
 
-  /// 按下 "−"：结束当前数字，开始输入下一段（减）。当前段无法解析为数字时忽略。
+  /// 按下 "−"：结束当前数字，开始输入下一段（减）。
+  /// 刚按过运算符（当前段为空）时改成 "−"；首段为空时忽略。
   void beginSubtraction() => _appendTerm(-1);
 
   void _appendTerm(int sign) {
+    if (_parts.last.isEmpty && _parts.length > 1) {
+      // 连按两个运算符 = 改主意，替换刚才那个。
+      _signs[_signs.length - 1] = sign;
+      return;
+    }
     if (Decimal.tryParse(_parts.last) == null) return;
     _parts.add('');
     _signs.add(sign);
+  }
+
+  /// 为什么现在不能保存；能保存时返回 null。键盘和保存入口共用这句话。
+  String? get invalidReason {
+    final total = value;
+    if (total > Decimal.zero) return null;
+    if (isEmpty) return '先输入金额';
+    if (total < Decimal.zero) {
+      return '合计是 ${total.toStringAsFixed(2)}，要大于 0 才能记';
+    }
+    return '金额要大于 0';
   }
 
   void deleteBackward() {

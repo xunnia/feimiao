@@ -193,6 +193,13 @@ class _HierarchicalCategoryPickerState
   static const double _rowExtent = 92;
   static const double _maxRowsHeight = 184;
   final LayerLink _panelLink = LayerLink();
+  final ScrollController _rowsScroll = ScrollController();
+
+  @override
+  void dispose() {
+    _rowsScroll.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -213,6 +220,7 @@ class _HierarchicalCategoryPickerState
           );
     final rootHeight =
         rows.isEmpty ? 0.0 : min(rows.length * _rowExtent + 4, _maxRowsHeight);
+    final hasMoreRows = rows.length * _rowExtent > _maxRowsHeight;
     final reservedPanelHeight = panelOpen && widget.obscuredChild == null
         ? min(232.0, ((widget.children.length + 5) ~/ 6) * 76.0 + 20)
         : 0.0;
@@ -229,39 +237,48 @@ class _HierarchicalCategoryPickerState
                 if (rows.isNotEmpty)
                   SizedBox(
                     height: rootHeight,
-                    child: ListView.builder(
-                      padding: EdgeInsets.zero,
-                      physics: const ClampingScrollPhysics(),
-                      itemExtent: _rowExtent,
-                      itemCount: rows.length,
-                      itemBuilder: (context, index) {
-                        final row = SizedBox(
-                          height: _rowExtent,
-                          child: _CategoryRowGrid(
-                            categories: rows[index],
-                            selectedId: widget.selectedParentId,
-                            expandableIds: widget.expandableIds,
-                            expandedId: widget.expandedParentId,
-                            subLabels: {
-                              for (final entry in widget.subLabels.entries)
-                                if (entry.value.isNotEmpty)
-                                  entry.key: entry.value,
-                            },
-                            onSelected: widget.onParentSelected,
-                          ),
-                        );
-                        if (index == activeRow) {
-                          return CompositedTransformTarget(
-                            link: _panelLink,
+                    // 超过两行时常驻一条细滚动条，提示下面还有分类。
+                    child: Scrollbar(
+                      key: const ValueKey('category-rows-scrollbar'),
+                      controller: _rowsScroll,
+                      thumbVisibility: hasMoreRows,
+                      thickness: 3,
+                      radius: const Radius.circular(2),
+                      child: ListView.builder(
+                        controller: _rowsScroll,
+                        padding: EdgeInsets.zero,
+                        physics: const ClampingScrollPhysics(),
+                        itemExtent: _rowExtent,
+                        itemCount: rows.length,
+                        itemBuilder: (context, index) {
+                          final row = SizedBox(
+                            height: _rowExtent,
+                            child: _CategoryRowGrid(
+                              categories: rows[index],
+                              selectedId: widget.selectedParentId,
+                              expandableIds: widget.expandableIds,
+                              expandedId: widget.expandedParentId,
+                              subLabels: {
+                                for (final entry in widget.subLabels.entries)
+                                  if (entry.value.isNotEmpty)
+                                    entry.key: entry.value,
+                              },
+                              onSelected: widget.onParentSelected,
+                            ),
+                          );
+                          if (index == activeRow) {
+                            return CompositedTransformTarget(
+                              link: _panelLink,
+                              child: row,
+                            );
+                          }
+                          return _CategoryObscuredRegion(
+                            obscured: panelOpen,
+                            onTap: widget.onClosePanel,
                             child: row,
                           );
-                        }
-                        return _CategoryObscuredRegion(
-                          obscured: panelOpen,
-                          onTap: widget.onClosePanel,
-                          child: row,
-                        );
-                      },
+                        },
+                      ),
                     ),
                   ),
                 if (widget.obscuredChild != null)

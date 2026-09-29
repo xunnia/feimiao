@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart';
-import 'package:image_picker/image_picker.dart';
 
 import '../../core/ai/natural_language_entry_parser.dart';
 import '../../widgets/ios_dialogs.dart';
@@ -10,30 +9,10 @@ import '../../widgets/app_toast.dart';
 import 'ai_quick_entry_view.dart';
 import '../../widgets/app_page_route.dart';
 
-/// 支付截图识别入口：相册选一张支付/账单截图 → ML Kit 中文 OCR →
+/// 支付截图识别：给定图片路径 → ML Kit 中文 OCR（本机、不联网）→
 /// 把识别文字喂给 [AiQuickEntryView]（复用既有的金额/分类/收支解析）。
 ///
-/// 用 ML Kit on-device 识别（中文脚本），无需联网；解析阶段才可能走 DeepSeek。
-Future<void> recognizeScreenshotAndEntry(BuildContext context) async {
-  // 1. 选图
-  XFile? file;
-  try {
-    file = await ImagePicker().pickImage(
-      source: ImageSource.gallery,
-      imageQuality: 92,
-    );
-  } catch (e) {
-    if (context.mounted) {
-      showAppToast(context, '打不开相册：$e', icon: Icons.error_outline);
-    }
-    return;
-  }
-  if (file == null) return; // 用户取消
-  if (!context.mounted) return;
-  await recognizeImagePathAndEntry(context, file.path);
-}
-
-/// 给定图片路径直接识别记账：相册选图与「分享到肥喵」共用这条管线。
+/// 现在只有「分享到肥喵」走这条管线；主页 [+] 选图改为直接交给 AI 记账看图。
 Future<void> recognizeImagePathAndEntry(
     BuildContext context, String imagePath) async {
   final navigator = Navigator.of(context);

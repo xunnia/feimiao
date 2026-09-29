@@ -1,6 +1,5 @@
 import 'dart:async';
 
-import 'package:decimal/decimal.dart';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart' show ImageSource;
 import 'package:provider/provider.dart';
@@ -14,6 +13,7 @@ import '../../core/transaction_time.dart';
 import '../../data/app_repository.dart';
 import '../../theme/app_colors.dart';
 import '../../widgets/app_date_picker.dart';
+import '../../widgets/app_line_icon.dart';
 import '../../widgets/app_toast.dart';
 import '../../widgets/glass.dart';
 import '../../widgets/ios_menu.dart';
@@ -296,14 +296,21 @@ class _ManualAddSheetState extends State<ManualAddSheet> {
   }
 
   // ── 保存 ─────────────────────────────────────────────────────────────────
+  /// 不能保存时说清原因（以前是点了没反应）。
+  bool _blocked(String reason) {
+    if (mounted) showAppToast(context, reason, icon: Icons.info_outline);
+    return false;
+  }
+
   Future<bool> _saveEntry() async {
+    final invalidAmount = _expression.invalidReason;
+    if (invalidAmount != null) return _blocked(invalidAmount);
     final amount = _expression.value;
-    if (amount <= Decimal.zero) return false;
 
     final repo = context.read<AppRepository>();
     final accountId =
         _selectedAccountId ?? repo.transactionAccounts.firstOrNull?.id;
-    if (accountId == null) return false;
+    if (accountId == null) return _blocked('还没有可用账户，先去「资产管理」加一个');
     final note = _noteController.text.trim();
     // New entries only pick a calendar day, so their clock comes from the
     // actual save. Editing preserves the original timestamp unless the user
@@ -314,7 +321,11 @@ class _ManualAddSheetState extends State<ManualAddSheet> {
     // 转账：要两个不同账户；不占分类，也不进统计（引擎本来就跳过转账）。
     if (_kind == TransactionKind.transfer) {
       final to = _toAccountId;
-      if (to == null || to == accountId) return false;
+      if (repo.transactionAccounts.length < 2) {
+        return _blocked('转账要两个账户，先去「资产管理」再加一个');
+      }
+      if (to == null) return _blocked('先选入款账户');
+      if (to == accountId) return _blocked('扣款和入款不能是同一个账户');
       final edit = widget.edit;
       if (edit != null) {
         await repo.updateTransaction(
@@ -628,43 +639,39 @@ class _ManualAddSheetState extends State<ManualAddSheet> {
                     .where((a) => a.id == id)
                     .firstOrNull
                     ?.name;
-                return SizedBox(
-                  height: 184,
-                  child: Center(
-                    child: Padding(
-                      padding: const EdgeInsets.fromLTRB(16, 0, 16, 0),
-                      child: Row(
-                        children: [
-                          Expanded(
-                            child: _AccountBox(
-                              hint: '扣款账户',
-                              name: nameOf(_selectedAccountId),
-                              accounts: repo.transactionAccounts,
-                              selectedId: _selectedAccountId,
-                              onPick: (id) =>
-                                  setState(() => _selectedAccountId = id),
-                            ),
-                          ),
-                          Padding(
-                            padding: const EdgeInsets.symmetric(horizontal: 8),
-                            child: Icon(Icons.swap_horiz,
-                                size: 18,
-                                color: Theme.of(context)
-                                    .colorScheme
-                                    .onSurfaceVariant),
-                          ),
-                          Expanded(
-                            child: _AccountBox(
-                              hint: '入款账户',
-                              name: nameOf(_toAccountId),
-                              accounts: repo.transactionAccounts,
-                              selectedId: _toAccountId,
-                              onPick: (id) => setState(() => _toAccountId = id),
-                            ),
-                          ),
-                        ],
+                // 按内容定高，不再沿用分类区的 184 固定高（上下大片空白）。
+                return Padding(
+                  key: const ValueKey('manual-transfer-accounts'),
+                  padding: const EdgeInsets.fromLTRB(16, 18, 16, 10),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: _AccountBox(
+                          hint: '扣款账户',
+                          name: nameOf(_selectedAccountId),
+                          accounts: repo.transactionAccounts,
+                          selectedId: _selectedAccountId,
+                          onPick: (id) =>
+                              setState(() => _selectedAccountId = id),
+                        ),
                       ),
-                    ),
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 8),
+                        child: Icon(Icons.swap_horiz,
+                            size: 18,
+                            color:
+                                Theme.of(context).colorScheme.onSurfaceVariant),
+                      ),
+                      Expanded(
+                        child: _AccountBox(
+                          hint: '入款账户',
+                          name: nameOf(_toAccountId),
+                          accounts: repo.transactionAccounts,
+                          selectedId: _toAccountId,
+                          onPick: (id) => setState(() => _toAccountId = id),
+                        ),
+                      ),
+                    ],
                   ),
                 );
               },
@@ -742,9 +749,8 @@ class _AccountBox extends StatelessWidget {
           for (final a in accounts)
             IosMenuItem(
               label: a.name,
-              icon: a.id == selectedId
-                  ? Icons.check_circle
-                  : Icons.radio_button_unchecked,
+              lineIcon: AppLineIcons.wallet,
+              selected: a.id == selectedId,
               onTap: () => onPick(a.id),
             ),
         ]),
@@ -871,9 +877,8 @@ class _ChipsRow extends StatelessWidget {
                   for (final b in repo.books)
                     IosMenuItem(
                       label: '${b.icon} ${b.name}',
-                      icon: b.id == bookId
-                          ? Icons.check_circle
-                          : Icons.radio_button_unchecked,
+                      lineIcon: AppLineIcons.book,
+                      selected: b.id == (book?.id ?? bookId),
                       onTap: () => onBookChanged(b.id),
                     ),
                 ]),
@@ -891,9 +896,8 @@ class _ChipsRow extends StatelessWidget {
                   for (final a in repo.transactionAccounts)
                     IosMenuItem(
                       label: a.name,
-                      icon: a.id == account?.id
-                          ? Icons.check_circle
-                          : Icons.radio_button_unchecked,
+                      lineIcon: AppLineIcons.wallet,
+                      selected: a.id == account?.id,
                       onTap: () => onAccountChanged(a.id),
                     ),
                 ]),
@@ -1073,18 +1077,23 @@ class _AmountCard extends StatelessWidget {
               ),
               const SizedBox(width: 5),
               Expanded(
-                child: Text(
-                  expression.displayText,
-                  key: const ValueKey('manual-amount-display'),
-                  style: TextStyle(
-                    fontSize: 24,
-                    fontWeight: FontWeight.w600,
-                    fontFamily: 'Nunito',
-                    color: amountColor,
-                    fontFeatures: const [FontFeature.tabularFigures()],
+                // 算式太长时整体缩小，不再用「…」截掉（看不到刚输的数字）。
+                child: FittedBox(
+                  fit: BoxFit.scaleDown,
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    expression.displayText,
+                    key: const ValueKey('manual-amount-display'),
+                    style: TextStyle(
+                      fontSize: 24,
+                      fontWeight: FontWeight.w600,
+                      fontFamily: 'Nunito',
+                      color: amountColor,
+                      fontFeatures: const [FontFeature.tabularFigures()],
+                    ),
+                    maxLines: 1,
+                    softWrap: false,
                   ),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
                 ),
               ),
               if (expression.isCompound)
@@ -1110,44 +1119,39 @@ class _AmountCard extends StatelessWidget {
           Row(
             children: [
               Expanded(
-                child: flash != null
-                    ? Padding(
-                        padding: const EdgeInsets.symmetric(vertical: 10),
-                        child: Text(
-                          flash!,
-                          style: TextStyle(
+                // 「再记」后的提示只借用备注框的占位文字显示，备注框一直可以点、
+                // 可以打字；一打字提示就被输入内容盖住。
+                child: TextField(
+                  key: const ValueKey('manual-note-field'),
+                  controller: noteController,
+                  focusNode: noteFocus,
+                  keyboardType: TextInputType.text,
+                  textInputAction: TextInputAction.done,
+                  maxLines: 1,
+                  onEditingComplete: () {},
+                  onSubmitted: (_) => onSave(),
+                  style: const TextStyle(fontSize: 13),
+                  decoration: InputDecoration(
+                    hintText: flash ?? '写备注',
+                    hintStyle: flash != null
+                        ? TextStyle(
                             fontSize: 13,
                             fontWeight: FontWeight.w500,
                             color: scheme.primary,
-                          ),
-                        ),
-                      )
-                    : TextField(
-                        key: const ValueKey('manual-note-field'),
-                        controller: noteController,
-                        focusNode: noteFocus,
-                        keyboardType: TextInputType.text,
-                        textInputAction: TextInputAction.done,
-                        maxLines: 1,
-                        onEditingComplete: () {},
-                        onSubmitted: (_) => onSave(),
-                        style: const TextStyle(fontSize: 13),
-                        decoration: InputDecoration(
-                          hintText: '写备注',
-                          hintStyle: TextStyle(
+                          )
+                        : TextStyle(
                             fontSize: 13,
                             color:
                                 scheme.onSurfaceVariant.withValues(alpha: 0.5),
                           ),
-                          isDense: true,
-                          border: InputBorder.none,
-                          enabledBorder: InputBorder.none,
-                          focusedBorder: InputBorder.none,
-                          filled: false,
-                          contentPadding:
-                              const EdgeInsets.symmetric(vertical: 10),
-                        ),
-                      ),
+                    isDense: true,
+                    border: InputBorder.none,
+                    enabledBorder: InputBorder.none,
+                    focusedBorder: InputBorder.none,
+                    filled: false,
+                    contentPadding: const EdgeInsets.symmetric(vertical: 10),
+                  ),
+                ),
               ),
               if (imagePath != null) ...[
                 ReceiptThumb(

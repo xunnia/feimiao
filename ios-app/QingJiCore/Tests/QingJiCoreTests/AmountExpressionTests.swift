@@ -87,6 +87,36 @@ final class AmountExpressionTests: XCTestCase {
         XCTAssertFalse(expression.isCompound)
     }
 
+    func testSecondOperatorReplacesFirst() {
+        var expression = AmountExpression()
+        expression.insertDigit("1")
+        expression.insertDigit("2")
+        expression.beginAddition()
+        expression.beginSubtraction()
+        XCTAssertEqual(expression.displayText, "12-")
+        expression.beginAddition()
+        XCTAssertEqual(expression.displayText, "12+")
+        expression.insertDigit("3")
+        XCTAssertEqual(expression.value, 15)
+    }
+
+    func testInvalidReason() {
+        var expression = AmountExpression()
+        XCTAssertEqual(expression.invalidReason, "先输入金额")
+        expression.insertDigit("0")
+        XCTAssertEqual(expression.invalidReason, "金额要大于 0")
+        expression.clear()
+        expression.insertDigit("1")
+        expression.insertDigit("0")
+        expression.beginSubtraction()
+        expression.insertDigit("2")
+        expression.insertDigit("0")
+        XCTAssertEqual(expression.invalidReason, "合计是 -10.00，要大于 0 才能记")
+        expression.deleteBackward()
+        expression.deleteBackward()
+        XCTAssertNil(expression.invalidReason)
+    }
+
     func testDeleteBackwardCrossesTerms() {
         var expression = AmountExpression()
         expression.insertDigit("8")

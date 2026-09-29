@@ -35,7 +35,11 @@ struct AmountKeypad: View {
                     functionKey(systemImage: "minus") { expression.beginSubtraction() }
                 }
                 GridRow {
-                    textKey(onSaveAgain == nil ? "C" : "再记", enabled: expression.value > 0 || onSaveAgain == nil) {
+                    // 金额不合法时仍可点：由 save() 说明原因，不再灰着没反应。
+                    textKey(
+                        onSaveAgain == nil ? "C" : "再记",
+                        dimmed: onSaveAgain != nil && expression.value <= 0
+                    ) {
                         if let onSaveAgain { onSaveAgain() } else { expression.clear() }
                     }
                     digitKey("0") { expression.insertDigit("0") }
@@ -73,15 +77,15 @@ struct AmountKeypad: View {
         .liquidGlassKeyControl(cornerRadius: 14)
     }
 
-    private func textKey(_ label: String, enabled: Bool, action: @escaping () -> Void) -> some View {
+    private func textKey(_ label: String, dimmed: Bool, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Text(label)
                 .font(.headline.weight(.medium))
+                .opacity(dimmed ? 0.45 : 1)
                 .frame(maxWidth: .infinity)
                 .frame(height: keyHeight)
         }
         .liquidGlassKeyControl(cornerRadius: 14)
-        .disabled(!enabled)
     }
 
     private func primaryKey(_ label: String, action: @escaping () -> Void) -> some View {
@@ -95,6 +99,5 @@ struct AmountKeypad: View {
             cornerRadius: 14,
             tint: expression.value > 0 ? Color.accentColor.opacity(0.82) : Color.gray.opacity(0.30)
         )
-        .disabled(expression.value <= 0)
     }
 }

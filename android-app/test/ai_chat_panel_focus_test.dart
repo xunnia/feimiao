@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
+import 'package:qingji/core/media/chat_attachment.dart';
 import 'package:qingji/data/app_repository.dart';
 import 'package:qingji/views/home/ai_chat_panel.dart';
 import 'package:qingji/views/home/manual_add_sheet.dart';
@@ -527,5 +528,83 @@ void main() {
 
     await tester.pumpWidget(const SizedBox.shrink());
     await tester.pump();
+  });
+
+  testWidgets('主页 [+] 打开和喵助手同一张「添加到聊天」面板', (tester) async {
+    final repo = AppRepository();
+
+    await tester.pumpWidget(
+      ChangeNotifierProvider<AppRepository>.value(
+        value: repo,
+        child: const MaterialApp(
+          home: Scaffold(
+            body: Align(
+              alignment: Alignment.bottomCenter,
+              child: RecordInputBar(),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    await tester.tap(find.byKey(const ValueKey('home-record-plus-button')));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+
+    expect(find.text('添加到聊天'), findsOneWidget);
+    expect(find.text('添加文件'), findsOneWidget);
+    expect(find.text('工具权限'), findsOneWidget);
+    expect(find.text('联网搜索'), findsOneWidget);
+    // 旧「更多功能」面板已下线。
+    expect(find.text('更多功能'), findsNothing);
+    expect(find.text('支付截图识别'), findsNothing);
+    expect(find.text('导入账单'), findsNothing);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pump();
+  });
+
+  testWidgets('主页 [+] 选好的附件会预放进 AI 记账输入框', (tester) async {
+    final repo = AppRepository();
+    const attachment = ChatAttachment(
+      kind: ChatAttachmentKind.image,
+      path: r'C:\app\chat_attachments\pay.jpg',
+      name: 'pay.jpg',
+      mimeType: 'image/jpeg',
+      sizeBytes: 1234,
+    );
+
+    await tester.pumpWidget(
+      ChangeNotifierProvider<AppRepository>.value(
+        value: repo,
+        child: MaterialApp(
+          home: Scaffold(
+            body: Builder(
+              builder: (context) => TextButton(
+                onPressed: () => showRecordEntrySheet(
+                  context,
+                  initialMode: RecordEntryMode.ai,
+                  initialAttachments: const [attachment],
+                ),
+                child: const Text('open'),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.text('open'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 380));
+
+    expect(find.byType(AiChatPanel), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('ai-chat-draft-attachment-0')),
+      findsOneWidget,
+    );
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pump(const Duration(seconds: 1));
   });
 }

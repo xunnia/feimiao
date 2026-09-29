@@ -20,6 +20,7 @@ import 'data/app_repository.dart';
 import 'share_intake.dart';
 import 'theme/app_colors.dart';
 import 'theme/app_theme_controller.dart';
+import 'theme/app_tokens.dart';
 import 'views/auto_record/auto_record_sheet.dart';
 import 'widgets/app_buttons.dart';
 import 'widgets/app_line_icon.dart';
@@ -27,7 +28,6 @@ import 'widgets/app_toast.dart';
 import 'widgets/book_switch_chip.dart';
 import 'widgets/slidable_tracker.dart';
 import 'widgets/ios_dialogs.dart';
-import 'widgets/ios_form.dart';
 import 'widgets/ios_menu.dart';
 import 'views/books/book_sheet.dart';
 import 'views/home/home_view.dart';
@@ -1289,8 +1289,8 @@ class _DrawerPanelState extends State<_DrawerPanel> {
             ),
             if (b.starred) ...[
               const SizedBox(width: 4),
-              Icon(Icons.star_rounded,
-                  size: 14, color: AppColors.budgetCaution(scheme)),
+              AppLineIcon(AppLineIcons.starFilled,
+                  size: 13, color: AppColors.budgetCaution(scheme)),
             ],
           ],
         ),
@@ -1304,7 +1304,8 @@ class _DrawerPanelState extends State<_DrawerPanel> {
           builder: (iconCtx) => GestureDetector(
             behavior: HitTestBehavior.opaque,
             onTap: () => showIosMenu(iconCtx, [
-              // 对齐 Claude 的会话菜单：加星 / 编辑 / 改名 / 删除
+              // 对齐 Claude 的会话菜单：加星 / 编辑 / 删除。
+              // 改名已包含在「编辑」弹层里，不再单列一项。
               IosMenuItem(
                 label: b.starred ? '取消加星' : '加星',
                 lineIcon: AppLineIcons.star,
@@ -1315,11 +1316,6 @@ class _DrawerPanelState extends State<_DrawerPanel> {
                 lineIcon: AppLineIcons.pencil,
                 onTap: () => showBookSheet(context, edit: b),
               ),
-              IosMenuItem(
-                label: '改名',
-                lineIcon: AppLineIcons.pencil,
-                onTap: () => _showRenameBookDialog(b, repo),
-              ),
               if (deletable)
                 IosMenuItem(
                   label: '删除',
@@ -1328,16 +1324,29 @@ class _DrawerPanelState extends State<_DrawerPanel> {
                   onTap: () => _confirmDeleteBook(b, repo),
                 ),
             ]),
-            child: Padding(
-              padding: const EdgeInsets.all(6),
-              child: Icon(Icons.more_horiz,
-                  size: 20, color: scheme.onSurfaceVariant),
+            // 视觉仍是 20 的小点点，但可点区域 48×48（docs/06 热区标准），
+            // 避免点偏落到整行上误切账本。
+            child: Semantics(
+              button: true,
+              label: '${b.name}更多操作',
+              child: SizedBox(
+                width: AppHitTarget.min,
+                height: AppHitTarget.min,
+                child: Center(
+                  child: AppLineIcon(
+                    AppLineIcons.moreHorizontal,
+                    size: 20,
+                    color: scheme.onSurfaceVariant,
+                  ),
+                ),
+              ),
             ),
           ),
         ),
         tileColor: selected ? AppColors.selectedCard(scheme) : null,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-        contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
+        // 右侧留白减掉热区多出来的 14（(48-20)/2），点点的视觉位置不变。
+        contentPadding: const EdgeInsets.fromLTRB(12, 2, 0, 2),
         onTap: () {
           repo.switchBook(b.id);
           widget.onClose();
@@ -1374,23 +1383,6 @@ class _DrawerPanelState extends State<_DrawerPanel> {
         errorBuilder: (_, __, ___) => fallback(),
       ),
     );
-  }
-
-  Future<void> _showRenameBookDialog(BookEntity b, AppRepository repo) async {
-    final ctrl = TextEditingController(text: b.name);
-    final ok = await showIosFormDialog(
-      context,
-      title: '账本改名',
-      subtitle: '给账本起个新名字',
-      content: TextField(
-        controller: ctrl,
-        autofocus: true,
-        decoration: iosInputDecoration(context, hint: '账本名称'),
-      ),
-    );
-    if (ok && ctrl.text.trim().isNotEmpty) {
-      await repo.renameBook(b.id, name: ctrl.text.trim());
-    }
   }
 
   /// 删账本保护：有账单时先给「转移到总账本」的温和出路，
@@ -1524,8 +1516,8 @@ class _DrawerPanelState extends State<_DrawerPanel> {
                             horizontal: 20, vertical: 8),
                         child: Row(
                           children: [
-                            Icon(Icons.more_horiz,
-                                size: 20, color: scheme.onSurfaceVariant),
+                            AppLineIcon(AppLineIcons.moreHorizontal,
+                                size: 21, color: scheme.onSurfaceVariant),
                             const SizedBox(width: 12),
                             Text(
                               _moreExpanded ? '收起' : '更多',
@@ -1629,12 +1621,12 @@ class _BookSwitchChip extends StatelessWidget {
         iconText: book?.icon ?? '📒',
         label: book?.name ?? '账本',
         onPressed: () => showIosMenu(ctx, [
+          // 统一菜单件的选中态（浅底 + 右侧对勾），不再混用粗圆圈图标。
           for (final b in repo.books)
             IosMenuItem(
               label: '${b.icon} ${b.name}',
-              icon: b.id == repo.currentBookId
-                  ? Icons.check_circle
-                  : Icons.radio_button_unchecked,
+              lineIcon: AppLineIcons.book,
+              selected: b.id == repo.currentBookId,
               onTap: () => repo.switchBook(b.id),
             ),
         ]),

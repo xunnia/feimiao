@@ -94,19 +94,22 @@ struct QuickAddView: View {
         VStack(spacing: 0) {
             manualHeader
 
-            ScrollView(.vertical, showsIndicators: false) {
-                if kind == .transfer {
-                    transferPickers
-                        .frame(minHeight: 174)
-                } else {
+            if kind == .transfer {
+                // 转账按内容定高，不再撑满分类区的 184 高（上下大片空白）。
+                transferPickers
+            } else {
+                // 分类超过两行时要滑动：显示滚动条并在出现时闪一下，提示下面还有。
+                ScrollView(.vertical) {
                     CategoryGrid(
                         categories: visibleCategories,
                         childCategories: childCategories,
                         selected: $selectedCategory
                     )
                 }
+                .scrollIndicators(.visible)
+                .scrollIndicatorsFlash(onAppear: true)
+                .frame(maxHeight: 184)
             }
-            .frame(maxHeight: 184)
 
             chipsRow
                 .padding(.top, 8)
@@ -257,7 +260,13 @@ struct QuickAddView: View {
                 if books.count > 1 {
                     Menu {
                         ForEach(books) { book in
-                            Button(book.name) { selectedBook = book }
+                            Button { selectedBook = book } label: {
+                                if book.persistentModelID == effectiveBook?.persistentModelID {
+                                    Label(book.name, systemImage: "checkmark")
+                                } else {
+                                    Text(book.name)
+                                }
+                            }
                         }
                     } label: {
                         chipSurface(effectiveBook?.name ?? "账本", systemImage: "book.closed")
@@ -267,7 +276,13 @@ struct QuickAddView: View {
                 if kind != .transfer {
                     Menu {
                         ForEach(usableAccounts) { account in
-                            Button(account.name) { selectedAccountID = account.stableID }
+                            Button { selectedAccountID = account.stableID } label: {
+                                if account.stableID == effectiveAccount?.stableID {
+                                    Label(account.name, systemImage: "checkmark")
+                                } else {
+                                    Text(account.name)
+                                }
+                            }
                         }
                     } label: {
                         chipSurface(effectiveAccount?.name ?? "账户", systemImage: "wallet.pass")
@@ -588,12 +603,20 @@ struct QuickAddView: View {
 
     @discardableResult
     private func save() -> Bool {
+        // 不能保存时说明原因（以前负数合计直接没反应）。
+        if let reason = expression.invalidReason {
+            saveError = reason
+            return false
+        }
         let amount = expression.value
-        guard amount > 0 else { return false }
 
         do {
             switch kind {
             case .transfer:
+                if usableAccounts.count < 2 {
+                    saveError = "转账要两个账户，先去「资产管理」再加一个"
+                    return false
+                }
                 guard let from = effectiveAccount, let to = effectiveTransferTarget,
                       from.persistentModelID != to.persistentModelID else {
                     saveError = LedgerStore.Error.invalidTransfer.localizedDescription

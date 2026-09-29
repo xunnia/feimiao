@@ -2,17 +2,25 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../../core/haptics.dart';
+import '../../core/media/chat_attachment.dart';
 import '../../data/app_repository.dart';
 import 'ai_chat_panel.dart';
 import 'manual_add_sheet.dart';
 
 enum RecordEntryMode { manual, ai }
 
+/// [initialAttachments]：主页 [+] 里选好的图片/文件，预放进 AI 记账
+/// 输入框的附件条，用户可再补一句话后发送。只有 AI 模式能带附件。
 Future<void> showRecordEntrySheet(
   BuildContext context, {
   required RecordEntryMode initialMode,
   ValueChanged<bool>? onModeChanged,
+  List<ChatAttachment> initialAttachments = const [],
 }) async {
+  assert(
+    initialAttachments.isEmpty || initialMode == RecordEntryMode.ai,
+    '附件只能交给 AI 记账',
+  );
   final route = PageRouteBuilder<void>(
     opaque: false,
     barrierDismissible: true,
@@ -23,6 +31,7 @@ Future<void> showRecordEntrySheet(
     pageBuilder: (_, __, ___) => _RecordEntrySheetHost(
       initialMode: initialMode,
       onModeChanged: onModeChanged,
+      initialAttachments: initialAttachments,
     ),
     transitionsBuilder: (ctx, anim, _, child) {
       final curved = CurvedAnimation(parent: anim, curve: Curves.easeOutCubic);
@@ -45,10 +54,12 @@ Future<void> showRecordEntrySheet(
 class _RecordEntrySheetHost extends StatefulWidget {
   final RecordEntryMode initialMode;
   final ValueChanged<bool>? onModeChanged;
+  final List<ChatAttachment> initialAttachments;
 
   const _RecordEntrySheetHost({
     required this.initialMode,
     this.onModeChanged,
+    this.initialAttachments = const [],
   });
 
   @override
@@ -124,6 +135,7 @@ class _RecordEntrySheetHostState extends State<_RecordEntrySheetHost>
               fastSwitch: true,
               active: _mode == RecordEntryMode.ai,
               recordOnly: true,
+              initialDraftAttachments: widget.initialAttachments,
               onSwitchToManual: () => _setMode(RecordEntryMode.manual),
             ),
           ),

@@ -71,9 +71,26 @@ public struct AmountExpression: Equatable, Sendable {
     }
 
     private mutating func beginOperation(_ operation: Character) {
+        if parts[parts.count - 1].isEmpty, !operators.isEmpty {
+            // 连按两个运算符 = 改主意，替换刚才那个（与 Android 一致）。
+            operators[operators.count - 1] = operation
+            return
+        }
         guard Decimal(string: parts[parts.count - 1]) != nil else { return }
         operators.append(operation)
         parts.append("")
+    }
+
+    /// 为什么现在不能保存；能保存时返回 nil。文案与 Android `invalidReason` 一致。
+    public var invalidReason: String? {
+        let total = value
+        if total > 0 { return nil }
+        if isEmpty { return "先输入金额" }
+        if total < 0 {
+            let text = String(format: "%.2f", NSDecimalNumber(decimal: total).doubleValue)
+            return "合计是 \(text)，要大于 0 才能记"
+        }
+        return "金额要大于 0"
     }
 
     public mutating func deleteBackward() {

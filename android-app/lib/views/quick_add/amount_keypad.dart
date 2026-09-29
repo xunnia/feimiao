@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 
 import '../../core/amount_expression.dart';
 import '../../core/haptics.dart';
+import '../../widgets/app_toast.dart';
 import '../../widgets/pressable_scale.dart';
 
 /// 记账数字键盘（对齐咔皮布局，4 列）：
@@ -90,8 +91,9 @@ class AmountKeypad extends StatelessWidget {
                     ? scheme.primary
                     : scheme.onSurfaceVariant.withValues(alpha: 0.4),
                 labelSize: 16,
-                onPressed: canSave ? onSaveAgain : null,
-                haptic: Haptic.medium,
+                onPressed:
+                    canSave ? onSaveAgain : () => _explainInvalid(context),
+                haptic: canSave ? Haptic.medium : Haptic.selection,
               )
             else
               _key(context,
@@ -106,8 +108,10 @@ class AmountKeypad extends StatelessWidget {
               labelSize: 16,
               fill: canSave ? scheme.primary : scheme.primary.withAlpha(90),
               labelColor: scheme.onPrimary,
-              onPressed: canSave ? onSave : null,
-              haptic: Haptic.medium, // 保存是确认动作，给更实的触感
+              // 灰着也能点：点了说明为什么不能保存（比如合计是负数），不再没反应。
+              onPressed: canSave ? onSave : () => _explainInvalid(context),
+              // 保存是确认动作，给更实的触感
+              haptic: canSave ? Haptic.medium : Haptic.selection,
             ),
           ]),
         ],
@@ -156,6 +160,11 @@ class AmountKeypad extends StatelessWidget {
                   ),
             ),
     );
+  }
+
+  void _explainInvalid(BuildContext context) {
+    final reason = expression.invalidReason;
+    if (reason != null) showAppToast(context, reason, icon: Icons.info_outline);
   }
 
   void _tap(VoidCallback action) {

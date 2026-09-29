@@ -99,6 +99,38 @@ void main() {
       expect(e.isCompound, isFalse);
       expect(e.isEmpty, isTrue);
     });
+
+    test('连按两个运算符时替换成后按的那个', () {
+      final e = AmountExpression();
+      e.insertDigit('1');
+      e.insertDigit('2');
+      e.beginAddition();
+      e.beginSubtraction();
+      expect(e.displayText, '12-');
+      e.beginAddition();
+      expect(e.displayText, '12+');
+      e.insertDigit('3');
+      expect(e.value, Decimal.fromInt(15));
+    });
+  });
+
+  group('AmountExpression 不能保存的原因', () {
+    test('空、零、负数各有说明，正数返回 null', () {
+      final e = AmountExpression();
+      expect(e.invalidReason, '先输入金额');
+      e.insertDigit('0');
+      expect(e.invalidReason, '金额要大于 0');
+      e.clear();
+      e.insertDigit('1');
+      e.insertDigit('0');
+      e.beginSubtraction();
+      e.insertDigit('2');
+      e.insertDigit('0');
+      expect(e.invalidReason, '合计是 -10.00，要大于 0 才能记');
+      e.deleteBackward();
+      e.deleteBackward();
+      expect(e.invalidReason, isNull);
+    });
   });
 
   group('AmountExpression 删除与清空', () {
