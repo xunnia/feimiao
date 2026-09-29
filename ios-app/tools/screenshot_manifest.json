@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
   "baseline": {
-    "androidVersion": "1.304.0+319",
-    "androidWatermark": "b0929-319",
+    "androidVersion": "1.305.0+320",
+    "androidWatermark": "b0930-320",
     "androidDatabaseVersion": 49,
     "iosDeploymentTarget": "26.0",
     "fixtureId": "p0-demo-ledger-2026-08-v1",
