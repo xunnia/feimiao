@@ -27,12 +27,10 @@ const double _homeFilterGap = 8.0;
 
 /// 首页：顶部汇总大卡片（预算+收支）+ 按所选月分组的明细列表。
 class HomeView extends StatefulWidget {
-  final VoidCallback onShowTransactions;
   final double bottomInset;
 
   const HomeView({
     super.key,
-    required this.onShowTransactions,
     this.bottomInset = 150,
   });
 

@@ -171,6 +171,15 @@ class AppColors {
           ? _bgDarkTop
           : (_bgSolid ? _bgBottom : _bgTop);
 
+  /// 整页背景在屏幕纵向位置 [t]（0=顶、1=底）处的实际颜色。
+  /// 盖在页面渐变上的渐隐/虚化层必须用它取色，用 [appBg] 的灰白会在
+  /// 暖渐变上露出一条白带（搜索页主题断层）。
+  static Color pageBgAt(Brightness brightness, double t) {
+    if (brightness == Brightness.dark) return _bgDark;
+    if (_bgSolid) return _bgBottom;
+    return Color.lerp(_bgTop, _bgBottom, (t / 0.85).clamp(0.0, 1.0))!;
+  }
+
   /// 页面背景：浅色淡灰 / 深色跟主题（暮夜=冷夜黑，默认=暖黑）。
   static Color appBg(ColorScheme scheme) =>
       scheme.brightness == Brightness.dark ? _bgDark : const Color(0xFFF7F8FA);

@@ -13,6 +13,7 @@ import '../theme/app_colors.dart';
 import '../theme/app_tokens.dart';
 import '../views/transactions/edit_transaction_sheet.dart';
 import 'glass.dart';
+import 'pressable_scale.dart';
 import 'tag_selector.dart';
 import 'transaction_actions.dart';
 
@@ -82,8 +83,11 @@ class TxDaySectionHeader extends StatelessWidget {
     final now = AppClock.now;
     final today = DateTime(now.year, now.month, now.day);
     final yesterday = today.subtract(const Duration(days: 1));
+    // 跨年的日子带上年份（搜索结果可能横跨好几年，不带年会分不清）。
+    final year =
+        section.day.year == today.year ? '' : '${section.day.year}年';
     final full =
-        '${section.day.month}月${section.day.day}日 周${_weekday(section.day.weekday)}';
+        '$year${section.day.month}月${section.day.day}日 周${_weekday(section.day.weekday)}';
     if (section.day == today) return '今天 · $full';
     if (section.day == yesterday) return '昨天 · $full';
     return full;
@@ -220,8 +224,11 @@ class TxDismissibleRow extends StatelessWidget {
   Widget build(BuildContext context) {
     return TransactionSlidable(
       transaction: transaction,
-      child: InkWell(
-        onTap: () => showEditTransactionSheet(context, transaction),
+      // 规范 06：按压反馈统一 PressableScale，不用 InkWell 水波纹。
+      child: PressableScale(
+        key: const ValueKey('tx-row-press'),
+        pressedScale: 0.985,
+        onPressed: () => showEditTransactionSheet(context, transaction),
         child: TxRow(transaction: transaction),
       ),
     );

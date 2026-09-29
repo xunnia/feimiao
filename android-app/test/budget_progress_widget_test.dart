@@ -591,9 +591,8 @@ void main() {
         value: repository,
         child: MaterialApp(
           theme: AppTheme.light(),
-          home: Scaffold(
+          home: const Scaffold(
             body: HomeView(
-              onShowTransactions: () {},
               bottomInset: 0,
             ),
           ),

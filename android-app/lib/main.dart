@@ -46,7 +46,6 @@ import 'views/settings/settings_view.dart';
 import 'views/settings/tags_view.dart';
 import 'views/statistics/statistics_view.dart';
 import 'views/transactions/reimburse_view.dart';
-import 'views/transactions/transaction_list_view.dart';
 import 'widgets/app_page_route.dart';
 
 const bool _parityCapture = bool.fromEnvironment('QINGJI_PARITY_CAPTURE');
@@ -1030,10 +1029,6 @@ class _MainScaffoldState extends State<_MainScaffold> {
           Positioned.fill(
             child: HomeView(
               bottomInset: _inputInset,
-              onShowTransactions: () => Navigator.push<void>(
-                context,
-                AppPageRoute<void>(builder: (_) => const TransactionListView()),
-              ),
             ),
           ),
 
@@ -1048,10 +1043,13 @@ class _MainScaffoldState extends State<_MainScaffold> {
                   gradient: LinearGradient(
                     begin: Alignment.topCenter,
                     end: Alignment.bottomCenter,
+                    // 贴底 150 已在渐变收尾段，取页面渐变底色（灰白会露白带）。
                     colors: [
-                      AppColors.appBg(scheme).withValues(alpha: 0.0),
-                      AppColors.appBg(scheme).withValues(alpha: 0.85),
-                      AppColors.appBg(scheme),
+                      AppColors.pageBgAt(scheme.brightness, 1)
+                          .withValues(alpha: 0.0),
+                      AppColors.pageBgAt(scheme.brightness, 1)
+                          .withValues(alpha: 0.85),
+                      AppColors.pageBgAt(scheme.brightness, 1),
                     ],
                     stops: const [0.0, 0.55, 1.0],
                   ),

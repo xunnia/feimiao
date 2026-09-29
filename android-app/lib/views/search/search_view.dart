@@ -13,6 +13,7 @@ import '../../data/app_repository.dart';
 import '../../theme/app_colors.dart';
 import '../../widgets/app_buttons.dart';
 import '../../widgets/app_date_picker.dart';
+import '../../widgets/app_line_icon.dart';
 import '../../widgets/ios_form.dart';
 import '../../widgets/ios_menu.dart';
 import '../../widgets/glass_input.dart';
@@ -61,6 +62,23 @@ String moneyRangeLabel(Decimal? minAmount, Decimal? maxAmount) {
   if (minAmount != null) return '≥ ${MoneyFormat.string(minAmount)}';
   if (maxAmount != null) return '≤ ${MoneyFormat.string(maxAmount)}';
   return '金额';
+}
+
+/// 时间筛选胶囊文字：都在今年只写月/日，否则带年份（跨年区间分得清）。
+String searchDateRangeLabel(DateTimeRange range, DateTime now) {
+  String two(int n) => n.toString().padLeft(2, '0');
+  final s = range.start, e = range.end;
+  if (s.year == now.year && e.year == now.year) {
+    return '${two(s.month)}/${two(s.day)}~${two(e.month)}/${two(e.day)}';
+  }
+  return '${s.year}/${two(s.month)}/${two(s.day)}~'
+      '${e.year}/${two(e.month)}/${two(e.day)}';
+}
+
+/// 金额区间：最低填得比最高还大时自动对调，免得一条都筛不出来。
+(Decimal?, Decimal?) normalizeAmountRange(Decimal? min, Decimal? max) {
+  if (min != null && max != null && min > max) return (max, min);
+  return (min, max);
 }
 
 class _SearchViewState extends State<SearchView> {
@@ -166,8 +184,6 @@ class _SearchViewState extends State<SearchView> {
     ].join('|');
   }
 
-  String _two(int n) => n.toString().padLeft(2, '0');
-
   bool _pass(
     TransactionEntity t,
     String normalizedQuery,
@@ -213,6 +229,19 @@ class _SearchViewState extends State<SearchView> {
     final showSummary = _active && _results.isNotEmpty;
     final topChromeHeight =
         _searchTopFilterHeight + (showSummary ? _searchTopSummaryHeight : 0);
+    // 正文从状态栏+标题栏下方开始；虚化层按它在整屏的位置取渐变色，
+    // 和透明标题栏后面的背景无缝接上。
+    final media = MediaQuery.of(context);
+    final screenH = media.size.height <= 0 ? 1.0 : media.size.height;
+    final bodyTop = media.padding.top + kToolbarHeight;
+    final topSpan = _FadeSpan(
+      bodyTop / screenH,
+      (bodyTop + topChromeHeight + 32) / screenH,
+    );
+    final bottomSpan = _FadeSpan(
+      (screenH - _searchBottomChromeHeight) / screenH,
+      1.0,
+    );
 
     return Scaffold(
       appBar: AppBar(
@@ -254,7 +283,12 @@ class _SearchViewState extends State<SearchView> {
             right: 0,
             top: 0,
             height: topChromeHeight + 32,
-            child: const IgnorePointer(child: _SearchTopFrostedFade()),
+            child: IgnorePointer(
+              child: _SearchTopFrostedFade(
+                key: const ValueKey('search-top-fade'),
+                span: topSpan,
+              ),
+            ),
           ),
           Positioned(
             left: 0,
@@ -269,12 +303,17 @@ class _SearchViewState extends State<SearchView> {
               ],
             ),
           ),
-          const Positioned(
+          Positioned(
             left: 0,
             right: 0,
             bottom: 0,
             height: _searchBottomChromeHeight,
-            child: IgnorePointer(child: _SearchBottomFrostedFade()),
+            child: IgnorePointer(
+              child: _SearchBottomFrostedFade(
+                key: const ValueKey('search-bottom-fade'),
+                span: bottomSpan,
+              ),
+            ),
           ),
           Positioned(
             left: 0,
@@ -294,9 +333,17 @@ class _SearchViewState extends State<SearchView> {
     List<TransactionEntity> rows,
     Map<int, Decimal> refundTotals,
   ) {
-    var exp = Decimal.zero, inc = Decimal.zero;
-    var expN = 0, incN = 0;
+    var exp = Decimal.zero, inc = Decimal.zero, xfer = Decimal.zero;
+    var expN = 0, incN = 0, xferN = 0;
     for (final t in rows) {
+      // 转账不进收支（口径标准 §转账），单独数笔数、合计转出金额；
+      // 否则筛「转账」时顶部只剩两个 0。
+      if (t.txKind == TransactionKind.transfer) {
+        if (!LedgerPolicy.includeInUserTotals(t)) continue;
+        xfer += t.amount.abs();
+        xferN++;
+        continue;
+      }
       final amount = LedgerPolicy.userAmountWith(t, refundTotals);
       if (amount == Decimal.zero) continue;
       // 笔数只数净额为正的家族（口径标准 §7.1）：legacy 独立负支出会冲减
@@ -342,7 +389,13 @@ class _SearchViewState extends State<SearchView> {
             ],
           ),
         );
+    final divider = Padding(
+      padding: const EdgeInsets.only(right: 16),
+      child:
+          Container(width: 0.5, height: 32, color: AppColors.hairline(scheme)),
+    );
     return Padding(
+      key: const ValueKey('search-summary'),
       padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
       child: AppGlassInputShell(
         radius: 18,
@@ -351,11 +404,16 @@ class _SearchViewState extends State<SearchView> {
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
         child: Row(
           children: [
-            col('支出', expN, exp, scheme.onSurface),
-            Container(
-                width: 0.5, height: 32, color: AppColors.hairline(scheme)),
-            const SizedBox(width: 16),
-            col('收入', incN, inc, AppColors.income(scheme)),
+            // 只筛转账时收支两栏必为 0，干脆只显示转账栏。
+            if (_kind != TransactionKind.transfer) ...[
+              col('支出', expN, exp, scheme.onSurface),
+              divider,
+              col('收入', incN, inc, AppColors.income(scheme)),
+            ],
+            if (xferN > 0 || _kind == TransactionKind.transfer) ...[
+              if (_kind != TransactionKind.transfer) divider,
+              col('转账', xferN, xfer, scheme.onSurfaceVariant),
+            ],
           ],
         ),
       ),
@@ -455,7 +513,7 @@ class _SearchViewState extends State<SearchView> {
             scheme,
             _range == null
                 ? '时间'
-                : '${_two(_range!.start.month)}/${_two(_range!.start.day)}~${_two(_range!.end.month)}/${_two(_range!.end.day)}',
+                : searchDateRangeLabel(_range!, AppClock.now),
             _range != null,
             _pickRange,
           ),
@@ -545,8 +603,8 @@ class _SearchViewState extends State<SearchView> {
       ])
         IosMenuItem(
           label: o.$2,
-          icon:
-              _kind == o.$1 ? Icons.check_circle : Icons.radio_button_unchecked,
+          lineIcon: AppLineIcons.receipt,
+          selected: _kind == o.$1,
           onTap: () {
             setState(() => _kind = o.$1);
             _runFilter();
@@ -582,9 +640,8 @@ class _SearchViewState extends State<SearchView> {
     showIosMenu(anchor, [
       IosMenuItem(
         label: '全部',
-        icon: _accountId == null
-            ? Icons.check_circle
-            : Icons.radio_button_unchecked,
+        lineIcon: AppLineIcons.wallet,
+        selected: _accountId == null,
         onTap: () {
           setState(() => _accountId = null);
           _runFilter();
@@ -593,9 +650,8 @@ class _SearchViewState extends State<SearchView> {
       for (final a in repo.accounts)
         IosMenuItem(
           label: a.name,
-          icon: a.id == _accountId
-              ? Icons.check_circle
-              : Icons.radio_button_unchecked,
+          lineIcon: AppLineIcons.wallet,
+          selected: a.id == _accountId,
           onTap: () {
             setState(() => _accountId = a.id);
             _runFilter();
@@ -609,8 +665,8 @@ class _SearchViewState extends State<SearchView> {
     showIosMenu(anchor, [
       IosMenuItem(
         label: '全部',
-        icon:
-            _tagId == null ? Icons.check_circle : Icons.radio_button_unchecked,
+        lineIcon: AppLineIcons.tag,
+        selected: _tagId == null,
         onTap: () {
           setState(() => _tagId = null);
           _runFilter();
@@ -619,9 +675,8 @@ class _SearchViewState extends State<SearchView> {
       for (final t in repo.tags)
         IosMenuItem(
           label: t.name,
-          icon: t.id == _tagId
-              ? Icons.check_circle
-              : Icons.radio_button_unchecked,
+          lineIcon: AppLineIcons.tag,
+          selected: t.id == _tagId,
           onTap: () {
             setState(() => _tagId = t.id);
             _runFilter();
@@ -683,9 +738,13 @@ class _SearchViewState extends State<SearchView> {
                 const SizedBox(height: 18),
                 PressableScale(
                   onPressed: () {
+                    final (lo, hi) = normalizeAmountRange(
+                      Decimal.tryParse(minC.text.trim()),
+                      Decimal.tryParse(maxC.text.trim()),
+                    );
                     setState(() {
-                      _minAmt = Decimal.tryParse(minC.text.trim());
-                      _maxAmt = Decimal.tryParse(maxC.text.trim());
+                      _minAmt = lo;
+                      _maxAmt = hi;
                     });
                     _runFilter();
                     FocusScope.of(context).unfocus();
@@ -725,12 +784,25 @@ class _SearchViewState extends State<SearchView> {
       );
 }
 
+/// 虚化层在屏幕上的纵向范围（0=屏顶、1=屏底），用来从页面渐变取同位置的色。
+class _FadeSpan {
+  final double start;
+  final double end;
+
+  const _FadeSpan(this.start, this.end);
+
+  Color at(Brightness b, double f) =>
+      AppColors.pageBgAt(b, start + (end - start) * f);
+}
+
 class _SearchTopFrostedFade extends StatelessWidget {
-  const _SearchTopFrostedFade();
+  final _FadeSpan span;
+
+  const _SearchTopFrostedFade({super.key, required this.span});
 
   @override
   Widget build(BuildContext context) {
-    final bg = AppColors.appBg(Theme.of(context).colorScheme);
+    final b = Theme.of(context).brightness;
     return ClipRect(
       child: ShaderMask(
         blendMode: BlendMode.dstIn,
@@ -752,9 +824,9 @@ class _SearchTopFrostedFade extends StatelessWidget {
                 begin: Alignment.topCenter,
                 end: Alignment.bottomCenter,
                 colors: [
-                  bg.withValues(alpha: 0.96),
-                  bg.withValues(alpha: 0.68),
-                  bg.withValues(alpha: 0.0),
+                  span.at(b, 0.0).withValues(alpha: 0.96),
+                  span.at(b, 0.62).withValues(alpha: 0.68),
+                  span.at(b, 1.0).withValues(alpha: 0.0),
                 ],
                 stops: const [0.0, 0.62, 1.0],
               ),
@@ -768,11 +840,13 @@ class _SearchTopFrostedFade extends StatelessWidget {
 }
 
 class _SearchBottomFrostedFade extends StatelessWidget {
-  const _SearchBottomFrostedFade();
+  final _FadeSpan span;
+
+  const _SearchBottomFrostedFade({super.key, required this.span});
 
   @override
   Widget build(BuildContext context) {
-    final bg = AppColors.appBg(Theme.of(context).colorScheme);
+    final b = Theme.of(context).brightness;
     return ClipRect(
       child: ShaderMask(
         blendMode: BlendMode.dstIn,
@@ -794,9 +868,9 @@ class _SearchBottomFrostedFade extends StatelessWidget {
                 begin: Alignment.topCenter,
                 end: Alignment.bottomCenter,
                 colors: [
-                  bg.withValues(alpha: 0.0),
-                  bg.withValues(alpha: 0.72),
-                  bg.withValues(alpha: 0.96),
+                  span.at(b, 0.0).withValues(alpha: 0.0),
+                  span.at(b, 0.58).withValues(alpha: 0.72),
+                  span.at(b, 1.0).withValues(alpha: 0.96),
                 ],
                 stops: const [0.0, 0.58, 1.0],
               ),
