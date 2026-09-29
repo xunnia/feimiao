@@ -18,6 +18,7 @@ import 'core/assets/repayment_reminder.dart';
 import 'core/haptics.dart';
 import 'core/widgets/widget_snapshot_service.dart';
 import 'data/app_repository.dart';
+import 'data/repository_profile_store.dart';
 import 'share_intake.dart';
 import 'theme/app_colors.dart';
 import 'theme/app_theme_controller.dart';
@@ -82,7 +83,7 @@ Future<void> main() async {
 
   // 肥喵账号（后端）。FM_ACCOUNT 编译开关关闭时 init 直接返回，
   // 不读存储、不联网，和没有账号体系时完全一样。
-  final account = CloudAccount();
+  final account = CloudAccount(profileStore: RepositoryProfileStore(repo));
   unawaited(account.init());
 
   runApp(

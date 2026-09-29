@@ -8,6 +8,7 @@ import 'cloud_config.dart';
 import 'cloud_errors.dart';
 import 'cloud_models.dart';
 import 'cloud_session_store.dart';
+import 'profile_sync.dart';
 
 /// 登录结果：要么登录成功，要么设备数超限、需要用户选一台下线。
 sealed class LoginOutcome {
@@ -29,8 +30,12 @@ class LoginNeedsDeviceChoice extends LoginOutcome {
 /// 没登录、断网、服务端出错都不会影响本地账本；这里只管账号。
 /// [CloudConfig.accountEnabled] 关闭时什么都不做，也不读写存储、不联网。
 class CloudAccount extends ChangeNotifier with WidgetsBindingObserver {
-  CloudAccount({CloudApi? api, bool? enabled, DateTime Function()? clock})
-      : _api = api ?? CloudApi(),
+  CloudAccount({
+    CloudApi? api,
+    bool? enabled,
+    DateTime Function()? clock,
+    this.profileStore,
+  })  : _api = api ?? CloudApi(),
         enabled = enabled ?? CloudConfig.accountEnabled,
         _now = clock ?? DateTime.now {
     _api.onSessionEnded = _handleSessionEnded;
@@ -39,6 +44,10 @@ class CloudAccount extends ChangeNotifier with WidgetsBindingObserver {
   final CloudApi _api;
   final bool enabled;
   final DateTime Function() _now;
+
+  /// 本机昵称。为 null 时不同步昵称（测试或没接账本时）。
+  final LocalProfileStore? profileStore;
+  Future<void>? _nicknameSyncTail;
 
   bool _ready = false;
   bool _signedIn = false;
@@ -133,6 +142,59 @@ class CloudAccount extends ChangeNotifier with WidgetsBindingObserver {
       await loadMe();
     } on CloudApiException catch (error) {
       debugPrint('me refresh failed: $error');
+      return;
+    }
+    // 不等：本机资料可能还没读完，不能拖住登录和刷新。
+    unawaited(_syncNicknameQuietly());
+  }
+
+  Future<void> _syncNicknameQuietly() async {
+    final store = profileStore;
+    if (store == null) return;
+    // 本机资料读完再比，否则会把"还没读到"当成"没设置"而拉回服务端的名字。
+    await store.whenProfileLoaded();
+    try {
+      await syncNickname();
+    } on CloudApiException catch (error) {
+      debugPrint('nickname sync failed: $error');
+    }
+  }
+
+  /// 按 `updated_at` 把昵称同步到较旧的一边。本机刚改完昵称时调用，失败抛
+  /// [CloudApiException]（比如服务端认为含敏感词），本机昵称保持不变。
+  /// 没登录、没接本机存储、本机资料还没读完时什么都不做。
+  /// 多次调用按顺序执行，每次都用调用时最新的本机昵称重新判断。
+  Future<void> syncNickname() {
+    final previous = _nicknameSyncTail;
+    final run = previous == null
+        ? _syncNickname()
+        : previous.then((_) {}, onError: (_) {}).then((_) => _syncNickname());
+    _nicknameSyncTail = run;
+    return run;
+  }
+
+  Future<void> _syncNickname() async {
+    final store = profileStore;
+    final me = _me;
+    if (store == null || !_signedIn || me == null || !store.profileLoaded) {
+      return;
+    }
+    final action = decideNicknameSync(
+      local: store.nickname,
+      localUpdatedAt: store.nicknameUpdatedAt,
+      remote: me.profile.displayName,
+      remoteUpdatedAt: me.profile.updatedAt,
+    );
+    switch (action) {
+      case NicknameSyncAction.none:
+        return;
+      case NicknameSyncAction.pull:
+        await store.applyCloudNickname(
+          normalizeNickname(me.profile.displayName ?? ''),
+          me.profile.updatedAt,
+        );
+      case NicknameSyncAction.push:
+        await updateDisplayName(normalizeNickname(store.nickname));
     }
   }
 

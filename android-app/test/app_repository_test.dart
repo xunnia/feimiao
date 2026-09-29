@@ -800,6 +800,27 @@ void main() {
     await reopened.closeForTest();
   });
 
+  test('profile nickname keeps 12 characters and its sync time persists',
+      () async {
+    final repo = await freshRepo();
+    expect(repo.profileLoaded, isTrue);
+    expect(repo.profileNicknameUpdatedAt, isNull);
+
+    await repo.setProfileNickname('一二三四五六七八九十甲乙丙丁');
+    expect(repo.profileNickname, '一二三四五六七八九十甲乙');
+    expect(repo.profileNicknameUpdatedAt, isNotNull);
+
+    final cloudAt = DateTime.utc(2026, 9, 29, 8);
+    await repo.applyCloudNickname('服务端名字', cloudAt);
+    await repo.closeForTest();
+
+    final reopened = AppRepository();
+    await reopened.init();
+    expect(reopened.profileNickname, '服务端名字');
+    expect(reopened.profileNicknameUpdatedAt, cloudAt);
+    await reopened.closeForTest();
+  });
+
   test('本机备份列表只读取不清理旧备份', () async {
     final repo = await freshRepo();
     final now = DateTime(2026, 7, 7, 12);

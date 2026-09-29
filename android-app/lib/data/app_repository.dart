@@ -22,6 +22,7 @@ import '../core/account/liability_balance_mode.dart';
 import '../core/account/net_worth_snapshot.dart';
 import '../core/account/net_worth_verified_checkpoint.dart';
 import '../core/app_clock.dart';
+import '../core/cloud/profile_sync.dart';
 import '../core/ai/ai_provider_config.dart';
 import '../core/ai/ai_account_json.dart';
 import '../core/ai/ai_logger.dart';
@@ -2965,6 +2966,8 @@ class AppRepository extends ChangeNotifier {
   int _lastAssetViewTabIndex = 2;
   String _profileNickname = '';
   String _profileAvatarPath = '';
+  DateTime? _profileNicknameUpdatedAt;
+  final Completer<void> _profileLoadedCompleter = Completer<void>();
 
   /// 用户纠正记忆：(备注短语, 收支, 分类key)。AI 记账时按此覆盖模型的猜测。
   final List<({String phrase, TransactionKind kind, String key})> _catMemory =
@@ -8927,34 +8930,78 @@ class AppRepository extends ChangeNotifier {
   String get profileNickname => _profileNickname;
   String get profileAvatarPath => _profileAvatarPath;
 
+  /// 本机最后一次修改昵称的时间，账号同步按它和服务端比新旧。
+  /// 这个字段上线前设的昵称没有时间，为 null。
+  DateTime? get profileNicknameUpdatedAt => _profileNicknameUpdatedAt;
+  bool get profileLoaded => _profileLoadedCompleter.isCompleted;
+  Future<void> get profileLoadedFuture => _profileLoadedCompleter.future;
+
   Future<void> _loadProfileSettings() async {
-    const keys = ['profile_nickname', 'profile_avatar_path'];
+    const keys = [
+      'profile_nickname',
+      'profile_avatar_path',
+      'profile_nickname_updated_at',
+    ];
     final rows = await _db!.query(
       'app_settings',
-      where: 'key IN (?, ?)',
+      where: 'key IN (?, ?, ?)',
       whereArgs: keys,
     );
     final map = {
       for (final row in rows)
         row['key'] as String: (row['value'] as String?) ?? '',
     };
-    final nickname = (map['profile_nickname'] ?? '').trim();
+    final nickname = normalizeNickname(map['profile_nickname'] ?? '');
     // 昵称是「用户的名字」不是 App 的名字：没设置就留空（UI 显示引导文案），
     // 旧版曾把 App 名当默认值写进库，读到它一律视为未设置。
     _profileNickname = nickname == '肥喵记账' ? '' : nickname;
     _profileAvatarPath = (map['profile_avatar_path'] ?? '').trim();
+    final updatedMs = int.tryParse(map['profile_nickname_updated_at'] ?? '');
+    _profileNicknameUpdatedAt = updatedMs == null
+        ? null
+        : DateTime.fromMillisecondsSinceEpoch(updatedMs, isUtc: true);
+    if (!_profileLoadedCompleter.isCompleted) {
+      _profileLoadedCompleter.complete();
+    }
   }
 
+  /// 用户在本机改昵称。最多 [kNicknameMaxChars] 个字（按看到的字算），并记下修改时间。
   Future<void> setProfileNickname(String nickname) async {
-    final trimmed = nickname.trim();
-    final normalized = trimmed.length > 12 ? trimmed.substring(0, 12) : trimmed;
+    final normalized = normalizeNickname(nickname);
     if (_profileNickname == normalized) return;
-    _profileNickname = normalized;
-    await _db!.insert(
-      'app_settings',
-      {'key': 'profile_nickname', 'value': normalized},
-      conflictAlgorithm: ConflictAlgorithm.replace,
-    );
+    await _writeProfileNickname(normalized, AppClock.now.toUtc());
+  }
+
+  /// 账号同步用：服务端的昵称更新时覆盖本机，修改时间记成服务端的时间，
+  /// 这样下次比较时两边一致，不会来回覆盖。
+  Future<void> applyCloudNickname(String nickname, DateTime? updatedAt) async {
+    final normalized = normalizeNickname(nickname);
+    final at = (updatedAt ?? AppClock.now).toUtc();
+    if (_profileNickname == normalized &&
+        _profileNicknameUpdatedAt == at) {
+      return;
+    }
+    await _writeProfileNickname(normalized, at);
+  }
+
+  Future<void> _writeProfileNickname(String value, DateTime updatedAt) async {
+    _profileNickname = value;
+    _profileNicknameUpdatedAt = updatedAt;
+    await _db!.transaction((txn) async {
+      await txn.insert(
+        'app_settings',
+        {'key': 'profile_nickname', 'value': value},
+        conflictAlgorithm: ConflictAlgorithm.replace,
+      );
+      await txn.insert(
+        'app_settings',
+        {
+          'key': 'profile_nickname_updated_at',
+          'value': updatedAt.millisecondsSinceEpoch.toString(),
+        },
+        conflictAlgorithm: ConflictAlgorithm.replace,
+      );
+    });
     notifyListeners();
   }
 

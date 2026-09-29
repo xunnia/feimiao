@@ -18,7 +18,10 @@ import '../../theme/app_tokens.dart';
 import '../../widgets/app_buttons.dart';
 import 'theme_settings_view.dart';
 import '../../widgets/app_toast.dart';
+import '../../core/cloud/cloud_account.dart';
+import '../../core/cloud/cloud_errors.dart';
 import '../account/account_section.dart';
+import '../account/account_widgets.dart';
 import '../common/app_sheet.dart';
 import '../../widgets/ios_form.dart';
 import '../../widgets/ios_menu.dart';
@@ -511,11 +514,23 @@ class _EditProfileSheetState extends State<_EditProfileSheet> {
     if (_saving) return;
     setState(() => _saving = true);
     final repo = context.read<AppRepository>();
+    // 没接账号时 provider 可能不存在（测试、截图），按可空读。
+    final account = Provider.of<CloudAccount?>(context, listen: false);
     try {
       await repo.setProfileNickname(_nicknameCtrl.text);
       final bytes = _avatarBytes;
       if (bytes != null) {
         await repo.saveProfileAvatarBytes(bytes);
+      }
+      if (account != null && account.enabled && account.signedIn) {
+        try {
+          await account.syncNickname();
+        } on CloudApiException catch (error) {
+          // 本机已经存好；只是账号那边没更新，下次打开 App 会再试。
+          if (mounted) {
+            showAppToast(context, '昵称已保存在本机，同步到账号没成功：${accountErrorText(error)}');
+          }
+        }
       }
       if (mounted) Navigator.pop(context);
     } finally {

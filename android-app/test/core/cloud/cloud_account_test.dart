@@ -5,7 +5,9 @@ import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:qingji/core/cloud/cloud_account.dart';
 import 'package:qingji/core/cloud/cloud_api.dart';
+import 'package:qingji/core/cloud/cloud_errors.dart';
 import 'package:qingji/core/cloud/cloud_session_store.dart';
+import 'package:qingji/core/cloud/profile_sync.dart';
 
 http.Response _json(int status, Object body, {Map<String, String>? headers}) =>
     http.Response(jsonEncode(body), status, headers: {
@@ -50,6 +52,9 @@ class _Server {
   bool deviceLimit = false;
   String etag = '"v1"';
   double usedPct = 12;
+  Map<String, Object?> profile = Map.of(_me['profile']! as Map<String, Object?>);
+  bool rejectProfile = false;
+  final profileWrites = <String>[];
 
   Future<http.Response> handle(http.Request request) async {
     requests.add(request);
@@ -94,7 +99,23 @@ class _Server {
       case '/v1/auth/device-limit/resolve':
         return _json(200, _tokens);
       case '/v1/me':
-        return _json(200, _me);
+        return _json(200, {..._me, 'profile': profile});
+      case '/v1/me/profile':
+        if (rejectProfile) {
+          return _json(400, {
+            'error': {
+              'code': 'INVALID_REQUEST',
+              'message': '昵称包含不允许的内容',
+              'action': 'show_message',
+              'request_id': 'r',
+            },
+          });
+        }
+        final name =
+            (jsonDecode(request.body) as Map)['display_name'] as String;
+        profileWrites.add(name);
+        profile = {'display_name': name, 'updated_at': '2026-09-30T00:00:00Z'};
+        return _json(200, profile);
       case '/v1/entitlements':
         if (request.headers['If-None-Match'] == etag) {
           return http.Response('', 304);
@@ -110,10 +131,34 @@ class _Server {
       requests.where((r) => r.url.path == '/v1$path').length;
 }
 
+class _LocalProfile implements LocalProfileStore {
+  _LocalProfile({this.nickname = '', this.nicknameUpdatedAt});
+
+  @override
+  String nickname;
+  @override
+  DateTime? nicknameUpdatedAt;
+  final applied = <String>[];
+
+  @override
+  bool get profileLoaded => true;
+
+  @override
+  Future<void> whenProfileLoaded() async {}
+
+  @override
+  Future<void> applyCloudNickname(String name, DateTime? updatedAt) async {
+    applied.add(name);
+    nickname = name;
+    nicknameUpdatedAt = updatedAt;
+  }
+}
+
 CloudAccount _account(_Server server, MemoryCloudSecretStore secrets,
-        {bool enabled = true}) =>
+        {bool enabled = true, LocalProfileStore? profile}) =>
     CloudAccount(
       enabled: enabled,
+      profileStore: profile,
       api: CloudApi(
         client: MockClient(server.handle),
         store: CloudSessionStore(store: secrets),
@@ -239,5 +284,90 @@ void main() {
     expect(account.signOutNotice, isNull);
     expect(server.count('/auth/logout'), 1);
     account.dispose();
+  });
+
+  group('nickname sync', () {
+    // 登录后的昵称同步是不等待的，让排队的请求跑完。
+    Future<void> settle() async {
+      for (var i = 0; i < 10; i++) {
+        await Future<void>.delayed(Duration.zero);
+      }
+    }
+
+    test('new device with no local name takes the server name on login',
+        () async {
+      final server = _Server();
+      final local = _LocalProfile();
+      final account =
+          _account(server, MemoryCloudSecretStore(), profile: local);
+      await account.init();
+
+      await account.loginWithCode('cat@example.com', '123456');
+      await settle();
+
+      expect(local.nickname, '肥喵');
+      expect(local.nicknameUpdatedAt!.toUtc(), DateTime.utc(2026, 9, 29));
+      expect(server.count('/me/profile'), 0);
+      account.dispose();
+    });
+
+    test('a newer local name is uploaded and a 20-char server name is cut',
+        () async {
+      final server = _Server();
+      final local = _LocalProfile(
+          nickname: '本机新名', nicknameUpdatedAt: DateTime.utc(2026, 9, 30));
+      final account =
+          _account(server, MemoryCloudSecretStore(), profile: local);
+      await account.init();
+      await account.loginWithCode('cat@example.com', '123456');
+      await settle();
+
+      expect(server.profileWrites, ['本机新名']);
+      expect(account.me!.profile.displayName, '本机新名');
+      expect(local.applied, isEmpty);
+
+      server.profile = {
+        'display_name': '一二三四五六七八九十甲乙丙丁戊己庚辛壬癸',
+        'updated_at': '2026-10-01T00:00:00Z',
+      };
+      await account.refresh();
+      await settle();
+      expect(local.nickname, '一二三四五六七八九十甲乙');
+      account.dispose();
+    });
+
+    test('a rejected upload throws and keeps the local name', () async {
+      final server = _Server()..rejectProfile = true;
+      final local = _LocalProfile(
+          nickname: '肥喵', nicknameUpdatedAt: DateTime.utc(2026, 9, 29));
+      final account =
+          _account(server, MemoryCloudSecretStore(), profile: local);
+      await account.init();
+      await account.loginWithCode('cat@example.com', '123456');
+      await settle();
+
+      local
+        ..nickname = '不合适的名字'
+        ..nicknameUpdatedAt = DateTime.utc(2026, 10, 2);
+      await expectLater(
+          account.syncNickname(), throwsA(isA<CloudApiException>()));
+
+      expect(local.nickname, '不合适的名字');
+      expect(account.me!.profile.displayName, '肥喵');
+      account.dispose();
+    });
+
+    test('without a local store the account never writes the profile',
+        () async {
+      final server = _Server();
+      final account = _account(server, MemoryCloudSecretStore());
+      await account.init();
+      await account.loginWithCode('cat@example.com', '123456');
+      await settle();
+      await account.syncNickname();
+
+      expect(server.count('/me/profile'), 0);
+      account.dispose();
+    });
   });
 }
