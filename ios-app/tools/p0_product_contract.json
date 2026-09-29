@@ -499,7 +499,7 @@
       "feature": "报告库与月报阅读",
       "androidEntry": "settings/reports",
       "androidState": "已有月报和报告正文",
-      "androidSource": ["android-app/lib/views/reports/report_views.dart", "android-app/lib/views/statistics/monthly_report_view.dart"],
+      "androidSource": ["android-app/lib/views/reports/report_views.dart"],
       "iosTargetEntry": "settings/reports",
       "iosCurrentEntry": "settings/reports",
       "iosSource": ["ios-app/QingJi/Views/Reports/ReportsView.swift"],
