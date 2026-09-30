@@ -14,6 +14,7 @@ import '../../core/models/category_seed.dart';
 import '../../core/models/transaction_kind.dart';
 import '../../core/models/transaction_record.dart';
 import '../../core/money_format.dart';
+import '../../core/statistics/delta_badge_text.dart';
 import '../../core/statistics/spending_insights.dart';
 import '../../core/statistics/statistics_engine.dart';
 import '../../data/app_repository.dart';
@@ -22,11 +23,11 @@ import '../../theme/app_colors.dart';
 import '../../theme/app_tokens.dart';
 import '../../widgets/app_buttons.dart';
 import '../../widgets/app_date_picker.dart';
+import '../../widgets/app_empty_state.dart';
 import '../../widgets/app_toast.dart';
 import '../../widgets/budget_progress.dart';
 import '../../widgets/glass.dart';
 import '../../widgets/ios_menu.dart';
-import '../../widgets/mascot.dart';
 import '../../widgets/monthly_pace_card.dart';
 import '../../widgets/pressable_scale.dart';
 import '../../widgets/settings_ui.dart';
@@ -392,6 +393,7 @@ class _WeekContent extends StatelessWidget {
           prevExpense: prevSame.totalExpense,
           prevIncome: prevSame.totalIncome,
           prevBalance: prevSame.balance,
+          lastIndex: isCurrentWeek ? today.difference(weekStart).inDays : null,
           series: [
             for (final d in s.dailyTotals)
               (
@@ -426,7 +428,7 @@ class _WeekContent extends StatelessWidget {
             ? null
             : _RingCard(
                 title: '支出构成',
-                totalLabel: '本周支出',
+                totalLabel: isCurrentWeek ? '本周支出' : '该周支出',
                 total: s.totalExpense,
                 categories: s.expenseByCategory,
                 onDrill: (n, {categoryNames}) => _drillToCategory(
@@ -441,7 +443,12 @@ class _WeekContent extends StatelessWidget {
             ? null
             : _SectionCard(
                 title: '每日支出',
-                child: _WeekBars(daily: s.dailyTotals),
+                child: _WeekBars(
+                  daily: s.dailyTotals,
+                  lastIndex: isCurrentWeek
+                      ? today.difference(weekStart).inDays
+                      : null,
+                ),
               ),
         'ranking' => !hasExpense
             ? null
@@ -573,6 +580,7 @@ class _MonthlyContent extends StatelessWidget {
           badgeIncome: curSame?.totalIncome,
           badgeBalance: curSame?.balance,
           compareNote: comparableDays == null ? null : '前$comparableDays天',
+          lastIndex: isCurrentMonth ? now.day - 1 : null,
           series: [
             for (final d in summary.dailyTotals)
               (
@@ -737,13 +745,34 @@ class _MonthlyContent extends StatelessWidget {
             dailyTotals: summary.dailyTotals,
             year: displayedMonth.year,
             month: displayedMonth.month,
+            lastDay: isCurrentMonth ? AppClock.now.day : null,
           ),
         );
       case 'radar':
-        if (summary.expenseByCategory.isEmpty) return null;
+        // 和顶部徽章、洞察同一对窗口：当月比上月同期，过去的月整月对整月。
+        final w = SpendingInsights.comparableMonthWindows(
+          records,
+          year: displayedMonth.year,
+          month: displayedMonth.month,
+          now: AppClock.now,
+        );
+        if (compareCategoryRows(
+          w.current.expenseByCategory,
+          w.previous.expenseByCategory,
+        ).isEmpty) {
+          return null;
+        }
+        final pm = DateTime(displayedMonth.year, displayedMonth.month - 1);
+        final curLabel = w.sameProgress ? '本月' : '${displayedMonth.month}月';
+        final prevLabel = w.sameProgress ? '上月同期' : '${pm.month}月';
         return _SectionCard(
-          title: '本月 vs 上月',
-          child: _CompareBarsH(current: summary, previous: prevSummary),
+          title: '$curLabel vs $prevLabel',
+          child: _CompareBarsH(
+            current: w.current.expenseByCategory,
+            previous: w.previous.expenseByCategory,
+            currentLabel: curLabel,
+            previousLabel: prevLabel,
+          ),
         );
       case 'stacked':
         return _SectionCard(
@@ -986,9 +1015,12 @@ class _TrendCardState extends State<_TrendCard> {
       // 支出/收入 切换挪到标题同一行（不再单独占一行、下压图表）。
       trailing: SizedBox(
         width: 108,
-        child: _TrendModeSegment(
+        // 06 §3：分段统一用 SlidingSegment，不再单独画一套。
+        child: SlidingSegment<bool>(
+          items: const [(false, '支出'), (true, '收入')],
           value: _showIncome,
           onChanged: (v) {
+            if (v == _showIncome) return;
             Haptics.selection();
             setState(() => _showIncome = v);
           },
@@ -1004,103 +1036,6 @@ class _TrendCardState extends State<_TrendCard> {
         compareLabel: widget.compareLabel,
         markIndex: widget.markIndex,
         periodLabel: widget.periodLabel,
-      ),
-    );
-  }
-}
-
-class _TrendModeSegment extends StatelessWidget {
-  final bool value;
-  final ValueChanged<bool> onChanged;
-
-  const _TrendModeSegment({
-    required this.value,
-    required this.onChanged,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    final index = value ? 1 : 0;
-    return Container(
-      height: 30,
-      padding: const EdgeInsets.all(3),
-      decoration: BoxDecoration(
-        color: AppColors.card(scheme),
-        borderRadius: BorderRadius.circular(999),
-        border: Border.all(color: AppColors.hairline(scheme)),
-      ),
-      child: LayoutBuilder(
-        builder: (context, constraints) {
-          final itemW = constraints.maxWidth / 2;
-          return Stack(
-            children: [
-              AnimatedPositioned(
-                duration: const Duration(milliseconds: 200),
-                curve: Curves.easeOutCubic,
-                left: index * itemW,
-                top: 0,
-                bottom: 0,
-                width: itemW,
-                child: Container(
-                  decoration: BoxDecoration(
-                    color: scheme.surfaceContainerHighest,
-                    borderRadius: BorderRadius.circular(999),
-                  ),
-                ),
-              ),
-              Row(
-                children: [
-                  _TrendModeItem(
-                    label: '支出',
-                    selected: !value,
-                    onTap: () => onChanged(false),
-                  ),
-                  _TrendModeItem(
-                    label: '收入',
-                    selected: value,
-                    onTap: () => onChanged(true),
-                  ),
-                ],
-              ),
-            ],
-          );
-        },
-      ),
-    );
-  }
-}
-
-class _TrendModeItem extends StatelessWidget {
-  final String label;
-  final bool selected;
-  final VoidCallback onTap;
-
-  const _TrendModeItem({
-    required this.label,
-    required this.selected,
-    required this.onTap,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return Expanded(
-      child: GestureDetector(
-        behavior: HitTestBehavior.opaque,
-        onTap: selected ? null : onTap,
-        child: Center(
-          child: Text(
-            label,
-            style: TextStyle(
-              fontSize: 12,
-              fontWeight: FontWeight.w400,
-              color: selected
-                  ? scheme.onSurface
-                  : scheme.onSurfaceVariant.withValues(alpha: 0.82),
-            ),
-          ),
-        ),
       ),
     );
   }
@@ -1173,7 +1108,7 @@ class _ChartLibraryRow extends StatelessWidget {
       mainAxisSize: MainAxisSize.min,
       children: [
         SizedBox(
-          height: 32,
+          height: 44,
           child: Row(
             children: [
               const SizedBox(width: 13),
@@ -1194,9 +1129,14 @@ class _ChartLibraryRow extends StatelessWidget {
                 width: 52,
                 child: Align(
                   alignment: Alignment.centerRight,
-                  child: _ChartLibrarySwitch(
+                  // 06 §3：开关统一用 AppSwitch（开=主色槽，跟随深色模式）。
+                  child: AppSwitch(
                     value: value,
-                    onChanged: onChanged,
+                    semanticLabel: title,
+                    onChanged: (v) {
+                      Haptics.selection();
+                      onChanged(v);
+                    },
                   ),
                 ),
               ),
@@ -1214,77 +1154,6 @@ class _ChartLibraryRow extends StatelessWidget {
             ),
           ),
       ],
-    );
-  }
-}
-
-class _ChartLibrarySwitch extends StatelessWidget {
-  final bool value;
-  final ValueChanged<bool> onChanged;
-
-  const _ChartLibrarySwitch({
-    required this.value,
-    required this.onChanged,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    const width = 43.2;
-    const height = 28.8;
-    const trackHeight = 24.0;
-    const thumbSize = 20.0;
-    const padding = 2.0;
-    const activeTrack = Color(0xFF73767D);
-    const inactiveTrack = Color(0xFFE8E9EC);
-    const inactiveBorder = Color(0xFFD8DADF);
-    return Semantics(
-      toggled: value,
-      button: true,
-      child: GestureDetector(
-        behavior: HitTestBehavior.opaque,
-        onTap: () {
-          Haptics.selection();
-          onChanged(!value);
-        },
-        child: SizedBox(
-          width: width,
-          height: height,
-          child: Center(
-            child: AnimatedContainer(
-              duration: const Duration(milliseconds: 120),
-              curve: Curves.easeOutCubic,
-              width: width,
-              height: trackHeight,
-              padding: const EdgeInsets.all(padding),
-              decoration: BoxDecoration(
-                color: value ? activeTrack : inactiveTrack,
-                borderRadius: BorderRadius.circular(999),
-                border: value ? null : Border.all(color: inactiveBorder),
-              ),
-              child: AnimatedAlign(
-                duration: const Duration(milliseconds: 120),
-                curve: Curves.easeOutCubic,
-                alignment: value ? Alignment.centerRight : Alignment.centerLeft,
-                child: Container(
-                  width: thumbSize,
-                  height: thumbSize,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: Colors.white,
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.black.withValues(alpha: 0.14),
-                        blurRadius: 4,
-                        offset: const Offset(0, 1),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ),
-          ),
-        ),
-      ),
     );
   }
 }
@@ -1357,6 +1226,7 @@ class _YearlyContent extends StatelessWidget {
           prevExpense: prevSame.totalExpense,
           prevIncome: prevSame.totalIncome,
           prevBalance: prevSame.balance,
+          lastIndex: markMonth,
           series: [
             for (var i = 0; i < 12; i++)
               (
@@ -1503,6 +1373,12 @@ class _CustomContent extends StatelessWidget {
     final r = range;
     final s =
         StatisticsEngine.rangeSummary(records, start: r.start, end: r.end);
+    // 按日历日减，不用 Duration（避免夏令时地区差一小时跨天）。
+    final prev = StatisticsEngine.rangeSummary(
+      records,
+      start: DateTime(s.start.year, s.start.month, s.start.day - s.dayCount),
+      end: DateTime(s.start.year, s.start.month, s.start.day - 1),
+    );
 
     final header = Column(
       children: [
@@ -1520,12 +1396,17 @@ class _CustomContent extends StatelessWidget {
           ],
         ),
         const SizedBox(height: 16),
-        // 自定义区间没有天然同期，不传 prev → 徽章隐藏（与同期虚线规则一致）。
+        // 07 §14：自定义 N 天比紧邻此前的 N 天，徽章旁标「较此前N天」
+        // （不写「前N天」，免得和月视图的「本月前N天」混淆）。
         _TotalsHeader(
           expense: s.totalExpense,
           income: s.totalIncome,
           balance: s.balance,
           periodLabel: '区间',
+          prevExpense: prev.totalExpense,
+          prevIncome: prev.totalIncome,
+          prevBalance: prev.balance,
+          compareNote: '较此前${s.dayCount}天',
           series: [
             for (final d in s.dailyTotals)
               (
@@ -1644,8 +1525,8 @@ class _InsightsCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final lines =
-        SpendingInsights.summaryLines(records, year: year, month: month);
+    final lines = SpendingInsights.summaryLines(records,
+        year: year, month: month, now: AppClock.now);
     final profile = SpendingInsights.profile(records, year: year, month: month);
     final forecast = isCurrentMonth
         ? SpendingInsights.forecast(
@@ -1795,6 +1676,10 @@ class _TotalsHeader extends StatelessWidget {
   /// 徽章旁的灰字说明，如「前30天」。
   final String? compareNote;
 
+  /// 07 §14「未来日期是 null」：本期还没过完时，曲线只画到这个下标（今天），
+  /// 后面留空；横轴仍按整期铺开。null = 整期都画（过去的周期）。
+  final int? lastIndex;
+
   const _TotalsHeader({
     required this.expense,
     required this.income,
@@ -1808,6 +1693,7 @@ class _TotalsHeader extends StatelessWidget {
     this.badgeIncome,
     this.badgeBalance,
     this.compareNote,
+    this.lastIndex,
   });
 
   @override
@@ -1828,12 +1714,15 @@ class _TotalsHeader extends StatelessWidget {
       ],
     );
 
-    final expenseSeries = [for (final s in series) s.$2];
-    final incomeSeries = [for (final s in series) s.$3];
+    final drawn = lastIndex == null
+        ? series
+        : series.take((lastIndex! + 1).clamp(0, series.length)).toList();
+    final expenseSeries = [for (final s in drawn) s.$2];
+    final incomeSeries = [for (final s in drawn) s.$3];
     // 结余迷你曲线用累计值（逐日净结余的爬坡线，比单日抖动有意义）。
     final balanceSeries = <double>[];
     var acc = 0.0;
-    for (final s in series) {
+    for (final s in drawn) {
       acc += s.$3 - s.$2;
       balanceSeries.add(acc);
     }
@@ -1895,6 +1784,7 @@ class _TotalsHeader extends StatelessWidget {
                   height: 128,
                   child: _HeaderCurve(
                     values: expenseSeries,
+                    // 标签用整期，曲线只到今天，右边留空。
                     labels: [for (final s in series) s.$1],
                     color: scheme.primary,
                   ),
@@ -1916,6 +1806,7 @@ class _TotalsHeader extends StatelessWidget {
                 goodWhenUp: true,
                 decoration: card,
                 spark: incomeSeries,
+                sparkSlots: series.length,
                 sparkColor: AppColors.income(scheme),
               ),
             ),
@@ -1930,6 +1821,7 @@ class _TotalsHeader extends StatelessWidget {
                 goodWhenUp: true,
                 decoration: card,
                 spark: balanceSeries,
+                sparkSlots: series.length,
                 sparkColor: scheme.primary,
               ),
             ),
@@ -1964,6 +1856,9 @@ class _HeaderCurve extends StatelessWidget {
       LineChartData(
         minY: 0,
         maxY: maxY,
+        // 横轴按整期（labels）铺开：values 可能只到今天，右边留空不画 0。
+        minX: 0,
+        maxX: math.max(labels.length - 1, 1).toDouble(),
         clipData: const FlClipData.all(),
         lineTouchData: const LineTouchData(enabled: false),
         lineBarsData: [
@@ -2066,6 +1961,9 @@ class _MiniTotalCard extends StatelessWidget {
   final List<double> spark;
   final Color sparkColor;
 
+  /// 迷你曲线横轴的总格数（整期天数）；[spark] 可能只到今天。
+  final int? sparkSlots;
+
   /// 徽章用的本期值（等长同期）。不传时徽章直接比 [amount]。
   final Decimal? badgeCurrent;
 
@@ -2078,6 +1976,7 @@ class _MiniTotalCard extends StatelessWidget {
     required this.decoration,
     required this.spark,
     required this.sparkColor,
+    this.sparkSlots,
     this.badgeCurrent,
   });
 
@@ -2124,7 +2023,8 @@ class _MiniTotalCard extends StatelessWidget {
                 SizedBox(
                   width: 64,
                   height: 26,
-                  child: _Sparkline(values: spark, color: sparkColor),
+                  child: _Sparkline(
+                      values: spark, color: sparkColor, slots: sparkSlots),
                 ),
             ],
           ),
@@ -2139,7 +2039,10 @@ class _Sparkline extends StatelessWidget {
   final List<double> values;
   final Color color;
 
-  const _Sparkline({required this.values, required this.color});
+  /// 横轴总格数；比 [values] 长时右边留空（没到的日子不画）。
+  final int? slots;
+
+  const _Sparkline({required this.values, required this.color, this.slots});
 
   @override
   Widget build(BuildContext context) {
@@ -2150,11 +2053,14 @@ class _Sparkline extends StatelessWidget {
       if (v > maxV) maxV = v;
     }
     if (maxV == minV) maxV = minV + 1;
+    final width = math.max(slots ?? values.length, values.length);
 
     return LineChart(
       LineChartData(
         minY: minV,
         maxY: maxV,
+        minX: 0,
+        maxX: math.max(width - 1, 1).toDouble(),
         clipData: const FlClipData.all(),
         lineTouchData: const LineTouchData(enabled: false),
         lineBarsData: [
@@ -2203,22 +2109,13 @@ class _DeltaBadge extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final base = prev;
-    if (base == null || base == Decimal.zero) return const SizedBox.shrink();
-    // 结余可能为负：分母取绝对值，方向语义才不翻车。
-    final baseVal = MoneyFormat.toDouble(base).abs();
-    final pct = (MoneyFormat.toDouble(current) - MoneyFormat.toDouble(base)) /
-        baseVal *
-        100;
-    if (pct.abs() < 0.05) return const SizedBox.shrink();
-    final up = pct > 0;
-    final good = up == goodWhenUp;
-    final pctText = pct.abs() >= 10
-        ? pct.abs().toStringAsFixed(0)
-        : pct.abs().toStringAsFixed(1);
+    // 上期 0 → 新增 ¥X；跨零 → 金额差；见 delta_badge_text.dart（07 §14）。
+    final d = deltaBadgeText(current: current, previous: prev);
+    if (d == null) return const SizedBox.shrink();
+    final good = d.up == goodWhenUp;
 
     return Text(
-      '${up ? '↑' : '↓'} $pctText%',
+      d.text,
       style: TextStyle(
         fontSize: 12.5,
         fontWeight: FontWeight.w600,
@@ -2676,7 +2573,10 @@ class _RingCard extends StatelessWidget {
 class _WeekBars extends StatelessWidget {
   final List<DateTotal> daily;
 
-  const _WeekBars({required this.daily});
+  /// 本周还没过完时的今天下标；之后的日子不画柱（没到 ≠ 花了 0）。
+  final int? lastIndex;
+
+  const _WeekBars({required this.daily, this.lastIndex});
 
   static const _weekdayNames = ['一', '二', '三', '四', '五', '六', '日'];
 
@@ -2705,6 +2605,9 @@ class _WeekBars extends StatelessWidget {
             ),
           ),
           barGroups: List.generate(daily.length, (i) {
+            if (lastIndex != null && i > lastIndex!) {
+              return BarChartGroupData(x: i, barRods: const []);
+            }
             return BarChartGroupData(
               x: i,
               barRods: [
@@ -2805,7 +2708,12 @@ class _DualLineChart extends StatelessWidget {
     final scheme = Theme.of(context).colorScheme;
     final expColor = AppColors.expense(scheme);
     final incColor = AppColors.income(scheme);
-    final data = showIncome ? income : expense;
+    // 07 §14「未来日期是 null，不是 0」：当期只画到今天（markIndex），
+    // 后面留空；上期对比线照常画满。横轴按 xLabels 固定铺开。
+    final full = showIncome ? income : expense;
+    final data = markIndex == null
+        ? full
+        : full.take((markIndex! + 1).clamp(0, full.length)).toList();
     final compare = showIncome ? compareIncome : compareExpense;
     final color = showIncome ? incColor : expColor;
     final label = showIncome ? '收入' : '支出';
@@ -2835,7 +2743,7 @@ class _DualLineChart extends StatelessWidget {
           curveSmoothness: 0.4,
           barWidth: 2.5,
           dotData: FlDotData(
-            show: d.length <= 14,
+            show: full.length <= 14,
             getDotPainter: (s, p, b, i) =>
                 FlDotCirclePainter(radius: 2.5, color: c, strokeWidth: 0),
           ),
@@ -2885,6 +2793,11 @@ class _DualLineChart extends StatelessWidget {
             LineChartData(
               minY: 0,
               maxY: maxY,
+              minX: 0,
+              maxX: math
+                  .max(
+                      math.max(xLabels.length, compare?.length ?? 0) - 1, 1)
+                  .toDouble(),
               clipData: const FlClipData.all(),
               lineBarsData: [
                 if (compare != null)
@@ -2996,13 +2909,18 @@ class _DualLineChart extends StatelessWidget {
                   maxContentWidth: 190,
                   fitInsideHorizontally: true,
                   getTooltipItems: (spots) => spots.map((s) {
-                    final i = s.x.round().clamp(0, data.length - 1).toInt();
+                    final i = s.x.round();
                     if (s != spots.first) return null;
-                    final current = data[i];
-                    final previous = compare != null && i < compare.length
-                        ? compare[i]
-                        : null;
-                    final diff = previous == null ? null : current - previous;
+                    // 摸到今天之后：本期还没发生（null），只显示上期那条。
+                    final current =
+                        i >= 0 && i < data.length ? data[i] : null;
+                    final previous =
+                        compare != null && i >= 0 && i < compare.length
+                            ? compare[i]
+                            : null;
+                    final diff = previous == null || current == null
+                        ? null
+                        : current - previous;
                     final pointLabel = compareText.contains('去年')
                         ? '${i + 1}月'
                         : compareText.contains('上月') || xLabels.length > 20
@@ -3020,16 +2938,19 @@ class _DualLineChart extends StatelessWidget {
                       textAlign: TextAlign.left,
                       children: [
                         TextSpan(
-                          text:
-                              '$primaryLabel  ${MoneyFormat.axisLabel(current)}',
+                          text: current == null
+                              ? '$primaryLabel  还没到'
+                              : '$primaryLabel  ${MoneyFormat.axisLabel(current)}',
                           style: TextStyle(
-                            color: color,
+                            color: current == null
+                                ? scheme.onSurfaceVariant
+                                : color,
                             fontSize: 11,
                             fontWeight: FontWeight.w500,
                             fontFamily: 'Nunito',
                           ),
                         ),
-                        if (previous != null && diff != null) ...[
+                        if (previous != null) ...[
                           TextSpan(
                             text:
                                 '\n$compareText  ${MoneyFormat.axisLabel(previous)}',
@@ -3040,17 +2961,19 @@ class _DualLineChart extends StatelessWidget {
                               fontFamily: 'Nunito',
                             ),
                           ),
-                          TextSpan(
-                            text:
-                                '\n较$compareText  ${diff >= 0 ? '+' : '-'}${MoneyFormat.axisLabel(diff.abs())}',
-                            style: TextStyle(
-                              color:
-                                  diff >= 0 ? color : scheme.onSurfaceVariant,
-                              fontSize: 11,
-                              fontWeight: FontWeight.w500,
-                              fontFamily: 'Nunito',
+                          if (diff != null)
+                            TextSpan(
+                              text:
+                                  '\n较$compareText  ${diff >= 0 ? '+' : '-'}${MoneyFormat.axisLabel(diff.abs())}',
+                              style: TextStyle(
+                                color: diff >= 0
+                                    ? color
+                                    : scheme.onSurfaceVariant,
+                                fontSize: 11,
+                                fontWeight: FontWeight.w500,
+                                fontFamily: 'Nunito',
+                              ),
                             ),
-                          ),
                         ],
                       ],
                     );
@@ -3244,6 +3167,7 @@ class _TopTxnList extends StatelessWidget {
   }
 }
 
+/// 页面级空状态：统一走 AppEmptyState（06 §3 标准件，只放猫+一句话）。
 class _EmptyState extends StatelessWidget {
   final String message;
   final String sub;
@@ -3255,24 +3179,9 @@ class _EmptyState extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 40),
-      child: Column(
-        children: [
-          const Mascot(mood: MascotMood.empty, size: 80, animate: true),
-          const SizedBox(height: 16),
-          Text(message,
-              style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                    color: scheme.onSurfaceVariant,
-                  )),
-          const SizedBox(height: 6),
-          Text(sub,
-              style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                    color: scheme.onSurfaceVariant,
-                  )),
-        ],
-      ),
+      child: AppEmptyState(title: message, message: sub),
     );
   }
 }
@@ -3287,10 +3196,14 @@ class _CalendarHeatmap extends StatelessWidget {
   final int year;
   final int month;
 
+  /// 当月的今天（几号）；之后的格子按「还没到」画。null = 过去的月。
+  final int? lastDay;
+
   const _CalendarHeatmap({
     required this.dailyTotals,
     required this.year,
     required this.month,
+    this.lastDay,
   });
 
   @override
@@ -3330,21 +3243,33 @@ class _CalendarHeatmap extends StatelessWidget {
               Builder(builder: (cellCtx) {
                 final v = MoneyFormat.toDouble(d.expense);
                 final t = maxVal <= 0 ? 0.0 : (v / maxVal).clamp(0.0, 1.0);
-                final bg = v <= 0
-                    ? scheme.outlineVariant.withValues(alpha: 0.25)
-                    : scheme.primary.withValues(alpha: 0.18 + 0.72 * t);
+                // 07 §14：没到的日子不是「没花钱」，只描边、不填色、点了不提示。
+                final future = lastDay != null && d.day > lastDay!;
+                final bg = future
+                    ? Colors.transparent
+                    : v <= 0
+                        ? scheme.outlineVariant.withValues(alpha: 0.25)
+                        : scheme.primary.withValues(alpha: 0.18 + 0.72 * t);
                 return GestureDetector(
                   behavior: HitTestBehavior.opaque,
-                  onTap: () => showAppToast(
-                    cellCtx,
-                    v <= 0
-                        ? '$month月${d.day}日 没花钱'
-                        : '$month月${d.day}日 支出 ${MoneyFormat.string(d.expense)}',
-                  ),
+                  onTap: future
+                      ? null
+                      : () => showAppToast(
+                            cellCtx,
+                            v <= 0
+                                ? '$month月${d.day}日 没花钱'
+                                : '$month月${d.day}日 支出 ${MoneyFormat.string(d.expense)}',
+                          ),
                   child: Container(
                     decoration: BoxDecoration(
                       color: bg,
                       borderRadius: BorderRadius.circular(5),
+                      border: future
+                          ? Border.all(
+                              color: scheme.outlineVariant
+                                  .withValues(alpha: 0.35),
+                              width: 0.8)
+                          : null,
                     ),
                     alignment: Alignment.center,
                     child: Text(
@@ -3392,34 +3317,32 @@ class _CalendarHeatmap extends StatelessWidget {
 /// 本月 vs 上月：TOP 分类横向分组条（替代难读的雷达图）。
 /// 每个分类两条横条：本月(深) / 上月(浅)，长度按最大值归一。
 class _CompareBarsH extends StatelessWidget {
-  final MonthlySummary current;
-  final MonthlySummary previous;
+  final List<CategoryTotal> current;
+  final List<CategoryTotal> previous;
+  final String currentLabel;
+  final String previousLabel;
 
-  const _CompareBarsH({required this.current, required this.previous});
+  const _CompareBarsH({
+    required this.current,
+    required this.previous,
+    required this.currentLabel,
+    required this.previousLabel,
+  });
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final cats = current.expenseByCategory
-        .where((c) => c.total > Decimal.zero)
-        .take(6)
-        .toList();
+    final cats = compareCategoryRows(current, previous);
     if (cats.isEmpty) {
-      return Text('本月还没有支出',
-          style: TextStyle(fontSize: 12, color: scheme.onSurfaceVariant));
-    }
-    double prevOf(CategoryTotal current) {
-      final p = previous.expenseByCategory
-          .where((c) => c.identity == current.identity)
-          .toList();
-      return p.isEmpty ? 0 : MoneyFormat.toDouble(p.first.total);
+      return Text('两个月都还没有支出',
+          style: AppType.secondary(scheme).copyWith(fontSize: 12));
     }
 
     final curColor = AppColors.expense(scheme);
     final prevColor = scheme.onSurfaceVariant.withValues(alpha: 0.35);
     var maxV = 0.0;
     for (final c in cats) {
-      maxV = math.max(maxV, math.max(MoneyFormat.toDouble(c.total), prevOf(c)));
+      maxV = math.max(maxV, math.max(c.cur, c.prev));
     }
     if (maxV <= 0) maxV = 1;
 
@@ -3448,9 +3371,9 @@ class _CompareBarsH extends StatelessWidget {
       children: [
         Row(
           children: [
-            _LegendDot(color: curColor, label: '本月'),
+            _LegendDot(color: curColor, label: currentLabel),
             const SizedBox(width: 14),
-            _LegendDot(color: prevColor, label: '上月'),
+            _LegendDot(color: prevColor, label: previousLabel),
           ],
         ),
         const SizedBox(height: 12),
@@ -3463,15 +3386,15 @@ class _CompareBarsH extends StatelessWidget {
                     overflow: TextOverflow.ellipsis,
                     style: Theme.of(context).textTheme.labelMedium),
               ),
-              Text(MoneyFormat.axisLabel(MoneyFormat.toDouble(c.total)),
+              Text(MoneyFormat.axisLabel(c.cur),
                   style: Theme.of(context).textTheme.labelSmall?.copyWith(
                       fontFamily: 'Nunito', color: scheme.onSurface)),
             ],
           ),
           const SizedBox(height: 4),
-          bar(curColor, MoneyFormat.toDouble(c.total)),
+          bar(curColor, c.cur),
           const SizedBox(height: 3),
-          bar(prevColor, prevOf(c)),
+          bar(prevColor, c.prev),
           const SizedBox(height: 12),
         ],
       ],
@@ -3549,7 +3472,7 @@ class _StackedBars12State extends State<_StackedBars12> {
     final scheme = Theme.of(context).colorScheme;
     if (!_any) {
       return Text('近 12 个月还没有记录',
-          style: TextStyle(fontSize: 12, color: scheme.onSurfaceVariant));
+          style: AppType.secondary(scheme).copyWith(fontSize: 12));
     }
 
     final spentColor = AppColors.expense(scheme);

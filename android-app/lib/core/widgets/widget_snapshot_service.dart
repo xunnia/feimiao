@@ -11,8 +11,8 @@ import 'package:path_provider/path_provider.dart';
 
 import '../../core/budget/budget_engine.dart';
 import '../../data/app_repository.dart';
-import '../models/transaction_kind.dart';
 import '../money_format.dart';
+import '../statistics/monthly_pace.dart';
 import '../statistics/statistics_engine.dart';
 import '../../widgets/home_summary_card.dart';
 import '../../widgets/monthly_pace_card.dart';
@@ -530,49 +530,29 @@ class FeimiaoWidgetSnapshotBuilder {
   static _WidgetPaceSnapshot _paceSnapshot(
     AppRepository repo,
     DateTime today,
-    Decimal currentExpense,
+    Decimal monthExpense,
     bool privacy,
   ) {
-    final months = <DateTime>[
-      for (var offset = 6; offset >= 1; offset--)
-        DateTime(today.year, today.month - offset),
-    ];
-    final sameProgressSlots = <int, Decimal>{};
-    final fullMonthSlots = <int, Decimal>{};
-    for (final month in months) {
-      final key = month.year * 100 + month.month;
-      sameProgressSlots[key] = Decimal.zero;
-      fullMonthSlots[key] = Decimal.zero;
-    }
-
-    for (final transaction in repo.visibleTransactions) {
-      if (transaction.txKind != TransactionKind.expense) continue;
-      final key = transaction.date.year * 100 + transaction.date.month;
-      if (!fullMonthSlots.containsKey(key)) continue;
-      final amount = repo.userAmountOf(transaction);
-      if (amount <= Decimal.zero) continue;
-      fullMonthSlots[key] = fullMonthSlots[key]! + amount;
-      final comparableDay = math.min(
-        today.day,
-        DateTime(transaction.date.year, transaction.date.month + 1, 0).day,
-      );
-      if (transaction.date.day <= comparableDay) {
-        sameProgressSlots[key] = sameProgressSlots[key]! + amount;
-      }
-    }
-
-    final samples =
-        sameProgressSlots.values.where((v) => v > Decimal.zero).toList();
-    final average = samples.isEmpty
-        ? Decimal.zero
-        : (samples.fold(Decimal.zero, (a, b) => a + b) /
-                Decimal.fromInt(samples.length))
-            .toDecimal(scaleOnInfinitePrecision: 2);
+    // 07 案例 74：和统计页进度卡（也是小组件图片）同一个函数、同一份记录，
+    // 历史样本门槛、真实 0 月、截至今天的本月值都一致。
+    final paceSamples = computeMonthlyPaceSamples(
+      records: repo.allRecordsRef,
+      year: today.year,
+      month: today.month,
+      isCurrentMonth: true,
+      now: today,
+    );
+    final history = paceSamples.where((s) => !s.current).toList();
+    final avgResult = monthlyPaceAverage(paceSamples);
+    final average = avgResult?.average ?? Decimal.zero;
+    final enough = avgResult != null;
+    // 本月值 = 截至今天（未来日期的账不提前算进来，07 案例 73）。
+    final currentExpense = paceSamples.last.pace;
     final maxAmount = [
       currentExpense,
       average,
-      ...sameProgressSlots.values,
-      ...fullMonthSlots.values,
+      for (final m in history) m.pace,
+      for (final m in history) m.full,
     ].fold<Decimal>(Decimal.zero, (max, item) => item > max ? item : max);
     final maxChartValue = math.max(MoneyFormat.toDouble(maxAmount), 0.01);
     final legacyMaxValue = math.max(
@@ -588,13 +568,11 @@ class FeimiaoWidgetSnapshotBuilder {
             .round();
 
     final chartMonths = [
-      for (final month in months)
+      for (final m in history)
         FeimiaoWidgetPaceMonthSnapshot(
-          label: '${month.month}月',
-          fullValue: MoneyFormat.toDouble(
-              fullMonthSlots[month.year * 100 + month.month]!),
-          sameProgressValue: MoneyFormat.toDouble(
-              sameProgressSlots[month.year * 100 + month.month]!),
+          label: m.label,
+          fullValue: MoneyFormat.toDouble(m.full),
+          sameProgressValue: MoneyFormat.toDouble(m.pace),
           isCurrent: false,
         ),
       FeimiaoWidgetPaceMonthSnapshot(
@@ -604,22 +582,23 @@ class FeimiaoWidgetSnapshotBuilder {
         isCurrent: true,
       ),
     ];
-    final state = currentExpense <= Decimal.zero && samples.isEmpty
+    final hasHistorySpend = history.any((m) => m.pace > Decimal.zero);
+    final state = currentExpense <= Decimal.zero && !hasHistorySpend
         ? 'empty'
-        : samples.length < 2
+        : !enough
             ? 'insufficientData'
             : privacy
                 ? 'privacy'
                 : 'normal';
     final caption = '截至${today.month}月${today.day}日';
-    final averageText = samples.length < 2 ? '--' : _money(average, privacy);
+    final averageText = enough ? _money(average, privacy) : '--';
     final currentText = _money(currentExpense, privacy);
 
     return _WidgetPaceSnapshot(
       caption: caption,
       averageText: averageText,
       thisProgress: legacyProgressOf(currentExpense),
-      averageProgress: samples.length < 2 ? 0 : legacyProgressOf(average),
+      averageProgress: enough ? legacyProgressOf(average) : 0,
       module: FeimiaoWidgetPaceSnapshot(
         state: state,
         title: caption,

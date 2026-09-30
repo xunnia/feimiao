@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:decimal/decimal.dart';
 
 import '../models/transaction_kind.dart';
@@ -26,30 +28,64 @@ class SpendingProfile {
 class SpendingInsights {
   SpendingInsights._();
 
-  /// ① 自动消费摘要：本月 vs 上月的显著变化，返回 0-3 条人话。
-  /// 如「餐饮比上月多花了 ¥120（+23%），主要是多了 8 笔」。
+  /// 07 §14：和顶部涨跌徽章用同一对窗口。
+  /// 当月（没过完）= 两边各取前 N 天，N = min(今天日序, 上月天数)；
+  /// 已过完的月 = 整月对整月。返回 (本期, 上期, 是否截到同期)。
+  static ({
+    RangeSummary current,
+    RangeSummary previous,
+    bool sameProgress,
+  }) comparableMonthWindows(
+    List<TransactionRecord> records, {
+    required int year,
+    required int month,
+    DateTime? now,
+  }) {
+    final n = now ?? DateTime.now();
+    final prevStart = DateTime(year, month - 1, 1);
+    final prevDays = DateTime(year, month, 0).day;
+    final curDays = DateTime(year, month + 1, 0).day;
+    final isCurrent = n.year == year && n.month == month;
+    final curN = isCurrent ? math.min(n.day, prevDays) : curDays;
+    final prevN = isCurrent ? curN : prevDays;
+    return (
+      current: StatisticsEngine.rangeSummary(records,
+          start: DateTime(year, month, 1), end: DateTime(year, month, curN)),
+      previous: StatisticsEngine.rangeSummary(records,
+          start: prevStart,
+          end: DateTime(prevStart.year, prevStart.month, prevN)),
+      sameProgress: isCurrent,
+    );
+  }
+
+  /// ① 自动消费摘要：本期 vs 上期的显著变化，返回 0-3 条人话。
+  /// 如「餐饮比上月同期多花 ¥120，多了 8 笔」。当月比上月同期（和顶部徽章
+  /// 同一窗口，避免月初拿 9 天比上月整月永远显示「省了」）。
   static List<String> summaryLines(
     List<TransactionRecord> records, {
     required int year,
     required int month,
+    DateTime? now,
   }) {
     final cur =
         StatisticsEngine.monthlySummary(records, year: year, month: month);
-    final pm = DateTime(year, month - 1, 1);
-    final prev = StatisticsEngine.monthlySummary(records,
-        year: pm.year, month: pm.month);
+    final w = comparableMonthWindows(records,
+        year: year, month: month, now: now);
+    // 翻到过去的月份不写「本月」；「上月」相对当前看的月份，照样成立。
+    final thisName = w.sameProgress ? '本月' : '$month月';
+    final prevName = w.sameProgress ? '上月同期' : '上月';
 
     final lines = <String>[];
-    final curTotal = cur.totalExpense.toDouble();
-    final prevTotal = prev.totalExpense.toDouble();
+    final curTotal = w.current.totalExpense.toDouble();
+    final prevTotal = w.previous.totalExpense.toDouble();
 
-    // 总支出变化（上月有数据才比，避免除零和无意义对比）。
+    // 总支出变化（上期有数据才比，避免除零和无意义对比）。
     if (prevTotal > 0 && curTotal > 0) {
       final pct = (curTotal - prevTotal) / prevTotal * 100;
       if (pct.abs() >= 10) {
         lines.add(pct > 0
-            ? '本月总支出比上月多了 ${pct.toStringAsFixed(0)}%'
-            : '本月总支出比上月省了 ${(-pct).toStringAsFixed(0)}%，不错喵');
+            ? '$thisName总支出比$prevName多了 ${pct.toStringAsFixed(0)}%'
+            : '$thisName总支出比$prevName省了 ${(-pct).toStringAsFixed(0)}%，不错喵');
       }
     }
 
@@ -57,9 +93,9 @@ class SpendingInsights {
     String? topName;
     var topDelta = Decimal.zero;
     int deltaCount = 0;
-    for (final c in cur.expenseByCategory) {
+    for (final c in w.current.expenseByCategory) {
       if (c.total <= Decimal.zero) continue;
-      final p = prev.expenseByCategory
+      final p = w.previous.expenseByCategory
           .where((x) => x.identity == c.identity)
           .toList();
       final prevTotalC = p.isEmpty ? Decimal.zero : p.first.total;
@@ -73,14 +109,18 @@ class SpendingInsights {
     }
     if (topName != null && topDelta.toDouble() >= 50) {
       final countPart = deltaCount > 0 ? '，多了 $deltaCount 笔' : '';
-      lines.add('「$topName」比上月多花 ${MoneyFormat.string(topDelta)}$countPart');
+      lines.add(
+          '「$topName」比$prevName多花 ${MoneyFormat.string(topDelta)}$countPart');
     }
 
-    // 最大头分类占比过高提醒（>45% 且总支出有规模）。
+    // 最大头分类占比过高提醒（>45% 且总支出有规模）。占比看整月（截至今天）。
     final top =
         cur.expenseByCategory.isEmpty ? null : cur.expenseByCategory.first;
-    if (top != null && top.share >= 0.45 && curTotal >= 200) {
-      lines.add('「${top.name}」占了本月支出的 ${(top.share * 100).round()}%，是绝对大头');
+    if (top != null &&
+        top.share >= 0.45 &&
+        cur.totalExpense.toDouble() >= 200) {
+      lines.add(
+          '「${top.name}」占了$thisName支出的 ${(top.share * 100).round()}%，是绝对大头');
     }
 
     return lines.take(3).toList();
@@ -192,4 +232,34 @@ class SpendingInsights {
     }
     return (projected: projected, overBy: overBy, text: text);
   }
+}
+
+/// 07 D-STAT-008：分类取两期正额分类的并集（上月花过、本期没花的也要出现），
+/// 按本期金额、再按上期金额降序取前 6。
+List<({String name, double cur, double prev})> compareCategoryRows(
+  List<CategoryTotal> current,
+  List<CategoryTotal> previous, {
+  int limit = 6,
+}) {
+  final rows = <String, ({String name, double cur, double prev})>{};
+  for (final c in current) {
+    if (c.total <= Decimal.zero) continue;
+    rows[c.identity] =
+        (name: c.name, cur: MoneyFormat.toDouble(c.total), prev: 0);
+  }
+  for (final p in previous) {
+    if (p.total <= Decimal.zero) continue;
+    final old = rows[p.identity];
+    rows[p.identity] = (
+      name: old?.name ?? p.name,
+      cur: old?.cur ?? 0,
+      prev: MoneyFormat.toDouble(p.total),
+    );
+  }
+  final list = rows.values.toList()
+    ..sort((a, b) {
+      final byCur = b.cur.compareTo(a.cur);
+      return byCur != 0 ? byCur : b.prev.compareTo(a.prev);
+    });
+  return list.take(limit).toList();
 }

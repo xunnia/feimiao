@@ -7,10 +7,14 @@ import 'package:flutter/material.dart';
 import '../core/app_clock.dart';
 import '../core/models/cat_svg_icon.dart';
 import '../core/models/category_seed.dart';
-import '../core/models/transaction_kind.dart';
 import '../core/models/transaction_record.dart';
 import '../core/money_format.dart';
+import '../core/statistics/monthly_pace.dart';
 import '../core/statistics/statistics_engine.dart';
+
+export '../core/statistics/monthly_pace.dart'
+    show MonthlyPaceSample, computeMonthlyPaceSamples;
+import '../theme/app_tokens.dart';
 import '../theme/app_colors.dart';
 import 'pressable_scale.dart';
 
@@ -74,27 +78,19 @@ class MonthlyPaceCard extends StatelessWidget {
     );
     final current = samples.last.pace;
 
-    final comparable = samples
-        .where((s) => !s.current && s.pace > Decimal.zero)
-        .map((s) => s.pace)
-        .toList();
-    final average = comparable.isEmpty
-        ? Decimal.zero
-        : (comparable.fold(Decimal.zero, (a, b) => a + b) /
-                Decimal.fromInt(comparable.length))
-            .toDecimal(scaleOnInfinitePrecision: 2);
-    final relation = average <= Decimal.zero
-        ? '已有支出记录'
-        : _paceRelation(
-            MoneyFormat.toDouble(current),
-            MoneyFormat.toDouble(average),
-          );
+    // 07 D-STAT-010/011：和桌面小组件同一套规则（core/statistics/monthly_pace）：
+    // 开始记账前的月不算，真实 0 月算，至少 2 个月才给平均。
+    final avgResult = monthlyPaceAverage(samples);
+    final average = avgResult?.average ?? Decimal.zero;
     // 翻到过去的月份不能再写「本月」。
     // 和周视图的「该周」一致；不用「8月」，免得和 X 轴的月份标签重复。
     final periodName = isCurrentMonth ? '本月' : '该月';
-    final title = average <= Decimal.zero
-        ? '截至 $month月$cutoffDay日，$periodName已有支出记录'
-        : '截至 $month月$cutoffDay日，$periodName支出与往常$relation';
+    final title = avgResult == null
+        ? (current > Decimal.zero
+            ? '截至 $month月$cutoffDay日，$periodName已有支出记录'
+            : '截至 $month月$cutoffDay日，$periodName还没有支出')
+        : '截至 $month月$cutoffDay日，$periodName支出与往常'
+            '${monthlyPaceRelation(current, average)}';
 
     final topCategories = summary.expenseByCategory
         .where((c) => c.total > Decimal.zero)
@@ -151,7 +147,7 @@ class MonthlyPaceCard extends StatelessWidget {
               _PaceMetric(
                 label: '平均',
                 amount: average,
-                muted: average <= Decimal.zero,
+                muted: avgResult == null,
                 maskAmounts: maskAmounts,
                 large: compact,
               ),
@@ -159,7 +155,8 @@ class MonthlyPaceCard extends StatelessWidget {
               _PaceMetric(
                 label: periodName,
                 amount: current,
-                color: const Color(0xFF0A84FF),
+                // 06：强调色用主色，不再写死系统蓝。
+                color: Theme.of(context).colorScheme.primary,
                 maskAmounts: maskAmounts,
                 large: compact,
               ),
@@ -191,10 +188,7 @@ class MonthlyPaceCard extends StatelessWidget {
             if (topCategories.isEmpty)
               Text(
                 isCurrentMonth ? '本月还没有支出分类。' : '这个月没有支出分类。',
-                style: TextStyle(
-                  fontSize: 13,
-                  color: scheme.onSurfaceVariant,
-                ),
+                style: AppType.secondary(scheme),
               )
             else ...[
               for (int i = 0; i < topCategories.length; i++) ...[
@@ -222,94 +216,6 @@ class MonthlyPaceCard extends StatelessWidget {
     );
   }
 
-  String _paceRelation(double current, double average) {
-    if (average <= 0) return '基本持平';
-    final delta = (current - average) / average;
-    if (delta.abs() <= 0.08) return '基本持平';
-    return delta > 0 ? '偏高' : '偏低';
-  }
-}
-
-class MonthlyPaceSample {
-  final String label;
-  final Decimal full;
-  final Decimal pace;
-  final bool current;
-
-  const MonthlyPaceSample({
-    required this.label,
-    required this.full,
-    required this.pace,
-    required this.current,
-  });
-}
-
-/// Computes the six historical pace bars and the current-month bar in one
-/// pass over [records]. Keeping this pure makes the expensive path measurable
-/// without involving Flutter layout or chart painting.
-@visibleForTesting
-List<MonthlyPaceSample> computeMonthlyPaceSamples({
-  required List<TransactionRecord> records,
-  required int year,
-  required int month,
-  required bool isCurrentMonth,
-  DateTime? now,
-}) {
-  final currentMonth = DateTime(year, month);
-  final today = now ?? AppClock.now;
-  final lastDay = DateTime(year, month + 1, 0).day;
-  final cutoffDay = isCurrentMonth ? math.min(today.day, lastDay) : lastDay;
-  final months = <DateTime>[
-    for (var offset = 6; offset >= 1; offset--) DateTime(year, month - offset),
-    currentMonth,
-  ];
-  final monthKeys = <int>{
-    for (final value in months) value.year * 100 + value.month,
-  };
-  final cutoffs = <int, int>{
-    for (final value in months)
-      value.year * 100 + value.month: value == currentMonth
-          ? cutoffDay
-          : math.min(
-              cutoffDay,
-              DateTime(value.year, value.month + 1, 0).day,
-            ),
-  };
-  final fullByMonth = <int, Decimal>{};
-  final paceByMonth = <int, Decimal>{};
-  for (final record in records) {
-    if (record.kind != TransactionKind.expense) continue;
-    final key = record.date.year * 100 + record.date.month;
-    if (!monthKeys.contains(key)) continue;
-    fullByMonth[key] = (fullByMonth[key] ?? Decimal.zero) + record.amount;
-    if (record.date.day <= cutoffs[key]!) {
-      paceByMonth[key] = (paceByMonth[key] ?? Decimal.zero) + record.amount;
-    }
-  }
-
-  final samples = <MonthlyPaceSample>[];
-  for (final value in months.take(6)) {
-    final key = value.year * 100 + value.month;
-    samples.add(
-      MonthlyPaceSample(
-        label: '${value.month}月',
-        full: fullByMonth[key] ?? Decimal.zero,
-        pace: paceByMonth[key] ?? Decimal.zero,
-        current: false,
-      ),
-    );
-  }
-  final currentKey = year * 100 + month;
-  final current = paceByMonth[currentKey] ?? Decimal.zero;
-  samples.add(
-    MonthlyPaceSample(
-      label: '$month月',
-      full: current,
-      pace: current,
-      current: true,
-    ),
-  );
-  return List.unmodifiable(samples);
 }
 
 class _PaceMetric extends StatelessWidget {
@@ -384,7 +290,8 @@ class _PaceBarsChart extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    const currentBlue = Color(0xFF0A84FF);
+    // 06：本月那根柱和标签用主色（原来写死 #0A84FF 系统蓝）。
+    final currentBlue = scheme.primary;
     final values = <double>[
       for (final s in samples) MoneyFormat.toDouble(s.full),
       for (final s in samples) MoneyFormat.toDouble(s.pace),

@@ -28,7 +28,8 @@ private const val SNAPSHOT_KEY = "snapshot"
 private const val COLOR_TEXT = 0xFF191A1C.toInt()
 private const val COLOR_SECONDARY = 0xFF74777D.toInt()
 private const val COLOR_MUTED = 0xFF9A9CA1.toInt()
-private const val COLOR_BLUE = 0xFF0A84FF.toInt()
+// 本月那根柱/标签：和 Flutter 图片卡同一主色 kCatBlueGray（原来写死系统蓝 #0A84FF）。
+private const val COLOR_BLUE = 0xFF7D8B9B.toInt()
 private const val COLOR_BAR_LIGHT = 0xFFF2F3F5.toInt()
 private const val COLOR_BAR_DARK = 0xFF666A70.toInt()
 private const val COLOR_DIVIDER = 0x1A000000
