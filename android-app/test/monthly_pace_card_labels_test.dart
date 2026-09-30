@@ -106,6 +106,15 @@ void main() {
     );
   });
 
+  testWidgets('翻到过去的月份不再写「本月」', (tester) async {
+    await _pumpCard(tester, DateTime(2026, 8));
+
+    expect(find.textContaining('本月'), findsNothing,
+        reason: '历史月的标题、指标和空提示都不能写「本月」');
+    expect(find.text('该月'), findsOneWidget);
+    expect(find.textContaining('截至 8月31日，该月'), findsOneWidget);
+  });
+
   testWidgets('跨年时回退到上一年的月份', (tester) async {
     // 2 月视角：前六根应是上年 8..12 月 + 本年 1 月。
     await _pumpCard(tester, DateTime(2026, 2));

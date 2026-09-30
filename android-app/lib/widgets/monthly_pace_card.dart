@@ -89,9 +89,12 @@ class MonthlyPaceCard extends StatelessWidget {
             MoneyFormat.toDouble(current),
             MoneyFormat.toDouble(average),
           );
+    // 翻到过去的月份不能再写「本月」。
+    // 和周视图的「该周」一致；不用「8月」，免得和 X 轴的月份标签重复。
+    final periodName = isCurrentMonth ? '本月' : '该月';
     final title = average <= Decimal.zero
-        ? '截至 $month月$cutoffDay日，本月已有支出记录'
-        : '截至 $month月$cutoffDay日，本月支出与往常$relation';
+        ? '截至 $month月$cutoffDay日，$periodName已有支出记录'
+        : '截至 $month月$cutoffDay日，$periodName支出与往常$relation';
 
     final topCategories = summary.expenseByCategory
         .where((c) => c.total > Decimal.zero)
@@ -154,7 +157,7 @@ class MonthlyPaceCard extends StatelessWidget {
               ),
               const SizedBox(width: 42),
               _PaceMetric(
-                label: '本月',
+                label: periodName,
                 amount: current,
                 color: const Color(0xFF0A84FF),
                 maskAmounts: maskAmounts,
@@ -187,7 +190,7 @@ class MonthlyPaceCard extends StatelessWidget {
             const SizedBox(height: 10),
             if (topCategories.isEmpty)
               Text(
-                '本月还没有支出分类。',
+                isCurrentMonth ? '本月还没有支出分类。' : '这个月没有支出分类。',
                 style: TextStyle(
                   fontSize: 13,
                   color: scheme.onSurfaceVariant,

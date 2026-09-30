@@ -469,9 +469,12 @@ List<TransactionRecord> _topExpenses(
     List<TransactionRecord> records, DateTime start, DateTime end) {
   final s = DateTime(start.year, start.month, start.day);
   final e = DateTime(end.year, end.month, end.day, 23, 59, 59);
+  // 07 D-STAT-003：只排真正花出去的钱。全额退款的原单是 0 元，
+  // 老数据里的负数冲账也不能进榜。
   final list = records
       .where((r) =>
           r.kind == TransactionKind.expense &&
+          r.amount > Decimal.zero &&
           !r.date.isBefore(s) &&
           !r.date.isAfter(e))
       .toList()
@@ -516,6 +519,7 @@ class _MonthlyContent extends StatelessWidget {
     final topExpenses = records
         .where((r) =>
             r.kind == TransactionKind.expense &&
+            r.amount > Decimal.zero &&
             r.date.year == displayedMonth.year &&
             r.date.month == displayedMonth.month)
         .toList()
@@ -537,6 +541,18 @@ class _MonthlyContent extends StatelessWidget {
       start: DateTime(prevMonth.year, prevMonth.month, 1),
       end: prevSameEnd,
     );
+    // 07 §14：本月已过天数比上月总天数多（如 31 日对 30 天的上月）时，
+    // 徽章只拿本月前 N 天去比，并标「前N天」；大号金额仍是截至今天的总额。
+    final comparableDays =
+        isCurrentMonth && now.day > prevMonthDays ? prevMonthDays : null;
+    final curSame = comparableDays == null
+        ? null
+        : StatisticsEngine.rangeSummary(
+            records,
+            start: DateTime(displayedMonth.year, displayedMonth.month, 1),
+            end: DateTime(
+                displayedMonth.year, displayedMonth.month, comparableDays),
+          );
 
     final header = Column(
       children: [
@@ -553,6 +569,10 @@ class _MonthlyContent extends StatelessWidget {
           prevExpense: prevSame.totalExpense,
           prevIncome: prevSame.totalIncome,
           prevBalance: prevSame.balance,
+          badgeExpense: curSame?.totalExpense,
+          badgeIncome: curSame?.totalIncome,
+          badgeBalance: curSame?.balance,
+          compareNote: comparableDays == null ? null : '前$comparableDays天',
           series: [
             for (final d in summary.dailyTotals)
               (
@@ -573,9 +593,9 @@ class _MonthlyContent extends StatelessWidget {
         padding: const EdgeInsets.all(16),
         children: [
           header,
-          const _EmptyState(
-            message: '本月还没有记录',
-            sub: '记几笔之后这里会出现分析图表',
+          _EmptyState(
+            message: isCurrentMonth ? '本月还没有记录' : '这个月没有记录',
+            sub: isCurrentMonth ? '记几笔之后这里会出现分析图表' : '换一个月看看吧',
           ),
         ],
       );
@@ -656,7 +676,7 @@ class _MonthlyContent extends StatelessWidget {
         if (!hasExpense) return null;
         return _RingCard(
           title: '支出构成',
-          totalLabel: '本月支出',
+          totalLabel: isCurrentMonth ? '本月支出' : '${displayedMonth.month}月支出',
           total: summary.totalExpense,
           categories: summary.expenseByCategory,
           onDrill: (n, {categoryNames}) => _drillToCategory(
@@ -694,6 +714,7 @@ class _MonthlyContent extends StatelessWidget {
           ],
           compareLabel: '上月同期',
           markIndex: isCurrentMonth ? AppClock.now.day - 1 : null,
+          periodLabel: isCurrentMonth ? '本月' : '${displayedMonth.month}月',
         );
       case 'ranking':
         if (!hasExpense) return null;
@@ -935,6 +956,10 @@ class _TrendCard extends StatefulWidget {
   final String? compareLabel;
   final int? markIndex;
 
+  /// 图例里本期那条线的前缀，如「本月」「8月」「今年」「2025年」。
+  /// 不传时按 compareLabel 猜（老行为）。
+  final String? periodLabel;
+
   const _TrendCard({
     required this.title,
     required this.xLabels,
@@ -944,6 +969,7 @@ class _TrendCard extends StatefulWidget {
     this.compareIncome,
     this.compareLabel,
     this.markIndex,
+    this.periodLabel,
   });
 
   @override
@@ -977,6 +1003,7 @@ class _TrendCardState extends State<_TrendCard> {
         compareIncome: widget.compareIncome,
         compareLabel: widget.compareLabel,
         markIndex: widget.markIndex,
+        periodLabel: widget.periodLabel,
       ),
     );
   }
@@ -1350,9 +1377,9 @@ class _YearlyContent extends StatelessWidget {
         padding: const EdgeInsets.all(16),
         children: [
           header,
-          const _EmptyState(
-            message: '今年还没有账目',
-            sub: '记几笔之后这里会出现年度报告',
+          _EmptyState(
+            message: isCurrentYear ? '今年还没有账目' : '这一年没有账目',
+            sub: isCurrentYear ? '记几笔之后这里会出现年度报告' : '换一年看看吧',
           ),
         ],
       );
@@ -1380,6 +1407,7 @@ class _YearlyContent extends StatelessWidget {
             compareIncome: prevIncome,
             compareLabel: '去年同期',
             markIndex: markMonth,
+            periodLabel: isCurrentYear ? '今年' : '$year年',
           ),
         'ring' => !hasExpense
             ? null
@@ -1543,10 +1571,20 @@ class _CustomContent extends StatelessWidget {
                   categoryNames: categoryNames,
                 ),
               ),
-        // 区间不超过约两个月才画每日线，太长看不清。
-        'daily' => !hasExpense || s.dayCount > 62
+        // 区间不超过约两个月才画每日线，太长看不清。超过时给一行说明，
+        // 不能悄悄消失（图表库里这张卡仍是打开状态，用户会以为坏了）。
+        'daily' => !hasExpense
             ? null
-            : _TrendCard(
+            : s.dayCount > 62
+                ? _SectionCard(
+                    title: '每日趋势',
+                    child: Text(
+                      '区间超过 62 天，每日线太密看不清。把区间缩短到两个月以内就会显示。',
+                      style: AppType.secondary(Theme.of(context).colorScheme)
+                          .copyWith(height: 1.4),
+                    ),
+                  )
+                : _TrendCard(
                 title: '每日趋势',
                 xLabels: [
                   for (var i = 0; i < s.dailyTotals.length; i++)
@@ -1621,8 +1659,9 @@ class _InsightsCard extends StatelessWidget {
       return const SizedBox.shrink();
     }
 
+    // 卡片之间的 16 由外层列表统一加，这里不再自带下边距（原来会叠成 32）。
     return Padding(
-      padding: const EdgeInsets.only(bottom: 16),
+      padding: EdgeInsets.zero,
       child: _SectionCard(
         title: '喵的洞察',
         child: Column(
@@ -1748,6 +1787,14 @@ class _TotalsHeader extends StatelessWidget {
   final String periodLabel;
   final List<(String, double, double)> series;
 
+  /// 徽章用的本期值（等长同期）。不传时徽章直接比大号金额。
+  final Decimal? badgeExpense;
+  final Decimal? badgeIncome;
+  final Decimal? badgeBalance;
+
+  /// 徽章旁的灰字说明，如「前30天」。
+  final String? compareNote;
+
   const _TotalsHeader({
     required this.expense,
     required this.income,
@@ -1757,6 +1804,10 @@ class _TotalsHeader extends StatelessWidget {
     this.prevExpense,
     this.prevIncome,
     this.prevBalance,
+    this.badgeExpense,
+    this.badgeIncome,
+    this.badgeBalance,
+    this.compareNote,
   });
 
   @override
@@ -1808,8 +1859,18 @@ class _TotalsHeader extends StatelessWidget {
                           ),
                     ),
                   ),
+                  if (compareNote != null && prevExpense != null) ...[
+                    Text(
+                      compareNote!,
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                            color: AppTextColor.secondary(scheme),
+                            fontWeight: FontWeight.w400,
+                          ),
+                    ),
+                    const SizedBox(width: 6),
+                  ],
                   _DeltaBadge(
-                    current: expense,
+                    current: badgeExpense ?? expense,
                     prev: prevExpense,
                     goodWhenUp: false,
                   ),
@@ -1849,6 +1910,7 @@ class _TotalsHeader extends StatelessWidget {
               child: _MiniTotalCard(
                 title: '收入',
                 amount: income,
+                badgeCurrent: badgeIncome,
                 color: amountGrey,
                 prev: prevIncome,
                 goodWhenUp: true,
@@ -1862,6 +1924,7 @@ class _TotalsHeader extends StatelessWidget {
               child: _MiniTotalCard(
                 title: '结余',
                 amount: balance,
+                badgeCurrent: badgeBalance,
                 color: amountGrey,
                 prev: prevBalance,
                 goodWhenUp: true,
@@ -2003,6 +2066,9 @@ class _MiniTotalCard extends StatelessWidget {
   final List<double> spark;
   final Color sparkColor;
 
+  /// 徽章用的本期值（等长同期）。不传时徽章直接比 [amount]。
+  final Decimal? badgeCurrent;
+
   const _MiniTotalCard({
     required this.title,
     required this.amount,
@@ -2012,6 +2078,7 @@ class _MiniTotalCard extends StatelessWidget {
     required this.decoration,
     required this.spark,
     required this.sparkColor,
+    this.badgeCurrent,
   });
 
   @override
@@ -2048,7 +2115,7 @@ class _MiniTotalCard extends StatelessWidget {
           Row(
             children: [
               _DeltaBadge(
-                current: amount,
+                current: badgeCurrent ?? amount,
                 prev: prev,
                 goodWhenUp: goodWhenUp,
               ),
@@ -2325,7 +2392,8 @@ class _BudgetRingCard extends StatelessWidget {
     final pctText = '${(displayRatio * 100).toInt()}%';
     final lastDay =
         DateTime(displayedMonth.year, displayedMonth.month + 1, 0).day;
-    final daysLeft = isCurrentMonth ? lastDay - AppClock.now.day : 0;
+    // 07 F-BUD-005：剩余天数含今天，和主页、预算页一致。
+    final daysLeft = isCurrentMonth ? lastDay - AppClock.now.day + 1 : 0;
 
     return _SectionCard(
       title: '',
@@ -2717,6 +2785,9 @@ class _DualLineChart extends StatelessWidget {
   /// "今天"竖虚线的下标（当月/当年才传）。
   final int? markIndex;
 
+  /// 本期图例前缀（见 [_TrendCard.periodLabel]）。
+  final String? periodLabel;
+
   const _DualLineChart({
     required this.xLabels,
     required this.expense,
@@ -2726,6 +2797,7 @@ class _DualLineChart extends StatelessWidget {
     this.compareIncome,
     this.compareLabel,
     this.markIndex,
+    this.periodLabel,
   });
 
   @override
@@ -2740,7 +2812,9 @@ class _DualLineChart extends StatelessWidget {
     final compareText = compareLabel ?? '上期';
     final primaryLabel = compare == null
         ? label
-        : compareText.contains('上月')
+        : periodLabel != null
+            ? '$periodLabel$label'
+            : compareText.contains('上月')
             ? '本月$label'
             : compareText.contains('去年')
                 ? '今年$label'
@@ -3013,7 +3087,9 @@ class _CategoryRanking extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final items = categories.take(5).toList();
+    // 和「支出构成」一样只排净额为正的分类（07 §15：占比只用正净支出）。
+    final items =
+        categories.where((c) => c.total > Decimal.zero).take(5).toList();
 
     return Column(
       children: items.map((item) {
@@ -3403,7 +3479,7 @@ class _CompareBarsH extends StatelessWidget {
   }
 }
 
-/// 近 12 月收支堆叠柱：柱高=当月收支较大者；深色=花掉的，金色=结余，橙色=超支。
+/// 近 12 月收支堆叠柱：柱高=当月收支较大者；深色=花掉的，金色=结余，橙色=超出收入。
 /// 12 次 monthlySummary 计算在 initState/didUpdateWidget 里缓存，
 /// records 引用不变（来自 allRecordsRef）+ endMonth 不变时跳过重算。
 class _StackedBars12 extends StatefulWidget {
@@ -3489,7 +3565,8 @@ class _StackedBars12State extends State<_StackedBars12> {
             const SizedBox(width: 14),
             _LegendDot(color: savedColor, label: '结余'),
             const SizedBox(width: 14),
-            const _LegendDot(color: AppColors.warning, label: '超支'),
+            // 07 D-STAT-009：支出大于收入的差额是「超出收入」，不是预算超支。
+            const _LegendDot(color: AppColors.warning, label: '超出收入'),
           ],
         ),
         const SizedBox(height: 12),
@@ -3532,7 +3609,7 @@ class _StackedBars12State extends State<_StackedBars12> {
                           // 结余（收入 > 支出）
                           if (_inc[i] > _exp[i])
                             BarChartRodStackItem(_exp[i], _inc[i], savedColor),
-                          // 超支（支出 > 收入）
+                          // 超出收入（支出 > 收入）
                           if (_exp[i] > _inc[i])
                             BarChartRodStackItem(
                                 _inc[i], _exp[i], AppColors.warning),
