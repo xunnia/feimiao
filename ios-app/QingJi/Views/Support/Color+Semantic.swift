@@ -12,6 +12,13 @@ extension Color {
     static let expense = Color.primary
     /// 警示（超支、负结余、今日已超）—— 柔和橙，避免刺激的红
     static let warning = Color(red: 0.90, green: 0.49, blue: 0.13)
+    /// 统计页强调色（本期柱/线、热力图、进度卡本月）：和安卓主色 kCatBlueGray 同值，
+    /// 浅色 7D8B9B / 深色 9DAFC0。原来各卡片各写一份 Color(red:…) 或系统蓝。
+    static let statisticsAccent = Color(uiColor: UIColor { trait in
+        trait.userInterfaceStyle == .dark
+            ? UIColor(red: 0x9D / 255, green: 0xAF / 255, blue: 0xC0 / 255, alpha: 1)
+            : UIColor(red: 0x7D / 255, green: 0x8B / 255, blue: 0x9B / 255, alpha: 1)
+    })
     /// 预算健康绿（预算条/圆环起点，与 Android budgetHealthy 7FB069 同值）
     static let budgetHealthy = Color(red: 0x7F / 255, green: 0xB0 / 255, blue: 0x69 / 255)
     /// 超支时预算内那 100% 的浅橙：和 warning 同色相，只降低强度（与 Android overspendWithin 对齐）

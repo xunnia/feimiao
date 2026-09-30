@@ -57,7 +57,6 @@ struct StatisticsCardLibrarySheet: View {
                 }
             }
         }
-        .tint(.gray)
         .accessibilityLabel("\(StatisticsCardLayout.titles[key] ?? key)\(selected ? "已显示" : "已隐藏")")
     }
 }

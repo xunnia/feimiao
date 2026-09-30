@@ -17,7 +17,7 @@ struct BudgetUsageRingCard: View {
     var body: some View {
         let percent = Self.displayPercent(spent: status.spentThisMonth, budget: budget)
         let over = status.spentThisMonth > budget
-        let color = over ? Color.warning : Color(red: 127 / 255, green: 176 / 255, blue: 105 / 255)
+        let color = over ? Color.warning : Color.budgetHealthy
         let calendar = Calendar.current
         let daysInMonth = calendar.range(of: .day, in: .month, for: displayedMonth)?.count ?? 30
         let daysLeft = calendar.isDate(displayedMonth, equalTo: now, toGranularity: .month)

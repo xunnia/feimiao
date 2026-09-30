@@ -86,10 +86,15 @@ final class LedgerStoreTests: XCTestCase {
 
     func testStatisticsComparisonBadgeUsesSameWeekPercentageDirection() {
         XCTAssertEqual(MonthlyStatsView.percentChangeLabel(current: 46, previous: 243), "↓ 81%")
-        XCTAssertEqual(MonthlyStatsView.percentChangeLabel(current: 574, previous: -243), "↑ 336%")
+        // 07 §14：结余跨零显示金额差，不再是失真的「↑ 336%」。
+        XCTAssertEqual(MonthlyStatsView.percentChangeLabel(current: 574, previous: -243), "↑ ¥817")
+        XCTAssertEqual(MonthlyStatsView.percentChangeLabel(current: -50, previous: 100), "↓ ¥150")
         XCTAssertEqual(MonthlyStatsView.percentChangeLabel(
             current: Decimal(string: "1017.90")!, previous: 1058), "↓ 3.8%")
-        XCTAssertNil(MonthlyStatsView.percentChangeLabel(current: 46, previous: 0))
+        // 上期 0、本期为正：「新增 ¥X」，不再整个隐藏。
+        XCTAssertEqual(MonthlyStatsView.percentChangeLabel(current: 46, previous: 0), "新增 ¥46")
+        XCTAssertNil(MonthlyStatsView.percentChangeLabel(current: 0, previous: 0))
+        XCTAssertEqual(MonthlyStatsView.compactMoney(12_345), "¥1.2万")
     }
 
     func testMonthlyTrendUsesAndroidAxisStepsForExpenseAndIncome() {

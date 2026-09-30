@@ -5,6 +5,10 @@ import QingJiCore
 struct SpendingInsightsCard: View {
     let projection: SpendingInsightsProjection
     let currencyCode: String
+    /// 本期叫法：当月「本月」，过去的月「8月」。
+    var thisName: String = "本月"
+    /// 上期叫法：当月「上月同期」（和顶部徽章同窗），过去的月「上月」。
+    var previousName: String = "上月"
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -22,15 +26,15 @@ struct SpendingInsightsCard: View {
             }
             if let change = projection.totalChangePercent {
                 insightLine(change > 0
-                    ? "本月总支出比上月多了 \(change)%"
-                    : "本月总支出比上月省了 \(-change)%，不错喵")
+                    ? "\(thisName)总支出比\(previousName)多了 \(change)%"
+                    : "\(thisName)总支出比\(previousName)省了 \(-change)%，不错喵")
             }
             if let category = projection.categoryIncrease {
                 let count = category.countDifference > 0 ? "，多了 \(category.countDifference) 笔" : ""
-                insightLine("「\(category.name)」比上月多花 \(MoneyFormat.string(category.amount, currencyCode: currencyCode))\(count)")
+                insightLine("「\(category.name)」比\(previousName)多花 \(MoneyFormat.string(category.amount, currencyCode: currencyCode))\(count)")
             }
             if let dominant = projection.dominantCategory {
-                insightLine("「\(dominant.name)」占了本月支出的 \(dominant.percent)%，是绝对大头")
+                insightLine("「\(dominant.name)」占了\(thisName)支出的 \(dominant.percent)%，是绝对大头")
             }
             if let forecast = projection.forecast {
                 let amount = MoneyFormat.string(forecast.projected, currencyCode: currencyCode)
@@ -89,11 +93,13 @@ private extension SpendingProfileKind {
 struct MonthlyHeatmapCard: View {
     let summary: MonthlySummary
     let currencyCode: String
+    /// 当月的今天（几号）；之后的格子按「还没到」画。nil = 过去的月。
+    var lastDay: Int? = nil
     @State private var selectedDay: DailyTotal?
 
     private let columns = Array(repeating: GridItem(.flexible(), spacing: 4), count: 7)
     private let weekdays = ["一", "二", "三", "四", "五", "六", "日"]
-    private let heatmapTint = Color(red: 125.0 / 255, green: 139.0 / 255, blue: 155.0 / 255)
+    private let heatmapTint = Color.statisticsAccent
 
     var body: some View {
         let calendar = Calendar.current
@@ -120,18 +126,31 @@ struct MonthlyHeatmapCard: View {
                             let day = summary.dailyTotals[index - leading]
                             let value = MoneyFormat.double(day.expense)
                             let intensity = maximum > 0 ? min(max(value / maximum, 0), 1) : 0
+                            // 07 §14：没到的日子不是「没花钱」，只描边、不填色、点了不弹。
+                            let isFuture = lastDay.map { day.day > $0 } ?? false
+                            let fill: Color = isFuture ? Color.clear
+                                : (value <= 0 ? Color.secondary.opacity(0.12)
+                                   : heatmapTint.opacity(0.18 + 0.72 * intensity))
                             Button { selectedDay = day } label: {
                                 Text("\(day.day)")
                                     .font(.caption2)
                                     .frame(maxWidth: .infinity)
                                     .frame(height: cellSide)
-                                    .background(value <= 0 ? Color.secondary.opacity(0.12)
-                                                : heatmapTint.opacity(0.18 + 0.72 * intensity),
-                                                in: .rect(cornerRadius: 5))
-                                    .foregroundStyle(intensity > 0.55 ? Color.white : Color.primary)
+                                    .background(fill, in: .rect(cornerRadius: 5))
+                                    .overlay {
+                                        if isFuture {
+                                            RoundedRectangle(cornerRadius: 5)
+                                                .stroke(Color.secondary.opacity(0.3), lineWidth: 0.8)
+                                        }
+                                    }
+                                    .foregroundStyle(isFuture ? Color.secondary
+                                                     : (intensity > 0.55 ? Color.white : Color.primary))
                             }
                             .buttonStyle(.plain)
-                            .accessibilityLabel("\(summary.month)月\(day.day)日，支出 \(MoneyFormat.string(day.expense, currencyCode: currencyCode))")
+                            .disabled(isFuture)
+                            .accessibilityLabel(isFuture
+                                ? "\(summary.month)月\(day.day)日，还没到"
+                                : "\(summary.month)月\(day.day)日，支出 \(MoneyFormat.string(day.expense, currencyCode: currencyCode))")
                         }
                     }
                 }
@@ -163,36 +182,38 @@ struct MonthlyHeatmapCard: View {
     }
 }
 
+/// 本期 vs 上期分类条。窗口和顶部徽章一致（当月比上月同期），
+/// 分类取两期并集（07 D-STAT-008）。
 struct MonthlyCompareBarsCard: View {
-    let current: MonthlySummary
-    let previous: MonthlySummary
+    let rows: [CategoryCompareRow]
+    let currentLabel: String
+    let previousLabel: String
     let currencyCode: String
 
     var body: some View {
-        let categories = Array(current.expenseByCategory.filter { $0.total > 0 }.prefix(6))
-        let maximum = max(categories.map { category in
-            max(MoneyFormat.double(category.total), MoneyFormat.double(previousAmount(for: category.name)))
+        let maximum = max(rows.map { row in
+            max(MoneyFormat.double(row.current), MoneyFormat.double(row.previous))
         }.max() ?? 0, 1)
         return VStack(alignment: .leading, spacing: 12) {
-            Text("本月 vs 上月").font(.headline)
+            Text("\(currentLabel) vs \(previousLabel)").font(.headline)
             HStack(spacing: 14) {
-                Label("本月", systemImage: "circle.fill").foregroundStyle(Color.primary)
-                Label("上月", systemImage: "circle.fill").foregroundStyle(Color.secondary.opacity(0.4))
+                Label(currentLabel, systemImage: "circle.fill").foregroundStyle(Color.primary)
+                Label(previousLabel, systemImage: "circle.fill").foregroundStyle(Color.secondary.opacity(0.4))
             }
             .font(.caption)
-            if categories.isEmpty {
-                Text("本月还没有支出").font(.caption).foregroundStyle(.secondary)
+            if rows.isEmpty {
+                Text("两个月都还没有支出").font(.caption).foregroundStyle(.secondary)
             }
-            ForEach(categories, id: \.name) { category in
+            ForEach(rows, id: \.name) { row in
                 VStack(alignment: .leading, spacing: 4) {
                     HStack {
-                        Text(category.name).lineLimit(1)
+                        Text(row.name).lineLimit(1)
                         Spacer()
-                        Text(MoneyFormat.string(category.total, currencyCode: currencyCode)).monospacedDigit()
+                        Text(MoneyFormat.string(row.current, currencyCode: currencyCode)).monospacedDigit()
                     }
                     .font(.caption)
-                    ProgressView(value: max(0, MoneyFormat.double(category.total)), total: maximum).tint(.primary)
-                    ProgressView(value: max(0, MoneyFormat.double(previousAmount(for: category.name))),
+                    ProgressView(value: max(0, MoneyFormat.double(row.current)), total: maximum).tint(.primary)
+                    ProgressView(value: max(0, MoneyFormat.double(row.previous)),
                                  total: maximum).tint(Color.secondary.opacity(0.4))
                 }
             }
@@ -200,10 +221,6 @@ struct MonthlyCompareBarsCard: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(14)
         .liquidGlassSurface(cornerRadius: 18)
-    }
-
-    private func previousAmount(for name: String) -> Decimal {
-        previous.expenseByCategory.first { $0.name == name }?.total ?? 0
     }
 }
 

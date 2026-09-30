@@ -7,7 +7,8 @@ struct MonthlyPaceCard: View {
     let currencyCode: String
     let onOpenAllExpenses: () -> Void
 
-    private let currentBlue = Color(red: 10 / 255, green: 132 / 255, blue: 1)
+    // 06：本月那根柱和数字用统计强调色（和安卓主色一致），不再写死系统蓝 #0A84FF。
+    private let currentBlue = Color.statisticsAccent
 
     var body: some View {
         let topCategories = Array(categories.filter { $0.total > 0 }.prefix(3))
@@ -19,7 +20,7 @@ struct MonthlyPaceCard: View {
                 .font(.subheadline)
             Divider()
             HStack(spacing: 42) {
-                metric(label: "平均", amount: projection.average, muted: projection.average <= 0)
+                metric(label: "平均", amount: projection.average, muted: !projection.hasAverage)
                 metric(label: periodName, amount: projection.current, color: currentBlue)
             }
             paceBars

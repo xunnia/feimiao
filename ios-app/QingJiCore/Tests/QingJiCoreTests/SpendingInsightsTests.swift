@@ -37,6 +37,32 @@ final class SpendingInsightsTests: XCTestCase {
         XCTAssertEqual(result.dominantCategory?.percent, 100)
     }
 
+    func testCurrentMonthComparesSameProgressAndUnionsCategories() {
+        // 今天 6/10；上月后半月花了很多。旧算法拿 200 比上月整月 1060 → 「省了 81%」。
+        let records = [
+            TransactionRecord(kind: .expense, amount: 100, categoryName: "餐饮", date: date(2026, 5, 5)),
+            TransactionRecord(kind: .expense, amount: 900, categoryName: "餐饮", date: date(2026, 5, 25)),
+            TransactionRecord(kind: .expense, amount: 60, categoryName: "交通", date: date(2026, 5, 6)),
+            TransactionRecord(kind: .expense, amount: 200, categoryName: "餐饮", date: date(2026, 6, 3)),
+        ]
+        let now = date(2026, 6, 10)
+        let windows = SpendingInsights.comparableMonthWindows(records: records, year: 2026, month: 6,
+                                                              now: now, calendar: calendar)
+        XCTAssertTrue(windows.sameProgress)
+        XCTAssertEqual(windows.previous.totalExpense, 160)
+        let current = StatisticsEngine.monthlySummary(of: records, year: 2026, month: 6, calendar: calendar)
+        let previous = StatisticsEngine.monthlySummary(of: records, year: 2026, month: 5, calendar: calendar)
+        let result = SpendingInsights.project(records: records, current: current, previous: previous,
+                                              now: now, monthlyBudget: nil, calendar: calendar,
+                                              comparison: windows)
+        XCTAssertEqual(result.totalChangePercent, 25)
+        let rows = SpendingInsights.compareCategoryRows(current: windows.current.expenseByCategory,
+                                                        previous: windows.previous.expenseByCategory)
+        XCTAssertEqual(rows.map(\.name), ["餐饮", "交通"])
+        XCTAssertEqual(rows.last?.current, 0)
+        XCTAssertEqual(rows.last?.previous, 60)
+    }
+
     func testProfilePrioritizesLargePurchaseAndNeedsFiveFamilies() {
         let small = (1...5).map { day in
             TransactionRecord(kind: .expense, amount: 50, date: date(2026, 6, day))

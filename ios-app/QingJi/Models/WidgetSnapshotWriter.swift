@@ -34,6 +34,9 @@ enum WidgetSnapshotWriter {
             calendar: calendar
         )
         let todayExpense = summary.dailyTotals.first(where: { $0.day == day })?.expense ?? 0
+        // 07 案例 74：同期平均和统计页进度卡同一个引擎、同一个门槛（至少 2 个历史月）。
+        let pace = MonthlyPaceEngine.project(records: records, year: year, month: month,
+                                             now: now, calendar: calendar)
         let privacy = UserDefaults.standard.bool(forKey: "qingji.widgetPrivacyMode")
         let currency = records.first?.currencyCode ?? "CNY"
         let money: (Decimal) -> String = { value in
@@ -99,7 +102,7 @@ enum WidgetSnapshotWriter {
             budgetHint: budgetHint,
             budgetProgress: budgetProgress,
             paceCaption: "截至\(formatter.string(from: now))",
-            paceAverageText: "--",
+            paceAverageText: pace.hasAverage ? money(pace.average) : "--",
             privacyMode: privacy,
             categories: categoryTotals
         )

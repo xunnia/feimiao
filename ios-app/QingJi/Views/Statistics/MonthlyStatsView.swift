@@ -442,7 +442,8 @@ struct MonthlyStatsView: View {
         return VStack(spacing: 20) {
             weekHeader
             periodTotals(summary, currencyCode: snapshot.scopedCurrencyCode,
-                         label: isCurrentWeek ? "本周" : "该周", previous: previous)
+                         label: isCurrentWeek ? "本周" : "该周", previous: previous,
+                         lastDate: isCurrentWeek ? today : nil)
             if summary.totalExpense == 0 && summary.totalIncome == 0 {
                 emptyState(title: "这一周没有记录",
                            message: "换一周看看吧")
@@ -450,7 +451,9 @@ struct MonthlyStatsView: View {
                 ForEach(StatisticsCardLayout.applicable(visibleCardKeys, month: false), id: \.self) { key in
                     periodCard(key, summary: summary, topExpenses: topExpenses,
                                currencyCode: snapshot.scopedCurrencyCode,
-                               start: weekStart, end: weekEnd, label: "本周支出")
+                               start: weekStart, end: weekEnd,
+                               label: isCurrentWeek ? "本周支出" : "该周支出",
+                               lastDate: isCurrentWeek ? today : nil)
                 }
             }
         }
@@ -521,7 +524,8 @@ struct MonthlyStatsView: View {
             periodTotals(period, currencyCode: snapshot.scopedCurrencyCode,
                          label: "\(components.month ?? 1)月", previous: previous,
                          badgeCurrent: comparableCurrent,
-                         compareNote: comparableDays.map { "前\($0)天" })
+                         compareNote: comparableDays.map { "前\($0)天" },
+                         lastDate: isCurrentMonth ? calendar.startOfDay(for: now) : nil)
             if hasMonthData {
                 ForEach(visibleCardKeys, id: \.self) { key in
                     monthCard(key, summary: summary, previousMonth: previousMonth,
@@ -591,24 +595,44 @@ struct MonthlyStatsView: View {
                     .id("stats-month-sources")
             }
         case "insights":
+            // 07 §14：和顶部徽章同一对窗口（当月比上月同期）。
+            let windows = SpendingInsights.comparableMonthWindows(
+                records: snapshot.records, year: summary.year, month: summary.month, now: now
+            )
             let projection = SpendingInsights.project(
                 records: snapshot.records, current: summary, previous: previousMonth,
-                now: now, monthlyBudget: budget?.amount
+                now: now, monthlyBudget: budget?.amount, comparison: windows
             )
             if !projection.isEmpty {
-                SpendingInsightsCard(projection: projection, currencyCode: currencyCode)
+                SpendingInsightsCard(projection: projection, currencyCode: currencyCode,
+                                     thisName: windows.sameProgress ? "本月" : "\(summary.month)月",
+                                     previousName: windows.sameProgress ? "上月同期" : "上月")
                     .id("stats-month-insights")
             }
         case "heatmap":
             if !summary.expenseByCategory.isEmpty {
-                MonthlyHeatmapCard(summary: summary, currencyCode: currencyCode)
+                MonthlyHeatmapCard(summary: summary, currencyCode: currencyCode,
+                                   lastDay: Calendar.current.isDate(displayedMonth, equalTo: now,
+                                                                    toGranularity: .month)
+                                       ? Calendar.current.component(.day, from: now) : nil)
                     .id("stats-month-heatmap")
             }
         case "radar":
-            if !summary.expenseByCategory.isEmpty {
-                MonthlyCompareBarsCard(current: summary, previous: previousMonth,
-                                       currencyCode: currencyCode)
-                    .id("stats-month-radar")
+            let windows = SpendingInsights.comparableMonthWindows(
+                records: snapshot.records, year: summary.year, month: summary.month, now: now
+            )
+            let rows = SpendingInsights.compareCategoryRows(
+                current: windows.current.expenseByCategory,
+                previous: windows.previous.expenseByCategory
+            )
+            if !rows.isEmpty {
+                MonthlyCompareBarsCard(
+                    rows: rows,
+                    currentLabel: windows.sameProgress ? "本月" : "\(summary.month)月",
+                    previousLabel: windows.sameProgress ? "上月同期" : "\(previousMonth.month)月",
+                    currencyCode: currencyCode
+                )
+                .id("stats-month-radar")
             }
         case "stacked":
             TwelveMonthStackCard(summaries: twelveMonthSummaries(snapshot: snapshot, endMonth: start),
@@ -656,10 +680,27 @@ struct MonthlyStatsView: View {
         let topExpenses = statisticsCache.periodTopExpenses(
             of: snapshot.records, revision: snapshot.revision, start: start, end: end
         )
+        // 07 §14：未结束的年比去年截至同月同日（2/29 裁到 2/28），过去的年全年对全年。
+        let now = AppClock.now
+        let isCurrentYear = year == calendar.component(.year, from: now)
+        let previousStart = calendar.date(byAdding: .year, value: -1, to: start) ?? start
+        let previousEnd: Date = {
+            guard isCurrentYear else { return calendar.date(byAdding: .day, value: -1, to: start) ?? start }
+            let parts = calendar.dateComponents([.month, .day], from: now)
+            let sameMonth = calendar.date(from: DateComponents(year: year - 1, month: parts.month, day: 1))
+                ?? previousStart
+            let days = calendar.range(of: .day, in: .month, for: sameMonth)?.count ?? 28
+            return calendar.date(byAdding: .day, value: min(parts.day ?? 1, days) - 1, to: sameMonth)
+                ?? sameMonth
+        }()
+        let previous = statisticsCache.period(
+            of: snapshot.records, revision: snapshot.revision, start: previousStart, end: previousEnd
+        )
         return VStack(spacing: 20) {
             yearHeader
             yearlyContent(summary: summary, topExpenses: topExpenses,
-                          currencyCode: snapshot.scopedCurrencyCode, start: start, end: end)
+                          currencyCode: snapshot.scopedCurrencyCode, start: start, end: end,
+                          previous: previous)
         }
     }
 
@@ -674,9 +715,19 @@ struct MonthlyStatsView: View {
             of: snapshot.records, revision: snapshot.revision,
             start: customStartDate, end: customEndDate
         )
+        // 07 §14：自定义 N 天比紧邻此前的 N 天，徽章旁标「较此前N天」。
+        let calendar = Calendar.current
+        let dayCount = max(summary.dailyTotals.count, 1)
+        let startDay = calendar.startOfDay(for: summary.start)
+        let previous = statisticsCache.period(
+            of: snapshot.records, revision: snapshot.revision,
+            start: calendar.date(byAdding: .day, value: -dayCount, to: startDay) ?? startDay,
+            end: calendar.date(byAdding: .day, value: -1, to: startDay) ?? startDay
+        )
         return VStack(spacing: 20) {
             customHeader
-            periodTotals(summary, currencyCode: snapshot.scopedCurrencyCode, label: "区间")
+            periodTotals(summary, currencyCode: snapshot.scopedCurrencyCode, label: "区间",
+                         previous: previous, compareNote: "较此前\(dayCount)天")
             if summary.totalExpense == 0 && summary.totalIncome == 0 {
                 emptyState(title: "这个区间还没有支出", message: "记几笔之后这里会出现分析图表")
             } else {
@@ -692,7 +743,8 @@ struct MonthlyStatsView: View {
     @ViewBuilder
     private func periodCard(_ key: String, summary: PeriodSummary,
                             topExpenses: [TransactionRecord], currencyCode: String,
-                            start: Date, end: Date, label: String) -> some View {
+                            start: Date, end: Date, label: String,
+                            lastDate: Date? = nil) -> some View {
         switch key {
         case "ring":
             if !summary.expenseByCategory.isEmpty {
@@ -701,7 +753,7 @@ struct MonthlyStatsView: View {
             }
         case "daily":
             if !summary.expenseByCategory.isEmpty {
-                periodDailyBarChart(summary.dailyTotals)
+                periodDailyBarChart(summary.dailyTotals, lastDate: lastDate)
                     .padding(14)
                     .liquidGlassSurface(cornerRadius: 18)
             }
@@ -731,7 +783,7 @@ struct MonthlyStatsView: View {
                                              start: monthStart, end: cutoffEnd)
     }
 
-    private let statisticsAccent = Color(red: 0.49, green: 0.55, blue: 0.62)
+    private let statisticsAccent = Color.statisticsAccent
     private let statisticsIncome = Color(red: 0.73, green: 0.56, blue: 0.32)
 
     /// [badgeCurrent] 是徽章用的等长同期本期值；不传时徽章直接比大号金额。
@@ -739,8 +791,14 @@ struct MonthlyStatsView: View {
     private func periodTotals(_ summary: PeriodSummary, currencyCode: String,
                               label: String, previous: PeriodSummary? = nil,
                               badgeCurrent: PeriodSummary? = nil,
-                              compareNote: String? = nil) -> some View {
+                              compareNote: String? = nil,
+                              lastDate: Date? = nil) -> some View {
         let badge = badgeCurrent ?? summary
+        // 07 §14「未来日期是 null」：本期还没过完时曲线只画到今天，横轴仍按整期。
+        let drawn = lastDate.map { last in summary.dailyTotals.filter { $0.date <= last } }
+            ?? summary.dailyTotals
+        let axisStart = summary.dailyTotals.first?.date ?? summary.start
+        let axisEnd = summary.dailyTotals.last?.date ?? summary.end
         return VStack(spacing: 8) {
             VStack(alignment: .leading, spacing: 4) {
                 HStack {
@@ -762,14 +820,15 @@ struct MonthlyStatsView: View {
                     .font(.system(size: 34, weight: .bold).monospacedDigit())
                     .lineLimit(1)
                     .minimumScaleFactor(0.6)
-                if summary.dailyTotals.contains(where: { $0.expense > 0 }) {
-                    Chart(summary.dailyTotals, id: \.date) { item in
+                if drawn.contains(where: { $0.expense > 0 }) {
+                    Chart(drawn, id: \.date) { item in
                         LineMark(x: .value("日期", item.date),
                                  y: .value("支出", MoneyFormat.double(item.expense)))
                             .interpolationMethod(.monotone)
                             .foregroundStyle(statisticsAccent)
                     }
                     .chartLegend(.hidden)
+                    .chartXScale(domain: axisStart...axisEnd)
                     .chartXAxis {
                         AxisMarks(values: Self.trendAxisDates(summary.dailyTotals)) {
                             AxisValueLabel(format: .dateTime.month(.defaultDigits).day())
@@ -788,13 +847,13 @@ struct MonthlyStatsView: View {
             ViewThatFits(in: .horizontal) {
                 HStack(spacing: 8) {
                     customMiniTotal("收入", amount: summary.totalIncome, currencyCode: currencyCode,
-                                    values: summary.dailyTotals.map { MoneyFormat.double($0.income) },
+                                    values: drawn.map { MoneyFormat.double($0.income) },
                                     color: statisticsIncome, previous: previous?.totalIncome,
-                                    badgeAmount: badge.totalIncome)
+                                    badgeAmount: badge.totalIncome, slots: summary.dailyTotals.count)
                     customMiniTotal("结余", amount: summary.balance, currencyCode: currencyCode,
-                                    values: Self.runningBalances(summary.dailyTotals),
+                                    values: Self.runningBalances(drawn),
                                     color: statisticsAccent, previous: previous?.balance,
-                                    badgeAmount: badge.balance)
+                                    badgeAmount: badge.balance, slots: summary.dailyTotals.count)
                 }
                 VStack(spacing: 8) {
                     totalCard(title: "收入", amount: summary.totalIncome, color: .primary, currencyCode: currencyCode)
@@ -815,7 +874,8 @@ struct MonthlyStatsView: View {
     private func customMiniTotal(_ title: LocalizedStringKey, amount: Decimal,
                                  currencyCode: String, values: [Double], color: Color,
                                  previous: Decimal? = nil,
-                                 badgeAmount: Decimal? = nil) -> some View {
+                                 badgeAmount: Decimal? = nil,
+                                 slots: Int? = nil) -> some View {
         VStack(alignment: .leading, spacing: 5) {
             Text(title).font(.caption).foregroundStyle(.secondary)
             Text(MoneyFormat.string(amount, currencyCode: currencyCode))
@@ -833,6 +893,8 @@ struct MonthlyStatsView: View {
                             .foregroundStyle(color)
                             .interpolationMethod(.monotone)
                     }
+                    // 横轴按整期格数；values 只到今天时右边留空。
+                    .chartXScale(domain: 0...max((slots ?? values.count) - 1, 1))
                     .chartXAxis(.hidden).chartYAxis(.hidden).chartLegend(.hidden)
                     .frame(width: 64, height: 26)
                     .accessibilityHidden(true)
@@ -854,19 +916,57 @@ struct MonthlyStatsView: View {
     }
 
     static func percentChangeLabel(current: Decimal, previous: Decimal) -> String? {
+        changeBadgeLabel(current: current, previous: previous)?.text
+    }
+
+    /// 和安卓 MoneyFormat.axisLabel 同样的紧凑金额：¥800 / ¥1,234 / ¥1.2万 / ¥12万。
+    static func compactMoney(_ value: Double) -> String {
+        let magnitude = abs(value)
+        let sign = value < 0 ? "-" : ""
+        let body: String
+        if magnitude >= 10_000 {
+            let wan = magnitude / 10_000
+            body = wan >= 10 ? "\(Int(wan.rounded()))万" : "\((wan * 10).rounded() / 10)万"
+        } else if magnitude >= 1_000 {
+            let formatter = NumberFormatter()
+            formatter.numberStyle = .decimal
+            formatter.maximumFractionDigits = 0
+            body = formatter.string(from: NSNumber(value: magnitude.rounded())) ?? "\(Int(magnitude.rounded()))"
+        } else {
+            body = "\(Int(magnitude.rounded()))"
+        }
+        return "\(sign)¥\(body)"
+    }
+
+    /// 涨跌徽章文案（07 §14，和安卓 delta_badge_text.dart 同规则）：
+    /// - 两期都是 0 → 不显示；
+    /// - 上期 0、本期不是 0 → 「新增 ¥X」，不显示无穷百分比；
+    /// - 任一期为负（结余跨零或都为负）→ 金额差「↑ ¥X」，百分比会失真；
+    /// - 其余 → 百分比，不到 0.05% 不显示。
+    static func changeBadgeLabel(current: Decimal, previous: Decimal) -> (text: String, up: Bool)? {
+        if previous == 0 && current == 0 { return nil }
+        let cur = NSDecimalNumber(decimal: current).doubleValue
+        let prev = NSDecimalNumber(decimal: previous).doubleValue
+        if previous == 0 {
+            return ("新增 \(compactMoney(abs(cur)))", cur > 0)
+        }
+        if current < 0 || previous < 0 {
+            let diff = cur - prev
+            guard diff != 0 else { return nil }
+            return ("\(diff > 0 ? "↑" : "↓") \(compactMoney(abs(diff)))", diff > 0)
+        }
         guard let percent = percentChange(current: current, previous: previous) else { return nil }
         let magnitude = abs(percent)
         let formatted = String(format: magnitude >= 10 ? "%.0f" : "%.1f", magnitude)
-        return "\(percent > 0 ? "↑" : "↓") \(formatted)%"
+        return ("\(percent > 0 ? "↑" : "↓") \(formatted)%", percent > 0)
     }
 
     @ViewBuilder
     private func changeBadge(current: Decimal, previous: Decimal, goodWhenUp: Bool) -> some View {
-        if let percent = Self.percentChange(current: current, previous: previous),
-           let label = Self.percentChangeLabel(current: current, previous: previous) {
-            Text(label)
+        if let badge = Self.changeBadgeLabel(current: current, previous: previous) {
+            Text(badge.text)
                 .font(.caption.weight(.medium).monospacedDigit())
-                .foregroundStyle((percent > 0) == goodWhenUp
+                .foregroundStyle(badge.up == goodWhenUp
                                  ? Color(red: 52 / 255, green: 168 / 255, blue: 83 / 255)
                                  : Color(red: 229 / 255, green: 72 / 255, blue: 77 / 255))
         }
@@ -932,17 +1032,23 @@ struct MonthlyStatsView: View {
         .liquidGlassSurface(cornerRadius: 18)
     }
 
+    /// 年视图合计。金额用中性色（06 §0.3：绿色只给预算健康态），负结余用警示橙；
+    /// [previous] 是去年同期，给出涨跌徽章。
     private func totalsCards(
         expense: Decimal,
         income: Decimal,
         balance: Decimal,
-        currencyCode: String
+        currencyCode: String,
+        previous: PeriodSummary? = nil
     ) -> some View {
         GlassEffectContainer(spacing: 12) {
             HStack(spacing: 12) {
-                totalCard(title: "支出", amount: expense, color: Color.expense, currencyCode: currencyCode)
-                totalCard(title: "收入", amount: income, color: Color.income, currencyCode: currencyCode)
-                totalCard(title: "结余", amount: balance, color: balance >= 0 ? Color.income : Color.warning, currencyCode: currencyCode)
+                totalCard(title: "支出", amount: expense, color: Color.expense, currencyCode: currencyCode,
+                          previous: previous?.totalExpense, goodWhenUp: false)
+                totalCard(title: "收入", amount: income, color: .primary, currencyCode: currencyCode,
+                          previous: previous?.totalIncome)
+                totalCard(title: "结余", amount: balance, color: balance >= 0 ? .primary : Color.warning,
+                          currencyCode: currencyCode, previous: previous?.balance)
             }
         }
     }
@@ -951,7 +1057,9 @@ struct MonthlyStatsView: View {
         title: LocalizedStringKey,
         amount: Decimal,
         color: Color,
-        currencyCode: String
+        currencyCode: String,
+        previous: Decimal? = nil,
+        goodWhenUp: Bool = true
     ) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             Text(title)
@@ -962,6 +1070,9 @@ struct MonthlyStatsView: View {
                 .foregroundStyle(color)
                 .lineLimit(1)
                 .minimumScaleFactor(0.6)
+            if let previous {
+                changeBadge(current: amount, previous: previous, goodWhenUp: goodWhenUp)
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(12)
@@ -1116,7 +1227,10 @@ struct MonthlyStatsView: View {
                     .lineStyle(StrokeStyle(lineWidth: 1.5, dash: [4, 3]))
                     .interpolationMethod(.monotone)
                 }
-                ForEach(summary.dailyTotals, id: \.day) { item in
+                // 07 §14：本月只画到今天，后面留空（上月同期虚线照常画满）。
+                ForEach(summary.dailyTotals.filter {
+                    !isCurrentMonth || $0.day <= calendar.component(.day, from: now)
+                }, id: \.day) { item in
                     LineMark(
                         x: .value("日", item.day),
                         y: .value("金额", max(0, MoneyFormat.double(trendShowsIncome ? item.income : item.expense))),
@@ -1171,11 +1285,17 @@ struct MonthlyStatsView: View {
         return "¥\(Int(value).formatted(.number.grouping(.automatic)))"
     }
 
-    private func periodDailyBarChart(_ dailyTotals: [PeriodDailyTotal]) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
+    private func periodDailyBarChart(_ dailyTotals: [PeriodDailyTotal],
+                                     lastDate: Date? = nil) -> some View {
+        // 没到的日子不画柱（没到 ≠ 花了 0）；横轴仍铺满整期。
+        let drawn = lastDate.map { last in dailyTotals.filter { $0.date <= last } } ?? dailyTotals
+        let axisStart = dailyTotals.first?.date ?? AppClock.now
+        let axisEnd = Calendar.current.date(byAdding: .day, value: 1,
+                                            to: dailyTotals.last?.date ?? axisStart) ?? axisStart
+        return VStack(alignment: .leading, spacing: 8) {
             Text("每日支出")
                 .font(.headline)
-            Chart(dailyTotals, id: \.date) { item in
+            Chart(drawn, id: \.date) { item in
                 BarMark(
                     x: .value("日", item.date, unit: .day),
                     y: .value("支出", MoneyFormat.double(item.expense))
@@ -1185,6 +1305,7 @@ struct MonthlyStatsView: View {
             .chartXAxis {
                 AxisMarks(values: .stride(by: .day))
             }
+            .chartXScale(domain: axisStart...axisEnd)
             .frame(height: 160)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -1241,13 +1362,15 @@ struct MonthlyStatsView: View {
     }
 
     private func yearlyContent(summary: YearlySummary, topExpenses: [TransactionRecord],
-                               currencyCode: String, start: Date, end: Date) -> some View {
+                               currencyCode: String, start: Date, end: Date,
+                               previous: PeriodSummary? = nil) -> some View {
         VStack(spacing: 20) {
             totalsCards(
                 expense: summary.totalExpense,
                 income: summary.totalIncome,
                 balance: summary.balance,
-                currencyCode: currencyCode
+                currencyCode: currencyCode,
+                previous: previous
             )
             if summary.totalExpense == 0 && summary.totalIncome == 0 {
                 let isCurrentYear = summary.year == Calendar.current.component(.year, from: AppClock.now)
@@ -1275,10 +1398,15 @@ struct MonthlyStatsView: View {
         case "daily":
             VStack(alignment: .leading, spacing: 8) {
                 Text("每月支出").font(.headline)
-                Chart(Array(summary.monthlyExpenses.enumerated()), id: \.offset) { index, amount in
+                // 今年还没到的月份不画柱（07 §14）；颜色和周/月视图同一个统计强调色。
+                let lastMonth = summary.year == Calendar.current.component(.year, from: AppClock.now)
+                    ? Calendar.current.component(.month, from: AppClock.now) : 12
+                Chart(Array(summary.monthlyExpenses.enumerated()).filter { $0.offset < lastMonth },
+                      id: \.offset) { index, amount in
                     BarMark(x: .value("月", index + 1), y: .value("支出", MoneyFormat.double(amount)))
-                        .foregroundStyle(Color.accentColor.gradient)
+                        .foregroundStyle(statisticsAccent.gradient)
                 }
+                .chartXScale(domain: 0...13)
                 .chartXAxis { AxisMarks(values: Array(1...12)) }
                 .frame(height: 160)
             }
@@ -1305,9 +1433,9 @@ struct MonthlyStatsView: View {
             Image("MascotEmpty")
                 .resizable()
                 .scaledToFit()
-                .frame(width: 80, height: 80)
+                .frame(width: 96, height: 96)
                 .accessibilityHidden(true)
-            Text(title).font(.headline).foregroundStyle(.secondary)
+            Text(title).font(.headline).foregroundStyle(.primary)
             Text(message).font(.subheadline).foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity)
