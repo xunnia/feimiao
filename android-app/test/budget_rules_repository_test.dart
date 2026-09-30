@@ -170,8 +170,20 @@ void main() {
     );
     final rules = repo.budgetRulesForBook(book);
     expect(rules, hasLength(2));
-    expect(rules.map((rule) => rule.colorIndex).toSet(), hasLength(2));
-    expect(repo.budgetRuleMonth(today).plannedAmount, Decimal.fromInt(1800));
+    // 日常预算不画色条；特别安排从第一种颜色轮流取。
+    expect(rules.map((rule) => rule.colorIndex), [0, 0]);
+    await repo.saveBudgetRule(
+      bookId: book,
+      kind: BudgetRuleKind.special,
+      amountYuan: 100,
+      unit: BudgetRuleUnit.day,
+      startDate: monthStart.add(const Duration(days: 5)),
+      endDate: monthStart.add(const Duration(days: 5)),
+      funding: BudgetFunding.extra,
+    );
+    expect(repo.budgetRulesForBook(book).last.colorIndex, 1);
+    // 300 + 聚会 3 天×500 额外 + 6 号 100 额外。
+    expect(repo.budgetRuleMonth(today).plannedAmount, Decimal.fromInt(1900));
     await repo.closeForTest();
   });
 

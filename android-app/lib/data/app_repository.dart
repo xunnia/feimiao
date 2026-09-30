@@ -15,7 +15,6 @@ import '../core/budget/budget_rule_calendar.dart';
 import '../core/budget/budget_rule_engine.dart';
 import '../core/budget/budget_rule_status.dart';
 import '../core/budget/budget_rules.dart';
-import '../core/budget/budget_special_tracking.dart';
 import '../core/budget/budget_transaction_family.dart';
 import '../core/budget/budget_window_resolver.dart';
 import '../core/budget/fixed_commitment.dart';
@@ -3436,13 +3435,6 @@ class AppRepository extends ChangeNotifier {
               (left, right) => right.anchorStart.compareTo(left.anchorStart)),
       );
 
-  List<BudgetPlanV2> get budgetSpecialPlansV2 => List.unmodifiable(
-        _budgetPlansV2.where((plan) => plan.isSpecial).toList()
-          ..sort(
-            (left, right) => left.anchorStart.compareTo(right.anchorStart),
-          ),
-      );
-
   List<BudgetPlanRevisionV2> budgetPlanRevisionsV2For(int planId) =>
       List.unmodifiable(
         _budgetPlanRevisionsV2.where((item) => item.planId == planId).toList()
@@ -3530,51 +3522,6 @@ class AppRepository extends ChangeNotifier {
     );
   }
 
-  List<BudgetSpecialTrackingResult> budgetSpecialTrackings({
-    required int bookId,
-    required DateTime windowStartInclusive,
-    required DateTime windowEndExclusive,
-    DateTime? asOf,
-    DateTime? knowledgeCutoff,
-    bool includeArchived = false,
-  }) {
-    final cutoff = knowledgeCutoff ?? DateTime.now();
-    final families = _budgetExpenseFamiliesForBook(bookId);
-    final rootByFamilyId = <String, TransactionEntity>{
-      for (final transaction in _allTransactions)
-        if (transaction.refundOf == null)
-          transaction.uuid.isEmpty
-              ? transaction.id.toString()
-              : transaction.uuid: transaction,
-    };
-    final inputs = <BudgetSpecialExpenseFamilyInput>[
-      for (final family in families)
-        BudgetSpecialExpenseFamilyInput(
-          id: family.id,
-          bookId: bookId,
-          currencyCode: family.currencyCode,
-          attributionDate: family.attributionDate,
-          createdAt: family.createdAt,
-          netAmountCents: _familyNetAt(family, cutoff),
-          countsInBudget: family.countsInBudget,
-          categoryKey:
-              family.categoryAllocations.firstOrNull?.categoryKey ?? '',
-          tagIds: rootByFamilyId[family.id]?.tagIds ?? const [],
-        ),
-    ];
-    return BudgetSpecialTrackingResolver.resolveWindow(
-      windowStartInclusive: windowStartInclusive,
-      windowEndExclusive: windowEndExclusive,
-      bookId: bookId,
-      asOf: asOf ?? DateTime.now(),
-      knowledgeCutoff: cutoff,
-      plans: _budgetPlansV2,
-      revisions: _budgetPlanRevisionsV2,
-      expenseFamilies: inputs,
-      includeArchived: includeArchived,
-    );
-  }
-
   BudgetWindowResult budgetForCalendarMonth(
     DateTime month, {
     int? bookId,
@@ -3633,8 +3580,8 @@ class AppRepository extends ChangeNotifier {
   // 预算规则模型（docs/08 §6）：所有用到预算的地方都走这里。
   // ---------------------------------------------------------------------------
 
-  /// 规则颜色一共几种（界面按下标取色）。
-  static const budgetRuleColorCount = 8;
+  /// 特别安排颜色一共几种：蓝、紫、粉、青、灰蓝（§6.2，界面按下标取色）。
+  static const budgetRuleColorCount = 5;
 
   /// 某账本没删的规则（按新建先后）。
   List<BudgetRule> budgetRulesForBook(int bookId) => List.unmodifiable(
@@ -3818,16 +3765,19 @@ class AppRepository extends ChangeNotifier {
     );
   }
 
-  int _nextBudgetRuleColor(int bookId, {int? exceptId}) {
-    final used = {
-      for (final rule in budgetRulesForBook(bookId))
-        if (rule.id != exceptId) rule.colorIndex,
-    };
-    for (var i = 0; i < budgetRuleColorCount; i++) {
-      if (!used.contains(i)) return i;
-    }
-    return used.length % budgetRuleColorCount;
+  /// 特别安排按新建顺序轮流取色（§6.2）；日常预算不画色条，固定 0。
+  int _nextBudgetRuleColor(int bookId, BudgetRuleKind kind) {
+    if (kind == BudgetRuleKind.base) return 0;
+    final specials = _budgetRules
+        .where((rule) => rule.bookId == bookId && !rule.isBase)
+        .length;
+    return specials % budgetRuleColorCount;
   }
+
+  /// 某账本每天计入预算的支出（yyyymmdd → 分），日历和某一天详情用。
+  Map<int, int> budgetSpendByDay(int bookId, {DateTime? asOf}) => bookId <= 0
+      ? const {}
+      : _budgetSpendByDay(bookId, budgetDay(asOf ?? AppClock.now)).spend;
 
   /// 新建或编辑一条规则，返回 id（§6.9）。
   ///
@@ -3886,8 +3836,9 @@ class AppRepository extends ChangeNotifier {
       startDate: start,
       endDate: end,
       funding: kind == BudgetRuleKind.special ? funding : null,
-      colorIndex: existing?.colorIndex ??
-          _nextBudgetRuleColor(bookId),
+      colorIndex: existing != null && existing.kind == kind
+          ? existing.colorIndex
+          : _nextBudgetRuleColor(bookId, kind),
       createdMs: existing?.createdMs ?? nowMs,
     );
     if (kind == BudgetRuleKind.special) {
@@ -16463,190 +16414,6 @@ class AppRepository extends ChangeNotifier {
     return planId;
   }
 
-  Future<int> saveBudgetSpecialTrackingV2({
-    int? planId,
-    required int bookId,
-    required String name,
-    required DateTime startInclusive,
-    required DateTime endInclusive,
-    required int totalCents,
-    required BudgetExpenseScopeV2 expenseScope,
-    Map<String, int> categoryBudgetsCents = const {},
-  }) async {
-    if (!_books.any((book) => book.id == bookId)) {
-      throw ArgumentError('专项追踪必须选择一个明确账本');
-    }
-    final start = DateTime(
-      startInclusive.year,
-      startInclusive.month,
-      startInclusive.day,
-    );
-    final end = DateTime(
-      endInclusive.year,
-      endInclusive.month,
-      endInclusive.day,
-    );
-    final normalizedName = name.trim();
-    final categoryTotal =
-        categoryBudgetsCents.values.fold<int>(0, (sum, value) => sum + value);
-    if (normalizedName.isEmpty ||
-        end.isBefore(start) ||
-        totalCents < 0 ||
-        expenseScope.isEmpty ||
-        categoryBudgetsCents.values.any((value) => value < 0) ||
-        categoryTotal > totalCents ||
-        categoryBudgetsCents.keys
-            .any((key) => !expenseScope.categoryKeys.contains(key))) {
-      throw ArgumentError('专项名称、日期、额度或消费范围不合法');
-    }
-    final nowMs = DateTime.now().millisecondsSinceEpoch;
-    late final int savedPlanId;
-    await _db!.transaction((txn) async {
-      if (planId == null) {
-        savedPlanId = await txn.insert('budget_plans', {
-          'uuid': _newUuid(),
-          'book_id': bookId,
-          'currency_code': 'CNY',
-          'timezone': 'device_local',
-          'name': normalizedName,
-          'role': 'special',
-          'cadence': BudgetPlanCadenceV2.oneOff.storageKey,
-          'anchor_start_day': budgetCivilDayKey(start),
-          'month_start_day': null,
-          'week_start': null,
-          'end_day': budgetCivilDayKey(end),
-          'expense_scope_json': expenseScope.toJsonString(),
-          'status': BudgetPlanStatusV2.active.storageKey,
-          'created_ms': nowMs,
-          'updated_ms': nowMs,
-        });
-        await txn.insert('budget_plan_revisions', {
-          'uuid': _newUuid(),
-          'plan_id': savedPlanId,
-          'effective_cycle_start_day': budgetCivilDayKey(start),
-          'effective_to_cycle_start_day': null,
-          'amount_cents': totalCents,
-          'category_budgets_json':
-              _encodeBudgetCategoryCents(categoryBudgetsCents),
-          'monthly_income_cents': null,
-          'fixed_templates_json': '[]',
-          'legacy_source_period_id': null,
-          'created_ms': nowMs,
-          'updated_ms': nowMs,
-        });
-        await txn.insert('budget_change_events', {
-          'uuid': _newUuid(),
-          'plan_id': savedPlanId,
-          'event_type': 'special_created',
-          'before_json': '',
-          'after_json': jsonEncode({
-            'start_day': budgetCivilDayKey(start),
-            'end_day': budgetCivilDayKey(end),
-            'total_cents': totalCents,
-            'expense_scope': expenseScope.toJson(),
-          }),
-          'created_ms': nowMs,
-        });
-        return;
-      }
-
-      final existingPlanRows = await txn.query(
-        'budget_plans',
-        where: "id = ? AND role = 'special'",
-        whereArgs: [planId],
-        limit: 1,
-      );
-      if (existingPlanRows.isEmpty) {
-        throw StateError('专项追踪不存在');
-      }
-      final existingPlan = existingPlanRows.first;
-      if (existingPlan['status'] == BudgetPlanStatusV2.archived.storageKey) {
-        throw StateError('已归档专项追踪不能再修改');
-      }
-      final versionMs = max(
-        nowMs,
-        (existingPlan['updated_ms'] as int? ?? 0) + 1,
-      );
-      final revisionRows = await txn.query(
-        'budget_plan_revisions',
-        where: 'plan_id = ?',
-        whereArgs: [planId],
-        orderBy: 'id ASC',
-      );
-      if (revisionRows.isEmpty) {
-        throw StateError('专项追踪缺少额度记录');
-      }
-      final revision = revisionRows.first;
-      savedPlanId = await txn.insert('budget_plans', {
-        'uuid': _newUuid(),
-        'book_id': bookId,
-        'currency_code': 'CNY',
-        'timezone': 'device_local',
-        'name': normalizedName,
-        'role': 'special',
-        'cadence': BudgetPlanCadenceV2.oneOff.storageKey,
-        'anchor_start_day': budgetCivilDayKey(start),
-        'month_start_day': null,
-        'week_start': null,
-        'end_day': budgetCivilDayKey(end),
-        'expense_scope_json': expenseScope.toJsonString(),
-        'status': BudgetPlanStatusV2.active.storageKey,
-        'created_ms': versionMs,
-        'updated_ms': versionMs,
-      });
-      await txn.insert('budget_plan_revisions', {
-        'uuid': _newUuid(),
-        'plan_id': savedPlanId,
-        'effective_cycle_start_day': budgetCivilDayKey(start),
-        'effective_to_cycle_start_day': null,
-        'amount_cents': totalCents,
-        'category_budgets_json':
-            _encodeBudgetCategoryCents(categoryBudgetsCents),
-        'monthly_income_cents': null,
-        'fixed_templates_json': '[]',
-        'legacy_source_period_id': null,
-        'created_ms': versionMs,
-        'updated_ms': versionMs,
-      });
-      await txn.update(
-        'budget_plans',
-        {
-          'status': BudgetPlanStatusV2.archived.storageKey,
-          'updated_ms': versionMs,
-        },
-        where: 'id = ?',
-        whereArgs: [planId],
-      );
-      await txn.insert('budget_change_events', {
-        'uuid': _newUuid(),
-        'plan_id': planId,
-        'event_type': 'special_superseded',
-        'before_json': jsonEncode({
-          'plan': existingPlan,
-          'revision': revision,
-        }),
-        'after_json': jsonEncode({'successor_plan_id': savedPlanId}),
-        'created_ms': versionMs,
-      });
-      await txn.insert('budget_change_events', {
-        'uuid': _newUuid(),
-        'plan_id': savedPlanId,
-        'event_type': 'special_created',
-        'before_json': jsonEncode({'supersedes_plan_id': planId}),
-        'after_json': jsonEncode({
-          'start_day': budgetCivilDayKey(start),
-          'end_day': budgetCivilDayKey(end),
-          'total_cents': totalCents,
-          'expense_scope': expenseScope.toJson(),
-        }),
-        'created_ms': versionMs,
-      });
-    });
-    await _loadBudgetV2();
-    notifyListeners();
-    return savedPlanId;
-  }
-
   Future<int> addBudgetPlanRevisionV2({
     required int planId,
     required int totalCents,
@@ -25307,13 +25074,8 @@ class AppRepository extends ChangeNotifier {
         }
       } catch (_) {}
     }
-    if (_budgetPlansV2.any((plan) =>
-        plan.isSpecial &&
-        plan.expenseScope.categoryKeys.any(budgetKeys.contains))) {
-      hasBudget = true;
-    }
     if (transactionCount > 0 || recurringCount > 0 || hasBudget) {
-      throw StateError('这个分类仍被账单、定时记账、分类预算或专项追踪使用，请先隐藏或合并。');
+      throw StateError('这个分类仍被账单、定时记账、或分类预算使用，请先隐藏或合并。');
     }
     await _db!.transaction((txn) async {
       await txn.delete('category_memory',
@@ -25584,10 +25346,6 @@ class AppRepository extends ChangeNotifier {
   }
 
   Future<void> deleteTag(int id) async {
-    if (_budgetPlansV2.any(
-        (plan) => plan.isSpecial && plan.expenseScope.tagIds.contains(id))) {
-      throw StateError('这个标签仍被专项追踪历史使用，暂时不能删除。');
-    }
     // 删标签 + 从所有账单 tags 里摘除要在同一事务里完成（要么全成要么全不成），
     // 摘除过的账单同步 bump updated_ms（同步戳），别留「内容变了戳没变」的行。
     await _db!.transaction((txn) async {

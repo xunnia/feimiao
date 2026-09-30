@@ -39,7 +39,7 @@ import 'views/savings/savings_goals_view.dart';
 import 'views/search/search_view.dart';
 import 'views/settings/accounts_view.dart';
 import 'views/settings/auto_record_setting_view.dart';
-import 'views/settings/budget_setting_view.dart';
+import 'views/budget/budget_view.dart';
 import 'views/settings/recurring_view.dart';
 import 'views/settings/categories_view.dart';
 import 'views/settings/import_export_view.dart';
@@ -1283,7 +1283,7 @@ class _DrawerPanelState extends State<_DrawerPanel> {
       case 'assets':
         _popAndPush(const AccountsView());
       case 'budget':
-        _popAndPush(const BudgetSettingView());
+        _popAndPush(const BudgetView());
       case 'savings':
         _popAndPush(const SavingsGoalsView());
       case 'assistant':

@@ -14,7 +14,7 @@
     "android": {
       "version": "1.307.0+322",
       "watermark": "b0930-322",
-      "databaseVersion": 49,
+      "databaseVersion": 50,
       "sourceCommit": "a6cc25c3dc0fbd93f62b6e83ef3471e8501d5e20",
       "apk": "ci-artifacts/releases/feimiao-codex-v1.307.0-322.apk",
       "apkBytes": 117868695,
@@ -87,7 +87,7 @@
     },
     "fixture": {
       "file": "ios-app/tools/migration-fixtures/p0-ios-qingji-upgrade-2026-09-v1.json",
-      "inputHash": "5EA4DED99EEE99AC607C53D341F22F4CB09F91CAEE727B8E9EF45866A8EC7ED3"
+      "inputHash": "B7DF32E0DAA53F66979B6E4A7A3E45FDF8DCB6612DB5B68484DC45E40A11EC2D"
     },
     "preserveFields": [
       "stableID",
@@ -108,7 +108,7 @@
       "isExcluded"
     ],
     "androidBackup": {
-      "requiredDatabaseVersion": 49,
+      "requiredDatabaseVersion": 50,
       "requiredSamples": ["current-v49", "v40", "v48"],
       "restoreTarget": "QingJi SwiftData",
       "status": "MACOS_EVIDENCE_PENDING"
@@ -438,8 +438,8 @@
       "board": "统计与数据",
       "feature": "预算与今日可花",
       "androidEntry": "drawer/budget",
-      "androidState": "当前预算周期和固定承诺",
-      "androidSource": ["android-app/lib/views/settings/budget_setting_view.dart", "android-app/lib/views/settings/budget_special_tracking_ui.dart"],
+      "androidState": "本月预算规则、日历和月底结余",
+      "androidSource": ["android-app/lib/views/budget/budget_view.dart", "android-app/lib/views/budget/budget_rule_sheet.dart"],
       "iosTargetEntry": "drawer/budget",
       "iosCurrentEntry": "settings/budget",
       "iosSource": ["ios-app/QingJi/Views/Settings/BudgetSettingView.swift", "ios-app/QingJi/Views/Settings/BudgetV2EditorViews.swift"],

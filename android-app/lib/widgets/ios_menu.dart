@@ -157,7 +157,10 @@ Future<void> showIosMenu(
     left = screen.width - margin - menuWidth;
   }
   // 默认弹在锚点下方；下方放不下（锚点靠近屏底，如记账卡芯片）就翻到上方。
-  final estHeight = items.length * 44.0 + 8;
+  // 带副标题的行多一行小字（约 62），否则按 44 估。
+  final estHeight = items.fold<double>(
+          0, (sum, item) => sum + (item.subtitle == null ? 44.0 : 62.0)) +
+      8;
   final maxHeight = math.min(estHeight, screen.height - margin * 2).toDouble();
   double top = alignToAnchorTop ? anchor.top : anchor.bottom + 4;
   var growUp = false;

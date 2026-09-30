@@ -6,6 +6,7 @@ import 'package:decimal/decimal.dart';
 
 import 'budget_engine.dart';
 import 'budget_rule_calendar.dart';
+import 'budget_rule_display.dart';
 import 'budget_rule_engine.dart';
 import 'budget_rules.dart';
 
@@ -66,12 +67,7 @@ class BudgetRuleValidationException implements Exception {
   const BudgetRuleValidationException(this.validation);
 
   @override
-  String toString() => switch (validation.issue) {
-        BudgetRuleIssue.carveWithoutBase =>
-          '${validation.month}月还没有日常预算，没法从里面匀，可以改成额外多给',
-        BudgetRuleIssue.carveExceedsBase =>
-          '匀的钱超过了${validation.month}月的预算，可以改成额外多给',
-      };
+  String toString() => BudgetRuleValidationText.of(validation);
 }
 
 /// 任意日期区间的预算合计（AI 问「这周」「某几天」、周报/月报用）。

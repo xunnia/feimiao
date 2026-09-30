@@ -3,7 +3,7 @@
   "baseline": {
     "androidVersion": "1.307.0+322",
     "androidWatermark": "b0930-322",
-    "androidDatabaseVersion": 49,
+    "androidDatabaseVersion": 50,
     "iosDeploymentTarget": "26.0",
     "fixtureId": "p0-demo-ledger-2026-08-v1",
     "fixtureInputHash": "E45AB0CEFF322CCAE8A54474AB523F954724A749D0561F698ED81F23850996A6",

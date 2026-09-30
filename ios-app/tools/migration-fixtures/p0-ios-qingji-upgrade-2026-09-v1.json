@@ -97,7 +97,7 @@
     "isExcluded"
   ],
   "androidBackup": {
-    "requiredDatabaseVersion": 49,
+    "requiredDatabaseVersion": 50,
     "requiredSamples": ["current-v49", "v40", "v48"],
     "restoreTarget": "QingJi SwiftData",
     "status": "MACOS_EVIDENCE_PENDING"

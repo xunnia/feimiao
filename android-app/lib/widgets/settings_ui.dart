@@ -90,7 +90,7 @@ class AppSwitch extends StatelessWidget {
 }
 
 /// 多选列表统一勾选件：保留轻量方形视觉，实际触控区域 48dp，
-/// 用于导入/自动记账/专项追踪等“可同时选多个”场景。
+/// 用于导入/自动记账等“可同时选多个”场景。
 class AppCheckmark extends StatelessWidget {
   final bool value;
   final ValueChanged<bool>? onChanged;

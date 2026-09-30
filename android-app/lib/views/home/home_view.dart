@@ -15,7 +15,7 @@ import '../../widgets/mascot.dart';
 import '../../widgets/sliding_segment.dart';
 import '../../widgets/transaction_day_list.dart';
 import '../statistics/statistics_view.dart';
-import '../settings/budget_setting_view.dart';
+import '../budget/budget_view.dart';
 import '../../widgets/app_page_route.dart';
 import '../../widgets/repository_data_gate.dart';
 
@@ -180,7 +180,7 @@ class _HomeViewState extends State<HomeView> {
             ),
             onOpenBudgetSettings: () => Navigator.of(context).push(
               AppPageRoute<void>(
-                builder: (_) => const BudgetSettingView(),
+                builder: (_) => const BudgetView(),
               ),
             ),
           ),

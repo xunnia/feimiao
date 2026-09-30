@@ -33,7 +33,7 @@ import 'package:qingji/views/settings/ai_setting_view.dart';
 import 'package:qingji/views/settings/ai_companion_views.dart';
 import 'package:qingji/views/settings/backup_view.dart';
 import 'package:qingji/views/settings/bill_review_view.dart';
-import 'package:qingji/views/settings/budget_setting_view.dart';
+import 'package:qingji/views/budget/budget_view.dart';
 import 'package:qingji/views/settings/categories_view.dart';
 import 'package:qingji/views/settings/ai_merged_pages.dart';
 import 'package:qingji/views/settings/recurring_view.dart';
@@ -182,7 +182,7 @@ Future<void> _captureParityScene(
     await _captureStatistics(tester, binding, '自定义', 'stats-custom-android');
   } else if (scene == 'budget') {
     await _capturePage(
-        tester, 'budget-android', const BudgetSettingView(), binding);
+        tester, 'budget-android', const BudgetView(), binding);
   } else if (scene == 'reimburse') {
     await _capturePage(
         tester, 'reimburse-android', const ReimburseView(), binding);
@@ -346,7 +346,7 @@ Future<void> _capturePlanningGroup(
   await _capturePage(
     tester,
     'budget-android',
-    const BudgetSettingView(),
+    const BudgetView(),
     binding,
   );
   await _capturePage(
