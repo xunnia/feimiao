@@ -107,6 +107,23 @@ final class StatisticsEngineTests: XCTestCase {
         XCTAssertEqual(ranked.map(\.amount), [80, 65])
     }
 
+    func testTopExpensesSkipFullRefundsAndLegacyNegativeExpenses() {
+        // 07 D-STAT-003：全额退款后净额为 0 的原单、老数据里的负数冲账都不能进单笔排行。
+        let refunded = UUID()
+        let records = [
+            TransactionRecord(id: refunded, kind: .expense, amount: 50, date: date(2026, 8, 3)),
+            TransactionRecord(kind: .expense, amount: -50, date: date(2026, 8, 4), refundOfID: refunded),
+            TransactionRecord(kind: .expense, amount: -5, date: date(2026, 8, 5)),
+            TransactionRecord(kind: .expense, amount: 12, date: date(2026, 8, 6)),
+        ]
+        let monthly = StatisticsEngine.monthlyTopExpenses(in: records, year: 2026, month: 8,
+                                                          calendar: calendar)
+        XCTAssertEqual(monthly.map(\.amount), [12])
+        let period = StatisticsEngine.periodTopExpenses(in: records, start: date(2026, 8, 1),
+                                                        end: date(2026, 8, 31), calendar: calendar)
+        XCTAssertEqual(period.map(\.amount), [12])
+    }
+
     func testPeriodSummaryIncludesBothEndpointsAndPreservesEmptyDays() {
         let records = [
             TransactionRecord(kind: .expense, amount: 30, categoryName: "餐饮", date: date(2026, 6, 29)),

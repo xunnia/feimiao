@@ -21,7 +21,8 @@ struct BudgetUsageRingCard: View {
         let calendar = Calendar.current
         let daysInMonth = calendar.range(of: .day, in: .month, for: displayedMonth)?.count ?? 30
         let daysLeft = calendar.isDate(displayedMonth, equalTo: now, toGranularity: .month)
-            ? max(daysInMonth - calendar.component(.day, from: now), 0) : 0
+            // 07 F-BUD-005：剩余天数含今天，和主页、预算页一致。
+            ? max(daysInMonth - calendar.component(.day, from: now) + 1, 0) : 0
         return HStack(spacing: 18) {
             ZStack {
                 Circle().stroke(color.opacity(0.28), lineWidth: 10.5)

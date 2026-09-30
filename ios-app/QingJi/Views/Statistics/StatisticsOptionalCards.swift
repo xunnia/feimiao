@@ -242,7 +242,8 @@ struct TwelveMonthStackCard: View {
                 HStack(spacing: 14) {
                     legend("花掉", color: .primary)
                     legend("结余", color: savedColor)
-                    legend("超支", color: .warning)
+                    // 07 D-STAT-009：支出大于收入的差额是「超出收入」，不是预算超支。
+                    legend("超出收入", color: .warning)
                 }
                 Chart(segments) { segment in
                     BarMark(x: .value("月", segment.index),

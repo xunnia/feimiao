@@ -48,6 +48,6 @@ final class MonthlyPaceEngineTests: XCTestCase {
         XCTAssertEqual(result.cutoffDay, 31)
         XCTAssertEqual(result.samples[5].pace, 40)
         XCTAssertEqual(result.current, 0)
-        XCTAssertEqual(result.title, "截至 3月31日，本月支出与往常偏低")
+        XCTAssertEqual(result.title, "截至 3月31日，该月支出与往常偏低")
     }
 }

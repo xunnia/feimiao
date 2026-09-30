@@ -82,9 +82,11 @@ public enum MonthlyPaceEngine {
                           NSDecimalNumber(decimal: average).doubleValue
             relation = abs(change) <= 0.08 ? "基本持平" : (change > 0 ? "偏高" : "偏低")
         }
+        // 翻到过去的月份不能再写「本月」；和周视图的「该周」、安卓一致。
+        let periodName = isCurrent ? "本月" : "该月"
         let title = average <= 0
-            ? "截至 \(month)月\(cutoff)日，本月已有支出记录"
-            : "截至 \(month)月\(cutoff)日，本月支出与往常\(relation)"
+            ? "截至 \(month)月\(cutoff)日，\(periodName)已有支出记录"
+            : "截至 \(month)月\(cutoff)日，\(periodName)支出与往常\(relation)"
         return MonthlyPaceProjection(samples: samples, average: average,
                                      current: current, cutoffDay: cutoff, title: title)
     }

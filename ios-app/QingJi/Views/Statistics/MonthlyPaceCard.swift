@@ -11,13 +11,16 @@ struct MonthlyPaceCard: View {
 
     var body: some View {
         let topCategories = Array(categories.filter { $0.total > 0 }.prefix(3))
+        // 翻到过去的月份写「该月」，不写「8月」，免得和横轴月份标签重复（和安卓一致）。
+        let isCurrentMonth = projection.samples.last?.isCurrent ?? true
+        let periodName = isCurrentMonth ? "本月" : "该月"
         return VStack(alignment: .leading, spacing: 14) {
             Text(verbatim: projection.title)
                 .font(.subheadline)
             Divider()
             HStack(spacing: 42) {
                 metric(label: "平均", amount: projection.average, muted: projection.average <= 0)
-                metric(label: "本月", amount: projection.current, color: currentBlue)
+                metric(label: periodName, amount: projection.current, color: currentBlue)
             }
             paceBars
             Text("分类与支出活动")
@@ -25,7 +28,7 @@ struct MonthlyPaceCard: View {
                 .foregroundStyle(.secondary)
             Divider()
             if topCategories.isEmpty {
-                Text("本月还没有支出分类。")
+                Text(isCurrentMonth ? "本月还没有支出分类。" : "这个月没有支出分类。")
                     .font(.subheadline).foregroundStyle(.secondary)
             } else {
                 ForEach(topCategories, id: \.name) { item in

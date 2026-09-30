@@ -127,7 +127,10 @@ public enum StatisticsEngine {
         in records: [TransactionRecord], year: Int, month: Int,
         calendar: Calendar = .current
     ) -> [TransactionRecord] {
+        // 07 D-STAT-003：只排真正花出去的钱。全额退款的原单是 0 元，
+        // 老数据里的负数冲账也不能进榜。
         let expenses = monthlyExpenseRecords(in: records, year: year, month: month, calendar: calendar)
+            .filter { $0.amount > 0 }
         let ranked = expenses.sorted { $0.amount > $1.amount }
         return Array(ranked.prefix(5))
     }
@@ -140,7 +143,7 @@ public enum StatisticsEngine {
         let endDay = calendar.startOfDay(for: max(start, end))
         let endExclusive = calendar.date(byAdding: .day, value: 1, to: endDay) ?? endDay
         let expenses = LedgerPolicy.userRecords(from: records).filter {
-            $0.kind == .expense && $0.date >= startDay && $0.date < endExclusive
+            $0.kind == .expense && $0.amount > 0 && $0.date >= startDay && $0.date < endExclusive
         }
         return Array(expenses.sorted { $0.amount > $1.amount }.prefix(5))
     }
