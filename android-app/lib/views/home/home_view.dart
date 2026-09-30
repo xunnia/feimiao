@@ -1,11 +1,9 @@
 import 'package:decimal/decimal.dart';
-import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:flutter/material.dart';
 import 'package:flutter/cupertino.dart' show CupertinoIcons;
 import 'package:provider/provider.dart';
 
 import '../../core/app_clock.dart';
-import '../../core/budget/budget_engine.dart';
 import '../../core/haptics.dart';
 import '../../core/models/transaction_record.dart';
 import '../../core/models/transaction_kind.dart';
@@ -131,12 +129,11 @@ class _HomeViewState extends State<HomeView> {
     // real book. Budget queries require a positive book id, so show the normal
     // no-budget state for this brief window and rebuild with real data when
     // repository initialization notifies listeners.
-    final budgetWindow =
-        repo.currentBookId > 0 ? repo.budgetForCalendarMonth(monthDate) : null;
-    final monthBudget = budgetWindow?.plannedAmount;
-    final budgetStatus = budgetWindow == null
-        ? null
-        : BudgetEngine.fromWindowResult(budgetWindow);
+    // 预算规则模型（docs/08 §6.10）：和小组件、统计环、AI 同一个入口。
+    final budgetSnapshot =
+        repo.currentBookId > 0 ? repo.budgetRuleMonth(monthDate) : null;
+    final monthBudget = budgetSnapshot?.plannedAmount;
+    final budgetStatus = budgetSnapshot?.status;
 
     // 所选月的交易 + 收支筛选（退款行不单独显示，挂在原账单里）。
     // The repository keeps this view as a stable, immutable reference.  Using

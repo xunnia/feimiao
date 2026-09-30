@@ -13,6 +13,7 @@ import 'package:provider/provider.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:qingji/core/account/account_movement_projection.dart';
 import 'package:qingji/core/app_clock.dart';
+import 'package:qingji/core/budget/budget_rules.dart';
 import 'package:qingji/core/models/recurring_rule.dart';
 import 'package:qingji/core/models/transaction_kind.dart';
 import 'package:qingji/core/import/bill_import.dart';
@@ -1430,6 +1431,17 @@ Future<_P0FixtureBundle> _ensureFixture(AppRepository repo) async {
       recurringMonthly: total['cycle'] == 'monthly',
       total: Decimal.parse(_p0String(total, 'amount')),
       categoryBudgets: categoryBudgets,
+    );
+  }
+  // 主页、统计、小组件读的是预算规则（docs/08 §6）：同一份种子数据补一条日常预算。
+  if (repo.budgetRulesForBook(bookID).isEmpty) {
+    final total = budgetRows.firstWhere((row) => row['category'] == null);
+    final start = _p0Date(total, 'periodStart');
+    await repo.insertBudgetRuleForTest(
+      bookId: bookID,
+      amountYuan: Decimal.parse(_p0String(total, 'amount')).round().toBigInt().toInt(),
+      unit: total['cycle'] == 'weekly' ? BudgetRuleUnit.week : BudgetRuleUnit.month,
+      startDate: DateTime(start.year, start.month),
     );
   }
 

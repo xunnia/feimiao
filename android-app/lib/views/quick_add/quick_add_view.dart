@@ -153,10 +153,12 @@ class _QuickAddViewState extends State<QuickAddView> {
           if (_kind == TransactionKind.expense)
             Consumer<AppRepository>(
               builder: (context, repo, _) {
-                final status = BudgetEngine.fromWindowResult(
-                  repo.currentBudgetCycle(),
-                );
-                if (status == null) return const SizedBox.shrink();
+                final status = repo.currentBookId > 0
+                    ? repo.budgetRuleMonth(AppClock.now).status
+                    : null;
+                if (status == null || !status.hasDailyGuidance) {
+                  return const SizedBox.shrink();
+                }
                 return _TodayAllowanceBanner(status: status);
               },
             ),
@@ -431,7 +433,7 @@ class _TodayAllowanceBanner extends StatelessWidget {
     final allowanceText = isOver
         ? '按预算平均 · 今日已超出节奏 ${MoneyFormat.string(-status.todayAllowance)}'
         : '按预算平均 · 今日可用 ${MoneyFormat.string(status.todayAllowance)}'
-            ' · 周期剩余 ${MoneyFormat.string(status.remaining)}';
+            ' · 本月剩余 ${MoneyFormat.string(status.remaining)}';
 
     return Container(
       width: double.infinity,

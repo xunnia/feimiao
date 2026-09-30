@@ -2206,7 +2206,7 @@ void main() {
     expect(precision['dflt_value'], "'legacy_unknown'");
     expect(
       Sqflite.firstIntValue(await check.rawQuery('PRAGMA user_version')),
-      49,
+      50,
     );
     await check.close();
   });
@@ -2293,7 +2293,7 @@ void main() {
     );
     expect(
       Sqflite.firstIntValue(await check.rawQuery('PRAGMA user_version')),
-      49,
+      50,
     );
     await check.close();
   });
@@ -3156,9 +3156,9 @@ void main() {
         repo.categoriesForKindRanked(TransactionKind.income).first;
     final accountId = repo.accounts.first.id;
 
-    await repo.addBudgetPeriod(
-      start: DateTime(2026, 7, 1),
-      total: Decimal.fromInt(100),
+    await repo.insertBudgetRuleForTest(
+      startDate: DateTime(2026, 7, 1),
+      amountYuan: 100,
     );
     await repo.addTransaction(
       kind: TransactionKind.expense,
@@ -6568,7 +6568,7 @@ void main() {
     final check = await databaseFactory.openDatabase(path);
     expect(
       Sqflite.firstIntValue(await check.rawQuery('PRAGMA user_version')),
-      49,
+      50,
     );
     final physicalColumns =
         (await check.rawQuery('PRAGMA table_info(physical_assets)'))
@@ -6721,7 +6721,7 @@ void main() {
     final check = await databaseFactory.openDatabase(path);
     expect(
       Sqflite.firstIntValue(await check.rawQuery('PRAGMA user_version')),
-      49,
+      50,
     );
     final afterRows = await check.query(
       'transactions',
@@ -6918,7 +6918,7 @@ void main() {
     final check = await databaseFactory.openDatabase(path);
     final v =
         Sqflite.firstIntValue(await check.rawQuery('PRAGMA user_version'));
-    expect(v, 49); // init 一路升到当前最新版本
+    expect(v, 50); // init 一路升到当前最新版本
     final tableNames = (await check
             .rawQuery("SELECT name FROM sqlite_master WHERE type = 'table'"))
         .map((r) => r['name'])

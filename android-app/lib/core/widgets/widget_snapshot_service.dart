@@ -9,7 +9,6 @@ import 'package:flutter/widgets.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
-import '../../core/budget/budget_engine.dart';
 import '../../data/app_repository.dart';
 import '../money_format.dart';
 import '../statistics/monthly_pace.dart';
@@ -183,12 +182,12 @@ class WidgetSnapshotService with WidgetsBindingObserver {
       year: today.year,
       month: today.month,
     );
-    final budgetWindow = repo.budgetForCalendarMonth(
+    final budgetSnapshot = repo.budgetRuleMonth(
       DateTime(today.year, today.month),
       asOf: today,
     );
-    final budget = budgetWindow.plannedAmount;
-    final budgetStatus = BudgetEngine.fromWindowResult(budgetWindow);
+    final budget = budgetSnapshot.plannedAmount;
+    final budgetStatus = budgetSnapshot.status;
     // 按设备真实像素密度渲染并留 1.25 倍超采样余量：显示端只缩不放
     //（缩不糊、放才糊）。写死 2.0 在 3.5x 屏上会被放大 1.75 倍、文字发糊。
     final view = WidgetsBinding.instance.platformDispatcher.implicitView;
@@ -371,19 +370,19 @@ class FeimiaoWidgetSnapshotBuilder {
     ];
 
     final balance = monthIncome - monthExpense;
-    final budgetWindow = repo.budgetForCalendarMonth(
+    final budgetSnapshot = repo.budgetRuleMonth(
       DateTime(today.year, today.month),
       asOf: today,
     );
-    final budget = budgetWindow.plannedAmount;
-    final budgetSpent = budgetWindow.spentAmount ?? monthExpense;
+    final budget = budgetSnapshot.plannedAmount;
+    final budgetSpent = budgetSnapshot.spentAmount ?? monthExpense;
     final budgetProgress = _budgetProgress(budgetSpent, budget);
     final budgetText = _budgetText(budgetSpent, budget, privacy);
     final budgetHint = _budgetHint(
       budgetSpent,
       budget,
       privacy,
-      excludedForeignCount: budgetWindow.excludedForeignTransactionCount,
+      excludedForeignCount: budgetSnapshot.excludedForeignCount,
     );
     final pace = _paceSnapshot(repo, today, monthExpense, privacy);
     final categories = _topCategories(categoryTotals, monthExpense, privacy);

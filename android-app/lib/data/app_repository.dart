@@ -11,6 +11,10 @@ import 'package:sqflite/sqflite.dart';
 
 import '../core/budget/budget_period.dart';
 import '../core/budget/budget_plan_v2.dart';
+import '../core/budget/budget_rule_calendar.dart';
+import '../core/budget/budget_rule_engine.dart';
+import '../core/budget/budget_rule_status.dart';
+import '../core/budget/budget_rules.dart';
 import '../core/budget/budget_special_tracking.dart';
 import '../core/budget/budget_transaction_family.dart';
 import '../core/budget/budget_window_resolver.dart';
@@ -2711,7 +2715,7 @@ class _AiProviderImportSnapshot {
 }
 
 class AppRepository extends ChangeNotifier {
-  static const _dbVersion = 49;
+  static const _dbVersion = 50;
   static const _dbName = 'qingji.db';
   static const bool _startupTrace = bool.fromEnvironment(
     'QINGJI_STARTUP_TRACE',
@@ -2905,6 +2909,10 @@ class AppRepository extends ChangeNotifier {
   final List<BudgetPlanRevisionV2> _budgetPlanRevisionsV2 = [];
   final List<BudgetCycleOverrideV2> _budgetCycleOverridesV2 = [];
   final List<BudgetFixedOccurrenceEntity> _budgetFixedOccurrencesV2 = [];
+
+  /// 预算规则模型（docs/08 §6）：含已软删的行，计算时由引擎排除。
+  final List<BudgetRule> _budgetRules = [];
+  final List<BudgetRolloverChange> _budgetRolloverChanges = [];
   AiProviderType _aiProviderType = AiProviderType.deepseek;
   String? _deepSeekApiKey;
   String? _customAiApiKey;
@@ -3621,6 +3629,393 @@ class AppRepository extends ChangeNotifier {
   /// 某分类 key 的月预算（未设返回 null）。
   Decimal? categoryBudgetFor(String key) => categoryBudgets[key];
 
+  // ---------------------------------------------------------------------------
+  // 预算规则模型（docs/08 §6）：所有用到预算的地方都走这里。
+  // ---------------------------------------------------------------------------
+
+  /// 规则颜色一共几种（界面按下标取色）。
+  static const budgetRuleColorCount = 8;
+
+  /// 某账本没删的规则（按新建先后）。
+  List<BudgetRule> budgetRulesForBook(int bookId) => List.unmodifiable(
+        _budgetRules.where((rule) => rule.bookId == bookId && !rule.isDeleted),
+      );
+
+  List<BudgetRolloverChange> _rolloverChangesForBook(int bookId) =>
+      _budgetRolloverChanges.where((change) => change.bookId == bookId).toList()
+        ..sort((a, b) {
+          final byMonth = a.monthIndex.compareTo(b.monthIndex);
+          return byMonth != 0 ? byMonth : a.id.compareTo(b.id);
+        });
+
+  /// 某账本某个月用的月底结余方式；没切换过就是「每月重新开始」。
+  BudgetRolloverMode budgetRolloverModeFor(
+    int bookId, {
+    required int year,
+    required int month,
+  }) {
+    final target = year * 12 + month - 1;
+    var mode = BudgetRolloverMode.reset;
+    for (final change in _rolloverChangesForBook(bookId)) {
+      if (change.monthIndex > target) break;
+      mode = change.mode;
+    }
+    return mode;
+  }
+
+  ({
+    int revision,
+    int bookId,
+    int dayKey,
+    Map<int, int> spend,
+    Map<int, int> foreign,
+  })? _budgetSpendCache;
+
+  /// 计入预算的每天支出（分）：支出家族净额 > 0（退款冲原单）、计入预算、CNY、
+  /// 账本范围按 [_bookIdsForView]；晚于现在的交易和退款先不算（§6.7）。
+  /// 按天判断（今天结束前的都算），所以按数据版本号 + 账本 + 日期缓存是准的。
+  ({Map<int, int> spend, Map<int, int> foreign}) _budgetSpendByDay(
+    int bookId,
+    DateTime today,
+  ) {
+    // 归属日按「截至哪天」判断；记录/退款的创建时间按真实时钟（知识截止），
+    // 和旧 resolver 的 asOf / knowledgeCutoff 分工一致。
+    final endOfToday = budgetAddDays(budgetDay(today), 1);
+    final knowledgeCutoff = DateTime.now();
+    bool notYet(DateTime value) => !value.isBefore(endOfToday);
+    bool unknown(DateTime createdAt) => createdAt.isAfter(knowledgeCutoff);
+    final dayKey = budgetDayKey(today);
+    final cached = _budgetSpendCache;
+    if (cached != null &&
+        cached.revision == _revision &&
+        cached.bookId == bookId &&
+        cached.dayKey == dayKey) {
+      return (spend: cached.spend, foreign: cached.foreign);
+    }
+    final spend = <int, int>{};
+    final foreign = <int, int>{};
+    for (final family in _budgetExpenseFamiliesForBook(bookId)) {
+      if (!family.countsInBudget) continue;
+      if (unknown(family.createdAt) || notYet(family.attributionDate)) {
+        continue;
+      }
+      final key = budgetDayKey(family.attributionDate);
+      if (family.currencyCode.trim().toUpperCase() != 'CNY') {
+        foreign[key] = (foreign[key] ?? 0) + 1;
+        continue;
+      }
+      var net = family.originalAmountMinor;
+      if (net > 0) {
+        for (final refund in family.refunds) {
+          if (unknown(refund.createdAt) || notYet(refund.effectiveAt)) continue;
+          net -= refund.amountMinor;
+        }
+        if (net <= 0) continue;
+      }
+      // 遗留的独立冲账负行按带符号金额冲减，和统计口径一致。
+      if (net == 0) continue;
+      spend[key] = (spend[key] ?? 0) + net;
+    }
+    _budgetSpendCache = (
+      revision: _revision,
+      bookId: bookId,
+      dayKey: dayKey,
+      spend: spend,
+      foreign: foreign,
+    );
+    return (spend: spend, foreign: foreign);
+  }
+
+  int _foreignCountOnCoveredDays(
+    Map<int, int> foreign,
+    Iterable<BudgetDayInfo> days,
+    DateTime today,
+  ) {
+    if (foreign.isEmpty) return 0;
+    var count = 0;
+    for (final day in days) {
+      if (!day.covered || day.day.isAfter(today)) continue;
+      count += foreign[budgetDayKey(day.day)] ?? 0;
+    }
+    return count;
+  }
+
+  /// 某账本某个月的预算（主页卡、小组件、统计环、喵洞察、AI 都用这一个）。
+  BudgetRuleSnapshot budgetRuleMonth(
+    DateTime month, {
+    int? bookId,
+    DateTime? asOf,
+  }) {
+    final id = bookId ?? _currentBookId;
+    final today = budgetDay(asOf ?? AppClock.now);
+    if (id <= 0) {
+      return BudgetRuleSnapshot(
+        bookId: id,
+        month: BudgetRuleEngine.resolveMonth(
+          rules: const [],
+          spendByDay: const {},
+          year: month.year,
+          month: month.month,
+          today: today,
+        ),
+      );
+    }
+    final rules = budgetRulesForBook(id);
+    final data = rules.isEmpty
+        ? (spend: const <int, int>{}, foreign: const <int, int>{})
+        : _budgetSpendByDay(id, today);
+    final result = BudgetRuleEngine.resolveMonth(
+      rules: rules,
+      rolloverChanges: _rolloverChangesForBook(id),
+      spendByDay: data.spend,
+      year: month.year,
+      month: month.month,
+      today: today,
+    );
+    return BudgetRuleSnapshot(
+      bookId: id,
+      month: result,
+      excludedForeignCount:
+          _foreignCountOnCoveredDays(data.foreign, result.days, today),
+    );
+  }
+
+  /// 任意日期区间的预算合计（不带结余）：AI 问「这周」「某几天」、报告用。
+  BudgetRuleRangeSummary budgetRuleRange({
+    required DateTime startInclusive,
+    required DateTime endInclusive,
+    int? bookId,
+    DateTime? asOf,
+  }) {
+    final id = bookId ?? _currentBookId;
+    final today = budgetDay(asOf ?? AppClock.now);
+    final rules = id <= 0 ? const <BudgetRule>[] : budgetRulesForBook(id);
+    if (rules.isEmpty) {
+      return BudgetRuleRangeSummary.resolve(
+        rules: const [],
+        spendByDay: const {},
+        startInclusive: startInclusive,
+        endInclusive: endInclusive,
+        today: today,
+      );
+    }
+    final data = _budgetSpendByDay(id, today);
+    final calendar = BudgetRuleCalendar(rules);
+    final days = <BudgetDayInfo>[
+      for (var d = budgetDay(startInclusive);
+          !d.isAfter(budgetDay(endInclusive));
+          d = budgetAddDays(d, 1))
+        calendar.dayInfo(d),
+    ];
+    return BudgetRuleRangeSummary.resolve(
+      rules: rules,
+      spendByDay: data.spend,
+      startInclusive: startInclusive,
+      endInclusive: endInclusive,
+      today: today,
+      excludedForeignCount:
+          _foreignCountOnCoveredDays(data.foreign, days, today),
+    );
+  }
+
+  int _nextBudgetRuleColor(int bookId, {int? exceptId}) {
+    final used = {
+      for (final rule in budgetRulesForBook(bookId))
+        if (rule.id != exceptId) rule.colorIndex,
+    };
+    for (var i = 0; i < budgetRuleColorCount; i++) {
+      if (!used.contains(i)) return i;
+    }
+    return used.length % budgetRuleColorCount;
+  }
+
+  /// 新建或编辑一条规则，返回 id（§6.9）。
+  ///
+  /// - 日常预算（base）：新建从当月 1 号起；编辑不改起始月，所以改金额对它
+  ///   管的所有月份都生效。
+  /// - 特别安排（special）：必须给起止日期；默认「从月预算里匀」，匀不下时抛
+  ///   [BudgetRuleValidationException]，界面提示改成额外多给。
+  /// - 金额取整到元，必须大于 0。
+  Future<int> saveBudgetRule({
+    int? id,
+    required int bookId,
+    required BudgetRuleKind kind,
+    String name = '',
+    required int amountYuan,
+    required BudgetRuleUnit unit,
+    DateTime? startDate,
+    DateTime? endDate,
+    BudgetFunding funding = BudgetFunding.carve,
+  }) async {
+    if (!_books.any((book) => book.id == bookId)) {
+      throw ArgumentError('预算规则必须属于一个账本');
+    }
+    if (amountYuan <= 0) throw ArgumentError('预算金额要大于 0');
+    final existing = id == null
+        ? null
+        : _budgetRules.where((rule) => rule.id == id && !rule.isDeleted)
+            .firstOrNull;
+    if (id != null && existing == null) {
+      throw StateError('这条预算规则已经不在了');
+    }
+    final nowMs = DateTime.now().millisecondsSinceEpoch;
+    final now = AppClock.now;
+    final DateTime start;
+    final DateTime? end;
+    if (kind == BudgetRuleKind.base) {
+      start = existing != null && existing.isBase
+          ? existing.startDate
+          : DateTime(now.year, now.month, 1);
+      end = null;
+    } else {
+      if (startDate == null || endDate == null) {
+        throw ArgumentError('特别安排要选开始和结束日期');
+      }
+      start = budgetDay(startDate);
+      end = budgetDay(endDate);
+      if (end.isBefore(start)) throw ArgumentError('结束日期不能早于开始日期');
+    }
+    final candidate = BudgetRule(
+      id: existing?.id ?? 0,
+      uuid: existing?.uuid ?? '',
+      bookId: bookId,
+      kind: kind,
+      name: name.trim(),
+      amountCents: amountYuan * 100,
+      unit: unit,
+      startDate: start,
+      endDate: end,
+      funding: kind == BudgetRuleKind.special ? funding : null,
+      colorIndex: existing?.colorIndex ??
+          _nextBudgetRuleColor(bookId),
+      createdMs: existing?.createdMs ?? nowMs,
+    );
+    if (kind == BudgetRuleKind.special) {
+      final issue = BudgetRuleEngine.validateSpecial(
+        existing: budgetRulesForBook(bookId),
+        candidate: candidate,
+      );
+      if (issue != null) throw BudgetRuleValidationException(issue);
+    }
+    final values = <String, Object?>{
+      'book_id': bookId,
+      'kind': kind == BudgetRuleKind.special ? 'special' : 'base',
+      'name': candidate.name,
+      'amount_cents': candidate.amountCents,
+      'unit': unit.name,
+      'start_date': _budgetDateText(start),
+      'end_date': end == null ? null : _budgetDateText(end),
+      'funding': candidate.funding?.name,
+      'color_index': candidate.colorIndex,
+      'updated_ms': nowMs,
+    };
+    final int savedId;
+    if (existing == null) {
+      savedId = await _db!.insert('budget_rules', {
+        ...values,
+        'uuid': _newSecureUuid(),
+        'created_ms': nowMs,
+        'deleted_ms': null,
+      });
+    } else {
+      await _db!.update(
+        'budget_rules',
+        values,
+        where: 'id = ?',
+        whereArgs: [existing.id],
+      );
+      savedId = existing.id;
+    }
+    await _loadBudgetRules();
+    notifyListeners();
+    return savedId;
+  }
+
+  /// 测试用：按指定起始日直接写一条日常预算（正式保存总是从当月 1 号起，
+  /// 固定日期的测试没法用）。
+  @visibleForTesting
+  Future<int> insertBudgetRuleForTest({
+    int? bookId,
+    required int amountYuan,
+    BudgetRuleUnit unit = BudgetRuleUnit.month,
+    required DateTime startDate,
+  }) async {
+    final nowMs = DateTime.now().millisecondsSinceEpoch;
+    final id = await _db!.insert('budget_rules', {
+      'uuid': _newSecureUuid(),
+      'book_id': bookId ?? _currentBookId,
+      'kind': 'base',
+      'name': '',
+      'amount_cents': amountYuan * 100,
+      'unit': unit.name,
+      'start_date': _budgetDateText(budgetDay(startDate)),
+      'end_date': null,
+      'funding': null,
+      'color_index': 0,
+      'created_ms': nowMs,
+      'updated_ms': nowMs,
+      'deleted_ms': null,
+    });
+    await _loadBudgetRules();
+    notifyListeners();
+    return id;
+  }
+
+  /// 删除规则：只写 deleted_ms（软删，给以后多端同步用）。
+  Future<void> deleteBudgetRule(int id) async {
+    final nowMs = DateTime.now().millisecondsSinceEpoch;
+    await _db!.update(
+      'budget_rules',
+      {'deleted_ms': nowMs, 'updated_ms': nowMs},
+      where: 'id = ? AND deleted_ms IS NULL',
+      whereArgs: [id],
+    );
+    await _loadBudgetRules();
+    notifyListeners();
+  }
+
+  /// 切换月底结余方式：从这个月起生效，更早的月份不变（§6.6）。
+  Future<void> setBudgetRolloverMode(
+    int bookId,
+    BudgetRolloverMode mode,
+  ) async {
+    if (!_books.any((book) => book.id == bookId)) {
+      throw ArgumentError('结余设置必须属于一个账本');
+    }
+    final now = AppClock.now;
+    final monthText =
+        '${now.year.toString().padLeft(4, '0')}-${now.month.toString().padLeft(2, '0')}';
+    final monthIndex = now.year * 12 + now.month - 1;
+    final nowMs = DateTime.now().millisecondsSinceEpoch;
+    final sameMonth = _rolloverChangesForBook(bookId)
+        .where((change) => change.monthIndex == monthIndex)
+        .lastOrNull;
+    if (sameMonth != null) {
+      if (sameMonth.mode == mode) return;
+      await _db!.update(
+        'budget_rollover_changes',
+        {'mode': budgetRolloverModeToDb(mode), 'updated_ms': nowMs},
+        where: 'id = ?',
+        whereArgs: [sameMonth.id],
+      );
+    } else {
+      if (budgetRolloverModeFor(bookId, year: now.year, month: now.month) ==
+          mode) {
+        return;
+      }
+      await _db!.insert('budget_rollover_changes', {
+        'uuid': _newSecureUuid(),
+        'book_id': bookId,
+        'effective_month': monthText,
+        'mode': budgetRolloverModeToDb(mode),
+        'created_ms': nowMs,
+        'updated_ms': nowMs,
+      });
+    }
+    await _loadBudgetRules();
+    notifyListeners();
+  }
+
   AiProviderType get aiProviderType => _aiProviderType;
   String? get deepSeekApiKey => _deepSeekApiKey;
   String? get customAiApiKey => _customAiApiKey;
@@ -4136,6 +4531,7 @@ class AppRepository extends ChangeNotifier {
       _loadCategories(),
       _loadBudgetPeriods(),
       _loadBudgetV2(),
+      _loadBudgetRules(),
       _loadRecordMode(),
       _loadMoneyDisplaySettings(),
       _loadCategoryIconStyle(),
@@ -4932,6 +5328,7 @@ class AppRepository extends ChangeNotifier {
 
     await db.execute(_createBudgetPeriodsSql);
     await _ensureBudgetV2Tables(db);
+    await _ensureBudgetRuleTables(db);
 
     await db.execute('''
       CREATE TABLE app_settings (
@@ -5469,6 +5866,12 @@ class AppRepository extends ChangeNotifier {
       // 账号级模型目录 + 最小连接探测，不改变既有成功/失败计数。
       await _ensureAiRunTables(db);
     }
+    if (oldVersion < 50) {
+      // v50：预算规则模型（docs/08 §6.11–§6.12）。新建规则表和结余表，
+      // 把旧预算换成每个账本一条日常预算；旧预算表原样保留、不再读取。
+      await _ensureBudgetRuleTables(db);
+      await _migrateBudgetRulesV50(db);
+    }
     // Some development builds already reported user_version 39 even though
     // the B3/A4 compatibility columns had not landed. Normal versioned
     // upgrades therefore need the same repair once, before the runtime marker
@@ -5971,6 +6374,194 @@ class AppRepository extends ChangeNotifier {
         ON physical_assets(savings_goal_id)
       ''',
     );
+  }
+
+  /// 预算规则模型的两张表（docs/08 §6.11）。日期存 `YYYY-MM-DD` 文本。
+  static Future<void> _ensureBudgetRuleTables(DatabaseExecutor db) async {
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS budget_rules (
+        id           INTEGER PRIMARY KEY AUTOINCREMENT,
+        uuid         TEXT NOT NULL UNIQUE,
+        book_id      INTEGER NOT NULL,
+        kind         TEXT NOT NULL,
+        name         TEXT NOT NULL DEFAULT '',
+        amount_cents INTEGER NOT NULL,
+        unit         TEXT NOT NULL,
+        start_date   TEXT NOT NULL,
+        end_date     TEXT,
+        funding      TEXT,
+        color_index  INTEGER NOT NULL DEFAULT 0,
+        created_ms   INTEGER NOT NULL,
+        updated_ms   INTEGER NOT NULL,
+        deleted_ms   INTEGER
+      )
+    ''');
+    await db.execute('''
+      CREATE INDEX IF NOT EXISTS idx_budget_rules_book
+      ON budget_rules(book_id, kind, deleted_ms)
+    ''');
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS budget_rollover_changes (
+        id              INTEGER PRIMARY KEY AUTOINCREMENT,
+        uuid            TEXT NOT NULL UNIQUE,
+        book_id         INTEGER NOT NULL,
+        effective_month TEXT NOT NULL,
+        mode            TEXT NOT NULL,
+        created_ms      INTEGER NOT NULL,
+        updated_ms      INTEGER NOT NULL
+      )
+    ''');
+    await db.execute('''
+      CREATE INDEX IF NOT EXISTS idx_budget_rollover_book
+      ON budget_rollover_changes(book_id, effective_month)
+    ''');
+  }
+
+  /// 标准 UUID v4：安全随机、小写带横线（为多端同步准备）。
+  static String _newSecureUuid() {
+    final random = Random.secure();
+    final bytes = List<int>.generate(16, (_) => random.nextInt(256));
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    final hex = bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+    return '${hex.substring(0, 8)}-${hex.substring(8, 12)}-'
+        '${hex.substring(12, 16)}-${hex.substring(16, 20)}-${hex.substring(20)}';
+  }
+
+  static String _budgetDateText(DateTime d) =>
+      '${d.year.toString().padLeft(4, '0')}-'
+      '${d.month.toString().padLeft(2, '0')}-'
+      '${d.day.toString().padLeft(2, '0')}';
+
+  static Future<bool> _budgetTableExists(
+    DatabaseExecutor db,
+    String name,
+  ) async {
+    final rows = await db.rawQuery(
+      "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+      [name],
+    );
+    return rows.isNotEmpty;
+  }
+
+  /// v50 迁移（docs/08 §6.12，用户 09-30 确认）：每个账本换成一条日常预算。
+  /// 优先取生效的 V2 日常主计划的当前版本；没有才用旧 budget_periods 里的
+  /// 每月预算（book_id 为空 = 全部账本，给每个账本各建一条）。已有日常预算
+  /// 的账本跳过，所以重复执行不会多建。旧表不删不改。
+  static Future<void> _migrateBudgetRulesV50(DatabaseExecutor db) async {
+    final now = AppClock.now;
+    final nowMs = now.millisecondsSinceEpoch;
+    final todayKey = now.year * 10000 + now.month * 100 + now.day;
+    final plans = await _budgetTableExists(db, 'budget_plans')
+        ? await db.query(
+            'budget_plans',
+            where: "role = 'primary' AND status = 'active' "
+                "AND cadence IN ('monthly', 'weekly')",
+          )
+        : const <Map<String, Object?>>[];
+    final revisions = await _budgetTableExists(db, 'budget_plan_revisions')
+        ? await db.query('budget_plan_revisions')
+        : const <Map<String, Object?>>[];
+    final periods = await _budgetTableExists(db, 'budget_periods')
+        ? await db.query('budget_periods', where: 'recurring_monthly = 1')
+        : const <Map<String, Object?>>[];
+    final books = await db.query('books', columns: ['id']);
+    for (final book in books) {
+      final bookId = book['id'] as int;
+      final existing = await db.query(
+        'budget_rules',
+        columns: ['id'],
+        where: "book_id = ? AND kind = 'base' AND deleted_ms IS NULL",
+        whereArgs: [bookId],
+        limit: 1,
+      );
+      if (existing.isNotEmpty) continue;
+      final source = _v50PlanSource(bookId, plans, revisions, todayKey) ??
+          _v50LegacySource(bookId, periods, nowMs);
+      if (source == null) continue;
+      await db.insert('budget_rules', {
+        'uuid': _newSecureUuid(),
+        'book_id': bookId,
+        'kind': 'base',
+        'name': '',
+        'amount_cents': source.cents,
+        'unit': source.unit,
+        'start_date': _budgetDateText(source.start),
+        'end_date': null,
+        'funding': null,
+        'color_index': 0,
+        'created_ms': nowMs,
+        'updated_ms': nowMs,
+        'deleted_ms': null,
+      });
+    }
+  }
+
+  /// 金额取整到元（规则金额必须是 100 的倍数）；≤ 0 视为没有预算。
+  static int? _v50RoundCents(num cents) {
+    final rounded = ((cents + 50) ~/ 100) * 100;
+    return rounded > 0 ? rounded.toInt() : null;
+  }
+
+  static ({int cents, String unit, DateTime start})? _v50PlanSource(
+    int bookId,
+    List<Map<String, Object?>> plans,
+    List<Map<String, Object?>> revisions,
+    int todayKey,
+  ) {
+    final mine = plans.where((p) => p['book_id'] == bookId).toList()
+      ..sort((a, b) => (a['anchor_start_day'] as int)
+          .compareTo(b['anchor_start_day'] as int));
+    if (mine.isEmpty) return null;
+    // 优先覆盖今天的那份；都没覆盖今天时取开始最晚的一份。
+    final covering = mine.where((p) {
+      final end = p['end_day'] as int?;
+      return (p['anchor_start_day'] as int) <= todayKey &&
+          (end == null || end >= todayKey);
+    }).toList();
+    final plan = covering.isNotEmpty ? covering.last : mine.last;
+    final revs = revisions.where((r) => r['plan_id'] == plan['id']).toList()
+      ..sort((a, b) => (a['effective_cycle_start_day'] as int)
+          .compareTo(b['effective_cycle_start_day'] as int));
+    if (revs.isEmpty) return null;
+    final started =
+        revs.where((r) => (r['effective_cycle_start_day'] as int) <= todayKey);
+    final revision = started.isNotEmpty ? started.last : revs.first;
+    final cents = _v50RoundCents(revision['amount_cents'] as int);
+    if (cents == null) return null;
+    final anchor = plan['anchor_start_day'] as int;
+    return (
+      cents: cents,
+      unit: plan['cadence'] == 'weekly' ? 'week' : 'month',
+      start: DateTime(anchor ~/ 10000, (anchor ~/ 100) % 100),
+    );
+  }
+
+  static ({int cents, String unit, DateTime start})? _v50LegacySource(
+    int bookId,
+    List<Map<String, Object?>> periods,
+    int nowMs,
+  ) {
+    final candidates = periods.where((p) {
+      final owner = p['book_id'] as int?;
+      return (owner == null || owner == bookId) &&
+          (p['start_ms'] as int) <= nowMs;
+    }).toList();
+    if (candidates.isEmpty) return null;
+    // 本账本专属的优先于「全部账本」；同类取开始最晚的。
+    candidates.sort((a, b) {
+      final rankA = a['book_id'] == null ? 0 : 1;
+      final rankB = b['book_id'] == null ? 0 : 1;
+      if (rankA != rankB) return rankA.compareTo(rankB);
+      return (a['start_ms'] as int).compareTo(b['start_ms'] as int);
+    });
+    final period = candidates.last;
+    final yuan = double.tryParse('${period['total']}'.trim());
+    if (yuan == null) return null;
+    final cents = _v50RoundCents((yuan * 100).round());
+    if (cents == null) return null;
+    final start = DateTime.fromMillisecondsSinceEpoch(period['start_ms'] as int);
+    return (cents: cents, unit: 'month', start: DateTime(start.year, start.month));
   }
 
   static Future<void> _ensureBudgetV2Tables(DatabaseExecutor db) async {
@@ -7610,6 +8201,7 @@ class AppRepository extends ChangeNotifier {
       _loadLiabilityProfiles(),
       _loadBudgetPeriods(),
       _loadBudgetV2(),
+      _loadBudgetRules(),
       _loadApiKey(),
       _loadRecordMode(),
       _loadAiPrivacyAccepted(),
@@ -7934,6 +8526,69 @@ class AppRepository extends ChangeNotifier {
     _budgetPeriods
       ..clear()
       ..addAll(rows.map(BudgetPeriod.fromMap));
+  }
+
+  static DateTime? _parseBudgetDateText(Object? raw) {
+    final text = raw?.toString().trim() ?? '';
+    final parts = text.split('-');
+    if (parts.length != 3) return null;
+    final y = int.tryParse(parts[0]);
+    final m = int.tryParse(parts[1]);
+    final d = int.tryParse(parts[2]);
+    if (y == null || m == null || d == null) return null;
+    final value = DateTime(y, m, d);
+    return value.year == y && value.month == m && value.day == d ? value : null;
+  }
+
+  /// 预算规则模型（docs/08 §6.11）。坏行跳过，不让一条脏数据拖垮启动。
+  Future<void> _loadBudgetRules() async {
+    final ruleRows = await _db!.query('budget_rules', orderBy: 'id ASC');
+    final changeRows =
+        await _db!.query('budget_rollover_changes', orderBy: 'id ASC');
+    _budgetRules.clear();
+    for (final row in ruleRows) {
+      final start = _parseBudgetDateText(row['start_date']);
+      final amount = row['amount_cents'] as int? ?? 0;
+      if (start == null || amount <= 0) continue;
+      final kind = row['kind'] == 'special'
+          ? BudgetRuleKind.special
+          : BudgetRuleKind.base;
+      final end = _parseBudgetDateText(row['end_date']);
+      if (kind == BudgetRuleKind.special && end == null) continue;
+      _budgetRules.add(BudgetRule(
+        id: row['id'] as int,
+        uuid: row['uuid'] as String? ?? '',
+        bookId: row['book_id'] as int,
+        kind: kind,
+        name: row['name'] as String? ?? '',
+        amountCents: amount,
+        unit: budgetRuleUnitFromDb(row['unit'] as String? ?? 'month'),
+        startDate: start,
+        endDate: kind == BudgetRuleKind.base ? null : end,
+        funding: budgetFundingFromDb(row['funding'] as String?),
+        colorIndex: row['color_index'] as int? ?? 0,
+        createdMs: row['created_ms'] as int? ?? 0,
+        updatedMs: row['updated_ms'] as int? ?? 0,
+        deletedMs: row['deleted_ms'] as int?,
+      ));
+    }
+    _budgetRolloverChanges.clear();
+    for (final row in changeRows) {
+      final month = row['effective_month']?.toString().split('-') ?? const [];
+      final y = month.isNotEmpty ? int.tryParse(month[0]) : null;
+      final m = month.length > 1 ? int.tryParse(month[1]) : null;
+      if (y == null || m == null || m < 1 || m > 12) continue;
+      _budgetRolloverChanges.add(BudgetRolloverChange(
+        id: row['id'] as int,
+        uuid: row['uuid'] as String? ?? '',
+        bookId: row['book_id'] as int,
+        year: y,
+        month: m,
+        mode: budgetRolloverModeFromDb(row['mode'] as String? ?? 'reset'),
+        createdMs: row['created_ms'] as int? ?? 0,
+        updatedMs: row['updated_ms'] as int? ?? 0,
+      ));
+    }
   }
 
   List<BudgetFixedTemplateV2> _decodeBudgetFixedTemplates(String raw) {
@@ -18178,6 +18833,15 @@ class AppRepository extends ChangeNotifier {
           await txn.delete(table, where: 'book_id = ?', whereArgs: [id]);
         }
       }
+      // 预算规则是账本自己的设置，不搬到总账本（会和总账本的规则打架），
+      // 账本删了就软删掉，留 deleted_ms 给以后多端同步用。
+      final ruleNow = DateTime.now().millisecondsSinceEpoch;
+      await txn.update(
+        'budget_rules',
+        {'deleted_ms': ruleNow, 'updated_ms': ruleNow},
+        where: 'book_id = ? AND deleted_ms IS NULL',
+        whereArgs: [id],
+      );
       await txn.delete('books', where: 'id = ?', whereArgs: [id]);
       if (_currentBookId == id) {
         _currentBookId = _defaultBookId;

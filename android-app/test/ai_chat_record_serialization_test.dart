@@ -1,8 +1,9 @@
 import 'package:decimal/decimal.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:qingji/core/ai/natural_language_entry_parser.dart';
-import 'package:qingji/core/budget/budget_period.dart';
-import 'package:qingji/core/budget/budget_window_resolver.dart';
+import 'package:qingji/core/budget/budget_rule_engine.dart';
+import 'package:qingji/core/budget/budget_rule_status.dart';
+import 'package:qingji/core/budget/budget_rules.dart';
 import 'package:qingji/core/models/transaction_kind.dart';
 import 'package:qingji/core/transaction_time.dart';
 import 'package:qingji/data/app_repository.dart';
@@ -198,36 +199,46 @@ void main() {
     );
   });
 
-  test('AI 历史预算上下文不会混入当前周期的今日指标', () {
-    final asOf = DateTime(2026, 7, 13, 12);
-    final plan = BudgetPeriod(
+  test('AI 历史月预算上下文不会混入今天的指标', () {
+    final today = DateTime(2026, 7, 13);
+    final rule = BudgetRule(
       id: 1,
       bookId: 1,
-      start: DateTime(2026, 1, 1),
-      total: Decimal.fromInt(3100),
+      kind: BudgetRuleKind.base,
+      amountCents: 310000,
+      unit: BudgetRuleUnit.month,
+      startDate: DateTime(2026, 1, 1),
+      createdMs: 1,
     );
-    BudgetWindowResult resolve(DateTime month) => BudgetWindowResolver.resolve(
-          query: BudgetWindowQuery(
-            viewKind: BudgetViewKind.calendarMonth,
-            bookId: 1,
-            referenceDate: month,
-            asOf: asOf,
-            knowledgeCutoff: asOf,
+    BudgetRuleSnapshot resolve(int month) => BudgetRuleSnapshot(
+          bookId: 1,
+          month: BudgetRuleEngine.resolveMonth(
+            rules: [rule],
+            spendByDay: {budgetDayKey(DateTime(2026, 7, 1)): 20000},
+            year: 2026,
+            month: month,
+            today: today,
           ),
-          periods: [plan],
         );
 
-    final historical = resolve(DateTime(2026, 6));
-    final current = resolve(DateTime(2026, 7));
+    final historical = formatBudgetMonthForAi(resolve(6));
+    final current = formatBudgetMonthForAi(resolve(7));
 
-    expect(historical.currentCycleDailyStatus, isNotNull);
-    expect(
-      formatBudgetContextForAi(historical),
-      isNot(contains('按预算平均今日可用')),
+    expect(historical, contains('预算 ¥3,100.00'));
+    expect(historical, isNot(contains('今天')));
+    expect(current, contains('已花 ¥200.00'));
+    expect(current, contains('今天还能花'));
+    expect(current, contains('还剩 19 天'));
+  });
+
+  test('AI 区间预算：没规则时写明未设，不当 0', () {
+    final summary = BudgetRuleRangeSummary.resolve(
+      rules: const [],
+      spendByDay: const {},
+      startInclusive: DateTime(2026, 7, 6),
+      endInclusive: DateTime(2026, 7, 12),
+      today: DateTime(2026, 7, 13),
     );
-    expect(
-      formatBudgetContextForAi(current),
-      contains('按预算平均今日可用'),
-    );
+    expect(formatBudgetRangeForAi(summary), contains('没有设预算'));
   });
 }

@@ -8,7 +8,7 @@ import 'package:provider/provider.dart';
 
 import '../../core/app_clock.dart';
 import '../../core/ai/bill_categorizer.dart';
-import '../../core/budget/budget_window_resolver.dart';
+import '../../core/budget/budget_rule_status.dart';
 import '../../core/models/cat_svg_icon.dart';
 import '../../core/models/category_seed.dart';
 import '../../core/models/transaction_kind.dart';
@@ -521,7 +521,7 @@ class _MonthlyContent extends StatelessWidget {
       year: prevMonth.year,
       month: prevMonth.month,
     );
-    final budgetWindow = repo.budgetForCalendarMonth(displayedMonth);
+    final budgetSnapshot = repo.budgetRuleMonth(displayedMonth);
 
     final topExpenses = records
         .where((r) =>
@@ -619,7 +619,7 @@ class _MonthlyContent extends StatelessWidget {
         summary,
         prevSummary,
         top5,
-        budgetWindow,
+        budgetSnapshot,
       ),
     );
   }
@@ -630,7 +630,7 @@ class _MonthlyContent extends StatelessWidget {
     MonthlySummary summary,
     MonthlySummary prevSummary,
     List<TransactionRecord> top5,
-    BudgetWindowResult budgetWindow,
+    BudgetRuleSnapshot budgetSnapshot,
   ) {
     final hasExpense = summary.expenseByCategory.isNotEmpty;
     final mStart = DateTime(displayedMonth.year, displayedMonth.month, 1);
@@ -642,7 +642,7 @@ class _MonthlyContent extends StatelessWidget {
           records: records,
           year: displayedMonth.year,
           month: displayedMonth.month,
-          monthlyBudget: budgetWindow.plannedAmount,
+          monthlyBudget: budgetSnapshot.plannedAmount,
           isCurrentMonth: isCurrentMonth,
         );
       case 'battery':
@@ -668,8 +668,8 @@ class _MonthlyContent extends StatelessWidget {
         );
       case 'budget_ring':
         // 没设预算不占位（引导在预算页，别在统计页塞空环）。
-        final planned = budgetWindow.plannedAmount;
-        final spent = budgetWindow.spentAmount;
+        final planned = budgetSnapshot.plannedAmount;
+        final spent = budgetSnapshot.spentAmount;
         if (planned == null || planned <= Decimal.zero || spent == null) {
           return null;
         }
@@ -678,7 +678,7 @@ class _MonthlyContent extends StatelessWidget {
           budget: planned,
           isCurrentMonth: isCurrentMonth,
           displayedMonth: displayedMonth,
-          excludedForeignCount: budgetWindow.excludedForeignTransactionCount,
+          excludedForeignCount: budgetSnapshot.excludedForeignCount,
         );
       case 'ring':
         if (!hasExpense) return null;

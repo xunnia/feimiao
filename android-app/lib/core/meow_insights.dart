@@ -1,6 +1,5 @@
 import 'package:decimal/decimal.dart';
 
-import 'budget/budget_engine.dart';
 import 'ledger/ledger_policy.dart';
 import 'models/transaction_kind.dart';
 import 'money_format.dart';
@@ -23,9 +22,7 @@ class MeowInsights {
     // BudgetWindowQuery intentionally rejects the sentinel id 0, so skip the
     // budget insight until there is a real book rather than querying it.
     final budgetStatus = repo.currentBookId > 0
-        ? BudgetEngine.fromWindowResult(
-            repo.budgetForCalendarMonth(DateTime(now.year, now.month)),
-          )
+        ? repo.budgetRuleMonth(DateTime(now.year, now.month)).status
         : null;
     if (budgetStatus != null && budgetStatus.remaining < Decimal.zero) {
       return '这个月有点超预算啦,剩下的日子省着点喵~有啥想问的随时说。';

@@ -35,7 +35,8 @@ import '../../core/ai/web_search.dart';
 import '../../core/ai/bill_categorizer.dart';
 import '../../core/ai/merchant_category.dart';
 import '../../core/ai/query_range.dart';
-import '../../core/budget/budget_window_resolver.dart';
+import '../../core/app_clock.dart';
+import '../../core/budget/budget_rule_status.dart';
 import '../../core/ai/refund_matcher.dart';
 import '../../core/ai/report_execution_fence.dart';
 import '../../core/ai/report_job_runtime.dart';
@@ -381,43 +382,69 @@ ChatIntentKind resolveAiPanelIntent({
   );
 }
 
+const _budgetAiPrefix = '【预算准确结果（直接引用，不要自行重算）】';
+
+String _budgetAiDate(DateTime d) => '${d.year}-${d.month}-${d.day}';
+
+String _budgetAiForeign(int count) =>
+    count > 0 ? '；已排除 $count 笔其他币种记录' : '';
+
+/// 某个月的预算（docs/08 §6.7），和主页卡、小组件同一个结果。
 @visibleForTesting
-String formatBudgetContextForAi(BudgetWindowResult result) {
-  final start = result.viewWindow.startInclusive;
-  final end = result.displayEndInclusive;
-  final prefix = '【预算准确结果（直接引用，不要自行重算）】'
-      '${start.year}-${start.month}-${start.day} 至 '
-      '${end.year}-${end.month}-${end.day}：';
-  final planned = result.plannedAmount;
-  final spent = result.spentAmount;
-  if (planned == null) {
-    return '$prefix未设置可用预算，或预算计划存在冲突；'
-        '不能把未知当作 0 元。';
+String formatBudgetMonthForAi(BudgetRuleSnapshot snapshot) {
+  final month = snapshot.month;
+  final end = DateTime(month.year, month.month + 1, 0);
+  final prefix = '$_budgetAiPrefix'
+      '${_budgetAiDate(DateTime(month.year, month.month))} 至 '
+      '${_budgetAiDate(end)}：';
+  if (!snapshot.hasBudget) {
+    return '$prefix这个月没有设预算；不能把未知当作 0 元。';
   }
-  if (spent == null) {
-    return '$prefix预算 ${MoneyFormat.string(planned)}，'
-        '支出结果当前不可用，不能推断剩余。';
-  }
-  final remaining = planned - spent;
-  final foreign = result.excludedForeignTransactionCount > 0
-      ? '；已排除 ${result.excludedForeignTransactionCount} 笔其他币种记录'
-      : '';
-  final daily = result.currentCycleDailyStatus;
-  final asOfDay = DateUtils.dateOnly(result.query.asOf);
-  final dailyUsable = result.viewWindow.contains(asOfDay) &&
-      (result.dailyStatus == MetricStatus.available ||
-          result.dailyStatus == MetricStatus.partial);
-  final dailyText = daily == null || !dailyUsable
+  final planned = snapshot.plannedAmount!;
+  final spent = snapshot.spentAmount!;
+  final remaining = snapshot.remainingAmount!;
+  final carry = month.carryInCents;
+  final carryText = carry == 0
       ? ''
-      : '；当前周期按预算平均今日可用 '
-          '${MoneyFormat.string(daily.todayRemainingAllowanceAmount)}，'
-          '剩余日均参考 '
-          '${MoneyFormat.string(daily.plainBudgetDailyReferenceAmount)}';
-  return '$prefix预算 ${MoneyFormat.string(planned)}，'
-      '已用 ${MoneyFormat.string(spent)}，'
-      '${remaining >= Decimal.zero ? '剩余' : '超出'} '
-      '${MoneyFormat.string(remaining.abs())}$dailyText$foreign。'
-      '当前旧预算缺少结构化固定承诺，以上是消费预算平均参考，不是安全可花现金。';
+      : carry > 0
+          ? '（含上月省下的 ${MoneyFormat.string(budgetCentsToDecimal(carry))}）'
+          : '（已扣上月超出的 ${MoneyFormat.string(budgetCentsToDecimal(-carry))}）';
+  final status = snapshot.status;
+  final today = month.today;
+  final todayText = status == null || !status.hasDailyGuidance || today == null
+      ? ''
+      : today.leftTodayCents >= 0
+          ? '；今天还能花 '
+              '${MoneyFormat.string(budgetCentsToDecimal(today.leftTodayCents))}，'
+              '还剩 ${today.remainingDays} 天'
+          : '；今天多花了 '
+              '${MoneyFormat.string(budgetCentsToDecimal(-today.leftTodayCents))}，'
+              '还剩 ${today.remainingDays} 天';
+  return '$prefix预算 ${MoneyFormat.string(planned)}$carryText，'
+      '已花 ${MoneyFormat.string(spent)}，'
+      '${remaining >= Decimal.zero ? '还能花' : '超出'} '
+      '${MoneyFormat.string(remaining.abs())}$todayText'
+      '${_budgetAiForeign(snapshot.excludedForeignCount)}。'
+      '这是按每天预算匀出来的消费参考，不是安全可花现金。';
+}
+
+/// 任意日期区间的预算合计（不带结余）。
+@visibleForTesting
+String formatBudgetRangeForAi(BudgetRuleRangeSummary summary) {
+  final prefix = '$_budgetAiPrefix'
+      '${_budgetAiDate(summary.startInclusive)} 至 '
+      '${_budgetAiDate(summary.endInclusive)}：';
+  if (!summary.hasBudget) {
+    return '$prefix这段时间没有设预算；不能把未知当作 0 元。';
+  }
+  final remaining = summary.remainingAmount;
+  return '$prefix这段时间每天预算合计 '
+      '${MoneyFormat.string(summary.budgetAmount)}，'
+      '已花 ${MoneyFormat.string(summary.spentAmount)}，'
+      '${remaining >= Decimal.zero ? '还剩' : '超出'} '
+      '${MoneyFormat.string(remaining.abs())}'
+      '${_budgetAiForeign(summary.excludedForeignCount)}。'
+      '不含上月结余，是消费参考，不是安全可花现金。';
 }
 
 /// 打开「来记一笔吧」AI 聊天面板（就地弹出，替代旧的跳全屏方案）。
@@ -992,7 +1019,9 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
   }
 
   bool _hasSuggestionBudget(AppRepository repo) =>
-      repo.currentBook != null && repo.monthlyBudget != null;
+      repo.currentBook != null &&
+      repo.currentBookId > 0 &&
+      repo.budgetRuleMonth(AppClock.now).hasBudget;
 
   @override
   void initState() {
@@ -4325,44 +4354,37 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
     DateTime? rangeStart,
     DateTime? rangeEndInclusive,
   }) {
-    late final BudgetWindowResult result;
-    if (question.contains('周期')) {
-      result = repo.currentBudgetCycle(now: now);
-    } else if (question.contains('周')) {
-      result = repo.budgetWindow(BudgetWindowQuery(
-        viewKind: BudgetViewKind.calendarWeek,
-        bookId: repo.currentBookId,
-        referenceDate: rangeStart ?? now,
+    // 预算规则模型只有自然月一个结算周期（docs/08 §6）；「周」按周一到周日，
+    // 其他区间按每天预算合计。
+    if (question.contains('周') && !question.contains('周期')) {
+      final reference = DateUtils.dateOnly(rangeStart ?? now);
+      final start = reference.subtract(Duration(days: reference.weekday - 1));
+      return formatBudgetRangeForAi(repo.budgetRuleRange(
+        startInclusive: start,
+        endInclusive: start.add(const Duration(days: 6)),
         asOf: now,
-        knowledgeCutoff: now,
-        calendarTimezone: 'device-local',
       ));
-    } else if (rangeStart != null && rangeEndInclusive != null) {
+    }
+    if (!question.contains('周期') &&
+        rangeStart != null &&
+        rangeEndInclusive != null) {
       final isCalendarMonth = rangeStart.day == 1 &&
           rangeStart.year == rangeEndInclusive.year &&
           rangeStart.month == rangeEndInclusive.month &&
           rangeEndInclusive.day ==
               DateTime(rangeStart.year, rangeStart.month + 1, 0).day;
-      result = isCalendarMonth
-          ? repo.budgetForCalendarMonth(rangeStart, asOf: now)
-          : repo.budgetWindow(BudgetWindowQuery(
-              viewKind: BudgetViewKind.custom,
-              bookId: repo.currentBookId,
-              referenceDate: rangeStart,
-              customEndExclusive:
-                  rangeEndInclusive.add(const Duration(days: 1)),
-              asOf: now,
-              knowledgeCutoff: now,
-              calendarTimezone: 'device-local',
-            ));
-    } else {
-      result = repo.budgetForCalendarMonth(now, asOf: now);
+      if (isCalendarMonth) {
+        return formatBudgetMonthForAi(
+          repo.budgetRuleMonth(rangeStart, asOf: now),
+        );
+      }
+      return formatBudgetRangeForAi(repo.budgetRuleRange(
+        startInclusive: rangeStart,
+        endInclusive: rangeEndInclusive,
+        asOf: now,
+      ));
     }
-    return _formatBudgetContext(result);
-  }
-
-  String _formatBudgetContext(BudgetWindowResult result) {
-    return formatBudgetContextForAi(result);
+    return formatBudgetMonthForAi(repo.budgetRuleMonth(now, asOf: now));
   }
 
   String _buildReportContext(
@@ -4410,15 +4432,22 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
       end: endInclusive,
     );
     final reportNow = DateTime.now();
-    final reportBudget = repo.budgetWindow(BudgetWindowQuery(
-      viewKind: BudgetViewKind.custom,
-      bookId: bookId ?? repo.currentBookId,
-      referenceDate: start,
-      customEndExclusive: endExclusive,
-      asOf: reportNow,
-      knowledgeCutoff: reportNow,
-      calendarTimezone: 'device-local',
-    ));
+    final isCalendarMonth = start.day == 1 &&
+        start.year == endInclusive.year &&
+        start.month == endInclusive.month &&
+        endInclusive.day == DateTime(start.year, start.month + 1, 0).day;
+    final reportBudget = isCalendarMonth
+        ? formatBudgetMonthForAi(repo.budgetRuleMonth(
+            start,
+            bookId: bookId ?? repo.currentBookId,
+            asOf: reportNow,
+          ))
+        : formatBudgetRangeForAi(repo.budgetRuleRange(
+            startInclusive: start,
+            endInclusive: endInclusive,
+            bookId: bookId ?? repo.currentBookId,
+            asOf: reportNow,
+          ));
 
     ({Decimal expense, Decimal income, int expenseCount}) summarize(
       Iterable<TransactionEntity> rows,
@@ -4486,7 +4515,7 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
       )
       ..writeln('- 支出笔数：${curSummary.expenseCount}')
       ..writeln('- 笔均支出：${MoneyFormat.string(avgExpense)}')
-      ..writeln(_formatBudgetContext(reportBudget))
+      ..writeln(reportBudget)
       ..writeln()
       ..writeln('【上一等长周期参考】')
       ..writeln(
