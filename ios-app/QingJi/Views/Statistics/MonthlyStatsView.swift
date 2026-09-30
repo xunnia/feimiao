@@ -13,7 +13,8 @@ struct MonthlyStatsView: View {
 
     @Environment(AppRouter.self) private var router
     @Query private var transactions: [MoneyTransaction]
-    @Query private var budgets: [Budget]
+    @Query private var budgetRules: [BudgetRuleRecord]
+    @Query private var budgetRollovers: [BudgetRolloverChangeRecord]
     @Query(sort: \Book.sortOrder)
     private var books: [Book]
 
@@ -503,11 +504,19 @@ struct MonthlyStatsView: View {
                 end: calendar.date(byAdding: .day, value: days - 1, to: monthStart) ?? monthStart
             )
         }
-        let budget = BudgetStore.effectiveTotalBudget(
-            from: budgets,
+        // 预算规则模型（docs/08 §6.10）：和主页、小组件同一个入口。
+        let budgetSnapshot = BudgetRuleStore.snapshot(
+            rules: budgetRules,
+            rollovers: budgetRollovers,
             selectedBookID: router.selectedBookID,
-            fallbackBookID: books.first(where: \.isDefault)?.stableID
+            books: books,
+            transactions: transactions,
+            year: summary.year,
+            month: summary.month,
+            now: now
         )
+        let budget = budgetSnapshot.plannedAmount
+        let budgetStatus = budgetSnapshot.status
         let hasMonthData = !summary.expenseByCategory.isEmpty || summary.totalIncome != 0
         let pace = statisticsCache.monthlyPace(
             of: snapshot.records, revision: snapshot.revision,
@@ -529,7 +538,7 @@ struct MonthlyStatsView: View {
             if hasMonthData {
                 ForEach(visibleCardKeys, id: \.self) { key in
                     monthCard(key, summary: summary, previousMonth: previousMonth,
-                              pace: pace, budget: budget, topExpenses: topExpenses,
+                              pace: pace, budget: budget, budgetStatus: budgetStatus, topExpenses: topExpenses,
                               sources: sources, snapshot: snapshot,
                               start: monthStart, end: monthEnd, now: now)
                 }
@@ -542,7 +551,7 @@ struct MonthlyStatsView: View {
 
     @ViewBuilder
     private func monthCard(_ key: String, summary: MonthlySummary, previousMonth: MonthlySummary,
-                           pace: MonthlyPaceProjection, budget: Budget?,
+                           pace: MonthlyPaceProjection, budget: Decimal?, budgetStatus: BudgetStatus?,
                            topExpenses: [TransactionRecord], sources: [SpendSourceTotal],
                            snapshot: IOSLedgerSnapshot, start: Date, end: Date, now: Date) -> some View {
         let currencyCode = snapshot.scopedCurrencyCode
@@ -554,12 +563,8 @@ struct MonthlyStatsView: View {
             }
             .id("stats-month-pace")
         case "budget_ring":
-            if let budget, budget.amount > 0 {
-                let status = statisticsCache.status(
-                    for: budget, records: snapshot.records, revision: snapshot.revision,
-                    referenceDate: displayedMonth
-                )
-                BudgetUsageRingCard(budget: budget.amount, status: status,
+            if let budget, budget > 0, let status = budgetStatus {
+                BudgetUsageRingCard(budget: budget, status: status,
                                     displayedMonth: displayedMonth, now: now, currencyCode: currencyCode)
                     .id("stats-month-budget-ring")
             }
@@ -601,7 +606,7 @@ struct MonthlyStatsView: View {
             )
             let projection = SpendingInsights.project(
                 records: snapshot.records, current: summary, previous: previousMonth,
-                now: now, monthlyBudget: budget?.amount, comparison: windows
+                now: now, monthlyBudget: budget, comparison: windows
             )
             if !projection.isEmpty {
                 SpendingInsightsCard(projection: projection, currencyCode: currencyCode,

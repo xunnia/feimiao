@@ -305,6 +305,8 @@ enum AndroidBackupImporter {
         let budgetOverrideRows = try reader.rows(from: "budget_cycle_overrides")
         let budgetCommitmentRows = try reader.rows(from: "budget_fixed_commitment_occurrences")
         let budgetChangeRows = try reader.rows(from: "budget_change_events")
+        let budgetRuleRows = try reader.rows(from: "budget_rules")
+        let budgetRolloverRows = try reader.rows(from: "budget_rollover_changes")
         let reportRows = try reader.rows(from: "reports")
 
         var bookIDs: [Int64: UUID] = [:]
@@ -1194,6 +1196,46 @@ enum AndroidBackupImporter {
             )
         }
 
+        // 预算规则（安卓 DB v50，docs/08 §6.11）。已删的行也带上，保持软删状态。
+        let budgetRules = budgetRuleRows.compactMap { row -> BackupBudgetRule? in
+            guard let id = row.integer("id"),
+                  let bookID = row.integer("book_id").flatMap({ bookIDs[$0] }),
+                  let amount = row.integer("amount_cents"), amount > 0 else { return nil }
+            let kind = row.string("kind")
+            guard kind == "base" || kind == "special" else { return nil }
+            let end = row.optionalString("end_date")
+            if kind == "special" && (end == nil || end!.isEmpty) { return nil }
+            let created = Int(row.integer("created_ms") ?? 0)
+            return BackupBudgetRule(
+                id: stableID(row.string("uuid"), table: "budget_rules", id: id),
+                bookID: bookID,
+                kind: kind,
+                name: row.string("name"),
+                amountCents: Int(amount),
+                unit: row.string("unit", fallback: "month"),
+                startDate: row.string("start_date"),
+                endDate: kind == "special" ? end : nil,
+                funding: kind == "special" ? (row.optionalString("funding") ?? "carve") : nil,
+                colorIndex: Int(row.integer("color_index") ?? 0),
+                createdMs: created,
+                updatedMs: Int(row.integer("updated_ms") ?? Int64(created)),
+                deletedMs: row.integer("deleted_ms").map(Int.init)
+            )
+        }
+        let budgetRolloverChanges = budgetRolloverRows.compactMap { row -> BackupBudgetRolloverChange? in
+            guard let id = row.integer("id"),
+                  let bookID = row.integer("book_id").flatMap({ bookIDs[$0] }) else { return nil }
+            let created = Int(row.integer("created_ms") ?? 0)
+            return BackupBudgetRolloverChange(
+                id: stableID(row.string("uuid"), table: "budget_rollover_changes", id: id),
+                bookID: bookID,
+                effectiveMonth: row.string("effective_month"),
+                mode: row.string("mode", fallback: "reset"),
+                createdMs: created,
+                updatedMs: Int(row.integer("updated_ms") ?? Int64(created))
+            )
+        }
+
         let reports = reportRows.compactMap { row -> BackupReport? in
             guard let id = row.integer("id") else { return nil }
             let periodStart = date(row.integer("period_start_ms")) ?? exportedAt
@@ -1245,6 +1287,8 @@ enum AndroidBackupImporter {
             budgetCycleOverridesV2: budgetCycleOverridesV2,
             budgetCommitmentOccurrencesV2: budgetCommitmentOccurrencesV2,
             budgetChangeEventsV2: budgetChangeEventsV2,
+            budgetRules: budgetRules,
+            budgetRolloverChanges: budgetRolloverChanges,
             reports: reports,
             accountBalanceCheckpoints: accountBalanceCheckpoints,
             netWorthVerifiedCheckpoints: netWorthVerifiedCheckpoints,

@@ -44,6 +44,8 @@ final class BackupStoreTests: XCTestCase {
                 BudgetCycleOverrideRecord.self,
                 BudgetCommitmentOccurrenceRecord.self,
                 BudgetChangeEventRecord.self,
+                BudgetRuleRecord.self,
+                BudgetRolloverChangeRecord.self,
                 ReportRecord.self,
                 AccountBalanceCheckpointRecord.self,
                 NetWorthVerifiedCheckpointRecord.self,

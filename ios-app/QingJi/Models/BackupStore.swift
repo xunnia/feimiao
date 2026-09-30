@@ -230,6 +230,8 @@ enum BackupStore {
         let budgetCycleOverridesV2 = try context.fetch(FetchDescriptor<BudgetCycleOverrideRecord>(sortBy: [SortDescriptor(\.cycleStart)]))
         let budgetCommitmentOccurrencesV2 = try context.fetch(FetchDescriptor<BudgetCommitmentOccurrenceRecord>(sortBy: [SortDescriptor(\.dueDate)]))
         let budgetChangeEventsV2 = try context.fetch(FetchDescriptor<BudgetChangeEventRecord>(sortBy: [SortDescriptor(\.createdAt)]))
+        let budgetRules = try context.fetch(FetchDescriptor<BudgetRuleRecord>(sortBy: [SortDescriptor(\.createdMs)]))
+        let budgetRolloverChanges = try context.fetch(FetchDescriptor<BudgetRolloverChangeRecord>(sortBy: [SortDescriptor(\.createdMs)]))
         let reports = try context.fetch(FetchDescriptor<ReportRecord>(sortBy: [SortDescriptor(\.createdAt, order: .forward)]))
         let accountBalanceCheckpoints = try context.fetch(FetchDescriptor<AccountBalanceCheckpointRecord>(sortBy: [SortDescriptor(\.effectiveAt)]))
         let netWorthVerifiedCheckpoints = try context.fetch(FetchDescriptor<NetWorthVerifiedCheckpointRecord>(sortBy: [SortDescriptor(\.asOf)]))
@@ -734,6 +736,33 @@ enum BackupStore {
                     createdAt: $0.createdAt
                 )
             },
+            budgetRules: budgetRules.map {
+                BackupBudgetRule(
+                    id: $0.stableID,
+                    bookID: $0.bookID,
+                    kind: $0.kindRaw,
+                    name: $0.name,
+                    amountCents: $0.amountCents,
+                    unit: $0.unitRaw,
+                    startDate: $0.startDate,
+                    endDate: $0.endDate,
+                    funding: $0.fundingRaw,
+                    colorIndex: $0.colorIndex,
+                    createdMs: $0.createdMs,
+                    updatedMs: $0.updatedMs,
+                    deletedMs: $0.deletedMs
+                )
+            },
+            budgetRolloverChanges: budgetRolloverChanges.map {
+                BackupBudgetRolloverChange(
+                    id: $0.stableID,
+                    bookID: $0.bookID,
+                    effectiveMonth: $0.effectiveMonth,
+                    mode: $0.modeRaw,
+                    createdMs: $0.createdMs,
+                    updatedMs: $0.updatedMs
+                )
+            },
             reports: reports.map {
                 BackupReport(
                     id: $0.stableID,
@@ -907,6 +936,8 @@ enum BackupStore {
         let currentBudgetCycleOverridesV2 = try context.fetch(FetchDescriptor<BudgetCycleOverrideRecord>())
         let currentBudgetCommitmentOccurrencesV2 = try context.fetch(FetchDescriptor<BudgetCommitmentOccurrenceRecord>())
         let currentBudgetChangeEventsV2 = try context.fetch(FetchDescriptor<BudgetChangeEventRecord>())
+        let currentBudgetRules = try context.fetch(FetchDescriptor<BudgetRuleRecord>())
+        let currentBudgetRolloverChanges = try context.fetch(FetchDescriptor<BudgetRolloverChangeRecord>())
         let currentReports = try context.fetch(FetchDescriptor<ReportRecord>())
         let currentAccountBalanceCheckpoints = try context.fetch(FetchDescriptor<AccountBalanceCheckpointRecord>())
         let currentNetWorthVerifiedCheckpoints = try context.fetch(FetchDescriptor<NetWorthVerifiedCheckpointRecord>())
@@ -1689,6 +1720,51 @@ enum BackupStore {
             budgetChangeEventsV2[item.id] = event
         }
 
+        var budgetRules = Dictionary(uniqueKeysWithValues: currentBudgetRules.map { ($0.stableID, $0) })
+        for item in package.budgetRules {
+            let rule = budgetRules[item.id] ?? BudgetRuleRecord(
+                stableID: item.id,
+                bookID: item.bookID,
+                kindRaw: item.kind,
+                amountCents: item.amountCents,
+                unitRaw: item.unit,
+                startDate: item.startDate,
+                createdMs: item.createdMs
+            )
+            if budgetRules[item.id] == nil { context.insert(rule) }
+            rule.bookID = item.bookID
+            rule.kindRaw = item.kind
+            rule.name = item.name
+            rule.amountCents = item.amountCents
+            rule.unitRaw = item.unit
+            rule.startDate = item.startDate
+            rule.endDate = item.endDate
+            rule.fundingRaw = item.funding
+            rule.colorIndex = item.colorIndex
+            rule.createdMs = item.createdMs
+            rule.updatedMs = item.updatedMs
+            rule.deletedMs = item.deletedMs
+            budgetRules[item.id] = rule
+        }
+
+        var budgetRolloverChanges = Dictionary(uniqueKeysWithValues: currentBudgetRolloverChanges.map { ($0.stableID, $0) })
+        for item in package.budgetRolloverChanges {
+            let change = budgetRolloverChanges[item.id] ?? BudgetRolloverChangeRecord(
+                stableID: item.id,
+                bookID: item.bookID,
+                effectiveMonth: item.effectiveMonth,
+                modeRaw: item.mode,
+                createdMs: item.createdMs
+            )
+            if budgetRolloverChanges[item.id] == nil { context.insert(change) }
+            change.bookID = item.bookID
+            change.effectiveMonth = item.effectiveMonth
+            change.modeRaw = item.mode
+            change.createdMs = item.createdMs
+            change.updatedMs = item.updatedMs
+            budgetRolloverChanges[item.id] = change
+        }
+
         var reports = Dictionary(uniqueKeysWithValues: currentReports.map { ($0.stableID, $0) })
         for item in package.reports {
             let report = reports[item.id] ?? ReportRecord(
@@ -1778,6 +1854,11 @@ enum BackupStore {
             netWorthVerifiedCheckpoints[item.id] = checkpoint
         }
 
+        // 旧备份里没有预算规则：恢复后按同一条迁移规则补上（docs/08 §6.12）。
+        if package.budgetRules.isEmpty {
+            BudgetRuleStore.migrate(in: context, save: false)
+        }
+
         if save {
             try saveContext(context)
         }
@@ -1822,6 +1903,8 @@ enum BackupStore {
         try deleteAll(ReceivableRecovery.self, from: context)
         try deleteAll(BudgetCommitmentOccurrenceRecord.self, from: context)
         try deleteAll(BudgetChangeEventRecord.self, from: context)
+        try deleteAll(BudgetRuleRecord.self, from: context)
+        try deleteAll(BudgetRolloverChangeRecord.self, from: context)
         try deleteAll(BudgetCycleOverrideRecord.self, from: context)
         try deleteAll(BudgetPlanRevisionRecord.self, from: context)
         try deleteAll(Budget.self, from: context)

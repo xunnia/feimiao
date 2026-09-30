@@ -80,6 +80,8 @@
         "BudgetCycleOverrideRecord",
         "BudgetCommitmentOccurrenceRecord",
         "BudgetChangeEventRecord",
+        "BudgetRuleRecord",
+        "BudgetRolloverChangeRecord",
         "ReportRecord",
         "AccountBalanceCheckpointRecord",
         "NetWorthVerifiedCheckpointRecord"
@@ -87,7 +89,7 @@
     },
     "fixture": {
       "file": "ios-app/tools/migration-fixtures/p0-ios-qingji-upgrade-2026-09-v1.json",
-      "inputHash": "B7DF32E0DAA53F66979B6E4A7A3E45FDF8DCB6612DB5B68484DC45E40A11EC2D"
+      "inputHash": "E256A154C46883627D656DEF94060494E64E6FCE1587B8A0C71C44E3836521B1"
     },
     "preserveFields": [
       "stableID",
@@ -442,7 +444,7 @@
       "androidSource": ["android-app/lib/views/budget/budget_view.dart", "android-app/lib/views/budget/budget_rule_sheet.dart"],
       "iosTargetEntry": "drawer/budget",
       "iosCurrentEntry": "settings/budget",
-      "iosSource": ["ios-app/QingJi/Views/Settings/BudgetSettingView.swift", "ios-app/QingJi/Views/Settings/BudgetV2EditorViews.swift"],
+      "iosSource": ["ios-app/QingJi/Views/Budget/BudgetView.swift", "ios-app/QingJi/Views/Budget/BudgetRuleEditorSheet.swift"],
       "requiredAnchors": ["period", "summary", "today-allowance", "category-budgets", "fixed-commitments"],
       "requiredFields": ["income", "fixed-expense", "saving", "budget", "spent", "remaining"],
       "evidence": {"android": "RECAPTURE_REQUIRED", "ios": "CURRENT_SCREEN_UNTRUSTED"}

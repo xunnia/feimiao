@@ -141,3 +141,57 @@ public struct BackupBudgetChangeEventV2: Codable, Equatable, Sendable {
         self.createdAt = createdAt
     }
 }
+
+/// 预算规则（docs/08 §6.11，安卓 budget_rules 同结构）。日期是 YYYY-MM-DD 公历日。
+public struct BackupBudgetRule: Codable, Equatable, Sendable {
+    public var id: UUID
+    public var bookID: UUID
+    public var kind: String
+    public var name: String
+    public var amountCents: Int
+    public var unit: String
+    public var startDate: String
+    public var endDate: String?
+    public var funding: String?
+    public var colorIndex: Int
+    public var createdMs: Int
+    public var updatedMs: Int
+    public var deletedMs: Int?
+
+    public init(id: UUID, bookID: UUID, kind: String, name: String = "", amountCents: Int, unit: String,
+                startDate: String, endDate: String? = nil, funding: String? = nil, colorIndex: Int = 0,
+                createdMs: Int, updatedMs: Int, deletedMs: Int? = nil) {
+        self.id = id
+        self.bookID = bookID
+        self.kind = kind
+        self.name = name
+        self.amountCents = amountCents
+        self.unit = unit
+        self.startDate = startDate
+        self.endDate = endDate
+        self.funding = funding
+        self.colorIndex = colorIndex
+        self.createdMs = createdMs
+        self.updatedMs = updatedMs
+        self.deletedMs = deletedMs
+    }
+}
+
+/// 月底结余切换记录（安卓 budget_rollover_changes）。effectiveMonth 是 YYYY-MM。
+public struct BackupBudgetRolloverChange: Codable, Equatable, Sendable {
+    public var id: UUID
+    public var bookID: UUID
+    public var effectiveMonth: String
+    public var mode: String
+    public var createdMs: Int
+    public var updatedMs: Int
+
+    public init(id: UUID, bookID: UUID, effectiveMonth: String, mode: String, createdMs: Int, updatedMs: Int) {
+        self.id = id
+        self.bookID = bookID
+        self.effectiveMonth = effectiveMonth
+        self.mode = mode
+        self.createdMs = createdMs
+        self.updatedMs = updatedMs
+    }
+}

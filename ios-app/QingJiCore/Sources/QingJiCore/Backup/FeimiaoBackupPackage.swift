@@ -42,6 +42,8 @@ public struct FeimiaoBackupPackage: Codable, Equatable, Sendable {
     public var budgetCycleOverridesV2: [BackupBudgetCycleOverrideV2]
     public var budgetCommitmentOccurrencesV2: [BackupBudgetCommitmentOccurrenceV2]
     public var budgetChangeEventsV2: [BackupBudgetChangeEventV2]
+    public var budgetRules: [BackupBudgetRule]
+    public var budgetRolloverChanges: [BackupBudgetRolloverChange]
     public var reports: [BackupReport]
     public var accountBalanceCheckpoints: [BackupAccountBalanceCheckpoint]
     public var netWorthVerifiedCheckpoints: [BackupNetWorthVerifiedCheckpoint]
@@ -80,6 +82,8 @@ public struct FeimiaoBackupPackage: Codable, Equatable, Sendable {
         budgetCycleOverridesV2: [BackupBudgetCycleOverrideV2] = [],
         budgetCommitmentOccurrencesV2: [BackupBudgetCommitmentOccurrenceV2] = [],
         budgetChangeEventsV2: [BackupBudgetChangeEventV2] = [],
+        budgetRules: [BackupBudgetRule] = [],
+        budgetRolloverChanges: [BackupBudgetRolloverChange] = [],
         reports: [BackupReport] = [],
         accountBalanceCheckpoints: [BackupAccountBalanceCheckpoint] = [],
         netWorthVerifiedCheckpoints: [BackupNetWorthVerifiedCheckpoint] = [],
@@ -117,6 +121,8 @@ public struct FeimiaoBackupPackage: Codable, Equatable, Sendable {
         self.budgetCycleOverridesV2 = budgetCycleOverridesV2
         self.budgetCommitmentOccurrencesV2 = budgetCommitmentOccurrencesV2
         self.budgetChangeEventsV2 = budgetChangeEventsV2
+        self.budgetRules = budgetRules
+        self.budgetRolloverChanges = budgetRolloverChanges
         self.reports = reports
         self.accountBalanceCheckpoints = accountBalanceCheckpoints
         self.netWorthVerifiedCheckpoints = netWorthVerifiedCheckpoints
@@ -131,6 +137,7 @@ public struct FeimiaoBackupPackage: Codable, Equatable, Sendable {
         case aiMemories, aiRequestRuns, aiRequestEvents, aiReportSchedules
         case budgetPlansV2, budgetPlanRevisionsV2, budgetCycleOverridesV2
         case budgetCommitmentOccurrencesV2, budgetChangeEventsV2
+        case budgetRules, budgetRolloverChanges
         case reports, accountBalanceCheckpoints, netWorthVerifiedCheckpoints, netWorthVerifiedItems
     }
 
@@ -168,6 +175,8 @@ public struct FeimiaoBackupPackage: Codable, Equatable, Sendable {
         budgetCycleOverridesV2 = try container.decodeIfPresent([BackupBudgetCycleOverrideV2].self, forKey: .budgetCycleOverridesV2) ?? []
         budgetCommitmentOccurrencesV2 = try container.decodeIfPresent([BackupBudgetCommitmentOccurrenceV2].self, forKey: .budgetCommitmentOccurrencesV2) ?? []
         budgetChangeEventsV2 = try container.decodeIfPresent([BackupBudgetChangeEventV2].self, forKey: .budgetChangeEventsV2) ?? []
+        budgetRules = try container.decodeIfPresent([BackupBudgetRule].self, forKey: .budgetRules) ?? []
+        budgetRolloverChanges = try container.decodeIfPresent([BackupBudgetRolloverChange].self, forKey: .budgetRolloverChanges) ?? []
         reports = try container.decodeIfPresent([BackupReport].self, forKey: .reports) ?? []
         accountBalanceCheckpoints = try container.decodeIfPresent([BackupAccountBalanceCheckpoint].self, forKey: .accountBalanceCheckpoints) ?? []
         netWorthVerifiedCheckpoints = try container.decodeIfPresent([BackupNetWorthVerifiedCheckpoint].self, forKey: .netWorthVerifiedCheckpoints) ?? []
@@ -208,6 +217,8 @@ public struct FeimiaoBackupPackage: Codable, Equatable, Sendable {
         try container.encode(budgetCycleOverridesV2, forKey: .budgetCycleOverridesV2)
         try container.encode(budgetCommitmentOccurrencesV2, forKey: .budgetCommitmentOccurrencesV2)
         try container.encode(budgetChangeEventsV2, forKey: .budgetChangeEventsV2)
+        try container.encode(budgetRules, forKey: .budgetRules)
+        try container.encode(budgetRolloverChanges, forKey: .budgetRolloverChanges)
         try container.encode(reports, forKey: .reports)
         try container.encode(accountBalanceCheckpoints, forKey: .accountBalanceCheckpoints)
         try container.encode(netWorthVerifiedCheckpoints, forKey: .netWorthVerifiedCheckpoints)

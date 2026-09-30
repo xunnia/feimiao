@@ -348,6 +348,20 @@ enum P0ParityDemoSeeder {
             context.insert(budget)
             result.append(budget)
         }
+        // 主页、统计、小组件读的是预算规则（docs/08 §6）：和安卓截图种子一样补一条日常预算。
+        if let total = fixture.budgets.first(where: { $0.category == nil }),
+           let book = books[total.book] {
+            let start = BudgetCivilDay(try P0ParityFixtureLoader.date(total.periodStart))
+            let yuan = NSDecimalNumber(decimal: try P0ParityFixtureLoader.amount(total.amount)).intValue
+            context.insert(BudgetRuleRecord(
+                bookID: book.stableID,
+                kindRaw: BudgetRuleKind.base.rawValue,
+                amountCents: yuan * 100,
+                unitRaw: (total.cycle == "weekly" ? BudgetRuleUnit.week : BudgetRuleUnit.month).rawValue,
+                startDate: BudgetCivilDay(year: start.year, month: start.month, day: 1).text,
+                createdMs: 1
+            ))
+        }
         return result
     }
 

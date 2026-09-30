@@ -191,7 +191,7 @@ struct SettingsView: View {
         case .aiTasks:   AITaskDiagnosticsView(initialTab: .tasks)
         case .aiSchedules: AIReportScheduleView()
         case .aiDiagnostics: AITaskDiagnosticsView(initialTab: .diagnostics)
-        case .budget:    BudgetSettingView()
+        case .budget:    BudgetView()
         case .reconcile: ReconcileView()
         case .reimburse: ReimburseView()
         case .reimburseSettlement: ReimburseView(opensFirstSettlement: true)

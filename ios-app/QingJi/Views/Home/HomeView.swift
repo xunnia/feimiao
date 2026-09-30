@@ -26,7 +26,8 @@ struct HomeView: View {
     private var transactions: [MoneyTransaction]
     @Query(sort: \Book.sortOrder)
     private var books: [Book]
-    @Query private var budgets: [Budget]
+    @Query private var budgetRules: [BudgetRuleRecord]
+    @Query private var budgetRollovers: [BudgetRolloverChangeRecord]
     @State private var transactionFilter: HomeTransactionFilter = .all
     @State private var displayedMonth = AppClock.now
     @State private var monthPickerDate = AppClock.now
@@ -60,23 +61,19 @@ struct HomeView: View {
             year: components.year ?? 2000,
             month: components.month ?? 1
         )
-        let totalBudget = BudgetStore.effectiveTotalBudget(
-            from: budgets,
+        // 预算规则模型（docs/08 §6.10）：和小组件、统计环、记账页同一个入口。
+        let budgetSnapshot = BudgetRuleStore.snapshot(
+            rules: budgetRules,
+            rollovers: budgetRollovers,
             selectedBookID: router.selectedBookID,
-            fallbackBookID: books.first(where: \.isDefault)?.stableID
+            books: books,
+            transactions: transactions,
+            year: components.year ?? 2000,
+            month: components.month ?? 1,
+            now: now
         )
-        let budgetStatus = totalBudget.map { budget in
-            statisticsCache.status(
-                for: budget,
-                records: snapshot.includedRecords,
-                revision: snapshot.revision,
-                referenceDate: Calendar.current.isDate(
-                    displayedMonth,
-                    equalTo: now,
-                    toGranularity: .month
-                ) ? now : displayedMonth
-            )
-        }
+        let totalBudget = budgetSnapshot.plannedAmount
+        let budgetStatus = budgetSnapshot.status
         let visibleTransactions = snapshot.includedTransactions.filter { transaction in
             guard transaction.refundOfID == nil,
                   Calendar.current.isDate(transaction.date, equalTo: displayedMonth, toGranularity: .month)
@@ -94,6 +91,7 @@ struct HomeView: View {
                         summary: summary,
                         totalBudget: totalBudget,
                         status: budgetStatus,
+                        hasDailyGuidance: budgetSnapshot.hasDailyGuidance,
                         currencyCode: snapshot.includedCurrencyCode,
                         now: now
                     )
@@ -195,8 +193,9 @@ struct HomeView: View {
 
     private func summaryCard(
         summary: MonthlySummary,
-        totalBudget: Budget?,
+        totalBudget: Decimal?,
         status: BudgetStatus?,
+        hasDailyGuidance: Bool,
         currencyCode: String,
         now: Date
     ) -> some View {
@@ -240,8 +239,9 @@ struct HomeView: View {
                 BudgetSummaryBody(
                     summary: summary,
                     status: status,
-                    budget: totalBudget.amount,
+                    budget: totalBudget,
                     isCurrentMonth: Calendar.current.isDate(displayedMonth, equalTo: now, toGranularity: .month),
+                    hasDailyGuidance: hasDailyGuidance,
                     currencyCode: currencyCode
                 )
             } else {
@@ -335,6 +335,8 @@ private struct BudgetSummaryBody: View {
     let status: BudgetStatus
     let budget: Decimal
     let isCurrentMonth: Bool
+    /// 今天有规则管时才画「今日可用」，否则退回「已用 %」圆环（与安卓一致）。
+    let hasDailyGuidance: Bool
     let currencyCode: String
 
     private var ratio: Double {
@@ -423,7 +425,7 @@ private struct BudgetSummaryBody: View {
             TodayAllowanceRing(
                 status: status,
                 currencyCode: currencyCode,
-                isCurrentMonth: isCurrentMonth,
+                isCurrentMonth: isCurrentMonth && hasDailyGuidance,
                 dailyAverage: HomeDailyAverage.expense(
                     summary.totalExpense,
                     year: summary.year,
@@ -464,7 +466,8 @@ enum BudgetOverflow {
     static let boundaryColor = Color(uiColor: .systemBackground).opacity(0.92)
 }
 
-private struct BudgetGradientProgressBar: View {
+/// 预算进度条：主页和预算页共用（同类同设计）。
+struct BudgetGradientProgressBar: View {
     let value: Double
     /// 非 nil 时进入超支模式：整条 = 已花，分界线左侧浅橙是预算内的 100%，右侧实橙是超出部分。
     var overflowStart: Double? = nil

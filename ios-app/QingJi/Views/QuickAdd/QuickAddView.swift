@@ -562,24 +562,18 @@ struct QuickAddView: View {
         )
     }
 
-    /// 设置过预算时计算「今日可花」。
+    /// 今天有预算规则管时计算「今日可花」（docs/08 §6.10，和主页同一个入口）。
     private func loadBudgetStatus() {
-        let budgets = (try? context.fetch(FetchDescriptor<Budget>())) ?? []
-        guard let budget = BudgetStore.effectiveTotalBudget(
-            from: budgets,
+        let now = AppClock.now
+        let components = Calendar.current.dateComponents([.year, .month], from: now)
+        let snapshot = BudgetRuleStore.snapshot(
+            in: context,
             selectedBookID: router.selectedBookID,
-            fallbackBookID: effectiveBook?.stableID
-        ), budget.amount > 0 else {
-            budgetStatus = nil
-            return
-        }
-        let all = (try? context.fetch(FetchDescriptor<MoneyTransaction>())) ?? []
-        let scoped = LedgerScope.filter(all, selectedBookID: router.selectedBookID)
-        budgetStatus = BudgetStore.status(
-            for: budget,
-            transactions: scoped,
-            referenceDate: AppClock.now
+            year: components.year ?? 2000,
+            month: components.month ?? 1,
+            now: now
         )
+        budgetStatus = snapshot.hasDailyGuidance ? snapshot.status : nil
     }
 
     private func resetCategorySelection() {

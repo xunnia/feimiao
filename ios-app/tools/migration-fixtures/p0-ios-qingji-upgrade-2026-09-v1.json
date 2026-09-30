@@ -46,6 +46,8 @@
       "BudgetCycleOverrideRecord",
       "BudgetCommitmentOccurrenceRecord",
       "BudgetChangeEventRecord",
+      "BudgetRuleRecord",
+      "BudgetRolloverChangeRecord",
       "ReportRecord",
       "AccountBalanceCheckpointRecord",
       "NetWorthVerifiedCheckpointRecord"

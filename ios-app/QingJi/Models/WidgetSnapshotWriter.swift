@@ -43,24 +43,25 @@ enum WidgetSnapshotWriter {
             privacy ? "••••" : MoneyFormat.string(value, currencyCode: currency)
         }
 
-        let budgets = (try? context.fetch(FetchDescriptor<Budget>())) ?? []
-        let budget = budgets.first(where: {
-            $0.isActive && $0.categoryKey == nil &&
-            ($0.bookID == selectedBook?.stableID || $0.bookID == nil)
-        })
-        let budgetStatus = budget.map {
-            BudgetStore.status(
-                for: $0,
-                transactions: scoped,
-                referenceDate: now,
-                calendar: calendar
-            )
-        }
+        // 预算规则模型（docs/08 §6.10）：和主页总账本同一个入口、同一个数。
+        let budgetSnapshot = BudgetRuleStore.snapshot(
+            rules: (try? context.fetch(FetchDescriptor<BudgetRuleRecord>())) ?? [],
+            rollovers: (try? context.fetch(FetchDescriptor<BudgetRolloverChangeRecord>())) ?? [],
+            selectedBookID: nil,
+            books: books,
+            transactions: transactions,
+            year: year,
+            month: month,
+            now: now,
+            calendar: calendar
+        )
+        let budget = budgetSnapshot.plannedAmount
+        let budgetStatus = budgetSnapshot.status
         let budgetRemaining = budgetStatus?.remaining ?? 0
         let budgetProgress: Int = {
-            guard let budget, budget.amount > 0 else { return 0 }
+            guard let budget, budget > 0 else { return 0 }
             let ratio = NSDecimalNumber(decimal: budgetStatus?.spentThisMonth ?? summary.totalExpense).doubleValue /
-                max(NSDecimalNumber(decimal: budget.amount).doubleValue, 0.01)
+                max(NSDecimalNumber(decimal: budget).doubleValue, 0.01)
             return Int((min(max(ratio, 0), 1) * 100).rounded())
         }()
         let budgetText = budget == nil
@@ -68,7 +69,7 @@ enum WidgetSnapshotWriter {
             : (budgetRemaining >= 0 ? money(budgetRemaining) : "超 \(money(-budgetRemaining))")
         let budgetHint = budget == nil
             ? "未设置预算 · 已展示本月支出"
-            : "已用 \(money(budgetStatus?.spentThisMonth ?? summary.totalExpense)) / \(money(budget?.amount ?? 0))"
+            : "已用 \(money(budgetStatus?.spentThisMonth ?? summary.totalExpense)) / \(money(budget ?? 0))"
 
         let categoryTotals = summary.expenseByCategory.prefix(3).map { item in
             let ratio = summary.totalExpense > 0

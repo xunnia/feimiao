@@ -34,6 +34,8 @@ enum BookStore {
             transaction.book = fallback
             transaction.updatedAt = Date()
         }
+        // 这个账本的预算规则一起软删（和安卓 deleteBook 一致）。
+        BudgetRuleStore.deleteRules(forBook: book.stableID, in: context)
         context.delete(book)
         try context.save()
     }
@@ -47,6 +49,8 @@ enum BookStore {
             .first(where: { $0.book?.persistentModelID == bookID }) {
             try LedgerStore.delete(next, in: context)
         }
+        // 这个账本的预算规则一起软删（和安卓 deleteBook 一致）。
+        BudgetRuleStore.deleteRules(forBook: book.stableID, in: context)
         context.delete(book)
         try context.save()
     }
