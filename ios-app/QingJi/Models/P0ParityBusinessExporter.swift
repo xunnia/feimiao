@@ -14,7 +14,7 @@ enum P0ParityBusinessExporter {
         books: [String: Book],
         accounts: [String: Account],
         transactions: [MoneyTransaction],
-        budgets: [Budget],
+        budgetRules: [BudgetRuleRecord],
         savingsGoals: [SavingsGoal],
         recurringRules: [RecurringRule],
         reports: [ReportRecord],
@@ -27,7 +27,7 @@ enum P0ParityBusinessExporter {
             books: books,
             accounts: accounts,
             transactions: transactions,
-            budgets: budgets,
+            budgetRules: budgetRules,
             savingsGoals: savingsGoals,
             recurringRules: recurringRules,
             reports: reports,
@@ -48,7 +48,7 @@ enum P0ParityBusinessExporter {
         books: [String: Book],
         accounts: [String: Account],
         transactions: [MoneyTransaction],
-        budgets: [Budget],
+        budgetRules: [BudgetRuleRecord],
         savingsGoals: [SavingsGoal],
         recurringRules: [RecurringRule],
         reports: [ReportRecord],
@@ -57,7 +57,6 @@ enum P0ParityBusinessExporter {
         guard books.count == fixture.books.count,
               accounts.count == fixture.accounts.count,
               transactions.count == fixture.transactions.count,
-              budgets.count == fixture.budgets.count,
               savingsGoals.count == fixture.savingsGoals.count,
               recurringRules.count == fixture.recurringRules.count,
               reports.count == fixture.reports.count else {
@@ -85,10 +84,18 @@ enum P0ParityBusinessExporter {
                 transactionKeyByID: transactionKeyByID
             )
         }
+        // 预算走预算规则引擎（docs/08 §6），和主页、预算页同一套算法。
+        let monthBudget = BudgetRuleEngine.resolveMonth(
+            rules: BudgetRuleStore.coreRules(budgetRules),
+            spendByDay: [:],
+            year: month.year ?? 0,
+            month: month.month ?? 0,
+            today: BudgetCivilDay(logicalNow, calendar: calendar)
+        )
         let summary = summaryPayload(
             fixture: fixture,
             transactions: transactions,
-            budgets: budgets,
+            budgetCents: monthBudget.budgetCents,
             logicalNow: logicalNow,
             calendar: calendar
         )
@@ -123,23 +130,35 @@ enum P0ParityBusinessExporter {
                 "sortOrder": account.sortOrder,
             ]
         }
-        let budgetRows: [[String: Any]] = try zip(fixture.budgets, budgets).map {
-            row,
-            budget in
-            let actualBook = budget.bookID.flatMap { bookKeyByID[$0] }
-            guard actualBook == row.book,
-                  budget.categoryKey == row.category else {
-                throw P0ParityFixtureError.invalidReference("export budget references \(row.key)")
+        // 预算规则没有分类预算：只导出总预算那一行（来自日常预算规则），
+        // 夹具里的分类预算行不再出现，检查脚本也只核对总预算。
+        let budgetRows: [[String: Any]] = try fixture.budgets
+            .filter { $0.category == nil }
+            .map { row in
+                guard let record = budgetRules.first(where: { $0.kindRaw == BudgetRuleKind.base.rawValue }),
+                      let rule = BudgetRuleStore.core(record, id: 1),
+                      let start = calendar.date(from: DateComponents(
+                          year: rule.startDate.year,
+                          month: rule.startDate.month,
+                          day: rule.startDate.day
+                      )) else {
+                    throw P0ParityFixtureError.invalidReference("export budget rule \(row.key)")
+                }
+                let actualBook = bookKeyByID[record.bookID]
+                guard actualBook == row.book else {
+                    throw P0ParityFixtureError.invalidReference("export budget book \(row.key)")
+                }
+                let cycle = rule.unit == .week ? "weekly" : "monthly"
+                let payload: [String: Any] = [
+                    "key": row.key,
+                    "book": optional(actualBook),
+                    "category": NSNull(),
+                    "periodStart": iso(start),
+                    "cycle": cycle,
+                    "amount": decimal(BudgetRuleStore.decimal(rule.amountCents)),
+                ]
+                return payload
             }
-            return [
-                "key": row.key,
-                "book": optional(actualBook),
-                "category": optional(budget.categoryKey),
-                "periodStart": optional(budget.periodStart.map(iso)),
-                "cycle": budget.cycleRaw,
-                "amount": decimal(budget.amount),
-            ]
-        }
         let savingsGoalRows: [[String: Any]] = zip(fixture.savingsGoals, savingsGoals).map {
             row,
             goal in
@@ -269,7 +288,7 @@ enum P0ParityBusinessExporter {
     private static func summaryPayload(
         fixture: P0ParityFixture,
         transactions: [MoneyTransaction],
-        budgets: [Budget],
+        budgetCents: Int,
         logicalNow: Date,
         calendar: Calendar
     ) -> [String: Any] {
@@ -299,7 +318,7 @@ enum P0ParityBusinessExporter {
             "augustBalance": decimal(income - netExpense),
             "augustTransactionRowsIncludingOffsetAndTransfer": monthTransactions.count,
             "augustVisibleOrdinaryRows": ordinaryRows,
-            "budget": decimal(budgets.first(where: { $0.categoryKey == nil })?.amount ?? 0),
+            "budget": decimal(BudgetRuleStore.decimal(budgetCents)),
             "fixtureExpectedBalance": fixture.expected.augustBalance,
         ]
     }

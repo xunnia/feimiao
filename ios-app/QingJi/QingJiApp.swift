@@ -37,13 +37,6 @@ struct QingJiApp: App {
                     }
                     // 预算规则模型（docs/08 §6.12）：旧预算只迁一次到新规则表。
                     BudgetRuleStore.migrateIfNeeded(in: AppModelContainer.shared.mainContext)
-                    try? BudgetCommitmentStore.materializeCurrent(
-                        in: AppModelContainer.shared.mainContext,
-                        now: AppClock.now
-                    )
-                    try? BudgetCommitmentStore.refreshRefundReviews(
-                        in: AppModelContainer.shared.mainContext
-                    )
                     try? RecurringStore.materializeDue(
                         in: AppModelContainer.shared.mainContext,
                         now: AppClock.now

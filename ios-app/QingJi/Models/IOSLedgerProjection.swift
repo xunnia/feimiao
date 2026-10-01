@@ -186,7 +186,6 @@ final class IOSStatisticsProjectionCache {
     private var spendSources: [MonthlyKey: [SpendSourceTotal]] = [:]
     private var yearly: [Int: YearlySummary] = [:]
     private var periods: [PeriodKey: PeriodSummary] = [:]
-    private var budgets: [BudgetKey: BudgetStatus] = [:]
 
     /// Exposed for the performance regression test; it counts core calculations,
     /// not SwiftUI body evaluations.
@@ -202,7 +201,6 @@ final class IOSStatisticsProjectionCache {
         spendSources.removeAll(keepingCapacity: true)
         yearly.removeAll(keepingCapacity: true)
         periods.removeAll(keepingCapacity: true)
-        budgets.removeAll(keepingCapacity: true)
     }
 
     func monthly(
@@ -306,27 +304,6 @@ final class IOSStatisticsProjectionCache {
         return value
     }
 
-    func status(
-        for budget: Budget,
-        records: [TransactionRecord],
-        revision: IOSLedgerDataRevision,
-        referenceDate: Date,
-        calendar: Calendar = .current
-    ) -> BudgetStatus {
-        prepare(for: revision)
-        let key = BudgetKey(budget: budget, referenceDate: referenceDate)
-        if let cached = budgets[key] { return cached }
-        calculationCount += 1
-        let value = BudgetStore.status(
-            for: budget,
-            records: records,
-            referenceDate: referenceDate,
-            calendar: calendar
-        )
-        budgets[key] = value
-        return value
-    }
-
     private struct MonthlyKey: Hashable {
         let year: Int
         let month: Int
@@ -341,29 +318,5 @@ final class IOSStatisticsProjectionCache {
     private struct PeriodKey: Hashable {
         let start: Date
         let end: Date
-    }
-
-    private struct BudgetKey: Hashable {
-        let id: UUID
-        let amount: String
-        let categoryKey: String
-        let bookID: UUID?
-        let periodStart: Date?
-        let periodEnd: Date?
-        let cycleRaw: String
-        let isActive: Bool
-        let referenceDate: Date
-
-        init(budget: Budget, referenceDate: Date) {
-            id = budget.stableID
-            amount = budget.amount.description
-            categoryKey = budget.categoryKey ?? ""
-            bookID = budget.bookID
-            periodStart = budget.periodStart
-            periodEnd = budget.periodEnd
-            cycleRaw = budget.cycleRaw
-            isActive = budget.isActive
-            self.referenceDate = referenceDate
-        }
     }
 }

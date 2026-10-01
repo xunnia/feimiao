@@ -130,7 +130,7 @@ enum P0ParityDemoSeeder {
             books: books,
             accounts: accounts
         )
-        let budgets = try insertBudgets(context: context, fixture: fixture, books: books)
+        let budgetRules = try insertBudgets(context: context, fixture: fixture, books: books)
         let savingsGoals = try insertSavingsGoals(context: context, fixture: fixture)
         let recurringRules = try insertRecurringRules(
             context: context,
@@ -165,7 +165,7 @@ enum P0ParityDemoSeeder {
             books: books,
             accounts: accounts,
             transactions: transactions,
-            budgets: budgets,
+            budgetRules: budgetRules,
             savingsGoals: savingsGoals,
             recurringRules: recurringRules,
             reports: reports,
@@ -332,37 +332,30 @@ enum P0ParityDemoSeeder {
         context: ModelContext,
         fixture: P0ParityFixture,
         books: [String: Book]
-    ) throws -> [Budget] {
-        var result: [Budget] = []
-        for row in fixture.budgets {
-            guard let book = books[row.book] else {
-                throw P0ParityFixtureError.invalidReference("budget \(row.key) book")
-            }
-            let budget = Budget(
-                amount: try P0ParityFixtureLoader.amount(row.amount),
-                categoryKey: row.category,
-                bookID: book.stableID,
-                periodStart: try P0ParityFixtureLoader.date(row.periodStart),
-                cycleRaw: row.cycle
-            )
-            context.insert(budget)
-            result.append(budget)
+    ) throws -> [BudgetRuleRecord] {
+        // 预算只读预算规则（docs/08 §6），旧 Budget 表不再写。规则没有分类预算，
+        // 夹具里的分类预算行不落库；总预算那一行变成一条按月的日常预算，
+        // 和安卓截图种子一样。
+        guard let total = fixture.budgets.first(where: { $0.category == nil }) else {
+            return []
         }
-        // 主页、统计、小组件读的是预算规则（docs/08 §6）：和安卓截图种子一样补一条日常预算。
-        if let total = fixture.budgets.first(where: { $0.category == nil }),
-           let book = books[total.book] {
-            let start = BudgetCivilDay(try P0ParityFixtureLoader.date(total.periodStart))
-            let yuan = NSDecimalNumber(decimal: try P0ParityFixtureLoader.amount(total.amount)).intValue
-            context.insert(BudgetRuleRecord(
-                bookID: book.stableID,
-                kindRaw: BudgetRuleKind.base.rawValue,
-                amountCents: yuan * 100,
-                unitRaw: (total.cycle == "weekly" ? BudgetRuleUnit.week : BudgetRuleUnit.month).rawValue,
-                startDate: BudgetCivilDay(year: start.year, month: start.month, day: 1).text,
-                createdMs: 1
-            ))
+        guard let book = books[total.book] else {
+            throw P0ParityFixtureError.invalidReference("budget \(total.key) book")
         }
-        return result
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: fixture.timezone) ?? .current
+        let start = BudgetCivilDay(try P0ParityFixtureLoader.date(total.periodStart), calendar: calendar)
+        let yuan = NSDecimalNumber(decimal: try P0ParityFixtureLoader.amount(total.amount)).intValue
+        let rule = BudgetRuleRecord(
+            bookID: book.stableID,
+            kindRaw: BudgetRuleKind.base.rawValue,
+            amountCents: yuan * 100,
+            unitRaw: (total.cycle == "weekly" ? BudgetRuleUnit.week : BudgetRuleUnit.month).rawValue,
+            startDate: BudgetCivilDay(year: start.year, month: start.month, day: 1).text,
+            createdMs: 1
+        )
+        context.insert(rule)
+        return [rule]
     }
 
     private static func insertSavingsGoals(

@@ -124,7 +124,13 @@ def validate(payload: dict[str, Any], contract: dict[str, Any], platform: str) -
     fixture_books = rows_by_key(fixture["books"], "fixture.books")
     fixture_accounts = rows_by_key(fixture["accounts"], "fixture.accounts")
     fixture_transactions = rows_by_key(fixture["transactions"], "fixture.transactions")
-    fixture_budgets = rows_by_key(fixture["budgets"], "fixture.budgets")
+    # 预算规则（docs/08 §6）没有分类预算：夹具里的分类预算行只是旧数据，
+    # 两端都只导出总预算那一行（由预算规则算出），分类行不再出现。
+    fixture_budgets = {
+        key: row
+        for key, row in rows_by_key(fixture["budgets"], "fixture.budgets").items()
+        if row.get("category") is None
+    }
     fixture_savings = rows_by_key(fixture["savingsGoals"], "fixture.savingsGoals")
     fixture_recurring = rows_by_key(fixture["recurringRules"], "fixture.recurringRules")
     fixture_reports = rows_by_key(fixture["reports"], "fixture.reports")
