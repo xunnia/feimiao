@@ -28,8 +28,13 @@ struct HomeView: View {
     private var books: [Book]
     @Query private var budgetRules: [BudgetRuleRecord]
     @Query private var budgetRollovers: [BudgetRolloverChangeRecord]
+    @Environment(\.scenePhase) private var scenePhase
     @State private var transactionFilter: HomeTransactionFilter = .all
     @State private var displayedMonth = AppClock.now
+    /// 上次和时钟对齐时的「本月」。App 常驻后台跨月回来，靠它判断要不要跟到新月份。
+    @State private var syncedNow = AppClock.now
+    /// 过了零点或回到前台时变一下，让「今天」「剩 N 天」换成新的一天。
+    @State private var clockTick = 0
     @State private var monthPickerDate = AppClock.now
     @State private var showMonthPicker = false
     @State private var editingTransaction: MoneyTransaction?
@@ -49,6 +54,7 @@ struct HomeView: View {
     }
 
     var body: some View {
+        let _ = clockTick
         let now = AppClock.now
         let snapshot = projectionCache.snapshot(
             for: transactions,
@@ -171,6 +177,7 @@ struct HomeView: View {
                     maximumDate: now
                 ) {
                     displayedMonth = startOfMonth(monthPickerDate)
+                    syncedNow = AppClock.now
                     showMonthPicker = false
                 }
                 .presentationDetents([.medium])
@@ -179,6 +186,38 @@ struct HomeView: View {
                 EditTransactionSheet(transaction: transaction)
             }
         .toolbar(.hidden, for: .tabBar)
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active { followClock() }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .NSCalendarDayChanged).receive(on: RunLoop.main)) { _ in
+            followClock()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.significantTimeChangeNotification)) { _ in
+            followClock()
+        }
+    }
+
+    /// 回到前台或过了零点：停在「当时本月」的跟到新的本月，手动选的月份不动。
+    private func followClock() {
+        let now = AppClock.now
+        displayedMonth = Self.monthAfterClockChange(shown: displayedMonth, syncedNow: syncedNow, now: now)
+        syncedNow = now
+        clockTick &+= 1
+    }
+
+    /// 跨月后主页该显示哪个月（和安卓 `homeMonthAfterClockChange` 同一规则）。
+    /// 正在看「当时的本月」就跟着时钟走到新的本月；用户自己翻到别的月份则保持不动，
+    /// 但不能停在未来（比如系统时间被往回调）。返回当月 1 号。
+    static func monthAfterClockChange(
+        shown: Date, syncedNow: Date, now: Date, calendar: Calendar = .current
+    ) -> Date {
+        func monthStart(_ date: Date) -> Date {
+            calendar.date(from: calendar.dateComponents([.year, .month], from: date)) ?? date
+        }
+        let shownMonth = monthStart(shown)
+        let nowMonth = monthStart(now)
+        if shownMonth == monthStart(syncedNow) { return nowMonth }
+        return shownMonth > nowMonth ? nowMonth : shownMonth
     }
 
     private var filterSegment: some View {

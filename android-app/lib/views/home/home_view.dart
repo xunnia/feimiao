@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:decimal/decimal.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/cupertino.dart' show CupertinoIcons;
@@ -36,9 +38,30 @@ class HomeView extends StatefulWidget {
   State<HomeView> createState() => _HomeViewState();
 }
 
-class _HomeViewState extends State<HomeView> {
+/// 跨月后主页该显示哪个月。
+///
+/// [shown] 是正在显示的月，[syncedNow] 是上次和时钟对齐时的「本月」，[now] 是现在。
+/// 正在看「当时的本月」就跟着时钟走到新的本月；用户自己翻到别的月份则保持不动。
+/// 只看年月，返回当月 1 号。
+DateTime homeMonthAfterClockChange({
+  required DateTime shown,
+  required DateTime syncedNow,
+  required DateTime now,
+}) {
+  final shownMonth = DateTime(shown.year, shown.month);
+  final syncedMonth = DateTime(syncedNow.year, syncedNow.month);
+  final nowMonth = DateTime(now.year, now.month);
+  if (shownMonth == syncedMonth) return nowMonth;
+  // 手动翻到的月份不动；但不能停在未来（比如系统时间被往回调）。
+  return shownMonth.isAfter(nowMonth) ? nowMonth : shownMonth;
+}
+
+class _HomeViewState extends State<HomeView> with WidgetsBindingObserver {
   late int _year;
   late int _month;
+  // 上次和时钟对齐时的「本月」。App 常驻后台跨月回来，靠它判断要不要跟到新月份。
+  late DateTime _syncedNow;
+  Timer? _midnightTimer;
   _TxFilter _filter = _TxFilter.all;
 
   @override
@@ -47,6 +70,52 @@ class _HomeViewState extends State<HomeView> {
     final now = AppClock.now;
     _year = now.year;
     _month = now.month;
+    _syncedNow = now;
+    WidgetsBinding.instance.addObserver(this);
+    _scheduleMidnightCheck();
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _midnightTimer?.cancel();
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) _followClock();
+  }
+
+  /// App 一直开在前台过了零点时，也要换到新的一天 / 新的月份。
+  void _scheduleMidnightCheck() {
+    _midnightTimer?.cancel();
+    final now = DateTime.now();
+    final nextMidnight = DateTime(now.year, now.month, now.day + 1);
+    _midnightTimer = Timer(
+      nextMidnight.difference(now) + const Duration(seconds: 1),
+      () {
+        if (!mounted) return;
+        _followClock();
+        _scheduleMidnightCheck();
+      },
+    );
+  }
+
+  /// 回到前台或过了零点：停在「当时本月」的跟到新的本月，手动选的月份不动；
+  /// 同一个月里也重建一次，让「今天」「剩 N 天」换成新的一天。
+  void _followClock() {
+    final now = AppClock.now;
+    final next = homeMonthAfterClockChange(
+      shown: DateTime(_year, _month),
+      syncedNow: _syncedNow,
+      now: now,
+    );
+    setState(() {
+      _year = next.year;
+      _month = next.month;
+      _syncedNow = now;
+    });
   }
 
   bool get _isCurrentMonth {
@@ -65,6 +134,7 @@ class _HomeViewState extends State<HomeView> {
     setState(() {
       _year = m.year;
       _month = m.month;
+      _syncedNow = now;
     });
   }
 
@@ -73,6 +143,7 @@ class _HomeViewState extends State<HomeView> {
     setState(() {
       _year = now.year;
       _month = now.month;
+      _syncedNow = now;
     });
   }
 
@@ -108,6 +179,7 @@ class _HomeViewState extends State<HomeView> {
     setState(() {
       _year = picked.year;
       _month = picked.month;
+      _syncedNow = AppClock.now;
     });
   }
 
