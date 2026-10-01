@@ -13,20 +13,39 @@ struct TransactionDayCard: View {
     var onSelect: ((MoneyTransaction) -> Void)?
     var onDelete: ((MoneyTransaction) -> Void)?
 
-    private var expense: Decimal {
+    /// 已退金额一律按正数用。`LedgerPolicy.refundTotals` 存的是负数（退款行本身是负额），
+    /// 调用方有的转过、有的没转；在这里统一，避免 38 − (−15) 被算成 53。
+    static func refundAmount(for transaction: MoneyTransaction, in refundByID: [UUID: Decimal]) -> Decimal {
+        let value = refundByID[transaction.stableID] ?? 0
+        return value < 0 ? -value : value
+    }
+
+    /// 当天支出合计，口径同统计页 `StatisticsEngine`（`LedgerPolicy.userRecords`）和安卓
+    /// `TxDayCard` 的 `userAmountOf`（07 F-TXN-013：用户净额 family）：
+    /// - 「不计入收支」的不算；
+    /// - 附着在原单上的退款行本身不单独算，已退金额从原单里减；
+    /// - 老数据里没挂原单的独立负支出照原额冲减（07 §退款规则 5，不猜成退款）。
+    static func dayExpense(_ items: [MoneyTransaction], refundByID: [UUID: Decimal]) -> Decimal {
         items.reduce(Decimal.zero) { total, transaction in
-            guard transaction.kind == .expense else { return total }
-            let refund = refundByID[transaction.stableID] ?? 0
-            let net = transaction.amount > 0 ? transaction.amount - refund : transaction.amount
-            return total + (net > 0 ? net : 0)
+            guard transaction.kind == .expense, !transaction.isExcluded, transaction.refundOfID == nil else {
+                return total
+            }
+            let net = transaction.amount > 0
+                ? transaction.amount - refundAmount(for: transaction, in: refundByID)
+                : transaction.amount
+            return total + net
         }
     }
 
-    private var income: Decimal {
+    /// 当天收入合计：「不计入收支」的不算。
+    static func dayIncome(_ items: [MoneyTransaction]) -> Decimal {
         items.reduce(Decimal.zero) { total, transaction in
-            transaction.kind == .income ? total + transaction.amount : total
+            transaction.kind == .income && !transaction.isExcluded ? total + transaction.amount : total
         }
     }
+
+    private var expense: Decimal { Self.dayExpense(items, refundByID: refundByID) }
+    private var income: Decimal { Self.dayIncome(items) }
 
     private var currencyCode: String {
         items.first?.currencyCode ?? "CNY"
@@ -44,7 +63,7 @@ struct TransactionDayCard: View {
 
                 TransactionRow(
                     transaction: transaction,
-                    refundAmount: refundByID[transaction.stableID] ?? 0
+                    refundAmount: Self.refundAmount(for: transaction, in: refundByID)
                 )
                 .padding(.horizontal, 14)
                 .padding(.vertical, 10)
