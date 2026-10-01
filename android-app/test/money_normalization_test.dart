@@ -2,7 +2,7 @@ import 'package:decimal/decimal.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:qingji/core/ai/entry_sanity.dart';
 import 'package:qingji/core/ai/natural_language_entry_parser.dart';
-import 'package:qingji/core/budget/budget_window_resolver.dart';
+import 'package:qingji/core/money_cents.dart';
 import 'package:qingji/core/models/transaction_kind.dart';
 
 ParsedEntry _entry({Decimal? amount, DateTime? date, double conf = 0.95}) =>

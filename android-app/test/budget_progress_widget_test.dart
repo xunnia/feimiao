@@ -3,7 +3,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
 import 'package:qingji/core/budget/budget_engine.dart';
-import 'package:qingji/core/budget/budget_window_resolver.dart';
 import 'package:qingji/core/models/transaction_record.dart';
 import 'package:qingji/core/statistics/statistics_engine.dart';
 import 'package:qingji/core/transaction_time.dart';
@@ -40,26 +39,6 @@ class _HomeSpacingRepository extends AppRepository {
 
   @override
   List<TransactionEntity> get visibleTransactionsRef => [transaction];
-
-  @override
-  BudgetWindowResult budgetForCalendarMonth(
-    DateTime month, {
-    int? bookId,
-    DateTime? asOf,
-    DateTime? knowledgeCutoff,
-  }) {
-    final now = asOf ?? DateTime.now();
-    return BudgetWindowResolver.resolve(
-      query: BudgetWindowQuery(
-        viewKind: BudgetViewKind.calendarMonth,
-        bookId: bookId ?? 1,
-        referenceDate: month,
-        asOf: now,
-        knowledgeCutoff: knowledgeCutoff ?? now,
-      ),
-      periods: const [],
-    );
-  }
 }
 
 void main() {

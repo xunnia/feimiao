@@ -1,7 +1,7 @@
 import 'package:decimal/decimal.dart';
 import 'package:flutter/material.dart';
 
-import '../../core/budget/budget_window_resolver.dart';
+import '../../core/money_cents.dart';
 import '../../core/money_format.dart';
 import '../../theme/app_colors.dart';
 import '../../theme/app_tokens.dart';

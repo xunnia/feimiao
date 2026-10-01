@@ -2,6 +2,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
+import 'package:qingji/core/budget/budget_rule_display.dart';
 import 'package:qingji/core/budget/budget_rule_engine.dart';
 import 'package:qingji/core/budget/budget_rule_status.dart';
 import 'package:qingji/core/budget/budget_rules.dart';
@@ -167,8 +168,20 @@ void main() {
     );
     expect(find.text('${now.month}月超出'), findsOneWidget);
     expect(find.text('¥50'), findsOneWidget);
-    expect(find.text('今天多花了 ¥50 · 还剩 ${budgetDaysInMonth(now.year, now.month) - now.day + 1} 天'),
-        findsOneWidget);
+    // 今天的额度 = 剩余预算按剩余天数分到今天（向下取整到元），所以「今天多花了」
+    // 随日期变：月底最后一天是 ¥50，1 号是 150 − ⌊100/31⌋ = ¥147。按引擎同一算法算期望值。
+    final todayStatus = BudgetRuleEngine.resolveMonth(
+      rules: [base(100)],
+      spendByDay: {budgetDayKey(today): 15000},
+      year: now.year,
+      month: now.month,
+      today: today,
+    ).today!;
+    expect(
+      find.text('今天多花了 ${budgetYuanText(-todayStatus.leftTodayCents)} · '
+          '还剩 ${budgetDaysInMonth(now.year, now.month) - now.day + 1} 天'),
+      findsOneWidget,
+    );
   });
 
   testWidgets('新增日常预算：填金额保存', (tester) async {

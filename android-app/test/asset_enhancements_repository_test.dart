@@ -6,7 +6,6 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:path/path.dart' as p;
 import 'package:qingji/core/assets/asset_allocation.dart';
 import 'package:qingji/core/account/account_movement_projection.dart';
-import 'package:qingji/core/budget/budget_plan_v2.dart';
 import 'package:qingji/core/models/transaction_kind.dart';
 import 'package:qingji/data/app_repository.dart';
 import 'package:sqflite/sqflite.dart';
@@ -782,34 +781,7 @@ void main() {
 
   test('v38 到 v42 等价迁移保留 B2 与资产证据并初始化 A4 字段', () async {
     var repo = await freshRepo();
-    final planId = await repo.addBudgetPlanV2(
-      bookId: repo.currentBookId,
-      name: 'v38 主预算',
-      cadence: BudgetPlanCadenceV2.monthly,
-      totalCents: 300000,
-      fixedTemplates: const [
-        BudgetFixedTemplateV2(
-          id: 'rent',
-          name: '房租',
-          plannedCents: 80000,
-          dueValue: 15,
-        ),
-      ],
-      monthStartDay: 1,
-      startNextCycle: false,
-    );
-    final plan = repo.budgetPlansV2.singleWhere((item) => item.id == planId);
-    final cycle = plan.cycleFor(DateTime.now());
-    await repo.upsertBudgetCycleOverrideV2(
-      planId: planId,
-      cycleStart: cycle.start,
-      targetAmountCents: 280000,
-    );
-    expect(
-      repo.budgetFixedOccurrencesV2For(planId, cycleStart: cycle.start),
-      isNotEmpty,
-    );
-
+    final bookId = repo.currentBookId;
     final purchaseId = await addExpense(
       repo,
       note: 'v38 相机购买',
@@ -842,19 +814,20 @@ void main() {
 
     final dbPath = p.join(tmp.path, 'qingji.db');
     var db = await databaseFactory.openDatabase(dbPath);
+    // 旧 V2 预算的写入代码已删（旧表只保留不再读写），这里直接插 v38 时代
+    // 会有的四张表原始行，验证等价迁移原样保留它们。
+    final planId = await _insertLegacyV2Plan(db, bookId: bookId);
     final evidence = await _captureV38Evidence(
       db,
       planId: planId,
       assetId: assetId,
     );
     expect(evidence.refundAllocation, isNotEmpty);
+    expect(evidence.plan['role'], 'primary');
     await _downgradeToV38(db);
     await db.close();
 
     repo = await freshRepo();
-    expect(
-        repo.budgetPlansV2.singleWhere((item) => item.id == planId).isPrimary,
-        isTrue);
     expect(repo.physicalAssetDetailById(assetId)!.warrantyUntil, warranty);
     expect(
         repo.physicalAssetDetailById(assetId)!.usageTrackingEnabled, isFalse);
@@ -1980,6 +1953,56 @@ Future<Set<String>> _columnNames(Database db, String table) async =>
     (await db.rawQuery('PRAGMA table_info($table)'))
         .map((row) => row['name'] as String)
         .toSet();
+
+/// 插一份 v38 时代的旧 V2 主预算：计划 + 版本 + 本期改额 + 固定支出发生。
+Future<int> _insertLegacyV2Plan(Database db, {required int bookId}) async {
+  const startDay = 20260701;
+  const endDay = 20260731;
+  final planId = await db.insert('budget_plans', {
+    'uuid': 'legacy-plan-v38',
+    'book_id': bookId,
+    'name': 'v38 主预算',
+    'role': 'primary',
+    'cadence': 'monthly',
+    'anchor_start_day': startDay,
+    'month_start_day': 1,
+    'status': 'active',
+    'created_ms': 1,
+    'updated_ms': 1,
+  });
+  final revisionId = await db.insert('budget_plan_revisions', {
+    'uuid': 'legacy-rev-v38',
+    'plan_id': planId,
+    'effective_cycle_start_day': startDay,
+    'amount_cents': 300000,
+    'fixed_templates_json':
+        '[{"id":"rent","name":"房租","planned_cents":80000,"due_value":15}]',
+    'created_ms': 1,
+    'updated_ms': 1,
+  });
+  await db.insert('budget_cycle_overrides', {
+    'uuid': 'legacy-override-v38',
+    'plan_id': planId,
+    'cycle_start_day': startDay,
+    'cycle_end_day': endDay,
+    'target_amount_cents': 280000,
+    'created_ms': 2,
+    'updated_ms': 2,
+  });
+  await db.insert('budget_fixed_commitment_occurrences', {
+    'uuid': 'legacy-occurrence-v38',
+    'plan_id': planId,
+    'revision_id': revisionId,
+    'template_id': 'rent',
+    'cycle_start_day': startDay,
+    'cycle_end_day': endDay,
+    'due_day': 20260715,
+    'planned_cents': 80000,
+    'created_ms': 3,
+    'updated_ms': 3,
+  });
+  return planId;
+}
 
 Future<_V38Evidence> _captureV38Evidence(
   Database db, {

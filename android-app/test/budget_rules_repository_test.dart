@@ -277,17 +277,6 @@ void main() {
     final kept = await repo.addBook(name: '已经有规则');
     final allBooksStart = DateTime(now.year - 1, 1, 1);
     final ownStart = DateTime(now.year - 1, 3, 15);
-    await repo.addBudgetPeriod(start: allBooksStart, total: Decimal.fromInt(4000));
-    await repo.addBudgetPeriod(
-      bookId: own,
-      start: ownStart,
-      total: Decimal.parse('5000.4'),
-    );
-    await repo.addBudgetPeriod(
-      bookId: weekly,
-      start: ownStart,
-      total: Decimal.fromInt(9999),
-    );
     await repo.saveBudgetRule(
       bookId: kept,
       kind: BudgetRuleKind.base,
@@ -301,6 +290,22 @@ void main() {
     var db = await databaseFactory.openDatabase(dbPath());
     // 模拟升级前：只有 kept 那条规则是用户自己加的，其余都是 v49 的旧数据。
     await db.delete('budget_rules', where: 'book_id != ?', whereArgs: [kept]);
+    // 旧预算期间（budget_periods）的写入代码已删，按旧写法直接插原始行。
+    Future<void> legacyPeriod(int? bookId, DateTime start, String total) =>
+        db.insert('budget_periods', {
+          'book_id': bookId,
+          'start_ms': start.millisecondsSinceEpoch,
+          'end_ms': null,
+          'recurring_monthly': 1,
+          'total': total,
+          'category_budgets': '',
+          'monthly_income': '',
+          'fixed_expenses': '',
+          'created_ms': 1,
+        });
+    await legacyPeriod(null, allBooksStart, '4000');
+    await legacyPeriod(own, ownStart, '5000.4');
+    await legacyPeriod(weekly, ownStart, '9999');
     final planId = await db.insert('budget_plans', {
       'uuid': 'plan-weekly-test',
       'book_id': weekly,

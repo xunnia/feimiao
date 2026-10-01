@@ -13,9 +13,6 @@ import 'package:qingji/core/account/net_worth_snapshot.dart';
 import 'package:qingji/core/account/net_worth_verified_checkpoint.dart';
 import 'package:qingji/core/assets/asset_allocation.dart';
 import 'package:qingji/core/backup/backup_package_codec.dart';
-import 'package:qingji/core/budget/budget_window_resolver.dart';
-import 'package:qingji/core/budget/budget_plan_v2.dart';
-import 'package:qingji/core/budget/fixed_commitment.dart';
 import 'package:qingji/core/import/bill_import.dart';
 import 'package:qingji/core/ai/report_execution_fence.dart';
 import 'package:qingji/core/money_format.dart';
@@ -24,7 +21,6 @@ import 'package:qingji/core/models/recurring_rule.dart';
 import 'package:qingji/core/models/transaction_card_display.dart';
 import 'package:qingji/core/models/transaction_kind.dart';
 import 'package:qingji/core/statistics/statistics_engine.dart';
-import 'package:qingji/core/statistics/metric_contract.dart';
 import 'package:qingji/core/transaction_time.dart';
 import 'package:qingji/core/widgets/widget_snapshot_service.dart';
 import 'package:qingji/data/app_repository.dart';
@@ -560,124 +556,6 @@ void main() {
     await db.execute('PRAGMA user_version = 33');
     await db.close();
   }
-
-  test('budget window keeps no-plan distinct from a zero budget', () async {
-    final repo = await freshRepo();
-
-    final result = repo.budgetForCalendarMonth(
-      DateTime(2026, 7),
-      asOf: DateTime(2026, 7, 10, 23, 59),
-    );
-
-    expect(result.plannedAmount, isNull);
-    expect(repo.budgetTotalFor(2026, 7), isNull);
-    await repo.closeForTest();
-  });
-
-  test('budget window resolves the plan that covered a historical month',
-      () async {
-    final repo = await freshRepo();
-    final bookId = repo.currentBookId;
-    await repo.addBudgetPeriod(
-      bookId: bookId,
-      start: DateTime(2026, 1, 1),
-      end: DateTime(2026, 5, 31),
-      total: Decimal.fromInt(3000),
-    );
-    await repo.addBudgetPeriod(
-      bookId: bookId,
-      start: DateTime(2026, 6, 1),
-      total: Decimal.fromInt(4000),
-    );
-
-    final march = repo.budgetForCalendarMonth(
-      DateTime(2026, 3),
-      asOf: DateTime(2026, 7, 10),
-    );
-    final july = repo.budgetForCalendarMonth(
-      DateTime(2026, 7),
-      asOf: DateTime(2026, 7, 10),
-    );
-
-    expect(march.plannedAmount, Decimal.fromInt(3000));
-    expect(july.plannedAmount, Decimal.fromInt(4000));
-    await repo.closeForTest();
-  });
-
-  test('budgetWindow uses the explicitly requested book view', () async {
-    final repo = await freshRepo();
-    final defaultBookId = repo.currentBookId;
-    final travelBookId = await repo.addBook(
-      name: '预算测试旅行',
-      includeInTotal: false,
-    );
-    await repo.addBudgetPeriod(
-      bookId: travelBookId,
-      start: DateTime(2026, 1, 1),
-      total: Decimal.fromInt(1000),
-    );
-    await repo.addTransaction(
-      kind: TransactionKind.expense,
-      amount: Decimal.fromInt(100),
-      accountId: repo.accounts.first.id,
-      date: DateTime(2026, 7, 5),
-      bookId: travelBookId,
-    );
-    final asOf = DateTime(2026, 7, 10, 23, 59);
-    final knowledgeCutoff = DateTime.now();
-
-    final travel = repo.budgetWindow(BudgetWindowQuery(
-      viewKind: BudgetViewKind.calendarMonth,
-      bookId: travelBookId,
-      referenceDate: DateTime(2026, 7),
-      asOf: asOf,
-      knowledgeCutoff: knowledgeCutoff,
-    ));
-    final defaultView = repo.budgetForCalendarMonth(
-      DateTime(2026, 7),
-      bookId: defaultBookId,
-      asOf: asOf,
-    );
-
-    expect(travel.plannedAmount, Decimal.fromInt(1000));
-    expect(travel.spentAmount, Decimal.fromInt(100));
-    expect(defaultView.plannedAmount, isNull);
-    expect(defaultView.spentAmount, Decimal.zero);
-    await repo.closeForTest();
-  });
-
-  test('currentBudgetCycle exposes resolver today allowance', () async {
-    final repo = await freshRepo();
-    final bookId = repo.currentBookId;
-    await repo.addBudgetPeriod(
-      bookId: bookId,
-      start: DateTime(2026, 1, 1),
-      total: Decimal.fromInt(3000),
-    );
-    await repo.addTransaction(
-      kind: TransactionKind.expense,
-      amount: Decimal.fromInt(900),
-      accountId: repo.accounts.first.id,
-      date: DateTime(2026, 6, 5),
-      bookId: bookId,
-    );
-    await repo.addTransaction(
-      kind: TransactionKind.expense,
-      amount: Decimal.fromInt(50),
-      accountId: repo.accounts.first.id,
-      date: DateTime(2026, 6, 10),
-      bookId: bookId,
-    );
-
-    final result = repo.currentBudgetCycle(
-      bookId: bookId,
-      now: DateTime(2026, 6, 10, 23, 59),
-    );
-
-    expect(result.currentCycleDailyStatus?.spentTodayCents, 5000);
-    expect(result.currentCycleDailyStatus?.todayRemainingAllowanceCents, 5000);
-    await repo.closeForTest();
-  });
 
   test('money display settings persist across repository restarts', () async {
     final repo = await freshRepo();
@@ -1581,189 +1459,6 @@ void main() {
     await repo.closeForTest();
   });
 
-  test('B2 V2 计划按完整周期应用 revision，本周期 override 保存绝对值', () async {
-    final repo = await freshRepo();
-    final now = DateTime.now();
-    final bookId = repo.currentBookId;
-    final planId = await repo.addBudgetPlanV2(
-      bookId: bookId,
-      name: '日常预算',
-      cadence: BudgetPlanCadenceV2.monthly,
-      totalCents: 310000,
-      categoryBudgetsCents: const {'dining': 100000},
-      monthStartDay: 1,
-      startNextCycle: false,
-    );
-    var current = repo.budgetWindow(BudgetWindowQuery(
-      viewKind: BudgetViewKind.cycle,
-      bookId: bookId,
-      referenceDate: now,
-      asOf: now,
-      knowledgeCutoff: DateTime.now(),
-    ));
-    expect(current.plannedCents, 310000);
-
-    final plan = repo.budgetPlansV2.firstWhere((item) => item.id == planId);
-    final currentCycle = plan.cycleFor(now);
-    await repo.addBudgetPlanRevisionV2(
-      planId: planId,
-      totalCents: 620000,
-      effectiveCycleStart: currentCycle.endExclusive,
-    );
-    current = repo.budgetWindow(BudgetWindowQuery(
-      viewKind: BudgetViewKind.cycle,
-      bookId: bookId,
-      referenceDate: now,
-      asOf: now,
-      knowledgeCutoff: DateTime.now(),
-    ));
-    final next = repo.budgetWindow(BudgetWindowQuery(
-      viewKind: BudgetViewKind.cycle,
-      bookId: bookId,
-      referenceDate: currentCycle.endExclusive,
-      asOf: currentCycle.endExclusive,
-      knowledgeCutoff: DateTime.now(),
-    ));
-    expect(current.plannedCents, 310000);
-    expect(next.plannedCents, 620000);
-
-    final futureBrowse = repo.budgetWindow(BudgetWindowQuery(
-      viewKind: BudgetViewKind.cycle,
-      bookId: bookId,
-      referenceDate: currentCycle.endExclusive,
-      asOf: now,
-      knowledgeCutoff: DateTime.now(),
-    ));
-    expect(
-        futureBrowse.currentCycleDailyStatus?.cycleStart, currentCycle.start);
-    expect(futureBrowse.fixedCommitmentStatus, MetricStatus.notApplicable);
-    expect(futureBrowse.discretionaryRemainingCents, isNull);
-
-    await repo.upsertBudgetCycleOverrideV2(
-      planId: planId,
-      cycleStart: currentCycle.start,
-      targetAmountCents: 330000,
-      categoryBudgetsCents: const {'dining': 100000},
-      inputIntent: BudgetOverrideIntent.adjustRemaining,
-      inputDeltaCents: 20000,
-    );
-    final overridden = repo.budgetWindow(BudgetWindowQuery(
-      viewKind: BudgetViewKind.cycle,
-      bookId: bookId,
-      referenceDate: now,
-      asOf: now,
-      knowledgeCutoff: DateTime.now(),
-    ));
-    expect(overridden.plannedCents, 330000);
-    await repo.closeForTest();
-  });
-
-  test('B2 固定支出 actual 与 reserve 互斥，部分退款后差额继续预留', () async {
-    final repo = await freshRepo();
-    final now = DateTime.now();
-    final bookId = repo.currentBookId;
-    final accountId = repo.accounts.first.id;
-    final dueDay = now.day.clamp(1, 28);
-    final planId = await repo.addBudgetPlanV2(
-      bookId: bookId,
-      name: '含固定支出预算',
-      cadence: BudgetPlanCadenceV2.monthly,
-      totalCents: 100000,
-      monthStartDay: 1,
-      startNextCycle: false,
-      fixedTemplates: [
-        BudgetFixedTemplateV2(
-          id: 'rent',
-          name: '房租',
-          plannedCents: 10000,
-          dueValue: dueDay,
-        ),
-      ],
-    );
-    final plan = repo.budgetPlansV2.firstWhere((item) => item.id == planId);
-    final cycle = plan.cycleFor(now);
-    final occurrence = repo
-        .budgetFixedOccurrencesV2For(planId, cycleStart: cycle.start)
-        .single;
-    var before = repo.budgetWindow(BudgetWindowQuery(
-      viewKind: BudgetViewKind.cycle,
-      bookId: bookId,
-      referenceDate: now,
-      asOf: now,
-      knowledgeCutoff: DateTime.now(),
-    ));
-    expect(before.fixedReserveCents, 10000);
-    expect(before.discretionaryRemainingCents, 90000);
-
-    final transactionId = await repo.addTransaction(
-      kind: TransactionKind.expense,
-      amount: Decimal.fromInt(100),
-      accountId: accountId,
-      bookId: bookId,
-      date: now,
-      note: '房租',
-    );
-    final transaction =
-        repo.transactions.firstWhere((item) => item.id == transactionId);
-    await repo.matchBudgetFixedOccurrence(
-      occurrence.id,
-      transaction.uuid,
-    );
-    final matched = repo.budgetWindow(BudgetWindowQuery(
-      viewKind: BudgetViewKind.cycle,
-      bookId: bookId,
-      referenceDate: now,
-      asOf: DateTime.now(),
-      knowledgeCutoff: DateTime.now(),
-    ));
-    expect(matched.spentCents, 10000);
-    expect(matched.fixedActualSpentCents, 10000);
-    expect(matched.fixedReserveCents, 0);
-    expect(matched.discretionaryRemainingCents, 90000);
-
-    await repo.refundTransaction(
-      transaction,
-      Decimal.fromInt(30),
-      settledAt: DateTime.now(),
-      settlementAccountId: accountId,
-    );
-    final refunded = repo.budgetWindow(BudgetWindowQuery(
-      viewKind: BudgetViewKind.cycle,
-      bookId: bookId,
-      referenceDate: now,
-      asOf: DateTime.now(),
-      knowledgeCutoff: DateTime.now(),
-    ));
-    expect(refunded.spentCents, 7000);
-    expect(refunded.fixedActualSpentCents, 7000);
-    expect(refunded.fixedReserveCents, 3000);
-    expect(refunded.discretionaryRemainingCents, 90000);
-    expect(refunded.fixedCommitmentStatus, MetricStatus.partial);
-
-    await repo.acceptBudgetFixedRefundReview(occurrence.id);
-    final secondRefundId = await repo.refundTransaction(
-      transaction,
-      Decimal.fromInt(10),
-      settledAt: DateTime.now(),
-      settlementAccountId: accountId,
-    );
-    expect(
-      repo
-          .budgetFixedOccurrencesV2For(planId, cycleStart: cycle.start)
-          .single
-          .occurrence
-          .reviewReason,
-      FixedCommitmentReviewReason.refundAfterMatch,
-    );
-    await repo.deleteTransaction(secondRefundId);
-    final afterUndo = repo
-        .budgetFixedOccurrencesV2For(planId, cycleStart: cycle.start)
-        .single;
-    expect(afterUndo.resolutionStatus, FixedCommitmentResolutionStatus.matched);
-    expect(afterUndo.occurrence.reviewReason, isNull);
-    await repo.closeForTest();
-  });
-
   test('A3 过期物品估值必须明确接受后才能形成完整核对', () async {
     final repo = await freshRepo();
     final oldDate = DateTime.now().subtract(const Duration(days: 120));
@@ -1850,322 +1545,6 @@ void main() {
     await repo.closeForTest();
   });
 
-  test('B2 V2 从生效日切断旧预算，归档后不会在未来复活 legacy', () async {
-    final repo = await freshRepo();
-    final now = DateTime.now();
-    final bookId = repo.currentBookId;
-    await repo.addBudgetPeriod(
-      bookId: bookId,
-      start: DateTime(2000, 1, 1),
-      recurringMonthly: true,
-      total: Decimal.fromInt(1000),
-    );
-    final planId = await repo.addBudgetPlanV2(
-      bookId: bookId,
-      name: 'V2 切换',
-      cadence: BudgetPlanCadenceV2.monthly,
-      totalCents: 200000,
-      monthStartDay: 1,
-      startNextCycle: false,
-    );
-    final plan = repo.budgetPlansV2.firstWhere((item) => item.id == planId);
-    final current = repo.budgetWindow(BudgetWindowQuery(
-      viewKind: BudgetViewKind.cycle,
-      bookId: bookId,
-      referenceDate: now,
-      asOf: now,
-      knowledgeCutoff: DateTime.now(),
-    ));
-    expect(current.plannedCents, 200000);
-
-    await repo.archiveBudgetPlanV2(planId);
-    final futureDate = plan.cycleFor(now).endExclusive;
-    final future = repo.budgetWindow(BudgetWindowQuery(
-      viewKind: BudgetViewKind.cycle,
-      bookId: bookId,
-      referenceDate: futureDate,
-      asOf: futureDate,
-      knowledgeCutoff: DateTime.now(),
-    ));
-    expect(future.planStatus, MetricStatus.unavailable);
-    expect(future.plannedCents, isNull);
-    await repo.closeForTest();
-  });
-
-  test('B2 下周期计划不会锁死本周期预算，并在边界日无冲突接续', () async {
-    final repo = await freshRepo();
-    final now = DateTime.now();
-    final bookId = repo.currentBookId;
-    final futurePlanId = await repo.addBudgetPlanV2(
-      bookId: bookId,
-      name: '下周期计划',
-      cadence: BudgetPlanCadenceV2.monthly,
-      totalCents: 200000,
-      monthStartDay: 1,
-      startNextCycle: true,
-    );
-    final futurePlan =
-        repo.budgetPlansV2.firstWhere((item) => item.id == futurePlanId);
-
-    final beforeBridge = repo.budgetWindow(BudgetWindowQuery(
-      viewKind: BudgetViewKind.cycle,
-      bookId: bookId,
-      referenceDate: now,
-      asOf: now,
-      knowledgeCutoff: DateTime.now(),
-    ));
-    expect(beforeBridge.planStatus, MetricStatus.unavailable);
-
-    final bridgePlanId = await repo.addBudgetPlanV2(
-      bookId: bookId,
-      name: '本周期计划',
-      cadence: BudgetPlanCadenceV2.monthly,
-      totalCents: 100000,
-      monthStartDay: 1,
-      startNextCycle: false,
-    );
-    final bridgePlan =
-        repo.budgetPlansV2.firstWhere((item) => item.id == bridgePlanId);
-    expect(
-      bridgePlan.endInclusive,
-      futurePlan.anchorStart.subtract(const Duration(days: 1)),
-    );
-
-    final current = repo.budgetWindow(BudgetWindowQuery(
-      viewKind: BudgetViewKind.cycle,
-      bookId: bookId,
-      referenceDate: now,
-      asOf: now,
-      knowledgeCutoff: DateTime.now(),
-    ));
-    expect(current.planStatus, MetricStatus.available);
-    expect(current.plannedCents, 100000);
-
-    final future = repo.budgetWindow(BudgetWindowQuery(
-      viewKind: BudgetViewKind.cycle,
-      bookId: bookId,
-      referenceDate: futurePlan.anchorStart,
-      asOf: futurePlan.anchorStart,
-      knowledgeCutoff: DateTime.now(),
-    ));
-    expect(future.planStatus, MetricStatus.available);
-    expect(future.plannedCents, 200000);
-    expect(future.planSlices.map((slice) => slice.planId).toSet(), {
-      futurePlanId,
-    });
-    await repo.closeForTest();
-  });
-
-  test('B2 已覆盖本周期的主计划仍禁止重复创建', () async {
-    final repo = await freshRepo();
-    final bookId = repo.currentBookId;
-    await repo.addBudgetPlanV2(
-      bookId: bookId,
-      name: '当前计划',
-      cadence: BudgetPlanCadenceV2.monthly,
-      totalCents: 100000,
-      monthStartDay: 1,
-      startNextCycle: false,
-    );
-
-    await expectLater(
-      repo.addBudgetPlanV2(
-        bookId: bookId,
-        name: '重复计划',
-        cadence: BudgetPlanCadenceV2.monthly,
-        totalCents: 200000,
-        monthStartDay: 1,
-        startNextCycle: false,
-      ),
-      throwsA(
-        isA<StateError>().having(
-          (error) => error.message,
-          'message',
-          contains('这个周期已有主预算记录'),
-        ),
-      ),
-    );
-    await repo.closeForTest();
-  });
-
-  test('B2 未生效计划可安全归档，结束日不会早于开始日', () async {
-    var repo = await freshRepo();
-    final bookId = repo.currentBookId;
-    final planId = await repo.addBudgetPlanV2(
-      bookId: bookId,
-      name: '尚未生效',
-      cadence: BudgetPlanCadenceV2.monthly,
-      totalCents: 100000,
-      monthStartDay: 1,
-      startNextCycle: true,
-    );
-    await repo.archiveBudgetPlanV2(planId);
-    var plan = repo.budgetPlansV2.firstWhere((item) => item.id == planId);
-    expect(plan.status, BudgetPlanStatusV2.archived);
-    expect(plan.endInclusive, isNull);
-    await repo.closeForTest();
-
-    repo = AppRepository();
-    await repo.init();
-    plan = repo.budgetPlansV2.firstWhere((item) => item.id == planId);
-    expect(plan.status, BudgetPlanStatusV2.archived);
-    expect(plan.endInclusive, isNull);
-    final future = repo.budgetWindow(BudgetWindowQuery(
-      viewKind: BudgetViewKind.cycle,
-      bookId: bookId,
-      referenceDate: plan.anchorStart,
-      asOf: plan.anchorStart,
-      knowledgeCutoff: DateTime.now(),
-    ));
-    expect(future.planStatus, MetricStatus.unavailable);
-    await repo.closeForTest();
-  });
-
-  test('B2 已归档周期保留历史且不会允许同周期重复主计划', () async {
-    final repo = await freshRepo();
-    final bookId = repo.currentBookId;
-    final planId = await repo.addBudgetPlanV2(
-      bookId: bookId,
-      name: '本周期历史',
-      cadence: BudgetPlanCadenceV2.monthly,
-      totalCents: 100000,
-      monthStartDay: 1,
-      startNextCycle: false,
-    );
-    await repo.archiveBudgetPlanV2(planId);
-
-    await expectLater(
-      repo.addBudgetPlanV2(
-        bookId: bookId,
-        name: '同周期重复',
-        cadence: BudgetPlanCadenceV2.monthly,
-        totalCents: 200000,
-        monthStartDay: 1,
-        startNextCycle: false,
-      ),
-      throwsA(isA<StateError>()),
-    );
-    expect(
-      await repo.addBudgetPlanV2(
-        bookId: bookId,
-        name: '下周期接续',
-        cadence: BudgetPlanCadenceV2.monthly,
-        totalCents: 200000,
-        monthStartDay: 1,
-        startNextCycle: true,
-      ),
-      greaterThan(0),
-    );
-    await repo.closeForTest();
-  });
-
-  test('B2 下周期 revision 可重复保存并同步预生成 occurrence', () async {
-    var repo = await freshRepo();
-    final now = DateTime.now();
-    final planId = await repo.addBudgetPlanV2(
-      bookId: repo.currentBookId,
-      name: '修订同步',
-      cadence: BudgetPlanCadenceV2.monthly,
-      totalCents: 100000,
-      monthStartDay: 1,
-      startNextCycle: false,
-      fixedTemplates: const [
-        BudgetFixedTemplateV2(
-          id: 'rent',
-          name: '房租',
-          plannedCents: 10000,
-          dueValue: 1,
-        ),
-      ],
-    );
-    final firstPlan =
-        repo.budgetPlansV2.firstWhere((item) => item.id == planId);
-    final nextStart = firstPlan.cycleFor(now).endExclusive;
-    await repo.closeForTest();
-
-    repo = AppRepository();
-    await repo.init();
-    expect(
-      repo
-          .budgetFixedOccurrencesV2For(planId, cycleStart: nextStart)
-          .single
-          .plannedCents,
-      10000,
-    );
-    await repo.addBudgetPlanRevisionV2(
-      planId: planId,
-      totalCents: 120000,
-      effectiveCycleStart: nextStart,
-      fixedTemplates: const [
-        BudgetFixedTemplateV2(
-          id: 'rent',
-          name: '房租',
-          plannedCents: 12000,
-          dueValue: 2,
-        ),
-      ],
-    );
-    final revisionId = await repo.addBudgetPlanRevisionV2(
-      planId: planId,
-      totalCents: 130000,
-      effectiveCycleStart: nextStart,
-      fixedTemplates: const [
-        BudgetFixedTemplateV2(
-          id: 'rent',
-          name: '房租',
-          plannedCents: 13000,
-          dueValue: 3,
-        ),
-      ],
-    );
-    final revisions = repo
-        .budgetPlanRevisionsV2For(planId)
-        .where((item) => item.effectiveCycleStart == nextStart)
-        .toList();
-    expect(revisions, hasLength(1));
-    expect(revisions.single.id, revisionId);
-    final occurrence =
-        repo.budgetFixedOccurrencesV2For(planId, cycleStart: nextStart).single;
-    expect(occurrence.revisionId, revisionId);
-    expect(occurrence.plannedCents, 13000);
-    expect(occurrence.dueDate.day, 3);
-    await repo.closeForTest();
-  });
-
-  test('B2 恢复备份后立即物化当前与下一周期 occurrence', () async {
-    final repo = await freshRepo();
-    final planId = await repo.addBudgetPlanV2(
-      bookId: repo.currentBookId,
-      name: '恢复后物化',
-      cadence: BudgetPlanCadenceV2.monthly,
-      totalCents: 100000,
-      monthStartDay: 1,
-      startNextCycle: false,
-      fixedTemplates: const [
-        BudgetFixedTemplateV2(
-          id: 'rent',
-          name: '房租',
-          plannedCents: 10000,
-          dueValue: 1,
-        ),
-      ],
-    );
-    final plan = repo.budgetPlansV2.firstWhere((item) => item.id == planId);
-    final nextStart = plan.cycleFor(DateTime.now()).endExclusive;
-    expect(
-      repo.budgetFixedOccurrencesV2For(planId, cycleStart: nextStart),
-      isEmpty,
-    );
-    final backup = await repo.createLocalBackupNow();
-    expect(backup, isNotNull);
-    expect(await repo.restoreDatabaseFromFile(backup!.path), isTrue);
-    expect(
-      repo.budgetFixedOccurrencesV2For(planId, cycleStart: nextStart),
-      hasLength(1),
-    );
-    await repo.closeForTest();
-  });
-
   test('v39 to v40 adds time precision without rewriting transaction time',
       () async {
     var repo = await freshRepo();
@@ -2213,14 +1592,19 @@ void main() {
 
   test('v36 → v40：旧账户不伪造期初时间，legacy hidden 与旧预算保留', () async {
     var repo = await freshRepo();
-    await repo.addBudgetPeriod(
-      bookId: repo.currentBookId,
-      start: DateTime(2000, 1, 1),
-      total: Decimal.fromInt(1000),
-    );
+    final bookId = repo.currentBookId;
     await repo.closeForTest();
     final path = p.join(tmp.path, 'qingji.db');
     final db = await databaseFactory.openDatabase(path);
+    // 旧预算期间的写入代码已删，按旧写法插一行 v36 时代的预算。
+    await db.insert('budget_periods', {
+      'book_id': bookId,
+      'start_ms': DateTime(2000, 1, 1).millisecondsSinceEpoch,
+      'recurring_monthly': 1,
+      'total': '1000',
+      'created_ms': 1,
+    });
+    await db.delete('budget_rules');
     await db.execute('''
       CREATE TABLE accounts_v36 (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -2268,7 +1652,8 @@ void main() {
 
     repo = AppRepository();
     await repo.init();
-    expect(repo.budgetPeriods, hasLength(1));
+    // 旧预算原样保留，并在 v50 转成同额的按月基础规则。
+    expect(repo.budgetRulesForBook(bookId).single.amountCents, 100000);
     expect(repo.accounts.any((item) => item.name == '旧删除账户'), isFalse);
     expect(repo.accounts.first.openingBalanceEffectiveMs, isNull);
     expect(
@@ -2290,6 +1675,12 @@ void main() {
         await check.rawQuery('SELECT COUNT(*) FROM budget_plans'),
       ),
       0,
+    );
+    expect(
+      Sqflite.firstIntValue(
+        await check.rawQuery('SELECT COUNT(*) FROM budget_periods'),
+      ),
+      1,
     );
     expect(
       Sqflite.firstIntValue(await check.rawQuery('PRAGMA user_version')),
@@ -2413,14 +1804,15 @@ void main() {
       startDate: DateTime(2099, 1, 1),
       note: '分类合并定时规则',
     );
-    await repo.addBudgetPeriod(
-      start: DateTime(2026, 1, 1),
-      total: Decimal.fromInt(1000),
-      categoryBudgets: {
-        'test_a': Decimal.fromInt(100),
-        'test_b': Decimal.fromInt(50),
-      },
-    );
+    // 旧表只保留不再读，但合并分类仍要把旧预算里的分类额度一起并过去，
+    // 免得旧数据留着已经不存在的分类 key。
+    await repo.debugDb.insert('budget_periods', {
+      'start_ms': DateTime(2026, 1, 1).millisecondsSinceEpoch,
+      'recurring_monthly': 1,
+      'total': '1000',
+      'category_budgets': jsonEncode({'test_a': '100', 'test_b': '50'}),
+      'created_ms': 1,
+    });
 
     await repo.mergeCategory(aId, bId);
 
@@ -2428,15 +1820,14 @@ void main() {
     expect(repo.categories.where((c) => c.id == aId), isEmpty);
     expect(repo.recallCategoryKey('瑞幸咖啡', TransactionKind.expense), 'test_b');
     expect(repo.recurringRules.single.categoryId, bId);
-    expect(repo.budgetPeriods.single.categoryBudgets['test_a'], isNull);
-    expect(
-      repo.budgetPeriods.single.categoryBudgets['test_b'],
-      Decimal.fromInt(150),
-    );
+    final period = (await repo.debugDb.query('budget_periods')).single;
+    final merged = jsonDecode(period['category_budgets'] as String) as Map;
+    expect(merged.containsKey('test_a'), isFalse);
+    expect(Decimal.parse(merged['test_b'].toString()), Decimal.fromInt(150));
     await repo.closeForTest();
   });
 
-  test('deleteCategory 会阻止删除仍被定时规则或分类预算使用的分类', () async {
+  test('deleteCategory 会阻止删除仍被定时规则使用的分类', () async {
     final repo = await freshRepo();
     final categoryId = await repo.addCategory(
       key: 'protected_category',
@@ -2910,11 +2301,14 @@ void main() {
       startDate: DateTime(2099, 1, 1),
       note: '旅行定时账',
     );
-    await repo.addBudgetPeriod(
-      bookId: travelId,
-      start: DateTime(2026, 1, 1),
-      total: Decimal.fromInt(1000),
-    );
+    // 旧预算表只保留不再读，但转移账本时仍要把旧行一起挪到总账本。
+    await repo.debugDb.insert('budget_periods', {
+      'book_id': travelId,
+      'start_ms': DateTime(2026, 1, 1).millisecondsSinceEpoch,
+      'recurring_monthly': 1,
+      'total': '1000',
+      'created_ms': 1,
+    });
     await repo.addPhysicalAsset(
       name: '旅行相机',
       assetType: AssetType.digital,
@@ -2936,7 +2330,10 @@ void main() {
     await repo.deleteBook(travelId, moveRecordsToDefault: true);
 
     expect(repo.recurringRules.single.bookId, defaultBookId);
-    expect(repo.budgetPeriods.single.bookId, defaultBookId);
+    expect(
+      (await repo.debugDb.query('budget_periods')).single['book_id'],
+      defaultBookId,
+    );
     expect(repo.physicalAssets.single.bookId, defaultBookId);
     expect(repo.receivableAssets.single.bookId, defaultBookId);
     expect(repo.reports.single.bookId, defaultBookId);
@@ -6813,39 +6210,6 @@ void main() {
     await after.close();
     expect(afterMs, greaterThan(beforeMs));
     await repo.closeForTest();
-  });
-
-  test('v13 预算搬迁失败后启动自愈会把老预算搬进 budget_periods', () async {
-    final seeded = await freshRepo();
-    expect(seeded.budgetPeriods, isEmpty);
-    await seeded.closeForTest();
-
-    // 模拟「v13 搬迁 try/catch 吞了异常」后的库：旧 budget 表有数据、
-    // budget_periods 空、自愈标记不存在。
-    final db =
-        await databaseFactory.openDatabase(p.join(tmp.path, 'qingji.db'));
-    await db.execute(
-        'CREATE TABLE IF NOT EXISTS budget (id INTEGER PRIMARY KEY AUTOINCREMENT, category_key TEXT, amount TEXT NOT NULL)');
-    await db.insert('budget', {'category_key': null, 'amount': '3000'});
-    await db.insert('budget', {'category_key': 'dining', 'amount': '800'});
-    await db.delete(
-      'app_settings',
-      where: 'key = ?',
-      whereArgs: ['v13_budget_migration_checked'],
-    );
-    await db.close();
-
-    final repo = await freshRepo();
-    final period = repo.budgetPeriods.single;
-    expect(period.total, Decimal.fromInt(3000));
-    expect(period.categoryBudgets['dining'], Decimal.fromInt(800));
-    expect(period.recurringMonthly, isTrue);
-    await repo.closeForTest();
-
-    // 自愈是一次性的：已有预算期间后再启动不会重复搬。
-    final again = await freshRepo();
-    expect(again.budgetPeriods, hasLength(1));
-    await again.closeForTest();
   });
 
   test('v15 → 最新 迁移：老账单原样保留，uuid 回填，hidden 列就位', () async {

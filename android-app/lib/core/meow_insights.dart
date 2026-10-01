@@ -19,8 +19,8 @@ class MeowInsights {
     // 1. 超预算
     // The assistant can be rendered before the repository has created or
     // restored a book (for example on a first-run screenshot or cold start).
-    // BudgetWindowQuery intentionally rejects the sentinel id 0, so skip the
-    // budget insight until there is a real book rather than querying it.
+    // Book id 0 is a sentinel (no real book yet), so skip the budget insight
+    // until there is a real book rather than querying the rule engine for it.
     final budgetStatus = repo.currentBookId > 0
         ? repo.budgetRuleMonth(DateTime(now.year, now.month)).status
         : null;

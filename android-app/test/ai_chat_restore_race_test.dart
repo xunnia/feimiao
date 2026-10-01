@@ -6,7 +6,6 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:path/path.dart' as p;
 import 'package:provider/provider.dart';
-import 'package:qingji/core/budget/budget_window_resolver.dart';
 import 'package:qingji/core/media/chat_attachment.dart';
 import 'package:qingji/core/ai/ai_provider_config.dart';
 import 'package:qingji/data/app_repository.dart';
@@ -62,20 +61,6 @@ class _ChatRaceRepository extends AppRepository {
 
   @override
   List<BookEntity> get books => const [_book];
-
-  @override
-  BudgetWindowResult budgetForCalendarMonth(
-    DateTime month, {
-    int? bookId,
-    DateTime? asOf,
-    DateTime? knowledgeCutoff,
-  }) =>
-      super.budgetForCalendarMonth(
-        month,
-        bookId: bookId ?? _book.id,
-        asOf: asOf,
-        knowledgeCutoff: knowledgeCutoff,
-      );
 
   @override
   Future<List<Map<String, Object?>>> loadChatMessages() async {

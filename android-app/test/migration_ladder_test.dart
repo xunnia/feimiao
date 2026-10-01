@@ -9,7 +9,6 @@
 //   v24 → latest : v25 recurring_rules.anchor_day 从 next_due_ms 回填
 import 'dart:io';
 
-import 'package:decimal/decimal.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:path/path.dart' as p;
 import 'package:qingji/core/models/transaction_kind.dart';
@@ -312,15 +311,17 @@ void main() {
     final repo = AppRepository();
     await repo.init(); // 触发 v12→42 迁移，v13 搬预算
 
-    // v13 应该把 legacy budget 行搬成一条 budget_period
-    expect(repo.budgetPeriods, hasLength(1));
-    final period = repo.budgetPeriods.first;
-    expect(period.total, Decimal.fromInt(2000));
+    // v50 再把这条旧预算转成按月的基础预算规则（2000 元 = 200000 分）。
+    final rules = repo.budgetRulesForBook(repo.currentBookId);
+    expect(rules, hasLength(1));
+    expect(rules.single.amountCents, 200000);
 
     await repo.closeForTest();
     final check = await databaseFactory.openDatabase(path);
+    // v13 应该把 legacy budget 行搬成一条 budget_period（旧表只保留不再读）
     final periodRows = await check.query('budget_periods');
     expect(periodRows, hasLength(1));
+    expect(periodRows.first['total'], '2000');
     // 分类预算应在 JSON 里
     final catBudgetsJson = periodRows.first['category_budgets'] as String;
     expect(catBudgetsJson, contains('dining'));

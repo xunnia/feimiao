@@ -1416,24 +1416,8 @@ Future<_P0FixtureBundle> _ensureFixture(AppRepository repo) async {
     );
   }
 
-  if (!repo.budgetPeriods.any((period) => period.bookId == bookID)) {
-    final categoryBudgets = <String, Decimal>{};
-    for (final row in budgetRows) {
-      final categoryKey = row['category'] as String?;
-      if (categoryKey != null) {
-        categoryBudgets[categoryKey] = Decimal.parse(_p0String(row, 'amount'));
-      }
-    }
-    final total = budgetRows.firstWhere((row) => row['category'] == null);
-    await repo.addBudgetPeriod(
-      bookId: bookID,
-      start: _p0Date(total, 'periodStart'),
-      recurringMonthly: total['cycle'] == 'monthly',
-      total: Decimal.parse(_p0String(total, 'amount')),
-      categoryBudgets: categoryBudgets,
-    );
-  }
-  // 主页、统计、小组件读的是预算规则（docs/08 §6）：同一份种子数据补一条日常预算。
+  // 预算只读预算规则（docs/08 §6），旧预算表不再写。规则没有分类预算：
+  // 夹具里的分类预算行不落库，总预算那一行变成一条按月的日常预算（和 iOS 一样）。
   if (repo.budgetRulesForBook(bookID).isEmpty) {
     final total = budgetRows.firstWhere((row) => row['category'] == null);
     final start = _p0Date(total, 'periodStart');
@@ -1611,13 +1595,20 @@ Future<Map<String, dynamic>> _buildP0BusinessJson(
     actualByKey[_p0String(row, 'key')] = refund;
   }
 
-  final expectedBudgetBookKey = _p0String(budgetRows.first, 'book');
-  final budgetPeriod = repo.budgetPeriods.firstWhere(
-    (period) =>
-        period.bookId != null &&
-        bookKeyById[period.bookId!] == expectedBudgetBookKey,
-    orElse: () => throw StateError('P0 export budget period is missing'),
-  );
+  // 预算走预算规则（docs/08 §6），和主页、预算页同一套算法。
+  final totalBudgetRows =
+      budgetRows.where((row) => row['category'] == null).toList();
+  final expectedBudgetBookKey = _p0String(totalBudgetRows.single, 'book');
+  final budgetBookId = bookKeyById.entries
+      .firstWhere(
+        (entry) => entry.value == expectedBudgetBookKey,
+        orElse: () => throw StateError('P0 export budget book is missing'),
+      )
+      .key;
+  final baseRule = repo.budgetRulesForBook(budgetBookId).firstWhere(
+        (rule) => rule.kind == BudgetRuleKind.base,
+        orElse: () => throw StateError('P0 export budget rule is missing'),
+      );
   final savingsByName = {
     for (final goal in repo.savingsGoals) goal.name: goal,
   };
@@ -1707,36 +1698,20 @@ Future<Map<String, dynamic>> _buildP0BusinessJson(
     });
   }
 
-  final budgetsPayload = <Map<String, dynamic>>[];
-  for (final row in budgetRows) {
-    final category = row['category'] as String?;
-    final amount = category == null
-        ? budgetPeriod.total
-        : budgetPeriod.categoryBudgets[category];
-    if (amount == null) {
-      throw StateError('P0 export category budget is missing: $category');
-    }
-    final actualBook =
-        budgetPeriod.bookId == null ? null : bookKeyById[budgetPeriod.bookId!];
-    if (actualBook != row['book']) {
-      throw StateError('P0 export budget book differs: ${row['key']}');
-    }
-    final actualCategory = category == null
-        ? null
-        : budgetPeriod.categoryBudgets.containsKey(category)
-            ? category
-            : throw StateError(
-                'P0 export budget category differs: ${row['key']}',
-              );
-    budgetsPayload.add({
-      'key': _p0String(row, 'key'),
-      'book': actualBook,
-      'category': actualCategory,
-      'periodStart': _p0Iso(budgetPeriod.start),
-      'cycle': budgetPeriod.recurringMonthly ? 'monthly' : 'one_time',
-      'amount': amount.toString(),
-    });
-  }
+  // 规则没有分类预算：只导出总预算那一行，检查脚本也只核对总预算。
+  final budgetsPayload = <Map<String, dynamic>>[
+    for (final row in totalBudgetRows)
+      {
+        'key': _p0String(row, 'key'),
+        'book': bookKeyById[baseRule.bookId],
+        'category': null,
+        'periodStart': _p0Iso(baseRule.startDate),
+        'cycle': baseRule.unit == BudgetRuleUnit.week ? 'weekly' : 'monthly',
+        'amount': (Decimal.fromInt(baseRule.amountCents) / Decimal.fromInt(100))
+            .toDecimal()
+            .toString(),
+      },
+  ];
 
   final savingsPayload = <Map<String, dynamic>>[];
   for (final row in savingsRows) {
@@ -1854,7 +1829,19 @@ Future<Map<String, dynamic>> _buildP0BusinessJson(
               transaction.txKind != TransactionKind.transfer &&
               transaction.refundOf == null)
           .length,
-      'budget': budgetPeriod.total.toString(),
+      'budget': (Decimal.fromInt(
+                repo
+                    .budgetRuleMonth(
+                      DateTime(logicalNow.year, logicalNow.month),
+                      bookId: budgetBookId,
+                      asOf: logicalNow,
+                    )
+                    .month
+                    .budgetCents,
+              ) /
+              Decimal.fromInt(100))
+          .toDecimal()
+          .toString(),
       'fixtureExpectedBalance': expected['augustBalance'],
     },
     'logicalMonth': {'year': logicalNow.year, 'month': logicalNow.month},

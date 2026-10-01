@@ -9,15 +9,13 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:sqflite/sqflite.dart';
 
-import '../core/budget/budget_period.dart';
 import '../core/budget/budget_plan_v2.dart';
 import '../core/budget/budget_rule_calendar.dart';
 import '../core/budget/budget_rule_engine.dart';
 import '../core/budget/budget_rule_status.dart';
 import '../core/budget/budget_rules.dart';
 import '../core/budget/budget_transaction_family.dart';
-import '../core/budget/budget_window_resolver.dart';
-import '../core/budget/fixed_commitment.dart';
+import '../core/money_cents.dart';
 import '../core/account/account_activity.dart';
 import '../core/account/account_balance_checkpoint.dart';
 import '../core/account/account_movement_projection.dart';
@@ -352,35 +350,6 @@ class AccountBalanceCheckpointEntity {
         createdMs: (m['created_ms'] as int?) ?? 0,
         updatedMs: (m['updated_ms'] as int?) ?? 0,
       );
-}
-
-class BudgetFixedOccurrenceEntity {
-  final int id;
-  final String uuid;
-  final int revisionId;
-  final FixedCommitmentOccurrence occurrence;
-  final int? resolvedMs;
-  final int createdMs;
-  final int updatedMs;
-
-  const BudgetFixedOccurrenceEntity({
-    required this.id,
-    required this.uuid,
-    required this.revisionId,
-    required this.occurrence,
-    required this.resolvedMs,
-    required this.createdMs,
-    required this.updatedMs,
-  });
-
-  String get templateId => occurrence.templateId;
-  int get planId => occurrence.planId;
-  int get plannedCents => occurrence.plannedCents;
-  DateTime get dueDate => occurrence.dueDate;
-  FixedCommitmentResolutionStatus get resolutionStatus =>
-      occurrence.resolutionStatus;
-  String? get matchedTransactionFamilyId =>
-      occurrence.matchedTransactionFamilyId;
 }
 
 enum PhysicalAssetSourceType {
@@ -2902,13 +2871,6 @@ class AppRepository extends ChangeNotifier {
 
   int _currentBookId = 0;
 
-  /// 全部预算期间（新模型：阶段性预算，见 core/budget/budget_period.dart）。
-  final List<BudgetPeriod> _budgetPeriods = [];
-  final List<BudgetPlanV2> _budgetPlansV2 = [];
-  final List<BudgetPlanRevisionV2> _budgetPlanRevisionsV2 = [];
-  final List<BudgetCycleOverrideV2> _budgetCycleOverridesV2 = [];
-  final List<BudgetFixedOccurrenceEntity> _budgetFixedOccurrencesV2 = [];
-
   /// 预算规则模型（docs/08 §6）：含已软删的行，计算时由引擎排除。
   final List<BudgetRule> _budgetRules = [];
   final List<BudgetRolloverChange> _budgetRolloverChanges = [];
@@ -3422,40 +3384,6 @@ class AppRepository extends ChangeNotifier {
     );
   }
 
-  /// 全部预算期间（新建在前面显示用，按生效起点降序）。
-  List<BudgetPeriod> get budgetPeriods {
-    final list = List<BudgetPeriod>.of(_budgetPeriods)
-      ..sort((a, b) => b.start.compareTo(a.start));
-    return List.unmodifiable(list);
-  }
-
-  List<BudgetPlanV2> get budgetPlansV2 => List.unmodifiable(
-        _budgetPlansV2.toList()
-          ..sort(
-              (left, right) => right.anchorStart.compareTo(left.anchorStart)),
-      );
-
-  List<BudgetPlanRevisionV2> budgetPlanRevisionsV2For(int planId) =>
-      List.unmodifiable(
-        _budgetPlanRevisionsV2.where((item) => item.planId == planId).toList()
-          ..sort((left, right) =>
-              left.effectiveCycleStart.compareTo(right.effectiveCycleStart)),
-      );
-
-  List<BudgetFixedOccurrenceEntity> budgetFixedOccurrencesV2For(
-    int planId, {
-    DateTime? cycleStart,
-  }) =>
-      List.unmodifiable(
-        _budgetFixedOccurrencesV2.where((item) {
-          if (item.planId != planId) return false;
-          return cycleStart == null ||
-              budgetCivilDayKey(item.occurrence.cycleStart) ==
-                  budgetCivilDayKey(cycleStart);
-        }).toList()
-          ..sort((left, right) => left.dueDate.compareTo(right.dueDate)),
-      );
-
   List<ConsumptionExpenseFamily> _budgetExpenseFamiliesForBook(
     int logicalBookId,
   ) {
@@ -3504,77 +3432,6 @@ class AppRepository extends ChangeNotifier {
     }
     return BudgetTransactionFamilyAdapter.build(events);
   }
-
-  /// Resolves one explicit budget window for a logical book view. V2 receives
-  /// the original expense family plus refund events, including fully-refunded
-  /// orders, so knowledge-cutoff and fixed-commitment review remain replayable.
-  BudgetWindowResult budgetWindow(BudgetWindowQuery query) {
-    final families = _budgetExpenseFamiliesForBook(query.bookId);
-    return BudgetWindowResolver.resolve(
-      query: query,
-      periods: _budgetPeriods,
-      expenseFamilies: families,
-      plansV2: _budgetPlansV2,
-      revisionsV2: _budgetPlanRevisionsV2,
-      overridesV2: _budgetCycleOverridesV2,
-      fixedOccurrencesV2:
-          _budgetFixedOccurrencesV2.map((item) => item.occurrence),
-    );
-  }
-
-  BudgetWindowResult budgetForCalendarMonth(
-    DateTime month, {
-    int? bookId,
-    DateTime? asOf,
-    DateTime? knowledgeCutoff,
-  }) {
-    final queryAsOf = asOf ?? AppClock.now;
-    return budgetWindow(BudgetWindowQuery(
-      viewKind: BudgetViewKind.calendarMonth,
-      bookId: bookId ?? _currentBookId,
-      referenceDate: month,
-      asOf: queryAsOf,
-      knowledgeCutoff: knowledgeCutoff ?? AppClock.now,
-    ));
-  }
-
-  BudgetWindowResult currentBudgetCycle({
-    int? bookId,
-    DateTime? now,
-    DateTime? knowledgeCutoff,
-  }) {
-    final queryNow = now ?? AppClock.now;
-    return budgetWindow(BudgetWindowQuery(
-      viewKind: BudgetViewKind.cycle,
-      bookId: bookId ?? _currentBookId,
-      referenceDate: queryNow,
-      asOf: queryNow,
-      knowledgeCutoff: knowledgeCutoff ?? AppClock.now,
-    ));
-  }
-
-  /// 某年某月生效的月预算总额（当前账本口径）；没设过返回 null。
-  Decimal? budgetTotalFor(int year, int month) =>
-      budgetForCalendarMonth(DateTime(year, month)).plannedAmount;
-
-  /// 现在生效的月预算总额（老调用方无感兼容）。
-  Decimal? get monthlyBudget {
-    final n = AppClock.now;
-    return budgetTotalFor(n.year, n.month);
-  }
-
-  /// 现在生效的分类预算明细（key -> 月预算）。
-  Map<String, Decimal> get categoryBudgets {
-    final result = budgetForCalendarMonth(AppClock.now);
-    return Map.unmodifiable({
-      for (final category in result.categoryResults)
-        if (category.plannedCents > 0)
-          category.categoryKey: category.plannedAmount,
-    });
-  }
-
-  /// 某分类 key 的月预算（未设返回 null）。
-  Decimal? categoryBudgetFor(String key) => categoryBudgets[key];
 
   // ---------------------------------------------------------------------------
   // 预算规则模型（docs/08 §6）：所有用到预算的地方都走这里。
@@ -4350,10 +4207,6 @@ class AppRepository extends ChangeNotifier {
       trace('default_book_start');
       await _ensureDefaultBook();
       trace('default_book_done');
-      // v13 预算搬迁失败的幂等自愈（只在首次检查时真正查表，之后有标记直接跳过）。
-      trace('budget_self_heal_start');
-      await _selfHealLegacyBudgetMigration();
-      trace('budget_self_heal_done');
       trace('maintenance');
       if (fastStartup) {
         // The home only needs the current book, accounts, categories, budget
@@ -4480,8 +4333,6 @@ class AppRepository extends ChangeNotifier {
     await Future.wait([
       _loadAccounts(),
       _loadCategories(),
-      _loadBudgetPeriods(),
-      _loadBudgetV2(),
       _loadBudgetRules(),
       _loadRecordMode(),
       _loadMoneyDisplaySettings(),
@@ -4492,7 +4343,6 @@ class AppRepository extends ChangeNotifier {
     // These operations can change the first month's visible ledger. Finish
     // them before home-ready, while leaving full-history/asset hydration lazy.
     await _normalizeStandaloneRefunds();
-    await _materializeBudgetV2Occurrences();
     await _materializeRecurring();
     await _loadTransactionsForStartupMonth();
   }
@@ -4722,7 +4572,6 @@ class AppRepository extends ChangeNotifier {
 
   Future<void> _convergeOpenedDatabase({bool notify = true}) async {
     await _loadAll(notify: false);
-    await _materializeBudgetV2Occurrences();
     await applyPhysicalAssetDepreciation(notify: false);
     await _materializeRecurring();
     await _loadTransactions();
@@ -4733,7 +4582,7 @@ class AppRepository extends ChangeNotifier {
     if (notify) notifyListeners();
   }
 
-  /// v13 预算搬迁的核心逻辑（版本迁移和启动自愈共用）：
+  /// v13 预算搬迁的核心逻辑（只给 v13 版本迁移用）：
   /// 把旧 budget 表的单一预算搬成一条「2000 年起每月循环」的预算期间。
   /// 调用方保证 budget_periods 表已存在；budget 表不存在时查询抛错由调用方兜。
   Future<void> _migrateLegacyBudgetIntoPeriods(DatabaseExecutor db) async {
@@ -4762,43 +4611,6 @@ class AppRepository extends ChangeNotifier {
       'fixed_expenses': '',
       'created_ms': DateTime.now().millisecondsSinceEpoch,
     });
-  }
-
-  static const _kLegacyBudgetMigrationCheckedKey =
-      'v13_budget_migration_checked';
-
-  /// v13 预算搬迁失败的幂等自愈：迁移时那段 try/catch 一旦吞了异常，
-  /// 老预算就永远搬不过来。启动收尾处补一次检查——budget_periods 还是空
-  /// 且旧 budget 表有数据时重跑搬迁；结果无论如何写一个「已检查」标记，
-  /// 避免用户日后删光预算期间时把老预算又复活出来。失败不拦启动、下次再试。
-  Future<void> _selfHealLegacyBudgetMigration() async {
-    try {
-      final db = _db;
-      if (db == null) return;
-      final flag = await db.query(
-        'app_settings',
-        where: 'key = ?',
-        whereArgs: [_kLegacyBudgetMigrationCheckedKey],
-        limit: 1,
-      );
-      if (flag.isNotEmpty) return;
-      final existing = await db.query('budget_periods', limit: 1);
-      if (existing.isEmpty) {
-        final legacyTable = await db.rawQuery(
-          "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'budget'",
-        );
-        if (legacyTable.isNotEmpty) {
-          await _migrateLegacyBudgetIntoPeriods(db);
-        }
-      }
-      await db.insert(
-        'app_settings',
-        {'key': _kLegacyBudgetMigrationCheckedKey, 'value': '1'},
-        conflictAlgorithm: ConflictAlgorithm.replace,
-      );
-    } catch (_) {
-      // 自愈只是兜底，失败不拦启动。
-    }
   }
 
   /// 每周静默本地备份一次（qingji.db.auto-日期.bak，最多保留 3 份）。
@@ -8150,8 +7962,6 @@ class AppRepository extends ChangeNotifier {
       _loadTransactions(),
       _loadPhysicalAssetData(refreshSnapshot: false),
       _loadLiabilityProfiles(),
-      _loadBudgetPeriods(),
-      _loadBudgetV2(),
       _loadBudgetRules(),
       _loadApiKey(),
       _loadRecordMode(),
@@ -8471,14 +8281,6 @@ class AppRepository extends ChangeNotifier {
     _invalidateBookViewCaches();
   }
 
-  Future<void> _loadBudgetPeriods() async {
-    final rows =
-        await _db!.query('budget_periods', orderBy: 'start_ms ASC, id ASC');
-    _budgetPeriods
-      ..clear()
-      ..addAll(rows.map(BudgetPeriod.fromMap));
-  }
-
   static DateTime? _parseBudgetDateText(Object? raw) {
     final text = raw?.toString().trim() ?? '';
     final parts = text.split('-');
@@ -8540,210 +8342,6 @@ class AppRepository extends ChangeNotifier {
         updatedMs: row['updated_ms'] as int? ?? 0,
       ));
     }
-  }
-
-  List<BudgetFixedTemplateV2> _decodeBudgetFixedTemplates(String raw) {
-    try {
-      final decoded = jsonDecode(raw) as List;
-      return [
-        for (final value in decoded.whereType<Map>())
-          BudgetFixedTemplateV2(
-            id: value['id']?.toString() ?? '',
-            name: value['name']?.toString() ?? '',
-            plannedCents: int.tryParse(value['planned_cents'].toString()) ?? 0,
-            dueValue: int.tryParse(value['due_value'].toString()) ?? 1,
-          ),
-      ].where((item) => item.id.isNotEmpty && item.plannedCents >= 0).toList();
-    } catch (_) {
-      return const [];
-    }
-  }
-
-  Map<String, int> _decodeBudgetCategoryCents(String? raw) {
-    if (raw == null) return const {};
-    try {
-      final decoded = jsonDecode(raw) as Map<String, dynamic>;
-      return {
-        for (final entry in decoded.entries)
-          if ((int.tryParse(entry.value.toString()) ?? -1) >= 0)
-            entry.key: int.parse(entry.value.toString()),
-      };
-    } catch (_) {
-      return const {};
-    }
-  }
-
-  Future<void> _loadBudgetV2() async {
-    final planRows = await _db!.query('budget_plans', orderBy: 'id ASC');
-    final revisionRows =
-        await _db!.query('budget_plan_revisions', orderBy: 'id ASC');
-    final overrideRows =
-        await _db!.query('budget_cycle_overrides', orderBy: 'id ASC');
-    final occurrenceRows = await _db!.query(
-      'budget_fixed_commitment_occurrences',
-      orderBy: 'cycle_start_day ASC, due_day ASC, id ASC',
-    );
-    _budgetPlansV2
-      ..clear()
-      ..addAll(planRows.map((row) => BudgetPlanV2(
-            id: row['id'] as int,
-            uuid: row['uuid'] as String,
-            bookId: row['book_id'] as int,
-            currencyCode: row['currency_code'] as String? ?? 'CNY',
-            timezone: row['timezone'] as String? ?? 'device_local',
-            name: row['name'] as String? ?? '',
-            role: row['role'] as String? ?? 'primary',
-            cadence:
-                BudgetPlanCadenceV2X.fromStorage(row['cadence'] as String?),
-            anchorStart: budgetCivilDayFromKey(row['anchor_start_day'] as int),
-            monthStartDay: row['month_start_day'] as int?,
-            weekStart: row['week_start'] as int?,
-            endInclusive: row['end_day'] == null
-                ? null
-                : budgetCivilDayFromKey(row['end_day'] as int),
-            expenseScope: BudgetExpenseScopeV2.fromJsonString(
-              row['expense_scope_json'] as String?,
-            ),
-            status: BudgetPlanStatusV2X.fromStorage(row['status'] as String?),
-            createdMs: row['created_ms'] as int? ?? 0,
-            updatedMs: row['updated_ms'] as int? ?? 0,
-          )));
-    _budgetPlanRevisionsV2
-      ..clear()
-      ..addAll(revisionRows.map((row) => BudgetPlanRevisionV2(
-            id: row['id'] as int,
-            uuid: row['uuid'] as String,
-            planId: row['plan_id'] as int,
-            effectiveCycleStart: budgetCivilDayFromKey(
-              row['effective_cycle_start_day'] as int,
-            ),
-            effectiveToCycleStart: row['effective_to_cycle_start_day'] == null
-                ? null
-                : budgetCivilDayFromKey(
-                    row['effective_to_cycle_start_day'] as int,
-                  ),
-            amountCents: row['amount_cents'] as int,
-            categoryBudgetsCents: _decodeBudgetCategoryCents(
-              row['category_budgets_json'] as String?,
-            ),
-            monthlyIncomeCents: row['monthly_income_cents'] as int?,
-            fixedTemplates: _decodeBudgetFixedTemplates(
-              row['fixed_templates_json'] as String? ?? '[]',
-            ),
-            legacySourcePeriodId: row['legacy_source_period_id'] as int?,
-            createdMs: row['created_ms'] as int? ?? 0,
-            updatedMs: row['updated_ms'] as int? ?? 0,
-          )));
-    _budgetCycleOverridesV2
-      ..clear()
-      ..addAll(overrideRows.map((row) => BudgetCycleOverrideV2(
-            id: row['id'] as int,
-            uuid: row['uuid'] as String,
-            planId: row['plan_id'] as int,
-            cycleStart: budgetCivilDayFromKey(row['cycle_start_day'] as int),
-            cycleEndInclusive:
-                budgetCivilDayFromKey(row['cycle_end_day'] as int),
-            targetAmountCents: row['target_amount_cents'] as int,
-            categoryBudgetsCents: row['category_budgets_json'] == null
-                ? null
-                : _decodeBudgetCategoryCents(
-                    row['category_budgets_json'] as String?,
-                  ),
-            inputIntent: BudgetOverrideIntent.fromStorage(
-              row['input_intent'] as String?,
-            ),
-            inputDeltaCents: row['input_delta_cents'] as int?,
-            createdMs: row['created_ms'] as int? ?? 0,
-            updatedMs: row['updated_ms'] as int? ?? 0,
-          )));
-    final plansById = {for (final plan in _budgetPlansV2) plan.id: plan};
-    _budgetFixedOccurrencesV2.clear();
-    for (final row in occurrenceRows) {
-      final plan = plansById[row['plan_id'] as int];
-      if (plan == null) continue;
-      FixedCommitmentResolutionStatus status;
-      try {
-        status = FixedCommitmentResolutionStatus.fromStorage(
-          row['resolution_status'] as String? ?? 'planned',
-        );
-      } catch (_) {
-        status = FixedCommitmentResolutionStatus.requiresReview;
-      }
-      FixedCommitmentReviewReason? reviewReason;
-      final reviewRaw = row['review_reason'] as String? ?? '';
-      if (reviewRaw.isNotEmpty) {
-        try {
-          reviewReason = FixedCommitmentReviewReason.fromStorage(reviewRaw);
-        } catch (_) {
-          reviewReason = FixedCommitmentReviewReason.invalidScope;
-        }
-      }
-      _budgetFixedOccurrencesV2.add(BudgetFixedOccurrenceEntity(
-        id: row['id'] as int,
-        uuid: row['uuid'] as String,
-        revisionId: row['revision_id'] as int,
-        occurrence: FixedCommitmentOccurrence(
-          id: row['id'] as int,
-          planId: plan.id,
-          bookId: plan.bookId,
-          currencyCode: plan.currencyCode,
-          templateId: row['template_id'] as String,
-          cycleStart: budgetCivilDayFromKey(row['cycle_start_day'] as int),
-          cycleEnd: budgetCivilDayFromKey(row['cycle_end_day'] as int),
-          dueDate: budgetCivilDayFromKey(row['due_day'] as int),
-          plannedCents: row['planned_cents'] as int,
-          resolutionStatus: status,
-          reviewReason: reviewReason,
-          matchedTransactionFamilyId:
-              row['matched_transaction_family_uuid'] as String?,
-          resolvedMs: row['resolved_ms'] as int?,
-        ),
-        resolvedMs: row['resolved_ms'] as int?,
-        createdMs: row['created_ms'] as int? ?? 0,
-        updatedMs: row['updated_ms'] as int? ?? 0,
-      ));
-    }
-  }
-
-  Future<void> _materializeBudgetV2Occurrences() async {
-    if (_budgetPlansV2.isEmpty) return;
-    final now = AppClock.now;
-    final nowMs = now.millisecondsSinceEpoch;
-    await _db!.transaction((txn) async {
-      for (final plan in _budgetPlansV2) {
-        if (!plan.isPrimary) continue;
-        final reference =
-            now.isBefore(plan.anchorStart) ? plan.anchorStart : now;
-        final current = plan.cycleFor(reference);
-        final cycles = [
-          current,
-          plan.cycleFor(current.endExclusive),
-        ];
-        for (final cycle in cycles) {
-          if (cycle.start.isBefore(plan.anchorStart) ||
-              (plan.endInclusive != null &&
-                  cycle.start.isAfter(plan.endInclusive!))) {
-            continue;
-          }
-          final revisions = _budgetPlanRevisionsV2
-              .where((revision) => revision.appliesTo(cycle))
-              .toList()
-            ..sort((left, right) =>
-                left.effectiveCycleStart.compareTo(right.effectiveCycleStart));
-          final revision = revisions.lastOrNull;
-          if (revision == null) continue;
-          await _insertBudgetOccurrencesForRevision(
-            txn,
-            plan: plan,
-            revisionId: revision.id,
-            cycle: cycle,
-            templates: revision.fixedTemplates,
-            nowMs: nowMs,
-          );
-        }
-      }
-    });
-    await _loadBudgetV2();
   }
 
   Future<void> _loadApiKey() async {
@@ -13364,13 +12962,6 @@ class AppRepository extends ChangeNotifier {
       );
     });
     await _refreshTransactionRows(familyRoots: {id});
-    // 与 refundTransaction 对齐：报销同样是一笔冲减，已匹配这笔账单的
-    // 固定支出 occurrence 需要回到待复核状态，不能带着旧金额继续算。
-    final reimbursedRoot =
-        _allTransactions.where((t) => t.id == id).firstOrNull;
-    if (reimbursedRoot != null) {
-      await _markBudgetOccurrenceRefundReview(reimbursedRoot);
-    }
     await _loadPhysicalAssetData(refreshSnapshot: false);
     await _refreshCurrentNetWorthSnapshotBestEffort(
       const {NetWorthSnapshotCause.refund},
@@ -13475,7 +13066,6 @@ class AppRepository extends ChangeNotifier {
       return refundId;
     });
     await _refreshTransactionRows(familyRoots: {original.id});
-    await _markBudgetOccurrenceRefundReview(original);
     await _loadPhysicalAssetData(refreshSnapshot: false);
     await _refreshCurrentNetWorthSnapshotBestEffort(
       const {NetWorthSnapshotCause.refund},
@@ -15931,7 +15521,6 @@ class AppRepository extends ChangeNotifier {
     });
     _deleteReceiptFileIfOwned(path);
     await _refreshTransactionRows(familyRoots: {familyRoot});
-    await _refreshBudgetOccurrenceRefundReview(familyRoot);
     await _loadPhysicalAssetData(refreshSnapshot: false);
     await _refreshCurrentNetWorthSnapshotBestEffort(
       const {
@@ -16087,943 +15676,6 @@ class AppRepository extends ChangeNotifier {
             );
           })(),
     ];
-  }
-
-  // ---------------------------------------------------------------------------
-  // 预算期间（新模型：阶段性预算）
-  // ---------------------------------------------------------------------------
-
-  String _encodeBudgetCategoryCents(Map<String, int> categories) =>
-      jsonEncode(categories);
-
-  String _encodeBudgetFixedTemplates(
-    Iterable<BudgetFixedTemplateV2> templates,
-  ) =>
-      jsonEncode([
-        for (final template in templates)
-          {
-            'id': template.id,
-            'name': template.name,
-            'planned_cents': template.plannedCents,
-            'due_value': template.dueValue,
-          },
-      ]);
-
-  BudgetPlanCycleV2 _budgetCycleForStartChoice({
-    required BudgetPlanCadenceV2 cadence,
-    required DateTime now,
-    required int monthStartDay,
-    required int weekStart,
-    required bool nextCycle,
-  }) {
-    final day = DateTime(now.year, now.month, now.day);
-    late DateTime start;
-    late DateTime end;
-    if (cadence == BudgetPlanCadenceV2.monthly) {
-      start = DateTime(day.year, day.month, monthStartDay);
-      if (day.isBefore(start)) {
-        start = DateTime(day.year, day.month - 1, monthStartDay);
-      }
-      if (nextCycle) {
-        start = DateTime(start.year, start.month + 1, monthStartDay);
-      }
-      end = DateTime(start.year, start.month + 1, monthStartDay);
-    } else {
-      final offset = (day.weekday - weekStart + 7) % 7;
-      start = day.subtract(Duration(days: offset));
-      if (nextCycle) start = start.add(const Duration(days: 7));
-      end = start.add(const Duration(days: 7));
-    }
-    return BudgetPlanCycleV2(planId: 0, start: start, endExclusive: end);
-  }
-
-  DateTime _fixedTemplateDueDate(
-    BudgetPlanV2 plan,
-    BudgetPlanCycleV2 cycle,
-    BudgetFixedTemplateV2 template,
-  ) {
-    if (plan.cadence == BudgetPlanCadenceV2.weekly) {
-      final offset = (template.dueValue - cycle.start.weekday + 7) % 7;
-      return cycle.start.add(Duration(days: offset));
-    }
-    var due = DateTime(cycle.start.year, cycle.start.month, template.dueValue);
-    if (due.isBefore(cycle.start)) {
-      due =
-          DateTime(cycle.start.year, cycle.start.month + 1, template.dueValue);
-    }
-    if (!due.isBefore(cycle.endExclusive)) {
-      due = cycle.endInclusive;
-    }
-    return due;
-  }
-
-  Future<void> _insertBudgetOccurrencesForRevision(
-    DatabaseExecutor txn, {
-    required BudgetPlanV2 plan,
-    required int revisionId,
-    required BudgetPlanCycleV2 cycle,
-    required Iterable<BudgetFixedTemplateV2> templates,
-    required int nowMs,
-  }) async {
-    for (final template in templates) {
-      await txn.insert(
-        'budget_fixed_commitment_occurrences',
-        {
-          'uuid': _newUuid(),
-          'plan_id': plan.id,
-          'revision_id': revisionId,
-          'template_id': template.id,
-          'cycle_start_day': cycle.startDayKey,
-          'cycle_end_day': cycle.endDayKey,
-          'due_day': budgetCivilDayKey(
-            _fixedTemplateDueDate(plan, cycle, template),
-          ),
-          'planned_cents': template.plannedCents,
-          'resolution_status':
-              FixedCommitmentResolutionStatus.planned.storageValue,
-          'review_reason': '',
-          'matched_transaction_family_uuid': null,
-          'resolved_ms': null,
-          'created_ms': nowMs,
-          'updated_ms': nowMs,
-        },
-        conflictAlgorithm: ConflictAlgorithm.ignore,
-      );
-    }
-  }
-
-  Future<void> _syncBudgetOccurrencesForRevision(
-    DatabaseExecutor txn, {
-    required BudgetPlanV2 plan,
-    required int revisionId,
-    required BudgetPlanCycleV2 cycle,
-    required Iterable<BudgetFixedTemplateV2> templates,
-    required int nowMs,
-  }) async {
-    final remaining = {
-      for (final template in templates) template.id: template,
-    };
-    final rows = await txn.query(
-      'budget_fixed_commitment_occurrences',
-      where: 'plan_id = ? AND cycle_start_day = ?',
-      whereArgs: [plan.id, cycle.startDayKey],
-    );
-    for (final row in rows) {
-      final id = row['id'] as int;
-      final templateId = row['template_id'] as String;
-      final template = remaining.remove(templateId);
-      final status = row['resolution_status'] as String? ?? 'planned';
-      final linked = row['matched_transaction_family_uuid'] as String?;
-      final untouched =
-          status == FixedCommitmentResolutionStatus.planned.storageValue &&
-              linked == null;
-      if (template == null) {
-        if (untouched) {
-          await txn.delete(
-            'budget_fixed_commitment_occurrences',
-            where: 'id = ?',
-            whereArgs: [id],
-          );
-        } else {
-          await txn.update(
-            'budget_fixed_commitment_occurrences',
-            {
-              'revision_id': revisionId,
-              'resolution_status':
-                  FixedCommitmentResolutionStatus.requiresReview.storageValue,
-              'review_reason':
-                  FixedCommitmentReviewReason.amountConflict.storageValue,
-              'matched_transaction_family_uuid': null,
-              'resolved_ms': null,
-              'updated_ms': nowMs,
-            },
-            where: 'id = ?',
-            whereArgs: [id],
-          );
-        }
-        continue;
-      }
-      final dueDay = budgetCivilDayKey(
-        _fixedTemplateDueDate(plan, cycle, template),
-      );
-      final amountChanged = row['planned_cents'] != template.plannedCents ||
-          row['due_day'] != dueDay;
-      final updates = <String, Object?>{
-        'revision_id': revisionId,
-        'planned_cents': template.plannedCents,
-        'due_day': dueDay,
-        'updated_ms': nowMs,
-      };
-      if (amountChanged && !untouched) {
-        updates.addAll({
-          'resolution_status':
-              FixedCommitmentResolutionStatus.requiresReview.storageValue,
-          'review_reason':
-              FixedCommitmentReviewReason.amountConflict.storageValue,
-          'matched_transaction_family_uuid': null,
-          'resolved_ms': null,
-        });
-      }
-      await txn.update(
-        'budget_fixed_commitment_occurrences',
-        updates,
-        where: 'id = ?',
-        whereArgs: [id],
-      );
-    }
-    await _insertBudgetOccurrencesForRevision(
-      txn,
-      plan: plan,
-      revisionId: revisionId,
-      cycle: cycle,
-      templates: remaining.values,
-      nowMs: nowMs,
-    );
-  }
-
-  Future<int> addBudgetPlanV2({
-    required int bookId,
-    required String name,
-    required BudgetPlanCadenceV2 cadence,
-    required int totalCents,
-    Map<String, int> categoryBudgetsCents = const {},
-    int? monthlyIncomeCents,
-    List<BudgetFixedTemplateV2> fixedTemplates = const [],
-    int monthStartDay = 1,
-    int weekStart = DateTime.monday,
-    bool startNextCycle = true,
-  }) async {
-    if (cadence == BudgetPlanCadenceV2.oneOff) {
-      throw ArgumentError('一次性计划请使用专项追踪。');
-    }
-    if (!_books.any((book) => book.id == bookId)) {
-      throw ArgumentError('预算必须选择一个明确账本');
-    }
-    if (totalCents <= 0 ||
-        categoryBudgetsCents.values.fold<int>(0, (a, b) => a + b) >
-            totalCents ||
-        fixedTemplates.fold<int>(0, (sum, item) => sum + item.plannedCents) >
-            totalCents) {
-      throw ArgumentError('预算总额、分类额度或固定支出不合法');
-    }
-    final now = DateTime.now();
-    final nowMs = now.millisecondsSinceEpoch;
-    final cycle = _budgetCycleForStartChoice(
-      cadence: cadence,
-      now: now,
-      monthStartDay: monthStartDay,
-      weekStart: weekStart,
-      nextCycle: startNextCycle,
-    );
-    final alreadyCoversStart = _budgetPlansV2.any((plan) =>
-        plan.isPrimary && plan.bookId == bookId && plan.covers(cycle.start));
-    if (alreadyCoversStart) {
-      throw StateError('这个周期已有主预算记录，请调整现有计划，或选择下周期生效。');
-    }
-    final futurePlans = _budgetPlansV2
-        .where((plan) =>
-            plan.isPrimary &&
-            plan.bookId == bookId &&
-            plan.status == BudgetPlanStatusV2.active &&
-            plan.anchorStart.isAfter(cycle.start) &&
-            (plan.endInclusive == null ||
-                !plan.endInclusive!.isBefore(cycle.start)))
-        .toList();
-    // A plan scheduled for the next cycle must not lock the current cycle out.
-    // Keep that future plan intact and make this one a bounded bridge ending
-    // the day before the earliest scheduled plan starts.
-    DateTime? nextPlanStart;
-    for (final plan in futurePlans) {
-      if (nextPlanStart == null || plan.anchorStart.isBefore(nextPlanStart)) {
-        nextPlanStart = plan.anchorStart;
-      }
-    }
-    final bridgeEndInclusive = nextPlanStart?.subtract(const Duration(days: 1));
-    late final int planId;
-    await _db!.transaction((txn) async {
-      planId = await txn.insert('budget_plans', {
-        'uuid': _newUuid(),
-        'book_id': bookId,
-        'currency_code': 'CNY',
-        'timezone': 'device_local',
-        'name': name.trim(),
-        'role': 'primary',
-        'cadence': cadence.storageKey,
-        'anchor_start_day': cycle.startDayKey,
-        'month_start_day':
-            cadence == BudgetPlanCadenceV2.monthly ? monthStartDay : null,
-        'week_start': cadence == BudgetPlanCadenceV2.weekly ? weekStart : null,
-        'end_day': bridgeEndInclusive == null
-            ? null
-            : budgetCivilDayKey(bridgeEndInclusive),
-        'status': BudgetPlanStatusV2.active.storageKey,
-        'created_ms': nowMs,
-        'updated_ms': nowMs,
-      });
-      final revisionId = await txn.insert('budget_plan_revisions', {
-        'uuid': _newUuid(),
-        'plan_id': planId,
-        'effective_cycle_start_day': cycle.startDayKey,
-        'effective_to_cycle_start_day': null,
-        'amount_cents': totalCents,
-        'category_budgets_json':
-            _encodeBudgetCategoryCents(categoryBudgetsCents),
-        'monthly_income_cents': monthlyIncomeCents,
-        'fixed_templates_json': _encodeBudgetFixedTemplates(fixedTemplates),
-        'legacy_source_period_id': null,
-        'created_ms': nowMs,
-        'updated_ms': nowMs,
-      });
-      final persistedPlan = BudgetPlanV2(
-        id: planId,
-        uuid: 'pending-$planId',
-        bookId: bookId,
-        cadence: cadence,
-        anchorStart: cycle.start,
-        monthStartDay:
-            cadence == BudgetPlanCadenceV2.monthly ? monthStartDay : null,
-        weekStart: cadence == BudgetPlanCadenceV2.weekly ? weekStart : null,
-        endInclusive: bridgeEndInclusive,
-      );
-      await _insertBudgetOccurrencesForRevision(
-        txn,
-        plan: persistedPlan,
-        revisionId: revisionId,
-        cycle: BudgetPlanCycleV2(
-          planId: planId,
-          start: cycle.start,
-          endExclusive: cycle.endExclusive,
-        ),
-        templates: fixedTemplates,
-        nowMs: nowMs,
-      );
-      await txn.insert('budget_change_events', {
-        'uuid': _newUuid(),
-        'plan_id': planId,
-        'event_type': 'plan_created',
-        'before_json': '',
-        'after_json': jsonEncode({
-          'total_cents': totalCents,
-          'effective_cycle_start_day': cycle.startDayKey,
-        }),
-        'created_ms': nowMs,
-      });
-    });
-    await _loadBudgetV2();
-    notifyListeners();
-    return planId;
-  }
-
-  Future<int> addBudgetPlanRevisionV2({
-    required int planId,
-    required int totalCents,
-    Map<String, int> categoryBudgetsCents = const {},
-    int? monthlyIncomeCents,
-    List<BudgetFixedTemplateV2> fixedTemplates = const [],
-    DateTime? effectiveCycleStart,
-  }) async {
-    final plan = _budgetPlansV2.where((item) => item.id == planId).firstOrNull;
-    if (plan == null) throw StateError('预算计划不存在');
-    final current = plan.cycleFor(DateTime.now());
-    final start = effectiveCycleStart ?? current.endExclusive;
-    final cycle = plan.cycleFor(start);
-    if (cycle.start != DateTime(start.year, start.month, start.day)) {
-      throw ArgumentError('预算修订只能从完整周期边界生效');
-    }
-    if (totalCents <= 0 ||
-        categoryBudgetsCents.values.fold<int>(0, (a, b) => a + b) >
-            totalCents ||
-        fixedTemplates.fold<int>(0, (sum, item) => sum + item.plannedCents) >
-            totalCents) {
-      throw ArgumentError('预算修订金额不合法');
-    }
-    final nowMs = DateTime.now().millisecondsSinceEpoch;
-    late final int revisionId;
-    await _db!.transaction((txn) async {
-      final existing = await txn.query(
-        'budget_plan_revisions',
-        where: 'plan_id = ? AND effective_cycle_start_day = ?',
-        whereArgs: [planId, cycle.startDayKey],
-        limit: 1,
-      );
-      final revisionPayload = <String, Object?>{
-        'amount_cents': totalCents,
-        'category_budgets_json':
-            _encodeBudgetCategoryCents(categoryBudgetsCents),
-        'monthly_income_cents': monthlyIncomeCents,
-        'fixed_templates_json': _encodeBudgetFixedTemplates(fixedTemplates),
-        'updated_ms': nowMs,
-      };
-      if (existing.isEmpty) {
-        await txn.update(
-          'budget_plan_revisions',
-          {
-            'effective_to_cycle_start_day': cycle.startDayKey,
-            'updated_ms': nowMs,
-          },
-          where:
-              'plan_id = ? AND effective_to_cycle_start_day IS NULL AND effective_cycle_start_day < ?',
-          whereArgs: [planId, cycle.startDayKey],
-        );
-        revisionId = await txn.insert('budget_plan_revisions', {
-          'uuid': _newUuid(),
-          'plan_id': planId,
-          'effective_cycle_start_day': cycle.startDayKey,
-          'effective_to_cycle_start_day': null,
-          ...revisionPayload,
-          'legacy_source_period_id': null,
-          'created_ms': nowMs,
-        });
-      } else {
-        revisionId = existing.first['id'] as int;
-        await txn.update(
-          'budget_plan_revisions',
-          revisionPayload,
-          where: 'id = ?',
-          whereArgs: [revisionId],
-        );
-      }
-      await _syncBudgetOccurrencesForRevision(
-        txn,
-        plan: plan,
-        revisionId: revisionId,
-        cycle: cycle,
-        templates: fixedTemplates,
-        nowMs: nowMs,
-      );
-      await txn.insert('budget_change_events', {
-        'uuid': _newUuid(),
-        'plan_id': planId,
-        'event_type':
-            existing.isEmpty ? 'revision_created' : 'revision_updated',
-        'before_json': existing.isEmpty ? '' : jsonEncode(existing.first),
-        'after_json': jsonEncode({
-          'revision_id': revisionId,
-          'total_cents': totalCents,
-          'effective_cycle_start_day': cycle.startDayKey,
-        }),
-        'created_ms': nowMs,
-      });
-    });
-    await _loadBudgetV2();
-    notifyListeners();
-    return revisionId;
-  }
-
-  Future<void> upsertBudgetCycleOverrideV2({
-    required int planId,
-    required DateTime cycleStart,
-    required int targetAmountCents,
-    Map<String, int>? categoryBudgetsCents,
-    BudgetOverrideIntent inputIntent = BudgetOverrideIntent.replaceTotal,
-    int? inputDeltaCents,
-  }) async {
-    final plan = _budgetPlansV2.where((item) => item.id == planId).firstOrNull;
-    if (plan == null) throw StateError('预算计划不存在');
-    final cycle = plan.cycleFor(cycleStart);
-    if (cycle.start !=
-        DateTime(cycleStart.year, cycleStart.month, cycleStart.day)) {
-      throw ArgumentError('本周期调整必须指向完整周期起点');
-    }
-    final categories = categoryBudgetsCents ??
-        _budgetPlanRevisionsV2
-            .where((revision) => revision.appliesTo(cycle))
-            .lastOrNull
-            ?.categoryBudgetsCents ??
-        const <String, int>{};
-    if (targetAmountCents < 0 ||
-        categories.values.fold<int>(0, (a, b) => a + b) > targetAmountCents) {
-      throw ArgumentError('调整后的分类额度超过了周期总额');
-    }
-    final nowMs = DateTime.now().millisecondsSinceEpoch;
-    await _db!.transaction((txn) async {
-      final existing = await txn.query(
-        'budget_cycle_overrides',
-        where: 'plan_id = ? AND cycle_start_day = ?',
-        whereArgs: [planId, cycle.startDayKey],
-        limit: 1,
-      );
-      final payload = {
-        'uuid': existing.isEmpty ? _newUuid() : existing.first['uuid'],
-        'plan_id': planId,
-        'cycle_start_day': cycle.startDayKey,
-        'cycle_end_day': cycle.endDayKey,
-        'target_amount_cents': targetAmountCents,
-        'category_budgets_json': categoryBudgetsCents == null
-            ? null
-            : _encodeBudgetCategoryCents(categoryBudgetsCents),
-        'input_intent': inputIntent.storageKey,
-        'input_delta_cents': inputDeltaCents,
-        'created_ms': existing.isEmpty
-            ? nowMs
-            : existing.first['created_ms'] as int? ?? nowMs,
-        'updated_ms': nowMs,
-      };
-      await txn.insert(
-        'budget_cycle_overrides',
-        payload,
-        conflictAlgorithm: ConflictAlgorithm.replace,
-      );
-      await txn.insert('budget_change_events', {
-        'uuid': _newUuid(),
-        'plan_id': planId,
-        'event_type': 'cycle_override_saved',
-        'before_json': existing.isEmpty ? '' : jsonEncode(existing.first),
-        'after_json': jsonEncode(payload),
-        'created_ms': nowMs,
-      });
-    });
-    await _loadBudgetV2();
-    notifyListeners();
-  }
-
-  Future<void> archiveBudgetPlanV2(int planId) async {
-    final plan = _budgetPlansV2.where((item) => item.id == planId).firstOrNull;
-    if (plan == null || plan.status == BudgetPlanStatusV2.archived) return;
-    final today = DateTime.now();
-    final cycle = plan.cycleFor(today);
-    final archiveEnd = plan.isSpecial
-        ? budgetCivilDayKey(plan.endInclusive!)
-        : today.isBefore(plan.anchorStart)
-            ? null
-            : cycle.endDayKey;
-    final nowMs = max(
-      DateTime.now().millisecondsSinceEpoch,
-      plan.updatedMs + 1,
-    );
-    await _db!.transaction((txn) async {
-      await txn.update(
-        'budget_plans',
-        {
-          'status': BudgetPlanStatusV2.archived.storageKey,
-          'end_day': archiveEnd,
-          'updated_ms': nowMs,
-        },
-        where: 'id = ?',
-        whereArgs: [planId],
-      );
-      await txn.insert('budget_change_events', {
-        'uuid': _newUuid(),
-        'plan_id': planId,
-        'event_type': 'plan_archived',
-        'before_json': jsonEncode({'status': plan.status.storageKey}),
-        'after_json': jsonEncode({
-          'status': BudgetPlanStatusV2.archived.storageKey,
-          'end_day': archiveEnd,
-        }),
-        'created_ms': nowMs,
-      });
-    });
-    await _loadBudgetV2();
-    notifyListeners();
-  }
-
-  int _familyNetAt(
-    ConsumptionExpenseFamily family,
-    DateTime knowledgeCutoff,
-  ) {
-    if (family.createdAt.isAfter(knowledgeCutoff)) return 0;
-    final refunds = family.refunds
-        .where((refund) => !refund.createdAt.isAfter(knowledgeCutoff))
-        .fold<int>(0, (sum, refund) => sum + refund.amountMinor);
-    return max(0, family.originalAmountMinor - refunds);
-  }
-
-  List<FixedCommitmentEvaluation> budgetFixedEvaluationsForCycle(
-    int planId,
-    DateTime cycleStart, {
-    DateTime? asOf,
-    DateTime? knowledgeCutoff,
-  }) {
-    final plan = _budgetPlansV2.where((item) => item.id == planId).firstOrNull;
-    if (plan == null) return const [];
-    final queryAsOf = asOf ?? DateTime.now();
-    final cutoff = knowledgeCutoff ?? DateTime.now();
-    final families = _budgetExpenseFamiliesForBook(plan.bookId);
-    final familyById = {for (final family in families) family.id: family};
-    final entities = budgetFixedOccurrencesV2For(
-      planId,
-      cycleStart: cycleStart,
-    );
-    final coreOccurrences = entities.map((item) => item.occurrence).toList();
-    return [
-      for (final entity in entities)
-        (() {
-          final occurrence = entity.occurrence;
-          final familyId = occurrence.matchedTransactionFamilyId;
-          final family = familyId == null ? null : familyById[familyId];
-          var exclusive = false;
-          var familyNet = 0;
-          var attributionOccurred = false;
-          var refundReview = occurrence.reviewReason ==
-              FixedCommitmentReviewReason.refundAfterMatch;
-          if (family != null) {
-            final candidate = FixedCommitmentFamilyCandidate(
-              familyId: family.id,
-              bookId: plan.bookId,
-              currencyCode: family.currencyCode,
-              attributionDate: family.attributionDate,
-            );
-            exclusive = FixedCommitmentLinkValidator.validateLink(
-              occurrence: occurrence,
-              candidate: candidate,
-              existingOccurrences: coreOccurrences,
-            ).isValid;
-            familyNet = _familyNetAt(family, cutoff);
-            attributionOccurred = !family.attributionDate.isAfter(queryAsOf);
-            final resolvedMs = occurrence.resolvedMs ?? 0;
-            if (family.refunds.any((refund) =>
-                refund.createdAt.millisecondsSinceEpoch > resolvedMs &&
-                !refund.createdAt.isAfter(cutoff))) {
-              refundReview = true;
-            }
-          }
-          return FixedCommitmentCalculator.evaluate(
-            occurrence: occurrence,
-            asOf: queryAsOf,
-            exclusiveLinked: exclusive,
-            familyNetCents: familyNet,
-            attributionOccurred: attributionOccurred,
-            refundAfterMatchReview: refundReview,
-          );
-        })(),
-    ];
-  }
-
-  List<TransactionEntity> budgetFixedMatchCandidates(
-    BudgetFixedOccurrenceEntity entity,
-  ) {
-    final plan =
-        _budgetPlansV2.where((item) => item.id == entity.planId).firstOrNull;
-    if (plan == null) return const [];
-    final allowedBooks = _bookIdsForView(plan.bookId).toSet();
-    final linkedFamilies = {
-      for (final item in _budgetFixedOccurrencesV2)
-        if (item.planId == plan.id &&
-            item.id != entity.id &&
-            item.matchedTransactionFamilyId != null)
-          item.matchedTransactionFamilyId!,
-    };
-    final candidates = _globalVisibleTransactions.where((transaction) {
-      if (transaction.txKind != TransactionKind.expense ||
-          transaction.amount <= Decimal.zero ||
-          transaction.bookId == null ||
-          !allowedBooks.contains(transaction.bookId) ||
-          transaction.currencyCode != plan.currencyCode) {
-        return false;
-      }
-      final day = DateTime(
-        transaction.date.year,
-        transaction.date.month,
-        transaction.date.day,
-      );
-      if (day.isBefore(entity.occurrence.cycleStart) ||
-          day.isAfter(entity.occurrence.cycleEnd)) {
-        return false;
-      }
-      final familyId = transaction.uuid.isEmpty
-          ? transaction.id.toString()
-          : transaction.uuid;
-      return !linkedFamilies.contains(familyId);
-    }).toList()
-      ..sort((left, right) => right.dateMs.compareTo(left.dateMs));
-    return List.unmodifiable(candidates);
-  }
-
-  Future<void> matchBudgetFixedOccurrence(
-    int occurrenceId,
-    String familyId,
-  ) async {
-    final entity = _budgetFixedOccurrencesV2
-        .where((item) => item.id == occurrenceId)
-        .firstOrNull;
-    if (entity == null) throw StateError('固定支出周期记录不存在');
-    final plan =
-        _budgetPlansV2.where((item) => item.id == entity.planId).firstOrNull;
-    if (plan == null) throw StateError('预算计划不存在');
-    final family = _budgetExpenseFamiliesForBook(plan.bookId)
-        .where((item) => item.id == familyId)
-        .firstOrNull;
-    if (family == null) throw StateError('匹配账单不存在');
-    final validation = FixedCommitmentLinkValidator.validateLink(
-      occurrence: entity.occurrence,
-      candidate: FixedCommitmentFamilyCandidate(
-        familyId: family.id,
-        bookId: plan.bookId,
-        currencyCode: family.currencyCode,
-        attributionDate: family.attributionDate,
-      ),
-      existingOccurrences:
-          _budgetFixedOccurrencesV2.map((item) => item.occurrence),
-    );
-    if (!validation.isValid) {
-      throw StateError('这笔账不在固定支出的账本、币种或周期范围内，或已匹配其他承诺。');
-    }
-    final nowMs = DateTime.now().millisecondsSinceEpoch;
-    await _db!.transaction((txn) async {
-      await txn.update(
-        'budget_fixed_commitment_occurrences',
-        {
-          'resolution_status':
-              FixedCommitmentResolutionStatus.matched.storageValue,
-          'review_reason': '',
-          'matched_transaction_family_uuid': familyId,
-          'resolved_ms': nowMs,
-          'updated_ms': nowMs,
-        },
-        where: 'id = ?',
-        whereArgs: [occurrenceId],
-      );
-      await txn.insert('budget_change_events', {
-        'uuid': _newUuid(),
-        'plan_id': entity.planId,
-        'event_type': 'occurrence_matched',
-        'before_json': jsonEncode({
-          'occurrence_id': occurrenceId,
-          'family_id': entity.matchedTransactionFamilyId,
-        }),
-        'after_json': jsonEncode({
-          'occurrence_id': occurrenceId,
-          'family_id': familyId,
-        }),
-        'created_ms': nowMs,
-      });
-    });
-    await _loadBudgetV2();
-    notifyListeners();
-  }
-
-  Future<void> skipBudgetFixedOccurrence(int occurrenceId) =>
-      _setBudgetFixedOccurrenceResolution(
-        occurrenceId,
-        status: FixedCommitmentResolutionStatus.skipped,
-        eventType: 'occurrence_skipped',
-      );
-
-  Future<void> resetBudgetFixedOccurrence(int occurrenceId) =>
-      _setBudgetFixedOccurrenceResolution(
-        occurrenceId,
-        status: FixedCommitmentResolutionStatus.planned,
-        eventType: 'occurrence_reset',
-      );
-
-  Future<void> acceptBudgetFixedRefundReview(int occurrenceId) async {
-    final entity = _budgetFixedOccurrencesV2
-        .where((item) => item.id == occurrenceId)
-        .firstOrNull;
-    if (entity == null ||
-        entity.occurrence.reviewReason !=
-            FixedCommitmentReviewReason.refundAfterMatch ||
-        entity.matchedTransactionFamilyId == null) {
-      throw StateError('这条固定支出没有可确认的退款差额');
-    }
-    final nowMs = DateTime.now().millisecondsSinceEpoch;
-    await _db!.update(
-      'budget_fixed_commitment_occurrences',
-      {
-        'resolution_status':
-            FixedCommitmentResolutionStatus.matched.storageValue,
-        'review_reason': '',
-        'resolved_ms': nowMs,
-        'updated_ms': nowMs,
-      },
-      where: 'id = ?',
-      whereArgs: [occurrenceId],
-    );
-    await _loadBudgetV2();
-    notifyListeners();
-  }
-
-  Future<void> _setBudgetFixedOccurrenceResolution(
-    int occurrenceId, {
-    required FixedCommitmentResolutionStatus status,
-    required String eventType,
-  }) async {
-    final entity = _budgetFixedOccurrencesV2
-        .where((item) => item.id == occurrenceId)
-        .firstOrNull;
-    if (entity == null) throw StateError('固定支出周期记录不存在');
-    final nowMs = DateTime.now().millisecondsSinceEpoch;
-    await _db!.transaction((txn) async {
-      await txn.update(
-        'budget_fixed_commitment_occurrences',
-        {
-          'resolution_status': status.storageValue,
-          'review_reason': '',
-          'matched_transaction_family_uuid': null,
-          'resolved_ms':
-              status == FixedCommitmentResolutionStatus.skipped ? nowMs : null,
-          'updated_ms': nowMs,
-        },
-        where: 'id = ?',
-        whereArgs: [occurrenceId],
-      );
-      await txn.insert('budget_change_events', {
-        'uuid': _newUuid(),
-        'plan_id': entity.planId,
-        'event_type': eventType,
-        'before_json': jsonEncode({
-          'status': entity.resolutionStatus.storageValue,
-          'family_id': entity.matchedTransactionFamilyId,
-        }),
-        'after_json': jsonEncode({'status': status.storageValue}),
-        'created_ms': nowMs,
-      });
-    });
-    await _loadBudgetV2();
-    notifyListeners();
-  }
-
-  Future<void> _markBudgetOccurrenceRefundReview(
-    TransactionEntity root,
-  ) async {
-    final familyId = root.uuid.isEmpty ? root.id.toString() : root.uuid;
-    final nowMs = DateTime.now().millisecondsSinceEpoch;
-    await _db!.update(
-      'budget_fixed_commitment_occurrences',
-      {
-        'resolution_status':
-            FixedCommitmentResolutionStatus.requiresReview.storageValue,
-        'review_reason':
-            FixedCommitmentReviewReason.refundAfterMatch.storageValue,
-        'updated_ms': nowMs,
-      },
-      where: 'matched_transaction_family_uuid = ? AND resolution_status = ?',
-      whereArgs: [
-        familyId,
-        FixedCommitmentResolutionStatus.matched.storageValue,
-      ],
-    );
-    await _loadBudgetV2();
-  }
-
-  Future<void> _refreshBudgetOccurrenceRefundReview(int rootId) async {
-    final root = _allTransactions
-        .where((transaction) => transaction.id == rootId)
-        .firstOrNull;
-    if (root == null) return;
-    final familyId = root.uuid.isEmpty ? root.id.toString() : root.uuid;
-    final refunds = _allTransactions
-        .where((transaction) => transaction.refundOf == rootId)
-        .toList();
-    final occurrences = _budgetFixedOccurrencesV2.where((item) =>
-        item.matchedTransactionFamilyId == familyId &&
-        (item.resolutionStatus == FixedCommitmentResolutionStatus.matched ||
-            item.occurrence.reviewReason ==
-                FixedCommitmentReviewReason.refundAfterMatch));
-    final nowMs = DateTime.now().millisecondsSinceEpoch;
-    await _db!.transaction((txn) async {
-      for (final occurrence in occurrences) {
-        final resolvedMs = occurrence.resolvedMs ?? 0;
-        final hasUnreviewedRefund = refunds.any(
-          (refund) => refund.createdMs > resolvedMs,
-        );
-        await txn.update(
-          'budget_fixed_commitment_occurrences',
-          {
-            'resolution_status': (hasUnreviewedRefund
-                    ? FixedCommitmentResolutionStatus.requiresReview
-                    : FixedCommitmentResolutionStatus.matched)
-                .storageValue,
-            'review_reason': hasUnreviewedRefund
-                ? FixedCommitmentReviewReason.refundAfterMatch.storageValue
-                : '',
-            'updated_ms': nowMs,
-          },
-          where: 'id = ?',
-          whereArgs: [occurrence.id],
-        );
-      }
-    });
-    await _loadBudgetV2();
-  }
-
-  /// 新建一条预算期间，返回 id。
-  Future<int> addBudgetPeriod({
-    int? bookId,
-    required DateTime start,
-    DateTime? end,
-    bool recurringMonthly = true,
-    required Decimal total,
-    Map<String, Decimal> categoryBudgets = const {},
-    Decimal? monthlyIncome,
-    List<(String, Decimal)> fixedExpenses = const [],
-  }) async {
-    final p = BudgetPeriod(
-      id: 0,
-      bookId: bookId,
-      start: DateTime(start.year, start.month, start.day),
-      end: end == null ? null : DateTime(end.year, end.month, end.day),
-      recurringMonthly: recurringMonthly,
-      total: total,
-      categoryBudgets: categoryBudgets,
-      monthlyIncome: monthlyIncome,
-      fixedExpenses: fixedExpenses,
-    );
-    final id = await _db!.insert('budget_periods', {
-      'book_id': bookId,
-      'start_ms': p.start.millisecondsSinceEpoch,
-      'end_ms': p.end?.millisecondsSinceEpoch,
-      'recurring_monthly': recurringMonthly ? 1 : 0,
-      'total': total.toString(),
-      'category_budgets':
-          categoryBudgets.isEmpty ? '' : p.categoryBudgetsJson(),
-      'monthly_income': monthlyIncome?.toString() ?? '',
-      'fixed_expenses': fixedExpenses.isEmpty ? '' : p.fixedExpensesJson(),
-      'created_ms': AppClock.now.millisecondsSinceEpoch,
-    });
-    await _loadBudgetPeriods();
-    notifyListeners();
-    return id;
-  }
-
-  /// 编辑既有预算计划（整条覆盖式更新，id 不变）。
-  Future<void> updateBudgetPeriod(
-    int id, {
-    int? bookId,
-    required DateTime start,
-    DateTime? end,
-    bool recurringMonthly = true,
-    required Decimal total,
-    Map<String, Decimal> categoryBudgets = const {},
-    Decimal? monthlyIncome,
-    List<(String, Decimal)> fixedExpenses = const [],
-  }) async {
-    final p = BudgetPeriod(
-      id: id,
-      bookId: bookId,
-      start: DateTime(start.year, start.month, start.day),
-      end: end == null ? null : DateTime(end.year, end.month, end.day),
-      recurringMonthly: recurringMonthly,
-      total: total,
-      categoryBudgets: categoryBudgets,
-      monthlyIncome: monthlyIncome,
-      fixedExpenses: fixedExpenses,
-    );
-    await _db!.update(
-      'budget_periods',
-      {
-        'book_id': bookId,
-        'start_ms': p.start.millisecondsSinceEpoch,
-        'end_ms': p.end?.millisecondsSinceEpoch,
-        'recurring_monthly': recurringMonthly ? 1 : 0,
-        'total': total.toString(),
-        'category_budgets':
-            categoryBudgets.isEmpty ? '' : p.categoryBudgetsJson(),
-        'monthly_income': monthlyIncome?.toString() ?? '',
-        'fixed_expenses': fixedExpenses.isEmpty ? '' : p.fixedExpensesJson(),
-      },
-      where: 'id = ?',
-      whereArgs: [id],
-    );
-    await _loadBudgetPeriods();
-    notifyListeners();
-  }
-
-  Future<void> deleteBudgetPeriod(int id) async {
-    await _db!.delete('budget_periods', where: 'id = ?', whereArgs: [id]);
-    await _loadBudgetPeriods();
-    notifyListeners();
   }
 
   // ---------------------------------------------------------------------------
@@ -25042,46 +23694,15 @@ class AppRepository extends ChangeNotifier {
           ids,
         )) ??
         0;
-    final budgetKeys = targets.map((category) => category.key).toSet();
-    var hasBudget = false;
-    final budgetRows = await _db!.query(
-      'budget_periods',
-      columns: ['category_budgets'],
-      where: "category_budgets <> ''",
-    );
-    for (final row in budgetRows) {
-      try {
-        final decoded = jsonDecode(row['category_budgets'] as String);
-        if (decoded is Map &&
-            decoded.keys.any((key) => budgetKeys.contains(key))) {
-          hasBudget = true;
-          break;
-        }
-      } catch (_) {}
+    if (transactionCount > 0 || recurringCount > 0) {
+      throw StateError('这个分类仍被账单或定时记账使用，请先隐藏或合并。');
     }
-    final revisionRows = await _db!.query(
-      'budget_plan_revisions',
-      columns: ['category_budgets_json'],
-      where: "category_budgets_json <> '{}'",
-    );
-    for (final row in revisionRows) {
-      try {
-        final decoded = jsonDecode(row['category_budgets_json'] as String);
-        if (decoded is Map &&
-            decoded.keys.any((key) => budgetKeys.contains(key))) {
-          hasBudget = true;
-          break;
-        }
-      } catch (_) {}
-    }
-    if (transactionCount > 0 || recurringCount > 0 || hasBudget) {
-      throw StateError('这个分类仍被账单、定时记账、或分类预算使用，请先隐藏或合并。');
-    }
+    final categoryKeys = targets.map((category) => category.key).toSet();
     await _db!.transaction((txn) async {
       await txn.delete('category_memory',
           where:
-              'category_key IN (${List.filled(budgetKeys.length, '?').join(',')})',
-          whereArgs: budgetKeys.toList());
+              'category_key IN (${List.filled(categoryKeys.length, '?').join(',')})',
+          whereArgs: categoryKeys.toList());
       await txn.delete('categories', where: 'id IN ($marks)', whereArgs: ids);
     });
     await _loadCategories();
@@ -25223,8 +23844,6 @@ class AppRepository extends ChangeNotifier {
     await _loadCategories();
     await _loadCategoryMemory();
     await _loadRecurringRules();
-    await _loadBudgetPeriods();
-    await _loadBudgetV2();
     await _loadTransactions();
     notifyListeners();
   }

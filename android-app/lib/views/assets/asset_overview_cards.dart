@@ -4,7 +4,7 @@ import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
 
 import '../../core/account/net_worth_verified_checkpoint.dart';
-import '../../core/budget/budget_window_resolver.dart';
+import '../../core/money_cents.dart';
 import '../../core/money_format.dart';
 import '../../data/app_repository.dart';
 import '../../theme/app_colors.dart';

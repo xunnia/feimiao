@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:qingji/core/account/account_activity.dart';
 import 'package:qingji/core/account/account_movement_projection.dart';
-import 'package:qingji/core/budget/budget_window_resolver.dart';
+import 'package:qingji/core/money_cents.dart';
 import 'package:qingji/core/money_format.dart';
 import 'package:qingji/core/models/transaction_kind.dart';
 import 'package:qingji/views/assets/account_activity_list.dart';

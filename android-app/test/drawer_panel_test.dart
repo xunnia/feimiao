@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
-import 'package:qingji/core/budget/budget_window_resolver.dart';
 import 'package:qingji/data/app_repository.dart';
 import 'package:qingji/main.dart' as app;
 import 'package:qingji/theme/app_theme_controller.dart';
@@ -31,22 +30,6 @@ class _DrawerRepo extends AppRepository {
 
   @override
   int get defaultBookId => 1;
-
-  // 夹具只覆盖了 currentBookId 的 getter，仓库内部 id 仍是 0；预算查询
-  // 要求正数 id，这里显式带上夹具账本。
-  @override
-  BudgetWindowResult budgetForCalendarMonth(
-    DateTime month, {
-    int? bookId,
-    DateTime? asOf,
-    DateTime? knowledgeCutoff,
-  }) =>
-      super.budgetForCalendarMonth(
-        month,
-        bookId: bookId ?? 1,
-        asOf: asOf,
-        knowledgeCutoff: knowledgeCutoff,
-      );
 }
 
 Future<void> _pumpOpenDrawer(WidgetTester tester, {String nickname = ''}) async {

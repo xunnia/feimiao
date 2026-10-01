@@ -4,7 +4,7 @@ import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 
 import '../../core/account/net_worth_snapshot.dart';
-import '../../core/budget/budget_window_resolver.dart';
+import '../../core/money_cents.dart';
 import '../../core/money_format.dart';
 import '../../theme/app_colors.dart';
 import '../../theme/app_tokens.dart';
