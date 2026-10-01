@@ -12,16 +12,16 @@
     "cleanSourceAnchor": "b40316f336fb0aefabf67817460775b665fdaa1d",
     "integrationBranch": "main",
     "android": {
-      "version": "1.307.0+322",
-      "watermark": "b0930-322",
+      "version": "1.308.0+323",
+      "watermark": "b1001-323",
       "databaseVersion": 50,
-      "sourceCommit": "a6cc25c3dc0fbd93f62b6e83ef3471e8501d5e20",
-      "apk": "ci-artifacts/releases/feimiao-codex-v1.307.0-322.apk",
-      "apkBytes": 117868695,
-      "apkSha256": "A1FAFD833B572FEDD8DC14B05B1ED404332740225FB4C26176BB50D0261DEEEE",
-      "apkSourceNote": "Released 322 APK built from sourceCommit plus the 322 version bump. Screenshot runs build the checked-out source.",
+      "sourceCommit": "e3259e72f4c4592377b57c32efb44b99071fe978",
+      "apk": "ci-artifacts/releases/feimiao-codex-v1.308.0-323.apk",
+      "apkBytes": 117262031,
+      "apkSha256": "8217DF5A9E91CD75C77019E1D377081665E71A1FF848D896B2E1863BD67CAD0D",
+      "apkSourceNote": "Released 323 APK built from sourceCommit plus the 323 version bump. Screenshot runs build the checked-out source.",
       "staticAnalysis": "0 errors; 89 warning/info diagnostics",
-      "tests": "1337/1337 passed locally on Windows"
+      "tests": "1290/1290 passed locally on Windows"
     },
     "ios": {
       "version": "1.286.0+300",
