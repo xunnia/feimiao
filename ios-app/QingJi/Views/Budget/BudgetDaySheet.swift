@@ -9,12 +9,14 @@ struct BudgetDaySheet: View {
     let day: BudgetCivilDay
 
     @Environment(\.dismiss) private var dismiss
+    @AppThemeContext private var theme
     @Query(sort: \Book.sortOrder) private var books: [Book]
     @Query private var ruleRecords: [BudgetRuleRecord]
     @Query private var rolloverRecords: [BudgetRolloverChangeRecord]
     @Query(sort: \MoneyTransaction.date, order: .reverse) private var transactions: [MoneyTransaction]
     @State private var projectionCache = IOSLedgerProjectionCache()
     @State private var editingTransaction: MoneyTransaction?
+    @State private var referenceDate = AppClock.now
 
     private var title: String {
         "\(day.month)月\(day.day)日 周\(budgetWeekdayNames[day.weekday - 1])"
@@ -34,7 +36,7 @@ struct BudgetDaySheet: View {
     var body: some View {
         let snapshot = BudgetRuleStore.snapshot(
             rules: ruleRecords, rollovers: rolloverRecords, selectedBookID: selectedBookID,
-            books: books, transactions: transactions, year: day.year, month: day.month)
+            books: books, transactions: transactions, year: day.year, month: day.month, now: referenceDate)
         let info = snapshot.month.days.first { $0.day == day }
         let future = day > snapshot.today
         let spent = future ? 0 : snapshot.spendByDay[day.key] ?? 0
@@ -76,12 +78,22 @@ struct BudgetDaySheet: View {
                         }
                     }
                     if !dayTransactions.isEmpty {
-                        TransactionDayCard(
-                            day: day.date(calendar: calendar),
-                            items: dayTransactions,
-                            refundByID: refundByID,
-                            onSelect: { editingTransaction = $0 }
-                        )
+                        LazyVStack(spacing: 0) {
+                            ForEach(Array(dayTransactions.enumerated()), id: \.element.stableID) { index, transaction in
+                                if index > 0 { Divider().padding(.leading, 60) }
+                                Button { editingTransaction = transaction } label: {
+                                    TransactionRow(transaction: transaction,
+                                                   refundAmount: refundByID[transaction.stableID] ?? 0)
+                                        .padding(.horizontal, 14)
+                                        .padding(.vertical, 10)
+                                        .contentShape(Rectangle())
+                                }
+                                .buttonStyle(.plain)
+                                .accessibilityIdentifier("budget-day-transaction-\(transaction.stableID.uuidString.lowercased())")
+                            }
+                        }
+                        .appThemeCard()
+                        .accessibilityIdentifier("budget-day-transactions")
                     } else if !future {
                         Text("这天没有记支出")
                             .font(.caption)
@@ -91,19 +103,20 @@ struct BudgetDaySheet: View {
                 }
                 .padding(EdgeInsets(top: 4, leading: 16, bottom: 20, trailing: 16))
             }
-            .liquidGlassCanvas()
+            .background(theme.sheet.ignoresSafeArea())
             .navigationTitle(title)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("完成") { dismiss() }
-                        .liquidGlassPillControl(horizontalPadding: 12, minHeight: 40)
+                ToolbarItem(placement: .cancellationAction) {
+                    LiquidGlassIconButton(systemName: "xmark", accessibilityLabel: "关闭", size: 36) { dismiss() }
                 }
             }
             .sheet(item: $editingTransaction) { transaction in
                 EditTransactionSheet(transaction: transaction)
             }
         }
+        .presentationBackground(theme.sheet)
+        .appRefreshOnDayChange { referenceDate = AppClock.now }
     }
 
     private func stat(_ label: String, _ value: String, warning: Bool = false) -> some View {
@@ -118,6 +131,7 @@ struct BudgetDaySheet: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(EdgeInsets(top: 10, leading: 12, bottom: 10, trailing: 12))
-        .liquidGlassSurface(cornerRadius: 14)
+        .appThemeInput()
+        .accessibilityIdentifier("budget-day-stat-\(label)")
     }
 }

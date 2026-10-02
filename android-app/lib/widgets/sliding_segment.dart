@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../theme/app_colors.dart';
+
 /// 分段切换（全 App 统一用它，别再各写各的）。
 /// 2026-07-09 视觉升级批对齐参考图（iOS Cloudflare 客户端）：
 /// 外层**灰底**胶囊（不再白底描边，太显眼），选中项=**白色滑块**平滑滑动，
@@ -28,9 +30,8 @@ class SlidingSegment<T> extends StatelessWidget {
       height: 34,
       padding: const EdgeInsets.all(3),
       decoration: BoxDecoration(
-        color: isDark
-            ? Colors.white.withValues(alpha: 0.08)
-            : Colors.black.withValues(alpha: 0.055),
+        // 底轨跟主题走：暖橙出暖灰、简约白出中性灰（2026-10-01，原来一律冷黑透明）。
+        color: AppColors.segmentTrack(scheme),
         borderRadius: BorderRadius.circular(999),
       ),
       child: LayoutBuilder(
@@ -72,10 +73,15 @@ class SlidingSegment<T> extends StatelessWidget {
                         child: Center(
                           child: Text(
                             label,
+                            // iOS 分段控件：选中项半粗、未选中略淡。
                             style: TextStyle(
                               fontSize: 13,
-                              fontWeight: FontWeight.w400,
-                              color: scheme.onSurface,
+                              fontWeight: v == value
+                                  ? FontWeight.w600
+                                  : FontWeight.w400,
+                              color: v == value
+                                  ? scheme.onSurface
+                                  : scheme.onSurface.withValues(alpha: 0.62),
                             ),
                           ),
                         ),

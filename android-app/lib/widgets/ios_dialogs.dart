@@ -122,9 +122,9 @@ class FrostedDialogCard extends StatelessWidget {
               child: Container(
                 padding: padding,
                 decoration: BoxDecoration(
-                  color: dark
-                      ? const Color(0xFF332F2C).withValues(alpha: 0.84)
-                      : Colors.white.withValues(alpha: 0.82),
+                  // 跟主题走的弹窗底（暖橙=奶白、简约白=白、深色=提一档的页面底）。
+                  color: AppColors.sheetSurface(scheme)
+                      .withValues(alpha: dark ? 0.88 : 0.86),
                   borderRadius: BorderRadius.circular(26),
                   border: Border.all(color: AppColors.hairline(scheme)),
                 ),

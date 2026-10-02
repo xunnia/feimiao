@@ -388,7 +388,8 @@ class FeimiaoWidgetSnapshotBuilder {
     final categories = _topCategories(categoryTotals, monthExpense, privacy);
     final bookName = repo.currentBook?.name ?? '肥喵记账';
     final dateText = '${today.month}月${today.day}日';
-    final hasBudget = budget != null && budget > Decimal.zero;
+    final hasBudget = budgetSnapshot.hasBudget;
+    final budgetOver = hasBudget && budget! < budgetSpent;
     final overview = _overviewSnapshot(
       monthExpense: hasBudget ? budgetSpent : monthExpense,
       monthIncome: monthIncome,
@@ -418,7 +419,7 @@ class FeimiaoWidgetSnapshotBuilder {
       monthExpenseText: _money(monthExpense, privacy),
       monthIncomeText: _money(monthIncome, privacy),
       balanceText: _money(balance, privacy),
-      budgetTitle: hasBudget ? '预算剩余' : '本月支出',
+      budgetTitle: hasBudget ? (budgetOver ? '预算已超' : '预算剩余') : '本月支出',
       budgetText: budgetText,
       budgetHint: budgetHint,
       budgetProgress: budgetProgress,
@@ -450,10 +451,11 @@ class FeimiaoWidgetSnapshotBuilder {
     required int budgetProgress,
     required bool privacy,
   }) {
-    final hasBudget = budget != null && budget > Decimal.zero;
+    final hasBudget = budget != null;
+    final over = hasBudget && budget < monthExpense;
     final status = !hasBudget
         ? 'normal'
-        : budgetProgress >= 100
+        : over
             ? 'over'
             : budgetProgress >= 85
                 ? 'nearLimit'
@@ -464,9 +466,9 @@ class FeimiaoWidgetSnapshotBuilder {
         mode: privacy ? 'privacy' : 'budget',
         title: '预算概览',
         primary: FeimiaoWidgetMetricSnapshot(
-          label: '预算剩余',
+          label: over ? '预算已超' : '预算剩余',
           amountText: budgetText,
-          semanticText: '预算剩余$budgetText',
+          semanticText: '${over ? '预算已超' : '预算剩余'}$budgetText',
         ),
         secondary: [
           FeimiaoWidgetMetricSnapshot(
@@ -621,13 +623,14 @@ class FeimiaoWidgetSnapshotBuilder {
   }
 
   static int _budgetProgress(Decimal spent, Decimal? budget) {
-    if (budget == null || budget <= Decimal.zero) return 0;
+    if (budget == null) return 0;
+    if (budget <= Decimal.zero) return spent > budget ? 100 : 0;
     final ratio = MoneyFormat.toDouble(spent) / MoneyFormat.toDouble(budget);
     return (ratio.clamp(0.0, 1.0) * 100).round();
   }
 
   static String _budgetText(Decimal spent, Decimal? budget, bool privacy) {
-    if (budget == null || budget <= Decimal.zero) {
+    if (budget == null) {
       return privacy ? '••••' : _money(spent, false);
     }
     final remain = budget - spent;
@@ -641,7 +644,7 @@ class FeimiaoWidgetSnapshotBuilder {
     bool privacy, {
     int excludedForeignCount = 0,
   }) {
-    if (budget == null || budget <= Decimal.zero) {
+    if (budget == null) {
       return '未设置预算 · 已展示本月支出';
     }
     if (privacy) return '金额已隐藏 · 进度仍保留';

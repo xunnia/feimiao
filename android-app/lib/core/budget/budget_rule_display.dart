@@ -91,7 +91,9 @@ BudgetRuleSpan budgetRuleSpan(
   final calendar = BudgetRuleCalendar(rules);
   DateTime? takeover;
   for (final other in calendar.rules) {
-    if (!other.isBase || identical(other, rule) || other.id == rule.id) continue;
+    if (!other.isBase || identical(other, rule) || other.id == rule.id) {
+      continue;
+    }
     if (!other.outranks(rule)) continue;
     if (!other.startDate.isAfter(rule.startDate)) {
       // 从一开始就被接走了，一天都没管到。
@@ -125,7 +127,11 @@ BudgetRuleSpan budgetRuleSpan(
   }
   final text = '${_monthText(rule.startDate, withYear: withYear)}起';
   if (day.isBefore(rule.startDate)) {
-    return BudgetRuleSpan(BudgetRuleState.upcoming, text);
+    return BudgetRuleSpan(
+      BudgetRuleState.upcoming,
+      text,
+      effectiveEnd: takeover == null ? null : budgetAddDays(takeover, -1),
+    );
   }
   return BudgetRuleSpan(
     BudgetRuleState.active,
@@ -136,7 +142,8 @@ BudgetRuleSpan budgetRuleSpan(
 
 /// 规则列表排序：新建时间倒序（§6.8）。
 List<BudgetRule> budgetRulesNewestFirst(Iterable<BudgetRule> rules) =>
-    rules.toList()..sort((a, b) => b.outranks(a) ? 1 : (a.outranks(b) ? -1 : 0));
+    rules.toList()
+      ..sort((a, b) => b.outranks(a) ? 1 : (a.outranks(b) ? -1 : 0));
 
 /// 节奏一句话（§6.7）。
 ({String text, bool warning}) budgetPaceText(BudgetMonthResult month) {
@@ -146,8 +153,13 @@ List<BudgetRule> budgetRulesNewestFirst(Iterable<BudgetRule> rules) =>
   if (month.effectiveCents > 0 && remaining < month.effectiveCents / 10) {
     return remaining <= 0
         ? (text: '这个月已经超出预算啦', warning: true)
-        : (text: '只剩 ${budgetYuanText(budgetFloorYuanCents(remaining))} 啦', warning: true);
+        : (
+            text: '只剩 ${budgetYuanText(budgetFloorYuanCents(remaining))} 啦',
+            warning: true
+          );
   }
+  // 到昨天还没有计划（预算第一天）：没得比，不显示节奏，免得和「今天多花了」打架。
+  if (today.plannedBeforeTodayCents <= 0) return (text: '', warning: false);
   final delta = today.paceDeltaCents;
   if (delta >= 0) {
     return (
@@ -183,7 +195,8 @@ List<BudgetRulePreviewLine> budgetRulePreview({
   final day = budgetDay(today);
   final others = [
     for (final rule in existing)
-      if (!rule.isDeleted && (candidate.id == 0 || rule.id != candidate.id)) rule
+      if (!rule.isDeleted && (candidate.id == 0 || rule.id != candidate.id))
+        rule
   ];
   final rules = [...others, candidate];
   BudgetMonthResult resolve(List<BudgetRule> set, int year, int month) =>
@@ -196,14 +209,29 @@ List<BudgetRulePreviewLine> budgetRulePreview({
       );
 
   if (candidate.isBase) {
-    final at = candidate.startDate.isAfter(day) ? candidate.startDate : day;
+    final span = budgetRuleSpan(candidate, rules, day);
+    if (span.effectiveEnd?.isBefore(candidate.startDate) == true) {
+      return const [BudgetRulePreviewLine('这条日常预算没有生效过，修改后仍不影响任何月份')];
+    }
+    var at = candidate.startDate.isAfter(day) ? candidate.startDate : day;
+    if (span.effectiveEnd != null && at.isAfter(span.effectiveEnd!)) {
+      at = span.effectiveEnd!;
+    }
     final month = resolve(rules, at.year, at.month);
+    final original =
+        existing.where((r) => !r.isDeleted && r.id == candidate.id).firstOrNull;
+    final before = original == null
+        ? null
+        : resolve(
+            existing.where((r) => !r.isDeleted).toList(), at.year, at.month);
     final plain = [
       for (final d in month.days)
         if (d.specialRule == null && identical(d.baseRule, candidate)) d
     ];
     return [
-      BudgetRulePreviewLine('${at.month}月一共 ${budgetYuanText(month.budgetCents)}'),
+      BudgetRulePreviewLine(before == null
+          ? '${at.month}月一共 ${budgetYuanText(month.budgetCents)}'
+          : '${at.month}月预算 ${budgetYuanText(before.budgetCents)} → ${budgetYuanText(month.budgetCents)}'),
       if (plain.isNotEmpty)
         BudgetRulePreviewLine(
           '平时每天约 ${_perDay(plain.fold(0, (s, d) => s + d.budgetCents), plain.length)}',
@@ -235,13 +263,17 @@ List<BudgetRulePreviewLine> budgetRulePreview({
   }
 
   // 涉及的每个月（最多列 3 个）。
-  final firstIndex = candidate.startDate.year * 12 + candidate.startDate.month - 1;
+  final firstIndex =
+      candidate.startDate.year * 12 + candidate.startDate.month - 1;
   final lastIndex = end.year * 12 + end.month - 1;
-  for (var index = firstIndex; index <= lastIndex && index < firstIndex + 3; index++) {
+  for (var index = firstIndex;
+      index <= lastIndex && index < firstIndex + 3;
+      index++) {
     final year = index ~/ 12;
     final m = index % 12 + 1;
     final after = resolve(rules, year, m);
-    final before = resolve(others, year, m);
+    final before =
+        resolve(existing.where((r) => !r.isDeleted).toList(), year, m);
     final added = after.budgetCents - before.budgetCents;
     final rest = [
       for (final d in after.days)
@@ -253,7 +285,7 @@ List<BudgetRulePreviewLine> budgetRulePreview({
     lines.add(BudgetRulePreviewLine(
       added == 0
           ? '$m月一共还是 ${budgetYuanText(after.budgetCents)}$restText'
-          : '$m月一共 ${budgetYuanText(after.budgetCents)}（多了 ${budgetYuanText(added)}）$restText',
+          : '$m月一共 ${budgetYuanText(after.budgetCents)}（${added > 0 ? '多了' : '少了'} ${budgetYuanText(added.abs())}）$restText',
     ));
   }
   if (lastIndex >= firstIndex + 3) {
@@ -294,6 +326,7 @@ class BudgetRuleValidationText {
 /// 改日常预算的金额或单位时，保存前的提示（§6.4）；没改就返回 null。
 String? budgetBaseEditWarning({
   required BudgetRule? original,
+  Iterable<BudgetRule> existing = const [],
   required int amountCents,
   required BudgetRuleUnit unit,
   required DateTime today,
@@ -301,8 +334,15 @@ String? budgetBaseEditWarning({
   if (original == null || !original.isBase) return null;
   if (original.amountCents == amountCents && original.unit == unit) return null;
   final start = original.startDate;
-  final head = start.year != today.year
-      ? '${start.year}年${start.month}月'
-      : '${start.month}月';
-  return '$head以来的每个月都会按新金额重新计算';
+  final end = budgetRuleSpan(original, existing, today).effectiveEnd;
+  if (end != null && end.isBefore(start)) return null;
+  final withYear =
+      start.year != today.year || (end != null && end.year != today.year);
+  final head = _monthText(start, withYear: withYear);
+  final range = end == null
+      ? '$head以来'
+      : DateTime(start.year, start.month) == DateTime(end.year, end.month)
+          ? head
+          : '$head–${_monthText(end, withYear: withYear)}';
+  return '这次修改会调整$range的预算，已记录的账单不变。';
 }

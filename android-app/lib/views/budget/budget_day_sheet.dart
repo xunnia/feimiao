@@ -52,10 +52,12 @@ class BudgetDaySheet extends StatelessWidget {
     final scheme = Theme.of(context).colorScheme;
     final repo = context.watch<AppRepository>();
     final today = budgetDay(AppClock.now);
-    final snapshot = repo.budgetRuleMonth(DateTime(day.year, day.month), bookId: bookId);
+    final snapshot =
+        repo.budgetRuleMonth(DateTime(day.year, day.month), bookId: bookId);
     final info = snapshot.month.days.firstWhere((d) => d.day == day);
     final future = day.isAfter(today);
-    final spent = future ? 0 : repo.budgetSpendByDay(bookId)[budgetDayKey(day)] ?? 0;
+    final spent =
+        future ? 0 : repo.budgetSpendByDay(bookId)[budgetDayKey(day)] ?? 0;
     final over = info.covered ? spent - info.budgetCents : 0;
     final dayTx = future
         ? const <TransactionEntity>[]
@@ -91,15 +93,17 @@ class BudgetDaySheet extends StatelessWidget {
                   Padding(
                     padding: const EdgeInsets.fromLTRB(20, 0, 20, 0),
                     child: Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
                       children: [
                         if (ruleColor != null) ...[
-                          BudgetRuleDot(color: ruleColor),
-                          const SizedBox(width: 8),
+                          BudgetRuleDot(color: ruleColor, size: 8),
+                          const SizedBox(width: 6),
                         ],
-                        Expanded(
+                        Flexible(
                           child: Text(
                             _ruleLine(info.specialRule, info.baseRule),
                             key: const ValueKey('budget-day-rule'),
+                            textAlign: TextAlign.center,
                             style: AppType.secondary(scheme),
                           ),
                         ),
@@ -110,42 +114,55 @@ class BudgetDaySheet extends StatelessWidget {
                     const SizedBox(height: 14),
                     Padding(
                       padding: const EdgeInsets.symmetric(horizontal: 16),
-                      child: Row(
-                        children: [
-                          _Stat(
-                            label: '当天预算',
-                            value: budgetYuanText(info.budgetCents),
-                          ),
-                          if (!future) ...[
-                            const SizedBox(width: 8),
-                            _Stat(label: '花了', value: budgetYuanText(spent)),
-                          ],
-                          if (!future && over >= 100) ...[
-                            const SizedBox(width: 8),
-                            _Stat(
-                              label: '超了',
-                              value: budgetYuanText(over),
-                              color: AppColors.warning,
-                            ),
-                          ],
-                        ],
+                      child: _DayStats(
+                        budgetCents: info.budgetCents,
+                        spentCents: future ? null : spent,
+                        overCents: !future && over >= 100 ? over : null,
                       ),
                     ),
                     if (!future && over >= 100) ...[
                       const SizedBox(height: 10),
-                      Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 20),
+                      Container(
+                        width: double.infinity,
+                        margin: const EdgeInsets.symmetric(horizontal: 16),
+                        padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+                        decoration: BoxDecoration(
+                          color: budgetSheetTileFill(scheme),
+                          borderRadius: BorderRadius.circular(AppRadius.sm),
+                        ),
                         child: Text(
                           '多花的会从后面的日子里自动匀出来，不用管它',
                           key: const ValueKey('budget-day-tip'),
-                          style: AppType.caption(scheme),
+                          style: TextStyle(
+                            fontSize: 13,
+                            height: 1.4,
+                            color: AppTextColor.secondary(scheme),
+                          ),
                         ),
                       ),
                     ],
                   ],
                   if (dayTx.isNotEmpty) ...[
-                    const SizedBox(height: 16),
-                    TxDayCard(section: TxSection(day: day, items: dayTx)),
+                    const SizedBox(height: 12),
+                    // 示意图：弹层里直接一笔一行、发丝线隔开，不再套一张带日期头的
+                    // 账单卡（标题已经写了日期）。仍用统一的账单行，点一下能编辑。
+                    Material(
+                      type: MaterialType.transparency,
+                      child: Column(
+                        key: const ValueKey('budget-day-tx-list'),
+                        children: [
+                          for (final tx in dayTx) ...[
+                            Container(
+                              margin:
+                                  const EdgeInsets.symmetric(horizontal: 20),
+                              height: 0.5,
+                              color: AppColors.hairline(scheme, strength: 1.4),
+                            ),
+                            TxDismissibleRow(transaction: tx),
+                          ],
+                        ],
+                      ),
+                    ),
                   ] else if (!future) ...[
                     const SizedBox(height: 16),
                     Padding(
@@ -163,41 +180,138 @@ class BudgetDaySheet extends StatelessWidget {
   }
 }
 
+/// 详情小格和提示条使用与规则表单相同的主题填充。
+Color budgetSheetTileFill(ColorScheme scheme) => AppColors.sheetFill(scheme);
+
+class _DayStats extends StatelessWidget {
+  final int budgetCents;
+  final int? spentCents;
+  final int? overCents;
+
+  const _DayStats({
+    required this.budgetCents,
+    required this.spentCents,
+    required this.overCents,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final values = <({String label, String value, Color? color})>[
+      (label: '当天预算', value: budgetYuanText(budgetCents), color: null),
+      if (spentCents != null)
+        (label: '花了', value: budgetYuanText(spentCents!), color: null),
+      if (overCents != null)
+        (
+          label: '超了',
+          value: budgetYuanText(overCents!),
+          color: AppColors.warning
+        ),
+    ];
+    return LayoutBuilder(builder: (context, constraints) {
+      final scaler = MediaQuery.textScalerOf(context);
+      final columnWidth =
+          (constraints.maxWidth - (values.length - 1) * 8) / values.length;
+      final useRows = scaler.scale(13) > 18 ||
+          values.any((value) {
+            final painter = TextPainter(
+              text:
+                  TextSpan(text: value.value, style: _Stat.valueStyle(context)),
+              textDirection: Directionality.of(context),
+              textScaler: scaler,
+            )..layout();
+            final exceedsColumn = painter.width + 24 > columnWidth;
+            painter.dispose();
+            return exceedsColumn;
+          });
+      return useRows
+          ? Column(
+              key: const ValueKey('budget-day-stats-rows'),
+              children: [
+                for (var i = 0; i < values.length; i++) ...[
+                  if (i > 0) const SizedBox(height: 8),
+                  _Stat(
+                    label: values[i].label,
+                    value: values[i].value,
+                    color: values[i].color,
+                    horizontal: true,
+                  ),
+                ],
+              ],
+            )
+          : Row(
+              key: const ValueKey('budget-day-stats-columns'),
+              children: [
+                for (var i = 0; i < values.length; i++) ...[
+                  if (i > 0) const SizedBox(width: 8),
+                  Expanded(
+                    child: _Stat(
+                      label: values[i].label,
+                      value: values[i].value,
+                      color: values[i].color,
+                    ),
+                  ),
+                ],
+              ],
+            );
+    });
+  }
+}
+
 class _Stat extends StatelessWidget {
   final String label;
   final String value;
   final Color? color;
+  final bool horizontal;
 
-  const _Stat({required this.label, required this.value, this.color});
+  const _Stat({
+    required this.label,
+    required this.value,
+    this.color,
+    this.horizontal = false,
+  });
+
+  static TextStyle valueStyle(BuildContext context) => TextStyle(
+        fontFamily: 'Nunito',
+        fontSize: 19,
+        fontWeight: FontWeight.w700,
+        color: Theme.of(context).colorScheme.onSurface,
+        fontFeatures: const [FontFeature.tabularFigures()],
+      );
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    return Expanded(
-      child: Container(
-        padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
-        decoration: BoxDecoration(
-          color: AppColors.card(scheme),
-          borderRadius: BorderRadius.circular(AppRadius.md),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(label, style: AppType.caption(scheme)),
-            const SizedBox(height: 2),
-            Text(
-              value,
-              style: TextStyle(
-                fontFamily: 'Nunito',
-                fontSize: 20,
-                fontWeight: FontWeight.w700,
-                color: color ?? scheme.onSurface,
-                fontFeatures: const [FontFeature.tabularFigures()],
-              ),
-            ),
-          ],
-        ),
+    final labelText = Text(
+      label,
+      style: TextStyle(fontSize: 13, color: AppTextColor.hint(scheme)),
+    );
+    final valueText = Text(
+      value,
+      maxLines: 1,
+      style: valueStyle(context).copyWith(color: color ?? scheme.onSurface),
+    );
+    return Container(
+      padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+      decoration: BoxDecoration(
+        color: budgetSheetTileFill(scheme),
+        borderRadius: BorderRadius.circular(14),
       ),
+      child: horizontal
+          ? Row(children: [
+              Expanded(child: labelText),
+              const SizedBox(width: 12),
+              Flexible(
+                child: FittedBox(fit: BoxFit.scaleDown, child: valueText),
+              ),
+            ])
+          : Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                labelText,
+                const SizedBox(height: 4),
+                valueText,
+              ],
+            ),
     );
   }
 }

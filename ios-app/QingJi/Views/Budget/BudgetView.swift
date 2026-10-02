@@ -18,6 +18,7 @@ struct BudgetView: View {
     @State private var pickedBook = false
     @State private var pickedBookID: UUID?
     @State private var monthIndex: Int = BudgetCivilDay(AppClock.now).monthIndex
+    @State private var referenceDate = AppClock.now
     @State private var showEnded = false
     @State private var editor: BudgetRuleEditorTarget?
     @State private var dayTarget: BudgetDayTarget?
@@ -35,7 +36,7 @@ struct BudgetView: View {
     private func monthSnapshot(year: Int, month: Int) -> BudgetRuleSnapshot {
         BudgetRuleStore.snapshot(
             rules: ruleRecords, rollovers: rolloverRecords, selectedBookID: scopeBookID,
-            books: books, transactions: transactions, year: year, month: month)
+            books: books, transactions: transactions, year: year, month: month, now: referenceDate)
     }
 
     var body: some View {
@@ -53,10 +54,8 @@ struct BudgetView: View {
         .toolbar {
             ToolbarItemGroup(placement: .topBarTrailing) {
                 bookMenu
-                Button {
+                LiquidGlassIconButton(systemName: "plus", accessibilityLabel: "新增预算", size: 32) {
                     openEditor(bookID: snapshot.bookID, record: nil, hasRules: !liveRecords(snapshot.bookID).isEmpty)
-                } label: {
-                    Image(systemName: "plus")
                 }
                 .disabled(snapshot.bookID == nil)
                 .accessibilityLabel("新增预算")
@@ -75,20 +74,17 @@ struct BudgetView: View {
         } message: {
             Text(errorMessage ?? "")
         }
+        .appRefreshOnDayChange(refreshDate)
     }
 
     private var bookMenu: some View {
-        Menu {
-            ForEach(DrawerLayout.orderedBooks(books)) { book in
-                let selected = scopeBookID.map { $0 == book.stableID } ?? book.isDefault
-                Button {
-                    pickedBook = true
-                    pickedBookID = book.isDefault ? nil : book.stableID
-                } label: {
-                    Label(book.name, systemImage: selected ? "checkmark.circle.fill" : "circle")
-                }
-            }
-        } label: {
+        AppSelectionMenu(selected: scopeBookID, options: DrawerLayout.orderedBooks(books).map { book in
+            AppMenuOption<UUID?>(value: book.isDefault ? nil : book.stableID,
+                                 title: book.name, systemName: "book.closed")
+        }, onSelect: { value in
+            pickedBook = true
+            pickedBookID = value
+        }) {
             HStack(spacing: 5) {
                 Image(systemName: "book.closed")
                 Text(bookName).lineLimit(1).truncationMode(.tail)
@@ -99,6 +95,16 @@ struct BudgetView: View {
         .tint(.primary)
         .accessibilityLabel("当前账本：\(bookName)")
         .accessibilityIdentifier("budget-book-chip")
+    }
+
+    private func refreshDate() {
+        let now = AppClock.now
+        let previous = BudgetCivilDay(referenceDate)
+        let current = BudgetCivilDay(now)
+        guard previous != current else { return }
+        monthIndex = BudgetMonthNavigation.refreshedMonthIndex(displayed: monthIndex,
+                                                               previousToday: previous, currentToday: current)
+        referenceDate = now
     }
 
     private func liveRecords(_ bookID: UUID?) -> [BudgetRuleRecord] {
@@ -115,26 +121,20 @@ struct BudgetView: View {
 
     /// 近 3 个自然月（不含本月）有支出的月份平均，取整到百元，最少 100；没有支出返回 nil。
     private func suggestionYuan() -> Int? {
-        let calendar = Calendar.current
-        let now = AppClock.now
-        guard let thisMonth = calendar.date(from: calendar.dateComponents([.year, .month], from: now)),
-              let from = calendar.date(byAdding: .month, value: -3, to: thisMonth) else { return nil }
-        var byMonth: [Int: Decimal] = [:]
-        for t in LedgerScope.filter(transactions, selectedBookID: scopeBookID)
-        where t.kindRaw == TransactionKind.expense.rawValue && t.amount > 0 && t.date >= from && t.date < thisMonth {
-            let c = calendar.dateComponents([.year, .month], from: t.date)
-            byMonth[(c.year ?? 0) * 100 + (c.month ?? 0), default: 0] += t.amount
-        }
-        guard !byMonth.isEmpty else { return nil }
-        let avg = NSDecimalNumber(decimal: byMonth.values.reduce(0, +)).doubleValue / Double(byMonth.count)
-        guard avg > 0 else { return nil }
-        let rounded = Int((avg.rounded() / 100).rounded()) * 100
-        return max(rounded, 100)
+        BudgetRuleStore.suggestionYuan(transactions: transactions, selectedBookID: scopeBookID,
+                                       now: referenceDate)
     }
 
     private func step(_ delta: Int) {
         UISelectionFeedbackGenerator().selectionChanged()
         monthIndex += delta
+    }
+}
+
+enum BudgetMonthNavigation {
+    static func refreshedMonthIndex(displayed: Int, previousToday: BudgetCivilDay,
+                                    currentToday: BudgetCivilDay) -> Int {
+        displayed == previousToday.monthIndex ? currentToday.monthIndex : displayed
     }
 }
 
@@ -243,7 +243,7 @@ extension BudgetView {
                     }
                 }
             }
-            .liquidGlassSurface()
+            .appThemeCard()
             if rules.contains(where: { !$0.isBase }) {
                 Text("日期重叠时，以后加的特别安排为准")
                     .font(.caption)
@@ -262,20 +262,23 @@ extension BudgetView {
             HStack(spacing: 14) {
                 BudgetRuleDot(color: BudgetRuleColors.color(rule))
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(budgetRuleName(rule)).foregroundStyle(.primary)
-                    Text("\(budgetRuleAmountText(rule)) · \(span?.text ?? "")")
-                        .font(.footnote)
+                    Text(budgetRuleName(rule))
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(.primary)
+                    Text(span?.text ?? "")
+                        .font(.system(size: 12.5))
                         .foregroundStyle(.secondary)
+                    if span?.state == .upcoming {
+                        Text("即将开始").font(.system(size: 11)).foregroundStyle(.secondary)
+                    }
                 }
                 Spacer(minLength: 8)
-                if span?.state == .upcoming {
-                    Text("即将开始")
-                        .font(.caption)
-                        .foregroundStyle(Color.accentColor)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 3)
-                        .background(Color.accentColor.opacity(0.12), in: Capsule())
-                }
+                Text(budgetRuleAmountText(rule))
+                    .font(.system(size: 14, weight: .semibold, design: .rounded))
+                    .monospacedDigit()
+                    .foregroundStyle(.primary)
+                    .multilineTextAlignment(.trailing)
+                    .layoutPriority(1)
                 Image(systemName: "chevron.right")
                     .font(.footnote.weight(.semibold))
                     .foregroundStyle(.tertiary)
@@ -302,7 +305,7 @@ extension BudgetView {
     }
 
     fileprivate func rolloverRow(bookID: UUID) -> some View {
-        let now = BudgetCivilDay(AppClock.now)
+        let now = BudgetCivilDay(referenceDate)
         let changes = BudgetRuleStore.coreRollovers(rolloverRecords, bookID: bookID)
         let current = BudgetRuleStore.rolloverMode(changes, year: now.year, month: now.month)
         let prevIndex = now.monthIndex - 1
@@ -321,31 +324,22 @@ extension BudgetView {
             if result >= 0 { return "\(pm)月省下 \(budgetYuanText(result))，\(cm)月就多 \(budgetYuanText(result))" }
             return "\(pm)月超出 \(budgetYuanText(-result))，\(cm)月就少 \(budgetYuanText(-result))"
         }()
-        let options = [
-            BudgetRolloverOption(mode: .reset, icon: "arrow.clockwise",
-                                 subtitle: "每个月从头算，上个月省下或超出都不影响", identifier: "budget-rollover-reset"),
-            BudgetRolloverOption(mode: .keepSavings, icon: "arrow.turn.down.right",
-                                 subtitle: keepExample, identifier: "budget-rollover-keep"),
-            BudgetRolloverOption(mode: .carryBoth, icon: "arrow.left.arrow.right",
-                                 subtitle: carryExample, identifier: "budget-rollover-carry"),
+        let options: [AppMenuOption<BudgetRolloverMode>] = [
+            AppMenuOption(value: .reset, title: Self.rolloverName(.reset),
+                          subtitle: "每个月从头算，上个月省下或超出都不影响", systemName: "arrow.clockwise", identifier: "budget-rollover-reset"),
+            AppMenuOption(value: .keepSavings, title: Self.rolloverName(.keepSavings),
+                          subtitle: keepExample, systemName: "arrow.turn.down.right", identifier: "budget-rollover-keep"),
+            AppMenuOption(value: .carryBoth, title: Self.rolloverName(.carryBoth),
+                          subtitle: carryExample, systemName: "arrow.left.arrow.right", identifier: "budget-rollover-carry"),
         ]
-        return Menu {
-            ForEach(options) { option in
-                Button {
-                    pickRollover(option.mode, bookID: bookID)
-                } label: {
-                    // 菜单项的第二个 Text 就是副标题（和安卓 IosMenuItem.subtitle 一样）。
-                    Text(Self.rolloverName(option.mode))
-                    Text(option.subtitle)
-                    Image(systemName: current == option.mode ? "checkmark" : option.icon)
-                }
-                .accessibilityIdentifier(option.identifier)
-            }
-        } label: {
+        return AppSelectionMenu(selected: current, options: options,
+                                onSelect: { pickRollover($0, bookID: bookID) }) {
             HStack {
                 Text("月底结余").foregroundStyle(.primary)
                 Spacer()
                 Text(Self.rolloverName(current)).foregroundStyle(.secondary)
+                    .font(.system(size: 13))
+                    .multilineTextAlignment(.trailing)
                 Image(systemName: "chevron.right")
                     .font(.footnote.weight(.semibold))
                     .foregroundStyle(.tertiary)
@@ -356,7 +350,7 @@ extension BudgetView {
             .contentShape(Rectangle())
         }
         .tint(.primary)
-        .liquidGlassSurface()
+        .appThemeCard()
         .accessibilityIdentifier("budget-rollover-row")
     }
 
@@ -368,12 +362,4 @@ extension BudgetView {
             errorMessage = "月底结余没改成，再试一次"
         }
     }
-}
-
-private struct BudgetRolloverOption: Identifiable {
-    let mode: BudgetRolloverMode
-    let icon: String
-    let subtitle: String
-    let identifier: String
-    var id: String { mode.rawValue }
 }

@@ -108,7 +108,9 @@ public func budgetRuleSpan(_ rule: BudgetRule, rules: [BudgetRule], today: Budge
                               effectiveEnd: last)
     }
     let text = "\(monthText(rule.startDate, withYear: withYear))起"
-    if today < rule.startDate { return BudgetRuleSpan(state: .upcoming, text: text, effectiveEnd: nil) }
+    if today < rule.startDate {
+        return BudgetRuleSpan(state: .upcoming, text: text, effectiveEnd: takeover?.adding(days: -1))
+    }
     return BudgetRuleSpan(state: .active, text: text, effectiveEnd: takeover?.adding(days: -1))
 }
 
@@ -126,6 +128,7 @@ public func budgetPaceText(_ month: BudgetMonthResult) -> (text: String, warning
             ? ("这个月已经超出预算啦", true)
             : ("只剩 \(budgetYuanText(budgetFloorYuanCents(remaining))) 啦", true)
     }
+    guard today.plannedBeforeTodayCents > 0 else { return ("", false) }
     let delta = today.paceDeltaCents
     if delta >= 0 {
         return ("比计划少花 \(budgetYuanText(budgetFloorYuanCents(delta))) · 节奏不错", false)
@@ -169,10 +172,27 @@ public func budgetRulePreview(existing: [BudgetRule], candidate: BudgetRule, tod
     }
 
     if candidate.isBase {
-        let at = candidate.startDate > today ? candidate.startDate : today
+        let span = budgetRuleSpan(candidate, rules: rules, today: today)
+        if let last = span.effectiveEnd, last < candidate.startDate {
+            return [BudgetRulePreviewLine("这条日常预算没有生效过，修改后仍不影响任何月份")]
+        }
+        let at: BudgetCivilDay
+        if let last = span.effectiveEnd, last < today {
+            at = last
+        } else {
+            at = candidate.startDate > today ? candidate.startDate : today
+        }
         let month = resolve(rules, at.year, at.month)
         let plain = month.days.filter { $0.specialRule == nil && budgetSameRule($0.baseRule, candidate) }
-        var lines = [BudgetRulePreviewLine("\(at.month)月一共 \(budgetYuanText(month.budgetCents))")]
+        let label = monthText(at, withYear: at.year != today.year)
+        let original = candidate.id == 0 ? nil : existing.first { budgetSameRule($0, candidate) && !$0.isDeleted }
+        var lines: [BudgetRulePreviewLine]
+        if original != nil {
+            let before = resolve(existing, at.year, at.month)
+            lines = [BudgetRulePreviewLine("\(label)预算 \(budgetYuanText(before.budgetCents)) → \(budgetYuanText(month.budgetCents))")]
+        } else {
+            lines = [BudgetRulePreviewLine("\(label)一共 \(budgetYuanText(month.budgetCents))")]
+        }
         if !plain.isEmpty {
             lines.append(BudgetRulePreviewLine("平时每天约 \(perDay(plain.reduce(0) { $0 + $1.budgetCents }, plain.count))"))
         }
@@ -198,15 +218,16 @@ public func budgetRulePreview(existing: [BudgetRule], candidate: BudgetRule, tod
         let year = index / 12
         let m = index % 12 + 1
         let after = resolve(rules, year, m)
-        let before = resolve(others, year, m)
+        let before = resolve(existing, year, m)
         let added = after.budgetCents - before.budgetCents
         let rest = after.days.filter { $0.specialRule == nil && $0.baseRule != nil }
         let restText = rest.isEmpty
             ? ""
             : "，其余日子每天约 \(perDay(rest.reduce(0) { $0 + $1.budgetCents }, rest.count))"
+        let change = added > 0 ? "多了 \(budgetYuanText(added))" : "少了 \(budgetYuanText(-added))"
         lines.append(BudgetRulePreviewLine(added == 0
             ? "\(m)月一共还是 \(budgetYuanText(after.budgetCents))\(restText)"
-            : "\(m)月一共 \(budgetYuanText(after.budgetCents))（多了 \(budgetYuanText(added))）\(restText)"))
+            : "\(m)月一共 \(budgetYuanText(after.budgetCents))（\(change)）\(restText)"))
         index += 1
     }
     if lastIndex >= firstIndex + 3 {
@@ -237,12 +258,21 @@ public func budgetRulePreview(existing: [BudgetRule], candidate: BudgetRule, tod
 
 /// 改日常预算的金额或单位时，保存前的提示（§6.4）；没改就返回 nil。
 public func budgetBaseEditWarning(original: BudgetRule?, amountCents: Int, unit: BudgetRuleUnit,
-                                  today: BudgetCivilDay) -> String? {
+                                  today: BudgetCivilDay, existing: [BudgetRule] = []) -> String? {
     guard let original, original.isBase else { return nil }
     if original.amountCents == amountCents && original.unit == unit { return nil }
     let start = original.startDate
-    let head = start.year != today.year ? "\(start.year)年\(start.month)月" : "\(start.month)月"
-    return "\(head)以来的每个月都会按新金额重新计算"
+    let span = budgetRuleSpan(original, rules: existing.isEmpty ? [original] : existing, today: today)
+    if let last = span.effectiveEnd {
+        guard last >= start else { return nil }
+        let withYear = start.year != today.year || last.year != today.year
+        let head = monthText(start, withYear: withYear)
+        let tail = monthText(last, withYear: withYear || last.year != start.year)
+        let range = start.monthIndex == last.monthIndex ? head : "\(head)–\(tail)"
+        return "这次修改会调整\(range)的预算，已记录的账单不变。"
+    }
+    let head = monthText(start, withYear: start.year != today.year)
+    return "这次修改会调整\(head)以来的预算，已记录的账单不变。"
 }
 
 // MARK: - 计入预算的支出（§6.7，和安卓 _budgetSpendByDay 同一口径）
@@ -304,6 +334,27 @@ public func budgetSpendByDay(_ rows: [BudgetSpendRow], today: BudgetCivilDay,
         spend[key, default: 0] += net
     }
     return (spend, foreign)
+}
+
+/// 最近三个完整自然月的净支出建议；只对净支出为正的月份平均。
+/// 和 Android 一样先取整元、再取整到百元，最少 100；没有有效支出返回 nil。
+public func budgetSuggestedMonthlyYuan(_ rows: [BudgetSpendRow], today: BudgetCivilDay,
+                                       knowledgeCutoff: Date) -> Int? {
+    // 建议忽略独立非正根交易，但保留关联退款；历史预算投影的带符号口径不变。
+    let suggestionRows = rows.filter { $0.refundOfID != nil || $0.amountCents > 0 }
+    let spend = budgetSpendByDay(suggestionRows, today: today, knowledgeCutoff: knowledgeCutoff).spend
+    var byMonth: [Int: Int] = [:]
+    for (key, cents) in spend {
+        let index = (key / 10_000) * 12 + (key / 100) % 100 - 1
+        if index >= today.monthIndex - 3 && index < today.monthIndex {
+            byMonth[index, default: 0] += cents
+        }
+    }
+    let positive = byMonth.values.filter { $0 > 0 }
+    guard !positive.isEmpty else { return nil }
+    let total = positive.reduce(0, +)
+    let averageYuan = (total + positive.count * 50) / (positive.count * 100)
+    return max(100, ((averageYuan + 50) / 100) * 100)
 }
 
 /// 这个月有规则、且不晚于今天的日子里，被排除的外币笔数。

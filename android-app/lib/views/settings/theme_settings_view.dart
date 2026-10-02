@@ -24,14 +24,14 @@ class ThemeSettingsView extends StatelessWidget {
         title: const Text('主题外观'),
         backgroundColor: Colors.transparent,
         actions: [
-          // 恢复默认（暖橙 40%）
+          // 恢复默认（暖橙 80%）
           Padding(
             padding: const EdgeInsets.only(right: 12),
             child: AppPillButton(
               label: '恢复默认',
               onPressed: theme.presetKey == 'warm' &&
                       theme.bgIntensity == 1.0 &&
-                      theme.cardAlpha == 0.40
+                      theme.cardAlpha == AppThemeController.defaultCardAlpha
                   ? null
                   : theme.resetDefault,
             ),

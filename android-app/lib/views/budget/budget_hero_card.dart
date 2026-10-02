@@ -7,6 +7,7 @@ import '../../theme/app_colors.dart';
 import '../../theme/app_tokens.dart';
 import '../../widgets/app_buttons.dart';
 import '../../widgets/budget_progress.dart';
+import 'budget_calendar_card.dart' show BudgetCard;
 
 /// 预算页顶部大数字卡（docs/08 §6.8 第 2 块）。
 class BudgetHeroCard extends StatelessWidget {
@@ -35,14 +36,9 @@ class BudgetHeroCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    return Container(
+    return BudgetCard(
       key: const ValueKey('budget-hero-card'),
-      width: double.infinity,
       padding: const EdgeInsets.fromLTRB(18, 16, 18, 16),
-      decoration: BoxDecoration(
-        color: AppColors.card(scheme),
-        borderRadius: BorderRadius.circular(AppRadius.lg),
-      ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: !month.hasRules
@@ -56,17 +52,22 @@ class BudgetHeroCard extends StatelessWidget {
     );
   }
 
-  Widget _big(String text, ColorScheme scheme, {Color? color}) => Text(
-        text,
-        key: const ValueKey('budget-hero-amount'),
-        style: TextStyle(
-          fontFamily: 'Nunito',
-          fontSize: 38,
-          fontWeight: FontWeight.w700,
-          letterSpacing: -0.5,
-          height: 1.15,
-          color: color ?? scheme.onSurface,
-          fontFeatures: const [FontFeature.tabularFigures()],
+  Widget _big(String text, ColorScheme scheme, {Color? color}) => FittedBox(
+        fit: BoxFit.scaleDown,
+        alignment: Alignment.centerLeft,
+        child: Text(
+          text,
+          key: const ValueKey('budget-hero-amount'),
+          maxLines: 1,
+          style: TextStyle(
+            fontFamily: 'Nunito',
+            fontSize: 44,
+            fontWeight: FontWeight.w700,
+            letterSpacing: 0,
+            height: 1.1,
+            color: color ?? scheme.onSurface,
+            fontFeatures: const [FontFeature.tabularFigures()],
+          ),
         ),
       );
 
@@ -74,20 +75,21 @@ class BudgetHeroCard extends StatelessWidget {
     final effective = month.effectiveCents;
     final spent = month.spentCents;
     final ratio = effective <= 0 ? (spent > 0 ? 1.0 : 0.0) : spent / effective;
-    final overflowStart =
-        spent > effective && spent > 0 ? (effective / spent).clamp(0.0, 1.0) : null;
+    final overflowStart = spent > effective && spent > 0
+        ? (effective / spent).clamp(0.0, 1.0)
+        : null;
     final today = month.today;
     final plannedRatio = today == null || effective <= 0
         ? null
         : (today.plannedBeforeTodayCents / effective).clamp(0.0, 1.0);
     return SizedBox(
-      height: 16,
+      height: 18,
       child: Stack(
         alignment: Alignment.centerLeft,
         children: [
           BudgetProgressBar(
             value: ratio.clamp(0.0, 1.0).toDouble(),
-            height: 8,
+            height: 10,
             overflowStart: overflowStart?.toDouble(),
           ),
           // 细竖线：按计划到今天该花到哪。
@@ -97,7 +99,7 @@ class BudgetHeroCard extends StatelessWidget {
               child: Container(
                 key: const ValueKey('budget-hero-plan-mark'),
                 width: 2,
-                height: 16,
+                height: 18,
                 decoration: BoxDecoration(
                   color: scheme.onSurface.withValues(alpha: 0.35),
                   borderRadius: BorderRadius.circular(1),
@@ -109,19 +111,25 @@ class BudgetHeroCard extends StatelessWidget {
     );
   }
 
-  Widget _caption(ColorScheme scheme) => Row(
-        children: [
-          Expanded(
-            child: Text(
+  Widget _caption(ColorScheme scheme) => SizedBox(
+        width: double.infinity,
+        child: Wrap(
+          alignment: WrapAlignment.spaceBetween,
+          spacing: 12,
+          runSpacing: 4,
+          children: [
+            Text(
               '已花 ${budgetYuanText(month.spentCents)}',
+              key: const ValueKey('budget-hero-spent-caption'),
               style: AppType.caption(scheme),
             ),
-          ),
-          Text(
-            '${month.month}月预算 ${budgetYuanText(month.budgetCents)}',
-            style: AppType.caption(scheme),
-          ),
-        ],
+            Text(
+              '${month.month}月预算 ${budgetYuanText(month.budgetCents)}',
+              key: const ValueKey('budget-hero-budget-caption'),
+              style: AppType.caption(scheme),
+            ),
+          ],
+        ),
       );
 
   /// 开了结转时多一行说明带进来多少。
@@ -235,18 +243,16 @@ class BudgetHeroCard extends StatelessWidget {
       const SizedBox(height: 2),
       _big(
         budgetYuanText(
-          over ? budgetFloorYuanCents(-remaining) : budgetLeftDisplayCents(remaining),
+          over
+              ? budgetFloorYuanCents(-remaining)
+              : budgetLeftDisplayCents(remaining),
         ),
         scheme,
         color: over ? AppColors.warning : null,
       ),
       if (todayLine != null) ...[
         const SizedBox(height: 4),
-        Text(
-          todayLine,
-          key: const ValueKey('budget-hero-today'),
-          style: AppType.secondary(scheme),
-        ),
+        _todayText(todayLine, scheme),
       ],
       if (carryLine != null) ...[const SizedBox(height: 2), carryLine],
       if (effective < 0) ...[
@@ -267,11 +273,43 @@ class BudgetHeroCard extends StatelessWidget {
     ];
   }
 
+  /// 「今天约 **¥140** · 还剩 13 天」：金额加粗，整行比说明文字深一档。
+  Widget _todayText(String line, ColorScheme scheme) {
+    final base = TextStyle(
+      fontSize: 15,
+      height: 1.4,
+      color: scheme.onSurface.withValues(alpha: 0.72),
+    );
+    final match = RegExp(r'¥[\d,]+').firstMatch(line);
+    return Text.rich(
+      key: const ValueKey('budget-hero-today'),
+      match == null
+          ? TextSpan(text: line)
+          : TextSpan(children: [
+              TextSpan(text: line.substring(0, match.start)),
+              TextSpan(
+                text: match.group(0),
+                style: TextStyle(
+                  fontFamily: 'Nunito',
+                  fontWeight: FontWeight.w700,
+                  color: scheme.onSurface,
+                ),
+              ),
+              TextSpan(text: line.substring(match.end)),
+            ]),
+      style: base,
+    );
+  }
+
   Widget _pill(String text, bool warning, ColorScheme scheme) {
     final color = warning ? AppColors.warning : AppColors.budgetHealthy(scheme);
+    // 字色比底色深一档，浅底上才读得清（同色相，不引入新颜色）。
+    final textColor = scheme.brightness == Brightness.dark
+        ? color
+        : Color.lerp(color, Colors.black, 0.32)!;
     return Container(
       key: const ValueKey('budget-hero-pace'),
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
       decoration: BoxDecoration(
         color: color.withValues(alpha: 0.14),
         borderRadius: BorderRadius.circular(AppRadius.pill),
@@ -279,7 +317,7 @@ class BudgetHeroCard extends StatelessWidget {
       child: Text(
         text,
         style: AppType.secondary(scheme).copyWith(
-          color: color,
+          color: textColor,
           fontWeight: FontWeight.w500,
         ),
       ),

@@ -3660,7 +3660,8 @@ class AppRepository extends ChangeNotifier {
     if (amountYuan <= 0) throw ArgumentError('预算金额要大于 0');
     final existing = id == null
         ? null
-        : _budgetRules.where((rule) => rule.id == id && !rule.isDeleted)
+        : _budgetRules
+            .where((rule) => rule.id == id && !rule.isDeleted)
             .firstOrNull;
     if (id != null && existing == null) {
       throw StateError('这条预算规则已经不在了');
@@ -6276,20 +6277,22 @@ class AppRepository extends ChangeNotifier {
       ..sort((a, b) => (a['anchor_start_day'] as int)
           .compareTo(b['anchor_start_day'] as int));
     if (mine.isEmpty) return null;
-    // 优先覆盖今天的那份；都没覆盖今天时取开始最晚的一份。
+    // 只迁当前生效的主计划，未来或已结束的计划不能盖过旧月预算。
     final covering = mine.where((p) {
       final end = p['end_day'] as int?;
       return (p['anchor_start_day'] as int) <= todayKey &&
           (end == null || end >= todayKey);
     }).toList();
-    final plan = covering.isNotEmpty ? covering.last : mine.last;
+    if (covering.isEmpty) return null;
+    final plan = covering.last;
     final revs = revisions.where((r) => r['plan_id'] == plan['id']).toList()
       ..sort((a, b) => (a['effective_cycle_start_day'] as int)
           .compareTo(b['effective_cycle_start_day'] as int));
     if (revs.isEmpty) return null;
     final started =
         revs.where((r) => (r['effective_cycle_start_day'] as int) <= todayKey);
-    final revision = started.isNotEmpty ? started.last : revs.first;
+    if (started.isEmpty) return null;
+    final revision = started.last;
     final cents = _v50RoundCents(revision['amount_cents'] as int);
     if (cents == null) return null;
     final anchor = plan['anchor_start_day'] as int;
@@ -6323,8 +6326,13 @@ class AppRepository extends ChangeNotifier {
     if (yuan == null) return null;
     final cents = _v50RoundCents((yuan * 100).round());
     if (cents == null) return null;
-    final start = DateTime.fromMillisecondsSinceEpoch(period['start_ms'] as int);
-    return (cents: cents, unit: 'month', start: DateTime(start.year, start.month));
+    final start =
+        DateTime.fromMillisecondsSinceEpoch(period['start_ms'] as int);
+    return (
+      cents: cents,
+      unit: 'month',
+      start: DateTime(start.year, start.month)
+    );
   }
 
   static Future<void> _ensureBudgetV2Tables(DatabaseExecutor db) async {
@@ -9100,8 +9108,7 @@ class AppRepository extends ChangeNotifier {
   Future<void> applyCloudNickname(String nickname, DateTime? updatedAt) async {
     final normalized = normalizeNickname(nickname);
     final at = (updatedAt ?? AppClock.now).toUtc();
-    if (_profileNickname == normalized &&
-        _profileNicknameUpdatedAt == at) {
+    if (_profileNickname == normalized && _profileNicknameUpdatedAt == at) {
       return;
     }
     await _writeProfileNickname(normalized, at);

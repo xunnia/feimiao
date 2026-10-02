@@ -4,29 +4,11 @@ import UIKit
 /// A quiet, content-bearing backdrop makes Liquid Glass read as translucent
 /// glass instead of an opaque white pill on a flat system background.
 struct LiquidGlassBackdrop: View {
-    @Environment(\.colorScheme) private var colorScheme
+    @AppThemeContext private var theme
 
     var body: some View {
-        let warmTop = colorScheme == .dark
-            ? Color(red: 0.11, green: 0.12, blue: 0.14)
-            : Color(red: 0.99, green: 0.90, blue: 0.70)
-        let warmBottom = colorScheme == .dark
-            ? Color(red: 0.06, green: 0.07, blue: 0.09)
-            : Color(red: 1.00, green: 0.97, blue: 0.89)
-
-        ZStack {
-            Color(uiColor: .systemGroupedBackground)
-
-            LinearGradient(
-                colors: [
-                    warmTop.opacity(colorScheme == .dark ? 0.45 : 0.78),
-                    warmBottom.opacity(colorScheme == .dark ? 0.20 : 0.62),
-                    Color(uiColor: .systemGroupedBackground).opacity(0.24)
-                ],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-        }
+        LinearGradient(colors: [theme.backgroundTop, theme.backgroundBottom],
+                       startPoint: .top, endPoint: .bottom)
         .accessibilityHidden(true)
     }
 }
@@ -45,6 +27,18 @@ struct LiquidGlassChrome: ViewModifier {
 }
 
 extension View {
+    func appThemeCard(cornerRadius: CGFloat = 20) -> some View {
+        modifier(AppThemeSurface(cornerRadius: cornerRadius, input: false))
+    }
+
+    func appThemeInput(cornerRadius: CGFloat = 8) -> some View {
+        modifier(AppThemeSurface(cornerRadius: cornerRadius, input: true))
+    }
+
+    func appRefreshOnDayChange(_ action: @escaping () -> Void) -> some View {
+        modifier(AppDayRefresh(action: action))
+    }
+
     func liquidGlassChrome() -> some View {
         modifier(LiquidGlassChrome())
     }
@@ -137,6 +131,187 @@ extension View {
         buttonStyle(.plain)
             .contentShape(.rect(cornerRadius: cornerRadius))
             .glassEffect(.regular.interactive(), in: .rect(cornerRadius: cornerRadius))
+    }
+}
+
+private struct AppThemeSurface: ViewModifier {
+    let cornerRadius: CGFloat
+    let input: Bool
+    @AppThemeContext private var theme
+
+    func body(content: Content) -> some View {
+        content
+            .background(input ? theme.fill : theme.card,
+                        in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .strokeBorder(theme.hairline, lineWidth: 0.5)
+                    .allowsHitTesting(false)
+            }
+    }
+}
+
+private struct AppDayRefresh: ViewModifier {
+    let action: () -> Void
+    @Environment(\.scenePhase) private var scenePhase
+
+    func body(content: Content) -> some View {
+        content
+            .onAppear(perform: action)
+            .onChange(of: scenePhase) { _, phase in
+                if phase == .active { action() }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .NSCalendarDayChanged)) { _ in action() }
+            .onReceive(NotificationCenter.default.publisher(for: UIApplication.significantTimeChangeNotification)) { _ in action() }
+    }
+}
+
+struct AppLabeledField<Content: View>: View {
+    let label: String
+    let helper: String?
+    let content: Content
+
+    init(_ label: String, helper: String? = nil, @ViewBuilder content: () -> Content) {
+        self.label = label
+        self.helper = helper
+        self.content = content()
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            Text(label).font(.system(size: 13)).foregroundStyle(.secondary)
+            content
+            if let helper {
+                Text(helper).font(.system(size: 12.5)).foregroundStyle(.secondary)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+struct AppSegmentOption<Value: Hashable>: Identifiable {
+    let value: Value
+    let title: String
+    var id: Value { value }
+}
+
+struct AppSlidingSegment<Value: Hashable>: View {
+    let options: [AppSegmentOption<Value>]
+    @Binding var selection: Value
+    @AppThemeContext private var theme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @ScaledMetric(relativeTo: .footnote) private var labelSize: CGFloat = 13
+    @Namespace private var highlight
+
+    var body: some View {
+        HStack(spacing: 0) {
+            ForEach(options) { option in
+                Button {
+                    UISelectionFeedbackGenerator().selectionChanged()
+                    withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.25)) { selection = option.value }
+                } label: {
+                    Text(option.title)
+                        .font(.system(size: labelSize, weight: selection == option.value ? .semibold : .regular))
+                        .foregroundStyle(selection == option.value ? Color.primary : Color.secondary)
+                        .multilineTextAlignment(.center)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.horizontal, 4)
+                        .padding(.vertical, 4)
+                        .frame(maxWidth: .infinity, minHeight: 28, maxHeight: .infinity)
+                        .background {
+                            if selection == option.value {
+                                Capsule()
+                                    .fill(theme.segmentSelected)
+                                    .shadow(color: .black.opacity(0.07), radius: 3, x: 0, y: 1)
+                                    .matchedGeometryEffect(id: "selection", in: highlight)
+                            }
+                        }
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityAddTraits(selection == option.value ? .isSelected : [])
+            }
+        }
+        .fixedSize(horizontal: false, vertical: true)
+        .padding(3)
+        .background(theme.segmentTrack, in: Capsule())
+    }
+}
+
+struct AppMenuOption<Value: Hashable>: Identifiable {
+    let value: Value
+    let title: String
+    var subtitle: String? = nil
+    var systemName: String? = nil
+    var identifier: String? = nil
+    var id: Value { value }
+}
+
+struct AppSelectionMenu<Value: Hashable, Label: View>: View {
+    let selected: Value
+    let options: [AppMenuOption<Value>]
+    let onSelect: (Value) -> Void
+    let label: Label
+    @State private var showing = false
+    @AppThemeContext private var theme
+    @ScaledMetric(relativeTo: .body) private var titleSize: CGFloat = 15
+    @ScaledMetric(relativeTo: .caption) private var subtitleSize: CGFloat = 12.5
+
+    init(selected: Value, options: [AppMenuOption<Value>], onSelect: @escaping (Value) -> Void,
+         @ViewBuilder label: () -> Label) {
+        self.selected = selected
+        self.options = options
+        self.onSelect = onSelect
+        self.label = label()
+    }
+
+    var body: some View {
+        Button { showing = true } label: { label }
+            .buttonStyle(.plain)
+            .popover(isPresented: $showing) {
+                ScrollView {
+                    VStack(spacing: 0) {
+                        ForEach(Array(options.enumerated()), id: \.element.id) { index, option in
+                            if index > 0 { Divider().padding(.horizontal, 12) }
+                            Button {
+                                showing = false
+                                onSelect(option.value)
+                            } label: {
+                                HStack(spacing: 10) {
+                                    if let icon = option.systemName {
+                                        Image(systemName: icon).frame(width: 20).foregroundStyle(.secondary)
+                                    }
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        Text(option.title)
+                                            .font(.system(size: titleSize, weight: .medium))
+                                            .fixedSize(horizontal: false, vertical: true)
+                                        if let subtitle = option.subtitle {
+                                            Text(subtitle)
+                                                .font(.system(size: subtitleSize)).foregroundStyle(.secondary)
+                                                .fixedSize(horizontal: false, vertical: true)
+                                        }
+                                    }
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    Image(systemName: "checkmark")
+                                        .foregroundStyle(Color.statisticsAccent)
+                                        .opacity(selected == option.value ? 1 : 0)
+                                        .frame(width: 16)
+                                }
+                                .foregroundStyle(.primary)
+                                .padding(12)
+                                .frame(maxWidth: .infinity, minHeight: 48, alignment: .leading)
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityIdentifier(option.identifier ?? "")
+                            .accessibilityAddTraits(selected == option.value ? .isSelected : [])
+                        }
+                    }
+                }
+                .frame(width: 280, height: min(420, CGFloat(options.count) * (options.contains { $0.subtitle != nil } ? 90 : 52)))
+                .presentationCompactAdaptation(.popover)
+                .presentationBackground(theme.sheet)
+            }
     }
 }
 
