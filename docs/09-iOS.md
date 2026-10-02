@@ -26,7 +26,7 @@
 
 ## 2. 当前真实状态
 
-### 2026-10-02 主题弹窗补修与原生优先收口（源码在途，未编译截图）
+### 2026-10-02 主题弹窗补修与原生优先收口（源码已推送，Mac 验收待结果）
 
 - 内容层取色对齐品牌主题：彩色顶底插值 35%，跟随浓度；白主题仍白，深色提亮 6%；输入同主题。原生弹窗不再绘制 Android 双灰胶囊、遮罩或高不透明度磨砂卡，不强制系统玻璃背景取相同实色。
 - `AppConfirmationDialog` 已按最新要求改为原生 `UIAlertController`，保留预算历史影响、降额转换、删除和账本三段确认；系统布局/材质/动态字体/模态无障碍不覆盖。多段动作在真实关闭完成后接续，防重、旧回调和拆除保护保留；危险上下文以公开 tint 取橙，取消为安全默认动作。不使用私有 KVC，不添加系统未提供的背景点击关闭行为。
@@ -37,8 +37,9 @@
 - 同日源码复核未发现可直接确认的 Swift 编译错误，不等于类型检查通过。交互测试直接调用 Coordinator，尚未覆盖真正点击 UIAlertAction 时系统自动关闭的 transitionCoordinator 分支；Mac 必须实际点击验证三段删除接续。Menu 勾选/副标题/VoiceOver 与 Form 多 Section 行背景也须运行检查，现有 17 项测试不能替代这些验收。
 - 撤回上一轮将 60 处 alert、7 处 confirmationDialog 与 Menu/contextMenu 一律列为「待替换」的计划：原生本身不是缺陷。后续只针对实际主题不适配、不可读、流程错误或多套 App 自绘设计改动，不机械全替换。Mac 上需先编译/XCTest，再真实点击预算确认和账本三段删除、获取同数据前后图；此后再做全 App 视觉判断。
 - P0 机器合同的允许平台差异同步纳入原生材质/弹窗菜单/sheet/Form/Picker 和无障碍；财务数据、入口、字段与信息层级禁替代要求不变，没有关闭任何开放门。
-- 无新版本、提交、推送或上线；详细 Android 96 组前后图与批次边界见 `02` §7.12。
-- 随后用户授权本批 iOS 精确提交/推送以启动 Mac 验收，Android 在途源码不混入。基线 CI `37008733173` 已实际查询为成功（`04a92a1`）；不把它用于证明本批新主题代码。工作流增加 `xcresulttool export attachments`，原始截图与 xcresult 一并留存；新提交/CI 结果待推送后更新，前后图与真实按钮交互仍未验。
+- 用户授权后，36个精确路径提交为 `2389bae835e0a8b69b360964bb7579d6fee4aefd`，已推 `origin/codex/budget-takeover` 并复验远端一致；未混入 Android 源码、产物、图片及后端规划，未合入 main、改版本或发布 VPS。
+- Mac [iOS CI 37028494081](https://github.com/xunnia/feimiao/actions/runs/37028494081) 和[双端截图 37028493722](https://github.com/xunnia/feimiao/actions/runs/37028493722) 已触发；读取一次时排队，最终编译/XCTest/截图结果未验，不自动轮询。工作流增加 `xcresulttool export attachments`，可下载原始附件与 xcresult；不是只有测试代码就能称截图通过。
+- 改前基线 CI `37008733173` 已实际查询为成功（`04a92a1`），iOS 源码/工作流与修改前 `8a4ac23` 无差异。38规定场景+23额外原图已下载到 `ios-app/outputs/ui_comparisons/2026-10-02-native-theme/before/`；metadata记录 iPhone Air和固定fixture。61 PNG合计49,511,777字节，图片不入 Git。当前只有改前原图，尚无本批改后/编号前后图及真实按钮操作证据；Android 96组组件前后图不替代 iOS 验收。
 
 ### 2026-10-02 预算接手批次（优先于下文旧快照）
 
