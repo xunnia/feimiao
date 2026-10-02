@@ -11,7 +11,7 @@ final class ThemePopupInteractionTests: XCTestCase {
         XCTAssertNotNil(session.coordinator.host)
         session.coordinator.confirm()
         session.coordinator.confirm()
-        spin()
+        waitUntil { !session.state.presented && session.coordinator.host == nil }
         XCTAssertEqual(session.state.confirmedPayloads, ["budget-rule"])
         XCTAssertNil(session.state.payload)
         XCTAssertFalse(session.state.presented)
@@ -22,7 +22,7 @@ final class ThemePopupInteractionTests: XCTestCase {
         let session = try makeSession()
         defer { session.close() }
         session.coordinator.dismissWithoutAction()
-        spin()
+        waitUntil { !session.state.presented && session.coordinator.host == nil }
         XCTAssertEqual(session.state.cancelCount, 0)
         XCTAssertTrue(session.state.confirmedPayloads.isEmpty)
         XCTAssertFalse(session.state.presented)
@@ -33,7 +33,7 @@ final class ThemePopupInteractionTests: XCTestCase {
         defer { session.close() }
         session.coordinator.cancel()
         session.coordinator.cancel()
-        spin()
+        waitUntil { !session.state.presented && session.coordinator.host == nil }
         XCTAssertEqual(session.state.cancelCount, 1)
         XCTAssertTrue(session.state.confirmedPayloads.isEmpty)
         XCTAssertFalse(session.state.presented)
@@ -45,7 +45,7 @@ final class ThemePopupInteractionTests: XCTestCase {
         XCTAssertEqual(session.coordinator.host?.preferredStyle, .alert)
         XCTAssertNotNil(session.sheet?.presentedViewController)
         session.coordinator.dismissWithoutAction()
-        spin()
+        waitUntil { session.coordinator.host == nil && session.sheet?.presentedViewController == nil }
         XCTAssertTrue(session.window.rootViewController?.presentedViewController === session.sheet)
         XCTAssertNil(session.sheet?.presentedViewController)
         XCTAssertTrue(session.state.confirmedPayloads.isEmpty)
@@ -71,7 +71,10 @@ final class ThemePopupInteractionTests: XCTestCase {
         session.coordinator.synchronize(from: session.anchor)
         session.state.presented = true
         session.coordinator.synchronize(from: session.anchor)
-        spin()
+        waitUntil {
+            guard let host = session.coordinator.host else { return false }
+            return host !== originalHost && host.view.window != nil && !host.isBeingPresented
+        }
         XCTAssertNotNil(session.coordinator.host)
         XCTAssertFalse(session.coordinator.host === originalHost)
         XCTAssertTrue(session.state.confirmedPayloads.isEmpty)
@@ -89,7 +92,7 @@ final class ThemePopupInteractionTests: XCTestCase {
         defer { session.close() }
         let originalID = try XCTUnwrap(session.coordinator.presentationID)
         session.coordinator.confirm(for: originalID)
-        spin()
+        waitUntil { !session.state.presented && session.coordinator.host == nil }
         session.coordinator.confirm(for: originalID)
         session.coordinator.cancel(for: originalID)
         session.coordinator.confirm()
@@ -134,7 +137,10 @@ final class ThemePopupInteractionTests: XCTestCase {
         }, onConfirm: {})
         session.coordinator.cancel()
         session.coordinator.cancel()
-        spin(1.2)
+        waitUntil {
+            guard let host = next.host else { return false }
+            return session.coordinator.host == nil && host.view.window != nil && !host.isBeingPresented
+        }
         XCTAssertEqual(session.state.cancelCount, 1)
         XCTAssertFalse(session.state.presented)
         XCTAssertNil(session.coordinator.host)
@@ -147,6 +153,7 @@ final class ThemePopupInteractionTests: XCTestCase {
 
     private func makeSession(inSheet: Bool = false) throws -> Session {
         let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let previousKeyWindow = scene.windows.first(where: \.isKeyWindow)
         let window = UIWindow(windowScene: scene)
         window.frame = CGRect(x: 0, y: 0, width: 420, height: 912)
         let anchor = AppDialogAnchorController()
@@ -158,18 +165,25 @@ final class ThemePopupInteractionTests: XCTestCase {
             sheet = nil
             window.rootViewController = anchor
         }
-        window.isHidden = false
+        window.makeKeyAndVisible()
         window.rootViewController?.view.layoutIfNeeded()
         if let sheet {
             sheet.modalPresentationStyle = .pageSheet
             window.rootViewController?.present(sheet, animated: false)
         }
-        spin(0.05)
+        waitUntil {
+            anchor.view.window != nil && (sheet == nil || (sheet?.presentingViewController != nil
+                && sheet?.isBeingPresented == false))
+        }
         let state = State()
         let coordinator = AppConfirmationPresenter.Coordinator(presenter(state))
         coordinator.synchronize(from: anchor)
-        spin()
-        return Session(window: window, anchor: anchor, sheet: sheet, coordinator: coordinator, state: state)
+        waitUntil {
+            guard let host = coordinator.host else { return false }
+            return host.view.window != nil && !host.isBeingPresented
+        }
+        return Session(window: window, previousKeyWindow: previousKeyWindow, anchor: anchor, sheet: sheet,
+                       coordinator: coordinator, state: state)
     }
 
     private func presenter(_ state: State, colorScheme: ColorScheme = .light) -> AppConfirmationPresenter {
@@ -186,6 +200,16 @@ final class ThemePopupInteractionTests: XCTestCase {
         RunLoop.main.run(until: Date().addingTimeInterval(seconds))
     }
 
+    // CI animations can outlast a fixed sleep; keep the actual dismissal/presentation assertions strict.
+    private func waitUntil(timeout: TimeInterval = 5, file: StaticString = #filePath, line: UInt = #line,
+                           _ condition: () -> Bool) {
+        let deadline = Date().addingTimeInterval(timeout)
+        while !condition(), Date() < deadline {
+            RunLoop.main.run(until: min(deadline, Date().addingTimeInterval(0.01)))
+        }
+        XCTAssertTrue(condition(), "Native presentation did not reach the expected state", file: file, line: line)
+    }
+
     private final class State {
         var presented = true
         var payload: String? = "budget-rule"
@@ -195,6 +219,7 @@ final class ThemePopupInteractionTests: XCTestCase {
 
     @MainActor private struct Session {
         let window: UIWindow
+        let previousKeyWindow: UIWindow?
         let anchor: AppDialogAnchorController
         let sheet: UINavigationController?
         let coordinator: AppConfirmationPresenter.Coordinator
@@ -204,6 +229,7 @@ final class ThemePopupInteractionTests: XCTestCase {
             coordinator.dismissImmediately()
             window.isHidden = true
             window.rootViewController = nil
+            previousKeyWindow?.makeKey()
         }
     }
 }

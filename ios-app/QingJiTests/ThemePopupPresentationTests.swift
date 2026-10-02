@@ -112,7 +112,7 @@ final class ThemePopupPresentationTests: XCTestCase {
             onCancel: {}, onConfirm: {})
         try attachPresentation(theme, name: name, width: width, contentSize: contentSize,
                                root: LinearGradient(colors: [theme.backgroundTop, theme.backgroundBottom],
-                                                    startPoint: .top, endPoint: .bottom), dialog: dialog)
+                                                    startPoint: .top, endPoint: .bottom).ignoresSafeArea(), dialog: dialog)
     }
 
     @MainActor
@@ -163,26 +163,36 @@ final class ThemePopupPresentationTests: XCTestCase {
                                                   contentSize: UIContentSizeCategory, root: Content,
                                                   dialog: UIAlertController? = nil) throws {
         let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let previousKeyWindow = scene.windows.first(where: \.isKeyWindow)
         let window = UIWindow(windowScene: scene)
         window.frame = CGRect(x: 0, y: 0, width: width, height: 912)
         window.overrideUserInterfaceStyle = theme.isDark ? .dark : .light
         window.traitOverrides.preferredContentSizeCategory = contentSize
         let content = root.environment(\.colorScheme, theme.isDark ? .dark : .light)
+            .environment(\.locale, Locale(identifier: "zh-Hans"))
         let controller = UIHostingController(rootView: content)
         window.rootViewController = controller
-        window.isHidden = false
+        controller.view.backgroundColor = UIColor(theme.backgroundBottom)
+        window.makeKeyAndVisible()
         defer {
             controller.dismiss(animated: false)
             window.isHidden = true
             window.rootViewController = nil
+            previousKeyWindow?.makeKey()
         }
         controller.view.frame = window.bounds
         controller.view.setNeedsLayout()
         controller.view.layoutIfNeeded()
-        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        try waitUntil { controller.view.window === window && !controller.isBeingPresented }
         if let dialog { controller.present(dialog, animated: false) }
-        RunLoop.main.run(until: Date().addingTimeInterval(0.3))
-        if let dialog { XCTAssertTrue(controller.presentedViewController === dialog) }
+        if let dialog {
+            try waitUntil {
+                controller.presentedViewController === dialog && dialog.view.window === window
+                    && !dialog.isBeingPresented
+            }
+        }
+        controller.view.layoutIfNeeded()
+        dialog?.view.layoutIfNeeded()
         let format = UIGraphicsImageRendererFormat()
         format.scale = 3
         let image = UIGraphicsImageRenderer(bounds: window.bounds, format: format).image { _ in
@@ -194,6 +204,18 @@ final class ThemePopupPresentationTests: XCTestCase {
         attachment.lifetime = .keepAlways
         add(attachment)
     }
+
+    @MainActor
+    private func waitUntil(timeout: TimeInterval = 5, _ condition: () -> Bool) throws {
+        let deadline = Date().addingTimeInterval(timeout)
+        while !condition(), Date() < deadline {
+            RunLoop.main.run(until: min(deadline, Date().addingTimeInterval(0.01)))
+        }
+        XCTAssertTrue(condition(), "Native view did not become ready for capture")
+        guard condition() else { throw CaptureError.presentationNotReady }
+    }
+
+    private enum CaptureError: Error { case presentationNotReady }
 
     @MainActor
     private func nativeDialog(destructive: Bool, scheme: ColorScheme) -> UIAlertController {
