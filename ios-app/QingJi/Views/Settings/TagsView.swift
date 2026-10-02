@@ -195,7 +195,7 @@ private struct TagEditorSheet: View {
 
     var body: some View {
         NavigationStack {
-            Form {
+            AppThemedForm {
                 TextField("标签名称", text: $name)
                     .onChange(of: name) { _, newValue in
                         if newValue.count > 8 { name = String(newValue.prefix(8)) }

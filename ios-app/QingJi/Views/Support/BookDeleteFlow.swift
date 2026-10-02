@@ -27,53 +27,44 @@ private struct BookDeleteFlow: ViewModifier {
                     moveTarget = target
                 }
             }
-            .alert(
+            .appConfirmationDialog(
                 "删除「\(emptyTarget?.name ?? "")」？",
-                isPresented: presence($emptyTarget)
+                isPresented: presence($emptyTarget),
+                message: "这个账本没有账目，删除后不可恢复。",
+                confirmText: "删除",
+                destructive: true
             ) {
-                Button("删除", role: .destructive) {
-                    if let target = emptyTarget { run { try BookStore.deleteMovingTransactions(target, in: context) } }
-                    emptyTarget = nil
-                }
-                Button("取消", role: .cancel) { emptyTarget = nil }
-            } message: {
-                Text("这个账本没有账目，删除后不可恢复。")
+                if let target = emptyTarget { run { try BookStore.deleteMovingTransactions(target, in: context) } }
+                emptyTarget = nil
             }
-            .alert(
+            .appConfirmationDialog(
                 "「\(moveTarget?.name ?? "")」有 \(count) 笔账目",
-                isPresented: presence($moveTarget)
-            ) {
-                Button("转移并删除") {
-                    if let target = moveTarget {
-                        let moved = count
-                        run(success: "\(moved) 笔账目已转移到总账本") {
-                            try BookStore.deleteMovingTransactions(target, in: context)
-                        }
-                    }
-                    moveTarget = nil
-                }
-                Button("取消", role: .cancel) {
+                isPresented: presence($moveTarget),
+                message: "建议把账目转移到总账本再删——记录一笔不丢。\n（点「取消」后仍想连账目一起删，会有单独确认。）",
+                confirmText: "转移并删除",
+                onCancel: {
                     let target = moveTarget
                     moveTarget = nil
-                    // 等上一个弹窗收起再弹第二道确认，否则 SwiftUI 会吞掉这一次展示。
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
-                        wipeTarget = target
+                    wipeTarget = target
+                }
+            ) {
+                if let target = moveTarget {
+                    let moved = count
+                    run(success: "\(moved) 笔账目已转移到总账本") {
+                        try BookStore.deleteMovingTransactions(target, in: context)
                     }
                 }
-            } message: {
-                Text("建议把账目转移到总账本再删——记录一笔不丢。\n（点「取消」后仍想连账目一起删，会有单独确认。）")
+                moveTarget = nil
             }
-            .alert(
+            .appConfirmationDialog(
                 "连 \(count) 笔账目一起删除？",
-                isPresented: presence($wipeTarget)
+                isPresented: presence($wipeTarget),
+                message: "「\(wipeTarget?.name ?? "")」和它的全部账目将永久删除，无法恢复。",
+                confirmText: "永久删除",
+                destructive: true
             ) {
-                Button("永久删除", role: .destructive) {
-                    if let target = wipeTarget { run { try BookStore.deleteWithTransactions(target, in: context) } }
-                    wipeTarget = nil
-                }
-                Button("取消", role: .cancel) { wipeTarget = nil }
-            } message: {
-                Text("「\(wipeTarget?.name ?? "")」和它的全部账目将永久删除，无法恢复。")
+                if let target = wipeTarget { run { try BookStore.deleteWithTransactions(target, in: context) } }
+                wipeTarget = nil
             }
             .alert(
                 "删除账本",
@@ -105,10 +96,8 @@ private struct BookDeleteFlow: ViewModifier {
             message = error.localizedDescription
         }
         guard let message else { return }
-        // 同样等确认弹窗收起后再提示结果。
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
-            resultMessage = message
-        }
+        // Confirmation actions already run after their presenter has dismissed.
+        resultMessage = message
     }
 }
 

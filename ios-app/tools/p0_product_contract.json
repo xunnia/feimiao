@@ -175,6 +175,9 @@
     "status-bar-and-safe-area-insets",
     "native-navigation-transition-and-edge-swipe",
     "native-keyboard-and-haptics",
+    "native-liquid-glass-materials-and-system-accessibility-adaptation",
+    "native-alert-menu-and-sheet-layout-preserving-product-actions-and-copy",
+    "native-form-and-picker-controls-preserving-fields-and-information-hierarchy",
     "ios-permission-wording-required-by-the-system",
     "sf-symbol-only-when-the-android-product-icon-has-no-custom-asset"
   ],

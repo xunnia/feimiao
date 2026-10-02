@@ -326,7 +326,7 @@ extension BudgetRuleEditorSheet {
                 .padding(EdgeInsets(top: 8, leading: 20, bottom: 24, trailing: 20))
             }
             .scrollDismissesKeyboard(.interactively)
-            .background(theme.sheet.ignoresSafeArea())
+            .background(theme.sheet)
             .navigationTitle(isEdit ? "编辑规则" : "新增规则")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -346,37 +346,27 @@ extension BudgetRuleEditorSheet {
                         .accessibilityIdentifier("budget-rule-save")
                 }
             }
-            .alert("改日常预算", isPresented: Binding(
+            .appConfirmationDialog("改日常预算", isPresented: Binding(
                 get: { baseEditWarning != nil }, set: { if !$0 { baseEditWarning = nil } }
-            )) {
-                Button("取消", role: .cancel) {}
-                Button("改") { save(confirmedBaseEdit: true) }
-            } message: {
-                Text(baseEditWarning ?? "")
+            ), message: baseEditWarning ?? "", confirmText: "改") {
+                save(confirmedBaseEdit: true)
             }
-            .alert("改成额外多给吗？", isPresented: Binding(
+            .appConfirmationDialog("改成额外多给吗？", isPresented: Binding(
                 get: { carvePrompt != nil }, set: { if !$0 { carvePrompt = nil } }
-            )) {
-                Button("取消", role: .cancel) {}
-                Button("改成额外多给") {
-                    funding = .extra
-                    save(force: .extra, confirmedBaseEdit: true)
-                }
-            } message: {
-                Text(carvePrompt ?? "")
+            ), message: carvePrompt ?? "", confirmText: "改成额外多给") {
+                funding = .extra
+                save(force: .extra, confirmedBaseEdit: true)
             }
-            .confirmationDialog(
+            .appConfirmationDialog(
                 "删除「\(originalRule.map(budgetRuleName) ?? "")」？",
                 isPresented: $confirmDelete,
-                titleVisibility: .visible
+                message: deleteMessage,
+                confirmText: "删除",
+                destructive: true
             ) {
-                Button("删除", role: .destructive) { deleteRule() }
-                Button("取消", role: .cancel) {}
-            } message: {
-                Text(deleteMessage)
+                deleteRule()
             }
         }
-        .presentationBackground(theme.sheet)
         .appRefreshOnDayChange { referenceDate = AppClock.now }
     }
 }

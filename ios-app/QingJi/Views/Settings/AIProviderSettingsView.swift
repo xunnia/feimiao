@@ -400,7 +400,7 @@ private struct AIProviderEditorView: View {
 
     var body: some View {
         NavigationStack {
-            Form {
+            AppThemedForm {
                 Section("服务商") {
                     Picker("类型", selection: $type) {
                         ForEach(AIProviderType.allCases) { item in

@@ -292,7 +292,7 @@ private struct ProfileEditorSheet: View {
 
     var body: some View {
         NavigationStack {
-            Form {
+            AppThemedForm {
                 Section {
                     HStack {
                         Spacer()

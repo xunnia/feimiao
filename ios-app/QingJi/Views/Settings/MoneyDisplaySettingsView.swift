@@ -38,7 +38,7 @@ struct MoneyDisplaySettingsView: View {
     }
 
     var body: some View {
-        Form {
+        AppThemedForm {
             Section("金额保留位数") {
                 Picker("小数位数", selection: $decimalPlaces) {
                     Text("两位").tag(2)

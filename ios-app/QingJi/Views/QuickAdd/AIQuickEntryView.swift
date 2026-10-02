@@ -83,7 +83,7 @@ struct AIQuickEntryView: View {
 
     var body: some View {
         NavigationStack {
-            Form {
+            AppThemedForm {
                 inputSection
                 if !refundNotice.isEmpty {
                     Section {

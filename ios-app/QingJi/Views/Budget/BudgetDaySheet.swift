@@ -103,7 +103,7 @@ struct BudgetDaySheet: View {
                 }
                 .padding(EdgeInsets(top: 4, leading: 16, bottom: 20, trailing: 16))
             }
-            .background(theme.sheet.ignoresSafeArea())
+            .background(theme.sheet)
             .navigationTitle(title)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -115,7 +115,6 @@ struct BudgetDaySheet: View {
                 EditTransactionSheet(transaction: transaction)
             }
         }
-        .presentationBackground(theme.sheet)
         .appRefreshOnDayChange { referenceDate = AppClock.now }
     }
 

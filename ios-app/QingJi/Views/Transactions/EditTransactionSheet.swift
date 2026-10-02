@@ -43,7 +43,7 @@ private struct OffsetSheet: View {
 
     var body: some View {
         NavigationStack {
-            Form {
+            AppThemedForm {
                 Section {
                     LabeledContent("原账单") {
                         Text(original.category?.name ?? "支出")
@@ -202,7 +202,7 @@ struct EditTransactionSheet: View {
 
     var body: some View {
         NavigationStack {
-            Form {
+            AppThemedForm {
                 Section {
                     TextField("金额", text: $amountText)
                         .keyboardType(.decimalPad)

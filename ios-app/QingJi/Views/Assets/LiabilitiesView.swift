@@ -234,7 +234,7 @@ private struct LiabilityEditor: View {
 
     var body: some View {
         NavigationStack {
-            Form {
+            AppThemedForm {
                 Section {
                     Picker("类型", selection: $kind) {
                         ForEach(LiabilityKind.allCases) { kind in
@@ -387,7 +387,7 @@ private struct LiabilityRepaymentSheet: View {
 
     var body: some View {
         NavigationStack {
-            Form {
+            AppThemedForm {
                 Section {
                     Text("当前本金 \(MoneyFormat.string(profile.currentPrincipal, currencyCode: profile.currencyCode))")
                         .foregroundStyle(.secondary)

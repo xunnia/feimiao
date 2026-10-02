@@ -91,7 +91,7 @@ struct AppThemePalette {
     let preferences: AppThemePreferences
     let colorScheme: ColorScheme
 
-    private var isDark: Bool { colorScheme == .dark || preferences.preset == .night }
+    var isDark: Bool { colorScheme == .dark || preferences.preset == .night }
     private var darkBase: UIColor { AppThemePreset.color(preferences.preset == .night ? 0x17191F : 0x211E1C) }
     private var topUIColor: UIColor {
         Self.blend(preferences.preset.bottom, preferences.preset.top, fraction: preferences.intensity)
@@ -102,19 +102,20 @@ struct AppThemePalette {
     var backgroundBottom: Color {
         Color(uiColor: isDark ? darkBase : preferences.preset.bottom)
     }
-    var sheet: Color {
-        Color(uiColor: isDark ? Self.blend(darkBase, .white, fraction: 0.06)
-              : preferences.preset == .white ? .white : preferences.preset.bottom)
+    private var sheetUIColor: UIColor {
+        if isDark { return Self.blend(darkBase, .white, fraction: 0.06) }
+        if preferences.preset == .white { return .white }
+        // Match Android: carry a restrained amount of the actual theme tint into floating surfaces.
+        return Self.blend(preferences.preset.bottom, topUIColor, fraction: 0.35)
     }
+    var sheet: Color { Color(uiColor: sheetUIColor) }
     var card: Color {
         Color(uiColor: isDark ? AppThemePreset.color(0x332F2C) : .white)
             .opacity(isDark ? min(0.95, preferences.cardAlpha + 0.15) : preferences.cardAlpha)
     }
     var fill: Color {
-        let base = isDark ? Self.blend(darkBase, .white, fraction: 0.06)
-            : preferences.preset == .white ? UIColor.white : preferences.preset.bottom
         let ink = isDark ? UIColor.white : Self.blend(topUIColor, .black, fraction: 0.55)
-        return Color(uiColor: Self.blend(base, ink, fraction: isDark ? 0.07 : 0.09))
+        return Color(uiColor: Self.blend(sheetUIColor, ink, fraction: isDark ? 0.07 : 0.09))
     }
     var segmentTrack: Color {
         let ink = isDark ? UIColor.white : Self.blend(topUIColor, .black, fraction: 0.55)

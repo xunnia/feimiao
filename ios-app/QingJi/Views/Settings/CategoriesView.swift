@@ -356,7 +356,7 @@ private struct CategoryEditorSheet: View {
 
     var body: some View {
         NavigationStack {
-            Form {
+            AppThemedForm {
                 Section {
                     TextField("分类名称", text: $name)
                 } header: {
@@ -429,7 +429,7 @@ private struct CategoryMergeSheet: View {
 
     var body: some View {
         NavigationStack {
-            Form {
+            AppThemedForm {
                 Section {
                     LabeledContent("来源", value: source.name)
                     Picker("目标", selection: $targetKey) {

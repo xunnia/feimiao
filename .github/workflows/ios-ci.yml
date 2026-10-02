@@ -123,6 +123,7 @@ jobs:
             -scheme QingJi \
             -destination "platform=iOS Simulator,name=$DEVICE" \
             -derivedDataPath build-tests \
+            -resultBundlePath app-tests.xcresult \
             CODE_SIGNING_ALLOWED=NO 2>&1 \
             | tee xcodebuild-tests.log
           build_status=${PIPESTATUS[0]}
@@ -134,11 +135,22 @@ jobs:
             done
           fi
           test "$build_status" -eq 0
+      - name: Export XCTest screenshot attachments
+        if: always()
+        run: |
+          if [ -d app-tests.xcresult ]; then
+            xcrun xcresulttool export attachments \
+              --path app-tests.xcresult \
+              --output-path app-test-attachments
+          fi
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: app-tests-diagnostics
-          path: xcodebuild-tests.log
+          path: |
+            xcodebuild-tests.log
+            app-tests.xcresult
+            app-test-attachments/
           if-no-files-found: warn
 
   simulator-screenshots:

@@ -907,7 +907,7 @@ struct PhysicalAssetEditor: View {
                 } else if isTransactionSource {
                     transactionPurchaseForm
                 } else {
-                    Form {
+                    AppThemedForm {
                         Section {
                             TextField("物品名称", text: $name)
                             Picker("类型", selection: $kind) {
@@ -1444,7 +1444,7 @@ private struct ReceivableEditor: View {
 
     var body: some View {
         NavigationStack {
-            Form {
+            AppThemedForm {
                 Section {
                     TextField("权益名称", text: $name)
                     Picker("类型", selection: $kind) {
@@ -1556,7 +1556,7 @@ private struct ReceivableRecoverySheet: View {
 
     var body: some View {
         NavigationStack {
-            Form {
+            AppThemedForm {
                 Section {
                     Text("剩余可收回 \(MoneyFormat.string(asset.remainingAmount, currencyCode: asset.currencyCode))")
                         .foregroundStyle(.secondary)

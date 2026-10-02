@@ -235,7 +235,7 @@ private struct RecurringRuleEditor: View {
 
     var body: some View {
         NavigationStack {
-            Form {
+            AppThemedForm {
                 Section {
                     Picker("类型", selection: $kind) {
                         Text("支出").tag(TransactionKind.expense)

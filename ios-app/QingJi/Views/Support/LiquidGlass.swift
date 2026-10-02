@@ -189,6 +189,25 @@ struct AppLabeledField<Content: View>: View {
     }
 }
 
+/// Theme the content layer, while Form retains native rows, controls and sheet chrome.
+struct AppThemedForm<Content: View>: View {
+    @AppThemeContext private var theme
+    let content: Content
+
+    init(@ViewBuilder content: () -> Content) {
+        self.content = content()
+    }
+
+    var body: some View {
+        Form {
+            content.listRowBackground(theme.card)
+        }
+        .scrollContentBackground(.hidden)
+        .background(theme.sheet)
+        .tint(Color.statisticsAccent)
+    }
+}
+
 struct AppSegmentOption<Value: Hashable>: Identifiable {
     let value: Value
     let title: String
@@ -252,10 +271,6 @@ struct AppSelectionMenu<Value: Hashable, Label: View>: View {
     let options: [AppMenuOption<Value>]
     let onSelect: (Value) -> Void
     let label: Label
-    @State private var showing = false
-    @AppThemeContext private var theme
-    @ScaledMetric(relativeTo: .body) private var titleSize: CGFloat = 15
-    @ScaledMetric(relativeTo: .caption) private var subtitleSize: CGFloat = 12.5
 
     init(selected: Value, options: [AppMenuOption<Value>], onSelect: @escaping (Value) -> Void,
          @ViewBuilder label: () -> Label) {
@@ -266,52 +281,24 @@ struct AppSelectionMenu<Value: Hashable, Label: View>: View {
     }
 
     var body: some View {
-        Button { showing = true } label: { label }
-            .buttonStyle(.plain)
-            .popover(isPresented: $showing) {
-                ScrollView {
-                    VStack(spacing: 0) {
-                        ForEach(Array(options.enumerated()), id: \.element.id) { index, option in
-                            if index > 0 { Divider().padding(.horizontal, 12) }
-                            Button {
-                                showing = false
-                                onSelect(option.value)
-                            } label: {
-                                HStack(spacing: 10) {
-                                    if let icon = option.systemName {
-                                        Image(systemName: icon).frame(width: 20).foregroundStyle(.secondary)
-                                    }
-                                    VStack(alignment: .leading, spacing: 4) {
-                                        Text(option.title)
-                                            .font(.system(size: titleSize, weight: .medium))
-                                            .fixedSize(horizontal: false, vertical: true)
-                                        if let subtitle = option.subtitle {
-                                            Text(subtitle)
-                                                .font(.system(size: subtitleSize)).foregroundStyle(.secondary)
-                                                .fixedSize(horizontal: false, vertical: true)
-                                        }
-                                    }
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                                    Image(systemName: "checkmark")
-                                        .foregroundStyle(Color.statisticsAccent)
-                                        .opacity(selected == option.value ? 1 : 0)
-                                        .frame(width: 16)
-                                }
-                                .foregroundStyle(.primary)
-                                .padding(12)
-                                .frame(maxWidth: .infinity, minHeight: 48, alignment: .leading)
-                                .contentShape(Rectangle())
-                            }
-                            .buttonStyle(.plain)
-                            .accessibilityIdentifier(option.identifier ?? "")
-                            .accessibilityAddTraits(selected == option.value ? .isSelected : [])
-                        }
+        Menu {
+            ForEach(options) { option in
+                Toggle(isOn: Binding(
+                    get: { selected == option.value },
+                    set: { if $0 && selected != option.value { onSelect(option.value) } }
+                )) {
+                    if let icon = option.systemName {
+                        SwiftUI.Label(option.title, systemImage: icon)
+                    } else {
+                        Text(option.title)
                     }
+                    if let subtitle = option.subtitle { Text(subtitle) }
                 }
-                .frame(width: 280, height: min(420, CGFloat(options.count) * (options.contains { $0.subtitle != nil } ? 90 : 52)))
-                .presentationCompactAdaptation(.popover)
-                .presentationBackground(theme.sheet)
+                .accessibilityIdentifier(option.identifier ?? "")
             }
+        } label: { label }
+        .menuActionDismissBehavior(.enabled)
+        .buttonStyle(.plain)
     }
 }
 
