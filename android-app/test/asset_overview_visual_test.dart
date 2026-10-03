@@ -20,7 +20,7 @@ void main() {
   setUpAll(() async {
     sqfliteFfiInit();
     databaseFactory = databaseFactoryFfi;
-    await loadScreenshotFonts();
+    await loadScreenshotFonts(force: true);
     for (final entry in {
       'AssetLabels': 'assets/fonts/AssetLabels-VF.ttf',
       'AssetAmount': 'assets/fonts/Nunito-ExtraBold.ttf',
@@ -102,8 +102,10 @@ void main() {
           final image = await boundary.toImage(pixelRatio: 3);
           try {
             final data = await image.toByteData(format: ui.ImageByteFormat.png);
-            final file = File(
-                'outputs/ui_comparisons/2026-10-03-asset-overview/page-${preset.key}-$suffix.png');
+            final output =
+                Platform.environment['ASSET_SCREENSHOT_OUTPUT_DIR'] ??
+                    'outputs/ui_comparisons/2026-10-03-asset-overview';
+            final file = File('$output/page-${preset.key}-$suffix.png');
             await file.parent.create(recursive: true);
             await file.writeAsBytes(data!.buffer.asUint8List());
           } finally {

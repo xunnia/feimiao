@@ -341,7 +341,7 @@ class _AccountsViewState extends State<AccountsView> {
           ),
         ],
         const SizedBox(height: 12),
-        AssetAnalysisCard(breakdown: breakdown),
+        AssetAnalysisCard(breakdown: breakdown, partial: netWorthPartial),
       ],
     );
   }

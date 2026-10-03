@@ -282,7 +282,16 @@ void main() {
     expect(find.byKey(const ValueKey('asset-metric-total')), findsOneWidget);
     expect(
         find.byKey(const ValueKey('asset-metric-liabilities')), findsOneWidget);
-    expect(find.text('自动估算'), findsOneWidget);
+    expect(find.byTooltip('估算与数据说明'), findsOneWidget);
+    await tester.tap(find.byTooltip('估算与数据说明'));
+    await pumpViewAnimations(tester);
+    expect(find.textContaining('人民币自动估算'), findsOneWidget);
+    final sheet = find.byType(SheetHeader);
+    await tester.tap(find
+        .descendant(of: sheet, matching: find.byType(AppCircleButton))
+        .first);
+    await pumpViewAnimations(tester);
+    expect(sheet, findsNothing);
     expect(find.text('本月收支净额'), findsNothing);
     expect(find.textContaining('本月收支净额'), findsNothing);
     expect(tester.takeException(), isNull);

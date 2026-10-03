@@ -2,6 +2,7 @@ import 'dart:math' as math;
 
 import 'package:decimal/decimal.dart';
 import 'package:fl_chart/fl_chart.dart';
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 
 import '../../core/account/net_worth_snapshot.dart';
@@ -13,6 +14,9 @@ import '../../data/app_repository.dart';
 import '../../theme/app_colors.dart';
 import '../../theme/app_tokens.dart';
 import '../../widgets/ios_menu.dart';
+import '../../widgets/settings_ui.dart';
+import '../common/app_sheet.dart';
+import 'asset_overview_style.dart';
 
 class AssetOverviewDashboard extends StatefulWidget {
   const AssetOverviewDashboard({
@@ -49,23 +53,52 @@ class _AssetOverviewDashboardState extends State<AssetOverviewDashboard> {
       AssetOverviewMetric.total: widget.breakdown.totalAssets,
       AssetOverviewMetric.liabilities: widget.breakdown.totalLiabilities,
     };
-    final labelStyle = TextStyle(
-      fontFamily: 'AssetLabels',
-      fontSize: 15,
-      height: 1.35,
-      fontWeight: FontWeight.w400,
-      fontVariations: const [FontVariation('wght', 450)],
-      color: scheme.onSurface.withValues(alpha: 0.65),
-    );
+    final labelStyle = AssetOverviewStyle.label(context);
     final minor = decimalToBudgetCents(widget.breakdown.netWorth);
     final delta =
         projection.delta(AssetOverviewMetric.netWorth, currentMinor: minor);
+    final qualitySummary = [
+      if (widget.partial) '部分金额待确认',
+      if (widget.excludedCount > 0) '${widget.excludedCount} 项未计入',
+      if (projection.trend.breaks.isNotEmpty) '趋势有断点',
+    ].join(' · ');
+    final changeLabel = Text(
+      delta == null
+          ? '区间变化暂不可比'
+          : '区间变化 ${delta >= 0 ? '+' : ''}${_amount(budgetDecimalFromCents(delta)!)}',
+      style: AppType.secondary(scheme).copyWith(fontFamily: 'Nunito'),
+    );
+    final rangeControl = Builder(
+      builder: (anchor) => TextButton(
+        key: const ValueKey('asset-trend-range'),
+        style: TextButton.styleFrom(
+          foregroundColor: scheme.onSurface.withValues(alpha: 0.65),
+          padding: const EdgeInsets.symmetric(horizontal: 4),
+          minimumSize: const Size(0, 32),
+          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+        ),
+        onPressed: () => showIosMenu(anchor, [
+          for (final range in AssetTrendRange.values)
+            IosMenuItem(
+              label: range.label,
+              icon: CupertinoIcons.calendar,
+              selected: range == _range,
+              onTap: () => setState(() => _range = range),
+            ),
+        ]),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          Text(_range.label, style: const TextStyle(fontSize: 12)),
+          const SizedBox(width: 4),
+          const Icon(CupertinoIcons.chevron_down, size: 12),
+        ]),
+      ),
+    );
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         Container(
           key: const ValueKey('asset-net-worth-card'),
-          padding: const EdgeInsets.fromLTRB(12, 16, 12, 12),
+          padding: const EdgeInsets.fromLTRB(16, 16, 16, 12),
           decoration: ShapeDecoration(
               color: AppColors.card(scheme),
               shape: RoundedRectangleBorder(
@@ -80,53 +113,36 @@ class _AssetOverviewDashboardState extends State<AssetOverviewDashboard> {
                       key: const ValueKey('asset-net-worth-title'),
                       style: labelStyle)),
               Text('人民币', style: AppType.caption(scheme)),
+              const SizedBox(width: 6),
+              SizedBox(
+                width: 24,
+                height: 24,
+                child: IconButton(
+                  tooltip: '估算与数据说明',
+                  padding: EdgeInsets.zero,
+                  iconSize: 16,
+                  color: scheme.onSurface.withValues(alpha: 0.65),
+                  onPressed: () => _showExplanation(context, projection),
+                  icon: const Icon(CupertinoIcons.info_circle),
+                ),
+              ),
             ]),
             const SizedBox(height: 8),
-            _Amount(widget.breakdown.netWorth,
-                size: 38, weight: FontWeight.w700),
+            AssetOverviewAmount(widget.breakdown.netWorth,
+                size: 41.75, weight: FontWeight.w800),
             const SizedBox(height: 6),
-            Text(
-              delta == null
-                  ? '区间变化暂不可比'
-                  : '区间变化 ${delta >= 0 ? '+' : '-'}${_amount(budgetDecimalFromCents(delta.abs())!)}',
-              style: AppType.secondary(scheme).copyWith(fontFamily: 'Nunito'),
-            ),
-            if (widget.partial || widget.excludedCount > 0) ...[
-              const SizedBox(height: 6),
-              Text(
-                  [
-                    if (widget.partial) '部分金额待确认',
-                    if (widget.excludedCount > 0)
-                      '${widget.excludedCount} 项未计入',
-                  ].join(' · '),
-                  style: AppType.caption(scheme)),
-            ],
-            const SizedBox(height: 12),
-            Row(children: [
-              Expanded(child: Text('自动估算', style: AppType.caption(scheme))),
-              Builder(
-                  builder: (anchor) => TextButton(
-                        key: const ValueKey('asset-trend-range'),
-                        style: TextButton.styleFrom(
-                            foregroundColor:
-                                scheme.onSurface.withValues(alpha: 0.65),
-                            padding: const EdgeInsets.symmetric(horizontal: 4)),
-                        onPressed: () => showIosMenu(anchor, [
-                          for (final range in AssetTrendRange.values)
-                            IosMenuItem(
-                                label: range.label,
-                                icon: Icons.calendar_today_outlined,
-                                selected: range == _range,
-                                onTap: () => setState(() => _range = range)),
-                        ]),
-                        child: Row(mainAxisSize: MainAxisSize.min, children: [
-                          Text(_range.label,
-                              style: const TextStyle(fontSize: 12)),
-                          const SizedBox(width: 4),
-                          const Icon(Icons.keyboard_arrow_down, size: 15)
-                        ]),
-                      )),
-            ]),
+            if (MediaQuery.textScalerOf(context).scale(13) > 18)
+              Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                changeLabel,
+                Align(alignment: Alignment.centerRight, child: rangeControl),
+              ])
+            else
+              Row(children: [
+                Expanded(child: changeLabel),
+                const SizedBox(width: 8),
+                rangeControl,
+              ]),
+            const SizedBox(height: 6),
             SizedBox(
                 height: projection.trend.hasTrend
                     ? 184 +
@@ -141,8 +157,10 @@ class _AssetOverviewDashboardState extends State<AssetOverviewDashboard> {
                     metric: AssetOverviewMetric.netWorth,
                     color: kCatBlueGray,
                     axes: true)),
-            if (projection.trend.breaks.isNotEmpty)
-              Text('统计范围或数据质量变化处断开', style: AppType.caption(scheme)),
+            if (qualitySummary.isNotEmpty) ...[
+              const SizedBox(height: 6),
+              Text(qualitySummary, style: AppType.caption(scheme)),
+            ],
           ]),
         ),
         const SizedBox(height: 12),
@@ -170,36 +188,54 @@ class _AssetOverviewDashboardState extends State<AssetOverviewDashboard> {
       ],
     );
   }
+
+  void _showExplanation(BuildContext context, AssetOverviewProjection p) {
+    final scheme = Theme.of(context).colorScheme;
+    final missing = p.trend.points
+        .where((point) => point.valuationCoverage.missingValuationCount > 0)
+        .length;
+    final messages = [
+      '金额为已计入资产的人民币自动估算，区间变化不是投资收益率。',
+      if (widget.partial) '当前部分金额待确认，请到「数据待完善」检查具体项目。',
+      if (widget.excludedCount > 0) '${widget.excludedCount} 项未计入当前净资产。',
+      if (missing > 0) '$missing 个历史快照估值待确认，不参与连线或比较，不能把补齐估值当作增长。',
+      if (p.trend.breaks.isNotEmpty) '统计范围或数据质量变化处断开，不跨断点计算涨幅。',
+      if (p.trend.points
+          .any((point) => !point.lineage.currencyCoverage.isComplete))
+        '部分外币未换算；仅在排除币种、统计范围和计算版本一致时比较已覆盖金额。',
+    ];
+    showBlurSheet<void>(context,
+        child: Builder(
+            builder: (sheetContext) => DecoratedBox(
+                  decoration:
+                      BoxDecoration(color: AppColors.sheetSurface(scheme)),
+                  child: SingleChildScrollView(
+                      child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      SheetHeader(
+                          title: '估算与数据说明',
+                          onClose: () => Navigator.of(sheetContext).pop()),
+                      Padding(
+                          padding: const EdgeInsets.fromLTRB(24, 8, 24, 24),
+                          child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                for (final message in messages)
+                                  Padding(
+                                      padding:
+                                          const EdgeInsets.only(bottom: 12),
+                                      child: Text(message,
+                                          style: AppType.secondary(scheme))),
+                              ])),
+                    ],
+                  )),
+                )));
+  }
 }
 
-String _amount(Decimal value) =>
-    MoneyFormat.string(value).replaceAll('¥', '').trim();
-
-class _Amount extends StatelessWidget {
-  const _Amount(this.value, {required this.size, required this.weight});
-  final Decimal value;
-  final double size;
-  final FontWeight weight;
-
-  @override
-  Widget build(BuildContext context) => Semantics(
-        label: '${_amount(value)} 人民币',
-        child: ExcludeSemantics(
-            child: FittedBox(
-          fit: BoxFit.scaleDown,
-          alignment: Alignment.centerLeft,
-          child: Text(_amount(value),
-              style: TextStyle(
-                  fontFamily: size == 28 ? 'AssetAmount' : 'Nunito',
-                  fontSize: size,
-                  height: size == 28 ? 1 : 1.1,
-                  fontWeight: weight,
-                  color: value < Decimal.zero
-                      ? AppColors.warning
-                      : Theme.of(context).colorScheme.onSurface)),
-        )),
-      );
-}
+String _amount(Decimal value) => AssetOverviewStyle.amount(value);
 
 class _MetricCard extends StatelessWidget {
   const _MetricCard(
@@ -232,7 +268,7 @@ class _MetricCard extends StatelessWidget {
     return Container(
       key: ValueKey('asset-metric-${metric.name}'),
       constraints: BoxConstraints(minHeight: height),
-      padding: const EdgeInsets.all(12),
+      padding: const EdgeInsets.all(16),
       decoration: ShapeDecoration(
         color: AppColors.card(scheme),
         shape: RoundedRectangleBorder(
@@ -245,8 +281,8 @@ class _MetricCard extends StatelessWidget {
         const SizedBox(height: 4),
         SizedBox(
             width: double.infinity,
-            child: _Amount(amount, size: 28, weight: FontWeight.w800)),
-        SizedBox(height: largeText ? 12 : math.max(2, height - 104.25)),
+            child: AssetOverviewAmount(amount, size: 22.5)),
+        SizedBox(height: largeText ? 12 : math.max(0, height - 106)),
         Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
           Expanded(
               child: Semantics(
@@ -263,13 +299,15 @@ class _MetricCard extends StatelessWidget {
                             ? Icons.arrow_upward
                             : Icons.remove,
                     size: 12,
-                    color: scheme.onSurface.withValues(alpha: 0.65)),
+                    color: AssetOverviewStyle.labelColor(context)),
               Flexible(
                   child: Text(percent ?? '—',
-                      style: labelStyle.copyWith(
-                          fontSize: 12.5,
+                      style: TextStyle(
+                          fontSize: 13,
                           fontFamily: 'Nunito',
-                          fontWeight: FontWeight.w600))),
+                          fontWeight: FontWeight.w700,
+                          fontFeatures: const [FontFeature('ss01')],
+                          color: AssetOverviewStyle.labelColor(context)))),
             ])),
           )),
           const SizedBox(width: 4),
@@ -308,6 +346,7 @@ class AssetOverviewChart extends StatelessWidget {
     }
     final points = trend.segments.expand((s) => s.points).toList();
     final first = points.first.lineage.asOf;
+    final last = points.last.lineage.asOf;
     final dates =
         points.map((p) => p.lineage.asOf.difference(first).inDays.toDouble());
     final maxX = math.max(1.0, dates.reduce(math.max));
@@ -318,20 +357,31 @@ class AssetOverviewChart extends StatelessWidget {
         math.max((high - low) * 0.12, math.max(high.abs() * 0.01, 1.0));
     final scheme = Theme.of(context).colorScheme;
     final axisScale = MediaQuery.textScalerOf(context).scale(10) / 10;
+    final crossesYear = first.year != last.year;
+    final dateInterval = (maxX / (axisScale > 1.3 ? 1 : 3)).ceilToDouble();
     Widget dateTitle(double value, TitleMeta meta) {
+      if (value != meta.min &&
+          value != meta.max &&
+          meta.max - value < dateInterval * 0.5) {
+        return const SizedBox.shrink();
+      }
       final date = DateTime(first.year, first.month, first.day + value.round());
       return SideTitleWidget(
           axisSide: meta.axisSide,
           fitInside:
               SideTitleFitInsideData.fromTitleMeta(meta, distanceFromEdge: 0),
-          child: Text('${date.month}/${date.day}',
+          child: Text(
+              '${crossesYear ? '${date.year}\n' : ''}${date.month}/${date.day}',
               style: AppType.caption(scheme).copyWith(fontSize: 10)));
     }
 
     return Semantics(
       image: true,
-      label:
-          '${metric.label}估算趋势，${points.length}个快照，${trend.breaks.length}处断点，非收益率',
+      label: '${metric.label}估算趋势，${points.length}个快照，'
+          '${_dayLabel(first)}为${MoneyFormat.string(budgetDecimalFromCents(metric.minor(points.first.components))!)}人民币，'
+          '${_dayLabel(last)}为${MoneyFormat.string(budgetDecimalFromCents(metric.minor(points.last.components))!)}人民币，'
+          '${trend.breaks.length}处断点，'
+          '${trend.points.any((point) => point.lineage.quality != NetWorthSnapshotQuality.available) ? '部分数据，' : ''}非收益率',
       child: ExcludeSemantics(
           child: LineChart(
         LineChartData(
@@ -358,8 +408,9 @@ class AssetOverviewChart extends StatelessWidget {
             bottomTitles: AxisTitles(
                 sideTitles: SideTitles(
                     showTitles: axes,
-                    reservedSize: math.max(25, axisScale * 14 + 8),
-                    interval: maxX / (axisScale > 1.3 ? 1 : 3),
+                    reservedSize:
+                        math.max(25, axisScale * (crossesYear ? 28 : 14) + 8),
+                    interval: dateInterval,
                     getTitlesWidget: dateTitle)),
             rightTitles: AxisTitles(
                 sideTitles: SideTitles(
@@ -411,3 +462,5 @@ class AssetOverviewChart extends StatelessWidget {
     );
   }
 }
+
+String _dayLabel(DateTime day) => '${day.year}年${day.month}月${day.day}日';

@@ -62,7 +62,7 @@ class AssetOverviewProjection {
   // Integer arithmetic rounds to one decimal without floating money arithmetic.
   String? percentage(AssetOverviewMetric metric, {required int currentMinor}) {
     final change = delta(metric, currentMinor: currentMinor);
-    if (change == null) return null;
+    if (change == null || currentMinor <= 0) return null;
     final base = metric.minor(trend.points.first.components);
     if (base <= 0) return null;
     final tenths = (change.abs() * 1000 + base ~/ 2) ~/ base;

@@ -17,7 +17,7 @@ import 'screenshot_font_support.dart';
 
 void main() {
   setUpAll(() async {
-    await loadScreenshotFonts();
+    await loadScreenshotFonts(force: true);
     for (final entry in {
       'AssetLabels': 'assets/fonts/AssetLabels-VF.ttf',
       'AssetAmount': 'assets/fonts/Nunito-ExtraBold.ttf'
@@ -108,8 +108,11 @@ void main() {
             try {
               final data =
                   await image.toByteData(format: ui.ImageByteFormat.png);
+              final output =
+                  Platform.environment['ASSET_SCREENSHOT_OUTPUT_DIR'] ??
+                      'outputs/ui_comparisons/2026-10-03-asset-overview';
               final file = File(
-                  'outputs/ui_comparisons/2026-10-03-asset-overview/dashboard-${size.width.toInt()}-${scale.toInt()}.png');
+                  '$output/dashboard-${size.width.toInt()}-${scale.toInt()}.png');
               await file.parent.create(recursive: true);
               await file.writeAsBytes(data!.buffer.asUint8List());
             } finally {

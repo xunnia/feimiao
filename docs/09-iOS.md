@@ -28,6 +28,13 @@
 
 ## 2. 当前真实状态
 
+### 2026-10-03 资产卡片字体与结构区补充（本地源码，未编译/未采图）
+
+- 用户确认参考为橙云，核对公开源码固定提交的系统字体声明；在已有总览在途代码上把局部主小标题设为系统13常规secondary、主40/小22 rounded bold，保留动态字号/原生Menu/Swift Charts，内距16。不是打包Apple字体或复制橙云受限业务代码，也不以声明相同承诺截图100%一致。
+- 新增`AssetStructureProjection`与`AssetsStructureSection`：同一份breakdown的分类金额列表/细构成条；partial、零分母、负组件/负债及合计不符不造比例，单类别不画重复图，负债率不封顶。品牌色、动态字体分行与人民币读屏保留，总览避免重复调用breakdown。新增6项`AssetStructureProjectionTests`尚未运行，原6项总览XCTest也未验。
+- iOS目前只有计算快照和单账户余额核对，没有Android全局verified-checkpoint实体/冻结覆盖模型；不拿普通快照伪造「上次核对」，此项同款缺口仍开放。NetWorthStore既有归档/估值/历史语义及趋势可靠性差距也不在本批关闭。
+- 本机无Swift/Xcode，没有编译、原生交互或本批iOS前后图；两工作流各38路由和P0合同检查通过仍PARTIAL/6开放门，Android离屏图不算iOS通过。未提交/推送/触发Mac CI/出IPA，本批不改325母版/截图水印，详见02 §7.24。
+
 ### 2026-10-03 Android母版325已上线（仅工具元数据同步，iOS未发布）
 
 - Android资产总览与主题补修已发布VPS，版本1.310.0+325/b1003-325/DB v50，来源`4199708901e5de13e4c33913baaeab1fa653f9df`；APK117,445,927字节，SHA256 `DEB25A455E540B024E416BE94AD3201563E14E4F7617C7ACD351FA0DB94F6424`。正式门禁、1431全量及新旧域完整下载通过；装机仍未验，详情见02 §7.19。
