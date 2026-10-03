@@ -26,7 +26,7 @@ import '../assets/asset_balance_review_sheet.dart';
 import '../assets/asset_overview_cards.dart';
 import '../assets/funds_tab_cards.dart';
 import '../assets/liability_migration_sheet.dart';
-import '../assets/net_worth_trend_card.dart';
+import '../assets/asset_overview_dashboard.dart';
 import '../../core/account/liability_balance_mode.dart';
 import '../assets/physical_asset_detail_page.dart';
 import '../assets/physical_asset_form_sheet.dart';
@@ -93,19 +93,19 @@ class _AccountsViewState extends State<AccountsView> {
   void _checkNetWorthMilestone(AppRepository repo) {
     if (_milestoneCelebrated) return;
     const milestones = <int>[
-      1000000,   // 1万
-      5000000,   // 5万
-      10000000,  // 10万
-      20000000,  // 20万
-      50000000,  // 50万
+      1000000, // 1万
+      5000000, // 5万
+      10000000, // 10万
+      20000000, // 20万
+      50000000, // 50万
       100000000, // 100万
       200000000, // 200万
       500000000, // 500万
       1000000000, // 1000万
     ];
     final ordered = repo.verifiedNetWorthCheckpoints
-        .where((c) =>
-            c.header.status == NetWorthVerifiedCheckpointStatus.active)
+        .where(
+            (c) => c.header.status == NetWorthVerifiedCheckpointStatus.active)
         .toList()
       ..sort((a, b) => b.header.asOf.compareTo(a.header.asOf));
     if (ordered.length < 2) return;
@@ -285,7 +285,6 @@ class _AccountsViewState extends State<AccountsView> {
     required int includedCount,
     required int totalCount,
   }) {
-    final scheme = Theme.of(context).colorScheme;
     // 待处理卡只留「用户要去做事」的任务型条目；
     // 数据口径类条目收进右上 ⋯ 菜单的「数据待完善」弹层。
     final warrantyReminderCount = physicalAssets
@@ -315,10 +314,6 @@ class _AccountsViewState extends State<AccountsView> {
           }),
         ),
     ];
-    final fundsAssets = breakdown.cashAssets +
-        breakdown.investmentAssets +
-        breakdown.receivableAssets;
-    final fundsNetWorth = fundsAssets - breakdown.totalLiabilities;
     final hasVerifiedCheckpoint = repo.verifiedNetWorthCheckpoints.any(
       (checkpoint) =>
           checkpoint.header.status == NetWorthVerifiedCheckpointStatus.active,
@@ -326,58 +321,13 @@ class _AccountsViewState extends State<AccountsView> {
 
     return ListView(
       key: const Key('asset-overview'),
-      // 顶部留 12：探头猫探出卡顶 8dp，ListView 默认 Clip.hardEdge 会裁，
-      // padding 不够猫头就没了。
       padding: const EdgeInsets.fromLTRB(16, 12, 16, 32),
       children: [
-        // hero 数字 + 迷你趋势合成一张卡（数字上、趋势下），
-        // 右上角照主页手法挂探头猫（home_summary_card.dart 同款）。
-        Stack(
-          clipBehavior: Clip.none,
-          children: [
-            Container(
-              decoration: appCardDecoration(scheme),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  AssetSummaryCard(
-                    netWorth: breakdown.netWorth,
-                    fundsAssets: fundsAssets,
-                    physicalAssets: breakdown.physicalAssets,
-                    fundsNetWorth: fundsNetWorth,
-                    liabilityTotal: breakdown.totalLiabilities,
-                    totalAssets: breakdown.totalAssets,
-                    includedCount: includedCount,
-                    accountCount: totalCount,
-                    partial: netWorthPartial,
-                    embedded: true,
-                  ),
-                  appCardDivider(scheme),
-                  NetWorthEstimatedTrendCard(
-                    trend: repo.netWorthEstimatedTrend,
-                    embedded: true,
-                  ),
-                ],
-              ),
-            ),
-            Positioned(
-              top: -8,
-              right: -4,
-              child: IgnorePointer(
-                child: MascotBreath(
-                  bob: 2.0,
-                  sway: 0,
-                  alignment: Alignment.centerRight,
-                  child: Image.asset(
-                    'assets/mascot/idle.webp',
-                    // 比主页的 96 小一号，避免和 hero 大数字抢空间。
-                    height: 80,
-                    fit: BoxFit.fitHeight,
-                  ),
-                ),
-              ),
-            ),
-          ],
+        AssetOverviewDashboard(
+          breakdown: breakdown,
+          trend: repo.netWorthEstimatedTrend,
+          partial: netWorthPartial,
+          excludedCount: totalCount - includedCount,
         ),
         if (pending.isNotEmpty) ...[
           const SizedBox(height: 12),

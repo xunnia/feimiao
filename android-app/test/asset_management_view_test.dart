@@ -274,11 +274,14 @@ void main() {
     await tester.tap(find.text('总览'));
     await pumpViewAnimations(tester);
     expect(find.byKey(const Key('asset-overview')), findsOneWidget);
-    // The overview intentionally contains both the net-worth value heading
-    // and a separate net-worth trend card. Match the value heading exactly
-    // instead of treating the shared word "净资产" as a unique locator.
-    expect(find.text('净资产（按 CNY 计）'), findsOneWidget);
-    expect(find.text('净资产趋势'), findsOneWidget);
+    // Overview uses one net-worth card plus four independent component cards.
+    expect(find.text('净资产'), findsOneWidget);
+    expect(find.byKey(const ValueKey('asset-net-worth-card')), findsOneWidget);
+    expect(find.byKey(const ValueKey('asset-metric-funds')), findsOneWidget);
+    expect(find.byKey(const ValueKey('asset-metric-physical')), findsOneWidget);
+    expect(find.byKey(const ValueKey('asset-metric-total')), findsOneWidget);
+    expect(
+        find.byKey(const ValueKey('asset-metric-liabilities')), findsOneWidget);
     expect(find.text('自动估算'), findsOneWidget);
     expect(find.text('本月收支净额'), findsNothing);
     expect(find.textContaining('本月收支净额'), findsNothing);
@@ -310,17 +313,17 @@ void main() {
     await tester.tap(find.text('物品'));
     await pumpViewAnimations(tester);
     await tester.tap(find.byIcon(Icons.add));
-      await pumpViewAnimations(tester);
-      expect(find.text('从最近账单加入'), findsOneWidget);
+    await pumpViewAnimations(tester);
+    expect(find.text('从最近账单加入'), findsOneWidget);
 
-      // The unified add sheet intentionally scrolls on a 320dp viewport;
-      // bring the row into the viewport before exercising its tap target.
-      await tester.ensureVisible(find.text('从最近账单加入'));
-      await tester.tap(find.text('从最近账单加入'));
-      await pumpViewAnimations(tester);
-      expect(find.text('机械键盘订单'), findsOneWidget);
-      await tester.ensureVisible(find.text('机械键盘订单'));
-      await tester.tap(find.text('机械键盘订单'));
+    // The unified add sheet intentionally scrolls on a 320dp viewport;
+    // bring the row into the viewport before exercising its tap target.
+    await tester.ensureVisible(find.text('从最近账单加入'));
+    await tester.tap(find.text('从最近账单加入'));
+    await pumpViewAnimations(tester);
+    expect(find.text('机械键盘订单'), findsOneWidget);
+    await tester.ensureVisible(find.text('机械键盘订单'));
+    await tester.tap(find.text('机械键盘订单'));
     await pumpViewAnimations(tester);
     expect(find.text('填写物品信息'), findsOneWidget);
 
@@ -1121,7 +1124,7 @@ void main() {
     // 默认显示物品，切到总览才能看到净资产数据。
     await tester.tap(find.text('总览'));
     await pumpViewAnimations(tester);
-    expect(find.text('净资产（按 CNY 计）'), findsOneWidget);
+    expect(find.text('净资产'), findsOneWidget);
     expect(find.text('部分金额待确认'), findsOneWidget);
 
     // 到账待确认属于数据口径类条目，收进右上 ⋯ 菜单的「数据待完善」弹层。

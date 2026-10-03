@@ -333,7 +333,10 @@ void main() {
     final scheme =
         Theme.of(tester.element(find.byType(BudgetDaySheet))).colorScheme;
     expect(budgetSheetTileFill(scheme), AppColors.sheetFill(scheme));
-    expect(scheme.surface, const Color(0xFFFFF6F8));
+    expect(
+      scheme.surface,
+      Color.lerp(const Color(0xFFFFF6F8), const Color(0xFFFAD2DF), 0.35),
+    );
     expect(tester.takeException(), isNull);
     await shot(tester, 'budget_day_sheet_pink');
   });

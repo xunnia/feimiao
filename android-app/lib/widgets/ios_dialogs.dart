@@ -161,7 +161,6 @@ class DialogPillButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final dark = scheme.brightness == Brightness.dark;
     return GestureDetector(
       onTap: onTap,
       behavior: HitTestBehavior.opaque,
@@ -169,10 +168,7 @@ class DialogPillButton extends StatelessWidget {
         height: height,
         alignment: Alignment.center,
         decoration: BoxDecoration(
-          // 明确的灰底（图二），不是白底：浅色黑 7%、深色白 12%。
-          color: dark
-              ? Colors.white.withValues(alpha: 0.12)
-              : Colors.black.withValues(alpha: 0.07),
+          color: AppColors.dialogFill(scheme),
           borderRadius: BorderRadius.circular(999),
         ),
         child: Text(

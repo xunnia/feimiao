@@ -198,7 +198,9 @@ String membershipStatusText(Membership m, {DateTime? now}) {
   switch (m.status) {
     case MembershipStatus.active:
       final end = m.endsAt;
-      return end == null ? '$trial生效中' : '$trial${formatAccountDate(end, now: now)} 到期';
+      return end == null
+          ? '$trial生效中'
+          : '$trial${formatAccountDate(end, now: now)} 到期';
     case MembershipStatus.grace:
       final until = m.graceUntil;
       return until == null
@@ -267,7 +269,8 @@ class _QuotaBar extends StatelessWidget {
 }
 
 /// 兑换码（仅安卓，服务端 `redeem.in_app` 为 true 时才有入口）。
-Future<void> showRedeemDialog(BuildContext context, CloudAccount account) async {
+Future<void> showRedeemDialog(
+    BuildContext context, CloudAccount account) async {
   // 和其它表单弹窗一样不手动 dispose：弹窗关闭动画期间输入框还在用它。
   final controller = TextEditingController();
   final ok = await showIosFormDialog(
@@ -275,14 +278,16 @@ Future<void> showRedeemDialog(BuildContext context, CloudAccount account) async 
     title: '兑换码',
     subtitle: '输入兑换码开通或延长会员',
     confirmText: '兑换',
-    content: TextField(
-      key: const ValueKey('redeem-code'),
-      controller: controller,
-      autofocus: true,
-      autocorrect: false,
-      maxLength: 64,
-      textCapitalization: TextCapitalization.characters,
-      decoration: iosInputDecoration(context, hint: '例如 FM-XXXX-XXXX'),
+    content: Builder(
+      builder: (ctx) => TextField(
+        key: const ValueKey('redeem-code'),
+        controller: controller,
+        autofocus: true,
+        autocorrect: false,
+        maxLength: 64,
+        textCapitalization: TextCapitalization.characters,
+        decoration: iosInputDecoration(ctx, hint: '例如 FM-XXXX-XXXX'),
+      ),
     ),
   );
   final code = controller.text.trim();

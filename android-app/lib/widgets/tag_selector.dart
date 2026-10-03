@@ -36,11 +36,13 @@ class TagSelector extends StatelessWidget {
       context,
       title: '新建标签',
       confirmText: '创建',
-      content: TextField(
-        controller: ctrl,
-        autofocus: true,
-        maxLength: 8,
-        decoration: iosInputDecoration(context, hint: '如：聚餐、报销、旅行'),
+      content: Builder(
+        builder: (ctx) => TextField(
+          controller: ctrl,
+          autofocus: true,
+          maxLength: 8,
+          decoration: iosInputDecoration(ctx, hint: '如：聚餐、报销、旅行'),
+        ),
       ),
     );
     if (ok && ctrl.text.trim().isNotEmpty) {
@@ -116,8 +118,7 @@ class InlineTagChips extends StatelessWidget {
     if (tagIds.isEmpty) return const SizedBox.shrink();
     final repo = context.watch<AppRepository>();
     final tags = [
-      for (final id in tagIds)
-        ...repo.tags.where((t) => t.id == id),
+      for (final id in tagIds) ...repo.tags.where((t) => t.id == id),
     ];
     if (tags.isEmpty) return const SizedBox.shrink();
     return Padding(

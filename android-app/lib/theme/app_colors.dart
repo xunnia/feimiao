@@ -202,18 +202,17 @@ class AppColors {
           : Colors.black.withValues(alpha: 0.06 * strength);
 
   /// 弹层 / 弹窗 / 菜单的底色，跟主题走（2026-10-01 用户点名：弹层不许一律纯白）。
-  /// 简约白 = 纯白（灰页底上的白弹层，iOS 原生观感）；彩色主题 = 主题底色
-  /// （暖橙 #FFFDF7 奶白）；深色 = 页面底色往上提一档。
+  /// 彩色主题轻取渐变顶色，避免六套近白底色使浮层看起来始终是白色。
+  /// 顶色已包含用户的背景浓度；浮层不跟卡片透明度一起变透，保证可读。
   static Color sheetSurfaceFor(Brightness brightness) {
     if (brightness == Brightness.dark) {
       return Color.lerp(_bgDark, Colors.white, 0.06)!;
     }
     final nearWhiteSolid = _bgSolid && _bgBottom.computeLuminance() >= 0.90;
-    return nearWhiteSolid ? Colors.white : _bgBottom;
+    return nearWhiteSolid ? Colors.white : Color.lerp(_bgBottom, _bgTop, 0.35)!;
   }
 
-  static Color sheetSurface(ColorScheme scheme) =>
-      sheetSurfaceFor(scheme.brightness);
+  static Color sheetSurface(ColorScheme scheme) => scheme.surface;
 
   /// 主题「墨色」：主题顶色压暗。拿它调淡填充，暖橙出暖灰、樱粉出粉灰、
   /// 简约白出中性灰（≈ iOS systemGray6），不再一律冷灰。
@@ -221,14 +220,21 @@ class AppColors {
       ? Colors.white
       : Color.lerp(_bgSolid ? _bgBottom : _bgTop, Colors.black, 0.55)!;
 
-  /// 弹层里的实心淡填充（输入框、小格子、提示条）：弹层底 + 9% 主题墨色。
-  /// 暖橙 ≈ #F2EFE8（示意图 #F4EFE7），简约白 ≈ #F2F2F2。
-  static Color sheetFill(ColorScheme scheme) => Color.alphaBlend(
-        _themeInk(scheme.brightness).withValues(
-          alpha: scheme.brightness == Brightness.dark ? 0.07 : 0.09,
-        ),
-        sheetSurface(scheme),
+  static Color _containerSurface(Brightness brightness, double alpha) =>
+      Color.alphaBlend(
+        _themeInk(brightness).withValues(alpha: alpha),
+        sheetSurfaceFor(brightness),
       );
+
+  /// 从当前 Theme 快照取色，不混用旧 ColorScheme 和新的全局主题字段。
+  static Color sheetFill(ColorScheme scheme) => scheme.surfaceContainerHigh;
+
+  /// Translucent ink stays darker than the frosted card rather than filling
+  /// its pills with an opaque, brighter input color.
+  static Color dialogFill(ColorScheme scheme) =>
+      scheme.brightness == Brightness.dark
+          ? Colors.white.withValues(alpha: 0.12)
+          : Colors.black.withValues(alpha: 0.07);
 
   /// 分段控件底轨：半透明主题墨色，卡片上、弹层上都能用。
   static Color segmentTrack(ColorScheme scheme) =>
@@ -304,14 +310,14 @@ class AppTheme {
       primary: kCatBlueGray,
       secondary: kCatGold,
       tertiary: kCatPink,
-      // surface = 弹层/弹窗底色，跟主题走（暖橙=奶白、简约白=纯白）。
-      // 各级 container 仍去掉蓝紫 tint，统一中性白/浅灰，消除断层。
+      // 所有浮层及内部填充来自同一主题，不再叠一套冷灰/纯白。
       surface: AppColors.sheetSurfaceFor(Brightness.light),
-      surfaceContainerLowest: Colors.white,
-      surfaceContainerLow: const Color(0xFFF7F8FA),
-      surfaceContainer: const Color(0xFFF3F4F6),
-      surfaceContainerHigh: const Color(0xFFEEEFF2),
-      surfaceContainerHighest: const Color(0xFFEAECEF),
+      surfaceContainerLowest: AppColors.sheetSurfaceFor(Brightness.light),
+      surfaceContainerLow: AppColors._containerSurface(Brightness.light, 0.03),
+      surfaceContainer: AppColors._containerSurface(Brightness.light, 0.06),
+      surfaceContainerHigh: AppColors._containerSurface(Brightness.light, 0.09),
+      surfaceContainerHighest:
+          AppColors._containerSurface(Brightness.light, 0.12),
     );
 
     return ThemeData(
@@ -399,7 +405,7 @@ class AppTheme {
           borderSide: const BorderSide(color: kCatBlueGray, width: 1.5),
         ),
         filled: true,
-        fillColor: Colors.white,
+        fillColor: AppColors.inputFill(cs),
       ),
     );
   }
@@ -415,6 +421,12 @@ class AppTheme {
       tertiary: kCatPink,
       // 弹层底色：页面底色往上提一档，跟主题走（默认暖灰、暮夜冷灰）。
       surface: AppColors.sheetSurfaceFor(Brightness.dark),
+      surfaceContainerLowest: AppColors.sheetSurfaceFor(Brightness.dark),
+      surfaceContainerLow: AppColors._containerSurface(Brightness.dark, 0.025),
+      surfaceContainer: AppColors._containerSurface(Brightness.dark, 0.045),
+      surfaceContainerHigh: AppColors._containerSurface(Brightness.dark, 0.07),
+      surfaceContainerHighest:
+          AppColors._containerSurface(Brightness.dark, 0.10),
       onSurface: const Color(0xFFEDE8E0), // 暖白文字
     );
 
@@ -422,12 +434,12 @@ class AppTheme {
       colorScheme: cs,
       fontFamily: 'Nunito',
       fontFamilyFallback: const ['NotoSansSC'],
-      scaffoldBackgroundColor: const Color(0xFF211E1C),
+      scaffoldBackgroundColor: Colors.transparent,
       useMaterial3: true,
       platform: TargetPlatform.iOS,
       pageTransitionsTheme: _iosPageTransitions,
       appBarTheme: AppBarTheme(
-        backgroundColor: const Color(0xFF211E1C),
+        backgroundColor: Colors.transparent,
         surfaceTintColor: Colors.transparent,
         elevation: 0,
         scrolledUnderElevation: 0,
@@ -490,7 +502,7 @@ class AppTheme {
           ),
         ),
         filled: true,
-        fillColor: const Color(0xFF332F2C),
+        fillColor: AppColors.inputFill(cs),
       ),
     );
   }
