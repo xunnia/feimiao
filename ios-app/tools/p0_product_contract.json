@@ -12,16 +12,16 @@
     "cleanSourceAnchor": "b40316f336fb0aefabf67817460775b665fdaa1d",
     "integrationBranch": "main",
     "android": {
-      "version": "1.310.0+325",
-      "watermark": "b1003-325",
+      "version": "1.311.0+326",
+      "watermark": "b1003-326",
       "databaseVersion": 50,
-      "sourceCommit": "4199708901e5de13e4c33913baaeab1fa653f9df",
-      "apk": "ci-artifacts/releases/feimiao-codex-v1.310.0-325.apk",
-      "apkBytes": 117445927,
-      "apkSha256": "DEB25A455E540B024E416BE94AD3201563E14E4F7617C7ACD351FA0DB94F6424",
-      "apkSourceNote": "Verified release 325 APK matches the Android source tree at sourceCommit. VPS publication is tracked in docs/02. Screenshot runs build the checked-out source; Android device and iOS runtime acceptance remain pending.",
+      "sourceCommit": "fc1e797682d8a71a1b4d59619386b02b5e531498",
+      "apk": "ci-artifacts/releases/feimiao-codex-v1.311.0-326.apk",
+      "apkBytes": 117527847,
+      "apkSha256": "AE86D7EA71662491DDD817173AB201FF2BD46788F9828ACEBF2A3925580F55CC",
+      "apkSourceNote": "Verified release 326 APK matches the Android source tree at sourceCommit. VPS publication is tracked in docs/02. Screenshot runs build the checked-out source; Android device and iOS runtime acceptance remain pending.",
       "staticAnalysis": "0 errors; 89 warning/info diagnostics",
-      "tests": "1431/1431 passed locally on Windows"
+      "tests": "1515/1515 passed locally on Windows"
     },
     "ios": {
       "version": "1.286.0+300",
