@@ -8,7 +8,7 @@
 
 ## 1. 目标（一句话）
 
-**iOS 版就是 Android「肥喵记账」在 iPhone 上的原生实现，不是一个新产品。** Android 当前生产版是唯一母版；本批已发布 `1.309.0+324` / DB v50，精确源码、APK 身份和水印见 `tools/p0_product_contract.json`、`tools/screenshot_manifest.json` 与 `02` §7.11，不再沿用旧 313 / v49 快照。
+**iOS 版就是 Android「肥喵记账」在 iPhone 上的原生实现，不是一个新产品。** Android 当前生产版是唯一母版；当前已发布 `1.310.0+325` / DB v50，精确源码、APK 身份和水印见 `tools/p0_product_contract.json`、`tools/screenshot_manifest.json` 与 `02` §7.19，不再沿用旧313/v49或324快照。
 
 **必须和 Android 一模一样的部分：**主页 + 左侧推开式抽屉（没有底部 Tab）；每个入口的名称、位置、层级；页面首屏的信息顺序和字段；金额、净额、退款/报销归属、预算、统计、净资产的算法；肥喵 Logo、猫咪、分类图标、账本封面和猫系配色（收入铜金、支出深色、超支橙，不用系统红绿）；空态、错误、取消、删除/撤销之后看到的结果。
 
@@ -27,6 +27,11 @@
 ---
 
 ## 2. 当前真实状态
+
+### 2026-10-03 Android母版325已上线（仅工具元数据同步，iOS未发布）
+
+- Android资产总览与主题补修已发布VPS，版本1.310.0+325/b1003-325/DB v50，来源`4199708901e5de13e4c33913baaeab1fa653f9df`；APK117,445,927字节，SHA256 `DEB25A455E540B024E416BE94AD3201563E14E4F7617C7ACD351FA0DB94F6424`。正式门禁、1431全量及新旧域完整下载通过；装机仍未验，详情见02 §7.19。
+- 本次只同步`p0_product_contract.json`的Android来源/版本/包身份/测试数字及`screenshot_manifest.json`的版本水印，不改iOS资产在途源码。带实际APK的P0契约与两工作流38路由通过，仍PARTIAL/6开放门；无新Mac/原生截图/触摸结果，不把Android发布算iOS通过。GitHub本轮未推送、不合main。
 
 ### 2026-10-03 资产总览获准实施（本地源码，Mac与前后图待验）
 
