@@ -15,6 +15,7 @@ enum LedgerStore {
         case refundExceedsRemaining
         case transactionNotFound
         case immutableOffset
+        case assetOperationLinked
 
         var errorDescription: String? {
             switch self {
@@ -24,6 +25,7 @@ enum LedgerStore {
             case .refundExceedsRemaining: return "退款金额不能超过剩余可退金额。"
             case .transactionNotFound: return "找不到原账单，请刷新后重试。"
             case .immutableOffset: return "退款或报销记录不能直接编辑，请在原账单的冲减记录中撤销后重新添加。"
+            case .assetOperationLinked: return "这笔账单关联了物品、权益或负债操作，请回到对应资产页面核对或撤销，不能单独修改或删除。"
             }
         }
     }
@@ -155,7 +157,8 @@ enum LedgerStore {
     @discardableResult
     static func createTransactions(
         in context: ModelContext,
-        drafts: [TransactionDraft]
+        drafts: [TransactionDraft],
+        beforeSave: (([MoneyTransaction]) throws -> Void)? = nil
     ) throws -> [MoneyTransaction] {
         guard !drafts.isEmpty else { return [] }
         let normalizedDrafts = drafts.map { draft in
@@ -214,6 +217,7 @@ enum LedgerStore {
         }
         transactions.forEach(context.insert)
         do {
+            try beforeSave?(transactions)
             try context.save()
             return transactions
         } catch {
@@ -240,6 +244,7 @@ enum LedgerStore {
         let normalizedAmount = MoneyNormalization.roundToCents(amount)
         guard normalizedAmount > 0 else { throw Error.invalidAmount }
         guard transaction.refundOfID == nil else { throw Error.immutableOffset }
+        try assertIndependentAssetTransaction(transaction, in: context)
         if transaction.kind == .transfer {
             guard let account, let toAccount,
                   account.stableID != toAccount.stableID,
@@ -284,7 +289,8 @@ enum LedgerStore {
     static func updateCategory(
         of transaction: MoneyTransaction,
         category: TxCategory?,
-        in context: ModelContext
+        in context: ModelContext,
+        beforeSave: (() throws -> Void)? = nil
     ) throws {
         guard transaction.refundOfID == nil else { throw Error.immutableOffset }
         if let category, category.kind != transaction.kind {
@@ -292,6 +298,7 @@ enum LedgerStore {
         }
         transaction.category = transaction.kind == .transfer ? nil : category
         transaction.updatedAt = Date()
+        try beforeSave?()
         try context.save()
     }
 
@@ -304,11 +311,13 @@ enum LedgerStore {
         eventType: TransactionEventType,
         settlementAccount: Account? = nil,
         settledAt: Date = Date(),
-        in context: ModelContext
+        in context: ModelContext,
+        saveImmediately: Bool = true
     ) throws -> MoneyTransaction {
         guard original.kind == .expense, original.amount > 0 else {
             throw Error.invalidAmount
         }
+        try assertNotLiabilityRepayment(original, in: context)
         let normalizedAmount = MoneyNormalization.roundToCents(amount)
         guard normalizedAmount > 0 else { throw Error.invalidAmount }
         if let settlementAccount,
@@ -353,32 +362,43 @@ enum LedgerStore {
             original.reimbursable = !fullyReimbursed
         }
         original.updatedAt = Date()
-        try context.save()
+        if saveImmediately { try context.save() }
         return offset
     }
 
     /// 删除原账单时级联删除附着退款；删除退款子行时同步报销标记。
     static func delete(_ transaction: MoneyTransaction, in context: ModelContext) throws {
+        try delete([transaction], in: context)
+    }
+
+    /// Validate every family before changing any row; AI cards join their
+    /// persisted state to this same save using an isolated ModelContext.
+    static func delete(
+        _ transactions: [MoneyTransaction],
+        in context: ModelContext,
+        beforeSave: (() throws -> Void)? = nil
+    ) throws {
+        try assertTransactionsCanBeDeleted(transactions, in: context)
         let all = try allTransactions(in: context)
+        let rootIDs = Set(transactions.filter { $0.refundOfID == nil }.map(\.stableID))
+        let removedIDs = Set(transactions.map(\.stableID)).union(
+            all.filter { $0.refundOfID.map(rootIDs.contains) ?? false }.map(\.stableID))
         var attachmentPaths = Set<String>()
-        if !transaction.attachmentPath.isEmpty {
-            attachmentPaths.insert(transaction.attachmentPath)
-        }
-        if transaction.refundOfID == nil {
-            for child in all where child.refundOfID == transaction.stableID {
-                if !child.attachmentPath.isEmpty {
-                    attachmentPaths.insert(child.attachmentPath)
-                }
-                context.delete(child)
+        for transaction in all where removedIDs.contains(transaction.stableID) {
+            if !transaction.attachmentPath.isEmpty {
+                attachmentPaths.insert(transaction.attachmentPath)
             }
-        } else if transaction.eventType == .reimbursement,
-                  let originalID = transaction.refundOfID,
-                  let original = all.first(where: { $0.stableID == originalID }) {
-            original.isReimbursed = false
-            original.reimbursable = true
-            original.updatedAt = Date()
+            if transaction.eventType == .reimbursement,
+               let originalID = transaction.refundOfID,
+               !removedIDs.contains(originalID),
+               let original = all.first(where: { $0.stableID == originalID }) {
+                original.isReimbursed = false
+                original.reimbursable = true
+                original.updatedAt = Date()
+            }
+            context.delete(transaction)
         }
-        context.delete(transaction)
+        try beforeSave?()
         try context.save()
         // 数据库提交成功后再清理本地媒体，避免保存失败导致账单和照片同时丢失。
         guard let remainingTransactions = try? allTransactions(in: context) else {
@@ -412,5 +432,70 @@ enum LedgerStore {
                 checkpoints: checkpoints
             )
         )
+    }
+
+    /// Bulk callers must preflight before deleting any independent row.
+    static func assertTransactionsCanBeDeleted(_ transactions: [MoneyTransaction], in context: ModelContext) throws {
+        for transaction in transactions { try assertIndependentAssetTransaction(transaction, in: context) }
+        let rootIDs = Set(transactions.filter { $0.refundOfID == nil }.map(\.stableID))
+        for child in try allTransactions(in: context) where child.refundOfID.map(rootIDs.contains) ?? false {
+            try assertIndependentAssetTransaction(child, in: context)
+        }
+    }
+
+    private static func assertNotLiabilityRepayment(_ transaction: MoneyTransaction, in context: ModelContext) throws {
+        guard AssetFinancialCommand.contains(AssetEvent.self, in: context) else { return }
+        let events = try context.fetch(FetchDescriptor<AssetEvent>())
+        let reversed = Set(events.compactMap { AssetFinancialCommand.metadata(of: $0)["reversal_of"] })
+        for event in events where !reversed.contains(event.stableID.uuidString) {
+            let values = AssetFinancialCommand.metadata(of: event)
+            guard values["command"] == "liability_repayment" else { continue }
+            if values["principal_transaction_id"] == transaction.stableID.uuidString ||
+               values["interest_transaction_id"] == transaction.stableID.uuidString { throw Error.assetOperationLinked }
+        }
+    }
+
+    private static func assertIndependentAssetTransaction(
+        _ transaction: MoneyTransaction,
+        in context: ModelContext
+    ) throws {
+        switch transaction.eventType {
+        case .assetSale, .receivableRecovery, .principalPayment:
+            throw Error.assetOperationLinked
+        default: break
+        }
+        let familyIDs = Set([transaction.stableID, transaction.refundOfID].compactMap { $0 })
+        if AssetFinancialCommand.contains(AssetTransactionLink.self, in: context),
+           try context.fetch(FetchDescriptor<AssetTransactionLink>()).contains(where: {
+               $0.transactionID == transaction.stableID
+           }) { throw Error.assetOperationLinked }
+        if AssetFinancialCommand.contains(AssetRefundAllocation.self, in: context),
+           try context.fetch(FetchDescriptor<AssetRefundAllocation>()).contains(where: {
+               familyIDs.contains($0.refundTransactionID)
+           }) { throw Error.assetOperationLinked }
+        if AssetFinancialCommand.contains(ReceivableRecovery.self, in: context),
+           try context.fetch(FetchDescriptor<ReceivableRecovery>()).contains(where: {
+               $0.transactionID.map(familyIDs.contains) ?? false
+           }) { throw Error.assetOperationLinked }
+        if AssetFinancialCommand.contains(AssetEvent.self, in: context) {
+            let returnedAssetIDs: Set<UUID>
+            if AssetFinancialCommand.contains(PhysicalAsset.self, in: context) {
+                returnedAssetIDs = Set(try context.fetch(FetchDescriptor<PhysicalAsset>())
+                    .filter { $0.lifecycle == .returned }.map(\.stableID))
+            } else {
+                returnedAssetIDs = []
+            }
+            let keys = ["transaction_id", "principal_transaction_id", "interest_transaction_id"]
+            for event in try context.fetch(FetchDescriptor<AssetEvent>()) {
+                let values = AssetFinancialCommand.metadata(of: event)
+                // undoReturn retains the refund and audit trail, but ends their active asset link.
+                if event.kind == .returned, returnedAssetIDs.contains(event.assetID),
+                   values["refund_transaction_id"].flatMap(UUID.init(uuidString:))
+                    .map(familyIDs.contains) ?? false { throw Error.assetOperationLinked }
+                if keys.contains(where: { key in
+                    values[key].flatMap(UUID.init(uuidString:)).map(familyIDs.contains) ?? false
+                }) { throw Error.assetOperationLinked }
+            }
+        }
     }
 }

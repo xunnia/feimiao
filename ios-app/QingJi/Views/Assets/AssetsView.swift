@@ -41,6 +41,9 @@ struct AssetsView: View {
     private var liabilities: [LiabilityProfile]
     @Query
     private var checkpoints: [AccountBalanceCheckpointRecord]
+    @Query(sort: \NetWorthSnapshot.asOf)
+    private var netWorthSnapshots: [NetWorthSnapshot]
+    @Query private var receivableRecoveries: [ReceivableRecovery]
 
     @State private var selectedTab: AssetTab = .overview
     @State private var showAddEntry = false
@@ -52,6 +55,7 @@ struct AssetsView: View {
     @State private var detailAsset: PhysicalAsset?
     @State private var editingReceivable: ReceivableAsset?
     @State private var recoveryAsset: ReceivableAsset?
+    @State private var undoRecoveryAsset: ReceivableAsset?
     @State private var terminalAsset: PhysicalAsset?
     @State private var errorMessage: String?
     @State private var showArchivedFunds = false
@@ -196,6 +200,22 @@ struct AssetsView: View {
             ReceivableRecoverySheet(asset: asset)
                 .presentationDetents([.medium])
         }
+        .appConfirmationDialog(
+            "撤销最近收回？",
+            isPresented: Binding(
+                get: { undoRecoveryAsset != nil },
+                set: { if !$0 { undoRecoveryAsset = nil } }
+            ),
+            message: "将恢复这次收回前的剩余权益，并同时撤销对应到账流水。旧记录没有到账凭据时不会自动补账；已重新核对余额或记录已变更时需先核对。",
+            confirmText: "撤销收回",
+            destructive: true
+        ) {
+            if let asset = undoRecoveryAsset {
+                do { try ReceivableStore.undoLatestRecovery(asset, in: context) }
+                catch { errorMessage = error.localizedDescription }
+            }
+            undoRecoveryAsset = nil
+        }
         .confirmationDialog(
             "结束持有",
             isPresented: Binding(
@@ -330,50 +350,11 @@ struct AssetsView: View {
     }
 
     private var netWorthSummary: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack {
-                Label("当前净资产", systemImage: "chart.line.uptrend.xyaxis")
-                    .font(.headline)
-                Spacer()
-                Text(MoneyFormat.string(currentBreakdown.netWorth, currencyCode: "CNY"))
-                    .font(.title3.monospacedDigit().weight(.bold))
-                    .foregroundStyle(currentBreakdown.netWorth >= 0 ? Color.primary : Color.red)
-            }
-            HStack(spacing: 0) {
-                summaryMetric("资金", currentBreakdown.cashAssets)
-                summaryMetric("投资", currentBreakdown.investmentAssets)
-                summaryMetric("物品", currentBreakdown.physicalAssets)
-                summaryMetric("权益", currentBreakdown.receivableAssets)
-            }
-            if currentBreakdown.totalLiabilities > 0 {
-                Text("负债 \(MoneyFormat.string(currentBreakdown.totalLiabilities, currencyCode: "CNY"))")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-            if !currentBreakdown.unsupportedCurrencies.isEmpty {
-                Label(
-                    "外币未换算：\(currentBreakdown.unsupportedCurrencies.sorted().joined(separator: "、"))",
-                    systemImage: "exclamationmark.triangle"
-                )
-                .font(.caption)
-                .foregroundStyle(.orange)
-            }
+        let value = currentBreakdown
+        return VStack(alignment: .leading, spacing: 16) {
+            AssetsOverviewDashboard(breakdown: value, snapshots: netWorthSnapshots)
+            AssetsStructureSection(breakdown: value)
         }
-        .padding(16)
-        .glassEffect(.regular, in: .rect(cornerRadius: 18))
-    }
-
-    private func summaryMetric(_ title: String, _ amount: Decimal) -> some View {
-        VStack(alignment: .leading, spacing: 3) {
-            Text(title)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            Text(MoneyFormat.string(amount, currencyCode: "CNY"))
-                .font(.caption.monospacedDigit().weight(.semibold))
-                .lineLimit(1)
-                .minimumScaleFactor(0.7)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var fundsContent: some View {
@@ -665,6 +646,12 @@ struct AssetsView: View {
         .padding(12)
         .glassEffect(.regular, in: .rect(cornerRadius: 14))
         .contextMenu {
+            if !archived, (asset.lifecycle == .partiallyRecovered || asset.lifecycle == .recovered),
+               receivableRecoveries.contains(where: { $0.receivableID == asset.stableID }) {
+                Button { undoRecoveryAsset = asset } label: {
+                    Label("撤销最近收回", systemImage: "arrow.uturn.backward")
+                }
+            }
             if archived {
                 Button {
                     do { try ReceivableStore.restore(asset, in: context) }

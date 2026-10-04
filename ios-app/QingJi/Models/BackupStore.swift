@@ -1888,6 +1888,7 @@ enum BackupStore {
     }
 
     private static func deleteAllModels(from context: ModelContext) throws {
+        AIChatOperationFence.shared.invalidateDatabase()
         // Delete dependent records first so relationship nullification never
         // leaves an old child attached to a newly restored parent.
         try deleteAll(AIRequestEventRecord.self, from: context)

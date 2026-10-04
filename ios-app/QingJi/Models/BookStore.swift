@@ -44,6 +44,9 @@ enum BookStore {
     static func deleteWithTransactions(_ book: Book, in context: ModelContext) throws {
         guard !book.isDefault else { throw BookStoreError.defaultBook }
         let bookID = book.persistentModelID
+        let transactions = try LedgerStore.allTransactions(in: context)
+            .filter { $0.book?.persistentModelID == bookID }
+        try LedgerStore.assertTransactionsCanBeDeleted(transactions, in: context)
         // 删原账单会级联删掉它的退款子行，所以每次重新取一遍，避免删到已删除的对象。
         while let next = try LedgerStore.allTransactions(in: context)
             .first(where: { $0.book?.persistentModelID == bookID }) {
