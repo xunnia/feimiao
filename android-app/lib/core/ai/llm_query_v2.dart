@@ -17,6 +17,7 @@ import 'openai_codex_oauth.dart';
 import 'web_search.dart';
 import '../media/chat_attachment.dart';
 import '../media/ai_image_preparation.dart';
+import '../app_clock.dart';
 
 /// AI 查询服务 V2：集成流式响应、日志、异常处理、数据裁剪、并发控制、
 /// Token 计数、fallback 等优化。
@@ -100,6 +101,7 @@ class LlmQueryV2 {
     String? apiKey,
     AiProviderConfig? config,
     required String transactionsText,
+    String memoryText = '',
     required void Function(String chunk) onChunk,
     required void Function(String fullAnswer) onDone,
     required void Function(AiException error) onError,
@@ -114,8 +116,12 @@ class LlmQueryV2 {
     final startTime = DateTime.now();
 
     try {
-      final provider = await OpenAiCodexOAuth.ensureFreshConfig(
-        _resolveConfig(apiKey: apiKey, config: config),
+      final provider = AiWebSearchContext.conversationConfig(
+        question: question,
+        ledgerText: transactionsText,
+        config: await OpenAiCodexOAuth.ensureFreshConfig(
+          _resolveConfig(apiKey: apiKey, config: config),
+        ),
       );
       final webSearch = await AiWebSearchContext.prepare(
         question: question,
@@ -159,9 +165,11 @@ class LlmQueryV2 {
         });
       }
       final messages = <Map<String, dynamic>>[
-        {'role': 'system', 'content': AiPromptTemplates.systemPrompt},
-        if (transactionsText.trim().isNotEmpty)
-          {'role': 'system', 'content': '账目上下文：\n$transactionsText'},
+        ...AiPromptTemplates.querySystemMessages(
+          now: AppClock.now,
+          ledgerText: transactionsText,
+          memoryText: memoryText,
+        ),
         if (webSearch.promptBlock.trim().isNotEmpty)
           {'role': 'system', 'content': webSearch.promptBlock},
         ...history,
@@ -302,14 +310,19 @@ class LlmQueryV2 {
     String? apiKey,
     AiProviderConfig? config,
     required String transactionsText,
+    String memoryText = '',
     String? taskId,
   }) async {
     final tid = taskId ?? 'ask_${DateTime.now().millisecondsSinceEpoch}';
     final startTime = DateTime.now();
 
     try {
-      final provider = await OpenAiCodexOAuth.ensureFreshConfig(
-        _resolveConfig(apiKey: apiKey, config: config),
+      final provider = AiWebSearchContext.conversationConfig(
+        question: question,
+        ledgerText: transactionsText,
+        config: await OpenAiCodexOAuth.ensureFreshConfig(
+          _resolveConfig(apiKey: apiKey, config: config),
+        ),
       );
       final webSearch = await AiWebSearchContext.prepare(
         question: question,
@@ -337,8 +350,11 @@ class LlmQueryV2 {
             bodyForModel: (model) => {
               'model': model,
               'messages': [
-                {'role': 'system', 'content': AiPromptTemplates.systemPrompt},
-                {'role': 'system', 'content': '账目上下文：\n$transactionsText'},
+                ...AiPromptTemplates.querySystemMessages(
+                  now: AppClock.now,
+                  ledgerText: transactionsText,
+                  memoryText: memoryText,
+                ),
                 if (webSearch.promptBlock.trim().isNotEmpty)
                   {'role': 'system', 'content': webSearch.promptBlock},
                 {'role': 'user', 'content': question},

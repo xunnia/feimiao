@@ -167,6 +167,54 @@ void main() {
     await tester.pumpWidget(const SizedBox.shrink());
   }
 
+  testWidgets('普通市场聊天及重新生成都不读取账本，用户记忆保持独立', (tester) async {
+    await tester.runAsync(() => repo.addAiMemory(
+          phrase: '股市',
+          content: '喜欢先看事实再看分析',
+          consent: true,
+        ));
+    await HttpOverrides.runZoned(() async {
+      await pumpPanel(tester);
+      await send(tester, '帮我分析下最近的股市');
+      await waitFor(tester, () async => (await answers()).length == 1);
+      expect(bodies.single['instructions'], isNot(contains('账目上下文：')));
+      expect(bodies.single['instructions'], contains('用户记忆（偏好参考'));
+      expect(bodies.single['instructions'], contains('喜欢先看事实再看分析'));
+      await waitFor(tester,
+          () => find.byTooltip('重新生成').hitTestable().evaluate().isNotEmpty);
+      await waitFor(
+          tester,
+          () => !aiChatHasActiveFlowForTesting(
+              tester.state(find.byType(AiChatPanel))));
+      await tester.runAsync(() => tester.tap(find.byTooltip('重新生成').last));
+      await waitFor(
+          tester,
+          () async =>
+              bodies.length == 2 &&
+              (await answers()).any((row) => row['text'] == '已收到的回答'));
+      expect(bodies.last['instructions'], isNot(contains('账目上下文：')));
+      expect(bodies.last['instructions'], contains('喜欢先看事实再看分析'));
+      expect(await tester.runAsync(answers), hasLength(1));
+      await closePanel(tester);
+    }, createHttpClient: _RealHttp().createHttpClient);
+  });
+
+  testWidgets('查账的日期追问带必要账本，切换为市场话题不再附带账本', (tester) async {
+    await HttpOverrides.runZoned(() async {
+      await pumpPanel(tester);
+      await send(tester, '本月花了多少');
+      await waitFor(tester, () async => (await answers()).length == 1);
+      expect(bodies.single['instructions'], contains('账目上下文：'));
+      await send(tester, '上个月呢');
+      await waitFor(tester, () async => (await answers()).length == 2);
+      expect(bodies.last['instructions'], contains('账目上下文：'));
+      await send(tester, '本月股市怎么样');
+      await waitFor(tester, () async => (await answers()).length == 3);
+      expect(bodies.last['instructions'], isNot(contains('账目上下文：')));
+      await closePanel(tester);
+    }, createHttpClient: _RealHttp().createHttpClient);
+  });
+
   testWidgets('生成中可展开真实摘要，增量保留排版，正文到达折叠且重开可恢复', (tester) async {
     await HttpOverrides.runZoned(() async {
       reasoningGate = Completer<void>();

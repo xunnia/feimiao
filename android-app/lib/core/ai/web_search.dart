@@ -5,6 +5,7 @@ import 'package:http/http.dart' as http;
 import 'ai_http_transport.dart';
 import 'ai_logger.dart';
 import 'ai_provider_config.dart';
+import 'chat_intent.dart';
 
 /// A source returned by either the provider-native search tool or the local
 /// adapter used for non-Responses providers.
@@ -375,14 +376,35 @@ class AiWebSearchContext {
     // Ledger questions are answered from the local repository. Never send
     // them to a public search endpoint merely because they contain "今天" or
     // "多少钱".
-    if (RegExp(r'(账本|记账|账单|支出|收入|消费|预算|余额|分类|花了|本月|本周|上月|上周)')
-        .hasMatch(value)) {
+    if (_hasPrivateLedgerContext(value)) {
       return false;
     }
+    final timelyMarket = RegExp(r'(股市|股票|行情|大盘|市场|证券|基金)').hasMatch(value) &&
+        RegExp(r'(最近|近期|最新|今天|明天|昨天|现在|本周|上周|本月|上月|今年|去年|走势|涨跌|收盘|开盘|实时)')
+            .hasMatch(value);
+    if (timelyMarket) return true;
     return RegExp(
       r'(最新|今天|现在|近期|新闻|天气|价格|多少钱|官网|搜索|查一下|网上|联网|开源|github|版本|政策|规定|股价|汇率|比赛|发布|更新|教程|是什么|怎么用)',
     ).hasMatch(value);
   }
+
+  /// Disable both native and adapter search for a ledger-bearing request.
+  /// This changes only the request snapshot, not the user's global switch.
+  static AiProviderConfig conversationConfig({
+    required String question,
+    required AiProviderConfig config,
+    required String ledgerText,
+  }) {
+    if (config.webSearchEnabled &&
+        (ledgerText.trim().isNotEmpty || _hasPrivateLedgerContext(question))) {
+      return config.copyWith(webSearchEnabled: false);
+    }
+    return config;
+  }
+
+  static bool _hasPrivateLedgerContext(String question) =>
+      ChatIntent.classify(question) != ChatIntentKind.chat ||
+      RegExp(r'(账本|记账|账单|支出|收入|消费|预算|余额|分类|花了)').hasMatch(question);
 
   static String _shortError(Object error) {
     final raw = AiLogger.sanitizeErrorForDisplay(error.toString())

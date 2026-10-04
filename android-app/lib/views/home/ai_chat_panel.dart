@@ -387,11 +387,13 @@ bool aiChatHasActiveFlowForTesting(State state) =>
 ChatIntentKind resolveAiPanelIntent({
   required bool recordOnly,
   required String text,
+  String previousQuestion = '',
 }) {
   if (recordOnly) return ChatIntentKind.record;
   return ChatIntent.classify(
     text,
     hasArabicAmount: NaturalLanguageEntryParser.extractAmount(text) != null,
+    previousQuestion: previousQuestion,
   );
 }
 
@@ -2753,7 +2755,15 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
     // 本地规则识别”的表达会根本没有发到 AI。
     final localIntent = attachments.isNotEmpty && !widget.recordOnly
         ? ChatIntentKind.chat
-        : resolveAiPanelIntent(recordOnly: widget.recordOnly, text: text);
+        : resolveAiPanelIntent(
+            recordOnly: widget.recordOnly,
+            text: text,
+            previousQuestion: ChatIntent.lastTopicQuestion(
+              _msgs.reversed
+                  .whereType<_UserMsg>()
+                  .map((message) => message.text),
+            ),
+          );
     final refund = widget.recordOnly ? null : _matchRefund(repo, text);
     // Chats 中的普通会话是闲聊/问答上下文；账本变更始终归入唯一的
     // 「记一记」会话，不能因用户在某个聊天里顺口提到一笔消费就把它
@@ -3294,6 +3304,7 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
     required String question,
     required AiProviderConfig config,
     required String transactionsText,
+    String memoryText = '',
     List<Map<String, String>> priorTurns = const [],
     String? imagePath,
     List<ChatAttachment> attachments = const [],
@@ -3385,6 +3396,7 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
       question: question,
       config: config,
       transactionsText: transactionsText,
+      memoryText: memoryText,
       priorTurns: priorTurns,
       imagePath: imagePath,
       attachments: attachments,
@@ -3734,7 +3746,8 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
         final streamed = await _askStreamingAnswer(
           question: text,
           config: aiConfig,
-          transactionsText: memoryPrompt,
+          transactionsText: '',
+          memoryText: memoryPrompt,
           // _send 已把本轮用户消息放进 _msgs；askStream 会在请求末尾
           // 自己追加 [question]，因此上下文只带此前轮次，不能重复当前问题。
           priorTurns:
@@ -3949,6 +3962,7 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
     } else {
       try {
         late final String transactionsText;
+        var queryMemoryText = '';
         late final AiContextSnapshot contextSnapshot;
         final memoryMatches = reportType == null
             ? repo.aiMemoriesForPrompt(text, sessionId: _sessionId)
@@ -3956,13 +3970,11 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
         if (reportType == null) {
           final ledgerContext = _buildTxnContext(repo,
               question: text, bookId: _flowLeases[flowId]?.bookId);
-          final memoryPrompt = repo.aiMemoryPromptBlock(
+          queryMemoryText = repo.aiMemoryPromptBlock(
             text,
             sessionId: _sessionId,
           );
-          transactionsText = [ledgerContext, memoryPrompt]
-              .where((value) => value.trim().isNotEmpty)
-              .join('\n\n');
+          transactionsText = ledgerContext;
           contextSnapshot = AiContextInspector.inspect(
             question: text,
             historyTurns: priorTurns.length,
@@ -3970,6 +3982,7 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
             memoryItems: memoryMatches.length,
             attachmentCount: attachments.length,
             estimatedPromptCharacters: transactionsText.length +
+                queryMemoryText.length +
                 text.length +
                 priorTurns.fold<int>(
                     0, (sum, turn) => sum + (turn['content']?.length ?? 0)),
@@ -4020,6 +4033,7 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
             question: text,
             config: aiConfig,
             transactionsText: transactionsText,
+            memoryText: queryMemoryText,
             // 同上：避免把刚发送的问题作为历史又追加一遍。
             priorTurns: priorTurns,
             imagePath: imagePath,
@@ -6309,7 +6323,17 @@ ${line('上月同期', lastStart, lastSameDayEnd, lastSameDay)}
     _scrollToBottom();
     unawaited(_runQuerySafely(flowId, m.question,
         attachments: originalUser?.attachments ?? const [],
-        chatOnly: originalUser?.attachments.isNotEmpty ?? false,
+        chatOnly: (originalUser?.attachments.isNotEmpty ?? false) ||
+            resolveAiPanelIntent(
+                  recordOnly: false,
+                  text: m.question,
+                  previousQuestion: ChatIntent.lastTopicQuestion(
+                    priorTurns.reversed
+                        .where((turn) => turn['role'] == 'user')
+                        .map((turn) => turn['content'] ?? ''),
+                  ),
+                ) !=
+                ChatIntentKind.query,
         priorTurnsOverride: priorTurns));
   }
 
