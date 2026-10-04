@@ -1,8 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 
-import '../../theme/app_colors.dart';
-
 /// The list extends behind the chrome; only its scroll padding reserves space.
 class ChatReadingViewport extends StatefulWidget {
   final Widget Function(EdgeInsets padding) history;
@@ -30,26 +28,34 @@ class _ChatReadingViewportState extends State<ChatReadingViewport> {
 
   @override
   Widget build(BuildContext context) {
-    final tint = AppColors.topFrostTint(Theme.of(context).colorScheme);
     return Stack(children: [
       Positioned.fill(
-          child: widget.history(EdgeInsets.only(
-              top: widget.headerHeight + 8, bottom: _composerHeight + 8))),
-      Positioned(
-          left: 0,
-          right: 0,
-          bottom: 0,
-          height: _composerHeight + 20,
-          child: IgnorePointer(
-              child: DecoratedBox(
-                  decoration: BoxDecoration(
-                      gradient: LinearGradient(
-                          begin: Alignment.topCenter,
-                          end: Alignment.bottomCenter,
-                          colors: [
-                tint.withValues(alpha: 0),
-                tint.withValues(alpha: 0.82)
-              ]))))),
+          // Fade history, not the theme behind it. A tint overlay repaints the
+          // bottom with the top color and breaks the page gradient on IME lift.
+          child: ShaderMask(
+              blendMode: BlendMode.dstIn,
+              shaderCallback: (bounds) {
+                final start = bounds.height <= 0
+                    ? 0.0
+                    : ((bounds.height - _composerHeight - 20) / bounds.height)
+                        .clamp(0.0, 1.0)
+                        .toDouble();
+                return LinearGradient(
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                    colors: const [
+                      Colors.black,
+                      Colors.black,
+                      Colors.transparent
+                    ],
+                    stops: [
+                      0,
+                      start,
+                      1
+                    ]).createShader(bounds);
+              },
+              child: widget.history(EdgeInsets.only(
+                  top: widget.headerHeight + 8, bottom: _composerHeight + 8)))),
       Positioned(
           left: 0,
           right: 0,

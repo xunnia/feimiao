@@ -16,6 +16,7 @@ import 'ai_request_manager.dart';
 import 'openai_codex_oauth.dart';
 import 'web_search.dart';
 import '../media/chat_attachment.dart';
+import '../media/ai_image_preparation.dart';
 
 /// AI 查询服务 V2：集成流式响应、日志、异常处理、数据裁剪、并发控制、
 /// Token 计数、fallback 等优化。
@@ -50,15 +51,10 @@ class LlmQueryV2 {
     if (!await file.exists()) {
       throw const AiNetworkException('图片文件不存在');
     }
-    final bytes = await file.readAsBytes();
+    final prepared = await AiImagePreparation.prepare(path);
+    final bytes = prepared.bytes;
     if (bytes.isEmpty) throw const AiNetworkException('图片文件为空');
-    final ext = path.split('.').last.toLowerCase();
-    final mime = switch (ext) {
-      'png' => 'image/png',
-      'webp' => 'image/webp',
-      'gif' => 'image/gif',
-      _ => 'image/jpeg',
-    };
+    final mime = prepared.mimeType;
     return 'data:$mime;base64,${base64Encode(bytes)}';
   }
 
@@ -69,10 +65,13 @@ class LlmQueryV2 {
     for (final attachment in attachments) {
       final file = File(attachment.path);
       if (!await file.exists()) throw const AiNetworkException('附件文件不存在');
-      final bytes = await file.readAsBytes();
+      final prepared = attachment.isImage
+          ? await AiImagePreparation.prepare(attachment.path)
+          : null;
+      final bytes = prepared?.bytes ?? await file.readAsBytes();
       if (bytes.isEmpty) throw const AiNetworkException('附件文件为空');
       final dataUri =
-          'data:${attachment.mimeType};base64,${base64Encode(bytes)}';
+          'data:${prepared?.mimeType ?? attachment.mimeType};base64,${base64Encode(bytes)}';
       if (attachment.isImage) {
         parts.add({
           'type': 'image_url',
@@ -926,7 +925,9 @@ $transactionsText''';
                 final content = delta?['text'] as String?;
                 final thinking = delta?['thinking'] as String?;
 
-                if (thinking != null && thinking.trim().isNotEmpty) {
+                if (delta?['type'] == 'thinking_delta' &&
+                    thinking != null &&
+                    thinking.isNotEmpty) {
                   onReasoningSummary?.call(thinking);
                 }
 
@@ -1511,7 +1512,7 @@ $transactionsText''';
     required AiProviderConfig config,
     required List<Map<String, dynamic>> messages,
   }) {
-    return _responsesBodyFromChatBody(
+    final body = _responsesBodyFromChatBody(
       {
         'model': config.modelCandidates.first,
         'messages': messages,
@@ -1519,6 +1520,13 @@ $transactionsText''';
       },
       config,
     )..['stream'] = true;
+    if (body['reasoning'] is Map) {
+      body['reasoning'] = {
+        ...Map<String, dynamic>.from(body['reasoning'] as Map),
+        'summary': 'auto',
+      };
+    }
+    return body;
   }
 
   static Map<String, dynamic> _chatCompletionsStreamBody({
@@ -1592,19 +1600,21 @@ $transactionsText''';
     Map<String, dynamic> event,
   ) {
     final type = event['type']?.toString().trim().toLowerCase() ?? '';
-    if (!type.contains('reasoning') || !type.contains('summary')) return null;
-    if (type.endsWith('.done')) return null;
+    if (type != 'response.reasoning_summary_text.delta' &&
+        type != 'response.reasoning_summary_part.added') {
+      return null;
+    }
 
     final delta = event['delta'];
-    if (delta is String && delta.trim().isNotEmpty) return delta;
+    if (delta is String && delta.isNotEmpty) return delta;
     if (delta is Map) {
       final text = (delta['text'] ?? delta['content'])?.toString() ?? '';
-      if (text.trim().isNotEmpty) return text;
+      if (text.isNotEmpty) return text;
     }
     final part = event['part'];
     if (part is Map) {
       final text = (part['text'] ?? part['content'])?.toString() ?? '';
-      if (text.trim().isNotEmpty) return text;
+      if (text.isNotEmpty) return text;
     }
     return null;
   }

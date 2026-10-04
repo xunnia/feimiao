@@ -55,6 +55,8 @@ import '../../core/models/transaction_card_display.dart';
 import '../../core/models/transaction_kind.dart';
 import '../../core/meow_insights.dart';
 import '../../core/media/chat_attachment.dart';
+import '../../core/media/ai_image_preparation.dart';
+import '../../core/ai/public_reasoning_summary.dart';
 import '../../core/money_format.dart';
 import '../../core/statistics/metric_contract.dart';
 import '../../core/statistics/statistics_engine.dart';
@@ -82,6 +84,7 @@ import 'chat_markdown_body.dart';
 import 'chat_reading_viewport.dart';
 import 'chat_attachment_preview.dart';
 import 'chat_answer_actions.dart';
+import 'chat_thinking_summary.dart';
 
 const Duration kAiBackgroundResponseNoticeDelay = Duration(seconds: 15);
 const double kAiResponseActionTouchExtent = 36;
@@ -2580,6 +2583,7 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
       current.completedAt = now;
     }
     msg.completedAt = now;
+    msg.expanded = false;
     _addThinkingSources(msg, sources);
     final hasProviderSummary = msg.steps.any(
       (step) => step.detail.trim().isNotEmpty,
@@ -2655,7 +2659,7 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
     }
     if (mounted && (rejectedImages > 0 || rejectedFiles > 0)) {
       final parts = <String>[];
-      if (rejectedImages > 0) parts.add('最多添加 3 张图片');
+      if (rejectedImages > 0) parts.add('最多添加 4 张图片');
       if (rejectedFiles > 0) parts.add('最多添加 10 个文件');
       _snack('${parts.join('，')}，超出的附件未添加');
     }
@@ -2737,6 +2741,13 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
       return;
     }
     final attachments = attachmentBatch.accepted;
+    try {
+      await AiImagePreparation.prepareAll(attachments);
+    } on FormatException catch (error) {
+      if (mounted && _ownsFlow(flowId)) _snack(error.message);
+      return;
+    }
+    if (!mounted || !_ownsFlow(flowId)) return;
     // 主页的 AI 记账入口不做本地意图拦截。用户输入的任何自然语言都
     // 先交给记账模型，由 forceRecord 提示词决定如何提取；否则“没被
     // 本地规则识别”的表达会根本没有发到 AI。
@@ -3293,9 +3304,36 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
     final result = Completer<_StreamingAnswer>();
     final chunks = StringBuffer();
     final receivedSources = <AiWebSource>[];
+    final publicSummary = PublicReasoningSummary();
     _AnswerMsg? liveMessage;
     var requestExpired = false;
+    Timer? refreshTimer;
     final runStartedAt = DateTime.now();
+
+    void refreshStream() {
+      if (refreshTimer != null) return;
+      final followTail = _followLatest &&
+          _scroll.hasClients &&
+          _scroll.position.extentAfter < 48;
+      refreshTimer = Timer(const Duration(milliseconds: 32), () {
+        refreshTimer = null;
+        if (!mounted || requestExpired || !_ownsFlow(flowId)) return;
+        setState(() {
+          if (liveMessage != null) liveMessage!.text = chunks.toString();
+        });
+        if (followTail) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (mounted &&
+                _ownsFlow(flowId) &&
+                _followLatest &&
+                _scroll.hasClients &&
+                !_scroll.position.isScrollingNotifier.value) {
+              _scroll.jumpTo(_scroll.position.maxScrollExtent);
+            }
+          });
+        }
+      });
+    }
 
     void rememberSources(Iterable<AiWebSource> sources) {
       if (requestExpired || !_ownsFlow(flowId)) return;
@@ -3340,7 +3378,7 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
         _scrollToLatestUserMessage();
         return;
       }
-      setState(() => liveMessage!.text = chunks.toString());
+      refreshStream();
     }
 
     await LlmQueryV2.askStream(
@@ -3368,26 +3406,25 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
       onReasoningSummary: (summary) {
         if (requestExpired || !_ownsFlow(flowId)) return;
         final thinking = _currentThinkingMsg(flowId);
-        if (thinking == null || thinking.completed) return;
-        final normalized = summary.replaceAll(RegExp(r'\s+'), ' ').trim();
-        if (normalized.isEmpty) return;
+        if (thinking == null || !publicSummary.append(summary)) return;
         final current = thinking.steps.lastOrNull;
         if (current == null) return;
-        final combined = '${current.detail} $normalized'.trim();
-        current.detail = combined.length > 420
-            ? combined.substring(combined.length - 420)
-            : combined;
-        if (mounted) setState(() {});
+        current.detail = publicSummary.text +
+            (publicSummary.truncated ? '\n\n（摘要过长，已保留前 65536 个字符）' : '');
+        thinking.hidden = false;
+        refreshStream();
         _recordRunEvent(
           repository ?? _chatRepository,
           runId,
           AiRunEventType.reasoning,
           payload: {
-            'characters': normalized.length,
+            'characters': summary.length,
           },
         );
       },
       onDone: (answer) {
+        refreshTimer?.cancel();
+        refreshTimer = null;
         if (requestExpired || !_ownsFlow(flowId)) return;
         // 以服务端最终文本为准。大多数 Responses 网关会发 delta；若没有
         // delta，保留旧路径在调用方完整展示最终回答。
@@ -3446,6 +3483,8 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
         }
       },
       onError: (error) {
+        refreshTimer?.cancel();
+        refreshTimer = null;
         if (requestExpired || !_ownsFlow(flowId)) return;
         if (repository != null) {
           unawaited(() async {
@@ -3504,6 +3543,8 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
     ).timeout(
       _kAiChatRequestTimeout,
       onTimeout: () {
+        refreshTimer?.cancel();
+        refreshTimer = null;
         requestExpired = true;
         _completeThinking(flowId: flowId);
         if (runId != null && runId.isNotEmpty) {
@@ -7403,206 +7444,33 @@ class _UserBubbleState extends State<_UserBubble> {
   }
 }
 
-class _ThinkingBubble extends StatefulWidget {
+class _ThinkingBubble extends StatelessWidget {
   final _ThinkingMsg msg;
   const _ThinkingBubble({required this.msg});
-
-  @override
-  State<_ThinkingBubble> createState() => _ThinkingBubbleState();
-}
-
-class _ThinkingBubbleState extends State<_ThinkingBubble>
-    with SingleTickerProviderStateMixin {
-  late final AnimationController _controller;
-  int _lastPulseSecond = 0;
-
-  _ThinkingMsg get msg => widget.msg;
-
-  @override
-  void initState() {
-    super.initState();
-    _controller = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 1350),
-    );
-  }
-
-  @override
-  void didChangeDependencies() {
-    super.didChangeDependencies();
-    if (MediaQuery.disableAnimationsOf(context)) {
-      _controller.stop();
-    } else if (!msg.completed &&
-        !_controller.isAnimating &&
-        _controller.value == 0) {
-      _controller.forward();
-    }
-  }
-
-  @override
-  void didUpdateWidget(covariant _ThinkingBubble oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (msg.completed) {
-      _controller.stop();
-    } else if (!_controller.isAnimating &&
-        msg.elapsed.inSeconds >= _lastPulseSecond + 3 &&
-        !MediaQuery.disableAnimationsOf(context)) {
-      _lastPulseSecond = msg.elapsed.inSeconds;
-      _controller.forward(from: 0);
-    }
-  }
-
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
-
-  String _durationLabel(Duration duration) {
-    final seconds = duration.inSeconds;
-    if (seconds < 60) return '${seconds}s';
-    return '${seconds ~/ 60}m ${seconds % 60}s';
-  }
 
   @override
   Widget build(BuildContext context) {
     if (msg.hidden) return const SizedBox.shrink();
     final scheme = Theme.of(context).colorScheme;
-    final secondary = AppTextColor.secondary(scheme);
-    if (!msg.completed) {
-      final thinkingColor = scheme.onSurface.withValues(alpha: 0.68);
-      final statusText = aiThinkingStatusText(
-        elapsed: msg.elapsed,
-        canContinueInBackground: msg.canContinueInBackground,
-      );
-      final displayStatus =
-          statusText == '喵还在思考，完成后会显示在这里。' ? '正在思考 · 完成后会显示在这里。' : statusText;
-      return Padding(
-        padding: const EdgeInsets.only(bottom: 10),
-        child: AnimatedBuilder(
-          animation: _controller,
-          builder: (context, child) => ShaderMask(
-            blendMode: BlendMode.srcIn,
-            shaderCallback: (bounds) => LinearGradient(
-              begin: Alignment(-1.8 + _controller.value * 3.6, 0),
-              end: Alignment(-0.8 + _controller.value * 3.6, 0),
-              colors: [
-                thinkingColor.withValues(alpha: 0.78),
-                thinkingColor,
-                thinkingColor.withValues(alpha: 0.78),
-              ],
-            ).createShader(bounds),
-            child: child,
-          ),
-          child: Text(
-            key: const ValueKey('ai-chat-thinking-label'),
-            displayStatus,
-            style: _chatBodyStyle(
-              scheme,
-              fontSize: 15,
-              height: null,
-              variableWeight: null,
-              color: thinkingColor,
-            ),
-          ),
-        ),
-      );
-    }
-    final summaries = <String>[];
-    for (final step in msg.steps) {
-      final summary = step.detail.trim();
-      if (summary.isNotEmpty && !summaries.contains(summary)) {
-        summaries.add(summary);
-      }
-    }
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 10),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          InkWell(
-            borderRadius: BorderRadius.circular(8),
-            onTap: () => setState(() => msg.expanded = !msg.expanded),
-            child: Padding(
-              padding: const EdgeInsets.symmetric(vertical: 3),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(
-                    '思考了 ${_durationLabel(msg.elapsed)}',
-                    style: _chatBodyStyle(scheme,
-                        fontSize: 15,
-                        height: null,
-                        variableWeight: null,
-                        color: AppTextColor.secondary(scheme)),
-                  ),
-                  const SizedBox(width: 3),
-                  AnimatedRotation(
-                    turns: msg.expanded ? 0.25 : 0,
-                    duration: const Duration(milliseconds: 170),
-                    child: Icon(Icons.chevron_right_rounded,
-                        size: 18, color: secondary),
-                  ),
-                ],
-              ),
-            ),
-          ),
-          AnimatedSize(
-            duration: const Duration(milliseconds: 190),
-            curve: Curves.easeOutCubic,
-            child: msg.expanded
-                ? Padding(
-                    key: const ValueKey('ai-chat-thinking-details'),
-                    padding: const EdgeInsets.only(top: 7, right: 28),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        if (summaries.isEmpty && msg.sources.isEmpty)
-                          Text(
-                            '模型没有返回可展示的思考摘要。',
-                            style: TextStyle(
-                              fontSize: 13,
-                              height: 1.5,
-                              color: secondary,
-                            ),
-                          ),
-                        for (var index = 0;
-                            index < summaries.length;
-                            index++) ...[
-                          if (index > 0) const SizedBox(height: 7),
-                          Text(
-                            summaries[index],
-                            style: TextStyle(
-                              fontSize: 13,
-                              height: 1.5,
-                              color: secondary,
-                            ),
-                          ),
-                        ],
-                        if (msg.sources.isNotEmpty) ...[
-                          if (summaries.isNotEmpty) const SizedBox(height: 7),
-                          Text(
-                            '搜索并参考了 ${msg.sources.length} 个公开来源',
-                            style: TextStyle(
-                              fontSize: 13,
-                              height: 1.5,
-                              color: secondary,
-                            ),
-                          ),
-                        ],
-                        const SizedBox(height: 9),
-                        Divider(
-                          height: 1,
-                          thickness: 0.6,
-                          color: AppColors.hairline(scheme),
-                        ),
-                      ],
-                    ),
-                  )
-                : const SizedBox.shrink(),
-          ),
-        ],
-      ),
+    final summaries = msg.steps
+        .map((step) => step.detail.trim())
+        .where((detail) => detail.isNotEmpty)
+        .toSet()
+        .join('\n\n');
+    final seconds = msg.elapsed.inSeconds;
+    final duration =
+        seconds < 60 ? '${seconds}s' : '${seconds ~/ 60}m ${seconds % 60}s';
+    return ChatThinkingSummary(
+      completed: msg.completed,
+      initiallyExpanded: msg.expanded,
+      summary: summaries,
+      // This duration includes provider/network waiting, not hidden reasoning.
+      label: msg.completed ? '处理了 $duration' : '正在思考',
+      style: _chatBodyStyle(scheme,
+          fontSize: 15,
+          height: null,
+          variableWeight: null,
+          color: scheme.onSurface.withValues(alpha: 0.68)),
     );
   }
 }

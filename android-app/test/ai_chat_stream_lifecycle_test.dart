@@ -31,6 +31,7 @@ void main() {
   late String sessionId;
   final bodies = <Map<String, dynamic>>[];
   Completer<void>? responseGate;
+  Completer<void>? reasoningGate;
   var interrupted = false;
 
   setUpAll(() {
@@ -41,6 +42,7 @@ void main() {
     resetChatHistoryForTesting();
     bodies.clear();
     responseGate = null;
+    reasoningGate = null;
     interrupted = false;
     temp = await Directory.systemTemp.createTemp('feimiao_chat_stream_');
     await databaseFactory.setDatabasesPath(temp.path);
@@ -66,6 +68,14 @@ void main() {
             'type': 'response.reasoning_summary_text.delta',
             'delta': '公开的简短处理摘要',
           })}\n\n');
+      await request.response.flush();
+      if (reasoningGate != null) {
+        await reasoningGate!.future;
+        request.response.write('data: ${jsonEncode({
+              'type': 'response.reasoning_summary_text.delta',
+              'delta': '\n\n**继续核对**\n\n${'完整内容' * 180}',
+            })}\n\n');
+      }
       request.response.write('data: ${jsonEncode({
             'type': 'response.output_text.delta',
             'delta': '已收到的回答',
@@ -85,6 +95,9 @@ void main() {
     });
   });
   tearDown(() async {
+    if (reasoningGate != null && !reasoningGate!.isCompleted) {
+      reasoningGate!.complete();
+    }
     if (responseGate != null && !responseGate!.isCompleted) {
       responseGate!.complete();
     }
@@ -153,6 +166,49 @@ void main() {
             tester.state(find.byType(AiChatPanel))));
     await tester.pumpWidget(const SizedBox.shrink());
   }
+
+  testWidgets('生成中可展开真实摘要，增量保留排版，正文到达折叠且重开可恢复', (tester) async {
+    await HttpOverrides.runZoned(() async {
+      reasoningGate = Completer<void>();
+      await pumpPanel(tester);
+      await send(tester, '你好');
+      await waitFor(
+          tester,
+          () => find.byType(InkWell).evaluate().any((element) =>
+              (element.widget as InkWell).onTap != null &&
+              find
+                  .descendant(
+                      of: find.byWidget(element.widget),
+                      matching: find.text('正在思考'))
+                  .evaluate()
+                  .isNotEmpty));
+      await tester.tap(find.text('正在思考'));
+      await tester.pump(const Duration(milliseconds: 250));
+      expect(
+          find.textContaining('公开的简短处理摘要', findRichText: true), findsOneWidget);
+      reasoningGate!.complete();
+      await waitFor(tester, () async => (await answers()).isNotEmpty);
+      final row = (await tester.runAsync(answers))!.single;
+      final metadata = ChatAnswerMetadata.decode(row['attachments_json']);
+      final steps = metadata.thinking!['steps'] as List;
+      expect(steps.last['detail'], startsWith('公开的简短处理摘要\n\n**继续核对**\n\n'));
+      expect(steps.last['detail'].length, greaterThan(420));
+      await tester.pump(const Duration(milliseconds: 250));
+      expect(
+          find.byKey(const ValueKey('ai-chat-thinking-details')), findsNothing);
+      await closePanel(tester);
+      resetChatHistoryForTesting();
+      await pumpPanel(tester);
+      await waitFor(tester,
+          () => find.textContaining('处理了').hitTestable().evaluate().isNotEmpty);
+      await tester.tap(find.textContaining('处理了'));
+      await tester.pump(const Duration(milliseconds: 250));
+      expect(find.byKey(const ValueKey('ai-chat-thinking-details')),
+          findsOneWidget);
+      expect(find.textContaining('继续核对', findRichText: true), findsOneWidget);
+      await closePanel(tester);
+    }, createHttpClient: _RealHttp().createHttpClient);
+  });
 
   testWidgets('断流保留正文及摘要，关闭重开后恢复中断状态', (tester) async {
     await HttpOverrides.runZoned(() async {

@@ -153,7 +153,7 @@ void main() {
                       elapsed: const Duration(seconds: 12),
                       summary: '核对用户希望放慢节奏的偏好，整理三个简短安排。'))),
           dark: dark);
-      await tester.tap(find.text('思考了 12s'));
+      await tester.tap(find.text('处理了 12s'));
       await settle(tester);
       await capture(tester, 'thinking-$themeName');
       await tester.pumpWidget(const SizedBox.shrink());

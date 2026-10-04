@@ -161,7 +161,7 @@ void main() {
           }
 
           if (!isBaseline) {
-            mark('thinking', tester.getRect(find.text('思考了 11s')));
+            mark('thinking', tester.getRect(find.text('处理了 11s')));
             mark('interrupted', tester.getRect(find.text('回复已中断')));
           }
           mark(
