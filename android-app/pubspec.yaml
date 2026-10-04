@@ -3,7 +3,7 @@ description: "肥喵记账 - 可爱又聪明的记账猫"
 publish_to: 'none'
 # 版本规则（用户 0703 拍板）：1.0 起步，每次推 GitHub 构建 minor +1（1.1、1.2…）。
 # 加号后是 Android versionCode，必须只增不减，否则手机拒绝覆盖安装。
-version: 1.311.0+326
+version: 1.312.0+327
 
 environment:
   sdk: '>=3.4.0 <4.0.0'
@@ -18,6 +18,7 @@ dependencies:
   crypto: ^3.0.7
   intl: ^0.20.2
   decimal: ^3.0.0
+  markdown: ^7.3.0
   sqflite: ^2.3.3
   path: ^1.9.0
   provider: ^6.1.2

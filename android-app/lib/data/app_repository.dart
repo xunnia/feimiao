@@ -20,6 +20,7 @@ import '../core/account/account_activity.dart';
 import '../core/account/account_balance_checkpoint.dart';
 import '../core/account/account_movement_projection.dart';
 import '../core/account/liability_balance_mode.dart';
+import '../core/account/liability_repayment_policy.dart';
 import '../core/account/net_worth_snapshot.dart';
 import '../core/account/net_worth_verified_checkpoint.dart';
 import '../core/app_clock.dart';
@@ -31,6 +32,7 @@ import '../core/ai/ai_provider_health.dart';
 import '../core/ai/ai_run.dart';
 import '../core/ai/ai_extensions.dart';
 import '../core/ai/chat_session.dart';
+import '../core/ai/chat_operation_lease.dart';
 import '../core/ai/openai_codex_oauth.dart';
 import '../core/ai/report_execution_fence.dart';
 import '../core/assets/asset_allocation.dart';
@@ -922,6 +924,8 @@ enum AssetEventType {
   receivableLost,
   receivableArchived,
   receivableUnarchived,
+  liabilityRepaid,
+  liabilityRepaymentUndone,
 }
 
 extension AssetEventTypeX on AssetEventType {
@@ -962,6 +966,8 @@ extension AssetEventTypeX on AssetEventType {
         AssetEventType.receivableLost => 'receivable_lost',
         AssetEventType.receivableArchived => 'receivable_archived',
         AssetEventType.receivableUnarchived => 'receivable_unarchived',
+        AssetEventType.liabilityRepaid => 'liability_repaid',
+        AssetEventType.liabilityRepaymentUndone => 'liability_repayment_undone',
       };
 
   String get label => switch (this) {
@@ -998,6 +1004,8 @@ extension AssetEventTypeX on AssetEventType {
         AssetEventType.receivableLost => '权益损失',
         AssetEventType.receivableArchived => '归档权益',
         AssetEventType.receivableUnarchived => '恢复权益',
+        AssetEventType.liabilityRepaid => '记录还款',
+        AssetEventType.liabilityRepaymentUndone => '撤销还款',
       };
 
   static AssetEventType fromStorage(String? value) {
@@ -2038,6 +2046,7 @@ class LiabilityProfileEntity {
 }
 
 class BookEntity {
+  final String uuid;
   final int id;
   final String name;
   final String icon;
@@ -2055,6 +2064,7 @@ class BookEntity {
   final bool includeInTotal;
 
   const BookEntity({
+    this.uuid = '',
     required this.id,
     required this.name,
     this.icon = '📒',
@@ -2065,6 +2075,7 @@ class BookEntity {
   });
 
   factory BookEntity.fromMap(Map<String, Object?> m) => BookEntity(
+        uuid: m['uuid'] as String? ?? '',
         id: m['id'] as int,
         name: m['name'] as String,
         icon: m['icon'] as String? ?? '📒',
@@ -2713,9 +2724,45 @@ class AppRepository extends ChangeNotifier {
   final ReportExecutionFence _reportExecutionFence;
   int _databaseGeneration = 0;
 
-  /// Changes only after a different database snapshot is committed.
+  /// Changes before replacing a database, including failed restore attempts.
   /// View-level caches use this to drop rows that belonged to the old file.
   int get databaseGeneration => _databaseGeneration;
+
+  final Map<String, int> _chatOperationEpochs = {};
+  int chatOperationEpoch(String sessionId) =>
+      _chatOperationEpochs[sessionId.trim()] ?? 0;
+
+  ChatOperationLease captureChatOperation(String sessionId,
+      {int? bookId, String? bookUuid}) {
+    final id = sessionId.trim();
+    final book = bookId == null
+        ? currentBook
+        : books.where((book) => book.id == bookId).firstOrNull;
+    _chatOperationEpochs.putIfAbsent(id, () => 0);
+    return ChatOperationLease(
+      owner: this,
+      sessionId: id,
+      sessionEpoch: chatOperationEpoch(id),
+      databaseGeneration: databaseGeneration,
+      bookId: bookId ?? book?.id,
+      bookUuid: bookUuid ?? book?.uuid ?? '',
+    );
+  }
+
+  bool isChatOperationCurrent(ChatOperationLease lease) =>
+      identical(lease.owner, this) &&
+      !lease.cancelled &&
+      lease.databaseGeneration == databaseGeneration &&
+      lease.sessionEpoch == (_chatOperationEpochs[lease.sessionId] ?? 0);
+
+  void _checkChatOperation([String? sessionId]) {
+    final lease = ChatOperationLease.current;
+    if (lease == null) return;
+    if (!isChatOperationCurrent(lease) ||
+        (sessionId != null && sessionId != lease.sessionId)) {
+      throw const ChatOperationInvalidated();
+    }
+  }
 
   /// 全局数据版本号：每次 notifyListeners()（= 任何写路径收尾）自动 +1。
   /// 余额 / 净资产 / 趋势 memo 拿它当缓存 key——版本一变旧结果自动作废，
@@ -9327,6 +9374,7 @@ class AppRepository extends ChangeNotifier {
     final session = _chatSessions.where((item) => item.id == id).firstOrNull;
     if (session == null) return;
     if (session.isRecord) throw StateError('「记一记」会话不能删除');
+    _chatOperationEpochs.update(id, (value) => value + 1, ifAbsent: () => 1);
     await _db!.transaction((txn) async {
       // A worker can outlive the conversation route. Drop unfinished work
       // together with a deleted Chat so it cannot later recreate a message
@@ -9449,6 +9497,7 @@ class AppRepository extends ChangeNotifier {
     final id = sessionId.trim();
     final now = DateTime.now().millisecondsSinceEpoch;
     final rowId = await _db!.transaction<int>((txn) async {
+      _checkChatOperation(id);
       final sessionRows = await txn.query(
         'chat_sessions',
         columns: const ['title', 'is_record'],
@@ -9457,6 +9506,8 @@ class AppRepository extends ChangeNotifier {
         limit: 1,
       );
       if (sessionRows.isEmpty) throw StateError('会话不存在');
+
+      _checkChatOperation(id);
 
       final rowId = await txn.insert('chat_messages', {
         'session_id': id,
@@ -9483,6 +9534,7 @@ class AppRepository extends ChangeNotifier {
         where: 'session_id = ?',
         whereArgs: [id],
       );
+      _checkChatOperation(id);
       return rowId;
     });
     // Keep the in-memory Chats catalog in sync while a detail route is open;
@@ -9607,6 +9659,7 @@ class AppRepository extends ChangeNotifier {
     final db = _db;
     if (db == null) throw StateError('repository is not initialized');
     final id = await db.transaction<int>((txn) async {
+      _checkChatOperation(targetSessionId);
       final sessionRows = await txn.query(
         'chat_sessions',
         columns: const ['session_id'],
@@ -9620,7 +9673,8 @@ class AppRepository extends ChangeNotifier {
         where: "status IN ('completed', 'failed') AND updated_ms < ?",
         whereArgs: [now - const Duration(days: 14).inMilliseconds],
       );
-      return txn.insert('report_jobs', {
+      _checkChatOperation(targetSessionId);
+      final inserted = await txn.insert('report_jobs', {
         'uuid': _newUuid(),
         'session_id': targetSessionId,
         'provider_id': snapshotProviderId,
@@ -9640,6 +9694,8 @@ class AppRepository extends ChangeNotifier {
         'created_ms': now,
         'updated_ms': now,
       });
+      _checkChatOperation(targetSessionId);
+      return inserted;
     });
     final rows = await db.query(
       'report_jobs',
@@ -10098,20 +10154,34 @@ class AppRepository extends ChangeNotifier {
 
   /// 更新某张记账卡的持久化 JSON（用户改分类/删条目后写回最新状态）。
   Future<void> updateChatRecordMessage(int rowId, String json) async {
-    await _db!.update('chat_messages', {'text': json},
-        where: 'id = ?', whereArgs: [rowId]);
+    await _db!.transaction((txn) async {
+      _checkChatOperation();
+      final session = ChatOperationLease.current?.sessionId;
+      await txn.update('chat_messages', {'text': json},
+          where: session == null ? 'id = ?' : 'id = ? AND session_id = ?',
+          whereArgs: [rowId, if (session != null) session]);
+      _checkChatOperation();
+    });
   }
 
   /// 只清空指定会话的消息。会话本身和其他会话历史必须保留。
   Future<void> clearChatSessionMessages(String sessionId) async {
     final id = sessionId.trim();
     if (id.isEmpty) throw ArgumentError.value(sessionId, 'sessionId');
-    await _db!.delete(
-      'chat_messages',
-      where: 'session_id = ?',
-      whereArgs: [id],
-    );
-    notifyListeners();
+    _chatOperationEpochs.update(id, (value) => value + 1, ifAbsent: () => 1);
+    try {
+      await _db!.transaction((txn) async {
+        await txn.delete('report_jobs',
+            where: "session_id = ? AND status IN ('queued', 'running')",
+            whereArgs: [id]);
+        await txn
+            .delete('chat_messages', where: 'session_id = ?', whereArgs: [id]);
+      });
+    } finally {
+      // Even a failed delete revokes the in-flight request. Views must reload
+      // the unchanged history instead of leaving a cancelled thinking bubble.
+      notifyListeners();
+    }
   }
 
   /// 删除指定会话中的单条消息。双条件约束避免重试某个 Chat 时误删
@@ -10123,18 +10193,29 @@ class AppRepository extends ChangeNotifier {
     final id = sessionId.trim();
     if (id.isEmpty) throw ArgumentError.value(sessionId, 'sessionId');
     if (messageId <= 0) throw ArgumentError.value(messageId, 'messageId');
-    await _db!.delete(
-      'chat_messages',
-      where: 'id = ? AND session_id = ?',
-      whereArgs: [messageId, id],
-    );
+    await _db!.transaction((txn) async {
+      _checkChatOperation(id);
+      await txn.delete('chat_messages',
+          where: 'id = ? AND session_id = ?', whereArgs: [messageId, id]);
+      _checkChatOperation(id);
+    });
     notifyListeners();
   }
 
   /// 兼容旧调用：明确表示清空全部会话。新界面不得用它清空当前会话。
   Future<void> clearChatMessages() async {
-    await _db!.delete('chat_messages');
-    notifyListeners();
+    for (final id in _chatOperationEpochs.keys.toList()) {
+      _chatOperationEpochs[id] = _chatOperationEpochs[id]! + 1;
+    }
+    try {
+      await _db!.transaction((txn) async {
+        await txn.delete('report_jobs',
+            where: "status IN ('queued', 'running')");
+        await txn.delete('chat_messages');
+      });
+    } finally {
+      notifyListeners();
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -10171,12 +10252,14 @@ class AppRepository extends ChangeNotifier {
     );
     var created = false;
     final run = await _db!.transaction<AiRun>((txn) async {
+      _checkChatOperation(sid);
       final existing = await txn.query(
         'ai_runs',
         where: 'idempotency_key = ?',
         whereArgs: [key],
         limit: 1,
       );
+      _checkChatOperation(sid);
       if (existing.isNotEmpty) return AiRun.fromMap(existing.first);
       final id = _newUuid();
       final value = AiRun(
@@ -10202,6 +10285,7 @@ class AppRepository extends ChangeNotifier {
         value.toMap(),
         conflictAlgorithm: ConflictAlgorithm.abort,
       );
+      _checkChatOperation(sid);
       created = true;
       return value;
     });
@@ -10280,14 +10364,16 @@ class AppRepository extends ChangeNotifier {
     if (id.isEmpty) throw ArgumentError.value(runId, 'runId');
     final now = DateTime.now().millisecondsSinceEpoch;
     final event = await _db!.transaction<AiRunEvent>((txn) async {
+      _checkChatOperation();
       final run = await txn.query(
         'ai_runs',
-        columns: const ['id'],
+        columns: const ['id', 'session_id'],
         where: 'id = ?',
         whereArgs: [id],
         limit: 1,
       );
       if (run.isEmpty) throw StateError('AI run 不存在');
+      _checkChatOperation(run.single['session_id'] as String);
       final sequenceRows = await txn.rawQuery(
         'SELECT COALESCE(MAX(sequence), 0) AS sequence '
         'FROM ai_run_events WHERE run_id = ?',
@@ -10310,6 +10396,7 @@ class AppRepository extends ChangeNotifier {
         where: 'id = ?',
         whereArgs: [id],
       );
+      _checkChatOperation();
       return AiRunEvent(
         id: eventId,
         runId: value.runId,
@@ -10402,7 +10489,18 @@ class AppRepository extends ChangeNotifier {
         'requires_confirmation': requiresConfirmation ? 1 : 0,
       'updated_ms': DateTime.now().millisecondsSinceEpoch,
     };
-    await _db!.update('ai_runs', values, where: 'id = ?', whereArgs: [id]);
+    await _db!.transaction((txn) async {
+      _checkChatOperation();
+      final rows = await txn.query('ai_runs',
+          columns: const ['session_id'],
+          where: 'id = ?',
+          whereArgs: [id],
+          limit: 1);
+      if (rows.isEmpty) return;
+      _checkChatOperation(rows.single['session_id'] as String);
+      await txn.update('ai_runs', values, where: 'id = ?', whereArgs: [id]);
+      _checkChatOperation();
+    });
     final run = await aiRunById(id);
     if (run != null) notifyListeners();
     return run;
@@ -10551,6 +10649,7 @@ class AppRepository extends ChangeNotifier {
   /// Undo only the transactions recorded by this run. UUID matching avoids
   /// deleting a newer transaction if SQLite ever reuses an integer row id.
   Future<bool> undoAiRun(String runId) async {
+    _checkChatOperation();
     final id = runId.trim();
     final run = await aiRunById(id);
     if (run == null ||
@@ -10587,6 +10686,7 @@ class AppRepository extends ChangeNotifier {
     final deletedIds = <int>[];
     final now = DateTime.now().millisecondsSinceEpoch;
     await _db!.transaction((txn) async {
+      _checkChatOperation(run.sessionId);
       final locked = await txn.query(
         'ai_runs',
         columns: const ['status'],
@@ -10670,6 +10770,7 @@ class AppRepository extends ChangeNotifier {
         payload: {'deletedCount': deleted, 'skippedCount': skipped},
         createdMs: now,
       );
+      _checkChatOperation(run.sessionId);
     });
     if (deletedIds.isNotEmpty) {
       await _refreshTransactionRows(ids: deletedIds.toSet());
@@ -11128,16 +11229,20 @@ class AppRepository extends ChangeNotifier {
   }) async {
     final p = phrase.trim();
     if (p.length < 2 || categoryKey.isEmpty) return;
-    await _db!.insert(
-      'category_memory',
-      {
-        'phrase': p,
-        'kind': kind.toJson(),
-        'category_key': categoryKey,
-        'updated_ms': DateTime.now().millisecondsSinceEpoch,
-      },
-      conflictAlgorithm: ConflictAlgorithm.replace,
-    );
+    await _db!.transaction((txn) async {
+      _checkChatOperation();
+      await txn.insert(
+          'category_memory',
+          {
+            'phrase': p,
+            'kind': kind.toJson(),
+            'category_key': categoryKey,
+            'updated_ms': DateTime.now().millisecondsSinceEpoch,
+          },
+          conflictAlgorithm: ConflictAlgorithm.replace);
+      _checkChatOperation();
+    });
+    _checkChatOperation();
     _catMemory.removeWhere((m) => m.phrase == p && m.kind == kind);
     _catMemory.add((phrase: p, kind: kind, key: categoryKey));
   }
@@ -12318,6 +12423,8 @@ class AppRepository extends ChangeNotifier {
     }
 
     try {
+      // Revoke work before closing the old DB, including failed restores.
+      _databaseGeneration++;
       await _db?.close();
       _db = null;
 
@@ -12373,7 +12480,6 @@ class AppRepository extends ChangeNotifier {
         oldReceipts: oldReceipts,
         oldAssetMedia: oldAssetMedia,
       );
-      _databaseGeneration++;
       notifyListeners();
       return true;
     } catch (_) {
@@ -12703,6 +12809,9 @@ class AppRepository extends ChangeNotifier {
   // ---------------------------------------------------------------------------
 
   Future<String?> transactionMutationBlockReason(int transactionId) async {
+    if (await _liabilityRepaymentForTransaction(_db!, transactionId) != null) {
+      return '这笔流水来自还款，请使用“撤销本次还款”一起撤销本金和利息。';
+    }
     final physicalLinks = await _db!.query(
       'asset_transaction_links',
       columns: ['link_type'],
@@ -12736,6 +12845,25 @@ class AppRepository extends ChangeNotifier {
     );
     if (recoveries.isNotEmpty) {
       return '这笔流水来自权益收回，请先在资产详情中撤销收回。';
+    }
+    final transactionRows = await _db!.query('transactions',
+        columns: ['uuid'],
+        where: 'id = ?',
+        whereArgs: [transactionId],
+        limit: 1);
+    final uuid = transactionRows.firstOrNull?['uuid'] as String?;
+    if (uuid != null && uuid.isNotEmpty) {
+      final recoveryEvents = await _db!.rawQuery('''
+        SELECT e.* FROM asset_events e
+        JOIN receivable_recoveries r ON r.event_id = e.id
+        WHERE e.asset_type = 'receivable'
+      ''');
+      if (recoveryEvents.any((e) =>
+          _assetEventMetadata(
+              e['metadata'] as String? ?? '')['interest_transaction_uuid'] ==
+          uuid)) {
+        return '这笔利息来自权益收回，请先在资产详情中撤销收回。';
+      }
     }
     return null;
   }
@@ -12917,6 +13045,7 @@ class AppRepository extends ChangeNotifier {
       throw ArgumentError('报销到账账户不存在或币种不受支持');
     }
     await _db!.transaction((txn) async {
+      await _assertNotLiabilityRepayment(txn, id);
       final rows = await txn.query(
         'transactions',
         where: 'id = ?',
@@ -12978,9 +13107,11 @@ class AppRepository extends ChangeNotifier {
 
   /// 只改某笔的分类（记账卡「一键改分类」用，轻量、不动其它字段）。
   Future<void> setTransactionCategory(int id, int? categoryId) async {
+    _checkChatOperation();
     await _assertTransactionMutable(id);
     final updatedMs = DateTime.now().millisecondsSinceEpoch;
     await _db!.transaction((txn) async {
+      _checkChatOperation();
       await txn.update(
         'transactions',
         {'category_id': categoryId, 'updated_ms': updatedMs},
@@ -12993,6 +13124,7 @@ class AppRepository extends ChangeNotifier {
         where: 'refund_of = ?',
         whereArgs: [id],
       );
+      _checkChatOperation();
     });
     await _refreshTransactionRows(familyRoots: {id});
     notifyListeners();
@@ -13018,6 +13150,7 @@ class AppRepository extends ChangeNotifier {
       throw ArgumentError('退款到账账户不存在或币种不受支持');
     }
     final refundId = await _db!.transaction<int>((txn) async {
+      await _assertNotLiabilityRepayment(txn, original.id);
       final rows = await txn.query(
         'transactions',
         where: 'id = ?',
@@ -13354,8 +13487,9 @@ class AppRepository extends ChangeNotifier {
     int accountId, {
     required int asOfMs,
     required int knowledgeCutoffMs,
+    List<AccountBalanceCheckpointEntity>? checkpoints,
   }) {
-    final visible = _accountBalanceCheckpoints
+    final visible = (checkpoints ?? _accountBalanceCheckpoints)
         .where((checkpoint) =>
             checkpoint.accountId == accountId &&
             checkpoint.status == 'active' &&
@@ -13382,13 +13516,15 @@ class AppRepository extends ChangeNotifier {
     required int accountId,
     required int asOfMs,
     required int knowledgeCutoffMs,
+    List<AccountBalanceCheckpointEntity>? checkpoints,
   }) {
     final reversed = _reversedAccountCheckpointIds(
       accountId,
       asOfMs: asOfMs,
       knowledgeCutoffMs: knowledgeCutoffMs,
+      checkpoints: checkpoints,
     );
-    final candidates = _accountBalanceCheckpoints.where(
+    final candidates = (checkpoints ?? _accountBalanceCheckpoints).where(
       (checkpoint) =>
           checkpoint.accountId == accountId &&
           checkpoint.isAnchor &&
@@ -13434,7 +13570,14 @@ class AppRepository extends ChangeNotifier {
     required DateTime asOf,
     required DateTime knowledgeCutoff,
     required bool historical,
+    List<TransactionEntity>? transactions,
+    List<AccountBalanceCheckpointEntity>? checkpoints,
+    Map<int, Set<String>>? coveredUnknownEventIds,
   }) {
+    final ledgerTransactions = transactions ?? _allTransactions;
+    final ledgerCheckpoints = checkpoints ?? _accountBalanceCheckpoints;
+    final ledgerCoverage =
+        coveredUnknownEventIds ?? _checkpointCoveredUnknownEventIds;
     final bookIds = _books.map((book) => book.id).toList();
     if (bookIds.isEmpty) bookIds.add(_defaultBookId == 0 ? 1 : _defaultBookId);
     final metricQuery = MetricQuery(
@@ -13456,6 +13599,7 @@ class AppRepository extends ChangeNotifier {
       accountId: account.id,
       asOfMs: asOfMs,
       knowledgeCutoffMs: cutoffMs,
+      checkpoints: ledgerCheckpoints,
     );
     final trustedFromMs = checkpoint?.effectiveMs ??
         (account.openingBalanceQuality == AccountOpeningBalanceQuality.exact
@@ -13464,11 +13608,11 @@ class AppRepository extends ChangeNotifier {
     final baselineCutoffMs = checkpoint?.knowledgeCutoffMs ?? account.createdMs;
     final covered = checkpoint == null
         ? const <String>{}
-        : _checkpointCoveredUnknownEventIds[checkpoint.id] ?? const <String>{};
+        : ledgerCoverage[checkpoint.id] ?? const <String>{};
     var unresolvedAbsorbedUnknown = 0;
     var backfilledBeforeOpeningCount = 0;
     final events = <AccountSettlementEvent>[];
-    for (final transaction in _allTransactions) {
+    for (final transaction in ledgerTransactions) {
       final event = _accountSettlementEvent(transaction);
       if (trustedFromMs == null) {
         events.add(event);
@@ -13507,7 +13651,7 @@ class AppRepository extends ChangeNotifier {
       events.add(event);
     }
     final coreMovements = <AccountBalanceMovement>[];
-    for (final transaction in _allTransactions) {
+    for (final transaction in ledgerTransactions) {
       final legs = _accountBalanceMovementLegs(transaction);
       final unknownDate = transaction.settledMs == null ||
           transaction.settlementQuality == SettlementQuality.unknown;
@@ -13570,7 +13714,7 @@ class AppRepository extends ChangeNotifier {
         sequence: account.openingBalanceSequence,
       ),
       checkpoints: [
-        for (final item in _accountBalanceCheckpoints)
+        for (final item in ledgerCheckpoints)
           if (item.accountId == account.id && item.status == 'active')
             AccountBalanceCheckpoint(
               id: item.id.toString(),
@@ -13580,8 +13724,7 @@ class AppRepository extends ChangeNotifier {
               knowledgeCutoffMs: item.knowledgeCutoffMs,
               targetBalanceMinor: decimalToBudgetCents(item.targetBalance),
               reversalOf: item.reversalOf?.toString(),
-              coveredUnknownEventIds:
-                  _checkpointCoveredUnknownEventIds[item.id] ?? const {},
+              coveredUnknownEventIds: ledgerCoverage[item.id] ?? const {},
             ),
       ],
       movements: coreMovements,
@@ -14615,6 +14758,22 @@ class AppRepository extends ChangeNotifier {
     final refs = <Map<String, Object?>>[];
     final now = DateTime.now().millisecondsSinceEpoch;
     await _db!.transaction((txn) async {
+      _checkChatOperation();
+      final lease = ChatOperationLease.current;
+      if (lease != null) {
+        if (lease.bookId == null || lease.bookUuid.isEmpty) {
+          throw StateError('发起时的账本未加载，请重新发送');
+        }
+        final bookRows = await txn.query('books',
+            columns: ['uuid'], where: 'id = ?', whereArgs: [lease.bookId]);
+        _checkChatOperation();
+        if (bookRows.length != 1 ||
+            bookRows.single['uuid'] != lease.bookUuid ||
+            drafts.any((draft) =>
+                draft.bookId != null && draft.bookId != lease.bookId)) {
+          throw const ChatOperationInvalidated();
+        }
+      }
       AiRunStatus? runStatus;
       if (normalizedRunId.isNotEmpty) {
         final rows = await txn.query(
@@ -14634,10 +14793,12 @@ class AppRepository extends ChangeNotifier {
         }
       }
 
+      _checkChatOperation();
       for (final draft in drafts) {
+        _checkChatOperation();
         final sync = _syncStampNew();
         final id = await txn.insert('transactions', {
-          'book_id': draft.bookId ?? _currentBookId,
+          'book_id': lease?.bookId ?? draft.bookId ?? _currentBookId,
           'kind': draft.kind.toJson(),
           'amount': normalizeMoneyAmount(draft.amount).toString(),
           'currency_code': 'CNY',
@@ -14667,6 +14828,7 @@ class AppRepository extends ChangeNotifier {
         });
       }
 
+      _checkChatOperation();
       if (normalizedRunId.isNotEmpty) {
         final result = jsonEncode({
           'transactionIds': ids,
@@ -14698,6 +14860,7 @@ class AppRepository extends ChangeNotifier {
           createdMs: now,
         );
       }
+      _checkChatOperation();
     });
 
     await _refreshTransactionRows(ids: ids.toSet());
@@ -15462,6 +15625,7 @@ class AppRepository extends ChangeNotifier {
   }
 
   Future<void> deleteTransaction(int id) async {
+    _checkChatOperation();
     final deleting = _allTransactions
         .where((transaction) => transaction.id == id)
         .firstOrNull;
@@ -15487,6 +15651,7 @@ class AppRepository extends ChangeNotifier {
     final path = await _imagePathOf(id);
     var familyRoot = id;
     await _db!.transaction((txn) async {
+      _checkChatOperation();
       final rows = await txn.query(
         'transactions',
         columns: ['id', 'refund_of', 'event_type'],
@@ -15525,6 +15690,7 @@ class AppRepository extends ChangeNotifier {
         // 即将删除的退款误判成“尚未分配”。
         await _refreshOrderAllocationQuality(txn, familyRoot);
       }
+      _checkChatOperation();
     });
     _deleteReceiptFileIfOwned(path);
     await _refreshTransactionRows(familyRoots: {familyRoot});
@@ -17119,10 +17285,13 @@ class AppRepository extends ChangeNotifier {
       } else {
         final txRows = await txn.query(
           'transactions',
-          columns: ['image_path'],
+          columns: ['id', 'image_path'],
           where: 'book_id = ?',
           whereArgs: [id],
         );
+        for (final row in txRows) {
+          await _assertNotLiabilityRepayment(txn, row['id'] as int);
+        }
         receiptPaths.addAll(txRows
             .map((row) => row['image_path'] as String? ?? '')
             .where((path) => path.isNotEmpty));
@@ -20742,6 +20911,7 @@ class AppRepository extends ChangeNotifier {
     String note = '',
     Decimal? interestAmount,
   }) async {
+    amount = normalizeMoneyAmount(amount);
     if (amount <= Decimal.zero) {
       throw ArgumentError('收回金额必须大于 0');
     }
@@ -20754,7 +20924,8 @@ class AppRepository extends ChangeNotifier {
     if (interest > Decimal.zero && targetAccountId == null) {
       throw ArgumentError('记利息收入需要指定到账账户');
     }
-    final at = recoveredAt ?? DateTime.now();
+    final at = recoveredAt ?? AppClock.now;
+    if (at.isAfter(AppClock.now)) throw ArgumentError('请在实际到账后记录收回');
     final timePrecision = recoveredAt == null
         ? TransactionTimePrecision.exact
         : TransactionTimePrecision.dateOnly;
@@ -20777,12 +20948,21 @@ class AppRepository extends ChangeNotifier {
       if (asset.currencyCode != 'CNY') {
         throw UnsupportedError('当前版本暂不支持外币权益收回入账。');
       }
-      if (targetAccountId != null &&
-          !_accounts.any((account) =>
-              account.id == targetAccountId &&
-              !account.isDeleted &&
-              account.currencyCode == 'CNY')) {
-        throw ArgumentError('到账账户不存在或币种不受支持');
+      AccountEntity? target;
+      Decimal? balanceBefore;
+      if (targetAccountId != null) {
+        final targetRows = await txn.query('accounts',
+            where: 'id = ?', whereArgs: [targetAccountId], limit: 1);
+        target = targetRows.isEmpty
+            ? null
+            : AccountEntity.fromMap(targetRows.single);
+        if (target == null ||
+            target.isDeleted ||
+            target.isArchived ||
+            target.currencyCode != 'CNY') {
+          throw ArgumentError('到账账户不存在、已归档或币种不受支持');
+        }
+        balanceBefore = await _accountBalanceForFinanceWrite(txn, target);
       }
       final newRemaining = asset.remainingAmount - amount;
       final newEconomicStatus = _receivableEconomicStatusForRemaining(
@@ -20865,6 +21045,17 @@ class AppRepository extends ChangeNotifier {
         where: 'id = ?',
         whereArgs: [id],
       );
+      final paymentRows = await txn.query('transactions',
+          where: 'id IN (?, ?)',
+          whereArgs: [transactionId, interestTransactionId]);
+      String? paymentUuid(int? id) =>
+          paymentRows.where((row) => row['id'] == id).firstOrNull?['uuid']
+              as String?;
+      if (target != null &&
+          await _accountBalanceForFinanceWrite(txn, target) !=
+              balanceBefore! + amount + interest) {
+        throw ArgumentError('到账日期已被余额核对覆盖，请先核对到账日期或撤销相关余额核对');
+      }
       final eventId = await _insertAssetEvent(
         txn,
         assetId: id,
@@ -20875,6 +21066,12 @@ class AppRepository extends ChangeNotifier {
         note: note.trim(),
         metadata: {
           'previous_remaining': asset.remainingAmount.toString(),
+          'remaining_after': newRemaining.toString(),
+          'original_amount': asset.originalAmount.toString(),
+          'economic_after': newEconomicStatus.storageKey,
+          'visibility_after': asset.visibilityStatus.storageKey,
+          'include_after':
+              newRemaining > Decimal.zero && asset.includeInNetWorth,
           'previous_status': asset.status.storageKey,
           'previous_economic_status': asset.economicStatus.storageKey,
           'previous_visibility_status': asset.visibilityStatus.storageKey,
@@ -20883,8 +21080,12 @@ class AppRepository extends ChangeNotifier {
           'previous_include_in_net_worth': asset.includeInNetWorth,
           if (targetAccountId != null) 'target_account_id': targetAccountId,
           if (transactionId != null) 'transaction_id': transactionId,
+          if (transactionId != null)
+            'transaction_uuid': paymentUuid(transactionId),
           if (interestTransactionId != null)
             'interest_transaction_id': interestTransactionId,
+          if (interestTransactionId != null)
+            'interest_transaction_uuid': paymentUuid(interestTransactionId),
           if (interest > Decimal.zero) 'interest_amount': interest.toString(),
         },
       );
@@ -20920,7 +21121,7 @@ class AppRepository extends ChangeNotifier {
         columns: ['id'],
         where: 'receivable_asset_id = ?',
         whereArgs: [recovery.receivableAssetId],
-        orderBy: 'recovered_ms DESC, id DESC',
+        orderBy: 'created_ms DESC, id DESC',
         limit: 1,
       );
       if (latestRows.isEmpty || latestRows.first['id'] != recoveryId) {
@@ -20934,6 +21135,10 @@ class AppRepository extends ChangeNotifier {
       );
       if (assetRows.isEmpty) throw StateError('权益资产不存在');
       final asset = ReceivableAssetEntity.fromMap(assetRows.first);
+      if (asset.economicStatus != ReceivableEconomicStatus.partialRecovered &&
+          asset.economicStatus != ReceivableEconomicStatus.recovered) {
+        throw StateError('权益状态已改变，请先核对再撤销收回');
+      }
       final restoredRemaining = asset.remainingAmount + recovery.amount;
       if (restoredRemaining > asset.originalAmount) {
         throw StateError('撤销后金额会超过原始金额');
@@ -20952,6 +21157,21 @@ class AppRepository extends ChangeNotifier {
             eventRows.first['metadata'] as String? ?? '',
           );
         }
+      }
+      if ((metadata.containsKey('remaining_after') &&
+              Decimal.tryParse('${metadata['remaining_after']}') !=
+                  asset.remainingAmount) ||
+          (metadata.containsKey('original_amount') &&
+              Decimal.tryParse('${metadata['original_amount']}') !=
+                  asset.originalAmount) ||
+          (metadata.containsKey('economic_after') &&
+              metadata['economic_after'] != asset.economicStatus.storageKey) ||
+          (metadata.containsKey('visibility_after') &&
+              metadata['visibility_after'] !=
+                  asset.visibilityStatus.storageKey) ||
+          (metadata.containsKey('include_after') &&
+              metadata['include_after'] != asset.includeInNetWorth)) {
+        throw StateError('权益资料已修改，不能覆盖当前金额或状态');
       }
       final previousStatus = ReceivableAssetStatusX.fromStorage(
         metadata['previous_status']?.toString(),
@@ -20983,7 +21203,62 @@ class AppRepository extends ChangeNotifier {
       );
       final previousIncluded = metadata['previous_include_in_net_worth'] is bool
           ? metadata['previous_include_in_net_worth'] as bool
-          : true;
+          : asset.includeInNetWorth;
+      final interest =
+          Decimal.tryParse('${metadata['interest_amount'] ?? '0'}');
+      if (interest == null || interest < Decimal.zero) {
+        throw StateError('利息凭证不完整');
+      }
+      int? interestTxId;
+      if (interest > Decimal.zero) {
+        final interestUuid = metadata['interest_transaction_uuid'] as String?;
+        if (interestUuid == null || interestUuid.isEmpty) {
+          throw StateError('旧收回记录缺少利息流水标识，请先核对，不能按编号猜测撤销');
+        }
+        final interestRows = await txn.query('transactions',
+            where: 'uuid = ?', whereArgs: [interestUuid], limit: 1);
+        if (interestRows.isEmpty) throw StateError('利息流水缺失，请先核对');
+        final tx = TransactionEntity.fromMap(interestRows.single);
+        if (tx.amount != interest ||
+            tx.txKind != TransactionKind.income ||
+            tx.accountId != recovery.targetAccountId ||
+            tx.refundOf != null ||
+            tx.eventType != TransactionEventType.income ||
+            tx.excluded ||
+            tx.currencyCode != asset.currencyCode ||
+            tx.settledMs != recovery.recoveredMs) {
+          throw StateError('利息流水已改变，请先核对');
+        }
+        interestTxId = tx.id;
+      }
+      AccountEntity? target;
+      Decimal? balanceBefore;
+      if (recovery.transactionId != null) {
+        final paymentRows = await txn.query('transactions',
+            where: 'id = ?', whereArgs: [recovery.transactionId], limit: 1);
+        if (paymentRows.isEmpty) throw StateError('收回流水缺失，不能只恢复权益');
+        final tx = TransactionEntity.fromMap(paymentRows.single);
+        if (tx.amount != recovery.amount ||
+            tx.txKind != TransactionKind.income ||
+            tx.eventType != TransactionEventType.receivableRecovery ||
+            !tx.excluded ||
+            tx.accountId != recovery.targetAccountId ||
+            tx.refundOf != null ||
+            tx.currencyCode != asset.currencyCode ||
+            tx.settledMs != recovery.recoveredMs ||
+            (metadata['transaction_uuid'] != null &&
+                metadata['transaction_uuid'] != tx.uuid) ||
+            await _refundedAmountInDb(txn, tx.id) != Decimal.zero) {
+          throw StateError('收回流水已改变，请先核对');
+        }
+        final targets = await txn.query('accounts',
+            where: 'id = ?', whereArgs: [recovery.targetAccountId], limit: 1);
+        if (targets.isEmpty) throw StateError('到账账户缺失，请先核对');
+        target = AccountEntity.fromMap(targets.single);
+        balanceBefore = await _accountBalanceForFinanceWrite(txn, target);
+      } else if (recovery.targetAccountId != null || interest > Decimal.zero) {
+        throw StateError('收回入账凭证不完整，请先核对');
+      }
       if (recovery.transactionId != null) {
         await txn.delete(
           'transactions',
@@ -20992,15 +21267,17 @@ class AppRepository extends ChangeNotifier {
         );
       }
       // A2：这笔收回若带了利息收入（超本金部分），撤销时一并删，审计闭合。
-      final interestTxId = int.tryParse(
-        metadata['interest_transaction_id']?.toString() ?? '',
-      );
       if (interestTxId != null) {
         await txn.delete(
           'transactions',
           where: 'id = ?',
           whereArgs: [interestTxId],
         );
+      }
+      if (target != null &&
+          await _accountBalanceForFinanceWrite(txn, target) !=
+              balanceBefore! - recovery.amount - interest) {
+        throw StateError('余额核对已包含本次收回，请先撤销相关余额核对再撤销收回');
       }
       await txn.delete('receivable_recoveries',
           where: 'id = ?', whereArgs: [recoveryId]);
@@ -21373,7 +21650,7 @@ class AppRepository extends ChangeNotifier {
   /// A 批「还款」动作（守 V2.1 锁定：不做本息 ledger 化、不改历史数据）。
   ///
   /// 语义：从 [fromAccountId] 划 [amount] 去还 [profileId] 挂的负债账户。
-  /// - 本金部分 = min(amount, currentPrincipal)：记一笔转账
+  /// - 余额口径的本金以真实账面欠款为准；兼容口径须先排除歧义。
   ///   （还款账户 → 负债账户），档案 currentPrincipal 同额递减（减到 0 为止）。
   /// - 超出本金的差额：自动追加一笔支出（分类=利息/手续费，见
   ///   [_interestCategoryFor]），从还款账户出——总划扣 = amount，账户余额
@@ -21402,39 +21679,63 @@ class AppRepository extends ChangeNotifier {
     if (amount <= Decimal.zero) {
       throw ArgumentError('还款金额必须大于 0');
     }
-    final profile =
-        _liabilityProfiles.where((p) => p.id == profileId).firstOrNull;
-    if (profile == null) throw StateError('负债档案不存在');
-    if (!_isSupportedTransactionAccountId(fromAccountId)) {
-      throw ArgumentError('还款账户不存在或币种不受支持');
+    final at = date ?? AppClock.now;
+    if (at.isAfter(AppClock.now)) {
+      throw ArgumentError('还款日期不能在未来，请在实际付款后记录');
     }
-    if (!_isSupportedTransactionAccountId(profile.accountId)) {
-      throw ArgumentError('负债账户不存在或币种不受支持');
-    }
-    if (fromAccountId == profile.accountId) {
-      throw ArgumentError('还款账户不能是负债账户本身');
-    }
-    final at = date ?? DateTime.now();
     final timePrecision = date == null
         ? TransactionTimePrecision.entryClock
         : TransactionTimePrecision.dateOnly;
-    final hasPrincipal = profile.currentPrincipal > Decimal.zero;
-    final principalPaid = hasPrincipal
-        ? (amount < profile.currentPrincipal
-            ? amount
-            : profile.currentPrincipal)
-        : Decimal.zero;
-    final interestPaid = hasPrincipal ? amount - principalPaid : Decimal.zero;
-    final transferAmount = hasPrincipal ? principalPaid : amount;
-    final liabilityAccountName =
-        _accounts.where((a) => a.id == profile.accountId).firstOrNull?.name ??
-            '负债账户';
-    final interestCategory = interestPaid > Decimal.zero
-        ? _interestCategoryFor(TransactionKind.expense)
-        : null;
+    late LiabilityRepaymentPlan plan;
     int? transferTxId;
     int? interestTxId;
     await _db!.transaction((txn) async {
+      final profiles = await txn.query('liability_profiles',
+          where: 'id = ?', whereArgs: [profileId], limit: 1);
+      if (profiles.isEmpty) throw StateError('负债档案不存在');
+      final profile = LiabilityProfileEntity.fromMap(profiles.single);
+      if (profile.status != LiabilityProfileStatus.active) {
+        throw ArgumentError('当前负债档案不是还款中，请先核对状态');
+      }
+      final accounts = await txn.query('accounts',
+          where: 'id IN (?, ?)', whereArgs: [fromAccountId, profile.accountId]);
+      final payer = accounts
+          .map(AccountEntity.fromMap)
+          .where((a) => a.id == fromAccountId)
+          .firstOrNull;
+      final liability = accounts
+          .map(AccountEntity.fromMap)
+          .where((a) => a.id == profile.accountId)
+          .firstOrNull;
+      if (payer == null ||
+          liability == null ||
+          payer.isDeleted ||
+          liability.isDeleted ||
+          payer.isArchived ||
+          liability.isArchived ||
+          payer.currencyCode != 'CNY' ||
+          liability.currencyCode != 'CNY') {
+        throw ArgumentError('还款或负债账户不存在、已归档或币种不受支持');
+      }
+      if (fromAccountId == profile.accountId) {
+        throw ArgumentError('还款账户不能是负债账户本身');
+      }
+      final balance = await _accountBalanceForFinanceWrite(txn, liability);
+      final payerBalance = await _accountBalanceForFinanceWrite(txn, payer);
+      plan = LiabilityRepaymentPolicy.resolve(
+        amount: amount,
+        accountBalance: balance,
+        contractPrincipal: profile.currentPrincipal,
+        mode: liability.balanceMode,
+        allowZeroPrincipalTransfer:
+            profile.type == LiabilityProfileType.creditCard,
+      );
+      final transferAmount = plan.transferAmount;
+      final interestPaid = plan.interestPaid;
+      final liabilityAccountName = liability.name;
+      final interestCategory = interestPaid > Decimal.zero
+          ? _interestCategoryFor(TransactionKind.expense)
+          : null;
       if (transferAmount > Decimal.zero) {
         transferTxId = await txn.insert('transactions', {
           'book_id': _currentBookId,
@@ -21488,24 +21789,58 @@ class AppRepository extends ChangeNotifier {
           ..._syncStampNew(),
         });
       }
-      if (principalPaid > Decimal.zero) {
-        final newPrincipal = profile.currentPrincipal - principalPaid;
-        final settled = newPrincipal <= Decimal.zero &&
-            profile.type == LiabilityProfileType.personalBorrow;
-        await txn.update(
-          'liability_profiles',
-          {
-            'current_principal': newPrincipal.toString(),
-            if (settled) 'status': LiabilityProfileStatus.paidOff.storageKey,
-            'updated_ms': DateTime.now().millisecondsSinceEpoch,
-          },
-          where: 'id = ?',
-          whereArgs: [profileId],
-        );
+      final settled = balance + transferAmount >= Decimal.zero &&
+          profile.type == LiabilityProfileType.personalBorrow;
+      final statusAfter =
+          settled ? LiabilityProfileStatus.paidOff : profile.status;
+      await txn.update(
+        'liability_profiles',
+        {
+          'current_principal': plan.principalAfter.toString(),
+          'status': statusAfter.storageKey,
+          'updated_ms': AppClock.now.millisecondsSinceEpoch,
+        },
+        where: 'id = ?',
+        whereArgs: [profileId],
+      );
+      final paymentRows = await txn.query('transactions',
+          where: 'id IN (?, ?)', whereArgs: [transferTxId, interestTxId]);
+      String? paymentUuid(int? id) =>
+          paymentRows.where((row) => row['id'] == id).firstOrNull?['uuid']
+              as String?;
+      if (await _accountBalanceForFinanceWrite(txn, payer) !=
+              payerBalance - amount ||
+          await _accountBalanceForFinanceWrite(txn, liability) !=
+              balance + transferAmount) {
+        throw ArgumentError('还款日期已被余额核对覆盖，请先核对付款日期或撤销相关余额核对');
       }
+      await _insertAssetEvent(
+        txn,
+        assetId: profileId,
+        assetType: AssetObjectType.liability,
+        type: AssetEventType.liabilityRepaid,
+        occurredAt: at,
+        value: amount,
+        note: note.trim(),
+        metadata: {
+          'profile_uuid': profile.uuid,
+          'liability_account_uuid': liability.uuid,
+          'from_account_uuid': payer.uuid,
+          'balance_mode': liability.balanceMode.storageKey,
+          'transfer_transaction_uuid': paymentUuid(transferTxId),
+          'interest_transaction_uuid': paymentUuid(interestTxId),
+          'transfer_amount': transferAmount.toString(),
+          'interest_amount': interestPaid.toString(),
+          'principal_before': profile.currentPrincipal.toString(),
+          'principal_after': plan.principalAfter.toString(),
+          'status_before': profile.status.storageKey,
+          'status_after': statusAfter.storageKey,
+        },
+      );
     });
     await _loadTransactions();
     await _loadLiabilityProfiles();
+    await _loadAssetEvents();
     await _refreshCurrentNetWorthSnapshotBestEffort(const {
       NetWorthSnapshotCause.transfer,
       NetWorthSnapshotCause.transaction,
@@ -21515,9 +21850,253 @@ class AppRepository extends ChangeNotifier {
     return (
       transferTransactionId: transferTxId,
       interestTransactionId: interestTxId,
-      principalPaid: principalPaid,
-      interestPaid: interestPaid,
+      principalPaid: plan.principalPaid,
+      interestPaid: plan.interestPaid,
     );
+  }
+
+  // Use the same balance resolver as the UI, with rows read under the write
+  // transaction. A second concurrent payment must not use the old UI cache.
+  Future<Decimal> _accountBalanceForFinanceWrite(
+      DatabaseExecutor txn, AccountEntity account) async {
+    final transactions = (await txn.query('transactions'))
+        .map(TransactionEntity.fromMap)
+        .toList();
+    final checkpoints = (await txn.query('account_balance_checkpoints'))
+        .map(AccountBalanceCheckpointEntity.fromMap)
+        .toList();
+    final coverage = <int, Set<String>>{};
+    for (final row
+        in await txn.query('account_checkpoint_covered_unknown_events')) {
+      coverage
+          .putIfAbsent(row['checkpoint_id'] as int, () => <String>{})
+          .add(row['account_event_uuid'] as String);
+    }
+    final now = AppClock.now;
+    return _accountBalanceResultAt(account,
+            asOf: now,
+            knowledgeCutoff: now,
+            historical: false,
+            transactions: transactions,
+            checkpoints: checkpoints,
+            coveredUnknownEventIds: coverage)
+        .value!
+        .balance;
+  }
+
+  Iterable<AssetEventEntity> _activeLiabilityRepayments(
+    Iterable<AssetEventEntity> events,
+  ) {
+    final reversed = {
+      for (final event in events)
+        if (event.assetType == AssetObjectType.liability &&
+            event.eventType == AssetEventType.liabilityRepaymentUndone)
+          _assetEventMetadata(event.metadata)['repayment_event_uuid'],
+    };
+    return events.where((event) =>
+        event.assetType == AssetObjectType.liability &&
+        event.eventType == AssetEventType.liabilityRepaid &&
+        event.uuid.isNotEmpty &&
+        !reversed.contains(event.uuid));
+  }
+
+  AssetEventEntity? liabilityRepaymentEventForTransaction(int transactionId) {
+    final uuid =
+        _allTransactions.where((t) => t.id == transactionId).firstOrNull?.uuid;
+    if (uuid == null || uuid.isEmpty) return null;
+    return _repaymentMatchingUuid(_assetEvents, uuid);
+  }
+
+  AssetEventEntity? _repaymentMatchingUuid(
+    Iterable<AssetEventEntity> events,
+    String transactionUuid,
+  ) {
+    return _activeLiabilityRepayments(events).where((event) {
+      final metadata = _assetEventMetadata(event.metadata);
+      return metadata['transfer_transaction_uuid'] == transactionUuid ||
+          metadata['interest_transaction_uuid'] == transactionUuid;
+    }).firstOrNull;
+  }
+
+  Future<AssetEventEntity?> _liabilityRepaymentForTransaction(
+    DatabaseExecutor db,
+    int transactionId,
+  ) async {
+    final rows = await db.query('transactions',
+        columns: ['uuid'],
+        where: 'id = ?',
+        whereArgs: [transactionId],
+        limit: 1);
+    final uuid = rows.firstOrNull?['uuid'] as String?;
+    if (uuid == null || uuid.isEmpty) return null;
+    final events = await db.query('asset_events',
+        where: 'asset_type = ?', whereArgs: ['liability']);
+    return _repaymentMatchingUuid(events.map(AssetEventEntity.fromMap), uuid);
+  }
+
+  Future<void> _assertNotLiabilityRepayment(
+    DatabaseExecutor db,
+    int transactionId,
+  ) async {
+    if (await _liabilityRepaymentForTransaction(db, transactionId) != null) {
+      throw StateError('还款流水不能单独修改、删除或退款，请撤销本次还款');
+    }
+  }
+
+  Future<void> undoLiabilityRepayment(int eventId) async {
+    await _db!.transaction((txn) async {
+      final events = (await txn.query('asset_events',
+              where: 'asset_type = ?', whereArgs: ['liability']))
+          .map(AssetEventEntity.fromMap)
+          .toList();
+      final active = _activeLiabilityRepayments(events).toList();
+      final event = active.where((e) => e.id == eventId).firstOrNull;
+      if (event == null) throw StateError('本次还款不存在或已经撤销');
+      final metadata = _assetEventMetadata(event.metadata);
+      final later = active.any((e) =>
+          (e.createdMs > event.createdMs ||
+              (e.createdMs == event.createdMs && e.id > event.id)) &&
+          _assetEventMetadata(e.metadata)['profile_uuid'] ==
+              metadata['profile_uuid']);
+      if (later) throw StateError('请先撤销该负债最近一次还款');
+      final profiles = await txn.query('liability_profiles',
+          where: 'uuid = ?', whereArgs: [metadata['profile_uuid']], limit: 1);
+      if (profiles.isEmpty) throw StateError('负债档案不存在，请先核对');
+      final profile = LiabilityProfileEntity.fromMap(profiles.single);
+      final beforePrincipal =
+          Decimal.tryParse('${metadata['principal_before']}');
+      final afterPrincipal = Decimal.tryParse('${metadata['principal_after']}');
+      final beforeStatus = metadata['status_before'];
+      if (beforePrincipal == null ||
+          afterPrincipal == null ||
+          beforePrincipal < Decimal.zero ||
+          beforePrincipal != normalizeMoneyAmount(beforePrincipal) ||
+          afterPrincipal < Decimal.zero ||
+          afterPrincipal != normalizeMoneyAmount(afterPrincipal) ||
+          beforeStatus != LiabilityProfileStatus.active.storageKey ||
+          profile.currentPrincipal != afterPrincipal ||
+          profile.status.storageKey != metadata['status_after']) {
+        throw StateError('负债档案已修改，请先核对，不能覆盖当前本金或状态');
+      }
+      final accounts = (await txn.query('accounts',
+              where: 'uuid IN (?, ?)',
+              whereArgs: [
+            metadata['from_account_uuid'],
+            metadata['liability_account_uuid']
+          ]))
+          .map(AccountEntity.fromMap)
+          .toList();
+      final payer = accounts
+          .where((a) => a.uuid == metadata['from_account_uuid'])
+          .firstOrNull;
+      final liability = accounts
+          .where((a) => a.uuid == metadata['liability_account_uuid'])
+          .firstOrNull;
+      if (payer == null ||
+          liability == null ||
+          payer.id == liability.id ||
+          payer.isDeleted ||
+          liability.isDeleted ||
+          payer.currencyCode != 'CNY' ||
+          liability.currencyCode != 'CNY' ||
+          profile.accountId != liability.id ||
+          liability.balanceMode.storageKey != metadata['balance_mode']) {
+        throw StateError('还款账户或余额口径已改变，请先核对');
+      }
+      final transfer = Decimal.tryParse('${metadata['transfer_amount']}');
+      final interest = Decimal.tryParse('${metadata['interest_amount']}');
+      if (transfer == null ||
+          interest == null ||
+          transfer < Decimal.zero ||
+          interest < Decimal.zero ||
+          transfer != normalizeMoneyAmount(transfer) ||
+          interest != normalizeMoneyAmount(interest) ||
+          transfer + interest != event.value ||
+          event.value! <= Decimal.zero) {
+        throw StateError('还款凭证不完整，请先核对');
+      }
+      final expectedPrincipalAfter = beforePrincipal - transfer;
+      if (afterPrincipal !=
+          (expectedPrincipalAfter > Decimal.zero
+              ? expectedPrincipalAfter
+              : Decimal.zero)) {
+        throw StateError('还款凭证中的前后本金不一致，请先核对');
+      }
+      final payments = <TransactionEntity>[];
+      for (final isInterest in [false, true]) {
+        final amount = isInterest ? interest : transfer;
+        final uuid = metadata[isInterest
+            ? 'interest_transaction_uuid'
+            : 'transfer_transaction_uuid'];
+        if (amount == Decimal.zero) {
+          if (uuid != null && uuid != '') throw StateError('还款凭证金额不一致');
+          continue;
+        }
+        final rows = await txn.query('transactions',
+            where: 'uuid = ?', whereArgs: [uuid], limit: 1);
+        if (rows.isEmpty) throw StateError('关联流水缺失，不能只撤销负债档案');
+        final payment = TransactionEntity.fromMap(rows.single);
+        if (payment.amount != amount ||
+            payment.accountId != payer.id ||
+            payment.toAccountId != (isInterest ? null : liability.id) ||
+            payment.txKind !=
+                (isInterest
+                    ? TransactionKind.expense
+                    : TransactionKind.transfer) ||
+            payment.eventType !=
+                (isInterest
+                    ? TransactionEventType.interest
+                    : TransactionEventType.transfer) ||
+            payment.currencyCode != 'CNY' ||
+            payment.excluded ||
+            payment.refundOf != null ||
+            payment.settledMs != event.occurredMs ||
+            await _refundedAmountInDb(txn, payment.id) != Decimal.zero) {
+          throw StateError('关联流水已改变，请先核对后再撤销');
+        }
+        payments.add(payment);
+      }
+      final payerBefore = await _accountBalanceForFinanceWrite(txn, payer);
+      final liabilityBefore =
+          await _accountBalanceForFinanceWrite(txn, liability);
+      for (final payment in payments) {
+        await txn
+            .delete('transactions', where: 'id = ?', whereArgs: [payment.id]);
+      }
+      if (await _accountBalanceForFinanceWrite(txn, payer) !=
+              payerBefore + event.value! ||
+          await _accountBalanceForFinanceWrite(txn, liability) !=
+              liabilityBefore - transfer) {
+        throw StateError('余额核对已包含本次还款，请先撤销相关余额核对再撤销还款');
+      }
+      await txn.update(
+          'liability_profiles',
+          {
+            'current_principal': beforePrincipal.toString(),
+            'status': beforeStatus,
+            'updated_ms': AppClock.now.millisecondsSinceEpoch,
+          },
+          where: 'id = ?',
+          whereArgs: [profile.id]);
+      await _insertAssetEvent(txn,
+          assetId: profile.id,
+          assetType: AssetObjectType.liability,
+          type: AssetEventType.liabilityRepaymentUndone,
+          occurredAt: AppClock.now,
+          value: event.value,
+          metadata: {
+            'repayment_event_uuid': event.uuid,
+            'profile_uuid': profile.uuid
+          });
+    });
+    await _loadTransactions();
+    await _loadLiabilityProfiles();
+    await _loadAssetEvents();
+    await _refreshCurrentNetWorthSnapshotBestEffort(const {
+      NetWorthSnapshotCause.transaction,
+      NetWorthSnapshotCause.liability,
+    });
+    notifyListeners();
   }
 
   /// 「最近要还」：活跃负债档案里设了还款日的，按下次还款日升序。
@@ -21943,6 +22522,21 @@ class AppRepository extends ChangeNotifier {
     };
     String accountNameOf(int? id) =>
         id == null ? '' : accountById[id]?.name ?? '';
+    String eventMetadataOf(AssetEventEntity event) {
+      if (event.assetType != AssetObjectType.receivable ||
+          event.eventType != AssetEventType.receivableRecovered) {
+        return event.metadata;
+      }
+      final recovery =
+          _receivableRecoveries.where((r) => r.eventId == event.id).firstOrNull;
+      if (recovery == null) return event.metadata;
+      final metadata = _assetEventMetadata(event.metadata);
+      if (recovery.transactionId != null) {
+        metadata['transaction_uuid'] = txUuidById[recovery.transactionId] ?? '';
+      }
+      return jsonEncode(metadata);
+    }
+
     Map<String, Object?> assetMap(PhysicalAssetEntity a) => {
           'id': a.id,
           'uuid': a.uuid,
@@ -22036,7 +22630,7 @@ class AppRepository extends ChangeNotifier {
               'occurred_ms': e.occurredMs,
               'value': e.value?.toString() ?? '',
               'note': e.note,
-              'metadata': e.metadata,
+              'metadata': eventMetadataOf(e),
               'created_ms': e.createdMs,
             }
       ],
@@ -22120,6 +22714,8 @@ class AppRepository extends ChangeNotifier {
               'amount': recovery.amount.toString(),
               'recovered_ms': recovery.recoveredMs,
               'target_account_id': recovery.targetAccountId,
+              'target_account_uuid':
+                  accountById[recovery.targetAccountId]?.uuid ?? '',
               'target_account_name': accountNameOf(recovery.targetAccountId),
               'event_id': recovery.eventId,
               'transaction_id': recovery.transactionId,
@@ -22220,15 +22816,22 @@ class AppRepository extends ChangeNotifier {
       required String idKey,
       required String nameKey,
     }) {
+      final uuid = str(m, idKey.replaceFirst('_id', '_uuid')).trim();
+      if (uuid.isNotEmpty) {
+        final byUuid = _accounts
+            .where((a) => a.uuid == uuid && !a.isDeleted)
+            .firstOrNull
+            ?.id;
+        if (byUuid != null) return byUuid;
+      }
       final name = str(m, nameKey).trim();
       if (name.isNotEmpty) {
         final active = _accounts
             .where((a) => !a.isDeleted && a.name.trim() == name)
-            .firstOrNull;
-        if (active != null) return active.id;
-        final any = _accounts.where((a) => a.name.trim() == name).firstOrNull;
-        if (any != null) return any.id;
+            .toList();
+        return active.length == 1 ? active.single.id : null;
       }
+      if (uuid.isNotEmpty) return null;
       final rawId = intOrNull(m[idKey]);
       if (rawId == null) return null;
       final exists = _accounts.any((a) => a.id == rawId && !a.isDeleted);
@@ -22581,6 +23184,7 @@ class AppRepository extends ChangeNotifier {
       for (final raw in events) {
         final assetType =
             AssetObjectTypeX.fromStorage(str(raw, 'asset_type', 'physical'));
+        if (assetType == AssetObjectType.liability) continue;
         final oldAssetId = intOrNull(raw['asset_id']);
         final assetId = oldAssetId == null
             ? null
@@ -22595,6 +23199,18 @@ class AppRepository extends ChangeNotifier {
           if (oldEventId != null) oldEventIdToNew[oldEventId] = existingEventId;
           continue;
         }
+        final metadata = _assetEventMetadata(str(raw, 'metadata'));
+        if (assetType == AssetObjectType.receivable &&
+            str(raw, 'event_type') ==
+                AssetEventType.receivableRecovered.storageKey) {
+          // Export-local integers must never address unrelated restored rows.
+          for (final prefix in ['transaction', 'interest_transaction']) {
+            final transactionUuid = metadata['${prefix}_uuid'] as String? ?? '';
+            metadata['${prefix}_id'] = transactionUuid.isEmpty
+                ? null
+                : await idByUuid('transactions', transactionUuid);
+          }
+        }
         final newEventId = await txn.insert('asset_events', {
           'uuid': uuid,
           'asset_id': assetId,
@@ -22604,7 +23220,7 @@ class AppRepository extends ChangeNotifier {
               intOr(raw['occurred_ms'], DateTime.now().millisecondsSinceEpoch),
           'value': str(raw, 'value'),
           'note': str(raw, 'note'),
-          'metadata': str(raw, 'metadata'),
+          'metadata': metadata.isEmpty ? '' : jsonEncode(metadata),
           'created_ms':
               intOr(raw['created_ms'], DateTime.now().millisecondsSinceEpoch),
         });
@@ -23308,6 +23924,43 @@ class AppRepository extends ChangeNotifier {
         );
         liabilityCount++;
       }
+      // Liability IDs have their own namespace. Restore journals only after
+      // profiles, using their persistent identity rather than a physical ID.
+      final liabilityEvents = events
+          .where((raw) =>
+              str(raw, 'asset_type') == AssetObjectType.liability.storageKey)
+          .toList()
+        ..sort((a, b) {
+          final created =
+              intOr(a['created_ms'], 0).compareTo(intOr(b['created_ms'], 0));
+          return created != 0
+              ? created
+              : intOr(a['id'], 0).compareTo(intOr(b['id'], 0));
+        });
+      for (final raw in liabilityEvents) {
+        final metadata = _assetEventMetadata(str(raw, 'metadata'));
+        final profileUuid = metadata['profile_uuid'] as String? ?? '';
+        if (profileUuid.isEmpty) continue;
+        final profileId = await idByUuid('liability_profiles', profileUuid);
+        final uuid = str(raw, 'uuid');
+        if (profileId == null ||
+            uuid.isEmpty ||
+            await existsByUuid('asset_events', uuid)) {
+          continue;
+        }
+        await txn.insert('asset_events', {
+          'uuid': uuid,
+          'asset_id': profileId,
+          'asset_type': AssetObjectType.liability.storageKey,
+          'event_type': str(raw, 'event_type'),
+          'occurred_ms': intOr(raw['occurred_ms'], 0),
+          'value': str(raw, 'value'),
+          'note': str(raw, 'note'),
+          'metadata': str(raw, 'metadata'),
+          'created_ms': intOr(raw['created_ms'], 0),
+        });
+        eventCount++;
+      }
     });
 
     await _loadTransactions();
@@ -23934,19 +24587,24 @@ class AppRepository extends ChangeNotifier {
   }
 
   Future<void> adjustSavingsGoal(int id, Decimal delta) async {
-    final goal = _savingsGoals.where((g) => g.id == id).firstOrNull;
-    if (goal == null) return;
-    var next = goal.saved + delta;
-    if (next < Decimal.zero) next = Decimal.zero;
-    await _db!.update(
-      'savings_goals',
-      {
-        'saved_amount': next.toString(),
-        'updated_ms': DateTime.now().millisecondsSinceEpoch,
-      },
-      where: 'id = ?',
-      whereArgs: [id],
-    );
+    final normalizedDelta = normalizeMoneyAmount(delta);
+    await _db!.transaction((txn) async {
+      final rows = await txn.query('savings_goals',
+          columns: ['saved_amount'], where: 'id = ?', whereArgs: [id]);
+      if (rows.isEmpty) return;
+      final saved = Decimal.parse(rows.single['saved_amount'] as String);
+      var next = normalizeMoneyAmount(saved + normalizedDelta);
+      if (next < Decimal.zero) next = Decimal.zero;
+      await txn.update(
+        'savings_goals',
+        {
+          'saved_amount': next.toString(),
+          'updated_ms': AppClock.now.millisecondsSinceEpoch,
+        },
+        where: 'id = ?',
+        whereArgs: [id],
+      );
+    });
     await _loadSavingsGoals();
     notifyListeners();
   }

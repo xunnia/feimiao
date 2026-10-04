@@ -144,18 +144,28 @@ class LlmQueryV2 {
               {'type': 'text', 'text': question},
               ...attachmentParts,
             ];
+      final history = <Map<String, dynamic>>[];
+      for (final turn in priorTurns) {
+        final priorAttachments =
+            ChatAttachment.decodeList(turn['attachments_json']);
+        final parts = await _attachmentParts(priorAttachments);
+        history.add({
+          'role': turn['role'] ?? 'user',
+          'content': parts.isEmpty
+              ? (turn['content'] ?? '')
+              : [
+                  {'type': 'text', 'text': turn['content'] ?? ''},
+                  ...parts,
+                ],
+        });
+      }
       final messages = <Map<String, dynamic>>[
         {'role': 'system', 'content': AiPromptTemplates.systemPrompt},
         if (transactionsText.trim().isNotEmpty)
           {'role': 'system', 'content': '账目上下文：\n$transactionsText'},
         if (webSearch.promptBlock.trim().isNotEmpty)
           {'role': 'system', 'content': webSearch.promptBlock},
-        ...priorTurns.map(
-          (turn) => <String, dynamic>{
-            'role': turn['role'] ?? 'user',
-            'content': turn['content'] ?? '',
-          },
-        ),
+        ...history,
         {'role': 'user', 'content': userContent},
       ];
       var requestProvider = provider;
