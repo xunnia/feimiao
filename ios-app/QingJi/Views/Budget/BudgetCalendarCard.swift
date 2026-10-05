@@ -53,11 +53,11 @@ struct BudgetCalendarCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack {
-                Text(year == today.year ? "\(month)月" : "\(year)年\(month)月")
+                Text(year == today.year ? "\(month)月" : "\(String(year))年\(month)月")
                     .font(.headline)
                 Spacer()
-                LiquidGlassIconButton(systemName: "chevron.left", accessibilityLabel: "上个月", size: 32, action: onPrev)
-                LiquidGlassIconButton(systemName: "chevron.right", accessibilityLabel: "下个月", size: 32, action: onNext)
+                BudgetMonthArrow(systemName: "chevron.left", label: "上个月", action: onPrev)
+                BudgetMonthArrow(systemName: "chevron.right", label: "下个月", action: onNext)
             }
             .padding(.leading, 4)
             HStack(spacing: 0) {
@@ -76,8 +76,26 @@ struct BudgetCalendarCard: View {
                 .padding(.top, 6)
         }
         .padding(EdgeInsets(top: 10, leading: 12, bottom: 12, trailing: 12))
-        .liquidGlassSurface()
+        .appThemeCard()
         .accessibilityIdentifier("budget-calendar-card")
+    }
+}
+
+struct BudgetMonthArrow: View {
+    let systemName: String
+    let label: String
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: systemName)
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(.secondary)
+                .frame(width: 36, height: 36)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(label)
     }
 }
 

@@ -26,7 +26,7 @@ void main() {
     expect(tileWidth * 3 + 8 * 3, greaterThan(width));
   });
 
-  test('草稿附件累计添加时共享三张图片和十个文件的上限', () {
+  test('草稿附件累计添加时共享四张图片和十个文件的上限', () {
     ChatAttachment image(int index) => ChatAttachment(
           kind: ChatAttachmentKind.image,
           path: 'image-$index.png',
@@ -46,7 +46,10 @@ void main() {
     final secondBatch = [image(3), image(4), file(1)];
     final accepted = fitDraftAttachments(firstBatch, secondBatch);
 
-    expect(accepted.map((item) => item.name), ['图片3.png', '文件1.txt']);
+    expect(
+        accepted.map((item) => item.name), ['图片3.png', '图片4.png', '文件1.txt']);
+    expect(
+        fitDraftAttachments([...firstBatch, ...accepted], [image(5)]), isEmpty);
     expect(
       fitDraftAttachments(
         [for (var i = 0; i < 10; i++) file(i)],

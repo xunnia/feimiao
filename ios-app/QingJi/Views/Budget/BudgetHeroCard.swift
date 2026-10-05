@@ -28,15 +28,15 @@ struct BudgetHeroCard: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(EdgeInsets(top: 16, leading: 18, bottom: 16, trailing: 18))
-        .liquidGlassSurface()
+        .padding(EdgeInsets(top: 20, leading: 20, bottom: 18, trailing: 20))
+        .appThemeCard()
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("budget-hero-card")
     }
 
     private func big(_ text: String, warning: Bool = false) -> some View {
         Text(text)
-            .font(.system(size: 38, weight: .bold, design: .rounded))
+            .font(.system(size: 44, weight: .bold, design: .rounded))
             .monospacedDigit()
             .foregroundStyle(warning ? Color.warning : Color.primary)
             .lineLimit(1)
@@ -90,7 +90,7 @@ struct BudgetHeroCard: View {
             secondary(suggestionCents.map { "近 3 个月平均每月花 \(budgetYuanText($0))，可以从这个数开始" }
                 ?? "先定一个每月能花多少，之后每天都能看到还剩多少")
                 .padding(.top, 2)
-            LiquidGlassPillButton("设个预算", prominent: true, action: onCreate)
+            LiquidGlassPillButton("设个预算", action: onCreate)
                 .padding(.top, 14)
                 .accessibilityIdentifier("budget-hero-create")
         }

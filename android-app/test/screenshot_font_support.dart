@@ -11,11 +11,13 @@ const screenshotCjkFontFamily = 'NotoSansSC';
 
 bool _screenshotFontsLoaded = false;
 
-Future<void> loadScreenshotFonts() async {
+Future<void> loadScreenshotFonts({bool force = false}) async {
   final candidates = <String?>[
     Platform.environment['FEIMIAO_CJK_FONT'],
     r'C:\Windows\Fonts\NotoSansSC-VF.ttf',
     r'C:\Windows\Fonts\Noto Sans SC (TrueType).otf',
+    if (force)
+      p.join(Directory.current.path, 'assets', 'fonts', 'AssetLabels-VF.ttf'),
   ];
   final screenshotRequested = Platform.environment.entries.any(
     (entry) =>
@@ -23,7 +25,7 @@ Future<void> loadScreenshotFonts() async {
         entry.key.endsWith('_SCREENSHOTS') &&
         entry.value == '1',
   );
-  if (!screenshotRequested) return;
+  if (!screenshotRequested && !force) return;
   if (_screenshotFontsLoaded) return;
 
   String? path;

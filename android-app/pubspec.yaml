@@ -3,7 +3,7 @@ description: "肥喵记账 - 可爱又聪明的记账猫"
 publish_to: 'none'
 # 版本规则（用户 0703 拍板）：1.0 起步，每次推 GitHub 构建 minor +1（1.1、1.2…）。
 # 加号后是 Android versionCode，必须只增不减，否则手机拒绝覆盖安装。
-version: 1.308.0+323
+version: 1.314.0+329
 
 environment:
   sdk: '>=3.4.0 <4.0.0'
@@ -18,6 +18,7 @@ dependencies:
   crypto: ^3.0.7
   intl: ^0.20.2
   decimal: ^3.0.0
+  markdown: ^7.3.0
   sqflite: ^2.3.3
   path: ^1.9.0
   provider: ^6.1.2
@@ -62,6 +63,7 @@ flutter:
   shaders:
     - shaders/ink_sparkle.frag
   assets:
+    - assets/fonts/OFL.txt
     - assets/mascot/
     - assets/cat_icons/
     - assets/cat_icons_filled/
@@ -81,6 +83,13 @@ flutter:
           weight: 600
         - asset: assets/fonts/Nunito-Bold.ttf
           weight: 700
+    - family: AssetAmount
+      fonts:
+        - asset: assets/fonts/Nunito-ExtraBold.ttf
+          weight: 800
+    - family: AssetLabels
+      fonts:
+        - asset: assets/fonts/AssetLabels-VF.ttf
 
 # 桌面图标：用户指定的蓝灰底白色眨眼猫原图。
 # 小米等桌面会优先使用 Android 8+ adaptive icon XML，并放大前景层。

@@ -227,6 +227,8 @@ class AiContextCompressor {
                 ? 'user'
                 : turn['role']!.trim(),
             'content': turn['content'] ?? '',
+            if (turn['attachments_json']?.isNotEmpty == true)
+              'attachments_json': turn['attachments_json']!,
           },
         )
         .where((turn) => turn['content']!.trim().isNotEmpty)
@@ -246,7 +248,7 @@ class AiContextCompressor {
       // Reserve a small amount for role/JSON framing that the caller adds.
       final budget = (remaining - 24).clamp(1, maxCharactersPerTurn).toInt();
       final content = compactText(turn['content']!, budget);
-      kept.add({'role': turn['role']!, 'content': content});
+      kept.add({...turn, 'content': content});
       remaining -= content.length + 24;
     }
     if (kept.isEmpty) return const [];
@@ -255,7 +257,7 @@ class AiContextCompressor {
     if (omittedTurns > 0) {
       final oldest = result.first;
       result[0] = {
-        'role': oldest['role']!,
+        ...oldest,
         'content': '【更早的 $omittedTurns 轮对话已压缩】\n${oldest['content']}',
       };
     }

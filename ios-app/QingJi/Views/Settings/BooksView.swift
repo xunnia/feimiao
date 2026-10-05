@@ -182,7 +182,7 @@ struct BookEditorSheet: View {
 
     var body: some View {
         NavigationStack {
-            Form {
+            AppThemedForm {
                 Section("基本信息") {
                     TextField("账本名称", text: $name)
                         .textInputAutocapitalization(.never)

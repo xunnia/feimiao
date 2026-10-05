@@ -550,7 +550,7 @@ private struct AccountCalibrationSheet: View {
 
     var body: some View {
         NavigationStack {
-            Form {
+            AppThemedForm {
                 Section("本次核对") {
                     LabeledContent("系统计算余额") {
                         Text(MoneyFormat.string(calculatedBalance, currencyCode: account.currencyCode))

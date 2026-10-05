@@ -505,7 +505,7 @@ class _BudgetBody extends StatelessWidget {
         ? (s.spentThisMonth / budget)
             .toDecimal(scaleOnInfinitePrecision: 4)
             .toDouble()
-        : 0.0;
+        : (over ? 1.0 : 0.0);
     final ratio = rawRatio.clamp(0.0, 1.0);
     // 预算卡只显示整数百分比；超过 100% 也展示实际比例，避免
     // “100%+” 丢失用户最需要的超支幅度。先在 Decimal 中四舍五入，
@@ -519,14 +519,18 @@ class _BudgetBody extends StatelessWidget {
     final pctValue = percentDecimal < Decimal.zero
         ? BigInt.zero
         : percentDecimal.round().toBigInt();
-    final pct = '$pctValue%';
+    final pct = budget > Decimal.zero ? '$pctValue%' : '--';
     // 超支时条形按「已花」铺满，100% 预算线落在 预算/已花 处。
-    final double? overflowStart = over && s.spentThisMonth > budget
-        ? (budget / s.spentThisMonth)
-            .toDecimal(scaleOnInfinitePrecision: 4)
-            .toDouble()
-            .clamp(0.0, 1.0)
-        : null;
+    final double? overflowStart = !over
+        ? null
+        : budget <= Decimal.zero
+            ? 0.0
+            : s.spentThisMonth > Decimal.zero
+                ? (budget / s.spentThisMonth)
+                    .toDecimal(scaleOnInfinitePrecision: 4)
+                    .toDouble()
+                    .clamp(0.0, 1.0)
+                : null;
 
     final now = AppClock.now;
     final daysInMonth = DateTime(now.year, now.month + 1, 0).day;
@@ -895,7 +899,8 @@ Decimal homeDailyAverageExpense(
   final days = isCurrentMonth ? today.day : DateTime(year, month + 1, 0).day;
   if (days <= 0 || expense <= Decimal.zero) return Decimal.zero;
   // 先按「分」四舍五入成整数，再除以 100（有限小数），不经过 double。
-  final cents = (expense * Decimal.fromInt(100) / Decimal.fromInt(days)).round();
+  final cents =
+      (expense * Decimal.fromInt(100) / Decimal.fromInt(days)).round();
   return (Decimal.fromBigInt(cents) / Decimal.fromInt(100)).toDecimal();
 }
 

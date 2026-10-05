@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/cupertino.dart' show CupertinoIcons;
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
@@ -6,13 +8,15 @@ import '../../core/app_clock.dart';
 import '../../core/budget/budget_rule_display.dart';
 import '../../core/budget/budget_rules.dart';
 import '../../core/budget/budget_suggestion.dart';
+import '../../core/budget/budget_view_clock.dart';
 import '../../core/haptics.dart';
 import '../../data/app_repository.dart';
 import '../../theme/app_tokens.dart';
 import '../../widgets/app_buttons.dart';
 import '../../widgets/book_switch_chip.dart';
+import '../../theme/app_colors.dart';
 import '../../widgets/ios_menu.dart';
-import '../../widgets/settings_ui.dart';
+import '../../widgets/pressable_scale.dart';
 import 'budget_calendar_card.dart';
 import 'budget_day_sheet.dart';
 import 'budget_hero_card.dart';
@@ -30,9 +34,11 @@ class BudgetView extends StatefulWidget {
   State<BudgetView> createState() => _BudgetViewState();
 }
 
-class _BudgetViewState extends State<BudgetView> {
+class _BudgetViewState extends State<BudgetView> with WidgetsBindingObserver {
   int? _bookId;
   late DateTime _month;
+  late DateTime _syncedNow;
+  Timer? _midnightTimer;
   bool _showEnded = false;
 
   @override
@@ -40,6 +46,48 @@ class _BudgetViewState extends State<BudgetView> {
     super.initState();
     final now = AppClock.now;
     _month = DateTime(now.year, now.month);
+    _syncedNow = now;
+    WidgetsBinding.instance.addObserver(this);
+    _scheduleMidnightCheck();
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _midnightTimer?.cancel();
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _followClock();
+      _scheduleMidnightCheck();
+    }
+  }
+
+  void _followClock() {
+    final now = AppClock.now;
+    setState(() {
+      _month = budgetMonthAfterClockChange(
+        shown: _month,
+        syncedNow: _syncedNow,
+        now: now,
+      );
+      _syncedNow = now;
+    });
+  }
+
+  void _scheduleMidnightCheck() {
+    _midnightTimer?.cancel();
+    final now = DateTime.now();
+    final midnight = DateTime(now.year, now.month, now.day + 1);
+    _midnightTimer =
+        Timer(midnight.difference(now) + const Duration(seconds: 1), () {
+      if (!mounted) return;
+      _followClock();
+      _scheduleMidnightCheck();
+    });
   }
 
   @override
@@ -55,13 +103,10 @@ class _BudgetViewState extends State<BudgetView> {
 
   /// 近 3 个自然月平均支出，取整到百（元）；没有支出返回 null。
   int? _suggestionYuan(AppRepository repo, int bookId) {
-    final avg = BudgetSuggestion.averageMonthlySpend(
+    return BudgetSuggestion.suggestedMonthlyYuan(
       repo.recordsForBookView(bookId),
       now: AppClock.now,
     );
-    if (avg == null) return null;
-    final rounded = ((avg.toDouble() / 100).round() * 100);
-    return rounded < 100 ? 100 : rounded;
   }
 
   void _openEditor(AppRepository repo, int bookId, {BudgetRule? rule}) {
@@ -166,18 +211,21 @@ class _BudgetViewState extends State<BudgetView> {
     final book = books.where((b) => b.id == bookId).firstOrNull;
     final today = budgetDay(AppClock.now);
     final snapshot = bookId > 0
-        ? repo.budgetRuleMonth(_month, bookId: bookId)
+        ? repo.budgetRuleMonth(_month, bookId: bookId, asOf: today)
         : null;
     final month = snapshot?.month;
-    final spend = bookId > 0 ? repo.budgetSpendByDay(bookId) : const <int, int>{};
-    final rules = bookId > 0 ? repo.budgetRulesForBook(bookId) : const <BudgetRule>[];
+    final spend =
+        bookId > 0 ? repo.budgetSpendByDay(bookId) : const <int, int>{};
+    final rules =
+        bookId > 0 ? repo.budgetRulesForBook(bookId) : const <BudgetRule>[];
     final nextMonth = DateTime(_month.year, _month.month + 1);
     final nextMode = bookId > 0
         ? repo.budgetRolloverModeFor(bookId,
             year: nextMonth.year, month: nextMonth.month)
         : BudgetRolloverMode.reset;
     final rolloverNow = bookId > 0
-        ? repo.budgetRolloverModeFor(bookId, year: today.year, month: today.month)
+        ? repo.budgetRolloverModeFor(bookId,
+            year: today.year, month: today.month)
         : BudgetRolloverMode.reset;
 
     return Scaffold(
@@ -235,7 +283,7 @@ class _BudgetViewState extends State<BudgetView> {
                       style: AppType.caption(scheme),
                     ),
                   ),
-                const SizedBox(height: 12),
+                const SizedBox(height: 14),
                 BudgetCalendarCard(
                   year: month.year,
                   month: month.month,
@@ -244,37 +292,43 @@ class _BudgetViewState extends State<BudgetView> {
                   today: today,
                   onPrev: () => _stepMonth(-1),
                   onNext: () => _stepMonth(1),
-                  onTapDay: (info) =>
-                      showBudgetDaySheet(context, bookId: bookId, day: info.day),
+                  onTapDay: (info) => showBudgetDaySheet(context,
+                      bookId: bookId, day: info.day),
                 ),
-                if (rules.isNotEmpty) ..._ruleSection(scheme, repo, bookId, rules, today),
-                const SizedBox(height: 12),
-                SettingsGroup(
-                  margin: EdgeInsets.zero,
-                  children: [
-                    Builder(
-                      builder: (anchor) => SettingsRow(
-                        key: const ValueKey('budget-rollover-row'),
-                        title: '月底结余',
-                        trailing: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Text(
-                              _rolloverName(rolloverNow),
-                              style: AppType.trailingValue(scheme),
+                if (rules.isNotEmpty)
+                  ..._ruleSection(scheme, repo, bookId, rules, today),
+                const SizedBox(height: 14),
+                Builder(
+                  builder: (anchor) => PressableScale(
+                    key: const ValueKey('budget-rollover-row'),
+                    onPressed: () => _showRolloverMenu(anchor, repo, bookId),
+                    child: BudgetCard(
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              '月底结余',
+                              style: TextStyle(
+                                fontSize: 15,
+                                fontWeight: FontWeight.w600,
+                                color: scheme.onSurface,
+                              ),
                             ),
-                            const SizedBox(width: 4),
-                            Icon(
-                              CupertinoIcons.chevron_forward,
-                              size: 18,
-                              color: AppTextColor.hint(scheme),
-                            ),
-                          ],
-                        ),
-                        onTap: () => _showRolloverMenu(anchor, repo, bookId),
+                          ),
+                          Text(
+                            _rolloverName(rolloverNow),
+                            style: AppType.trailingValue(scheme),
+                          ),
+                          const SizedBox(width: 4),
+                          Icon(
+                            CupertinoIcons.chevron_forward,
+                            size: 16,
+                            color: AppTextColor.hint(scheme),
+                          ),
+                        ],
                       ),
                     ),
-                  ],
+                  ),
                 ),
               ],
             ),
@@ -289,7 +343,9 @@ class _BudgetViewState extends State<BudgetView> {
     DateTime today,
   ) {
     final sorted = budgetRulesNewestFirst(rules);
-    final spans = {for (final r in sorted) r.id: budgetRuleSpan(r, rules, today)};
+    final spans = {
+      for (final r in sorted) r.id: budgetRuleSpan(r, rules, today)
+    };
     final live = [
       for (final r in sorted)
         if (spans[r.id]!.state != BudgetRuleState.ended) r
@@ -298,72 +354,140 @@ class _BudgetViewState extends State<BudgetView> {
       for (final r in sorted)
         if (spans[r.id]!.state == BudgetRuleState.ended) r
     ];
+    final divider = BoxDecoration(
+      border: Border(top: BorderSide(color: AppColors.hairline(scheme))),
+    );
+    final nameStyle = TextStyle(
+      fontSize: 15,
+      fontWeight: FontWeight.w600,
+      color: scheme.onSurface,
+    );
+    final subStyle = TextStyle(fontSize: 13, color: AppTextColor.hint(scheme));
+
     Widget row(BudgetRule rule) {
       final span = spans[rule.id]!;
-      return SettingsRow(
+      final color = budgetRuleColor(rule, scheme);
+      return PressableScale(
         key: ValueKey('budget-rule-row-${rule.id}'),
-        leading: BudgetRuleDot(color: budgetRuleColor(rule, scheme)),
-        title: budgetRuleName(rule),
-        subtitle: '${budgetRuleAmountText(rule)} · ${span.text}',
-        trailing: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            if (span.state == BudgetRuleState.upcoming)
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                decoration: BoxDecoration(
-                  color: scheme.primary.withValues(alpha: 0.12),
-                  borderRadius: BorderRadius.circular(AppRadius.pill),
-                ),
-                child: Text(
-                  '即将开始',
-                  style: AppType.caption(scheme).copyWith(color: scheme.primary),
+        onPressed: () => _openEditor(repo, bookId, rule: rule),
+        child: Container(
+          padding: const EdgeInsets.symmetric(vertical: 11),
+          decoration: divider,
+          child: Row(
+            children: [
+              BudgetRuleDot(color: color),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(budgetRuleName(rule), style: nameStyle),
+                    const SizedBox(height: 2),
+                    Text(span.text, style: subStyle),
+                  ],
                 ),
               ),
-            const SizedBox(width: 4),
-            Icon(
-              CupertinoIcons.chevron_forward,
-              size: 18,
-              color: AppTextColor.hint(scheme),
-            ),
-          ],
+              const SizedBox(width: 8),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  Text(budgetRuleAmountText(rule), style: nameStyle),
+                  if (span.state == BudgetRuleState.upcoming) ...[
+                    const SizedBox(height: 2),
+                    Text(
+                      '即将开始',
+                      style: TextStyle(fontSize: 11, color: color),
+                    ),
+                  ],
+                ],
+              ),
+            ],
+          ),
         ),
-        onTap: () => _openEditor(repo, bookId, rule: rule),
       );
     }
 
     return [
-      const SizedBox(height: 4),
-      const SettingsSectionLabel('预算规则'),
-      SettingsGroup(
-        margin: EdgeInsets.zero,
-        children: [
-          for (final rule in live) row(rule),
-          if (ended.isNotEmpty)
-            SettingsRow(
-              key: const ValueKey('budget-ended-toggle'),
-              title: '已结束 ${ended.length} 条',
-              titleColor: AppTextColor.secondary(scheme),
-              trailing: Icon(
-                _showEnded
-                    ? CupertinoIcons.chevron_up
-                    : CupertinoIcons.chevron_down,
-                size: 18,
-                color: AppTextColor.hint(scheme),
+      const SizedBox(height: 14),
+      BudgetCard(
+        key: const ValueKey('budget-rules-card'),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Padding(
+              padding: const EdgeInsets.only(bottom: 4),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      '规则',
+                      style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.w700,
+                        color: scheme.onSurface,
+                      ),
+                    ),
+                  ),
+                  PressableScale(
+                    key: const ValueKey('budget-rules-add'),
+                    onPressed: () => _openEditor(repo, bookId),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 6),
+                      child: Text(
+                        '＋ 新增',
+                        style: TextStyle(fontSize: 14, color: scheme.primary),
+                      ),
+                    ),
+                  ),
+                ],
               ),
-              onTap: () => setState(() => _showEnded = !_showEnded),
             ),
-          if (_showEnded) for (final rule in ended) row(rule),
-        ],
-      ),
-      if (rules.any((r) => !r.isBase))
-        Padding(
-          padding: const EdgeInsets.fromLTRB(6, 8, 6, 0),
-          child: Text(
-            '日期重叠时，以后加的特别安排为准',
-            style: AppType.caption(scheme),
-          ),
+            for (final rule in live) row(rule),
+            if (ended.isNotEmpty)
+              PressableScale(
+                key: const ValueKey('budget-ended-toggle'),
+                onPressed: () => setState(() => _showEnded = !_showEnded),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(vertical: 11),
+                  decoration: divider,
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          '已结束 ${ended.length} 条',
+                          style: TextStyle(
+                            fontSize: 14,
+                            color: AppTextColor.secondary(scheme),
+                          ),
+                        ),
+                      ),
+                      Icon(
+                        _showEnded
+                            ? CupertinoIcons.chevron_up
+                            : CupertinoIcons.chevron_down,
+                        size: 16,
+                        color: AppTextColor.hint(scheme),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            if (_showEnded)
+              for (final rule in ended) row(rule),
+            if (rules.any((r) => !r.isBase))
+              Padding(
+                padding: const EdgeInsets.only(top: 6),
+                child: Text(
+                  '日期重叠时，以后加的特别安排为准',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: AppTextColor.hint(scheme),
+                  ),
+                ),
+              ),
+          ],
         ),
+      ),
     ];
   }
 }

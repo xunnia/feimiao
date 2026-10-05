@@ -607,7 +607,8 @@ class _EditProfileSheetState extends State<_EditProfileSheet> {
         } on CloudApiException catch (error) {
           // 本机已经存好；只是账号那边没更新，下次打开 App 会再试。
           if (mounted) {
-            showAppToast(context, '昵称已保存在本机，同步到账号没成功：${accountErrorText(error)}');
+            showAppToast(
+                context, '昵称已保存在本机，同步到账号没成功：${accountErrorText(error)}');
           }
         }
       }
@@ -626,7 +627,7 @@ class _EditProfileSheetState extends State<_EditProfileSheet> {
       child: Container(
         margin: const EdgeInsets.all(10),
         decoration: BoxDecoration(
-          color: AppColors.appBg(scheme),
+          color: AppColors.sheetSurface(scheme),
           borderRadius: BorderRadius.circular(30),
         ),
         child: ConstrainedBox(
@@ -770,7 +771,7 @@ Future<void> _showAboutSheet(BuildContext context) async {
           child: Container(
             margin: const EdgeInsets.all(10),
             decoration: BoxDecoration(
-              color: AppColors.appBg(scheme),
+              color: AppColors.sheetSurface(scheme),
               borderRadius: BorderRadius.circular(30),
             ),
             child: Column(
@@ -841,7 +842,7 @@ Future<void> _showTextSheet(
           child: Container(
             margin: const EdgeInsets.all(10),
             decoration: BoxDecoration(
-              color: AppColors.appBg(scheme),
+              color: AppColors.sheetSurface(scheme),
               borderRadius: BorderRadius.circular(30),
             ),
             child: Column(

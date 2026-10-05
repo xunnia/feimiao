@@ -372,7 +372,11 @@ class ComputedNetWorthSnapshot {
       );
 
   int get netWorthMinor => components.netWorthMinor;
-  bool get isEligibleForEstimatedTrend => lineage.isEligibleForEstimatedTrend;
+  // A missing valuation has no stable object coverage to compare, even when
+  // adjacent snapshots report the same missing count.
+  bool get isEligibleForEstimatedTrend =>
+      lineage.isEligibleForEstimatedTrend &&
+      valuationCoverage.missingValuationCount == 0;
 
   Map<String, Object?> toJson() => {
         ...lineage.toJson(),

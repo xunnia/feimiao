@@ -13,10 +13,15 @@ struct LiabilitiesView: View {
     private var books: [Book]
     @Query(filter: #Predicate<TxCategory> { !$0.isArchived }, sort: \TxCategory.sortOrder)
     private var categories: [TxCategory]
+    @Query(sort: \AssetEvent.createdAt, order: .reverse)
+    private var assetEvents: [AssetEvent]
+    @Query private var transactions: [MoneyTransaction]
+    @Query private var checkpoints: [AccountBalanceCheckpointRecord]
 
     @State private var showEditor = false
     @State private var editingProfile: LiabilityProfile?
     @State private var repaymentProfile: LiabilityProfile?
+    @State private var undoRepaymentProfile: LiabilityProfile?
     @State private var errorMessage: String?
 
     var body: some View {
@@ -25,7 +30,7 @@ struct LiabilitiesView: View {
                 HStack {
                     Label("当前负债", systemImage: "minus.circle")
                     Spacer()
-                    Text(MoneyFormat.string(totalLiabilities, currencyCode: "CNY"))
+                    Text(totalLiabilities.map { MoneyFormat.string($0, currencyCode: "CNY") } ?? "待核对")
                         .font(.headline.monospacedDigit())
                 }
             }
@@ -70,6 +75,22 @@ struct LiabilitiesView: View {
             LiabilityRepaymentSheet(profile: profile)
                 .presentationDetents([.medium, .large])
         }
+        .appConfirmationDialog(
+            "撤销最近还款？",
+            isPresented: Binding(
+                get: { undoRepaymentProfile != nil },
+                set: { if !$0 { undoRepaymentProfile = nil } }
+            ),
+            message: "将同时撤销该次本金转账和利息支出，恢复还款前的档案本金。历史审计记录保留；已重新核对余额或记录被修改时不会直接撤销。",
+            confirmText: "撤销还款",
+            destructive: true
+        ) {
+            if let profile = undoRepaymentProfile {
+                do { try LiabilityStore.undoLatestRepayment(profile, in: context) }
+                catch { errorMessage = error.localizedDescription }
+            }
+            undoRepaymentProfile = nil
+        }
         .alert("操作失败", isPresented: Binding(
             get: { errorMessage != nil },
             set: { if !$0 { errorMessage = nil } }
@@ -80,10 +101,31 @@ struct LiabilitiesView: View {
         }
     }
 
-    private var totalLiabilities: Decimal {
-        profiles
-            .filter { $0.lifecycle == .active }
-            .reduce(into: Decimal.zero) { $0 += $1.currentPrincipal }
+    private var totalLiabilities: Decimal? {
+        var total = Decimal.zero
+        for profile in profiles where profile.lifecycle == .active {
+            guard profile.currencyCode.uppercased() == "CNY",
+                  let value = displayedDebtAmount(profile) else { return nil }
+            total += value
+        }
+        return total
+    }
+
+    private func displayedDebtAmount(_ profile: LiabilityProfile) -> Decimal? {
+        Self.displayedDebtAmount(for: profile, accounts: accounts, transactions: transactions, checkpoints: checkpoints)
+    }
+
+    static func displayedDebtAmount(
+        for profile: LiabilityProfile, accounts: [Account], transactions: [MoneyTransaction],
+        checkpoints: [AccountBalanceCheckpointRecord]
+    ) -> Decimal? {
+        guard let account = accounts.first(where: { $0.stableID == profile.accountID }),
+              !account.isDeleted, account.currencyCode.uppercased() == profile.currencyCode.uppercased() else { return nil }
+        if account.balanceMode == .ledger || (profile.kind == .creditCard && profile.currentPrincipal == 0) {
+            let balance = LedgerStore.accountBalance(for: account, transactions: transactions, checkpoints: checkpoints)
+            return MoneyNormalization.roundToCents(max(-balance, .zero))
+        }
+        return MoneyNormalization.roundToCents(profile.currentPrincipal)
     }
 
     private func liabilityRow(_ profile: LiabilityProfile) -> some View {
@@ -102,8 +144,27 @@ struct LiabilitiesView: View {
                         .foregroundStyle(.secondary)
                 }
                 Spacer(minLength: 8)
-                Text(MoneyFormat.string(profile.currentPrincipal, currencyCode: profile.currencyCode))
+                Text(displayedDebtAmount(profile).map { MoneyFormat.string($0, currencyCode: profile.currencyCode) } ?? "待核对")
                     .font(.subheadline.monospacedDigit().weight(.semibold))
+                Menu {
+                    Button { editingProfile = profile } label: {
+                        Label("编辑档案", systemImage: "pencil")
+                    }
+                    if profile.lifecycle == .active {
+                        Button { repaymentProfile = profile } label: {
+                            Label("记录还款", systemImage: "arrow.down.left")
+                        }
+                    }
+                    if LiabilityStore.latestRepaymentEvent(for: profile, events: assetEvents) != nil {
+                        Button { undoRepaymentProfile = profile } label: {
+                            Label("撤销最近还款", systemImage: "arrow.uturn.backward")
+                        }
+                    }
+                } label: {
+                    Image(systemName: "ellipsis")
+                }
+                .liquidGlassCircleControl()
+                .accessibilityLabel("负债操作")
             }
             HStack(spacing: 6) {
                 Text(profile.lifecycle.label)
@@ -234,7 +295,7 @@ private struct LiabilityEditor: View {
 
     var body: some View {
         NavigationStack {
-            Form {
+            AppThemedForm {
                 Section {
                     Picker("类型", selection: $kind) {
                         ForEach(LiabilityKind.allCases) { kind in
@@ -366,6 +427,8 @@ private struct LiabilityRepaymentSheet: View {
     private var books: [Book]
     @Query(filter: #Predicate<TxCategory> { !$0.isArchived }, sort: \TxCategory.sortOrder)
     private var categories: [TxCategory]
+    @Query private var transactions: [MoneyTransaction]
+    @Query private var checkpoints: [AccountBalanceCheckpointRecord]
 
     let profile: LiabilityProfile
     @State private var amountText: String
@@ -384,12 +447,15 @@ private struct LiabilityRepaymentSheet: View {
     private var amount: Decimal? { Decimal(string: amountText.replacingOccurrences(of: ",", with: "")) }
     private var fromAccount: Account? { accounts.first { $0.stableID == fromAccountID } }
     private var liabilityAccountID: UUID? { profile.accountID }
+    private var actualDebtAmount: Decimal? {
+        LiabilitiesView.displayedDebtAmount(for: profile, accounts: accounts, transactions: transactions, checkpoints: checkpoints)
+    }
 
     var body: some View {
         NavigationStack {
-            Form {
+            AppThemedForm {
                 Section {
-                    Text("当前本金 \(MoneyFormat.string(profile.currentPrincipal, currencyCode: profile.currencyCode))")
+                    Text("当前欠款 \(actualDebtAmount.map { MoneyFormat.string($0, currencyCode: profile.currencyCode) } ?? "待核对")")
                         .foregroundStyle(.secondary)
                     TextField("本次还款金额", text: $amountText)
                         .keyboardType(.decimalPad)
@@ -413,7 +479,7 @@ private struct LiabilityRepaymentSheet: View {
                     TextField("备注（可选）", text: $note)
                 }
                 Section {
-                    Text("本金部分生成付款账户到负债账户的转账；超出本金的部分才记为利息支出。")
+                    Text("本金部分生成付款账户到负债账户的转账；按已核对的账户欠款拆分本息，不使用过期的档案本金。余额口径不一致时需先核对。")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
@@ -432,6 +498,9 @@ private struct LiabilityRepaymentSheet: View {
                 }
             }
             .onAppear {
+                if amountText == "\(profile.currentPrincipal)", let actualDebtAmount {
+                    amountText = actualDebtAmount.description
+                }
                 if fromAccountID == nil {
                     fromAccountID = accounts.first {
                         !$0.isDeleted &&

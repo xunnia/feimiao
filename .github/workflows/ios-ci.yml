@@ -123,6 +123,7 @@ jobs:
             -scheme QingJi \
             -destination "platform=iOS Simulator,name=$DEVICE" \
             -derivedDataPath build-tests \
+            -resultBundlePath app-tests.xcresult \
             CODE_SIGNING_ALLOWED=NO 2>&1 \
             | tee xcodebuild-tests.log
           build_status=${PIPESTATUS[0]}
@@ -134,20 +135,36 @@ jobs:
             done
           fi
           test "$build_status" -eq 0
+      - name: Export XCTest screenshot attachments
+        if: always()
+        run: |
+          if [ -d app-tests.xcresult ]; then
+            xcrun xcresulttool export attachments \
+              --path app-tests.xcresult \
+              --output-path app-test-attachments
+          fi
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: app-tests-diagnostics
-          path: xcodebuild-tests.log
+          path: |
+            xcodebuild-tests.log
+            app-tests.xcresult
+            app-test-attachments/
           if-no-files-found: warn
 
   simulator-screenshots:
-    name: 模拟器截图
+    name: 模拟器截图 (${{ matrix.revision }})
     runs-on: macos-26
+    strategy:
+      fail-fast: false
+      matrix:
+        revision: ${{ fromJSON((github.ref == 'refs/heads/codex/ios-sync-20261004' || github.ref == 'refs/heads/codex/android-handoff-20261006') && '["candidate","before"]' || '["candidate"]') }}
     steps:
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0
+          ref: ${{ matrix.revision == 'before' && '048abecf7e7455349b0e64ef9d7b00e5cad9abd6' || github.sha }}
       - name: Validate P0 same-product contract
         run: |
           python3 ios-app/tools/check_p0_product_contract.py
@@ -405,22 +422,55 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: simulator-screenshots
+          name: ${{ matrix.revision == 'before' && 'ios-sync-before-screenshots' || 'simulator-screenshots' }}
           path: ci-artifacts/ios-screenshots/
           if-no-files-found: warn
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: ios-interaction-screenshots
+          name: ${{ matrix.revision == 'before' && 'ios-sync-before-interaction-screenshots' || 'ios-interaction-screenshots' }}
           path: ci-artifacts/ios-interaction-screenshots/
           if-no-files-found: warn
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: simulator-screenshot-diagnostics
+          name: simulator-screenshot-diagnostics-${{ matrix.revision }}
           path: |
             xcodebuild-screenshots.log
             ios-screenshot-runtime.log
+          if-no-files-found: warn
+      - name: Record screenshot source
+        if: always()
+        env:
+          REVISION: ${{ matrix.revision }}
+          TRIGGER_SHA: ${{ github.sha }}
+          TRIGGER_REF: ${{ github.ref }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          # Source evidence for before/candidate screenshots. Kept outside the
+          # screenshot directories so route/count checks are unaffected.
+          mkdir -p ci-artifacts/ios-screenshot-source
+          out=ci-artifacts/ios-screenshot-source/source.txt
+          {
+            echo "revision=$REVISION"
+            echo "checked_out_sha=$(git rev-parse HEAD)"
+            echo "trigger_sha=$TRIGGER_SHA"
+            echo "trigger_ref=$TRIGGER_REF"
+            echo "run_id=$RUN_ID"
+            echo "run_attempt=$RUN_ATTEMPT"
+            echo "recorded_at_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo "--- xcodebuild -version"
+            xcodebuild -version 2>&1 || true
+            echo "--- booted simulators"
+            xcrun simctl list devices booted 2>&1 || true
+          } > "$out"
+          cat "$out"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ios-screenshot-source-${{ matrix.revision }}
+          path: ci-artifacts/ios-screenshot-source/
           if-no-files-found: warn
 
   unsigned-ipa:

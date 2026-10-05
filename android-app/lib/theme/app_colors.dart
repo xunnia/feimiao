@@ -94,10 +94,13 @@ class AppColors {
 
   /// 全局玻璃卡片透明度**默认值**（2026-07-11 主题系统上线后，
   /// 实际生效值是下面的运行时字段，由 AppThemeController 灌入；
-  /// 这里的 const 只是出厂默认=暖橙 40%）。选中态 36% 用户点名"还不错"，别动。
+  /// 这里的 const 只是出厂默认=暖橙 80%，2026-10-01 用户定从 40% 调上来，
+  /// 卡片更接近实心奶白）。选中态 36% 用户点名"还不错"，别动。
   /// 小组件 compact 渲染仍实心，不受主题影响。
-  static const double cardAlphaLight = 0.40;
-  static const double cardAlphaDark = 0.55;
+  static const double cardAlphaLight = 0.80;
+
+  /// 深色 = 浅色 + 0.15（和 AppThemeController 的换算一致）。
+  static const double cardAlphaDark = 0.95;
   static const double selectedCardAlphaLight = 0.36;
   static const double selectedCardAlphaDark = 0.46;
 
@@ -198,11 +201,50 @@ class AppColors {
           ? Colors.white.withValues(alpha: 0.10 * strength)
           : Colors.black.withValues(alpha: 0.06 * strength);
 
-  /// 输入框填充底：浅色 iOS systemGray6 / 深色暖灰（比卡片再深一点）。
-  static Color inputFill(ColorScheme scheme) =>
+  /// 弹层 / 弹窗 / 菜单的底色，跟主题走（2026-10-01 用户点名：弹层不许一律纯白）。
+  /// 彩色主题轻取渐变顶色，避免六套近白底色使浮层看起来始终是白色。
+  /// 顶色已包含用户的背景浓度；浮层不跟卡片透明度一起变透，保证可读。
+  static Color sheetSurfaceFor(Brightness brightness) {
+    if (brightness == Brightness.dark) {
+      return Color.lerp(_bgDark, Colors.white, 0.06)!;
+    }
+    final nearWhiteSolid = _bgSolid && _bgBottom.computeLuminance() >= 0.90;
+    return nearWhiteSolid ? Colors.white : Color.lerp(_bgBottom, _bgTop, 0.35)!;
+  }
+
+  static Color sheetSurface(ColorScheme scheme) => scheme.surface;
+
+  /// 主题「墨色」：主题顶色压暗。拿它调淡填充，暖橙出暖灰、樱粉出粉灰、
+  /// 简约白出中性灰（≈ iOS systemGray6），不再一律冷灰。
+  static Color _themeInk(Brightness brightness) => brightness == Brightness.dark
+      ? Colors.white
+      : Color.lerp(_bgSolid ? _bgBottom : _bgTop, Colors.black, 0.55)!;
+
+  static Color _containerSurface(Brightness brightness, double alpha) =>
+      Color.alphaBlend(
+        _themeInk(brightness).withValues(alpha: alpha),
+        sheetSurfaceFor(brightness),
+      );
+
+  /// 从当前 Theme 快照取色，不混用旧 ColorScheme 和新的全局主题字段。
+  static Color sheetFill(ColorScheme scheme) => scheme.surfaceContainerHigh;
+
+  /// Translucent ink stays darker than the frosted card rather than filling
+  /// its pills with an opaque, brighter input color.
+  static Color dialogFill(ColorScheme scheme) =>
       scheme.brightness == Brightness.dark
-          ? const Color(0xFF3B3733)
-          : const Color(0xFFF2F2F7);
+          ? Colors.white.withValues(alpha: 0.12)
+          : Colors.black.withValues(alpha: 0.07);
+
+  /// 分段控件底轨：半透明主题墨色，卡片上、弹层上都能用。
+  static Color segmentTrack(ColorScheme scheme) =>
+      _themeInk(scheme.brightness).withValues(
+        alpha: scheme.brightness == Brightness.dark ? 0.08 : 0.12,
+      );
+
+  /// 输入框填充底：跟主题走的淡填充（原来写死 iOS 冷灰 #F2F2F7，
+  /// 暖色弹层上发青发冷）。
+  static Color inputFill(ColorScheme scheme) => sheetFill(scheme);
 
   /// 图标圆底/小占位块统一填充。别再各写各的
   /// `surfaceContainerHighest.withValues(alpha: 0.42~0.62)` 魔法数。
@@ -268,13 +310,14 @@ class AppTheme {
       primary: kCatBlueGray,
       secondary: kCatGold,
       tertiary: kCatPink,
-      // 全局白底：surface 及各级 container 去掉蓝紫 tint，统一中性白/浅灰，消除断层
-      surface: Colors.white,
-      surfaceContainerLowest: Colors.white,
-      surfaceContainerLow: const Color(0xFFF7F8FA),
-      surfaceContainer: const Color(0xFFF3F4F6),
-      surfaceContainerHigh: const Color(0xFFEEEFF2),
-      surfaceContainerHighest: const Color(0xFFEAECEF),
+      // 所有浮层及内部填充来自同一主题，不再叠一套冷灰/纯白。
+      surface: AppColors.sheetSurfaceFor(Brightness.light),
+      surfaceContainerLowest: AppColors.sheetSurfaceFor(Brightness.light),
+      surfaceContainerLow: AppColors._containerSurface(Brightness.light, 0.03),
+      surfaceContainer: AppColors._containerSurface(Brightness.light, 0.06),
+      surfaceContainerHigh: AppColors._containerSurface(Brightness.light, 0.09),
+      surfaceContainerHighest:
+          AppColors._containerSurface(Brightness.light, 0.12),
     );
 
     return ThemeData(
@@ -362,7 +405,7 @@ class AppTheme {
           borderSide: const BorderSide(color: kCatBlueGray, width: 1.5),
         ),
         filled: true,
-        fillColor: Colors.white,
+        fillColor: AppColors.inputFill(cs),
       ),
     );
   }
@@ -376,7 +419,14 @@ class AppTheme {
       primary: const Color(0xFF9DAFC0), // 略亮蓝灰
       secondary: kCatGold,
       tertiary: kCatPink,
-      surface: const Color(0xFF2A2825), // 暖灰 surface
+      // 弹层底色：页面底色往上提一档，跟主题走（默认暖灰、暮夜冷灰）。
+      surface: AppColors.sheetSurfaceFor(Brightness.dark),
+      surfaceContainerLowest: AppColors.sheetSurfaceFor(Brightness.dark),
+      surfaceContainerLow: AppColors._containerSurface(Brightness.dark, 0.025),
+      surfaceContainer: AppColors._containerSurface(Brightness.dark, 0.045),
+      surfaceContainerHigh: AppColors._containerSurface(Brightness.dark, 0.07),
+      surfaceContainerHighest:
+          AppColors._containerSurface(Brightness.dark, 0.10),
       onSurface: const Color(0xFFEDE8E0), // 暖白文字
     );
 
@@ -384,12 +434,12 @@ class AppTheme {
       colorScheme: cs,
       fontFamily: 'Nunito',
       fontFamilyFallback: const ['NotoSansSC'],
-      scaffoldBackgroundColor: const Color(0xFF211E1C),
+      scaffoldBackgroundColor: Colors.transparent,
       useMaterial3: true,
       platform: TargetPlatform.iOS,
       pageTransitionsTheme: _iosPageTransitions,
       appBarTheme: AppBarTheme(
-        backgroundColor: const Color(0xFF211E1C),
+        backgroundColor: Colors.transparent,
         surfaceTintColor: Colors.transparent,
         elevation: 0,
         scrolledUnderElevation: 0,
@@ -452,7 +502,7 @@ class AppTheme {
           ),
         ),
         filled: true,
-        fillColor: const Color(0xFF332F2C),
+        fillColor: AppColors.inputFill(cs),
       ),
     );
   }

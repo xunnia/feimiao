@@ -12,16 +12,16 @@
     "cleanSourceAnchor": "b40316f336fb0aefabf67817460775b665fdaa1d",
     "integrationBranch": "main",
     "android": {
-      "version": "1.308.0+323",
-      "watermark": "b1001-323",
+      "version": "1.314.0+329",
+      "watermark": "b1004-329",
       "databaseVersion": 50,
-      "sourceCommit": "e3259e72f4c4592377b57c32efb44b99071fe978",
-      "apk": "ci-artifacts/releases/feimiao-codex-v1.308.0-323.apk",
-      "apkBytes": 117262031,
-      "apkSha256": "8217DF5A9E91CD75C77019E1D377081665E71A1FF848D896B2E1863BD67CAD0D",
-      "apkSourceNote": "Released 323 APK built from sourceCommit plus the 323 version bump. Screenshot runs build the checked-out source.",
-      "staticAnalysis": "0 errors; 89 warning/info diagnostics",
-      "tests": "1290/1290 passed locally on Windows"
+      "sourceCommit": "82a3ddd465d8f2a5fadbd136d107e5cf8d29dbc0",
+      "apk": "ci-artifacts/releases/feimiao-codex-v1.314.0-329.apk",
+      "apkBytes": 118903579,
+      "apkSha256": "DA23F04A173BFF5FEA074D3D8D49B23DAEE0CEDAA87B4760DAD9166EE72F51AA",
+      "apkSourceNote": "Verified release 329 APK matches the Android source tree at sourceCommit. VPS publication is tracked in docs/02. Screenshot runs build the checked-out source; Android device and real-model acceptance remain pending. iOS general-chat routing has not yet been synchronized.",
+      "staticAnalysis": "0 errors; 86 warning/info diagnostics",
+      "tests": "1699/1699 passed locally on Windows"
     },
     "ios": {
       "version": "1.286.0+300",
@@ -175,6 +175,9 @@
     "status-bar-and-safe-area-insets",
     "native-navigation-transition-and-edge-swipe",
     "native-keyboard-and-haptics",
+    "native-liquid-glass-materials-and-system-accessibility-adaptation",
+    "native-alert-menu-and-sheet-layout-preserving-product-actions-and-copy",
+    "native-form-and-picker-controls-preserving-fields-and-information-hierarchy",
     "ios-permission-wording-required-by-the-system",
     "sf-symbol-only-when-the-android-product-icon-has-no-custom-asset"
   ],

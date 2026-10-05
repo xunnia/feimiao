@@ -4,7 +4,9 @@ import 'dart:math' as math;
 
 import 'package:http/http.dart' as http;
 
+import '../app_clock.dart';
 import 'ai_http_transport.dart';
+import 'ai_prompt_templates.dart';
 import 'ai_provider_config.dart';
 import 'openai_codex_oauth.dart';
 import 'web_search.dart';
@@ -30,24 +32,25 @@ class LlmQuery {
     String? apiKey,
     AiProviderConfig? config,
     required String transactionsText,
+    String memoryText = '',
     List<Map<String, String>> priorTurns = const [],
   }) async {
-    final provider = await OpenAiCodexOAuth.ensureFreshConfig(
-      _resolveConfig(apiKey: apiKey, config: config),
+    final provider = AiWebSearchContext.conversationConfig(
+      question: question,
+      ledgerText: transactionsText,
+      config: await OpenAiCodexOAuth.ensureFreshConfig(
+        _resolveConfig(apiKey: apiKey, config: config),
+      ),
     );
     final webSearch = await AiWebSearchContext.prepare(
       question: question,
       config: provider,
     );
-    final systemPrompt = '''你是「喵助手」，一只蓝白英短猫助手，有账本数据作为参考。
-性格：口语化、亲切，可以带一点猫咪语气（偶尔用「喵」）。
-能力：可以回答任何问题——记账查账、消费分析、日常聊天、知识问答都可以。
-账本相关回答规则：涉及金额要给具体数字（单位元）；算不出或数据里没有就如实说不知道，绝不编造。
-**账目里若给了「本期准确合计」「本期分类准确合计」或「分类查询准确合计」，回答总额时必须直接引用那个数，绝不自己把明细一条条加起来（你手算会错）。**
-如果账目上下文出现「分类筛选已锁定」，只能使用该分类及其子分类的合计和明细；
-禁止把其它分类的数字混进答案，也不要把全月总支出冒充分类支出。若筛选合计为 0，直接如实回答 0。
-
-$transactionsText''';
+    final systemMessages = AiPromptTemplates.querySystemMessages(
+      now: AppClock.now,
+      ledgerText: transactionsText,
+      memoryText: memoryText,
+    );
 
     final history = [
       for (final turn in priorTurns)
@@ -61,7 +64,7 @@ $transactionsText''';
       bodyForModel: (model) => {
         'model': model,
         'messages': [
-          {'role': 'system', 'content': systemPrompt},
+          ...systemMessages,
           if (webSearch.promptBlock.trim().isNotEmpty)
             {'role': 'system', 'content': webSearch.promptBlock},
           ...history,

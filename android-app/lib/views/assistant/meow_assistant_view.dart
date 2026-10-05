@@ -228,11 +228,13 @@ class _MeowAssistantViewState extends State<MeowAssistantView> {
     final confirmed = await showIosFormDialog(
       context,
       title: '重命名',
-      content: TextField(
-        controller: controller,
-        autofocus: true,
-        maxLength: 40,
-        decoration: iosInputDecoration(context, hint: '会话名称'),
+      content: Builder(
+        builder: (ctx) => TextField(
+          controller: controller,
+          autofocus: true,
+          maxLength: 40,
+          decoration: iosInputDecoration(ctx, hint: '会话名称'),
+        ),
       ),
     );
     final title = controller.text.trim();

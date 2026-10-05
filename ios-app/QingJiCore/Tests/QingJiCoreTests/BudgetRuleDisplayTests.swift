@@ -67,6 +67,32 @@ final class BudgetRuleDisplayTests: XCTestCase {
         XCTAssertEqual(budgetPaceText(month(310000)).text, "这个月已经超出预算啦")
     }
 
+    func testFirstDayHasNoPaceEvaluation() {
+        let firstDay = day(2026, 9, 1)
+        for spentToday in [0, 100_000] {
+            let month = BudgetRuleEngine.resolveMonth(rules: [base(1, 3000, firstDay)],
+                                                      spendByDay: [firstDay.key: spentToday],
+                                                      year: 2026, month: 9, today: firstDay)
+            XCTAssertEqual(month.today?.plannedBeforeTodayCents, 0)
+            XCTAssertEqual(budgetPaceText(month).text, "")
+            XCTAssertFalse(budgetPaceText(month).warning)
+        }
+    }
+
+    func testFirstDayStillShowsLowBalanceAndOverspendWarnings() {
+        let firstDay = day(2026, 9, 1)
+        func month(_ spentToday: Int) -> BudgetMonthResult {
+            BudgetRuleEngine.resolveMonth(rules: [base(1, 3000, firstDay)],
+                                          spendByDay: [firstDay.key: spentToday],
+                                          year: 2026, month: 9, today: firstDay)
+        }
+        XCTAssertEqual(month(280_000).today?.plannedBeforeTodayCents, 0)
+        XCTAssertEqual(budgetPaceText(month(280_000)).text, "只剩 ¥200 啦")
+        XCTAssertTrue(budgetPaceText(month(280_000)).warning)
+        XCTAssertEqual(budgetPaceText(month(310_000)).text, "这个月已经超出预算啦")
+        XCTAssertTrue(budgetPaceText(month(310_000)).warning)
+    }
+
     func testPreviewCarveMidAutumn() {
         let lines = budgetRulePreview(
             existing: [base(1, 4000, day(2026, 9, 1))],
@@ -107,8 +133,149 @@ final class BudgetRuleDisplayTests: XCTestCase {
         let rule = base(1, 5000, day(2026, 5, 1))
         XCTAssertNil(budgetBaseEditWarning(original: rule, amountCents: 500000, unit: .month, today: today))
         XCTAssertEqual(budgetBaseEditWarning(original: rule, amountCents: 600000, unit: .month, today: today),
-                       "5月以来的每个月都会按新金额重新计算")
+                       "这次修改会调整5月以来的预算，已记录的账单不变。")
         XCTAssertNil(budgetBaseEditWarning(original: nil, amountCents: 600000, unit: .week, today: today))
+    }
+
+    func testBaseEditWarningStopsAtActualTakeover() {
+        let may = base(1, 5000, day(2026, 5, 1))
+        let oct = base(2, 6000, day(2026, 10, 1))
+        XCTAssertEqual(budgetBaseEditWarning(original: may, amountCents: 520000, unit: .month,
+                                            today: day(2026, 11, 2), existing: [may, oct]),
+                       "这次修改会调整5月–9月的预算，已记录的账单不变。")
+        let sameMonth = base(3, 7000, day(2026, 5, 1))
+        XCTAssertNil(budgetBaseEditWarning(original: may, amountCents: 520000, unit: .month,
+                                          today: today, existing: [may, sameMonth]))
+    }
+
+    func testUpcomingBaseSpanRetainsKnownTakeoverEnd() {
+        let oct = base(1, 5000, day(2026, 10, 1))
+        let dec = base(2, 6000, day(2026, 12, 1))
+        let span = budgetRuleSpan(oct, rules: [oct, dec], today: today)
+        XCTAssertEqual(span.state, .upcoming)
+        XCTAssertEqual(span.text, "10月起")
+        XCTAssertEqual(span.effectiveEnd, day(2026, 11, 30))
+        XCTAssertNil(budgetRuleSpan(dec, rules: [oct, dec], today: today).effectiveEnd)
+    }
+
+    func testUpcomingBaseEditWarningStopsAtKnownTakeover() {
+        let oct = base(1, 5000, day(2026, 10, 1))
+        let dec = base(2, 6000, day(2026, 12, 1))
+        XCTAssertEqual(budgetBaseEditWarning(original: oct, amountCents: 520000, unit: .month,
+                                            today: today, existing: [oct, dec]),
+                       "这次修改会调整10月–11月的预算，已记录的账单不变。")
+    }
+
+    func testBaseEditWarningIncludesYearsAndSingleMonth() {
+        let dec = base(1, 5000, day(2025, 12, 1))
+        let feb = base(2, 6000, day(2026, 2, 1))
+        XCTAssertEqual(budgetBaseEditWarning(original: dec, amountCents: 520000, unit: .month,
+                                            today: today, existing: [dec, feb]),
+                       "这次修改会调整2025年12月–2026年1月的预算，已记录的账单不变。")
+        let jan = base(3, 6000, day(2026, 1, 1))
+        XCTAssertEqual(budgetBaseEditWarning(original: dec, amountCents: 520000, unit: .month,
+                                            today: today, existing: [dec, jan]),
+                       "这次修改会调整2025年12月的预算，已记录的账单不变。")
+    }
+
+    func testEndedBasePreviewUsesLastOwnedMonthAndEngineTotals() {
+        let may = base(1, 5000, day(2026, 5, 1))
+        let oct = base(2, 6000, day(2026, 10, 1))
+        let edited = base(1, 5200, day(2026, 5, 1))
+        let lines = budgetRulePreview(existing: [may, oct], candidate: edited, today: day(2026, 11, 2)).map(\.text)
+        XCTAssertEqual(lines.first, "9月预算 ¥5,000 → ¥5,200")
+        XCTAssertFalse(lines.contains { $0.contains("11月") })
+        let replaced = base(3, 7000, day(2026, 5, 1))
+        XCTAssertEqual(budgetRulePreview(existing: [may, replaced], candidate: edited, today: today).map(\.text),
+                       ["这条日常预算没有生效过，修改后仍不影响任何月份"])
+    }
+
+    func testUpcomingBasePreviewUsesFirstOwnedFutureMonth() {
+        let oct = base(1, 5000, day(2026, 10, 1))
+        let dec = base(2, 6000, day(2026, 12, 1))
+        let edited = base(1, 5200, day(2026, 10, 1))
+        let lines = budgetRulePreview(existing: [oct, dec], candidate: edited, today: today).map(\.text)
+        XCTAssertEqual(lines.first, "10月预算 ¥5,000 → ¥5,200")
+        XCTAssertFalse(lines.contains { $0.contains("9月") || $0.contains("12月") })
+    }
+
+    func testSpecialPreviewExplainsFullMonthOverrideAndEditedReduction() {
+        let daily = base(1, 3000, day(2026, 10, 1))
+        let override = special(2, 1000, day(2026, 10, 1), day(2026, 10, 31), unit: .month)
+        let lines = budgetRulePreview(existing: [daily], candidate: override, today: today).map(\.text)
+        XCTAssertEqual(lines[1], "10月一共 ¥1,000（少了 ¥2,000）")
+        let previous = special(2, 2000, day(2026, 10, 1), day(2026, 10, 31), unit: .month, funding: .extra)
+        let reduced = special(2, 1000, day(2026, 10, 1), day(2026, 10, 31), unit: .month, funding: .extra)
+        let editLines = budgetRulePreview(existing: [daily, previous], candidate: reduced, today: today).map(\.text)
+        XCTAssertTrue(editLines[1].contains("少了 ¥1,000"))
+        XCTAssertFalse(editLines[1].contains("多了 -"))
+    }
+
+    private func suggestionSpend(_ cents: Int, on day: BudgetCivilDay, id: UUID = UUID(),
+                                 refundOf: UUID? = nil, excluded: Bool = false,
+                                 currency: String = "CNY", createdAt: Date? = nil,
+                                 expense: Bool = true) -> BudgetSpendRow {
+        BudgetSpendRow(id: id, isExpense: expense, amountCents: cents, currencyCode: currency,
+                       attributionDay: day, createdAt: createdAt, refundOfID: refundOf, isExcluded: excluded)
+    }
+
+    func testSuggestionUsesRefundNetAndIgnoresExcludedForeignAndFullyRefundedMonths() {
+        let original = UUID()
+        let fullyRefunded = UUID()
+        let rows = [
+            suggestionSpend(100_000, on: day(2026, 8, 10), id: original),
+            suggestionSpend(-90_000, on: day(2026, 9, 2), refundOf: original),
+            suggestionSpend(300_000, on: day(2026, 6, 10), excluded: true),
+            suggestionSpend(900_000, on: day(2026, 6, 11), currency: "USD"),
+            suggestionSpend(800_000, on: day(2026, 6, 12), expense: false),
+            suggestionSpend(20_000, on: day(2026, 7, 1), id: fullyRefunded),
+            suggestionSpend(-20_000, on: day(2026, 9, 3), refundOf: fullyRefunded),
+        ]
+        XCTAssertEqual(budgetSuggestedMonthlyYuan(rows, today: today, knowledgeCutoff: .distantFuture), 100)
+        XCTAssertNil(budgetSuggestedMonthlyYuan(Array(rows[2...4]), today: today, knowledgeCutoff: .distantFuture))
+        XCTAssertNil(budgetSuggestedMonthlyYuan(Array(rows[5...6]), today: today, knowledgeCutoff: .distantFuture))
+        XCTAssertNil(budgetSuggestedMonthlyYuan([], today: today, knowledgeCutoff: .distantFuture))
+    }
+
+    func testSuggestionOnlyUsesLastThreeCompleteMonthsAcrossYearAndPreservesRoundingOrder() {
+        let january = day(2027, 1, 18)
+        let rows = [
+            suggestionSpend(10_000, on: day(2026, 10, 1)),
+            suggestionSpend(50_000, on: day(2026, 12, 31)),
+            suggestionSpend(900_000, on: day(2026, 9, 30)),
+            suggestionSpend(800_000, on: day(2027, 1, 1)),
+        ]
+        XCTAssertEqual(budgetSuggestedMonthlyYuan(rows, today: january, knowledgeCutoff: .distantFuture), 300)
+        XCTAssertEqual(budgetSuggestedMonthlyYuan([suggestionSpend(14_949, on: day(2026, 12, 1))],
+                                                 today: january, knowledgeCutoff: .distantFuture), 100)
+        XCTAssertEqual(budgetSuggestedMonthlyYuan([suggestionSpend(14_950, on: day(2026, 12, 1))],
+                                                 today: january, knowledgeCutoff: .distantFuture), 200)
+    }
+
+    func testSuggestionDoesNotUseRefundsThatAreNotKnownYet() {
+        let original = UUID()
+        let cutoff = Date(timeIntervalSince1970: 1_000)
+        let rows = [
+            suggestionSpend(100_000, on: day(2026, 8, 10), id: original, createdAt: cutoff),
+            suggestionSpend(-100_000, on: day(2026, 8, 10), refundOf: original,
+                            createdAt: cutoff.addingTimeInterval(1)),
+        ]
+        XCTAssertEqual(budgetSuggestedMonthlyYuan(rows, today: today, knowledgeCutoff: cutoff), 1000)
+        XCTAssertNil(budgetSuggestedMonthlyYuan(rows, today: today, knowledgeCutoff: cutoff.addingTimeInterval(1)))
+    }
+
+    func testSuggestionIgnoresStandaloneNonpositiveRootsButKeepsLinkedRefunds() {
+        let original = UUID()
+        let rows = [
+            suggestionSpend(100_000, on: day(2026, 8, 10), id: original),
+            suggestionSpend(-40_000, on: day(2026, 9, 2), refundOf: original),
+            suggestionSpend(-50_000, on: day(2026, 8, 11)),
+            suggestionSpend(0, on: day(2026, 6, 10)),
+        ]
+        XCTAssertEqual(budgetSuggestedMonthlyYuan(rows, today: today, knowledgeCutoff: .distantFuture), 600)
+        XCTAssertNil(budgetSuggestedMonthlyYuan(Array(rows[2...3]), today: today, knowledgeCutoff: .distantFuture))
+        XCTAssertEqual(budgetSpendByDay(rows, today: today, knowledgeCutoff: .distantFuture).spend,
+                       [20260810: 60_000, 20260811: -50_000])
     }
 
     func testSpendByDayFollowsBudgetRules() {

@@ -516,15 +516,17 @@ class _AiAccountSettingsPageState extends State<AiAccountSettingsPage> {
         context,
         title: '粘贴 OAuth 回调地址',
         subtitle: '浏览器显示连接失败时，复制地址栏中 localhost:1455 或 1457 的完整地址。',
-        content: TextField(
-          controller: controller,
-          minLines: 2,
-          maxLines: 4,
-          autocorrect: false,
-          enableSuggestions: false,
-          decoration: iosInputDecoration(
-            context,
-            hint: 'http://localhost:1455/auth/callback?code=…&state=…',
+        content: Builder(
+          builder: (ctx) => TextField(
+            controller: controller,
+            minLines: 2,
+            maxLines: 4,
+            autocorrect: false,
+            enableSuggestions: false,
+            decoration: iosInputDecoration(
+              ctx,
+              hint: 'http://localhost:1455/auth/callback?code=…&state=…',
+            ),
           ),
         ),
         confirmText: '完成授权',
@@ -1063,8 +1065,7 @@ class _AiAccountImportSheetState extends State<_AiAccountImportSheet> {
                     final choice = _choices[index];
                     final account = choice.account;
                     final duplicate = choice.duplicate;
-                    final skipped =
-                        choice.action == AiAccountImportAction.skip;
+                    final skipped = choice.action == AiAccountImportAction.skip;
                     return Container(
                       padding: const EdgeInsets.fromLTRB(14, 12, 12, 8),
                       decoration: BoxDecoration(
@@ -1764,7 +1765,6 @@ class _ProviderModelListBoxState extends State<_ProviderModelListBox> {
   }
 }
 
-
 /// 隐私与数据：所有人都能进（01 §4），从设置首页「AI」分组打开。
 class AiPrivacyDataPage extends StatelessWidget {
   const AiPrivacyDataPage({super.key});
@@ -1841,7 +1841,6 @@ class AiPrivacyDataPage extends StatelessWidget {
     );
   }
 }
-
 
 class _PlainValue extends StatelessWidget {
   final String text;

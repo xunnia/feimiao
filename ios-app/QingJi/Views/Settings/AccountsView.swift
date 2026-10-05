@@ -288,7 +288,7 @@ struct AccountEditorSheet: View {
 
     var body: some View {
         NavigationStack {
-            Form {
+            AppThemedForm {
                 Section("基本信息") {
                     TextField("账户名称", text: $name)
                     Picker("类型", selection: $kind) {

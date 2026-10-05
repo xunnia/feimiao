@@ -20,7 +20,7 @@ struct ReconcileView: View {
     }
 
     var body: some View {
-        Form {
+        AppThemedForm {
             Section {
                 Text("对一下每个账户的真实余额，有差额点「保存校准」。校准不会伪造一笔收入或支出，之后仍可撤销。")
                     .font(.footnote)

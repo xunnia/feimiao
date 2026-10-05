@@ -24,74 +24,74 @@ class AiTaskCenterBody extends StatelessWidget {
   Widget build(BuildContext context) {
     final repo = context.watch<AppRepository>();
     return FutureBuilder<List<AiRun>>(
-        future: repo.loadAiRuns(limit: 100),
-        builder: (context, snapshot) {
-          final runs = snapshot.data ?? const <AiRun>[];
-          return ListView(
-            padding: const EdgeInsets.only(top: 8, bottom: 32),
-            children: [
-              if (runs.isEmpty)
-                const SettingsGroup(
-                  children: [
+      future: repo.loadAiRuns(limit: 100),
+      builder: (context, snapshot) {
+        final runs = snapshot.data ?? const <AiRun>[];
+        return ListView(
+          padding: const EdgeInsets.only(top: 8, bottom: 32),
+          children: [
+            if (runs.isEmpty)
+              const SettingsGroup(
+                children: [
+                  SettingsRow(
+                    leading: Icon(CupertinoIcons.checkmark_circle),
+                    title: '暂无 AI 任务',
+                    subtitle: '发送消息或生成报告后，任务会显示在这里。',
+                  ),
+                ],
+              )
+            else
+              SettingsGroup(
+                children: [
+                  for (final run in runs)
                     SettingsRow(
-                      leading: Icon(CupertinoIcons.checkmark_circle),
-                      title: '暂无 AI 任务',
-                      subtitle: '发送消息或生成报告后，任务会显示在这里。',
-                    ),
-                  ],
-                )
-              else
-                SettingsGroup(
-                  children: [
-                    for (final run in runs)
-                      SettingsRow(
-                        leading: Icon(_runIcon(run.mode)),
-                        title: run.mode.label,
-                        subtitle:
-                            '${run.config.providerLabel} · ${run.config.model.isEmpty ? '未指定模型' : run.config.model}',
-                        trailing: Text(
-                          run.status.label,
-                          style: TextStyle(
-                            fontSize: 12,
-                            color: _runColor(context, run.status),
-                          ),
-                        ),
-                        onTap: () => Navigator.of(context).push(
-                          MaterialPageRoute<void>(
-                            builder: (_) => AiRunDetailView(run: run),
-                          ),
+                      leading: Icon(_runIcon(run.mode)),
+                      title: run.mode.label,
+                      subtitle:
+                          '${run.config.providerLabel} · ${run.config.model.isEmpty ? '未指定模型' : run.config.model}',
+                      trailing: Text(
+                        run.status.label,
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: _runColor(context, run.status),
                         ),
                       ),
-                  ],
-                ),
-              FutureBuilder<List<ReportJobEntity>>(
-                future: repo.pendingReportJobs(),
-                builder: (context, snapshot) {
-                  final jobs = snapshot.data ?? const <ReportJobEntity>[];
-                  if (jobs.isEmpty) return const SizedBox.shrink();
-                  return SettingsGroup(
-                    children: [
-                      for (final job in jobs)
-                        SettingsRow(
-                          leading: const Icon(CupertinoIcons.doc_text),
-                          title: job.title,
-                          subtitle: '报告任务 · ${job.stage}',
-                          trailing: Text(job.status),
+                      onTap: () => Navigator.of(context).push(
+                        MaterialPageRoute<void>(
+                          builder: (_) => AiRunDetailView(run: run),
                         ),
-                    ],
-                  );
-                },
+                      ),
+                    ),
+                ],
               ),
-              const Padding(
-                padding: EdgeInsets.fromLTRB(24, 0, 24, 0),
-                child: Text(
-                  '运行记录只保留状态、耗时和配置快照，不包含密钥或完整账本内容。',
-                  style: TextStyle(fontSize: 12, color: Colors.grey),
-                ),
+            FutureBuilder<List<ReportJobEntity>>(
+              future: repo.pendingReportJobs(),
+              builder: (context, snapshot) {
+                final jobs = snapshot.data ?? const <ReportJobEntity>[];
+                if (jobs.isEmpty) return const SizedBox.shrink();
+                return SettingsGroup(
+                  children: [
+                    for (final job in jobs)
+                      SettingsRow(
+                        leading: const Icon(CupertinoIcons.doc_text),
+                        title: job.title,
+                        subtitle: '报告任务 · ${job.stage}',
+                        trailing: Text(job.status),
+                      ),
+                  ],
+                );
+              },
+            ),
+            const Padding(
+              padding: EdgeInsets.fromLTRB(24, 0, 24, 0),
+              child: Text(
+                '运行记录只保留状态、耗时和配置快照，不包含密钥或完整账本内容。',
+                style: TextStyle(fontSize: 12, color: Colors.grey),
               ),
-            ],
-          );
-        },
+            ),
+          ],
+        );
+      },
     );
   }
 
@@ -359,21 +359,23 @@ Future<void> addAiMemory(BuildContext context) async {
     context,
     title: '添加一条记忆',
     subtitle: '只在匹配到触发短语时使用',
-    content: Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        TextField(
-          controller: phrase,
-          textInputAction: TextInputAction.next,
-          decoration: iosInputDecoration(context, hint: '触发短语'),
-        ),
-        const SizedBox(height: 10),
-        TextField(
-          controller: content,
-          maxLines: 3,
-          decoration: iosInputDecoration(context, hint: '要记住的内容'),
-        ),
-      ],
+    content: Builder(
+      builder: (ctx) => Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          TextField(
+            controller: phrase,
+            textInputAction: TextInputAction.next,
+            decoration: iosInputDecoration(ctx, hint: '触发短语'),
+          ),
+          const SizedBox(height: 10),
+          TextField(
+            controller: content,
+            maxLines: 3,
+            decoration: iosInputDecoration(ctx, hint: '要记住的内容'),
+          ),
+        ],
+      ),
     ),
     confirmText: '保存',
     cancelText: '取消',

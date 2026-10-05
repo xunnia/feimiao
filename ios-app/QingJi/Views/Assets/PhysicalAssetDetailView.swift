@@ -464,7 +464,7 @@ private struct AssetValueUpdateSheet: View {
 
     var body: some View {
         NavigationStack {
-            Form {
+            AppThemedForm {
                 Section {
                     TextField("当前估值", text: $valueText)
                         .keyboardType(.decimalPad)
@@ -537,7 +537,7 @@ private struct AssetSaleSheet: View {
 
     var body: some View {
         NavigationStack {
-            Form {
+            AppThemedForm {
                 Section {
                     TextField("成交价", text: $grossText)
                         .keyboardType(.decimalPad)
@@ -716,7 +716,7 @@ private struct AssetEvidenceSheet: View {
 
     var body: some View {
         NavigationStack {
-            Form {
+            AppThemedForm {
                 Section("物品照片") {
                     photoPreview
                         .frame(maxWidth: .infinity)
@@ -888,7 +888,7 @@ private struct AssetDepreciationSheet: View {
 
     var body: some View {
         NavigationStack {
-            Form {
+            AppThemedForm {
                 Section {
                     Toggle("启用线性折旧", isOn: $enabled)
                     if enabled {

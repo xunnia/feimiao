@@ -64,6 +64,72 @@ void main() {
       expect(w['transport'], closeTo(0.2, 0.0001));
     });
 
+    test('平均建议只使用人民币净额，不把外币当人民币相加', () {
+      TransactionRecord rec(String amount, String currency) =>
+          TransactionRecord.create(
+            kind: TransactionKind.expense,
+            amount: Decimal.parse(amount),
+            categoryName: '午餐',
+            accountName: '',
+            toAccountName: '',
+            date: DateTime(2026, 6, 5),
+            currencyCode: currency,
+          );
+      expect(
+          BudgetSuggestion.averageMonthlySpend([
+            rec('100', 'CNY'),
+            rec('900', 'USD'),
+            rec('0', 'CNY'),
+          ], now: DateTime(2026, 7, 10)),
+          Decimal.fromInt(100));
+      expect(
+          BudgetSuggestion.averageMonthlySpend([rec('900', 'USD')],
+              now: DateTime(2026, 7, 10)),
+          isNull);
+    });
+
+    test('平均建议的整数元四舍五入边界不丢分', () {
+      TransactionRecord rec(String amount, int month) =>
+          TransactionRecord.create(
+            kind: TransactionKind.expense,
+            amount: Decimal.parse(amount),
+            categoryName: '午餐',
+            accountName: '',
+            toAccountName: '',
+            date: DateTime(2026, month, 5),
+          );
+      expect(
+          BudgetSuggestion.averageMonthlySpend([
+            rec('149.49', 5),
+            rec('149.49', 6),
+          ], now: DateTime(2026, 7, 10)),
+          Decimal.fromInt(149));
+      expect(
+          BudgetSuggestion.averageMonthlySpend([
+            rec('149.49', 5),
+            rec('149.51', 6),
+          ], now: DateTime(2026, 7, 10)),
+          Decimal.fromInt(150));
+    });
+
+    test('页面建议先取整元再取整百，低额至少100，没有记录不猜数', () {
+      TransactionRecord rec(String amount) => TransactionRecord.create(
+            kind: TransactionKind.expense,
+            amount: Decimal.parse(amount),
+            date: DateTime(2026, 6, 5),
+          );
+      int? suggested(String amount) => BudgetSuggestion.suggestedMonthlyYuan(
+            [rec(amount)],
+            now: DateTime(2026, 7, 10),
+          );
+      expect(suggested('149.49'), 100);
+      expect(suggested('149.50'), 200);
+      expect(suggested('0.01'), 100);
+      expect(
+          BudgetSuggestion.suggestedMonthlyYuan([], now: DateTime(2026, 7, 10)),
+          isNull);
+    });
+
     test('split 整元切分且合计等于总额，零头给最大头', () {
       final out = BudgetSuggestion.split(
         total: Decimal.fromInt(1000),
