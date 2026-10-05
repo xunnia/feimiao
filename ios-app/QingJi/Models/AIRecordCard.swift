@@ -6,6 +6,7 @@ import QingJiCore
 /// 解析结果和真正写入的交易 ID 分开保存：解析卡可以跨重启恢复，整批撤销
 /// 只会触碰这张卡实际创建的交易，不会误删用户后来手动记的账。
 struct AIRecordCardState: Codable, Equatable, Sendable {
+    var bookID: UUID?
     var entries: [ParsedEntry]
     var categoryKeys: [String?]
     var transactionIDs: [UUID?]
@@ -16,6 +17,7 @@ struct AIRecordCardState: Codable, Equatable, Sendable {
 
     init(
         entries: [ParsedEntry],
+        bookID: UUID? = nil,
         categoryKeys: [String?] = [],
         transactionIDs: [UUID?] = [],
         deletedIndices: Set<Int> = [],
@@ -24,6 +26,7 @@ struct AIRecordCardState: Codable, Equatable, Sendable {
         feedback: String = ""
     ) {
         self.entries = entries
+        self.bookID = bookID
         self.categoryKeys = categoryKeys
         self.transactionIDs = transactionIDs
         self.deletedIndices = deletedIndices
@@ -33,10 +36,10 @@ struct AIRecordCardState: Codable, Equatable, Sendable {
     }
 
     func categoryKey(at index: Int) -> String? {
-        index < categoryKeys.count ? categoryKeys[index] : nil
+        index >= 0 && index < categoryKeys.count ? categoryKeys[index] : nil
     }
 
     func transactionID(at index: Int) -> UUID? {
-        index < transactionIDs.count ? transactionIDs[index] : nil
+        index >= 0 && index < transactionIDs.count ? transactionIDs[index] : nil
     }
 }

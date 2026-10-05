@@ -31,7 +31,7 @@ struct AIChatAttachment: Identifiable, Hashable, Sendable {
 }
 
 enum AIChatAttachmentStore {
-    static let maxImages = 3
+    static let maxImages = 4
     static let maxFiles = 10
     static let maxImageBytes = 20 * 1024 * 1024
     static let maxFileBytes = 50 * 1024 * 1024

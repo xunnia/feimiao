@@ -1109,7 +1109,8 @@ enum AssetStore {
         _ asset: PhysicalAsset,
         at date: Date = Date(),
         note: String = "退货退款",
-        in context: ModelContext
+        in context: ModelContext,
+        save: AssetFinancialCommand.Save = { try $0.save() }
     ) throws -> MoneyTransaction {
         guard asset.lifecycle == .owned || asset.lifecycle == .idle else {
             throw Error.returnNotAvailable
@@ -1145,43 +1146,45 @@ enum AssetStore {
         let previousLifecycle = asset.lifecycle
         let previousInclude = asset.includeInNetWorth
         let previousEndedAt = asset.endedAt
-        let refund = try LedgerStore.createOffset(
-            for: original,
-            amount: status.remainingAmount,
-            note: note,
-            eventType: .refund,
-            settlementAccount: original.account,
-            settledAt: date,
-            in: context
-        )
-        asset.lifecycle = .returned
-        asset.currentValue = .zero
-        asset.includeInNetWorth = false
-        asset.endedAt = date
-        asset.updatedAt = date
-        context.insert(AssetValuation(
-            assetID: asset.stableID,
-            value: .zero,
-            sourceRaw: "status_zero",
-            valuedAt: date,
-            note: "确认退货"
-        ))
-        context.insert(AssetEvent(
-            assetID: asset.stableID,
-            kind: .returned,
-            occurredAt: date,
-            value: status.remainingAmount,
-            note: note,
-            metadataJSON: metadataJSON([
-                "refund_transaction_id": refund.stableID.uuidString,
-                "previous_value": previousValue.description,
-                "previous_lifecycle": previousLifecycle.rawValue,
-                "previous_include_in_net_worth": previousInclude ? "1" : "0",
-                "previous_ended_at": previousEndedAt?.timeIntervalSince1970.description ?? ""
-            ])
-        ))
-        try context.save()
-        return refund
+        let previousUpdatedAt = asset.updatedAt
+        let previousOriginalUpdatedAt = original.updatedAt
+        return try AssetFinancialCommand.perform(in: context, save: save) { changes in
+            changes.restoreOnFailure {
+                asset.lifecycle = previousLifecycle
+                asset.currentValue = previousValue
+                asset.includeInNetWorth = previousInclude
+                asset.endedAt = previousEndedAt
+                asset.updatedAt = previousUpdatedAt
+                original.updatedAt = previousOriginalUpdatedAt
+            }
+            let refund = try LedgerStore.createOffset(
+                for: original, amount: status.remainingAmount, note: note, eventType: .refund,
+                settlementAccount: original.account, settledAt: date, in: context,
+                saveImmediately: false
+            )
+            changes.restoreOnFailure { context.delete(refund) }
+            asset.lifecycle = .returned
+            asset.currentValue = .zero
+            asset.includeInNetWorth = false
+            asset.endedAt = date
+            asset.updatedAt = date
+            changes.insert(AssetValuation(
+                assetID: asset.stableID, value: .zero, sourceRaw: "status_zero",
+                valuedAt: date, note: "确认退货"
+            ))
+            changes.insert(AssetEvent(
+                assetID: asset.stableID, kind: .returned, occurredAt: date,
+                value: status.remainingAmount, note: note,
+                metadataJSON: metadataJSON([
+                    "refund_transaction_id": refund.stableID.uuidString,
+                    "previous_value": previousValue.description,
+                    "previous_lifecycle": previousLifecycle.rawValue,
+                    "previous_include_in_net_worth": previousInclude ? "1" : "0",
+                    "previous_ended_at": previousEndedAt?.timeIntervalSince1970.description ?? ""
+                ])
+            ))
+            return refund
+        }
     }
 
     /// 撤销退货状态只恢复物品本身；原账单退款保留，和 Android 的审计语义一致。
@@ -1367,6 +1370,11 @@ enum ReceivableStore {
         case invalidAmount
         case exceedsRemaining
         case recoveryNotLatest
+        case invalidAccount
+        case inactiveAsset
+        case recoveryConflict
+        case eventBeforeBalanceAnchor
+        case futureRecovery
 
         var errorDescription: String? {
             switch self {
@@ -1374,6 +1382,11 @@ enum ReceivableStore {
             case .invalidAmount: return "金额必须大于 0。"
             case .exceedsRemaining: return "收回金额不能超过剩余金额。"
             case .recoveryNotLatest: return "只能从最近一次收回开始撤销。"
+            case .invalidAccount: return "到账账户不存在、已停用或币种与权益不一致。"
+            case .inactiveAsset: return "只有待收回或部分收回的权益可以继续收回。"
+            case .recoveryConflict: return "权益或到账流水已变更，请先核对最近一次收回记录，不能直接撤销。"
+            case .eventBeforeBalanceAnchor: return "收回日期早于账户期初或最近余额核对，请先核对该账户和到账日期。"
+            case .futureRecovery: return "不能把未来日期记为已经到账，请选择实际收回日期。"
             }
         }
     }
@@ -1390,7 +1403,11 @@ enum ReceivableStore {
     ) throws -> [ReceivableRecovery] {
         try context.fetch(FetchDescriptor<ReceivableRecovery>(
             sortBy: [SortDescriptor(\ReceivableRecovery.recoveredAt, order: .reverse)]
-        )).filter { $0.receivableID == asset.stableID }
+        )).filter { $0.receivableID == asset.stableID }.sorted {
+            if $0.recoveredAt != $1.recoveredAt { return $0.recoveredAt > $1.recoveredAt }
+            if $0.createdAt != $1.createdAt { return $0.createdAt > $1.createdAt }
+            return $0.stableID.uuidString > $1.stableID.uuidString
+        }
     }
 
     @discardableResult
@@ -1466,46 +1483,204 @@ enum ReceivableStore {
         in context: ModelContext,
         account: Account? = nil,
         date: Date = Date(),
-        note: String = ""
+        note: String = "",
+        save: AssetFinancialCommand.Save = { try $0.save() }
     ) throws -> ReceivableRecovery {
         let normalizedAmount = MoneyNormalization.roundToCents(amount)
         guard normalizedAmount > 0 else { throw Error.invalidAmount }
+        guard date <= Date() else { throw Error.futureRecovery }
+        guard !asset.isDeleted, asset.lifecycle == .active || asset.lifecycle == .partiallyRecovered else {
+            throw Error.inactiveAsset
+        }
         guard normalizedAmount <= asset.remainingAmount else { throw Error.exceedsRemaining }
-        let recovery = ReceivableRecovery(
-            receivableID: asset.stableID,
-            amount: normalizedAmount,
-            recoveredAt: date,
-            targetAccountID: account?.stableID,
-            note: note.trimmingCharacters(in: .whitespacesAndNewlines)
-        )
-        context.insert(recovery)
-        asset.remainingAmount -= normalizedAmount
-        asset.lifecycle = asset.remainingAmount == 0 ? .recovered : .partiallyRecovered
-        if asset.remainingAmount == 0 { asset.includeInNetWorth = false }
-        asset.updatedAt = Date()
-        try context.save()
-        return recovery
+        if let account {
+            let accounts = try context.fetch(FetchDescriptor<Account>())
+            guard accounts.contains(where: { $0.stableID == account.stableID }),
+                  !account.isDeleted, account.status == .active,
+                  account.currencyCode.uppercased() == asset.currencyCode.uppercased() else {
+                throw Error.invalidAccount
+            }
+            guard try AssetFinancialCommand.allowsEvent(at: date, for: account, in: context) else {
+                throw Error.eventBeforeBalanceAnchor
+            }
+        }
+        let book = try context.fetch(FetchDescriptor<Book>()).first { $0.stableID == asset.bookID }
+        let before = (asset.remainingAmount, asset.lifecycleRaw, asset.includeInNetWorth,
+                      asset.economicStatusRaw, asset.endedAt, asset.updatedAt)
+        let existingTransactions = try LedgerStore.allTransactions(in: context)
+        let accountCheckpoints = try account.map { try AssetFinancialCommand.activeAnchors(for: $0.stableID, in: context) } ?? []
+        let balanceBefore = account.map { LedgerStore.accountBalance(for: $0, transactions: existingTransactions, checkpoints: accountCheckpoints) }
+        let sequence = try AssetFinancialCommand.nextSequence(for: asset.stableID, command: "receivable_recovery", in: context)
+        return try AssetFinancialCommand.perform(in: context, save: save) { changes in
+            changes.restoreOnFailure {
+                (asset.remainingAmount, asset.lifecycleRaw, asset.includeInNetWorth,
+                 asset.economicStatusRaw, asset.endedAt, asset.updatedAt) = before
+            }
+            let recovery = ReceivableRecovery(
+                receivableID: asset.stableID, amount: normalizedAmount, recoveredAt: date,
+                targetAccountID: account?.stableID, note: note.trimmingCharacters(in: .whitespacesAndNewlines)
+            )
+            if let account {
+                let transaction = MoneyTransaction(
+                    amount: normalizedAmount, kind: .income, date: date,
+                    note: note.isEmpty ? "收回权益：\(asset.name)" : note,
+                    currencyCode: asset.currencyCode, account: account, book: book,
+                    timePrecision: .dateOnly, settledAt: date, settlementQuality: .userConfirmed,
+                    settlementAccountID: account.stableID, settlementAccountQuality: .userConfirmed,
+                    eventType: .receivableRecovery, isExcluded: true
+                )
+                changes.insert(transaction)
+                recovery.transactionID = transaction.stableID
+            }
+            changes.insert(recovery)
+            asset.remainingAmount = MoneyNormalization.roundToCents(asset.remainingAmount - normalizedAmount)
+            asset.lifecycle = asset.remainingAmount == 0 ? .recovered : .partiallyRecovered
+            asset.economicStatusRaw = asset.remainingAmount == 0 ? "recovered" : "partial_recovered"
+            if asset.remainingAmount == 0 { asset.includeInNetWorth = false; asset.endedAt = date }
+            asset.updatedAt = Date()
+            changes.insert(AssetEvent(
+                assetID: asset.stableID, kind: .edited, occurredAt: date, value: normalizedAmount,
+                note: "收回权益", metadataJSON: AssetFinancialCommand.metadata([
+                    "command": "receivable_recovery", "recovery_id": recovery.stableID.uuidString,
+                    "sequence": String(sequence),
+                    "transaction_id": recovery.transactionID?.uuidString ?? "",
+                    "target_account_id": recovery.targetAccountID?.uuidString ?? "",
+                    "original_amount": asset.originalAmount.description, "currency_code": asset.currencyCode,
+                    "previous_remaining": before.0.description, "remaining_after": asset.remainingAmount.description,
+                    "previous_lifecycle": before.1, "previous_include_in_net_worth": before.2 ? "1" : "0",
+                    "include_after": asset.includeInNetWorth ? "1" : "0", "previous_economic_status": before.3,
+                    "lifecycle_after": asset.lifecycleRaw, "economic_status_after": asset.economicStatusRaw,
+                    "ended_at_after": asset.endedAt?.timeIntervalSince1970.description ?? "",
+                    "previous_ended_at": before.4?.timeIntervalSince1970.description ?? ""
+                ])
+            ))
+            if let account, let balanceBefore {
+                let actual = LedgerStore.accountBalance(for: account, transactions: try LedgerStore.allTransactions(in: context),
+                                                       checkpoints: accountCheckpoints)
+                guard MoneyNormalization.roundToCents(actual) == MoneyNormalization.roundToCents(balanceBefore + normalizedAmount) else {
+                    throw Error.recoveryConflict
+                }
+            }
+            return recovery
+        }
     }
 
     static func undoLatestRecovery(
         _ asset: ReceivableAsset,
-        in context: ModelContext
+        in context: ModelContext,
+        save: AssetFinancialCommand.Save = { try $0.save() }
     ) throws {
         let items = try recoveries(for: asset, in: context)
-        guard let latest = items.first else { return }
-        guard Calendar.current.isDate(
-            latest.recoveredAt,
-            equalTo: items.map(\.recoveredAt).max() ?? latest.recoveredAt,
-            toGranularity: .second
-        ) else {
-            throw Error.recoveryNotLatest
+        let events = try context.fetch(FetchDescriptor<AssetEvent>())
+        let recoveryEvents = events.filter {
+            $0.assetID == asset.stableID && AssetFinancialCommand.metadata(of: $0)["command"] == "receivable_recovery"
         }
-        context.delete(latest)
-        asset.remainingAmount += latest.amount
-        asset.lifecycle = asset.remainingAmount >= asset.originalAmount ? .active : .partiallyRecovered
-        asset.includeInNetWorth = true
-        asset.updatedAt = Date()
-        try context.save()
+        func sequence(of recovery: ReceivableRecovery) -> Int {
+            guard let event = recoveryEvents.first(where: {
+                AssetFinancialCommand.metadata(of: $0)["recovery_id"] == recovery.stableID.uuidString
+            }) else { return 0 }
+            return Int(AssetFinancialCommand.metadata(of: event)["sequence"] ?? "") ?? 0
+        }
+        guard let latest = items.max(by: {
+            if sequence(of: $0) != sequence(of: $1) { return sequence(of: $0) < sequence(of: $1) }
+            if $0.createdAt != $1.createdAt { return $0.createdAt < $1.createdAt }
+            return $0.stableID.uuidString < $1.stableID.uuidString
+        }) else { return }
+        guard !asset.isDeleted, latest.amount > 0, latest.amount == MoneyNormalization.roundToCents(latest.amount),
+              asset.originalAmount > 0, asset.remainingAmount >= 0,
+              asset.lifecycle == .partiallyRecovered || asset.lifecycle == .recovered,
+              asset.remainingAmount + latest.amount <= asset.originalAmount else { throw Error.recoveryConflict }
+        let event = events.first {
+            $0.assetID == asset.stableID &&
+            AssetFinancialCommand.metadata(of: $0)["command"] == "receivable_recovery" &&
+            AssetFinancialCommand.metadata(of: $0)["recovery_id"] == latest.stableID.uuidString
+        }
+        let metadata = event.map(AssetFinancialCommand.metadata(of:)) ?? [:]
+        if let event {
+            guard let original = metadata["original_amount"].flatMap({ Decimal(string: $0) }),
+                  let after = metadata["remaining_after"].flatMap({ Decimal(string: $0) }),
+                  let previous = metadata["previous_remaining"].flatMap({ Decimal(string: $0) }),
+                  original == asset.originalAmount, after == asset.remainingAmount,
+                  previous == MoneyNormalization.roundToCents(after + latest.amount), previous <= original,
+                  metadata["lifecycle_after"] == asset.lifecycleRaw,
+                  metadata["economic_status_after"] == asset.economicStatusRaw,
+                  metadata["include_after"] == (asset.includeInNetWorth ? "1" : "0"),
+                  metadata["currency_code"] == asset.currencyCode,
+                  metadata["transaction_id"] == (latest.transactionID?.uuidString ?? ""),
+                  metadata["target_account_id"] == (latest.targetAccountID?.uuidString ?? ""),
+                  metadata["ended_at_after"] == (asset.endedAt?.timeIntervalSince1970.description ?? ""),
+                  event.value == latest.amount, event.occurredAt == latest.recoveredAt,
+                  let previousLifecycle = metadata["previous_lifecycle"].flatMap(ReceivableLifecycle.init(rawValue:)),
+                  previousLifecycle == .active || previousLifecycle == .partiallyRecovered,
+                  ["0", "1"].contains(metadata["previous_include_in_net_worth"] ?? "") else {
+                throw Error.recoveryConflict
+            }
+        } else if latest.targetAccountID != nil || latest.transactionID != nil {
+            // Only legacy recoveries without an account are safe to undo without an arrival journal.
+            throw Error.recoveryConflict
+        }
+        guard (latest.targetAccountID == nil) == (latest.transactionID == nil) else { throw Error.recoveryConflict }
+        let transactions = try context.fetch(FetchDescriptor<MoneyTransaction>())
+        var transaction: MoneyTransaction?
+        if let id = latest.transactionID {
+            guard let linked = transactions.first(where: { $0.stableID == id }),
+                  linked.eventType == .receivableRecovery, linked.kind == .income, linked.isExcluded,
+                  linked.refundOfID == nil, linked.toAccount == nil,
+                  linked.date == latest.recoveredAt, linked.settledAt == latest.recoveredAt,
+                  linked.amount == latest.amount, linked.settlementAccountID == latest.targetAccountID,
+                  linked.account?.stableID == latest.targetAccountID,
+                  linked.currencyCode.uppercased() == asset.currencyCode.uppercased(),
+                  !transactions.contains(where: { $0.refundOfID == id }) else {
+                throw Error.recoveryConflict
+            }
+            transaction = linked
+        }
+        if let id = latest.targetAccountID, latest.transactionID != nil,
+           try !AssetFinancialCommand.allowsUndo(for: [id], createdAt: event?.createdAt ?? latest.createdAt, in: context) {
+            throw Error.recoveryConflict
+        }
+        let before = (asset.remainingAmount, asset.lifecycleRaw, asset.includeInNetWorth,
+                      asset.economicStatusRaw, asset.endedAt, asset.updatedAt)
+        let targetAccount = try context.fetch(FetchDescriptor<Account>()).first { $0.stableID == latest.targetAccountID }
+        let checkpoints = try targetAccount.map { try AssetFinancialCommand.activeAnchors(for: $0.stableID, in: context) } ?? []
+        let balanceBefore = targetAccount.map { LedgerStore.accountBalance(for: $0, transactions: transactions, checkpoints: checkpoints) }
+        if latest.transactionID != nil,
+           (targetAccount == nil || targetAccount?.currencyCode.uppercased() != asset.currencyCode.uppercased()) {
+            throw Error.recoveryConflict
+        }
+        try AssetFinancialCommand.perform(in: context, save: save) { changes in
+            changes.restoreOnFailure {
+                (asset.remainingAmount, asset.lifecycleRaw, asset.includeInNetWorth,
+                 asset.economicStatusRaw, asset.endedAt, asset.updatedAt) = before
+            }
+            if let transaction { changes.delete(transaction) }
+            changes.delete(latest)
+            asset.remainingAmount = metadata["previous_remaining"].flatMap { Decimal(string: $0) }
+                ?? MoneyNormalization.roundToCents(before.0 + latest.amount)
+            asset.lifecycleRaw = metadata["previous_lifecycle"]
+                ?? (asset.remainingAmount >= asset.originalAmount ? ReceivableLifecycle.active.rawValue : ReceivableLifecycle.partiallyRecovered.rawValue)
+            // Old recoveries have no evidence of the previous inclusion choice.
+            if let include = metadata["previous_include_in_net_worth"] { asset.includeInNetWorth = include == "1" }
+            asset.economicStatusRaw = metadata["previous_economic_status"] ?? asset.economicStatusRaw
+            if let ended = metadata["previous_ended_at"] {
+                asset.endedAt = Double(ended).map(Date.init(timeIntervalSince1970:))
+            }
+            asset.updatedAt = Date()
+            changes.insert(AssetEvent(
+                assetID: asset.stableID, kind: .restored, note: "撤销收回权益",
+                metadataJSON: AssetFinancialCommand.metadata([
+                    "command": "receivable_recovery_reversal", "recovery_id": latest.stableID.uuidString,
+                    "reversal_of": event?.stableID.uuidString ?? "", "legacy_unverified": event == nil ? "1" : "0"
+                ])
+            ))
+            if transaction != nil, let targetAccount, let balanceBefore {
+                let actual = LedgerStore.accountBalance(for: targetAccount, transactions: try LedgerStore.allTransactions(in: context),
+                                                       checkpoints: checkpoints)
+                guard MoneyNormalization.roundToCents(actual) == MoneyNormalization.roundToCents(balanceBefore - latest.amount) else {
+                    throw Error.recoveryConflict
+                }
+            }
+        }
     }
 
     static func setLost(_ asset: ReceivableAsset, in context: ModelContext, note: String = "") throws {
@@ -1540,13 +1715,23 @@ enum LiabilityStore {
         case invalidRepayment
         case accountMissing
         case sameAccount
+        case needsBalanceReview
+        case repaymentChanged
+        case eventBeforeBalanceAnchor
+        case inactiveProfile
+        case futureRepayment
 
         var errorDescription: String? {
             switch self {
             case .invalidPrincipal: return "负债本金必须大于 0。"
-            case .invalidRepayment: return "还款金额必须大于 0，且不能超过当前本金。"
+            case .invalidRepayment: return "还款金额必须大于 0，利息分类必须是支出分类。"
             case .accountMissing: return "还款账户不存在或已停用。"
             case .sameAccount: return "还款账户不能是负债账户本身。"
+            case .needsBalanceReview: return "负债档案本金与账户欠款口径不一致，请先在账户中核对实际欠款和档案本金，再记录还款。不会自动修改原数据。"
+            case .repaymentChanged: return "最近还款或负债档案已经变更，请先核对，不能直接撤销。"
+            case .eventBeforeBalanceAnchor: return "还款日期早于账户期初或最近余额核对，请先核对付款账户、负债账户和还款日期。"
+            case .inactiveProfile: return "只有还款中的负债档案可以记录还款，请先恢复或核对档案状态。"
+            case .futureRepayment: return "还款只能记录已发生的付款，不能选择未来日期。"
             }
         }
     }
@@ -1555,6 +1740,21 @@ enum LiabilityStore {
         try context.fetch(FetchDescriptor<LiabilityProfile>(sortBy: [
             SortDescriptor(\LiabilityProfile.updatedAt, order: .reverse)
         ]))
+    }
+
+    static func latestRepaymentEvent(for profile: LiabilityProfile, events: [AssetEvent]) -> AssetEvent? {
+        let items = events.filter { $0.assetID == profile.stableID }
+        let reversed = Set(items.compactMap { AssetFinancialCommand.metadata(of: $0)["reversal_of"] })
+        return items.filter {
+            AssetFinancialCommand.metadata(of: $0)["command"] == "liability_repayment" &&
+            !reversed.contains($0.stableID.uuidString)
+        }.sorted {
+            let left = Int(AssetFinancialCommand.metadata(of: $0)["sequence"] ?? "") ?? 0
+            let right = Int(AssetFinancialCommand.metadata(of: $1)["sequence"] ?? "") ?? 0
+            if left != right { return left > right }
+            if $0.createdAt != $1.createdAt { return $0.createdAt > $1.createdAt }
+            return $0.stableID.uuidString > $1.stableID.uuidString
+        }.first
     }
 
     @discardableResult
@@ -1652,10 +1852,14 @@ enum LiabilityStore {
         category: TxCategory?,
         date: Date = Date(),
         note: String = "",
-        in context: ModelContext
+        in context: ModelContext,
+        save: AssetFinancialCommand.Save = { try $0.save() }
     ) throws -> (principal: Decimal, interest: Decimal) {
         let normalizedAmount = MoneyNormalization.roundToCents(amount)
         guard normalizedAmount > 0 else { throw Error.invalidRepayment }
+        guard profile.currentPrincipal >= 0 else { throw Error.invalidPrincipal }
+        guard profile.lifecycle == .active else { throw Error.inactiveProfile }
+        guard date <= Date() else { throw Error.futureRepayment }
         guard fromAccount.status == .active && !fromAccount.isDeleted else { throw Error.accountMissing }
         let accounts = try context.fetch(FetchDescriptor<Account>())
         guard let liabilityAccountID = profile.accountID,
@@ -1668,45 +1872,190 @@ enum LiabilityStore {
             throw Error.accountMissing
         }
         guard liabilityAccount.stableID != fromAccount.stableID else { throw Error.sameAccount }
-        let hasPrincipal = profile.currentPrincipal > 0
-        // 信用卡档案常把本金记在负债账户余额上，currentPrincipal 为 0 时，
-        // 整笔还款仍是账户之间的转账，不把它虚构成利息。
-        let principal = hasPrincipal
-            ? (normalizedAmount < profile.currentPrincipal ? normalizedAmount : profile.currentPrincipal)
+        guard accounts.contains(where: { $0.stableID == fromAccount.stableID }),
+              profile.currencyCode.uppercased() == liabilityAccount.currencyCode.uppercased() else {
+            throw Error.accountMissing
+        }
+        guard try AssetFinancialCommand.allowsEvent(at: date, for: fromAccount, in: context),
+              try AssetFinancialCommand.allowsEvent(at: date, for: liabilityAccount, in: context) else {
+            throw Error.eventBeforeBalanceAnchor
+        }
+        let transactions = try LedgerStore.allTransactions(in: context)
+        let checkpoints = try AccountCheckpointStore.checkpoints(for: liabilityAccount.stableID, in: context)
+        let balance = MoneyNormalization.roundToCents(LedgerStore.accountBalance(
+            for: liabilityAccount, transactions: transactions, checkpoints: checkpoints
+        ))
+        let payerCheckpoints = try AccountCheckpointStore.checkpoints(for: fromAccount.stableID, in: context)
+        let payerBalance = LedgerStore.accountBalance(for: fromAccount, transactions: transactions, checkpoints: payerCheckpoints)
+        let pureCreditCardTransfer = profile.kind == .creditCard && profile.currentPrincipal == 0
+        if !pureCreditCardTransfer {
+            guard balance < 0 else { throw Error.needsBalanceReview }
+            if liabilityAccount.balanceMode == .legacyHybrid,
+               MoneyNormalization.roundToCents(profile.currentPrincipal) != -balance {
+                throw Error.needsBalanceReview
+            }
+        }
+        // Ledger-mode debt is the actual negative balance, not a stale profile.
+        // Zero-principal credit-card profiles retain the existing pure transfer.
+        let principal = !pureCreditCardTransfer
+            ? min(normalizedAmount, -balance)
             : normalizedAmount
-        let interest = hasPrincipal ? normalizedAmount - principal : .zero
-        if principal > 0 {
-            _ = try LedgerStore.createTransaction(
-                in: context,
-                amount: principal,
-                kind: .transfer,
-                date: date,
+        let interest = pureCreditCardTransfer ? .zero : normalizedAmount - principal
+        guard interest == 0 || category == nil || category?.kind == .expense else { throw Error.invalidRepayment }
+        let before = (profile.currentPrincipal, profile.lifecycleRaw, profile.updatedAt)
+        let sequence = try AssetFinancialCommand.nextSequence(for: profile.stableID, command: "liability_repayment", in: context)
+        try AssetFinancialCommand.perform(in: context, save: save) { changes in
+            changes.restoreOnFailure {
+                (profile.currentPrincipal, profile.lifecycleRaw, profile.updatedAt) = before
+            }
+            let principalTransaction = MoneyTransaction(
+                amount: principal, kind: .transfer, date: date,
                 note: note.isEmpty ? "偿还本金" : note,
-                account: fromAccount,
-                toAccount: liabilityAccount,
-                book: book,
-                timePrecision: .dateOnly
+                currencyCode: fromAccount.currencyCode, account: fromAccount,
+                toAccount: liabilityAccount, book: book, timePrecision: .dateOnly,
+                settledAt: date, settlementQuality: .userConfirmed,
+                settlementAccountID: fromAccount.stableID, settlementAccountQuality: .userConfirmed,
+                eventType: .transfer
             )
+            changes.insert(principalTransaction)
+            var interestTransaction: MoneyTransaction?
+            if interest > 0 {
+                let transaction = MoneyTransaction(
+                    amount: interest, kind: .expense, date: date,
+                    note: note.isEmpty ? "还款利息" : "\(note)（利息）",
+                    currencyCode: fromAccount.currencyCode, category: category,
+                    account: fromAccount, book: book, timePrecision: .dateOnly,
+                    settledAt: date, settlementQuality: .userConfirmed,
+                    settlementAccountID: fromAccount.stableID, settlementAccountQuality: .userConfirmed,
+                    eventType: .interest
+                )
+                changes.insert(transaction)
+                interestTransaction = transaction
+            }
+            if !pureCreditCardTransfer { profile.currentPrincipal = max(before.0 - principal, .zero) }
+            if balance + principal >= 0, profile.kind == .personalBorrow {
+                profile.lifecycle = .paidOff
+            }
+            profile.updatedAt = Date()
+            changes.insert(AssetEvent(
+                assetID: profile.stableID, kind: .edited, occurredAt: date, value: normalizedAmount,
+                note: "负债还款", metadataJSON: AssetFinancialCommand.metadata([
+                    "command": "liability_repayment", "account_id": liabilityAccount.stableID.uuidString,
+                    "sequence": String(sequence),
+                    "payer_account_id": fromAccount.stableID.uuidString,
+                    "balance_mode": liabilityAccount.balanceModeRaw,
+                    "original_principal": profile.originalPrincipal.description,
+                    "principal_before": before.0.description, "principal_after": profile.currentPrincipal.description,
+                    "lifecycle_before": before.1, "lifecycle_after": profile.lifecycleRaw,
+                    "principal_paid": principal.description, "interest_paid": interest.description,
+                    "currency_code": fromAccount.currencyCode,
+                    "principal_transaction_id": principalTransaction.stableID.uuidString,
+                    "interest_transaction_id": interestTransaction?.stableID.uuidString ?? ""
+                ])
+            ))
+            let current = try LedgerStore.allTransactions(in: context)
+            let payerAfter = LedgerStore.accountBalance(for: fromAccount, transactions: current, checkpoints: payerCheckpoints)
+            let debtAfter = LedgerStore.accountBalance(for: liabilityAccount, transactions: current, checkpoints: checkpoints)
+            guard MoneyNormalization.roundToCents(payerAfter) == MoneyNormalization.roundToCents(payerBalance - normalizedAmount),
+                  MoneyNormalization.roundToCents(debtAfter) == MoneyNormalization.roundToCents(balance + principal) else {
+                throw Error.needsBalanceReview
+            }
         }
-        if interest > 0 {
-            _ = try LedgerStore.createTransaction(
-                in: context,
-                amount: interest,
-                kind: .expense,
-                date: date,
-                note: note.isEmpty ? "还款利息" : "\(note)（利息）",
-                category: category,
-                account: fromAccount,
-                book: book,
-                timePrecision: .dateOnly
-            )
-        }
-        if hasPrincipal { profile.currentPrincipal -= principal }
-        if profile.currentPrincipal <= 0, profile.kind == .personalBorrow {
-            profile.lifecycle = .paidOff
-        }
-        profile.updatedAt = Date()
-        try context.save()
         return (principal, interest)
+    }
+
+    /// Old repayments without an event are never reconstructed from guesses.
+    static func undoLatestRepayment(
+        _ profile: LiabilityProfile,
+        in context: ModelContext,
+        save: AssetFinancialCommand.Save = { try $0.save() }
+    ) throws {
+        let events = try context.fetch(FetchDescriptor<AssetEvent>()).filter { $0.assetID == profile.stableID }
+        guard let event = latestRepaymentEvent(for: profile, events: events) else { throw Error.repaymentChanged }
+        let values = AssetFinancialCommand.metadata(of: event)
+        guard let principalBefore = values["principal_before"].flatMap({ Decimal(string: $0) }),
+              let principalAfter = values["principal_after"].flatMap({ Decimal(string: $0) }),
+              let principalPaid = values["principal_paid"].flatMap({ Decimal(string: $0) }),
+              let interestPaid = values["interest_paid"].flatMap({ Decimal(string: $0) }),
+              principalBefore >= 0, principalAfter >= 0, principalPaid > 0, interestPaid >= 0,
+              profile.originalPrincipal >= 0, principalBefore <= profile.originalPrincipal,
+              principalBefore == MoneyNormalization.roundToCents(principalBefore),
+              principalAfter == MoneyNormalization.roundToCents(principalAfter),
+              principalPaid == MoneyNormalization.roundToCents(principalPaid),
+              interestPaid == MoneyNormalization.roundToCents(interestPaid),
+              principalAfter == max(principalBefore - principalPaid, .zero),
+              values["lifecycle_before"] == LiabilityLifecycle.active.rawValue,
+              event.value == MoneyNormalization.roundToCents(principalPaid + interestPaid),
+              principalAfter == profile.currentPrincipal, values["lifecycle_after"] == profile.lifecycleRaw,
+              values["account_id"] == profile.accountID?.uuidString,
+              values["currency_code"] == profile.currencyCode else { throw Error.repaymentChanged }
+        if let recordedOriginal = values["original_principal"] {
+            guard let original = Decimal(string: recordedOriginal),
+                  original == profile.originalPrincipal else { throw Error.repaymentChanged }
+        }
+        let account = try context.fetch(FetchDescriptor<Account>()).first { $0.stableID == profile.accountID }
+        guard account?.balanceModeRaw == values["balance_mode"] else { throw Error.repaymentChanged }
+        guard let payerID = values["payer_account_id"].flatMap(UUID.init(uuidString:)),
+              let accountID = profile.accountID,
+              payerID != accountID,
+              try AssetFinancialCommand.allowsUndo(for: [payerID, accountID], createdAt: event.createdAt, in: context) else {
+            throw Error.repaymentChanged
+        }
+        let all = try LedgerStore.allTransactions(in: context)
+        guard let principalID = values["principal_transaction_id"].flatMap(UUID.init(uuidString:)),
+              let principal = all.first(where: { $0.stableID == principalID }),
+              principal.eventType == .transfer, principal.kind == .transfer, principal.refundOfID == nil,
+              !principal.isExcluded, principal.date == event.occurredAt, principal.settledAt == event.occurredAt,
+              principal.amount == principalPaid, principal.settlementAccountID == payerID,
+              principal.account?.stableID.uuidString == values["payer_account_id"],
+              principal.toAccount?.stableID.uuidString == values["account_id"],
+              principal.currencyCode == values["currency_code"],
+              !all.contains(where: { $0.refundOfID == principalID }) else { throw Error.repaymentChanged }
+        var interest: MoneyTransaction?
+        if interestPaid > 0 {
+            guard let interestID = values["interest_transaction_id"].flatMap(UUID.init(uuidString:)),
+                  let transaction = all.first(where: { $0.stableID == interestID }),
+                  transaction.eventType == .interest, transaction.kindRaw == TransactionKind.expense.rawValue,
+                  transaction.refundOfID == nil, transaction.toAccount == nil, !transaction.isExcluded,
+                  transaction.date == event.occurredAt, transaction.settledAt == event.occurredAt,
+                  transaction.amount == interestPaid, transaction.settlementAccountID == payerID,
+                  transaction.account?.stableID.uuidString == values["payer_account_id"],
+                  transaction.currencyCode == values["currency_code"],
+                  !all.contains(where: { $0.refundOfID == transaction.stableID }) else { throw Error.repaymentChanged }
+            interest = transaction
+        } else if values["interest_transaction_id"] != "" {
+            throw Error.repaymentChanged
+        }
+        let before = (profile.currentPrincipal, profile.lifecycleRaw, profile.updatedAt)
+        let accounts = try context.fetch(FetchDescriptor<Account>())
+        guard let debtAccount = accounts.first(where: { $0.stableID == profile.accountID }),
+              let payerAccount = accounts.first(where: { $0.stableID == payerID }),
+              debtAccount.currencyCode == values["currency_code"],
+              payerAccount.currencyCode == values["currency_code"] else { throw Error.repaymentChanged }
+        let debtCheckpoints = try AccountCheckpointStore.checkpoints(for: debtAccount.stableID, in: context)
+        let payerCheckpoints = try AccountCheckpointStore.checkpoints(for: payerAccount.stableID, in: context)
+        let debtBefore = LedgerStore.accountBalance(for: debtAccount, transactions: all, checkpoints: debtCheckpoints)
+        let payerBefore = LedgerStore.accountBalance(for: payerAccount, transactions: all, checkpoints: payerCheckpoints)
+        try AssetFinancialCommand.perform(in: context, save: save) { changes in
+            changes.restoreOnFailure { (profile.currentPrincipal, profile.lifecycleRaw, profile.updatedAt) = before }
+            changes.delete(principal)
+            if let interest { changes.delete(interest) }
+            profile.currentPrincipal = principalBefore
+            profile.lifecycleRaw = values["lifecycle_before"] ?? before.1
+            profile.updatedAt = Date()
+            changes.insert(AssetEvent(
+                assetID: profile.stableID, kind: .restored, note: "撤销负债还款",
+                metadataJSON: AssetFinancialCommand.metadata([
+                    "command": "liability_repayment_reversal", "reversal_of": event.stableID.uuidString
+                ])
+            ))
+            let current = try LedgerStore.allTransactions(in: context)
+            let debtAfter = LedgerStore.accountBalance(for: debtAccount, transactions: current, checkpoints: debtCheckpoints)
+            let payerAfter = LedgerStore.accountBalance(for: payerAccount, transactions: current, checkpoints: payerCheckpoints)
+            guard MoneyNormalization.roundToCents(debtAfter) == MoneyNormalization.roundToCents(debtBefore - principal.amount),
+                  MoneyNormalization.roundToCents(payerAfter) == MoneyNormalization.roundToCents(payerBefore + principal.amount + (interest?.amount ?? 0)) else {
+                throw Error.repaymentChanged
+            }
+        }
     }
 }
