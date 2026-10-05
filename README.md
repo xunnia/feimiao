@@ -24,4 +24,4 @@ Android 与原生 iOS 的个人记账应用。两端共用产品口径，分别�
 
 Android 更新入口：[VPS version.json](https://updates.xunni.dpdns.org/version.json)。**线上版本以该接口为准，不以旧标签 `android-latest` 或某个文档中的历史版本推断。**
 
-主线源码与线上 Android 版本一致（当前版本见 `android-app/pubspec.yaml`），集成记录和待办见 [`docs/02-项目进度.md`](docs/02-项目进度.md)。iOS 候选功能在各自分支接受 Xcode 验证，通过之前不覆盖主线，详见 [`docs/09-iOS.md`](docs/09-iOS.md)。
+`main` 是唯一集成主线，但尚未集成的 Android 交付可能先在独立分支；不要把主线、线上 APK 和当前工作分支视为同一版本。2026-10-06 最新 Android 接手基线为 [`codex/android-handoff-20261006`](https://github.com/xunnia/feimiao/tree/codex/android-handoff-20261006)，版本 `1.314.0+329`；请先读该分支 [`docs/02-项目进度.md`](docs/02-项目进度.md) 顶部接手入口，实际分支版本以 `android-app/pubspec.yaml` 为准。iOS 候选功能在各自分支接受 Xcode 验证，通过之前不覆盖主线，详见 [`docs/09-iOS.md`](docs/09-iOS.md)。
