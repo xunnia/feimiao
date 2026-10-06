@@ -27,6 +27,8 @@ struct PhysicalAssetDetailView: View {
     @State private var terminalAction: PhysicalAssetLifecycle?
     @State private var showReturnConfirmation = false
     @State private var errorMessage: String?
+    @Environment(\.dynamicTypeSize) private var typeSize
+    @ScaledMetric(relativeTo: .largeTitle) private var dailySize: CGFloat = 40
 
     private enum DetailSheet: String, Identifiable {
         case editor
@@ -62,13 +64,25 @@ struct PhysicalAssetDetailView: View {
         try? AssetStore.metrics(for: asset, in: context, asOf: AppClock.now)
     }
 
+    private var latestValuation: AssetValuation? {
+        assetValuations.first { $0.valuedAt <= AppClock.now }
+    }
+
+    private var hasUnconfirmedCost: Bool {
+        asset.acquisitionCostSourceRaw == AssetAcquisitionCostSource.manualUnknown.rawValue || assetLinks.contains {
+            ($0.linkTypeRaw == AssetTransactionLinkType.sourceTransaction.rawValue ||
+             $0.linkTypeRaw == AssetTransactionLinkType.purchaseTransaction.rawValue)
+                && $0.costQualityRaw != AssetAllocationCostQuality.exact.rawValue
+        }
+    }
+
     var body: some View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
                     hero
-                    actionGrid
-                    metricsSection
+                    warrantySection
+                    if asset.usageTrackingEnabled { metricsSection }
                     assetInfoSection
                     linkedTransactionsSection
                     eventSection
@@ -77,7 +91,7 @@ struct PhysicalAssetDetailView: View {
                 .padding(.vertical, 12)
             }
             .liquidGlassCanvas()
-            .navigationTitle(asset.name)
+            .navigationTitle("物品详情")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
@@ -165,54 +179,120 @@ struct PhysicalAssetDetailView: View {
     }
 
     private var hero: some View {
-        HStack(spacing: 14) {
-            Image(systemName: asset.kind.symbolName)
-                .font(.title2)
-                .foregroundStyle(.tint)
-                .frame(width: 54, height: 54)
-                .background(Color.accentColor.opacity(0.13), in: .circle)
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(alignment: .center, spacing: 14) {
+                Button { activeSheet = .evidence } label: { assetPhoto }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(asset.photoPath.isEmpty ? "添加物品照片" : "查看照片与凭证")
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(asset.name).font(.headline).foregroundStyle(.primary)
+                    ViewThatFits(in: .horizontal) {
+                        HStack(spacing: 6) { identityTags }
+                        VStack(alignment: .leading, spacing: 4) { identityTags }
+                    }
+                    .font(.caption).foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
             VStack(alignment: .leading, spacing: 4) {
-                Text(MoneyFormat.string(asset.currentValue, currencyCode: asset.currencyCode))
-                    .font(.title2.monospacedDigit().weight(.bold))
-                Text("当前估值 · \(asset.lifecycle.label)")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                if let metrics, let days = metrics.heldDays.value {
-                    Text("已持有 \(days) 天")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                Text(hasUnconfirmedCost ? "日均持有花费 · 按已知成本" : "日均持有花费")
+                    .font(.footnote).foregroundStyle(.secondary)
+                ViewThatFits(in: .horizontal) {
+                    HStack(alignment: .firstTextBaseline, spacing: 3) { dailyAmount }
+                    VStack(alignment: .leading, spacing: 3) { dailyAmount }
+                }
+                if let days = metrics?.heldDays.value {
+                    Text("已持有 \(days) 天\(asset.purchaseDate.map { " · \(dateText($0))购入" } ?? "")")
+                        .font(.footnote).foregroundStyle(.secondary)
+                } else {
+                    Text(metrics?.dailyHoldingCost.reason ?? "持有日期与成本待确认")
+                        .font(.footnote).foregroundStyle(.secondary)
+                }
+                if hasUnconfirmedCost {
+                    Text("购置成本或退款分配待确认，保值率暂不可计算")
+                        .font(.caption).foregroundStyle(Color.warning)
                 }
             }
-            Spacer(minLength: 8)
+            if typeSize >= .xxxLarge {
+                VStack(alignment: .leading, spacing: 12) { mainMetrics }
+            } else {
+                HStack(alignment: .top, spacing: 10) { mainMetrics }
+            }
+            Divider()
+            actionGrid
         }
         .padding(16)
-        .glassEffect(.regular, in: .rect(cornerRadius: 18))
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(asset.name)，\(MoneyFormat.string(asset.currentValue, currencyCode: asset.currencyCode))，\(asset.lifecycle.label)")
+        .appThemeCard(cornerRadius: 22)
+        .accessibilityIdentifier("physical-asset-hero")
+    }
+
+    @ViewBuilder private var assetPhoto: some View {
+        if let url = AttachmentStore.url(for: asset.thumbnailPath.isEmpty ? asset.photoPath : asset.thumbnailPath),
+           let image = UIImage(contentsOfFile: url.path) {
+            Image(uiImage: image).resizable().scaledToFill()
+                .frame(width: 68, height: 68)
+                .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+        } else {
+            VStack(spacing: 3) {
+                Image(systemName: asset.kind.symbolName).font(.title2)
+                Text(asset.photoPath.isEmpty ? "添加照片" : "照片待恢复").font(.system(size: 10.5))
+            }
+            .foregroundStyle(.secondary)
+            .frame(width: 68, height: 68)
+            .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .strokeBorder(Color.secondary.opacity(0.3), style: StrokeStyle(lineWidth: 1, dash: [4, 3])))
+        }
+    }
+
+    @ViewBuilder private var identityTags: some View {
+        Text(asset.kind.label)
+        Text(asset.lifecycle.label).foregroundStyle(Color.accentColor)
+        Text(asset.includeInNetWorth ? "计入净资产" : "未计入净资产")
+    }
+
+    @ViewBuilder private var dailyAmount: some View {
+        Text(AssetsPresentation.physicalDailyValue(metrics, costSource: asset.acquisitionCostSourceRaw)
+            .map { MoneyFormat.string($0, currencyCode: asset.currencyCode) } ?? "—")
+            .font(.system(size: dailySize, weight: .bold, design: .rounded))
+            .lineLimit(1).minimumScaleFactor(0.25)
+        Text("/天").font(.title3.weight(.semibold)).foregroundStyle(.secondary)
+    }
+
+    @ViewBuilder private var mainMetrics: some View {
+        detailMetric("当前估值", value: !isOwned ? MoneyFormat.string(asset.currentValue, currencyCode: asset.currencyCode, withSymbol: false)
+            : latestValuation.map { MoneyFormat.string($0.value, currencyCode: asset.currencyCode, withSymbol: false) } ?? "—",
+            subtitle: latestValuation.map { "\(dateText($0.valuedAt))估" } ?? (isOwned ? "未估值" : asset.lifecycle.label))
+        detailMetric("保值率", value: !hasUnconfirmedCost && latestValuation?.value == asset.currentValue
+            ? metrics?.valueRetentionRatio.value.map(retentionText) ?? "—" : "—",
+            subtitle: hasUnconfirmedCost ? "成本待确认" : latestValuation == nil ? "未估值"
+                : latestValuation?.value != asset.currentValue ? "估值口径待确认" : metrics?.valueRetentionRatio.value == nil
+                    ? metrics?.valueRetentionRatio.reason ?? "不可计算" : "估值 ÷ 净购置成本")
+        detailMetric("购置成本", value: asset.acquisitionCostSourceRaw == AssetAcquisitionCostSource.manualUnknown.rawValue ? "—"
+            : MoneyFormat.string(asset.purchasePrice, currencyCode: asset.currencyCode, withSymbol: false),
+            subtitle: hasUnconfirmedCost ? "分配待确认" : assetLinks.contains {
+                $0.linkTypeRaw == AssetTransactionLinkType.sourceTransaction.rawValue || $0.linkTypeRaw == AssetTransactionLinkType.purchaseTransaction.rawValue
+            } ? "已关联账单" : "手动记录")
+    }
+
+    private func detailMetric(_ title: String, value: String, subtitle: String) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(title).font(.caption).foregroundStyle(.secondary)
+            Text(value).font(.system(.subheadline, design: .rounded, weight: .bold))
+                .lineLimit(1).minimumScaleFactor(0.6)
+            Text(subtitle).font(.caption2).foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var actionGrid: some View {
-        LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
-            detailAction("编辑资料", systemImage: "pencil", enabled: isOwned) {
-                activeSheet = .editor
-            }
+        let columns = Array(repeating: GridItem(.flexible()), count: typeSize >= .xxxLarge ? 1 : 2)
+        return LazyVGrid(columns: columns, spacing: 8) {
             detailAction("更新估值", systemImage: "chart.line.uptrend.xyaxis", enabled: isOwned) {
                 activeSheet = .value
             }
             if isOwned {
                 detailAction("关联支出", systemImage: "link", enabled: true) {
                     activeSheet = .cost
-                }
-                if asset.usageTrackingEnabled {
-                    detailAction("记录使用", systemImage: "hand.tap", enabled: true) {
-                        perform { try AssetStore.addUsage(asset, in: context) }
-                    }
-                }
-                detailAction("出售物品", systemImage: "tag", enabled: true) {
-                    activeSheet = .sale
-                }
-                detailAction("确认退货", systemImage: "arrow.uturn.backward", enabled: true) {
-                    showReturnConfirmation = true
                 }
             } else if asset.lifecycle == .sold {
                 detailAction("撤销出售", systemImage: "arrow.uturn.backward", enabled: true) {
@@ -249,27 +329,23 @@ struct PhysicalAssetDetailView: View {
 
     @ViewBuilder
     private var metricsSection: some View {
-        DetailCard(title: "持有指标", systemImage: "gauge.with.dots.needle.67percent") {
-            DetailRow(label: "购置成本", value: MoneyFormat.string(asset.purchasePrice, currencyCode: asset.currencyCode))
-            if let daily = metrics?.dailyHoldingCost.value {
-                DetailRow(label: "日均持有花费", value: "\(MoneyFormat.string(daily, currencyCode: asset.currencyCode))/天")
-            } else {
-                DetailRow(label: "日均持有花费", value: metrics?.dailyHoldingCost.reason ?? "待确认")
-            }
+        DetailCard(title: "使用记录", systemImage: "hand.tap") {
             if let perUse = metrics?.perUseHoldingCost.value {
                 DetailRow(label: "每次使用成本", value: "\(MoneyFormat.string(perUse, currencyCode: asset.currencyCode))/次")
             }
-            if let ratio = metrics?.valueRetentionRatio.value {
-                DetailRow(label: "保值率", value: retentionText(ratio))
-            }
             if asset.usageTrackingEnabled {
                 DetailRow(label: "累计使用", value: "\(asset.usageCount) 次")
+            }
+            if isOwned {
+                detailAction("记录使用", systemImage: "plus", enabled: true) {
+                    perform { try AssetStore.addUsage(asset, in: context) }
+                }
             }
         }
     }
 
     private var assetInfoSection: some View {
-        DetailCard(title: "资产信息", systemImage: "shippingbox") {
+        DetailCard(title: "资料", systemImage: "shippingbox") {
             DetailRow(label: "类型", value: asset.kind.label)
             DetailRow(label: "来源", value: asset.sourceType.label)
             DetailRow(label: "状态", value: asset.lifecycle.label)
@@ -363,6 +439,15 @@ struct PhysicalAssetDetailView: View {
         Button("照片与凭证") { activeSheet = .evidence }
         Button("折旧设置") { activeSheet = .depreciation }
         if isOwned {
+            Button("出售物品") { activeSheet = .sale }
+            Button("确认退货") { showReturnConfirmation = true }
+            Button("更新估值") { activeSheet = .value }
+            Button("关联支出") { activeSheet = .cost }
+            if asset.usageTrackingEnabled {
+                Button("记录使用") { perform { try AssetStore.addUsage(asset, in: context) } }
+                Button("撤销最近使用") { perform { try AssetStore.undoLatestUsage(asset, in: context) } }
+                    .disabled(asset.usageCount <= 0)
+            }
             Button(asset.lifecycle == .idle ? "标记为在用" : "标记为闲置") {
                 perform {
                     try AssetStore.setLifecycle(
@@ -384,6 +469,25 @@ struct PhysicalAssetDetailView: View {
         } else if asset.lifecycle == .disposed || asset.lifecycle == .lost || asset.lifecycle == .gifted {
             Button("撤销结束持有") { perform { try AssetStore.undoEnd(asset, in: context) } }
         }
+    }
+
+    @ViewBuilder private var warrantySection: some View {
+        if let until = asset.warrantyUntil {
+            let remaining = Calendar.current.dateComponents([.day], from: Calendar.current.startOfDay(for: AppClock.now),
+                to: Calendar.current.startOfDay(for: until)).day ?? 0
+            VStack(alignment: .leading, spacing: 8) {
+                ViewThatFits(in: .horizontal) {
+                    HStack { Text("保修").font(.subheadline.weight(.medium)); Spacer(); warrantyText(until, days: remaining) }
+                    VStack(alignment: .leading, spacing: 4) { Text("保修").font(.subheadline.weight(.medium)); warrantyText(until, days: remaining) }
+                }
+            }
+            .padding(16).frame(maxWidth: .infinity, alignment: .leading).appThemeCard(cornerRadius: 22)
+        }
+    }
+
+    private func warrantyText(_ until: Date, days: Int) -> some View {
+        Text("\(days >= 0 ? "剩 \(days) 天" : "已到期") · 至 \(dateText(until))")
+            .font(.footnote).foregroundStyle(days < 0 ? Color.warning : Color.secondary)
     }
 
     private func finishTerminal(_ lifecycle: PhysicalAssetLifecycle) {
@@ -416,13 +520,12 @@ private struct DetailCard<Content: View>: View {
     @ViewBuilder let content: Content
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 9) {
-            Label(title, systemImage: systemImage)
-                .font(.headline)
-            content
+        VStack(alignment: .leading, spacing: 7) {
+            Text(title).font(.footnote).foregroundStyle(.secondary).padding(.horizontal, 16)
+            VStack(alignment: .leading, spacing: 10) { content }
+                .padding(16).frame(maxWidth: .infinity, alignment: .leading)
+                .appThemeCard(cornerRadius: 22)
         }
-        .padding(14)
-        .glassEffect(.regular, in: .rect(cornerRadius: 16))
     }
 }
 
@@ -431,13 +534,16 @@ private struct DetailRow: View {
     let value: String
 
     var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 12) {
-            Text(label)
-                .foregroundStyle(.secondary)
-            Spacer(minLength: 8)
-            Text(value)
-                .multilineTextAlignment(.trailing)
-                .lineLimit(3)
+        ViewThatFits(in: .horizontal) {
+            HStack(alignment: .firstTextBaseline, spacing: 12) {
+                Text(label).foregroundStyle(.secondary)
+                Spacer(minLength: 8)
+                Text(value).multilineTextAlignment(.trailing)
+            }
+            VStack(alignment: .leading, spacing: 3) {
+                Text(label).foregroundStyle(.secondary)
+                Text(value)
+            }
         }
         .font(.subheadline)
     }

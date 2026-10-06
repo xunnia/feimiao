@@ -44,6 +44,9 @@ struct AssetsView: View {
     @Query(sort: \NetWorthSnapshot.asOf)
     private var netWorthSnapshots: [NetWorthSnapshot]
     @Query private var receivableRecoveries: [ReceivableRecovery]
+    @Query private var assetValuations: [AssetValuation]
+    @Query private var verifiedCheckpoints: [NetWorthVerifiedCheckpointRecord]
+    @Environment(\.dynamicTypeSize) private var typeSize
 
     @State private var selectedTab: AssetTab = .overview
     @State private var showAddEntry = false
@@ -61,6 +64,9 @@ struct AssetsView: View {
     @State private var showArchivedFunds = false
     @State private var zeroAccountsExpanded = false
     @State private var editingAccount: Account?
+    @State private var fundsQuery = ""
+    @State private var fundsFilter = AssetsFundsFilter.all
+    @State private var fundsSort = AssetsFundsSort.recent
     let opensFirstDetail: Bool
     let startsOnAdd: Bool
     let startsOnPurchase: Bool
@@ -112,7 +118,7 @@ struct AssetsView: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
+            VStack(alignment: .leading, spacing: 14) {
                 Picker("资产类型", selection: $selectedTab) {
                     ForEach(AssetTab.allCases) { tab in
                         Text(tab.label).tag(tab)
@@ -351,22 +357,160 @@ struct AssetsView: View {
 
     private var netWorthSummary: some View {
         let value = currentBreakdown
-        return VStack(alignment: .leading, spacing: 16) {
-            AssetsOverviewDashboard(breakdown: value, snapshots: netWorthSnapshots)
-            AssetsStructureSection(breakdown: value)
+        let included = physicalAssets.filter {
+            !$0.isDeleted && $0.includeInNetWorth && ($0.lifecycle == .owned || $0.lifecycle == .idle)
+                && $0.currencyCode.uppercased() == "CNY"
         }
+        let missing = included.filter { asset in
+            !assetValuations.contains { $0.assetID == asset.stableID && $0.valuedAt <= AppClock.now }
+        }.count
+        let currentAccounts = accounts.filter { !$0.isDeleted && $0.status == .active && $0.includeInNetWorth }
+        let cnyAccounts = currentAccounts.filter { $0.currencyCode.uppercased() == "CNY" }
+        let debtIDs = Set(cnyAccounts.filter { balance(for: $0) < 0 }.map(\.stableID)).union(
+            liabilities.filter { profile in
+                profile.lifecycle == .active && profile.currentPrincipal > 0 && cnyAccounts.contains {
+                    $0.stableID == profile.accountID && $0.balanceMode != .ledger && balance(for: $0) >= 0
+                }
+            }.compactMap(\.accountID)
+        )
+        return VStack(alignment: .leading, spacing: 12) {
+            AssetsOverviewDashboard(
+                breakdown: value, snapshots: netWorthSnapshots, verifiedCheckpoints: verifiedCheckpoints,
+                cashAccountCount: currentAccounts.filter { $0.kind != .investment && $0.currencyCode.uppercased() == "CNY" && balance(for: $0) > 0 }.count,
+                includedItemCount: included.count,
+                excludedItemCount: visibleAssets.filter { !$0.includeInNetWorth }.count,
+                missingValuationCount: missing,
+                debtCount: debtIDs.count,
+                calibratedAccountCount: currentAccounts.filter { calibration(for: $0) != nil }.count,
+                accountCount: currentAccounts.count
+            )
+            pendingSection
+            AssetsStructureSection(breakdown: value, hasMissingValuations: missing > 0)
+        }
+    }
+
+    private struct PendingItem: Identifiable {
+        enum Destination { case account(Account), reconcile, liabilities, asset(PhysicalAsset) }
+        let id: String
+        let title: String
+        let subtitle: String
+        let symbol: String
+        let warning: Bool
+        let destination: Destination
+    }
+
+    private var pendingItems: [PendingItem] {
+        let active = accounts.filter { !$0.isDeleted && $0.status == .active }
+        var result: [PendingItem] = []
+        if let account = active.first(where: { !$0.kind.isLiability && balance(for: $0) < 0 }) {
+            result.append(PendingItem(id: "negative", title: "\(account.name)余额为负",
+                subtitle: MoneyFormat.string(balance(for: account), currencyCode: account.currencyCode),
+                symbol: "exclamationmark.triangle", warning: true, destination: .account(account)))
+        }
+        let stale = active.filter { account in
+            guard let checkpoint = calibration(for: account) else { return true }
+            return (Calendar.current.dateComponents([.day], from: Calendar.current.startOfDay(for: checkpoint.effectiveAt),
+                to: Calendar.current.startOfDay(for: AppClock.now)).day ?? 0) > 30
+        }
+        if !stale.isEmpty {
+            result.append(PendingItem(id: "calibration", title: "\(stale.count) 个账户待校准",
+                subtitle: stale.prefix(2).map(\.name).joined(separator: "、"), symbol: "clock", warning: false,
+                destination: .reconcile))
+        }
+        if let profile = liabilities.first(where: { profile in
+            guard profile.lifecycle == .active else { return false }
+            let amount = LiabilitiesView.displayedDebtAmount(for: profile, accounts: accounts,
+                transactions: transactions, checkpoints: checkpoints)
+            return amount.map { $0 > 0 } ?? (profile.currentPrincipal > 0)
+        }) {
+            let name = accounts.first { $0.stableID == profile.accountID }?.name ?? profile.kind.label
+            let amount = LiabilitiesView.displayedDebtAmount(for: profile, accounts: accounts,
+                transactions: transactions, checkpoints: checkpoints)
+            result.append(PendingItem(id: "liability", title: "\(name)待还款",
+                subtitle: amount.map { "待还 \(MoneyFormat.string($0, currencyCode: profile.currencyCode))" } ?? "金额待核对",
+                symbol: "creditcard", warning: false, destination: .liabilities))
+        }
+        if let asset = visibleAssets.first(where: { asset in
+            guard let until = asset.warrantyUntil, asset.lifecycle == .owned || asset.lifecycle == .idle else { return false }
+            let days = Calendar.current.dateComponents([.day], from: AppClock.now, to: until).day ?? -1
+            return days >= 0 && days <= 30
+        }), let until = asset.warrantyUntil {
+            result.append(PendingItem(id: "warranty", title: "\(asset.name)保修将到期",
+                subtitle: until.formatted(date: .abbreviated, time: .omitted), symbol: "checkmark.shield",
+                warning: false, destination: .asset(asset)))
+        }
+        return Array(result.prefix(3))
+    }
+
+    @ViewBuilder private var pendingSection: some View {
+        let items = pendingItems
+        if !items.isEmpty {
+            VStack(alignment: .leading, spacing: 7) {
+                HStack {
+                    Text("待处理")
+                    Spacer()
+                    Text("\(items.count)")
+                }
+                .font(.footnote).foregroundStyle(.secondary).padding(.horizontal, 16)
+                VStack(spacing: 0) {
+                    ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
+                        if index > 0 { Divider().padding(.leading, 58) }
+                        switch item.destination {
+                        case .account(let account):
+                            NavigationLink { AccountDetailView(account: account) } label: { pendingLabel(item) }
+                        case .reconcile:
+                            NavigationLink { ReconcileView() } label: { pendingLabel(item) }
+                        case .liabilities:
+                            NavigationLink { LiabilitiesView() } label: { pendingLabel(item) }
+                        case .asset(let asset):
+                            Button { detailAsset = asset } label: { pendingLabel(item) }
+                        }
+                    }
+                }
+                .buttonStyle(.plain)
+                .appThemeCard(cornerRadius: 22)
+            }
+            .accessibilityIdentifier("assets-pending")
+        }
+    }
+
+    private func pendingLabel(_ item: PendingItem) -> some View {
+        HStack(spacing: 12) {
+            Image(systemName: item.symbol).font(.body)
+                .foregroundStyle(item.warning ? Color.warning : Color.accentColor)
+                .frame(width: 34, height: 34)
+                .background((item.warning ? Color.warning : Color.accentColor).opacity(0.12),
+                            in: RoundedRectangle(cornerRadius: 11, style: .continuous))
+            VStack(alignment: .leading, spacing: 2) {
+                Text(item.title).font(.subheadline.weight(.medium)).foregroundStyle(.primary)
+                Text(item.subtitle).font(.caption).foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            Image(systemName: "chevron.right").font(.caption).foregroundStyle(.secondary)
+        }
+        .padding(.horizontal, 16).padding(.vertical, 11)
+        .contentShape(Rectangle())
     }
 
     private var fundsContent: some View {
         let visible = accounts.filter { !$0.isDeleted }
         let active = visible.filter { $0.status == .active }
         let archived = visible.filter { $0.status == .archived }
-        let selected = showArchivedFunds ? archived : active
-        let selectedReceivables = showArchivedFunds ? archivedReceivables : visibleReceivables
+        let selected = sortedFunds((showArchivedFunds ? archived : active).filter {
+            fundsFilter.includes($0.kind, balance: balance(for: $0))
+                && AssetsPresentation.matches(fundsQuery, values: $0.name, $0.institution)
+        })
+        let selectedReceivables = (fundsFilter == .all || fundsFilter == .receivables)
+            ? (showArchivedFunds ? archivedReceivables : visibleReceivables).filter {
+                AssetsPresentation.matches(fundsQuery, values: $0.name, $0.counterparty, $0.kind.label)
+            }.sorted { fundsSort == .name ? $0.name.localizedStandardCompare($1.name) == .orderedAscending : $0.updatedAt > $1.updatedAt }
+            : []
         let nonZero = selected.filter { showArchivedFunds || balance(for: $0) != 0 }
-        let zero = showArchivedFunds ? [] : active.filter { balance(for: $0) == 0 }
+        let zero = showArchivedFunds ? [] : selected.filter { balance(for: $0) == 0 }
 
         return VStack(alignment: .leading, spacing: 12) {
+            fundsSummary
+            fundsControls
             if showArchivedFunds {
                 Button {
                     showArchivedFunds = false
@@ -376,15 +520,25 @@ struct AssetsView: View {
                 }
                 .liquidGlassSurface(cornerRadius: 14)
             }
-            if !selectedReceivables.isEmpty {
-                receivableContent(selectedReceivables, archived: showArchivedFunds)
-            }
-
             ForEach(AccountKind.allCases, id: \.self) { kind in
                 let group = nonZero.filter { $0.kind == kind }
                 if !group.isEmpty {
                     fundsGroup(kind: kind, accounts: group, archived: showArchivedFunds)
                 }
+            }
+            if !selectedReceivables.isEmpty {
+                receivableContent(selectedReceivables, archived: showArchivedFunds)
+            }
+            if fundsFilter == .all || fundsFilter == .liabilities {
+                NavigationLink { LiabilitiesView() } label: {
+                    HStack {
+                        Label("负债与还款", systemImage: "creditcard")
+                        Spacer()
+                        Image(systemName: "chevron.right")
+                    }
+                    .font(.subheadline).foregroundStyle(.secondary).padding(16)
+                }
+                .buttonStyle(.plain).appThemeCard(cornerRadius: 22)
             }
 
             if !zero.isEmpty {
@@ -408,7 +562,7 @@ struct AssetsView: View {
                         }
                     }
                 }
-                .glassEffect(.regular, in: .rect(cornerRadius: 16))
+                .appThemeCard(cornerRadius: 22)
             }
 
             if !showArchivedFunds && (!archived.isEmpty || !archivedReceivables.isEmpty) {
@@ -424,11 +578,11 @@ struct AssetsView: View {
                     .foregroundStyle(.secondary)
                     .padding(16)
                 }
-                .glassEffect(.regular, in: .rect(cornerRadius: 16))
+                .appThemeCard(cornerRadius: 22)
             }
 
             if selected.isEmpty && selectedReceivables.isEmpty && zero.isEmpty {
-                emptySection(showArchivedFunds ? "没有已归档账户" : "还没有资金账户", systemImage: "wallet.pass")
+                emptySection(!fundsQuery.isEmpty || fundsFilter != .all ? "没有匹配的资金项目" : showArchivedFunds ? "没有已归档账户" : "还没有资金账户", systemImage: "wallet.pass")
             }
         }
         .accessibilityIdentifier("assets-funds")
@@ -438,28 +592,126 @@ struct AssetsView: View {
         LedgerStore.accountBalance(for: account, transactions: transactions, checkpoints: checkpoints)
     }
 
+    private func calibration(for account: Account) -> AccountBalanceCheckpointRecord? {
+        AssetsPresentation.latestCalibration(accountID: account.stableID, checkpoints: checkpoints, now: AppClock.now)
+    }
+
+    private func sortedFunds(_ selected: [Account]) -> [Account] {
+        selected.sorted {
+            switch fundsSort {
+            case .recent: return $0.updatedAt == $1.updatedAt ? $0.sortOrder < $1.sortOrder : $0.updatedAt > $1.updatedAt
+            case .name: return $0.name.localizedStandardCompare($1.name) == .orderedAscending
+            case .manual: return $0.sortOrder < $1.sortOrder
+            }
+        }
+    }
+
+    private var fundsSummary: some View {
+        let value = currentBreakdown
+        let uncovered = Set(accounts.filter {
+            !$0.isDeleted && $0.status == .active && $0.includeInNetWorth && $0.currencyCode.uppercased() != "CNY"
+        }.map { $0.currencyCode.uppercased() }).union(visibleReceivables.filter {
+            $0.includeInNetWorth && ($0.lifecycle == .active || $0.lifecycle == .partiallyRecovered)
+                && $0.currencyCode.uppercased() != "CNY"
+        }.map { $0.currencyCode.uppercased() })
+        let unavailable = !uncovered.isEmpty && value.cashAssets + value.investmentAssets + value.receivableAssets == 0
+            && value.totalLiabilities == 0
+        return ViewThatFits(in: .horizontal) {
+            HStack(alignment: .bottom, spacing: 12) {
+                fundsSummaryValues(value, unavailable: unavailable)
+                Spacer(minLength: 8)
+                fundsSummaryTotals(value, unavailable: unavailable, hasUncovered: !uncovered.isEmpty)
+            }
+            VStack(alignment: .leading, spacing: 8) {
+                fundsSummaryValues(value, unavailable: unavailable)
+                fundsSummaryTotals(value, unavailable: unavailable, hasUncovered: !uncovered.isEmpty)
+            }
+        }
+        .padding(.horizontal, 16).padding(.vertical, 14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .appThemeCard(cornerRadius: 22)
+    }
+
+    private func fundsSummaryValues(_ value: NetWorthStore.Breakdown, unavailable: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text("资金净值 · 人民币").font(.footnote).foregroundStyle(.secondary)
+            Text(unavailable ? "—" : AssetsOverviewDashboard.amount(value.netWorth - value.physicalAssets))
+                .font(.system(.title, design: .rounded, weight: .bold))
+                .foregroundStyle(value.netWorth - value.physicalAssets < 0 ? Color.warning : Color.primary)
+                .lineLimit(1).minimumScaleFactor(0.6)
+        }
+    }
+
+    private func fundsSummaryTotals(_ value: NetWorthStore.Breakdown, unavailable: Bool, hasUncovered: Bool) -> some View {
+        VStack(alignment: .trailing, spacing: 3) {
+            Text("资金 \(unavailable ? "—" : AssetsOverviewDashboard.amount(value.cashAssets + value.investmentAssets + value.receivableAssets))")
+            Text("负债 \(unavailable ? "—" : AssetsOverviewDashboard.amount(value.totalLiabilities))")
+            if hasUncovered { Text("外币未换算").foregroundStyle(Color.warning) }
+        }
+        .font(.caption).foregroundStyle(.secondary)
+    }
+
+    private var fundsControls: some View {
+        VStack(spacing: 10) {
+            HStack(spacing: 8) {
+                Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                TextField("搜索账户或机构", text: $fundsQuery).font(.subheadline)
+                    .textInputAutocapitalization(.never).autocorrectionDisabled()
+                if !fundsQuery.isEmpty {
+                    Button { fundsQuery = "" } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary) }
+                        .buttonStyle(.plain).accessibilityLabel("清除搜索")
+                }
+            }
+            .padding(.horizontal, 12).padding(.vertical, 10)
+            .appThemeInput(cornerRadius: 13)
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 7) {
+                    ForEach(AssetsFundsFilter.allCases) { filter in
+                        Button { fundsFilter = filter } label: {
+                            Text(filter.label).font(.subheadline.weight(fundsFilter == filter ? .semibold : .regular))
+                        }
+                        .buttonStyle(.glass)
+                        .tint(fundsFilter == filter ? Color.accentColor : Color.secondary)
+                        .accessibilityAddTraits(fundsFilter == filter ? .isSelected : [])
+                    }
+                    Menu {
+                        Picker("排序", selection: $fundsSort) {
+                            ForEach(AssetsFundsSort.allCases) { Text($0.label).tag($0) }
+                        }
+                    } label: {
+                        Label(fundsSort.label, systemImage: "arrow.up.arrow.down").font(.subheadline)
+                    }
+                    .buttonStyle(.glass)
+                }
+                .padding(.vertical, 2)
+            }
+        }
+    }
+
     private func fundsGroup(kind: AccountKind, accounts group: [Account], archived: Bool) -> some View {
         let currencies = Set(group.map(\.currencyCode))
         let subtotal = group.reduce(Decimal.zero) { $0 + balance(for: $1) }
-        return VStack(spacing: 0) {
+        return VStack(alignment: .leading, spacing: 7) {
             HStack(spacing: 6) {
-                Text(kind.fundsLabel).font(.subheadline.weight(.semibold))
-                Text("\(group.count) 个账户").font(.caption).foregroundStyle(.secondary)
+                Text("\(kind.fundsLabel) · \(group.count)").font(.footnote)
                 Spacer(minLength: 4)
-                if currencies.count == 1, let currency = currencies.first {
+                if group.count > 1, currencies.count == 1, let currency = currencies.first {
                     Text(MoneyFormat.string(subtotal, currencyCode: currency))
                         .font(.subheadline.monospacedDigit())
                         .foregroundStyle(subtotal < 0 ? Color.warning : Color.secondary)
                 }
             }
+            .foregroundStyle(.secondary)
             .padding(.horizontal, 16)
-            .padding(.vertical, 12)
-            ForEach(group.indices, id: \.self) { index in
-                if index > 0 { Divider().padding(.horizontal, 16) }
-                fundsRow(group[index], archived: archived)
+            .padding(.top, 4)
+            VStack(spacing: 0) {
+                ForEach(group.indices, id: \.self) { index in
+                    if index > 0 { Divider().padding(.leading, 62) }
+                    fundsRow(group[index], archived: archived)
+                }
             }
+            .appThemeCard(cornerRadius: 22)
         }
-        .glassEffect(.regular, in: .rect(cornerRadius: 16))
     }
 
     private func fundsRow(_ account: Account, archived: Bool) -> some View {
@@ -467,25 +719,25 @@ struct AssetsView: View {
         return NavigationLink {
             AccountDetailView(account: account)
         } label: {
-            HStack(spacing: 12) {
+            HStack(alignment: .center, spacing: 12) {
                 Image(systemName: account.kind.symbol)
                     .font(.body)
                     .foregroundStyle(.secondary)
                     .frame(width: 34, height: 34)
-                    .background(Color.secondary.opacity(0.1), in: .circle)
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(account.name).font(.body)
-                    Text(account.institution.isEmpty ? account.kind.fundsLabel
-                         : "\(account.kind.fundsLabel) · \(account.institution)")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                    .background(Color.secondary.opacity(0.1), in: RoundedRectangle(cornerRadius: 11, style: .continuous))
+                if typeSize >= .xxxLarge {
+                    VStack(alignment: .leading, spacing: 6) {
+                        fundsAccountIdentity(account)
+                        fundsAccountAmount(amount, currency: account.currencyCode)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                } else {
+                    ViewThatFits(in: .horizontal) {
+                        HStack(spacing: 8) { fundsAccountIdentity(account); Spacer(minLength: 6); fundsAccountAmount(amount, currency: account.currencyCode) }
+                        VStack(alignment: .leading, spacing: 6) { fundsAccountIdentity(account); fundsAccountAmount(amount, currency: account.currencyCode) }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                Spacer(minLength: 6)
-                Text(MoneyFormat.string(amount, currencyCode: account.currencyCode))
-                    .font(.subheadline.monospacedDigit().weight(.medium))
-                    .foregroundStyle(amount < 0 ? Color.warning : Color.primary)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.7)
                 Image(systemName: "chevron.right")
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -511,6 +763,22 @@ struct AssetsView: View {
                 Label(archived ? "恢复" : "归档", systemImage: archived ? "arrow.uturn.backward" : "archivebox")
             }
         }
+    }
+
+    private func fundsAccountIdentity(_ account: Account) -> some View {
+        let checkpoint = calibration(for: account)
+        let text = AssetsPresentation.calibrationText(checkpoint, now: AppClock.now)
+        return VStack(alignment: .leading, spacing: 2) {
+            Text(account.name).font(.subheadline.weight(.medium)).foregroundStyle(.primary)
+            Text(text).font(.caption).foregroundStyle(checkpoint == nil || text.contains("未校准") ? Color.warning : Color.secondary)
+        }
+    }
+
+    private func fundsAccountAmount(_ amount: Decimal, currency: String) -> some View {
+        Text(MoneyFormat.string(amount, currencyCode: currency))
+            .font(.system(.subheadline, design: .rounded, weight: .bold))
+            .foregroundStyle(amount < 0 ? Color.warning : Color.primary)
+            .lineLimit(1).minimumScaleFactor(0.7)
     }
 
     private var physicalContent: some View {
@@ -604,47 +872,40 @@ struct AssetsView: View {
     }
 
     private func receivableContent(_ assets: [ReceivableAsset], archived: Bool) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            sectionTitle("权益资产", systemImage: "arrow.down.left.circle")
-            ForEach(assets) { asset in
-                receivableRow(asset, archived: archived)
+        VStack(alignment: .leading, spacing: 7) {
+            Text("权益 · \(assets.count)").font(.footnote).foregroundStyle(.secondary)
+                .padding(.horizontal, 16).padding(.top, 4)
+            VStack(spacing: 0) {
+                ForEach(Array(assets.enumerated()), id: \.element.stableID) { index, asset in
+                    if index > 0 { Divider().padding(.leading, 58) }
+                    receivableRow(asset, archived: archived)
+                }
             }
+            .appThemeCard(cornerRadius: 22)
         }
     }
 
     private func receivableRow(_ asset: ReceivableAsset, archived: Bool) -> some View {
-        HStack(spacing: 12) {
-            Button {
-                editingReceivable = asset
-            } label: {
-                HStack(spacing: 12) {
-                    Image(systemName: "arrow.down.left.circle.fill")
-                        .foregroundStyle(Color.accentColor)
-                        .font(.title3)
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text(asset.name)
-                            .font(.body.weight(.medium))
-                            .foregroundStyle(.primary)
-                        Text("\(asset.kind.label) · \(asset.lifecycle.label)\(asset.counterparty.isEmpty ? "" : " · \(asset.counterparty)")")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
+        HStack(alignment: .center, spacing: 12) {
+            Image(systemName: "arrow.down.left.circle")
+                .foregroundStyle(.secondary).font(.body)
+                .frame(width: 34, height: 34)
+                .background(Color.secondary.opacity(0.1), in: RoundedRectangle(cornerRadius: 11, style: .continuous))
+            if typeSize >= .xxxLarge {
+                VStack(alignment: .leading, spacing: 6) {
+                    receivableIdentity(asset)
+                    receivableValues(asset, archived: archived)
                 }
-            }
-            .buttonStyle(.plain)
-            Spacer(minLength: 4)
-            VStack(alignment: .trailing, spacing: 3) {
-                Text(MoneyFormat.string(asset.remainingAmount, currencyCode: asset.currencyCode))
-                    .font(.subheadline.monospacedDigit().weight(.semibold))
-                if !archived && asset.remainingAmount > 0 {
-                    Button("收回") { recoveryAsset = asset }
-                        .font(.caption.weight(.semibold))
-                        .liquidGlassPrimaryPillControl(horizontalPadding: 10, minHeight: 36)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            } else {
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 8) { receivableIdentity(asset); Spacer(minLength: 4); receivableValues(asset, archived: archived) }
+                    VStack(alignment: .leading, spacing: 6) { receivableIdentity(asset); receivableValues(asset, archived: archived) }
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
-        .padding(12)
-        .glassEffect(.regular, in: .rect(cornerRadius: 14))
+        .padding(.horizontal, 16).padding(.vertical, 12)
         .contextMenu {
             if !archived, (asset.lifecycle == .partiallyRecovered || asset.lifecycle == .recovered),
                receivableRecoveries.contains(where: { $0.receivableID == asset.stableID }) {
@@ -672,6 +933,30 @@ struct AssetsView: View {
                 } label: {
                     Label("标记损失", systemImage: "exclamationmark.triangle")
                 }
+            }
+        }
+    }
+
+    private func receivableIdentity(_ asset: ReceivableAsset) -> some View {
+        Button { editingReceivable = asset } label: {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(asset.name).font(.subheadline.weight(.medium)).foregroundStyle(.primary)
+                Text("\(asset.kind.label) · \(asset.lifecycle.label)\(asset.counterparty.isEmpty ? "" : " · \(asset.counterparty)")")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func receivableValues(_ asset: ReceivableAsset, archived: Bool) -> some View {
+        VStack(alignment: .trailing, spacing: 3) {
+            Text(MoneyFormat.string(asset.remainingAmount, currencyCode: asset.currencyCode))
+                .font(.system(.subheadline, design: .rounded, weight: .bold))
+                .lineLimit(1).minimumScaleFactor(0.6)
+            if !archived && asset.remainingAmount > 0 {
+                Button("收回") { recoveryAsset = asset }
+                    .font(.caption.weight(.semibold))
+                    .liquidGlassPrimaryPillControl(horizontalPadding: 10, minHeight: 36)
             }
         }
     }

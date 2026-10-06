@@ -23,6 +23,7 @@ struct BudgetView: View {
     @State private var editor: BudgetRuleEditorTarget?
     @State private var dayTarget: BudgetDayTarget?
     @State private var errorMessage: String?
+    @Environment(\.dynamicTypeSize) private var typeSize
 
     private var scopeBookID: UUID? { pickedBook ? pickedBookID : router.selectedBookID }
     private var year: Int { monthIndex / 12 }
@@ -189,10 +190,7 @@ extension BudgetView {
                     onNext: { step(1) },
                     onTapDay: { info in dayTarget = BudgetDayTarget(day: info.day) }
                 )
-                if !rules.isEmpty {
-                    ruleSection(rules: rules, records: records, bookID: bookID, today: today)
-                }
-                rolloverRow(bookID: bookID)
+                ruleSection(rules: rules, records: records, bookID: bookID, today: today)
             }
             .padding(EdgeInsets(top: 8, leading: 16, bottom: 32, trailing: 16))
         }
@@ -208,9 +206,9 @@ extension BudgetView {
         let ended = sorted.filter { spans[$0.id]?.state == .ended }
         VStack(alignment: .leading, spacing: 6) {
             Text("预算规则")
-                .font(.footnote.weight(.semibold))
+                .font(.footnote)
                 .foregroundStyle(.secondary)
-                .padding(.horizontal, 6)
+                .padding(.horizontal, 16)
                 .padding(.top, 4)
             VStack(spacing: 0) {
                 ForEach(Array(live.enumerated()), id: \.element.id) { index, rule in
@@ -242,8 +240,10 @@ extension BudgetView {
                         }
                     }
                 }
+                if !sorted.isEmpty { Divider().padding(.leading, 40) }
+                rolloverRow(bookID: bookID)
             }
-            .appThemeCard()
+            .appThemeCard(cornerRadius: 22)
             if rules.contains(where: { !$0.isBase }) {
                 Text("日期重叠时，以后加的特别安排为准")
                     .font(.caption)
@@ -263,22 +263,29 @@ extension BudgetView {
                 BudgetRuleDot(color: BudgetRuleColors.color(rule))
                 VStack(alignment: .leading, spacing: 2) {
                     Text(budgetRuleName(rule))
-                        .font(.system(size: 15, weight: .semibold))
+                        .font(.subheadline.weight(.medium))
                         .foregroundStyle(.primary)
                     Text(span?.text ?? "")
-                        .font(.system(size: 12.5))
+                        .font(.caption)
                         .foregroundStyle(.secondary)
                     if span?.state == .upcoming {
                         Text("即将开始").font(.system(size: 11)).foregroundStyle(.secondary)
                     }
+                    if typeSize >= .xxxLarge {
+                        Text(budgetRuleAmountText(rule))
+                            .font(.system(.subheadline, design: .rounded, weight: .semibold))
+                            .foregroundStyle(.primary)
+                    }
                 }
                 Spacer(minLength: 8)
-                Text(budgetRuleAmountText(rule))
-                    .font(.system(size: 14, weight: .semibold, design: .rounded))
-                    .monospacedDigit()
-                    .foregroundStyle(.primary)
-                    .multilineTextAlignment(.trailing)
-                    .layoutPriority(1)
+                if typeSize < .xxxLarge {
+                    Text(budgetRuleAmountText(rule))
+                        .font(.system(.subheadline, design: .rounded, weight: .semibold))
+                        .monospacedDigit()
+                        .foregroundStyle(.primary)
+                        .multilineTextAlignment(.trailing)
+                        .layoutPriority(1)
+                }
                 Image(systemName: "chevron.right")
                     .font(.footnote.weight(.semibold))
                     .foregroundStyle(.tertiary)
@@ -335,11 +342,12 @@ extension BudgetView {
         return AppSelectionMenu(selected: current, options: options,
                                 onSelect: { pickRollover($0, bookID: bookID) }) {
             HStack {
-                Text("月底结余").foregroundStyle(.primary)
+                Color.clear.frame(width: 10, height: 10)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("月底结余").font(.subheadline.weight(.medium)).foregroundStyle(.primary)
+                    Text(Self.rolloverName(current)).foregroundStyle(.secondary).font(.caption)
+                }
                 Spacer()
-                Text(Self.rolloverName(current)).foregroundStyle(.secondary)
-                    .font(.system(size: 13))
-                    .multilineTextAlignment(.trailing)
                 Image(systemName: "chevron.right")
                     .font(.footnote.weight(.semibold))
                     .foregroundStyle(.tertiary)
@@ -350,7 +358,6 @@ extension BudgetView {
             .contentShape(Rectangle())
         }
         .tint(.primary)
-        .appThemeCard()
         .accessibilityIdentifier("budget-rollover-row")
     }
 

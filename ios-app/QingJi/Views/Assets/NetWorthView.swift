@@ -36,7 +36,7 @@ struct NetWorthView: View {
                     Text(MoneyFormat.string(breakdown.netWorth, currencyCode: "CNY"))
                         .font(.system(size: 34, weight: .bold, design: .rounded))
                         .monospacedDigit()
-                        .foregroundStyle(breakdown.netWorth >= 0 ? Color.primary : Color.red)
+                        .foregroundStyle(breakdown.netWorth >= 0 ? Color.primary : Color.warning)
                     Text("资产 \(MoneyFormat.string(breakdown.totalAssets, currencyCode: "CNY")) · 负债 \(MoneyFormat.string(breakdown.totalLiabilities, currencyCode: "CNY"))")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
@@ -58,7 +58,7 @@ struct NetWorthView: View {
                         "未计入外币：\(breakdown.unsupportedCurrencies.sorted().joined(separator: "、"))",
                         systemImage: "exclamationmark.triangle"
                     )
-                    .foregroundStyle(.orange)
+                    .foregroundStyle(Color.warning)
                 } footer: {
                     Text("外币不会被静默折算为 0；补充汇率或改用人民币后再纳入净资产。")
                 }
@@ -122,7 +122,7 @@ struct NetWorthView: View {
             Spacer()
             Text(MoneyFormat.string(amount, currencyCode: "CNY"))
                 .font(.subheadline.monospacedDigit().weight(.medium))
-                .foregroundStyle(title == "负债" ? Color.red : Color.primary)
+                .foregroundStyle(title == "负债" ? Color.warning : Color.primary)
         }
     }
 }
