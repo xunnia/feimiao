@@ -101,6 +101,13 @@ final class AssetsConceptPresentationTests: XCTestCase {
         XCTAssertNil(AssetsPresentation.physicalDailyValue(nil, costSource: "manual"))
     }
 
+    func testPhysicalAssetDateFormatUsesChineseLocale() throws {
+        let calendar = Calendar(identifier: .gregorian)
+        let date = try XCTUnwrap(calendar.date(from: DateComponents(year: 2026, month: 5, day: 27, hour: 12)))
+        XCTAssertEqual(PhysicalAssetDetailView.formattedDate(date), "2026年5月27日")
+        XCTAssertEqual(PhysicalAssetDetailView.formattedDate(nil), "未填写")
+    }
+
     func testCaptureFourConceptPagesWithThemesNarrowWidthAndLargeText() async throws {
         let schema = Schema([Account.self, Book.self, TxCategory.self, MoneyTransaction.self,
             PhysicalAsset.self, AssetEvent.self, AssetUsageEvent.self, AssetTransactionLink.self,

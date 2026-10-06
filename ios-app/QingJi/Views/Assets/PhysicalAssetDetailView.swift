@@ -504,8 +504,12 @@ struct PhysicalAssetDetailView: View {
     }
 
     private func dateText(_ date: Date?) -> String {
+        Self.formattedDate(date)
+    }
+
+    static func formattedDate(_ date: Date?) -> String {
         guard let date else { return "未填写" }
-        return date.formatted(.dateTime.year().month().day())
+        return date.formatted(.dateTime.year().month(.defaultDigits).day().locale(Locale(identifier: "zh_CN")))
     }
 
     private func retentionText(_ ratio: Decimal) -> String {
