@@ -8,7 +8,7 @@
 
 ## 1. 目标（一句话）
 
-**iOS 版就是 Android「肥喵记账」在 iPhone 上的原生实现，不是一个新产品。** Android 当前生产版是唯一母版；当前已发布 `1.314.0+329` / DB v50，精确源码、APK 身份和水印见 `tools/p0_product_contract.json`、`tools/screenshot_manifest.json` 与 `02` §7.37，不再沿用旧313/v49或328快照。
+**iOS 版就是 Android「肥喵记账」在 iPhone 上的原生实现，不是一个新产品。** Android 当前生产版是唯一母版；当前已发布 `1.315.0+330` / DB v50，精确源码、APK 身份和水印见 `tools/p0_product_contract.json`、`tools/screenshot_manifest.json` 与 `02` §7.38。iOS概念稿测试分支仍携带Android328，其采图不算330双端封板。
 
 **必须和 Android 一模一样的部分：**主页 + 左侧推开式抽屉（没有底部 Tab）；每个入口的名称、位置、层级；页面首屏的信息顺序和字段；金额、净额、退款/报销归属、预算、统计、净资产的算法；肥喵 Logo、猫咪、分类图标、账本封面和猫系配色（收入铜金、支出深色、超支橙，不用系统红绿）；空态、错误、取消、删除/撤销之后看到的结果。
 
@@ -27,6 +27,17 @@
 ---
 
 ## 2. 当前真实状态
+
+### 2026-10-06 资产/预算概念稿同步（Android330上线，iOS采图harness补修待验）
+
+- 用户批准`资产_预算 UI 概念稿 v1.html`实施，并明确授权iOS测试分支及CI、不合main/正式发IPA。隔离工作树`.tmp/ios-concept-ui-20261006`从d4f816a候选建立，10路径仅总览/结构/资金/物品详情/预算及相称XCTest，原模型、保存与迁移不改；主目录其他iOS候选与Android指定integration_test保持原样。
+- UI同Android本批概念稿的信息层级与真实数据，iOS继续系统rounded字/Swift Charts/原生Menu和sheet/Liquid Glass，不套HTML。修复旧changeAmount调用兼容、新测试endedAt、中文日期以及缩略丢失或损坏时只读原图fallback，不修改附件存储。
+- 大字详情头补修后生产UI提交`0220ed7b31c0a99966faa3c98c1fcaf5215bf5c0`正常推独立测试分支，远端核对一致。CI37433068957编译/Core146/146/未签名IPA job成功；App257项中1个主题采图用例失败（两条failure），不是整套通过。四页AssetsConceptPresentationTests实际11/11、主题交互9/9通过，12张附件Pillow校验/唯一哈希/逐张复看成功；普通1170×2532、大字960×2532，非完整38路由fixture，不能混配前后图。
+- 只读核对确认ThemePopupPresentationTests从d4f816a到0220ed7无改动，失败与窗口appearance/清理未等转场吻合，但最小修正仍需Mac证明。仅该测试改async/真实viewDidAppear/present和dismiss completion/安全窗口清理；保留22场景、原5秒超时、全部断言和阶段诊断，不改生产主题。补修`b0d8d8f80d8a7318a9567140e5a5516ec23ad27f`精确提交并推送，远端SHA一致、工作树干净；新iOS CI37437605468/双端截图37437605513运行/排队，最终待验。主目录该文件先核对原哈希再同步，其他候选保留。
+- before为d4f816a旧CI37197272749的38路由真实原生图，iPhoneAir1260×2736/zh-Hans/Shanghai/固定2026-08-27演示fixture，metadata/image哈希匹配；不是本轮新采。0220ed7真实38路由采图job成功，产物11398858353已下载，38PNG/38sidecar/38唯一SHA/固定fixture及严格非空守卫全部通过；四页同fixture编号前后图和联系图已生成并由主代理实际复看，金额/资料一致，路径`ios-app/outputs/ui_comparisons/2026-10-06-concept/0220ed7/comparisons/`。补修b0d8d8f只改harness、整个QingJi生产目录与0220无diff，不把图假称最新CI运行。Windows无Xcode、设备/动效及大字下部/长金额/筛选实际点击仍未验，不合main/正式发布IPA。
+- Android母版330已正式归档/发布VPS，源码`57436f1`，全量1741/1741、0 error、16组离屏前后图、固定签名/16 KiB/字体及两域整包复验通过；APK119,165,883字节、SHA256 `79C81EC7F86C7E35B0AA2E9FB10BC4D47D606AC38982101E240A25534C4E446F`。本机仅同步两工具JSON，合同仍P0_PARTIAL/6开放门、两工作流各38路由匹配；不覆盖本iOS分支的Android328、不把Android上线当iOS通过。
+
+- **补修CI最后快照（16:51 CST）**：b0d8d8f对应CI37437605468编译/Core job success；App XCTest、未签名IPA和candidate采图仍in_progress，双端截图37437605513 queued。本轮完整测试数及harness是否解决失败仍待结果，不报告新257通过/整体绿，不继续自动轮询；本批下载/图守卫/拼图exec全部退出0，隔离树干净。
 
 ### 2026-10-04 Android母版329已上线（仅工具元数据同步，iOS通用聊天待补）
 
