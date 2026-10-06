@@ -167,6 +167,41 @@ void main() {
     expect(formField, findsNothing);
   }
 
+  testWidgets('overview debt count follows actual included liabilities',
+      (tester) async {
+    final repo = AppRepository();
+    await tester.runAsync(() async {
+      await repo.init();
+      await repo.addAccount(
+        name: '透支银行卡',
+        type: AccountType.debit,
+        openingBalance: Decimal.fromInt(-1000),
+      );
+      await repo.addAccount(
+        name: '不计入的透支账户',
+        type: AccountType.other,
+        openingBalance: Decimal.fromInt(-2000),
+        includeInNetWorth: false,
+      );
+      await repo.addAccount(
+        name: '已结清信用卡',
+        type: AccountType.credit,
+        openingBalance: Decimal.zero,
+      );
+      await repo.setLastAssetViewTabIndex(0);
+    });
+    addTearDown(() => tester.runAsync(repo.closeForTest));
+    await pumpAccountsView(tester, repo);
+    expect(repo.currentNetWorthBreakdown().totalLiabilities,
+        Decimal.fromInt(1000));
+    final debtSummary = find.byKey(const ValueKey('asset-metric-liabilities'));
+    expect(find.descendant(of: debtSummary, matching: find.text('1 项')),
+        findsOneWidget);
+    expect(find.descendant(of: debtSummary, matching: find.text('1,000.00')),
+        findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('asset management exposes three page-local views',
       (tester) async {
     final repo = (await tester.runAsync(seededGlobalRepo))!;
@@ -274,14 +309,21 @@ void main() {
     await tester.tap(find.text('总览'));
     await pumpViewAnimations(tester);
     expect(find.byKey(const Key('asset-overview')), findsOneWidget);
-    // Overview uses one net-worth card plus four independent component cards.
+    // Overview keeps three real components inside the net-worth card.
     expect(find.text('净资产'), findsOneWidget);
     expect(find.byKey(const ValueKey('asset-net-worth-card')), findsOneWidget);
     expect(find.byKey(const ValueKey('asset-metric-funds')), findsOneWidget);
     expect(find.byKey(const ValueKey('asset-metric-physical')), findsOneWidget);
-    expect(find.byKey(const ValueKey('asset-metric-total')), findsOneWidget);
+    expect(find.byKey(const ValueKey('asset-metric-total')), findsNothing);
     expect(
         find.byKey(const ValueKey('asset-metric-liabilities')), findsOneWidget);
+    for (final metric in ['funds', 'physical', 'liabilities']) {
+      expect(
+          find.descendant(
+              of: find.byKey(const ValueKey('asset-net-worth-card')),
+              matching: find.byKey(ValueKey('asset-metric-$metric'))),
+          findsOneWidget);
+    }
     expect(find.byTooltip('估算与数据说明'), findsOneWidget);
     await tester.tap(find.byTooltip('估算与数据说明'));
     await pumpViewAnimations(tester);
@@ -811,7 +853,7 @@ void main() {
     await tester.tap(find.text('临近保修相机'));
     await pumpViewAnimations(tester);
     await scrollLastListTo(tester, find.text('保修'));
-    expect(find.textContaining('还有 5 天'), findsAtLeastNWidgets(1));
+    expect(find.textContaining('剩 5 天'), findsAtLeastNWidgets(1));
     expect(tester.takeException(), isNull);
   });
 
@@ -1147,7 +1189,7 @@ void main() {
     // 点条目 = 关弹层并跳到资金页。
     await tester.tap(find.textContaining('个账户的到账信息待确认'));
     await tester.pumpAndSettle();
-    expect(find.textContaining('· 待确认'), findsOneWidget);
+    expect(find.textContaining('1 笔到账账户待确认'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 
@@ -1244,6 +1286,8 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('zero-balance-accounts-toggle')));
     await tester.pump();
+    await tester.ensureVisible(find.text('花花信用卡').last);
+    await tester.pumpAndSettle();
     await tester.tap(find.text('花花信用卡').last);
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('credit-interest-free-row')), findsOneWidget);

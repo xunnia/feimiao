@@ -4,12 +4,123 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../../core/money_format.dart';
+import '../../core/app_clock.dart';
 import '../../data/app_repository.dart';
 import '../../theme/app_colors.dart';
 import '../../theme/app_tokens.dart';
 import '../../widgets/app_buttons.dart';
 import '../../widgets/settings_ui.dart';
 import 'asset_form_kit.dart';
+
+class FundsSectionHeader extends StatelessWidget {
+  const FundsSectionHeader({super.key, required this.title, this.trailing});
+  final String title;
+  final String? trailing;
+
+  @override
+  Widget build(BuildContext context) {
+    final style =
+        AppType.secondary(Theme.of(context).colorScheme).copyWith(fontSize: 13);
+    return Padding(
+        padding: const EdgeInsets.fromLTRB(16, 4, 16, 7),
+        child: Wrap(
+            alignment: WrapAlignment.spaceBetween,
+            spacing: 12,
+            runSpacing: 4,
+            children: [
+              Text(title, style: style),
+              if (trailing != null)
+                Text(trailing!, style: style.copyWith(fontFamily: 'Nunito')),
+            ]));
+  }
+}
+
+/// Shared funds/receivables geometry, with a second line for large text.
+class FundsAssetRow extends StatelessWidget {
+  const FundsAssetRow(
+      {super.key,
+      required this.icon,
+      required this.title,
+      required this.subtitle,
+      required this.amount,
+      required this.onTap,
+      this.muted = false,
+      this.negative = false});
+  final IconData icon;
+  final String title;
+  final Widget subtitle;
+  final String amount;
+  final VoidCallback onTap;
+  final bool muted;
+  final bool negative;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final titleWidget = Text(title,
+        maxLines: 2,
+        overflow: TextOverflow.ellipsis,
+        style: AppType.rowTitle(scheme).copyWith(
+            fontSize: 15,
+            color: muted ? AppTextColor.hint(scheme) : scheme.onSurface));
+    final money = FittedBox(
+        fit: BoxFit.scaleDown,
+        alignment: Alignment.centerRight,
+        child: Text(amount,
+            style: TextStyle(
+                fontFamily: 'Nunito',
+                fontSize: 15.5,
+                fontWeight: FontWeight.w700,
+                color: muted
+                    ? AppTextColor.hint(scheme)
+                    : negative
+                        ? AppColors.warning
+                        : scheme.onSurface)));
+    return InkWell(
+        onTap: onTap,
+        child: Padding(
+            padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+            child: LayoutBuilder(builder: (context, constraints) {
+              final stacked = constraints.maxWidth < 280 ||
+                  MediaQuery.textScalerOf(context).scale(15) > 21;
+              final labels = Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    titleWidget,
+                    const SizedBox(height: 2),
+                    subtitle,
+                    if (stacked) ...[
+                      const SizedBox(height: 6),
+                      Align(alignment: Alignment.centerRight, child: money)
+                    ]
+                  ]);
+              return Row(children: [
+                Container(
+                    width: 34,
+                    height: 34,
+                    alignment: Alignment.center,
+                    decoration: BoxDecoration(
+                        color: AppColors.iconCircleFill(scheme),
+                        borderRadius: BorderRadius.circular(11)),
+                    child: Icon(icon,
+                        size: 18, color: AppTextColor.secondary(scheme))),
+                const SizedBox(width: 12),
+                Expanded(child: labels),
+                if (!stacked) ...[
+                  const SizedBox(width: 10),
+                  ConstrainedBox(
+                      constraints:
+                          BoxConstraints(maxWidth: constraints.maxWidth * 0.4),
+                      child: money)
+                ],
+                const SizedBox(width: 4),
+                Icon(Icons.chevron_right,
+                    size: 15, color: AppTextColor.hint(scheme)),
+              ]);
+            })));
+  }
+}
 
 /// repo.upcomingRepayments() 的行记录（结构化 record 类型别名，UI 侧引用用）。
 typedef UpcomingRepaymentItem = ({
@@ -128,11 +239,13 @@ class FundsAccountBalance {
   final AccountEntity account;
   final Decimal balance;
   final String? qualityText;
+  final DateTime? calibratedAt;
 
   const FundsAccountBalance({
     required this.account,
     required this.balance,
     this.qualityText,
+    this.calibratedAt,
   });
 }
 
@@ -162,48 +275,24 @@ class FundsAccountGroupCard extends StatelessWidget {
     // 组内币种不一致时不硬加，避免算出一个混币种的假小计（数据诚实性优先）。
     final currencies =
         group.items.map((item) => item.account.currencyCode).toSet();
-    final showSubtotal = currencies.length == 1;
+    final showSubtotal = currencies.length == 1 && group.items.length > 1;
     final subtotal = group.items
         .fold<Decimal>(Decimal.zero, (sum, item) => sum + item.balance);
-    final subtotalStyle = AppType.secondary(scheme).copyWith(
-      color: subtotal < Decimal.zero ? AppColors.warning : null,
-    );
-    return Container(
-      decoration: appCardDecoration(scheme),
-      clipBehavior: Clip.antiAlias,
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 12, 14, 8),
-            child: Row(
-              children: [
-                Text(
-                  group.type.label,
-                  style: AppType.rowTitle(scheme),
-                ),
-                const SizedBox(width: 6),
-                Text(
-                  '${group.items.length} 个账户',
-                  style: AppType.caption(scheme),
-                ),
-                if (showSubtotal) ...[
-                  const Spacer(),
-                  Text.rich(
-                    digitAwareAmountSpan(
-                      MoneyFormat.string(
-                        subtotal,
-                        currencyCode: currencies.single,
-                      ),
-                      subtotalStyle,
-                    ),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ],
-              ],
-            ),
-          ),
+    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      FundsSectionHeader(
+          title: '${group.type.label} · ${group.items.length}',
+          trailing: showSubtotal
+              ? MoneyFormat.string(subtotal, currencyCode: currencies.single)
+              : null),
+      Container(
+        decoration: ShapeDecoration(
+            color: AppColors.card(scheme),
+            shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(22),
+                side:
+                    BorderSide(color: AppColors.hairline(scheme), width: 0.5))),
+        clipBehavior: Clip.antiAlias,
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
           for (int i = 0; i < group.items.length; i++) ...[
             if (i > 0) appCardDivider(scheme),
             FundsAccountBalanceTile(
@@ -211,9 +300,9 @@ class FundsAccountGroupCard extends StatelessWidget {
               onTap: () => onTap(group.items[i].account),
             ),
           ],
-        ],
+        ]),
       ),
-    );
+    ]);
   }
 }
 
@@ -235,12 +324,25 @@ class FundsAccountBalanceTile extends StatelessWidget {
         .liabilityProfileForAccount(item.account.id);
     final negative = item.balance < Decimal.zero;
     final muted = !item.account.includeInNetWorth;
-    // 副标题减负：最多「类型 + 1 个附加段」，
-    // 优先级 = N天后还款(≤10天才显示) > 机构 > 「待确认」 > 「不计入」。
-    final daysLeft = profile != null &&
-            profile.status == LiabilityProfileStatus.active
-        ? profile.daysUntilRepayment()
-        : null;
+    final today = AppClock.now;
+    final calibrated = item.calibratedAt;
+    final daysSince = calibrated == null
+        ? null
+        : DateTime(today.year, today.month, today.day)
+            .difference(
+                DateTime(calibrated.year, calibrated.month, calibrated.day))
+            .inDays;
+    final calibration = daysSince == null
+        ? '从未校准'
+        : daysSince == 0
+            ? '今天校准'
+            : daysSince > 30
+                ? '$daysSince 天未校准'
+                : '$daysSince 天前校准';
+    final daysLeft =
+        profile != null && profile.status == LiabilityProfileStatus.active
+            ? profile.daysUntilRepayment()
+            : null;
     final dueSoon = daysLeft != null && daysLeft <= 10;
     final extra = dueSoon
         ? (daysLeft < 0
@@ -248,118 +350,40 @@ class FundsAccountBalanceTile extends StatelessWidget {
             : daysLeft == 0
                 ? '今天还款'
                 : '$daysLeft 天后还款')
-        : item.account.institution.isNotEmpty
-            ? item.account.institution
-            : item.qualityText != null
-                ? '待确认'
-                : !item.account.includeInNetWorth
-                    ? '不计入'
-                    : null;
+        : item.qualityText ??
+            (!item.account.includeInNetWorth ? '不计入净资产' : calibration);
     // 还款临近的颜色语义：逾期/今天=warning 橙、1-3 天=kCatGold（不用红绿）。
     final extraColor = !dueSoon
-        ? null
+        ? daysSince != null && daysSince > 30
+            ? AppColors.warning
+            : null
         : daysLeft <= 0
             ? AppColors.warning
             : daysLeft <= 3
                 ? kCatGold
                 : null;
-    final subtitleStyle =
-        (Theme.of(context).textTheme.labelSmall ?? const TextStyle()).copyWith(
+    final subtitleStyle = AppType.secondary(scheme).copyWith(
+      fontSize: 12,
       color: muted ? AppTextColor.hint(scheme) : AppTextColor.secondary(scheme),
       fontWeight: FontWeight.w400,
     );
     final subtitleSpan = TextSpan(children: [
       digitAwareAmountSpan(
-        extra == null ? item.account.type.label : '${item.account.type.label} · ',
-        subtitleStyle,
+        extra,
+        extraColor == null
+            ? subtitleStyle
+            : subtitleStyle.copyWith(color: extraColor),
       ),
-      if (extra != null)
-        digitAwareAmountSpan(
-          extra,
-          extraColor == null
-              ? subtitleStyle
-              : subtitleStyle.copyWith(color: extraColor),
-        ),
     ]);
-    return InkWell(
-      onTap: onTap,
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(16, 11, 12, 11),
-        child: Row(
-          children: [
-            Container(
-              width: 34,
-              height: 34,
-              alignment: Alignment.center,
-              decoration: BoxDecoration(
-                color: AppColors.iconCircleFill(scheme),
-                shape: BoxShape.circle,
-              ),
-              child: Icon(
-                _accountIcon(item.account.type),
-                size: 18,
-                color: muted
-                    ? AppTextColor.hint(scheme)
-                    : AppTextColor.secondary(scheme),
-              ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(
-                    item.account.name,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                          fontWeight: FontWeight.w400,
-                          color: muted
-                              ? scheme.onSurface.withValues(alpha: 0.55)
-                              : scheme.onSurface,
-                        ),
-                  ),
-                  const SizedBox(height: 3),
-                  Text.rich(
-                    // Nunito 只套在数字子串上（中文混排拆 TextSpan）。
-                    subtitleSpan,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(width: 10),
-            ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 128),
-              child: Text(
-                MoneyFormat.string(
-                  item.balance,
-                  currencyCode: item.account.currencyCode,
-                ),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                textAlign: TextAlign.right,
-                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                      fontFamily: 'Nunito',
-                      fontWeight: FontWeight.w500,
-                      color: muted
-                          ? AppTextColor.hint(scheme)
-                          : (negative ? AppColors.warning : scheme.onSurface),
-                    ),
-              ),
-            ),
-            const SizedBox(width: 4),
-            Icon(
-              Icons.chevron_right,
-              size: 18,
-              color: AppTextColor.secondary(scheme),
-            ),
-          ],
-        ),
-      ),
-    );
+    return FundsAssetRow(
+        icon: _accountIcon(item.account.type),
+        title: item.account.name,
+        subtitle: Text.rich(subtitleSpan),
+        amount: MoneyFormat.string(item.balance,
+            currencyCode: item.account.currencyCode),
+        onTap: onTap,
+        muted: muted,
+        negative: negative);
   }
 
   IconData _accountIcon(AccountType type) => switch (type) {
@@ -519,7 +543,8 @@ class LiabilityMigrationBannerRow extends StatelessWidget {
         ),
         child: Row(
           children: [
-            Icon(Icons.upgrade_rounded, size: 18, color: scheme.onPrimaryContainer),
+            Icon(Icons.upgrade_rounded,
+                size: 18, color: scheme.onPrimaryContainer),
             const SizedBox(width: 8),
             Expanded(
               child: Text(
@@ -529,7 +554,8 @@ class LiabilityMigrationBannerRow extends StatelessWidget {
                 ),
               ),
             ),
-            Icon(Icons.chevron_right, size: 18, color: scheme.onPrimaryContainer),
+            Icon(Icons.chevron_right,
+                size: 18, color: scheme.onPrimaryContainer),
           ],
         ),
       ),

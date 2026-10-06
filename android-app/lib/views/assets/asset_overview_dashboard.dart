@@ -6,6 +6,7 @@ import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 
 import '../../core/account/net_worth_snapshot.dart';
+import '../../core/account/net_worth_verified_checkpoint.dart';
 import '../../core/app_clock.dart';
 import '../../core/assets/asset_overview_projection.dart';
 import '../../core/money_cents.dart';
@@ -25,12 +26,28 @@ class AssetOverviewDashboard extends StatefulWidget {
     required this.trend,
     required this.partial,
     required this.excludedCount,
+    this.cashAccountCount = 0,
+    this.physicalCount = 0,
+    this.excludedPhysicalCount = 0,
+    this.liabilityCount = 0,
+    this.physicalPartial = false,
+    this.lastVerifiedAt,
+    this.verifiedComparison,
+    this.onReview,
   });
 
   final NetWorthBreakdown breakdown;
   final NetWorthTrendResult trend;
   final bool partial;
   final int excludedCount;
+  final int cashAccountCount;
+  final int physicalCount;
+  final int excludedPhysicalCount;
+  final int liabilityCount;
+  final bool physicalPartial;
+  final DateTime? lastVerifiedAt;
+  final NetWorthVerifiedCheckpointComparison? verifiedComparison;
+  final VoidCallback? onReview;
 
   @override
   State<AssetOverviewDashboard> createState() => _AssetOverviewDashboardState();
@@ -44,15 +61,6 @@ class _AssetOverviewDashboardState extends State<AssetOverviewDashboard> {
     final scheme = Theme.of(context).colorScheme;
     final projection = AssetOverviewProjection(
         source: widget.trend, range: _range, now: AppClock.now);
-    final values = <AssetOverviewMetric, Decimal>{
-      AssetOverviewMetric.netWorth: widget.breakdown.netWorth,
-      AssetOverviewMetric.funds: widget.breakdown.cashAssets +
-          widget.breakdown.investmentAssets +
-          widget.breakdown.receivableAssets,
-      AssetOverviewMetric.physical: widget.breakdown.physicalAssets,
-      AssetOverviewMetric.total: widget.breakdown.totalAssets,
-      AssetOverviewMetric.liabilities: widget.breakdown.totalLiabilities,
-    };
     final labelStyle = AssetOverviewStyle.label(context);
     final minor = decimalToBudgetCents(widget.breakdown.netWorth);
     final delta =
@@ -62,12 +70,44 @@ class _AssetOverviewDashboardState extends State<AssetOverviewDashboard> {
       if (widget.excludedCount > 0) '${widget.excludedCount} 项未计入',
       if (projection.trend.breaks.isNotEmpty) '趋势有断点',
     ].join(' · ');
-    final changeLabel = Text(
-      delta == null
-          ? '区间变化暂不可比'
-          : '区间变化 ${delta >= 0 ? '+' : ''}${_amount(budgetDecimalFromCents(delta)!)}',
-      style: AppType.secondary(scheme).copyWith(fontFamily: 'Nunito'),
-    );
+    final verified = widget.verifiedComparison;
+    final verifiedChange = verified?.change;
+    final changeLabel = widget.lastVerifiedAt == null && verifiedChange == null
+        ? Wrap(
+            spacing: 6,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+                Text('还没有完整核对', style: AppType.secondary(scheme)),
+                if (widget.onReview != null)
+                  GestureDetector(
+                    onTap: widget.onReview,
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 4),
+                      child: Text('去核对 ›',
+                          style: AppType.secondary(scheme)
+                              .copyWith(color: scheme.primary)),
+                    ),
+                  ),
+              ])
+        : Text.rich(
+            TextSpan(children: [
+              if (verifiedChange != null) ...[
+                TextSpan(
+                  text:
+                      '${verifiedChange.netWorthDeltaMinor >= 0 ? '↑ ' : '↓ '}'
+                      '${_amount(budgetDecimalFromCents(verifiedChange.netWorthDeltaMinor)!).replaceFirst('-', '')}  ',
+                  style: const TextStyle(
+                      fontFamily: 'Nunito', fontWeight: FontWeight.w700),
+                ),
+                TextSpan(
+                    text:
+                        '两次完整核对 · ${_shortDay(verified!.earlier.header.asOf.toLocal())}'),
+              ] else
+                TextSpan(
+                    text:
+                        '上次完整核对 · ${_shortDay(widget.lastVerifiedAt!.toLocal())}'),
+            ]),
+            style: AppType.secondary(scheme));
     final rangeControl = Builder(
       builder: (anchor) => TextButton(
         key: const ValueKey('asset-trend-range'),
@@ -98,11 +138,11 @@ class _AssetOverviewDashboardState extends State<AssetOverviewDashboard> {
       children: [
         Container(
           key: const ValueKey('asset-net-worth-card'),
-          padding: const EdgeInsets.fromLTRB(16, 16, 16, 12),
+          padding: const EdgeInsets.all(16),
           decoration: ShapeDecoration(
               color: AppColors.card(scheme),
               shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(28),
+                  borderRadius: BorderRadius.circular(22),
                   side: BorderSide(
                       color: AppColors.hairline(scheme), width: 0.5))),
           child:
@@ -127,64 +167,93 @@ class _AssetOverviewDashboardState extends State<AssetOverviewDashboard> {
                 ),
               ),
             ]),
-            const SizedBox(height: 8),
+            const SizedBox(height: 4),
             AssetOverviewAmount(widget.breakdown.netWorth,
-                size: 41.75, weight: FontWeight.w800),
-            const SizedBox(height: 6),
+                size: 40, weight: FontWeight.w800),
+            const SizedBox(height: 4),
             if (MediaQuery.textScalerOf(context).scale(13) > 18)
               Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                 changeLabel,
-                Align(alignment: Alignment.centerRight, child: rangeControl),
+                if (projection.trend.hasTrend)
+                  Align(alignment: Alignment.centerRight, child: rangeControl),
               ])
             else
               Row(children: [
                 Expanded(child: changeLabel),
-                const SizedBox(width: 8),
-                rangeControl,
+                if (projection.trend.hasTrend) ...[
+                  const SizedBox(width: 8),
+                  rangeControl,
+                ],
               ]),
-            const SizedBox(height: 6),
-            SizedBox(
-                height: projection.trend.hasTrend
-                    ? 184 +
-                        math.max(
-                                0,
-                                MediaQuery.textScalerOf(context).scale(10) -
-                                    10) *
-                            4
-                    : 72,
+            const SizedBox(height: 10),
+            if (projection.trend.hasTrend) ...[
+              SizedBox(
+                height: 78 +
+                    math.max(
+                        0, MediaQuery.textScalerOf(context).scale(11) - 11),
                 child: AssetOverviewChart(
                     projection: projection,
                     metric: AssetOverviewMetric.netWorth,
-                    color: kCatBlueGray,
-                    axes: true)),
+                    color: scheme.primary,
+                    axes: true,
+                    compact: true),
+              ),
+              if (widget.partial || projection.trend.breaks.isNotEmpty)
+                Padding(
+                  padding: const EdgeInsets.only(top: 4),
+                  child: Text(delta == null ? '估算趋势有缺口，区间暂不可比' : '估算趋势，非投资收益',
+                      style: AppType.caption(scheme)),
+                ),
+            ] else
+              Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                decoration: BoxDecoration(
+                    color: AppColors.inputFill(scheme),
+                    borderRadius: BorderRadius.circular(12)),
+                child: Row(children: [
+                  Icon(CupertinoIcons.chart_bar,
+                      size: 15, color: AssetOverviewStyle.labelColor(context)),
+                  const SizedBox(width: 6),
+                  Expanded(
+                      child: Text(
+                          projection.trend.points.length > 1
+                              ? '已有快照暂不可比'
+                              : '至少积累 2 个可比快照后显示趋势',
+                          style: AppType.caption(scheme))),
+                ]),
+              ),
+            const SizedBox(height: 14),
+            Divider(
+                height: 0.5, thickness: 0.5, color: AppColors.hairline(scheme)),
+            const SizedBox(height: 14),
+            _OverviewStrip(
+              breakdown: widget.breakdown,
+              cashAccountCount: widget.cashAccountCount,
+              physicalCount: widget.physicalCount,
+              excludedPhysicalCount: widget.excludedPhysicalCount,
+              liabilityCount: widget.liabilityCount,
+              physicalPartial: widget.physicalPartial,
+            ),
             if (qualitySummary.isNotEmpty) ...[
-              const SizedBox(height: 6),
-              Text(qualitySummary, style: AppType.caption(scheme)),
+              const SizedBox(height: 12),
+              GestureDetector(
+                onTap: () => _showExplanation(context, projection),
+                child: Row(children: [
+                  Icon(CupertinoIcons.info_circle,
+                      size: 14, color: AssetOverviewStyle.labelColor(context)),
+                  const SizedBox(width: 5),
+                  Expanded(
+                      child:
+                          Text(qualitySummary, style: AppType.caption(scheme))),
+                  Text('查看 ›',
+                      style: AppType.caption(scheme)
+                          .copyWith(color: scheme.primary)),
+                ]),
+              ),
             ],
           ]),
         ),
-        const SizedBox(height: 12),
-        LayoutBuilder(builder: (context, constraints) {
-          final largeText = MediaQuery.textScalerOf(context).scale(15) > 22;
-          final columns = largeText ? 1 : 2;
-          final width = (constraints.maxWidth - (columns - 1) * 12) / columns;
-          final height = math.max(106.0, width * 3 / 5);
-          return Wrap(spacing: 12, runSpacing: 12, children: [
-            for (final metric in AssetOverviewMetric.values
-                .where((m) => m != AssetOverviewMetric.netWorth))
-              SizedBox(
-                  width: width,
-                  child: _MetricCard(
-                    metric: metric,
-                    amount: values[metric]!,
-                    projection: projection,
-                    height: height,
-                    width: width,
-                    largeText: largeText,
-                    labelStyle: labelStyle,
-                  )),
-          ]);
-        }),
       ],
     );
   }
@@ -236,89 +305,107 @@ class _AssetOverviewDashboardState extends State<AssetOverviewDashboard> {
 }
 
 String _amount(Decimal value) => AssetOverviewStyle.amount(value);
+String _shortDay(DateTime date) => '${date.month}月${date.day}日';
 
-class _MetricCard extends StatelessWidget {
-  const _MetricCard(
-      {required this.metric,
-      required this.amount,
-      required this.projection,
-      required this.height,
-      required this.width,
-      required this.largeText,
-      required this.labelStyle});
-  final AssetOverviewMetric metric;
-  final Decimal amount;
-  final AssetOverviewProjection projection;
-  final double height;
-  final double width;
-  final bool largeText;
-  final TextStyle labelStyle;
+class _OverviewStrip extends StatelessWidget {
+  const _OverviewStrip(
+      {required this.breakdown,
+      required this.cashAccountCount,
+      required this.physicalCount,
+      required this.excludedPhysicalCount,
+      required this.liabilityCount,
+      required this.physicalPartial});
+  final NetWorthBreakdown breakdown;
+  final int cashAccountCount;
+  final int physicalCount;
+  final int excludedPhysicalCount;
+  final int liabilityCount;
+  final bool physicalPartial;
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final minor = decimalToBudgetCents(amount);
-    final change = projection.delta(metric, currentMinor: minor);
-    final percent = projection.percentage(metric, currentMinor: minor);
-    final color = switch (metric) {
-      AssetOverviewMetric.physical => kCatGold,
-      AssetOverviewMetric.liabilities => AppColors.warning,
-      _ => kCatBlueGray,
-    };
-    return Container(
-      key: ValueKey('asset-metric-${metric.name}'),
-      constraints: BoxConstraints(minHeight: height),
-      padding: const EdgeInsets.all(16),
-      decoration: ShapeDecoration(
-        color: AppColors.card(scheme),
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(20),
-          side: BorderSide(color: AppColors.hairline(scheme), width: 0.5),
-        ),
+    final values = [
+      (
+        'funds',
+        '可动用资金',
+        breakdown.cashAssets,
+        breakdown.investmentAssets > Decimal.zero
+            ? '另有投资 ${_amount(breakdown.investmentAssets)}'
+            : '$cashAccountCount 个账户',
+        false
       ),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Text(metric.label, style: labelStyle),
-        const SizedBox(height: 4),
-        SizedBox(
-            width: double.infinity,
-            child: AssetOverviewAmount(amount, size: 22.5)),
-        SizedBox(height: largeText ? 12 : math.max(0, height - 106)),
-        Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
-          Expanded(
-              child: Semantics(
-            label: percent == null
-                ? '区间估算变化不可比'
-                : '区间估算${change! < 0 ? '下降' : change > 0 ? '上升' : '持平'} $percent，非收益率',
-            child: ExcludeSemantics(
-                child: Row(mainAxisSize: MainAxisSize.min, children: [
-              if (percent != null)
-                Icon(
-                    change! < 0
-                        ? Icons.arrow_downward
-                        : change > 0
-                            ? Icons.arrow_upward
-                            : Icons.remove,
-                    size: 12,
-                    color: AssetOverviewStyle.labelColor(context)),
-              Flexible(
-                  child: Text(percent ?? '—',
-                      style: TextStyle(
-                          fontSize: 13,
-                          fontFamily: 'Nunito',
-                          fontWeight: FontWeight.w700,
-                          fontFeatures: const [FontFeature('ss01')],
-                          color: AssetOverviewStyle.labelColor(context)))),
-            ])),
-          )),
-          const SizedBox(width: 4),
-          SizedBox(
-              width: width >= 160 ? 64 : 40,
-              height: 28,
-              child: AssetOverviewChart(
-                  projection: projection, metric: metric, color: color)),
-        ]),
-      ]),
-    );
+      (
+        'physical',
+        '计入物品',
+        breakdown.physicalAssets,
+        physicalPartial
+            ? '估值待确认'
+            : physicalCount == 0 && excludedPhysicalCount > 0
+                ? '$excludedPhysicalCount 件 · 未计入'
+                : '$physicalCount 件',
+        physicalPartial &&
+            physicalCount > 0 &&
+            breakdown.physicalAssets == Decimal.zero
+      ),
+      (
+        'liabilities',
+        '总负债',
+        breakdown.totalLiabilities,
+        '$liabilityCount 项',
+        false
+      ),
+    ];
+    return LayoutBuilder(builder: (context, constraints) {
+      final stacked = MediaQuery.textScalerOf(context).scale(12) > 17 ||
+          constraints.maxWidth < 270;
+      Widget metric(int index) {
+        final (key, label, amount, caption, unknown) = values[index];
+        return Container(
+          key: ValueKey('asset-metric-$key'),
+          padding: stacked
+              ? EdgeInsets.only(top: index == 0 ? 0 : 12)
+              : EdgeInsets.only(
+                  left: index == 0 ? 0 : 8, right: index == 2 ? 0 : 8),
+          decoration: BoxDecoration(
+              border: !stacked && index > 0
+                  ? Border(
+                      left: BorderSide(
+                          color: AppColors.hairline(scheme), width: 0.5))
+                  : null),
+          child:
+              Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(label,
+                style:
+                    AssetOverviewStyle.label(context).copyWith(fontSize: 12)),
+            const SizedBox(height: 3),
+            if (unknown)
+              Text('—',
+                  style: TextStyle(
+                      fontFamily: 'AssetAmount',
+                      fontSize: 16.5,
+                      height: 1,
+                      fontWeight: FontWeight.w800,
+                      color: scheme.onSurface))
+            else
+              SizedBox(
+                  width: double.infinity,
+                  child: AssetOverviewAmount(amount, size: 16.5)),
+            const SizedBox(height: 3),
+            Text(caption,
+                style: AppType.caption(scheme).copyWith(fontSize: 11)),
+          ]),
+        );
+      }
+
+      return stacked
+          ? Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [for (var i = 0; i < values.length; i++) metric(i)])
+          : Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              for (var i = 0; i < values.length; i++) Expanded(child: metric(i))
+            ]);
+    });
   }
 }
 
@@ -328,11 +415,13 @@ class AssetOverviewChart extends StatelessWidget {
       required this.projection,
       required this.metric,
       required this.color,
-      this.axes = false});
+      this.axes = false,
+      this.compact = false});
   final AssetOverviewProjection projection;
   final AssetOverviewMetric metric;
   final Color color;
   final bool axes;
+  final bool compact;
 
   @override
   Widget build(BuildContext context) {
@@ -375,24 +464,17 @@ class AssetOverviewChart extends StatelessWidget {
               style: AppType.caption(scheme).copyWith(fontSize: 10)));
     }
 
-    return Semantics(
-      image: true,
-      label: '${metric.label}估算趋势，${points.length}个快照，'
-          '${_dayLabel(first)}为${MoneyFormat.string(budgetDecimalFromCents(metric.minor(points.first.components))!)}人民币，'
-          '${_dayLabel(last)}为${MoneyFormat.string(budgetDecimalFromCents(metric.minor(points.last.components))!)}人民币，'
-          '${trend.breaks.length}处断点，'
-          '${trend.points.any((point) => point.lineage.quality != NetWorthSnapshotQuality.available) ? '部分数据，' : ''}非收益率',
-      child: ExcludeSemantics(
-          child: LineChart(
+    final chart = LineChart(
         LineChartData(
           minX: 0,
           maxX: maxX,
           minY: low - padding,
           maxY: high + padding,
-          clipData: const FlClipData.all(),
+          // Compact endpoints sit on the plot edge; the padded Y range contains them.
+          clipData: compact ? const FlClipData.none() : const FlClipData.all(),
           borderData: FlBorderData(show: false),
           gridData: FlGridData(
-              show: axes,
+              show: axes && !compact,
               drawVerticalLine: false,
               horizontalInterval: (high - low + padding * 2) / 3,
               getDrawingHorizontalLine: (_) => FlLine(
@@ -407,27 +489,20 @@ class AssetOverviewChart extends StatelessWidget {
                 const AxisTitles(sideTitles: SideTitles(showTitles: false)),
             bottomTitles: AxisTitles(
                 sideTitles: SideTitles(
-                    showTitles: axes,
+                    showTitles: axes && !compact,
                     reservedSize:
                         math.max(25, axisScale * (crossesYear ? 28 : 14) + 8),
                     interval: dateInterval,
                     getTitlesWidget: dateTitle)),
             rightTitles: AxisTitles(
                 sideTitles: SideTitles(
-                    showTitles: axes,
+                    showTitles: axes && !compact,
                     reservedSize: 46 * axisScale,
                     interval: (high - low + padding * 2) / 3,
-                    getTitlesWidget: (value, meta) {
-                      final gap = (meta.max - meta.min) / 3;
-                      if ((value != meta.max && meta.max - value < gap * 0.5) ||
-                          (value != meta.min && value - meta.min < gap * 0.5)) {
-                        return const SizedBox.shrink();
-                      }
-                      return Text(
-                          MoneyFormat.axisLabel(value, withSymbol: false),
-                          style:
-                              AppType.caption(scheme).copyWith(fontSize: 10));
-                    })),
+                    getTitlesWidget: (value, meta) => Text(
+                        MoneyFormat.axisLabel(value, withSymbol: false),
+                        style:
+                            AppType.caption(scheme).copyWith(fontSize: 10)))),
           ),
           lineBarsData: [
             for (final segment in trend.segments)
@@ -437,14 +512,18 @@ class AssetOverviewChart extends StatelessWidget {
                     FlSpot(p.lineage.asOf.difference(first).inDays.toDouble(),
                         metric.minor(p.components) / 100)
                 ],
-                isCurved: true,
+                isCurved: !compact,
                 preventCurveOverShooting: true,
                 color: color,
-                barWidth: axes ? 2.2 : 1.8,
+                barWidth: compact
+                    ? 2
+                    : axes
+                        ? 2.2
+                        : 1.8,
                 isStrokeCapRound: true,
                 dotData: FlDotData(
-                    show: axes,
-                    checkToShowDot: (spot, bar) => spot == bar.spots.last),
+                    show: compact,
+                    checkToShowDot: (spot, data) => spot.x == maxX),
                 belowBarData: BarAreaData(
                     show: axes,
                     gradient: LinearGradient(
@@ -457,8 +536,33 @@ class AssetOverviewChart extends StatelessWidget {
               ),
           ],
         ),
-        duration: Duration.zero,
-      )),
+        duration: Duration.zero);
+    return Semantics(
+      image: true,
+      label: '${metric.label}估算趋势，${points.length}个快照，'
+          '${_dayLabel(first)}为${MoneyFormat.string(budgetDecimalFromCents(metric.minor(points.first.components))!)}人民币，'
+          '${_dayLabel(last)}为${MoneyFormat.string(budgetDecimalFromCents(metric.minor(points.last.components))!)}人民币，'
+          '${trend.breaks.length}处断点，'
+          '${trend.points.any((point) => point.lineage.quality != NetWorthSnapshotQuality.available) ? '部分数据，' : ''}非收益率',
+      child: ExcludeSemantics(
+          child: compact
+              ? Column(children: [
+                  Expanded(child: chart),
+                  const SizedBox(height: 2),
+                  Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Text(
+                            '${crossesYear ? '${first.year}/' : ''}${first.month}/${first.day}',
+                            style:
+                                AppType.caption(scheme).copyWith(fontSize: 11)),
+                        Text(
+                            '${crossesYear ? '${last.year}/' : ''}${last.month}/${last.day}',
+                            style:
+                                AppType.caption(scheme).copyWith(fontSize: 11)),
+                      ])
+                ])
+              : chart),
     );
   }
 }

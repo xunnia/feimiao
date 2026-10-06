@@ -81,6 +81,9 @@ void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   setUpAll(() async {
     await loadScreenshotFonts();
+    await (FontLoader('AssetAmount')
+          ..addFont(rootBundle.load('assets/fonts/Nunito-ExtraBold.ttf')))
+        .load();
     if (Platform.environment['UPDATE_BUDGET_UI_SCREENSHOTS'] == '1') {
       final emojiPath = Platform.environment['FEIMIAO_EMOJI_FONT'] ??
           r'C:\Windows\Fonts\seguiemj.ttf';
@@ -259,7 +262,7 @@ void main() {
       tester
           .getRect(find.byKey(const ValueKey('budget-hero-budget-caption')))
           .right,
-      closeTo(cardRight - 18, 1),
+      closeTo(cardRight - (suffix == 'before' ? 18 : 16), 1),
     );
     await shot(tester, 'budget_main');
   });
@@ -394,6 +397,38 @@ void main() {
     );
     expect(tester.takeException(), isNull);
     await shot(tester, 'budget_narrow_large_text');
+  });
+
+  testWidgets('320dp完整预算页：长规则金额和结余入口可读可点', (tester) async {
+    final fixture = repo();
+    final longRules = _MockupRepo(
+        [
+          BudgetRule(
+            id: 9,
+            bookId: 1,
+            kind: BudgetRuleKind.base,
+            name: '家人日常和旅行的全年预算安排',
+            amountCents: 12345678900,
+            unit: BudgetRuleUnit.month,
+            startDate: DateTime(year, month),
+            createdMs: 9,
+          ),
+        ],
+        fixture.spend,
+        const []);
+    addTearDown(fixture.dispose);
+    await pumpPage(tester, longRules, size: const Size(320, 844), textScale: 2);
+    expect(tester.takeException(), isNull);
+    await tester.scrollUntilVisible(
+        find.byKey(const ValueKey('budget-rollover-row')), 400,
+        scrollable: find.byType(Scrollable).first);
+    await tester.pumpAndSettle();
+    expect(find.text('每月 ¥123,456,789'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+    await tester.tap(find.byKey(const ValueKey('budget-rollover-row')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('budget-rollover-keep')), findsOneWidget);
+    expect(tester.takeException(), isNull);
   });
 
   testWidgets('详情大金额与200%大字不压缩成三列', (tester) async {

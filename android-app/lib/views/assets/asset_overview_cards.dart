@@ -28,12 +28,16 @@ class AssetEmptyState extends StatelessWidget {
 class AssetPendingItem {
   final IconData icon;
   final String text;
+  final String? subtitle;
+  final String actionLabel;
   final VoidCallback onTap;
 
   const AssetPendingItem({
     required this.icon,
     required this.text,
     required this.onTap,
+    this.subtitle,
+    this.actionLabel = '查看',
   });
 }
 
@@ -46,29 +50,120 @@ class AssetPendingCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         Padding(
-          padding: const EdgeInsets.fromLTRB(8, 0, 8, 4),
-          child: Text('待处理', style: AppType.sectionLabel(scheme)),
+          padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
+          child: Wrap(
+            alignment: WrapAlignment.spaceBetween,
+            spacing: 12,
+            runSpacing: 4,
+            children: [
+              Text('待处理', style: AssetOverviewStyle.label(context)),
+              Text('${items.length} 项',
+                  style: AssetOverviewStyle.label(context)
+                      .copyWith(fontFamily: 'Nunito')),
+            ],
+          ),
         ),
-        SettingsGroup(
-          margin: EdgeInsets.zero,
-          children: [
-            for (final item in items)
-              SettingsRow(
-                leading: Icon(item.icon),
-                title: item.text,
-                trailing: Icon(
-                  Icons.chevron_right,
-                  size: 18,
-                  color: AppTextColor.secondary(scheme),
-                ),
-                onTap: item.onTap,
-              ),
-          ],
+        Container(
+          decoration: ShapeDecoration(
+            color: AppColors.card(scheme),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(22),
+              side: BorderSide(color: AppColors.hairline(scheme), width: 0.5),
+            ),
+          ),
+          clipBehavior: Clip.antiAlias,
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            for (var i = 0; i < items.length; i++) ...[
+              if (i > 0)
+                Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 16),
+                    child: Divider(
+                        height: 0.5,
+                        thickness: 0.5,
+                        color: AppColors.hairline(scheme))),
+              _AssetPendingRow(item: items[i]),
+            ],
+          ]),
         ),
       ],
+    );
+  }
+}
+
+class _AssetPendingRow extends StatelessWidget {
+  const _AssetPendingRow({required this.item});
+  final AssetPendingItem item;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final labels = Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(item.text,
+            style: AppType.rowTitle(scheme).copyWith(fontSize: 14.5)),
+        if (item.subtitle != null && item.subtitle!.isNotEmpty) ...[
+          const SizedBox(height: 2),
+          Text(item.subtitle!,
+              style: AppType.secondary(scheme).copyWith(fontSize: 12)),
+        ],
+      ],
+    );
+    final action = Row(mainAxisSize: MainAxisSize.min, children: [
+      Flexible(
+          child: Text(item.actionLabel,
+              style: AppType.secondary(scheme)
+                  .copyWith(fontSize: 13, color: scheme.primary))),
+      const SizedBox(width: 2),
+      Icon(Icons.chevron_right, size: 15, color: scheme.primary),
+    ]);
+    return InkWell(
+      onTap: item.onTap,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        child: LayoutBuilder(builder: (context, constraints) {
+          final stacked = constraints.maxWidth < 280 ||
+              MediaQuery.textScalerOf(context).scale(14.5) > 21;
+          return Row(children: [
+            Container(
+              width: 34,
+              height: 34,
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                  color: AppColors.iconCircleFill(scheme),
+                  borderRadius: BorderRadius.circular(11)),
+              child: Icon(item.icon,
+                  size: 18, color: AppTextColor.secondary(scheme)),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: stacked
+                  ? Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        labels,
+                        const SizedBox(height: 6),
+                        Align(alignment: Alignment.centerRight, child: action),
+                      ],
+                    )
+                  : labels,
+            ),
+            if (!stacked) ...[
+              const SizedBox(width: 12),
+              ConstrainedBox(
+                constraints:
+                    BoxConstraints(maxWidth: constraints.maxWidth * 0.3),
+                child: action,
+              ),
+            ],
+          ]);
+        }),
+      ),
     );
   }
 }
@@ -506,11 +601,51 @@ class AssetAnalysisCard extends StatelessWidget {
     final kinds = structure.visibleKinds.toList();
     final rate = structure.liabilityPercentage;
     return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-      const _OverviewSectionTitle('资产结构'),
+      Padding(
+        padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
+        child: LayoutBuilder(builder: (context, constraints) {
+          final style = AssetOverviewStyle.label(context);
+          return Wrap(
+            alignment: WrapAlignment.spaceBetween,
+            spacing: 12,
+            runSpacing: 4,
+            children: [
+              Text('资产结构', style: style),
+              ConstrainedBox(
+                constraints: BoxConstraints(maxWidth: constraints.maxWidth),
+                child: Semantics(
+                  key: const ValueKey('asset-structure-total'),
+                  label:
+                      '总资产 ${AssetOverviewStyle.amount(structure.totalAssets)} 人民币',
+                  child: ExcludeSemantics(
+                    child: FittedBox(
+                      fit: BoxFit.scaleDown,
+                      alignment: Alignment.centerRight,
+                      child: Text.rich(TextSpan(style: style, children: [
+                        const TextSpan(text: '总资产 '),
+                        TextSpan(
+                            text: AssetOverviewStyle.amount(
+                                structure.totalAssets),
+                            style: style.copyWith(fontFamily: 'Nunito')),
+                      ])),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          );
+        }),
+      ),
       Container(
         key: const ValueKey('asset-structure-card'),
         padding: const EdgeInsets.all(16),
-        decoration: appCardDecoration(scheme),
+        decoration: ShapeDecoration(
+          color: AppColors.card(scheme),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(22),
+            side: BorderSide(color: AppColors.hairline(scheme), width: 0.5),
+          ),
+        ),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           if (structure.hasShares && kinds.length > 1) ...[
             SizedBox(
@@ -531,15 +666,34 @@ class AssetAnalysisCard extends StatelessWidget {
           if (kinds.isEmpty)
             Text('暂无已计入的人民币资产', style: AppType.secondary(scheme)),
           for (var i = 0; i < kinds.length; i++) ...[
-            if (i > 0) const SizedBox(height: 16),
+            if (i > 0) const SizedBox(height: 10),
             _AssetStructureRow(
                 kind: kinds[i],
                 amount: structure.amounts[kinds[i]]!,
                 percentage: structure.percentage(kinds[i]),
+                showPercentage: kinds.length > 1,
                 color: _structureColor(kinds[i], scheme)),
+          ],
+          if (structure.hasShares && kinds.length == 1) ...[
+            const SizedBox(height: 8),
+            Text('目前只有一类资产，暂不显示占比', style: AppType.caption(scheme)),
           ],
           const SizedBox(height: 14),
           Divider(height: 1, thickness: 0.5, color: AppColors.hairline(scheme)),
+          const SizedBox(height: 10),
+          Semantics(
+            key: const ValueKey('asset-structure-liabilities'),
+            label:
+                '负债 ${AssetOverviewStyle.amount(structure.totalLiabilities)} 人民币',
+            child: ExcludeSemantics(
+              child: _AssetStructureLine(
+                label: '负债',
+                amount: structure.totalLiabilities,
+                color: AppTextColor.secondary(scheme),
+                outlined: true,
+              ),
+            ),
+          ),
           const SizedBox(height: 10),
           Wrap(spacing: 16, runSpacing: 6, children: [
             Text('人民币 · 已计入资产', style: AppType.caption(scheme)),
@@ -563,49 +717,86 @@ class _AssetStructureRow extends StatelessWidget {
       {required this.kind,
       required this.amount,
       required this.percentage,
+      required this.showPercentage,
       required this.color});
   final AssetStructureKind kind;
   final Decimal amount;
   final Decimal? percentage;
+  final bool showPercentage;
   final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    final percentText =
+        percentage == null ? '—' : '${percentage!.toStringAsFixed(1)}%';
+    return Semantics(
+      key: ValueKey('asset-structure-${kind.name}'),
+      label: '${kind.label} ${AssetOverviewStyle.amount(amount)} 人民币，'
+          '${percentage == null ? '占比不可计算' : '占比$percentText'}',
+      child: ExcludeSemantics(
+        child: _AssetStructureLine(
+            label: kind.label,
+            amount: amount,
+            color: color,
+            percentageText: showPercentage ? percentText : null),
+      ),
+    );
+  }
+}
+
+class _AssetStructureLine extends StatelessWidget {
+  const _AssetStructureLine(
+      {required this.label,
+      required this.amount,
+      required this.color,
+      this.percentageText,
+      this.outlined = false});
+  final String label;
+  final Decimal amount;
+  final Color color;
+  final String? percentageText;
+  final bool outlined;
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final title = Row(children: [
       Container(
-          width: 6,
-          height: 6,
-          decoration: BoxDecoration(color: color, shape: BoxShape.circle)),
+          width: 8,
+          height: 8,
+          decoration: BoxDecoration(
+              color: outlined ? null : color,
+              border: outlined ? Border.all(color: color) : null,
+              borderRadius: BorderRadius.circular(3))),
       const SizedBox(width: 8),
-      Expanded(child: Text(kind.label, style: AppType.secondary(scheme))),
+      Expanded(
+          child:
+              Text(label, style: AppType.body(scheme).copyWith(fontSize: 14))),
     ]);
-    final percentText =
-        percentage == null ? '—' : '${percentage!.toStringAsFixed(1)}%';
     final values = Row(children: [
-      Expanded(child: AssetOverviewAmount(amount, size: 18)),
-      const SizedBox(width: 12),
-      Text(percentText,
-          style: AppType.secondary(scheme).copyWith(fontFamily: 'Nunito')),
+      Expanded(
+          child: Align(
+              alignment: Alignment.centerRight,
+              child: AssetOverviewAmount(amount,
+                  size: 15, weight: FontWeight.w700))),
+      if (percentageText != null) ...[
+        const SizedBox(width: 12),
+        Text(percentageText!,
+            style: AppType.caption(scheme).copyWith(fontFamily: 'Nunito')),
+      ],
     ]);
-    return Semantics(
-      key: ValueKey('asset-structure-${kind.name}'),
-      label: '${kind.label} ${AssetOverviewStyle.amount(amount)} 人民币，'
-          '${percentage == null ? '占比不可计算' : '占比$percentText'}',
-      child: ExcludeSemantics(
-          child: LayoutBuilder(builder: (context, constraints) {
-        final large = MediaQuery.textScalerOf(context).scale(13) > 18;
-        return large || constraints.maxWidth < 300
-            ? Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [title, const SizedBox(height: 6), values])
-            : Row(children: [
-                Expanded(flex: 4, child: title),
-                const SizedBox(width: 12),
-                Expanded(flex: 6, child: values)
-              ]);
-      })),
-    );
+    return LayoutBuilder(builder: (context, constraints) {
+      final large = MediaQuery.textScalerOf(context).scale(14) > 20;
+      return large || constraints.maxWidth < 300
+          ? Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [title, const SizedBox(height: 6), values])
+          : Row(children: [
+              Expanded(flex: 4, child: title),
+              const SizedBox(width: 12),
+              Expanded(flex: 6, child: values)
+            ]);
+    });
   }
 }
 

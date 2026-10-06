@@ -38,7 +38,7 @@ class BudgetHeroCard extends StatelessWidget {
     final scheme = Theme.of(context).colorScheme;
     return BudgetCard(
       key: const ValueKey('budget-hero-card'),
-      padding: const EdgeInsets.fromLTRB(18, 16, 18, 16),
+      padding: const EdgeInsets.all(16),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: !month.hasRules
@@ -60,9 +60,9 @@ class BudgetHeroCard extends StatelessWidget {
           key: const ValueKey('budget-hero-amount'),
           maxLines: 1,
           style: TextStyle(
-            fontFamily: 'Nunito',
+            fontFamily: 'AssetAmount',
             fontSize: 44,
-            fontWeight: FontWeight.w700,
+            fontWeight: FontWeight.w800,
             letterSpacing: 0,
             height: 1.1,
             color: color ?? scheme.onSurface,
@@ -83,13 +83,13 @@ class BudgetHeroCard extends StatelessWidget {
         ? null
         : (today.plannedBeforeTodayCents / effective).clamp(0.0, 1.0);
     return SizedBox(
-      height: 18,
+      height: 16,
       child: Stack(
         alignment: Alignment.centerLeft,
         children: [
           BudgetProgressBar(
             value: ratio.clamp(0.0, 1.0).toDouble(),
-            height: 10,
+            height: 8,
             overflowStart: overflowStart?.toDouble(),
           ),
           // 细竖线：按计划到今天该花到哪。
@@ -99,7 +99,7 @@ class BudgetHeroCard extends StatelessWidget {
               child: Container(
                 key: const ValueKey('budget-hero-plan-mark'),
                 width: 2,
-                height: 18,
+                height: 16,
                 decoration: BoxDecoration(
                   color: scheme.onSurface.withValues(alpha: 0.35),
                   borderRadius: BorderRadius.circular(1),
@@ -121,12 +121,12 @@ class BudgetHeroCard extends StatelessWidget {
             Text(
               '已花 ${budgetYuanText(month.spentCents)}',
               key: const ValueKey('budget-hero-spent-caption'),
-              style: AppType.caption(scheme),
+              style: AppType.secondary(scheme).copyWith(fontSize: 12),
             ),
             Text(
               '${month.month}月预算 ${budgetYuanText(month.budgetCents)}',
               key: const ValueKey('budget-hero-budget-caption'),
-              style: AppType.caption(scheme),
+              style: AppType.secondary(scheme).copyWith(fontSize: 12),
             ),
           ],
         ),
@@ -146,7 +146,7 @@ class BudgetHeroCard extends StatelessWidget {
   Widget _label(String text, ColorScheme scheme) => Text(
         text,
         key: const ValueKey('budget-hero-label'),
-        style: AppType.secondary(scheme),
+        style: AppType.secondary(scheme).copyWith(fontSize: 13.5),
       );
 
   List<Widget> _empty(BuildContext context, ColorScheme scheme) {
@@ -276,9 +276,9 @@ class BudgetHeroCard extends StatelessWidget {
   /// 「今天约 **¥140** · 还剩 13 天」：金额加粗，整行比说明文字深一档。
   Widget _todayText(String line, ColorScheme scheme) {
     final base = TextStyle(
-      fontSize: 15,
+      fontSize: 13,
       height: 1.4,
-      color: scheme.onSurface.withValues(alpha: 0.72),
+      color: AppTextColor.secondary(scheme),
     );
     final match = RegExp(r'¥[\d,]+').firstMatch(line);
     return Text.rich(
@@ -309,15 +309,16 @@ class BudgetHeroCard extends StatelessWidget {
         : Color.lerp(color, Colors.black, 0.32)!;
     return Container(
       key: const ValueKey('budget-hero-pace'),
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 5),
       decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.14),
+        color: color.withValues(alpha: 0.18),
         borderRadius: BorderRadius.circular(AppRadius.pill),
       ),
       child: Text(
         text,
         style: AppType.secondary(scheme).copyWith(
           color: textColor,
+          fontSize: 12.5,
           fontWeight: FontWeight.w500,
         ),
       ),

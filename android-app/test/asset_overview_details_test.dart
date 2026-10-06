@@ -15,6 +15,7 @@ import 'package:qingji/data/app_repository.dart';
 import 'package:qingji/theme/app_colors.dart';
 import 'package:qingji/theme/app_theme_controller.dart';
 import 'package:qingji/views/assets/asset_overview_cards.dart';
+import 'package:qingji/views/assets/asset_overview_style.dart';
 import 'package:qingji/views/settings/accounts_view.dart';
 import 'package:qingji/widgets/app_buttons.dart';
 import 'package:qingji/widgets/settings_ui.dart';
@@ -337,12 +338,43 @@ void main() {
     expect(find.text('42,000.00'), findsOneWidget);
   });
   testWidgets(
-      'details behavior single bucket avoids redundant chart and duplicate total',
+      'details behavior single bucket avoids redundant chart and percentage',
       (tester) async {
     await pumpDetails(tester, scene: 'single');
     expect(find.byKey(const ValueKey('asset-structure-bar')), findsNothing);
-    expect(find.text('100.0%'), findsOneWidget);
-    expect(find.text('总资产'), findsNothing);
+    expect(find.text('100.0%'), findsNothing);
+    expect(find.text('目前只有一类资产，暂不显示占比'), findsOneWidget);
+    expect(
+        find.descendant(
+            of: find.byKey(const ValueKey('asset-structure-card')),
+            matching: find.byKey(const ValueKey('asset-structure-total'))),
+        findsNothing);
+    expect(
+        tester
+            .widget<Semantics>(
+                find.byKey(const ValueKey('asset-structure-total')))
+            .properties
+            .label,
+        '总资产 42,000.00 人民币');
+  });
+  testWidgets('details behavior liabilities retain actual amount and rate',
+      (tester) async {
+    await pumpDetails(tester);
+    final card = find.byKey(const ValueKey('asset-structure-card'));
+    final debt = find.byKey(const ValueKey('asset-structure-liabilities'));
+    expect(find.descendant(of: card, matching: debt), findsOneWidget);
+    expect(tester.widget<Semantics>(debt).properties.label, '负债 5,000.00 人民币');
+    expect(find.text('负债率 7.0%'), findsOneWidget);
+    expect(
+        tester.getTopLeft(debt).dy,
+        greaterThan(tester
+            .getBottomLeft(
+                find.byKey(const ValueKey('asset-structure-physical')))
+            .dy));
+    final amount = tester.widget<AssetOverviewAmount>(
+        find.descendant(of: debt, matching: find.byType(AssetOverviewAmount)));
+    expect(amount.size, 15);
+    expect(amount.weight, FontWeight.w700);
   });
   testWidgets(
       'details behavior semantic rows include amount currency and share',

@@ -8,6 +8,7 @@ import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:qingji/core/account/net_worth_snapshot.dart';
+import 'package:qingji/core/account/net_worth_verified_checkpoint.dart';
 import 'package:qingji/core/app_clock.dart';
 import 'package:qingji/core/assets/asset_overview_projection.dart';
 import 'package:qingji/core/money_cents.dart';
@@ -28,7 +29,8 @@ Future<void> _pump(WidgetTester tester, List<ComputedNetWorthSnapshot> points,
     {String theme = 'warm',
     Size size = const Size(420, 912),
     double scale = 1,
-    bool partial = false}) async {
+    bool partial = false,
+    NetWorthVerifiedCheckpointComparison? verifiedComparison}) async {
   await tester.binding.setSurfaceSize(size);
   addTearDown(() => tester.binding.setSurfaceSize(null));
   final preset = kThemePresets.firstWhere((p) => p.key == theme);
@@ -72,6 +74,11 @@ Future<void> _pump(WidgetTester tester, List<ComputedNetWorthSnapshot> points,
             trend: resolveNetWorthTrend(points),
             partial: partial,
             excludedCount: partial ? 2 : 0,
+            cashAccountCount: 1,
+            physicalCount: 1,
+            liabilityCount: 1,
+            verifiedComparison: verifiedComparison,
+            lastVerifiedAt: verifiedComparison?.later.header.asOf,
           ),
         ),
       ),
@@ -84,8 +91,7 @@ Future<void> _pump(WidgetTester tester, List<ComputedNetWorthSnapshot> points,
 List<String> _dateLabels(WidgetTester tester) => tester
     .widgetList<Text>(find.byType(Text))
     .map((t) => t.data ?? '')
-    .where((t) =>
-        RegExp(r'^\d{1,2}/\d{1,2}$|^\d{4}\n\d{1,2}/\d{1,2}$').hasMatch(t))
+    .where((t) => RegExp(r'^(\d{4}/)?\d{1,2}/\d{1,2}$').hasMatch(t))
     .toList();
 
 void main() {
@@ -125,7 +131,7 @@ void main() {
           ],
           size: const Size(320, 900),
           scale: scale);
-      expect(_dateLabels(tester), ['2025\n12/31', '2026\n1/1']);
+      expect(_dateLabels(tester), ['2025/12/31', '2026/1/1']);
       final chart = tester.getRect(find.byType(AssetOverviewChart).first);
       final rects =
           _dateLabels(tester).map((t) => tester.getRect(find.text(t))).toList();
@@ -138,15 +144,24 @@ void main() {
     });
   }
   for (final mode in MoneyIntegerRoundingMode.values) {
-    testWidgets('negative change uses signed $mode rounding', (tester) async {
+    testWidgets('negative verified change uses signed $mode rounding',
+        (tester) async {
       MoneyFormat.configure(decimalPlaces: 0, integerRoundingMode: mode);
-      await _pump(tester, [
-        snapshot(day.subtract(const Duration(days: 1))),
-        snapshot(day, cash: 9880)
-      ]);
-      final expected =
-          MoneyFormat.string(Decimal.parse('-1.20')).replaceAll('¥', '').trim();
-      expect(find.text('区间变化 $expected'), findsOneWidget);
+      await _pump(
+          tester,
+          [
+            snapshot(day.subtract(const Duration(days: 1))),
+            snapshot(day, cash: 9880)
+          ],
+          verifiedComparison: _verifiedChange(-120));
+      final expected = MoneyFormat.string(Decimal.parse('-1.20'))
+          .replaceAll('¥', '')
+          .trim()
+          .replaceFirst('-', '');
+      expect(find.textContaining('↓ $expected', findRichText: true),
+          findsOneWidget);
+      expect(find.textContaining('两次完整核对', findRichText: true), findsOneWidget);
+      expect(find.textContaining('区间变化'), findsNothing);
     });
   }
   testWidgets('reader summaries include each metric endpoint and quality',
@@ -159,6 +174,30 @@ void main() {
     ];
     await _pump(tester, points);
     try {
+      final dashboardChart =
+          tester.widget<AssetOverviewChart>(find.byType(AssetOverviewChart));
+      expect(dashboardChart.metric, AssetOverviewMetric.netWorth);
+      expect(dashboardChart.compact, isTrue);
+      await tester.pumpWidget(MaterialApp(
+        theme: AppTheme.light(),
+        home: Scaffold(
+          body: Column(children: [
+            for (final metric in AssetOverviewMetric.values)
+              SizedBox(
+                  height: 100,
+                  child: AssetOverviewChart(
+                      projection: AssetOverviewProjection(
+                          source: resolveNetWorthTrend(points),
+                          range: AssetTrendRange.all,
+                          now: AppClock.now),
+                      metric: metric,
+                      color: Colors.blueGrey,
+                      axes: true)),
+          ]),
+        ),
+      ));
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
       for (final metric in AssetOverviewMetric.values) {
         final chart = find.byWidgetPredicate(
             (w) => w is AssetOverviewChart && w.metric == metric);
@@ -266,12 +305,51 @@ void main() {
   testWidgets('asset reliability capture negative-floor', (tester) async {
     MoneyFormat.configure(
         decimalPlaces: 0, integerRoundingMode: MoneyIntegerRoundingMode.floor);
-    await _pump(tester, [
-      snapshot(day.subtract(const Duration(days: 1))),
-      snapshot(day, cash: 9880)
-    ]);
+    await _pump(
+        tester,
+        [
+          snapshot(day.subtract(const Duration(days: 1))),
+          snapshot(day, cash: 9880)
+        ],
+        verifiedComparison: _verifiedChange(-120));
     await _capture(tester, 'negative-floor');
   });
+}
+
+NetWorthVerifiedCheckpointComparison _verifiedChange(int deltaMinor) {
+  NetWorthVerifiedCheckpoint checkpoint(int day, int minor) {
+    final date = DateTime.utc(2026, 8, day, 10);
+    return NetWorthVerifiedCheckpoint(
+      header: NetWorthVerifiedCheckpointHeader(
+        uuid: 'reliability-$day',
+        asOf: date,
+        knowledgeCutoff: date,
+        scopeVersion: 1,
+        calculationVersion: 1,
+        currencyCoverage: NetWorthCurrencyCoverage.single('CNY'),
+        totals: NetWorthVerifiedCheckpointTotals(
+            totalAssetsMinor: minor,
+            totalLiabilitiesMinor: 0,
+            netWorthMinor: minor),
+        completeness: NetWorthVerifiedCheckpointCompleteness.complete,
+        status: NetWorthVerifiedCheckpointStatus.active,
+        createdAt: date,
+      ),
+      items: [
+        NetWorthVerifiedCheckpointItem(
+            objectType: 'account',
+            objectUuid: 'cash',
+            confirmedAmountMinor: minor,
+            currencyCode: 'CNY',
+            valueEffectiveAt: date,
+            valueSource: 'user_confirmation',
+            quality: 'confirmed')
+      ],
+    );
+  }
+
+  return compareNetWorthVerifiedCheckpoints(
+      checkpoint(1, 10000), checkpoint(2, 10000 + deltaMinor));
 }
 
 Future<void> _capture(WidgetTester tester, String name) async {

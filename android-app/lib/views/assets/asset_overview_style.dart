@@ -11,14 +11,13 @@ abstract final class AssetOverviewStyle {
   static Color labelColor(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     if (MediaQuery.highContrastOf(context)) return scheme.onSurface;
-    return scheme.brightness == Brightness.dark
-        ? scheme.onSurface.withValues(alpha: 0.65)
-        : const Color(0xFF868384);
+    return scheme.onSurface
+        .withValues(alpha: scheme.brightness == Brightness.dark ? 0.62 : 0.55);
   }
 
   static TextStyle label(BuildContext context) => TextStyle(
         fontFamily: 'AssetLabels',
-        fontSize: 12.5,
+        fontSize: 13,
         height: 1.35,
         fontWeight: FontWeight.w400,
         fontVariations: const [FontVariation('wght', 400)],
@@ -43,18 +42,16 @@ class AssetOverviewAmount extends StatelessWidget {
           alignment: Alignment.centerLeft,
           child: Text(AssetOverviewStyle.amount(value),
               style: TextStyle(
-                  fontFamily: 'AssetAmount',
+                  fontFamily:
+                      weight == FontWeight.w800 ? 'AssetAmount' : 'Nunito',
                   fontSize: size,
                   height: size < 30 ? 1 : 1.1,
                   fontWeight: weight,
-                  fontFeatures: const [FontFeature('ss01')],
                   color: value < Decimal.zero
                       ? Theme.of(context).brightness == Brightness.dark
                           ? AppColors.warning
                           : Color.lerp(AppColors.warning, Colors.black, 0.4)
-                      : Theme.of(context).brightness == Brightness.dark
-                          ? Theme.of(context).colorScheme.onSurface
-                          : Colors.black)),
+                      : Theme.of(context).colorScheme.onSurface)),
         )),
       );
 }

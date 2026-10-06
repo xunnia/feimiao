@@ -1,13 +1,16 @@
 // 物品资产详情页与退货/撤销流程（从 accounts_view.dart 拆出）。
 import 'dart:async';
 import 'dart:io';
+import 'dart:math' as math;
 
 import 'package:decimal/decimal.dart';
+import 'package:flutter/cupertino.dart' show CupertinoIcons;
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../../core/assets/asset_allocation.dart';
 import '../../core/assets/asset_metrics.dart';
+import '../../core/app_clock.dart';
 import '../../core/money_format.dart';
 import '../../data/app_repository.dart';
 import '../../theme/app_colors.dart';
@@ -16,6 +19,7 @@ import '../../widgets/app_buttons.dart';
 import '../../widgets/app_toast.dart';
 import '../../widgets/ios_dialogs.dart';
 import '../../widgets/ios_menu.dart';
+import '../../widgets/pressable_scale.dart';
 import '../../widgets/settings_ui.dart';
 import '../../widgets/transaction_actions.dart';
 import '../common/app_sheet.dart';
@@ -47,7 +51,28 @@ PhysicalAssetMetrics _resolveMetrics(
       usageTrackingEnabled: asset.usageTrackingEnabled,
       usageCount: usage.totalCount,
     ),
+    asOf: AppClock.now,
   );
+}
+
+String _detailDateText(DateTime? date) =>
+    date == null ? '未填写' : '${date.year}年${date.month}月${date.day}日';
+
+File? _assetPhotoFile(PhysicalAssetEntity asset) {
+  for (final source in [asset.photoPath.trim(), asset.thumbnailPath.trim()]) {
+    if (source.isNotEmpty) {
+      final file = File(source);
+      if (file.existsSync()) return file;
+    }
+  }
+  return null;
+}
+
+String _detailAmountNumber(Decimal amount, String currencyCode) {
+  final symbol = currencyCode == 'CNY' ? '¥' : MoneyFormat.symbol(currencyCode);
+  return MoneyFormat.string(amount, currencyCode: currencyCode)
+      .replaceFirst(symbol, '')
+      .trim();
 }
 
 String _physicalAssetStatusLabel(PhysicalAssetEntity asset) {
@@ -92,20 +117,22 @@ class PhysicalAssetDetailPage extends StatelessWidget {
             ),
           ),
       endedAt: current.endedAt,
+      asOf: AppClock.now,
     );
     final recentValuations = valuationTrend.points.reversed.take(4).toList();
     final hasKnownValuation = valuationTrend.points.isNotEmpty;
     final cost = repo.physicalAssetAcquisitionCost(current.id);
     final additional = repo.physicalAssetAdditionalCost(current.id);
     final usage = repo.physicalAssetUsage(current.id);
-    final warrantyReminder = repo.warrantyReminderForAsset(current);
+    final warrantyReminder =
+        repo.warrantyReminderForAsset(current, asOf: AppClock.now);
     final savingsGoal = current.savingsGoalId == null
         ? null
         : repo.savingsGoalById(current.savingsGoalId!);
     final costLabel = current.acquisitionCostSource ==
             AssetAcquisitionCostSource.transactionAllocations
         ? '净购置成本'
-        : '购买价';
+        : '购买成本';
     final costText = cost.amount == null
         ? '待确认'
         : '${MoneyFormat.string(
@@ -172,30 +199,35 @@ class PhysicalAssetDetailPage extends StatelessWidget {
         : '不可计算 · ${cost.isExact ? metrics.valueRetentionRatio.reason : cost.reason}';
     final warrantyText = current.warrantyUntil == null
         ? '未填写'
-        : '${assetDateText(current.warrantyUntil)} · ${assetReminderDetailText(
+        : '${assetReminderDetailText(
             warrantyReminder,
-            upcomingLabel: '还有',
+            upcomingLabel: '剩',
             dueTodayLabel: '今天到期',
             expiredLabel: '已过期',
             inactiveLabel: '已结束持有',
-          )}';
+          )} · 至${_detailDateText(current.warrantyUntil)}';
     final dailyAvailable =
         cost.isExact && additional.isExact && metrics.dailyHoldingCost.isExact;
-    final primaryMetric = dailyAvailable ? dailyText : '日均暂不可计算';
+    final primaryMetric = dailyAvailable
+        ? MoneyFormat.string(metrics.dailyHoldingCost.value!,
+            currencyCode: current.currencyCode)
+        : '暂不可计算';
     final primaryCaption = dailyAvailable
-        ? '$heldText · ${hasKnownValuation ? '当前估值 ${MoneyFormat.string(current.currentValue, currencyCode: current.currencyCode)}' : '当前估值待确认'}'
+        ? '${owned ? '已持有' : '持有'} $heldText · ${current.purchaseDate == null ? '购买日期未填写' : '${_detailDateText(current.purchaseDate)}购入'}'
         : '$heldText · ${holdingCostReason(metrics.dailyHoldingCost.reason)}';
+    final photo = _assetPhotoFile(current);
     return Scaffold(
       backgroundColor: Colors.transparent,
       appBar: AppBar(
         leading: const AppBackButton(),
-        title: Text(current.name),
+        title: const Text('物品详情'),
         actions: [
           Padding(
             padding: const EdgeInsets.only(right: 10),
             child: Builder(
               builder: (menuContext) => AppCircleButton(
                 icon: Icons.more_horiz,
+                semanticLabel: '更多物品操作',
                 onPressed: () => _showMoreMenu(
                   menuContext,
                   context,
@@ -211,31 +243,105 @@ class PhysicalAssetDetailPage extends StatelessWidget {
         key: const Key('physical-asset-detail-page'),
         padding: const EdgeInsets.fromLTRB(16, 4, 16, 32),
         children: [
-          _PhysicalAssetHero(asset: current),
-          const SizedBox(height: 16),
-          Text(
-            primaryMetric,
-            key: const Key('physical-asset-primary-metric'),
-            style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                  fontFamily: 'Nunito',
-                  fontWeight: FontWeight.w600,
+          _DetailCard(
+            key: const Key('physical-asset-summary-card'),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                if (photo != null) ...[
+                  _PhysicalAssetHero(
+                    asset: current,
+                    file: photo,
+                    onPressed: () => _showEvidenceSheet(context, current),
+                  ),
+                  const SizedBox(height: 14),
+                ],
+                Row(
+                  children: [
+                    if (photo == null) ...[
+                      _PhysicalAssetHeroPlaceholder(
+                        asset: current,
+                        onPressed: () => _showEvidenceSheet(context, current),
+                      ),
+                      const SizedBox(width: 14),
+                    ],
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(current.name,
+                              style: AppType.rowTitle(scheme).copyWith(
+                                  fontSize: 18, fontWeight: FontWeight.w600)),
+                          const SizedBox(height: 6),
+                          Wrap(
+                            spacing: 6,
+                            runSpacing: 6,
+                            children: [
+                              _InfoPill(current.assetType.label),
+                              _InfoPill(_physicalAssetStatusLabel(current),
+                                  emphasized: owned),
+                              _InfoPill(current.countsInNetWorth
+                                  ? '计入净资产'
+                                  : '不计入净资产'),
+                              if (current.inclusionQuality ==
+                                  AssetInclusionQuality.needsReview)
+                                const _InfoPill('待确认'),
+                            ],
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
                 ),
-          ),
-          const SizedBox(height: 4),
-          Text(primaryCaption, style: AppType.secondary(scheme)),
-          const SizedBox(height: 10),
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: [
-              _InfoPill(current.assetType.label),
-              _InfoPill(_physicalAssetStatusLabel(current)),
-              _InfoPill(
-                current.countsInNetWorth ? '计入净资产' : '不计入净资产',
-              ),
-              if (current.inclusionQuality == AssetInclusionQuality.needsReview)
-                const _InfoPill('待确认'),
-            ],
+                const SizedBox(height: 18),
+                Text('日均持有花费', style: AppType.secondary(scheme)),
+                const SizedBox(height: 4),
+                _DailyHoldingAmount(
+                    amount: primaryMetric, available: dailyAvailable),
+                const SizedBox(height: 4),
+                Text(primaryCaption, style: AppType.secondary(scheme)),
+                const SizedBox(height: 14),
+                _AssetMetricStrip(
+                  value: hasKnownValuation
+                      ? _detailAmountNumber(
+                          current.currentValue, current.currencyCode)
+                      : '待确认',
+                  valueCaption: recentValuations.isEmpty
+                      ? '估值未填写'
+                      : '${recentValuations.first.effectiveAt.month}月${recentValuations.first.effectiveAt.day}日估',
+                  retention: cost.isExact && metrics.valueRetentionRatio.isExact
+                      ? retentionText
+                      : '不可计算',
+                  retentionCaption:
+                      cost.isExact && metrics.valueRetentionRatio.isExact
+                          ? '估值 ÷ 成本'
+                          : cost.isExact
+                              ? metrics.valueRetentionRatio.reason
+                              : cost.reason,
+                  costLabel: costLabel,
+                  cost: cost.amount == null
+                      ? '待确认'
+                      : _detailAmountNumber(cost.amount!, current.currencyCode),
+                  costCaption: !cost.isExact
+                      ? cost.reason
+                      : current.acquisitionCostSource ==
+                              AssetAcquisitionCostSource.transactionAllocations
+                          ? '已关联账单'
+                          : '手动填写',
+                  currencyCode: current.currencyCode,
+                ),
+                const SizedBox(height: 14),
+                _DetailActions(
+                  onValue:
+                      owned ? () => _showValueSheet(context, current) : null,
+                  onLink: owned
+                      ? () => _showCostLinkSheet(context, repo, current)
+                      : null,
+                  menuBuilder: (menuContext) =>
+                      _showMoreMenu(menuContext, context, repo, current),
+                ),
+              ],
+            ),
           ),
           // D1b: 卖出盈亏复盘卡
           if (!owned && saleLinks.isNotEmpty) ...[
@@ -267,8 +373,32 @@ class PhysicalAssetDetailPage extends StatelessWidget {
               ],
             ),
           ],
-          // D1a: 服役进度条
-          _ServiceProgressBar(asset: current, metrics: metrics),
+          if (current.warrantyUntil != null) ...[
+            const SizedBox(height: 12),
+            _WarrantyCard(asset: current, description: warrantyText),
+          ],
+          const SizedBox(height: 12),
+          _DetailSection(
+            title: '资料',
+            children: [
+              _DetailRow(label: '类型', value: current.assetType.label),
+              _DetailRow(label: '来源', value: current.sourceType.label),
+              if (current.brand.isNotEmpty)
+                _DetailRow(label: '品牌', value: current.brand),
+              if (current.model.isNotEmpty)
+                _DetailRow(label: '型号', value: current.model),
+              if (current.location.isNotEmpty)
+                _DetailRow(label: '位置', value: current.location),
+              if (current.note.isNotEmpty)
+                _DetailRow(label: '备注', value: current.note),
+            ],
+          ),
+          if (current.hasLinearDepreciation) ...[
+            const SizedBox(height: 12),
+            _DetailCard(
+              child: _ServiceProgressBar(asset: current, metrics: metrics),
+            ),
+          ],
           const SizedBox(height: 12),
           AssetDetailSection(
             title: '持有指标',
@@ -298,7 +428,7 @@ class PhysicalAssetDetailPage extends StatelessWidget {
               if (current.endedAt != null)
                 AssetDetailRow(
                   label: '结束日期',
-                  value: assetDateText(current.endedAt),
+                  value: _detailDateText(current.endedAt),
                 ),
             ],
           ),
@@ -309,7 +439,7 @@ class PhysicalAssetDetailPage extends StatelessWidget {
               children: [
                 for (final point in recentValuations)
                   AssetDetailRow(
-                    label: assetDateText(point.effectiveAt),
+                    label: _detailDateText(point.effectiveAt),
                     value: MoneyFormat.string(
                       point.value,
                       currencyCode: current.currencyCode,
@@ -336,17 +466,9 @@ class PhysicalAssetDetailPage extends StatelessWidget {
               ),
               AssetDetailRow(
                 label: '购买日期',
-                value: assetDateText(current.purchaseDate),
+                value: _detailDateText(current.purchaseDate),
               ),
               AssetDetailRow(label: '保修', value: warrantyText),
-              if (current.brand.isNotEmpty)
-                AssetDetailRow(label: '品牌', value: current.brand),
-              if (current.model.isNotEmpty)
-                AssetDetailRow(label: '型号', value: current.model),
-              if (current.location.isNotEmpty)
-                AssetDetailRow(label: '位置', value: current.location),
-              if (current.note.isNotEmpty)
-                AssetDetailRow(label: '备注', value: current.note),
             ],
           ),
           const SizedBox(height: 12),
@@ -371,29 +493,6 @@ class PhysicalAssetDetailPage extends StatelessWidget {
                 AssetDetailRow(
                   label: '残值',
                   value: MoneyFormat.string(current.salvageValue),
-                ),
-            ],
-          ),
-          const SizedBox(height: 12),
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: [
-              AppPillButton(
-                label: '更新估值',
-                onPressed:
-                    owned ? () => _showValueSheet(context, current) : null,
-              ),
-              AppPillButton(
-                label: '关联支出',
-                onPressed: owned
-                    ? () => _showCostLinkSheet(context, repo, current)
-                    : null,
-              ),
-              if (owned && current.usageTrackingEnabled)
-                AppPillButton(
-                  label: '记录使用',
-                  onPressed: () => _recordUsage(context, repo, current),
                 ),
             ],
           ),
@@ -551,7 +650,7 @@ class PhysicalAssetDetailPage extends StatelessWidget {
                       AssetDetailRow(
                         label: event.eventType.label,
                         value:
-                            '${assetDateText(event.occurredAt)}${event.value == null ? '' : ' · ${MoneyFormat.string(event.value!)}'}',
+                            '${_detailDateText(event.occurredAt)}${event.value == null ? '' : ' · ${MoneyFormat.string(event.value!)}'}',
                       ),
                   ],
           ),
@@ -1008,31 +1107,34 @@ Future<void> _showPhysicalAssetRefundAllocation(
 
 class _PhysicalAssetHero extends StatelessWidget {
   final PhysicalAssetEntity asset;
+  final File file;
+  final VoidCallback onPressed;
 
-  const _PhysicalAssetHero({required this.asset});
+  const _PhysicalAssetHero(
+      {required this.asset, required this.file, required this.onPressed});
 
   @override
   Widget build(BuildContext context) {
-    final source = asset.photoPath.trim().isNotEmpty
-        ? asset.photoPath.trim()
-        : asset.thumbnailPath.trim();
-    final file = source.isEmpty ? null : File(source);
     return Semantics(
       image: true,
+      button: true,
       label: '${asset.name}的物品照片',
-      child: AspectRatio(
-        aspectRatio: 4 / 3,
-        child: ClipRRect(
-          borderRadius: BorderRadius.circular(AppRadius.lg),
-          child: file != null && file.existsSync()
-              ? Image.file(
-                  file,
-                  fit: BoxFit.cover,
-                  filterQuality: FilterQuality.medium,
-                  errorBuilder: (_, __, ___) =>
-                      _PhysicalAssetHeroPlaceholder(asset: asset),
-                )
-              : _PhysicalAssetHeroPlaceholder(asset: asset),
+      child: PressableScale(
+        onPressed: onPressed,
+        child: AspectRatio(
+          aspectRatio: 4 / 3,
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(18),
+            child: Image.file(
+              file,
+              fit: BoxFit.contain,
+              filterQuality: FilterQuality.medium,
+              errorBuilder: (_, __, ___) => Center(
+                child: _PhysicalAssetHeroPlaceholder(
+                    asset: asset, onPressed: onPressed),
+              ),
+            ),
+          ),
         ),
       ),
     );
@@ -1041,19 +1143,39 @@ class _PhysicalAssetHero extends StatelessWidget {
 
 class _PhysicalAssetHeroPlaceholder extends StatelessWidget {
   final PhysicalAssetEntity asset;
+  final VoidCallback onPressed;
 
-  const _PhysicalAssetHeroPlaceholder({required this.asset});
+  const _PhysicalAssetHeroPlaceholder(
+      {required this.asset, required this.onPressed});
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    return ColoredBox(
-      color: AppColors.inputFill(scheme),
-      child: Center(
-        child: Icon(
-          assetTypeIcon(asset.assetType),
-          size: 56,
-          color: AppTextColor.secondary(scheme),
+    return Tooltip(
+      message: '添加照片',
+      child: PressableScale(
+        onPressed: onPressed,
+        child: CustomPaint(
+          painter: _PhotoPlaceholderBorder(
+              color: scheme.onSurface.withValues(alpha: 0.22)),
+          child: SizedBox(
+            key: const Key('physical-asset-photo-placeholder'),
+            width: 68,
+            height: 68,
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(assetTypeIcon(asset.assetType),
+                    size: 24, color: AppTextColor.hint(scheme)),
+                const SizedBox(height: 3),
+                FittedBox(
+                  fit: BoxFit.scaleDown,
+                  child: Text('添加照片',
+                      style: AppType.caption(scheme).copyWith(fontSize: 10.5)),
+                ),
+              ],
+            ),
+          ),
         ),
       ),
     );
@@ -1062,20 +1184,376 @@ class _PhysicalAssetHeroPlaceholder extends StatelessWidget {
 
 class _InfoPill extends StatelessWidget {
   final String text;
-  const _InfoPill(this.text);
+  final bool emphasized;
+  const _InfoPill(this.text, {this.emphasized = false});
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
       decoration: BoxDecoration(
-        color: AppColors.iconCircleFill(scheme),
+        color: emphasized
+            ? scheme.primary.withValues(alpha: 0.14)
+            : AppColors.iconCircleFill(scheme),
         borderRadius: BorderRadius.circular(999),
       ),
       child: Text(
         text,
-        style: AppType.caption(scheme),
+        style: AppType.secondary(scheme).copyWith(
+          fontSize: 11.5,
+          color: emphasized ? scheme.primary : AppTextColor.secondary(scheme),
+        ),
+      ),
+    );
+  }
+}
+
+class _PhotoPlaceholderBorder extends CustomPainter {
+  final Color color;
+  const _PhotoPlaceholderBorder({required this.color});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final path = Path()
+      ..addRRect(RRect.fromRectAndRadius(
+          (Offset.zero & size).deflate(0.6), const Radius.circular(18)));
+    final paint = Paint()
+      ..color = color
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.2;
+    for (final metric in path.computeMetrics()) {
+      for (var offset = 0.0; offset < metric.length; offset += 8) {
+        canvas.drawPath(
+            metric.extractPath(offset, math.min(offset + 5, metric.length)),
+            paint);
+      }
+    }
+  }
+
+  @override
+  bool shouldRepaint(_PhotoPlaceholderBorder oldDelegate) =>
+      color != oldDelegate.color;
+}
+
+class _DetailCard extends StatelessWidget {
+  final Widget child;
+  final EdgeInsetsGeometry padding;
+  const _DetailCard(
+      {super.key,
+      required this.child,
+      this.padding = const EdgeInsets.all(16)});
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Container(
+      decoration: BoxDecoration(
+        color: AppColors.card(scheme),
+        borderRadius: BorderRadius.circular(22),
+        border: Border.all(color: AppColors.hairline(scheme), width: 0.5),
+      ),
+      padding: padding,
+      child: child,
+    );
+  }
+}
+
+class _DailyHoldingAmount extends StatelessWidget {
+  final String amount;
+  final bool available;
+  const _DailyHoldingAmount({required this.amount, required this.available});
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return FittedBox(
+      alignment: Alignment.centerLeft,
+      fit: BoxFit.scaleDown,
+      child: Text.rich(
+        key: const Key('physical-asset-primary-metric'),
+        TextSpan(children: [
+          TextSpan(text: amount),
+          if (available)
+            TextSpan(
+              text: ' /天',
+              style: TextStyle(
+                fontSize: 18,
+                fontWeight: FontWeight.w700,
+                color: AppTextColor.secondary(scheme),
+              ),
+            ),
+        ]),
+        maxLines: 1,
+        style: TextStyle(
+          fontFamily: 'AssetAmount',
+          fontSize: available ? 40 : 24,
+          fontWeight: FontWeight.w800,
+          height: 1.15,
+          letterSpacing: 0,
+          color: scheme.onSurface,
+          fontFeatures: const [FontFeature.tabularFigures()],
+        ),
+      ),
+    );
+  }
+}
+
+class _AssetMetricStrip extends StatelessWidget {
+  final String value;
+  final String valueCaption;
+  final String retention;
+  final String retentionCaption;
+  final String costLabel;
+  final String cost;
+  final String costCaption;
+  final String currencyCode;
+
+  const _AssetMetricStrip({
+    required this.value,
+    required this.valueCaption,
+    required this.retention,
+    required this.retentionCaption,
+    required this.costLabel,
+    required this.cost,
+    required this.costCaption,
+    required this.currencyCode,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final items = [
+      ('当前估值', value, valueCaption),
+      ('保值率', retention, retentionCaption),
+      (costLabel, cost, costCaption),
+    ];
+    return LayoutBuilder(builder: (context, constraints) {
+      final stacked = constraints.maxWidth < 270 ||
+          MediaQuery.textScalerOf(context).scale(15.5) > 22;
+      Widget tile((String, String, String) item) => Semantics(
+            label: '${item.$1} ${item.$2}'
+                '${item.$1 == '保值率' ? '' : ' $currencyCode'}，${item.$3}',
+            child: ExcludeSemantics(
+              child: Container(
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: AppColors.iconCircleFill(scheme),
+                  borderRadius: BorderRadius.circular(14),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(item.$1,
+                        style:
+                            AppType.secondary(scheme).copyWith(fontSize: 11.5)),
+                    const SizedBox(height: 3),
+                    FittedBox(
+                      alignment: Alignment.centerLeft,
+                      fit: BoxFit.scaleDown,
+                      child: Text(item.$2,
+                          style: TextStyle(
+                            fontFamily: 'AssetAmount',
+                            fontSize: 15.5,
+                            fontWeight: FontWeight.w800,
+                            color: scheme.onSurface,
+                            fontFeatures: const [FontFeature.tabularFigures()],
+                          )),
+                    ),
+                    const SizedBox(height: 1),
+                    Text(item.$3,
+                        style: AppType.caption(scheme).copyWith(fontSize: 11)),
+                  ],
+                ),
+              ),
+            ),
+          );
+      if (stacked) {
+        return Column(
+          key: const Key('physical-asset-metrics-stacked'),
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            for (var i = 0; i < items.length; i++) ...[
+              if (i > 0) const SizedBox(height: 8),
+              tile(items[i]),
+            ],
+          ],
+        );
+      }
+      return Row(
+        key: const Key('physical-asset-metrics-three-columns'),
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          for (var i = 0; i < items.length; i++) ...[
+            if (i > 0) const SizedBox(width: 8),
+            Expanded(child: tile(items[i])),
+          ],
+        ],
+      );
+    });
+  }
+}
+
+class _DetailActions extends StatelessWidget {
+  final VoidCallback? onValue;
+  final VoidCallback? onLink;
+  final ValueChanged<BuildContext> menuBuilder;
+  const _DetailActions(
+      {required this.onValue, required this.onLink, required this.menuBuilder});
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final scale = MediaQuery.textScalerOf(context);
+    final height = math.max(40.0, scale.scale(15.5) * 1.3 + 12);
+    Widget button(bool primary, double width) => AppPillButton(
+          label: primary ? '更新估值' : '关联支出',
+          onPressed: primary ? onValue : onLink,
+          width: width,
+          height: height,
+          padding: const EdgeInsets.symmetric(horizontal: 10),
+          fillColor:
+              primary ? scheme.primary : AppColors.iconCircleFill(scheme),
+          foregroundColor: primary ? scheme.onPrimary : scheme.onSurface,
+        );
+    final menu = Builder(
+      builder: (anchor) => AppCircleButton(
+        icon: CupertinoIcons.ellipsis,
+        semanticLabel: '更多操作',
+        size: 40,
+        expandHitTarget: false,
+        onPressed: () => menuBuilder(anchor),
+      ),
+    );
+    return LayoutBuilder(builder: (context, constraints) {
+      if (scale.scale(15.5) > 22 || constraints.maxWidth < 270) {
+        return Column(children: [
+          button(true, constraints.maxWidth),
+          const SizedBox(height: 8),
+          Row(children: [
+            Expanded(child: button(false, constraints.maxWidth - 48)),
+            const SizedBox(width: 8),
+            menu,
+          ]),
+        ]);
+      }
+      final width = (constraints.maxWidth - 56) / 2;
+      return Row(children: [
+        Expanded(child: button(true, width)),
+        const SizedBox(width: 8),
+        Expanded(child: button(false, width)),
+        const SizedBox(width: 8),
+        menu,
+      ]);
+    });
+  }
+}
+
+class _WarrantyCard extends StatelessWidget {
+  final PhysicalAssetEntity asset;
+  final String description;
+  const _WarrantyCard({required this.asset, required this.description});
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final purchase = asset.purchaseDate;
+    final end = asset.warrantyUntil!;
+    final total = purchase == null
+        ? 0
+        : assetCalendarDay(end).difference(assetCalendarDay(purchase)).inDays;
+    final passed = purchase == null
+        ? 0
+        : assetCalendarDay(AppClock.now)
+            .difference(assetCalendarDay(purchase))
+            .inDays;
+    return _DetailCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Wrap(
+            alignment: WrapAlignment.spaceBetween,
+            spacing: 10,
+            runSpacing: 4,
+            children: [
+              Text('保修',
+                  style: AppType.rowTitle(scheme).copyWith(fontSize: 15)),
+              Text(description, style: AppType.secondary(scheme)),
+            ],
+          ),
+          if (total > 0) ...[
+            const SizedBox(height: 10),
+            ClipRRect(
+              borderRadius: BorderRadius.circular(99),
+              child: LinearProgressIndicator(
+                value: (passed / total).clamp(0.0, 1.0),
+                minHeight: 6,
+                backgroundColor: scheme.primary.withValues(alpha: 0.16),
+                color: scheme.primary,
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _DetailSection extends StatelessWidget {
+  final String title;
+  final List<Widget> children;
+  const _DetailSection({required this.title, required this.children});
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 4, 16, 7),
+          child: Text(title,
+              style: AppType.secondary(Theme.of(context).colorScheme)),
+        ),
+        _DetailCard(
+          padding: const EdgeInsets.symmetric(horizontal: 14),
+          child: Column(children: [
+            for (var i = 0; i < children.length; i++) ...[
+              if (i > 0)
+                Divider(
+                    height: 0.5,
+                    thickness: 0.5,
+                    color: AppColors.hairline(Theme.of(context).colorScheme)),
+              children[i],
+            ],
+          ]),
+        ),
+      ],
+    );
+  }
+}
+
+class _DetailRow extends StatelessWidget {
+  final String label;
+  final String value;
+  const _DetailRow({required this.label, required this.value});
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 12),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(label,
+              style: AppType.secondary(scheme).copyWith(fontSize: 14.5)),
+          const SizedBox(width: 16),
+          Expanded(
+            child: Text(value,
+                textAlign: TextAlign.right,
+                style: AppType.body(scheme).copyWith(fontSize: 14.5)),
+          ),
+        ],
       ),
     );
   }
@@ -1105,7 +1583,7 @@ class _ServiceProgressBar extends StatelessWidget {
     } else if (asset.warrantyUntil != null && asset.purchaseDate != null) {
       lifespanDays =
           asset.warrantyUntil!.difference(asset.purchaseDate!).inDays;
-      lifespanLabel = '保修至 ${assetDateText(asset.warrantyUntil)}';
+      lifespanLabel = '保修至 ${_detailDateText(asset.warrantyUntil)}';
     } else {
       return const SizedBox.shrink();
     }
@@ -1195,8 +1673,8 @@ class _SellPnLCard extends StatelessWidget {
                 ),
                 _PnLRow(
                   label: '出售到账',
-                  value:
-                      MoneyFormat.string(saleProceeds, currencyCode: currencyCode),
+                  value: MoneyFormat.string(saleProceeds,
+                      currencyCode: currencyCode),
                   scheme: scheme,
                 ),
               ],
