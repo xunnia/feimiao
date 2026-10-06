@@ -70,27 +70,27 @@ final class ThemePopupPresentationTests: XCTestCase {
     }
 
     @MainActor
-    func testCaptureNativeThemeConfirmationsForVisualReview() throws {
+    func testCaptureNativeThemeConfirmationsForVisualReview() async throws {
         for preset in AppThemePreset.allCases {
             let scheme: ColorScheme = preset == .night ? .dark : .light
-            try attachDialog(palette(preset, scheme: scheme), name: "confirmation-\(preset.rawValue)-delete")
-            try attachDialog(palette(preset, scheme: scheme), name: "confirmation-\(preset.rawValue)-ordinary",
-                             destructive: false)
+            try await attachDialog(palette(preset, scheme: scheme), name: "confirmation-\(preset.rawValue)-delete")
+            try await attachDialog(palette(preset, scheme: scheme), name: "confirmation-\(preset.rawValue)-ordinary",
+                                   destructive: false)
         }
-        try attachDialog(palette(.warm, scheme: .dark), name: "confirmation-warm-dark")
-        try attachDialog(palette(.pink), name: "confirmation-pink-320-large", width: 320,
-                         contentSize: .accessibilityExtraExtraLarge)
+        try await attachDialog(palette(.warm, scheme: .dark), name: "confirmation-warm-dark")
+        try await attachDialog(palette(.pink), name: "confirmation-pink-320-large", width: 320,
+                               contentSize: .accessibilityExtraExtraLarge)
     }
 
     @MainActor
-    func testCaptureNativeFormsWithEveryThemeForVisualReview() throws {
+    func testCaptureNativeFormsWithEveryThemeForVisualReview() async throws {
         for preset in AppThemePreset.allCases {
-            try attachForm(palette(preset, scheme: preset == .night ? .dark : .light),
-                           name: "form-\(preset.rawValue)")
+            try await attachForm(palette(preset, scheme: preset == .night ? .dark : .light),
+                                 name: "form-\(preset.rawValue)")
         }
-        try attachForm(palette(.warm, scheme: .dark), name: "form-warm-dark")
-        try attachForm(palette(.pink), name: "form-pink-320-large", width: 320,
-                       contentSize: .accessibilityExtraExtraLarge)
+        try await attachForm(palette(.warm, scheme: .dark), name: "form-warm-dark")
+        try await attachForm(palette(.pink), name: "form-pink-320-large", width: 320,
+                             contentSize: .accessibilityExtraExtraLarge)
     }
 
     private func palette(_ preset: AppThemePreset, scheme: ColorScheme = .light,
@@ -102,7 +102,7 @@ final class ThemePopupPresentationTests: XCTestCase {
 
     @MainActor
     private func attachDialog(_ theme: AppThemePalette, name: String, width: CGFloat = 420,
-                              destructive: Bool = true, contentSize: UIContentSizeCategory = .large) throws {
+                              destructive: Bool = true, contentSize: UIContentSizeCategory = .large) async throws {
         let dialog = AppNativeConfirmation.makeController(
             title: destructive ? "删除这条预算规则？" : "改日常预算",
             message: destructive ? "这几天会回到日常预算，已经记录的账单不会改变。"
@@ -110,14 +110,14 @@ final class ThemePopupPresentationTests: XCTestCase {
             confirmText: destructive ? "删除" : "改", cancelText: "取消",
             destructive: destructive, colorScheme: theme.isDark ? .dark : .light,
             onCancel: {}, onConfirm: {})
-        try attachPresentation(theme, name: name, width: width, contentSize: contentSize,
-                               root: LinearGradient(colors: [theme.backgroundTop, theme.backgroundBottom],
-                                                    startPoint: .top, endPoint: .bottom).ignoresSafeArea(), dialog: dialog)
+        try await attachPresentation(theme, name: name, width: width, contentSize: contentSize,
+                                     root: LinearGradient(colors: [theme.backgroundTop, theme.backgroundBottom],
+                                                          startPoint: .top, endPoint: .bottom).ignoresSafeArea(), dialog: dialog)
     }
 
     @MainActor
     private func attachForm(_ theme: AppThemePalette, name: String, width: CGFloat = 420,
-                            contentSize: UIContentSizeCategory = .large) throws {
+                            contentSize: UIContentSizeCategory = .large) async throws {
         let defaults = UserDefaults.standard
         let saved = ["qingji.themePreset", "qingji.themeIntensity", "qingji.themeCardAlpha"]
             .map { ($0, defaults.object(forKey: $0)) }
@@ -155,13 +155,13 @@ final class ThemePopupPresentationTests: XCTestCase {
                 }
             }
         }
-        try attachPresentation(theme, name: name, width: width, contentSize: contentSize, root: root)
+        try await attachPresentation(theme, name: name, width: width, contentSize: contentSize, root: root)
     }
 
     @MainActor
     private func attachPresentation<Content: View>(_ theme: AppThemePalette, name: String, width: CGFloat,
                                                   contentSize: UIContentSizeCategory, root: Content,
-                                                  dialog: UIAlertController? = nil) throws {
+                                                  dialog: UIAlertController? = nil) async throws {
         let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
         let previousKeyWindow = scene.windows.first(where: \.isKeyWindow)
         let window = UIWindow(windowScene: scene)
@@ -170,52 +170,104 @@ final class ThemePopupPresentationTests: XCTestCase {
         window.traitOverrides.preferredContentSizeCategory = contentSize
         let content = root.environment(\.colorScheme, theme.isDark ? .dark : .light)
             .environment(\.locale, Locale(identifier: "zh-Hans"))
-        let controller = UIHostingController(rootView: content)
+        let controller = CaptureHostingController(rootView: content)
         window.rootViewController = controller
         controller.view.backgroundColor = UIColor(theme.backgroundBottom)
         window.makeKeyAndVisible()
-        defer {
-            controller.dismiss(animated: false)
-            window.isHidden = true
-            window.rootViewController = nil
-            previousKeyWindow?.makeKey()
-        }
+        defer { previousKeyWindow?.makeKey() }
         controller.view.frame = window.bounds
         controller.view.setNeedsLayout()
         controller.view.layoutIfNeeded()
-        try waitUntil { controller.view.window === window && !controller.isBeingPresented }
-        if let dialog { controller.present(dialog, animated: false) }
-        if let dialog {
-            try waitUntil {
-                controller.presentedViewController === dialog && dialog.view.window === window
-                    && !dialog.isBeingPresented
+        var captureError: Error?
+        do {
+            // Root-window attachment precedes viewDidAppear; presenting earlier overlaps UIKit transitions.
+            try await waitUntil(name: name, phase: "host appearance") {
+                controller.isVisible && controller.view.window === window
+                    && !controller.isBeingPresented && controller.transitionCoordinator == nil
             }
+            if let dialog {
+                var presentationCompleted = false
+                controller.present(dialog, animated: false) { presentationCompleted = true }
+                try await waitUntil(name: name, phase: "dialog presentation") {
+                    presentationCompleted && controller.presentedViewController === dialog
+                        && dialog.view.window === window && !dialog.isBeingPresented
+                        && dialog.transitionCoordinator == nil
+                }
+            }
+            controller.view.layoutIfNeeded()
+            dialog?.view.layoutIfNeeded()
+            let format = UIGraphicsImageRendererFormat()
+            format.scale = 3
+            let image = UIGraphicsImageRenderer(bounds: window.bounds, format: format).image { _ in
+                XCTAssertTrue(window.drawHierarchy(in: window.bounds, afterScreenUpdates: true))
+            }
+            XCTAssertEqual(image.size.width, width)
+            let attachment = XCTAttachment(image: image)
+            attachment.name = name
+            attachment.lifetime = .keepAlways
+            add(attachment)
+        } catch {
+            captureError = error
         }
-        controller.view.layoutIfNeeded()
-        dialog?.view.layoutIfNeeded()
-        let format = UIGraphicsImageRendererFormat()
-        format.scale = 3
-        let image = UIGraphicsImageRenderer(bounds: window.bounds, format: format).image { _ in
-            XCTAssertTrue(window.drawHierarchy(in: window.bounds, afterScreenUpdates: true))
+        do {
+            try await closeCapture(controller, window: window, name: name)
+        } catch {
+            if let captureError { throw captureError }
+            throw error
         }
-        XCTAssertEqual(image.size.width, width)
-        let attachment = XCTAttachment(image: image)
-        attachment.name = name
-        attachment.lifetime = .keepAlways
-        add(attachment)
+        if let captureError { throw captureError }
     }
 
     @MainActor
-    private func waitUntil(timeout: TimeInterval = 5, _ condition: () -> Bool) throws {
+    private func closeCapture<Content: View>(_ controller: CaptureHostingController<Content>,
+                                             window: UIWindow, name: String) async throws {
+        if let dialog = controller.presentedViewController {
+            var dismissalCompleted = false
+            controller.dismiss(animated: false) { dismissalCompleted = true }
+            try await waitUntil(name: name, phase: "dialog dismissal") {
+                dismissalCompleted && controller.presentedViewController == nil
+                    && dialog.presentingViewController == nil && !dialog.isBeingDismissed
+                    && dialog.transitionCoordinator == nil
+            }
+        }
+        try await waitUntil(name: name, phase: "host before removal") {
+            controller.isVisible && controller.transitionCoordinator == nil
+        }
+        window.isHidden = true
+        try await waitUntil(name: name, phase: "host disappearance") {
+            !controller.isVisible && controller.transitionCoordinator == nil
+        }
+        window.rootViewController = nil
+    }
+
+    @MainActor
+    private func waitUntil(name: String, phase: String, timeout: TimeInterval = 5,
+                           file: StaticString = #filePath, line: UInt = #line,
+                           _ condition: () -> Bool) async throws {
         let deadline = Date().addingTimeInterval(timeout)
         while !condition(), Date() < deadline {
-            RunLoop.main.run(until: min(deadline, Date().addingTimeInterval(0.01)))
+            try await Task.sleep(nanoseconds: 10_000_000)
         }
-        XCTAssertTrue(condition(), "Native view did not become ready for capture")
+        XCTAssertTrue(condition(), "\(name): native view did not become ready for \(phase)", file: file, line: line)
         guard condition() else { throw CaptureError.presentationNotReady }
     }
 
     private enum CaptureError: Error { case presentationNotReady }
+
+    @MainActor
+    private final class CaptureHostingController<Content: View>: UIHostingController<Content> {
+        private(set) var isVisible = false
+
+        override func viewDidAppear(_ animated: Bool) {
+            super.viewDidAppear(animated)
+            isVisible = true
+        }
+
+        override func viewDidDisappear(_ animated: Bool) {
+            super.viewDidDisappear(animated)
+            isVisible = false
+        }
+    }
 
     @MainActor
     private func nativeDialog(destructive: Bool, scheme: ColorScheme) -> UIAlertController {
