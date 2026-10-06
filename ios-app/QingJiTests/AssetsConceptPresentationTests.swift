@@ -94,7 +94,7 @@ final class AssetsConceptPresentationTests: XCTestCase {
 
     func testUnknownCostDoesNotTurnDefaultZeroIntoDailyCost() {
         let metrics = AssetMetrics.resolve(PhysicalAssetMetricInput(netAcquisitionCost: 0,
-            currentNetValue: 0, purchasedAt: now, isEconomicallyOwned: true,
+            currentNetValue: 0, purchasedAt: now, endedAt: nil, isEconomicallyOwned: true,
             hasKnownValuation: false), asOf: now)
         XCTAssertNil(AssetsPresentation.physicalDailyValue(metrics, costSource: "manual_unknown"))
         XCTAssertEqual(AssetsPresentation.physicalDailyValue(metrics, costSource: "manual"), 0)

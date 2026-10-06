@@ -35,6 +35,11 @@ struct AssetsOverviewDashboard: View {
         MoneyFormat.string(value, currencyCode: "CNY", withSymbol: false)
     }
 
+    static func changeAmount(_ value: Decimal) -> String {
+        let formatted = amount(value)
+        return value >= 0 ? "+\(formatted)" : formatted
+    }
+
     var body: some View {
         let history = projection
         VStack(alignment: .leading, spacing: 10) {
