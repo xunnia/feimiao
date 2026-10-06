@@ -227,8 +227,7 @@ struct PhysicalAssetDetailView: View {
     }
 
     @ViewBuilder private var assetPhoto: some View {
-        if let url = AttachmentStore.url(for: asset.thumbnailPath.isEmpty ? asset.photoPath : asset.thumbnailPath),
-           let image = UIImage(contentsOfFile: url.path) {
+        if let image = Self.photoImage(thumbnailPath: asset.thumbnailPath, photoPath: asset.photoPath) {
             Image(uiImage: image).resizable().scaledToFill()
                 .frame(width: 68, height: 68)
                 .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
@@ -242,6 +241,15 @@ struct PhysicalAssetDetailView: View {
             .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous)
                 .strokeBorder(Color.secondary.opacity(0.3), style: StrokeStyle(lineWidth: 1, dash: [4, 3])))
         }
+    }
+
+    static func photoImage(thumbnailPath: String, photoPath: String) -> UIImage? {
+        for path in [thumbnailPath, photoPath] where !path.isEmpty {
+            if let url = AttachmentStore.url(for: path), let image = UIImage(contentsOfFile: url.path) {
+                return image
+            }
+        }
+        return nil
     }
 
     @ViewBuilder private var identityTags: some View {

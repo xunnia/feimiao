@@ -108,6 +108,26 @@ final class AssetsConceptPresentationTests: XCTestCase {
         XCTAssertEqual(PhysicalAssetDetailView.formattedDate(nil), "未填写")
     }
 
+    func testPhysicalPhotoFallsBackWhenThumbnailIsMissingOrUndecodable() throws {
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        let original = UIGraphicsImageRenderer(size: CGSize(width: 8, height: 8), format: format).image { renderer in
+            renderer.cgContext.setFillColor(UIColor.black.cgColor)
+            renderer.cgContext.fill(CGRect(x: 0, y: 0, width: 8, height: 8))
+        }
+        let data = try XCTUnwrap(original.pngData())
+        let photoPath = try AttachmentStore.save(data: data, fileExtension: "png")
+        defer { AttachmentStore.remove(photoPath) }
+        let corruptPath = try AttachmentStore.save(data: Data([0, 1, 2]), fileExtension: "png")
+        defer { AttachmentStore.remove(corruptPath) }
+        let missingPath = "\(UUID().uuidString).png"
+        XCTAssertEqual(try XCTUnwrap(PhysicalAssetDetailView.photoImage(thumbnailPath: missingPath,
+            photoPath: photoPath)).size.width, 8)
+        XCTAssertEqual(try XCTUnwrap(PhysicalAssetDetailView.photoImage(thumbnailPath: corruptPath,
+            photoPath: photoPath)).size.width, 8)
+        XCTAssertNil(PhysicalAssetDetailView.photoImage(thumbnailPath: corruptPath, photoPath: missingPath))
+    }
+
     func testCaptureFourConceptPagesWithThemesNarrowWidthAndLargeText() async throws {
         let schema = Schema([Account.self, Book.self, TxCategory.self, MoneyTransaction.self,
             PhysicalAsset.self, AssetEvent.self, AssetUsageEvent.self, AssetTransactionLink.self,
