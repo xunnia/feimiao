@@ -517,7 +517,12 @@ struct PhysicalAssetDetailView: View {
 
     static func formattedDate(_ date: Date?) -> String {
         guard let date else { return "未填写" }
-        return date.formatted(.dateTime.year().month(.defaultDigits).day().locale(Locale(identifier: "zh_CN")))
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "zh_CN")
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.timeZone = .current
+        formatter.dateFormat = "yyyy年M月d日"
+        return formatter.string(from: date)
     }
 
     private func retentionText(_ ratio: Decimal) -> String {
