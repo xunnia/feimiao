@@ -108,6 +108,14 @@ final class AssetsConceptPresentationTests: XCTestCase {
         XCTAssertEqual(PhysicalAssetDetailView.formattedDate(nil), "未填写")
     }
 
+    func testPhysicalIdentityHeaderKeepsRegularLayoutAndStacksAtLargeTextSizes() {
+        XCTAssertFalse(PhysicalAssetDetailView.stacksIdentityHeader(for: .large))
+        XCTAssertFalse(PhysicalAssetDetailView.stacksIdentityHeader(for: .xxLarge))
+        XCTAssertTrue(PhysicalAssetDetailView.stacksIdentityHeader(for: .xxxLarge))
+        XCTAssertTrue(PhysicalAssetDetailView.stacksIdentityHeader(for: .accessibility3))
+        XCTAssertTrue(PhysicalAssetDetailView.stacksIdentityHeader(for: .accessibility5))
+    }
+
     func testPhysicalPhotoFallsBackWhenThumbnailIsMissingOrUndecodable() throws {
         let format = UIGraphicsImageRendererFormat()
         format.scale = 1

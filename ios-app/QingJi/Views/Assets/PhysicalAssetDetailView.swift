@@ -180,19 +180,16 @@ struct PhysicalAssetDetailView: View {
 
     private var hero: some View {
         VStack(alignment: .leading, spacing: 14) {
-            HStack(alignment: .center, spacing: 14) {
-                Button { activeSheet = .evidence } label: { assetPhoto }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel(asset.photoPath.isEmpty ? "添加物品照片" : "查看照片与凭证")
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(asset.name).font(.headline).foregroundStyle(.primary)
-                    ViewThatFits(in: .horizontal) {
-                        HStack(spacing: 6) { identityTags }
-                        VStack(alignment: .leading, spacing: 4) { identityTags }
-                    }
-                    .font(.caption).foregroundStyle(.secondary)
+            if Self.stacksIdentityHeader(for: typeSize) {
+                VStack(alignment: .leading, spacing: 12) {
+                    assetPhotoButton
+                    identityHeader
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
+            } else {
+                HStack(alignment: .center, spacing: 14) {
+                    assetPhotoButton
+                    identityHeader
+                }
             }
             VStack(alignment: .leading, spacing: 4) {
                 Text(hasUnconfirmedCost ? "日均持有花费 · 按已知成本" : "日均持有花费")
@@ -224,6 +221,33 @@ struct PhysicalAssetDetailView: View {
         .padding(16)
         .appThemeCard(cornerRadius: 22)
         .accessibilityIdentifier("physical-asset-hero")
+    }
+
+    static func stacksIdentityHeader(for size: DynamicTypeSize) -> Bool {
+        size >= .xxxLarge
+    }
+
+    private var assetPhotoButton: some View {
+        Button { activeSheet = .evidence } label: { assetPhoto }
+            .buttonStyle(.plain)
+            .accessibilityLabel(asset.photoPath.isEmpty ? "添加物品照片" : "查看照片与凭证")
+    }
+
+    private var identityHeader: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(asset.name).font(.headline).foregroundStyle(.primary)
+            if Self.stacksIdentityHeader(for: typeSize) {
+                VStack(alignment: .leading, spacing: 4) { identityTags }
+                    .fixedSize(horizontal: false, vertical: true)
+            } else {
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 6) { identityTags }
+                    VStack(alignment: .leading, spacing: 4) { identityTags }
+                }
+            }
+        }
+        .font(.caption).foregroundStyle(.secondary)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     @ViewBuilder private var assetPhoto: some View {
