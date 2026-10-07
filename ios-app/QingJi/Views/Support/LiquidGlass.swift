@@ -157,6 +157,12 @@ private struct LiquidGlassControlSurface<S: InsettableShape>: ViewModifier {
 
     func body(content: Content) -> some View {
         content
+            .background {
+                if LiquidGlassControlAppearance.usesNeutralLightSurface(subtle: subtle, isDark: theme.isDark) {
+                    // Clear glass needs a backing treatment on bright, saturated backgrounds.
+                    shape.fill(Color.white.opacity(0.52))
+                }
+            }
             .glassEffect(glass, in: shape)
             .overlay {
                 if subtle {
