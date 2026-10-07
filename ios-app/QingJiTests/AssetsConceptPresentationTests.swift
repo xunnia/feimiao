@@ -301,7 +301,9 @@ final class AssetsConceptPresentationTests: XCTestCase {
         } ?? view
         let controller = CaptureHostingController(rootView: root.liquidGlassChrome().modelContainer(container).environment(router)
             .environment(\.colorScheme, scheme).environment(\.locale, Locale(identifier: "zh-Hans")))
-        window.rootViewController = controller
+        let presenter = UIViewController()
+        window.rootViewController = presenter
+        controller.modalPresentationStyle = .fullScreen
         window.makeKeyAndVisible()
         defer {
             window.isHidden = true
@@ -313,8 +315,14 @@ final class AssetsConceptPresentationTests: XCTestCase {
         var captureError: Error?
         var intermediateController: UIViewController?
         do {
+            try await waitUntil(name: name, phase: "window appearance") {
+                presenter.view.window === window && presenter.transitionCoordinator == nil
+            }
+            var presented = false
+            presenter.present(controller, animated: false) { presented = true }
             try await waitUntil(name: name, phase: "appearance") {
-                controller.isVisible && controller.view.window === window && controller.transitionCoordinator == nil
+                presented && controller.isVisible && controller.view.window === window
+                    && !controller.isBeingPresented && controller.transitionCoordinator == nil
             }
             if parent != nil {
                 presentation.isPresented = true
@@ -388,10 +396,18 @@ final class AssetsConceptPresentationTests: XCTestCase {
         try await waitUntil(name: name, phase: "host before removal") {
             controller.isVisible && controller.transitionCoordinator == nil
         }
-        window.isHidden = true
+        if let presenter = controller.presentingViewController {
+            var completed = false
+            presenter.dismiss(animated: false) { completed = true }
+            try await waitUntil(name: name, phase: "host dismissal") {
+                completed && presenter.presentedViewController == nil && controller.presentingViewController == nil
+                    && !controller.isVisible && !controller.isBeingDismissed && controller.transitionCoordinator == nil
+            }
+        }
         try await waitUntil(name: name, phase: "disappearance") {
             !controller.isVisible && controller.transitionCoordinator == nil
         }
+        window.isHidden = true
     }
 
     private func waitUntil(name: String, phase: String, _ ready: () -> Bool) async throws {

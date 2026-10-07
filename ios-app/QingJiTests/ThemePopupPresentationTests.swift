@@ -171,18 +171,28 @@ final class ThemePopupPresentationTests: XCTestCase {
         let content = root.environment(\.colorScheme, theme.isDark ? .dark : .light)
             .environment(\.locale, Locale(identifier: "zh-Hans"))
         let controller = CaptureHostingController(rootView: content)
-        window.rootViewController = controller
+        let presenter = UIViewController()
+        window.rootViewController = presenter
+        controller.modalPresentationStyle = .fullScreen
         controller.view.backgroundColor = UIColor(theme.backgroundBottom)
         window.makeKeyAndVisible()
-        defer { previousKeyWindow?.makeKey() }
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+            previousKeyWindow?.makeKey()
+        }
         controller.view.frame = window.bounds
         controller.view.setNeedsLayout()
         controller.view.layoutIfNeeded()
         var captureError: Error?
         do {
-            // Root-window attachment precedes viewDidAppear; presenting earlier overlaps UIKit transitions.
+            try await waitUntil(name: name, phase: "window appearance") {
+                presenter.view.window === window && presenter.transitionCoordinator == nil
+            }
+            var presentationCompleted = false
+            presenter.present(controller, animated: false) { presentationCompleted = true }
             try await waitUntil(name: name, phase: "host appearance") {
-                controller.isVisible && controller.view.window === window
+                presentationCompleted && controller.isVisible && controller.view.window === window
                     && !controller.isBeingPresented && controller.transitionCoordinator == nil
             }
             if let dialog {
@@ -233,10 +243,19 @@ final class ThemePopupPresentationTests: XCTestCase {
         try await waitUntil(name: name, phase: "host before removal") {
             controller.isVisible && controller.transitionCoordinator == nil
         }
-        window.isHidden = true
+        // Hiding a root window does not guarantee viewDidDisappear on iOS 26.
+        if let presenter = controller.presentingViewController {
+            var dismissalCompleted = false
+            presenter.dismiss(animated: false) { dismissalCompleted = true }
+            try await waitUntil(name: name, phase: "host dismissal") {
+                dismissalCompleted && presenter.presentedViewController == nil && controller.presentingViewController == nil
+                    && !controller.isVisible && !controller.isBeingDismissed && controller.transitionCoordinator == nil
+            }
+        }
         try await waitUntil(name: name, phase: "host disappearance") {
             !controller.isVisible && controller.transitionCoordinator == nil
         }
+        window.isHidden = true
         window.rootViewController = nil
     }
 
