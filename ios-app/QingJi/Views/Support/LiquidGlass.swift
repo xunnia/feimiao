@@ -136,9 +136,8 @@ extension View {
 }
 
 enum LiquidGlassControlAppearance {
-    static func usesNeutralLightSurface(subtle: Bool, isDark: Bool) -> Bool { subtle && !isDark }
     static func outlineOpacity(subtle: Bool, isDark: Bool) -> Double {
-        usesNeutralLightSurface(subtle: subtle, isDark: isDark) ? 0.18 : 0.12
+        subtle && !isDark ? 0.18 : 0.12
     }
 }
 
@@ -148,22 +147,12 @@ private struct LiquidGlassControlSurface<S: InsettableShape>: ViewModifier {
     @AppThemeContext private var theme
 
     private var glass: Glass {
-        if LiquidGlassControlAppearance.usesNeutralLightSurface(subtle: subtle, isDark: theme.isDark) {
-            // Tint the native material, not the page or a second opaque button background.
-            return .clear.tint(Color(white: 0.96).opacity(0.24)).interactive()
-        }
-        return subtle ? .clear.interactive() : .regular.interactive()
+        subtle ? .clear.interactive() : .regular.interactive()
     }
 
     func body(content: Content) -> some View {
         content
             .glassEffect(glass, in: shape)
-            .background {
-                if LiquidGlassControlAppearance.usesNeutralLightSurface(subtle: subtle, isDark: theme.isDark) {
-                    // Place the backing beneath the glass, not inside its content layer.
-                    shape.fill(Color.white.opacity(0.52))
-                }
-            }
             .overlay {
                 if subtle {
                     shape.strokeBorder(Color.primary.opacity(LiquidGlassControlAppearance.outlineOpacity(

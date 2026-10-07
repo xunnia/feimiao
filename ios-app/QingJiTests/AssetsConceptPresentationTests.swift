@@ -138,13 +138,76 @@ final class AssetsConceptPresentationTests: XCTestCase {
         XCTAssertTrue(subtlePill.subtle)
     }
 
-    func testNeutralGlassCalibrationOnlyChangesOptInLightControls() {
-        XCTAssertTrue(LiquidGlassControlAppearance.usesNeutralLightSurface(subtle: true, isDark: false))
-        XCTAssertFalse(LiquidGlassControlAppearance.usesNeutralLightSurface(subtle: true, isDark: true))
-        XCTAssertFalse(LiquidGlassControlAppearance.usesNeutralLightSurface(subtle: false, isDark: false))
-        XCTAssertFalse(LiquidGlassControlAppearance.usesNeutralLightSurface(subtle: false, isDark: true))
+    func testThinGlassOutlineKeepsLightAndDarkContrastWithoutChangingDefaultControls() {
         XCTAssertEqual(LiquidGlassControlAppearance.outlineOpacity(subtle: true, isDark: false), 0.18)
         XCTAssertEqual(LiquidGlassControlAppearance.outlineOpacity(subtle: true, isDark: true), 0.12)
+        XCTAssertEqual(LiquidGlassControlAppearance.outlineOpacity(subtle: false, isDark: false), 0.12)
+        XCTAssertEqual(LiquidGlassControlAppearance.outlineOpacity(subtle: false, isDark: true), 0.12)
+    }
+
+    func testSubtleGlassPreservesColoredBackdropLikeNativeClearGlass() async throws {
+        let container = try ModelContainer(for: Schema([Book.self]),
+            configurations: ModelConfiguration(isStoredInMemoryOnly: true))
+        let router = AppRouter()
+        for scheme in [ColorScheme.light, .dark] {
+            let backdrop = Color(red: 0.36, green: 0.67, blue: 0.56)
+            let native = Button {} label: {
+                Image(systemName: "plus").font(.system(size: 20, weight: .medium))
+            }
+            .buttonStyle(.plain).frame(width: 44, height: 44).contentShape(Circle())
+            .glassEffect(.clear.interactive(), in: .circle)
+            let reference = AnyView(ZStack {
+                backdrop
+                native
+            }.ignoresSafeArea())
+            let actual = AnyView(ZStack {
+                backdrop
+                LiquidGlassIconButton(systemName: "plus", accessibilityLabel: "新增", size: 44, subtle: true) {}
+            }.ignoresSafeArea())
+            let name = scheme == .dark ? "dark" : "light"
+            let expectedImage = try await capture(reference, container: container, router: router,
+                scheme: scheme, width: 420, size: .large, name: "native-\(name)", attachmentPrefix: "glass-regression-")
+            let actualImage = try await capture(actual, container: container, router: router,
+                scheme: scheme, width: 420, size: .large, name: "subtle-\(name)", attachmentPrefix: "glass-regression-")
+            // Sample inside the glass, above the icon and away from the edge/shadow.
+            let sample = CGRect(x: 206, y: 441, width: 8, height: 4)
+            let expected = try meanRGB(expectedImage, points: sample)
+            let actualRGB = try meanRGB(actualImage, points: sample)
+            for channel in 0..<3 {
+                XCTAssertEqual(actualRGB[channel], expected[channel], accuracy: 8,
+                    "\(name): glass interior must preserve the backdrop, not add a white backing or tint")
+            }
+            if scheme == .light {
+                let whiteBacked = AnyView(ZStack {
+                    backdrop
+                    native.background { Circle().fill(Color.white.opacity(0.52)) }
+                }.ignoresSafeArea())
+                let canary = try await capture(whiteBacked, container: container, router: router,
+                    scheme: scheme, width: 420, size: .large, name: "white-canary-light",
+                    attachmentPrefix: "glass-regression-")
+                let canaryRGB = try meanRGB(canary, points: sample)
+                let difference = zip(canaryRGB, expected).map { abs($0.0 - $0.1) }.max() ?? 0
+                XCTAssertGreaterThan(difference, 20, "The probe must detect the removed 52% white backing")
+            }
+        }
+    }
+
+    private func meanRGB(_ image: UIImage, points: CGRect) throws -> [Double] {
+        let source = try XCTUnwrap(image.cgImage)
+        let region = CGRect(x: points.minX * image.scale, y: points.minY * image.scale,
+            width: points.width * image.scale, height: points.height * image.scale)
+        let crop = try XCTUnwrap(source.cropping(to: region))
+        var bytes = [UInt8](repeating: 0, count: crop.width * crop.height * 4)
+        try bytes.withUnsafeMutableBytes { buffer in
+            let context = try XCTUnwrap(CGContext(data: buffer.baseAddress, width: crop.width, height: crop.height,
+                bitsPerComponent: 8, bytesPerRow: crop.width * 4, space: CGColorSpaceCreateDeviceRGB(),
+                bitmapInfo: CGBitmapInfo.byteOrder32Big.rawValue | CGImageAlphaInfo.premultipliedLast.rawValue))
+            context.draw(crop, in: CGRect(x: 0, y: 0, width: CGFloat(crop.width), height: CGFloat(crop.height)))
+        }
+        return (0..<3).map { channel in
+            stride(from: channel, to: bytes.count, by: 4).reduce(0.0) { $0 + Double(bytes[$1]) }
+                / Double(crop.width * crop.height)
+        }
     }
 
     func testPhysicalPhotoFallsBackWhenThumbnailIsMissingOrUndecodable() throws {
@@ -312,9 +375,11 @@ final class AssetsConceptPresentationTests: XCTestCase {
         return record
     }
 
+    @discardableResult
     private func capture(_ view: AnyView, container: ModelContainer, router: AppRouter, scheme: ColorScheme,
                          width: CGFloat, size: UIContentSizeCategory, name: String, sheetOver parent: AnyView? = nil,
-                         detents: Set<PresentationDetent> = [.large], through intermediate: AnyView? = nil) async throws {
+                         detents: Set<PresentationDetent> = [.large], through intermediate: AnyView? = nil,
+                         attachmentPrefix: String = "concept-v1-") async throws -> UIImage {
         let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
         let previous = scene.windows.first(where: \.isKeyWindow)
         let window = UIWindow(windowScene: scene)
@@ -344,6 +409,7 @@ final class AssetsConceptPresentationTests: XCTestCase {
         controller.view.frame = window.bounds
         controller.view.layoutIfNeeded()
         var captureError: Error?
+        var capturedImage: UIImage?
         var intermediateController: UIViewController?
         do {
             try await waitUntil(name: name, phase: "window appearance") {
@@ -384,9 +450,10 @@ final class AssetsConceptPresentationTests: XCTestCase {
             XCTAssertEqual(image.size.width, width)
             XCTAssertEqual(image.size.height, 912)
             let attachment = XCTAttachment(image: image)
-            attachment.name = "concept-v1-\(name)"
+            attachment.name = "\(attachmentPrefix)\(name)"
             attachment.lifetime = .keepAlways
             add(attachment)
+            capturedImage = image
         } catch {
             captureError = error
         }
@@ -412,6 +479,7 @@ final class AssetsConceptPresentationTests: XCTestCase {
             throw error
         }
         if let captureError { throw captureError }
+        return try XCTUnwrap(capturedImage)
     }
 
     private func closeCapture<Content: View>(_ controller: CaptureHostingController<Content>,
