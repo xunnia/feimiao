@@ -332,7 +332,7 @@ final class AssetsConceptPresentationTests: XCTestCase {
         } ?? view
         let controller = CaptureHostingController(rootView: root.liquidGlassChrome().modelContainer(container).environment(router)
             .environment(\.colorScheme, scheme).environment(\.locale, Locale(identifier: "zh-Hans")))
-        let presenter = UIViewController()
+        let presenter = CapturePresenterController()
         window.rootViewController = presenter
         controller.modalPresentationStyle = .fullScreen
         window.makeKeyAndVisible()
@@ -347,7 +347,7 @@ final class AssetsConceptPresentationTests: XCTestCase {
         var intermediateController: UIViewController?
         do {
             try await waitUntil(name: name, phase: "window appearance") {
-                presenter.view.window === window && presenter.transitionCoordinator == nil
+                presenter.isVisible && presenter.view.window === window && presenter.transitionCoordinator == nil
             }
             var presented = false
             presenter.present(controller, animated: false) { presented = true }
@@ -433,6 +433,7 @@ final class AssetsConceptPresentationTests: XCTestCase {
             try await waitUntil(name: name, phase: "host dismissal") {
                 completed && presenter.presentedViewController == nil && controller.presentingViewController == nil
                     && !controller.isVisible && !controller.isBeingDismissed && controller.transitionCoordinator == nil
+                    && (presenter as? CapturePresenterController)?.isVisible == true
             }
         }
         try await waitUntil(name: name, phase: "disappearance") {
@@ -449,6 +450,20 @@ final class AssetsConceptPresentationTests: XCTestCase {
     }
 
     private enum CaptureError: Error { case hostNotReady }
+
+    private final class CapturePresenterController: UIViewController {
+        private(set) var isVisible = false
+
+        override func viewDidAppear(_ animated: Bool) {
+            super.viewDidAppear(animated)
+            isVisible = true
+        }
+
+        override func viewDidDisappear(_ animated: Bool) {
+            super.viewDidDisappear(animated)
+            isVisible = false
+        }
+    }
 
     private final class CapturePresentation: ObservableObject {
         @Published var isPresented = false

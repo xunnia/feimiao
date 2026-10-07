@@ -171,7 +171,7 @@ final class ThemePopupPresentationTests: XCTestCase {
         let content = root.environment(\.colorScheme, theme.isDark ? .dark : .light)
             .environment(\.locale, Locale(identifier: "zh-Hans"))
         let controller = CaptureHostingController(rootView: content)
-        let presenter = UIViewController()
+        let presenter = CapturePresenterController()
         window.rootViewController = presenter
         controller.modalPresentationStyle = .fullScreen
         controller.view.backgroundColor = UIColor(theme.backgroundBottom)
@@ -187,7 +187,7 @@ final class ThemePopupPresentationTests: XCTestCase {
         var captureError: Error?
         do {
             try await waitUntil(name: name, phase: "window appearance") {
-                presenter.view.window === window && presenter.transitionCoordinator == nil
+                presenter.isVisible && presenter.view.window === window && presenter.transitionCoordinator == nil
             }
             var presentationCompleted = false
             presenter.present(controller, animated: false) { presentationCompleted = true }
@@ -250,6 +250,7 @@ final class ThemePopupPresentationTests: XCTestCase {
             try await waitUntil(name: name, phase: "host dismissal") {
                 dismissalCompleted && presenter.presentedViewController == nil && controller.presentingViewController == nil
                     && !controller.isVisible && !controller.isBeingDismissed && controller.transitionCoordinator == nil
+                    && (presenter as? CapturePresenterController)?.isVisible == true
             }
         }
         try await waitUntil(name: name, phase: "host disappearance") {
@@ -272,6 +273,21 @@ final class ThemePopupPresentationTests: XCTestCase {
     }
 
     private enum CaptureError: Error { case presentationNotReady }
+
+    @MainActor
+    private final class CapturePresenterController: UIViewController {
+        private(set) var isVisible = false
+
+        override func viewDidAppear(_ animated: Bool) {
+            super.viewDidAppear(animated)
+            isVisible = true
+        }
+
+        override func viewDidDisappear(_ animated: Bool) {
+            super.viewDidDisappear(animated)
+            isVisible = false
+        }
+    }
 
     @MainActor
     private final class CaptureHostingController<Content: View>: UIHostingController<Content> {
