@@ -62,14 +62,7 @@ extension View {
         buttonStyle(.plain)
             .frame(width: size, height: size)
             .contentShape(Circle())
-            .glassEffect(subtle ? .clear.interactive() : .regular.interactive(), in: .circle)
-            .overlay {
-                if subtle {
-                    Circle().strokeBorder(Color.primary.opacity(0.12), lineWidth: 0.5)
-                        .allowsHitTesting(false).accessibilityHidden(true)
-                }
-            }
-            .shadow(color: .black.opacity(subtle ? 0.04 : 0), radius: 8, x: 0, y: 3)
+            .modifier(LiquidGlassControlSurface(shape: Circle(), subtle: subtle))
     }
 
     /// A single glass capsule for text actions and menus.
@@ -83,14 +76,7 @@ extension View {
             .padding(.horizontal, horizontalPadding)
             .frame(minWidth: minWidth, minHeight: minHeight)
             .contentShape(Capsule())
-            .glassEffect(subtle ? .clear.interactive() : .regular.interactive(), in: .capsule)
-            .overlay {
-                if subtle {
-                    Capsule().strokeBorder(Color.primary.opacity(0.12), lineWidth: 0.5)
-                        .allowsHitTesting(false).accessibilityHidden(true)
-                }
-            }
-            .shadow(color: .black.opacity(subtle ? 0.04 : 0), radius: 8, x: 0, y: 3)
+            .modifier(LiquidGlassControlSurface(shape: Capsule(), subtle: subtle))
     }
 
     /// The prominent action keeps the native Liquid Glass behavior while using
@@ -146,6 +132,40 @@ extension View {
         buttonStyle(.plain)
             .contentShape(.rect(cornerRadius: cornerRadius))
             .glassEffect(.regular.interactive(), in: .rect(cornerRadius: cornerRadius))
+    }
+}
+
+enum LiquidGlassControlAppearance {
+    static func usesNeutralLightSurface(subtle: Bool, isDark: Bool) -> Bool { subtle && !isDark }
+    static func outlineOpacity(subtle: Bool, isDark: Bool) -> Double {
+        usesNeutralLightSurface(subtle: subtle, isDark: isDark) ? 0.18 : 0.12
+    }
+}
+
+private struct LiquidGlassControlSurface<S: InsettableShape>: ViewModifier {
+    let shape: S
+    let subtle: Bool
+    @AppThemeContext private var theme
+
+    private var glass: Glass {
+        if LiquidGlassControlAppearance.usesNeutralLightSurface(subtle: subtle, isDark: theme.isDark) {
+            // Tint the native material, not the page or a second opaque button background.
+            return .clear.tint(Color(white: 0.96).opacity(0.24)).interactive()
+        }
+        return subtle ? .clear.interactive() : .regular.interactive()
+    }
+
+    func body(content: Content) -> some View {
+        content
+            .glassEffect(glass, in: shape)
+            .overlay {
+                if subtle {
+                    shape.strokeBorder(Color.primary.opacity(LiquidGlassControlAppearance.outlineOpacity(
+                        subtle: subtle, isDark: theme.isDark)), lineWidth: 0.5)
+                        .allowsHitTesting(false).accessibilityHidden(true)
+                }
+            }
+            .shadow(color: .black.opacity(subtle ? 0.04 : 0), radius: 8, x: 0, y: 3)
     }
 }
 

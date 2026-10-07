@@ -115,6 +115,7 @@ struct PhysicalAssetDetailView: View {
                     }
                     .font(.system(size: 20, weight: .medium))
                     .liquidGlassCircleControl(size: 44, subtle: true)
+                    .tint(Color.primary)
                     .accessibilityLabel("更多资产操作")
                 }
                 .sharedBackgroundVisibility(.hidden)

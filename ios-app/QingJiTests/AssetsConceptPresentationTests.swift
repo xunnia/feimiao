@@ -138,6 +138,15 @@ final class AssetsConceptPresentationTests: XCTestCase {
         XCTAssertTrue(subtlePill.subtle)
     }
 
+    func testNeutralGlassCalibrationOnlyChangesOptInLightControls() {
+        XCTAssertTrue(LiquidGlassControlAppearance.usesNeutralLightSurface(subtle: true, isDark: false))
+        XCTAssertFalse(LiquidGlassControlAppearance.usesNeutralLightSurface(subtle: true, isDark: true))
+        XCTAssertFalse(LiquidGlassControlAppearance.usesNeutralLightSurface(subtle: false, isDark: false))
+        XCTAssertFalse(LiquidGlassControlAppearance.usesNeutralLightSurface(subtle: false, isDark: true))
+        XCTAssertEqual(LiquidGlassControlAppearance.outlineOpacity(subtle: true, isDark: false), 0.18)
+        XCTAssertEqual(LiquidGlassControlAppearance.outlineOpacity(subtle: true, isDark: true), 0.12)
+    }
+
     func testPhysicalPhotoFallsBackWhenThumbnailIsMissingOrUndecodable() throws {
         let format = UIGraphicsImageRendererFormat()
         format.scale = 1
@@ -225,6 +234,15 @@ final class AssetsConceptPresentationTests: XCTestCase {
             try await capture(pushed(AnyView(BudgetView())), container: container, router: router,
                 scheme: scheme, width: width, size: size, name: "budget-\(name)")
         }
+
+        for preset in [AppThemePreset.white, .pink, .mint, .blue] {
+            defaults.set(preset.rawValue, forKey: "qingji.themePreset")
+            try await capture(pushed(AnyView(AssetsView())), container: container, router: router,
+                scheme: .light, width: 420, size: .large, name: "assets-overview-\(preset.rawValue)-light")
+            try await capture(pushed(AnyView(BudgetView())), container: container, router: router,
+                scheme: .light, width: 420, size: .large, name: "budget-\(preset.rawValue)-light")
+        }
+        defaults.set(AppThemePreset.warm.rawValue, forKey: "qingji.themePreset")
 
         // Use the same fixture without history; the range menu must remain available.
         for snapshot in try context.fetch(FetchDescriptor<NetWorthSnapshot>()) { context.delete(snapshot) }
