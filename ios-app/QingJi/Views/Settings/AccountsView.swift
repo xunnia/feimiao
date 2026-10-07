@@ -322,13 +322,15 @@ struct AccountEditorSheet: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("取消") { dismiss() }
-                        .liquidGlassPillControl(horizontalPadding: 12, minHeight: 40)
+                        .liquidGlassPillControl(horizontalPadding: 12, minHeight: 44)
                 }
+                .sharedBackgroundVisibility(.hidden)
                 ToolbarItem(placement: .confirmationAction) {
                     Button(account == nil ? "创建" : "保存") { save() }
                         .disabled(!canSave)
-                        .liquidGlassPillControl(horizontalPadding: 12, minHeight: 40)
+                        .liquidGlassPillControl(horizontalPadding: 12, minHeight: 44)
                 }
+                .sharedBackgroundVisibility(.hidden)
             }
             .alert("无法保存", isPresented: Binding(
                 get: { errorMessage != nil },

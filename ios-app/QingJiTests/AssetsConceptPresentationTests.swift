@@ -116,6 +116,15 @@ final class AssetsConceptPresentationTests: XCTestCase {
         XCTAssertTrue(PhysicalAssetDetailView.stacksIdentityHeader(for: .accessibility5))
     }
 
+    func testBudgetBookControlCompactsBeforeCrowdingTheNavigationTitle() {
+        XCTAssertFalse(BudgetView.usesCompactBookControl(width: 420, typeSize: .large))
+        XCTAssertFalse(BudgetView.usesCompactBookControl(width: 375, typeSize: .xLarge))
+        XCTAssertTrue(BudgetView.usesCompactBookControl(width: 374, typeSize: .large))
+        XCTAssertTrue(BudgetView.usesCompactBookControl(width: 320, typeSize: .large))
+        XCTAssertTrue(BudgetView.usesCompactBookControl(width: 420, typeSize: .xxLarge))
+        XCTAssertTrue(BudgetView.usesCompactBookControl(width: 420, typeSize: .accessibility5))
+    }
+
     func testPhysicalPhotoFallsBackWhenThumbnailIsMissingOrUndecodable() throws {
         let format = UIGraphicsImageRendererFormat()
         format.scale = 1
@@ -137,7 +146,18 @@ final class AssetsConceptPresentationTests: XCTestCase {
     }
 
     func testCaptureFourConceptPagesWithThemesNarrowWidthAndLargeText() async throws {
-        let schema = Schema([Account.self, Book.self, TxCategory.self, MoneyTransaction.self,
+        let defaults = UserDefaults.standard
+        let savedTheme = ["qingji.themePreset", "qingji.themeIntensity", "qingji.themeCardAlpha"]
+            .map { ($0, defaults.object(forKey: $0)) }
+        defer {
+            for (key, value) in savedTheme {
+                if let value { defaults.set(value, forKey: key) } else { defaults.removeObject(forKey: key) }
+            }
+        }
+        defaults.set(AppThemePreset.warm.rawValue, forKey: "qingji.themePreset")
+        defaults.set(1.0, forKey: "qingji.themeIntensity")
+        defaults.set(0.8, forKey: "qingji.themeCardAlpha")
+        let schema = Schema([Account.self, Book.self, TxCategory.self, Tag.self, MoneyTransaction.self,
             PhysicalAsset.self, AssetEvent.self, AssetUsageEvent.self, AssetTransactionLink.self,
             AssetValuation.self, ReceivableAsset.self, ReceivableRecovery.self, LiabilityProfile.self,
             NetWorthSnapshot.self, AccountBalanceCheckpointRecord.self, NetWorthVerifiedCheckpointRecord.self,
@@ -177,17 +197,67 @@ final class AssetsConceptPresentationTests: XCTestCase {
             createdMs: Int(AppClock.now.timeIntervalSince1970 * 1000)))
         try context.save()
         let router = AppRouter()
-        for (scheme, width, size, name) in [(ColorScheme.light, CGFloat(390), UIContentSizeCategory.large, "light"),
-            (.dark, CGFloat(390), .large, "dark"), (.light, CGFloat(320), .accessibilityExtraExtraLarge, "narrow-large")] {
-            try await capture(AnyView(NavigationStack { AssetsView() }), container: container, router: router,
+        let scenes: [(ColorScheme, CGFloat, UIContentSizeCategory, String)] = [
+            (.light, 420, .large, "light"), (.dark, 420, .large, "dark"),
+            (.light, 320, .accessibilityExtraExtraLarge, "narrow-large")
+        ]
+        for (scheme, width, size, name) in scenes {
+            try await capture(pushed(AnyView(AssetsView())), container: container, router: router,
                 scheme: scheme, width: width, size: size, name: "assets-overview-\(name)")
-            try await capture(AnyView(NavigationStack { AssetsView(startsOnFunds: true) }), container: container, router: router,
+            try await capture(pushed(AnyView(AssetsView(startsOnFunds: true))), container: container, router: router,
                 scheme: scheme, width: width, size: size, name: "assets-funds-\(name)")
             try await capture(AnyView(PhysicalAssetDetailView(asset: item)), container: container, router: router,
-                scheme: scheme, width: width, size: size, name: "assets-detail-\(name)")
-            try await capture(AnyView(NavigationStack { BudgetView() }), container: container, router: router,
+                scheme: scheme, width: width, size: size, name: "assets-detail-\(name)",
+                sheetOver: pushed(AnyView(AssetsView())))
+            try await capture(pushed(AnyView(BudgetView())), container: container, router: router,
                 scheme: scheme, width: width, size: size, name: "budget-\(name)")
         }
+
+        // Use the same fixture without history; the range menu must remain available.
+        for snapshot in try context.fetch(FetchDescriptor<NetWorthSnapshot>()) { context.delete(snapshot) }
+        let longBook = Book(name: "家庭共同账本与长期生活预算", sortOrder: 1)
+        context.insert(longBook)
+        let rule = BudgetRuleRecord(bookID: longBook.stableID, kindRaw: "base", amountCents: 300_000,
+            unitRaw: "month", startDate: BudgetCivilDay(year: today.year, month: today.month, day: 1).description,
+            createdMs: Int(AppClock.now.timeIntervalSince1970 * 1000))
+        context.insert(rule)
+        let category = TxCategory(key: "concept-dining", name: "餐饮", symbol: "fork.knife", kind: .expense)
+        context.insert(category)
+        let transaction = MoneyTransaction(amount: 15, kind: .expense, date: AppClock.now,
+            note: "午餐", category: category, account: bank, book: longBook)
+        context.insert(transaction)
+        router.selectedBookID = longBook.stableID
+        try context.save()
+        XCTAssertFalse(longBook.isDefault)
+        XCTAssertEqual(router.selectedBookID, longBook.stableID)
+        for (scheme, width, size, name) in scenes {
+            try await capture(pushed(AnyView(AssetsView())), container: container, router: router,
+                scheme: scheme, width: width, size: size, name: "assets-no-history-\(name)")
+            try await capture(pushed(AnyView(BudgetView())), container: container, router: router,
+                scheme: scheme, width: width, size: size, name: "budget-long-book-\(name)")
+            try await capture(AnyView(BudgetRuleEditorSheet(bookID: longBook.stableID, editing: rule, suggestionYuan: nil)),
+                container: container, router: router, scheme: scheme, width: width, size: size,
+                name: "budget-editor-\(name)", sheetOver: pushed(AnyView(BudgetView())))
+            try await capture(AnyView(AccountEditorSheet(account: bank, nextSortOrder: bank.sortOrder)),
+                container: container, router: router, scheme: scheme, width: width, size: size,
+                name: "assets-account-editor-\(name)", sheetOver: pushed(AnyView(AssetsView(startsOnFunds: true))),
+                detents: [.medium, .large])
+            try await capture(AnyView(BudgetDaySheet(selectedBookID: longBook.stableID, day: today)),
+                container: container, router: router, scheme: scheme, width: width, size: size,
+                name: "budget-day-\(name)", sheetOver: pushed(AnyView(BudgetView())), detents: [.medium, .large])
+            try await capture(AnyView(EditTransactionSheet(transaction: transaction)),
+                container: container, router: router, scheme: scheme, width: width, size: size,
+                name: "budget-transaction-editor-\(name)", sheetOver: pushed(AnyView(BudgetView())),
+                through: AnyView(BudgetDaySheet(selectedBookID: longBook.stableID, day: today)))
+        }
+    }
+
+    private func pushed(_ destination: AnyView) -> AnyView {
+        AnyView(NavigationStack(path: .constant(["page"])) {
+            Color.clear
+                .navigationTitle("肥喵")
+                .navigationDestination(for: String.self) { _ in destination }
+        })
     }
 
     private func anchor(_ account: UUID, days: Int) -> AccountBalanceCheckpointRecord {
@@ -212,14 +282,24 @@ final class AssetsConceptPresentationTests: XCTestCase {
     }
 
     private func capture(_ view: AnyView, container: ModelContainer, router: AppRouter, scheme: ColorScheme,
-                         width: CGFloat, size: UIContentSizeCategory, name: String) async throws {
+                         width: CGFloat, size: UIContentSizeCategory, name: String, sheetOver parent: AnyView? = nil,
+                         detents: Set<PresentationDetent> = [.large], through intermediate: AnyView? = nil) async throws {
         let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
         let previous = scene.windows.first(where: \.isKeyWindow)
         let window = UIWindow(windowScene: scene)
-        window.frame = CGRect(x: 0, y: 0, width: width, height: 844)
+        window.frame = CGRect(x: 0, y: 0, width: width, height: 912)
         window.overrideUserInterfaceStyle = scheme == .dark ? .dark : .light
         window.traitOverrides.preferredContentSizeCategory = size
-        let controller = UIHostingController(rootView: view.modelContainer(container).environment(router)
+        let presentation = CapturePresentation()
+        let nestedPresentation = CapturePresentation()
+        let sheetContent = intermediate.map {
+            AnyView(CaptureSheetHost(parent: $0, content: view, presentation: nestedPresentation, detents: detents))
+        } ?? view
+        let root = parent.map {
+            AnyView(CaptureSheetHost(parent: $0, content: sheetContent, presentation: presentation,
+                                    detents: intermediate == nil ? detents : [.medium, .large]))
+        } ?? view
+        let controller = CaptureHostingController(rootView: root.liquidGlassChrome().modelContainer(container).environment(router)
             .environment(\.colorScheme, scheme).environment(\.locale, Locale(identifier: "zh-Hans")))
         window.rootViewController = controller
         window.makeKeyAndVisible()
@@ -230,16 +310,127 @@ final class AssetsConceptPresentationTests: XCTestCase {
         }
         controller.view.frame = window.bounds
         controller.view.layoutIfNeeded()
-        try await Task.sleep(nanoseconds: 300_000_000)
-        controller.view.layoutIfNeeded()
-        let format = UIGraphicsImageRendererFormat()
-        format.scale = 3
-        let image = UIGraphicsImageRenderer(bounds: window.bounds, format: format).image { _ in
-            XCTAssertTrue(window.drawHierarchy(in: window.bounds, afterScreenUpdates: true))
+        var captureError: Error?
+        var intermediateController: UIViewController?
+        do {
+            try await waitUntil(name: name, phase: "appearance") {
+                controller.isVisible && controller.view.window === window && controller.transitionCoordinator == nil
+            }
+            if parent != nil {
+                presentation.isPresented = true
+                try await waitUntil(name: name, phase: "sheet presentation") {
+                    guard let sheet = controller.presentedViewController else { return false }
+                    return sheet.view.window === window && !sheet.isBeingPresented
+                        && sheet.transitionCoordinator == nil && sheet.presentationController != nil
+                }
+                if intermediate != nil {
+                    let host = try XCTUnwrap(controller.presentedViewController)
+                    intermediateController = host
+                    nestedPresentation.isPresented = true
+                    try await waitUntil(name: name, phase: "nested sheet presentation") {
+                        guard let sheet = host.presentedViewController else { return false }
+                        return sheet.view.window === window && !sheet.isBeingPresented
+                            && sheet.transitionCoordinator == nil && sheet.presentationController != nil
+                    }
+                }
+            }
+            controller.view.layoutIfNeeded()
+            controller.presentedViewController?.view.layoutIfNeeded()
+            intermediateController?.presentedViewController?.view.layoutIfNeeded()
+            let format = UIGraphicsImageRendererFormat()
+            format.scale = 3
+            let image = UIGraphicsImageRenderer(bounds: window.bounds, format: format).image { _ in
+                XCTAssertTrue(window.drawHierarchy(in: window.bounds, afterScreenUpdates: true))
+            }
+            XCTAssertEqual(image.size.width, width)
+            XCTAssertEqual(image.size.height, 912)
+            let attachment = XCTAttachment(image: image)
+            attachment.name = "concept-v1-\(name)"
+            attachment.lifetime = .keepAlways
+            add(attachment)
+        } catch {
+            captureError = error
         }
-        let attachment = XCTAttachment(image: image)
-        attachment.name = "concept-v1-\(name)"
-        attachment.lifetime = .keepAlways
-        add(attachment)
+        do {
+            if let host = intermediateController {
+                nestedPresentation.isPresented = false
+                try await waitUntil(name: name, phase: "nested sheet dismissal") {
+                    host.presentedViewController == nil && host.transitionCoordinator == nil
+                        && !host.isBeingDismissed
+                }
+            }
+            presentation.isPresented = false
+            try await waitUntil(name: name, phase: "sheet dismissal") {
+                controller.presentedViewController == nil && controller.isVisible && controller.transitionCoordinator == nil
+            }
+            try await closeCapture(controller, window: window, name: name)
+        } catch {
+            // Preserve the failure, but still attempt native dismissal before detaching the window.
+            nestedPresentation.isPresented = false
+            presentation.isPresented = false
+            try? await closeCapture(controller, window: window, name: name)
+            if let captureError { throw captureError }
+            throw error
+        }
+        if let captureError { throw captureError }
+    }
+
+    private func closeCapture<Content: View>(_ controller: CaptureHostingController<Content>,
+                                             window: UIWindow, name: String) async throws {
+        if let sheet = controller.presentedViewController {
+            var completed = false
+            controller.dismiss(animated: false) { completed = true }
+            try await waitUntil(name: name, phase: "native dismissal cleanup") {
+                completed && controller.presentedViewController == nil && sheet.presentingViewController == nil
+                    && !sheet.isBeingDismissed && sheet.transitionCoordinator == nil
+            }
+        }
+        try await waitUntil(name: name, phase: "host before removal") {
+            controller.isVisible && controller.transitionCoordinator == nil
+        }
+        window.isHidden = true
+        try await waitUntil(name: name, phase: "disappearance") {
+            !controller.isVisible && controller.transitionCoordinator == nil
+        }
+    }
+
+    private func waitUntil(name: String, phase: String, _ ready: () -> Bool) async throws {
+        let deadline = Date().addingTimeInterval(5)
+        while !ready(), Date() < deadline { try await Task.sleep(nanoseconds: 10_000_000) }
+        XCTAssertTrue(ready(), "\(name): host not ready for \(phase)")
+        guard ready() else { throw CaptureError.hostNotReady }
+    }
+
+    private enum CaptureError: Error { case hostNotReady }
+
+    private final class CapturePresentation: ObservableObject {
+        @Published var isPresented = false
+    }
+
+    private struct CaptureSheetHost: View {
+        let parent: AnyView
+        let content: AnyView
+        @ObservedObject var presentation: CapturePresentation
+        let detents: Set<PresentationDetent>
+
+        var body: some View {
+            parent.sheet(isPresented: $presentation.isPresented) {
+                content.presentationDetents(detents)
+            }
+        }
+    }
+
+    private final class CaptureHostingController<Content: View>: UIHostingController<Content> {
+        private(set) var isVisible = false
+
+        override func viewDidAppear(_ animated: Bool) {
+            super.viewDidAppear(animated)
+            isVisible = true
+        }
+
+        override func viewDidDisappear(_ animated: Bool) {
+            super.viewDidDisappear(animated)
+            isVisible = false
+        }
     }
 }

@@ -73,8 +73,10 @@ struct AssetsOverviewDashboard: View {
                     HStack { trendStatus(history); Spacer(minLength: 4); rangeMenu }
                     VStack(alignment: .leading, spacing: 2) { trendStatus(history); rangeMenu }
                 }
-                AssetsHistoryChart(history: history, metric: .netWorth, color: .statisticsAccent, axes: true)
-                    .frame(height: history.hasTrend ? 64 : (typeSize.isAccessibilitySize ? 80 : 42))
+                if history.hasTrend {
+                    AssetsHistoryChart(history: history, metric: .netWorth, color: .statisticsAccent, axes: true)
+                        .frame(height: 64)
+                }
                 if history.hasTrend, let first = history.points.first, let last = history.points.last {
                     HStack {
                         Text(shortDate(first.asOf))
@@ -119,13 +121,14 @@ struct AssetsOverviewDashboard: View {
             }
             .font(.footnote)
         }
+        .buttonStyle(.plain)
         .accessibilityLabel("核对账户余额，单账户校准不代表完整净资产核对")
     }
 
     private func trendStatus(_ history: AssetOverviewProjection) -> some View {
         Text((missingValuationCount == 0 ? history.delta(.netWorth, current: breakdown.netWorth) : nil).map {
             "估算变化 \($0 >= 0 ? "+" : "−")\(Self.amount(abs($0)))"
-        } ?? "快照估算趋势")
+        } ?? (history.hasTrend ? "快照估算趋势" : history.points.count > 1 ? "已有快照暂不可比" : "可比快照不足"))
         .font(.caption).foregroundStyle(.secondary)
     }
 
@@ -141,6 +144,7 @@ struct AssetsOverviewDashboard: View {
             }
             .font(.caption).foregroundStyle(.secondary)
         }
+        .buttonStyle(.plain)
         .accessibilityIdentifier("assets-trend-range")
     }
 
@@ -200,8 +204,9 @@ struct AssetsOverviewDashboard: View {
             .navigationTitle("净资产说明")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .topBarTrailing) {
-                LiquidGlassIconButton(systemName: "xmark", accessibilityLabel: "关闭") { showInfo = false }
-            } }
+                LiquidGlassIconButton(systemName: "xmark", accessibilityLabel: "关闭", size: 44) { showInfo = false }
+                    .foregroundStyle(Color.primary)
+            }.sharedBackgroundVisibility(.hidden) }
         }
         .presentationDetents([.medium, .large])
     }

@@ -100,8 +100,9 @@ struct NetWorthView: View {
                         message = error.localizedDescription
                     }
                 }
-                .liquidGlassPillControl(horizontalPadding: 12, minHeight: 40)
+                .liquidGlassPillControl(horizontalPadding: 12, minHeight: 44)
             }
+            .sharedBackgroundVisibility(.hidden)
         }
         .alert("净资产", isPresented: Binding(
             get: { message != nil },

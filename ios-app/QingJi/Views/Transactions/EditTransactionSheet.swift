@@ -70,13 +70,15 @@ private struct OffsetSheet: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("取消") { dismiss() }
-                        .liquidGlassPillControl(horizontalPadding: 12, minHeight: 40)
+                        .liquidGlassPillControl(horizontalPadding: 12, minHeight: 44)
                 }
+                .sharedBackgroundVisibility(.hidden)
                 ToolbarItem(placement: .confirmationAction) {
                     Button("确认") { save() }
                         .disabled(amount == nil || amount! <= 0)
-                        .liquidGlassPillControl(horizontalPadding: 12, minHeight: 40)
+                        .liquidGlassPillControl(horizontalPadding: 12, minHeight: 44)
                 }
+                .sharedBackgroundVisibility(.hidden)
             }
             .onAppear {
                 if let status = try? LedgerStore.refundStatus(for: original, in: context) {
@@ -350,13 +352,15 @@ struct EditTransactionSheet: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("取消") { dismiss() }
-                        .liquidGlassPillControl(horizontalPadding: 12, minHeight: 40)
+                        .liquidGlassPillControl(horizontalPadding: 12, minHeight: 44)
                 }
+                .sharedBackgroundVisibility(.hidden)
                 ToolbarItem(placement: .confirmationAction) {
                     Button("保存") { save() }
                         .disabled(parsedAmount == nil || parsedAmount! <= 0)
-                        .liquidGlassPillControl(horizontalPadding: 12, minHeight: 40)
+                        .liquidGlassPillControl(horizontalPadding: 12, minHeight: 44)
                 }
+                .sharedBackgroundVisibility(.hidden)
             }
             .onAppear(perform: load)
             .onChange(of: photoItem) { _, item in

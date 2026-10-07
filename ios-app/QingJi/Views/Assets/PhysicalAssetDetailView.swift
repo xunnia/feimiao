@@ -99,19 +99,23 @@ struct PhysicalAssetDetailView: View {
                         dismiss()
                     } label: {
                         Image(systemName: "chevron.left")
+                            .foregroundStyle(.primary)
                     }
-                    .liquidGlassCircleControl()
+                    .liquidGlassCircleControl(size: 44)
                     .accessibilityLabel("返回")
                 }
+                .sharedBackgroundVisibility(.hidden)
                 ToolbarItem(placement: .topBarTrailing) {
                     Menu {
                         actionMenu
                     } label: {
                         Image(systemName: "ellipsis")
+                            .foregroundStyle(.primary)
                     }
-                    .liquidGlassCircleControl()
+                    .liquidGlassCircleControl(size: 44)
                     .accessibilityLabel("更多资产操作")
                 }
+                .sharedBackgroundVisibility(.hidden)
             }
             .sheet(item: $activeSheet) { sheet in
                 switch sheet {
@@ -351,10 +355,14 @@ struct PhysicalAssetDetailView: View {
         Button(action: action) {
             Label(title, systemImage: systemImage)
                 .font(.subheadline.weight(.medium))
-                .frame(maxWidth: .infinity, minHeight: 42)
+                .foregroundStyle(.primary)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 10)
+                .frame(maxWidth: .infinity, minHeight: 44)
+                .contentShape(Capsule())
         }
-        .liquidGlassPillControl(horizontalPadding: 14, minHeight: 44)
-        .tint(.accentColor)
+        .buttonStyle(.plain)
+        .appThemeInput(cornerRadius: 22)
         .disabled(!enabled)
         .accessibilityLabel(title)
     }
@@ -624,13 +632,15 @@ private struct AssetValueUpdateSheet: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("取消") { dismiss() }
-                        .liquidGlassPillControl(horizontalPadding: 12, minHeight: 40)
+                        .liquidGlassPillControl(horizontalPadding: 12, minHeight: 44)
                 }
+                .sharedBackgroundVisibility(.hidden)
                 ToolbarItem(placement: .confirmationAction) {
                     Button("保存") { save() }
-                        .liquidGlassPillControl(horizontalPadding: 12, minHeight: 40)
+                        .liquidGlassPillControl(horizontalPadding: 12, minHeight: 44)
                         .disabled(value == nil || value! < 0)
                 }
+                .sharedBackgroundVisibility(.hidden)
             }
             .alert("无法保存", isPresented: Binding(
                 get: { errorMessage != nil },
@@ -713,13 +723,15 @@ private struct AssetSaleSheet: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("取消") { dismiss() }
-                        .liquidGlassPillControl(horizontalPadding: 12, minHeight: 40)
+                        .liquidGlassPillControl(horizontalPadding: 12, minHeight: 44)
                 }
+                .sharedBackgroundVisibility(.hidden)
                 ToolbarItem(placement: .confirmationAction) {
                     Button("确认出售") { save() }
-                        .liquidGlassPillControl(horizontalPadding: 12, minHeight: 40)
+                        .liquidGlassPillControl(horizontalPadding: 12, minHeight: 44)
                         .disabled(!valid)
                 }
+                .sharedBackgroundVisibility(.hidden)
             }
             .alert("无法出售", isPresented: Binding(
                 get: { errorMessage != nil },
@@ -820,8 +832,9 @@ private struct AssetCostLinkSheet: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("完成") { dismiss() }
-                        .liquidGlassPillControl(horizontalPadding: 12, minHeight: 40)
+                        .liquidGlassPillControl(horizontalPadding: 12, minHeight: 44)
                 }
+                .sharedBackgroundVisibility(.hidden)
             }
             .alert("无法关联", isPresented: Binding(
                 get: { errorMessage != nil },
@@ -900,12 +913,14 @@ private struct AssetEvidenceSheet: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("取消") { dismiss() }
-                        .liquidGlassPillControl(horizontalPadding: 12, minHeight: 40)
+                        .liquidGlassPillControl(horizontalPadding: 12, minHeight: 44)
                 }
+                .sharedBackgroundVisibility(.hidden)
                 ToolbarItem(placement: .confirmationAction) {
                     Button("保存") { save() }
-                        .liquidGlassPillControl(horizontalPadding: 12, minHeight: 40)
+                        .liquidGlassPillControl(horizontalPadding: 12, minHeight: 44)
                 }
+                .sharedBackgroundVisibility(.hidden)
             }
             .onChange(of: photoItem) { _, item in
                 if let item { importPhoto(item) }
@@ -1060,13 +1075,15 @@ private struct AssetDepreciationSheet: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("取消") { dismiss() }
-                        .liquidGlassPillControl(horizontalPadding: 12, minHeight: 40)
+                        .liquidGlassPillControl(horizontalPadding: 12, minHeight: 44)
                 }
+                .sharedBackgroundVisibility(.hidden)
                 ToolbarItem(placement: .confirmationAction) {
                     Button("保存") { save() }
-                        .liquidGlassPillControl(horizontalPadding: 12, minHeight: 40)
+                        .liquidGlassPillControl(horizontalPadding: 12, minHeight: 44)
                         .disabled(!valid)
                 }
+                .sharedBackgroundVisibility(.hidden)
             }
             .alert("无法保存", isPresented: Binding(
                 get: { errorMessage != nil },

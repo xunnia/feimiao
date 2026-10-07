@@ -54,14 +54,17 @@ struct LiabilitiesView: View {
         .scrollContentBackground(.hidden)
         .liquidGlassCanvas()
         .navigationTitle("负债管理")
+        .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Button { showEditor = true } label: {
                     Image(systemName: "plus")
+                        .foregroundStyle(.primary)
                 }
-                .liquidGlassCircleControl()
+                .liquidGlassCircleControl(size: 44)
                 .accessibilityLabel("新建负债")
             }
+            .sharedBackgroundVisibility(.hidden)
         }
         .sheet(isPresented: $showEditor) {
             LiabilityEditor(profile: nil)
@@ -347,13 +350,15 @@ private struct LiabilityEditor: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("取消") { dismiss() }
-                        .liquidGlassPillControl(horizontalPadding: 12, minHeight: 40)
+                        .liquidGlassPillControl(horizontalPadding: 12, minHeight: 44)
                 }
+                .sharedBackgroundVisibility(.hidden)
                 ToolbarItem(placement: .confirmationAction) {
                     Button(profile == nil ? "创建" : "保存") { save() }
                         .disabled(!canSave)
-                        .liquidGlassPillControl(horizontalPadding: 12, minHeight: 40)
+                        .liquidGlassPillControl(horizontalPadding: 12, minHeight: 44)
                 }
+                .sharedBackgroundVisibility(.hidden)
             }
             .onAppear {
                 if accountID == nil { accountID = accounts.first?.stableID }
@@ -489,13 +494,15 @@ private struct LiabilityRepaymentSheet: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("取消") { dismiss() }
-                        .liquidGlassPillControl(horizontalPadding: 12, minHeight: 40)
+                        .liquidGlassPillControl(horizontalPadding: 12, minHeight: 44)
                 }
+                .sharedBackgroundVisibility(.hidden)
                 ToolbarItem(placement: .confirmationAction) {
                     Button("确认") { repay() }
                         .disabled(amount == nil || amount! <= 0 || fromAccount == nil)
-                        .liquidGlassPillControl(horizontalPadding: 12, minHeight: 40)
+                        .liquidGlassPillControl(horizontalPadding: 12, minHeight: 44)
                 }
+                .sharedBackgroundVisibility(.hidden)
             }
             .onAppear {
                 if amountText == "\(profile.currentPrincipal)", let actualDebtAmount {

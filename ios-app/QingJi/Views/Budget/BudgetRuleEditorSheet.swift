@@ -331,20 +331,27 @@ extension BudgetRuleEditorSheet {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    LiquidGlassIconButton(systemName: "xmark", accessibilityLabel: "取消", size: 36) { dismiss() }
+                    LiquidGlassIconButton(systemName: "xmark", accessibilityLabel: "取消", size: 44) { dismiss() }
+                        .foregroundStyle(Color.primary)
                 }
-                ToolbarItemGroup(placement: .confirmationAction) {
-                    if isEdit {
-                        LiquidGlassIconButton(systemName: "trash", accessibilityLabel: "删除这条预算", size: 32) {
+                .sharedBackgroundVisibility(.hidden)
+                if isEdit {
+                    ToolbarItem(placement: .confirmationAction) {
+                        LiquidGlassIconButton(systemName: "trash", accessibilityLabel: "删除这条预算", size: 44) {
                             confirmDelete = true
                         }
                         .foregroundStyle(Color.warning)
                         .accessibilityIdentifier("budget-rule-delete")
                     }
+                    .sharedBackgroundVisibility(.hidden)
+                }
+                ToolbarItem(placement: .confirmationAction) {
                     LiquidGlassPillButton("保存") { save() }
+                        .foregroundStyle(Color.primary)
                         .disabled(saving)
                         .accessibilityIdentifier("budget-rule-save")
                 }
+                .sharedBackgroundVisibility(.hidden)
             }
             .appConfirmationDialog("改日常预算", isPresented: Binding(
                 get: { baseEditWarning != nil }, set: { if !$0 { baseEditWarning = nil } }

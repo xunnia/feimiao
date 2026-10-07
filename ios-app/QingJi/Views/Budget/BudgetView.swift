@@ -42,25 +42,32 @@ struct BudgetView: View {
 
     var body: some View {
         let snapshot = monthSnapshot(year: year, month: month)
-        Group {
-            if let bookID = snapshot.bookID {
-                content(snapshot: snapshot, bookID: bookID)
-            } else {
-                ContentUnavailableView("先建一个账本再设预算", systemImage: "book.closed")
-            }
-        }
-        .liquidGlassCanvas()
-        .navigationTitle("预算")
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItemGroup(placement: .topBarTrailing) {
-                bookMenu
-                LiquidGlassIconButton(systemName: "plus", accessibilityLabel: "新增预算", size: 32) {
-                    openEditor(bookID: snapshot.bookID, record: nil, hasRules: !liveRecords(snapshot.bookID).isEmpty)
+        GeometryReader { geometry in
+            Group {
+                if let bookID = snapshot.bookID {
+                    content(snapshot: snapshot, bookID: bookID)
+                } else {
+                    ContentUnavailableView("先建一个账本再设预算", systemImage: "book.closed")
                 }
-                .disabled(snapshot.bookID == nil)
-                .accessibilityLabel("新增预算")
-                .accessibilityIdentifier("budget-add-rule")
+            }
+            .liquidGlassCanvas()
+            .navigationTitle("预算")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    bookMenu(compact: Self.usesCompactBookControl(width: geometry.size.width, typeSize: typeSize))
+                }
+                .sharedBackgroundVisibility(.hidden)
+                ToolbarItem(placement: .topBarTrailing) {
+                    LiquidGlassIconButton(systemName: "plus", accessibilityLabel: "新增预算", size: 44) {
+                        openEditor(bookID: snapshot.bookID, record: nil, hasRules: !liveRecords(snapshot.bookID).isEmpty)
+                    }
+                    .foregroundStyle(Color.primary)
+                    .disabled(snapshot.bookID == nil)
+                    .accessibilityLabel("新增预算")
+                    .accessibilityIdentifier("budget-add-rule")
+                }
+                .sharedBackgroundVisibility(.hidden)
             }
         }
         .sheet(item: $editor) { target in
@@ -78,7 +85,7 @@ struct BudgetView: View {
         .appRefreshOnDayChange(refreshDate)
     }
 
-    private var bookMenu: some View {
+    private func bookMenu(compact: Bool) -> some View {
         AppSelectionMenu(selected: scopeBookID, options: DrawerLayout.orderedBooks(books).map { book in
             AppMenuOption<UUID?>(value: book.isDefault ? nil : book.stableID,
                                  title: book.name, systemName: "book.closed")
@@ -88,14 +95,23 @@ struct BudgetView: View {
         }) {
             HStack(spacing: 5) {
                 Image(systemName: "book.closed")
-                Text(bookName).lineLimit(1).truncationMode(.tail)
+                if !compact {
+                    Text(bookName).lineLimit(1).truncationMode(.tail)
+                        .frame(maxWidth: 54)
+                }
                 Image(systemName: "chevron.down").font(.caption.weight(.semibold))
             }
             .font(.subheadline.weight(.medium))
+            .foregroundStyle(.primary)
         }
-        .tint(.primary)
+        .tint(Color.primary)
+        .liquidGlassPillControl(horizontalPadding: 10, minHeight: 44)
         .accessibilityLabel("当前账本：\(bookName)")
         .accessibilityIdentifier("budget-book-chip")
+    }
+
+    static func usesCompactBookControl(width: CGFloat, typeSize: DynamicTypeSize) -> Bool {
+        width < 375 || typeSize >= .xxLarge
     }
 
     private func refreshDate() {

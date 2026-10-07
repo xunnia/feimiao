@@ -29,6 +29,7 @@ struct AssetsView: View {
     }
 
     @Environment(\.modelContext) private var context
+    @AppThemeContext private var theme
     @Query(sort: \Account.sortOrder)
     private var accounts: [Account]
     @Query
@@ -155,6 +156,7 @@ struct AssetsView: View {
             detailAsset = first
         }
         .navigationTitle("资产管理")
+        .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Button {
@@ -163,9 +165,10 @@ struct AssetsView: View {
                     Image(systemName: "plus")
                         .foregroundStyle(.primary)
                 }
-                .liquidGlassCircleControl()
+                .liquidGlassCircleControl(size: 44)
                 .accessibilityLabel("新增资产")
             }
+            .sharedBackgroundVisibility(.hidden)
         }
         .sheet(isPresented: $showAddEntry, onDismiss: openPendingAddAction) {
             addEntrySheet
@@ -279,9 +282,10 @@ struct AssetsView: View {
                         Image(systemName: "xmark")
                             .foregroundStyle(.primary)
                     }
-                    .liquidGlassCircleControl(size: 40)
+                    .liquidGlassCircleControl(size: 44)
                     .accessibilityLabel("关闭")
                 }
+                .sharedBackgroundVisibility(.hidden)
             }
         }
     }
@@ -664,26 +668,50 @@ struct AssetsView: View {
             }
             .padding(.horizontal, 12).padding(.vertical, 10)
             .appThemeInput(cornerRadius: 13)
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 7) {
-                    ForEach(AssetsFundsFilter.allCases) { filter in
-                        Button { fundsFilter = filter } label: {
-                            Text(filter.label).font(.subheadline.weight(fundsFilter == filter ? .semibold : .regular))
+            HStack(spacing: 8) {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 7) {
+                        ForEach(AssetsFundsFilter.allCases) { filter in
+                            Button { fundsFilter = filter } label: {
+                                Text(filter.label)
+                                    .font(.subheadline.weight(fundsFilter == filter ? .semibold : .regular))
+                                    .lineLimit(1)
+                                    .fixedSize(horizontal: true, vertical: true)
+                                    .foregroundStyle(fundsFilter == filter ? Color.primary : Color.secondary)
+                                    .padding(.horizontal, 12)
+                                    .padding(.vertical, 8)
+                                    .frame(minHeight: 44)
+                                    .contentShape(Capsule())
+                                    .background(fundsFilter == filter ? theme.segmentSelected : Color.clear, in: Capsule())
+                                    .overlay {
+                                        Capsule().strokeBorder(fundsFilter == filter ? theme.hairline : Color.clear, lineWidth: 0.5)
+                                    }
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityIdentifier("assets-filter-\(filter.rawValue)")
+                            .accessibilityAddTraits(fundsFilter == filter ? .isSelected : [])
                         }
-                        .buttonStyle(.glass)
-                        .tint(fundsFilter == filter ? Color.accentColor : Color.secondary)
-                        .accessibilityAddTraits(fundsFilter == filter ? .isSelected : [])
                     }
-                    Menu {
-                        Picker("排序", selection: $fundsSort) {
-                            ForEach(AssetsFundsSort.allCases) { Text($0.label).tag($0) }
-                        }
-                    } label: {
-                        Label(fundsSort.label, systemImage: "arrow.up.arrow.down").font(.subheadline)
-                    }
-                    .buttonStyle(.glass)
+                    .padding(.vertical, 2)
                 }
-                .padding(.vertical, 2)
+                .frame(maxWidth: .infinity)
+                Menu {
+                    Picker("排序", selection: $fundsSort) {
+                        ForEach(AssetsFundsSort.allCases) { Text($0.label).tag($0) }
+                    }
+                } label: {
+                    Image(systemName: "arrow.up.arrow.down")
+                        .font(.body.weight(.medium))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 44, height: 44)
+                        .contentShape(Circle())
+                }
+                .buttonStyle(.plain)
+                .appThemeInput(cornerRadius: 22)
+                .help("排序：\(fundsSort.label)")
+                .accessibilityLabel("账户排序")
+                .accessibilityValue(fundsSort.label)
+                .accessibilityIdentifier("assets-funds-sort")
             }
         }
     }
@@ -1351,14 +1379,16 @@ struct PhysicalAssetEditor: View {
             .tint(.primary)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    LiquidGlassIconButton(systemName: "xmark", accessibilityLabel: "关闭") { dismiss() }
+                    LiquidGlassIconButton(systemName: "xmark", accessibilityLabel: "关闭", size: 44) { dismiss() }
                 }
+                .sharedBackgroundVisibility(.hidden)
                 if !isTransactionSource || sourceTransactionID != nil {
                     ToolbarItem(placement: .confirmationAction) {
                         Button(asset == nil && !isTransactionSource ? "创建" : "保存") { save() }
                             .disabled(!canSave)
-                            .liquidGlassPillControl(horizontalPadding: 12, minHeight: 40)
+                            .liquidGlassPillControl(horizontalPadding: 12, minHeight: 44)
                     }
+                    .sharedBackgroundVisibility(.hidden)
                 }
             }
             .alert("无法保存", isPresented: Binding(
@@ -1749,13 +1779,15 @@ private struct ReceivableEditor: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("取消") { dismiss() }
-                        .liquidGlassPillControl(horizontalPadding: 12, minHeight: 40)
+                        .liquidGlassPillControl(horizontalPadding: 12, minHeight: 44)
                 }
+                .sharedBackgroundVisibility(.hidden)
                 ToolbarItem(placement: .confirmationAction) {
                     Button(asset == nil ? "创建" : "保存") { save() }
                         .disabled(amount == nil || amount! <= 0 || name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                        .liquidGlassPillControl(horizontalPadding: 12, minHeight: 40)
+                        .liquidGlassPillControl(horizontalPadding: 12, minHeight: 44)
                 }
+                .sharedBackgroundVisibility(.hidden)
             }
             .alert("无法保存", isPresented: Binding(
                 get: { errorMessage != nil },
@@ -1849,13 +1881,15 @@ private struct ReceivableRecoverySheet: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("取消") { dismiss() }
-                        .liquidGlassPillControl(horizontalPadding: 12, minHeight: 40)
+                        .liquidGlassPillControl(horizontalPadding: 12, minHeight: 44)
                 }
+                .sharedBackgroundVisibility(.hidden)
                 ToolbarItem(placement: .confirmationAction) {
                     Button("确认") { save() }
                         .disabled(amount == nil || amount! <= 0)
-                        .liquidGlassPillControl(horizontalPadding: 12, minHeight: 40)
+                        .liquidGlassPillControl(horizontalPadding: 12, minHeight: 44)
                 }
+                .sharedBackgroundVisibility(.hidden)
             }
             .alert("无法保存", isPresented: Binding(
                 get: { errorMessage != nil },
