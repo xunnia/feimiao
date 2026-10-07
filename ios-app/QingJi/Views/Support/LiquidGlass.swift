@@ -64,7 +64,10 @@ extension View {
             .contentShape(Circle())
             .glassEffect(subtle ? .clear.interactive() : .regular.interactive(), in: .circle)
             .overlay {
-                if subtle { Circle().strokeBorder(Color.primary.opacity(0.12), lineWidth: 0.5) }
+                if subtle {
+                    Circle().strokeBorder(Color.primary.opacity(0.12), lineWidth: 0.5)
+                        .allowsHitTesting(false).accessibilityHidden(true)
+                }
             }
             .shadow(color: .black.opacity(subtle ? 0.04 : 0), radius: 8, x: 0, y: 3)
     }
@@ -82,7 +85,10 @@ extension View {
             .contentShape(Capsule())
             .glassEffect(subtle ? .clear.interactive() : .regular.interactive(), in: .capsule)
             .overlay {
-                if subtle { Capsule().strokeBorder(Color.primary.opacity(0.12), lineWidth: 0.5) }
+                if subtle {
+                    Capsule().strokeBorder(Color.primary.opacity(0.12), lineWidth: 0.5)
+                        .allowsHitTesting(false).accessibilityHidden(true)
+                }
             }
             .shadow(color: .black.opacity(subtle ? 0.04 : 0), radius: 8, x: 0, y: 3)
     }
