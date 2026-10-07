@@ -125,6 +125,19 @@ final class AssetsConceptPresentationTests: XCTestCase {
         XCTAssertTrue(BudgetView.usesCompactBookControl(width: 420, typeSize: .accessibility5))
     }
 
+    func testThinChromeIsOptInAndKeepsExistingDefaultControls() {
+        let standard = LiquidGlassIconButton(systemName: "plus", accessibilityLabel: "新增") {}
+        let subtle = LiquidGlassIconButton(systemName: "plus", accessibilityLabel: "新增", size: 44, subtle: true) {}
+        XCTAssertEqual(standard.size, 48)
+        XCTAssertFalse(standard.subtle)
+        XCTAssertEqual(subtle.size, 44)
+        XCTAssertTrue(subtle.subtle)
+        let standardPill = LiquidGlassPillButton("保存") {}
+        let subtlePill = LiquidGlassPillButton("保存", subtle: true) {}
+        XCTAssertFalse(standardPill.subtle)
+        XCTAssertTrue(subtlePill.subtle)
+    }
+
     func testPhysicalPhotoFallsBackWhenThumbnailIsMissingOrUndecodable() throws {
         let format = UIGraphicsImageRendererFormat()
         format.scale = 1

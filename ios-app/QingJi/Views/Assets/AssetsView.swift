@@ -165,7 +165,8 @@ struct AssetsView: View {
                     Image(systemName: "plus")
                         .foregroundStyle(.primary)
                 }
-                .liquidGlassCircleControl(size: 44)
+                .font(.system(size: 20, weight: .medium))
+                .liquidGlassCircleControl(size: 44, subtle: true)
                 .accessibilityLabel("新增资产")
             }
             .sharedBackgroundVisibility(.hidden)
@@ -282,7 +283,8 @@ struct AssetsView: View {
                         Image(systemName: "xmark")
                             .foregroundStyle(.primary)
                     }
-                    .liquidGlassCircleControl(size: 44)
+                    .font(.system(size: 20, weight: .medium))
+                    .liquidGlassCircleControl(size: 44, subtle: true)
                     .accessibilityLabel("关闭")
                 }
                 .sharedBackgroundVisibility(.hidden)
@@ -1379,14 +1381,14 @@ struct PhysicalAssetEditor: View {
             .tint(.primary)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    LiquidGlassIconButton(systemName: "xmark", accessibilityLabel: "关闭", size: 44) { dismiss() }
+                    LiquidGlassIconButton(systemName: "xmark", accessibilityLabel: "关闭", size: 44, subtle: true) { dismiss() }
                 }
                 .sharedBackgroundVisibility(.hidden)
                 if !isTransactionSource || sourceTransactionID != nil {
                     ToolbarItem(placement: .confirmationAction) {
                         Button(asset == nil && !isTransactionSource ? "创建" : "保存") { save() }
                             .disabled(!canSave)
-                            .liquidGlassPillControl(horizontalPadding: 12, minHeight: 44)
+                            .liquidGlassPillControl(horizontalPadding: 12, minHeight: 44, subtle: true)
                     }
                     .sharedBackgroundVisibility(.hidden)
                 }
@@ -1779,13 +1781,13 @@ private struct ReceivableEditor: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("取消") { dismiss() }
-                        .liquidGlassPillControl(horizontalPadding: 12, minHeight: 44)
+                        .liquidGlassPillControl(horizontalPadding: 12, minHeight: 44, subtle: true)
                 }
                 .sharedBackgroundVisibility(.hidden)
                 ToolbarItem(placement: .confirmationAction) {
                     Button(asset == nil ? "创建" : "保存") { save() }
                         .disabled(amount == nil || amount! <= 0 || name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                        .liquidGlassPillControl(horizontalPadding: 12, minHeight: 44)
+                        .liquidGlassPillControl(horizontalPadding: 12, minHeight: 44, subtle: true)
                 }
                 .sharedBackgroundVisibility(.hidden)
             }
@@ -1881,13 +1883,13 @@ private struct ReceivableRecoverySheet: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("取消") { dismiss() }
-                        .liquidGlassPillControl(horizontalPadding: 12, minHeight: 44)
+                        .liquidGlassPillControl(horizontalPadding: 12, minHeight: 44, subtle: true)
                 }
                 .sharedBackgroundVisibility(.hidden)
                 ToolbarItem(placement: .confirmationAction) {
                     Button("确认") { save() }
                         .disabled(amount == nil || amount! <= 0)
-                        .liquidGlassPillControl(horizontalPadding: 12, minHeight: 44)
+                        .liquidGlassPillControl(horizontalPadding: 12, minHeight: 44, subtle: true)
                 }
                 .sharedBackgroundVisibility(.hidden)
             }

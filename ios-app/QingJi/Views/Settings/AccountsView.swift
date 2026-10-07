@@ -92,20 +92,25 @@ struct AccountsView: View {
         .scrollContentBackground(.hidden)
         .liquidGlassCanvas()
         .navigationTitle("账户管理")
+        .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
                 EditButton()
-                    .liquidGlassPillControl(horizontalPadding: 12, minHeight: 40)
+                    .liquidGlassPillControl(horizontalPadding: 12, minHeight: 44, subtle: true)
             }
+            .sharedBackgroundVisibility(.hidden)
             ToolbarItem(placement: .topBarTrailing) {
                 Button {
                     showAddSheet = true
                 } label: {
                     Image(systemName: "plus")
                 }
-                .liquidGlassCircleControl()
+                .font(.system(size: 20, weight: .medium))
+                .foregroundStyle(.primary)
+                .liquidGlassCircleControl(size: 44, subtle: true)
                 .accessibilityLabel("新建账户")
             }
+            .sharedBackgroundVisibility(.hidden)
         }
         .sheet(isPresented: $showAddSheet) {
             AccountEditorSheet(
@@ -322,13 +327,13 @@ struct AccountEditorSheet: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("取消") { dismiss() }
-                        .liquidGlassPillControl(horizontalPadding: 12, minHeight: 44)
+                        .liquidGlassPillControl(horizontalPadding: 12, minHeight: 44, subtle: true)
                 }
                 .sharedBackgroundVisibility(.hidden)
                 ToolbarItem(placement: .confirmationAction) {
                     Button(account == nil ? "创建" : "保存") { save() }
                         .disabled(!canSave)
-                        .liquidGlassPillControl(horizontalPadding: 12, minHeight: 44)
+                        .liquidGlassPillControl(horizontalPadding: 12, minHeight: 44, subtle: true)
                 }
                 .sharedBackgroundVisibility(.hidden)
             }

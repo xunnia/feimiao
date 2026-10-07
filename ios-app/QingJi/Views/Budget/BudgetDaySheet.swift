@@ -108,7 +108,7 @@ struct BudgetDaySheet: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    LiquidGlassIconButton(systemName: "xmark", accessibilityLabel: "关闭", size: 44) { dismiss() }
+                    LiquidGlassIconButton(systemName: "xmark", accessibilityLabel: "关闭", size: 44, subtle: true) { dismiss() }
                         .foregroundStyle(Color.primary)
                 }
                 .sharedBackgroundVisibility(.hidden)

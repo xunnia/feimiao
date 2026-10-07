@@ -59,7 +59,7 @@ struct BudgetView: View {
                 }
                 .sharedBackgroundVisibility(.hidden)
                 ToolbarItem(placement: .topBarTrailing) {
-                    LiquidGlassIconButton(systemName: "plus", accessibilityLabel: "新增预算", size: 44) {
+                    LiquidGlassIconButton(systemName: "plus", accessibilityLabel: "新增预算", size: 44, subtle: true) {
                         openEditor(bookID: snapshot.bookID, record: nil, hasRules: !liveRecords(snapshot.bookID).isEmpty)
                     }
                     .foregroundStyle(Color.primary)
@@ -105,7 +105,7 @@ struct BudgetView: View {
             .foregroundStyle(.primary)
         }
         .tint(Color.primary)
-        .liquidGlassPillControl(horizontalPadding: 10, minHeight: 44)
+        .liquidGlassPillControl(horizontalPadding: 10, minHeight: 44, subtle: true)
         .accessibilityLabel("当前账本：\(bookName)")
         .accessibilityIdentifier("budget-book-chip")
     }

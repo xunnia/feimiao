@@ -204,7 +204,7 @@ struct AssetsOverviewDashboard: View {
             .navigationTitle("净资产说明")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .topBarTrailing) {
-                LiquidGlassIconButton(systemName: "xmark", accessibilityLabel: "关闭", size: 44) { showInfo = false }
+                LiquidGlassIconButton(systemName: "xmark", accessibilityLabel: "关闭", size: 44, subtle: true) { showInfo = false }
                     .foregroundStyle(Color.primary)
             }.sharedBackgroundVisibility(.hidden) }
         }

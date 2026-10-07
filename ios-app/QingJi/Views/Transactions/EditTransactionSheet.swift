@@ -70,13 +70,13 @@ private struct OffsetSheet: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("取消") { dismiss() }
-                        .liquidGlassPillControl(horizontalPadding: 12, minHeight: 44)
+                        .liquidGlassPillControl(horizontalPadding: 12, minHeight: 44, subtle: true)
                 }
                 .sharedBackgroundVisibility(.hidden)
                 ToolbarItem(placement: .confirmationAction) {
                     Button("确认") { save() }
                         .disabled(amount == nil || amount! <= 0)
-                        .liquidGlassPillControl(horizontalPadding: 12, minHeight: 44)
+                        .liquidGlassPillControl(horizontalPadding: 12, minHeight: 44, subtle: true)
                 }
                 .sharedBackgroundVisibility(.hidden)
             }
@@ -352,13 +352,13 @@ struct EditTransactionSheet: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("取消") { dismiss() }
-                        .liquidGlassPillControl(horizontalPadding: 12, minHeight: 44)
+                        .liquidGlassPillControl(horizontalPadding: 12, minHeight: 44, subtle: true)
                 }
                 .sharedBackgroundVisibility(.hidden)
                 ToolbarItem(placement: .confirmationAction) {
                     Button("保存") { save() }
                         .disabled(parsedAmount == nil || parsedAmount! <= 0)
-                        .liquidGlassPillControl(horizontalPadding: 12, minHeight: 44)
+                        .liquidGlassPillControl(horizontalPadding: 12, minHeight: 44, subtle: true)
                 }
                 .sharedBackgroundVisibility(.hidden)
             }

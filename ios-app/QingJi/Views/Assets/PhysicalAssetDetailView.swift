@@ -101,7 +101,8 @@ struct PhysicalAssetDetailView: View {
                         Image(systemName: "chevron.left")
                             .foregroundStyle(.primary)
                     }
-                    .liquidGlassCircleControl(size: 44)
+                    .font(.system(size: 20, weight: .medium))
+                    .liquidGlassCircleControl(size: 44, subtle: true)
                     .accessibilityLabel("返回")
                 }
                 .sharedBackgroundVisibility(.hidden)
@@ -112,7 +113,8 @@ struct PhysicalAssetDetailView: View {
                         Image(systemName: "ellipsis")
                             .foregroundStyle(.primary)
                     }
-                    .liquidGlassCircleControl(size: 44)
+                    .font(.system(size: 20, weight: .medium))
+                    .liquidGlassCircleControl(size: 44, subtle: true)
                     .accessibilityLabel("更多资产操作")
                 }
                 .sharedBackgroundVisibility(.hidden)

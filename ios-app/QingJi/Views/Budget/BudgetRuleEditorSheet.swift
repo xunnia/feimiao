@@ -331,13 +331,13 @@ extension BudgetRuleEditorSheet {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    LiquidGlassIconButton(systemName: "xmark", accessibilityLabel: "取消", size: 44) { dismiss() }
+                    LiquidGlassIconButton(systemName: "xmark", accessibilityLabel: "取消", size: 44, subtle: true) { dismiss() }
                         .foregroundStyle(Color.primary)
                 }
                 .sharedBackgroundVisibility(.hidden)
                 if isEdit {
                     ToolbarItem(placement: .confirmationAction) {
-                        LiquidGlassIconButton(systemName: "trash", accessibilityLabel: "删除这条预算", size: 44) {
+                        LiquidGlassIconButton(systemName: "trash", accessibilityLabel: "删除这条预算", size: 44, subtle: true) {
                             confirmDelete = true
                         }
                         .foregroundStyle(Color.warning)
@@ -346,7 +346,7 @@ extension BudgetRuleEditorSheet {
                     .sharedBackgroundVisibility(.hidden)
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    LiquidGlassPillButton("保存") { save() }
+                    LiquidGlassPillButton("保存", subtle: true) { save() }
                         .foregroundStyle(Color.primary)
                         .disabled(saving)
                         .accessibilityIdentifier("budget-rule-save")

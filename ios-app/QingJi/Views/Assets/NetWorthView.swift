@@ -100,7 +100,7 @@ struct NetWorthView: View {
                         message = error.localizedDescription
                     }
                 }
-                .liquidGlassPillControl(horizontalPadding: 12, minHeight: 44)
+                .liquidGlassPillControl(horizontalPadding: 12, minHeight: 44, subtle: true)
             }
             .sharedBackgroundVisibility(.hidden)
         }
