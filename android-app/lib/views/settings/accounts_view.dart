@@ -5,6 +5,8 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../../core/account/net_worth_verified_checkpoint.dart';
+import '../../core/app_clock.dart';
+import '../../core/money_format.dart';
 import '../../core/statistics/metric_contract.dart';
 import '../../data/app_repository.dart';
 import '../../theme/app_colors.dart';
@@ -25,8 +27,9 @@ import '../assets/asset_add_entry_sheet.dart';
 import '../assets/asset_balance_review_sheet.dart';
 import '../assets/asset_overview_cards.dart';
 import '../assets/funds_tab_cards.dart';
+import '../assets/funds_summary_card.dart';
 import '../assets/liability_migration_sheet.dart';
-import '../assets/net_worth_trend_card.dart';
+import '../assets/asset_overview_dashboard.dart';
 import '../../core/account/liability_balance_mode.dart';
 import '../assets/physical_asset_detail_page.dart';
 import '../assets/physical_asset_form_sheet.dart';
@@ -48,6 +51,10 @@ enum _AssetListVisibility { active, archived }
 
 enum _ItemKind { all, active, idle, ended }
 
+enum _FundsKind { all, accounts, investment, receivables, liabilities }
+
+enum _FundsSort { recent, name, manual }
+
 /// 资产管理固定为全局范围，账本只作为物品和权益的归属信息。
 class AccountsView extends StatefulWidget {
   const AccountsView({super.key});
@@ -65,6 +72,9 @@ class _AccountsViewState extends State<AccountsView> {
   _ItemKind _itemKind = _ItemKind.all;
   AssetType? _itemType;
   final _itemSearchController = TextEditingController();
+  final _fundsSearchController = TextEditingController();
+  _FundsKind _fundsKind = _FundsKind.all;
+  _FundsSort _fundsSort = _FundsSort.recent;
   // D2a: 本次会话是否已弹出里程碑庆祝（防重复）。
   bool _milestoneCelebrated = false;
 
@@ -85,6 +95,7 @@ class _AccountsViewState extends State<AccountsView> {
   @override
   void dispose() {
     _itemSearchController.dispose();
+    _fundsSearchController.dispose();
     super.dispose();
   }
 
@@ -93,19 +104,19 @@ class _AccountsViewState extends State<AccountsView> {
   void _checkNetWorthMilestone(AppRepository repo) {
     if (_milestoneCelebrated) return;
     const milestones = <int>[
-      1000000,   // 1万
-      5000000,   // 5万
-      10000000,  // 10万
-      20000000,  // 20万
-      50000000,  // 50万
+      1000000, // 1万
+      5000000, // 5万
+      10000000, // 10万
+      20000000, // 20万
+      50000000, // 50万
       100000000, // 100万
       200000000, // 200万
       500000000, // 500万
       1000000000, // 1000万
     ];
     final ordered = repo.verifiedNetWorthCheckpoints
-        .where((c) =>
-            c.header.status == NetWorthVerifiedCheckpointStatus.active)
+        .where(
+            (c) => c.header.status == NetWorthVerifiedCheckpointStatus.active)
         .toList()
       ..sort((a, b) => b.header.asOf.compareTo(a.header.asOf));
     if (ordered.length < 2) return;
@@ -186,6 +197,10 @@ class _AccountsViewState extends State<AccountsView> {
               account: account,
               balance: result.value!.balance,
               qualityText: qualityText,
+              calibratedAt: result.value!.checkpoint == null
+                  ? null
+                  : DateTime.fromMillisecondsSinceEpoch(
+                      result.value!.checkpoint!.effectiveMs),
             ));
           }
           final includedBalances = balances
@@ -214,6 +229,9 @@ class _AccountsViewState extends State<AccountsView> {
                 padding: const EdgeInsets.fromLTRB(16, 10, 16, 8),
                 child: SlidingSegment<_AssetView>(
                   key: const Key('asset-view-segment'),
+                  height:
+                      (MediaQuery.textScalerOf(context).scale(13) * 1.35 + 12)
+                          .clamp(34.0, double.infinity),
                   items: const [
                     (_AssetView.overview, '总览'),
                     (_AssetView.funds, '资金'),
@@ -240,9 +258,21 @@ class _AccountsViewState extends State<AccountsView> {
                           netWorthResult.status != MetricStatus.available,
                       includedCount: includedCount,
                       totalCount: totalCount,
+                      balances: balances,
                     ),
                   _AssetView.funds => _buildFunds(
                       context,
+                      breakdown: breakdown,
+                      partial: fundsSummaryIsPartial(
+                          netWorthResult: netWorthResult,
+                          physicalAssets: [
+                            ...physicalAssets,
+                            ...archivedAssets
+                          ],
+                          receivableAssets: [
+                            ...receivableAssets,
+                            ...archivedReceivables
+                          ]),
                       balances: balances,
                       receivableAssets: receivableAssets,
                       archivedReceivables: archivedReceivables,
@@ -284,8 +314,8 @@ class _AccountsViewState extends State<AccountsView> {
     required bool netWorthPartial,
     required int includedCount,
     required int totalCount,
+    required List<FundsAccountBalance> balances,
   }) {
-    final scheme = Theme.of(context).colorScheme;
     // 待处理卡只留「用户要去做事」的任务型条目；
     // 数据口径类条目收进右上 ⋯ 菜单的「数据待完善」弹层。
     final warrantyReminderCount = physicalAssets
@@ -294,7 +324,43 @@ class _AccountsViewState extends State<AccountsView> {
     final receivableDueReminderCount = receivableAssets
         .where((asset) => repo.dueReminderForReceivable(asset).needsAttention)
         .length;
+    final nextRepayment = repo.upcomingRepayments().firstOrNull;
+    final negativeAccounts = balances.where((item) =>
+        !item.account.isArchived &&
+        !item.account.type.liability &&
+        item.balance < Decimal.zero);
+    final calibrationCount = balances
+        .where((item) =>
+            !item.account.isArchived &&
+            (item.calibratedAt == null ||
+                AppClock.now.difference(item.calibratedAt!).inDays >
+                    (item.account.verificationIntervalDays ?? 30)))
+        .length;
     final pending = <AssetPendingItem>[
+      if (nextRepayment != null)
+        AssetPendingItem(
+            icon: Icons.credit_card_outlined,
+            text: '${nextRepayment.account?.name ?? '负债账户'}待还款',
+            subtitle:
+                '${nextRepayment.nextDate.month}月${nextRepayment.nextDate.day}日 · ${nextRepayment.daysLeft < 0 ? '已逾期' : '待还'}',
+            actionLabel: '去还款',
+            onTap: () => _showRepaymentSheet(context, nextRepayment)),
+      for (final item in negativeAccounts.take(2))
+        AssetPendingItem(
+            icon: Icons.warning_amber_outlined,
+            text: '${item.account.name}余额为负',
+            subtitle: MoneyFormat.string(item.balance,
+                currencyCode: item.account.currencyCode),
+            actionLabel: '校准',
+            onTap: () => _showAccountDetail(context, item.account)),
+      if (calibrationCount > 0)
+        AssetPendingItem(
+            icon: Icons.schedule_outlined,
+            text: '$calibrationCount 个账户需要校准',
+            subtitle: '从未校准或超过核对间隔',
+            actionLabel: '去校准',
+            onTap: () => showBlurSheet<void>(context,
+                child: const AssetBalanceReviewSheet())),
       if (warrantyReminderCount > 0)
         AssetPendingItem(
           icon: Icons.verified_user_outlined,
@@ -315,75 +381,101 @@ class _AccountsViewState extends State<AccountsView> {
           }),
         ),
     ];
-    final fundsAssets = breakdown.cashAssets +
-        breakdown.investmentAssets +
-        breakdown.receivableAssets;
-    final fundsNetWorth = fundsAssets - breakdown.totalLiabilities;
-    final hasVerifiedCheckpoint = repo.verifiedNetWorthCheckpoints.any(
-      (checkpoint) =>
-          checkpoint.header.status == NetWorthVerifiedCheckpointStatus.active,
-    );
+    final activeCheckpoints = repo.verifiedNetWorthCheckpoints
+        .where(
+          (checkpoint) =>
+              checkpoint.header.status ==
+              NetWorthVerifiedCheckpointStatus.active,
+        )
+        .toList()
+      ..sort((a, b) => b.header.asOf.compareTo(a.header.asOf));
+    final allPhysical = [
+      ...repo.globalActivePhysicalAssets,
+      ...repo.globalArchivedPhysicalAssets
+    ];
+    final includedAccounts = repo.accounts.where(
+        (a) => !a.isDeleted && a.includeInNetWorth && a.currencyCode == 'CNY');
 
     return ListView(
       key: const Key('asset-overview'),
-      // 顶部留 12：探头猫探出卡顶 8dp，ListView 默认 Clip.hardEdge 会裁，
-      // padding 不够猫头就没了。
       padding: const EdgeInsets.fromLTRB(16, 12, 16, 32),
       children: [
-        // hero 数字 + 迷你趋势合成一张卡（数字上、趋势下），
-        // 右上角照主页手法挂探头猫（home_summary_card.dart 同款）。
-        Stack(
-          clipBehavior: Clip.none,
-          children: [
-            Container(
-              decoration: appCardDecoration(scheme),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  AssetSummaryCard(
-                    netWorth: breakdown.netWorth,
-                    fundsAssets: fundsAssets,
-                    physicalAssets: breakdown.physicalAssets,
-                    fundsNetWorth: fundsNetWorth,
-                    liabilityTotal: breakdown.totalLiabilities,
-                    totalAssets: breakdown.totalAssets,
-                    includedCount: includedCount,
-                    accountCount: totalCount,
-                    partial: netWorthPartial,
-                    embedded: true,
-                  ),
-                  appCardDivider(scheme),
-                  NetWorthEstimatedTrendCard(
-                    trend: repo.netWorthEstimatedTrend,
-                    embedded: true,
-                  ),
-                ],
-              ),
-            ),
-            Positioned(
-              top: -8,
-              right: -4,
-              child: IgnorePointer(
-                child: MascotBreath(
-                  bob: 2.0,
-                  sway: 0,
-                  alignment: Alignment.centerRight,
-                  child: Image.asset(
-                    'assets/mascot/idle.webp',
-                    // 比主页的 96 小一号，避免和 hero 大数字抢空间。
-                    height: 80,
-                    fit: BoxFit.fitHeight,
-                  ),
-                ),
-              ),
-            ),
-          ],
+        AssetOverviewDashboard(
+          breakdown: breakdown,
+          trend: repo.netWorthEstimatedTrend,
+          partial: netWorthPartial,
+          excludedCount: totalCount - includedCount,
+          cashAccountCount: includedAccounts
+              .where(
+                  (a) => !a.type.liability && a.type != AccountType.investment)
+              .length,
+          physicalCount: repo.physicalAssetsCountedInNetWorth.length,
+          excludedPhysicalCount:
+              allPhysical.where((a) => !a.countsInNetWorth).length,
+          liabilityCount: includedAccounts.where((account) {
+            if (repo.accountBalanceOf(account) < Decimal.zero) return true;
+            return !account.balanceMode.isLedger &&
+                repo.liabilityProfiles.any((profile) =>
+                    profile.accountId == account.id &&
+                    profile.countsAsLiability &&
+                    profile.currentPrincipal > Decimal.zero);
+          }).length,
+          physicalPartial: allPhysical.any((a) =>
+                  a.inclusionQuality == AssetInclusionQuality.needsReview) ||
+              repo.stalePhysicalValuationCount() > 0,
+          lastVerifiedAt: activeCheckpoints
+              .where((c) =>
+                  c.header.completeness ==
+                  NetWorthVerifiedCheckpointCompleteness.complete)
+              .firstOrNull
+              ?.header
+              .asOf
+              .toLocal(),
+          verifiedComparison: repo.latestVerifiedNetWorthComparison,
+          onReview: () => _verifyNetWorth(context, repo),
         ),
         if (pending.isNotEmpty) ...[
           const SizedBox(height: 12),
-          AssetPendingCard(items: pending),
+          AssetPendingCard(items: pending.take(3).toList()),
+          if (pending.length > 3)
+            Align(
+                alignment: Alignment.centerRight,
+                child: TextButton(
+                    onPressed: () => showBlurSheet<void>(context,
+                        child: Builder(
+                            builder: (sheetContext) => SingleChildScrollView(
+                                    child: Column(
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                      SheetHeader(
+                                          title: '待处理',
+                                          onClose: () =>
+                                              Navigator.of(sheetContext).pop()),
+                                      Padding(
+                                          padding: const EdgeInsets.all(16),
+                                          child: AssetPendingCard(
+                                              items: pending
+                                                  .map((item) =>
+                                                      AssetPendingItem(
+                                                          icon: item.icon,
+                                                          text: item.text,
+                                                          subtitle:
+                                                              item.subtitle,
+                                                          actionLabel:
+                                                              item.actionLabel,
+                                                          onTap: () {
+                                                            Navigator.of(
+                                                                    sheetContext)
+                                                                .pop();
+                                                            item.onTap();
+                                                          }))
+                                                  .toList())),
+                                    ])))),
+                    child: Text('查看全部 ${pending.length} 项',
+                        style:
+                            AppType.secondary(Theme.of(context).colorScheme)))),
         ],
-        if (hasVerifiedCheckpoint) ...[
+        if (activeCheckpoints.isNotEmpty) ...[
           const SizedBox(height: 12),
           VerifiedNetWorthCard(
             checkpoints: repo.verifiedNetWorthCheckpoints,
@@ -391,7 +483,7 @@ class _AccountsViewState extends State<AccountsView> {
           ),
         ],
         const SizedBox(height: 12),
-        AssetAnalysisCard(breakdown: breakdown),
+        AssetAnalysisCard(breakdown: breakdown, partial: netWorthPartial),
       ],
     );
   }
@@ -616,6 +708,8 @@ class _AccountsViewState extends State<AccountsView> {
 
   Widget _buildFunds(
     BuildContext context, {
+    required NetWorthBreakdown breakdown,
+    required bool partial,
     required List<FundsAccountBalance> balances,
     required List<ReceivableAssetEntity> receivableAssets,
     required List<ReceivableAssetEntity> archivedReceivables,
@@ -623,16 +717,51 @@ class _AccountsViewState extends State<AccountsView> {
     required bool hasLendingData,
     bool hasMigrationWork = false,
   }) {
-    // 种类筛选已删除：列表本就按账户类型分组，够用；只留「当前项目/已归档」一维切换。
+    final scheme = Theme.of(context).colorScheme;
+    final query = _fundsSearchController.text.trim().toLowerCase();
+    bool matches(String name, String institution) =>
+        query.isEmpty ||
+        name.toLowerCase().contains(query) ||
+        institution.toLowerCase().contains(query);
     final showArchived = _fundsVisibility == _AssetListVisibility.archived;
     final activeBalances =
         balances.where((item) => !item.account.isArchived).toList();
     final archivedBalances =
         balances.where((item) => item.account.isArchived).toList();
     final archivedCount = archivedBalances.length + archivedReceivables.length;
-    final currentBalances = showArchived ? archivedBalances : activeBalances;
-    final currentReceivables =
-        showArchived ? archivedReceivables : receivableAssets;
+    final currentBalances =
+        (showArchived ? archivedBalances : activeBalances).where((item) {
+      final type = item.account.type;
+      final included = switch (_fundsKind) {
+        _FundsKind.all => true,
+        _FundsKind.accounts =>
+          !type.liability && type != AccountType.investment,
+        _FundsKind.investment => type == AccountType.investment,
+        _FundsKind.receivables => false,
+        _FundsKind.liabilities => type.liability || item.balance < Decimal.zero,
+      };
+      return included && matches(item.account.name, item.account.institution);
+    }).toList()
+          ..sort((a, b) => switch (_fundsSort) {
+                _FundsSort.recent =>
+                  b.account.updatedMs.compareTo(a.account.updatedMs),
+                _FundsSort.name => a.account.name.compareTo(b.account.name),
+                _FundsSort.manual =>
+                  a.account.sortOrder.compareTo(b.account.sortOrder),
+              });
+    final currentReceivables = (showArchived
+            ? archivedReceivables
+            : receivableAssets)
+        .where((asset) =>
+            (_fundsKind == _FundsKind.all ||
+                _fundsKind == _FundsKind.receivables) &&
+            matches(asset.name, asset.counterparty))
+        .toList()
+      ..sort((a, b) => switch (_fundsSort) {
+            _FundsSort.recent => b.updatedMs.compareTo(a.updatedMs),
+            _FundsSort.name => a.name.compareTo(b.name),
+            _FundsSort.manual => a.id.compareTo(b.id),
+          });
     // ¥0 账户只在「当前项目」视图折叠进底部卡；归档视图原样平铺，不折叠。
     final zeroItems = showArchived
         ? const <FundsAccountBalance>[]
@@ -649,22 +778,95 @@ class _AccountsViewState extends State<AccountsView> {
             .toList();
     final groups = _groupBalances(nonZeroBalances);
     final hasArchiveLink = !showArchived && archivedCount > 0;
-    final showLendingEntry = !showArchived && hasLendingData;
-    final isEmpty = groups.isEmpty &&
-        currentReceivables.isEmpty &&
-        zeroItems.isEmpty &&
-        !hasArchiveLink &&
-        !showLendingEntry;
+    final showLendingEntry = !showArchived &&
+        hasLendingData &&
+        query.isEmpty &&
+        _fundsKind == _FundsKind.all;
+    final isEmpty =
+        groups.isEmpty && currentReceivables.isEmpty && zeroItems.isEmpty;
 
     return Column(
       key: const Key('asset-funds'),
       children: [
         Expanded(
-          child: isEmpty
+          child: balances.isEmpty &&
+                  receivableAssets.isEmpty &&
+                  archivedReceivables.isEmpty
               ? const AssetEmptyState()
               : ListView(
                   padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
                   children: [
+                    FundsSummaryCard(breakdown: breakdown, partial: partial),
+                    const SizedBox(height: 10),
+                    TextField(
+                      key: const Key('funds-search'),
+                      controller: _fundsSearchController,
+                      textInputAction: TextInputAction.search,
+                      style: AppType.body(scheme).copyWith(fontSize: 14),
+                      decoration:
+                          iosInputDecoration(context, hint: '搜索账户或机构').copyWith(
+                        isDense: true,
+                        contentPadding: const EdgeInsets.symmetric(
+                            horizontal: 12, vertical: 10),
+                        prefixIcon: const Icon(Icons.search, size: 18),
+                        prefixIconConstraints:
+                            const BoxConstraints(minWidth: 38, minHeight: 38),
+                        fillColor: AppColors.iconCircleFill(scheme),
+                      ),
+                      onChanged: (_) => setState(() {}),
+                    ),
+                    const SizedBox(height: 10),
+                    SingleChildScrollView(
+                        scrollDirection: Axis.horizontal,
+                        child: Row(children: [
+                          for (final kind in _FundsKind.values) ...[
+                            PressableScale(
+                                onPressed: () =>
+                                    setState(() => _fundsKind = kind),
+                                child: Semantics(
+                                    selected: kind == _fundsKind,
+                                    button: true,
+                                    child: Container(
+                                      key: Key('funds-filter-${kind.name}'),
+                                      padding: const EdgeInsets.symmetric(
+                                          horizontal: 13, vertical: 6),
+                                      decoration: BoxDecoration(
+                                          color: kind == _fundsKind
+                                              ? scheme.primary
+                                              : AppColors.iconCircleFill(
+                                                  scheme),
+                                          borderRadius:
+                                              BorderRadius.circular(999)),
+                                      child: Text(_fundsKindLabel(kind),
+                                          style: AppType.secondary(
+                                                  scheme)
+                                              .copyWith(
+                                                  color: kind == _fundsKind
+                                                      ? scheme.onPrimary
+                                                      : AppTextColor.secondary(
+                                                          scheme),
+                                                  fontWeight: kind == _fundsKind
+                                                      ? FontWeight.w600
+                                                      : FontWeight.w400)),
+                                    ))),
+                            const SizedBox(width: 7),
+                          ],
+                          _LightFilterDropdown(
+                              label: _fundsSortLabel(_fundsSort),
+                              active: _fundsSort != _FundsSort.recent,
+                              itemsBuilder: () => [
+                                    for (final sort in _FundsSort.values)
+                                      IosMenuItem(
+                                          label: _fundsSortLabel(sort),
+                                          icon: Icons.sort,
+                                          selected: sort == _fundsSort,
+                                          onTap: () =>
+                                              setState(() => _fundsSort = sort))
+                                  ]),
+                        ])),
+                    const SizedBox(height: 12),
+                    if (isEmpty)
+                      const SizedBox(height: 120, child: AssetEmptyState()),
                     if (showArchived) ...[
                       FundsArchiveBackRow(
                         onTap: () => setState(() =>
@@ -673,7 +875,11 @@ class _AccountsViewState extends State<AccountsView> {
                       const SizedBox(height: 6),
                     ],
                     // 「最近要还」置顶：10 天内到期的还款比静态列表更紧急。
-                    if (!showArchived && upcomingRepayments.isNotEmpty) ...[
+                    if (!showArchived &&
+                        upcomingRepayments.isNotEmpty &&
+                        query.isEmpty &&
+                        (_fundsKind == _FundsKind.all ||
+                            _fundsKind == _FundsKind.liabilities)) ...[
                       UpcomingRepaymentsCard(
                         items: upcomingRepayments,
                         onRepay: (item) => _showRepaymentSheet(context, item),
@@ -684,7 +890,9 @@ class _AccountsViewState extends State<AccountsView> {
                         const SizedBox(height: 12),
                     ],
                     // 借贷往来入口：紧跟「最近要还」，与已归档入口同款轻量行。
-                    if (showLendingEntry) ...[
+                    if (showLendingEntry &&
+                        query.isEmpty &&
+                        _fundsKind == _FundsKind.all) ...[
                       LendingEntryRow(onTap: () => _openLending(context)),
                       const SizedBox(height: 6),
                     ],
@@ -881,7 +1089,13 @@ class _AccountsViewState extends State<AccountsView> {
           balances.where((item) => item.account.type == type).toList();
       if (items.isEmpty) continue;
       items.sort((a, b) {
-        final sort = a.account.sortOrder.compareTo(b.account.sortOrder);
+        final sort = switch (_fundsSort) {
+          _FundsSort.recent =>
+            b.account.updatedMs.compareTo(a.account.updatedMs),
+          _FundsSort.name => a.account.name.compareTo(b.account.name),
+          _FundsSort.manual =>
+            a.account.sortOrder.compareTo(b.account.sortOrder),
+        };
         if (sort != 0) return sort;
         return a.account.name.compareTo(b.account.name);
       });
@@ -1047,6 +1261,20 @@ class _AccountsViewState extends State<AccountsView> {
 String _visibilityLabel(_AssetListVisibility value) => switch (value) {
       _AssetListVisibility.active => '当前项目',
       _AssetListVisibility.archived => '已归档',
+    };
+
+String _fundsKindLabel(_FundsKind kind) => switch (kind) {
+      _FundsKind.all => '全部',
+      _FundsKind.accounts => '账户',
+      _FundsKind.investment => '投资',
+      _FundsKind.receivables => '权益',
+      _FundsKind.liabilities => '负债',
+    };
+
+String _fundsSortLabel(_FundsSort sort) => switch (sort) {
+      _FundsSort.recent => '最近更新',
+      _FundsSort.name => '名称',
+      _FundsSort.manual => '自定义顺序',
     };
 
 String _itemKindLabel(_ItemKind value) => switch (value) {

@@ -34,6 +34,30 @@ void main() {
     expect(preferences.cardAlpha, 0.90);
   });
 
+  test('saved legacy 40% opacity is kept, not guessed to be untouched', () {
+    final preferences = AppThemePreferences.fromJson({
+      'preset': 'warm',
+      'intensity': 1.0,
+      'cardAlpha': 0.40,
+    });
+    expect(preferences.cardAlpha, 0.40);
+    expect(AppThemeController.defaultCardAlpha, 0.80);
+    expect(preferences.toJson()['v'], AppThemePreferences.formatVersion);
+  });
+
+  test('a card opacity the user picked is kept', () {
+    expect(
+      AppThemePreferences.fromJson({'cardAlpha': 0.55}).cardAlpha,
+      0.55,
+    );
+    // 新格式里用户主动拖回 40% 也要保留。
+    expect(
+      AppThemePreferences.fromJson({'v': 2, 'cardAlpha': 0.40}).cardAlpha,
+      0.40,
+    );
+    expect(AppThemePreferences.fromJson({}).cardAlpha, 0.80);
+  });
+
   test('backup page limits display without deleting protected files', () {
     final all = List.generate(5, (index) => File('backup-$index.bak'));
 

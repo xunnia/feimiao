@@ -51,6 +51,7 @@ class ChatIntent {
     '预算',
     '余额',
     '结余',
+    '超支',
     '金额',
     '一笔',
     '分类',
@@ -63,12 +64,6 @@ class ChatIntent {
     '打车',
     '购物',
     '交通',
-    '本月',
-    '上月',
-    '这个月',
-    '上个月',
-    '今年',
-    '去年',
     '周报',
     '月报',
     '年报',
@@ -221,11 +216,25 @@ class ChatIntent {
   static bool isQuery(String text, {bool hasArabicAmount = false}) =>
       classify(text, hasArabicAmount: hasArabicAmount) == ChatIntentKind.query;
 
+  static bool isPeriodFollowUp(String text) => RegExp(
+          r'^(?:那|那么)?(?:本月|这个月|这月|上月|上个月|本周|这周|上周|今天|昨天|今年|去年|近\s*\d{1,3}\s*天)(?:的)?(?:呢|怎么样|如何)?[？?]?$')
+      .hasMatch(text.trim());
+
+  static String lastTopicQuestion(Iterable<String> newestFirst) {
+    for (final question in newestFirst) {
+      if (question.trim().isNotEmpty && !isPeriodFollowUp(question)) {
+        return question;
+      }
+    }
+    return '';
+  }
+
   /// 本地三态兜底。只有明确金额或收支动作才进入记账，其余普通
   /// 自然语言按闲聊处理，避免在 AI 不可用时把“你好”误写成账单。
   static ChatIntentKind classify(
     String text, {
     bool hasArabicAmount = false,
+    String previousQuestion = '',
   }) {
     final t = text.trim();
     if (t.isEmpty) return ChatIntentKind.chat;
@@ -238,6 +247,11 @@ class ChatIntent {
         (hasLedgerScope &&
             hasFinanceContext &&
             queryActionWords.any(t.contains))) {
+      return ChatIntentKind.query;
+    }
+    if (isPeriodFollowUp(t) &&
+        previousQuestion.trim().isNotEmpty &&
+        classify(previousQuestion) == ChatIntentKind.query) {
       return ChatIntentKind.query;
     }
     final hasQuestionSignal = queryWords.any(t.contains);

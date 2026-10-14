@@ -522,7 +522,7 @@ private struct TransactionFilterSheet: View {
 
     var body: some View {
         NavigationStack {
-            Form {
+            AppThemedForm {
                 Section("类型") {
                     Picker("交易类型", selection: $kind) {
                         Text("全部").tag(TransactionKind?.none)

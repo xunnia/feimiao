@@ -24,4 +24,4 @@ Android 与原生 iOS 的个人记账应用。两端共用产品口径，分别�
 
 Android 更新入口：[VPS version.json](https://updates.xunni.dpdns.org/version.json)。**线上版本以该接口为准，不以旧标签 `android-latest` 或某个文档中的历史版本推断。**
 
-主线源码与线上 Android 版本一致（当前版本见 `android-app/pubspec.yaml`），集成记录和待办见 [`docs/02-项目进度.md`](docs/02-项目进度.md)。iOS 候选功能在各自分支接受 Xcode 验证，通过之前不覆盖主线，详见 [`docs/09-iOS.md`](docs/09-iOS.md)。
+`main` 是唯一集成主线，但目前仍是 Android323，不能当作最新工作版本。2026-10-15 双端云端接手统一使用 [`codex/android-handoff-20261006`](https://github.com/xunnia/feimiao/tree/codex/android-handoff-20261006)：Android `1.315.0+330 / b1006-330 / DB50`，iOS 源码及测试对齐候选 `dd692b7`，包含最新资产/预算与透明按钮。已有 [Draft PR #1](https://github.com/xunnia/feimiao/pull/1) 只看进度、不合并；先读本分支 [`docs/02-项目进度.md`](docs/02-项目进度.md) 顶部的已做/未做与验收边界，不能拿旧 iOS 分支的 Android328 覆盖330。SDK、签名、真实账本、发布包及本机 ignored 截图不随 Git 上传；源码同步不是本次正式发布或设备验收，iOS 细节见 [`docs/09-iOS.md`](docs/09-iOS.md)。

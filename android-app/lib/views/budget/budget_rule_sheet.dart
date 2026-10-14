@@ -12,7 +12,6 @@ import '../../core/haptics.dart';
 import '../../data/app_repository.dart';
 import '../../theme/app_colors.dart';
 import '../../theme/app_tokens.dart';
-import '../../widgets/app_buttons.dart';
 import '../../widgets/app_toast.dart';
 import '../../widgets/ios_dialogs.dart';
 import '../../widgets/ios_form.dart';
@@ -20,6 +19,8 @@ import '../../widgets/pressable_scale.dart';
 import '../../widgets/settings_ui.dart';
 import '../../widgets/sliding_segment.dart';
 import '../common/app_sheet.dart';
+import 'budget_calendar_card.dart' show BudgetMonthArrow;
+import 'budget_rule_colors.dart';
 
 /// 新增 / 编辑预算规则（docs/08 §6.9）。
 /// [suggestionYuan]：第一次新建时预填的近 3 月平均建议。
@@ -65,6 +66,7 @@ class _BudgetRuleSheetState extends State<BudgetRuleSheet> {
   late final int _draftCreatedMs;
   late DateTime _pickerMonth;
   bool _saving = false;
+  bool _confirming = false;
   String? _error;
 
   BudgetRule? get _rule => widget.rule;
@@ -137,6 +139,7 @@ class _BudgetRuleSheetState extends State<BudgetRuleSheet> {
         uuid: _rule?.uuid ?? '',
         bookId: widget.bookId,
         kind: BudgetRuleKind.base,
+        name: _name.text.trim(),
         amountCents: yuan * 100,
         unit: _unit,
         startDate: _rule?.isBase == true
@@ -165,7 +168,7 @@ class _BudgetRuleSheetState extends State<BudgetRuleSheet> {
   }
 
   Future<void> _save(AppRepository repo, {BudgetFunding? forceFunding}) async {
-    if (_saving) return;
+    if (_saving || _confirming) return;
     final yuan = _amountYuan;
     if (yuan == null) {
       setState(() => _error = '填一个大于 0 的整数金额');
@@ -180,6 +183,7 @@ class _BudgetRuleSheetState extends State<BudgetRuleSheet> {
         ? null
         : budgetBaseEditWarning(
             original: _rule,
+            existing: repo.budgetRulesForBook(widget.bookId),
             amountCents: yuan * 100,
             unit: _unit,
             today: AppClock.now,
@@ -188,12 +192,18 @@ class _BudgetRuleSheetState extends State<BudgetRuleSheet> {
     final startsBeforeThisMonth = _rule != null &&
         _rule!.startDate.isBefore(DateTime(today.year, today.month));
     if (warning != null && startsBeforeThisMonth) {
-      final ok = await showConfirmDialog(
-        context,
-        title: '改日常预算',
-        message: warning,
-        confirmText: '改',
-      );
+      setState(() => _confirming = true);
+      bool ok;
+      try {
+        ok = await showConfirmDialog(
+          context,
+          title: '改日常预算',
+          message: warning,
+          confirmText: '改',
+        );
+      } finally {
+        if (mounted) setState(() => _confirming = false);
+      }
       if (!ok || !mounted) return;
     }
     setState(() {
@@ -205,7 +215,7 @@ class _BudgetRuleSheetState extends State<BudgetRuleSheet> {
         id: _rule?.id,
         bookId: widget.bookId,
         kind: _dated ? BudgetRuleKind.special : BudgetRuleKind.base,
-        name: _dated ? _name.text : '',
+        name: _name.text.trim(),
         amountYuan: yuan,
         unit: _unit,
         startDate: _dated ? _start : null,
@@ -243,9 +253,7 @@ class _BudgetRuleSheetState extends State<BudgetRuleSheet> {
     final ok = await showConfirmDialog(
       context,
       title: '删除「${budgetRuleName(rule)}」？',
-      message: rule.isBase
-          ? '它管的日子会交还给它之前的那条日常预算；前面没有就没有预算。'
-          : '这几天会回到日常预算。',
+      message: rule.isBase ? '它管的日子会交还给它之前的那条日常预算；前面没有就没有预算。' : '这几天会回到日常预算。',
       confirmText: '删除',
       destructive: true,
     );
@@ -272,6 +280,8 @@ class _BudgetRuleSheetState extends State<BudgetRuleSheet> {
       }
     });
   }
+
+  bool get _rangeComplete => _start != null && _end != null;
 
   String _rangeText() {
     final start = _start;
@@ -309,7 +319,9 @@ class _BudgetRuleSheetState extends State<BudgetRuleSheet> {
     final today = AppClock.now;
     final rule = _rule;
     if (rule != null && rule.isBase) {
-      return '从${rule.startDate.year != today.year ? '${rule.startDate.year}年' : ''}${rule.startDate.month}月起一直有效';
+      final span =
+          budgetRuleSpan(rule, repo.budgetRulesForBook(widget.bookId), today);
+      return span.text == '没有生效过' ? span.text : '${span.text}有效';
     }
     final hasBase = _others(repo).any((r) => r.isBase);
     return hasBase
@@ -326,13 +338,14 @@ class _BudgetRuleSheetState extends State<BudgetRuleSheet> {
     final preview = candidate == null
         ? const <BudgetRulePreviewLine>[]
         : budgetRulePreview(
-            existing: others,
+            existing: repo.budgetRulesForBook(widget.bookId),
             candidate: candidate,
             today: AppClock.now,
           );
     final baseWarning = !_dated && candidate != null
         ? budgetBaseEditWarning(
             original: _rule,
+            existing: repo.budgetRulesForBook(widget.bookId),
             amountCents: candidate.amountCents,
             unit: _unit,
             today: AppClock.now,
@@ -343,6 +356,13 @@ class _BudgetRuleSheetState extends State<BudgetRuleSheet> {
         widget.suggestionYuan != null &&
         _amount.text.trim() == '${widget.suggestionYuan}';
     final screenH = MediaQuery.sizeOf(context).height;
+    // 这条规则（保存后）会用的颜色：日常预算用主色，特别安排用它在色板里的颜色。
+    final accent = !_dated
+        ? scheme.primary
+        : budgetRulePalette[(_rule != null && !_rule!.isBase
+                ? _rule!.colorIndex
+                : others.where((r) => !r.isBase).length) %
+            budgetRulePalette.length];
 
     return ConstrainedBox(
       constraints: BoxConstraints(maxHeight: screenH * 0.88),
@@ -350,11 +370,11 @@ class _BudgetRuleSheetState extends State<BudgetRuleSheet> {
         mainAxisSize: MainAxisSize.min,
         children: [
           SheetHeader(
-            title: _isEdit ? '编辑预算' : '新增预算',
+            title: _isEdit ? '编辑规则' : '新增规则',
             onClose: () => Navigator.pop(context),
             actionLabel: '保存',
             actionKey: const ValueKey('budget-rule-save'),
-            onAction: _saving ? null : () => _save(repo),
+            onAction: _saving || _confirming ? null : () => _save(repo),
           ),
           Flexible(
             child: SingleChildScrollView(
@@ -362,47 +382,22 @@ class _BudgetRuleSheetState extends State<BudgetRuleSheet> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  if (!_isEdit) ...[
-                    SizedBox(
-                      width: double.infinity,
-                      child: SlidingSegment<bool>(
-                        key: const ValueKey('budget-rule-dated'),
-                        items: const [(false, '一直有效'), (true, '选日期')],
-                        value: _dated,
-                        onChanged: (v) {
-                          Haptics.selection();
-                          setState(() {
-                            _dated = v;
-                            _error = null;
-                          });
-                        },
-                      ),
+                  // 示意图顺序：名称 → 预算 → 单位 → 时间（一直有效/选日期）→ 日历 → 预览。
+                  // 名称一直在，切「选日期」时上面的东西不会跳。
+                  AppLabeledField(
+                    label: '名称',
+                    child: TextField(
+                      key: const ValueKey('budget-rule-name'),
+                      controller: _name,
+                      maxLength: 20,
+                      onChanged: (_) => setState(() {}),
+                      decoration: iosInputDecoration(
+                        context,
+                        hint: _dated ? '如 国庆出游（可以不填）' : '日常（可以不填）',
+                      ).copyWith(counterText: ''),
                     ),
-                    const SizedBox(height: 6),
-                  ],
-                  Text(
-                    _dated
-                        ? '特别安排：这几天按它算，优先于日常预算'
-                        : _baseCaption(repo),
-                    style: AppType.caption(scheme),
                   ),
                   const SizedBox(height: 14),
-                  if (_dated) ...[
-                    AppLabeledField(
-                      label: '名称',
-                      child: TextField(
-                        key: const ValueKey('budget-rule-name'),
-                        controller: _name,
-                        maxLength: 20,
-                        onChanged: (_) => setState(() {}),
-                        decoration: iosInputDecoration(
-                          context,
-                          hint: '如 国庆出游（可以不填）',
-                        ).copyWith(counterText: ''),
-                      ),
-                    ),
-                    const SizedBox(height: 14),
-                  ],
                   AppLabeledField(
                     label: '预算',
                     helperText: prefilled ? '按近 3 个月平均支出预填的，可以改' : null,
@@ -435,11 +430,34 @@ class _BudgetRuleSheetState extends State<BudgetRuleSheet> {
                       },
                     ),
                   ),
+                  const SizedBox(height: 16),
+                  Text('时间',
+                      style: AppType.secondary(scheme).copyWith(height: 1)),
+                  const SizedBox(height: 7),
+                  if (!_isEdit)
+                    SizedBox(
+                      width: double.infinity,
+                      child: SlidingSegment<bool>(
+                        key: const ValueKey('budget-rule-dated'),
+                        items: const [(false, '一直有效'), (true, '选日期')],
+                        value: _dated,
+                        onChanged: (v) {
+                          Haptics.selection();
+                          setState(() {
+                            _dated = v;
+                            _error = null;
+                          });
+                        },
+                      ),
+                    ),
+                  if (!_dated) ...[
+                    const SizedBox(height: 6),
+                    Text(_baseCaption(repo), style: AppType.caption(scheme)),
+                  ],
                   if (_dated) ...[
-                    const SizedBox(height: 16),
-                    Text('日期', style: AppType.secondary(scheme)),
-                    const SizedBox(height: 7),
+                    const SizedBox(height: 10),
                     _RangeCalendar(
+                      accent: accent,
                       month: _pickerMonth,
                       start: _start,
                       end: _rangeEnd,
@@ -450,12 +468,15 @@ class _BudgetRuleSheetState extends State<BudgetRuleSheet> {
                           DateTime(_pickerMonth.year, _pickerMonth.month + 1)),
                       onTapDay: _tapDay,
                     ),
-                    const SizedBox(height: 6),
-                    Text(
-                      _rangeText(),
-                      key: const ValueKey('budget-rule-range-text'),
-                      style: AppType.caption(scheme),
-                    ),
+                    // 选完起止后，日期写进下面的预览第一行；没选完才在这提示怎么点。
+                    if (!_rangeComplete) ...[
+                      const SizedBox(height: 6),
+                      Text(
+                        _rangeText(),
+                        key: const ValueKey('budget-rule-range-text'),
+                        style: AppType.caption(scheme),
+                      ),
+                    ],
                     const SizedBox(height: 16),
                     Text('钱从哪来', style: AppType.secondary(scheme)),
                     const SizedBox(height: 7),
@@ -481,17 +502,12 @@ class _BudgetRuleSheetState extends State<BudgetRuleSheet> {
                         key: const ValueKey('budget-rule-extra-only'),
                         style: AppType.body(scheme),
                       ),
-                    const SizedBox(height: 6),
-                    Text(
-                      _effectiveFunding(others) == BudgetFunding.carve
-                          ? '月总额不变，其余日子平均少一点'
-                          : '在原来的预算上多给这笔钱，月总额变大',
-                      style: AppType.caption(scheme),
-                    ),
                   ],
                   if (preview.isNotEmpty || baseWarning != null) ...[
                     const SizedBox(height: 18),
-                    _PreviewCard(lines: [
+                    _PreviewCard(accent: accent, lines: [
+                      if (_dated && _rangeComplete)
+                        BudgetRulePreviewLine(_rangeText()),
                       ...preview,
                       if (baseWarning != null)
                         BudgetRulePreviewLine(baseWarning, warning: true),
@@ -530,10 +546,12 @@ class _BudgetRuleSheetState extends State<BudgetRuleSheet> {
   }
 }
 
+/// 保存前的预览：规则颜色的淡底小框（示意图同款），不再带「预览」小标题和描边。
 class _PreviewCard extends StatelessWidget {
   final List<BudgetRulePreviewLine> lines;
+  final Color accent;
 
-  const _PreviewCard({required this.lines});
+  const _PreviewCard({required this.lines, required this.accent});
 
   @override
   Widget build(BuildContext context) {
@@ -541,26 +559,21 @@ class _PreviewCard extends StatelessWidget {
     return Container(
       key: const ValueKey('budget-rule-preview'),
       width: double.infinity,
-      padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+      padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
       decoration: BoxDecoration(
-        color: AppColors.card(scheme),
-        borderRadius: BorderRadius.circular(AppRadius.md),
-        border: Border.all(color: AppColors.hairline(scheme)),
+        color: accent.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(AppRadius.sm),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text('预览', style: AppType.sectionLabel(scheme)),
-          const SizedBox(height: 6),
           for (final line in lines)
-            Padding(
-              padding: const EdgeInsets.only(top: 2),
-              child: Text(
-                line.text,
-                style: AppType.body(scheme).copyWith(
-                  fontSize: 14,
-                  color: line.warning ? AppColors.warning : null,
-                ),
+            Text(
+              line.text,
+              style: TextStyle(
+                fontSize: 13,
+                height: 1.6,
+                color: line.warning ? AppColors.warning : scheme.onSurface,
               ),
             ),
         ],
@@ -571,6 +584,7 @@ class _PreviewCard extends StatelessWidget {
 
 /// 弹层里的小日历：点一下开始、再点一下结束（§6.9「内嵌小日历点起止」）。
 class _RangeCalendar extends StatelessWidget {
+  final Color accent;
   final DateTime month;
   final DateTime? start;
   final DateTime? end;
@@ -580,6 +594,7 @@ class _RangeCalendar extends StatelessWidget {
   final ValueChanged<DateTime> onTapDay;
 
   const _RangeCalendar({
+    required this.accent,
     required this.month,
     required this.start,
     required this.end,
@@ -603,103 +618,106 @@ class _RangeCalendar extends StatelessWidget {
     while (cells.length % 7 != 0) {
       cells.add(null);
     }
-    return Container(
+    return Column(
       key: const ValueKey('budget-rule-range-calendar'),
-      padding: const EdgeInsets.fromLTRB(10, 6, 10, 10),
-      decoration: BoxDecoration(
-        color: AppColors.card(scheme),
-        borderRadius: BorderRadius.circular(AppRadius.md),
-      ),
-      child: Column(
-        children: [
-          Row(
-            children: [
-              const SizedBox(width: 6),
-              Expanded(
-                child: Text(
-                  '${month.year}年${month.month}月',
-                  style: AppType.rowTitle(scheme),
+      children: [
+        Row(
+          children: [
+            Expanded(
+              child: Text(
+                '${month.year}年${month.month}月',
+                style: TextStyle(
+                  fontSize: 15,
+                  fontWeight: FontWeight.w600,
+                  color: scheme.onSurface,
                 ),
               ),
-              AppCircleButton(
-                key: const ValueKey('budget-range-prev'),
-                icon: CupertinoIcons.chevron_back,
-                size: 30,
-                iconSize: 15,
-                semanticLabel: '上个月',
-                onPressed: onPrev,
-              ),
-              const SizedBox(width: 4),
-              AppCircleButton(
-                key: const ValueKey('budget-range-next'),
-                icon: CupertinoIcons.chevron_forward,
-                size: 30,
-                iconSize: 15,
-                semanticLabel: '下个月',
-                onPressed: onNext,
-              ),
-            ],
-          ),
-          const SizedBox(height: 4),
-          Row(
-            children: [
-              for (final w in _weekdays)
-                Expanded(
-                  child: Center(child: Text(w, style: AppType.caption(scheme))),
-                ),
-            ],
-          ),
-          const SizedBox(height: 2),
-          for (var i = 0; i < cells.length; i += 7)
-            Row(
-              children: [
-                for (final day in cells.sublist(i, i + 7))
-                  Expanded(
-                    child: day == null
-                        ? const SizedBox(height: 38)
-                        : _rangeCell(day, scheme),
-                  ),
-              ],
             ),
-        ],
-      ),
+            BudgetMonthArrow(
+              key: const ValueKey('budget-range-prev'),
+              icon: CupertinoIcons.chevron_back,
+              semanticLabel: '上个月',
+              onPressed: onPrev,
+            ),
+            BudgetMonthArrow(
+              key: const ValueKey('budget-range-next'),
+              icon: CupertinoIcons.chevron_forward,
+              semanticLabel: '下个月',
+              onPressed: onNext,
+            ),
+          ],
+        ),
+        const SizedBox(height: 4),
+        Row(
+          children: [
+            for (final w in _weekdays)
+              Expanded(
+                child: Center(
+                  child: Text(
+                    w,
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: AppTextColor.hint(scheme),
+                    ),
+                  ),
+                ),
+              ),
+          ],
+        ),
+        const SizedBox(height: 4),
+        for (var i = 0; i < cells.length; i += 7)
+          Row(
+            children: [
+              for (final day in cells.sublist(i, i + 7))
+                Expanded(
+                  child: day == null
+                      ? const SizedBox(height: 36)
+                      : _rangeCell(day, scheme),
+                ),
+            ],
+          ),
+      ],
     );
   }
 
+  /// 选中的日子：规则颜色的淡色圆角方块 + 同色粗字（示意图同款）。
   Widget _rangeCell(DateTime day, ColorScheme scheme) {
     final s = start;
     final e = end;
-    final isEdge = (s != null && day == s) || (e != null && day == e);
-    final inRange = s != null &&
-        e != null &&
-        !day.isBefore(s) &&
-        !day.isAfter(e);
+    final selected = s != null &&
+        (day == s || (e != null && !day.isBefore(s) && !day.isAfter(e)));
     final isToday = day == today;
+    final weekend = day.weekday >= 6;
     return PressableScale(
       key: ValueKey('budget-range-day-${budgetDayKey(day)}'),
       onPressed: () => onTapDay(day),
-      child: Container(
-        height: 38,
-        margin: const EdgeInsets.symmetric(vertical: 1),
-        color: inRange && !isEdge
-            ? scheme.primary.withValues(alpha: 0.12)
-            : Colors.transparent,
-        alignment: Alignment.center,
-        child: Container(
-          width: 32,
-          height: 32,
-          alignment: Alignment.center,
-          decoration: BoxDecoration(
-            shape: BoxShape.circle,
-            color: isEdge ? scheme.primary : Colors.transparent,
-          ),
-          child: Text(
-            '${day.day}',
-            style: AppType.body(scheme).copyWith(
-              fontSize: 14,
-              height: 1,
-              fontWeight: isToday ? FontWeight.w700 : FontWeight.w400,
-              color: isEdge ? scheme.onPrimary : null,
+      child: SizedBox(
+        height: 36,
+        child: Center(
+          child: Container(
+            width: 32,
+            height: 32,
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(8),
+              color: selected
+                  ? accent.withValues(alpha: 0.20)
+                  : Colors.transparent,
+            ),
+            child: Text(
+              '${day.day}',
+              style: TextStyle(
+                fontFamily: 'Nunito',
+                fontSize: 15,
+                height: 1,
+                fontWeight:
+                    selected || isToday ? FontWeight.w700 : FontWeight.w600,
+                color: selected
+                    ? Color.lerp(accent, Colors.black, 0.18)
+                    : weekend
+                        ? AppTextColor.hint(scheme)
+                        : scheme.onSurface,
+              ),
             ),
           ),
         ),

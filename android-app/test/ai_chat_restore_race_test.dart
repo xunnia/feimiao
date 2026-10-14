@@ -14,7 +14,8 @@ import 'package:qingji/views/home/ai_chat_panel.dart';
 String _bookCoverPath(String fileName) {
   final candidates = [
     p.join(Directory.current.path, 'assets', 'book_covers', fileName),
-    p.join(Directory.current.path, 'android-app', 'assets', 'book_covers', fileName),
+    p.join(Directory.current.path, 'android-app', 'assets', 'book_covers',
+        fileName),
   ];
   for (final candidate in candidates) {
     if (File(candidate).existsSync()) return candidate;
@@ -384,9 +385,17 @@ void main() {
     }
 
     final images = find.byWidgetPredicate(
-      (widget) => widget is Image && widget.image is FileImage,
+      (widget) =>
+          widget is Image &&
+          (widget.image is FileImage ||
+              (widget.image is ResizeImage &&
+                  (widget.image as ResizeImage).imageProvider is FileImage)),
     );
     expect(images, findsNWidgets(3));
+    for (final image in tester.widgetList<Image>(images)) {
+      expect(image.image, isA<ResizeImage>());
+      expect((image.image as ResizeImage).width, lessThanOrEqualTo(400));
+    }
     final rects = [for (var i = 0; i < 3; i++) tester.getRect(images.at(i))];
     expect(rects.first.left, closeTo(16, 0.5));
     expect(rects.last.right, closeTo(374, 0.5));

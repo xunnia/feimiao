@@ -2,9 +2,10 @@ import SwiftUI
 import PhotosUI
 import UIKit
 import UniformTypeIdentifiers
+import ImageIO
 
 /// 聊天附件导入：主页 [+] 和喵助手 [+] 共用，限制和提示文案只写这一处。
-/// `existing` 是输入框里已有的附件，用来算「最多 3 张图 / 10 个文件」的余量。
+/// `existing` 是输入框里已有的附件，用来算「最多 4 张图 / 10 个文件」的余量。
 @MainActor
 enum ChatAttachmentImporter {
     struct Outcome {
@@ -17,12 +18,22 @@ enum ChatAttachmentImporter {
         let existingImages = existing.filter(\.isImage).count
         for item in items {
             if existingImages + outcome.added.count >= AIChatAttachmentStore.maxImages {
-                outcome.message = "一次最多发送 3 张图片。"
+                outcome.message = "一次最多发送 4 张图片。"
                 break
             }
             guard let raw = try? await item.loadTransferable(type: Data.self),
-                  let image = UIImage(data: raw) else { continue }
-            append(image: image, into: &outcome, existingImages: existingImages)
+                  !raw.isEmpty, raw.count <= AIChatAttachmentStore.maxImageBytes,
+                  let source = CGImageSourceCreateWithData(raw as CFData, nil),
+                  let type = CGImageSourceGetType(source),
+                  let mime = UTType(type as String)?.preferredMIMEType else {
+                outcome.message = "图片无法读取或超过 20 MB，请重新选择。"
+                continue
+            }
+            do {
+                let ext = UTType(type as String)?.preferredFilenameExtension ?? "jpg"
+                outcome.added.append(try AIChatAttachmentStore.persist(data: raw,
+                    name: "图片-\(existingImages + outcome.added.count + 1).\(ext)", mimeType: mime))
+            } catch { outcome.message = error.localizedDescription }
         }
         return outcome
     }
@@ -31,7 +42,7 @@ enum ChatAttachmentImporter {
         var outcome = Outcome()
         let existingImages = existing.filter(\.isImage).count
         guard existingImages < AIChatAttachmentStore.maxImages else {
-            outcome.message = "一次最多发送 3 张图片。"
+            outcome.message = "一次最多发送 4 张图片。"
             return outcome
         }
         append(image: image, into: &outcome, existingImages: existingImages)
@@ -54,6 +65,11 @@ enum ChatAttachmentImporter {
                 }
                 let mime = UTType(filenameExtension: url.pathExtension)?.preferredMIMEType
                     ?? "application/octet-stream"
+                if mime.hasPrefix("image/") &&
+                    (existing + outcome.added).filter(\.isImage).count >= AIChatAttachmentStore.maxImages {
+                    outcome.message = "一次最多发送 4 张图片。"
+                    continue
+                }
                 if let attachment = try? AIChatAttachmentStore.persist(
                     data: data,
                     name: url.lastPathComponent,
@@ -72,7 +88,7 @@ enum ChatAttachmentImporter {
     }
 
     private static func append(image: UIImage, into outcome: inout Outcome, existingImages: Int) {
-        guard let data = image.jpegData(compressionQuality: 0.88) else { return }
+        guard let data = image.jpegData(compressionQuality: 1) else { return }
         if data.count > AIChatAttachmentStore.maxImageBytes {
             outcome.message = "图片不能超过 20 MB。"
             return
@@ -88,7 +104,7 @@ enum ChatAttachmentImporter {
 }
 
 /// 「添加到聊天」面板（对齐安卓 chat_add_sheet.dart）：
-/// 顶栏 ✕ / 标题 / 全部照片 → 相机 + 最近照片（多选最多 3 张）→ 添加文件 → 联网搜索。
+/// 顶栏 ✕ / 标题 / 全部照片 → 相机 + 最近照片（多选最多 4 张）→ 添加文件 → 联网搜索。
 /// 安卓的「工具权限」一行 iOS 暂不做：iOS 喵助手还没有工具调用。
 struct ChatAddSheet: View {
     @Environment(\.dismiss) private var dismiss
@@ -232,7 +248,7 @@ struct ChatAddSheet: View {
         }
     }
 
-    /// 相机格 + 系统照片选择器的内嵌横条（按选择顺序编号，最多 3 张）。
+    /// 相机格 + 系统照片选择器的内嵌横条（按选择顺序编号，最多 4 张）。
     private var photoStrip: some View {
         HStack(spacing: 8) {
             Button {

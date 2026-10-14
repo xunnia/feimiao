@@ -18,7 +18,13 @@ class _FakeRepo extends AppRepository {
   final List<BudgetRule> rules;
   final Map<int, int> spend;
   BudgetRolloverMode mode = BudgetRolloverMode.reset;
-  final saved = <({BudgetRuleKind kind, int amountYuan, BudgetFunding funding})>[];
+  final saved = <({
+    BudgetRuleKind kind,
+    int amountYuan,
+    BudgetFunding funding,
+    String name
+  })>[];
+  final requestedMonths = <DateTime>[];
 
   @override
   int get currentBookId => 1;
@@ -43,7 +49,8 @@ class _FakeRepo extends AppRepository {
       mode;
 
   @override
-  Future<void> setBudgetRolloverMode(int bookId, BudgetRolloverMode mode) async {
+  Future<void> setBudgetRolloverMode(
+      int bookId, BudgetRolloverMode mode) async {
     this.mode = mode;
     notifyListeners();
   }
@@ -53,23 +60,26 @@ class _FakeRepo extends AppRepository {
     DateTime month, {
     int? bookId,
     DateTime? asOf,
-  }) =>
-      BudgetRuleSnapshot(
-        bookId: 1,
-        month: BudgetRuleEngine.resolveMonth(
-          rules: rules,
-          spendByDay: spend,
-          year: month.year,
-          month: month.month,
-          today: budgetDay(asOf ?? DateTime.now()),
-        ),
-      );
+  }) {
+    requestedMonths.add(month);
+    return BudgetRuleSnapshot(
+      bookId: 1,
+      month: BudgetRuleEngine.resolveMonth(
+        rules: rules,
+        spendByDay: spend,
+        year: month.year,
+        month: month.month,
+        today: budgetDay(asOf ?? DateTime.now()),
+      ),
+    );
+  }
 
   @override
   List<TransactionRecord> recordsForBookView(int bookId) => const [];
 
   @override
-  List<TransactionEntity> visibleTransactionsForBookView(int bookId) => const [];
+  List<TransactionEntity> visibleTransactionsForBookView(int bookId) =>
+      const [];
 
   @override
   Future<int> saveBudgetRule({
@@ -83,7 +93,8 @@ class _FakeRepo extends AppRepository {
     DateTime? endDate,
     BudgetFunding funding = BudgetFunding.carve,
   }) async {
-    saved.add((kind: kind, amountYuan: amountYuan, funding: funding));
+    saved.add(
+        (kind: kind, amountYuan: amountYuan, funding: funding, name: name));
     final now = DateTime.now();
     rules.add(BudgetRule(
       id: rules.length + 1,
@@ -156,7 +167,9 @@ void main() {
     expect(_textContaining('今天约 ¥'), findsOneWidget);
     expect(find.byKey(const ValueKey('budget-rule-row-1')), findsOneWidget);
     expect(find.text('日常'), findsOneWidget);
-    expect(_textContaining('每月 ¥3,000 · ${now.month}月起'), findsOneWidget);
+    // 规则行：金额靠右，时间写在名字下面。
+    expect(find.text('每月 ¥3,000'), findsOneWidget);
+    expect(find.text('${now.month}月起'), findsOneWidget);
     // 只有日常预算时不显示特别安排重叠说明。
     expect(find.text('日期重叠时，以后加的特别安排为准'), findsNothing);
   });
@@ -188,19 +201,70 @@ void main() {
     final repo = await pump(tester, _FakeRepo());
     await tester.tap(find.byKey(const ValueKey('budget-add-rule')));
     await tester.pumpAndSettle();
-    expect(find.text('新增预算'), findsOneWidget);
+    expect(find.text('新增规则'), findsOneWidget);
     await tester.enterText(
       find.byKey(const ValueKey('budget-rule-amount')),
       '4000',
     );
+    await tester.enterText(
+        find.byKey(const ValueKey('budget-rule-name')), '生活费');
     await tester.pumpAndSettle();
     expect(find.byKey(const ValueKey('budget-rule-preview')), findsOneWidget);
     await tester.tap(find.byKey(const ValueKey('budget-rule-save')));
     await tester.pumpAndSettle(const Duration(seconds: 2));
     expect(repo.saved.single.kind, BudgetRuleKind.base);
     expect(repo.saved.single.amountYuan, 4000);
-    expect(find.text('新增预算'), findsNothing);
+    expect(repo.saved.single.name, '生活费');
+    expect(find.text('新增规则'), findsNothing);
   });
+
+  testWidgets('编辑历史日常规则先提醒账单不变，取消确认不保存', (tester) async {
+    final old = BudgetRule(
+      id: 1,
+      bookId: 1,
+      kind: BudgetRuleKind.base,
+      amountCents: 500000,
+      unit: BudgetRuleUnit.month,
+      startDate: DateTime(now.year, now.month - 2),
+      createdMs: 1,
+    );
+    final repo = await pump(tester, _FakeRepo(rules: [old]));
+    await tester.ensureVisible(find.byKey(const ValueKey('budget-rule-row-1')));
+    await tester.tap(find.byKey(const ValueKey('budget-rule-row-1')));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+        find.byKey(const ValueKey('budget-rule-amount')), '5200');
+    await tester.tap(find.byKey(const ValueKey('budget-rule-save')));
+    await tester.pumpAndSettle();
+    expect(_textContaining('已记录的账单不变'), findsWidgets);
+    expect(repo.saved, isEmpty);
+    await tester.tap(find.text('取消'));
+    await tester.pumpAndSettle();
+    expect(repo.saved, isEmpty);
+    await tester.tap(find.byKey(const ValueKey('budget-rule-save')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('改'));
+    await tester.pumpAndSettle(const Duration(seconds: 2));
+    expect(repo.saved, hasLength(1));
+    expect(repo.saved.single.amountYuan, 5200);
+  });
+
+  for (final step in [-1, 1]) {
+    testWidgets('前台恢复重新读取预算但保留手选月份 $step', (tester) async {
+      final repo = await pump(tester, _FakeRepo(rules: [base(3000)]));
+      await tester.tap(find.byKey(
+          ValueKey(step < 0 ? 'budget-month-prev' : 'budget-month-next')));
+      await tester.pumpAndSettle();
+      final selected = DateTime(now.year, now.month + step);
+      expect(repo.requestedMonths.last, selected);
+      final count = repo.requestedMonths.length;
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+      await tester.pump();
+      expect(repo.requestedMonths.length, greaterThan(count));
+      expect(repo.requestedMonths.last, selected);
+    });
+  }
 
   testWidgets('选日期：没有日常预算时只能额外多给', (tester) async {
     final repo = await pump(tester, _FakeRepo());
@@ -208,12 +272,16 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text('选日期'));
     await tester.pumpAndSettle();
-    expect(find.byKey(const ValueKey('budget-rule-range-calendar')), findsOneWidget);
-    await tester.enterText(find.byKey(const ValueKey('budget-rule-amount')), '300');
+    expect(find.byKey(const ValueKey('budget-rule-range-calendar')),
+        findsOneWidget);
+    await tester.enterText(
+        find.byKey(const ValueKey('budget-rule-amount')), '300');
     final day = DateTime(now.year, now.month, 1);
-    await tester.tap(find.byKey(ValueKey('budget-range-day-${budgetDayKey(day)}')));
+    await tester
+        .tap(find.byKey(ValueKey('budget-range-day-${budgetDayKey(day)}')));
     await tester.pumpAndSettle();
-    expect(find.byKey(const ValueKey('budget-rule-extra-only')), findsOneWidget);
+    expect(
+        find.byKey(const ValueKey('budget-rule-extra-only')), findsOneWidget);
     await tester.tap(find.byKey(const ValueKey('budget-rule-save')));
     await tester.pumpAndSettle(const Duration(seconds: 2));
     expect(repo.saved.single.kind, BudgetRuleKind.special);

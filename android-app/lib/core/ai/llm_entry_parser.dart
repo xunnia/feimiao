@@ -8,6 +8,7 @@ import 'package:http/http.dart' as http;
 
 import '../models/transaction_kind.dart';
 import '../media/chat_attachment.dart';
+import '../media/ai_image_preparation.dart';
 import '../transaction_time.dart';
 import 'ai_provider_config.dart';
 import 'ai_http_transport.dart';
@@ -897,15 +898,10 @@ Future<String?> _imageDataUri(String? imagePath) async {
   if (!await file.exists()) {
     throw LlmParseException('图片文件不存在');
   }
-  final bytes = await file.readAsBytes();
+  final prepared = await AiImagePreparation.prepare(path);
+  final bytes = prepared.bytes;
   if (bytes.isEmpty) throw const LlmParseException('图片文件为空');
-  final ext = path.split('.').last.toLowerCase();
-  final mime = switch (ext) {
-    'png' => 'image/png',
-    'webp' => 'image/webp',
-    'gif' => 'image/gif',
-    _ => 'image/jpeg',
-  };
+  final mime = prepared.mimeType;
   return 'data:$mime;base64,${base64Encode(bytes)}';
 }
 
@@ -916,9 +912,13 @@ Future<List<Map<String, dynamic>>> _chatAttachmentParts(
   for (final attachment in attachments) {
     final file = File(attachment.path);
     if (!await file.exists()) throw LlmParseException('附件文件不存在');
-    final bytes = await file.readAsBytes();
+    final prepared = attachment.isImage
+        ? await AiImagePreparation.prepare(attachment.path)
+        : null;
+    final bytes = prepared?.bytes ?? await file.readAsBytes();
     if (bytes.isEmpty) throw const LlmParseException('附件文件为空');
-    final dataUri = 'data:${attachment.mimeType};base64,${base64Encode(bytes)}';
+    final dataUri =
+        'data:${prepared?.mimeType ?? attachment.mimeType};base64,${base64Encode(bytes)}';
     if (attachment.isImage) {
       parts.add({
         'type': 'image_url',

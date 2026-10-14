@@ -5,6 +5,7 @@ import 'dart:io';
 import 'package:decimal/decimal.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:path/path.dart' as p;
+import 'package:qingji/core/app_clock.dart';
 import 'package:qingji/core/budget/budget_rule_status.dart';
 import 'package:qingji/core/budget/budget_rules.dart';
 import 'package:qingji/core/models/transaction_kind.dart';
@@ -36,7 +37,7 @@ void main() {
     return repo;
   }
 
-  final now = DateTime.now();
+  final now = AppClock.now;
   final today = DateTime(now.year, now.month, now.day);
   final monthStart = DateTime(now.year, now.month);
   String dbPath() => p.join(tmp.path, 'qingji.db');
@@ -215,8 +216,7 @@ void main() {
     await db.close();
   });
 
-  test('总账本汇总计入总账本的支出；子账本规则不加到总账本；删账本软删规则',
-      () async {
+  test('总账本汇总计入总账本的支出；子账本规则不加到总账本；删账本软删规则', () async {
     final repo = await freshRepo();
     final total = repo.currentBookId;
     final trip = await repo.addBook(name: '旅行', includeInTotal: true);
@@ -267,8 +267,7 @@ void main() {
     await repo.closeForTest();
   });
 
-  test('v49 → v50：V2 主计划优先，其次本账本旧预算，再其次「全部账本」；已有规则跳过',
-      () async {
+  test('v49 → v50：V2 主计划优先，其次本账本旧预算，再其次「全部账本」；已有规则跳过', () async {
     var repo = await freshRepo();
     final total = repo.currentBookId;
     final weekly = await repo.addBook(name: '周计划');
@@ -353,5 +352,164 @@ void main() {
     expect(await db.query('budget_plans', where: 'id = ?', whereArgs: [planId]),
         hasLength(1));
     await db.close();
+  });
+
+  group('v50 迁移只取当前生效来源', () {
+    final legacyStart = DateTime(now.year, now.month - 1);
+    final futureStart = DateTime(now.year, now.month + 1);
+    int dayKey(DateTime day) => day.year * 10000 + day.month * 100 + day.day;
+
+    Future<({Database db, int book})> oldDatabase(
+        {bool hasLegacy = true}) async {
+      final repo = await freshRepo();
+      final book = repo.currentBookId;
+      await repo.closeForTest();
+      final db = await databaseFactory.openDatabase(dbPath());
+      // 真实 v49 表形状：升级前还没有新规则表。
+      await db.execute('DROP TABLE budget_rules');
+      await db.execute('DROP TABLE budget_rollover_changes');
+      if (hasLegacy) {
+        await db.insert('budget_periods', {
+          'book_id': book,
+          'start_ms': legacyStart.millisecondsSinceEpoch,
+          'end_ms': null,
+          'recurring_monthly': 1,
+          'total': '4000',
+          'category_budgets': '',
+          'monthly_income': '',
+          'fixed_expenses': '',
+          'created_ms': 1,
+        });
+      }
+      await db.execute('PRAGMA user_version = 49');
+      return (db: db, book: book);
+    }
+
+    Future<int> plan(Database db, int book, DateTime start, {DateTime? end}) =>
+        db.insert('budget_plans', {
+          'uuid': 'plan-${dayKey(start)}',
+          'book_id': book,
+          'role': 'primary',
+          'cadence': 'monthly',
+          'anchor_start_day': dayKey(start),
+          'end_day': end == null ? null : dayKey(end),
+          'status': 'active',
+          'created_ms': 1,
+          'updated_ms': 1,
+        });
+
+    Future<int> revision(Database db, int planId, DateTime start, int cents) =>
+        db.insert('budget_plan_revisions', {
+          'uuid': 'revision-$planId-${dayKey(start)}',
+          'plan_id': planId,
+          'effective_cycle_start_day': dayKey(start),
+          'amount_cents': cents,
+          'created_ms': 1,
+          'updated_ms': 1,
+        });
+
+    for (final source in ['未来计划', '只有未来版本', '已结束计划']) {
+      test('$source 不得盖过当前旧月预算 4000', () async {
+        final old = await oldDatabase();
+        final start = source == '未来计划' ? futureStart : legacyStart;
+        final planId = await plan(old.db, old.book, start,
+            end: source == '已结束计划'
+                ? monthStart.subtract(const Duration(days: 1))
+                : null);
+        await revision(
+            old.db, planId, source == '只有未来版本' ? futureStart : start, 600000);
+        final oldPlans = await old.db.query('budget_plans');
+        final oldRevisions = await old.db.query('budget_plan_revisions');
+        final oldPeriods = await old.db.query('budget_periods');
+        await old.db.close();
+
+        final repo = await freshRepo();
+        try {
+          final rule = repo.budgetRulesForBook(old.book).single;
+          expect(rule.amountCents, 400000);
+          expect(rule.startDate, legacyStart);
+          expect(
+              repo.budgetRuleMonth(today).plannedAmount, Decimal.fromInt(4000));
+          expect(await repo.debugDb.query('budget_plans'), oldPlans);
+          expect(
+              await repo.debugDb.query('budget_plan_revisions'), oldRevisions);
+          expect(await repo.debugDb.query('budget_periods'), oldPeriods);
+          expect(await repo.debugDb.getVersion(), 50);
+        } finally {
+          await repo.closeForTest();
+        }
+      });
+    }
+
+    test('当前 V2 版本 5000 优先于旧预算 4000 和未来版本 6000', () async {
+      final old = await oldDatabase();
+      final planId = await plan(old.db, old.book, legacyStart);
+      await revision(old.db, planId, legacyStart, 500000);
+      await revision(old.db, planId, futureStart, 600000);
+      final futurePlanId = await plan(old.db, old.book, futureStart);
+      await revision(old.db, futurePlanId, futureStart, 700000);
+      await old.db.close();
+      final repo = await freshRepo();
+      try {
+        final rule = repo.budgetRulesForBook(old.book).single;
+        expect(rule.amountCents, 500000);
+        expect(rule.startDate, legacyStart);
+        expect(
+            repo.budgetRuleMonth(today).plannedAmount, Decimal.fromInt(5000));
+      } finally {
+        await repo.closeForTest();
+      }
+    });
+
+    test('只有未来计划且没有旧月预算时不新建当前规则', () async {
+      final old = await oldDatabase(hasLegacy: false);
+      final planId = await plan(old.db, old.book, futureStart);
+      await revision(old.db, planId, futureStart, 600000);
+      await old.db.close();
+      final repo = await freshRepo();
+      try {
+        expect(repo.budgetRulesForBook(old.book), isEmpty);
+        expect(repo.budgetRuleMonth(today).hasBudget, isFalse);
+      } finally {
+        await repo.closeForTest();
+      }
+    });
+
+    test('重复升级保留用户编辑；恢复 v49 旧备份重新按当前来源迁移', () async {
+      final old = await oldDatabase();
+      final planId = await plan(old.db, old.book, futureStart);
+      await revision(old.db, planId, futureStart, 600000);
+      await old.db.close();
+      final backup = await File(dbPath()).copy(p.join(tmp.path, 'old-v49.bak'));
+      var repo = await freshRepo();
+      final id = repo.budgetRulesForBook(old.book).single.id;
+      await repo.saveBudgetRule(
+          id: id,
+          bookId: old.book,
+          kind: BudgetRuleKind.base,
+          amountYuan: 7777,
+          unit: BudgetRuleUnit.month);
+      final editedRows = await repo.debugDb.query('budget_rules');
+      await repo.debugDb.setVersion(49);
+      await repo.closeForTest();
+
+      repo = await freshRepo();
+      try {
+        expect(await repo.debugDb.query('budget_rules'), editedRows);
+        expect(await repo.restoreDatabaseFromFile(backup.path), isTrue);
+        expect(repo.budgetRulesForBook(old.book).single.amountCents, 400000);
+        expect(repo.budgetRulesForBook(old.book).single.startDate, legacyStart);
+        expect(await repo.debugDb.getVersion(), 50);
+        final oldBackup = await databaseFactory.openDatabase(backup.path);
+        try {
+          expect(await oldBackup.getVersion(), 49);
+          expect(await oldBackup.query('budget_periods'), hasLength(1));
+        } finally {
+          await oldBackup.close();
+        }
+      } finally {
+        await repo.closeForTest();
+      }
+    });
   });
 }

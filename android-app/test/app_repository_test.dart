@@ -13,6 +13,7 @@ import 'package:qingji/core/account/net_worth_snapshot.dart';
 import 'package:qingji/core/account/net_worth_verified_checkpoint.dart';
 import 'package:qingji/core/assets/asset_allocation.dart';
 import 'package:qingji/core/backup/backup_package_codec.dart';
+import 'package:qingji/core/budget/budget_rules.dart';
 import 'package:qingji/core/import/bill_import.dart';
 import 'package:qingji/core/ai/report_execution_fence.dart';
 import 'package:qingji/core/money_format.dart';
@@ -2543,6 +2544,37 @@ void main() {
     expect((months.last as Map<String, Object?>)['label'], '7月');
     expect((months.last as Map<String, Object?>)['isCurrent'], isTrue);
     await repo.closeForTest();
+  });
+
+  test('桌面小组件快照：负结转零支出仍保留预算欠额和预算状态', () async {
+    final repo = await freshRepo();
+    addTearDown(repo.closeForTest);
+    final now = DateTime.now();
+    final previousMonth = DateTime(now.year, now.month - 1);
+    await repo.insertBudgetRuleForTest(
+        startDate: previousMonth, amountYuan: 4000);
+    await repo.addTransaction(
+      kind: TransactionKind.expense,
+      amount: Decimal.fromInt(9000),
+      accountId: repo.accounts.first.id,
+      date: previousMonth,
+    );
+    await repo.setBudgetRolloverMode(
+        repo.currentBookId, BudgetRolloverMode.carryBoth);
+    final snapshot = FeimiaoWidgetSnapshotBuilder.build(repo, now: now);
+    expect(snapshot.monthExpenseText, '¥0.00');
+    expect(snapshot.budgetTitle, '预算已超');
+    expect(snapshot.budgetText, '超 ¥1,000.00');
+    expect(snapshot.budgetHint, isNot(contains('未设置预算')));
+    expect(snapshot.budgetProgress, 100);
+    expect(snapshot.overview.mode, 'budget');
+    expect(snapshot.overview.primary.label, '预算已超');
+    expect(snapshot.overview.progress.status, 'over');
+
+    await repo.setWidgetPrivacyMode(true);
+    final privacy = FeimiaoWidgetSnapshotBuilder.build(repo, now: now);
+    expect(privacy.budgetTitle, '预算已超');
+    expect(privacy.budgetText, '超 ••••');
   });
 
   test('桌面小组件快照：有预算时输出预算剩余、支出和收入', () async {

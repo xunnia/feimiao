@@ -161,7 +161,7 @@ private struct SavingsGoalEditor: View {
 
     var body: some View {
         NavigationStack {
-            Form {
+            AppThemedForm {
                 Section {
                     TextField("目标名称", text: $name)
                     TextField("目标金额", text: $targetText)

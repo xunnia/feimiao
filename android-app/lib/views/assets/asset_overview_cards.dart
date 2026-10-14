@@ -1,9 +1,11 @@
 // 资产总览页卡片，从 accounts_view.dart 拆出。
 import 'package:decimal/decimal.dart';
-import 'package:fl_chart/fl_chart.dart';
+import 'package:flutter/cupertino.dart';
+import 'package:flutter/foundation.dart' show listEquals;
 import 'package:flutter/material.dart';
 
 import '../../core/account/net_worth_verified_checkpoint.dart';
+import '../../core/assets/asset_structure_projection.dart';
 import '../../core/money_cents.dart';
 import '../../core/money_format.dart';
 import '../../data/app_repository.dart';
@@ -11,6 +13,8 @@ import '../../theme/app_colors.dart';
 import '../../theme/app_tokens.dart';
 import '../../widgets/mascot.dart';
 import '../../widgets/settings_ui.dart';
+import '../common/app_sheet.dart';
+import 'asset_overview_style.dart';
 
 class AssetEmptyState extends StatelessWidget {
   const AssetEmptyState({super.key});
@@ -24,12 +28,16 @@ class AssetEmptyState extends StatelessWidget {
 class AssetPendingItem {
   final IconData icon;
   final String text;
+  final String? subtitle;
+  final String actionLabel;
   final VoidCallback onTap;
 
   const AssetPendingItem({
     required this.icon,
     required this.text,
     required this.onTap,
+    this.subtitle,
+    this.actionLabel = '查看',
   });
 }
 
@@ -42,29 +50,120 @@ class AssetPendingCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         Padding(
-          padding: const EdgeInsets.fromLTRB(8, 0, 8, 4),
-          child: Text('待处理', style: AppType.sectionLabel(scheme)),
+          padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
+          child: Wrap(
+            alignment: WrapAlignment.spaceBetween,
+            spacing: 12,
+            runSpacing: 4,
+            children: [
+              Text('待处理', style: AssetOverviewStyle.label(context)),
+              Text('${items.length} 项',
+                  style: AssetOverviewStyle.label(context)
+                      .copyWith(fontFamily: 'Nunito')),
+            ],
+          ),
         ),
-        SettingsGroup(
-          margin: EdgeInsets.zero,
-          children: [
-            for (final item in items)
-              SettingsRow(
-                leading: Icon(item.icon),
-                title: item.text,
-                trailing: Icon(
-                  Icons.chevron_right,
-                  size: 18,
-                  color: AppTextColor.secondary(scheme),
-                ),
-                onTap: item.onTap,
-              ),
-          ],
+        Container(
+          decoration: ShapeDecoration(
+            color: AppColors.card(scheme),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(22),
+              side: BorderSide(color: AppColors.hairline(scheme), width: 0.5),
+            ),
+          ),
+          clipBehavior: Clip.antiAlias,
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            for (var i = 0; i < items.length; i++) ...[
+              if (i > 0)
+                Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 16),
+                    child: Divider(
+                        height: 0.5,
+                        thickness: 0.5,
+                        color: AppColors.hairline(scheme))),
+              _AssetPendingRow(item: items[i]),
+            ],
+          ]),
         ),
       ],
+    );
+  }
+}
+
+class _AssetPendingRow extends StatelessWidget {
+  const _AssetPendingRow({required this.item});
+  final AssetPendingItem item;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final labels = Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(item.text,
+            style: AppType.rowTitle(scheme).copyWith(fontSize: 14.5)),
+        if (item.subtitle != null && item.subtitle!.isNotEmpty) ...[
+          const SizedBox(height: 2),
+          Text(item.subtitle!,
+              style: AppType.secondary(scheme).copyWith(fontSize: 12)),
+        ],
+      ],
+    );
+    final action = Row(mainAxisSize: MainAxisSize.min, children: [
+      Flexible(
+          child: Text(item.actionLabel,
+              style: AppType.secondary(scheme)
+                  .copyWith(fontSize: 13, color: scheme.primary))),
+      const SizedBox(width: 2),
+      Icon(Icons.chevron_right, size: 15, color: scheme.primary),
+    ]);
+    return InkWell(
+      onTap: item.onTap,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        child: LayoutBuilder(builder: (context, constraints) {
+          final stacked = constraints.maxWidth < 280 ||
+              MediaQuery.textScalerOf(context).scale(14.5) > 21;
+          return Row(children: [
+            Container(
+              width: 34,
+              height: 34,
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                  color: AppColors.iconCircleFill(scheme),
+                  borderRadius: BorderRadius.circular(11)),
+              child: Icon(item.icon,
+                  size: 18, color: AppTextColor.secondary(scheme)),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: stacked
+                  ? Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        labels,
+                        const SizedBox(height: 6),
+                        Align(alignment: Alignment.centerRight, child: action),
+                      ],
+                    )
+                  : labels,
+            ),
+            if (!stacked) ...[
+              const SizedBox(width: 12),
+              ConstrainedBox(
+                constraints:
+                    BoxConstraints(maxWidth: constraints.maxWidth * 0.3),
+                child: action,
+              ),
+            ],
+          ]);
+        }),
+      ),
     );
   }
 }
@@ -79,6 +178,7 @@ int _computeCheckInStreak(List<NetWorthVerifiedCheckpoint> ordered) {
   for (var i = 1; i < ordered.length; i++) {
     final curLocal = ordered[i].header.asOf.toLocal();
     final curYM = (curLocal.year, curLocal.month);
+    if (curYM == prevYM) continue;
     // 计算 prevYM 的上一个月
     final expYear = prevYM.$2 == 1 ? prevYM.$1 - 1 : prevYM.$1;
     final expMonth = prevYM.$2 == 1 ? 12 : prevYM.$2 - 1;
@@ -113,84 +213,184 @@ class VerifiedNetWorthCard extends StatelessWidget {
     final latest = ordered.firstOrNull;
     // 核对入口在右上 ⋯ 菜单；没有任何核对记录时整卡不渲染。
     if (latest == null) return const SizedBox.shrink();
-    final change = comparison?.later.header.id == latest.header.id
+    final change = comparison?.later.header.uuid == latest.header.uuid
         ? comparison?.change
         : null;
     final latestDate = latest.header.asOf.toLocal();
     final streak = _computeCheckInStreak(ordered); // D2b
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: appCardDecoration(scheme),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Text('净资产核对', style: AppType.rowTitle(scheme)),
-              const Spacer(),
-              // D2b: 连续核对月份徽章，streak ≥ 2 才显示
-              if (streak >= 2)
-                Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                  decoration: BoxDecoration(
-                    color: scheme.primaryContainer,
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: Text(
-                    '连续$streak月核对 🎯',
-                    style: AppType.caption(scheme),
-                  ),
-                ),
-            ],
-          ),
-          const SizedBox(height: 4),
-          ...[
-            Text(
-              '${latest.header.completeness == NetWorthVerifiedCheckpointCompleteness.complete ? '完整核对' : '部分核对'}'
-              ' · ${latestDate.year}/${latestDate.month.toString().padLeft(2, '0')}/${latestDate.day.toString().padLeft(2, '0')} '
-              '${latestDate.hour.toString().padLeft(2, '0')}:'
-              '${latestDate.minute.toString().padLeft(2, '0')}',
-              style: AppType.secondary(scheme),
+    final completeness = latest.header.completeness ==
+            NetWorthVerifiedCheckpointCompleteness.complete
+        ? '完整核对'
+        : '部分核对';
+    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      const _OverviewSectionTitle('上次核对'),
+      Container(
+        key: const ValueKey('asset-verified-summary'),
+        padding: const EdgeInsets.all(16),
+        decoration: appCardDecoration(scheme),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Row(children: [
+            Expanded(
+                child: Text('$completeness · 人民币',
+                    style: AppType.secondary(scheme))),
+            SizedBox(
+              width: 24,
+              height: 24,
+              child: IconButton(
+                tooltip: '查看上次核对详情',
+                padding: EdgeInsets.zero,
+                iconSize: 16,
+                color: AssetOverviewStyle.labelColor(context),
+                icon: const Icon(CupertinoIcons.info_circle),
+                onPressed: () => _showDetails(context, latest, change),
+              ),
             ),
-            const SizedBox(height: 8),
+          ]),
+          const SizedBox(height: 6),
+          SizedBox(
+              width: double.infinity,
+              child: AssetOverviewAmount(
+                  budgetDecimalFromCents(latest.header.totals.netWorthMinor)!,
+                  size: 22.5)),
+          const SizedBox(height: 8),
+          Wrap(spacing: 12, runSpacing: 4, children: [
+            Text(_checkpointDate(latestDate), style: AppType.secondary(scheme)),
+            if (streak >= 2)
+              Text('连续 $streak 月核对', style: AppType.caption(scheme)),
+          ]),
+          if (change != null) ...[
+            const SizedBox(height: 6),
             Text(
-              MoneyFormat.string(
-                budgetDecimalFromCents(
-                  latest.header.totals.netWorthMinor,
-                )!,
-              ),
-              style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                    fontFamily: 'Nunito',
-                    fontWeight: FontWeight.w600,
-                  ),
-            ),
-            if (change != null) ...[
-              const SizedBox(height: 4),
-              Text(
-                '较上次完整核对 '
-                '${change.netWorthDeltaMinor >= 0 ? '+' : '-'}'
-                '${MoneyFormat.string(budgetDecimalFromCents(change.netWorthDeltaMinor.abs())!)}',
-                style: AppType.secondary(scheme).copyWith(fontFamily: 'Nunito'),
-              ),
-            ] else if (latest.header.completeness ==
-                NetWorthVerifiedCheckpointCompleteness.partial) ...[
-              const SizedBox(height: 4),
-              Text(
-                latest.header.incompletenessReasons.first.message,
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-                style: AppType.caption(scheme),
-              ),
-            ] else ...[
-              const SizedBox(height: 4),
-              Text('再完成一次完整核对后显示变化。', style: AppType.caption(scheme)),
-            ],
+                '较上次完整核对 ${change.netWorthDeltaMinor >= 0 ? '+' : ''}'
+                '${AssetOverviewStyle.amount(budgetDecimalFromCents(change.netWorthDeltaMinor)!)}',
+                style:
+                    AppType.secondary(scheme).copyWith(fontFamily: 'Nunito')),
+          ] else if (latest.header.completeness ==
+              NetWorthVerifiedCheckpointCompleteness.partial) ...[
+            const SizedBox(height: 6),
+            Text('有 ${latest.header.incompletenessReasons.length} 项待完善，暂不比较变化',
+                style: AppType.secondary(scheme)),
+          ] else ...[
+            const SizedBox(height: 6),
+            Text(
+                comparison?.later.header.uuid == latest.header.uuid &&
+                        comparison!.issues.isNotEmpty
+                    ? '两次核对口径不同，暂不比较变化'
+                    : '再完成一次可比的完整核对后显示变化',
+                style: AppType.caption(scheme)),
           ],
-        ],
+        ]),
       ),
-    );
+    ]);
   }
+
+  void _showDetails(BuildContext context, NetWorthVerifiedCheckpoint checkpoint,
+      NetWorthVerifiedCheckpointChange? change) {
+    final scheme = Theme.of(context).colorScheme;
+    final header = checkpoint.header;
+    showBlurSheet<void>(context,
+        child: Builder(
+            builder: (sheetContext) => DecoratedBox(
+                  decoration:
+                      BoxDecoration(color: AppColors.sheetSurface(scheme)),
+                  child: SingleChildScrollView(
+                      child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      SheetHeader(
+                          title: '上次核对详情',
+                          onClose: () => Navigator.of(sheetContext).pop()),
+                      Padding(
+                          padding: const EdgeInsets.fromLTRB(24, 8, 24, 24),
+                          child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(_checkpointDate(header.asOf.toLocal()),
+                                    style: AppType.body(scheme)),
+                                const SizedBox(height: 8),
+                                Text(
+                                    '${header.completeness == NetWorthVerifiedCheckpointCompleteness.complete ? '完整核对' : '部分核对'} · 人民币 · 历史金额，不代表当前余额',
+                                    style: AppType.secondary(scheme)),
+                                const SizedBox(height: 16),
+                                for (final item in [
+                                  ('当时总资产', header.totals.totalAssetsMinor),
+                                  (
+                                    '当时总负债',
+                                    header.totals.totalLiabilitiesMinor
+                                  ),
+                                  ('当时净资产', header.totals.netWorthMinor),
+                                  if (change != null)
+                                    ('较上次完整核对变化', change.netWorthDeltaMinor),
+                                ]) ...[
+                                  Text(item.$1,
+                                      style: AppType.secondary(scheme)),
+                                  const SizedBox(height: 4),
+                                  SizedBox(
+                                      width: double.infinity,
+                                      child: AssetOverviewAmount(
+                                          budgetDecimalFromCents(item.$2)!,
+                                          size: 22.5)),
+                                  const SizedBox(height: 16),
+                                ],
+                                for (final reason
+                                    in header.incompletenessReasons)
+                                  Padding(
+                                      padding:
+                                          const EdgeInsets.only(bottom: 12),
+                                      child: Text(reason.message,
+                                          style: AppType.secondary(scheme))),
+                                if (comparison?.later.header.uuid ==
+                                        header.uuid &&
+                                    change == null)
+                                  for (final issue in comparison!.issues)
+                                    Padding(
+                                        padding:
+                                            const EdgeInsets.only(bottom: 12),
+                                        child: Text(_comparisonIssueText(issue),
+                                            style: AppType.secondary(scheme))),
+                                Text(
+                                    '统计范围版本 ${header.scopeVersion} · 计算版本 ${header.calculationVersion}',
+                                    style: AppType.caption(scheme)),
+                              ])),
+                    ],
+                  )),
+                )));
+  }
+}
+
+String _checkpointDate(DateTime date) =>
+    '${date.year}/${date.month.toString().padLeft(2, '0')}/${date.day.toString().padLeft(2, '0')} '
+    '${date.hour.toString().padLeft(2, '0')}:${date.minute.toString().padLeft(2, '0')}';
+
+String _comparisonIssueText(NetWorthVerifiedComparabilityIssue issue) =>
+    switch (issue) {
+      NetWorthVerifiedComparabilityIssue.nonIncreasingAsOf =>
+        '两次核对的时间顺序不符，暂不比较变化。',
+      NetWorthVerifiedComparabilityIssue.earlierNotActive =>
+        '上一次核对已撤销或被替代，暂不比较变化。',
+      NetWorthVerifiedComparabilityIssue.laterNotActive =>
+        '本次核对已撤销或被替代，暂不比较变化。',
+      NetWorthVerifiedComparabilityIssue.earlierIncomplete =>
+        '上一次核对只覆盖部分资产，暂不比较变化。',
+      NetWorthVerifiedComparabilityIssue.laterIncomplete =>
+        '本次核对只覆盖部分资产，暂不比较变化。',
+      NetWorthVerifiedComparabilityIssue.scopeVersionMismatch =>
+        '两次核对的资产计入范围不同，暂不比较变化。',
+      NetWorthVerifiedComparabilityIssue.calculationVersionMismatch =>
+        '两次核对的计算口径不同，暂不比较变化。',
+      NetWorthVerifiedComparabilityIssue.currencyCoverageMismatch =>
+        '两次核对覆盖的币种不同，暂不比较变化。',
+    };
+
+class _OverviewSectionTitle extends StatelessWidget {
+  const _OverviewSectionTitle(this.title);
+  final String title;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+      padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
+      child: Text(title, style: AssetOverviewStyle.label(context)));
 }
 
 class AssetSummaryCard extends StatelessWidget {
@@ -372,161 +572,254 @@ class _AssetMetric extends StatelessWidget {
   }
 }
 
-// 资产配置环图固定配色（四类资产，饱和度中等，深浅色均可读）。
-const _kAllocationColors = [
-  Color(0xFF6B9FD4), // 流动资金
-  Color(0xFF68B09B), // 投资余额
-  Color(0xFFAB8EC6), // 权益资产
-  Color(0xFFE8A068), // 计入物品
-];
+Color _structureColor(AssetStructureKind kind, ColorScheme scheme) =>
+    switch (kind) {
+      AssetStructureKind.cash => scheme.primary,
+      AssetStructureKind.investment => scheme.onSurface.withValues(alpha: 0.52),
+      AssetStructureKind.receivable => kCatPink,
+      AssetStructureKind.physical => kCatGold,
+    };
 
 class AssetAnalysisCard extends StatelessWidget {
   final NetWorthBreakdown breakdown;
+  final bool partial;
 
-  const AssetAnalysisCard({super.key, required this.breakdown});
+  const AssetAnalysisCard(
+      {super.key, required this.breakdown, this.partial = false});
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final liabilityRate = breakdown.totalAssets <= Decimal.zero
-        ? null
-        : breakdown.totalLiabilities.toDouble() /
-            breakdown.totalAssets.toDouble();
-    final rawItems = [
-      ('流动资金', breakdown.cashAssets),
-      ('投资余额', breakdown.investmentAssets),
-      ('权益资产', breakdown.receivableAssets),
-      ('计入物品', breakdown.physicalAssets),
-    ];
-    // 只渲染金额 > 0 的段；保留颜色索引对应关系。
-    final items = [
-      for (var i = 0; i < rawItems.length; i++)
-        if (rawItems[i].$2 > Decimal.zero) (rawItems[i].$1, rawItems[i].$2, i),
-    ];
-    final hasData = items.isNotEmpty;
-    return Container(
-      padding: const EdgeInsets.fromLTRB(16, 13, 16, 14),
-      decoration: appCardDecoration(scheme),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // 「生成报告」入口在右上 ⋯ 菜单。
-          Text('资产结构', style: AppType.rowTitle(scheme)),
-          const SizedBox(height: 12),
-          if (!hasData)
-            Text('暂无可分析的资产数据', style: AppType.secondary(scheme))
-          else
-            IntrinsicHeight(
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.center,
-                children: [
-                  // ── 左：环图（donut），中心显示总资产金额 ──
-                  SizedBox(
-                    width: 110,
-                    height: 110,
-                    child: Stack(
-                      alignment: Alignment.center,
-                      children: [
-                        PieChart(
-                          PieChartData(
-                            sections: [
-                              for (final item in items)
-                                PieChartSectionData(
-                                  value: item.$2.toDouble(),
-                                  color:
-                                      _kAllocationColors[item.$3],
-                                  radius: 22,
-                                  title: '',
-                                  showTitle: false,
-                                ),
-                            ],
-                            centerSpaceRadius: 33,
-                            sectionsSpace: 2,
-                          ),
-                        ),
-                        Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Text(
-                              '总资产',
-                              style: TextStyle(
-                                fontSize: 10,
-                                color: AppTextColor.hint(scheme),
-                              ),
-                            ),
-                            Text(
-                              '${MoneyFormat.string(breakdown.totalAssets)} CNY',
-                              style: TextStyle(
-                                fontFamily: 'Nunito',
-                                fontSize: 11,
-                                fontWeight: FontWeight.w600,
-                                color: scheme.onSurface,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ],
+    final structure = AssetStructureProjection(
+        totalAssets: breakdown.totalAssets,
+        totalLiabilities: breakdown.totalLiabilities,
+        cash: breakdown.cashAssets,
+        investment: breakdown.investmentAssets,
+        receivable: breakdown.receivableAssets,
+        physical: breakdown.physicalAssets,
+        partial: partial);
+    final kinds = structure.visibleKinds.toList();
+    final rate = structure.liabilityPercentage;
+    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      Padding(
+        padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
+        child: LayoutBuilder(builder: (context, constraints) {
+          final style = AssetOverviewStyle.label(context);
+          return Wrap(
+            alignment: WrapAlignment.spaceBetween,
+            spacing: 12,
+            runSpacing: 4,
+            children: [
+              Text('资产结构', style: style),
+              ConstrainedBox(
+                constraints: BoxConstraints(maxWidth: constraints.maxWidth),
+                child: Semantics(
+                  key: const ValueKey('asset-structure-total'),
+                  label:
+                      '总资产 ${AssetOverviewStyle.amount(structure.totalAssets)} 人民币',
+                  child: ExcludeSemantics(
+                    child: FittedBox(
+                      fit: BoxFit.scaleDown,
+                      alignment: Alignment.centerRight,
+                      child: Text.rich(TextSpan(style: style, children: [
+                        const TextSpan(text: '总资产 '),
+                        TextSpan(
+                            text: AssetOverviewStyle.amount(
+                                structure.totalAssets),
+                            style: style.copyWith(fontFamily: 'Nunito')),
+                      ])),
                     ),
                   ),
-                  const SizedBox(width: 14),
-                  // ── 右：图例（圆点 + 分类 + 金额 + 占比）──
-                  Expanded(
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        for (final item in items)
-                          Padding(
-                            padding:
-                                const EdgeInsets.symmetric(vertical: 4),
-                            child: Row(
-                              children: [
-                                Container(
-                                  width: 8,
-                                  height: 8,
-                                  decoration: BoxDecoration(
-                                    color: _kAllocationColors[item.$3],
-                                    shape: BoxShape.circle,
-                                  ),
-                                ),
-                                const SizedBox(width: 6),
-                                Expanded(
-                                  child: Text(
-                                    item.$1,
-                                    style: AppType.secondary(scheme),
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                  ),
-                                ),
-                                Text(
-                                  MoneyFormat.string(item.$2),
-                                  style: TextStyle(
-                                    fontFamily: 'Nunito',
-                                    fontSize: 13,
-                                    fontWeight: FontWeight.w500,
-                                    color: scheme.onSurface,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                      ],
-                    ),
-                  ),
-                ],
+                ),
+              ),
+            ],
+          );
+        }),
+      ),
+      Container(
+        key: const ValueKey('asset-structure-card'),
+        padding: const EdgeInsets.all(16),
+        decoration: ShapeDecoration(
+          color: AppColors.card(scheme),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(22),
+            side: BorderSide(color: AppColors.hairline(scheme), width: 0.5),
+          ),
+        ),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          if (structure.hasShares && kinds.length > 1) ...[
+            SizedBox(
+                width: double.infinity,
+                height: 6,
+                child: CustomPaint(
+                  key: const ValueKey('asset-structure-bar'),
+                  painter: _AssetStructurePainter([
+                    for (final kind in kinds)
+                      (
+                        structure.percentage(kind)!.toDouble() / 100,
+                        _structureColor(kind, scheme)
+                      ),
+                  ]),
+                )),
+            const SizedBox(height: 16),
+          ],
+          if (kinds.isEmpty)
+            Text('暂无已计入的人民币资产', style: AppType.secondary(scheme)),
+          for (var i = 0; i < kinds.length; i++) ...[
+            if (i > 0) const SizedBox(height: 10),
+            _AssetStructureRow(
+                kind: kinds[i],
+                amount: structure.amounts[kinds[i]]!,
+                percentage: structure.percentage(kinds[i]),
+                showPercentage: kinds.length > 1,
+                color: _structureColor(kinds[i], scheme)),
+          ],
+          if (structure.hasShares && kinds.length == 1) ...[
+            const SizedBox(height: 8),
+            Text('目前只有一类资产，暂不显示占比', style: AppType.caption(scheme)),
+          ],
+          const SizedBox(height: 14),
+          Divider(height: 1, thickness: 0.5, color: AppColors.hairline(scheme)),
+          const SizedBox(height: 10),
+          Semantics(
+            key: const ValueKey('asset-structure-liabilities'),
+            label:
+                '负债 ${AssetOverviewStyle.amount(structure.totalLiabilities)} 人民币',
+            child: ExcludeSemantics(
+              child: _AssetStructureLine(
+                label: '负债',
+                amount: structure.totalLiabilities,
+                color: AppTextColor.secondary(scheme),
+                outlined: true,
               ),
             ),
-          if (liabilityRate != null) ...[
-            const SizedBox(height: 8),
-            Text(
-              '负债率：${(liabilityRate * 100).toStringAsFixed(1)}%',
-              style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                    color: AppTextColor.secondary(scheme),
-                    fontWeight: FontWeight.w400,
-                  ),
-            ),
+          ),
+          const SizedBox(height: 10),
+          Wrap(spacing: 16, runSpacing: 6, children: [
+            Text('人民币 · 已计入资产', style: AppType.caption(scheme)),
+            Text('负债率 ${rate == null ? '—' : '${rate.toStringAsFixed(1)}%'}',
+                style:
+                    AppType.secondary(scheme).copyWith(fontFamily: 'Nunito')),
+          ]),
+          if (partial || !structure.isConsistent) ...[
+            const SizedBox(height: 6),
+            Text(partial ? '部分金额待确认，占比暂不可比' : '金额口径待核实，占比暂不可比',
+                style: AppType.secondary(scheme)),
           ],
-        ],
+        ]),
+      ),
+    ]);
+  }
+}
+
+class _AssetStructureRow extends StatelessWidget {
+  const _AssetStructureRow(
+      {required this.kind,
+      required this.amount,
+      required this.percentage,
+      required this.showPercentage,
+      required this.color});
+  final AssetStructureKind kind;
+  final Decimal amount;
+  final Decimal? percentage;
+  final bool showPercentage;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    final percentText =
+        percentage == null ? '—' : '${percentage!.toStringAsFixed(1)}%';
+    return Semantics(
+      key: ValueKey('asset-structure-${kind.name}'),
+      label: '${kind.label} ${AssetOverviewStyle.amount(amount)} 人民币，'
+          '${percentage == null ? '占比不可计算' : '占比$percentText'}',
+      child: ExcludeSemantics(
+        child: _AssetStructureLine(
+            label: kind.label,
+            amount: amount,
+            color: color,
+            percentageText: showPercentage ? percentText : null),
       ),
     );
   }
+}
+
+class _AssetStructureLine extends StatelessWidget {
+  const _AssetStructureLine(
+      {required this.label,
+      required this.amount,
+      required this.color,
+      this.percentageText,
+      this.outlined = false});
+  final String label;
+  final Decimal amount;
+  final Color color;
+  final String? percentageText;
+  final bool outlined;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final title = Row(children: [
+      Container(
+          width: 8,
+          height: 8,
+          decoration: BoxDecoration(
+              color: outlined ? null : color,
+              border: outlined ? Border.all(color: color) : null,
+              borderRadius: BorderRadius.circular(3))),
+      const SizedBox(width: 8),
+      Expanded(
+          child:
+              Text(label, style: AppType.body(scheme).copyWith(fontSize: 14))),
+    ]);
+    final values = Row(children: [
+      Expanded(
+          child: Align(
+              alignment: Alignment.centerRight,
+              child: AssetOverviewAmount(amount,
+                  size: 15, weight: FontWeight.w700))),
+      if (percentageText != null) ...[
+        const SizedBox(width: 12),
+        Text(percentageText!,
+            style: AppType.caption(scheme).copyWith(fontFamily: 'Nunito')),
+      ],
+    ]);
+    return LayoutBuilder(builder: (context, constraints) {
+      final large = MediaQuery.textScalerOf(context).scale(14) > 20;
+      return large || constraints.maxWidth < 300
+          ? Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [title, const SizedBox(height: 6), values])
+          : Row(children: [
+              Expanded(flex: 4, child: title),
+              const SizedBox(width: 12),
+              Expanded(flex: 6, child: values)
+            ]);
+    });
+  }
+}
+
+class _AssetStructurePainter extends CustomPainter {
+  const _AssetStructurePainter(this.segments);
+  final List<(double, Color)> segments;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    canvas.save();
+    canvas.clipRRect(
+        RRect.fromRectAndRadius(Offset.zero & size, const Radius.circular(3)));
+    double x = 0;
+    for (final (share, color) in segments) {
+      final width = size.width * share;
+      canvas.drawRect(
+          Rect.fromLTWH(x, 0, width, size.height), Paint()..color = color);
+      x += width;
+    }
+    canvas.restore();
+  }
+
+  @override
+  bool shouldRepaint(covariant _AssetStructurePainter oldDelegate) =>
+      !listEquals(segments, oldDelegate.segments);
 }

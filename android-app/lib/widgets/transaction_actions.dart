@@ -6,6 +6,7 @@ import 'package:provider/provider.dart';
 import '../core/haptics.dart';
 import '../core/models/transaction_kind.dart';
 import '../data/app_repository.dart';
+import '../theme/app_colors.dart';
 import '../views/transactions/edit_transaction_sheet.dart';
 import 'app_toast.dart';
 import 'refund_settlement_sheet.dart';
@@ -18,6 +19,7 @@ const Color _kDelete = Color(0xFFE0552B); // 警示红
 /// 单笔账目的左滑操作：编辑 / 退款 / 删除(纯文字,无图标)。
 /// 点「删除」后,这排按钮**原地**变成一条长红「删除这笔」确认条;
 /// 划走(不确认)即取消。退款走冲账(方案1)。
+/// 关联负债还款只提供整次撤销，本金和利息不能单独编辑、退款或删除。
 class TransactionSlidable extends StatefulWidget {
   final TransactionEntity transaction;
   final Widget child;
@@ -34,13 +36,18 @@ class TransactionSlidable extends StatefulWidget {
 
 class _TransactionSlidableState extends State<TransactionSlidable> {
   bool _confirming = false;
+  bool _submitting = false;
+  int? _confirmedRepaymentId;
 
   @override
   void didUpdateWidget(TransactionSlidable old) {
     super.didUpdateWidget(old);
     // 列表因退款/改动重建时，清掉可能残留的「删除这笔」确认态——
     // 否则下次左滑这一行会直接冒出红色删除确认条（用户 0703 反馈）。
-    if (_confirming) _confirming = false;
+    if (_confirming) {
+      _confirming = false;
+      _confirmedRepaymentId = null;
+    }
   }
 
   // 仅对「正向支出」给退款入口(收入/转账/退款冲账本身都不给)。
@@ -50,39 +57,77 @@ class _TransactionSlidableState extends State<TransactionSlidable> {
 
   @override
   Widget build(BuildContext context) {
+    final repaymentId = context.select<AppRepository, int?>(
+      (repo) =>
+          repo.liabilityRepaymentEventForTransaction(widget.transaction.id)?.id,
+    );
+    final isRepayment = repaymentId != null || _confirmedRepaymentId != null;
     // 确认态和普通态保持同一宽度,避免切换时跳动。
     // 操作区整体改短;按钮↔确认条之间淡入淡出,不再瞬间跳。
-    final extent = _canRefund ? 0.58 : 0.4;
-    return Slidable(
-      key: ValueKey('tx_${widget.transaction.id}'),
-      endActionPane: ActionPane(
-        motion: const DrawerMotion(),
-        extentRatio: extent,
-        children: [
-          CustomSlidableAction(
-            autoClose: false,
-            onPressed: (_) {}, // 按钮各自处理点击(内层 GestureDetector)
-            padding: EdgeInsets.zero,
-            backgroundColor: Colors.transparent,
-            child: Builder(
-              builder: (paneCtx) => AnimatedSwitcher(
-                duration: const Duration(milliseconds: 220),
-                child:
-                    _confirming ? _confirmBar(paneCtx) : _buttonsRow(paneCtx),
+    return LayoutBuilder(builder: (context, constraints) {
+      var extent = _canRefund ? 0.58 : 0.4;
+      if (isRepayment) {
+        final confirmText = TextPainter(
+          text: TextSpan(
+            text: '撤销本次还款',
+            style: DefaultTextStyle.of(context).style.copyWith(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w500,
+                ),
+          ),
+          textDirection: Directionality.of(context),
+          textScaler: MediaQuery.textScalerOf(context),
+        )..layout();
+        extent = ((confirmText.width + 16) / constraints.maxWidth)
+            .clamp(0.4, 0.85)
+            .toDouble();
+        confirmText.dispose();
+      }
+      return Slidable(
+        key: ValueKey('tx_${widget.transaction.id}'),
+        endActionPane: ActionPane(
+          motion: const DrawerMotion(),
+          extentRatio: extent,
+          children: [
+            CustomSlidableAction(
+              autoClose: false,
+              onPressed: (_) {}, // 按钮各自处理点击(内层 GestureDetector)
+              padding: EdgeInsets.zero,
+              backgroundColor: Colors.transparent,
+              child: Builder(
+                builder: (paneCtx) => AnimatedSwitcher(
+                  duration: const Duration(milliseconds: 220),
+                  child: _confirming
+                      ? _confirmBar(paneCtx)
+                      : _buttonsRow(paneCtx, repaymentId),
+                ),
               ),
             ),
-          ),
-        ],
-      ),
-      // 观察面板开合，登记到全局 SlidableTracker（右滑开抽屉手势据此让位）。
-      child: _PaneWatcher(
-        trackKey: 'tx_${widget.transaction.id}',
-        child: widget.child,
-      ),
-    );
+          ],
+        ),
+        // 观察面板开合，登记到全局 SlidableTracker（右滑开抽屉手势据此让位）。
+        child: _PaneWatcher(
+          trackKey: 'tx_${widget.transaction.id}',
+          child: widget.child,
+        ),
+      );
+    });
   }
 
-  Widget _buttonsRow(BuildContext paneCtx) {
+  Widget _buttonsRow(BuildContext paneCtx, int? repaymentId) {
+    if (repaymentId != null) {
+      return Row(
+        key: const ValueKey('btns'),
+        children: [
+          _seg(
+            '撤销',
+            AppColors.warning,
+            () => _startConfirm(paneCtx, repaymentId: repaymentId),
+            foreground: Colors.black87,
+          ),
+        ],
+      );
+    }
     return Row(
       key: const ValueKey('btns'),
       children: [
@@ -101,62 +146,94 @@ class _TransactionSlidableState extends State<TransactionSlidable> {
   }
 
   Widget _confirmBar(BuildContext paneCtx) {
+    final isRepayment = _confirmedRepaymentId != null;
     return GestureDetector(
       key: const ValueKey('confirm'),
       behavior: HitTestBehavior.opaque,
-      onTap: () async {
-        Haptics.of(Haptic.warning);
-        try {
-          await context
-              .read<AppRepository>()
-              .deleteTransaction(widget.transaction.id);
-        } on StateError catch (e) {
-          // 仓储层的保护性拦截（如「这笔退款已经用于确认物品退货…」）
-          // 要说给用户听，不能静默吞掉让删除看起来没反应。
-          if (!mounted) return;
-          showAppToast(context, e.message, icon: Icons.error_outline);
-        } catch (_) {
-          if (!mounted) return;
-          showAppToast(context, '删除失败，请重试', icon: Icons.error_outline);
-        }
-      },
+      onTap: _submitting
+          ? null
+          : () async {
+              if (_submitting) return;
+              final repaymentId = _confirmedRepaymentId;
+              final controller = Slidable.of(paneCtx);
+              setState(() => _submitting = true);
+              Haptics.of(Haptic.warning);
+              try {
+                final repo = context.read<AppRepository>();
+                if (repaymentId != null) {
+                  await repo.undoLiabilityRepayment(repaymentId);
+                  if (!mounted) return;
+                  controller?.close();
+                  setState(() {
+                    _confirming = false;
+                    _confirmedRepaymentId = null;
+                  });
+                  showAppToast(context, '已撤销本次还款');
+                } else {
+                  await repo.deleteTransaction(widget.transaction.id);
+                }
+              } on StateError catch (e) {
+                // 仓储层的保护性拦截（如「这笔退款已经用于确认物品退货…」）
+                // 要说给用户听，不能静默吞掉让删除看起来没反应。
+                if (!mounted) return;
+                showAppToast(context, e.message, icon: Icons.error_outline);
+              } catch (_) {
+                if (!mounted) return;
+                showAppToast(context, isRepayment ? '撤销失败，请重试' : '删除失败，请重试',
+                    icon: Icons.error_outline);
+              } finally {
+                if (mounted) setState(() => _submitting = false);
+              }
+            },
       child: Container(
-        color: _kDelete,
+        color: isRepayment ? AppColors.warning : _kDelete,
+        padding: isRepayment
+            ? const EdgeInsets.symmetric(horizontal: 8)
+            : EdgeInsets.zero,
         alignment: Alignment.center,
-        child: const Text('删除这笔',
+        child: Text(isRepayment ? (_submitting ? '撤销中' : '撤销本次还款') : '删除这笔',
             style: TextStyle(
-                color: Colors.white,
+                color: isRepayment ? Colors.black87 : Colors.white,
                 fontSize: 14,
                 fontWeight: FontWeight.w500)),
       ),
     );
   }
 
-  Widget _seg(String label, Color color, VoidCallback onTap) {
+  Widget _seg(String label, Color color, VoidCallback onTap,
+      {Color foreground = Colors.white}) {
     return Expanded(
       child: GestureDetector(
         behavior: HitTestBehavior.opaque,
-        onTap: onTap,
+        onTap: _submitting ? null : onTap,
         child: Container(
           color: color,
           alignment: Alignment.center,
-          child: Text(label,
-              style: const TextStyle(color: Colors.white, fontSize: 14)),
+          child: Text(label, style: TextStyle(color: foreground, fontSize: 14)),
         ),
       ),
     );
   }
 
   // 进入"红色确认条"态;面板划回收起时自动取消确认。
-  void _startConfirm(BuildContext paneCtx) {
+  void _startConfirm(BuildContext paneCtx, {int? repaymentId}) {
+    if (_submitting) return;
     Haptics.selection();
     final ctrl = Slidable.of(paneCtx);
-    setState(() => _confirming = true);
+    setState(() {
+      _confirming = true;
+      _confirmedRepaymentId = repaymentId;
+    });
     if (ctrl != null) {
       void listener() {
         if (ctrl.actionPaneType.value == ActionPaneType.none) {
           ctrl.actionPaneType.removeListener(listener);
-          if (mounted) setState(() => _confirming = false);
+          if (mounted) {
+            setState(() {
+              _confirming = false;
+              _confirmedRepaymentId = null;
+            });
+          }
         }
       }
 

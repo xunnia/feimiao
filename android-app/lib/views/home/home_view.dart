@@ -12,6 +12,7 @@ import '../../core/models/transaction_kind.dart';
 import '../../core/money_format.dart';
 import '../../core/statistics/statistics_engine.dart';
 import '../../data/app_repository.dart';
+import '../../theme/app_colors.dart';
 import '../../widgets/home_summary_card.dart';
 import '../../widgets/mascot.dart';
 import '../../widgets/sliding_segment.dart';
@@ -164,14 +165,19 @@ class _HomeViewState extends State<HomeView> with WidgetsBindingObserver {
       context: context,
       isScrollControlled: true,
       useSafeArea: true,
-      backgroundColor: Theme.of(context).colorScheme.surface,
+      backgroundColor: Colors.transparent,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
       ),
-      builder: (_) => _HomeMonthPickerSheet(
-        initial: DateTime(_year, _month),
-        last: AppClock.now,
-        records: repo.allRecordsRef,
+      builder: (sheetContext) => Material(
+        color: Theme.of(sheetContext).colorScheme.surface,
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+        clipBehavior: Clip.antiAlias,
+        child: _HomeMonthPickerSheet(
+          initial: DateTime(_year, _month),
+          last: AppClock.now,
+          records: repo.allRecordsRef,
+        ),
       ),
     );
     if (picked == null || !mounted) return;
@@ -512,7 +518,7 @@ class _MonthGridCell extends StatelessWidget {
     final enabledText = scheme.onSurface.withValues(alpha: 0.92);
     final fill = disabled
         ? scheme.surfaceContainerHighest.withValues(alpha: 0.34)
-        : const Color(0xFFF7FAFF);
+        : AppColors.inputFill(scheme);
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
       onTap: onTap,
@@ -521,10 +527,14 @@ class _MonthGridCell extends StatelessWidget {
         curve: Curves.easeOutCubic,
         padding: const EdgeInsets.fromLTRB(12, 11, 12, 10),
         decoration: BoxDecoration(
-          color: selected ? const Color(0xFFF1F7FF) : fill,
+          color: selected
+              ? Color.alphaBlend(scheme.primary.withValues(alpha: 0.10), fill)
+              : fill,
           borderRadius: BorderRadius.circular(18),
           border: Border.all(
-            color: selected ? const Color(0xFFBBD9FF) : Colors.transparent,
+            color: selected
+                ? scheme.primary.withValues(alpha: 0.28)
+                : Colors.transparent,
             width: selected ? 1.2 : 0,
           ),
         ),
@@ -547,11 +557,11 @@ class _MonthGridCell extends StatelessWidget {
                   '-${MoneyFormat.string(expense)}',
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontSize: 14,
                     fontWeight: FontWeight.w500,
                     fontFamily: 'Nunito',
-                    color: Color(0xFF174C8F),
+                    color: scheme.onSurface,
                   ),
                 ),
               ),
@@ -562,11 +572,11 @@ class _MonthGridCell extends StatelessWidget {
                   '+${MoneyFormat.string(income)}',
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontSize: 14,
                     fontWeight: FontWeight.w500,
                     fontFamily: 'Nunito',
-                    color: Color(0xFF87512A),
+                    color: AppColors.income(scheme),
                   ),
                 ),
               )

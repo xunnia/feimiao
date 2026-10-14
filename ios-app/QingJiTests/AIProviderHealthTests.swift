@@ -3,6 +3,21 @@ import XCTest
 
 @MainActor
 final class AIProviderHealthTests: XCTestCase {
+    func testUserCancellationDoesNotDamagePersistedProviderHealth() {
+        let suiteName = "qingji.ai-provider-cancel-test-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let providerID = UUID()
+        let store = AIProviderStore(defaults: defaults)
+        let initial = store.recordProviderSuccess(for: providerID, latencyMs: 100)
+        let cancellations: [Error] = [CancellationError(), URLError(.cancelled), CancellationError()]
+        for error in cancellations {
+            XCTAssertEqual(store.recordProviderFailure(for: providerID, error: error), initial)
+        }
+        XCTAssertEqual(AIProviderStore(defaults: defaults).health(for: providerID), initial)
+        XCTAssertNil(initial.cooldownUntil)
+    }
+
     func testVerificationStatusSurvivesARegularFailure() {
         let now = Date(timeIntervalSince1970: 1_735_689_600)
         var health = AIProviderHealth(providerID: UUID())
@@ -138,6 +153,13 @@ final class AIProviderHealthTests: XCTestCase {
         XCTAssertEqual(
             AIProviderVerificationStatus.from(error: AIProviderStoreError.missingSecret),
             .configurationError
+        )
+    }
+
+    func testInterruptedReplyIsANetworkFailureNotAnInvalidCredential() {
+        XCTAssertEqual(
+            AIProviderVerificationStatus.from(error: AIProviderError.interrupted),
+            .networkError
         )
     }
 

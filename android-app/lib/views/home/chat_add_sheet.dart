@@ -107,11 +107,10 @@ class _ChatAddSheetState extends State<_ChatAddSheet> {
     setState(() => _picking = true);
     try {
       final files = source == ImageSource.gallery
-          ? await ImagePicker().pickMultiImage(imageQuality: 92)
+          ? await ImagePicker().pickMultiImage()
           : <XFile>[
               if (await ImagePicker().pickImage(
                 source: source,
-                imageQuality: 92,
               )
                   case final XFile file)
                 file,
@@ -121,7 +120,7 @@ class _ChatAddSheetState extends State<_ChatAddSheet> {
             ? files.take(AiAttachmentPipeline.maxImages).toList(growable: false)
             : files;
         if (files.length > selectedFiles.length && mounted) {
-          showAppToast(context, '一次最多添加 3 张图片，已保留前 3 张');
+          showAppToast(context, '一次最多添加 4 张图片，已保留前 4 张');
         }
         await _deliverAttachments([
           for (final file in selectedFiles)

@@ -34,20 +34,34 @@ class BudgetSuggestion {
   }) {
     final from = DateTime(now.year, now.month - months, 1);
     final to = DateTime(now.year, now.month, 1); // 不含本月
-    final byMonth = <int, double>{}; // year*100+month -> 支出合计
+    final byMonth = <int, Decimal>{}; // year*100+month -> 支出合计
     for (final r in records) {
       if (r.kind != TransactionKind.expense) continue;
+      if (r.currencyCode.trim().toUpperCase() != 'CNY') continue;
       if (r.amount <= Decimal.zero) continue;
       final d = DateTime(r.date.year, r.date.month, 1);
       if (d.isBefore(from) || !d.isBefore(to)) continue;
       final key = d.year * 100 + d.month;
-      byMonth[key] = (byMonth[key] ?? 0) + r.amount.toDouble();
+      byMonth[key] = (byMonth[key] ?? Decimal.zero) + r.amount;
     }
     if (byMonth.isEmpty) return null;
-    final avg =
-        byMonth.values.reduce((a, b) => a + b) / byMonth.length;
-    if (avg <= 0) return null;
-    return Decimal.parse(avg.toStringAsFixed(0));
+    final total = byMonth.values.fold(Decimal.zero, (a, b) => a + b);
+    if (total <= Decimal.zero) return null;
+    return (total / Decimal.fromInt(byMonth.length))
+        .toDecimal(scaleOnInfinitePrecision: 8)
+        .round();
+  }
+
+  /// 页面建议：先将月均净支出取整元，再取整到百元，至少 100 元。
+  static int? suggestedMonthlyYuan(
+    List<TransactionRecord> records, {
+    required DateTime now,
+  }) {
+    final average = averageMonthlySpend(records, now: now);
+    if (average == null) return null;
+    final yuan = average.toBigInt().toInt();
+    final rounded = ((yuan + 50) ~/ 100) * 100;
+    return rounded < 100 ? 100 : rounded;
   }
 
   /// 近 [months] 个月（不含本月）的支出结构权重：顶级分类 key -> 占比。

@@ -66,6 +66,37 @@ void main() {
     expect(ChatIntent.isQuery('   '), isFalse);
   });
   group('ChatIntent.classify free chat fallback', () {
+    test('日历范围不等于账本语义，市场与生活问题仍为普通聊天', () {
+      for (final question in [
+        '帮我分析下最近的股市',
+        '今年股市怎么样',
+        '本月股票涨幅怎么样',
+        '上个月广州天气怎么样',
+        '今年有什么好电影',
+      ]) {
+        expect(ChatIntent.classify(question), ChatIntentKind.chat,
+            reason: question);
+      }
+      expect(ChatIntent.classify('今年收入多少'), ChatIntentKind.query);
+      expect(ChatIntent.classify('这个月超支了吗'), ChatIntentKind.query);
+      expect(ChatIntent.classify('查一下本月餐饮'), ChatIntentKind.query);
+    });
+
+    test('省略账务词的连续日期追问只继承当前用户话题', () {
+      final topic = ChatIntent.lastTopicQuestion([
+        '上个月呢',
+        '那上周呢',
+        '这个月花了多少',
+      ]);
+      expect(topic, '这个月花了多少');
+      expect(ChatIntent.classify('去年呢', previousQuestion: topic),
+          ChatIntentKind.query);
+      expect(ChatIntent.classify('上个月呢', previousQuestion: '广州天气怎么样'),
+          ChatIntentKind.chat);
+      expect(ChatIntent.classify('上个月呢'), ChatIntentKind.chat);
+      expect(ChatIntent.lastTopicQuestion(['今年股市怎么样', '这个月花了多少']), '今年股市怎么样');
+    });
+
     test('casual messages are not treated as records', () {
       expect(ChatIntent.classify('你好呀'), ChatIntentKind.chat);
       expect(ChatIntent.classify('讲个笑话'), ChatIntentKind.chat);

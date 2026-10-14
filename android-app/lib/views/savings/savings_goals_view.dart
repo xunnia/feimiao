@@ -101,12 +101,14 @@ class SavingsGoalsView extends StatelessWidget {
       context,
       title: deposit ? '存入「${g.name}」' : '从「${g.name}」取出',
       confirmText: deposit ? '存入' : '取出',
-      content: TextField(
-        controller: ctrl,
-        autofocus: true,
-        keyboardType: const TextInputType.numberWithOptions(decimal: true),
-        inputFormatters: moneyInputFormatters(),
-        decoration: iosInputDecoration(context, prefix: '¥ ', hint: '0.00'),
+      content: Builder(
+        builder: (ctx) => TextField(
+          controller: ctrl,
+          autofocus: true,
+          keyboardType: const TextInputType.numberWithOptions(decimal: true),
+          inputFormatters: moneyInputFormatters(),
+          decoration: iosInputDecoration(ctx, prefix: '¥ ', hint: '0.00'),
+        ),
       ),
     );
     final rawValue = ctrl.text.trim();

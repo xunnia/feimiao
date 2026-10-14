@@ -74,7 +74,7 @@ void main() {
       body['input'],
       '第一句问题\n\nassistant: 上一句回答\n\n第二句问题',
     );
-    expect(body['reasoning'], {'effort': 'high'});
+    expect(body['reasoning'], {'effort': 'high', 'summary': 'auto'});
   });
 
   test('官方 Codex 的非流式调用也强制使用 stream=true', () {
@@ -192,7 +192,7 @@ void main() {
     // `max_output_tokens` parameter; the official client lets the model
     // choose its own output budget.
     expect(body.containsKey('max_output_tokens'), isFalse);
-    expect(body['reasoning'], {'effort': 'high'});
+    expect(body['reasoning'], {'effort': 'high', 'summary': 'auto'});
     expect(body['input'], [
       {
         'type': 'message',
@@ -321,8 +321,8 @@ void main() {
         {'role': 'user', 'content': '你好'},
       ],
     );
-    expect(max['reasoning'], {'effort': 'xhigh'});
-    expect(ultra['reasoning'], {'effort': 'xhigh'});
+    expect(max['reasoning'], {'effort': 'xhigh', 'summary': 'auto'});
+    expect(ultra['reasoning'], {'effort': 'xhigh', 'summary': 'auto'});
     expect(ultra['max_output_tokens'], 16384);
   });
 
@@ -343,7 +343,7 @@ void main() {
         {'role': 'user', 'content': '你好'},
       ],
     );
-    expect(body['reasoning'], {'effort': 'max'});
+    expect(body['reasoning'], {'effort': 'max', 'summary': 'auto'});
     expect(body.containsKey('max_output_tokens'), isFalse);
   });
 

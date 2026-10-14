@@ -18,11 +18,16 @@ Future<T?> appSheet<T>(
     isScrollControlled: isScrollControlled,
     // 弹层撑满时顶部必须让出状态栏（真机键盘顶起后会怼进状态栏）。
     useSafeArea: true,
-    backgroundColor: Theme.of(context).colorScheme.surface,
+    backgroundColor: Colors.transparent,
     shape: const RoundedRectangleBorder(
       borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
     ),
-    builder: (_) => child,
+    builder: (sheetContext) => Material(
+      color: Theme.of(sheetContext).colorScheme.surface,
+      borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+      clipBehavior: Clip.antiAlias,
+      child: child,
+    ),
   );
 }
 

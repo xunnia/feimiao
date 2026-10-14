@@ -8,6 +8,7 @@ struct QingJiApp: App {
     @State private var router = AppRouter()
     @State private var aiProviderStore = AIProviderStore()
     @AppStorage("qingji.appearanceMode") private var appearanceModeRaw = AppAppearanceMode.system.rawValue
+    @AppStorage("qingji.themePreset") private var themePresetRaw = AppThemePreset.warm.rawValue
     @AppStorage("qingji.repaymentReminderEnabled") private var repaymentReminderEnabled = true
     @Environment(\.scenePhase) private var scenePhase
 
@@ -69,7 +70,9 @@ struct QingJiApp: App {
                     }
                 }
                 .preferredColorScheme(
-                    AppAppearanceMode(rawValue: appearanceModeRaw)?.colorScheme
+                    AppThemePreferences(presetKey: themePresetRaw, intensity: 1,
+                                        cardAlpha: AppThemePreferences.defaultCardAlpha)
+                        .colorScheme(appearanceMode: AppAppearanceMode(rawValue: appearanceModeRaw) ?? .system)
                 )
         }
         .modelContainer(AppModelContainer.shared)

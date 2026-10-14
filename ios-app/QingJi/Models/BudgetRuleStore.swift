@@ -218,6 +218,15 @@ enum BudgetRuleStore {
         }
     }
 
+    static func suggestionYuan(transactions: [MoneyTransaction], selectedBookID: UUID?,
+                               now: Date = AppClock.now, knowledgeCutoff: Date = Date(),
+                               calendar: Calendar = .current) -> Int? {
+        let scoped = LedgerScope.filter(transactions, selectedBookID: selectedBookID)
+        return budgetSuggestedMonthlyYuan(spendRows(scoped, calendar: calendar),
+                                          today: BudgetCivilDay(now, calendar: calendar),
+                                          knowledgeCutoff: knowledgeCutoff)
+    }
+
     /// 某个账本某个月。selectedBookID 为 nil 表示总账本。
     /// 视图用 @Query 拿到的数组直接传进来，规则一改就会重算。
     static func snapshot(
@@ -442,11 +451,12 @@ enum BudgetRuleStore {
             let end = plan.endInclusive.map { BudgetCivilDay($0) }
             return start <= today && (end == nil || end! >= today)
         }
-        let plan = covering.last ?? mine.last!
+        // 只迁当前生效的主计划，未来或已结束的计划不能盖过旧月预算。
+        guard let plan = covering.last else { return nil }
         let revs = revisions.filter { $0.planID == plan.stableID }.sorted { $0.effectiveCycleStart < $1.effectiveCycleStart }
         guard !revs.isEmpty else { return nil }
         let started = revs.filter { BudgetCivilDay($0.effectiveCycleStart) <= today }
-        let revision = started.last ?? revs.first!
+        guard let revision = started.last else { return nil }
         guard let cents = roundCents(revision.amountCents) else { return nil }
         let anchor = BudgetCivilDay(plan.anchorStart)
         return (cents, plan.cadenceRaw == BudgetPlanCadenceV2.weekly.rawValue ? .week : .month,

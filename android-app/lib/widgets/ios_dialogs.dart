@@ -122,9 +122,9 @@ class FrostedDialogCard extends StatelessWidget {
               child: Container(
                 padding: padding,
                 decoration: BoxDecoration(
-                  color: dark
-                      ? const Color(0xFF332F2C).withValues(alpha: 0.84)
-                      : Colors.white.withValues(alpha: 0.82),
+                  // 跟主题走的弹窗底（暖橙=奶白、简约白=白、深色=提一档的页面底）。
+                  color: AppColors.sheetSurface(scheme)
+                      .withValues(alpha: dark ? 0.88 : 0.86),
                   borderRadius: BorderRadius.circular(26),
                   border: Border.all(color: AppColors.hairline(scheme)),
                 ),
@@ -161,7 +161,6 @@ class DialogPillButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final dark = scheme.brightness == Brightness.dark;
     return GestureDetector(
       onTap: onTap,
       behavior: HitTestBehavior.opaque,
@@ -169,10 +168,7 @@ class DialogPillButton extends StatelessWidget {
         height: height,
         alignment: Alignment.center,
         decoration: BoxDecoration(
-          // 明确的灰底（图二），不是白底：浅色黑 7%、深色白 12%。
-          color: dark
-              ? Colors.white.withValues(alpha: 0.12)
-              : Colors.black.withValues(alpha: 0.07),
+          color: AppColors.dialogFill(scheme),
           borderRadius: BorderRadius.circular(999),
         ),
         child: Text(

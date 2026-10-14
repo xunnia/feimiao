@@ -31,7 +31,7 @@ class AiAttachmentBatch {
 class AiAttachmentPipeline {
   AiAttachmentPipeline._();
 
-  static const maxImages = 3;
+  static const maxImages = 4;
   static const maxFiles = 10;
   static const maxImageBytes = 20 * 1024 * 1024;
   static const maxFileBytes = 50 * 1024 * 1024;
@@ -57,7 +57,7 @@ class AiAttachmentPipeline {
         } else if (size > max) {
           error = attachment.isImage ? '图片不能超过 20 MB' : '文件不能超过 50 MB';
         } else if (attachment.isImage && imageCount >= maxImages) {
-          error = '一次最多发送 3 张图片';
+          error = '一次最多发送 4 张图片';
         } else if (!attachment.isImage && fileCount >= maxFiles) {
           error = '一次最多发送 10 个文件';
         }

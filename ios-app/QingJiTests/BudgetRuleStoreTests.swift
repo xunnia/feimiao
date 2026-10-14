@@ -91,6 +91,30 @@ final class BudgetRuleStoreTests: XCTestCase {
         XCTAssertEqual(extra.fundingRaw, BudgetFunding.extra.rawValue)
     }
 
+    func testSuggestionUsesSharedNetProjectionAndSelectedBookScope() {
+        let book = Book(name: "日常", isDefault: true)
+        let privateBook = Book(name: "独立")
+        privateBook.includeInTotal = false
+        let now = day(2026, 9, 18)
+        let original = MoneyTransaction(amount: 1000, kind: .expense, date: day(2026, 8, 10),
+                                        book: book, createdAt: now)
+        let refund = MoneyTransaction(amount: -900, kind: .expense, date: original.date,
+                                      book: book, createdAt: now, refundOfID: original.stableID)
+        let excluded = MoneyTransaction(amount: 8000, kind: .expense, date: day(2026, 7, 1),
+                                        book: book, createdAt: now, isExcluded: true)
+        let foreign = MoneyTransaction(amount: 9000, kind: .expense, date: day(2026, 6, 1),
+                                       currencyCode: "USD", book: book, createdAt: now)
+        let other = MoneyTransaction(amount: 6000, kind: .expense, date: day(2026, 8, 11),
+                                     book: privateBook, createdAt: now)
+        let transactions = [original, refund, excluded, foreign, other]
+        XCTAssertEqual(BudgetRuleStore.suggestionYuan(transactions: transactions, selectedBookID: nil,
+                                                     now: now, knowledgeCutoff: now), 100)
+        XCTAssertEqual(BudgetRuleStore.suggestionYuan(transactions: transactions, selectedBookID: book.stableID,
+                                                     now: now, knowledgeCutoff: now), 100)
+        XCTAssertEqual(BudgetRuleStore.suggestionYuan(transactions: transactions, selectedBookID: privateBook.stableID,
+                                                     now: now, knowledgeCutoff: now), 6000)
+    }
+
     func testRolloverModeKeepsOneRecordPerMonth() throws {
         let context = try makeContext()
         let bookID = UUID()
@@ -122,6 +146,123 @@ final class BudgetRuleStoreTests: XCTestCase {
         XCTAssertEqual(rules.first?.amountCents, 400_000)
         XCTAssertEqual(rules.first?.unitRaw, BudgetRuleUnit.month.rawValue)
         XCTAssertEqual(rules.first?.startDate, "2026-05-01")
+    }
+
+    private func insertPlan(in context: ModelContext, book: Book, start: Date,
+                            end: Date? = nil, revisions: [(Date, Int)]) {
+        let plan = BudgetPlanRecord(bookID: book.stableID, anchorStart: start, endInclusive: end)
+        context.insert(plan)
+        for (effectiveStart, cents) in revisions {
+            context.insert(BudgetPlanRevisionRecord(planID: plan.stableID,
+                                                     effectiveCycleStart: effectiveStart,
+                                                     amountCents: cents))
+        }
+    }
+
+    func testFutureV2PlanFallsBackToCurrentLegacyMonthlyBudget() throws {
+        let context = try makeContext()
+        let book = Book(name: "日常", isDefault: true)
+        context.insert(book)
+        context.insert(Budget(amount: 4000, bookID: book.stableID, periodStart: day(2026, 5, 1)))
+        insertPlan(in: context, book: book, start: day(2026, 9, 1),
+                   revisions: [(day(2026, 9, 1), 600_000)])
+        try context.save()
+
+        BudgetRuleStore.migrate(in: context, now: day(2026, 8, 20))
+        let rules = try context.fetch(FetchDescriptor<BudgetRuleRecord>())
+        XCTAssertEqual(rules.count, 1)
+        XCTAssertEqual(rules.first?.amountCents, 400_000)
+        XCTAssertEqual(rules.first?.startDate, "2026-05-01")
+        XCTAssertEqual(try context.fetch(FetchDescriptor<Budget>()).count, 1)
+        XCTAssertEqual(try context.fetch(FetchDescriptor<BudgetPlanRecord>()).first?.anchorStart, day(2026, 9, 1))
+        XCTAssertEqual(try context.fetch(FetchDescriptor<BudgetPlanRevisionRecord>()).first?.amountCents, 600_000)
+    }
+
+    func testV2WithOnlyFutureRevisionFallsBackToCurrentLegacyMonthlyBudget() throws {
+        let context = try makeContext()
+        let book = Book(name: "日常", isDefault: true)
+        context.insert(book)
+        context.insert(Budget(amount: 4000, bookID: book.stableID, periodStart: day(2026, 5, 1)))
+        insertPlan(in: context, book: book, start: day(2026, 6, 1),
+                   revisions: [(day(2026, 9, 1), 600_000)])
+        try context.save()
+
+        BudgetRuleStore.migrate(in: context, now: day(2026, 8, 20))
+        let rules = try context.fetch(FetchDescriptor<BudgetRuleRecord>())
+        XCTAssertEqual(rules.count, 1)
+        XCTAssertEqual(rules.first?.amountCents, 400_000)
+        XCTAssertEqual(rules.first?.startDate, "2026-05-01")
+    }
+
+    func testEndedV2PlanFallsBackToCurrentLegacyMonthlyBudget() throws {
+        let context = try makeContext()
+        let book = Book(name: "日常", isDefault: true)
+        context.insert(book)
+        context.insert(Budget(amount: 4000, bookID: book.stableID, periodStart: day(2026, 5, 1)))
+        insertPlan(in: context, book: book, start: day(2026, 6, 1), end: day(2026, 7, 31),
+                   revisions: [(day(2026, 6, 1), 600_000)])
+        try context.save()
+
+        BudgetRuleStore.migrate(in: context, now: day(2026, 8, 20))
+        let rules = try context.fetch(FetchDescriptor<BudgetRuleRecord>())
+        XCTAssertEqual(rules.count, 1)
+        XCTAssertEqual(rules.first?.amountCents, 400_000)
+        XCTAssertEqual(rules.first?.startDate, "2026-05-01")
+    }
+
+    func testCurrentV2RevisionWinsOverLegacyAndFutureRevision() throws {
+        let context = try makeContext()
+        let book = Book(name: "日常", isDefault: true)
+        context.insert(book)
+        context.insert(Budget(amount: 4000, bookID: book.stableID, periodStart: day(2026, 5, 1)))
+        insertPlan(in: context, book: book, start: day(2026, 6, 1),
+                   revisions: [(day(2026, 6, 1), 500_000), (day(2026, 9, 1), 600_000)])
+        insertPlan(in: context, book: book, start: day(2026, 10, 1),
+                   revisions: [(day(2026, 10, 1), 700_000)])
+        try context.save()
+
+        BudgetRuleStore.migrate(in: context, now: day(2026, 8, 20))
+        let rules = try context.fetch(FetchDescriptor<BudgetRuleRecord>())
+        XCTAssertEqual(rules.count, 1)
+        XCTAssertEqual(rules.first?.amountCents, 500_000)
+        XCTAssertEqual(rules.first?.startDate, "2026-06-01")
+    }
+
+    func testOnlyFuturePlanWithoutLegacyDoesNotCreateBase() throws {
+        let context = try makeContext()
+        let book = Book(name: "日常", isDefault: true)
+        context.insert(book)
+        insertPlan(in: context, book: book, start: day(2026, 9, 1),
+                   revisions: [(day(2026, 9, 1), 600_000)])
+        try context.save()
+
+        BudgetRuleStore.migrate(in: context, now: day(2026, 8, 20))
+        XCTAssertTrue(try context.fetch(FetchDescriptor<BudgetRuleRecord>()).isEmpty)
+    }
+
+    func testRepeatedMigrationPreservesUserEditedBase() throws {
+        let context = try makeContext()
+        let book = Book(name: "日常", isDefault: true)
+        context.insert(book)
+        context.insert(Budget(amount: 4000, bookID: book.stableID, periodStart: day(2026, 5, 1)))
+        insertPlan(in: context, book: book, start: day(2026, 9, 1),
+                   revisions: [(day(2026, 9, 1), 600_000)])
+        try context.save()
+        let now = day(2026, 8, 20)
+
+        BudgetRuleStore.migrate(in: context, now: now)
+        let original = try XCTUnwrap(context.fetch(FetchDescriptor<BudgetRuleRecord>()).first)
+        let edited = try BudgetRuleStore.save(
+            in: context, editing: original, bookID: book.stableID, kind: .base, name: "我的预算",
+            amountYuan: 7777, unit: .month, start: nil, end: nil, funding: .carve, now: now)
+        let updatedMs = edited.updatedMs
+        BudgetRuleStore.migrate(in: context, now: now)
+        let rules = try context.fetch(FetchDescriptor<BudgetRuleRecord>())
+        XCTAssertEqual(rules.count, 1)
+        XCTAssertEqual(rules.first?.stableID, original.stableID)
+        XCTAssertEqual(rules.first?.amountCents, 777_700)
+        XCTAssertEqual(rules.first?.name, "我的预算")
+        XCTAssertEqual(rules.first?.updatedMs, updatedMs)
     }
 
     func testDeleteIsSoftAndLeavesRuleOutOfSnapshot() throws {

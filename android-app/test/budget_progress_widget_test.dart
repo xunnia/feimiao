@@ -42,6 +42,49 @@ class _HomeSpacingRepository extends AppRepository {
 }
 
 void main() {
+  for (final sample in [(budget: -1000, spent: 0), (budget: 0, spent: 20)]) {
+    testWidgets(
+        'nonpositive budget ${sample.budget} keeps debt without division by zero',
+        (tester) async {
+      final budget = Decimal.fromInt(sample.budget);
+      final spent = Decimal.fromInt(sample.spent);
+      await tester.pumpWidget(MaterialApp(
+        theme: AppTheme.light(),
+        home: Scaffold(
+          body: HomeSummaryCard(
+            monthDate: DateTime(2026, 10),
+            isCurrentMonth: false,
+            summary: MonthlySummary(
+              year: 2026,
+              month: 10,
+              totalExpense: spent,
+              totalIncome: Decimal.zero,
+              expenseByCategory: const [],
+              dailyTotals: const [],
+            ),
+            budget: budget,
+            budgetStatus: BudgetStatus(
+              monthlyBudget: budget,
+              spentThisMonth: spent,
+              spentToday: Decimal.zero,
+              remaining: budget - spent,
+              todayAllowance: Decimal.zero,
+              isOverBudget: true,
+              hasDailyGuidance: false,
+            ),
+          ),
+        ),
+      ));
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+      expect(find.text('该月超预算'), findsOneWidget);
+      expect(find.text('0%'), findsNothing);
+      final bar =
+          tester.widget<BudgetProgressBar>(find.byType(BudgetProgressBar));
+      expect(bar.value, 1);
+    });
+  }
+
   test('budget palette restores green and keeps the track on endpoint hue', () {
     final light = AppTheme.light().colorScheme;
     final dark = AppTheme.dark().colorScheme;
@@ -283,7 +326,9 @@ void main() {
     );
     final boundary =
         tester.getRect(find.byKey(const ValueKey('budget-progress-boundary')));
-    expect(boundary.center.dx - tester.getTopLeft(find.byType(BudgetProgressBar)).dx,
+    expect(
+        boundary.center.dx -
+            tester.getTopLeft(find.byType(BudgetProgressBar)).dx,
         closeTo(140, 0.01));
   });
 
@@ -415,8 +460,8 @@ void main() {
     // 圆环底边与百分比标签那一行对齐。
     final ringRect =
         tester.getRect(find.byKey(const ValueKey('home-today-ring')));
-    final chipRect = tester
-        .getRect(find.byKey(const ValueKey('home-budget-percent-chip')));
+    final chipRect =
+        tester.getRect(find.byKey(const ValueKey('home-budget-percent-chip')));
     expect(ringRect.bottom, closeTo(chipRect.bottom, 2));
   });
 

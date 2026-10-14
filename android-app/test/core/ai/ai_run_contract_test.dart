@@ -136,7 +136,7 @@ void main() {
     final image = File('${directory.path}/image.png');
     await image.writeAsBytes(List<int>.filled(8, 1));
     final attachments = [
-      for (var i = 0; i < 4; i++)
+      for (var i = 0; i < 5; i++)
         ChatAttachment(
           kind: ChatAttachmentKind.image,
           path: image.path,
@@ -146,9 +146,9 @@ void main() {
         ),
     ];
     final result = await AiAttachmentPipeline.validate(attachments);
-    expect(result.accepted, hasLength(3));
+    expect(result.accepted, hasLength(4));
     expect(result.rejected, hasLength(1));
-    expect(result.rejected.single.error, contains('3'));
+    expect(result.rejected.single.error, contains('4'));
   });
 
   test('connector and memory definitions use explicit allowlists', () {

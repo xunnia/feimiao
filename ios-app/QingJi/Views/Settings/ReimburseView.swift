@@ -169,7 +169,7 @@ private struct ReimburseSettlementSheet: View {
 
     var body: some View {
         NavigationStack {
-            Form {
+            AppThemedForm {
                 Section("原账单") {
                     LabeledContent("分类", value: transaction.category?.name ?? "未分类")
                     LabeledContent("原始金额", value: MoneyFormat.string(transaction.amount, currencyCode: transaction.currencyCode))

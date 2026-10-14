@@ -15,6 +15,71 @@ void main() {
         AiWebSearchContext.shouldSearchQuestion('GitHub 上最新的 GPT 桌面端'), isTrue);
   });
 
+  test('最近股市及带月份的公开行情问题触发搜索', () {
+    for (final question in [
+      '帮我分析下最近的股市',
+      '今年股市怎么样',
+      '本月股票涨幅怎么样',
+      '看看上周大盘走势',
+    ]) {
+      expect(AiWebSearchContext.shouldSearchQuestion(question), isTrue,
+          reason: question);
+    }
+    expect(AiWebSearchContext.shouldSearchQuestion('最近心情不好'), isFalse);
+    expect(AiWebSearchContext.shouldSearchQuestion('讲个笑话'), isFalse);
+    expect(AiWebSearchContext.shouldSearchQuestion('什么是股票'), isFalse);
+  });
+
+  test('账单和混合私有问题不把整句送到公开搜索', () {
+    for (final question in [
+      '本月餐饮花了多少',
+      '看看我上周打车多少钱',
+      '查询我的账单，并分析最近股市',
+      '查账以后搜索最近股市',
+      '记一笔股票手续费 30 元',
+    ]) {
+      expect(AiWebSearchContext.shouldSearchQuestion(question), isFalse,
+          reason: question);
+    }
+  });
+
+  test('普通股市问题在搜索开启时调用适配器，关闭时不调用', () async {
+    var calls = 0;
+    final adapter = _RecordingAdapter(() {
+      calls++;
+      return const AiWebSearchResponse(query: '最近股市', sources: [
+        AiWebSource(title: '公开市场资料', url: 'https://example.com/market'),
+      ]);
+    });
+    const config = AiProviderConfig(
+      type: AiProviderType.deepseek,
+      apiKey: 'test-key',
+      baseUrl: AiProviderConfig.deepSeekBaseUrl,
+      model: 'deepseek-v4-flash-vision',
+      endpointType: AiEndpointType.chatCompletions,
+      webSearchEnabled: true,
+    );
+    final context = await AiWebSearchContext.prepare(
+      question: '帮我分析下最近的股市',
+      config: config,
+      adapter: adapter,
+    );
+    expect(calls, 1);
+    expect(context.promptBlock, contains('公开市场资料'));
+    await AiWebSearchContext.prepare(
+      question: '帮我分析下最近的股市',
+      config: config.copyWith(webSearchEnabled: false),
+      adapter: adapter,
+    );
+    expect(calls, 1);
+    await AiWebSearchContext.prepare(
+      question: '看看我上周打车多少钱',
+      config: config,
+      adapter: adapter,
+    );
+    expect(calls, 1);
+  });
+
   test('Responses 账号不走本地搜索适配器', () async {
     var called = false;
     final adapter = _RecordingAdapter(() {
@@ -35,6 +100,28 @@ void main() {
     );
     expect(called, isFalse);
     expect(context.promptBlock, isEmpty);
+  });
+
+  test('查账单次请求关闭原生搜索，不修改全局配置或普通市场搜索', () {
+    const config = AiProviderConfig(
+      type: AiProviderType.custom,
+      apiKey: 'test-key',
+      baseUrl: 'https://api.example.com/v1',
+      model: 'gpt-5',
+      endpointType: AiEndpointType.responses,
+      webSearchEnabled: true,
+    );
+    for (final question in ['本月花了多少', '查询我的账单，并分析最近股市']) {
+      final guarded = AiWebSearchContext.conversationConfig(
+          question: question, config: config, ledgerText: '本期准确合计：100 元');
+      expect(guarded.webSearchEnabled, isFalse);
+      expect(guarded.responsesWebSearchTools, isEmpty);
+    }
+    expect(config.webSearchEnabled, isTrue);
+    expect(
+        AiWebSearchContext.conversationConfig(
+            question: '帮我分析下最近的股市', config: config, ledgerText: ''),
+        same(config));
   });
 
   test('DuckDuckGo JSON 结果解析为来源列表', () async {

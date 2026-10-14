@@ -784,7 +784,7 @@ private struct QuickAddDetailsSheet: View {
 
     var body: some View {
         NavigationStack {
-            Form {
+            AppThemedForm {
                 Section("收支选项") {
                     if kind == .expense {
                         Toggle("待报销", isOn: $isReimbursable)

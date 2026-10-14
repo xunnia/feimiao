@@ -5,17 +5,20 @@ struct AIChatTurn: Identifiable, Hashable {
     let role: String
     let content: String
     let attachments: [AIChatAttachment]
+    let createdAt: Date
 
     init(
         id: UUID = UUID(),
         role: String,
         content: String,
-        attachments: [AIChatAttachment] = []
+        attachments: [AIChatAttachment] = [],
+        createdAt: Date = Date()
     ) {
         self.id = id
         self.role = role
         self.content = content
         self.attachments = attachments
+        self.createdAt = createdAt
     }
 }
 
@@ -38,6 +41,11 @@ enum AIProviderError: LocalizedError {
     case http(Int, String)
     case emptyResponse
     case unsupportedModelCatalogue
+    case interrupted
+
+    static func isCancellation(_ error: Error) -> Bool {
+        error is CancellationError || (error as? URLError)?.code == .cancelled
+    }
 
     var errorDescription: String? {
         switch self {
@@ -49,6 +57,7 @@ enum AIProviderError: LocalizedError {
             return "服务商请求失败（\(status)）\(suffix)"
         case .emptyResponse: return "服务商没有返回文字内容。"
         case .unsupportedModelCatalogue: return "该服务商暂不提供标准模型目录。"
+        case .interrupted: return "回复未完整接收，已保留收到的内容。"
         }
     }
 }
@@ -87,36 +96,71 @@ enum AIProviderClient {
         onText: @escaping (String) -> Void,
         onReasoning: ((String) -> Void)? = nil,
         onSources: (([AIChatSource]) -> Void)? = nil,
-        structuredRecord: Bool = false
+        structuredRecord: Bool = false,
+        session: URLSession = .shared
     ) async throws -> AIChatResponse {
         let key = secret.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !key.isEmpty else { throw AIProviderError.missingAPIKey }
 
+        var preparedMessages: [AIChatTurn] = []
+        for turn in messages {
+            try Task.checkCancellation()
+            var prepared: [AIChatAttachment] = []
+            for attachment in turn.attachments {
+                prepared.append(try await AIImagePreparation.shared.prepare(attachment))
+            }
+            preparedMessages.append(AIChatTurn(id: turn.id, role: turn.role,
+                content: turn.content, attachments: prepared, createdAt: turn.createdAt))
+        }
+        try Task.checkCancellation()
         var request = try makeRequest(
             account: account,
             secret: key,
-            messages: messages,
+            messages: preparedMessages,
             structuredRecord: structuredRecord
         )
         request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
-        let (bytes, response) = try await URLSession.shared.bytes(for: request)
+        let (bytes, response) = try await session.bytes(for: request)
         guard let http = response as? HTTPURLResponse else { throw AIProviderError.invalidResponse }
+        guard (200..<300).contains(http.statusCode) else {
+            var errorBytes = Data()
+            for try await byte in bytes.prefix(2048) {
+                errorBytes.append(byte)
+            }
+            throw AIProviderError.http(http.statusCode,
+                bodySnippet(String(decoding: errorBytes, as: UTF8.self)))
+        }
 
-        var body = ""
         var output = ""
-        var reasoning = ""
+        var reasoning = AIStreamSummaryBuffer()
         var sourcesByURL: [String: AIChatSource] = [:]
         var completedText = ""
-        for try await rawLine in bytes.lines {
-            let line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard line.hasPrefix("data:") else { continue }
-            let payload = String(line.dropFirst(5)).trimmingCharacters(in: .whitespacesAndNewlines)
-            if payload == "[DONE]" { break }
-            body += payload
+        var streamCompleted = false
+        var anthropicStopReason: String?
+        var frames = AISSEFrameDecoder()
+        func receive(_ frame: AISSEFrameDecoder.Frame) throws {
+            let payload = frame.data.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !payload.isEmpty else { return }
+            if payload == "[DONE]" {
+                guard !account.usesResponses && !account.usesAnthropicMessages else {
+                    throw AIProviderError.interrupted
+                }
+                streamCompleted = true
+                return
+            }
+            guard let data = payload.data(using: .utf8),
+                  let object = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                throw AIProviderError.invalidResponse
+            }
+            let type = object["type"] as? String ?? frame.event
+            if ["response.failed", "response.incomplete", "error"].contains(type)
+                || (object["error"] != nil && !(object["error"] is NSNull)) {
+                throw AIProviderError.interrupted
+            }
             if let event = event(from: payload, account: account) {
                 if !event.reasoning.isEmpty {
-                    reasoning += event.reasoning
-                    onReasoning?(event.reasoning)
+                    let accepted = reasoning.append(event.reasoning)
+                    if !accepted.isEmpty { onReasoning?(accepted) }
                 }
                 if !event.sources.isEmpty {
                     for source in event.sources { sourcesByURL[source.url] = source }
@@ -131,22 +175,53 @@ enum AIProviderClient {
                 output += delta
                 onText(delta)
             }
+            if account.usesResponses && type == "response.completed" {
+                let response = object["response"] as? [String: Any]
+                if let status = response?["status"] as? String, status != "completed" {
+                    throw AIProviderError.interrupted
+                }
+                streamCompleted = true
+            } else if account.usesAnthropicMessages {
+                if type == "message_delta",
+                   let delta = object["delta"] as? [String: Any],
+                   let reason = delta["stop_reason"] as? String {
+                    anthropicStopReason = reason
+                }
+                if type == "message_stop" {
+                    guard let reason = anthropicStopReason,
+                          ["end_turn", "stop_sequence", "refusal"].contains(reason) else {
+                        throw AIProviderError.interrupted
+                    }
+                    streamCompleted = true
+                }
+            } else if let choices = object["choices"] as? [[String: Any]],
+                      let reason = choices.first?["finish_reason"] as? String, !reason.isEmpty {
+                guard reason == "stop" || reason == "end_turn" else { throw AIProviderError.interrupted }
+                streamCompleted = true
+            }
+        }
+        for try await byte in bytes {
+            if let frame = try frames.append(byte) {
+                try Task.checkCancellation()
+                try receive(frame)
+                if streamCompleted { break }
+            }
         }
 
-        guard (200..<300).contains(http.statusCode) else {
-            throw AIProviderError.http(http.statusCode, bodySnippet(body))
-        }
-        if output.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-           !completedText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        try Task.checkCancellation()
+        guard streamCompleted else { throw AIProviderError.interrupted }
+        if !completedText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            // Final server text is authoritative, even when it corrects deltas.
+            let hadOutput = !output.isEmpty
             output = completedText
-            onText(completedText)
+            if !hadOutput { onText(completedText) }
         }
         if output.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             throw AIProviderError.emptyResponse
         }
         return AIChatResponse(
             text: output,
-            reasoningSummary: reasoning,
+            reasoningSummary: reasoning.text,
             sources: Array(sourcesByURL.values).sorted { $0.url < $1.url }
         )
     }
@@ -297,7 +372,7 @@ enum AIProviderClient {
                 ? (account.effort == .max || account.effort == .ultra ? "max" : account.effort.responsesValue)
                 : account.effort.responsesValue
             if let effort = effortValue {
-                body["reasoning"] = ["effort": effort]
+                body["reasoning"] = ["effort": effort, "summary": "auto"]
             }
             if account.webSearchEnabled {
                 if account.authMethod == .oauth {
@@ -484,6 +559,7 @@ enum AIProviderClient {
             let terminal = type.hasSuffix(".done") || type.contains("completed")
             let text: String? = {
                 guard !terminal else { return nil }
+                guard type == "response.output_text.delta" || type.isEmpty else { return nil }
                 if let value = object["delta"] as? String,
                    type.contains("output_text") || type.contains("content_part") || type.isEmpty {
                     return value
@@ -491,7 +567,7 @@ enum AIProviderClient {
                 return object["text"] as? String
             }()
             let reasoning: String = {
-                guard type.contains("reasoning"), type.contains("summary"), !type.hasSuffix(".done") else { return "" }
+                guard type == "response.reasoning_summary_text.delta" else { return "" }
                 if let value = object["delta"] as? String { return value }
                 if let value = object["delta"] as? [String: Any] {
                     return (value["text"] as? String) ?? (value["content"] as? String) ?? ""
@@ -515,10 +591,8 @@ enum AIProviderClient {
         if account.usesAnthropicMessages {
             let delta = object["delta"] as? [String: Any]
             let type = (delta?["type"] as? String)?.lowercased() ?? ""
-            let thinking = (delta?["thinking"] as? String)
-                ?? (type.contains("thinking") ? delta?["text"] as? String : nil)
-                ?? ""
-            let text = type.contains("thinking") ? nil : delta?["text"] as? String
+            let thinking = type == "thinking_delta" ? (delta?["thinking"] as? String ?? "") : ""
+            let text = type == "text_delta" ? delta?["text"] as? String : nil
             return StreamEvent(text: text, reasoning: thinking, sources: [], completedText: "")
         }
         guard let choices = object["choices"] as? [[String: Any]],
@@ -526,7 +600,8 @@ enum AIProviderClient {
               let delta = first["delta"] as? [String: Any] else { return nil }
         return StreamEvent(
             text: delta["content"] as? String,
-            reasoning: (delta["reasoning_content"] as? String) ?? "",
+            // Compatibility fields do not prove this is a public summary.
+            reasoning: "",
             sources: [],
             completedText: ""
         )
@@ -596,6 +671,10 @@ enum AIProviderClient {
         try? endpointURL(for: account, modelsRequest: modelsRequest)
     }
 
+    static func publicSummaryForTesting(payload: String, account: AIProviderAccount) -> String {
+        event(from: payload, account: account)?.reasoning ?? ""
+    }
+
     static func requestBodyForTesting(
         account: AIProviderAccount,
         messages: [AIChatTurn],
@@ -641,5 +720,58 @@ enum AIProviderClient {
     private static func bodySnippet(_ body: String) -> String {
         let compact = body.replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression).trimmingCharacters(in: .whitespacesAndNewlines)
         return compact.count > 240 ? String(compact.prefix(240)) + "…" : compact
+    }
+}
+
+private struct AISSEFrameDecoder {
+    struct Frame {
+        let event: String
+        let data: String
+    }
+    private var event = ""
+    private var lines: [String] = []
+    private var byteCount = 0
+    private var lineBytes = Data()
+    private var afterCarriageReturn = false
+    private var firstLine = true
+
+    mutating func append(_ byte: UInt8) throws -> Frame? {
+        if afterCarriageReturn && byte == 10 {
+            afterCarriageReturn = false
+            return nil
+        }
+        afterCarriageReturn = byte == 13
+        guard byte == 10 || byte == 13 else {
+            lineBytes.append(byte)
+            guard lineBytes.count <= 1024 * 1024 else { throw AIProviderError.invalidResponse }
+            return nil
+        }
+        guard var line = String(data: lineBytes, encoding: .utf8) else { throw AIProviderError.invalidResponse }
+        lineBytes.removeAll(keepingCapacity: true)
+        if firstLine {
+            if line.hasPrefix("\u{FEFF}") { line.removeFirst() }
+            firstLine = false
+        }
+        return try appendLine(line)
+    }
+
+    private mutating func appendLine(_ line: String) throws -> Frame? {
+        if line.isEmpty {
+            let frame = lines.isEmpty ? nil : Frame(event: event, data: lines.joined(separator: "\n"))
+            event = ""
+            lines.removeAll(keepingCapacity: true)
+            byteCount = 0
+            return frame
+        }
+        if line.hasPrefix("event:") {
+            event = String(line.dropFirst(6)).trimmingCharacters(in: .whitespaces)
+        } else if line == "data" || line.hasPrefix("data:") {
+            var value = line == "data" ? "" : String(line.dropFirst(5))
+            if value.hasPrefix(" ") { value.removeFirst() }
+            byteCount += value.utf8.count + 1
+            guard byteCount <= 1024 * 1024 else { throw AIProviderError.invalidResponse }
+            lines.append(value)
+        }
+        return nil
     }
 }

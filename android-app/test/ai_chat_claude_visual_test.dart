@@ -38,7 +38,8 @@ const _visualModels = [
 String _bookCoverPath(String fileName) {
   final candidates = [
     p.join(Directory.current.path, 'assets', 'book_covers', fileName),
-    p.join(Directory.current.path, 'android-app', 'assets', 'book_covers', fileName),
+    p.join(Directory.current.path, 'android-app', 'assets', 'book_covers',
+        fileName),
   ];
   for (final candidate in candidates) {
     if (File(candidate).existsSync()) return candidate;
@@ -460,7 +461,7 @@ void main() {
         ),
       ),
     );
-    expect(find.text('正在思考 · 完成后会显示在这里。'), findsOneWidget);
+    expect(find.text('正在思考'), findsOneWidget);
 
     await _pumpVisualCard(
       tester,
@@ -477,12 +478,13 @@ void main() {
         ),
       ),
     );
-    expect(find.text('思考了 12s'), findsOneWidget);
+    expect(find.text('处理了 12s'), findsOneWidget);
     expect(
-      tester.widget<Text>(find.text('思考了 12s')).style?.fontSize,
+      tester.widget<Text>(find.text('处理了 12s')).style?.fontSize,
       15,
     );
-    expect(find.text('核对了公开数据并整理出关键变化。'), findsOneWidget);
+    expect(find.textContaining('核对了公开数据并整理出关键变化。', findRichText: true),
+        findsOneWidget);
     expect(find.byType(Divider), findsOneWidget);
     expect(find.textContaining('整理本地账目'), findsNothing);
     await _captureIfRequested(

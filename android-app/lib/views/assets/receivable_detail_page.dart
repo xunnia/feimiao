@@ -15,6 +15,7 @@ import '../../widgets/settings_ui.dart';
 import '../common/app_sheet.dart';
 import 'asset_form_kit.dart';
 import 'receivable_sheets.dart';
+import 'funds_tab_cards.dart';
 
 IconData _receivableIcon(ReceivableAssetType type) => switch (type) {
       ReceivableAssetType.rentalDeposit => Icons.key_outlined,
@@ -39,28 +40,18 @@ class ReceivableAssetGroupCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    return Container(
-      decoration: appCardDecoration(scheme),
-      clipBehavior: Clip.antiAlias,
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 12, 10, 8),
-            child: Row(
-              children: [
-                Text(
-                  '权益资产',
-                  style: AppType.rowTitle(scheme),
-                ),
-                const SizedBox(width: 6),
-                Text(
-                  '${assets.length} 项',
-                  style: AppType.caption(scheme),
-                ),
-              ],
-            ),
+    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      FundsSectionHeader(title: '权益资产 · ${assets.length}'),
+      Container(
+        decoration: ShapeDecoration(
+          color: AppColors.card(scheme),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(22),
+            side: BorderSide(color: AppColors.hairline(scheme), width: 0.5),
           ),
+        ),
+        clipBehavior: Clip.antiAlias,
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
           for (int i = 0; i < assets.length; i++) ...[
             if (i > 0) appCardDivider(scheme),
             _ReceivableAssetTile(
@@ -68,9 +59,9 @@ class ReceivableAssetGroupCard extends StatelessWidget {
               onTap: () => onTap(assets[i]),
             ),
           ],
-        ],
+        ]),
       ),
-    );
+    ]);
   }
 }
 
@@ -87,108 +78,52 @@ class _ReceivableAssetTile extends StatelessWidget {
         context.watch<AppRepository>().dueReminderForReceivable(asset);
     final dueText = _receivableDueReminderText(dueReminder);
     final muted = !asset.countsInNetWorth;
-    // 副标题减负：最多「类型 + 1 个附加段」，
-    // 优先级 = 非默认状态 > 对象 > 「待确认」 > 「不计入」。
-    final statusLabel = _receivableStatusLabel(asset);
-    final extra = asset.economicStatus != ReceivableEconomicStatus.active
-        ? statusLabel
-        : asset.counterparty.isNotEmpty
-            ? asset.counterparty
-            : asset.inclusionQuality == AssetInclusionQuality.needsReview
-                ? '待确认'
-                : !asset.includeInNetWorth
-                    ? '不计入'
-                    : null;
-    return InkWell(
+    final subtitle = [
+      asset.type.label,
+      if (asset.counterparty.isNotEmpty) asset.counterparty,
+      if (asset.economicStatus != ReceivableEconomicStatus.active)
+        _receivableStatusLabel(asset)
+      else if (asset.inclusionQuality == AssetInclusionQuality.needsReview)
+        '待确认'
+      else if (!asset.includeInNetWorth)
+        '不计入',
+    ].join(' · ');
+    return FundsAssetRow(
+      icon: _receivableIcon(asset.type),
+      title: asset.name,
+      amount: MoneyFormat.string(
+        asset.remainingAmount,
+        currencyCode: asset.currencyCode,
+      ),
+      muted: muted,
       onTap: onTap,
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(16, 11, 12, 11),
-        child: Row(
-          children: [
-            Container(
-              width: 34,
-              height: 34,
-              alignment: Alignment.center,
-              decoration: BoxDecoration(
-                color: AppColors.iconCircleFill(scheme),
-                shape: BoxShape.circle,
-              ),
-              child: Icon(
-                _receivableIcon(asset.type),
-                size: 18,
-                color: muted
-                    ? AppTextColor.hint(scheme)
+      subtitle: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            subtitle,
+            style: AppType.secondary(scheme).copyWith(
+              fontSize: 12,
+              color: muted
+                  ? AppTextColor.hint(scheme)
+                  : AppTextColor.secondary(scheme),
+            ),
+          ),
+          if (dueText != null) ...[
+            const SizedBox(height: 2),
+            Text(
+              dueText,
+              key: Key('receivable-due-${asset.id}'),
+              style: AppType.caption(scheme).copyWith(
+                fontSize: 12,
+                color: dueReminder.status == AssetReminderStatus.expired
+                    ? AppColors.warning
                     : AppTextColor.secondary(scheme),
               ),
             ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(
-                    asset.name,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                          fontWeight: FontWeight.w400,
-                          color: muted
-                              ? scheme.onSurface.withValues(alpha: 0.55)
-                              : scheme.onSurface,
-                        ),
-                  ),
-                  const SizedBox(height: 3),
-                  Text(
-                    [
-                      asset.type.label,
-                      if (extra != null) extra,
-                    ].join(' · '),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: AppType.secondary(scheme).copyWith(
-                      color: muted
-                          ? AppTextColor.hint(scheme)
-                          : AppTextColor.secondary(scheme),
-                    ),
-                  ),
-                  if (dueText != null) ...[
-                    const SizedBox(height: 2),
-                    Text(
-                      dueText,
-                      key: Key('receivable-due-${asset.id}'),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: AppType.caption(scheme).copyWith(
-                        color: dueReminder.status == AssetReminderStatus.expired
-                            ? AppColors.warning
-                            : AppTextColor.secondary(scheme),
-                      ),
-                    ),
-                  ],
-                ],
-              ),
-            ),
-            const SizedBox(width: 10),
-            Text(
-              MoneyFormat.string(
-                asset.remainingAmount,
-                currencyCode: asset.currencyCode,
-              ),
-              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                    fontFamily: 'Nunito',
-                    fontWeight: FontWeight.w500,
-                    color: muted ? AppTextColor.hint(scheme) : scheme.onSurface,
-                  ),
-            ),
-            const SizedBox(width: 4),
-            Icon(
-              Icons.chevron_right,
-              size: 18,
-              color: AppTextColor.secondary(scheme),
-            ),
           ],
-        ),
+        ],
       ),
     );
   }

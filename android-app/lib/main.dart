@@ -198,7 +198,6 @@ Future<void> _reportHomeReady() async {
   }
 }
 
-
 void _setStartupSystemUi() {
   try {
     // This Flutter API is intentionally synchronous and reports asynchronous
@@ -1198,7 +1197,8 @@ class _DrawerProfileEntry extends StatelessWidget {
           constraints: const BoxConstraints(minHeight: 44),
           child: Row(
             children: [
-              ProfileAvatar(nickname: nickname, avatarPath: avatarPath, size: 36),
+              ProfileAvatar(
+                  nickname: nickname, avatarPath: avatarPath, size: 36),
               const SizedBox(width: 10),
               Flexible(
                 child: Text(
@@ -1484,7 +1484,13 @@ class _DrawerPanelState extends State<_DrawerPanel> {
       confirmText: '永久删除',
       destructive: true,
     );
-    if (wipe) await repo.deleteBook(b.id);
+    if (wipe) {
+      try {
+        await repo.deleteBook(b.id);
+      } on StateError catch (error) {
+        if (mounted) showAppToast(context, error.message);
+      }
+    }
   }
 
   void _onReorder(int oldIndex, int newIndex, List<_DrawerFn> fns) {

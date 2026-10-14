@@ -4,7 +4,7 @@ import QingJiCore
 enum MoneyFormat {
     /// "¥1,234.50" 风格的金额文本。小数位和整数取整方式跟随安卓端的
     /// “金额显示”设置，只影响展示，不改变账务层保存的 Decimal 精度。
-    static func string(_ amount: Decimal, currencyCode: String) -> String {
+    static func string(_ amount: Decimal, currencyCode: String, withSymbol: Bool = true) -> String {
         let defaults = UserDefaults.standard
         let places = defaults.object(forKey: "qingji.moneyDecimalPlaces") as? Int ?? 2
         let roundingRaw = defaults.string(forKey: "qingji.moneyRoundingMode") ?? "round"
@@ -14,6 +14,7 @@ enum MoneyFormat {
         formatter.locale = currencyCode.uppercased() == "CNY"
             ? Locale(identifier: "zh_CN")
             : Locale.current
+        if !withSymbol { formatter.currencySymbol = "" }
         formatter.minimumFractionDigits = max(0, min(2, places))
         formatter.maximumFractionDigits = max(0, min(2, places))
         formatter.roundingMode = switch roundingRaw {

@@ -86,7 +86,7 @@ private struct AIMemoryEditor: View {
 
     var body: some View {
         NavigationStack {
-            Form {
+            AppThemedForm {
                 Section("记忆内容") {
                     TextField("触发短语，例如：我不吃辣", text: $phrase)
                     TextField("喵要记住什么", text: $content, axis: .vertical)

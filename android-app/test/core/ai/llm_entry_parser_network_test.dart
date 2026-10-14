@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:image/image.dart' as img;
 import 'package:qingji/core/ai/ai_provider_config.dart';
 import 'package:qingji/core/ai/llm_entry_parser.dart';
 import 'package:qingji/core/media/chat_attachment.dart';
@@ -75,15 +76,17 @@ void main() {
     final temp = await Directory.systemTemp.createTemp('feimiao-image-wire-');
     addTearDown(() => temp.delete(recursive: true));
     final image = File('${temp.path}${Platform.pathSeparator}bill.png');
-    await image.writeAsBytes(const [1, 2, 3, 4]);
+    final original = img.encodePng(img.Image(width: 2, height: 2));
+    await image.writeAsBytes(original);
     final attachment = ChatAttachment(
       kind: ChatAttachmentKind.image,
       path: image.path,
       name: 'bill.png',
       mimeType: 'image/png',
-      sizeBytes: 4,
+      sizeBytes: original.length,
     );
     final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    addTearDown(() => server.close(force: true));
     final requestBody = Completer<Map<String, dynamic>>();
     server.listen((request) async {
       final decoded = jsonDecode(await utf8.decoder.bind(request).join())
@@ -110,7 +113,60 @@ void main() {
         );
     expect(
       (imagePart['image_url'] as Map)['url'],
-      'data:image/png;base64,AQIDBA==',
+      'data:image/png;base64,${base64Encode(original)}',
     );
+  });
+
+  test('主页大图记账发送缩放副本且保留原图', () async {
+    final temp = await Directory.systemTemp.createTemp('feimiao-image-resize-');
+    addTearDown(() => temp.delete(recursive: true));
+    final image = File('${temp.path}${Platform.pathSeparator}bill.png');
+    final original = img.encodePng(img.Image(width: 4100, height: 16));
+    await image.writeAsBytes(original);
+    final attachment = ChatAttachment(
+      kind: ChatAttachmentKind.image,
+      path: image.path,
+      name: 'bill.png',
+      mimeType: 'image/png',
+      sizeBytes: original.length,
+    );
+    final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    addTearDown(() => server.close(force: true));
+    final requestBody = Completer<Map<String, dynamic>>();
+    server.listen((request) async {
+      requestBody.complete(jsonDecode(await utf8.decoder.bind(request).join())
+          as Map<String, dynamic>);
+      await _writeSuccess(request);
+      unawaited(server.close(force: true));
+    });
+
+    await LlmEntryParser.parseWithLLM(
+      text: '识别这张宽账单',
+      config: _configFor(server),
+      expenseCats: const [(key: 'dining', name: '餐饮')],
+      incomeCats: const [(key: 'otherIncome', name: '其他收入')],
+      attachments: [attachment],
+      forceRecord: true,
+    );
+
+    final body = await requestBody.future;
+    final content = ((body['messages'] as List).last as Map)['content'] as List;
+    final imagePart = content.cast<Map>().singleWhere(
+          (part) => part['type'] == 'image_url',
+        );
+    final dataUrl = (imagePart['image_url'] as Map)['url'] as String;
+    expect(dataUrl, startsWith('data:image/png;base64,'));
+    final sentBytes = base64Decode(dataUrl.substring(dataUrl.indexOf(',') + 1));
+    final sent = img.decodePng(sentBytes)!;
+    expect(sent.width, 4096);
+    expect(sent.height, 16);
+    expect(sentBytes, isNot(orderedEquals(original)));
+    expect(await image.readAsBytes(), orderedEquals(original));
+    final cache =
+        Directory('${temp.path}${Platform.pathSeparator}.ai_prepared_v1');
+    final copy = cache.listSync().whereType<File>().singleWhere(
+          (file) => file.path.endsWith('.png'),
+        );
+    expect(await copy.readAsBytes(), orderedEquals(sentBytes));
   });
 }

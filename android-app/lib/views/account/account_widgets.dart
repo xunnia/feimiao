@@ -58,7 +58,7 @@ class AccountFormSheet extends StatelessWidget {
       child: Container(
         margin: const EdgeInsets.all(10),
         decoration: BoxDecoration(
-          color: AppColors.appBg(scheme),
+          color: AppColors.sheetSurface(scheme),
           borderRadius: BorderRadius.circular(30),
         ),
         child: ConstrainedBox(
@@ -200,14 +200,18 @@ class _AccountPasswordFieldState extends State<AccountPasswordField> {
         enableSuggestions: false,
         maxLength: 128,
         autofillHints: [
-          widget.newPassword ? AutofillHints.newPassword : AutofillHints.password,
+          widget.newPassword
+              ? AutofillHints.newPassword
+              : AutofillHints.password,
         ],
         textInputAction: TextInputAction.done,
         decoration: iosInputDecoration(context, hint: widget.hint).copyWith(
           suffixIcon: IconButton(
             tooltip: _obscure ? '显示密码' : '隐藏密码',
             icon: Icon(
-              _obscure ? Icons.visibility_outlined : Icons.visibility_off_outlined,
+              _obscure
+                  ? Icons.visibility_outlined
+                  : Icons.visibility_off_outlined,
               size: 18,
               color: AppTextColor.secondary(scheme),
             ),
@@ -288,9 +292,8 @@ class _AccountCodeFieldState extends State<AccountCodeField> {
 
   @override
   Widget build(BuildContext context) {
-    final label = _remaining > 0
-        ? '$_remaining 秒后重发'
-        : (_sentOnce ? '重新发送' : '获取验证码');
+    final label =
+        _remaining > 0 ? '$_remaining 秒后重发' : (_sentOnce ? '重新发送' : '获取验证码');
     return AppLabeledField(
       label: widget.label,
       helperText: widget.helperText,
@@ -373,16 +376,16 @@ class DeviceListGroup extends StatelessWidget {
                 : device.isCurrent
                     ? Text('本机', style: AppType.trailingValue(scheme))
                     : TextButton(
-                        onPressed: onRevoke == null
-                            ? null
-                            : () => onRevoke!(device),
+                        onPressed:
+                            onRevoke == null ? null : () => onRevoke!(device),
                         child: Text(
                           '下线',
                           style: AppType.body(scheme)
                               .copyWith(color: AppColors.warning),
                         ),
                       ),
-            onTap: selectable && onToggle != null ? () => onToggle!(device) : null,
+            onTap:
+                selectable && onToggle != null ? () => onToggle!(device) : null,
           ),
       ],
     );
@@ -397,7 +400,8 @@ String deviceTitle(CloudDevice device) {
 
 String deviceSubtitle(CloudDevice device) {
   final parts = <String>[
-    if (device.lastSeenAt != null) '最近使用 ${formatAccountDate(device.lastSeenAt!)}',
+    if (device.lastSeenAt != null)
+      '最近使用 ${formatAccountDate(device.lastSeenAt!)}',
     if (device.lastLocation != null && device.lastLocation!.isNotEmpty)
       device.lastLocation!,
     if (device.appVersion != null && device.appVersion!.isNotEmpty)

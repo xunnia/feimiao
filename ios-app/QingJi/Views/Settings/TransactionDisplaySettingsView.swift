@@ -22,7 +22,7 @@ struct TransactionDisplaySettingsView: View {
     }
 
     var body: some View {
-        Form {
+        AppThemedForm {
             Section("账单卡片") {
                 Picker("标题优先级", selection: displayMode) {
                     ForEach(TransactionCardDisplayMode.allCases) { mode in

@@ -97,22 +97,25 @@ class AppThemePreferences {
     required this.cardAlpha,
   });
 
+  /// 偏好格式版本。v2（2026-10-01）把卡片透明度默认值从 40% 改成 80%。
+  static const int formatVersion = 2;
+
   factory AppThemePreferences.fromJson(Map<String, dynamic> json) {
     final legacyMinimal = json['minimal'] == true;
+    final cardAlpha = (json['cardAlpha'] as num?)?.toDouble() ??
+        (legacyMinimal ? 0.90 : AppThemeController.defaultCardAlpha);
     return AppThemePreferences(
       presetKey:
           (json['preset'] as String?) ?? (legacyMinimal ? 'white' : 'warm'),
       bgIntensity: ((json['intensity'] as num?)?.toDouble() ?? 1.0)
           .clamp(0.0, 1.0)
           .toDouble(),
-      cardAlpha: ((json['cardAlpha'] as num?)?.toDouble() ??
-              (legacyMinimal ? 0.90 : 0.40))
-          .clamp(0.25, 0.90)
-          .toDouble(),
+      cardAlpha: cardAlpha.clamp(0.25, 0.90).toDouble(),
     );
   }
 
   Map<String, Object> toJson() => {
+        'v': formatVersion,
         'preset': presetKey,
         'intensity': bgIntensity,
         'cardAlpha': cardAlpha,
@@ -134,10 +137,13 @@ class AppThemeController extends ChangeNotifier {
   Future<void> _saveQueue = Future<void>.value();
   Future<void>? _loadFuture;
 
+  /// 出厂默认卡片透明度（浅色）。2026-10-01 用户定从 40% 调到 80%。
+  static const double defaultCardAlpha = AppColors.cardAlphaLight;
+
   // 默认值 = 当前线上观感。
   String presetKey = 'warm';
   double bgIntensity = 1.0; // 0~1，渐变顶色深浅
-  double cardAlpha = 0.40; // 0.25~0.90，浅色卡片透明度
+  double cardAlpha = defaultCardAlpha; // 0.25~0.90，浅色卡片透明度
 
   ThemePreset get preset => kThemePresets.firstWhere(
         (p) => p.key == presetKey,
@@ -255,7 +261,7 @@ class AppThemeController extends ChangeNotifier {
   void resetDefault() {
     presetKey = 'warm';
     bgIntensity = 1.0;
-    cardAlpha = 0.40;
+    cardAlpha = defaultCardAlpha;
     _commit();
   }
 }

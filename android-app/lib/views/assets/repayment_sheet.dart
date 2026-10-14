@@ -173,6 +173,12 @@ class _RepaymentSheetState extends State<RepaymentSheet> {
     } on ArgumentError catch (error) {
       if (!mounted) return;
       showAppToast(context, '${error.message}', icon: Icons.error_outline);
+    } on StateError catch (error) {
+      if (!mounted) return;
+      showAppToast(context, error.message, icon: Icons.error_outline);
+    } catch (_) {
+      if (!mounted) return;
+      showAppToast(context, '还款未保存，请重试', icon: Icons.error_outline);
     } finally {
       if (mounted) setState(() => _saving = false);
     }
