@@ -12,16 +12,16 @@
     "cleanSourceAnchor": "b40316f336fb0aefabf67817460775b665fdaa1d",
     "integrationBranch": "main",
     "android": {
-      "version": "1.314.0+329",
-      "watermark": "b1004-329",
+      "version": "1.315.0+330",
+      "watermark": "b1006-330",
       "databaseVersion": 50,
-      "sourceCommit": "82a3ddd465d8f2a5fadbd136d107e5cf8d29dbc0",
-      "apk": "ci-artifacts/releases/feimiao-codex-v1.314.0-329.apk",
-      "apkBytes": 118903579,
-      "apkSha256": "DA23F04A173BFF5FEA074D3D8D49B23DAEE0CEDAA87B4760DAD9166EE72F51AA",
-      "apkSourceNote": "Verified release 329 APK matches the Android source tree at sourceCommit. VPS publication is tracked in docs/02. Screenshot runs build the checked-out source; Android device and real-model acceptance remain pending. iOS general-chat routing has not yet been synchronized.",
+      "sourceCommit": "57436f1d5099f2299887d11effdc1fb6a8d7c319",
+      "apk": "ci-artifacts/releases/feimiao-codex-v1.315.0-330.apk",
+      "apkBytes": 119165883,
+      "apkSha256": "79C81EC7F86C7E35B0AA2E9FB10BC4D47D606AC38982101E240A25534C4E446F",
+      "apkSourceNote": "Verified release 330 APK matches the Android source tree at sourceCommit. The 2026-10-15 handoff branch combines this exact Android tree with the iOS dd692b7 candidate and retains the B1 screenshot workflow. Historical screenshots from the separate iOS branch carried Android 328 and are not a sealed Android 330 parity baseline. VPS publication is tracked in docs/02; this source handoff does not republish. Android installation, device interaction and real-model acceptance remain pending.",
       "staticAnalysis": "0 errors; 86 warning/info diagnostics",
-      "tests": "1699/1699 passed locally on Windows"
+      "tests": "1741/1741 passed locally on Windows"
     },
     "ios": {
       "version": "1.286.0+300",
