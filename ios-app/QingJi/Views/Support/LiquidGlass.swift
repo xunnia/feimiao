@@ -58,24 +58,25 @@ extension View {
     /// The plain button style is important: applying a glass button style and a
     /// glass effect to the same control produces the white-plus-gray double
     /// surface visible in the parity screenshots.
-    func liquidGlassCircleControl(size: CGFloat = 48) -> some View {
+    func liquidGlassCircleControl(size: CGFloat = 48, subtle: Bool = false) -> some View {
         buttonStyle(.plain)
             .frame(width: size, height: size)
             .contentShape(Circle())
-            .glassEffect(.regular.interactive(), in: .circle)
+            .modifier(LiquidGlassControlSurface(shape: Circle(), subtle: subtle))
     }
 
     /// A single glass capsule for text actions and menus.
     func liquidGlassPillControl(
         horizontalPadding: CGFloat = 14,
         minWidth: CGFloat? = nil,
-        minHeight: CGFloat = 44
+        minHeight: CGFloat = 44,
+        subtle: Bool = false
     ) -> some View {
         buttonStyle(.plain)
             .padding(.horizontal, horizontalPadding)
             .frame(minWidth: minWidth, minHeight: minHeight)
             .contentShape(Capsule())
-            .glassEffect(.regular.interactive(), in: .capsule)
+            .modifier(LiquidGlassControlSurface(shape: Capsule(), subtle: subtle))
     }
 
     /// The prominent action keeps the native Liquid Glass behavior while using
@@ -131,6 +132,35 @@ extension View {
         buttonStyle(.plain)
             .contentShape(.rect(cornerRadius: cornerRadius))
             .glassEffect(.regular.interactive(), in: .rect(cornerRadius: cornerRadius))
+    }
+}
+
+enum LiquidGlassControlAppearance {
+    static func outlineOpacity(subtle: Bool, isDark: Bool) -> Double {
+        subtle && !isDark ? 0.18 : 0.12
+    }
+}
+
+private struct LiquidGlassControlSurface<S: InsettableShape>: ViewModifier {
+    let shape: S
+    let subtle: Bool
+    @AppThemeContext private var theme
+
+    private var glass: Glass {
+        subtle ? .clear.interactive() : .regular.interactive()
+    }
+
+    func body(content: Content) -> some View {
+        content
+            .glassEffect(glass, in: shape)
+            .overlay {
+                if subtle {
+                    shape.strokeBorder(Color.primary.opacity(LiquidGlassControlAppearance.outlineOpacity(
+                        subtle: subtle, isDark: theme.isDark)), lineWidth: 0.5)
+                        .allowsHitTesting(false).accessibilityHidden(true)
+                }
+            }
+            .shadow(color: .black.opacity(subtle ? 0.04 : 0), radius: 8, x: 0, y: 3)
     }
 }
 
@@ -308,27 +338,30 @@ struct LiquidGlassIconButton: View {
     let systemName: String
     let accessibilityLabel: String
     let size: CGFloat
+    let subtle: Bool
     let action: () -> Void
 
     init(
         systemName: String,
         accessibilityLabel: String,
         size: CGFloat = 48,
+        subtle: Bool = false,
         action: @escaping () -> Void
     ) {
         self.systemName = systemName
         self.accessibilityLabel = accessibilityLabel
         self.size = size
+        self.subtle = subtle
         self.action = action
     }
 
     var body: some View {
         Button(action: action) {
             Image(systemName: systemName)
-                .font(.headline.weight(.semibold))
+                .font(subtle ? .system(size: 20, weight: .medium) : .headline.weight(.semibold))
                 .frame(width: size, height: size)
         }
-        .liquidGlassCircleControl(size: size)
+        .liquidGlassCircleControl(size: size, subtle: subtle)
         .accessibilityLabel(accessibilityLabel)
     }
 }
@@ -337,11 +370,13 @@ struct LiquidGlassIconButton: View {
 struct LiquidGlassPillButton: View {
     let title: String
     let prominent: Bool
+    let subtle: Bool
     let action: () -> Void
 
-    init(_ title: String, prominent: Bool = false, action: @escaping () -> Void) {
+    init(_ title: String, prominent: Bool = false, subtle: Bool = false, action: @escaping () -> Void) {
         self.title = title
         self.prominent = prominent
+        self.subtle = subtle
         self.action = action
     }
 
@@ -356,7 +391,7 @@ struct LiquidGlassPillButton: View {
             Button(action: action) {
                 Text(title)
             }
-                .liquidGlassPillControl()
+                .liquidGlassPillControl(subtle: subtle)
         }
     }
 }

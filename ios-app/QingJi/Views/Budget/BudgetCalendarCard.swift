@@ -52,12 +52,16 @@ struct BudgetCalendarCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack {
-                Text(year == today.year ? "\(month)月" : "\(String(year))年\(month)月")
-                    .font(.headline)
-                Spacer()
-                BudgetMonthArrow(systemName: "chevron.left", label: "上个月", action: onPrev)
-                BudgetMonthArrow(systemName: "chevron.right", label: "下个月", action: onNext)
+            ViewThatFits(in: .horizontal) {
+                HStack {
+                    Text("\(String(year))年\(month)月").font(.headline)
+                    Spacer(minLength: 8)
+                    monthNavigation
+                }
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("\(String(year))年\(month)月").font(.headline)
+                    monthNavigation
+                }
             }
             .padding(.leading, 4)
             HStack(spacing: 0) {
@@ -75,9 +79,16 @@ struct BudgetCalendarCard: View {
                 .foregroundStyle(.secondary)
                 .padding(.top, 6)
         }
-        .padding(EdgeInsets(top: 10, leading: 12, bottom: 12, trailing: 12))
-        .appThemeCard()
+        .padding(EdgeInsets(top: 14, leading: 12, bottom: 12, trailing: 12))
+        .appThemeCard(cornerRadius: 22)
         .accessibilityIdentifier("budget-calendar-card")
+    }
+
+    private var monthNavigation: some View {
+        HStack(spacing: 8) {
+            BudgetMonthArrow(systemName: "chevron.left", label: "上个月", action: onPrev)
+            BudgetMonthArrow(systemName: "chevron.right", label: "下个月", action: onNext)
+        }
     }
 }
 
@@ -128,7 +139,6 @@ private struct BudgetCalendarWeekRow: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            Divider()
             HStack(spacing: 0) {
                 ForEach(0..<7, id: \.self) { index in
                     if let info = week[index] {
@@ -170,33 +180,48 @@ private struct BudgetCalendarDayCell: View {
     let spentCents: Int
     let today: BudgetCivilDay
     let action: () -> Void
+    @ScaledMetric(relativeTo: .body) private var dateSize: CGFloat = 15
+    @ScaledMetric(relativeTo: .caption2) private var spendSize: CGFloat = 10.5
+    @ScaledMetric(relativeTo: .body) private var cellHeight: CGFloat = 46
+    @ScaledMetric(relativeTo: .body) private var circleSize: CGFloat = 27
 
     var body: some View {
         let isToday = info.day == today
         let isPast = info.day < today
-        let weekend = info.day.weekday >= 6
         let over = info.covered && spentCents > info.budgetCents
         let sub: String? = isToday
             ? "今天"
             : (isPast && info.covered && spentCents >= 100 ? "\(spentCents / 100)" : nil)
         let subColor: Color = isToday ? .accentColor : (over && !isToday ? .warning : .secondary)
+        let todayCircleSize = min(circleSize, 32)
         Button(action: action) {
             VStack(spacing: 0) {
                 Text("\(info.day.day)")
-                    .font(.system(size: 15, weight: .semibold, design: .rounded))
-                    .foregroundStyle(isToday ? Color.white : (weekend ? Color.secondary : Color.primary))
-                    .frame(width: 28, height: 28)
+                    .font(.system(size: dateSize, weight: isToday ? .bold : .medium, design: .rounded))
+                    .lineLimit(1).minimumScaleFactor(0.5)
+                    .foregroundStyle(isToday ? Color.white : Color.primary)
+                    .opacity(!isToday && !isPast ? 0.4 : 1)
+                    .frame(width: isToday ? todayCircleSize : nil)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: circleSize)
                     .background {
-                        if isToday { Circle().fill(Color.accentColor) }
+                        if isToday { Circle().fill(Color.accentColor).frame(width: todayCircleSize, height: todayCircleSize) }
+                    }
+                    .overlay(alignment: .bottom) {
+                        if over && isPast {
+                            Capsule().fill(Color.warning.opacity(0.6)).frame(width: min(circleSize, 24), height: 2)
+                        }
                     }
                 Text(sub ?? " ")
-                    .font(.system(size: 11, weight: over || isToday ? .semibold : .regular, design: .rounded))
+                    .font(.system(size: spendSize, weight: .bold, design: .rounded))
                     .monospacedDigit()
                     .foregroundStyle(subColor)
-                    .frame(height: 14)
+                    .lineLimit(1).minimumScaleFactor(0.5)
+                    .frame(maxWidth: .infinity)
+                    .frame(minHeight: 14)
             }
             .frame(maxWidth: .infinity)
-            .frame(height: 46)
+            .frame(minHeight: cellHeight)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
