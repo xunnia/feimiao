@@ -17,7 +17,9 @@ import 'package:qingji/views/assets/asset_overview_dashboard.dart';
 import 'asset_overview_projection_test.dart' show snapshot;
 import 'screenshot_font_support.dart';
 
-const _output = 'outputs/ui_comparisons/2026-10-03-asset-typography';
+String get _output =>
+    Platform.environment['ASSET_SCREENSHOT_OUTPUT_DIR'] ??
+    'outputs/ui_comparisons/2026-10-03-asset-typography';
 
 Future<void> _capture(WidgetTester tester, Key key, String name) async {
   if (Platform.environment['UPDATE_ASSET_SCREENSHOTS'] != '1') return;
@@ -250,6 +252,10 @@ void main() {
                     trend: resolveNetWorthTrend(points),
                     partial: partial,
                     excludedCount: partial ? 4 : 0,
+                    cashAccountCount: 2,
+                    physicalCount: 1,
+                    physicalPartial: partial,
+                    liabilityCount: 1,
                   ),
                 ),
               ),
@@ -261,11 +267,14 @@ void main() {
         final mainTitle = find.byKey(const ValueKey('asset-net-worth-title'));
         final smallTitle = find.descendant(
             of: find.byKey(const ValueKey('asset-metric-funds')),
-            matching: find.text('资金资产'));
-        expect(tester.widget<Text>(mainTitle).style,
-            tester.widget<Text>(smallTitle).style);
+            matching: find.text('可动用资金'));
         final titleStyle = tester.widget<Text>(mainTitle).style!;
-        expect(titleStyle.fontSize, 12.5);
+        final stripTitleStyle = tester.widget<Text>(smallTitle).style!;
+        expect(titleStyle.fontSize, 13);
+        expect(stripTitleStyle.fontSize, 12);
+        expect(stripTitleStyle.fontFamily, titleStyle.fontFamily);
+        expect(stripTitleStyle.fontVariations, titleStyle.fontVariations);
+        expect(stripTitleStyle.color, titleStyle.color);
         expect(
             titleStyle.fontVariations, const [ui.FontVariation('wght', 400)]);
         expect(
@@ -273,40 +282,47 @@ void main() {
             highContrast
                 ? theme.colorScheme.onSurface
                 : preset.forceDark
-                    ? theme.colorScheme.onSurface.withValues(alpha: 0.65)
-                    : const Color(0xFF868384));
+                    ? theme.colorScheme.onSurface.withValues(alpha: 0.62)
+                    : theme.colorScheme.onSurface.withValues(alpha: 0.55));
         expect(
             tester.getTopLeft(mainTitle).dx, tester.getTopLeft(smallTitle).dx);
         final mainAmount = find.descendant(
             of: find.byKey(const ValueKey('asset-net-worth-card')),
             matching: find.byWidgetPredicate((widget) =>
-                widget is Text && widget.style?.fontFamily == 'AssetAmount'));
+                widget is Text &&
+                widget.style?.fontFamily == 'AssetAmount' &&
+                widget.style?.fontSize == 40));
         final mainAmountStyle = tester.widget<Text>(mainAmount).style!;
-        expect(mainAmountStyle.fontSize, 41.75);
+        expect(mainAmountStyle.fontSize, 40);
         expect(mainAmountStyle.fontWeight, FontWeight.w800);
-        expect(mainAmountStyle.fontFeatures, const [ui.FontFeature('ss01')]);
+        expect(mainAmountStyle.fontFeatures, isNull);
         expect(
             mainAmountStyle.color,
             partial
                 ? preset.forceDark
                     ? AppColors.warning
                     : Color.lerp(AppColors.warning, Colors.black, 0.4)
-                : preset.forceDark
-                    ? theme.colorScheme.onSurface
-                    : Colors.black);
+                : theme.colorScheme.onSurface);
         final metric = find.byKey(const ValueKey('asset-metric-funds'));
         final amountText = find.descendant(
             of: metric,
             matching: find.byWidgetPredicate((widget) =>
                 widget is Text && widget.style?.fontFamily == 'AssetAmount'));
         final amountStyle = tester.widget<Text>(amountText).style!;
-        expect(amountStyle.fontSize, 22.5);
+        expect(amountStyle.fontSize, 16.5);
         expect(amountStyle.fontWeight, FontWeight.w800);
-        expect(amountStyle.fontFeatures, const [ui.FontFeature('ss01')]);
+        expect(amountStyle.fontFeatures, isNull);
         final card = tester.getRect(metric);
         final amount = tester.getRect(amountText);
-        expect(amount.left, greaterThanOrEqualTo(card.left + 16));
-        expect(amount.right, lessThanOrEqualTo(card.right - 16));
+        expect(amount.left, greaterThanOrEqualTo(card.left));
+        expect(amount.right, lessThanOrEqualTo(card.right));
+        final physical = find.byKey(const ValueKey('asset-metric-physical'));
+        expect(find.descendant(of: physical, matching: find.text('—')),
+            partial ? findsOneWidget : findsNothing);
+        expect(find.text('估值待确认'), partial ? findsOneWidget : findsNothing);
+        if (partial) {
+          expect(tester.widget<Text>(mainAmount).data, startsWith('-'));
+        }
         final stage = Platform.environment['ASSET_SHOT_SUFFIX'] ?? 'after';
         await _capture(tester, captureKey,
             'dashboard-${preset.key}-${partial ? 'partial' : 'complete'}${highContrast ? '-high-contrast' : ''}${longAmount ? '-long' : ''}-$stage');

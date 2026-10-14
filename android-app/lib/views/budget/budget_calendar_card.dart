@@ -36,25 +36,10 @@ class BudgetCalendarCard extends StatelessWidget {
   });
 
   static const _weekdays = ['一', '二', '三', '四', '五', '六', '日'];
-  static const _monthNames = [
-    '一月',
-    '二月',
-    '三月',
-    '四月',
-    '五月',
-    '六月',
-    '七月',
-    '八月',
-    '九月',
-    '十月',
-    '十一月',
-    '十二月',
-  ];
-
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final title = year == today.year ? _monthNames[month - 1] : '$year年$month月';
+    final title = '$year年$month月';
     final lead = DateTime(year, month).weekday - 1;
     final cells = <BudgetDayInfo?>[
       ...List<BudgetDayInfo?>.filled(lead, null),
@@ -68,6 +53,7 @@ class BudgetCalendarCard extends StatelessWidget {
     ];
     return BudgetCard(
       key: const ValueKey('budget-calendar-card'),
+      padding: const EdgeInsets.fromLTRB(12, 14, 12, 12),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -77,8 +63,8 @@ class BudgetCalendarCard extends StatelessWidget {
                 child: Text(
                   title,
                   style: TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.w700,
+                    fontSize: 16,
+                    fontWeight: FontWeight.w600,
                     color: scheme.onSurface,
                   ),
                 ),
@@ -106,14 +92,14 @@ class BudgetCalendarCard extends StatelessWidget {
                     name,
                     textAlign: TextAlign.center,
                     style: TextStyle(
-                      fontSize: 12,
+                      fontSize: 11.5,
                       color: AppTextColor.hint(scheme),
                     ),
                   ),
                 ),
             ],
           ),
-          const SizedBox(height: 4),
+          const SizedBox(height: 2),
           for (final week in weeks)
             _WeekRow(
               week: week,
@@ -121,7 +107,7 @@ class BudgetCalendarCard extends StatelessWidget {
               today: budgetDay(today),
               onTapDay: onTapDay,
             ),
-          const SizedBox(height: 8),
+          const SizedBox(height: 6),
           _Legend(scheme: scheme),
         ],
       ),
@@ -149,14 +135,7 @@ class BudgetCard extends StatelessWidget {
       decoration: BoxDecoration(
         color: AppColors.card(scheme),
         borderRadius: BorderRadius.circular(22),
-        boxShadow: [
-          if (scheme.brightness == Brightness.light)
-            BoxShadow(
-              color: Colors.black.withValues(alpha: 0.04),
-              blurRadius: 16,
-              offset: const Offset(0, 4),
-            ),
-        ],
+        border: Border.all(color: AppColors.hairline(scheme), width: 0.5),
       ),
       child: child,
     );
@@ -187,7 +166,7 @@ class BudgetMonthArrow extends StatelessWidget {
         child: SizedBox(
           width: 36,
           height: 32,
-          child: Icon(icon, size: 17, color: AppTextColor.hint(scheme)),
+          child: Icon(icon, size: 18, color: AppTextColor.secondary(scheme)),
         ),
       ),
     );
@@ -200,29 +179,28 @@ class _Legend extends StatelessWidget {
   const _Legend({required this.scheme});
 
   Widget _dot(Color color) => Container(
-        width: 7,
-        height: 7,
+        width: 8,
+        height: 8,
         margin: const EdgeInsets.only(right: 4),
-        decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+        decoration: BoxDecoration(
+          color: color,
+          borderRadius: BorderRadius.circular(3),
+        ),
       );
 
   @override
   Widget build(BuildContext context) {
-    final style = TextStyle(fontSize: 11, color: AppTextColor.hint(scheme));
+    final style = TextStyle(fontSize: 11.5, color: AppTextColor.hint(scheme));
     return Wrap(
-      spacing: 14,
+      spacing: 12,
       runSpacing: 4,
       crossAxisAlignment: WrapCrossAlignment.center,
       children: [
-        Row(mainAxisSize: MainAxisSize.min, children: [
-          _dot(AppTextColor.hint(scheme)),
-          Text('没超', style: style),
-        ]),
+        Text('数字 = 当天花了多少', style: style),
         Row(mainAxisSize: MainAxisSize.min, children: [
           _dot(AppColors.warning),
-          Text('当天超了', style: style),
+          Text('超了当天预算', style: style),
         ]),
-        Text('数字 = 当天花了多少', style: style),
       ],
     );
   }
@@ -259,13 +237,9 @@ class _WeekRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
     final bars = _bars();
     return Container(
-      padding: const EdgeInsets.symmetric(vertical: 5),
-      decoration: BoxDecoration(
-        border: Border(top: BorderSide(color: AppColors.hairline(scheme))),
-      ),
+      padding: const EdgeInsets.only(top: 3, bottom: 1),
       child: Column(
         children: [
           LayoutBuilder(
@@ -273,9 +247,9 @@ class _WeekRow extends StatelessWidget {
               final scaler = MediaQuery.textScalerOf(context);
               final circleSize = math.min(
                 constraints.maxWidth / 7 - 4,
-                math.max(30.0, scaler.scale(30)),
+                math.max(27.0, scaler.scale(27)),
               );
-              final subHeight = math.max(14.0, scaler.scale(11) * 1.25);
+              final subHeight = math.max(12.0, scaler.scale(10.5) * 1.15);
               return Row(
                 children: [
                   for (final info in week)
@@ -391,10 +365,9 @@ class _DayCell extends StatelessWidget {
     final scheme = Theme.of(context).colorScheme;
     final isToday = info.day == today;
     final isPast = info.day.isBefore(today);
-    final weekend = info.day.weekday >= 6;
     final over = info.covered && spentCents > info.budgetCents;
     String? sub;
-    Color subColor = AppTextColor.hint(scheme);
+    Color subColor = scheme.onSurface.withValues(alpha: 0.58);
     if (isToday) {
       sub = '今天';
       subColor = scheme.primary;
@@ -424,20 +397,30 @@ class _DayCell extends StatelessWidget {
                 decoration: isToday
                     ? BoxDecoration(
                         color: scheme.primary, shape: BoxShape.circle)
-                    : null,
+                    : isPast && over
+                        ? BoxDecoration(
+                            borderRadius: BorderRadius.circular(9),
+                            border: Border(
+                              bottom: BorderSide(
+                                color:
+                                    AppColors.warning.withValues(alpha: 0.55),
+                                width: 2,
+                              ),
+                            ),
+                          )
+                        : null,
                 child: FittedBox(
                   fit: BoxFit.scaleDown,
                   child: Text(
                     '${info.day.day}',
                     style: TextStyle(
-                      fontFamily: 'Nunito',
-                      fontSize: 16,
-                      fontWeight: FontWeight.w700,
+                      fontSize: 15,
+                      fontWeight: isToday ? FontWeight.w700 : FontWeight.w500,
                       color: isToday
                           ? scheme.onPrimary
-                          : weekend
-                              ? AppTextColor.hint(scheme)
-                              : scheme.onSurface,
+                          : isPast
+                              ? scheme.onSurface
+                              : scheme.onSurface.withValues(alpha: 0.33),
                     ),
                   ),
                 ),
@@ -453,11 +436,10 @@ class _DayCell extends StatelessWidget {
                           child: Text(
                             sub,
                             style: TextStyle(
-                              fontFamily: 'Nunito',
-                              fontSize: 11,
-                              fontWeight: over || isToday
-                                  ? FontWeight.w600
-                                  : FontWeight.w400,
+                              fontFamily: isToday ? null : 'AssetAmount',
+                              fontSize: 10.5,
+                              fontWeight:
+                                  isToday ? FontWeight.w700 : FontWeight.w800,
                               color: subColor,
                             ),
                           ),

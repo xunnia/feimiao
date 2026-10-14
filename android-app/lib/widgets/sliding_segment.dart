@@ -11,12 +11,14 @@ class SlidingSegment<T> extends StatelessWidget {
   final List<(T, String)> items;
   final T value;
   final ValueChanged<T> onChanged;
+  final double height;
 
   const SlidingSegment({
     super.key,
     required this.items,
     required this.value,
     required this.onChanged,
+    this.height = 34,
   });
 
   @override
@@ -27,7 +29,7 @@ class SlidingSegment<T> extends StatelessWidget {
         items.indexWhere((e) => e.$1 == value).clamp(0, items.length - 1);
 
     return Container(
-      height: 34,
+      height: height,
       padding: const EdgeInsets.all(3),
       decoration: BoxDecoration(
         // 底轨跟主题走：暖橙出暖灰、简约白出中性灰（2026-10-01，原来一律冷黑透明）。
