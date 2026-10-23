@@ -12,16 +12,17 @@
     "cleanSourceAnchor": "b40316f336fb0aefabf67817460775b665fdaa1d",
     "integrationBranch": "main",
     "android": {
-      "version": "1.315.0+330",
-      "watermark": "b1006-330",
-      "databaseVersion": 50,
-      "sourceCommit": "57436f1d5099f2299887d11effdc1fb6a8d7c319",
-      "apk": "ci-artifacts/releases/feimiao-codex-v1.315.0-330.apk",
-      "apkBytes": 119165883,
-      "apkSha256": "79C81EC7F86C7E35B0AA2E9FB10BC4D47D606AC38982101E240A25534C4E446F",
-      "apkSourceNote": "Verified release 330 APK matches the Android source tree at sourceCommit. VPS publication is tracked in docs/02. The iOS concept test branch still carries Android 328; its screenshots are not a sealed Android 330 parity baseline. Android installation, device interaction and real-model acceptance remain pending.",
+      "version": "1.316.0+331",
+      "watermark": "b1023-331",
+      "databaseVersion": 51,
+      "candidateStatus": "ANDROID_RELEASE_331_APK_VERIFIED; native device and iOS acceptance pending",
+      "sourceCommit": "3c33bc3c901711e49e32a142cae2dd423fc86d49",
+      "apk": "ci-artifacts/releases/feimiao-codex-v1.316.0-331.apk",
+      "apkBytes": 119296951,
+      "apkSha256": "AD23971D76C459C63109D20E30DB5B55BFA69B91E8536AB79B771E5FE6678D85",
+      "apkSourceNote": "Verified release 331 APK matches the Android source tree at sourceCommit, including DB51 scene memberships. VPS publication is tracked in docs/02. Existing iOS test-branch screenshots predate this release and are not a sealed Android 331 parity baseline. Android installation, device interaction and real-model acceptance remain pending.",
       "staticAnalysis": "0 errors; 86 warning/info diagnostics",
-      "tests": "1741/1741 passed locally on Windows"
+      "tests": "1794/1794 passed locally on Windows; final screenshot harness 23/23 passed separately"
     },
     "ios": {
       "version": "1.286.0+300",
@@ -48,7 +49,7 @@
       "store": "SwiftData",
       "policy": "in-place",
       "container": "AppModelContainer.shared",
-      "schemaPolicy": "introduce-an-explicit-VersionedSchema-before-the-next-model-change",
+      "schemaPolicy": "explicit-VersionedSchema-V1-V2-V3-lightweight; macOS migration evidence pending",
       "modelTypes": [
         "Account",
         "Book",
@@ -89,7 +90,7 @@
     },
     "fixture": {
       "file": "ios-app/tools/migration-fixtures/p0-ios-qingji-upgrade-2026-09-v1.json",
-      "inputHash": "E256A154C46883627D656DEF94060494E64E6FCE1587B8A0C71C44E3836521B1"
+      "inputHash": "D5F4F45C938E41F32E22F528296D3A03F6F96406C2AF83AD0AEA2D6DD9D717BF"
     },
     "preserveFields": [
       "stableID",
@@ -110,7 +111,7 @@
       "isExcluded"
     ],
     "androidBackup": {
-      "requiredDatabaseVersion": 50,
+      "requiredDatabaseVersion": 51,
       "requiredSamples": ["current-v49", "v40", "v48"],
       "restoreTarget": "QingJi SwiftData",
       "status": "MACOS_EVIDENCE_PENDING"
