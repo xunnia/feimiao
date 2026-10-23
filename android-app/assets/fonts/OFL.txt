@@ -2,7 +2,7 @@ Nunito:
 Copyright 2014 The Nunito Project Authors
 (https://github.com/googlefonts/nunito)
 
-Noto Sans SC (AssetLabels-VF.ttf is a title-glyph subset):
+Noto Sans SC (AssetLabels-VF.ttf and BudgetUnits-VF.ttf are glyph subsets):
 Copyright 2014-2021 Adobe (http://www.adobe.com/), with Reserved Font Name
 'Source'.
 

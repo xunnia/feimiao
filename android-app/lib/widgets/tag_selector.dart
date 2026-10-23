@@ -5,6 +5,28 @@ import '../data/app_repository.dart';
 import '../views/settings/tags_view.dart';
 import 'ios_form.dart';
 
+/// 标签菜单及行内选择器共用的快速新建入口。
+Future<int?> showCreateTagDialog(BuildContext context) async {
+  final repo = context.read<AppRepository>();
+  var name = '';
+  final ok = await showIosFormDialog(
+    context,
+    title: '新建标签',
+    confirmText: '创建',
+    content: Builder(
+      builder: (ctx) => TextField(
+        onChanged: (value) => name = value,
+        autofocus: true,
+        maxLength: 8,
+        decoration: iosInputDecoration(ctx, hint: '如：聚餐、报销、旅行'),
+      ),
+    ),
+  );
+  if (!ok || !context.mounted || name.trim().isEmpty) return null;
+  return await repo.addTag(
+      name: name.trim(), colorValue: kTagPalette.first.toARGB32());
+}
+
 /// 标签选择器：一行可横滑的标签胶囊，点选/取消，末尾「+」可快速建标签。
 ///
 /// 用于记账大卡（手动 / 编辑），通过 [selectedIds] + [onChanged] 受控。
@@ -29,29 +51,8 @@ class TagSelector extends StatelessWidget {
   }
 
   Future<void> _quickCreate(BuildContext context) async {
-    final repo = context.read<AppRepository>();
-    final ctrl = TextEditingController();
-    // 走全局表单弹窗（图二风格：左对齐+双浅胶囊），别再用裸 AlertDialog。
-    final ok = await showIosFormDialog(
-      context,
-      title: '新建标签',
-      confirmText: '创建',
-      content: Builder(
-        builder: (ctx) => TextField(
-          controller: ctrl,
-          autofocus: true,
-          maxLength: 8,
-          decoration: iosInputDecoration(ctx, hint: '如：聚餐、报销、旅行'),
-        ),
-      ),
-    );
-    if (ok && ctrl.text.trim().isNotEmpty) {
-      final id = await repo.addTag(
-        name: ctrl.text.trim(),
-        colorValue: kTagPalette.first.toARGB32(),
-      );
-      _toggle(id); // 新建后默认选中
-    }
+    final id = await showCreateTagDialog(context);
+    if (id != null && context.mounted) _toggle(id);
   }
 
   @override

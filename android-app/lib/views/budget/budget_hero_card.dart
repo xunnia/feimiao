@@ -60,9 +60,9 @@ class BudgetHeroCard extends StatelessWidget {
           key: const ValueKey('budget-hero-amount'),
           maxLines: 1,
           style: TextStyle(
-            fontFamily: 'AssetAmount',
-            fontSize: 44,
-            fontWeight: FontWeight.w800,
+            fontFamily: 'Nunito',
+            fontSize: 42,
+            fontWeight: FontWeight.w600,
             letterSpacing: 0,
             height: 1.1,
             color: color ?? scheme.onSurface,

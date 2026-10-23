@@ -341,6 +341,23 @@ class _BudgetViewState extends State<BudgetView> with WidgetsBindingObserver {
     Widget row(BudgetRule rule, {required bool hasDivider}) {
       final span = spans[rule.id]!;
       final color = budgetRuleColor(rule, scheme);
+      Widget amount() => Text.rich(
+            TextSpan(children: [
+              TextSpan(
+                text: budgetUnitText(rule.unit),
+                style: rule.unit == BudgetRuleUnit.month
+                    ? amountStyle.copyWith(
+                        fontFamily: 'BudgetUnits',
+                        fontWeight: FontWeight.w500,
+                        fontVariations: const [FontVariation('wght', 550)],
+                      )
+                    : null,
+              ),
+              TextSpan(text: ' ${budgetYuanText(rule.amountCents)}'),
+            ]),
+            key: ValueKey('budget-rule-amount-${rule.id}'),
+            style: amountStyle,
+          );
       return PressableScale(
         key: ValueKey('budget-rule-row-${rule.id}'),
         onPressed: () => _openEditor(repo, bookId, rule: rule),
@@ -359,7 +376,7 @@ class _BudgetViewState extends State<BudgetView> with WidgetsBindingObserver {
                   Text(span.text, style: subStyle),
                   if (stacked) ...[
                     const SizedBox(height: 4),
-                    Text(budgetRuleAmountText(rule), style: amountStyle),
+                    amount(),
                   ],
                   if (span.state == BudgetRuleState.upcoming) ...[
                     const SizedBox(height: 2),
@@ -374,7 +391,7 @@ class _BudgetViewState extends State<BudgetView> with WidgetsBindingObserver {
                   Expanded(child: description),
                   if (!stacked) ...[
                     const SizedBox(width: 8),
-                    Text(budgetRuleAmountText(rule), style: amountStyle),
+                    amount(),
                   ],
                   const SizedBox(width: 6),
                   Icon(CupertinoIcons.chevron_forward,

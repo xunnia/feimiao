@@ -81,6 +81,14 @@ void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   setUpAll(() async {
     await loadScreenshotFonts();
+    final nunito = FontLoader('Nunito');
+    for (final weight in ['Regular', 'Medium', 'SemiBold', 'Bold']) {
+      nunito.addFont(rootBundle.load('assets/fonts/Nunito-$weight.ttf'));
+    }
+    await nunito.load();
+    await (FontLoader('BudgetUnits')
+          ..addFont(rootBundle.load('assets/fonts/BudgetUnits-VF.ttf')))
+        .load();
     await (FontLoader('AssetAmount')
           ..addFont(rootBundle.load('assets/fonts/Nunito-ExtraBold.ttf')))
         .load();
@@ -244,6 +252,41 @@ void main() {
       find.byKey(const ValueKey('budget-capture')),
       matchesGoldenFile('$outDir/${name}_$suffix.png'),
     );
+  }
+
+  for (final variant in ['light', 'dark', 'large']) {
+    testWidgets('budget typography $variant', (tester) async {
+      await pumpPage(tester, repo(),
+          brightness: variant == 'dark' ? Brightness.dark : Brightness.light,
+          size: Size(variant == 'large' ? 320 : 393, 1000),
+          textScale: variant == 'large' ? 2 : 1);
+      expect(tester.takeException(), isNull);
+      if (!suffix.startsWith('before')) {
+        final hero = tester
+            .widget<Text>(find.byKey(const ValueKey('budget-hero-amount')));
+        expect(hero.style!.fontSize, 42);
+        expect(hero.style!.fontWeight, FontWeight.w600);
+        final ruleAmount = find.byKey(const ValueKey('budget-rule-amount-1'));
+        if (ruleAmount.evaluate().isEmpty) {
+          await tester.scrollUntilVisible(ruleAmount, 250,
+              scrollable: find.byType(Scrollable).first);
+          await tester.pumpAndSettle();
+        }
+        final amount = tester.widget<Text>(ruleAmount);
+        expect(amount.style!.fontWeight, FontWeight.w700);
+        final period =
+            (amount.textSpan! as TextSpan).children!.first as TextSpan;
+        expect(period.text, '每月');
+        expect(period.style!.fontFamily, 'BudgetUnits');
+        expect(period.style!.fontVariations!.single.value, 550);
+        if (variant == 'large') {
+          await tester.drag(
+              find.byType(Scrollable).first, const Offset(0, 3000));
+          await tester.pumpAndSettle();
+        }
+      }
+      await shot(tester, 'budget_typography_$variant');
+    });
   }
 
   testWidgets('预算主页（示意图第一屏）', (tester) async {

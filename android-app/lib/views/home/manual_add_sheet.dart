@@ -21,11 +21,9 @@ import '../../widgets/pressable_scale.dart';
 import '../../widgets/sliding_segment.dart';
 import '../../widgets/tag_selector.dart';
 import '../common/receipt_picker.dart';
-import '../common/app_sheet.dart';
 import '../books/transaction_books_sheet.dart';
 import '../quick_add/amount_keypad.dart';
 import '../quick_add/category_grid.dart';
-import '../../widgets/settings_ui.dart';
 
 /// 打开手动记账 / 编辑账目大卡（**统一入口**：背景高斯模糊 + 底部上滑，
 /// 与 AI 记账面板同一套出场，别再用无模糊的 showModalBottomSheet）。
@@ -491,36 +489,31 @@ class _ManualAddSheetState extends State<ManualAddSheet> {
   }
 
   // ── 标签选择小弹层 ────────────────────────────────────────────────────────
-  Future<void> _pickTags() async {
-    await showBlurSheet<void>(
-      context,
-      radius: 28,
-      child: Builder(
-          builder: (ctx) => SafeArea(
-                child: Padding(
-                  padding: const EdgeInsets.only(bottom: 8),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      SheetHeader(
-                        title: '选标签',
-                        onClose: () => Navigator.pop(ctx),
-                      ),
-                      StatefulBuilder(
-                        builder: (ctx2, setLocal) => TagSelector(
-                          selectedIds: _tagIds,
-                          onChanged: (v) {
-                            setLocal(() {});
-                            setState(() => _tagIds = v);
-                          },
-                        ),
-                      ),
-                      const SizedBox(height: 8),
-                    ],
-                  ),
-                ),
-              )),
+  Future<void> _pickTags(BuildContext anchorContext) async {
+    final repo = context.read<AppRepository>();
+    await showIosMultiSelectMenu<int>(
+      anchorContext,
+      cardKey: const ValueKey('tag-picker-menu'),
+      selectedValues: _tagIds.toSet(),
+      choices: [
+        for (final tag in repo.tags)
+          IosMenuChoice(value: tag.id, label: tag.name, icon: AppLineIcons.tag),
+      ],
+      onChanged: (ids) {
+        if (mounted) setState(() => _tagIds = ids.toList());
+      },
+      actions: [
+        IosMenuItem(
+          label: '新建标签',
+          icon: Icons.add_rounded,
+          onTap: () async {
+            final id = await showCreateTagDialog(context);
+            if (id != null && mounted) {
+              setState(() => _tagIds = {..._tagIds, id}.toList());
+            }
+          },
+        ),
+      ],
     );
   }
 
@@ -816,7 +809,7 @@ class _ChipsRow extends StatelessWidget {
   final ValueChanged<DateTime> onDateChanged;
   final ValueChanged<Set<int>> onBooksChanged;
   final ValueChanged<int?> onAccountChanged;
-  final VoidCallback onTagsTap;
+  final ValueChanged<BuildContext> onTagsTap;
   final VoidCallback onReimbursableToggle;
   final VoidCallback onExcludedToggle;
 
@@ -885,16 +878,17 @@ class _ChipsRow extends StatelessWidget {
           const SizedBox(width: 8),
           // 总账本无需勾选；编辑历史账单也可多选场景账本。
           ...[
-            _Chip(
-              icon: Icons.menu_book_outlined,
-              label: bookLabel,
-              selected: selectedBooks.isNotEmpty,
-              onTap: () async {
-                final ids = await showTransactionBooksSheet(context,
-                    selectedIds: bookIds);
-                if (context.mounted && ids != null) onBooksChanged(ids);
-              },
-            ),
+            Builder(
+                builder: (chipCtx) => _Chip(
+                      key: const ValueKey('manual-book-chip'),
+                      icon: Icons.menu_book_outlined,
+                      label: bookLabel,
+                      selected: selectedBooks.isNotEmpty,
+                      onTap: () => showTransactionBooksMenu(chipCtx,
+                          selectedIds: bookIds, onChanged: (ids) {
+                        if (context.mounted) onBooksChanged(ids);
+                      }),
+                    )),
             const SizedBox(width: 8),
           ],
           // 账户 —— 同款 iOS 浮动菜单
@@ -918,12 +912,14 @@ class _ChipsRow extends StatelessWidget {
           ],
           if (showExtras) ...[
             // 标签
-            _Chip(
-              icon: Icons.label_outline,
-              label: tagCount > 0 ? '$tagCount 个标签' : '标签',
-              selected: tagCount > 0,
-              onTap: onTagsTap,
-            ),
+            Builder(
+                builder: (chipCtx) => _Chip(
+                      key: const ValueKey('manual-tag-chip'),
+                      icon: Icons.label_outline,
+                      label: tagCount > 0 ? '$tagCount 个标签' : '标签',
+                      selected: tagCount > 0,
+                      onTap: () => onTagsTap(chipCtx),
+                    )),
             // 待报销（仅支出）
             if (kind == TransactionKind.expense) ...[
               const SizedBox(width: 8),
@@ -958,6 +954,7 @@ class _Chip extends StatelessWidget {
   final VoidCallback onTap;
 
   const _Chip({
+    super.key,
     required this.icon,
     required this.label,
     required this.onTap,

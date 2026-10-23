@@ -13387,6 +13387,10 @@ class AppRepository extends ChangeNotifier {
   Decimal userAmountOf(TransactionEntity t) =>
       LedgerPolicy.userAmountWith(t, _refundTotals);
 
+  /// 全历史归集列表使用同一用户金额口径，不受当前账本筛选影响。
+  Decimal userAmountAcrossBooks(TransactionEntity t) =>
+      LedgerPolicy.userAmountWith(t, _globalRefundTotals);
+
   /// 一批账单里算几笔支出（口径标准 §7.1 的 `expenseCount`）：只数净额为正的
   /// 原始消费家族。页面要显示「N 笔」一律走这里，别自己 `.length`，
   /// 否则全额退款家族会把笔数撑大、和统计页对不上。

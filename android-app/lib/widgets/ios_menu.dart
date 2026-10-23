@@ -1,6 +1,7 @@
 import 'dart:math' as math;
 
 import 'package:flutter/cupertino.dart' show CupertinoIcons;
+import 'package:flutter/foundation.dart' show ValueListenable;
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart' show RendererBinding;
 
@@ -25,6 +26,7 @@ class IosMenuItem {
   final String? subtitle;
   final bool enabled;
   final VoidCallback onTap;
+  final bool dismissOnTap;
 
   const IosMenuItem({
     this.key,
@@ -36,7 +38,62 @@ class IosMenuItem {
     this.subtitle,
     this.enabled = true,
     required this.onTap,
+    this.dismissOnTap = true,
   }) : assert(icon != null || lineIcon != null);
+}
+
+/// 与普通账户菜单共用外观；多选只更新所在表单的草稿，点遮罩收起。
+class IosMenuChoice<T> {
+  final T value;
+  final String label;
+  final String? subtitle;
+  final AppLineIconData icon;
+
+  const IosMenuChoice(
+      {required this.value,
+      required this.label,
+      required this.icon,
+      this.subtitle});
+}
+
+Future<void> showIosMultiSelectMenu<T>(
+  BuildContext anchorContext, {
+  required List<IosMenuChoice<T>> choices,
+  required Set<T> selectedValues,
+  required ValueChanged<Set<T>> onChanged,
+  List<IosMenuItem> actions = const [],
+  Key? cardKey,
+}) async {
+  final selected =
+      selectedValues.intersection(choices.map((c) => c.value).toSet());
+  var changed = false;
+  late final ValueNotifier<List<IosMenuItem>> updates;
+  List<IosMenuItem> rows() => [
+        for (final choice in choices)
+          IosMenuItem(
+            label: choice.label,
+            subtitle: choice.subtitle,
+            lineIcon: choice.icon,
+            selected: selected.contains(choice.value),
+            dismissOnTap: false,
+            onTap: () {
+              if (!selected.add(choice.value)) selected.remove(choice.value);
+              changed = true;
+              updates.value = rows();
+            },
+          ),
+        ...actions,
+      ];
+  updates = ValueNotifier(rows());
+  try {
+    await showIosMenu(anchorContext, updates.value,
+        updates: updates, cardKey: cardKey, constrainToInsets: true);
+    // Keep the anchor's label/width stable while its highlight is displayed.
+    // Only the menu rows change during selection; the form stays a draft.
+    if (changed) onChanged(Set.of(selected));
+  } finally {
+    updates.dispose();
+  }
 }
 
 AppLineIconData? _standardLineIcon(IconData? icon) {
@@ -142,12 +199,26 @@ Future<void> showIosMenu(
   bool alignToAnchorLeft = false,
   Key? cardKey,
   bool alignToAnchorTop = false,
+  ValueListenable<List<IosMenuItem>>? updates,
+  bool constrainToInsets = false,
 }) {
   final box = anchorContext.findRenderObject() as RenderBox;
   final anchor = box.localToGlobal(Offset.zero) & box.size;
   final screen = _viewportSize(anchorContext);
-  final menuWidth = width ?? 196.0;
   const margin = 8.0;
+  final menuWidth = (width ?? 196.0).clamp(0.0, screen.width - margin * 2);
+  final media = MediaQuery.of(anchorContext);
+  // Scaffold may remove keyboard insets from the anchor's MediaQuery after
+  // resizing its body. The overlay still covers the whole Flutter view.
+  final view = View.of(anchorContext);
+  final keyboardInset = math.max(
+      media.viewInsets.bottom, view.viewInsets.bottom / view.devicePixelRatio);
+  final topBound = margin + (constrainToInsets ? media.viewPadding.top : 0);
+  final bottomBound = screen.height -
+      margin -
+      (constrainToInsets
+          ? math.max(keyboardInset, media.viewPadding.bottom)
+          : 0);
 
   // 右对齐到锚点右缘，越界时夹回屏幕内。
   double left = anchor.right - menuWidth;
@@ -161,15 +232,30 @@ Future<void> showIosMenu(
   final estHeight = items.fold<double>(
           0, (sum, item) => sum + (item.subtitle == null ? 44.0 : 62.0)) +
       8;
-  final maxHeight = math.min(estHeight, screen.height - margin * 2).toDouble();
+  final maxHeight =
+      math.min(estHeight, math.max(0, bottomBound - topBound)).toDouble();
   double top = alignToAnchorTop ? anchor.top : anchor.bottom + 4;
   var growUp = false;
-  if (top + estHeight > screen.height - margin) {
+  if (top + estHeight > bottomBound) {
     top = (anchor.top - 4 - maxHeight)
-        .clamp(margin, screen.height - margin)
+        .clamp(topBound, math.max(topBound, bottomBound - maxHeight))
         .toDouble();
     growUp = true;
   }
+  top = top.clamp(topBound, math.max(topBound, bottomBound - maxHeight));
+
+  Widget card(List<IosMenuItem> currentItems) => _IosMenuCard(
+        key: const ValueKey('unified-ios-menu-card'),
+        items: currentItems,
+        width: menuWidth,
+        maxHeight: maxHeight,
+      );
+  final menu = updates == null
+      ? card(items)
+      : ValueListenableBuilder<List<IosMenuItem>>(
+          valueListenable: updates,
+          builder: (_, value, __) => card(value),
+        );
 
   return showGeneralDialog<void>(
     context: anchorContext,
@@ -200,20 +286,10 @@ Future<void> showIosMenu(
                 alignment: growUp ? Alignment.bottomRight : Alignment.topRight,
                 scale: Tween<double>(begin: 0.82, end: 1.0).animate(curved),
                 child: cardKey == null
-                    ? _IosMenuCard(
-                        key: const ValueKey('unified-ios-menu-card'),
-                        items: items,
-                        width: menuWidth,
-                        maxHeight: maxHeight,
-                      )
+                    ? menu
                     : KeyedSubtree(
                         key: cardKey,
-                        child: _IosMenuCard(
-                          key: const ValueKey('unified-ios-menu-card'),
-                          items: items,
-                          width: menuWidth,
-                          maxHeight: maxHeight,
-                        ),
+                        child: menu,
                       ),
               ),
             ),
@@ -300,86 +376,88 @@ class _IosMenuRow extends StatelessWidget {
         : item.enabled
             ? scheme.onSurface
             : scheme.onSurfaceVariant.withValues(alpha: 0.62);
-    return InkWell(
-      onTap: !item.enabled
-          ? null
-          : () {
-              Haptics.selection();
-              Navigator.of(context).pop();
-              item.onTap();
-            },
-      splashFactory: NoSplash.splashFactory,
-      borderRadius: BorderRadius.circular(13),
-      highlightColor: scheme.onSurface.withValues(alpha: 0.055),
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 120),
-        margin: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
-        decoration: BoxDecoration(
-          color: item.selected
-              ? scheme.onSurface.withValues(alpha: 0.065)
-              : Colors.transparent,
+    return Semantics(
+        checked: item.dismissOnTap ? null : item.selected,
+        child: InkWell(
+          onTap: !item.enabled
+              ? null
+              : () {
+                  Haptics.selection();
+                  if (item.dismissOnTap) Navigator.of(context).pop();
+                  item.onTap();
+                },
+          splashFactory: NoSplash.splashFactory,
           borderRadius: BorderRadius.circular(13),
-        ),
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-          // 对齐 Claude：图标在前、名称在后。
-          child: Row(
-            children: [
-              if (item.selected)
-                SizedBox(
-                  key: ValueKey('chat-filter-check-${item.label}'),
-                  width: 8,
-                  height: 1,
-                ),
-              if (lineIcon != null)
-                AppLineIcon(lineIcon, size: 20, color: color)
-              else
-                Icon(item.icon, size: 19, color: color),
-              const SizedBox(width: 12),
-              Expanded(
-                child: item.subtitle == null
-                    ? Text(
-                        item.label,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: AppType.menuItem(color),
-                      )
-                    : Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Text(
+          highlightColor: scheme.onSurface.withValues(alpha: 0.055),
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 120),
+            margin: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+            decoration: BoxDecoration(
+              color: item.selected
+                  ? scheme.onSurface.withValues(alpha: 0.065)
+                  : Colors.transparent,
+              borderRadius: BorderRadius.circular(13),
+            ),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              // 对齐 Claude：图标在前、名称在后。
+              child: Row(
+                children: [
+                  if (item.selected)
+                    SizedBox(
+                      key: ValueKey('chat-filter-check-${item.label}'),
+                      width: 8,
+                      height: 1,
+                    ),
+                  if (lineIcon != null)
+                    AppLineIcon(lineIcon, size: 20, color: color)
+                  else
+                    Icon(item.icon, size: 19, color: color),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: item.subtitle == null
+                        ? Text(
                             item.label,
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                             style: AppType.menuItem(color),
-                          ),
-                          const SizedBox(height: 2),
-                          Text(
-                            item.subtitle!,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: AppType.menuSubtitle(
-                              scheme.onSurfaceVariant.withValues(
-                                alpha: item.enabled ? 0.72 : 0.58,
+                          )
+                        : Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Text(
+                                item.label,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: AppType.menuItem(color),
                               ),
-                            ),
+                              const SizedBox(height: 2),
+                              Text(
+                                item.subtitle!,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: AppType.menuSubtitle(
+                                  scheme.onSurfaceVariant.withValues(
+                                    alpha: item.enabled ? 0.72 : 0.58,
+                                  ),
+                                ),
+                              ),
+                            ],
                           ),
-                        ],
-                      ),
+                  ),
+                  if (item.selected) ...[
+                    const SizedBox(width: 10),
+                    Icon(
+                      Icons.check_rounded,
+                      size: 18,
+                      color: color,
+                    ),
+                  ],
+                ],
               ),
-              if (item.selected) ...[
-                const SizedBox(width: 10),
-                Icon(
-                  Icons.check_rounded,
-                  size: 18,
-                  color: color,
-                ),
-              ],
-            ],
+            ),
           ),
-        ),
-      ),
-    );
+        ));
   }
 }

@@ -14,6 +14,7 @@ import '../theme/app_tokens.dart';
 import '../views/transactions/edit_transaction_sheet.dart';
 import 'glass.dart';
 import 'pressable_scale.dart';
+import 'settings_ui.dart';
 import 'tag_selector.dart';
 import 'transaction_actions.dart';
 
@@ -41,7 +42,17 @@ List<TxSection> groupTxnsByDay(List<TransactionEntity> transactions) {
 class TxDayCard extends StatelessWidget {
   final TxSection section;
 
-  const TxDayCard({super.key, required this.section});
+  /// Non-null enables selection while retaining the home page's bill rows.
+  /// Selection mode never exposes the edit or swipe-to-delete gestures.
+  final Set<int>? selectedIds;
+  final ValueChanged<TransactionEntity>? onSelectionChanged;
+
+  const TxDayCard({
+    super.key,
+    required this.section,
+    this.selectedIds,
+    this.onSelectionChanged,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -56,15 +67,46 @@ class TxDayCard extends StatelessWidget {
           type: MaterialType.transparency,
           child: Column(
             children: [
-              TxDaySectionHeader(section: section),
+              TxDaySectionHeader(
+                  section: section, acrossBooks: selectedIds != null),
               for (int i = 0; i < section.items.length; i++) ...[
                 if (i > 0)
                   Container(
-                    margin: const EdgeInsets.only(left: 66, right: 14),
+                    margin: EdgeInsets.only(
+                        left: selectedIds == null ? 66 : 114, right: 14),
                     height: 0.5,
                     color: scheme.outlineVariant.withValues(alpha: 0.5),
                   ),
-                TxDismissibleRow(transaction: section.items[i]),
+                if (selectedIds == null)
+                  TxDismissibleRow(transaction: section.items[i])
+                else
+                  Semantics(
+                    checked: selectedIds!.contains(section.items[i].id),
+                    enabled: onSelectionChanged != null,
+                    child: PressableScale(
+                      onPressed: onSelectionChanged == null
+                          ? null
+                          : () => onSelectionChanged!(section.items[i]),
+                      pressedScale: 0.985,
+                      child: Row(children: [
+                        ExcludeSemantics(
+                          child: AppCheckmark(
+                            value: selectedIds!.contains(section.items[i].id),
+                            onChanged: null,
+                            interactive: false,
+                          ),
+                        ),
+                        Expanded(
+                          child: TxRow(
+                            transaction: section.items[i],
+                            acrossBooks: true,
+                            stackAmount:
+                                MediaQuery.textScalerOf(context).scale(15) > 20,
+                          ),
+                        ),
+                      ]),
+                    ),
+                  ),
               ],
             ],
           ),
@@ -76,16 +118,20 @@ class TxDayCard extends StatelessWidget {
 
 class TxDaySectionHeader extends StatelessWidget {
   final TxSection section;
+  final bool acrossBooks;
 
-  const TxDaySectionHeader({super.key, required this.section});
+  const TxDaySectionHeader({
+    super.key,
+    required this.section,
+    this.acrossBooks = false,
+  });
 
   String _dateLabel() {
     final now = AppClock.now;
     final today = DateTime(now.year, now.month, now.day);
     final yesterday = today.subtract(const Duration(days: 1));
     // 跨年的日子带上年份（搜索结果可能横跨好几年，不带年会分不清）。
-    final year =
-        section.day.year == today.year ? '' : '${section.day.year}年';
+    final year = section.day.year == today.year ? '' : '${section.day.year}年';
     final full =
         '$year${section.day.month}月${section.day.day}日 周${_weekday(section.day.weekday)}';
     if (section.day == today) return '今天 · $full';
@@ -99,12 +145,14 @@ class TxDaySectionHeader extends StatelessWidget {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final repo = context.read<AppRepository>();
+    final userAmount =
+        acrossBooks ? repo.userAmountAcrossBooks : repo.userAmountOf;
     final totalExpense = section.items
         .where((t) => t.txKind == TransactionKind.expense)
-        .fold(Decimal.zero, (s, t) => s + repo.userAmountOf(t));
+        .fold(Decimal.zero, (s, t) => s + userAmount(t));
     final totalIncome = section.items
         .where((t) => t.txKind == TransactionKind.income)
-        .fold(Decimal.zero, (s, t) => s + repo.userAmountOf(t));
+        .fold(Decimal.zero, (s, t) => s + userAmount(t));
     final hasExpense = totalExpense > Decimal.zero;
     final hasIncome = totalIncome > Decimal.zero;
 
@@ -239,10 +287,17 @@ class TxRow extends StatelessWidget {
   final TransactionEntity transaction;
   final bool dateGrouped;
 
+  /// Used by narrow selection lists at large text sizes; normal home rows
+  /// retain their existing layout.
+  final bool stackAmount;
+  final bool acrossBooks;
+
   const TxRow({
     super.key,
     required this.transaction,
     this.dateGrouped = true,
+    this.stackAmount = false,
+    this.acrossBooks = false,
   });
 
   bool get _isTransfer => transaction.txKind == TransactionKind.transfer;
@@ -295,7 +350,9 @@ class TxRow extends StatelessWidget {
         context.select<AppRepository, TransactionCardDisplayMode>(
             (repo) => repo.transactionCardDisplayMode);
     final repo = context.read<AppRepository>();
-    final refunded = repo.refundedAmountOf(transaction.id);
+    final refunded = acrossBooks
+        ? (transaction.amount - repo.netAmountAcrossBooks(transaction)).abs()
+        : repo.refundedAmountOf(transaction.id);
     final hasRefund = refunded > Decimal.zero &&
         transaction.txKind == TransactionKind.expense;
     final net = transaction.amount - refunded;
@@ -318,6 +375,42 @@ class TxRow extends StatelessWidget {
       ),
       cardText.secondary,
     ]);
+    final amountWidgets = <Widget>[
+      if (hasRefund) ...[
+        Text(
+          MoneyFormat.string(transaction.amount,
+              currencyCode: transaction.currencyCode),
+          style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                color: AppTextColor.hint(scheme),
+                decoration: TextDecoration.lineThrough,
+                fontFamily: 'Nunito',
+              ),
+        ),
+        const SizedBox(width: 6),
+        Text(
+          net <= Decimal.zero
+              ? MoneyFormat.string(net, currencyCode: transaction.currencyCode)
+              : '-${MoneyFormat.string(net, currencyCode: transaction.currencyCode)}',
+          style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+            color: scheme.onSurface,
+            fontWeight: FontWeight.w600,
+            fontFamily: 'Nunito',
+            // ignore: deprecated_member_use
+            fontFeatures: const [FontFeature.tabularFigures()],
+          ),
+        ),
+      ] else
+        Text(
+          _amountText,
+          style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+            color: _amountColor(scheme),
+            fontWeight: FontWeight.w600,
+            fontFamily: 'Nunito',
+            // ignore: deprecated_member_use
+            fontFeatures: const [FontFeature.tabularFigures()],
+          ),
+        ),
+    ];
     return Padding(
       padding: const EdgeInsets.symmetric(
           horizontal: AppSpacing.lg, vertical: AppSpacing.sm),
@@ -363,45 +456,17 @@ class TxRow extends StatelessWidget {
                   ),
                 ],
                 InlineTagChips(tagIds: transaction.tagIds),
+                if (stackAmount) ...[
+                  const SizedBox(height: 4),
+                  Wrap(children: amountWidgets),
+                ],
               ],
             ),
           ),
-          const SizedBox(width: AppSpacing.md),
-          if (hasRefund) ...[
-            Text(
-              MoneyFormat.string(transaction.amount,
-                  currencyCode: transaction.currencyCode),
-              style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                    color: AppTextColor.hint(scheme),
-                    decoration: TextDecoration.lineThrough,
-                    fontFamily: 'Nunito',
-                  ),
-            ),
-            const SizedBox(width: 6),
-            Text(
-              net <= Decimal.zero
-                  ? MoneyFormat.string(net,
-                      currencyCode: transaction.currencyCode)
-                  : '-${MoneyFormat.string(net, currencyCode: transaction.currencyCode)}',
-              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                color: scheme.onSurface,
-                fontWeight: FontWeight.w600,
-                fontFamily: 'Nunito',
-                // ignore: deprecated_member_use
-                fontFeatures: const [FontFeature.tabularFigures()],
-              ),
-            ),
-          ] else
-            Text(
-              _amountText,
-              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                color: _amountColor(scheme),
-                fontWeight: FontWeight.w600,
-                fontFamily: 'Nunito',
-                // ignore: deprecated_member_use
-                fontFeatures: const [FontFeature.tabularFigures()],
-              ),
-            ),
+          if (!stackAmount) ...[
+            const SizedBox(width: AppSpacing.md),
+            ...amountWidgets,
+          ],
         ],
       ),
     );

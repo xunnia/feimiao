@@ -3,107 +3,51 @@ import 'package:provider/provider.dart';
 
 import '../../core/haptics.dart';
 import '../../core/models/transaction_kind.dart';
-import '../../core/money_format.dart';
 import '../../data/app_repository.dart';
 import '../../theme/app_tokens.dart';
 import '../../widgets/app_date_picker.dart';
+import '../../widgets/app_line_icon.dart';
 import '../../widgets/app_toast.dart';
 import '../../widgets/ios_form.dart';
 import '../../widgets/ios_menu.dart';
+import '../../widgets/pressable_scale.dart';
 import '../../widgets/settings_ui.dart';
 import '../../widgets/sliding_segment.dart';
+import '../../widgets/transaction_day_list.dart';
 import '../common/app_sheet.dart';
 
-/// 返回明确确认的关联集合；取消返回 null。总账本是全量视图，不参与勾选。
-Future<Set<int>?> showTransactionBooksSheet(
-  BuildContext context, {
+/// 锚定账本芯片的多选菜单，只更新记账表单草稿；原账仍由保存入口写入。
+Future<void> showTransactionBooksMenu(
+  BuildContext anchorContext, {
   required Iterable<int> selectedIds,
-}) =>
-    showBlurSheet<Set<int>>(
-      context,
-      child: TransactionBooksSheet(selectedIds: selectedIds.toSet()),
-    );
-
-class TransactionBooksSheet extends StatefulWidget {
-  final Set<int> selectedIds;
-
-  const TransactionBooksSheet({super.key, required this.selectedIds});
-
-  @override
-  State<TransactionBooksSheet> createState() => _TransactionBooksSheetState();
-}
-
-class _TransactionBooksSheetState extends State<TransactionBooksSheet> {
-  late final Set<int> _selected = Set.of(widget.selectedIds);
-
-  @override
-  Widget build(BuildContext context) {
-    final repo = context.watch<AppRepository>();
-    final scheme = Theme.of(context).colorScheme;
-    final books = repo.books.where((b) => b.id != repo.defaultBookId).toList();
-    final validIds = books.map((b) => b.id).toSet();
-    return SafeArea(
-      child: ConstrainedBox(
-        constraints:
-            BoxConstraints(maxHeight: MediaQuery.sizeOf(context).height * .8),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            SheetHeader(
-              title: MediaQuery.textScalerOf(context).scale(16) > 22
-                  ? '账本'
-                  : '选择账本',
-              subtitle: '总账本自动包含全部账单',
-              onClose: () => Navigator.pop(context),
-              actionLabel: '确定',
-              onAction: () =>
-                  Navigator.pop(context, _selected.intersection(validIds)),
-            ),
-            Flexible(
-              child: SingleChildScrollView(
-                padding: const EdgeInsets.fromLTRB(16, 12, 16, 20),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    if (books.isNotEmpty)
-                      SettingsGroup(children: [
-                        for (final book in books)
-                          SettingsRow(
-                            title: book.name,
-                            subtitle: book.remark.isEmpty ? null : book.remark,
-                            leading: AppCheckmark(
-                              value: _selected.contains(book.id),
-                              interactive: false,
-                              onChanged: null,
-                            ),
-                            onTap: () {
-                              Haptics.selection();
-                              setState(() {
-                                if (!_selected.add(book.id)) {
-                                  _selected.remove(book.id);
-                                }
-                              });
-                            },
-                          ),
-                      ]),
-                    Padding(
-                      padding: const EdgeInsets.fromLTRB(8, 12, 8, 0),
-                      child: Text(
-                        books.isEmpty
-                            ? '还没有场景账本，可以在抽屉中新建。当前账单保留在总账本。'
-                            : '可同时选择多个账本。不选场景账本时，仅保留在总账本；不会复制账单或重复扣款。',
-                        style: AppType.secondary(scheme),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ],
+  required ValueChanged<Set<int>> onChanged,
+}) {
+  final repo = anchorContext.read<AppRepository>();
+  final books = repo.books.where((b) => b.id != repo.defaultBookId).toList();
+  return showIosMultiSelectMenu<int>(
+    anchorContext,
+    cardKey: const ValueKey('book-picker-menu'),
+    selectedValues: selectedIds.toSet(),
+    onChanged: onChanged,
+    choices: [
+      for (final book in books)
+        IosMenuChoice(
+          value: book.id,
+          label: book.name,
+          subtitle: book.remark.isEmpty ? null : book.remark,
+          icon: AppLineIcons.book,
         ),
-      ),
-    );
-  }
+    ],
+    actions: [
+      if (books.isEmpty)
+        IosMenuItem(
+          label: '暂无场景账本',
+          lineIcon: AppLineIcons.book,
+          enabled: false,
+          onTap: () {},
+        ),
+    ],
+  );
 }
 
 Future<void> showBookTransactionsSheet(BuildContext context,
@@ -225,6 +169,150 @@ class _BookTransactionsSheetState extends State<BookTransactionsSheet> {
     }
   }
 
+  Widget _filterBar(List<TransactionEntity> transactions, Set<int> selected,
+      bool allVisibleSelected, String kindLabel, bool hasFilters) {
+    final scheme = Theme.of(context).colorScheme;
+    final style = AppType.secondary(scheme);
+    final dateLabel = _range == null
+        ? '全部日期'
+        : '${_range!.start.month}/${_range!.start.day}—${_range!.end.month}/${_range!.end.day}';
+    final status = _saving
+        ? '保存中，请稍候'
+        : selected.isNotEmpty
+            ? '已选 ${selected.length} 笔'
+            : hasFilters
+                ? '筛选出 ${transactions.length} 笔'
+                : null;
+    final allLabel = allVisibleSelected ? '取消全选' : '全选';
+    final buttonStyle = TextButton.styleFrom(
+        padding: EdgeInsets.zero,
+        minimumSize: const Size(0, 40),
+        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+        alignment: Alignment.centerLeft);
+    Widget filterLabel(String label) => Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(label, style: style),
+            const SizedBox(width: 4),
+            Icon(Icons.keyboard_arrow_down_rounded,
+                size: 16, color: scheme.onSurface.withValues(alpha: .55)),
+          ],
+        );
+    final kindFilter = Builder(
+      builder: (anchor) => TextButton(
+        key: const ValueKey('book-transactions-kind'),
+        style: buttonStyle,
+        onPressed: _saving
+            ? null
+            : () => showIosMenu(anchor, [
+                  for (final option in <(TransactionKind?, String)>[
+                    (null, '全部类型'),
+                    (TransactionKind.expense, '支出'),
+                    (TransactionKind.income, '收入'),
+                    (TransactionKind.transfer, '转账'),
+                  ])
+                    IosMenuItem(
+                      label: option.$2,
+                      lineIcon: switch (option.$1) {
+                        TransactionKind.expense => AppLineIcons.receipt,
+                        TransactionKind.income => AppLineIcons.wallet,
+                        TransactionKind.transfer => AppLineIcons.importExport,
+                        _ => AppLineIcons.grid,
+                      },
+                      selected: _kind == option.$1,
+                      onTap: () => setState(() => _kind = option.$1),
+                    ),
+                ]),
+        child: filterLabel(kindLabel),
+      ),
+    );
+    final dateFilter = TextButton(
+      key: const ValueKey('book-transactions-date'),
+      style: buttonStyle,
+      onPressed: _saving
+          ? null
+          : () async {
+              final result = await showAppDateRangePicker(context,
+                  initial: _range, first: DateTime(2000), last: DateTime(2100));
+              if (mounted && result != null) {
+                setState(() => _range = result);
+              }
+            },
+      child: filterLabel(dateLabel),
+    );
+    final selectAll = TextButton(
+      key: const ValueKey('book-transactions-select-all'),
+      style: buttonStyle,
+      onPressed: _saving || transactions.isEmpty
+          ? null
+          : () => setState(() {
+                for (final t in transactions) {
+                  if (allVisibleSelected) {
+                    _selected.remove(t.id);
+                  } else {
+                    _selected.add(t.id);
+                  }
+                }
+              }),
+      child: Text(allLabel, style: style),
+    );
+    final statusText = status == null
+        ? null
+        : Text(status,
+            key: const ValueKey('book-transactions-status'), style: style);
+    return Padding(
+      key: const ValueKey('book-transactions-filter-bar'),
+      padding: const EdgeInsets.fromLTRB(20, 4, 20, 4),
+      child: LayoutBuilder(builder: (context, constraints) {
+        double textWidth(String text) {
+          final painter = TextPainter(
+            text: TextSpan(
+                text: text,
+                style: DefaultTextStyle.of(context).style.merge(style)),
+            textDirection: Directionality.of(context),
+            textScaler: MediaQuery.textScalerOf(context),
+            locale: Localizations.maybeLocaleOf(context),
+          )..layout();
+          final width = painter.width;
+          painter.dispose();
+          return width;
+        }
+
+        final requiredWidth = textWidth(kindLabel) +
+            textWidth(dateLabel) +
+            40 +
+            24 +
+            textWidth(allLabel) +
+            (status == null ? 0 : textWidth(status) + 12);
+        if (requiredWidth <= constraints.maxWidth) {
+          return Row(children: [
+            kindFilter,
+            const SizedBox(width: 12),
+            dateFilter,
+            const Spacer(),
+            if (statusText != null) ...[
+              statusText,
+              const SizedBox(width: 12),
+            ],
+            selectAll,
+          ]);
+        }
+        // Preserve readable text at narrow widths and accessibility sizes.
+        return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Wrap(spacing: 12, children: [kindFilter, dateFilter]),
+          Row(children: [
+            if (statusText != null)
+              Expanded(child: statusText)
+            else
+              const Spacer(),
+            const SizedBox(width: 12),
+            selectAll,
+          ]),
+        ]);
+      }),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final repo = context.watch<AppRepository>();
@@ -240,7 +328,6 @@ class _BookTransactionsSheetState extends State<BookTransactionsSheet> {
               title: MediaQuery.textScalerOf(context).scale(16) > 22
                   ? (_removing ? '移出' : '归集')
                   : (_removing ? '移出关联' : '已有账单'),
-              subtitle: widget.book.name,
               onClose: () => Navigator.pop(context),
             ),
             Expanded(
@@ -272,10 +359,13 @@ class _BookTransactionsSheetState extends State<BookTransactionsSheet> {
       );
     }
     final transactions = _candidates(repo);
+    final sections = groupTxnsByDay(transactions);
     final validIds = repo.allTransactions.map((t) => t.id).toSet();
     final selected = _selected.intersection(validIds);
     final allVisibleSelected = transactions.isNotEmpty &&
         transactions.every((t) => selected.contains(t.id));
+    final hasFilters =
+        _range != null || _kind != null || _search.text.trim().isNotEmpty;
     final kindLabel = switch (_kind) {
       TransactionKind.expense => '支出',
       TransactionKind.income => '收入',
@@ -292,167 +382,111 @@ class _BookTransactionsSheetState extends State<BookTransactionsSheet> {
               title: MediaQuery.textScalerOf(context).scale(16) > 22
                   ? (_removing ? '移出' : '归集')
                   : (_removing ? '移出关联' : '已有账单'),
-              subtitle: widget.book.name,
               onClose: _saving ? null : () => Navigator.pop(context),
               actionLabel: _removing ? '移出' : '添加',
               onAction: _saving || selected.isEmpty ? null : _save,
             ),
             Padding(
-              padding: const EdgeInsets.fromLTRB(20, 8, 20, 12),
-              child: SlidingSegment<bool>(
-                items: const [(false, '添加已有'), (true, '移出关联')],
-                height: MediaQuery.textScalerOf(context).scale(13) + 21,
-                value: _removing,
-                onChanged: (value) {
-                  if (_saving) return;
-                  setState(() {
-                    _removing = value;
-                    _selected.clear();
-                  });
-                },
-              ),
-            ),
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 20),
-              child: TextField(
-                key: const ValueKey('book-transactions-search'),
-                controller: _search,
-                enabled: !_saving,
-                style: AppType.body(scheme),
-                textInputAction: TextInputAction.done,
-                onSubmitted: (_) =>
-                    FocusManager.instance.primaryFocus?.unfocus(),
-                decoration: iosInputDecoration(context, hint: '搜索备注、分类、账户或金额'),
-                onChanged: (_) => setState(() {}),
-              ),
-            ),
-            Padding(
               padding: const EdgeInsets.fromLTRB(20, 8, 20, 4),
-              child: Wrap(spacing: 12, runSpacing: 4, children: [
-                Builder(
-                    builder: (anchor) => TextButton(
-                          onPressed: _saving
-                              ? null
-                              : () => showIosMenu(anchor, [
-                                    for (final option
-                                        in <(TransactionKind?, String)>[
-                                      (null, '全部类型'),
-                                      (TransactionKind.expense, '支出'),
-                                      (TransactionKind.income, '收入'),
-                                      (TransactionKind.transfer, '转账'),
-                                    ])
-                                      IosMenuItem(
-                                          label: option.$2,
-                                          selected: _kind == option.$1,
-                                          onTap: () => setState(
-                                              () => _kind = option.$1)),
-                                  ]),
-                          child:
-                              Text(kindLabel, style: AppType.secondary(scheme)),
-                        )),
-                TextButton(
-                  onPressed: _saving
-                      ? null
-                      : () async {
-                          final result = await showAppDateRangePicker(context,
-                              initial: _range,
-                              first: DateTime(2000),
-                              last: DateTime(2100));
-                          if (mounted && result != null) {
-                            setState(() => _range = result);
-                          }
-                        },
-                  child: Text(
-                      _range == null
-                          ? '全部日期'
-                          : '${_range!.start.month}/${_range!.start.day}—${_range!.end.month}/${_range!.end.day}',
-                      style: AppType.secondary(scheme)),
-                ),
-                if (_range != null || _kind != null || _search.text.isNotEmpty)
-                  TextButton(
-                      onPressed: _saving
+              child: LayoutBuilder(builder: (context, constraints) {
+                final scaler = MediaQuery.textScalerOf(context);
+                final large = scaler.scale(13) > 18;
+                // Keep room for search at 320dp / 200%, with two-line segment
+                // labels instead of shrinking the user's preferred text size.
+                final segmentWidth = (large ? 230.0 : 160.0)
+                    .clamp(0.0, constraints.maxWidth - 108);
+                return Row(children: [
+                  SizedBox(
+                    width: segmentWidth,
+                    child: SlidingSegment<bool>(
+                      key: const ValueKey('book-transactions-mode'),
+                      items: large
+                          ? const [(false, '添加\n已有'), (true, '移除\n关联')]
+                          : const [(false, '添加已有'), (true, '移除关联')],
+                      height: large ? scaler.scale(13) * 2.5 + 14 : 36,
+                      value: _removing,
+                      onChanged: (value) {
+                        if (_saving) return;
+                        setState(() {
+                          _removing = value;
+                          _selected.clear();
+                        });
+                      },
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                      child: TextField(
+                    key: const ValueKey('book-transactions-search'),
+                    controller: _search,
+                    enabled: !_saving,
+                    style: AppType.body(scheme),
+                    textInputAction: TextInputAction.done,
+                    onSubmitted: (_) =>
+                        FocusManager.instance.primaryFocus?.unfocus(),
+                    decoration:
+                        iosInputDecoration(context, hint: '搜索').copyWith(
+                      contentPadding: const EdgeInsets.symmetric(
+                          horizontal: 10, vertical: 9),
+                      prefixIcon: large
                           ? null
-                          : () => setState(() {
-                                _range = null;
-                                _kind = null;
-                                _search.clear();
-                              }),
-                      child: Text('清除筛选', style: AppType.secondary(scheme))),
-              ]),
+                          : Icon(Icons.search_rounded,
+                              size: 18,
+                              color: scheme.onSurface.withValues(alpha: .45)),
+                      prefixIconConstraints: const BoxConstraints(minWidth: 30),
+                      suffixIconConstraints:
+                          const BoxConstraints(minWidth: 32, maxWidth: 32),
+                      suffixIcon: hasFilters
+                          ? Tooltip(
+                              message: '清除筛选',
+                              child: PressableScale(
+                                onPressed: _saving
+                                    ? null
+                                    : () => setState(() {
+                                          _range = null;
+                                          _kind = null;
+                                          _search.clear();
+                                        }),
+                                child: SizedBox(
+                                  width: 32,
+                                  height: 40,
+                                  child: Icon(Icons.close_rounded,
+                                      size: 16,
+                                      color: scheme.onSurface
+                                          .withValues(alpha: .55)),
+                                ),
+                              ),
+                            )
+                          : null,
+                    ),
+                    onChanged: (_) => setState(() {}),
+                  )),
+                ]);
+              }),
             ),
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 20),
-              child: Row(children: [
-                Expanded(
-                    child: Text(
-                        _saving
-                            ? '保存中，请稍候'
-                            : '已选 ${selected.length} 笔 · 筛选出 ${transactions.length} 笔',
-                        style: AppType.secondary(scheme))),
-                TextButton(
-                  onPressed: _saving || transactions.isEmpty
-                      ? null
-                      : () => setState(() {
-                            for (final t in transactions) {
-                              if (allVisibleSelected) {
-                                _selected.remove(t.id);
-                              } else {
-                                _selected.add(t.id);
-                              }
-                            }
-                          }),
-                  child: Text(allVisibleSelected ? '取消全选' : '全选',
-                      style: AppType.secondary(scheme)),
-                ),
-              ]),
-            ),
+            _filterBar(transactions, selected, allVisibleSelected, kindLabel,
+                hasFilters),
             Expanded(
               child: ListView.builder(
-                padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
-                itemCount: transactions.length,
+                padding: const EdgeInsets.only(top: 4, bottom: 12),
+                itemCount: sections.length,
                 itemBuilder: (context, index) {
-                  final t = transactions[index];
-                  final value = selected.contains(t.id);
-                  return Padding(
-                    padding: const EdgeInsets.only(bottom: 8),
-                    child: SettingsGroup(children: [
-                      SettingsRow(
-                        title: t.note.isNotEmpty
-                            ? t.note
-                            : (t.categoryNameZh.isEmpty
-                                ? '转账'
-                                : t.categoryNameZh),
-                        subtitle:
-                            '${t.date.year}年${t.date.month}月${t.date.day}日 · '
-                            '${t.txKind == TransactionKind.income ? '收入' : t.txKind == TransactionKind.transfer ? '转账' : '支出'} '
-                            '${MoneyFormat.string(t.amount, currencyCode: t.currencyCode)}',
-                        leading: AppCheckmark(
-                            value: value, onChanged: null, interactive: false),
-                        onTap: _saving
-                            ? null
-                            : () {
-                                Haptics.selection();
-                                setState(() {
-                                  if (!_selected.add(t.id)) {
-                                    _selected.remove(t.id);
-                                  }
-                                });
-                              },
-                      )
-                    ]),
+                  return TxDayCard(
+                    section: sections[index],
+                    selectedIds: selected,
+                    onSelectionChanged: _saving
+                        ? null
+                        : (t) {
+                            setState(() {
+                              if (!_selected.add(t.id)) {
+                                _selected.remove(t.id);
+                              }
+                            });
+                          },
                   );
                 },
               ),
             ),
-            if (MediaQuery.viewInsetsOf(context).bottom == 0)
-              Padding(
-                padding: const EdgeInsets.fromLTRB(24, 4, 24, 16),
-                child: Text(
-                    _removing
-                        ? '仅解除当前账本关联。总账本、其他账本、账户余额和退款记录不变。'
-                        : '总账本自动包含全部账单；添加后不会复制账单，也不会重复扣款。',
-                    style: AppType.caption(scheme)),
-              ),
           ]),
         ),
       ),
