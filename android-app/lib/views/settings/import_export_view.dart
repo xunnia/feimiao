@@ -67,6 +67,8 @@ class _ImportExportViewState extends State<ImportExportView> {
     '记录类型',
     '交易UUID',
     '退款归属UUID',
+    '账本UUID',
+    '账本名称',
   ];
   final _dateFmt = DateFormat('yyyy-MM-dd HH:mm');
 
@@ -116,6 +118,11 @@ class _ImportExportViewState extends State<ImportExportView> {
       final uuidOf = {for (final t in all) t.id: t.uuid};
       final refundTotals = LedgerPolicy.refundTotals(all);
       for (final t in txs) {
+        final bookCells = _feimiaoBookAssociationCells(
+          books: repo.books,
+          bookIds: t.bookIds,
+          defaultBookId: repo.defaultBookId,
+        );
         final settlementAccountName = t.settlementAccountId == null
             ? ''
             : repo.accounts
@@ -154,6 +161,8 @@ class _ImportExportViewState extends State<ImportExportView> {
           t.refundOf == null ? '账单' : '退款',
           t.uuid,
           t.refundOf == null ? '' : (uuidOf[t.refundOf] ?? ''),
+          bookCells.uuids,
+          bookCells.names,
         ]);
       }
       final csv = const ListToCsvConverter().convert(rows);
@@ -570,6 +579,34 @@ String _formatFeimiaoTransactionDate(
   return DateFormat(pattern).format(date);
 }
 
+({String uuids, String names}) _feimiaoBookAssociationCells({
+  required Iterable<BookEntity> books,
+  required Iterable<int> bookIds,
+  required int defaultBookId,
+}) {
+  final ids = bookIds.where((id) => id != defaultBookId).toSet();
+  final selected = books.where((book) => ids.contains(book.id)).toList();
+  if (selected.length != ids.length) {
+    throw const FormatException('账本关联不完整，请刷新后重新导出');
+  }
+  return (
+    uuids: jsonEncode(selected.map((book) => book.uuid).toList()),
+    names: jsonEncode(selected.map((book) => book.name).toList()),
+  );
+}
+
+@visibleForTesting
+({String uuids, String names}) feimiaoBookAssociationCellsForTest({
+  required Iterable<BookEntity> books,
+  required Iterable<int> bookIds,
+  required int defaultBookId,
+}) =>
+    _feimiaoBookAssociationCells(
+      books: books,
+      bookIds: bookIds,
+      defaultBookId: defaultBookId,
+    );
+
 List<FeimiaoImportRow>? _parseFeimiaoRows(List<List<String>> table) {
   if (table.isEmpty) return null;
 
@@ -590,6 +627,24 @@ List<FeimiaoImportRow>? _parseFeimiaoRows(List<List<String>> table) {
     final index = columns[name] ?? -1;
     if (index < 0 || index >= row.length) return '';
     return clean(row[index]);
+  }
+
+  List<String>? bookArray(List<String> row, String name, int line) {
+    if (!columns.containsKey(name)) return null;
+    final raw = cell(row, name);
+    // Blank optional cells in older/external files do not prove an empty
+    // membership. Only an explicit JSON [] means "total ledger only".
+    if (raw.isEmpty || raw == 'null') return null;
+    Object? decoded;
+    try {
+      decoded = jsonDecode(raw);
+    } on FormatException {
+      throw FormatException('第 $line 行的$name应为 JSON 字符串数组');
+    }
+    if (decoded is! List || decoded.any((value) => value is! String)) {
+      throw FormatException('第 $line 行的$name应为 JSON 字符串数组');
+    }
+    return decoded.cast<String>().map((value) => value.trim()).toList();
   }
 
   Decimal money(String raw) {
@@ -645,6 +700,13 @@ List<FeimiaoImportRow>? _parseFeimiaoRows(List<List<String>> table) {
         .where((name) => name.isNotEmpty)
         .toList(growable: false);
     final reimbursable = cell(raw, '可报销').toLowerCase();
+    final bookUuids = bookArray(raw, '账本UUID', i + 1);
+    final bookNames = bookArray(raw, '账本名称', i + 1);
+    if (bookUuids != null &&
+        bookNames != null &&
+        bookUuids.length != bookNames.length) {
+      throw FormatException('第 ${i + 1} 行的账本 UUID 与名称数量不一致');
+    }
     rows.add(
       FeimiaoImportRow(
         uuid: cell(raw, '交易UUID'),
@@ -659,6 +721,8 @@ List<FeimiaoImportRow>? _parseFeimiaoRows(List<List<String>> table) {
         accountName: cell(raw, '账户'),
         toAccountName: toAccountName,
         tagNames: tagNames,
+        bookUuids: bookUuids,
+        bookNames: bookNames,
         note: cell(raw, '备注'),
         date: date,
         timePrecision: TransactionTimePrecisionX.fromStorage(

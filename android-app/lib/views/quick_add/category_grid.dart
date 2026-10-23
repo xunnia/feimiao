@@ -1,4 +1,4 @@
-import 'dart:math' show min;
+import 'dart:math' show max, min;
 import 'dart:ui' show ImageFilter;
 
 import 'package:flutter/material.dart';
@@ -191,7 +191,6 @@ class HierarchicalCategoryPicker extends StatefulWidget {
 class _HierarchicalCategoryPickerState
     extends State<HierarchicalCategoryPicker> {
   static const double _rowExtent = 92;
-  static const double _maxRowsHeight = 184;
   final LayerLink _panelLink = LayerLink();
   final ScrollController _rowsScroll = ScrollController();
 
@@ -204,6 +203,11 @@ class _HierarchicalCategoryPickerState
   @override
   Widget build(BuildContext context) {
     const columns = 5;
+    // Keep the existing icon/label sizes. Large system text needs more row
+    // height (including two-line child labels), rather than clipping at 84dp.
+    final rowExtent = _rowExtent +
+        max(0.0, MediaQuery.textScalerOf(context).scale(12) - 12) * 2.5;
+    final maxRowsHeight = rowExtent * 2;
     final rows = <List<CategoryEntity>>[];
     for (var i = 0; i < widget.categories.length; i += columns) {
       rows.add(widget.categories.sublist(
@@ -219,8 +223,8 @@ class _HierarchicalCategoryPickerState
             (row) => row.any((c) => c.id == widget.expandedParentId),
           );
     final rootHeight =
-        rows.isEmpty ? 0.0 : min(rows.length * _rowExtent + 4, _maxRowsHeight);
-    final hasMoreRows = rows.length * _rowExtent > _maxRowsHeight;
+        rows.isEmpty ? 0.0 : min(rows.length * rowExtent + 4, maxRowsHeight);
+    final hasMoreRows = rows.length * rowExtent > maxRowsHeight;
     final reservedPanelHeight = panelOpen && widget.obscuredChild == null
         ? min(232.0, ((widget.children.length + 5) ~/ 6) * 76.0 + 20)
         : 0.0;
@@ -248,11 +252,11 @@ class _HierarchicalCategoryPickerState
                         controller: _rowsScroll,
                         padding: EdgeInsets.zero,
                         physics: const ClampingScrollPhysics(),
-                        itemExtent: _rowExtent,
+                        itemExtent: rowExtent,
                         itemCount: rows.length,
                         itemBuilder: (context, index) {
                           final row = SizedBox(
-                            height: _rowExtent,
+                            height: rowExtent,
                             child: _CategoryRowGrid(
                               categories: rows[index],
                               selectedId: widget.selectedParentId,

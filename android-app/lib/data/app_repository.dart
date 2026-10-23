@@ -24,6 +24,7 @@ import '../core/account/liability_repayment_policy.dart';
 import '../core/account/net_worth_snapshot.dart';
 import '../core/account/net_worth_verified_checkpoint.dart';
 import '../core/app_clock.dart';
+import 'transaction_book_store.dart';
 import '../core/cloud/profile_sync.dart';
 import '../core/ai/ai_provider_config.dart';
 import '../core/ai/ai_account_json.dart';
@@ -2137,6 +2138,10 @@ class CategoryEntity {
 class TransactionEntity {
   final int id;
   final int? bookId;
+  final Set<int>? _bookIds;
+  Set<int> get bookIds => _bookIds == null
+      ? {if (bookId != null) bookId!}
+      : Set.unmodifiable(_bookIds);
   final String uuid;
   final String kind;
   final String amountStr;
@@ -2188,6 +2193,7 @@ class TransactionEntity {
   const TransactionEntity({
     required this.id,
     this.bookId,
+    Set<int>? bookIds,
     this.uuid = '',
     required this.kind,
     required this.amountStr,
@@ -2215,7 +2221,7 @@ class TransactionEntity {
     this.recurringRuleId,
     this.excluded = false,
     this.refundOf,
-  });
+  }) : _bookIds = bookIds;
 
   TransactionRecord toRecord({String languageCode = 'zh'}) => TransactionRecord(
         id: id.toString(),
@@ -2238,6 +2244,9 @@ class TransactionEntity {
       TransactionEntity(
         id: m['id'] as int,
         bookId: m['book_id'] as int?,
+        bookIds: m['book_ids'] == null
+            ? null
+            : TransactionBookStore.parse(m['book_ids']),
         uuid: m['uuid'] as String? ?? '',
         kind: m['kind'] as String,
         amountStr: m['amount'] as String,
@@ -2357,6 +2366,8 @@ class FeimiaoImportRow {
   final TransactionEventType? eventType;
   final bool excluded;
   final bool reimbursable;
+  final List<String>? bookUuids;
+  final List<String>? bookNames;
 
   const FeimiaoImportRow({
     this.uuid = '',
@@ -2380,6 +2391,8 @@ class FeimiaoImportRow {
     this.eventType,
     this.excluded = false,
     this.reimbursable = false,
+    this.bookUuids,
+    this.bookNames,
   });
 }
 
@@ -2694,7 +2707,7 @@ class _AiProviderImportSnapshot {
 }
 
 class AppRepository extends ChangeNotifier {
-  static const _dbVersion = 50;
+  static const _dbVersion = 51;
   static const _dbName = 'qingji.db';
   static const bool _startupTrace = bool.fromEnvironment(
     'QINGJI_STARTUP_TRACE',
@@ -3020,6 +3033,8 @@ class AppRepository extends ChangeNotifier {
       _categoriesViewCache ??= List.unmodifiable(_categories);
   List<TransactionEntity> get transactions =>
       _transactionsViewCache ??= List.unmodifiable(_transactions);
+  List<TransactionEntity> get allTransactions =>
+      List.unmodifiable(_allTransactions);
   TransactionEntity? transactionById(int id) => _txById[id];
   int get transactionCount => _transactions.length;
   Iterable<TransactionEntity> get transactionsView => _transactions;
@@ -3434,7 +3449,6 @@ class AppRepository extends ChangeNotifier {
   List<ConsumptionExpenseFamily> _budgetExpenseFamiliesForBook(
     int logicalBookId,
   ) {
-    final allowedBooks = _bookIdsForView(logicalBookId).toSet();
     final transactionById = {
       for (final transaction in _allTransactions) transaction.id: transaction,
     };
@@ -3443,8 +3457,7 @@ class AppRepository extends ChangeNotifier {
     };
     final events = <BudgetTransactionFamilyEvent>[];
     for (final transaction in _allTransactions) {
-      if (transaction.bookId == null ||
-          !allowedBooks.contains(transaction.bookId)) {
+      if (!_transactionMatchesBook(transaction, logicalBookId)) {
         continue;
       }
       final category = transaction.categoryId == null
@@ -5201,6 +5214,7 @@ class AppRepository extends ChangeNotifier {
     await _ensureReportJobs(db);
     await _ensureAiRunTables(db);
     await _ensureAiExtensionTables(db);
+    await TransactionBookStore.ensureSchema(db);
     // The freshly-created schema already includes every runtime compatibility
     // table/index, so the first normal open can skip the legacy repair pass.
     await db.insert(
@@ -5682,6 +5696,11 @@ class AppRepository extends ChangeNotifier {
       // 把旧预算换成每个账本一条日常预算；旧预算表原样保留、不再读取。
       await _ensureBudgetRuleTables(db);
       await _migrateBudgetRulesV50(db);
+    }
+    if (oldVersion < 51) {
+      // Add an empty overlay; existing book_id, balances and financial history
+      // remain byte-for-byte unchanged. sqflite runs onUpgrade transactionally.
+      await TransactionBookStore.ensureSchema(db);
     }
     // Some development builds already reported user_version 39 even though
     // the B3/A4 compatibility columns had not landed. Normal versioned
@@ -11597,6 +11616,8 @@ class AppRepository extends ChangeNotifier {
 
   List<int> _bookIdsForView(int bookId) {
     final isTotal = bookId == _defaultBookId;
+    // Asset scopes keep their existing opt-in policy. Transaction membership
+    // uses _transactionMatchesBook and is deliberately independent of this.
     final ids = isTotal
         ? [
             for (final b in _books)
@@ -11609,9 +11630,34 @@ class AppRepository extends ChangeNotifier {
 
   List<int> _bookIdsForCurrentView() => _bookIdsForView(_currentBookId);
 
+  Set<int> transactionBookIds(TransactionEntity transaction) =>
+      transaction.bookIds;
+
+  bool _transactionMatchesBook(TransactionEntity transaction, int bookId) =>
+      bookId == _defaultBookId || transaction.bookIds.contains(bookId);
+
+  bool _transactionMatchesAssetBook(
+          TransactionEntity transaction, int bookId) =>
+      transaction.bookId == bookId ||
+      (bookId != _defaultBookId && transaction.bookIds.contains(bookId));
+
+  Future<bool> _transactionMatchesBookInDb(
+      DatabaseExecutor db, int transactionID, int? bookID) async {
+    if (bookID == null) return false;
+    final rows = await db.query('transactions',
+        columns: ['book_id'],
+        where: 'id = ?',
+        whereArgs: [transactionID],
+        limit: 1);
+    return rows.isNotEmpty &&
+        (rows.single['book_id'] == bookID ||
+            (bookID != _defaultBookId &&
+                (await TransactionBookStore.read(db, transactionID))
+                    .contains(bookID)));
+  }
+
   Future<void> _loadTransactions() async {
-    // 总账本 = 聚合视图：显示自己的账单 + 所有「计入总账本」账本的账单；
-    // 其它账本只显示自己的。
+    // 总账本显示全部原账；场景账本按关联集合筛选，不复制财务记录。
     _transactionFullReloadCount++;
     final all = await _queryTransactions();
     _allTransactions
@@ -11626,15 +11672,14 @@ class AppRepository extends ChangeNotifier {
     final now = AppClock.now;
     final start = DateTime(now.year, now.month);
     final end = DateTime(now.year, now.month + 1);
-    final bookIds = _bookIdsForCurrentView();
-    final placeholders = List.filled(bookIds.length, '?').join(',');
+    final scene = _currentBookId == _defaultBookId ? null : _currentBookId;
     final rows = await _queryTransactions(
-      where: 't.date_ms >= ? AND t.date_ms < ? AND '
-          't.book_id IN ($placeholders)',
+      where: 't.date_ms >= ? AND t.date_ms < ?'
+          '${scene == null ? '' : ' AND ${TransactionBookStore.scopeSql}'}',
       args: [
         start.millisecondsSinceEpoch,
         end.millisecondsSinceEpoch,
-        ...bookIds,
+        if (scene != null) ...[scene, scene],
       ],
     );
     _allTransactions
@@ -11647,6 +11692,7 @@ class AppRepository extends ChangeNotifier {
       SELECT
         t.id,
         t.book_id,
+        ${TransactionBookStore.selectSql} AS book_ids,
         t.uuid,
         t.kind,
         t.amount,
@@ -11698,13 +11744,10 @@ class AppRepository extends ChangeNotifier {
   }
 
   void _applyCurrentBookTransactionView() {
-    final ids = _bookIdsForCurrentView();
-    final allowedBookIds = ids.toSet();
     _transactions
       ..clear()
       ..addAll(_allTransactions.where((transaction) =>
-          transaction.bookId != null &&
-          allowedBookIds.contains(transaction.bookId)));
+          _transactionMatchesBook(transaction, _currentBookId)));
     _invalidateTxDerived();
   }
 
@@ -12908,6 +12951,7 @@ class AppRepository extends ChangeNotifier {
     String imagePath = '',
     bool excluded = false,
     int? bookId,
+    Iterable<int>? bookIds,
     String? autoRecordSourceId,
   }) async {
     final normalizedCurrency = currencyCode.trim().toUpperCase();
@@ -12951,7 +12995,14 @@ class AppRepository extends ChangeNotifier {
       ..._syncStampNew(),
     };
     final newId = sourceId == null || sourceId.isEmpty
-        ? await _db!.insert('transactions', values)
+        ? await _db!.transaction<int>((txn) async {
+            final id = await txn.insert('transactions', values);
+            if (bookIds != null) {
+              await TransactionBookStore.replace(txn, id, bookIds,
+                  defaultBookID: _defaultBookId);
+            }
+            return id;
+          })
         : await _db!.transaction<int>((txn) async {
             final existing = await txn.query(
               'auto_record_occurrences',
@@ -12977,6 +13028,10 @@ class AppRepository extends ChangeNotifier {
               'created_ms': AppClock.now.millisecondsSinceEpoch,
             });
             final transactionId = await txn.insert('transactions', values);
+            if (bookIds != null) {
+              await TransactionBookStore.replace(txn, transactionId, bookIds,
+                  defaultBookID: _defaultBookId);
+            }
             await txn.update(
               'auto_record_occurrences',
               {'transaction_id': transactionId},
@@ -14621,6 +14676,7 @@ class AppRepository extends ChangeNotifier {
     bool reimbursable = false,
     String imagePath = '',
     bool excluded = false,
+    Iterable<int>? bookIds,
   }) async {
     amount = normalizeMoneyAmount(amount);
     if (amount <= Decimal.zero) {
@@ -14706,6 +14762,10 @@ class AppRepository extends ChangeNotifier {
         where: 'id = ?',
         whereArgs: [id],
       );
+      if (bookIds != null) {
+        await TransactionBookStore.replace(txn, id, bookIds,
+            defaultBookID: _defaultBookId);
+      }
       if (refunded > Decimal.zero) {
         await txn.update(
           'transactions',
@@ -14919,13 +14979,18 @@ class AppRepository extends ChangeNotifier {
       );
     }
 
-    final existingUuids = (await _db!.query(
+    String uuidKey(String value) =>
+        value.trim().replaceAll('-', '').toLowerCase();
+    final knownTransactions = await _db!.query(
       'transactions',
-      columns: ['uuid'],
+      columns: ['id', 'uuid'],
       where: "uuid <> ''",
-    ))
-        .map((r) => r['uuid'] as String)
-        .toSet();
+    );
+    final existingUuidIds = {
+      for (final row in knownTransactions)
+        uuidKey(row['uuid'] as String): row['id'] as int
+    };
+    final existingUuids = existingUuidIds.keys.toSet();
     final existingFingerprints = await _existingImportFingerprints();
     final uuidToId = <String, int>{};
     var inserted = 0;
@@ -14953,9 +15018,76 @@ class AppRepository extends ChangeNotifier {
       ],
     };
     var createdTags = false;
+    var createdBooks = false;
     // 整个逐行导入（含新建账户/标签、账单、退款行）包在一个事务里：
     // 中途任何一行失败都整体回滚，不会留下半截导入的脏数据。
     await _db!.transaction((txn) async {
+      final knownBooks = (await txn.query('books')).toList();
+      Future<Set<int>?> importedBooks(FeimiaoImportRow row) async {
+        if (row.bookUuids == null && row.bookNames == null) return null;
+        final uuids = row.bookUuids ?? const <String>[];
+        final names = row.bookNames ?? const <String>[];
+        if (row.bookUuids != null &&
+            row.bookNames != null &&
+            uuids.length != names.length) {
+          throw const FormatException('账本UUID与名称数量不一致');
+        }
+        final result = <int>{};
+        for (var i = 0; i < max(uuids.length, names.length); i++) {
+          final uuid = i < uuids.length ? uuids[i].trim() : '';
+          final name = i < names.length ? names[i].trim() : '';
+          if (uuid.isEmpty && name.isEmpty) {
+            throw const FormatException('账本标识和名称不能同时为空');
+          }
+          final matches = knownBooks
+              .where((b) => uuid.isNotEmpty
+                  ? uuidKey(b['uuid'] as String? ?? '') == uuidKey(uuid)
+                  : b['name'] == name)
+              .toList();
+          if (matches.length > 1) {
+            throw FormatException('存在多个同名账本“$name”，请用账本UUID导入');
+          }
+          if (matches.isNotEmpty) {
+            final id = matches.single['id'] as int;
+            if (id != _defaultBookId) result.add(id);
+            continue;
+          }
+          final values = <String, Object?>{
+            ..._syncStampNew(),
+            if (uuid.isNotEmpty) 'uuid': uuid,
+            'name': name.isEmpty ? '导入账本' : name,
+            'icon': '📒',
+            'sort_order': knownBooks.length,
+            'created_ms': AppClock.now.millisecondsSinceEpoch,
+            'include_in_total': 1,
+          };
+          final id = await txn.insert('books', values);
+          knownBooks.add({...values, 'id': id});
+          createdBooks = true;
+          result.add(id);
+        }
+        return result;
+      }
+
+      Future<void> restoreBooks(int id, FeimiaoImportRow row,
+          {bool merge = false}) async {
+        final selected = await importedBooks(row);
+        if (selected == null && (!merge || _currentBookId == _defaultBookId)) {
+          return;
+        }
+        await TransactionBookStore.replace(
+            txn,
+            id,
+            merge
+                ? {
+                    ...await TransactionBookStore.read(txn, id),
+                    ...?selected,
+                    if (selected == null) _currentBookId
+                  }
+                : selected!,
+            defaultBookID: _defaultBookId);
+      }
+
       for (final name in accountNames) {
         final key = normalizedName(name);
         if (accountIdsByName.containsKey(key)) continue;
@@ -15029,7 +15161,11 @@ class AppRepository extends ChangeNotifier {
 
       String nextUuid(String raw) {
         final u = raw.trim();
-        if (u.length == 32) return u;
+        if (RegExp(
+                r'^(?:[0-9a-fA-F]{32}|[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})$')
+            .hasMatch(u)) {
+          return uuidKey(u);
+        }
         return _newUuid();
       }
 
@@ -15081,22 +15217,17 @@ class AppRepository extends ChangeNotifier {
 
       final explicitRefundParents = {
         for (final r in rows)
-          if (r.refundOfUuid.trim().isNotEmpty) r.refundOfUuid.trim(),
+          if (r.refundOfUuid.trim().isNotEmpty) uuidKey(r.refundOfUuid),
       };
       final originals =
           rows.where((r) => r.refundOfUuid.trim().isEmpty).toList();
       for (final row in originals) {
         final uuid = nextUuid(row.uuid);
         if (existingUuids.contains(uuid)) {
-          final existing = await txn.query(
-            'transactions',
-            columns: ['id'],
-            where: 'uuid = ?',
-            whereArgs: [uuid],
-            limit: 1,
-          );
-          if (existing.isNotEmpty) {
-            uuidToId[uuid] = existing.first['id'] as int;
+          final id = existingUuidIds[uuid] ?? uuidToId[uuid];
+          if (id != null) {
+            uuidToId[uuid] = id;
+            await restoreBooks(id, row, merge: true);
           }
           skipped++;
           continue;
@@ -15107,9 +15238,11 @@ class AppRepository extends ChangeNotifier {
           date: row.date,
           note: row.note,
         );
-        if (row.uuid.isEmpty &&
-            _consumeExistingImportFingerprint(existingFingerprints, fp) !=
-                null) {
+        final existingId = row.uuid.isEmpty
+            ? _consumeExistingImportFingerprint(existingFingerprints, fp)
+            : null;
+        if (existingId != null) {
+          await restoreBooks(existingId, row, merge: true);
           skipped++;
           continue;
         }
@@ -15118,6 +15251,7 @@ class AppRepository extends ChangeNotifier {
           'uuid': uuid,
           'refund_of': null,
         });
+        await restoreBooks(id, row);
         uuidToId[uuid] = id;
         existingUuids.add(uuid);
         inserted++;
@@ -15159,7 +15293,8 @@ class AppRepository extends ChangeNotifier {
           skipped++;
           continue;
         }
-        final originalId = uuidToId[row.refundOfUuid.trim()];
+        final originalId = uuidToId[uuidKey(row.refundOfUuid)] ??
+            existingUuidIds[uuidKey(row.refundOfUuid)];
         if (originalId == null) {
           skipped++;
           continue;
@@ -15232,6 +15367,7 @@ class AppRepository extends ChangeNotifier {
       }
     });
 
+    if (createdBooks) await _loadBooks();
     if (createdAccounts) await _loadAccounts();
     if (createdTags) await _loadTags();
     await _loadTransactions();
@@ -15298,8 +15434,7 @@ class AppRepository extends ChangeNotifier {
         'category_id',
         'account_id',
       ],
-      where: 'book_id = ?',
-      whereArgs: [_currentBookId],
+      where: 'refund_of IS NULL',
     );
     final result = <String, List<int>>{};
     for (final r in rows) {
@@ -15378,6 +15513,16 @@ class AppRepository extends ChangeNotifier {
         );
         final existingId = _consumeExistingImportFingerprint(existing, fp);
         if (existingId != null) {
+          if (_currentBookId != _defaultBookId) {
+            await TransactionBookStore.replace(
+                txn,
+                existingId,
+                {
+                  ...await TransactionBookStore.read(txn, existingId),
+                  _currentBookId
+                },
+                defaultBookID: _defaultBookId);
+          }
           skipped++;
           if (r.orderNo.isNotEmpty) orderToId[r.orderNo] = existingId;
           insertedRows.add((id: existingId, row: r, categoryId: categoryId));
@@ -15416,20 +15561,21 @@ class AppRepository extends ChangeNotifier {
           if (exact != null) return exact;
           // 跨批/跨月配对：原单可能是之前某次导入落库的（order_no 已持久化）。
           // 只认同账本、非退款的支出行；金额上限仍由调用方的 remaining 校验兜底。
-          final historical = await txn.query(
-            'transactions',
-            columns: ['id'],
-            where: 'order_no = ? AND refund_of IS NULL AND kind = ? '
-                'AND book_id = ?',
-            whereArgs: [
+          final historical = await txn.rawQuery(
+            '''SELECT t.id FROM transactions t
+                WHERE t.order_no = ? AND t.refund_of IS NULL AND t.kind = ?
+                AND (? = ? OR ${TransactionBookStore.scopeSql})
+                ORDER BY t.id ASC LIMIT 2''',
+            [
               r.orderNo,
               TransactionKind.expense.toJson(),
               _currentBookId,
+              _defaultBookId,
+              _currentBookId,
+              _currentBookId
             ],
-            orderBy: 'id ASC',
-            limit: 1,
           );
-          if (historical.isNotEmpty) return historical.first['id'] as int;
+          if (historical.length == 1) return historical.single['id'] as int;
         }
         final rMerchant = _refundMatchKey(r.merchant);
         final rText = _refundMatchKey('${r.product} ${r.note}');
@@ -15806,10 +15952,8 @@ class AppRepository extends ChangeNotifier {
     _ensureBookViewCachesFresh();
     final cached = _bookVisibleTxCache[bookId];
     if (cached != null) return List.of(cached);
-    final allowed = _bookIdsForView(bookId).toSet();
     final result = _globalVisibleTransactions
-        .where((transaction) =>
-            transaction.bookId != null && allowed.contains(transaction.bookId))
+        .where((transaction) => _transactionMatchesBook(transaction, bookId))
         .toList(growable: false);
     _bookVisibleTxCache[bookId] = result;
     return List.of(result);
@@ -15819,13 +15963,30 @@ class AppRepository extends ChangeNotifier {
     _ensureBookViewCachesFresh();
     final cached = _bookRecordsCache[bookId];
     if (cached != null) return List.of(cached);
-    final allowed = _bookIdsForView(bookId).toSet();
-    final transactions = _allTransactions.where((transaction) =>
-        transaction.bookId != null && allowed.contains(transaction.bookId));
+    final transactions = _allTransactions
+        .where((transaction) => _transactionMatchesBook(transaction, bookId));
     final result = _buildUserRecords(transactions, _globalRefundTotals);
     _bookRecordsCache[bookId] = List.unmodifiable(result);
     _bookRecordsCacheBuildCount++;
     return List.of(result);
+  }
+
+  /// Union by original row identity, never by concatenating scene subtotals.
+  List<TransactionEntity> visibleTransactionsForBookViews(
+      Iterable<int> bookIds) {
+    final ids = bookIds.toSet();
+    return _globalVisibleTransactions
+        .where(
+            (t) => ids.contains(_defaultBookId) || t.bookIds.any(ids.contains))
+        .toList();
+  }
+
+  List<TransactionRecord> recordsForBookViews(Iterable<int> bookIds) {
+    final ids = bookIds.toSet();
+    return _buildUserRecords(
+        _allTransactions.where(
+            (t) => ids.contains(_defaultBookId) || t.bookIds.any(ids.contains)),
+        _globalRefundTotals);
   }
 
   List<TransactionRecord> _buildUserRecords(
@@ -17241,193 +17402,74 @@ class AppRepository extends ChangeNotifier {
   }
 
   /// 这个账本名下有多少笔账单（删除前的保护检查用）。
-  Future<int> transactionCountForBook(int id) async =>
-      Sqflite.firstIntValue(await _db!.rawQuery(
-          'SELECT COUNT(*) FROM transactions WHERE book_id = ?', [id])) ??
-      0;
+  Future<int> transactionCountForBook(int id) async {
+    final all = await _queryTransactions();
+    return all
+        .where((t) => t.refundOf == null && _transactionMatchesBook(t, id))
+        .length;
+  }
 
-  /// 删账本。[moveRecordsToDefault] = true 时先把账单转移到总账本再删，
-  /// 记录不丢；false = 连账单一起删（UI 层要走更深的二次确认）。
-  Future<void> deleteBook(int id, {bool moveRecordsToDefault = false}) async {
+  /// Change scope only, in one transaction. A selected refund resolves to its
+  /// root; repeated IDs and intersecting scene selections never duplicate money.
+  Future<void> setTransactionBooks(
+    Iterable<int> transactionIds,
+    Iterable<int> bookIds, {
+    bool addOnly = false,
+    bool removeOnly = false,
+  }) async {
+    if (addOnly && removeOnly) throw ArgumentError('不能同时添加和移除账本');
+    final selected = bookIds.toSet()..remove(_defaultBookId);
+    final ids = transactionIds.toSet();
+    if (ids.isEmpty) return;
+    final roots = await _db!.transaction((txn) =>
+        TransactionBookStore.updateMany(txn, ids, selected,
+            defaultBookID: _defaultBookId,
+            updatedMs: AppClock.now.millisecondsSinceEpoch,
+            addOnly: addOnly,
+            removeOnly: removeOnly));
+    for (final group in TransactionBookStore.chunks(roots)) {
+      await _refreshTransactionRows(familyRoots: group.toSet());
+    }
+    notifyListeners();
+  }
+
+  /// 删除场景只解除关联；旧兼容来源转到总账本，原账与资产保留。
+  /// 保留旧参数名，明确拒绝旧的连数据删除调用。
+  Future<void> deleteBook(int id, {bool moveRecordsToDefault = true}) async {
+    if (!moveRecordsToDefault) {
+      throw StateError('删除账本不会删除账单，请在明细页单独确认从所有账本删除原账单。');
+    }
     if (_books.length <= 1) return;
     if (id == _defaultBookId) return; // 总账本不可删
-    final receiptPaths = <String>[];
     await _db!.transaction((txn) async {
-      if (moveRecordsToDefault) {
-        final now = DateTime.now().millisecondsSinceEpoch;
+      final now = DateTime.now().millisecondsSinceEpoch;
+      await txn.update(
+        'transactions',
+        {'book_id': _defaultBookId, 'updated_ms': now},
+        where: 'book_id = ?',
+        whereArgs: [id],
+      );
+      for (final table in [
+        'recurring_rules',
+        'budget_periods',
+        'reports',
+        'report_jobs',
+        'physical_assets',
+        'receivable_assets',
+      ]) {
         await txn.update(
-          'transactions',
-          {'book_id': _defaultBookId, 'updated_ms': now},
+          table,
+          {'book_id': _defaultBookId},
           where: 'book_id = ?',
           whereArgs: [id],
         );
-        for (final table in [
-          'recurring_rules',
-          'budget_periods',
-          'reports',
-          'report_jobs',
-          'physical_assets',
-          'receivable_assets',
-        ]) {
-          await txn.update(
-            table,
-            {'book_id': _defaultBookId},
-            where: 'book_id = ?',
-            whereArgs: [id],
-          );
-        }
-        await txn.update(
-          'budget_plans',
-          {'book_id': _defaultBookId, 'updated_ms': now},
-          where: 'book_id = ?',
-          whereArgs: [id],
-        );
-      } else {
-        final txRows = await txn.query(
-          'transactions',
-          columns: ['id', 'image_path'],
-          where: 'book_id = ?',
-          whereArgs: [id],
-        );
-        for (final row in txRows) {
-          await _assertNotLiabilityRepayment(txn, row['id'] as int);
-        }
-        receiptPaths.addAll(txRows
-            .map((row) => row['image_path'] as String? ?? '')
-            .where((path) => path.isNotEmpty));
-
-        final ruleIds = (await txn.query(
-          'recurring_rules',
-          columns: ['id'],
-          where: 'book_id = ?',
-          whereArgs: [id],
-        ))
-            .map((row) => row['id'] as int)
-            .toList();
-        if (ruleIds.isNotEmpty) {
-          await txn.delete(
-            'recurring_occurrences',
-            where: 'rule_id IN (${List.filled(ruleIds.length, '?').join(',')})',
-            whereArgs: ruleIds,
-          );
-        }
-
-        final physicalIds = (await txn.query(
-          'physical_assets',
-          columns: ['id'],
-          where: 'book_id = ?',
-          whereArgs: [id],
-        ))
-            .map((row) => row['id'] as int)
-            .toList();
-        if (physicalIds.isNotEmpty) {
-          final marks = List.filled(physicalIds.length, '?').join(',');
-          await txn.delete('asset_transaction_links',
-              where: 'asset_id IN ($marks)', whereArgs: physicalIds);
-          await txn.delete('asset_valuations',
-              where: 'asset_id IN ($marks)', whereArgs: physicalIds);
-          await txn.delete('asset_events',
-              where: "asset_type = 'physical' AND asset_id IN ($marks)",
-              whereArgs: physicalIds);
-          await txn.delete('asset_usage_events',
-              where: 'asset_id IN ($marks)', whereArgs: physicalIds);
-        }
-
-        final receivableIds = (await txn.query(
-          'receivable_assets',
-          columns: ['id'],
-          where: 'book_id = ?',
-          whereArgs: [id],
-        ))
-            .map((row) => row['id'] as int)
-            .toList();
-        if (receivableIds.isNotEmpty) {
-          final marks = List.filled(receivableIds.length, '?').join(',');
-          await txn.delete('receivable_recoveries',
-              where: 'receivable_asset_id IN ($marks)',
-              whereArgs: receivableIds);
-          await txn.delete('asset_events',
-              where: "asset_type = 'receivable' AND asset_id IN ($marks)",
-              whereArgs: receivableIds);
-        }
-
-        final reportIds = (await txn.query(
-          'reports',
-          columns: ['id'],
-          where: 'book_id = ?',
-          whereArgs: [id],
-        ))
-            .map((row) => row['id'] as int)
-            .toSet();
-        if (reportIds.isNotEmpty) {
-          final chatRows = await txn.query(
-            'chat_messages',
-            columns: ['id', 'text'],
-            where: 'role = ?',
-            whereArgs: ['report'],
-          );
-          final chatIds = <int>[];
-          for (final row in chatRows) {
-            try {
-              final decoded = jsonDecode(row['text'] as String? ?? '');
-              final reportId = decoded is Map
-                  ? (decoded['reportId'] as num?)?.toInt()
-                  : null;
-              if (reportId != null && reportIds.contains(reportId)) {
-                chatIds.add(row['id'] as int);
-              }
-            } catch (_) {}
-          }
-          if (chatIds.isNotEmpty) {
-            await txn.delete(
-              'chat_messages',
-              where: 'id IN (${List.filled(chatIds.length, '?').join(',')})',
-              whereArgs: chatIds,
-            );
-          }
-        }
-
-        final budgetPlanIds = (await txn.query(
-          'budget_plans',
-          columns: ['id'],
-          where: 'book_id = ?',
-          whereArgs: [id],
-        ))
-            .map((row) => row['id'] as int)
-            .toList();
-        if (budgetPlanIds.isNotEmpty) {
-          final marks = List.filled(budgetPlanIds.length, '?').join(',');
-          for (final table in [
-            'budget_fixed_commitment_occurrences',
-            'budget_cycle_overrides',
-            'budget_plan_revisions',
-            'budget_change_events',
-          ]) {
-            await txn.delete(
-              table,
-              where: 'plan_id IN ($marks)',
-              whereArgs: budgetPlanIds,
-            );
-          }
-          await txn.delete(
-            'budget_plans',
-            where: 'id IN ($marks)',
-            whereArgs: budgetPlanIds,
-          );
-        }
-
-        for (final table in [
-          'transactions',
-          'recurring_rules',
-          'budget_periods',
-          'reports',
-          'report_jobs',
-          'physical_assets',
-          'receivable_assets',
-        ]) {
-          await txn.delete(table, where: 'book_id = ?', whereArgs: [id]);
-        }
       }
+      await txn.update(
+        'budget_plans',
+        {'book_id': _defaultBookId, 'updated_ms': now},
+        where: 'book_id = ?',
+        whereArgs: [id],
+      );
       // 预算规则是账本自己的设置，不搬到总账本（会和总账本的规则打架），
       // 账本删了就软删掉，留 deleted_ms 给以后多端同步用。
       final ruleNow = DateTime.now().millisecondsSinceEpoch;
@@ -17439,17 +17481,13 @@ class AppRepository extends ChangeNotifier {
       );
       await txn.delete('books', where: 'id = ?', whereArgs: [id]);
       if (_currentBookId == id) {
-        _currentBookId = _defaultBookId;
         await txn.insert(
           'app_settings',
-          {'key': 'current_book_id', 'value': _currentBookId.toString()},
+          {'key': 'current_book_id', 'value': _defaultBookId.toString()},
           conflictAlgorithm: ConflictAlgorithm.replace,
         );
       }
     });
-    for (final path in receiptPaths) {
-      _deleteReceiptFileIfOwned(path);
-    }
     await _loadAll();
     await _refreshCurrentNetWorthSnapshotBestEffort(
       const {
@@ -17696,7 +17734,8 @@ class AppRepository extends ChangeNotifier {
     final normalizedQuery = query.trim().toLowerCase();
     final candidates = <AssetPurchaseAllocationCandidate>[];
     for (final transaction in _globalVisibleTransactions) {
-      if ((bookId != null && transaction.bookId != bookId) ||
+      if ((bookId != null &&
+              !_transactionMatchesAssetBook(transaction, bookId)) ||
           transaction.txKind != TransactionKind.expense ||
           transaction.refundOf != null ||
           transaction.amount <= Decimal.zero ||
@@ -17752,7 +17791,6 @@ class AppRepository extends ChangeNotifier {
     if (asset == null || asset.isDeleted || asset.bookId == null) {
       return const [];
     }
-    final allowedBooks = _bookIdsForView(asset.bookId!).toSet();
     final normalized = query.trim().toLowerCase();
     final purchaseIds = _assetTransactionLinks
         .where((link) =>
@@ -17767,8 +17805,7 @@ class AppRepository extends ChangeNotifier {
           transaction.refundOf != null ||
           transaction.amount <= Decimal.zero ||
           transaction.excluded ||
-          transaction.bookId == null ||
-          !allowedBooks.contains(transaction.bookId) ||
+          !_transactionMatchesAssetBook(transaction, asset.bookId!) ||
           transaction.currencyCode != asset.currencyCode ||
           purchaseIds.contains(transaction.id)) {
         return false;
@@ -17807,14 +17844,12 @@ class AppRepository extends ChangeNotifier {
     }
     final transaction =
         _allTransactions.where((item) => item.id == transactionId).firstOrNull;
-    final allowedBooks = _bookIdsForView(asset.bookId!).toSet();
     if (transaction == null ||
         transaction.txKind != TransactionKind.expense ||
         transaction.refundOf != null ||
         transaction.amount <= Decimal.zero ||
         transaction.excluded ||
-        transaction.bookId == null ||
-        !allowedBooks.contains(transaction.bookId) ||
+        !_transactionMatchesAssetBook(transaction, asset.bookId!) ||
         transaction.currencyCode != asset.currencyCode) {
       throw StateError('只能关联同账本、同币种的普通支出');
     }
@@ -18859,7 +18894,8 @@ class AppRepository extends ChangeNotifier {
       );
       if (transactionRows.isEmpty) throw StateError('购置账单不存在');
       final transaction = transactionRows.first;
-      if (transaction['book_id'] != asset.bookId ||
+      if (!await _transactionMatchesBookInDb(
+              txn, transactionId, asset.bookId) ||
           transaction['kind'] != TransactionKind.expense.toJson() ||
           transaction['refund_of'] != null ||
           transaction['currency_code'] != asset.currencyCode) {
@@ -19179,7 +19215,8 @@ class AppRepository extends ChangeNotifier {
         final source = sourceRows.first;
         final sourceAmount =
             Decimal.tryParse(source['amount'] as String? ?? '') ?? Decimal.zero;
-        if (source['book_id'] != _currentBookId ||
+        if (!await _transactionMatchesBookInDb(
+                txn, sourceTransactionId!, _currentBookId) ||
             source['kind'] != TransactionKind.expense.toJson() ||
             source['refund_of'] != null ||
             sourceAmount <= Decimal.zero ||
@@ -23425,7 +23462,9 @@ class AppRepository extends ChangeNotifier {
                 Decimal.zero;
         final sameCurrency = transaction['currency_code'] ==
             (asset['currency_code'] as String? ?? 'CNY');
-        final sameBook = transaction['book_id'] == asset['book_id'];
+        final sameBook = transaction['book_id'] == asset['book_id'] ||
+            await _transactionMatchesBookInDb(
+                txn, transactionId, asset['book_id'] as int?);
         var amount = str(raw, 'amount', '0');
         final legacyGross = decimalToBudgetCents(
           Decimal.tryParse(amount) ?? Decimal.zero,
@@ -23443,9 +23482,6 @@ class AppRepository extends ChangeNotifier {
         var valid = true;
         if (linkType.isAdditionalCost) {
           final assetBookId = asset['book_id'] as int?;
-          final allowedBooks = assetBookId == null
-              ? const <int>{}
-              : _bookIdsForView(assetBookId).toSet();
           final occupied = await txn.query(
             'asset_transaction_links',
             columns: ['id'],
@@ -23458,8 +23494,9 @@ class AppRepository extends ChangeNotifier {
               transaction['refund_of'] == null &&
               transactionAmount > Decimal.zero &&
               transaction['excluded'] != 1 &&
-              transaction['book_id'] != null &&
-              allowedBooks.contains(transaction['book_id']) &&
+              (sameBook ||
+                  await _transactionMatchesBookInDb(
+                      txn, transactionId, assetBookId)) &&
               sameCurrency &&
               occupied.isEmpty;
           if (valid) {

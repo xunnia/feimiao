@@ -1586,7 +1586,7 @@ void main() {
     expect(precision['dflt_value'], "'legacy_unknown'");
     expect(
       Sqflite.firstIntValue(await check.rawQuery('PRAGMA user_version')),
-      50,
+      51,
     );
     await check.close();
   });
@@ -1685,7 +1685,7 @@ void main() {
     );
     expect(
       Sqflite.firstIntValue(await check.rawQuery('PRAGMA user_version')),
-      50,
+      51,
     );
     await check.close();
   });
@@ -2341,7 +2341,7 @@ void main() {
     await repo.closeForTest();
   });
 
-  test('deleteBook 连数据删除后会同步刷新当天净资产快照', () async {
+  test('deleteBook 拒绝旧的连数据删除，保留资产和净资产快照', () async {
     final repo = await freshRepo();
     final doomedBookId = await repo.addBook(name: '待删除账本');
     await repo.switchBook(doomedBookId);
@@ -2360,10 +2360,15 @@ void main() {
       isNot(Decimal.zero),
     );
 
-    await repo.deleteBook(doomedBookId, moveRecordsToDefault: false);
+    final beforeSnapshots = repo.netWorthSnapshots.toList();
+    await expectLater(
+        repo.deleteBook(doomedBookId, moveRecordsToDefault: false),
+        throwsStateError);
 
-    expect(repo.physicalAssets, isEmpty);
-    expect(repo.receivableAssets, isEmpty);
+    expect(repo.physicalAssets, hasLength(1));
+    expect(repo.receivableAssets, hasLength(1));
+    expect(repo.books.map((b) => b.id), contains(doomedBookId));
+    expect(repo.netWorthSnapshots, beforeSnapshots);
     expect(
       repo.netWorthSnapshots.first.netWorth,
       repo.currentNetWorthResult().value!.netWorth,
@@ -2393,7 +2398,7 @@ void main() {
       bookId: privateBookId,
     );
 
-    expect(repo.visibleTransactions, isEmpty);
+    expect(repo.visibleTransactions, hasLength(1));
     expect(repo.accountBalanceOf(account), Decimal.fromInt(-80));
     await repo.switchBook(privateBookId);
     expect(repo.accountBalanceOf(account), Decimal.fromInt(-80));
@@ -5997,7 +6002,7 @@ void main() {
     final check = await databaseFactory.openDatabase(path);
     expect(
       Sqflite.firstIntValue(await check.rawQuery('PRAGMA user_version')),
-      50,
+      51,
     );
     final physicalColumns =
         (await check.rawQuery('PRAGMA table_info(physical_assets)'))
@@ -6150,7 +6155,7 @@ void main() {
     final check = await databaseFactory.openDatabase(path);
     expect(
       Sqflite.firstIntValue(await check.rawQuery('PRAGMA user_version')),
-      50,
+      51,
     );
     final afterRows = await check.query(
       'transactions',
@@ -6314,7 +6319,7 @@ void main() {
     final check = await databaseFactory.openDatabase(path);
     final v =
         Sqflite.firstIntValue(await check.rawQuery('PRAGMA user_version'));
-    expect(v, 50); // init 一路升到当前最新版本
+    expect(v, 51); // init 一路升到当前最新版本
     final tableNames = (await check
             .rawQuery("SELECT name FROM sqlite_master WHERE type = 'table'"))
         .map((r) => r['name'])

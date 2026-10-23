@@ -4,10 +4,14 @@ import 'package:provider/provider.dart';
 import '../../core/haptics.dart';
 import '../../data/app_repository.dart';
 import '../../theme/app_colors.dart';
+import '../../theme/app_tokens.dart';
+import '../../widgets/app_line_icon.dart';
+import '../../widgets/app_toast.dart';
 import '../../widgets/ios_form.dart';
 import '../../widgets/pressable_scale.dart';
 import '../../widgets/settings_ui.dart';
 import '../common/app_sheet.dart';
+import 'transaction_books_sheet.dart';
 
 /// 常用账本模板（对齐团团记账的预置账本，去掉共享类）。
 /// [cover] 是成品封面图（用户 GPT 生成的蓝白英短猫插画）；
@@ -49,8 +53,22 @@ const List<BookTemplate> kBookTemplates = [
 ];
 
 /// 弹「新建账本」半屏页；[edit] 传入则是编辑既有账本。
-Future<void> showBookSheet(BuildContext context, {BookEntity? edit}) {
-  return appSheet<void>(context, child: _BookSheet(edit: edit));
+Future<void> showBookSheet(BuildContext context, {BookEntity? edit}) async {
+  final result = await showBlurSheet<_BookSheetResult>(context,
+      child: _BookSheet(edit: edit));
+  if (result == null || !result.addExisting || !context.mounted) return;
+  final book = context
+      .read<AppRepository>()
+      .books
+      .where((b) => b.id == result.id)
+      .firstOrNull;
+  if (book != null) await showBookTransactionsSheet(context, book: book);
+}
+
+class _BookSheetResult {
+  final int id;
+  final bool addExisting;
+  const _BookSheetResult(this.id, this.addExisting);
 }
 
 class _BookSheet extends StatefulWidget {
@@ -68,9 +86,10 @@ class _BookSheetState extends State<_BookSheet> {
   late final TextEditingController _remarkCtrl =
       TextEditingController(text: widget.edit?.remark ?? '');
   late String _icon = widget.edit?.icon ?? '📒';
-  late bool _includeInTotal = widget.edit?.includeInTotal ?? true;
   late String _cover = widget.edit?.cover ?? '';
   String? _pickedTemplate;
+  bool _addExisting = false;
+  bool _saving = false;
 
   bool get _isEdit => widget.edit != null;
 
@@ -96,166 +115,193 @@ class _BookSheetState extends State<_BookSheet> {
   }
 
   Future<void> _submit() async {
+    if (_saving) return;
     final repo = context.read<AppRepository>();
     final name = _nameCtrl.text.trim();
     if (name.isEmpty) return;
-    Haptics.of(Haptic.success);
     final remark = _remarkCtrl.text.trim();
-    if (_isEdit) {
-      await repo.updateBook(
-        widget.edit!.id,
-        name: name,
-        icon: _icon,
-        cover: _cover,
-        remark: remark,
-        includeInTotal: _includeInTotal,
-      );
-    } else {
-      final id = await repo.addBook(
-        name: name,
-        icon: _icon,
-        cover: _cover,
-        remark: remark,
-        includeInTotal: _includeInTotal,
-      );
-      await repo.switchBook(id);
+    setState(() => _saving = true);
+    try {
+      final int id;
+      if (_isEdit) {
+        id = widget.edit!.id;
+        await repo.updateBook(id,
+            name: name, icon: _icon, cover: _cover, remark: remark);
+      } else {
+        id = await repo.addBook(
+            name: name, icon: _icon, cover: _cover, remark: remark);
+        await repo.switchBook(id);
+      }
+      Haptics.of(Haptic.success);
+      if (mounted) Navigator.pop(context, _BookSheetResult(id, _addExisting));
+    } catch (error) {
+      if (mounted) {
+        showAppToast(context, error.toString().replaceFirst('Bad state: ', ''));
+      }
+    } finally {
+      if (mounted) setState(() => _saving = false);
     }
-    if (mounted) Navigator.pop(context);
   }
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final bottomInset = MediaQuery.viewInsetsOf(context).bottom;
+    final repo = context.watch<AppRepository>();
+    final isSceneBook = widget.edit?.id != repo.defaultBookId;
+    final largeText = MediaQuery.textScalerOf(context).scale(16) > 22;
 
-    return Padding(
-      padding: EdgeInsets.only(bottom: bottomInset),
+    return PopScope(
+      canPop: !_saving,
       child: SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // 统一弹层头：✕ 关闭 + 居中标题 + 右上角「创建/保存」。
-            SheetHeader(
-              title: _isEdit ? '编辑账本' : '新建账本',
-              subtitle: _isEdit ? null : '选一个常用账本，或直接起名自定义',
-              onClose: () => Navigator.pop(context),
-              actionLabel: _isEdit ? '保存' : '创建',
-              onAction: _nameCtrl.text.trim().isEmpty ? null : _submit,
-            ),
-            if (!_isEdit) ...[
-              const SizedBox(height: 12),
-              // ── 封面横滑（对齐 Claude 选图交互）──
-              SizedBox(
-                height: 118,
-                child: ListView(
-                  scrollDirection: Axis.horizontal,
-                  padding: const EdgeInsets.symmetric(horizontal: 16),
-                  children: [
-                    for (final t in kBookTemplates) ...[
-                      _CoverCard(
-                        template: t,
-                        selected: _pickedTemplate == t.key,
-                        onTap: () => _pickTemplate(t),
+        child: ConstrainedBox(
+          constraints: BoxConstraints(
+              maxHeight: (MediaQuery.sizeOf(context).height -
+                      MediaQuery.viewInsetsOf(context).bottom) *
+                  .88),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // 统一弹层头：✕ 关闭 + 居中标题 + 右上角「创建/保存」。
+              SheetHeader(
+                title: largeText
+                    ? (_isEdit ? '编辑' : '新建')
+                    : (_isEdit ? '编辑账本' : '新建账本'),
+                subtitle: _isEdit ? null : '选一个常用账本，或直接起名自定义',
+                onClose: _saving ? null : () => Navigator.pop(context),
+                actionLabel: _isEdit ? '保存' : '创建',
+                onAction:
+                    _saving || _nameCtrl.text.trim().isEmpty ? null : _submit,
+              ),
+              Flexible(
+                  child: SingleChildScrollView(
+                      child: AbsorbPointer(
+                absorbing: _saving,
+                child: Column(mainAxisSize: MainAxisSize.min, children: [
+                  if (!_isEdit) ...[
+                    const SizedBox(height: 12),
+                    // ── 封面横滑（对齐 Claude 选图交互）──
+                    SizedBox(
+                      height: 118,
+                      child: ListView(
+                        scrollDirection: Axis.horizontal,
+                        padding: const EdgeInsets.symmetric(horizontal: 16),
+                        children: [
+                          for (final t in kBookTemplates) ...[
+                            _CoverCard(
+                              template: t,
+                              selected: _pickedTemplate == t.key,
+                              onTap: () => _pickTemplate(t),
+                            ),
+                            const SizedBox(width: 10),
+                          ],
+                        ],
                       ),
-                      const SizedBox(width: 10),
-                    ],
+                    ),
+                    const SizedBox(height: 12),
                   ],
-                ),
-              ),
-              const SizedBox(height: 12),
-            ],
-            // ── 名称 ──
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 20),
-              child: Row(
-                children: [
-                  SizedBox(
-                    width: 34,
-                    child: Center(
-                      child: Text(_icon, style: const TextStyle(fontSize: 22)),
-                    ),
-                  ),
-                  Expanded(
-                    child: TextField(
-                      controller: _nameCtrl,
-                      // 编辑就是来改名的，直接聚焦弹键盘；新建先让用户看模板。
-                      autofocus: _isEdit,
-                      maxLength: 12,
-                      decoration: iosInputDecoration(context, hint: '账本名称'),
-                      onChanged: (_) => setState(() {}),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(height: 6),
-            // ── 备注（显示在抽屉账本名下方）──
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 20),
-              child: Row(
-                children: [
-                  SizedBox(
-                    width: 34,
-                    child: Text(
-                      '备注',
-                      textAlign: TextAlign.center,
-                      style: TextStyle(
-                        fontSize: 15,
-                        fontWeight: FontWeight.w400,
-                        color: scheme.onSurface,
-                      ),
-                    ),
-                  ),
-                  Expanded(
-                    child: TextField(
-                      controller: _remarkCtrl,
-                      maxLength: 20,
-                      decoration:
-                          iosInputDecoration(context, hint: '可选，如"日常开销"'),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(height: 6),
-            // ── 计入总账本 ──
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 20),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
+                  // ── 名称 ──
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 20),
+                    child: Row(
                       children: [
-                        const Text('账单计入总账本',
-                            style: TextStyle(
-                              fontSize: 15,
-                              fontWeight: FontWeight.w400,
-                            )),
-                        const SizedBox(height: 2),
-                        Text(
-                          '开启后，这本账的账单也会出现在总账本里一起统计',
-                          style: TextStyle(
-                            fontSize: 12,
-                            fontWeight: FontWeight.w400,
-                            color:
-                                scheme.onSurfaceVariant.withValues(alpha: 0.68),
+                        SizedBox(
+                          width: 34,
+                          child: Center(
+                            child: Text(_icon,
+                                style: const TextStyle(fontSize: 22)),
+                          ),
+                        ),
+                        Expanded(
+                          child: TextField(
+                            controller: _nameCtrl,
+                            // 先展示归集入口，避免自动键盘遮住已有账单管理。
+                            autofocus: false,
+                            maxLength: 12,
+                            decoration:
+                                iosInputDecoration(context, hint: '账本名称'),
+                            onChanged: (_) => setState(() {}),
                           ),
                         ),
                       ],
                     ),
                   ),
-                  AppSwitch(
-                    value: _includeInTotal,
-                    semanticLabel: '账单计入总账本',
-                    onChanged: (v) => setState(() => _includeInTotal = v),
+                  const SizedBox(height: 6),
+                  // ── 备注（显示在抽屉账本名下方）──
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 20),
+                    child: Row(
+                      children: [
+                        SizedBox(
+                          width: 34,
+                          child: Text(
+                            '备注',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                              fontSize: 15,
+                              fontWeight: FontWeight.w400,
+                              color: scheme.onSurface,
+                            ),
+                          ),
+                        ),
+                        Expanded(
+                          child: TextField(
+                            controller: _remarkCtrl,
+                            maxLength: 20,
+                            decoration:
+                                iosInputDecoration(context, hint: '可选，如"日常开销"'),
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
-                ],
-              ),
-            ),
-            const SizedBox(height: 18),
-          ],
+                  const SizedBox(height: 6),
+                  // 总账本是全量视图；场景账本仅为归集，不再提供排除开关。
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(24, 6, 24, 12),
+                    child: Align(
+                        alignment: Alignment.centerLeft,
+                        child: Text(
+                            widget.edit?.includeInTotal == false
+                                ? '总账本现包含全部账单，原先排除的账本也会计入'
+                                : '总账本自动包含全部账单，同一笔账可以同时归入多个场景账本。',
+                            style: AppType.secondary(scheme))),
+                  ),
+                  if (isSceneBook)
+                    Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 16),
+                        child: SettingsGroup(children: [
+                          if (!_isEdit)
+                            SettingsRow(
+                                title: '创建后添加已有账单',
+                                subtitle: '从历史收支中选择，不复制账单',
+                                trailing: AppSwitch(
+                                    value: _addExisting,
+                                    semanticLabel: '创建后添加已有账单',
+                                    onChanged: (value) =>
+                                        setState(() => _addExisting = value))),
+                          if (_isEdit) ...[
+                            SettingsRow(
+                                title: '添加已有账单',
+                                leading: const AppLineIcon(AppLineIcons.book,
+                                    size: 20),
+                                subtitle: '从总账本选择，可搜索和批量添加',
+                                onTap: () => showBookTransactionsSheet(context,
+                                    book: widget.edit!)),
+                            SettingsRow(
+                                title: '管理已关联账单',
+                                leading: const AppLineIcon(AppLineIcons.pencil,
+                                    size: 20),
+                                subtitle: '移出当前账本，原始账单仍保留',
+                                onTap: () => showBookTransactionsSheet(context,
+                                    book: widget.edit!, removeOnly: true)),
+                          ],
+                        ])),
+                  const SizedBox(height: 18),
+                ]),
+              ))),
+            ],
+          ),
         ),
       ),
     );

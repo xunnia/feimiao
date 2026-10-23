@@ -32,6 +32,7 @@ import 'widgets/slidable_tracker.dart';
 import 'widgets/ios_dialogs.dart';
 import 'widgets/ios_menu.dart';
 import 'views/books/book_sheet.dart';
+import 'views/books/transaction_books_sheet.dart';
 import 'views/home/home_view.dart';
 import 'views/home/record_input_bar.dart';
 import 'views/assistant/meow_assistant_view.dart';
@@ -1241,6 +1242,8 @@ class _DrawerPanel extends StatefulWidget {
 }
 
 class _DrawerPanelState extends State<_DrawerPanel> {
+  final Set<int> _deletingBookIds = {};
+
   /// 「更多」折叠：默认只露前 5 个功能项，展开后全部可见（都可长按拖动排序）。
   bool _moreExpanded = false;
 
@@ -1374,6 +1377,19 @@ class _DrawerPanelState extends State<_DrawerPanel> {
                 lineIcon: AppLineIcons.pencil,
                 onTap: () => showBookSheet(context, edit: b),
               ),
+              if (b.id != repo.defaultBookId)
+                IosMenuItem(
+                  label: '添加已有账单',
+                  lineIcon: AppLineIcons.book,
+                  onTap: () => showBookTransactionsSheet(context, book: b),
+                ),
+              if (b.id != repo.defaultBookId)
+                IosMenuItem(
+                  label: '管理账单关联',
+                  lineIcon: AppLineIcons.pencil,
+                  onTap: () => showBookTransactionsSheet(context,
+                      book: b, removeOnly: true),
+                ),
               if (deletable)
                 IosMenuItem(
                   label: '删除',
@@ -1443,53 +1459,34 @@ class _DrawerPanelState extends State<_DrawerPanel> {
     );
   }
 
-  /// 删账本保护：有账单时先给「转移到总账本」的温和出路，
-  /// 连账单一起删要过两道确认（真实数据，别让一次手滑清掉）。
+  /// 删除的是场景容器和关联，不删除总账本中的原始账单。
   Future<void> _confirmDeleteBook(BookEntity b, AppRepository repo) async {
-    final n = await repo.transactionCountForBook(b.id);
-    if (!mounted) return;
+    if (!_deletingBookIds.add(b.id)) return;
+    try {
+      final n = await repo.transactionCountForBook(b.id);
+      if (!mounted) return;
 
-    if (n == 0) {
       final ok = await showConfirmDialog(
         context,
         title: '删除「${b.name}」？',
-        message: '这个账本没有账目，删除后不可恢复。',
-        confirmText: '删除',
+        message: n == 0
+            ? '删除这个空账本，不影响其他账本。'
+            : '仅删除账本及 $n 笔账单的关联。原始账单仍在总账本，其他场景账本和账户余额不变。',
+        confirmText: '删除账本',
         destructive: true,
       );
-      if (ok) await repo.deleteBook(b.id);
-      return;
-    }
-
-    // 有账单：先推荐转移。
-    final move = await showConfirmDialog(
-      context,
-      title: '「${b.name}」有 $n 笔账目',
-      message: '建议把账目转移到总账本再删——记录一笔不丢。\n'
-          '（点「取消」后仍想连账目一起删，再删一次会有单独确认。）',
-      confirmText: '转移并删除',
-    );
-    if (!mounted) return;
-    if (move) {
-      await repo.deleteBook(b.id, moveRecordsToDefault: true);
-      if (mounted) showAppToast(context, '$n 笔账目已转移到总账本');
-      return;
-    }
-
-    // 用户拒绝转移：更深一层的破坏性确认。
-    final wipe = await showConfirmDialog(
-      context,
-      title: '连 $n 笔账目一起删除？',
-      message: '「${b.name}」和它的全部账目将永久删除，无法恢复。',
-      confirmText: '永久删除',
-      destructive: true,
-    );
-    if (wipe) {
+      if (!mounted || !ok) return;
       try {
-        await repo.deleteBook(b.id);
-      } on StateError catch (error) {
-        if (mounted) showAppToast(context, error.message);
+        await repo.deleteBook(b.id, moveRecordsToDefault: true);
+        if (mounted) showAppToast(context, '账本已删除，原始账单仍保留');
+      } catch (error) {
+        if (mounted) {
+          showAppToast(
+              context, error.toString().replaceFirst('Bad state: ', ''));
+        }
       }
+    } finally {
+      _deletingBookIds.remove(b.id);
     }
   }
 

@@ -434,7 +434,7 @@ void main() {
           expect(
               await repo.debugDb.query('budget_plan_revisions'), oldRevisions);
           expect(await repo.debugDb.query('budget_periods'), oldPeriods);
-          expect(await repo.debugDb.getVersion(), 50);
+          expect(await repo.debugDb.getVersion(), 51);
         } finally {
           await repo.closeForTest();
         }
@@ -499,7 +499,7 @@ void main() {
         expect(await repo.restoreDatabaseFromFile(backup.path), isTrue);
         expect(repo.budgetRulesForBook(old.book).single.amountCents, 400000);
         expect(repo.budgetRulesForBook(old.book).single.startDate, legacyStart);
-        expect(await repo.debugDb.getVersion(), 50);
+        expect(await repo.debugDb.getVersion(), 51);
         final oldBackup = await databaseFactory.openDatabase(backup.path);
         try {
           expect(await oldBackup.getVersion(), 49);

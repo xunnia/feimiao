@@ -22,6 +22,7 @@ import '../../widgets/sliding_segment.dart';
 import '../../widgets/tag_selector.dart';
 import '../common/receipt_picker.dart';
 import '../common/app_sheet.dart';
+import '../books/transaction_books_sheet.dart';
 import '../quick_add/amount_keypad.dart';
 import '../quick_add/category_grid.dart';
 import '../../widgets/settings_ui.dart';
@@ -160,7 +161,8 @@ class _ManualSheetRouteFrameState extends State<_ManualSheetRouteFrame> {
 ///   金额卡（输入框风格）：左上金额 + 细横线 + 备注 + 右下相册/拍照
 ///   数字键盘：1-9 / ⌫ / + / − / 再记 / 0 / . / 完成
 /// 「再记」保存后不关卡片继续记；「完成」保存并关闭。
-/// 编辑模式（[edit] 非空）：预填原账目、完成键=保存、无「再记」、不切账本。
+/// 编辑模式（[edit] 非空）：预填原账目、完成键=保存、无「再记」。
+/// 新建和编辑均可关联多个场景账本，原始账单只保存一份。
 class ManualAddSheet extends StatefulWidget {
   /// 点击"AI助手"时的回调；null（编辑模式）则不显示模式胶囊。
   final VoidCallback? onSwitchToAi;
@@ -182,7 +184,7 @@ class _ManualAddSheetState extends State<ManualAddSheet> {
   int? _panelParentId; // 当前展开二级面板的大类（null=没开）
   int? _selectedAccountId;
   int? _toAccountId; // 转账的「入款账户」
-  int? _bookId; // 记到哪个账本（默认当前账本）
+  Set<int> _bookIds = {}; // 场景账本关联；总账本始终自动包含
   DateTime _date = AppClock.now;
   final TextEditingController _noteController = TextEditingController();
   List<int> _tagIds = [];
@@ -221,6 +223,10 @@ class _ManualAddSheetState extends State<ManualAddSheet> {
       _excluded = t.excluded;
       _imagePath = t.imagePath.isEmpty ? null : t.imagePath;
       final repo = context.read<AppRepository>();
+      _bookIds = repo
+          .transactionBookIds(t)
+          .where((id) => id != repo.defaultBookId)
+          .toSet();
       final cat =
           repo.categories.where((c) => c.id == _selectedCategoryId).firstOrNull;
       _activeParentId = cat == null ? null : (cat.parentId ?? cat.id);
@@ -242,7 +248,11 @@ class _ManualAddSheetState extends State<ManualAddSheet> {
   void _applyDefaults() {
     final repo = context.read<AppRepository>();
     _selectedAccountId ??= repo.transactionAccounts.firstOrNull?.id;
-    _bookId ??= repo.currentBookId;
+    if (!_isEdit &&
+        _bookIds.isEmpty &&
+        repo.currentBookId != repo.defaultBookId) {
+      _bookIds = {repo.currentBookId};
+    }
     final cats = repo.categoriesForKindRanked(_kind);
     _selectedCategoryId ??= cats.firstOrNull?.id;
     _activeParentId ??= _selectedCategoryId;
@@ -338,6 +348,7 @@ class _ManualAddSheetState extends State<ManualAddSheet> {
           note: note,
           date: transactionDate,
           imagePath: _imagePath ?? '',
+          bookIds: _bookIds,
         );
       } else {
         await repo.addTransaction(
@@ -349,7 +360,7 @@ class _ManualAddSheetState extends State<ManualAddSheet> {
           note: note,
           date: transactionDate,
           imagePath: _imagePath ?? '',
-          bookId: _bookId,
+          bookIds: _bookIds,
         );
       }
       return true;
@@ -369,6 +380,7 @@ class _ManualAddSheetState extends State<ManualAddSheet> {
         reimbursable: _kind == TransactionKind.expense ? _reimbursable : false,
         imagePath: _imagePath ?? '',
         excluded: _excluded,
+        bookIds: _bookIds,
       );
       // 学习用户纠正：改了分类且有备注 → 记住「备注 → 新分类」，下次 AI 自动套用。
       if (_selectedCategoryId != null &&
@@ -397,7 +409,7 @@ class _ManualAddSheetState extends State<ManualAddSheet> {
       reimbursable: _kind == TransactionKind.expense ? _reimbursable : false,
       imagePath: _imagePath ?? '',
       excluded: _excluded,
-      bookId: _bookId,
+      bookIds: _bookIds,
     );
     return true;
   }
@@ -519,8 +531,7 @@ class _ManualAddSheetState extends State<ManualAddSheet> {
         _ChipsRow(
           kind: _kind,
           date: _date,
-          bookId: _bookId,
-          showBook: !_isEdit,
+          bookIds: _bookIds,
           showExtras: _kind != TransactionKind.transfer,
           accountId: _selectedAccountId,
           tagCount: _tagIds.length,
@@ -529,7 +540,7 @@ class _ManualAddSheetState extends State<ManualAddSheet> {
           onDateChanged: (date) => setState(
             () => _date = calendarDayWithClock(date, _date),
           ),
-          onBookChanged: (id) => setState(() => _bookId = id),
+          onBooksChanged: (ids) => setState(() => _bookIds = ids),
           onAccountChanged: (id) => setState(() => _selectedAccountId = id),
           onTagsTap: _pickTags,
           onReimbursableToggle: () =>
@@ -607,6 +618,7 @@ class _ManualAddSheetState extends State<ManualAddSheet> {
                     SizedBox(
                       width: _isEdit ? 128 : 180,
                       child: SlidingSegment<TransactionKind>(
+                        height: MediaQuery.textScalerOf(context).scale(13) + 21,
                         items: [
                           (TransactionKind.expense, '支出'),
                           (TransactionKind.income, '收入'),
@@ -795,15 +807,14 @@ class _AccountBox extends StatelessWidget {
 class _ChipsRow extends StatelessWidget {
   final TransactionKind kind;
   final DateTime date;
-  final int? bookId;
-  final bool showBook;
+  final Set<int> bookIds;
   final bool showExtras;
   final int? accountId;
   final int tagCount;
   final bool reimbursable;
   final bool excluded;
   final ValueChanged<DateTime> onDateChanged;
-  final ValueChanged<int?> onBookChanged;
+  final ValueChanged<Set<int>> onBooksChanged;
   final ValueChanged<int?> onAccountChanged;
   final VoidCallback onTagsTap;
   final VoidCallback onReimbursableToggle;
@@ -812,15 +823,14 @@ class _ChipsRow extends StatelessWidget {
   const _ChipsRow({
     required this.kind,
     required this.date,
-    required this.bookId,
-    this.showBook = true,
+    required this.bookIds,
     this.showExtras = true,
     required this.accountId,
     required this.tagCount,
     required this.reimbursable,
     required this.excluded,
     required this.onDateChanged,
-    required this.onBookChanged,
+    required this.onBooksChanged,
     required this.onAccountChanged,
     required this.onTagsTap,
     required this.onReimbursableToggle,
@@ -839,14 +849,20 @@ class _ChipsRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final repo = context.watch<AppRepository>();
-    final book =
-        repo.books.where((b) => b.id == bookId).firstOrNull ?? repo.currentBook;
+    final selectedBooks = repo.books
+        .where((b) => b.id != repo.defaultBookId && bookIds.contains(b.id))
+        .toList();
+    final bookLabel = selectedBooks.isEmpty
+        ? '仅总账本'
+        : selectedBooks.length == 1
+            ? selectedBooks.first.name
+            : '${selectedBooks.length} 个账本';
     final account =
         repo.transactionAccounts.where((a) => a.id == accountId).firstOrNull ??
             repo.transactionAccounts.firstOrNull;
 
     return SizedBox(
-      height: 32,
+      height: MediaQuery.textScalerOf(context).scale(11) + 21,
       child: ListView(
         scrollDirection: Axis.horizontal,
         padding: const EdgeInsets.symmetric(horizontal: 12),
@@ -867,22 +883,17 @@ class _ChipsRow extends StatelessWidget {
             },
           ),
           const SizedBox(width: 8),
-          // 账本（多账本：这笔记到哪本）—— 弹 iOS 浮动菜单，与抽屉账本菜单同款
-          if (showBook && repo.books.length > 1) ...[
-            Builder(
-              builder: (chipCtx) => _Chip(
-                icon: Icons.menu_book_outlined,
-                label: book?.name ?? '账本',
-                onTap: () => showIosMenu(chipCtx, [
-                  for (final b in repo.books)
-                    IosMenuItem(
-                      label: '${b.icon} ${b.name}',
-                      lineIcon: AppLineIcons.book,
-                      selected: b.id == (book?.id ?? bookId),
-                      onTap: () => onBookChanged(b.id),
-                    ),
-                ]),
-              ),
+          // 总账本无需勾选；编辑历史账单也可多选场景账本。
+          ...[
+            _Chip(
+              icon: Icons.menu_book_outlined,
+              label: bookLabel,
+              selected: selectedBooks.isNotEmpty,
+              onTap: () async {
+                final ids = await showTransactionBooksSheet(context,
+                    selectedIds: bookIds);
+                if (context.mounted && ids != null) onBooksChanged(ids);
+              },
             ),
             const SizedBox(width: 8),
           ],
