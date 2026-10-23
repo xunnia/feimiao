@@ -8,6 +8,7 @@ import 'package:qingji/core/cloud/cloud_api.dart';
 import 'package:qingji/core/cloud/cloud_errors.dart';
 import 'package:qingji/core/cloud/cloud_models.dart';
 import 'package:qingji/core/cloud/cloud_session_store.dart';
+import 'session_test_store.dart';
 
 const _base = 'https://api.test/v1';
 
@@ -50,7 +51,7 @@ class _Harness {
       requests.add(request);
       return handler(request);
     }),
-    store: CloudSessionStore(store: secrets),
+    store: testSessionStore(secrets),
     baseUrl: _base,
     clock: () => now,
     deviceInfo: () async => {'model': 'Xiaomi 14', 'os_version': 'Android 15'},
@@ -70,8 +71,8 @@ void main() {
   group('CloudSessionStore', () {
     test('install id is a stable UUID v4', () async {
       final secrets = MemoryCloudSecretStore();
-      final first = await CloudSessionStore(store: secrets).installId();
-      final second = await CloudSessionStore(store: secrets).installId();
+      final first = await testSessionStore(secrets).installId();
+      final second = await testSessionStore(secrets).installId();
       expect(first, second);
       expect(CloudSessionStore.isUuid(first), isTrue);
       expect(first[14], '4');
@@ -80,7 +81,7 @@ void main() {
 
     test('clearSession keeps the install id', () async {
       final secrets = MemoryCloudSecretStore();
-      final store = CloudSessionStore(store: secrets);
+      final store = testSessionStore(secrets);
       final id = await store.installId();
       await store.writeTokens(CloudTokens.fromResponse(_tokens('1'), DateTime(2026)));
       await store.writeRaw(CloudSessionStore.meKey, '{}');
@@ -453,7 +454,7 @@ void main() {
 
       final again = CloudApi(
         client: MockClient((_) async => _json(200, {})),
-        store: CloudSessionStore(store: h.secrets),
+        store: testSessionStore(h.secrets),
         baseUrl: _base,
         clock: () => h.now,
       );
@@ -461,7 +462,7 @@ void main() {
 
       final later = CloudApi(
         client: MockClient((_) async => _json(200, {})),
-        store: CloudSessionStore(store: h.secrets),
+        store: testSessionStore(h.secrets),
         baseUrl: _base,
         clock: () => h.now.add(const Duration(days: 31)),
       );

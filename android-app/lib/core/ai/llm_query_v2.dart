@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io' show File;
-import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:http/http.dart' as http;
@@ -12,6 +11,8 @@ import 'ai_http_transport.dart';
 import 'ai_logger.dart';
 import 'ai_prompt_templates.dart';
 import 'ai_provider_config.dart';
+import 'claude_messages_protocol.dart';
+import 'responses_protocol.dart';
 import 'ai_request_manager.dart';
 import 'openai_codex_oauth.dart';
 import 'web_search.dart';
@@ -825,37 +826,11 @@ $transactionsText''';
     final Map<String, dynamic> body;
 
     if (isClaude) {
-      // Claude 原生格式
-      final systemMessages =
-          messages.where((m) => m['role'] == 'system').toList();
-      final userMessages =
-          messages.where((m) => m['role'] != 'system').toList();
-
-      final budgetTokens = config.reasoningEffort.claudeBudgetTokens;
-      final maxTokens =
-          budgetTokens == null ? 4096 : math.max(4096, budgetTokens + 4096);
-      body = {
-        'model': config.modelCandidates.first,
-        'messages': [
-          for (final message in userMessages) _messageForClaude(message),
-        ],
-        'stream': true,
-        'max_tokens': maxTokens,
-      };
-
-      // 合并 system prompt
-      if (systemMessages.isNotEmpty) {
-        body['system'] = systemMessages.map((m) => m['content']).join('\n\n');
-      }
-
-      // thinking 参数映射
-      if (budgetTokens != null) {
-        body['thinking'] = {
-          'type': 'enabled',
-          'budget_tokens': budgetTokens,
-        };
-        body['temperature'] = 1;
-      }
+      body = ClaudeMessagesProtocol.bodyFromChat(
+        {'model': config.modelCandidates.first, 'messages': messages},
+        config,
+        kind: ClaudeRequestKind.streamChat,
+      );
     } else if (isResponses) {
       // Responses API 的流式格式使用 input/instructions，而不是
       // Chat Completions 的 messages。转换器同时注入 reasoning.effort。
@@ -989,30 +964,12 @@ $transactionsText''';
                 if (reasoningSummary != null) {
                   onReasoningSummary?.call(reasoningSummary);
                 }
-                if (type == 'response.failed') {
-                  final response = event['response'];
-                  final error = response is Map ? response['error'] : null;
-                  final message = error is Map
-                      ? error['message']?.toString()
-                      : error?.toString();
-                  throw AiServerException(
-                    (message == null || message.trim().isEmpty)
-                        ? 'Responses 生成失败'
-                        : message.trim(),
-                  );
-                }
-                if (type == 'response.incomplete') {
-                  final response = event['response'];
-                  final details =
-                      response is Map ? response['incomplete_details'] : null;
-                  final reason = details is Map
-                      ? details['reason']?.toString()
-                      : details?.toString();
-                  throw AiTokenLimitException(
-                    reason == null || reason.trim().isEmpty
-                        ? 'Responses 输出未完成'
-                        : 'Responses 输出未完成：${reason.trim()}',
-                  );
+                final protocolError = ResponsesProtocol.failure(event);
+                if (protocolError != null) {
+                  if (protocolError.kind == ResponsesFailureKind.incomplete) {
+                    throw AiTokenLimitException(protocolError.message);
+                  }
+                  throw AiServerException(protocolError.message);
                 }
                 if (type == 'response.output_text.done') {
                   final text = event['text'];
@@ -1211,318 +1168,39 @@ $transactionsText''';
   }
 
   static String _extractResponsesSseText(String body) {
-    final buffer = StringBuffer();
-    String? completed;
-    for (final line in const LineSplitter().convert(body)) {
-      if (!line.startsWith('data:')) continue;
-      final data = line.substring(5).trimLeft();
-      if (data == '[DONE]') break;
-      try {
-        final decoded = jsonDecode(data);
-        if (decoded is Map) {
-          final event = Map<String, dynamic>.from(decoded);
-          final type = event['type']?.toString().toLowerCase() ?? '';
-          if (type == 'response.failed') {
-            final response = event['response'];
-            final error = response is Map ? response['error'] : null;
-            final message =
-                error is Map ? error['message']?.toString() : error?.toString();
-            throw AiServerException(
-              message == null || message.trim().isEmpty
-                  ? 'Responses 生成失败'
-                  : message.trim(),
-            );
-          }
-          if (type == 'response.incomplete') {
-            throw const AiTokenLimitException('Responses 输出未完成');
-          }
-          if (type == 'response.output_text.done') {
-            final text = event['text'];
-            if (text is String && text.trim().isNotEmpty) completed = text;
-          } else if (type == 'response.completed') {
-            final response = event['response'];
-            if (response is Map) {
-              final text = _extractResponsesText(
-                Map<String, dynamic>.from(response),
-              );
-              if (text.isNotEmpty) completed = text;
-            }
-          }
-        }
-        final delta = _responsesStreamDelta(data);
-        if (delta != null) buffer.write(delta);
-      } on AiException {
-        rethrow;
-      } catch (_) {
-        // Ignore non-JSON SSE comments and vendor-specific events.
+    try {
+      return ResponsesProtocol.collectSseText(body);
+    } on ResponsesProtocolException catch (error) {
+      if (error.kind == ResponsesFailureKind.incomplete) {
+        throw AiTokenLimitException(error.message);
       }
+      throw AiServerException(error.message);
     }
-    final result = buffer.toString().trim();
-    return result.isNotEmpty ? result : (completed ?? '');
   }
 
   static List<AiWebSource> _extractResponsesSseSources(String body) {
     final result = <AiWebSource>[];
     final seen = <String>{};
-    for (final line in const LineSplitter().convert(body)) {
-      if (!line.startsWith('data:')) continue;
-      final data = line.substring(5).trimLeft();
-      if (data == '[DONE]') break;
-      try {
-        final decoded = jsonDecode(data);
-        if (decoded is Map) {
-          for (final source in _extractResponsesSources(
-            Map<String, dynamic>.from(decoded),
-          )) {
-            if (seen.add(source.url)) result.add(source);
-          }
-        }
-      } catch (_) {
-        // Ignore non-JSON SSE comments/events.
+    for (final event in ResponsesProtocol.sseEvents(body)) {
+      for (final source in _extractResponsesSources(event)) {
+        if (seen.add(source.url)) result.add(source);
       }
     }
     return result;
   }
 
-  static Map<String, dynamic> _messageForClaude(Map<String, dynamic> message) {
-    final content = message['content'];
-    if (content is! List) return message;
-    return {
-      ...message,
-      'content': [
-        for (final part in content)
-          if (part is Map && part['type'] == 'text')
-            {'type': 'text', 'text': part['text']?.toString() ?? ''}
-          else if (part is Map && part['type'] == 'image_url')
-            {
-              'type': 'image',
-              'source': {
-                'type': 'base64',
-                'media_type': _mimeFromDataUri(
-                  (part['image_url'] is Map ? part['image_url']['url'] : null)
-                      ?.toString(),
-                ),
-                'data': _base64FromDataUri(
-                  (part['image_url'] is Map ? part['image_url']['url'] : null)
-                      ?.toString(),
-                ),
-              },
-            }
-          else if (part is Map && part['type'] == 'file')
-            {
-              'type': 'document',
-              'source': {
-                'type': 'base64',
-                'media_type': _mimeFromDataUri(
-                  (part['file'] is Map ? part['file']['file_data'] : null)
-                      ?.toString(),
-                ),
-                'data': _base64FromDataUri(
-                  (part['file'] is Map ? part['file']['file_data'] : null)
-                      ?.toString(),
-                ),
-              },
-              'title': (part['file'] is Map ? part['file']['filename'] : null)
-                  ?.toString(),
-            },
-      ],
-    };
-  }
+  static Map<String, dynamic> _messageForClaude(Map<String, dynamic> message) =>
+      ClaudeMessagesProtocol.messageFromChat(message);
 
   static Map<String, dynamic> _responsesBodyFromChatBody(
     Map<String, dynamic> chatBody,
     AiProviderConfig config,
-  ) {
-    if (config.isOpenAiCodexOAuth) {
-      return _codexResponsesBodyFromChatBody(chatBody, config);
-    }
-
-    final instructions = <String>[];
-    final inputParts = <String>[];
-    final messages = chatBody['messages'];
-
-    if (messages is List) {
-      for (final item in messages) {
-        if (item is! Map) continue;
-        final role = (item['role'] as String?)?.trim().toLowerCase() ?? 'user';
-        final rawContent = item['content'];
-        final content = _stringContent(rawContent).trim();
-        if (content.isEmpty && rawContent is! List) continue;
-
-        if (role == 'system' || role == 'developer') {
-          instructions.add(content);
-        } else if (role == 'assistant') {
-          inputParts.add('assistant: $content');
-        } else {
-          inputParts.add(content);
-        }
-      }
-    }
-
-    final imageMessage = messages is List
-        ? messages.whereType<Map>().where((item) {
-            final content = item['content'];
-            return content is List &&
-                content.any((part) =>
-                    part is Map &&
-                    (part['type'] == 'image_url' || part['type'] == 'file'));
-          }).toList()
-        : const <Map>[];
-    final body = <String, dynamic>{
-      'model': chatBody['model'],
-      'input': imageMessage.isEmpty
-          ? inputParts.join('\n\n').trim()
-          : _responsesInputFromMessages(messages),
-      // Ledger context is user data; never opt into the Responses service's
-      // server-side retention default for public OpenAI or compatible relays.
-      'store': false,
-    };
-
-    final instructionText = instructions.join('\n\n').trim();
-    if (instructionText.isNotEmpty) body['instructions'] = instructionText;
-
-    final maxTokens = chatBody['max_tokens'];
-    if (maxTokens is int && maxTokens > 0) {
-      body['max_output_tokens'] = maxTokens;
-    }
-
-    final effort = config.reasoningEffort.responsesApiValue;
-    if (effort != null) {
-      body['reasoning'] = {'effort': effort};
-    }
-    final webTools = config.responsesWebSearchTools;
-    if (webTools.isNotEmpty) body['tools'] = webTools;
-    final webIncludes = config.responsesWebSearchIncludes;
-    if (webIncludes.isNotEmpty) body['include'] = webIncludes;
-
-    return body;
-  }
-
-  static List<Map<String, dynamic>> _responsesInputFromMessages(
-    Object? rawMessages,
-  ) {
-    if (rawMessages is! List) return const [];
-    final input = <Map<String, dynamic>>[];
-    for (final item in rawMessages) {
-      if (item is! Map) continue;
-      final role = (item['role']?.toString().trim().toLowerCase() ?? 'user');
-      if (role == 'system' || role == 'developer') continue;
-      final content = item['content'];
-      final parts = <Map<String, dynamic>>[];
-      if (content is List) {
-        for (final part in content) {
-          if (part is Map && part['type'] == 'text') {
-            parts.add({
-              'type': role == 'assistant' ? 'output_text' : 'input_text',
-              'text': part['text']?.toString() ?? '',
-            });
-          } else if (part is Map && part['type'] == 'image_url') {
-            parts.add({
-              'type': 'input_image',
-              'image_url':
-                  (part['image_url'] is Map ? part['image_url']['url'] : null)
-                      ?.toString(),
-            });
-          } else if (part is Map && part['type'] == 'file') {
-            parts.add({
-              'type': 'input_file',
-              'filename':
-                  (part['file'] is Map ? part['file']['filename'] : null)
-                      ?.toString(),
-              'file_data':
-                  (part['file'] is Map ? part['file']['file_data'] : null)
-                      ?.toString(),
-            });
-          }
-        }
-      } else if (content != null) {
-        parts.add({
-          'type': role == 'assistant' ? 'output_text' : 'input_text',
-          'text': content.toString(),
-        });
-      }
-      if (parts.isNotEmpty) {
-        input.add({
-          'type': 'message',
-          'role': role == 'assistant' ? 'assistant' : 'user',
-          'content': parts,
-        });
-      }
-    }
-    return input;
-  }
-
-  static String _mimeFromDataUri(String? uri) {
-    final match = RegExp(r'^data:([^;]+);base64,').firstMatch(uri ?? '');
-    return match?.group(1) ?? 'image/jpeg';
-  }
-
-  static String _base64FromDataUri(String? uri) {
-    final value = uri ?? '';
-    final comma = value.indexOf(',');
-    return comma < 0 ? value : value.substring(comma + 1);
-  }
-
-  /// ChatGPT subscription OAuth is backed by the Codex Responses endpoint,
-  /// whose wire contract is stricter than the public OpenAI Responses API:
-  /// instructions must be non-empty, input must be a message array, and the
-  /// endpoint only accepts streamed, non-stored responses.
-  static Map<String, dynamic> _codexResponsesBodyFromChatBody(
-    Map<String, dynamic> chatBody,
-    AiProviderConfig config,
-  ) {
-    final instructions = <String>[];
-    final input = <Map<String, dynamic>>[];
-    final messages = chatBody['messages'];
-
-    if (messages is List) {
-      for (final item in messages) {
-        if (item is! Map) continue;
-        final role = (item['role'] as String?)?.trim().toLowerCase() ?? 'user';
-        final rawContent = item['content'];
-        final content = _stringContent(rawContent).trim();
-        if (content.isEmpty && rawContent is! List) continue;
-        if (role == 'system' || role == 'developer') {
-          instructions.add(content);
-          continue;
-        }
-        final outputType = role == 'assistant' ? 'output_text' : 'input_text';
-        input.add(
-          rawContent is List &&
-                  rawContent.any(
-                    (part) =>
-                        part is Map &&
-                        (part['type'] == 'image_url' || part['type'] == 'file'),
-                  )
-              ? _responsesInputFromMessages([item]).single
-              : {
-                  'type': 'message',
-                  'role': role == 'assistant' ? 'assistant' : 'user',
-                  'content': [
-                    {'type': outputType, 'text': content},
-                  ],
-                },
-        );
-      }
-    }
-
-    final body = <String, dynamic>{
-      'model': chatBody['model'],
-      'instructions': instructions.join('\n\n').trim().isEmpty
-          ? 'You are a helpful assistant.'
-          : instructions.join('\n\n').trim(),
-      'input': input,
-      'store': false,
-      'stream': true,
-    };
-    final effort = config.reasoningEffort.codexResponsesApiValue;
-    if (effort != null) body['reasoning'] = {'effort': effort};
-    final webTools = config.responsesWebSearchTools;
-    if (webTools.isNotEmpty) body['tools'] = webTools;
-    final webIncludes = config.responsesWebSearchIncludes;
-    if (webIncludes.isNotEmpty) body['include'] = webIncludes;
-    return body;
-  }
+  ) =>
+      ResponsesProtocol.bodyFromChat(
+        chatBody,
+        config,
+        kind: ResponsesRequestKind.chat,
+      );
 
   static Map<String, dynamic> _responsesStreamBody({
     required AiProviderConfig config,
@@ -1577,35 +1255,8 @@ $transactionsText''';
   /// 官方会在 `response.output_text.done` 里重发完整文本；该事件不能
   /// 当作增量写入，否则流式回答会在结束时重复一遍。
   static String? _responsesStreamDelta(String data) {
-    final payload = data.trim();
-    if (payload.isEmpty || payload == '[DONE]') return null;
-
-    final decoded = jsonDecode(payload);
-    if (decoded is! Map) return null;
-    final json = Map<String, dynamic>.from(decoded);
-    final type = json['type']?.toString().toLowerCase() ?? '';
-
-    // 标准 Responses 协议：`delta` 是唯一可追加的文本字段。
-    final delta = json['delta'];
-    if (delta is String &&
-        delta.isNotEmpty &&
-        (type.contains('output_text.delta') ||
-            type.contains('content_part.delta') ||
-            type.isEmpty)) {
-      return delta;
-    }
-
-    // 部分兼容网关未标注 event type，直接用 text/output_text 放增量。
-    // 正式 `*.done`/`*.completed` 会带完整文本，必须过滤以避免重复。
-    final isTerminal = type.endsWith('.done') || type.contains('completed');
-    if (isTerminal ||
-        (!type.contains('output_text') &&
-            !type.contains('content_part') &&
-            type.isNotEmpty)) {
-      return null;
-    }
-    final fallback = json['text'] ?? json['output_text'];
-    return fallback is String && fallback.isNotEmpty ? fallback : null;
+    final event = ResponsesProtocol.decodeEvent(data);
+    return event == null ? null : ResponsesProtocol.textDelta(event);
   }
 
   /// Only provider-authored, user-displayable reasoning summary deltas are
@@ -1636,63 +1287,16 @@ $transactionsText''';
   }
 
   static String? _responsesCompletedText(String data) {
-    final payload = data.trim();
-    if (payload.isEmpty || payload == '[DONE]') return null;
-    final decoded = jsonDecode(payload);
-    if (decoded is! Map) return null;
-    final event = Map<String, dynamic>.from(decoded);
-    if (event['type']?.toString().toLowerCase() != 'response.completed') {
+    final event = ResponsesProtocol.decodeEvent(data);
+    if (event == null ||
+        ResponsesProtocol.eventType(event) != 'response.completed') {
       return null;
     }
-    final response = event['response'];
-    if (response is! Map) return null;
-    return _extractResponsesText(Map<String, dynamic>.from(response));
+    return ResponsesProtocol.completedText(event);
   }
 
-  static String _stringContent(Object? content) {
-    if (content is String) return content;
-    if (content is List) {
-      return content
-          .map((part) {
-            if (part is String) return part;
-            if (part is Map) return part['text']?.toString() ?? '';
-            return '';
-          })
-          .where((part) => part.trim().isNotEmpty)
-          .join('\n');
-    }
-    return content?.toString() ?? '';
-  }
-
-  static String _extractResponsesText(Map<String, dynamic> outer) {
-    final outputText = outer['output_text'];
-    if (outputText is String && outputText.trim().isNotEmpty) {
-      return outputText;
-    }
-
-    final buffer = StringBuffer();
-
-    void walk(Object? value) {
-      if (value is Map) {
-        final type = value['type']?.toString();
-        final text = value['text'];
-        if ((type == 'output_text' || type == 'text') && text is String) {
-          if (text.trim().isNotEmpty) buffer.writeln(text.trim());
-        }
-        final content = value['content'];
-        if (content != null) walk(content);
-        final output = value['output'];
-        if (output != null) walk(output);
-      } else if (value is List) {
-        for (final item in value) {
-          walk(item);
-        }
-      }
-    }
-
-    walk(outer['output']);
-    return buffer.toString().trim();
-  }
+  static String _extractResponsesText(Object? decoded) =>
+      ResponsesProtocol.extractText(decoded);
 
   /// Responses places web citations in `annotations` on output text parts.
   /// Walk the complete response because gateways differ in whether they put
@@ -1892,53 +1496,12 @@ $transactionsText''';
   static Map<String, dynamic> _convertToClaudeFormat(
     Map<String, dynamic> openaiBody,
     AiProviderConfig config,
-  ) {
-    final messages = openaiBody['messages'] as List<dynamic>?;
-    if (messages == null) return openaiBody;
-
-    // 分离 system 和 非 system 消息
-    final systemMessages = <String>[];
-    final userMessages = <Map<String, dynamic>>[];
-
-    for (final msg in messages) {
-      if (msg is! Map<String, dynamic>) continue;
-      final role = msg['role'] as String?;
-      final content = msg['content'];
-
-      if (role == 'system') {
-        systemMessages.add(_stringContent(content));
-      } else {
-        userMessages.add(msg);
-      }
-    }
-
-    final budgetTokens = config.reasoningEffort.claudeBudgetTokens;
-    final requestedMaxTokens = (openaiBody['max_tokens'] as int?) ?? 4096;
-    final maxTokens = budgetTokens == null
-        ? requestedMaxTokens
-        : math.max(requestedMaxTokens, budgetTokens + 4096);
-    final claudeBody = <String, dynamic>{
-      'model': openaiBody['model'],
-      'messages': userMessages,
-      'max_tokens': maxTokens,
-    };
-
-    // 合并所有 system prompt
-    if (systemMessages.isNotEmpty) {
-      claudeBody['system'] = systemMessages.join('\n\n');
-    }
-
-    // thinking 参数映射
-    if (budgetTokens != null) {
-      claudeBody['thinking'] = {
-        'type': 'enabled',
-        'budget_tokens': budgetTokens,
-      };
-      claudeBody['temperature'] = 1;
-    }
-
-    return claudeBody;
-  }
+  ) =>
+      ClaudeMessagesProtocol.bodyFromChat(
+        openaiBody,
+        config,
+        kind: ClaudeRequestKind.query,
+      );
 
   static AiProviderConfig _resolveConfig({
     String? apiKey,

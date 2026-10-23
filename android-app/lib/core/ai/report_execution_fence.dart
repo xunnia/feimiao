@@ -110,6 +110,16 @@ class ReportExecutionFence {
 
   static final ReportExecutionFence shared = ReportExecutionFence();
 
+  /// Serialize recovery with foreground/background database replacement.
+  /// Unlike a restore this must not rotate the generation on ordinary startup.
+  Future<T> withRecoveryBarrier<T>(Future<T> Function() action) {
+    final held = Zone.current[_zoneKey] as _HeldFence?;
+    if (held != null && held.active && identical(held.owner, this)) {
+      return action();
+    }
+    return _withExclusive((_, __) => action());
+  }
+
   static const _databaseName = 'feimiao_report_execution_fence.db';
   static const _stateTable = 'fence_state';
   static const _stateId = 1;
@@ -117,7 +127,7 @@ class ReportExecutionFence {
   final ReportFencePathProvider _databasePathProvider;
   final ReportGenerationFactory _generationFactory;
   final Object _zoneKey = Object();
-  Future<void> _localTail = Future<void>.value();
+  Future<void>? _localTail;
 
   Future<ReportGenerationLease> acquire() {
     return _withExclusive((db, databasePath) async {
@@ -223,7 +233,7 @@ class ReportExecutionFence {
     final predecessor = _localTail;
     final release = Completer<void>();
     _localTail = release.future;
-    await predecessor;
+    if (predecessor != null) await predecessor;
     try {
       return await _withDatabaseExclusive(action);
     } finally {

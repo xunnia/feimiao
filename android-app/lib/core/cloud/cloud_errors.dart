@@ -96,6 +96,23 @@ class CloudApiException implements Exception {
     this.cause,
   });
 
+  /// 本机登录已切换：旧请求不能重试到新账号，也不能写回旧结果。
+  factory CloudApiException.sessionChanged() => CloudApiException(
+        status: 409,
+        code: CloudErrorCode.unknown,
+        rawCode: 'LOCAL_SESSION_CHANGED',
+        action: CloudErrorAction.showMessage,
+        message: '登录状态已变更，请重新操作',
+      );
+
+  factory CloudApiException.storageFailure() => CloudApiException(
+        status: 500,
+        code: CloudErrorCode.unknown,
+        rawCode: 'LOCAL_STORAGE_FAILED',
+        action: CloudErrorAction.retryLater,
+        message: '账号信息保存失败，请重试',
+      );
+
   /// 断网、超时、DNS 失败等：请求没有拿到服务端的回应。
   factory CloudApiException.network([Object? cause]) => CloudApiException(
         status: 0,

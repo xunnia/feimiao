@@ -56,6 +56,15 @@ class CloudAccount extends ChangeNotifier with WidgetsBindingObserver {
   String? _signOutNotice;
   Future<void>? _entitlementsInFlight;
   bool _observing = false;
+  int _generation = 0;
+  bool _disposed = false;
+  Future<void>? _initializing;
+
+  bool _isCurrent(int generation) => !_disposed && generation == _generation;
+
+  void _checkCurrent(int generation) {
+    if (!_isCurrent(generation)) throw CloudApiException.sessionChanged();
+  }
 
   bool get ready => _ready;
   bool get signedIn => _signedIn;
@@ -70,24 +79,62 @@ class CloudAccount extends ChangeNotifier with WidgetsBindingObserver {
 
   CloudApi get api => _api;
 
-  Future<void> init() async {
+  Future<void> init() => _initializing ??= _init();
+
+  Future<void> _init() async {
+    final generation = _generation;
     if (!enabled) {
       _ready = true;
       notifyListeners();
       return;
     }
-    _signedIn = await _api.restore();
-    if (_signedIn) {
-      _me = await _readMeCache();
-      _entitlements = await _api.store.readEntitlements();
+    try {
+      final restored = await _api.restore();
+      if (!_isCurrent(generation)) return;
+      _signedIn = restored;
+      if (restored) {
+        final me = await _readStartupCache(_readMeCache);
+        if (!_isCurrent(generation)) return;
+        final entitlements =
+            await _readStartupCache(_api.store.readEntitlements);
+        if (!_isCurrent(generation)) return;
+        _me = me;
+        _entitlements = entitlements;
+      }
+    } on CloudApiException catch (error) {
+      // init is started without awaiting it. A login/logout may supersede its
+      // storage reads; that is cancellation, not a startup failure.
+      if (error.rawCode != 'LOCAL_SESSION_CHANGED') {
+        // A local storage outage must not escape the unawaited startup task.
+        // Keep the app usable offline; never expose cached credentials here.
+        debugPrint('cloud restore unavailable: ${error.rawCode}');
+      }
+    } finally {
+      if (!_disposed) {
+        _ready = true;
+        if (!_observing) {
+          WidgetsBinding.instance.addObserver(this);
+          _observing = true;
+        }
+        notifyListeners();
+      }
     }
-    _ready = true;
-    notifyListeners();
-    if (!_observing) {
-      WidgetsBinding.instance.addObserver(this);
-      _observing = true;
+    if (_isCurrent(generation) && _signedIn) unawaited(refresh());
+  }
+
+  Future<T?> _readStartupCache<T>(Future<T?> Function() read) async {
+    try {
+      return await read();
+    } on CloudApiException catch (error) {
+      if (error.rawCode == 'LOCAL_SESSION_CHANGED') rethrow;
+      return null;
+    } on FormatException {
+      return null;
+    } on TypeError {
+      return null;
+    } on RangeError {
+      return null;
     }
-    if (_signedIn) unawaited(refresh());
   }
 
   @override
@@ -99,6 +146,9 @@ class CloudAccount extends ChangeNotifier with WidgetsBindingObserver {
 
   @override
   void dispose() {
+    _disposed = true;
+    _generation++;
+    _api.onSessionEnded = null;
     if (_observing) WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
@@ -112,25 +162,37 @@ class CloudAccount extends ChangeNotifier with WidgetsBindingObserver {
   /// 打开设置页、回到前台、AI 请求结束时调用。用 ETag，没变化时服务端回 304。
   Future<void> refreshEntitlements() {
     if (!_signedIn) return Future.value();
-    return _entitlementsInFlight ??=
-        _fetchEntitlements().whenComplete(() => _entitlementsInFlight = null);
+    final inFlight = _entitlementsInFlight;
+    if (inFlight != null) return inFlight;
+    late final Future<void> future;
+    future = _fetchEntitlements().whenComplete(() {
+      if (identical(_entitlementsInFlight, future)) {
+        _entitlementsInFlight = null;
+      }
+    });
+    return _entitlementsInFlight = future;
   }
 
   Future<void> _fetchEntitlements() async {
+    final generation = _generation;
+    final session = _api.sessionGeneration;
     final cached = _entitlements;
     try {
       final result = await _api.entitlements(etag: cached?.etag);
-      if (!_signedIn) return;
+      if (!_isCurrent(generation) || !_signedIn) return;
+      final CachedEntitlements updated;
       if (result.notModified && cached != null) {
-        _entitlements = CachedEntitlements(
+        updated = CachedEntitlements(
             json: cached.json, etag: cached.etag, fetchedAt: _now());
       } else if (result.json != null) {
-        _entitlements = CachedEntitlements(
+        updated = CachedEntitlements(
             json: result.json!, etag: result.etag, fetchedAt: _now());
       } else {
         return;
       }
-      await _api.store.writeEntitlements(_entitlements!);
+      await _api.store.writeEntitlements(updated, generation: session);
+      if (!_isCurrent(generation)) return;
+      _entitlements = updated;
       notifyListeners();
     } on CloudApiException catch (error) {
       debugPrint('entitlements refresh failed: $error');
@@ -138,6 +200,7 @@ class CloudAccount extends ChangeNotifier with WidgetsBindingObserver {
   }
 
   Future<void> _loadMeQuietly() async {
+    final generation = _generation;
     try {
       await loadMe();
     } on CloudApiException catch (error) {
@@ -145,14 +208,15 @@ class CloudAccount extends ChangeNotifier with WidgetsBindingObserver {
       return;
     }
     // 不等：本机资料可能还没读完，不能拖住登录和刷新。
-    unawaited(_syncNicknameQuietly());
+    if (_isCurrent(generation)) unawaited(_syncNicknameQuietly(generation));
   }
 
-  Future<void> _syncNicknameQuietly() async {
+  Future<void> _syncNicknameQuietly(int generation) async {
     final store = profileStore;
     if (store == null) return;
     // 本机资料读完再比，否则会把"还没读到"当成"没设置"而拉回服务端的名字。
     await store.whenProfileLoaded();
+    if (!_isCurrent(generation)) return;
     try {
       await syncNickname();
     } on CloudApiException catch (error) {
@@ -165,15 +229,19 @@ class CloudAccount extends ChangeNotifier with WidgetsBindingObserver {
   /// 没登录、没接本机存储、本机资料还没读完时什么都不做。
   /// 多次调用按顺序执行，每次都用调用时最新的本机昵称重新判断。
   Future<void> syncNickname() {
+    final generation = _generation;
     final previous = _nicknameSyncTail;
     final run = previous == null
-        ? _syncNickname()
-        : previous.then((_) {}, onError: (_) {}).then((_) => _syncNickname());
+        ? _syncNickname(generation)
+        : previous
+            .then((_) {}, onError: (_) {})
+            .then((_) => _syncNickname(generation));
     _nicknameSyncTail = run;
     return run;
   }
 
-  Future<void> _syncNickname() async {
+  Future<void> _syncNickname(int generation) async {
+    if (!_isCurrent(generation)) return;
     final store = profileStore;
     final me = _me;
     if (store == null || !_signedIn || me == null || !store.profileLoaded) {
@@ -199,8 +267,10 @@ class CloudAccount extends ChangeNotifier with WidgetsBindingObserver {
   }
 
   Future<CloudMe> loadMe() async {
+    final generation = _generation;
+    final session = _api.sessionGeneration;
     final me = await _api.me();
-    await _setMe(me);
+    await _setMe(me, generation, session);
     return me;
   }
 
@@ -226,29 +296,36 @@ class CloudAccount extends ChangeNotifier with WidgetsBindingObserver {
       _login(() => _api.resolveDeviceLimit(info.loginTicket, revokeDeviceIds));
 
   Future<LoginOutcome> _login(Future<LoginResult> Function() call) async {
+    _clearState();
+    final generation = _generation;
+    _signOutNotice = null;
+    notifyListeners();
     final LoginResult result;
     try {
       result = await call();
     } on CloudApiException catch (error) {
+      _checkCurrent(generation);
       final limit = _api.deviceLimitOf(error);
       if (limit != null) return LoginNeedsDeviceChoice(limit);
       rethrow;
     }
+    _checkCurrent(generation);
     _signedIn = true;
     _signOutNotice = null;
     _me = null;
     _entitlements = null;
     notifyListeners();
     await refresh();
+    _checkCurrent(generation);
     return LoginSucceeded(isNewUser: result.isNewUser);
   }
 
   /// 主动退出登录。只清账号信息，本地账本不动。
   Future<void> logout() async {
-    await _api.logout();
     _clearState();
     _signOutNotice = null;
     notifyListeners();
+    await _api.logout();
   }
 
   void clearSignOutNotice() {
@@ -271,8 +348,9 @@ class CloudAccount extends ChangeNotifier with WidgetsBindingObserver {
   Future<List<CloudDevice>> devices() => _api.devices();
 
   Future<void> revokeDevice(CloudDevice device) async {
+    final generation = _generation;
     await _api.revokeDevice(device);
-    if (device.isCurrent) {
+    if (device.isCurrent && _isCurrent(generation)) {
       _clearState();
       notifyListeners();
     }
@@ -281,7 +359,10 @@ class CloudAccount extends ChangeNotifier with WidgetsBindingObserver {
   Future<void> revokeOtherDevices() => _api.revokeOtherDevices();
 
   Future<void> updateDisplayName(String name) async {
+    final generation = _generation;
+    final session = _api.sessionGeneration;
     final profile = await _api.updateProfile(displayName: name);
+    _checkCurrent(generation);
     final me = _me;
     if (me != null) {
       await _setMe(
@@ -293,13 +374,17 @@ class CloudAccount extends ChangeNotifier with WidgetsBindingObserver {
           createdAt: me.createdAt,
           deletion: me.deletion,
         ),
+        generation,
+        session,
       );
     }
   }
 
   /// 设置或修改密码（验证码来自 [OtpPurpose.setPassword]）。其他设备会下线。
   Future<void> setPassword(String otpCode, String newPassword) async {
+    final generation = _generation;
     await _api.setPassword(otpCode, newPassword);
+    _checkCurrent(generation);
     await _loadMeQuietly();
   }
 
@@ -311,18 +396,24 @@ class CloudAccount extends ChangeNotifier with WidgetsBindingObserver {
     String newEmail,
     String otpCode,
   ) async {
+    final generation = _generation;
+    final session = _api.sessionGeneration;
     final me = await _api.confirmNewEmail(ticket.ticket, newEmail, otpCode);
-    await _setMe(me);
+    await _setMe(me, generation, session);
   }
 
   Future<DeletionStatus> requestDeletion(String otpCode) async {
+    final generation = _generation;
     final status = await _api.requestDeletion(otpCode);
+    _checkCurrent(generation);
     await _loadMeQuietly();
     return status;
   }
 
   Future<DeletionStatus> cancelDeletion() async {
+    final generation = _generation;
     final status = await _api.cancelDeletion();
+    _checkCurrent(generation);
     await _loadMeQuietly();
     return status;
   }
@@ -331,11 +422,16 @@ class CloudAccount extends ChangeNotifier with WidgetsBindingObserver {
 
   /// 兑换成功后直接用返回的最新权益，不用再拉一次。
   Future<RedeemGrant> redeem(String code) async {
+    final generation = _generation;
+    final session = _api.sessionGeneration;
     final (grant, json) = await _api.redeem(code);
+    _checkCurrent(generation);
     if (json.isNotEmpty) {
-      _entitlements =
+      final updated =
           CachedEntitlements(json: json, etag: null, fetchedAt: _now());
-      await _api.store.writeEntitlements(_entitlements!);
+      await _api.store.writeEntitlements(updated, generation: session);
+      _checkCurrent(generation);
+      _entitlements = updated;
       notifyListeners();
     } else {
       unawaited(refreshEntitlements());
@@ -348,21 +444,31 @@ class CloudAccount extends ChangeNotifier with WidgetsBindingObserver {
   // -------------------------------------------------------------------------
 
   void _handleSessionEnded(CloudApiException reason) {
+    if (_disposed) return;
     _clearState();
     _signOutNotice = reason.message;
     notifyListeners();
   }
 
   void _clearState() {
+    _generation++;
+    _entitlementsInFlight = null;
+    _nicknameSyncTail = null;
     _signedIn = false;
     _me = null;
     _entitlements = null;
   }
 
-  Future<void> _setMe(CloudMe me) async {
+  Future<void> _setMe(CloudMe me, int generation, int session) async {
+    _checkCurrent(generation);
     if (!_signedIn) return;
+    if (!await _api.store.writeRaw(
+        CloudSessionStore.meKey, jsonEncode(_meToJson(me)),
+        generation: session)) {
+      throw CloudApiException.storageFailure();
+    }
+    _checkCurrent(generation);
     _me = me;
-    await _api.store.writeRaw(CloudSessionStore.meKey, jsonEncode(_meToJson(me)));
     notifyListeners();
   }
 

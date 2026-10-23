@@ -1,6 +1,6 @@
 import 'package:decimal/decimal.dart';
 
-import '../../data/app_repository.dart';
+import '../models/ledger_entities.dart';
 import '../models/transaction_kind.dart';
 import '../models/transaction_record.dart';
 
@@ -88,9 +88,7 @@ class LedgerPolicy {
     Iterable<TransactionEntity> transactions,
     Map<int, Decimal> refundTotals,
   ) =>
-      transactions
-          .where((t) => countsAsExpenseFamily(t, refundTotals))
-          .length;
+      transactions.where((t) => countsAsExpenseFamily(t, refundTotals)).length;
 
   /// toUserRecord 的索引版：批量转换时先建一次 [refundTotals] 再逐笔调这个。
   static TransactionRecord toUserRecordWith(

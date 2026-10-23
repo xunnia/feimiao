@@ -9,6 +9,7 @@ import 'package:qingji/core/cloud/cloud_account.dart';
 import 'package:qingji/core/cloud/cloud_api.dart';
 import 'package:qingji/core/cloud/cloud_models.dart';
 import 'package:qingji/core/cloud/cloud_session_store.dart';
+import '../../core/cloud/session_test_store.dart';
 import 'package:qingji/data/app_repository.dart';
 import 'package:qingji/theme/app_colors.dart';
 import 'package:qingji/views/account/account_page.dart';
@@ -146,7 +147,7 @@ CloudAccount _account(_Server server, {bool enabled = true}) => CloudAccount(
       enabled: enabled,
       api: CloudApi(
         client: MockClient(server.handle),
-        store: CloudSessionStore(store: MemoryCloudSecretStore()),
+        store: testSessionStore(MemoryCloudSecretStore()),
         baseUrl: 'https://api.test/v1',
         deviceInfo: () async => const {},
       ),

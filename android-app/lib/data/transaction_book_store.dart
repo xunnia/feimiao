@@ -1,4 +1,5 @@
 import 'package:sqflite/sqflite.dart';
+import '../core/ledger/book_membership.dart';
 
 /// Additive membership overlay. Absence means legacy `book_id`; a default-book
 /// row marks an explicit selection even when no scene book is selected.
@@ -53,9 +54,7 @@ abstract final class TransactionBookStore {
                        WHERE original.id = t.refund_of), t.book_id) = ?))
   ''';
 
-  static Set<int> parse(Object? value) => value == null
-      ? <int>{}
-      : value.toString().split(',').map(int.tryParse).whereType<int>().toSet();
+  static Set<int> parse(Object? value) => parseTransactionBookIds(value);
 
   static Future<Set<int>> read(
     DatabaseExecutor db,

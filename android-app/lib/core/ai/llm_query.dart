@@ -1,6 +1,5 @@
 import 'dart:async' show TimeoutException;
 import 'dart:convert';
-import 'dart:math' as math;
 
 import 'package:http/http.dart' as http;
 
@@ -8,6 +7,8 @@ import '../app_clock.dart';
 import 'ai_http_transport.dart';
 import 'ai_prompt_templates.dart';
 import 'ai_provider_config.dart';
+import 'claude_messages_protocol.dart';
+import 'responses_protocol.dart';
 import 'openai_codex_oauth.dart';
 import 'web_search.dart';
 
@@ -286,115 +287,12 @@ $transactionsText''';
   static Map<String, dynamic> _responsesBodyFromChatBody(
     Map<String, dynamic> chatBody,
     AiProviderConfig config,
-  ) {
-    if (config.isOpenAiCodexOAuth) {
-      return _codexResponsesBodyFromChatBody(chatBody, config);
-    }
-
-    final instructions = <String>[];
-    final inputParts = <String>[];
-    final messages = chatBody['messages'];
-    if (messages is List) {
-      for (final item in messages) {
-        if (item is! Map) continue;
-        final role = (item['role'] as String?)?.trim().toLowerCase() ?? 'user';
-        final content = _stringContent(item['content']).trim();
-        if (content.isEmpty) continue;
-        if (role == 'system' || role == 'developer') {
-          instructions.add(content);
-        } else if (role == 'assistant') {
-          inputParts.add('assistant: $content');
-        } else {
-          inputParts.add(content);
-        }
-      }
-    }
-    final body = <String, dynamic>{
-      'model': chatBody['model'],
-      'input': inputParts.join('\n\n').trim(),
-      // Public Responses defaults to retaining responses; Chats/report data
-      // must be explicitly non-persistent at the provider boundary.
-      'store': false,
-    };
-    final instructionText = instructions.join('\n\n').trim();
-    if (instructionText.isNotEmpty) body['instructions'] = instructionText;
-    final maxTokens = chatBody['max_tokens'];
-    if (maxTokens is int && maxTokens > 0) {
-      body['max_output_tokens'] = maxTokens;
-    }
-    final effort = config.reasoningEffort.responsesApiValue;
-    if (effort != null) {
-      body['reasoning'] = {'effort': effort};
-    }
-    final webTools = config.responsesWebSearchTools;
-    if (webTools.isNotEmpty) body['tools'] = webTools;
-    final webIncludes = config.responsesWebSearchIncludes;
-    if (webIncludes.isNotEmpty) body['include'] = webIncludes;
-    return body;
-  }
-
-  static Map<String, dynamic> _codexResponsesBodyFromChatBody(
-    Map<String, dynamic> chatBody,
-    AiProviderConfig config,
-  ) {
-    final instructions = <String>[];
-    final input = <Map<String, dynamic>>[];
-    final messages = chatBody['messages'];
-    if (messages is List) {
-      for (final item in messages) {
-        if (item is! Map) continue;
-        final role = (item['role'] as String?)?.trim().toLowerCase() ?? 'user';
-        final content = _stringContent(item['content']).trim();
-        if (content.isEmpty) continue;
-        if (role == 'system' || role == 'developer') {
-          instructions.add(content);
-          continue;
-        }
-        input.add({
-          'type': 'message',
-          'role': role == 'assistant' ? 'assistant' : 'user',
-          'content': [
-            {
-              'type': role == 'assistant' ? 'output_text' : 'input_text',
-              'text': content,
-            },
-          ],
-        });
-      }
-    }
-    final instructionText = instructions.join('\n\n').trim();
-    final body = <String, dynamic>{
-      'model': chatBody['model'],
-      'instructions': instructionText.isEmpty
-          ? 'You are a helpful assistant.'
-          : instructionText,
-      'input': input,
-      'store': false,
-      'stream': true,
-    };
-    final effort = config.reasoningEffort.codexResponsesApiValue;
-    if (effort != null) body['reasoning'] = {'effort': effort};
-    final webTools = config.responsesWebSearchTools;
-    if (webTools.isNotEmpty) body['tools'] = webTools;
-    final webIncludes = config.responsesWebSearchIncludes;
-    if (webIncludes.isNotEmpty) body['include'] = webIncludes;
-    return body;
-  }
-
-  static String _stringContent(Object? content) {
-    if (content is String) return content;
-    if (content is List) {
-      return content
-          .map((part) {
-            if (part is String) return part;
-            if (part is Map) return part['text']?.toString() ?? '';
-            return '';
-          })
-          .where((part) => part.trim().isNotEmpty)
-          .join('\n');
-    }
-    return content?.toString() ?? '';
-  }
+  ) =>
+      ResponsesProtocol.bodyFromChat(
+        chatBody,
+        config,
+        kind: ResponsesRequestKind.report,
+      );
 
   static Future<String> _postChat({
     required AiProviderConfig config,
@@ -445,44 +343,11 @@ $transactionsText''';
     required int timeoutSeconds,
     required AiHttpTransport transport,
   }) async {
-    // 从 chat-completions 格式转换为 Claude Messages 格式
-    final messages = body['messages'] as List? ?? [];
-    String? systemPrompt;
-    final claudeMessages = <Map<String, dynamic>>[];
-    for (final msg in messages) {
-      if (msg is! Map) continue;
-      final role = (msg['role'] as String?)?.trim() ?? 'user';
-      final content = _stringContent(msg['content']).trim();
-      if (content.isEmpty) continue;
-      if (role == 'system') {
-        systemPrompt = content;
-      } else {
-        claudeMessages.add({'role': role, 'content': content});
-      }
-    }
-
-    final budget = config.reasoningEffort.claudeBudgetTokens;
-    final requestedMaxTokens = (body['max_tokens'] as int?) ?? 4096;
-    final maxTokens = budget != null
-        ? math.max(requestedMaxTokens, budget + 4096)
-        : requestedMaxTokens;
-
-    final claudeBody = <String, dynamic>{
-      'model': body['model'],
-      'messages': claudeMessages,
-      'max_tokens': maxTokens,
-    };
-    if (systemPrompt != null) claudeBody['system'] = systemPrompt;
-
-    // 思考深度参数
-    if (budget != null) {
-      claudeBody['thinking'] = {
-        'type': 'enabled',
-        'budget_tokens': budget,
-      };
-      // thinking 模式下 temperature 必须为 1
-      claudeBody['temperature'] = 1;
-    }
+    final claudeBody = ClaudeMessagesProtocol.bodyFromChat(
+      body,
+      config,
+      kind: ClaudeRequestKind.report,
+    );
 
     late http.Response resp;
     try {
@@ -599,77 +464,15 @@ $transactionsText''';
   }
 
   static String _extractCodexSseText(String body) {
-    final buffer = StringBuffer();
-    String? completed;
-    for (final line in const LineSplitter().convert(body)) {
-      if (!line.startsWith('data:')) continue;
-      final data = line.substring(5).trimLeft();
-      if (data == '[DONE]') break;
-      try {
-        final decoded = jsonDecode(data);
-        if (decoded is Map) {
-          final event = Map<String, dynamic>.from(decoded);
-          final type = event['type']?.toString().toLowerCase() ?? '';
-          if (type == 'response.failed') {
-            throw LlmQueryException(
-              event['response'] is Map
-                  ? ((event['response'] as Map)['error']?.toString() ??
-                      'Responses 生成失败')
-                  : 'Responses 生成失败',
-            );
-          }
-          if (type == 'response.output_text.done') {
-            final text = event['text'];
-            if (text is String && text.trim().isNotEmpty) completed = text;
-          } else if (type == 'response.completed') {
-            final response = event['response'];
-            if (response is Map) {
-              final text = _extractResponsesText(
-                Map<String, dynamic>.from(response),
-              );
-              if (text.isNotEmpty) completed = text;
-            }
-          }
-          final delta = event['delta'];
-          if (delta is String && delta.isNotEmpty) buffer.write(delta);
-        }
-      } on LlmQueryException {
-        rethrow;
-      } catch (_) {
-        // Ignore vendor-specific SSE comments/events that are not JSON.
-      }
+    try {
+      return ResponsesProtocol.collectSseText(body);
+    } on ResponsesProtocolException catch (error) {
+      throw LlmQueryException(error.message);
     }
-    final result = buffer.toString().trim();
-    return result.isNotEmpty ? result : (completed ?? '');
   }
 
-  static String _extractResponsesText(Map<String, dynamic> outer) {
-    final outputText = outer['output_text'];
-    if (outputText is String && outputText.trim().isNotEmpty) {
-      return outputText;
-    }
-    final buffer = StringBuffer();
-    void walk(Object? value) {
-      if (value is Map) {
-        final type = value['type']?.toString();
-        final text = value['text'];
-        if ((type == 'output_text' || type == 'text') && text is String) {
-          if (text.trim().isNotEmpty) buffer.writeln(text.trim());
-        }
-        final content = value['content'];
-        if (content != null) walk(content);
-        final output = value['output'];
-        if (output != null) walk(output);
-      } else if (value is List) {
-        for (final item in value) {
-          walk(item);
-        }
-      }
-    }
-
-    walk(outer['output']);
-    return buffer.toString().trim();
-  }
+  static String _extractResponsesText(Object? decoded) =>
+      ResponsesProtocol.extractText(decoded);
 
   static List<AiWebSource> _extractResponseSources(Object? outer) =>
       AiWebSearchContext.extractResponseSources(outer);
@@ -677,21 +480,9 @@ $transactionsText''';
   static List<AiWebSource> _extractSseSources(String body) {
     final result = <AiWebSource>[];
     final seen = <String>{};
-    for (final line in const LineSplitter().convert(body)) {
-      if (!line.startsWith('data:')) continue;
-      final data = line.substring(5).trimLeft();
-      if (data == '[DONE]') break;
-      try {
-        final decoded = jsonDecode(data);
-        if (decoded is Map) {
-          for (final source in _extractResponseSources(
-            Map<String, dynamic>.from(decoded),
-          )) {
-            if (seen.add(source.url)) result.add(source);
-          }
-        }
-      } catch (_) {
-        // Ignore non-JSON SSE comments/events.
+    for (final event in ResponsesProtocol.sseEvents(body)) {
+      for (final source in _extractResponseSources(event)) {
+        if (seen.add(source.url)) result.add(source);
       }
     }
     return result;

@@ -1,6 +1,5 @@
 import 'dart:convert';
 import 'dart:io' show File;
-import 'dart:math' as math;
 
 import 'package:decimal/decimal.dart';
 import 'package:flutter/foundation.dart' show visibleForTesting;
@@ -11,6 +10,8 @@ import '../media/chat_attachment.dart';
 import '../media/ai_image_preparation.dart';
 import '../transaction_time.dart';
 import 'ai_provider_config.dart';
+import 'claude_messages_protocol.dart';
+import 'responses_protocol.dart';
 import 'ai_http_transport.dart';
 import 'ai_logger.dart';
 import 'entry_sanity.dart';
@@ -613,133 +614,23 @@ $catList
   static Map<String, dynamic> _responsesBodyFromChatBody(
     Map<String, dynamic> chatBody,
     AiProviderConfig config,
-  ) {
-    final instructions = <String>[];
-    final input = <Map<String, dynamic>>[];
-    final messages = chatBody['messages'];
-    if (messages is List) {
-      for (final item in messages) {
-        if (item is! Map) continue;
-        final role = (item['role'] as String?)?.trim().toLowerCase() ?? 'user';
-        final rawContent = item['content'];
-        final content = _stringContent(rawContent).trim();
-        if (content.isEmpty && rawContent is! List) continue;
-        if (role == 'system' || role == 'developer') {
-          instructions.add(content);
-          continue;
-        }
-        input.add({
-          'type': 'message',
-          'role': role == 'assistant' ? 'assistant' : 'user',
-          'content': _convertOpenAiContentToResponses(
-            rawContent,
-            assistant: role == 'assistant',
-          ),
-        });
-      }
-    }
-    final instructionText = instructions.join('\n\n').trim();
-    final body = <String, dynamic>{
-      'model': chatBody['model'],
-      'instructions': instructionText.isEmpty
-          ? 'You are a helpful assistant.'
-          : instructionText,
-      'input': input,
-      'store': false,
-      'stream': config.isOpenAiCodexOAuth || config.isGptModel,
-    };
-    final effort = config.reasoningEffort.codexResponsesApiValue;
-    if (effort != null) body['reasoning'] = {'effort': effort};
-    final responseFormat = chatBody['response_format'];
-    if (responseFormat is Map && responseFormat['type'] == 'json_object') {
-      final schema = chatBody['response_schema'];
-      if (schema is Map) {
-        body['text'] = {
-          'format': {
-            'type': 'json_schema',
-            'name': 'codex_output_schema',
-            'strict': true,
-            'schema': Map<String, dynamic>.from(schema),
-          },
-        };
-      }
-    }
-    return body;
-  }
+  ) =>
+      ResponsesProtocol.bodyFromChat(
+        chatBody,
+        config,
+        kind: ResponsesRequestKind.entry,
+      );
 
   static String _extractResponsesSseText(String body) {
-    final buffer = StringBuffer();
-    String? completed;
-    var finished = false;
-    for (final line in const LineSplitter().convert(body)) {
-      if (!line.startsWith('data:')) continue;
-      final data = line.substring(5).trimLeft();
-      if (data == '[DONE]') {
-        finished = true;
-        break;
-      }
-      try {
-        final decoded = jsonDecode(data);
-        if (decoded is Map) {
-          final event = Map<String, dynamic>.from(decoded);
-          final type = event['type']?.toString().toLowerCase() ?? '';
-          if (type == 'response.failed' || type == 'error') {
-            throw const LlmParseException('Responses 生成失败');
-          }
-          if (type == 'response.incomplete') {
-            throw const LlmParseException('Responses 输出未完成');
-          }
-          if (type == 'response.output_text.done') {
-            final text = event['text'];
-            if (text is String && text.trim().isNotEmpty) completed = text;
-          } else if (type == 'response.completed') {
-            finished = true;
-            final response = event['response'];
-            if (response is Map) {
-              final text = _extractResponsesText(
-                Map<String, dynamic>.from(response),
-              );
-              if (text.isNotEmpty) completed = text;
-            }
-          }
-          final delta = event['delta'];
-          if (delta is String && delta.isNotEmpty) buffer.write(delta);
-        }
-      } on LlmParseException {
-        rethrow;
-      } catch (_) {
-        // Ignore vendor-specific SSE comments/events that are not JSON.
-      }
+    try {
+      return ResponsesProtocol.collectSseText(body, requireComplete: true);
+    } on ResponsesProtocolException catch (error) {
+      throw LlmParseException(error.message);
     }
-    if (!finished) throw const LlmParseException('Responses 流式响应意外中断');
-    final result = buffer.toString().trim();
-    final finalText = completed?.trim() ?? '';
-    return finalText.length >= result.length ? finalText : result;
   }
 
-  static String _extractResponsesText(Object? decoded) {
-    if (decoded is! Map) return '';
-    final outer = Map<String, dynamic>.from(decoded);
-    final outputText = outer['output_text'];
-    if (outputText is String && outputText.trim().isNotEmpty) return outputText;
-    final buffer = StringBuffer();
-    void walk(Object? value) {
-      if (value is Map) {
-        final type = value['type']?.toString();
-        final text = value['text'];
-        if ((type == 'output_text' || type == 'text') && text is String) {
-          if (text.trim().isNotEmpty) buffer.writeln(text.trim());
-        }
-        walk(value['content']);
-        walk(value['output']);
-      } else if (value is List) {
-        for (final item in value) walk(item);
-      }
-    }
-
-    walk(outer['output']);
-    return buffer.toString().trim();
-  }
+  static String _extractResponsesText(Object? decoded) =>
+      ResponsesProtocol.extractText(decoded);
 
   // ---------------------------------------------------------------------------
   // 内部转换
@@ -814,43 +705,6 @@ $catList
       now: fallbackDate,
     );
   }
-}
-
-List<Map<String, dynamic>> _convertOpenAiContentToResponses(
-  Object? content, {
-  required bool assistant,
-}) {
-  if (content is! List) {
-    return [
-      {
-        'type': assistant ? 'output_text' : 'input_text',
-        'text': content?.toString() ?? '',
-      },
-    ];
-  }
-  return [
-    for (final part in content)
-      if (part is Map && part['type'] == 'text')
-        {
-          'type': assistant ? 'output_text' : 'input_text',
-          'text': part['text']?.toString() ?? '',
-        }
-      else if (part is Map && part['type'] == 'image_url')
-        {
-          'type': 'input_image',
-          'image_url':
-              (part['image_url'] is Map ? part['image_url']['url'] : null)
-                  ?.toString(),
-        }
-      else if (part is Map && part['type'] == 'file')
-        {
-          'type': 'input_file',
-          'filename': (part['file'] is Map ? part['file']['filename'] : null)
-              ?.toString(),
-          'file_data': (part['file'] is Map ? part['file']['file_data'] : null)
-              ?.toString(),
-        },
-  ];
 }
 
 /// 备注拼进 LLM 上下文（「日期|收支|分类|金额|备注」竖线对齐格式）前的清洗：
@@ -937,121 +791,9 @@ Future<List<Map<String, dynamic>>> _chatAttachmentParts(
 Map<String, dynamic> _convertToClaudeFormat(
   Map<String, dynamic> openaiBody,
   AiProviderConfig config,
-) {
-  final messages = openaiBody['messages'] as List<dynamic>?;
-  if (messages == null) return openaiBody;
-
-  // 分离 system 和 非 system 消息
-  final systemMessages = <String>[];
-  final userMessages = <Map<String, dynamic>>[];
-
-  for (final msg in messages) {
-    if (msg is! Map<String, dynamic>) continue;
-    final role = msg['role'] as String?;
-    final content = msg['content'];
-
-    if (role == 'system') {
-      systemMessages.add(_stringContent(content));
-    } else {
-      userMessages.add({
-        ...msg,
-        'content': _convertOpenAiContentToClaude(content),
-      });
-    }
-  }
-
-  final budgetTokens = config.reasoningEffort.claudeBudgetTokens;
-  final requestedMaxTokens = (openaiBody['max_tokens'] as int?) ?? 4096;
-  final maxTokens = budgetTokens == null
-      ? requestedMaxTokens
-      : math.max(requestedMaxTokens, budgetTokens + 4096);
-
-  final claudeBody = <String, dynamic>{
-    'model': openaiBody['model'],
-    'messages': userMessages,
-    'max_tokens': maxTokens,
-  };
-
-  // 合并所有 system prompt
-  if (systemMessages.isNotEmpty) {
-    claudeBody['system'] = systemMessages.join('\n\n');
-  }
-
-  // thinking 参数映射
-  if (budgetTokens != null) {
-    claudeBody['thinking'] = {
-      'type': 'enabled',
-      'budget_tokens': budgetTokens,
-    };
-    claudeBody['temperature'] = 1;
-  }
-
-  return claudeBody;
-}
-
-Object _convertOpenAiContentToClaude(Object? content) {
-  if (content is! List) return content ?? '';
-  return [
-    for (final part in content)
-      if (part is Map) ...[
-        if (part['type'] == 'text')
-          {'type': 'text', 'text': part['text']?.toString() ?? ''}
-        else if (part['type'] == 'image_url')
-          {
-            'type': 'image',
-            'source': {
-              'type': 'base64',
-              'media_type': _mimeFromDataUri(
-                (part['image_url'] is Map ? part['image_url']['url'] : null)
-                    ?.toString(),
-              ),
-              'data': _base64FromDataUri(
-                (part['image_url'] is Map ? part['image_url']['url'] : null)
-                    ?.toString(),
-              ),
-            },
-          }
-        else if (part['type'] == 'file')
-          {
-            'type': 'document',
-            'source': {
-              'type': 'base64',
-              'media_type': _mimeFromDataUri(
-                (part['file'] is Map ? part['file']['file_data'] : null)
-                    ?.toString(),
-              ),
-              'data': _base64FromDataUri(
-                (part['file'] is Map ? part['file']['file_data'] : null)
-                    ?.toString(),
-              ),
-            },
-            'title': (part['file'] is Map ? part['file']['filename'] : null)
-                ?.toString(),
-          },
-      ],
-  ];
-}
-
-String _mimeFromDataUri(String? uri) {
-  final match = RegExp(r'^data:([^;]+);base64,').firstMatch(uri ?? '');
-  return match?.group(1) ?? 'image/jpeg';
-}
-
-String _base64FromDataUri(String? uri) {
-  final value = uri ?? '';
-  final comma = value.indexOf(',');
-  return comma < 0 ? value : value.substring(comma + 1);
-}
-
-/// 辅助函数：从 content 提取字符串
-String _stringContent(dynamic content) {
-  if (content is String) return content;
-  if (content is List) {
-    return content
-        .whereType<Map<String, dynamic>>()
-        .where((m) => m['type'] == 'text')
-        .map((m) => m['text'] as String? ?? '')
-        .join(' ');
-  }
-  return '';
-}
+) =>
+    ClaudeMessagesProtocol.bodyFromChat(
+      openaiBody,
+      config,
+      kind: ClaudeRequestKind.entry,
+    );

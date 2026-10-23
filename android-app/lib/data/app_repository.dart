@@ -25,6 +25,7 @@ import '../core/account/net_worth_snapshot.dart';
 import '../core/account/net_worth_verified_checkpoint.dart';
 import '../core/app_clock.dart';
 import 'transaction_book_store.dart';
+import 'repository_revisions.dart';
 import '../core/cloud/profile_sync.dart';
 import '../core/ai/ai_provider_config.dart';
 import '../core/ai/ai_account_json.dart';
@@ -39,6 +40,7 @@ import '../core/ai/report_execution_fence.dart';
 import '../core/assets/asset_allocation.dart';
 import '../core/assets/asset_enhancements.dart';
 import '../core/backup/backup_package_codec.dart';
+import '../core/backup/restore_activation.dart';
 import '../core/import/bill_import.dart';
 import '../core/ledger/ledger_policy.dart';
 import '../core/money_format.dart';
@@ -57,2475 +59,12 @@ import '../core/transaction_time.dart';
 // 领域实体
 // ---------------------------------------------------------------------------
 
-enum AccountType {
-  cash,
-  debit,
-  credit,
-  savings,
-  investment,
-  loan,
-  other,
-}
-
-enum AccountOpeningBalanceQuality { exact, legacyUnknown }
-
-extension AccountOpeningBalanceQualityX on AccountOpeningBalanceQuality {
-  String get storageKey => switch (this) {
-        AccountOpeningBalanceQuality.exact => 'exact',
-        AccountOpeningBalanceQuality.legacyUnknown => 'legacy_unknown',
-      };
-
-  static AccountOpeningBalanceQuality fromStorage(String? value) =>
-      value == 'exact'
-          ? AccountOpeningBalanceQuality.exact
-          : AccountOpeningBalanceQuality.legacyUnknown;
-}
-
-enum AccountStatus { active, archived, legacyHidden }
-
-extension AccountStatusX on AccountStatus {
-  String get storageKey => switch (this) {
-        AccountStatus.active => 'active',
-        AccountStatus.archived => 'archived',
-        AccountStatus.legacyHidden => 'legacy_hidden',
-      };
-
-  static AccountStatus fromStorage(String? value) => switch (value) {
-        'archived' => AccountStatus.archived,
-        'legacy_hidden' => AccountStatus.legacyHidden,
-        _ => AccountStatus.active,
-      };
-}
-
-extension AccountTypeX on AccountType {
-  String get storageKey => switch (this) {
-        AccountType.cash => 'cash',
-        AccountType.debit => 'debit',
-        AccountType.credit => 'credit',
-        AccountType.savings => 'savings',
-        AccountType.investment => 'investment',
-        AccountType.loan => 'loan',
-        AccountType.other => 'other',
-      };
-
-  String get label => switch (this) {
-        AccountType.cash => '现金',
-        AccountType.debit => '储蓄卡',
-        AccountType.credit => '信用卡',
-        AccountType.savings => '存款',
-        AccountType.investment => '投资',
-        AccountType.loan => '贷款',
-        AccountType.other => '其他',
-      };
-
-  bool get liability => this == AccountType.credit || this == AccountType.loan;
-
-  static AccountType fromStorage(String? value) {
-    for (final type in AccountType.values) {
-      if (type.storageKey == value) return type;
-    }
-    return AccountType.cash;
-  }
-}
-
-class AccountEntity {
-  final int id;
-  final String uuid;
-  final String name;
-  final String currencyCode;
-  final AccountType type;
-  final Decimal openingBalance;
-  final bool includeInNetWorth;
-  final String institution;
-  final int sortOrder;
-  final bool isDeleted;
-  final int createdMs;
-  final int updatedMs;
-  final int? openingBalanceEffectiveMs;
-  final int openingBalanceSequence;
-  final AccountOpeningBalanceQuality openingBalanceQuality;
-  final AccountStatus status;
-  final int? archivedMs;
-  final int? lastVerifiedMs;
-  final int? verificationIntervalDays;
-
-  /// A5 负债余额口径。`legacyHybrid`（默认）= 正余额算资产且 active 档案
-  /// 本金另算负债；`ledger` = 余额是唯一真相，档案本金不进总负债。
-  /// 老库升级和老备份读入都必须回落 legacyHybrid，否则口径静默翻转。
-  final LiabilityBalanceMode balanceMode;
-
-  const AccountEntity({
-    required this.id,
-    this.uuid = '',
-    required this.name,
-    this.currencyCode = 'CNY',
-    this.type = AccountType.cash,
-    required this.openingBalance,
-    this.includeInNetWorth = true,
-    this.institution = '',
-    this.sortOrder = 0,
-    this.isDeleted = false,
-    this.createdMs = 0,
-    this.updatedMs = 0,
-    this.openingBalanceEffectiveMs,
-    this.openingBalanceSequence = 0,
-    this.openingBalanceQuality = AccountOpeningBalanceQuality.legacyUnknown,
-    this.status = AccountStatus.active,
-    this.archivedMs,
-    this.lastVerifiedMs,
-    this.verificationIntervalDays,
-    this.balanceMode = LiabilityBalanceMode.legacyHybrid,
-  });
-
-  bool get isArchived => status == AccountStatus.archived;
-  bool get isLegacyHidden => isDeleted || status == AccountStatus.legacyHidden;
-
-  Map<String, Object?> toMap() => {
-        'id': id == 0 ? null : id,
-        'uuid': uuid,
-        'name': name,
-        'currency_code': currencyCode,
-        'type': type.storageKey,
-        'opening_balance': openingBalance.toString(),
-        'include_in_net_worth': includeInNetWorth ? 1 : 0,
-        'institution': institution,
-        'sort_order': sortOrder,
-        'is_deleted': isDeleted ? 1 : 0,
-        'created_ms': createdMs,
-        'updated_ms': updatedMs,
-        'opening_balance_effective_ms': openingBalanceEffectiveMs,
-        'opening_balance_sequence': openingBalanceSequence,
-        'opening_balance_quality': openingBalanceQuality.storageKey,
-        'status': status.storageKey,
-        'archived_ms': archivedMs,
-        'last_verified_ms': lastVerifiedMs,
-        'verification_interval_days': verificationIntervalDays,
-        'balance_mode': balanceMode.storageKey,
-      };
-
-  factory AccountEntity.fromMap(Map<String, Object?> m) => AccountEntity(
-        id: m['id'] as int,
-        uuid: m['uuid'] as String? ?? '',
-        name: m['name'] as String,
-        currencyCode: m['currency_code'] as String? ?? 'CNY',
-        type: AccountTypeX.fromStorage(m['type'] as String?),
-        openingBalance:
-            Decimal.tryParse(m['opening_balance'] as String? ?? '') ??
-                Decimal.zero,
-        includeInNetWorth: ((m['include_in_net_worth'] as int?) ?? 1) == 1,
-        institution: m['institution'] as String? ?? '',
-        sortOrder: (m['sort_order'] as int?) ?? 0,
-        isDeleted: ((m['is_deleted'] as int?) ?? 0) == 1,
-        createdMs: (m['created_ms'] as int?) ?? 0,
-        updatedMs: (m['updated_ms'] as int?) ?? 0,
-        openingBalanceEffectiveMs: m['opening_balance_effective_ms'] as int?,
-        openingBalanceSequence: (m['opening_balance_sequence'] as int?) ?? 0,
-        openingBalanceQuality: AccountOpeningBalanceQualityX.fromStorage(
-          m['opening_balance_quality'] as String?,
-        ),
-        status: AccountStatusX.fromStorage(m['status'] as String?),
-        archivedMs: m['archived_ms'] as int?,
-        lastVerifiedMs: m['last_verified_ms'] as int?,
-        verificationIntervalDays: m['verification_interval_days'] as int?,
-        // 缺列/未知值一律 legacyHybrid（见 LiabilityBalanceModeX.fromStorage）。
-        balanceMode: LiabilityBalanceModeX.fromStorage(
-          m['balance_mode'] as String?,
-        ),
-      );
-}
-
-class AccountBalanceValue {
-  final Decimal balance;
-  final AccountMovementProjectionValue movement;
-  final AccountBalanceCheckpointEntity? checkpoint;
-  final DateTime? trustedFrom;
-
-  const AccountBalanceValue({
-    required this.balance,
-    required this.movement,
-    this.checkpoint,
-    this.trustedFrom,
-  });
-}
-
-class AccountBalanceTrendPoint {
-  final DateTime asOf;
-  final Decimal balance;
-  final bool trusted;
-
-  const AccountBalanceTrendPoint({
-    required this.asOf,
-    required this.balance,
-    required this.trusted,
-  });
-}
-
-class AccountBalanceTrendValue {
-  final DateTime trustedFrom;
-  final List<AccountBalanceTrendPoint> points;
-
-  const AccountBalanceTrendValue({
-    required this.trustedFrom,
-    required this.points,
-  });
-
-  bool get hasTrend => points.length >= 2;
-}
-
-enum AccountBalanceCheckpointKind { anchor, reversal }
-
-extension AccountBalanceCheckpointKindX on AccountBalanceCheckpointKind {
-  String get storageKey =>
-      this == AccountBalanceCheckpointKind.anchor ? 'anchor' : 'reversal';
-
-  static AccountBalanceCheckpointKind fromStorage(String? value) =>
-      value == 'reversal'
-          ? AccountBalanceCheckpointKind.reversal
-          : AccountBalanceCheckpointKind.anchor;
-}
-
-class AccountBalanceCheckpointEntity {
-  final int id;
-  final String uuid;
-  final int accountId;
-  final AccountBalanceCheckpointKind eventKind;
-  final int effectiveMs;
-  final int sequence;
-  final String timezone;
-  final int knowledgeCutoffMs;
-  final Decimal targetBalance;
-  final Decimal calculatedBefore;
-  final Decimal deltaAtCreation;
-  final String reason;
-  final String note;
-  final String status;
-  final int? reversalOf;
-  final int createdMs;
-  final int updatedMs;
-
-  const AccountBalanceCheckpointEntity({
-    required this.id,
-    required this.uuid,
-    required this.accountId,
-    required this.eventKind,
-    required this.effectiveMs,
-    required this.sequence,
-    required this.timezone,
-    required this.knowledgeCutoffMs,
-    required this.targetBalance,
-    required this.calculatedBefore,
-    required this.deltaAtCreation,
-    required this.reason,
-    required this.note,
-    required this.status,
-    required this.reversalOf,
-    required this.createdMs,
-    required this.updatedMs,
-  });
-
-  bool get isAnchor => eventKind == AccountBalanceCheckpointKind.anchor;
-  bool get isReversal => eventKind == AccountBalanceCheckpointKind.reversal;
-
-  factory AccountBalanceCheckpointEntity.fromMap(Map<String, Object?> m) =>
-      AccountBalanceCheckpointEntity(
-        id: m['id'] as int,
-        uuid: m['uuid'] as String? ?? '',
-        accountId: m['account_id'] as int,
-        eventKind: AccountBalanceCheckpointKindX.fromStorage(
-          m['event_kind'] as String?,
-        ),
-        effectiveMs: m['effective_ms'] as int,
-        sequence: (m['sequence'] as int?) ?? 0,
-        timezone: m['timezone'] as String? ?? 'device_local',
-        knowledgeCutoffMs: (m['knowledge_cutoff_ms'] as int?) ?? 0,
-        targetBalance: Decimal.tryParse(m['target_balance'] as String? ?? '') ??
-            Decimal.zero,
-        calculatedBefore:
-            Decimal.tryParse(m['calculated_before'] as String? ?? '') ??
-                Decimal.zero,
-        deltaAtCreation:
-            Decimal.tryParse(m['delta_at_creation'] as String? ?? '') ??
-                Decimal.zero,
-        reason: m['reason'] as String? ?? 'manual',
-        note: m['note'] as String? ?? '',
-        status: m['status'] as String? ?? 'active',
-        reversalOf: m['reversal_of'] as int?,
-        createdMs: (m['created_ms'] as int?) ?? 0,
-        updatedMs: (m['updated_ms'] as int?) ?? 0,
-      );
-}
-
-enum PhysicalAssetSourceType {
-  historicalExisting,
-  fromTransaction,
-  newPurchaseWithAccount,
-  giftReceived,
-  inheritance,
-  manualOther,
-}
-
-extension PhysicalAssetSourceTypeX on PhysicalAssetSourceType {
-  String get storageKey => switch (this) {
-        PhysicalAssetSourceType.historicalExisting => 'historical_existing',
-        PhysicalAssetSourceType.fromTransaction => 'from_transaction',
-        PhysicalAssetSourceType.newPurchaseWithAccount =>
-          'new_purchase_with_account',
-        PhysicalAssetSourceType.giftReceived => 'gift_received',
-        PhysicalAssetSourceType.inheritance => 'inheritance',
-        PhysicalAssetSourceType.manualOther => 'manual_other',
-      };
-
-  String get label => switch (this) {
-        PhysicalAssetSourceType.historicalExisting => '历史已有，补录一个',
-        PhysicalAssetSourceType.fromTransaction => '从已有账单加入',
-        PhysicalAssetSourceType.newPurchaseWithAccount => '新购买，同时记账',
-        PhysicalAssetSourceType.giftReceived => '别人赠送',
-        PhysicalAssetSourceType.inheritance => '继承/转入',
-        PhysicalAssetSourceType.manualOther => '其他来源',
-      };
-
-  static PhysicalAssetSourceType fromStorage(String? value) {
-    for (final type in PhysicalAssetSourceType.values) {
-      if (type.storageKey == value) return type;
-    }
-    return PhysicalAssetSourceType.historicalExisting;
-  }
-}
-
-enum PhysicalAssetStatus {
-  active,
-  idle,
-  sold,
-  disposed,
-  lost,
-  gifted,
-  archived,
-}
-
-enum PhysicalAssetEconomicStatus {
-  owned,
-  sold,
-  returned,
-  scrapped,
-  lost,
-  gifted,
-}
-
-extension PhysicalAssetEconomicStatusX on PhysicalAssetEconomicStatus {
-  String get storageKey => switch (this) {
-        PhysicalAssetEconomicStatus.owned => 'owned',
-        PhysicalAssetEconomicStatus.sold => 'sold',
-        PhysicalAssetEconomicStatus.returned => 'returned',
-        PhysicalAssetEconomicStatus.scrapped => 'scrapped',
-        PhysicalAssetEconomicStatus.lost => 'lost',
-        PhysicalAssetEconomicStatus.gifted => 'gifted',
-      };
-
-  String get label => switch (this) {
-        PhysicalAssetEconomicStatus.owned => '持有中',
-        PhysicalAssetEconomicStatus.sold => '已出售',
-        PhysicalAssetEconomicStatus.returned => '已退货',
-        PhysicalAssetEconomicStatus.scrapped => '已报废',
-        PhysicalAssetEconomicStatus.lost => '已丢失',
-        PhysicalAssetEconomicStatus.gifted => '已赠送',
-      };
-
-  bool get ownsValue => this == PhysicalAssetEconomicStatus.owned;
-
-  static PhysicalAssetEconomicStatus fromStorage(String? value) {
-    for (final status in PhysicalAssetEconomicStatus.values) {
-      if (status.storageKey == value) return status;
-    }
-    return PhysicalAssetEconomicStatus.owned;
-  }
-}
-
-enum PhysicalAssetUsageStatus { active, idle, unknown }
-
-extension PhysicalAssetUsageStatusX on PhysicalAssetUsageStatus {
-  String get storageKey => switch (this) {
-        PhysicalAssetUsageStatus.active => 'active',
-        PhysicalAssetUsageStatus.idle => 'idle',
-        PhysicalAssetUsageStatus.unknown => 'unknown',
-      };
-
-  String get label => switch (this) {
-        PhysicalAssetUsageStatus.active => '使用中',
-        PhysicalAssetUsageStatus.idle => '闲置',
-        PhysicalAssetUsageStatus.unknown => '使用状态待确认',
-      };
-
-  static PhysicalAssetUsageStatus fromStorage(String? value) {
-    for (final status in PhysicalAssetUsageStatus.values) {
-      if (status.storageKey == value) return status;
-    }
-    return PhysicalAssetUsageStatus.unknown;
-  }
-}
-
-enum AssetVisibilityStatus { active, archived }
-
-extension AssetVisibilityStatusX on AssetVisibilityStatus {
-  String get storageKey => switch (this) {
-        AssetVisibilityStatus.active => 'active',
-        AssetVisibilityStatus.archived => 'archived',
-      };
-
-  String get label => switch (this) {
-        AssetVisibilityStatus.active => '显示中',
-        AssetVisibilityStatus.archived => '已归档',
-      };
-
-  static AssetVisibilityStatus fromStorage(String? value) {
-    return value == 'archived'
-        ? AssetVisibilityStatus.archived
-        : AssetVisibilityStatus.active;
-  }
-}
-
-enum AssetInclusionQuality { confirmed, needsReview }
-
-extension AssetInclusionQualityX on AssetInclusionQuality {
-  String get storageKey => switch (this) {
-        AssetInclusionQuality.confirmed => 'confirmed',
-        AssetInclusionQuality.needsReview => 'needs_review',
-      };
-
-  String get label => switch (this) {
-        AssetInclusionQuality.confirmed => '已确认',
-        AssetInclusionQuality.needsReview => '待确认',
-      };
-
-  static AssetInclusionQuality fromStorage(String? value) {
-    return value == 'needs_review'
-        ? AssetInclusionQuality.needsReview
-        : AssetInclusionQuality.confirmed;
-  }
-}
-
-PhysicalAssetEconomicStatus _physicalEconomicFromLegacyStatus(
-  PhysicalAssetStatus status,
-) =>
-    switch (status) {
-      PhysicalAssetStatus.sold => PhysicalAssetEconomicStatus.sold,
-      PhysicalAssetStatus.disposed => PhysicalAssetEconomicStatus.scrapped,
-      PhysicalAssetStatus.lost => PhysicalAssetEconomicStatus.lost,
-      PhysicalAssetStatus.gifted => PhysicalAssetEconomicStatus.gifted,
-      PhysicalAssetStatus.active ||
-      PhysicalAssetStatus.idle ||
-      PhysicalAssetStatus.archived =>
-        PhysicalAssetEconomicStatus.owned,
-    };
-
-PhysicalAssetUsageStatus _physicalUsageFromLegacyStatus(
-  PhysicalAssetStatus status,
-) =>
-    switch (status) {
-      PhysicalAssetStatus.active => PhysicalAssetUsageStatus.active,
-      PhysicalAssetStatus.idle => PhysicalAssetUsageStatus.idle,
-      _ => PhysicalAssetUsageStatus.unknown,
-    };
-
-PhysicalAssetStatus _legacyPhysicalStatusFor({
-  required PhysicalAssetEconomicStatus economicStatus,
-  required PhysicalAssetUsageStatus usageStatus,
-  required AssetVisibilityStatus visibilityStatus,
-}) {
-  if (visibilityStatus == AssetVisibilityStatus.archived) {
-    return PhysicalAssetStatus.archived;
-  }
-  return switch (economicStatus) {
-    PhysicalAssetEconomicStatus.owned =>
-      usageStatus == PhysicalAssetUsageStatus.idle
-          ? PhysicalAssetStatus.idle
-          : PhysicalAssetStatus.active,
-    PhysicalAssetEconomicStatus.sold => PhysicalAssetStatus.sold,
-    PhysicalAssetEconomicStatus.returned ||
-    PhysicalAssetEconomicStatus.scrapped =>
-      PhysicalAssetStatus.disposed,
-    PhysicalAssetEconomicStatus.lost => PhysicalAssetStatus.lost,
-    PhysicalAssetEconomicStatus.gifted => PhysicalAssetStatus.gifted,
-  };
-}
-
-extension PhysicalAssetStatusX on PhysicalAssetStatus {
-  String get storageKey => switch (this) {
-        PhysicalAssetStatus.active => 'active',
-        PhysicalAssetStatus.idle => 'idle',
-        PhysicalAssetStatus.sold => 'sold',
-        PhysicalAssetStatus.disposed => 'disposed',
-        PhysicalAssetStatus.lost => 'lost',
-        PhysicalAssetStatus.gifted => 'gifted',
-        PhysicalAssetStatus.archived => 'archived',
-      };
-
-  String get label => switch (this) {
-        PhysicalAssetStatus.active => '使用中',
-        PhysicalAssetStatus.idle => '闲置',
-        PhysicalAssetStatus.sold => '已出售',
-        PhysicalAssetStatus.disposed => '已报废',
-        PhysicalAssetStatus.lost => '已丢失',
-        PhysicalAssetStatus.gifted => '已赠送',
-        PhysicalAssetStatus.archived => '已归档',
-      };
-
-  bool get canCountInNetWorth =>
-      this == PhysicalAssetStatus.active || this == PhysicalAssetStatus.idle;
-
-  static PhysicalAssetStatus fromStorage(String? value) {
-    for (final status in PhysicalAssetStatus.values) {
-      if (status.storageKey == value) return status;
-    }
-    return PhysicalAssetStatus.active;
-  }
-}
-
-enum AssetValueSource {
-  opening,
-  purchase,
-  manual,
-  sale,
-  statusZero,
-  autoDepreciation,
-}
-
-extension AssetValueSourceX on AssetValueSource {
-  String get storageKey => switch (this) {
-        AssetValueSource.opening => 'opening',
-        AssetValueSource.purchase => 'purchase',
-        AssetValueSource.manual => 'manual',
-        AssetValueSource.sale => 'sale',
-        AssetValueSource.statusZero => 'status_zero',
-        AssetValueSource.autoDepreciation => 'auto_depreciation',
-      };
-
-  static AssetValueSource fromStorage(String? value) {
-    for (final source in AssetValueSource.values) {
-      if (source.storageKey == value) return source;
-    }
-    return AssetValueSource.manual;
-  }
-}
-
-enum AssetType {
-  digital,
-  appliance,
-  vehicle,
-  property,
-  valuables,
-  collectibles,
-  tools,
-  other,
-}
-
-extension AssetTypeX on AssetType {
-  String get storageKey => switch (this) {
-        AssetType.digital => 'digital',
-        AssetType.appliance => 'appliance',
-        AssetType.vehicle => 'vehicle',
-        AssetType.property => 'property',
-        AssetType.valuables => 'valuables',
-        AssetType.collectibles => 'collectibles',
-        AssetType.tools => 'tools',
-        AssetType.other => 'other',
-      };
-
-  String get label => switch (this) {
-        AssetType.digital => '数码设备',
-        AssetType.appliance => '家电家具',
-        AssetType.vehicle => '车辆交通',
-        AssetType.property => '房产',
-        AssetType.valuables => '贵重物品',
-        AssetType.collectibles => '收藏品',
-        AssetType.tools => '工具设备',
-        AssetType.other => '其他',
-      };
-
-  static AssetType fromStorage(String? value) {
-    for (final type in AssetType.values) {
-      if (type.storageKey == value) return type;
-    }
-    return AssetType.other;
-  }
-}
-
-enum AssetObjectType {
-  physical,
-  receivable,
-  investment,
-  liability,
-}
-
-extension AssetObjectTypeX on AssetObjectType {
-  String get storageKey => switch (this) {
-        AssetObjectType.physical => 'physical',
-        AssetObjectType.receivable => 'receivable',
-        AssetObjectType.investment => 'investment',
-        AssetObjectType.liability => 'liability',
-      };
-
-  String get label => switch (this) {
-        AssetObjectType.physical => '实物资产',
-        AssetObjectType.receivable => '权益资产',
-        AssetObjectType.investment => '投资资产',
-        AssetObjectType.liability => '负债',
-      };
-
-  static AssetObjectType fromStorage(String? value) {
-    for (final type in AssetObjectType.values) {
-      if (type.storageKey == value) return type;
-    }
-    return AssetObjectType.physical;
-  }
-}
-
-enum ReceivableAssetType {
-  rentalDeposit,
-  loanOut,
-  accountReceivable,
-  prepaidCard,
-  membershipCard,
-  securityDeposit,
-  other,
-}
-
-extension ReceivableAssetTypeX on ReceivableAssetType {
-  String get storageKey => switch (this) {
-        ReceivableAssetType.rentalDeposit => 'rental_deposit',
-        ReceivableAssetType.loanOut => 'loan_out',
-        ReceivableAssetType.accountReceivable => 'account_receivable',
-        ReceivableAssetType.prepaidCard => 'prepaid_card',
-        ReceivableAssetType.membershipCard => 'membership_card',
-        ReceivableAssetType.securityDeposit => 'security_deposit',
-        ReceivableAssetType.other => 'other',
-      };
-
-  String get label => switch (this) {
-        ReceivableAssetType.rentalDeposit => '租房押金',
-        ReceivableAssetType.loanOut => '借出款',
-        ReceivableAssetType.accountReceivable => '应收款',
-        ReceivableAssetType.prepaidCard => '预付卡余额',
-        ReceivableAssetType.membershipCard => '会员卡余额',
-        ReceivableAssetType.securityDeposit => '保证金',
-        ReceivableAssetType.other => '其他权益',
-      };
-
-  static ReceivableAssetType fromStorage(String? value) {
-    for (final type in ReceivableAssetType.values) {
-      if (type.storageKey == value) return type;
-    }
-    return ReceivableAssetType.other;
-  }
-}
-
-enum ReceivableAssetStatus {
-  active,
-  partialRecovered,
-  recovered,
-  lost,
-  archived,
-}
-
-enum ReceivableEconomicStatus {
-  active,
-  partialRecovered,
-  recovered,
-  lost,
-  unknown,
-}
-
-extension ReceivableEconomicStatusX on ReceivableEconomicStatus {
-  String get storageKey => switch (this) {
-        ReceivableEconomicStatus.active => 'active',
-        ReceivableEconomicStatus.partialRecovered => 'partial_recovered',
-        ReceivableEconomicStatus.recovered => 'recovered',
-        ReceivableEconomicStatus.lost => 'lost',
-        ReceivableEconomicStatus.unknown => 'unknown',
-      };
-
-  String get label => switch (this) {
-        ReceivableEconomicStatus.active => '未收回',
-        ReceivableEconomicStatus.partialRecovered => '部分收回',
-        ReceivableEconomicStatus.recovered => '已收回',
-        ReceivableEconomicStatus.lost => '已损失',
-        ReceivableEconomicStatus.unknown => '状态待确认',
-      };
-
-  bool get canCountInNetWorth =>
-      this == ReceivableEconomicStatus.active ||
-      this == ReceivableEconomicStatus.partialRecovered;
-
-  static ReceivableEconomicStatus fromStorage(String? value) {
-    for (final status in ReceivableEconomicStatus.values) {
-      if (status.storageKey == value) return status;
-    }
-    return ReceivableEconomicStatus.unknown;
-  }
-}
-
-ReceivableEconomicStatus _receivableEconomicFromLegacyStatus(
-  ReceivableAssetStatus status,
-) =>
-    switch (status) {
-      ReceivableAssetStatus.active => ReceivableEconomicStatus.active,
-      ReceivableAssetStatus.partialRecovered =>
-        ReceivableEconomicStatus.partialRecovered,
-      ReceivableAssetStatus.recovered => ReceivableEconomicStatus.recovered,
-      ReceivableAssetStatus.lost => ReceivableEconomicStatus.lost,
-      ReceivableAssetStatus.archived => ReceivableEconomicStatus.unknown,
-    };
-
-ReceivableAssetStatus _legacyReceivableStatusFor({
-  required ReceivableEconomicStatus economicStatus,
-  required AssetVisibilityStatus visibilityStatus,
-}) {
-  if (visibilityStatus == AssetVisibilityStatus.archived) {
-    return ReceivableAssetStatus.archived;
-  }
-  return switch (economicStatus) {
-    ReceivableEconomicStatus.active => ReceivableAssetStatus.active,
-    ReceivableEconomicStatus.partialRecovered =>
-      ReceivableAssetStatus.partialRecovered,
-    ReceivableEconomicStatus.recovered => ReceivableAssetStatus.recovered,
-    ReceivableEconomicStatus.lost => ReceivableAssetStatus.lost,
-    ReceivableEconomicStatus.unknown => ReceivableAssetStatus.active,
-  };
-}
-
-extension ReceivableAssetStatusX on ReceivableAssetStatus {
-  String get storageKey => switch (this) {
-        ReceivableAssetStatus.active => 'active',
-        ReceivableAssetStatus.partialRecovered => 'partial_recovered',
-        ReceivableAssetStatus.recovered => 'recovered',
-        ReceivableAssetStatus.lost => 'lost',
-        ReceivableAssetStatus.archived => 'archived',
-      };
-
-  String get label => switch (this) {
-        ReceivableAssetStatus.active => '未收回',
-        ReceivableAssetStatus.partialRecovered => '部分收回',
-        ReceivableAssetStatus.recovered => '已收回',
-        ReceivableAssetStatus.lost => '已损失',
-        ReceivableAssetStatus.archived => '已归档',
-      };
-
-  bool get canCountInNetWorth =>
-      this == ReceivableAssetStatus.active ||
-      this == ReceivableAssetStatus.partialRecovered;
-
-  static ReceivableAssetStatus fromStorage(String? value) {
-    for (final status in ReceivableAssetStatus.values) {
-      if (status.storageKey == value) return status;
-    }
-    return ReceivableAssetStatus.active;
-  }
-}
-
-enum LiabilityProfileType {
-  creditCard,
-  mortgage,
-  carLoan,
-  consumerLoan,
-
-  /// A2 借贷按人：向个人借入的钱（counterparty = 借入对象姓名）。
-  personalBorrow,
-  other,
-}
-
-extension LiabilityProfileTypeX on LiabilityProfileType {
-  String get storageKey => switch (this) {
-        LiabilityProfileType.creditCard => 'credit_card',
-        LiabilityProfileType.mortgage => 'mortgage',
-        LiabilityProfileType.carLoan => 'car_loan',
-        LiabilityProfileType.consumerLoan => 'consumer_loan',
-        LiabilityProfileType.personalBorrow => 'personal_borrow',
-        LiabilityProfileType.other => 'other',
-      };
-
-  String get label => switch (this) {
-        LiabilityProfileType.creditCard => '信用卡',
-        LiabilityProfileType.mortgage => '房贷',
-        LiabilityProfileType.carLoan => '车贷',
-        LiabilityProfileType.consumerLoan => '消费贷',
-        LiabilityProfileType.personalBorrow => '个人借入',
-        LiabilityProfileType.other => '其他负债',
-      };
-
-  static LiabilityProfileType fromStorage(String? value) {
-    for (final type in LiabilityProfileType.values) {
-      if (type.storageKey == value) return type;
-    }
-    return LiabilityProfileType.other;
-  }
-}
-
-enum LiabilityProfileStatus {
-  active,
-  paidOff,
-  paused,
-  archived,
-}
-
-extension LiabilityProfileStatusX on LiabilityProfileStatus {
-  String get storageKey => switch (this) {
-        LiabilityProfileStatus.active => 'active',
-        LiabilityProfileStatus.paidOff => 'paid_off',
-        LiabilityProfileStatus.paused => 'paused',
-        LiabilityProfileStatus.archived => 'archived',
-      };
-
-  String get label => switch (this) {
-        LiabilityProfileStatus.active => '还款中',
-        LiabilityProfileStatus.paidOff => '已结清',
-        LiabilityProfileStatus.paused => '暂停',
-        LiabilityProfileStatus.archived => '已归档',
-      };
-
-  bool get countsAsLiability => this == LiabilityProfileStatus.active;
-
-  static LiabilityProfileStatus fromStorage(String? value) {
-    for (final status in LiabilityProfileStatus.values) {
-      if (status.storageKey == value) return status;
-    }
-    return LiabilityProfileStatus.active;
-  }
-}
-
-enum AssetEventType {
-  openingAssetImport,
-  createdFromTransaction,
-  assetPurchased,
-  assetCreated,
-  assetEdited,
-  valueUpdated,
-  assetSold,
-  assetSaleUndone,
-  assetReturned,
-  assetReturnUndone,
-  assetTransactionUnlinked,
-  assetDisposed,
-  assetLost,
-  assetGifted,
-  assetTerminalUndone,
-  assetCostLinked,
-  assetCostUnlinked,
-  assetUsageTrackingEnabled,
-  assetUsageTrackingDisabled,
-  assetSavingsGoalLinked,
-  assetSavingsGoalUnlinked,
-  assetArchived,
-  assetUnarchived,
-  depreciationConfigured,
-  autoDepreciationApplied,
-  evidenceUpdated,
-  receivableCreated,
-  receivableEdited,
-  receivableRecovered,
-  receivableRecoveryUndone,
-  receivableLost,
-  receivableArchived,
-  receivableUnarchived,
-  liabilityRepaid,
-  liabilityRepaymentUndone,
-}
-
-extension AssetEventTypeX on AssetEventType {
-  String get storageKey => switch (this) {
-        AssetEventType.openingAssetImport => 'opening_asset_import',
-        AssetEventType.createdFromTransaction => 'created_from_transaction',
-        AssetEventType.assetPurchased => 'asset_purchased',
-        AssetEventType.assetCreated => 'asset_created',
-        AssetEventType.assetEdited => 'asset_edited',
-        AssetEventType.valueUpdated => 'value_updated',
-        AssetEventType.assetSold => 'asset_sold',
-        AssetEventType.assetSaleUndone => 'asset_sale_undone',
-        AssetEventType.assetReturned => 'asset_returned',
-        AssetEventType.assetReturnUndone => 'asset_return_undone',
-        AssetEventType.assetTransactionUnlinked => 'asset_transaction_unlinked',
-        AssetEventType.assetDisposed => 'asset_disposed',
-        AssetEventType.assetLost => 'asset_lost',
-        AssetEventType.assetGifted => 'asset_gifted',
-        AssetEventType.assetTerminalUndone => 'asset_terminal_undone',
-        AssetEventType.assetCostLinked => 'asset_cost_linked',
-        AssetEventType.assetCostUnlinked => 'asset_cost_unlinked',
-        AssetEventType.assetUsageTrackingEnabled =>
-          'asset_usage_tracking_enabled',
-        AssetEventType.assetUsageTrackingDisabled =>
-          'asset_usage_tracking_disabled',
-        AssetEventType.assetSavingsGoalLinked => 'asset_savings_goal_linked',
-        AssetEventType.assetSavingsGoalUnlinked =>
-          'asset_savings_goal_unlinked',
-        AssetEventType.assetArchived => 'asset_archived',
-        AssetEventType.assetUnarchived => 'asset_unarchived',
-        AssetEventType.depreciationConfigured => 'depreciation_configured',
-        AssetEventType.autoDepreciationApplied => 'auto_depreciation_applied',
-        AssetEventType.evidenceUpdated => 'evidence_updated',
-        AssetEventType.receivableCreated => 'receivable_created',
-        AssetEventType.receivableEdited => 'receivable_edited',
-        AssetEventType.receivableRecovered => 'receivable_recovered',
-        AssetEventType.receivableRecoveryUndone => 'receivable_recovery_undone',
-        AssetEventType.receivableLost => 'receivable_lost',
-        AssetEventType.receivableArchived => 'receivable_archived',
-        AssetEventType.receivableUnarchived => 'receivable_unarchived',
-        AssetEventType.liabilityRepaid => 'liability_repaid',
-        AssetEventType.liabilityRepaymentUndone => 'liability_repayment_undone',
-      };
-
-  String get label => switch (this) {
-        AssetEventType.openingAssetImport => '历史补录',
-        AssetEventType.createdFromTransaction => '从账单加入',
-        AssetEventType.assetPurchased => '新购买',
-        AssetEventType.assetCreated => '新增资产',
-        AssetEventType.assetEdited => '编辑资料',
-        AssetEventType.valueUpdated => '更新当前价值',
-        AssetEventType.assetSold => '出售资产',
-        AssetEventType.assetSaleUndone => '撤销出售',
-        AssetEventType.assetReturned => '退货',
-        AssetEventType.assetReturnUndone => '撤销退货',
-        AssetEventType.assetTransactionUnlinked => '解除账单关联',
-        AssetEventType.assetDisposed => '报废资产',
-        AssetEventType.assetLost => '标记丢失',
-        AssetEventType.assetGifted => '赠送资产',
-        AssetEventType.assetTerminalUndone => '撤销结束持有',
-        AssetEventType.assetCostLinked => '关联持有支出',
-        AssetEventType.assetCostUnlinked => '解除持有支出',
-        AssetEventType.assetUsageTrackingEnabled => '开启使用次数',
-        AssetEventType.assetUsageTrackingDisabled => '关闭使用次数',
-        AssetEventType.assetSavingsGoalLinked => '关联存钱目标',
-        AssetEventType.assetSavingsGoalUnlinked => '解除存钱目标',
-        AssetEventType.assetArchived => '归档资产',
-        AssetEventType.assetUnarchived => '恢复归档',
-        AssetEventType.depreciationConfigured => '折旧设置',
-        AssetEventType.autoDepreciationApplied => '自动折旧',
-        AssetEventType.evidenceUpdated => '凭证更新',
-        AssetEventType.receivableCreated => '新增权益',
-        AssetEventType.receivableEdited => '编辑权益',
-        AssetEventType.receivableRecovered => '收回权益',
-        AssetEventType.receivableRecoveryUndone => '撤销收回',
-        AssetEventType.receivableLost => '权益损失',
-        AssetEventType.receivableArchived => '归档权益',
-        AssetEventType.receivableUnarchived => '恢复权益',
-        AssetEventType.liabilityRepaid => '记录还款',
-        AssetEventType.liabilityRepaymentUndone => '撤销还款',
-      };
-
-  static AssetEventType fromStorage(String? value) {
-    for (final type in AssetEventType.values) {
-      if (type.storageKey == value) return type;
-    }
-    return AssetEventType.assetCreated;
-  }
-}
-
-enum AssetTransactionLinkType {
-  sourceTransaction,
-  purchaseTransaction,
-  saleAccountMovement,
-  maintenance,
-  accessory,
-  insurance,
-  otherCost,
-}
-
-extension AssetTransactionLinkTypeX on AssetTransactionLinkType {
-  String get storageKey => switch (this) {
-        AssetTransactionLinkType.sourceTransaction => 'source_transaction',
-        AssetTransactionLinkType.purchaseTransaction => 'purchase_transaction',
-        AssetTransactionLinkType.saleAccountMovement => 'sale_account_movement',
-        AssetTransactionLinkType.maintenance => 'maintenance',
-        AssetTransactionLinkType.accessory => 'accessory',
-        AssetTransactionLinkType.insurance => 'insurance',
-        AssetTransactionLinkType.otherCost => 'other_cost',
-      };
-
-  String get label => switch (this) {
-        AssetTransactionLinkType.sourceTransaction => '购买账单',
-        AssetTransactionLinkType.purchaseTransaction => '购置支出',
-        AssetTransactionLinkType.saleAccountMovement => '出售到账',
-        AssetTransactionLinkType.maintenance => '维修保养',
-        AssetTransactionLinkType.accessory => '配件',
-        AssetTransactionLinkType.insurance => '保险',
-        AssetTransactionLinkType.otherCost => '其他支出',
-      };
-
-  bool get isAdditionalCost =>
-      this == AssetTransactionLinkType.maintenance ||
-      this == AssetTransactionLinkType.accessory ||
-      this == AssetTransactionLinkType.insurance ||
-      this == AssetTransactionLinkType.otherCost;
-
-  static AssetTransactionLinkType fromStorage(String? value) {
-    for (final type in AssetTransactionLinkType.values) {
-      if (type.storageKey == value) return type;
-    }
-    return AssetTransactionLinkType.sourceTransaction;
-  }
-}
-
-class PhysicalAssetEntity {
-  final int id;
-  final String uuid;
-  final int? bookId;
-  final String name;
-  final AssetType assetType;
-
-  /// v32 及资产 JSON v3 的兼容影子；v33 业务逻辑不得再读取它。
-  final PhysicalAssetStatus status;
-  final PhysicalAssetEconomicStatus economicStatus;
-  final PhysicalAssetUsageStatus usageStatus;
-  final AssetVisibilityStatus visibilityStatus;
-  final AssetInclusionQuality inclusionQuality;
-  final PhysicalAssetSourceType sourceType;
-  final AssetAcquisitionCostSource acquisitionCostSource;
-  final Decimal purchasePrice;
-  final Decimal currentValue;
-  final String currencyCode;
-  final int? purchaseDateMs;
-  final String brand;
-  final String model;
-  final String location;
-  final int? warrantyUntilMs;
-  final bool usageTrackingEnabled;
-  final int? savingsGoalId;
-  final String photoPath;
-  final String thumbnailPath;
-  final String invoicePath;
-  final String depreciationMethod;
-  final Decimal depreciationBase;
-  final Decimal salvageValue;
-  final int usefulLifeMonths;
-  final int? depreciationStartMs;
-  final bool depreciationPaused;
-  final String note;
-  final bool includeInNetWorth;
-  final bool isDeleted;
-  final int? endedMs;
-  final int? archivedMs;
-  final int createdMs;
-  final int updatedMs;
-
-  const PhysicalAssetEntity({
-    required this.id,
-    this.uuid = '',
-    this.bookId,
-    required this.name,
-    this.assetType = AssetType.other,
-    this.status = PhysicalAssetStatus.active,
-    this.economicStatus = PhysicalAssetEconomicStatus.owned,
-    this.usageStatus = PhysicalAssetUsageStatus.active,
-    this.visibilityStatus = AssetVisibilityStatus.active,
-    this.inclusionQuality = AssetInclusionQuality.confirmed,
-    this.sourceType = PhysicalAssetSourceType.historicalExisting,
-    this.acquisitionCostSource = AssetAcquisitionCostSource.manual,
-    required this.purchasePrice,
-    required this.currentValue,
-    this.currencyCode = 'CNY',
-    this.purchaseDateMs,
-    this.brand = '',
-    this.model = '',
-    this.location = '',
-    this.warrantyUntilMs,
-    this.usageTrackingEnabled = false,
-    this.savingsGoalId,
-    this.photoPath = '',
-    this.thumbnailPath = '',
-    this.invoicePath = '',
-    this.depreciationMethod = '',
-    required this.depreciationBase,
-    required this.salvageValue,
-    this.usefulLifeMonths = 0,
-    this.depreciationStartMs,
-    this.depreciationPaused = false,
-    this.note = '',
-    this.includeInNetWorth = true,
-    this.isDeleted = false,
-    this.endedMs,
-    this.archivedMs,
-    this.createdMs = 0,
-    this.updatedMs = 0,
-  });
-
-  DateTime? get purchaseDate => purchaseDateMs == null
-      ? null
-      : DateTime.fromMillisecondsSinceEpoch(purchaseDateMs!);
-  DateTime? get warrantyUntil => warrantyUntilMs == null
-      ? null
-      : DateTime.fromMillisecondsSinceEpoch(warrantyUntilMs!);
-  DateTime? get depreciationStartDate => depreciationStartMs == null
-      ? null
-      : DateTime.fromMillisecondsSinceEpoch(depreciationStartMs!);
-  DateTime get updatedAt => DateTime.fromMillisecondsSinceEpoch(updatedMs);
-  DateTime? get endedAt =>
-      endedMs == null ? null : DateTime.fromMillisecondsSinceEpoch(endedMs!);
-  DateTime? get archivedAt => archivedMs == null
-      ? null
-      : DateTime.fromMillisecondsSinceEpoch(archivedMs!);
-  bool get isArchived => visibilityStatus == AssetVisibilityStatus.archived;
-  bool get isOwned => economicStatus == PhysicalAssetEconomicStatus.owned;
-  bool get hasLinearDepreciation =>
-      depreciationMethod == 'linear' &&
-      usefulLifeMonths > 0 &&
-      depreciationBase > Decimal.zero;
-  bool get countsInNetWorth =>
-      !isDeleted && includeInNetWorth && economicStatus.ownsValue;
-
-  factory PhysicalAssetEntity.fromMap(Map<String, Object?> m) {
-    final legacyStatus =
-        PhysicalAssetStatusX.fromStorage(m['status'] as String?);
-    return PhysicalAssetEntity(
-      id: m['id'] as int,
-      uuid: m['uuid'] as String? ?? '',
-      bookId: m['book_id'] as int?,
-      name: m['name'] as String? ?? '',
-      assetType: AssetTypeX.fromStorage(m['asset_type'] as String?),
-      status: legacyStatus,
-      economicStatus: m.containsKey('economic_status')
-          ? PhysicalAssetEconomicStatusX.fromStorage(
-              m['economic_status'] as String?,
-            )
-          : _physicalEconomicFromLegacyStatus(legacyStatus),
-      usageStatus: m.containsKey('usage_status')
-          ? PhysicalAssetUsageStatusX.fromStorage(
-              m['usage_status'] as String?,
-            )
-          : _physicalUsageFromLegacyStatus(legacyStatus),
-      visibilityStatus: m.containsKey('visibility_status')
-          ? AssetVisibilityStatusX.fromStorage(
-              m['visibility_status'] as String?,
-            )
-          : legacyStatus == PhysicalAssetStatus.archived
-              ? AssetVisibilityStatus.archived
-              : AssetVisibilityStatus.active,
-      inclusionQuality: m.containsKey('inclusion_quality')
-          ? AssetInclusionQualityX.fromStorage(
-              m['inclusion_quality'] as String?,
-            )
-          : legacyStatus == PhysicalAssetStatus.archived
-              ? AssetInclusionQuality.needsReview
-              : AssetInclusionQuality.confirmed,
-      sourceType:
-          PhysicalAssetSourceTypeX.fromStorage(m['source_type'] as String?),
-      acquisitionCostSource: AssetAcquisitionCostSourceX.fromStorage(
-        m['acquisition_cost_source'] as String?,
-      ),
-      purchasePrice: Decimal.tryParse(m['purchase_price'] as String? ?? '') ??
-          Decimal.zero,
-      currentValue:
-          Decimal.tryParse(m['current_value'] as String? ?? '') ?? Decimal.zero,
-      currencyCode: m['currency_code'] as String? ?? 'CNY',
-      purchaseDateMs: m['purchase_date_ms'] as int?,
-      brand: m['brand'] as String? ?? '',
-      model: m['model'] as String? ?? '',
-      location: m['location'] as String? ?? '',
-      warrantyUntilMs: m['warranty_until_ms'] as int?,
-      usageTrackingEnabled: ((m['usage_tracking_enabled'] as int?) ?? 0) == 1,
-      savingsGoalId: m['savings_goal_id'] as int?,
-      photoPath: m['photo_path'] as String? ?? '',
-      thumbnailPath: m['thumbnail_path'] as String? ?? '',
-      invoicePath: m['invoice_path'] as String? ?? '',
-      depreciationMethod: m['depreciation_method'] as String? ?? '',
-      depreciationBase:
-          Decimal.tryParse(m['depreciation_base'] as String? ?? '') ??
-              Decimal.zero,
-      salvageValue:
-          Decimal.tryParse(m['salvage_value'] as String? ?? '') ?? Decimal.zero,
-      usefulLifeMonths: m['useful_life_months'] as int? ?? 0,
-      depreciationStartMs: m['depreciation_start_ms'] as int?,
-      depreciationPaused: ((m['depreciation_paused'] as int?) ?? 0) == 1,
-      note: m['note'] as String? ?? '',
-      includeInNetWorth: ((m['include_in_net_worth'] as int?) ?? 1) == 1,
-      isDeleted: ((m['is_deleted'] as int?) ?? 0) == 1,
-      endedMs: m['ended_ms'] as int?,
-      archivedMs: m['archived_ms'] as int?,
-      createdMs: m['created_ms'] as int? ?? 0,
-      updatedMs: m['updated_ms'] as int? ?? 0,
-    );
-  }
-}
-
-class AssetEventEntity {
-  final int id;
-  final String uuid;
-  final int assetId;
-  final AssetObjectType assetType;
-  final AssetEventType eventType;
-  final int occurredMs;
-  final Decimal? value;
-  final String note;
-  final String metadata;
-  final int createdMs;
-
-  const AssetEventEntity({
-    required this.id,
-    this.uuid = '',
-    required this.assetId,
-    this.assetType = AssetObjectType.physical,
-    required this.eventType,
-    required this.occurredMs,
-    this.value,
-    this.note = '',
-    this.metadata = '',
-    this.createdMs = 0,
-  });
-
-  DateTime get occurredAt => DateTime.fromMillisecondsSinceEpoch(occurredMs);
-
-  factory AssetEventEntity.fromMap(Map<String, Object?> m) => AssetEventEntity(
-        id: m['id'] as int,
-        uuid: m['uuid'] as String? ?? '',
-        assetId: m['asset_id'] as int,
-        assetType: AssetObjectTypeX.fromStorage(m['asset_type'] as String?),
-        eventType: AssetEventTypeX.fromStorage(m['event_type'] as String?),
-        occurredMs: m['occurred_ms'] as int? ?? 0,
-        value: Decimal.tryParse(m['value'] as String? ?? ''),
-        note: m['note'] as String? ?? '',
-        metadata: m['metadata'] as String? ?? '',
-        createdMs: m['created_ms'] as int? ?? 0,
-      );
-}
-
-class AssetValuationEntity {
-  final int id;
-  final String uuid;
-  final int assetId;
-  final Decimal value;
-  final AssetValueSource source;
-  final int valuedAtMs;
-  final String note;
-  final int createdMs;
-
-  const AssetValuationEntity({
-    required this.id,
-    this.uuid = '',
-    required this.assetId,
-    required this.value,
-    this.source = AssetValueSource.manual,
-    required this.valuedAtMs,
-    this.note = '',
-    this.createdMs = 0,
-  });
-
-  DateTime get valuedAt => DateTime.fromMillisecondsSinceEpoch(valuedAtMs);
-
-  factory AssetValuationEntity.fromMap(Map<String, Object?> m) =>
-      AssetValuationEntity(
-        id: m['id'] as int,
-        uuid: m['uuid'] as String? ?? '',
-        assetId: m['asset_id'] as int,
-        value: Decimal.tryParse(m['value'] as String? ?? '') ?? Decimal.zero,
-        source: AssetValueSourceX.fromStorage(m['source'] as String?),
-        valuedAtMs: m['valued_at_ms'] as int? ?? 0,
-        note: m['note'] as String? ?? '',
-        createdMs: m['created_ms'] as int? ?? 0,
-      );
-}
-
-class AssetTransactionLinkEntity {
-  final int id;
-  final String uuid;
-  final int assetId;
-  final AssetObjectType assetObjectType;
-  final int transactionId;
-  final AssetTransactionLinkType linkType;
-  final Decimal amount;
-  final int allocatedGrossCents;
-  final int allocatedRefundCents;
-  final AssetAllocationCostQuality costQuality;
-  final String note;
-  final int createdMs;
-  final int updatedMs;
-
-  const AssetTransactionLinkEntity({
-    required this.id,
-    this.uuid = '',
-    required this.assetId,
-    this.assetObjectType = AssetObjectType.physical,
-    required this.transactionId,
-    required this.linkType,
-    required this.amount,
-    this.allocatedGrossCents = 0,
-    this.allocatedRefundCents = 0,
-    this.costQuality = AssetAllocationCostQuality.partial,
-    this.note = '',
-    this.createdMs = 0,
-    this.updatedMs = 0,
-  });
-
-  int get allocatedNetCents => allocatedGrossCents - allocatedRefundCents;
-
-  factory AssetTransactionLinkEntity.fromMap(Map<String, Object?> m) =>
-      AssetTransactionLinkEntity(
-        id: m['id'] as int,
-        uuid: m['uuid'] as String? ?? '',
-        assetId: m['asset_id'] as int,
-        assetObjectType:
-            AssetObjectTypeX.fromStorage(m['asset_object_type'] as String?),
-        transactionId: m['transaction_id'] as int,
-        linkType:
-            AssetTransactionLinkTypeX.fromStorage(m['link_type'] as String?),
-        amount: Decimal.tryParse(m['amount'] as String? ?? '') ?? Decimal.zero,
-        allocatedGrossCents: m['allocated_gross_cents'] as int? ?? 0,
-        allocatedRefundCents: m['allocated_refund_cents'] as int? ?? 0,
-        costQuality: AssetAllocationCostQualityX.fromStorage(
-          m['cost_quality'] as String?,
-        ),
-        note: m['note'] as String? ?? '',
-        createdMs: m['created_ms'] as int? ?? 0,
-        updatedMs: m['updated_ms'] as int? ?? 0,
-      );
-}
-
-class AssetUsageEventEntity {
-  final int id;
-  final String uuid;
-  final int assetId;
-  final int countDelta;
-  final int? reversalOf;
-  final int occurredMs;
-  final String note;
-  final int createdMs;
-  final int updatedMs;
-
-  const AssetUsageEventEntity({
-    required this.id,
-    required this.uuid,
-    required this.assetId,
-    required this.countDelta,
-    this.reversalOf,
-    required this.occurredMs,
-    this.note = '',
-    required this.createdMs,
-    required this.updatedMs,
-  });
-
-  factory AssetUsageEventEntity.fromMap(Map<String, Object?> map) =>
-      AssetUsageEventEntity(
-        id: map['id'] as int,
-        uuid: map['uuid'] as String? ?? '',
-        assetId: map['asset_id'] as int,
-        countDelta: map['count_delta'] as int? ?? 0,
-        reversalOf: map['reversal_of'] as int?,
-        occurredMs: map['occurred_ms'] as int? ?? 0,
-        note: map['note'] as String? ?? '',
-        createdMs: map['created_ms'] as int? ?? 0,
-        updatedMs: map['updated_ms'] as int? ?? 0,
-      );
-
-  AssetUsageEventPoint toPoint(Map<int, String> uuidById) =>
-      AssetUsageEventPoint(
-        id: uuid.isEmpty ? id.toString() : uuid,
-        countDelta: countDelta,
-        occurredMs: occurredMs,
-        sequence: id,
-        reversalOf: reversalOf == null
-            ? null
-            : (uuidById[reversalOf!] ?? reversalOf.toString()),
-      );
-}
-
-class AssetPurchaseAllocationCandidate {
-  final TransactionEntity transaction;
-  final int orderGrossCents;
-  final int validRefundCents;
-  final int allocatedGrossCents;
-  final int allocatedRefundCents;
-
-  const AssetPurchaseAllocationCandidate({
-    required this.transaction,
-    required this.orderGrossCents,
-    required this.validRefundCents,
-    required this.allocatedGrossCents,
-    required this.allocatedRefundCents,
-  });
-
-  int get remainingGrossCents => orderGrossCents - allocatedGrossCents;
-  int get remainingRefundCents => validRefundCents - allocatedRefundCents;
-  int get orderNetCents => orderGrossCents - validRefundCents;
-}
-
-class PhysicalAssetRefundAllocationTarget {
-  final int assetId;
-  final String name;
-  final int grossCents;
-  final int currentAllocatedRefundCents;
-  final int totalAllocatedRefundCents;
-
-  const PhysicalAssetRefundAllocationTarget({
-    required this.assetId,
-    required this.name,
-    required this.grossCents,
-    required this.currentAllocatedRefundCents,
-    required this.totalAllocatedRefundCents,
-  });
-}
-
-class PendingPhysicalAssetRefundAllocation {
-  final int refundTransactionId;
-  final int originalTransactionId;
-  final int refundDateMs;
-  final String orderLabel;
-  final int refundCents;
-  final List<PhysicalAssetRefundAllocationTarget> targets;
-
-  /// 本次退款还能归到「订单未跟踪部分」的上限（订单毛额减去已入库物品
-  /// 毛额、再扣掉别的退款已占用的未跟踪额度；含本退款当前已归的部分）。
-  /// 0 = 订单全额都在已跟踪物品上，弹层不显示该选项。
-  final int untrackedLimitCents;
-
-  /// 本退款当前已归到未跟踪部分的金额（重新分配时回显用）。
-  final int currentUntrackedCents;
-
-  const PendingPhysicalAssetRefundAllocation({
-    required this.refundTransactionId,
-    required this.originalTransactionId,
-    required this.refundDateMs,
-    required this.orderLabel,
-    required this.refundCents,
-    required this.targets,
-    this.untrackedLimitCents = 0,
-    this.currentUntrackedCents = 0,
-  });
-
-  int get allocatedCents => targets.fold<int>(
-        0,
-        (sum, target) => sum + target.currentAllocatedRefundCents,
-      );
-
-  int get remainingCents => refundCents - allocatedCents;
-}
-
-enum PhysicalAssetAcquisitionCostQuality { exact, partial, conflict }
-
-class PhysicalAssetAcquisitionCostResult {
-  final PhysicalAssetAcquisitionCostQuality quality;
-  final Decimal? amount;
-  final String reason;
-
-  const PhysicalAssetAcquisitionCostResult({
-    required this.quality,
-    required this.amount,
-    required this.reason,
-  });
-
-  bool get isExact => quality == PhysicalAssetAcquisitionCostQuality.exact;
-}
-
-class PhysicalAssetAdditionalCostResult {
-  final Decimal amount;
-  final bool isExact;
-  final String reason;
-
-  const PhysicalAssetAdditionalCostResult({
-    required this.amount,
-    required this.isExact,
-    this.reason = '',
-  });
-}
-
-class ReceivableAssetEntity {
-  final int id;
-  final String uuid;
-  final int? bookId;
-  final String name;
-  final ReceivableAssetType type;
-
-  /// v32 及资产 JSON v3 的兼容影子；v33 业务逻辑不得再读取它。
-  final ReceivableAssetStatus status;
-  final ReceivableEconomicStatus economicStatus;
-  final AssetVisibilityStatus visibilityStatus;
-  final AssetInclusionQuality inclusionQuality;
-  final Decimal originalAmount;
-  final Decimal remainingAmount;
-  final String currencyCode;
-  final String counterparty;
-  final int? dueDateMs;
-  final bool includeInNetWorth;
-  final String note;
-  final bool isDeleted;
-  final int? endedMs;
-  final int? archivedMs;
-  final int createdMs;
-  final int updatedMs;
-
-  const ReceivableAssetEntity({
-    required this.id,
-    this.uuid = '',
-    this.bookId,
-    required this.name,
-    this.type = ReceivableAssetType.other,
-    this.status = ReceivableAssetStatus.active,
-    this.economicStatus = ReceivableEconomicStatus.active,
-    this.visibilityStatus = AssetVisibilityStatus.active,
-    this.inclusionQuality = AssetInclusionQuality.confirmed,
-    required this.originalAmount,
-    required this.remainingAmount,
-    this.currencyCode = 'CNY',
-    this.counterparty = '',
-    this.dueDateMs,
-    this.includeInNetWorth = true,
-    this.note = '',
-    this.isDeleted = false,
-    this.endedMs,
-    this.archivedMs,
-    this.createdMs = 0,
-    this.updatedMs = 0,
-  });
-
-  DateTime? get dueDate => dueDateMs == null
-      ? null
-      : DateTime.fromMillisecondsSinceEpoch(dueDateMs!);
-
-  DateTime? get endedAt =>
-      endedMs == null ? null : DateTime.fromMillisecondsSinceEpoch(endedMs!);
-  DateTime? get archivedAt => archivedMs == null
-      ? null
-      : DateTime.fromMillisecondsSinceEpoch(archivedMs!);
-  bool get isArchived => visibilityStatus == AssetVisibilityStatus.archived;
-  bool get countsInNetWorth =>
-      !isDeleted &&
-      includeInNetWorth &&
-      economicStatus.canCountInNetWorth &&
-      remainingAmount > Decimal.zero;
-
-  factory ReceivableAssetEntity.fromMap(Map<String, Object?> m) {
-    final legacyStatus =
-        ReceivableAssetStatusX.fromStorage(m['status'] as String?);
-    return ReceivableAssetEntity(
-      id: m['id'] as int,
-      uuid: m['uuid'] as String? ?? '',
-      bookId: m['book_id'] as int?,
-      name: m['name'] as String? ?? '',
-      type: ReceivableAssetTypeX.fromStorage(m['receivable_type'] as String?),
-      status: legacyStatus,
-      economicStatus: m.containsKey('economic_status')
-          ? ReceivableEconomicStatusX.fromStorage(
-              m['economic_status'] as String?,
-            )
-          : _receivableEconomicFromLegacyStatus(legacyStatus),
-      visibilityStatus: m.containsKey('visibility_status')
-          ? AssetVisibilityStatusX.fromStorage(
-              m['visibility_status'] as String?,
-            )
-          : legacyStatus == ReceivableAssetStatus.archived
-              ? AssetVisibilityStatus.archived
-              : AssetVisibilityStatus.active,
-      inclusionQuality: m.containsKey('inclusion_quality')
-          ? AssetInclusionQualityX.fromStorage(
-              m['inclusion_quality'] as String?,
-            )
-          : legacyStatus == ReceivableAssetStatus.archived
-              ? AssetInclusionQuality.needsReview
-              : AssetInclusionQuality.confirmed,
-      originalAmount: Decimal.tryParse(m['original_amount'] as String? ?? '') ??
-          Decimal.zero,
-      remainingAmount:
-          Decimal.tryParse(m['remaining_amount'] as String? ?? '') ??
-              Decimal.zero,
-      currencyCode: m['currency_code'] as String? ?? 'CNY',
-      counterparty: m['counterparty'] as String? ?? '',
-      dueDateMs: m['due_date_ms'] as int?,
-      includeInNetWorth: ((m['include_in_net_worth'] as int?) ?? 1) == 1,
-      note: m['note'] as String? ?? '',
-      isDeleted: ((m['is_deleted'] as int?) ?? 0) == 1,
-      endedMs: m['ended_ms'] as int?,
-      archivedMs: m['archived_ms'] as int?,
-      createdMs: m['created_ms'] as int? ?? 0,
-      updatedMs: m['updated_ms'] as int? ?? 0,
-    );
-  }
-}
-
-class ReceivableRecoveryEntity {
-  final int id;
-  final String uuid;
-  final int receivableAssetId;
-  final Decimal amount;
-  final int recoveredMs;
-  final int? targetAccountId;
-  final int? eventId;
-  final int? transactionId;
-  final String note;
-  final int createdMs;
-
-  const ReceivableRecoveryEntity({
-    required this.id,
-    this.uuid = '',
-    required this.receivableAssetId,
-    required this.amount,
-    required this.recoveredMs,
-    this.targetAccountId,
-    this.eventId,
-    this.transactionId,
-    this.note = '',
-    this.createdMs = 0,
-  });
-
-  DateTime get recoveredAt => DateTime.fromMillisecondsSinceEpoch(recoveredMs);
-
-  factory ReceivableRecoveryEntity.fromMap(Map<String, Object?> m) =>
-      ReceivableRecoveryEntity(
-        id: m['id'] as int,
-        uuid: m['uuid'] as String? ?? '',
-        receivableAssetId: m['receivable_asset_id'] as int,
-        amount: Decimal.tryParse(m['amount'] as String? ?? '') ?? Decimal.zero,
-        recoveredMs: m['recovered_ms'] as int? ?? 0,
-        targetAccountId: m['target_account_id'] as int?,
-        eventId: m['event_id'] as int?,
-        transactionId: m['transaction_id'] as int?,
-        note: m['note'] as String? ?? '',
-        createdMs: m['created_ms'] as int? ?? 0,
-      );
-}
-
-class NetWorthSnapshotEntity {
-  final int id;
-  final String scopeKey;
-  final String snapshotDate;
-  final Decimal totalAssets;
-  final Decimal totalLiabilities;
-  final Decimal netWorth;
-  final Decimal cashAssets;
-  final Decimal investmentAssets;
-  final Decimal physicalAssets;
-  final Decimal receivableAssets;
-  final String snapshotType;
-  final String lineageKey;
-  final int asOfMs;
-  final int knowledgeCutoffMs;
-  final String timezone;
-  final int scopeVersion;
-  final int calculationVersion;
-  final String currencyCoverageJson;
-  final NetWorthSnapshotQuality quality;
-  final String causeSetJson;
-  final String reasonsJson;
-  final String valuationCoverageJson;
-  final bool provisional;
-  final int createdMs;
-
-  const NetWorthSnapshotEntity({
-    required this.id,
-    this.scopeKey = 'global',
-    required this.snapshotDate,
-    required this.totalAssets,
-    required this.totalLiabilities,
-    required this.netWorth,
-    required this.cashAssets,
-    required this.investmentAssets,
-    required this.physicalAssets,
-    required this.receivableAssets,
-    this.snapshotType = 'legacy_unverified',
-    this.lineageKey = 'legacy:global',
-    this.asOfMs = 0,
-    this.knowledgeCutoffMs = 0,
-    this.timezone = 'device_local',
-    this.scopeVersion = 1,
-    this.calculationVersion = 1,
-    this.currencyCoverageJson = '',
-    this.quality = NetWorthSnapshotQuality.legacyUnverified,
-    this.causeSetJson = '',
-    this.reasonsJson = '',
-    this.valuationCoverageJson = '',
-    this.provisional = false,
-    this.createdMs = 0,
-  });
-
-  bool get isComputed => snapshotType == 'computed_snapshot';
-
-  ComputedNetWorthSnapshot toComputedSnapshot() {
-    final parsedDate = DateTime.tryParse(snapshotDate) ??
-        DateTime.fromMillisecondsSinceEpoch(
-          asOfMs == 0 ? createdMs : asOfMs,
-        );
-    // snapshot_date is the civil-day truth. Epoch midnight can map to another
-    // day after the device travels to a different timezone.
-    final asOf = parsedDate;
-    final coverage = _decodeNetWorthCurrencyCoverage(currencyCoverageJson);
-    final causes = _decodeNetWorthSnapshotCauses(causeSetJson);
-    final reasons = _decodeNetWorthSnapshotReasons(reasonsJson);
-    final valuation = _decodeNetWorthValuationCoverage(valuationCoverageJson);
-    final effectiveQuality =
-        isComputed ? quality : NetWorthSnapshotQuality.legacyUnverified;
-    return ComputedNetWorthSnapshot.rehydrate(
-      lineage: NetWorthSnapshotLineage(
-        asOf: asOf,
-        knowledgeCutoff: DateTime.fromMillisecondsSinceEpoch(
-          knowledgeCutoffMs == 0 ? createdMs : knowledgeCutoffMs,
-        ),
-        timezone: timezone.isEmpty ? 'device_local' : timezone,
-        scopeKey: scopeKey,
-        scopeVersion: max(1, scopeVersion),
-        calculationVersion: max(1, calculationVersion),
-        currencyCoverage: coverage,
-        quality: effectiveQuality,
-        reasons: effectiveQuality == NetWorthSnapshotQuality.available
-            ? const []
-            : reasons.isEmpty
-                ? [
-                    NetWorthSnapshotReason(
-                      code: effectiveQuality.storageKey,
-                      message: isComputed ? '快照数据不完整' : '旧快照未经当前口径验证',
-                    ),
-                  ]
-                : reasons,
-        provisional: provisional,
-        causes:
-            causes.isEmpty ? const {NetWorthSnapshotCause.migration} : causes,
-      ),
-      components: NetWorthSnapshotComponents(
-        cashAssetsMinor: decimalToBudgetCents(cashAssets),
-        investmentAssetsMinor: decimalToBudgetCents(investmentAssets),
-        physicalAssetsMinor: decimalToBudgetCents(physicalAssets),
-        receivableAssetsMinor: decimalToBudgetCents(receivableAssets),
-        liabilitiesMinor: decimalToBudgetCents(totalLiabilities),
-      ),
-      valuationCoverage: valuation,
-    );
-  }
-
-  factory NetWorthSnapshotEntity.fromMap(Map<String, Object?> m) =>
-      NetWorthSnapshotEntity(
-        id: m['id'] as int,
-        scopeKey: m['scope_key'] as String? ?? 'global',
-        snapshotDate: m['snapshot_date'] as String? ?? '',
-        totalAssets: Decimal.tryParse(m['total_assets'] as String? ?? '') ??
-            Decimal.zero,
-        totalLiabilities:
-            Decimal.tryParse(m['total_liabilities'] as String? ?? '') ??
-                Decimal.zero,
-        netWorth:
-            Decimal.tryParse(m['net_worth'] as String? ?? '') ?? Decimal.zero,
-        cashAssets:
-            Decimal.tryParse(m['cash_assets'] as String? ?? '') ?? Decimal.zero,
-        investmentAssets:
-            Decimal.tryParse(m['investment_assets'] as String? ?? '') ??
-                Decimal.zero,
-        physicalAssets:
-            Decimal.tryParse(m['physical_assets'] as String? ?? '') ??
-                Decimal.zero,
-        receivableAssets:
-            Decimal.tryParse(m['receivable_assets'] as String? ?? '') ??
-                Decimal.zero,
-        snapshotType: m['snapshot_type'] as String? ?? 'legacy_unverified',
-        lineageKey: m['lineage_key'] as String? ?? 'legacy:global',
-        asOfMs: m['as_of_ms'] as int? ?? 0,
-        knowledgeCutoffMs: m['knowledge_cutoff_ms'] as int? ?? 0,
-        timezone: m['timezone'] as String? ?? 'device_local',
-        scopeVersion: m['scope_version'] as int? ?? 1,
-        calculationVersion: m['calculation_version'] as int? ?? 1,
-        currencyCoverageJson: m['currency_coverage_json'] as String? ?? '',
-        quality: NetWorthSnapshotQualityX.fromStorage(
-          m['quality'] as String?,
-        ),
-        causeSetJson: m['cause_set_json'] as String? ?? '',
-        reasonsJson: m['reasons_json'] as String? ?? '',
-        valuationCoverageJson: m['valuation_coverage_json'] as String? ?? '',
-        provisional: (m['provisional'] as int? ?? 0) == 1,
-        createdMs: m['created_ms'] as int? ?? 0,
-      );
-}
-
-NetWorthCurrencyCoverage _decodeNetWorthCurrencyCoverage(String raw) {
-  try {
-    final value = jsonDecode(raw);
-    if (value is Map) {
-      return NetWorthCurrencyCoverage(
-        baseCurrency: value['base_currency']?.toString() ?? 'CNY',
-        coveredCurrencies:
-            (value['covered'] as List? ?? const ['CNY']).map((e) => '$e'),
-        uncoveredCurrencies:
-            (value['uncovered'] as List? ?? const []).map((e) => '$e'),
-      );
-    }
-  } catch (_) {}
-  return NetWorthCurrencyCoverage.single('CNY');
-}
-
-Set<NetWorthSnapshotCause> _decodeNetWorthSnapshotCauses(String raw) {
-  try {
-    final value = jsonDecode(raw);
-    if (value is List) {
-      return value
-          .map((item) => NetWorthSnapshotCauseX.fromStorage('$item'))
-          .toSet();
-    }
-  } catch (_) {}
-  return const {};
-}
-
-List<NetWorthSnapshotReason> _decodeNetWorthSnapshotReasons(String raw) {
-  try {
-    final value = jsonDecode(raw);
-    if (value is List) {
-      return [
-        for (final item in value)
-          if (item is Map && (item['code']?.toString().isNotEmpty ?? false))
-            NetWorthSnapshotReason(
-              code: item['code'].toString(),
-              message: item['message']?.toString() ?? '',
-              details: item['details'] is Map
-                  ? Map<String, Object?>.from(item['details'] as Map)
-                  : const {},
-            ),
-      ];
-    }
-  } catch (_) {}
-  return const [];
-}
-
-NetWorthValuationCoverage _decodeNetWorthValuationCoverage(String raw) {
-  try {
-    final value = jsonDecode(raw);
-    if (value is Map) {
-      return NetWorthValuationCoverage(
-        missingValuationCount: value['missing_count'] as int? ?? 0,
-        staleValuationCount: value['stale_count'] as int? ?? 0,
-      );
-    }
-  } catch (_) {}
-  return const NetWorthValuationCoverage();
-}
-
-class NetWorthBreakdown {
-  final Decimal totalAssets;
-  final Decimal totalLiabilities;
-  final Decimal netWorth;
-  final Decimal cashAssets;
-  final Decimal investmentAssets;
-  final Decimal physicalAssets;
-  final Decimal receivableAssets;
-
-  const NetWorthBreakdown({
-    required this.totalAssets,
-    required this.totalLiabilities,
-    required this.netWorth,
-    required this.cashAssets,
-    required this.investmentAssets,
-    required this.physicalAssets,
-    required this.receivableAssets,
-  });
-}
-
-class LiabilityProfileEntity {
-  final int id;
-  final String uuid;
-  final int accountId;
-  final LiabilityProfileType type;
-  final Decimal originalAmount;
-  final Decimal currentPrincipal;
-  final Decimal interestRate;
-  final int? repaymentDay;
-  final int? repaymentAccountId;
-  final int? startDateMs;
-  final int? endDateMs;
-  final LiabilityProfileStatus status;
-  final String note;
-
-  /// 信用卡账单日（每月 1-31）；null = 未设置。
-  final int? statementDay;
-
-  /// 信用卡额度；null = 未设置（Decimal 字符串存储）。
-  final Decimal? creditLimit;
-
-  /// 借入对象姓名（personalBorrow 用）；空 = 无对象。
-  final String counterparty;
-  final int createdMs;
-  final int updatedMs;
-
-  LiabilityProfileEntity({
-    required this.id,
-    this.uuid = '',
-    required this.accountId,
-    this.type = LiabilityProfileType.other,
-    required this.originalAmount,
-    required this.currentPrincipal,
-    Decimal? interestRate,
-    this.repaymentDay,
-    this.repaymentAccountId,
-    this.startDateMs,
-    this.endDateMs,
-    this.status = LiabilityProfileStatus.active,
-    this.note = '',
-    this.statementDay,
-    this.creditLimit,
-    this.counterparty = '',
-    this.createdMs = 0,
-    this.updatedMs = 0,
-  }) : interestRate = interestRate ?? Decimal.zero;
-
-  DateTime? get startDate => startDateMs == null
-      ? null
-      : DateTime.fromMillisecondsSinceEpoch(startDateMs!);
-  DateTime? get endDate => endDateMs == null
-      ? null
-      : DateTime.fromMillisecondsSinceEpoch(endDateMs!);
-
-  bool get countsAsLiability =>
-      status.countsAsLiability && currentPrincipal > Decimal.zero;
-
-  DateTime? nextRepaymentDate({DateTime? now}) {
-    final day = repaymentDay;
-    if (day == null || day < 1 || day > 31) {
-      // A2 个人借入：没设每月还款日、但约了一次性还款日（endDate）时，
-      // 到期日就是它。到期已过也照样返回（daysUntilRepayment 会是负数），
-      // 逾期的欠款该被看见，不该悄悄消失。只对 personalBorrow 生效——
-      // 房贷/车贷的 endDate 是「贷款结清日」，不是单次还款日。
-      if (type == LiabilityProfileType.personalBorrow && endDateMs != null) {
-        final due = endDate!;
-        return DateTime(due.year, due.month, due.day);
-      }
-      return null;
-    }
-    final base = now ?? DateTime.now();
-    DateTime candidate(int year, int month) {
-      final last = DateTime(year, month + 1, 0).day;
-      return DateTime(year, month, min(day, last));
-    }
-
-    var next = candidate(base.year, base.month);
-    if (next.isBefore(DateTime(base.year, base.month, base.day))) {
-      next = candidate(base.year, base.month + 1);
-    }
-    return next;
-  }
-
-  int? daysUntilRepayment({DateTime? now}) {
-    final next = nextRepaymentDate(now: now);
-    if (next == null) return null;
-    final base = now ?? DateTime.now();
-    final today = DateTime(base.year, base.month, base.day);
-    return next.difference(today).inDays;
-  }
-
-  factory LiabilityProfileEntity.fromMap(Map<String, Object?> m) =>
-      LiabilityProfileEntity(
-        id: m['id'] as int,
-        uuid: m['uuid'] as String? ?? '',
-        accountId: m['account_id'] as int,
-        type: LiabilityProfileTypeX.fromStorage(m['liability_type'] as String?),
-        originalAmount:
-            Decimal.tryParse(m['original_amount'] as String? ?? '') ??
-                Decimal.zero,
-        currentPrincipal:
-            Decimal.tryParse(m['current_principal'] as String? ?? '') ??
-                Decimal.zero,
-        interestRate: Decimal.tryParse(m['interest_rate'] as String? ?? '') ??
-            Decimal.zero,
-        repaymentDay: m['repayment_day'] as int?,
-        repaymentAccountId: m['repayment_account_id'] as int?,
-        startDateMs: m['start_date_ms'] as int?,
-        endDateMs: m['end_date_ms'] as int?,
-        status: LiabilityProfileStatusX.fromStorage(m['status'] as String?),
-        note: m['note'] as String? ?? '',
-        statementDay: m['statement_day'] as int?,
-        creditLimit: Decimal.tryParse(m['credit_limit'] as String? ?? ''),
-        counterparty: m['counterparty'] as String? ?? '',
-        createdMs: m['created_ms'] as int? ?? 0,
-        updatedMs: m['updated_ms'] as int? ?? 0,
-      );
-
-  Map<String, Object?> toMap() => {
-        'id': id,
-        'uuid': uuid,
-        'account_id': accountId,
-        'liability_type': type.storageKey,
-        'original_amount': originalAmount.toString(),
-        'current_principal': currentPrincipal.toString(),
-        'interest_rate': interestRate.toString(),
-        'repayment_day': repaymentDay,
-        'repayment_account_id': repaymentAccountId,
-        'start_date_ms': startDateMs,
-        'end_date_ms': endDateMs,
-        'status': status.storageKey,
-        'note': note,
-        'statement_day': statementDay,
-        'credit_limit': creditLimit?.toString(),
-        'counterparty': counterparty,
-        'created_ms': createdMs,
-        'updated_ms': updatedMs,
-      };
-}
-
-class BookEntity {
-  final String uuid;
-  final int id;
-  final String name;
-  final String icon;
-
-  /// 封面图资源路径（assets/book_covers/*.png）；空 = 无封面（显示 emoji）。
-  final String cover;
-
-  /// 备注（抽屉账本行名称下方的灰小字）；空 = 不显示。
-  final String remark;
-
-  /// 加星账本排在列表前面（总账本永远第一）。
-  final bool starred;
-
-  /// 该账本的账单是否并入「总账本」视图（默认并入）。
-  final bool includeInTotal;
-
-  const BookEntity({
-    this.uuid = '',
-    required this.id,
-    required this.name,
-    this.icon = '📒',
-    this.cover = '',
-    this.remark = '',
-    this.starred = false,
-    this.includeInTotal = true,
-  });
-
-  factory BookEntity.fromMap(Map<String, Object?> m) => BookEntity(
-        uuid: m['uuid'] as String? ?? '',
-        id: m['id'] as int,
-        name: m['name'] as String,
-        icon: m['icon'] as String? ?? '📒',
-        cover: m['cover'] as String? ?? '',
-        remark: m['remark'] as String? ?? '',
-        starred: ((m['starred'] as int?) ?? 0) == 1,
-        includeInTotal: ((m['include_in_total'] as int?) ?? 1) == 1,
-      );
-}
-
-class CategoryEntity {
-  final int id;
-  final String key;
-  final String nameZh;
-  final String nameEn;
-  final String kindRaw;
-  final int? parentId;
-
-  /// 已隐藏：不再出现在记账面板/编辑的分类网格里（历史账单不受影响）。
-  final bool hidden;
-
-  TransactionKind get kind => TransactionKind.fromJson(kindRaw);
-  bool get isTopLevel => parentId == null;
-
-  const CategoryEntity({
-    required this.id,
-    required this.key,
-    required this.nameZh,
-    required this.nameEn,
-    required this.kindRaw,
-    this.parentId,
-    this.hidden = false,
-  });
-
-  String localizedName(String languageCode) =>
-      languageCode.toLowerCase().startsWith('zh') ? nameZh : nameEn;
-
-  Map<String, Object?> toMap() => {
-        'id': id == 0 ? null : id,
-        'key': key,
-        'name_zh': nameZh,
-        'name_en': nameEn,
-        'kind': kindRaw,
-        'parent_id': parentId,
-        'hidden': hidden ? 1 : 0,
-      };
-
-  factory CategoryEntity.fromMap(Map<String, Object?> m) => CategoryEntity(
-        id: m['id'] as int,
-        key: m['key'] as String,
-        nameZh: m['name_zh'] as String,
-        nameEn: m['name_en'] as String,
-        kindRaw: m['kind'] as String,
-        parentId: m['parent_id'] as int?,
-        hidden: ((m['hidden'] as int?) ?? 0) == 1,
-      );
-}
-
-class TransactionEntity {
-  final int id;
-  final int? bookId;
-  final Set<int>? _bookIds;
-  Set<int> get bookIds => _bookIds == null
-      ? {if (bookId != null) bookId!}
-      : Set.unmodifiable(_bookIds);
-  final String uuid;
-  final String kind;
-  final String amountStr;
-  final String currencyCode;
-  final int? categoryId;
-  final String categoryKey;
-  final String categoryNameZh;
-  final String categoryNameEn;
-  final int? accountId;
-  final String accountName;
-  final int? toAccountId;
-  final String toAccountName;
-  final String note;
-  final int dateMs;
-  final TransactionTimePrecision timePrecision;
-  final int createdMs;
-  final int? settledMs;
-  final SettlementQuality settlementQuality;
-  final int? settlementAccountId;
-  final SettlementQuality settlementAccountQuality;
-  final TransactionEventType eventType;
-  final String tagsRaw;
-  final bool reimbursable;
-  final String imagePath;
-  final int? recurringRuleId;
-
-  /// 不计入收支：仍在账单列表里，但统计/预算/洞察都跳过它。
-  final bool excluded;
-
-  /// 附着式退款：非空 = 这是某笔原账单的退款行（负支出），
-  /// 不在时间线单独显示，改挂到 refundOf 那笔的详情/净额里。
-  final int? refundOf;
-
-  Decimal get amount => Decimal.parse(amountStr);
-  DateTime get date => DateTime.fromMillisecondsSinceEpoch(dateMs);
-  DateTime? get settledAt => settledMs == null
-      ? null
-      : DateTime.fromMillisecondsSinceEpoch(settledMs!);
-  TransactionKind get txKind => TransactionKind.fromJson(kind);
-
-  List<int> get tagIds => tagsRaw.isEmpty
-      ? const []
-      : tagsRaw
-          .split(',')
-          .map((s) => int.tryParse(s.trim()))
-          .whereType<int>()
-          .toList();
-
-  const TransactionEntity({
-    required this.id,
-    this.bookId,
-    Set<int>? bookIds,
-    this.uuid = '',
-    required this.kind,
-    required this.amountStr,
-    this.currencyCode = 'CNY',
-    this.categoryId,
-    this.categoryKey = '',
-    this.categoryNameZh = '',
-    this.categoryNameEn = '',
-    this.accountId,
-    this.accountName = '',
-    this.toAccountId,
-    this.toAccountName = '',
-    this.note = '',
-    required this.dateMs,
-    this.timePrecision = TransactionTimePrecision.legacyUnknown,
-    this.createdMs = 0,
-    this.settledMs,
-    this.settlementQuality = SettlementQuality.unknown,
-    this.settlementAccountId,
-    this.settlementAccountQuality = SettlementQuality.unknown,
-    this.eventType = TransactionEventType.legacyAdjustment,
-    this.tagsRaw = '',
-    this.reimbursable = false,
-    this.imagePath = '',
-    this.recurringRuleId,
-    this.excluded = false,
-    this.refundOf,
-  }) : _bookIds = bookIds;
-
-  TransactionRecord toRecord({String languageCode = 'zh'}) => TransactionRecord(
-        id: id.toString(),
-        kind: txKind,
-        amount: amount,
-        currencyCode: currencyCode,
-        categoryName:
-            languageCode.startsWith('zh') ? categoryNameZh : categoryNameEn,
-        categoryKey: categoryKey,
-        accountId: accountId,
-        accountName: accountName,
-        toAccountId: toAccountId,
-        toAccountName: toAccountName,
-        note: note,
-        date: date,
-        timePrecision: timePrecision,
-      );
-
-  factory TransactionEntity.fromMap(Map<String, Object?> m) =>
-      TransactionEntity(
-        id: m['id'] as int,
-        bookId: m['book_id'] as int?,
-        bookIds: m['book_ids'] == null
-            ? null
-            : TransactionBookStore.parse(m['book_ids']),
-        uuid: m['uuid'] as String? ?? '',
-        kind: m['kind'] as String,
-        amountStr: m['amount'] as String,
-        currencyCode: m['currency_code'] as String? ?? 'CNY',
-        categoryId: m['category_id'] as int?,
-        categoryKey: m['category_key'] as String? ?? '',
-        categoryNameZh: m['category_name_zh'] as String? ?? '',
-        categoryNameEn: m['category_name_en'] as String? ?? '',
-        accountId: m['account_id'] as int?,
-        accountName: m['account_name'] as String? ?? '',
-        toAccountId: m['to_account_id'] as int?,
-        toAccountName: m['to_account_name'] as String? ?? '',
-        note: m['note'] as String? ?? '',
-        dateMs: m['date_ms'] as int,
-        timePrecision: TransactionTimePrecisionX.fromStorage(
-          m['time_precision'] as String?,
-        ),
-        createdMs: m['created_ms'] as int? ?? 0,
-        settledMs: m['settled_ms'] as int?,
-        settlementQuality: SettlementQualityX.fromStorage(
-          m['settlement_quality'] as String?,
-        ),
-        settlementAccountId: m['settlement_account_id'] as int?,
-        settlementAccountQuality: SettlementQualityX.fromStorage(
-          m['settlement_account_quality'] as String?,
-        ),
-        eventType: TransactionEventTypeX.fromStorage(
-          m['event_type'] as String?,
-        ),
-        tagsRaw: m['tags'] as String? ?? '',
-        reimbursable: ((m['reimbursable'] as int?) ?? 0) == 1,
-        imagePath: m['image_path'] as String? ?? '',
-        recurringRuleId: m['recurring_rule_id'] as int?,
-        excluded: ((m['excluded'] as int?) ?? 0) == 1,
-        refundOf: m['refund_of'] as int?,
-      );
-}
-
-class TransactionDraft {
-  final TransactionKind kind;
-  final Decimal amount;
-  final int? categoryId;
-  final int accountId;
-  final String note;
-  final DateTime date;
-  final TransactionTimePrecision timePrecision;
-  final List<int> tagIds;
-  final bool reimbursable;
-  final String imagePath;
-  final bool excluded;
-  final int? bookId;
-
-  const TransactionDraft({
-    required this.kind,
-    required this.amount,
-    this.categoryId,
-    required this.accountId,
-    this.note = '',
-    required this.date,
-    this.timePrecision = TransactionTimePrecision.legacyUnknown,
-    this.tagIds = const [],
-    this.reimbursable = false,
-    this.imagePath = '',
-    this.excluded = false,
-    this.bookId,
-  });
-
-  TransactionDraft copyWith({
-    TransactionKind? kind,
-    Decimal? amount,
-    int? categoryId,
-    int? accountId,
-    String? note,
-    DateTime? date,
-    TransactionTimePrecision? timePrecision,
-    List<int>? tagIds,
-    bool? reimbursable,
-    String? imagePath,
-    bool? excluded,
-    int? bookId,
-  }) =>
-      TransactionDraft(
-        kind: kind ?? this.kind,
-        amount: amount ?? this.amount,
-        categoryId: categoryId ?? this.categoryId,
-        accountId: accountId ?? this.accountId,
-        note: note ?? this.note,
-        date: date ?? this.date,
-        timePrecision: timePrecision ?? this.timePrecision,
-        tagIds: tagIds ?? this.tagIds,
-        reimbursable: reimbursable ?? this.reimbursable,
-        imagePath: imagePath ?? this.imagePath,
-        excluded: excluded ?? this.excluded,
-        bookId: bookId ?? this.bookId,
-      );
-}
-
-class FeimiaoImportRow {
-  final String uuid;
-  final String refundOfUuid;
-  final String role;
-  final TransactionKind kind;
-  final Decimal amount;
-  final Decimal refunded;
-  final String categoryKey;
-  final String categoryName;
-  final String accountName;
-  final String toAccountName;
-  final List<String> tagNames;
-  final String note;
-  final DateTime date;
-  final TransactionTimePrecision timePrecision;
-  final DateTime? settledAt;
-  final SettlementQuality? settlementQuality;
-  final String settlementAccountName;
-  final SettlementQuality? settlementAccountQuality;
-  final TransactionEventType? eventType;
-  final bool excluded;
-  final bool reimbursable;
-  final List<String>? bookUuids;
-  final List<String>? bookNames;
-
-  const FeimiaoImportRow({
-    this.uuid = '',
-    this.refundOfUuid = '',
-    this.role = 'transaction',
-    required this.kind,
-    required this.amount,
-    required this.refunded,
-    this.categoryKey = '',
-    this.categoryName = '',
-    this.accountName = '',
-    this.toAccountName = '',
-    this.tagNames = const [],
-    this.note = '',
-    required this.date,
-    this.timePrecision = TransactionTimePrecision.legacyUnknown,
-    this.settledAt,
-    this.settlementQuality,
-    this.settlementAccountName = '',
-    this.settlementAccountQuality,
-    this.eventType,
-    this.excluded = false,
-    this.reimbursable = false,
-    this.bookUuids,
-    this.bookNames,
-  });
-}
-
-class FeimiaoImportResult {
-  final int inserted;
-  final int skippedDuplicates;
-  final int refundsAttached;
-
-  const FeimiaoImportResult({
-    required this.inserted,
-    required this.skippedDuplicates,
-    required this.refundsAttached,
-  });
-}
-
-class FeimiaoAssetImportResult {
-  final int assets;
-  final int receivables;
-  final int events;
-  final int usages;
-  final int valuations;
-  final int links;
-  final int recoveries;
-  final int snapshots;
-  final int liabilities;
-  final int unresolvedTransactionLinks;
-  final int unresolvedSavingsGoalLinks;
-  final int rejectedLinks;
-
-  const FeimiaoAssetImportResult({
-    required this.assets,
-    this.receivables = 0,
-    required this.events,
-    this.usages = 0,
-    required this.valuations,
-    required this.links,
-    this.recoveries = 0,
-    this.snapshots = 0,
-    this.liabilities = 0,
-    this.unresolvedTransactionLinks = 0,
-    this.unresolvedSavingsGoalLinks = 0,
-    this.rejectedLinks = 0,
-  });
-
-  int get total =>
-      assets +
-      receivables +
-      events +
-      usages +
-      valuations +
-      links +
-      recoveries +
-      snapshots +
-      liabilities;
-}
-
-class ImportBatchResult {
-  final int inserted;
-  final int skippedDuplicates;
-  final int refundsAttached;
-  final int unresolvedRefunds;
-
-  const ImportBatchResult({
-    required this.inserted,
-    required this.skippedDuplicates,
-    required this.refundsAttached,
-    this.unresolvedRefunds = 0,
-  });
-}
-
-class SavingsGoalEntity {
-  final int id;
-  final String uuid;
-  final String name;
-  final String emoji;
-  final String targetStr;
-  final String savedStr;
-  final int createdMs;
-  final int updatedMs;
-
-  Decimal get target => Decimal.parse(targetStr);
-  Decimal get saved => Decimal.parse(savedStr);
-
-  double get progress {
-    final t = target;
-    if (t <= Decimal.zero) return 0;
-    final r = (saved / t).toDouble();
-    return r.clamp(0.0, 1.0);
-  }
-
-  bool get isDone => saved >= target && target > Decimal.zero;
-
-  const SavingsGoalEntity({
-    required this.id,
-    required this.uuid,
-    required this.name,
-    this.emoji = '🐷',
-    required this.targetStr,
-    this.savedStr = '0',
-    this.createdMs = 0,
-    this.updatedMs = 0,
-  });
-
-  factory SavingsGoalEntity.fromMap(Map<String, Object?> m) =>
-      SavingsGoalEntity(
-        id: m['id'] as int,
-        uuid: m['uuid'] as String? ?? '',
-        name: m['name'] as String,
-        emoji: m['emoji'] as String? ?? '🐷',
-        targetStr: m['target_amount'] as String? ?? '0',
-        savedStr: m['saved_amount'] as String? ?? '0',
-        createdMs: m['created_ms'] as int? ?? 0,
-        updatedMs: m['updated_ms'] as int? ?? 0,
-      );
-}
-
-class TagEntity {
-  final int id;
-  final String name;
-  final int colorValue;
-
-  const TagEntity({
-    required this.id,
-    required this.name,
-    required this.colorValue,
-  });
-
-  factory TagEntity.fromMap(Map<String, Object?> m) => TagEntity(
-        id: m['id'] as int,
-        name: m['name'] as String,
-        colorValue: m['color'] as int? ?? 0xFF7D8B9B,
-      );
-}
+import '../core/models/account_entities.dart';
+import '../core/models/asset_entities.dart';
+import '../core/models/ledger_entities.dart';
+export '../core/models/account_entities.dart';
+export '../core/models/asset_entities.dart';
+export '../core/models/ledger_entities.dart';
 
 class ReportEntity {
   final int id;
@@ -2730,11 +269,17 @@ class AppRepository extends ChangeNotifier {
         defaultValue: false,
       );
 
-  AppRepository({ReportExecutionFence? reportExecutionFence})
+  AppRepository(
+      {ReportExecutionFence? reportExecutionFence,
+      Future<Directory> Function()? restoreDocumentsDirectoryProvider})
       : _reportExecutionFence =
-            reportExecutionFence ?? ReportExecutionFence.shared;
+            reportExecutionFence ?? ReportExecutionFence.shared,
+        _restoreDocumentsDirectoryProvider =
+            restoreDocumentsDirectoryProvider ??
+                getApplicationDocumentsDirectory;
 
   final ReportExecutionFence _reportExecutionFence;
+  final Future<Directory> Function() _restoreDocumentsDirectoryProvider;
   int _databaseGeneration = 0;
 
   /// Changes before replacing a database, including failed restore attempts.
@@ -2777,10 +322,12 @@ class AppRepository extends ChangeNotifier {
     }
   }
 
-  /// 全局数据版本号：每次 notifyListeners()（= 任何写路径收尾）自动 +1。
-  /// 余额 / 净资产 / 趋势 memo 拿它当缓存 key——版本一变旧结果自动作废，
-  /// 121 处 notifyListeners 调用点零改动就全部接入失效。
-  int _revision = 0;
+  final RepositoryRevisions _revisions = RepositoryRevisions();
+  int get _revision => _revisions.total;
+  int get financialRevision => _revisions.of(RepositoryChange.financial);
+  int get chatRevision => _revisions.of(RepositoryChange.chat);
+  int get settingsRevision => _revisions.of(RepositoryChange.settings);
+  int get aiRevision => _revisions.of(RepositoryChange.ai);
 
   /// 当前内存账本快照的单调版本，供只读视图缓存使用。
   ///
@@ -2789,8 +336,10 @@ class AppRepository extends ChangeNotifier {
   int get dataRevision => _revision;
 
   @override
-  void notifyListeners() {
-    _revision++;
+  void notifyListeners() => _notifyChange(RepositoryChange.financial);
+
+  void _notifyChange(RepositoryChange domain) {
+    _revisions.advance(domain);
     super.notifyListeners();
   }
 
@@ -3551,7 +1100,7 @@ class AppRepository extends ChangeNotifier {
     final dayKey = budgetDayKey(today);
     final cached = _budgetSpendCache;
     if (cached != null &&
-        cached.revision == _revision &&
+        cached.revision == financialRevision &&
         cached.bookId == bookId &&
         cached.dayKey == dayKey) {
       return (spend: cached.spend, foreign: cached.foreign);
@@ -3581,7 +1130,7 @@ class AppRepository extends ChangeNotifier {
       spend[key] = (spend[key] ?? 0) + net;
     }
     _budgetSpendCache = (
-      revision: _revision,
+      revision: financialRevision,
       bookId: bookId,
       dayKey: dayKey,
       spend: spend,
@@ -4246,6 +1795,12 @@ class AppRepository extends ChangeNotifier {
 
     try {
       final dbPath = p.join(await getDatabasesPath(), _dbName);
+      if (await RestoreActivation.needsRecovery(dbPath)) {
+        await _reportExecutionFence.withRecoveryBarrier(() =>
+            RestoreActivation.recover(
+                databasePath: dbPath,
+                documentsDirectory: _restoreDocumentsDirectoryProvider));
+      }
       final databaseAlreadyExisted = await File(dbPath).exists();
       trace('path');
       await _backupBeforeMigration(dbPath);
@@ -8924,7 +6479,7 @@ class AppRepository extends ChangeNotifier {
       conflictAlgorithm: ConflictAlgorithm.replace,
     );
     await batch.commit(noResult: true);
-    notifyListeners();
+    _notifyChange(RepositoryChange.settings);
   }
 
   Future<void> _loadWidgetPrivacyMode() async {
@@ -8946,7 +6501,7 @@ class AppRepository extends ChangeNotifier {
       {'key': 'widget_privacy_mode', 'value': enabled ? '1' : '0'},
       conflictAlgorithm: ConflictAlgorithm.replace,
     );
-    notifyListeners();
+    _notifyChange(RepositoryChange.settings);
   }
 
   Future<void> _loadRepaymentReminderEnabled() async {
@@ -8969,7 +6524,7 @@ class AppRepository extends ChangeNotifier {
       {'key': 'repayment_reminder_enabled', 'value': enabled ? '1' : '0'},
       conflictAlgorithm: ConflictAlgorithm.replace,
     );
-    notifyListeners();
+    _notifyChange(RepositoryChange.settings);
   }
 
   Future<void> _loadMoneyDisplaySettings() async {
@@ -9005,7 +6560,7 @@ class AppRepository extends ChangeNotifier {
       {'key': 'money_decimal_places', 'value': '$next'},
       conflictAlgorithm: ConflictAlgorithm.replace,
     );
-    notifyListeners();
+    _notifyChange(RepositoryChange.settings);
   }
 
   Future<void> setMoneyIntegerRoundingMode(
@@ -9025,7 +6580,7 @@ class AppRepository extends ChangeNotifier {
       },
       conflictAlgorithm: ConflictAlgorithm.replace,
     );
-    notifyListeners();
+    _notifyChange(RepositoryChange.settings);
   }
 
   MoneyIntegerRoundingMode _parseMoneyIntegerRoundingMode(String? raw) {
@@ -9055,7 +6610,7 @@ class AppRepository extends ChangeNotifier {
       {'key': 'category_icon_style', 'value': style.storageKey},
       conflictAlgorithm: ConflictAlgorithm.replace,
     );
-    notifyListeners();
+    _notifyChange(RepositoryChange.settings);
   }
 
   Future<void> _loadTransactionDisplayPreferences() async {
@@ -9095,7 +6650,7 @@ class AppRepository extends ChangeNotifier {
       {'key': 'transaction_card_display_mode', 'value': mode.storageKey},
       conflictAlgorithm: ConflictAlgorithm.replace,
     );
-    notifyListeners();
+    _notifyChange(RepositoryChange.settings);
   }
 
   Future<void> setUserMessageBubbleStyle(
@@ -9108,7 +6663,7 @@ class AppRepository extends ChangeNotifier {
       {'key': 'user_message_bubble_style', 'value': style.storageKey},
       conflictAlgorithm: ConflictAlgorithm.replace,
     );
-    notifyListeners();
+    _notifyChange(RepositoryChange.settings);
   }
 
   Future<void> setLastAssetViewTabIndex(int index) async {
@@ -9198,7 +6753,7 @@ class AppRepository extends ChangeNotifier {
         conflictAlgorithm: ConflictAlgorithm.replace,
       );
     });
-    notifyListeners();
+    _notifyChange(RepositoryChange.settings);
   }
 
   Future<String> saveProfileAvatarBytes(
@@ -9236,7 +6791,7 @@ class AppRepository extends ChangeNotifier {
       {'key': 'profile_avatar_path', 'value': dest.path},
       conflictAlgorithm: ConflictAlgorithm.replace,
     );
-    notifyListeners();
+    _notifyChange(RepositoryChange.settings);
     return dest.path;
   }
 
@@ -9281,7 +6836,7 @@ class AppRepository extends ChangeNotifier {
       conflictAlgorithm: ConflictAlgorithm.replace,
     );
     await _pruneChatMessages();
-    notifyListeners();
+    _notifyChange(RepositoryChange.chat);
   }
 
   /// 删除超过保存时长的对话。
@@ -9344,7 +6899,7 @@ class AppRepository extends ChangeNotifier {
     );
     await db.insert('chat_sessions', session.toMap());
     await _loadChatSessions();
-    notifyListeners();
+    _notifyChange(RepositoryChange.chat);
     return _chatSessions.firstWhere((item) => item.id == session.id);
   }
 
@@ -9364,7 +6919,7 @@ class AppRepository extends ChangeNotifier {
       whereArgs: [id],
     );
     await _loadChatSessions();
-    notifyListeners();
+    _notifyChange(RepositoryChange.chat);
   }
 
   Future<void> setChatSessionStarred(String sessionId, bool starred) async {
@@ -9382,7 +6937,7 @@ class AppRepository extends ChangeNotifier {
       whereArgs: [id],
     );
     await _loadChatSessions();
-    notifyListeners();
+    _notifyChange(RepositoryChange.chat);
   }
 
   Future<void> deleteChatSession(String sessionId) async {
@@ -9409,7 +6964,7 @@ class AppRepository extends ChangeNotifier {
           .delete('chat_sessions', where: 'session_id = ?', whereArgs: [id]);
     });
     await _loadChatSessions();
-    notifyListeners();
+    _notifyChange(RepositoryChange.chat);
   }
 
   /// Persists the model selection owned by one conversation.
@@ -9441,7 +6996,7 @@ class AppRepository extends ChangeNotifier {
       whereArgs: [id],
     );
     await _loadChatSessions();
-    notifyListeners();
+    _notifyChange(RepositoryChange.chat);
   }
 
   /// Makes a session's model/effort the active global chat selection used by
@@ -9464,7 +7019,7 @@ class AppRepository extends ChangeNotifier {
     }
     _chatAiReasoningEffort = session.effort;
     await _persistAiProviderMetadata(notify: false);
-    notifyListeners();
+    _notifyChange(RepositoryChange.chat);
   }
 
   Future<void> syncChatSessionSelection(String sessionId) async {
@@ -10036,7 +7591,7 @@ class AppRepository extends ChangeNotifier {
 
   Future<void> reloadReportsFromStorage() async {
     await _loadReports();
-    notifyListeners();
+    _notifyChange(RepositoryChange.chat);
   }
 
   Future<ReportEntity?> getReport(int id) async {
@@ -10060,7 +7615,7 @@ class AppRepository extends ChangeNotifier {
       whereArgs: [id],
     );
     await _loadReports();
-    notifyListeners();
+    _notifyChange(RepositoryChange.chat);
   }
 
   Future<void> updateReportContent(
@@ -10108,7 +7663,7 @@ class AppRepository extends ChangeNotifier {
       }
     });
     await _loadReports();
-    notifyListeners();
+    _notifyChange(RepositoryChange.chat);
   }
 
   Future<void> deleteReport(int id) async {
@@ -10140,7 +7695,7 @@ class AppRepository extends ChangeNotifier {
       }
     });
     await _loadReports();
-    notifyListeners();
+    _notifyChange(RepositoryChange.chat);
   }
 
   Future<List<ReportEntity>> loadReports({
@@ -10199,7 +7754,7 @@ class AppRepository extends ChangeNotifier {
     } finally {
       // Even a failed delete revokes the in-flight request. Views must reload
       // the unchanged history instead of leaving a cancelled thinking bubble.
-      notifyListeners();
+      _notifyChange(RepositoryChange.chat);
     }
   }
 
@@ -10218,7 +7773,7 @@ class AppRepository extends ChangeNotifier {
           where: 'id = ? AND session_id = ?', whereArgs: [messageId, id]);
       _checkChatOperation(id);
     });
-    notifyListeners();
+    _notifyChange(RepositoryChange.chat);
   }
 
   /// 兼容旧调用：明确表示清空全部会话。新界面不得用它清空当前会话。
@@ -10233,7 +7788,7 @@ class AppRepository extends ChangeNotifier {
         await txn.delete('chat_messages');
       });
     } finally {
-      notifyListeners();
+      _notifyChange(RepositoryChange.chat);
     }
   }
 
@@ -10425,7 +7980,7 @@ class AppRepository extends ChangeNotifier {
         createdMs: value.createdMs,
       );
     });
-    notifyListeners();
+    _notifyChange(RepositoryChange.ai);
     return event;
   }
 
@@ -10521,7 +8076,7 @@ class AppRepository extends ChangeNotifier {
       _checkChatOperation();
     });
     final run = await aiRunById(id);
-    if (run != null) notifyListeners();
+    if (run != null) _notifyChange(RepositoryChange.ai);
     return run;
   }
 
@@ -10627,7 +8182,7 @@ class AppRepository extends ChangeNotifier {
         createdMs: now,
       );
     });
-    notifyListeners();
+    _notifyChange(RepositoryChange.ai);
   }
 
   Future<void> markAiRunFailed(
@@ -10818,7 +8373,7 @@ class AppRepository extends ChangeNotifier {
       conflictAlgorithm: ConflictAlgorithm.replace,
     );
     _aiProviderHealth[id] = next;
-    notifyListeners();
+    _notifyChange(RepositoryChange.ai);
     return next;
   }
 
@@ -10839,7 +8394,7 @@ class AppRepository extends ChangeNotifier {
       conflictAlgorithm: ConflictAlgorithm.replace,
     );
     _aiProviderHealth[id] = next;
-    notifyListeners();
+    _notifyChange(RepositoryChange.ai);
     return next;
   }
 
@@ -10870,7 +8425,7 @@ class AppRepository extends ChangeNotifier {
       conflictAlgorithm: ConflictAlgorithm.replace,
     );
     _aiProviderHealth[id] = next;
-    notifyListeners();
+    _notifyChange(RepositoryChange.ai);
     return next;
   }
 
@@ -10883,7 +8438,7 @@ class AppRepository extends ChangeNotifier {
       whereArgs: [id],
     );
     _aiProviderHealth.remove(id);
-    notifyListeners();
+    _notifyChange(RepositoryChange.ai);
   }
 
   List<AiMemory> get aiMemories => List.unmodifiable(_aiMemories);
@@ -10967,7 +8522,7 @@ class AppRepository extends ChangeNotifier {
     );
     await _db!.insert('ai_memories', memory.toMap());
     await _loadAiMemories();
-    notifyListeners();
+    _notifyChange(RepositoryChange.ai);
     return memory;
   }
 
@@ -10985,7 +8540,7 @@ class AppRepository extends ChangeNotifier {
       whereArgs: [value],
     );
     await _loadAiMemories();
-    notifyListeners();
+    _notifyChange(RepositoryChange.ai);
   }
 
   Future<void> deleteAiMemory(String id) async {
@@ -10993,13 +8548,13 @@ class AppRepository extends ChangeNotifier {
     if (value.isEmpty) return;
     await _db!.delete('ai_memories', where: 'id = ?', whereArgs: [value]);
     _aiMemories.removeWhere((memory) => memory.id == value);
-    notifyListeners();
+    _notifyChange(RepositoryChange.ai);
   }
 
   Future<void> forgetAllAiMemories() async {
     await _db!.delete('ai_memories');
     _aiMemories.clear();
-    notifyListeners();
+    _notifyChange(RepositoryChange.ai);
   }
 
   Future<void> markAiMemoryUsed(String id) async {
@@ -11054,7 +8609,7 @@ class AppRepository extends ChangeNotifier {
       conflictAlgorithm: ConflictAlgorithm.replace,
     );
     await _loadAiReportSchedules();
-    notifyListeners();
+    _notifyChange(RepositoryChange.ai);
     return normalized;
   }
 
@@ -11067,7 +8622,7 @@ class AppRepository extends ChangeNotifier {
       whereArgs: [value],
     );
     _aiReportSchedules.removeWhere((schedule) => schedule.id == value);
-    notifyListeners();
+    _notifyChange(RepositoryChange.ai);
   }
 
   Future<List<AiReportSchedule>> dueAiReportSchedules({DateTime? now}) async {
@@ -11287,7 +8842,7 @@ class AppRepository extends ChangeNotifier {
     await _db!.delete('category_memory',
         where: 'phrase = ? AND kind = ?', whereArgs: [phrase, kind.toJson()]);
     _catMemory.removeWhere((m) => m.phrase == phrase && m.kind == kind);
-    notifyListeners();
+    _notifyChange(RepositoryChange.ai);
   }
 
   /// 按备注召回学过的分类 key：取被备注包含的「最长」短语对应的分类；无则 null。
@@ -11848,9 +9403,9 @@ class AppRepository extends ChangeNotifier {
   }
 
   void _ensureBookViewCachesFresh() {
-    if (_bookViewCacheRevision == _revision) return;
+    if (_bookViewCacheRevision == financialRevision) return;
     _invalidateBookViewCaches();
-    _bookViewCacheRevision = _revision;
+    _bookViewCacheRevision = financialRevision;
   }
 
   Map<int, TransactionEntity>? _txByIdCache;
@@ -11908,14 +9463,15 @@ class AppRepository extends ChangeNotifier {
   /// memo 只在 (revision, 当天) 都没变时有效；否则整体清空重建。
   void _ensureBalanceCacheFresh() {
     final today = _dayStampOf(AppClock.now);
-    if (_balanceCacheRevision == _revision && _balanceCacheDayStamp == today) {
+    if (_balanceCacheRevision == financialRevision &&
+        _balanceCacheDayStamp == today) {
       return;
     }
     _accountBalanceCache.clear();
     _accountBalanceTrendCache.clear();
     _netWorthResultCache = null;
     _netWorthBreakdownCache = null;
-    _balanceCacheRevision = _revision;
+    _balanceCacheRevision = financialRevision;
     _balanceCacheDayStamp = today;
   }
 
@@ -12387,22 +9943,19 @@ class AppRepository extends ChangeNotifier {
     void Function(String step)? onRestoreStep,
   }) async {
     final dbPath = p.join(await getDatabasesPath(), _dbName);
+    if (await File(RestoreActivation.journalPath(dbPath)).exists()) {
+      return false;
+    }
     final bakPath = '$dbPath.bak';
     final token = DateTime.now().microsecondsSinceEpoch;
     final stagedPath = '$dbPath.restore-new-$token';
-    final oldPath = '$dbPath.restore-old-$token';
     Directory? liveReceipts;
     Directory? stagedReceipts;
     Directory? oldReceipts;
     Directory? liveAssetMedia;
     Directory? stagedAssetMedia;
     Directory? oldAssetMedia;
-    var databaseMovedToOld = false;
-    var databaseInstalled = false;
-    var receiptsMovedToOld = false;
-    var receiptsInstalled = false;
-    var assetMediaMovedToOld = false;
-    var assetMediaInstalled = false;
+    RestoreActivation? activation;
 
     try {
       await File(srcPath).copy(stagedPath);
@@ -12471,39 +10024,33 @@ class AppRepository extends ChangeNotifier {
       await _db?.close();
       _db = null;
 
-      final cur = File(dbPath);
-      if (await cur.exists()) {
-        await cur.rename(oldPath);
-        databaseMovedToOld = true;
-      }
+      activation = await RestoreActivation.begin(
+          databasePath: dbPath,
+          token: '$token',
+          documentsDirectory: documentsDirectory ??
+              (liveReceipts?.parent ?? liveAssetMedia?.parent),
+          receipts: stagedReceipts != null,
+          assetMedia: stagedAssetMedia != null);
+      await activation.database.moveOriginal();
       for (final suffix in ['-wal', '-shm']) {
         final sidecar = File('$dbPath$suffix');
         if (await sidecar.exists()) await sidecar.delete();
       }
       onRestoreStep?.call('before_database_install');
-      await File(stagedPath).rename(dbPath);
-      databaseInstalled = true;
+      await activation.database.install();
       if (stagedReceipts != null &&
           liveReceipts != null &&
           oldReceipts != null) {
-        if (await liveReceipts.exists()) {
-          await liveReceipts.rename(oldReceipts.path);
-          receiptsMovedToOld = true;
-        }
+        await activation.media('receipts')!.moveOriginal();
         onRestoreStep?.call('before_receipts_install');
-        await stagedReceipts.rename(liveReceipts.path);
-        receiptsInstalled = true;
+        await activation.media('receipts')!.install();
       }
       if (stagedAssetMedia != null &&
           liveAssetMedia != null &&
           oldAssetMedia != null) {
-        if (await liveAssetMedia.exists()) {
-          await liveAssetMedia.rename(oldAssetMedia.path);
-          assetMediaMovedToOld = true;
-        }
+        await activation.media('asset_media')!.moveOriginal();
         onRestoreStep?.call('before_asset_media_install');
-        await stagedAssetMedia.rename(liveAssetMedia.path);
-        assetMediaInstalled = true;
+        await activation.media('asset_media')!.install();
       }
 
       onRestoreStep?.call('before_database_open');
@@ -12517,12 +10064,10 @@ class AppRepository extends ChangeNotifier {
       await _ensureDefaultBook();
       await _normalizeStandaloneRefunds();
       await _convergeOpenedDatabase(notify: false);
-      await _cleanupCommittedRestore(
-        dbPath: dbPath,
-        oldPath: oldPath,
-        oldReceipts: oldReceipts,
-        oldAssetMedia: oldAssetMedia,
-      );
+      await activation.commit();
+      try {
+        await _pruneLocalBackups(File(dbPath).parent);
+      } catch (_) {}
       notifyListeners();
       return true;
     } catch (_) {
@@ -12533,38 +10078,12 @@ class AppRepository extends ChangeNotifier {
         _db = null;
       }
       try {
-        final current = File(dbPath);
-        if (databaseInstalled && await current.exists()) {
-          await current.delete();
-        }
-        final old = File(oldPath);
-        if (databaseMovedToOld && await old.exists()) {
-          await old.rename(dbPath);
-        } else if (!await current.exists()) {
-          final bak = File(bakPath);
-          if (await bak.exists()) await bak.copy(dbPath);
-        }
-      } catch (_) {}
-      try {
-        if (liveReceipts != null && oldReceipts != null) {
-          if (receiptsInstalled && await liveReceipts.exists()) {
-            await liveReceipts.delete(recursive: true);
-          }
-          if (receiptsMovedToOld && await oldReceipts.exists()) {
-            await oldReceipts.rename(liveReceipts.path);
-          }
-        }
-      } catch (_) {}
-      try {
-        if (liveAssetMedia != null && oldAssetMedia != null) {
-          if (assetMediaInstalled && await liveAssetMedia.exists()) {
-            await liveAssetMedia.delete(recursive: true);
-          }
-          if (assetMediaMovedToOld && await oldAssetMedia.exists()) {
-            await oldAssetMedia.rename(liveAssetMedia.path);
-          }
-        }
-      } catch (_) {}
+        await activation?.rollback();
+      } catch (_) {
+        // Leave the durable journal for startup recovery. Never reopen/create
+        // a database while the old files have not been reconciled.
+        return false;
+      }
       try {
         final staged = File(stagedPath);
         if (await staged.exists()) await staged.delete();
@@ -12580,6 +10099,10 @@ class AppRepository extends ChangeNotifier {
         }
       } catch (_) {}
       try {
+        if (!await File(dbPath).exists() ||
+            await File(RestoreActivation.journalPath(dbPath)).exists()) {
+          return false;
+        }
         _db = await openDatabase(
           dbPath,
           version: _dbVersion,
@@ -12594,31 +10117,6 @@ class AppRepository extends ChangeNotifier {
       } catch (_) {}
       return false;
     }
-  }
-
-  Future<void> _cleanupCommittedRestore({
-    required String dbPath,
-    required String oldPath,
-    Directory? oldReceipts,
-    Directory? oldAssetMedia,
-  }) async {
-    try {
-      await _pruneLocalBackups(File(dbPath).parent);
-    } catch (_) {}
-    try {
-      final old = File(oldPath);
-      if (await old.exists()) await old.delete();
-    } catch (_) {}
-    try {
-      if (oldReceipts != null && await oldReceipts.exists()) {
-        await oldReceipts.delete(recursive: true);
-      }
-    } catch (_) {}
-    try {
-      if (oldAssetMedia != null && await oldAssetMedia.exists()) {
-        await oldAssetMedia.delete(recursive: true);
-      }
-    } catch (_) {}
   }
 
   Future<void> _copyDirectoryTree(Directory source, Directory target) async {
@@ -14490,7 +11988,7 @@ class AppRepository extends ChangeNotifier {
             snapshot.snapshotDate == dateKey && snapshot.isComputed)
         .firstOrNull;
     if (existing != null) {
-      mergedCauses.addAll(_decodeNetWorthSnapshotCauses(existing.causeSetJson));
+      mergedCauses.addAll(decodeNetWorthSnapshotCauses(existing.causeSetJson));
     }
     final previous = _netWorthSnapshots
         .where((snapshot) => snapshot.isComputed)
@@ -16105,7 +13603,7 @@ class AppRepository extends ChangeNotifier {
     setting('ai_report_reasoning_effort', _reportAiReasoningEffort.storageKey);
     setting('ai_task_config_version', '3');
     await batch.commit(noResult: true);
-    if (notify) notifyListeners();
+    if (notify) _notifyChange(RepositoryChange.ai);
   }
 
   /// Add or edit one configured provider. The DeepSeek entry is always kept as
@@ -16414,7 +13912,7 @@ class AppRepository extends ChangeNotifier {
         rethrow;
       }
     }
-    if (notify) notifyListeners();
+    if (notify) _notifyChange(RepositoryChange.ai);
   }
 
   /// Flushes provider metadata after a batch import. Individual account
@@ -16444,13 +13942,13 @@ class AppRepository extends ChangeNotifier {
   Future<void> commitAiAccountImportBatch() async {
     if (_aiProviderImportSnapshot == null) {
       await _persistAiProviderMetadata(notify: false);
-      notifyListeners();
+      _notifyChange(RepositoryChange.ai);
       return;
     }
     try {
       await _persistAiProviderMetadata(notify: false);
       _aiProviderImportSnapshot = null;
-      notifyListeners();
+      _notifyChange(RepositoryChange.ai);
     } catch (_) {
       try {
         await rollbackAiAccountImportBatch();
@@ -16529,7 +14027,7 @@ class AppRepository extends ChangeNotifier {
       }
     }
     _aiProviderImportSnapshot = null;
-    notifyListeners();
+    _notifyChange(RepositoryChange.ai);
   }
 
   /// Completes a GPT OAuth login and turns the account-specific Codex model
@@ -16824,7 +14322,7 @@ class AppRepository extends ChangeNotifier {
     await _persistAiProviderMetadata(
       notify: false,
     );
-    notifyListeners();
+    _notifyChange(RepositoryChange.ai);
   }
 
   /// Enable or pause one account without deleting its credential or model
@@ -16878,7 +14376,7 @@ class AppRepository extends ChangeNotifier {
     await _persistAiProviderMetadata(
       notify: false,
     );
-    notifyListeners();
+    _notifyChange(RepositoryChange.ai);
   }
 
   /// Rebinds Chats sessions that reference a provider which is no longer
@@ -16989,7 +14487,7 @@ class AppRepository extends ChangeNotifier {
       {'key': 'available_ai_models', 'value': _availableModels.join(',')},
       conflictAlgorithm: ConflictAlgorithm.replace,
     );
-    notifyListeners();
+    _notifyChange(RepositoryChange.ai);
   }
 
   bool _chatCurrentModelIn(AiConfiguredProvider provider) =>
@@ -17038,7 +14536,7 @@ class AppRepository extends ChangeNotifier {
     await _persistAiProviderMetadata(
       notify: false,
     );
-    notifyListeners();
+    _notifyChange(RepositoryChange.ai);
   }
 
   Future<void> saveChatModelSelection({
@@ -17068,7 +14566,7 @@ class AppRepository extends ChangeNotifier {
     await _persistAiProviderMetadata(
       notify: false,
     );
-    notifyListeners();
+    _notifyChange(RepositoryChange.ai);
   }
 
   Future<void> saveAiProviderConfig({
@@ -17169,7 +14667,7 @@ class AppRepository extends ChangeNotifier {
     setting('ai_task_config_version', '2');
 
     await batch.commit(noResult: true);
-    notifyListeners();
+    _notifyChange(RepositoryChange.ai);
   }
 
   Future<void> saveAiTaskRouting({
@@ -17202,7 +14700,7 @@ class AppRepository extends ChangeNotifier {
     setting('ai_task_config_version', '2');
 
     await batch.commit(noResult: true);
-    notifyListeners();
+    _notifyChange(RepositoryChange.ai);
   }
 
   Future<void> saveAiAdvancedConfig({
@@ -17244,7 +14742,7 @@ class AppRepository extends ChangeNotifier {
     setting('ai_report_reasoning_effort', _reportAiReasoningEffort.storageKey);
     setting('ai_task_config_version', '2');
     await batch.commit(noResult: true);
-    notifyListeners();
+    _notifyChange(RepositoryChange.ai);
   }
 
   /// 保存用户筛选后的可用模型列表
@@ -17255,7 +14753,7 @@ class AppRepository extends ChangeNotifier {
       {'key': 'available_ai_models', 'value': _availableModels.join(',')},
       conflictAlgorithm: ConflictAlgorithm.replace,
     );
-    notifyListeners();
+    _notifyChange(RepositoryChange.ai);
   }
 
   Future<String?> _saveSecret({
@@ -19390,7 +16888,7 @@ class AppRepository extends ChangeNotifier {
         : status == PhysicalAssetStatus.idle
             ? PhysicalAssetUsageStatus.idle
             : PhysicalAssetUsageStatus.active;
-    final legacyStatus = _legacyPhysicalStatusFor(
+    final legacyStatus = legacyPhysicalStatusFor(
       economicStatus: existing.economicStatus,
       usageStatus: usageStatus,
       visibilityStatus: existing.visibilityStatus,
@@ -19785,7 +17283,7 @@ class AppRepository extends ChangeNotifier {
       await txn.update(
         'physical_assets',
         {
-          'status': _legacyPhysicalStatusFor(
+          'status': legacyPhysicalStatusFor(
             economicStatus: PhysicalAssetEconomicStatus.returned,
             usageStatus: asset.usageStatus,
             visibilityStatus: asset.visibilityStatus,
@@ -19870,7 +17368,7 @@ class AppRepository extends ChangeNotifier {
       await txn.update(
         'physical_assets',
         {
-          'status': _legacyPhysicalStatusFor(
+          'status': legacyPhysicalStatusFor(
             economicStatus: PhysicalAssetEconomicStatus.owned,
             usageStatus: usage,
             visibilityStatus: visibility,
@@ -19977,7 +17475,7 @@ class AppRepository extends ChangeNotifier {
       await txn.update(
         'physical_assets',
         {
-          'status': _legacyPhysicalStatusFor(
+          'status': legacyPhysicalStatusFor(
             economicStatus: PhysicalAssetEconomicStatus.sold,
             usageStatus: asset.usageStatus,
             visibilityStatus: asset.visibilityStatus,
@@ -20083,12 +17581,12 @@ class AppRepository extends ChangeNotifier {
           ? PhysicalAssetEconomicStatusX.fromStorage(
               metadata['previous_economic_status']?.toString(),
             )
-          : _physicalEconomicFromLegacyStatus(previousStatus);
+          : physicalEconomicFromLegacyStatus(previousStatus);
       final restoredUsage = metadata.containsKey('previous_usage_status')
           ? PhysicalAssetUsageStatusX.fromStorage(
               metadata['previous_usage_status']?.toString(),
             )
-          : _physicalUsageFromLegacyStatus(previousStatus);
+          : physicalUsageFromLegacyStatus(previousStatus);
       final restoredVisibility =
           metadata.containsKey('previous_visibility_status')
               ? AssetVisibilityStatusX.fromStorage(
@@ -20102,7 +17600,7 @@ class AppRepository extends ChangeNotifier {
               metadata['previous_inclusion_quality']?.toString(),
             )
           : AssetInclusionQuality.confirmed;
-      final restoredStatus = _legacyPhysicalStatusFor(
+      final restoredStatus = legacyPhysicalStatusFor(
         economicStatus: restoredEconomic,
         usageStatus: restoredUsage,
         visibilityStatus: restoredVisibility,
@@ -20456,7 +17954,7 @@ class AppRepository extends ChangeNotifier {
         includeInNetWorth != asset.includeInNetWorth) {
       await _bumpNetWorthScopeVersion();
     }
-    final legacyStatus = _legacyPhysicalStatusFor(
+    final legacyStatus = legacyPhysicalStatusFor(
       economicStatus: nextEconomic,
       usageStatus: nextUsage,
       visibilityStatus: asset.visibilityStatus,
@@ -20570,7 +18068,7 @@ class AppRepository extends ChangeNotifier {
       await txn.update(
         'physical_assets',
         {
-          'status': _legacyPhysicalStatusFor(
+          'status': legacyPhysicalStatusFor(
             economicStatus: restoredEconomic,
             usageStatus: restoredUsage,
             visibilityStatus: current.visibilityStatus,
@@ -20655,7 +18153,7 @@ class AppRepository extends ChangeNotifier {
     if (!existing.isArchived) {
       throw StateError('只有已归档资产可以恢复');
     }
-    final restoredStatus = _legacyPhysicalStatusFor(
+    final restoredStatus = legacyPhysicalStatusFor(
       economicStatus: existing.economicStatus,
       usageStatus: existing.usageStatus,
       visibilityStatus: AssetVisibilityStatus.active,
@@ -20705,7 +18203,7 @@ class AppRepository extends ChangeNotifier {
       await txn.update(
         'physical_assets',
         {
-          'status': _legacyPhysicalStatusFor(
+          'status': legacyPhysicalStatusFor(
             economicStatus: asset.economicStatus,
             usageStatus: usageStatus,
             visibilityStatus: asset.visibilityStatus,
@@ -20815,7 +18313,7 @@ class AppRepository extends ChangeNotifier {
         'book_id': _currentBookId,
         'name': name.trim(),
         'receivable_type': type.storageKey,
-        'status': _legacyReceivableStatusFor(
+        'status': legacyReceivableStatusFor(
           economicStatus: economicStatus,
           visibilityStatus: visibilityStatus,
         ).storageKey,
@@ -21072,7 +18570,7 @@ class AppRepository extends ChangeNotifier {
         'receivable_assets',
         {
           'remaining_amount': newRemaining.toString(),
-          'status': _legacyReceivableStatusFor(
+          'status': legacyReceivableStatusFor(
             economicStatus: newEconomicStatus,
             visibilityStatus: asset.visibilityStatus,
           ).storageKey,
@@ -21222,7 +18720,7 @@ class AppRepository extends ChangeNotifier {
               metadata['previous_economic_status']?.toString(),
             )
           : previousStatus.canCountInNetWorth
-              ? _receivableEconomicFromLegacyStatus(previousStatus)
+              ? receivableEconomicFromLegacyStatus(previousStatus)
               : _receivableEconomicStatusForRemaining(
                   restoredRemaining,
                   asset.originalAmount,
@@ -21238,7 +18736,7 @@ class AppRepository extends ChangeNotifier {
               metadata['previous_inclusion_quality']?.toString(),
             )
           : asset.inclusionQuality;
-      final restoredStatus = _legacyReceivableStatusFor(
+      final restoredStatus = legacyReceivableStatusFor(
         economicStatus: restoredEconomic,
         visibilityStatus: restoredVisibility,
       );
@@ -21368,7 +18866,7 @@ class AppRepository extends ChangeNotifier {
         'receivable_assets',
         {
           'remaining_amount': '0',
-          'status': _legacyReceivableStatusFor(
+          'status': legacyReceivableStatusFor(
             economicStatus: ReceivableEconomicStatus.lost,
             visibilityStatus: asset.visibilityStatus,
           ).storageKey,
@@ -21442,7 +18940,7 @@ class AppRepository extends ChangeNotifier {
     if (!asset.isArchived) {
       throw StateError('只有已归档权益可以恢复');
     }
-    final status = _legacyReceivableStatusFor(
+    final status = legacyReceivableStatusFor(
       economicStatus: asset.economicStatus,
       visibilityStatus: AssetVisibilityStatus.active,
     );
@@ -21510,7 +19008,7 @@ class AppRepository extends ChangeNotifier {
       await txn.update(
         'receivable_assets',
         {
-          'status': _legacyReceivableStatusFor(
+          'status': legacyReceivableStatusFor(
             economicStatus: economicStatus,
             visibilityStatus: asset.visibilityStatus,
           ).storageKey,
@@ -22959,10 +20457,10 @@ class AppRepository extends ChangeNotifier {
         final rawVisibility = str(raw, 'visibility_status');
         final rawQuality = str(raw, 'inclusion_quality');
         final economicStatus = isLegacyStateFormat
-            ? _physicalEconomicFromLegacyStatus(legacyStatus)
+            ? physicalEconomicFromLegacyStatus(legacyStatus)
             : PhysicalAssetEconomicStatusX.fromStorage(rawEconomic);
         final usageStatus = isLegacyStateFormat
-            ? _physicalUsageFromLegacyStatus(legacyStatus)
+            ? physicalUsageFromLegacyStatus(legacyStatus)
             : PhysicalAssetUsageStatusX.fromStorage(rawUsage);
         final visibilityStatus = isLegacyStateFormat
             ? legacyStatus == PhysicalAssetStatus.archived
@@ -22984,7 +20482,7 @@ class AppRepository extends ChangeNotifier {
             : !validEconomic || !validUsage || !validVisibility || !validQuality
                 ? AssetInclusionQuality.needsReview
                 : AssetInclusionQualityX.fromStorage(rawQuality);
-        final status = _legacyPhysicalStatusFor(
+        final status = legacyPhysicalStatusFor(
           economicStatus: economicStatus,
           usageStatus: usageStatus,
           visibilityStatus: visibilityStatus,
@@ -23106,7 +20604,7 @@ class AppRepository extends ChangeNotifier {
         final rawVisibility = str(raw, 'visibility_status');
         final rawQuality = str(raw, 'inclusion_quality');
         final economicStatus = isLegacyStateFormat
-            ? _receivableEconomicFromLegacyStatus(legacyStatus)
+            ? receivableEconomicFromLegacyStatus(legacyStatus)
             : ReceivableEconomicStatusX.fromStorage(rawEconomic);
         final visibilityStatus = isLegacyStateFormat
             ? legacyStatus == ReceivableAssetStatus.archived
@@ -23126,7 +20624,7 @@ class AppRepository extends ChangeNotifier {
             : !validEconomic || !validVisibility || !validQuality
                 ? AssetInclusionQuality.needsReview
                 : AssetInclusionQualityX.fromStorage(rawQuality);
-        final status = _legacyReceivableStatusFor(
+        final status = legacyReceivableStatusFor(
           economicStatus: economicStatus,
           visibilityStatus: visibilityStatus,
         );

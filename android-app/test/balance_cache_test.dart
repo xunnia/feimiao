@@ -36,6 +36,43 @@ void main() {
     return repo;
   }
 
+  test(
+      'chat and display changes notify observers without invalidating financial caches',
+      () async {
+    final repo = await freshRepo();
+    final account = repo.accounts.first;
+    final balance = repo.accountBalanceResultOf(account);
+    final netWorth = repo.currentNetWorthResult();
+    final trend = repo.accountBalanceTrend(account, days: 7);
+    final financial = repo.financialRevision;
+    final revision = repo.dataRevision;
+    var notifications = 0;
+    repo.addListener(() => notifications++);
+    final chat = await repo.createChatSession(title: 'cache isolation');
+    await repo.renameChatSession(chat.id, 'renamed');
+    await repo.setChatSessionStarred(chat.id, true);
+    await repo.setProfileNickname('缓存测试');
+    await repo.setMoneyDecimalPlaces(1);
+    await repo.clearChatSessionMessages(chat.id);
+    expect(notifications, greaterThan(0));
+    expect(repo.dataRevision, greaterThan(revision));
+    expect(repo.chatRevision, greaterThan(0));
+    expect(repo.settingsRevision, greaterThan(0));
+    expect(repo.financialRevision, financial);
+    expect(identical(repo.accountBalanceResultOf(account), balance), isTrue);
+    expect(identical(repo.currentNetWorthResult(), netWorth), isTrue);
+    expect(
+        identical(repo.accountBalanceTrend(account, days: 7), trend), isTrue);
+    await repo.addTransaction(
+        kind: TransactionKind.expense,
+        amount: Decimal.fromInt(1),
+        accountId: account.id,
+        date: DateTime.now());
+    expect(repo.financialRevision, greaterThan(financial));
+    expect(identical(repo.accountBalanceResultOf(account), balance), isFalse);
+    await repo.closeForTest();
+  });
+
   test('① 连续两次读余额：第二次命中缓存，计数不增且返回同一对象', () async {
     final repo = await freshRepo();
     final accountId = await repo.addAccount(

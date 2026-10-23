@@ -32,6 +32,40 @@ void main() {
     );
   }
 
+  test('recovery inside an existing worker guard reuses its fence', () async {
+    final fence = fenceWithGenerations(['generation-1']);
+    final lease = await fence.acquire();
+    final result = await lease
+        .guard(
+          () => fence.withRecoveryBarrier(() async => 'recovered'),
+          readJobUuid: (_) async => null,
+        )
+        .timeout(const Duration(seconds: 3));
+    expect(result, 'recovered');
+    expect((await fence.acquire()).generation, lease.generation);
+  });
+
+  test('startup recovery waits for a concurrent restore to finish', () async {
+    final fence = fenceWithGenerations(['generation-1']);
+    final started = Completer<void>();
+    final release = Completer<void>();
+    final restoring = fence.withRestoreBarrier(() async {
+      started.complete();
+      await release.future;
+    });
+    await started.future;
+    var recovered = false;
+    final recovering = fence.withRecoveryBarrier(() async {
+      recovered = true;
+    });
+    await Future<void>.delayed(const Duration(milliseconds: 30));
+    expect(recovered, isFalse);
+    release.complete();
+    await restoring;
+    await recovering;
+    expect(recovered, isTrue);
+  });
+
   test('successful restore rotation invalidates an older report lease',
       () async {
     final fence = fenceWithGenerations(['generation-1', 'generation-2']);

@@ -7,6 +7,7 @@ import 'package:qingji/core/cloud/cloud_account.dart';
 import 'package:qingji/core/cloud/cloud_api.dart';
 import 'package:qingji/core/cloud/cloud_errors.dart';
 import 'package:qingji/core/cloud/cloud_session_store.dart';
+import 'session_test_store.dart';
 import 'package:qingji/core/cloud/profile_sync.dart';
 
 http.Response _json(int status, Object body, {Map<String, String>? headers}) =>
@@ -161,7 +162,7 @@ CloudAccount _account(_Server server, MemoryCloudSecretStore secrets,
       profileStore: profile,
       api: CloudApi(
         client: MockClient(server.handle),
-        store: CloudSessionStore(store: secrets),
+        store: testSessionStore(secrets),
         baseUrl: 'https://api.test/v1',
         deviceInfo: () async => const {},
       ),

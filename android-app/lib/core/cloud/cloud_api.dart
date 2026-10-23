@@ -96,16 +96,31 @@ class CloudApi {
   Future<void>? _refreshing;
 
   bool get hasSession => _tokens != null;
+  int get sessionGeneration => store.sessionGeneration;
+
+  int _beginSession() {
+    _tokens = null;
+    _refreshing = null;
+    return store.beginSession();
+  }
+
+  void _checkSession(int generation) {
+    if (generation != sessionGeneration) {
+      throw CloudApiException.sessionChanged();
+    }
+  }
 
   static String _normalizeBase(String base) =>
       base.endsWith('/') ? base.substring(0, base.length - 1) : base;
 
   /// 启动时从安全存储恢复登录状态。
   Future<bool> restore() async {
+    final generation = _beginSession();
     final tokens = await store.readTokens();
+    _checkSession(generation);
     if (tokens == null) return false;
     if (!tokens.refreshExpiresAt.isAfter(_now())) {
-      await store.clearSession();
+      await store.clearSession(generation: generation);
       return false;
     }
     _tokens = tokens;
@@ -138,33 +153,44 @@ class CloudApi {
   /// 验证码登录（新邮箱自动注册）。设备超限时抛 `DEVICE_LIMIT`，
   /// 用 [deviceLimitOf] 取出设备列表。
   Future<LoginResult> verifyOtp(String email, String code) async {
-    final response = await _request('POST', '/auth/otp/verify', body: {
-      'email': email.trim(),
-      'code': code.trim(),
-      'device': await _deviceBody(),
-    });
-    return _adoptLogin(response);
+    final generation = _beginSession();
+    await store.clearSession(generation: generation);
+    final response = await _request('POST', '/auth/otp/verify',
+        body: {
+          'email': email.trim(),
+          'code': code.trim(),
+          'device': await _deviceBody(),
+        },
+        generation: generation);
+    return _adoptLogin(response, generation);
   }
 
   Future<LoginResult> passwordLogin(String email, String password) async {
-    final response = await _request('POST', '/auth/password/login', body: {
-      'email': email.trim(),
-      'password': password,
-      'device': await _deviceBody(),
-    });
-    return _adoptLogin(response);
+    final generation = _beginSession();
+    await store.clearSession(generation: generation);
+    final response = await _request('POST', '/auth/password/login',
+        body: {
+          'email': email.trim(),
+          'password': password,
+          'device': await _deviceBody(),
+        },
+        generation: generation);
+    return _adoptLogin(response, generation);
   }
 
   Future<LoginResult> resolveDeviceLimit(
     String loginTicket,
     List<String> revokeDeviceIds,
   ) async {
-    final response =
-        await _request('POST', '/auth/device-limit/resolve', body: {
-      'login_ticket': loginTicket,
-      'revoke_device_ids': revokeDeviceIds,
-    });
-    return _adoptLogin(response);
+    final generation = _beginSession();
+    await store.clearSession(generation: generation);
+    final response = await _request('POST', '/auth/device-limit/resolve',
+        body: {
+          'login_ticket': loginTicket,
+          'revoke_device_ids': revokeDeviceIds,
+        },
+        generation: generation);
+    return _adoptLogin(response, generation);
   }
 
   DeviceLimitInfo? deviceLimitOf(CloudApiException error) =>
@@ -172,16 +198,23 @@ class CloudApi {
           ? DeviceLimitInfo.fromDetails(error.details, _now())
           : null;
 
-  /// 退出登录。先通知服务端（失败也不管），本机一定清掉。
+  /// 先持久记录退出意图；本机清理失败仍尝试撤销旧服务端会话。
   Future<void> logout() async {
-    if (_tokens != null) {
-      try {
-        await _request('POST', '/auth/logout', auth: true, endOnFailure: false);
-      } on CloudApiException {
-        // 断网或令牌已失效：服务端的会话会自己过期，本机照样退出。
+    final previous = _tokens;
+    final generation = _beginSession();
+    try {
+      await store.clearSession(generation: generation);
+    } finally {
+      if (previous != null) {
+        try {
+          // 只撤销退出时的旧会话，不能等待后读取新账号令牌或触发刷新。
+          await _send('POST', '/auth/logout', previous.accessToken, null,
+              const {}, CloudSessionStore.newUuidV4());
+        } on CloudApiException {
+          // 断网或令牌已失效：服务端的会话会自己过期，本机照样退出。
+        }
       }
     }
-    await _clearLocal();
   }
 
   // -------------------------------------------------------------------------
@@ -239,9 +272,10 @@ class CloudApi {
 
   /// 让某台设备下线。如果是本机，等于退出登录。
   Future<void> revokeDevice(CloudDevice device) async {
+    final generation = sessionGeneration;
     await _request('DELETE', '/me/devices/${Uri.encodeComponent(device.id)}',
         auth: true);
-    if (device.isCurrent) await _clearLocal();
+    if (device.isCurrent) await _clearLocal(generation);
   }
 
   Future<DeletionStatus> requestDeletion(String otpCode) async {
@@ -294,27 +328,39 @@ class CloudApi {
   // 内部
   // -------------------------------------------------------------------------
 
-  Future<LoginResult> _adoptLogin(_Response response) async {
+  Future<LoginResult> _adoptLogin(_Response response, int generation) async {
     final result = LoginResult.fromJson(response.json, _now());
-    if (!result.tokens.isUsable) throw CloudApiException.unexpected(response.status);
-    await _adoptTokens(result.tokens);
+    if (!result.tokens.isUsable) {
+      throw CloudApiException.unexpected(response.status);
+    }
+    await _adoptTokens(result.tokens, generation);
     return result;
   }
 
-  Future<void> _adoptTokens(CloudTokens tokens) async {
+  Future<void> _adoptTokens(CloudTokens tokens, int generation) async {
+    _checkSession(generation);
+    await store.writeTokens(tokens, generation: generation);
+    _checkSession(generation);
     _tokens = tokens;
-    await store.writeTokens(tokens);
   }
 
-  Future<void> _clearLocal() async {
-    _tokens = null;
-    await store.clearSession();
+  Future<int> _clearLocal(int generation) async {
+    _checkSession(generation);
+    final clearedGeneration = _beginSession();
+    await store.clearSession(generation: clearedGeneration);
+    return clearedGeneration;
   }
 
-  Future<void> _endSession(CloudApiException reason) async {
+  Future<void> _endSession(CloudApiException reason, int generation) async {
+    _checkSession(generation);
     if (_tokens == null) return;
-    await _clearLocal();
-    onSessionEnded?.call(reason);
+    final clearedGeneration = _beginSession();
+    try {
+      await store.clearSession(generation: clearedGeneration);
+    } finally {
+      // 安全存储清理失败也不能继续显示已登录；若已重新登录，则不再发旧下线通知。
+      if (clearedGeneration == sessionGeneration) onSessionEnded?.call(reason);
+    }
   }
 
   Future<Map<String, Object?>> _deviceBody() async {
@@ -343,32 +389,46 @@ class CloudApi {
     Object? body,
     Map<String, String> headers = const {},
     bool endOnFailure = true,
+    int? generation,
   }) async {
-    if (auth) await _ensureFreshAccess();
+    final expected = generation ?? sessionGeneration;
+    _checkSession(expected);
+    if (auth) await _ensureFreshAccess(expected);
+    _checkSession(expected);
     final requestId = method == 'GET' ? null : CloudSessionStore.newUuidV4();
     final sentWith = _tokens?.accessToken;
-    var response = await _send(method, path, auth, body, headers, requestId);
+    var response = await _send(
+        method, path, auth ? sentWith : null, body, headers, requestId,
+        generation: expected);
+    _checkSession(expected);
 
     if (auth && response.status == 401) {
-      final error = CloudApiException.fromResponse(response.status, response.body);
+      final error =
+          CloudApiException.fromResponse(response.status, response.body);
       final canRefresh = error.code == CloudErrorCode.unauthenticated ||
           (error.code == CloudErrorCode.unknown &&
               error.action == CloudErrorAction.refreshOrLogin);
       if (canRefresh && _tokens != null) {
-        await _refreshOnce(sentWith);
-        response = await _send(method, path, auth, body, headers, requestId);
+        await _refreshOnce(sentWith, expected);
+        _checkSession(expected);
+        response = await _send(
+            method, path, _tokens?.accessToken, body, headers, requestId,
+            generation: expected);
+        _checkSession(expected);
       }
     }
 
     if (response.ok || response.status == 304) return response;
-    final error = CloudApiException.fromResponse(response.status, response.body);
+    final error =
+        CloudApiException.fromResponse(response.status, response.body);
     if (auth && endOnFailure && (error.endsSession || response.status == 401)) {
-      await _endSession(error);
+      await _endSession(error, expected);
     }
     throw error;
   }
 
-  Future<void> _ensureFreshAccess() async {
+  Future<void> _ensureFreshAccess(int generation) async {
+    _checkSession(generation);
     final tokens = _tokens;
     if (tokens == null) {
       throw CloudApiException(
@@ -388,17 +448,20 @@ class CloudApi {
         action: CloudErrorAction.login,
         message: '登录已过期，请重新登录',
       );
-      await _endSession(reason);
+      await _endSession(reason, generation);
       throw reason;
     }
-    if (tokens.accessExpiresAt.subtract(CloudConfig.refreshSkew).isBefore(now)) {
-      await _refreshOnce(tokens.accessToken);
+    if (tokens.accessExpiresAt
+        .subtract(CloudConfig.refreshSkew)
+        .isBefore(now)) {
+      await _refreshOnce(tokens.accessToken, generation);
     }
   }
 
   /// 同一时间只刷新一次。[staleAccess] 是失败请求用的令牌：
   /// 如果别的请求已经换过新令牌，就不用再刷新了。
-  Future<void> _refreshOnce(String? staleAccess) {
+  Future<void> _refreshOnce(String? staleAccess, int generation) {
+    _checkSession(generation);
     final inFlight = _refreshing;
     if (inFlight != null) return inFlight;
     final current = _tokens;
@@ -406,22 +469,30 @@ class CloudApi {
     if (staleAccess != null && current.accessToken != staleAccess) {
       return Future.value();
     }
-    final future = _doRefresh(current).whenComplete(() => _refreshing = null);
+    late final Future<void> future;
+    future = _doRefresh(current, generation).whenComplete(() {
+      if (identical(_refreshing, future)) _refreshing = null;
+    });
     _refreshing = future;
     return future;
   }
 
-  Future<void> _doRefresh(CloudTokens current) async {
-    final response = await _send('POST', '/auth/refresh', false,
-        {'refresh_token': current.refreshToken}, const {}, null);
+  Future<void> _doRefresh(CloudTokens current, int generation) async {
+    final response = await _send('POST', '/auth/refresh', null,
+        {'refresh_token': current.refreshToken}, const {}, null,
+        generation: generation);
+    _checkSession(generation);
     if (response.ok) {
-      await _adoptTokens(CloudTokens.fromResponse(response.json, _now()));
+      final tokens = CloudTokens.fromResponse(response.json, _now());
+      if (!tokens.isUsable) throw CloudApiException.unexpected(response.status);
+      await _adoptTokens(tokens, generation);
       return;
     }
-    final error = CloudApiException.fromResponse(response.status, response.body);
+    final error =
+        CloudApiException.fromResponse(response.status, response.body);
     // 只有服务端明确说这个登录不能用了才下线；5xx 之类保留登录，下次再试。
     if (response.status == 401 || response.status == 403 || error.endsSession) {
-      await _endSession(error);
+      await _endSession(error, generation);
     }
     throw error;
   }
@@ -429,20 +500,22 @@ class CloudApi {
   Future<_Response> _send(
     String method,
     String path,
-    bool auth,
+    String? accessToken,
     Object? body,
     Map<String, String> extraHeaders,
-    String? requestId,
-  ) async {
+    String? requestId, {
+    int? generation,
+  }) async {
+    final installId = await store.installId();
+    if (generation != null) _checkSession(generation);
     final request = http.Request(method, Uri.parse('$_base$path'));
     request.headers.addAll({
       'Accept': 'application/json',
-      'X-Install-Id': await store.installId(),
+      'X-Install-Id': installId,
       'X-Platform': CloudConfig.platform,
       'X-App-Version': CloudConfig.appVersion,
       if (requestId != null) 'X-Request-Id': requestId,
-      if (auth && _tokens != null)
-        'Authorization': 'Bearer ${_tokens!.accessToken}',
+      if (accessToken != null) 'Authorization': 'Bearer $accessToken',
       ...extraHeaders,
     });
     if (body != null) {
