@@ -41,7 +41,7 @@ struct AIPrivacyConsentSheet: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("暂不") { dismiss() }
-                        .liquidGlassPillControl(horizontalPadding: 12, minHeight: 40)
+                        .nativeToolbarControl()
                 }
             }
         }

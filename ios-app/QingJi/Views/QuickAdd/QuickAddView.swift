@@ -719,7 +719,7 @@ private struct ManualDatePickerSheet: View {
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("完成") { dismiss() }
-                        .liquidGlassPillControl(horizontalPadding: 12, minHeight: 40)
+                        .nativeToolbarControl()
                 }
             }
         }
@@ -841,7 +841,7 @@ private struct QuickAddDetailsSheet: View {
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("完成") { dismiss() }
-                        .liquidGlassPillControl(horizontalPadding: 12, minHeight: 40)
+                        .nativeToolbarControl()
                 }
             }
             .onChange(of: photoItem) { _, item in

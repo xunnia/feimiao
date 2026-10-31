@@ -101,11 +101,9 @@ struct PhysicalAssetDetailView: View {
                         Image(systemName: "chevron.left")
                             .foregroundStyle(.primary)
                     }
-                    .font(.system(size: 20, weight: .medium))
-                    .liquidGlassCircleControl(size: 44, subtle: true)
+                    .nativeToolbarControl()
                     .accessibilityLabel("返回")
                 }
-                .sharedBackgroundVisibility(.hidden)
                 ToolbarItem(placement: .topBarTrailing) {
                     Menu {
                         actionMenu
@@ -113,12 +111,10 @@ struct PhysicalAssetDetailView: View {
                         Image(systemName: "ellipsis")
                             .foregroundStyle(.primary)
                     }
-                    .font(.system(size: 20, weight: .medium))
-                    .liquidGlassCircleControl(size: 44, subtle: true)
+                    .nativeToolbarControl()
                     .tint(Color.primary)
                     .accessibilityLabel("更多资产操作")
                 }
-                .sharedBackgroundVisibility(.hidden)
             }
             .sheet(item: $activeSheet) { sheet in
                 switch sheet {
@@ -635,15 +631,13 @@ private struct AssetValueUpdateSheet: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("取消") { dismiss() }
-                        .liquidGlassPillControl(horizontalPadding: 12, minHeight: 44)
+                        .nativeToolbarControl()
                 }
-                .sharedBackgroundVisibility(.hidden)
                 ToolbarItem(placement: .confirmationAction) {
                     Button("保存") { save() }
-                        .liquidGlassPillControl(horizontalPadding: 12, minHeight: 44)
+                        .nativeToolbarControl()
                         .disabled(value == nil || value! < 0)
                 }
-                .sharedBackgroundVisibility(.hidden)
             }
             .alert("无法保存", isPresented: Binding(
                 get: { errorMessage != nil },
@@ -726,15 +720,13 @@ private struct AssetSaleSheet: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("取消") { dismiss() }
-                        .liquidGlassPillControl(horizontalPadding: 12, minHeight: 44)
+                        .nativeToolbarControl()
                 }
-                .sharedBackgroundVisibility(.hidden)
                 ToolbarItem(placement: .confirmationAction) {
                     Button("确认出售") { save() }
-                        .liquidGlassPillControl(horizontalPadding: 12, minHeight: 44)
+                        .nativeToolbarControl()
                         .disabled(!valid)
                 }
-                .sharedBackgroundVisibility(.hidden)
             }
             .alert("无法出售", isPresented: Binding(
                 get: { errorMessage != nil },
@@ -836,9 +828,8 @@ private struct AssetCostLinkSheet: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("完成") { dismiss() }
-                        .liquidGlassPillControl(horizontalPadding: 12, minHeight: 44)
+                        .nativeToolbarControl()
                 }
-                .sharedBackgroundVisibility(.hidden)
             }
             .alert("无法关联", isPresented: Binding(
                 get: { errorMessage != nil },
@@ -917,14 +908,12 @@ private struct AssetEvidenceSheet: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("取消") { dismiss() }
-                        .liquidGlassPillControl(horizontalPadding: 12, minHeight: 44)
+                        .nativeToolbarControl()
                 }
-                .sharedBackgroundVisibility(.hidden)
                 ToolbarItem(placement: .confirmationAction) {
                     Button("保存") { save() }
-                        .liquidGlassPillControl(horizontalPadding: 12, minHeight: 44)
+                        .nativeToolbarControl()
                 }
-                .sharedBackgroundVisibility(.hidden)
             }
             .onChange(of: photoItem) { _, item in
                 if let item { importPhoto(item) }
@@ -1079,15 +1068,13 @@ private struct AssetDepreciationSheet: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("取消") { dismiss() }
-                        .liquidGlassPillControl(horizontalPadding: 12, minHeight: 44)
+                        .nativeToolbarControl()
                 }
-                .sharedBackgroundVisibility(.hidden)
                 ToolbarItem(placement: .confirmationAction) {
                     Button("保存") { save() }
-                        .liquidGlassPillControl(horizontalPadding: 12, minHeight: 44)
+                        .nativeToolbarControl()
                         .disabled(!valid)
                 }
-                .sharedBackgroundVisibility(.hidden)
             }
             .alert("无法保存", isPresented: Binding(
                 get: { errorMessage != nil },

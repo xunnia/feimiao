@@ -187,6 +187,7 @@ struct AssistantSourcesSheet: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .topBarTrailing) {
                 Button("完成") { dismiss() }
+                    .nativeToolbarControl()
             }}
             .liquidGlassChrome()
         }

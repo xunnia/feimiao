@@ -96,21 +96,18 @@ struct AccountsView: View {
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
                 EditButton()
-                    .liquidGlassPillControl(horizontalPadding: 12, minHeight: 44, subtle: true)
+                    .nativeToolbarControl()
             }
-            .sharedBackgroundVisibility(.hidden)
             ToolbarItem(placement: .topBarTrailing) {
                 Button {
                     showAddSheet = true
                 } label: {
                     Image(systemName: "plus")
                 }
-                .font(.system(size: 20, weight: .medium))
                 .foregroundStyle(.primary)
-                .liquidGlassCircleControl(size: 44, subtle: true)
+                .nativeToolbarControl()
                 .accessibilityLabel("新建账户")
             }
-            .sharedBackgroundVisibility(.hidden)
         }
         .sheet(isPresented: $showAddSheet) {
             AccountEditorSheet(
@@ -326,15 +323,13 @@ struct AccountEditorSheet: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    LiquidGlassIconButton(systemName: "xmark", accessibilityLabel: "取消", size: 44, subtle: true) { dismiss() }
+                    ToolbarIconButton(systemName: "xmark", accessibilityLabel: "取消") { dismiss() }
                 }
-                .sharedBackgroundVisibility(.hidden)
                 ToolbarItem(placement: .confirmationAction) {
                     Button(account == nil ? "创建" : "保存") { save() }
                         .disabled(!canSave)
-                        .liquidGlassPillControl(horizontalPadding: 12, minHeight: 44, subtle: true)
+                        .nativeToolbarControl()
                 }
-                .sharedBackgroundVisibility(.hidden)
             }
             .alert("无法保存", isPresented: Binding(
                 get: { errorMessage != nil },

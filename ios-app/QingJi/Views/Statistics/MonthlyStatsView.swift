@@ -192,11 +192,12 @@ struct MonthlyStatsView: View {
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Button { showCardLibrary = true } label: { Image(systemName: "plus") }
-                    .liquidGlassCircleControl(size: 44)
+                    .nativeToolbarControl()
                     .accessibilityLabel("自定义图表")
             }
-            ToolbarItem(placement: .topBarTrailing) {
-                if books.count > 1 {
+            if books.count > 1 {
+                ToolbarSpacer(.fixed, placement: .topBarTrailing)
+                ToolbarItem(placement: .topBarTrailing) {
                     Button { showBookPicker = true } label: {
                         HStack(spacing: 4) {
                             Image(systemName: "book.closed")
@@ -206,7 +207,7 @@ struct MonthlyStatsView: View {
                         .font(.caption)
                         .foregroundStyle(.primary)
                     }
-                    .liquidGlassPillControl(horizontalPadding: 10, minWidth: 80)
+                    .nativeToolbarControl()
                     .accessibilityLabel("当前账本：\(selectedBookName)")
                     .popover(isPresented: $showBookPicker,
                              attachmentAnchor: .point(.topTrailing), arrowEdge: .top) {

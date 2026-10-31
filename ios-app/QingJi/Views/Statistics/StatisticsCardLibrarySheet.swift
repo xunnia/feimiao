@@ -36,8 +36,7 @@ struct StatisticsCardLibrarySheet: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
-                    Button { dismiss() } label: { Image(systemName: "xmark") }
-                        .accessibilityLabel("关闭")
+                    ToolbarIconButton(systemName: "xmark", accessibilityLabel: "关闭") { dismiss() }
                 }
             }
         }

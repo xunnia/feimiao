@@ -54,7 +54,7 @@ struct BooksView: View {
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
                 EditButton()
-                    .liquidGlassPillControl(horizontalPadding: 12, minHeight: 40)
+                    .nativeToolbarControl()
             }
             ToolbarItem(placement: .topBarTrailing) {
                 Button {
@@ -62,7 +62,7 @@ struct BooksView: View {
                 } label: {
                     Image(systemName: "plus")
                 }
-                .liquidGlassCircleControl()
+                .nativeToolbarControl()
                 .accessibilityLabel("新建账本")
             }
         }
@@ -238,12 +238,12 @@ struct BookEditorSheet: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("取消") { dismiss() }
-                        .liquidGlassPillControl(horizontalPadding: 12, minHeight: 40)
+                        .nativeToolbarControl()
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button(book == nil ? "创建" : "保存") { save() }
                         .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                        .liquidGlassPillControl(horizontalPadding: 12, minHeight: 40)
+                        .nativeToolbarControl()
                 }
             }
             .alert("无法保存", isPresented: Binding(

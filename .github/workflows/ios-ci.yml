@@ -173,6 +173,9 @@ jobs:
           python3 ios-app/tools/check_route_manifest.py \
             --manifest ios-app/tools/screenshot_manifest.json \
             --workflow .github/workflows/ios-ci.yml
+      - name: Validate native toolbar glass
+        run: |
+          python3 ios-app/tools/test_toolbar_native_glass.py
       - name: Select Xcode 27 (fallback to Xcode 26)
         run: |
           XCODE_APP=$(ls -d /Applications/Xcode_27*.app 2>/dev/null | sort -V | tail -n 1)

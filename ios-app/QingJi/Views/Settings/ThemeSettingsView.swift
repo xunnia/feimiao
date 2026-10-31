@@ -81,7 +81,7 @@ struct ThemeSettingsView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
-                LiquidGlassIconButton(systemName: "arrow.counterclockwise", accessibilityLabel: "恢复默认", size: 32) {
+                ToolbarIconButton(systemName: "arrow.counterclockwise", accessibilityLabel: "恢复默认") {
                     presetRaw = AppThemePreset.warm.rawValue
                     intensity = 1
                     cardAlpha = AppThemePreferences.defaultCardAlpha

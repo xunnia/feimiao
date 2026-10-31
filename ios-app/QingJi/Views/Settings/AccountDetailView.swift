@@ -180,7 +180,7 @@ struct AccountDetailView: View {
                 } label: {
                     Image(systemName: "ellipsis")
                 }
-                .liquidGlassCircleControl()
+                .nativeToolbarControl()
                 .accessibilityLabel("账户操作")
             }
         }
@@ -578,12 +578,12 @@ private struct AccountCalibrationSheet: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("取消") { dismiss() }
-                        .liquidGlassPillControl(horizontalPadding: 12, minHeight: 40)
+                        .nativeToolbarControl()
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("保存") { save() }
                         .disabled(actualBalance == nil)
-                        .liquidGlassPillControl(horizontalPadding: 12, minHeight: 40)
+                        .nativeToolbarControl()
                 }
             }
             .alert("无法保存", isPresented: Binding(

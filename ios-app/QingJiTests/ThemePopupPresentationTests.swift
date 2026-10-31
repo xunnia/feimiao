@@ -148,10 +148,11 @@ final class ThemePopupPresentationTests: XCTestCase {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    LiquidGlassIconButton(systemName: "xmark", accessibilityLabel: "取消", size: 36) {}
+                    ToolbarIconButton(systemName: "xmark", accessibilityLabel: "取消") {}
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    LiquidGlassPillButton("保存") {}
+                    Button("保存") {}
+                        .nativeToolbarControl()
                 }
             }
         }

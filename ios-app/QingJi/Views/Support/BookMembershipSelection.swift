@@ -47,9 +47,10 @@ struct BookMembershipSelectionSheet: View {
                 .navigationTitle("选择账本")
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
-                    ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } }
+                    ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() }.nativeToolbarControl() }
                     ToolbarItem(placement: .confirmationAction) {
                         Button("完成") { selection = draft; dismiss() }
+                            .nativeToolbarControl()
                     }
                 }
         }
@@ -158,11 +159,11 @@ struct BookMembershipBulkSheet: View {
             .navigationTitle(removing ? "移出已有账单" : "添加已有账单")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } }
+                ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() }.nativeToolbarControl() }
                 ToolbarItem(placement: .confirmationAction) {
                     Button(removing ? "移除" : "添加") {
                         if removing { confirmRemoval = true } else { save() }
-                    }.disabled(bookID == nil || selected.isEmpty)
+                    }.disabled(bookID == nil || selected.isEmpty).nativeToolbarControl()
                 }
             }
             .onAppear { if bookID == nil { bookID = books.first { !$0.isDefault }?.stableID } }

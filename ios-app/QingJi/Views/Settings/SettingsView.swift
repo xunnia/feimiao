@@ -332,7 +332,7 @@ private struct ProfileEditorSheet: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("取消") { dismiss() }
-                        .liquidGlassPillControl(horizontalPadding: 12, minHeight: 40)
+                        .nativeToolbarControl()
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("保存") {
@@ -340,7 +340,7 @@ private struct ProfileEditorSheet: View {
                         avatarPath = draftAvatarPath
                         dismiss()
                     }
-                    .liquidGlassPillControl(horizontalPadding: 12, minHeight: 40)
+                    .nativeToolbarControl()
                 }
             }
             .onChange(of: photoItem) { _, item in

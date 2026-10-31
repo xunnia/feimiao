@@ -263,7 +263,7 @@ struct AIReportScheduleView: View {
                 } label: {
                     Image(systemName: "plus")
                 }
-                .liquidGlassCircleControl()
+                .nativeToolbarControl()
                 .accessibilityLabel("添加每月报告")
             }
         }

@@ -61,11 +61,9 @@ struct LiabilitiesView: View {
                     Image(systemName: "plus")
                         .foregroundStyle(.primary)
                 }
-                .font(.system(size: 20, weight: .medium))
-                .liquidGlassCircleControl(size: 44, subtle: true)
+                .nativeToolbarControl()
                 .accessibilityLabel("新建负债")
             }
-            .sharedBackgroundVisibility(.hidden)
         }
         .sheet(isPresented: $showEditor) {
             LiabilityEditor(profile: nil)
@@ -350,15 +348,13 @@ private struct LiabilityEditor: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    LiquidGlassIconButton(systemName: "xmark", accessibilityLabel: "取消", size: 44, subtle: true) { dismiss() }
+                    ToolbarIconButton(systemName: "xmark", accessibilityLabel: "取消") { dismiss() }
                 }
-                .sharedBackgroundVisibility(.hidden)
                 ToolbarItem(placement: .confirmationAction) {
                     Button(profile == nil ? "创建" : "保存") { save() }
                         .disabled(!canSave)
-                        .liquidGlassPillControl(horizontalPadding: 12, minHeight: 44, subtle: true)
+                        .nativeToolbarControl()
                 }
-                .sharedBackgroundVisibility(.hidden)
             }
             .onAppear {
                 if accountID == nil { accountID = accounts.first?.stableID }
@@ -493,15 +489,13 @@ private struct LiabilityRepaymentSheet: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    LiquidGlassIconButton(systemName: "xmark", accessibilityLabel: "取消", size: 44, subtle: true) { dismiss() }
+                    ToolbarIconButton(systemName: "xmark", accessibilityLabel: "取消") { dismiss() }
                 }
-                .sharedBackgroundVisibility(.hidden)
                 ToolbarItem(placement: .confirmationAction) {
                     Button("确认") { repay() }
                         .disabled(amount == nil || amount! <= 0 || fromAccount == nil)
-                        .liquidGlassPillControl(horizontalPadding: 12, minHeight: 44, subtle: true)
+                        .nativeToolbarControl()
                 }
-                .sharedBackgroundVisibility(.hidden)
             }
             .onAppear {
                 if amountText == "\(profile.currentPrincipal)", let actualDebtAmount {

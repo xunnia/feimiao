@@ -71,7 +71,7 @@ struct SavingsGoalsView: View {
                 Button { showEditor = true } label: {
                     Image(systemName: "plus")
                 }
-                .liquidGlassCircleControl()
+                .nativeToolbarControl()
                 .accessibilityLabel("新建存钱目标")
             }
         }
@@ -200,10 +200,12 @@ private struct SavingsGoalEditor: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("取消") { dismiss() }
+                        .nativeToolbarControl()
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button(goal == nil ? "创建" : "保存") { save() }
                         .disabled(!canSave)
+                        .nativeToolbarControl()
                 }
             }
             .alert("无法保存", isPresented: Binding(

@@ -69,15 +69,13 @@ private struct OffsetSheet: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    LiquidGlassIconButton(systemName: "xmark", accessibilityLabel: "取消", size: 44, subtle: true) { dismiss() }
+                    ToolbarIconButton(systemName: "xmark", accessibilityLabel: "取消") { dismiss() }
                 }
-                .sharedBackgroundVisibility(.hidden)
                 ToolbarItem(placement: .confirmationAction) {
                     Button("确认") { save() }
                         .disabled(amount == nil || amount! <= 0)
-                        .liquidGlassPillControl(horizontalPadding: 12, minHeight: 44, subtle: true)
+                        .nativeToolbarControl()
                 }
-                .sharedBackgroundVisibility(.hidden)
             }
             .onAppear {
                 if let status = try? LedgerStore.refundStatus(for: original, in: context) {
@@ -350,15 +348,13 @@ struct EditTransactionSheet: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    LiquidGlassIconButton(systemName: "xmark", accessibilityLabel: "取消", size: 44, subtle: true) { dismiss() }
+                    ToolbarIconButton(systemName: "xmark", accessibilityLabel: "取消") { dismiss() }
                 }
-                .sharedBackgroundVisibility(.hidden)
                 ToolbarItem(placement: .confirmationAction) {
                     Button("保存") { save() }
                         .disabled(parsedAmount == nil || parsedAmount! <= 0)
-                        .liquidGlassPillControl(horizontalPadding: 12, minHeight: 44, subtle: true)
+                        .nativeToolbarControl()
                 }
-                .sharedBackgroundVisibility(.hidden)
             }
             .onAppear(perform: load)
             .onChange(of: photoItem) { _, item in

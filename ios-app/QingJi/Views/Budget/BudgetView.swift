@@ -57,9 +57,9 @@ struct BudgetView: View {
                 ToolbarItem(placement: .topBarTrailing) {
                     bookMenu(compact: Self.usesCompactBookControl(width: geometry.size.width, typeSize: typeSize))
                 }
-                .sharedBackgroundVisibility(.hidden)
+                ToolbarSpacer(.fixed, placement: .topBarTrailing)
                 ToolbarItem(placement: .topBarTrailing) {
-                    LiquidGlassIconButton(systemName: "plus", accessibilityLabel: "新增预算", size: 44, subtle: true) {
+                    ToolbarIconButton(systemName: "plus", accessibilityLabel: "新增预算") {
                         openEditor(bookID: snapshot.bookID, record: nil, hasRules: !liveRecords(snapshot.bookID).isEmpty)
                     }
                     .foregroundStyle(Color.primary)
@@ -67,7 +67,6 @@ struct BudgetView: View {
                     .accessibilityLabel("新增预算")
                     .accessibilityIdentifier("budget-add-rule")
                 }
-                .sharedBackgroundVisibility(.hidden)
             }
         }
         .sheet(item: $editor) { target in
@@ -105,7 +104,6 @@ struct BudgetView: View {
             .foregroundStyle(.primary)
         }
         .tint(Color.primary)
-        .liquidGlassPillControl(horizontalPadding: 10, minHeight: 44, subtle: true)
         .accessibilityLabel("当前账本：\(bookName)")
         .accessibilityIdentifier("budget-book-chip")
     }

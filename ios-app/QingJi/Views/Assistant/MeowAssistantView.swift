@@ -78,28 +78,28 @@ struct MeowAssistantView: View {
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     Button("完成") { dismiss() }
-                        .liquidGlassPillControl(horizontalPadding: 12, minHeight: 40)
+                        .nativeToolbarControl()
                 }
                 ToolbarItem(placement: .topBarTrailing) {
-                    GlassEffectContainer(spacing: 8) {
-                        HStack(spacing: 8) {
-                            modelMenu
-                            NavigationLink {
-                                AIChatsView()
-                            } label: {
-                                Image(systemName: "bubble.left.and.bubble.right")
-                            }
-                            .liquidGlassCircleControl(size: 44)
-                            .accessibilityLabel("Chats")
-                            NavigationLink {
-                                AIProviderSettingsView()
-                            } label: {
-                                Image(systemName: "gearshape")
-                            }
-                            .liquidGlassCircleControl(size: 44)
-                            .accessibilityLabel("AI 设置")
-                        }
+                    modelMenu
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    NavigationLink {
+                        AIChatsView()
+                    } label: {
+                        Image(systemName: "bubble.left.and.bubble.right")
                     }
+                    .nativeToolbarControl()
+                    .accessibilityLabel("Chats")
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    NavigationLink {
+                        AIProviderSettingsView()
+                    } label: {
+                        Image(systemName: "gearshape")
+                    }
+                    .nativeToolbarControl()
+                    .accessibilityLabel("AI 设置")
                 }
             }
             .task {
@@ -177,7 +177,7 @@ struct MeowAssistantView: View {
         } label: {
             Image(systemName: "slider.horizontal.3")
         }
-        .liquidGlassCircleControl(size: 44)
+        .nativeToolbarControl()
         .accessibilityLabel(providerStore.selectedAccount.map {
             "\($0.displayName) · \($0.model) · \($0.effort.label)"
         } ?? "选择 AI 模型")
@@ -1037,6 +1037,7 @@ private struct AssistantMessageBubble: View {
                     .navigationBarTitleDisplayMode(.inline)
                     .toolbar { ToolbarItem(placement: .topBarTrailing) {
                         Button("完成") { selectText = false }
+                            .nativeToolbarControl()
                     }}
                     .liquidGlassChrome()
                 }

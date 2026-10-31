@@ -93,7 +93,7 @@ struct CategoriesView: View {
                 } label: {
                     Image(systemName: "arrow.up.arrow.down")
                 }
-                .liquidGlassCircleControl()
+                .nativeToolbarControl()
                 .accessibilityLabel("切换收支类型")
             }
             ToolbarItem(placement: .topBarTrailing) {
@@ -104,7 +104,7 @@ struct CategoriesView: View {
                 } label: {
                     Image(systemName: "plus")
                 }
-                .liquidGlassCircleControl()
+                .nativeToolbarControl()
                 .accessibilityLabel("新建分类")
             }
             ToolbarItem(placement: .topBarTrailing) {
@@ -113,7 +113,7 @@ struct CategoriesView: View {
                 } label: {
                     Image(systemName: "paintpalette")
                 }
-                .liquidGlassCircleControl()
+                .nativeToolbarControl()
                 .accessibilityLabel("图标样式")
             }
         }
@@ -374,12 +374,12 @@ private struct CategoryEditorSheet: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("取消") { dismiss() }
-                        .liquidGlassPillControl(horizontalPadding: 12, minHeight: 40)
+                        .nativeToolbarControl()
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button(editing == nil ? "创建" : "保存") { save() }
                         .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                        .liquidGlassPillControl(horizontalPadding: 12, minHeight: 40)
+                        .nativeToolbarControl()
                 }
             }
             .alert("无法保存", isPresented: Binding(
@@ -447,7 +447,7 @@ private struct CategoryMergeSheet: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("取消") { dismiss() }
-                        .liquidGlassPillControl(horizontalPadding: 12, minHeight: 40)
+                        .nativeToolbarControl()
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("合并") {
@@ -456,7 +456,7 @@ private struct CategoryMergeSheet: View {
                         dismiss()
                     }
                     .disabled(targetKey.isEmpty)
-                    .liquidGlassPillControl(horizontalPadding: 12, minHeight: 40)
+                    .nativeToolbarControl()
                 }
             }
             .onAppear {
@@ -520,14 +520,14 @@ private struct CategoryIconStyleSheet: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("取消") { dismiss() }
-                        .liquidGlassPillControl(horizontalPadding: 12, minHeight: 40)
+                        .nativeToolbarControl()
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("保存") {
                         UserDefaults.standard.set(selectedRaw, forKey: "qingji.categoryIconStyle")
                         dismiss()
                     }
-                    .liquidGlassPillControl(horizontalPadding: 12, minHeight: 40)
+                    .nativeToolbarControl()
                 }
             }
         }

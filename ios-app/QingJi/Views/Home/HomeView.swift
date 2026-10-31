@@ -128,10 +128,9 @@ struct HomeView: View {
                         onOpenDrawer?()
                     } label: {
                         Image(systemName: "line.3.horizontal")
-                            .font(.title3)
                             .foregroundStyle(.primary)
                     }
-                    .liquidGlassCircleControl()
+                    .nativeToolbarControl()
                     .accessibilityLabel("打开菜单")
                 }
             ToolbarItem(placement: .topBarTrailing) {
@@ -139,12 +138,12 @@ struct HomeView: View {
                     router.selectedTab = .search
                 } label: {
                     Image(systemName: "magnifyingglass")
-                        .font(.title3)
                         .foregroundStyle(.primary)
                 }
-                .liquidGlassCircleControl()
+                .nativeToolbarControl()
                 .accessibilityLabel("搜索明细")
             }
+            ToolbarSpacer(.fixed, placement: .topBarTrailing)
             ToolbarItem(placement: .topBarTrailing) {
                 Menu {
                     // 与抽屉「我的账本」同一顺序；总账本就是默认账本（selectedBookID == nil），
@@ -168,7 +167,7 @@ struct HomeView: View {
                     .font(.subheadline.weight(.medium))
                     .foregroundStyle(.primary)
                 }
-                .liquidGlassPillControl(horizontalPadding: 14, minWidth: 116)
+                .nativeToolbarControl()
                 .tint(.primary)
                 .accessibilityLabel("当前账本：\(selectedBookName)")
             }

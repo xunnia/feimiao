@@ -165,11 +165,9 @@ struct AssetsView: View {
                     Image(systemName: "plus")
                         .foregroundStyle(.primary)
                 }
-                .font(.system(size: 20, weight: .medium))
-                .liquidGlassCircleControl(size: 44, subtle: true)
+                .nativeToolbarControl()
                 .accessibilityLabel("新增资产")
             }
-            .sharedBackgroundVisibility(.hidden)
         }
         .sheet(isPresented: $showAddEntry, onDismiss: openPendingAddAction) {
             addEntrySheet
@@ -283,11 +281,9 @@ struct AssetsView: View {
                         Image(systemName: "xmark")
                             .foregroundStyle(.primary)
                     }
-                    .font(.system(size: 20, weight: .medium))
-                    .liquidGlassCircleControl(size: 44, subtle: true)
+                    .nativeToolbarControl()
                     .accessibilityLabel("关闭")
                 }
-                .sharedBackgroundVisibility(.hidden)
             }
         }
     }
@@ -1381,16 +1377,14 @@ struct PhysicalAssetEditor: View {
             .tint(.primary)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    LiquidGlassIconButton(systemName: "xmark", accessibilityLabel: "关闭", size: 44, subtle: true) { dismiss() }
+                    ToolbarIconButton(systemName: "xmark", accessibilityLabel: "关闭") { dismiss() }
                 }
-                .sharedBackgroundVisibility(.hidden)
                 if !isTransactionSource || sourceTransactionID != nil {
                     ToolbarItem(placement: .confirmationAction) {
                         Button(asset == nil && !isTransactionSource ? "创建" : "保存") { save() }
                             .disabled(!canSave)
-                            .liquidGlassPillControl(horizontalPadding: 12, minHeight: 44, subtle: true)
+                            .nativeToolbarControl()
                     }
-                    .sharedBackgroundVisibility(.hidden)
                 }
             }
             .alert("无法保存", isPresented: Binding(
@@ -1780,15 +1774,13 @@ private struct ReceivableEditor: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    LiquidGlassIconButton(systemName: "xmark", accessibilityLabel: "取消", size: 44, subtle: true) { dismiss() }
+                    ToolbarIconButton(systemName: "xmark", accessibilityLabel: "取消") { dismiss() }
                 }
-                .sharedBackgroundVisibility(.hidden)
                 ToolbarItem(placement: .confirmationAction) {
                     Button(asset == nil ? "创建" : "保存") { save() }
                         .disabled(amount == nil || amount! <= 0 || name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                        .liquidGlassPillControl(horizontalPadding: 12, minHeight: 44, subtle: true)
+                        .nativeToolbarControl()
                 }
-                .sharedBackgroundVisibility(.hidden)
             }
             .alert("无法保存", isPresented: Binding(
                 get: { errorMessage != nil },
@@ -1881,15 +1873,13 @@ private struct ReceivableRecoverySheet: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    LiquidGlassIconButton(systemName: "xmark", accessibilityLabel: "取消", size: 44, subtle: true) { dismiss() }
+                    ToolbarIconButton(systemName: "xmark", accessibilityLabel: "取消") { dismiss() }
                 }
-                .sharedBackgroundVisibility(.hidden)
                 ToolbarItem(placement: .confirmationAction) {
                     Button("确认") { save() }
                         .disabled(amount == nil || amount! <= 0)
-                        .liquidGlassPillControl(horizontalPadding: 12, minHeight: 44, subtle: true)
+                        .nativeToolbarControl()
                 }
-                .sharedBackgroundVisibility(.hidden)
             }
             .alert("无法保存", isPresented: Binding(
                 get: { errorMessage != nil },

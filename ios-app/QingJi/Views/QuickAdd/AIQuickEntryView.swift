@@ -112,7 +112,7 @@ struct AIQuickEntryView: View {
                         speech.stop()
                         dismiss()
                     }
-                    .liquidGlassPillControl(horizontalPadding: 12, minHeight: 40)
+                    .nativeToolbarControl()
                 }
             }
             .alert("无法保存", isPresented: Binding(

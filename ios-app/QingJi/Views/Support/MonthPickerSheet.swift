@@ -56,7 +56,7 @@ struct MonthPickerSheet: View {
                     Button { dismiss() } label: {
                         Image(systemName: "xmark")
                     }
-                    .liquidGlassCircleControl(size: 40)
+                    .nativeToolbarControl()
                     .accessibilityLabel("取消")
                 }
                 ToolbarItem(placement: .confirmationAction) {
@@ -65,7 +65,7 @@ struct MonthPickerSheet: View {
                                                        maximumDate: maximumDate)
                         onConfirm()
                     }
-                    .liquidGlassPillControl(horizontalPadding: 12, minHeight: 40)
+                    .nativeToolbarControl()
                 }
             }
             .onChange(of: year) { _, newYear in

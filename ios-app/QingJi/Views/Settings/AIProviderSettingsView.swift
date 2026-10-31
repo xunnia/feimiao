@@ -147,7 +147,7 @@ struct AIProviderSettingsView: View {
                 } label: {
                     Image(systemName: "plus")
                 }
-                .liquidGlassCircleControl()
+                .nativeToolbarControl()
                 .accessibilityLabel("添加 AI 账号")
             }
         }
@@ -485,14 +485,14 @@ private struct AIProviderEditorView: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("取消") { dismiss() }
-                        .liquidGlassPillControl(horizontalPadding: 12, minHeight: 40)
+                        .nativeToolbarControl()
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("保存") { save() }
                         .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
                                   model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
                                   baseURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                        .liquidGlassPillControl(horizontalPadding: 12, minHeight: 40)
+                        .nativeToolbarControl()
                 }
             }
             .onAppear {

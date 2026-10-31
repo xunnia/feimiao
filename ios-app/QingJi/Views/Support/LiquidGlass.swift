@@ -18,9 +18,10 @@ struct LiquidGlassChrome: ViewModifier {
     func body(content: Content) -> some View {
         content
             .tint(Color.accentColor)
-            // Keep the native glass button as a fallback for text actions. Icon
-            // controls opt into an explicit circle below so SwiftUI's default
-            // capsule cannot stretch them into a second surface.
+            // Keep the native glass button as a fallback for content-layer text
+            // actions. Icon controls opt into an explicit circle below, and toolbar
+            // items reset with nativeToolbarControl() because the bar already draws
+            // its own shared glass.
             .buttonStyle(.glass(.clear))
             .toolbarBackground(.hidden, for: .navigationBar)
     }
@@ -393,5 +394,29 @@ struct LiquidGlassPillButton: View {
             }
                 .liquidGlassPillControl(subtle: subtle)
         }
+    }
+}
+
+extension View {
+    /// Toolbar items already sit on the bar's shared Liquid Glass. Reset the
+    /// app-wide glass button fallback so an item never draws a second surface.
+    func nativeToolbarControl() -> some View {
+        buttonStyle(.automatic)
+    }
+}
+
+/// Top-bar icon action. The iOS 26 toolbar draws the glass container itself,
+/// so this stays a plain system item in the toolbar's monochrome style.
+struct ToolbarIconButton: View {
+    let systemName: String
+    let accessibilityLabel: String
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: systemName)
+        }
+        .nativeToolbarControl()
+        .accessibilityLabel(accessibilityLabel)
     }
 }

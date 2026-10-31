@@ -220,7 +220,7 @@ struct TransactionListView: View {
                         membershipCandidateIDs = Set(projection.filtered.map(\.stableID))
                         showBookMemberships = true
                     } label: { Image(systemName: "books.vertical") }
-                    .liquidGlassCircleControl()
+                    .nativeToolbarControl()
                     .accessibilityLabel("批量添加或移出场景账本")
                     .disabled(projection.filtered.isEmpty)
                 }
@@ -238,7 +238,7 @@ struct TransactionListView: View {
                                 }
                             }
                     }
-                    .liquidGlassCircleControl()
+                    .nativeToolbarControl()
                     .accessibilityLabel(hasActiveFilters ? "已启用筛选" : "筛选账目")
                 }
             }
@@ -628,7 +628,7 @@ private struct TransactionFilterSheet: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("取消") { dismiss() }
-                        .liquidGlassPillControl(horizontalPadding: 12, minHeight: 40)
+                        .nativeToolbarControl()
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("应用") {
@@ -649,7 +649,7 @@ private struct TransactionFilterSheet: View {
                         !isValidRange ||
                         !isValidDateRange
                     )
-                    .liquidGlassPillControl(horizontalPadding: 12, minHeight: 40)
+                    .nativeToolbarControl()
                 }
             }
         }

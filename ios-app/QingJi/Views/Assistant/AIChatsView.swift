@@ -106,7 +106,7 @@ struct AIChatsView: View {
                 } label: {
                     Image(systemName: "plus")
                 }
-                .liquidGlassCircleControl()
+                .nativeToolbarControl()
                 .accessibilityLabel("新建会话")
             }
         }
