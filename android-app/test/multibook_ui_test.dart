@@ -899,6 +899,8 @@ Future<void> _loadEmojiFont() async {
     if (Platform.environment['WINDIR'] case final String windows)
       '$windows/Fonts/seguiemj.ttf',
     '/System/Library/Fonts/Apple Color Emoji.ttc',
+    // CI 的 Linux 镜像不一定装了系统 emoji 字体，用 SDK 自带的同一份兜底。
+    flutterSdkEmojiFontPath(),
   ];
   // An explicit font must be honored rather than silently changing the
   // comparison baseline. Otherwise use a platform's installed emoji font.

@@ -182,7 +182,7 @@ void main() {
     databaseFactory = databaseFactoryFfi;
     await loadScreenshotFonts(force: true);
     final emoji = File(Platform.environment['FEIMIAO_EMOJI_FONT'] ??
-        r'C:\src\xunni-codex\.tmp\flutter-audit-sdk\flutter\engine\src\flutter\txt\third_party\fonts\NotoColorEmoji.ttf');
+        flutterSdkEmojiFontPath());
     if (emoji.existsSync()) {
       await (FontLoader('NotoColorEmoji')
             ..addFont(

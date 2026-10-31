@@ -82,8 +82,10 @@ jobs:
       - name: Test
         working-directory: android-app
         run: |
-          sudo apt-get install -y libsqlite3-dev \
-            || (sudo apt-get update && sudo apt-get install -y libsqlite3-dev)
+          # fonts-noto-cjk: screenshot/layout tests need real CJK glyphs
+          # (see test/screenshot_font_support.dart).
+          sudo apt-get install -y libsqlite3-dev fonts-noto-cjk \
+            || (sudo apt-get update && sudo apt-get install -y libsqlite3-dev fonts-noto-cjk)
           set -o pipefail
           flutter test --reporter expanded 2>&1 | tee flutter-test.log
 

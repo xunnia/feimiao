@@ -48,7 +48,7 @@ void main() {
     await loadScreenshotFonts();
     if (!capture) return;
     final emojiFont = File(Platform.environment['FEIMIAO_EMOJI_FONT'] ??
-        r'C:\src\xunni-codex\.tmp\flutter-audit-sdk\flutter\engine\src\flutter\txt\third_party\fonts\NotoColorEmoji.ttf');
+        flutterSdkEmojiFontPath());
     if (!emojiFont.existsSync()) {
       throw StateError('头像截图需要 Noto Color Emoji，请设置 FEIMIAO_EMOJI_FONT。');
     }
