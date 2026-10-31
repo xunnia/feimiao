@@ -8,7 +8,7 @@
 
 ## 1. 目标（一句话）
 
-**iOS 版就是 Android「肥喵记账」在 iPhone 上的原生实现，不是一个新产品。** Android当前生产版是唯一母版；2026-10-31实查线上元数据已为 `1.318.0+333` / DB v51，精确源码、APK身份和水印见 `02` 顶部。注意 `codex/budget-takeover` 上的 `tools/p0_product_contract.json`、`tools/screenshot_manifest.json` 仍指向332，10-31备份推送的iOS截图任务因此合同校验失败；本地集成分支 `codex/reliability-20261031` 的 `c51928f` 已精确更新到333源码/APK身份，但未推送、未经Mac验证，不能当333已对齐证明。iOS既有测试分支采图早于332，不算本批双端封板；本地多场景和架构原生候选仍需新的Mac验收。
+**iOS 版就是 Android「肥喵记账」在 iPhone 上的原生实现，不是一个新产品。** Android当前生产版是唯一母版；2026-10-31实查线上元数据已为 `1.318.0+333` / DB v51，精确源码、APK身份和水印见 `02` 顶部。注意 `codex/budget-takeover` 上的 `tools/p0_product_contract.json`、`tools/screenshot_manifest.json` 仍指向332，10-31备份推送的iOS截图任务因此合同校验失败；集成分支 `codex/reliability-20261031` 的 `c51928f` 已精确更新到333源码/APK身份，10-31推送后Mac上合同和38路由校验已通过，但App编译失败、截图没拍，不能当333已对齐证明。iOS既有测试分支采图早于332，不算本批双端封板；本地多场景和架构原生候选仍需新的Mac验收。
 
 **必须和 Android 一模一样的部分：**主页 + 左侧推开式抽屉（没有底部 Tab）；每个入口的名称、位置、层级；页面首屏的信息顺序和字段；金额、净额、退款/报销归属、预算、统计、净资产的算法；肥喵 Logo、猫咪、分类图标、账本封面和猫系配色（收入铜金、支出深色、超支橙，不用系统红绿）；空态、错误、取消、删除/撤销之后看到的结果。
 
@@ -28,14 +28,17 @@
 
 ## 2. 当前真实状态
 
-### 2026-10-31 第一批：候选整合进本地集成分支（未推送，Mac待验）
+### 2026-10-31 第一批：候选整合进集成分支（已推送；Mac第一次编译失败，修复待推送）
 
 - 主目录93份未提交iOS候选按 `baf52ea` 三方对比，叠到已合入远端按钮线 `dd692b7` 的树上，提交为 `codex/reliability-20261031` 的 `57e42b3`（54个路径，worktree `.tmp/reliability-20261031`），主目录原文件没动：38份只有本机改动直接采用，6份本机新增，7份自动合并，11份逐段裁决，31份与按钮线已一致不动。
 - 冲突裁决：AIProviderClient、流式摘要、资产趋势及其测试取按钮线版本（已含本机同类改动，另有逐块限长、币种归一和质量门修正）；AssetFinancialCommand、BookStore、LedgerStore 取本机超集版本（局部撤销 journal，旧的全局删账一律拒绝）；AssetStore 取本机版并补回 `original_principal` 冻结与撤销校验；MeowAssistantView 取按钮线流式实现并补回多场景范围和可失败的预览容器；AssetFinancialCommandTests 合并双方全部测试。
 - 内容：多场景账本与V1→V2→V3显式迁移、旧库磁盘迁移测试（`AppSchemaMigrationTests` 4项）、保存失败局部撤销与启动失败重试（10-24的8项XCTest）、备份v10关联与CSV恢复。`c51928f` 另把 `tools/p0_product_contract.json`、`screenshot_manifest.json` 精确更新到333源码/APK身份。
 - 已验证的只有Windows侧：结构核对（括号平衡、1080个旧声明签名仍有兼容声明、同模块无重复类型、35个 `@Model` 均在V3），工具测试45/45，P0合同 `P0_PARTIAL` 有效（38场景/12旅程/6个未关门禁），38条路由与manifest一致。没有Swift编译、XCTest、磁盘迁移实测、原生截图或真机。
 - 10-31备份推送 `baf52ea` 的Mac CI：编译、核心逻辑测试、App层XCTest（140项0失败，含 `ThemePopupInteractionTests` 9/9）和未签名IPA通过，截图因合同仍标332失败。这只覆盖已提交代码，不覆盖这93份候选。
-- 下一步：用户确认后推送集成分支，由Mac CI编译并跑XCTest（先看4项旧库迁移和8项撤销/启动重试）、截图和IPA；启动失败错误页、多场景选择/归集等原生界面要出同场景前后图。聊天行为对齐Android 329+放第二批。
+- 10-31推送集成分支 `fc7cd63` 的Mac CI `41208375673`：核心逻辑150/0、P0合同和38路由校验通过；App编译、App层XCTest、截图、未签名IPA都停在编译。Release整模块构建列出3处错误，主目录候选原文件里同样存在，不是合并带进来的：`QingJiApp.swift` 默认参数闭包读 `@MainActor` 的 `AppModelContainer.shared`；`WidgetSnapshotWriter.swift` 改成总账本范围后标题仍引用已删的 `selectedBook`；`TransactionListView.swift` 给账本投影传 `books` 却没有 `books` 查询。
+- 本地 `475b1e3`（未推送）：正式opener改在 `convenience init()` 里构造，测试用 `init(opener:)` 不变；小组件标题取默认账本名（默认账本就是总账本），数据范围不变；流水页按其他视图写法补 `@Query(sort: \Book.sortOrder)`。QingJiTests依赖App模块，本次也没编译，4项旧库迁移和8项撤销/启动重试仍未运行。
+- 读iOS编译失败时，先看IPA任务（Release整模块）的日志：Debug编译在第一个模块签名错误处就停，只报1处；整模块构建一次列出了全部3处。
+- 下一步：用户确认后推送 `475b1e3` 和文档提交，由Mac CI重新编译并跑XCTest（先看4项旧库迁移和8项撤销/启动重试）、截图和IPA；改前图用按钮线最后一次Mac通过的 `b1280eb`（iOS CI `37616880822`，截图2027-01-05过期），它的App代码与候选合入前一致；启动失败错误页、多场景选择/归集等原生界面要出同场景前后图。聊天行为对齐Android 329+放第二批。
 
 ### 2026-10-31 本机Opus接手核对（不推送、不触发CI）
 
