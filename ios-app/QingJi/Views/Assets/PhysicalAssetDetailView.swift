@@ -773,6 +773,7 @@ private struct AssetCostLinkSheet: View {
     private var transactions: [MoneyTransaction]
     @Query
     private var links: [AssetTransactionLink]
+    @Query private var books: [Book]
 
     let asset: PhysicalAsset
     @State private var query = ""
@@ -785,7 +786,7 @@ private struct AssetCostLinkSheet: View {
         return transactions
             .filter {
                 $0.kind == .expense && $0.amount > 0 && $0.refundOfID == nil &&
-                !$0.isExcluded && $0.book?.stableID == asset.bookID &&
+                !$0.isExcluded && LedgerScope.allowsAssetAssociation($0, bookID: asset.bookID, books: books) &&
                 $0.currencyCode == asset.currencyCode && !linked.contains($0.stableID) &&
                 (normalized.isEmpty || $0.note.lowercased().contains(normalized) || $0.amount.description.contains(normalized))
             }

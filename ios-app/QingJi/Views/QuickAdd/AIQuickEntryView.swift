@@ -34,6 +34,8 @@ struct AIQuickEntryView: View {
     @State private var matchedCategoryKeys: [String?] = []
     @State private var selectedAccountID: UUID?
     @State private var selectedBookID: UUID?
+    @State private var selectedBookIDs: Set<UUID> = []
+    @State private var didInitializeBooks = false
     @State private var photoItem: PhotosPickerItem?
     @State private var isRecognizingImage = false
     @State private var speech = SpeechDictation()
@@ -262,6 +264,7 @@ struct AIQuickEntryView: View {
         }
     }
 
+    @ViewBuilder
     private var destinationSection: some View {
         Section("入账位置") {
             Picker("账户", selection: $selectedAccountID) {
@@ -270,13 +273,8 @@ struct AIQuickEntryView: View {
                     Text(account.name).tag(Optional(account.stableID))
                 }
             }
-            Picker("账本", selection: $selectedBookID) {
-                Text("总账本 / 自动").tag(nil as UUID?)
-                ForEach(usableBooks) { book in
-                    Text(book.name).tag(Optional(book.stableID))
-                }
-            }
         }
+        BookMembershipSection(books: usableBooks, selection: $selectedBookIDs)
     }
 
     private var resultSection: some View {
@@ -386,6 +384,12 @@ struct AIQuickEntryView: View {
 
     private func setDefaultDestinationIfNeeded() {
         if selectedAccountID == nil { selectedAccountID = usableAccounts.first?.stableID }
+        if !didInitializeBooks, !usableBooks.isEmpty {
+            didInitializeBooks = true
+            if let id = router.selectedBookID, usableBooks.contains(where: { $0.stableID == id && !$0.isDefault }) {
+                selectedBookIDs = [id]
+            }
+        }
         if selectedBookID == nil, router.selectedBookID == nil {
             selectedBookID = usableBooks.first(where: { $0.isDefault })?.stableID ?? usableBooks.first?.stableID
         }
@@ -412,7 +416,7 @@ struct AIQuickEntryView: View {
     }
 
     private func matchRefund(in text: String) -> RefundMatchResult {
-        let scoped = LedgerScope.filter(transactions, selectedBookID: router.selectedBookID)
+        let scoped = LedgerScope.filter(transactions, selectedBookID: router.selectedBookID, books: books)
         let records = scoped.map(\.record)
         let refundTotals = LedgerPolicy.refundTotals(from: records)
         let candidates = scoped.compactMap { transaction -> RefundCandidate? in
@@ -700,6 +704,7 @@ struct AIQuickEntryView: View {
                 category: category(for: index, entry: entry),
                 account: account,
                 book: selectedBook,
+                scenarioBookIDs: selectedBookIDs,
                 reimbursable: entry.kind == .expense && looksReimbursable(entry.note),
                 timePrecision: entry.timePrecision
             )

@@ -4,6 +4,37 @@ import QingJiCore
 @testable import QingJi
 
 final class AndroidBackupImporterTests: XCTestCase {
+    func testAndroidMembershipRowsPreserveMultipleEmptyAndRefundInheritance() throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("android-multibook-\(UUID().uuidString).db")
+        var database: OpaquePointer?
+        XCTAssertEqual(sqlite3_open_v2(url.path, &database, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE, nil), SQLITE_OK)
+        let db = try XCTUnwrap(database)
+        defer { sqlite3_close(db); try? FileManager.default.removeItem(at: url) }
+        try execute(db, """
+            CREATE TABLE books (id INTEGER PRIMARY KEY, uuid TEXT, name TEXT, sort_order INTEGER);
+            INSERT INTO books VALUES (1, 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', '总账本', 0);
+            INSERT INTO books VALUES (2, 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', '生意', 1);
+            INSERT INTO books VALUES (3, 'cccccccccccccccccccccccccccccccc', '项目', 2);
+            CREATE TABLE transactions (id INTEGER PRIMARY KEY, uuid TEXT, book_id INTEGER, kind TEXT, amount TEXT, refund_of INTEGER);
+            INSERT INTO transactions VALUES (1, '11111111111111111111111111111111', 2, 'expense', '100', NULL);
+            INSERT INTO transactions VALUES (2, '22222222222222222222222222222222', 2, 'expense', '-20', 1);
+            INSERT INTO transactions VALUES (3, '33333333333333333333333333333333', 2, 'expense', '30', NULL);
+            INSERT INTO transactions VALUES (4, '44444444444444444444444444444444', 3, 'income', '50', NULL);
+            CREATE TABLE transaction_books (transaction_id INTEGER, book_id INTEGER);
+            INSERT INTO transaction_books VALUES (1,1),(1,2),(1,3),(3,1);
+            """)
+        let data = try AndroidBackupImporter.canonicalData(from: Data(contentsOf: url), databaseVersion: 51, exportedAt: Date())
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let package = try decoder.decode(FeimiaoBackupPackage.self, from: data)
+        let business = try XCTUnwrap(package.books.first { $0.name == "生意" }?.id)
+        let project = try XCTUnwrap(package.books.first { $0.name == "项目" }?.id)
+        XCTAssertEqual(Set(try XCTUnwrap(package.transactions.first { $0.amount == 100 }?.scenarioBookIDs)), [business, project])
+        XCTAssertEqual(Set(try XCTUnwrap(package.transactions.first { $0.amount == -20 }?.scenarioBookIDs)), [business, project])
+        XCTAssertEqual(package.transactions.first { $0.amount == 30 }?.scenarioBookIDs, [])
+        XCTAssertNil(package.transactions.first { $0.amount == 50 }?.scenarioBookIDs)
+    }
+
     func testConvertsCoreAndroidSQLiteAndKeepsStableRelations() throws {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("android-backup-test-\(UUID().uuidString).db")

@@ -242,6 +242,8 @@ private struct ReimburseSettlementSheet: View {
 }
 
 #Preview {
+  if let container = try? AppModelContainer.makeContainer(inMemory: true) {
     ReimburseView()
-        .modelContainer(AppModelContainer.shared)
+        .modelContainer(container)
+  }
 }

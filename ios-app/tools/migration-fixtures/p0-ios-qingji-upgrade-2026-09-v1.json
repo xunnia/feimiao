@@ -14,7 +14,7 @@
     "store": "SwiftData",
     "policy": "in-place",
     "container": "AppModelContainer.shared",
-    "schemaPolicy": "introduce-an-explicit-VersionedSchema-before-the-next-model-change",
+    "schemaPolicy": "explicit-VersionedSchema-V1-V2-V3-lightweight; macOS migration evidence pending",
     "modelTypes": [
       "Account",
       "Book",
@@ -99,7 +99,7 @@
     "isExcluded"
   ],
   "androidBackup": {
-    "requiredDatabaseVersion": 50,
+    "requiredDatabaseVersion": 51,
     "requiredSamples": ["current-v49", "v40", "v48"],
     "restoreTarget": "QingJi SwiftData",
     "status": "MACOS_EVIDENCE_PENDING"

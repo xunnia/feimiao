@@ -70,6 +70,46 @@ final class AssetFinancialCommandTests: XCTestCase {
                                  category: nil, in: stack.context)
     }
 
+    func testPhysicalAssetArchiveSaveFailureKeepsValueLifecycleAndOtherEdits() throws {
+        let stack = try Stack()
+        let (_, cash) = try recoveryFixture(stack)
+        let asset = try AssetStore.create(in: stack.context, name: "相机", kind: .other,
+            purchasePrice: 1_000, currentValue: 800)
+        let previousUpdatedAt = asset.updatedAt
+        let eventsBefore = try stack.context.fetchCount(FetchDescriptor<AssetEvent>())
+        cash.name = "保留其他编辑"
+        stack.context.autosaveEnabled = true
+        XCTAssertThrowsError(try AssetStore.archive(asset, in: stack.context,
+            saveContext: { _ in throw Failure.save }))
+        XCTAssertTrue(stack.context.autosaveEnabled)
+        stack.context.autosaveEnabled = false
+        XCTAssertEqual(asset.lifecycle, .owned)
+        XCTAssertTrue(asset.includeInNetWorth)
+        XCTAssertNil(asset.archivedAt)
+        XCTAssertEqual(asset.updatedAt, previousUpdatedAt)
+        XCTAssertEqual(asset.currentValue, 800)
+        try stack.context.save()
+        let reload = ModelContext(stack.container)
+        XCTAssertEqual(try reload.fetchCount(FetchDescriptor<AssetEvent>()), eventsBefore)
+        XCTAssertEqual(try reload.fetch(FetchDescriptor<PhysicalAsset>()).first?.lifecycle, .owned)
+        XCTAssertEqual(cash.name, "保留其他编辑")
+    }
+
+    func testUsageSaveFailureLeavesNoUsageOrJournalAfterLaterSave() throws {
+        let stack = try Stack()
+        let asset = try AssetStore.create(in: stack.context, name: "相机", kind: .other,
+            purchasePrice: 1_000, currentValue: 800)
+        let eventsBefore = try stack.context.fetchCount(FetchDescriptor<AssetEvent>())
+        XCTAssertThrowsError(try AssetStore.addUsage(asset, count: 2, in: stack.context,
+            saveContext: { _ in throw Failure.save }))
+        XCTAssertEqual(asset.usageCount, 0)
+        try stack.context.save()
+        let reload = ModelContext(stack.container)
+        XCTAssertEqual(try reload.fetchCount(FetchDescriptor<AssetUsageEvent>()), 0)
+        XCTAssertEqual(try reload.fetchCount(FetchDescriptor<AssetEvent>()), eventsBefore)
+        XCTAssertEqual(try reload.fetch(FetchDescriptor<PhysicalAsset>()).first?.usageCount, 0)
+    }
+
     private func updateOriginalPrincipal(_ profile: LiabilityProfile, to amount: Decimal,
                                          account: Account, in stack: Stack) throws {
         try LiabilityStore.update(

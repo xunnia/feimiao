@@ -41,7 +41,8 @@ enum LedgerStore {
         selectedBookID: UUID? = nil
     ) throws -> [MoneyTransaction] {
         let all = try allTransactions(in: context)
-        return LedgerScope.filter(all, selectedBookID: selectedBookID)
+        let books = try context.fetch(FetchDescriptor<Book>())
+        return LedgerScope.filter(all, selectedBookID: selectedBookID, books: books)
             .filter { $0.refundOfID == nil }
     }
 
@@ -73,6 +74,7 @@ enum LedgerStore {
         let account: Account?
         let toAccount: Account?
         let book: Book?
+        let scenarioBookIDs: Set<UUID>?
         let tags: [String]
         let reimbursable: Bool
         let isExcluded: Bool
@@ -89,6 +91,7 @@ enum LedgerStore {
             account: Account? = nil,
             toAccount: Account? = nil,
             book: Book? = nil,
+            scenarioBookIDs: Set<UUID>? = nil,
             tags: [String] = [],
             reimbursable: Bool = false,
             isExcluded: Bool = false,
@@ -104,6 +107,7 @@ enum LedgerStore {
             self.account = account
             self.toAccount = toAccount
             self.book = book
+            self.scenarioBookIDs = scenarioBookIDs
             self.tags = tags
             self.reimbursable = reimbursable
             self.isExcluded = isExcluded
@@ -124,6 +128,7 @@ enum LedgerStore {
         account: Account? = nil,
         toAccount: Account? = nil,
         book: Book? = nil,
+        scenarioBookIDs: Set<UUID>? = nil,
         tags: [String] = [],
         reimbursable: Bool = false,
         isExcluded: Bool = false,
@@ -142,6 +147,7 @@ enum LedgerStore {
                 account: account,
                 toAccount: toAccount,
                 book: book,
+                scenarioBookIDs: scenarioBookIDs,
                 tags: tags,
                 reimbursable: reimbursable,
                 isExcluded: isExcluded,
@@ -171,6 +177,7 @@ enum LedgerStore {
                 account: draft.account,
                 toAccount: draft.toAccount,
                 book: draft.book,
+                scenarioBookIDs: draft.scenarioBookIDs,
                 tags: draft.tags,
                 reimbursable: draft.reimbursable,
                 isExcluded: draft.isExcluded,
@@ -217,6 +224,11 @@ enum LedgerStore {
         }
         transactions.forEach(context.insert)
         do {
+            for (transaction, draft) in zip(transactions, normalizedDrafts) {
+                if let ids = draft.scenarioBookIDs {
+                    try BookMembershipStore.apply(transactionIDs: [transaction.stableID], operation: .replace(ids), in: context)
+                }
+            }
             try beforeSave?(transactions)
             try context.save()
             return transactions
@@ -237,9 +249,11 @@ enum LedgerStore {
         toAccount: Account? = nil,
         attachmentPath: String? = nil,
         tags: [String]? = nil,
+        scenarioBookIDs: Set<UUID>? = nil,
         reimbursable: Bool,
         isExcluded: Bool,
-        in context: ModelContext
+        in context: ModelContext,
+        saveContext: AssetFinancialCommand.Save = { try $0.save() }
     ) throws {
         let normalizedAmount = MoneyNormalization.roundToCents(amount)
         guard normalizedAmount > 0 else { throw Error.invalidAmount }
@@ -258,30 +272,49 @@ enum LedgerStore {
                 throw Error.refundExceedsRemaining
             }
         }
-        transaction.amount = normalizedAmount
-        transaction.date = date
-        transaction.note = note
-        transaction.category = transaction.kind == .transfer ? nil : category
-        transaction.account = account
-        transaction.toAccount = transaction.kind == .transfer ? toAccount : nil
-        if let attachmentPath {
-            transaction.attachmentPath = attachmentPath
+        let old = (amount: transaction.amount, date: transaction.date, note: transaction.note,
+                   category: transaction.category, account: transaction.account, toAccount: transaction.toAccount,
+                   attachmentPath: transaction.attachmentPath, tags: transaction.tags,
+                   currencyCode: transaction.currencyCode, settledAt: transaction.settledAt,
+                   settlementQuality: transaction.settlementQuality, settlementAccountID: transaction.settlementAccountID,
+                   settlementAccountQuality: transaction.settlementAccountQuality, eventType: transaction.eventType,
+                   reimbursable: transaction.reimbursable, isExcluded: transaction.isExcluded, updatedAt: transaction.updatedAt)
+        try AssetFinancialCommand.perform(in: context, save: saveContext) { changes in
+            // 验证并准备家族关联后，才改金额等字段；一次保存避免半套更新。
+            let oldMemberships = try scenarioBookIDs.map {
+                try BookMembershipStore.apply(transactionIDs: [transaction.stableID], operation: .replace($0), in: context)
+            } ?? []
+            changes.restoreOnFailure { oldMemberships.forEach { $0.restore() } }
+            changes.restoreOnFailure {
+                transaction.amount = old.amount; transaction.date = old.date; transaction.note = old.note
+                transaction.category = old.category; transaction.account = old.account; transaction.toAccount = old.toAccount
+                transaction.attachmentPath = old.attachmentPath; transaction.tags = old.tags
+                transaction.currencyCode = old.currencyCode; transaction.settledAt = old.settledAt
+                transaction.settlementQuality = old.settlementQuality; transaction.settlementAccountID = old.settlementAccountID
+                transaction.settlementAccountQuality = old.settlementAccountQuality; transaction.eventType = old.eventType
+                transaction.reimbursable = old.reimbursable; transaction.isExcluded = old.isExcluded
+                transaction.updatedAt = old.updatedAt
+            }
+            transaction.amount = normalizedAmount
+            transaction.date = date
+            transaction.note = note
+            transaction.category = transaction.kind == .transfer ? nil : category
+            transaction.account = account
+            transaction.toAccount = transaction.kind == .transfer ? toAccount : nil
+            if let attachmentPath { transaction.attachmentPath = attachmentPath }
+            if let tags { transaction.tags = tags }
+            transaction.currencyCode = account?.currencyCode ?? transaction.currencyCode
+            if transaction.refundOfID == nil {
+                transaction.settledAt = date
+                transaction.settlementQuality = account == nil ? .unknown : .userConfirmed
+                transaction.settlementAccountID = account?.stableID
+                transaction.settlementAccountQuality = account == nil ? .unknown : .userConfirmed
+                transaction.eventType = .defaultFor(transaction.kind)
+            }
+            transaction.reimbursable = reimbursable
+            transaction.isExcluded = isExcluded
+            transaction.updatedAt = Date()
         }
-        if let tags {
-            transaction.tags = tags
-        }
-        transaction.currencyCode = account?.currencyCode ?? transaction.currencyCode
-        if transaction.refundOfID == nil {
-            transaction.settledAt = date
-            transaction.settlementQuality = account == nil ? .unknown : .userConfirmed
-            transaction.settlementAccountID = account?.stableID
-            transaction.settlementAccountQuality = account == nil ? .unknown : .userConfirmed
-            transaction.eventType = .defaultFor(transaction.kind)
-        }
-        transaction.reimbursable = reimbursable
-        transaction.isExcluded = isExcluded
-        transaction.updatedAt = Date()
-        try context.save()
     }
 
     /// 轻量修改分类，供 AI 记账卡和明细页复用；不改变金额、日期、账户或
@@ -290,16 +323,23 @@ enum LedgerStore {
         of transaction: MoneyTransaction,
         category: TxCategory?,
         in context: ModelContext,
-        beforeSave: (() throws -> Void)? = nil
+        beforeSave: (() throws -> Void)? = nil,
+        saveContext: AssetFinancialCommand.Save = { try $0.save() }
     ) throws {
         guard transaction.refundOfID == nil else { throw Error.immutableOffset }
         if let category, category.kind != transaction.kind {
             throw Error.transactionNotFound
         }
-        transaction.category = transaction.kind == .transfer ? nil : category
-        transaction.updatedAt = Date()
-        try beforeSave?()
-        try context.save()
+        let old = (transaction.category, transaction.updatedAt)
+        try AssetFinancialCommand.perform(in: context, save: saveContext) { changes in
+            changes.restoreOnFailure {
+                transaction.category = old.0
+                transaction.updatedAt = old.1
+            }
+            transaction.category = transaction.kind == .transfer ? nil : category
+            transaction.updatedAt = Date()
+            try beforeSave?()
+        }
     }
 
     /// 在原账单日期创建附着式退款或报销，并限制总冲减不超过原金额。
@@ -312,7 +352,8 @@ enum LedgerStore {
         settlementAccount: Account? = nil,
         settledAt: Date = Date(),
         in context: ModelContext,
-        saveImmediately: Bool = true
+        saveImmediately: Bool = true,
+        saveContext: AssetFinancialCommand.Save = { try $0.save() }
     ) throws -> MoneyTransaction {
         guard original.kind == .expense, original.amount > 0 else {
             throw Error.invalidAmount
@@ -353,17 +394,29 @@ enum LedgerStore {
             refundOfID: original.stableID,
             isReimbursed: eventType == .reimbursement
         )
-        context.insert(offset)
-        if eventType == .reimbursement {
+        if original.hasExplicitBookMemberships {
+            offset.setScenarioBookIDs(original.scenarioBookIDs)
+        }
+        let old = (original.isReimbursed, original.reimbursable, original.updatedAt)
+        return try AssetFinancialCommand.perform(in: context, save: { context in
+            if saveImmediately { try saveContext(context) }
+        }) { changes in
+            changes.insert(offset)
+            changes.restoreOnFailure {
+                original.isReimbursed = old.0
+                original.reimbursable = old.1
+                original.updatedAt = old.2
+            }
+            if eventType == .reimbursement {
             // 安卓端只有“净额已补满”才清掉待报销；保留这个条件，避免
             // 编辑页做部分报销后账单从待处理列表里凭空消失。
             let fullyReimbursed = normalizedAmount >= status.remainingAmount
             original.isReimbursed = fullyReimbursed
             original.reimbursable = !fullyReimbursed
+            }
+            original.updatedAt = Date()
+            return offset
         }
-        original.updatedAt = Date()
-        if saveImmediately { try context.save() }
-        return offset
     }
 
     /// 删除原账单时级联删除附着退款；删除退款子行时同步报销标记。
@@ -376,7 +429,8 @@ enum LedgerStore {
     static func delete(
         _ transactions: [MoneyTransaction],
         in context: ModelContext,
-        beforeSave: (() throws -> Void)? = nil
+        beforeSave: (() throws -> Void)? = nil,
+        saveContext: AssetFinancialCommand.Save = { try $0.save() }
     ) throws {
         try assertTransactionsCanBeDeleted(transactions, in: context)
         let all = try allTransactions(in: context)
@@ -384,7 +438,8 @@ enum LedgerStore {
         let removedIDs = Set(transactions.map(\.stableID)).union(
             all.filter { $0.refundOfID.map(rootIDs.contains) ?? false }.map(\.stableID))
         var attachmentPaths = Set<String>()
-        for transaction in all where removedIDs.contains(transaction.stableID) {
+        try AssetFinancialCommand.perform(in: context, save: saveContext) { changes in
+          for transaction in all where removedIDs.contains(transaction.stableID) {
             if !transaction.attachmentPath.isEmpty {
                 attachmentPaths.insert(transaction.attachmentPath)
             }
@@ -392,14 +447,20 @@ enum LedgerStore {
                let originalID = transaction.refundOfID,
                !removedIDs.contains(originalID),
                let original = all.first(where: { $0.stableID == originalID }) {
+                let old = (original.isReimbursed, original.reimbursable, original.updatedAt)
+                changes.restoreOnFailure {
+                    original.isReimbursed = old.0
+                    original.reimbursable = old.1
+                    original.updatedAt = old.2
+                }
                 original.isReimbursed = false
                 original.reimbursable = true
                 original.updatedAt = Date()
             }
-            context.delete(transaction)
+            changes.delete(transaction)
+          }
+          try beforeSave?()
         }
-        try beforeSave?()
-        try context.save()
         // 数据库提交成功后再清理本地媒体，避免保存失败导致账单和照片同时丢失。
         guard let remainingTransactions = try? allTransactions(in: context) else {
             return

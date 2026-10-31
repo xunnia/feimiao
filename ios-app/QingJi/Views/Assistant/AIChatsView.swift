@@ -154,8 +154,10 @@ struct AIChatsView: View {
 }
 
 #Preview {
+  if let container = try? AppModelContainer.makeContainer(inMemory: true) {
     AIChatsView()
-        .modelContainer(AppModelContainer.shared)
+        .modelContainer(container)
         .environment(AppRouter())
         .environment(AIProviderStore())
+  }
 }

@@ -79,6 +79,8 @@ struct IOSLedgerDataRevision: Equatable, Hashable {
             state = Self.mix(state, Self.stringBits(transaction.toAccount?.name ?? ""))
             state = Self.mix(state, Self.dateBits(transaction.toAccount?.updatedAt))
             state = Self.mix(state, Self.uuidBits(transaction.book?.stableID))
+            state = Self.mix(state, Self.stringBits(transaction.bookMembershipIDsRaw))
+            state = Self.mix(state, Self.boolBits(transaction.hasExplicitBookMemberships))
             state = Self.mix(state, Self.stringBits(transaction.book?.name ?? ""))
             state = Self.mix(state, Self.boolBits(transaction.book?.includeInTotal ?? true))
             state = Self.mix(state, Self.dateBits(transaction.book?.updatedAt))
@@ -131,8 +133,10 @@ final class IOSLedgerProjectionCache {
 
     func snapshot(
         for transactions: [MoneyTransaction],
-        selectedBookID: UUID?
+        selectedBookID: UUID?,
+        books: [Book] = []
     ) -> IOSLedgerSnapshot {
+        let selectedBookID = books.contains { $0.stableID == selectedBookID && $0.isDefault } ? nil : selectedBookID
         let revision = IOSLedgerDataRevision(
             transactions,
             selectedBookID: selectedBookID
@@ -143,7 +147,7 @@ final class IOSLedgerProjectionCache {
             return lastSnapshot
         }
 
-        let scoped = LedgerScope.filter(transactions, selectedBookID: selectedBookID)
+        let scoped = LedgerScope.filter(transactions, selectedBookID: selectedBookID, books: books)
         let records = scoped.map(\.record)
         var recordsByID = [UUID: TransactionRecord](minimumCapacity: records.count)
         for record in records {

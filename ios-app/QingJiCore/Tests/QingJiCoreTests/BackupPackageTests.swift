@@ -2,6 +2,30 @@ import XCTest
 @testable import QingJiCore
 
 final class BackupPackageTests: XCTestCase {
+    func testMembershipRoundTripDistinguishesLegacyEmptyAndMultipleScenes() throws {
+        let id = UUID()
+        let first = UUID()
+        let second = UUID()
+        let encoder = JSONEncoder()
+        let decoder = JSONDecoder()
+        let memberships: [[UUID]?] = [nil, [], [first, second]]
+        for ids in memberships {
+            let value = BackupTransaction(id: id, amount: 100, kind: .expense, date: Date(timeIntervalSince1970: 0),
+                                          bookID: first, scenarioBookIDs: ids)
+            let result = try decoder.decode(BackupTransaction.self, from: encoder.encode(value))
+            XCTAssertEqual(result.scenarioBookIDs, ids)
+            XCTAssertEqual(result.bookID, first)
+        }
+    }
+
+    func testLegacyTransactionJSONWithoutMembershipKeepsFallbackSemantics() throws {
+        let value = BackupTransaction(id: UUID(), amount: 100, kind: .expense, date: Date(timeIntervalSince1970: 0), bookID: UUID())
+        let data = try JSONEncoder().encode(value)
+        let result = try JSONDecoder().decode(BackupTransaction.self, from: data)
+        XCTAssertNil(result.scenarioBookIDs)
+        XCTAssertEqual(result.bookID, value.bookID)
+    }
+
     func testRoundTripKeepsStableRelationships() throws {
         let bookID = UUID()
         let accountID = UUID()

@@ -135,13 +135,14 @@ enum AssetStore {
         let allLinks = try context.fetch(FetchDescriptor<AssetTransactionLink>())
         let linkedTransactionIDs = Set(allLinks.map(\.transactionID))
         let records = try context.fetch(FetchDescriptor<MoneyTransaction>())
+        let books = try context.fetch(FetchDescriptor<Book>())
         return records
             .filter { transaction in
                 transaction.kind == .expense &&
                 transaction.amount > 0 &&
                 transaction.refundOfID == nil &&
                 !transaction.isExcluded &&
-                transaction.book?.stableID == bookID &&
+                LedgerScope.allowsAssetAssociation(transaction, bookID: bookID, books: books) &&
                 transaction.currencyCode == asset.currencyCode &&
                 !linkedTransactionIDs.contains(transaction.stableID) &&
                 (normalized.isEmpty ||
@@ -158,57 +159,61 @@ enum AssetStore {
         _ asset: PhysicalAsset,
         transaction: MoneyTransaction,
         type: AssetTransactionLinkType,
-        in context: ModelContext
+        in context: ModelContext,
+        saveContext: AssetFinancialCommand.Save = { try $0.save() }
     ) throws -> AssetTransactionLink {
-        guard type != .sourceTransaction,
-              type != .purchaseTransaction,
-              type != .saleAccountMovement else { throw Error.invalidTransaction }
-        guard try costTransactions(for: asset, in: context)
-            .contains(where: { $0.stableID == transaction.stableID }) else {
-            throw Error.invalidTransaction
+        return try AssetFinancialCommand.perform(in: context, save: saveContext) { changes in
+            guard type != .sourceTransaction,
+                  type != .purchaseTransaction,
+                  type != .saleAccountMovement else { throw Error.invalidTransaction }
+            guard try costTransactions(for: asset, in: context)
+                .contains(where: { $0.stableID == transaction.stableID }) else {
+                throw Error.invalidTransaction
+            }
+            let records = try context.fetch(FetchDescriptor<MoneyTransaction>()).map(\.record)
+            let net = LedgerPolicy.refundStatus(
+                for: transaction.record,
+                in: records
+            ).remainingAmount
+            guard net > 0 else { throw Error.invalidTransaction }
+            let link = AssetTransactionLink(
+                assetID: asset.stableID,
+                transactionID: transaction.stableID,
+                linkTypeRaw: type.rawValue,
+                amount: MoneyNormalization.roundToCents(net)
+            )
+            link.costQualityRaw = AssetAllocationCostQuality.exact.rawValue
+            link.note = type.label
+            changes.insert(link)
+            changes.insert(AssetEvent(
+                assetID: asset.stableID,
+                kind: .costLinked,
+                value: link.amount,
+                note: "\(type.label) · \(transaction.note)"
+            ))
+            return link
         }
-        let records = try context.fetch(FetchDescriptor<MoneyTransaction>()).map(\.record)
-        let net = LedgerPolicy.refundStatus(
-            for: transaction.record,
-            in: records
-        ).remainingAmount
-        guard net > 0 else { throw Error.invalidTransaction }
-        let link = AssetTransactionLink(
-            assetID: asset.stableID,
-            transactionID: transaction.stableID,
-            linkTypeRaw: type.rawValue,
-            amount: MoneyNormalization.roundToCents(net)
-        )
-        link.costQualityRaw = AssetAllocationCostQuality.exact.rawValue
-        link.note = type.label
-        context.insert(link)
-        context.insert(AssetEvent(
-            assetID: asset.stableID,
-            kind: .costLinked,
-            value: link.amount,
-            note: "\(type.label) · \(transaction.note)"
-        ))
-        try context.save()
-        return link
     }
 
     static func unlinkCost(
         _ link: AssetTransactionLink,
-        in context: ModelContext
+        in context: ModelContext,
+        saveContext: AssetFinancialCommand.Save = { try $0.save() }
     ) throws {
-        guard link.linkTypeRaw != AssetTransactionLinkType.sourceTransaction.rawValue,
-              link.linkTypeRaw != AssetTransactionLinkType.purchaseTransaction.rawValue,
-              link.linkTypeRaw != AssetTransactionLinkType.saleAccountMovement.rawValue else {
-            throw Error.invalidTransaction
+        try AssetFinancialCommand.perform(in: context, save: saveContext) { changes in
+            guard link.linkTypeRaw != AssetTransactionLinkType.sourceTransaction.rawValue,
+                  link.linkTypeRaw != AssetTransactionLinkType.purchaseTransaction.rawValue,
+                  link.linkTypeRaw != AssetTransactionLinkType.saleAccountMovement.rawValue else {
+                throw Error.invalidTransaction
+            }
+            let assetID = link.assetID
+            changes.delete(link)
+            changes.insert(AssetEvent(
+                assetID: assetID,
+                kind: .costUnlinked,
+                note: "解除持有成本关联"
+            ))
         }
-        let assetID = link.assetID
-        context.delete(link)
-        context.insert(AssetEvent(
-            assetID: assetID,
-            kind: .costUnlinked,
-            note: "解除持有成本关联"
-        ))
-        try context.save()
     }
 
     struct PurchaseCandidate {
@@ -265,46 +270,50 @@ enum AssetStore {
         grossCents: Int,
         refundCents: Int = 0,
         in context: ModelContext,
-        saveImmediately: Bool = true
+        saveImmediately: Bool = true,
+        commandChanges: AssetFinancialCommand.Changes? = nil,
+        saveContext: AssetFinancialCommand.Save = { try $0.save() }
     ) throws -> AssetTransactionLink {
-        guard transaction.kind == .expense,
-              transaction.amount > 0,
-              transaction.refundOfID == nil,
-              !transaction.isExcluded,
-              transaction.book?.stableID == asset.bookID,
-              transaction.currencyCode == asset.currencyCode else {
-            throw Error.invalidTransaction
+        return try AssetFinancialCommand.perform(in: context, save: { context in if saveImmediately { try saveContext(context) } }, joining: commandChanges) { changes in
+            let books = try context.fetch(FetchDescriptor<Book>())
+            guard transaction.kind == .expense,
+                  transaction.amount > 0,
+                  transaction.refundOfID == nil,
+                  !transaction.isExcluded,
+                  LedgerScope.allowsAssetAssociation(transaction, bookID: asset.bookID, books: books),
+                  transaction.currencyCode == asset.currencyCode else {
+                throw Error.invalidTransaction
+            }
+            try validatePurchaseAllocation(
+                transaction: transaction,
+                grossCents: grossCents,
+                refundCents: refundCents,
+                assetID: asset.stableID,
+                in: context
+            )
+            let link = AssetTransactionLink(
+                assetID: asset.stableID,
+                transactionID: transaction.stableID,
+                linkTypeRaw: AssetTransactionLinkType.sourceTransaction.rawValue,
+                amount: Decimal(grossCents - refundCents) / Decimal(100)
+            )
+            link.allocatedGrossCents = grossCents
+            link.allocatedRefundCents = refundCents
+            link.costQualityRaw = AssetAllocationCostQuality.partial.rawValue
+            link.note = "从已有账单分配"
+            changes.insert(link)
+            changes.set(asset, \.acquisitionCostSourceRaw, AssetAcquisitionCostSource.transactionAllocations.rawValue)
+            changes.set(asset, \.purchasePrice, MoneyNormalization.roundToCents(
+                Decimal(grossCents - refundCents) / Decimal(100)
+            ))
+            changes.insert(AssetEvent(
+                assetID: asset.stableID,
+                kind: .transactionLinked,
+                value: link.amount,
+                note: "从已有账单分配"
+            ))
+            return link
         }
-        try validatePurchaseAllocation(
-            transaction: transaction,
-            grossCents: grossCents,
-            refundCents: refundCents,
-            assetID: asset.stableID,
-            in: context
-        )
-        let link = AssetTransactionLink(
-            assetID: asset.stableID,
-            transactionID: transaction.stableID,
-            linkTypeRaw: AssetTransactionLinkType.sourceTransaction.rawValue,
-            amount: Decimal(grossCents - refundCents) / Decimal(100)
-        )
-        link.allocatedGrossCents = grossCents
-        link.allocatedRefundCents = refundCents
-        link.costQualityRaw = AssetAllocationCostQuality.partial.rawValue
-        link.note = "从已有账单分配"
-        context.insert(link)
-        asset.acquisitionCostSourceRaw = AssetAcquisitionCostSource.transactionAllocations.rawValue
-        asset.purchasePrice = MoneyNormalization.roundToCents(
-            Decimal(grossCents - refundCents) / Decimal(100)
-        )
-        context.insert(AssetEvent(
-            assetID: asset.stableID,
-            kind: .transactionLinked,
-            value: link.amount,
-            note: "从已有账单分配"
-        ))
-        if saveImmediately { try context.save() }
-        return link
     }
 
     private static func validatePurchaseAllocation(
@@ -368,59 +377,62 @@ enum AssetStore {
         includeInNetWorth: Bool = true,
         sourceType: PhysicalAssetSourceType = .historicalExisting,
         usageLifecycle: PhysicalAssetLifecycle = .owned,
-        saveImmediately: Bool = true
+        saveImmediately: Bool = true,
+        commandChanges: AssetFinancialCommand.Changes? = nil,
+        saveContext: AssetFinancialCommand.Save = { try $0.save() }
     ) throws -> PhysicalAsset {
-        try validateUsageLifecycle(usageLifecycle)
-        let normalizedPurchasePrice = MoneyNormalization.roundToCents(purchasePrice)
-        let normalizedCurrentValue = MoneyNormalization.roundToCents(currentValue)
-        try validate(
-            name: name,
-            purchasePrice: normalizedPurchasePrice,
-            currentValue: normalizedCurrentValue,
-            purchaseDate: purchaseDate,
-            warrantyUntil: warrantyUntil
-        )
-        let now = Date()
-        let asset = PhysicalAsset(
-            name: name.trimmingCharacters(in: .whitespacesAndNewlines),
-            kind: kind,
-            purchasePrice: normalizedPurchasePrice,
-            currentValue: normalizedCurrentValue,
-            currencyCode: currencyCode.trimmingCharacters(in: .whitespacesAndNewlines).uppercased(),
-            bookID: book?.stableID
-        )
-        asset.purchaseDate = purchaseDate
-        asset.sourceType = sourceType
-        asset.lifecycle = usageLifecycle
-        asset.usageStatusRaw = usageLifecycle == .idle ? "idle" : "active"
-        asset.acquisitionCostSourceRaw = normalizedPurchasePrice > 0
+        return try AssetFinancialCommand.perform(in: context, save: { context in if saveImmediately { try saveContext(context) } }, joining: commandChanges) { changes in
+            try validateUsageLifecycle(usageLifecycle)
+            let normalizedPurchasePrice = MoneyNormalization.roundToCents(purchasePrice)
+            let normalizedCurrentValue = MoneyNormalization.roundToCents(currentValue)
+            try validate(
+                name: name,
+                purchasePrice: normalizedPurchasePrice,
+                currentValue: normalizedCurrentValue,
+                purchaseDate: purchaseDate,
+                warrantyUntil: warrantyUntil
+            )
+            let now = Date()
+            let asset = PhysicalAsset(
+                name: name.trimmingCharacters(in: .whitespacesAndNewlines),
+                kind: kind,
+                purchasePrice: normalizedPurchasePrice,
+                currentValue: normalizedCurrentValue,
+                currencyCode: currencyCode.trimmingCharacters(in: .whitespacesAndNewlines).uppercased(),
+                bookID: book?.stableID
+            )
+            changes.set(asset, \.purchaseDate, purchaseDate)
+            changes.set(asset, \.sourceType, sourceType)
+            changes.set(asset, \.lifecycle, usageLifecycle)
+            changes.set(asset, \.usageStatusRaw, usageLifecycle == .idle ? "idle" : "active")
+            changes.set(asset, \.acquisitionCostSourceRaw, normalizedPurchasePrice > 0
             ? AssetAcquisitionCostSource.manual.rawValue
-            : AssetAcquisitionCostSource.manualUnknown.rawValue
-        asset.brand = brand.trimmingCharacters(in: .whitespacesAndNewlines)
-        asset.model = model.trimmingCharacters(in: .whitespacesAndNewlines)
-        asset.location = location.trimmingCharacters(in: .whitespacesAndNewlines)
-        asset.warrantyUntil = warrantyUntil
-        asset.note = note.trimmingCharacters(in: .whitespacesAndNewlines)
-        asset.includeInNetWorth = includeInNetWorth
-        asset.createdAt = now
-        asset.updatedAt = now
-        context.insert(asset)
-        context.insert(AssetEvent(
-            assetID: asset.stableID,
-            kind: .created,
-            occurredAt: purchaseDate ?? now,
-            value: normalizedCurrentValue,
-            note: asset.note
-        ))
-        context.insert(AssetValuation(
-            assetID: asset.stableID,
-            value: normalizedCurrentValue,
-            sourceRaw: purchaseDate == nil ? "opening" : "purchase",
-            valuedAt: purchaseDate ?? now,
-            note: "初始当前价值"
-        ))
-        if saveImmediately { try context.save() }
-        return asset
+            : AssetAcquisitionCostSource.manualUnknown.rawValue)
+            changes.set(asset, \.brand, brand.trimmingCharacters(in: .whitespacesAndNewlines))
+            changes.set(asset, \.model, model.trimmingCharacters(in: .whitespacesAndNewlines))
+            changes.set(asset, \.location, location.trimmingCharacters(in: .whitespacesAndNewlines))
+            changes.set(asset, \.warrantyUntil, warrantyUntil)
+            changes.set(asset, \.note, note.trimmingCharacters(in: .whitespacesAndNewlines))
+            changes.set(asset, \.includeInNetWorth, includeInNetWorth)
+            changes.set(asset, \.createdAt, now)
+            changes.set(asset, \.updatedAt, now)
+            changes.insert(asset)
+            changes.insert(AssetEvent(
+                assetID: asset.stableID,
+                kind: .created,
+                occurredAt: purchaseDate ?? now,
+                value: normalizedCurrentValue,
+                note: asset.note
+            ))
+            changes.insert(AssetValuation(
+                assetID: asset.stableID,
+                value: normalizedCurrentValue,
+                sourceRaw: purchaseDate == nil ? "opening" : "purchase",
+                valuedAt: purchaseDate ?? now,
+                note: "初始当前价值"
+            ))
+            return asset
+        }
     }
 
     /// 新购买物品：创建资产的同时生成一笔 asset_purchase 支出，并把两者绑定。
@@ -441,7 +453,8 @@ enum AssetStore {
         warrantyUntil: Date? = nil,
         note: String = "",
         includeInNetWorth: Bool = true,
-        usageLifecycle: PhysicalAssetLifecycle = .owned
+        usageLifecycle: PhysicalAssetLifecycle = .owned,
+        saveContext: AssetFinancialCommand.Save = { try $0.save() }
     ) throws -> PhysicalAsset {
         try validateUsageLifecycle(usageLifecycle)
         let normalizedPrice = MoneyNormalization.roundToCents(purchasePrice)
@@ -454,8 +467,7 @@ enum AssetStore {
         guard category == nil || category?.kind == .expense else {
             throw Error.invalidTransaction
         }
-        var createdAsset: PhysicalAsset?
-        try context.transaction {
+        return try AssetFinancialCommand.perform(in: context, save: saveContext) { changes in
             let asset = try create(
                 in: context,
                 name: name,
@@ -473,7 +485,8 @@ enum AssetStore {
                 includeInNetWorth: includeInNetWorth,
                 sourceType: .newPurchaseWithAccount,
                 usageLifecycle: usageLifecycle,
-                saveImmediately: false
+                saveImmediately: false,
+                commandChanges: changes
             )
             let transaction = MoneyTransaction(
                 amount: normalizedPrice,
@@ -494,17 +507,17 @@ enum AssetStore {
                 settlementAccountQuality: .userConfirmed,
                 eventType: .assetPurchase
             )
-            context.insert(transaction)
+            changes.insert(transaction)
             _ = try linkPurchaseAllocation(
                 asset,
                 transaction: transaction,
                 grossCents: MoneyNormalization.cents(normalizedPrice),
                 in: context,
-                saveImmediately: false
+                saveImmediately: false,
+                commandChanges: changes
             )
-            createdAsset = asset
+            return asset
         }
-        return createdAsset!
     }
 
     /// 从既有支出账单加入物品；多物品订单必须显式给出本物品的毛额和退款分摊。
@@ -523,7 +536,8 @@ enum AssetStore {
         warrantyUntil: Date? = nil,
         note: String = "",
         includeInNetWorth: Bool = true,
-        usageLifecycle: PhysicalAssetLifecycle = .owned
+        usageLifecycle: PhysicalAssetLifecycle = .owned,
+        saveContext: AssetFinancialCommand.Save = { try $0.save() }
     ) throws -> PhysicalAsset {
         try validateUsageLifecycle(usageLifecycle)
         guard transaction.kind == .expense,
@@ -546,8 +560,7 @@ enum AssetStore {
             in: context
         )
         let net = Decimal(allocatedGrossCents - allocatedRefundCents) / Decimal(100)
-        var createdAsset: PhysicalAsset?
-        try context.transaction {
+        return try AssetFinancialCommand.perform(in: context, save: saveContext) { changes in
             let asset = try create(
                 in: context,
                 name: name,
@@ -565,7 +578,8 @@ enum AssetStore {
                 includeInNetWorth: includeInNetWorth,
                 sourceType: .fromTransaction,
                 usageLifecycle: usageLifecycle,
-                saveImmediately: false
+                saveImmediately: false,
+                commandChanges: changes
             )
             _ = try linkPurchaseAllocation(
                 asset,
@@ -573,11 +587,11 @@ enum AssetStore {
                 grossCents: allocatedGrossCents,
                 refundCents: allocatedRefundCents,
                 in: context,
-                saveImmediately: false
+                saveImmediately: false,
+                commandChanges: changes
             )
-            createdAsset = asset
+            return asset
         }
-        return createdAsset!
     }
 
     static func update(
@@ -595,57 +609,59 @@ enum AssetStore {
         location: String,
         note: String,
         includeInNetWorth: Bool,
-        usageLifecycle: PhysicalAssetLifecycle? = nil
+        usageLifecycle: PhysicalAssetLifecycle? = nil,
+        saveContext: AssetFinancialCommand.Save = { try $0.save() }
     ) throws {
-        guard asset.lifecycle == .owned || asset.lifecycle == .idle else {
-            throw Error.endedAsset
-        }
-        if let usageLifecycle { try validateUsageLifecycle(usageLifecycle) }
-        let normalizedPurchasePrice = MoneyNormalization.roundToCents(purchasePrice)
-        let normalizedCurrentValue = MoneyNormalization.roundToCents(currentValue)
-        try validate(
-            name: name,
-            purchasePrice: normalizedPurchasePrice,
-            currentValue: normalizedCurrentValue,
-            purchaseDate: purchaseDate,
-            warrantyUntil: warrantyUntil
-        )
-        let previousValue = asset.currentValue
-        asset.name = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        asset.kind = kind
-        asset.purchasePrice = normalizedPurchasePrice
-        asset.currentValue = normalizedCurrentValue
-        if previousValue != normalizedCurrentValue {
-            asset.depreciationPaused = true
-        }
-        asset.bookID = book?.stableID
-        asset.purchaseDate = purchaseDate
-        asset.warrantyUntil = warrantyUntil
-        asset.brand = brand.trimmingCharacters(in: .whitespacesAndNewlines)
-        asset.model = model.trimmingCharacters(in: .whitespacesAndNewlines)
-        asset.location = location.trimmingCharacters(in: .whitespacesAndNewlines)
-        asset.note = note.trimmingCharacters(in: .whitespacesAndNewlines)
-        asset.includeInNetWorth = includeInNetWorth
-        if let usageLifecycle {
-            asset.lifecycle = usageLifecycle
-            asset.usageStatusRaw = usageLifecycle == .idle ? "idle" : "active"
-        }
-        asset.updatedAt = Date()
-        context.insert(AssetEvent(
-            assetID: asset.stableID,
-            kind: previousValue == normalizedCurrentValue ? .edited : .valuationUpdated,
-            value: normalizedCurrentValue,
-            note: previousValue == normalizedCurrentValue ? "编辑资产资料" : "手动更新当前价值"
-        ))
-        if previousValue != normalizedCurrentValue {
-            context.insert(AssetValuation(
+        try AssetFinancialCommand.perform(in: context, save: saveContext) { changes in
+            guard asset.lifecycle == .owned || asset.lifecycle == .idle else {
+                throw Error.endedAsset
+            }
+            if let usageLifecycle { try validateUsageLifecycle(usageLifecycle) }
+            let normalizedPurchasePrice = MoneyNormalization.roundToCents(purchasePrice)
+            let normalizedCurrentValue = MoneyNormalization.roundToCents(currentValue)
+            try validate(
+                name: name,
+                purchasePrice: normalizedPurchasePrice,
+                currentValue: normalizedCurrentValue,
+                purchaseDate: purchaseDate,
+                warrantyUntil: warrantyUntil
+            )
+            let previousValue = asset.currentValue
+            changes.set(asset, \.name, name.trimmingCharacters(in: .whitespacesAndNewlines))
+            changes.set(asset, \.kind, kind)
+            changes.set(asset, \.purchasePrice, normalizedPurchasePrice)
+            changes.set(asset, \.currentValue, normalizedCurrentValue)
+            if previousValue != normalizedCurrentValue {
+                changes.set(asset, \.depreciationPaused, true)
+            }
+            changes.set(asset, \.bookID, book?.stableID)
+            changes.set(asset, \.purchaseDate, purchaseDate)
+            changes.set(asset, \.warrantyUntil, warrantyUntil)
+            changes.set(asset, \.brand, brand.trimmingCharacters(in: .whitespacesAndNewlines))
+            changes.set(asset, \.model, model.trimmingCharacters(in: .whitespacesAndNewlines))
+            changes.set(asset, \.location, location.trimmingCharacters(in: .whitespacesAndNewlines))
+            changes.set(asset, \.note, note.trimmingCharacters(in: .whitespacesAndNewlines))
+            changes.set(asset, \.includeInNetWorth, includeInNetWorth)
+            if let usageLifecycle {
+                changes.set(asset, \.lifecycle, usageLifecycle)
+                changes.set(asset, \.usageStatusRaw, usageLifecycle == .idle ? "idle" : "active")
+            }
+            changes.set(asset, \.updatedAt, Date())
+            changes.insert(AssetEvent(
                 assetID: asset.stableID,
+                kind: previousValue == normalizedCurrentValue ? .edited : .valuationUpdated,
                 value: normalizedCurrentValue,
-                sourceRaw: "manual",
-                note: "手动更新当前价值"
+                note: previousValue == normalizedCurrentValue ? "编辑资产资料" : "手动更新当前价值"
             ))
+            if previousValue != normalizedCurrentValue {
+                changes.insert(AssetValuation(
+                    assetID: asset.stableID,
+                    value: normalizedCurrentValue,
+                    sourceRaw: "manual",
+                    note: "手动更新当前价值"
+                ))
+            }
         }
-        try context.save()
     }
 
     private static func validateUsageLifecycle(_ lifecycle: PhysicalAssetLifecycle) throws {
@@ -656,103 +672,109 @@ enum AssetStore {
         _ asset: PhysicalAsset,
         lifecycle: PhysicalAssetLifecycle,
         in context: ModelContext,
-        note: String = ""
+        note: String = "",
+        saveContext: AssetFinancialCommand.Save = { try $0.save() }
     ) throws {
-        guard asset.lifecycle == .owned || asset.lifecycle == .idle || lifecycle == .archived else {
-            throw Error.endedAsset
+        try AssetFinancialCommand.perform(in: context, save: saveContext) { changes in
+            guard asset.lifecycle == .owned || asset.lifecycle == .idle || lifecycle == .archived else {
+                throw Error.endedAsset
+            }
+            changes.set(asset, \.lifecycle, lifecycle)
+            changes.set(asset, \.updatedAt, Date())
+            if lifecycle != .owned && lifecycle != .idle {
+                changes.set(asset, \.includeInNetWorth, false)
+                changes.set(asset, \.endedAt, Date())
+            } else {
+                changes.set(asset, \.includeInNetWorth, true)
+                changes.set(asset, \.endedAt, nil)
+            }
+            let eventKind: AssetEventKind
+            switch lifecycle {
+            case .owned: eventKind = .restored
+            case .idle: eventKind = .edited
+            case .sold: eventKind = .sold
+            case .returned: eventKind = .returned
+            case .disposed: eventKind = .disposed
+            case .lost: eventKind = .lost
+            case .gifted: eventKind = .gifted
+            case .archived: eventKind = .archived
+            }
+            changes.insert(AssetEvent(
+                assetID: asset.stableID,
+                kind: eventKind,
+                value: asset.currentValue,
+                note: note
+            ))
         }
-        asset.lifecycle = lifecycle
-        asset.updatedAt = Date()
-        if lifecycle != .owned && lifecycle != .idle {
-            asset.includeInNetWorth = false
-            asset.endedAt = Date()
-        } else {
-            asset.includeInNetWorth = true
-            asset.endedAt = nil
+    }
+
+    static func restore(_ asset: PhysicalAsset, in context: ModelContext, saveContext: AssetFinancialCommand.Save = { try $0.save() }) throws {
+        try AssetFinancialCommand.perform(in: context, save: saveContext) { changes in
+            guard asset.lifecycle == .archived else { return }
+            changes.set(asset, \.lifecycle, .owned)
+            changes.set(asset, \.includeInNetWorth, true)
+            changes.set(asset, \.endedAt, nil)
+            changes.set(asset, \.archivedAt, nil)
+            changes.set(asset, \.updatedAt, Date())
+            changes.insert(AssetEvent(assetID: asset.stableID, kind: .restored, value: asset.currentValue))
         }
-        let eventKind: AssetEventKind
-        switch lifecycle {
-        case .owned: eventKind = .restored
-        case .idle: eventKind = .edited
-        case .sold: eventKind = .sold
-        case .returned: eventKind = .returned
-        case .disposed: eventKind = .disposed
-        case .lost: eventKind = .lost
-        case .gifted: eventKind = .gifted
-        case .archived: eventKind = .archived
+    }
+
+    static func archive(_ asset: PhysicalAsset, in context: ModelContext, saveContext: AssetFinancialCommand.Save = { try $0.save() }) throws {
+        try AssetFinancialCommand.perform(in: context, save: saveContext) { changes in
+            changes.set(asset, \.lifecycle, .archived)
+            changes.set(asset, \.archivedAt, Date())
+            changes.set(asset, \.includeInNetWorth, false)
+            changes.set(asset, \.updatedAt, Date())
+            changes.insert(AssetEvent(assetID: asset.stableID, kind: .archived, value: asset.currentValue))
         }
-        context.insert(AssetEvent(
-            assetID: asset.stableID,
-            kind: eventKind,
-            value: asset.currentValue,
-            note: note
-        ))
-        try context.save()
     }
 
-    static func restore(_ asset: PhysicalAsset, in context: ModelContext) throws {
-        guard asset.lifecycle == .archived else { return }
-        asset.lifecycle = .owned
-        asset.includeInNetWorth = true
-        asset.endedAt = nil
-        asset.archivedAt = nil
-        asset.updatedAt = Date()
-        context.insert(AssetEvent(assetID: asset.stableID, kind: .restored, value: asset.currentValue))
-        try context.save()
+    static func addUsage(_ asset: PhysicalAsset, count: Int = 1, in context: ModelContext, saveContext: AssetFinancialCommand.Save = { try $0.save() }) throws {
+        try AssetFinancialCommand.perform(in: context, save: saveContext) { changes in
+            guard asset.usageTrackingEnabled, count > 0 else { return }
+            changes.set(asset, \.usageCount, asset.usageCount + count)
+            changes.set(asset, \.updatedAt, Date())
+            changes.insert(AssetUsageEvent(
+                assetID: asset.stableID,
+                countDelta: count,
+                occurredAt: Date(),
+                note: "增加使用次数"
+            ))
+            changes.insert(AssetEvent(
+                assetID: asset.stableID,
+                kind: .usageAdded,
+                value: Decimal(count),
+                note: "增加使用次数"
+            ))
+        }
     }
 
-    static func archive(_ asset: PhysicalAsset, in context: ModelContext) throws {
-        asset.lifecycle = .archived
-        asset.archivedAt = Date()
-        asset.includeInNetWorth = false
-        asset.updatedAt = Date()
-        context.insert(AssetEvent(assetID: asset.stableID, kind: .archived, value: asset.currentValue))
-        try context.save()
-    }
-
-    static func addUsage(_ asset: PhysicalAsset, count: Int = 1, in context: ModelContext) throws {
-        guard asset.usageTrackingEnabled, count > 0 else { return }
-        asset.usageCount += count
-        asset.updatedAt = Date()
-        context.insert(AssetUsageEvent(
-            assetID: asset.stableID,
-            countDelta: count,
-            occurredAt: Date(),
-            note: "增加使用次数"
-        ))
-        context.insert(AssetEvent(
-            assetID: asset.stableID,
-            kind: .usageAdded,
-            value: Decimal(count),
-            note: "增加使用次数"
-        ))
-        try context.save()
-    }
-
-    static func undoLatestUsage(_ asset: PhysicalAsset, in context: ModelContext) throws {
-        let events = try usageEvents(for: asset, in: context)
-        let reversed = Set(events.compactMap(\.reversalOfID))
-        guard let target = events.first(where: {
-            $0.reversalOfID == nil && $0.countDelta > 0 && !reversed.contains($0.stableID)
-        }) else { return }
-        let now = Date()
-        context.insert(AssetUsageEvent(
-            assetID: asset.stableID,
-            countDelta: 0,
-            reversalOfID: target.stableID,
-            occurredAt: now,
-            note: "撤销使用记录",
-            stableID: UUID()
-        ))
-        asset.usageCount = max(0, asset.usageCount - target.countDelta)
-        asset.updatedAt = now
-        context.insert(AssetEvent(
-            assetID: asset.stableID,
-            kind: .usageAdded,
-            value: Decimal(-target.countDelta),
-            note: "撤销使用次数"
-        ))
-        try context.save()
+    static func undoLatestUsage(_ asset: PhysicalAsset, in context: ModelContext, saveContext: AssetFinancialCommand.Save = { try $0.save() }) throws {
+        try AssetFinancialCommand.perform(in: context, save: saveContext) { changes in
+            let events = try usageEvents(for: asset, in: context)
+            let reversed = Set(events.compactMap(\.reversalOfID))
+            guard let target = events.first(where: {
+                $0.reversalOfID == nil && $0.countDelta > 0 && !reversed.contains($0.stableID)
+            }) else { return }
+            let now = Date()
+            changes.insert(AssetUsageEvent(
+                assetID: asset.stableID,
+                countDelta: 0,
+                reversalOfID: target.stableID,
+                occurredAt: now,
+                note: "撤销使用记录",
+                stableID: UUID()
+            ))
+            changes.set(asset, \.usageCount, max(0, asset.usageCount - target.countDelta))
+            changes.set(asset, \.updatedAt, now)
+            changes.insert(AssetEvent(
+                assetID: asset.stableID,
+                kind: .usageAdded,
+                value: Decimal(-target.countDelta),
+                note: "撤销使用次数"
+            ))
+        }
     }
 
     /// 只更新当前估值，不改购置成本；每次更新都会追加估值记录。
@@ -762,42 +784,44 @@ enum AssetStore {
         value: Decimal,
         at date: Date = Date(),
         note: String = "手动更新当前价值",
-        in context: ModelContext
+        in context: ModelContext,
+        saveContext: AssetFinancialCommand.Save = { try $0.save() }
     ) throws -> AssetValuation {
-        guard asset.lifecycle == .owned || asset.lifecycle == .idle else {
-            throw Error.endedAsset
+        return try AssetFinancialCommand.perform(in: context, save: saveContext) { changes in
+            guard asset.lifecycle == .owned || asset.lifecycle == .idle else {
+                throw Error.endedAsset
+            }
+            let normalized = MoneyNormalization.roundToCents(value)
+            guard normalized >= 0 else { throw Error.invalidAmount }
+            let latestValuation = try context.fetch(FetchDescriptor<AssetValuation>(
+                sortBy: [
+                    SortDescriptor(\.valuedAt, order: .reverse),
+                    SortDescriptor(\.createdAt, order: .reverse),
+                ]
+            )).first { $0.assetID == asset.stableID }
+            let becomesCurrent = latestValuation == nil || date >= latestValuation!.valuedAt
+            if becomesCurrent {
+                changes.set(asset, \.currentValue, normalized)
+                changes.set(asset, \.depreciationPaused, true)
+                changes.set(asset, \.updatedAt, date)
+            }
+            let valuation = AssetValuation(
+                assetID: asset.stableID,
+                value: normalized,
+                sourceRaw: "manual",
+                valuedAt: date,
+                note: note
+            )
+            changes.insert(valuation)
+            changes.insert(AssetEvent(
+                assetID: asset.stableID,
+                kind: .valuationUpdated,
+                occurredAt: date,
+                value: normalized,
+                note: note
+            ))
+            return valuation
         }
-        let normalized = MoneyNormalization.roundToCents(value)
-        guard normalized >= 0 else { throw Error.invalidAmount }
-        let latestValuation = try context.fetch(FetchDescriptor<AssetValuation>(
-            sortBy: [
-                SortDescriptor(\.valuedAt, order: .reverse),
-                SortDescriptor(\.createdAt, order: .reverse),
-            ]
-        )).first { $0.assetID == asset.stableID }
-        let becomesCurrent = latestValuation == nil || date >= latestValuation!.valuedAt
-        if becomesCurrent {
-            asset.currentValue = normalized
-            asset.depreciationPaused = true
-            asset.updatedAt = date
-        }
-        let valuation = AssetValuation(
-            assetID: asset.stableID,
-            value: normalized,
-            sourceRaw: "manual",
-            valuedAt: date,
-            note: note
-        )
-        context.insert(valuation)
-        context.insert(AssetEvent(
-            assetID: asset.stableID,
-            kind: .valuationUpdated,
-            occurredAt: date,
-            value: normalized,
-            note: note
-        ))
-        try context.save()
-        return valuation
     }
 
     /// 更新资产照片、缩略图和发票/保修单路径；数据库只保存受管目录中的相对路径。
@@ -808,23 +832,25 @@ enum AssetStore {
         invoicePath: String,
         note: String = "",
         at date: Date = Date(),
-        in context: ModelContext
+        in context: ModelContext,
+        saveContext: AssetFinancialCommand.Save = { try $0.save() }
     ) throws {
-        asset.photoPath = photoPath.trimmingCharacters(in: .whitespacesAndNewlines)
-        if let thumbnailPath {
-            asset.thumbnailPath = thumbnailPath.trimmingCharacters(in: .whitespacesAndNewlines)
+        try AssetFinancialCommand.perform(in: context, save: saveContext) { changes in
+            changes.set(asset, \.photoPath, photoPath.trimmingCharacters(in: .whitespacesAndNewlines))
+            if let thumbnailPath {
+                changes.set(asset, \.thumbnailPath, thumbnailPath.trimmingCharacters(in: .whitespacesAndNewlines))
+            }
+            changes.set(asset, \.invoicePath, invoicePath.trimmingCharacters(in: .whitespacesAndNewlines))
+            changes.set(asset, \.updatedAt, date)
+            changes.insert(AssetEvent(
+                assetID: asset.stableID,
+                kind: .edited,
+                occurredAt: date,
+                note: note.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    ? "更新资产凭证"
+                    : note
+            ))
         }
-        asset.invoicePath = invoicePath.trimmingCharacters(in: .whitespacesAndNewlines)
-        asset.updatedAt = date
-        context.insert(AssetEvent(
-            assetID: asset.stableID,
-            kind: .edited,
-            occurredAt: date,
-            note: note.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                ? "更新资产凭证"
-                : note
-        ))
-        try context.save()
     }
 
     /// 配置或关闭线性折旧。关闭后清空折旧字段，重新保存配置会恢复自动折旧。
@@ -837,111 +863,115 @@ enum AssetStore {
         startAt: Date? = nil,
         note: String = "",
         at date: Date = Date(),
-        in context: ModelContext
+        in context: ModelContext,
+        saveContext: AssetFinancialCommand.Save = { try $0.save() }
     ) throws {
-        if enabled {
-            let normalizedBase = MoneyNormalization.roundToCents(base)
-            let normalizedSalvage = MoneyNormalization.roundToCents(salvageValue)
-            guard normalizedBase > 0,
-                  normalizedSalvage >= 0,
-                  normalizedSalvage <= normalizedBase,
-                  usefulLifeMonths > 0,
-                  let startAt else {
-                throw Error.invalidAmount
+        try AssetFinancialCommand.perform(in: context, save: saveContext) { changes in
+            if enabled {
+                let normalizedBase = MoneyNormalization.roundToCents(base)
+                let normalizedSalvage = MoneyNormalization.roundToCents(salvageValue)
+                guard normalizedBase > 0,
+                      normalizedSalvage >= 0,
+                      normalizedSalvage <= normalizedBase,
+                      usefulLifeMonths > 0,
+                      let startAt else {
+                    throw Error.invalidAmount
+                }
+                if let purchaseDate = asset.purchaseDate,
+                   Calendar.current.startOfDay(for: startAt) <
+                   Calendar.current.startOfDay(for: purchaseDate) {
+                    throw Error.invalidWarranty
+                }
+                changes.set(asset, \.depreciationMethod, "linear")
+                changes.set(asset, \.depreciationBase, normalizedBase)
+                changes.set(asset, \.salvageValue, normalizedSalvage)
+                changes.set(asset, \.usefulLifeMonths, usefulLifeMonths)
+                changes.set(asset, \.depreciationStartDate, startAt)
+                changes.set(asset, \.depreciationPaused, false)
+            } else {
+                changes.set(asset, \.depreciationMethod, "")
+                changes.set(asset, \.depreciationBase, .zero)
+                changes.set(asset, \.salvageValue, .zero)
+                changes.set(asset, \.usefulLifeMonths, 0)
+                changes.set(asset, \.depreciationStartDate, nil)
+                changes.set(asset, \.depreciationPaused, false)
             }
-            if let purchaseDate = asset.purchaseDate,
-               Calendar.current.startOfDay(for: startAt) <
-               Calendar.current.startOfDay(for: purchaseDate) {
-                throw Error.invalidWarranty
-            }
-            asset.depreciationMethod = "linear"
-            asset.depreciationBase = normalizedBase
-            asset.salvageValue = normalizedSalvage
-            asset.usefulLifeMonths = usefulLifeMonths
-            asset.depreciationStartDate = startAt
-            asset.depreciationPaused = false
-        } else {
-            asset.depreciationMethod = ""
-            asset.depreciationBase = .zero
-            asset.salvageValue = .zero
-            asset.usefulLifeMonths = 0
-            asset.depreciationStartDate = nil
-            asset.depreciationPaused = false
+            changes.set(asset, \.updatedAt, date)
+            changes.insert(AssetEvent(
+                assetID: asset.stableID,
+                kind: .depreciation,
+                occurredAt: date,
+                value: enabled ? asset.depreciationBase : nil,
+                note: note.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    ? (enabled ? "设置线性折旧" : "关闭自动折旧")
+                    : note
+            ))
         }
-        asset.updatedAt = date
-        context.insert(AssetEvent(
-            assetID: asset.stableID,
-            kind: .depreciation,
-            occurredAt: date,
-            value: enabled ? asset.depreciationBase : nil,
-            note: note.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                ? (enabled ? "设置线性折旧" : "关闭自动折旧")
-                : note
-        ))
-        try context.save()
     }
 
     /// 应用截至指定日期的线性折旧；只降低当前价值，不生成普通收支流水。
     @discardableResult
     static func applyDepreciation(
         asOf: Date = Date(),
-        in context: ModelContext
+        in context: ModelContext,
+        saveContext: AssetFinancialCommand.Save = { try $0.save() }
     ) throws -> Int {
-        let assets = try context.fetch(FetchDescriptor<PhysicalAsset>())
-            .filter {
-                !$0.isDeleted &&
-                ($0.lifecycle == .owned || $0.lifecycle == .idle) &&
-                $0.depreciationMethod == "linear" &&
-                !$0.depreciationPaused &&
-                $0.depreciationStartDate != nil &&
-                $0.usefulLifeMonths > 0
+        return try AssetFinancialCommand.perform(in: context, save: saveContext) { changes in
+            let assets = try context.fetch(FetchDescriptor<PhysicalAsset>())
+                .filter {
+                    !$0.isDeleted &&
+                    ($0.lifecycle == .owned || $0.lifecycle == .idle) &&
+                    $0.depreciationMethod == "linear" &&
+                    !$0.depreciationPaused &&
+                    $0.depreciationStartDate != nil &&
+                    $0.usefulLifeMonths > 0
+                }
+            let calendar = Calendar.current
+            var changed = 0
+            for asset in assets {
+                guard let start = asset.depreciationStartDate,
+                      asOf >= start else { continue }
+                let startMonth = calendar.date(
+                    from: calendar.dateComponents([.year, .month], from: start)
+                ) ?? start
+                let endMonth = calendar.date(
+                    from: calendar.dateComponents([.year, .month], from: asOf)
+                ) ?? asOf
+                let elapsed = min(
+                    max(calendar.dateComponents([.month], from: startMonth, to: endMonth).month ?? 0, 0),
+                    asset.usefulLifeMonths
+                )
+                guard elapsed > 0 else { continue }
+                let depreciable = asset.depreciationBase - asset.salvageValue
+                guard depreciable > 0 else { continue }
+                var monthly = Decimal.zero
+                var left = depreciable
+                var right = Decimal(asset.usefulLifeMonths)
+                NSDecimalDivide(&monthly, &left, &right, .plain)
+                var target = asset.depreciationBase - monthly * Decimal(elapsed)
+                if target < asset.salvageValue { target = asset.salvageValue }
+                target = MoneyNormalization.roundToCents(target)
+                guard target < asset.currentValue else { continue }
+                changes.set(asset, \.currentValue, target)
+                changes.set(asset, \.updatedAt, asOf)
+                changes.insert(AssetValuation(
+                    assetID: asset.stableID,
+                    value: target,
+                    sourceRaw: "auto_depreciation",
+                    valuedAt: asOf,
+                    note: "自动线性折旧"
+                ))
+                changes.insert(AssetEvent(
+                    assetID: asset.stableID,
+                    kind: .depreciation,
+                    occurredAt: asOf,
+                    value: target,
+                    note: "自动线性折旧"
+                ))
+                changed += 1
             }
-        let calendar = Calendar.current
-        var changed = 0
-        for asset in assets {
-            guard let start = asset.depreciationStartDate,
-                  asOf >= start else { continue }
-            let startMonth = calendar.date(
-                from: calendar.dateComponents([.year, .month], from: start)
-            ) ?? start
-            let endMonth = calendar.date(
-                from: calendar.dateComponents([.year, .month], from: asOf)
-            ) ?? asOf
-            let elapsed = min(
-                max(calendar.dateComponents([.month], from: startMonth, to: endMonth).month ?? 0, 0),
-                asset.usefulLifeMonths
-            )
-            guard elapsed > 0 else { continue }
-            let depreciable = asset.depreciationBase - asset.salvageValue
-            guard depreciable > 0 else { continue }
-            var monthly = Decimal.zero
-            var left = depreciable
-            var right = Decimal(asset.usefulLifeMonths)
-            NSDecimalDivide(&monthly, &left, &right, .plain)
-            var target = asset.depreciationBase - monthly * Decimal(elapsed)
-            if target < asset.salvageValue { target = asset.salvageValue }
-            target = MoneyNormalization.roundToCents(target)
-            guard target < asset.currentValue else { continue }
-            asset.currentValue = target
-            asset.updatedAt = asOf
-            context.insert(AssetValuation(
-                assetID: asset.stableID,
-                value: target,
-                sourceRaw: "auto_depreciation",
-                valuedAt: asOf,
-                note: "自动线性折旧"
-            ))
-            context.insert(AssetEvent(
-                assetID: asset.stableID,
-                kind: .depreciation,
-                occurredAt: asOf,
-                value: target,
-                note: "自动线性折旧"
-            ))
-            changed += 1
+            return changed
         }
-        if changed > 0 { try context.save() }
-        return changed
     }
 
     /// 出售物品：出售到账作为 asset_sale 事件收入写入，但明确排除普通收支统计。
@@ -954,153 +984,157 @@ enum AssetStore {
         account: Account? = nil,
         at date: Date = Date(),
         note: String = "",
-        in context: ModelContext
+        in context: ModelContext,
+        saveContext: AssetFinancialCommand.Save = { try $0.save() }
     ) throws -> MoneyTransaction? {
-        guard asset.lifecycle == .owned || asset.lifecycle == .idle else {
-            throw Error.invalidSale
-        }
-        let gross = MoneyNormalization.roundToCents(grossProceeds)
-        let normalizedFee = MoneyNormalization.roundToCents(fee)
-        guard gross >= 0, normalizedFee >= 0, normalizedFee <= gross else {
-            throw Error.invalidSale
-        }
-        guard asset.currencyCode.uppercased() == "CNY" else {
-            throw Error.saleAccountMissing
-        }
-        if let account,
-           account.isDeleted || account.status != .active ||
-           account.currencyCode != asset.currencyCode {
-            throw Error.saleAccountMissing
-        }
-        let net = gross - normalizedFee
-        let previousValue = asset.currentValue
-        let previousLifecycle = asset.lifecycle
-        let previousInclude = asset.includeInNetWorth
-        let previousEndedAt = asset.endedAt
-        let books = try context.fetch(FetchDescriptor<Book>())
-        let book = books.first { $0.stableID == asset.bookID }
-        let cleanedNote = note.trimmingCharacters(in: .whitespacesAndNewlines)
-        var saleTransaction: MoneyTransaction?
-        if let account, net > 0 {
-            let transaction = MoneyTransaction(
-                amount: net,
-                kind: .income,
-                date: date,
-                note: cleanedNote.isEmpty ? "资产出售：\(asset.name)" : cleanedNote,
-                merchantName: asset.name,
-                currencyCode: asset.currencyCode,
-                book: book,
-                timePrecision: .dateOnly,
-                settledAt: date,
-                settlementQuality: .userConfirmed,
-                settlementAccountID: account.stableID,
-                settlementAccountQuality: .userConfirmed,
-                eventType: .assetSale,
-                isExcluded: true
-            )
-            context.insert(transaction)
-            saleTransaction = transaction
-        }
-        asset.lifecycle = .sold
-        asset.currentValue = .zero
-        asset.includeInNetWorth = false
-        asset.endedAt = date
-        asset.updatedAt = date
-        if let saleTransaction {
-            let link = AssetTransactionLink(
+        return try AssetFinancialCommand.perform(in: context, save: saveContext) { changes in
+            guard asset.lifecycle == .owned || asset.lifecycle == .idle else {
+                throw Error.invalidSale
+            }
+            let gross = MoneyNormalization.roundToCents(grossProceeds)
+            let normalizedFee = MoneyNormalization.roundToCents(fee)
+            guard gross >= 0, normalizedFee >= 0, normalizedFee <= gross else {
+                throw Error.invalidSale
+            }
+            guard asset.currencyCode.uppercased() == "CNY" else {
+                throw Error.saleAccountMissing
+            }
+            if let account,
+               account.isDeleted || account.status != .active ||
+               account.currencyCode != asset.currencyCode {
+                throw Error.saleAccountMissing
+            }
+            let net = gross - normalizedFee
+            let previousValue = asset.currentValue
+            let previousLifecycle = asset.lifecycle
+            let previousInclude = asset.includeInNetWorth
+            let previousEndedAt = asset.endedAt
+            let books = try context.fetch(FetchDescriptor<Book>())
+            let book = books.first { $0.stableID == asset.bookID }
+            let cleanedNote = note.trimmingCharacters(in: .whitespacesAndNewlines)
+            var saleTransaction: MoneyTransaction?
+            if let account, net > 0 {
+                let transaction = MoneyTransaction(
+                    amount: net,
+                    kind: .income,
+                    date: date,
+                    note: cleanedNote.isEmpty ? "资产出售：\(asset.name)" : cleanedNote,
+                    merchantName: asset.name,
+                    currencyCode: asset.currencyCode,
+                    book: book,
+                    timePrecision: .dateOnly,
+                    settledAt: date,
+                    settlementQuality: .userConfirmed,
+                    settlementAccountID: account.stableID,
+                    settlementAccountQuality: .userConfirmed,
+                    eventType: .assetSale,
+                    isExcluded: true
+                )
+                changes.insert(transaction)
+                saleTransaction = transaction
+            }
+            changes.set(asset, \.lifecycle, .sold)
+            changes.set(asset, \.currentValue, .zero)
+            changes.set(asset, \.includeInNetWorth, false)
+            changes.set(asset, \.endedAt, date)
+            changes.set(asset, \.updatedAt, date)
+            if let saleTransaction {
+                let link = AssetTransactionLink(
+                    assetID: asset.stableID,
+                    transactionID: saleTransaction.stableID,
+                    linkTypeRaw: AssetTransactionLinkType.saleAccountMovement.rawValue,
+                    amount: net
+                )
+                link.costQualityRaw = AssetAllocationCostQuality.exact.rawValue
+                link.note = "出售到账，不计入普通收入"
+                changes.insert(link)
+            }
+            changes.insert(AssetValuation(
                 assetID: asset.stableID,
-                transactionID: saleTransaction.stableID,
-                linkTypeRaw: AssetTransactionLinkType.saleAccountMovement.rawValue,
-                amount: net
-            )
-            link.costQualityRaw = AssetAllocationCostQuality.exact.rawValue
-            link.note = "出售到账，不计入普通收入"
-            context.insert(link)
+                value: .zero,
+                sourceRaw: "sale",
+                valuedAt: date,
+                note: cleanedNote
+            ))
+            changes.insert(AssetEvent(
+                assetID: asset.stableID,
+                kind: .sold,
+                occurredAt: date,
+                value: net,
+                note: cleanedNote,
+                metadataJSON: metadataJSON([
+                    "gross_sale_amount": gross.description,
+                    "sale_fee": normalizedFee.description,
+                    "net_proceeds": net.description,
+                    "previous_value": previousValue.description,
+                    "previous_lifecycle": previousLifecycle.rawValue,
+                    "previous_include_in_net_worth": previousInclude ? "1" : "0",
+                    "previous_ended_at": previousEndedAt?.timeIntervalSince1970.description ?? "",
+                    "transaction_id": saleTransaction?.stableID.uuidString ?? ""
+                ])
+            ))
+            return saleTransaction
         }
-        context.insert(AssetValuation(
-            assetID: asset.stableID,
-            value: .zero,
-            sourceRaw: "sale",
-            valuedAt: date,
-            note: cleanedNote
-        ))
-        context.insert(AssetEvent(
-            assetID: asset.stableID,
-            kind: .sold,
-            occurredAt: date,
-            value: net,
-            note: cleanedNote,
-            metadataJSON: metadataJSON([
-                "gross_sale_amount": gross.description,
-                "sale_fee": normalizedFee.description,
-                "net_proceeds": net.description,
-                "previous_value": previousValue.description,
-                "previous_lifecycle": previousLifecycle.rawValue,
-                "previous_include_in_net_worth": previousInclude ? "1" : "0",
-                "previous_ended_at": previousEndedAt?.timeIntervalSince1970.description ?? "",
-                "transaction_id": saleTransaction?.stableID.uuidString ?? ""
-            ])
-        ))
-        try context.save()
-        return saleTransaction
     }
 
     /// 撤销出售时删除出售专用到账流水，恢复出售前的价值和持有状态。
     static func undoSale(
         _ asset: PhysicalAsset,
         at date: Date = Date(),
-        in context: ModelContext
+        in context: ModelContext,
+        saveContext: AssetFinancialCommand.Save = { try $0.save() }
     ) throws {
-        guard asset.lifecycle == .sold else { throw Error.saleNotFound }
-        let events = try events(for: asset, in: context)
-        let saleEvent = events.first { $0.kind == .sold }
-        let metadata = saleEvent.flatMap { eventMetadata($0) } ?? [:]
-        let previousValue = Decimal(
-            string: metadata["previous_value"] as? String ?? ""
-        ) ?? asset.currentValue
-        let previousLifecycle = PhysicalAssetLifecycle(
-            rawValue: metadata["previous_lifecycle"] as? String ?? "owned"
-        ) ?? .owned
-        let previousInclude = (metadata["previous_include_in_net_worth"] as? String) != "0"
-        let previousEndedAt = dateFromMetadata(metadata["previous_ended_at"])
-        let links = try context.fetch(FetchDescriptor<AssetTransactionLink>())
-            .filter {
-                $0.assetID == asset.stableID &&
-                $0.linkTypeRaw == AssetTransactionLinkType.saleAccountMovement.rawValue
+        try AssetFinancialCommand.perform(in: context, save: saveContext) { changes in
+            guard asset.lifecycle == .sold else { throw Error.saleNotFound }
+            let events = try events(for: asset, in: context)
+            let saleEvent = events.first { $0.kind == .sold }
+            let metadata = saleEvent.flatMap { eventMetadata($0) } ?? [:]
+            let previousValue = Decimal(
+                string: metadata["previous_value"] as? String ?? ""
+            ) ?? asset.currentValue
+            let previousLifecycle = PhysicalAssetLifecycle(
+                rawValue: metadata["previous_lifecycle"] as? String ?? "owned"
+            ) ?? .owned
+            let previousInclude = (metadata["previous_include_in_net_worth"] as? String) != "0"
+            let previousEndedAt = dateFromMetadata(metadata["previous_ended_at"])
+            let links = try context.fetch(FetchDescriptor<AssetTransactionLink>())
+                .filter {
+                    $0.assetID == asset.stableID &&
+                    $0.linkTypeRaw == AssetTransactionLinkType.saleAccountMovement.rawValue
+                }
+                .sorted { $0.createdAt > $1.createdAt }
+            if let link = links.first {
+                let transactions = try context.fetch(FetchDescriptor<MoneyTransaction>())
+                for child in transactions where child.refundOfID == link.transactionID {
+                    changes.delete(child)
+                }
+                if let transaction = transactions.first(where: { $0.stableID == link.transactionID }) {
+                    changes.delete(transaction)
+                }
+                changes.delete(link)
             }
-            .sorted { $0.createdAt > $1.createdAt }
-        if let link = links.first {
-            let transactions = try context.fetch(FetchDescriptor<MoneyTransaction>())
-            for child in transactions where child.refundOfID == link.transactionID {
-                context.delete(child)
-            }
-            if let transaction = transactions.first(where: { $0.stableID == link.transactionID }) {
-                context.delete(transaction)
-            }
-            context.delete(link)
-        }
-        asset.lifecycle = previousLifecycle == .owned || previousLifecycle == .idle
+            changes.set(asset, \.lifecycle, previousLifecycle == .owned || previousLifecycle == .idle
             ? previousLifecycle
-            : .owned
-        asset.currentValue = MoneyNormalization.roundToCents(previousValue)
-        asset.includeInNetWorth = previousInclude
-        asset.endedAt = previousEndedAt
-        asset.updatedAt = date
-        context.insert(AssetValuation(
-            assetID: asset.stableID,
-            value: asset.currentValue,
-            sourceRaw: "manual",
-            valuedAt: date,
-            note: "撤销出售，恢复出售前价值"
-        ))
-        context.insert(AssetEvent(
-            assetID: asset.stableID,
-            kind: .restored,
-            occurredAt: date,
-            value: asset.currentValue,
-            note: "撤销出售"
-        ))
-        try context.save()
+            : .owned)
+            changes.set(asset, \.currentValue, MoneyNormalization.roundToCents(previousValue))
+            changes.set(asset, \.includeInNetWorth, previousInclude)
+            changes.set(asset, \.endedAt, previousEndedAt)
+            changes.set(asset, \.updatedAt, date)
+            changes.insert(AssetValuation(
+                assetID: asset.stableID,
+                value: asset.currentValue,
+                sourceRaw: "manual",
+                valuedAt: date,
+                note: "撤销出售，恢复出售前价值"
+            ))
+            changes.insert(AssetEvent(
+                assetID: asset.stableID,
+                kind: .restored,
+                occurredAt: date,
+                value: asset.currentValue,
+                note: "撤销出售"
+            ))
+        }
     }
 
     /// 确认退货：仅允许购置来源完整覆盖原账单的物品，避免多物品订单被整单误退。
@@ -1191,39 +1225,41 @@ enum AssetStore {
     static func undoReturn(
         _ asset: PhysicalAsset,
         at date: Date = Date(),
-        in context: ModelContext
+        in context: ModelContext,
+        saveContext: AssetFinancialCommand.Save = { try $0.save() }
     ) throws {
-        guard asset.lifecycle == .returned else { throw Error.returnNotAvailable }
-        let returnedEvent = try events(for: asset, in: context).first { $0.kind == .returned }
-        let metadata = returnedEvent.flatMap { eventMetadata($0) } ?? [:]
-        let previousValue = Decimal(
-            string: metadata["previous_value"] as? String ?? ""
-        ) ?? asset.currentValue
-        let previousLifecycle = PhysicalAssetLifecycle(
-            rawValue: metadata["previous_lifecycle"] as? String ?? "owned"
-        ) ?? .owned
-        let previousInclude = (metadata["previous_include_in_net_worth"] as? String) != "0"
-        let previousEndedAt = dateFromMetadata(metadata["previous_ended_at"])
-        asset.lifecycle = previousLifecycle == .idle ? .idle : .owned
-        asset.currentValue = MoneyNormalization.roundToCents(previousValue)
-        asset.includeInNetWorth = previousInclude
-        asset.endedAt = previousEndedAt
-        asset.updatedAt = date
-        context.insert(AssetValuation(
-            assetID: asset.stableID,
-            value: asset.currentValue,
-            sourceRaw: "manual",
-            valuedAt: date,
-            note: "撤销退货，恢复退货前价值"
-        ))
-        context.insert(AssetEvent(
-            assetID: asset.stableID,
-            kind: .restored,
-            occurredAt: date,
-            value: asset.currentValue,
-            note: "撤销退货"
-        ))
-        try context.save()
+        try AssetFinancialCommand.perform(in: context, save: saveContext) { changes in
+            guard asset.lifecycle == .returned else { throw Error.returnNotAvailable }
+            let returnedEvent = try events(for: asset, in: context).first { $0.kind == .returned }
+            let metadata = returnedEvent.flatMap { eventMetadata($0) } ?? [:]
+            let previousValue = Decimal(
+                string: metadata["previous_value"] as? String ?? ""
+            ) ?? asset.currentValue
+            let previousLifecycle = PhysicalAssetLifecycle(
+                rawValue: metadata["previous_lifecycle"] as? String ?? "owned"
+            ) ?? .owned
+            let previousInclude = (metadata["previous_include_in_net_worth"] as? String) != "0"
+            let previousEndedAt = dateFromMetadata(metadata["previous_ended_at"])
+            changes.set(asset, \.lifecycle, previousLifecycle == .idle ? .idle : .owned)
+            changes.set(asset, \.currentValue, MoneyNormalization.roundToCents(previousValue))
+            changes.set(asset, \.includeInNetWorth, previousInclude)
+            changes.set(asset, \.endedAt, previousEndedAt)
+            changes.set(asset, \.updatedAt, date)
+            changes.insert(AssetValuation(
+                assetID: asset.stableID,
+                value: asset.currentValue,
+                sourceRaw: "manual",
+                valuedAt: date,
+                note: "撤销退货，恢复退货前价值"
+            ))
+            changes.insert(AssetEvent(
+                assetID: asset.stableID,
+                kind: .restored,
+                occurredAt: date,
+                value: asset.currentValue,
+                note: "撤销退货"
+            ))
+        }
     }
 
     /// 报废、丢失、赠送属于终止持有，不生成虚构的收入或支出。
@@ -1232,92 +1268,96 @@ enum AssetStore {
         lifecycle: PhysicalAssetLifecycle,
         at date: Date = Date(),
         note: String = "",
-        in context: ModelContext
+        in context: ModelContext,
+        saveContext: AssetFinancialCommand.Save = { try $0.save() }
     ) throws {
-        guard lifecycle == .disposed || lifecycle == .lost || lifecycle == .gifted else {
-            throw Error.invalidTerminalStatus
+        try AssetFinancialCommand.perform(in: context, save: saveContext) { changes in
+            guard lifecycle == .disposed || lifecycle == .lost || lifecycle == .gifted else {
+                throw Error.invalidTerminalStatus
+            }
+            guard asset.lifecycle == .owned || asset.lifecycle == .idle else {
+                throw Error.invalidTerminalStatus
+            }
+            let previousValue = asset.currentValue
+            let previousLifecycle = asset.lifecycle
+            let previousInclude = asset.includeInNetWorth
+            let previousEndedAt = asset.endedAt
+            changes.set(asset, \.lifecycle, lifecycle)
+            changes.set(asset, \.currentValue, .zero)
+            changes.set(asset, \.includeInNetWorth, false)
+            changes.set(asset, \.endedAt, date)
+            changes.set(asset, \.updatedAt, date)
+            let eventKind: AssetEventKind = switch lifecycle {
+            case .disposed: .disposed
+            case .lost: .lost
+            case .gifted: .gifted
+            default: .edited
+            }
+            changes.insert(AssetValuation(
+                assetID: asset.stableID,
+                value: .zero,
+                sourceRaw: "status_zero",
+                valuedAt: date,
+                note: note
+            ))
+            changes.insert(AssetEvent(
+                assetID: asset.stableID,
+                kind: eventKind,
+                occurredAt: date,
+                value: .zero,
+                note: note,
+                metadataJSON: metadataJSON([
+                    "previous_value": previousValue.description,
+                    "previous_lifecycle": previousLifecycle.rawValue,
+                    "previous_include_in_net_worth": previousInclude ? "1" : "0",
+                    "previous_ended_at": previousEndedAt?.timeIntervalSince1970.description ?? ""
+                ])
+            ))
         }
-        guard asset.lifecycle == .owned || asset.lifecycle == .idle else {
-            throw Error.invalidTerminalStatus
-        }
-        let previousValue = asset.currentValue
-        let previousLifecycle = asset.lifecycle
-        let previousInclude = asset.includeInNetWorth
-        let previousEndedAt = asset.endedAt
-        asset.lifecycle = lifecycle
-        asset.currentValue = .zero
-        asset.includeInNetWorth = false
-        asset.endedAt = date
-        asset.updatedAt = date
-        let eventKind: AssetEventKind = switch lifecycle {
-        case .disposed: .disposed
-        case .lost: .lost
-        case .gifted: .gifted
-        default: .edited
-        }
-        context.insert(AssetValuation(
-            assetID: asset.stableID,
-            value: .zero,
-            sourceRaw: "status_zero",
-            valuedAt: date,
-            note: note
-        ))
-        context.insert(AssetEvent(
-            assetID: asset.stableID,
-            kind: eventKind,
-            occurredAt: date,
-            value: .zero,
-            note: note,
-            metadataJSON: metadataJSON([
-                "previous_value": previousValue.description,
-                "previous_lifecycle": previousLifecycle.rawValue,
-                "previous_include_in_net_worth": previousInclude ? "1" : "0",
-                "previous_ended_at": previousEndedAt?.timeIntervalSince1970.description ?? ""
-            ])
-        ))
-        try context.save()
     }
 
     static func undoEnd(
         _ asset: PhysicalAsset,
         at date: Date = Date(),
-        in context: ModelContext
+        in context: ModelContext,
+        saveContext: AssetFinancialCommand.Save = { try $0.save() }
     ) throws {
-        guard asset.lifecycle == .disposed || asset.lifecycle == .lost || asset.lifecycle == .gifted else {
-            throw Error.invalidTerminalStatus
+        try AssetFinancialCommand.perform(in: context, save: saveContext) { changes in
+            guard asset.lifecycle == .disposed || asset.lifecycle == .lost || asset.lifecycle == .gifted else {
+                throw Error.invalidTerminalStatus
+            }
+            let event = try events(for: asset, in: context).first {
+                $0.kind == .disposed || $0.kind == .lost || $0.kind == .gifted
+            }
+            let metadata = event.flatMap { eventMetadata($0) } ?? [:]
+            let previousValue = Decimal(
+                string: metadata["previous_value"] as? String ?? ""
+            ) ?? asset.currentValue
+            let previousLifecycle = PhysicalAssetLifecycle(
+                rawValue: metadata["previous_lifecycle"] as? String ?? "owned"
+            ) ?? .owned
+            let previousInclude = (metadata["previous_include_in_net_worth"] as? String) != "0"
+            let previousEndedAt = dateFromMetadata(metadata["previous_ended_at"])
+            changes.set(asset, \.lifecycle, previousLifecycle == .idle ? .idle : .owned)
+            changes.set(asset, \.currentValue, MoneyNormalization.roundToCents(previousValue))
+            changes.set(asset, \.includeInNetWorth, previousInclude)
+            changes.set(asset, \.endedAt, previousEndedAt)
+            changes.set(asset, \.updatedAt, date)
+            changes.insert(AssetValuation(
+                assetID: asset.stableID,
+                value: asset.currentValue,
+                sourceRaw: "manual",
+                valuedAt: date,
+                note: "撤销结束持有"
+            ))
+            changes.insert(AssetEvent(
+                assetID: asset.stableID,
+                kind: .restored,
+                occurredAt: date,
+                value: asset.currentValue,
+                note: "撤销结束持有"
+            ))
         }
-        let event = try events(for: asset, in: context).first {
-            $0.kind == .disposed || $0.kind == .lost || $0.kind == .gifted
-        }
-        let metadata = event.flatMap { eventMetadata($0) } ?? [:]
-        let previousValue = Decimal(
-            string: metadata["previous_value"] as? String ?? ""
-        ) ?? asset.currentValue
-        let previousLifecycle = PhysicalAssetLifecycle(
-            rawValue: metadata["previous_lifecycle"] as? String ?? "owned"
-        ) ?? .owned
-        let previousInclude = (metadata["previous_include_in_net_worth"] as? String) != "0"
-        let previousEndedAt = dateFromMetadata(metadata["previous_ended_at"])
-        asset.lifecycle = previousLifecycle == .idle ? .idle : .owned
-        asset.currentValue = MoneyNormalization.roundToCents(previousValue)
-        asset.includeInNetWorth = previousInclude
-        asset.endedAt = previousEndedAt
-        asset.updatedAt = date
-        context.insert(AssetValuation(
-            assetID: asset.stableID,
-            value: asset.currentValue,
-            sourceRaw: "manual",
-            valuedAt: date,
-            note: "撤销结束持有"
-        ))
-        context.insert(AssetEvent(
-            assetID: asset.stableID,
-            kind: .restored,
-            occurredAt: date,
-            value: asset.currentValue,
-            note: "撤销结束持有"
-        ))
-        try context.save()
     }
 
     private static func metadataJSON(_ values: [String: String]) -> String {
@@ -1421,27 +1461,29 @@ enum ReceivableStore {
         dueDate: Date? = nil,
         book: Book? = nil,
         note: String = "",
-        includeInNetWorth: Bool = true
+        includeInNetWorth: Bool = true,
+        saveContext: AssetFinancialCommand.Save = { try $0.save() }
     ) throws -> ReceivableAsset {
-        let normalizedOriginalAmount = MoneyNormalization.roundToCents(originalAmount)
-        guard !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            throw Error.invalidName
+        return try AssetFinancialCommand.perform(in: context, save: saveContext) { changes in
+            let normalizedOriginalAmount = MoneyNormalization.roundToCents(originalAmount)
+            guard !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                throw Error.invalidName
+            }
+            guard normalizedOriginalAmount > 0 else { throw Error.invalidAmount }
+            let asset = ReceivableAsset(
+                name: name.trimmingCharacters(in: .whitespacesAndNewlines),
+                originalAmount: normalizedOriginalAmount,
+                kind: kind,
+                bookID: book?.stableID,
+                currencyCode: currencyCode.uppercased()
+            )
+            changes.set(asset, \.counterparty, counterparty.trimmingCharacters(in: .whitespacesAndNewlines))
+            changes.set(asset, \.dueDate, dueDate)
+            changes.set(asset, \.note, note.trimmingCharacters(in: .whitespacesAndNewlines))
+            changes.set(asset, \.includeInNetWorth, includeInNetWorth)
+            changes.insert(asset)
+            return asset
         }
-        guard normalizedOriginalAmount > 0 else { throw Error.invalidAmount }
-        let asset = ReceivableAsset(
-            name: name.trimmingCharacters(in: .whitespacesAndNewlines),
-            originalAmount: normalizedOriginalAmount,
-            kind: kind,
-            bookID: book?.stableID,
-            currencyCode: currencyCode.uppercased()
-        )
-        asset.counterparty = counterparty.trimmingCharacters(in: .whitespacesAndNewlines)
-        asset.dueDate = dueDate
-        asset.note = note.trimmingCharacters(in: .whitespacesAndNewlines)
-        asset.includeInNetWorth = includeInNetWorth
-        context.insert(asset)
-        try context.save()
-        return asset
     }
 
     static func update(
@@ -1454,26 +1496,28 @@ enum ReceivableStore {
         counterparty: String,
         dueDate: Date?,
         note: String,
-        includeInNetWorth: Bool
+        includeInNetWorth: Bool,
+        saveContext: AssetFinancialCommand.Save = { try $0.save() }
     ) throws {
-        guard !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            throw Error.invalidName
+        try AssetFinancialCommand.perform(in: context, save: saveContext) { changes in
+            guard !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                throw Error.invalidName
+            }
+            let normalizedOriginalAmount = MoneyNormalization.roundToCents(originalAmount)
+            guard normalizedOriginalAmount > 0 else { throw Error.invalidAmount }
+            let recovered = asset.originalAmount - asset.remainingAmount
+            guard normalizedOriginalAmount >= recovered else { throw Error.exceedsRemaining }
+            changes.set(asset, \.name, name.trimmingCharacters(in: .whitespacesAndNewlines))
+            changes.set(asset, \.kind, kind)
+            changes.set(asset, \.originalAmount, normalizedOriginalAmount)
+            changes.set(asset, \.remainingAmount, normalizedOriginalAmount - recovered)
+            changes.set(asset, \.bookID, book?.stableID)
+            changes.set(asset, \.counterparty, counterparty.trimmingCharacters(in: .whitespacesAndNewlines))
+            changes.set(asset, \.dueDate, dueDate)
+            changes.set(asset, \.note, note.trimmingCharacters(in: .whitespacesAndNewlines))
+            changes.set(asset, \.includeInNetWorth, includeInNetWorth)
+            changes.set(asset, \.updatedAt, Date())
         }
-        let normalizedOriginalAmount = MoneyNormalization.roundToCents(originalAmount)
-        guard normalizedOriginalAmount > 0 else { throw Error.invalidAmount }
-        let recovered = asset.originalAmount - asset.remainingAmount
-        guard normalizedOriginalAmount >= recovered else { throw Error.exceedsRemaining }
-        asset.name = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        asset.kind = kind
-        asset.originalAmount = normalizedOriginalAmount
-        asset.remainingAmount = normalizedOriginalAmount - recovered
-        asset.bookID = book?.stableID
-        asset.counterparty = counterparty.trimmingCharacters(in: .whitespacesAndNewlines)
-        asset.dueDate = dueDate
-        asset.note = note.trimmingCharacters(in: .whitespacesAndNewlines)
-        asset.includeInNetWorth = includeInNetWorth
-        asset.updatedAt = Date()
-        try context.save()
     }
 
     @discardableResult
@@ -1683,28 +1727,31 @@ enum ReceivableStore {
         }
     }
 
-    static func setLost(_ asset: ReceivableAsset, in context: ModelContext, note: String = "") throws {
-        asset.lifecycle = .lost
-        asset.remainingAmount = 0
-        asset.includeInNetWorth = false
-        asset.endedAt = Date()
-        asset.updatedAt = Date()
-        try context.save()
+    static func setLost(_ asset: ReceivableAsset, in context: ModelContext, note: String = "", saveContext: AssetFinancialCommand.Save = { try $0.save() }) throws {
+        try AssetFinancialCommand.perform(in: context, save: saveContext) { changes in
+            changes.set(asset, \.lifecycle, .lost)
+            changes.set(asset, \.remainingAmount, 0)
+            changes.set(asset, \.includeInNetWorth, false)
+            changes.set(asset, \.endedAt, Date())
+            changes.set(asset, \.updatedAt, Date())
+        }
     }
 
-    static func archive(_ asset: ReceivableAsset, in context: ModelContext) throws {
-        asset.lifecycle = .archived
-        asset.archivedAt = Date()
-        asset.updatedAt = Date()
-        try context.save()
+    static func archive(_ asset: ReceivableAsset, in context: ModelContext, saveContext: AssetFinancialCommand.Save = { try $0.save() }) throws {
+        try AssetFinancialCommand.perform(in: context, save: saveContext) { changes in
+            changes.set(asset, \.lifecycle, .archived)
+            changes.set(asset, \.archivedAt, Date())
+            changes.set(asset, \.updatedAt, Date())
+        }
     }
 
-    static func restore(_ asset: ReceivableAsset, in context: ModelContext) throws {
-        asset.lifecycle = asset.remainingAmount >= asset.originalAmount ? .active : .partiallyRecovered
-        asset.archivedAt = nil
-        asset.includeInNetWorth = asset.remainingAmount > 0
-        asset.updatedAt = Date()
-        try context.save()
+    static func restore(_ asset: ReceivableAsset, in context: ModelContext, saveContext: AssetFinancialCommand.Save = { try $0.save() }) throws {
+        try AssetFinancialCommand.perform(in: context, save: saveContext) { changes in
+            changes.set(asset, \.lifecycle, asset.remainingAmount >= asset.originalAmount ? .active : .partiallyRecovered)
+            changes.set(asset, \.archivedAt, nil)
+            changes.set(asset, \.includeInNetWorth, asset.remainingAmount > 0)
+            changes.set(asset, \.updatedAt, Date())
+        }
     }
 }
 
@@ -1771,30 +1818,32 @@ enum LiabilityStore {
         creditLimit: Decimal? = nil,
         startDate: Date? = nil,
         dueDate: Date? = nil,
-        note: String = ""
+        note: String = "",
+        saveContext: AssetFinancialCommand.Save = { try $0.save() }
     ) throws -> LiabilityProfile {
-        let normalizedOriginalPrincipal = MoneyNormalization.roundToCents(originalPrincipal)
-        guard normalizedOriginalPrincipal > 0 else { throw Error.invalidPrincipal }
-        let current = MoneyNormalization.roundToCents(currentPrincipal ?? originalPrincipal)
-        guard current >= 0, current <= normalizedOriginalPrincipal else { throw Error.invalidPrincipal }
-        let profile = LiabilityProfile(
-            accountID: account?.stableID,
-            kind: kind,
-            originalPrincipal: normalizedOriginalPrincipal,
-            currentPrincipal: current,
-            currencyCode: account?.currencyCode ?? "CNY"
-        )
-        profile.counterparty = counterparty.trimmingCharacters(in: .whitespacesAndNewlines)
-        profile.annualRate = annualRate
-        profile.statementDay = statementDay
-        profile.paymentDay = paymentDay
-        profile.creditLimit = creditLimit
-        profile.startDate = startDate
-        profile.dueDate = dueDate
-        profile.note = note.trimmingCharacters(in: .whitespacesAndNewlines)
-        context.insert(profile)
-        try context.save()
-        return profile
+        return try AssetFinancialCommand.perform(in: context, save: saveContext) { changes in
+            let normalizedOriginalPrincipal = MoneyNormalization.roundToCents(originalPrincipal)
+            guard normalizedOriginalPrincipal > 0 else { throw Error.invalidPrincipal }
+            let current = MoneyNormalization.roundToCents(currentPrincipal ?? originalPrincipal)
+            guard current >= 0, current <= normalizedOriginalPrincipal else { throw Error.invalidPrincipal }
+            let profile = LiabilityProfile(
+                accountID: account?.stableID,
+                kind: kind,
+                originalPrincipal: normalizedOriginalPrincipal,
+                currentPrincipal: current,
+                currencyCode: account?.currencyCode ?? "CNY"
+            )
+            changes.set(profile, \.counterparty, counterparty.trimmingCharacters(in: .whitespacesAndNewlines))
+            changes.set(profile, \.annualRate, annualRate)
+            changes.set(profile, \.statementDay, statementDay)
+            changes.set(profile, \.paymentDay, paymentDay)
+            changes.set(profile, \.creditLimit, creditLimit)
+            changes.set(profile, \.startDate, startDate)
+            changes.set(profile, \.dueDate, dueDate)
+            changes.set(profile, \.note, note.trimmingCharacters(in: .whitespacesAndNewlines))
+            changes.insert(profile)
+            return profile
+        }
     }
 
     static func update(
@@ -1811,36 +1860,39 @@ enum LiabilityStore {
         creditLimit: Decimal?,
         startDate: Date?,
         dueDate: Date?,
-        note: String
+        note: String,
+        saveContext: AssetFinancialCommand.Save = { try $0.save() }
     ) throws {
-        let normalizedOriginalPrincipal = MoneyNormalization.roundToCents(originalPrincipal)
-        let normalizedCurrentPrincipal = MoneyNormalization.roundToCents(currentPrincipal)
-        guard normalizedOriginalPrincipal > 0,
-              normalizedCurrentPrincipal >= 0,
-              normalizedCurrentPrincipal <= normalizedOriginalPrincipal else {
-            throw Error.invalidPrincipal
+        try AssetFinancialCommand.perform(in: context, save: saveContext) { changes in
+            let normalizedOriginalPrincipal = MoneyNormalization.roundToCents(originalPrincipal)
+            let normalizedCurrentPrincipal = MoneyNormalization.roundToCents(currentPrincipal)
+            guard normalizedOriginalPrincipal > 0,
+                  normalizedCurrentPrincipal >= 0,
+                  normalizedCurrentPrincipal <= normalizedOriginalPrincipal else {
+                throw Error.invalidPrincipal
+            }
+            changes.set(profile, \.kind, kind)
+            changes.set(profile, \.originalPrincipal, normalizedOriginalPrincipal)
+            changes.set(profile, \.currentPrincipal, normalizedCurrentPrincipal)
+            changes.set(profile, \.accountID, account?.stableID)
+            changes.set(profile, \.currencyCode, account?.currencyCode ?? profile.currencyCode)
+            changes.set(profile, \.counterparty, counterparty.trimmingCharacters(in: .whitespacesAndNewlines))
+            changes.set(profile, \.annualRate, annualRate)
+            changes.set(profile, \.statementDay, statementDay)
+            changes.set(profile, \.paymentDay, paymentDay)
+            changes.set(profile, \.creditLimit, creditLimit)
+            changes.set(profile, \.startDate, startDate)
+            changes.set(profile, \.dueDate, dueDate)
+            changes.set(profile, \.note, note.trimmingCharacters(in: .whitespacesAndNewlines))
+            changes.set(profile, \.updatedAt, Date())
         }
-        profile.kind = kind
-        profile.originalPrincipal = normalizedOriginalPrincipal
-        profile.currentPrincipal = normalizedCurrentPrincipal
-        profile.accountID = account?.stableID
-        profile.currencyCode = account?.currencyCode ?? profile.currencyCode
-        profile.counterparty = counterparty.trimmingCharacters(in: .whitespacesAndNewlines)
-        profile.annualRate = annualRate
-        profile.statementDay = statementDay
-        profile.paymentDay = paymentDay
-        profile.creditLimit = creditLimit
-        profile.startDate = startDate
-        profile.dueDate = dueDate
-        profile.note = note.trimmingCharacters(in: .whitespacesAndNewlines)
-        profile.updatedAt = Date()
-        try context.save()
     }
 
-    static func setLifecycle(_ profile: LiabilityProfile, status: LiabilityLifecycle, in context: ModelContext) throws {
-        profile.lifecycle = status
-        profile.updatedAt = Date()
-        try context.save()
+    static func setLifecycle(_ profile: LiabilityProfile, status: LiabilityLifecycle, in context: ModelContext, saveContext: AssetFinancialCommand.Save = { try $0.save() }) throws {
+        try AssetFinancialCommand.perform(in: context, save: saveContext) { changes in
+            changes.set(profile, \.lifecycle, status)
+            changes.set(profile, \.updatedAt, Date())
+        }
     }
 
     /// 本金部分建成还款账户 -> 负债账户的转账；若金额超过本金，超出部分作为利息支出。

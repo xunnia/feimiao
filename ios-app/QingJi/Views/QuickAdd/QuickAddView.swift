@@ -26,7 +26,9 @@ struct QuickAddView: View {
     @State private var expression = AmountExpression()
     @State private var selectedCategory: TxCategory?
     @State private var selectedAccountID: UUID?
-    @State private var selectedBook: Book?
+    @State private var selectedBookIDs: Set<UUID> = []
+    @State private var didSelectBooks = false
+    @State private var showBookSelection = false
     @State private var transferTargetID: UUID?
     @State private var date = AppClock.now
     @State private var note = ""
@@ -85,9 +87,26 @@ struct QuickAddView: View {
     }
 
     private var effectiveBook: Book? {
-        selectedBook
-            ?? books.first(where: { $0.stableID == router.selectedBookID })
-            ?? books.first
+        books.first(where: { effectiveBookIDs.contains($0.stableID) })
+            ?? books.first(where: { $0.isDefault }) ?? books.first
+    }
+
+    private var effectiveBookIDs: Set<UUID> {
+        if didSelectBooks { return selectedBookIDs }
+        guard let id = router.selectedBookID, books.contains(where: { $0.stableID == id && !$0.isDefault }) else { return [] }
+        return [id]
+    }
+
+    private var bookSelectionLabel: String {
+        let selected = books.filter { effectiveBookIDs.contains($0.stableID) }
+        if selected.count > 1 { return "\(selected.count) 个场景账本" }
+        return selected.first?.name ?? "总账本"
+    }
+
+    private func openBookSelection() {
+        selectedBookIDs = effectiveBookIDs
+        didSelectBooks = true
+        showBookSelection = true
     }
 
     var body: some View {
@@ -160,6 +179,9 @@ struct QuickAddView: View {
             .sheet(isPresented: $showDatePicker) {
                 ManualDatePickerSheet(date: $date)
                     .presentationDetents([.medium])
+            }
+            .sheet(isPresented: $showBookSelection) {
+                BookMembershipSelectionSheet(books: books, selection: $selectedBookIDs)
             }
             .sheet(isPresented: $showCamera) {
                 CameraImagePicker { image in
@@ -258,18 +280,8 @@ struct QuickAddView: View {
                     showDatePicker = true
                 }
                 if books.count > 1 {
-                    Menu {
-                        ForEach(books) { book in
-                            Button { selectedBook = book } label: {
-                                if book.persistentModelID == effectiveBook?.persistentModelID {
-                                    Label(book.name, systemImage: "checkmark")
-                                } else {
-                                    Text(book.name)
-                                }
-                            }
-                        }
-                    } label: {
-                        chipSurface(effectiveBook?.name ?? "账本", systemImage: "book.closed")
+                    Button(action: openBookSelection) {
+                        chipSurface(bookSelectionLabel, systemImage: "book.closed")
                     }
                     .buttonStyle(.plain)
                 }
@@ -497,20 +509,8 @@ struct QuickAddView: View {
                     }
                     .liquidGlassPillControl(horizontalPadding: 12, minHeight: 40)
                 }
-                Menu {
-                    ForEach(books) { book in
-                        Button {
-                            selectedBook = book
-                        } label: {
-                            if book.persistentModelID == effectiveBook?.persistentModelID {
-                                Label(book.name, systemImage: "checkmark")
-                            } else {
-                                Text(book.name)
-                            }
-                        }
-                    }
-                } label: {
-                    Label(effectiveBook?.name ?? "账本", systemImage: "book.closed")
+                Button(action: openBookSelection) {
+                    Label(bookSelectionLabel, systemImage: "book.closed")
                         .font(.subheadline)
                         .lineLimit(1)
                 }
@@ -625,6 +625,7 @@ struct QuickAddView: View {
                     account: from,
                     toAccount: to,
                     book: effectiveBook,
+                    scenarioBookIDs: effectiveBookIDs,
                     tags: Array(selectedTagNames),
                     isExcluded: isExcluded,
                     attachmentPath: attachmentPath
@@ -640,6 +641,7 @@ struct QuickAddView: View {
                     category: category,
                     account: effectiveAccount,
                     book: effectiveBook,
+                    scenarioBookIDs: effectiveBookIDs,
                     tags: Array(selectedTagNames),
                     reimbursable: kind == .expense && isReimbursable,
                     isExcluded: isExcluded,

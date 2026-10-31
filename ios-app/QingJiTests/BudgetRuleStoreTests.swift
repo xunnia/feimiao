@@ -108,9 +108,9 @@ final class BudgetRuleStoreTests: XCTestCase {
                                      book: privateBook, createdAt: now)
         let transactions = [original, refund, excluded, foreign, other]
         XCTAssertEqual(BudgetRuleStore.suggestionYuan(transactions: transactions, selectedBookID: nil,
-                                                     now: now, knowledgeCutoff: now), 100)
+                                                     now: now, knowledgeCutoff: now), 6100)
         XCTAssertEqual(BudgetRuleStore.suggestionYuan(transactions: transactions, selectedBookID: book.stableID,
-                                                     now: now, knowledgeCutoff: now), 100)
+                                                     now: now, knowledgeCutoff: now), 6100)
         XCTAssertEqual(BudgetRuleStore.suggestionYuan(transactions: transactions, selectedBookID: privateBook.stableID,
                                                      now: now, knowledgeCutoff: now), 6000)
     }

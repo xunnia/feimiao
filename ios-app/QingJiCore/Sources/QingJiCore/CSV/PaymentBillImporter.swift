@@ -20,9 +20,17 @@ public struct ImportedBillResult: Sendable {
     }
 }
 
-public enum BillImportError: Error, Equatable {
+public enum BillImportError: LocalizedError, Equatable {
     /// 找不到包含「交易时间」等必需列的表头行。
     case unrecognizedFormat
+    case invalidBookMembership
+
+    public var errorDescription: String? {
+        switch self {
+        case .unrecognizedFormat: return "无法识别账单格式。"
+        case .invalidBookMembership: return "账本关联无效或缺少对应名称，请重新导出账单。"
+        }
+    }
 }
 
 /// 微信支付 / 支付宝导出账单（CSV，UTF-8）的通用导入器。
@@ -75,6 +83,8 @@ public enum PaymentBillImporter {
         let alipayCategoryColumn = column("交易分类", "category")
         let statusColumn = column("当前状态", "交易状态")
         let orderColumn = column("商户订单号", "商户单号", "交易订单号", "交易单号", "订单号", "order_no")
+        let bookIDsColumn = column("账本UUID", "scenario_book_ids")
+        let bookNamesColumn = column("账本名称", "scenario_book_names")
 
         let source: BillSource = detectSource(preamble: rows[..<headerIndex], header: header)
 
@@ -105,6 +115,23 @@ public enum PaymentBillImporter {
             let extraNote = cell(noteColumn)
             let order = cell(orderColumn) == "/" ? "" : cell(orderColumn)
             let status = cell(statusColumn)
+            var scenarioBookIDs: [UUID]?
+            var scenarioBookNames: [String]?
+            if let bookIDsColumn {
+                let raw = cell(bookIDsColumn)
+                if !raw.isEmpty && raw != "null" {
+                    guard let decoded = try? JSONDecoder().decode([UUID].self, from: Data(raw.utf8)) else {
+                        throw BillImportError.invalidBookMembership
+                    }
+                    scenarioBookIDs = decoded
+                    let rawNames = cell(bookNamesColumn)
+                    if !rawNames.isEmpty && rawNames != "null" {
+                        guard let names = try? JSONDecoder().decode([String].self, from: Data(rawNames.utf8)),
+                              names.count == decoded.count else { throw BillImportError.invalidBookMembership }
+                        scenarioBookNames = names
+                    }
+                }
+            }
             let refundText = [category, type, product, counterparty, status]
                 .joined(separator: " ")
             let hasRefundSignal = containsRefundSignal(refundText)
@@ -165,6 +192,8 @@ public enum PaymentBillImporter {
                 } ?? ""),
                 topCategoryKey: isRefund ? "" : (seed?.parentKey ?? seed?.key ?? ""),
                 accountName: "",
+                scenarioBookIDs: scenarioBookIDs,
+                scenarioBookNames: scenarioBookNames,
                 note: note,
                 merchant: counterparty,
                 product: product == "/" ? "" : product,

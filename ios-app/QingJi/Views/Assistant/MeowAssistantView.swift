@@ -57,7 +57,7 @@ struct MeowAssistantView: View {
     }
 
     private var usableRecords: [TransactionRecord] {
-        let scoped = LedgerScope.filter(transactions, selectedBookID: router.selectedBookID)
+        let scoped = LedgerScope.filter(transactions, selectedBookID: router.selectedBookID, books: books)
             .map(\.record)
         return LedgerPolicy.userRecords(from: scoped)
     }
@@ -1239,8 +1239,10 @@ private struct AIRecordCardView: View {
 }
 
 #Preview {
+  if let container = try? AppModelContainer.makeContainer(inMemory: true) {
     MeowAssistantView()
-        .modelContainer(AppModelContainer.shared)
+        .modelContainer(container)
         .environment(AppRouter())
         .environment(AIProviderStore())
+  }
 }

@@ -19,8 +19,7 @@ enum WidgetSnapshotWriter {
         let books = (try? context.fetch(FetchDescriptor<Book>(sortBy: [
             SortDescriptor(\Book.sortOrder)
         ]))) ?? []
-        let selectedBook = books.first(where: { $0.isDefault }) ?? books.first
-        let scoped = LedgerScope.filter(transactions, selectedBookID: selectedBook?.stableID)
+        let scoped = LedgerScope.filter(transactions, selectedBookID: nil)
         let records = scoped.map(\.record)
         let calendar = Calendar.current
         let components = calendar.dateComponents([.year, .month, .day], from: now)

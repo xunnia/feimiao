@@ -138,7 +138,7 @@ struct BudgetView: View {
 
     /// 近 3 个自然月（不含本月）有支出的月份平均，取整到百元，最少 100；没有支出返回 nil。
     private func suggestionYuan() -> Int? {
-        BudgetRuleStore.suggestionYuan(transactions: transactions, selectedBookID: scopeBookID,
+        BudgetRuleStore.suggestionYuan(transactions: transactions, selectedBookID: scopeBookID, books: books,
                                        now: referenceDate)
     }
 

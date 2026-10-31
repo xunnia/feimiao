@@ -274,6 +274,7 @@ enum AndroidBackupImporter {
         let categoryRows = try reader.rows(from: "categories")
         let tagRows = try reader.rows(from: "tags")
         let transactionRows = try reader.rows(from: "transactions")
+        let transactionBookRows = try reader.rows(from: "transaction_books")
         let budgetRows = try reader.rows(from: "budget")
         let budgetPeriodRows = try reader.rows(from: "budget_periods")
         let savingsRows = try reader.rows(from: "savings_goals")
@@ -367,6 +368,16 @@ enum AndroidBackupImporter {
         var transactionIDs: [Int64: UUID] = [:]
         for row in transactionRows {
             if let id = row.integer("id") { transactionIDs[id] = stableID(row.string("uuid"), table: "transactions", id: id) }
+        }
+        var memberships: [Int64: Set<UUID>] = [:]
+        for row in transactionBookRows {
+            guard let transactionID = row.integer("transaction_id"), transactionIDs[transactionID] != nil,
+                  let bookID = row.integer("book_id"), let stableBookID = bookIDs[bookID] else {
+                throw Error.invalidDatabase
+            }
+            // Android 的默认账本行同时充当显式空集合标记。
+            if memberships[transactionID] == nil { memberships[transactionID] = [] }
+            if stableBookID != defaultBookID { memberships[transactionID]?.insert(stableBookID) }
         }
 
         var assetIDs: [Int64: UUID] = [:]
@@ -531,6 +542,7 @@ enum AndroidBackupImporter {
                 accountID: row.integer("account_id").flatMap { accountIDs[$0] },
                 toAccountID: row.integer("to_account_id").flatMap { accountIDs[$0] },
                 bookID: row.integer("book_id").flatMap { bookIDs[$0] } ?? defaultBookID,
+                scenarioBookIDs: memberships[row.integer("refund_of") ?? id].map { $0.sorted { $0.uuidString < $1.uuidString } },
                 refundOfID: refundID,
                 isReimbursed: eventType == .reimbursement,
                 isExcluded: row.bool("excluded"),

@@ -401,7 +401,32 @@ enum BillRecordSaver {
             case .unknown: return accounts.first
             }
         }()
-        let book = books.first(where: { $0.includeInTotal }) ?? books.first
+        let book = books.first(where: { $0.isDefault }) ?? books.first
+        // CSV 关联按稳定 UUID 恢复，名称只用于创建缺失场景，不用同名去重。
+        let knownBooks = Dictionary(books.map { ($0.stableID, $0) }, uniquingKeysWith: { first, _ in first })
+        var missingBookNames: [UUID: String] = [:]
+        for record in result.records {
+            guard let ids = record.scenarioBookIDs else { continue }
+            for (index, id) in ids.enumerated() {
+                if let existing = knownBooks[id] {
+                    guard !existing.isDefault else { throw BillImportError.invalidBookMembership }
+                    continue
+                }
+                guard let names = record.scenarioBookNames, index < names.count else { throw BillImportError.invalidBookMembership }
+                let name = names[index].trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !name.isEmpty else { throw BillImportError.invalidBookMembership }
+                if let prior = missingBookNames[id], prior != name { throw BillImportError.invalidBookMembership }
+                missingBookNames[id] = name
+            }
+        }
+        var insertedBooks: [Book] = []
+        for id in missingBookNames.keys.sorted(by: { $0.uuidString < $1.uuidString }) {
+            guard let name = missingBookNames[id] else { continue }
+            let newBook = Book(name: name, sortOrder: (books.map(\.sortOrder).max() ?? 0) + insertedBooks.count + 1)
+            newBook.stableID = id
+            insertedBooks.append(newBook)
+            context.insert(newBook)
+        }
 
         func category(for record: TransactionRecord) -> TxCategory? {
             if !record.categoryKey.isEmpty,
@@ -480,6 +505,7 @@ enum BillRecordSaver {
                 isExcluded: record.isExcluded,
                 tagNames: record.tags.joined(separator: ",")
             )
+            if let ids = record.scenarioBookIDs { transaction.setScenarioBookIDs(Set(ids)) }
             context.insert(transaction)
             insertedTransactions.append(transaction)
             if transaction.kind == .expense && !record.orderNo.isEmpty {
@@ -574,6 +600,7 @@ enum BillRecordSaver {
                         isExcluded: fallback.isExcluded,
                         tagNames: fallback.tags.joined(separator: ",")
                     )
+                    if let ids = fallback.scenarioBookIDs { transaction.setScenarioBookIDs(Set(ids)) }
                     context.insert(transaction)
                     insertedTransactions.append(transaction)
                     allRecords.append(transaction.record)
@@ -614,6 +641,7 @@ enum BillRecordSaver {
                 orderNo: record.orderNo,
                 refundOfID: original.stableID
             )
+            if original.hasExplicitBookMemberships { refund.setScenarioBookIDs(original.scenarioBookIDs) }
             context.insert(refund)
             insertedTransactions.append(refund)
             allRecords.append(refund.record)
@@ -626,6 +654,7 @@ enum BillRecordSaver {
             // batch so a failed persistent save cannot leave a half-imported
             // set of rows in the context or on the next save.
             insertedTransactions.forEach(context.delete)
+            insertedBooks.forEach(context.delete)
             throw error
         }
         return committed

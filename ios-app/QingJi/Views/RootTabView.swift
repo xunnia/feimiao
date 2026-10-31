@@ -385,7 +385,9 @@ struct DrawerCardShape: Shape {
 }
 
 #Preview {
+  if let container = try? AppModelContainer.makeContainer(inMemory: true) {
     RootTabView()
-        .modelContainer(AppModelContainer.shared)
+        .modelContainer(container)
         .environment(AppRouter())
+  }
 }

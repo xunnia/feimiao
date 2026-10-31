@@ -17,6 +17,9 @@ public struct TransactionRecord: Identifiable, Codable, Equatable, Sendable {
     public var toAccountID: UUID?
     public var toAccountName: String
     public var bookID: UUID?
+    /// 场景归集元数据，nil兼容旧单账本，[]为仅总账本。
+    public var scenarioBookIDs: [UUID]?
+    public var scenarioBookNames: [String]?
     public var note: String
     public var merchant: String
     public var product: String
@@ -62,6 +65,8 @@ public struct TransactionRecord: Identifiable, Codable, Equatable, Sendable {
         toAccountID: UUID? = nil,
         toAccountName: String = "",
         bookID: UUID? = nil,
+        scenarioBookIDs: [UUID]? = nil,
+        scenarioBookNames: [String]? = nil,
         note: String = "",
         merchant: String = "",
         product: String = "",
@@ -95,6 +100,8 @@ public struct TransactionRecord: Identifiable, Codable, Equatable, Sendable {
         self.toAccountID = toAccountID
         self.toAccountName = toAccountName
         self.bookID = bookID
+        self.scenarioBookIDs = scenarioBookIDs
+        self.scenarioBookNames = scenarioBookNames
         self.note = note
         self.merchant = merchant
         self.product = product
@@ -127,6 +134,7 @@ public struct TransactionRecord: Identifiable, Codable, Equatable, Sendable {
         case id, kind, amount, currencyCode, categoryName, categoryKey
         case topCategoryName, topCategoryKey, accountID, accountName
         case toAccountID, toAccountName, bookID, note, merchant, product, date, timePrecision
+        case scenarioBookIDs, scenarioBookNames
         case createdAt, settledAt, settlementQuality, settlementAccountID
         case settlementAccountQuality, eventType, tags, reimbursable, isReimbursed
         case attachmentPath, orderNo, recurringRuleID, refundOfID, isExcluded
@@ -147,6 +155,8 @@ public struct TransactionRecord: Identifiable, Codable, Equatable, Sendable {
         toAccountID = try values.decodeIfPresent(UUID.self, forKey: .toAccountID)
         toAccountName = try values.decodeIfPresent(String.self, forKey: .toAccountName) ?? ""
         bookID = try values.decodeIfPresent(UUID.self, forKey: .bookID)
+        scenarioBookIDs = try values.decodeIfPresent([UUID].self, forKey: .scenarioBookIDs)
+        scenarioBookNames = try values.decodeIfPresent([String].self, forKey: .scenarioBookNames)
         note = try values.decodeIfPresent(String.self, forKey: .note) ?? ""
         merchant = try values.decodeIfPresent(String.self, forKey: .merchant) ?? ""
         product = try values.decodeIfPresent(String.self, forKey: .product) ?? ""
@@ -183,6 +193,8 @@ public struct TransactionRecord: Identifiable, Codable, Equatable, Sendable {
         try values.encodeIfPresent(toAccountID, forKey: .toAccountID)
         try values.encode(toAccountName, forKey: .toAccountName)
         try values.encodeIfPresent(bookID, forKey: .bookID)
+        try values.encodeIfPresent(scenarioBookIDs, forKey: .scenarioBookIDs)
+        try values.encodeIfPresent(scenarioBookNames, forKey: .scenarioBookNames)
         try values.encode(note, forKey: .note)
         try values.encode(merchant, forKey: .merchant)
         try values.encode(product, forKey: .product)

@@ -119,7 +119,7 @@ enum BudgetRuleStore {
 
     // MARK: 账本范围
 
-    /// 预算页、主页用的账本：nil = 总账本（规则挂在默认账本上，支出汇总所有计入总账的账本）。
+    /// nil = 总账本（规则挂在默认账本上，支出按全部原始账单去重）。
     static func ruleBookID(selectedBookID: UUID?, books: [Book]) -> UUID? {
         if let selectedBookID { return selectedBookID }
         return (books.first(where: \.isDefault) ?? books.first)?.stableID
@@ -218,10 +218,10 @@ enum BudgetRuleStore {
         }
     }
 
-    static func suggestionYuan(transactions: [MoneyTransaction], selectedBookID: UUID?,
+    static func suggestionYuan(transactions: [MoneyTransaction], selectedBookID: UUID?, books: [Book] = [],
                                now: Date = AppClock.now, knowledgeCutoff: Date = Date(),
                                calendar: Calendar = .current) -> Int? {
-        let scoped = LedgerScope.filter(transactions, selectedBookID: selectedBookID)
+        let scoped = LedgerScope.filter(transactions, selectedBookID: selectedBookID, books: books)
         return budgetSuggestedMonthlyYuan(spendRows(scoped, calendar: calendar),
                                           today: BudgetCivilDay(now, calendar: calendar),
                                           knowledgeCutoff: knowledgeCutoff)
@@ -251,7 +251,7 @@ enum BudgetRuleStore {
         var spend: [Int: Int] = [:]
         var foreign: [Int: Int] = [:]
         if !rules.isEmpty {
-            let scoped = LedgerScope.filter(transactions, selectedBookID: selectedBookID)
+            let scoped = LedgerScope.filter(transactions, selectedBookID: selectedBookID, books: books)
             (spend, foreign) = budgetSpendByDay(spendRows(scoped, calendar: calendar), today: today,
                                                 knowledgeCutoff: Date())
         }

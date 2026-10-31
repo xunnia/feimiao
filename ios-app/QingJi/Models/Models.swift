@@ -62,7 +62,7 @@ final class Account {
     }
 }
 
-/// 账本。默认账本相当于安卓端的「总账本」，其他账本可选择是否计入总账。
+/// 默认账本是所有原始账单的总览；其他账本是可重叠的场景归集。
 @Model
 final class Book {
     var stableID: UUID = UUID()
@@ -191,6 +191,10 @@ final class MoneyTransaction {
     var category: TxCategory? = nil
     var account: Account? = nil
     var book: Book? = nil
+    /// 兼容旧版单账本关系，空集合也必须与“尚未迁移”区分。
+    /// 只保存场景账本 UUID，总账本永远自动包含原记录。
+    var bookMembershipIDsRaw: String = ""
+    var hasExplicitBookMemberships: Bool = false
     /// 转账的目标账户，仅 kind == .transfer 时有值。
     var toAccount: Account? = nil
 
@@ -311,6 +315,7 @@ final class MoneyTransaction {
             toAccountID: toAccountID,
             toAccountName: toAccountName,
             bookID: bookID,
+            scenarioBookIDs: scenarioBookIDs.sorted { $0.uuidString < $1.uuidString },
             note: note,
             merchant: merchantName,
             product: productName,
@@ -336,6 +341,19 @@ final class MoneyTransaction {
     var tags: [String] {
         get { tagNames.split(separator: ",").map(String.init) }
         set { tagNames = newValue.joined(separator: ",") }
+    }
+
+    var scenarioBookIDs: Set<UUID> {
+        if hasExplicitBookMemberships {
+            return Set(bookMembershipIDsRaw.split(separator: ",").compactMap { UUID(uuidString: String($0)) })
+        }
+        guard let book, !book.isDefault else { return [] }
+        return [book.stableID]
+    }
+
+    func setScenarioBookIDs(_ ids: Set<UUID>) {
+        bookMembershipIDsRaw = ids.map(\.uuidString).sorted().joined(separator: ",")
+        hasExplicitBookMemberships = true
     }
 }
 

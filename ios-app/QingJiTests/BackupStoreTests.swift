@@ -5,6 +5,44 @@ import QingJiCore
 
 @MainActor
 final class BackupStoreTests: XCTestCase {
+    func testBackupRoundTripPreservesMultipleScenesAndExplicitEmptyMembership() throws {
+        let source = try Stack()
+        let total = Book(name: "总账本", isDefault: true)
+        let business = Book(name: "生意")
+        let project = Book(name: "项目")
+        [total, business, project].forEach(source.context.insert)
+        let transaction = MoneyTransaction(amount: 100, kind: .expense, book: business)
+        transaction.setScenarioBookIDs([business.stableID, project.stableID])
+        let totalOnly = MoneyTransaction(amount: 20, kind: .expense, book: business)
+        totalOnly.setScenarioBookIDs([])
+        source.context.insert(transaction)
+        source.context.insert(totalOnly)
+        try source.context.save()
+        let destination = try Stack()
+        _ = try BackupStore.importData(BackupStore.export(context: source.context), into: destination.context)
+        let restored = try LedgerStore.allTransactions(in: destination.context)
+        XCTAssertEqual(restored.first { $0.stableID == transaction.stableID }?.scenarioBookIDs, [business.stableID, project.stableID])
+        let empty = try XCTUnwrap(restored.first { $0.stableID == totalOnly.stableID })
+        XCTAssertTrue(empty.hasExplicitBookMemberships)
+        XCTAssertTrue(empty.scenarioBookIDs.isEmpty)
+        XCTAssertEqual(LedgerScope.filter(restored, selectedBookID: business.stableID).count, 1)
+        XCTAssertEqual(LedgerScope.filter(restored, selectedBookID: nil).count, 2)
+    }
+
+    func testBackupRejectsDanglingScenarioWithoutDeletingCurrentData() throws {
+        let stack = try Stack()
+        let current = Book(name: "保留账本", isDefault: true)
+        stack.context.insert(current)
+        try stack.context.save()
+        let package = FeimiaoBackupPackage(transactions: [BackupTransaction(id: UUID(), amount: 100,
+            kind: .expense, date: Date(), scenarioBookIDs: [UUID()])])
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        XCTAssertThrowsError(try BackupStore.importData(encoder.encode(package), into: stack.context))
+        XCTAssertEqual(try stack.context.fetch(FetchDescriptor<Book>()).first?.stableID, current.stableID)
+        XCTAssertEqual(try LedgerStore.allTransactions(in: stack.context).count, 0)
+    }
+
     private enum SaveFailure: Error, Equatable {
         case expected
     }

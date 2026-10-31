@@ -29,17 +29,20 @@ enum BackgroundMaintenance {
             task.setTaskCompleted(success: false)
         }
         Task { @MainActor in
+            var succeeded = false
             defer {
-                task.setTaskCompleted(success: true)
+                task.setTaskCompleted(success: succeeded)
                 schedule()
             }
-            let context = ModelContext(AppModelContainer.shared)
+            guard let container = try? AppModelContainer.shared else { return }
+            let context = ModelContext(container)
             guard let transactions = try? context.fetch(FetchDescriptor<MoneyTransaction>()),
                   let books = try? context.fetch(FetchDescriptor<Book>()) else { return }
             let now = AppClock.now
-            for book in books where book.includeInTotal {
+            for book in books {
+                let scopeID = book.isDefault ? nil : book.stableID
                 let hasCurrentReport = (try? context.fetch(FetchDescriptor<ReportRecord>()))?.contains {
-                    $0.bookID == book.stableID &&
+                    ($0.bookID == scopeID || (book.isDefault && $0.bookID == book.stableID)) &&
                     Calendar.current.isDate($0.periodStart, equalTo: now, toGranularity: .month) &&
                     $0.type == "monthly"
                 } ?? false
@@ -47,11 +50,12 @@ enum BackgroundMaintenance {
                     _ = try? ReportStore.createMonthly(
                         in: context,
                         transactions: transactions,
-                        bookID: book.stableID,
+                        bookID: scopeID,
                         month: now
                     )
                 }
             }
+            succeeded = true
         }
     }
 }

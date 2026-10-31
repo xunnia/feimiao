@@ -140,6 +140,8 @@ struct EditTransactionSheet: View {
     private var accounts: [Account]
     @Query(sort: \Tag.sortOrder)
     private var tags: [Tag]
+    @Query(sort: \Book.sortOrder)
+    private var books: [Book]
     @Query(sort: \MoneyTransaction.date)
     private var allTransactions: [MoneyTransaction]
 
@@ -152,11 +154,13 @@ struct EditTransactionSheet: View {
     @State private var isReimbursable = false
     @State private var isExcluded = false
     @State private var selectedTagNames: Set<String> = []
+    @State private var selectedBookIDs: Set<UUID> = []
     @State private var attachmentPath = ""
     @State private var photoItem: PhotosPickerItem?
     @State private var operationMessage: String?
     @State private var offsetKind: OffsetKind?
     @State private var didSave = false
+    @State private var showGlobalDelete = false
 
     private var parsedAmount: Decimal? {
         Decimal(string: amountText.replacingOccurrences(of: ",", with: ""))
@@ -245,6 +249,7 @@ struct EditTransactionSheet: View {
                     }
                     Toggle("不计入收支统计", isOn: $isExcluded)
                 }
+                BookMembershipSection(books: books, selection: $selectedBookIDs)
                 if !tags.isEmpty {
                     Section("标签") {
                         ForEach(tags) { tag in
@@ -288,12 +293,7 @@ struct EditTransactionSheet: View {
                 }
                 Section {
                     Button("删除这笔", role: .destructive) {
-                        do {
-                            try LedgerStore.delete(transaction, in: context)
-                            dismiss()
-                        } catch {
-                            operationMessage = error.localizedDescription
-                        }
+                        showGlobalDelete = true
                     }
                 }
                 if transaction.kind == .expense && transaction.amount > 0 {
@@ -395,6 +395,14 @@ struct EditTransactionSheet: View {
                     kind: kind
                 )
             }
+            .appConfirmationDialog("从所有账本删除这笔账单？", isPresented: $showGlobalDelete,
+                message: "会从总账本和所有场景账本删除这笔原账及其退款/报销记录，并影响账户余额。仅想移出某个场景，请取消勾选对应账本后保存。",
+                confirmText: "从所有账本删除", destructive: true) {
+                do {
+                    try LedgerStore.delete(transaction, in: context)
+                    dismiss()
+                } catch { operationMessage = error.localizedDescription }
+            }
             .alert("操作失败", isPresented: Binding(
                 get: { operationMessage != nil },
                 set: { if !$0 { operationMessage = nil } }
@@ -416,6 +424,7 @@ struct EditTransactionSheet: View {
         isReimbursable = transaction.reimbursable
         isExcluded = transaction.isExcluded
         selectedTagNames = Set(transaction.tags)
+        selectedBookIDs = transaction.scenarioBookIDs
         attachmentPath = transaction.attachmentPath
     }
 
@@ -433,6 +442,7 @@ struct EditTransactionSheet: View {
                 toAccount: targetAccount,
                 attachmentPath: attachmentPath,
                 tags: selectedTagList,
+                scenarioBookIDs: selectedBookIDs,
                 reimbursable: transaction.kind == .expense && isReimbursable,
                 isExcluded: isExcluded,
                 in: context

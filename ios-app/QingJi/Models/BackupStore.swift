@@ -308,6 +308,7 @@ enum BackupStore {
                     accountID: $0.account?.stableID,
                     toAccountID: $0.toAccount?.stableID,
                     bookID: $0.book?.stableID,
+                    scenarioBookIDs: $0.hasExplicitBookMemberships ? $0.scenarioBookIDs.sorted { $0.uuidString < $1.uuidString } : nil,
                     refundOfID: $0.refundOfID,
                     isReimbursed: $0.isReimbursed,
                     isExcluded: $0.isExcluded,
@@ -1043,6 +1044,15 @@ enum BackupStore {
             transaction.account = item.accountID.flatMap { accounts[$0] }
             transaction.toAccount = item.toAccountID.flatMap { accounts[$0] }
             transaction.book = item.bookID.flatMap { books[$0] }
+            if let ids = item.scenarioBookIDs {
+                guard ids.allSatisfy({ books[$0] != nil && books[$0]?.isDefault == false }) else {
+                    throw BackupStoreError.malformed
+                }
+                transaction.setScenarioBookIDs(Set(ids))
+            } else {
+                transaction.bookMembershipIDsRaw = ""
+                transaction.hasExplicitBookMemberships = false
+            }
             transaction.refundOfID = item.refundOfID
             transaction.isReimbursed = item.isReimbursed
             transaction.isExcluded = item.isExcluded

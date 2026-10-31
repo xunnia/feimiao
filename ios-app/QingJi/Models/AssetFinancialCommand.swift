@@ -16,6 +16,16 @@ enum AssetFinancialCommand {
             cleanup.append(action)
         }
 
+        /// Capture only the field this command changes. Other pending edits in
+        /// the same shared context must survive a failed save.
+        func set<Model: AnyObject, Value>(
+            _ model: Model, _ keyPath: ReferenceWritableKeyPath<Model, Value>, _ value: Value
+        ) {
+            let previous = model[keyPath: keyPath]
+            cleanup.append { model[keyPath: keyPath] = previous }
+            model[keyPath: keyPath] = value
+        }
+
         func insert<T: PersistentModel>(_ model: T) {
             context.insert(model)
             cleanup.append { [context] in context.delete(model) }
@@ -32,8 +42,11 @@ enum AssetFinancialCommand {
     static func perform<T>(
         in context: ModelContext,
         save: Save = { try $0.save() },
+        joining parent: Changes? = nil,
         _ operation: (Changes) throws -> T
     ) throws -> T {
+        // Composite operations share one undo journal and one final save.
+        if let parent { return try operation(parent) }
         let autosave = context.autosaveEnabled
         context.autosaveEnabled = false
         defer { context.autosaveEnabled = autosave }

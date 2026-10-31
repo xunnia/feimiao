@@ -8,6 +8,7 @@ struct ImportExportView: View {
     @Environment(\.modelContext) private var context
     @Query(sort: \MoneyTransaction.date, order: .reverse)
     private var transactions: [MoneyTransaction]
+    @Query(sort: \Book.sortOrder) private var books: [Book]
 
     @State private var showImporter = false
     @State private var showExporter = false
@@ -33,7 +34,7 @@ struct ImportExportView: View {
             Section {
                 Button {
                     let visible = LedgerPolicy.userRecords(from: transactions.map(\.record))
-                    exportDocument = CSVDocument(text: CSVExporter.export(visible))
+                    exportDocument = CSVDocument(text: CSVExporter.export(visible, bookNames: Dictionary(books.map { ($0.stableID, $0.name) }, uniquingKeysWith: { first, _ in first })))
                     showExporter = true
                 } label: {
                     Label("导出全部账目为 CSV", systemImage: "square.and.arrow.up")
@@ -108,6 +109,8 @@ struct ImportExportView: View {
             }
             pendingImport = imported
             showImportReview = true
+        } catch BillImportError.invalidBookMembership {
+            importMessage = "文件中的账本关联无效。请重新导出，避免丢失场景账本归属。"
         } catch is BillImportError {
             importMessage = "无法识别账单格式，请确认是微信或支付宝导出的 CSV 文件。"
         } catch {

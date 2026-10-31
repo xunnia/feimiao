@@ -26,7 +26,7 @@ struct AddTransactionIntent: AppIntent {
         guard amount > 0 else {
             return .result(dialog: "金额要大于 0 才能入账。")
         }
-        let context = AppModelContainer.shared.mainContext
+        let context = try AppModelContainer.shared.mainContext
         DataSeeder.seedIfNeeded(context: context)
 
         let kind: TransactionKind = isIncome ? .income : .expense

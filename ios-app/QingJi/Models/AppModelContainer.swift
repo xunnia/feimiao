@@ -7,59 +7,46 @@ import SwiftData
 ///
 /// 当进程环境变量 QINGJI_DEMO == "1" 时，改用内存容器（isStoredInMemoryOnly: true）
 /// 并灌入演示数据，用于 CI 截图。真实用户和打包的 IPA 不受影响。
+@MainActor
 enum AppModelContainer {
-    static let shared: ModelContainer = {
-        let schema = Schema([
-            Account.self,
-            Book.self,
-            TxCategory.self,
-            Tag.self,
-            MoneyTransaction.self,
-            Budget.self,
-            SavingsGoal.self,
-            RecurringRule.self,
-            RecurringOccurrence.self,
-            PhysicalAsset.self,
-            AssetEvent.self,
-            AssetUsageEvent.self,
-            AssetTransactionLink.self,
-            AssetRefundAllocation.self,
-            AssetValuation.self,
-            ReceivableAsset.self,
-            ReceivableRecovery.self,
-            LiabilityProfile.self,
-            NetWorthSnapshot.self,
-            AIChatSession.self,
-            AIChatMessage.self,
-            AIMemoryRecord.self,
-            AIRequestRunRecord.self,
-            AIRequestEventRecord.self,
-            AIReportScheduleRecord.self,
-            BudgetPlanRecord.self,
-            BudgetPlanRevisionRecord.self,
-            BudgetCycleOverrideRecord.self,
-            BudgetCommitmentOccurrenceRecord.self,
-            BudgetChangeEventRecord.self,
-            BudgetRuleRecord.self,
-            BudgetRolloverChangeRecord.self,
-            ReportRecord.self,
-            AccountBalanceCheckpointRecord.self,
-            NetWorthVerifiedCheckpointRecord.self,
-        ])
-        do {
+    /// Production and disk-migration tests use exactly the same schema/plan.
+    /// Opening failures propagate; never delete, replace, or silently rebuild a
+    /// user's store. An explicit URL is for isolated tests and disables CloudKit.
+    static func makeContainer(
+        at url: URL? = nil,
+        inMemory: Bool = false,
+        migrationPlan: any SchemaMigrationPlan.Type = FeimiaoMigrationPlan.self
+    ) throws -> ModelContainer {
+        let schema = Schema(versionedSchema: FeimiaoSchemaV3.self)
+        let config: ModelConfiguration
+        if let url {
+            config = ModelConfiguration(schema: schema, url: url, cloudKitDatabase: .none)
+        } else {
+            config = ModelConfiguration(schema: schema, isStoredInMemoryOnly: inMemory)
+        }
+        return try ModelContainer(for: schema, migrationPlan: migrationPlan, configurations: [config])
+    }
+
+    private static var cachedContainer: ModelContainer?
+
+    /// Cache successes only. A failed open remains retryable and never falls
+    /// back to an empty/in-memory database for a real user.
+    static var shared: ModelContainer {
+        get throws {
+            if let cachedContainer { return cachedContainer }
             // 演示模式：内存容器，CI 截图专用
             if ProcessInfo.processInfo.environment["QINGJI_DEMO"] == "1" {
-                let config = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
-                let container = try ModelContainer(for: schema, configurations: [config])
-                // mainContext 是 @MainActor 隔离的，这里是非隔离的静态上下文不能直接用；
-                // 改用新建的 ModelContext（内存库各上下文共享同一存储，写入对 @Query 照样可见）
+                let container = try makeContainer(inMemory: true)
+                // 用独立 Context 写演示数据；内存库各 Context 共享同一存储，
+                // 保存后主界面的 @Query 仍可读取，且不携带种子写入的待保存状态。
                 DemoDataSeeder.seed(context: ModelContext(container))
+                cachedContainer = container
                 return container
             }
             // 正常模式：本地持久化存储
-            return try ModelContainer(for: schema, configurations: [ModelConfiguration(schema: schema)])
-        } catch {
-            fatalError("无法创建数据库容器: \(error)")
+            let container = try makeContainer()
+            cachedContainer = container
+            return container
         }
-    }()
+    }
 }

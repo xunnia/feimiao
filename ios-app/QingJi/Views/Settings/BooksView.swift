@@ -44,7 +44,7 @@ struct BooksView: View {
             } header: {
                 Text("我的账本")
             } footer: {
-                Text("总账本用于汇总勾选了“计入总账”的账本，不能删除。")
+                Text("总账本包含全部账单，只计算一次。场景账本可交叉归集，同一笔账可同时加入多个账本。")
             }
         }
         .listStyle(.insetGrouped)
@@ -109,9 +109,6 @@ struct BooksView: View {
                         Text(book.remark)
                             .lineLimit(1)
                     }
-                    if book.includeInTotal && !book.isDefault {
-                        Text(book.remark.isEmpty ? "计入总账" : "· 计入总账")
-                    }
                 }
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -167,7 +164,9 @@ struct BookEditorSheet: View {
     @State private var remark: String
     @State private var cover: String
     @State private var isStarred: Bool
-    @State private var includeInTotal: Bool
+    @State private var addExistingAfterCreate = true
+    @State private var createdBook: Book?
+    @State private var membershipBook: Book?
     @State private var errorMessage: String?
 
     init(book: Book?, nextSortOrder: Int) {
@@ -177,7 +176,6 @@ struct BookEditorSheet: View {
         _remark = State(initialValue: book?.remark ?? "")
         _cover = State(initialValue: BookCoverCatalog.key(for: book?.cover ?? ""))
         _isStarred = State(initialValue: book?.isStarred ?? false)
-        _includeInTotal = State(initialValue: book?.includeInTotal ?? true)
     }
 
     var body: some View {
@@ -191,8 +189,18 @@ struct BookEditorSheet: View {
                             if newValue.count > 20 { remark = String(newValue.prefix(20)) }
                         }
                     Toggle("加星", isOn: $isStarred)
-                    if book?.isDefault != true {
-                        Toggle("计入总账", isOn: $includeInTotal)
+                }
+                if book == nil {
+                    Section {
+                        Toggle("创建后添加已有账单", isOn: $addExistingAfterCreate)
+                    } footer: {
+                        Text("以前记录的收支可以直接归集，无需重新记账。全部原账始终保留在总账本。")
+                    }
+                } else if let book, !book.isDefault {
+                    Section {
+                        Button {
+                            membershipBook = book
+                        } label: { Label("添加或移出已有账单", systemImage: "books.vertical") }
                     }
                 }
 
@@ -246,6 +254,11 @@ struct BookEditorSheet: View {
             } message: {
                 Text(errorMessage ?? "")
             }
+            .sheet(item: $membershipBook, onDismiss: {
+                if createdBook != nil { dismiss() }
+            }) { target in
+                BookMembershipBulkSheet(bookID: target.stableID)
+            }
         }
     }
 
@@ -257,23 +270,32 @@ struct BookEditorSheet: View {
             book.remark = remark.trimmingCharacters(in: .whitespacesAndNewlines)
             book.cover = BookCoverCatalog.storedValue(for: cover)
             book.isStarred = isStarred
-            if !book.isDefault { book.includeInTotal = includeInTotal }
             book.updatedAt = Date()
         } else {
-            context.insert(Book(
+            let newBook = Book(
                 name: cleanName,
                 cover: BookCoverCatalog.storedValue(for: cover),
                 remark: remark.trimmingCharacters(in: .whitespacesAndNewlines),
                 sortOrder: nextSortOrder,
                 isStarred: isStarred,
-                includeInTotal: includeInTotal
-            ))
+                includeInTotal: true
+            )
+            context.insert(newBook)
+            createdBook = newBook
         }
         do {
             try context.save()
             UINotificationFeedbackGenerator().notificationOccurred(.success)
-            dismiss()
+            if addExistingAfterCreate, let createdBook {
+                membershipBook = createdBook
+            } else {
+                dismiss()
+            }
         } catch {
+            if let createdBook {
+                context.delete(createdBook)
+                self.createdBook = nil
+            }
             errorMessage = error.localizedDescription
         }
     }

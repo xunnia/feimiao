@@ -2,6 +2,34 @@ import XCTest
 @testable import QingJiCore
 
 final class BillImportTests: XCTestCase {
+    func testCSVBookMembershipRoundTripKeepsUUIDsNamesAndEmptySelection() throws {
+        let first = UUID()
+        let second = UUID()
+        let records = [
+            TransactionRecord(kind: .expense, amount: 100, scenarioBookIDs: [first, second],
+                              date: Date(timeIntervalSince1970: 1_700_000_000)),
+            TransactionRecord(kind: .income, amount: 20, scenarioBookIDs: [],
+                              date: Date(timeIntervalSince1970: 1_700_000_000)),
+            TransactionRecord(kind: .income, amount: 30,
+                              date: Date(timeIntervalSince1970: 1_700_000_000)),
+        ]
+        let csv = CSVExporter.export(records, bookNames: [first: "生意,采购", second: "项目A"])
+        let imported = try PaymentBillImporter.importBill(fromCSV: csv)
+        XCTAssertEqual(imported.records[0].scenarioBookIDs, [first, second])
+        XCTAssertEqual(imported.records[0].scenarioBookNames, ["生意,采购", "项目A"])
+        XCTAssertEqual(imported.records[1].scenarioBookIDs, [])
+        XCTAssertEqual(imported.records[1].scenarioBookNames, [])
+        XCTAssertNil(imported.records[2].scenarioBookIDs, "CSV null 保持旧数据尚未显式归集的含义")
+        XCTAssertNil(imported.records[2].scenarioBookNames)
+    }
+
+    func testInvalidCSVBookUUIDDoesNotSilentlyLoseMembership() {
+        let csv = "date,kind,amount,账本UUID\n2026-10-23,expense,100,not-json"
+        XCTAssertThrowsError(try PaymentBillImporter.importBill(fromCSV: csv)) { error in
+            XCTAssertEqual(error as? BillImportError, .invalidBookMembership)
+        }
+    }
+
     func testCSVParserHandlesQuotedFields() {
         let rows = CSVParser.parse("a,\"b,1\",c\n\"say \"\"hi\"\"\",2,3\n")
         XCTAssertEqual(rows, [["a", "b,1", "c"], ["say \"hi\"", "2", "3"]])

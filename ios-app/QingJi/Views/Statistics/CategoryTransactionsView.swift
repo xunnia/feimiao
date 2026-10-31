@@ -10,11 +10,12 @@ struct CategoryTransactionsView: View {
     let end: Date
 
     @Environment(AppRouter.self) private var router
+    @Query private var books: [Book]
     @Query(sort: \MoneyTransaction.date, order: .reverse) private var transactions: [MoneyTransaction]
     @State private var projectionCache = IOSLedgerProjectionCache()
 
     var body: some View {
-        let snapshot = projectionCache.snapshot(for: transactions, selectedBookID: router.selectedBookID)
+        let snapshot = projectionCache.snapshot(for: transactions, selectedBookID: router.selectedBookID, books: books)
         let records = StatisticsEngine.expenseRecords(
             in: snapshot.records, categoryNames: categoryNames, start: start, end: end
         )

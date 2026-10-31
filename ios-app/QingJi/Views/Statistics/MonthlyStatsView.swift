@@ -129,7 +129,7 @@ struct MonthlyStatsView: View {
         @Bindable var router = router
         let snapshot = projectionCache.snapshot(
             for: transactions,
-            selectedBookID: router.selectedBookID
+            selectedBookID: router.selectedBookID, books: books
         )
 
         ScrollViewReader { scroll in

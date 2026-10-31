@@ -8,7 +8,7 @@ public struct FeimiaoBackupPackage: Codable, Equatable, Sendable {
     /// v7 additionally carries local audit/checkpoint records; v9 carries AI
     /// run history and report schedules. Credentials remain excluded from every
     /// backup version.
-    public static let currentSchemaVersion = 9
+    public static let currentSchemaVersion = 10
 
     public var schemaVersion: Int
     public var exportedAt: Date
@@ -390,6 +390,8 @@ public struct BackupTransaction: Codable, Equatable, Sendable {
     public var accountID: UUID?
     public var toAccountID: UUID?
     public var bookID: UUID?
+    /// nil 为旧单账本记录；[] 表示明确只在总账本，不能回退 bookID。
+    public var scenarioBookIDs: [UUID]?
     public var refundOfID: UUID?
     public var isReimbursed: Bool
     public var isExcluded: Bool
@@ -423,6 +425,7 @@ public struct BackupTransaction: Codable, Equatable, Sendable {
         accountID: UUID? = nil,
         toAccountID: UUID? = nil,
         bookID: UUID? = nil,
+        scenarioBookIDs: [UUID]? = nil,
         refundOfID: UUID? = nil,
         isReimbursed: Bool = false,
         isExcluded: Bool = false,
@@ -455,6 +458,7 @@ public struct BackupTransaction: Codable, Equatable, Sendable {
         self.accountID = accountID
         self.toAccountID = toAccountID
         self.bookID = bookID
+        self.scenarioBookIDs = scenarioBookIDs
         self.refundOfID = refundOfID
         self.isReimbursed = isReimbursed
         self.isExcluded = isExcluded

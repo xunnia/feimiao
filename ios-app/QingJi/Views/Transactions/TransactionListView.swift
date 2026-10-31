@@ -23,7 +23,10 @@ struct TransactionListView: View {
     @State private var searchText = ""
     @State private var editingTransaction: MoneyTransaction?
     @State private var deleteError: String?
+    @State private var globalDeleteTarget: MoneyTransaction?
     @State private var showFilters = false
+    @State private var showBookMemberships = false
+    @State private var membershipCandidateIDs: Set<UUID> = []
     @State private var kindFilter: TransactionKind?
     @State private var accountFilterID: UUID?
     @State private var tagFilterID: UUID?
@@ -159,7 +162,7 @@ struct TransactionListView: View {
     var body: some View {
         let snapshot = projectionCache.snapshot(
             for: transactions,
-            selectedBookID: router.selectedBookID
+            selectedBookID: router.selectedBookID, books: books
         )
         let projection = listProjectionCache.projection(
             for: snapshot,
@@ -212,6 +215,15 @@ struct TransactionListView: View {
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
+                        membershipCandidateIDs = Set(projection.filtered.map(\.stableID))
+                        showBookMemberships = true
+                    } label: { Image(systemName: "books.vertical") }
+                    .liquidGlassCircleControl()
+                    .accessibilityLabel("批量添加或移出场景账本")
+                    .disabled(projection.filtered.isEmpty)
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
                         showFilters = true
                     } label: {
                         Image(systemName: "line.3.horizontal.decrease")
@@ -252,6 +264,9 @@ struct TransactionListView: View {
                     maximumAmountText = values.maximumAmountText
                 }
             }
+            .sheet(isPresented: $showBookMemberships) {
+                BookMembershipBulkSheet(bookID: router.selectedBookID, candidateIDs: membershipCandidateIDs)
+            }
             .alert("无法删除", isPresented: Binding(
                 get: { deleteError != nil },
                 set: { if !$0 { deleteError = nil } }
@@ -259,6 +274,15 @@ struct TransactionListView: View {
                 Button("好") { deleteError = nil }
             } message: {
                 Text(deleteError ?? "")
+            }
+            .appConfirmationDialog("从所有账本删除这笔账单？", isPresented: Binding(
+                get: { globalDeleteTarget != nil }, set: { if !$0 { globalDeleteTarget = nil } }
+            ), message: "会从总账本和所有场景账本删除原账及其退款/报销，账户余额也会变化。只想移出当前场景，请使用批量账本操作。",
+                confirmText: "从所有账本删除", destructive: true) {
+                guard let transaction = globalDeleteTarget else { return }
+                do { try LedgerStore.delete(transaction, in: context) }
+                catch { deleteError = error.localizedDescription }
+                globalDeleteTarget = nil
             }
     }
 
@@ -336,11 +360,7 @@ struct TransactionListView: View {
     }
 
     private func deleteTransaction(_ transaction: MoneyTransaction) {
-        do {
-            try LedgerStore.delete(transaction, in: context)
-        } catch {
-            deleteError = error.localizedDescription
-        }
+        globalDeleteTarget = transaction
     }
 
     private func parsedAmount(_ text: String) -> Decimal? {

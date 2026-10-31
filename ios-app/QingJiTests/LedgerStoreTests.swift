@@ -5,6 +5,8 @@ import QingJiCore
 
 @MainActor
 final class LedgerStoreTests: XCTestCase {
+    private enum SaveFailure: Swift.Error { case injected }
+
     private final class Stack {
         let container: ModelContainer
         let context: ModelContext
@@ -47,6 +49,88 @@ final class LedgerStoreTests: XCTestCase {
         stack.context.insert(dining)
         try stack.context.save()
         return (book, cash, bank, dining)
+    }
+
+    func testCategorySaveFailureRestoresOnlyCommandFieldsAfterLaterSave() throws {
+        let stack = try Stack()
+        let (book, cash, _, dining) = try seed(stack)
+        let replacement = TxCategory(key: "travel", name: "出行", symbol: "car", kind: .expense)
+        stack.context.insert(replacement)
+        let original = try LedgerStore.createTransaction(in: stack.context, amount: 80,
+            kind: .expense, date: Date(), category: dining, account: cash, book: book)
+        let previousUpdatedAt = original.updatedAt
+        cash.name = "保留其他页面尚未保存的编辑"
+        XCTAssertThrowsError(try LedgerStore.updateCategory(of: original, category: replacement,
+            in: stack.context, saveContext: { _ in throw SaveFailure.injected }))
+        XCTAssertEqual(original.category?.stableID, dining.stableID)
+        XCTAssertEqual(original.updatedAt, previousUpdatedAt)
+        XCTAssertEqual(cash.name, "保留其他页面尚未保存的编辑")
+        try stack.context.save()
+        let reloaded = ModelContext(stack.container)
+        XCTAssertEqual(try reloaded.fetch(FetchDescriptor<MoneyTransaction>()).first?.category?.stableID, dining.stableID)
+        XCTAssertEqual(try reloaded.fetch(FetchDescriptor<Account>()).first(where: { $0.stableID == cash.stableID })?.name,
+                       "保留其他页面尚未保存的编辑")
+    }
+
+    func testReimbursementSaveFailureDoesNotLeakOffsetOrFlagsIntoLaterSave() throws {
+        let stack = try Stack()
+        let (book, cash, _, dining) = try seed(stack)
+        let original = try LedgerStore.createTransaction(in: stack.context, amount: 80,
+            kind: .expense, date: Date(), category: dining, account: cash, book: book, reimbursable: true)
+        let previousUpdatedAt = original.updatedAt
+        cash.name = "保留账户编辑"
+        XCTAssertThrowsError(try LedgerStore.createOffset(for: original, amount: 80, note: "报销",
+            eventType: .reimbursement, settlementAccount: cash, in: stack.context,
+            saveContext: { _ in throw SaveFailure.injected }))
+        XCTAssertFalse(original.isReimbursed)
+        XCTAssertTrue(original.reimbursable)
+        XCTAssertEqual(original.updatedAt, previousUpdatedAt)
+        try stack.context.save()
+        let reloaded = ModelContext(stack.container)
+        let rows = try reloaded.fetch(FetchDescriptor<MoneyTransaction>())
+        XCTAssertEqual(rows.count, 1)
+        XCTAssertEqual(rows.first?.stableID, original.stableID)
+        XCTAssertFalse(try XCTUnwrap(rows.first).isReimbursed)
+        XCTAssertTrue(try XCTUnwrap(rows.first).reimbursable)
+        XCTAssertEqual(cash.name, "保留账户编辑")
+    }
+
+    func testDeleteFamilySaveFailureKeepsOriginalOffsetsAndRelationshipsAfterLaterSave() throws {
+        let stack = try Stack()
+        let (book, cash, _, dining) = try seed(stack)
+        let original = try LedgerStore.createTransaction(in: stack.context, amount: 80,
+            kind: .expense, date: Date(), category: dining, account: cash, book: book)
+        let offset = try LedgerStore.createOffset(for: original, amount: 20, note: "退款",
+            eventType: .refund, settlementAccount: cash, in: stack.context)
+        cash.name = "其他编辑"
+        XCTAssertThrowsError(try LedgerStore.delete([original], in: stack.context,
+            saveContext: { _ in throw SaveFailure.injected }))
+        try stack.context.save()
+        let reloaded = ModelContext(stack.container)
+        let rows = try reloaded.fetch(FetchDescriptor<MoneyTransaction>())
+        XCTAssertEqual(Set(rows.map(\.stableID)), Set([original.stableID, offset.stableID]))
+        XCTAssertEqual(rows.first(where: { $0.stableID == offset.stableID })?.refundOfID, original.stableID)
+        XCTAssertTrue(rows.allSatisfy { $0.account?.stableID == cash.stableID && $0.book?.stableID == book.stableID })
+        XCTAssertEqual(cash.name, "其他编辑")
+    }
+
+    func testDeleteReimbursementFailureRestoresOriginalFlagsAfterLaterSave() throws {
+        let stack = try Stack()
+        let (book, cash, _, dining) = try seed(stack)
+        let original = try LedgerStore.createTransaction(in: stack.context, amount: 80,
+            kind: .expense, date: Date(), category: dining, account: cash, book: book, reimbursable: true)
+        let offset = try LedgerStore.createOffset(for: original, amount: 80, note: "报销",
+            eventType: .reimbursement, settlementAccount: cash, in: stack.context)
+        let previousUpdatedAt = original.updatedAt
+        XCTAssertThrowsError(try LedgerStore.delete([offset], in: stack.context,
+            saveContext: { _ in throw SaveFailure.injected }))
+        XCTAssertTrue(original.isReimbursed)
+        XCTAssertFalse(original.reimbursable)
+        XCTAssertEqual(original.updatedAt, previousUpdatedAt)
+        try stack.context.save()
+        let rows = try ModelContext(stack.container).fetch(FetchDescriptor<MoneyTransaction>())
+        XCTAssertEqual(rows.count, 2)
+        XCTAssertTrue(try XCTUnwrap(rows.first { $0.stableID == original.stableID }).isReimbursed)
     }
 
     func testBuiltInChildRollupUsesSameNameAsStoredParent() throws {

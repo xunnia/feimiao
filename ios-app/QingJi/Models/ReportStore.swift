@@ -18,9 +18,8 @@ enum ReportStore {
               let end = calendar.date(byAdding: .second, value: -1, to: nextStart) else {
             throw CocoaError(.validationMissingMandatoryProperty)
         }
-        let records = transactions
-            .filter { $0.book?.stableID == bookID || bookID == nil }
-            .map(\.record)
+        let books = try context.fetch(FetchDescriptor<Book>())
+        let records = LedgerScope.filter(transactions, selectedBookID: bookID, books: books).map(\.record)
         let summary = StatisticsEngine.monthlySummary(
             of: records,
             year: components.year ?? calendar.component(.year, from: start),

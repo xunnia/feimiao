@@ -18,7 +18,7 @@ private enum HomeTransactionFilter: String, CaseIterable, Hashable {
 }
 
 /// iOS 首页：先看本月真实汇总，再进入记账和明细。
-/// 账本筛选遵守安卓端的「计入总账」约定；退款子记录保留在统计中，但不在首页重复列出。
+/// 总账本包含全部原始账单；退款子记录保留在统计中，但不在首页重复列出。
 struct HomeView: View {
     @Environment(AppRouter.self) private var router
     let onOpenDrawer: (() -> Void)?
@@ -40,6 +40,8 @@ struct HomeView: View {
     @State private var editingTransaction: MoneyTransaction?
     @State private var projectionCache = IOSLedgerProjectionCache()
     @State private var statisticsCache = IOSStatisticsProjectionCache()
+    @AppStorage("bookMemberships.totalScopeNotice.v1") private var didShowTotalScopeNotice = false
+    @State private var showTotalScopeNotice = false
 
     init(onOpenDrawer: (() -> Void)? = nil) {
         self.onOpenDrawer = onOpenDrawer
@@ -58,7 +60,7 @@ struct HomeView: View {
         let now = AppClock.now
         let snapshot = projectionCache.snapshot(
             for: transactions,
-            selectedBookID: router.selectedBookID
+            selectedBookID: router.selectedBookID, books: books
         )
         let components = Calendar.current.dateComponents([.year, .month], from: displayedMonth)
         let summary = statisticsCache.monthly(
@@ -186,6 +188,14 @@ struct HomeView: View {
                 EditTransactionSheet(transaction: transaction)
             }
         .toolbar(.hidden, for: .tabBar)
+        .onAppear(perform: checkTotalScopeNotice)
+        .onChange(of: books.count) { _, _ in checkTotalScopeNotice() }
+        .onChange(of: books.contains(where: { !$0.isDefault && !$0.includeInTotal })) { _, _ in checkTotalScopeNotice() }
+        .alert("总账本现在包含全部账单", isPresented: $showTotalScopeNotice) {
+            Button("我知道了") { didShowTotalScopeNotice = true }
+        } message: {
+            Text("你以前设置为不计入总账的场景账本，现在也会显示在总账本中，汇总数字可能变化。没有复制或删除任何账单，账户余额不变；切换场景账本仍可单独查看。")
+        }
         .onChange(of: scenePhase) { _, phase in
             if phase == .active { followClock() }
         }
@@ -195,6 +205,11 @@ struct HomeView: View {
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.significantTimeChangeNotification)) { _ in
             followClock()
         }
+    }
+
+    private func checkTotalScopeNotice() {
+        guard !didShowTotalScopeNotice, books.contains(where: { !$0.isDefault && !$0.includeInTotal }) else { return }
+        showTotalScopeNotice = true
     }
 
     /// 回到前台或过了零点：停在「当时本月」的跟到新的本月，手动选的月份不动。
@@ -905,7 +920,9 @@ private struct HomeRecordInputBar: View {
 }
 
 #Preview {
+  if let container = try? AppModelContainer.makeContainer(inMemory: true) {
     HomeView()
-        .modelContainer(AppModelContainer.shared)
+        .modelContainer(container)
         .environment(AppRouter())
+  }
 }

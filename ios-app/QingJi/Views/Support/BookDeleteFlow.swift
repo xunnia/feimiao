@@ -2,16 +2,13 @@ import SwiftUI
 import SwiftData
 import UIKit
 
-/// 删账本的三段确认，对齐安卓 `_confirmDeleteBook`：
-/// 没账目 → 确认删除；有账目 → 先推荐「转移并删除」；
-/// 用户拒绝转移 → 再弹一次「永久删除」，连账目一起删。
+/// 删除账本只解除关联；取消绝不进入更危险的全局删账。
 private struct BookDeleteFlow: ViewModifier {
     @Environment(\.modelContext) private var context
     @Binding var book: Book?
 
     @State private var emptyTarget: Book?
     @State private var moveTarget: Book?
-    @State private var wipeTarget: Book?
     @State private var count = 0
     @State private var resultMessage: String?
 
@@ -30,7 +27,7 @@ private struct BookDeleteFlow: ViewModifier {
             .appConfirmationDialog(
                 "删除「\(emptyTarget?.name ?? "")」？",
                 isPresented: presence($emptyTarget),
-                message: "这个账本没有账目，删除后不可恢复。",
+                message: "只删除这个场景账本及其预算规则，全部账单仍保留在总账本。",
                 confirmText: "删除",
                 destructive: true
             ) {
@@ -40,31 +37,16 @@ private struct BookDeleteFlow: ViewModifier {
             .appConfirmationDialog(
                 "「\(moveTarget?.name ?? "")」有 \(count) 笔账目",
                 isPresented: presence($moveTarget),
-                message: "建议把账目转移到总账本再删——记录一笔不丢。\n（点「取消」后仍想连账目一起删，会有单独确认。）",
-                confirmText: "转移并删除",
-                onCancel: {
-                    let target = moveTarget
-                    moveTarget = nil
-                    wipeTarget = target
-                }
+                message: "只移除这个场景账本及其预算规则。账单仍可在总账本和其他已关联的账本查看，账户余额不变。",
+                confirmText: "删除账本"
             ) {
                 if let target = moveTarget {
                     let moved = count
-                    run(success: "\(moved) 笔账目已转移到总账本") {
+                    run(success: "已解除 \(moved) 笔账目的关联，原账单已保留") {
                         try BookStore.deleteMovingTransactions(target, in: context)
                     }
                 }
                 moveTarget = nil
-            }
-            .appConfirmationDialog(
-                "连 \(count) 笔账目一起删除？",
-                isPresented: presence($wipeTarget),
-                message: "「\(wipeTarget?.name ?? "")」和它的全部账目将永久删除，无法恢复。",
-                confirmText: "永久删除",
-                destructive: true
-            ) {
-                if let target = wipeTarget { run { try BookStore.deleteWithTransactions(target, in: context) } }
-                wipeTarget = nil
             }
             .alert(
                 "删除账本",

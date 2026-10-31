@@ -10,10 +10,12 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import io
 import json
 import re
 import subprocess
 import sys
+import tarfile
 from collections import Counter
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
@@ -287,14 +289,87 @@ def validate_data_upgrade(payload: dict[str, Any], repo: Path) -> None:
     require(len(model_types) == len(set(model_types)) and
             all(isinstance(value, str) and value for value in model_types),
             "dataUpgrade target modelTypes must be unique strings")
-    model_source = text(repo / "ios-app/QingJi/Models/AppModelContainer.swift")
+    model_source = text(repo / "ios-app/QingJi/Models/AppSchema.swift")
+    require("enum FeimiaoSchemaV3: VersionedSchema" in model_source and "enum FeimiaoMigrationPlan" in model_source,
+            "explicit current schema and migration plan must exist")
+    model_source = model_source.split("enum FeimiaoSchemaV3: VersionedSchema", 1)[1].split("enum FeimiaoMigrationPlan", 1)[0]
+    container_source = text(repo / "ios-app/QingJi/Models/AppModelContainer.swift")
+    require("Schema(versionedSchema: FeimiaoSchemaV3.self)" in container_source and
+            "migrationPlan: any SchemaMigrationPlan.Type = FeimiaoMigrationPlan.self" in container_source and
+            "ModelContainer(for: schema, migrationPlan: migrationPlan, configurations: [config])" in container_source and
+            container_source.count("ModelContainer(for:") == 1 and
+            "get throws" in container_source and "fatalError(" not in container_source and
+            re.search(r"let container = try makeContainer\(\)\s+cachedContainer = container\s+return container", container_source),
+            "production container must use current schema and migration plan")
+    legacy_source = text(repo / "ios-app/QingJi/Models/LegacyLedgerModels.swift")
+    original = subprocess.run(
+        ["git", "show", f"{source_revision}:ios-app/QingJi/Models/Models.swift"],
+        cwd=repo, capture_output=True, text=True, encoding="utf-8", check=False,
+    )
+    require(original.returncode == 0, "cannot inspect original ledger schema")
+    for model in ("Account", "Book", "TxCategory", "MoneyTransaction"):
+        marker = f"final class {model} {{"
+        end_marker = "init(" if model == "Book" else "var kind:"
+        declarations = []
+        for source_text in (original.stdout, legacy_source):
+            require(marker in source_text, f"missing frozen {model} declaration")
+            body = source_text.split(marker, 1)[1]
+            require(end_marker in body, f"cannot delimit stored properties of {model}")
+            body = body.split(end_marker, 1)[0]
+            # This frozen cluster declares all stored properties before its first
+            # computed getter/initializer, including inverse/deleteRule metadata.
+            declarations.append(re.sub(r"\s+", "", re.sub(r"//[^\n]*", "", body)))
+        require(declarations[0] == declarations[1], f"frozen {model} differs from original stored properties/relationships")
+    schema_source = text(repo / "ios-app/QingJi/Models/AppSchema.swift")
+    require("static var leafModels:" in schema_source and "static var legacyLedger:" in schema_source,
+            "historical model groups must be explicit")
+    leaf_section = schema_source.split("static var leafModels:", 1)[1].split("static var legacyLedger:", 1)[0]
+    shared_names = set(re.findall(r"([A-Za-z][A-Za-z0-9]+)\.self", leaf_section))
+
+    def stored_model_declarations(sources: list[str]) -> dict[str, list[str]]:
+        result = {}
+        for source_text in sources:
+            for match in re.finditer(r"(?m)^final class (\w+)\s*\{", source_text):
+                end = source_text.find("\n}", match.end())
+                require(end >= 0, "cannot delimit persistent class")
+                fields = []
+                for line in source_text[match.end():end].splitlines():
+                    if not re.match(r"^    (?:var |@(?:Attribute|Relationship))", line):
+                        continue
+                    field = line.strip()
+                    if field.startswith("var ") and re.match(r"var \w+[^=]*\{", field):
+                        continue  # computed property, not persisted metadata
+                    fields.append(field)
+                result[match.group(1)] = fields
+        return result
+
+    current_fields = stored_model_declarations([
+        text(path) for path in (repo / "ios-app/QingJi/Models").glob("*.swift")
+        if path.name != "LegacyLedgerModels.swift"
+    ])
+    for version in (1, 2):
+        anchor = regex_value(
+            rf'enum FeimiaoSchemaV{version}: VersionedSchema.*?sourceRevision: String\s*\{{\s*"([0-9a-f]{{40}})"',
+            schema_source, f"V{version} schema source anchor", re.DOTALL,
+        )
+        archive = subprocess.run(["git", "archive", anchor, "ios-app/QingJi/Models"], cwd=repo, capture_output=True, check=False)
+        require(archive.returncode == 0, f"cannot inspect V{version} leaf model source")
+        with tarfile.open(fileobj=io.BytesIO(archive.stdout)) as bundle:
+            historical_fields = stored_model_declarations([
+                bundle.extractfile(member).read().decode("utf-8")
+                for member in bundle.getmembers() if member.isfile() and member.name.endswith(".swift")
+            ])
+        names = shared_names | ({"BudgetRuleRecord", "BudgetRolloverChangeRecord"} if version == 2 else set())
+        for name in names:
+            require(name in current_fields and current_fields.get(name) == historical_fields.get(name),
+                    f"shared V{version} leaf {name} changed persisted metadata; freeze it before changing the current model")
     actual_model_types = re.findall(
         r"^\s+([A-Za-z][A-Za-z0-9]+)\.self,",
         model_source,
         re.MULTILINE,
     )
     require(model_types == actual_model_types,
-            "dataUpgrade target modelTypes differ from AppModelContainer")
+            "dataUpgrade target modelTypes differ from FeimiaoSchemaV3")
 
     fixture = upgrade.get("fixture")
     require(isinstance(fixture, dict), "dataUpgrade.fixture must be an object")

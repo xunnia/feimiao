@@ -5,6 +5,34 @@ import QingJiCore
 
 @MainActor
 final class BillRecordSaverTests: XCTestCase {
+    func testCSVRestoresScenesByUUIDEvenWhenTwoBooksHaveSameName() throws {
+        let stack = try Stack()
+        let (_, account) = try seed(stack)
+        let existing = Book(name: "生意")
+        stack.context.insert(existing)
+        try stack.context.save()
+        let importedID = UUID()
+        let entry = TransactionRecord(kind: .expense, amount: 100,
+            scenarioBookIDs: [existing.stableID, importedID], scenarioBookNames: ["生意", "生意"],
+            date: Date(timeIntervalSince1970: 1_700_000_000))
+        XCTAssertEqual(try BillRecordSaver.save(result([entry]), account: account, context: stack.context), 1)
+        let scenes = try stack.context.fetch(FetchDescriptor<Book>()).filter { !$0.isDefault }
+        XCTAssertEqual(scenes.count, 2)
+        let transaction = try XCTUnwrap(stack.context.fetch(FetchDescriptor<MoneyTransaction>()).first)
+        XCTAssertEqual(transaction.scenarioBookIDs, [existing.stableID, importedID])
+    }
+
+    func testCSVFailedSaveRemovesOnlyImportedScenesAndTransactions() throws {
+        let stack = try Stack()
+        let (book, account) = try seed(stack)
+        let entry = TransactionRecord(kind: .expense, amount: 100,
+            scenarioBookIDs: [UUID()], scenarioBookNames: ["导入项目"], date: Date(timeIntervalSince1970: 1_700_000_000))
+        XCTAssertThrowsError(try BillRecordSaver.save(result([entry]), account: account, context: stack.context,
+            saveContext: { _ in throw SaveFailure.expected }))
+        XCTAssertEqual(try stack.context.fetch(FetchDescriptor<Book>()).map(\.stableID), [book.stableID])
+        XCTAssertEqual(try stack.context.fetchCount(FetchDescriptor<MoneyTransaction>()), 0)
+    }
+
     private final class Stack {
         let context: ModelContext
 

@@ -41,7 +41,7 @@ struct BudgetDaySheet: View {
         let future = day > snapshot.today
         let spent = future ? 0 : snapshot.spendByDay[day.key] ?? 0
         let over = info?.covered == true ? spent - (info?.budgetCents ?? 0) : 0
-        let projection = projectionCache.snapshot(for: transactions, selectedBookID: selectedBookID)
+        let projection = projectionCache.snapshot(for: transactions, selectedBookID: selectedBookID, books: books)
         let calendar = Calendar.current
         let dayTransactions: [MoneyTransaction] = future ? [] : projection.scopedTransactions.filter {
             $0.kindRaw == TransactionKind.expense.rawValue && $0.refundOfID == nil
