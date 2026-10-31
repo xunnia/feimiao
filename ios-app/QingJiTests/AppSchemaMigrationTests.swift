@@ -215,6 +215,26 @@ final class AppSchemaMigrationTests: XCTestCase {
         XCTAssertEqual(legacy.scenarioBookIDs, [fixture.projectID]); XCTAssertFalse(legacy.hasExplicitBookMemberships)
     }
 
+    func testSoftDeletedAccountStaysDeletedAfterReopeningCurrentStore() throws {
+        let url = try directory().appendingPathComponent("default.store")
+        let id = UUID()
+        do {
+            let container = try AppModelContainer.makeContainer(at: url)
+            let context = ModelContext(container)
+            let account = Account(name: "已删账户", kind: .cash)
+            account.stableID = id
+            account.isDeleted = true
+            context.insert(account)
+            try context.save()
+        }
+        let reopened = try AppModelContainer.makeContainer(at: url)
+        let context = ModelContext(reopened)
+        let account = try XCTUnwrap(context.fetch(FetchDescriptor<Account>()).first { $0.stableID == id })
+        XCTAssertTrue(account.isDeleted, "软删除账户重开后不能复活")
+        let visible = try context.fetch(FetchDescriptor<Account>(predicate: #Predicate<Account> { !$0.isSoftDeleted }))
+        XCTAssertFalse(visible.contains { $0.stableID == id })
+    }
+
     func testFailedMigrationLeavesOriginalStoreReopenableWithOriginalRowsAndAttachment() throws {
         let dir = try directory()
         let url = dir.appendingPathComponent("default.store")

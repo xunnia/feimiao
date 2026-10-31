@@ -12,7 +12,7 @@ struct ImportReviewView: View {
     @Environment(AIProviderStore.self) private var providerStore
     @Query(filter: #Predicate<TxCategory> { !$0.isArchived }, sort: \.sortOrder)
     private var categories: [TxCategory]
-    @Query(filter: #Predicate<Account> { !$0.isDeleted }, sort: \.sortOrder)
+    @Query(filter: #Predicate<Account> { !$0.isSoftDeleted }, sort: \.sortOrder)
     private var accounts: [Account]
 
     let result: ImportedBillResult

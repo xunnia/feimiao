@@ -42,8 +42,10 @@ enum FeimiaoSchemaV2: VersionedSchema {
     }
 }
 
-/// Only two defaulted attributes are added to MoneyTransaction. Old book and
-/// account relationships remain intact; legacy scene fallback remains lazy.
+/// Only two defaulted attributes are added to MoneyTransaction, and Account's
+/// soft-delete flag is renamed to isSoftDeleted (originalName "isDeleted" carries
+/// the value over; the old name clashes with NSManagedObject.isDeleted). Old book
+/// and account relationships remain intact; legacy scene fallback remains lazy.
 enum FeimiaoSchemaV3: VersionedSchema {
     static var versionIdentifier: Schema.Version { Schema.Version(3, 0, 0) }
     static var models: [any PersistentModel.Type] {

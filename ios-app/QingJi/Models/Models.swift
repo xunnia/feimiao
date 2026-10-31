@@ -15,7 +15,10 @@ final class Account {
     var initialBalance: Decimal = 0
     var institution: String = ""
     var includeInNetWorth: Bool = true
-    var isDeleted: Bool = false
+    /// 软删除标记。属性名不能叫 isDeleted：它与 NSManagedObject 自带的 isDeleted 重名
+    /// （Apple 禁止属性名与其无参方法同名），迁移后重开会读成 false，已删账户会“复活”。
+    /// 旧库升级时按 originalName 把值带过来；代码仍可用下方的 isDeleted 别名。
+    @Attribute(originalName: "isDeleted") var isSoftDeleted: Bool = false
     var statusRaw: String = AccountStatus.active.rawValue
     var archivedAt: Date? = nil
     var lastVerifiedAt: Date? = nil
@@ -52,6 +55,12 @@ final class Account {
     var balanceMode: LiabilityBalanceMode {
         get { LiabilityBalanceMode(rawValue: balanceModeRaw) ?? .legacyHybrid }
         set { balanceModeRaw = newValue.rawValue }
+    }
+
+    /// 代码层别名；#Predicate 只能用存储属性 isSoftDeleted。
+    var isDeleted: Bool {
+        get { isSoftDeleted }
+        set { isSoftDeleted = newValue }
     }
 
     init(name: String, kind: AccountKind, currencyCode: String = "CNY", sortOrder: Int = 0) {
