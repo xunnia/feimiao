@@ -8,7 +8,7 @@
 
 ## 1. 目标（一句话）
 
-**iOS 版就是 Android「肥喵记账」在 iPhone 上的原生实现，不是一个新产品。** Android当前生产版是唯一母版；2026-10-31实查线上元数据已为 `1.318.0+333` / DB v51，精确源码、APK身份和水印见 `02` 顶部。注意 `codex/budget-takeover` 上的 `tools/p0_product_contract.json`、`tools/screenshot_manifest.json` 仍指向332，10-31备份推送的iOS截图任务因此合同校验失败；集成分支 `codex/reliability-20261031` 的 `c51928f` 已精确更新到333源码/APK身份，10-31推送后Mac上合同和38路由校验已通过；推送 `73eb210` 后编译和候选截图任务也通过，但App层XCTest 11项失败（本地已修待推送）、截图还没复看，不能当333已对齐证明。iOS既有测试分支采图早于332，不算本批双端封板；本地多场景和架构原生候选仍需新的Mac验收。
+**iOS 版就是 Android「肥喵记账」在 iPhone 上的原生实现，不是一个新产品。** Android当前生产版是唯一母版；2026-10-31实查线上元数据已为 `1.318.0+333` / DB v51，精确源码、APK身份和水印见 `02` 顶部。注意 `codex/budget-takeover` 上的 `tools/p0_product_contract.json`、`tools/screenshot_manifest.json` 仍指向332，10-31备份推送的iOS截图任务因此合同校验失败；集成分支 `codex/reliability-20261031` 的 `c51928f` 已精确更新到333源码/APK身份，10-31推送后Mac上合同和38路由校验已通过；推送 `73eb210` 后编译和候选截图任务也通过，App层XCTest 11项失败；11-01修复随 `a343776` 推送后XCTest 291项0失败，但截图还没复看，不能当333已对齐证明。iOS既有测试分支采图早于332，不算本批双端封板；本地多场景和架构原生候选仍需新的Mac验收。
 
 **必须和 Android 一模一样的部分：**主页 + 左侧推开式抽屉（没有底部 Tab）；每个入口的名称、位置、层级；页面首屏的信息顺序和字段；金额、净额、退款/报销归属、预算、统计、净资产的算法；肥喵 Logo、猫咪、分类图标、账本封面和猫系配色（收入铜金、支出深色、超支橙，不用系统红绿）；空态、错误、取消、删除/撤销之后看到的结果。
 
@@ -28,7 +28,7 @@
 
 ## 2. 当前真实状态
 
-### 2026-10-31 第一批：候选整合进集成分支（已推送到 `73eb210`，Mac编译通过；XCTest 11项失败已本地修复，待推送）
+### 2026-10-31 第一批：候选整合进集成分支（已推送到 `a343776`，Mac编译和App层XCTest 291/0通过）
 
 - 主目录93份未提交iOS候选按 `baf52ea` 三方对比，叠到已合入远端按钮线 `dd692b7` 的树上，提交为 `codex/reliability-20261031` 的 `57e42b3`（54个路径，worktree `.tmp/reliability-20261031`），主目录原文件没动：38份只有本机改动直接采用，6份本机新增，7份自动合并，11份逐段裁决，31份与按钮线已一致不动。
 - 冲突裁决：AIProviderClient、流式摘要、资产趋势及其测试取按钮线版本（已含本机同类改动，另有逐块限长、币种归一和质量门修正）；AssetFinancialCommand、BookStore、LedgerStore 取本机超集版本（局部撤销 journal，旧的全局删账一律拒绝）；AssetStore 取本机版并补回 `original_principal` 冻结与撤销校验；MeowAssistantView 取按钮线流式实现并补回多场景范围和可失败的预览容器；AssetFinancialCommandTests 合并双方全部测试。
@@ -40,12 +40,13 @@
 - `bc416fc`（随 `73eb210` 推送，Mac编译通过）：推送前复查新增测试，`LedgerStoreTests` 的分类保存失败测试用 `category?.stableID` 比较分类，但 `TxCategory` 的标识是 `key`、没有 `stableID`，整个QingJiTests会编不过；改为比较 `.key`，与 `AIRecordCardStoreTests` 一致。本批相关8个测试文件逐行核对，只发现这一处；其余13个改动测试文件只做了机械检查（顶层重名、`@testable import`、主线程隔离、未声明的名字、漏写 try/await），没发现问题。都是静态检查；推送 `73eb210` 后Mac编译通过。
 - 读iOS编译失败时，先看IPA任务（Release整模块）的日志：Debug编译在第一个模块签名错误处就停，只报1处；整模块构建一次列出了全部3处。
 - 推送 `73eb210` 的Mac CI `41213850286`：编译、核心逻辑150/0、候选模拟器截图、未签名IPA通过；App层XCTest 290项中11个用例失败（17条失败记录，6条意外抛错），汇总任务跳过，产物2027-01-29过期，候选截图还没下载复看。4项旧库磁盘迁移3项失败，3项都在 `AppSchemaMigrationTests` 第144行（已删账户读成未删）和第148行（信用额度金额）断言失败，`testMigratedStoreKeepsLegacyEmptyAndMultipleMembershipsAfterSecondOpen` 通过；8项撤销/启动重试7项通过，只有 `LedgerStoreTests` 的删账单家族保存失败测试失败。双端截图 `41213850281` 的iOS任务在Build for simulator拉 `swift-markdown-ui` 时连不上github.com（网络问题）；Android 5批和汇总验收通过，对比报告跳过。
-- 本地 `ab601e7`（未推送）：多场景候选给 `linkPurchaseAllocation` 加了账本成员校验（主目录候选原文件就有，随 `57e42b3` 合入），`LedgerScope.allowsAssetAssociation` 对无账本直接返回false，无账本物品一律被拒；`AssetStoreTests` 2项（从账单建物品、新购建档）和 `AssetFinancialCommandTests` 3项（退货退款2项、取消关联）失败。改为无账本物品只接受无账本账单，有账本时规则不变；Android `addPhysicalAssetFromTransaction` 让物品沿用账单的账本，结果一致。另改2处测试写法：迁移测试的信用额度金额改用 `Decimal(string:)`（Double字面量有误差）；`BookMembershipStoreTests` 带关系新建的对象会被SwiftData自动插入，改为显式插入并按两笔断言。
-- 本地 `e19e324`（未推送）：Mac上2项失败说明靠重新insert撤销删除不可靠：删场景账本失败后场景账本没回来（`BookMembershipStoreTests` 账本数断言失败，随后再删直接抛错）；删账单家族失败后账单回来了，但丢了账户和账本关系（`LedgerStoreTests` 第113行）。`AssetFinancialCommand.perform` 加 `deleting:`：会删除的命令先保存已有待保存编辑，失败时先还原本命令改的字段再rollback到该点；未声明就删除在Debug下断言。声明的6个命令：删账单、删场景账本（保留账单）、取消成本关联、撤销出售、撤销收回、撤销还款；逐处核对过，代码里所有 `changes.delete` 都在这6个命令内，退货失败清理删的是本次新建、未保存的退款，不经过 `changes.delete`。这是对10-24「不用共享Context全局rollback」的有意修正，只限删除类；非删除类仍是局部撤销。
-- 本地 `f6bc559`（未推送）：迁移3项第144行失败是 `Account.isDeleted` 与 `NSManagedObject.isDeleted` 重名（Apple禁止属性名与其无参方法同名），已删账户迁移重开读成未删。存储属性改名 `isSoftDeleted`，用 `@Attribute(originalName: "isDeleted")` 带过旧列值，保留 `isDeleted` 计算属性别名；唯一的账户 `#Predicate`（`ImportReviewView`）改用新名；冻结的V1/V2 `LegacyLedgerModels.Account` 保持原名，校验和不变。V3未发布，原位修改；装过 `73eb210` 未签名IPA的设备打开可能进启动错误页（不删数据），记录里没有设备装过。新增 `testSoftDeletedAccountStaysDeletedAfterReopeningCurrentStore`。
+- `ab601e7`（随 `a343776` 推送，Mac通过）：多场景候选给 `linkPurchaseAllocation` 加了账本成员校验（主目录候选原文件就有，随 `57e42b3` 合入），`LedgerScope.allowsAssetAssociation` 对无账本直接返回false，无账本物品一律被拒；`AssetStoreTests` 2项（从账单建物品、新购建档）和 `AssetFinancialCommandTests` 3项（退货退款2项、取消关联）失败。改为无账本物品只接受无账本账单，有账本时规则不变；Android `addPhysicalAssetFromTransaction` 让物品沿用账单的账本，结果一致。另改2处测试写法：迁移测试的信用额度金额改用 `Decimal(string:)`（Double字面量有误差）；`BookMembershipStoreTests` 带关系新建的对象会被SwiftData自动插入，改为显式插入并按两笔断言。
+- `e19e324`（随 `a343776` 推送，Mac通过）：Mac上2项失败说明靠重新insert撤销删除不可靠：删场景账本失败后场景账本没回来（`BookMembershipStoreTests` 账本数断言失败，随后再删直接抛错）；删账单家族失败后账单回来了，但丢了账户和账本关系（`LedgerStoreTests` 第113行）。`AssetFinancialCommand.perform` 加 `deleting:`：会删除的命令先保存已有待保存编辑，失败时先还原本命令改的字段再rollback到该点；未声明就删除在Debug下断言。声明的6个命令：删账单、删场景账本（保留账单）、取消成本关联、撤销出售、撤销收回、撤销还款；逐处核对过，代码里所有 `changes.delete` 都在这6个命令内，退货失败清理删的是本次新建、未保存的退款，不经过 `changes.delete`。这是对10-24「不用共享Context全局rollback」的有意修正，只限删除类；非删除类仍是局部撤销。
+- `f6bc559`（随 `a343776` 推送，Mac通过）：迁移3项第144行失败是 `Account.isDeleted` 与 `NSManagedObject.isDeleted` 重名（Apple禁止属性名与其无参方法同名），已删账户迁移重开读成未删。存储属性改名 `isSoftDeleted`，用 `@Attribute(originalName: "isDeleted")` 带过旧列值，保留 `isDeleted` 计算属性别名；唯一的账户 `#Predicate`（`ImportReviewView`）改用新名；冻结的V1/V2 `LegacyLedgerModels.Account` 保持原名，校验和不变。V3未发布，原位修改；装过 `73eb210` 未签名IPA的设备打开可能进启动错误页（不删数据），记录里没有设备装过。新增 `testSoftDeletedAccountStaysDeletedAfterReopeningCurrentStore`。
 - 没改：`PhysicalAsset`、`ReceivableAsset` 也有同名 `isDeleted`，过滤都在内存（`AssetStore`、`AssetsView`、`NetWorthStore`），已删资产重开后可能复活；两个模型V1–V3共用，要先在 `LegacyLedgerModels` 冻结旧版本再改，另行确认、Mac验证。
-- 这3个提交只在本机，本机不能编译Swift：以前没跑到的路径（5项过关联校验之后的部分、场景删除测试再删之后的断言、退货退款清理）都要等Mac；新重开测试在旧代码上也可能通过，确认修复主要看迁移3项。已用脚本找出调用这6个删除命令且断言保存结果的测试并逐个读过，没发现与「先保存」冲突的断言。Windows侧工具测试45/45、P0合同、38路由复跑通过。
-- 下一步：用户确认后推送 `ab601e7` 起的本地提交，iOS CI和双端截图随推送重跑；先看11项和新重开测试，尤其 `AppSchemaMigrationTests` 第144行，若仍失败说明重名也影响旧库写入或迁移，要再查。改前图用按钮线最后一次Mac通过的 `b1280eb`（iOS CI `37616880822`，截图2027-01-05过期），它的App代码与候选合入前一致；启动失败错误页、多场景选择/归集等原生界面要出同场景前后图，但启动失败错误页和多场景账本选择面板现在CI里没有截图点（38条固定路由和交互截图都不含），要补截图代码再推送，等XCTest全过后另行确认。物品/应收重名之后另行确认。聊天行为对齐Android 329+放第二批。
+- 推送 `a343776` 的Mac CI `41227903767`：编译、核心逻辑150/0、App层XCTest 291项0失败、未签名IPA通过。上次失败的11项全部通过，包括迁移3项第144行的已删账户断言；新增的账户重开测试也通过。以前没跑到的路径（5项过关联校验之后的部分、场景删除测试再删之后的断言、退货退款清理）这次都跑到并通过。日志里的CoreData沙盒报错上次也有，是模拟器环境的老问题；改动的文件没有新增编译警告。已用脚本找出调用这6个删除命令且断言保存结果的测试并逐个读过，没发现与「先保存」冲突的断言。Windows侧工具测试45/45、P0合同、38路由复跑通过。
+- 双端截图 `41227903770`：iOS任务这次拉依赖成功、拍图通过，Android 0–3批通过；记录时iOS CI的候选截图和Android第4批还在跑，汇总验收和对比报告未出。
+- 下一步：截图跑完后下载复看候选截图。改前图用按钮线最后一次Mac通过的 `b1280eb`（iOS CI `37616880822`，截图2027-01-05过期），它的App代码与候选合入前一致；启动失败错误页、多场景选择/归集等原生界面要出同场景前后图，但启动失败错误页和多场景账本选择面板现在CI里没有截图点（38条固定路由和交互截图都不含），要补截图代码再推送；XCTest现已全过，补截图点另行确认。物品/应收重名之后另行确认。聊天行为对齐Android 329+放第二批。
 
 ### 2026-10-31 本机Opus接手核对（不推送、不触发CI）
 
