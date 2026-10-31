@@ -91,7 +91,7 @@ enum WidgetSnapshotWriter {
         formatter.dateFormat = "M月d日"
         let snapshot = WidgetSnapshot(
             generatedAtMs: Int64(now.timeIntervalSince1970 * 1000),
-            bookName: selectedBook?.name ?? "肥喵记账",
+            bookName: books.first(where: { $0.isDefault })?.name ?? "肥喵记账",
             dateText: formatter.string(from: now),
             todayExpenseText: money(todayExpense),
             monthExpenseText: money(summary.totalExpense),

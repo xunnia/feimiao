@@ -19,6 +19,8 @@ struct TransactionListView: View {
     private var accounts: [Account]
     @Query(sort: \Tag.sortOrder)
     private var tags: [Tag]
+    @Query(sort: \Book.sortOrder)
+    private var books: [Book]
 
     @State private var searchText = ""
     @State private var editingTransaction: MoneyTransaction?

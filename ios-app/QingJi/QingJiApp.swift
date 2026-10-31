@@ -105,7 +105,13 @@ final class DatabaseStartupState {
     private(set) var failed = false
     private let opener: () throws -> ModelContainer
 
-    init(opener: @escaping () throws -> ModelContainer = { try AppModelContainer.shared }) {
+    /// Production opener. It is built inside a main-actor initializer because a
+    /// default-argument closure is nonisolated and cannot read `shared`.
+    convenience init() {
+        self.init(opener: { try AppModelContainer.shared })
+    }
+
+    init(opener: @escaping () throws -> ModelContainer) {
         self.opener = opener
     }
 
