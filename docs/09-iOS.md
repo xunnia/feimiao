@@ -37,8 +37,9 @@
 - 10-31备份推送 `baf52ea` 的Mac CI：编译、核心逻辑测试、App层XCTest（140项0失败，含 `ThemePopupInteractionTests` 9/9）和未签名IPA通过，截图因合同仍标332失败。这只覆盖已提交代码，不覆盖这93份候选。
 - 10-31推送集成分支 `fc7cd63` 的Mac CI `41208375673`：核心逻辑150/0、P0合同和38路由校验通过；App编译、App层XCTest、截图、未签名IPA都停在编译。Release整模块构建列出3处错误，主目录候选原文件里同样存在，不是合并带进来的：`QingJiApp.swift` 默认参数闭包读 `@MainActor` 的 `AppModelContainer.shared`；`WidgetSnapshotWriter.swift` 改成总账本范围后标题仍引用已删的 `selectedBook`；`TransactionListView.swift` 给账本投影传 `books` 却没有 `books` 查询。
 - 本地 `475b1e3`（未推送）：正式opener改在 `convenience init()` 里构造，测试用 `init(opener:)` 不变；小组件标题取默认账本名（默认账本就是总账本），数据范围不变；流水页按其他视图写法补 `@Query(sort: \Book.sortOrder)`。QingJiTests依赖App模块，本次也没编译，4项旧库迁移和8项撤销/启动重试仍未运行。
+- 本地 `bc416fc`（未推送）：推送前复查新增测试，`LedgerStoreTests` 的分类保存失败测试用 `category?.stableID` 比较分类，但 `TxCategory` 的标识是 `key`、没有 `stableID`，整个QingJiTests会编不过；改为比较 `.key`，与 `AIRecordCardStoreTests` 一致。本批相关8个测试文件逐行核对，只发现这一处；其余13个改动测试文件只做了机械检查（顶层重名、`@testable import`、主线程隔离、未声明的名字、漏写 try/await），没发现问题。都是静态检查，不等于编译通过。
 - 读iOS编译失败时，先看IPA任务（Release整模块）的日志：Debug编译在第一个模块签名错误处就停，只报1处；整模块构建一次列出了全部3处。
-- 下一步：用户确认后推送 `475b1e3` 和文档提交，由Mac CI重新编译并跑XCTest（先看4项旧库迁移和8项撤销/启动重试）、截图和IPA；改前图用按钮线最后一次Mac通过的 `b1280eb`（iOS CI `37616880822`，截图2027-01-05过期），它的App代码与候选合入前一致；启动失败错误页、多场景选择/归集等原生界面要出同场景前后图。聊天行为对齐Android 329+放第二批。
+- 下一步：用户确认后推送 `475b1e3` 起的本地提交，由Mac CI重新编译并跑XCTest（先看4项旧库迁移和8项撤销/启动重试）、截图和IPA；改前图用按钮线最后一次Mac通过的 `b1280eb`（iOS CI `37616880822`，截图2027-01-05过期），它的App代码与候选合入前一致；启动失败错误页、多场景选择/归集等原生界面要出同场景前后图，但启动失败错误页和多场景账本选择面板现在CI里没有截图点（38条固定路由和交互截图都不含），要补截图代码再推送，等编译通过后另行确认。聊天行为对齐Android 329+放第二批。
 
 ### 2026-10-31 本机Opus接手核对（不推送、不触发CI）
 
