@@ -12,6 +12,9 @@ settings:
 packages:
   QingJiCore:
     path: QingJiCore
+  MarkdownUI:
+    url: https://github.com/gonzalezreal/swift-markdown-ui
+    exactVersion: 2.4.1
 targets:
   QingJi:
     type: application
@@ -29,6 +32,7 @@ targets:
         buildPhase: resources
     dependencies:
       - package: QingJiCore
+      - package: MarkdownUI
       - target: QingJiWidget
       - target: QingJiShare
       - sdk: libcompression.tbd

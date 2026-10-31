@@ -397,6 +397,7 @@ final class AIProviderStore {
 
     @discardableResult
     func recordProviderFailure(for accountID: UUID, error: Error) -> AIProviderHealth {
+        guard !AIProviderError.isCancellation(error) else { return health(for: accountID) }
         let next = health(for: accountID).recordFailure(error.localizedDescription)
         providerHealth[accountID] = next
         persistHealth()

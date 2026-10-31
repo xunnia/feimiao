@@ -135,6 +135,7 @@ struct AIChatsView: View {
     }
 
     private func delete(_ session: AIChatSession) {
+        AIChatOperationFence.shared.invalidate(sessionID: session.stableID)
         let messages = (try? context.fetch(FetchDescriptor<AIChatMessage>())) ?? []
         for message in messages where message.sessionID == session.stableID {
             context.delete(message)

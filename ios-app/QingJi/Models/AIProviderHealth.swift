@@ -67,6 +67,8 @@ enum AIProviderVerificationStatus: String, Codable, CaseIterable, Hashable, Iden
                 if status == 400 || status == 404 || lowerMessage.contains("model") {
                     return .modelUnavailable
                 }
+            case .interrupted:
+                return .networkError
             case .invalidResponse:
                 break
             }

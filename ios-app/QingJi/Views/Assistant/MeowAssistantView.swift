@@ -35,6 +35,9 @@ struct MeowAssistantView: View {
     @State private var sessionID: UUID?
     @State private var didLoad = false
     @State private var requestTask: Task<Void, Never>?
+    @State private var activeRequestID: UUID?
+    @State private var recordLeases: [UUID: AIChatOperationFence.Lease] = [:]
+    @State private var completionByTurn: [UUID: AIChatCompletionMetadata] = [:]
     @State private var attachments: [AIChatAttachment] = []
     @State private var showAddSheet = false
     @State private var reasoningByTurn: [UUID: String] = [:]
@@ -45,6 +48,8 @@ struct MeowAssistantView: View {
     @State private var confirmationMessage: String?
     @State private var pendingUndoTurnID: UUID?
     @State private var pendingConsentAccount: AIProviderAccount?
+    @State private var followLatest = true
+    @State private var userScrolling = false
 
     init(sessionID: UUID? = nil, title: String? = nil) {
         requestedSessionID = sessionID
@@ -65,8 +70,8 @@ struct MeowAssistantView: View {
                 } else {
                     conversation
                 }
-                composer
             }
+            .safeAreaInset(edge: .bottom, spacing: 0) { composer }
             .liquidGlassCanvas()
             .navigationTitle(titleOverride ?? (requestedSessionID == nil ? "喵助手" : "新对话"))
             .navigationBarTitleDisplayMode(.inline)
@@ -268,9 +273,14 @@ struct MeowAssistantView: View {
                     ForEach(turns) { turn in
                         AssistantMessageBubble(
                             turn: turn,
-                            isStreaming: isSending && turn.role == "assistant" && turn.content.isEmpty,
+                            isStreaming: isSending && turn.role == "assistant" && turn.id == turns.last?.id,
                             reasoningSummary: reasoningByTurn[turn.id] ?? "",
+                            completion: completionByTurn[turn.id],
                             sources: sourcesByTurn[turn.id] ?? [],
+                            onEdit: {
+                                draft = turn.content
+                                attachments = turn.attachments
+                            },
                             recordCard: recordCards[turn.id],
                             onSaveRecord: recordCards[turn.id]?.saved == false ? { saveRecord(turnID: turn.id) } : nil,
                             onUndoRecord: recordCards[turn.id]?.saved == true && recordCards[turn.id]?.rolledBack == false
@@ -308,11 +318,26 @@ struct MeowAssistantView: View {
                 .padding(.vertical, 18)
             }
             .scrollDismissesKeyboard(.interactively)
+            .scrollEdgeEffectStyle(.soft, for: .all)
+            .onScrollPhaseChange { _, phase in
+                userScrolling = phase == .interacting || phase == .decelerating
+            }
+            .onScrollGeometryChange(for: Bool.self) { geometry in
+                geometry.contentSize.height + geometry.contentInsets.bottom -
+                    geometry.contentOffset.y - geometry.containerSize.height < 64
+            } action: { _, atBottom in
+                if userScrolling { followLatest = atBottom }
+            }
             .onChange(of: turns.count) {
-                if let last = turns.last {
+                if followLatest, let last = turns.last {
                     withAnimation(.snappy) {
                         proxy.scrollTo(last.id, anchor: .bottom)
                     }
+                }
+            }
+            .onChange(of: turns.last?.content) {
+                if followLatest, let last = turns.last {
+                    proxy.scrollTo(last.id, anchor: .bottom)
                 }
             }
         }
@@ -369,30 +394,8 @@ struct MeowAssistantView: View {
     }
 
     private var attachmentStrip: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 8) {
-                ForEach(attachments) { attachment in
-                    HStack(spacing: 6) {
-                        Image(systemName: attachment.isImage ? "photo" : "doc.fill")
-                            .foregroundStyle(Color.accentColor)
-                        Text(attachment.name)
-                            .lineLimit(1)
-                            .font(.caption)
-                        Button {
-                            attachments.removeAll { $0.id == attachment.id }
-                        } label: {
-                            Image(systemName: "xmark.circle.fill")
-                                .foregroundStyle(.secondary)
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityLabel("移除 \(attachment.name)")
-                    }
-                    .padding(.horizontal, 9)
-                    .padding(.vertical, 6)
-                    .glassEffect(.regular, in: .capsule)
-                }
-            }
-            .padding(.horizontal, 4)
+        AssistantAttachmentStrip(attachments: attachments) { id in
+            attachments.removeAll { $0.id == id }
         }
     }
 
@@ -420,9 +423,24 @@ struct MeowAssistantView: View {
         sessionID = session.stableID
         recordSession = session.isRecord
 
-        let saved = ((try? context.fetch(FetchDescriptor<AIChatMessage>())) ?? [])
-            .filter { $0.sessionID == session.stableID }
-            .sorted { $0.createdAt < $1.createdAt }
+        let loadedSessionID = session.stableID
+        let saved: [AIChatMessage]
+        do {
+            saved = try context.fetch(FetchDescriptor<AIChatMessage>(
+                predicate: #Predicate { $0.sessionID == loadedSessionID },
+                sortBy: [SortDescriptor(\.createdAt)]
+            ))
+        } catch {
+            errorMessage = "对话记录读取失败，请重新进入：\(error.localizedDescription)"
+            return
+        }
+        completionByTurn = Dictionary(uniqueKeysWithValues: saved.compactMap { message in
+            guard let data = message.recordJSON.data(using: .utf8),
+                  let metadata = try? JSONDecoder().decode(AIChatCompletionMetadata.self, from: data) else {
+                return nil
+            }
+            return (message.stableID, metadata)
+        })
         reasoningByTurn = Dictionary(uniqueKeysWithValues: saved.compactMap { message in
             let value = message.reasoningSummary.trimmingCharacters(in: .whitespacesAndNewlines)
             return value.isEmpty ? nil : (message.stableID, value)
@@ -439,6 +457,9 @@ struct MeowAssistantView: View {
             }
             return (message.stableID, card)
         })
+        recordLeases = Dictionary(uniqueKeysWithValues: recordCards.map { id, card in
+            (id, AIChatOperationFence.shared.capture(sessionID: loadedSessionID, bookID: card.bookID))
+        })
         turns = saved.map { message in
             let restored = AIChatAttachmentStore.decode(message.attachmentsJSON)
                 .compactMap(AIChatAttachmentStore.restore)
@@ -446,7 +467,8 @@ struct MeowAssistantView: View {
                 id: message.stableID,
                 role: message.role,
                 content: message.content,
-                attachments: restored
+                attachments: restored,
+                createdAt: message.createdAt
             )
         }
     }
@@ -457,7 +479,7 @@ struct MeowAssistantView: View {
             return
         }
         let prompt = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !prompt.isEmpty else { return }
+        guard !prompt.isEmpty || !attachments.isEmpty else { return }
         guard let account = providerStore.selectedAccount else {
             errorMessage = "请先在 AI 设置中添加并启用一个账号。"
             return
@@ -475,9 +497,21 @@ struct MeowAssistantView: View {
 
         let id = sessionID ?? createSession(for: account)
         sessionID = id
+        let requestID = UUID()
+        activeRequestID = requestID
+        let bookID = (books.first { $0.stableID == router.selectedBookID }
+            ?? books.first { $0.isDefault } ?? books.first)?.stableID
+        let lease = AIChatOperationFence.shared.capture(sessionID: id, bookID: bookID)
+        let startedAt = Date()
+        let isRecordRequest = recordSession
         let userTurn = AIChatTurn(role: "user", content: prompt, attachments: attachments)
+        followLatest = true
         turns.append(userTurn)
-        persistMessage(userTurn, sessionID: id)
+        guard persistMessage(userTurn, sessionID: id) else {
+            turns.removeAll { $0.id == userTurn.id }
+            activeRequestID = nil
+            return
+        }
         updateSessionTitleIfNeeded(prompt, sessionID: id)
         draft = ""
         attachments = []
@@ -538,22 +572,67 @@ struct MeowAssistantView: View {
             }
         }
         requestTask = Task { @MainActor in
+            var firstOutputAt: Date?
+            var summaryBuffer = AIStreamSummaryBuffer()
+            var pendingText = ""
+            var displayTask: Task<Void, Never>?
+            func flushDisplay() {
+                displayTask?.cancel()
+                displayTask = nil
+                guard activeRequestID == requestID,
+                      AIChatOperationFence.shared.isCurrent(lease) else { return }
+                if !pendingText.isEmpty {
+                    updateAssistant(id: assistantID, append: pendingText)
+                    pendingText = ""
+                }
+                if !summaryBuffer.text.isEmpty {
+                    reasoningByTurn[assistantID] = summaryBuffer.text
+                }
+            }
+            func scheduleDisplay() {
+                guard displayTask == nil else { return }
+                displayTask = Task { @MainActor in
+                    try? await Task.sleep(nanoseconds: 32_000_000)
+                    guard !Task.isCancelled else { return }
+                    flushDisplay()
+                }
+            }
+            defer {
+                displayTask?.cancel()
+                if activeRequestID == requestID {
+                    isSending = false
+                    requestTask = nil
+                    activeRequestID = nil
+                }
+            }
             do {
                 AIRequestRunStore.setStatus(runID, .thinking, in: context)
                 let response = try await providerStore.stream(
                     account: account,
                     messages: Array(requestTurns),
                     onText: { delta in
+                        guard activeRequestID == requestID,
+                              AIChatOperationFence.shared.isCurrent(lease),
+                              requestTask?.isCancelled != true else { return }
+                        if firstOutputAt == nil, !delta.isEmpty { firstOutputAt = Date() }
                         // 记账会话的响应是 JSON 提案，不把原始 JSON 流直接展示
                         // 给用户；最终会变成可操作的原生卡片。
-                        if !recordSession {
-                            updateAssistant(id: assistantID, append: delta)
+                        if !isRecordRequest {
+                            pendingText += delta
+                            scheduleDisplay()
                         }
                     },
                     onReasoning: { delta in
-                        reasoningByTurn[assistantID, default: ""] += delta
+                        guard activeRequestID == requestID,
+                              AIChatOperationFence.shared.isCurrent(lease),
+                              requestTask?.isCancelled != true else { return }
+                        summaryBuffer.append(delta)
+                        scheduleDisplay()
                     },
                     onSources: { sources in
+                        guard activeRequestID == requestID,
+                              AIChatOperationFence.shared.isCurrent(lease),
+                              requestTask?.isCancelled != true else { return }
                         sourcesByTurn[assistantID] = sources
                         AIRequestRunStore.append(
                             .source,
@@ -562,11 +641,18 @@ struct MeowAssistantView: View {
                             in: context
                         )
                     },
-                    structuredRecord: recordSession,
+                    structuredRecord: isRecordRequest,
                     webSearch: ChatWebSearchPreference.isEnabled
                 )
+                try Task.checkCancellation()
+                guard activeRequestID == requestID,
+                      AIChatOperationFence.shared.isCurrent(lease) else { return }
+                flushDisplay()
+                if !isRecordRequest {
+                    updateAssistant(id: assistantID, replaceWith: response.text)
+                }
                 var recordCard: AIRecordCardState?
-                if recordSession,
+                if isRecordRequest,
                    let parsed = AIRecordProposalCodec.decode(
                        response.text,
                        fallbackDate: AppClock.now,
@@ -585,10 +671,12 @@ struct MeowAssistantView: View {
                     let keys = normalizedEntries.map(resolveRecordCategoryKey(for:))
                     recordCard = AIRecordCardState(
                         entries: normalizedEntries,
+                        bookID: lease.bookID,
                         categoryKeys: keys,
                         transactionIDs: Array(repeating: nil, count: normalizedEntries.count)
                     )
                     recordCards[assistantID] = recordCard
+                    recordLeases[assistantID] = lease
                     AIRequestRunStore.setStatus(
                         runID,
                         .awaitingConfirmation,
@@ -609,12 +697,16 @@ struct MeowAssistantView: View {
                     )
                 }
                 if let assistant = turns.first(where: { $0.id == assistantID }) {
+                    let metadata = AIChatCompletionMetadata(
+                        thinkingSeconds: Int((firstOutputAt ?? Date()).timeIntervalSince(startedAt)), interrupted: false)
+                    completionByTurn[assistantID] = metadata
                     persistMessage(
                         assistant,
                         sessionID: id,
                         reasoningSummary: response.reasoningSummary,
                         sources: response.sources,
-                        recordCard: recordCard
+                        recordCard: recordCard,
+                        completion: metadata
                     )
                 }
                 if recordCard == nil {
@@ -631,8 +723,22 @@ struct MeowAssistantView: View {
                     )
                 }
             } catch {
-                turns.removeAll { $0.id == assistantID }
-                if error is CancellationError {
+                guard activeRequestID == requestID,
+                      AIChatOperationFence.shared.isCurrent(lease) else { return }
+                flushDisplay()
+                let partial = turns.first { $0.id == assistantID }
+                let hasSummary = !(reasoningByTurn[assistantID] ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                if let partial, !partial.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || hasSummary {
+                    let metadata = AIChatCompletionMetadata(
+                        thinkingSeconds: Int((firstOutputAt ?? Date()).timeIntervalSince(startedAt)), interrupted: true)
+                    completionByTurn[assistantID] = metadata
+                    persistMessage(partial, sessionID: id,
+                        reasoningSummary: reasoningByTurn[assistantID] ?? "",
+                        sources: sourcesByTurn[assistantID] ?? [], completion: metadata)
+                } else {
+                    turns.removeAll { $0.id == assistantID }
+                }
+                if AIProviderError.isCancellation(error) {
                     AIRequestRunStore.setStatus(runID, .cancelled, in: context)
                     AIRequestRunStore.append(.cancelled, runID: runID, in: context)
                 } else {
@@ -648,11 +754,11 @@ struct MeowAssistantView: View {
                         summary: error.localizedDescription,
                         in: context
                     )
-                    errorMessage = error.localizedDescription
+                    if partial?.content.isEmpty != false {
+                        errorMessage = error.localizedDescription
+                    }
                 }
             }
-            isSending = false
-            requestTask = nil
         }
     }
 
@@ -669,16 +775,21 @@ struct MeowAssistantView: View {
         return session.stableID
     }
 
+    @discardableResult
     private func persistMessage(
         _ turn: AIChatTurn,
         sessionID: UUID,
         reasoningSummary: String = "",
         sources: [AIChatSource] = [],
-        recordCard: AIRecordCardState? = nil
-    ) {
+        recordCard: AIRecordCardState? = nil,
+        completion: AIChatCompletionMetadata? = nil
+    ) -> Bool {
         let recordJSON: String = {
-            guard let recordCard,
-                  let data = try? JSONEncoder().encode(recordCard) else { return "" }
+            let data: Data?
+            if let recordCard { data = try? JSONEncoder().encode(recordCard) }
+            else if let completion { data = try? JSONEncoder().encode(completion) }
+            else { data = nil }
+            guard let data else { return "" }
             return String(decoding: data, as: UTF8.self)
         }()
         let message = AIChatMessage(
@@ -691,8 +802,16 @@ struct MeowAssistantView: View {
             attachmentsJSON: AIChatAttachmentStore.encode(turn.attachments),
             recordJSON: recordJSON
         )
+        message.createdAt = turn.createdAt
         context.insert(message)
-        try? context.save()
+        do {
+            try context.save()
+            return true
+        } catch {
+            context.delete(message)
+            errorMessage = "对话记录保存失败：\(error.localizedDescription)"
+            return false
+        }
     }
 
     private func updateSessionTitleIfNeeded(_ prompt: String, sessionID: UUID) {
@@ -709,13 +828,15 @@ struct MeowAssistantView: View {
     private func updateAssistant(id: UUID, append text: String) {
         guard let index = turns.firstIndex(where: { $0.id == id }) else { return }
         let current = turns[index]
-        turns[index] = AIChatTurn(id: id, role: current.role, content: current.content + text)
+        turns[index] = AIChatTurn(id: id, role: current.role, content: current.content + text,
+                                 attachments: current.attachments, createdAt: current.createdAt)
     }
 
     private func updateAssistant(id: UUID, replaceWith text: String) {
         guard let index = turns.firstIndex(where: { $0.id == id }) else { return }
         let current = turns[index]
-        turns[index] = AIChatTurn(id: id, role: current.role, content: text)
+        turns[index] = AIChatTurn(id: id, role: current.role, content: text,
+                                 attachments: current.attachments, createdAt: current.createdAt)
     }
 
     private func encodeSources(_ sources: [AIChatSource]) -> String {
@@ -737,7 +858,7 @@ struct MeowAssistantView: View {
         你是肥喵记账的记账入口。用户此处是在记录账目，不是聊天或查账。
         只输出 JSON 对象，不要 Markdown 或解释：
         {"intent":"record","entries":[{"amount":数字或null,"kind":"expense或income","categoryKey":"分类key","date":"YYYY-MM-DD或带时分的ISO时间","note":"简短备注","confidence":0到1}]}
-        多笔金额必须拆成多条；没说日期用今天，没说时分不要猜；金额不确定用 null，不要把订单号、卡号或余额当金额。分类只能从以下列表选择，优先具体子类：(options)
+        多笔金额必须拆成多条；没说日期用今天，没说时分不要猜；金额不确定用 null，不要把订单号、卡号或余额当金额。分类只能从以下列表选择，优先具体子类：\(options)
         """
     }
 
@@ -755,63 +876,30 @@ struct MeowAssistantView: View {
     }
 
     private func saveRecord(turnID: UUID) {
-        guard var card = recordCards[turnID], !card.saved else { return }
+        guard recordCards[turnID]?.saved == false else { return }
         guard let account = accounts.first(where: {
             !$0.isDeleted && $0.status == .active
         }) else {
             errorMessage = "请先添加一个可用账户。"
             return
         }
-        let book = books.first(where: { $0.stableID == router.selectedBookID })
-            ?? books.first(where: { $0.isDefault })
-            ?? books.first
-        let drafts = card.entries.enumerated().compactMap { index, entry -> LedgerStore.TransactionDraft? in
-            guard let amount = entry.amount, amount > 0 else { return nil }
-            let key = card.categoryKey(at: index)
-            let category = categories.first {
-                $0.kind == entry.kind && $0.key == key && !$0.isArchived
-            }
-            return LedgerStore.TransactionDraft(
-                amount: amount,
-                kind: entry.kind,
-                date: entry.date,
-                note: entry.note,
-                category: category,
-                account: account,
-                book: book,
-                reimbursable: entry.kind == .expense && looksReimbursable(entry.note),
-                timePrecision: entry.timePrecision
-            )
-        }
-        guard !drafts.isEmpty else {
-            errorMessage = "没有识别出可保存的金额。"
-            return
-        }
+        guard recordOperationIsCurrent(turnID), let lease = recordLeases[turnID] else { return }
         do {
-            let saved = try LedgerStore.createTransactions(in: context, drafts: drafts)
-            var ids = Array(repeating: nil as UUID?, count: card.entries.count)
-            var savedIndex = 0
-            for index in card.entries.indices where card.entries[index].amount != nil {
-                guard savedIndex < saved.count else { break }
-                ids[index] = saved[savedIndex].stableID
-                savedIndex += 1
-            }
-            card.transactionIDs = ids
-            card.saved = true
-            card.feedback = "已记下 \(saved.count) 笔，不对可点改分类或删除"
+            let card = try AIRecordCardStore.save(turnID: turnID, accountID: account.stableID,
+                                                 lease: lease, in: context)
+            let count = card.transactionIDs.compactMap { $0 }.count
             recordCards[turnID] = card
-            persistRecordCard(card, turnID: turnID)
             let runID = runIDsByTurn[turnID]
             AIRequestRunStore.setStatus(
                 runID,
                 .completed,
-                summary: "已写入 \(saved.count) 笔",
+                summary: "已写入 \(count) 笔",
                 in: context
             )
             AIRequestRunStore.append(
                 .committed,
                 runID: runID,
-                count: saved.count,
+                count: count,
                 in: context
             )
             AIRequestRunStore.append(.completed, runID: runID, in: context)
@@ -822,57 +910,29 @@ struct MeowAssistantView: View {
     }
 
     private func changeRecordCategory(turnID: UUID, index: Int, categoryKey: String) {
-        guard var card = recordCards[turnID], card.saved,
-              index < card.entries.count,
-              let transactionID = card.transactionID(at: index),
-              let transaction = transactions.first(where: { $0.stableID == transactionID }) else { return }
-        guard let next = categories.first(where: {
-            $0.kind == card.entries[index].kind && $0.key == categoryKey && !$0.isArchived
-        }) else { return }
+        guard recordOperationIsCurrent(turnID), let lease = recordLeases[turnID] else { return }
         do {
-            try LedgerStore.updateCategory(of: transaction, category: next, in: context)
-            if index >= card.categoryKeys.count {
-                card.categoryKeys += Array(repeating: nil, count: index - card.categoryKeys.count + 1)
-            }
-            card.categoryKeys[index] = next.key
-            card.feedback = "已把第 \(index + 1) 笔改为「\(next.name)」"
-            recordCards[turnID] = card
-            persistRecordCard(card, turnID: turnID)
+            recordCards[turnID] = try AIRecordCardStore.changeCategory(
+                turnID: turnID, index: index, categoryKey: categoryKey, lease: lease, in: context)
         } catch {
             errorMessage = error.localizedDescription
         }
     }
 
     private func deleteRecordEntry(turnID: UUID, index: Int) {
-        guard var card = recordCards[turnID], card.saved,
-              index < card.entries.count,
-              let transactionID = card.transactionID(at: index),
-              let transaction = transactions.first(where: { $0.stableID == transactionID }) else { return }
+        guard recordOperationIsCurrent(turnID), let lease = recordLeases[turnID] else { return }
         do {
-            try LedgerStore.delete(transaction, in: context)
-            card.deletedIndices.insert(index)
-            card.feedback = "已删除第 \(index + 1) 笔"
-            recordCards[turnID] = card
-            persistRecordCard(card, turnID: turnID)
+            recordCards[turnID] = try AIRecordCardStore.deleteEntry(
+                turnID: turnID, index: index, lease: lease, in: context)
         } catch {
             errorMessage = error.localizedDescription
         }
     }
 
     private func undoRecord(turnID: UUID?) {
-        guard let turnID, var card = recordCards[turnID], card.saved, !card.rolledBack else { return }
+        guard let turnID, recordOperationIsCurrent(turnID), let lease = recordLeases[turnID] else { return }
         do {
-            for index in card.entries.indices {
-                guard !card.deletedIndices.contains(index),
-                      let transactionID = card.transactionID(at: index),
-                      let transaction = transactions.first(where: { $0.stableID == transactionID }) else { continue }
-                try LedgerStore.delete(transaction, in: context)
-                card.deletedIndices.insert(index)
-            }
-            card.rolledBack = true
-            card.feedback = "本次 AI 记账已撤销"
-            recordCards[turnID] = card
-            persistRecordCard(card, turnID: turnID)
+            recordCards[turnID] = try AIRecordCardStore.undo(turnID: turnID, lease: lease, in: context)
             let runID = runIDsByTurn[turnID]
             AIRequestRunStore.setStatus(runID, .rolledBack, summary: "本次 AI 记账已撤销", in: context)
             AIRequestRunStore.append(.rolledBack, runID: runID, in: context)
@@ -881,17 +941,12 @@ struct MeowAssistantView: View {
         }
     }
 
-    private func persistRecordCard(_ card: AIRecordCardState, turnID: UUID) {
-        guard let data = try? JSONEncoder().encode(card),
-              let message = (try? context.fetch(FetchDescriptor<AIChatMessage>()))?
-                .first(where: { $0.stableID == turnID }) else { return }
-        message.recordJSON = String(decoding: data, as: UTF8.self)
-        message.content = card.feedback.isEmpty ? message.content : card.feedback
-        try? context.save()
-    }
-
-    private func looksReimbursable(_ value: String) -> Bool {
-        value.range(of: "报销|出差|差旅|垫付|公司报|帮公司|公司的|因公|客户招待|招待费", options: .regularExpression) != nil
+    private func recordOperationIsCurrent(_ turnID: UUID) -> Bool {
+        guard let lease = recordLeases[turnID], AIChatOperationFence.shared.isCurrent(lease) else {
+            errorMessage = "会话或账本已改变，请重新打开对话。"
+            return false
+        }
+        return true
     }
 
     private func systemPrompt(for query: String) -> String {
@@ -932,7 +987,9 @@ private struct AssistantMessageBubble: View {
     let turn: AIChatTurn
     let isStreaming: Bool
     let reasoningSummary: String
+    let completion: AIChatCompletionMetadata?
     let sources: [AIChatSource]
+    let onEdit: () -> Void
     let recordCard: AIRecordCardState?
     let onSaveRecord: (() -> Void)?
     let onUndoRecord: (() -> Void)?
@@ -942,98 +999,108 @@ private struct AssistantMessageBubble: View {
     let categoryEmojis: [String: String]
     let categoryOptions: [String: [(key: String, name: String)]]
     @AppStorage("qingji.userMessageBubbleStyle") private var bubbleStyleRaw = UserMessageBubbleStyle.followCardOpacity.rawValue
+    @State private var selectText = false
+    @State private var feedback = 0
 
     var body: some View {
-        HStack(alignment: .top, spacing: 9) {
-            if turn.role == "assistant" {
-                Image(systemName: "cat.fill")
-                    .font(.caption)
-                    .foregroundStyle(Color.accentColor)
-                    .frame(width: 28, height: 28)
-                    .background(Color.accentColor.opacity(0.12), in: .circle)
-                bubble
-                Spacer(minLength: 35)
-            } else {
-                Spacer(minLength: 35)
-                bubble
-                    .foregroundStyle(.primary)
+        if turn.role == "assistant" {
+            answer.frame(maxWidth: .infinity, alignment: .leading)
+        } else {
+            VStack(alignment: .trailing, spacing: 8) {
+                if !turn.attachments.isEmpty {
+                    AssistantAttachmentStrip(attachments: turn.attachments)
+                }
+                if !turn.content.isEmpty {
+                    HStack {
+                        Spacer(minLength: 35)
+                        Text(turn.content).font(.body).textSelection(.enabled)
+                            .padding(.horizontal, 14).padding(.vertical, 11)
+                            .background(userBubbleBackground, in: .rect(cornerRadius: 18))
+                            .contextMenu {
+                                Text(turn.createdAt.formatted(date: .abbreviated, time: .shortened))
+                                Button("复制", systemImage: "doc.on.doc") {
+                                    UIPasteboard.general.string = turn.content
+                                }
+                                Button("编辑", systemImage: "square.and.pencil", action: onEdit)
+                                Button("选择文本", systemImage: "text.cursor") { selectText = true }
+                            }
+                    }
+                }
+            }
+            .sheet(isPresented: $selectText) {
+                NavigationStack {
+                    ScrollView {
+                        Text(turn.content).textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading).padding(20)
+                    }
+                    .liquidGlassCanvas().navigationTitle("选择文本")
+                    .navigationBarTitleDisplayMode(.inline)
+                    .toolbar { ToolbarItem(placement: .topBarTrailing) {
+                        Button("完成") { selectText = false }
+                    }}
+                    .liquidGlassChrome()
+                }
             }
         }
     }
 
-    private var bubble: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            if !turn.attachments.isEmpty {
-                ForEach(turn.attachments) { attachment in
-                    Label(attachment.name, systemImage: attachment.isImage ? "photo" : "doc.fill")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
+    private var answer: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            if (isStreaming && turn.content.isEmpty) || !reasoningSummary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                AssistantThinkingSummary(summary: reasoningSummary,
+                    seconds: completion?.thinkingSeconds,
+                    isThinking: isStreaming && turn.content.isEmpty)
             }
-            if !reasoningSummary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                DisclosureGroup("已思考") {
-                    Text(reasoningSummary)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .textSelection(.enabled)
-                }
-                .font(.caption)
-                .foregroundStyle(.secondary)
+            if let recordCard {
+                AIRecordCardView(card: recordCard, categoryLabels: categoryLabels,
+                    categoryEmojis: categoryEmojis, categoryOptions: categoryOptions,
+                    onSave: onSaveRecord, onUndo: onUndoRecord,
+                    onChangeCategory: onChangeRecordCategory, onDeleteEntry: onDeleteRecordEntry)
+            } else if !turn.content.isEmpty {
+                AssistantMarkdownBody(text: turn.content)
             }
-            if isStreaming {
-                ProgressView()
-                    .controlSize(.small)
-            } else if let recordCard {
-                AIRecordCardView(
-                    card: recordCard,
-                    categoryLabels: categoryLabels,
-                    categoryEmojis: categoryEmojis,
-                    categoryOptions: categoryOptions,
-                    onSave: onSaveRecord,
-                    onUndo: onUndoRecord,
-                    onChangeCategory: onChangeRecordCategory,
-                    onDeleteEntry: onDeleteRecordEntry
-                )
-            } else {
-                Text(turn.content)
-                    .textSelection(.enabled)
+            if completion?.interrupted == true {
+                Text("回复已中断").font(.caption).foregroundStyle(.secondary)
             }
-            if !sources.isEmpty {
-                Divider()
-                VStack(alignment: .leading, spacing: 4) {
-                    Label("来源 \(sources.count)", systemImage: "globe")
-                        .font(.caption.weight(.medium))
-                        .foregroundStyle(.secondary)
-                    ForEach(sources) { source in
-                        if let url = URL(string: source.url) {
-                            Link(destination: url) {
-                                Text(source.title.isEmpty ? source.url : source.title)
-                                    .font(.caption)
-                                    .lineLimit(1)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                            }
-                        }
+            if !isStreaming && !turn.content.isEmpty {
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 0) {
+                        actions
+                        Spacer(minLength: 8)
+                        if !sources.isEmpty { AssistantSourcesButton(sources: sources) }
+                    }
+                    VStack(alignment: .trailing, spacing: 4) {
+                        HStack(spacing: 0) { actions; Spacer(minLength: 0) }
+                        if !sources.isEmpty { AssistantSourcesButton(sources: sources) }
                     }
                 }
             }
         }
-        .font(.body)
-        .padding(.horizontal, 14)
-        .padding(.vertical, 11)
-        .background(
-            turn.role == "assistant"
-                ? AnyShapeStyle(.background)
-                : AnyShapeStyle(userBubbleBackground)
-        )
-        .clipShape(.rect(cornerRadius: 18))
+    }
+
+    private var actions: some View {
+        HStack(spacing: 0) {
+            action("复制", symbol: "doc.on.doc") { UIPasteboard.general.string = turn.content }
+            action("赞同", symbol: "hand.thumbsup", selected: feedback == 1) { feedback = feedback == 1 ? 0 : 1 }
+            action("不赞同", symbol: "hand.thumbsdown", selected: feedback == -1) { feedback = feedback == -1 ? 0 : -1 }
+            ShareLink(item: turn.content) {
+                Image(systemName: "square.and.arrow.up").frame(width: 36, height: 36)
+            }.buttonStyle(.plain).accessibilityLabel("分享")
+        }.foregroundStyle(.secondary).fixedSize()
+    }
+
+    private func action(_ label: String, symbol: String, selected: Bool = false,
+                        perform: @escaping () -> Void) -> some View {
+        Button(action: perform) {
+            Image(systemName: symbol).frame(width: 36, height: 36)
+                .foregroundStyle(selected ? Color.accentColor : Color.secondary)
+        }.buttonStyle(.plain).accessibilityLabel(label)
     }
 
     private var userBubbleBackground: Color {
         switch UserMessageBubbleStyle(rawValue: bubbleStyleRaw) ?? .followCardOpacity {
-        case .followCardOpacity:
-            return Color.accentColor.opacity(0.14)
-        case .fixedGray:
-            return Color(.secondarySystemBackground)
+        case .followCardOpacity: return Color.accentColor.opacity(0.14)
+        case .fixedGray: return Color(.secondarySystemBackground)
         }
     }
 }

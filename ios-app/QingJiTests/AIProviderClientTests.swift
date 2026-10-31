@@ -3,6 +3,16 @@ import XCTest
 
 @MainActor
 final class AIProviderClientTests: XCTestCase {
+    func testOnlyProviderPublicSummaryEventsAreDisplayed() {
+        let account = AIProviderAccount(name: "Test", type: .custom,
+            baseURL: "https://example.com/v1", model: "gpt-test", endpoint: .responses)
+        XCTAssertEqual(AIProviderClient.publicSummaryForTesting(
+            payload: #"{"type":"response.reasoning_summary_text.delta","delta":"\n\n"}"#, account: account), "\n\n")
+        for event in ["response.reasoning_text.delta", "response.reasoning_summary_text.done", "untrusted.reasoning_summary"] {
+            XCTAssertEqual(AIProviderClient.publicSummaryForTesting(
+                payload: "{\"type\":\"\(event)\",\"delta\":\"not public\"}", account: account), "")
+        }
+    }
     func testEndpointNormalizationRemovesPastedOperationSuffix() {
         let account = AIProviderAccount(
             name: "OpenAI",

@@ -10,6 +10,7 @@ struct BudgetHeroCard: View {
     /// 下个月会用的结余方式（过去的月份写「已留给 X月」用）。
     let nextMonthMode: BudgetRolloverMode
     let onCreate: () -> Void
+    @ScaledMetric(relativeTo: .largeTitle) private var amountSize: CGFloat = 44
 
     private var monthIndex: Int { month.year * 12 + month.month - 1 }
     private var prevMonth: Int { month.month == 1 ? 12 : month.month - 1 }
@@ -28,41 +29,47 @@ struct BudgetHeroCard: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(EdgeInsets(top: 20, leading: 20, bottom: 18, trailing: 20))
-        .appThemeCard()
+        .padding(16)
+        .appThemeCard(cornerRadius: 22)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("budget-hero-card")
     }
 
     private func big(_ text: String, warning: Bool = false) -> some View {
         Text(text)
-            .font(.system(size: 44, weight: .bold, design: .rounded))
+            .font(.system(size: amountSize, weight: .bold, design: .rounded))
             .monospacedDigit()
             .foregroundStyle(warning ? Color.warning : Color.primary)
             .lineLimit(1)
-            .minimumScaleFactor(0.6)
+            .minimumScaleFactor(0.25)
             .accessibilityIdentifier("budget-hero-amount")
     }
 
     private func label(_ text: String) -> some View {
         Text(text)
-            .font(.subheadline)
+            .font(.footnote)
             .foregroundStyle(.secondary)
             .accessibilityIdentifier("budget-hero-label")
     }
 
     private func secondary(_ text: String, warning: Bool = false) -> some View {
         Text(text)
-            .font(.subheadline)
+            .font(.footnote)
             .foregroundStyle(warning ? Color.warning : Color.secondary)
             .padding(.top, 4)
     }
 
     private var caption: some View {
-        HStack {
-            Text("已花 \(budgetYuanText(month.spentCents))")
-            Spacer()
-            Text("\(month.month)月预算 \(budgetYuanText(month.budgetCents))")
+        ViewThatFits(in: .horizontal) {
+            HStack {
+                Text("已花 \(budgetYuanText(month.spentCents))")
+                Spacer(minLength: 8)
+                Text("\(month.month)月预算 \(budgetYuanText(month.budgetCents))")
+            }
+            VStack(alignment: .leading, spacing: 3) {
+                Text("已花 \(budgetYuanText(month.spentCents))")
+                Text("\(month.month)月预算 \(budgetYuanText(month.budgetCents))")
+            }
         }
         .font(.caption)
         .foregroundStyle(.secondary)
@@ -151,7 +158,7 @@ struct BudgetHeroCard: View {
         if !pace.text.isEmpty && covered {
             let color = pace.warning ? Color.warning : Color.budgetHealthy
             Text(pace.text)
-                .font(.subheadline.weight(.medium))
+                .font(.footnote.weight(.medium))
                 .foregroundStyle(color)
                 .padding(.horizontal, 10)
                 .padding(.vertical, 5)

@@ -3,6 +3,17 @@ import QingJiCore
 @testable import QingJi
 
 final class AIRecordCardTests: XCTestCase {
+    func testBookIdentityIsPersistedAndOldCardsRemainReadable() throws {
+        let bookID = UUID()
+        let card = AIRecordCardState(entries: [], bookID: bookID)
+        let data = try JSONEncoder().encode(card)
+        XCTAssertEqual(try JSONDecoder().decode(AIRecordCardState.self, from: data).bookID, bookID)
+        var old = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        old.removeValue(forKey: "bookID")
+        let oldData = try JSONSerialization.data(withJSONObject: old)
+        XCTAssertNil(try JSONDecoder().decode(AIRecordCardState.self, from: oldData).bookID)
+    }
+
     func testRecordCardRoundTripsSavedAndUndoState() throws {
         let entry = ParsedEntry(
             amount: Decimal(string: "23.50"),
