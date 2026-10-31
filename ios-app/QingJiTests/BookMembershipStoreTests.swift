@@ -130,11 +130,14 @@ final class BookMembershipStoreTests: XCTestCase {
         let (_, context, total, business, project, cash) = try stack()
         let original = try LedgerStore.createTransaction(in: context, amount: 100, kind: .expense,
             date: Date(), account: cash, book: business, scenarioBookIDs: [project.stableID])
+        // 带关系初始化会被 SwiftData 自动放进同一个 context，这里显式插入，查询结果按两笔断言。
         let marker = MoneyTransaction(amount: 1, kind: .income, book: total)
+        context.insert(marker)
         XCTAssertEqual(LedgerScope.filter([original, marker], selectedBookID: total.stableID).count, 2)
         XCTAssertEqual(LedgerScope.filter([original], selectedBookID: total.stableID, books: [total, business, project]).count, 1)
         XCTAssertEqual(LedgerScope.filter([original], selectedBookIDs: [total.stableID, project.stableID], books: [total, business, project]).count, 1)
-        XCTAssertEqual(try LedgerStore.visibleTransactions(in: context, selectedBookID: total.stableID).count, 1)
+        XCTAssertEqual(Set(try LedgerStore.visibleTransactions(in: context, selectedBookID: total.stableID).map(\.stableID)),
+                       [original.stableID, marker.stableID])
         XCTAssertFalse(LedgerScope.allowsAssetAssociation(original, bookID: total.stableID, books: [total, business, project]), "总账本查询全量不应扩大资产的关联资格")
         XCTAssertTrue(LedgerScope.allowsAssetAssociation(original, bookID: business.stableID, books: [total, business, project]))
         XCTAssertTrue(LedgerScope.allowsAssetAssociation(original, bookID: project.stableID, books: [total, business, project]))

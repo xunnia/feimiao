@@ -86,7 +86,7 @@ final class AppSchemaMigrationTests: XCTestCase {
         cash.isDeleted = true; cash.statusRaw = "archived"; cash.archivedAt = timestamp
         cash.lastVerifiedAt = timestamp; cash.openingBalanceEffectiveAt = timestamp
         cash.openingBalanceQualityRaw = "exact"; cash.balanceModeRaw = "principal_only"
-        cash.creditStatementDay = 5; cash.creditPaymentDay = 20; cash.creditLimit = 9876.54
+        cash.creditStatementDay = 5; cash.creditPaymentDay = 20; cash.creditLimit = Decimal(string: "9876.54")
         cash.sortOrder = 7; cash.createdAt = timestamp; cash.updatedAt = timestamp
         let bank = LegacyLedgerModels.Account(name: "银行卡", kind: .cash)
         let total = LegacyLedgerModels.Book(name: "总账本", isDefault: true)
@@ -145,7 +145,7 @@ final class AppSchemaMigrationTests: XCTestCase {
         XCTAssertEqual(cash.statusRaw, "archived"); XCTAssertEqual(cash.archivedAt, timestamp)
         XCTAssertEqual(cash.lastVerifiedAt, timestamp); XCTAssertEqual(cash.openingBalanceEffectiveAt, timestamp)
         XCTAssertEqual(cash.openingBalanceQualityRaw, "exact"); XCTAssertEqual(cash.balanceModeRaw, "principal_only")
-        XCTAssertEqual(cash.creditStatementDay, 5); XCTAssertEqual(cash.creditPaymentDay, 20); XCTAssertEqual(cash.creditLimit, 9876.54)
+        XCTAssertEqual(cash.creditStatementDay, 5); XCTAssertEqual(cash.creditPaymentDay, 20); XCTAssertEqual(cash.creditLimit, Decimal(string: "9876.54"))
         XCTAssertEqual(cash.sortOrder, 7); XCTAssertEqual(cash.createdAt, timestamp); XCTAssertEqual(cash.updatedAt, timestamp)
         XCTAssertEqual(Set((cash.outgoingTransactions ?? []).map(\.stableID)), Set(fixture.records.filter { $0.accountID == fixture.cashID }.map(\.id)))
         let bank = try XCTUnwrap(context.fetch(FetchDescriptor<Account>()).first { $0.stableID == fixture.bankID })

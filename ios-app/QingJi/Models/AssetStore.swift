@@ -280,7 +280,11 @@ enum AssetStore {
                   transaction.amount > 0,
                   transaction.refundOfID == nil,
                   !transaction.isExcluded,
-                  LedgerScope.allowsAssetAssociation(transaction, bookID: asset.bookID, books: books),
+                  // 无账本物品沿用它的无账本购置账单（与 Android addPhysicalAssetFromTransaction 一致）；
+                  // 有账本时仍按原账本或场景成员资格校验。
+                  (asset.bookID == nil
+                      ? transaction.book == nil
+                      : LedgerScope.allowsAssetAssociation(transaction, bookID: asset.bookID, books: books)),
                   transaction.currencyCode == asset.currencyCode else {
                 throw Error.invalidTransaction
             }
