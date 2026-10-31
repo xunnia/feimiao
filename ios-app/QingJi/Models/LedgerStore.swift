@@ -438,7 +438,7 @@ enum LedgerStore {
         let removedIDs = Set(transactions.map(\.stableID)).union(
             all.filter { $0.refundOfID.map(rootIDs.contains) ?? false }.map(\.stableID))
         var attachmentPaths = Set<String>()
-        try AssetFinancialCommand.perform(in: context, save: saveContext) { changes in
+        try AssetFinancialCommand.perform(in: context, save: saveContext, deleting: true) { changes in
           for transaction in all where removedIDs.contains(transaction.stableID) {
             if !transaction.attachmentPath.isEmpty {
                 attachmentPaths.insert(transaction.attachmentPath)

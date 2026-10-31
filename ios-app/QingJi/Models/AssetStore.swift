@@ -200,7 +200,7 @@ enum AssetStore {
         in context: ModelContext,
         saveContext: AssetFinancialCommand.Save = { try $0.save() }
     ) throws {
-        try AssetFinancialCommand.perform(in: context, save: saveContext) { changes in
+        try AssetFinancialCommand.perform(in: context, save: saveContext, deleting: true) { changes in
             guard link.linkTypeRaw != AssetTransactionLinkType.sourceTransaction.rawValue,
                   link.linkTypeRaw != AssetTransactionLinkType.purchaseTransaction.rawValue,
                   link.linkTypeRaw != AssetTransactionLinkType.saleAccountMovement.rawValue else {
@@ -1088,7 +1088,7 @@ enum AssetStore {
         in context: ModelContext,
         saveContext: AssetFinancialCommand.Save = { try $0.save() }
     ) throws {
-        try AssetFinancialCommand.perform(in: context, save: saveContext) { changes in
+        try AssetFinancialCommand.perform(in: context, save: saveContext, deleting: true) { changes in
             guard asset.lifecycle == .sold else { throw Error.saleNotFound }
             let events = try events(for: asset, in: context)
             let saleEvent = events.first { $0.kind == .sold }
@@ -1696,7 +1696,7 @@ enum ReceivableStore {
            (targetAccount == nil || targetAccount?.currencyCode.uppercased() != asset.currencyCode.uppercased()) {
             throw Error.recoveryConflict
         }
-        try AssetFinancialCommand.perform(in: context, save: save) { changes in
+        try AssetFinancialCommand.perform(in: context, save: save, deleting: true) { changes in
             changes.restoreOnFailure {
                 (asset.remainingAmount, asset.lifecycleRaw, asset.includeInNetWorth,
                  asset.economicStatusRaw, asset.endedAt, asset.updatedAt) = before
@@ -2092,7 +2092,7 @@ enum LiabilityStore {
         let payerCheckpoints = try AccountCheckpointStore.checkpoints(for: payerAccount.stableID, in: context)
         let debtBefore = LedgerStore.accountBalance(for: debtAccount, transactions: all, checkpoints: debtCheckpoints)
         let payerBefore = LedgerStore.accountBalance(for: payerAccount, transactions: all, checkpoints: payerCheckpoints)
-        try AssetFinancialCommand.perform(in: context, save: save) { changes in
+        try AssetFinancialCommand.perform(in: context, save: save, deleting: true) { changes in
             changes.restoreOnFailure { (profile.currentPrincipal, profile.lifecycleRaw, profile.updatedAt) = before }
             changes.delete(principal)
             if let interest { changes.delete(interest) }

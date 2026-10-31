@@ -3,14 +3,22 @@ import SwiftData
 
 /// One save commits an economic operation. Failure cleanup is scoped to this
 /// operation rather than rolling back other editors sharing the ModelContext.
+/// SwiftData cannot undelete a persisted row by inserting it again, so commands
+/// that delete declare `deleting: true`: earlier pending edits are committed
+/// first (as autosave would), and a failed save rolls back to that point.
 enum AssetFinancialCommand {
     typealias Save = (ModelContext) throws -> Void
 
     final class Changes {
         private let context: ModelContext
+        private let allowsDelete: Bool
         private var cleanup: [() -> Void] = []
+        private(set) var requiresRollback = false
 
-        init(context: ModelContext) { self.context = context }
+        init(context: ModelContext, allowsDelete: Bool = false) {
+            self.context = context
+            self.allowsDelete = allowsDelete
+        }
 
         func restoreOnFailure(_ action: @escaping () -> Void) {
             cleanup.append(action)
@@ -31,9 +39,11 @@ enum AssetFinancialCommand {
             cleanup.append { [context] in context.delete(model) }
         }
 
+        /// Deleted rows come back only through rollback; see the type comment.
         func delete<T: PersistentModel>(_ model: T) {
+            assert(allowsDelete, "Commands that delete must pass deleting: true at the outermost perform")
             context.delete(model)
-            cleanup.append { [context] in context.insert(model) }
+            requiresRollback = true
         }
 
         fileprivate func undo() { cleanup.reversed().forEach { $0() } }
@@ -43,20 +53,23 @@ enum AssetFinancialCommand {
         in context: ModelContext,
         save: Save = { try $0.save() },
         joining parent: Changes? = nil,
+        deleting: Bool = false,
         _ operation: (Changes) throws -> T
     ) throws -> T {
         // Composite operations share one undo journal and one final save.
         if let parent { return try operation(parent) }
+        if deleting, context.hasChanges { try context.save() }
         let autosave = context.autosaveEnabled
         context.autosaveEnabled = false
         defer { context.autosaveEnabled = autosave }
-        let changes = Changes(context: context)
+        let changes = Changes(context: context, allowsDelete: deleting)
         do {
             let result = try operation(changes)
             try save(context)
             return result
         } catch {
             changes.undo()
+            if changes.requiresRollback { context.rollback() }
             throw error
         }
     }

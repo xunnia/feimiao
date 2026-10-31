@@ -30,7 +30,7 @@ enum BookStore {
         guard let fallback = books.first(where: { $0.isDefault }) else { throw BookStoreError.noFallback }
         let all = try LedgerStore.allTransactions(in: context)
         let ids = Set(LedgerScope.filter(all, selectedBookID: book.stableID).map(\.stableID))
-        try AssetFinancialCommand.perform(in: context, save: saveContext) { changes in
+        try AssetFinancialCommand.perform(in: context, save: saveContext, deleting: true) { changes in
             let previous = try BookMembershipStore.apply(transactionIDs: ids, operation: .remove([book.stableID]), in: context)
             changes.restoreOnFailure { previous.forEach { $0.restore() } }
             // 删除场景时将旧兼容锚点转到总账本，所有金额、资产、周期规则都保留。
