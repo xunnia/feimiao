@@ -12,17 +12,17 @@
     "cleanSourceAnchor": "b40316f336fb0aefabf67817460775b665fdaa1d",
     "integrationBranch": "main",
     "android": {
-      "version": "1.316.0+331",
-      "watermark": "b1023-331",
+      "version": "1.318.0+333",
+      "watermark": "b1024-333",
       "databaseVersion": 51,
-      "candidateStatus": "ANDROID_RELEASE_331_APK_VERIFIED; native device and iOS acceptance pending",
-      "sourceCommit": "3c33bc3c901711e49e32a142cae2dd423fc86d49",
-      "apk": "ci-artifacts/releases/feimiao-codex-v1.316.0-331.apk",
-      "apkBytes": 119296951,
-      "apkSha256": "AD23971D76C459C63109D20E30DB5B55BFA69B91E8536AB79B771E5FE6678D85",
-      "apkSourceNote": "Verified release 331 APK matches the Android source tree at sourceCommit, including DB51 scene memberships. VPS publication is tracked in docs/02. Existing iOS test-branch screenshots predate this release and are not a sealed Android 331 parity baseline. Android installation, device interaction and real-model acceptance remain pending.",
-      "staticAnalysis": "0 errors; 86 warning/info diagnostics",
-      "tests": "1794/1794 passed locally on Windows; final screenshot harness 23/23 passed separately"
+      "candidateStatus": "ANDROID_RELEASE_333_APK_VERIFIED; native device and iOS acceptance pending",
+      "sourceCommit": "6a8ae5e082178496719cd1a35d0475a7bba76c16",
+      "apk": "ci-artifacts/releases/feimiao-codex-v1.318.0-333.apk",
+      "apkBytes": 119315714,
+      "apkSha256": "EF8B5FACED752CBE11CD9706FD6CEF4264EF8A3D5D0C5E37B94AEA568AB73572",
+      "apkSourceNote": "Verified release 333 APK matches the Android source tree at sourceCommit. VPS publication is tracked in docs/02. Existing iOS test-branch screenshots predate this release and are not a sealed Android 333 parity baseline. Android installation, device interaction and real-model acceptance remain pending.",
+      "staticAnalysis": "0 errors; 85 warning/info diagnostics",
+      "tests": "Release 333 baseline: 1903/1903 passed locally on Windows"
     },
     "ios": {
       "version": "1.286.0+300",

@@ -1,10 +1,10 @@
 {
   "schemaVersion": 1,
   "baseline": {
-    "androidVersion": "1.316.0+331",
-    "androidWatermark": "b1023-331",
+    "androidVersion": "1.318.0+333",
+    "androidWatermark": "b1024-333",
     "androidDatabaseVersion": 51,
-    "candidateStatus": "ANDROID_RELEASE_331_IDENTITY_ONLY; no new device parity screenshot or native device acceptance",
+    "candidateStatus": "ANDROID_RELEASE_333_IDENTITY_ONLY; no new device parity screenshot or native device acceptance",
     "iosDeploymentTarget": "26.0",
     "fixtureId": "p0-demo-ledger-2026-08-v1",
     "fixtureInputHash": "E45AB0CEFF322CCAE8A54474AB523F954724A749D0561F698ED81F23850996A6",
