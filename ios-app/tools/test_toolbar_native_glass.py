@@ -13,6 +13,9 @@ FORBIDDEN = re.compile(
 # Unstyled controls inherit the app-wide `.buttonStyle(.glass(.clear))` fallback.
 CONTROL = re.compile(r"\b(?:Button|Menu|NavigationLink|EditButton)\b\s*[({]")
 NATIVE = re.compile(r"\.nativeToolbarControl\(\)|\bToolbarIconButton\(")
+# The app root tints every control with the accent color; toolbar items reset it so
+# they stay monochrome like the system back button.
+ACCENT = re.compile(r"\.(?:tint|foregroundStyle|foregroundColor)\((?:Color)?\.accentColor\)")
 
 
 def braced(text, start):
@@ -52,6 +55,13 @@ class ToolbarNativeGlassTests(unittest.TestCase):
                 if CONTROL.search(body) and not NATIVE.search(body):
                     offenders.append(f"{where}: {' '.join(body.split())[:90]}")
         self.assertGreaterEqual(items, 100)
+        self.assertEqual(offenders, [])
+
+    def test_toolbar_controls_stay_monochrome(self):
+        helper = (SOURCE / "Views/Support/LiquidGlass.swift").read_text(encoding="utf-8")
+        body = braced(helper, helper.index("{", helper.index("func nativeToolbarControl()")))
+        self.assertIn(".tint(Color.primary)", body)
+        offenders = [f"{where}: {hit.group(0)}" for where, block in toolbar_blocks() for hit in ACCENT.finditer(block)]
         self.assertEqual(offenders, [])
 
 

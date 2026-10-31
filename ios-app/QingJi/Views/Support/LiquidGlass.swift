@@ -399,9 +399,11 @@ struct LiquidGlassPillButton: View {
 
 extension View {
     /// Toolbar items already sit on the bar's shared Liquid Glass. Reset the
-    /// app-wide glass button fallback so an item never draws a second surface.
+    /// app-wide glass button fallback so an item never draws a second surface,
+    /// and the app accent so items stay monochrome like the system back button.
     func nativeToolbarControl() -> some View {
         buttonStyle(.automatic)
+            .tint(Color.primary)
     }
 }
 
