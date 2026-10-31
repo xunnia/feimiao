@@ -62,12 +62,12 @@ final class LedgerStoreTests: XCTestCase {
         cash.name = "保留其他页面尚未保存的编辑"
         XCTAssertThrowsError(try LedgerStore.updateCategory(of: original, category: replacement,
             in: stack.context, saveContext: { _ in throw SaveFailure.injected }))
-        XCTAssertEqual(original.category?.stableID, dining.stableID)
+        XCTAssertEqual(original.category?.key, dining.key)
         XCTAssertEqual(original.updatedAt, previousUpdatedAt)
         XCTAssertEqual(cash.name, "保留其他页面尚未保存的编辑")
         try stack.context.save()
         let reloaded = ModelContext(stack.container)
-        XCTAssertEqual(try reloaded.fetch(FetchDescriptor<MoneyTransaction>()).first?.category?.stableID, dining.stableID)
+        XCTAssertEqual(try reloaded.fetch(FetchDescriptor<MoneyTransaction>()).first?.category?.key, dining.key)
         XCTAssertEqual(try reloaded.fetch(FetchDescriptor<Account>()).first(where: { $0.stableID == cash.stableID })?.name,
                        "保留其他页面尚未保存的编辑")
     }
