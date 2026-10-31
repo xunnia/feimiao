@@ -8,7 +8,7 @@
 
 ## 1. 目标（一句话）
 
-**iOS 版就是 Android「肥喵记账」在 iPhone 上的原生实现，不是一个新产品。** Android当前生产版是唯一母版；2026-10-31实查线上元数据已为 `1.318.0+333` / DB v51，精确源码、APK身份和水印见 `02` 顶部。注意 `codex/budget-takeover` 上的 `tools/p0_product_contract.json`、`tools/screenshot_manifest.json` 仍指向332，10-31备份推送的iOS截图任务因此合同校验失败；集成分支 `codex/reliability-20261031` 的 `c51928f` 已精确更新到333源码/APK身份，10-31推送后Mac上合同和38路由校验已通过；推送 `73eb210` 后编译和候选截图任务也通过，App层XCTest 11项失败；11-01修复随 `a343776` 推送后XCTest 291项0失败，但截图还没复看，不能当333已对齐证明。iOS既有测试分支采图早于332，不算本批双端封板；本地多场景和架构原生候选仍需新的Mac验收。
+**iOS 版就是 Android「肥喵记账」在 iPhone 上的原生实现，不是一个新产品。** Android当前生产版是唯一母版；2026-10-31实查线上元数据已为 `1.318.0+333` / DB v51，精确源码、APK身份和水印见 `02` 顶部。注意 `codex/budget-takeover` 上的 `tools/p0_product_contract.json`、`tools/screenshot_manifest.json` 仍指向332，10-31备份推送的iOS截图任务因此合同校验失败；集成分支 `codex/reliability-20261031` 的 `c51928f` 已精确更新到333源码/APK身份，10-31推送后Mac上合同和38路由校验已通过；推送 `73eb210` 后编译和候选截图任务也通过，App层XCTest 11项失败；11-01修复随 `a343776` 推送后XCTest 291项0失败，候选截图和双端截图也全部通过，11-01已复看（结论见下方2026-11-01）；但双端38/38都是 `dimension_mismatch`、还没人工判定，启动失败错误页和多场景选择面板也没有截图点，仍不能当333已对齐证明。iOS既有测试分支采图早于332，不算本批双端封板；本地多场景和架构原生候选仍需新的Mac验收。
 
 **必须和 Android 一模一样的部分：**主页 + 左侧推开式抽屉（没有底部 Tab）；每个入口的名称、位置、层级；页面首屏的信息顺序和字段；金额、净额、退款/报销归属、预算、统计、净资产的算法；肥喵 Logo、猫咪、分类图标、账本封面和猫系配色（收入铜金、支出深色、超支橙，不用系统红绿）；空态、错误、取消、删除/撤销之后看到的结果。
 
@@ -28,6 +28,20 @@
 
 ## 2. 当前真实状态
 
+### 2026-11-01 截图复看与顶栏改用系统原生玻璃（复看完成；顶栏源码与本机检查完成，未推送，Mac编译和改后图待推送）
+
+- 复看对象：`a343776` 的iOS CI `41227903767`（6个任务全部成功）对改前 `b1280eb` 的iOS CI `37616880822`，两边都是iPhone Air、1260×2736、同一套固定数据。原图在本机 `.tmp/opus-takeover-20261031/shots/`，同场景前后图在其中 `pairs/`（不进仓库）。
+- 38张路由图：32张只差状态栏时间。真正的界面变化2处，都是多场景候选该有的：05搜索页多了「批量添加或移出场景账本」按钮（books.vertical图标）；08账本管理底部说明改成多场景文案。
+- 既有不稳定，不是本批带来的：01/02/05/31里同为12:00的两笔账（兼职、午餐）上下对调，首页、流水页和账户详情的 `@Query` 只按 `date` 排，同一时刻没有第二排序键；19周期记账的「下次」日期跟着CI当天走，还是英文格式，没固定到测试数据。23张交互图最大差异0.09%，差异框都在状态栏（y 96–136）。
+- 双端截图 `41227903770`：38对都采到、都比了（incomplete 0），38张都是 `dimension_mismatch`，因为两端分辨率不同，不做像素比较，只说明待人工判定；P0业务差异只有 `platform`。人工看到的差距：iOS搜索路由没输入「麦当劳」；08 Android拍的是新建账本表单、iOS是列表；iOS多了批量入口。没有截图点的新界面：批量归集弹层、启动失败错误页、多场景选择面板、首页提示框、账本管理的开关、编辑账单里的场景账本区。
+- 顶栏问题：用户11-01反馈首页左上角菜单和很多页面顶部按钮「叠加了很多个效果」。`a343776` 截图里核实：首页菜单是外圈胶囊里再套一个圆；搜索页和首页右上，每个图标在共享胶囊里各有一圈，「总账本」胶囊里也多一层；统计「+」两层；选择月份弹层的关闭/确认里有灰色内块；自定义图表弹层的关闭按钮是蓝色、轮廓双层；填写物品信息弹层是细边加阴影的另一套样子；系统自带的返回按钮（搜索/设置/统计）只有一层。
+- 原因三层：①根视图 `LiquidGlassChrome` 的 `.buttonStyle(.glass(.clear))` 和强调色 `.tint` 漏进没写样式的顶栏按钮，系统共享玻璃里又画一层并变蓝；②63个顶栏块里有83处 `liquidGlassCircleControl`/`liquidGlassPillControl`、14个 `LiquidGlassIconButton`、1个 `LiquidGlassPillButton`、1个 `GlassEffectContainer`（肥喵助手右上3个按钮），叠在系统共享玻璃上；③10-07在40处 `sharedBackgroundVisibility(.hidden)` 隐藏系统背景，其中30处 `subtle: true` 自绘透明玻璃、0.5pt细边和阴影，和系统返回按钮不是一个样。
+- 修法（`ddec322`）：`LiquidGlass.swift` 新增 `nativeToolbarControl()`（即 `buttonStyle(.automatic)`，重置根视图的玻璃按钮）和 `ToolbarIconButton`（图标加读屏名的普通按钮，不着色）。37个视图文件的顶栏去掉全部139处自绘玻璃和隐藏背景；109个顶栏项全部走系统样式：92处 `.nativeToolbarControl()`、15个 `ToolbarIconButton`，另2个是菜单助手（`modelMenu` 自带重置，`bookMenu` 用的 `AppSelectionMenu` 内部是 `.plain`）。其中8个按钮原来没写样式、继承了根玻璃，在 AssistantReadingViews、SavingsGoalsView、StatisticsCardLibrarySheet、BookMembershipSelection。肥喵助手的 `GlassEffectContainer` 拆成3个独立顶栏项；首页（搜索/账本菜单）、预算（账本菜单/「+」）、预算规则（删除/保存）、月度统计（账本胶囊）共4处 `ToolbarSpacer(.fixed)`；预算规则的「保存」从 `LiquidGlassPillButton` 改成系统文字按钮。读屏名、动作和禁用条件不变。正文层的 `LiquidGlassIconButton`/`LiquidGlassPillButton`、`subtle` 参数和根视图fallback都保留。
+- 守卫：新增 `ios-app/tools/test_toolbar_native_glass.py`，扫描 `.toolbar {}` 和 `some ToolbarContent {}`，禁止自绘玻璃、隐藏共享背景、`GlassEffectContainer`、`glassEffect`、`buttonStyle(.glass`，并要求带按钮的顶栏项都用 `.nativeToolbarControl()` 或 `ToolbarIconButton`；接在 `ios-ci.yml` 路由校验之后。`ThemePopupPresentationTests` 的样例同步改成新写法。
+- 本机验证：diff-check、P0合同、38路由、守卫2/2、工具测试47/47通过。没验证：Swift编译和XCTest（Windows没有Swift）、改后渲染、真机、上线。要在Mac上确认：`if` 里和 `.confirmationAction` 位置的 `ToolbarSpacer` 能否编译；顶栏图标是不是系统单色、会不会被根视图强调色染蓝；预算页账本菜单（`.plain`）在系统玻璃里的按压和热区；导入复核页按钮顺序；流水页筛选按钮的小红点。
+- 前后图：改前用已下载的 `a343776` 路由图38张和交互图23张（顶栏代码与 `ddec322` 前一致，`cf2ed67` 只改文档）；改后图要推送后由CI拍，重点看首页、侧栏、搜索、统计、预算、资产、肥喵助手和各弹层顶栏。
+- 顺带看到、没改：物品详情是sheet，左上角用返回箭头 `chevron.left` 关闭，系统规范里sheet一般用关闭按钮，是否改另行确认。
+
 ### 2026-10-31 第一批：候选整合进集成分支（已推送到 `a343776`，Mac编译和App层XCTest 291/0通过）
 
 - 主目录93份未提交iOS候选按 `baf52ea` 三方对比，叠到已合入远端按钮线 `dd692b7` 的树上，提交为 `codex/reliability-20261031` 的 `57e42b3`（54个路径，worktree `.tmp/reliability-20261031`），主目录原文件没动：38份只有本机改动直接采用，6份本机新增，7份自动合并，11份逐段裁决，31份与按钮线已一致不动。
@@ -45,8 +59,8 @@
 - `f6bc559`（随 `a343776` 推送，Mac通过）：迁移3项第144行失败是 `Account.isDeleted` 与 `NSManagedObject.isDeleted` 重名（Apple禁止属性名与其无参方法同名），已删账户迁移重开读成未删。存储属性改名 `isSoftDeleted`，用 `@Attribute(originalName: "isDeleted")` 带过旧列值，保留 `isDeleted` 计算属性别名；唯一的账户 `#Predicate`（`ImportReviewView`）改用新名；冻结的V1/V2 `LegacyLedgerModels.Account` 保持原名，校验和不变。V3未发布，原位修改；装过 `73eb210` 未签名IPA的设备打开可能进启动错误页（不删数据），记录里没有设备装过。新增 `testSoftDeletedAccountStaysDeletedAfterReopeningCurrentStore`。
 - 没改：`PhysicalAsset`、`ReceivableAsset` 也有同名 `isDeleted`，过滤都在内存（`AssetStore`、`AssetsView`、`NetWorthStore`），已删资产重开后可能复活；两个模型V1–V3共用，要先在 `LegacyLedgerModels` 冻结旧版本再改，另行确认、Mac验证。
 - 推送 `a343776` 的Mac CI `41227903767`：编译、核心逻辑150/0、App层XCTest 291项0失败、未签名IPA通过。上次失败的11项全部通过，包括迁移3项第144行的已删账户断言；新增的账户重开测试也通过。以前没跑到的路径（5项过关联校验之后的部分、场景删除测试再删之后的断言、退货退款清理）这次都跑到并通过。日志里的CoreData沙盒报错上次也有，是模拟器环境的老问题；改动的文件没有新增编译警告。已用脚本找出调用这6个删除命令且断言保存结果的测试并逐个读过，没发现与「先保存」冲突的断言。Windows侧工具测试45/45、P0合同、38路由复跑通过。
-- 双端截图 `41227903770`：iOS任务这次拉依赖成功、拍图通过，Android 0–3批通过；记录时iOS CI的候选截图和Android第4批还在跑，汇总验收和对比报告未出。
-- 下一步：截图跑完后下载复看候选截图。改前图用按钮线最后一次Mac通过的 `b1280eb`（iOS CI `37616880822`，截图2027-01-05过期），它的App代码与候选合入前一致；启动失败错误页、多场景选择/归集等原生界面要出同场景前后图，但启动失败错误页和多场景账本选择面板现在CI里没有截图点（38条固定路由和交互截图都不含），要补截图代码再推送；XCTest现已全过，补截图点另行确认。物品/应收重名之后另行确认。聊天行为对齐Android 329+放第二批。
+- 双端截图 `41227903770`：iOS任务这次拉依赖成功、拍图通过。最终8个任务全部成功（iOS拍图、Android 5批、汇总验收、对比报告），38/38采到；iOS CI `41227903767` 的候选截图和汇总也通过。复看结论见上方2026-11-01。
+- 下一步：候选截图已在11-01复看（见上方2026-11-01）。改前图用的是按钮线最后一次Mac通过的 `b1280eb`（iOS CI `37616880822`，截图2027-01-05过期），它的App代码与候选合入前一致；启动失败错误页、多场景选择/归集等原生界面要出同场景前后图，但启动失败错误页和多场景账本选择面板现在CI里没有截图点（38条固定路由和交互截图都不含），要补截图代码再推送；XCTest现已全过，补截图点另行确认。物品/应收重名之后另行确认。聊天行为对齐Android 329+放第二批。
 
 ### 2026-10-31 本机Opus接手核对（不推送、不触发CI）
 
@@ -84,7 +98,7 @@
 
 - **浅色校准续接067d592**：用户认可深色、确认浅色校准；37a9858的30原生图已取，但App259中1项初始化等待失败，日志为host readiness，非已证明的生产重开问题。subtle浅色原生clear中性tint/细边、详情更多中性图标，深色和默认不变；9交互改async等待真实appearance/关闭，5秒与断言保留，1项边界/8张额外浅色主题图。工具45/45/6.843秒、合同及38路由通过；7路径精确正常推测试分支、新CI37604116454触发，Mac编译/新图待验，不用旧图替代、不合main/不发布，主目录其他在途保留。
 
-- 用户授权优化本批UI；仅相关10份生产View与1份XCTest，原模型/账务/聊天/迁移不改，Android与指定integration_test不改。相关自有玻璃工具项显式隐藏系统共享背景，统一44pt；预算账本限宽/窄屏大字精简，资金筛选轻主题底＋独立排序图标，详情正文轻操作，直接账户/权益/负债/还款/估值/出售/账单编辑子层同步。总览无趋势收紧，原区间与质量说明保留。
+- 用户授权优化本批UI；仅相关10份生产View与1份XCTest，原模型/账务/聊天/迁移不改，Android与指定integration_test不改。相关自有玻璃工具项显式隐藏系统共享背景，统一44pt（11-01撤回：顶栏改用系统共享玻璃，见本页2026-11-01）；预算账本限宽/窄屏大字精简，资金筛选轻主题底＋独立排序图标，详情正文轻操作，直接账户/权益/负债/还款/估值/出售/账单编辑子层同步。总览无趋势收紧，原区间与质量说明保留。
 - 全局`LiquidGlass.swift`与干净候选b0d8d8f字节一致，未扩大为全App按钮继承变更；物品详情sheet的NavigationStack合理且保留，撤回此前结构性缺陷误判。系统API实际编译及原生渲染仍需Mac，不用源码审查宣称双层已实际消失。
 - `AssetsConceptPresentationTests`新增1个宽度/字号边界测试，原11函数保留；采图扩至30场景并包含生产chrome和返回导航、空历史/非默认长账本/预算编辑/账户编辑/预算日/账单编辑、浅深/窄屏大字。详情和编辑经原生sheet，账单编辑包含日详情→第二层sheet；逐层等待呈现/关闭，失败保留原错误并尝试原生清理，Tag仅补测试Schema。固定暖主题并恢复偏好；普通1260×2736、窄屏960×2736。新场景尚未运行/出图，二层UIKit挂载及实际按钮操作仍待验；新边界需同数据/harness改前图，不与旧不同尺寸附件混作前后图；完整路由基线保留0220ed7固定Air fixture。
 - 用户已回复「授权，采最新截图」。权限恢复后11文件精确移植到干净候选，14路径含本批3份隔离文档精确提交；独立分支`codex/ios-ui-chrome-20261007`/`06ffbf747a687d54901e5c319f3e2c81ba6ffeea`正常推送、远端SHA一致。工具再次45/45、0失败/8.081秒/退出0，合同/38路由/diff检查通过；Mac CI37596068768进行中、配对截图37596068763排队。Windows无Xcode，Swift编译、完整XCTest、最新原生图及真实操作待验；原生图取得后核对来源与尺寸，不以10-06旧图冒充最新。不合main、不正式发布IPA、不改Android/线上，其他在途改动保护，详见02 §7.39。
@@ -337,7 +351,8 @@
 - **`.github/workflows/ios-ci.yml`**：推送 `claude/** codex/** feature/** main` 且改动了 `ios-app/**` 时触发，也可以手动触发。在 `macos-26` 上跑（优先用 Xcode 27，没有就用 26.x）：QingJiCore `swift test` → 模拟器编译 → App XCTest → 模拟器截图 → 未签名 IPA（`QingJi-unsigned.ipa` 完整版 + `QingJi-noext.ipa` 去掉扩展和 entitlements 的兜底版）→ 上传为 Actions Artifacts。09-12 起不再自动提交回分支；Artifacts 会过期，长期证据要另行归档。
 - **`.github/workflows/parity-screenshots.yml`**：Android 模拟器（分片）+ iOS 模拟器各自采集 → 核对来源 → `ios-app/tools/compare_png.py --require-complete` → 生成可视化对比图和 P0 基线报告 → 上传为 Artifacts（不回写分支）。两个工作流共用同一个并发组，不会互相抢着写。
 - 相关工具：`ios-app/tools/screenshot_manifest.json`、`check_route_manifest.py`、`check_p0_product_contract.py`、`write_parity_metadata.py`、`check_capture_metadata.py`。
-- 最近一次完整的双端采集：run `35508046549`（`76e093f`，在 screenshot-stability 线上）：41 个场景里 40 对有图，全部是 `dimension_mismatch`，`assets-funds` 缺失；业务 diff 只有 `platform` 一项。**这次运行没有验证 P1 候选分支。** 那次的原始 PNG 还没归档到本机，Actions 保留期过后会丢。
+- 最近一次完整的双端采集：run `41227903770`（`a343776`，集成分支，11-01）：38 个场景 38/38 都有图，全部是 `dimension_mismatch`（两端分辨率不同，只说明待人工判定）；业务 diff 只有 `platform` 一项。原始 PNG 已下载到本机 `.tmp/opus-takeover-20261031/shots/`（不进仓库），Actions 保留期过后网上那份会丢。
+- 更早一次：run `35508046549`（`76e093f`，在 screenshot-stability 线上）：41 个场景里 40 对有图，全部是 `dimension_mismatch`，`assets-funds` 缺失；业务 diff 只有 `platform` 一项。**这次运行没有验证 P1 候选分支。** 那次的原始 PNG 没归档到本机。
 - **截图链路的防假成功机制**（09-12 起）：
   - Android 41 个场景拆成 5 批、各用新 AVD，每批最多 9 个、同时最多 2 批。每批成功后才写完成凭据；汇总时缺批次、图片重复、跨提交、fixture/版本/业务数据不一致都会拒绝。
   - simctl 启停和截图加 45 秒超时，超时按失败处理，不把空白截图当成功。启动前先结束旧进程（`--terminate-running-process`）。
@@ -390,7 +405,8 @@
 
 ## 7. Liquid Glass / iOS 27 技术约束（要点）
 - `glassEffect(_:in:)`、`GlassEffectContainer`、`glassEffectID`、`.buttonStyle(.glass/.glassProminent)` 都需要 **iOS 26.0+**，所以部署目标定在 26.0 就能覆盖 iOS 27，不用锁死 27。真正用到 iOS 27 专属 API 时，才需要 Xcode 27 SDK。
-- 玻璃只用在**导航/输入栏/关键操作/分类筛选胶囊**这类控件层；账单内容卡不要层层叠玻璃，要保证可读性。成组的控件放进 `GlassEffectContainer`（性能更好、还能互相融合变形）。
+- 玻璃只用在**导航/输入栏/关键操作/分类筛选胶囊**这类控件层；账单内容卡不要层层叠玻璃，要保证可读性。成组的控件放进 `GlassEffectContainer`（性能更好、还能互相融合变形）。这条只管正文里的控件组。
+- 顶栏不一样：系统已经把顶栏按钮放进共享玻璃里，顶栏项不再套 `GlassEffectContainer`、不自绘玻璃、不隐藏共享背景，图标默认单色，文字按钮和图标组之间用 `ToolbarSpacer(.fixed)` 分开（规则见06，11-01起由 `ios-app/tools/test_toolbar_native_glass.py` 守卫）。官方依据：[Toolbars（HIG）](https://developer.apple.com/design/human-interface-guidelines/toolbars)、[ToolbarSpacer](https://developer.apple.com/documentation/swiftui/toolbarspacer)、[sharedBackgroundVisibility](https://developer.apple.com/documentation/swiftui/toolbarcontent/sharedbackgroundvisibility(_:))。11-01实际读取：顶栏默认单色，减少自定义背景和着色控件，用标准返回/关闭按钮，文字操作和图标组之间留固定间距。
 - Liquid Glass 主要服务于控件/导航层。原生效果更好时优先使用，允许系统确定菜单/弹层的排版、圆角与材质；功能、信息层级、品牌素材、账务语义与入口不变。内容层跟主题，原生材质可保留中性色，不叠实色背景遮挡玻璃，也不向系统内部子视图写私有样式。
 - 官方依据：[Adopting Liquid Glass](https://developer.apple.com/documentation/technologyoverviews/adopting-liquid-glass)、[SwiftUI Menu](https://developer.apple.com/documentation/swiftui/menu)。10-02 实际读取：标准组件自动采用新系统外观，减少自定义外壳背景，支持菜单副标题，并验证减弱动态/透明度设置；没有据此宣称每一种弹层都一定透明或已完成真机验收。
 - 性能验收和视觉验收分开：性能要用同一份数据集的真实耗时或 XCTest measure 来比，不能拿截图当性能证据。
