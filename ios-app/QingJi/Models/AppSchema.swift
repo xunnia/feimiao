@@ -6,9 +6,9 @@ import SwiftData
 private enum UnchangedAppModels {
     static var leafModels: [any PersistentModel.Type] { [
         Tag.self, Budget.self, SavingsGoal.self, RecurringRule.self,
-        RecurringOccurrence.self, PhysicalAsset.self, AssetEvent.self,
+        RecurringOccurrence.self, AssetEvent.self,
         AssetUsageEvent.self, AssetTransactionLink.self, AssetRefundAllocation.self,
-        AssetValuation.self, ReceivableAsset.self, ReceivableRecovery.self,
+        AssetValuation.self, ReceivableRecovery.self,
         LiabilityProfile.self, NetWorthSnapshot.self, AIChatSession.self,
         AIChatMessage.self, AIMemoryRecord.self, AIRequestRunRecord.self,
         AIRequestEventRecord.self, AIReportScheduleRecord.self, BudgetPlanRecord.self,
@@ -22,6 +22,11 @@ private enum UnchangedAppModels {
         LegacyLedgerModels.Account.self, LegacyLedgerModels.Book.self,
         LegacyLedgerModels.TxCategory.self, LegacyLedgerModels.MoneyTransaction.self,
     ] }
+
+    /// Frozen leaves whose soft-delete flag is still stored as isDeleted.
+    static var legacyAssets: [any PersistentModel.Type] { [
+        LegacyAssetModels.PhysicalAsset.self, LegacyAssetModels.ReceivableAsset.self,
+    ] }
 }
 
 /// The unversioned published graph at b40316f, before budget rule tables.
@@ -29,7 +34,7 @@ enum FeimiaoSchemaV1: VersionedSchema {
     static var sourceRevision: String { "b40316f336fb0aefabf67817460775b665fdaa1d" }
     static var versionIdentifier: Schema.Version { Schema.Version(1, 0, 0) }
     static var models: [any PersistentModel.Type] {
-        UnchangedAppModels.legacyLedger + UnchangedAppModels.leafModels
+        UnchangedAppModels.legacyLedger + UnchangedAppModels.legacyAssets + UnchangedAppModels.leafModels
     }
 }
 
@@ -42,9 +47,10 @@ enum FeimiaoSchemaV2: VersionedSchema {
     }
 }
 
-/// Only two defaulted attributes are added to MoneyTransaction, and Account's
-/// soft-delete flag is renamed to isSoftDeleted (originalName "isDeleted" carries
-/// the value over; the old name clashes with NSManagedObject.isDeleted). Old book
+/// Only two defaulted attributes are added to MoneyTransaction, and the
+/// soft-delete flag of Account, PhysicalAsset and ReceivableAsset is renamed to
+/// isSoftDeleted (originalName "isDeleted" carries the value over; the old name
+/// clashes with NSManagedObject.isDeleted). Old book
 /// and account relationships remain intact; legacy scene fallback remains lazy.
 enum FeimiaoSchemaV3: VersionedSchema {
     static var versionIdentifier: Schema.Version { Schema.Version(3, 0, 0) }

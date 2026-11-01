@@ -345,8 +345,20 @@ def validate_data_upgrade(payload: dict[str, Any], repo: Path) -> None:
 
     current_fields = stored_model_declarations([
         text(path) for path in (repo / "ios-app/QingJi/Models").glob("*.swift")
-        if path.name != "LegacyLedgerModels.swift"
+        if path.name not in ("LegacyLedgerModels.swift", "LegacyAssetModels.swift")
     ])
+    v1_section = schema_source.split("enum FeimiaoSchemaV1: VersionedSchema", 1)[-1].split("enum FeimiaoSchemaV2", 1)[0]
+    assets_section = schema_source.split("static var legacyAssets:", 1)[-1].split("] }", 1)[0]
+    require("static var legacyAssets:" in schema_source and "UnchangedAppModels.legacyAssets" in v1_section and
+            "LegacyAssetModels.PhysicalAsset.self" in assets_section and
+            "LegacyAssetModels.ReceivableAsset.self" in assets_section,
+            "V1/V2 must keep the frozen pre-rename asset models")
+    # The frozen asset copies are nested one level; dedent them to reuse the parser.
+    frozen_asset_fields = stored_model_declarations([
+        re.sub(r"(?m)^    ", "", text(repo / "ios-app/QingJi/Models/LegacyAssetModels.swift"))
+    ])
+    require(set(frozen_asset_fields) == {"PhysicalAsset", "ReceivableAsset"},
+            "frozen asset models must be exactly PhysicalAsset and ReceivableAsset")
     for version in (1, 2):
         anchor = regex_value(
             rf'enum FeimiaoSchemaV{version}: VersionedSchema.*?sourceRevision: String\s*\{{\s*"([0-9a-f]{{40}})"',
@@ -363,6 +375,9 @@ def validate_data_upgrade(payload: dict[str, Any], repo: Path) -> None:
         for name in names:
             require(name in current_fields and current_fields.get(name) == historical_fields.get(name),
                     f"shared V{version} leaf {name} changed persisted metadata; freeze it before changing the current model")
+        for name, fields in frozen_asset_fields.items():
+            require(fields == historical_fields.get(name),
+                    f"frozen V{version} {name} differs from original stored properties")
     actual_model_types = re.findall(
         r"^\s+([A-Za-z][A-Za-z0-9]+)\.self,",
         model_source,

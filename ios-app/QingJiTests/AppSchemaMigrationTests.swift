@@ -62,6 +62,10 @@ final class AppSchemaMigrationTests: XCTestCase {
         let businessID: UUID
         let projectID: UUID
         let ruleID: UUID?
+        let deletedAssetID: UUID
+        let keptAssetID: UUID
+        let deletedReceivableID: UUID
+        let keptReceivableID: UUID
     }
 
     private func directory() throws -> URL {
@@ -120,10 +124,20 @@ final class AppSchemaMigrationTests: XCTestCase {
                 unitRaw: "month", startDate: "2026-10-01", createdMs: 42)
             context.insert(rule); ruleID = rule.stableID
         }
+        let deletedAsset = LegacyAssetModels.PhysicalAsset(name: "已删物品", purchasePrice: 199)
+        deletedAsset.isDeleted = true; deletedAsset.updatedAt = timestamp
+        let keptAsset = LegacyAssetModels.PhysicalAsset(name: "在用物品")
+        let deletedReceivable = LegacyAssetModels.ReceivableAsset(name: "已删应收", originalAmount: 300)
+        deletedReceivable.isDeleted = true; deletedReceivable.updatedAt = timestamp
+        let keptReceivable = LegacyAssetModels.ReceivableAsset(name: "在收应收", originalAmount: 50)
+        context.insert(deletedAsset); context.insert(keptAsset)
+        context.insert(deletedReceivable); context.insert(keptReceivable)
         try context.save()
         return Fixture(records: rows.map(\.record), updatedAt: Dictionary(uniqueKeysWithValues: rows.map { ($0.stableID, $0.updatedAt) }),
                        cashID: cash.stableID, bankID: bank.stableID, totalID: total.stableID,
-                       businessID: business.stableID, projectID: project.stableID, ruleID: ruleID)
+                       businessID: business.stableID, projectID: project.stableID, ruleID: ruleID,
+                       deletedAssetID: deletedAsset.stableID, keptAssetID: keptAsset.stableID,
+                       deletedReceivableID: deletedReceivable.stableID, keptReceivableID: keptReceivable.stableID)
     }
 
     private func assertUpgraded(_ fixture: Fixture, in context: ModelContext, file: StaticString = #filePath, line: UInt = #line) throws {
@@ -167,6 +181,23 @@ final class AppSchemaMigrationTests: XCTestCase {
             XCTAssertEqual(rules.first?.stableID, ruleID); XCTAssertEqual(rules.first?.bookID, fixture.businessID)
             XCTAssertEqual(rules.first?.amountCents, 50000)
         }
+        // 物品和应收的软删除标记也改了名，旧库里已删的升级后不能复活，没删的也不能变成已删。
+        let assets = try context.fetch(FetchDescriptor<PhysicalAsset>())
+        let deletedAsset = try XCTUnwrap(assets.first { $0.stableID == fixture.deletedAssetID })
+        XCTAssertTrue(deletedAsset.isDeleted, "旧库里已删的物品升级后不能复活")
+        XCTAssertEqual(deletedAsset.name, "已删物品"); XCTAssertEqual(deletedAsset.purchasePrice, 199)
+        XCTAssertEqual(deletedAsset.updatedAt, timestamp)
+        XCTAssertFalse(try XCTUnwrap(assets.first { $0.stableID == fixture.keptAssetID }).isDeleted)
+        let visibleAssets = try context.fetch(FetchDescriptor<PhysicalAsset>(predicate: #Predicate<PhysicalAsset> { !$0.isSoftDeleted }))
+        XCTAssertEqual(visibleAssets.map(\.stableID), [fixture.keptAssetID])
+        let receivables = try context.fetch(FetchDescriptor<ReceivableAsset>())
+        let deletedReceivable = try XCTUnwrap(receivables.first { $0.stableID == fixture.deletedReceivableID })
+        XCTAssertTrue(deletedReceivable.isDeleted, "旧库里已删的应收升级后不能复活")
+        XCTAssertEqual(deletedReceivable.name, "已删应收"); XCTAssertEqual(deletedReceivable.remainingAmount, 300)
+        XCTAssertEqual(deletedReceivable.updatedAt, timestamp)
+        XCTAssertFalse(try XCTUnwrap(receivables.first { $0.stableID == fixture.keptReceivableID }).isDeleted)
+        let visibleReceivables = try context.fetch(FetchDescriptor<ReceivableAsset>(predicate: #Predicate<ReceivableAsset> { !$0.isSoftDeleted }))
+        XCTAssertEqual(visibleReceivables.map(\.stableID), [fixture.keptReceivableID])
     }
 
     func testOriginalUnversionedStoreMigratesInPlaceAndReopensWithAllRelationships() throws {
@@ -233,6 +264,31 @@ final class AppSchemaMigrationTests: XCTestCase {
         XCTAssertTrue(account.isDeleted, "软删除账户重开后不能复活")
         let visible = try context.fetch(FetchDescriptor<Account>(predicate: #Predicate<Account> { !$0.isSoftDeleted }))
         XCTAssertFalse(visible.contains { $0.stableID == id })
+    }
+
+    func testSoftDeletedItemAndReceivableStayDeletedAfterReopeningCurrentStore() throws {
+        let url = try directory().appendingPathComponent("default.store")
+        let assetID = UUID(), receivableID = UUID()
+        do {
+            let container = try AppModelContainer.makeContainer(at: url)
+            let context = ModelContext(container)
+            let asset = PhysicalAsset(name: "已删物品", stableID: assetID)
+            asset.isDeleted = true
+            let receivable = ReceivableAsset(name: "已删应收", originalAmount: 100, stableID: receivableID)
+            receivable.isDeleted = true
+            context.insert(asset); context.insert(receivable)
+            try context.save()
+        }
+        let reopened = try AppModelContainer.makeContainer(at: url)
+        let context = ModelContext(reopened)
+        let asset = try XCTUnwrap(context.fetch(FetchDescriptor<PhysicalAsset>()).first { $0.stableID == assetID })
+        XCTAssertTrue(asset.isDeleted, "软删除物品重开后不能复活")
+        let receivable = try XCTUnwrap(context.fetch(FetchDescriptor<ReceivableAsset>()).first { $0.stableID == receivableID })
+        XCTAssertTrue(receivable.isDeleted, "软删除应收重开后不能复活")
+        let visibleAssets = try context.fetch(FetchDescriptor<PhysicalAsset>(predicate: #Predicate<PhysicalAsset> { !$0.isSoftDeleted }))
+        XCTAssertFalse(visibleAssets.contains { $0.stableID == assetID })
+        let visibleReceivables = try context.fetch(FetchDescriptor<ReceivableAsset>(predicate: #Predicate<ReceivableAsset> { !$0.isSoftDeleted }))
+        XCTAssertFalse(visibleReceivables.contains { $0.stableID == receivableID })
     }
 
     func testFailedMigrationLeavesOriginalStoreReopenableWithOriginalRowsAndAttachment() throws {

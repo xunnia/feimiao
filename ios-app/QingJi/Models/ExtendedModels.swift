@@ -248,7 +248,10 @@ final class PhysicalAsset {
     var depreciationPaused: Bool = false
     var note: String = ""
     var includeInNetWorth: Bool = true
-    var isDeleted: Bool = false
+    /// 软删除标记，和 Account 同理不能叫 isDeleted（与 NSManagedObject 自带的 isDeleted 重名，
+    /// 重开后可能读成 false，已删物品会“复活”）。旧库升级时按 originalName 把值带过来；
+    /// 代码仍可用下方的 isDeleted 别名。
+    @Attribute(originalName: "isDeleted") var isSoftDeleted: Bool = false
     var endedAt: Date? = nil
     var archivedAt: Date? = nil
     var createdAt: Date = Date()
@@ -267,6 +270,12 @@ final class PhysicalAsset {
     var sourceType: PhysicalAssetSourceType {
         get { PhysicalAssetSourceType(rawValue: sourceTypeRaw) ?? .historicalExisting }
         set { sourceTypeRaw = newValue.rawValue }
+    }
+
+    /// 代码层别名；#Predicate 只能用存储属性 isSoftDeleted。
+    var isDeleted: Bool {
+        get { isSoftDeleted }
+        set { isSoftDeleted = newValue }
     }
 
     init(
@@ -543,7 +552,8 @@ final class ReceivableAsset {
     var dueDate: Date? = nil
     var includeInNetWorth: Bool = true
     var note: String = ""
-    var isDeleted: Bool = false
+    /// 软删除标记，同上不能叫 isDeleted；旧库按 originalName 带过原值，代码用下方别名。
+    @Attribute(originalName: "isDeleted") var isSoftDeleted: Bool = false
     var endedAt: Date? = nil
     var archivedAt: Date? = nil
     var createdAt: Date = Date()
@@ -557,6 +567,12 @@ final class ReceivableAsset {
     var lifecycle: ReceivableLifecycle {
         get { ReceivableLifecycle(rawValue: lifecycleRaw) ?? .active }
         set { lifecycleRaw = newValue.rawValue }
+    }
+
+    /// 代码层别名；#Predicate 只能用存储属性 isSoftDeleted。
+    var isDeleted: Bool {
+        get { isSoftDeleted }
+        set { isSoftDeleted = newValue }
     }
 
     init(name: String, originalAmount: Decimal, kind: ReceivableKind = .other, bookID: UUID? = nil, currencyCode: String = "CNY", stableID: UUID = UUID()) {
