@@ -219,6 +219,13 @@ struct ImportReviewView: View {
                 selectedAccountID = selectedAccountID ?? suggestedAccount?.stableID
                 seedSelections()
             }
+            // 分类晚到，或上层重画后账单换了编号，都只补还没选的行，不动已选的。
+            .onChange(of: categories.map(\.key)) { _, _ in
+                seedSelections()
+            }
+            .onChange(of: result.records.map(\.id)) { _, _ in
+                seedSelections()
+            }
             .onDisappear {
                 aiTask?.cancel()
             }
@@ -405,18 +412,36 @@ struct ImportReviewView: View {
     }
 
     private func seedSelections() {
-        guard selectedKeys.isEmpty else { return }
-        for record in result.records {
-            guard record.eventType != .refund else { continue }
-            if let rememberedKey = CategoryMemoryStore.categoryKey(
-                for: record.merchant,
-                kind: record.kind
-            ), categories.contains(where: { $0.key == rememberedKey && $0.kind == record.kind }) {
-                selectedKeys[record.id] = rememberedKey
+        let seeded = Self.seededSelections(
+            records: result.records,
+            categories: categories.map { (key: $0.key, kind: $0.kind, name: $0.name) },
+            existing: selectedKeys
+        )
+        if seeded != selectedKeys { selectedKeys = seeded }
+    }
+
+    typealias SeedCategory = (key: String, kind: TransactionKind, name: String)
+
+    /// 只给还没选分类的行补默认分类；已选的（手动、整组或 AI）原样保留，退款行不选。
+    /// 顺序：记住的商户分类、账单自带分类、规则猜测、同名分类，最后落到「其他」或「其他收入」。
+    static func seededSelections(
+        records: [TransactionRecord],
+        categories: [SeedCategory],
+        existing: [UUID: String],
+        remembered: (String, TransactionKind) -> String? = {
+            CategoryMemoryStore.categoryKey(for: $0, kind: $1)
+        }
+    ) -> [UUID: String] {
+        var selections = existing
+        for record in records {
+            guard record.eventType != .refund, selections[record.id] == nil else { continue }
+            if let rememberedKey = remembered(record.merchant, record.kind),
+               categories.contains(where: { $0.key == rememberedKey && $0.kind == record.kind }) {
+                selections[record.id] = rememberedKey
                 continue
             }
             if let exact = categories.first(where: { $0.kind == record.kind && $0.key == record.categoryKey }) {
-                selectedKeys[record.id] = exact.key
+                selections[record.id] = exact.key
                 continue
             }
             let guess = BillCategorizer.classify(
@@ -427,21 +452,22 @@ struct ImportReviewView: View {
             )
             if let guessedKey = guess.key,
                categories.contains(where: { $0.key == guessedKey && $0.kind == record.kind }) {
-                selectedKeys[record.id] = guessedKey
+                selections[record.id] = guessedKey
                 continue
             }
             if let named = categories.first(where: {
                 $0.kind == record.kind && !record.categoryName.isEmpty &&
                     ($0.name == record.categoryName || $0.name.contains(record.categoryName) || record.categoryName.contains($0.name))
             }) {
-                selectedKeys[record.id] = named.key
+                selections[record.id] = named.key
                 continue
             }
             let fallback = record.kind == .income ? "otherIncome" : CategorySeed.fallbackExpenseKey
             if let fallback = categories.first(where: { $0.kind == record.kind && $0.key == fallback }) {
-                selectedKeys[record.id] = fallback.key
+                selections[record.id] = fallback.key
             }
         }
+        return selections
     }
 
     private func isUnresolved(_ record: TransactionRecord) -> Bool {
