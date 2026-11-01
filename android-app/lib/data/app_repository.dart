@@ -344,11 +344,16 @@ class AppRepository extends ChangeNotifier {
   }
 
   /// 行级 uuid（多人共享账本的同步地基）：32 位小写 hex，无需三方库。
+  /// 必须用安全随机数：不带种子的 Random() 种子只有 32 位，编号最多约 43 亿种，
+  /// 几万笔就可能撞号，导出再导入、导到 iOS 时会把两笔认成同一笔。
   static String _newUuid() {
-    final r = Random();
+    final r = Random.secure();
     return List.generate(
         16, (_) => r.nextInt(256).toRadixString(16).padLeft(2, '0')).join();
   }
+
+  @visibleForTesting
+  static String newRowUuidForTest() => _newUuid();
 
   /// 新行的同步字段：uuid + 变更时间戳。
   static Map<String, Object?> _syncStampNew() {
