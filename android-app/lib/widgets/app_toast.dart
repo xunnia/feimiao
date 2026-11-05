@@ -9,8 +9,11 @@ import 'mascot.dart';
 /// 顶部轻提示（对齐 Claude 的「已复制」toast）：
 /// 深色半透明小胶囊从顶部滑入，停约 1 秒后淡出。全 App 的轻提示统一用它。
 /// [mascot] 非空时用猫表情替代图标（如记账/核对成功配 MascotMood.success）。
+/// [hold] 是停留时长；字多、要用户读完的提示（如数据修复说明）可以停久一点。
 void showAppToast(BuildContext context, String text,
-    {IconData icon = Icons.check_circle, MascotMood? mascot}) {
+    {IconData icon = Icons.check_circle,
+    MascotMood? mascot,
+    Duration hold = const Duration(milliseconds: 1050)}) {
   final overlay = Overlay.of(context, rootOverlay: true);
   late OverlayEntry entry;
   entry = OverlayEntry(
@@ -18,6 +21,7 @@ void showAppToast(BuildContext context, String text,
       text: text,
       icon: icon,
       mascot: mascot,
+      hold: hold,
       onDone: () => entry.remove(),
     ),
   );
@@ -28,12 +32,14 @@ class _Toast extends StatefulWidget {
   final String text;
   final IconData icon;
   final MascotMood? mascot;
+  final Duration hold;
   final VoidCallback onDone;
 
   const _Toast({
     required this.text,
     required this.icon,
     this.mascot,
+    required this.hold,
     required this.onDone,
   });
 
@@ -58,7 +64,7 @@ class _ToastState extends State<_Toast> with SingleTickerProviderStateMixin {
   Future<void> _run() async {
     await _c.forward();
     if (!mounted) return;
-    _dismissTimer = Timer(const Duration(milliseconds: 1050), () async {
+    _dismissTimer = Timer(widget.hold, () async {
       if (mounted) await _c.reverse();
       if (mounted) widget.onDone();
     });

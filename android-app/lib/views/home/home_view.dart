@@ -13,6 +13,7 @@ import '../../core/money_format.dart';
 import '../../core/statistics/statistics_engine.dart';
 import '../../data/app_repository.dart';
 import '../../theme/app_colors.dart';
+import '../../widgets/app_toast.dart';
 import '../../widgets/home_summary_card.dart';
 import '../../widgets/mascot.dart';
 import '../../widgets/sliding_segment.dart';
@@ -64,6 +65,8 @@ class _HomeViewState extends State<HomeView> with WidgetsBindingObserver {
   late DateTime _syncedNow;
   Timer? _midnightTimer;
   _TxFilter _filter = _TxFilter.all;
+  // 打开 App 时修过重复编号的账单，首页提示一次。
+  bool _uuidNoticeScheduled = false;
 
   @override
   void initState() {
@@ -189,9 +192,29 @@ class _HomeViewState extends State<HomeView> with WidgetsBindingObserver {
     });
   }
 
+  void _showUuidRepairNotice() {
+    if (!mounted) return;
+    final repo = context.read<AppRepository>();
+    final count = repo.uuidDuplicatesNoticeCount;
+    _uuidNoticeScheduled = false;
+    if (count <= 0) return;
+    showAppToast(
+      context,
+      '发现 $count 笔账单编号重复，已换新编号，没有删除或合并',
+      icon: Icons.info_outline,
+      hold: const Duration(seconds: 3),
+    );
+    unawaited(repo.clearUuidDuplicatesNotice());
+  }
+
   @override
   Widget build(BuildContext context) {
     final repo = context.watch<AppRepository>();
+    if (repo.uuidDuplicatesNoticeCount > 0 && !_uuidNoticeScheduled) {
+      _uuidNoticeScheduled = true;
+      WidgetsBinding.instance
+          .addPostFrameCallback((_) => _showUuidRepairNotice());
+    }
     final isCurrent = _isCurrentMonth;
     if (!isCurrent && repo.isHydrating) {
       return RepositoryDataGate(builder: (_) => const SizedBox.shrink());

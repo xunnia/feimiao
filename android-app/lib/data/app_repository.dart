@@ -263,6 +263,13 @@ class AppRepository extends ChangeNotifier {
   // import. Keeping a durable marker avoids rewriting the same 20 settings on
   // every cold start.
   static const _aiMetadataMarkerKey = 'ai_provider_metadata_normalized_v1';
+  // 旧版 Android 账单编号用不带种子的 Random() 生成，可能撞号。查过、修过
+  // 就记下，以后启动只读这一行；失败最多重试 3 次，不让每次启动都变慢。
+  static const _uuidDuplicatesCheckedKey =
+      'transaction_uuid_duplicates_checked_v1';
+  static const _uuidDuplicatesNoticeKey =
+      'transaction_uuid_duplicates_notice_v1';
+  static const _uuidDuplicatesMaxAttempts = 3;
   // Keep the defensive anomaly scan available for diagnostics without making
   // every production cold start pay for PRAGMA, EXISTS and index probes.
   static bool get _verifyRuntimeSchemaOnStartup => const bool.fromEnvironment(
@@ -402,6 +409,7 @@ class AppRepository extends ChangeNotifier {
   bool _deferredInitPending = false;
   String? _deferredAutoBackupPath;
   bool _deferredRefundNormalization = false;
+  int _uuidDuplicatesRenumbered = 0;
   Object? _initializationError;
   StackTrace? _initializationErrorStack;
   Object? _aiInitializationError;
@@ -1829,6 +1837,8 @@ class AppRepository extends ChangeNotifier {
       trace('default_book_start');
       await _ensureDefaultBook();
       trace('default_book_done');
+      await _repairDuplicateTransactionUuids(dbPath);
+      trace('uuid_check');
       trace('maintenance');
       if (fastStartup) {
         // The home only needs the current book, accounts, categories, budget
@@ -10068,6 +10078,7 @@ class AppRepository extends ChangeNotifier {
       );
       await _runB3A4V39Compat(_db!);
       await _ensureDefaultBook();
+      await _repairDuplicateTransactionUuids(dbPath);
       await _normalizeStandaloneRefunds();
       await _convergeOpenedDatabase(notify: false);
       await activation.commit();
@@ -10117,6 +10128,7 @@ class AppRepository extends ChangeNotifier {
         );
         await _runB3A4V39Compat(_db!);
         await _ensureDefaultBook();
+        await _repairDuplicateTransactionUuids(dbPath);
         await _normalizeStandaloneRefunds();
         await _convergeOpenedDatabase(notify: false);
         notifyListeners();
@@ -13058,6 +13070,221 @@ class AppRepository extends ChangeNotifier {
       ids.addAll(derived);
     }
     return ids;
+  }
+
+  /// 打开 App 时修好了几笔编号重复的账单；首页提示一次后清掉。
+  int get uuidDuplicatesNoticeCount => _uuidDuplicatesRenumbered;
+
+  Future<void> clearUuidDuplicatesNotice() async {
+    _uuidDuplicatesRenumbered = 0;
+    try {
+      await _db?.delete('app_settings',
+          where: 'key = ?', whereArgs: [_uuidDuplicatesNoticeKey]);
+    } catch (_) {
+      // 只是提示：没删掉，下次启动再提示一次，不影响记账。
+    }
+  }
+
+  /// 测试用：修复改完第一笔后故意出错，验证要么全改、要么一点不改。
+  @visibleForTesting
+  bool debugFailUuidRepairAfterFirstUpdate = false;
+
+  /// 查一次账单编号有没有重复（不分大小写和连字符，和导入一致）。有重复就
+  /// 先备份，再在一个事务里换编号：要么全部改完，要么一点不改。出错时原样
+  /// 保留、照常打开 App，下次启动再试，最多 3 次。
+  Future<void> _repairDuplicateTransactionUuids(String dbPath) async {
+    _uuidDuplicatesRenumbered = 0;
+    final db = _db;
+    if (db == null) return;
+    var attempts = 0;
+    try {
+      final settings = await db.query('app_settings',
+          where: 'key IN (?, ?)',
+          whereArgs: [_uuidDuplicatesCheckedKey, _uuidDuplicatesNoticeKey]);
+      final values = {
+        for (final row in settings)
+          row['key'] as String: row['value'] as String?,
+      };
+      _uuidDuplicatesRenumbered =
+          int.tryParse(values[_uuidDuplicatesNoticeKey] ?? '') ?? 0;
+      final checked = values[_uuidDuplicatesCheckedKey] ?? '';
+      if (checked == '1') return;
+      attempts = int.tryParse(checked.replaceFirst('failed:', '')) ?? 0;
+      if (attempts >= _uuidDuplicatesMaxAttempts) return;
+      final duplicate = await db.rawQuery('''
+        SELECT 1 FROM transactions
+        WHERE uuid <> ''
+        GROUP BY lower(replace(trim(uuid), '-', ''))
+        HAVING COUNT(*) > 1
+        LIMIT 1
+      ''');
+      if (duplicate.isEmpty) {
+        await db.insert(
+            'app_settings', {'key': _uuidDuplicatesCheckedKey, 'value': '1'},
+            conflictAlgorithm: ConflictAlgorithm.replace);
+        return;
+      }
+      // 先备份再动：备份失败就不修，原样打开。
+      await _createConsistentDatabaseCopy(
+        dbPath,
+        '$dbPath.pre-uuid-repair.bak',
+        sourceDb: db,
+      );
+      final renumbered = await db.transaction((txn) async {
+        final count = await _renumberDuplicateTransactionUuids(
+          txn,
+          failAfterFirstUpdate: debugFailUuidRepairAfterFirstUpdate,
+        );
+        await txn.insert(
+            'app_settings', {'key': _uuidDuplicatesCheckedKey, 'value': '1'},
+            conflictAlgorithm: ConflictAlgorithm.replace);
+        if (count > 0) {
+          await txn.insert('app_settings',
+              {'key': _uuidDuplicatesNoticeKey, 'value': '$count'},
+              conflictAlgorithm: ConflictAlgorithm.replace);
+        }
+        return count;
+      });
+      if (renumbered > 0) _uuidDuplicatesRenumbered = renumbered;
+    } catch (error) {
+      debugPrint('uuid_repair failed attempt=${attempts + 1} error=$error');
+      try {
+        await db.insert(
+            'app_settings',
+            {
+              'key': _uuidDuplicatesCheckedKey,
+              'value': 'failed:${attempts + 1}'
+            },
+            conflictAlgorithm: ConflictAlgorithm.replace);
+      } catch (_) {}
+    }
+  }
+
+  /// 编号重复的账单逐组处理：按导出顺序（时间新的在前，同时间行号大的在前），
+  /// 第一笔留原编号，其余依次换成导入时同一公式的新编号，被别的账单占用就
+  /// 往后顺延。只改编号，不改金额、日期、备注、账本和修改时间。返回换了几笔。
+  static Future<int> _renumberDuplicateTransactionUuids(
+    DatabaseExecutor txn, {
+    bool failAfterFirstUpdate = false,
+  }) async {
+    String keyOf(String raw) => raw.trim().replaceAll('-', '').toLowerCase();
+    final rows = await txn.query('transactions',
+        columns: ['id', 'uuid', 'event_type'],
+        where: "uuid <> ''",
+        orderBy: 'date_ms DESC, id DESC');
+    final groups = <String, List<Map<String, Object?>>>{};
+    for (final row in rows) {
+      final key = keyOf(row['uuid'] as String);
+      if (key.isNotEmpty) (groups[key] ??= []).add(row);
+    }
+    final occupied = groups.keys.toSet();
+    final newUuidById = <int, String>{};
+    final renamed = <String, List<String>>{};
+    for (final entry in groups.entries) {
+      if (entry.value.length < 2) continue;
+      var rank = 0;
+      for (final row in entry.value.skip(1)) {
+        var candidate = '';
+        while (candidate.isEmpty || occupied.contains(candidate)) {
+          rank++;
+          candidate = rank <= _maxDuplicateUuidRank
+              ? _derivedDuplicateUuid(entry.key, rank)
+              : _newUuid();
+        }
+        occupied.add(candidate);
+        newUuidById[row['id'] as int] = candidate;
+        (renamed[row['uuid'] as String] ??= []).add(candidate);
+      }
+    }
+    if (newUuidById.isEmpty) return 0;
+    // 资产凭证按编号记着收回、利息、还款转账那笔。先按原来的找法认出它指的是
+    // 哪一笔：收回本金有直接关联的 id；利息、还款转账按账单类型认，认不出就
+    // 和现在按编号查一样取 id 最小的。那笔换了编号，凭证跟着改。
+    final rowsByUuid = <String, List<Map<String, Object?>>>{};
+    for (final row in rows) {
+      (rowsByUuid[row['uuid'] as String] ??= []).add(row);
+    }
+    for (final list in rowsByUuid.values) {
+      list.sort((a, b) => (a['id'] as int).compareTo(b['id'] as int));
+    }
+    final recoveryTxByEvent = {
+      for (final row in await txn.query('receivable_recoveries',
+          columns: ['event_id', 'transaction_id'],
+          where: 'event_id IS NOT NULL AND transaction_id IS NOT NULL'))
+        row['event_id'] as int: row['transaction_id'] as int,
+    };
+    final expectedTypes = {
+      'transaction_uuid': {TransactionEventType.receivableRecovery.storageKey},
+      'interest_transaction_uuid': {
+        TransactionEventType.income.storageKey,
+        TransactionEventType.interest.storageKey,
+      },
+      'transfer_transaction_uuid': {TransactionEventType.transfer.storageKey},
+    };
+    final metadataUpdates = <int, String>{};
+    for (final event in await txn.query('asset_events',
+        columns: ['id', 'metadata'],
+        where: "metadata LIKE '%transaction_uuid%'")) {
+      final metadata = Map<String, dynamic>.of(
+          _assetEventMetadata(event['metadata'] as String? ?? ''));
+      var changed = false;
+      for (final ref in expectedTypes.entries) {
+        final value = metadata[ref.key];
+        final candidates = value is String ? rowsByUuid[value] : null;
+        if (candidates == null) continue;
+        final linkedId = ref.key == 'transaction_uuid'
+            ? recoveryTxByEvent[event['id'] as int]
+            : null;
+        final target =
+            candidates.where((row) => row['id'] == linkedId).firstOrNull ??
+                candidates
+                    .where((row) => ref.value.contains(row['event_type']))
+                    .firstOrNull ??
+                candidates.first;
+        final next = newUuidById[target['id'] as int];
+        if (next == null) continue;
+        metadata[ref.key] = next;
+        changed = true;
+      }
+      if (changed) metadataUpdates[event['id'] as int] = jsonEncode(metadata);
+    }
+    var updated = 0;
+    for (final entry in newUuidById.entries) {
+      await txn.update('transactions', {'uuid': entry.value},
+          where: 'id = ?', whereArgs: [entry.key]);
+      updated++;
+      if (failAfterFirstUpdate && updated == 1) {
+        throw StateError('测试用：修复中途出错');
+      }
+    }
+    for (final entry in metadataUpdates.entries) {
+      await txn.update('asset_events', {'metadata': entry.value},
+          where: 'id = ?', whereArgs: [entry.key]);
+    }
+    // 余额核对按编号记着吸收过哪些到账时间未知的账单（转账分 :out / :in 两边）。
+    // 换了编号的那笔照样算吸收过，余额和修之前一样。
+    for (final row
+        in await txn.query('account_checkpoint_covered_unknown_events')) {
+      final covered = row['account_event_uuid'] as String;
+      final suffix = covered.endsWith(':out')
+          ? ':out'
+          : covered.endsWith(':in')
+              ? ':in'
+              : '';
+      final base = covered.substring(0, covered.length - suffix.length);
+      for (final next in renamed[base] ?? const <String>[]) {
+        await txn.insert(
+          'account_checkpoint_covered_unknown_events',
+          {
+            'checkpoint_id': row['checkpoint_id'],
+            'account_event_uuid': '$next$suffix',
+            'created_ms': row['created_ms'] ?? 0,
+          },
+          conflictAlgorithm: ConflictAlgorithm.ignore,
+        );
+      }
+    }
+    return newUuidById.length;
   }
 
   /// 编号重复的账单按组处理：先按金额、时间、备注认出手机里已有的那笔，
