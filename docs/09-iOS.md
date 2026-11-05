@@ -28,7 +28,7 @@
 
 ## 2. 当前真实状态
 
-### 2026-11-05 导入Android备份时编号重复的账单都保留（本机已提交 `080c8dc`；没编译、没跑XCTest、没推送）
+### 2026-11-05 导入Android备份时编号重复的账单都保留（已推送到 `da689d1`，代码 `080c8dc`；Mac编译、XCTest 295/0、截图全部通过；没真机）
 
 - 起因：333及以前的Android新账单编号可能撞号（见02）。`AndroidBackupImporter.stableID` 把编号相同的几笔变成同一个 `stableID`，恢复时按 `item.id` 覆盖，少一笔且不提示。用户11-05选定：都保留，时间新的那笔用原编号，其余换新编号，和Android表格恢复同一规则。
 - 改法：`AndroidBackupImporter.swift` 新增 `renumberDuplicateTransactionIDs`，建好Android行号到编号的对照表 `transactionIDs` 后、转换账单之前运行：按编号分组，组内按 `date_ms` 从新到旧、同一时间行号大的在前，第一笔留原编号，其余用 `derivedDuplicateTransactionID` 换编号（`sha256("feimiao-dup:<原编号去横线小写>:<序号>")` 的前16字节，序号1到64，跳过已占用的；都占了才退回 `stableID("", table: "transactions-duplicate", id: 行号)`）。和Android算出来的是同一个编号，只是写法不同（Android小写不带横线，iOS大写带横线）。没有重复时结果和以前一样。
@@ -36,7 +36,7 @@
 - 没跟着换、没核实：几处按文字存的账单编号，比如 `matched_transaction_family_uuid`、净资产的 `object_uuid`、余额核对的 `account_event_uuid`，还是原编号，会指向留原编号的那笔，影响没查。
 - 提示：iOS导入提示文字没改，换了编号不单独说。
 - 测试：`AndroidBackupImporterTests` 新增 `testDuplicateAndroidTransactionUUIDsKeepNewestAndRenumberRestLikeAndroid`：三笔同编号（晚饭时间最新；午饭和早饭时间相同，午饭用大写带横线的写法、挂在「生意」场景账本）加一笔挂在午饭上的退款。断言晚饭留原编号，早饭（行号大）和午饭依次是 `4A59A4DA-06FB-AEDD-DD21-962E263EDDA9`、`083DA2F4-6CBD-4108-03B1-7A01E8280EC6`，和Android同一规则算出的一样；退款指向午饭，午饭和退款在「生意」，晚饭和早饭没有场景账本；同一份数据再转换一次编号不变。
-- 状态：源码完成。Windows没有Swift，没编译，新测试没跑，这批也没跑本机iOS工具检查；没真机，没推送，没上线。要推送后看Mac CI，推送另行确认。iOS遇到重复不崩（下方查重复编号那条的49处，先改 `DataSeeder`）还没做，另行确认。
+- 状态：源码完成，用户确认后推送到 `da689d1`。iOS CI `42018740768` 6个任务全部成功：编译警告8条和11-01 `41293914982` 一样，核心逻辑150/0，App层XCTest 295项0失败（新加的这项通过）。两组iOS截图里看得出的变化只有12:00同时刻账单对调（已知不稳定，和这次改动无关），详见02。本机没跑iOS工具检查；没真机，没上线。iOS遇到重复不崩（下方查重复编号那条的49处，先改 `DataSeeder`）还没做，另行确认。
 
 ### 2026-11-01 截图复看与顶栏改用系统原生玻璃（已推送到 `abb728f`：Mac编译、XCTest 291/0、截图全部通过，叠加、截断和顶栏变蓝都已消除；深色模式和真机没验证；导入复核补选分类的修复已推送到 `3c6c5bc`，CI和截图全部通过；物品和应收软删除标记重名的修复已推送到 `73e5054`，CI和截图全部通过；查重复编号：iOS现有写入不会产生，Android新账单编号随机性不够可能撞号；Android新编号改用安全随机数的修复已推送到 `edf18b6`，Android CI和截图全部通过）
 
