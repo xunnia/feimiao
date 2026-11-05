@@ -943,7 +943,10 @@ enum BackupStore {
         let currentAccountBalanceCheckpoints = try context.fetch(FetchDescriptor<AccountBalanceCheckpointRecord>())
         let currentNetWorthVerifiedCheckpoints = try context.fetch(FetchDescriptor<NetWorthVerifiedCheckpointRecord>())
 
-        var books = Dictionary(uniqueKeysWithValues: currentBooks.map { ($0.stableID, $0) })
+        // Store rows have no unique constraint (CloudKit compatibility), so a store
+        // that already holds duplicate IDs must not trap here: the first fetched
+        // row is updated and the other copies are left untouched.
+        var books = Dictionary(currentBooks.map { ($0.stableID, $0) }, uniquingKeysWith: { first, _ in first })
         for item in package.books {
             let book = books[item.id] ?? Book(name: item.name)
             if books[item.id] == nil { context.insert(book) }
@@ -959,7 +962,7 @@ enum BackupStore {
             books[item.id] = book
         }
 
-        var accounts = Dictionary(uniqueKeysWithValues: currentAccounts.map { ($0.stableID, $0) })
+        var accounts = Dictionary(currentAccounts.map { ($0.stableID, $0) }, uniquingKeysWith: { first, _ in first })
         for item in package.accounts {
             let account = accounts[item.id] ?? Account(name: item.name, kind: item.kind)
             if accounts[item.id] == nil { context.insert(account) }
@@ -991,7 +994,7 @@ enum BackupStore {
             accounts[item.id] = account
         }
 
-        var categoriesByKey = Dictionary(uniqueKeysWithValues: currentCategories.map { ($0.key, $0) })
+        var categoriesByKey = Dictionary(currentCategories.map { ($0.key, $0) }, uniquingKeysWith: { first, _ in first })
         for item in package.categories {
             let category = categoriesByKey[item.key] ?? TxCategory(
                 key: item.key,
@@ -1013,7 +1016,7 @@ enum BackupStore {
             categoriesByKey[item.key] = category
         }
 
-        var tags = Dictionary(uniqueKeysWithValues: currentTags.map { ($0.stableID, $0) })
+        var tags = Dictionary(currentTags.map { ($0.stableID, $0) }, uniquingKeysWith: { first, _ in first })
         for item in package.tags {
             let tag = tags[item.id] ?? Tag(name: item.name)
             if tags[item.id] == nil { context.insert(tag) }
@@ -1025,7 +1028,7 @@ enum BackupStore {
             tags[item.id] = tag
         }
 
-        var transactions = Dictionary(uniqueKeysWithValues: currentTransactions.map { ($0.stableID, $0) })
+        var transactions = Dictionary(currentTransactions.map { ($0.stableID, $0) }, uniquingKeysWith: { first, _ in first })
         for item in package.transactions {
             let transaction = transactions[item.id] ?? MoneyTransaction(amount: item.amount, kind: item.kind)
             if transactions[item.id] == nil { context.insert(transaction) }
@@ -1072,7 +1075,7 @@ enum BackupStore {
             transactions[item.id] = transaction
         }
 
-        var budgets = Dictionary(uniqueKeysWithValues: currentBudgets.map { ($0.stableID, $0) })
+        var budgets = Dictionary(currentBudgets.map { ($0.stableID, $0) }, uniquingKeysWith: { first, _ in first })
         for item in package.budgets {
             let budget = budgets[item.id] ?? Budget(amount: item.amount, categoryKey: item.categoryKey, stableID: item.id)
             if budgets[item.id] == nil { context.insert(budget) }
@@ -1088,7 +1091,7 @@ enum BackupStore {
             budgets[item.id] = budget
         }
 
-        var savingsGoals = Dictionary(uniqueKeysWithValues: currentSavingsGoals.map { ($0.stableID, $0) })
+        var savingsGoals = Dictionary(currentSavingsGoals.map { ($0.stableID, $0) }, uniquingKeysWith: { first, _ in first })
         for item in package.savingsGoals {
             let goal = savingsGoals[item.id] ?? SavingsGoal(
                 name: item.name,
@@ -1113,7 +1116,7 @@ enum BackupStore {
             savingsGoals[item.id] = goal
         }
 
-        var recurringRules = Dictionary(uniqueKeysWithValues: currentRecurringRules.map { ($0.stableID, $0) })
+        var recurringRules = Dictionary(currentRecurringRules.map { ($0.stableID, $0) }, uniquingKeysWith: { first, _ in first })
         for item in package.recurringRules {
             let rule = recurringRules[item.id] ?? RecurringRule(
                 amount: item.amount,
@@ -1151,7 +1154,7 @@ enum BackupStore {
             recurringRules[item.id] = rule
         }
 
-        var recurringOccurrences = Dictionary(uniqueKeysWithValues: currentRecurringOccurrences.map { ($0.stableID, $0) })
+        var recurringOccurrences = Dictionary(currentRecurringOccurrences.map { ($0.stableID, $0) }, uniquingKeysWith: { first, _ in first })
         for item in package.recurringOccurrences {
             let occurrence = recurringOccurrences[item.id] ?? RecurringOccurrence(
                 ruleID: item.ruleID,
@@ -1168,7 +1171,7 @@ enum BackupStore {
             recurringOccurrences[item.id] = occurrence
         }
 
-        var physicalAssets = Dictionary(uniqueKeysWithValues: currentPhysicalAssets.map { ($0.stableID, $0) })
+        var physicalAssets = Dictionary(currentPhysicalAssets.map { ($0.stableID, $0) }, uniquingKeysWith: { first, _ in first })
         for item in package.physicalAssets {
             let asset = physicalAssets[item.id] ?? PhysicalAsset(
                 name: item.name,
@@ -1221,7 +1224,7 @@ enum BackupStore {
             physicalAssets[item.id] = asset
         }
 
-        var assetEvents = Dictionary(uniqueKeysWithValues: currentAssetEvents.map { ($0.stableID, $0) })
+        var assetEvents = Dictionary(currentAssetEvents.map { ($0.stableID, $0) }, uniquingKeysWith: { first, _ in first })
         for item in package.assetEvents {
             let event = assetEvents[item.id] ?? AssetEvent(
                 assetID: item.assetID,
@@ -1243,7 +1246,7 @@ enum BackupStore {
             assetEvents[item.id] = event
         }
 
-        var assetUsageEvents = Dictionary(uniqueKeysWithValues: currentAssetUsageEvents.map { ($0.stableID, $0) })
+        var assetUsageEvents = Dictionary(currentAssetUsageEvents.map { ($0.stableID, $0) }, uniquingKeysWith: { first, _ in first })
         for item in package.assetUsageEvents {
             let event = assetUsageEvents[item.id] ?? AssetUsageEvent(
                 assetID: item.assetID,
@@ -1265,7 +1268,7 @@ enum BackupStore {
             assetUsageEvents[item.id] = event
         }
 
-        var assetTransactionLinks = Dictionary(uniqueKeysWithValues: currentAssetTransactionLinks.map { ($0.stableID, $0) })
+        var assetTransactionLinks = Dictionary(currentAssetTransactionLinks.map { ($0.stableID, $0) }, uniquingKeysWith: { first, _ in first })
         for item in package.assetTransactionLinks {
             let link = assetTransactionLinks[item.id] ?? AssetTransactionLink(
                 assetID: item.assetID,
@@ -1290,7 +1293,7 @@ enum BackupStore {
             assetTransactionLinks[item.id] = link
         }
 
-        var assetRefundAllocations = Dictionary(uniqueKeysWithValues: currentAssetRefundAllocations.map { ($0.stableID, $0) })
+        var assetRefundAllocations = Dictionary(currentAssetRefundAllocations.map { ($0.stableID, $0) }, uniquingKeysWith: { first, _ in first })
         for item in package.assetRefundAllocations {
             let allocation = assetRefundAllocations[item.id] ?? AssetRefundAllocation(
                 assetTransactionLinkID: item.assetTransactionLinkID,
@@ -1310,7 +1313,7 @@ enum BackupStore {
             assetRefundAllocations[item.id] = allocation
         }
 
-        var assetValuations = Dictionary(uniqueKeysWithValues: currentAssetValuations.map { ($0.stableID, $0) })
+        var assetValuations = Dictionary(currentAssetValuations.map { ($0.stableID, $0) }, uniquingKeysWith: { first, _ in first })
         for item in package.assetValuations {
             let valuation = assetValuations[item.id] ?? AssetValuation(
                 assetID: item.assetID,
@@ -1330,7 +1333,7 @@ enum BackupStore {
             assetValuations[item.id] = valuation
         }
 
-        var receivableAssets = Dictionary(uniqueKeysWithValues: currentReceivableAssets.map { ($0.stableID, $0) })
+        var receivableAssets = Dictionary(currentReceivableAssets.map { ($0.stableID, $0) }, uniquingKeysWith: { first, _ in first })
         for item in package.receivableAssets {
             let receivable = receivableAssets[item.id] ?? ReceivableAsset(
                 name: item.name,
@@ -1364,7 +1367,7 @@ enum BackupStore {
             receivableAssets[item.id] = receivable
         }
 
-        var receivableRecoveries = Dictionary(uniqueKeysWithValues: currentReceivableRecoveries.map { ($0.stableID, $0) })
+        var receivableRecoveries = Dictionary(currentReceivableRecoveries.map { ($0.stableID, $0) }, uniquingKeysWith: { first, _ in first })
         for item in package.receivableRecoveries {
             let recovery = receivableRecoveries[item.id] ?? ReceivableRecovery(
                 receivableID: item.receivableID,
@@ -1386,7 +1389,7 @@ enum BackupStore {
             receivableRecoveries[item.id] = recovery
         }
 
-        var liabilities = Dictionary(uniqueKeysWithValues: currentLiabilities.map { ($0.stableID, $0) })
+        var liabilities = Dictionary(currentLiabilities.map { ($0.stableID, $0) }, uniquingKeysWith: { first, _ in first })
         for item in package.liabilities {
             let liability = liabilities[item.id] ?? LiabilityProfile(
                 accountID: item.accountID,
@@ -1416,7 +1419,7 @@ enum BackupStore {
             liabilities[item.id] = liability
         }
 
-        var netWorthSnapshots = Dictionary(uniqueKeysWithValues: currentNetWorthSnapshots.map { ($0.stableID, $0) })
+        var netWorthSnapshots = Dictionary(currentNetWorthSnapshots.map { ($0.stableID, $0) }, uniquingKeysWith: { first, _ in first })
         for item in package.netWorthSnapshots {
             let snapshot = netWorthSnapshots[item.id] ?? NetWorthSnapshot(
                 asOf: item.asOf,
@@ -1445,7 +1448,7 @@ enum BackupStore {
             netWorthSnapshots[item.id] = snapshot
         }
 
-        var aiChatSessions = Dictionary(uniqueKeysWithValues: currentAIChatSessions.map { ($0.stableID, $0) })
+        var aiChatSessions = Dictionary(currentAIChatSessions.map { ($0.stableID, $0) }, uniquingKeysWith: { first, _ in first })
         for item in package.aiChatSessions {
             let session = aiChatSessions[item.id] ?? AIChatSession(
                 stableID: item.id,
@@ -1468,7 +1471,7 @@ enum BackupStore {
             aiChatSessions[item.id] = session
         }
 
-        var aiChatMessages = Dictionary(uniqueKeysWithValues: currentAIChatMessages.map { ($0.stableID, $0) })
+        var aiChatMessages = Dictionary(currentAIChatMessages.map { ($0.stableID, $0) }, uniquingKeysWith: { first, _ in first })
         for item in package.aiChatMessages {
             let message = aiChatMessages[item.id] ?? AIChatMessage(
                 stableID: item.id,
@@ -1496,7 +1499,7 @@ enum BackupStore {
             aiChatMessages[item.id] = message
         }
 
-        var aiMemories = Dictionary(uniqueKeysWithValues: currentAIMemories.map { ($0.stableID, $0) })
+        var aiMemories = Dictionary(currentAIMemories.map { ($0.stableID, $0) }, uniquingKeysWith: { first, _ in first })
         for item in package.aiMemories {
             let memory = aiMemories[item.id] ?? AIMemoryRecord(
                 stableID: item.id,
@@ -1520,7 +1523,7 @@ enum BackupStore {
             aiMemories[item.id] = memory
         }
 
-        var aiRequestRuns = Dictionary(uniqueKeysWithValues: currentAIRequestRuns.map { ($0.stableID, $0) })
+        var aiRequestRuns = Dictionary(currentAIRequestRuns.map { ($0.stableID, $0) }, uniquingKeysWith: { first, _ in first })
         for item in package.aiRequestRuns {
             let run = aiRequestRuns[item.id] ?? AIRequestRunRecord(
                 stableID: item.id,
@@ -1555,7 +1558,7 @@ enum BackupStore {
             aiRequestRuns[item.id] = run
         }
 
-        var aiRequestEvents = Dictionary(uniqueKeysWithValues: currentAIRequestEvents.map { ($0.stableID, $0) })
+        var aiRequestEvents = Dictionary(currentAIRequestEvents.map { ($0.stableID, $0) }, uniquingKeysWith: { first, _ in first })
         for item in package.aiRequestEvents {
             let event = aiRequestEvents[item.id] ?? AIRequestEventRecord(
                 stableID: item.id,
@@ -1577,7 +1580,7 @@ enum BackupStore {
             aiRequestEvents[item.id] = event
         }
 
-        var aiReportSchedules = Dictionary(uniqueKeysWithValues: currentAIReportSchedules.map { ($0.stableID, $0) })
+        var aiReportSchedules = Dictionary(currentAIReportSchedules.map { ($0.stableID, $0) }, uniquingKeysWith: { first, _ in first })
         for item in package.aiReportSchedules {
             let schedule = aiReportSchedules[item.id] ?? AIReportScheduleRecord(
                 stableID: item.id,
@@ -1609,7 +1612,7 @@ enum BackupStore {
             aiReportSchedules[item.id] = schedule
         }
 
-        var budgetPlansV2 = Dictionary(uniqueKeysWithValues: currentBudgetPlansV2.map { ($0.stableID, $0) })
+        var budgetPlansV2 = Dictionary(currentBudgetPlansV2.map { ($0.stableID, $0) }, uniquingKeysWith: { first, _ in first })
         for item in package.budgetPlansV2 {
             let plan = budgetPlansV2[item.id] ?? BudgetPlanRecord(
                 stableID: item.id,
@@ -1635,7 +1638,7 @@ enum BackupStore {
             budgetPlansV2[item.id] = plan
         }
 
-        var budgetPlanRevisionsV2 = Dictionary(uniqueKeysWithValues: currentBudgetPlanRevisionsV2.map { ($0.stableID, $0) })
+        var budgetPlanRevisionsV2 = Dictionary(currentBudgetPlanRevisionsV2.map { ($0.stableID, $0) }, uniquingKeysWith: { first, _ in first })
         for item in package.budgetPlanRevisionsV2 {
             let revision = budgetPlanRevisionsV2[item.id] ?? BudgetPlanRevisionRecord(
                 stableID: item.id,
@@ -1658,7 +1661,7 @@ enum BackupStore {
             budgetPlanRevisionsV2[item.id] = revision
         }
 
-        var budgetCycleOverridesV2 = Dictionary(uniqueKeysWithValues: currentBudgetCycleOverridesV2.map { ($0.stableID, $0) })
+        var budgetCycleOverridesV2 = Dictionary(currentBudgetCycleOverridesV2.map { ($0.stableID, $0) }, uniquingKeysWith: { first, _ in first })
         for item in package.budgetCycleOverridesV2 {
             let override = budgetCycleOverridesV2[item.id] ?? BudgetCycleOverrideRecord(
                 stableID: item.id,
@@ -1681,7 +1684,7 @@ enum BackupStore {
             budgetCycleOverridesV2[item.id] = override
         }
 
-        var budgetCommitmentOccurrencesV2 = Dictionary(uniqueKeysWithValues: currentBudgetCommitmentOccurrencesV2.map { ($0.stableID, $0) })
+        var budgetCommitmentOccurrencesV2 = Dictionary(currentBudgetCommitmentOccurrencesV2.map { ($0.stableID, $0) }, uniquingKeysWith: { first, _ in first })
         for item in package.budgetCommitmentOccurrencesV2 {
             let occurrence = budgetCommitmentOccurrencesV2[item.id] ?? BudgetCommitmentOccurrenceRecord(
                 stableID: item.id,
@@ -1711,7 +1714,7 @@ enum BackupStore {
             budgetCommitmentOccurrencesV2[item.id] = occurrence
         }
 
-        var budgetChangeEventsV2 = Dictionary(uniqueKeysWithValues: currentBudgetChangeEventsV2.map { ($0.stableID, $0) })
+        var budgetChangeEventsV2 = Dictionary(currentBudgetChangeEventsV2.map { ($0.stableID, $0) }, uniquingKeysWith: { first, _ in first })
         for item in package.budgetChangeEventsV2 {
             let event = budgetChangeEventsV2[item.id] ?? BudgetChangeEventRecord(
                 stableID: item.id,
@@ -1730,7 +1733,7 @@ enum BackupStore {
             budgetChangeEventsV2[item.id] = event
         }
 
-        var budgetRules = Dictionary(uniqueKeysWithValues: currentBudgetRules.map { ($0.stableID, $0) })
+        var budgetRules = Dictionary(currentBudgetRules.map { ($0.stableID, $0) }, uniquingKeysWith: { first, _ in first })
         for item in package.budgetRules {
             let rule = budgetRules[item.id] ?? BudgetRuleRecord(
                 stableID: item.id,
@@ -1757,7 +1760,7 @@ enum BackupStore {
             budgetRules[item.id] = rule
         }
 
-        var budgetRolloverChanges = Dictionary(uniqueKeysWithValues: currentBudgetRolloverChanges.map { ($0.stableID, $0) })
+        var budgetRolloverChanges = Dictionary(currentBudgetRolloverChanges.map { ($0.stableID, $0) }, uniquingKeysWith: { first, _ in first })
         for item in package.budgetRolloverChanges {
             let change = budgetRolloverChanges[item.id] ?? BudgetRolloverChangeRecord(
                 stableID: item.id,
@@ -1775,7 +1778,7 @@ enum BackupStore {
             budgetRolloverChanges[item.id] = change
         }
 
-        var reports = Dictionary(uniqueKeysWithValues: currentReports.map { ($0.stableID, $0) })
+        var reports = Dictionary(currentReports.map { ($0.stableID, $0) }, uniquingKeysWith: { first, _ in first })
         for item in package.reports {
             let report = reports[item.id] ?? ReportRecord(
                 stableID: item.id,
@@ -1803,7 +1806,7 @@ enum BackupStore {
             reports[item.id] = report
         }
 
-        var accountBalanceCheckpoints = Dictionary(uniqueKeysWithValues: currentAccountBalanceCheckpoints.map { ($0.stableID, $0) })
+        var accountBalanceCheckpoints = Dictionary(currentAccountBalanceCheckpoints.map { ($0.stableID, $0) }, uniquingKeysWith: { first, _ in first })
         for item in package.accountBalanceCheckpoints {
             let checkpoint = accountBalanceCheckpoints[item.id] ?? AccountBalanceCheckpointRecord(
                 stableID: item.id,
@@ -1834,7 +1837,7 @@ enum BackupStore {
             accountBalanceCheckpoints[item.id] = checkpoint
         }
 
-        var netWorthVerifiedCheckpoints = Dictionary(uniqueKeysWithValues: currentNetWorthVerifiedCheckpoints.map { ($0.stableID, $0) })
+        var netWorthVerifiedCheckpoints = Dictionary(currentNetWorthVerifiedCheckpoints.map { ($0.stableID, $0) }, uniquingKeysWith: { first, _ in first })
         let verifiedItemsByCheckpoint = Dictionary(grouping: package.netWorthVerifiedItems, by: \.checkpointID)
         for item in package.netWorthVerifiedCheckpoints {
             let checkpoint = netWorthVerifiedCheckpoints[item.id] ?? NetWorthVerifiedCheckpointRecord(

@@ -434,29 +434,30 @@ struct MeowAssistantView: View {
             errorMessage = "对话记录读取失败，请重新进入：\(error.localizedDescription)"
             return
         }
-        completionByTurn = Dictionary(uniqueKeysWithValues: saved.compactMap { message in
+        // 聊天记录没有唯一约束，同一编号出现两次时只取最先读到的那条，不崩。
+        completionByTurn = Dictionary(saved.compactMap { message in
             guard let data = message.recordJSON.data(using: .utf8),
                   let metadata = try? JSONDecoder().decode(AIChatCompletionMetadata.self, from: data) else {
                 return nil
             }
             return (message.stableID, metadata)
-        })
-        reasoningByTurn = Dictionary(uniqueKeysWithValues: saved.compactMap { message in
+        }, uniquingKeysWith: { first, _ in first })
+        reasoningByTurn = Dictionary(saved.compactMap { message in
             let value = message.reasoningSummary.trimmingCharacters(in: .whitespacesAndNewlines)
             return value.isEmpty ? nil : (message.stableID, value)
-        })
-        sourcesByTurn = Dictionary(uniqueKeysWithValues: saved.compactMap { message in
+        }, uniquingKeysWith: { first, _ in first })
+        sourcesByTurn = Dictionary(saved.compactMap { message in
             let values = decodeSources(message.sourceJSON)
             return values.isEmpty ? nil : (message.stableID, values)
-        })
-        recordCards = Dictionary(uniqueKeysWithValues: saved.compactMap { message in
+        }, uniquingKeysWith: { first, _ in first })
+        recordCards = Dictionary(saved.compactMap { message in
             guard !message.recordJSON.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
                   let data = message.recordJSON.data(using: .utf8),
                   let card = try? JSONDecoder().decode(AIRecordCardState.self, from: data) else {
                 return nil
             }
             return (message.stableID, card)
-        })
+        }, uniquingKeysWith: { first, _ in first })
         recordLeases = Dictionary(uniqueKeysWithValues: recordCards.map { id, card in
             (id, AIChatOperationFence.shared.capture(sessionID: loadedSessionID, bookID: card.bookID))
         })

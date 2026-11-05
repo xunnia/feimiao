@@ -68,7 +68,8 @@ enum AssetStore {
             .filter { $0.assetID == asset.stableID }
         let transactions = try context.fetch(FetchDescriptor<MoneyTransaction>())
         let records = transactions.map(\.record)
-        let transactionByID = Dictionary(uniqueKeysWithValues: transactions.map { ($0.stableID, $0) })
+        // 账单编号重复时取最先读到的那条，不崩。
+        let transactionByID = Dictionary(transactions.map { ($0.stableID, $0) }, uniquingKeysWith: { first, _ in first })
         var acquisition = Decimal.zero
         var additional = Decimal.zero
         if links.isEmpty {

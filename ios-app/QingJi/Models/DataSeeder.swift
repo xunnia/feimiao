@@ -10,7 +10,9 @@ enum DataSeeder {
         // 幂等升级：旧版 iOS 只有一级分类，更新后补齐安卓同款两级树；
         // 历史交易只依赖 stable key，不会因名称或父级变化而丢失。
         let existingCategories = (try? context.fetch(FetchDescriptor<TxCategory>())) ?? []
-        var byKey = Dictionary(uniqueKeysWithValues: existingCategories.map { ($0.key, $0) })
+        // 分类没有唯一约束（兼容 CloudKit），库里已有同 key 的重复分类时不能崩：
+        // 只更新最先读到的那条，其余原样保留，不删除、不合并。
+        var byKey = Dictionary(existingCategories.map { ($0.key, $0) }, uniquingKeysWith: { first, _ in first })
         for (index, seed) in CategorySeed.all.enumerated() {
             let category = byKey[seed.key] ?? TxCategory(
                 key: seed.key,

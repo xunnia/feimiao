@@ -215,7 +215,7 @@ extension BudgetView {
     fileprivate func ruleSection(rules: [BudgetRule], records: [BudgetRuleRecord], bookID: UUID,
                                  today: BudgetCivilDay) -> some View {
         let sorted = budgetRulesNewestFirst(rules)
-        let spans = Dictionary(uniqueKeysWithValues: sorted.map { ($0.id, budgetRuleSpan($0, rules: rules, today: today)) })
+        let spans = Dictionary(sorted.map { ($0.id, budgetRuleSpan($0, rules: rules, today: today)) }, uniquingKeysWith: { first, _ in first })
         let live = sorted.filter { spans[$0.id]?.state != .ended }
         let ended = sorted.filter { spans[$0.id]?.state == .ended }
         VStack(alignment: .leading, spacing: 6) {
