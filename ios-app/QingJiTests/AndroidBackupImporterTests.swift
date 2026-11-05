@@ -145,6 +145,54 @@ final class AndroidBackupImporterTests: XCTestCase {
         XCTAssertEqual(package.books.map(\.id), second.books.map(\.id))
     }
 
+    func testDuplicateAndroidTransactionUUIDsKeepNewestAndRenumberRestLikeAndroid() throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("android-duplicate-uuid-\(UUID().uuidString).db")
+        var database: OpaquePointer?
+        XCTAssertEqual(sqlite3_open_v2(url.path, &database, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE, nil), SQLITE_OK)
+        let db = try XCTUnwrap(database)
+        defer { sqlite3_close(db); try? FileManager.default.removeItem(at: url) }
+        // 三笔账单共用一个编号（第 2 行是大写带横线的写法），第 4 行是第 2 行的退款。
+        try execute(db, """
+            CREATE TABLE books (id INTEGER PRIMARY KEY, uuid TEXT, name TEXT, sort_order INTEGER);
+            INSERT INTO books VALUES (1, 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', '总账本', 0);
+            INSERT INTO books VALUES (2, 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', '生意', 1);
+            CREATE TABLE transactions (id INTEGER PRIMARY KEY, uuid TEXT, book_id INTEGER, kind TEXT, amount TEXT, note TEXT, date_ms INTEGER, refund_of INTEGER);
+            INSERT INTO transactions VALUES (1, 'abababababababababababababababab', 1, 'expense', '30', '晚饭', 1751454000000, NULL);
+            INSERT INTO transactions VALUES (2, 'ABABABAB-ABAB-ABAB-ABAB-ABABABABABAB', 2, 'expense', '20', '午饭', 1751342400000, NULL);
+            INSERT INTO transactions VALUES (3, 'abababababababababababababababab', 1, 'expense', '10', '早饭', 1751342400000, NULL);
+            INSERT INTO transactions VALUES (4, 'efefefefefefefefefefefefefefefef', 2, 'expense', '-5', '退款', 1751360000000, 2);
+            CREATE TABLE transaction_books (transaction_id INTEGER, book_id INTEGER);
+            INSERT INTO transaction_books VALUES (2,1),(2,2);
+            """)
+        let databaseData = try Data(contentsOf: url)
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let package = try decoder.decode(
+            FeimiaoBackupPackage.self,
+            from: AndroidBackupImporter.canonicalData(from: databaseData, databaseVersion: 51, exportedAt: Date())
+        )
+        XCTAssertEqual(package.transactions.count, 4)
+        XCTAssertEqual(Set(package.transactions.map(\.id)).count, 4)
+        let byNote = Dictionary(uniqueKeysWithValues: package.transactions.map { ($0.note, $0) })
+        // 时间新的那笔保留原编号；同一时间的按安卓行号大的在前。新编号和安卓表格恢复算出来的一致。
+        XCTAssertEqual(byNote["晚饭"]?.id, UUID(uuidString: "ABABABAB-ABAB-ABAB-ABAB-ABABABABABAB"))
+        XCTAssertEqual(byNote["早饭"]?.id, UUID(uuidString: "4A59A4DA-06FB-AEDD-DD21-962E263EDDA9"))
+        XCTAssertEqual(byNote["午饭"]?.id, UUID(uuidString: "083DA2F4-6CBD-4108-03B1-7A01E8280EC6"))
+        XCTAssertEqual(byNote["退款"]?.id, UUID(uuidString: "EFEFEFEF-EFEF-EFEF-EFEF-EFEFEFEFEFEF"))
+        XCTAssertEqual(byNote["退款"]?.refundOfID, byNote["午饭"]?.id)
+        let business = try XCTUnwrap(package.books.first { $0.name == "生意" }?.id)
+        XCTAssertEqual(byNote["午饭"]?.scenarioBookIDs, [business])
+        XCTAssertEqual(byNote["退款"]?.scenarioBookIDs, [business])
+        XCTAssertNil(byNote["晚饭"]?.scenarioBookIDs)
+        XCTAssertNil(byNote["早饭"]?.scenarioBookIDs)
+
+        let again = try decoder.decode(
+            FeimiaoBackupPackage.self,
+            from: AndroidBackupImporter.canonicalData(from: databaseData, databaseVersion: 51, exportedAt: Date())
+        )
+        XCTAssertEqual(package.transactions.map(\.id), again.transactions.map(\.id))
+    }
+
     private func execute(_ database: OpaquePointer, _ sql: String) throws {
         var errorMessage: UnsafeMutablePointer<CChar>?
         let result = sql.withCString {

@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
 
+import 'package:crypto/crypto.dart';
 import 'package:decimal/decimal.dart';
 import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as p;
@@ -12492,17 +12493,27 @@ class AppRepository extends ChangeNotifier {
       'transactions',
       columns: ['id', 'uuid'],
       where: "uuid <> ''",
+      orderBy: 'id',
     );
     final existingUuidIds = {
       for (final row in knownTransactions)
         uuidKey(row['uuid'] as String): row['id'] as int
     };
+    final dbIdsByKey = <String, List<int>>{};
+    for (final row in knownTransactions) {
+      (dbIdsByKey[uuidKey(row['uuid'] as String)] ??= <int>[])
+          .add(row['id'] as int);
+    }
     final existingUuids = existingUuidIds.keys.toSet();
     final existingFingerprints = await _existingImportFingerprints();
-    final uuidToId = <String, int>{};
+    // 文件里的原编号 → 本次恢复后对应的账单 id；编号重复时按文件顺序有多笔。
+    final fileIdsByKey = <String, List<int>>{};
+    final fileRefundedById = <int, Decimal>{};
     var inserted = 0;
     var skipped = 0;
     var refundsAttached = 0;
+    var renumbered = 0;
+    var ambiguousRefunds = 0;
 
     String normalizedName(String name) => name.trim().toLowerCase();
 
@@ -12666,15 +12677,17 @@ class AppRepository extends ChangeNotifier {
         return null;
       }
 
-      String nextUuid(String raw) {
+      String? validKey(String raw) {
         final u = raw.trim();
         if (RegExp(
                 r'^(?:[0-9a-fA-F]{32}|[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})$')
             .hasMatch(u)) {
           return uuidKey(u);
         }
-        return _newUuid();
+        return null;
       }
+
+      String nextUuid(String raw) => validKey(raw) ?? _newUuid();
 
       Map<String, Object?> baseMap(FeimiaoImportRow row) {
         final accountId = accountIdByName(row.accountName);
@@ -12722,18 +12735,43 @@ class AppRepository extends ChangeNotifier {
         };
       }
 
+      final keys = [for (final row in rows) validKey(row.uuid)];
+      final duplicatePlan = await _planDuplicateUuidImport(
+        txn,
+        rows: rows,
+        keys: keys,
+        dbIdsByKey: dbIdsByKey,
+      );
+      void recordFileId(String key, int id) {
+        final ids = fileIdsByKey[key] ??= <int>[];
+        if (!ids.contains(id)) ids.add(id);
+      }
+
       final explicitRefundParents = {
         for (final r in rows)
           if (r.refundOfUuid.trim().isNotEmpty) uuidKey(r.refundOfUuid),
       };
-      final originals =
-          rows.where((r) => r.refundOfUuid.trim().isEmpty).toList();
-      for (final row in originals) {
-        final uuid = nextUuid(row.uuid);
+      for (var i = 0; i < rows.length; i++) {
+        final row = rows[i];
+        if (row.refundOfUuid.trim().isNotEmpty) continue;
+        final fileKey = keys[i];
+        final matchedId = duplicatePlan.matchedIds[i];
+        if (matchedId != null) {
+          // 编号重复的组里认出了手机里已有的那笔；配对来的（改过的）不并账本。
+          if (duplicatePlan.exactMatches.contains(i)) {
+            await restoreBooks(matchedId, row, merge: true);
+          }
+          recordFileId(fileKey!, matchedId);
+          fileRefundedById[matchedId] = row.refunded;
+          skipped++;
+          continue;
+        }
+        final uuid = duplicatePlan.assignedUuids[i] ?? nextUuid(row.uuid);
         if (existingUuids.contains(uuid)) {
-          final id = existingUuidIds[uuid] ?? uuidToId[uuid];
+          final id = existingUuidIds[uuid] ?? fileIdsByKey[uuid]?.firstOrNull;
           if (id != null) {
-            uuidToId[uuid] = id;
+            recordFileId(uuid, id);
+            fileRefundedById[id] = row.refunded;
             await restoreBooks(id, row, merge: true);
           }
           skipped++;
@@ -12759,13 +12797,15 @@ class AppRepository extends ChangeNotifier {
           'refund_of': null,
         });
         await restoreBooks(id, row);
-        uuidToId[uuid] = id;
+        recordFileId(fileKey ?? uuid, id);
+        fileRefundedById[id] = row.refunded;
         existingUuids.add(uuid);
         inserted++;
+        if (fileKey != null && fileKey != uuid) renumbered++;
 
         if (row.refunded > Decimal.zero &&
             row.amount > Decimal.zero &&
-            !explicitRefundParents.contains(uuid)) {
+            !explicitRefundParents.contains(fileKey ?? uuid)) {
           if (row.refunded > row.amount) {
             skipped++;
             continue;
@@ -12793,35 +12833,17 @@ class AppRepository extends ChangeNotifier {
         }
       }
 
-      final refunds = rows.where((r) => r.refundOfUuid.trim().isNotEmpty);
-      for (final row in refunds) {
-        final uuid = nextUuid(row.uuid);
-        if (existingUuids.contains(uuid)) {
-          skipped++;
-          continue;
-        }
-        final originalId = uuidToId[uuidKey(row.refundOfUuid)] ??
-            existingUuidIds[uuidKey(row.refundOfUuid)];
-        if (originalId == null) {
-          skipped++;
-          continue;
-        }
-        final requestedRefund = normalizeMoneyAmount(row.amount.abs());
+      Future<({Decimal amount, Decimal refunded, bool isRefund})?> refundRoom(
+          int originalId) async {
         final originalRows = await txn.query(
           'transactions',
-          columns: ['amount'],
+          columns: ['amount', 'refund_of'],
           where: 'id = ?',
           whereArgs: [originalId],
           limit: 1,
         );
-        if (originalRows.isEmpty) {
-          skipped++;
-          continue;
-        }
-        final originalAmount =
-            Decimal.tryParse(originalRows.first['amount'] as String? ?? '') ??
-                Decimal.zero;
-        var existingRefunded = Decimal.zero;
+        if (originalRows.isEmpty) return null;
+        var refunded = Decimal.zero;
         final existingRefundRows = await txn.query(
           'transactions',
           columns: ['amount'],
@@ -12829,15 +12851,71 @@ class AppRepository extends ChangeNotifier {
           whereArgs: [originalId],
         );
         for (final existingRefund in existingRefundRows) {
-          existingRefunded +=
+          refunded +=
               (Decimal.tryParse(existingRefund['amount'] as String? ?? '') ??
                       Decimal.zero)
                   .abs();
         }
-        if (requestedRefund > originalAmount - existingRefunded) {
+        return (
+          amount:
+              Decimal.tryParse(originalRows.first['amount'] as String? ?? '') ??
+                  Decimal.zero,
+          refunded: refunded,
+          isRefund: originalRows.first['refund_of'] != null,
+        );
+      }
+
+      for (var i = 0; i < rows.length; i++) {
+        final row = rows[i];
+        if (row.refundOfUuid.trim().isEmpty) continue;
+        if (duplicatePlan.matchedIds.containsKey(i)) {
           skipped++;
           continue;
         }
+        final refundKey = keys[i];
+        final uuid = duplicatePlan.assignedUuids[i] ?? nextUuid(row.uuid);
+        if (existingUuids.contains(uuid)) {
+          skipped++;
+          continue;
+        }
+        final parentKey = uuidKey(row.refundOfUuid);
+        final candidates = fileIdsByKey[parentKey] ??
+            _duplicateFamilyIds(parentKey, dbIdsByKey);
+        if (candidates.isEmpty) {
+          skipped++;
+          continue;
+        }
+        final requestedRefund = normalizeMoneyAmount(row.amount.abs());
+        var originalId = candidates.first;
+        if (candidates.length > 1) {
+          // 原账单编号重复：优先挂到文件里记着有这笔退款、且还能退的那笔。
+          int? preferred;
+          int? withRoom;
+          for (final id in candidates) {
+            final room = await refundRoom(id);
+            if (room == null || room.isRefund) continue;
+            if (requestedRefund > room.amount - room.refunded) continue;
+            withRoom ??= id;
+            final expected = fileRefundedById[id];
+            if (expected != null &&
+                requestedRefund <= expected - room.refunded) {
+              preferred = id;
+              break;
+            }
+          }
+          final chosen = preferred ?? withRoom;
+          if (chosen == null) {
+            skipped++;
+            continue;
+          }
+          originalId = chosen;
+        }
+        final room = await refundRoom(originalId);
+        if (room == null || requestedRefund > room.amount - room.refunded) {
+          skipped++;
+          continue;
+        }
+        final ambiguousParent = candidates.length > 1;
         final inferredEventType = row.eventType ??
             (row.note.trim() == '报销到账'
                 ? TransactionEventType.reimbursement
@@ -12871,6 +12949,8 @@ class AppRepository extends ChangeNotifier {
         );
         existingUuids.add(uuid);
         refundsAttached++;
+        if (refundKey != null && refundKey != uuid) renumbered++;
+        if (ambiguousParent) ambiguousRefunds++;
       }
     });
 
@@ -12893,6 +12973,8 @@ class AppRepository extends ChangeNotifier {
       inserted: inserted,
       skippedDuplicates: skipped,
       refundsAttached: refundsAttached,
+      renumbered: renumbered,
+      ambiguousRefunds: ambiguousRefunds,
     );
   }
 
@@ -12954,6 +13036,212 @@ class AppRepository extends ChangeNotifier {
       (result[fp] ??= <int>[]).add(r['id'] as int);
     }
     return result;
+  }
+
+  static const int _maxDuplicateUuidRank = 64;
+
+  /// 文件里编号重复时，多出来的那笔按固定规则换新编号：同一份文件
+  /// 在哪台手机、导入几次都得到同一个编号。iOS 导入安卓备份用同一规则。
+  static String _derivedDuplicateUuid(String root, int rank) => sha256
+      .convert(utf8.encode('feimiao-dup:$root:$rank'))
+      .toString()
+      .substring(0, 32);
+
+  static List<int> _duplicateFamilyIds(
+    String key,
+    Map<String, List<int>> dbIdsByKey,
+  ) {
+    final ids = [...?dbIdsByKey[key]];
+    for (var rank = 1; rank <= _maxDuplicateUuidRank; rank++) {
+      final derived = dbIdsByKey[_derivedDuplicateUuid(key, rank)];
+      if (derived == null) break;
+      ids.addAll(derived);
+    }
+    return ids;
+  }
+
+  /// 编号重复的账单按组处理：先按金额、时间、备注认出手机里已有的那笔，
+  /// 再把改过的账单和手机里剩下的同组账单配对，最后剩下的才新增；
+  /// 新增时按文件顺序（时间新的在前）先占原编号，其余换新编号。
+  Future<
+      ({
+        Map<int, int> matchedIds,
+        Set<int> exactMatches,
+        Map<int, String> assignedUuids,
+      })> _planDuplicateUuidImport(
+    DatabaseExecutor txn, {
+    required List<FeimiaoImportRow> rows,
+    required List<String?> keys,
+    required Map<String, List<int>> dbIdsByKey,
+  }) async {
+    final matchedIds = <int, int>{};
+    final exactMatches = <int>{};
+    final assignedUuids = <int, String>{};
+    final fileCount = <String, int>{};
+    for (final key in keys) {
+      if (key != null) fileCount[key] = (fileCount[key] ?? 0) + 1;
+    }
+    final roots = {
+      for (final e in fileCount.entries)
+        if (e.value > 1) e.key,
+      for (final e in dbIdsByKey.entries)
+        if (e.value.length > 1) e.key,
+    };
+    if (roots.isEmpty) {
+      return (
+        matchedIds: matchedIds,
+        exactMatches: exactMatches,
+        assignedUuids: assignedUuids,
+      );
+    }
+    final familyKeys = <String, List<String>>{};
+    final rootOf = <String, String>{for (final root in roots) root: root};
+    for (final root in roots) {
+      final family = [root];
+      for (var rank = 1; rank <= _maxDuplicateUuidRank; rank++) {
+        final derived = _derivedDuplicateUuid(root, rank);
+        family.add(derived);
+        rootOf.putIfAbsent(derived, () => root);
+      }
+      familyKeys[root] = family;
+    }
+    final groups = <String, List<int>>{};
+    for (var i = 0; i < rows.length; i++) {
+      final key = keys[i];
+      final root = key == null ? null : rootOf[key];
+      if (root != null) (groups[root] ??= <int>[]).add(i);
+    }
+    final claimed = dbIdsByKey.keys.toSet();
+
+    String fingerprintOf(List<String> fact) => fact.join('|');
+    // 原账单和退款永不互配；方向最重要，其次金额、时间、备注。
+    int similarity(List<String> a, List<String> b) {
+      if (a[0] != b[0]) return -1;
+      return (a[1] == b[1] ? 8 : 0) +
+          (a[2] == b[2] ? 4 : 0) +
+          (a[3] == b[3] ? 2 : 0) +
+          (a[4] == b[4] ? 1 : 0);
+    }
+
+    List<String> factOf({
+      required bool refund,
+      required TransactionKind kind,
+      required Decimal amount,
+      required DateTime date,
+      required String note,
+    }) {
+      final minute =
+          DateTime(date.year, date.month, date.day, date.hour, date.minute);
+      final trimmed = note.trim();
+      return [
+        refund ? 'r' : 'o',
+        kind.toJson(),
+        amount.toString(),
+        minute.millisecondsSinceEpoch.toString(),
+        refund && trimmed.isEmpty ? '退款' : trimmed,
+      ];
+    }
+
+    final pending = <(int, String)>[];
+    for (final entry in groups.entries) {
+      final root = entry.key;
+      final keyOfDbId = <int, String>{
+        for (final key in familyKeys[root]!)
+          for (final id in dbIdsByKey[key] ?? const <int>[]) id: key,
+      };
+      final dbFacts = <int, List<String>>{};
+      if (keyOfDbId.isNotEmpty) {
+        final ids = keyOfDbId.keys.toList();
+        final dbRows = await txn.query(
+          'transactions',
+          columns: ['id', 'kind', 'amount', 'date_ms', 'note', 'refund_of'],
+          where: 'id IN (${List.filled(ids.length, '?').join(',')})',
+          whereArgs: ids,
+          orderBy: 'id',
+        );
+        for (final r in dbRows) {
+          dbFacts[r['id'] as int] = factOf(
+            refund: r['refund_of'] != null,
+            kind: TransactionKind.fromJson(r['kind'] as String),
+            amount: Decimal.parse(r['amount'] as String),
+            date: DateTime.fromMillisecondsSinceEpoch(r['date_ms'] as int),
+            note: r['note'] as String? ?? '',
+          );
+        }
+      }
+      final freeDbIds = dbFacts.keys.toList();
+      final fileFacts = <int, List<String>>{};
+      final leftover = <int>[];
+      for (final i in entry.value) {
+        final row = rows[i];
+        final refund = row.refundOfUuid.trim().isNotEmpty;
+        final fact = fileFacts[i] = factOf(
+          refund: refund,
+          kind: row.kind,
+          amount: refund
+              ? Decimal.zero - normalizeMoneyAmount(row.amount.abs())
+              : normalizeMoneyAmount(row.amount),
+          date: row.date,
+          note: row.note,
+        );
+        final same = freeDbIds
+            .where((id) => fingerprintOf(dbFacts[id]!) == fingerprintOf(fact))
+            .toList();
+        if (same.isEmpty) {
+          leftover.add(i);
+          continue;
+        }
+        final id = same.firstWhere((id) => keyOfDbId[id] == keys[i],
+            orElse: () => same.first);
+        freeDbIds.remove(id);
+        matchedIds[i] = id;
+        exactMatches.add(i);
+      }
+      // 剩下的多半是导出后又改过的账单，和手机里剩下的同组账单配对。
+      final candidates = <(int, int, int)>[
+        for (final i in leftover)
+          for (final id in freeDbIds)
+            if (similarity(fileFacts[i]!, dbFacts[id]!) >= 0)
+              (similarity(fileFacts[i]!, dbFacts[id]!), i, id),
+      ]..sort((a, b) {
+          if (a.$1 != b.$1) return b.$1.compareTo(a.$1);
+          if (a.$2 != b.$2) return a.$2.compareTo(b.$2);
+          return a.$3.compareTo(b.$3);
+        });
+      final pairedFiles = <int>{};
+      final pairedDbIds = <int>{};
+      for (final (_, i, id) in candidates) {
+        if (pairedFiles.contains(i) || pairedDbIds.contains(id)) continue;
+        pairedFiles.add(i);
+        pairedDbIds.add(id);
+        matchedIds[i] = id;
+      }
+      for (final i in leftover) {
+        if (!pairedFiles.contains(i)) pending.add((i, root));
+      }
+    }
+
+    // 新增的按文件顺序先占自己的原编号，占不到的再换新编号。
+    pending.sort((a, b) => a.$1.compareTo(b.$1));
+    final needNew = <(int, String)>[];
+    for (final (i, root) in pending) {
+      if (claimed.add(keys[i]!)) {
+        assignedUuids[i] = keys[i]!;
+      } else {
+        needNew.add((i, root));
+      }
+    }
+    for (final (i, root) in needNew) {
+      final free = familyKeys[root]!.skip(1).where((k) => !claimed.contains(k));
+      final uuid = free.isEmpty ? _newUuid() : free.first;
+      claimed.add(uuid);
+      assignedUuids[i] = uuid;
+    }
+    return (
+      matchedIds: matchedIds,
+      exactMatches: exactMatches,
+      assignedUuids: assignedUuids,
+    );
   }
 
   String _refundMatchKey(String text) {
@@ -20448,6 +20736,7 @@ class AppRepository extends ChangeNotifier {
     var snapshotCount = 0;
     var liabilityCount = 0;
     var unresolvedTransactionLinkCount = 0;
+    var ambiguousTransactionLinkCount = 0;
     var unresolvedSavingsGoalLinkCount = 0;
     var rejectedLinkCount = 0;
 
@@ -20750,9 +21039,18 @@ class AppRepository extends ChangeNotifier {
           // Export-local integers must never address unrelated restored rows.
           for (final prefix in ['transaction', 'interest_transaction']) {
             final transactionUuid = metadata['${prefix}_uuid'] as String? ?? '';
-            metadata['${prefix}_id'] = transactionUuid.isEmpty
-                ? null
-                : await idByUuid('transactions', transactionUuid);
+            final txRows = transactionUuid.isEmpty
+                ? const <Map<String, Object?>>[]
+                : await txn.query(
+                    'transactions',
+                    columns: ['id'],
+                    where: 'uuid = ?',
+                    whereArgs: [transactionUuid],
+                  );
+            // 编号对应多笔账单时拿不准该挂哪笔，不自动关联。
+            if (txRows.length > 1) ambiguousTransactionLinkCount++;
+            metadata['${prefix}_id'] =
+                txRows.length == 1 ? txRows.single['id'] as int : null;
           }
         }
         final newEventId = await txn.insert('asset_events', {
@@ -20896,15 +21194,32 @@ class AppRepository extends ChangeNotifier {
           ],
           where: 'uuid = ?',
           whereArgs: [transactionUuid],
-          limit: 1,
         );
         if (txRows.isEmpty) {
           unresolvedTransactionLinkCount++;
           continue;
         }
+        final uuid = uuidOf(raw);
+        if (txRows.length > 1) {
+          // 编号对应多笔账单时拿不准该挂哪笔，不自动关联；
+          // 本机已有这条关联（用户手动挂过）就照旧沿用。
+          final existing = await txn.query(
+            'asset_transaction_links',
+            columns: ['id', 'transaction_id'],
+            where: 'uuid = ?',
+            whereArgs: [uuid],
+            limit: 1,
+          );
+          if (existing.isEmpty) {
+            ambiguousTransactionLinkCount++;
+          } else if (txRows
+              .any((row) => row['id'] == existing.single['transaction_id'])) {
+            importedLinkIdByUuid[uuid] = existing.single['id'] as int;
+          }
+          continue;
+        }
         final transaction = txRows.single;
         final transactionId = transaction['id'] as int;
-        final uuid = uuidOf(raw);
         final rawLinkType = str(raw, 'link_type', 'source_transaction');
         if (!AssetTransactionLinkType.values
             .any((type) => type.storageKey == rawLinkType)) {
@@ -21139,7 +21454,6 @@ class AppRepository extends ChangeNotifier {
           columns: ['id', 'refund_of', 'amount'],
           where: 'uuid = ?',
           whereArgs: [refundUuid],
-          limit: 1,
         );
         if (refundRows.isEmpty) {
           unresolvedTransactionLinkCount++;
@@ -21147,6 +21461,11 @@ class AppRepository extends ChangeNotifier {
         }
         final uuid = uuidOf(raw);
         if (await existsByUuid('asset_refund_allocations', uuid)) continue;
+        if (refundRows.length > 1) {
+          // 退款编号对应多笔账单时拿不准，不自动关联。
+          ambiguousTransactionLinkCount++;
+          continue;
+        }
         final refund = refundRows.single;
         final cents = intOr(raw['allocated_refund_cents'], 0);
         final allocationStatus = str(raw, 'status', 'active');
@@ -21206,9 +21525,11 @@ class AppRepository extends ChangeNotifier {
             columns: ['id', 'account_id'],
             where: 'uuid = ?',
             whereArgs: [transactionUuid],
-            limit: 1,
           );
-          if (txRows.isNotEmpty) {
+          if (txRows.length > 1) {
+            // 编号对应多笔账单时拿不准该挂哪笔，不自动关联。
+            ambiguousTransactionLinkCount++;
+          } else if (txRows.isNotEmpty) {
             transactionId = txRows.first['id'] as int;
             targetAccountId ??= txRows.first['account_id'] as int?;
           }
@@ -21523,6 +21844,7 @@ class AppRepository extends ChangeNotifier {
       snapshots: snapshotCount,
       liabilities: liabilityCount,
       unresolvedTransactionLinks: unresolvedTransactionLinkCount,
+      ambiguousTransactionLinks: ambiguousTransactionLinkCount,
       unresolvedSavingsGoalLinks: unresolvedSavingsGoalLinkCount,
       rejectedLinks: rejectedLinkCount,
     );

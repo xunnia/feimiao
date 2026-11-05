@@ -3687,6 +3687,175 @@ void main() {
     await repo.closeForTest();
   });
 
+  // 旧版随机编号可能撞号：两笔账单用着同一个编号。
+  const sharedUuid = 'abababababababababababababababab';
+  // sha256('feimiao-dup:<原编号>:1') 的前 32 位；iOS 导入安卓备份用同一规则。
+  const derivedUuid = '4a59a4da06fbaedddd21962e263edda9';
+
+  FeimiaoImportRow duplicateUuidRow(
+    AppRepository repo, {
+    required String uuid,
+    required String note,
+    required String amount,
+    required DateTime date,
+    String refunded = '0',
+    String refundOfUuid = '',
+  }) {
+    final category =
+        repo.categoriesForKindRanked(TransactionKind.expense).first;
+    return FeimiaoImportRow(
+      uuid: uuid,
+      refundOfUuid: refundOfUuid,
+      role: refundOfUuid.isEmpty ? 'transaction' : '退款',
+      kind: TransactionKind.expense,
+      amount: Decimal.parse(amount),
+      refunded: Decimal.parse(refunded),
+      categoryKey: category.key,
+      categoryName: category.nameZh,
+      accountName: repo.accounts.first.name,
+      note: note,
+      date: date,
+      timePrecision: TransactionTimePrecision.exact,
+    );
+  }
+
+  Map<String, String> uuidsByNote(AppRepository repo) => {
+        for (final t in repo.visibleTransactions) t.note: t.uuid,
+      };
+
+  test('肥喵导出恢复：文件里两笔账单编号重复时都保留，时间新的那笔用原编号', () async {
+    final repo = await freshRepo();
+    // 导出按时间新到旧排列，晚饭在前。
+    List<FeimiaoImportRow> fileRows() => [
+          duplicateUuidRow(repo,
+              uuid: sharedUuid,
+              note: '晚饭',
+              amount: '30',
+              date: DateTime(2026, 7, 2, 19)),
+          duplicateUuidRow(repo,
+              uuid: sharedUuid,
+              note: '午饭',
+              amount: '20',
+              date: DateTime(2026, 7, 1, 12)),
+        ];
+
+    final first = await repo.importFeimiaoExportRows(fileRows());
+    expect(first.inserted, 2);
+    expect(first.skippedDuplicates, 0);
+    expect(first.renumbered, 1);
+    expect(uuidsByNote(repo), {'晚饭': sharedUuid, '午饭': derivedUuid});
+
+    // 同一份文件再导入，不多出账单。
+    final again = await repo.importFeimiaoExportRows(fileRows());
+    expect(again.inserted, 0);
+    expect(again.skippedDuplicates, 2);
+    expect(again.renumbered, 0);
+    expect(repo.visibleTransactions, hasLength(2));
+    await repo.closeForTest();
+  });
+
+  test('肥喵导出恢复：旧版丢掉的重复编号账单，用原文件再导入能找回', () async {
+    final repo = await freshRepo();
+    final dinner = duplicateUuidRow(repo,
+        uuid: sharedUuid,
+        note: '晚饭',
+        amount: '30',
+        date: DateTime(2026, 7, 2, 19));
+    final lunch = duplicateUuidRow(repo,
+        uuid: sharedUuid,
+        note: '午饭',
+        amount: '20',
+        date: DateTime(2026, 7, 1, 12));
+    // 旧版恢复只留下了文件里的第一笔。
+    await repo.importFeimiaoExportRows([dinner]);
+    expect(repo.visibleTransactions, hasLength(1));
+
+    final result = await repo.importFeimiaoExportRows([dinner, lunch]);
+    expect(result.inserted, 1);
+    expect(result.skippedDuplicates, 1);
+    expect(result.renumbered, 1);
+    expect(uuidsByNote(repo), {'晚饭': sharedUuid, '午饭': derivedUuid});
+    await repo.closeForTest();
+  });
+
+  test('肥喵导出恢复：手机里已有两笔同编号账单（其中一笔改过）时，恢复不多出账单', () async {
+    final repo = await freshRepo();
+    const tempUuid = 'cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd';
+    final dinner = duplicateUuidRow(repo,
+        uuid: sharedUuid,
+        note: '晚饭',
+        amount: '30',
+        date: DateTime(2026, 7, 2, 19));
+    final lunch = duplicateUuidRow(repo,
+        uuid: sharedUuid,
+        note: '午饭',
+        amount: '20',
+        date: DateTime(2026, 7, 1, 12));
+    await repo.importFeimiaoExportRows([
+      dinner,
+      duplicateUuidRow(repo,
+          uuid: tempUuid,
+          note: '午饭',
+          amount: '20',
+          date: DateTime(2026, 7, 1, 12)),
+    ]);
+    // 模拟旧版随机编号撞号，且导出后午饭金额被改过。
+    await repo.debugDb.update('transactions', {'uuid': sharedUuid},
+        where: 'uuid = ?', whereArgs: [tempUuid]);
+    await repo.debugDb.update('transactions', {'amount': '25'},
+        where: 'note = ?', whereArgs: ['午饭']);
+
+    final result = await repo.importFeimiaoExportRows([dinner, lunch]);
+    expect(result.inserted, 0);
+    expect(result.skippedDuplicates, 2);
+    expect(result.renumbered, 0);
+    expect(repo.visibleTransactions, hasLength(2));
+    await repo.closeForTest();
+  });
+
+  test('肥喵导出恢复：退款的原账单编号重复时，挂到还能退的那笔并提示核对', () async {
+    final repo = await freshRepo();
+    // 导出按时间新到旧：午饭在前，打车和它的退款在后。
+    List<FeimiaoImportRow> fileRows() => [
+          duplicateUuidRow(repo,
+              uuid: sharedUuid,
+              note: '午饭',
+              amount: '20',
+              date: DateTime(2026, 7, 3, 12)),
+          duplicateUuidRow(repo,
+              uuid: 'efefefefefefefefefefefefefefefef',
+              refundOfUuid: sharedUuid,
+              note: '退款',
+              amount: '15',
+              date: DateTime(2026, 7, 1, 9)),
+          duplicateUuidRow(repo,
+              uuid: sharedUuid,
+              note: '打车',
+              amount: '40',
+              refunded: '15',
+              date: DateTime(2026, 7, 1, 9)),
+        ];
+
+    final result = await repo.importFeimiaoExportRows(fileRows());
+    expect(result.inserted, 2);
+    expect(result.refundsAttached, 1);
+    expect(result.renumbered, 1);
+    expect(result.ambiguousRefunds, 1);
+    expect(uuidsByNote(repo), {'午饭': sharedUuid, '打车': derivedUuid});
+    final taxi = repo.visibleTransactions.singleWhere((t) => t.note == '打车');
+    final lunch = repo.visibleTransactions.singleWhere((t) => t.note == '午饭');
+    expect(repo.refundedAmountOf(taxi.id), Decimal.parse('15'));
+    expect(repo.refundedAmountOf(lunch.id), Decimal.zero);
+
+    final again = await repo.importFeimiaoExportRows(fileRows());
+    expect(again.inserted, 0);
+    expect(again.refundsAttached, 0);
+    expect(again.skippedDuplicates, 3);
+    expect(repo.refundedAmountOf(taxi.id), Decimal.parse('15'));
+    expect(repo.refundedAmountOf(lunch.id), Decimal.zero);
+    await repo.closeForTest();
+  });
+
   test('肥喵导出恢复：保留跨月退款的到账日期、账户和证据质量', () async {
     final repo = await freshRepo();
     final category =

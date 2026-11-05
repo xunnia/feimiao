@@ -369,6 +369,7 @@ enum AndroidBackupImporter {
         for row in transactionRows {
             if let id = row.integer("id") { transactionIDs[id] = stableID(row.string("uuid"), table: "transactions", id: id) }
         }
+        renumberDuplicateTransactionIDs(&transactionIDs, rows: transactionRows)
         var memberships: [Int64: Set<UUID>] = [:]
         for row in transactionBookRows {
             guard let transactionID = row.integer("transaction_id"), transactionIDs[transactionID] != nil,
@@ -1415,6 +1416,53 @@ enum AndroidBackupImporter {
         if let uuid = UUID(uuidString: normalizeUUID(trimmed)) { return uuid }
         let seed = "\(table):\(trimmed.isEmpty ? String(id ?? 0) : trimmed)"
         let digest = Array(SHA256.hash(data: Data(seed.utf8)))
+        var value: uuid_t = (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+        withUnsafeMutableBytes(of: &value) { bytes in
+            for index in 0..<16 { bytes[index] = digest[index] }
+        }
+        return UUID(uuid: value)
+    }
+
+    private static let maxDuplicateTransactionRank = 64
+
+    /// 安卓库里多笔账单共用一个编号时，时间新的那笔保留原编号，其余按
+    /// 固定规则换新编号（与安卓表格恢复同一规则、同一顺序）。退款、账本、
+    /// 资产关联都按安卓行号找账单，会跟着换；同一份备份导入几次编号都不变。
+    private static func renumberDuplicateTransactionIDs(_ ids: inout [Int64: UUID], rows: [SQLiteRow]) {
+        var rowIDsByStable: [UUID: [Int64]] = [:]
+        for (rowID, stable) in ids { rowIDsByStable[stable, default: []].append(rowID) }
+        let duplicated = rowIDsByStable.filter { $0.value.count > 1 }
+        guard !duplicated.isEmpty else { return }
+        var dateByRowID: [Int64: Int64] = [:]
+        for row in rows {
+            if let id = row.integer("id") { dateByRowID[id] = row.integer("date_ms") ?? Int64.min }
+        }
+        var claimed = Set(ids.values)
+        for (stable, rowIDs) in duplicated.sorted(by: { $0.key.uuidString < $1.key.uuidString }) {
+            let ordered = rowIDs.sorted { lhs, rhs in
+                let left = dateByRowID[lhs] ?? Int64.min
+                let right = dateByRowID[rhs] ?? Int64.min
+                return left != right ? left > right : lhs > rhs
+            }
+            let root = stable.uuidString.replacingOccurrences(of: "-", with: "").lowercased()
+            var rank = 1
+            for rowID in ordered.dropFirst() {
+                var assigned: UUID?
+                while rank <= maxDuplicateTransactionRank {
+                    let candidate = derivedDuplicateTransactionID(root: root, rank: rank)
+                    rank += 1
+                    if claimed.insert(candidate).inserted {
+                        assigned = candidate
+                        break
+                    }
+                }
+                ids[rowID] = assigned ?? stableID("", table: "transactions-duplicate", id: rowID)
+            }
+        }
+    }
+
+    private static func derivedDuplicateTransactionID(root: String, rank: Int) -> UUID {
+        let digest = Array(SHA256.hash(data: Data("feimiao-dup:\(root):\(rank)".utf8)))
         var value: uuid_t = (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
         withUnsafeMutableBytes(of: &value) { bytes in
             for index in 0..<16 { bytes[index] = digest[index] }

@@ -37,7 +37,11 @@ import '../common/app_sheet.dart';
 /// 「日期」仍是消费/预算归属日，以兼容旧文件；到账日期为空代表未知，
 /// 不得在重新导入时用归属日或导入当天补造。只有可靠时分才导出 HH:mm。
 class ImportExportView extends StatefulWidget {
-  const ImportExportView({super.key});
+  const ImportExportView({super.key, this.debugPickFile});
+
+  /// 测试用：代替系统文件选择器。
+  @visibleForTesting
+  final Future<FilePickerResult?> Function()? debugPickFile;
 
   @override
   State<ImportExportView> createState() => _ImportExportViewState();
@@ -208,12 +212,13 @@ class _ImportExportViewState extends State<ImportExportView> {
     final repo = context.read<AppRepository>();
     setState(() => _busy = true);
     try {
-      final picked = await FilePicker.platform.pickFiles(
-        type: FileType.custom,
-        allowedExtensions: ['csv', 'txt', 'xlsx', 'xls', 'json'],
-        withData: false,
-        withReadStream: true,
-      );
+      final picked = await (widget.debugPickFile?.call() ??
+          FilePicker.platform.pickFiles(
+            type: FileType.custom,
+            allowedExtensions: ['csv', 'txt', 'xlsx', 'xls', 'json'],
+            withData: false,
+            withReadStream: true,
+          ));
       if (picked == null || picked.files.isEmpty) {
         _setMessage('已取消');
         return;
@@ -246,6 +251,8 @@ class _ImportExportViewState extends State<ImportExportView> {
             '${result.unresolvedSavingsGoalLinks} 个存钱目标关联尚未恢复，请确认本机存在唯一的对应目标后重试',
           if (result.rejectedLinks > 0)
             '${result.rejectedLinks} 条不符合账本、币种或交易类型约束的关联已拒绝',
+          if (result.ambiguousTransactionLinks > 0)
+            '${result.ambiguousTransactionLinks} 条关联对应的账单编号重复，拿不准该挂哪笔，没有自动关联，请到资产详情里核对',
         ];
         final warningSuffix = warnings.isEmpty ? '' : "。${warnings.join('；')}";
         _setMessage(
@@ -267,7 +274,9 @@ class _ImportExportViewState extends State<ImportExportView> {
         final restored = await repo.importFeimiaoExportRows(feimiaoRows);
         _setMessage(
           '已恢复 ${restored.inserted} 笔，退款 ${restored.refundsAttached} 笔'
-          '${restored.skippedDuplicates > 0 ? '，跳过重复 ${restored.skippedDuplicates} 行' : ''}',
+          '${restored.skippedDuplicates > 0 ? '，跳过重复 ${restored.skippedDuplicates} 行' : ''}'
+          '${restored.renumbered > 0 ? '。${restored.renumbered} 笔编号和别的账单重复，已换新编号保留' : ''}'
+          '${restored.ambiguousRefunds > 0 ? '。${restored.ambiguousRefunds} 笔退款的原账单编号重复，已挂到还能退的那笔，请核对' : ''}',
         );
         return;
       }

@@ -360,10 +360,18 @@ class FeimiaoImportResult {
   final int skippedDuplicates;
   final int refundsAttached;
 
+  /// 文件里编号重复、换了新编号保留下来的账单数。
+  final int renumbered;
+
+  /// 原账单编号重复、按剩余可退金额挑了一笔挂上的退款数。
+  final int ambiguousRefunds;
+
   const FeimiaoImportResult({
     required this.inserted,
     required this.skippedDuplicates,
     required this.refundsAttached,
+    this.renumbered = 0,
+    this.ambiguousRefunds = 0,
   });
 }
 
@@ -381,6 +389,9 @@ class FeimiaoAssetImportResult {
   final int unresolvedSavingsGoalLinks;
   final int rejectedLinks;
 
+  /// 账单编号对应多笔账单、拿不准该挂哪笔，没有自动关联的条数。
+  final int ambiguousTransactionLinks;
+
   const FeimiaoAssetImportResult({
     required this.assets,
     this.receivables = 0,
@@ -394,6 +405,7 @@ class FeimiaoAssetImportResult {
     this.unresolvedTransactionLinks = 0,
     this.unresolvedSavingsGoalLinks = 0,
     this.rejectedLinks = 0,
+    this.ambiguousTransactionLinks = 0,
   });
 
   int get total =>

@@ -635,6 +635,59 @@ void main() {
     await repo.closeForTest();
   });
 
+  test('资产 JSON 遇到账单编号对应多笔账单时不自动关联，提示核对', () async {
+    var repo = await freshRepo();
+    final assetId = await repo.addPhysicalAsset(
+      name: '撞号工作站',
+      currentValue: Decimal.fromInt(6000),
+    );
+    final maintenanceId = await addExpense(
+      repo,
+      note: '撞号工作站维护',
+      amount: Decimal.fromInt(80),
+    );
+    await repo.linkPhysicalAssetCost(
+      assetId: assetId,
+      transactionId: maintenanceId,
+      type: AssetTransactionLinkType.maintenance,
+    );
+    final linkedUuid =
+        repo.transactions.singleWhere((t) => t.id == maintenanceId).uuid;
+    final exported = await repo.exportAssetTablesJson();
+    await repo.closeForTest();
+
+    final dbPath = p.join(tmp.path, 'qingji.db');
+    await databaseFactory.deleteDatabase(dbPath);
+    repo = await freshRepo();
+    // 旧版随机编号撞号：两笔账单用着同一个编号。
+    for (final note in ['维护甲', '维护乙']) {
+      await addExpense(repo, note: note, amount: Decimal.fromInt(80));
+    }
+    await repo.debugDb.update('transactions', {'uuid': linkedUuid},
+        where: "note IN ('维护甲', '维护乙')");
+
+    final result = await repo.importAssetTablesJson(exported);
+    final imported = repo.globalActivePhysicalAssets.singleWhere(
+      (asset) => asset.name == '撞号工作站',
+    );
+    expect(result.links, 0);
+    expect(result.ambiguousTransactionLinks, 1);
+    expect(result.unresolvedTransactionLinks, 0);
+    expect(repo.additionalCostLinksForAsset(imported.id), isEmpty);
+
+    // 用户手动关联以后，本机导出再导回不再误报。
+    await repo.linkPhysicalAssetCost(
+      assetId: imported.id,
+      transactionId: repo.transactions.firstWhere((t) => t.note == '维护甲').id,
+      type: AssetTransactionLinkType.maintenance,
+    );
+    final again =
+        await repo.importAssetTablesJson(await repo.exportAssetTablesJson());
+    expect(again.ambiguousTransactionLinks, 0);
+    expect(repo.additionalCostLinksForAsset(imported.id), hasLength(1));
+    await repo.closeForTest();
+  });
+
   test('资产 JSON 拒绝把 additional link 关联到收入交易', () async {
     var repo = await freshRepo();
     final assetId = await repo.addPhysicalAsset(
