@@ -90,8 +90,8 @@ class NaturalLanguageEntryParser {
 
   /// 提取金额。优先「X块Y」口语格式，其次带货币标记的数字，最后取最后一个数字。
   static Decimal? extractAmount(String text) {
-    // "23块5" -> 23.5
-    final kuaiPattern = RegExp(r'(\d+)[块元]([1-9])\b');
+    // "23块5" / "23块50" -> 23.5
+    final kuaiPattern = RegExp(r'(\d+)[块元]([1-9])(?:0?)(?![\d])');
     final kuaiMatch = kuaiPattern.firstMatch(text);
     if (kuaiMatch != null) {
       final yuan = Decimal.tryParse(kuaiMatch.group(1)!);
@@ -101,13 +101,15 @@ class NaturalLanguageEntryParser {
       }
     }
 
-    // 带货币标记的数字：¥23.5 / 23.5元 / 23块 / 23.5刀
-    final yenPattern = RegExp(r'[¥￥]\s*(\d+(?:\.\d{1,2})?)');
-    final unitPattern = RegExp(r'(\d+(?:\.\d{1,2})?)\s*[块元刀]');
+    // 带货币标记的数字：¥1,299.50 / ¥23.5 / 12,000元 / 23块 / 23.5刀
+    final yenPattern =
+        RegExp(r'[¥￥]\s*((?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d{1,2})?)');
+    final unitPattern =
+        RegExp(r'((?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d{1,2})?)\s*[块元刀]');
     final markedMatch =
         yenPattern.firstMatch(text) ?? unitPattern.firstMatch(text);
     if (markedMatch != null) {
-      return Decimal.tryParse(markedMatch.group(1)!);
+      return Decimal.tryParse(markedMatch.group(1)!.replaceAll(',', ''));
     }
 
     // 中文数字金额（离线/无 key 也能认）：
@@ -130,11 +132,21 @@ class NaturalLanguageEntryParser {
       if (yuan != null) return Decimal.fromInt(yuan);
     }
 
-    // 兜底：最后一个数字（"买了2杯咖啡58" -> 58）
-    final allPattern = RegExp(r'(\d+(?:\.\d{1,2})?)');
-    final allMatches = allPattern.allMatches(text).toList();
+    // 兜底：移除显式日期与时分后再取最后一个数字（避免把「7月3日吃了面」「下午6点30打车」里的日期/时间当金额）
+    final withoutDateTime = text
+        .replaceAll(RegExp(r'\d{4}[年./-]\d{1,2}[月./-]\d{1,2}[日号]?'), ' ')
+        .replaceAll(RegExp(r'\d{1,2}月\d{1,2}[日号]'), ' ')
+        .replaceAll(RegExp(r'(?<!\d)\d{1,2}月(?!\d)'), ' ')
+        .replaceAll(RegExp(r'(?<!\d)[1-3]?\d[号日](?!\d)'), ' ')
+        .replaceAll(
+          RegExp(
+              r'(?:凌晨|早上|上午|中午|下午|晚上|昨晚|今晚|今早)?\s*\d{1,2}\s*(?::|：|点|时)\s*\d{0,2}\s*分?'),
+          ' ',
+        );
+    final allPattern = RegExp(r'((?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d{1,2})?)');
+    final allMatches = allPattern.allMatches(withoutDateTime).toList();
     if (allMatches.isNotEmpty) {
-      return Decimal.tryParse(allMatches.last.group(1)!);
+      return Decimal.tryParse(allMatches.last.group(1)!.replaceAll(',', ''));
     }
 
     return null;
@@ -298,7 +310,8 @@ class NaturalLanguageEntryParser {
     final period = match.group(1) ?? '';
     final isEvening = period == '下午' || period.contains('晚');
     if (isEvening && hour < 12) hour += 12;
-    if (isEvening && hour == 12) hour = 0;
+    // 只有「晚上12点/今晚12点」归零点；「下午12点」仍是正午 12:00。
+    if (period.contains('晚') && hour == 12) hour = 0;
     if (period == '中午' && hour < 11) hour += 12;
     if (period == '凌晨' && hour == 12) hour = 0;
 
@@ -311,9 +324,15 @@ class NaturalLanguageEntryParser {
     );
   }
 
-  static bool _hasExplicitTime(String text) => RegExp(
-        r'(?:凌晨|早上|上午|中午|下午|晚上|昨晚|今晚|今早)?\s*\d{1,2}\s*(?::|：|点|时)\s*\d{0,2}\s*分?',
-      ).hasMatch(text);
+  static bool _hasExplicitTime(String text) {
+    final match = RegExp(
+      r'(凌晨|早上|上午|中午|下午|晚上|昨晚|今晚|今早)?\s*(\d{1,2})\s*(?::|：|点|时)\s*(\d{1,2})?\s*分?',
+    ).firstMatch(text);
+    if (match == null) return false;
+    final hour = int.tryParse(match.group(2) ?? '');
+    final minute = int.tryParse(match.group(3) ?? '') ?? 0;
+    return hour != null && hour <= 23 && minute <= 59;
+  }
 
   // ---------------------------------------------------------------------------
   // 分类
@@ -489,9 +508,10 @@ class PaymentScreenshotParser {
     final marked = <Decimal>[];
     final plain = <Decimal>[];
 
-    // 匹配可选前缀标记 + 数字（含千分位逗号，1-2位小数）
+    // 匹配可选前缀标记 + 数字（含千分位逗号，1-2位小数）：
+    // `-`/`−` 仅在行首或空白/中文后视为负号金额，避免把 ISO 日期「2026-06-12」里的 `-06` / `-12` 误当成金额。
     final pattern = RegExp(
-      r'([-−¥￥]?)\s*(\d{1,3}(?:,\d{3})*(?:\.\d{1,2})?|\d+(?:\.\d{1,2})?)',
+      r'((?:(?<![\dA-Za-z])[-−]|[¥￥])?)\s*(\d{1,3}(?:,\d{3})*(?:\.\d{1,2})?|\d+(?:\.\d{1,2})?)',
     );
 
     for (final match in pattern.allMatches(text)) {

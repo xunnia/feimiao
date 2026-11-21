@@ -68,13 +68,7 @@ class _AutoRecordSheetState extends State<_AutoRecordSheet> {
             (c.kind == TransactionKind.income
                 ? 'otherIncome'
                 : CategorySeed.fallbackExpenseKey);
-        int? catId;
-        for (final x in repo.categories) {
-          if (x.kind == c.kind && x.key == wantKey) {
-            catId = x.id;
-            break;
-          }
-        }
+        final catId = repo.resolveActiveCategory(wantKey, c.kind)?.id;
         await repo.addTransaction(
           kind: c.kind,
           amount: c.amount,
@@ -123,8 +117,7 @@ class _AutoRecordSheetState extends State<_AutoRecordSheet> {
                 subtitle: '勾掉不想记的，其余一键记下',
                 onClose: _saving ? null : _dismiss,
                 actionLabel: _saving ? '记账中…' : '记下 $_selectedCount 笔',
-                onAction:
-                    _saving || _selectedCount == 0 ? null : _saveSelected,
+                onAction: _saving || _selectedCount == 0 ? null : _saveSelected,
               ),
               Flexible(
                 child: Padding(
@@ -202,8 +195,7 @@ class _AutoRecordSheetState extends State<_AutoRecordSheet> {
                       '退款通知仅提示，不会入账',
                       style: TextStyle(
                         fontSize: 11,
-                        color: scheme.onSurfaceVariant
-                            .withValues(alpha: 0.75),
+                        color: scheme.onSurfaceVariant.withValues(alpha: 0.75),
                       ),
                     ),
                   ],

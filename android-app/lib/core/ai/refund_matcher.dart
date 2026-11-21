@@ -25,9 +25,15 @@ class RefundMatcher {
   /// 退款金额。退款写入必须宁可追问，也不能靠日期数字猜金额。
   static Decimal? extractAmount(String text) {
     final withoutDates = text
-        .replaceAll(RegExp(r'\d{4}[年./-]\d{1,2}[月./-]\d{1,2}日?'), '')
-        .replaceAll(RegExp(r'\d{1,2}月\d{1,2}[日号]'), '')
-        .replaceAll(RegExp(r'(?<!\d)\d{1,2}月(?!\d)'), '');
+        .replaceAll(RegExp(r'\d{4}[年./-]\d{1,2}[月./-]\d{1,2}[日号]?'), ' ')
+        .replaceAll(RegExp(r'\d{1,2}月\d{1,2}[日号]'), ' ')
+        .replaceAll(RegExp(r'(?<!\d)\d{1,2}月(?!\d)'), ' ')
+        .replaceAll(RegExp(r'(?<!\d)[1-3]?\d[号日](?!\d)'), ' ')
+        .replaceAll(
+          RegExp(
+              r'(?:凌晨|早上|上午|中午|下午|晚上|昨晚|今晚|今早)?\s*\d{1,2}\s*(?::|：|点|时)\s*\d{0,2}\s*分?'),
+          ' ',
+        );
     return NaturalLanguageEntryParser.extractAmount(withoutDates);
   }
 
@@ -172,21 +178,35 @@ class RefundMatcher {
       return _DateWindow(start, start.add(const Duration(days: 1)));
     }
 
+    DateTime? validDate(int y, int m, int d) {
+      if (m < 1 || m > 12 || d < 1 || d > 31) return null;
+      final dt = DateTime(y, m, d);
+      return dt.year == y && dt.month == m && dt.day == d ? dt : null;
+    }
+
     final full = RegExp(r'(\d{4})年(\d{1,2})月(\d{1,2})[日号]?').firstMatch(text);
     if (full != null) {
-      return singleDay(DateTime(
+      final dt = validDate(
         int.parse(full.group(1)!),
         int.parse(full.group(2)!),
         int.parse(full.group(3)!),
-      ));
+      );
+      if (dt != null) return singleDay(dt);
     }
     final monthDay = RegExp(r'(\d{1,2})月(\d{1,2})[日号]').firstMatch(text);
     if (monthDay != null) {
-      return singleDay(DateTime(
-        now.year,
-        int.parse(monthDay.group(1)!),
-        int.parse(monthDay.group(2)!),
-      ));
+      final m = int.parse(monthDay.group(1)!);
+      final d = int.parse(monthDay.group(2)!);
+      var candidate = validDate(now.year, m, d);
+      final today = day(now);
+      // 跨年退款（例如 1 月 5 日提「12月28日那笔退款」）：若今年该日还在未来，自动回退上一年。
+      if (candidate == null || candidate.isAfter(today)) {
+        final prevYear = validDate(now.year - 1, m, d);
+        if (prevYear != null && !prevYear.isAfter(today)) {
+          candidate = prevYear;
+        }
+      }
+      if (candidate != null) return singleDay(candidate);
     }
     if (text.contains('大前天')) {
       return singleDay(now.subtract(const Duration(days: 3)));

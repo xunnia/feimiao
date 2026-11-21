@@ -16,6 +16,16 @@ class MoneyFormat {
   static int _decimalPlaces = 2;
   static MoneyIntegerRoundingMode _integerRoundingMode =
       MoneyIntegerRoundingMode.round;
+  static final Map<String, String> _symbolCache = <String, String>{};
+  static final Map<(String, int), NumberFormat> _currencyFormatCache =
+      <(String, int), NumberFormat>{};
+  static final NumberFormat _axisThousandFormat = NumberFormat('#,###');
+
+  static NumberFormat _currencyFormatter(String sym, int digits) =>
+      _currencyFormatCache.putIfAbsent(
+        (sym, digits),
+        () => NumberFormat.currency(symbol: sym, decimalDigits: digits),
+      );
 
   static int get decimalPlaces => _decimalPlaces;
   static MoneyIntegerRoundingMode get integerRoundingMode =>
@@ -44,11 +54,7 @@ class MoneyFormat {
     final digits = decimalDigits.clamp(0, 2);
     try {
       final sym = currencyCode == 'CNY' ? '¥' : symbol(currencyCode);
-      final fmt = NumberFormat.currency(
-        symbol: sym,
-        decimalDigits: digits,
-      );
-      return fmt.format(amount.toDouble());
+      return _currencyFormatter(sym, digits).format(amount.toDouble());
     } catch (_) {
       return '¥${amount.toStringAsFixed(digits)}';
     }
@@ -58,10 +64,15 @@ class MoneyFormat {
   /// 借助 [NumberFormat.simpleCurrency] 从 intl 获取本地化符号；
   /// 无法识别的货币码直接返回原码字符串。
   static String symbol(String currencyCode) {
+    final cached = _symbolCache[currencyCode];
+    if (cached != null) return cached;
     try {
-      final fmt = NumberFormat.simpleCurrency(name: currencyCode);
-      return fmt.currencySymbol;
+      final sym =
+          NumberFormat.simpleCurrency(name: currencyCode).currencySymbol;
+      _symbolCache[currencyCode] = sym;
+      return sym;
     } catch (_) {
+      _symbolCache[currencyCode] = currencyCode;
       return currencyCode;
     }
   }
@@ -82,8 +93,7 @@ class MoneyFormat {
         );
       }
       final sym = currencyCode == 'CNY' ? '¥' : symbol(currencyCode);
-      final fmt = NumberFormat.currency(symbol: sym, decimalDigits: 0);
-      return fmt.format(value);
+      return _currencyFormatter(sym, 0).format(value);
     } catch (_) {
       return '¥${value.toStringAsFixed(decimalDigits)}';
     }
@@ -113,7 +123,7 @@ class MoneyFormat {
       // 10万以上不留小数，10万以下保留一位（1.2万）。
       body = wan >= 10 ? '${wan.round()}万' : '${(wan * 10).round() / 10}万';
     } else if (a >= 1000) {
-      body = NumberFormat('#,###').format(a.round());
+      body = _axisThousandFormat.format(a.round());
     } else {
       body = a.round().toString();
     }

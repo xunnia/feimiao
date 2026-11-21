@@ -118,11 +118,12 @@ class InlineTagChips extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (tagIds.isEmpty) return const SizedBox.shrink();
-    final allTags = context.select<AppRepository, List<TagEntity>>(
-      (r) => r.tags,
-    );
+    // 依赖稳定的 _tagsViewCache 引用，只在标签库真正重载时重建，再用 O(1) tagById 查表。
+    context.select<AppRepository, List<TagEntity>>((r) => r.tags);
+    final repo = context.read<AppRepository>();
     final tags = [
-      for (final id in tagIds) ...allTags.where((t) => t.id == id),
+      for (final id in tagIds)
+        if (repo.tagById(id) case final tag?) tag,
     ];
     if (tags.isEmpty) return const SizedBox.shrink();
     return Padding(

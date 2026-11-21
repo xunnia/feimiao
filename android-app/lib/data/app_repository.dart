@@ -596,14 +596,14 @@ class AppRepository extends ChangeNotifier {
   bool _statCardOrderConfigured = false;
 
   List<BookEntity> get books => _booksViewCache ??= List.unmodifiable(_books);
-  List<AccountEntity> get accounts => List.unmodifiable(_accounts);
-  List<AccountEntity> get activeAccounts => List.unmodifiable(
-        _accounts.where((account) => !account.isArchived),
-      );
-  List<AccountEntity> get archivedAccounts => List.unmodifiable(
-        _accounts.where((account) => account.isArchived),
-      );
-  List<AccountEntity> get transactionAccounts => List.unmodifiable(
+  List<AccountEntity> get accounts =>
+      _accountsViewCache ??= List.unmodifiable(_accounts);
+  List<AccountEntity> get activeAccounts => _activeAccountsViewCache ??=
+      List.unmodifiable(_accounts.where((account) => !account.isArchived));
+  List<AccountEntity> get archivedAccounts => _archivedAccountsViewCache ??=
+      List.unmodifiable(_accounts.where((account) => account.isArchived));
+  List<AccountEntity> get transactionAccounts =>
+      _transactionAccountsViewCache ??= List.unmodifiable(
         _accounts.where(
           (account) =>
               !account.isDeleted &&
@@ -743,7 +743,10 @@ class AppRepository extends ChangeNotifier {
   List<SavingsGoalEntity> get savingsGoals => List.unmodifiable(_savingsGoals);
   SavingsGoalEntity? savingsGoalById(int id) =>
       _savingsGoals.where((goal) => goal.id == id).firstOrNull;
-  List<TagEntity> get tags => List.unmodifiable(_tags);
+  List<TagEntity> get tags => _tagsViewCache ??= List.unmodifiable(_tags);
+  TagEntity? tagById(int id) => (_tagByIdCache ??= {
+        for (final tag in _tags) tag.id: tag,
+      })[id];
   List<ReportEntity> get reports =>
       _reportsViewCache ??= List.unmodifiable(_reports);
 
@@ -1031,14 +1034,13 @@ class AppRepository extends ChangeNotifier {
   List<ConsumptionExpenseFamily> _budgetExpenseFamiliesForBook(
     int logicalBookId,
   ) {
-    final transactionById = {
-      for (final transaction in _allTransactions) transaction.id: transaction,
-    };
+    final transactionById = _txById;
     final categoryById = {
       for (final category in _categories) category.id: category
     };
     final events = <BudgetTransactionFamilyEvent>[];
     for (final transaction in _allTransactions) {
+      if (transaction.txKind != TransactionKind.expense) continue;
       if (!_transactionMatchesBook(transaction, logicalBookId)) {
         continue;
       }
@@ -1186,6 +1188,10 @@ class AppRepository extends ChangeNotifier {
     return count;
   }
 
+  final Map<(int, int, int, int), BudgetRuleSnapshot> _budgetRuleMonthCache =
+      {};
+  int? _budgetRuleMonthCacheRevision;
+
   /// 某账本某个月的预算（主页卡、小组件、统计环、喵洞察、AI 都用这一个）。
   BudgetRuleSnapshot budgetRuleMonth(
     DateTime month, {
@@ -1206,6 +1212,13 @@ class AppRepository extends ChangeNotifier {
         ),
       );
     }
+    if (_budgetRuleMonthCacheRevision != financialRevision) {
+      _budgetRuleMonthCache.clear();
+      _budgetRuleMonthCacheRevision = financialRevision;
+    }
+    final cacheKey = (id, month.year, month.month, budgetDayKey(today));
+    final cached = _budgetRuleMonthCache[cacheKey];
+    if (cached != null) return cached;
     final rules = budgetRulesForBook(id);
     final data = rules.isEmpty
         ? (spend: const <int, int>{}, foreign: const <int, int>{})
@@ -1218,12 +1231,14 @@ class AppRepository extends ChangeNotifier {
       month: month.month,
       today: today,
     );
-    return BudgetRuleSnapshot(
+    final snapshot = BudgetRuleSnapshot(
       bookId: id,
       month: result,
       excludedForeignCount:
           _foreignCountOnCoveredDays(data.foreign, result.days, today),
     );
+    _budgetRuleMonthCache[cacheKey] = snapshot;
+    return snapshot;
   }
 
   /// 任意日期区间的预算合计（不带结余）：AI 问「这周」「某几天」、报告用。
@@ -3398,6 +3413,14 @@ class AppRepository extends ChangeNotifier {
       await db.execute(
         "UPDATE chat_messages SET session_id = 'record' WHERE session_id IS NULL OR session_id = ''",
       );
+      await db.execute('''
+        CREATE INDEX IF NOT EXISTS idx_chat_messages_session_created
+        ON chat_messages(session_id, created_ms DESC, id DESC)
+      ''');
+      await db.execute('''
+        CREATE INDEX IF NOT EXISTS idx_chat_messages_created
+        ON chat_messages(created_ms)
+      ''');
     }
 
     final now = DateTime.now().millisecondsSinceEpoch;
@@ -4631,6 +4654,14 @@ class AppRepository extends ChangeNotifier {
       CREATE INDEX IF NOT EXISTS idx_transactions_settlement_account_quality
       ON transactions(settlement_account_quality, id)
     ''');
+    await db.execute('''
+      CREATE INDEX IF NOT EXISTS idx_transactions_date_id
+      ON transactions(date_ms DESC, id DESC)
+    ''');
+    await db.execute('''
+      CREATE INDEX IF NOT EXISTS idx_transactions_uuid
+      ON transactions(uuid)
+    ''');
   }
 
   static const _createReportsSql = '''
@@ -5681,6 +5712,8 @@ class AppRepository extends ChangeNotifier {
     _tags
       ..clear()
       ..addAll(rows.map(TagEntity.fromMap));
+    _tagsViewCache = null;
+    _tagByIdCache = null;
   }
 
   Future<void> _loadReports() async {
@@ -5810,6 +5843,10 @@ class AppRepository extends ChangeNotifier {
     _accounts
       ..clear()
       ..addAll(rows.map(AccountEntity.fromMap));
+    _accountsViewCache = null;
+    _activeAccountsViewCache = null;
+    _archivedAccountsViewCache = null;
+    _transactionAccountsViewCache = null;
     _invalidateBalanceDerived();
   }
 
@@ -5957,6 +5994,8 @@ class AppRepository extends ChangeNotifier {
       ..addAll(rows.map(CategoryEntity.fromMap));
     _allRecordsCache = null;
     _categoriesViewCache = null;
+    _rankedCategoriesCache.clear();
+    _rankedChildrenCache.clear();
     _invalidateBookViewCaches();
   }
 
@@ -6021,6 +6060,7 @@ class AppRepository extends ChangeNotifier {
         updatedMs: row['updated_ms'] as int? ?? 0,
       ));
     }
+    _budgetRuleMonthCache.clear();
   }
 
   Future<void> _loadApiKey() async {
@@ -8306,14 +8346,15 @@ class AppRepository extends ChangeNotifier {
 
   /// Undo only the transactions recorded by this run. UUID matching avoids
   /// deleting a newer transaction if SQLite ever reuses an integer row id.
-  Future<bool> undoAiRun(String runId) async {
+  Future<({bool changed, Set<int> deletedIds, int skippedCount})>
+      undoAiRunDetailed(String runId) async {
     _checkChatOperation();
     final id = runId.trim();
     final run = await aiRunById(id);
     if (run == null ||
         run.status == AiRunStatus.rolledBack ||
         run.status != AiRunStatus.completed) {
-      return false;
+      return (changed: false, deletedIds: const <int>{}, skippedCount: 0);
     }
     final refs = <({int id, String uuid, int? updatedMs})>[];
     try {
@@ -8437,8 +8478,17 @@ class AppRepository extends ChangeNotifier {
       );
     }
     notifyListeners();
-    return deleted > 0 || (refs.isEmpty && run.status == AiRunStatus.completed);
+    final changed =
+        deleted > 0 || (refs.isEmpty && run.status == AiRunStatus.completed);
+    return (
+      changed: changed,
+      deletedIds: Set<int>.unmodifiable(deletedIds),
+      skippedCount: skipped,
+    );
   }
+
+  Future<bool> undoAiRun(String runId) async =>
+      (await undoAiRunDetailed(runId)).changed;
 
   Future<AiProviderHealth> recordAiProviderSuccess(
     String providerId,
@@ -8917,6 +8967,53 @@ class AppRepository extends ChangeNotifier {
         for (final c in _categories)
           if (c.kind == kind && !c.hidden) (key: c.key, name: c.nameZh)
       ];
+
+  /// 按 key 或中文名解析「未隐藏」的分类（AI 记账 / 快捷记账 / 自动记账共用）：
+  /// 1) 优先精确 key（未隐藏）；
+  /// 2) 其次不区分大小写 key（未隐藏）；
+  /// 3) 其次中文名匹配（未隐藏）；
+  /// 4) 若命中的子分类被隐藏，自动退到其未隐藏的父分类；
+  /// 5) 最终回退到 `other` / `otherIncome`（先找未隐藏，最后兜底任意同向兜底分类）。
+  CategoryEntity? resolveActiveCategory(
+    String? keyOrName,
+    TransactionKind kind,
+  ) {
+    final raw = keyOrName?.trim() ?? '';
+    if (raw.isNotEmpty) {
+      final lower = raw.toLowerCase();
+      CategoryEntity? hiddenMatch;
+      for (final c in _categories) {
+        if (c.kind != kind) continue;
+        if (c.key == raw) {
+          if (!c.hidden) return c;
+          hiddenMatch ??= c;
+        }
+      }
+      for (final c in _categories) {
+        if (c.kind != kind || c.hidden) continue;
+        if (c.key.toLowerCase() == lower) return c;
+      }
+      for (final c in _categories) {
+        if (c.kind != kind || c.hidden) continue;
+        if (c.nameZh == raw) return c;
+      }
+      if (hiddenMatch != null && hiddenMatch.parentId != null) {
+        final parent = _categories
+            .where((c) => c.id == hiddenMatch!.parentId && !c.hidden)
+            .firstOrNull;
+        if (parent != null) return parent;
+      }
+    }
+    final fallbackKey = kind == TransactionKind.income
+        ? 'otherIncome'
+        : CategorySeed.fallbackExpenseKey;
+    return _categories
+            .where((c) => c.kind == kind && !c.hidden && c.key == fallbackKey)
+            .firstOrNull ??
+        _categories
+            .where((c) => c.kind == kind && c.key == fallbackKey)
+            .firstOrNull;
+  }
 
   /// 给 DeepSeek 提示词用：用户的学习记忆（历史纠正），让模型模仿其分类习惯。
   List<({String phrase, String categoryKey})> get llmLearnedHints =>
@@ -9464,9 +9561,20 @@ class AppRepository extends ChangeNotifier {
   // 时置 null，让 select<AppRepository, List<T>>(r=>r.xxx) 能通过
   // 对象标识判断是否真正变化，避免每次 notifyListeners 都触发重建。
   List<BookEntity>? _booksViewCache;
+  List<AccountEntity>? _accountsViewCache;
+  List<AccountEntity>? _activeAccountsViewCache;
+  List<AccountEntity>? _archivedAccountsViewCache;
+  List<AccountEntity>? _transactionAccountsViewCache;
   List<CategoryEntity>? _categoriesViewCache;
   List<TransactionEntity>? _transactionsViewCache;
+  List<TagEntity>? _tagsViewCache;
+  Map<int, TagEntity>? _tagByIdCache;
   List<ReportEntity>? _reportsViewCache;
+  Map<int, List<TransactionEntity>>? _txByAccountCache;
+  List<TransactionEntity>? _txWithUnknownAccountCache;
+  Map<String, AssetEventEntity>? _activeRepaymentByTxUuidCache;
+  final Map<TransactionKind, List<CategoryEntity>> _rankedCategoriesCache = {};
+  final Map<int, List<CategoryEntity>> _rankedChildrenCache = {};
 
   void _invalidateTxDerived() {
     _refundTotalsCache = null;
@@ -9478,8 +9586,56 @@ class AppRepository extends ChangeNotifier {
     _visibleTxViewCache = null;
     _allRecordsViewCache = null;
     _txByIdCache = null;
+    _txByAccountCache = null;
+    _txWithUnknownAccountCache = null;
+    _rankedCategoriesCache.clear();
+    _rankedChildrenCache.clear();
+    _budgetRuleMonthCache.clear();
     _invalidateBookViewCaches();
     _invalidateBalanceDerived();
+  }
+
+  /// 返回可能影响指定账户余额/活动记录的交易切片（按账户惰性建索引，随 `_invalidateTxDerived` 作废）。
+  /// 包含 `settlementAccountId == accountId`、`toAccountId == accountId` 以及 `settlementAccountId == null`
+  ///（未知到账账户的变动），避免 90 天趋势与多账户余额计算反复扫整张 10k 流水表。
+  List<TransactionEntity> _transactionsPotentiallyAffectingAccount(
+    int accountId,
+  ) {
+    if (_txByAccountCache == null) {
+      final byAccount = <int, List<TransactionEntity>>{};
+      final unknownAccount = <TransactionEntity>[];
+      for (final tx in _allTransactions) {
+        final sId = tx.settlementAccountId;
+        final tId = tx.toAccountId;
+        if (sId == null) {
+          unknownAccount.add(tx);
+          if (tId != null) {
+            (byAccount[tId] ??= <TransactionEntity>[]).add(tx);
+          }
+        } else {
+          (byAccount[sId] ??= <TransactionEntity>[]).add(tx);
+          if (tId != null && tId != sId) {
+            (byAccount[tId] ??= <TransactionEntity>[]).add(tx);
+          }
+        }
+      }
+      _txByAccountCache = byAccount;
+      _txWithUnknownAccountCache = unknownAccount;
+    }
+    final direct = _txByAccountCache![accountId];
+    final unknown = _txWithUnknownAccountCache!;
+    if (unknown.isEmpty) return direct ?? const <TransactionEntity>[];
+    if (direct == null || direct.isEmpty) return unknown;
+    // 罕见场景：存在未知到账账户流水，且某笔转账的 toAccountId 恰好等于 accountId 时去重。
+    final seen = <int>{};
+    final merged = <TransactionEntity>[];
+    for (final tx in direct) {
+      if (seen.add(tx.id)) merged.add(tx);
+    }
+    for (final tx in unknown) {
+      if (seen.add(tx.id)) merged.add(tx);
+    }
+    return merged;
   }
 
   void _invalidateBookViewCaches() {
@@ -9634,6 +9790,7 @@ class AppRepository extends ChangeNotifier {
     _assetEvents
       ..clear()
       ..addAll(rows.map(AssetEventEntity.fromMap));
+    _activeRepaymentByTxUuidCache = null;
   }
 
   Future<void> _loadAssetUsageEvents() async {
@@ -11219,7 +11376,8 @@ class AppRepository extends ChangeNotifier {
     List<AccountBalanceCheckpointEntity>? checkpoints,
     Map<int, Set<String>>? coveredUnknownEventIds,
   }) {
-    final ledgerTransactions = transactions ?? _allTransactions;
+    final ledgerTransactions =
+        transactions ?? _transactionsPotentiallyAffectingAccount(account.id);
     final ledgerCheckpoints = checkpoints ?? _accountBalanceCheckpoints;
     final ledgerCoverage =
         coveredUnknownEventIds ?? _checkpointCoveredUnknownEventIds;
@@ -11566,10 +11724,12 @@ class AppRepository extends ChangeNotifier {
         .where((account) => account.id == accountId)
         .firstOrNull
         ?.currencyCode;
+    final accountTransactions =
+        _transactionsPotentiallyAffectingAccount(accountId);
     return AccountActivityProjection.forAccount(
       accountId: accountId,
       limit: limit,
-      events: _allTransactions
+      events: accountTransactions
           .where((transaction) =>
               accountCurrency == null ||
               transaction.currencyCode == accountCurrency)
@@ -13951,6 +14111,8 @@ class AppRepository extends ChangeNotifier {
       _categories.where((c) => c.kind == kind).toList();
 
   List<CategoryEntity> categoriesForKindRanked(TransactionKind kind) {
+    final cached = _rankedCategoriesCache[kind];
+    if (cached != null) return cached;
     final all = categoriesForKind(kind);
     // 记账面板不展示已隐藏的分类（管理页用 categoriesForKind 能看到全部）。
     final tops = all.where((c) => c.isTopLevel && !c.hidden).toList();
@@ -13973,7 +14135,11 @@ class AppRepository extends ChangeNotifier {
       final cb = rolled[b.$2.id] ?? 0;
       return ca != cb ? cb.compareTo(ca) : a.$1.compareTo(b.$1);
     });
-    return [for (final e in indexed) e.$2];
+    final ranked = List<CategoryEntity>.unmodifiable(
+      [for (final e in indexed) e.$2],
+    );
+    _rankedCategoriesCache[kind] = ranked;
+    return ranked;
   }
 
   List<CategoryEntity> childrenOf(int parentId) =>
@@ -13986,8 +14152,14 @@ class AppRepository extends ChangeNotifier {
   /// 子分类按「这个人用得多不多」排序：记过的次数多在前，没记过的保持原顺序。
   /// 手动卡的二级分类展开面板用它，让常用子类排前面少翻找。已隐藏的不出现。
   List<CategoryEntity> childrenOfRanked(int parentId) {
+    final cached = _rankedChildrenCache[parentId];
+    if (cached != null) return cached;
     final children = visibleChildrenOf(parentId);
-    if (children.length < 2) return children;
+    if (children.length < 2) {
+      final result = List<CategoryEntity>.unmodifiable(children);
+      _rankedChildrenCache[parentId] = result;
+      return result;
+    }
     final counts = <int, int>{};
     for (final t in _transactions) {
       final cid = t.categoryId;
@@ -14001,7 +14173,11 @@ class AppRepository extends ChangeNotifier {
       final cb = counts[b.$2.id] ?? 0;
       return ca != cb ? cb.compareTo(ca) : a.$1.compareTo(b.$1);
     });
-    return [for (final e in indexed) e.$2];
+    final ranked = List<CategoryEntity>.unmodifiable(
+      [for (final e in indexed) e.$2],
+    );
+    _rankedChildrenCache[parentId] = ranked;
+    return ranked;
   }
 
   /// 某大类本月支出合计（含其子类）。用于分类预算进度。
@@ -20030,11 +20206,29 @@ class AppRepository extends ChangeNotifier {
         !reversed.contains(event.uuid));
   }
 
+  Map<String, AssetEventEntity> get _activeRepaymentByTxUuid {
+    final cached = _activeRepaymentByTxUuidCache;
+    if (cached != null) return cached;
+    final map = <String, AssetEventEntity>{};
+    for (final event in _activeLiabilityRepayments(_assetEvents)) {
+      final metadata = _assetEventMetadata(event.metadata);
+      final transferUuid = metadata['transfer_transaction_uuid']?.toString();
+      if (transferUuid != null && transferUuid.isNotEmpty) {
+        map.putIfAbsent(transferUuid, () => event);
+      }
+      final interestUuid = metadata['interest_transaction_uuid']?.toString();
+      if (interestUuid != null && interestUuid.isNotEmpty) {
+        map.putIfAbsent(interestUuid, () => event);
+      }
+    }
+    _activeRepaymentByTxUuidCache = map;
+    return map;
+  }
+
   AssetEventEntity? liabilityRepaymentEventForTransaction(int transactionId) {
-    final uuid =
-        _allTransactions.where((t) => t.id == transactionId).firstOrNull?.uuid;
+    final uuid = _txById[transactionId]?.uuid;
     if (uuid == null || uuid.isEmpty) return null;
-    return _repaymentMatchingUuid(_assetEvents, uuid);
+    return _activeRepaymentByTxUuid[uuid];
   }
 
   AssetEventEntity? _repaymentMatchingUuid(

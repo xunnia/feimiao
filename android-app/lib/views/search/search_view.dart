@@ -88,7 +88,21 @@ class _SearchViewState extends State<SearchView> {
   // 过滤结果缓存：每次击键防抖300ms后重算，避免 build 内全表扫描
   List<TransactionEntity> _results = const [];
   List<TxSection> _sections = const [];
-  Map<int, Decimal> _refundTotals = const {};
+  ({
+    Decimal exp,
+    Decimal inc,
+    Decimal xfer,
+    int expN,
+    int incN,
+    int xferN,
+  }) _summary = (
+    exp: Decimal.zero,
+    inc: Decimal.zero,
+    xfer: Decimal.zero,
+    expN: 0,
+    incN: 0,
+    xferN: 0,
+  );
   int? _lastFilterRevision;
   String? _lastFilterKey;
 
@@ -142,32 +156,82 @@ class _SearchViewState extends State<SearchView> {
         setState(() {
           _results = const [];
           _sections = const [];
-          _refundTotals = const {};
+          _summary = (
+            exp: Decimal.zero,
+            inc: Decimal.zero,
+            xfer: Decimal.zero,
+            expN: 0,
+            incN: 0,
+            xferN: 0,
+          );
         });
       }
       return;
     }
     final repo = context.read<AppRepository>();
-    if (_lastFilterRevision == repo.dataRevision &&
+    if (_lastFilterRevision == repo.financialRevision &&
         _lastFilterKey == filterKey) {
       return;
     }
-    _lastFilterRevision = repo.dataRevision;
+    _lastFilterRevision = repo.financialRevision;
     _lastFilterKey = filterKey;
     final q = _q.trim();
-    final all = repo.transactions;
-    final rt = LedgerPolicy.refundTotals(all);
     final normalizedQuery = normalizeSearchText(q);
-    final r = repo.visibleTransactionsRef
-        .where((t) => _pass(t, normalizedQuery, rt))
-        .toList();
+    final queryHasDigitOrCurrency =
+        _searchDigitOrCurrencyPattern.hasMatch(normalizedQuery);
+    final rangeStart = _range == null
+        ? null
+        : DateTime(_range!.start.year, _range!.start.month, _range!.start.day);
+    final rangeEnd = _range == null
+        ? null
+        : DateTime(_range!.end.year, _range!.end.month, _range!.end.day);
+    final r = <TransactionEntity>[];
+    var exp = Decimal.zero, inc = Decimal.zero, xfer = Decimal.zero;
+    var expN = 0, incN = 0, xferN = 0;
+    for (final t in repo.visibleTransactionsRef) {
+      if (!_pass(
+        t,
+        repo,
+        normalizedQuery,
+        queryHasDigitOrCurrency: queryHasDigitOrCurrency,
+        rangeStart: rangeStart,
+        rangeEnd: rangeEnd,
+      )) {
+        continue;
+      }
+      r.add(t);
+      if (t.txKind == TransactionKind.transfer) {
+        if (!LedgerPolicy.includeInUserTotals(t)) continue;
+        xfer += t.amount.abs();
+        xferN++;
+        continue;
+      }
+      final amount = repo.userAmountOf(t);
+      if (amount == Decimal.zero) continue;
+      if (t.txKind == TransactionKind.expense) {
+        exp += amount;
+        if (amount > Decimal.zero) expN++;
+      } else if (t.txKind == TransactionKind.income) {
+        inc += amount;
+        if (amount > Decimal.zero) incN++;
+      }
+    }
     final secs = groupTxnsByDay(r);
     setState(() {
       _results = r;
       _sections = secs;
-      _refundTotals = rt;
+      _summary = (
+        exp: exp,
+        inc: inc,
+        xfer: xfer,
+        expN: expN,
+        incN: incN,
+        xferN: xferN,
+      );
     });
   }
+
+  static final RegExp _searchDigitOrCurrencyPattern = RegExp(r'[0-9¥￥.,]');
 
   String _filterKey() {
     final range = _range;
@@ -185,39 +249,47 @@ class _SearchViewState extends State<SearchView> {
 
   bool _pass(
     TransactionEntity t,
-    String normalizedQuery,
-    Map<int, Decimal> refundTotals,
-  ) {
-    final userAmount = LedgerPolicy.userAmountWith(t, refundTotals);
+    AppRepository repo,
+    String normalizedQuery, {
+    required bool queryHasDigitOrCurrency,
+    required DateTime? rangeStart,
+    required DateTime? rangeEnd,
+  }) {
+    // 便宜的精确筛选前置，先剪掉不匹配的绝大多数行，再做文本/金额格式化匹配。
+    if (_kind != null && t.txKind != _kind) return false;
+    if (_accountId != null && t.accountId != _accountId) return false;
+    if (_tagId != null && !t.tagIds.contains(_tagId)) return false;
+    if (rangeStart != null && rangeEnd != null) {
+      final d = DateTime(t.date.year, t.date.month, t.date.day);
+      if (d.isBefore(rangeStart) || d.isAfter(rangeEnd)) return false;
+    }
+    final userAmount = repo.userAmountOf(t);
+    if (_minAmt != null || _maxAmt != null) {
+      final abs =
+          userAmount == Decimal.zero ? t.amount.abs() : userAmount.abs();
+      if (_minAmt != null && abs < _minAmt!) return false;
+      if (_maxAmt != null && abs > _maxAmt!) return false;
+    }
     if (normalizedQuery.isNotEmpty) {
       bool contains(String value) =>
+          value.isNotEmpty &&
           normalizeSearchText(value).contains(normalizedQuery);
       // 分类名空时按列表里显示的「未分类」参与匹配，搜「未分类」才搜得到。
       final catName = t.categoryNameZh.isNotEmpty
           ? t.categoryNameZh
           : (t.txKind == TransactionKind.transfer ? '转账' : '未分类');
-      final hit = contains(catName) ||
+      var hit = contains(catName) ||
           contains(t.note) ||
           contains(t.accountName) ||
           contains(t.toAccountName) ||
-          contains(t.categoryKey) ||
-          moneySearchTexts(t.amount).any(contains) ||
-          moneySearchTexts(userAmount).any(contains);
+          contains(t.categoryKey);
+      if (!hit && queryHasDigitOrCurrency) {
+        hit = moneySearchTexts(t.amount).any(contains) ||
+            (userAmount != t.amount &&
+                moneySearchTexts(userAmount).any(contains));
+      }
       if (!hit) return false;
     }
-    if (_kind != null && t.txKind != _kind) return false;
-    if (_range != null) {
-      final d = DateTime(t.date.year, t.date.month, t.date.day);
-      final s =
-          DateTime(_range!.start.year, _range!.start.month, _range!.start.day);
-      final e = DateTime(_range!.end.year, _range!.end.month, _range!.end.day);
-      if (d.isBefore(s) || d.isAfter(e)) return false;
-    }
-    if (_accountId != null && t.accountId != _accountId) return false;
-    if (_tagId != null && !t.tagIds.contains(_tagId)) return false;
-    final abs = userAmount == Decimal.zero ? t.amount.abs() : userAmount.abs();
-    if (_minAmt != null && abs < _minAmt!) return false;
-    if (_maxAmt != null && abs > _maxAmt!) return false;
     return true;
   }
 
@@ -300,8 +372,7 @@ class _SearchViewState extends State<SearchView> {
               mainAxisSize: MainAxisSize.min,
               children: [
                 _filterBar(scheme, repo),
-                if (showSummary)
-                  _summaryCard(scheme, repo, _results, _refundTotals),
+                if (showSummary) _summaryCard(scheme),
               ],
             ),
           ),
@@ -328,36 +399,9 @@ class _SearchViewState extends State<SearchView> {
     );
   }
 
-  /// 顶部统计卡：支出/收入 金额 + 笔数（对齐咔皮）。
-  Widget _summaryCard(
-    ColorScheme scheme,
-    AppRepository repo,
-    List<TransactionEntity> rows,
-    Map<int, Decimal> refundTotals,
-  ) {
-    var exp = Decimal.zero, inc = Decimal.zero, xfer = Decimal.zero;
-    var expN = 0, incN = 0, xferN = 0;
-    for (final t in rows) {
-      // 转账不进收支（口径标准 §转账），单独数笔数、合计转出金额；
-      // 否则筛「转账」时顶部只剩两个 0。
-      if (t.txKind == TransactionKind.transfer) {
-        if (!LedgerPolicy.includeInUserTotals(t)) continue;
-        xfer += t.amount.abs();
-        xferN++;
-        continue;
-      }
-      final amount = LedgerPolicy.userAmountWith(t, refundTotals);
-      if (amount == Decimal.zero) continue;
-      // 笔数只数净额为正的家族（口径标准 §7.1）：legacy 独立负支出会冲减
-      // 合计，但它不是一笔正支出，不能占笔数。
-      if (t.txKind == TransactionKind.expense) {
-        exp += amount;
-        if (amount > Decimal.zero) expN++;
-      } else if (t.txKind == TransactionKind.income) {
-        inc += amount;
-        if (amount > Decimal.zero) incN++;
-      }
-    }
+  /// 顶部统计卡：支出/收入 金额 + 笔数（对齐咔皮，直接复用 `_runFilter` 聚合结果）。
+  Widget _summaryCard(ColorScheme scheme) {
+    final (:exp, :inc, :xfer, :expN, :incN, :xferN) = _summary;
     Widget col(String label, int n, Decimal amt, Color color) => Expanded(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,

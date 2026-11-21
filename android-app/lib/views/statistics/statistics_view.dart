@@ -3453,20 +3453,34 @@ class _StackedBars12State extends State<_StackedBars12> {
 
   void _compute() {
     final months = <DateTime>[];
+    final slotByYearMonth = <int, int>{};
     for (var i = 11; i >= 0; i--) {
-      months.add(DateTime(widget.endMonth.year, widget.endMonth.month - i, 1));
+      final m = DateTime(widget.endMonth.year, widget.endMonth.month - i, 1);
+      slotByYearMonth[m.year * 12 + m.month] = months.length;
+      months.add(m);
+    }
+    final expDecimals = List<Decimal>.filled(12, Decimal.zero);
+    final incDecimals = List<Decimal>.filled(12, Decimal.zero);
+    // 单遍 O(N) 按月分桶，替代原来 12 次全账本 monthlySummary 扫描。
+    for (final r in widget.records) {
+      if (r.kind == TransactionKind.transfer) continue;
+      final slot = slotByYearMonth[r.date.year * 12 + r.date.month];
+      if (slot == null) continue;
+      if (r.kind == TransactionKind.expense) {
+        expDecimals[slot] += r.amount;
+      } else if (r.kind == TransactionKind.income) {
+        incDecimals[slot] += r.amount;
+      }
     }
     final exp = <double>[];
     final inc = <double>[];
     var maxV = 0.0;
     var any = false;
-    for (final m in months) {
-      final s = StatisticsEngine.monthlySummary(widget.records,
-          year: m.year, month: m.month);
+    for (var i = 0; i < 12; i++) {
       final e =
-          MoneyFormat.toDouble(s.totalExpense).clamp(0.0, double.infinity);
+          MoneyFormat.toDouble(expDecimals[i]).clamp(0.0, double.infinity);
       final iv =
-          MoneyFormat.toDouble(s.totalIncome).clamp(0.0, double.infinity);
+          MoneyFormat.toDouble(incDecimals[i]).clamp(0.0, double.infinity);
       exp.add(e);
       inc.add(iv);
       final top = e > iv ? e : iv;

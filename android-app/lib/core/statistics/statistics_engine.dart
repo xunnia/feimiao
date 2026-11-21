@@ -284,18 +284,15 @@ class StatisticsEngine {
     required int year,
     required int month,
   }) {
-    final monthRecords = records.where((r) {
-      if (r.kind == TransactionKind.transfer) return false;
-      return r.date.year == year && r.date.month == month;
-    }).toList();
-
     var totalExpense = Decimal.zero;
     var totalIncome = Decimal.zero;
     final categoryTotals = <String, _CategoryBucket>{};
     final dailyExpense = <int, Decimal>{};
     final dailyIncome = <int, Decimal>{};
 
-    for (final record in monthRecords) {
+    for (final record in records) {
+      if (record.kind == TransactionKind.transfer) continue;
+      if (record.date.year != year || record.date.month != month) continue;
       final day = record.date.day;
       switch (record.kind) {
         case TransactionKind.expense:
@@ -358,10 +355,13 @@ class StatisticsEngine {
     final dayExpense = <int, Decimal>{};
     final dayIncome = <int, Decimal>{};
 
+    final startMs = s.millisecondsSinceEpoch;
+    final endExclusiveMs = endExclusive.millisecondsSinceEpoch;
     for (final record in records) {
       if (record.kind == TransactionKind.transfer) continue;
+      final recordMs = record.date.millisecondsSinceEpoch;
+      if (recordMs < startMs || recordMs >= endExclusiveMs) continue;
       final d = DateTime(record.date.year, record.date.month, record.date.day);
-      if (d.isBefore(s) || !d.isBefore(endExclusive)) continue;
       final idx = _calendarDaysBetween(s, d);
 
       switch (record.kind) {

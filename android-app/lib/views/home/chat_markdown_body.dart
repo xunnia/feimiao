@@ -27,19 +27,39 @@ class ChatMarkdownBody extends StatefulWidget {
 }
 
 class _ChatMarkdownBodyState extends State<ChatMarkdownBody> {
+  static final RegExp _numericPattern = RegExp(r'[+\-￥¥]?\d[\d,]*(?:\.\d+)?%?');
   late List<md.Node> _nodes;
   final _links = <String, TapGestureRecognizer>{};
+  List<RegExp> _sourceUrlPatterns = const [];
 
   @override
   void initState() {
     super.initState();
+    _compileSourcePatterns();
     _parse();
   }
 
   @override
   void didUpdateWidget(ChatMarkdownBody oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (!_sameUrls(oldWidget.sourceUrls, widget.sourceUrls)) {
+      _compileSourcePatterns();
+    }
     if (oldWidget.text != widget.text) _parse();
+  }
+
+  static bool _sameUrls(Set<String> a, Set<String> b) =>
+      a.length == b.length && a.containsAll(b);
+
+  void _compileSourcePatterns() {
+    if (widget.sourceUrls.isEmpty) {
+      _sourceUrlPatterns = const [];
+      return;
+    }
+    _sourceUrlPatterns = [
+      for (final url in widget.sourceUrls)
+        if (url.isNotEmpty) RegExp('${RegExp.escape(url)}(?=\$|[\\s，。；：！？、)])'),
+    ];
   }
 
   void _parse() {
@@ -233,10 +253,9 @@ class _ChatMarkdownBodyState extends State<ChatMarkdownBody> {
   }
 
   String _withoutKnownSources(String text) {
-    for (final url in widget.sourceUrls) {
-      if (url.isEmpty) continue;
-      text = text.replaceAll(
-          RegExp('${RegExp.escape(url)}(?=\u0024|[\\s，。；：！？、)])'), '');
+    if (_sourceUrlPatterns.isEmpty) return text;
+    for (final pattern in _sourceUrlPatterns) {
+      text = text.replaceAll(pattern, '');
     }
     return text;
   }
@@ -247,9 +266,8 @@ class _ChatMarkdownBodyState extends State<ChatMarkdownBody> {
     for (final node in nodes) {
       if (node is md.Text) {
         final visibleText = _withoutKnownSources(node.text);
-        final pattern = RegExp(r'[+\-￥¥]?\d[\d,]*(?:\.\d+)?%?');
         var offset = 0;
-        for (final match in pattern.allMatches(visibleText)) {
+        for (final match in _numericPattern.allMatches(visibleText)) {
           spans.add(TextSpan(
               text: visibleText.substring(offset, match.start), style: base));
           spans.add(TextSpan(
@@ -381,10 +399,12 @@ class _ChatCodeBlock extends StatelessWidget {
   }
 }
 
+final RegExp _asciiCodePattern = RegExp(r'[\x00-\x7f]+');
+
 List<InlineSpan> _codeSpans(String text, TextStyle style) {
   final spans = <InlineSpan>[];
   var offset = 0;
-  for (final match in RegExp(r'[\x00-\x7f]+').allMatches(text)) {
+  for (final match in _asciiCodePattern.allMatches(text)) {
     spans.add(TextSpan(
         text: text.substring(offset, match.start),
         style: style

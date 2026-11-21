@@ -46,8 +46,23 @@ bool shouldShowTransactionClock(
         !transactionTimeIsMidnight(value),
     };
 
+String _normalizeAiDateString(String raw) {
+  var value = raw.trim();
+  if (value.isEmpty) return value;
+  // 容忍部分中文票据模型输出 YYYY/MM/DD 或单数字月日（如 2026/6/5）。
+  final slashDate =
+      RegExp(r'^(\d{4})/(\d{1,2})/(\d{1,2})(.*)$').firstMatch(value);
+  if (slashDate != null) {
+    final y = slashDate.group(1)!;
+    final m = slashDate.group(2)!.padLeft(2, '0');
+    final d = slashDate.group(3)!.padLeft(2, '0');
+    value = '$y-$m-$d${slashDate.group(4)!}';
+  }
+  return value;
+}
+
 TransactionTimePrecision aiTransactionTimePrecision(String raw) {
-  final value = raw.trim();
+  final value = _normalizeAiDateString(raw);
   if (value.isEmpty || DateTime.tryParse(value) == null) {
     return TransactionTimePrecision.entryClock;
   }
@@ -93,12 +108,32 @@ DateTime calendarDayWithClock(DateTime day, DateTime clock) {
 /// the time this entry was submitted". An explicit ISO time, including a real
 /// `00:00`, remains authoritative. Invalid or missing output uses [fallback].
 DateTime parseAiTransactionTime(String raw, {required DateTime fallback}) {
-  final value = raw.trim();
+  final value = _normalizeAiDateString(raw);
   if (value.isEmpty) return fallback;
 
   final parsed = DateTime.tryParse(value);
   if (parsed == null) return fallback;
 
   final isDateOnly = RegExp(r'^\d{4}-\d{2}-\d{2}$').hasMatch(value);
-  return isDateOnly ? calendarDayWithClock(parsed, fallback) : parsed;
+  if (isDateOnly) return calendarDayWithClock(parsed, fallback);
+
+  // 模型在提示词要求本地时间时偶尔误加尾部 'Z'（例如 2026-06-20T12:30:00Z），
+  // 保留模型输出的本地墙钟时分，避免东八区整段偏移 8 小时甚至跨天；
+  // 显式带时区偏移（如 +08:00）则规范转换成本地 DateTime。
+  if (parsed.isUtc) {
+    if (value.endsWith('Z') || value.endsWith('z')) {
+      return DateTime(
+        parsed.year,
+        parsed.month,
+        parsed.day,
+        parsed.hour,
+        parsed.minute,
+        parsed.second,
+        parsed.millisecond,
+        parsed.microsecond,
+      );
+    }
+    return parsed.toLocal();
+  }
+  return parsed;
 }

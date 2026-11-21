@@ -181,7 +181,9 @@ class TxDaySectionHeader extends StatelessWidget {
         textDirection: Directionality.of(context),
         textScaler: MediaQuery.textScalerOf(context),
       )..layout();
-      return painter.width;
+      final width = painter.width;
+      painter.dispose();
+      return width;
     }
 
     return Padding(
@@ -304,10 +306,7 @@ class TxRow extends StatelessWidget {
 
   String get _emoji {
     if (_isTransfer) return '🔁';
-    final seed = CategorySeed.all
-        .where((s) => s.key == transaction.categoryKey)
-        .firstOrNull;
-    return seed?.emoji ?? '🏷️';
+    return CategorySeed.emojiOf(transaction.categoryKey);
   }
 
   // 老的独立退款冲账行（负支出）：显示成「+¥x」收入绿。

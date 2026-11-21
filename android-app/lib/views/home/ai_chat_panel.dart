@@ -1732,7 +1732,12 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
     AppRepository repo,
     String json,
   ) async {
-    await _pendingUserPersistence;
+    final pending = _pendingUserPersistence;
+    if (pending != null) {
+      try {
+        await pending.timeout(_kAiChatPersistenceTimeout);
+      } catch (_) {}
+    }
     final signature = _chatSignature('record', json, '');
     _pendingChatSignatures.update(signature, (count) => count + 1,
         ifAbsent: () => 1);
@@ -2511,7 +2516,7 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
         _thinkingStatusTimer = null;
         return;
       }
-      setState(() {});
+      msg.notifyLiveChange();
       // A request can stall before the HTTP stream is opened (OAuth refresh,
       // search preparation, or attachment decoding). The transport timeout
       // cannot see those stages, so release the foreground UI explicitly.
@@ -2920,7 +2925,12 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
             final homeRefund =
                 widget.recordOnly ? _matchRefund(repo, text) : null;
             if (homeRefund?.isRefundMutation == true) {
-              await _applyRefund(homeRefund!, repo, flowId: flowId);
+              await _applyRefund(
+                homeRefund!,
+                repo,
+                flowId: flowId,
+                runId: recordRun?.id,
+              );
             } else {
               await _applyRecord(
                 res.entries,
@@ -3046,8 +3056,33 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
     }
   }
 
-  Future<void> _applyRefund(RefundMatchResult result, AppRepository repo,
-      {int? flowId}) async {
+  Future<void> _applyRefund(
+    RefundMatchResult result,
+    AppRepository repo, {
+    int? flowId,
+    String? runId,
+  }) async {
+    Future<void> finishRefundRun(
+      AiRunStatus status,
+      Map<String, Object?> payload,
+    ) async {
+      if (runId == null || runId.isEmpty) return;
+      await repo.updateAiRun(
+        runId,
+        status: status,
+        resultJson: jsonEncode(payload),
+        requiresConfirmation: false,
+      );
+      _recordRunEvent(
+        repo,
+        runId,
+        status == AiRunStatus.cancelled
+            ? AiRunEventType.cancelled
+            : AiRunEventType.completed,
+        payload: payload,
+      );
+    }
+
     _setThinkingKind(_ThinkingKind.recordMatch, flowId: flowId);
     if (result.status != RefundMatchStatus.matched) {
       final prompt = _refundPrompt(result);
@@ -3058,6 +3093,10 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
           _busy = false;
         });
       }
+      await finishRefundRun(AiRunStatus.completed, {
+        'refundStatus': result.status.name,
+        'entries': 0,
+      });
       await _addChatMessage(repo, role: 'info', text: prompt);
       if (mounted) _scrollToLatestUserMessage();
       return;
@@ -3077,6 +3116,33 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
           _busy = false;
         });
       }
+      await finishRefundRun(AiRunStatus.completed, {
+        'refundStatus': 'original_missing',
+        'entries': 0,
+      });
+      await _addChatMessage(repo, role: 'info', text: prompt);
+      if (mounted) _scrollToLatestUserMessage();
+      return;
+    }
+
+    // 弹确认层前按最新数据库余额重算剩余可退上限，防止并发退款导致陈旧额度。
+    final freshRemaining = original.amount - repo.refundedAmountOf(original.id);
+    if (freshRemaining <= Decimal.zero || amount > freshRemaining) {
+      final prompt = freshRemaining <= Decimal.zero
+          ? '这笔原订单已经全额退款，不能重复登记'
+          : '这笔原订单只剩 ${MoneyFormat.string(freshRemaining)} 可退，'
+              '不能登记 ${MoneyFormat.string(amount)}。请核对金额';
+      if (mounted) {
+        _completeThinking(flowId: flowId);
+        setState(() {
+          _msgs.add(_InfoMsg(prompt));
+          _busy = false;
+        });
+      }
+      await finishRefundRun(AiRunStatus.completed, {
+        'refundStatus': 'exceeds_remaining',
+        'entries': 0,
+      });
       await _addChatMessage(repo, role: 'info', text: prompt);
       if (mounted) _scrollToLatestUserMessage();
       return;
@@ -3086,19 +3152,27 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
       context,
       original: original,
       initialAmount: amount,
-      maxAmount: candidate.remaining,
+      maxAmount: freshRemaining,
       amountEditable: false,
       title: '确认退款到账',
       confirmLabel: '确认退款',
       existingRefunds: repo.refundsOf(original.id),
     );
-    if (!mounted) return;
+    if (!mounted) {
+      await finishRefundRun(AiRunStatus.cancelled, {
+        'refundStatus': 'unmounted',
+      });
+      return;
+    }
     if (settlement == null) {
       const prompt = '已取消这笔退款，本次没有写入账本';
       _completeThinking(flowId: flowId);
       setState(() {
         _msgs.add(_InfoMsg(prompt));
         _busy = false;
+      });
+      await finishRefundRun(AiRunStatus.cancelled, {
+        'refundStatus': 'user_cancelled',
       });
       await _addChatMessage(repo, role: 'info', text: prompt);
       _scrollToLatestUserMessage();
@@ -3122,10 +3196,19 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
           _busy = false;
         });
       }
+      await finishRefundRun(AiRunStatus.completed, {
+        'refundStatus': 'conflict',
+        'entries': 0,
+      });
       await _addChatMessage(repo, role: 'info', text: prompt);
       if (mounted) _scrollToLatestUserMessage();
       return;
     }
+    await finishRefundRun(AiRunStatus.completed, {
+      'refundStatus': 'committed',
+      'refundId': refundId,
+      'originalId': original.id,
+    });
 
     final refundedAfter = repo.refundedAmountOf(original.id);
     final bookName = repo.books
@@ -3257,7 +3340,8 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
       }
     }
     if (runId != null && runId.isNotEmpty) {
-      if (results.isEmpty) {
+      if (proposalMsg == null) {
+        // 无可确认提案（解析为空、缺金额或页面已关闭未确认）：直接标记完成，避免 ai_runs 残留僵尸 awaitingConfirmation。
         await repo.updateAiRun(
           runId,
           status: AiRunStatus.completed,
@@ -3337,12 +3421,19 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
       final followTail = _followLatest &&
           _scroll.hasClients &&
           _scroll.position.extentAfter < 48;
-      refreshTimer = Timer(const Duration(milliseconds: 32), () {
+      // 约 20 Hz 节流（50ms），并仅通过消息局部 revision 刷新实时气泡，
+      // 不再触发根 _AiChatPanelState 全面板/历史气泡/输入栏毛玻璃重建。
+      refreshTimer = Timer(const Duration(milliseconds: 50), () {
         refreshTimer = null;
         if (!mounted || requestExpired || !_ownsFlow(flowId)) return;
-        setState(() {
-          if (liveMessage != null) liveMessage!.text = chunks.toString();
-        });
+        if (liveMessage != null) {
+          liveMessage!.text = chunks.toString();
+          liveMessage!.notifyLiveChange();
+        }
+        final thinking = _currentThinkingMsg(flowId);
+        if (thinking != null && !thinking.completed) {
+          thinking.notifyLiveChange();
+        }
         if (followTail) {
           WidgetsBinding.instance.addPostFrameCallback((_) {
             if (mounted &&
@@ -5319,31 +5410,25 @@ ${line('上月同期', lastStart, lastSameDayEnd, lastSameDay)}
   }
 
   CategoryEntity? _matchCat(AppRepository repo, ParsedEntry e) {
-    CategoryEntity? cat;
-    // 分类优先级:用户纠正记忆 > 商户/关键词词典 > 大模型猜测 > 兜底。
-    // 记忆=最懂你;词典=高频商户确定性命中(瑞幸→饮料、滴滴→打车),比模型稳。
+    // 分类优先级：用户纠正记忆 > 商户/关键词词典（仅当大模型未给出更具体分类时）> 大模型 > 兜底。
+    // 同时过滤已隐藏分类，并支持大小写不敏感 key 与中文名回退。
     final learned = repo.recallCategoryKey(e.note, e.kind);
     final dict = MerchantCategory.classify(e.note, e.kind);
-    // 笼统餐饮按时段细化到早/午/晚餐（更聪明）。
-    final wantKey = MealTime.refine(
-      learned ?? dict ?? e.categoryKey,
-      e.date,
-      e.note,
-    );
-    if (wantKey != null) {
-      cat = repo.categories
-          .where((c) => c.kind == e.kind && c.key == wantKey)
-          .firstOrNull;
-    }
-    cat ??= repo.categories
-        .where(
-          (c) =>
-              c.kind == e.kind &&
-              (c.key == CategorySeed.fallbackExpenseKey ||
-                  c.key == 'otherIncome'),
-        )
-        .firstOrNull;
-    return cat;
+    final llmKey = e.categoryKey?.trim();
+    final llmFallback = llmKey == null ||
+        llmKey.isEmpty ||
+        llmKey == CategorySeed.fallbackExpenseKey ||
+        llmKey == 'otherIncome';
+    // 泛电商平台词（淘宝/京东/拼多多 → shopping）与快递兜底（other）不再覆盖大模型选出的更具体分类。
+    final dictIsGeneric =
+        dict == 'shopping' || dict == CategorySeed.fallbackExpenseKey;
+    final pickedKey = learned ??
+        (dict != null && (!dictIsGeneric || llmFallback) ? dict : null) ??
+        llmKey ??
+        dict;
+    // 笼统餐饮按时段细化到早/午/晚餐（仅当目标子类存在且未隐藏时生效）。
+    final refinedKey = MealTime.refine(pickedKey, e.date, e.note);
+    return repo.resolveActiveCategory(refinedKey ?? pickedKey, e.kind);
   }
 
   // ── 保存这张卡里的账目 ──────────────────────────────────────────────────
@@ -5613,26 +5698,35 @@ ${line('上月同期', lastStart, lastSameDayEnd, lastSameDay)}
   // ── 删除单笔：明细卡上的「删除」芯片（带确认，替代旧的整条撤销）────────────
   Future<void> _deleteEntry(_RecordMsg msg, int i) async {
     final id = i < msg.txnIds.length ? msg.txnIds[i] : null;
-    if (id == null) return;
-    final ok = await showConfirmDialog(
-      context,
-      title: '删除这笔账？',
-      message: '删除后不可恢复。',
-      confirmText: '删除',
-      destructive: true,
-    );
-    if (!ok || !mounted) return;
-    if (!_recordActionIsCurrent(msg)) return;
-    try {
-      await msg.lease!.run(() => _chatRepository.deleteTransaction(id));
-    } catch (error) {
-      if (mounted) _snack('删除失败：$error');
+    if (id == null ||
+        msg.deletedIdx.contains(i) ||
+        msg.deletingIdx.contains(i)) {
       return;
     }
-    if (!mounted) return;
-    Haptics.selection();
-    setState(() => msg.deletedIdx.add(i));
-    await _persistRecord(msg); // 把删除状态写回持久化卡
+    msg.deletingIdx.add(i);
+    try {
+      final ok = await showConfirmDialog(
+        context,
+        title: '删除这笔账？',
+        message: '删除后不可恢复。',
+        confirmText: '删除',
+        destructive: true,
+      );
+      if (!ok || !mounted) return;
+      if (!_recordActionIsCurrent(msg)) return;
+      try {
+        await msg.lease!.run(() => _chatRepository.deleteTransaction(id));
+      } catch (error) {
+        if (mounted) _snack('删除失败：$error');
+        return;
+      }
+      if (!mounted) return;
+      Haptics.selection();
+      setState(() => msg.deletedIdx.add(i));
+      await _persistRecord(msg); // 把删除状态写回持久化卡
+    } finally {
+      msg.deletingIdx.remove(i);
+    }
   }
 
   Future<void> _undoRecord(_RecordMsg msg) async {
@@ -5647,30 +5741,34 @@ ${line('上月同期', lastStart, lastSameDayEnd, lastSameDay)}
     );
     if (!ok || !mounted || !_recordActionIsCurrent(msg)) return;
     final repo = context.read<AppRepository>();
-    final bool changed;
+    final ({bool changed, Set<int> deletedIds, int skippedCount}) undoResult;
     try {
-      changed = await msg.lease!.run(() => repo.undoAiRun(runId));
+      undoResult = await msg.lease!.run(() => repo.undoAiRunDetailed(runId));
     } catch (error) {
       if (mounted) _snack('撤销失败：$error');
       return;
     }
-    if (!changed) {
+    if (!undoResult.changed) {
       if (mounted) _snack('这次记账已经撤销，或没有可撤销的记录');
       return;
     }
     msg.rolledBack = true;
-    msg.deletedIdx.addAll(
-      [
-        for (var i = 0; i < msg.txnIds.length; i++)
-          if (msg.txnIds[i] != null) i
-      ],
-    );
-    msg.savedFeedback = '本次 AI 记账已撤销';
+    // 只划掉实际被撤销删除的条目，保留用户修改后被跳过保护的条目。
+    for (var i = 0; i < msg.txnIds.length; i++) {
+      final id = msg.txnIds[i];
+      if (id != null && undoResult.deletedIds.contains(id)) {
+        msg.deletedIdx.add(i);
+      }
+    }
+    final feedback = undoResult.skippedCount > 0
+        ? '已撤销 ${undoResult.deletedIds.length} 笔，另有 ${undoResult.skippedCount} 笔因修改过已保留'
+        : '本次 AI 记账已撤销';
+    msg.savedFeedback = feedback;
     await _persistRecord(msg, repository: repo);
     if (mounted) {
       Haptics.selection();
       setState(() {});
-      _snack('本次 AI 记账已撤销');
+      _snack(feedback);
     }
   }
 
@@ -6585,21 +6683,31 @@ ${line('上月同期', lastStart, lastSameDayEnd, lastSameDay)}
           ? KeyedSubtree(key: _latestUserMsgKey, child: bubble)
           : bubble;
     }
-    if (m is _ThinkingMsg) return _ThinkingBubble(msg: m);
+    if (m is _ThinkingMsg) {
+      return ValueListenableBuilder<int>(
+        valueListenable: m.liveRevision,
+        builder: (_, __, ___) => _ThinkingBubble(msg: m),
+      );
+    }
     if (m is _InfoMsg) return _InfoBubble(text: m.text, error: m.error);
     if (m is _AnswerMsg) {
-      return _AnswerBubble(
-        text: m.text,
-        animate: !m.shown,
-        streaming: m.streaming,
-        interrupted: m.interrupted,
-        sources: m.sources,
-        onShown: () => m.shown = true,
-        onRegenerate: widget.recordOnly || m.question.isEmpty
-            ? null
-            : () => _regenerate(m),
-        // 猫只出现在最后一条回复下（对齐 Claude），历史回复不重复放猫。
-        showMascot: isLast,
+      return RepaintBoundary(
+        child: ValueListenableBuilder<int>(
+          valueListenable: m.liveRevision,
+          builder: (_, __, ___) => _AnswerBubble(
+            text: m.text,
+            animate: !m.shown,
+            streaming: m.streaming,
+            interrupted: m.interrupted,
+            sources: m.sources,
+            onShown: () => m.shown = true,
+            onRegenerate: widget.recordOnly || m.question.isEmpty
+                ? null
+                : () => _regenerate(m),
+            // 猫只出现在最后一条回复下（对齐 Claude），历史回复不重复放猫。
+            showMascot: isLast,
+          ),
+        ),
       );
     }
     if (m is _ReportMsg) {
@@ -6613,9 +6721,13 @@ ${line('上月同期', lastStart, lastSameDayEnd, lastSameDay)}
     }
     if (m is _RecordMsg) {
       final repo = context.read<AppRepository>();
+      final leaseBookId = m.lease?.bookId;
+      final leaseBookName = leaseBookId == null
+          ? null
+          : repo.books.where((b) => b.id == leaseBookId).firstOrNull?.name;
       return _RecordBubble(
         msg: m,
-        bookName: repo.currentBook?.name ?? '总账本',
+        bookName: leaseBookName ?? repo.currentBook?.name ?? '总账本',
         onSave: m.saving ? null : () => _save(m),
         onChangeCategory: (i) => _showCategoryPicker(m, i),
         onDeleteEntry: (i) => _deleteEntry(m, i),
@@ -6711,6 +6823,11 @@ class _ThinkingMsg extends _Msg {
   bool hidden = false;
   final List<_ThinkingStep> steps;
   final List<AiWebSource> sources = <AiWebSource>[];
+  final ValueNotifier<int> liveRevision = ValueNotifier<int>(0);
+
+  void notifyLiveChange() {
+    liveRevision.value = liveRevision.value + 1;
+  }
 
   _ThinkingMsg(
     this.kind, {
@@ -6779,6 +6896,12 @@ class _AnswerMsg extends _Msg {
   int? chatRowId;
   bool interrupted = false;
   final _ThinkingMsg? thinking;
+  final ValueNotifier<int> liveRevision = ValueNotifier<int>(0);
+
+  void notifyLiveChange() {
+    liveRevision.value = liveRevision.value + 1;
+  }
+
   _AnswerMsg(
     this.text, {
     this.question = '',
@@ -6831,6 +6954,9 @@ class _RecordMsg extends _Msg {
 
   /// 已被用户从明细卡上删除的条目下标（跨重启持久化，恢复时从 JSON 灌回）。
   final Set<int> deletedIdx = <int>{};
+
+  /// 正在确认/删除中的条目下标（防双击重复弹确认框与重复删除）。
+  final Set<int> deletingIdx = <int>{};
   String savedFeedback; // 记完后猫给的一句数据反馈
 
   /// 这张卡在 chat_messages 表里的行 id（已保存的卡才有）；改分类/删条目后
@@ -8990,7 +9116,14 @@ class _RecordBubble extends StatelessWidget {
               onChangeCategory: () => onChangeCategory(i),
               onDelete: () => onDeleteEntry(i),
             ),
-          if (msg.aiRunId != null && msg.aiRunId!.isNotEmpty)
+          if (msg.aiRunId != null &&
+              msg.aiRunId!.isNotEmpty &&
+              (msg.rolledBack ||
+                  [
+                    for (var i = 0; i < msg.txnIds.length; i++)
+                      if (msg.txnIds[i] != null && !msg.deletedIdx.contains(i))
+                        i,
+                  ].isNotEmpty))
             Align(
               alignment: Alignment.centerLeft,
               child: _ActionChip(
@@ -9530,8 +9663,11 @@ class _ScaledSingleLineText extends StatelessWidget {
           textScaler: textScaler,
           maxLines: 1,
         )..layout();
+        final measuredWidth = painter.width;
+        final measuredHeight = painter.height;
+        painter.dispose();
         final available = constraints.maxWidth;
-        if (!available.isFinite || painter.width <= available) {
+        if (!available.isFinite || measuredWidth <= available) {
           return Text(
             text,
             textScaler: textScaler,
@@ -9541,10 +9677,10 @@ class _ScaledSingleLineText extends StatelessWidget {
             style: resolvedStyle,
           );
         }
-        final scale = available <= 0 ? 0.0 : available / painter.width;
+        final scale = available <= 0 ? 0.0 : available / measuredWidth;
         return SizedBox(
           width: available,
-          height: painter.height * scale,
+          height: measuredHeight * scale,
           child: FittedBox(
             fit: BoxFit.scaleDown,
             alignment: Alignment.centerLeft,

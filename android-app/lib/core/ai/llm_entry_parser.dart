@@ -25,8 +25,139 @@ import 'openai_codex_oauth.dart';
 class LlmEntryParser {
   LlmEntryParser._();
 
-  static const _timeoutSeconds = 20;
+  static const _timeoutSeconds = 35;
+  static const _heavyTimeoutSeconds = 60;
   static AiHttpTransport? _sharedTransport;
+
+  static int _timeoutFor({
+    required AiProviderConfig provider,
+    required bool heavy,
+  }) {
+    if (heavy || provider.reasoningEffort != AiReasoningEffort.none) {
+      return _heavyTimeoutSeconds;
+    }
+    return _timeoutSeconds;
+  }
+
+  /// 宽容抽取模型返回的 JSON 对象：
+  /// 1) 去掉 UTF-8 BOM 与 `<think>...</think>` 思考块；
+  /// 2) 优先直接 `jsonDecode`；
+  /// 3) 回退抽取 Markdown fenced code block（```` ```json ... ``` ````）；
+  /// 4) 回退按括号平衡扫描首个 `{ ... }`（并在最后一步容忍尾逗号）。
+  @visibleForTesting
+  static Map<String, dynamic> extractJsonObject(String raw) {
+    var cleaned = raw.trim();
+    if (cleaned.isNotEmpty && cleaned.codeUnitAt(0) == 0xFEFF) {
+      cleaned = cleaned.substring(1).trim();
+    }
+    cleaned = cleaned
+        .replaceAll(
+          RegExp(r'<think>[\s\S]*?</think>', caseSensitive: false),
+          '',
+        )
+        .trim();
+
+    Map<String, dynamic>? tryDecode(String candidate) {
+      final text = candidate.trim();
+      if (text.isEmpty) return null;
+      try {
+        final decoded = jsonDecode(text);
+        if (decoded is Map<String, dynamic>) return decoded;
+      } catch (_) {
+        // 仅在标准解析失败时容忍尾逗号（部分中转/推理模型常见）。
+        final noTrailingComma =
+            text.replaceAllMapped(RegExp(r',\s*([}\]])'), (m) => m.group(1)!);
+        if (noTrailingComma != text) {
+          try {
+            final decoded = jsonDecode(noTrailingComma);
+            if (decoded is Map<String, dynamic>) return decoded;
+          } catch (_) {}
+        }
+      }
+      return null;
+    }
+
+    final direct = tryDecode(cleaned);
+    if (direct != null) return direct;
+
+    for (final match
+        in RegExp(r'```(?:json)?\s*([\s\S]*?)```', caseSensitive: false)
+            .allMatches(cleaned)) {
+      final block = match.group(1);
+      if (block == null) continue;
+      final parsed = tryDecode(block);
+      if (parsed != null) return parsed;
+    }
+
+    // 按 JSON 字符串转义规则扫描最外层平衡的 `{ ... }`。
+    var depth = 0;
+    var start = -1;
+    var inString = false;
+    var escaped = false;
+    for (var i = 0; i < cleaned.length; i++) {
+      final ch = cleaned[i];
+      if (inString) {
+        if (escaped) {
+          escaped = false;
+        } else if (ch == r'\') {
+          escaped = true;
+        } else if (ch == '"') {
+          inString = false;
+        }
+        continue;
+      }
+      if (ch == '"') {
+        inString = true;
+        continue;
+      }
+      if (ch == '{') {
+        if (depth == 0) start = i;
+        depth++;
+      } else if (ch == '}' && depth > 0) {
+        depth--;
+        if (depth == 0 && start >= 0) {
+          final parsed = tryDecode(cleaned.substring(start, i + 1));
+          if (parsed != null) return parsed;
+          start = -1;
+        }
+      }
+    }
+
+    throw const FormatException('未在模型回复中找到有效 JSON 对象');
+  }
+
+  /// 标准化模型返回的金额字段：容忍千分位逗号、货币符号、前后空格、中文全角数字及「元/块」后缀。
+  @visibleForTesting
+  static Decimal? parseModelAmount(Object? rawAmount) {
+    if (rawAmount is num) {
+      if (!rawAmount.isFinite) return null;
+      return Decimal.tryParse(rawAmount.toString());
+    }
+    if (rawAmount is! String) return null;
+    var s = rawAmount.trim();
+    if (s.isEmpty) return null;
+    // 全角数字/小数点/符号转半角
+    final buf = StringBuffer();
+    for (final rune in s.runes) {
+      if (rune >= 0xFF10 && rune <= 0xFF19) {
+        buf.writeCharCode(rune - 0xFEE0);
+      } else if (rune == 0xFF0E) {
+        buf.write('.');
+      } else if (rune == 0xFF0C) {
+        buf.write(',');
+      } else if (rune == 0x2212 || rune == 0xFF0D) {
+        buf.write('-');
+      } else {
+        buf.writeCharCode(rune);
+      }
+    }
+    s = buf
+        .toString()
+        .replaceAll(RegExp(r'[\s,¥￥$€£]'), '')
+        .replaceAll(RegExp(r'(?:人民币|元|块)$'), '');
+    if (s.isEmpty) return null;
+    return Decimal.tryParse(s);
+  }
 
   static AiHttpTransport get _transport =>
       _sharedTransport ??= AiHttpTransport();
@@ -115,8 +246,23 @@ class LlmEntryParser {
     final expenseList = expenseCats.map((c) => '${c.key}:${c.name}').join('、');
     final incomeList = incomeCats.map((c) => '${c.key}:${c.name}').join('、');
 
-    // 用户历史纠正 → few-shot 习惯提示，让模型模仿这个用户的分类选择。
-    final hints = learnedHints.take(20).toList();
+    // 用户历史纠正 → few-shot 习惯提示：优先挑命中当前输入文本的短语，
+    // 再保留最新记录（最多 20 条），避免用户纠正超过 20 条后新习惯永远进不了提示词。
+    final normalizedInput = text.toLowerCase();
+    final matchedHints = <({String phrase, String categoryKey})>[];
+    final otherHints = <({String phrase, String categoryKey})>[];
+    for (final h in learnedHints) {
+      if (h.phrase.isNotEmpty &&
+          normalizedInput.contains(h.phrase.toLowerCase())) {
+        matchedHints.add(h);
+      } else {
+        otherHints.add(h);
+      }
+    }
+    final hints = [
+      ...matchedHints,
+      ...otherHints.reversed,
+    ].take(20).toList();
     final habitBlock = hints.isEmpty
         ? ''
         : '''
@@ -218,8 +364,10 @@ ${hints.map((h) => '${h.phrase}→${h.categoryKey}').join('、')}''';
     // 兼容模型回退（对齐 llm_query 的 _postWithModelFallback）：
     // 首选模型 400/404 或报模型不存在时，换下一个候选模型重试。
     final requestStartedMs = clock.elapsedMilliseconds;
+    final heavyRequest = fromScreenshot || attachmentParts.isNotEmpty;
     final content = await _postChatContentWithFallback(
       provider: provider,
+      timeoutSeconds: _timeoutFor(provider: provider, heavy: heavyRequest),
       bodyForModel: (model) => {
         'model': model,
         'messages': [
@@ -228,18 +376,19 @@ ${hints.map((h) => '${h.phrase}→${h.categoryKey}').join('、')}''';
         ],
         'response_format': {'type': 'json_object'},
         'response_schema': _recordOutputSchema,
+        'max_tokens': heavyRequest ? 4096 : 2048,
         'temperature': 0.2, // 抽取类任务调低，减少同句不同解析的随机性
         'stream': false,
       },
     );
     final responseReadyMs = clock.elapsedMilliseconds;
 
-    // 解析 content 里的 entries 数组
+    // 解析 content 里的 entries 数组（容忍 Markdown 代码块、<think> 标签与尾逗号）
     late Map<String, dynamic> parsed;
     try {
-      parsed = jsonDecode(content) as Map<String, dynamic>;
+      parsed = extractJsonObject(content);
     } catch (e) {
-      throw LlmParseException('模型返回的 JSON 解析失败：$e\n原文：$content');
+      throw LlmParseException('模型返回的 JSON 解析失败：$e');
     }
 
     // 意图：截图一律记账；否则读模型给的 intent，缺省/拿不准当 record。
@@ -324,6 +473,7 @@ $catList
     // 兼容模型回退：与 parseWithLLM 共用同一套候选模型重试逻辑。
     final content = await _postChatContentWithFallback(
       provider: provider,
+      timeoutSeconds: _timeoutFor(provider: provider, heavy: items.length > 20),
       bodyForModel: (model) => {
         'model': model,
         'messages': [
@@ -331,12 +481,13 @@ $catList
           {'role': 'user', 'content': merchantLines},
         ],
         'response_format': {'type': 'json_object'},
+        'max_tokens': 2048,
         'temperature': 0.2,
         'stream': false,
       },
     );
     try {
-      final parsed = jsonDecode(content) as Map<String, dynamic>;
+      final parsed = extractJsonObject(content);
       return {
         for (final e in parsed.entries)
           if (e.value is String && (e.value as String).isNotEmpty)
@@ -357,6 +508,7 @@ $catList
   static Future<String> _postChatContentWithFallback({
     required AiProviderConfig provider,
     required Map<String, dynamic> Function(String model) bodyForModel,
+    int timeoutSeconds = _timeoutSeconds,
   }) async {
     LlmParseException? lastError;
     var models = provider.modelCandidates;
@@ -371,6 +523,7 @@ $catList
           return await _postChatContent(
             provider: activeProvider,
             body: bodyForModel(model),
+            timeoutSeconds: timeoutSeconds,
           );
         } on LlmParseException catch (e) {
           if (_shouldRetryInitialNetwork(
@@ -483,6 +636,7 @@ $catList
   static Future<String> _postChatContent({
     required AiProviderConfig provider,
     required Map<String, dynamic> body,
+    int timeoutSeconds = _timeoutSeconds,
   }) async {
     late int statusCode;
     late String bodyText;
@@ -527,7 +681,7 @@ $catList
           ..body = jsonEncode(requestBody);
         final response = await _transport.send(
           request,
-          timeout: const Duration(seconds: _timeoutSeconds),
+          timeout: Duration(seconds: timeoutSeconds),
           forceRouteRefresh: true,
         );
         statusCode = response.statusCode;
@@ -544,7 +698,7 @@ $catList
           uri,
           headers: headers,
           body: jsonEncode(requestBody),
-          timeout: const Duration(seconds: _timeoutSeconds),
+          timeout: Duration(seconds: timeoutSeconds),
           forceRouteRefresh: true,
         );
         statusCode = response.statusCode;
@@ -657,24 +811,19 @@ $catList
 
   static ParsedEntry? _convertEntry(
       Map<String, dynamic> raw, DateTime fallbackDate) {
-    // amount
-    final rawAmount = raw['amount'];
-    final Decimal? amount = switch (rawAmount) {
-      num n => Decimal.tryParse(n.toString()),
-      String s => Decimal.tryParse(s),
-      _ => null,
-    };
+    // amount（支持数字、带千分位/货币符号/全角数字的字符串）
+    final Decimal? amount = parseModelAmount(raw['amount']);
 
-    // kind
-    final kindStr = raw['kind'] as String? ?? 'expense';
+    // kind（大小写不敏感 + 去空格）
+    final kindStr = (raw['kind']?.toString() ?? 'expense').trim().toLowerCase();
     final kind =
         kindStr == 'income' ? TransactionKind.income : TransactionKind.expense;
 
     // categoryKey
-    final categoryKey = raw['categoryKey'] as String?;
+    final categoryKey = raw['categoryKey']?.toString().trim();
 
     // note
-    final note = raw['note'] as String? ?? '';
+    final note = raw['note']?.toString() ?? '';
 
     // date
     final date = parseAiTransactionTime(

@@ -57,6 +57,7 @@ class _AiQuickEntryViewState extends State<AiQuickEntryView> {
 
   bool _loading = false;
   bool _saving = false;
+  int _parseToken = 0;
 
   /// 是否因降级（未配置 key 或 LLM 失败）而用了本地解析。
   bool _usedFallback = false;
@@ -89,8 +90,10 @@ class _AiQuickEntryViewState extends State<AiQuickEntryView> {
   // ---------------------------------------------------------------------------
 
   Future<void> _doParse() async {
+    if (_loading) return;
     final text = _inputCtrl.text.trim();
     if (text.isEmpty) return;
+    final token = ++_parseToken;
 
     final repo = context.read<AppRepository>();
     setState(() {
@@ -104,6 +107,13 @@ class _AiQuickEntryViewState extends State<AiQuickEntryView> {
     });
 
     try {
+      // 冷启动通过系统分享进入时，先等 AI 配置就绪，避免误把已配好的模型降级成单笔本地解析。
+      if (!repo.isAiReady) {
+        try {
+          await repo.aiReady.timeout(const Duration(seconds: 6));
+        } catch (_) {}
+      }
+      if (!mounted || token != _parseToken) return;
       if (!widget.fromScreenshot) {
         final refund = RefundMatcher.match(
           text: text,
@@ -122,7 +132,7 @@ class _AiQuickEntryViewState extends State<AiQuickEntryView> {
           ],
         );
         if (refund.isRefundMutation) {
-          if (mounted) {
+          if (mounted && token == _parseToken) {
             setState(() {
               _pendingRefund =
                   refund.status == RefundMatchStatus.matched ? refund : null;
@@ -144,14 +154,13 @@ class _AiQuickEntryViewState extends State<AiQuickEntryView> {
           context,
           config: aiConfig,
         );
+        if (!mounted || token != _parseToken) return;
         if (!consented) {
-          if (mounted) {
-            setState(() {
-              _loading = false;
-              _usedFallback = true;
-              _fallbackHint = '未同意 AI 隐私说明，已取消联网解析';
-            });
-          }
+          setState(() {
+            _loading = false;
+            _usedFallback = true;
+            _fallbackHint = '未同意 AI 隐私说明，已取消联网解析';
+          });
           return;
         }
         // 尝试 LLM 解析
@@ -183,29 +192,28 @@ class _AiQuickEntryViewState extends State<AiQuickEntryView> {
         fallbackHint = '未配置 AI 或解析失败，已用本地简易解析（单笔）';
       }
 
-      // 为每笔结果匹配分类实体：用户记忆 > 商户/关键词词典 > 大模型 > 兜底。
+      if (!mounted || token != _parseToken) return;
+
+      // 为每笔结果匹配未隐藏分类实体：用户记忆 > 精准商户词典 > 大模型 > 兜底。
       final matched = results.map((entry) {
-        CategoryEntity? cat;
         final learned = repo.recallCategoryKey(entry.note, entry.kind);
         final dict = MerchantCategory.classify(entry.note, entry.kind);
-        final wantKey = MealTime.refine(
-            learned ?? dict ?? entry.categoryKey, entry.date, entry.note);
-        if (wantKey != null) {
-          cat = repo.categories
-              .where((c) => c.kind == entry.kind && c.key == wantKey)
-              .firstOrNull;
-        }
-        // 未匹配 → 兜底 other / otherIncome
-        cat ??= repo.categories
-            .where((c) =>
-                c.kind == entry.kind &&
-                (c.key == CategorySeed.fallbackExpenseKey ||
-                    c.key == 'otherIncome'))
-            .firstOrNull;
-        return cat;
+        final llmKey = entry.categoryKey?.trim();
+        final llmFallback = llmKey == null ||
+            llmKey.isEmpty ||
+            llmKey == CategorySeed.fallbackExpenseKey ||
+            llmKey == 'otherIncome';
+        final dictIsGeneric =
+            dict == 'shopping' || dict == CategorySeed.fallbackExpenseKey;
+        final pickedKey = learned ??
+            (dict != null && (!dictIsGeneric || llmFallback) ? dict : null) ??
+            llmKey ??
+            dict;
+        final refinedKey = MealTime.refine(pickedKey, entry.date, entry.note);
+        return repo.resolveActiveCategory(refinedKey ?? pickedKey, entry.kind);
       }).toList();
 
-      if (mounted) {
+      if (mounted && token == _parseToken) {
         setState(() {
           _entries = results;
           _matchedCats = matched;
@@ -215,7 +223,7 @@ class _AiQuickEntryViewState extends State<AiQuickEntryView> {
         });
       }
     } catch (_) {
-      if (mounted) setState(() => _loading = false);
+      if (mounted && token == _parseToken) setState(() => _loading = false);
     }
   }
 
@@ -241,11 +249,23 @@ class _AiQuickEntryViewState extends State<AiQuickEntryView> {
       }
       setState(() => _saving = true);
       try {
+        final freshRemaining =
+            original.amount - repo.refundedAmountOf(original.id);
+        if (freshRemaining <= Decimal.zero ||
+            pendingRefund.amount! > freshRemaining) {
+          if (mounted) {
+            setState(() {
+              _pendingRefund = null;
+              _refundNotice = '原订单或可退金额刚刚发生了变化，退款没有写入。请核对后重试';
+            });
+          }
+          return;
+        }
         final settlement = await showRefundSettlementSheet(
           context,
           original: original,
           initialAmount: pendingRefund.amount!,
-          maxAmount: pendingRefund.candidate!.remaining,
+          maxAmount: freshRemaining,
           amountEditable: false,
           title: '确认退款到账',
           confirmLabel: '确认退款',
@@ -280,7 +300,10 @@ class _AiQuickEntryViewState extends State<AiQuickEntryView> {
 
     final repo = context.read<AppRepository>();
     final accountId = repo.transactionAccounts.firstOrNull?.id;
-    if (accountId == null) return;
+    if (accountId == null) {
+      showAppToast(context, '请先在「资产管理」里加一个账户', icon: Icons.info_outline);
+      return;
+    }
 
     setState(() => _saving = true);
     try {
@@ -444,6 +467,7 @@ class _AiQuickEntryViewState extends State<AiQuickEntryView> {
                         contentPadding: const EdgeInsets.symmetric(vertical: 4),
                       ),
                       onChanged: (_) {
+                        _parseToken++;
                         setState(() {
                           if (_entries != null) {
                             _entries = null;

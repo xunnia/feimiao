@@ -10,8 +10,23 @@ class OrderListParser {
   OrderListParser._();
 
   static final RegExp countAnchor = RegExp(r'共\s*\d+\s*件');
-  static final RegExp cancelled =
-      RegExp(r'已取消|交易关闭|已关闭|交易取消|退款成功|已退款|未付款');
+  static final RegExp cancelled = RegExp(r'已取消|交易关闭|已关闭|交易取消|退款成功|已退款|未付款');
+  static final RegExp _priceHint =
+      RegExp(r'[¥￥]\s*\d+(?:\.\d{1,2})?|\d+\.\d{2}');
+  static final RegExp _partialRefundHint = RegExp(r'已退款\s*[¥￥]?\s*\d|部分退款');
+
+  static bool _isCancelledOrder(List<OcrLine> block) {
+    for (final line in block) {
+      final t = line.text.trim();
+      if (t.isEmpty) continue;
+      if (_partialRefundHint.hasMatch(t)) continue;
+      // 仅把短状态行/状态标签视为整单取消，避免误杀长横幅提示或「申请退款」按钮。
+      if (t.length <= 16 && cancelled.hasMatch(t) && !t.contains('申请退款')) {
+        return true;
+      }
+    }
+    return false;
+  }
 
   /// 切成一单一块，已丢弃取消/退款单。块内按阅读顺序(top)排列。
   static List<List<OcrLine>> segment(List<OcrLine> lines) {
@@ -33,17 +48,16 @@ class OrderListParser {
           cur = <OcrLine>[];
         }
       }
-      // 末尾残留(页脚/优惠券/按钮，无「共N件」)直接丢弃：只保留真正含锚点的块
-      blocks = blocks
-          .where((b) => b.any((l) => countAnchor.hasMatch(l.text)))
-          .toList();
+      // 末尾残留若本身包含价格（如屏底最后一单的「共N件」被截在屏外）且有至少两行，保留给上层解析；
+      // 纯页脚/按钮残留（无价格）直接丢弃。
+      if (cur.length >= 2 && cur.any((l) => _priceHint.hasMatch(l.text))) {
+        blocks.add(cur);
+      }
     } else {
       blocks = ScreenshotLayout.clusterBlocks(valid);
     }
 
-    // 丢弃已取消/退款/未付款的整单
-    return blocks
-        .where((b) => !cancelled.hasMatch(b.map((l) => l.text).join()))
-        .toList();
+    // 丢弃已取消/全额退款/未付款的整单
+    return blocks.where((b) => !_isCancelledOrder(b)).toList();
   }
 }

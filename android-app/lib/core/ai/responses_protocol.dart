@@ -92,7 +92,7 @@ abstract final class ResponsesProtocol {
         body['max_output_tokens'] = maxTokens;
       }
     }
-    final effort = entry || codex
+    final effort = codex
         ? config.reasoningEffort.codexResponsesApiValue
         : config.reasoningEffort.responsesApiValue;
     if (effort != null) body['reasoning'] = {'effort': effort};

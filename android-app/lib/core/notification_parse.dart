@@ -48,7 +48,13 @@ class NotificationParse {
       // 紧挨支付词（前或后）→ 最可能是本次支付金额
       if (_payCtx.hasMatch(pre) || _payCtx.hasMatch(post)) return val;
     }
-    return firstNonBalance ?? balanceFallback;
+    if (firstNonBalance != null) return firstNonBalance;
+    // 纯余额查询/余额提醒通知（无任何支付或收款语义）不能把账户余额当成本次消费金额。
+    if (balanceFallback != null &&
+        (_payCtx.hasMatch(text) || _refundCtx.hasMatch(text))) {
+      return balanceFallback;
+    }
+    return null;
   }
 
   /// 收支方向：收款/到账/退款/「向你转账」→ 收入；其余 → 支出。

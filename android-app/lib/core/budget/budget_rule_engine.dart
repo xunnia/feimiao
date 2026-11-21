@@ -107,13 +107,21 @@ class BudgetRuleEngine {
 
     final todayDay = budgetDay(today);
     final target = year * 12 + month - 1;
+    final targetMode = modeFor(target);
     final starts = [
       for (final rule in calendar.rules) _monthIndex(rule.startDate),
       for (final change in changes) change.monthIndex,
     ];
     var carry = 0;
-    if (starts.isNotEmpty) {
-      final first = starts.reduce((a, b) => a < b ? a : b);
+    if (starts.isNotEmpty && targetMode != BudgetRolloverMode.reset) {
+      var first = starts.reduce((a, b) => a < b ? a : b);
+      // 结余在任一中间 reset 月都会清零，只需从最后一个 reset 月开始向前累计。
+      for (var index = target - 1; index > first; index--) {
+        if (modeFor(index) == BudgetRolloverMode.reset) {
+          first = index;
+          break;
+        }
+      }
       for (var index = first; index < target; index++) {
         final days = _days(calendar, index);
         final budget = days.fold(0, (sum, d) => sum + d.budgetCents);
@@ -126,7 +134,6 @@ class BudgetRuleEngine {
         };
       }
     }
-    if (modeFor(target) == BudgetRolloverMode.reset) carry = 0;
 
     final days = _days(calendar, target);
     final budget = days.fold(0, (sum, d) => sum + d.budgetCents);
@@ -139,7 +146,7 @@ class BudgetRuleEngine {
       budgetCents: budget,
       carryInCents: carry,
       spentCents: spent,
-      rolloverMode: modeFor(target),
+      rolloverMode: targetMode,
       today: inMonth
           ? _todayStatus(days, spendByDay, todayDay, budget + carry)
           : null,
@@ -223,7 +230,9 @@ class BudgetRuleEngine {
         if (candidate.id == 0 || rule.id != candidate.id) rule
     ];
     final calendar = BudgetRuleCalendar([...others, candidate]);
-    for (var d = candidate.startDate; !d.isAfter(end); d = budgetAddDays(d, 1)) {
+    for (var d = candidate.startDate;
+        !d.isAfter(end);
+        d = budgetAddDays(d, 1)) {
       if (!identical(calendar.specialOwner(d), candidate)) continue;
       final base = calendar.baseOwner(d);
       if (base == null) {

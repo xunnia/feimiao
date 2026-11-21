@@ -188,14 +188,15 @@ class AccountBalanceCheckpointResolver {
 
     final includedIds = <String>[];
     final unresolvedIds = <String>[];
-    final orderedMovements = movements.toList()
-      ..sort((left, right) => _compareMovementOrder(left, right));
+    // 先过滤出与当前账户及知识截止时间相关的流水再排序，避免 10k 全账本重复排序。
+    final orderedMovements = <AccountBalanceMovement>[
+      for (final movement in movements)
+        if ((movement.createdMs <= 0 ||
+                movement.createdMs <= query.knowledgeCutoffMs) &&
+            movement.mayAffect(query.accountId))
+          movement,
+    ]..sort(_compareMovementOrder);
     for (final movement in orderedMovements) {
-      if (movement.createdMs > 0 &&
-          movement.createdMs > query.knowledgeCutoffMs) {
-        continue;
-      }
-      if (!movement.mayAffect(query.accountId)) continue;
       if (movement.accountId == null) {
         reasons.add(AccountBalancePartialReason.unknownSettlementAccount);
         unresolvedIds.add(movement.id);
