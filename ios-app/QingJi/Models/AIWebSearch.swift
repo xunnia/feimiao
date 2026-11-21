@@ -1,16 +1,18 @@
 import Foundation
+import QingJiCore
 
 /// Keyless public-web fallback for Claude and OpenAI-compatible gateways.
 /// Official Responses/Codex accounts use their native web-search tool instead;
 /// this adapter is only used when the provider has no equivalent tool.
 enum AIWebSearch {
-    static func shouldSearch(_ query: String) -> Bool {
-        let keywords = [
-            "最新", "新闻", "今天", "天气", "价格", "汇率", "官网", "政策",
-            "资料", "搜索", "网上", "现在", "近期", "发布", "版本"
-        ]
-        let value = query.lowercased()
-        return keywords.contains(where: { value.contains($0) })
+    static func shouldSearch(
+        _ query: String,
+        previousUserQuestionsNewestFirst: [String] = []
+    ) -> Bool {
+        AssistantChatContract.shouldRunPublicWebSearch(
+            query,
+            previousUserQuestionsNewestFirst: previousUserQuestionsNewestFirst
+        )
     }
 
     static func search(_ query: String, maxResults: Int = 5) async throws -> [AIChatSource] {

@@ -13,7 +13,7 @@ struct MeowAssistantView: View {
     @Environment(AppRouter.self) private var router
     @Environment(AIProviderStore.self) private var providerStore
 
-    @Query(sort: \MoneyTransaction.date, order: .reverse)
+    @Query(sort: MoneyTransaction.descendingSortDescriptors)
     private var transactions: [MoneyTransaction]
     @Query(sort: \Account.sortOrder)
     private var accounts: [Account]
@@ -56,10 +56,21 @@ struct MeowAssistantView: View {
         titleOverride = title
     }
 
-    private var usableRecords: [TransactionRecord] {
-        let scoped = LedgerScope.filter(transactions, selectedBookID: router.selectedBookID, books: books)
-            .map(\.record)
+    private func usableRecords(for bookID: UUID?) -> [TransactionRecord] {
+        let scoped = LedgerScope.filter(
+            transactions.sorted(by: MoneyTransaction.isOrderedBeforeDescending),
+            selectedBookID: bookID,
+            books: books
+        ).map(\.record)
         return LedgerPolicy.userRecords(from: scoped)
+    }
+
+    private func bookDisplayName(for bookID: UUID?) -> String {
+        guard let bookID,
+              let book = books.first(where: { $0.stableID == bookID }) else {
+            return "总账本"
+        }
+        return book.isDefault ? "总账本" : book.name
     }
 
     var body: some View {
@@ -271,6 +282,10 @@ struct MeowAssistantView: View {
             ScrollView {
                 LazyVStack(spacing: 14) {
                     ForEach(turns) { turn in
+                        let canRegenerate = !isSending
+                            && turn.role == "assistant"
+                            && recordCards[turn.id] == nil
+                            && precedingUserTurn(before: turn.id) != nil
                         AssistantMessageBubble(
                             turn: turn,
                             isStreaming: isSending && turn.role == "assistant" && turn.id == turns.last?.id,
@@ -281,6 +296,7 @@ struct MeowAssistantView: View {
                                 draft = turn.content
                                 attachments = turn.attachments
                             },
+                            onRegenerate: canRegenerate ? { regenerate(assistantID: turn.id) } : nil,
                             recordCard: recordCards[turn.id],
                             onSaveRecord: recordCards[turn.id]?.saved == false ? { saveRecord(turnID: turn.id) } : nil,
                             onUndoRecord: recordCards[turn.id]?.saved == true && recordCards[turn.id]?.rolledBack == false
@@ -498,46 +514,159 @@ struct MeowAssistantView: View {
 
         let id = sessionID ?? createSession(for: account)
         sessionID = id
-        let requestID = UUID()
-        activeRequestID = requestID
         let bookID = (books.first { $0.stableID == router.selectedBookID }
             ?? books.first { $0.isDefault } ?? books.first)?.stableID
-        let lease = AIChatOperationFence.shared.capture(sessionID: id, bookID: bookID)
-        let startedAt = Date()
-        let isRecordRequest = recordSession
+        let priorConversation = turns
+        let priorUserQuestions = priorConversation.reversed()
+            .filter { $0.role == "user" }
+            .map(\.content)
+        let intent = AssistantChatContract.resolveIntent(
+            recordSession: recordSession,
+            text: prompt,
+            hasAttachments: !attachments.isEmpty,
+            previousUserQuestionsNewestFirst: priorUserQuestions
+        )
+        // 普通会话不直接把随口提到的记账写入账本，统一引导去置顶的「记一记」（与 Android 一致）。
+        if !recordSession && intent == .record {
+            errorMessage = "记账请使用置顶的「记一记」会话。"
+            return
+        }
+
         let userTurn = AIChatTurn(role: "user", content: prompt, attachments: attachments)
         followLatest = true
         turns.append(userTurn)
         guard persistMessage(userTurn, sessionID: id) else {
             turns.removeAll { $0.id == userTurn.id }
-            activeRequestID = nil
             return
         }
         updateSessionTitleIfNeeded(prompt, sessionID: id)
         draft = ""
         attachments = []
 
+        startAssistantGeneration(
+            sessionID: id,
+            account: account,
+            bookID: bookID,
+            userTurn: userTurn,
+            priorConversation: priorConversation,
+            intent: intent
+        )
+    }
+
+    private func precedingUserTurn(before assistantID: UUID) -> AIChatTurn? {
+        guard let index = turns.firstIndex(where: { $0.id == assistantID }) else { return nil }
+        return turns[..<index].last { $0.role == "user" }
+    }
+
+    private func regenerate(assistantID targetID: UUID) {
+        guard !isSending else { return }
+        guard let targetIndex = turns.firstIndex(where: { $0.id == targetID }),
+              turns[targetIndex].role == "assistant",
+              recordCards[targetID] == nil else { return }
+        guard let userIndex = turns[..<targetIndex].lastIndex(where: { $0.role == "user" }) else { return }
+        let userTurn = turns[userIndex]
+        guard let account = providerStore.selectedAccount else {
+            errorMessage = "请先在 AI 设置中添加并启用一个账号。"
+            return
+        }
+        guard !providerStore.secret(for: account.id).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            errorMessage = account.authMethod == .oauth
+                ? "当前 ChatGPT 账号授权已失效，请到 AI 设置中重新登录。"
+                : "当前账号没有 API Key，请到 AI 设置中补充。"
+            return
+        }
+        guard AIPrivacyConsentStore.isAccepted(for: account.id) else {
+            pendingConsentAccount = account
+            return
+        }
+
+        let id = sessionID ?? createSession(for: account)
+        sessionID = id
+        let priorConversation = Array(turns[..<userIndex])
+        let priorUserQuestions = priorConversation.reversed()
+            .filter { $0.role == "user" }
+            .map(\.content)
+        let intent = AssistantChatContract.resolveIntent(
+            recordSession: recordSession,
+            text: userTurn.content,
+            hasAttachments: !userTurn.attachments.isEmpty,
+            previousUserQuestionsNewestFirst: priorUserQuestions
+        )
+        let bookID = (books.first { $0.stableID == router.selectedBookID }
+            ?? books.first { $0.isDefault } ?? books.first)?.stableID
+
+        guard deletePersistedMessage(id: targetID, sessionID: id) else { return }
+        turns.remove(at: targetIndex)
+        completionByTurn.removeValue(forKey: targetID)
+        reasoningByTurn.removeValue(forKey: targetID)
+        sourcesByTurn.removeValue(forKey: targetID)
+        runIDsByTurn.removeValue(forKey: targetID)
+        followLatest = true
+
+        startAssistantGeneration(
+            sessionID: id,
+            account: account,
+            bookID: bookID,
+            userTurn: userTurn,
+            priorConversation: priorConversation,
+            intent: intent
+        )
+    }
+
+    private func startAssistantGeneration(
+        sessionID id: UUID,
+        account: AIProviderAccount,
+        bookID: UUID?,
+        userTurn: AIChatTurn,
+        priorConversation: [AIChatTurn],
+        intent: ChatIntentKind
+    ) {
+        let prompt = userTurn.content
+        let requestID = UUID()
+        activeRequestID = requestID
+        // 发起即锁定会话与账本快照：生成过程中切账本不影响本次查账上下文或记账落库目标。
+        let lease = AIChatOperationFence.shared.capture(sessionID: id, bookID: bookID)
+        let startedAt = Date()
+        let isRecordRequest = recordSession
+        let priorUserQuestions = priorConversation.reversed()
+            .filter { $0.role == "user" }
+            .map(\.content)
+
         let assistantID = UUID()
         turns.append(AIChatTurn(id: assistantID, role: "assistant", content: ""))
         isSending = true
 
-        let intent = recordSession
-            ? ChatIntentKind.record
-            : ChatIntent.classify(
-                prompt,
-                hasArabicAmount: prompt.range(of: #"\d"#, options: .regularExpression) != nil
+        let ledgerText: String
+        let requestSystemTurns: [AIChatTurn]
+        if isRecordRequest {
+            ledgerText = ""
+            requestSystemTurns = [AIChatTurn(role: "system", content: recordSystemPrompt)]
+        } else {
+            ledgerText = intent == .query
+                ? ledgerContextSnapshot(for: bookID)
+                : ""
+            let memoryText = AIMemoryStore.promptBlock(
+                memories: aiMemories,
+                query: prompt
             )
-        let requestSystemPrompt: String
-        switch intent {
-        case .record:
-            requestSystemPrompt = recordSession ? recordSystemPrompt : chatSystemPrompt
-        case .query:
-            requestSystemPrompt = systemPrompt(for: prompt)
-            AIMemoryStore.markUsed(aiMemories, query: prompt, in: context)
-        case .chat:
-            requestSystemPrompt = chatSystemPrompt
+            if !memoryText.isEmpty {
+                AIMemoryStore.markUsed(aiMemories, query: prompt, in: context)
+            }
+            requestSystemTurns = AssistantChatContract.systemMessages(
+                now: AppClock.now,
+                ledgerText: ledgerText,
+                memoryText: memoryText
+            ).map { AIChatTurn(role: "system", content: $0) }
         }
-        let requestTurns = [AIChatTurn(role: "system", content: requestSystemPrompt)] + turns.dropLast()
+        let conversationHistory = priorConversation + [userTurn]
+        let requestTurns = requestSystemTurns + conversationHistory
+        let requestWebSearch = AssistantChatContract.allowsWebSearch(
+            globalEnabled: ChatWebSearchPreference.isEnabled,
+            structuredRecord: isRecordRequest,
+            question: prompt,
+            ledgerText: ledgerText,
+            previousUserQuestionsNewestFirst: priorUserQuestions
+        )
         let runMode: AIRequestMode = recordSession
             ? .record
             : (intent == .query ? .query : .chat)
@@ -610,7 +739,7 @@ struct MeowAssistantView: View {
                 AIRequestRunStore.setStatus(runID, .thinking, in: context)
                 let response = try await providerStore.stream(
                     account: account,
-                    messages: Array(requestTurns),
+                    messages: requestTurns,
                     onText: { delta in
                         guard activeRequestID == requestID,
                               AIChatOperationFence.shared.isCurrent(lease),
@@ -643,7 +772,7 @@ struct MeowAssistantView: View {
                         )
                     },
                     structuredRecord: isRecordRequest,
-                    webSearch: ChatWebSearchPreference.isEnabled
+                    webSearch: requestWebSearch
                 )
                 try Task.checkCancellation()
                 guard activeRequestID == requestID,
@@ -815,6 +944,24 @@ struct MeowAssistantView: View {
         }
     }
 
+    private func deletePersistedMessage(id: UUID, sessionID: UUID) -> Bool {
+        do {
+            let saved = try context.fetch(FetchDescriptor<AIChatMessage>(
+                predicate: #Predicate { $0.sessionID == sessionID && $0.stableID == id }
+            ))
+            for item in saved {
+                context.delete(item)
+            }
+            if !saved.isEmpty {
+                try context.save()
+            }
+            return true
+        } catch {
+            errorMessage = "旧回复清理失败：\(error.localizedDescription)"
+            return false
+        }
+    }
+
     private func updateSessionTitleIfNeeded(_ prompt: String, sessionID: UUID) {
         guard let session = (try? context.fetch(FetchDescriptor<AIChatSession>()))?
             .first(where: { $0.stableID == sessionID }),
@@ -950,36 +1097,31 @@ struct MeowAssistantView: View {
         return true
     }
 
-    private func systemPrompt(for query: String) -> String {
+    private func ledgerContextSnapshot(for bookID: UUID?) -> String {
         let now = AppClock.now
-        let components = Calendar.current.dateComponents([.year, .month], from: now)
+        let calendar = Calendar.current
+        let components = calendar.dateComponents([.year, .month], from: now)
+        let year = components.year ?? 2000
+        let month = components.month ?? 1
+        let records = usableRecords(for: bookID)
         let summary = StatisticsEngine.monthlySummary(
-            of: usableRecords,
-            year: components.year ?? 2000,
-            month: components.month ?? 1
+            of: records,
+            year: year,
+            month: month,
+            calendar: calendar
         )
-        let recent = usableRecords.prefix(16).map {
-            let note = $0.note.isEmpty ? "未命名" : $0.note
-            return "\($0.date.formatted(.dateTime.month().day())) \(note) \($0.amount)"
+        let currencyCode = records.first?.currencyCode ?? "CNY"
+        let recent = records.prefix(16).map { record -> String in
+            let dateParts = calendar.dateComponents([.month, .day], from: record.date)
+            let dayText = "\(dateParts.month ?? month)月\(dateParts.day ?? 1)日"
+            let note = record.note.isEmpty ? "未命名" : record.note
+            return "\(dayText) \(note) \(MoneyFormat.string(record.amount, currencyCode: record.currencyCode))"
         }.joined(separator: "；")
-        let memory = AIMemoryStore.promptBlock(
-            memories: aiMemories,
-            query: query
-        )
-        let memoryText = memory.isEmpty ? "暂无匹配的已授权记忆" : memory
         return """
-        你是肥喵记账的亲切助手。只能根据提供的账务数据回答；数据不足时明确说不知道，不要编造金额。金额使用人民币，转账不算收入或支出，退款和报销按原账单净额理解。回答口语化、简洁，必要时使用少量 Markdown。
-        当前月份：\(components.year ?? 2000)-\(components.month ?? 1)。本月收入 \(summary.totalIncome)，本月支出 \(summary.totalExpense)，结余 \(summary.balance)。近期记录：\(recent.isEmpty ? "暂无" : recent)
-        与本次问题匹配的已授权记忆：
-        \(memoryText)
-        """
-    }
-
-    private var chatSystemPrompt: String {
-        """
-        你是肥喵记账的亲切助手。当前问题不是在查询或修改用户账本。
-        只根据会话中用户明确提供的内容回答；不要猜测用户的金额、账户或历史消费，
-        也不要声称读取了账本。回答自然、口语化，必要时使用少量 Markdown。
+        账本范围：\(bookDisplayName(for: bookID))（发起时已锁定）
+        当前月份：\(year)-\(String(format: "%02d", month))
+        本期准确合计：支出 \(MoneyFormat.string(summary.totalExpense, currencyCode: currencyCode))，收入 \(MoneyFormat.string(summary.totalIncome, currencyCode: currencyCode))，结余 \(MoneyFormat.string(summary.balance, currencyCode: currencyCode))（转账不算收入或支出，退款与报销按原账单净额计算）
+        近期记录：\(recent.isEmpty ? "暂无" : recent)
         """
     }
 }
@@ -991,6 +1133,7 @@ private struct AssistantMessageBubble: View {
     let completion: AIChatCompletionMetadata?
     let sources: [AIChatSource]
     let onEdit: () -> Void
+    let onRegenerate: (() -> Void)?
     let recordCard: AIRecordCardState?
     let onSaveRecord: (() -> Void)?
     let onUndoRecord: (() -> Void)?
@@ -1064,7 +1207,7 @@ private struct AssistantMessageBubble: View {
             if completion?.interrupted == true {
                 Text("回复已中断").font(.caption).foregroundStyle(.secondary)
             }
-            if !isStreaming && !turn.content.isEmpty {
+            if !isStreaming && (!turn.content.isEmpty || (completion?.interrupted == true && onRegenerate != nil)) {
                 ViewThatFits(in: .horizontal) {
                     HStack(spacing: 0) {
                         actions
@@ -1082,12 +1225,19 @@ private struct AssistantMessageBubble: View {
 
     private var actions: some View {
         HStack(spacing: 0) {
-            action("复制", symbol: "doc.on.doc") { UIPasteboard.general.string = turn.content }
-            action("赞同", symbol: "hand.thumbsup", selected: feedback == 1) { feedback = feedback == 1 ? 0 : 1 }
-            action("不赞同", symbol: "hand.thumbsdown", selected: feedback == -1) { feedback = feedback == -1 ? 0 : -1 }
-            ShareLink(item: turn.content) {
-                Image(systemName: "square.and.arrow.up").frame(width: 36, height: 36)
-            }.buttonStyle(.plain).accessibilityLabel("分享")
+            if !turn.content.isEmpty {
+                action("复制", symbol: "doc.on.doc") { UIPasteboard.general.string = turn.content }
+                action("赞同", symbol: "hand.thumbsup", selected: feedback == 1) { feedback = feedback == 1 ? 0 : 1 }
+                action("不赞同", symbol: "hand.thumbsdown", selected: feedback == -1) { feedback = feedback == -1 ? 0 : -1 }
+            }
+            if let onRegenerate {
+                action("重新生成", symbol: "arrow.clockwise", perform: onRegenerate)
+            }
+            if !turn.content.isEmpty {
+                ShareLink(item: turn.content) {
+                    Image(systemName: "square.and.arrow.up").frame(width: 36, height: 36)
+                }.buttonStyle(.plain).accessibilityLabel("分享")
+            }
         }.foregroundStyle(.secondary).fixedSize()
     }
 

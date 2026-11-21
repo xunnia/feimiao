@@ -1,4 +1,5 @@
 import XCTest
+import QingJiCore
 @testable import QingJi
 
 @MainActor
@@ -108,5 +109,76 @@ final class AIProviderClientTests: XCTestCase {
         )
         XCTAssertEqual((chatBody["response_format"] as? [String: String])?["type"], "json_object")
         XCTAssertNotNil(chatBody["response_schema"] as? [String: Any])
+    }
+
+    func testPrivateLedgerConversationDisablesNativeWebSearchPerRequest() {
+        let now = Date(timeIntervalSince1970: 1_787_803_200)
+        let ledgerMessages = AssistantChatContract.systemMessages(
+            now: now,
+            ledgerText: "账本范围：总账本（发起时已锁定）\n本期准确合计：支出 ¥100.00"
+        ).map { AIChatTurn(role: "system", content: $0) }
+            + [AIChatTurn(role: "user", content: "这个月花了多少")]
+        XCTAssertFalse(
+            AIProviderStore.allowsWebSearch(
+                messages: ledgerMessages,
+                globalEnabled: true,
+                structuredRecord: false
+            )
+        )
+
+        let mixedMessages = AssistantChatContract.systemMessages(
+            now: now,
+            ledgerText: ""
+        ).map { AIChatTurn(role: "system", content: $0) }
+            + [AIChatTurn(role: "user", content: "查询我的账单，并分析最近股市")]
+        XCTAssertFalse(
+            AIProviderStore.allowsWebSearch(
+                messages: mixedMessages,
+                globalEnabled: true,
+                structuredRecord: false
+            )
+        )
+
+        let publicMessages = AssistantChatContract.systemMessages(
+            now: now,
+            ledgerText: ""
+        ).map { AIChatTurn(role: "system", content: $0) }
+            + [AIChatTurn(role: "user", content: "帮我分析下最近的股市")]
+        XCTAssertTrue(
+            AIProviderStore.allowsWebSearch(
+                messages: publicMessages,
+                globalEnabled: true,
+                structuredRecord: false
+            )
+        )
+        XCTAssertTrue(AIWebSearch.shouldSearch("帮我分析下最近的股市"))
+        XCTAssertFalse(AIWebSearch.shouldSearch("查询我的账单，并分析最近股市"))
+        XCTAssertFalse(
+            AIWebSearch.shouldSearch(
+                "上个月呢",
+                previousUserQuestionsNewestFirst: ["这个月花了多少"]
+            )
+        )
+
+        var responsesAccount = AIProviderAccount(
+            name: "OpenAI",
+            type: .custom,
+            baseURL: "https://api.openai.com/v1",
+            model: "gpt-5-mini",
+            endpoint: .responses,
+            webSearchEnabled: false
+        )
+        let privateBody = AIProviderClient.requestBodyForTesting(
+            account: responsesAccount,
+            messages: ledgerMessages
+        )
+        XCTAssertNil(privateBody["tools"])
+
+        responsesAccount.webSearchEnabled = true
+        let publicBody = AIProviderClient.requestBodyForTesting(
+            account: responsesAccount,
+            messages: publicMessages
+        )
+        XCTAssertNotNil(publicBody["tools"])
     }
 }

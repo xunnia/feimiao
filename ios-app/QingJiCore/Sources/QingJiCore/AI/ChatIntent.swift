@@ -6,19 +6,20 @@ public enum ChatIntentKind: String, Codable, CaseIterable, Hashable, Sendable {
     case chat
 }
 
-/// 喵助手的本地三态意图判断。只有明确账本语义才会把个人流水拼进
-/// 普通会话；知识问答和闲聊不会携带账本上下文。
+/// 喵助手的本地三态意图判断（对齐 Android `lib/core/ai/chat_intent.dart`）。
+/// 只有明确账本语义才会把个人流水拼进普通会话；纯日期词不等于财务语义，
+/// 知识问答、股市分析和闲聊不会携带账本上下文。
 public enum ChatIntent {
     private static let queryWords = [
         "多少", "排行", "排名", "最大", "最多", "最贵", "最高", "对比", "分析",
         "统计", "占比", "哪类", "哪个", "哪天", "怎么样", "什么", "为什么",
         "如何", "是不是", "合理", "超支", "明细", "花销", "剩", "吗", "?", "？",
     ]
+    /// 只有问句同时涉及账本/收支语义时才算查账；纯日期词（本月/今年等）不放在这里。
     private static let financeWords = [
         "账", "支出", "收入", "消费", "花销", "花了", "预算", "余额", "结余",
-        "金额", "一笔", "分类", "报销", "退款", "工资", "买", "餐饮", "吃饭",
-        "打车", "购物", "交通", "本月", "上月", "这个月", "上个月", "今年",
-        "去年", "周报", "月报", "年报", "报告",
+        "超支", "金额", "一笔", "分类", "报销", "退款", "工资", "买", "餐饮",
+        "吃饭", "打车", "购物", "交通", "周报", "月报", "年报", "报告",
     ]
     private static let ledgerScopeWords = [
         "本月", "这月", "这个月", "上月", "上个月", "本周", "这周", "上周",
@@ -39,26 +40,60 @@ public enum ChatIntent {
         "早餐", "午饭", "午餐", "晚饭", "晚餐", "夜宵", "吃饭", "餐饮", "外卖", "奶茶",
         "咖啡", "饮料", "打车", "公交", "地铁", "停车", "加油", "房租", "水费", "电费",
         "燃气", "话费", "网费", "快递", "药费", "失业金", "失业保险", "社保", "补贴",
-        "津贴", "养老金", "退休金", "红包", "工资", "奖金", "报销", "退款", "支出", "收入",
-        "买菜", "菜", "超市", "水果", "零食", "购物",
+        "津贴", "养老金", "退休金", "公积金", "红包", "工资", "奖金", "报销", "退款",
+        "支出", "收入", "买菜", "菜", "超市", "水果", "零食", "购物",
     ]
 
-    public static func isQuery(_ text: String, hasArabicAmount: Bool = false) -> Bool {
-        classify(text, hasArabicAmount: hasArabicAmount) == .query
+    public static func isQuery(
+        _ text: String,
+        hasArabicAmount: Bool = false,
+        previousQuestion: String = ""
+    ) -> Bool {
+        classify(
+            text,
+            hasArabicAmount: hasArabicAmount,
+            previousQuestion: previousQuestion
+        ) == .query
+    }
+
+    public static func isPeriodFollowUp(_ text: String) -> Bool {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
+        return trimmed.range(
+            of: #"^(?:那|那么)?(?:本月|这个月|这月|上月|上个月|本周|这周|上周|今天|昨天|今年|去年|近\s*\d{1,3}\s*天)(?:的)?(?:呢|怎么样|如何)?[？?]?$"#,
+            options: .regularExpression
+        ) != nil
+    }
+
+    /// 从最新到最旧的用户历史问题中找出最近一条明确话题（跳过纯日期追问）。
+    public static func lastTopicQuestion(_ newestFirst: [String]) -> String {
+        for question in newestFirst {
+            let trimmed = question.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty && !isPeriodFollowUp(trimmed) {
+                return question
+            }
+        }
+        return ""
     }
 
     public static func classify(
         _ text: String,
-        hasArabicAmount: Bool = false
+        hasArabicAmount: Bool = false,
+        previousQuestion: String = ""
     ) -> ChatIntentKind {
         let value = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !value.isEmpty else { return .chat }
         let hasFinanceContext = financeWords.contains(where: value.contains)
         let hasScope = ledgerScopeWords.contains(where: value.contains) ||
-            value.range(of: #"最近\s*\d{1,3}\s*天"#, options: .regularExpression) != nil
+            value.range(of: #"(?:最近|近\s*\d{1,3}\s*天)"#, options: .regularExpression) != nil
 
         if explicitQueryActions.contains(where: value.contains) ||
             (hasScope && hasFinanceContext && queryActions.contains(where: value.contains)) {
+            return .query
+        }
+        if isPeriodFollowUp(value),
+           !previousQuestion.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+           classify(previousQuestion) == .query {
             return .query
         }
         if queryWords.contains(where: value.contains) {

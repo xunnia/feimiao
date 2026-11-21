@@ -1,6 +1,7 @@
 import Foundation
 import Observation
 import Security
+import QingJiCore
 
 /// The provider/account shape mirrors the Android AI settings contract while
 /// keeping credentials outside the Codable payload.
@@ -664,6 +665,28 @@ final class AIProviderStore {
         }
     }
 
+    static func allowsWebSearch(
+        messages: [AIChatTurn],
+        globalEnabled: Bool,
+        structuredRecord: Bool
+    ) -> Bool {
+        let userHistoryNewestFirst = messages.reversed()
+            .filter { $0.role == "user" }
+            .map(\.content)
+        let currentQuery = userHistoryNewestFirst.first ?? ""
+        let priorUserQuestions = Array(userHistoryNewestFirst.dropFirst())
+        let hasLedgerContext = messages.contains {
+            $0.role == "system" && $0.content.contains("账目上下文：")
+        }
+        return AssistantChatContract.allowsWebSearch(
+            globalEnabled: globalEnabled,
+            structuredRecord: structuredRecord,
+            question: currentQuery,
+            ledgerText: hasLedgerContext ? "ledger" : "",
+            previousUserQuestionsNewestFirst: priorUserQuestions
+        )
+    }
+
     func stream(
         account: AIProviderAccount,
         messages: [AIChatTurn],
@@ -677,13 +700,25 @@ final class AIProviderStore {
         var requestMessages = messages
         var localSources: [AIChatSource] = []
         // 联网搜索只认聊天 [+] 面板里的那一个开关（调用方传 webSearch），
-        // 账号上旧的「允许联网搜索」不再生效；结构化记账永远不联网。
-        let searchAllowed = webSearch && !structuredRecord
+        // 账号上旧的「允许联网搜索」不再生效；结构化记账与含私有账本语义的请求单次关闭搜索。
+        let userHistoryNewestFirst = messages.reversed()
+            .filter { $0.role == "user" }
+            .map(\.content)
+        let currentQuery = userHistoryNewestFirst.first ?? ""
+        let priorUserQuestions = Array(userHistoryNewestFirst.dropFirst())
+        let searchAllowed = Self.allowsWebSearch(
+            messages: messages,
+            globalEnabled: webSearch,
+            structuredRecord: structuredRecord
+        )
         if searchAllowed,
            !account.usesResponses,
-           let query = messages.last(where: { $0.role == "user" })?.content,
-           AIWebSearch.shouldSearch(query),
-           let searchSources = try? await AIWebSearch.search(query) {
+           !currentQuery.isEmpty,
+           AIWebSearch.shouldSearch(
+               currentQuery,
+               previousUserQuestionsNewestFirst: priorUserQuestions
+           ),
+           let searchSources = try? await AIWebSearch.search(currentQuery) {
             localSources = searchSources
             let evidence = searchSources.enumerated().map { index, source in
                 "\(index + 1). \(source.title)\n摘要：\(source.snippet)\n来源：\(source.url)"
