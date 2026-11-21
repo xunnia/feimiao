@@ -319,9 +319,9 @@ class FundsAccountBalanceTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final profile = context
-        .watch<AppRepository>()
-        .liabilityProfileForAccount(item.account.id);
+    final profile = context.select<AppRepository, LiabilityProfileEntity?>(
+      (r) => r.liabilityProfileForAccount(item.account.id),
+    );
     final negative = item.balance < Decimal.zero;
     final muted = !item.account.includeInNetWorth;
     final today = AppClock.now;

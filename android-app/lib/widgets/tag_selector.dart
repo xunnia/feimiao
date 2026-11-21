@@ -118,9 +118,11 @@ class InlineTagChips extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (tagIds.isEmpty) return const SizedBox.shrink();
-    final repo = context.watch<AppRepository>();
+    final allTags = context.select<AppRepository, List<TagEntity>>(
+      (r) => r.tags,
+    );
     final tags = [
-      for (final id in tagIds) ...repo.tags.where((t) => t.id == id),
+      for (final id in tagIds) ...allTags.where((t) => t.id == id),
     ];
     if (tags.isEmpty) return const SizedBox.shrink();
     return Padding(

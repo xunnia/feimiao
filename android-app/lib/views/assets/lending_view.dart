@@ -35,7 +35,10 @@ class _LendingViewState extends State<LendingView> {
 
   @override
   Widget build(BuildContext context) {
-    final repo = context.watch<AppRepository>();
+    context.select<AppRepository, (int, int, bool)>(
+      (r) => r.financialViewVersion,
+    );
+    final repo = context.read<AppRepository>();
     final parties = _buildParties(repo);
     return Scaffold(
       backgroundColor: Colors.transparent,
@@ -130,7 +133,8 @@ class _LendingParty {
     for (final asset in loanOuts) {
       final open = !asset.isDeleted &&
           (asset.economicStatus == ReceivableEconomicStatus.active ||
-              asset.economicStatus == ReceivableEconomicStatus.partialRecovered);
+              asset.economicStatus ==
+                  ReceivableEconomicStatus.partialRecovered);
       if (open) lentRemaining += asset.remainingAmount;
       events.add(_LendingEvent(
         date: DateTime.fromMillisecondsSinceEpoch(asset.createdMs),
@@ -165,7 +169,8 @@ class _LendingParty {
       ));
       // 还款 = 转入借入账户的真实转账（借入到账那笔是从该账户转出，
       // 已由上面的「借入」行表达，这里不重复显示）。
-      for (final transfer in repo.transfersInvolvingAccount(profile.accountId)) {
+      for (final transfer
+          in repo.transfersInvolvingAccount(profile.accountId)) {
         if (transfer.toAccountId != profile.accountId) continue;
         events.add(_LendingEvent(
           date: transfer.date,

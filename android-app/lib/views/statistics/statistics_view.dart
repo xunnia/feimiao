@@ -249,7 +249,17 @@ class _StatisticsViewState extends State<StatisticsView> {
                   onChanged: _onRangeChanged,
                 ),
               ),
-              Expanded(child: _buildContent(records, repo)),
+              Expanded(
+                child: AnimatedSwitcher(
+                  duration: AppMotion.duration(context, AppMotion.fast),
+                  switchInCurve: Curves.easeOutCubic,
+                  switchOutCurve: Curves.easeOutCubic,
+                  child: KeyedSubtree(
+                    key: ValueKey(_range),
+                    child: _buildContent(records, repo),
+                  ),
+                ),
+              ),
             ],
           );
         },
@@ -300,7 +310,10 @@ class _BookChip extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final repo = context.watch<AppRepository>();
+    context.select<AppRepository, (int, int)>(
+      (r) => (r.financialRevision, r.currentBookId),
+    );
+    final repo = context.read<AppRepository>();
     final book = repo.currentBook;
     if (repo.books.length < 2) return const SizedBox.shrink();
 

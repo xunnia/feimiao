@@ -2,6 +2,7 @@ import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 
 import '../core/haptics.dart';
+import '../theme/app_tokens.dart';
 import '../views/common/app_sheet.dart';
 import 'app_buttons.dart';
 import 'pressable_scale.dart';
@@ -203,7 +204,11 @@ class _AppDatePickerSheetState extends State<_AppDatePickerSheet> {
                       const SizedBox(width: 4),
                       AnimatedRotation(
                         turns: _wheel ? 0.5 : 0,
-                        duration: const Duration(milliseconds: 200),
+                        duration: AppMotion.duration(
+                          context,
+                          const Duration(milliseconds: 200),
+                        ),
+                        curve: Curves.easeOutCubic,
                         child: Icon(CupertinoIcons.chevron_down,
                             size: 15, color: scheme.onSurfaceVariant),
                       ),
@@ -229,7 +234,10 @@ class _AppDatePickerSheetState extends State<_AppDatePickerSheet> {
           ),
           // 主体：月网格 or 年月滚轮
           AnimatedSize(
-            duration: const Duration(milliseconds: 200),
+            duration: AppMotion.duration(
+              context,
+              const Duration(milliseconds: 200),
+            ),
             curve: Curves.easeOutCubic,
             child: _wheel ? _buildWheel(scheme) : _buildGrid(scheme),
           ),

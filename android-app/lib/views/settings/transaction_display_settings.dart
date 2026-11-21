@@ -25,7 +25,8 @@ class _TransactionDisplaySettingsSheet extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final repo = context.watch<AppRepository>();
+    context.select<AppRepository, (int, int)>((r) => r.settingsViewVersion);
+    final repo = context.read<AppRepository>();
     final maxHeight = MediaQuery.sizeOf(context).height * 0.86;
     final followsCards =
         repo.userMessageBubbleStyle == UserMessageBubbleStyle.followCardOpacity;

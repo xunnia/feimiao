@@ -74,8 +74,9 @@ class _ReceivableAssetTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final dueReminder =
-        context.watch<AppRepository>().dueReminderForReceivable(asset);
+    final dueReminder = context.select<AppRepository, AssetReminderState>(
+      (r) => r.dueReminderForReceivable(asset),
+    );
     final dueText = _receivableDueReminderText(dueReminder);
     final muted = !asset.countsInNetWorth;
     final subtitle = [
@@ -155,7 +156,10 @@ class ReceivableAssetDetailPage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final repo = context.watch<AppRepository>();
+    context.select<AppRepository, (int, int, bool)>(
+      (r) => r.financialViewVersion,
+    );
+    final repo = context.read<AppRepository>();
     final current = repo.receivableDetailById(asset.id) ?? asset;
     final dueReminder = repo.dueReminderForReceivable(current);
     final canRecover = current.remainingAmount > Decimal.zero &&

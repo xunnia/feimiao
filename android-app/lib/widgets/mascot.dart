@@ -166,7 +166,21 @@ class _MascotBreathState extends State<MascotBreath>
       vsync: this,
       duration: const Duration(milliseconds: 2200),
     )..addStatusListener(_onStatus);
-    _c.forward();
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final disable = MediaQuery.maybeOf(context)?.disableAnimations ?? false;
+    if (disable) {
+      _restTimer?.cancel();
+      _c.stop();
+      _c.value = 0;
+    } else if (!_c.isAnimating &&
+        (_restTimer == null || !_restTimer!.isActive)) {
+      _halfCycles = 0;
+      _c.forward();
+    }
   }
 
   void _onStatus(AnimationStatus s) {

@@ -486,6 +486,9 @@ Future<void> showAiChatPanel(
       sessionId: sessionId,
     ),
     transitionsBuilder: (ctx, anim, _, child) {
+      if (AppMotion.reduceMotion(ctx)) {
+        return FadeTransition(opacity: anim, child: child);
+      }
       final curved = CurvedAnimation(parent: anim, curve: Curves.easeOutCubic);
       return FadeTransition(
         opacity: anim,
@@ -6246,9 +6249,9 @@ ${line('上月同期', lastStart, lastSameDayEnd, lastSameDay)}
                             offset: const Offset(-4, 2),
                             child: Builder(
                               builder: (btnCtx) => _ModelPill(
-                                model: _chatConfig(
-                                  context.watch<AppRepository>(),
-                                ).model,
+                                model: btnCtx.select<AppRepository, String>(
+                                  (r) => _chatConfig(r).model,
+                                ),
                                 selected: _activeInputSelection ==
                                     _InputSelection.model,
                                 onTap: () => _showModelPicker(btnCtx),
@@ -6261,8 +6264,9 @@ ${line('上月同期', lastStart, lastSameDayEnd, lastSameDay)}
                           offset: const Offset(-4, 2),
                           child: Builder(
                             builder: (btnCtx) => _EffortLabel(
-                              effort: _chatEffort(
-                                context.watch<AppRepository>(),
+                              effort: btnCtx
+                                  .select<AppRepository, AiReasoningEffort>(
+                                _chatEffort,
                               ),
                               selected: _activeInputSelection ==
                                   _InputSelection.effort,

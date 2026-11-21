@@ -24,6 +24,10 @@ import java.net.ServerSocket
 import java.net.Socket
 import java.net.URI
 import java.nio.charset.StandardCharsets
+import java.util.concurrent.ArrayBlockingQueue
+import java.util.concurrent.RejectedExecutionException
+import java.util.concurrent.ThreadPoolExecutor
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
@@ -477,6 +481,16 @@ class OAuthKeepAliveService : Service() {
         @Volatile private var boundPort: Int? = null
         private val sockets = mutableListOf<ServerSocket>()
         private val workers = mutableListOf<Thread>()
+        private val requestExecutor = ThreadPoolExecutor(
+            2,
+            4,
+            15L,
+            TimeUnit.SECONDS,
+            ArrayBlockingQueue(16),
+            { runnable ->
+                Thread(runnable, "feimiao-oauth-request").apply { isDaemon = true }
+            },
+        )
         private val lock = Any()
 
         private val readyFile get() = File(filesDir, READY_FILE)
@@ -531,6 +545,7 @@ class OAuthKeepAliveService : Service() {
                 workers.toList().forEach { it.interrupt() }
                 workers.clear()
             }
+            requestExecutor.shutdownNow()
             val port = boundPort
             boundPort = null
             if (port != null && ownsReadyMarker(port)) readyFile.delete()
@@ -622,8 +637,14 @@ class OAuthKeepAliveService : Service() {
             while (running.get()) {
                 try {
                     val client = server.accept()
-                    Thread({ handle(client, port) }, "feimiao-oauth-request")
-                        .start()
+                    try {
+                        requestExecutor.execute { handle(client, port) }
+                    } catch (_: RejectedExecutionException) {
+                        try {
+                            client.close()
+                        } catch (_: Exception) {
+                        }
+                    }
                 } catch (_: IOException) {
                     if (running.get()) continue
                     return

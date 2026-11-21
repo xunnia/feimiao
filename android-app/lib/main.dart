@@ -1520,7 +1520,10 @@ class _DrawerPanelState extends State<_DrawerPanel> {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final repo = context.watch<AppRepository>();
+    context.select<AppRepository, (int, int, bool)>(
+      (r) => r.financialViewVersion,
+    );
+    final repo = context.read<AppRepository>();
     final fns = _orderedFns(repo);
     // 折叠态只露排序后的前 5 个（shown 是 fns 的前缀，排序索引可直接对应全局）。
     final shown = _moreExpanded ? fns : fns.take(5).toList();
@@ -1689,7 +1692,10 @@ class _BookSwitchChip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final repo = context.watch<AppRepository>();
+    context.select<AppRepository, (int, int)>(
+      (r) => (r.financialRevision, r.currentBookId),
+    );
+    final repo = context.read<AppRepository>();
     final book =
         repo.currentBook ?? (repo.books.isNotEmpty ? repo.books.first : null);
 

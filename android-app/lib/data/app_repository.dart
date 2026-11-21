@@ -344,6 +344,18 @@ class AppRepository extends ChangeNotifier {
   (int, int, bool) get financialViewVersion =>
       (financialRevision, settingsRevision, isHydrating);
 
+  /// 供聊天会话列表、报告库等聊天域视图按域订阅的版本指纹：
+  /// 屏蔽无关的纯账务微调或无关显示设置抖动（保留财务修订仅在需要时各自选读）。
+  int get chatViewVersion => chatRevision;
+
+  /// 供 AI 账号、任务诊断、可控记忆、定时报表等 AI 域视图按域订阅的版本指纹。
+  /// 附带 [financialRevision] 的覆盖原因：测试替身与兼容路径调用 `notifyListeners()`
+  /// 走默认 financial 域，而生产高频的 `chat` 流式消息通知不会推进它。
+  (int, int) get aiViewVersion => (aiRevision, financialRevision);
+
+  /// 供显示设置、个人资料等设置域视图按域订阅的版本指纹。
+  (int, int) get settingsViewVersion => (settingsRevision, financialRevision);
+
   /// 当前内存账本快照的单调版本，供只读视图缓存使用。
   ///
   /// 这是一个不包含业务数据的版本号：任何仓库写路径完成通知时都会递增，

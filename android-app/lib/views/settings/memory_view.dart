@@ -20,54 +20,53 @@ class CategoryMemoryBody extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final repo = context.watch<AppRepository>();
+    context.select<AppRepository, (int, int)>((r) => r.aiViewVersion);
+    final repo = context.read<AppRepository>();
     final scheme = Theme.of(context).colorScheme;
     final memories = repo.categoryMemories;
 
     return memories.isEmpty
-          ? const AppEmptyState(
-              mood: MascotMood.thinking,
-              title: '还没学到东西',
-              message: '记账后在账单里改一次分类，喵就记住了',
-            )
-          : ListView(
-              padding: const EdgeInsets.fromLTRB(16, 8, 16, 28),
-              children: [
-                Text(
-                  '你纠正过的分类喵都记着，下次同样的备注会优先用它。学错了就删掉。',
-                  style: TextStyle(
-                      fontSize: 12,
-                      color: scheme.onSurfaceVariant,
-                      height: 1.4),
+        ? const AppEmptyState(
+            mood: MascotMood.thinking,
+            title: '还没学到东西',
+            message: '记账后在账单里改一次分类，喵就记住了',
+          )
+        : ListView(
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 28),
+            children: [
+              Text(
+                '你纠正过的分类喵都记着，下次同样的备注会优先用它。学错了就删掉。',
+                style: TextStyle(
+                    fontSize: 12, color: scheme.onSurfaceVariant, height: 1.4),
+              ),
+              const SizedBox(height: 12),
+              Container(
+                decoration: BoxDecoration(
+                  color: AppColors.card(scheme),
+                  borderRadius: BorderRadius.circular(16),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withValues(alpha: 0.04),
+                      blurRadius: 10,
+                      offset: const Offset(0, 2),
+                    ),
+                  ],
                 ),
-                const SizedBox(height: 12),
-                Container(
-                  decoration: BoxDecoration(
-                    color: AppColors.card(scheme),
-                    borderRadius: BorderRadius.circular(16),
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.black.withValues(alpha: 0.04),
-                        blurRadius: 10,
-                        offset: const Offset(0, 2),
-                      ),
+                child: Column(
+                  children: [
+                    for (var i = 0; i < memories.length; i++) ...[
+                      if (i > 0)
+                        Divider(
+                            height: 0.5,
+                            indent: 14,
+                            color: AppColors.hairline(scheme)),
+                      _MemoryRow(memory: memories[i], repo: repo),
                     ],
-                  ),
-                  child: Column(
-                    children: [
-                      for (var i = 0; i < memories.length; i++) ...[
-                        if (i > 0)
-                          Divider(
-                              height: 0.5,
-                              indent: 14,
-                              color: AppColors.hairline(scheme)),
-                        _MemoryRow(memory: memories[i], repo: repo),
-                      ],
-                    ],
-                  ),
+                  ],
                 ),
-              ],
-            );
+              ),
+            ],
+          );
   }
 }
 
@@ -112,7 +111,8 @@ class _MemoryRow extends StatelessWidget {
             ),
           ),
           AppCircleButton.custom(
-            iconWidget: Icon(Icons.close, size: 18, color: scheme.onSurfaceVariant),
+            iconWidget:
+                Icon(Icons.close, size: 18, color: scheme.onSurfaceVariant),
             size: 30,
             iconSize: 18,
             semanticLabel: '删除这条记忆',

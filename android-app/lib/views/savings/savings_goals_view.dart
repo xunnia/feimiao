@@ -50,8 +50,10 @@ class SavingsGoalsView extends StatelessWidget {
           ),
         ],
       ),
-      body: Consumer<AppRepository>(
-        builder: (context, repo, _) {
+      body: Selector<AppRepository, (int, int, bool)>(
+        selector: (_, repo) => repo.financialViewVersion,
+        builder: (context, _, __) {
+          final repo = context.read<AppRepository>();
           final goals = repo.savingsGoals;
           if (goals.isEmpty) return _empty(context);
           return ListView.builder(

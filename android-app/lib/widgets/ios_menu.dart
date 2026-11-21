@@ -265,7 +265,14 @@ Future<void> showIosMenu(
     transitionDuration: const Duration(milliseconds: 170),
     pageBuilder: (_, __, ___) => const SizedBox.shrink(),
     transitionBuilder: (ctx, anim, _, child) {
+      final reduceMotion = AppMotion.reduceMotion(ctx);
       final curved = CurvedAnimation(parent: anim, curve: Curves.easeOutBack);
+      final menuChild = cardKey == null
+          ? menu
+          : KeyedSubtree(
+              key: cardKey,
+              child: menu,
+            );
       return Stack(
         children: [
           Positioned.fill(
@@ -282,16 +289,15 @@ Future<void> showIosMenu(
             top: top,
             child: FadeTransition(
               opacity: anim,
-              child: ScaleTransition(
-                alignment: growUp ? Alignment.bottomRight : Alignment.topRight,
-                scale: Tween<double>(begin: 0.82, end: 1.0).animate(curved),
-                child: cardKey == null
-                    ? menu
-                    : KeyedSubtree(
-                        key: cardKey,
-                        child: menu,
-                      ),
-              ),
+              child: reduceMotion
+                  ? menuChild
+                  : ScaleTransition(
+                      alignment:
+                          growUp ? Alignment.bottomRight : Alignment.topRight,
+                      scale:
+                          Tween<double>(begin: 0.82, end: 1.0).animate(curved),
+                      child: menuChild,
+                    ),
             ),
           ),
         ],

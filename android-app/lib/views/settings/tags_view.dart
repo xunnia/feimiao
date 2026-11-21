@@ -41,10 +41,18 @@ class TagsView extends StatelessWidget {
           ),
         ],
       ),
-      body: Consumer<AppRepository>(
-        builder: (context, repo, _) {
+      body: Selector<AppRepository, (int, int, bool)>(
+        selector: (_, repo) => repo.financialViewVersion,
+        builder: (context, _, __) {
+          final repo = context.read<AppRepository>();
           final tags = repo.tags;
           if (tags.isEmpty) return _empty(context);
+          final tagCounts = <int, int>{};
+          for (final tx in repo.transactions) {
+            for (final id in tx.tagIds) {
+              tagCounts[id] = (tagCounts[id] ?? 0) + 1;
+            }
+          }
           return ListView.separated(
             padding: const EdgeInsets.fromLTRB(12, 8, 12, 96),
             itemCount: tags.length,
@@ -52,10 +60,8 @@ class TagsView extends StatelessWidget {
             itemBuilder: (_, i) {
               final t = tags[i];
               final color = Color(t.colorValue);
-              // 统计引用该标签的笔数
-              final count = repo.transactions
-                  .where((tx) => tx.tagIds.contains(t.id))
-                  .length;
+              // 统计引用该标签的笔数（单次预聚合，避免每行遍历全量交易）。
+              final count = tagCounts[t.id] ?? 0;
               return Card(
                 elevation: 0,
                 color: color.withValues(alpha: 0.10),

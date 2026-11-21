@@ -49,7 +49,10 @@ class AppSwitch extends StatelessWidget {
               height: 48,
               child: Center(
                 child: AnimatedContainer(
-                  duration: const Duration(milliseconds: 180),
+                  duration: AppMotion.duration(
+                    context,
+                    const Duration(milliseconds: 180),
+                  ),
                   curve: Curves.easeOutCubic,
                   width: 40,
                   height: 24,
@@ -59,7 +62,10 @@ class AppSwitch extends StatelessWidget {
                     borderRadius: BorderRadius.circular(999),
                   ),
                   child: AnimatedAlign(
-                    duration: const Duration(milliseconds: 180),
+                    duration: AppMotion.duration(
+                      context,
+                      const Duration(milliseconds: 180),
+                    ),
                     curve: Curves.easeOutCubic,
                     alignment:
                         value ? Alignment.centerRight : Alignment.centerLeft,
@@ -120,7 +126,7 @@ class AppCheckmark extends StatelessWidget {
       height: AppHitTarget.min,
       child: Center(
         child: AnimatedContainer(
-          duration: AppMotion.fast,
+          duration: AppMotion.duration(context, AppMotion.fast),
           curve: AppMotion.enter,
           width: 22,
           height: 22,

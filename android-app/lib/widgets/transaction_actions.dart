@@ -7,6 +7,7 @@ import '../core/haptics.dart';
 import '../core/models/transaction_kind.dart';
 import '../data/app_repository.dart';
 import '../theme/app_colors.dart';
+import '../theme/app_tokens.dart';
 import '../views/transactions/edit_transaction_sheet.dart';
 import 'app_toast.dart';
 import 'refund_settlement_sheet.dart';
@@ -96,7 +97,10 @@ class _TransactionSlidableState extends State<TransactionSlidable> {
               backgroundColor: Colors.transparent,
               child: Builder(
                 builder: (paneCtx) => AnimatedSwitcher(
-                  duration: const Duration(milliseconds: 220),
+                  duration: AppMotion.duration(
+                    paneCtx,
+                    const Duration(milliseconds: 220),
+                  ),
                   child: _confirming
                       ? _confirmBar(paneCtx)
                       : _buttonsRow(paneCtx, repaymentId),

@@ -12,7 +12,9 @@ import 'package:qingji/theme/app_colors.dart';
 import 'package:qingji/widgets/animated_money.dart';
 import 'package:qingji/widgets/budget_progress.dart';
 import 'package:qingji/widgets/glass_input.dart';
+import 'package:qingji/widgets/mascot.dart';
 import 'package:qingji/widgets/pressable_scale.dart';
+import 'package:qingji/widgets/settings_ui.dart';
 import 'package:qingji/widgets/sliding_segment.dart';
 import 'package:qingji/widgets/tag_selector.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
@@ -34,10 +36,11 @@ void main() {
       addTearDown(repo.closeForTest);
 
       final before = repo.financialViewVersion;
-      final chatBefore = repo.chatRevision;
+      final chatBefore = repo.chatViewVersion;
       final aiBefore = repo.aiRevision;
+      final settingsBefore = repo.settingsViewVersion;
 
-      // 聊天会话写入与 AI 记忆写入只会推进 chat/ai 域，不改变 financialViewVersion。
+      // 聊天会话写入与 AI 记忆写入只会推进 chat/ai 域，不改变 financial/settings 域。
       await repo.createChatSession(title: '股市讨论');
       await repo.addAiMemory(
         phrase: '股市',
@@ -45,8 +48,9 @@ void main() {
         consent: true,
       );
 
-      expect(repo.chatRevision, greaterThan(chatBefore));
+      expect(repo.chatViewVersion, greaterThan(chatBefore));
       expect(repo.aiRevision, greaterThan(aiBefore));
+      expect(repo.settingsViewVersion, settingsBefore);
       expect(repo.financialViewVersion, before);
     });
 
@@ -77,6 +81,9 @@ void main() {
                     onPressed: () => tapped = true,
                     child: const Text('按压测试'),
                   ),
+                  AppSwitch(value: true, onChanged: (_) {}),
+                  AppCheckmark(value: true, onChanged: (_) {}),
+                  const MascotBreath(child: SizedBox(width: 24, height: 24)),
                 ],
               ),
             ),

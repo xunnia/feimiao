@@ -23,7 +23,8 @@ class AiTaskCenterBody extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final repo = context.watch<AppRepository>();
+    context.select<AppRepository, (int, int)>((r) => r.aiViewVersion);
+    final repo = context.read<AppRepository>();
     return FutureBuilder<List<AiRun>>(
       future: repo.loadAiRuns(limit: 100),
       builder: (context, snapshot) {
@@ -297,7 +298,8 @@ class AiDiagnosticsBody extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final repo = context.watch<AppRepository>();
+    context.select<AppRepository, (int, int)>((r) => r.aiViewVersion);
+    final repo = context.read<AppRepository>();
     return ListView(
       padding: const EdgeInsets.only(top: 8, bottom: 32),
       children: [
@@ -400,7 +402,8 @@ class AiMemoryControlBody extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final repo = context.watch<AppRepository>();
+    context.select<AppRepository, (int, int)>((r) => r.aiViewVersion);
+    final repo = context.read<AppRepository>();
     return ListView(
       padding: const EdgeInsets.only(top: 8, bottom: 32),
       children: [
@@ -474,7 +477,8 @@ class AiReportScheduleView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final repo = context.watch<AppRepository>();
+    context.select<AppRepository, (int, int)>((r) => r.aiViewVersion);
+    final repo = context.read<AppRepository>();
     return Scaffold(
       appBar: AppBar(
         leading: const AppBackButton(),

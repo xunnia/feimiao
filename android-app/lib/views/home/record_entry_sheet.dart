@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import '../../core/haptics.dart';
 import '../../core/media/chat_attachment.dart';
 import '../../data/app_repository.dart';
+import '../../theme/app_tokens.dart';
 import 'ai_chat_panel.dart';
 import 'manual_add_sheet.dart';
 
@@ -34,6 +35,9 @@ Future<void> showRecordEntrySheet(
       initialAttachments: initialAttachments,
     ),
     transitionsBuilder: (ctx, anim, _, child) {
+      if (AppMotion.reduceMotion(ctx)) {
+        return FadeTransition(opacity: anim, child: child);
+      }
       final curved = CurvedAnimation(parent: anim, curve: Curves.easeOutCubic);
       return FadeTransition(
         opacity: anim,
@@ -117,7 +121,12 @@ class _RecordEntrySheetHostState extends State<_RecordEntrySheetHost>
       _aiBuilt = _aiBuilt || mode == RecordEntryMode.ai;
       _ignoreManualKeyboardInset = !ai && keyboardOpen;
     });
-    _switchController.forward(from: 0);
+    if (AppMotion.reduceMotion(context)) {
+      _switchController.value = 1;
+      setState(() => _outgoingMode = null);
+    } else {
+      _switchController.forward(from: 0);
+    }
   }
 
   @override

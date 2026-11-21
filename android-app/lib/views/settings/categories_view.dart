@@ -37,7 +37,10 @@ class _CategoriesViewState extends State<CategoriesView> {
 
   @override
   Widget build(BuildContext context) {
-    final repo = context.watch<AppRepository>();
+    context.select<AppRepository, (int, int, bool)>(
+      (r) => r.financialViewVersion,
+    );
+    final repo = context.read<AppRepository>();
     final scheme = Theme.of(context).colorScheme;
     final tops =
         repo.categoriesForKind(_kind).where((c) => c.isTopLevel).toList();

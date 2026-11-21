@@ -13,9 +13,11 @@ import '../../core/money_format.dart';
 import '../../core/statistics/statistics_engine.dart';
 import '../../data/app_repository.dart';
 import '../../theme/app_colors.dart';
+import '../../theme/app_tokens.dart';
 import '../../widgets/app_toast.dart';
 import '../../widgets/home_summary_card.dart';
 import '../../widgets/mascot.dart';
+import '../../widgets/pressable_scale.dart';
 import '../../widgets/sliding_segment.dart';
 import '../../widgets/transaction_day_list.dart';
 import '../statistics/statistics_view.dart';
@@ -450,12 +452,20 @@ class _HomeMonthPickerSheetState extends State<_HomeMonthPickerSheet> {
                   ),
                   Expanded(
                     child: Center(
-                      child: Text(
-                        '$_year年',
-                        style: TextStyle(
-                          fontSize: 18,
-                          fontWeight: FontWeight.w400,
-                          color: scheme.onSurface,
+                      child: AnimatedSwitcher(
+                        duration: AppMotion.duration(context, AppMotion.fast),
+                        transitionBuilder: (child, anim) => FadeTransition(
+                          opacity: anim,
+                          child: child,
+                        ),
+                        child: Text(
+                          '$_year年',
+                          key: ValueKey(_year),
+                          style: TextStyle(
+                            fontSize: 18,
+                            fontWeight: FontWeight.w400,
+                            color: scheme.onSurface,
+                          ),
                         ),
                       ),
                     ),
@@ -522,9 +532,10 @@ class _YearArrow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    return GestureDetector(
-      behavior: HitTestBehavior.opaque,
-      onTap: enabled ? onTap : null,
+    return PressableScale(
+      onPressed: enabled ? onTap : null,
+      pressedScale: 0.90,
+      haptic: null,
       child: SizedBox(
         width: 52,
         height: 52,
@@ -568,11 +579,12 @@ class _MonthGridCell extends StatelessWidget {
     final fill = disabled
         ? scheme.surfaceContainerHighest.withValues(alpha: 0.34)
         : AppColors.inputFill(scheme);
-    return GestureDetector(
-      behavior: HitTestBehavior.opaque,
-      onTap: onTap,
+    return PressableScale(
+      onPressed: onTap,
+      pressedScale: 0.95,
+      haptic: null,
       child: AnimatedContainer(
-        duration: const Duration(milliseconds: 160),
+        duration: AppMotion.duration(context, AppMotion.fast),
         curve: Curves.easeOutCubic,
         padding: const EdgeInsets.fromLTRB(12, 11, 12, 10),
         decoration: BoxDecoration(
@@ -677,9 +689,12 @@ class _FilterSegmentState extends State<_FilterSegment> {
 
   void _select(_TxFilter next) {
     if (next == _visualValue) return;
-    Haptics.selection();
     setState(() => _visualValue = next);
     final token = ++_notifyToken;
+    if (AppMotion.reduceMotion(context)) {
+      widget.onChanged(next);
+      return;
+    }
     Future<void>.delayed(const Duration(milliseconds: 180), () {
       if (!mounted || token != _notifyToken) return;
       widget.onChanged(next);
@@ -736,7 +751,9 @@ class _EmptyState extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final firstUse = context.watch<AppRepository>().transactions.isEmpty;
+    final firstUse = context.select<AppRepository, bool>(
+      (r) => r.transactions.isEmpty,
+    );
     if (!firstUse) {
       return const Center(
         child: Mascot(mood: MascotMood.empty, size: 184, animate: true),

@@ -102,7 +102,10 @@ class PhysicalAssetDetailPage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final repo = context.watch<AppRepository>();
+    context.select<AppRepository, (int, int, bool)>(
+      (r) => r.financialViewVersion,
+    );
+    final repo = context.read<AppRepository>();
     final current = repo.physicalAssetDetailById(assetId) ?? fallbackAsset;
     final scheme = Theme.of(context).colorScheme;
     final events = repo.eventsForAsset(current.id).take(6).toList();

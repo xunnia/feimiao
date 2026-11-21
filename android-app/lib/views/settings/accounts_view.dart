@@ -249,56 +249,67 @@ class _AccountsViewState extends State<AccountsView> {
                 ),
               ),
               Expanded(
-                child: switch (_view) {
-                  _AssetView.overview => _buildOverview(
-                      context,
-                      repo,
-                      breakdown: breakdown,
-                      physicalAssets: physicalAssets,
-                      receivableAssets: receivableAssets,
-                      netWorthPartial:
-                          netWorthResult.status != MetricStatus.available,
-                      includedCount: includedCount,
-                      totalCount: totalCount,
-                      balances: balances,
-                    ),
-                  _AssetView.funds => _buildFunds(
-                      context,
-                      breakdown: breakdown,
-                      partial: fundsSummaryIsPartial(
-                          netWorthResult: netWorthResult,
-                          physicalAssets: [
-                            ...physicalAssets,
-                            ...archivedAssets
-                          ],
-                          receivableAssets: [
-                            ...receivableAssets,
-                            ...archivedReceivables
-                          ]),
-                      balances: balances,
-                      receivableAssets: receivableAssets,
-                      archivedReceivables: archivedReceivables,
-                      upcomingRepayments: repo.upcomingRepayments(),
-                      // 借贷往来入口：有借出权益或个人借入档案才显示。
-                      hasLendingData: [
-                            ...receivableAssets,
-                            ...archivedReceivables,
-                          ].any((a) => a.type == ReceivableAssetType.loanOut) ||
-                          repo.liabilityProfiles.any((p) =>
-                              p.type == LiabilityProfileType.personalBorrow),
-                      // A5：有尚未迁移到 ledger 口径的活跃负债档案时显示升级横幅。
-                      hasMigrationWork: repo.buildMigrationPlan().any((item) =>
-                          item.branch !=
-                              LiabilityMigrationBranch.alreadyLedger &&
-                          item.branch !=
-                              LiabilityMigrationBranch.noPrincipalSafe),
-                    ),
-                  _AssetView.items => _buildItems(
-                      context,
-                      physicalAssets: physicalAssets,
-                      archivedAssets: archivedAssets,
-                    ),
-                },
+                child: AnimatedSwitcher(
+                  duration: AppMotion.duration(context, AppMotion.fast),
+                  switchInCurve: Curves.easeOutCubic,
+                  switchOutCurve: Curves.easeOutCubic,
+                  child: KeyedSubtree(
+                    key: ValueKey(_view),
+                    child: switch (_view) {
+                      _AssetView.overview => _buildOverview(
+                          context,
+                          repo,
+                          breakdown: breakdown,
+                          physicalAssets: physicalAssets,
+                          receivableAssets: receivableAssets,
+                          netWorthPartial:
+                              netWorthResult.status != MetricStatus.available,
+                          includedCount: includedCount,
+                          totalCount: totalCount,
+                          balances: balances,
+                        ),
+                      _AssetView.funds => _buildFunds(
+                          context,
+                          breakdown: breakdown,
+                          partial: fundsSummaryIsPartial(
+                              netWorthResult: netWorthResult,
+                              physicalAssets: [
+                                ...physicalAssets,
+                                ...archivedAssets
+                              ],
+                              receivableAssets: [
+                                ...receivableAssets,
+                                ...archivedReceivables
+                              ]),
+                          balances: balances,
+                          receivableAssets: receivableAssets,
+                          archivedReceivables: archivedReceivables,
+                          upcomingRepayments: repo.upcomingRepayments(),
+                          // 借贷往来入口：有借出权益或个人借入档案才显示。
+                          hasLendingData: [
+                                ...receivableAssets,
+                                ...archivedReceivables,
+                              ].any((a) =>
+                                  a.type == ReceivableAssetType.loanOut) ||
+                              repo.liabilityProfiles.any((p) =>
+                                  p.type ==
+                                  LiabilityProfileType.personalBorrow),
+                          // A5：有尚未迁移到 ledger 口径的活跃负债档案时显示升级横幅。
+                          hasMigrationWork: repo.buildMigrationPlan().any(
+                              (item) =>
+                                  item.branch !=
+                                      LiabilityMigrationBranch.alreadyLedger &&
+                                  item.branch !=
+                                      LiabilityMigrationBranch.noPrincipalSafe),
+                        ),
+                      _AssetView.items => _buildItems(
+                          context,
+                          physicalAssets: physicalAssets,
+                          archivedAssets: archivedAssets,
+                        ),
+                    },
+                  ),
+                ),
               ),
             ],
           );

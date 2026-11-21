@@ -8,6 +8,7 @@ import '../../core/models/category_seed.dart';
 import '../../core/models/cat_svg_icon.dart';
 import '../../data/app_repository.dart';
 import '../../theme/app_colors.dart';
+import '../../theme/app_tokens.dart';
 import '../../widgets/pressable_scale.dart';
 
 /// 子类横排 chip（旧版，编辑页仍在用；手动卡已改为咔皮式展开面板）。
@@ -295,7 +296,10 @@ class _HierarchicalCategoryPickerState
                   )
                 else
                   AnimatedSize(
-                    duration: const Duration(milliseconds: 220),
+                    duration: AppMotion.duration(
+                      context,
+                      const Duration(milliseconds: 220),
+                    ),
                     curve: Curves.easeOutCubic,
                     alignment: Alignment.topCenter,
                     child: SizedBox(
@@ -427,81 +431,96 @@ class HierarchicalSubcategoryPanel extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    return Container(
-      key: const ValueKey('subcategory-panel'),
-      margin: const EdgeInsets.fromLTRB(12, 2, 12, 6),
-      padding: const EdgeInsets.symmetric(vertical: 10),
-      decoration: BoxDecoration(
-        color: AppColors.card(scheme),
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: AppColors.hairline(scheme)),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.10),
-            blurRadius: 18,
-            offset: const Offset(0, 4),
-          ),
-        ],
+    final motionDuration = AppMotion.duration(context, AppMotion.fast);
+    return TweenAnimationBuilder<double>(
+      tween: Tween(begin: 0, end: 1),
+      duration: motionDuration,
+      curve: Curves.easeOutCubic,
+      builder: (_, t, child) => Opacity(
+        opacity: t,
+        child: Transform.translate(
+          offset: Offset(0, (1 - t) * -6),
+          child: child,
+        ),
       ),
-      child: ConstrainedBox(
-        constraints: const BoxConstraints(maxHeight: 232),
-        child: GridView.builder(
-          shrinkWrap: true,
-          physics: const ClampingScrollPhysics(),
-          padding: const EdgeInsets.symmetric(horizontal: 8),
-          gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-            crossAxisCount: 6,
-            mainAxisSpacing: 12,
-            crossAxisSpacing: 4,
-            childAspectRatio: 0.74,
-          ),
-          itemCount: children.length,
-          itemBuilder: (context, index) {
-            final category = children[index];
-            final selected = category.id == selectedId;
-            return PressableScale(
-              key: ValueKey('category-child-${category.id}'),
-              onPressed: () {
-                HapticFeedback.selectionClick();
-                onSelected(category);
-              },
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Container(
-                    padding: const EdgeInsets.all(2),
-                    decoration: BoxDecoration(
-                      borderRadius: BorderRadius.circular(12),
-                      border: Border.all(
-                        color: selected ? scheme.primary : Colors.transparent,
-                        width: 2,
+      child: Container(
+        key: const ValueKey('subcategory-panel'),
+        margin: const EdgeInsets.fromLTRB(12, 2, 12, 6),
+        padding: const EdgeInsets.symmetric(vertical: 10),
+        decoration: BoxDecoration(
+          color: AppColors.card(scheme),
+          borderRadius: BorderRadius.circular(18),
+          border: Border.all(color: AppColors.hairline(scheme)),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.10),
+              blurRadius: 18,
+              offset: const Offset(0, 4),
+            ),
+          ],
+        ),
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxHeight: 232),
+          child: GridView.builder(
+            shrinkWrap: true,
+            physics: const ClampingScrollPhysics(),
+            padding: const EdgeInsets.symmetric(horizontal: 8),
+            gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+              crossAxisCount: 6,
+              mainAxisSpacing: 12,
+              crossAxisSpacing: 4,
+              childAspectRatio: 0.74,
+            ),
+            itemCount: children.length,
+            itemBuilder: (context, index) {
+              final category = children[index];
+              final selected = category.id == selectedId;
+              return PressableScale(
+                key: ValueKey('category-child-${category.id}'),
+                onPressed: () {
+                  HapticFeedback.selectionClick();
+                  onSelected(category);
+                },
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    AnimatedContainer(
+                      duration: AppMotion.duration(context, AppMotion.fast),
+                      curve: Curves.easeOutCubic,
+                      padding: const EdgeInsets.all(2),
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(
+                          color: selected ? scheme.primary : Colors.transparent,
+                          width: 2,
+                        ),
+                      ),
+                      child: CatIcon(
+                        categoryKey: category.key,
+                        emoji: CategorySeed.emojiOf(category.key),
+                        size: 36,
                       ),
                     ),
-                    child: CatIcon(
-                      categoryKey: category.key,
-                      emoji: CategorySeed.emojiOf(category.key),
-                      size: 36,
+                    const SizedBox(height: 3),
+                    Text(
+                      category.nameZh,
+                      textAlign: TextAlign.center,
+                      style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                            fontSize: 10,
+                            color: selected
+                                ? scheme.primary
+                                : scheme.onSurfaceVariant,
+                            fontWeight:
+                                selected ? FontWeight.w600 : FontWeight.normal,
+                          ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
                     ),
-                  ),
-                  const SizedBox(height: 3),
-                  Text(
-                    category.nameZh,
-                    textAlign: TextAlign.center,
-                    style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                          fontSize: 10,
-                          color: selected
-                              ? scheme.primary
-                              : scheme.onSurfaceVariant,
-                          fontWeight:
-                              selected ? FontWeight.w600 : FontWeight.normal,
-                        ),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ],
-              ),
-            );
-          },
+                  ],
+                ),
+              );
+            },
+          ),
         ),
       ),
     );
@@ -535,9 +554,10 @@ class _CategoryItem extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onTap,
-      behavior: HitTestBehavior.opaque,
+    return PressableScale(
+      onPressed: onTap,
+      pressedScale: 0.94,
+      haptic: null,
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
@@ -545,7 +565,9 @@ class _CategoryItem extends StatelessWidget {
           Stack(
             clipBehavior: Clip.none,
             children: [
-              Container(
+              AnimatedContainer(
+                duration: AppMotion.duration(context, AppMotion.fast),
+                curve: Curves.easeOutCubic,
                 padding: const EdgeInsets.all(2),
                 decoration: BoxDecoration(
                   borderRadius: BorderRadius.circular(15),
@@ -573,12 +595,16 @@ class _CategoryItem extends StatelessWidget {
                       border:
                           Border.all(color: scheme.outlineVariant, width: 0.5),
                     ),
-                    child: Icon(
-                      expanded
-                          ? Icons.keyboard_arrow_up
-                          : Icons.keyboard_arrow_down,
-                      size: 12,
-                      color: scheme.onSurfaceVariant,
+                    child: AnimatedSwitcher(
+                      duration: AppMotion.duration(context, AppMotion.fast),
+                      child: Icon(
+                        expanded
+                            ? Icons.keyboard_arrow_up
+                            : Icons.keyboard_arrow_down,
+                        key: ValueKey(expanded),
+                        size: 12,
+                        color: scheme.onSurfaceVariant,
+                      ),
                     ),
                   ),
                 ),

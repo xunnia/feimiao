@@ -257,7 +257,8 @@ class _MeowAssistantViewState extends State<MeowAssistantView> {
 
   @override
   Widget build(BuildContext context) {
-    final repo = context.watch<AppRepository>();
+    context.select<AppRepository, int>((r) => r.chatViewVersion);
+    final repo = context.read<AppRepository>();
     final scheme = Theme.of(context).colorScheme;
     final sessions = _visibleSessions(repo);
     return Scaffold(

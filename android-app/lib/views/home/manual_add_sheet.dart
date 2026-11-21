@@ -12,6 +12,7 @@ import '../../core/money_format.dart';
 import '../../core/transaction_time.dart';
 import '../../data/app_repository.dart';
 import '../../theme/app_colors.dart';
+import '../../theme/app_tokens.dart';
 import '../../widgets/app_date_picker.dart';
 import '../../widgets/app_line_icon.dart';
 import '../../widgets/app_toast.dart';
@@ -66,6 +67,9 @@ Future<void> showManualAddSheet(
       ),
     ),
     transitionsBuilder: (ctx, anim, _, child) {
+      if (AppMotion.reduceMotion(ctx)) {
+        return FadeTransition(opacity: anim, child: child);
+      }
       final curved = CurvedAnimation(parent: anim, curve: Curves.easeOutCubic);
       return FadeTransition(
         opacity: anim,

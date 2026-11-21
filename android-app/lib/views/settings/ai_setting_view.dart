@@ -835,7 +835,8 @@ class _AiAccountSettingsPageState extends State<AiAccountSettingsPage> {
 
   @override
   Widget build(BuildContext context) {
-    final repo = context.watch<AppRepository>();
+    context.select<AppRepository, (int, int)>((r) => r.aiViewVersion);
+    final repo = context.read<AppRepository>();
     final providers = repo.aiProviders;
 
     return Scaffold(
@@ -1778,7 +1779,10 @@ class AiPrivacyDataPage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final repo = context.watch<AppRepository>();
+    context.select<AppRepository, ((int, int), (int, int))>(
+      (r) => (r.aiViewVersion, r.settingsViewVersion),
+    );
+    final repo = context.read<AppRepository>();
 
     return Scaffold(
       appBar: AppBar(

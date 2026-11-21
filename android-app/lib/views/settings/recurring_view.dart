@@ -51,8 +51,10 @@ class RecurringView extends StatelessWidget {
           ),
         ],
       ),
-      body: Consumer<AppRepository>(
-        builder: (context, repo, _) {
+      body: Selector<AppRepository, (int, int, bool)>(
+        selector: (_, repo) => repo.financialViewVersion,
+        builder: (context, _, __) {
+          final repo = context.read<AppRepository>();
           final rules = repo.recurringRules;
           if (rules.isEmpty) {
             return const AppEmptyState(
