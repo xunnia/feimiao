@@ -11,7 +11,7 @@ struct CategoryTransactionsView: View {
 
     @Environment(AppRouter.self) private var router
     @Query private var books: [Book]
-    @Query(sort: \MoneyTransaction.date, order: .reverse) private var transactions: [MoneyTransaction]
+    @Query(sort: MoneyTransaction.descendingSortDescriptors) private var transactions: [MoneyTransaction]
     @State private var projectionCache = IOSLedgerProjectionCache()
 
     var body: some View {
@@ -39,7 +39,11 @@ struct CategoryTransactionsView: View {
                     }
                     .listRowBackground(Color.clear)
                     ForEach(sections.keys.sorted(by: >), id: \.self) { day in
-                        TransactionDayCard(day: day, items: sections[day] ?? [], refundByID: refundByID)
+                        TransactionDayCard(
+                            day: day,
+                            items: (sections[day] ?? []).sorted(by: MoneyTransaction.isOrderedBeforeDescending),
+                            refundByID: refundByID
+                        )
                             .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 6, trailing: 16))
                             .listRowSeparator(.hidden)
                             .listRowBackground(Color.clear)

@@ -13,7 +13,7 @@ struct BudgetDaySheet: View {
     @Query(sort: \Book.sortOrder) private var books: [Book]
     @Query private var ruleRecords: [BudgetRuleRecord]
     @Query private var rolloverRecords: [BudgetRolloverChangeRecord]
-    @Query(sort: \MoneyTransaction.date, order: .reverse) private var transactions: [MoneyTransaction]
+    @Query(sort: MoneyTransaction.descendingSortDescriptors) private var transactions: [MoneyTransaction]
     @State private var projectionCache = IOSLedgerProjectionCache()
     @State private var editingTransaction: MoneyTransaction?
     @State private var referenceDate = AppClock.now

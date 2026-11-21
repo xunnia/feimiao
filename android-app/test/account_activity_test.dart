@@ -9,6 +9,7 @@ import 'package:qingji/views/assets/account_activity_list.dart';
 
 AccountActivityEvent _event({
   required String id,
+  int? sequence,
   TransactionEventType eventType = TransactionEventType.expense,
   TransactionKind legacyKind = TransactionKind.expense,
   int amountMinor = 1000,
@@ -21,6 +22,7 @@ AccountActivityEvent _event({
 }) =>
     AccountActivityEvent(
       id: id,
+      sequence: sequence,
       bookId: 1,
       currencyCode: 'CNY',
       eventType: eventType,
@@ -124,6 +126,42 @@ void main() {
       ],
     );
     expect(items.map((item) => item.eventId), ['new', 'middle']);
+  });
+
+  test(
+      'breaks same-timestamp ties deterministically by sequence before random id',
+      () {
+    final sameTime = DateTime(2026, 8, 27, 12, 0);
+    // 即使随机 UUID 的字典序与录入顺序相反，也优先按数据库行号（sequence）倒序，
+    // 让同一分钟的两笔账（如午餐与退款）在账户详情里不再随随机编号上下对调。
+    final firstOrder = AccountActivityProjection.forAccount(
+      accountId: 1,
+      events: [
+        _event(
+            id: 'ffff-lunch', sequence: 1, settledAt: sameTime, createdMs: 100),
+        _event(
+            id: '0000-refund',
+            sequence: 2,
+            settledAt: sameTime,
+            createdMs: 100),
+      ],
+    );
+    final reversedOrder = AccountActivityProjection.forAccount(
+      accountId: 1,
+      events: [
+        _event(
+            id: '0000-refund',
+            sequence: 2,
+            settledAt: sameTime,
+            createdMs: 100),
+        _event(
+            id: 'ffff-lunch', sequence: 1, settledAt: sameTime, createdMs: 100),
+      ],
+    );
+    expect(
+        firstOrder.map((item) => item.eventId), ['0000-refund', 'ffff-lunch']);
+    expect(reversedOrder.map((item) => item.eventId),
+        ['0000-refund', 'ffff-lunch']);
   });
 
   testWidgets('recent activity renderer exposes quality and signed amount',

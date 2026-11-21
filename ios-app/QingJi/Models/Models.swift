@@ -364,6 +364,26 @@ final class MoneyTransaction {
         bookMembershipIDsRaw = ids.map(\.uuidString).sorted().joined(separator: ",")
         hasExplicitBookMemberships = true
     }
+
+    /// 账单倒序比较：先按记账时间倒序，同时间按录入时间倒序，仍相同按稳定编号倒序。
+    /// 避免同时刻两笔账（如同一分钟手动记两笔或固定演示数据）每次查询上下随机对调。
+    static func isOrderedBeforeDescending(_ lhs: MoneyTransaction, _ rhs: MoneyTransaction) -> Bool {
+        if lhs.date != rhs.date { return lhs.date > rhs.date }
+        if lhs.createdAt != rhs.createdAt { return lhs.createdAt > rhs.createdAt }
+        return lhs.stableID.uuidString > rhs.stableID.uuidString
+    }
+
+    /// 账单正序比较（如退款子记录、备份导出）：先按时间正序，再按录入时间与稳定编号正序。
+    static func isOrderedBeforeAscending(_ lhs: MoneyTransaction, _ rhs: MoneyTransaction) -> Bool {
+        if lhs.date != rhs.date { return lhs.date < rhs.date }
+        if lhs.createdAt != rhs.createdAt { return lhs.createdAt < rhs.createdAt }
+        return lhs.stableID.uuidString < rhs.stableID.uuidString
+    }
+
+    static let descendingSortDescriptors: [SortDescriptor<MoneyTransaction>] = [
+        SortDescriptor(\.date, order: .reverse),
+        SortDescriptor(\.createdAt, order: .reverse),
+    ]
 }
 
 /// 月度预算。当前只用「总预算」一条记录（categoryKey == nil），

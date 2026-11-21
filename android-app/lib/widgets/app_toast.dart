@@ -98,49 +98,53 @@ class _ToastState extends State<_Toast> with SingleTickerProviderStateMixin {
             );
           },
           child: Center(
-            child: Container(
-              // 长文案（如错误信息）别顶出屏幕：限宽 + 最多两行。
-              constraints: BoxConstraints(
-                  maxWidth: MediaQuery.sizeOf(context).width - 48),
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(999),
-                child: BackdropFilter(
-                  filter: ImageFilter.blur(sigmaX: 7, sigmaY: 7),
-                  child: Container(
-                    padding: EdgeInsets.symmetric(
-                        horizontal: 14,
-                        vertical: widget.mascot == null ? 8 : 6),
-                    decoration: BoxDecoration(
-                      color: Colors.black.withValues(alpha: 0.70),
-                      borderRadius: BorderRadius.circular(999),
-                      border: Border.all(
-                        color: Colors.white.withValues(alpha: 0.10),
-                        width: 0.6,
+            child: Material(
+              type: MaterialType.transparency,
+              child: Container(
+                // 长文案（如错误信息）别顶出屏幕：限宽 + 最多两行。
+                constraints: BoxConstraints(
+                    maxWidth: MediaQuery.sizeOf(context).width - 48),
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(999),
+                  child: BackdropFilter(
+                    filter: ImageFilter.blur(sigmaX: 7, sigmaY: 7),
+                    child: Container(
+                      padding: EdgeInsets.symmetric(
+                          horizontal: 14,
+                          vertical: widget.mascot == null ? 8 : 6),
+                      decoration: BoxDecoration(
+                        color: Colors.black.withValues(alpha: 0.70),
+                        borderRadius: BorderRadius.circular(999),
+                        border: Border.all(
+                          color: Colors.white.withValues(alpha: 0.10),
+                          width: 0.6,
+                        ),
                       ),
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        if (widget.mascot != null)
-                          // Mascot 自带加载失败回退 emoji，不会崩。
-                          Mascot(mood: widget.mascot!, size: 22, animate: false)
-                        else
-                          Icon(widget.icon, size: 15, color: Colors.white),
-                        const SizedBox(width: 6),
-                        Flexible(
-                          child: Text(
-                            widget.text,
-                            maxLines: 2,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
-                              fontSize: 14,
-                              color: Colors.white,
-                              fontWeight: FontWeight.w400,
-                              decoration: TextDecoration.none,
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          if (widget.mascot != null)
+                            // Mascot 自带加载失败回退 emoji，不会崩。
+                            Mascot(
+                                mood: widget.mascot!, size: 22, animate: false)
+                          else
+                            Icon(widget.icon, size: 15, color: Colors.white),
+                          const SizedBox(width: 6),
+                          Flexible(
+                            child: Text(
+                              widget.text,
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                fontSize: 14,
+                                color: Colors.white,
+                                fontWeight: FontWeight.w400,
+                                decoration: TextDecoration.none,
+                              ),
                             ),
                           ),
-                        ),
-                      ],
+                        ],
+                      ),
                     ),
                   ),
                 ),

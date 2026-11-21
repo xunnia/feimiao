@@ -782,7 +782,7 @@ private struct AssetCostLinkSheet: View {
                 $0.currencyCode == asset.currencyCode && !linked.contains($0.stableID) &&
                 (normalized.isEmpty || $0.note.lowercased().contains(normalized) || $0.amount.description.contains(normalized))
             }
-            .sorted { $0.date > $1.date }
+            .sorted(by: MoneyTransaction.isOrderedBeforeDescending)
     }
 
     var body: some View {

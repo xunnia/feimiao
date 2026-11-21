@@ -115,7 +115,7 @@ struct RecurringRulesView: View {
             HStack(spacing: 6) {
                 Text(rule.period.label)
                 Text("·")
-                Text(rule.isCompleted ? "已完成" : "下次 \(rule.nextDueDate.formatted(date: .abbreviated, time: .omitted))")
+                Text(rule.isCompleted ? "已完成" : "下次 \(Self.dueDateLabel(rule.nextDueDate))")
                 Spacer(minLength: 4)
                 if rule.kind == .transfer, let target {
                     Text("\(account?.name ?? "账户") → \(target.name)")
@@ -148,6 +148,16 @@ struct RecurringRulesView: View {
                 Label("删除", systemImage: "trash")
             }
         }
+    }
+
+    static func dueDateLabel(_ date: Date, calendar: Calendar = .current) -> String {
+        let components = calendar.dateComponents([.year, .month, .day], from: date)
+        guard let year = components.year,
+              let month = components.month,
+              let day = components.day else {
+            return ""
+        }
+        return "\(year)年\(month)月\(day)日"
     }
 }
 

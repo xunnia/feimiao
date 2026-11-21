@@ -31,9 +31,9 @@ enum LedgerStore {
     }
 
     static func allTransactions(in context: ModelContext) throws -> [MoneyTransaction] {
-        try context.fetch(FetchDescriptor<MoneyTransaction>(sortBy: [
-            SortDescriptor(\.date, order: .reverse)
-        ]))
+        try context.fetch(FetchDescriptor<MoneyTransaction>(
+            sortBy: MoneyTransaction.descendingSortDescriptors
+        )).sorted(by: MoneyTransaction.isOrderedBeforeDescending)
     }
 
     static func visibleTransactions(
@@ -52,7 +52,7 @@ enum LedgerStore {
     ) throws -> [MoneyTransaction] {
         let all = try allTransactions(in: context)
         return all.filter { $0.refundOfID == original.stableID }
-            .sorted { $0.date < $1.date }
+            .sorted(by: MoneyTransaction.isOrderedBeforeAscending)
     }
 
     static func refundStatus(

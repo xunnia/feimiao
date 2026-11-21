@@ -62,7 +62,7 @@ struct BookMembershipBulkSheet: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var context
     @Query(sort: \Book.sortOrder) private var books: [Book]
-    @Query(sort: \MoneyTransaction.date, order: .reverse) private var all: [MoneyTransaction]
+    @Query(sort: MoneyTransaction.descendingSortDescriptors) private var all: [MoneyTransaction]
     let candidateIDs: Set<UUID>?
     @State private var bookID: UUID?
     @State private var removing = false
@@ -98,6 +98,7 @@ struct BookMembershipBulkSheet: View {
             }
             return true
         }
+        .sorted(by: MoneyTransaction.isOrderedBeforeDescending)
     }
 
     var body: some View {

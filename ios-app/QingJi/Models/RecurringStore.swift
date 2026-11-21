@@ -140,7 +140,7 @@ enum RecurringStore {
     @discardableResult
     static func materializeDue(
         in context: ModelContext,
-        now: Date = Date(),
+        now: Date = AppClock.now,
         calendar: Calendar = .current
     ) throws -> Int {
         let rules = try rules(in: context)

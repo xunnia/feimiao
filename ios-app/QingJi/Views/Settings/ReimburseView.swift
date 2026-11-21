@@ -5,7 +5,7 @@ import UIKit
 /// 待报销：按原账单挂接抵消流水，原账单日期和实际到账日期分别保留。
 struct ReimburseView: View {
     @Environment(\.modelContext) private var context
-    @Query(sort: \MoneyTransaction.date, order: .reverse)
+    @Query(sort: MoneyTransaction.descendingSortDescriptors)
     private var transactions: [MoneyTransaction]
     @Query(sort: \Account.sortOrder)
     private var accounts: [Account]
@@ -23,6 +23,7 @@ struct ReimburseView: View {
             !$0.isReimbursed &&
             remainingAmount(for: $0) > 0
         }
+        .sorted(by: MoneyTransaction.isOrderedBeforeDescending)
     }
 
     private var pendingTotal: Decimal {

@@ -151,7 +151,7 @@ enum AssetStore {
                  transaction.category?.name.lowercased().contains(normalized) == true ||
                  transaction.amount.description.contains(normalized))
             }
-            .sorted { $0.date > $1.date }
+            .sorted(by: MoneyTransaction.isOrderedBeforeDescending)
     }
 
     /// 将一笔已有支出作为物品的后续持有成本关联；关联本身不改变账单。

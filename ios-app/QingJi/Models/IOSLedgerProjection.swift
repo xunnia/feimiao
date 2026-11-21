@@ -147,7 +147,8 @@ final class IOSLedgerProjectionCache {
             return lastSnapshot
         }
 
-        let scoped = LedgerScope.filter(transactions, selectedBookID: selectedBookID, books: books)
+        let orderedTransactions = transactions.sorted(by: MoneyTransaction.isOrderedBeforeDescending)
+        let scoped = LedgerScope.filter(orderedTransactions, selectedBookID: selectedBookID, books: books)
         let records = scoped.map(\.record)
         var recordsByID = [UUID: TransactionRecord](minimumCapacity: records.count)
         for record in records {

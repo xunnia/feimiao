@@ -504,4 +504,76 @@ final class LedgerStoreTests: XCTestCase {
             80
         )
     }
+
+    func testSameTimestampTransactionsUseDeterministicSecondarySortOrder() throws {
+        let stack = try Stack()
+        let (book, cash, _, dining) = try seed(stack)
+        let sameDate = Date(timeIntervalSince1970: 1_787_803_200) // 2026-08-27T12:00:00+08:00
+        let earlierCreated = sameDate.addingTimeInterval(1)
+        let laterCreated = sameDate.addingTimeInterval(2)
+        let idSmall = try XCTUnwrap(UUID(uuidString: "00000000-0000-4000-8000-000000000001"))
+        let idLarge = try XCTUnwrap(UUID(uuidString: "FFFFFFFF-FFFF-4FFF-8FFF-FFFFFFFFFFFF"))
+
+        let first = MoneyTransaction(
+            amount: 38,
+            kind: .expense,
+            date: sameDate,
+            note: "午餐 麦当劳",
+            category: dining,
+            account: cash,
+            book: book,
+            stableID: idLarge,
+            createdAt: earlierCreated,
+            updatedAt: earlierCreated
+        )
+        let second = MoneyTransaction(
+            amount: 120,
+            kind: .income,
+            date: sameDate,
+            note: "兼职收入",
+            category: dining,
+            account: cash,
+            book: book,
+            stableID: idSmall,
+            createdAt: laterCreated,
+            updatedAt: laterCreated
+        )
+        stack.context.insert(first)
+        stack.context.insert(second)
+        try stack.context.save()
+
+        // 即使先写入的那条 UUID 字典序更大，仍按录入时间倒序固定排在后面。
+        let fetched = try LedgerStore.allTransactions(in: stack.context)
+        XCTAssertEqual(fetched.map(\.note), ["兼职收入", "午餐 麦当劳"])
+
+        let cache = IOSLedgerProjectionCache()
+        let projected = cache.snapshot(for: [first, second], selectedBookID: nil, books: [book])
+        XCTAssertEqual(projected.scopedTransactions.map(\.note), ["兼职收入", "午餐 麦当劳"])
+
+        // 录入时间也相同时，回退到 stableID 倒序，确保任意输入顺序得到相同排序。
+        let tiedA = MoneyTransaction(
+            amount: 10, kind: .expense, date: sameDate, note: "A",
+            account: cash, book: book, stableID: idSmall, createdAt: earlierCreated, updatedAt: earlierCreated
+        )
+        let tiedB = MoneyTransaction(
+            amount: 20, kind: .expense, date: sameDate, note: "B",
+            account: cash, book: book, stableID: idLarge, createdAt: earlierCreated, updatedAt: earlierCreated
+        )
+        XCTAssertEqual(
+            [tiedA, tiedB].sorted(by: MoneyTransaction.isOrderedBeforeDescending).map(\.note),
+            ["B", "A"]
+        )
+        XCTAssertEqual(
+            [tiedB, tiedA].sorted(by: MoneyTransaction.isOrderedBeforeDescending).map(\.note),
+            ["B", "A"]
+        )
+    }
+
+    func testRecurringDueDateLabelUsesChineseFormatWithoutLocaleDrift() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.locale = Locale(identifier: "en_US")
+        calendar.timeZone = TimeZone(identifier: "Asia/Shanghai")!
+        let date = try XCTUnwrap(calendar.date(from: DateComponents(year: 2026, month: 9, day: 30, hour: 12)))
+        XCTAssertEqual(RecurringRulesView.dueDateLabel(date, calendar: calendar), "2026年9月30日")
+    }
 }

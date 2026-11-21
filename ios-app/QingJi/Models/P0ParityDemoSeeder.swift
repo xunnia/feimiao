@@ -261,7 +261,8 @@ enum P0ParityDemoSeeder {
         var byKey: [String: MoneyTransaction] = [:]
         var rows: [MoneyTransaction] = []
 
-        for row in fixture.transactions {
+        let logicalNow = try P0ParityFixtureLoader.date(fixture.clock)
+        for (index, row) in fixture.transactions.enumerated() {
             guard byKey[row.key] == nil else {
                 throw P0ParityFixtureError.invalidReference("duplicate transaction key \(row.key)")
             }
@@ -289,6 +290,9 @@ enum P0ParityDemoSeeder {
             let toAccount = row.toAccount.flatMap { accounts[$0] }
             let currencyCode = row.currency ?? fixture.currency
             let settledAt = try row.settledAt.map(P0ParityFixtureLoader.date) ?? transactionDate
+            // 演示数据按夹具顺序递增 1 秒作为录入时间，与 Android 自增 id 顺序一致，
+            // 让 12:00 同分钟账单（午餐、兼职、退款）每次截图顺序完全固定。
+            let seededCreatedAt = logicalNow.addingTimeInterval(TimeInterval(index))
             let transaction = MoneyTransaction(
                 amount: amount,
                 kind: kind,
@@ -302,6 +306,8 @@ enum P0ParityDemoSeeder {
                 toAccount: toAccount,
                 book: book,
                 timePrecision: .entryClock,
+                createdAt: seededCreatedAt,
+                updatedAt: seededCreatedAt,
                 settledAt: settledAt,
                 settlementQuality: .userConfirmed,
                 settlementAccountID: settlementAccount.stableID,

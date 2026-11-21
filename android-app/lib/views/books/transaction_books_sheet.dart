@@ -134,7 +134,10 @@ class _BookTransactionsSheetState extends State<BookTransactionsSheet> {
               .toLowerCase()
               .contains(query);
     }).toList()
-      ..sort((a, b) => b.dateMs.compareTo(a.dateMs));
+      ..sort((a, b) {
+        final byDate = b.dateMs.compareTo(a.dateMs);
+        return byDate != 0 ? byDate : b.id.compareTo(a.id);
+      });
   }
 
   Future<void> _save() async {

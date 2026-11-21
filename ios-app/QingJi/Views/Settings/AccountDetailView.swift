@@ -38,7 +38,7 @@ struct AccountDetailView: View {
 
     @Environment(\.modelContext) private var context
     @Query private var accounts: [Account]
-    @Query(sort: \MoneyTransaction.date, order: .reverse)
+    @Query(sort: MoneyTransaction.descendingSortDescriptors)
     private var transactions: [MoneyTransaction]
     @Query private var checkpoints: [AccountBalanceCheckpointRecord]
 
@@ -77,7 +77,9 @@ struct AccountDetailView: View {
 
     private var activities: [Activity] {
         let id = currentAccount.stableID
-        return transactions.compactMap { transaction in
+        return transactions
+            .sorted(by: MoneyTransaction.isOrderedBeforeDescending)
+            .compactMap { transaction in
             let record = transaction.record
             let isOutgoing = record.accountID == id ||
                 record.settlementAccountID == id ||

@@ -11508,6 +11508,7 @@ class AppRepository extends ChangeNotifier {
               id: transaction.uuid.isEmpty
                   ? transaction.id.toString()
                   : transaction.uuid,
+              sequence: transaction.id,
               bookId: transaction.bookId ?? _defaultBookId,
               currencyCode: transaction.currencyCode,
               eventType: transaction.eventType,

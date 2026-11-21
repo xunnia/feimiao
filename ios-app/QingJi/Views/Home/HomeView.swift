@@ -22,7 +22,7 @@ private enum HomeTransactionFilter: String, CaseIterable, Hashable {
 struct HomeView: View {
     @Environment(AppRouter.self) private var router
     let onOpenDrawer: (() -> Void)?
-    @Query(sort: \MoneyTransaction.date, order: .reverse)
+    @Query(sort: MoneyTransaction.descendingSortDescriptors)
     private var transactions: [MoneyTransaction]
     @Query(sort: \Book.sortOrder)
     private var books: [Book]
@@ -364,7 +364,7 @@ struct HomeView: View {
         .map { day, items in
             HomeTransactionDayGroup(
                 day: day,
-                items: items.sorted { $0.date > $1.date }
+                items: items.sorted(by: MoneyTransaction.isOrderedBeforeDescending)
             )
         }
         .sorted { $0.day > $1.day }

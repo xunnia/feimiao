@@ -5,6 +5,7 @@ enum AccountActivityDirection { inflow, outflow }
 
 class AccountActivityEvent {
   final String id;
+  final int? sequence;
   final int bookId;
   final String currencyCode;
   final TransactionEventType eventType;
@@ -23,6 +24,7 @@ class AccountActivityEvent {
 
   const AccountActivityEvent({
     required this.id,
+    this.sequence,
     required this.bookId,
     required this.currencyCode,
     required this.eventType,
@@ -43,6 +45,7 @@ class AccountActivityEvent {
 
 class AccountActivityItem {
   final String eventId;
+  final int? sequence;
   final int accountId;
   final int bookId;
   final String currencyCode;
@@ -60,6 +63,7 @@ class AccountActivityItem {
 
   const AccountActivityItem({
     required this.eventId,
+    this.sequence,
     required this.accountId,
     required this.bookId,
     required this.currencyCode,
@@ -106,6 +110,7 @@ class AccountActivityProjection {
       if (legAccountId != accountId || amountMinor == 0) return;
       items.add(AccountActivityItem(
         eventId: event.id,
+        sequence: event.sequence,
         accountId: legAccountId,
         bookId: event.bookId,
         currencyCode: event.currencyCode,
@@ -184,6 +189,13 @@ class AccountActivityProjection {
           right.settledAt?.millisecondsSinceEpoch ?? right.createdMs;
       final byTime = rightSort.compareTo(leftSort);
       if (byTime != 0) return byTime;
+      final leftSeq = left.sequence;
+      final rightSeq = right.sequence;
+      if (leftSeq != null && rightSeq != null && leftSeq != rightSeq) {
+        return rightSeq.compareTo(leftSeq);
+      }
+      final byCreated = right.createdMs.compareTo(left.createdMs);
+      if (byCreated != 0) return byCreated;
       return right.eventId.compareTo(left.eventId);
     });
     if (limit == null || limit < 0 || items.length <= limit) return items;

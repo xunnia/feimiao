@@ -13,7 +13,7 @@ struct TransactionListView: View {
 
     @Environment(AppRouter.self) private var router
     @Environment(\.modelContext) private var context
-    @Query(sort: \MoneyTransaction.date, order: .reverse)
+    @Query(sort: MoneyTransaction.descendingSortDescriptors)
     private var transactions: [MoneyTransaction]
     @Query(sort: \Account.sortOrder)
     private var accounts: [Account]
@@ -124,7 +124,7 @@ struct TransactionListView: View {
             grouped[calendar.startOfDay(for: transaction.date), default: []].append(transaction)
         }
         let sections = grouped.keys.sorted(by: >).map { day in
-            let items = grouped[day] ?? []
+            let items = (grouped[day] ?? []).sorted(by: MoneyTransaction.isOrderedBeforeDescending)
             var expense = Decimal(0)
             var income = Decimal(0)
             for transaction in items where !transaction.isExcluded {

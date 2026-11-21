@@ -193,7 +193,7 @@ struct EditTransactionSheet: View {
     private var refundChildren: [MoneyTransaction] {
         allTransactions
             .filter { $0.refundOfID == transaction.stableID }
-            .sorted { $0.date < $1.date }
+            .sorted(by: MoneyTransaction.isOrderedBeforeAscending)
     }
 
     private var refundStatus: RefundStatus {
