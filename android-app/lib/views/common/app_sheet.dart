@@ -75,7 +75,9 @@ Future<T?> showBlurSheet<T>(
     // 各弹层内部自带的 SafeArea 不会二次垫高）。
     pageBuilder: (ctx, _, __) => SafeArea(
       child: AnimatedPadding(
-        duration: const Duration(milliseconds: 250),
+        duration: MediaQuery.disableAnimationsOf(ctx)
+            ? Duration.zero
+            : const Duration(milliseconds: 220),
         curve: Curves.easeOutCubic,
         padding: EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(ctx).bottom),
         child: Padding(
@@ -98,23 +100,28 @@ Future<T?> showBlurSheet<T>(
       ),
     ),
     transitionBuilder: (ctx, anim, _, child) {
+      final reduceMotion = MediaQuery.disableAnimationsOf(ctx);
       final curved = CurvedAnimation(parent: anim, curve: Curves.easeOutCubic);
-      final transition = FadeTransition(
-        opacity: anim,
-        child: SlideTransition(
-          position: Tween<Offset>(
-            begin: const Offset(0, 0.06),
-            end: Offset.zero,
-          ).animate(curved),
-          child: child,
-        ),
-      );
+      final transition = reduceMotion
+          ? FadeTransition(opacity: anim, child: child)
+          : FadeTransition(
+              opacity: anim,
+              child: SlideTransition(
+                position: Tween<Offset>(
+                  begin: const Offset(0, 0.06),
+                  end: Offset.zero,
+                ).animate(curved),
+                child: child,
+              ),
+            );
       if (!blurBackground) return transition;
+      // 减弱动态或键盘正顶起时跳过动态高斯模糊，减少重绘抖动与发热。
+      final sigma = reduceMotion || MediaQuery.viewInsetsOf(ctx).bottom > 0
+          ? 0.0
+          : 10 * anim.value;
+      if (sigma <= 0.01) return transition;
       return BackdropFilter(
-        filter: ImageFilter.blur(
-          sigmaX: 10 * anim.value,
-          sigmaY: 10 * anim.value,
-        ),
+        filter: ImageFilter.blur(sigmaX: sigma, sigmaY: sigma),
         child: transition,
       );
     },

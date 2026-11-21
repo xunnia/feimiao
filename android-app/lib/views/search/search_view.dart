@@ -224,7 +224,10 @@ class _SearchViewState extends State<SearchView> {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final repo = context.watch<AppRepository>();
+    context.select<AppRepository, (int, int, bool)>(
+      (r) => r.financialViewVersion,
+    );
+    final repo = context.read<AppRepository>();
     final showSummary = _active && _results.isNotEmpty;
     final topChromeHeight =
         _searchTopFilterHeight + (showSummary ? _searchTopSummaryHeight : 0);
@@ -426,6 +429,8 @@ class _SearchViewState extends State<SearchView> {
       child: Padding(
         padding: const EdgeInsets.fromLTRB(12, 6, 12, 10),
         child: AppGlassInputShell(
+          // 键盘展开期间暂停模糊（06 §5 铁律），避免输入法动画期每帧重算 BackdropFilter。
+          blurEnabled: MediaQuery.viewInsetsOf(context).bottom == 0,
           padding: const EdgeInsets.fromLTRB(14, 14, 10, 10),
           child: Column(
             mainAxisSize: MainAxisSize.min,

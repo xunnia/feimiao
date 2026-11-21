@@ -67,6 +67,16 @@ class _HomeViewState extends State<HomeView> with WidgetsBindingObserver {
   _TxFilter _filter = _TxFilter.all;
   // 打开 App 时修过重复编号的账单，首页提示一次。
   bool _uuidNoticeScheduled = false;
+  // 首页当前月派生缓存：当账务版本、当前月份、筛选器未变时直接复用，
+  // 避免父级 inset/键盘/动画微调重排时重复跑 monthlySummary 和按天分组。
+  AppRepository? _cachedRepo;
+  (int, int, bool)? _cachedVersion;
+  int? _cachedYear;
+  int? _cachedMonth;
+  _TxFilter? _cachedFilter;
+  MonthlySummary? _cachedSummary;
+  List<TransactionEntity> _cachedMonthTx = const [];
+  List<TxSection> _cachedSections = const [];
 
   @override
   void initState() {
@@ -209,7 +219,11 @@ class _HomeViewState extends State<HomeView> with WidgetsBindingObserver {
 
   @override
   Widget build(BuildContext context) {
-    final repo = context.watch<AppRepository>();
+    // 仅订阅账务/显示设置域版本，屏蔽 AI 聊天与运行日志通知造成的首页全量重算。
+    final version = context.select<AppRepository, (int, int, bool)>(
+      (r) => r.financialViewVersion,
+    );
+    final repo = context.read<AppRepository>();
     if (repo.uuidDuplicatesNoticeCount > 0 && !_uuidNoticeScheduled) {
       _uuidNoticeScheduled = true;
       WidgetsBinding.instance
@@ -221,11 +235,44 @@ class _HomeViewState extends State<HomeView> with WidgetsBindingObserver {
     }
     final monthDate = DateTime(_year, _month);
 
-    final summary = StatisticsEngine.monthlySummary(
-      repo.allRecordsRef,
-      year: _year,
-      month: _month,
-    );
+    if (!identical(_cachedRepo, repo) ||
+        _cachedVersion != version ||
+        _cachedYear != _year ||
+        _cachedMonth != _month) {
+      _cachedRepo = repo;
+      _cachedVersion = version;
+      _cachedYear = _year;
+      _cachedMonth = _month;
+      _cachedFilter = null;
+      _cachedSummary = StatisticsEngine.monthlySummary(
+        repo.allRecordsRef,
+        year: _year,
+        month: _month,
+      );
+      _cachedMonthTx = [
+        for (final transaction in repo.visibleTransactionsRef)
+          if (transaction.date.year == _year &&
+              transaction.date.month == _month)
+            transaction,
+      ];
+    }
+    if (_cachedFilter != _filter) {
+      _cachedFilter = _filter;
+      final filtered = _cachedMonthTx.where((t) {
+        switch (_filter) {
+          case _TxFilter.all:
+            return true;
+          case _TxFilter.expense:
+            return t.txKind == TransactionKind.expense;
+          case _TxFilter.income:
+            return t.txKind == TransactionKind.income;
+        }
+      }).toList();
+      _cachedSections = groupTxnsByDay(filtered);
+    }
+    final summary = _cachedSummary!;
+    final monthTx = _cachedMonthTx;
+    final sections = _cachedSections;
     // Cold start paints the home shell before the repository has selected a
     // real book. Budget queries require a positive book id, so show the normal
     // no-budget state for this brief window and rebuild with real data when
@@ -235,27 +282,6 @@ class _HomeViewState extends State<HomeView> with WidgetsBindingObserver {
         repo.currentBookId > 0 ? repo.budgetRuleMonth(monthDate) : null;
     final monthBudget = budgetSnapshot?.plannedAmount;
     final budgetStatus = budgetSnapshot?.status;
-
-    // 所选月的交易 + 收支筛选（退款行不单独显示，挂在原账单里）。
-    // The repository keeps this view as a stable, immutable reference.  Using
-    // it here avoids copying the entire visible ledger on every home rebuild;
-    // only the selected month's list is materialized for grouping.
-    final monthTx = [
-      for (final transaction in repo.visibleTransactionsRef)
-        if (transaction.date.year == _year && transaction.date.month == _month)
-          transaction,
-    ];
-    final filtered = monthTx.where((t) {
-      switch (_filter) {
-        case _TxFilter.all:
-          return true;
-        case _TxFilter.expense:
-          return t.txKind == TransactionKind.expense;
-        case _TxFilter.income:
-          return t.txKind == TransactionKind.income;
-      }
-    }).toList();
-    final sections = groupTxnsByDay(filtered);
 
     final topChrome = MediaQuery.paddingOf(context).top;
 

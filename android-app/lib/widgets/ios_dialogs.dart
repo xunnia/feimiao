@@ -26,20 +26,23 @@ Future<bool> showConfirmDialog(
     transitionDuration: const Duration(milliseconds: 200),
     pageBuilder: (_, __, ___) => const SizedBox.shrink(),
     transitionBuilder: (ctx, anim, _, __) {
+      final reduceMotion = MediaQuery.disableAnimationsOf(ctx);
+      final card = Center(
+        child: _ConfirmCard(
+          title: title,
+          message: message,
+          confirmText: confirmText,
+          cancelText: cancelText,
+          destructive: destructive,
+        ),
+      );
+      if (reduceMotion) return FadeTransition(opacity: anim, child: card);
       final curved = CurvedAnimation(parent: anim, curve: Curves.easeOutBack);
       return FadeTransition(
         opacity: anim,
         child: ScaleTransition(
           scale: Tween<double>(begin: 0.92, end: 1.0).animate(curved),
-          child: Center(
-            child: _ConfirmCard(
-              title: title,
-              message: message,
-              confirmText: confirmText,
-              cancelText: cancelText,
-              destructive: destructive,
-            ),
-          ),
+          child: card,
         ),
       );
     },
@@ -64,6 +67,9 @@ Future<T?> showFrostedDialog<T>(
     transitionDuration: const Duration(milliseconds: 200),
     pageBuilder: (_, __, ___) => child,
     transitionBuilder: (ctx, anim, _, page) {
+      if (MediaQuery.disableAnimationsOf(ctx)) {
+        return FadeTransition(opacity: anim, child: page);
+      }
       final curved = CurvedAnimation(parent: anim, curve: Curves.easeOutBack);
       return FadeTransition(
         opacity: anim,

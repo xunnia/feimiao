@@ -338,6 +338,12 @@ class AppRepository extends ChangeNotifier {
   int get settingsRevision => _revisions.of(RepositoryChange.settings);
   int get aiRevision => _revisions.of(RepositoryChange.ai);
 
+  /// 供财务展示页（首页、预算、统计、资产、搜索）按域订阅的版本指纹：
+  /// 仅当账务数据、显示设置或水合状态变化时才变，屏蔽聊天消息、AI 健康度与
+  /// AI 运行日志的频繁广播，避免聊天时穿透重建首页/统计/资产页。
+  (int, int, bool) get financialViewVersion =>
+      (financialRevision, settingsRevision, isHydrating);
+
   /// 当前内存账本快照的单调版本，供只读视图缓存使用。
   ///
   /// 这是一个不包含业务数据的版本号：任何仓库写路径完成通知时都会递增，
@@ -7874,8 +7880,9 @@ class AppRepository extends ChangeNotifier {
     bool requiresConfirmation = false,
   }) async {
     final key = idempotencyKey.trim();
-    if (key.isEmpty)
+    if (key.isEmpty) {
       throw ArgumentError.value(idempotencyKey, 'idempotencyKey');
+    }
     final sid =
         sessionId.trim().isEmpty ? ChatSession.recordId : sessionId.trim();
     final now = DateTime.now().millisecondsSinceEpoch;
@@ -8729,8 +8736,9 @@ class AppRepository extends ChangeNotifier {
       var candidate = DateTime(now.year, now.month, now.day, 9);
       final delta = (dayValue.clamp(1, 7).toInt() - candidate.weekday) % 7;
       candidate = candidate.add(Duration(days: delta));
-      if (!candidate.isAfter(now))
+      if (!candidate.isAfter(now)) {
         candidate = candidate.add(const Duration(days: 7));
+      }
       return candidate;
     }
     var year = now.year;

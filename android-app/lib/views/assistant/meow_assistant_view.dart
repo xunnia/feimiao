@@ -290,7 +290,7 @@ class _MeowAssistantViewState extends State<MeowAssistantView> {
                             'Chats',
                             style: TextStyle(
                               fontFamily: 'Nunito',
-                              fontFamilyFallback: const ['NotoSansSC'],
+                              fontFamilyFallback: ['NotoSansSC'],
                               fontSize: 19,
                               fontWeight: FontWeight.w500,
                             ),

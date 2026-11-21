@@ -131,7 +131,12 @@ class BudgetProgressBar extends StatelessWidget {
                     child: ClipRRect(
                       key: const ValueKey('budget-progress-fill-clip'),
                       borderRadius: BorderRadius.circular(AppRadius.pill),
-                      child: SizedBox(
+                      child: AnimatedContainer(
+                        duration: AppMotion.duration(
+                          context,
+                          AppMotion.normal,
+                        ),
+                        curve: Curves.easeOutCubic,
                         width: width * progress,
                         height: height,
                         child: OverflowBox(
@@ -239,33 +244,42 @@ class BudgetProgressRing extends StatelessWidget {
     final trackColor = BudgetProgressPalette.trackColor(scheme, activeColor);
     final outlineColor =
         BudgetProgressPalette.trackOutlineColor(scheme, activeColor);
-    return Stack(
-      fit: StackFit.expand,
-      children: [
-        ExcludeSemantics(
-          child: CircularProgressIndicator(
-            key: const ValueKey('budget-progress-ring-outline'),
-            value: 1,
-            strokeWidth: strokeWidth + 1.5,
+    final clamped = value.clamp(0.0, 1.0);
+    final animDuration = !TickerMode.valuesOf(context).enabled
+        ? Duration.zero
+        : AppMotion.duration(context, AppMotion.normal);
+    return TweenAnimationBuilder<double>(
+      tween: Tween<double>(end: clamped),
+      duration: animDuration,
+      curve: Curves.easeOutCubic,
+      builder: (context, animatedValue, _) => Stack(
+        fit: StackFit.expand,
+        children: [
+          ExcludeSemantics(
+            child: CircularProgressIndicator(
+              key: const ValueKey('budget-progress-ring-outline'),
+              value: 1,
+              strokeWidth: strokeWidth + 1.5,
+              strokeAlign: CircularProgressIndicator.strokeAlignCenter,
+              strokeCap: StrokeCap.butt,
+              trackGap: 0,
+              padding: EdgeInsets.zero,
+              color: outlineColor,
+            ),
+          ),
+          CircularProgressIndicator(
+            key: const ValueKey('budget-progress-ring-fill'),
+            value: animatedValue,
+            strokeWidth: strokeWidth,
             strokeAlign: CircularProgressIndicator.strokeAlignCenter,
-            strokeCap: StrokeCap.butt,
+            strokeCap: StrokeCap.round,
             trackGap: 0,
             padding: EdgeInsets.zero,
-            color: outlineColor,
+            color: activeColor,
+            backgroundColor: trackColor,
           ),
-        ),
-        CircularProgressIndicator(
-          key: const ValueKey('budget-progress-ring-fill'),
-          value: value.clamp(0.0, 1.0),
-          strokeWidth: strokeWidth,
-          strokeAlign: CircularProgressIndicator.strokeAlignCenter,
-          strokeCap: StrokeCap.round,
-          trackGap: 0,
-          padding: EdgeInsets.zero,
-          color: activeColor,
-          backgroundColor: trackColor,
-        ),
-      ],
+        ],
+      ),
     );
   }
 

@@ -5,6 +5,7 @@ import 'package:http/http.dart' as http;
 
 import '../app_clock.dart';
 import 'ai_http_transport.dart';
+import 'ai_logger.dart';
 import 'ai_prompt_templates.dart';
 import 'ai_provider_config.dart';
 import 'claude_messages_protocol.dart';
@@ -21,6 +22,18 @@ class LlmQuery {
 
   static const _timeoutSeconds = 30;
   static const _reportTimeoutSeconds = 90;
+
+  static int _reportMaxTokens(AiProviderConfig config) =>
+      switch (config.reasoningEffort) {
+        AiReasoningEffort.none => 2400,
+        AiReasoningEffort.minimal || AiReasoningEffort.low => 3200,
+        AiReasoningEffort.medium => 4096,
+        AiReasoningEffort.high => 6144,
+        AiReasoningEffort.xhigh ||
+        AiReasoningEffort.max ||
+        AiReasoningEffort.ultra =>
+          8192,
+      };
   static AiHttpTransport? _sharedTransport;
 
   static AiHttpTransport get _transport =>
@@ -159,7 +172,7 @@ $transactionsText''';
         ],
         'stream': false,
         'temperature': 0.25,
-        'max_tokens': 2400,
+        'max_tokens': _reportMaxTokens(provider),
       },
     );
   }
@@ -312,14 +325,16 @@ $transactionsText''';
         timeout: Duration(seconds: timeoutSeconds),
       );
     } catch (e) {
-      throw LlmQueryException('网络请求失败：$e');
+      throw LlmQueryException(
+        '网络请求失败：${_sanitizeForDisplay(e.toString(), config.apiKey)}',
+      );
     }
 
     // 必须用 bodyBytes 显式按 UTF-8 解码：响应头不带 charset 时
     // http 包的 .body 按 latin1 解，中文全变乱码且会入库。
     final bodyText = utf8.decode(resp.bodyBytes, allowMalformed: true);
     if (resp.statusCode != 200) {
-      final snippet = _bodySnippet(bodyText);
+      final snippet = _bodySnippet(bodyText, apiKey: config.apiKey);
       throw LlmQueryException(
         '${config.providerLabel} 返回错误 ${resp.statusCode}'
         '${snippet.isEmpty ? '' : '：$snippet'}',
@@ -361,12 +376,14 @@ $transactionsText''';
         timeout: Duration(seconds: timeoutSeconds),
       );
     } catch (e) {
-      throw LlmQueryException('Claude Messages 请求失败：$e');
+      throw LlmQueryException(
+        'Claude Messages 请求失败：${_sanitizeForDisplay(e.toString(), config.apiKey)}',
+      );
     }
 
     final bodyText = utf8.decode(resp.bodyBytes, allowMalformed: true);
     if (resp.statusCode != 200) {
-      final snippet = _bodySnippet(bodyText);
+      final snippet = _bodySnippet(bodyText, apiKey: config.apiKey);
       throw LlmQueryException(
         '${config.providerLabel} Messages 返回错误 ${resp.statusCode}'
         '${snippet.isEmpty ? '' : '：$snippet'}',
@@ -430,12 +447,14 @@ $transactionsText''';
         forceRouteRefresh: true,
       );
     } catch (e) {
-      throw LlmQueryException('网络请求失败：$e');
+      throw LlmQueryException(
+        '网络请求失败：${_sanitizeForDisplay(e.toString(), config.apiKey)}',
+      );
     }
 
     final bodyText = utf8.decode(resp.bodyBytes, allowMalformed: true);
     if (resp.statusCode != 200) {
-      final snippet = _bodySnippet(bodyText);
+      final snippet = _bodySnippet(bodyText, apiKey: config.apiKey);
       throw LlmQueryException(
         '${config.providerLabel} Responses 返回错误 ${resp.statusCode}'
         '${snippet.isEmpty ? '' : '：$snippet'}',
@@ -491,11 +510,23 @@ $transactionsText''';
     return result;
   }
 
-  static String _bodySnippet(String body) {
-    final text = body.replaceAll(RegExp(r'\s+'), ' ').trim();
-    if (text.isEmpty) return '';
-    if (text.length <= 180) return text;
-    return '${text.substring(0, 180)}…';
+  static String _sanitizeForDisplay(String raw, String apiKey) {
+    var sanitized = AiLogger.sanitizeErrorForDisplay(raw);
+    final trimmedKey = apiKey.trim();
+    if (trimmedKey.isNotEmpty) {
+      sanitized = sanitized.replaceAll(trimmedKey, '***');
+    }
+    return sanitized;
+  }
+
+  static String _bodySnippet(String body, {String apiKey = ''}) {
+    final sanitized = _sanitizeForDisplay(
+      body.replaceAll(RegExp(r'\s+'), ' ').trim(),
+      apiKey,
+    );
+    if (sanitized.isEmpty) return '';
+    if (sanitized.length <= 180) return sanitized;
+    return '${sanitized.substring(0, 180)}…';
   }
 
   static Future<void> testConnection(

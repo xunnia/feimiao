@@ -59,9 +59,10 @@ class _AnimatedMoneyState extends State<AnimatedMoney>
 
   @override
   Widget build(BuildContext context) {
-    // Ticker 被禁用的环境（小组件离屏渲染）里动画永远停在第 0 帧，
-    // 会把金额渲成 ¥0.00——这种场景直接静态显示最终值。
-    if (!TickerMode.valuesOf(context).enabled) {
+    // Ticker 被禁用的环境（小组件离屏渲染）或开启系统「减弱动态」时，
+    // 直接静态显示最终值，避免停在第 0 帧或引起眩晕。
+    if (!TickerMode.valuesOf(context).enabled ||
+        MediaQuery.disableAnimationsOf(context)) {
       return Text(
         '${widget.prefix}${MoneyFormat.string(widget.value)}',
         style: widget.style,

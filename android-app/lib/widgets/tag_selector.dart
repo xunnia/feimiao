@@ -58,11 +58,12 @@ class TagSelector extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final repo = context.watch<AppRepository>();
-    final tags = repo.tags;
+    final tags = context.select<AppRepository, List<TagEntity>>((r) => r.tags);
+    final scaledHeight = MediaQuery.textScalerOf(context).scale(12) + 22;
+    final rowHeight = scaledHeight > 34 ? scaledHeight : 34.0;
 
     return SizedBox(
-      height: 34,
+      height: rowHeight,
       child: ListView(
         scrollDirection: Axis.horizontal,
         padding: EdgeInsets.zero,

@@ -597,7 +597,7 @@ $catList
             return block['text'] as String;
           }
         }
-        throw LlmParseException('Claude 响应中未找到 text 内容块');
+        throw const LlmParseException('Claude 响应中未找到 text 内容块');
       } catch (e) {
         throw LlmParseException('Claude 响应结构异常：$e');
       }
@@ -750,7 +750,7 @@ Future<String?> _imageDataUri(String? imagePath) async {
   if (path.isEmpty) return null;
   final file = File(path);
   if (!await file.exists()) {
-    throw LlmParseException('图片文件不存在');
+    throw const LlmParseException('图片文件不存在');
   }
   final prepared = await AiImagePreparation.prepare(path);
   final bytes = prepared.bytes;
@@ -765,7 +765,7 @@ Future<List<Map<String, dynamic>>> _chatAttachmentParts(
   final parts = <Map<String, dynamic>>[];
   for (final attachment in attachments) {
     final file = File(attachment.path);
-    if (!await file.exists()) throw LlmParseException('附件文件不存在');
+    if (!await file.exists()) throw const LlmParseException('附件文件不存在');
     final prepared = attachment.isImage
         ? await AiImagePreparation.prepare(attachment.path)
         : null;

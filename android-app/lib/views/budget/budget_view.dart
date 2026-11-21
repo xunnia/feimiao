@@ -202,7 +202,10 @@ class _BudgetViewState extends State<BudgetView> with WidgetsBindingObserver {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final repo = context.watch<AppRepository>();
+    context.select<AppRepository, (int, int, bool)>(
+      (r) => r.financialViewVersion,
+    );
+    final repo = context.read<AppRepository>();
     final books = repo.books;
     var bookId = _bookId ?? repo.currentBookId;
     if (!books.any((b) => b.id == bookId) && books.isNotEmpty) {

@@ -40,7 +40,10 @@ class CategoryTxnsView extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final repo = context.watch<AppRepository>();
+    context.select<AppRepository, (int, int, bool)>(
+      (r) => r.financialViewVersion,
+    );
+    final repo = context.read<AppRepository>();
     final endInclusive = DateTime(end.year, end.month, end.day, 23, 59, 59);
     final selectedNames = categoryNames ?? {categoryName};
     final categoryById = {for (final c in repo.categories) c.id: c};

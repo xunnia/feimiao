@@ -229,8 +229,10 @@ class _StatisticsViewState extends State<StatisticsView> {
           const SizedBox(width: 12),
         ],
       ),
-      body: Consumer<AppRepository>(
-        builder: (context, repo, _) {
+      body: Selector<AppRepository, (int, int, bool)>(
+        selector: (_, repo) => repo.financialViewVersion,
+        builder: (context, _, __) {
+          final repo = context.read<AppRepository>();
           final records = repo.allRecordsRef;
           return Column(
             children: [
@@ -445,9 +447,8 @@ class _WeekContent extends StatelessWidget {
                 title: '每日支出',
                 child: _WeekBars(
                   daily: s.dailyTotals,
-                  lastIndex: isCurrentWeek
-                      ? today.difference(weekStart).inDays
-                      : null,
+                  lastIndex:
+                      isCurrentWeek ? today.difference(weekStart).inDays : null,
                 ),
               ),
         'ranking' => !hasExpense
@@ -1466,22 +1467,24 @@ class _CustomContent extends StatelessWidget {
                     ),
                   )
                 : _TrendCard(
-                title: '每日趋势',
-                xLabels: [
-                  for (var i = 0; i < s.dailyTotals.length; i++)
-                    (i == 0 || i % (s.dayCount > 14 ? 7 : 2) == 0)
-                        ? '${s.dailyTotals[i].date.month}/${s.dailyTotals[i].date.day}'
-                        : '',
-                ],
-                expense: [
-                  for (final d in s.dailyTotals)
-                    MoneyFormat.toDouble(d.expense).clamp(0.0, double.infinity),
-                ],
-                income: [
-                  for (final d in s.dailyTotals)
-                    MoneyFormat.toDouble(d.income).clamp(0.0, double.infinity),
-                ],
-              ),
+                    title: '每日趋势',
+                    xLabels: [
+                      for (var i = 0; i < s.dailyTotals.length; i++)
+                        (i == 0 || i % (s.dayCount > 14 ? 7 : 2) == 0)
+                            ? '${s.dailyTotals[i].date.month}/${s.dailyTotals[i].date.day}'
+                            : '',
+                    ],
+                    expense: [
+                      for (final d in s.dailyTotals)
+                        MoneyFormat.toDouble(d.expense)
+                            .clamp(0.0, double.infinity),
+                    ],
+                    income: [
+                      for (final d in s.dailyTotals)
+                        MoneyFormat.toDouble(d.income)
+                            .clamp(0.0, double.infinity),
+                    ],
+                  ),
         'ranking' => !hasExpense
             ? null
             : _SectionCard(
@@ -2723,10 +2726,10 @@ class _DualLineChart extends StatelessWidget {
         : periodLabel != null
             ? '$periodLabel$label'
             : compareText.contains('上月')
-            ? '本月$label'
-            : compareText.contains('去年')
-                ? '今年$label'
-                : '本期$label';
+                ? '本月$label'
+                : compareText.contains('去年')
+                    ? '今年$label'
+                    : '本期$label';
     final maxV = [...data, if (compare != null) ...compare]
         .fold<double>(0, (a, b) => a > b ? a : b);
     final step = _niceStep(maxV);
@@ -2795,8 +2798,7 @@ class _DualLineChart extends StatelessWidget {
               maxY: maxY,
               minX: 0,
               maxX: math
-                  .max(
-                      math.max(xLabels.length, compare?.length ?? 0) - 1, 1)
+                  .max(math.max(xLabels.length, compare?.length ?? 0) - 1, 1)
                   .toDouble(),
               clipData: const FlClipData.all(),
               lineBarsData: [
@@ -2912,8 +2914,7 @@ class _DualLineChart extends StatelessWidget {
                     final i = s.x.round();
                     if (s != spots.first) return null;
                     // 摸到今天之后：本期还没发生（null），只显示上期那条。
-                    final current =
-                        i >= 0 && i < data.length ? data[i] : null;
+                    final current = i >= 0 && i < data.length ? data[i] : null;
                     final previous =
                         compare != null && i >= 0 && i < compare.length
                             ? compare[i]
@@ -2966,9 +2967,8 @@ class _DualLineChart extends StatelessWidget {
                               text:
                                   '\n较$compareText  ${diff >= 0 ? '+' : '-'}${MoneyFormat.axisLabel(diff.abs())}',
                               style: TextStyle(
-                                color: diff >= 0
-                                    ? color
-                                    : scheme.onSurfaceVariant,
+                                color:
+                                    diff >= 0 ? color : scheme.onSurfaceVariant,
                                 fontSize: 11,
                                 fontWeight: FontWeight.w500,
                                 fontFamily: 'Nunito',
@@ -3266,8 +3266,8 @@ class _CalendarHeatmap extends StatelessWidget {
                       borderRadius: BorderRadius.circular(5),
                       border: future
                           ? Border.all(
-                              color: scheme.outlineVariant
-                                  .withValues(alpha: 0.35),
+                              color:
+                                  scheme.outlineVariant.withValues(alpha: 0.35),
                               width: 0.8)
                           : null,
                     ),

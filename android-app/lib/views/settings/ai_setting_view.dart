@@ -477,8 +477,9 @@ class _AiAccountSettingsPageState extends State<AiAccountSettingsPage> {
           );
       if (!opened) {
         await OpenAiCodexOAuth.service.cancel();
-        if (mounted)
+        if (mounted) {
           showAppToast(context, '无法打开 GPT 授权页', icon: Icons.error_outline);
+        }
         return;
       }
       if (mounted) {

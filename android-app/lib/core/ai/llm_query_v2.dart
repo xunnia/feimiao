@@ -497,7 +497,16 @@ $transactionsText''';
               ],
               'stream': false,
               'temperature': 0.25,
-              'max_tokens': 2400,
+              'max_tokens': switch (provider.reasoningEffort) {
+                AiReasoningEffort.none => 2400,
+                AiReasoningEffort.minimal || AiReasoningEffort.low => 3200,
+                AiReasoningEffort.medium => 4096,
+                AiReasoningEffort.high => 6144,
+                AiReasoningEffort.xhigh ||
+                AiReasoningEffort.max ||
+                AiReasoningEffort.ultra =>
+                  8192,
+              },
             },
           ),
         ),

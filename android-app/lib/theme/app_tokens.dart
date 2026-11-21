@@ -85,6 +85,15 @@ class AppMotion {
 
   /// 确认 / 强调（轻微回弹）
   static const Curve spring = Curves.easeOutBack;
+
+  /// 是否应减弱动态（遵循系统「移除动画 / 减弱动态」无障碍偏好）。
+  static bool reduceMotion(BuildContext context) =>
+      MediaQuery.disableAnimationsOf(context) ||
+      MediaQuery.accessibleNavigationOf(context);
+
+  /// 在减弱动态下自动把过渡压缩为即时，否则返回原时长。
+  static Duration duration(BuildContext context, Duration normal) =>
+      reduceMotion(context) ? Duration.zero : normal;
 }
 
 /// 字重令牌。

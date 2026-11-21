@@ -39,6 +39,8 @@ class AppGlassInputShell extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    final effectiveBlur =
+        blurEnabled && blur > 0 && !MediaQuery.disableAnimationsOf(context);
 
     return Container(
       decoration: BoxDecoration(
@@ -54,7 +56,7 @@ class AppGlassInputShell extends StatelessWidget {
       child: ClipRRect(
         borderRadius: BorderRadius.circular(radius),
         child: BackdropFilter(
-          enabled: blurEnabled,
+          enabled: effectiveBlur,
           filter: ImageFilter.blur(sigmaX: blur, sigmaY: blur),
           child: CustomPaint(
             foregroundPainter: GlassEdgePainter(radius: radius),
@@ -80,6 +82,7 @@ class AppGlassInputIconButton extends StatelessWidget {
   final double iconSize;
   final Color? color;
   final bool mutedWhenDisabled;
+  final String? semanticLabel;
 
   const AppGlassInputIconButton({
     super.key,
@@ -89,33 +92,52 @@ class AppGlassInputIconButton extends StatelessWidget {
     this.iconSize = 18,
     this.color,
     this.mutedWhenDisabled = true,
+    this.semanticLabel,
   });
+
+  static String? _defaultLabelFor(IconData icon) {
+    if (icon == Icons.add) return '添加到聊天';
+    if (icon == Icons.arrow_upward_rounded || icon == Icons.send_rounded) {
+      return '发送';
+    }
+    if (icon == Icons.search || icon == Icons.search_rounded) return '搜索';
+    if (icon == Icons.close || icon == Icons.close_rounded) return '清除';
+    if (icon == Icons.stop_rounded) return '停止生成';
+    return null;
+  }
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final enabled = onPressed != null;
+    final label = semanticLabel ?? _defaultLabelFor(icon);
 
-    return PressableScale(
-      onPressed: onPressed,
-      child: SizedBox(
-        width: size,
-        height: size,
-        child: GlassSurface(
-          circle: true,
-          blur: 0,
-          child: Center(
-            child: Icon(
-              icon,
-              size: iconSize,
-              color: enabled || !mutedWhenDisabled
-                  ? (color ?? scheme.onSurfaceVariant)
-                  : scheme.onSurfaceVariant.withValues(alpha: 0.38),
+    final button = Semantics(
+      button: true,
+      enabled: enabled,
+      label: label,
+      child: PressableScale(
+        onPressed: onPressed,
+        child: SizedBox(
+          width: size,
+          height: size,
+          child: GlassSurface(
+            circle: true,
+            blur: 0,
+            child: Center(
+              child: Icon(
+                icon,
+                size: iconSize,
+                color: enabled || !mutedWhenDisabled
+                    ? (color ?? scheme.onSurfaceVariant)
+                    : scheme.onSurfaceVariant.withValues(alpha: 0.38),
+              ),
             ),
           ),
         ),
       ),
     );
+    return label == null ? button : Tooltip(message: label, child: button);
   }
 }
 

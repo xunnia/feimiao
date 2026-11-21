@@ -40,7 +40,10 @@ class _AccountDetailPageState extends State<AccountDetailPage> {
 
   @override
   Widget build(BuildContext context) {
-    final repo = context.watch<AppRepository>();
+    context.select<AppRepository, (int, int, bool)>(
+      (r) => r.financialViewVersion,
+    );
+    final repo = context.read<AppRepository>();
     final current = repo.accounts
             .where((item) => item.id == widget.account.id && !item.isDeleted)
             .firstOrNull ??

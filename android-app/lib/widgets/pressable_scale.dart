@@ -51,6 +51,8 @@ class _PressableScaleState extends State<PressableScale> {
 
   @override
   Widget build(BuildContext context) {
+    final reduceMotion = MediaQuery.disableAnimationsOf(context);
+    final effectiveDuration = reduceMotion ? Duration.zero : widget.duration;
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
       onTapDown: (_) => _setDown(true),
@@ -69,12 +71,13 @@ class _PressableScaleState extends State<PressableScale> {
               widget.onLongPress!();
             },
       child: AnimatedScale(
-        scale: _down ? widget.pressedScale : 1.0,
-        duration: widget.duration,
-        curve: Curves.easeOut,
+        scale: (_down && !reduceMotion) ? widget.pressedScale : 1.0,
+        duration: effectiveDuration,
+        curve: Curves.easeOutCubic,
         child: AnimatedOpacity(
           opacity: _down ? widget.pressedOpacity : 1.0,
-          duration: widget.duration,
+          duration: effectiveDuration,
+          curve: Curves.easeOutCubic,
           child: widget.child,
         ),
       ),

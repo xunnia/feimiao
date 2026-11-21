@@ -174,8 +174,10 @@ class _AccountsViewState extends State<AccountsView> {
           ),
         ],
       ),
-      body: Consumer<AppRepository>(
-        builder: (context, repo, _) {
+      body: Selector<AppRepository, (int, int, bool)>(
+        selector: (_, repo) => repo.financialViewVersion,
+        builder: (context, _, __) {
+          final repo = context.read<AppRepository>();
           final accounts = repo.accounts.where((a) => !a.isDeleted).toList();
           final physicalAssets = repo.globalActivePhysicalAssets;
           final archivedAssets = repo.globalArchivedPhysicalAssets;

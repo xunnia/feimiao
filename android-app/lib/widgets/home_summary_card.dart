@@ -12,6 +12,7 @@ import 'animated_money.dart';
 import 'budget_progress.dart';
 import 'glass.dart';
 import 'mascot.dart';
+import 'pressable_scale.dart';
 
 const String _maskedMoneyText = '¥****';
 
@@ -253,45 +254,48 @@ class _StatsBadge extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    return GestureDetector(
-      behavior: HitTestBehavior.opaque,
-      onTap: onTap,
-      child: Container(
-        height: 26,
-        padding: const EdgeInsets.only(left: 9, right: 7),
-        decoration: BoxDecoration(
-          color: AppColors.card(scheme),
-          borderRadius: BorderRadius.circular(999),
-          border: Border.all(
-            color: scheme.outlineVariant.withValues(alpha: 0.28),
-            width: 0.5,
+    return Semantics(
+      button: true,
+      label: '打开统计',
+      child: PressableScale(
+        onPressed: onTap,
+        child: Container(
+          constraints: const BoxConstraints(minHeight: 26),
+          padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+          decoration: BoxDecoration(
+            color: AppColors.card(scheme),
+            borderRadius: BorderRadius.circular(999),
+            border: Border.all(
+              color: scheme.outlineVariant.withValues(alpha: 0.28),
+              width: 0.5,
+            ),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.035),
+                blurRadius: 8,
+                offset: const Offset(0, 2),
+              ),
+            ],
           ),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withValues(alpha: 0.035),
-              blurRadius: 8,
-              offset: const Offset(0, 2),
-            ),
-          ],
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text(
-              '统计',
-              style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                    fontSize: 12,
-                    fontWeight: FontWeight.w400,
-                    color: scheme.onSurfaceVariant.withValues(alpha: 0.82),
-                  ),
-            ),
-            const SizedBox(width: 2),
-            Icon(
-              CupertinoIcons.chevron_forward,
-              size: 11,
-              color: scheme.onSurfaceVariant.withValues(alpha: 0.78),
-            ),
-          ],
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                '统计',
+                style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w400,
+                      color: scheme.onSurfaceVariant.withValues(alpha: 0.82),
+                    ),
+              ),
+              const SizedBox(width: 2),
+              Icon(
+                CupertinoIcons.chevron_forward,
+                size: 11,
+                color: scheme.onSurfaceVariant.withValues(alpha: 0.78),
+              ),
+            ],
+          ),
         ),
       ),
     );

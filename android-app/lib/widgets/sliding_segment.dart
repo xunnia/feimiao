@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 
+import '../core/haptics.dart';
 import '../theme/app_colors.dart';
+import '../theme/app_tokens.dart';
 
 /// 分段切换（全 App 统一用它，别再各写各的）。
 /// 2026-07-09 视觉升级批对齐参考图（iOS Cloudflare 客户端）：
@@ -30,6 +32,7 @@ class SlidingSegment<T> extends StatelessWidget {
     final scaledHeight = MediaQuery.textScalerOf(context).scale(13) + 21;
     final effectiveHeight = scaledHeight > height ? scaledHeight : height;
 
+    final reduceMotion = AppMotion.reduceMotion(context);
     return Container(
       height: effectiveHeight,
       padding: const EdgeInsets.all(3),
@@ -45,7 +48,9 @@ class SlidingSegment<T> extends StatelessWidget {
             children: [
               // 滑动的选中滑块：半透明白（实心白在半透明卡上太突兀，用户点名）
               AnimatedPositioned(
-                duration: const Duration(milliseconds: 220),
+                duration: reduceMotion
+                    ? Duration.zero
+                    : const Duration(milliseconds: 220),
                 curve: Curves.easeOutCubic,
                 left: index * itemW,
                 top: 0,
@@ -71,21 +76,40 @@ class SlidingSegment<T> extends StatelessWidget {
                 children: [
                   for (final (v, label) in items)
                     Expanded(
-                      child: GestureDetector(
-                        behavior: HitTestBehavior.opaque,
-                        onTap: () => onChanged(v),
-                        child: Center(
-                          child: Text(
-                            label,
-                            // iOS 分段控件：选中项半粗、未选中略淡。
-                            style: TextStyle(
-                              fontSize: 13,
-                              fontWeight: v == value
-                                  ? FontWeight.w600
-                                  : FontWeight.w400,
-                              color: v == value
-                                  ? scheme.onSurface
-                                  : scheme.onSurface.withValues(alpha: 0.62),
+                      child: Semantics(
+                        button: true,
+                        selected: v == value,
+                        label: label,
+                        child: GestureDetector(
+                          behavior: HitTestBehavior.opaque,
+                          onTap: () {
+                            if (v != value) {
+                              Haptics.selection();
+                              onChanged(v);
+                            }
+                          },
+                          child: Center(
+                            child: AnimatedDefaultTextStyle(
+                              duration:
+                                  reduceMotion ? Duration.zero : AppMotion.fast,
+                              curve: Curves.easeOutCubic,
+                              // iOS 分段控件：选中项半粗、未选中略淡。
+                              style: TextStyle(
+                                fontFamily: 'Nunito',
+                                fontFamilyFallback: const ['NotoSansSC'],
+                                fontSize: 13,
+                                fontWeight: v == value
+                                    ? FontWeight.w600
+                                    : FontWeight.w400,
+                                color: v == value
+                                    ? scheme.onSurface
+                                    : scheme.onSurface.withValues(alpha: 0.62),
+                              ),
+                              child: Text(
+                                label,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                              ),
                             ),
                           ),
                         ),

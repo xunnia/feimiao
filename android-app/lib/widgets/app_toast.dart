@@ -80,6 +80,7 @@ class _ToastState extends State<_Toast> with SingleTickerProviderStateMixin {
   @override
   Widget build(BuildContext context) {
     final top = MediaQuery.viewPaddingOf(context).top + 12;
+    final reduceMotion = MediaQuery.disableAnimationsOf(context);
     return Positioned(
       top: top,
       left: 0,
@@ -92,7 +93,7 @@ class _ToastState extends State<_Toast> with SingleTickerProviderStateMixin {
             return Opacity(
               opacity: t,
               child: Transform.translate(
-                offset: Offset(0, -8 * (1 - t)),
+                offset: reduceMotion ? Offset.zero : Offset(0, -8 * (1 - t)),
                 child: child,
               ),
             );

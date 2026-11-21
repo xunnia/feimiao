@@ -1414,7 +1414,10 @@ class OpenAiCodexOAuthService {
         // Network transitions while Chrome is foregrounded are expected. Keep
         // the persisted device session and retry until its official deadline.
       } on SocketException {
-      } on http.ClientException {}
+        // Retry until deadline across transient network switches.
+      } on http.ClientException {
+        // Retry until deadline across transient client errors.
+      }
 
       if (response != null &&
           response.statusCode >= 200 &&

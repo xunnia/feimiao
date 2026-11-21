@@ -933,7 +933,7 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
     final flowScope = flowId?.toString() ?? 'unscoped-${++_unscopedRunNonce}';
     final idempotencyKey = sha256
         .convert(utf8.encode(
-          '${_sessionId}|$_runOwnerId|${mode.storageKey}|$inputDigest|$flowScope',
+          '$_sessionId|$_runOwnerId|${mode.storageKey}|$inputDigest|$flowScope',
         ))
         .toString();
     final run = await repository.createOrGetAiRun(
@@ -3788,7 +3788,8 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
       } on LlmQueryException catch (e) {
         answer = _friendlyAiError(
           e,
-          hasAttachments: attachments.isNotEmpty || (imagePath?.trim().isNotEmpty ?? false),
+          hasAttachments:
+              attachments.isNotEmpty || (imagePath?.trim().isNotEmpty ?? false),
           providerLabel: aiConfig.providerLabel,
         );
         if (queryRun != null) {
@@ -4103,7 +4104,8 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
       } on LlmQueryException catch (e) {
         answer = _friendlyAiError(
           e,
-          hasAttachments: attachments.isNotEmpty || (imagePath?.trim().isNotEmpty ?? false),
+          hasAttachments:
+              attachments.isNotEmpty || (imagePath?.trim().isNotEmpty ?? false),
           providerLabel: aiConfig.providerLabel,
         );
         if (queryRun != null) {

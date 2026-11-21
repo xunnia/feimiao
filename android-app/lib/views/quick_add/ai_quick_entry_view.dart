@@ -410,6 +410,10 @@ class _AiQuickEntryViewState extends State<AiQuickEntryView> {
               const SizedBox(height: 16),
 
               AppGlassInputShell(
+                // 页面底部为纯静态主题渐变，关掉常驻模糊避免键盘弹起期额外离屏重绘。
+                blur: 0,
+                blurEnabled: false,
+                opacity: 0.78,
                 padding: const EdgeInsets.fromLTRB(14, 14, 10, 10),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,

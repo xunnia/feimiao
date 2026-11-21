@@ -5,11 +5,7 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 /// Android: 使用 EncryptedSharedPreferences + Android Keystore
 /// iOS: 使用 Keychain
 class AiSecureConfig {
-  static const _storage = FlutterSecureStorage(
-    aOptions: AndroidOptions(
-      encryptedSharedPreferences: true,
-    ),
-  );
+  static const _storage = FlutterSecureStorage();
 
   static const _keyDeepSeekApiKey = 'ai_deepseek_api_key';
   static const _keyDeepSeekBaseUrl = 'ai_deepseek_base_url';

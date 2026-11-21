@@ -718,8 +718,9 @@ class OAuthKeepAliveService : Service() {
                             writeHtmlResponse(socket, 200, tokenExchangeHtml(flowId.orEmpty(), request))
                         }
                         "/auth/token-result" -> {
+                            val allowOrigin = allowedLoopbackOrigin(headerValues["origin"], port)
                             if (method == "OPTIONS") {
-                                writeCorsResponse(socket, 204, "")
+                                writeCorsResponse(socket, 204, "", allowOrigin)
                                 return
                             }
                             if (method != "POST") {
@@ -747,7 +748,7 @@ class OAuthKeepAliveService : Service() {
                                     writeResponse(socket, 500, "授权结果暂存失败，请返回肥喵记账重试")
                                     return
                                 }
-                                writeCorsResponse(socket, 200, "已收到授权结果，请返回肥喵记账")
+                                writeCorsResponse(socket, 200, "已收到授权结果，请返回肥喵记账", allowOrigin)
                             } catch (_: Exception) {
                                 writeResponse(socket, 400, "授权交换结果格式错误")
                             }
@@ -811,11 +812,27 @@ class OAuthKeepAliveService : Service() {
             }
         }
 
-        private fun writeCorsResponse(socket: Socket, status: Int, message: String) {
+        private fun allowedLoopbackOrigin(origin: String?, port: Int): String {
+            val candidate = origin?.trim().orEmpty()
+            val allowed = setOf(
+                "http://localhost:$port",
+                "http://127.0.0.1:$port",
+                "http://[::1]:$port",
+            )
+            return if (candidate in allowed) candidate else "http://localhost:$port"
+        }
+
+        private fun writeCorsResponse(
+            socket: Socket,
+            status: Int,
+            message: String,
+            allowOrigin: String,
+        ) {
             val bytes = message.toByteArray(StandardCharsets.UTF_8)
             val header = "HTTP/1.1 $status OK\r\n" +
                 "Content-Type: text/plain; charset=utf-8\r\n" +
-                "Access-Control-Allow-Origin: *\r\n" +
+                "Access-Control-Allow-Origin: $allowOrigin\r\n" +
+                "Vary: Origin\r\n" +
                 "Access-Control-Allow-Methods: POST, OPTIONS\r\n" +
                 "Access-Control-Allow-Headers: content-type\r\n" +
                 "Cache-Control: no-store\r\n" +
