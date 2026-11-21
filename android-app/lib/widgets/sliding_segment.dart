@@ -27,9 +27,11 @@ class SlidingSegment<T> extends StatelessWidget {
     final isDark = scheme.brightness == Brightness.dark;
     final index =
         items.indexWhere((e) => e.$1 == value).clamp(0, items.length - 1);
+    final scaledHeight = MediaQuery.textScalerOf(context).scale(13) + 21;
+    final effectiveHeight = scaledHeight > height ? scaledHeight : height;
 
     return Container(
-      height: height,
+      height: effectiveHeight,
       padding: const EdgeInsets.all(3),
       decoration: BoxDecoration(
         // 底轨跟主题走：暖橙出暖灰、简约白出中性灰（2026-10-01，原来一律冷黑透明）。

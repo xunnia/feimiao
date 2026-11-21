@@ -595,8 +595,19 @@ class _PhysicalAssetFormSheetState extends State<PhysicalAssetFormSheet> {
             aspectRatio: 1,
             child: ClipRRect(
               borderRadius: BorderRadius.circular(8),
-              child: previewPath.isNotEmpty && File(previewPath).existsSync()
-                  ? Image.file(File(previewPath), fit: BoxFit.cover)
+              child: previewPath.isNotEmpty
+                  ? Image.file(
+                      File(previewPath),
+                      cacheWidth: 360,
+                      fit: BoxFit.cover,
+                      errorBuilder: (_, __, ___) => ColoredBox(
+                        color: AppColors.iconCircleFill(scheme),
+                        child: Icon(
+                          assetTypeIcon(_assetType),
+                          color: AppTextColor.secondary(scheme),
+                        ),
+                      ),
+                    )
                   : ColoredBox(
                       color: AppColors.iconCircleFill(scheme),
                       child: Icon(

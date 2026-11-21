@@ -407,9 +407,11 @@ class LlmQueryV2 {
     final startTime = DateTime.now();
 
     try {
-      final provider = await OpenAiCodexOAuth.ensureFreshConfig(
+      // 报告请求携带整期个人账单上下文，单次强制关闭联网搜索，不修改全局配置。
+      final provider = (await OpenAiCodexOAuth.ensureFreshConfig(
         _resolveConfig(apiKey: apiKey, config: config),
-      );
+      ))
+          .copyWith(webSearchEnabled: false);
       final typeLabel = switch (reportType) {
         'weekly' => '消费周报',
         'yearly' => '消费年报',
@@ -878,7 +880,8 @@ $transactionsText''';
       }
 
       if (resp.statusCode != 200) {
-        final bodyText = await resp.stream.bytesToString();
+        final rawBytes = await resp.stream.toBytes();
+        final bodyText = utf8.decode(rawBytes, allowMalformed: true);
         throw _sanitizeException(
           AiRequestManager.wrapException(
             Exception(_bodySnippet(bodyText)),
@@ -999,10 +1002,7 @@ $transactionsText''';
                 provider: config.providerLabel,
                 model: config.modelCandidates.first,
                 warning: 'Responses 流式响应单条解析失败: $e',
-                extra: {
-                  'chunk_data':
-                      data.substring(0, data.length > 100 ? 100 : data.length)
-                },
+                extra: {'chunk_length': data.length},
               );
             }
           } else {
@@ -1029,10 +1029,7 @@ $transactionsText''';
                 provider: config.providerLabel,
                 model: config.modelCandidates.first,
                 warning: '流式响应单条解析失败: $e',
-                extra: {
-                  'chunk_data':
-                      data.substring(0, data.length > 100 ? 100 : data.length)
-                },
+                extra: {'chunk_length': data.length},
               );
             }
           }

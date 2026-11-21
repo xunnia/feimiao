@@ -401,22 +401,22 @@ class _SelectedPhotosButton extends StatelessWidget {
             mainAxisSize: MainAxisSize.min,
             children: [
               if (busy) ...[
-                const SizedBox(
+                SizedBox(
                   width: 16,
                   height: 16,
                   child: CircularProgressIndicator(
                     strokeWidth: 1.8,
-                    color: Colors.white,
+                    color: scheme.surface,
                   ),
                 ),
                 const SizedBox(width: 8),
               ],
               Text(
                 busy ? '上传中…' : '添加 $count 张照片',
-                style: const TextStyle(
+                style: TextStyle(
                   fontSize: 15,
                   fontWeight: FontWeight.w400,
-                  color: Colors.white,
+                  color: scheme.surface,
                 ),
               ),
             ],

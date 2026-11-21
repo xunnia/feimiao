@@ -173,17 +173,18 @@ class _AiAccountSettingsPageState extends State<AiAccountSettingsPage> {
       return;
     }
     if (!_ensureSecureBaseUrl(provider, draft)) return;
+    final repo = context.read<AppRepository>();
     setState(() => _busy.add(provider.id));
     final started = DateTime.now();
     try {
       final testConfig = config.copyWith(model: _selectedModel(draft));
       await LlmQuery.testConnection(testConfig);
       try {
-        await context.read<AppRepository>().recordAiProviderVerification(
-              provider.id,
-              status: AiAccountVerificationStatus.available.name,
-              latencyMs: DateTime.now().difference(started).inMilliseconds,
-            );
+        await repo.recordAiProviderVerification(
+          provider.id,
+          status: AiAccountVerificationStatus.available.name,
+          latencyMs: DateTime.now().difference(started).inMilliseconds,
+        );
       } catch (_) {
         // Diagnostics must never turn a successful provider probe into a
         // failed user action (for example while a database is closing).
@@ -191,12 +192,12 @@ class _AiAccountSettingsPageState extends State<AiAccountSettingsPage> {
       if (mounted) showAppToast(context, '${draft.label}连接成功');
     } catch (e) {
       try {
-        await context.read<AppRepository>().recordAiProviderVerification(
-              provider.id,
-              status: _verificationStatusForError(e).name,
-              message: _shortError(e),
-              latencyMs: DateTime.now().difference(started).inMilliseconds,
-            );
+        await repo.recordAiProviderVerification(
+          provider.id,
+          status: _verificationStatusForError(e).name,
+          message: _shortError(e),
+          latencyMs: DateTime.now().difference(started).inMilliseconds,
+        );
       } catch (_) {}
       if (mounted) {
         showAppToast(
@@ -573,19 +574,22 @@ class _AiAccountSettingsPageState extends State<AiAccountSettingsPage> {
         fallbackModels.add(value);
       }
     }
-    var saved = await context.read<AppRepository>().saveAiOAuthTokens(
-          providerId: provider.id,
-          tokens: tokens,
-          models: fallbackModels,
-        );
-    draft.apiKey.text = saved.apiKey;
-    draft.baseUrl.text = saved.baseUrl;
-    draft.model.text = saved.model;
-    draft.models
-      ..clear()
-      ..addAll(saved.models);
-    draft.endpointType = saved.endpointType;
-    draft.authMethod = saved.authMethod;
+    final repo = context.read<AppRepository>();
+    var saved = await repo.saveAiOAuthTokens(
+      providerId: provider.id,
+      tokens: tokens,
+      models: fallbackModels,
+    );
+    if (mounted) {
+      draft.apiKey.text = saved.apiKey;
+      draft.baseUrl.text = saved.baseUrl;
+      draft.model.text = saved.model;
+      draft.models
+        ..clear()
+        ..addAll(saved.models);
+      draft.endpointType = saved.endpointType;
+      draft.authMethod = saved.authMethod;
+    }
 
     List<String> models = const [];
     Object? modelFetchError;
@@ -608,27 +612,29 @@ class _AiAccountSettingsPageState extends State<AiAccountSettingsPage> {
         final value = candidate.trim();
         if (value.isNotEmpty && seen.add(value)) modelNames.add(value);
       }
-      final latest = context.read<AppRepository>().aiProviderById(saved.id);
+      final latest = repo.aiProviderById(saved.id);
       if (latest != null && modelNames.isNotEmpty) {
-        await context.read<AppRepository>().saveAiConfiguredProvider(
-              latest.copyWith(
-                model: modelNames.first,
-                models: modelNames,
-              ),
-            );
-        saved = context.read<AppRepository>().aiProviderById(saved.id) ??
+        await repo.saveAiConfiguredProvider(
+          latest.copyWith(
+            model: modelNames.first,
+            models: modelNames,
+          ),
+        );
+        saved = repo.aiProviderById(saved.id) ??
             latest.copyWith(model: modelNames.first, models: modelNames);
       }
     }
-    saved = context.read<AppRepository>().aiProviderById(saved.id) ?? saved;
-    draft.apiKey.text = saved.apiKey;
-    draft.baseUrl.text = saved.baseUrl;
-    draft.model.text = saved.model;
-    draft.models
-      ..clear()
-      ..addAll(saved.models);
-    draft.endpointType = saved.endpointType;
-    draft.authMethod = saved.authMethod;
+    saved = repo.aiProviderById(saved.id) ?? saved;
+    if (mounted) {
+      draft.apiKey.text = saved.apiKey;
+      draft.baseUrl.text = saved.baseUrl;
+      draft.model.text = saved.model;
+      draft.models
+        ..clear()
+        ..addAll(saved.models);
+      draft.endpointType = saved.endpointType;
+      draft.authMethod = saved.authMethod;
+    }
     if (modelFetchError == null) {
       try {
         await LlmQuery.testConnection(
@@ -639,16 +645,16 @@ class _AiAccountSettingsPageState extends State<AiAccountSettingsPage> {
       }
     }
     final verificationStatus = modelFetchError != null
-        ? _verificationStatusForError(modelFetchError!)
+        ? _verificationStatusForError(modelFetchError)
         : probeError != null
-            ? _verificationStatusForError(probeError!)
+            ? _verificationStatusForError(probeError)
             : AiAccountVerificationStatus.available;
     try {
-      await context.read<AppRepository>().recordAiProviderVerification(
-            saved.id,
-            status: verificationStatus.name,
-            message: _shortError(probeError ?? modelFetchError ?? ''),
-          );
+      await repo.recordAiProviderVerification(
+        saved.id,
+        status: verificationStatus.name,
+        message: _shortError(probeError ?? modelFetchError ?? ''),
+      );
     } catch (_) {}
     if (mounted) {
       setState(() {});
@@ -899,7 +905,7 @@ class _AiAccountSettingsPageState extends State<AiAccountSettingsPage> {
                         .read<AppRepository>()
                         .setAiConfiguredProviderEnabled(provider.id, value);
                   } catch (error) {
-                    if (mounted) {
+                    if (context.mounted) {
                       showAppToast(
                         context,
                         '切换失败：${_shortError(error)}',
@@ -1851,19 +1857,6 @@ class _PlainValue extends StatelessWidget {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     return Text(text, style: AppType.trailingValue(scheme));
-  }
-}
-
-class _MutedText extends StatelessWidget {
-  final String text;
-
-  const _MutedText(this.text);
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    // UI 标准：说明文字一律 AppType.secondary（13/中灰），不再依赖 textTheme。
-    return Text(text, style: AppType.secondary(scheme));
   }
 }
 

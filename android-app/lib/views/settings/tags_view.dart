@@ -158,7 +158,7 @@ class TagsView extends StatelessWidget {
                         shape: BoxShape.circle,
                         border: Border.all(
                           color: colorValue == c.toARGB32()
-                              ? Colors.black87
+                              ? Theme.of(ctx).colorScheme.onSurface
                               : Colors.transparent,
                           width: 2.5,
                         ),

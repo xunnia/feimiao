@@ -84,9 +84,12 @@ class LlmQuery {
     AiProviderConfig? config,
     required String transactionsText,
   }) async {
-    final provider = await OpenAiCodexOAuth.ensureFreshConfig(
+    // 报告请求携带整期个人账单明细，单次强制关闭联网搜索，避免账号级搜索开关导致
+    // 模型在持有私密账单上下文时外发搜索查询（与普通查账一致，不改全局配置）。
+    final provider = (await OpenAiCodexOAuth.ensureFreshConfig(
       _resolveConfig(apiKey: apiKey, config: config),
-    );
+    ))
+        .copyWith(webSearchEnabled: false);
     final typeLabel = switch (reportType) {
       'weekly' => '消费周报',
       'yearly' => '消费年报',

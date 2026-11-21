@@ -96,6 +96,8 @@ class ReceiptThumb extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    final cacheDim =
+        (size * MediaQuery.devicePixelRatioOf(context)).ceil().clamp(64, 512);
     return Stack(
       clipBehavior: Clip.none,
       children: [
@@ -107,6 +109,7 @@ class ReceiptThumb extends StatelessWidget {
               File(path),
               width: size,
               height: size,
+              cacheWidth: cacheDim,
               fit: BoxFit.cover,
               errorBuilder: (_, __, ___) => Container(
                 width: size,
@@ -130,7 +133,8 @@ class ReceiptThumb extends StatelessWidget {
                 shape: BoxShape.circle,
                 border: Border.all(color: scheme.outlineVariant),
               ),
-              child: Icon(Icons.close, size: 13, color: scheme.onSurfaceVariant),
+              child:
+                  Icon(Icons.close, size: 13, color: scheme.onSurfaceVariant),
             ),
           ),
         ),
@@ -159,6 +163,7 @@ void showReceiptViewer(BuildContext context, String path) {
                 child: Center(
                   child: Image.file(
                     File(path),
+                    cacheWidth: 1600,
                     errorBuilder: (_, __, ___) => const Padding(
                       padding: EdgeInsets.all(40),
                       child: Icon(Icons.broken_image_outlined,

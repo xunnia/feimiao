@@ -284,24 +284,34 @@ class _AiQuickEntryViewState extends State<AiQuickEntryView> {
 
     setState(() => _saving = true);
     try {
+      final drafts = <TransactionDraft>[];
       for (int i = 0; i < entries.length; i++) {
         final e = entries[i];
         final amount = e.amount;
         if (amount == null || amount <= Decimal.zero) continue;
-        await repo.addTransaction(
-          kind: e.kind,
-          amount: amount,
-          categoryId: _matchedCats[i]?.id,
-          accountId: accountId,
-          note: e.note,
-          date: e.date,
-          timePrecision: e.timePrecision,
-          reimbursable: SmartTags.isReimbursable(e.note),
+        drafts.add(
+          TransactionDraft(
+            kind: e.kind,
+            amount: amount,
+            categoryId: _matchedCats[i]?.id,
+            accountId: accountId,
+            note: e.note,
+            date: e.date,
+            timePrecision: e.timePrecision,
+            reimbursable: SmartTags.isReimbursable(e.note),
+          ),
         );
       }
+      if (drafts.isNotEmpty) {
+        await repo.addTransactionDraftsAtomically(drafts);
+      }
       if (mounted) {
-        showAppToast(context, '已保存 ${entries.length} 笔账目');
+        showAppToast(context, '已保存 ${drafts.length} 笔账目');
         Navigator.pop(context);
+      }
+    } catch (error) {
+      if (mounted) {
+        showAppToast(context, '保存失败，请重试', icon: Icons.error_outline);
       }
     } finally {
       if (mounted) setState(() => _saving = false);
@@ -357,7 +367,8 @@ class _AiQuickEntryViewState extends State<AiQuickEntryView> {
               label: '配置',
               onPressed: () => Navigator.push(
                 context,
-                AppPageRoute<void>(builder: (_) => const AiAccountSettingsPage()),
+                AppPageRoute<void>(
+                    builder: (_) => const AiAccountSettingsPage()),
               ),
             ),
         ],
@@ -562,9 +573,8 @@ class _AiQuickEntryViewState extends State<AiQuickEntryView> {
                   height: 44,
                   loading: _saving,
                   onPressed: (!_hasValidEntry || _saving) ? null : _saveAll,
-                  label: entries.length > 1
-                      ? '全部保存（${entries.length} 笔）'
-                      : '保存这笔',
+                  label:
+                      entries.length > 1 ? '全部保存（${entries.length} 笔）' : '保存这笔',
                   fillColor: scheme.onSurface,
                   foregroundColor: scheme.surface,
                 ),

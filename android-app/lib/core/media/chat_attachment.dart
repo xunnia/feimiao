@@ -112,6 +112,86 @@ abstract final class ChatAttachmentStore {
     );
   }
 
+  /// 清理 `chat_attachments/` 与 `.ai_prepared_v1/` 里不再被任何聊天消息引用的孤儿文件。
+  /// [referencedPaths] 应包含数据库里仍存活消息引用的路径，以及当前草稿里的路径；
+  /// 只清理修改时间早于 [minAge] 的文件，避免误删刚刚选进草稿、还没来得及落库的附件。
+  static Future<int> pruneOrphanFiles({
+    required Set<String> referencedPaths,
+    Directory? attachmentsDirectory,
+    Duration minAge = const Duration(minutes: 5),
+    DateTime? now,
+  }) async {
+    try {
+      final dir = attachmentsDirectory ??
+          Directory(
+            p.join((await getApplicationDocumentsDirectory()).path,
+                'chat_attachments'),
+          );
+      if (!await dir.exists()) return 0;
+      final normalizedRefs = referencedPaths
+          .map((path) => p.normalize(path.trim()))
+          .where((path) => path.isNotEmpty)
+          .toSet();
+      final cutoff = (now ?? DateTime.now()).subtract(minAge);
+      var deleted = 0;
+
+      await for (final entity in dir.list(followLinks: false)) {
+        if (entity is! File) continue;
+        final normalized = p.normalize(entity.path);
+        if (normalizedRefs.contains(normalized)) continue;
+        try {
+          final modified = await entity.lastModified();
+          if (modified.isAfter(cutoff)) continue;
+          await entity.delete();
+          deleted++;
+        } catch (_) {}
+      }
+
+      // 同步清理已无引用的 .ai_prepared_v1 压缩缓存（当没有任何存活附件或缓存过期时清空）。
+      final preparedDir = Directory(p.join(dir.path, '.ai_prepared_v1'));
+      if (await preparedDir.exists()) {
+        final hasLiveAttachment =
+            await dir.list(followLinks: false).any((entity) => entity is File);
+        final cacheCutoff =
+            (now ?? DateTime.now()).subtract(const Duration(days: 7));
+        await for (final entity in preparedDir.list(followLinks: false)) {
+          if (entity is! File) continue;
+          try {
+            final modified = await entity.lastModified();
+            if (!hasLiveAttachment || modified.isBefore(cacheCutoff)) {
+              await entity.delete();
+              deleted++;
+            }
+          } catch (_) {}
+        }
+      }
+      return deleted;
+    } catch (_) {
+      return 0;
+    }
+  }
+
+  /// 删除草稿中移出的单个持久化附件文件（仅限 chat_attachments 目录内，防止误删用户原图）。
+  static Future<void> deletePersistedDraftFile(
+    String rawPath, {
+    Directory? attachmentsDirectory,
+  }) async {
+    final path = rawPath.trim();
+    if (path.isEmpty) return;
+    try {
+      final dir = attachmentsDirectory ??
+          Directory(
+            p.join((await getApplicationDocumentsDirectory()).path,
+                'chat_attachments'),
+          );
+      final normalizedDir = p.normalize(dir.path);
+      final normalizedFile = p.normalize(path);
+      if (!p.isWithin(normalizedDir, normalizedFile)) return;
+      final file = File(normalizedFile);
+      if (await file.exists()) await file.delete();
+    } catch (_) {}
+  }
+
   static String _mimeFor(String extension) => switch (extension) {
         '.jpg' || '.jpeg' => 'image/jpeg',
         '.png' => 'image/png',

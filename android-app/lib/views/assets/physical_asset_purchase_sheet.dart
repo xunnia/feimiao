@@ -267,7 +267,8 @@ class _PhysicalAssetPurchaseSheetState
               ),
               const SizedBox(width: 10),
               Text(
-                MoneyFormat.string(transaction.amount, currencyCode: transaction.currencyCode),
+                MoneyFormat.string(transaction.amount,
+                    currencyCode: transaction.currencyCode),
                 style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                       fontFamily: 'Nunito',
                       fontWeight: FontWeight.w600,
@@ -530,7 +531,13 @@ class _PhysicalAssetPurchaseSheetState
                     )
                   : Image.file(
                       File(_media!.thumbnailPath),
+                      cacheWidth: 360,
                       fit: BoxFit.cover,
+                      errorBuilder: (_, __, ___) => ColoredBox(
+                        color: AppColors.iconCircleFill(scheme),
+                        child: Icon(assetTypeIcon(_assetType),
+                            color: AppTextColor.secondary(scheme)),
+                      ),
                     ),
             ),
           ),

@@ -128,20 +128,39 @@ class _BillReviewViewState extends State<BillReviewView> {
       body: Column(
         children: [
           Expanded(
-            child: ListView(
-              padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
-              children: [
-                _summaryCard(scheme, groups.length),
-                const SizedBox(height: 12),
-                _accountPicker(repo),
-                const SizedBox(height: 12),
-                for (final g in groups) _groupCard(g, repo, scheme),
+            child: CustomScrollView(
+              slivers: [
+                SliverPadding(
+                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+                  sliver: SliverToBoxAdapter(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        _summaryCard(scheme, groups.length),
+                        const SizedBox(height: 12),
+                        _accountPicker(repo),
+                        const SizedBox(height: 12),
+                      ],
+                    ),
+                  ),
+                ),
                 if (groups.isEmpty)
-                  Padding(
-                    padding: const EdgeInsets.only(top: 24),
-                    child: Text('全部自动归类完成，直接导入即可喵',
-                        textAlign: TextAlign.center,
-                        style: TextStyle(color: scheme.onSurfaceVariant)),
+                  SliverPadding(
+                    padding: const EdgeInsets.fromLTRB(16, 24, 16, 12),
+                    sliver: SliverToBoxAdapter(
+                      child: Text('全部自动归类完成，直接导入即可喵',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(color: scheme.onSurfaceVariant)),
+                    ),
+                  )
+                else
+                  SliverPadding(
+                    padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+                    sliver: SliverList.builder(
+                      itemCount: groups.length,
+                      itemBuilder: (_, index) =>
+                          _groupCard(groups[index], repo, scheme),
+                    ),
                   ),
               ],
             ),

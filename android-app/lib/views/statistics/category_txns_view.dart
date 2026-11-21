@@ -86,29 +86,37 @@ class CategoryTxnsView extends StatelessWidget {
               child: Text('这段时间没有「$categoryName」的记录',
                   style: TextStyle(color: scheme.onSurfaceVariant)),
             )
-          : ListView(
-              padding: const EdgeInsets.only(top: 8, bottom: 24),
-              children: [
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(20, 4, 20, 12),
-                  child: Row(
-                    children: [
-                      Text('共 $familyCount 笔',
-                          style: TextStyle(color: scheme.onSurfaceVariant)),
-                      const Spacer(),
-                      Text(
-                        MoneyFormat.string(total),
-                        style: TextStyle(
-                          fontSize: 18,
-                          fontWeight: FontWeight.w600,
-                          fontFamily: 'Nunito',
-                          color: AppColors.expense(scheme),
+          : CustomScrollView(
+              slivers: [
+                SliverToBoxAdapter(
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(20, 12, 20, 12),
+                    child: Row(
+                      children: [
+                        Text('共 $familyCount 笔',
+                            style: TextStyle(color: scheme.onSurfaceVariant)),
+                        const Spacer(),
+                        Text(
+                          MoneyFormat.string(total),
+                          style: TextStyle(
+                            fontSize: 18,
+                            fontWeight: FontWeight.w600,
+                            fontFamily: 'Nunito',
+                            color: AppColors.expense(scheme),
+                          ),
                         ),
-                      ),
-                    ],
+                      ],
+                    ),
                   ),
                 ),
-                for (final s in sections) TxDayCard(section: s),
+                SliverPadding(
+                  padding: const EdgeInsets.only(bottom: 24),
+                  sliver: SliverList.builder(
+                    itemCount: sections.length,
+                    itemBuilder: (_, index) =>
+                        TxDayCard(section: sections[index]),
+                  ),
+                ),
               ],
             ),
     );

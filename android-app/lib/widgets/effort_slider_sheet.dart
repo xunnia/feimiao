@@ -61,10 +61,11 @@ class _EffortSliderSheetState extends State<_EffortSliderSheet>
 
     _ultraAnimController = AnimationController(
       vsync: this,
-      duration: const Duration(milliseconds: 2000),
+      duration: const Duration(milliseconds: 900),
     );
+    // 遵守 06 §5 禁 repeat() 永动画铁律：选中 Ultra 时播一次渐变过渡即停。
     if (_value == _efforts.length - 1) {
-      _ultraAnimController.repeat();
+      _ultraAnimController.forward(from: 0);
     }
   }
 
@@ -79,7 +80,7 @@ class _EffortSliderSheetState extends State<_EffortSliderSheet>
     if (newValue != _value) {
       setState(() => _value = newValue);
       if (newValue == _efforts.length - 1) {
-        _ultraAnimController.repeat();
+        _ultraAnimController.forward(from: 0);
       } else {
         _ultraAnimController.stop();
       }

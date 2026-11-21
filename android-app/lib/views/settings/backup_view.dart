@@ -34,6 +34,7 @@ class BackupView extends StatefulWidget {
 
 class _BackupViewState extends State<BackupView> {
   late Future<List<File>> _backups;
+  bool _busy = false;
 
   @override
   void initState() {
@@ -42,13 +43,16 @@ class _BackupViewState extends State<BackupView> {
   }
 
   void _reloadBackups() {
+    if (!mounted) return;
     setState(() {
       _backups = context.read<AppRepository>().localBackupFiles();
     });
   }
 
   Future<void> _export(BuildContext context) async {
+    if (_busy) return;
     final repo = context.read<AppRepository>();
+    setState(() => _busy = true);
     try {
       final file = await repo.exportBackupPackage();
       final now = AppClock.now;
@@ -62,10 +66,13 @@ class _BackupViewState extends State<BackupView> {
       if (context.mounted) {
         showAppToast(context, '导出失败，请重试', icon: Icons.error_outline);
       }
+    } finally {
+      if (mounted) setState(() => _busy = false);
     }
   }
 
   Future<void> _restore(BuildContext context) async {
+    if (_busy) return;
     final repo = context.read<AppRepository>();
 
     final result = await FilePicker.platform.pickFiles(
@@ -88,8 +95,9 @@ class _BackupViewState extends State<BackupView> {
       confirmText: '确认恢复',
       destructive: true,
     );
-    if (!ok) return;
+    if (!ok || !context.mounted) return;
 
+    setState(() => _busy = true);
     final lower = path.toLowerCase();
     final bool success;
     try {
@@ -108,6 +116,8 @@ class _BackupViewState extends State<BackupView> {
         showAppToast(context, '恢复失败，请重试', icon: Icons.error_outline);
       }
       return;
+    } finally {
+      if (mounted) setState(() => _busy = false);
     }
     if (context.mounted) {
       showAppToast(
@@ -116,11 +126,19 @@ class _BackupViewState extends State<BackupView> {
         icon: success ? Icons.check_circle : Icons.error_outline,
       );
     }
+    _reloadBackups();
   }
 
   Future<void> _createLocalBackup(BuildContext context) async {
+    if (_busy) return;
     final repo = context.read<AppRepository>();
-    final file = await repo.createLocalBackupNow();
+    setState(() => _busy = true);
+    final File? file;
+    try {
+      file = await repo.createLocalBackupNow();
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
     if (!context.mounted) return;
     showAppToast(
       context,
@@ -246,6 +264,7 @@ class _BackupViewState extends State<BackupView> {
   }
 
   Future<void> _restoreLocal(BuildContext context, File f) async {
+    if (_busy) return;
     final repo = context.read<AppRepository>();
     final ok = await showConfirmDialog(
       context,
@@ -256,6 +275,7 @@ class _BackupViewState extends State<BackupView> {
       destructive: true,
     );
     if (!ok || !context.mounted) return;
+    setState(() => _busy = true);
     final bool success;
     try {
       success = await repo.restoreDatabaseFromFile(f.path);
@@ -271,6 +291,8 @@ class _BackupViewState extends State<BackupView> {
       }
       if (mounted) _reloadBackups();
       return;
+    } finally {
+      if (mounted) setState(() => _busy = false);
     }
     if (context.mounted) {
       showAppToast(
@@ -279,11 +301,11 @@ class _BackupViewState extends State<BackupView> {
         icon: success ? Icons.check_circle : Icons.error_outline,
       );
     }
-    _reloadBackups();
+    if (mounted) _reloadBackups();
   }
 }
 
-/// 备份文件的人话标签：auto-20260703 → 自动备份；pre-v15 → 升级前；.bak → 恢复前兜底。
+/// 备份文件的人话标签：auto-20260703 → 自动备份；pre-v15 → 升级前；pre-uuid-repair → 编号修复前；.bak → 恢复前兜底。
 String _backupLabel(File f) {
   final name = f.uri.pathSegments.last;
   final auto = RegExp(r'auto-(\d{4})(\d{2})(\d{2})').firstMatch(name);
@@ -296,6 +318,7 @@ String _backupLabel(File f) {
     return '手动备份 ${manual.group(1)}/${int.parse(manual.group(2)!)}'
         '/${int.parse(manual.group(3)!)} ${manual.group(4)}:${manual.group(5)}';
   }
+  if (name.contains('pre-uuid-repair')) return '编号修复前备份';
   final pre = RegExp(r'pre-v(\d+)').firstMatch(name);
   if (pre != null) return '升级前备份';
   return '恢复前的兜底备份';

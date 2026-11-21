@@ -36,6 +36,7 @@ import '../core/ai/ai_run.dart';
 import '../core/ai/ai_extensions.dart';
 import '../core/ai/chat_session.dart';
 import '../core/ai/chat_operation_lease.dart';
+import '../core/media/chat_attachment.dart';
 import '../core/ai/openai_codex_oauth.dart';
 import '../core/ai/report_execution_fence.dart';
 import '../core/assets/asset_allocation.dart';
@@ -2204,9 +2205,13 @@ class AppRepository extends ChangeNotifier {
 
   Future<void> _convergeOpenedDatabase({bool notify = true}) async {
     await _loadAll(notify: false);
-    await applyPhysicalAssetDepreciation(notify: false);
-    await _materializeRecurring();
-    await _loadTransactions();
+    final depreciated = await applyPhysicalAssetDepreciation(notify: false);
+    final materialized = await _materializeRecurring();
+    // _loadAll 已完成全表加载；仅当折旧或周期记账实际写入新记录时再重读交易表，
+    // 避免每次冷启动首帧后无条件执行第二遍全表 LEFT JOIN。
+    if (depreciated > 0 || materialized) {
+      await _loadTransactions();
+    }
     await _persistCurrentNetWorthSnapshot(
       causes: const {NetWorthSnapshotCause.scheduledRebuild},
       notify: false,
@@ -2422,10 +2427,15 @@ class AppRepository extends ChangeNotifier {
         header[63];
   }
 
-  Future<void> _pruneLocalBackups(Directory dir, {int keep = 3}) async {
+  Future<void> _pruneLocalBackups(
+    Directory dir, {
+    int keep = 3,
+    int keepMigration = 2,
+  }) async {
     if (keep <= 0) return;
     final manualFiles = <File>[];
     final autoFiles = <File>[];
+    final migrationFiles = <File>[];
     try {
       await for (final e in dir.list()) {
         if (e is File &&
@@ -2436,24 +2446,30 @@ class AppRepository extends ChangeNotifier {
             manualFiles.add(e);
           } else if (name.startsWith('$_dbName.auto-')) {
             autoFiles.add(e);
+          } else if (name.startsWith('$_dbName.pre-v')) {
+            migrationFiles.add(e);
           }
         }
       }
       final times = <String, DateTime>{};
-      for (final f in [...manualFiles, ...autoFiles]) {
+      for (final f in [...manualFiles, ...autoFiles, ...migrationFiles]) {
         times[f.path] = await f.lastModified();
       }
-      Future<void> pruneBucket(List<File> files) async {
+      Future<void> pruneBucket(List<File> files, int limit) async {
         files.sort((a, b) => times[b.path]!.compareTo(times[a.path]!));
-        for (final old in files.skip(keep)) {
+        for (final old in files.skip(limit)) {
           try {
             await old.delete();
           } catch (_) {}
         }
       }
 
-      await pruneBucket(manualFiles);
-      await pruneBucket(autoFiles);
+      await pruneBucket(manualFiles, keep);
+      await pruneBucket(autoFiles, keep);
+      // 升级前迁移备份也按修改时间保留最近 keepMigration 份，避免随每次跨版升级无限堆积。
+      if (keepMigration > 0) {
+        await pruneBucket(migrationFiles, keepMigration);
+      }
     } catch (_) {
       // 清理失败不影响启动、备份或恢复。
     }
@@ -6981,6 +6997,37 @@ class AppRepository extends ChangeNotifier {
     });
     await _loadChatSessions();
     _notifyChange(RepositoryChange.chat);
+    unawaited(pruneOrphanChatAttachments());
+  }
+
+  /// 收集当前数据库 chat_messages 仍引用的全部附件路径，清理孤儿磁盘文件。
+  Future<int> pruneOrphanChatAttachments({
+    Directory? attachmentsDirectory,
+    Duration minAge = const Duration(minutes: 5),
+  }) async {
+    final db = _db;
+    if (db == null) return 0;
+    try {
+      final rows = await db.query(
+        'chat_messages',
+        columns: const ['image_path', 'attachments_json'],
+      );
+      final referenced = <String>{};
+      for (final row in rows) {
+        final imagePath = (row['image_path'] as String?)?.trim() ?? '';
+        if (imagePath.isNotEmpty) referenced.add(imagePath);
+        for (final item in ChatAttachment.decodeList(row['attachments_json'])) {
+          if (item.path.trim().isNotEmpty) referenced.add(item.path.trim());
+        }
+      }
+      return await ChatAttachmentStore.pruneOrphanFiles(
+        referencedPaths: referenced,
+        attachmentsDirectory: attachmentsDirectory,
+        minAge: minAge,
+      );
+    } catch (_) {
+      return 0;
+    }
   }
 
   /// Persists the model selection owned by one conversation.
@@ -7771,6 +7818,7 @@ class AppRepository extends ChangeNotifier {
       // Even a failed delete revokes the in-flight request. Views must reload
       // the unchanged history instead of leaving a cancelled thinking bubble.
       _notifyChange(RepositoryChange.chat);
+      unawaited(pruneOrphanChatAttachments());
     }
   }
 
@@ -7805,6 +7853,7 @@ class AppRepository extends ChangeNotifier {
       });
     } finally {
       _notifyChange(RepositoryChange.chat);
+      unawaited(pruneOrphanChatAttachments());
     }
   }
 
@@ -9067,8 +9116,8 @@ class AppRepository extends ChangeNotifier {
   }
 
   /// 到期生成:启用规则中凡 nextDue<=今天 就补记一笔并推进 nextDue。
-  /// guard 上限防止极端情况(长期没打开 App)跑飞。
-  Future<void> _materializeRecurring() async {
+  /// guard 上限防止极端情况(长期没打开 App)跑飞。返回是否实际生成或推进了规则。
+  Future<bool> _materializeRecurring() async {
     final now = AppClock.now;
     final cutoff = DateTime(now.year, now.month, now.day, 23, 59, 59)
         .millisecondsSinceEpoch;
@@ -9183,6 +9232,7 @@ class AppRepository extends ChangeNotifier {
       }
     });
     if (changed) await _loadRecurringRules();
+    return changed;
   }
 
   List<int> _bookIdsForView(int bookId) {

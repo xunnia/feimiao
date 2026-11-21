@@ -443,16 +443,26 @@ class _AssetEvidenceSheetState extends State<AssetEvidenceSheet> {
                     borderRadius: BorderRadius.circular(12),
                   ),
                   clipBehavior: Clip.antiAlias,
-                  child:
-                      previewPath.isNotEmpty && File(previewPath).existsSync()
-                          ? Image.file(File(previewPath), fit: BoxFit.cover)
-                          : Center(
-                              child: Icon(
-                                Icons.image_outlined,
-                                size: 36,
-                                color: AppTextColor.secondary(scheme),
-                              ),
+                  child: previewPath.isNotEmpty
+                      ? Image.file(
+                          File(previewPath),
+                          cacheWidth: 720,
+                          fit: BoxFit.cover,
+                          errorBuilder: (_, __, ___) => Center(
+                            child: Icon(
+                              Icons.image_outlined,
+                              size: 36,
+                              color: AppTextColor.secondary(scheme),
                             ),
+                          ),
+                        )
+                      : Center(
+                          child: Icon(
+                            Icons.image_outlined,
+                            size: 36,
+                            color: AppTextColor.secondary(scheme),
+                          ),
+                        ),
                 ),
               ),
               const SizedBox(height: 8),

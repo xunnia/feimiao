@@ -41,73 +41,89 @@ class ReimburseView extends StatelessWidget {
               title: '没有待报销的账单',
               message: '都结清啦',
             )
-          : ListView(
-              padding: const EdgeInsets.fromLTRB(16, 8, 16, 28),
-              children: [
-                // 合计卡
-                Container(
-                  padding: const EdgeInsets.all(16),
-                  decoration: BoxDecoration(
-                    color: AppColors.card(scheme),
-                    borderRadius: BorderRadius.circular(16),
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.black.withValues(alpha: 0.04),
-                        blurRadius: 10,
-                        offset: const Offset(0, 2),
-                      ),
-                    ],
-                  ),
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.baseline,
-                    textBaseline: TextBaseline.alphabetic,
-                    children: [
-                      Text('${items.length} 笔待报销',
-                          style: const TextStyle(
-                              fontSize: 14, fontWeight: FontWeight.w500)),
-                      const Spacer(),
-                      Text(
-                        MoneyFormat.string(total),
-                        style: TextStyle(
-                          fontSize: 22,
-                          fontWeight: FontWeight.w600,
-                          fontFamily: 'Nunito',
-                          color: AppColors.income(scheme),
+          : CustomScrollView(
+              slivers: [
+                SliverPadding(
+                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 10),
+                  sliver: SliverToBoxAdapter(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        // 合计卡
+                        Container(
+                          padding: const EdgeInsets.all(16),
+                          decoration: BoxDecoration(
+                            color: AppColors.card(scheme),
+                            borderRadius: BorderRadius.circular(16),
+                            boxShadow: [
+                              BoxShadow(
+                                color: Colors.black.withValues(alpha: 0.04),
+                                blurRadius: 10,
+                                offset: const Offset(0, 2),
+                              ),
+                            ],
+                          ),
+                          child: Row(
+                            crossAxisAlignment: CrossAxisAlignment.baseline,
+                            textBaseline: TextBaseline.alphabetic,
+                            children: [
+                              Text('${items.length} 笔待报销',
+                                  style: const TextStyle(
+                                      fontSize: 14,
+                                      fontWeight: FontWeight.w500)),
+                              const Spacer(),
+                              Text(
+                                MoneyFormat.string(total),
+                                style: TextStyle(
+                                  fontSize: 22,
+                                  fontWeight: FontWeight.w600,
+                                  fontFamily: 'Nunito',
+                                  color: AppColors.income(scheme),
+                                ),
+                              ),
+                            ],
+                          ),
                         ),
-                      ),
-                    ],
-                  ),
-                ),
-                const SizedBox(height: 6),
-                Text(
-                  '报销到账后确认日期和收款账户，原支出会按实际报销额抵消。',
-                  style:
-                      TextStyle(fontSize: 11.5, color: scheme.onSurfaceVariant),
-                ),
-                const SizedBox(height: 10),
-                Container(
-                  decoration: BoxDecoration(
-                    color: AppColors.card(scheme),
-                    borderRadius: BorderRadius.circular(16),
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.black.withValues(alpha: 0.04),
-                        blurRadius: 10,
-                        offset: const Offset(0, 2),
-                      ),
-                    ],
-                  ),
-                  child: Column(
-                    children: [
-                      for (var i = 0; i < items.length; i++) ...[
-                        if (i > 0)
-                          Divider(
-                              height: 0.5,
-                              indent: 14,
-                              color: AppColors.hairline(scheme)),
-                        _ReimburseRow(tx: items[i], repo: repo),
+                        const SizedBox(height: 6),
+                        Text(
+                          '报销到账后确认日期和收款账户，原支出会按实际报销额抵消。',
+                          style: TextStyle(
+                              fontSize: 11.5, color: scheme.onSurfaceVariant),
+                        ),
                       ],
-                    ],
+                    ),
+                  ),
+                ),
+                SliverPadding(
+                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 28),
+                  sliver: SliverList.builder(
+                    itemCount: items.length,
+                    itemBuilder: (_, i) {
+                      final isFirst = i == 0;
+                      final isLast = i == items.length - 1;
+                      final radius = BorderRadius.vertical(
+                        top: isFirst ? const Radius.circular(16) : Radius.zero,
+                        bottom:
+                            isLast ? const Radius.circular(16) : Radius.zero,
+                      );
+                      return Container(
+                        decoration: BoxDecoration(
+                          color: AppColors.card(scheme),
+                          borderRadius: radius,
+                        ),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            if (!isFirst)
+                              Divider(
+                                  height: 0.5,
+                                  indent: 14,
+                                  color: AppColors.hairline(scheme)),
+                            _ReimburseRow(tx: items[i], repo: repo),
+                          ],
+                        ),
+                      );
+                    },
                   ),
                 ),
               ],
@@ -138,11 +154,9 @@ class _ReimburseRow extends StatelessWidget {
       toAccountName: tx.toAccountName,
     );
     // 待报销行可能来自任意账本：按 tx.bookId 反查账本名，找不到再兜底当前账本。
-    final bookName = repo.books
-            .where((book) => book.id == tx.bookId)
-            .firstOrNull
-            ?.name ??
-        repo.currentBook?.name;
+    final bookName =
+        repo.books.where((book) => book.id == tx.bookId).firstOrNull?.name ??
+            repo.currentBook?.name;
     final detailText = joinTransactionCardDetails([
       transactionCardTimeLabel(
         tx.date,

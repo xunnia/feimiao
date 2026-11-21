@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:ui' show ImageFilter;
 
 import 'package:decimal/decimal.dart';
 import 'package:flutter/material.dart';
@@ -399,8 +398,8 @@ class _SearchViewState extends State<SearchView> {
       padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
       child: AppGlassInputShell(
         radius: 18,
-        blur: 8,
-        opacity: 0.52,
+        blur: 0,
+        opacity: 0.82,
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
         child: Row(
           children: [
@@ -511,9 +510,7 @@ class _SearchViewState extends State<SearchView> {
           ),
           _chip(
             scheme,
-            _range == null
-                ? '时间'
-                : searchDateRangeLabel(_range!, AppClock.now),
+            _range == null ? '时间' : searchDateRangeLabel(_range!, AppClock.now),
             _range != null,
             _pickRange,
           ),
@@ -803,38 +800,21 @@ class _SearchTopFrostedFade extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final b = Theme.of(context).brightness;
-    return ClipRect(
-      child: ShaderMask(
-        blendMode: BlendMode.dstIn,
-        shaderCallback: (bounds) => const LinearGradient(
+    // 用纯渐变收口顶部渐隐（与主页顶栏一致），避免与底部输入栏叠加多层常驻 BackdropFilter。
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
           begin: Alignment.topCenter,
           end: Alignment.bottomCenter,
           colors: [
-            Colors.white,
-            Colors.white,
-            Colors.transparent,
+            span.at(b, 0.0).withValues(alpha: 0.96),
+            span.at(b, 0.62).withValues(alpha: 0.72),
+            span.at(b, 1.0).withValues(alpha: 0.0),
           ],
-          stops: [0.0, 0.58, 1.0],
-        ).createShader(bounds),
-        child: BackdropFilter(
-          filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
-          child: DecoratedBox(
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                begin: Alignment.topCenter,
-                end: Alignment.bottomCenter,
-                colors: [
-                  span.at(b, 0.0).withValues(alpha: 0.96),
-                  span.at(b, 0.62).withValues(alpha: 0.68),
-                  span.at(b, 1.0).withValues(alpha: 0.0),
-                ],
-                stops: const [0.0, 0.62, 1.0],
-              ),
-            ),
-            child: const SizedBox.expand(),
-          ),
+          stops: const [0.0, 0.62, 1.0],
         ),
       ),
+      child: const SizedBox.expand(),
     );
   }
 }
@@ -847,38 +827,21 @@ class _SearchBottomFrostedFade extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final b = Theme.of(context).brightness;
-    return ClipRect(
-      child: ShaderMask(
-        blendMode: BlendMode.dstIn,
-        shaderCallback: (bounds) => const LinearGradient(
+    // 底部渐隐同样用纯渐变，避免搜索页弹键盘时同时触发 4 层离屏模糊重算。
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
           begin: Alignment.topCenter,
           end: Alignment.bottomCenter,
           colors: [
-            Colors.transparent,
-            Colors.white,
-            Colors.white,
+            span.at(b, 0.0).withValues(alpha: 0.0),
+            span.at(b, 0.58).withValues(alpha: 0.76),
+            span.at(b, 1.0).withValues(alpha: 0.96),
           ],
-          stops: [0.0, 0.42, 1.0],
-        ).createShader(bounds),
-        child: BackdropFilter(
-          filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
-          child: DecoratedBox(
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                begin: Alignment.topCenter,
-                end: Alignment.bottomCenter,
-                colors: [
-                  span.at(b, 0.0).withValues(alpha: 0.0),
-                  span.at(b, 0.58).withValues(alpha: 0.72),
-                  span.at(b, 1.0).withValues(alpha: 0.96),
-                ],
-                stops: const [0.0, 0.58, 1.0],
-              ),
-            ),
-            child: const SizedBox.expand(),
-          ),
+          stops: const [0.0, 0.58, 1.0],
         ),
       ),
+      child: const SizedBox.expand(),
     );
   }
 }

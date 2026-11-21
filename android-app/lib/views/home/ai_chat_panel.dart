@@ -10,7 +10,6 @@ import 'package:flutter/cupertino.dart' show CupertinoIcons;
 import 'package:flutter/foundation.dart' show kDebugMode, visibleForTesting;
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart' show RendererBinding;
-import 'package:flutter/physics.dart' show SpringDescription;
 import 'package:flutter/services.dart'
     show Clipboard, ClipboardData, SystemChannels;
 import 'package:flutter_svg/flutter_svg.dart';
@@ -58,7 +57,6 @@ import '../../core/media/chat_attachment.dart';
 import '../../core/media/ai_image_preparation.dart';
 import '../../core/ai/public_reasoning_summary.dart';
 import '../../core/money_format.dart';
-import '../../core/statistics/metric_contract.dart';
 import '../../core/statistics/statistics_engine.dart';
 import '../../core/transaction_time.dart';
 import '../../data/app_repository.dart';
@@ -748,6 +746,7 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
   final String _runOwnerId =
       '${DateTime.now().microsecondsSinceEpoch}-${Random.secure().nextInt(1 << 32)}';
   int? _activeFlowId;
+  String? _activeStreamTaskId;
   final Map<int, ChatOperationLease> _flowLeases = {};
   final Map<int, AiProviderConfig> _flowChatConfigs = {};
   final Map<int, AiProviderConfig> _flowRecordConfigs = {};
@@ -826,6 +825,10 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
       _backgroundFlowId = null;
     }
     if (_activeFlowId == flowId) {
+      if (_activeStreamTaskId != null) {
+        LlmQueryV2.cancel(_activeStreamTaskId!);
+        _activeStreamTaskId = null;
+      }
       _activeFlowId = null;
       if (mounted && _busy) setState(() => _busy = false);
       if (_thinkingTickerFlowId == flowId) {
@@ -1995,6 +1998,8 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
 
   @override
   void dispose() {
+    // 离开聊天页时不取消正在进行中的流式请求：保留后台完成并持久化到会话，
+    // 仅在显式超时或用户停止/清空会话切流时才调 LlmQueryV2.cancel。
     _textSelectionScrim?.remove();
     _textSelectionScrim = null;
     WidgetsBinding.instance.removeObserver(this);
@@ -2101,7 +2106,7 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
             _currentThinkingMsg(observedFlowId) != null;
         if (ownsObservedFlow) {
           _completeThinking(flowId: observedFlowId);
-          _finishFlow(observedFlowId!);
+          _finishFlow(observedFlowId);
         }
         setState(() {
           _msgs.removeWhere(
@@ -2131,7 +2136,7 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
             _currentThinkingMsg(observedFlowId) != null;
         if (ownsObservedFlow) {
           _completeThinking(flowId: observedFlowId);
-          _finishFlow(observedFlowId!);
+          _finishFlow(observedFlowId);
         }
         setState(() {
           _msgs.add(_InfoMsg('报告生成失败，请检查 AI 设置后重新生成', error: true));
@@ -2891,13 +2896,13 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
           if (!_ownsFlow(flowId)) return;
           if (recordRun != null) {
             await repo.recordAiProviderSuccess(
-              recordRun!.config.providerId,
+              recordRun.config.providerId,
               DateTime.now().difference(startedAt).inMilliseconds,
             );
-            await repo.updateAiRun(recordRun!.id, status: AiRunStatus.thinking);
+            await repo.updateAiRun(recordRun.id, status: AiRunStatus.thinking);
             _recordRunEvent(
               repo,
-              recordRun!.id,
+              recordRun.id,
               AiRunEventType.stageChanged,
               payload: {
                 'stage': 'parsed',
@@ -2941,11 +2946,11 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
       } catch (error) {
         if (recordRun != null) {
           await repo.recordAiProviderFailure(
-            recordRun!.config.providerId,
+            recordRun.config.providerId,
             _shortAiError(error),
           );
           await repo.markAiRunFailed(
-            recordRun!.id,
+            recordRun.id,
             code: error is LlmQueryException
                 ? 'llm_request_failed'
                 : 'parse_failed',
@@ -3320,6 +3325,9 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
     var requestExpired = false;
     Timer? refreshTimer;
     final runStartedAt = DateTime.now();
+    final streamTaskId =
+        'chat_stream_${flowId ?? 0}_${runStartedAt.microsecondsSinceEpoch}';
+    _activeStreamTaskId = streamTaskId;
 
     void refreshStream() {
       if (refreshTimer != null) return;
@@ -3400,6 +3408,7 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
       priorTurns: priorTurns,
       imagePath: imagePath,
       attachments: attachments,
+      taskId: streamTaskId,
       onChunk: showChunk,
       onSources: (sources) {
         if (requestExpired || !_ownsFlow(flowId)) return;
@@ -3437,6 +3446,9 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
       onDone: (answer) {
         refreshTimer?.cancel();
         refreshTimer = null;
+        if (_activeStreamTaskId == streamTaskId) {
+          _activeStreamTaskId = null;
+        }
         if (requestExpired || !_ownsFlow(flowId)) return;
         // 以服务端最终文本为准。大多数 Responses 网关会发 delta；若没有
         // delta，保留旧路径在调用方完整展示最终回答。
@@ -3497,6 +3509,9 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
       onError: (error) {
         refreshTimer?.cancel();
         refreshTimer = null;
+        if (_activeStreamTaskId == streamTaskId) {
+          _activeStreamTaskId = null;
+        }
         if (requestExpired || !_ownsFlow(flowId)) return;
         if (repository != null) {
           unawaited(() async {
@@ -3558,6 +3573,10 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
         refreshTimer?.cancel();
         refreshTimer = null;
         requestExpired = true;
+        LlmQueryV2.cancel(streamTaskId);
+        if (_activeStreamTaskId == streamTaskId) {
+          _activeStreamTaskId = null;
+        }
         _completeThinking(flowId: flowId);
         if (runId != null && runId.isNotEmpty) {
           unawaited(() async {
@@ -3767,7 +3786,11 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
           unawaited(repo.markAiMemoryUsed(memory.id));
         }
       } on LlmQueryException catch (e) {
-        answer = _friendlyAiError(e);
+        answer = _friendlyAiError(
+          e,
+          hasAttachments: attachments.isNotEmpty || (imagePath?.trim().isNotEmpty ?? false),
+          providerLabel: aiConfig.providerLabel,
+        );
         if (queryRun != null) {
           await repo.markAiRunFailed(
             queryRun.id,
@@ -4078,7 +4101,11 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
         _handleInvalidatedReport(flowId: flowId);
         return;
       } on LlmQueryException catch (e) {
-        answer = _friendlyAiError(e);
+        answer = _friendlyAiError(
+          e,
+          hasAttachments: attachments.isNotEmpty || (imagePath?.trim().isNotEmpty ?? false),
+          providerLabel: aiConfig.providerLabel,
+        );
         if (queryRun != null) {
           await repo.markAiRunFailed(
             queryRun.id,
@@ -5104,27 +5131,42 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
     return sb.toString();
   }
 
-  String _friendlyAiError(LlmQueryException e) {
+  String _friendlyAiError(
+    LlmQueryException e, {
+    bool hasAttachments = false,
+    String? providerLabel,
+  }) {
     final code = e.statusCode;
     final message = e.message.trim();
+    final provider = (providerLabel?.trim().isNotEmpty ?? false)
+        ? providerLabel!.trim()
+        : 'AI 服务商';
     if (RegExp(r'(图片|附件)文件(不存在|为空)').hasMatch(message)) {
       return '附件读取失败：${_shortAiError(message)}。图片仍保留在消息里，请重新选择后再试。';
     }
     if (code == 413 || message.toLowerCase().contains('too large')) {
       return '附件发送失败：文件超过当前服务商允许的大小，请压缩图片或减少一次发送的数量。';
     }
-    if (code == 400 ||
+    final attachmentRelated = hasAttachments ||
+        code == 415 ||
+        RegExp(r'(image|vision|附件|图片).*(unsupported|不支持|invalid)',
+                caseSensitive: false)
+            .hasMatch(message);
+    if ((code == 400 && attachmentRelated) ||
         code == 415 ||
         RegExp(r'(image|vision|附件|图片).*(unsupported|不支持|invalid)',
                 caseSensitive: false)
             .hasMatch(message)) {
       return '当前模型或上游格式没有接受这次附件，请换用支持图片的模型，或检查服务商的上游格式。';
     }
+    if (code == 400) {
+      return '请求参数未被 $provider 接受（HTTP 400：${_shortAiError(message)}），请检查模型或接口配置后重试。';
+    }
     if (code == 401 || code == 403) {
       return '喵没连上 AI：API Key 可能无效或没有权限，去「设置 → AI 账号」检查一下。';
     }
     if (code == 402 || code == 429) {
-      return '喵没连上 AI：DeepSeek 余额、额度或频率限制可能不够了，稍后再试或检查控制台。';
+      return '喵没连上 AI：$provider 余额、额度或频率限制可能不够了，稍后再试或检查控制台。';
     }
     if (e.message.contains('TimeoutException') || e.message.contains('超时')) {
       return '喵没连上 AI：这次请求超时了，账单多的时候可以稍后重试。';
@@ -6110,7 +6152,11 @@ ${line('上月同期', lastStart, lastSameDayEnd, lastSameDay)}
               _AttachmentDraftStrip(
                 attachments: _draftAttachments,
                 onRemove: (index) {
+                  final removed = _draftAttachments[index];
                   setState(() => _draftAttachments.removeAt(index));
+                  unawaited(
+                    ChatAttachmentStore.deletePersistedDraftFile(removed.path),
+                  );
                   _onInputChanged();
                 },
               ),
@@ -9289,7 +9335,7 @@ class _SuggestionGrid extends StatelessWidget {
             onPressed: () => onTap(s),
             child: GlassSurface(
               radius: 16,
-              blur: 4,
+              blur: 0,
               opacity: 0.86,
               padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 7),
               child: Text(
@@ -9874,9 +9920,10 @@ class _EffortPopupCardState extends State<_EffortPopupCard>
     if (_index < 0) _index = 0; // 默认 Low
     _ultraCtrl = AnimationController(
       vsync: this,
-      duration: const Duration(seconds: 2),
+      duration: const Duration(milliseconds: 900),
     );
-    if (_isUltra) _ultraCtrl.repeat();
+    // 遵守 06 §5 禁 repeat() 永动画铁律：进入或切到 Ultra 时播放一次流光扫过即停。
+    if (_isUltra) _ultraCtrl.forward(from: 0);
   }
 
   @override
@@ -10008,7 +10055,7 @@ class _EffortPopupCardState extends State<_EffortPopupCard>
                     setState(() => _index = i);
                     final nowUltra = _isUltra;
                     if (nowUltra && !wasUltra) {
-                      _ultraCtrl.repeat();
+                      _ultraCtrl.forward(from: 0);
                     } else if (!nowUltra && wasUltra) {
                       _ultraCtrl.stop();
                     }

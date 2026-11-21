@@ -34,11 +34,16 @@ class AppUpdateInfo {
   static AppUpdateInfo? fromJson(Map<String, dynamic> json) {
     final code = json['versionCode'];
     final url = json['url'];
-    if (code is! int || url is! String || url.isEmpty) return null;
+    if (code is! int ||
+        code <= 0 ||
+        url is! String ||
+        !isSecureUpdateUrl(url)) {
+      return null;
+    }
     return AppUpdateInfo(
       versionName: (json['versionName'] as String?) ?? '',
       versionCode: code,
-      url: url,
+      url: url.trim(),
       notes: (json['notes'] as String?) ?? '',
       sizeBytes: (json['sizeBytes'] as num?)?.toInt() ?? 0,
       sha256: sanitizeSha256(json['sha256'] as String?),

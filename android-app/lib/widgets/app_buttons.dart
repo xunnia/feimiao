@@ -46,10 +46,19 @@ String? _labelForIcon(IconData? icon) {
   if (icon == CupertinoIcons.xmark || icon == Icons.close) return '关闭';
   if (icon == CupertinoIcons.chevron_back) return '返回';
   if (icon == CupertinoIcons.search || icon == Icons.search) return '搜索';
-  if (icon == CupertinoIcons.trash || icon == Icons.delete_outline) return '删除';
+  if (icon == CupertinoIcons.trash ||
+      icon == CupertinoIcons.delete ||
+      icon == Icons.delete_outline) {
+    return '删除';
+  }
+  if (icon == CupertinoIcons.minus_circle) return '移除';
+  if (icon == Icons.more_horiz || icon == CupertinoIcons.ellipsis)
+    return '更多操作';
   if (icon == CupertinoIcons.checkmark || icon == Icons.check) return '完成';
   if (icon == Icons.refresh_rounded) return '刷新';
   if (icon == Icons.auto_awesome_outlined) return 'AI 记账';
+  if (icon == Icons.photo_camera_outlined) return '拍照';
+  if (icon == Icons.photo_library_outlined) return '从相册选择';
   return null;
 }
 

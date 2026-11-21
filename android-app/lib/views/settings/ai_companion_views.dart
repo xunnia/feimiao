@@ -10,6 +10,7 @@ import '../../core/ai/ai_provider_config.dart';
 import '../../core/ai/ai_provider_health.dart';
 import '../../core/ai/ai_run.dart';
 import '../../data/app_repository.dart';
+import '../../theme/app_colors.dart';
 import '../../widgets/app_buttons.dart';
 import '../../widgets/app_toast.dart';
 import '../../widgets/ios_form.dart';
@@ -109,7 +110,7 @@ class AiTaskCenterBody extends StatelessWidget {
   static Color _runColor(BuildContext context, AiRunStatus status) {
     final scheme = Theme.of(context).colorScheme;
     return switch (status) {
-      AiRunStatus.failed => scheme.error,
+      AiRunStatus.failed => AppColors.warning,
       AiRunStatus.completed || AiRunStatus.rolledBack => scheme.primary,
       _ => scheme.onSurfaceVariant,
     };
@@ -126,7 +127,6 @@ class AiRunDetailView extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final repo = context.read<AppRepository>();
-    final scheme = Theme.of(context).colorScheme;
     return Scaffold(
       appBar: AppBar(
         leading: const AppBackButton(),
@@ -167,11 +167,11 @@ class AiRunDetailView extends StatelessWidget {
                 SettingsRow(
                   title: '错误',
                   subtitle: run.errorMessage,
-                  titleColor: scheme.error,
+                  titleColor: AppColors.warning,
                 ),
             ],
           ),
-          SettingsSectionLabel('运行过程'),
+          const SettingsSectionLabel('运行过程'),
           FutureBuilder<List<AiRunEvent>>(
             future: repo.loadAiRunEvents(run.id),
             builder: (context, snapshot) {
@@ -421,6 +421,7 @@ class AiMemoryControlBody extends StatelessWidget {
                       subtitle: memory.content,
                       trailing: AppCircleButton(
                         icon: CupertinoIcons.delete,
+                        semanticLabel: '删除记忆',
                         onPressed: () => repo.deleteAiMemory(memory.id),
                       ),
                     ),
@@ -431,7 +432,7 @@ class AiMemoryControlBody extends StatelessWidget {
             SettingsRow(
               leading: const Icon(CupertinoIcons.trash),
               title: '忘记全部记忆',
-              titleColor: Theme.of(context).colorScheme.error,
+              titleColor: AppColors.warning,
               onTap: () async {
                 final ok = await showConfirmDialog(
                   context,

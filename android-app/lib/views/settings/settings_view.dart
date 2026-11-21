@@ -463,20 +463,24 @@ class ProfileAvatar extends StatelessWidget {
           ),
         );
 
+    final cacheDim =
+        (size * MediaQuery.devicePixelRatioOf(context)).ceil().clamp(64, 512);
     Widget image;
     if (previewBytes != null) {
       image = Image.memory(
         previewBytes!,
         width: size,
         height: size,
+        cacheWidth: cacheDim,
         fit: BoxFit.cover,
         gaplessPlayback: true,
       );
-    } else if (avatarPath.isNotEmpty && File(avatarPath).existsSync()) {
+    } else if (avatarPath.isNotEmpty) {
       image = Image.file(
         File(avatarPath),
         width: size,
         height: size,
+        cacheWidth: cacheDim,
         fit: BoxFit.cover,
         gaplessPlayback: true,
         errorBuilder: (_, __, ___) => placeholder(),

@@ -1115,6 +1115,10 @@ class _PhysicalAssetHero extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final cacheWidth = (MediaQuery.sizeOf(context).width *
+            MediaQuery.devicePixelRatioOf(context))
+        .ceil()
+        .clamp(400, 1600);
     return Semantics(
       image: true,
       button: true,
@@ -1127,6 +1131,7 @@ class _PhysicalAssetHero extends StatelessWidget {
             borderRadius: BorderRadius.circular(18),
             child: Image.file(
               file,
+              cacheWidth: cacheWidth,
               fit: BoxFit.contain,
               filterQuality: FilterQuality.medium,
               errorBuilder: (_, __, ___) => Center(

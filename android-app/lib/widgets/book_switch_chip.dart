@@ -26,9 +26,9 @@ class AppBookSwitchChip extends StatelessWidget {
       child: GlassSurface(
         radius: 18,
         blur: 0,
-        padding: const EdgeInsets.symmetric(horizontal: 10),
-        child: SizedBox(
-          height: 36,
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(minHeight: 24),
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [

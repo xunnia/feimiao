@@ -525,8 +525,11 @@ class QingJiApp extends StatelessWidget {
     // Keep the historical standalone/embedded `QingJiApp()` contract: callers
     // that do not opt into the production startup gate do not need to provide
     // an AppRepository just to build the widget tree.
+    // 只读一次引用，不在顶层 MaterialApp 订阅 AppRepository：避免每次聊天、
+    // 切换资产页签或更新 AI 健康度都穿透重建整棵 MaterialApp。启动门由
+    // _RepositoryStartupGate 自行监听 ready / 初始化错误。
     final repository =
-        deferHomeUntilRepositoryReady ? context.watch<AppRepository>() : null;
+        deferHomeUntilRepositoryReady ? context.read<AppRepository>() : null;
     return MaterialApp(
       title: '肥喵记账',
       debugShowCheckedModeBanner: false,
@@ -572,6 +575,7 @@ class _RepositoryStartupGateState extends State<_RepositoryStartupGate> {
   @override
   void initState() {
     super.initState();
+    widget.repository.addListener(_onRepositoryChanged);
     _waitForRepository();
   }
 
@@ -579,8 +583,23 @@ class _RepositoryStartupGateState extends State<_RepositoryStartupGate> {
   void didUpdateWidget(covariant _RepositoryStartupGate oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (!identical(oldWidget.repository, widget.repository)) {
+      oldWidget.repository.removeListener(_onRepositoryChanged);
+      widget.repository.addListener(_onRepositoryChanged);
       _waitForRepository();
     }
+  }
+
+  @override
+  void dispose() {
+    widget.repository.removeListener(_onRepositoryChanged);
+    super.dispose();
+  }
+
+  void _onRepositoryChanged() {
+    if (!mounted) return;
+    // 启动完成后不再随日常账务/聊天变化重建门控壳。
+    if (widget.repository.isReady && _homeReadyScheduled) return;
+    setState(() {});
   }
 
   void _waitForRepository() {

@@ -33,8 +33,10 @@ class AiAttachmentPipeline {
 
   static const maxImages = 4;
   static const maxFiles = 10;
+  static const maxTotalCount = 10;
   static const maxImageBytes = 20 * 1024 * 1024;
   static const maxFileBytes = 50 * 1024 * 1024;
+  static const maxTotalBytes = 50 * 1024 * 1024;
 
   static Future<AiAttachmentBatch> validate(
     Iterable<ChatAttachment> attachments,
@@ -42,24 +44,30 @@ class AiAttachmentPipeline {
     final list = attachments.toList(growable: false);
     var imageCount = 0;
     var fileCount = 0;
+    var totalBytes = 0;
     final checks = <AiAttachmentCheck>[];
     final accepted = <ChatAttachment>[];
     for (final attachment in list) {
       final path = attachment.path.trim();
       String? error;
+      var size = 0;
       if (path.isEmpty || !await File(path).exists()) {
         error = '文件已不存在，请重新选择';
       } else {
-        final size = await File(path).length();
+        size = await File(path).length();
         final max = attachment.isImage ? maxImageBytes : maxFileBytes;
         if (size <= 0) {
           error = '文件为空';
         } else if (size > max) {
           error = attachment.isImage ? '图片不能超过 20 MB' : '文件不能超过 50 MB';
+        } else if (accepted.length >= maxTotalCount) {
+          error = '一次最多发送 10 个附件';
         } else if (attachment.isImage && imageCount >= maxImages) {
           error = '一次最多发送 4 张图片';
         } else if (!attachment.isImage && fileCount >= maxFiles) {
           error = '一次最多发送 10 个文件';
+        } else if (totalBytes + size > maxTotalBytes) {
+          error = '单条消息附件总大小不能超过 50 MB';
         }
       }
       final check = AiAttachmentCheck(
@@ -70,6 +78,7 @@ class AiAttachmentPipeline {
       checks.add(check);
       if (check.accepted) {
         accepted.add(attachment);
+        totalBytes += size;
         if (attachment.isImage) {
           imageCount++;
         } else {

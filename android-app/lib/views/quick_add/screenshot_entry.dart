@@ -52,7 +52,7 @@ Future<void> recognizeImagePathAndEntry(
   }
 
   // 4. 关遮罩
-  if (navigator.canPop()) navigator.pop();
+  if (navigator.mounted && navigator.canPop()) navigator.pop();
 
   // 判定是否「订单列表」：≥2 个订单锚点，或 ≥3 个不同金额。
   // 注意：部分截图 OCR 抓不到 ¥ 符号（金额是裸的 17.70），所以锚点要带「共N件」、
@@ -99,6 +99,7 @@ Future<void> recognizeImagePathAndEntry(
   }
 
   // 5. 把识别文字交给 AI 快记页解析
+  if (!navigator.mounted) return;
   navigator.push(
     AppPageRoute<void>(
       builder: (_) => AiQuickEntryView(

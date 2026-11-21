@@ -634,13 +634,33 @@ class MainActivity : FlutterActivity() {
     }
 
     /// 把分享进来的 content:// 图片复制到 App 缓存目录，返回可读文件路径（供 ML Kit OCR）。
+    /// 限制单张上限 20 MB，避免异常超大文件在拷贝/OCR 阶段引发内存抖动或 OOM。
     private fun copyToCache(uri: Uri): String? {
         return try {
             cleanupSharedCache()
+            val maxBytes = 20L * 1024 * 1024
             val input = contentResolver.openInputStream(uri) ?: return null
             val file = File(cacheDir, "shared_${System.currentTimeMillis()}.jpg")
-            file.outputStream().use { out -> input.copyTo(out) }
-            input.close()
+            var total = 0L
+            input.use { stream ->
+                file.outputStream().use { out ->
+                    val buffer = ByteArray(16 * 1024)
+                    while (true) {
+                        val read = stream.read(buffer)
+                        if (read < 0) break
+                        total += read
+                        if (total > maxBytes) {
+                            file.delete()
+                            return null
+                        }
+                        out.write(buffer, 0, read)
+                    }
+                }
+            }
+            if (total <= 0L) {
+                file.delete()
+                return null
+            }
             file.absolutePath
         } catch (e: Exception) {
             null
@@ -740,9 +760,13 @@ class MainActivity : FlutterActivity() {
         versionCode: Int,
     ): Long? {
         return try {
+            val safeFileName = File(fileName).name
+            if (safeFileName.isBlank() || safeFileName == "." || safeFileName == "..") {
+                return null
+            }
             val dir = getExternalFilesDir(android.os.Environment.DIRECTORY_DOWNLOADS)
                 ?: return null
-            val target = File(dir, fileName)
+            val target = File(dir, safeFileName)
             if (target.exists()) target.delete()
             val dm = getSystemService(Context.DOWNLOAD_SERVICE) as android.app.DownloadManager
             val request = android.app.DownloadManager.Request(Uri.parse(url)).apply {
@@ -755,7 +779,7 @@ class MainActivity : FlutterActivity() {
                 setDestinationInExternalFilesDir(
                     this@MainActivity,
                     android.os.Environment.DIRECTORY_DOWNLOADS,
-                    fileName,
+                    safeFileName,
                 )
                 setAllowedOverMetered(true)
                 setAllowedOverRoaming(true)

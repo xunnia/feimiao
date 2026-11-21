@@ -247,11 +247,11 @@ class _AppDatePickerSheetState extends State<_AppDatePickerSheet> {
                     color: scheme.primary,
                     borderRadius: BorderRadius.circular(16),
                   ),
-                  child: const Text('确认',
+                  child: Text('确认',
                       style: TextStyle(
                           fontSize: 16,
                           fontWeight: FontWeight.w500,
-                          color: Colors.white)),
+                          color: scheme.onPrimary)),
                 ),
               ),
             ),
@@ -467,7 +467,7 @@ class _DayCell extends StatelessWidget {
     if (disabled) {
       textColor = scheme.onSurfaceVariant.withValues(alpha: 0.35);
     } else if (selected) {
-      textColor = Colors.white;
+      textColor = scheme.onPrimary;
     } else if (isToday) {
       textColor = scheme.primary;
     } else {
