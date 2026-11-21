@@ -28,6 +28,12 @@
 
 ## 2. 当前真实状态
 
+### 2026-11-22 同时刻账单第二排序键与周期记账固定时钟/中文日期（代码 `02b4ac8`，已授权推送；待Mac编译和XCTest；没真机）
+
+- 同时间排序：`MoneyTransaction` 新增 `isOrderedBeforeDescending` / `isOrderedBeforeAscending`（先比 `date`，再比 `createdAt`，最后比 `stableID.uuidString`）和 `descendingSortDescriptors`（`date` + `createdAt` 倒序），接入 `LedgerStore`、`IOSLedgerProjectionCache`、`HomeView`、`TransactionListView`、`AccountDetailView`、`CategoryTransactionsView`、`BudgetDaySheet`、`BookMembershipSelection`、`ReimburseView`、`EditTransactionSheet`、`AssetStore`、`PhysicalAssetDetailView`；`P0ParityDemoSeeder` 写入演示账单时按夹具顺序每秒递增写入 `createdAt`/`updatedAt`，消除首页、搜索和账户详情里 12:00 两笔账每次截图随机上下对调的老不稳定。
+- 周期记账日期：`RecurringStore.materializeDue` 默认 `now` 改为 `AppClock.now`，`RecurringRulesView` 下次日期改为固定中文 `yyyy年M月d日`（`dueDateLabel`），不再受 CI 当天或模拟器英文 locale 影响。
+- 测试与验证：`LedgerStoreTests` 新增 2 项（同时间第二排序键、周期记账中文日期）。Windows 无 Swift，本机仅通过 48/48 Python 工具测试（含顶栏玻璃守卫）、P0 合同和 38 路由校验；实际 Mac 编译、XCTest 和双端截图待推送后验收。
+
 ### 2026-11-05 库里有重复编号时不崩（已推送到 `c597a4c`，代码 `01303cb`；Mac编译、XCTest 298/0、截图全部通过；没真机）
 
 - 改法：下方「查重复编号」记的49处里，用库里现有记录建的42处改成 `Dictionary(_:uniquingKeysWith:)`，只留最先读到的那条，和代码里已有的8处写法一样，没有重复时结果不变：`DataSeeder.swift` 1处（每次启动都跑，库里有同 `key` 的分类时只更新最先读到的那条，其余原样保留）、`BackupStore` 恢复时35处（「合并」方式才会读到原有记录，App里恢复都用「替换」，会先删掉旧记录）、`AssetStore.metrics` 1处、`MeowAssistantView` 读聊天记录4处、`BudgetView` 1处。
