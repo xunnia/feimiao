@@ -28,12 +28,12 @@
 
 ## 2. 当前真实状态
 
-### 2026-11-22 喵助手聊天行为对齐 Android 329+（代码 `b71ff1c`，已授权推送；待Mac编译和XCTest；没真机）
+### 2026-11-22 喵助手聊天行为对齐 Android 329+（代码 `b71ff1c`、文档 `94786e3` 已推送；Mac CI 6/6 通过，核心 155/155、XCTest 301/301；没真机）
 
 - 改动：`QingJiCore/.../AI/ChatIntent.swift` 移除 6 个纯日期财务词并补 `isPeriodFollowUp` / `lastTopicQuestion` / `previousQuestion`；新增 `QingJiCore/.../AI/AssistantChatContract.swift` 统一通用角色、带时区设备时间、记忆与账本隔离、`resolveIntent` 及私有请求搜索防护；`AIWebSearch.swift`、`AIProviderStore.swift`、`MeowAssistantView.swift` 接入发起时账本快照锁定、私有/混合请求单次禁搜索（不改全局开关）、普通会话记账引导回「记一记」，以及普通回复与中断回复的「重新生成」按钮（不加「继续生成」）。
-- 测试：`QingJiCoreTests/ChatIntentTests.swift` 新增 5 项，`QingJiTests/AIProviderClientTests.swift` 新增 1 项。Windows 无 Swift，本机仅过 48/48 工具测试、P0 合同、38 路由与 `git diff --check`；实际编译与 XCTest 待推送后由 Mac CI 验收。
+- 推送后 Mac CI 验证：`44936087286` 6/6 通过——核心逻辑 `swift test` **155 / 155**（含新增 5 项）、App 层 XCTest **301 / 301**（含两批新增全部 3 项）、编译、候选模拟器截图、未签名 IPA、汇总全部通过。下载 `44934436797` 与 `44936087286` 两组 38 张候选截图逐张对比，状态栏以下无可见差异（26/38 逐像素相同，其余最大通道差 ≤14），12:00 同分钟账单顺序固定，19 定时记账显示中文「每月 · 下次 2026年9月30日」。
 
-### 2026-11-22 同时刻账单第二排序键与周期记账固定时钟/中文日期（代码 `02b4ac8`，已授权推送；待Mac编译和XCTest；没真机）
+### 2026-11-22 同时刻账单第二排序键与周期记账固定时钟/中文日期（代码 `02b4ac8`、文档 `e41a97e` 已推送；Mac CI `44934436797` 6/6 通过；没真机）
 
 - 同时间排序：`MoneyTransaction` 新增 `isOrderedBeforeDescending` / `isOrderedBeforeAscending`（先比 `date`，再比 `createdAt`，最后比 `stableID.uuidString`）和 `descendingSortDescriptors`（`date` + `createdAt` 倒序），接入 `LedgerStore`、`IOSLedgerProjectionCache`、`HomeView`、`TransactionListView`、`AccountDetailView`、`CategoryTransactionsView`、`BudgetDaySheet`、`BookMembershipSelection`、`ReimburseView`、`EditTransactionSheet`、`AssetStore`、`PhysicalAssetDetailView`；`P0ParityDemoSeeder` 写入演示账单时按夹具顺序每秒递增写入 `createdAt`/`updatedAt`，消除首页、搜索和账户详情里 12:00 两笔账每次截图随机上下对调的老不稳定。
 - 周期记账日期：`RecurringStore.materializeDue` 默认 `now` 改为 `AppClock.now`，`RecurringRulesView` 下次日期改为固定中文 `yyyy年M月d日`（`dueDateLabel`），不再受 CI 当天或模拟器英文 locale 影响。
