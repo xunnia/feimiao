@@ -710,6 +710,8 @@ const String _lucideHeader =
 const String _icCopy =
     '$_lucideHeader<rect width="14" height="14" x="8" y="8" rx="2"/>'
     '<path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>';
+const String _icCheck =
+    '$_lucideHeader<path d="M20 6 9 17l-5-5"/></svg>';
 const String _icRetry =
     '$_lucideHeader<path d="M21 12a9 9 0 1 1-2.64-6.36L21 8.27"/>'
     '<path d="M21 3v5.27h-5.27"/></svg>';
@@ -821,6 +823,7 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
   final ValueNotifier<bool> _visualsReady = ValueNotifier<bool>(false);
   final ValueNotifier<bool> _hasInputText = ValueNotifier<bool>(false);
   final ValueNotifier<bool> _imeVisualsActive = ValueNotifier<bool>(false);
+  final ValueNotifier<bool> _showJumpToBottom = ValueNotifier<bool>(false);
   Timer? _openSettleTimer;
   Timer? _focusTimer;
   Timer? _focusKeepAliveTimer;
@@ -2084,6 +2087,7 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
     _visualsReady.dispose();
     _hasInputText.dispose();
     _imeVisualsActive.dispose();
+    _showJumpToBottom.dispose();
     _ctrl.removeListener(_onInputChanged);
     _ctrl.dispose();
     _focus.dispose();
@@ -2468,27 +2472,80 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
     });
     _latestUserAnchorTimer = Timer(const Duration(milliseconds: 260), () {
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        _ensureLatestUserVisible(const Duration(milliseconds: 160));
+        // If streaming has already started, follow the growing answer tail
+        // instead of pulling the viewport back up to the user bubble.
+        final hasLiveStream =
+            _msgs.any((m) => m is _AnswerMsg && m.streaming);
+        if (hasLiveStream) {
+          _followStreamingTail();
+        } else {
+          _ensureLatestUserVisible(const Duration(milliseconds: 160));
+        }
       });
     });
   }
 
-  /// Gently follow the growing bottom edge during live streaming without
-  /// snapping back if the user has scrolled up to read earlier paragraphs.
-  void _followStreamingTail() {
-    if (!mounted || !_followLatest || !_scroll.hasClients) return;
-    final position = _scroll.position;
-    if (position.isScrollingNotifier.value) return;
-    final delta = position.maxScrollExtent - position.pixels;
-    if (delta <= 1.0) return;
-    if (delta > 64.0) {
-      // User already scrolled up away from the live tail — do not yank back.
+  void _updateJumpToBottomVisibility(ScrollMetrics metrics) {
+    final shouldShow = metrics.extentAfter > 160;
+    if (_showJumpToBottom.value != shouldShow) {
+      _showJumpToBottom.value = shouldShow;
+    }
+  }
+
+  void _jumpToLatestBottom() {
+    if (!mounted || !_scroll.hasClients) return;
+    Haptics.selection();
+    _followLatest = true;
+    _showJumpToBottom.value = false;
+    final target = _scroll.position.maxScrollExtent;
+    if (AppMotion.reduceMotion(context)) {
+      _scroll.jumpTo(target);
       return;
     }
-    // Directly adjust by the tiny per-frame growth (typically 4–24 px) so the
-    // viewport glides at 60fps in lockstep with revealed lines, matching iOS
-    // Claude's streaming scroll feel.
-    position.jumpTo(position.maxScrollExtent);
+    _scroll.animateTo(
+      target,
+      duration: const Duration(milliseconds: 260),
+      curve: Curves.easeOutCubic,
+    );
+  }
+
+  /// Smoothly keep the latest streaming text above the composer while
+  /// `_followLatest` is active.
+  ///
+  /// Crucially:
+  /// - Do NOT bail out just because `delta > 84`: when a multi-line paragraph,
+  ///   table, or code block wraps in, `maxScrollExtent` can jump by > 84 px in
+  ///   a single frame — bailing out there was why users had to manually swipe
+  ///   down to see newly generated text!
+  /// - Respect user intent solely via `_followLatest` (cleared the instant
+  ///   the user drags upward in `ScrollUpdateNotification`) and an active
+  ///   manual finger drag (`_userDraggingList`).
+  bool _userDraggingList = false;
+
+  void _followStreamingTail() {
+    if (!mounted || !_scroll.hasClients) return;
+    final position = _scroll.position;
+    if (_followLatest && !_userDraggingList) {
+      final target = position.maxScrollExtent;
+      final delta = target - position.pixels;
+      if (delta > 0.5) {
+        // Gentle exponential chase per 120Hz frame so even a sudden code block
+        // or tall paragraph glides smoothly into view instead of teleporting,
+        // while tiny 1-line increments settle directly onto maxScrollExtent.
+        final next = delta <= 28.0 ? target : position.pixels + delta * 0.38;
+        position.jumpTo(next.clamp(position.minScrollExtent, target));
+        if ((target - position.pixels) > 1.0) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (mounted && _followLatest && !_userDraggingList) {
+              _followStreamingTail();
+            }
+          });
+        }
+      }
+      if (_showJumpToBottom.value) _showJumpToBottom.value = false;
+      return;
+    }
+    _updateJumpToBottomVisibility(position);
   }
 
   double _latestUserAnchorBottomPadding(double viewportHeight) {
@@ -2522,6 +2579,7 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
         ? ListView.builder(
             controller: _scroll,
             physics: const _ChatBouncingScrollPhysics(),
+            keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
             padding: padding,
             itemCount: _msgs.length,
             itemBuilder: (context, index) => KeyedSubtree(
@@ -2532,6 +2590,7 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
         : ListView(
             controller: _scroll,
             physics: const _ChatBouncingScrollPhysics(),
+            keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
             padding: padding,
             children: [
               ConstrainedBox(
@@ -2549,10 +2608,28 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
           );
     return NotificationListener<ScrollNotification>(
       onNotification: (notification) {
+        if (notification is ScrollStartNotification &&
+            notification.dragDetails != null) {
+          _userDraggingList = true;
+        } else if (notification is ScrollEndNotification) {
+          _userDraggingList = false;
+        }
+        if (notification is ScrollUpdateNotification ||
+            notification is ScrollMetricsNotification ||
+            notification is ScrollEndNotification) {
+          _updateJumpToBottomVisibility(notification.metrics);
+        }
         if (notification is ScrollUpdateNotification &&
             notification.dragDetails != null) {
-          _followLatest = notification.metrics.extentAfter < 48;
-          if (!_followLatest) _latestUserAnchorTimer?.cancel();
+          final dy = notification.dragDetails!.delta.dy;
+          if (dy > 0) {
+            // Finger dragging downward = scrolling up into history -> release auto-follow immediately.
+            _followLatest = false;
+            _latestUserAnchorTimer?.cancel();
+          } else if (notification.metrics.extentAfter < 48) {
+            // User scrolled back down to the bottom -> re-engage auto-follow.
+            _followLatest = true;
+          }
         }
         return false;
       },
@@ -3523,10 +3600,10 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
 
     void refreshStream() {
       if (refreshTimer != null) return;
-      // 对齐屏幕原生刷新率（含 90Hz/120Hz/144Hz）：下一帧 vsync 直接投喂，不再用
-      // 固定 16ms/50ms 定时器人为锁死到 60Hz；真正逐帧平滑释放由 _AnswerBubble
-      // 内的 SmoothStreamTextController (Ticker) 驱动，且只刷新单个回答气泡。
-      refreshTimer = Timer(const Duration(milliseconds: 6), () {
+      // 尽量零延迟把 SSE 新 chunk 喂给 _AnswerBubble 的 SmoothStreamTextController，
+      // 只把同微任务内连续到达的多行 SSE 合并一次（microtask / 4ms），让 120Hz
+      // Ticker 持续有平滑弹药，不积攒整块再放。
+      refreshTimer = Timer(const Duration(milliseconds: 4), () {
         refreshTimer = null;
         if (!mounted || requestExpired || !_ownsFlow(flowId)) return;
         if (liveMessage != null) {
@@ -3581,6 +3658,9 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
           streaming: true,
         );
         liveMessage = message;
+        // Subtle tactile confirmation when the first answer token arrives
+        // (matching iOS Claude's soft first-token haptic).
+        Haptics.selection();
         setState(() {
           _msgs.add(message);
         });
@@ -6007,6 +6087,14 @@ ${line('上月同期', lastStart, lastSameDayEnd, lastSameDay)}
             child: ChatReadingViewport(
               history: content,
               headerHeight: headerHeight,
+              overlay: ValueListenableBuilder<bool>(
+                valueListenable: _showJumpToBottom,
+                builder: (context, visible, _) => _JumpToBottomPill(
+                  visible: visible,
+                  streaming: _busy,
+                  onTap: _jumpToLatestBottom,
+                ),
+              ),
               composer: Padding(
                   padding: const EdgeInsets.fromLTRB(12, 0, 12, 10),
                   child: _inputBox(context, blurEnabled: !imeTransitioning)),
@@ -8486,9 +8574,8 @@ class _ClaudeActionButton extends StatelessWidget {
         button: true,
         label: tooltip,
         selected: active,
-        child: GestureDetector(
-          behavior: HitTestBehavior.opaque,
-          onTap: onTap,
+        child: PressableScale(
+          onPressed: onTap,
           child: SizedBox(
             width: kAiResponseActionTouchExtent,
             height: kAiResponseActionTouchExtent,
@@ -8663,7 +8750,9 @@ class _AnswerBubbleState extends State<_AnswerBubble>
   int _graphemeCount = 0;
   bool _liked = false;
   bool _disliked = false;
+  bool _copied = false;
   Timer? _timer;
+  Timer? _copiedResetTimer;
   late final SmoothStreamTextController _smoothStream;
   Set<String> _sourceUrlSet = const {};
 
@@ -8709,9 +8798,11 @@ class _AnswerBubbleState extends State<_AnswerBubble>
   void _onSmoothStreamTick() {
     if (!mounted) return;
     setState(() {});
-    if (widget.streaming) {
+    if (widget.streaming || _smoothStream.isFinishing) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted && widget.streaming) widget.onStreamFrame?.call();
+        if (mounted && (widget.streaming || _smoothStream.isFinishing)) {
+          widget.onStreamFrame?.call();
+        }
       });
     }
   }
@@ -8735,11 +8826,22 @@ class _AnswerBubbleState extends State<_AnswerBubble>
       return;
     }
     if (oldWidget.streaming && !widget.streaming) {
-      // Stream just finished: snap any tiny remaining smooth-reveal tail so
-      // final action bar and selectable text appear cleanly without lag.
-      _smoothStream.update(widget.text, streaming: false);
+      // Upstream finished: smoothly drain any remaining buffered tail instead
+      // of teleporting the last block onto screen in one frame.
       _graphemeCount = aiTypewriterLength(widget.text);
       _shown = _graphemeCount;
+      _smoothStream.update(
+        widget.text,
+        streaming: false,
+        smoothFinish: true,
+        onDrainComplete: () {
+          if (!mounted) return;
+          setState(() {});
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (mounted) widget.onStreamFrame?.call();
+          });
+        },
+      );
       return;
     }
     _graphemeCount = aiTypewriterLength(widget.text);
@@ -8756,9 +8858,21 @@ class _AnswerBubbleState extends State<_AnswerBubble>
   @override
   void dispose() {
     _timer?.cancel();
+    _copiedResetTimer?.cancel();
     _smoothStream.removeListener(_onSmoothStreamTick);
     _smoothStream.dispose();
     super.dispose();
+  }
+
+  void _copyAnswer(BuildContext context) {
+    Haptics.selection();
+    Clipboard.setData(ClipboardData(text: widget.text));
+    showAppToast(context, '已复制');
+    _copiedResetTimer?.cancel();
+    setState(() => _copied = true);
+    _copiedResetTimer = Timer(const Duration(milliseconds: 1400), () {
+      if (mounted) setState(() => _copied = false);
+    });
   }
 
   // 按回答语气挑一只猫。
@@ -8830,10 +8944,11 @@ class _AnswerBubbleState extends State<_AnswerBubble>
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final shownText = widget.streaming
+    final activelyStreaming = widget.streaming || _smoothStream.isFinishing;
+    final shownText = activelyStreaming
         ? _smoothStream.visibleText
         : aiTypewriterPrefix(widget.text, _shown);
-    final done = !widget.streaming && _shown >= _graphemeCount;
+    final done = !activelyStreaming && _shown >= _graphemeCount;
     // Claude-like answer typography: soft body text and restrained emphasis.
     final baseStyle = _chatBodyStyle(scheme);
     return Padding(
@@ -8847,8 +8962,13 @@ class _AnswerBubbleState extends State<_AnswerBubble>
             text: shownText,
             style: baseStyle,
             sourceUrls: _sourceUrlSet,
-            streaming: widget.streaming,
+            streaming: activelyStreaming,
           ),
+          if (activelyStreaming)
+            Padding(
+              padding: const EdgeInsets.only(top: 6),
+              child: _StreamingPulseDot(color: scheme.primary),
+            ),
           if (done) ...[
             if (widget.interrupted) ...[
               const SizedBox(height: 5),
@@ -8861,43 +8981,72 @@ class _AnswerBubbleState extends State<_AnswerBubble>
               ),
             ],
             const SizedBox(height: 4),
-            // 操作图标行（对标 Claude：裸图标、细线、浅灰）。
-            ChatAnswerActions(
-              key: const ValueKey('ai-chat-answer-actions'),
-              sourceLabel: '${widget.sources.length} 个来源',
-              source: widget.sources.isEmpty
-                  ? null
-                  : _SourceActionButton(
-                      sources: widget.sources,
-                      onTap: () => unawaited(_showSources(context))),
-              actions: [
-                _action(_icCopy, '复制', () {
-                  Clipboard.setData(ClipboardData(text: widget.text));
-                  showAppToast(context, '已复制');
-                }),
-                _action(
-                  _liked ? _icThumbUpFill : _icThumbUp,
-                  '赞同',
-                  () => setState(() {
-                    _liked = !_liked;
-                    if (_liked) _disliked = false;
+            // 操作图标行（对标 Claude：裸图标、细线、浅灰，生成结束轻柔淡入）。
+            TweenAnimationBuilder<double>(
+              tween: Tween(begin: 0.0, end: 1.0),
+              duration: AppMotion.duration(
+                context,
+                const Duration(milliseconds: 180),
+              ),
+              curve: Curves.easeOutCubic,
+              builder: (_, value, child) => Opacity(
+                opacity: value,
+                child: child,
+              ),
+              child: ChatAnswerActions(
+                key: const ValueKey('ai-chat-answer-actions'),
+                sourceLabel: '${widget.sources.length} 个来源',
+                source: widget.sources.isEmpty
+                    ? null
+                    : _SourceActionButton(
+                        sources: widget.sources,
+                        onTap: () => unawaited(_showSources(context))),
+                actions: [
+                  _action(
+                    _copied ? _icCheck : _icCopy,
+                    '复制',
+                    () => _copyAnswer(context),
+                    active: _copied,
+                  ),
+                  _action(
+                    _liked ? _icThumbUpFill : _icThumbUp,
+                    '赞同',
+                    () {
+                      Haptics.selection();
+                      setState(() {
+                        _liked = !_liked;
+                        if (_liked) _disliked = false;
+                      });
+                    },
+                    active: _liked,
+                  ),
+                  _action(
+                    _disliked ? _icThumbDownFill : _icThumbDown,
+                    '不赞同',
+                    () {
+                      Haptics.selection();
+                      setState(() {
+                        _disliked = !_disliked;
+                        if (_disliked) _liked = false;
+                      });
+                    },
+                    active: _disliked,
+                  ),
+                  if (widget.onRegenerate != null)
+                    _action(_icRetry, '重新生成', () {
+                      Haptics.selection();
+                      widget.onRegenerate!();
+                    }),
+                  _action(_icShare, '分享', () {
+                    Haptics.selection();
+                    unawaited(_shareAnswer(context));
                   }),
-                  active: _liked,
-                ),
-                _action(
-                  _disliked ? _icThumbDownFill : _icThumbDown,
-                  '不赞同',
-                  () => setState(() {
-                    _disliked = !_disliked;
-                    if (_disliked) _liked = false;
+                  _action(_icMore, '更多', () {
+                    Haptics.selection();
+                    _showMoreActions(context);
                   }),
-                  active: _disliked,
-                ),
-                if (widget.onRegenerate != null)
-                  _action(_icRetry, '重新生成', widget.onRegenerate!),
-                _action(_icShare, '分享', () => unawaited(_shareAnswer(context))),
-                _action(_icMore, '更多', () => _showMoreActions(context)),
-              ],
+                ],
+              ),
             ),
             if (widget.showMascot) ...[
               const SizedBox(height: 2),
@@ -10713,6 +10862,156 @@ class _EffortTrackPainter extends CustomPainter {
       old.isUltra != isUltra ||
       old.ultraT != ultraT ||
       old.scheme != scheme;
+}
+
+/// Floating Claude-style "scroll to latest" button shown only when the user
+/// scrolls up away from the bottom of a conversation. Uses lightweight
+/// `GlassSurface(blur: 0)` to respect the single-blur performance invariant.
+class _JumpToBottomPill extends StatelessWidget {
+  final bool visible;
+  final bool streaming;
+  final VoidCallback onTap;
+
+  const _JumpToBottomPill({
+    required this.visible,
+    required this.streaming,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final duration = AppMotion.duration(
+      context,
+      const Duration(milliseconds: 180),
+    );
+    return IgnorePointer(
+      ignoring: !visible,
+      child: AnimatedOpacity(
+        opacity: visible ? 1 : 0,
+        duration: duration,
+        curve: Curves.easeOutCubic,
+        child: AnimatedScale(
+          scale: visible ? 1 : 0.85,
+          duration: duration,
+          curve: Curves.easeOutCubic,
+          child: Semantics(
+            button: true,
+            label: '回到底部',
+            child: Tooltip(
+              message: '回到底部',
+              child: PressableScale(
+                key: const ValueKey('ai-chat-scroll-to-bottom'),
+                onPressed: onTap,
+                child: Container(
+                  width: 36,
+                  height: 36,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withValues(alpha: 0.10),
+                        blurRadius: 12,
+                        offset: const Offset(0, 3),
+                      ),
+                    ],
+                  ),
+                  child: GlassSurface(
+                    circle: true,
+                    blur: 0,
+                    opacity: 0.90,
+                    child: Center(
+                      child: Icon(
+                        Icons.keyboard_arrow_down_rounded,
+                        size: 21,
+                        color: streaming ? scheme.primary : scheme.onSurface,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Calm periodic streaming cursor dot under the live reply (finite timer-driven
+/// pulse, never `.repeat()`, pauses cleanly on `reduceMotion` / inactive ticker).
+class _StreamingPulseDot extends StatefulWidget {
+  final Color color;
+
+  const _StreamingPulseDot({required this.color});
+
+  @override
+  State<_StreamingPulseDot> createState() => _StreamingPulseDotState();
+}
+
+class _StreamingPulseDotState extends State<_StreamingPulseDot>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _pulse;
+  Timer? _timer;
+
+  @override
+  void initState() {
+    super.initState();
+    _pulse = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 900),
+    );
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _syncPulse();
+  }
+
+  void _syncPulse() {
+    _timer?.cancel();
+    if (AppMotion.reduceMotion(context) || !TickerMode.valuesOf(context).enabled) {
+      _pulse.stop();
+      _pulse.value = 0.5;
+      return;
+    }
+    if (!_pulse.isAnimating) _pulse.forward(from: 0);
+    _timer = Timer.periodic(const Duration(milliseconds: 1100), (_) {
+      if (mounted) _pulse.forward(from: 0);
+    });
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    _pulse.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: _pulse,
+      builder: (_, __) {
+        final wave = sin(_pulse.value * pi);
+        final alpha = 0.35 + 0.55 * wave;
+        final scale = 0.85 + 0.25 * wave;
+        return Transform.scale(
+          scale: scale,
+          child: Container(
+            key: const ValueKey('ai-chat-streaming-indicator'),
+            width: 8,
+            height: 8,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: widget.color.withValues(alpha: alpha),
+            ),
+          ),
+        );
+      },
+    );
+  }
 }
 
 class _CircleBtn extends StatelessWidget {

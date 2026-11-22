@@ -23,23 +23,36 @@ class SmoothStreamTextController extends ChangeNotifier {
   bool _reduceMotion = false;
   bool _disposed = false;
 
-  /// Minimum characters per second when backlog is tiny (smooth, calm glide).
-  static const double _minCharsPerSecond = 56.0;
+  /// Minimum characters per second when backlog is small — smooth, readable
+  /// Claude iOS-style cadence (~38 chars/sec, ~1 char every 2–3 frames at 120Hz).
+  static const double _minCharsPerSecond = 38.0;
 
-  /// Target catch-up window so large bursts drain smoothly within ~160 ms
-  /// rather than stalling behind fast models.
-  static const double _catchUpWindowSeconds = 0.16;
+  /// Target catch-up window (~380 ms) so even a large 80–200 char burst from
+  /// an upstream relay glides out smoothly word-by-word instead of dumping
+  /// an entire paragraph in 2–3 frames.
+  static const double _catchUpWindowSeconds = 0.38;
 
-  /// Maximum reveal rate (chars/sec) — scaled by actual frame `dtSec` so
-  /// 60Hz, 90Hz, 120Hz and 144Hz displays all run at the exact same smooth
-  /// physical velocity, with half-sized per-frame micro-steps at 120Hz.
-  static const double _maxCharsPerSecond = 1600.0;
+  /// Soft ceiling on reveal velocity (chars/sec) while streaming is active:
+  /// keeps fast relays and large proxy-flushed chunks feeling like fluid,
+  /// continuous typing (~1.8–2.0 chars per 120Hz frame max) instead of jumping
+  /// in whole blocks. Once the stream finishes (`complete()`), remaining text
+  /// accelerates gently to finish within ~280 ms instead of hard-snapping.
+  static const double _maxCharsPerSecond = 220.0;
+
+  /// Accelerated drain ceiling after upstream finishes so the tail completes
+  /// cleanly in a smooth glide without jarring block-snapping.
+  static const double _finishingCharsPerSecond = 520.0;
+
+  bool _finishing = false;
+  VoidCallback? _onDrainComplete;
 
   SmoothStreamTextController({required TickerProvider vsync}) : _vsync = vsync;
 
   String get target => _target;
 
   bool get isCatchingUp => _revealedLength < _target.length;
+
+  bool get isFinishing => _finishing && isCatchingUp;
 
   /// Visible slice aligned on UTF-16 grapheme / surrogate boundaries so
   /// emojis and CJK surrogate pairs are never split mid-code-point.
@@ -62,23 +75,45 @@ class SmoothStreamTextController extends ChangeNotifier {
 
   /// Update the authoritative upstream text buffer.
   ///
-  /// When [streaming] is false (completed, restored from history, or reduced
-  /// motion), the full text is shown immediately.
-  void update(String nextTarget, {required bool streaming}) {
+  /// - While [streaming] is true, reveals text progressively at vsync pace.
+  /// - When [streaming] transitions to false with unrevealed backlog (e.g. a
+  ///   bursty gateway flushed the final block right before `[DONE]`), pass
+  ///   [smoothFinish: true] to smoothly finish draining the tail instead of
+  ///   teleporting the rest of the answer in 1 frame.
+  void update(
+    String nextTarget, {
+    required bool streaming,
+    bool smoothFinish = false,
+    VoidCallback? onDrainComplete,
+  }) {
     if (_disposed) return;
     final previous = _target;
     _target = nextTarget;
+    _onDrainComplete = onDrainComplete;
 
-    // Non-streaming or reduced-motion: reveal immediately.
+    // Non-streaming or reduced-motion: either smoothly drain final tail or snap.
     if (!streaming || _reduceMotion) {
+      if (!_reduceMotion &&
+          smoothFinish &&
+          _revealedLength < _target.length &&
+          _target.length - _revealedLength <= 600) {
+        _finishing = true;
+        _ensureTicker();
+        return;
+      }
+      _finishing = false;
       _stopTicker();
       if (_revealedLength != _target.length || previous != _target) {
         _revealedLength = _target.length;
         _carry = 0;
         notifyListeners();
       }
+      _onDrainComplete?.call();
+      _onDrainComplete = null;
       return;
     }
+
+    _finishing = false;
 
     // If upstream replaced/shortened text (e.g. final canonical answer or
     // reset), clamp safely.
@@ -86,9 +121,9 @@ class SmoothStreamTextController extends ChangeNotifier {
       _revealedLength = _revealedLength.clamp(0, _target.length);
     }
 
-    // Tiny first chunk (1–3 chars): show immediately so time-to-first-glyph
+    // Tiny first chunk (1–2 chars): show immediately so time-to-first-glyph
     // has zero artificial delay.
-    if (previous.isEmpty && _target.length <= 4) {
+    if (previous.isEmpty && _target.length <= 2) {
       _revealedLength = _target.length;
       _carry = 0;
       notifyListeners();
@@ -102,15 +137,19 @@ class SmoothStreamTextController extends ChangeNotifier {
     }
   }
 
-  /// Snap immediately to the complete target (e.g. on stream completion).
+  /// Snap immediately to the complete target (e.g. on reduceMotion or reset).
   void snapToTarget() {
     if (_disposed) return;
+    _finishing = false;
     _stopTicker();
     if (_revealedLength != _target.length) {
       _revealedLength = _target.length;
       _carry = 0;
       notifyListeners();
     }
+    final cb = _onDrainComplete;
+    _onDrainComplete = null;
+    cb?.call();
   }
 
   void _ensureTicker() {
@@ -140,16 +179,24 @@ class SmoothStreamTextController extends ChangeNotifier {
 
     final pending = _target.length - _revealedLength;
     if (pending <= 0) {
+      _finishing = false;
       _stopTicker();
+      final cb = _onDrainComplete;
+      _onDrainComplete = null;
+      cb?.call();
       return;
     }
 
-    // Adaptive, refresh-rate-independent rate: fast enough to finish current
-    // backlog in ~160 ms, floored at _minCharsPerSecond and capped at
-    // _maxCharsPerSecond so 120Hz/144Hz frames take finer steps per tick.
+    // Adaptive, refresh-rate-independent velocity:
+    // - smooth gentle glide when backlog is small (_minCharsPerSecond)
+    // - smoothly speeds up as backlog grows, capped at _maxCharsPerSecond
+    //   so even large 100+ char proxy bursts stream out fluidly word-by-word
+    //   at 120Hz rather than popping whole paragraphs in 1-2 frames.
+    final maxRate = _finishing ? _finishingCharsPerSecond : _maxCharsPerSecond;
+    final window = _finishing ? 0.22 : _catchUpWindowSeconds;
     final rate = math
-        .max(_minCharsPerSecond, pending / _catchUpWindowSeconds)
-        .clamp(_minCharsPerSecond, _maxCharsPerSecond)
+        .max(_minCharsPerSecond, pending / window)
+        .clamp(_minCharsPerSecond, maxRate)
         .toDouble();
     _carry += rate * dtSec;
     final step = _carry.floor();
@@ -166,12 +213,20 @@ class SmoothStreamTextController extends ChangeNotifier {
       _revealedLength = nextSafe;
     }
 
+    var drained = false;
     if (_revealedLength >= _target.length) {
       _revealedLength = _target.length;
       _carry = 0;
+      _finishing = false;
       _stopTicker();
+      drained = true;
     }
     notifyListeners();
+    if (drained) {
+      final cb = _onDrainComplete;
+      _onDrainComplete = null;
+      cb?.call();
+    }
   }
 
   static int _safeCodeUnitBoundary(String text, int index) {
@@ -219,8 +274,8 @@ int computeSmoothRevealStep({
 }) {
   if (pendingChars <= 0 || dtSeconds <= 0) return 0;
   final rate = math
-      .max(56.0, pendingChars / 0.16)
-      .clamp(56.0, 1600.0)
+      .max(38.0, pendingChars / 0.38)
+      .clamp(38.0, 220.0)
       .toDouble();
   return math.min(pendingChars, math.max(1, (rate * dtSeconds).floor()));
 }

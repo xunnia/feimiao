@@ -7,6 +7,7 @@ class ChatReadingViewport extends StatefulWidget {
   final Widget composer;
   final Widget header;
   final Widget topFade;
+  final Widget? overlay;
   final double headerHeight;
   const ChatReadingViewport(
       {super.key,
@@ -14,6 +15,7 @@ class ChatReadingViewport extends StatefulWidget {
       required this.composer,
       required this.header,
       required this.topFade,
+      this.overlay,
       this.headerHeight = 56});
   @override
   State<ChatReadingViewport> createState() => _ChatReadingViewportState();
@@ -67,6 +69,13 @@ class _ChatReadingViewportState extends State<ChatReadingViewport> {
               },
               child: widget.history(EdgeInsets.only(
                   top: widget.headerHeight + 8, bottom: _composerHeight + 8)))),
+      if (widget.overlay != null)
+        Positioned(
+          left: 0,
+          right: 0,
+          bottom: _composerHeight + 10,
+          child: Center(child: widget.overlay),
+        ),
       Positioned(
           left: 0,
           right: 0,

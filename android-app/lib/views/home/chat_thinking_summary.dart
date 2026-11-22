@@ -158,6 +158,7 @@ class _ChatThinkingSummaryState extends State<ChatThinkingSummary>
                                           top: 7, right: 16, bottom: 10),
                                       child: ChatMarkdownBody(
                                           text: widget.summary,
+                                          streaming: !widget.completed,
                                           style: widget.style.copyWith(
                                               fontSize: 13, height: 1.5))))),
                           Divider(

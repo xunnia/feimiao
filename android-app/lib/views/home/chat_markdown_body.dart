@@ -1,13 +1,17 @@
+import 'dart:async';
+
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:markdown/markdown.dart' as md;
 import 'package:url_launcher/url_launcher.dart';
 
+import '../../core/haptics.dart';
 import '../../theme/app_colors.dart';
 import '../../theme/app_tokens.dart';
 import '../../widgets/app_line_icon.dart';
 import '../../widgets/app_toast.dart';
+import '../../widgets/pressable_scale.dart';
 
 /// CommonMark/GFM owns parsing; this renderer only defines the chat layout.
 class ChatMarkdownBody extends StatefulWidget {
@@ -293,7 +297,8 @@ class _ChatMarkdownBodyState extends State<ChatMarkdownBody> {
             code: node.textContent,
             language:
                 (code?.attributes['class'] ?? '').replaceFirst('language-', ''),
-            style: base);
+            style: base,
+            streaming: widget.streaming);
       case 'table':
         final rows = <md.Element>[];
         void collect(md.Element element) {
@@ -484,20 +489,53 @@ class _ChatMarkdownBodyState extends State<ChatMarkdownBody> {
   }
 }
 
-class _ChatCodeBlock extends StatelessWidget {
+class _ChatCodeBlock extends StatefulWidget {
   final String code;
   final String language;
   final TextStyle style;
+  final bool streaming;
 
   const _ChatCodeBlock({
     required this.code,
     required this.language,
     required this.style,
+    this.streaming = false,
   });
+
+  @override
+  State<_ChatCodeBlock> createState() => _ChatCodeBlockState();
+}
+
+class _ChatCodeBlockState extends State<_ChatCodeBlock> {
+  bool _copied = false;
+  Timer? _resetTimer;
+
+  @override
+  void dispose() {
+    _resetTimer?.cancel();
+    super.dispose();
+  }
+
+  void _copyCode() {
+    Haptics.selection();
+    Clipboard.setData(ClipboardData(text: widget.code));
+    showAppToast(context, '已复制');
+    _resetTimer?.cancel();
+    setState(() => _copied = true);
+    _resetTimer = Timer(const Duration(milliseconds: 1400), () {
+      if (mounted) setState(() => _copied = false);
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    final codeSpan = TextSpan(
+      children: _codeSpans(
+        widget.code.trimRight(),
+        widget.style.copyWith(fontSize: 13),
+      ),
+    );
     return Container(
         key: const ValueKey('ai-chat-code-block'),
         decoration: BoxDecoration(
@@ -510,8 +548,8 @@ class _ChatCodeBlock extends StatelessWidget {
               padding: const EdgeInsets.only(left: 12, right: 4),
               child: Row(children: [
                 Expanded(
-                    child: Text(language.isEmpty ? '代码' : language,
-                        style: style.copyWith(
+                    child: Text(widget.language.isEmpty ? '代码' : widget.language,
+                        style: widget.style.copyWith(
                             fontSize: 12,
                             color: AppTextColor.secondary(scheme)))),
                 Tooltip(
@@ -519,23 +557,24 @@ class _ChatCodeBlock extends StatelessWidget {
                     child: Semantics(
                         button: true,
                         label: '复制代码',
-                        child: InkWell(
-                            onTap: () {
-                              Clipboard.setData(ClipboardData(text: code));
-                              showAppToast(context, '已复制');
-                            },
+                        child: PressableScale(
+                            onPressed: _copyCode,
                             child: Padding(
                                 padding: const EdgeInsets.all(10),
-                                child: AppLineIcon(AppLineIcons.copy,
-                                    size: 17,
-                                    color: AppTextColor.secondary(scheme)))))),
+                                child: _copied
+                                    ? Icon(Icons.check_rounded,
+                                        size: 17, color: scheme.primary)
+                                    : AppLineIcon(AppLineIcons.copy,
+                                        size: 17,
+                                        color: AppTextColor.secondary(
+                                            scheme)))))),
               ])),
           SingleChildScrollView(
               scrollDirection: Axis.horizontal,
               padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
-              child: SelectableText.rich(TextSpan(
-                  children: _codeSpans(
-                      code.trimRight(), style.copyWith(fontSize: 13))))),
+              child: widget.streaming
+                  ? Text.rich(codeSpan)
+                  : SelectableText.rich(codeSpan)),
         ]));
   }
 }

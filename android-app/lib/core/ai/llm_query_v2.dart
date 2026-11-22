@@ -877,6 +877,10 @@ $transactionsText''';
           ..headers.addAll(headers)
           ..headers.putIfAbsent('Accept', () => 'text/event-stream')
           ..headers.putIfAbsent('Cache-Control', () => 'no-cache')
+          // Disable HTTP gzip buffering on SSE streams: gzip compressors wait
+          // for multi-kilobyte blocks before flushing, which makes upstream
+          // tokens arrive in huge chunks instead of token-by-token.
+          ..headers['Accept-Encoding'] = 'identity'
           ..body = jsonEncode(requestBody);
         resp = await streamTransport.send(
           request,
