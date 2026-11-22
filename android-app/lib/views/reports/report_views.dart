@@ -204,9 +204,7 @@ class _ReportLibrarySheetState extends State<_ReportLibrarySheet> {
 
   @override
   Widget build(BuildContext context) {
-    context.select<AppRepository, (int, (int, int))>(
-      (r) => (r.chatViewVersion, r.aiViewVersion),
-    );
+    context.select<AppRepository, (int, int, int)>((r) => r.chatViewVersion);
     final repo = context.read<AppRepository>();
     final reports = repo.reports
         .where((r) => _type == null || r.type == _type)

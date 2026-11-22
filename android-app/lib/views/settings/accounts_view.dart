@@ -249,10 +249,14 @@ class _AccountsViewState extends State<AccountsView> {
                 ),
               ),
               Expanded(
+                // 只对新切入页做轻量淡入，退出页立即移除，避免快速来回切换时两份
+                // TextField 同时挂载同一 SearchController 或叠加两份重树绘制。
                 child: AnimatedSwitcher(
                   duration: AppMotion.duration(context, AppMotion.fast),
+                  reverseDuration: Duration.zero,
                   switchInCurve: Curves.easeOutCubic,
-                  switchOutCurve: Curves.easeOutCubic,
+                  layoutBuilder: (currentChild, _) =>
+                      currentChild ?? const SizedBox.shrink(),
                   child: KeyedSubtree(
                     key: ValueKey(_view),
                     child: switch (_view) {

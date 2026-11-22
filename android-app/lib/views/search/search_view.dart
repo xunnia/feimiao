@@ -173,6 +173,13 @@ class _SearchViewState extends State<SearchView> {
         _lastFilterKey == filterKey) {
       return;
     }
+    setState(() {
+      _recomputeFilterSync(repo);
+    });
+  }
+
+  void _recomputeFilterSync(AppRepository repo) {
+    final filterKey = _filterKey();
     _lastFilterRevision = repo.financialRevision;
     _lastFilterKey = filterKey;
     final q = _q.trim();
@@ -216,19 +223,16 @@ class _SearchViewState extends State<SearchView> {
         if (amount > Decimal.zero) incN++;
       }
     }
-    final secs = groupTxnsByDay(r);
-    setState(() {
-      _results = r;
-      _sections = secs;
-      _summary = (
-        exp: exp,
-        inc: inc,
-        xfer: xfer,
-        expN: expN,
-        incN: incN,
-        xferN: xferN,
-      );
-    });
+    _results = r;
+    _sections = groupTxnsByDay(r);
+    _summary = (
+      exp: exp,
+      inc: inc,
+      xfer: xfer,
+      expN: expN,
+      incN: incN,
+      xferN: xferN,
+    );
   }
 
   static final RegExp _searchDigitOrCurrencyPattern = RegExp(r'[0-9¥￥.,]');
@@ -300,6 +304,11 @@ class _SearchViewState extends State<SearchView> {
       (r) => r.financialViewVersion,
     );
     final repo = context.read<AppRepository>();
+    // context.select 变化不会再次触发 didChangeDependencies；
+    // 当后台/编辑页改了账单导致 financialRevision 推进时，同步重算筛选结果与汇总。
+    if (_active && _lastFilterRevision != repo.financialRevision) {
+      _recomputeFilterSync(repo);
+    }
     final showSummary = _active && _results.isNotEmpty;
     final topChromeHeight =
         _searchTopFilterHeight + (showSummary ? _searchTopSummaryHeight : 0);

@@ -331,7 +331,6 @@ class _RecurringEditSheetState extends State<_RecurringEditSheet> {
                           ],
                           value: _kind,
                           onChanged: (v) {
-                            Haptics.selection();
                             setState(() {
                               _kind = v;
                               _categoryId = null;
@@ -493,7 +492,6 @@ class _RecurringEditSheetState extends State<_RecurringEditSheet> {
                     ],
                     value: _period,
                     onChanged: (v) {
-                      Haptics.selection();
                       setState(() => _period = v);
                     },
                   ),
@@ -534,7 +532,6 @@ class _RecurringEditSheetState extends State<_RecurringEditSheet> {
                     ],
                     value: _endMode,
                     onChanged: (v) {
-                      Haptics.selection();
                       setState(() {
                         _endMode = v;
                         if (v == _RecurringEndMode.date) {

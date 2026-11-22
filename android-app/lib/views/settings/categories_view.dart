@@ -77,7 +77,6 @@ class _CategoriesViewState extends State<CategoriesView> {
                 ],
                 value: _kind,
                 onChanged: (v) {
-                  Haptics.selection();
                   setState(() => _kind = v);
                 },
               ),

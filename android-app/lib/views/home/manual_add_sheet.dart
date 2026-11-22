@@ -263,7 +263,6 @@ class _ManualAddSheetState extends State<ManualAddSheet> {
   void _onKindChanged(TransactionKind kind) {
     if (kind == _kind) return;
     final repo = context.read<AppRepository>();
-    Haptics.selection();
     setState(() {
       _kind = kind;
       _panelParentId = null;

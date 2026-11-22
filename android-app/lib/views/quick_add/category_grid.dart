@@ -477,6 +477,7 @@ class HierarchicalSubcategoryPanel extends StatelessWidget {
               final selected = category.id == selectedId;
               return PressableScale(
                 key: ValueKey('category-child-${category.id}'),
+                haptic: null,
                 onPressed: () {
                   HapticFeedback.selectionClick();
                   onSelected(category);

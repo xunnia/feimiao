@@ -99,15 +99,22 @@ abstract final class ResponsesProtocol {
     if (entry) {
       final format = chatBody['response_format'];
       final schema = chatBody['response_schema'];
-      if (format is Map && format['type'] == 'json_object' && schema is Map) {
-        body['text'] = {
-          'format': {
-            'type': 'json_schema',
-            'name': 'codex_output_schema',
-            'strict': true,
-            'schema': Map<String, dynamic>.from(schema),
-          },
-        };
+      if (format is Map && format['type'] == 'json_object') {
+        if (schema is Map) {
+          body['text'] = {
+            'format': {
+              'type': 'json_schema',
+              'name': 'codex_output_schema',
+              'strict': true,
+              'schema': Map<String, dynamic>.from(schema),
+            },
+          };
+        } else if (!codex) {
+          // 公共 Responses 通道在无 strict schema（如动态商户键的 classifyMerchants）时保留 json_object 约束。
+          body['text'] = {
+            'format': {'type': 'json_object'},
+          };
+        }
       }
     } else {
       final tools = config.responsesWebSearchTools;

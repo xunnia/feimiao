@@ -425,7 +425,6 @@ class _BudgetRuleSheetState extends State<BudgetRuleSheet> {
                       items: _units,
                       value: _unit,
                       onChanged: (v) {
-                        Haptics.selection();
                         setState(() => _unit = v);
                       },
                     ),
@@ -442,7 +441,6 @@ class _BudgetRuleSheetState extends State<BudgetRuleSheet> {
                         items: const [(false, '一直有效'), (true, '选日期')],
                         value: _dated,
                         onChanged: (v) {
-                          Haptics.selection();
                           setState(() {
                             _dated = v;
                             _error = null;
@@ -491,7 +489,6 @@ class _BudgetRuleSheetState extends State<BudgetRuleSheet> {
                           ],
                           value: _funding,
                           onChanged: (v) {
-                            Haptics.selection();
                             setState(() => _funding = v);
                           },
                         ),

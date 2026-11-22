@@ -522,6 +522,13 @@ class _ChatMemoryState {
   int databaseGeneration;
 
   void reset({required bool restored, int? databaseGeneration}) {
+    for (final msg in history) {
+      if (msg is _ThinkingMsg) {
+        msg.disposeLiveNotifier();
+      } else if (msg is _AnswerMsg) {
+        msg.disposeLiveNotifier();
+      }
+    }
     history.clear();
     rowIdsInMemory.clear();
     pendingSignatures.clear();
@@ -1127,6 +1134,10 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
     }
     _observedDatabaseGeneration = generation;
     _observedSessionEpoch = epoch;
+    if (_activeStreamTaskId != null) {
+      LlmQueryV2.cancel(_activeStreamTaskId!);
+      _activeStreamTaskId = null;
+    }
     _activeFlowId = null;
     _backgroundFlowId = null;
     _thinkingTickerFlowId = null;
@@ -2997,7 +3008,12 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
     // 仍使用确定性附着流程，避免离线兜底把退款写成普通收入。
     final homeRefund = widget.recordOnly ? _matchRefund(repo, text) : null;
     if (homeRefund?.isRefundMutation == true) {
-      await _applyRefund(homeRefund!, repo, flowId: flowId);
+      await _applyRefund(
+        homeRefund!,
+        repo,
+        flowId: flowId,
+        runId: recordRun?.id,
+      );
       return;
     }
     final hint = !aiConfig.hasCredential
@@ -3451,14 +3467,17 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
     void rememberSources(Iterable<AiWebSource> sources) {
       if (requestExpired || !_ownsFlow(flowId)) return;
       final seen = receivedSources.map((source) => source.url).toSet();
+      var added = false;
       for (final source in sources) {
         if (source.url.trim().isEmpty || !seen.add(source.url)) continue;
         receivedSources.add(source);
+        added = true;
       }
-      if (liveMessage != null) {
+      if (liveMessage != null && added) {
         liveMessage!.sources
           ..clear()
           ..addAll(receivedSources);
+        liveMessage!.notifyLiveChange();
       }
     }
 
@@ -3480,6 +3499,7 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
         final message = _AnswerMsg(
           chunks.toString(),
           question: question,
+          sources: List<AiWebSource>.from(receivedSources),
           // 内容已经由 SSE 抵达，不能再从头播放一次本地打字机动画。
           shown: true,
           streaming: true,
@@ -3507,9 +3527,10 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
       onSources: (sources) {
         if (requestExpired || !_ownsFlow(flowId)) return;
         rememberSources(sources);
-        final thinking = _currentThinkingMsg();
+        final thinking = _currentThinkingMsg(flowId);
         if (thinking != null && _ownsFlow(flowId)) {
           _addThinkingSources(thinking, sources);
+          thinking.notifyLiveChange();
         }
         _recordRunEvent(
           repository ?? _chatRepository,
@@ -6824,9 +6845,17 @@ class _ThinkingMsg extends _Msg {
   final List<_ThinkingStep> steps;
   final List<AiWebSource> sources = <AiWebSource>[];
   final ValueNotifier<int> liveRevision = ValueNotifier<int>(0);
+  bool _liveDisposed = false;
 
   void notifyLiveChange() {
+    if (_liveDisposed) return;
     liveRevision.value = liveRevision.value + 1;
+  }
+
+  void disposeLiveNotifier() {
+    if (_liveDisposed) return;
+    _liveDisposed = true;
+    liveRevision.dispose();
   }
 
   _ThinkingMsg(
@@ -6897,9 +6926,17 @@ class _AnswerMsg extends _Msg {
   bool interrupted = false;
   final _ThinkingMsg? thinking;
   final ValueNotifier<int> liveRevision = ValueNotifier<int>(0);
+  bool _liveDisposed = false;
 
   void notifyLiveChange() {
+    if (_liveDisposed) return;
     liveRevision.value = liveRevision.value + 1;
+  }
+
+  void disposeLiveNotifier() {
+    if (_liveDisposed) return;
+    _liveDisposed = true;
+    liveRevision.dispose();
   }
 
   _AnswerMsg(

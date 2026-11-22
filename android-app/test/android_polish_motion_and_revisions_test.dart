@@ -36,7 +36,7 @@ void main() {
       addTearDown(repo.closeForTest);
 
       final before = repo.financialViewVersion;
-      final chatBefore = repo.chatViewVersion;
+      final chatBefore = repo.chatRevision;
       final aiBefore = repo.aiRevision;
       final settingsBefore = repo.settingsViewVersion;
 
@@ -48,7 +48,7 @@ void main() {
         consent: true,
       );
 
-      expect(repo.chatViewVersion, greaterThan(chatBefore));
+      expect(repo.chatRevision, greaterThan(chatBefore));
       expect(repo.aiRevision, greaterThan(aiBefore));
       expect(repo.settingsViewVersion, settingsBefore);
       expect(repo.financialViewVersion, before);

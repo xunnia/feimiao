@@ -39,6 +39,38 @@ class LlmEntryParser {
     return _timeoutSeconds;
   }
 
+  /// OpenAI o1/o3/o4-mini 等 Chat Completions 推理模型不接受旧字段 `max_tokens`，
+  /// 需改用 `max_completion_tokens`；同时在开启推理强度时给出更宽裕的输出额度，
+  /// 避免推理 token 吃满预算截断 JSON。
+  static bool _usesMaxCompletionTokens(String model) => RegExp(
+        r'(^|[/ :])o[134](?:[-_.]|$)',
+        caseSensitive: false,
+      ).hasMatch(model.trim());
+
+  static Map<String, dynamic> _maxTokensField({
+    required AiProviderConfig provider,
+    required String model,
+    required bool heavy,
+  }) {
+    final base = heavy ? 4096 : 2048;
+    final budget = switch (provider.reasoningEffort) {
+      AiReasoningEffort.none => base,
+      AiReasoningEffort.minimal || AiReasoningEffort.low => heavy ? 4096 : 3200,
+      AiReasoningEffort.medium => 4096,
+      AiReasoningEffort.high => 6144,
+      AiReasoningEffort.xhigh ||
+      AiReasoningEffort.max ||
+      AiReasoningEffort.ultra =>
+        8192,
+    };
+    final key = !provider.shouldUseClaudeMessages &&
+            !provider.shouldUseResponses &&
+            _usesMaxCompletionTokens(model)
+        ? 'max_completion_tokens'
+        : 'max_tokens';
+    return {key: budget};
+  }
+
   /// 宽容抽取模型返回的 JSON 对象：
   /// 1) 去掉 UTF-8 BOM 与 `<think>...</think>` 思考块；
   /// 2) 优先直接 `jsonDecode`；
@@ -376,7 +408,11 @@ ${hints.map((h) => '${h.phrase}→${h.categoryKey}').join('、')}''';
         ],
         'response_format': {'type': 'json_object'},
         'response_schema': _recordOutputSchema,
-        'max_tokens': heavyRequest ? 4096 : 2048,
+        ..._maxTokensField(
+          provider: provider,
+          model: model,
+          heavy: heavyRequest,
+        ),
         'temperature': 0.2, // 抽取类任务调低，减少同句不同解析的随机性
         'stream': false,
       },
@@ -481,7 +517,11 @@ $catList
           {'role': 'user', 'content': merchantLines},
         ],
         'response_format': {'type': 'json_object'},
-        'max_tokens': 2048,
+        ..._maxTokensField(
+          provider: provider,
+          model: model,
+          heavy: items.length > 20,
+        ),
         'temperature': 0.2,
         'stream': false,
       },

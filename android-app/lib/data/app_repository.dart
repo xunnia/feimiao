@@ -345,8 +345,10 @@ class AppRepository extends ChangeNotifier {
       (financialRevision, settingsRevision, isHydrating);
 
   /// 供聊天会话列表、报告库等聊天域视图按域订阅的版本指纹：
-  /// 屏蔽无关的纯账务微调或无关显示设置抖动（保留财务修订仅在需要时各自选读）。
-  int get chatViewVersion => chatRevision;
+  /// 附带 [financialRevision] 与 [aiRevision] 以覆盖恢复备份、删除账本或删除 AI 账号
+  /// 触发的会话重绑与全量重载，同时仍屏蔽纯显示设置抖动。
+  (int, int, int) get chatViewVersion =>
+      (chatRevision, financialRevision, aiRevision);
 
   /// 供 AI 账号、任务诊断、可控记忆、定时报表等 AI 域视图按域订阅的版本指纹。
   /// 附带 [financialRevision] 的覆盖原因：测试替身与兼容路径调用 `notifyListeners()`
@@ -5996,6 +5998,7 @@ class AppRepository extends ChangeNotifier {
     _categoriesViewCache = null;
     _rankedCategoriesCache.clear();
     _rankedChildrenCache.clear();
+    _budgetRuleMonthCache.clear();
     _invalidateBookViewCaches();
   }
 

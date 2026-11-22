@@ -1,7 +1,9 @@
 import 'dart:io';
 
 import 'package:decimal/decimal.dart';
+import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:provider/provider.dart';
 import 'package:qingji/core/ai/ai_provider_config.dart';
 import 'package:qingji/core/ai/llm_entry_parser.dart';
 import 'package:qingji/core/ai/merchant_category.dart';
@@ -17,6 +19,8 @@ import 'package:qingji/core/models/transaction_kind.dart';
 import 'package:qingji/core/notification_parse.dart';
 import 'package:qingji/core/transaction_time.dart';
 import 'package:qingji/data/app_repository.dart';
+import 'package:qingji/theme/app_colors.dart';
+import 'package:qingji/views/search/search_view.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 void main() {
@@ -269,6 +273,80 @@ void main() {
       expect(res.budgetCents, 300000);
       expect(res.carryInCents, 0);
       expect(res.spentCents, 12000);
+    });
+
+    testWidgets('SearchView 在交易变更后立即刷新列表与汇总（不依赖 didChangeDependencies）',
+        (tester) async {
+      late Directory dir;
+      late AppRepository repo;
+      late int txId;
+      await tester.runAsync(() async {
+        sqfliteFfiInit();
+        databaseFactory = databaseFactoryFfi;
+        dir = await Directory.systemTemp.createTemp('feimiao_search_live_');
+        await databaseFactory.setDatabasesPath(dir.path);
+        repo = AppRepository();
+        await repo.init();
+        final cat = repo.categories
+            .firstWhere((c) => c.kind == TransactionKind.expense && !c.hidden);
+        final acc = repo.transactionAccounts.first;
+        txId = await repo.addTransaction(
+          kind: TransactionKind.expense,
+          amount: Decimal.parse('32'),
+          categoryId: cat.id,
+          accountId: acc.id,
+          note: '拿铁咖啡',
+          date: DateTime(2026, 8, 20, 10, 0),
+        );
+      });
+      addTearDown(() async {
+        await tester.runAsync(() async {
+          await repo.closeForTest();
+          await dir.delete(recursive: true);
+        });
+      });
+
+      await tester.pumpWidget(
+        ChangeNotifierProvider<AppRepository>.value(
+          value: repo,
+          child: MaterialApp(
+            theme: AppTheme.light(),
+            home: const SearchView(),
+          ),
+        ),
+      );
+      await tester.enterText(find.byType(TextField), '拿铁');
+      await tester.pump(const Duration(milliseconds: 350));
+      expect(find.text('拿铁咖啡'), findsOneWidget);
+
+      // 删除该笔交易后，SearchView 应通过 financialViewVersion 自动刷新移除陈旧条目。
+      await tester.runAsync(() => repo.deleteTransaction(txId));
+      await tester.pump();
+      expect(find.text('拿铁咖啡'), findsNothing);
+    });
+
+    test('公共 Responses classifyMerchants 无 schema 时保留 json_object 约束', () {
+      const config = AiProviderConfig(
+        type: AiProviderType.custom,
+        apiKey: 'sk-test',
+        baseUrl: 'https://api.openai.com/v1',
+        model: 'gpt-5',
+        endpointType: AiEndpointType.responses,
+      );
+      final body = ResponsesProtocol.bodyFromChat(
+        const {
+          'model': 'gpt-5',
+          'messages': [
+            {'role': 'user', 'content': '瑞幸咖啡'},
+          ],
+          'response_format': {'type': 'json_object'},
+        },
+        config,
+        kind: ResponsesRequestKind.entry,
+      );
+      expect(body['text'], {
+        'format': {'type': 'json_object'},
+      });
     });
   });
 }

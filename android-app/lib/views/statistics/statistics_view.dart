@@ -198,7 +198,6 @@ class _StatisticsViewState extends State<StatisticsView> {
   }
 
   void _onRangeChanged(_StatRange r) {
-    Haptics.selection();
     setState(() => _range = r);
     // 首次进自定义、还没区间 → 落一个默认区间并持久化（界面立刻有两个日期字段）。
     if (r == _StatRange.custom && _customRange == null) {
@@ -250,10 +249,13 @@ class _StatisticsViewState extends State<StatisticsView> {
                 ),
               ),
               Expanded(
+                // 仅淡入新维度，退出页不保留在栈里同时绘制两套重型图表。
                 child: AnimatedSwitcher(
                   duration: AppMotion.duration(context, AppMotion.fast),
+                  reverseDuration: Duration.zero,
                   switchInCurve: Curves.easeOutCubic,
-                  switchOutCurve: Curves.easeOutCubic,
+                  layoutBuilder: (currentChild, _) =>
+                      currentChild ?? const SizedBox.shrink(),
                   child: KeyedSubtree(
                     key: ValueKey(_range),
                     child: _buildContent(records, repo),
@@ -1035,7 +1037,6 @@ class _TrendCardState extends State<_TrendCard> {
           value: _showIncome,
           onChanged: (v) {
             if (v == _showIncome) return;
-            Haptics.selection();
             setState(() => _showIncome = v);
           },
         ),
