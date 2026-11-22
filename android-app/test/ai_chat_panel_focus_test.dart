@@ -464,7 +464,7 @@ void main() {
       find.byKey(const ValueKey('ai-chat-input-shell')),
     );
     expect(inputShell.padding, AppGlassInputShell.standardPadding);
-    expect(inputShell.opacity, 0.4);
+    expect(inputShell.opacity, 0.78);
     final initialBlur = inputShell.blur;
 
     await tester.pump(const Duration(milliseconds: 4200));
@@ -476,7 +476,7 @@ void main() {
     );
     expect(settledShell.blur, initialBlur);
     expect(settledShell.padding, AppGlassInputShell.standardPadding);
-    expect(settledShell.opacity, 0.4);
+    expect(settledShell.opacity, 0.78);
     expect(settledField.focusNode, same(field.focusNode));
     expect(settledField.focusNode?.hasFocus, isTrue);
     expect(

@@ -173,7 +173,18 @@ void main() {
     final image = await _image(tester);
     final data = (await tester.runAsync(() => image.toByteData()))!;
     expect(_difference(data, image.width, 180, 500, Colors.black), 0);
-    expect(_difference(data, image.width, 180, 640, const Color(0xFF808080)),
+    // Above the composer top edge, history begins fading smoothly.
+    expect(
+      _difference(data, image.width, 180, 560, Colors.black),
+      greaterThan(20),
+    );
+    expect(
+      _difference(data, image.width, 180, 560, Colors.white),
+      greaterThan(20),
+    );
+    // Inside the composer typing zone, scrolled history is fully faded out so
+    // background lines never bleed through the typed text or model bar.
+    expect(_difference(data, image.width, 180, 640, Colors.white),
         lessThanOrEqualTo(1));
     expect(_difference(data, image.width, 180, 739, Colors.white),
         lessThanOrEqualTo(1));

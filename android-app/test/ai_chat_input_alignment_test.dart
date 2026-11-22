@@ -135,7 +135,7 @@ void main() {
     );
     expect(shell.padding, AppGlassInputShell.standardPadding);
     expect(shell.blur, 10);
-    expect(shell.opacity, 0.4);
+    expect(shell.opacity, 0.78);
     expect(
       find.byKey(const ValueKey('ai-chat-model-pill')),
       findsOneWidget,

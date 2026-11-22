@@ -35,10 +35,19 @@ class _ChatReadingViewportState extends State<ChatReadingViewport> {
           child: ShaderMask(
               blendMode: BlendMode.dstIn,
               shaderCallback: (bounds) {
-                final start = bounds.height <= 0
+                final h = bounds.height;
+                final start = h <= 0
                     ? 0.0
-                    : ((bounds.height - _composerHeight - 20) / bounds.height)
+                    : ((h - _composerHeight - 24) / h)
                         .clamp(0.0, 1.0)
+                        .toDouble();
+                // Fade scrolled history out quickly once it passes under the
+                // top edge of the composer shell so background lines cannot
+                // bleed through the typed text or model bar.
+                final end = h <= 0
+                    ? 1.0
+                    : ((h - _composerHeight * 0.72) / h)
+                        .clamp(start, 1.0)
                         .toDouble();
                 return LinearGradient(
                     begin: Alignment.topCenter,
@@ -46,12 +55,14 @@ class _ChatReadingViewportState extends State<ChatReadingViewport> {
                     colors: const [
                       Colors.black,
                       Colors.black,
-                      Colors.transparent
+                      Colors.transparent,
+                      Colors.transparent,
                     ],
                     stops: [
                       0,
                       start,
-                      1
+                      end,
+                      1,
                     ]).createShader(bounds);
               },
               child: widget.history(EdgeInsets.only(

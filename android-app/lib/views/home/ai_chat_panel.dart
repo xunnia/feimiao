@@ -255,12 +255,34 @@ class _ChatBouncingScrollPhysics extends BouncingScrollPhysics {
   }
 
   @override
-  double applyBoundaryConditions(ScrollMetrics position, double value) {
+  double applyPhysicsToUserOffset(ScrollMetrics position, double offset) {
+    final adjusted = super.applyPhysicsToUserOffset(position, offset);
     final lower = position.minScrollExtent - kAiChatMaxOverscroll;
     final upper = position.maxScrollExtent + kAiChatMaxOverscroll;
-    if (value < lower) return value - lower;
-    if (value > upper) return value - upper;
-    return 0;
+    // ScrollPositionWithSingleContext applies `pixels - adjusted`. Cap the
+    // user drag inside [lower, upper] here instead of rejecting via
+    // applyBoundaryConditions: a non-zero boundary rejection during a
+    // ballistic fling makes BallisticScrollActivity call goIdle() while still
+    // outOfRange, leaving the list frozen/hovering past the edge instead of
+    // springing back.
+    final nextPixels = (position.pixels - adjusted).clamp(lower, upper);
+    return position.pixels - nextPixels;
+  }
+
+  @override
+  Simulation? createBallisticSimulation(
+    ScrollMetrics position,
+    double velocity,
+  ) {
+    final simulation = super.createBallisticSimulation(position, velocity);
+    if (simulation == null) return null;
+    final lower = position.minScrollExtent - kAiChatMaxOverscroll;
+    final upper = position.maxScrollExtent + kAiChatMaxOverscroll;
+    return _CappedOverscrollSimulation(
+      simulation,
+      minExtent: lower,
+      maxExtent: upper,
+    );
   }
 
   @override
@@ -273,6 +295,31 @@ class _ChatBouncingScrollPhysics extends BouncingScrollPhysics {
         stiffness: 155,
         damping: 14.5,
       );
+}
+
+class _CappedOverscrollSimulation extends Simulation {
+  final Simulation _inner;
+  final double minExtent;
+  final double maxExtent;
+
+  _CappedOverscrollSimulation(
+    this._inner, {
+    required this.minExtent,
+    required this.maxExtent,
+  }) : super(tolerance: _inner.tolerance);
+
+  @override
+  double x(double time) => _inner.x(time).clamp(minExtent, maxExtent);
+
+  @override
+  double dx(double time) {
+    final raw = _inner.x(time);
+    if (raw <= minExtent || raw >= maxExtent) return 0;
+    return _inner.dx(time);
+  }
+
+  @override
+  bool isDone(double time) => _inner.isDone(time);
 }
 
 @visibleForTesting
@@ -6266,7 +6313,7 @@ ${line('上月同期', lastStart, lastSameDayEnd, lastSameDay)}
         // unification. Opacity and dimensions remain shared with the home bar.
         blur: 10,
         blurEnabled: blurEnabled,
-        opacity: 0.4,
+        opacity: 0.78,
         padding: AppGlassInputShell.standardPadding,
         child: Column(
           mainAxisSize: MainAxisSize.min,

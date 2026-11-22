@@ -33,7 +33,7 @@ class AppGlassInputShell extends StatelessWidget {
     this.radius = 28,
     this.blur = 6,
     this.blurEnabled = true,
-    this.opacity = 0.4,
+    this.opacity = 0.78,
   });
 
   @override
@@ -41,6 +41,11 @@ class AppGlassInputShell extends StatelessWidget {
     final scheme = Theme.of(context).colorScheme;
     final effectiveBlur =
         blurEnabled && blur > 0 && !MediaQuery.disableAnimationsOf(context);
+    // When live backdrop blur is paused (IME open/animating or reduce-motion),
+    // raise the surface fill so scrolled chat text behind the shell never
+    // bleeds through and degrades typing legibility.
+    final effectiveOpacity =
+        effectiveBlur ? opacity : opacity.clamp(0.88, 1.0).toDouble();
 
     return Container(
       decoration: BoxDecoration(
@@ -63,7 +68,7 @@ class AppGlassInputShell extends StatelessWidget {
             child: Container(
               padding: padding,
               decoration: BoxDecoration(
-                color: scheme.surface.withValues(alpha: opacity),
+                color: scheme.surface.withValues(alpha: effectiveOpacity),
                 borderRadius: BorderRadius.circular(radius),
               ),
               child: child,

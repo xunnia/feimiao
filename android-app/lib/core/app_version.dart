@@ -2,8 +2,8 @@ class AppVersion {
   AppVersion._();
 
   static const String name = '肥喵记账';
-  static const String version = '1.319.0';
-  static const int buildNumber = 334;
+  static const String version = '1.320.0';
+  static const int buildNumber = 335;
 
   static const String display = 'v$version';
   static const String fullDisplay = 'v$version ($buildNumber)';
