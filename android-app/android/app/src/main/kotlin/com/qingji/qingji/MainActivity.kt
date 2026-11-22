@@ -44,6 +44,37 @@ class MainActivity : FlutterActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         startupStartedAtMs = SystemClock.elapsedRealtime()
         super.onCreate(savedInstanceState)
+        preferHighestDisplayRefreshRate()
+    }
+
+    /// Ask Android / OEM display managers (MIUI, HyperOS, ColorOS, OneUI, Pixel)
+    /// to pick the highest supported refresh rate at the current resolution
+    /// (e.g. 120Hz / 144Hz instead of defaulting a Flutter SurfaceView to 60Hz).
+    private fun preferHighestDisplayRefreshRate() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return
+        try {
+            val currentDisplay = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                display
+            } else {
+                @Suppress("DEPRECATION")
+                windowManager.defaultDisplay
+            } ?: return
+            val active = currentDisplay.mode
+            val best = currentDisplay.supportedModes
+                .filter {
+                    it.physicalWidth == active.physicalWidth &&
+                        it.physicalHeight == active.physicalHeight
+                }
+                .maxByOrNull { it.refreshRate }
+                ?: return
+            if (best.modeId != active.modeId) {
+                val attrs = window.attributes
+                attrs.preferredDisplayModeId = best.modeId
+                window.attributes = attrs
+            }
+        } catch (e: Exception) {
+            Log.w("FeimiaoDisplay", "Failed to request high refresh rate: ${e.message}")
+        }
     }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {

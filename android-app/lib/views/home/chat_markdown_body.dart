@@ -15,11 +15,18 @@ class ChatMarkdownBody extends StatefulWidget {
   final TextStyle style;
   final Set<String> sourceUrls;
 
+  /// When true (live SSE streaming), uses lightweight [Text.rich] instead of
+  /// [SelectableText.rich] and caches already-settled top-level paragraphs so
+  /// 60fps streaming stays jank-free. Switches back to full selectable text
+  /// as soon as the stream completes.
+  final bool streaming;
+
   const ChatMarkdownBody({
     super.key,
     required this.text,
     required this.style,
     this.sourceUrls = const {},
+    this.streaming = false,
   });
 
   @override
@@ -29,6 +36,12 @@ class ChatMarkdownBody extends StatefulWidget {
 class _ChatMarkdownBodyState extends State<ChatMarkdownBody> {
   static final RegExp _numericPattern = RegExp(r'[+\-￥¥]?\d[\d,]*(?:\.\d+)?%?');
   late List<md.Node> _nodes;
+  String _settledPrefix = '';
+  List<md.Node> _settledNodes = const [];
+  List<Widget>? _cachedSettledWidgets;
+  TextStyle? _cachedSettledStyle;
+  Brightness? _cachedSettledBrightness;
+  TextScaler? _cachedSettledScaler;
   final _links = <String, TapGestureRecognizer>{};
   List<RegExp> _sourceUrlPatterns = const [];
 
@@ -45,13 +58,17 @@ class _ChatMarkdownBodyState extends State<ChatMarkdownBody> {
     if (!_sameUrls(oldWidget.sourceUrls, widget.sourceUrls)) {
       _compileSourcePatterns();
     }
-    if (oldWidget.text != widget.text) _parse();
+    if (oldWidget.text != widget.text ||
+        oldWidget.streaming != widget.streaming) {
+      _parse();
+    }
   }
 
   static bool _sameUrls(Set<String> a, Set<String> b) =>
       a.length == b.length && a.containsAll(b);
 
   void _compileSourcePatterns() {
+    _cachedSettledWidgets = null;
     if (widget.sourceUrls.isEmpty) {
       _sourceUrlPatterns = const [];
       return;
@@ -62,10 +79,89 @@ class _ChatMarkdownBodyState extends State<ChatMarkdownBody> {
     ];
   }
 
+  /// Find the last safe top-level paragraph boundary (`\n\n`) outside any open
+  /// fenced code block (``` / ~~~) so completed paragraphs can be parsed once
+  /// and cached during live streaming.
+  static int _safeParagraphSplitOffset(String text) {
+    var fence = '';
+    var lineStart = 0;
+    var lastSplit = 0;
+    final len = text.length;
+    while (lineStart < len) {
+      final nl = text.indexOf('\n', lineStart);
+      final lineEnd = nl < 0 ? len : nl;
+      final line = text.substring(lineStart, lineEnd).trimLeft();
+      if (fence.isEmpty) {
+        if (line.startsWith('```')) {
+          fence = '```';
+        } else if (line.startsWith('~~~')) {
+          fence = '~~~';
+        } else if (line.isEmpty && nl >= 0 && nl + 1 < len) {
+          // Blank line outside a fence separates top-level blocks.
+          lastSplit = nl + 1;
+        }
+      } else if (line.startsWith(fence)) {
+        fence = '';
+      }
+      if (nl < 0) break;
+      lineStart = nl + 1;
+    }
+    return lastSplit;
+  }
+
   void _parse() {
-    final document =
+    final text = widget.text;
+    if (!widget.streaming) {
+      _settledPrefix = '';
+      _settledNodes = const [];
+      _cachedSettledWidgets = null;
+      final document = md.Document(
+          extensionSet: md.ExtensionSet.gitHubWeb, encodeHtml: false);
+      _nodes = document.parseLines(text.split('\n'));
+      return;
+    }
+
+    final splitAt = _safeParagraphSplitOffset(text);
+    if (splitAt <= 0) {
+      _settledPrefix = '';
+      _settledNodes = const [];
+      _cachedSettledWidgets = null;
+      final document = md.Document(
+          extensionSet: md.ExtensionSet.gitHubWeb, encodeHtml: false);
+      _nodes = document.parseLines(text.split('\n'));
+      return;
+    }
+
+    final nextPrefix = text.substring(0, splitAt);
+    if (nextPrefix != _settledPrefix) {
+      _cachedSettledWidgets = null;
+      if (_settledPrefix.isNotEmpty && nextPrefix.startsWith(_settledPrefix)) {
+        final delta = nextPrefix.substring(_settledPrefix.length);
+        final doc = md.Document(
+            extensionSet: md.ExtensionSet.gitHubWeb, encodeHtml: false);
+        _settledNodes = [
+          ..._settledNodes,
+          ...doc.parseLines(delta.split('\n')),
+        ];
+      } else {
+        final doc = md.Document(
+            extensionSet: md.ExtensionSet.gitHubWeb, encodeHtml: false);
+        _settledNodes = doc.parseLines(nextPrefix.split('\n'));
+      }
+      _settledPrefix = nextPrefix;
+    }
+
+    final tail = text.substring(splitAt);
+    if (tail.isEmpty) {
+      _nodes = _settledNodes;
+      return;
+    }
+    final tailDoc =
         md.Document(extensionSet: md.ExtensionSet.gitHubWeb, encodeHtml: false);
-    _nodes = document.parseLines(widget.text.split('\n'));
+    _nodes = [
+      ..._settledNodes,
+      ...tailDoc.parseLines(tail.split('\n')),
+    ];
   }
 
   Future<void> _openLink(Uri uri) async {
@@ -86,7 +182,44 @@ class _ChatMarkdownBodyState extends State<ChatMarkdownBody> {
   }
 
   @override
-  Widget build(BuildContext context) => _blocks(context, _nodes, widget.style);
+  Widget build(BuildContext context) {
+    if (!widget.streaming || _settledNodes.isEmpty) {
+      return _blocks(context, _nodes, widget.style);
+    }
+    // At 120Hz (8.3ms frame budget), avoid rebuilding already-settled top-level
+    // paragraph subtrees on every tick: cache their built Widget instances and
+    // only rebuild the actively growing tail block(s).
+    final brightness = Theme.of(context).brightness;
+    final scaler = MediaQuery.textScalerOf(context);
+    var settledWidgets = _cachedSettledWidgets;
+    if (settledWidgets == null ||
+        _cachedSettledStyle != widget.style ||
+        _cachedSettledBrightness != brightness ||
+        _cachedSettledScaler != scaler) {
+      settledWidgets = [
+        for (var i = 0; i < _settledNodes.length; i++)
+          RepaintBoundary(child: _block(context, _settledNodes[i], widget.style)),
+      ];
+      _cachedSettledWidgets = settledWidgets;
+      _cachedSettledStyle = widget.style;
+      _cachedSettledBrightness = brightness;
+      _cachedSettledScaler = scaler;
+    }
+    final tailCount = _nodes.length - _settledNodes.length;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        for (var i = 0; i < settledWidgets.length; i++) ...[
+          if (i > 0) const SizedBox(height: 12),
+          settledWidgets[i],
+        ],
+        for (var j = 0; j < tailCount; j++) ...[
+          if (settledWidgets.isNotEmpty || j > 0) const SizedBox(height: 12),
+          _block(context, _nodes[_settledNodes.length + j], widget.style),
+        ],
+      ],
+    );
+  }
 
   TextStyle _emphasis(TextStyle base) => base.copyWith(
       fontWeight: FontWeight.w600,
@@ -218,7 +351,15 @@ class _ChatMarkdownBodyState extends State<ChatMarkdownBody> {
   Widget _text(BuildContext context, List<md.Node> nodes, TextStyle base,
       {bool wrap = true, TextAlign align = TextAlign.left}) {
     final spans = _inline(context, nodes, base);
-    return SelectableText.rich(TextSpan(style: base, children: spans),
+    final rich = TextSpan(style: base, children: spans);
+    if (widget.streaming) {
+      return Text.rich(
+        rich,
+        textAlign: align,
+        maxLines: wrap ? null : 1,
+      );
+    }
+    return SelectableText.rich(rich,
         textAlign: align,
         // Horizontal table tracks use intrinsic text width; prose still wraps.
         maxLines: wrap ? null : 1);

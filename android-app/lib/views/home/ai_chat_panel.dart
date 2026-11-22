@@ -82,6 +82,7 @@ import 'chat_markdown_body.dart';
 import 'chat_reading_viewport.dart';
 import 'chat_attachment_preview.dart';
 import 'chat_answer_actions.dart';
+import 'chat_smooth_stream.dart';
 import 'chat_thinking_summary.dart';
 
 const Duration kAiBackgroundResponseNoticeDelay = Duration(seconds: 15);
@@ -2472,6 +2473,24 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
     });
   }
 
+  /// Gently follow the growing bottom edge during live streaming without
+  /// snapping back if the user has scrolled up to read earlier paragraphs.
+  void _followStreamingTail() {
+    if (!mounted || !_followLatest || !_scroll.hasClients) return;
+    final position = _scroll.position;
+    if (position.isScrollingNotifier.value) return;
+    final delta = position.maxScrollExtent - position.pixels;
+    if (delta <= 1.0) return;
+    if (delta > 64.0) {
+      // User already scrolled up away from the live tail — do not yank back.
+      return;
+    }
+    // Directly adjust by the tiny per-frame growth (typically 4–24 px) so the
+    // viewport glides at 60fps in lockstep with revealed lines, matching iOS
+    // Claude's streaming scroll feel.
+    position.jumpTo(position.maxScrollExtent);
+  }
+
   double _latestUserAnchorBottomPadding(double viewportHeight) {
     if (_latestUserMsg == null) return 8;
     // Keep a small breathing room below the last user message while the
@@ -2802,25 +2821,26 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
     _flowChatConfigs.putIfAbsent(flowId, () => _chatConfig(repo));
     _flowRecordConfigs.putIfAbsent(
         flowId, () => repo.aiProviderConfigFor(AiTaskType.recordParse));
-    final attachmentBatch =
-        await AiAttachmentPipeline.validate(requestedAttachments);
-    if (!mounted || !_ownsFlow(flowId)) return;
-    if (!attachmentBatch.isValid) {
-      final reason = attachmentBatch.rejected
-          .map((check) => check.error)
-          .where((error) => error.trim().isNotEmpty)
-          .join('、');
-      _snack(reason.isEmpty ? '附件无法发送，请重新选择' : '附件无法发送：$reason');
-      return;
+
+    // Fast-path pure-text messages: validate synchronously and commit the user
+    // bubble + thinking indicator in the very first frame (like iOS Claude),
+    // without waiting on async attachment/image pipeline round-trips.
+    List<ChatAttachment> attachments = const [];
+    if (requestedAttachments.isNotEmpty) {
+      final attachmentBatch =
+          await AiAttachmentPipeline.validate(requestedAttachments);
+      if (!mounted || !_ownsFlow(flowId)) return;
+      if (!attachmentBatch.isValid) {
+        final reason = attachmentBatch.rejected
+            .map((check) => check.error)
+            .where((error) => error.trim().isNotEmpty)
+            .join('、');
+        _snack(reason.isEmpty ? '附件无法发送，请重新选择' : '附件无法发送：$reason');
+        return;
+      }
+      attachments = attachmentBatch.accepted;
     }
-    final attachments = attachmentBatch.accepted;
-    try {
-      await AiImagePreparation.prepareAll(attachments);
-    } on FormatException catch (error) {
-      if (mounted && _ownsFlow(flowId)) _snack(error.message);
-      return;
-    }
-    if (!mounted || !_ownsFlow(flowId)) return;
+
     // 主页的 AI 记账入口不做本地意图拦截。用户输入的任何自然语言都
     // 先交给记账模型，由 forceRecord 提示词决定如何提取；否则“没被
     // 本地规则识别”的表达会根本没有发到 AI。
@@ -2856,6 +2876,7 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
       text,
       attachments: attachments,
       sentAt: DateTime.now(),
+      animateIn: true,
     );
     setState(() {
       _started = true;
@@ -2866,6 +2887,26 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
     });
     _restartThinkingTicker(flowId: flowId);
     _scrollToLatestUserMessage();
+
+    // Prepare image attachments after the user bubble and thinking status are
+    // already on screen so image compression never freezes the send tap.
+    if (attachments.isNotEmpty) {
+      try {
+        await AiImagePreparation.prepareAll(attachments);
+      } on FormatException catch (error) {
+        if (mounted && _ownsFlow(flowId)) {
+          _completeThinking(flowId: flowId);
+          setState(() {
+            _msgs.remove(userMsg);
+            _msgs.removeWhere((m) => m is _ThinkingMsg && m.flowId == flowId);
+            _busy = false;
+          });
+          _snack(error.message);
+        }
+        return;
+      }
+      if (!mounted || !_ownsFlow(flowId)) return;
+    }
     final userPersistence = _addChatMessage(
       repo,
       role: 'user',
@@ -3478,15 +3519,14 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
     final streamTaskId =
         'chat_stream_${flowId ?? 0}_${runStartedAt.microsecondsSinceEpoch}';
     _activeStreamTaskId = streamTaskId;
+    if (mounted) setState(() {});
 
     void refreshStream() {
       if (refreshTimer != null) return;
-      final followTail = _followLatest &&
-          _scroll.hasClients &&
-          _scroll.position.extentAfter < 48;
-      // 约 20 Hz 节流（50ms），并仅通过消息局部 revision 刷新实时气泡，
-      // 不再触发根 _AiChatPanelState 全面板/历史气泡/输入栏毛玻璃重建。
-      refreshTimer = Timer(const Duration(milliseconds: 50), () {
+      // 对齐屏幕原生刷新率（含 90Hz/120Hz/144Hz）：下一帧 vsync 直接投喂，不再用
+      // 固定 16ms/50ms 定时器人为锁死到 60Hz；真正逐帧平滑释放由 _AnswerBubble
+      // 内的 SmoothStreamTextController (Ticker) 驱动，且只刷新单个回答气泡。
+      refreshTimer = Timer(const Duration(milliseconds: 6), () {
         refreshTimer = null;
         if (!mounted || requestExpired || !_ownsFlow(flowId)) return;
         if (liveMessage != null) {
@@ -3496,17 +3536,6 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
         final thinking = _currentThinkingMsg(flowId);
         if (thinking != null && !thinking.completed) {
           thinking.notifyLiveChange();
-        }
-        if (followTail) {
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            if (mounted &&
-                _ownsFlow(flowId) &&
-                _followLatest &&
-                _scroll.hasClients &&
-                !_scroll.position.isScrollingNotifier.value) {
-              _scroll.jumpTo(_scroll.position.maxScrollExtent);
-            }
-          });
         }
       });
     }
@@ -3555,7 +3584,9 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
         setState(() {
           _msgs.add(message);
         });
-        _scrollToLatestUserMessage();
+        // Gently keep the newly appearing answer visible if the user is near
+        // the bottom; avoid double-yanking back to the user bubble mid-stream.
+        WidgetsBinding.instance.addPostFrameCallback((_) => _followStreamingTail());
         return;
       }
       refreshStream();
@@ -3637,6 +3668,7 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
           liveMessage!
             ..text = completed
             ..streaming = false;
+          liveMessage!.notifyLiveChange();
           if (mounted && _ownsFlow(flowId)) setState(() {});
         }
         _setRunStatus(
@@ -4001,7 +4033,12 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
           }
           _busy = false;
         });
-        _scrollToLatestUserMessage();
+        if (!answerAlreadyRendered) {
+          _scrollToLatestUserMessage();
+        } else {
+          WidgetsBinding.instance
+              .addPostFrameCallback((_) => _followStreamingTail());
+        }
       }
       if (answerRowId != null) attachRowId(answerRowId);
       return;
@@ -4365,7 +4402,12 @@ class _AiChatPanelState extends State<AiChatPanel> with WidgetsBindingObserver {
         return;
       }
       setState(() => addAnswerMessage(animate: !answerAlreadyRendered));
-      _scrollToLatestUserMessage();
+      if (!answerAlreadyRendered) {
+        _scrollToLatestUserMessage();
+      } else {
+        WidgetsBinding.instance
+            .addPostFrameCallback((_) => _followStreamingTail());
+      }
       if (answerRowId != null) attachRowId(answerRowId);
     } finally {
       _releaseReportJob(reportJob, reportLease);
@@ -6302,6 +6344,35 @@ ${line('上月同期', lastStart, lastSameDayEnd, lastSameDay)}
     await repo.setChatWebSearchEnabled(enabled);
   }
 
+  void _stopActiveGeneration() {
+    final taskId = _activeStreamTaskId;
+    if (taskId != null) {
+      LlmQueryV2.cancel(taskId);
+      _activeStreamTaskId = null;
+    }
+    final flowId = _activeFlowId;
+    if (flowId != null) {
+      _flowLeases[flowId]?.cancel();
+      _completeThinking(flowId: flowId);
+      // Mark any live streaming bubble as interrupted immediately so the user
+      // gets instant stop feedback without waiting for socket teardown.
+      for (final msg in _msgs.reversed) {
+        if (msg is _AnswerMsg && msg.streaming) {
+          msg
+            ..streaming = false
+            ..interrupted = true;
+          msg.notifyLiveChange();
+          break;
+        }
+      }
+      _finishFlow(flowId);
+    }
+    Haptics.selection();
+    if (mounted && _busy) {
+      setState(() => _busy = false);
+    }
+  }
+
   // 卡中卡输入框：浅底圆角框 + 工具行。
   // 输入框：与首页那条完全统一（玻璃圆角卡 + 细黑边）。
   Widget _inputBox(BuildContext context, {bool blurEnabled = true}) {
@@ -6451,11 +6522,19 @@ ${line('上月同期', lastStart, lastSameDayEnd, lastSameDay)}
                 if (!widget.fullScreen) const Spacer(),
                 ValueListenableBuilder<bool>(
                   valueListenable: _hasInputText,
-                  builder: (context, hasText, _) => _CircleBtn(
-                    key: const ValueKey('ai-chat-send-button'),
-                    icon: Icons.arrow_upward,
-                    onTap: (hasText && !_busy) ? () => _send() : null,
-                  ),
+                  builder: (context, hasText, _) {
+                    final showStop = _busy && _activeStreamTaskId != null;
+                    return _CircleBtn(
+                      key: const ValueKey('ai-chat-send-button'),
+                      icon: showStop ? Icons.stop_rounded : Icons.arrow_upward,
+                      semanticLabel: showStop ? '停止生成' : '发送',
+                      onTap: showStop
+                          ? _stopActiveGeneration
+                          : (hasText && !_busy)
+                              ? () => _send()
+                              : null,
+                    );
+                  },
                 ),
               ],
             ),
@@ -6741,6 +6820,8 @@ ${line('上月同期', lastStart, lastSameDayEnd, lastSameDay)}
         text: m.text,
         attachments: m.attachments,
         fullBleedAttachments: true,
+        animateIn: m.animateIn,
+        onAnimatedIn: () => m.animateIn = false,
         selected: identical(_selectedUserMsg, m) ||
             identical(_textSelectingUserMsg, m),
         textSelectionMode: identical(_textSelectingUserMsg, m),
@@ -6769,6 +6850,7 @@ ${line('上月同期', lastStart, lastSameDayEnd, lastSameDay)}
             interrupted: m.interrupted,
             sources: m.sources,
             onShown: () => m.shown = true,
+            onStreamFrame: _followStreamingTail,
             onRegenerate: widget.recordOnly || m.question.isEmpty
                 ? null
                 : () => _regenerate(m),
@@ -6872,10 +6954,12 @@ class _UserMsg extends _Msg {
   final DateTime sentAt;
   final List<ChatAttachment> attachments;
   int? chatRowId;
+  bool animateIn;
   _UserMsg(
     this.text, {
     this.attachments = const [],
     this.chatRowId,
+    this.animateIn = false,
     DateTime? sentAt,
   }) : sentAt = sentAt ?? DateTime.now();
 }
@@ -7522,6 +7606,8 @@ class _UserBubble extends StatefulWidget {
   final String text;
   final List<ChatAttachment> attachments;
   final bool fullBleedAttachments;
+  final bool animateIn;
+  final VoidCallback? onAnimatedIn;
   final bool selected;
   final bool textSelectionMode;
   final VoidCallback? onSelectionDismissed;
@@ -7531,6 +7617,8 @@ class _UserBubble extends StatefulWidget {
     required this.text,
     this.attachments = const [],
     this.fullBleedAttachments = false,
+    this.animateIn = false,
+    this.onAnimatedIn,
     this.selected = false,
     this.textSelectionMode = false,
     this.onSelectionDismissed,
@@ -7541,17 +7629,55 @@ class _UserBubble extends StatefulWidget {
   State<_UserBubble> createState() => _UserBubbleState();
 }
 
-class _UserBubbleState extends State<_UserBubble> {
+class _UserBubbleState extends State<_UserBubble>
+    with SingleTickerProviderStateMixin {
   late final TextEditingController _selectionController;
   final FocusNode _selectionFocus = FocusNode();
   final GlobalKey<EditableTextState> _editableKey =
       GlobalKey<EditableTextState>();
+  AnimationController? _enterController;
+  Animation<double>? _enterOpacity;
+  Animation<Offset>? _enterSlide;
+  bool _enterStarted = false;
 
   @override
   void initState() {
     super.initState();
     _selectionController = TextEditingController(text: widget.text);
     if (widget.textSelectionMode) _scheduleNativeSelection();
+    if (widget.animateIn) {
+      final controller = AnimationController(
+        vsync: this,
+        duration: const Duration(milliseconds: 220),
+      );
+      _enterController = controller;
+      final curved = CurvedAnimation(
+        parent: controller,
+        curve: Curves.easeOutCubic,
+      );
+      _enterOpacity = Tween<double>(begin: 0.0, end: 1.0).animate(curved);
+      _enterSlide = Tween<Offset>(
+        begin: const Offset(0, 0.14),
+        end: Offset.zero,
+      ).animate(curved);
+    }
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final controller = _enterController;
+    if (controller != null && !_enterStarted) {
+      _enterStarted = true;
+      if (AppMotion.reduceMotion(context)) {
+        controller.value = 1.0;
+        widget.onAnimatedIn?.call();
+      } else {
+        controller.forward().whenComplete(() {
+          if (mounted) widget.onAnimatedIn?.call();
+        });
+      }
+    }
   }
 
   @override
@@ -7581,6 +7707,7 @@ class _UserBubbleState extends State<_UserBubble> {
 
   @override
   void dispose() {
+    _enterController?.dispose();
     _selectionController.dispose();
     _selectionFocus.dispose();
     super.dispose();
@@ -7724,6 +7851,14 @@ class _UserBubbleState extends State<_UserBubble> {
         // horizontal content inset. Attachment rows use that full available
         // width directly, so three square cards fill the chat content area
         // without touching the physical screen edges.
+        final enterOpacity = _enterOpacity;
+        final enterSlide = _enterSlide;
+        if (enterOpacity != null && enterSlide != null) {
+          return FadeTransition(
+            opacity: enterOpacity,
+            child: SlideTransition(position: enterSlide, child: bubble),
+          );
+        }
         return bubble;
       },
     );
@@ -8492,7 +8627,7 @@ class _SourceFavicon extends StatelessWidget {
   }
 }
 
-// ── 查账回答气泡（喵助手回答，打字机流式）────────────────────────────────────
+// ── 查账回答气泡（喵助手回答，vsync 丝滑流式）────────────────────────────────
 class _AnswerBubble extends StatefulWidget {
   final String text;
   final List<AiWebSource> sources;
@@ -8500,6 +8635,7 @@ class _AnswerBubble extends StatefulWidget {
   final bool streaming;
   final bool interrupted;
   final VoidCallback? onShown;
+  final VoidCallback? onStreamFrame;
   final VoidCallback? onRegenerate;
 
   /// 是否在操作图标下放猫：只有列表最后一条回复为 true（对齐 Claude）。
@@ -8512,6 +8648,7 @@ class _AnswerBubble extends StatefulWidget {
     this.streaming = false,
     this.interrupted = false,
     this.onShown,
+    this.onStreamFrame,
     this.onRegenerate,
     this.showMascot = false,
   });
@@ -8520,19 +8657,31 @@ class _AnswerBubble extends StatefulWidget {
   State<_AnswerBubble> createState() => _AnswerBubbleState();
 }
 
-class _AnswerBubbleState extends State<_AnswerBubble> {
+class _AnswerBubbleState extends State<_AnswerBubble>
+    with SingleTickerProviderStateMixin {
   int _shown = 0;
   int _graphemeCount = 0;
   bool _liked = false;
   bool _disliked = false;
   Timer? _timer;
+  late final SmoothStreamTextController _smoothStream;
+  Set<String> _sourceUrlSet = const {};
 
   @override
   void initState() {
     super.initState();
+    _smoothStream = SmoothStreamTextController(vsync: this)
+      ..addListener(_onSmoothStreamTick);
+    _sourceUrlSet = {for (final s in widget.sources) s.url};
     _graphemeCount = aiTypewriterLength(widget.text);
+    if (widget.streaming) {
+      _shown = _graphemeCount;
+      _smoothStream.update(widget.text, streaming: true);
+      return;
+    }
     if (!widget.animate) {
       _shown = _graphemeCount;
+      _smoothStream.update(widget.text, streaming: false);
       return;
     }
     _timer = Timer.periodic(const Duration(milliseconds: 28), (t) {
@@ -8552,11 +8701,45 @@ class _AnswerBubbleState extends State<_AnswerBubble> {
   }
 
   @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _smoothStream.setReduceMotion(AppMotion.reduceMotion(context));
+  }
+
+  void _onSmoothStreamTick() {
+    if (!mounted) return;
+    setState(() {});
+    if (widget.streaming) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && widget.streaming) widget.onStreamFrame?.call();
+      });
+    }
+  }
+
+  @override
   void didUpdateWidget(covariant _AnswerBubble oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (oldWidget.sources.length != widget.sources.length ||
+        !identical(oldWidget.sources, widget.sources)) {
+      _sourceUrlSet = {for (final s in widget.sources) s.url};
+    }
     if (oldWidget.text == widget.text &&
         oldWidget.animate == widget.animate &&
         oldWidget.streaming == widget.streaming) {
+      return;
+    }
+    if (widget.streaming) {
+      _timer?.cancel();
+      _timer = null;
+      _smoothStream.update(widget.text, streaming: true);
+      return;
+    }
+    if (oldWidget.streaming && !widget.streaming) {
+      // Stream just finished: snap any tiny remaining smooth-reveal tail so
+      // final action bar and selectable text appear cleanly without lag.
+      _smoothStream.update(widget.text, streaming: false);
+      _graphemeCount = aiTypewriterLength(widget.text);
+      _shown = _graphemeCount;
       return;
     }
     _graphemeCount = aiTypewriterLength(widget.text);
@@ -8564,6 +8747,7 @@ class _AnswerBubbleState extends State<_AnswerBubble> {
       _timer?.cancel();
       _timer = null;
       _shown = _graphemeCount;
+      _smoothStream.update(widget.text, streaming: false);
     } else {
       _shown = _shown.clamp(0, _graphemeCount);
     }
@@ -8572,6 +8756,8 @@ class _AnswerBubbleState extends State<_AnswerBubble> {
   @override
   void dispose() {
     _timer?.cancel();
+    _smoothStream.removeListener(_onSmoothStreamTick);
+    _smoothStream.dispose();
     super.dispose();
   }
 
@@ -8644,7 +8830,9 @@ class _AnswerBubbleState extends State<_AnswerBubble> {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final shownText = aiTypewriterPrefix(widget.text, _shown);
+    final shownText = widget.streaming
+        ? _smoothStream.visibleText
+        : aiTypewriterPrefix(widget.text, _shown);
     final done = !widget.streaming && _shown >= _graphemeCount;
     // Claude-like answer typography: soft body text and restrained emphasis.
     final baseStyle = _chatBodyStyle(scheme);
@@ -8653,11 +8841,13 @@ class _AnswerBubbleState extends State<_AnswerBubble> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // 回答正文：全宽、无气泡（对标 Claude），轻量 markdown 渲染。
+          // 回答正文：全宽、无气泡（对标 Claude），流式期启用增量缓存 + 轻量文本，
+          // 结束后自动切换为可自由选词的完整 Markdown 正文。
           ChatMarkdownBody(
             text: shownText,
             style: baseStyle,
-            sourceUrls: widget.sources.map((source) => source.url).toSet(),
+            sourceUrls: _sourceUrlSet,
+            streaming: widget.streaming,
           ),
           if (done) ...[
             if (widget.interrupted) ...[
@@ -10529,12 +10719,14 @@ class _CircleBtn extends StatelessWidget {
   final IconData icon;
   final VoidCallback? onTap;
   final bool plain;
+  final String? semanticLabel;
 
   const _CircleBtn({
     super.key,
     required this.icon,
     required this.onTap,
     this.plain = false,
+    this.semanticLabel,
   });
 
   @override
@@ -10578,6 +10770,7 @@ class _CircleBtn extends StatelessWidget {
       icon: icon,
       onPressed: onTap,
       color: scheme.onSurfaceVariant,
+      semanticLabel: semanticLabel,
     );
   }
 }

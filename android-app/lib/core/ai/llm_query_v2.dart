@@ -875,11 +875,15 @@ $transactionsText''';
         }
         final request = http.Request('POST', uri)
           ..headers.addAll(headers)
+          ..headers.putIfAbsent('Accept', () => 'text/event-stream')
+          ..headers.putIfAbsent('Cache-Control', () => 'no-cache')
           ..body = jsonEncode(requestBody);
         resp = await streamTransport.send(
           request,
           timeout: Duration(seconds: timeoutSeconds),
-          forceRouteRefresh: true,
+          // Reuse the 5s cached Android proxy route instead of forcing two
+          // synchronous MethodChannel round-trips on every single send tap.
+          forceRouteRefresh: false,
         );
       } on TimeoutException {
         throw const AiNetworkException('请求超时');
@@ -915,9 +919,9 @@ $transactionsText''';
           if (line.isEmpty) continue;
 
           if (isClaude) {
-            // Claude SSE 格式: "data: {...}"
-            if (!line.startsWith('data: ')) continue;
-            final data = line.substring(6);
+            // Claude SSE 格式: "data: {...}"（兼容无空格的 `data:` 网关）
+            if (!line.startsWith('data:')) continue;
+            final data = line.substring(5).trimLeft();
 
             try {
               final json = jsonDecode(data) as Map<String, dynamic>;
@@ -947,10 +951,7 @@ $transactionsText''';
                 provider: config.providerLabel,
                 model: config.modelCandidates.first,
                 warning: 'Claude 流式响应单条解析失败: $e',
-                extra: {
-                  'chunk_data':
-                      data.substring(0, data.length > 100 ? 100 : data.length)
-                },
+                extra: {'chunk_length': data.length},
               );
             }
           } else if (isResponses) {
@@ -998,11 +999,13 @@ $transactionsText''';
                   }
                   streamCompleted = true;
                 }
-              }
-              final content = _responsesStreamDelta(data);
-              if (content != null) {
-                fullAnswer.write(content);
-                onChunk(content);
+                // Reuse already-decoded event map instead of running jsonDecode
+                // a second time for every single SSE token.
+                final content = ResponsesProtocol.textDelta(event);
+                if (content != null) {
+                  fullAnswer.write(content);
+                  onChunk(content);
+                }
               }
             } catch (e) {
               if (e is AiException) rethrow;
@@ -1015,9 +1018,9 @@ $transactionsText''';
               );
             }
           } else {
-            // OpenAI 格式
-            if (!line.startsWith('data: ')) continue;
-            final data = line.substring(6);
+            // OpenAI / DeepSeek Chat Completions 格式（兼容 `data:` 无空格网关）
+            if (!line.startsWith('data:')) continue;
+            final data = line.substring(5).trimLeft();
             if (data == '[DONE]') {
               streamCompleted = true;
               break;
@@ -1026,6 +1029,12 @@ $transactionsText''';
             try {
               final json = jsonDecode(data) as Map<String, dynamic>;
               final delta = json['choices']?[0]?['delta'];
+              final reasoning =
+                  (delta?['reasoning_content'] ?? delta?['reasoning'])
+                      as String?;
+              if (reasoning != null && reasoning.isNotEmpty) {
+                onReasoningSummary?.call(reasoning);
+              }
               final content = delta?['content'] as String?;
 
               if (content != null && content.isNotEmpty) {
