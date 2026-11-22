@@ -3,7 +3,6 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../../core/app_clock.dart';
-import '../../core/haptics.dart';
 import '../../core/money_format.dart';
 import '../../widgets/app_buttons.dart';
 import '../../core/models/cat_svg_icon.dart';
